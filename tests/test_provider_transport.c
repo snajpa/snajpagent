@@ -20,6 +20,7 @@
 #include "audio_device.h"
 #include "voice_rtc.h"
 #if SNAJPAGENT_AUDIO_DEVICE
+#include <opus/opus.h>
 #include <rtc/rtc.h>
 #endif
 
@@ -7111,6 +7112,61 @@ static void test_native_voice_transport(void)
 }
 
 #if SNAJPAGENT_AUDIO_DEVICE
+static void
+test_native_media_loss_burst(void)
+{
+    struct snag_voice_rtc *media = NULL;
+    char error[256] = {0};
+    assert(snag_voice_rtc_open(&media, error, sizeof(error)) == 0);
+    int code;
+    OpusEncoder *encoder = opus_encoder_create(24000, 1, OPUS_APPLICATION_VOIP, &code);
+    assert(encoder && code == OPUS_OK);
+    int16_t input[480];
+    int16_t output[2880];
+    for (size_t i = 0; i < 480u; ++i) input[i] = i % 48u < 24u ? 8000 : -8000;
+    unsigned char packet[1512] = {0x80, 111, 0, 100};
+    int bytes = opus_encode(encoder, input, 480, packet + 12u, 1500);
+    assert(bytes > 0);
+    assert(snag_voice_rtc_output(media, output, 2880u) == 0);
+    snag_voice_rtc_fixture_packet(media, packet, bytes + 12, false);
+    assert(snag_voice_rtc_output(media, output, 2880u) == 480);
+    packet[3] = 103;
+    snag_voice_rtc_fixture_packet(media, packet, bytes + 12, false);
+    assert(snag_voice_rtc_output(media, output, 2880u) == 0);
+    snag_voice_rtc_fixture_packet(media, packet, bytes + 12, true);
+    /* One expired reorder interval covers the whole known loss burst. */
+    assert(snag_voice_rtc_output(media, output, 2880u) == 480);
+    assert(snag_voice_rtc_output(media, output, 2880u) == 480);
+    assert(snag_voice_rtc_output(media, output, 2880u) == 480);
+    assert(snag_voice_rtc_output(media, output, 2880u) == 0);
+    /* Late/duplicate packets stay retired; a fresh hole still gets its wait. */
+    packet[3] = 101;
+    snag_voice_rtc_fixture_packet(media, packet, bytes + 12, false);
+    assert(snag_voice_rtc_output(media, output, 2880u) == 0);
+    packet[3] = 105;
+    snag_voice_rtc_fixture_packet(media, packet, bytes + 12, false);
+    assert(snag_voice_rtc_output(media, output, 2880u) == 0);
+    packet[3] = 104;
+    snag_voice_rtc_fixture_packet(media, packet, bytes + 12, false);
+    assert(snag_voice_rtc_output(media, output, 2880u) == 480);
+    assert(snag_voice_rtc_output(media, output, 2880u) == 480);
+    assert(snag_voice_rtc_output(media, output, 2880u) == 0);
+    /* The same loss rule applies across sequence wrap after interruption. */
+    snag_voice_rtc_flush(media);
+    packet[2] = packet[3] = 255;
+    snag_voice_rtc_fixture_packet(media, packet, bytes + 12, false);
+    assert(snag_voice_rtc_output(media, output, 2880u) == 480);
+    packet[2] = 0;
+    packet[3] = 2;
+    snag_voice_rtc_fixture_packet(media, packet, bytes + 12, true);
+    assert(snag_voice_rtc_output(media, output, 2880u) == 480);
+    assert(snag_voice_rtc_output(media, output, 2880u) == 480);
+    assert(snag_voice_rtc_output(media, output, 2880u) == 480);
+    assert(snag_voice_rtc_output(media, output, 2880u) == 0);
+    opus_encoder_destroy(encoder);
+    snag_voice_rtc_close(media);
+}
+
 static void native_echo(int id,const char *data,int length,void *opaque)
 {
     (void)opaque;
@@ -8265,6 +8321,9 @@ main(void)
 {
     test_native_voice_caption_mirrors();
     test_native_voice_transcript_events();
+#if SNAJPAGENT_AUDIO_DEVICE
+    test_native_media_loss_burst();
+#endif
 #if defined(__linux__) && !defined(_WIN32)
     test_native_ui();
 #endif

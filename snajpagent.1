@@ -2104,6 +2104,9 @@ at 200 ms after the first queued sample; prolonged provider or network stalls ca
 still produce silence. Received captions do not prove the corresponding sound
 was heard. Speech interruption flushes queued playback and reports a conservative
 played position to the provider.
+Native media waits up to 60 ms for a missing packet to arrive out of order.
+After that deadline, a known burst of lost packets is concealed together;
+each missing packet does not add another wait.
 .TP
 .B /voice mute, /voice unmute
 Pause or resume microphone forwarding. Unmute discards old capture samples;

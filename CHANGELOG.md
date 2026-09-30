@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Native voice conceals a burst of lost packets after one reorder deadline,
+  avoiding a further playback stall for each packet in the burst.
+
 - Native voice now displays incoming ASR and generated transcript segments as
   they arrive, preserving interleaved speaker previews and newer speech when a
   delayed final transcript arrives. Mirrored turn updates do not reset or double

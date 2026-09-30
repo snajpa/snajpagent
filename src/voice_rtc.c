@@ -167,7 +167,10 @@ int snag_voice_rtc_output(struct snag_voice_rtc *r,int16_t *pcm,uint32_t capacit
                 pcm,(int)(present?capacity:r->frame_size),0);
             if (present)p->size=0;
             if (count>0)r->frame_size=(uint32_t)count;
-            ++r->next;r->due=snag_monotonic_ms()+60u;
+            ++r->next;
+            /* Conceal the known loss burst after one reorder deadline. A new
+             * deadline starts only after a real packet makes progress. */
+            if (present) r->due = snag_monotonic_ms() + 60u;
         }
     }
     pthread_mutex_unlock(&r->mutex);return count;
@@ -179,6 +182,19 @@ void snag_voice_rtc_flush(struct snag_voice_rtc *r)
     opus_decoder_ctl(r->decoder,OPUS_RESET_STATE);
     pthread_mutex_unlock(&r->mutex);
 }
+#ifdef SNAJPAGENT_TEST_TRANSPORT_ENDPOINTS
+void
+snag_voice_rtc_fixture_packet(struct snag_voice_rtc *r, const void *packet, int size,
+    bool expired)
+{
+    received(0, packet, size, r);
+    if (expired) {
+        pthread_mutex_lock(&r->mutex);
+        r->due = 0u;
+        pthread_mutex_unlock(&r->mutex);
+    }
+}
+#endif /* SNAJPAGENT_TEST_TRANSPORT_ENDPOINTS */
 #else
 int snag_voice_rtc_open(struct snag_voice_rtc **out,char *e,size_t n)
 {

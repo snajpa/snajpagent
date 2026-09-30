@@ -99,6 +99,12 @@ privacy boundary: stop microphone forwarding and playback immediately. A newly
 attached terminal requires explicit reactivation; attachment alone never opens
 its microphone. Accepted coding work and finalized transcripts survive.
 
+Native media keeps its encoded reorder queue separate from device playout. A
+missing packet gets one 60 ms reorder deadline. After it expires, conceal the
+known loss burst without another wait per packet; receiving the next real packet
+starts the deadline for any subsequent hole. Late packets remain retired, and
+the same sequence arithmetic covers wraparound and interruption resets.
+
 ## Shared context and tool boundary
 
 Maintain an ordered voice conversation history. Before each voice-model turn,
