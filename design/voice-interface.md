@@ -43,6 +43,19 @@ capacity recovery and long-lived context maintenance remain in implementation.
 
 ## Ownership and lifetime
 
+Duplex capture uses SpeexDSP's adaptive echo filter inside the existing device
+owner. Its reference is the actual rendered PCM, including prefill silence.
+Callback sizes adapt to 20 ms frames with a requested 250 ms filter tail for
+device delay and room reflections. Capture and render keep their 24 kHz clock.
+The device owner also owns the filter state; processing adds no device, worker
+or provider connection. Standalone dictation and file playback retain their
+existing sample paths. Assistant activity does not gate the microphone, so
+near-end speech can interrupt a reply. While mute is acknowledged, unmute clears
+partial capture and resets the filter before admitting fresh samples. Existing
+Autoconf dependency recipes supply the filter across portable targets.
+Hardware-free echo/double-talk tests cover sample flow; device qualification
+remains separate (see `QUALIFICATION.md`).
+
 Keep the existing audio/connection owner and the existing coding/session owner.
 The voice owner continues capture, playback, speech interruption and transcript
 processing while coding is idle, queued, running or awaiting a tool. The session

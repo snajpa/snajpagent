@@ -40,6 +40,19 @@ behavior then uses the same `openpty`, `ioctl(TIOCGWINSZ/TIOCSWINSZ)`,
 controlling-terminal, immediate-run, yielded-run, and `write_stdin` paths.
 The tmux layer complements those raw-PTY checks by interpreting cursor movement,
 erase, wrap, and resize sequences as a real terminal does.
+## Duplex voice processing
+
+The audio-enabled `tests/test_provider_transport` suite feeds the real device
+callback without opening hardware. A delayed, reflected copy of actual rendered
+samples models linear speaker echo; an independent two-tone signal models
+near-end input. The test measures echo-energy reduction and retained near-end
+amplitude/correlation, adapts varying callback sizes, and checks partial-frame
+discard and filter reset across mute/unmute. It also exercises real Opus
+decoding, packet loss/reordering and the local RTC round trip.
+
+This covers synthetic sample flow. Physical devices, nonlinear loudspeaker echo,
+clock drift, human speech intelligibility and live ASR require separate evidence.
+
 ## Native terminal transfers
 
 The stock-Mosh argument regression uses an isolated recording SSH stub to verify

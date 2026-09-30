@@ -39,4 +39,9 @@ let
       "-DNO_WEBSOCKET=ON" "-DNO_EXAMPLES=ON" "-DNO_TESTS=ON"
     ];
   });
-in { inherit rtc juice tls srtp; opus = target.libopus; }
+  speex = target.speexdsp.overrideAttrs (old: {
+    configureFlags = (old.configureFlags or []) ++ [
+      "--disable-examples" "--disable-sse" "--disable-neon"
+    ];
+  });
+in { inherit rtc juice tls srtp speex; opus = target.libopus; }

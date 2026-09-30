@@ -64,7 +64,7 @@ let
       '';
     });
   voiceRtc = import ./voice-rtc-cross.nix {
-    inherit pkgs cmakeLibrary tls; sourcePkgs = windows;
+    inherit pkgs cmakeLibrary autotoolsLibrary tls; sourcePkgs = windows;
     # mingw-aarch64 has no RTCD arm; presume NEON (mandatory on aarch64).
     opusFlags = pkgs.lib.optional windows.stdenv.hostPlatform.isAarch64 "-DOPUS_MAY_HAVE_NEON=OFF";
     # The presumed path needs the may-have prototypes/includes; RTCD stays out.
@@ -307,6 +307,8 @@ in {
         "PDF_CFLAGS=$($PKG_CONFIG --cflags poppler libpng | sed -E 's/(^| )-I/\1-isystem /g')${pkgs.lib.optionalString (pty != null) " -nostdinc++ -isystem ${pkgs.lib.getDev pty.cxx}/include/c++/v1"}"
         "PDF_LIBS=$($PKG_CONFIG --static --libs poppler libpng)${if pty != null then " -L${pty.cxx}/lib -lc++ -L${pty.unwind}/lib -lunwind" else if windows.stdenv.cc.isClang then " -lc++" else " -lstdc++"}"
         "RTC_CFLAGS=${voiceRtc.cflags}"
+        "AEC_CFLAGS=${voiceRtc.aecCflags}"
+        "AEC_LIBS=${voiceRtc.aecLibs}"
         "RTC_LIBS=${voiceRtc.libs} ${if pty != null then "-L${pty.cxx}/lib -lc++ -L${pty.unwind}/lib -lunwind" else if windows.stdenv.cc.isClang then "-lc++" else "-lstdc++"}"
         'MINIAUDIO_CFLAGS=-isystem ${pkgs.miniaudio.src}'
       )

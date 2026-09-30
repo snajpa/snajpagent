@@ -195,7 +195,7 @@ let
     os = "openbsd";
   };
   voiceRtc = import ./voice-rtc-cross.nix {
-    inherit pkgs cmakeLibrary tls; sourcePkgs = sourcePkgs;
+    inherit pkgs cmakeLibrary autotoolsLibrary tls; sourcePkgs = sourcePkgs;
     # OpenBSD 3.5's inttypes.h omits the C99 format macros (PRIx64).
     srtpPatches = lib.optional early ./libsrtp-openbsd35-inttypes.patch;
     # 3.5's netinet/in.h needs sys/types.h first; seed the checked header.
@@ -575,6 +575,8 @@ in {
           "AV_CFLAGS=$(pkg-config --cflags libavformat libavcodec libavutil libswresample libswscale)"
           "AV_LIBS=$(pkg-config --static --libs libavformat libavcodec libavutil libswresample libswscale | sed -E 's/-l?(-l?)?pthread//g')"
           "RTC_CFLAGS=${voiceRtc.cflags}"
+          "AEC_CFLAGS=${voiceRtc.aecCflags}"
+          "AEC_LIBS=${voiceRtc.aecLibs}"
           "RTC_LIBS=${voiceRtc.libs} ${if legacy then "${cxx}/lib/libstdc++.a -Wl,-Bdynamic" else "-Wl,-Bdynamic -lc++ -lc++abi"} -lm -Wl,-Bstatic"
           'MINIAUDIO_CFLAGS=-isystem ${miniaudio}'
           'CXX=${cxxCompiler} --target=${target} --sysroot=${sdk}'

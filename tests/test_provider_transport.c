@@ -20,6 +20,7 @@
 #include "audio_device.h"
 #include "voice_rtc.h"
 #if SNAJPAGENT_AUDIO_DEVICE
+#include <math.h>
 #include <opus/opus.h>
 #include <rtc/rtc.h>
 #endif
@@ -7112,6 +7113,107 @@ static void test_native_voice_transport(void)
 }
 
 #if SNAJPAGENT_AUDIO_DEVICE
+static double
+near_tone_sample(size_t frame)
+{
+    double time = (double)frame / 24000.0;
+    return 3000.0 * sin(2.0 * 3.141592653589793 * 217.0 * time) +
+        2000.0 * sin(2.0 * 3.141592653589793 * 479.0 * time);
+}
+
+static void
+test_duplex_echo(void)
+{
+    struct snag_audio_device *device = snag_audio_fixture_duplex();
+    assert(device);
+    enum { total = 360000, history_size = 8192, delay = 1920 };
+    int16_t history[history_size] = {0};
+    int16_t far[480];
+    int16_t microphone[480];
+    int16_t rendered[480];
+    int16_t captured[480];
+    int16_t *result = calloc(total, sizeof(*result));
+    assert(result);
+    memset(microphone, 0, sizeof(microphone));
+    snag_audio_fixture_io(device, rendered, microphone, 480u);
+    assert(snag_audio_mute(device, false) == 0);
+    uint32_t random = 0x542fcb83u;
+    size_t saved = 0u;
+    double echo_power = 0.0;
+    size_t chunk = 0u;
+    for (size_t frame = 0u; frame < total; ++chunk) {
+        uint32_t count = (uint32_t)(chunk % 4u + 1u) * 120u;
+        if (count > total - frame) count = (uint32_t)(total - frame);
+        for (size_t i = 0u; i < count; ++i) {
+            size_t at = frame + i;
+            random = random * 1664525u + 1013904223u;
+            far[i] = (int16_t)(((int32_t)(random >> 16u) - 32768) / 4);
+            double echo = 0.625 * history[(at - delay) % history_size] +
+                0.25 * history[(at - delay - 97u) % history_size];
+            microphone[i] = (int16_t)(echo + (at >= 240000u ? near_tone_sample(at) : 0.0));
+            if (at >= 144000u && at < 216000u) {
+                echo_power += (double)microphone[i] * microphone[i];
+            }
+        }
+        assert(snag_audio_play(device, far, count) == count);
+        snag_audio_fixture_io(device, rendered, microphone, count);
+        assert(snag_audio_fault(device) == 0);
+        for (size_t i = 0u; i < count; ++i) history[(frame + i) % history_size] = rendered[i];
+        uint32_t got;
+        while ((got = snag_audio_capture(device, captured, 480u)) != 0u) {
+            assert(saved + got <= total);
+            memcpy(result + saved, captured, got * sizeof(*captured));
+            saved += got;
+        }
+        frame += count;
+    }
+    assert(saved == total && echo_power > 0.0);
+    double remaining = 0.0;
+    for (size_t i = 144000u; i < 216000u; ++i) remaining += (double)result[i] * result[i];
+    double best = 0.0;
+    double near_gain = 0.0;
+    for (size_t lag = 0u; lag < 240u; ++lag) {
+        double cross = 0.0;
+        double output_power = 0.0;
+        double input_power = 0.0;
+        for (size_t i = 288000u; i < total; ++i) {
+            double expected = near_tone_sample(i - lag);
+            cross += result[i] * expected;
+            input_power += expected * expected;
+            output_power += (double)result[i] * result[i];
+        }
+        double correlation = output_power > 0.0 ?
+            cross * cross / (output_power * input_power) : 0.0;
+        if (correlation > best) {
+            best = correlation;
+            near_gain = cross / input_power;
+        }
+    }
+    fprintf(stderr, "duplex echo remaining=%.6f near correlation-squared=%.6f gain=%.6f\n",
+        remaining / echo_power, best, near_gain);
+    assert(remaining < echo_power * 0.1);
+    assert(best > 0.5 && near_gain > 0.2);
+    /* A partial pre-mute frame must not become fresh input after unmute. */
+    snag_audio_interrupt(device);
+    for (size_t i = 0u; i < 480u; ++i) microphone[i] = 9000;
+    snag_audio_fixture_io(device, rendered, microphone, 240u);
+    assert(snag_audio_capture(device, captured, 480u) == 0u);
+    assert(snag_audio_mute(device, true) == 0);
+    assert(snag_audio_mute(device, false) == 1);
+    snag_audio_fixture_io(device, rendered, microphone, 240u);
+    assert(snag_audio_capture(device, captured, 480u) == 0u);
+    assert(snag_audio_mute(device, false) == 0);
+    memset(microphone, 0, sizeof(microphone));
+    snag_audio_fixture_io(device, rendered, microphone, 240u);
+    assert(snag_audio_capture(device, captured, 480u) == 0u);
+    snag_audio_fixture_io(device, rendered, microphone, 240u);
+    assert(snag_audio_capture(device, captured, 480u) == 480u);
+    for (size_t i = 0u; i < 480u; ++i) assert(captured[i] == 0);
+    assert(snag_audio_fault(device) == 0);
+    free(result);
+    snag_audio_close(device);
+}
+
 static void
 test_native_media_loss_burst(void)
 {
@@ -8323,6 +8425,7 @@ main(void)
     test_native_voice_transcript_events();
 #if SNAJPAGENT_AUDIO_DEVICE
     test_native_media_loss_burst();
+    test_duplex_echo();
 #endif
 #if defined(__linux__) && !defined(_WIN32)
     test_native_ui();

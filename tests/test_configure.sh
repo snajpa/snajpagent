@@ -110,6 +110,49 @@ rc=$?
 grep -Fqx 'HAVE_POPPLER_NEW_API ?= 0' "$tmp/config.mk" ||
 	fail 'Poppler API detection did not use the selected target pkg-config'
 
+# Device audio requires the echo processor too, using the target's metadata.
+cat >"$tmp/audio-cc" <<'EOF'
+#!/bin/sh
+for argument do
+    case "$argument" in
+        */audio.c)
+            if grep -q 'speex_echo_state_init' "$argument"; then
+                [ "$SPEEX_AVAILABLE" = yes ] || exit 1
+                case " $* " in *' -I/target-speex '*) ;; *) exit 1 ;; esac
+                case " $* " in *' -L/target-speex -lspeexdsp '*) ;; *) exit 1 ;; esac
+            fi
+            ;;
+    esac
+done
+exit 0
+EOF
+cat >"$tmp/audio-pkg-config" <<'EOF'
+#!/bin/sh
+case "$*" in
+    '--exists speexdsp') exit 0 ;;
+    '--cflags speexdsp') printf '%s\n' '-I/target-speex' ;;
+    '--libs speexdsp') printf '%s\n' '-L/target-speex -lspeexdsp' ;;
+    *) exit 1 ;;
+esac
+EOF
+chmod +x "$tmp/audio-cc" "$tmp/audio-pkg-config"
+for available in yes no; do
+    cp "$tmp/pristine.mk" "$tmp/config.mk"
+    (cd "$tmp" && unset AEC_CFLAGS AEC_LIBS &&
+        CC="$tmp/audio-cc" PKG_CONFIG="$tmp/audio-pkg-config" SPEEX_AVAILABLE="$available" \
+        sh ./configure --without-av --without-pdf --with-audio-device \
+        --without-office --without-office-commands >"$tmp/audio-out" 2>&1)
+    rc=$?
+    if [ "$available" = yes ]; then
+        [ "$rc" = 0 ] || fail 'audio probe did not use target SpeexDSP flags'
+        grep -Fqx 'WITH_AUDIO_DEVICE ?= 1' "$tmp/config.mk" || fail 'audio was not enabled'
+    else
+        [ "$rc" = 1 ] || fail 'required audio accepted missing SpeexDSP'
+        cmp -s "$tmp/pristine.mk" "$tmp/config.mk" || fail 'failed audio changed config.mk'
+        grep -q SpeexDSP "$tmp/audio-out" || fail 'missing echo dependency was not explained'
+    fi
+done
+
 if [ "$fails" -ne 0 ]; then
 	printf 'test_configure: %s check(s) failed\n' "$fails"
 	exit 1

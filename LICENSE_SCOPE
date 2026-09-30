@@ -25,6 +25,10 @@ their upstream MIT terms for the old-Darwin monotonic clock implementations.
 LLVM-exception terms, including its GPLv2 compatibility provision.
 Preserve those notices and corresponding patched sources with distributions.
 
+Device-enabled builds link SpeexDSP under its upstream BSD terms. Preserve its
+copyright notices, redistribution conditions and disclaimers from the matching
+library source when distributing linked executables.
+
 Project design notes live under design/. System Jansson and system libcurl are
 build/runtime dependencies; no third-party
 Jansson or libcurl implementation source or upstream header source is vendored.

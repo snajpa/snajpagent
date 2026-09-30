@@ -5,6 +5,10 @@
 #include <string.h>
 
 #if SNAJPAGENT_AUDIO_DEVICE
+#include <speex/speex_echo.h>
+
+/* Budget 20 ms frames and a 250 ms filter tail for device delay and reflections. */
+#define SNAG_ECHO_FRAMES 480u
 #define MA_NO_ENGINE
 #define MA_NO_NODE_GRAPH
 #define MA_NO_RESOURCE_MANAGER
@@ -22,33 +26,71 @@ struct snag_audio_device {
     int16_t *input_samples, *output_samples;
     atomic_uint mute, silenced, fault, delivered;
     unsigned int channels;
+    SpeexEchoState *echo;
+    uint32_t echo_frames;
+    int16_t echo_capture[SNAG_ECHO_FRAMES];
+    int16_t echo_render[2u * SNAG_ECHO_FRAMES];
     bool context_ready, device_ready, capture, playback;
 };
+
+static int
+capture_pcm(struct snag_audio_device *owner, const int16_t *input, const int16_t *output,
+    uint32_t frames)
+{
+    if (!owner->echo) {
+        return frames <= 48000u - snag_pcm_available(&owner->input) &&
+            snag_pcm_write(&owner->input, input, frames) == frames ? 0 : -1;
+    }
+    if (!output) return -1;
+    while (frames) {
+        uint32_t count = SNAG_ECHO_FRAMES - owner->echo_frames;
+        if (count > frames) count = frames;
+        memcpy(owner->echo_capture + owner->echo_frames, input, count * sizeof(*input));
+        memcpy(owner->echo_render + owner->echo_frames * owner->channels, output,
+            count * owner->channels * sizeof(*output));
+        owner->echo_frames += count;
+        input += count;
+        output += count * owner->channels;
+        frames -= count;
+        if (owner->echo_frames == SNAG_ECHO_FRAMES) {
+            int16_t filtered[SNAG_ECHO_FRAMES];
+            owner->echo_frames = 0u;
+            speex_echo_cancellation(owner->echo, owner->echo_capture, owner->echo_render, filtered);
+            if (snag_pcm_available(&owner->input) > 48000u - SNAG_ECHO_FRAMES ||
+                snag_pcm_write(&owner->input, filtered, SNAG_ECHO_FRAMES) != SNAG_ECHO_FRAMES) {
+                return -1;
+            }
+        }
+    }
+    return 0;
+}
 
 static void
 callback(ma_device *device, void *output, const void *input, ma_uint32 frames)
 {
     struct snag_audio_device *owner = device->pUserData;
-    if (owner->capture) {
-        unsigned int gate = atomic_load_explicit(&owner->mute, memory_order_acquire);
-        if (gate & 1u)
-            atomic_store_explicit(&owner->silenced, gate, memory_order_release);
-        else if (!atomic_load_explicit(&owner->fault, memory_order_relaxed)) {
-            if (!input || frames > 48000u - snag_pcm_available(&owner->input) ||
-                snag_pcm_write(&owner->input, input, frames) != frames)
-                atomic_store_explicit(&owner->fault, 1u, memory_order_release);
-        }
-    }
+    unsigned int gate = atomic_load_explicit(&owner->mute, memory_order_acquire);
+    /* The reference includes exactly what this callback renders, including silence. */
     if (owner->playback && output) {
         uint32_t count = frames * owner->channels;
         memset(output, 0, (size_t)count * sizeof(int16_t));
         if (atomic_load_explicit(&owner->fault, memory_order_acquire)) {
             snag_pcm_discard(&owner->output);
-            return;
+        } else {
+            uint32_t n = owner->capture ?
+                snag_pcm_playout_read(&owner->playout, &owner->output, output, count) :
+                snag_pcm_read(&owner->output, output, count);
+            atomic_fetch_add_explicit(&owner->delivered, n / owner->channels, memory_order_relaxed);
         }
-        uint32_t n = owner->capture ? snag_pcm_playout_read(&owner->playout, &owner->output, output, count) :
-            snag_pcm_read(&owner->output, output, count);
-        atomic_fetch_add_explicit(&owner->delivered, n / owner->channels, memory_order_relaxed);
+    }
+    if (!owner->capture) return;
+    if (gate & 1u) {
+        /* No DSP access follows this acknowledgement; unmute may reset it. */
+        atomic_store_explicit(&owner->silenced, gate, memory_order_release);
+    } else if (!atomic_load_explicit(&owner->fault, memory_order_relaxed)) {
+        if (!input || capture_pcm(owner, input, output, frames) < 0) {
+            atomic_store_explicit(&owner->fault, 1u, memory_order_release);
+        }
     }
 }
 
@@ -106,19 +148,17 @@ snag_audio_close(struct snag_audio_device *owner)
     if (!owner) return;
     if (owner->device_ready) ma_device_uninit(&owner->device);
     if (owner->context_ready) ma_context_uninit(&owner->context);
+    if (owner->echo) speex_echo_state_destroy(owner->echo);
+    memset(owner->echo_capture, 0, sizeof(owner->echo_capture));
     if (owner->input_samples) memset(owner->input_samples, 0, 65536u * sizeof(int16_t));
     free(owner->input_samples); free(owner->output_samples); free(owner);
 }
 
-int
-snag_audio_open(bool capture, bool playback, unsigned int channels,
-                const char *input_name, const char *output_name, struct snag_audio_device **out,
-                char *error, size_t size)
+static struct snag_audio_device *
+audio_buffers(bool capture, bool playback, unsigned int channels)
 {
-    *out = NULL;
-    if ((!capture && !playback) || channels < 1u || channels > 2u) return -1;
     struct snag_audio_device *owner = calloc(1u, sizeof(*owner));
-    if (!owner) return -1;
+    if (!owner) return NULL;
     owner->capture = capture; owner->playback = playback; owner->channels = channels;
     atomic_init(&owner->mute, capture && playback ? 1u : 0u); atomic_init(&owner->silenced, 0u);
     atomic_init(&owner->fault, 0u); atomic_init(&owner->delivered, 0u);
@@ -131,6 +171,28 @@ snag_audio_open(bool capture, bool playback, unsigned int channels,
         owner->output_samples = calloc(1048576u * channels, sizeof(int16_t));
         if (snag_pcm_init(&owner->output, owner->output_samples, 1048576u * channels) < 0) goto failed;
     }
+    if (capture && playback) {
+        int rate = 24000;
+        owner->echo = speex_echo_state_init_mc(SNAG_ECHO_FRAMES, rate / 4, 1, (int)channels);
+        if (!owner->echo || speex_echo_ctl(owner->echo, SPEEX_ECHO_SET_SAMPLING_RATE, &rate) < 0) {
+            goto failed;
+        }
+    }
+    return owner;
+failed:
+    snag_audio_close(owner);
+    return NULL;
+}
+
+int
+snag_audio_open(bool capture, bool playback, unsigned int channels,
+    const char *input_name, const char *output_name, struct snag_audio_device **out,
+    char *error, size_t size)
+{
+    *out = NULL;
+    if ((!capture && !playback) || channels < 1u || channels > 2u) return -1;
+    struct snag_audio_device *owner = audio_buffers(capture, playback, channels);
+    if (!owner) return -1;
     if (ma_context_init(NULL, 0, NULL, &owner->context) != MA_SUCCESS) goto failed;
     owner->context_ready = true;
     ma_device_config config = ma_device_config_init(capture ?
@@ -192,10 +254,31 @@ int snag_audio_mute(struct snag_audio_device *owner, bool mute)
     if (!(gate & 1u)) return 0;
     if (atomic_load_explicit(&owner->silenced, memory_order_acquire) != gate) return 1;
     snag_pcm_discard(&owner->input);
+    if (owner->echo) {
+        owner->echo_frames = 0u;
+        memset(owner->echo_capture, 0, sizeof(owner->echo_capture));
+        memset(owner->echo_render, 0, sizeof(owner->echo_render));
+        speex_echo_state_reset(owner->echo);
+    }
     atomic_store(&owner->mute, gate + 1u);
     return 0;
 }
 #ifdef SNAJPAGENT_TEST_TRANSPORT_ENDPOINTS
+struct snag_audio_device *
+snag_audio_fixture_duplex(void)
+{
+    struct snag_audio_device *owner = audio_buffers(true, true, 1u);
+    if (owner) owner->device.pUserData = owner;
+    return owner;
+}
+
+void
+snag_audio_fixture_io(struct snag_audio_device *owner, int16_t *out, const int16_t *in,
+    uint32_t frames)
+{
+    callback(&owner->device, out, in, frames);
+}
+
 /* Exercise the actual callback/gate without initializing any backend. */
 int snag_audio_fixture_capture(void)
 {

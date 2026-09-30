@@ -1980,8 +1980,8 @@ history and fresh-state transport writes finish. Large histories can delay this
 stage; /voice off cancels it while coding work continues. Saved actions and audio
 are not replayed. Current speech already belongs to the live provider conversation.
 Microphone audio goes to the provider's media servers and replies
-are synthesized speech. Use a headset: software acoustic echo cancellation is
-not provided. Keyboard editing and ordinary submission remain available.
+are synthesized speech. Use a headset to limit speaker feedback alongside software
+echo cancellation. Keyboard editing and ordinary submission remain available.
 .PP
 Capture and incoming reply audio stream concurrently through bounded PCM rings.
 The current endpoint uses server-detected speech turns. Reply generation can start
@@ -2107,9 +2107,14 @@ played position to the provider.
 Native media waits up to 60 ms for a missing packet to arrive out of order.
 After that deadline, a known burst of lost packets is concealed together;
 each missing packet does not add another wait.
+Duplex capture reduces speaker echo using the samples actually rendered as its
+reference. The microphone remains available during replies. Echo reduction
+depends on the devices and room; headphones can help when speaker audio still
+reaches speech recognition.
 .TP
 .B /voice mute, /voice unmute
-Pause or resume microphone forwarding. Unmute discards old capture samples;
+Pause or resume microphone forwarding. Unmute discards old capture samples,
+including a partial processing frame, and resets the echo filter;
 already transmitted audio cannot be recalled. Speaker output and coding work
 are independent of microphone mute.
 The prompt shows starting or muting until the device owner applies the change.
@@ -5033,6 +5038,8 @@ available device support. Linux, macOS, Windows and BSD production recipes
 explicitly enable it.
 MINIAUDIO_CFLAGS supplies the path to
 miniaudio.h; AUDIO_DEVICE_LIBS overrides platform backend link flags.
+Device audio also links SpeexDSP for duplex echo reduction. AEC_CFLAGS and
+AEC_LIBS select a nonstandard SpeexDSP installation; otherwise pkg-config is used.
 The device adapter uses miniaudio's low-level API, without its engine or decoders.
 FreeBSD uses OSS. With older OSS headers, device enumeration reports only the
 accessible default /dev/dsp node; native format/version metadata is unavailable.

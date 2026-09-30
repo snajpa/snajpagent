@@ -125,7 +125,7 @@ let
       '';
     };
   voiceRtc = import ./voice-rtc-cross.nix {
-    inherit pkgs cmakeLibrary tls; sourcePkgs = sourcePkgs;
+    inherit pkgs cmakeLibrary autotoolsLibrary tls; sourcePkgs = sourcePkgs;
   };
   jansson = cmakeLibrary sourcePkgs.jansson [
     "-DJANSSON_BUILD_SHARED_LIBS=OFF"
@@ -360,6 +360,8 @@ in {
           "PDF_CFLAGS=$(pkg-config --cflags poppler libpng | sed -E 's/(^| )-I/\1-isystem /g')"
           "PDF_LIBS=$(pkg-config --static --libs poppler libpng) -lc++"
           "RTC_CFLAGS=${voiceRtc.cflags}"
+          "AEC_CFLAGS=${voiceRtc.aecCflags}"
+          "AEC_LIBS=${voiceRtc.aecLibs}"
           "RTC_LIBS=${voiceRtc.libs} -lc++"
           'MINIAUDIO_CFLAGS=-isystem ${pkgs.miniaudio.src}'
           "CURL_CFLAGS=$(pkg-config --cflags libcurl)"

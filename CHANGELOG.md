@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Reduce speaker echo in duplex voice capture with SpeexDSP, using the actual
+  rendered output as its reference. The microphone stays available during replies.
+  Unmute clears partial capture and resets the filter before forwarding resumes.
+
 - Native voice conceals a burst of lost packets after one reorder deadline,
   avoiding a further playback stall for each packet in the burst.
 

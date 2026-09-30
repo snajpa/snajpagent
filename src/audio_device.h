@@ -3,7 +3,7 @@
 #define SNAJPAGENT_AUDIO_DEVICE_H
 #include "base.h"
 struct snag_audio_device;
-/* Device owner alone calls lifecycle and ring APIs. Callbacks move samples only.
+/* Device owner alone calls lifecycle and ring APIs. Callbacks move/filter samples.
  * 24 kHz native s16; capture mono, playback mono or stereo. No capture on open
  * unless capture=true. Duplex voice opens with forwarding muted; its owner
  * explicitly unmutes after UI/control checks. Selection is an exact device
@@ -26,6 +26,8 @@ uint32_t snag_audio_pending(const struct snag_audio_device *);
 uint32_t snag_audio_delivered(const struct snag_audio_device *);
 uint32_t snag_audio_latency_ms(const struct snag_audio_device *);
 #ifdef SNAJPAGENT_TEST_TRANSPORT_ENDPOINTS
+struct snag_audio_device *snag_audio_fixture_duplex(void);
+void snag_audio_fixture_io(struct snag_audio_device *, int16_t *, const int16_t *, uint32_t);
 int snag_audio_fixture_capture(void);
 #endif
 #endif

@@ -1,9 +1,12 @@
 # SPDX-License-Identifier: GPL-2.0-only
-{ pkgs, sourcePkgs, cmakeLibrary, tls, cxxFlags ? null, cxxLibraries ? null,
+{ pkgs, sourcePkgs, cmakeLibrary, autotoolsLibrary, tls, cxxFlags ? null, cxxLibraries ? null,
   rtcFlags ? [], opusFlags ? [], opusCflags ? "",
   rtcPatches ? [], srtpPatches ? [], srtpFlags ? [], sctpPatches ? [] }:
 let
   source = import ./voice-rtc.nix { inherit pkgs; target = sourcePkgs; };
+  speex = autotoolsLibrary sourcePkgs.speexdsp [
+    "--disable-examples" "--disable-sse" "--disable-neon"
+  ] [];
   juice = cmakeLibrary source.juice [ "-DNO_TESTS=ON" "-DNO_SERVER=ON" ] [];
   srtp = (cmakeLibrary sourcePkgs.srtp ([ "-DENABLE_OPENSSL=OFF" "-DLIBSRTP_TEST_APPS=OFF" ] ++ srtpFlags) []).overrideAttrs (old: {
     patches = (old.patches or []) ++ srtpPatches;
@@ -37,8 +40,10 @@ let
       '';
   });
 in {
-  inherit rtc juice srtp sctp opus;
-  dependencies = [ rtc juice srtp sctp opus ];
+  inherit rtc juice srtp sctp opus speex;
+  dependencies = [ rtc juice srtp sctp opus speex ];
+  aecCflags = "-I${speex}/include";
+  aecLibs = "-L${speex}/lib -lspeexdsp";
   cflags = "-DRTC_STATIC -I${rtc}/include -I${opus}/include";
   libs = "-L${rtc}/lib -ldatachannel -L${juice}/lib -ljuice -L${srtp}/lib -lsrtp2 -L${sctp}/lib -lusrsctp -L${opus}/lib -lopus -L${tls}/lib -lmbedtls -lmbedx509 -lmbedcrypto";
 }

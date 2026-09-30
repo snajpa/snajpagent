@@ -175,7 +175,7 @@ let
     os = "netbsd";
   };
   voiceRtc = import ./voice-rtc-cross.nix {
-    inherit pkgs cmakeLibrary tls; sourcePkgs = sourcePkgs;
+    inherit pkgs cmakeLibrary autotoolsLibrary tls; sourcePkgs = sourcePkgs;
     # NetBSD 2.0's sys/queue.h lacks TAILQ_FOREACH_SAFE.
     sctpPatches = [ ./usrsctp-bsd-tailq-safe.patch ./usrsctp-netbsd-route-in6.patch ./usrsctp-legacy-arc4random.patch ] ++ lib.optional legacy ./usrsctp-legacy-compat.patch;
     # NetBSD 2.0 lacks AI_ADDRCONFIG/AI_NUMERICSERV for getaddrinfo.
@@ -440,6 +440,8 @@ in {
           "AV_CFLAGS=$(pkg-config --cflags libavformat libavcodec libavutil libswresample libswscale)"
           "AV_LIBS=$(pkg-config --static --libs libavformat libavcodec libavutil libswresample libswscale | sed -E 's/-l?(-l?)?pthread//g')"
           "RTC_CFLAGS=${voiceRtc.cflags}"
+          "AEC_CFLAGS=${voiceRtc.aecCflags}"
+          "AEC_LIBS=${voiceRtc.aecLibs}"
           "RTC_LIBS=${voiceRtc.libs} ${cxx}/lib/libstdc++.a -Wl,-Bdynamic${lib.optionalString (!legacy) " -lstdc++"} -lm -lgcc_s -Wl,-Bstatic"
           'MINIAUDIO_CFLAGS=-isystem ${miniaudio}'
           'CXX=${cxxCompiler} --target=${target} --sysroot=${sdk}'

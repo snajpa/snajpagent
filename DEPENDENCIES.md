@@ -119,8 +119,8 @@ Legacy FreeType consumers use its pkg-config metadata; generation of the optiona
 freetype-config shell helper is disabled while font and compression support remain.
 
 Default native builds additionally use FFmpeg (libavformat, libavcodec,
-libavutil, libswresample, libswscale), Poppler, libpng, and miniaudio 0.11.23.
-Native subscription voice links libdatachannel 0.24.1 and Opus
+libavutil, libswresample, libswscale), Poppler, libpng, and miniaudio.
+Native subscription voice links libdatachannel and Opus
 through their C APIs. `RTC_CFLAGS`/`RTC_LIBS` select nonstandard installations.
 Portable builds use libjuice for ICE, plus DTLS and SRTP. BYOK uses libcurl
 WebSockets. `WITH_AUDIO_DEVICE=0` disables audio devices and native voice media.
@@ -133,8 +133,12 @@ and `src/pdf.cpp`; PDF requires C++20. System Poppler 26 reshaped the stream
 and renderer C++ APIs: host builds against it pass `HAVE_POPPLER_NEW_API=1`
 on the make line (default 0 keeps the Poppler to 25.x shape the matrix pins). Miniaudio is compiled once in
 `src/miniaudio.c` from its dependency header. The low-level device callback
-moves native PCM only; engine, resource manager, node graph and file decoders
-are disabled. No third-party source is copied into the repository.
+moves native PCM and applies SpeexDSP 1.2.1 echo cancellation to duplex capture;
+engine, resource manager, node graph and file decoders are disabled. SpeexDSP
+uses BSD redistribution terms. `AEC_CFLAGS`/`AEC_LIBS` select nonstandard paths;
+the default uses its `speexdsp` pkg-config metadata. Portable recipes use the
+existing Autoconf builders with scalar DSP for the supported CPU baselines.
+No third-party source is copied into the repository.
 
 Supply the miniaudio header using `MINIAUDIO_CFLAGS=-I/PATH/TO/HEADERS` when
 pkg-config metadata is unavailable. The selected source is

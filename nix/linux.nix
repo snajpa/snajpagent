@@ -166,7 +166,7 @@ in {
     outputs = [ "out" "debug" ];
     nativeBuildInputs = [ musl.buildPackages.pkg-config ];
     buildInputs = [ staticFixed.jansson curl av pdf staticFixed.libpng archive
-      staticFixed.libxml2 alsa pulse voice.rtc voice.juice voice.opus voice.srtp
+      staticFixed.libxml2 alsa pulse voice.rtc voice.juice voice.opus voice.srtp voice.speex
       staticFixed.usrsctp tls ];
     enableParallelBuilding = true;
     dontConfigure = true;
@@ -210,6 +210,8 @@ in {
         "MINIAUDIO_CFLAGS=-isystem ${pkgs.miniaudio.src} $($PKG_CONFIG --cflags alsa libpulse) -DMA_NO_RUNTIME_LINKING -DMA_ENABLE_ONLY_SPECIFIC_BACKENDS -DMA_ENABLE_ALSA -DMA_ENABLE_PULSEAUDIO"
         "AUDIO_DEVICE_LIBS=$($PKG_CONFIG --static --libs alsa libpulse)"
         "RTC_CFLAGS=-DRTC_STATIC -I${voice.rtc.dev}/include -I${voice.opus.dev}/include"
+        "AEC_CFLAGS=$($PKG_CONFIG --cflags speexdsp)"
+        "AEC_LIBS=$($PKG_CONFIG --static --libs speexdsp)"
         "RTC_LIBS=-L${voice.rtc}/lib -ldatachannel -L${voice.juice}/lib -ljuice $($PKG_CONFIG --static --libs opus libsrtp2 usrsctp mbedtls) -lstdc++"
       )
     '';

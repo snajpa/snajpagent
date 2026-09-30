@@ -174,7 +174,7 @@ let
     os = "freebsd";
   };
   voiceRtc = import ./voice-rtc-cross.nix {
-    inherit pkgs cmakeLibrary tls; sourcePkgs = sourcePkgs;
+    inherit pkgs cmakeLibrary autotoolsLibrary tls; sourcePkgs = sourcePkgs;
     # Both FreeBSD SDKs' net/if.h need struct sockaddr complete first.
     rtcPatches = [ ./libdatachannel-bsd-sockaddr.patch ] ++ lib.optional legacy ./libdatachannel-legacy-round.patch;
     # Both FreeBSD SDKs predate the libc timingsafe_bcmp; 5.1 also lacks
@@ -441,6 +441,8 @@ in {
           "AV_CFLAGS=$(pkg-config --cflags libavformat libavcodec libavutil libswresample libswscale)"
           "AV_LIBS=$(pkg-config --static --libs libavformat libavcodec libavutil libswresample libswscale | sed -E 's/-l?(-l?)?pthread//g')"
           "RTC_CFLAGS=${voiceRtc.cflags}"
+          "AEC_CFLAGS=${voiceRtc.aecCflags}"
+          "AEC_LIBS=${voiceRtc.aecLibs}"
           "RTC_LIBS=${voiceRtc.libs} ${cxx}/lib/libstdc++.a -Wl,-Bdynamic -lm${lib.optionalString (!legacy) " -lgcc_s"} -Wl,-Bstatic"
           'MINIAUDIO_CFLAGS=-isystem ${miniaudio}'
           'CXX=${cxxCompiler} --target=${target} --sysroot=${sdk}'
