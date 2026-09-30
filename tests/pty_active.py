@@ -670,7 +670,7 @@ def test_session_list_keeps_live_owner():
         child.wait_idle_prompt(start=end)
         return bytes(child.buf[start:])
 
-    header = b"SESSION\tNAME\tMODEL\tTURNS\tPROCESS\tFIRST PROMPT"
+    header = rb"SESSION +NAME +MODEL +TURNS +PROCESS +LAST PROMPT +IRC"
     with Child([], ready=DEFAULT_IDLE_PROMPT, cols=160) as stopped:
         end = stopped.send_wait(b"stopped-session-regression\r", b"fixture answer")
         stopped.wait_idle_prompt(start=end)
@@ -689,18 +689,18 @@ def test_session_list_keeps_live_owner():
             second.wait_idle_prompt(start=end)
             second_id = second.session_id()
             output = query(first, b"/session", b"running sessions:")
-            assert output.count(header) == 1, output
+            assert len(re.findall(header, output)) == 1, output
             assert first_id.encode() in output, output
             assert second_id[:8].encode() in output, output
             assert stopped_id[:8].encode() not in output, output
             for command in (b"/session list", b"/session l", b"/s list", b"/s l"):
                 output = query(first, command, b"saved sessions:")
-                assert output.count(header) == 1, output
+                assert len(re.findall(header, output)) == 1, output
                 for identity in (first_id, second_id, stopped_id):
                     state = b"stored" if identity == stopped_id else b"live"
-                    row = (identity[:8].encode() + b"\t-\t" + DEFAULT_MODEL.encode() +
-                           b"\t1\t" + state + b"\t")
-                    assert row in output, output
+                    row = (identity[:8].encode() + rb" +- +" + re.escape(DEFAULT_MODEL.encode()) +
+                           rb" +1 +" + state + rb" +")
+                    assert re.search(row, output), output
             output = query(first, b"/s", b"running sessions:")
             assert first_id.encode() in output and second_id[:8].encode() in output, output
             assert stopped_id[:8].encode() not in output, output
@@ -866,7 +866,7 @@ def test_session_names():
     listed = run("-l")
     assert listed.returncode == 0, listed
     assert listed.stdout.splitlines()[0].split("\t") == [
-        "SESSION", "NAME", "MODEL", "TURNS", "PROCESS", "FIRST PROMPT"], listed
+        "SESSION", "NAME", "MODEL", "TURNS", "PROCESS", "LAST PROMPT", "IRC"], listed
     row = next(line.split("\t") for line in listed.stdout.splitlines()
                if line.startswith(sid[:8] + "\t"))
     assert row[1] == name and row[4] == "stored", row
@@ -5228,6 +5228,14 @@ def test_runtime_network_commands():
     config = write_config("runtime.ini",
         "[provider openai]\napi_key = ${OPENAI_API_KEY}\n[irc]\n"
         f"listen = {endpoint}\nclient = {outgoing}\n")
+    def listed_endpoints(identity, expected, process="live"):
+        result = subprocess.run([BINARY, "--dotdir", DOTDIR, "--config", str(config), "-l"],
+                                cwd=WORKSPACE, env={**os.environ, "HOME": WORKSPACE},
+                                capture_output=True, text=True, timeout=MIN_WAIT_S)
+        assert result.returncode == 0, result.stderr
+        rows = [line.split("\t") for line in result.stdout.splitlines()[1:]]
+        row = next(row for row in rows if row[0] == identity[:8])
+        assert row[4] == process and row[6] == expected, row
     before = session_ids()
     child = Child(["--no-color", "--config", str(config), "--no-listen", "--no-client",
                    "-n", "runtimeagent", "-o", "runtimeop", "-r", "lab"])
@@ -5254,16 +5262,20 @@ def test_runtime_network_commands():
         end = child.send_wait(f"/connect {outgoing}\r".encode(), b"outgoing connection added", start=end)
         links = accept_connections(upstream, 2)
         end = child.send_wait(f"/connect {outgoing}\r".encode(), b"outgoing connection already configured", start=end)
+        listed_endpoints(session_id, f"s/{endpoint},c/{outgoing}")
         end = child.send_wait(b"/disconnect\r", b"outgoing connections removed; hosting unchanged", start=end)
+        listed_endpoints(session_id, f"s/{endpoint}")
         for connection in links:
             connection.settimeout(2.0)
             while connection.recv(65536):
                 pass
         end = child.send_wait(b"/server stop\r", b"hosting stopped; outgoing connections unchanged", start=end)
+        listed_endpoints(session_id, "-")
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
             assert probe.connect_ex(("127.0.0.1", int(endpoint.rsplit(":", 1)[1]))) != 0
         end = child.send_wait_idle(b"\x03", b"turn interrupted", start=end)
         command = child.exit_now()
+        listed_endpoints(session_id, "-", "stored")
         arguments = command_arguments(command)
         assert "--no-listen" in arguments and "--no-client" in arguments
         assert "--listen" not in arguments and "--client" not in arguments

@@ -953,10 +953,16 @@ color options, Markdown presentation options, and
 .B \-\-update-model-cache
 may accompany it.  Markdown
 presentation has no useful effect on session-list output. The table has headings
-for session ID, name, model, turn count, process state and first prompt.
-Text columns show single-line previews of up to 80 Unicode characters, followed
-by an ellipsis when shortened. Whitespace and terminal controls become spaces;
-the saved names, model IDs and prompts retain their full contents.
+for session ID, name, model, turn count, process state, last prompt and IRC.
+The last two columns share the remaining terminal width equally. Long cells end
+with an ellipsis; widths account for wide Unicode characters. Redirected output
+is tab-separated with previews of up to 80 display columns per cell.
+Whitespace and terminal controls become spaces; saved text retains its full contents.
+IRC lists comma-separated endpoints: s/ENDPOINT for the hosted server first,
+then c/ENDPOINT for each outgoing client. A dash means no recorded endpoints.
+Stored sessions show their last recorded topology. An IRC prompt shows
+ENDPOINT: MESSAGE, resolving saved event references to the latest message
+in that prompt. Ordinary prompts show the latest saved user text.
 An unnamed session shows a dash in the name column.
 The process column shows live while a process owns the session, and stored when
 only its saved history remains. Live includes sessions waiting for input.

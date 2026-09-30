@@ -4,6 +4,11 @@
 
 ## Unreleased
 
+- Add a final IRC column to session lists, with the hosted `s/endpoint` first and
+  comma-separated `c/endpoint` clients. LAST PROMPT shows the latest saved input,
+  rendering IRC references as `endpoint: message`. Terminal tables share remaining
+  width equally between these columns and clip cells by Unicode display width.
+
 - Remove session archiving, `/archive` and the archive-status column. All saved
   sessions appear in resume selection and participate in `--last`; previously
   archived histories resume normally.

@@ -3,6 +3,7 @@
 #include "media.h"
 #include "base.h"
 #include "fs.h"
+#include "irc.h"
 
 #include <errno.h>
 #include <stdio.h>
@@ -328,14 +329,16 @@ snag_session_is_live(const struct snag_session *session)
 }
 
 static int
-append_list_preview(struct snag_buf *row, const char *text)
+append_list_preview(struct snag_buf *row, const char *text, size_t width, bool pad)
 {
     size_t length = text ? strlen(text) : 0u;
     size_t offset = 0u;
     size_t shown = 0u;
+    size_t ellipsis_end = row->len;
+    size_t ellipsis_width = 0u;
     bool space = false;
 
-    /* A table cell previews saved text; full prompts can contain an IRC transcript. */
+    if (!width) return 0;
     while (offset < length) {
         uint32_t cp;
         size_t bytes = snag_utf8_decode((const unsigned char *)text + offset,
@@ -350,60 +353,316 @@ append_list_preview(struct snag_buf *row, const char *text)
             offset += bytes;
             continue;
         }
-        if (shown + (space ? 1u : 0u) >= 80u) break;
+        int cells = snag_char_width(cp);
+        if (cells < 0) cells = 1;
+        if (shown + (space ? 1u : 0u) + (size_t)cells > width) {
+            row->len = ellipsis_end;
+            if (snag_buf_append(row, "…", 3u) < 0) return -1;
+            shown = ellipsis_width + 1u;
+            break;
+        }
         if (space && snag_buf_putc(row, ' ') < 0) return -1;
         if (snag_buf_append(row, text + offset, bytes) < 0) return -1;
-        shown += space ? 2u : 1u;
+        shown += (space ? 1u : 0u) + (size_t)cells;
+        if (shown < width) {
+            ellipsis_end = row->len;
+            ellipsis_width = shown;
+        }
         space = false;
         offset += bytes;
     }
-    return offset < length ? snag_buf_append(row, "…", 3u) : 0;
+    while (pad && shown++ < width) {
+        if (snag_buf_putc(row, ' ') < 0) return -1;
+    }
+    return 0;
+}
+
+struct list_irc {
+    const char *prompt;
+    struct snag_buf preview;
+    struct snag_buf endpoints;
+    bool prompt_found;
+    bool topology_found;
+    bool wants_message;
+};
+
+static bool
+irc_prompt_header(const char *text)
+{
+    return !strncmp(text, "[IRC update id=", 15u) ||
+        !strncmp(text, "[IRC endpoint=", 14u);
+}
+
+static int
+list_irc_prompt(struct list_irc *irc)
+{
+    const char *selected = NULL;
+    const char *text = irc->prompt;
+
+    irc->prompt_found = true;
+    if (!text || !irc_prompt_header(text)) return 0;
+    for (const char *line = text; line && *line; ) {
+        if (irc_prompt_header(line)) {
+            const char *end = strchr(line, '\n');
+            const char *message = strstr(line, " event=message ");
+            const char *notice = strstr(line, " event=notice ");
+            bool chat = (message && (!end || message < end)) ||
+                (notice && (!end || notice < end));
+            if (chat || !irc->wants_message) selected = line;
+            if (chat) irc->wants_message = true;
+        }
+        line = strchr(line, '\n');
+        if (line) ++line;
+    }
+    if (!selected) return 0;
+    const char *end = strchr(selected, ']');
+    const char *endpoint = strstr(selected, "endpoint=");
+    if (!end || !endpoint || endpoint > end) return 0;
+    endpoint += 9u;
+    size_t endpoint_len = strcspn(endpoint, " ]\n");
+    if (!endpoint_len || endpoint_len > SNAG_CONFIG_IRC_ENDPOINT_MAX) return 0;
+    if (snag_buf_printf(&irc->preview, "%.*s: ", (int)endpoint_len, endpoint) < 0) return -1;
+    if (!strncmp(selected, "[IRC update id=", 15u)) {
+        irc->prompt_found = false;
+        const char *kind = strstr(selected, "event=");
+        if (kind && kind < end) {
+            kind += 6u;
+            return snag_buf_append(&irc->preview, kind, strcspn(kind, " ]\n"));
+        }
+        return 0;
+    }
+    const char *body = end + 1u;
+    if (*body == '\n') ++body;
+    const char *next = strstr(body, "\n[IRC ");
+    return snag_buf_append(&irc->preview, body, next ? (size_t)(next - body) : strlen(body));
+}
+
+static int
+list_irc_topology(struct list_irc *irc, const char *text)
+{
+    const char *host = strstr(text, "\nhosted: ");
+    size_t host_len = 0u;
+
+    if (host) {
+        host += 9u;
+        host_len = strcspn(host, "\r\n");
+        if (host_len == 2u && !strncmp(host, "no", 2u)) host_len = 0u;
+        if (host_len && snag_buf_printf(&irc->endpoints, "s/%.*s", (int)host_len, host) < 0)
+            return -1;
+    }
+    bool destinations = strstr(text, "\ndestination[") != NULL;
+    for (const char *line = text; line && *line; ) {
+        if (!strncmp(line, "history:\n", 9u)) break;
+        const char *endpoint = NULL;
+        size_t length = 0u;
+        if (destinations && !strncmp(line, "destination[", 12u)) {
+            const char *colon = strstr(line, "]: ");
+            const char *end = strchr(line, '\n');
+            if (colon && (!end || colon < end)) {
+                endpoint = colon + 3u;
+                length = strcspn(endpoint, "\r\n");
+            }
+        } else if (!destinations && !strncmp(line, "endpoint[", 9u)) {
+            endpoint = line + 9u;
+            const char *end = strstr(endpoint, "]: ");
+            if (end) length = (size_t)(end - endpoint);
+        }
+        if (length && (length != host_len || memcmp(endpoint, host, length))) {
+            if (snag_buf_printf(&irc->endpoints, "%sc/%.*s",
+                    irc->endpoints.len ? "," : "", (int)length, endpoint) < 0) return -1;
+        }
+        line = strchr(line, '\n');
+        if (line) ++line;
+    }
+    irc->topology_found = true;
+    return 0;
+}
+
+static int
+list_irc_event(void *opaque, const struct snag_session *state, uint64_t seq,
+    const char *type, const json_t *data, char *error, size_t error_size)
+{
+    struct list_irc *irc = opaque;
+    (void)state;
+    (void)seq;
+    (void)error;
+    (void)error_size;
+
+    if (!irc->topology_found && !strcmp(type, "irc_snapshot")) {
+        const char *text = snag_json_string(data, "text");
+        if (text && list_irc_topology(irc, text) < 0) return -1;
+    }
+    if (!irc->prompt_found && !strcmp(type, "irc_event")) {
+        struct snag_irc_event event;
+        if (snag_irc_event_read(data, &event) < 0) return -1;
+        char reference[96];
+        (void)snprintf(reference, sizeof(reference), "[IRC update id=%s:%llu ",
+            event.stream, (unsigned long long)event.sequence);
+        if (event.stream[0] && strstr(irc->prompt, reference) &&
+            (!irc->wants_message || event.kind == SNAG_IRC_MESSAGE ||
+             event.kind == SNAG_IRC_NOTICE)) {
+            irc->preview.len = 0u;
+            if (snag_buf_printf(&irc->preview, "%s: %s", event.endpoint,
+                    event.text[0] ? event.text : snag_irc_kind_name(event.kind)) < 0) return -1;
+            irc->prompt_found = true;
+        }
+    }
+    return irc->topology_found && irc->prompt_found ? SNAG_JOURNAL_STOP_AFTER : 0;
+}
+
+static json_t *
+list_cells(struct snag_session *session, bool live, unsigned int columns)
+{
+    struct list_irc irc = {.prompt = session->last_user,
+        .preview = {.max = SNAG_MAX_DIRECT_PROMPT},
+        .endpoints = {.max = SNAG_MAX_IRC_SNAPSHOT}};
+    struct snag_buf cell = {.max = SNAG_MAX_DIRECT_PROMPT};
+    json_t *cells = NULL;
+    uint64_t before;
+    char id[9];
+    char turns[32];
+
+    const char *topology = snag_json_string(session->strings, "irc_snapshot");
+    if (list_irc_prompt(&irc) < 0 ||
+        (topology && list_irc_topology(&irc, topology) < 0)) goto out;
+    if (!irc.topology_found || !irc.prompt_found) {
+        /* Older checkpoints lack the topology cache. A damaged historical prefix
+         * must not hide a session whose current checkpoint remains valid. */
+        (void)snag_session_each_event_reverse(session, 0u, SIZE_MAX, list_irc_event,
+            &irc, &before, NULL, 0u);
+    }
+    if (snag_buf_terminate(&irc.preview) < 0 ||
+        snag_buf_terminate(&irc.endpoints) < 0) goto out;
+    (void)snprintf(id, sizeof(id), "%.8s", session->id);
+    (void)snprintf(turns, sizeof(turns), "%llu", (unsigned long long)session->turn_count);
+    const char *values[] = {id, session->name ? session->name : "-", session->default_model,
+        turns, live ? "live" : "stored",
+        irc.preview.len ? (const char *)irc.preview.data : session->last_user,
+        irc.endpoints.len ? (const char *)irc.endpoints.data : "-"};
+    cells = json_array();
+    for (size_t i = 0u; cells && i < 7u; ++i) {
+        cell.len = 0u;
+        if (append_list_preview(&cell, values[i], i >= 5u && columns ? columns : 80u, false) < 0 ||
+            json_array_append_new(cells, json_stringn((const char *)cell.data, cell.len)) < 0) {
+            json_decref(cells);
+            cells = NULL;
+        }
+    }
+out:
+    snag_buf_free(&cell);
+    snag_buf_free(&irc.preview);
+    snag_buf_free(&irc.endpoints);
+    return cells;
+}
+
+static size_t
+list_text_width(const char *text)
+{
+    size_t width = 0u;
+    size_t length = strlen(text);
+    for (size_t offset = 0u; offset < length; ) {
+        uint32_t cp;
+        size_t bytes = snag_utf8_decode((const unsigned char *)text + offset,
+            length - offset, &cp);
+        if (!bytes) break;
+        int cells = snag_char_width(cp);
+        if (cells > 0) width += (size_t)cells;
+        offset += bytes;
+    }
+    return width;
+}
+
+static int
+emit_list(const json_t *rows, unsigned int columns, snag_store_emit_fn emit, void *opaque)
+{
+    static const char *const headers[] = {
+        "SESSION", "NAME", "MODEL", "TURNS", "PROCESS", "LAST PROMPT", "IRC"};
+    size_t widths[] = {8u, 4u, 5u, 5u, 7u, 11u, 3u};
+    struct snag_buf line = {.max = SNAG_MAX_DIRECT_PROMPT};
+    int rc = -1;
+
+    for (size_t row = 0u; row < json_array_size(rows); ++row) {
+        for (size_t col = 0u; col < 5u; ++col) {
+            size_t width = list_text_width(json_string_value(
+                json_array_get(json_array_get(rows, row), col)));
+            if (width > widths[col]) widths[col] = width;
+        }
+    }
+    if (columns) {
+        size_t fixed = 12u;
+        for (size_t col = 0u; col < 5u; ++col) fixed += widths[col];
+        /* Keep both final headings readable, then divide every remaining cell equally. */
+        while (fixed + 2u * strlen(headers[5]) > columns) {
+            size_t widest = widths[1] > widths[2] ? 1u : 2u;
+            if (widths[widest] <= 1u) {
+                widest = 0u;
+                for (size_t col = 3u; col < 5u; ++col) {
+                    if (widths[col] > widths[widest]) widest = col;
+                }
+            }
+            if (widths[widest] <= 1u) break;
+            --widths[widest];
+            --fixed;
+        }
+        size_t remaining = columns > fixed ? columns - fixed : 0u;
+        widths[5] = remaining / 2u;
+        widths[6] = remaining - widths[5];
+    }
+    for (size_t row = 0u; row <= json_array_size(rows); ++row) {
+        line.len = 0u;
+        for (size_t col = 0u; col < 7u; ++col) {
+            const char *text = row ? json_string_value(
+                json_array_get(json_array_get(rows, row - 1u), col)) : headers[col];
+            if ((col && snag_buf_append(&line, columns ? "  " : "\t", columns ? 2u : 1u) < 0) ||
+                append_list_preview(&line, text, columns ? widths[col] : 80u,
+                    columns && col != 6u) < 0) goto out;
+        }
+        if (snag_buf_putc(&line, '\n') < 0 ||
+            emit(opaque, (const char *)line.data, line.len) < 0) goto out;
+    }
+    rc = 0;
+out:
+    snag_buf_free(&line);
+    return rc;
 }
 
 int
 snag_store_list(struct snag_store *store, const struct snag_session *owned,
-                enum snag_session_list filter, snag_store_emit_fn emit, void *opaque, char *error, size_t error_size)
+    enum snag_session_list filter, unsigned int columns, snag_store_emit_fn emit,
+    void *opaque, char *error, size_t error_size)
 {
-    struct snag_directory *dir;
+    struct snag_directory *dir = open_sessions_dir(store, error, error_size);
     const char *entry;
-    unsigned int shown = 0;
+    json_t *rows = json_array();
+    int rc = -1;
 
-    dir = open_sessions_dir(store, error, error_size);
-    if (!dir) return -1;
+    if (!dir || !rows) goto out;
     while ((entry = snag_directory_next(dir)) != NULL) {
         struct snag_session snapshot;
         if (matching_snapshot(store, &snapshot, entry) < 0) continue;
-        struct snag_buf row = {.max = SNAG_PATH_MAX_BYTES + 8192u};
-        /* Closing any descriptor of our POSIX lock file drops all locks held
-         * by this process on that file, even if another descriptor owns them. */
+        /* Closing a second descriptor of our lock drops the owner's POSIX lock. */
         bool live = owned && owned->lock_fd >= 0 && !strcmp(owned->id, entry);
         if (!live) live = snag_session_is_live(&snapshot);
         if (filter == SNAG_SESSIONS_RUNNING && !live) {
             snag_session_close(&snapshot);
             continue;
         }
-        if ((!shown && snag_buf_printf(&row,
-                "SESSION\tNAME\tMODEL\tTURNS\tPROCESS\tFIRST PROMPT\n") < 0) ||
-            snag_buf_printf(&row, "%.8s\t", entry) < 0 ||
-            append_list_preview(&row, snapshot.name ? snapshot.name : "-") < 0 ||
-            snag_buf_putc(&row, '\t') < 0 ||
-            append_list_preview(&row, snapshot.default_model) < 0 ||
-            snag_buf_printf(&row, "\t%llu\t%s\t",
-                            (unsigned long long)snapshot.turn_count,
-                            live ? "live" : "stored") < 0 ||
-            append_list_preview(&row, snapshot.first_user) < 0 ||
-            snag_buf_putc(&row, '\n') < 0 ||
-            emit(opaque, (const char *)row.data, row.len) < 0) {
-            snag_buf_free(&row);
-            snag_session_close(&snapshot);
-            (void)snag_directory_close(dir);
-            return snag_errorf(error, error_size, "cannot write session list");
-        }
-        snag_buf_free(&row);
+        json_t *cells = list_cells(&snapshot, live, columns);
         snag_session_close(&snapshot);
-        ++shown;
+        if (!cells || json_array_append_new(rows, cells) < 0) goto out;
     }
-    if (finish_directory(dir, error, error_size) < 0) return -1;
-    if (!shown) snag_errorf(error, error_size, "no matching sessions");
-    return 0;
+    rc = finish_directory(dir, error, error_size);
+    dir = NULL;
+    if (rc < 0) goto out;
+    if (!json_array_size(rows)) {
+        (void)snag_errorf(error, error_size, "no matching sessions");
+    } else {
+        rc = emit_list(rows, columns, emit, opaque);
+    }
+out:
+    if (dir) (void)snag_directory_close(dir);
+    json_decref(rows);
+    if (rc < 0 && error_size && !error[0])
+        (void)snag_errorf(error, error_size, "cannot write session list");
+    return rc;
 }

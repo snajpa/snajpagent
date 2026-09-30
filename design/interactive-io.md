@@ -13,13 +13,19 @@ The operator must be able to leave a live session without a terminal multiplexer
 and reconnect without restarting its engine. `--attach` / `-A` attach to a live
 owner; `--resume` attaches to a live session or continues a stopped one. Existing file `/attach` and
 `/detach` remain unchanged. Bare `/session` prints the full current ID followed
-by running sessions; `/session list` also includes stopped sessions;
+by running sessions; `/session list` also includes stored sessions;
 `/session detach` returns to the shell; `/session attach ID` switches terminals
 to another live owner. Unique ID prefixes are accepted and ambiguous matches
 are listed rather than guessed. Omitting an attach ID offers a live-session
 selection, not an implicit resume or a new session.
 Attachment bypasses provider onboarding and uses the live owner's configuration,
 including when its state directory has no default configuration file.
+
+Session tables end with LAST PROMPT and IRC, splitting remaining terminal columns
+equally. IRC previews show `endpoint: message`; endpoint lists place the hosted
+`s/endpoint` before comma-separated `c/endpoint` clients. Names, models and text
+are flattened and clipped by display width; redirected lists remain tab-separated.
+The resume/attach picker uses the same table.
 
 Keep the existing engine/presentation ownership split. One process remains the
 session and journal owner throughout requests, tools, IRC, goals and terminal

@@ -370,7 +370,7 @@ while ! grep -q 'waiting for shutdown' "$root/live-hold.err"; do
     sleep 0.01
 done
 $bin --dotdir "$live_state" -l >"$root/live-list" 2>"$root/live-list.err"
-[ "$(head -n 1 "$root/live-list")" = "$(printf 'SESSION\tNAME\tMODEL\tTURNS\tPROCESS\tFIRST PROMPT')" ]
+[ "$(head -n 1 "$root/live-list")" = "$(printf 'SESSION\tNAME\tMODEL\tTURNS\tPROCESS\tLAST PROMPT\tIRC')" ]
 grep -q "^$(printf %.8s "$live_id").*live" "$root/live-list"
 kill -s TERM "$live_pid"
 set +e

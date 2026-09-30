@@ -16,6 +16,7 @@
 #include "session_client.h"
 #include "snajpagent.h"
 #include "store.h"
+#include "term_host.h"
 #include "turn.h"
 #include "tools.h"
 #include "wire.h"
@@ -106,6 +107,7 @@ app_error(struct app_state *app, const char *message)
     return failure_notice(app, message, false);
 }
 static int list_row(void *opaque, const char *text, size_t len);
+static unsigned int list_columns(const struct app_state *app);
 static int
 app_warning(struct app_state *app, const char *message)
 {
@@ -3004,7 +3006,9 @@ handle_common_command(struct app_state *app, const char *line, bool active, bool
                       len ? "saved" : "running") < 0) return -1;
         if (snag_store_list(&app->store, &app->session,
                             len ? SNAG_SESSIONS_ALL : SNAG_SESSIONS_RUNNING,
-                            list_row, app, error, sizeof(error)) < 0) return app_error(app, error);
+                            list_columns(app), list_row, app, error, sizeof(error)) < 0) {
+            return app_error(app, error);
+        }
         return error[0] ? app_textf(app, SNAG_UI_HOST, "%s", error) : 0;
     }
     if (strncmp(line, "/history", 8u) == 0 && (!line[8] || isspace((unsigned char)line[8]))) {
@@ -5245,6 +5249,15 @@ write_resume_command(struct app_state *app, const char *program, const char *dot
     snag_buf_free(&command);
 }
 
+static unsigned int
+list_columns(const struct app_state *app)
+{
+    int fd = app->cli->list ? STDOUT_FILENO : STDERR_FILENO;
+    if (snag_isatty(fd) != 1) return 0u;
+    unsigned int columns = snag_term_host_columns();
+    return columns ? columns : 80u;
+}
+
 static int
 list_row(void *opaque, const char *text, size_t len)
 {
@@ -5263,7 +5276,8 @@ pick_session_id(struct app_state *app, enum snag_session_list filter, char **id,
     int rc = -1;
 
     *id = NULL;
-    if (snag_store_list(&app->store, NULL, filter, list_row, app, error, error_size) < 0 ||
+    if (snag_store_list(&app->store, NULL, filter, list_columns(app),
+            list_row, app, error, error_size) < 0 ||
         snag_ui_open(&app->ui, error, error_size) < 0 ||
         snag_ui_prompt(&app->ui, false, "session › ", frames, 1u, 0u) < 0) return -1;
     do {
@@ -5782,7 +5796,8 @@ run_owner(const struct snag_cli *cli, const char *program, struct snag_session_p
         "cannot use the home directory as the default working directory");
     if (!cwd) goto fail;
     if (cli->list) {
-        rc = snag_store_list(&app.store, NULL, SNAG_SESSIONS_ALL, list_row, &app,
+        rc = snag_store_list(&app.store, NULL, SNAG_SESSIONS_ALL,
+                            list_columns(&app), list_row, &app,
                             error, sizeof(error)) < 0 ? 3 : 0;
         if (rc) (void)snag_ui_text(&app.ui, SNAG_UI_ERROR, error);
         goto out;

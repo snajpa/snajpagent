@@ -68,7 +68,7 @@ def check_legacy_sessions(binary):
                 original = path.read_bytes()
                 listed = run("-l").stdout.decode().splitlines()
                 assert listed[0].split("\t") == [
-                    "SESSION", "NAME", "MODEL", "TURNS", "PROCESS", "FIRST PROMPT"]
+                    "SESSION", "NAME", "MODEL", "TURNS", "PROCESS", "LAST PROMPT", "IRC"]
                 own = next(line.split("\t") for line in listed[1:]
                            if line.startswith(path.parent.name[:8] + "\t"))
                 assert own[1] == name and own[4] == "stored", own

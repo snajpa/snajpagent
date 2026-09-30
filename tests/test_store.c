@@ -2076,7 +2076,7 @@ main(void)
     {
         int fd = open(list_path, O_CREAT | O_TRUNC | O_WRONLY, 0600);
         assert(fd >= 0);
-        assert(snag_store_list(&store, &session, SNAG_SESSIONS_ALL,
+        assert(snag_store_list(&store, &session, SNAG_SESSIONS_ALL, 0u,
                               list_to_fd, &fd, error, sizeof(error)) == 0);
         assert(close(fd) == 0);
         assert(read_file(list_path, list_buf, sizeof(list_buf)) > 0u);

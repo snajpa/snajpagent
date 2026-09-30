@@ -313,7 +313,8 @@ int snag_session_locate(struct snag_store *, struct snag_session *, const char *
 enum snag_session_list { SNAG_SESSIONS_ALL, SNAG_SESSIONS_RUNNING };
 /* Supply the caller's owned session so probing never opens/closes its lock. */
 int snag_store_list(struct snag_store *store, const struct snag_session *owned,
-                    enum snag_session_list filter, snag_store_emit_fn emit, void *opaque,
+                    enum snag_session_list filter, unsigned int columns,
+                    snag_store_emit_fn emit, void *opaque,
                     char *error, size_t error_size);
 int snag_session_delete(struct snag_store *store, struct snag_session *session,
                        const char *confirmed_prefix, uint64_t *written_seq, char *error, size_t error_size);

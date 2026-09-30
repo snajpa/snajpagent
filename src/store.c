@@ -928,6 +928,8 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             goto invalid;
         if (replace_text(session, &session->cwd, "cwd", cwd, SNAG_PATH_MAX_BYTES) < 0)
             return -1;
+        if (snag_json_set_new(session->strings, "irc_snapshot", json_string("")) < 0)
+            return -1;
         if (!snag_strcpy(session->default_effort, sizeof(session->default_effort), effort) ||
             !snag_strcpy(session->default_model, sizeof(session->default_model), model) ||
             !snag_strcpy(session->default_provider, sizeof(session->default_provider), provider))
@@ -992,6 +994,8 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             !snag_text_valid(text, 1u, SNAG_MAX_IRC_SNAPSHOT) ||
             snag_json_integer_u64(data, "timestamp_ms", &timestamp_ms) < 0 || timestamp_ms == 0u)
             goto invalid;
+        if (snag_json_set_new(session->strings, "irc_snapshot", json_string(text)) < 0)
+            return -1;
     } else if (strcmp(type, "cwd_changed") == 0) {
         const char *old_cwd = snag_json_string(data, "old_cwd");
         const char *new_cwd = snag_json_string(data, "new_cwd");
