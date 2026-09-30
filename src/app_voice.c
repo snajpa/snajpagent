@@ -3835,7 +3835,13 @@ int snag_app_voice_command(struct app_state *app,const char *line,bool *handled)
     *handled=!strcmp(line,"/voice") || !strncmp(line,"/voice ",7u);
     if(!*handled || !strcmp(line,"/voice devices")) {*handled=false;return 0;}
     if(!strcmp(line,"/voice off")) {
-        if (app->voice_switch) app->voice_switch->mode = SNAG_SESSION_VOICE_OFF;
+        if (app->voice_switch) {
+            if (app->voice_switch->sent) app->voice_switch->mode = SNAG_SESSION_VOICE_OFF;
+            else {
+                free(app->voice_switch);
+                app->voice_switch = NULL;
+            }
+        }
         if (app->voice) {
             /* Off supersedes a prepared transfer and follows the usual durable stop. */
             app->voice->transfer_target[0] = '\0';

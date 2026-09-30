@@ -620,7 +620,8 @@ is appended as a new, explicit boundary after the carried source observations.
 READY can accept the destination only after its history is ready for adoption.
 BOUND remains the microphone activation boundary. The frontend's source drain must
 also report the final requested voice state: a mode captured at initial pause can
-be stale by then. Explicit off during preparation wins; unapplied or late source
+be stale by then. Explicit off discards an unsent switch request immediately;
+once offered, off travels as the final mode. Unapplied or late source
 actions remain source actions and cannot be replayed against the new destination.
 Loss of the frontend never serves as proof of a successful intentional handover.
 

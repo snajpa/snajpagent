@@ -8707,7 +8707,9 @@ struct handover_owner {
     char id[SNAG_ID_HEX_LEN + 1u];
 };
 
-enum { HANDOVER_LOST = 3u, HANDOVER_REFUSED, HANDOVER_CASES };
+enum {
+    HANDOVER_LOST = 3u, HANDOVER_REFUSED, HANDOVER_REATTACHED, HANDOVER_CANCELLED, HANDOVER_CASES
+};
 
 static void
 test_voice_archive_return(struct app_state *source, const char *original, uint64_t original_seq)
@@ -8862,6 +8864,10 @@ handover_engine(struct snag_session_process *process, const char *path, const ch
         /* Admit the command while active, then use the existing expiry fixture
          * to finish the simulated owner without opening media or a provider. */
         assert(snag_app_voice_fixture_failure(&app, NULL, NULL) == SNAG_VOICE_RETRY);
+        if (mode == HANDOVER_CANCELLED) {
+            assert(snag_app_voice_command(&app, "/voice off", &handled) == 0 && handled);
+            assert(!app.voice && !app.voice_switch);
+        }
         assert(fcntl(control, F_SETFL, O_NONBLOCK) == 0);
         while (app.voice_switch) {
             ssize_t n = read(control, &gate, 1u);
@@ -8876,7 +8882,9 @@ handover_engine(struct snag_session_process *process, const char *path, const ch
             assert(snag_app_voice_attachment_service(&app) == 0);
             (void)snag_sleep_ms(1u);
         }
-        if (mode == HANDOVER_REFUSED) {
+        if (mode == HANDOVER_CANCELLED) {
+            assert(!app.voice && snag_ui_session_attachment(&app.ui) == 1u);
+        } else if (mode == HANDOVER_REFUSED) {
             assert(app.voice && snag_ui_session_attachment(&app.ui) == 1u);
             json_t *state = snag_app_voice_fixture_state(&app);
             assert(state && !*snag_json_string(state, "transfer_target"));
@@ -8900,6 +8908,13 @@ handover_engine(struct snag_session_process *process, const char *path, const ch
         while (snag_ui_session_attachment(&app.ui)) (void)snag_sleep_ms(1u);
         assert(write(report, "d", 1u) == 1);
         assert(read(control, source_id, sizeof(source_id)) == sizeof(source_id));
+        if (mode == HANDOVER_CANCELLED) {
+            assert(!snag_ui_session_pending(&app.ui) && !app.voice_import && !app.voice);
+            assert(!app.session.voice_history.adopted_seq && !app.session.pending_queue_count);
+            assert(write(report, "F", 1u) == 1);
+            assert(read(control, &gate, 1u) == 1 && gate == 'A');
+            goto finished;
+        }
         uint64_t generation;
         while (!(generation = snag_ui_session_pending(&app.ui))) (void)snag_sleep_ms(1u);
         if (mode == HANDOVER_REFUSED) {
@@ -8923,13 +8938,32 @@ handover_engine(struct snag_session_process *process, const char *path, const ch
         assert(!app.session.voice_history.adopted_seq && !app.voice);
         assert(write(report, "b", 1u) == 1);
         assert(read(control, &gate, 1u) == 1 && gate == 'A');
-        if (mode == HANDOVER_LOST) {
+        if (mode == HANDOVER_LOST || mode == HANDOVER_REATTACHED) {
             while (snag_ui_session_attachment(&app.ui)) (void)snag_sleep_ms(1u);
+        }
+        if (mode == HANDOVER_REATTACHED) {
+            assert(write(report, "n", 1u) == 1);
+            uint64_t next_generation;
+            while (!(next_generation = snag_ui_session_pending(&app.ui)))
+                (void)snag_sleep_ms(1u);
+            assert(next_generation > generation && app.voice_import);
+            assert(!app.session.voice_history.adopted_seq);
+            /* Match the production service order: consume the old BOUND before
+             * preparing a new ordinary attachment. Neither may start audio. */
+            assert(snag_app_voice_attachment_service(&app) == 0);
+            assert(app.session.voice_history.adopted_seq && !app.voice_import && !app.voice);
+            assert(snag_app_voice_attachment_prepare(&app, next_generation) == 1);
+            assert(snag_ui_session_rebind(&app.ui, next_generation) == 0);
+            assert(snag_ui_session_ready(&app.ui, next_generation) == 0);
+            while (!snag_ui_session_attachment(&app.ui)) (void)snag_sleep_ms(1u);
+            assert(snag_ui_session_attachment(&app.ui) == next_generation && !app.voice);
         }
         assert(snag_app_voice_attachment_service(&app) == 0);
         assert(app.session.voice_history.adopted_seq && !app.voice_import);
-        if (mode == SNAG_SESSION_VOICE_OFF || mode == HANDOVER_LOST) assert(!app.voice);
-        else {
+        if (mode == SNAG_SESSION_VOICE_OFF || mode == HANDOVER_LOST ||
+            mode == HANDOVER_REATTACHED) {
+            assert(!app.voice);
+        } else {
             json_t *state = snag_app_voice_fixture_state(&app);
             assert(state && json_is_true(json_object_get(state, "muted")) ==
                 (mode == SNAG_SESSION_VOICE_MUTED));
@@ -9045,6 +9079,7 @@ test_voice_handover(void)
                     client_open = false;
                 }
                 if (event == SNAG_SESSION_SWITCH) {
+                    assert(mode != HANDOVER_CANCELLED);
                     assert(!strcmp((const char *)client.event_data, target.id));
                     assert(snprintf(directory, sizeof(directory), "%s/sessions/%s",
                         path, target.id) > 0);
@@ -9073,7 +9108,20 @@ test_voice_handover(void)
                     else { assert(phase == 'D'); source_done = true; }
                 } else if (phase == 'P') assert(write(source.control, "M", 1u) == 1);
                 else if (phase == 'b') bound = true;
-                else if (phase == 'r') {
+                else if (phase == 'n') {
+                    assert(mode == HANDOVER_REATTACHED && released && !client_open);
+                    assert(close(terminal[1]) == 0);
+                    assert(snag_session_stream_pair(terminal) == 0);
+                    assert(snag_session_client_init(&client, terminal[0], -1) == 0);
+                    assert(snprintf(directory, sizeof(directory), "%s/sessions/%s",
+                        path, target.id) > 0);
+                    int dir = open(directory, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+                    assert(dir >= 0);
+                    int peer = snag_session_endpoint_connect(dir, directory);
+                    assert(peer >= 0 && close(dir) == 0);
+                    assert(snag_session_client_attach(&client, peer) == 0);
+                    client_open = true;
+                } else if (phase == 'r') {
                     assert(mode == SNAG_SESSION_VOICE_OFF && released);
                     assert(snprintf(directory, sizeof(directory), "%s/sessions/%s",
                         path, source.id) > 0);
@@ -9081,18 +9129,20 @@ test_voice_handover(void)
                     assert(write(target.control, "H", 1u) == 1);
                 } else { assert(phase == 'F'); adopted = true; }
             }
-            if (source_done && !released && (bound || (mode == HANDOVER_REFUSED && adopted))) {
+            bool kept_source = mode == HANDOVER_REFUSED || mode == HANDOVER_CANCELLED;
+            if (source_done && !released && (bound || (kept_source && adopted))) {
                 int status;
                 assert(waitpid(source.pid, &status, 0) == source.pid);
                 assert(WIFEXITED(status) && !WEXITSTATUS(status));
-                if (mode == HANDOVER_REFUSED) assert(refused && !bound);
-                else {
+                if (kept_source) {
+                    assert(!bound && (mode == HANDOVER_CANCELLED || refused));
+                } else {
                     assert(snprintf(directory, sizeof(directory), "%s/sessions/%s",
                         path, source.id) > 0);
                     assert(snprintf(retired, sizeof(retired), "%s/retired-source", path) > 0);
                     assert(rename(directory, retired) == 0);
                 }
-                if (mode == HANDOVER_LOST) {
+                if (mode == HANDOVER_LOST || mode == HANDOVER_REATTACHED) {
                     snag_session_client_close(&client);
                     client_open = false;
                 }

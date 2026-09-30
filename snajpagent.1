@@ -1704,9 +1704,9 @@ source results stay with the source session. The destination's previous voice
 conversation is replaced by the carried conversation, followed by current
 destination context.
 Preparation failure keeps the source attachment and resumes its voice when
-still enabled. Turning voice off before history is sealed cancels preparation;
-after the offer is sent, it leaves voice off in the destination. Mute changes
-applied before source release determine the destination's initial microphone state.
+still enabled. Before the transfer offer is sent, /voice off cancels preparation
+immediately. Afterward, a successful switch leaves voice off in the destination.
+Mute changes applied before source release determine the destination's initial microphone state.
 An incompatible private-protocol version is refused before acceptance. Use a
 compatible binary to attach to an older running owner.
 .TP

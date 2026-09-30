@@ -18,7 +18,8 @@
   journal before acceptance, preserving source identities and queued-work ownership.
   Use destination configuration and credentials, retire source media before binding,
   and apply final mute/off state before starting destination audio. Failed preparation
-  keeps the source attached; ordinary reattachment requires explicit voice activation.
+  keeps the source attached; explicit off cancels an unsent switch immediately.
+  Ordinary reattachment requires explicit voice activation.
 
 - Preserve native microphone sample time across mute gaps and partial reads,
   using capture positions for RTP timestamps while retaining input privacy.
