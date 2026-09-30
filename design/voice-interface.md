@@ -527,6 +527,14 @@ Journal or display failure stops voice through existing failure handling.
 These source operations currently have fixture coverage only. Connecting them to
 the shared attachment exchange and importing destination history remain pending.
 
+The store can open an exact source session's committed history prefix with a
+read-only descriptor. The source supplies its end offset, next sequence and hash;
+opening verifies the boundary record, then existing paged cursors verify the
+visited chain. The view takes no writer lock, runs no reducer or repair and does
+not adopt later appends. Closing it preserves the live source owner's lock.
+This supplies bounded history access for handover; callers must still select and
+filter public observations before importing them. Attachment does not use it yet.
+
 ## Implementation and regression sequence
 
 1. Reproduce a second native delegation while a coding request is pending.

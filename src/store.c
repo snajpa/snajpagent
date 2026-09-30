@@ -2889,6 +2889,43 @@ invalid:
     return snag_fail(error, error_size, EINVAL, "invalid history record boundary");
 }
 
+int
+snag_session_history_open(struct snag_store *store, struct snag_session *session, const char *id,
+    const struct snag_journal_cursor *tail, char *error, size_t error_size)
+{
+    if (!store || !session || session->id[0] || session->pending_log || !id ||
+        !snag_hex_is_lower(id, SNAG_ID_HEX_LEN) || !tail || tail->offset < 0 ||
+        !tail->next_seq || !snag_hex_is_lower(tail->prev_sha256, SNAG_SHA256_HEX_LEN) ||
+        ((tail->offset == 0) != (tail->next_seq == 1u)) ||
+        (!tail->offset && strspn(tail->prev_sha256, "0") != SNAG_SHA256_HEX_LEN)) {
+        return snag_fail(error, error_size, EINVAL, "invalid committed history prefix");
+    }
+    if (snag_session_locate(store, session, id, NULL, NULL, error, error_size) < 0) return -1;
+    session->log_fd = snag_open_read_security_at(session->dir_fd, "events.jsonl", false);
+    if (session->log_fd < 0) {
+        return snag_errorf(error, error_size, "cannot open source history: %s", strerror(errno));
+    }
+    if (snag_store_verify_private_fd(session->log_fd, false, "source history",
+            error, error_size) < 0) return -1;
+    if (snag_seek(session->log_fd, 0, SEEK_END) < tail->offset) {
+        return snag_fail(error, error_size, EINVAL, "source history ends before committed prefix");
+    }
+    session->log_end = tail->offset;
+    session->next_seq = tail->next_seq;
+    memcpy(session->prev_sha256, tail->prev_sha256, sizeof(session->prev_sha256));
+    if (!tail->offset) return 0;
+    int64_t split = previous_newline(session, tail->offset - 1), end = -1;
+    if (split < -1) {
+        return snag_fail(error, error_size, EINVAL, "cannot locate source history boundary");
+    }
+    json_t *record = read_record_at(session, split + 1, &end);
+    int rc = end == tail->offset ? history_record_valid(session, record, split + 1, end,
+        tail->next_seq - 1u, error, error_size) : -1;
+    if (!rc && strcmp(tail->prev_sha256, snag_json_string(record, "event_sha256"))) rc = -1;
+    json_decref(record);
+    return rc < 0 ? snag_fail(error, error_size, EINVAL, "invalid source history boundary") : 0;
+}
+
 static int
 history_cursor_before(struct snag_session *session, uint64_t before,
     struct snag_journal_cursor *cursor, char *error, size_t error_size)

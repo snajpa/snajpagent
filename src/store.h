@@ -371,6 +371,13 @@ int snag_session_each_event_reverse(struct snag_session *, uint64_t before_seq, 
  * consumed records and supplies NULL state. End-of-log is reusable after append. */
 int snag_session_each_event_forward(struct snag_session *, struct snag_journal_cursor *,
     size_t scan_bytes, snag_session_event_fn, void *opaque, char *error, size_t error_size);
+/* Open an exact session's committed prefix for cursor scans only. The source
+ * owner supplies the tail; opening verifies its last record, and scans verify
+ * the visited chain. No writer lock, reducer replay, repair or suffix adoption.
+ * Supply an initialized unopened session and close it on every outcome.
+ * Records are raw; callers still apply their public projection/secret filter. */
+int snag_session_history_open(struct snag_store *, struct snag_session *, const char *id,
+    const struct snag_journal_cursor *tail, char *error, size_t error_size);
 
 int snag_session_media(struct snag_session *session, const char *path, const char *mime,
                        int (*pump)(void *, unsigned int), void *opaque,

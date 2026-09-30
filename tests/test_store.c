@@ -458,6 +458,136 @@ test_forward_history(struct snag_store *store, const char *cwd)
 }
 
 static void
+test_history_prefix(struct snag_store *store, const char *cwd)
+{
+    struct snag_session source, view, other;
+    char error[256];
+    snag_session_init(&source);
+    snag_session_init(&view);
+    snag_session_init(&other);
+    assert(snag_session_create(store, &source, cwd, "default", "model", "high",
+        error, sizeof(error)) == 0);
+    commit_event(&source, "effort_changed",
+        change_data("old_effort", "high", "new_effort", "low"));
+    struct snag_journal_cursor tail = {.offset = source.log_end, .next_seq = source.next_seq};
+    memcpy(tail.prev_sha256, source.prev_sha256, sizeof(tail.prev_sha256));
+    assert(snag_session_history_open(store, &source, source.id, &tail,
+        error, sizeof(error)) < 0);
+    assert_session_lock_retained(&source, "after refusing an owned history view");
+    assert(snag_session_history_open(store, &view, source.id, &tail,
+        error, sizeof(error)) == 0);
+    assert(view.lock_fd < 0 && !view.strings && !view.pending_log && !view.pending_queue);
+    assert(snag_seek(view.log_fd, 0, SEEK_SET) == 0 && write(view.log_fd, "!", 1u) < 0);
+    /* A live writer can append; neither scan direction adopts its later suffix. */
+    commit_event(&source, "effort_changed",
+        change_data("old_effort", "low", "new_effort", "high"));
+    struct snag_journal_cursor cursor = {0};
+    struct forward_scan scan = {.next = 1u};
+    while (scan.next < tail.next_seq) {
+        assert(snag_session_each_event_forward(&view, &cursor, 1u, forward_event,
+            &scan, error, sizeof(error)) == 0);
+    }
+    assert(cursor.offset == tail.offset && !strcmp(cursor.prev_sha256, tail.prev_sha256));
+    assert(snag_session_each_event_forward(&view, &cursor, SIZE_MAX, forward_event,
+        &scan, error, sizeof(error)) == 0 && scan.next == tail.next_seq);
+    struct reverse_scan reverse = {.next = tail.next_seq, .limit = SIZE_MAX};
+    uint64_t before = 0u;
+    assert(snag_session_each_event_reverse(&view, 0u, SIZE_MAX, reverse_event,
+        &reverse, &before, error, sizeof(error)) == 0);
+    assert(!before && reverse.count == tail.next_seq - 1u);
+    snag_session_close(&view);
+    assert_session_lock_retained(&source, "after closing source history view");
+    /* Empty prefixes have the genesis hash and expose no events. */
+    struct snag_journal_cursor empty = {.next_seq = 1u};
+    memset(empty.prev_sha256, '0', SNAG_SHA256_HEX_LEN);
+    assert(snag_session_history_open(store, &view, source.id, &empty,
+        error, sizeof(error)) == 0);
+    cursor = (struct snag_journal_cursor){0};
+    scan = (struct forward_scan){.next = 1u};
+    assert(snag_session_each_event_forward(&view, &cursor, SIZE_MAX, forward_event,
+        &scan, error, sizeof(error)) == 0 && scan.next == 1u);
+    snag_session_close(&view);
+    for (unsigned int trial = 0u; trial < 8u; ++trial) {
+        struct snag_journal_cursor bad = tail;
+        switch (trial) {
+        case 0: --bad.offset; break;
+        case 1: ++bad.offset; break;
+        case 2: ++bad.next_seq; break;
+        case 3: bad.next_seq = 1u; break;
+        case 4: bad.prev_sha256[0] = bad.prev_sha256[0] == '0' ? '1' : '0'; break;
+        case 5: bad.prev_sha256[0] = 'Z'; break;
+        case 6: bad.offset = source.log_end + 1; break;
+        default: bad = empty; bad.prev_sha256[0] = '1'; break;
+        }
+        assert(snag_session_history_open(store, &view, source.id, &bad,
+            error, sizeof(error)) < 0);
+        snag_session_close(&view);
+    }
+    assert(snag_session_history_open(store, &view, "12345678", &tail,
+        error, sizeof(error)) < 0 && view.dir_fd < 0);
+    assert(snag_session_create(store, &other, cwd, "default", "model", "high",
+        error, sizeof(error)) == 0);
+    commit_event(&other, "effort_changed",
+        change_data("old_effort", "high", "new_effort", "low"));
+    assert(snag_session_history_open(store, &view, other.id, &tail,
+        error, sizeof(error)) < 0);
+    snag_session_close(&view);
+    snag_session_close(&other);
+    /* An incomplete later write is neither adopted nor repaired by the view. */
+    assert(snag_seek(source.log_fd, 0, SEEK_END) == source.log_end);
+    assert(write(source.log_fd, "{torn", 5u) == 5);
+    assert(snag_session_history_open(store, &view, source.id, &tail,
+        error, sizeof(error)) == 0);
+    cursor = (struct snag_journal_cursor){0};
+    scan = (struct forward_scan){.next = 1u};
+    assert(snag_session_each_event_forward(&view, &cursor, SIZE_MAX, forward_event,
+        &scan, error, sizeof(error)) == 0 && scan.next == tail.next_seq);
+    snag_session_close(&view);
+    assert(snag_seek(source.log_fd, 0, SEEK_END) == source.log_end + 5);
+    assert(snag_truncate(source.log_fd, source.log_end) == 0);
+    /* Opening validates the tail; the bounded scanner rejects damaged interior
+     * records before exposing them to the projection callback. */
+    int corrupt = snag_create_private_at(source.dir_fd, "events.jsonl", false);
+    assert(corrupt >= 0 && write(corrupt, "[", 1u) == 1);
+    assert(snag_session_history_open(store, &view, source.id, &tail,
+        error, sizeof(error)) == 0);
+    cursor = (struct snag_journal_cursor){0};
+    scan = (struct forward_scan){.next = 1u};
+    assert(snag_session_each_event_forward(&view, &cursor, SIZE_MAX, forward_event,
+        &scan, error, sizeof(error)) < 0 && scan.next == 1u);
+    snag_session_close(&view);
+    assert(snag_seek(corrupt, 0, SEEK_SET) == 0 && write(corrupt, "{", 1u) == 1);
+    assert(close(corrupt) == 0);
+#ifndef _WIN32
+    assert(fchmod(source.log_fd, 0644) == 0);
+    assert(snag_session_history_open(store, &view, source.id, &tail,
+        error, sizeof(error)) < 0);
+    snag_session_close(&view);
+    assert(fchmod(source.log_fd, 0600) == 0);
+    assert(renameat(source.dir_fd, "events.jsonl", source.dir_fd, "history-original") == 0);
+    assert(symlinkat("history-original", source.dir_fd, "events.jsonl") == 0);
+    assert(snag_session_history_open(store, &view, source.id, &tail,
+        error, sizeof(error)) < 0);
+    snag_session_close(&view);
+    assert(unlinkat(source.dir_fd, "events.jsonl", 0) == 0);
+    assert(renameat(source.dir_fd, "history-original", source.dir_fd, "events.jsonl") == 0);
+#endif
+    assert_session_lock_retained(&source, "after history prefix failures");
+    assert(snag_session_checkpoint(&source, error, sizeof(error)) == 0);
+    tail.offset = source.log_end;
+    tail.next_seq = source.next_seq;
+    memcpy(tail.prev_sha256, source.prev_sha256, sizeof(tail.prev_sha256));
+    assert(snag_session_history_open(store, &view, source.id, &tail,
+        error, sizeof(error)) == 0);
+    cursor = (struct snag_journal_cursor){0};
+    scan = (struct forward_scan){.next = 1u};
+    assert(snag_session_each_event_forward(&view, &cursor, SIZE_MAX, forward_event,
+        &scan, error, sizeof(error)) == 0 && scan.next == tail.next_seq);
+    snag_session_close(&view);
+    snag_session_close(&source);
+}
+
+static void
 test_reverse_history(struct snag_store *store, const char *cwd)
 {
     struct snag_session session;
@@ -896,6 +1026,22 @@ test_large_embedded_checkpoint(struct snag_store *store, const char *cwd)
     session.on_checkpoint = large_checkpoint_context;
     assert(snag_session_checkpoint(&session, error, sizeof(error)) == 0);
     session.on_checkpoint = NULL;
+    struct snag_session view;
+    snag_session_init(&view);
+    struct snag_journal_cursor tail = {.offset = session.log_end, .next_seq = session.next_seq};
+    memcpy(tail.prev_sha256, session.prev_sha256, sizeof(tail.prev_sha256));
+    assert(snag_session_history_open(store, &view, session.id, &tail,
+        error, sizeof(error)) == 0);
+    struct snag_journal_cursor cursor = {0};
+    struct forward_scan scan = {.next = 1u};
+    assert(snag_session_each_event_forward(&view, &cursor, 1u, forward_event,
+        &scan, error, sizeof(error)) == 0 && scan.next == 2u);
+    /* The existing quantum admits one complete large checkpoint, not a new cap. */
+    assert(snag_session_each_event_forward(&view, &cursor, 1u, forward_event,
+        &scan, error, sizeof(error)) == 0 && scan.next == tail.next_seq);
+    assert(cursor.offset == tail.offset && !strcmp(cursor.prev_sha256, tail.prev_sha256));
+    snag_session_close(&view);
+    assert_session_lock_retained(&session, "after large checkpoint history view");
     snag_session_close(&session);
     snag_session_init(&session);
     assert(snag_session_open(store, &session, id, error, sizeof(error)) == 0);
@@ -1810,6 +1956,7 @@ main(void)
     test_pending_session(&store, cwd);
     test_reverse_history(&store, cwd);
     test_forward_history(&store, cwd);
+    test_history_prefix(&store, cwd);
     test_upload_staging_lifecycle(&store, cwd);
     test_checkpoint_optional_download_queue(&store, cwd);
     test_one_file_checkpoint(&store, cwd);

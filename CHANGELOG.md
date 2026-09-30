@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Add read-only, hash-verified committed history views for source preparation.
+  The live source keeps its writer lock; public projection and attachment import
+  remain pending.
+
 - Add internal source-side voice handover preparation with reversible pause,
   retained helper history and requested mode. Shared attachment wiring and
   destination history import remain pending.
