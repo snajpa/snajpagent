@@ -493,8 +493,17 @@ snag_app_tool_run(struct app_state *app, const struct snag_response_item *call,
 {
     if (call && call->name && !strcmp(call->name, "read_tool_output"))
         return snag_app_output_page(app, call, result, error, error_size);
-    if (call && call->name && !strcmp(call->name, "read_session_history"))
-        return snag_app_history_page(app, call, result, error, error_size);
+    if (call && call->name && !strcmp(call->name, "read_session_history")) {
+        struct snag_secret_set secrets = {0};
+        *result = NULL;
+        int rc = snag_secret_set_build(&secrets, app->config, credential, error, error_size);
+        if (!rc) {
+            rc = snag_app_history_page(app, call, &secrets.wire, result, error, error_size);
+        }
+        if (!rc && *result) rc = snag_secret_result(&secrets, *result, error, error_size);
+        snag_secret_set_free(&secrets);
+        return rc;
+    }
     if (call && call->name && !strcmp(call->name, "voice_output"))
         return snag_app_voice_output(app, call, result, error, error_size);
     if (call && call->name && !strcmp(call->name, "list_goals"))

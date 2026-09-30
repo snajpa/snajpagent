@@ -4,9 +4,12 @@
 
 ## Unreleased
 
+- Filter structured history before quoting it for voice or shortening history-tool
+  details. Protect configured secrets and request credentials, including values
+  containing quotes or backslashes in older records. Saved records stay unchanged.
+
 - Add read-only, hash-verified committed history views for source preparation.
-  The live source keeps its writer lock; public projection and attachment import
-  remain pending.
+  The live source keeps its writer lock; shared attachment import remains pending.
 
 - Add internal source-side voice handover preparation with reversible pause,
   retained helper history and requested mode. Shared attachment wiring and

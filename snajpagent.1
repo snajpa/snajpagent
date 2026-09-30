@@ -2030,6 +2030,8 @@ credentials reflected in provider output. This protection follows credentials
 used by interface requests when a credential file changes during voice use,
 including tokens refreshed inside the HTTP transport and responses retained
 during shutdown.
+History filtering precedes JSON quoting and excerpting, including for old records
+whose text predates a configured secret. Saved records stay unchanged.
 Before its first delegation, the text interface reads working inputs, public
 output and outcomes from session history. It appends newly recorded working
 events before subsequent ordinary requests. This catches up in bounded steps
@@ -2910,6 +2912,8 @@ empty with
 continue with its cursor rather than treating it as the end of history.
 Checkpoint records show coverage metadata instead of saved transcripts;
 provider continuations and encrypted compaction payloads are omitted.
+History records are filtered with configured secrets and the request's credential
+before their details are shortened. Stored records remain unchanged.
 History and goal listing report an output-budget failure, not a false empty/end
 page, when no matching entry fits. Reduce history detail or increase the
 configured tool output budget as indicated.
@@ -4303,6 +4307,7 @@ reads a bounded newest-first page of verified durable session events. Optional
 before_seq is an exclusive positive event sequence cursor; omit it for the newest
 page. Limit defaults to 20 events (1..50), and detail_bytes defaults to 512 bytes
 per event (128..2048). Use the returned next_before_seq to page older events.
+Secret filtering applies to structured records before creating those excerpts.
 .PP
 .B list_goals
 lists bounded durable goal identities, current/final statuses and parent/replacement

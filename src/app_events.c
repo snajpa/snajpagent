@@ -880,6 +880,7 @@ out:
 
 struct app_history_scan {
     struct app_state *app;
+    const struct snag_wire_secrets *secrets;
     struct snag_buf body;
     json_t *filter;
     uint64_t first_seq, last_seq;
@@ -903,10 +904,13 @@ history_excerpt(const char *text, size_t limit)
 }
 
 char *
-snag_app_history_data(uint64_t seq, const char *type, const json_t *data)
+snag_app_history_data(uint64_t seq, const char *type, const json_t *data,
+    const struct snag_wire_secrets *secrets, char *error, size_t size)
 {
     json_t *view = NULL, *items = NULL;
     char *encoded = NULL;
+    char *filtered = NULL;
+    struct snag_buf clean = {.max = SNAG_MAX_EVENT_LINE + 1u};
     bool omitted = false;
     if (!strcmp(type, "session_checkpoint")) {
         view = json_pack("{s:I,s:b,s:I}", "covers_through_seq", (json_int_t)(seq - 1u),
@@ -938,10 +942,22 @@ snag_app_history_data(uint64_t seq, const char *type, const json_t *data)
             goto out;
     }
     if (view) encoded = json_dumps(view, JSON_COMPACT | JSON_SORT_KEYS | JSON_ENCODE_ANY);
+    if (encoded) {
+        size_t length = strlen(encoded);
+        if (snag_wire_json_redact_bounded((const unsigned char *)encoded, length,
+                SNAG_MAX_EVENT_LINE, secrets, &clean, error, size) == 0 &&
+            snag_buf_terminate(&clean) == 0) {
+            filtered = (char *)clean.data;
+            clean.data = NULL;
+        }
+        snag_secret_clear(encoded, length);
+        free(encoded);
+    }
 out:
+    snag_buf_free(&clean);
     json_decref(items);
     json_decref(view);
-    return encoded;
+    return filtered;
 }
 
 static int
@@ -957,7 +973,7 @@ history_event(void *opaque, const struct snag_session *state, uint64_t seq,
     scan->last_seq = seq;
     if (scan->filter && !json_object_get(scan->filter, type)) return 0;
     ++scan->matched;
-    char *encoded = snag_app_history_data(seq, type, data);
+    char *encoded = snag_app_history_data(seq, type, data, scan->secrets, error, error_size);
     if (!encoded) return -1;
     char *detail = history_excerpt(encoded, scan->detail_bytes);
     free(encoded);
@@ -978,11 +994,11 @@ out:
 }
 
 int
-snag_app_history_page(struct app_state *app, const struct snag_response_item *call, json_t **result,
-                      char *error, size_t error_size)
+snag_app_history_page(struct app_state *app, const struct snag_response_item *call,
+    const struct snag_wire_secrets *secrets, json_t **result, char *error, size_t error_size)
 {
     uint64_t before = 0u, limit = 20u, detail = 512u;
-    struct app_history_scan scan = {.app = app};
+    struct app_history_scan scan = {.app = app, .secrets = secrets};
     struct snag_buf text = {.max = app->session.tool_output_bytes + 1u};
     int rc = -1;
 

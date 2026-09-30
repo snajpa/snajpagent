@@ -135,6 +135,9 @@ out:
     return rc;
 }
 
+static int voice_history_page(struct app_state *, const struct snag_response_item *,
+    json_t **, char *, size_t);
+
 int
 snag_app_voice_read(struct app_state *app, const struct snag_response_item *call,
                     json_t **result, char *error, size_t size)
@@ -145,7 +148,7 @@ snag_app_voice_read(struct app_state *app, const struct snag_response_item *call
         return snag_tools_read_only(call, app->session.cwd, NULL, NULL, result);
     }
     if (!strcmp(call->name, "read_session_history"))
-        return snag_app_history_page(app, call, result, error, size);
+        return voice_history_page(app, call, result, error, size);
     if (strcmp(call->name, "inspect_session")) {
         *result = snag_tool_result_terminal(false, "Tool is unavailable to the voice interface.");
         return *result ? 0 : -1;
@@ -332,6 +335,17 @@ struct app_voice {
     bool close_requested;
     char transfer_target[SNAG_ID_HEX_LEN + 1u]; /* Session-owner-only paused transfer. */
 };
+
+static int
+voice_history_page(struct app_state *app, const struct snag_response_item *call,
+    json_t **result, char *error, size_t size)
+{
+    if (!app->voice) return snag_app_tool_run(app, call, NULL, result, error, size);
+    const struct snag_secret_set *secrets = &app->voice->secrets;
+    int rc = snag_app_history_page(app, call, &secrets->wire, result, error, size);
+    if (!rc && *result) rc = snag_secret_result(secrets, *result, error, size);
+    return rc;
+}
 
 static void
 observation_start(struct app_voice *v, const struct snag_session *session)
@@ -1965,11 +1979,9 @@ interface_history_event(void *opaque, const struct snag_session *state, uint64_t
     struct interface_history_read *read = opaque;
     struct app_voice *v = read->app->voice;
     (void)state;
-    (void)error;
-    (void)size;
     if (seq >= read->handoff->history_target) return 1;
     if (!history_observation(v, seq, type, data, true)) return 0;
-    char *encoded = snag_app_history_data(seq, type, data);
+    char *encoded = snag_app_history_data(seq, type, data, &v->secrets.wire, error, size);
     json_t *view = encoded ? json_loads(encoded, JSON_REJECT_DUPLICATES, NULL) : NULL;
     if (encoded) snag_secret_clear(encoded, strlen(encoded));
     free(encoded);
@@ -2634,18 +2646,15 @@ observation_record(struct app_state *app, uint64_t seq,
     const char *type, const json_t *data, char *error, size_t size)
 {
     struct app_voice *v = app->voice;
-    char *encoded = snag_app_history_data(seq, type, data);
+    char *encoded = snag_app_history_data(seq, type, data, &v->secrets.wire, error, size);
     if (!encoded) return NULL;
-    struct snag_buf clean = {.max = SNAG_MAX_EVENT_LINE};
-    int rc = snag_wire_json_redact_bounded((const unsigned char *)encoded, strlen(encoded),
-        SNAG_MAX_EVENT_LINE, &v->secrets.wire, &clean, error, size);
-    snag_secret_clear(encoded, strlen(encoded));
-    free(encoded);
-    json_t *record = !rc ? json_pack("{s:s,s:s,s:I,s:s,s:I,s:s%}",
+    size_t length = strlen(encoded);
+    json_t *record = json_pack("{s:s,s:s,s:I,s:s,s:I,s:s%}",
         "kind", "session_observation", "session_id", app->session.id,
-        "seq", (json_int_t)seq, "event_type", type, "length", (json_int_t)clean.len,
-        "text", (char *)clean.data, clean.len) : NULL;
-    snag_buf_free(&clean);
+        "seq", (json_int_t)seq, "event_type", type, "length", (json_int_t)length,
+        "text", encoded, length);
+    snag_secret_clear(encoded, length);
+    free(encoded);
     return record;
 }
 

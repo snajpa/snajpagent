@@ -36,6 +36,7 @@ struct partial_public_item {
 
 struct app_audio;
 struct app_voice;
+struct snag_wire_secrets;
 struct snag_output_cache {
     char handle[SNAG_ID_HEX_LEN + 1u];
     unsigned int stream;
@@ -228,9 +229,11 @@ int snag_app_tool_read(void *, const char *, unsigned int, uint64_t, uint64_t, s
 int snag_app_recovered_output(struct app_state *, const char *, json_t *);
 int snag_app_output_page(struct app_state *, const struct snag_response_item *, json_t **,
                          char *, size_t);
-char *snag_app_history_data(uint64_t, const char *, const json_t *);
-int snag_app_history_page(struct app_state *, const struct snag_response_item *, json_t **,
-                          char *, size_t);
+/* Filter structured records before quoting or excerpting their public data. */
+char *snag_app_history_data(uint64_t, const char *, const json_t *,
+    const struct snag_wire_secrets *, char *, size_t);
+int snag_app_history_page(struct app_state *, const struct snag_response_item *,
+    const struct snag_wire_secrets *, json_t **, char *, size_t);
 int snag_app_goal_list(struct app_state *, const struct snag_response_item *, json_t **,
                        char *, size_t);
 int snag_app_select_model_tool(struct app_state *, const struct snag_response_item *,

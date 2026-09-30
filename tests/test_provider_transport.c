@@ -1342,6 +1342,32 @@ server_child(int listen_fd, enum model_fixture models, bool transport)
                 server_fail("missing voice capabilities or CLI help");
             }
             json_t *body = json_loads(wire, JSON_REJECT_DUPLICATES, NULL);
+            if (models == MODEL_VOICE_READ) {
+                unsigned int archived = 0u;
+                json_t *input = json_object_get(body, "input");
+                for (size_t j = 0u; j < json_array_size(input); ++j) {
+                    const char *content = snag_json_string(json_array_get(input, j), "content");
+                    json_t *event = content ? json_loads(content, 0, NULL) : NULL;
+                    const char *kind = snag_json_string(event, "kind");
+                    const json_t *source = json_object_get(event, "data");
+                    const json_t *speech = json_object_get(source, "event");
+                    const char *item = snag_json_string(speech, "item_id");
+                    if (kind && !strcmp(kind, "session_observation") && item &&
+                        !strcmp(item, "archived-private")) {
+                        const char *text = snag_json_string(speech, "text");
+                        if (!text || strcmp(text, "original λ <redacted:secret> tail")) {
+                            server_fail("archived ASR did not filter an escaped configured secret");
+                        }
+                        const char *connection = snag_json_string(source, "connection_id");
+                        if (!connection || strcmp(connection, "11111111111111111111111111111111")) {
+                            server_fail("archived ASR changed its original connection");
+                        }
+                        ++archived;
+                    }
+                    json_decref(event);
+                }
+                if (archived != 1u) server_fail("archived ASR was duplicated or omitted");
+            }
             const char *key = snag_json_string(body, "prompt_cache_key");
             char header[128];
             if (!key || strlen(key) != SNAG_CACHE_KEY_LEN ||
@@ -2960,7 +2986,7 @@ voice_fixture_transition(struct app_state *app, const char *type, json_t *data, 
 {
     char error[256];
     uint64_t seq = app->session.next_seq;
-    char *expected = observe ? snag_app_history_data(seq, type, data) : NULL;
+    char *expected = observe ? snag_app_history_data(seq, type, data, NULL, NULL, 0u) : NULL;
     assert(data && (!observe || expected));
     assert(snag_session_commit(&app->session, type, data, NULL, error, sizeof(error)) == 0);
     if (!observe) return 0u;
@@ -3714,7 +3740,8 @@ test_voice_observation_cursor(void)
             assert(json_object_set_new(json_object_get(safe, "event"), "text",
                 json_string("Correction <redacted:secret>")) == 0);
         }
-        archive_expected[i] = snag_app_history_data(archive_seq + i, archive_types[i], safe);
+        archive_expected[i] = snag_app_history_data(archive_seq + i, archive_types[i], safe,
+            NULL, NULL, 0u);
         json_decref(safe);
         assert(archive_expected[i] && snag_session_commit(&app.session, archive_types[i],
             archive[i], NULL, error, sizeof(error)) == 0);
@@ -3824,7 +3851,7 @@ test_voice_observation_cursor(void)
     strcpy(prompt + 6000u, "<redacted:secret>");
     json_t *redacted = json_deep_copy(data);
     assert(redacted && json_object_set_new(redacted, "prompt", json_string(prompt)) == 0);
-    char *expected = snag_app_history_data(seq, "goal_started", redacted);
+    char *expected = snag_app_history_data(seq, "goal_started", redacted, NULL, NULL, 0u);
     json_decref(redacted);
     assert(expected && snag_session_commit(&app.session, "goal_started", data,
         NULL, error, sizeof(error)) == 0);
@@ -4187,11 +4214,33 @@ test_voice_interface_read(void)
     assert(snag_store_open(&app.store, path, error, sizeof(error)) == 0);
     assert(snag_session_create(&app.store, &app.session, path, "openai", "fixture",
         "medium", error, sizeof(error)) == 0);
+    const char *original = "original λ history-\"quoted\\secret tail";
+    app.session.tool_output_bytes = 2048u;
+    uint64_t archive_seq = app.session.next_seq;
+    json_t *archive = json_pack("{s:s,s:s,s:s,s:{s:s,s:s,s:s,s:s}}",
+        "connection_id", "11111111111111111111111111111111",
+        "provider", "openai", "model", "fixture", "event", "type", "voice_transcript",
+        "speaker", "user", "item_id", "archived-private", "text", original);
+    assert(snag_session_commit(&app.session, "voice_event", json_incref(archive),
+        NULL, error, sizeof(error)) == 0);
+    /* The historical text predates this configured secret. Filtering must run
+     * on its structured fields before quoting the record into helper input. */
+    assert(snag_config_add_secret(&config, "\"history-\\\"quoted\\\\secret\"", NULL,
+        error, sizeof(error)) == 0);
     json_t *events = json_pack("[{s:s,s:s,s:s,s:s,s:s,s:s}]", "type", "voice_handoff",
         "input_id", "read_input", "response_id", "read_response", "call_id", "read_call",
         "transcript", "Which directory is this?", "request", "Read the session cwd.");
     assert(snag_app_voice_fixture(&app, events, false) == 0);
     json_decref(events);
+    struct snag_response_item history_call = {.kind = SNAG_ITEM_TOOL_CALL,
+        .name = "read_session_history", .arguments = json_pack("{s:I,s:i,s:i}",
+            "before_seq", (json_int_t)(archive_seq + 1u), "limit", 1, "detail_bytes", 2048)};
+    json_t *history_result = NULL;
+    assert(snag_app_voice_read(&app, &history_call, &history_result, error, sizeof(error)) == 0);
+    assert(strstr(snag_json_string(history_result, "model_text"),
+        "original λ <redacted:secret> tail"));
+    json_decref(history_result);
+    json_decref(history_call.arguments);
     assert(snag_ui_text(&app.ui, SNAG_UI_HOST,
         "Interface UI result transport-secret tail") == 0);
     json_t *reply = NULL;
@@ -4205,6 +4254,8 @@ test_voice_interface_read(void)
     assert(json_is_true(json_object_get(reply, "final")));
     assert(strstr(snag_json_string(reply, "text"), "transport"));
     assert(!app.session.pending_queue_count && !app.session.active_turn);
+    assert(!strcmp(snag_json_string(json_object_get(archive, "event"), "text"), original));
+    json_decref(archive);
     char contents[10];
     assert(lseek(fd, 0, SEEK_SET) == 0 && read(fd, contents, sizeof(contents)) == 10);
     assert(!memcmp(contents, "unchanged\n", 10u));
@@ -5071,6 +5122,63 @@ test_history_and_goal_list_tools(void)
     json_decref(result);
     json_decref(call.arguments);
 
+    struct snag_config config;
+    struct snag_credential credential;
+    snag_config_init(&config);
+    snag_credential_clear(&credential);
+    strcpy(credential.value, "credential-\"quoted\\tail");
+    credential.len = strlen(credential.value);
+    assert(snag_config_add_secret(&config, "\"plain-history-secret\"", NULL,
+        error, sizeof(error)) == 0);
+    assert(snag_config_add_secret(&config, "\"history-\\\"quoted\\\\secret\"", NULL,
+        error, sizeof(error)) == 0);
+    app.config = &config;
+    const char *original_text = "original λ plain-history-secret history-\"quoted\\secret "
+        "credential-\"quoted\\tail end";
+    json_t *archive = json_pack("{s:s,s:s,s:s,s:{s:s,s:s,s:s,s:s,s:s}}",
+        "connection_id", "11111111111111111111111111111111", "provider", "default",
+        "model", "fixture", "event", "type", "voice_transcript", "speaker", "user",
+        "item_id", "protected-history", "text", original_text,
+        "authorization", "private-history-authorization");
+    char clipped[257];
+    memset(clipped, 'x', sizeof(clipped) - 1u);
+    memcpy(clipped, "clipped-history-secret-", sizeof("clipped-history-secret-") - 1u);
+    clipped[sizeof(clipped) - 1u] = '\0';
+    json_t *literal = json_string(clipped);
+    char *quoted = json_dumps(literal, JSON_ENCODE_ANY);
+    assert(quoted && snag_config_add_secret(&config, quoted, NULL, error, sizeof(error)) == 0);
+    free(quoted);
+    json_decref(literal);
+    assert(json_object_set_new(json_object_get(archive, "event"), "a", json_string(clipped)) == 0);
+    assert(snag_session_commit(&app.session, "voice_event", json_incref(archive),
+        NULL, error, sizeof(error)) == 0);
+    call.arguments = json_pack("{s:i,s:i}", "limit", 1, "detail_bytes", 2048);
+    assert(snag_app_tool_run(&app, &call, &credential, &result, error, sizeof(error)) == 0);
+    text = snag_json_string(result, "model_text");
+    assert(text && strstr(text,
+        "original λ <redacted:secret> <redacted:secret> <redacted:secret> end"));
+    assert(strstr(text, "<redacted:authorization>") &&
+        !strstr(text, "private-history-authorization"));
+    assert(strstr(text, "protected-history") &&
+        strstr(text, "11111111111111111111111111111111"));
+    assert(!strcmp(snag_json_string(json_object_get(archive, "event"), "text"), original_text));
+    json_decref(result);
+    /* Filter the complete value before an excerpt can expose only its prefix. */
+    assert(json_object_set_new(call.arguments, "detail_bytes", json_integer(128)) == 0);
+    assert(snag_app_tool_run(&app, &call, &credential, &result, error, sizeof(error)) == 0);
+    text = snag_json_string(result, "model_text");
+    assert(text && strstr(text, "\"a\":\"<redacted:secret>\"") &&
+        !strstr(text, "clipped-history-secret-"));
+    json_decref(result);
+    /* A protected member name cannot be rewritten into a different record. */
+    assert(snag_config_add_secret(&config, "\"speaker\"", NULL, error, sizeof(error)) == 0);
+    assert(snag_app_tool_run(&app, &call, &credential, &result, error, sizeof(error)) < 0);
+    assert(!result && error[0]);
+    assert(!strcmp(snag_json_string(json_object_get(archive, "event"), "text"), original_text));
+    json_decref(call.arguments);
+    json_decref(archive);
+    snag_credential_clear(&credential);
+    snag_config_free(&config);
     snag_session_close(&app.session);
     snag_store_close(&app.store);
 }
@@ -8750,6 +8858,7 @@ test_native_ui(void)
 int
 main(void)
 {
+    test_history_and_goal_list_tools();
     test_native_voice_caption_mirrors();
     test_native_voice_transcript_events();
 #if SNAJPAGENT_AUDIO_DEVICE
@@ -8824,7 +8933,6 @@ main(void)
     test_output_cache_failure();
     test_read_only_dispatch();
     test_goal_tool_manipulates_unfinished_goals();
-    test_history_and_goal_list_tools();
     test_local_provider_transport();
     test_session_identity_header();
     test_openrouter_search_transport();

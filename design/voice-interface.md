@@ -162,6 +162,13 @@ cursor while conversation retention is developed.
 Initial and refreshed textual context snapshots use the same configured-secret
 filter as recorded voice events. Filtering operates on an outbound copy; the
 working session's prompt, queue contents and authority records stay unchanged.
+Native observations, helper history and `read_session_history` share structured
+public-data projection. It omits provider continuation and filters credentials
+before quoting JSON or clipping an excerpt. The coding tool supplies configuration
+and its current credential; voice supplies its retained credential protection.
+This also covers old records whose text predates a configured secret. A protected
+member name fails projection rather than becoming a renamed record. Source
+records remain unchanged, and archived calls remain observation data.
 Snapshot history uses an owner-local derived projection and the verified forward
 cursor. Each call consumes at most the existing 4 MiB scan quantum plus one
 complete record; later calls continue from the saved position. The projection
