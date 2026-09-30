@@ -67,7 +67,7 @@ int
 snag_session_packet_set(struct snag_session_packet *packet, enum snag_session_message type,
                          const void *data, size_t length)
 {
-    if (type < SNAG_SESSION_RESERVE || type > SNAG_SESSION_OUTPUT_ACK ||
+    if (type < SNAG_SESSION_RESERVE || type > SNAG_SESSION_STATUS ||
         length > SNAG_SESSION_FRAME_MAX || (length && !data)) return snag_errno(EINVAL);
     packet->bytes[0] = 'S';
     packet->bytes[1] = 'A';
@@ -492,7 +492,7 @@ snag_session_packet_read(int fd, struct snag_session_packet *packet)
         if (packet->used >= SNAG_SESSION_HEADER) {
             if (packet->bytes[0] != 'S' || packet->bytes[1] != 'A' || packet->bytes[2] != 2u ||
                 packet->bytes[3] < SNAG_SESSION_RESERVE ||
-                packet->bytes[3] > SNAG_SESSION_OUTPUT_ACK ||
+                packet->bytes[3] > SNAG_SESSION_STATUS ||
                 snag_session_packet_length(packet) > SNAG_SESSION_FRAME_MAX)
                 return snag_errno(EPROTO);
             target += snag_session_packet_length(packet);
@@ -618,3 +618,55 @@ snag_session_packet_write(int fd, struct snag_session_packet *packet)
     return snag_errno(ENOTSUP);
 }
 #endif /* SNAG_SESSION_NATIVE */
+
+int
+snag_session_endpoint_status(int dir_fd, const char *dir_path)
+{
+#ifdef SNAG_SESSION_NATIVE
+    struct snag_session_packet request = {0}, reply = {0};
+    int fd = snag_session_endpoint_connect(dir_fd, dir_path);
+    if (fd < 0) return -1;
+    (void)snag_session_packet_set(&request, SNAG_SESSION_STATUS, NULL, 0u);
+    /* The local UI thread answers independently of provider work. Bound a
+     * stopped or older owner so listing cannot wait indefinitely on one row. */
+    uint64_t deadline = snag_monotonic_ms() + 1000u;
+    int result = -1;
+    bool verified = false;
+    while (snag_monotonic_ms() < deadline) {
+        int rc = snag_session_packet_write(fd, &request);
+        if (rc < 0) break;
+        if (rc == 1) {
+            rc = verified ? 1 : snag_session_peer_verify(fd);
+            if (rc < 0) break;
+            if (rc == 1) {
+                verified = true;
+                rc = snag_session_packet_read(fd, &reply);
+                if (rc < 0) break;
+                if (rc == 1) {
+                    size_t length = snag_session_packet_length(&reply);
+                    const unsigned char *data = reply.bytes + SNAG_SESSION_HEADER;
+                    if (snag_session_packet_type(&reply) == SNAG_SESSION_STATUS &&
+                        length == 1u && data[0] <= 1u) result = data[0];
+                    /* Already-running older owners reject every extra socket
+                     * while occupied; their detached relay closes STATUS. */
+                    static const char busy[] =
+                        "session already has a terminal or attachment reservation";
+                    if (snag_session_packet_type(&reply) == SNAG_SESSION_ERROR &&
+                        length == sizeof(busy) - 1u && !memcmp(data, busy, length)) result = 1;
+                    break;
+                }
+            }
+        }
+        uint64_t now = snag_monotonic_ms();
+        if (now >= deadline) break;
+        struct pollfd pollfd = {fd, request.offset < request.used ? POLLOUT : POLLIN, 0};
+        if (poll(&pollfd, 1u, (int)(deadline - now)) < 0 && errno != EINTR) break;
+    }
+    (void)close(fd);
+    return result;
+#else
+    (void)dir_fd;
+    (void)dir_path;
+    return snag_errno(ENOTSUP);
+#endif
+}

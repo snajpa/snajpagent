@@ -697,7 +697,7 @@ def test_session_list_keeps_live_owner():
                 output = query(first, command, b"saved sessions:")
                 assert len(re.findall(header, output)) == 1, output
                 for identity in (first_id, second_id, stopped_id):
-                    state = b"stored" if identity == stopped_id else b"live"
+                    state = b"stored" if identity == stopped_id else b"attached"
                     row = (identity[:8].encode() + rb" +- +" + re.escape(DEFAULT_MODEL.encode()) +
                            rb" +1 +" + state + rb" +")
                     assert re.search(row, output), output

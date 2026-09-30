@@ -20,7 +20,8 @@ enum snag_session_message {
     SNAG_SESSION_RESERVE = 1, SNAG_SESSION_READY, SNAG_SESSION_COMMIT,
     SNAG_SESSION_INPUT, SNAG_SESSION_OUTPUT, SNAG_SESSION_RESIZE,
     SNAG_SESSION_DETACH, SNAG_SESSION_EXIT, SNAG_SESSION_SWITCH,
-    SNAG_SESSION_ERROR, SNAG_SESSION_SUSPEND, SNAG_SESSION_QUITTING, SNAG_SESSION_OUTPUT_ACK
+    SNAG_SESSION_ERROR, SNAG_SESSION_SUSPEND, SNAG_SESSION_QUITTING, SNAG_SESSION_OUTPUT_ACK,
+    SNAG_SESSION_STATUS
 };
 
 struct snag_session_packet {
@@ -61,6 +62,9 @@ void snag_session_listener_close(struct snag_session_listener *);
  * the first frame. Connecting or probing never reserves an attachment. */
 int snag_session_listener_accept(const struct snag_session_listener *);
 int snag_session_endpoint_connect(int dir_fd, const char *dir_path);
+/* Read-only status: 1 attached, 0 detached, -1 unavailable. Never reserves a
+ * terminal. STATUS has an empty request and a one-byte boolean response. */
+int snag_session_endpoint_status(int dir_fd, const char *dir_path);
 int snag_session_stream_pair(int fds[2]);
 /* 1 same effective user, 0 awaiting first kernel credential, -1 refusal/error.
  * Does not consume frame bytes. Cache success only for this connection. */

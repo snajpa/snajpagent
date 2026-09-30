@@ -42,7 +42,16 @@ existing string table retains it; older checkpoints have no name. `-N` names new
 sessions and selects an exact name for attach/resume. Name lookup reads snapshots
 without acquiring the session writer lock. Duplicate names list candidate IDs.
 `/session name` updates the owned session, including during active work. Lists
-show column headings and live/stored process ownership. Terminal tables align cells
+show column headings and attached/detached/stored process state. The writer lock
+distinguishes stored sessions; a read-only STATUS request to the native relay
+distinguishes an activated (or suspended) terminal from a detached owner. New
+connections send RESERVE or STATUS before they can acquire a terminal reservation.
+Status queries leave attachment generations, input, output and journals intact.
+Older occupied owners return their existing busy response. Queries have a one-second
+local deadline; an unavailable endpoint leaves a running session shown as detached.
+Every session selector resolves unique 1..32-character prefixes to canonical IDs.
+Displayed IDs use at least eight characters, expand collisions and remain intact
+on narrow terminals. Terminal tables align cells
 by display width and divide the space after metadata equally between LAST PROMPT
 and IRC. Redirected output uses TSV with 80-column previews. Whitespace and terminal
 controls become spaces without changing stored text. LAST PROMPT uses last_user;

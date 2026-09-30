@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Show attached, detached and stored sessions, with read-only terminal status
+  queries. Accept unique short IDs in CLI, picker and slash-command session
+  selectors; retain usable IDs on narrow tables and expand colliding prefixes.
+
 - Accept validated Responses keepalives after completion, preserving successful
   turns and their output without an unnecessary retry. Malformed trailers and
   later response events remain protocol errors.

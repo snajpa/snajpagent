@@ -173,10 +173,15 @@ def check_listing(binary):
             own = next(row for row in rows if row[0] == path.parent.name[:8])
             assert own[5] == "localhost:6667: latest actual message", own
             assert own[6] == "s/localhost:6667,c/client.example:7777,c/other.example:8888", own
-            for width in (60, 80, 120, 200):
+            for width in (32, 40, 60, 80, 120, 200):
                 lines = terminal_list(prefix, root, env, width)
                 assert len(lines) == len(journals) + 1, lines
                 assert all(cells(line) <= width and "\t" not in line for line in lines), lines
+                assert all(len(line.split()[0]) >= 8 and
+                           all(c in "0123456789abcdef" for c in line.split()[0])
+                           for line in lines[1:]), lines
+                if width < 60:
+                    continue
                 prompt_start = lines[0].index("LAST PROMPT")
                 irc_start = lines[0].index("IRC")
                 assert abs((irc_start - prompt_start - 2) - (width - irc_start)) <= 1, lines[0]

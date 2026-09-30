@@ -231,7 +231,7 @@ static const struct snag_term_command commands[] = {
     {"/retry", "retry failed turn; if active, restart at a safe boundary"},
     {"/yield", "return tool wait to model; keep running processes"},
     {"/session", "current session ID and running sessions"},
-    {"/session list|l", "all saved sessions and their live state"},
+    {"/session list|l", "all saved sessions and their attachment state"},
     {"/session name NAME", "set the current session's saved name"},
     {"/session attach|a ID", "switch to a live session; failure keeps this attachment"},
     {"/session detach|d", "return to the shell while this session continues"},
@@ -2979,8 +2979,9 @@ handle_common_command(struct app_state *app, const char *line, bool active, bool
             (verb == 6u && !strncmp(argument, "attach", 6u))) {
             if (!app->ui.native) return app_error(app, "native attachment is unavailable here");
             while (verb < len && isspace((unsigned char)argument[verb])) ++verb;
-            if (len - verb < 8u || len - verb > SNAG_ID_HEX_LEN)
-                return app_error(app, "usage: /session attach|a ID (8..32 character prefix)");
+            if (len == verb || len - verb > SNAG_ID_HEX_LEN)
+                return app_error(app,
+                    "usage: /session attach|a ID (unique 1..32 character prefix)");
             char prefix[SNAG_ID_HEX_LEN + 1u];
             memcpy(prefix, argument + verb, len - verb);
             prefix[len - verb] = '\0';
@@ -5286,8 +5287,8 @@ pick_session_id(struct app_state *app, enum snag_session_list filter, char **id,
     if (rc < 0 || action != SNAG_TERM_SUBMIT || !prefix) {
         snag_errorf(error, error_size, "session selection cancelled");
         rc = -1;
-    } else if (strlen(prefix) < 8u || strlen(prefix) > SNAG_ID_HEX_LEN) {
-        snag_errorf(error, error_size, "enter an 8..32 character session id prefix");
+    } else if (!prefix[0] || strlen(prefix) > SNAG_ID_HEX_LEN) {
+        snag_errorf(error, error_size, "enter a unique 1..32 character session id prefix");
         rc = -1;
     } else {
         *id = prefix;

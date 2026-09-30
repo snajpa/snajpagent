@@ -117,7 +117,9 @@ test_session_location(struct snag_store *store, const struct snag_session *owned
                                error, sizeof(error)) < 0 && errno == EPIPE);
     assert(snag_session_locate(store, &target, "abcdefab4", NULL, NULL,
                                error, sizeof(error)) < 0 && errno == ENOENT);
-    static const char *invalid[] = {NULL, "", "abcdefa", "ABCDEFAB", "../abcdefab",
+    assert(snag_session_locate(store, &target, "abcdefa", NULL, NULL,
+                               error, sizeof(error)) < 0 && errno == EEXIST);
+    static const char *invalid[] = {NULL, "", "ABCDEFAB", "../abcdefab",
                                     "abcdefab1111111111111111111111111"};
     for (size_t i = 0u; i < (sizeof(invalid) / sizeof(invalid[0])); ++i) {
         assert(snag_session_locate(store, &target, invalid[i], NULL, NULL,
@@ -2072,6 +2074,12 @@ main(void)
     }
 
     assert_session_lock_retained(&session, "before listing");
+    char collision[SNAG_ID_HEX_LEN + 1u], unique_prefix[10];
+    memcpy(collision, session.id, sizeof(collision));
+    collision[8] = collision[8] == '0' ? '1' : '0';
+    assert(mkdirat(store.sessions_fd, collision, 0700) == 0);
+    memcpy(unique_prefix, session.id, 9u);
+    unique_prefix[9] = '\0';
     assert(snprintf(list_path, sizeof(list_path), "%s/list", temp) > 0);
     {
         int fd = open(list_path, O_CREAT | O_TRUNC | O_WRONLY, 0600);
@@ -2081,9 +2089,11 @@ main(void)
         assert(close(fd) == 0);
         assert(read_file(list_path, list_buf, sizeof(list_buf)) > 0u);
         assert(strstr(list_buf, id_prefix) != NULL);
+        assert(strstr(list_buf, unique_prefix) != NULL);
         assert(strstr(list_buf, "STATUS") == NULL);
     }
     assert_session_lock_retained(&session, "after listing");
+    assert(unlinkat(store.sessions_fd, collision, AT_REMOVEDIR) == 0);
     assert(snag_session_delete(&store, &session, id_prefix, NULL, error, sizeof(error)) == 0);
     snag_session_close(&session);
     snag_session_init(&session);

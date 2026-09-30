@@ -55,6 +55,7 @@ reject_drop(struct snag_session_relay *relay)
     relay->reject_deadline = 0u;
     relay->rejection.used = relay->rejection.offset = 0u;
     relay->reject_verified = false;
+    relay->reject_reply = false;
 }
 
 int
@@ -300,20 +301,40 @@ accept_peer(struct snag_session_relay *relay, const struct snag_session_listener
         (void)close(fd);
         return;
     }
-    if (relay->peer < 0) {
-        relay->peer = fd;
-        relay->peer_verified = verified == 1;
-        relay->phase = SNAG_SESSION_WAIT_RESERVE;
-        ++relay->generation;
-        relay->handshake_deadline = snag_monotonic_ms() + HANDSHAKE_MS;
-    } else {
-        static const char busy[] = "session already has a terminal or attachment reservation";
-        relay->reject = fd;
-        relay->reject_verified = verified == 1;
-        (void)snag_session_packet_set(&relay->rejection, SNAG_SESSION_ERROR,
-                                      busy, sizeof(busy) - 1u);
-        relay->reject_deadline = snag_monotonic_ms() + STALL_MS;
+    /* Read the request before reserving anything. A status reader never changes
+     * the current peer, attachment generation, repaint or terminal input. */
+    relay->reject = fd;
+    relay->reject_verified = verified == 1;
+    relay->reject_deadline = snag_monotonic_ms() + STALL_MS;
+}
+
+static int
+candidate_message(struct snag_session_relay *relay)
+{
+    enum snag_session_message type = snag_session_packet_type(&relay->rejection);
+    if (snag_session_packet_length(&relay->rejection)) return snag_errno(EPROTO);
+    if (type == SNAG_SESSION_STATUS) {
+        unsigned char attached = relay->peer >= 0 &&
+            (relay->phase == SNAG_SESSION_ATTACHED ||
+             (relay->phase == SNAG_SESSION_RESERVED && !relay->handshake_deadline));
+        relay->reject_reply = true;
+        return snag_session_packet_set(&relay->rejection, SNAG_SESSION_STATUS, &attached, 1u);
     }
+    if (type != SNAG_SESSION_RESERVE) return snag_errno(EPROTO);
+    if (relay->peer >= 0) {
+        static const char busy[] = "session already has a terminal or attachment reservation";
+        relay->reject_reply = true;
+        return snag_session_packet_set(&relay->rejection, SNAG_SESSION_ERROR,
+                                        busy, sizeof(busy) - 1u);
+    }
+    relay->peer = relay->reject;
+    relay->peer_verified = true;
+    relay->reject = -1;
+    reject_drop(relay);
+    relay->phase = SNAG_SESSION_RESERVED;
+    ++relay->generation;
+    relay->handshake_deadline = snag_monotonic_ms() + HANDSHAKE_MS;
+    return queue_output(relay, SNAG_SESSION_READY, NULL, 0u);
 }
 
 int
@@ -338,7 +359,7 @@ snag_session_relay_step(struct snag_session_relay *relay,
             (relay->input_pending ? POLLOUT : 0), 0},
         {relay->peer, (!relay->input_pending && !relay->closing ? POLLIN : 0) |
             (relay->output.used ? POLLOUT : 0), 0},
-        {relay->reject, relay->reject_verified ? POLLOUT : POLLIN, 0},
+        {relay->reject, relay->reject_reply ? POLLOUT : POLLIN, 0},
         {listener && relay->reject < 0 ? listener->fd : -1, POLLIN, 0}
     };
     int rc = poll(fds, sizeof(fds) / sizeof(fds[0]), timeout_ms);
@@ -379,7 +400,12 @@ snag_session_relay_step(struct snag_session_relay *relay,
         rc = relay->reject_verified ? 1 : snag_session_peer_verify(relay->reject);
         if (rc == 1) {
             relay->reject_verified = true;
-            rc = snag_session_packet_write(relay->reject, &relay->rejection);
+            if (relay->reject_reply) {
+                rc = snag_session_packet_write(relay->reject, &relay->rejection);
+            } else {
+                rc = snag_session_packet_read(relay->reject, &relay->rejection);
+                if (rc == 1) rc = candidate_message(relay);
+            }
         }
         if (rc != 0) reject_drop(relay);
     }

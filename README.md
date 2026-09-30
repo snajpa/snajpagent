@@ -113,7 +113,7 @@ snajpagent -l
 snajpagent --resume --last
 ```
 
-Tables show `live`/`stored`, latest prompts and IRC endpoints (`s/` server, `c/` client). Name sessions with
+Tables show `attached`/`detached`/`stored`, prompts and IRC endpoints (`s/` server, `c/` client). Name sessions with
 `snajpagent -N lead`, or `/session name lead`.
 `snajpagent --attach -N lead` reconnects while it runs;
 `snajpagent --resume -N lead` attaches if running or reopens it if stored.

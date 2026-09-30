@@ -4,6 +4,7 @@
 #include "base.h"
 #include "fs.h"
 #include "irc.h"
+#include "session_host.h"
 
 #include <errno.h>
 #include <stdio.h>
@@ -83,8 +84,9 @@ resolve_prefix(struct snag_store *store, const char *prefix,
     unsigned int matches = 0;
 
     memset(target, 0, sizeof(*target));
-    if (len < 8u || len > SNAG_ID_HEX_LEN || !snag_hex_is_lower(prefix, len))
-        return snag_fail(error, error_size, EINVAL, "session id must be 8..32 lowercase hex characters");
+    if (!len || len > SNAG_ID_HEX_LEN || !snag_hex_is_lower(prefix, len))
+        return snag_fail(error, error_size, EINVAL,
+            "session id must be 1..32 lowercase hex characters");
     for (unsigned int trash = 0u; trash < (include_trash ? 2u : 1u); ++trash) {
         struct snag_directory *dir = open_store_dir(store, trash ? "trash" : "sessions",
             trash ? "trash directory" : "sessions directory", error, error_size);
@@ -511,7 +513,8 @@ list_irc_event(void *opaque, const struct snag_session *state, uint64_t seq,
 }
 
 static json_t *
-list_cells(struct snag_session *session, bool live, unsigned int columns)
+list_cells(struct snag_store *store, struct snag_session *session, const char *state,
+             unsigned int columns)
 {
     struct list_irc irc = {.prompt = session->last_user,
         .preview = {.max = SNAG_MAX_DIRECT_PROMPT},
@@ -519,7 +522,7 @@ list_cells(struct snag_session *session, bool live, unsigned int columns)
     struct snag_buf cell = {.max = SNAG_MAX_DIRECT_PROMPT};
     json_t *cells = NULL;
     uint64_t before;
-    char id[9];
+    char id[SNAG_ID_HEX_LEN + 1u];
     char turns[32];
 
     const char *topology = snag_json_string(session->strings, "irc_snapshot");
@@ -542,10 +545,18 @@ list_cells(struct snag_session *session, bool live, unsigned int columns)
     }
     if (snag_buf_terminate(&irc.preview) < 0 ||
         snag_buf_terminate(&irc.endpoints) < 0) goto out;
-    (void)snprintf(id, sizeof(id), "%.8s", session->id);
+    /* Expand collisions, including stored/trash sessions outside this filter,
+     * so the displayed selector resolves through every session entry point. */
+    for (size_t length = 8u; length <= SNAG_ID_HEX_LEN; ++length) {
+        struct resolved_session target;
+        memcpy(id, session->id, length);
+        id[length] = '\0';
+        if (resolve_prefix(store, id, &target, true, NULL, NULL, NULL, 0u) == 0 ||
+            errno != EEXIST) break;
+    }
     (void)snprintf(turns, sizeof(turns), "%llu", (unsigned long long)session->turn_count);
     const char *values[] = {id, session->name ? session->name : "-", session->default_model,
-        turns, live ? "live" : "stored",
+        turns, state,
         irc.preview.len ? (const char *)irc.preview.data : session->last_user,
         irc.endpoints.len ? (const char *)irc.endpoints.data : "-"};
     cells = json_array();
@@ -604,7 +615,7 @@ emit_list(const json_t *rows, unsigned int columns, snag_store_emit_fn emit, voi
         while (fixed + 2u * strlen(headers[5]) > columns) {
             size_t widest = widths[1] > widths[2] ? 1u : 2u;
             if (widths[widest] <= 1u) {
-                widest = 0u;
+                widest = 3u;
                 for (size_t col = 3u; col < 5u; ++col) {
                     if (widths[col] > widths[widest]) widest = col;
                 }
@@ -656,7 +667,10 @@ snag_store_list(struct snag_store *store, const struct snag_session *owned,
             snag_session_close(&snapshot);
             continue;
         }
-        json_t *cells = list_cells(&snapshot, live, columns);
+        const char *state = !live ? "stored" :
+            snag_session_endpoint_status(snapshot.dir_fd, snapshot.dir_path) > 0 ?
+            "attached" : "detached";
+        json_t *cells = list_cells(store, &snapshot, state, columns);
         snag_session_close(&snapshot);
         if (!cells || json_array_append_new(rows, cells) < 0) goto out;
     }

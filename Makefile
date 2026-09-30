@@ -258,6 +258,7 @@ check: $(BIN) $(TEST_BIN)
 	python3 tests/test_remote_ssh.py
 	./tests/test_responses
 	python3 tests/test_response_keepalive.py ./$(BIN)
+	python3 tests/test_session_states.py ./$(BIN)
 	./tests/test_provider_retry
 	./tests/test_provider_transport
 	./tests/test_context

@@ -903,14 +903,16 @@ execution still requires a stopped session. Without an ID or
 or
 .BR \-\-last ,
 interactively select a saved session.
-An ID is a unique prefix of 8 through 32 lowercase hexadecimal characters.
+An ID is a unique prefix of 1 through 32 lowercase hexadecimal characters.
+Displayed short IDs work in every session ID selector, including both pickers
+and /session attach. Ambiguous prefixes list matching full IDs.
 The writer lock prevents a second owner.
 .TP
 .BR \-A , " \-\-attach [" session-id "]"
 Connect a terminal to a live native session owner on Linux. Without an ID,
 or
 .BR "\-N NAME" ,
-select a running session. Accepts a unique 8..32-character ID prefix and
+select a running session. Accepts a unique 1..32-character ID prefix and
 .BR \-\-dotdir ;
 the owner retains its existing configuration and model selection. Ambiguous
 prefixes list full matching IDs. An occupied terminal is never taken over.
@@ -955,7 +957,8 @@ may accompany it.  Markdown
 presentation has no useful effect on session-list output. The table has headings
 for session ID, name, model, turn count, process state, last prompt and IRC.
 The last two columns share the remaining terminal width equally. Long cells end
-with an ellipsis; widths account for wide Unicode characters. Redirected output
+with an ellipsis; session IDs stay intact and expand beyond eight characters
+when needed to distinguish sessions. Widths account for wide Unicode characters. Redirected output
 is tab-separated with previews of up to 80 display columns per cell.
 Whitespace and terminal controls become spaces; saved text retains its full contents.
 IRC lists comma-separated endpoints: s/ENDPOINT for the hosted server first,
@@ -964,8 +967,11 @@ Stored sessions show their last recorded topology. An IRC prompt shows
 ENDPOINT: MESSAGE, resolving saved event references to the latest message
 in that prompt. Ordinary prompts show the latest saved user text.
 An unnamed session shows a dash in the name column.
-The process column shows live while a process owns the session, and stored when
-only its saved history remains. Live includes sessions waiting for input.
+The process column shows attached while a terminal client is connected,
+detached while the session runs without one, and stored when only saved history
+remains. A suspended terminal retains its attachment. A connection still reserving
+or repainting its terminal becomes attached after activation. Listing queries the
+owner without reserving a terminal or changing saved history.
 Use --attach to reconnect to a running native session. --resume attaches if
 running and starts the session if stored.
 .TP
@@ -1589,7 +1595,7 @@ session is identified as not yet saved; listing does not start a model turn.
 .TP
 .BR "/session list" , " /session l" , " /s list" , " /s l"
 Print the current session ID and all saved sessions,
-with column headings and their live or stored process state.
+with column headings and their attached, detached or stored process state.
 This does not attach to or resume a session.
 .TP
 .BR "/session attach ID" , " /session a ID" , " /s a ID"
