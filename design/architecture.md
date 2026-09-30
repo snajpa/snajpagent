@@ -127,6 +127,11 @@ Model selection changes use `model_selection_changed`. A compaction summary is
 the coverage boundary for provider input, not a second checkpoint file or a
 request to replay covered images and completed tool exchanges. The next indexed
 checkpoint saves the post-compaction view and only its uncovered event seam.
+Request assembly installs the summary or recovery prefix once, then appends
+the cached journal-derived suffix. The cache excludes that prefix; input timing
+and recovery-message references follow their items when the suffix is copied.
+Restoring a compacted checkpoint rebuilds the view from its retained event seam,
+including checkpoints written with a summary prefix in the cached view.
 
 Before `response_started`, the runtime builds the exact outgoing model-input
 and request projections and accounts for them in token units. The default

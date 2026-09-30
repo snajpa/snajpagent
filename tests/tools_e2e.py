@@ -7,6 +7,8 @@ asserts durable journal events plus real filesystem effects. Deterministic: no
 terminal, no timing races.
 """
 import argparse
+import hashlib
+import json
 import os
 import shutil
 import subprocess
@@ -28,13 +30,16 @@ DENY_WRITE = (
 
 
 def run_case(binary, provider, root, name, prompt, respond, rules="", read_only=False,
-             prepare=None, agent_settings=""):
+             prepare=None, agent_settings="", read_agents=False):
     case = root / name
     case.mkdir(parents=True)
     if prepare is not None:
         prepare(case)
     config = case / "config.ini"
     harness.write_irc_config(config, provider.port, "host-model")
+    if read_agents:
+        config.write_text(config.read_text().replace("read_agents_md = false",
+                                                   "read_agents_md = true"))
     if agent_settings:
         config.write_text(config.read_text(encoding="utf-8").replace(
             "[agent]\n", "[agent]\n" + agent_settings, 1), encoding="utf-8")
@@ -329,6 +334,88 @@ def case_wide_call_batch(binary, provider, root):
     print("tools e2e wide-call-batch: ok", flush=True)
 
 
+def case_cd_call_batch(binary, provider, root):
+    calls = [
+        ("cd", {"path": "./subdir"}),
+        ("get_cwd", {}),
+        ("write_file", {"path": "./created.txt", "content": "in subdir"}),
+        ("exec_command", {"command": "pwd"}),
+        ("cd", {"path": "./missing"}),
+        ("read_file", {"path": "./created.txt"}),
+        ("cd", {"path": ".."}),
+        ("get_cwd", {}),
+    ]
+
+    def respond(handler, request, sequence):
+        outs = [i for i in request["input"] if i.get("type") == "function_call_output"]
+        if not outs:
+            provider.reply(handler, provider.functions_body(
+                sequence, [(f"cd-batch-{i}", name, arguments)
+                           for i, (name, arguments) in enumerate(calls)]).encode())
+            return
+        assert len(outs) == len(calls), outs
+        provider.reply(handler, provider.response_body(sequence, "cd batch done").encode())
+
+    case, result, events = run_case(
+        binary, provider, root, "cd-batch", "change directory within one batch", respond,
+        prepare=lambda case: (case / "subdir").mkdir())
+    assert result.returncode == 0, (result.stdout, result.stderr)
+    starts = harness.event_list(events, "tool_started")
+    outcomes = {entry["data"]["call_id"]: entry["data"]["result"] for entry in finished(events)}
+    results = [outcomes[entry["data"]["call_id"]] for entry in starts]
+    assert len(results) == len(calls), results
+    assert [item["status"] for item in results] == [
+        "succeeded", "succeeded", "succeeded", "succeeded",
+        "failed", "succeeded", "succeeded", "succeeded"], results
+    assert results[1]["model_text"] == str(case / "subdir"), results[1]
+    assert str(case / "subdir") in results[3]["model_text"], results[3]
+    assert "in subdir" in results[5]["model_text"], results[5]
+    assert results[7]["model_text"] == str(case), results[7]
+    assert (case / "subdir" / "created.txt").read_text() == "in subdir"
+    assert not (case / "created.txt").exists()
+    for index, entry in enumerate(starts):
+        name, arguments = calls[index]
+        action = dict(arguments=arguments, name=name, resolved_workdir=str(case))
+        digest = hashlib.sha256(json.dumps(
+            action, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        assert entry["data"]["action_sha256"] == digest, entry
+        expected = case if index in (0, 7) else case / "subdir"
+        assert entry["data"]["resolved_workdir"] == str(expected), entry
+
+    # Resume must accept the complete journal and retain the tools' outcomes.
+    provider.runtime_handler = respond
+    try:
+        resumed = subprocess.run(
+            [str(binary), "--config", str(case / "config.ini"),
+             "--dotdir", str(case / "state"), "--resume", "--last", "-e", "--", "verify"],
+            cwd=case, env={**os.environ, "HOME": str(case), "SNAJPAGENT_IRC_UI_KEY": SECRET},
+            capture_output=True, text=True, timeout=60)
+    finally:
+        provider.runtime_handler = None
+    assert resumed.returncode == 0, (resumed.stdout, resumed.stderr)
+    _, replay = harness.read_events(case / "state")
+    assert len(finished(replay)) == len(calls), replay
+    print("tools e2e cd-call-batch: ok", flush=True)
+
+
+def case_home_instruction_symlink(binary, provider, root):
+    def prepare(case):
+        (case / "guidance.md").write_text("Use the linked home instructions.\n")
+        (case / "AGENTS.md").symlink_to("guidance.md")
+
+    case, result, events = run_case(
+        binary, provider, root, "home-instruction-symlink", "read the home instructions",
+        responder(provider, [("read_file", {"path": "./guidance.md"})], "instructions read"),
+        prepare=prepare, read_agents=True)
+    assert result.returncode == 0, (result.stdout, result.stderr)
+    turn = harness.event_list(events, "turn_started")[0]
+    assert str(case / "guidance.md") in turn["data"]["instructions"], turn
+    output = finished(events)[0]["data"]["result"]
+    assert output["status"] == "succeeded", output
+    assert "linked home instructions" in output["model_text"], output
+    print("tools e2e home-instruction-symlink: ok", flush=True)
+
+
 CASES = (
     case_home_default,
     case_model_switch_disabled,
@@ -339,6 +426,8 @@ CASES = (
     case_read_only_refuses_writes,
     case_rule_denies_write,
     case_wide_call_batch,
+    case_cd_call_batch,
+    case_home_instruction_symlink,
 )
 
 

@@ -4,6 +4,18 @@
 
 ## Unreleased
 
+- Preserve tool-call admission and replay when `cd` changes directory within a
+  response batch; later calls use the updated directory.
+
+- Keep compaction summaries and provider item IDs unique when reusing cached
+  request history, including after repeated compaction and resume.
+
+- Accept `AGENTS.md` and `AGENTS.override.md` symlinks to regular files and
+  advertise their canonical targets once.
+
+- Add `/context N s` and `/context N save` to save the selected provider/model's
+  context window in configuration. `/context N` retains its session-only scope.
+
 - Restore PowerPC Linux session-host and terminal-relay builds while preserving
   terminal-size request bits across musl, glibc and BSD interfaces.
 

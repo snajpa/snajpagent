@@ -754,7 +754,7 @@ is optional.  The default is derived from the hostname.
 .TP
 .BI \-d " directory"
 Advertise an additional local working-document root.  Repeat for multiple roots.
-Each directory must contain a regular, non-symlink
+Each directory must contain a regular file, or a symlink to a regular file, named
 .B AGENTS.md
 or
 .BR AGENTS.override.md ;
@@ -1653,13 +1653,14 @@ resolves to
 .B medium
 when used for a turn.
 .TP
-.BR /context " [default|max|N]"
+.BR /context " [default|max|N [s|save]]"
 Show or set the context window for the selected model.  A bare
 .B /context
 reports the selection with the window, its output reservation, the effective
 client percentage and the auto-compaction budget.
 .B default
-uses the provider's advertised normal working window,
+uses the configured model-limit window, or the provider's advertised normal
+working window when no context override is configured,
 .B max
 uses the advertised maximum, and an integer
 .I N
@@ -1671,6 +1672,26 @@ reservation, client percentage and proactive compaction stay derived from the
 selected window, so shrinking it compacts before the next request.  During
 active work the command ends the current response and rebuilds the turn under
 the new window, retaining conversation and completed tool results.
+.IP
+Append
+.B s
+or
+.B save
+to a numeric selection, for example
+.BR "/context 900000 save" ,
+to also save
+.B context_window_tokens
+in the selected provider/model's exact
+.B [model-limit PROVIDER/MODEL]
+section of the active configuration. Other settings and file permissions are
+preserved. The saved window applies to new sessions using that model and to
+.B /context default
+in this process. A numeric selection without the suffix changes only the
+current session. Invalid values or a configuration save failure leave the
+session selection unchanged. Save requires a number; edit the configuration
+with
+.B /config
+to remove a saved override.
 .TP
 .BR /nick " [" NICK "]"
 Show the agent and operator nicks, or rename the agent nick. The new nick is
@@ -3581,7 +3602,8 @@ requires path to an existing directory. Absolute paths and relative paths,
 including
 .BR ./ ,
 resolve against the current directory. A successful change is saved before
-later tool calls; existing processes keep their own launch directory.
+later tool calls, including calls in the same response batch; existing processes
+keep their own launch directory.
 .PP
 .B select_model
 requires selector, either a configured
@@ -4265,7 +4287,9 @@ Outside a repository, only the current working directory is searched.  Global
 instructions precede project instructions, followed by explicit
 .B \-d
 entry points.  Duplicate canonical paths are included once.
-Files must be regular and non-symlink; discovery does not read their contents.
+Files may be symlinks whose canonical targets are regular files; discovery
+does not read their contents. Broken links, symlink loops and non-regular
+targets report an instruction discovery error.
 The model is given safely quoted paths and reads relevant guidance with normal
 tools, subject to those tools' file and output limits.  An empty override still
 takes precedence.  Per-turn metadata records advertised paths, not content

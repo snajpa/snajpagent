@@ -213,6 +213,9 @@ int snag_config_shell_validate(const char *shell, char *error, size_t error_size
 char *snag_config_path(const char *explicit_path, const char *dotdir, char *error, size_t error_size);
 int snag_config_save_model(const char *path, bool allow_create, const char *provider, const char *model,
                           const char *effort, char *error, size_t error_size);
+int snag_config_save_context(struct snag_config *config, const char *path, bool allow_create,
+                            const char *provider, const char *model, uint64_t tokens,
+                            char *error, size_t error_size);
 int snag_config_save_provider(const char *path, bool allow_create,
                              const struct snag_provider_config *provider,
                              const char *initial_model, const char *effort, char *error, size_t error_size);

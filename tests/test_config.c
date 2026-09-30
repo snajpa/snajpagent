@@ -733,6 +733,62 @@ test_many_config_secrets(const char *path)
     snag_config_free(&config);
 }
 
+static void
+test_context_configuration_save(const char *path)
+{
+    const char *cases[] = {
+        "[provider first]\n[agent]\nmodel=chosen\n# keep this comment\n",
+        "[provider first]\n[model-limit first/chosen]\nmax_output_tokens=100\n[ui]\n",
+        ("[provider first]\r\n[model-limit  first/chosen]\r\n"
+         "context_window_tokens=1000\r\n# retain this rule\r\nmax_output_tokens=100\r\n")
+    };
+    char error[256] = {0};
+    for (size_t i = 0u; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+        struct snag_config config;
+        struct snag_config loaded;
+        write_bytes(path, cases[i], strlen(cases[i]));
+        load_config(&config, path, NULL);
+        for (uint64_t tokens = 500000u; tokens <= 600000u; tokens += 100000u) {
+            assert(snag_config_save_context(&config, path, false, "first", "chosen",
+                tokens, error, sizeof(error)) == 0);
+            load_config(&loaded, path, NULL);
+            assert(loaded.model_limit_count == 1u && config.model_limit_count == 1u);
+            assert(loaded.model_limits[0].context_window_tokens == tokens);
+            assert(config.model_limits[0].context_window_tokens == tokens);
+            assert(loaded.model_limits[0].max_output_tokens == (i ? 100u : 0u));
+            snag_config_free(&loaded);
+        }
+        struct stat before;
+        struct stat after;
+        assert(stat(path, &before) == 0);
+        assert(snag_config_save_context(&config, path, false, "first", "chosen",
+            0u, error, sizeof(error)) < 0);
+        assert(snag_config_save_context(&config, path, false, "first", "chosen",
+            UINT64_C(4000000001), error, sizeof(error)) < 0);
+        assert(snag_config_save_context(&config, path, false, "missing", "chosen",
+            500000u, error, sizeof(error)) < 0);
+        if (i) {
+            assert(snag_config_save_context(&config, path, false, "first", "chosen",
+                50u, error, sizeof(error)) < 0);
+        }
+        assert(stat(path, &after) == 0 && before.st_ino == after.st_ino);
+        assert(config.model_limits[0].context_window_tokens == 600000u);
+        snag_config_free(&config);
+    }
+    assert(unlink(path) == 0);
+    struct snag_config config;
+    snag_config_init(&config);
+    assert(snag_config_save_context(&config, path, false, "openai", "chosen",
+        500000u, error, sizeof(error)) < 0);
+    assert(access(path, F_OK) < 0);
+    assert(snag_config_save_context(&config, path, true, "openai", "chosen",
+        500000u, error, sizeof(error)) == 0);
+    snag_config_free(&config);
+    load_config(&config, path, NULL);
+    assert(config.model_limits[0].context_window_tokens == 500000u);
+    snag_config_free(&config);
+}
+
 int
 main(void)
 {
@@ -1194,6 +1250,7 @@ main(void)
     test_many_model_aliases(path);
     test_spinner_frames(path);
     test_many_providers_and_limits(path);
+    test_context_configuration_save(path);
     assert(unlink(path) == 0);
     free(temp);
     puts("test_config: ok");

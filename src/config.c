@@ -1343,11 +1343,12 @@ provider_settings(struct snag_buf *output, const struct snag_provider_config *p)
 static const char *const model_setting_keys[] = {"provider", "model", "reasoning_effort"};
 
 static int
-append_missing_model_settings(struct snag_buf *out, const bool seen[3], const char *const values[3])
+append_missing_settings(struct snag_buf *out, const bool seen[3], const char *const *keys,
+                        const char *const *values, size_t count)
 {
     if (out->len && out->data[out->len - 1u] != '\n' && snag_buf_putc(out, '\n') < 0) return -1;
-    for (size_t i = 0u; i < 3u; ++i)
-        if (!seen[i] && snag_buf_printf(out, "%s = %s\n", model_setting_keys[i], values[i]) < 0) return -1;
+    for (size_t i = 0u; i < count; ++i)
+        if (!seen[i] && snag_buf_printf(out, "%s = %s\n", keys[i], values[i]) < 0) return -1;
     return 0;
 }
 
@@ -1355,7 +1356,8 @@ append_missing_model_settings(struct snag_buf *out, const bool seen[3], const ch
  * heading; model assignments retain their individual line endings. */
 static int
 replace_settings(const struct snag_buf *input, struct snag_buf *output,
-                 const struct snag_provider_config *provider, const char *const values[3])
+                 const struct snag_provider_config *provider, const char *section,
+                 const char *const *keys, const char *const *values, size_t count)
 {
     size_t at = 0u;
     bool selected = false, found = false, seen[3] = {false, false, false};
@@ -1384,10 +1386,16 @@ replace_settings(const struct snag_buf *input, struct snag_buf *output,
             found |= selected;
             replaced = true;
         } else if (!provider && *s == '[' && strlen(s) > 1u && s[strlen(s) - 1u] == ']') {
-            if (strcmp(s, "[agent]") == 0) {
+            s[strlen(s) - 1u] = '\0';
+            char *heading = trim(s + 1u);
+            bool matches = !strcmp(heading, section);
+            if (!strncmp(heading, "model-limit ", 12u) &&
+                !strncmp(section, "model-limit ", 12u))
+                matches = !strcmp(trim(heading + 12u), section + 12u);
+            if (matches) {
                 selected = found = true;
             } else if (selected) {
-                if (append_missing_model_settings(output, seen, values) < 0) return -1;
+                if (append_missing_settings(output, seen, keys, values, count) < 0) return -1;
                 selected = false;
             }
         } else if (selected) {
@@ -1400,8 +1408,8 @@ replace_settings(const struct snag_buf *input, struct snag_buf *output,
                         "auth base_url api_key native_compaction parallel_tool_calls leading_instructions");
                 } else {
                     size_t ending = newline ? 1u + (content && line[content - 1u] == '\r') : 0u;
-                    for (size_t i = 0u; i < 3u; ++i) {
-                        if (strcmp(s, model_setting_keys[i]) != 0) continue;
+                    for (size_t i = 0u; i < count; ++i) {
+                        if (strcmp(s, keys[i]) != 0) continue;
                         if (snag_buf_printf(output, "%s = %s", s, values[i]) < 0 ||
                             snag_buf_append(output, line + len - ending, ending) < 0) return -1;
                         seen[i] = replaced = true;
@@ -1419,9 +1427,10 @@ replace_settings(const struct snag_buf *input, struct snag_buf *output,
     } else {
         if (!found) {
             if ((output->len && output->data[output->len - 1u] != '\n' && snag_buf_putc(output, '\n') < 0) ||
-                snag_buf_append(output, "[agent]\n", 8u) < 0) return -1;
+                snag_buf_printf(output, "[%s]\n", section) < 0) return -1;
         }
-        if ((!found || selected) && append_missing_model_settings(output, seen, values) < 0) return -1;
+        if ((!found || selected) &&
+            append_missing_settings(output, seen, keys, values, count) < 0) return -1;
     }
     return 0;
 }
@@ -1447,7 +1456,7 @@ snag_config_validate_provider(const struct snag_provider_config *provider, char 
 static int
 save_config_settings(const char *path, bool allow_create, const char *provider, const char *model,
                       const char *effort, const struct snag_provider_config *provider_config,
-                      char *error, size_t error_size)
+                      uint64_t context_tokens, char *error, size_t error_size)
 {
     snag_file_info before;
     snag_file_info current;
@@ -1505,13 +1514,32 @@ save_config_settings(const char *path, bool allow_create, const char *provider, 
                           &permissions, error, error_size);
     if (read_rc < 0) goto out;
     const char *values[] = {provider, model, effort};
-    if (replace_settings(&input, &output, provider_config, values) < 0) {
+    const char *const context_keys[] = {"context_window_tokens"};
+    const char *const *keys = model_setting_keys;
+    char context_section[SNAG_CONFIG_PROVIDER_NAME_MAX + SNAG_CONFIG_MODEL_MAX + 16u];
+    char tokens[32];
+    const char *section = "agent";
+    size_t count = 3u;
+    if (context_tokens) {
+        (void)snprintf(context_section, sizeof(context_section),
+            "model-limit %s/%s", provider, model);
+        (void)snprintf(tokens, sizeof(tokens), "%llu", (unsigned long long)context_tokens);
+        section = context_section;
+        keys = context_keys;
+        values[0] = tokens;
+        count = 1u;
+    }
+    if (replace_settings(&input, &output, context_tokens ? NULL : provider_config,
+            section, keys, values, count) < 0) {
         snag_errorf(error, error_size, "configuration update exceeds 64 KiB");
         goto out;
     }
-    if (provider_config && *model) {
+    if (context_tokens && read_rc != 0 && provider_config &&
+        (snag_buf_printf(&output, "\n[provider %s]\n", provider_config->name) < 0 ||
+         provider_settings(&output, provider_config) < 0)) goto out;
+    if (provider_config && *model && !context_tokens) {
         struct snag_buf selected = {.max = SNAG_CONFIG_FILE_MAX};
-        if (replace_settings(&output, &selected, NULL, values) < 0) {
+        if (replace_settings(&output, &selected, NULL, section, keys, values, count) < 0) {
             snag_buf_free(&selected);
             goto out;
         }
@@ -1582,7 +1610,41 @@ snag_config_save_model(const char *path, bool allow_create,
                       const char *provider, const char *model, const char *effort,
                       char *error, size_t error_size)
 {
-    return save_config_settings(path, allow_create, provider, model, effort, NULL, error, error_size);
+    return save_config_settings(path, allow_create, provider, model, effort, NULL, 0u,
+        error, error_size);
+}
+
+int
+snag_config_save_context(struct snag_config *config, const char *path, bool allow_create,
+                        const char *provider, const char *model, uint64_t tokens,
+                        char *error, size_t error_size)
+{
+    if (!config || !snag_config_name_valid(provider) ||
+        !tokens || tokens > SNAG_CONFIG_TOKEN_LIMIT_MAX ||
+        !model || !*model || strchr(model, '*') || strchr(model, '?') || strchr(model, '[') ||
+        strchr(model, ']'))
+        return snag_fail(error, error_size, EINVAL, "invalid context default");
+    const struct snag_provider_config *selected = snag_config_provider(config, provider);
+    if (!selected)
+        return snag_fail(error, error_size, EINVAL, "context provider is not configured");
+    size_t index = 0u;
+    for (; index < config->model_limit_count; ++index) {
+        if (!strcmp(config->model_limits[index].provider, provider) &&
+            !strcmp(config->model_limits[index].model, model)) break;
+    }
+    if (index == config->model_limit_count && grow_model_limits(config) < 0)
+        return snag_errorf(error, error_size, "cannot allocate the context default");
+    if (save_config_settings(path, allow_create, provider, model, "default", selected, tokens,
+            error, error_size) < 0) return -1;
+    struct snag_model_limit_config *limit = &config->model_limits[index];
+    if (index == config->model_limit_count) {
+        memset(limit, 0, sizeof(*limit));
+        (void)snag_strcpy(limit->provider, sizeof(limit->provider), provider);
+        (void)snag_strcpy(limit->model, sizeof(limit->model), model);
+        ++config->model_limit_count;
+    }
+    limit->context_window_tokens = tokens;
+    return 0;
 }
 
 int
@@ -1595,7 +1657,8 @@ snag_config_save_provider(const char *path, bool allow_create, const struct snag
         strchr(provider->base_url, '\n') || strchr(provider->base_url, '\r'))
         return snag_errorf(error, error_size, "invalid provider settings");
     return save_config_settings(path, allow_create, provider->name,
-        initial_model ? initial_model : "", effort ? effort : "default", provider, error, error_size);
+        initial_model ? initial_model : "", effort ? effort : "default", provider, 0u,
+        error, error_size);
 }
 
 const struct snag_provider_config *
@@ -1744,4 +1807,3 @@ snag_config_resolve_execution(const struct snag_config *config, const char *prov
                          "effective default_timeout_ms exceeds max_timeout_ms for %s/%s", provider, model);
     return 0;
 }
-

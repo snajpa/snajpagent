@@ -49,7 +49,8 @@ snag_instructions_add_owned(struct snag_instruction_set *set, char *path,
 }
 
 static int
-try_candidate(struct snag_instruction_set *set, const char *path, bool *added, char *error, size_t error_size)
+try_candidate(struct snag_instruction_set *set, const char *path, bool follow_symlink,
+              bool *added, char *error, size_t error_size)
 {
     snag_file_info st;
     char *canonical;
@@ -59,14 +60,27 @@ try_candidate(struct snag_instruction_set *set, const char *path, bool *added, c
         if (errno == ENOENT) return 0;
         return snag_errorf(error, error_size, "cannot inspect instruction %s: %s", path, strerror(errno));
     }
-    if (S_ISLNK(st.st_mode) || !S_ISREG(st.st_mode)) {
+    if ((!follow_symlink || !S_ISLNK(st.st_mode)) && !S_ISREG(st.st_mode)) {
         return snag_fail(error, error_size, EINVAL,
-                    "instruction %s must be a non-symlink regular file", path);
+                    "instruction %s must resolve to a regular file", path);
     }
     canonical = snag_realpath(path);
+    if (!canonical)
+        return snag_errorf(error, error_size, "cannot resolve instruction %s: %s",
+            path, strerror(errno));
     if (!snag_text_valid(canonical, 0u, SNAG_PATH_MAX_BYTES)) {
         free(canonical);
         return snag_fail(error, error_size, EINVAL, "instruction path cannot be canonicalized");
+    }
+    if (snag_stat(canonical, &st) < 0) {
+        free(canonical);
+        return snag_errorf(error, error_size, "cannot inspect instruction %s: %s",
+            path, strerror(errno));
+    }
+    if (!S_ISREG(st.st_mode)) {
+        free(canonical);
+        return snag_fail(error, error_size, EINVAL,
+            "instruction %s must resolve to a regular file", path);
     }
     *added = true;
     for (size_t i = 0; i < set->count; ++i) {
@@ -82,7 +96,7 @@ int
 snag_instructions_add_file(struct snag_instruction_set *set, const char *path, char *error, size_t error_size)
 {
     bool added;
-    if (try_candidate(set, path, &added, error, error_size) < 0) return -1;
+    if (try_candidate(set, path, true, &added, error, error_size) < 0) return -1;
     if (added) return 0;
     return snag_fail(error, error_size, ENOENT, "instruction file is missing: %s", path);
 }
@@ -98,7 +112,7 @@ try_instruction_dir(struct snag_instruction_set *set, const char *dir, char *err
         int rc;
 
         if (!path) return -1;
-        rc = try_candidate(set, path, &added, error, error_size);
+        rc = try_candidate(set, path, true, &added, error, error_size);
         free(path);
         if (rc < 0) return -1;
         if (added) return 1;
@@ -357,7 +371,7 @@ snag_instructions_worknote(const char *cwd, char **note,
         int inspected;
 
         if (!path) goto out;
-        inspected = try_candidate(&probe, path, &added, scratch, sizeof(scratch));
+        inspected = try_candidate(&probe, path, false, &added, scratch, sizeof(scratch));
         free(path);
         if (inspected == 0 && added) {
             /* Transfer the canonical path out of the probe set. */

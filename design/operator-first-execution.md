@@ -64,6 +64,9 @@ then commits its event before reporting success. File/path helpers take the
 current cwd from the session at each call; none captures it in a global. A
 batch containing `cd` is sequenced so later dependent calls observe the new
 value. Existing in-flight processes retain their launch workdir.
+Each call's action digest remains bound to the directory at response acceptance;
+`tool_started` separately records and validates the directory at admission.
+The runner computes those digests before admitting any calls in the batch.
 
 The UI owner is the only owner of the composer and readiness display. It
 distinguishes an active turn, a foreground slash command and idle independently

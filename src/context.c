@@ -363,8 +363,11 @@ context_cache_restore(struct snag_session *session, struct context_cache **out,
         !json_is_boolean(rebuild_images)) goto invalid;
     cache->view.active_turn = json_is_true(active_turn);
     cache->view.input_timed = json_is_true(input_timed);
-    /* The legacy field also covers interrupted derived-view updates. */
-    cache->rebuild_view = json_is_true(rebuild_images);
+    /* Older compacted views include the separately installed summary/rebase
+     * prefix. Rebuild once from their retained event seam on restore. The
+     * legacy flag also covers interrupted updates and image resolution. */
+    cache->rebuild_view = json_is_true(rebuild_images) ||
+        cache->compact_seq != 0u || cache->rebase_seq != 0u;
     cache->view.control = control;
     if (snag_session_each_event_from_checkpoint(session, session->checkpoint_state,
         checkpoint_context_event, cache, error, error_size) < 0) goto fail;
@@ -2713,7 +2716,9 @@ snag_context_cache_key(const struct snag_session *session, const char *provider,
 static int
 context_copy_events(struct context_builder *dest, const struct context_builder *source, size_t start)
 {
-    dest->recovery_index = source->recovery_index;
+    size_t offset = json_array_size(dest->request_input);
+    dest->recovery_index = source->recovery_count ?
+        offset + source->recovery_index - start : 0u;
     dest->recovery_count = source->recovery_count;
     dest->recovery_first_ms = source->recovery_first_ms;
     dest->event_time_ms = source->event_time_ms;
@@ -2749,7 +2754,7 @@ context_copy_events(struct context_builder *dest, const struct context_builder *
         for (size_t j = start; j < json_array_size(source->request_input); ++j) {
             if (json_array_get(source->request_input, j) != message) continue;
             json_t *copy = json_array_get(dest->request_input,
-                dest->base_request_count + j - start);
+                offset + j - start);
             if (json_object_set(entry, "message", copy) < 0) { json_decref(entry); return -1; }
             break;
         }
@@ -2961,6 +2966,10 @@ snag_context_build(struct snag_session *session, const char *model, const char *
             if (install_rc < 0) goto out;
             if (install_rc == 1) builder.compact_seq = 0u;
         }
+        /* Summary and rebase prefixes are installed on every build. Cache
+         * only the following journal-derived items, so reuse cannot repeat
+         * provider IDs or shift the input-timing references. */
+        builder.base_request_count = json_array_size(builder.request_input);
         struct context_cache *cache = NULL;
         if (context_cache_get(session, &cache, error, error_size, control) < 0) goto out;
         if (!cache->scope[0] && continuation_scope &&

@@ -94,6 +94,26 @@ main(void)
     assert(strcmp(set.paths[3], path) == 0); /* content is not read by discovery */
     (void)unlink(path);
     assert(symlink("AGENTS.md", path) == 0);
+    assert(snag_instructions_discover(&set, leaf, error, sizeof(error)) == 0);
+    char target[4096];
+    assert(snprintf(target, sizeof(target), "%s/AGENTS.md", leaf) > 0);
+    assert(set.count == 4u && strcmp(set.paths[3], target) == 0);
+    assert(snag_instructions_add_file(&set, path, error, sizeof(error)) == 0);
+    assert(set.count == 4u);
+    assert(unlink(path) == 0);
+    assert(symlink(target, path) == 0);
+    assert(snag_instructions_discover(&set, leaf, error, sizeof(error)) == 0);
+    assert(set.count == 4u && strcmp(set.paths[3], target) == 0);
+    assert(unlink(path) == 0);
+    assert(symlink("missing-guidance", path) == 0);
+    assert(snag_instructions_discover(&set, leaf, error, sizeof(error)) < 0);
+    assert(errno == ENOENT);
+    assert(unlink(path) == 0);
+    assert(symlink("AGENTS.override.md", path) == 0);
+    assert(snag_instructions_discover(&set, leaf, error, sizeof(error)) < 0);
+    assert(errno == ELOOP);
+    assert(unlink(path) == 0);
+    assert(symlink(".", path) == 0);
     assert(snag_instructions_discover(&set, leaf, error, sizeof(error)) < 0);
     assert(errno == EINVAL);
     assert(unlink(path) == 0);

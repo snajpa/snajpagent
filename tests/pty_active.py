@@ -2509,7 +2509,7 @@ def test_input_survives_preparation_failure():
     agents.mkdir()
     try:
         with Child([], DEFAULT_IDLE_PROMPT) as child:
-            child.send_wait(b"/ro ping\r", b"must be a non-symlink regular file")
+            child.send_wait(b"/ro ping\r", b"must resolve to a regular file")
             session_id = child.session_id()
             log = events(session_id)
             accepted = [e for e in log if e["type"] == "input_received"]
@@ -4091,6 +4091,57 @@ def test_context_selection_command_and_resume():
                     resumed.exit_now()
         assert len([event for event in events(session_id)
                     if event["type"] == "turn_started"]) == 1
+    finally:
+        child.kill()
+        if old_cache is None:
+            cache_path.unlink(missing_ok=True)
+        else:
+            cache_path.write_bytes(old_cache)
+
+
+def test_context_configuration_save():
+    cache_path = Path(DOTDIR) / "models.json"
+    old_cache = cache_path.read_bytes() if cache_path.exists() else None
+    config = write_config("context-save.ini",
+        "[agent]\nmodel=gpt-5.6-luna\nreasoning_effort=high\n"
+        "[provider first]\nbase_url=https://example.test/backend-api/codex\n"
+        "[model-limit first]\nimage_tokens=700\n# retain this setting\n")
+    original = config.read_bytes()
+    child = Child(["--config", str(config), "--no-color"])
+    try:
+        child.wait(PROMPT.rstrip())
+        end = child.send_wait_idle(b"/model cache\r", b"cache updated:")
+        end = child.send_wait_idle(b"/context 500000\r", b"selected=500000", start=end)
+        assert config.read_bytes() == original
+        for command, value in ((b"/context 500000 s\r", 500000),
+                               (b"/context 600000 save\r", 600000)):
+            end = child.send_wait_idle(command, b"configuration saved:", start=end)
+            text = config.read_text()
+            assert f"context_window_tokens = {value}\n" in text, text
+            assert text.count("[model-limit first/gpt-5.6-luna]") == 1, text
+            assert "image_tokens=700\n# retain this setting\n" in text, text
+        saved = config.read_bytes()
+        for command, message in (
+                (b"/context 900000 save\r", b"exceeds the advertised maximum"),
+                (b"/context 0 s\r", b"between 1 and 4000000000"),
+                (b"/context 500000 save extra\r", b"context accepts"),
+                (b"/context max save\r", b"requires a token count")):
+            end = child.send_wait_idle(command, message, start=end)
+            assert config.read_bytes() == saved
+        end = child.send_wait_idle(b"/context 500000\r", b"selected=500000", start=end)
+        assert config.read_bytes() == saved
+        end = child.send_wait_idle(b"/context default\r", b"selected=600000", start=end)
+        # A failed write must leave both the session choice and config intact.
+        config.unlink()
+        config.mkdir()
+        end = child.send_wait_idle(b"/context 700000 save\r", b"configuration", start=end)
+        config.rmdir()
+        config.write_bytes(saved)
+        end = child.send_wait_idle(b"/context\r", b"selected=600000", start=end)
+        child.exit_cleanly(end)
+        with Child(["--config", str(config), "--no-color"], PROMPT.rstrip()) as fresh:
+            end = fresh.send_wait_idle(b"/context\r", b"selected=600000")
+            fresh.exit_cleanly(end)
     finally:
         child.kill()
         if old_cache is None:
@@ -6663,6 +6714,7 @@ if __name__ == "__main__":
     test_provider_login_and_first_run()
     test_compaction_policy_selection()
     test_context_selection_command_and_resume()
+    test_context_configuration_save()
     test_context_change_restarts_active_turn()
     test_provider_local_models()
     test_provider_local_models(False)

@@ -337,10 +337,19 @@ A session may select its own basis with `/context default|max|N`. The choice is
 durable (`context_selection_changed` in the session log, restored on resume) and
 wins over a configured `model-limit` context for that session; explicit
 input/output limits, typed learned ceilings and the output reservation still
-intersect the selected window. `default` returns to the advertised normal
-window, `max` selects the advertised maximum, and a number selects an explicit
-token count that must fit the advertised maximum. Reserve, client percentage and
+intersect the selected window. `default` returns to the configured context
+override or advertised normal window, `max` selects the advertised maximum,
+and a number selects an explicit token count that must fit the advertised
+maximum. Reserve, client percentage and
 proactive compaction stay derived from the selection.
+
+`/context N s|save` also writes `context_window_tokens` in the exact
+`[model-limit PROVIDER/MODEL]` section through the atomic config writer. Other
+settings and permissions survive the edit. Validation and saving precede the
+session selection event; a failed save retains the previous selection. The
+runtime configuration adopts the saved override, so `/context default` and
+new sessions use it immediately. A plain numeric selection remains local to
+the session.
 
 The provider setting `auto_compact_input_tokens` defaults to `auto`: proactive
 compaction uses 90% of the resolved hard input budget (rounded down, minimum

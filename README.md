@@ -275,8 +275,10 @@ is available with `[agent] allow_model_change=true` (default off). Switching
 retains completed tool results and running commands; a smaller context triggers
 bounded compaction when needed. The manual covers saved defaults and effort rules.
 
-`/context default` uses the advertised normal window, `max` the maximum, and a
-number an explicit token count. Larger windows may change provider pricing.
+`/context default` uses the configured or advertised normal window, `max` the
+maximum, and a number an explicit token count for the session. Append `s` or
+`save` to a number to save that provider/model's config default. Larger windows
+may change provider pricing.
 The prompt's percentage shows measured input against the resolved budget;
 `?%` means unknown. `/status` explains accounting, and `/compact` summarizes
 older context while preserving the transcript on disk. The manual covers

@@ -193,9 +193,9 @@ static const struct snag_term_command commands[] = {
     {"/model PROVIDER/MODEL/EFFORT [save|s]", "select explicit provider/model/effort"},
     {"/effort [LEVEL]", "show/set provider-defined effort (default means medium)"},
     {"/context", "show the context window, its reserve and compaction budget"},
-    {"/context default", "use the provider's normal working window"},
+    {"/context default", "use the configured or advertised working window"},
     {"/context max", "use the advertised maximum context"},
-    {"/context N", "use an explicit token window (N tokens)"},
+    {"/context N [s|save]", "set N tokens; optionally save this model's config default"},
     {"/compact", "compact context at a safe request boundary"},
     {"/state", "session state including goal and its actions"},
     {"/state goal [status|help]", "show goal section or this usage"},
@@ -2317,7 +2317,7 @@ report_context(struct app_state *app, const struct snag_provider_config *provide
             app->session.active_turn ? "next response in this turn" : "next turn",
             choice->mode == SNAG_CONTEXT_MODE_MAX ? "max (advertised maximum)" :
             choice->mode == SNAG_CONTEXT_MODE_TOKENS ? "explicit token window" :
-            "default (advertised working window)") < 0) goto out;
+            "default (configured or advertised working window)") < 0) goto out;
     if (snag_buf_append(&text, "\nselected=", strlen("\nselected=")) < 0) goto out;
     if (selected) {
         if (snag_buf_printf(&text, "%llu", (unsigned long long)selected) < 0) goto out;
@@ -2359,6 +2359,7 @@ change_context(struct app_state *app, const char *value, bool active)
     char *word = NULL;
     char *end = NULL;
     uint64_t tokens;
+    bool save = false;
 
     (void)active;
     if (!provider)
@@ -2376,6 +2377,17 @@ change_context(struct app_state *app, const char *value, bool active)
     if (!*word) {
         free(copy);
         return report_context(app, provider, &choice);
+    }
+    end = word;
+    while (*end && !isspace((unsigned char)*end)) ++end;
+    if (*end) {
+        *end++ = '\0';
+        char *suffix = trim_selector_part(end);
+        if (strcmp(suffix, "s") && strcmp(suffix, "save")) {
+            free(copy);
+            return app_error(app, "context accepts default, max, or a token count with s/save");
+        }
+        save = true;
     }
     if (strcmp(word, "default") == 0) {
         choice = (struct snag_context_choice){SNAG_CONTEXT_MODE_DEFAULT, 0u};
@@ -2395,12 +2407,18 @@ change_context(struct app_state *app, const char *value, bool active)
         }
     }
     free(copy);
+    if (save && choice.mode != SNAG_CONTEXT_MODE_TOKENS)
+        return app_error(app, "saving a context default requires a token count: /context N s|save");
     /* Resolve the candidate before recording it: an impossible choice must not
      * reach the session log, and the operator sees the reconciled reserve and
      * compaction budget for the choice they made. */
     if (snag_app_context_preview(app, provider, app->session.default_model, &choice, &capacity,
                                  error, sizeof(error)) < 0)
         return app_error(app, error[0] ? error : "context capacity could not be resolved");
+    if (save && snag_config_save_context(app->config, app->config_path,
+            app->config_allow_create, provider->name, app->session.default_model,
+            choice.tokens, error, sizeof(error)) < 0)
+        return app_error(app, error[0] ? error : "context default could not be saved");
     if (choice.mode != app->session.context_mode || choice.tokens != app->session.context_tokens) {
         if (commit_event(app, "context_selection_changed", json_pack("{s:s,s:I,s:s,s:I}",
                 "new_mode", snag_context_mode_name(choice.mode),
@@ -2422,7 +2440,9 @@ change_context(struct app_state *app, const char *value, bool active)
             app->model_switch_requested = true;
         }
     }
-    return report_context(app, provider, &choice);
+    int rc = report_context(app, provider, &choice);
+    if (rc < 0) return rc;
+    return save ? app_textf(app, SNAG_UI_HOST, "configuration saved: %s", app->config_path) : 0;
 }
 
 static int
@@ -3669,6 +3689,7 @@ call_rule_check(struct app_state *app, const struct snag_response_item *call,
 struct call_slot {
     struct snag_response_item call;
     char handle[SNAG_ID_HEX_LEN + 1u];
+    char action_sha256[SNAG_SHA256_HEX_LEN + 1u];
     bool started, finished, process;
     bool rule_rejected;
     char rule_message[512];
@@ -3691,10 +3712,16 @@ run_call_batch(struct app_state *app, const char *turn_id, const struct snag_cre
     bool steering_handoff = app->session.pending_steering_count != 0u &&
         !app->session.steering_deferred;
 
-    for (size_t i = 0u; i < count; ++i)
-        if (call_rule_check(app, &calls[i].call, &calls[i].rule_rejected,
+    /* Bind each proposal before cd can change the execution directory for
+     * later calls. Replay retains this response-time identity independently
+     * of the current directory recorded at admission. */
+    for (size_t i = 0u; i < count; ++i) {
+        if (snag_tool_action_digest(&calls[i].call, app->session.cwd,
+                calls[i].action_sha256) < 0 ||
+            call_rule_check(app, &calls[i].call, &calls[i].rule_rejected,
                             calls[i].rule_message, sizeof(calls[i].rule_message), &calls[i].insertion,
                             error, error_size) < 0) return -1;
+    }
     while (finished < count) {
         size_t before = finished;
         bool pending = false;
@@ -3790,9 +3817,8 @@ run_call_batch(struct app_state *app, const char *turn_id, const struct snag_cre
                     }
             }
             if (result) goto complete;
-            char digest[SNAG_SHA256_HEX_LEN + 1u];
-            if (snag_tool_action_digest(call, app->session.cwd, digest) < 0 ||
-                commit_event(app, "tool_started", json_pack("{s:s,s:s,s:s,s:s}", "action_sha256", digest,
+            if (commit_event(app, "tool_started", json_pack("{s:s,s:s,s:s,s:s}",
+                        "action_sha256", calls[i].action_sha256,
                         "call_id", call->call_id, "resolved_workdir", app->session.cwd,
                         "turn_id", turn_id), error, error_size) < 0) return -1;
             calls[i].started = true;

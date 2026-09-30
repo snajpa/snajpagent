@@ -1107,10 +1107,45 @@ test_repeated_compaction_active_seam(struct snag_store *store, const char *cwd)
                                       &projection, output);
             snag_context_projection_free(&projection);
             assert(session.active_turn && !strcmp(session.active_turn_id, turn));
+            if (cycle < 3u) {
+                struct snag_context_projection cached = {0};
+                build_context(&session, cycle + 1u, empty, &instructions, &projection);
+                build_context(&session, cycle + 1u, empty, &instructions, &cached);
+                json_t *input = json_object_get(cached.create_request.value, "input");
+                size_t summaries = 0u;
+                for (size_t i = 0u; i < json_array_size(input); ++i) {
+                    const char *type = snag_json_string(json_array_get(input, i), "type");
+                    if (type && !strcmp(type, "compaction")) ++summaries;
+                }
+                assert(summaries == 1u);
+                assert(json_equal(projection.create_request.value, cached.create_request.value));
+                for (unsigned int attempt = 1u; attempt <= 2u; ++attempt) {
+                    commit_event(&session, "turn_recovery", checked_json(json_pack(
+                        "{s:s,s:s,s:s}", "class", "provider", "message", "retry after compaction",
+                        "turn_id", turn)));
+                    build_context(&session, cycle + 1u, empty, &instructions, &cached);
+                }
+                assert(message_matching(json_object_get(cached.create_request.value, "input"),
+                    "2 failed attempts"));
+                snag_context_projection_free(&projection);
+                snag_context_projection_free(&cached);
+            }
             if (reopen && cycle < 3u) {
                 assert(snag_session_checkpoint(&session, error, sizeof(error)) == 0);
                 snag_session_close(&session);
                 assert(snag_session_open(store, &session, session_id, error, sizeof(error)) == 0);
+                /* Older embedded views retained the installed summary prefix. */
+                json_t *legacy = json_object_get(session.checkpoint_context, "request_input");
+                assert(json_array_insert(legacy, 0u, json_array_get(output, 0u)) == 0);
+                build_context(&session, cycle + 1u, empty, &instructions, &projection);
+                json_t *input = json_object_get(projection.create_request.value, "input");
+                size_t summaries = 0u;
+                for (size_t i = 0u; i < json_array_size(input); ++i) {
+                    const char *type = snag_json_string(json_array_get(input, i), "type");
+                    if (type && !strcmp(type, "compaction")) ++summaries;
+                }
+                assert(summaries == 1u);
+                snag_context_projection_free(&projection);
             }
         }
         assert(session.pending_steering_count == 1u);
@@ -2240,6 +2275,12 @@ test_rebased_active_compaction_after_trim(struct snag_store *store, const char *
     commit_event(&session, "context_rebased", json_pack("{s:s,s:s}",
         "reason", "turn_recovery", "turn_id", turn));
     assert(!strcmp(session.context_rebase_turn_id, turn));
+    struct snag_context_projection cached = {0};
+    build_context(&session, 1u, empty, NULL, &projection);
+    build_context(&session, 1u, empty, NULL, &cached);
+    assert(json_equal(projection.create_request.value, cached.create_request.value));
+    snag_context_projection_free(&projection);
+    snag_context_projection_free(&cached);
     commit_event(&session, "response_started", response_started(turn, response, NULL));
     commit_event(&session, "response_completed", response_completed(turn, response, "new result"));
     int rc = snag_context_compact_request_build(&session, SNAJPAGENT_MODEL, "medium",
