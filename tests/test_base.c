@@ -3779,8 +3779,18 @@ test_session_relay(void)
     /* Bad initial messages and zero geometry cannot commit an attachment. */
     client = snag_session_endpoint_connect(dir, root);
     assert(client >= 0);
+    uint64_t before_bad_request = relay.generation;
     relay_send_frame(client, SNAG_SESSION_COMMIT, geometry, sizeof(geometry));
-    relay_wait_event(&relay, &listener, SNAG_SESSION_DETACH);
+    /* An unreserved socket is closed without creating an attachment or a
+     * synthetic detach notification for the UI. */
+    bool rejected = false;
+    packet = (struct snag_session_packet){0};
+    for (unsigned int i = 0u; i < 1000u && !rejected; ++i) {
+        enum snag_session_message bad_event;
+        assert(snag_session_relay_step(&relay, &listener, 1, &bad_event) == 0 && !bad_event);
+        rejected = snag_session_packet_read(client, &packet) < 0;
+    }
+    assert(rejected && relay.peer < 0 && relay.generation == before_bad_request);
     assert(close(client) == 0);
     client = relay_reserve(&relay, &listener, dir, root);
     const unsigned char invalid_geometry[] = {0u, 0u, 80u, 0u};
