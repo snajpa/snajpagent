@@ -1090,8 +1090,9 @@ owner_capture(struct app_voice *v)
     if (atomic_load(&v->stop) || atomic_load(&v->muted) || v->applied_mute ||
         (!v->rtc && v->send_count)) return 0;
     int16_t pcm[480];
-    uint32_t count = snag_audio_capture(v->device, pcm, 480u);
-    int rc = count ? (v->rtc ? snag_voice_rtc_input(v->rtc, pcm, count) :
+    uint32_t position = 0u;
+    uint32_t count = snag_audio_capture(v->device, pcm, 480u, &position);
+    int rc = count ? (v->rtc ? snag_voice_rtc_input(v->rtc, pcm, count, position) :
         snag_voice_input(v->protocol, pcm, count, v->error, sizeof(v->error))) : 0;
     snag_secret_clear(pcm, sizeof(pcm));
     return rc;
@@ -1126,7 +1127,7 @@ static int owner_mute(struct app_voice *v)
     int rc=v->device?snag_audio_mute(v->device,mute):0;
     if(rc)return rc<0?-1:0;
     v->applied_mute=mute;
-    if (mute && v->rtc && snag_voice_rtc_input(v->rtc,NULL,0u)<0)return -1;
+    if (mute && v->rtc && snag_voice_rtc_input(v->rtc, NULL, 0u, 0u) < 0) return -1;
     /* An unsent audio message can be withdrawn. A partially sent frame must
      * finish before clear, preserving WebSocket framing. */
     if(mute && v->send_count && !v->send_offset && v->send_audio[v->send_read]) {

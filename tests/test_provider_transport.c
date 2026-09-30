@@ -4795,13 +4795,13 @@ static void test_voice_owner_mute(void)
     for (size_t i = 0u; i < 480u; ++i) input[i] = (int16_t)(i * 32u);
     snag_audio_fixture_io(device, output, input, 480u);
     assert(snag_app_voice_fixture_capture(&app, device, NULL) == 0);
-    assert(snag_audio_capture(device, output, 240u) == 240u);
+    assert(snag_audio_capture(device, output, 240u, NULL) == 240u);
     /* Leave half a frame: this reaches the real encoder without sending RTP. */
     assert(snag_app_voice_fixture_capture(&app, device, rtc) == 0);
-    assert(snag_audio_capture(device, output, 480u) == 0u);
+    assert(snag_audio_capture(device, output, 480u, NULL) == 0u);
     unsigned char packet[1500];
     assert(snag_voice_rtc_fixture_encode(rtc, input, packet, sizeof(packet)) < 0);
-    assert(snag_voice_rtc_input(rtc, NULL, 0u) == 0);
+    assert(snag_voice_rtc_input(rtc, NULL, 0u, 0u) == 0);
     assert(snag_voice_rtc_fixture_encode(rtc, input, packet, sizeof(packet)) > 0);
 #endif /* SNAJPAGENT_AUDIO_DEVICE */
     assert(snag_app_voice_fixture_mute(&app)==0);
@@ -4809,7 +4809,7 @@ static void test_voice_owner_mute(void)
     /* The applied owner mute still wins over the independent native transport. */
     snag_audio_fixture_io(device, output, input, 480u);
     assert(snag_app_voice_fixture_capture(&app, device, rtc) == 0);
-    assert(snag_audio_capture(device, output, 480u) == 480u);
+    assert(snag_audio_capture(device, output, 480u, NULL) == 480u);
     snag_audio_close(device);
     snag_voice_rtc_close(rtc);
 #endif
@@ -7263,8 +7263,10 @@ test_native_input_reset(void)
     for (size_t frame = 0u; frame < 20u; ++frame) {
         assert(snag_voice_rtc_fixture_encode(media, signal, packet, sizeof(packet)) > 0);
     }
-    assert(snag_voice_rtc_input(media, signal, 240u) == 0);
-    assert(snag_voice_rtc_input(media, NULL, 0u) == 0);
+    assert(snag_voice_rtc_input(media, signal, 240u, 0u) == 0);
+    assert(snag_voice_rtc_input(media, signal, 1u, 241u) < 0);
+    assert(snag_voice_rtc_input(media, signal, 16u, 240u) == 0);
+    assert(snag_voice_rtc_input(media, NULL, 0u, 0u) == 0);
     int bytes = snag_voice_rtc_fixture_encode(media, silence, packet, sizeof(packet));
     assert(bytes > 0);
     int code;
@@ -7339,7 +7341,7 @@ test_duplex_echo(void)
         assert(snag_audio_fault(device) == 0);
         for (size_t i = 0u; i < count; ++i) history[(frame + i) % history_size] = rendered[i];
         uint32_t got;
-        while ((got = snag_audio_capture(device, captured, 480u)) != 0u) {
+        while ((got = snag_audio_capture(device, captured, 480u, NULL)) != 0u) {
             assert(saved + got <= total);
             memcpy(result + saved, captured, got * sizeof(*captured));
             saved += got;
@@ -7376,17 +7378,17 @@ test_duplex_echo(void)
     snag_audio_interrupt(device);
     for (size_t i = 0u; i < 480u; ++i) microphone[i] = 9000;
     snag_audio_fixture_io(device, rendered, microphone, 240u);
-    assert(snag_audio_capture(device, captured, 480u) == 0u);
+    assert(snag_audio_capture(device, captured, 480u, NULL) == 0u);
     assert(snag_audio_mute(device, true) == 0);
     assert(snag_audio_mute(device, false) == 1);
     snag_audio_fixture_io(device, rendered, microphone, 240u);
-    assert(snag_audio_capture(device, captured, 480u) == 0u);
+    assert(snag_audio_capture(device, captured, 480u, NULL) == 0u);
     assert(snag_audio_mute(device, false) == 0);
     memset(microphone, 0, sizeof(microphone));
     snag_audio_fixture_io(device, rendered, microphone, 240u);
-    assert(snag_audio_capture(device, captured, 480u) == 0u);
+    assert(snag_audio_capture(device, captured, 480u, NULL) == 0u);
     snag_audio_fixture_io(device, rendered, microphone, 240u);
-    assert(snag_audio_capture(device, captured, 480u) == 480u);
+    assert(snag_audio_capture(device, captured, 480u, NULL) == 480u);
     for (size_t i = 0u; i < 480u; ++i) assert(captured[i] == 0);
     assert(snag_audio_fault(device) == 0);
     free(result);
@@ -7448,10 +7450,21 @@ test_native_media_loss_burst(void)
     snag_voice_rtc_close(media);
 }
 
-static void native_echo(int id,const char *data,int length,void *opaque)
+struct native_media_echo {
+    atomic_uint packets;
+    atomic_uint timestamp;
+};
+
+static void
+native_echo(int id, const char *data, int length, void *opaque)
 {
-    (void)opaque;
     if (length<12 || length>2048 || (((const unsigned char *)data)[1]&127u)!=111u)return;
+    struct native_media_echo *echo = opaque;
+    const unsigned char *bytes = (const unsigned char *)data;
+    uint32_t timestamp = (uint32_t)bytes[4] << 24u | (uint32_t)bytes[5] << 16u |
+        (uint32_t)bytes[6] << 8u | bytes[7];
+    atomic_store_explicit(&echo->timestamp, timestamp, memory_order_relaxed);
+    atomic_fetch_add_explicit(&echo->packets, 1u, memory_order_release);
     unsigned char packet[2048];memcpy(packet,data,(size_t)length);
     packet[8]=packet[9]=packet[10]=0;packet[11]=88;
     (void)rtcSendMessage(id,(const char *)packet,length);
@@ -7472,7 +7485,12 @@ static void test_native_media(void)
     assert(rtcSetGatheringStateChangeCallback(pc,native_gathered)==0);
     rtcTrackInit init={.direction=RTC_DIRECTION_SENDRECV,
         .codec=RTC_CODEC_OPUS,.payloadType=111,.ssrc=88,.mid="0"};
-    int track=rtcAddTrackEx(pc,&init);assert(track>=0);rtcSetUserPointer(track,&gathered);
+    struct native_media_echo echo;
+    atomic_init(&echo.packets, 0u);
+    atomic_init(&echo.timestamp, 0u);
+    int track = rtcAddTrackEx(pc, &init);
+    assert(track >= 0);
+    rtcSetUserPointer(track, &echo);
     assert(rtcSetMessageCallback(track,native_echo)==0);
     assert(rtcSetRemoteDescription(pc,(char *)offer.data,"offer")==0 &&
         rtcSetLocalDescription(pc,"answer")==0);
@@ -7481,11 +7499,26 @@ static void test_native_media(void)
     assert(snag_voice_rtc_answer(media,answer)==0);
     while (!snag_voice_rtc_ready(media) && snag_monotonic_ms()<deadline)snag_sleep_ms(5u);
     assert(snag_voice_rtc_ready(media));
-    int16_t input[480],output[2880];for (unsigned int i=0;i<480u;++i)input[i]=(i/24u)%2u?8000:-8000;
+    int16_t input[480];
+    int16_t output[2880];
+    int16_t rendered[480];
+    int16_t captured[480];
+    for (unsigned int i = 0; i < 480u; ++i) input[i] = (i / 24u) % 2u ? 8000 : -8000;
+    struct snag_audio_device *device = snag_audio_fixture_duplex();
+    assert(device);
+    snag_audio_fixture_io(device, rendered, input, 480u);
+    assert(snag_audio_mute(device, false) == 0);
+    uint32_t position = 0u;
     unsigned int samples=0,peak=0;uint64_t next=snag_monotonic_ms();deadline=next+1200u;
+    unsigned int sent = 0u;
     while (snag_monotonic_ms()<deadline) {
         if (snag_monotonic_ms()>=next) {
-            assert(snag_voice_rtc_input(media,input,480u)==0);next+=20u;}
+            snag_audio_fixture_io(device, rendered, input, 480u);
+            assert(snag_audio_capture(device, captured, 480u, &position) == 480u);
+            assert(snag_voice_rtc_input(media, captured, 480u, position) == 0);
+            next += 20u;
+            ++sent;
+        }
         int n=snag_voice_rtc_output(media,output,2880u);assert(n>=0);
         samples+=(unsigned int)n;
         for (int i = 0; i < n; ++i) {
@@ -7497,7 +7530,41 @@ static void test_native_media(void)
         snag_sleep_ms(2u);
     }
     assert(samples>12000u && peak>1000u);
-    assert(snag_voice_rtc_input(media,input,200u)==0 && snag_voice_rtc_input(media,NULL,0u)==0);
+    deadline = snag_monotonic_ms() + 1000u;
+    while (atomic_load_explicit(&echo.packets, memory_order_acquire) != sent) {
+        assert(snag_monotonic_ms() < deadline);
+        (void)snag_sleep_ms(2u);
+    }
+    uint32_t before_mute = atomic_load(&echo.timestamp);
+    uint32_t before_position = position;
+    snag_audio_fixture_io(device, rendered, input, 480u);
+    assert(snag_audio_capture(device, captured, 200u, &position) == 200u);
+    assert(snag_voice_rtc_input(media, captured, 200u, position) == 0);
+    assert(snag_audio_mute(device, true) == 0);
+    assert(snag_voice_rtc_input(media, NULL, 0u, 0u) == 0);
+    /* Omitted microphone time must remain a gap in the RTP sample timeline. */
+    for (unsigned int i = 0u; i < 6u; ++i) {
+        snag_audio_fixture_io(device, rendered, input, 480u);
+        assert(snag_audio_capture(device, captured, 480u, NULL) == 0u);
+        (void)snag_sleep_ms(20u);
+    }
+    assert(atomic_load(&echo.packets) == sent);
+    assert(snag_audio_mute(device, false) == 0);
+    snag_audio_fixture_io(device, rendered, input, 480u);
+    assert(snag_audio_capture(device, captured, 480u, &position) == 480u);
+    assert(snag_voice_rtc_input(media, captured, 480u, position) == 0);
+    deadline = snag_monotonic_ms() + 1000u;
+    while (atomic_load_explicit(&echo.packets, memory_order_acquire) != sent + 1u) {
+        assert(snag_monotonic_ms() < deadline);
+        (void)snag_sleep_ms(2u);
+    }
+    uint32_t after_mute = atomic_load(&echo.timestamp);
+    fprintf(stderr, "native mute timestamp step=%u; elapsed gap at least %u ticks\n",
+        after_mute - before_mute, 120u * 48u);
+    assert(after_mute - before_mute >= 120u * 48u);
+    assert(position - before_position == 3840u);
+    assert(after_mute - before_mute == (position - before_position) * 2u);
+    snag_audio_close(device);
     snag_voice_rtc_flush(media);snag_voice_rtc_close(media);
     rtcSetMessageCallback(track,NULL);rtcDeleteTrack(track);
     rtcDeletePeerConnection(pc);snag_buf_free(&offer);

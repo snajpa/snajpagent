@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Preserve native microphone sample time across mute gaps and partial reads,
+  using capture positions for RTP timestamps while retaining input privacy.
+
 - Keep active native microphone forwarding independent of queued context and
   result messages, preserving the initial history, mute and stop gates.
 

@@ -48,7 +48,10 @@ samples models linear speaker echo; an independent two-tone signal models
 near-end input. The test measures echo-energy reduction and retained near-end
 amplitude/correlation, adapts varying callback sizes, and checks partial-frame
 discard and filter reset across mute/unmute. It also exercises real Opus
-decoding, packet loss/reordering and the local RTC round trip.
+decoding, packet loss/reordering and the local RTC round trip. The round trip
+checks received packet timestamps against callback sample positions across a
+mute interval and discarded partial input, with no packets forwarded while
+muted. Capture tests also cover partial reads and sample-counter wrap.
 
 This covers synthetic sample flow. Physical devices, nonlinear loudspeaker echo,
 clock drift, human speech intelligibility and live ASR require separate evidence.

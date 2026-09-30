@@ -12,7 +12,9 @@ int snag_audio_devices(struct snag_buf *, char *, size_t);
 int snag_audio_open(bool capture, bool playback, unsigned int channels,
                      const char *, const char *, struct snag_audio_device **, char *, size_t);
 void snag_audio_close(struct snag_audio_device *);
-uint32_t snag_audio_capture(struct snag_audio_device *, int16_t *, uint32_t);
+/* Optional first-sample position on the continuous 24 kHz capture clock,
+ * modulo 2^32. The clock includes muted samples; an empty read leaves it alone. */
+uint32_t snag_audio_capture(struct snag_audio_device *, int16_t *, uint32_t, uint32_t *);
 uint32_t snag_audio_play(struct snag_audio_device *, const int16_t *, uint32_t);
 void snag_audio_interrupt(struct snag_audio_device *);
 /* Publish the end of a voice audio item so short/tail audio drains promptly. */

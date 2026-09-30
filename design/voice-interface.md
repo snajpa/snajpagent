@@ -55,6 +55,13 @@ partial capture and resets the filter before admitting fresh samples. Native
 input clearing also resets Opus encoder lookahead, so previously captured
 samples cannot reappear in the next encoded frame. Autoconf dependency recipes
 supply the filter across portable targets.
+The callback counts all 24 kHz capture frames, including muted frames. Fresh
+capture carries its first-sample position through partial reads to the existing
+native packetizer, which maps it to the 48 kHz Opus RTP clock. Muted time remains
+an explicit timestamp gap; packet send timing does not define sample time
+(RFC 3550 section 5.1; RFC 7587 section 4.1). The mute acknowledgement protects
+the capture-ring reset and its read position together. Counter arithmetic wraps
+with the RTP clock, and a partial encoder frame accepts only contiguous samples.
 Hardware-free echo/double-talk tests cover sample flow; device qualification
 remains separate (see `QUALIFICATION.md`).
 

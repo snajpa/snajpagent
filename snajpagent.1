@@ -2131,7 +2131,8 @@ reaches speech recognition.
 .B /voice mute, /voice unmute
 Pause or resume microphone forwarding. Unmute discards old capture samples,
 including a partial processing frame, and resets the echo filter.
-Native voice also clears encoder lookahead at mute. Audio already transmitted
+Native voice also clears encoder lookahead at mute and preserves the muted
+interval in subsequent audio timestamps. Audio already transmitted
 cannot be recalled. Speaker output and coding work
 are independent of microphone mute.
 The prompt shows starting or muting until the device owner applies the change.

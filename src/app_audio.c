@@ -224,7 +224,7 @@ snag_app_audio_service(struct app_state *app)
     }
     int16_t pcm[4096];
     uint32_t n;
-    while ((n = snag_audio_capture(audio->device, pcm, 4096u)) != 0u) {
+    while ((n = snag_audio_capture(audio->device, pcm, 4096u, NULL)) != 0u) {
         size_t remaining = (60u * 48000u + 44u - audio->wav.len) / 2u;
         if (n > remaining) n = (uint32_t)remaining;
         unsigned char *bytes = (unsigned char *)pcm;

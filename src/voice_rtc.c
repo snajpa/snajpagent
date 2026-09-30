@@ -21,7 +21,8 @@ struct snag_voice_rtc {
     OpusDecoder *decoder;
     struct rtc_packet packets[RTP_SLOTS];
     uint16_t next;
-    uint32_t timestamp;
+    uint32_t timestamp_base;
+    uint32_t input_position;
     uint32_t frame_size;
     uint64_t due;
     bool receiving,output_started;
@@ -98,14 +99,16 @@ int snag_voice_rtc_open(struct snag_voice_rtc **out,char *error,size_t size)
     uint32_t ssrc;uint16_t sequence;
     if (snag_random_bytes((unsigned char *)&ssrc,sizeof(ssrc))<0 ||
         snag_random_bytes((unsigned char *)&sequence,sizeof(sequence))<0 ||
-        snag_random_bytes((unsigned char *)&r->timestamp,sizeof(r->timestamp))<0)goto fail;
+        snag_random_bytes((unsigned char *)&r->timestamp_base, sizeof(r->timestamp_base)) < 0) {
+        goto fail;
+    }
     rtcTrackInit track={.direction=RTC_DIRECTION_SENDRECV,.codec=RTC_CODEC_OPUS,
         .payloadType=111,.ssrc=ssrc,.mid="0",.name="snajpagent",.msid="voice",.trackId="audio"};
     r->track=rtcAddTrackEx(r->pc,&track);
     if (r->track<0)goto fail;
     rtcSetUserPointer(r->track,r);
     rtcPacketizerInit packetizer={.ssrc=ssrc,.cname="snajpagent",.payloadType=111,.clockRate=48000,
-        .sequenceNumber=sequence,.timestamp=r->timestamp};
+        .sequenceNumber = sequence, .timestamp = r->timestamp_base};
     if (rtcSetOpusPacketizer(r->track,&packetizer)<0 || rtcChainRtcpReceivingSession(r->track)<0 ||
         rtcChainRtcpSrReporter(r->track)<0 || rtcSetMessageCallback(r->track,received)<0 ||
         rtcSetLocalDescription(r->pc,"offer")<0)goto fail;
@@ -131,25 +134,37 @@ bool snag_voice_rtc_ready(struct snag_voice_rtc *r)
 {
     return !atomic_load(&r->failed) && rtcIsOpen(r->track);
 }
-int snag_voice_rtc_input(struct snag_voice_rtc *r,const int16_t *pcm,uint32_t frames)
+int
+snag_voice_rtc_input(struct snag_voice_rtc *r, const int16_t *pcm, uint32_t frames,
+    uint32_t position)
 {
-    if (atomic_load(&r->failed))return -1;
+    if (atomic_load(&r->failed)) return -1;
     if (!frames) {
         memset(r->input, 0, sizeof(r->input));
         r->input_count = 0u;
         /* The encoder retains delayed microphone samples beyond this buffer. */
         return opus_encoder_ctl(r->encoder, OPUS_RESET_STATE) == OPUS_OK ? 0 : -1;
     }
-    if (!pcm)return -1;
+    if (!pcm || (r->input_count && position != r->input_position + r->input_count)) {
+        return -1;
+    }
     while (frames) {
-        uint32_t n=480u-r->input_count;if (n>frames)n=frames;
-        memcpy(r->input+r->input_count,pcm,n*sizeof(*pcm));r->input_count+=n;pcm+=n;frames-=n;
-        if (r->input_count<480u)continue;
+        if (!r->input_count) r->input_position = position;
+        uint32_t n = 480u - r->input_count;
+        if (n > frames) n = frames;
+        memcpy(r->input + r->input_count, pcm, n * sizeof(*pcm));
+        r->input_count += n;
+        pcm += n;
+        frames -= n;
+        position += n;
+        if (r->input_count < 480u) continue;
         unsigned char packet[OPUS_PACKET];
-        int size=opus_encode(r->encoder,r->input,480,packet,sizeof(packet));r->input_count=0u;
-        if (size<0 || rtcSetTrackRtpTimestamp(r->track,r->timestamp)<0 ||
-            rtcSendMessage(r->track,(const char *)packet,size)<0)return -1;
-        r->timestamp+=960u;
+        int size = opus_encode(r->encoder, r->input, 480, packet, sizeof(packet));
+        r->input_count = 0u;
+        /* Opus RTP uses 48 kHz, including samples discarded while muted. */
+        uint32_t timestamp = r->timestamp_base + r->input_position * 2u;
+        if (size < 0 || rtcSetTrackRtpTimestamp(r->track, timestamp) < 0 ||
+            rtcSendMessage(r->track, (const char *)packet, size) < 0) return -1;
     }
     return 0;
 }
@@ -218,9 +233,14 @@ int snag_voice_rtc_open(struct snag_voice_rtc **out,char *e,size_t n)
 int snag_voice_rtc_offer(struct snag_voice_rtc *r,struct snag_buf *b) {(void)r;(void)b;return -1;}
 int snag_voice_rtc_answer(struct snag_voice_rtc *r,const char *s) {(void)r;(void)s;return -1;}
 bool snag_voice_rtc_ready(struct snag_voice_rtc *r) {(void)r;return false;}
-int snag_voice_rtc_input(struct snag_voice_rtc *r,const int16_t *p,uint32_t n)
+int
+snag_voice_rtc_input(struct snag_voice_rtc *r, const int16_t *p, uint32_t n, uint32_t position)
 {
-    (void)r;(void)p;(void)n;return -1;
+    (void)r;
+    (void)p;
+    (void)n;
+    (void)position;
+    return -1;
 }
 int snag_voice_rtc_output(struct snag_voice_rtc *r,int16_t *p,uint32_t n)
 {

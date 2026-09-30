@@ -7,8 +7,10 @@ int snag_voice_rtc_open(struct snag_voice_rtc **, char *, size_t);
 int snag_voice_rtc_offer(struct snag_voice_rtc *, struct snag_buf *);
 int snag_voice_rtc_answer(struct snag_voice_rtc *, const char *);
 bool snag_voice_rtc_ready(struct snag_voice_rtc *);
-/* Zero input frames discard partial capture and reset encoder lookahead at mute. */
-int snag_voice_rtc_input(struct snag_voice_rtc *, const int16_t *, uint32_t);
+/* Position is the first sample on the continuous 24 kHz capture clock (modulo
+ * 2^32). Partial input must be contiguous. Zero frames discard partial capture
+ * and reset encoder lookahead at mute; position is then ignored. */
+int snag_voice_rtc_input(struct snag_voice_rtc *, const int16_t *, uint32_t, uint32_t);
 /* Native media uses 48 kHz RTP timestamps and 24 kHz mono device PCM. */
 int snag_voice_rtc_output(struct snag_voice_rtc *, int16_t *, uint32_t);
 void snag_voice_rtc_flush(struct snag_voice_rtc *);
