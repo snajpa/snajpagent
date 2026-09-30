@@ -128,6 +128,7 @@ remember_input(struct app_state *app, const char *text)
 static int
 persist_session(struct app_state *app, char *error, size_t error_size)
 {
+    if (snag_app_save_resume_options(app, error, error_size) < 0) return -1;
     int rc = snag_session_persist(&app->store, &app->session, error, error_size);
     if (rc == 0 && app->ui.opened) {
         (void)snag_history_bind(&app->ui.history, app->session.dir_path);
@@ -5197,40 +5198,17 @@ build_resume_command(const struct app_state *app, const char *program,
                      const char *dotdir, struct snag_buf *command)
 {
     char *resolved = snag_program_path(program && *program ? program : SNAJPAGENT_NAME);
-    const struct snag_cli *cli = app->cli;
-    const struct snag_config *config = app->config;
+    char *default_dir = snag_app_dotdir(NULL, NULL, 0u);
+    snag_file_info actual, standard;
+    bool is_default = default_dir && (!strcmp(dotdir, default_dir) ||
+        (snag_stat(dotdir, &actual) == 0 && snag_stat(default_dir, &standard) == 0 &&
+         actual.st_dev == standard.st_dev && actual.st_ino == standard.st_ino));
     int rc = -1;
 
+    free(default_dir);
     if (!resolved) return -1;
     if (snag_command_argument(command, resolved) < 0 ||
-        append_command_option(command, "--dotdir", dotdir) < 0) goto out;
-    if (cli->config_path && append_command_option(command, "--config", cli->config_path) < 0) goto out;
-    for (size_t i = 0; i < cli->doc_instructions.count; ++i) {
-        const char *path = cli->doc_instructions.paths[i];
-        const char *slash = strrchr(path, '/');
-        char dir[SNAG_PATH_MAX_BYTES + 1u];
-        if (!slash) goto out;
-        (void)snprintf(dir, sizeof(dir), "%.*s", (int)(slash - path + 1), path);
-        if (append_command_option(command, "-d", dir) < 0) goto out;
-    }
-    if (cli->color && snag_buf_printf(command, " --color=%s", cli->color) < 0) goto out;
-    if (cli->markdown && append_command_literal(command, cli->markdown) < 0) goto out;
-    for (unsigned int i = 0u; i < snag_ui_verbosity(&app->ui); ++i)
-        if (append_command_literal(command, "-v") < 0) goto out;
-    if (config->irc.listen_explicit) {
-        if (append_command_option(command, "--listen", config->irc.listen) < 0) goto out;
-    } else if (append_command_literal(command, "--no-listen") < 0) {
-        goto out;
-    }
-    if (!config->irc.client_count && append_command_literal(command, "--no-client") < 0) goto out;
-    for (size_t i = 0u; i < config->irc.client_count; ++i)
-        if (append_command_option(command, "--client", config->irc.clients[i]) < 0) goto out;
-    if (config->irc.model_nick[0] && !config->irc.model_nick_implicit &&
-        append_command_option(command, "--model-nick", config->irc.model_nick) < 0) goto out;
-    if (config->irc.operator_nick[0] && !config->irc.operator_nick_implicit &&
-        append_command_option(command, "--operator-nick", config->irc.operator_nick) < 0) goto out;
-    if (config->irc.room_name[0] && append_command_option(command, "--room-name", config->irc.room_name) < 0)
-        goto out;
+        (!is_default && append_command_option(command, "--dotdir", dotdir) < 0)) goto out;
     if (append_command_literal(command, "--resume") < 0 ||
         snag_command_argument(command, app->session.id) < 0) goto out;
     rc = 0;
@@ -5680,6 +5658,10 @@ render_room_history(void *opaque, const struct snag_irc_event *event)
 static int
 run_owner(const struct snag_cli *cli, const char *program, struct snag_session_process *process)
 {
+    struct snag_cli effective = *cli, saved;
+    json_t *saved_options = NULL;
+    snag_cli_init(&saved);
+    cli = &effective;
     struct app_state app;
     struct snag_shutdown signal_handlers;
     struct snag_config config;
@@ -5734,6 +5716,30 @@ run_owner(const struct snag_cli *cli, const char *program, struct snag_session_p
         invalid_message = error[0] ? error : "dotdir is unavailable";
         goto invalid;
     }
+    if (cli->resume) {
+        if (snag_store_open(&app.store, dotdir, error, sizeof(error)) < 0) goto fail;
+        if (cli->session_name) {
+            char id[SNAG_ID_HEX_LEN + 1u];
+            rc = snag_store_find_name(&app.store, cli->session_name, id,
+                                      list_row, &app, error, sizeof(error));
+            if (!rc) rc = snag_session_open(&app.store, &app.session, id, error, sizeof(error));
+        } else if (cli->resume_id) rc = snag_session_open(&app.store, &app.session, cli->resume_id,
+                                  error, sizeof(error));
+        else if (cli->last) rc = snag_session_open_last(&app.store, &app.session,
+                                       error, sizeof(error));
+        else rc = pick_session(&app, error, sizeof(error));
+        if (rc == 1) {
+            (void)snag_ui_text(&app.ui, SNAG_UI_WARNING, error);
+            rc = 0;
+            goto out;
+        }
+        if (rc < 0) {
+            goto fail;
+        }
+        if (snag_app_restore_resume_options(&effective, &saved, &app.session,
+                &saved_options, error, sizeof(error)) < 0) goto invalid;
+    }
+    app.config_allow_create = cli->config_path == NULL;
     if (snag_config_load(&config, cli->config_path, dotdir, error, sizeof(error)) < 0) goto invalid;
     if (!cli->list && ((!config.provider_count) ||
         (cli->provider && !snag_config_provider(&config, cli->provider)))) {
@@ -5743,7 +5749,7 @@ run_owner(const struct snag_cli *cli, const char *program, struct snag_session_p
     }
     config_path = snag_config_path(cli->config_path, dotdir, error, sizeof(error));
     if (!config_path) goto invalid;
-    if (snag_store_open(&app.store, dotdir, error, sizeof(error)) < 0) goto fail;
+    if (!cli->resume && snag_store_open(&app.store, dotdir, error, sizeof(error)) < 0) goto fail;
     if (cli->update_model_cache) {
         if (refresh_model_cache(&app, error, sizeof(error)) < 0) goto fail;
     } else {
@@ -5756,7 +5762,7 @@ run_owner(const struct snag_cli *cli, const char *program, struct snag_session_p
         .kind = SNAG_UI_COLOR, .data.value = snag_cli_color(cli, config.color)});
     snag_ui_send(&app.ui, (struct snag_ui_command){
         .kind = SNAG_UI_MARKDOWN, .data.value = snag_cli_markdown(cli, config.markdown)});
-    if (!cli->execute && !cli->list && snag_irc_apply_cli(&config, cli, error, sizeof(error)) < 0)
+    if (!cli->list && snag_irc_apply_cli(&config, cli, error, sizeof(error)) < 0)
         goto invalid;
     app.networked = !cli->execute && !cli->list && snag_irc_enabled(&config);
     snag_ui_send(&app.ui, (struct snag_ui_command){
@@ -5806,24 +5812,6 @@ run_owner(const struct snag_cli *cli, const char *program, struct snag_session_p
     if (cli->resume) {
         const struct snag_provider_config *resume_provider;
         const char *resume_model;
-        if (cli->session_name) {
-            char id[SNAG_ID_HEX_LEN + 1u];
-            rc = snag_store_find_name(&app.store, cli->session_name, id,
-                                      list_row, &app, error, sizeof(error));
-            if (!rc) rc = snag_session_open(&app.store, &app.session, id, error, sizeof(error));
-        } else if (cli->resume_id) rc = snag_session_open(&app.store, &app.session, cli->resume_id,
-                                  error, sizeof(error));
-        else if (cli->last) rc = snag_session_open_last(&app.store, &app.session,
-                                       error, sizeof(error));
-        else rc = pick_session(&app, error, sizeof(error));
-        if (rc == 1) {
-            (void)snag_ui_text(&app.ui, SNAG_UI_WARNING, error);
-            rc = 0;
-            goto out;
-        }
-        if (rc < 0) {
-            goto fail;
-        }
         resume_provider = cli->model ? selection.provider : snag_config_provider(&config,
             cli->provider ? cli->provider : app.session.default_provider);
         resume_model = cli->model ? new_model : app.session.default_model;
@@ -5874,6 +5862,8 @@ run_owner(const struct snag_cli *cli, const char *program, struct snag_session_p
         app.turn_effort = resolve_effort(app.session.default_effort);
         app.turn_provider = selected_provider;
     }
+    app.resume_options_ready = true;
+    if (snag_app_save_resume_options(&app, error, sizeof(error)) < 0) goto fail;
     if (!cli->execute) {
         if (snag_irc_open(&app.irc, &config, app.session.cwd,
                          snag_app_irc_event, snag_app_irc_trace, &app, error, sizeof(error)) < 0 ||
@@ -5923,6 +5913,11 @@ fail:
 report:
     (void)snag_ui_text(&app.ui, SNAG_UI_ERROR, invalid_message);
 out:
+    if (app.session.log_fd >= 0 &&
+        snag_app_save_resume_options(&app, error, sizeof(error)) < 0) {
+        (void)snag_ui_text(&app.ui, SNAG_UI_ERROR, error);
+        if (!rc) rc = 3;
+    }
     snag_app_audio_close(&app);
     (void)snag_app_shutdown(&app);
     /* A POSIX process lock is released by closing any descriptor on its inode. */
@@ -5953,6 +5948,8 @@ out:
     snag_buf_free(&app.output_cache.data);
     snag_app_clear_partial_public(&app);
     free(app.partial);
+    snag_cli_free(&saved);
+    json_decref(saved_options);
     free(config_path);
     free(dotdir);
     free(cwd);

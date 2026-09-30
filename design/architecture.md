@@ -570,11 +570,19 @@ Loading and model/provider saves use the same semantic configuration validator,
 including auth endpoints and cross-field model limits. Saves validate private
 parse copies before atomically replacing the file; invalid text is not replaced.
 
-IRC configuration is process-local, while admitted room state is durable
-session data. Typed events cover connection, membership, message, mode, topic,
-history, and model-input snapshot transitions. They are validated before
-append and replay; append occurs before transcript rendering or provider
-projection.
+Session launch settings are durable in `session_options` events. Their validated
+argument arrays contain only config/document paths, display preferences and IRC
+roles/identities; credentials stay in the config's existing secret sources.
+The checkpoint string table retains `resume_options` as a JSON array. Resume
+opens its selected session before loading config, parses these arguments through
+the existing CLI validation, and merges explicit overrides by setting. Explicit
+client lists replace saved clients; a listener override leaves clients intact.
+Topology changes save the current desired roles. Orderly exit saves current
+verbosity. One-shot execution retains desired roles without opening networking.
+Old sessions recover known IRC metadata from their last snapshot, stopping at
+history; chat text cannot become arguments. Typed IRC events cover connection,
+membership, message, mode, topic, history and model-input transitions and remain
+validated before append, transcript rendering and provider projection.
 
 After any exit with a resumable open session, common cleanup restores the
 terminal, closes IRC, and writes one exact
@@ -584,16 +592,11 @@ fails. The bullet header and command each begin at column zero with no
 intervening blank line. With color enabled, the complete header has the same
 bold-green lifecycle role as `• Compacted`, and the ANSI reset precedes the
 header newline so the command line begins directly with uncolored command
-bytes. The command
-reuses the resolved dotdir and explicit config source, exact session ID,
-explicit presentation settings and effective
-IRC settings. Session model/provider/effort preferences are restored from the
-journal, including CLI selections accepted before any new turn. Thus process-local IRC launch configuration does not enter the
-event log but the operator can immediately recreate a client, server, or
-combined process. It explicitly carries `--no-listen`/`--no-client` for absent
-roles, preventing config defaults from resurrecting removed endpoints. Normal
-cleanup preserves the desired role specification until the hint is built.
-The command contains neither prompts nor secret values.
+bytes. The command selects the exact session ID and includes --dotdir only when
+the directory differs from the default by path and filesystem identity. Saved
+launch options and model/provider/effort preferences supply the remaining state.
+Disabled IRC roles persist across changed configuration defaults. The command
+contains neither prompts nor secret values.
 
 SIGHUP and SIGTERM set signal-safe shutdown state, as does SIGINT outside the
 interactive terminal handler. Idle and active provider/tool/network pumps

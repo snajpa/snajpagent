@@ -193,6 +193,7 @@ snag_app_irc_snapshot(struct app_state *app, const char *reason, char *error, si
 
     if (!app || !app->irc || !reason) return snag_errno(EINVAL);
     if (snag_app_sync_destinations(app) < 0) return -1;
+    if (snag_app_save_resume_options(app, error, error_size) < 0) return -1;
     struct snag_buf snapshot = {.max = SNAG_MAX_IRC_SNAPSHOT};
     rc = strcmp(reason, "compaction") != 0 ? snag_irc_state(app->irc, &snapshot, error, error_size) :
         snag_irc_snapshot(app->irc, &snapshot, error, error_size);

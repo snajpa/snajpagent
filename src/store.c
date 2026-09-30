@@ -183,6 +183,22 @@ snag_session_pending_steering_unadmitted(const struct snag_session *session)
         if (session->pending_steering[i].first_context_ms) return false;
     return true;
 }
+bool
+snag_session_options_valid(const json_t *args)
+{
+    if (!json_is_array(args)) return false;
+    for (size_t i = 0u; i < json_array_size(args); ++i) {
+        const char *name = json_string_value(json_array_get(args, i));
+        if (snag_string_in(name, "--no-listen --no-client --markdown --no-markdown -v"))
+            continue;
+        if (!snag_string_in(name,
+                "--config -d --color --listen --client --model-nick --operator-nick --room-name") ||
+            !snag_text_valid(json_string_value(json_array_get(args, ++i)),
+                1u, SNAG_PATH_MAX_BYTES)) return false;
+    }
+    return true;
+}
+
 void
 snag_session_init(struct snag_session *session)
 {
@@ -940,6 +956,11 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         const char *name = snag_json_string(data, "name");
         if (!snag_json_exact_keys(data, "name") || !snag_session_name_valid(name)) goto invalid;
         if (replace_text(session, &session->name, "name", name, SNAG_PATH_MAX_BYTES) < 0) return -1;
+    } else if (strcmp(type, "session_options") == 0) {
+        const json_t *args = json_object_get(data, "args");
+        if (!snag_json_exact_keys(data, "args") || !snag_session_options_valid(args)) goto invalid;
+        if (snag_json_set_new(session->strings, "resume_options", json_deep_copy(args)) < 0)
+            return -1;
     } else if (strcmp(type, "audio_usage") == 0) {
         /* Auxiliary billing is retained for inspection only. It changes no
          * coding context, token counters, queue or executor state. */

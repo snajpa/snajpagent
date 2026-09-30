@@ -101,7 +101,7 @@ Linux sessions started on ANSI terminals at least 20 columns wide survive
 terminal loss. Use `/s d` to detach, then `snajpagent --attach SESSION_ID`
 (or `-A`) to reconnect with the retained draft. Without an ID, attach offers a
 running-session picker. `/s a ID` switches live sessions; failure keeps the source.
-Normal exit prints its resume command.
+Normal exit prints a minimal resume command; omitted options retain session settings.
 
 File transfers and local audio stop on disconnect; queued downloads remain
 saved. Restart microphone capture after reconnecting. New editors and pagers
@@ -182,7 +182,7 @@ data destinations and capture controls.
 Project notes and `AGENTS.md` carry findings across sessions. Keep decisions
 current and proposals separate from approvals. `-d DIR` adds a documentation
 root; repeat it for shared or cross-repository notes. Relative documentation
-paths use the launch directory and persist in the printed resume command.
+paths use the launch directory and persist in the session.
 
 ## 2. Work together
 

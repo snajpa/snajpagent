@@ -342,14 +342,14 @@ for color in auto always never; do
     out=$($bin --dotdir "$root/color-$color" --color="$color" -e -- ping \
         2>"$root/color-$color.err")
     [ "$out" = pong ]
-    grep -q -- " --color=$color " "$root/color-$color.err"
+! grep -q -- ' --color' "$root/color-$color.err"
 done
 
 out=$($bin -e --resume "$id" -- ping 2>"$root/err")
 [ "$out" = pong ]
 strip_resume "$root/err"
 only_resume "$root/err"
-[ "$(grep -vc '"type":"response_output"' "$dotdir/sessions/$id/events.jsonl")" -eq 13 ]
+[ "$(grep -vc '"type":"response_output"' "$dotdir/sessions/$id/events.jsonl")" -eq 14 ]
 [ "$(grep -c '"type":"input_admitted"' "$dotdir/sessions/$id/events.jsonl")" -eq 2 ]
 $bin -l >"$root/list" 2>"$root/err"
 grep -q "^$(printf %.8s "$id").*2" "$root/list"
@@ -1248,7 +1248,7 @@ def turns():
 expected = [str(agents), *[str(d / "AGENTS.md") for d in dirs]]
 assert turns()[-1]["instructions"][-3:] == expected
 command = shlex.split(result.stderr.splitlines()[-1])
-assert [pathlib.Path(command[i + 1]) for i, arg in enumerate(command) if arg == "-d"] == dirs
+assert "-d" not in command and "--config" not in command, command
 resumed = subprocess.run([command[0], "-e", *command[1:], "--", "ping"], cwd=launch,
                          env={**os.environ, "HOME": str(home)},
                          text=True, capture_output=True, timeout=15)

@@ -4,6 +4,11 @@
 
 ## Unreleased
 
+- Retain session launch settings on resume unless explicitly overridden,
+  including IRC roles/endpoints, identities, config path, documentation roots
+  and display preferences. Exit hints omit retained settings and the default
+  ~/.snajpagent path. Older sessions recover their recorded IRC topology.
+
 - Show attached, detached and stored sessions, with read-only terminal status
   queries. Accept unique short IDs in CLI, picker and slash-command session
   selectors; retain usable IDs on narrow tables and expand colliding prefixes.

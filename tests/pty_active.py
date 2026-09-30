@@ -3563,7 +3563,7 @@ def test_runtime_verbosity_resume():
             answered = child.send_wait_idle(b"ping\r", b"pong")
             end = child.send_wait_idle(f"/verbose {level}\r".encode(), f"verbosity: {level} (".encode())
             command = child.exit_now()
-            assert shlex.split(command).count("-v") == level, command
+            assert "-v" not in shlex.split(command), command
         with Child.from_command(command) as resumed:
             resumed.wait_idle_prompt()
             end = resumed.send_wait_idle(b"/verbose\r", f"verbosity: {level} (".encode())
@@ -5228,7 +5228,7 @@ def test_runtime_network_commands():
     config = write_config("runtime.ini",
         "[provider openai]\napi_key = ${OPENAI_API_KEY}\n[irc]\n"
         f"listen = {endpoint}\nclient = {outgoing}\n")
-    def listed_endpoints(identity, expected, process="live"):
+    def listed_endpoints(identity, expected, process="attached"):
         result = subprocess.run([BINARY, "--dotdir", DOTDIR, "--config", str(config), "-l"],
                                 cwd=WORKSPACE, env={**os.environ, "HOME": WORKSPACE},
                                 capture_output=True, text=True, timeout=MIN_WAIT_S)
@@ -5277,7 +5277,7 @@ def test_runtime_network_commands():
         command = child.exit_now()
         listed_endpoints(session_id, "-", "stored")
         arguments = command_arguments(command)
-        assert "--no-listen" in arguments and "--no-client" in arguments
+        assert "--no-listen" not in arguments and "--no-client" not in arguments
         assert "--listen" not in arguments and "--client" not in arguments
         log = events(session_id)
         assert not [event for event in log if event["type"] == "steering_added"]
@@ -5321,9 +5321,7 @@ def test_network_resume_roles():
         connection.close()
     client_arguments = command_arguments(client_command)
     assert "--listen" not in client_arguments
-    assert client_arguments.count("--client") == 1
-    assert client_arguments[client_arguments.index("--client") + 1] == \
-        upstream_endpoint
+    assert "--client" not in client_arguments
     resumed_client = Child.from_command(client_command)
     header = resumed_client.wait(b"session id")
     resumed_client.wait(client_id[:8].encode(), start=header)
@@ -5350,11 +5348,9 @@ def test_network_resume_roles():
     server.send(b"\x04")
     server_command = server.finish()
     server_arguments = command_arguments(server_command)
-    assert server_arguments[server_arguments.index("--listen") + 1] == \
-        server_endpoint
+    assert "--listen" not in server_arguments
     assert "--client" not in server_arguments
-    assert server_arguments[server_arguments.index("--room-name") + 1] == \
-        "#lab"
+    assert "--room-name" not in server_arguments
     resumed_server = Child.from_command(server_command)
     header = resumed_server.wait(b"session id")
     resumed_server.wait(server_id[:8].encode(), start=header)
@@ -5397,10 +5393,7 @@ def test_network_resume_roles():
     for connection in first_links:
         connection.close()
     combined_arguments = command_arguments(combined_command)
-    assert combined_arguments[combined_arguments.index("--listen") + 1] == \
-        combined_endpoint
-    assert combined_arguments[combined_arguments.index("--client") + 1] == \
-        upstream_endpoint
+    assert "--listen" not in combined_arguments and "--client" not in combined_arguments
     resumed_combined = Child.from_command(combined_command)
     header = resumed_combined.wait(b"session id")
     resumed_combined.wait(combined_id[:8].encode(), start=header)
@@ -5592,8 +5585,7 @@ def test_network_live_nick_prompt():
         command = child.finish()
         child = None
         arguments = command_arguments(command)
-        assert arguments[arguments.index("--model-nick") + 1] == "agent"
-        assert arguments[arguments.index("--operator-nick") + 1] == "operator"
+        assert "--model-nick" not in arguments and "--operator-nick" not in arguments
         assert "operator8" not in command
     finally:
         if child:

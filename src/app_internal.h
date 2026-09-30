@@ -92,6 +92,7 @@ struct app_state {
     struct snag_irc_config irc_file_config;
     const char *config_path;
     bool config_allow_create;
+    bool resume_options_ready;
     char turn_model_value[SNAG_MODEL_MAX_BYTES];
     char turn_effort_value[SNAG_EFFORT_MAX_BYTES];
     const char *turn_model;
@@ -308,6 +309,9 @@ int snag_app_irc_event(void *opaque, const struct snag_irc_event *event);
 int snag_app_irc_trace(void *opaque, unsigned int level, char direction,
                       const char *endpoint, const char *text, size_t len);
 int snag_app_irc_restore(struct app_state *app, char *error, size_t error_size);
+int snag_app_save_resume_options(struct app_state *, char *, size_t);
+int snag_app_restore_resume_options(struct snag_cli *, struct snag_cli *,
+    const struct snag_session *, json_t **, char *, size_t);
 int snag_app_irc_flush_urgent(struct app_state *app, char *error, size_t error_size);
 char *snag_app_irc_take_pending(struct app_state *app, bool *local_operator, bool force_background);
 bool snag_app_irc_prompt(const char *text);

@@ -553,8 +553,9 @@ and cannot be bypassed by automatic goal work.  Resume restores recorded
 context and accounts for lost command owners; old OS processes and handles
 are not revived.
 .PP
-Resuming a stopped session starts networking from the current configuration and
-explicit startup options.  For example, reopen a session with a hosted IRC server and no
+Resuming a stopped session retains its saved listener, clients, nicks and room.
+Explicit startup options replace the corresponding setting before work continues.
+For example, reopen a session with a hosted IRC server and no
 outgoing client connections:
 .PP
 .nf
@@ -791,8 +792,8 @@ or
 .BR AGENTS.override.md ;
 the override takes precedence. Relative option paths resolve against the
 shell directory used to launch snajpagent. Canonical duplicate paths are
-collapsed.  These roots are invocation-local;
-the printed resume command includes them.  They remain explicit pointers even
+collapsed. These roots are saved with the session; omitted roots on resume retain
+them, while explicit -d options replace the saved set. They remain explicit pointers even
 when automatic discovery is disabled.  They do not grant unrelated write
 permission or synchronize documents between hosts.
 .TP
@@ -863,7 +864,8 @@ selection after local recovery, without rewriting past events. A missing name
 is an error. Combine with -m MODEL when changing models too.
 .TP
 .BR \-v
-Set verbosity to the number of flags, starting at 0 without flags.
+Set verbosity to the number of flags. New sessions start at 0 without flags;
+resume retains the saved level when flags are omitted.
 More than six flags is an error.  The runtime command
 .B /verbose N
 sets the same process-local level.  See
@@ -903,6 +905,16 @@ execution still requires a stopped session. Without an ID or
 or
 .BR \-\-last ,
 interactively select a saved session.
+Omitted configuration path, documentation roots, color, Markdown, verbosity and
+IRC options retain the session's saved values. Explicit options replace only
+the corresponding setting; --no-listen and --no-client keep those roles disabled.
+The exit hint supplies only the session selector and a nondefault --dotdir.
+Default ~/.snajpagent is omitted, including when passed explicitly.
+Config files are reread through their saved paths; credentials are not copied
+into session settings. Older sessions recover IRC settings from their last
+recorded topology; an unrecorded custom config path or documentation root must
+be supplied once. Live attachment keeps the already-running owner's settings.
+.PP
 An ID is a unique prefix of 1 through 32 lowercase hexadecimal characters.
 Displayed short IDs work in every session ID selector, including both pickers
 and /session attach. Ambiguous prefixes list matching full IDs.
@@ -1791,8 +1803,8 @@ and is present at the next turn. Keep it brief and specific to the ongoing work.
 Show or set this process's current verbosity immediately, even during active
 work (Enter or active-turn Tab).  Subsequent output uses the new level;
 already visited detail is not replayed.  It is local feedback, never chat or
-model input.  The printed resume
-command carries this current level, not the original startup flag count.
+model input. The current level is saved on orderly exit and restored on resume
+unless explicit -v flags select another level.
 .TP
 .B /compact
 Compact model context at idle or at a safe active-turn request boundary.
@@ -4234,16 +4246,11 @@ durable.  Resume reconstructs turns, tool state, queue, goals, provider/model
 selection, and admitted IRC state.
 .PP
 Normal exit prints a two-line resume hint for every resumable session.  It
-includes the exact session, dotdir, explicit configuration, presentation
-overrides and effective IRC topology. Model/provider/effort preferences are
-restored from the session rather than repeated as launch overrides. It never
-includes prompts or credential values.  The command includes the effective
-listener and outgoing list, or explicit
-.B --no-listen
-and
-.B --no-client
-for absent roles, so reused config defaults cannot resurrect removed endpoints.
-Temporary connection outages do not remove desired roles from the command.
+includes the exact session and a nondefault dotdir. Saved configuration paths,
+documentation roots, presentation and IRC settings, and model/provider/effort
+preferences are restored from the session. The command contains no prompts or
+credential values. Disabled roles stay disabled across changed config defaults;
+temporary connection outages retain the desired endpoints.
 .PP
 On experimental native Windows, the resume header names a normal cmd.exe
 prompt with delayed expansion off.  Paste the printed command there, not into

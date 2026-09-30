@@ -425,6 +425,8 @@ decode_state(const json_t *data, struct snag_session *s)
     JSON_FIELD(active_instructions); JSON_FIELD(response_public);
 #undef JSON_FIELD
     if (s->strings && !json_is_object(s->strings)) return -1;
+    const json_t *options = json_object_get(s->strings, "resume_options");
+    if (options && !snag_session_options_valid(options)) return -1;
     /* Snapshot v1 predates the download outbox. Copy its mutable container
      * so suffix replay cannot alter the saved checkpoint. */
     json_t *downloads = json_object_get(data, "download_queue");

@@ -415,7 +415,7 @@ snag_irc_apply_cli(struct snag_config *config, const struct snag_cli *cli, char 
     }
     if (cli->irc_room_name && config_copy(config->irc.room_name, sizeof(config->irc.room_name),
                     cli->irc_room_name, "IRC room name", error, error_size) < 0) return -1;
-    if (snag_irc_enabled(config) && cli->prompt && !cli->prompt_after_dashdash)
+    if (!cli->execute && snag_irc_enabled(config) && cli->prompt && !cli->prompt_after_dashdash)
         return snag_fail(error, error_size, EINVAL, "networked initial chat text must follow --");
     return snag_irc_normalize(config, error, error_size);
 }

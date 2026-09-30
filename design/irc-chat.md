@@ -32,8 +32,8 @@ Server and client roles are deliberately composable, including
 `-s ENDPOINT -c ENDPOINT`. Incoming traffic is presented to the one local
 agent and operator, but is not blindly bridged from one server to another.
 
-Interactive resume uses current configuration plus these explicit startup
-overrides. It opens the selected listener and client roles before continuing
+Interactive resume inherits saved roles and identities, then applies explicit
+startup overrides to the corresponding settings. It opens the selected listener and client roles before continuing
 saved work, and supplies the resulting topology and identities to the UI and
 model. Historical room snapshots remain conversation data; the live runtime
 owns the current networking state.
@@ -110,8 +110,8 @@ Omitted endpoints mean `localhost:6667`. Validation, lexical endpoint equality,
 the 16-client bound and preferences are shared with startup. Duplicate additions
 and absent removals are informative no-ops. Adding a listener fails visibly on
 address collision without stopping the session or unrelated endpoints. Client
-connection/join completion is asynchronous. These commands are process-local:
-they never edit config, steer the model, cancel tools or silently change view.
+connection/join completion is asynchronous. These commands update saved session roles without editing config, steering the
+model, cancelling tools or silently changing view.
 
 ## Configuration And Precedence
 
@@ -675,16 +675,14 @@ history, and projected snapshots. Replay validates sequence, UTF-8, line and
 history bounds, source identity, and operator-state transitions before those
 events can become model input.
 
-On every resumable exit, the process prints a POSIX-shell-quoted command whose
-effective network arguments reconstruct that process configuration. A
-client-only command carries every outgoing endpoint; a server command carries
-its listener, room, and local nicks; a combined command carries both sets. It
-also reuses the same dotdir and explicit config path and resumes
-the exact durable session. The output contains no credentials or chat text.
-Absent roles are explicit `--no-listen`/`--no-client`, preventing reused config
-defaults from resurrecting them. Desired clients remain present during temporary
-outages. Cleanup does not mutate the desired role specification.
-SIGHUP and SIGTERM unwind through this path; SIGKILL and machine loss cannot.
+On every resumable exit, the process prints a shell-quoted command selecting the
+same durable session and, when needed, its nondefault dotdir. Saved settings
+restore its config path, documentation roots, display preferences, IRC listener,
+clients, nicks and room. Explicit overrides replace the corresponding setting.
+Disabled roles stay disabled even when configuration defaults later enable them.
+Desired clients remain present during temporary outages. Cleanup preserves the
+desired role specification. SIGHUP and SIGTERM save the current preferences;
+SIGKILL and machine loss retain the most recent committed settings.
 
 The server stores no provider credential and never transports tool arguments
 or results. Existing secret redaction remains in force at higher verbosity.
