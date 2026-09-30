@@ -5262,9 +5262,9 @@ def test_runtime_network_commands():
         end = child.send_wait(f"/connect {outgoing}\r".encode(), b"outgoing connection added", start=end)
         links = accept_connections(upstream, 2)
         end = child.send_wait(f"/connect {outgoing}\r".encode(), b"outgoing connection already configured", start=end)
-        listed_endpoints(session_id, f"s/{endpoint},c/{outgoing}")
+        listed_endpoints(session_id, f"s/runtimeagent@{endpoint},c/runtimeagent@{outgoing}")
         end = child.send_wait(b"/disconnect\r", b"outgoing connections removed; hosting unchanged", start=end)
-        listed_endpoints(session_id, f"s/{endpoint}")
+        listed_endpoints(session_id, f"s/runtimeagent@{endpoint}")
         for connection in links:
             connection.settimeout(2.0)
             while connection.recv(65536):

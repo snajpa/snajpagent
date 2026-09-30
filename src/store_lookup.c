@@ -440,38 +440,66 @@ list_irc_prompt(struct list_irc *irc)
 }
 
 static int
+list_irc_endpoint(struct list_irc *irc, const char *text, const char *end,
+    char role, const char *endpoint, size_t length, const char *nick, size_t nick_len)
+{
+    char key[SNAG_CONFIG_IRC_ENDPOINT_MAX + 32u];
+
+    if (!length || length > SNAG_CONFIG_IRC_ENDPOINT_MAX) return 0;
+    (void)snprintf(key, sizeof(key), "\naliases[%.*s]: model ", (int)length, endpoint);
+    const char *alias = strstr(text, key);
+    if (alias && alias < end) {
+        nick = alias + strlen(key);
+        nick_len = strcspn(nick, " \t\r\n");
+    }
+    if (nick_len > SNAG_CONFIG_IRC_NICK_MAX) nick_len = 0u;
+    return snag_buf_printf(&irc->endpoints, "%s%c/%.*s%s%.*s",
+        irc->endpoints.len ? "," : "", role, (int)nick_len, nick ? nick : "",
+        nick_len ? "@" : "", (int)length, endpoint);
+}
+
+static int
 list_irc_topology(struct list_irc *irc, const char *text)
 {
+    const char *end = strstr(text, "\nhistory:\n");
     const char *host = strstr(text, "\nhosted: ");
+    const char *nick = strstr(text, "\nmodel nick: ");
+    size_t nick_len = 0u;
     size_t host_len = 0u;
 
-    if (host) {
+    if (!end) end = text + strlen(text);
+    if (nick && nick < end) {
+        nick += 13u;
+        nick_len = strcspn(nick, " \t\r\n");
+    }
+    if (host && host < end) {
         host += 9u;
         host_len = strcspn(host, "\r\n");
         if (host_len == 2u && !strncmp(host, "no", 2u)) host_len = 0u;
-        if (host_len && snag_buf_printf(&irc->endpoints, "s/%.*s", (int)host_len, host) < 0)
+        if (list_irc_endpoint(irc, text, end, 's', host, host_len, nick, nick_len) < 0)
             return -1;
     }
-    bool destinations = strstr(text, "\ndestination[") != NULL;
-    for (const char *line = text; line && *line; ) {
-        if (!strncmp(line, "history:\n", 9u)) break;
+    const char *destination = strstr(text, "\ndestination[");
+    bool destinations = destination && destination < end;
+    for (const char *line = text; line && line < end; ) {
         const char *endpoint = NULL;
         size_t length = 0u;
         if (destinations && !strncmp(line, "destination[", 12u)) {
             const char *colon = strstr(line, "]: ");
-            const char *end = strchr(line, '\n');
-            if (colon && (!end || colon < end)) {
+            const char *line_end = strchr(line, '\n');
+            if (colon && (!line_end || colon < line_end)) {
                 endpoint = colon + 3u;
                 length = strcspn(endpoint, "\r\n");
             }
         } else if (!destinations && !strncmp(line, "endpoint[", 9u)) {
             endpoint = line + 9u;
-            const char *end = strstr(endpoint, "]: ");
-            if (end) length = (size_t)(end - endpoint);
+            const char *close = strstr(endpoint, "]: ");
+            const char *line_end = strchr(line, '\n');
+            if (close && (!line_end || close < line_end)) length = (size_t)(close - endpoint);
         }
         if (length && (length != host_len || memcmp(endpoint, host, length))) {
-            if (snag_buf_printf(&irc->endpoints, "%sc/%.*s",
-                    irc->endpoints.len ? "," : "", (int)length, endpoint) < 0) return -1;
+            if (list_irc_endpoint(irc, text, end, 'c', endpoint, length, nick, nick_len) < 0)
+                return -1;
         }
         line = strchr(line, '\n');
         if (line) ++line;

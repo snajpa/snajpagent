@@ -59,8 +59,10 @@ IRC references resolve through verified historical events. The latest irc_snapsh
 text is cached in the checkpoint string table. Lookup reuses verified recent events
 inside older checkpoints before scanning history. A damaged older prefix leaves
 checkpoint-backed sessions listable with
-available metadata. IRC lists the hosted s/ endpoint first, then c/ clients;
-stored sessions retain their last recorded topology.
+available metadata. IRC lists the hosted s/nick@endpoint first, then c/ clients.
+Endpoint aliases supply the accepted agent nick; older snapshots use the global
+model nick when aliases are absent. Metadata parsing stops before history.
+Stored sessions retain their last recorded topology and identities.
 Probing the caller's own session uses its retained lock descriptor.
 
 All saved sessions participate in resume selection and --last. Archiving has been

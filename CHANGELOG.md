@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Show recorded agent nicks in the session list IRC column as `s/nick@endpoint`
+  and `c/nick@endpoint`, including per-endpoint aliases and stored sessions.
+
 - Retain session launch settings on resume unless explicitly overridden,
   including IRC roles/endpoints, identities, config path, documentation roots
   and display preferences. Exit hints omit retained settings and the default

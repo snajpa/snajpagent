@@ -23,7 +23,8 @@ including when its state directory has no default configuration file.
 
 Session tables end with LAST PROMPT and IRC, splitting remaining terminal columns
 equally. IRC previews show `endpoint: message`; endpoint lists place the hosted
-`s/endpoint` before comma-separated `c/endpoint` clients. Names, models and text
+`s/nick@endpoint` before comma-separated `c/nick@endpoint` clients. Each nick is
+the recorded agent identity; unknown nicks leave the endpoint alone. Names, models and text
 are flattened and clipped by display width; redirected lists remain tab-separated.
 The resume/attach picker uses the same table.
 

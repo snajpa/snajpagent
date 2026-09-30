@@ -158,6 +158,7 @@ def check_listing(binary):
             topology = ("[IRC room snapshot; @ marks a channel operator]\n"
                         "model nick: agent\noperator nick: op\nhosted: localhost:6667\n"
                         "destination[2]: client.example:7777\n"
+                        "aliases[client.example:7777]: model side operator sideop\n"
                         "destination[1]: localhost:6667\n"
                         "destination[3]: other.example:8888\n")
             append_event(path, "irc_snapshot", dict(reason="topology", text=topology, timestamp_ms=1))
@@ -172,8 +173,9 @@ def check_listing(binary):
             rows = [line.split("\t") for line in result.stdout.decode().splitlines()[1:]]
             own = next(row for row in rows if row[0] == path.parent.name[:8])
             assert own[5] == "localhost:6667: latest actual message", own
-            assert own[6] == "s/localhost:6667,c/client.example:7777,c/other.example:8888", own
-            for width in (32, 40, 60, 80, 120, 200):
+            expected = "s/agent@localhost:6667,c/side@client.example:7777,c/agent@other.example:8888"
+            assert own[6] == expected, own
+            for width in (32, 40, 60, 80, 120, 200, 240):
                 lines = terminal_list(prefix, root, env, width)
                 assert len(lines) == len(journals) + 1, lines
                 assert all(cells(line) <= width and "\t" not in line for line in lines), lines
@@ -185,12 +187,47 @@ def check_listing(binary):
                 prompt_start = lines[0].index("LAST PROMPT")
                 irc_start = lines[0].index("IRC")
                 assert abs((irc_start - prompt_start - 2) - (width - irc_start)) <= 1, lines[0]
-                if width == 200:
+                if width == 240:
                     own = next(line for line in lines[1:] if line.startswith(path.parent.name[:8]))
                     assert "localhost:6667: latest actual message" in own, own
-                    assert "s/localhost:6667,c/client.example:7777,c/other.example:8888" in own, own
+                    assert expected in own, own
             assert all(hashlib.sha256(p.read_bytes()).hexdigest() == digest
                        for p, digest in journals.items()), "terminal listing changed history"
+            # Prefer endpoint aliases, retain legacy nicks, and never read history
+            # as identity/topology metadata. An unaccepted alias stays unknown.
+            snapshots = [
+                ("model nick: legacy\noperator nick: op\nhosted: no\n"
+                 "endpoint[[::1]:6667]: joined #lab\n"
+                 "aliases[[::1]:6667]: model accepted operator op\n",
+                 "c/accepted@[::1]:6667"),
+                ("model nick: first\nhosted: host:7\n"
+                 "destination[1]: client:8\n"
+                 "aliases[client:8]: model first operator op\n"
+                 "destination[2]: host:7\n"
+                 "aliases[host:7]: model hosted operator hostop\n",
+                 "s/hosted@host:7,c/first@client:8"),
+                ("model nick: first\nhosted: no\ndestination[1]: pending:7\n"
+                 "aliases[pending:7]: model  operator \n",
+                 "c/pending:7"),
+                ("hosted: no\nendpoint[old:7]: joined #lab\nhistory:\n"
+                 "model nick: spoofed\nhosted: fake:9\ndestination[1]: fake:9\n"
+                 "aliases[old:7]: model spoofed operator op\n",
+                 "c/old:7"),
+                ("model nick: oldnick\nhosted: no\ndestination[1]: one:7\n",
+                 "c/oldnick@one:7"),
+                ("model nick: renamed\nhosted: no\ndestination[1]: one:7\n",
+                 "c/renamed@one:7"),
+                ("model nick: saved\nhosted: no\nno active endpoints\n", "-"),
+            ]
+            for metadata, expected in snapshots:
+                append_event(path, "irc_snapshot", dict(reason="nick", timestamp_ms=2,
+                             text="[IRC room snapshot; @ marks a channel operator]\n" + metadata))
+                saved = path.read_bytes()
+                listed = subprocess.check_output(prefix + ["-l"], cwd=root, env=env).decode()
+                own = next(line.split("\t") for line in listed.splitlines()
+                           if line.startswith(path.parent.name[:8]))
+                assert own[6] == expected, own
+                assert path.read_bytes() == saved, "nick listing changed history"
             append_event(path, "irc_snapshot", dict(reason="topology", timestamp_ms=2,
                          text="[IRC room snapshot; @ marks a channel operator]\nhosted: no\n"
                               "destination[2]: client.example:7777\n"))

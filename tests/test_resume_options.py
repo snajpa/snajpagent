@@ -148,10 +148,10 @@ def check_network(binary, previous=None):
                 assert row[6] == expected, row
 
             first = start(["--config", str(config), "-s", hosted, "-c", clients[0],
-                           "-c", clients[1], "-n", "resumeagent", "-o", "resumeop",
+                           "-c", clients[1], "-n", "saved", "-o", "resumeop",
                            "-r", "savedroom", "--no-color"], b"resumeop@", previous)
             sid = next((state / "sessions").iterdir()).name
-            original = f"s/{hosted},c/{clients[0]},c/{clients[1]}"
+            original = f"s/saved@{hosted},c/saved@{clients[0]},c/saved@{clients[1]}"
             topology(original)
             finish(first)
             # Keeping --config here isolates the legacy IRC bug; later resumes
@@ -161,10 +161,10 @@ def check_network(binary, previous=None):
             resumed.until(b"resumeop@", 10)
             finish(resumed)
             resumed = start(["--resume", sid, "-c", clients[2], "-o", "changedop"], b"changedop@")
-            topology(f"s/{hosted},c/{clients[2]}")
+            topology(f"s/saved@{hosted},c/saved@{clients[2]}")
             finish(resumed)
             resumed = start(["--resume", sid], b"changedop@")
-            topology(f"s/{hosted},c/{clients[2]}")
+            topology(f"s/saved@{hosted},c/saved@{clients[2]}")
             finish(resumed)
             stopped = start(["--resume", sid, "--no-listen", "--no-client"], "›".encode())
             topology("-")

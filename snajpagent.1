@@ -973,9 +973,11 @@ with an ellipsis; session IDs stay intact and expand beyond eight characters
 when needed to distinguish sessions. Widths account for wide Unicode characters. Redirected output
 is tab-separated with previews of up to 80 display columns per cell.
 Whitespace and terminal controls become spaces; saved text retains its full contents.
-IRC lists comma-separated endpoints: s/ENDPOINT for the hosted server first,
-then c/ENDPOINT for each outgoing client. A dash means no recorded endpoints.
-Stored sessions show their last recorded topology. An IRC prompt shows
+IRC lists comma-separated entries: s/NICK@ENDPOINT for the hosted server first,
+then c/NICK@ENDPOINT for each outgoing client. NICK is the agent nick recorded
+for that endpoint; older snapshots fall back to the recorded session nick.
+An unknown nick leaves only s/ENDPOINT or c/ENDPOINT. A dash means no recorded
+endpoints. Stored sessions show their last recorded topology and nicks. An IRC prompt shows
 ENDPOINT: MESSAGE, resolving saved event references to the latest message
 in that prompt. Ordinary prompts show the latest saved user text.
 An unnamed session shows a dash in the name column.
