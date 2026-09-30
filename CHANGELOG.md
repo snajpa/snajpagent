@@ -4,6 +4,8 @@
 
 ## Unreleased
 
+- Keep native voice startup alive when a turn finishes before audio devices open.
+
 - Reset native Opus encoder lookahead when microphone input is cleared at mute,
   so its buffered microphone tail is not encoded after unmute.
 

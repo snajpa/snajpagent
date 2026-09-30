@@ -4678,6 +4678,12 @@ static void test_voice_owner_mute(void)
 {
     struct app_state app={0};
     assert(snag_app_voice_fixture(&app,NULL,false)==0);
+    /* Native turn.done may arrive while initial context still gates devices. */
+    assert(snag_app_voice_fixture_play(&app, NULL, 0u) == 0);
+    assert(snag_app_voice_fixture_play(&app, NULL, 0u) == 0);
+    assert(!snag_app_voice_fixture_capture_ready(&app));
+    int16_t sample = 0;
+    assert(snag_app_voice_fixture_play(&app, &sample, 1u) < 0);
     assert(snag_app_voice_fixture_mute(&app)==0);
     /* The close fixture separately tests durable notice draining. This owner
      * fixture needs a real private session for that same close path. */

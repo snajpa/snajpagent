@@ -988,8 +988,12 @@ static int owner_send(void *opaque,const json_t *event)
 static int owner_play(void *opaque,const char *item,const int16_t *samples,uint32_t frames)
 {
     struct app_voice *v=opaque;
-    if(!v->device)return -1;
-    if(!frames) {snag_audio_finish(v->device);return 0;}
+    /* Sideband completion can precede device activation during history restore. */
+    if (!frames) {
+        if (v->device) snag_audio_finish(v->device);
+        return 0;
+    }
+    if (!v->device) return -1;
     if(strcmp(v->audio_item,item)) {
         if(snag_audio_pending(v->device))return -1;
         if(!snag_strcpy(v->audio_item,sizeof(v->audio_item),item))return -1;
@@ -999,6 +1003,13 @@ static int owner_play(void *opaque,const char *item,const int16_t *samples,uint3
     v->drained_ms=0;
     return snag_audio_play(v->device,samples,frames)==frames?0:-1;
 }
+#ifdef SNAJPAGENT_TEST_TRANSPORT_ENDPOINTS
+int
+snag_app_voice_fixture_play(struct app_state *app, const int16_t *samples, uint32_t frames)
+{
+    return app->voice ? owner_play(app->voice, "native-output", samples, frames) : -1;
+}
+#endif
 static uint32_t owner_interrupt(void *opaque)
 {
     struct app_voice *v=opaque;

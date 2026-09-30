@@ -190,6 +190,7 @@ json_t *snag_app_voice_fixture_state(struct app_state *);
 int snag_app_voice_fixture_restart(struct app_state *, const struct snag_credential *);
 json_t *snag_app_voice_fixture_context(struct app_state *);
 int snag_app_voice_fixture_mute(struct app_state *);
+int snag_app_voice_fixture_play(struct app_state *, const int16_t *, uint32_t);
 int snag_app_voice_fixture_checkpoint(struct app_state *);
 #endif
 bool snag_app_shutdown(struct app_state *);

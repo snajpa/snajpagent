@@ -70,6 +70,10 @@ context before opening the connection. Cancellation or attachment loss interrupt
 this wait; closing joins the worker before retaining final credential protection
 and notices. Credential storage stays private to the current activation.
 
+Native sideband turn completion can precede device activation during initial
+history restoration. Finishing an empty playback stream succeeds without opening
+devices; actual PCM still requires an open playback device.
+
 Track requested voice mode separately from connection/device readiness. Report
 listening, muted, reconnecting and suspended states accurately. A recoverable
 connection loss uses paced, interruptible recovery while voice remains requested;
