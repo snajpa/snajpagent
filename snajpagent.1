@@ -2072,7 +2072,15 @@ Initial instructions include the same command and keyboard reference as /help.
 The voice interface can enter slash commands and explicit replies to UI prompts
 through the same input queue as the keyboard. The typed draft is preserved.
 An acknowledgement reports admission; the command's normal output reports its
-result or asks for confirmation. A full input queue refuses admission. Input
+result or asks for confirmation. While voice is on, acknowledged host/help text,
+errors, warnings and logical prompt changes enter its public history. UI-local
+command feedback follows the same session-owner history path. Registered secrets
+are filtered; terminal frames and clock/spinner redraws are not copied. Both voice
+histories consume the retained observations, including after reconnection. This
+path does not reconstruct UI output from before voice activation.
+Voice remains serviceable while a confirmation is open. Existing permissions
+still apply, including keyboard-only consent where explicitly required.
+A full input queue refuses admission. Input
 from an ended attachment is rejected, including queued input not yet dispatched.
 The voice interface can read older dialogue, controls and results with the same
 paged session-history tool used by the model. History inspection keeps existing

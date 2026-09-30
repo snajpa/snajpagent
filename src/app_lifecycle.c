@@ -92,6 +92,7 @@ confirm_delete(struct app_state *app, char prefix[9], char *error, size_t error_
     }
     do {
         if (snag_tools_service(0, snag_ui_wake_fd(&app->ui), error, error_size) < 0) return -1;
+        if (snag_app_voice_service(app) < 0) return -1;
         rc = snag_ui_poll(&app->ui, 25, &action, &line);
         /* UI-local commands already ran and intentionally carry no text. */
         if (rc > 0 && action == SNAG_TERM_SUBMIT && !line) rc = 0;
@@ -168,6 +169,7 @@ snag_app_consent(struct app_state *app, const char *reason, char *error, size_t 
         return snag_errorf(error, error_size, "confirmation prompt could not be displayed");
     do {
         if (snag_tools_service(0, snag_ui_wake_fd(&app->ui), error, error_size) < 0) return -1;
+        if (snag_app_voice_service(app) < 0) return -1;
         rc = snag_ui_poll(&app->ui, 25, &action, &line);
         if (rc > 0 && action == SNAG_TERM_SUBMIT && !line) rc = 0;
         if (rc > 0 && action == SNAG_TERM_SUBMIT && line && line[0] == '/' && line[1] != '/') {
@@ -195,7 +197,7 @@ snag_app_consent(struct app_state *app, const char *reason, char *error, size_t 
         if (error_size) snprintf(error, error_size, "confirmation was cancelled");
         return 1;
     }
-    matched = strcmp(line, id) == 0;
+    matched = !app->ui.input_interface && strcmp(line, id) == 0;
     free(line);
     if (!matched) {
         if (error_size) snprintf(error, error_size, "confirmation did not match the displayed challenge");

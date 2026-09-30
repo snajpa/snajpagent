@@ -1329,6 +1329,12 @@ server_child(int listen_fd, enum model_fixture models, bool transport)
             if (strstr(wire, "transport-secret")) {
                 server_fail("retained interface history exposed a configured credential");
             }
+            if (models == MODEL_VOICE_READ) {
+                const char *marker = "Interface UI result <redacted:secret> tail";
+                const char *found = strstr(wire, marker);
+                if (!found || strstr(found + 1u, marker) || !strstr(wire, "ui_observation"))
+                    server_fail("text interface did not retain exactly one UI observation");
+            }
             bool summarizing = compact && (i == summary_request || (retry && i == 5u));
             if (!summarizing && (!strstr(wire, "inspect_session") ||
                 !strstr(wire, "get_cwd") || !strstr(wire, "Keyboard") ||
@@ -3633,6 +3639,35 @@ test_voice_native_capacity(enum model_fixture mode)
     stop_server(&server);
 }
 
+static json_t *
+voice_ui_packet(struct app_state *app, uint64_t seq)
+{
+    struct snag_buf joined = {.max = SNAG_MAX_EVENT_LINE};
+    uint64_t deadline = snag_monotonic_ms() + 5000u;
+    bool complete = false;
+    while (!complete) {
+        assert(snag_monotonic_ms() < deadline);
+        assert(snag_app_voice_service(app) == 0 && app->voice);
+        json_t *packet = snag_app_voice_fixture_observation(app);
+        if (!packet) continue;
+        assert((uint64_t)json_integer_value(json_object_get(packet, "seq")) == seq);
+        assert((size_t)json_integer_value(json_object_get(packet, "offset")) == joined.len);
+        assert(!strcmp(snag_json_string(packet, "event_type"), "voice_event"));
+        const char *text = snag_json_string(packet, "text");
+        assert(text && snag_text_valid(text, 1u, 1024u));
+        assert(snag_buf_append(&joined, text, strlen(text)) == 0);
+        complete = json_is_true(json_object_get(packet, "complete"));
+        json_decref(packet);
+    }
+    json_t *record = json_loadb((char *)joined.data, joined.len, JSON_REJECT_DUPLICATES, NULL);
+    assert(record);
+    json_t *event = json_incref(json_object_get(record, "event"));
+    assert(event && !strcmp(snag_json_string(event, "operation"), "ui_observation"));
+    json_decref(record);
+    snag_buf_free(&joined);
+    return event;
+}
+
 static void
 test_voice_observation_cursor(void)
 {
@@ -3731,7 +3766,56 @@ test_voice_observation_cursor(void)
     assert(!strstr(late_text, "voice-observation-secret"));
     json_decref(late);
     assert(!app.session.active_turn && !app.session.pending_queue_count);
+    const enum snag_ui_operation outputs[] = {
+        SNAG_UI_HOST, SNAG_UI_HELP, SNAG_UI_ERROR, SNAG_UI_WARNING
+    };
+    const char *presentations[] = {"host", "help", "error", "warning"};
+    for (size_t i = 0u; i < sizeof(outputs) / sizeof(*outputs); ++i) {
+        uint64_t output_seq = app.session.next_seq;
+        assert(snag_ui_text(&app.ui, outputs[i],
+            "UI result voice-observation-secret, not an action approval") == 0);
+        assert(app.session.next_seq == output_seq + 1u);
+        assert(snag_app_voice_service(&app) == 0 && app.voice);
+        json_t *observed = snag_app_voice_fixture_observation(&app);
+        assert(observed && json_is_true(json_object_get(observed, "complete")));
+        assert((uint64_t)json_integer_value(json_object_get(observed, "seq")) == output_seq);
+        const char *text = snag_json_string(observed, "text");
+        assert(text && strstr(text, "ui_observation") && strstr(text, presentations[i]));
+        assert(strstr(text, "UI result <redacted:secret>, not an action approval"));
+        assert(!strstr(text, "voice-observation-secret"));
+        json_decref(observed);
+    }
+    assert(!app.session.active_turn && !app.session.pending_queue_count);
     char prompt[6100];
+    const char *frames[SNAG_TERM_SPINNER_COUNT] = {" ", " ", " "};
+    uint64_t prompt_seq = app.session.next_seq;
+    assert(snag_ui_prompt(&app.ui, false, "UI confirmation > ", frames, 1u, 0u) == 0);
+    assert(app.session.next_seq == prompt_seq + 1u);
+    json_t *prompt_event = voice_ui_packet(&app, prompt_seq);
+    assert(!strcmp(snag_json_string(prompt_event, "presentation"), "prompt"));
+    assert(!strcmp(snag_json_string(prompt_event, "text"), "UI confirmation > "));
+    json_decref(prompt_event);
+    assert(snag_ui_prompt(&app.ui, false, "UI confirmation > ", frames, 2u, 1u) == 0);
+    assert(app.session.next_seq == prompt_seq + 1u);
+    assert(snag_ui_hold(&app.ui, false) == 0);
+    prompt_event = voice_ui_packet(&app, prompt_seq + 1u);
+    assert(!strcmp(snag_json_string(prompt_event, "presentation"), "prompt_closed"));
+    json_decref(prompt_event);
+    assert(snag_ui_hold(&app.ui, false) == 0 && app.session.next_seq == prompt_seq + 2u);
+    size_t large_size = 2u * 1024u * 1024u + 20u;
+    char *large_output = malloc(large_size + 64u);
+    assert(large_output);
+    for (size_t i = 0u; i < large_size; i += 2u) memcpy(large_output + i, "λ", 2u);
+    strcpy(large_output + large_size, "voice-observation-secret UI output tail");
+    uint64_t large_seq = app.session.next_seq;
+    assert(snag_ui_text(&app.ui, SNAG_UI_HOST, large_output) == 0);
+    assert(app.session.next_seq == large_seq + 1u);
+    json_t *large_event = voice_ui_packet(&app, large_seq);
+    const char *large_text = snag_json_string(large_event, "text");
+    assert(large_text && !memcmp(large_text, large_output, large_size));
+    assert(!strcmp(large_text + large_size, "<redacted:secret> UI output tail"));
+    json_decref(large_event);
+    free(large_output);
     for (size_t i = 0; i < 6000u; i += 2u) memcpy(prompt + i, "λ", 2u);
     strcpy(prompt + 6000u, "voice-observation-secret");
     const char *goal = "0123456789abcdef0123456789abcdef";
@@ -3828,7 +3912,18 @@ test_voice_observation_cursor(void)
     assert(complete_turn);
     missing += voice_fixture_model_changes(&app, true);
     assert(missing == 0u);
-    snag_app_voice_close(&app);
+    int journal_fd = app.session.log_fd;
+    uint64_t failure_seq = app.session.next_seq;
+    app.session.log_fd = -1;
+    assert(snag_ui_text(&app.ui, SNAG_UI_HOST, "Output remains visible on retention failure") == 0);
+    app.session.log_fd = journal_fd;
+    assert(app.session.next_seq == failure_seq);
+    assert(snag_app_voice_service(&app) == 0 && !app.voice);
+    assert(app.session.active_turn && !strcmp(app.session.active_prompt,
+        "voice-observation-secret"));
+    failure_seq = app.session.next_seq;
+    assert(snag_ui_text(&app.ui, SNAG_UI_HOST, "UI remains usable with voice off") == 0);
+    assert(app.session.next_seq == failure_seq);
     snag_ui_free(&app.ui);
     snag_session_close(&app.session);
     snag_store_close(&app.store);
@@ -4097,6 +4192,8 @@ test_voice_interface_read(void)
         "transcript", "Which directory is this?", "request", "Read the session cwd.");
     assert(snag_app_voice_fixture(&app, events, false) == 0);
     json_decref(events);
+    assert(snag_ui_text(&app.ui, SNAG_UI_HOST,
+        "Interface UI result transport-secret tail") == 0);
     json_t *reply = NULL;
     uint64_t start = snag_monotonic_ms();
     while (!reply && snag_monotonic_ms() - start < 5000u) {
@@ -8212,6 +8309,7 @@ test_native_ui(void)
         for (unsigned int i = 0u; i < admitted_count; ++i) {
             assert(snag_ui_poll(ui, 0, &admitted, &command) == 1);
             assert(admitted == SNAG_TERM_SUBMIT && command && !strcmp(command, "/status"));
+            assert(ui->input_interface);
             free(command);
             command = NULL;
         }
@@ -8313,6 +8411,14 @@ test_native_ui(void)
                         "model_selection_changed"));
                     json_decref(history);
                 }
+                uint64_t feedback_seq = session->next_seq;
+                assert(snag_ui_input(ui, "/verbose 3", 1u) == 0);
+                assert(snag_ui_poll(ui, 100, &admitted, &command) == 0 && !command);
+                assert(ui->input_interface && session->next_seq == feedback_seq + 1u);
+                json_t *feedback = voice_ui_packet(&app, feedback_seq);
+                assert(!strcmp(snag_json_string(feedback, "input"), "/verbose 3"));
+                assert(strstr(snag_json_string(feedback, "text"), "verbosity: 3"));
+                json_decref(feedback);
             }
             snag_app_voice_close(&app);
             assert(!app.voice && !session->active_turn && !session->pending_queue_count);

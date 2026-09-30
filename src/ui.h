@@ -17,6 +17,10 @@ struct snag_ui {
     bool prompt_wanted;
     bool active, input_active, input_echoed, input_view_applied;
     bool input_error;
+    bool input_interface;
+    /* Engine-only semantic output acknowledgement. Borrowed text, no terminal frames. */
+    void (*observe)(void *, const char *, const char *, const char *);
+    void *observe_opaque;
     uint64_t turn_generation;
     uint64_t input_received_ms;
     char label[SNAG_TERM_LABEL_BYTES];

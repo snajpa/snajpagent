@@ -279,6 +279,7 @@ struct app_voice {
     atomic_uint pending_handoffs; /* Notices plus session-owner handoff slots. */
     bool retryable; /* Published with done by the connection owner. */
     bool capacity_pending; /* Published with done; owner clears after compaction. */
+    bool ui_observation_failed; /* Owner-only; retention failure must not fail the UI command. */
     bool capacity_announced;
     uint64_t reconnect_at;
     unsigned int reconnects;
@@ -593,6 +594,28 @@ static int
 voice_record(struct app_state *app, struct app_voice *v, json_t *event)
 {
     return voice_record_at(app, v, v->connection, event);
+}
+
+static void
+ui_observation(void *opaque, const char *presentation, const char *text, const char *input)
+{
+    struct app_state *app = opaque;
+    struct app_voice *v = app->voice;
+    if (!v || v->ui_observation_failed || app->session.delete_requested) return;
+    json_t *event = json_pack("{s:s,s:s,s:s,s:s,s:o}", "type", "voice_response",
+        "operation", "ui_observation", "presentation", presentation, "text", text,
+        "input", input ? json_string(input) : json_null());
+    if (voice_record(app, v, event) < 0) {
+        v->ui_observation_failed = true;
+        atomic_store(&v->stop, true);
+    }
+}
+
+static void
+observe_ui(struct app_state *app)
+{
+    app->ui.observe = ui_observation;
+    app->ui.observe_opaque = app;
 }
 
 static int
@@ -914,6 +937,7 @@ int snag_app_voice_fixture(struct app_state *app,const json_t *notices,bool done
     snag_buf_init(&v->receive,VOICE_MESSAGE);v->announced=true;app->voice=v;
     observation_start(v, &app->session);
     if (snag_secret_set_build(&v->secrets, app->config, NULL, NULL, 0u) < 0) return -1;
+    observe_ui(app);
     for(size_t i=0;i<json_array_size(notices);++i)
         if(owner_notice(v,json_array_get(notices,i))<0)return -1;
     return 0;
@@ -1815,6 +1839,8 @@ history_observation(const struct app_voice *v, uint64_t seq, const char *type,
     const char *record_type = snag_json_string(json_object_get(data, "event"), "type");
     if (!record_type) return false;
     const char *operation = snag_json_string(json_object_get(data, "event"), "operation");
+    if (!strcmp(record_type, "voice_response") && operation &&
+        !strcmp(operation, "ui_observation")) return true;
     /* Maintenance receipts stay in the journal; their adopted summary is
      * supplied separately, once, before the uncovered conversation tail. */
     if (operation && !strncmp(operation, "native_compact", 14u)) return false;
@@ -2764,6 +2790,11 @@ int snag_app_voice_service(struct app_state *app)
     struct app_voice *v = app->voice;
     if (!v || v->servicing) return 0;
     v->servicing = true;
+    if (v->ui_observation_failed) {
+        snag_app_voice_close(app);
+        return snag_ui_text(&app->ui, SNAG_UI_ERROR,
+            "Voice stopped: UI output could not be retained. Existing coding work is unchanged.");
+    }
     if (voice_attachment_lost(v)) {
         snag_app_voice_close(app);
         return snag_ui_text(&app->ui,SNAG_UI_HOST,lost_terminal);
@@ -3073,6 +3104,7 @@ int snag_app_voice_command(struct app_state *app,const char *line,bool *handled)
     if (voice_context_snapshot(app, v, &v->context, error, sizeof(error)) < 0) goto failed;
     observation_start(v, &app->session);
     if(pthread_create(&v->thread,NULL,voice_owner,v))goto failed;
+    observe_ui(app);
     v->thread_started=true;return 0;
 failed:
     snag_app_voice_close(app);snag_ui_audio(&app->ui,"",false);

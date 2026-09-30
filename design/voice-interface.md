@@ -336,8 +336,22 @@ path, with ordinary permissions, confirmations and actual results. The voice
 thread never becomes another journal or execution owner. File and documentation
 work reaches the model through ordinary input admission. The `ui_input` capability
 admits UI commands and explicit replies through the shared keyboard-input path.
-Continuous observation of command output and confirmation prompts remains to be
-implemented alongside retained conversation context.
+Acknowledged semantic UI text joins retained conversation context while voice is
+on. The session owner retains host/help/error/warning output and logical prompt
+transitions as secret-filtered `voice_response` records with operation
+`ui_observation`. UI-local feedback returns through its existing input action,
+without another queue or journal writer. Both voice histories read these records
+through their existing verified cursors, including after reconnection. Existing
+working-output and transcript records remain their canonical sources.
+
+Observations describe owner-acknowledged output, not successful action admission
+or remote context adoption. Clock/spinner repainting does not create repeated
+history. Retaining UI output preserves the working request, queue identities and
+cache affinity. A retention error stops voice with a diagnostic rather than
+failing an otherwise successful UI command. Output from before voice activation
+is not reconstructed by this path. Confirmation loops service the same voice
+owner; their existing permissions still apply. Input provenance prevents a helper
+from satisfying an explicit keyboard-only consent challenge with observed text.
 
 Voice UI input enters the presentation owner's existing action queue. That owner
 applies immediate UI commands and routes the remaining input to the ordinary

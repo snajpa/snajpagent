@@ -32,6 +32,7 @@ struct ui_message {
     struct snag_buf delivered;
     char error[256];
     int result, saved_errno;
+    bool prompt_changed;
     atomic_bool done;
 };
 
@@ -70,6 +71,7 @@ struct ui_action {
     enum snag_term_action action;
     char *text;
     int error;
+    char feedback[192];
     bool submission_echoed, view_applied, input_error;
     bool history_refresh, history_warning, steering, local;
     struct ui_snapshot snapshot;
@@ -1197,6 +1199,7 @@ local_feedback(struct snag_ui_display *display)
         display->painting_feedback = true;
         rc = snag_render_submitted(&display->render, item->snapshot.label, item->text);
         if (rc == 0 && display->feedback[0]) rc = snag_render_host(&display->render, display->feedback);
+        if (rc == 0) memcpy(item->feedback, display->feedback, sizeof(item->feedback));
         display->painting_feedback = false;
         display->local_acknowledged = true;
     }
@@ -1242,6 +1245,19 @@ apply_display(struct snag_ui_display *display, struct ui_message *message)
     struct snag_ui_runtime *runtime = display->runtime;
     size_t offset = 0u;
     bool raw = message->command.kind == SNAG_UI_RAW;
+    if (message->command.kind == SNAG_UI_PROMPT && !message->command.label) {
+        const struct snag_ui_prompt *old = &display->prompt;
+        const struct snag_ui_prompt *next = &message->command.data.prompt;
+        message->prompt_changed = !display->term.prompt_wanted || old->active != next->active ||
+            old->mode != next->mode || strcmp(old->source ? old->source : "",
+                next->source ? next->source : "");
+        for (size_t i = 0u; i < SNAG_PROMPT_HOUR && !message->prompt_changed; ++i) {
+            message->prompt_changed = strcmp(old->values[i] ? old->values[i] : "",
+                next->values[i] ? next->values[i] : "") != 0;
+        }
+    } else if (message->command.kind == SNAG_UI_HOLD || message->command.kind == SNAG_UI_CLOSE) {
+        message->prompt_changed = display->term.prompt_wanted;
+    }
 
     display->render.suppress_optional = public_stopped(runtime);
     if (!raw && message->command.kind != SNAG_UI_PUBLIC) return apply_message(display, &message->command,
@@ -1409,6 +1425,21 @@ request(struct snag_ui *ui, struct ui_message *message, struct snag_buf *deliver
     if (error && error_size) (void)snprintf(error, error_size, "%s", message->error);
     if (delivered && message->delivered.len && snag_buf_append(delivered, message->delivered.data,
                        message->delivered.len) < 0) rc = -1;
+    if (rc == 0 && ui->observe) {
+        const char *kind = NULL;
+        switch (message->command.kind) {
+        case SNAG_UI_HOST: kind = "host"; break;
+        case SNAG_UI_HELP: kind = "help"; break;
+        case SNAG_UI_ERROR: kind = "error"; break;
+        case SNAG_UI_WARNING: kind = "warning"; break;
+        default: break;
+        }
+        if (kind && message->command.text)
+            ui->observe(ui->observe_opaque, kind, message->command.text, NULL);
+        if (message->prompt_changed)
+            ui->observe(ui->observe_opaque, ui->prompt_wanted ? "prompt" : "prompt_closed",
+                ui->label, NULL);
+    }
     snag_buf_free(&message->delivered);
     if (rc < 0 && message->saved_errno) errno = message->saved_errno;
 out: saved = errno;
@@ -1772,6 +1803,7 @@ snag_ui_poll(struct snag_ui *ui, int timeout_ms, enum snag_term_action *action, 
     *text = NULL;
     ui->input_echoed = false;
     ui->input_error = false;
+    ui->input_interface = false;
     for (;;) {
         snag_wakeup_drain(runtime->actions.wake[0]);
         int fatal = atomic_load(&runtime->fatal);
@@ -1834,6 +1866,7 @@ snag_ui_poll(struct snag_ui *ui, int timeout_ms, enum snag_term_action *action, 
     }
     ui->input_received_ms = item->received_ms;
     ui->input_error = item->input_error;
+    ui->input_interface = item->interface_input;
     ui->input_view = item->snapshot.view;
     ui->input_active = item->snapshot.active;
     ui->input_route = item->route;
@@ -1841,6 +1874,8 @@ snag_ui_poll(struct snag_ui *ui, int timeout_ms, enum snag_term_action *action, 
     ui->input_view_applied = item->view_applied;
     ui->selection = item->snapshot.selection;
     memcpy(ui->submitted_label, item->snapshot.label, sizeof(ui->submitted_label));
+    if (item->feedback[0] && ui->observe)
+        ui->observe(ui->observe_opaque, "host", item->feedback, item->text);
     if (item->local) {
         (void)snag_ui_history_add(ui, item->text);
         free(item->text);
