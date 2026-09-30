@@ -29,7 +29,7 @@ def check_listing(binary):
             prefix = [str(binary), "--config", str(config), "--dotdir", str(state)]
             cases = [
                 ("IRC history", "[IRC endpoint=localhost:6667 room=#lab event=history_ready]\n" +
-                 "[IRC update id=fixture:1 event=join sender=peer]\n" * 30 + "replayed"),
+                 "[IRC endpoint=localhost:6667 room=#lab event=join sender=peer]\n" * 30 + "replayed"),
                 ("multiline", "first line\nsecond\tcolumn\rreturn\vvertical\fform feed"),
                 ("controls", "escape\x1b[31m red\x1b[0m\x07 bell\u009b31m\u2028line\u2029paragraph"),
                 ("Unicode", "a" * 79 + "界😀žluťoučký"),
