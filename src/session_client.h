@@ -51,7 +51,8 @@ int snag_session_client_error(struct snag_session_client *, const char *);
  * terminal control. Its payload is in event_data/event_length until the next
  * step. ERROR before destination acceptance leaves the source peer live. Input
  * reaches the source until destination acceptance, then waits for queued source
- * frames to drain before entering the destination. After write-side shutdown,
+ * frames to drain before entering the destination. BOUND is queued before new
+ * input to publish that completed frontend transition. After write-side shutdown,
  * a transport failure ends the connection rather than rolling back to the source.
  * Initial attach has no source. */
 int snag_session_client_step(struct snag_session_client *, int timeout_ms,

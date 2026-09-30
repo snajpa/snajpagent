@@ -196,6 +196,9 @@ commit_target(struct snag_session_client *client, enum snag_session_message *eve
     client->target = -1;
     client->target_deadline = 0u;
     packet_clear(&client->output);
+    /* The destination cannot activate attachment-bound resources while the
+     * frontend still belongs to the source. New input follows this frame. */
+    if (snag_session_packet_set(&client->input, SNAG_SESSION_BOUND, NULL, 0u) < 0) return -1;
     *event = SNAG_SESSION_READY;
     return 1;
 }

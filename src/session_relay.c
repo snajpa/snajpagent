@@ -147,8 +147,8 @@ snag_session_relay_activate(struct snag_session_relay *relay, uint64_t generatio
      * pending flip-buffer work; flushing only master input leaves that work. */
     if (tcflush(slave, TCOFLUSH) < 0 || tcflush(relay->master, TCIFLUSH) < 0) return -1;
     if (queue_output(relay, SNAG_SESSION_READY, NULL, 0u) < 0) return -1;
-    relay->handshake_deadline = 0u;
-    relay->phase = SNAG_SESSION_ATTACHED;
+    relay->handshake_deadline = snag_monotonic_ms() + HANDSHAKE_MS;
+    relay->phase = SNAG_SESSION_ACCEPTED;
     return 0;
 }
 
@@ -200,7 +200,13 @@ peer_message(struct snag_session_relay *relay, enum snag_session_message *event)
         relay->phase = SNAG_SESSION_REPAINT;
         relay->handshake_deadline = snag_monotonic_ms() + HANDSHAKE_MS;
         *event = SNAG_SESSION_COMMIT;
-    } else if (relay->phase == SNAG_SESSION_ATTACHED || suspended) {
+    } else if (relay->phase == SNAG_SESSION_ACCEPTED && type == SNAG_SESSION_BOUND) {
+        if (length) return snag_errno(EPROTO);
+        relay->phase = SNAG_SESSION_ATTACHED;
+        relay->handshake_deadline = 0u;
+        *event = SNAG_SESSION_BOUND;
+    } else if (relay->phase == SNAG_SESSION_ATTACHED || suspended ||
+        (relay->phase == SNAG_SESSION_ACCEPTED && type == SNAG_SESSION_OUTPUT_ACK)) {
         if (type == SNAG_SESSION_OUTPUT_ACK && length == 2u) {
             const unsigned char *p = relay->input.bytes + SNAG_SESSION_HEADER;
             size_t offset = (size_t)p[0] | (size_t)p[1] << 8u;
@@ -353,7 +359,8 @@ snag_session_relay_step(struct snag_session_relay *relay,
     timeout_ms = deadline_wait(timeout_ms, now, relay->output_ack_deadline);
     timeout_ms = deadline_wait(timeout_ms, now, relay->input_deadline);
     timeout_ms = deadline_wait(timeout_ms, now, relay->reject_deadline);
-    bool output = relay->peer >= 0 && relay->phase == SNAG_SESSION_ATTACHED;
+    bool output = relay->peer >= 0 && (relay->phase == SNAG_SESSION_ATTACHED ||
+        relay->phase == SNAG_SESSION_ACCEPTED);
     struct pollfd fds[] = {
         {relay->master, (!output || (!relay->output.used && !relay->output_length) ? POLLIN : 0) |
             (relay->input_pending ? POLLOUT : 0), 0},
@@ -366,7 +373,16 @@ snag_session_relay_step(struct snag_session_relay *relay,
     if (rc < 0) return errno == EINTR ? 0 : -1;
     expire(relay, snag_monotonic_ms(), event);
     if (relay->peer >= 0 && relay->peer == fds[1].fd) {
-        if (relay->output.used && fds[1].revents & POLLOUT) peer_write(relay, event);
+        /* Readiness from this poll predates the queued acceptance write. A
+         * frontend cannot have bound to an acceptance it has not received. */
+        if (relay->phase == SNAG_SESSION_ACCEPTED && relay->output.used &&
+            snag_session_packet_type(&relay->output) == SNAG_SESSION_READY &&
+            fds[1].revents & POLLIN) {
+            peer_drop(relay);
+            *event = SNAG_SESSION_DETACH;
+        } else if (relay->output.used && fds[1].revents & POLLOUT) {
+            peer_write(relay, event);
+        }
         /* A hung-up socket remains poll-ready even with no requested events.
          * Drop it now rather than spinning behind blocked PTY input. */
         if (relay->peer >= 0 && fds[1].revents & (POLLHUP | POLLERR | POLLNVAL)) {
@@ -390,7 +406,8 @@ snag_session_relay_step(struct snag_session_relay *relay,
         if (master_write(relay) < 0) return -1;
     }
     if (fds[0].revents & (POLLIN | POLLHUP | POLLERR | POLLNVAL)) {
-        output = relay->peer >= 0 && relay->phase == SNAG_SESSION_ATTACHED;
+        output = relay->peer >= 0 && (relay->phase == SNAG_SESSION_ATTACHED ||
+            relay->phase == SNAG_SESSION_ACCEPTED);
         if (!output || (!relay->output.used && !relay->output_length)) {
             rc = master_read(relay, !output);
             if (rc != 0) return rc;

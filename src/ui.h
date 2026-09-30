@@ -90,8 +90,9 @@ int snag_ui_session_start(struct snag_ui *, struct snag_session_process *);
 int snag_ui_session_listen(struct snag_ui *, const struct snag_session *);
 int snag_ui_session_control(struct snag_ui *, enum snag_session_message, const void *, size_t);
 uint64_t snag_ui_session_pending(const struct snag_ui *);
-/* Current activated native attachment identity; zero when absent/pending/suspended or
- * using a direct terminal. Changes also identify exclusive-transfer lease loss. */
+/* Current frontend-bound native attachment identity; zero until source drain
+ * and binding finish, while absent/suspended, or using a direct terminal.
+ * Changes also identify exclusive-transfer lease loss. */
 uint64_t snag_ui_session_attachment(const struct snag_ui *);
 int snag_ui_session_rebind(struct snag_ui *, uint64_t generation);
 int snag_ui_session_ready(struct snag_ui *, uint64_t generation);

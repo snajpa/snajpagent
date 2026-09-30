@@ -8738,6 +8738,14 @@ test_native_ui(void)
         }
         assert(snag_ui_session_attachment(ui) == 0u);
         assert(snag_ui_session_rebind(ui, generation) == 0);
+        assert(snag_ui_session_attachment(ui) == 0u);
+        assert(snag_ui_voice(ui, "[VOICE MIC ON] ") == 1);
+        assert(snag_ui_audio(ui, "[MIC ON] ", true) == 1);
+        assert(write(report[1], "P", 1u) == 1);
+        while (!snag_ui_session_attachment(ui)) {
+            assert(snag_monotonic_ms() < deadline);
+            (void)snag_sleep_ms(1u);
+        }
         assert(snag_ui_session_attachment(ui) == generation);
         assert(!app.voice && !app.audio);
         assert(snag_app_audio_fixture(&app, false) == 0);
@@ -8820,6 +8828,8 @@ test_native_ui(void)
     unsigned char geometry[4] = {31u, 0u, 97u, 0u};
     native_ui_frame(peer, SNAG_SESSION_COMMIT, geometry, sizeof(geometry));
     native_ui_expect(peer, SNAG_SESSION_READY, &output);
+    assert(read(report[0], &phase, 1u) == 1 && phase == 'P');
+    native_ui_frame(peer, SNAG_SESSION_BOUND, NULL, 0u);
     assert(read(report[0], &phase, 1u) == 1 && phase == 'B');
     /* Ctrl-Z must suspend only the replaceable frontend. The following byte
      * was already admitted and must survive suspension and recommit. */
@@ -8830,6 +8840,7 @@ test_native_ui(void)
     geometry[0] = 33u;
     native_ui_frame(peer, SNAG_SESSION_COMMIT, geometry, sizeof(geometry));
     native_ui_expect(peer, SNAG_SESSION_READY, &output);
+    native_ui_frame(peer, SNAG_SESSION_BOUND, NULL, 0u);
     native_ui_frame(peer, SNAG_SESSION_INPUT, "\r", 1u);
     native_ui_expect(peer, SNAG_SESSION_EXIT, &output);
     assert(snag_buf_terminate(&output) == 0);

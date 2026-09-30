@@ -15,13 +15,14 @@
 #define SNAG_SESSION_COMMIT_BYTES (4u + 2u * SNAG_TERMINAL_NAME_BYTES)
 
 /* OUTPUT_ACK carries a two-byte little-endian cumulative write offset within
- * the current OUTPUT frame. QUITTING announces a hard escape, completed by EOF. */
+ * the current OUTPUT frame. QUITTING announces a hard escape, completed by EOF.
+ * BOUND follows destination READY and old-source drain, before new input. */
 enum snag_session_message {
     SNAG_SESSION_RESERVE = 1, SNAG_SESSION_READY, SNAG_SESSION_COMMIT,
     SNAG_SESSION_INPUT, SNAG_SESSION_OUTPUT, SNAG_SESSION_RESIZE,
     SNAG_SESSION_DETACH, SNAG_SESSION_EXIT, SNAG_SESSION_SWITCH,
     SNAG_SESSION_ERROR, SNAG_SESSION_SUSPEND, SNAG_SESSION_QUITTING, SNAG_SESSION_OUTPUT_ACK,
-    SNAG_SESSION_STATUS
+    SNAG_SESSION_BOUND, SNAG_SESSION_STATUS
 };
 
 struct snag_session_packet {

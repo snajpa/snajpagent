@@ -651,6 +651,9 @@ session_service(struct snag_ui_display *display, int timeout_ms)
         atomic_store(&display->runtime->session_attachment, 0u);
         atomic_store(&display->runtime->session_pending, display->relay.generation);
         snag_wakeup_send(display->runtime->actions.wake[1]);
+    } else if (event == SNAG_SESSION_BOUND) {
+        atomic_store(&display->runtime->session_attachment, display->relay.generation);
+        snag_wakeup_send(display->runtime->actions.wake[1]);
     } else if (event == SNAG_SESSION_RESIZE) {
         snag_term_notify_resize();
         if (display->suspended)
@@ -750,7 +753,6 @@ apply_session(struct snag_ui_display *display, const struct snag_ui_command *com
                                          display->native_process.slave) < 0) return -1;
         display->profile = display->relay.profile;
         display->term.screen = display->profile.sty[0] != '\0';
-        atomic_store(&runtime->session_attachment, display->relay.generation);
         atomic_store(&runtime->session_pending, 0u);
         if (display->suspended)
             (void)snag_session_process_redraw(&display->native_process);
@@ -758,7 +760,8 @@ apply_session(struct snag_ui_display *display, const struct snag_ui_command *com
             snag_term_attachment_modes(&display->term, true) < 0) return -1;
         return 0;
     }
-    if (display->relay.phase != SNAG_SESSION_ATTACHED) return snag_errno(ESTALE);
+    if (display->relay.phase != SNAG_SESSION_ATTACHED &&
+        display->relay.phase != SNAG_SESSION_ACCEPTED) return snag_errno(ESTALE);
     display->native_barrier = false;
     display->term.defer_redraw = display->view_repainting;
     if (!display->suspended && display->prompt.source && !display->view_repainting)

@@ -513,6 +513,15 @@ queued source frame before changing peers: write-side shutdown lets the source
 relay consume queued input and display acknowledgements before closing. Late source
 controls cannot cross this drain boundary. Subsequent input follows the destination.
 
+The private attachment protocol uses version3. Destination READY records acceptance;
+the frontend sends BOUND after source drain, before new destination input. The relay
+keeps an ACCEPTED phase under its existing handshake deadline until that frame
+arrives. Semantic repaint output and output credits remain live, while UI attachment
+identity stays zero and audio activation is refused. Premature, malformed or repeated
+binding frames detach that peer. Incompatible protocol versions fail before
+acceptance, leaving the source in place. Initial native-owner socketpairs already
+belong to their frontend; reattachment and suspension continuation use the exchange.
+
 An intentional successful switch preserves the requested voice mode independently
 of whether keyboard or voice initiated it. Append an explicit session boundary
 and destination context to the voice history. Pending actions, output and late

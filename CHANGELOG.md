@@ -4,6 +4,11 @@
 
 ## Unreleased
 
+- Publish a live native attachment only after the frontend confirms that it has
+  drained the source and bound to the destination. Keep audio activation and new
+  input behind that acknowledgement. Incompatible private-protocol versions are
+  refused before acceptance; use a compatible binary for an older running owner.
+
 - Filter structured history before quoting it for voice or shortening history-tool
   details. Protect configured secrets and request credentials, including values
   containing quotes or backslashes in older records. Saved records stay unchanged.

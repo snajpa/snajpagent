@@ -1693,6 +1693,10 @@ timeout or an unavailable owner before acceptance leaves the source usable.
 After acceptance, the client waits for the source relay to consume queued input
 and display acknowledgements before releasing that connection. A connection
 failure during this final drain is reported and ends the terminal connection.
+The destination publishes its live attachment after the frontend confirms that
+drain and binds to it; new input and audio activation wait for this acknowledgement.
+An incompatible private-protocol version is refused before acceptance. Use a
+compatible binary to attach to an older running owner.
 .TP
 .BR "/session name NAME" , " /s name NAME"
 Save or replace the current session's name, including while work is active.

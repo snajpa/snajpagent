@@ -6,7 +6,7 @@
 
 enum snag_session_phase {
     SNAG_SESSION_WAIT_RESERVE, SNAG_SESSION_RESERVED,
-    SNAG_SESSION_REPAINT, SNAG_SESSION_ATTACHED
+    SNAG_SESSION_REPAINT, SNAG_SESSION_ACCEPTED, SNAG_SESSION_ATTACHED
 };
 
 /* One relay thread owns all fields and descriptors. Other threads communicate
@@ -30,7 +30,8 @@ struct snag_session_relay {
  * authenticated socketpair peer. That initial peer is already attached. */
 int snag_session_relay_init(struct snag_session_relay *, int master, int initial_peer);
 void snag_session_relay_close(struct snag_session_relay *);
-/* Poll/drain once. event is COMMIT (UI must reset), RESIZE, DETACH, ERROR or zero.
+/* Poll/drain once. event is COMMIT (UI must reset), BOUND (frontend now owns
+ * this attachment), RESIZE, DETACH, ERROR or zero.
  * ERROR is a client diagnostic in event_data/event_length until the next step;
  * it never becomes PTY input or releases the current attachment.
  * Returns 1 on PTY EOF, 0 on progress/timeout, -1 on a PTY/poll failure. Peer
