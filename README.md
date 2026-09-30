@@ -113,7 +113,7 @@ snajpagent -l
 snajpagent --resume --last
 ```
 
-List headings distinguish `live` from `stored` sessions. Name a session with
+Tables show `live`/`stored` and single-line prompt previews. Name a session with
 `snajpagent -N lead`, or an existing one with `/session name lead`.
 `snajpagent --attach -N lead` reconnects while it runs;
 `snajpagent --resume -N lead` attaches if running or reopens it if stored.

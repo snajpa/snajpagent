@@ -954,10 +954,14 @@ color options, Markdown presentation options, and
 may accompany it.  Markdown
 presentation has no useful effect on session-list output. The table has headings
 for session ID, name, model, turn count, active/archived status, process state and first prompt.
+Text columns show single-line previews of up to 80 Unicode characters, followed
+by an ellipsis when shortened. Whitespace and terminal controls become spaces;
+the saved names, model IDs and prompts retain their full contents.
 An unnamed session shows a dash in the name column.
 The process column shows live while a process owns the session, and stored when
 only its saved history remains. Live includes sessions waiting for input.
-Use --attach to reconnect to a running native session, or --resume to start a stored session.
+Use --attach to reconnect to a running native session. --resume attaches if
+running and starts the session if stored.
 .TP
 .BR \-h
 Print short help and exit.  It must stand alone.
@@ -2737,7 +2741,9 @@ Proactive compaction uses exact preflight or the last compatible measured input
 usage. Compaction covers complete older event prefixes; each completed summary
 records its covered boundary and later compactions start at that boundary, not
 at the beginning of the journal. Previously presented image payloads are omitted
-from summary requests. New uncounted additions may exceed the limit. If a
+from summary requests. Native compaction output can retain user messages together
+with its summary; the complete output is accepted within the 12 MiB byte bound.
+New uncounted additions may exceed the token limit. If a
 provider rejects a request before any output, the next attempt retains the
 current turn and controls but omits the earlier provider transcript, compacted
 conversation, images and completed tool calls. The model can use bounded

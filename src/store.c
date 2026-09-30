@@ -525,7 +525,9 @@ snag_process_output_decode(const json_t *data, struct snag_buf *bytes)
 static int
 compact_output_digest(const json_t *output, char out[SNAG_SHA256_HEX_LEN + 1u], size_t *bytes)
 {
-    if (!json_is_array(output) || json_array_size(output) == 0u || json_array_size(output) > 128u)
+    /* Native compaction can retain every user message alongside its summary.
+     * The encoded byte bound below limits storage independently of item count. */
+    if (!json_is_array(output) || json_array_size(output) == 0u)
         return snag_errno(EINVAL);
     for (size_t i = 0; i < json_array_size(output); ++i) {
         json_t *item = json_array_get(output, i);

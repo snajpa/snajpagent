@@ -463,6 +463,61 @@ def case_incomplete_stream_recovery(binary, provider, root):
     print("tools e2e incomplete stream recovery without duplicate effects: ok", flush=True)
 
 
+def case_native_compaction_many_items(binary, provider, root):
+    def respond(handler, request, sequence):
+        provider.reply(handler, provider.response_body(sequence, "compaction turn done").encode())
+
+    provider.runtime_handler = respond
+    try:
+        for size in (128, 129, 257):
+            case = root / f"compact-{size}-items"
+            case.mkdir()
+            config = case / "config.ini"
+            harness.write_irc_config(config, provider.port, "host-model")
+            base = config.read_text().replace("[agent]\n", "[agent]\nmax_turn_retries = 0\n")
+            base = base.replace("native_compaction = false", "native_compaction = true")
+            config.write_text(base)
+            state = case / "state"
+            output = [{"type": "message", "role": "user", "content": f"retained input {i}"}
+                      for i in range(size - 1)]
+            output.append({"type": "compaction", "id": f"cmp_many_{size}",
+                           "encrypted_content": "opaque-compact-summary"})
+
+            def compact(handler, request):
+                provider.reply(handler, json.dumps({"object": "response.compaction", "output": output}).encode(),
+                               "application/json")
+
+            provider.runtime_compact_handler = compact
+            prefix = [str(binary), "--config", str(config), "--dotdir", str(state)]
+            env = {**os.environ, "HOME": str(case), "SNAJPAGENT_IRC_UI_KEY": SECRET}
+            result = subprocess.run(prefix + ["-e", "--", "seed"], cwd=case, env=env,
+                                    capture_output=True, text=True, timeout=15)
+            assert result.returncode == 0, result.stderr
+            sid = next((state / "sessions").iterdir()).name
+            config.write_text(base.replace("auto_compact_input_tokens = 0",
+                                           "auto_compact_input_tokens = 1"))
+            result = subprocess.run(prefix + ["--resume", sid, "-e", "--", "continue"],
+                                    cwd=case, env=env, capture_output=True, text=True, timeout=15)
+            assert result.returncode == 0, (size, result.stdout, result.stderr)
+            _, events = harness.read_events(state)
+            completed = harness.event_list(events, "compaction_completed")
+            assert completed and completed[-1]["data"]["output"] == output, (size, result.stderr)
+            assert not harness.event_list(events, "compaction_interrupted"), size
+            assert not harness.event_list(events, "turn_recovery"), size
+            assert not harness.event_list(events, "turn_failed"), size
+            # Reopen the saved compacted state and complete another ordinary turn.
+            config.write_text(base)
+            result = subprocess.run(prefix + ["--resume", sid, "-e", "--", "after compact"],
+                                    cwd=case, env=env, capture_output=True, text=True, timeout=15)
+            assert result.returncode == 0, (size, result.stderr)
+            _, events = harness.read_events(state)
+            assert len(harness.event_list(events, "turn_completed")) == 3
+        print("native compaction: 128/129/257 output items commit and resume: ok", flush=True)
+    finally:
+        provider.runtime_handler = None
+        provider.runtime_compact_handler = None
+
+
 CASES = (
     case_home_default,
     case_model_switch_disabled,
@@ -476,6 +531,7 @@ CASES = (
     case_cd_call_batch,
     case_home_instruction_symlink,
     case_incomplete_stream_recovery,
+    case_native_compaction_many_items,
 )
 
 

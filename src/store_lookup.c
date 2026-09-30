@@ -327,6 +327,39 @@ snag_session_is_live(const struct snag_session *session)
     return live;
 }
 
+static int
+append_list_preview(struct snag_buf *row, const char *text)
+{
+    size_t length = text ? strlen(text) : 0u;
+    size_t offset = 0u;
+    size_t shown = 0u;
+    bool space = false;
+
+    /* A table cell previews saved text; full prompts can contain an IRC transcript. */
+    while (offset < length) {
+        uint32_t cp;
+        size_t bytes = snag_utf8_decode((const unsigned char *)text + offset,
+                                       length - offset, &cp);
+        if (!bytes) return snag_errno(EILSEQ);
+        if (cp <= 0x20u || (cp >= 0x7fu && cp <= 0x9fu) || cp == 0xadu ||
+            cp == 0x61cu || cp == 0x200bu || cp == 0x200eu || cp == 0x200fu ||
+            (cp >= 0x2028u && cp <= 0x202eu) || cp == 0x2060u ||
+            (cp >= 0x2066u && cp <= 0x206fu) || cp == 0xfeffu ||
+            (cp >= 0xfff9u && cp <= 0xfffbu)) {
+            space = shown != 0u;
+            offset += bytes;
+            continue;
+        }
+        if (shown + (space ? 1u : 0u) >= 80u) break;
+        if (space && snag_buf_putc(row, ' ') < 0) return -1;
+        if (snag_buf_append(row, text + offset, bytes) < 0) return -1;
+        shown += space ? 2u : 1u;
+        space = false;
+        offset += bytes;
+    }
+    return offset < length ? snag_buf_append(row, "…", 3u) : 0;
+}
+
 int
 snag_store_list(struct snag_store *store, const struct snag_session *owned,
                 enum snag_session_list filter, snag_store_emit_fn emit, void *opaque, char *error, size_t error_size)
@@ -351,11 +384,16 @@ snag_store_list(struct snag_store *store, const struct snag_session *owned,
         }
         if ((!shown && snag_buf_printf(&row,
                 "SESSION\tNAME\tMODEL\tTURNS\tSTATUS\tPROCESS\tFIRST PROMPT\n") < 0) ||
-            snag_buf_printf(&row, "%.8s\t%s\t%s\t%llu\t%s\t%s\t%s\n", entry,
-                           snapshot.name ? snapshot.name : "-", snapshot.default_model,
-                           (unsigned long long)snapshot.turn_count,
-                           snapshot.archived ? "archived" : "active", live ? "live" : "stored",
-                           snapshot.first_user ? snapshot.first_user : "") < 0 ||
+            snag_buf_printf(&row, "%.8s\t", entry) < 0 ||
+            append_list_preview(&row, snapshot.name ? snapshot.name : "-") < 0 ||
+            snag_buf_putc(&row, '\t') < 0 ||
+            append_list_preview(&row, snapshot.default_model) < 0 ||
+            snag_buf_printf(&row, "\t%llu\t%s\t%s\t",
+                            (unsigned long long)snapshot.turn_count,
+                            snapshot.archived ? "archived" : "active",
+                            live ? "live" : "stored") < 0 ||
+            append_list_preview(&row, snapshot.first_user) < 0 ||
+            snag_buf_putc(&row, '\n') < 0 ||
             emit(opaque, (const char *)row.data, row.len) < 0) {
             snag_buf_free(&row);
             snag_session_close(&snapshot);

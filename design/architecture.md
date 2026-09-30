@@ -43,7 +43,9 @@ sessions and selects an exact name for attach/resume. Name lookup reads snapshot
 without acquiring the session writer lock. Duplicate names list candidate IDs.
 `/session name` updates the owned session, including during active work. Lists
 show column headings and separate active/archived status from live/stored process
-ownership. Probing the caller's own session uses its retained lock descriptor.
+ownership. Name, model and first-prompt cells use bounded single-line previews;
+whitespace and terminal controls become spaces without changing stored text.
+Probing the caller's own session uses its retained lock descriptor.
 
 ## Model-facing tool contract
 
@@ -147,6 +149,9 @@ the cached journal-derived suffix. The cache excludes that prefix; input timing
 and recovery-message references follow their items when the suffix is copied.
 Restoring a compacted checkpoint rebuilds the view from its retained event seam,
 including checkpoints written with a summary prefix in the cached view.
+Native compaction output may retain user messages alongside its opaque summary.
+Journal validation accepts those arrays under the existing 12 MiB encoded byte
+bound, with shape, digest and continuation-scope validation.
 
 Before `response_started`, the runtime builds the exact outgoing model-input
 and request projections and accounts for them in token units. The default

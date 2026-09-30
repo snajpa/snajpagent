@@ -4,6 +4,12 @@
 
 ## Unreleased
 
+- Keep session-list text in single-line previews, including IRC history and long
+  Unicode prompts; terminal controls cannot create extra rows or columns.
+
+- Accept native compaction outputs with more than 128 items within the existing
+  byte bound, so retained user messages do not invalidate a completed summary.
+
 - Make interactive `--resume` attach to a running native session, including
   selection by ID, name, `--last` or the picker; stored sessions resume normally.
 

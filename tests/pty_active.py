@@ -724,6 +724,29 @@ def test_session_list_keeps_live_owner():
             "first-live-session", "terminal_status"], turns
 
 
+def test_session_list_previews():
+    prompt = "list-preview-first\nlist-preview-second\tcolumn"
+    result = subprocess.run([BINARY, "--dotdir", DOTDIR, "-N", "list preview", "-e", "--", prompt],
+                            cwd=WORKSPACE, env={**os.environ, "HOME": WORKSPACE},
+                            capture_output=True, timeout=MIN_WAIT_S)
+    assert result.returncode == 0, result.stderr
+    expected = b"list-preview-first list-preview-second column"
+    with Child([], ready=DEFAULT_IDLE_PROMPT, cols=200) as child:
+        start = len(child.buf)
+        child.send(b"/session list\r")
+        end = child.wait_text(expected, start=start)
+        child.wait_idle_prompt(start=end)
+        listed = bytes(child.buf[start:])
+        assert b"list-preview-first\r\nlist-preview-second" not in listed, listed
+        child.exit_now()
+    with Child(["--resume"], cols=200) as picker:
+        picker.wait_text(expected)
+        picker.wait_text("session › ".encode())
+        picker.send(b"\x04")
+        picker.reap()
+    print("session list and resume picker: single-line saved previews: ok", flush=True)
+
+
 def test_resume_attaches_live_session():
     if not sys.platform.startswith("linux"):
         return
@@ -6743,6 +6766,7 @@ if __name__ == "__main__":
     test_redraw_preserves_sealed_output()
     test_session_list_keeps_live_owner()
     test_session_names()
+    test_session_list_previews()
     test_resume_attaches_live_session()
     test_compaction_ignores_legacy_samples()
     test_hard_compaction_progress_is_remeasured()

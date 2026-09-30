@@ -1280,6 +1280,8 @@ assert limit_turns and limit_turns[-1]["instructions"][-20:] == limit_docs, limi
 print("working-docs CLI: ok")
 PY
 
+python3 "$(dirname "$bin")/test_session_listing.py" "$bin"
+
 TERM=xterm "$(dirname "$bin")/pty_interactive.py" "$bin" "$root/work"
 TERM=dumb "$(dirname "$bin")/pty_interactive.py" "$bin" "$root/work"
 TERM=xterm python3 "$(dirname "$bin")/pty_terminal_matrix.py" "$bin" "$root/work"
