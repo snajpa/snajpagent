@@ -29,6 +29,7 @@ struct snag_upload_result {
  * snag_upload_cleanup removes precisely this operation's staging leaves. */
 int snag_upload_receive(int tty, int stage_fd, size_t slots, bool directory,
                     const struct snag_terminal_profile *profile,
+                        bool probe_title, bool allow_legacy,
                         int (*checkpoint)(void *), void *opaque,
                         struct snag_upload_result *result, char *error, size_t error_size);
 void snag_upload_cleanup(int stage_fd, struct snag_upload_result *result);
@@ -37,6 +38,7 @@ void snag_upload_cleanup(int stage_fd, struct snag_upload_result *result);
  * owns file_fd. Result carries only post-EXIT input; no attachment is created. */
 int snag_download_send(int tty, int file_fd, const char *name, const char *expected_sha,
                     const struct snag_terminal_profile *profile,
+                        bool probe_title, bool allow_legacy,
                         int (*checkpoint)(void *), void *opaque,
                         struct snag_upload_result *result, char *error, size_t error_size);
 
@@ -49,13 +51,16 @@ struct snag_client_result {
     unsigned char tail[4096];
     size_t tail_len;
 };
+typedef ssize_t (*snag_screen_reader)(void *, unsigned char *, size_t, uint64_t);
 /* Workstation endpoints use the proxy's private child terminal through the
  * process host. The caller owns selection, presentation and child lifetime. */
 int snag_client_download(struct snag_child *child, int directory, const char *path,
+                         snag_screen_reader title_reader,
                          int (*progress)(void *, uint64_t, uint64_t),
                          int (*checkpoint)(void *), void *opaque,
                          struct snag_client_result *result, char *error, size_t error_size);
 int snag_client_upload(struct snag_child *child, int fd, const char *name,
+                       snag_screen_reader title_reader,
                        int (*progress)(void *, uint64_t, uint64_t),
                        int (*checkpoint)(void *), void *opaque,
                        struct snag_client_result *result, char *error, size_t error_size);

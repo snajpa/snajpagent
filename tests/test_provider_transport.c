@@ -4,6 +4,7 @@
 #include "app_internal.h"
 #include "config.h"
 #include "credential.h"
+#include "http.h"
 #include "json.h"
 #include "model_cache.h"
 #include "provider.h"
@@ -5756,6 +5757,18 @@ test_voice_socket(void)
     strcpy(provider.base_url,"http://127.0.0.1:1/v1/");
     assert(snag_provider_voice_open(&provider,&credential,"fixture",NULL,NULL,
         &voice,error,sizeof(error))<0 && !voice);
+    const curl_version_info_data *version = curl_version_info(CURLVERSION_NOW);
+    bool websocket = false;
+    for (const char *const *protocol = version ? version->protocols : NULL;
+         protocol && *protocol; ++protocol) {
+        if (!strcmp(*protocol, "ws")) websocket = true;
+    }
+    if (!websocket) {
+        assert(strstr(error, "lacks WebSocket support"));
+        fprintf(stderr, "test_voice_socket: skipped (linked libcurl lacks WebSocket support)\n");
+        snag_credential_clear(&credential);
+        return;
+    }
     assert(strstr(error,"/backend-api/codex"));
     for (unsigned int test = 0; test < 30u; ++test) {
         unsigned int mode = test % 10u;

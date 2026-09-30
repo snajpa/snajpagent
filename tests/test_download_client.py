@@ -7,6 +7,7 @@ import os
 import shutil
 import shlex
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -99,6 +100,11 @@ class DownloadSession(Session):
 
     def exit(self):
         self.write(b"/exit\r")
+        if self.screen_name and sys.platform == "darwin":
+            # The parent master can hold a macOS screen frontend in E (exiting).
+            self.read_until(b"--resume", 5)
+            os.close(self.master)
+            self.master = None
         assert self.process.wait(timeout=5) == 0
 
 
@@ -294,7 +300,7 @@ class DownloadTests(unittest.TestCase):
             session = DownloadSession(Path(path), screen=True)
             try:
                 (session.home / "cancel").write_bytes(b"abc")
-                session.write(b"/send cancel\r")
+                session.write(f"/send {session.home / 'cancel'}\r".encode())
                 session.read_until(b"::TRZSZ:TRANSFER:S:")
                 session.read_until(b"\r\n")
                 session.write(b"\x03")
@@ -352,7 +358,7 @@ class DownloadTests(unittest.TestCase):
                 session = DownloadSession(Path(path))
                 try:
                     (session.home / "cancel").write_bytes(b"abc")
-                    session.write(b"/send cancel\r")
+                    session.write(f"/send {session.home / 'cancel'}\r".encode())
                     session.read_until(b"::TRZSZ:TRANSFER:S:")
                     session.read_until(b"\r\n")
                     session.write(action)

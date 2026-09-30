@@ -1392,6 +1392,7 @@ On the POSIX workstation, wrap the connection with the native client:
 .PP
 .nf
     snajpagent remote ssh -t target snajpagent
+    snajpagent remote mosh -- target snajpagent
 .fi
 .PP
 The workstation wrapper owns file selection and the download destination.
@@ -1400,6 +1401,7 @@ Reconnect to the running agent through the wrapper:
 .PP
 .nf
     snajpagent remote ssh -t target snajpagent --attach SESSION_ID
+    snajpagent remote mosh -- target snajpagent --attach SESSION_ID
 .fi
 .PP
 Omit SESSION_ID to choose from running sessions.
@@ -1437,6 +1439,16 @@ result for model-triggered sends.
 Transfers keep the conversation visible. The native wrapper displays a single
 progress line with direction, byte count and percentage, then restores the prompt.
 Byte progress reaches 100% before final verification; the receipt confirms completion.
+.PP
+The wrapper negotiates a fast byte-stream client over SSH. Stock Mosh carries
+terminal screen state instead of a byte stream: with the same outer wrapper,
+the agent negotiates a short title-state frame and keyboard acknowledgement
+channel. File bytes, checksums and receipts use the existing terminal transfer
+protocol over that channel. The wrapper consumes the title frames before
+forwarding terminal output, so protocol data stays out of the conversation,
+draft and scrollback. Mosh transfers use smaller blocks and take longer than
+the SSH route; they use the current Mosh session, with no separate file
+connection. The executable name, path and TERM value do not select a mode.
 .PP
 Keep the outer workstation wrapper active across SSH hops and screen
 reattachments. An inner native wrapper probes for an upstream native client
@@ -1488,7 +1500,10 @@ from that batch and retains existing unsent attachments. A batch has at most eig
 files; retained files are at most 256 MiB each, and prepared image content uses
 the existing 12 MiB input budget.
 Native uploads use acknowledged blocks of at most 1 KiB to preserve input
-through GNU screen, including screen boundaries hidden behind a relay.
+through GNU screen, including screen boundaries hidden behind a relay. The
+Mosh title-state mode limits blocks to 256 bytes, then divides each wire line
+into short checked title updates. A stale or repeated update cannot append
+the same bytes twice.
 .SS Send to the workstation
 Type
 .B /send PATH
@@ -1515,12 +1530,18 @@ file bytes stay outside model tool output. Transfers intentionally send the
 selected file bytes to the workstation without tool-output redaction.
 .SS "Pending downloads and reattachment"
 The model's send_file journals an export in the existing remote session before
-attempting delivery. A live native-client probe permits immediate delivery;
-one-shot runs, detached screen and clients without that probe report
-\(lqqueued; not delivered yet\(rq. They emit no file-transfer frames.
+attempting delivery. An interactive session probes for the fast client, then
+tries a screen-state handshake when the fast probe has no reply. A positive
+reply permits immediate delivery through the selected mode. One-shot runs
+and detached sessions report \(lqqueued; not delivered yet\(rq and emit no
+file-transfer frames. An unsupported interactive client leaves the export
+pending and reports queued intent; no file data starts before the
+screen-state reply.
 .PP
-Wrapped reattachment discovers the live client and delivers pending files at
-an idle render boundary. Unwrapped attachment leaves exports pending. Only
+Wrapped reattachment over the fast byte-stream route discovers the client
+and delivers pending files at an idle render boundary. A Mosh reattachment
+keeps previously queued exports pending; request their delivery again from
+the active session. Unwrapped attachment leaves exports pending. Only
 acknowledged completion removes an export. Interrupted or uncertain transfers
 remain pending, so a reconnect may produce a collision-safe duplicate if a
 prior client landed the file but its completion acknowledgement was lost.
@@ -1539,7 +1560,10 @@ Cancel the workstation selector or press Ctrl-C during the transfer. Ordinary
 commands and steering are unavailable while the transfer owns input. Per-frame
 I/O waits are bounded at 20 seconds; a missing wrapper returns a transfer error.
 Transfers through GNU screen use 1 KiB DATA blocks to keep input frames within
-its terminal input burst capacity; other connections use up to 64 KiB blocks.
+its terminal input burst capacity; Mosh screen-state uses 256-byte blocks and
+checked, retransmitted short title frames. Other connections use up to 64 KiB
+blocks. An interrupted or lost screen frame fails without publishing an
+incomplete file.
 The native client removes unpublished temporary files on transfer failure;
 a process crash can leave a hidden .snag-upload-ID staging file. Other clients
 can leave partial files: inspect them before use. Only acknowledged completion

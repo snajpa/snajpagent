@@ -76,6 +76,13 @@ raw_transfer_mode(struct termios *mode)
     mode->c_cc[VTIME] = 0;
 }
 
+static bool
+transfer_fast_client(const struct app_state *app)
+{
+    return app->remote_available &&
+        snag_monotonic_ms() - app->remote_reply_at < 2000u;
+}
+
 static int
 stage_open(struct app_state *app, char name[SNAG_ID_HEX_LEN + 8u])
 {
@@ -175,6 +182,7 @@ snag_app_upload_command(struct app_state *app, bool directory)
     int stage_fd = -1, tty = -1, rc = -1;
     bool leased = false, raw = false, restored = true;
     struct termios saved;
+    bool fast = false;
     if (app->attaching)
         return snag_ui_text(&app->ui, SNAG_UI_ERROR, "Attachment preparation is already active.");
     if (snag_session_persist(&app->store, &app->session, error, sizeof(error)) < 0) goto out;
@@ -188,6 +196,7 @@ snag_app_upload_command(struct app_state *app, bool directory)
         (void)snag_errorf(error, sizeof(error), "Cannot stage upload: %s", strerror(errno));
         goto out;
     }
+    fast = transfer_fast_client(app);
     app->attaching = true;
     if (snag_ui_external(&app->ui, true, error, sizeof(error)) < 0) goto out;
     leased = true;
@@ -207,6 +216,7 @@ snag_app_upload_command(struct app_state *app, bool directory)
     rc = snag_upload_receive(tty, stage_fd,
         SNAG_UPLOAD_FILES_MAX - json_array_size(app->draft_content), directory,
         app->ui.native ? &app->ui.profile : NULL,
+        !fast, true,
         transfer_checkpoint, &lease, &result, error, sizeof(error));
     if (rc == 0 && result.count == 0u) rc = 1; /* No attachment to publish. */
 out:
@@ -371,14 +381,17 @@ out:
 }
 
 static int
-app_download(struct app_state *app, const char *path, const json_t *pending, json_t **result,
+app_download(struct app_state *app, const char *path, const json_t *pending,
+             bool allow_legacy, bool *unavailable, json_t **result,
              char *error, size_t error_size)
 {
     *result = NULL;
+    if (unavailable) *unavailable = false;
 #ifdef _WIN32
     (void)app;
     (void)path;
     (void)pending;
+    (void)allow_legacy;
     (void)error;
     (void)error_size;
     *result = snag_tool_result_terminal(false, "Terminal download is not available on this host.");
@@ -393,6 +406,7 @@ app_download(struct app_state *app, const char *path, const json_t *pending, jso
     int input = -1, tty = -1, rc = -1;
     bool leased = false, raw = false, restored = true, owning = false;
     struct termios saved;
+    bool fast = false;
     snag_file_info info;
 
     if (app->execute || !app->ui.opened || snag_isatty(STDERR_FILENO) != 1) {
@@ -449,6 +463,7 @@ app_download(struct app_state *app, const char *path, const json_t *pending, jso
         if (lseek(input, 0, SEEK_SET) < 0) goto out;
         name = snag_json_string(pending, "name");
     }
+    fast = transfer_fast_client(app);
     app->attaching = true;
     owning = true;
     if (snag_ui_external(&app->ui, true, error, error_size) < 0) goto out;
@@ -466,8 +481,10 @@ app_download(struct app_state *app, const char *path, const json_t *pending, jso
     }
     raw = true;
     rc = snag_download_send(tty, input, name, expected, app->ui.native ? &app->ui.profile : NULL,
+                            !fast, allow_legacy,
                             transfer_checkpoint, &lease,
                             &transfer, error, error_size);
+    if (unavailable && rc < 0 && !fast && errno == ENOTSUP) *unavailable = true;
 out:
     if (leased && transfer_discard_stale_input(&lease, tty, &transfer) < 0) {
         restored = false;
@@ -491,7 +508,10 @@ out:
     if (owning) app->attaching = false;
     free(source);
     json_decref(asset);
-    if (!restored) return -1;
+    if (!restored) {
+        if (unavailable) *unavailable = false;
+        return -1;
+    }
     char receipt[SNAG_PATH_MAX_BYTES + 128u];
     if (rc == 0 && transfer.receipt[0])
         (void)snprintf(receipt, sizeof(receipt), "Download completed: %s\n"
@@ -509,12 +529,14 @@ int
 snag_app_download(struct app_state *app, const char *path, json_t **result,
                   char *error, size_t error_size)
 {
-    return app_download(app, path, NULL, result, error, error_size);
+    return app_download(app, path, NULL, true, NULL, result, error, error_size);
 }
 
 int
-snag_app_download_pending(struct app_state *app, const json_t *item, json_t **result,
+snag_app_download_pending(struct app_state *app, const json_t *item,
+                          bool *unavailable, json_t **result,
                           char *error, size_t error_size)
 {
-    return app_download(app, snag_json_string(item, "path"), item, result, error, error_size);
+    return app_download(app, snag_json_string(item, "path"), item, false, unavailable,
+                        result, error, error_size);
 }

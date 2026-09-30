@@ -164,6 +164,10 @@ class Session:
                 os.killpg(self.process.pid, signal.SIGTERM)
             except ProcessLookupError:
                 pass
+            except PermissionError:
+                # macOS screen can join a protected process to the fixture's
+                # group. Signal only the exact child Popen still owned here.
+                self.process.terminate()
         try:
             self.process.wait(timeout=3)
         except subprocess.TimeoutExpired:

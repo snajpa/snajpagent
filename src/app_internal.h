@@ -202,7 +202,8 @@ int snag_app_download(struct app_state *app, const char *path, json_t **result,
                       char *error, size_t error_size);
 int snag_app_remote_probe(struct app_state *app);
 void snag_app_remote_reply(struct app_state *app, const char *nonce);
-int snag_app_download_pending(struct app_state *app, const json_t *item, json_t **result,
+int snag_app_download_pending(struct app_state *app, const json_t *item,
+                              bool *unavailable, json_t **result,
                               char *error, size_t error_size);
 int snag_app_download_queue(struct app_state *app, const char *path, json_t **result,
                             char *error, size_t error_size);

@@ -61,7 +61,7 @@ receive_adapter(const char *stage, const char *receipt)
     struct snag_upload_result result = {0};
     if (!strcmp(line, "trz") || directory) {
         rc = snag_upload_receive(fd, stage_fd, SNAG_UPLOAD_FILES_MAX, directory,
-                                  NULL,
+                                  NULL, false, true,
                                  NULL, NULL, &result, error, sizeof(error));
     } else {
         (void)snprintf(error, sizeof(error), "unexpected launch: %s", line);

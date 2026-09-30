@@ -65,6 +65,9 @@
 
 - Add `/context N s` and `/context N save` to save the selected provider/model's
   context window in configuration. `/context N` retains its session-only scope.
+- Transfer files in both directions through stock Mosh with a nonce-negotiated,
+  checked screen-state channel. Preserve the fast SSH/trzsz path, protect the
+  visible conversation and restore terminal input after transfers and errors.
 
 - Restore PowerPC Linux session-host and terminal-relay builds while preserving
   terminal-size request bits across musl, glibc and BSD interfaces.

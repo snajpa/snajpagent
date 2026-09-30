@@ -10,19 +10,26 @@ selection.
 
 Current development source includes client-only `snajpagent remote COMMAND…`
 and native POSIX workstation file endpoints via `/receive` (into the agent)
-and `/send PATH` (to the workstation). Workstation configuration
+and `/send PATH` (to the workstation). The wrapper prefers the verified fast
+SSH byte stream; stock Mosh uses a nonce-negotiated title-state channel with
+short checked frames and keyboard acknowledgements. Workstation configuration
 reads only `[terminal] download_dir`, defaulting to `~/Downloads`. Verified
 uploads become private unsent attachments; acknowledged downloads display actual
 local-path receipts. The trzsz-go client remains usable with explicit transfer
-commands. Model `send_file` uses native-client availability and journals export
-intent before delivery. The saved remote-session queue supports stable-ID listing,
-removal and clearing, including stale sources; read-only permits listing only.
-Detached GNU screen exports remain pending without protocol frames; native wrapped
-reattachment delivers at idle boundaries. Changed sources and uncertain outcomes
-remain pending. Native selector input is a regular-file path, not a desktop picker.
-Actual desktop GUI drag and macOS UI remain unqualified. See QUALIFICATION.md for
-tested terminal/SSH scenarios. The 0.99.8b stable downloads predate native remote
-mode, downloads and the durable outbox.
+commands. Model `send_file` journals export intent before delivery and tries
+screen-state mode when an attached interactive client lacks the fast reply.
+The saved remote-session queue supports stable-ID listing, removal and clearing,
+including stale sources; read-only permits listing only. Detached GNU screen
+exports remain pending without protocol frames. Fast-client reattachment
+redelivers at idle boundaries; Mosh reattachment requires an explicit send for
+older queued items. Changed sources and uncertain outcomes remain pending.
+Native selector input is a regular-file path, not a desktop picker. Local
+stock Mosh 1.4.0 `--local --no-init` transferred 128-byte files in both directions
+through the task fixture with exact bytes, receipts and prompt reuse; the
+screen-state PTY relay covers loss, replay, cancellation and resize. Desktop
+GUI drag and remote-network Mosh qualification remain separate. See
+QUALIFICATION.md for terminal/SSH scenarios. The 0.99.8b stable downloads
+predate native remote mode, downloads and the durable outbox.
 
 Voice supports native Codex subscription calls and public Realtime BYOK.
 The selected provider supplies credentials and defaults. Native media uses

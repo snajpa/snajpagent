@@ -3139,7 +3139,7 @@ flush_download_queue(struct app_state *app)
         const char *id = snag_json_string(item, "id");
         char error[256] = {0};
         json_t *result = NULL;
-        rc = snag_app_download_pending(app, item, &result, error, sizeof(error));
+        rc = snag_app_download_pending(app, item, NULL, &result, error, sizeof(error));
         if (rc == 0) {
             const char *message = snag_json_string(result, "model_text");
             rc = snag_ui_text(&app->ui,

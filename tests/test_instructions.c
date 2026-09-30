@@ -39,9 +39,12 @@ main(void)
     json_t *metadata;
 
     assert(mkdtemp(temp));
-    assert(snprintf(home, sizeof(home), "%s/home", temp) > 0);
+    /* /tmp is a symlink on macOS; discovery returns canonical paths. */
+    char *canonical = realpath(temp, NULL);
+    assert(canonical);
+    assert(snprintf(home, sizeof(home), "%s/home", canonical) > 0);
     assert(snprintf(config, sizeof(config), "%s/.config/snajpagent", home) > 0);
-    assert(snprintf(repo, sizeof(repo), "%s/repo", temp) > 0);
+    assert(snprintf(repo, sizeof(repo), "%s/repo", canonical) > 0);
     assert(snprintf(sub, sizeof(sub), "%s/sub", repo) > 0);
     assert(snprintf(leaf, sizeof(leaf), "%s/leaf", sub) > 0);
     mkdir_checked(home);
@@ -189,7 +192,7 @@ main(void)
     {
         struct snag_instruction_set many = {0};
         for (unsigned int i = 0u; i < 20u; ++i) {
-            assert(snprintf(path, sizeof(path), "%s/many-%u", temp, i) > 0);
+            assert(snprintf(path, sizeof(path), "%s/many-%u", canonical, i) > 0);
             mkdir_checked(path);
             assert(snprintf(leaf, sizeof(leaf), "%s/AGENTS.md", path) > 0);
             write_file(leaf, "many\n");
@@ -204,5 +207,6 @@ main(void)
     }
 
     puts("test_instructions: ok");
+    free(canonical);
     return 0;
 }

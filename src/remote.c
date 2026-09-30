@@ -4,6 +4,7 @@
 #include "config.h"
 #include "fs.h"
 #include "process_host.h"
+#include "screen_wire.h"
 #include "term_host.h"
 #include "upload.h"
 #include "upload_wire.h"
@@ -72,6 +73,7 @@ remote_usage(void)
         "Client-only terminal wrapper; does not start an agent or chat session.\n"
         "With no command, starts your local shell. Child arguments are passed literally.\n"
         "Start: snajpagent remote ssh -t target snajpagent\n"
+        "Through Mosh: snajpagent remote mosh -- target snajpagent\n"
         "Detach inside the agent: /session detach\n"
         "Reattach: snajpagent remote ssh -t target snajpagent --attach [SESSION_ID]\n"
         "Without SESSION_ID, attach offers a running-session picker.\n");
@@ -107,8 +109,19 @@ struct remote_transfer {
     bool screen;
     bool relay_transfer;
     bool relay_frame;
-    unsigned char marker[128];
+    unsigned char marker[512];
     size_t marker_len;
+    bool osc_forward;
+    bool osc_drop;
+    bool osc_escape;
+    bool title_active;
+    bool title_ended;
+    char title_nonce[9];
+    uint32_t title_next;
+    uint32_t title_last_checksum;
+    unsigned char title_bytes[SNAG_SCREEN_CHUNK];
+    size_t title_at;
+    size_t title_len;
     unsigned char keys[4096];
     size_t key_len;
     bool drop_ready;
@@ -337,6 +350,36 @@ remote_upload_choice(struct remote_transfer *client, char *path, size_t capacity
 
 static int remote_output(struct remote_transfer *, const unsigned char *, size_t);
 
+static ssize_t
+remote_screen_receive(void *opaque, unsigned char *bytes, size_t capacity, uint64_t deadline)
+{
+    struct remote_transfer *client = opaque;
+    while (client->title_at == client->title_len) {
+        if (client->title_ended) return snag_errno(EPIPE);
+        if (remote_checkpoint(client)) return snag_errno(ECANCELED);
+        uint64_t now = snag_monotonic_ms();
+        if (now >= deadline) return snag_errno(ETIMEDOUT);
+        int timeout = (int)(deadline - now > 50u ? 50u : deadline - now);
+        struct snag_child_event event = {.child = client->child, .stream = 0u,
+            .events = SNAG_CHILD_READ};
+        int ready = snag_child_wait(&event, 1u, SNAG_WAKE_INVALID, timeout);
+        if (ready < 0 && errno == EINTR) continue;
+        if (ready < 0) return -1;
+        if (event.revents & (SNAG_CHILD_END | SNAG_CHILD_ERROR)) return snag_errno(EPIPE);
+        if (!(event.revents & SNAG_CHILD_READ)) continue;
+        unsigned char output[8192];
+        ssize_t n = snag_child_read(client->child, 0u, output, sizeof(output));
+        if (n < 0 && (errno == EAGAIN || errno == EINTR)) continue;
+        if (n <= 0) return n < 0 ? -1 : snag_errno(EPIPE);
+        if (remote_output(client, output, (size_t)n) < 0) return -1;
+    }
+    size_t count = client->title_len - client->title_at;
+    if (count > capacity) count = capacity;
+    memcpy(bytes, client->title_bytes + client->title_at, count);
+    client->title_at += count;
+    return (ssize_t)count;
+}
+
 static int
 remote_progress(void *opaque, uint64_t done, uint64_t total)
 {
@@ -378,11 +421,13 @@ remote_transfer_run(struct remote_transfer *client, char direction)
     if (direction == 'S') {
         fd = remote_download_root(client, &directory);
         if (fd >= 0) rc = snag_client_download(client->child, fd, directory,
+            client->title_active ? remote_screen_receive : NULL,
             remote_progress, remote_checkpoint, client, &result, error, sizeof(error));
     } else if (client->drop_fd >= 0) {
         fd = client->drop_fd;
         client->drop_fd = -1;
         rc = snag_client_upload(client->child, fd, client->drop_name,
+            client->title_active ? remote_screen_receive : NULL,
             remote_progress, remote_checkpoint, client, &result, error, sizeof(error));
     } else {
         char path[SNAG_PATH_MAX_BYTES + 1u];
@@ -390,7 +435,8 @@ remote_transfer_run(struct remote_transfer *client, char direction)
             fd = snag_open_read(path, false);
             const char *name = strrchr(path, '/');
             if (fd >= 0) rc = snag_client_upload(client->child, fd,
-                name ? name + 1u : path, remote_progress, remote_checkpoint, client,
+                name ? name + 1u : path, client->title_active ? remote_screen_receive : NULL,
+                remote_progress, remote_checkpoint, client,
                 &result, error, sizeof(error));
         }
     }
@@ -435,6 +481,114 @@ remote_passthrough(struct remote_transfer *client, const unsigned char *data, si
     return 0;
 }
 
+static size_t
+remote_title_body(const unsigned char *data, size_t length)
+{
+    static const char mosh[] = "[mosh] ";
+    if (length < 4u || memcmp(data, "\033]2;", 4u)) return 0u;
+    size_t at = 4u;
+    if (length - at >= sizeof(mosh) - 1u &&
+        !memcmp(data + at, mosh, sizeof(mosh) - 1u)) at += sizeof(mosh) - 1u;
+    return at;
+}
+
+static bool
+remote_screen_title(const unsigned char *data, size_t length)
+{
+    static const char prefix[] = "SNAJPAGENT-SCREEN/1:";
+    size_t at = remote_title_body(data, length);
+    return at && length - at >= sizeof(prefix) - 1u &&
+        !memcmp(data + at, prefix, sizeof(prefix) - 1u);
+}
+
+/* Withhold the complete OSC before forwarding an unrelated terminal title. */
+static int
+remote_title(struct remote_transfer *client, const unsigned char *data, size_t length)
+{
+    static const char hello[] = "SNAJPAGENT-SCREEN/1:HELLO:";
+    static const char prefix[] = SNAG_SCREEN_PREFIX;
+    if (!remote_screen_title(data, length)) return 0;
+    if (client->relay) return remote_passthrough(client, data, length) < 0 ? -1 : 1;
+    size_t end = length - (data[length - 1u] == '\a' ? 1u : 2u);
+    size_t at = remote_title_body(data, length);
+    const unsigned char *body = data + at;
+    size_t size = end - at;
+    if (client->title_active && size == sizeof(prefix) - 1u + sizeof("END:") - 1u + 8u &&
+        !memcmp(body, prefix, sizeof(prefix) - 1u) &&
+        !memcmp(body + sizeof(prefix) - 1u, "END:", sizeof("END:") - 1u) &&
+        !memcmp(body + sizeof(prefix) + sizeof("END:") - 2u,
+                client->title_nonce, 8u)) {
+        client->title_ended = true;
+        return 1;
+    }
+    if (client->title_active && size >= sizeof(prefix) + 4u &&
+        !memcmp(body, prefix, sizeof(prefix) - 1u) &&
+        !memcmp(body + sizeof(prefix) - 1u, "DATA:", 5u)) {
+        uint32_t sequence;
+        uint32_t checksum;
+        unsigned char chunk[SNAG_SCREEN_CHUNK];
+        size_t count;
+        if (snag_screen_decode(body + sizeof(prefix) - 1u,
+                               size - (sizeof(prefix) - 1u), client->title_nonce,
+                               &sequence, &checksum, chunk, &count) < 0) return 1;
+        if (sequence == client->title_next && client->title_at == client->title_len) {
+            memcpy(client->title_bytes, chunk, count);
+            client->title_at = 0u;
+            client->title_len = count;
+            client->title_last_checksum = checksum;
+            ++client->title_next;
+        } else if (sequence != client->title_next - 1u ||
+                   checksum != client->title_last_checksum) {
+            return 1;
+        }
+        char ack[96];
+        int n = snprintf(ack, sizeof(ack), "#SNAJPAGENT-SCREEN:ACK:%s:%08x:%08x\n",
+                         client->title_nonce, sequence, checksum);
+        if (n < 0 || (size_t)n >= sizeof(ack) ||
+            remote_child_write(client->child, ack, (size_t)n) < 0) return -1;
+        return 1;
+    }
+    if (end >= at && (size == sizeof(hello) - 1u + 8u ||
+                      size == sizeof(hello) - 1u + 10u) &&
+        !memcmp(body, hello, sizeof(hello) - 1u)) {
+        const unsigned char *id = body + sizeof(hello) - 1u;
+        bool valid = true;
+        for (size_t i = 0u; i < 8u; ++i) {
+            if (!((id[i] >= '0' && id[i] <= '9') || (id[i] >= 'a' && id[i] <= 'f'))) {
+                valid = false;
+                break;
+            }
+        }
+        char direction = size == sizeof(hello) - 1u + 10u ? (char)id[9] : 0;
+        if (direction && (id[8] != ':' || (direction != 'R' && direction != 'S'))) valid = false;
+        if (valid) {
+            /* Screen redraws can repeat HELLO during a transfer or after END.
+             * Replaying it must neither nest a transfer nor type READY/ACT
+             * into the restored composer. Keep the last operation's nonce. */
+            if (client->title_active || (direction &&
+                !memcmp(client->title_nonce, id, 8u))) return 1;
+            char reply[sizeof("#SNAJPAGENT-SCREEN:READY:") + 8u + 1u];
+            int n = snprintf(reply, sizeof(reply), "#SNAJPAGENT-SCREEN:READY:%.*s\n",
+                             8, (const char *)id);
+            if (n < 0 || (size_t)n >= sizeof(reply) ||
+                remote_child_write(client->child, reply, (size_t)n) < 0) return -1;
+            if (direction) {
+                memcpy(client->title_nonce, id, 8u);
+                client->title_nonce[8] = '\0';
+                client->title_next = 0u;
+                client->title_at = client->title_len = 0u;
+                client->title_ended = false;
+                client->title_active = true;
+                client->marker_len = 0u;
+                int rc = remote_transfer_run(client, direction);
+                client->title_active = false;
+                return rc < 0 ? -1 : 1;
+            }
+        }
+    }
+    return 1;
+}
+
 static int
 remote_output(struct remote_transfer *client, const unsigned char *data, size_t length)
 {
@@ -443,6 +597,13 @@ remote_output(struct remote_transfer *client, const unsigned char *data, size_t 
     static const char drop[] = "\033[?9002";
     for (size_t i = 0; i < length; ++i) {
         unsigned char byte = data[i];
+        if (client->osc_forward || client->osc_drop) {
+            bool end = byte == '\a' || (client->osc_escape && byte == '\\');
+            if (client->osc_forward && remote_write(STDOUT_FILENO, &byte, 1u) < 0) return -1;
+            client->osc_escape = byte == 0x1bu;
+            if (end) client->osc_forward = client->osc_drop = client->osc_escape = false;
+            continue;
+        }
         if (client->relay_transfer) {
             if (client->relay_frame || byte == '#') {
                 size_t end = i;
@@ -467,6 +628,28 @@ remote_output(struct remote_transfer *client, const unsigned char *data, size_t 
         client->marker[client->marker_len++] = byte;
         if (client->marker[0] == 0x1bu) {
             size_t n = client->marker_len;
+            if (n >= 2u && client->marker[1] == ']') {
+                bool end = byte == '\a' ||
+                    (n >= 3u && client->marker[n - 2u] == 0x1bu && byte == '\\');
+                if (end) {
+                    /* A title handshake can start a nested transfer read. The
+                     * inner parser must not inherit or overwrite this OSC. */
+                    unsigned char title[sizeof(client->marker)];
+                    memcpy(title, client->marker, n);
+                    client->marker_len = 0u;
+                    int handled = remote_title(client, title, n);
+                    if (handled < 0 || (handled == 0 &&
+                        remote_write(STDOUT_FILENO, title, n) < 0)) return -1;
+                } else if (n == sizeof(client->marker)) {
+                    bool ours = remote_screen_title(client->marker, n);
+                    if (!ours && remote_write(STDOUT_FILENO, client->marker, n) < 0) return -1;
+                    client->osc_drop = ours;
+                    client->osc_forward = !ours;
+                    client->osc_escape = byte == 0x1bu;
+                    client->marker_len = 0u;
+                }
+                continue;
+            }
             if (n <= sizeof(drop) - 1u && !memcmp(client->marker, drop, n)) continue;
             if (n == sizeof(drop) && !memcmp(client->marker, drop, n - 1u) &&
                 (byte == 'h' || byte == 'l')) {
@@ -671,7 +854,9 @@ remote_proxy(const char *executable, const char *const *command, const char *dow
         }
         if (ready[0].revents & POLLNVAL) { errno = EIO; rc = -1; }
     }
-    if (client.marker_len)
+    /* Never release a truncated title's protocol prefix into scrollback. */
+    if (client.marker_len && !(client.marker_len >= 2u &&
+        client.marker[0] == 0x1bu && client.marker[1] == ']'))
         (void)remote_write(STDOUT_FILENO, client.marker, client.marker_len);
     if (client.drop_fd >= 0) (void)close(client.drop_fd);
     snag_buf_free(&client.input);

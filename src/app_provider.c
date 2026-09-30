@@ -604,18 +604,28 @@ snag_app_tool_run(struct app_state *app, const struct snag_response_item *call,
         app->remote_available = live;
         app->remote_verified = false;
         app->remote_nonce[0] = '\0';
-        if (live) {
-            json_decref(*result);
+        /* A detached native session has no workstation to answer a title
+         * challenge. Leave its queued result and editable draft untouched. */
+        bool attached = !app->ui.native || snag_ui_session_attachment(&app->ui);
+        if (live || (!app->execute && app->ui.opened && attached)) {
+            json_t *queued = *result;
             *result = NULL;
-            rc = snag_app_download_pending(app, item, result, error, error_size);
-            if (rc == 0 && !strcmp(snag_json_string(*result, "status"), "succeeded")) {
-                rc = snag_app_commit_event(app, "download_removed", json_pack("{s:s,s:s}",
-                    "id", snag_json_string(item, "id"), "reason", "delivered to wrapped client"),
-                    error, error_size);
+            bool unavailable = false;
+            rc = snag_app_download_pending(app, item, &unavailable, result, error, error_size);
+            if (rc == 0 && unavailable) {
+                json_decref(*result);
+                *result = queued;
+            } else {
+                json_decref(queued);
+                if (rc == 0 && !strcmp(snag_json_string(*result, "status"), "succeeded")) {
+                    rc = snag_app_commit_event(app, "download_removed",
+                        json_pack("{s:s,s:s}", "id", snag_json_string(item, "id"),
+                                  "reason", "delivered to wrapped client"), error, error_size);
+                }
+                if (rc == 0) rc = snag_ui_text(&app->ui,
+                    !strcmp(snag_json_string(*result, "status"), "succeeded") ?
+                    SNAG_UI_HOST : SNAG_UI_ERROR, snag_json_string(*result, "model_text"));
             }
-            if (rc == 0) rc = snag_ui_text(&app->ui,
-                !strcmp(snag_json_string(*result, "status"), "succeeded") ?
-                SNAG_UI_HOST : SNAG_UI_ERROR, snag_json_string(*result, "model_text"));
         }
         json_decref(item);
         return rc;

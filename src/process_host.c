@@ -1689,11 +1689,13 @@ snag_child_close_stream(struct snag_child *child, unsigned int stream)
 void
 snag_child_free(struct snag_child *child)
 {
-    if (!child->reaped && child->pid > 0) {
-        snag_child_signal(child, SNAG_CHILD_KILL);
-        while (waitpid(child->pid, NULL, 0) < 0 && errno == EINTR) ;
-    }
+    if (!child->reaped && child->pid > 0) snag_child_signal(child, SNAG_CHILD_KILL);
+    /* A dying PTY child can remain in exit until the owner closes the master,
+     * notably on macOS. Release streams before waiting for its final reap. */
     for (unsigned int i = 0; i < 3u; ++i) snag_child_close_stream(child, i);
+    if (!child->reaped && child->pid > 0) {
+        while (waitpid(child->pid, NULL, 0) < 0 && errno == EINTR) {}
+    }
     snag_child_init(child);
 }
 

@@ -4,14 +4,10 @@
 
 A terminal harness for autonomous, long-horizon work and distributed agent teams.
 
-Give a model an objective, tools and project context. Persistent goals carry work
-across turns; steering, saved sessions and retained tool results keep it under
-your direction. Built-in IRC connects people and agents across machines and
-rooms, with each instance running tools in its own environment.
-
-Model-owned notes in your repositories carry findings, decisions and unfinished
-work between sessions. Sessions start in your home directory and discover its
-`AGENTS.md` instructions, where you can point the model to that shared memory.
+Give a model an objective, tools and project context. Goals, steering and saved
+sessions carry work across turns. Built-in IRC connects agents across machines;
+each runs tools locally. Model-owned project notes retain findings and unfinished
+work. Sessions discover your home directory's `AGENTS.md`; point it to those notes.
 
 [Website](https://agent.snajpa.net) ·
 [Downloads](https://agent.snajpa.net/downloads.html) ·
@@ -30,19 +26,18 @@ start snajpagent:
 snajpagent
 ```
 
-Describe the outcome, constraints and repository, then press Enter. Use a
-persistent goal for work spanning multiple turns: implementation, testing and
-follow-through continue until the goal is complete or blocked.
+Describe the outcome, constraints and repository; press Enter. A persistent
+goal carries implementation, testing and follow-through across turns until
+complete or blocked.
 
 New sessions start at `~`. The model manages its working directory and can read
 and edit files and run commands across the filesystem with your OS permissions,
 without per-call approval. Absolute paths and explicit `./` paths are supported.
 Empty Enter opens a fresh prompt, like a shell.
 
-Read its replies and scroll back normally. Tool details are hidden by default;
-`/verbose 1` shows compact activity and `/verbose 2` adds input/result previews,
-with short call references and omitted content marked `[…]`. `/help` lists
-commands and keys; enter commands even while the model works.
+Scroll back normally. Tool details start hidden: `/verbose 1` shows activity,
+`/verbose 2` adds input/result previews and call references; `[…]` marks omissions.
+`/help` lists commands/keys, available even during work.
 
 [![A local session reports fixing whitespace handling and passing four checks](www/screenshots/ordinary.png)](www/screenshots/ordinary.png)
 
@@ -129,32 +124,37 @@ Wrap your connection with the native workstation client:
 
 ```sh
 snajpagent remote ssh -t target snajpagent
+snajpagent remote mosh -- target snajpagent
 # Reattach a running agent session:
 snajpagent remote ssh -t target snajpagent --attach SESSION_ID
+snajpagent remote mosh -- target snajpagent --attach SESSION_ID
 ```
 
-Use `/session detach` in the agent to return to the shell while work continues.
-Omit `SESSION_ID` from the attach command to choose a running session.
+Use `/session detach` to leave work running; omit `SESSION_ID` to choose a session.
+`remote` passes child arguments literally through a PTY without starting a local
+agent. Keep the wrapper outside SSH or Mosh, with current development builds at
+both ends. Capability handshakes select the fast SSH stream or a slower, checked
+stock-Mosh channel within the same terminal connection, without SCP or SFTP.
 
-`remote` runs the supplied command through a PTY. Drop a workstation regular file
-into the POSIX agent's composer, or select it with `/receive`. Native drops need
-current binaries at both ends and preserve the draft and active work. Verified
-uploads become unsent attachments; review `/attachments` before submitting.
-Uploads reject directories and empty files.
+Drop one regular file into the POSIX composer, or use `/receive` and enter its
+path. Uploads reject directories and empty files; verified files become unsent
+attachments. Review `/attachments` before submitting. Use `/send PATH` or model
+`send_file` for downloads, including empty files and accepted `asset:ID` references.
+The conversation stays visible, with compact progress and actual saved-path
+receipts; transfers restore the prompt and draft. Downloads default to
+`~/Downloads`; change `[terminal] download_dir` in the workstation config.
 
-`/send PATH` or the model's `send_file` tool downloads files, including empty
-files and accepted `asset:ID` references. Transfers show progress and receipts
-with saved paths. Downloads default to `~/Downloads`; change `[terminal]
-download_dir` in the workstation's `~/.snajpagent/config.ini`.
+Detached model sends queue durable exports. Fast-stream reattachment delivers
+them at idle; after Mosh reattachment, use `/send PATH` and remove the old queue
+ID once delivered. Changed or uncertain exports stay pending. Model
+`download_queue` lists, removes or clears intent while preserving source/local files.
 
-Model sends while detached queue durable exports. Wrapped reattachment delivers
-them at an idle boundary. Changed sources and uncertain transfers remain pending;
-the model's `download_queue` tool lists or removes them, preserving original files.
-
-Alternatively, install `trzsz-go` with Homebrew and connect using
-`trzsz --dragfile ssh target`. Its `~/.trzsz.conf` `DefaultDownloadPath` controls
-saving. Stock drag sends Ctrl-C first, which can cancel drafts or work.
-See the manual's **Terminal file transfers** and **Remote terminal mode** sections.
+For explicit transfers, trzsz-go remains an alternative: install it with Homebrew
+on macOS and use `trzsz --dragfile ssh target`. Its `~/.trzsz.conf`
+`DefaultDownloadPath` selects saving. Go-client drag sends Ctrl-C first and can
+cancel a draft or work.
+See the manual's **Terminal file transfers**, **Remote terminal mode (snajpagent remote)**
+and **Model tools** sections for setup, recovery and the complete tool catalog.
 Native wrapper, downloads and outbox are development-source features; the
 0.99.8b stable binary supports uploads.
 
@@ -220,10 +220,9 @@ Enter sends to the room; Tab queues a local follow-up while your model works.
 
 ### Coordinate work
 
-Give agents tasks in the room and they exchange messages and report results. Use
-project files and Git for code and handoff
-notes, since joining IRC shares no files, credentials or command processes, and
-use separate Git worktrees for independent edits to one repository.
+Assign work in the room; agents exchange findings. Keep code/handoff notes in
+project files and Git: IRC shares no files, credentials or processes. Independent
+edits use separate Git worktrees.
 
 `/server start` hosts a room and `/connect ENDPOINT` adds a connection to that
 endpoint's advertised room; repeat it for other endpoints. `/names` lists rooms
@@ -242,11 +241,11 @@ sandbox.
 waiting work and its editor revises entries. See the manual for editing controls.
 
 `/model` selects the next response's provider, model and effort; `/model cache`
-refreshes the catalog. Selection persists across resume. Model-callable switching
-is available with `[agent] allow_model_change=true` (default off). Switching
-retains completed tool results and running commands; a smaller context triggers
-bounded compaction when needed. The manual covers saved defaults and effort rules.
+refreshes the catalog. Selection persists across resume; model-callable switching
+uses `[agent] allow_model_change=true` (default off). Switching retains tool
+results and running commands, compacting smaller contexts when needed.
 
+<<<<<<< HEAD
 `/context default` uses the configured or advertised normal window, `max` the
 maximum, and a number an explicit token count for the session. Append `s` or
 `save` to a number to save that provider/model's config default. Larger windows
@@ -255,6 +254,13 @@ The prompt's percentage shows measured input against the resolved budget;
 `?%` means unknown. `/status` explains accounting, and `/compact` summarizes
 older context while preserving the transcript on disk. The manual covers
 model-limit rules, effort choices and context changes during active work.
+=======
+`/context default` uses the advertised normal window, `max` the maximum, and a
+number an explicit token count. Larger windows may change provider pricing.
+The prompt shows measured input/budget; `?%` means unknown. `/status` explains
+accounting, and `/compact` summarizes context while retaining the disk transcript.
+The manual covers model limits, effort and context changes during work.
+>>>>>>> df43114 (Negotiate screen-state terminal transfers through stock Mosh)
 
 ### Restrict what the model may do
 
@@ -397,10 +403,19 @@ This installs the binary and manual under `$HOME/.local`; the default prefix is
 `make DEBUG=1` builds for debugging; `make help` lists build options, and
 [dependency notes](DEPENDENCIES.md) cover platform scope.
 
+<<<<<<< HEAD
 `make prod-matrix` builds standalone targets into `build/matrix/` using bounded
 parallelism, without installation or VMs. Plain `make` builds the host platform.
 The [platform notes](DEPENDENCIES.md) describe target recipes, bundled libraries,
 legacy kernel and pthread ABI requirements, entropy, TLS and unsupported experiments.
+=======
+`make prod-matrix` builds all implemented standalone targets into
+`build/matrix/`, bounded by host load/memory, without installation or VMs.
+[Platform notes](DEPENDENCIES.md) cover individual recipes, pinned toolchains,
+CPU/kernel/ABI limits and Windows/NetBSD experimental builds. Unsupported
+PowerPC 32-bit is opt-in, outside the matrix, with no stable download/update
+channel. Plain `make` builds only the host.
+>>>>>>> df43114 (Negotiate screen-state terminal transfers through stock Mosh)
 
 Without configuration or credentials, the first interactive launch offers
 ChatGPT/Codex or Meta subscription, OpenRouter, OpenAI or custom-provider setup;

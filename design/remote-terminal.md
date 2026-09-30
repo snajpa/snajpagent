@@ -38,6 +38,26 @@ The wrapper recognizes the existing protocol-1 trzsz transfer marker and runs a
 native regular-file endpoint. Upload selection accepts a local path; empty input,
 Escape or Ctrl-C cancels. Download publication uses a temporary regular file,
 streaming MD5 verification, fsync and non-overwriting hard-link publication.
+When the byte-stream probe has no reply, a separate OSC 2 title challenge
+offers screen-state transport. An eight-hex nonce and direction are checked by
+the native workstation wrapper before it sends READY as terminal keyboard input.
+The executable path, name and TERM value do not choose the transport. Explicit
+trzsz-go commands retain the existing marker/wire path after the title timeout.
+
+Stock Mosh retains title state and can skip intermediate terminal output.
+The server therefore sends one short title DATA frame at a time and leaves it
+in that state until a nonce-, sequence- and CRC-bound keyboard ACK arrives.
+Each frame carries at most 120 raw wire bytes; an attempt digit forces a new
+title on retries without changing the sequence. The client accepts each
+sequence once, acknowledges duplicates, ignores stale frames and withholds
+complete OSC strings before deciding whether to forward them. Protocol titles,
+including oversized and incomplete ones, never reach the physical terminal.
+An END title replaces the final retained data frame on completion or error.
+The wrapper ignores repeated HELLO titles during an exchange and retains the
+completed nonce so replay cannot start another exchange in the restored composer.
+The protocol-1 file codec, digest, receipts, collision-safe publication and
+terminal lease are shared with the fast SSH mode. The screen-state configuration
+advertises 256-byte DATA blocks and the frame wait is bounded at 20 seconds.
 The final EXIT carries native receipt JSON with actual landed paths. The remote
 application restores its terminal lease before rendering that receipt through
 ordinary UI text, preserving the composer and cursor. Buffered post-transfer
@@ -76,9 +96,14 @@ operator download and queue removal. This preserves detached-screen safety.
 `send_file` first opens and hashes the regular source or accepted session asset,
 then commits `download_queued` to the existing remote session. Each item contains
 a stable 32-hex ID, source path/name, size, mtime, SHA256 and enqueue timestamp.
-A live native reply permits sending. Otherwise the tool returns queued intent,
-explicitly not delivery, and never starts transfer frames. There is no second
-local session or automatic age expiry.
+A live byte-stream reply permits fast sending. In an attached interactive
+session, send_file can try the title challenge after the fast reply times out.
+A positive READY allows screen-state delivery; an unsupported peer leaves the
+durable export pending without sending file data. One-shot and detached turns
+return queued intent, explicitly not delivery, and never start transfer frames.
+There is no second local session or automatic age expiry. Idle outbox discovery
+and automatic reattachment delivery remain on the fast byte-stream route;
+Mosh clients can request an explicit send after reattachment.
 
 Interactive idle processing probes when exports exist. A transition to a live
 client flushes a queue snapshot at a safe UI boundary; continued replies avoid
@@ -106,6 +131,13 @@ carry the queue; deletion follows ordinary session deletion.
 - `tests/test_download_client.py`: synthetic wire, durable outbox/list/remove/clear,
   read-only and pinned Go client interoperability.
 - `tests/test_upload_client.py`: pinned Go upload and protocol failure coverage.
+- `tests/fixture_screen_state.py`: disposable screen-state relay with truncated
+  titles, loss, replay and resize. `tests/test_remote_terminal.py` checks both
+  directions, unchanged file bytes, cancellation, prompt reuse and absence of
+  transfer text in captured physical-terminal output.
+- The optional stock-Mosh local test starts an unmodified Mosh client and server
+  over loopback, verifies upload and download bytes and terminal hygiene, and
+  keeps external SSH credentials and user sessions out of fixture execution.
 
 Qualification records distinguish PTY/path selection from desktop GUI actions.
 

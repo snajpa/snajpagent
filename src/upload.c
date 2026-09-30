@@ -3,6 +3,7 @@
 #include "json.h"
 #include "media.h"
 #include "process_host.h"
+#include "screen_wire.h"
 #include "upload_md5.h"
 #include "upload_wire.h"
 
@@ -15,6 +16,7 @@
 int
 snag_download_send(int tty, int file_fd, const char *name, const char *expected_sha,
                     const struct snag_terminal_profile *profile,
+                    bool probe_title, bool allow_legacy,
                     int (*checkpoint)(void *), void *opaque,
                     struct snag_upload_result *result, char *error, size_t error_size)
 {
@@ -22,6 +24,8 @@ snag_download_send(int tty, int file_fd, const char *name, const char *expected_
     (void)file_fd;
     (void)expected_sha;
     (void)profile;
+    (void)probe_title;
+    (void)allow_legacy;
     (void)name;
     (void)checkpoint;
     (void)opaque;
@@ -32,6 +36,7 @@ snag_download_send(int tty, int file_fd, const char *name, const char *expected_
 int
 snag_upload_receive(int tty, int stage_fd, size_t slots, bool directory,
                     const struct snag_terminal_profile *profile,
+                    bool probe_title, bool allow_legacy,
                     int (*checkpoint)(void *), void *opaque,
                     struct snag_upload_result *result, char *error, size_t error_size)
 {
@@ -40,6 +45,8 @@ snag_upload_receive(int tty, int stage_fd, size_t slots, bool directory,
     (void)slots;
     (void)directory;
     (void)profile;
+    (void)probe_title;
+    (void)allow_legacy;
     (void)checkpoint;
     (void)opaque;
     (void)result;
@@ -55,6 +62,7 @@ snag_upload_cleanup(int stage_fd, struct snag_upload_result *result)
 #else
 #include <fcntl.h>
 #include <poll.h>
+#include <sys/select.h>
 #include <unistd.h>
 
 #define SNAG_UPLOAD_FRAME_TIMEOUT_MS 20000u
@@ -67,6 +75,10 @@ struct upload_io {
     int stage_fd;
     bool display_started;
     bool screen;
+    bool title;
+    char title_nonce[9];
+    uint32_t title_sequence;
+    snag_screen_reader title_reader;
     int (*checkpoint)(void *);
     void *opaque;
     unsigned char input[SNAG_UPLOAD_READ_CHUNK];
@@ -98,14 +110,33 @@ wait_ready(struct upload_io *io, short events, uint64_t deadline)
             if (event.revents & (SNAG_CHILD_END | SNAG_CHILD_ERROR)) return snag_errno(EIO);
             continue;
         }
+        int rc;
+#ifdef __APPLE__
+        /* Darwin poll reports POLLNVAL for a valid controlling /dev/tty.
+         * select supports that descriptor and avoids false transfer failure. */
+        fd_set readable;
+        fd_set writable;
+        FD_ZERO(&readable);
+        FD_ZERO(&writable);
+        FD_SET(io->fd, events == POLLIN ? &readable : &writable);
+        struct timeval wait = {.tv_sec = timeout / 1000,
+                               .tv_usec = (timeout % 1000) * 1000};
+        rc = select(io->fd + 1, events == POLLIN ? &readable : NULL,
+                    events == POLLOUT ? &writable : NULL, NULL, &wait);
+#else
         struct pollfd pollfd = {.fd = io->fd, .events = events};
-        int rc = poll(&pollfd, 1u, timeout);
+        rc = poll(&pollfd, 1u, timeout);
+#endif
         if (rc < 0 && errno == EINTR) continue;
         if (rc < 0) return -1;
+#ifdef __APPLE__
+        if (rc) return 0;
+#else
         if (rc && (pollfd.revents & events)) return 0;
         if (rc && (pollfd.revents & (POLLHUP | POLLERR | POLLNVAL))) {
             return snag_errno(EIO);
         }
+#endif
     }
 }
 
@@ -116,7 +147,7 @@ stream_write(struct upload_io *io, const unsigned char *bytes, size_t length)
 }
 
 static int
-write_bytes(struct upload_io *io, const unsigned char *bytes, size_t length)
+plain_write_bytes(struct upload_io *io, const unsigned char *bytes, size_t length)
 {
     uint64_t deadline = snag_monotonic_ms() + SNAG_UPLOAD_FRAME_TIMEOUT_MS;
     while (length) {
@@ -153,12 +184,148 @@ write_bytes(struct upload_io *io, const unsigned char *bytes, size_t length)
 }
 
 static int
-transfer_begin(struct upload_io *io, char direction, const struct snag_terminal_profile *profile)
+read_byte(struct upload_io *io, uint64_t deadline, unsigned char *byte);
+
+static int
+stream_handshake(struct upload_io *io)
 {
-    /* TERM describes capabilities and can be forwarded over SSH. Only STY
-     * identifies a GNU screen backend that will unwrap DCS packets here. */
+    char id[SNAG_ID_HEX_LEN + 1u];
+    if (snag_random_id(id) < 0) return -1;
+    id[8] = '\0';
+    unsigned long nonce = strtoul(id, NULL, 16) % 1000000000ul;
+    char query[48];
+    char reply[16];
+    int sent = snprintf(query, sizeof(query), "\033[?9001;%lun", nonce);
+    int expected = snprintf(reply, sizeof(reply), "\033[>%luS", nonce);
+    if (sent < 0 || (size_t)sent >= sizeof(query) || expected < 0 ||
+        (size_t)expected >= sizeof(reply) ||
+        plain_write_bytes(io, (const unsigned char *)query, (size_t)sent) < 0) return -1;
+
+    uint64_t deadline = snag_monotonic_ms() + 1000u;
+    size_t matched = 0u;
+    while (snag_monotonic_ms() < deadline) {
+        unsigned char c;
+        if (read_byte(io, deadline, &c) < 0) {
+            if (errno == ETIMEDOUT) return 0;
+            return -1;
+        }
+        if (c == 3u) return snag_errno(ECANCELED);
+        matched = c == (unsigned char)reply[matched] ? matched + 1u :
+                  c == (unsigned char)reply[0] ? 1u : 0u;
+        if (matched == (size_t)expected) return 1;
+    }
+    return 0;
+}
+
+static int
+title_handshake(struct upload_io *io, char direction)
+{
+    char id[SNAG_ID_HEX_LEN + 1u];
+    if (snag_random_id(id) < 0) return -1;
+    memcpy(io->title_nonce, id, 8u);
+    io->title_nonce[8] = '\0';
+
+    char challenge[96];
+    int length = snprintf(challenge, sizeof(challenge),
+        "\033]2;" SNAG_SCREEN_PREFIX "HELLO:%s:%c\a", io->title_nonce, direction);
+    if (length < 0 || (size_t)length >= sizeof(challenge) ||
+        plain_write_bytes(io, (const unsigned char *)challenge, (size_t)length) < 0) return -1;
+
+    char reply[64];
+    int expected = snprintf(reply, sizeof(reply),
+        "#SNAJPAGENT-SCREEN:READY:%s\n", io->title_nonce);
+    if (expected < 0 || (size_t)expected >= sizeof(reply)) return snag_errno(EOVERFLOW);
+    size_t matched = 0u;
+    uint64_t deadline = snag_monotonic_ms() + 1500u;
+    while (snag_monotonic_ms() < deadline) {
+        unsigned char c;
+        if (read_byte(io, deadline, &c) < 0) {
+            if (errno == ETIMEDOUT) return 0;
+            return -1;
+        }
+        if (c == 3u) return snag_errno(ECANCELED);
+        matched = c == (unsigned char)reply[matched] ? matched + 1u :
+                  c == (unsigned char)reply[0] ? 1u : 0u;
+        if (matched == (size_t)expected) {
+            io->title = true;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int
+title_write(struct upload_io *io, const unsigned char *bytes, size_t length)
+{
+    while (length) {
+        size_t chunk = length > SNAG_SCREEN_CHUNK ? SNAG_SCREEN_CHUNK : length;
+        uint32_t checksum = snag_screen_checksum(bytes, chunk);
+        char ack[96];
+        int ack_len = snprintf(ack, sizeof(ack),
+            "#SNAJPAGENT-SCREEN:ACK:%s:%08x:%08x\n",
+            io->title_nonce, io->title_sequence, checksum);
+        if (ack_len < 0 || (size_t)ack_len >= sizeof(ack)) return snag_errno(EOVERFLOW);
+        uint64_t deadline = snag_monotonic_ms() + SNAG_UPLOAD_FRAME_TIMEOUT_MS;
+        unsigned int attempt = 0u;
+        size_t matched = 0u;
+        size_t failed = 0u;
+        for (;;) {
+            char title[256];
+            int n = snag_screen_encode(title, sizeof(title), io->title_nonce,
+                                       io->title_sequence, attempt++ % 16u, bytes, chunk);
+            if (n < 0 || plain_write_bytes(io, (const unsigned char *)title, (size_t)n) < 0)
+                return -1;
+            uint64_t next = snag_monotonic_ms() + 750u;
+            if (next > deadline) next = deadline;
+            while (snag_monotonic_ms() < next) {
+                unsigned char c;
+                if (read_byte(io, next, &c) < 0) {
+                    if (errno == ETIMEDOUT) break;
+                    return -1;
+                }
+                if (c == 3u) return snag_errno(ECANCELED);
+                static const char failure[] = "#fail:";
+                failed = c == (unsigned char)failure[failed] ? failed + 1u :
+                         c == (unsigned char)failure[0] ? 1u : 0u;
+                if (failed == sizeof(failure) - 1u) return snag_errno(ECANCELED);
+                matched = c == (unsigned char)ack[matched] ? matched + 1u :
+                          c == (unsigned char)ack[0] ? 1u : 0u;
+                if (matched == (size_t)ack_len) goto acknowledged;
+            }
+            if (snag_monotonic_ms() >= deadline) return snag_errno(ETIMEDOUT);
+        }
+acknowledged:
+        ++io->title_sequence;
+        bytes += chunk;
+        length -= chunk;
+    }
+    return 0;
+}
+
+static int
+write_bytes(struct upload_io *io, const unsigned char *bytes, size_t length)
+{
+    return io->title && !io->child ? title_write(io, bytes, length) :
+                                      plain_write_bytes(io, bytes, length);
+}
+
+static int
+transfer_begin(struct upload_io *io, char direction, const struct snag_terminal_profile *profile,
+               bool probe_title, bool allow_legacy)
+{
+    /* GNU screen unwraps DCS before the native wrapper sees the CSI probe. */
     const char *sty = getenv("STY");
     io->screen = profile ? profile->sty[0] != '\0' : sty && *sty;
+    if (probe_title) {
+        int stream = stream_handshake(io);
+        if (stream < 0) return -1;
+        if (!stream) {
+            int title = title_handshake(io, direction);
+            if (title < 0) return -1;
+            if (title) return 0;
+            if (!allow_legacy) return snag_errno(ENOTSUP);
+        }
+    }
     /* The final two digits are platform flags: 10 means Windows, not a nonce.
      * Match the POSIX client's 13-digit marker with a reserved 00 suffix. */
     uint64_t identifier = (snag_time_ms() % 100000000000ull) * 100ull;
@@ -177,6 +344,16 @@ static int
 transfer_end(struct upload_io *io, bool stopped)
 {
     const char *restore = "\033[u\033[0J\r\n";
+    if (io->title) {
+        /* Replace the last DATA title in Mosh's retained screen state. A
+         * reconnect must never redisplay an old data chunk as a new one. */
+        io->checkpoint = NULL;
+        char end[96];
+        int n = snprintf(end, sizeof(end),
+            "\033]2;" SNAG_SCREEN_PREFIX "END:%s\a", io->title_nonce);
+        return n < 0 || (size_t)n >= sizeof(end) ? snag_errno(EOVERFLOW) :
+            plain_write_bytes(io, (const unsigned char *)end, (size_t)n);
+    }
     if (!io->display_started) return 0;
     io->checkpoint = NULL;
     if (stopped) {
@@ -204,9 +381,14 @@ static int
 read_byte(struct upload_io *io, uint64_t deadline, unsigned char *byte)
 {
     while (io->at == io->len) {
-        if (wait_ready(io, POLLIN, deadline) < 0) return -1;
-        ssize_t amount = io->child ? snag_child_read(io->child, 0u, io->input, sizeof(io->input)) :
-                                    read(io->fd, io->input, sizeof(io->input));
+        ssize_t amount;
+        if (io->title_reader && io->child) {
+            amount = io->title_reader(io->opaque, io->input, sizeof(io->input), deadline);
+        } else {
+            if (wait_ready(io, POLLIN, deadline) < 0) return -1;
+            amount = io->child ? snag_child_read(io->child, 0u, io->input, sizeof(io->input)) :
+                                 read(io->fd, io->input, sizeof(io->input));
+        }
         if (amount < 0 && (errno == EAGAIN || errno == EINTR)) continue;
         if (amount <= 0) return amount < 0 ? -1 : snag_errno(EPIPE);
         io->at = 0;
@@ -228,7 +410,15 @@ read_frame(struct upload_io *io, struct upload_frame *frame)
         unsigned char byte;
         if (read_byte(io, deadline, &byte) < 0) goto done;
         if (byte == 0x03u) { errno = ECANCELED; goto done; }
-        if (byte == '\n') break;
+        if (byte == '\n') {
+            static const char ack[] = "#SNAJPAGENT-SCREEN:ACK:";
+            if (io->title && line.len >= sizeof(ack) - 1u &&
+                !memcmp(line.data, ack, sizeof(ack) - 1u)) {
+                snag_buf_reset(&line);
+                continue;
+            }
+            break;
+        }
         if (snag_buf_putc(&line, byte) < 0) goto done;
     }
     size_t colon = 0;
@@ -314,7 +504,8 @@ send_config(struct upload_io *io)
     char config[256];
     /* screen's input queue can lose a large pasted protocol-1 DATA line.
      * Keep client DATA frames within a small raw-tty input burst there. */
-    unsigned int block = io->screen ? SNAG_UPLOAD_SCREEN_BLOCK : SNAG_UPLOAD_BLOCK_MAX;
+    unsigned int block = io->title ? 256u :
+        io->screen ? SNAG_UPLOAD_SCREEN_BLOCK : SNAG_UPLOAD_BLOCK_MAX;
     int n = snprintf(config, sizeof(config),
         "{\"lang\":\"c-snajpagent\",\"protocol\":1,\"binary\":false,"
         "\"directory\":false,\"overwrite\":false,\"bufsize\":%u,"
@@ -466,6 +657,7 @@ snag_upload_cleanup(int stage_fd, struct snag_upload_result *result)
 int
 snag_upload_receive(int tty, int stage_fd, size_t slots, bool directory,
                     const struct snag_terminal_profile *profile,
+                    bool probe_title, bool allow_legacy,
                     int (*checkpoint)(void *), void *opaque,
                     struct snag_upload_result *result, char *error, size_t error_size)
 {
@@ -488,7 +680,8 @@ snag_upload_receive(int tty, int stage_fd, size_t slots, bool directory,
     if (!slots) return snag_fail(error, error_size, EFBIG, "attachment slots are full");
 
     snag_buf_init(&frame.payload, SNAG_UPLOAD_LINE_MAX);
-    if (transfer_begin(&io, directory ? 'D' : 'R', profile) < 0 ||
+    if (transfer_begin(&io, directory ? 'D' : 'R', profile,
+                       probe_title, allow_legacy) < 0 ||
         receive_action(&io, &frame, &peer_cancelled, &result->native_client) < 0) goto done;
     if (peer_cancelled) {
         rc = 1;
@@ -519,7 +712,7 @@ snag_upload_receive(int tty, int stage_fd, size_t slots, bool directory,
     size_t summary_len;
     if (read_expected(&io, &frame, "EXIT") < 0 ||
         decode_payload(&frame, summary, sizeof(summary), &summary_len) < 0) goto done;
-    result->tail_len = io.len - io.at;
+    result->tail_len = io.title ? 0u : io.len - io.at;
     memcpy(result->tail, io.input + io.at, result->tail_len);
     rc = 0;
 done:
@@ -559,6 +752,7 @@ download_integer(struct upload_io *io, struct upload_frame *frame,
 int
 snag_download_send(int tty, int file_fd, const char *name, const char *expected_sha,
                     const struct snag_terminal_profile *profile,
+                    bool probe_title, bool allow_legacy,
                     int (*checkpoint)(void *), void *opaque,
                     struct snag_upload_result *result, char *error, size_t error_size)
 {
@@ -594,7 +788,7 @@ snag_download_send(int tty, int file_fd, const char *name, const char *expected_
     }
     memset(result, 0, sizeof(*result));
     snag_buf_init(&frame.payload, SNAG_UPLOAD_LINE_MAX);
-    if (transfer_begin(&io, 'S', profile) < 0) goto done;
+    if (transfer_begin(&io, 'S', profile, probe_title, allow_legacy) < 0) goto done;
     started = true;
     if (receive_action(&io, &frame, &cancelled, &result->native_client) < 0) goto done;
     if (cancelled) { rc = 1; goto done; }
@@ -612,7 +806,7 @@ snag_download_send(int tty, int file_fd, const char *name, const char *expected_
     snag_sha256_init(&queued_hash);
     uint64_t sent = 0;
     while (sent < (uint64_t)before.st_size) {
-        size_t limit = io.screen ? 1024u : sizeof(block);
+        size_t limit = io.title ? 256u : io.screen ? 1024u : sizeof(block);
         size_t want = (uint64_t)before.st_size - sent > limit ? limit :
                       (size_t)((uint64_t)before.st_size - sent);
         ssize_t amount = read(file_fd, block, want);
@@ -666,7 +860,7 @@ snag_download_send(int tty, int file_fd, const char *name, const char *expected_
         json_decref(receipt);
         if (!valid) { errno = EPROTO; goto done; }
     }
-    result->tail_len = io.len - io.at;
+    result->tail_len = io.title ? 0u : io.len - io.at;
     memcpy(result->tail, io.input + io.at, result->tail_len);
     rc = 0;
 done:
@@ -750,11 +944,13 @@ client_publish(int dir, struct snag_upload_file *file, const char *path,
 
 int
 snag_client_download(struct snag_child *child, int directory, const char *path,
+                     snag_screen_reader title_reader,
                      int (*progress)(void *, uint64_t, uint64_t),
                      int (*checkpoint)(void *), void *opaque,
                      struct snag_client_result *result, char *error, size_t error_size)
 {
     struct upload_io io = {.fd = -1, .child = child, .stage_fd = directory,
+                           .title_reader = title_reader, .title = title_reader != NULL,
                            .checkpoint = checkpoint, .opaque = opaque};
     struct upload_frame frame = {0};
     struct snag_upload_file file = {.fd = -1};
@@ -835,11 +1031,14 @@ done:
 
 int
 snag_client_upload(struct snag_child *child, int fd, const char *name,
+                   snag_screen_reader title_reader,
                    int (*progress)(void *, uint64_t, uint64_t),
                    int (*checkpoint)(void *), void *opaque,
                    struct snag_client_result *result, char *error, size_t error_size)
 {
-    struct upload_io io = {.fd = -1, .child = child, .checkpoint = checkpoint, .opaque = opaque};
+    struct upload_io io = {.fd = -1, .child = child, .title_reader = title_reader,
+                           .title = title_reader != NULL, .checkpoint = checkpoint,
+                           .opaque = opaque};
     struct upload_frame frame = {0};
     snag_buf_init(&frame.payload, SNAG_UPLOAD_LINE_MAX);
     memset(result, 0, sizeof(*result));
@@ -857,7 +1056,8 @@ snag_client_upload(struct snag_child *child, int fd, const char *name,
         download_integer(&io, &frame, "SIZE", (uint64_t)before.st_size) < 0) goto done;
     /* A relay can hide STY while an upstream screen still carries input. Match
      * its safe burst even when the peer advertises the full wire block size. */
-    if (block > SNAG_UPLOAD_SCREEN_BLOCK) block = SNAG_UPLOAD_SCREEN_BLOCK;
+    if (block > (title_reader ? 256u : SNAG_UPLOAD_SCREEN_BLOCK))
+        block = title_reader ? 256u : SNAG_UPLOAD_SCREEN_BLOCK;
     struct snag_upload_md5 hash;
     snag_upload_md5_init(&hash);
     uint64_t sent = 0u;

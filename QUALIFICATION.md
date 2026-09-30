@@ -51,6 +51,33 @@ The detached-screen regression checks receipt scrollback and restoration of a
 partly edited draft and its cursor on reattachment. Changed-source checks also
 cover same-size edits with restored mtime, requiring the saved SHA256.
 
+On 2026-09-30 a local macOS PTY fixture ran the unmodified Mosh 1.4.0 client
+and server with `mosh --local --no-init` inside the native wrapper. It sent one
+128-byte file each way, checked the landed bytes and digest/EXIT receipt, kept
+protocol text out of captured terminal output, accepted another prompt and
+restored the transfer terminal before the wrapper exited on SIGTERM. Mosh
+may split a visible long path with cursor-position
+sequences; the assertion checks the actual file and final receipt instead of a
+contiguous raw PTY path. A separate disposable screen-state relay checks short
+title bounds, dropped and duplicate frames, stale replay, cancellation and
+resize with exact bytes, prompt reuse and no exposed protocol text. These are
+local tests, not a remote-network latency or desktop-GUI qualification.
+
+The macOS lean build (`WITH_AV=0 WITH_PDF=0 WITH_OFFICE=0`) ran 39
+remote-terminal cases: 36 passed and three platform cases skipped, including
+passing handshake replay during transfer and after END. Upload-client and
+download-client suites ran 12 and 16 cases respectively, with five and six
+existing optional skips and the remaining cases passing.
+The complete `make check` stopped at `tests/test_tools`' direct-argv test:
+the existing converter sandbox requests a 2 GiB `RLIMIT_DATA` value that this
+host rejects, causing helper exit 125. An untouched-baseline build reproduced
+the same assertion; this transfer change leaves that sandbox policy unchanged.
+The linked macOS libcurl also lacks WebSocket support; the voice-socket test
+checks the unsupported response and skips its socket cases by capability.
+Fixtures use `TMPDIR=/private/tmp` so symlinked macOS temporary ancestors do
+not conflict with the store's real-directory safety checks. The full integration
+gate is not recorded as passing on this host.
+
 `tests/test_download_client.py` covers server framing, wrong digests/cancellation,
 uncertain model-transfer retention, durable queue IDs/list/remove/clear and
 read-only guards. `tests/test_upload_client.py` and the download suite also exercise
