@@ -23,12 +23,12 @@ including stale sources; read-only permits listing only. Detached GNU screen
 exports remain pending without protocol frames. Fast-client reattachment
 redelivers at idle boundaries; Mosh reattachment requires an explicit send for
 older queued items. Changed sources and uncertain outcomes remain pending.
-Native selector input is a regular-file path, not a desktop picker. Local
-stock Mosh 1.4.0 `--local --no-init` transferred 128-byte files in both directions
-through the task fixture with exact bytes, receipts and prompt reuse; the
+Native selector input accepts a regular-file path. Stock Mosh 1.4.0 transfers
+passed over local loopback and from a Mac to a Linux VM, including `--no-init`
+and default prediction, with exact bytes, receipts and prompt reuse. The
 screen-state PTY relay covers loss, replay, cancellation and resize. Desktop
-GUI drag and remote-network Mosh qualification remain separate. See
-QUALIFICATION.md for terminal/SSH scenarios. The 0.99.8b stable downloads
+GUI drag and bulk-throughput qualification remain separate. See QUALIFICATION.md
+for terminal/SSH scenarios and file sizes. The 0.99.8b stable downloads
 predate native remote mode, downloads and the durable outbox.
 
 Voice supports native Codex subscription calls and public Realtime BYOK.

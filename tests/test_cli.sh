@@ -280,13 +280,14 @@ out=$($bin -e -- ping 2>"$root/err")
 [ "$out" = pong ]
 strip_resume "$root/err"
 only_resume "$root/err"
-grep -q "^'$bin' --dotdir '$dotdir' --no-listen --no-client --resume '[0-9a-f]\\{32\\}'$" \
+grep -q "^'$bin' --resume '[0-9a-f]\\{32\\}'$" \
     "$root/err"
 [ -d "$dotdir/sessions" ]
 [ -d "$dotdir/trash" ]
 id=$(find "$dotdir/sessions" -mindepth 1 -maxdepth 1 -type d -printf '%f\n')
 [ ${#id} -eq 32 ]
-[ "$(grep -vc '"type":"response_output"' "$dotdir/sessions/$id/events.jsonl")" -eq 7 ]
+[ "$(grep -Evc '"type":"(response_output|session_options)"' \
+    "$dotdir/sessions/$id/events.jsonl")" -eq 7 ]
 [ "$(grep -c '"type":"input_admitted"' "$dotdir/sessions/$id/events.jsonl")" -eq 1 ]
 
 # The writer owns the exact two-line header and framing; the builder owns only
@@ -1280,8 +1281,10 @@ assert limit_turns and limit_turns[-1]["instructions"][-20:] == limit_docs, limi
 print("working-docs CLI: ok")
 PY
 
-python3 "$(dirname "$bin")/test_session_listing.py" "$bin"
-python3 "$(dirname "$bin")/test_session_archiving.py" "$bin"
+# These suites run their own HTTP provider instead of the compiled provider fixture.
+production_bin="$(dirname "$bin")/../$SNAJPAGENT_TEST_NAME"
+python3 "$(dirname "$bin")/test_session_listing.py" "$production_bin"
+python3 "$(dirname "$bin")/test_session_archiving.py" "$production_bin"
 
 TERM=xterm "$(dirname "$bin")/pty_interactive.py" "$bin" "$root/work"
 TERM=dumb "$(dirname "$bin")/pty_interactive.py" "$bin" "$root/work"

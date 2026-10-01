@@ -60,8 +60,17 @@ may split a visible long path with cursor-position
 sequences; the assertion checks the actual file and final receipt instead of a
 contiguous raw PTY path. A separate disposable screen-state relay checks short
 title bounds, dropped and duplicate frames, stale replay, cancellation and
-resize with exact bytes, prompt reuse and no exposed protocol text. These are
-local tests, not a remote-network latency or desktop-GUI qualification.
+resize with exact bytes, prompt reuse and no exposed protocol text.
+
+On 2026-10-01 the full Mac ARM64 wrapper transferred a 1,024-byte file each way
+through stock Mosh 1.4.0 to a Linux VM. Both `--no-init --predict=never` and
+`--no-init` with default prediction passed content/digest receipts, hidden title
+frames, prompt reuse and terminal-mode restoration. Isolated state and a runner
+that reaps its own descendants kept the probe separate from existing sessions.
+These small-file checks do not qualify bulk throughput or desktop GUI behavior.
+The Linux remote-terminal suite passed all 39 cases, including prompt return
+when an exited transport leaves a background descendant holding its PTY. Linux
+upload/download suites passed with three/five optional skips respectively.
 
 The macOS lean build (`WITH_AV=0 WITH_PDF=0 WITH_OFFICE=0`) ran 39
 remote-terminal cases: 36 passed and three platform cases skipped, including

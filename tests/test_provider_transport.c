@@ -5742,6 +5742,17 @@ ws_cancel(void *opaque,unsigned int timeout)
     return snag_monotonic_ms()>=*(uint64_t *)opaque?2:0;
 }
 
+static bool
+websocket_supported(void)
+{
+    const curl_version_info_data *version = curl_version_info(CURLVERSION_NOW);
+    for (const char *const *protocol = version ? version->protocols : NULL;
+         protocol && *protocol; ++protocol) {
+        if (!strcmp(*protocol, "ws")) return true;
+    }
+    return false;
+}
+
 static void
 test_voice_socket(void)
 {
@@ -5757,13 +5768,7 @@ test_voice_socket(void)
     strcpy(provider.base_url,"http://127.0.0.1:1/v1/");
     assert(snag_provider_voice_open(&provider,&credential,"fixture",NULL,NULL,
         &voice,error,sizeof(error))<0 && !voice);
-    const curl_version_info_data *version = curl_version_info(CURLVERSION_NOW);
-    bool websocket = false;
-    for (const char *const *protocol = version ? version->protocols : NULL;
-         protocol && *protocol; ++protocol) {
-        if (!strcmp(*protocol, "ws")) websocket = true;
-    }
-    if (!websocket) {
+    if (!websocket_supported()) {
         assert(strstr(error, "lacks WebSocket support"));
         fprintf(stderr, "test_voice_socket: skipped (linked libcurl lacks WebSocket support)\n");
         snag_credential_clear(&credential);
@@ -7119,6 +7124,10 @@ test_voice_renewal(struct app_state *app, struct snag_config *config,
 static void
 test_voice_network_renewal(struct app_state *app, struct snag_config *config)
 {
+    if (!websocket_supported()) {
+        fprintf(stderr, "voice network renewal: skipped (libcurl lacks WebSocket support)\n");
+        return;
+    }
     int refused = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
     struct sockaddr_in address = {.sin_family = AF_INET,
         .sin_addr.s_addr = htonl(INADDR_LOOPBACK)};
@@ -7161,6 +7170,8 @@ test_voice_network_renewal(struct app_state *app, struct snag_config *config)
 static void
 test_native_ui(void)
 {
+    char *saved_term = snag_environment("TERM");
+    assert(setenv("TERM", "xterm", 1) == 0);
     char path[4096], directory[4096], id[33], error[256];
     const char *tmp = getenv("TMPDIR");
     assert(snprintf(path, sizeof(path), "%s/snajpagent-native-ui-XXXXXX", tmp ? tmp : "/tmp") > 0);
@@ -7435,7 +7446,9 @@ test_native_ui(void)
         unsigned int voice_counts[2] = {0};
         assert(snag_session_each_event(session, voice_close_record, voice_counts,
                                         error, sizeof(error)) == 0);
-        assert(voice_counts[0] == 2u && voice_counts[1] == 9u && !session->pending_queue_count);
+        unsigned int expected_stops = websocket_supported() ? 9u : 8u;
+        assert(voice_counts[0] == 2u && voice_counts[1] == expected_stops &&
+            !session->pending_queue_count);
         for (unsigned int playing = 0u; playing < 2u; ++playing) {
             assert(snag_app_audio_fixture(&app, playing != 0u) == 0);
             assert(snag_app_audio_fixture_checkpoint(&app) == 2);
@@ -7557,6 +7570,12 @@ test_native_ui(void)
     stop_server(&renewal_server);
     assert(close(auth_lock) == 0);
     assert(close(credential_listener) == 0);
+    if (saved_term) {
+        assert(setenv("TERM", saved_term, 1) == 0);
+        free(saved_term);
+    } else {
+        assert(unsetenv("TERM") == 0);
+    }
 }
 #endif /* __linux__ && !_WIN32 */
 
