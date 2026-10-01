@@ -124,16 +124,17 @@ Wrap your connection with the native workstation client:
 
 ```sh
 snajpagent remote ssh -t target snajpagent
-snajpagent remote mosh -- target snajpagent
+snajpagent remote mosh target snajpagent
 # Reattach a running agent session:
 snajpagent remote ssh -t target snajpagent --attach SESSION_ID
-snajpagent remote mosh -- target snajpagent --attach SESSION_ID
+snajpagent remote mosh target snajpagent --attach SESSION_ID
 ```
 
 Use `/session detach` to leave work running; omit `SESSION_ID` to choose a session.
 `remote` passes child arguments literally through a PTY without starting a local
-agent. Keep the wrapper outside SSH or Mosh, with current development builds at
-both ends. Capability handshakes select the fast SSH stream or a slower, checked
+agent. Put Mosh options before the hostname; the wrapper separates them from
+remote application options. Keep the wrapper outside SSH or Mosh, with current
+development builds at both ends. Capability handshakes select the fast SSH stream or a slower, checked
 stock-Mosh channel within the same terminal connection, without SCP or SFTP.
 
 Drop one regular file into the POSIX composer, or use `/receive` and enter its

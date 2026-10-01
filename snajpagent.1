@@ -1392,7 +1392,7 @@ On the POSIX workstation, wrap the connection with the native client:
 .PP
 .nf
     snajpagent remote ssh -t target snajpagent
-    snajpagent remote mosh -- target snajpagent
+    snajpagent remote mosh target snajpagent
 .fi
 .PP
 The workstation wrapper owns file selection and the download destination.
@@ -1401,7 +1401,7 @@ Reconnect to the running agent through the wrapper:
 .PP
 .nf
     snajpagent remote ssh -t target snajpagent --attach SESSION_ID
-    snajpagent remote mosh -- target snajpagent --attach SESSION_ID
+    snajpagent remote mosh target snajpagent --attach SESSION_ID
 .fi
 .PP
 Omit SESSION_ID to choose from running sessions.
@@ -1417,6 +1417,13 @@ and the child's exit status propagate through the wrapper. When the child exits,
 the wrapper drains ready output and restores the terminal, including when a
 background descendant retains the child terminal. Ordinary agent
 options and prompts retain their existing meaning outside this subcommand.
+.PP
+For a directly wrapped mosh command, the client inserts an option separator
+before the hostname so application options such as --resume reach the remote
+program. Put Mosh options before the hostname. Full option names, short options
+and their values are recognized; abbreviated or unfamiliar options retain Mosh's
+own parsing and require an explicit -- before the hostname. An existing
+separator is preserved. Argument text remains literal.
 .PP
 Client mode reads only the workstation configuration's terminal section. It
 starts no agent, provider, tools, IRC connection, media preparation or session

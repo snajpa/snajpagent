@@ -10,6 +10,14 @@ when a background descendant still holds the child PTY open.
 It creates no local session, provider, tools, IRC runtime or media state.
 `[terminal] download_dir` defaults to `~/Downloads`.
 
+When the directly wrapped command's basename is `mosh`, the wrapper inserts `--`
+before the hostname. It skips values of documented Mosh options, accepts attached
+`--option=value` forms and preserves an existing separator. Unknown or abbreviated
+options retain the original argv so Mosh owns their interpretation; those forms
+need an explicit separator. Mosh options precede the hostname, and application
+flags follow the remote command. Other commands and all argument text retain
+literal forwarding. No environment override or shell interpolation is added.
+
 Workstation file streaming uses the existing process-host child read, write and
 wait operations. The proxy retains ownership of that child throughout a transfer;
 the protocol layer borrows it without reaching into its platform-specific descriptors.
@@ -125,7 +133,8 @@ carry the queue; deletion follows ordinary session deletion.
 
 ## Regression surfaces
 
-- `tests/test_remote_terminal.py`: pure startup, literal argv, terminal restoration,
+- `tests/test_remote_terminal.py`: pure startup, literal argv, Mosh option boundaries,
+  terminal restoration,
   native transfer/receipt, upstream ownership, local GNU screen, detach/reattach,
   unwrapped pending and changed-source retention.
 - `tests/test_remote_ssh.py`: disposable authenticated loopback SSH, remote screen

@@ -36,6 +36,12 @@ The tmux layer complements those raw-PTY checks by interpreting cursor movement,
 erase, wrap, and resize sequences as a real terminal does.
 ## Native terminal transfers
 
+The stock-Mosh argument regression uses an isolated recording SSH stub to verify
+the hostname and literal remote command, including --resume, --help, whitespace,
+Unicode and shell syntax. It covers leading Mosh option values, attached values,
+absolute launcher paths and explicit separators. The loopback Mosh transfer test
+omits the manual separator and verifies uploads, downloads and prompt reuse.
+
 The development-source native wrapper is exercised on Linux x86-64 by
 `tests/test_remote_terminal.py`: isolated client startup, literal argv, PTY size,
 exit/signals and terminal restoration, binary upload and binary/empty download,

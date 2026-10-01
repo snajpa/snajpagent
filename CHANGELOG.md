@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Separate Mosh options from remote command arguments in the workstation wrapper,
+  so `remote mosh HOST snajpagent --resume ID` works without a manual separator.
+  Preserve leading Mosh option values and explicit separators.
+
 - Use HTTP/1.1 for provider requests so HTTPS Responses streams avoid HTTP/2
   gateway resets. Preserve TLS verification and partial-output replay guards.
 

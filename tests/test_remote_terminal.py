@@ -48,6 +48,7 @@ class RemoteProcess:
         env = dict(os.environ, HOME=str(home), TERM="xterm-256color", SHELL="/bin/sh")
         if extra_env:
             env.update(extra_env)
+            env = {key: value for key, value in env.items() if value is not None}
         for key in ("STY", "TMUX", "TMUX_PANE", "OPENAI_API_KEY"):
             env.pop(key, None)
         command = arguments if wrapped is None else [str(PRODUCT), *(["remote"] if wrapped else []), *arguments]
@@ -409,6 +410,55 @@ class RemoteStartupTests(unittest.TestCase):
             finally:
                 child.close()
 
+    @unittest.skipUnless(shutil.which("mosh"), "stock Mosh launcher unavailable")
+    def test_mosh_remote_command_options(self):
+        with tempfile.TemporaryDirectory(prefix="snag-mosh-options-") as tmp:
+            home = Path(tmp).resolve()
+            capture = home / "ssh.json"
+            ssh = home / "ssh"
+            ssh.write_text(f"#!{sys.executable}\n" + textwrap.dedent('''
+                import json, os, sys
+                from pathlib import Path
+                Path(os.environ["MOSH_TEST_CAPTURE"]).write_text(json.dumps(sys.argv[1:]))
+                print("SSH_ARGUMENTS_RECORDED", flush=True)
+                sys.exit(17)
+            '''))
+            ssh.chmod(0o755)
+            client = home / "color counter"
+            client.write_text(f"#!{sys.executable}\nprint(256)\n")
+            client.chmod(0o755)
+            command = ["/usr/local/bin/snajpagent", "--resume",
+                       "2d491a2c01ce8583aad5895dc067d56d", "--help", "--",
+                       "a b", "$(touch forbidden)", "résumé", ""]
+            cases = [
+                ("mosh", []),
+                (shutil.which("mosh"), ["--no-init", "--"]),
+                (shutil.which("mosh"), ["--client", str(client), "--server", "mosh-server",
+                    "--predict", "never", "--family", "inet", "--port", "60001",
+                    "--ssh", shlex.quote(str(ssh)), "--bind-server", "any",
+                    "--experimental-remote-ip", "proxy"]),
+                ("mosh", ["--predict=never", "-p", "60002", "--ssh=" + shlex.quote(str(ssh))]),
+                ("mosh", ["--serv", "mosh-server", "--"]),
+            ]
+            env = {"PATH": str(home) + os.pathsep + os.environ["PATH"],
+                   "MOSH_TEST_CAPTURE": str(capture), "POSIXLY_CORRECT": None}
+            for executable, options in cases:
+                with self.subTest(options=options):
+                    capture.unlink(missing_ok=True)
+                    child = RemoteProcess(home, [executable, *options, "snajpadev", *command],
+                                          extra_env=env)
+                    try:
+                        child.until(b"SSH_ARGUMENTS_RECORDED", 8)
+                        self.assertNotEqual(self.wait_exited(child), 0)
+                        args = json.loads(capture.read_text())
+                        self.assertEqual(args[-3:-1], ["snajpadev", "--"])
+                        remote = shlex.split(args[-1])
+                        self.assertEqual(remote[remote.index("--") + 1:], command)
+                        self.assertFalse((home / "forbidden").exists())
+                        self.assertFalse((home / ".snajpagent").exists())
+                    finally:
+                        child.close()
+
     @unittest.skipUnless(shutil.which("mosh") and shutil.which("mosh-server"),
                          "stock Mosh client and server unavailable")
     def test_stock_local_mosh_transfers_both_directions(self):
@@ -422,7 +472,7 @@ class RemoteStartupTests(unittest.TestCase):
             local_file.write_bytes(bytes(reversed(range(128))))
             dotdir = root / "agent"
             child = RemoteProcess(home, ["mosh", "--local", "--no-init",
-                                   "--predict=never", "--", "127.0.0.1", str(PRODUCT),
+                                   "--predict=never", "127.0.0.1", str(PRODUCT),
                                    "--dotdir", str(dotdir)], winsize=(24, 80))
             try:
                 child.until("›".encode(), 20)

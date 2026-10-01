@@ -73,7 +73,7 @@ remote_usage(void)
         "Client-only terminal wrapper; does not start an agent or chat session.\n"
         "With no command, starts your local shell. Child arguments are passed literally.\n"
         "Start: snajpagent remote ssh -t target snajpagent\n"
-        "Through Mosh: snajpagent remote mosh -- target snajpagent\n"
+        "Through Mosh: snajpagent remote mosh target snajpagent\n"
         "Detach inside the agent: /session detach\n"
         "Reattach: snajpagent remote ssh -t target snajpagent --attach [SESSION_ID]\n"
         "Without SESSION_ID, attach offers a running-session picker.\n");
@@ -886,6 +886,38 @@ remote_proxy(const char *executable, const char *const *command, const char *dow
     return rc;
 }
 
+/* Mosh scans for options after the hostname unless an explicit -- precedes it.
+ * Keep remote application flags out of that scan without changing their bytes. */
+static char **
+remote_mosh_command(int argc, char **argv)
+{
+    const char *name = strrchr(argv[0], '/');
+    if (strcmp(name ? name + 1 : argv[0], "mosh")) return argv;
+    int host = 1;
+    for (; host < argc; ++host) {
+        const char *option = argv[host];
+        if (!strcmp(option, "--")) return argv;
+        if (option[0] != '-' || !option[1]) break;
+        option += option[1] == '-' ? 2 : 1;
+        if (snag_string_in(option, "client server predict family port p ssh bind-server "
+                          "experimental-remote-ip")) {
+            if (++host == argc) return argv;
+        } else if (!strchr(option, '=') &&
+                   !snag_string_in(option, "a n 4 6 o predict-overwrite no-predict-overwrite "
+                                   "ssh-pty no-ssh-pty init no-init local help version")) {
+            /* Leave abbreviated or future options to Mosh's own parser. */
+            return argv;
+        }
+    }
+    if (host == argc) return argv;
+    char **command = calloc((size_t)argc + 2u, sizeof(*command));
+    if (!command) return NULL;
+    for (int i = 0; i < host; ++i) command[i] = argv[i];
+    command[host] = "--";
+    for (int i = host; i < argc; ++i) command[i + 1] = argv[i];
+    return command;
+}
+
 int
 snag_remote_main(int argc, char **argv)
 {
@@ -937,8 +969,15 @@ snag_remote_main(int argc, char **argv)
         free(executable);
         return 127;
     }
-    int rc = remote_proxy(executable, (const char *const *)arguments, downloads,
+    char **command = remote_mosh_command(at < argc ? argc - at : 1, arguments);
+    if (!command) {
+        (void)fprintf(stderr, "snajpagent remote: cannot allocate Mosh arguments\n");
+        free(executable);
+        return 1;
+    }
+    int rc = remote_proxy(executable, (const char *const *)command, downloads,
                           error, sizeof(error));
+    if (command != arguments) free(command);
     free(executable);
     if (rc < 0) { (void)fprintf(stderr, "snajpagent remote: %s\n", error); return 1; }
     return rc;

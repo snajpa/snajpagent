@@ -2,6 +2,11 @@
 
 # Implementation status
 
+`snajpagent remote mosh HOST COMMAND...` separates Mosh options from the remote
+command automatically, including commands with --resume or --attach. Leading
+Mosh option values and explicit separators remain supported; abbreviated or
+unrecognized Mosh options keep their native parsing and use an explicit `--`.
+
 Provider HTTP requests explicitly use HTTP/1.1. The HTTPS ALPN regression
 reproduces an HTTP/2 stream reset with the previous executable, then verifies
 completion, no replay after partial output and rejection of an untrusted TLS
