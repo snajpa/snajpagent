@@ -245,7 +245,6 @@ refreshes the catalog. Selection persists across resume; model-callable switchin
 uses `[agent] allow_model_change=true` (default off). Switching retains tool
 results and running commands, compacting smaller contexts when needed.
 
-<<<<<<< HEAD
 `/context default` uses the configured or advertised normal window, `max` the
 maximum, and a number an explicit token count for the session. Append `s` or
 `save` to a number to save that provider/model's config default. Larger windows
@@ -254,13 +253,6 @@ The prompt's percentage shows measured input against the resolved budget;
 `?%` means unknown. `/status` explains accounting, and `/compact` summarizes
 older context while preserving the transcript on disk. The manual covers
 model-limit rules, effort choices and context changes during active work.
-=======
-`/context default` uses the advertised normal window, `max` the maximum, and a
-number an explicit token count. Larger windows may change provider pricing.
-The prompt shows measured input/budget; `?%` means unknown. `/status` explains
-accounting, and `/compact` summarizes context while retaining the disk transcript.
-The manual covers model limits, effort and context changes during work.
->>>>>>> df43114 (Negotiate screen-state terminal transfers through stock Mosh)
 
 ### Restrict what the model may do
 
@@ -403,19 +395,10 @@ This installs the binary and manual under `$HOME/.local`; the default prefix is
 `make DEBUG=1` builds for debugging; `make help` lists build options, and
 [dependency notes](DEPENDENCIES.md) cover platform scope.
 
-<<<<<<< HEAD
 `make prod-matrix` builds standalone targets into `build/matrix/` using bounded
 parallelism, without installation or VMs. Plain `make` builds the host platform.
 The [platform notes](DEPENDENCIES.md) describe target recipes, bundled libraries,
 legacy kernel and pthread ABI requirements, entropy, TLS and unsupported experiments.
-=======
-`make prod-matrix` builds all implemented standalone targets into
-`build/matrix/`, bounded by host load/memory, without installation or VMs.
-[Platform notes](DEPENDENCIES.md) cover individual recipes, pinned toolchains,
-CPU/kernel/ABI limits and Windows/NetBSD experimental builds. Unsupported
-PowerPC 32-bit is opt-in, outside the matrix, with no stable download/update
-channel. Plain `make` builds only the host.
->>>>>>> df43114 (Negotiate screen-state terminal transfers through stock Mosh)
 
 Without configuration or credentials, the first interactive launch offers
 ChatGPT/Codex or Meta subscription, OpenRouter, OpenAI or custom-provider setup;
