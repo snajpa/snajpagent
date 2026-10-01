@@ -1305,6 +1305,8 @@ test_voice_queue(struct snag_store *store,const char *cwd)
     assert(!strcmp(session.pending_queue[0].queue_id,queue));
     assert(strstr(session.pending_queue[0].text,"ASR-derived") && strstr(session.pending_queue[0].text,"inspect the build"));
     assert(strstr(session.pending_queue[0].text,"not an additional user instruction or approval"));
+    assert(!strstr(session.pending_queue[0].text, "speaker identity"));
+    assert(strstr(session.pending_queue[0].text, "The voice interface relays requests"));
     uint64_t seq=session.next_seq;
     assert(snag_session_voice_queue(&session,source,again,&duplicate,error,sizeof(error))==0 && duplicate);
     assert(!strcmp(queue,again) && session.next_seq==seq && session.pending_queue_count==1u);

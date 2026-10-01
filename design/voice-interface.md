@@ -423,6 +423,20 @@ Identified-only providers retain their existing preview path. Final transcripts,
 muting and barge-in retain their normal completion/clearing behavior.
 
 The voice conversation can discuss a task without submitting each utterance.
+The native voice model delegates session actions to the client; public Realtime
+uses `ask_agent`. The interface helper uses `submit_input` for executable work,
+including shell commands, SSH, builds and file changes. CLI help describes UI
+slash commands; the working model's tools remain available for other tasks.
+Relayed requests distinguish spoken input, derived interpretations and actual
+working-model execution results.
+
+Voice instructions use current state for progress questions and useful updates
+after long silences. Requests for quiet or resumed narration are conversational
+preferences, leaving work and listening running. They use ordinary language,
+with the same distinction from work cancellation and microphone controls as
+other voice requests. These instructions require live conversational evaluation;
+fixture coverage verifies their delivery and the shared routing paths.
+
 When it requests an action, carry the finalized source utterance identities and
 transcripts separately from the voice model's interpretation. Preserve their
 order and relation to the current task. Fragmented speech must not silently
@@ -438,8 +452,8 @@ are interface controls and need no coding turn.
 
 The voice model proposes the route; the session owner validates and commits it.
 Use the same permissions, approval requirements, control boundaries and journal
-acknowledgements as typed input. ASR does not authenticate the speaker, and a
-derived paraphrase cannot grant authority absent from the source instruction.
+acknowledgements as typed input. A derived paraphrase cannot grant authority
+absent from the source instruction.
 An acknowledgement says whether an instruction was received, queued, admitted
 as steering, refused or completed. Receipt alone cannot be reported as execution.
 

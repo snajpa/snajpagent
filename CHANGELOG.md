@@ -4,6 +4,11 @@
 
 ## Unreleased
 
+- Clarify voice task delegation and distinguish UI controls from executable work.
+  Keep spoken requests and derived interpretations separate under existing session
+  permissions. Voice guidance covers progress questions and ordinary requests to
+  pause or resume narration while work continues.
+
 - Publish a live native attachment only after the frontend confirms that it has
   drained the source and bound to the destination. Keep audio activation and new
   input behind that acknowledgement. Incompatible private-protocol versions are

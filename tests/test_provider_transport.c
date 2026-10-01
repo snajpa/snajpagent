@@ -1339,6 +1339,7 @@ server_child(int listen_fd, enum model_fixture models, bool transport)
             bool summarizing = compact && (i == summary_request || (retry && i == 5u));
             if (!summarizing && (!strstr(wire, "inspect_session") ||
                 !strstr(wire, "get_cwd") || !strstr(wire, "Keyboard") ||
+                !strstr(wire, "submit_input for executable work") ||
                 !strstr(wire, "/session") || !strstr(wire, "/voice"))) {
                 server_fail("missing voice capabilities or CLI help");
             }
@@ -6672,14 +6673,18 @@ voice_fixture_new(const struct snag_voice_io *io, void *opaque, const char *mode
 }
 
 static void
-voice_orientation(const json_t *session)
+voice_orientation(const json_t *session, bool native)
 {
     const char *instructions = snag_json_string(session, "instructions");
     assert(instructions && strstr(instructions, "voice model"));
     assert(strstr(instructions, "The model means the working model"));
+    assert(strstr(instructions, native ? "Delegate to the client" : "Use ask_agent"));
+    assert(!strstr(instructions, native ? "Use ask_agent" : "Delegate to the client"));
+    assert(strstr(instructions, "Quiet narration leaves work and listening running"));
+    assert(!strstr(instructions, "authenticate a speaker"));
     assert(strstr(instructions, "The CLI is another interface to this same session"));
     assert(strstr(instructions, "do not automatically request new work"));
-    assert(strstr(instructions, "do not authenticate a speaker or add permissions"));
+    assert(strstr(instructions, "Use the existing session permissions"));
     struct snag_buf help = {.max = 64u * 1024u};
     assert(snag_app_help_text(&help, NULL) == 0 && help.len);
     const char *commands = strstr(instructions, (const char *)help.data);
@@ -6695,7 +6700,7 @@ static struct snag_voice *voice_start(struct voice_fixture *f)
     char error[256];assert(voice && !snag_voice_ready(voice));
     assert(snag_voice_begin(voice,error,sizeof(error))==0);
     json_t *session=json_object_get(voice_last(f->sent),"session");assert(json_is_object(session));
-    voice_orientation(session);
+    voice_orientation(session, false);
     assert(json_array_size(json_object_get(session,"tools"))==1u);
     assert(voice_deliver(voice,json_pack("{s:s,s:O}","type","session.updated","session",session))==0);
     assert(snag_voice_ready(voice));return voice;
@@ -7078,7 +7083,7 @@ static void test_native_voice_protocol(void)
     json_t *session=snag_voice_native_session(v);
     assert(session &&
         !strcmp(snag_json_string(json_object_get(session,"delegation"),"type"),"client"));
-    voice_orientation(session);
+    voice_orientation(session, true);
     json_decref(session);
     assert(snag_voice_begin(v,error,sizeof(error))==0 && snag_voice_ready(v));
     assert(json_array_size(f.sent)==0u); /* Existing native call, no public session.update. */

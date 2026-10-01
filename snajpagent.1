@@ -1985,10 +1985,15 @@ Native ASR and generated captions update as transcript segments arrive, with a
 separate preview for each speaker. Finalized transcripts retain their utterance
 identities; partial captions do not submit coding work.
 Conversation continues while accepted coding requests are queued or running.
+Ask for work status or quieter narration in ordinary speech. Narration preferences
+apply to spoken updates; work cancellation and microphone mute have separate controls.
 The session interface can read files, inspect current work, steer an exact active
 turn, queue a separate task, request turn cancellation, select a cached model,
 or change voice capture mode. Stale turn targets are refused without changing
 another turn. File changes and command execution run through the coding agent.
+Executable tasks can be described directly, including work outside the CLI's
+slash-command help. Relayed requests preserve the original transcript and mark
+the voice interface's interpretation separately from working-model results.
 Each result keeps its original request identity. The live connection tracks up to eight outstanding
 handoffs. At capacity, native voice reports that a new handoff was not submitted;
 public Realtime temporarily withholds the session tool. Conversation and accepted
