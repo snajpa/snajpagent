@@ -1073,11 +1073,12 @@ def turn_events(items, event_type, turn_id):
             item["data"]["turn_id"] == turn_id]
 
 
-def assert_topology_only_after(session_id, previous):
+def assert_resume_metadata_only_after(session_id, previous):
     current = events(session_id)
     assert current[:len(previous)] == previous
     updates = current[len(previous):]
-    assert updates and all(e["type"] == "irc_snapshot" for e in updates), updates
+    assert updates
+    assert all(e["type"] in ("irc_snapshot", "session_options") for e in updates), updates
 
 
 def one(items, event_type):
@@ -3372,7 +3373,7 @@ def test_saved_goal_restored_without_lookup():
             assert b"revision: 1" in resumed.buf[status:restored]
             resumed.wait_idle_prompt(start=parent)
             resumed.drain(0.1)
-            assert_topology_only_after(session_id, original)
+            assert_resume_metadata_only_after(session_id, original)
             # A normal follow-up must not create a replacement or resume it.
             answer = resumed.send_wait(b"ping\r", b"pong", start=restored)
             resumed.exit_cleanly(answer)
@@ -3400,7 +3401,7 @@ def test_resume_preserves_inactive_and_queued_goal_states():
             resumed.wait_idle_prompt(start=restored)
             resumed.drain(0.1)
             resumed.exit_now()
-        assert_topology_only_after(session_id, original)
+        assert_resume_metadata_only_after(session_id, original)
 
     with Child([], ready=DEFAULT_IDLE_PROMPT) as child:
         child.send_wait(b"/goal slow goal\r", b"working on goal")
@@ -5085,13 +5086,15 @@ def test_empty_session_lifecycle():
                b"selected-before-prompt/high   ?%") as resumed:
         command = resumed.exit_now()
         assert command_arguments(command)[-2:] == ["--resume", sid]
-        # Resume records the actual network state without changing history or
+        # Resume records settings and network state without changing history or
         # inventing a user turn, even when the process is now offline.
         resumed_log = (STATE_ROOT / sid / "events.jsonl").read_bytes()
         assert resumed_log.startswith(saved)
         updates = [json.loads(line) for line in resumed_log[len(saved):].splitlines()]
-        assert updates and all(e["type"] == "irc_snapshot" for e in updates), updates
-        assert all("hosted: no\n" in e["data"]["text"] for e in updates), updates
+        assert updates
+        assert all(e["type"] in ("irc_snapshot", "session_options") for e in updates), updates
+        snapshots = [e for e in updates if e["type"] == "irc_snapshot"]
+        assert snapshots and all("hosted: no\n" in e["data"]["text"] for e in snapshots), updates
     print("empty session lifecycle: ok")
 
 
@@ -6428,7 +6431,7 @@ def test_goal_orderly_quit_resume():
                 restored = resumed.wait(f"goal {goal['goal_id']}: paused · wording locked".encode())
                 resumed.wait_idle_prompt(start=restored)
                 resumed.exit_now()
-                assert_topology_only_after(session_id, stopped)
+                assert_resume_metadata_only_after(session_id, stopped)
                 print("explicit Ctrl-C pause then quit/resume: ok", flush=True)
                 continue
             restored = resumed.wait(f"goal {goal['goal_id']}: active · wording locked".encode())
