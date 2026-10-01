@@ -445,7 +445,8 @@ class RemoteStartupTests(unittest.TestCase):
                 child.until(b"pong", 10)
                 self.assertEqual(termios.tcgetattr(child.slave), mode)
                 child.process.send_signal(signal.SIGTERM)
-                self.assertEqual(self.wait_exited(child), 128 + signal.SIGTERM)
+                # Mosh may handle the forwarded signal and exit normally.
+                self.assertIn(self.wait_exited(child), (0, 128 + signal.SIGTERM))
             finally:
                 child.close()
 
