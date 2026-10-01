@@ -518,11 +518,15 @@ configure_prompt(struct snag_ui_display *display, const struct snag_ui_prompt *p
         (void)snprintf(minute, sizeof(minute), clock->valid ? "%u" : "--", clock->minute);
         (void)snprintf(second, sizeof(second), clock->valid ? "%u" : "--", clock->second);
         for (size_t i = 0u; i < SNAG_PROMPT_HOUR; ++i) values[i] = prompt->values[i];
-        if (prompt->mode == 0u && display->term.destinations)
+        if (display->term.destinations)
             for (size_t i = 0u; i < display->term.destinations->count; ++i) {
                 const struct snag_irc_destination *destination = &display->term.destinations->items[i];
-                if (destination->target.id == display->term.destination.id && destination->operator[0])
+                if (prompt->mode == 0u ?
+                    destination->target.id != display->term.destination.id : i != 0u) continue;
+                if (destination->operator[0])
                     values[SNAG_PROMPT_OPERATOR] = destination->operator;
+                if (destination->model[0])
+                    values[SNAG_PROMPT_MODEL_NICK] = destination->model;
             }
         values[SNAG_PROMPT_HOUR] = hour;
         values[SNAG_PROMPT_MINUTE] = minute;
@@ -1653,7 +1657,8 @@ send_prompt(struct snag_ui *ui, enum snag_ui_operation kind, bool active, const 
         memcpy(message.command.data.prompt.frames[i], spinners[i], strlen(spinners[i]) + 1u);
     }
     for (size_t i = 0u; values && i < SNAG_PROMPT_HOUR; ++i) {
-        message.command.data.prompt.values[i] = snag_strdup_checked(values[i], SNAG_TERM_LABEL_BYTES);
+        size_t limit = i == SNAG_PROMPT_SESSION_NAME ? SNAG_PATH_MAX_BYTES : SNAG_TERM_LABEL_BYTES;
+        message.command.data.prompt.values[i] = snag_strdup_checked(values[i], limit);
         if (!message.command.data.prompt.values[i]) {
             message_free(&message);
             return -1;

@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Add optional `{model_nick}` and `{session_name}` prompt fields beside
+  `{operator}`. Nick fields follow the selected IRC endpoint in chat; session
+  names follow saved renames and resume. Default prompts retain their layout.
+
 - Restore the workstation terminal promptly when its wrapped transport exits,
   including when background descendants retain an open child terminal.
 

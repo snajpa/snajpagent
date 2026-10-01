@@ -425,9 +425,11 @@ between the indicator slots and clock. The default rollout view uses
 active. Both start with a goal flag slot and one shared activity slot;
 tool work takes priority over model work in the same column. Reserved slots
 and unused digits in the four-column context field remain spaces. The
-prompt and local chat use the accepted operator nick on the first configured
-server, or the hosted nick when serving a room. Nick changes refresh the prompt
-without losing the draft; configured nicks remain registration preferences.
+prompt uses the selected endpoint's accepted operator nick in chat and the first
+endpoint's nick in rollout. Optional `{model_nick}` follows the same endpoint;
+`{session_name}` supplies the saved session name or empty text when unnamed.
+Nick changes refresh these fields without losing the draft; configured nicks
+remain registration preferences.
 The hostname comes from the local machine, not the IRC endpoint, room, or
 remote server. Both views use the session's local prompt history and Ctrl-R
 search. Global history seeds new sessions and receives newly entered lines on

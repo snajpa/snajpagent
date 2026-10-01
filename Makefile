@@ -278,6 +278,7 @@ check: $(BIN) $(TEST_BIN)
 	SNAJPAGENT_TEST_WITH_OFFICE='$(WITH_OFFICE)' \
 		./tests/test_cli.sh ./$(FIXTURE_BIN)
 	python3 ./tests/test_citations.py ./$(FIXTURE_BIN)
+	python3 ./tests/test_prompt_identity.py ./$(BIN)
 	@if command -v tmux >/dev/null 2>&1; then \
 		$(MAKE) tmuxcheck; \
 	else \

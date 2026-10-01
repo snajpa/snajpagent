@@ -649,6 +649,9 @@ render_prompt(struct app_state *app, bool active, const char *submitted)
     (void)snprintf(queue, sizeof(queue), "%zu", app->session.pending_queue_count);
     if (json_array_size(app->draft_content))snprintf(queue+strlen(queue),sizeof(queue)-strlen(queue)," [%zu attached]",json_array_size(app->draft_content));
     values[SNAG_PROMPT_QUEUE] = queue;
+    values[SNAG_PROMPT_MODEL_NICK] = app->irc ? snag_irc_model_nick(app->irc) :
+        app->config->irc.model_nick;
+    values[SNAG_PROMPT_SESSION_NAME] = app->session.name ? app->session.name : "";
     if (!submitted && app->queue_edit_id[0]) {
         struct snag_buf out = {.max = SNAG_TERM_LABEL_BYTES};
         for (unsigned int i = 0u; i < SNAG_TERM_SPINNER_SLOTS; ++i)
@@ -685,7 +688,8 @@ ensure_turn_prompt(struct app_state *app)
 
 static int
 validate_prompt_values(struct snag_ui *ui, const struct snag_config *config,
-                       const struct snag_provider_config *provider, const char *model, const char *effort)
+                       const struct snag_provider_config *provider, const char *model,
+                       const char *effort, const char *session_name)
 {
     char hostname[256u];
     const char *values[SNAG_PROMPT_FIELD_COUNT];
@@ -702,6 +706,8 @@ validate_prompt_values(struct snag_ui *ui, const struct snag_config *config,
     values[3] = config->irc.operator_nick;
     values[4] = hostname;
     values[5] = "100";
+    values[SNAG_PROMPT_MODEL_NICK] = config->irc.model_nick;
+    values[SNAG_PROMPT_SESSION_NAME] = session_name ? session_name : "";
     values[SNAG_PROMPT_HOUR] = "23";
     values[SNAG_PROMPT_MINUTE] = "59";
     values[SNAG_PROMPT_SECOND] = "60";
@@ -719,13 +725,14 @@ out: return rc;
 }
 
 static int
-validate_prompt_candidate(struct app_state *app, const struct snag_config *config)
+validate_prompt_candidate(struct app_state *app, const struct snag_config *config,
+                          const char *session_name)
 {
     const struct snag_provider_config *provider = snag_config_provider(
         config, app->session.default_provider[0] ? app->session.default_provider : NULL);
 
     return validate_prompt_values(&app->ui, config, provider, app->session.default_model,
-                                  resolve_effort(app->session.default_effort));
+                                  resolve_effort(app->session.default_effort), session_name);
 }
 
 static unsigned int
@@ -2177,7 +2184,7 @@ reload_config(struct app_state *app, char *error, size_t error_size)
             "reloaded configuration does not define the selected provider");
         goto out;
     }
-    if (validate_prompt_candidate(app, &candidate) < 0) {
+    if (validate_prompt_candidate(app, &candidate, app->session.name) < 0) {
         (void)snag_fail(error, error_size, EINVAL,
             "reloaded prompt cannot be rendered with the current selection");
         goto out;
@@ -2970,6 +2977,11 @@ handle_common_command(struct app_state *app, const char *line, bool active, bool
             if (!name || !snag_session_name_valid(json_string_value(name))) {
                 json_decref(name);
                 return app_error(app, "usage: /session name NAME (nonempty single-line UTF-8)");
+            }
+            if (!app->execute && validate_prompt_candidate(app, app->config,
+                    json_string_value(name)) < 0) {
+                json_decref(name);
+                return app_error(app, "session name does not fit the configured prompt");
             }
             if (commit_event(app, "session_named", json_pack("{s:o}", "name", name),
                               error, sizeof(error)) < 0 ||
@@ -5821,7 +5833,8 @@ run_owner(const struct snag_cli *cli, const char *program, struct snag_session_p
         }
         if (!cli->execute && validate_prompt_values(&app.ui, &config, resume_provider,
                 cli->model ? new_model : app.session.default_model,
-                resolve_effort(cli->model || cli->effort ? new_effort : app.session.default_effort)) < 0) {
+                resolve_effort(cli->model || cli->effort ? new_effort : app.session.default_effort),
+                app.session.name) < 0) {
             invalid_message = "configured prompt cannot be rendered with the current selection";
             goto invalid;
         }
@@ -5845,7 +5858,7 @@ run_owner(const struct snag_cli *cli, const char *program, struct snag_session_p
             snag_config_provider(&config,
                 cli->provider ? cli->provider : config.provider[0] ? config.provider : NULL);
         if (!cli->execute && validate_prompt_values( &app.ui, &config, selected_provider, new_model,
-                resolve_effort(new_effort)) < 0) {
+                resolve_effort(new_effort), cli->session_name) < 0) {
             invalid_message = "configured prompt cannot be rendered with the current selection";
             goto invalid;
         }

@@ -3081,6 +3081,8 @@ case.  Ordinary fields are
 .BR {model} ,
 .BR {effort} ,
 .BR {operator} ,
+.BR {model_nick} ,
+.BR {session_name} ,
 .BR {host} ,
 .BR {context} ,
 .BR {mode} ,
@@ -3098,6 +3100,24 @@ templates must replace them with one shared activity placeholder.
 Backslash escapes literal braces and backslash.  No shell, environment, or
 command expansion occurs.  snajpagent appends one space after the selected
 label.
+.PP
+.B {operator}
+and
+.B {model_nick}
+show the local operator and agent IRC identities.  Connected endpoints supply
+their accepted nicks, including server-assigned suffixes and later renames.
+Chat uses the selected endpoint; rollout uses the first endpoint.  Without an
+endpoint, the local nick values are used.
+.B {model}
+continues to mean the provider's model identifier.
+.B {session_name}
+shows the saved name set by
+.B -N
+or
+.BR "/session name NAME" ,
+and expands to empty text for an unnamed session.  Renames update the prompt,
+and resume restores the saved name.  Names are inserted literally, including
+spaces and braces.  These optional fields do not change the default template.
 .PP
 .B {queue}
 expands to the plain number of pending future prompts, including 0 when empty.
@@ -3145,6 +3165,15 @@ For a minimal prompt without spinners, use this single-line value:
 .nf
 prompt = {chat:{operator}:}{rollout-idle:›}{rollout-active:»}
 .fi
+.PP
+To show both nicks and the session name in every view, use:
+.nf
+prompt = [{session_name}] {operator}/{model_nick}{chat: :}{rollout-idle: ›}{rollout-active: »}
+.fi
+.PP
+The full expanded label must fit the limit described above.  An interactive
+session rename that would exceed it is rejected and keeps the previous name.
+A long name remains valid when the template does not display it.
 .PP
 Templates must be printable valid UTF-8, at most 1024 bytes.  All three cases
 are required and nonempty; text and fields outside them are shared.

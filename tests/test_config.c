@@ -511,7 +511,7 @@ static void
 test_prompt_numbers(const char *path)
 {
     const char *values[SNAG_PROMPT_FIELD_COUNT] = {
-        "p", "m", "e", "op", "host", "0", "chat", "0", "3", "7", "9"};
+        "p", "m", "e", "op", "host", "0", "chat", "0", "agent", "session", "3", "7", "9"};
     static const char *const contexts[] = {"0", "9", "10", "99", "100", "?"};
     static const char *const padded[] = {"  0% ", "  9% ", " 10% ", " 99% ", "100% ", "  ?% "};
     static const char *const invalid[] = {
@@ -520,8 +520,22 @@ test_prompt_numbers(const char *path)
         "hour:2:2", "context:511", "hour:0511", "context:99999999999999999999",
         "model:2", "provider:2", "mode:2", "goal_spinner:1",
         "activity_spinner:1", "provider_spinner", "tool_spinner", "host:2", "operator:2",
-        "effort:2", "queue:02"};
+        "effort:2", "queue:02", "model_nick:2", "session_name:2"};
     char label[SNAG_TERM_LABEL_BYTES], template[256];
+
+    const char identities[] = "{operator}|{model_nick}|{session_name}|{model}"
+        "{chat:C}{rollout-idle:I}{rollout-active:A}";
+    expect_ui(path, "prompt", identities, true);
+    values[SNAG_PROMPT_SESSION_NAME] = "build {literal} α";
+    for (unsigned int mode = 0u; mode < 3u; ++mode) {
+        assert(snag_config_prompt_expand(identities, mode, values, 0xfdu,
+            label, sizeof(label)) == 0);
+        assert(strncmp(label, "op|agent|build {literal} α|m", strlen(label) - 2u) == 0);
+    }
+    values[SNAG_PROMPT_SESSION_NAME] = "";
+    assert(snag_config_prompt_expand(identities, 1u, values, 0xfdu,
+        label, sizeof(label)) == 0);
+    assert(strcmp(label, "op|agent||mI ") == 0);
 
     for (size_t i = 0u; i < sizeof(contexts) / sizeof(contexts[0]); ++i) {
         values[SNAG_PROMPT_CONTEXT] = contexts[i];
@@ -871,7 +885,7 @@ main(void)
         static const char *const contexts[] = {"0", "9", "10", "99", "100", "?"};
         static const char *const queues[] = {"0", "1", "9", "10", "128"};
         const char *values[SNAG_PROMPT_FIELD_COUNT] = {
-            "p", "m", "e", "op", "host", "0", "chat", "0", "3", "7", "9"};
+            "p", "m", "e", "op", "host", "0", "chat", "0", "agent", "session", "3", "7", "9"};
         char expanded[128], expected[128], badge[32];
 
         for (size_t q = 0u; q < sizeof(queues) / sizeof(queues[0]); ++q) {
@@ -1085,7 +1099,8 @@ main(void)
     }
     {
         const char *values[SNAG_PROMPT_FIELD_COUNT] = {
-            "prov", "model", "high", "", "host", "0", "rollout-idle", "0", "12", "34", "56"};
+            "prov", "model", "high", "", "host", "0", "rollout-idle", "0",
+            "agent", "", "12", "34", "56"};
         const char template[] = "pre{chat:{hour:02}:{minute:02}:{second:02} {operator}:}"
             "{rollout-idle:{provider}/{model}/{effort} " "{context}%{goal_spinner}›}{rollout-active:A}";
         const unsigned char expected[] = {

@@ -493,7 +493,8 @@ previous text would duplicate it even without another model response.
 
 `[ui] prompt` is one data-only template with exactly one `{chat:TEXT}`, one
 `{rollout-idle:TEXT}`, and one `{rollout-active:TEXT}` case. It supports
-separate `{provider}`, `{model}`, `{effort}`, `{operator}`, `{host}`,
+separate `{provider}`, `{model}`, `{effort}`, `{operator}`, `{model_nick}`,
+`{session_name}`, `{host}`,
 `{context}`, `{queue}`, `{mode}`, `{hour}`, `{minute}`, and `{second}` fields plus optional `{goal_spinner}`,
 and `{activity_spinner}` fields and escaped literal
 braces/backslash; it performs no shell or environment expansion. The default
@@ -504,6 +505,15 @@ as case fields; each spinner may occur only once in any expanded mode. Inactive
 slots and unused digits in the four-column percentage remain spaces. The default idle chat prompt is
 `   HH:MM:SS OPERATOR@HOST : `. Snajpagent appends one
 space after the expanded template.
+
+`{operator}` and `{model_nick}` use accepted live IRC identities, following the
+selected endpoint in chat and the first endpoint in rollout. Destination updates
+refresh both fields while preserving the draft and clock. Without endpoints,
+local nick values remain available. `{model}` remains the provider model ID.
+`{session_name}` inserts the saved name literally, or empty text when unnamed;
+renames and resumed sessions use the current stored name. Interactive renames
+validate all prompt modes before saving. A name omitted from the template keeps
+the session-name storage limit and consumes no label space.
 
 Clock components are natural decimal local-time values from one capture per
 composer, not fragments of a preformatted string. `{hour:02}:{minute:02}:{second:02}`

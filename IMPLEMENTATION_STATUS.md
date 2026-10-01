@@ -2,6 +2,10 @@
 
 # Implementation status
 
+Custom `[ui] prompt` templates expose `{operator}`, `{model_nick}` and
+`{session_name}`. Nick fields follow accepted endpoint identities; saved names
+survive resume and update on rename. Default prompts retain their existing layout.
+
 Model-driven `select_model` choices now require an entry in the current model
 cache, including its provider and effort. The tool's `cache` selector refreshes
 provider catalogs and returns selectable rows; failed refresh leaves the prior

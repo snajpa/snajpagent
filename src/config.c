@@ -312,7 +312,8 @@ prompt_body(const char *text, size_t len, const char *const values[SNAG_PROMPT_F
             unsigned int selected, unsigned int *seen, struct snag_buf *out)
 {
     static const char *const fields[] = {"provider", "model", "effort",
-        "operator", "host", "context", "mode", "queue", "hour", "minute", "second",
+        "operator", "host", "context", "mode", "queue", "model_nick", "session_name",
+        "hour", "minute", "second",
         "goal_spinner", "activity_spinner"};
     static const char *const names[] = {"chat:", "rollout-idle:", "rollout-active:"};
 
