@@ -265,6 +265,7 @@ check: $(BIN) $(TEST_BIN)
 	./tests/test_provider_retry
 	./tests/test_provider_transport
 	python3 tests/test_provider_https.py ./$(BIN)
+	python3 tests/test_token_preflight.py ./$(BIN)
 	./tests/test_context
 	./tests/test_model_cache
 	./tests/test_render

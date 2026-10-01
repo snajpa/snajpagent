@@ -6,6 +6,9 @@ This file records test coverage and outstanding platform and provider checks.
 Static inspection, local loopback tests, target-platform execution and live-provider
 runs each cover different behavior. Report the actual scope of each result.
 
+The [2026-10-01 regression audit](design/regression-audit-20261001.md) maps the
+32 audited development commits to their permanent tests and records coverage additions.
+
 ## Source-archive evidence
 
 The repository provides these existing checks. `make check` runs unit, CLI,
@@ -22,6 +25,7 @@ separate opt-in tools:
 | `make evidencematrixcheck` | validates a supplied final set of external per-platform bundles for required platform coverage, unique platform ids, consistent versioning, terminal evidence, and live-provider evidence |
 | `make sizecheck` | reports source/test line counts and the largest production file, with no thresholds or line-count failures |
 | `tests/test_provider_transport` | exercises the real libcurl create/count/compact transport against a local loopback HTTP server |
+| `tests/test_token_preflight.py` | verifies exact API-key token preflight, tool continuation, resume and count-endpoint authentication failure through the production CLI |
 | `tests/pty_*.py` | exercises the interactive terminal composer, live resize, suspend/continue, and TERM/width fallback behavior through a PTY on the current POSIX host |
 | `tests/test_command_pager.py` | exercises command reports and aliases through a capture pager in a six-row PTY, combined reports, retained history and queue rows, active-turn paging, template overrides and direct-output fallback; checks real less navigation after resize and physical screen contents over stock Mosh when those programs and GNU screen are installed |
 | `tests/test_upload_client.py` | exercises ten terminal-upload PTY cases on Linux x86-64, including pinned Go trzsz client binary/text multi-file transfer, rollback after invalid image preparation, synthetic protocol failures and terminal recovery; GUI drag and nested SSH are not exercised |

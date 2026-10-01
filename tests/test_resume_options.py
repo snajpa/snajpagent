@@ -192,7 +192,65 @@ def check_network(binary, previous=None):
             provider.close()
 
 
+def check_display_preferences(binary):
+    provider = harness.FakeResponses()
+    provider.runtime_handler = lambda handler, request, sequence: provider.reply(
+        handler, provider.response_body(sequence, "render **bold marker** final-marker").encode(),
+        close_header=True)
+    try:
+        with tempfile.TemporaryDirectory(prefix="snag-resume-display-") as tmp:
+            root = Path(tmp).resolve()
+            config = root / "config.ini"
+            harness.write_irc_config(config, provider.port, "host-model")
+            with config.open("a") as out:
+                out.write("markdown = true\n"
+                          "prompt = {chat::}{rollout-idle:READY>}{rollout-active:WORK>}\n")
+            state = root / "state"
+            base = [str(binary), "--config", str(config), "--dotdir", str(state)]
+            env = {"SNAJPAGENT_IRC_UI_KEY": "irc-ui-secret", "NO_COLOR": None}
+            sid = None
+            cases = ((["--color=always", "--no-markdown", "-vv"], True, False, 2),
+                     ([], True, False, 2),
+                     (["--color=never", "--markdown", "-v"], False, True, 1),
+                     ([], False, True, 1))
+            for index, (options, colored, markdown, verbosity) in enumerate(cases):
+                if index == 3:
+                    # Saved choices must still win after the defaults change.
+                    config.write_text(config.read_text().replace("color = never", "color = always")
+                                      .replace("markdown = true", "markdown = false"))
+                args = base + (["--resume", sid] if sid else []) + options
+                child = RemoteProcess(root, args, wrapped=None, extra_env=env,
+                                      winsize=(24, 120))
+                try:
+                    child.until(b"READY>", 10)
+                    child.output.clear()
+                    os.write(child.master, b"ping\r")
+                    output = child.until(b"final-marker", 10)
+                    child.until_after(b"final-marker", b"READY>", 10)
+                    records = harness.read_events(state)[1]
+                    assert len(harness.event_list(records, "turn_completed")) == index + 1
+                    assert (b"**bold marker**" in output) == (not markdown), output
+                    child.output.clear()
+                    os.write(child.master, b"/verbose\r")
+                    child.until(f"verbosity: {verbosity} (".encode(), 10)
+                    child.until(b"READY>", 10)
+                    child.output.clear()
+                    os.write(child.master, b"/exit\r")
+                    output = child.until(b"--resume", 10)
+                    header = "• You can resume this session with the following command:".encode()
+                    assert (b"\x1b[1;32m" + header + b"\x1b[0m" in output) == colored, output
+                    child.wait(0)
+                    sid = next((state / "sessions").iterdir()).name
+                finally:
+                    child.close()
+            assert not provider.failure, provider.failure
+            print("resume color, Markdown and verbosity: saved, overridden and inherited: ok")
+    finally:
+        provider.close()
+
+
 if __name__ == "__main__":
     binary = Path(sys.argv[1] if len(sys.argv) > 1 else "./snajpagent").resolve()
     check(binary)
     check_network(binary, Path(sys.argv[2]).resolve() if len(sys.argv) > 2 else None)
+    check_display_preferences(binary)
