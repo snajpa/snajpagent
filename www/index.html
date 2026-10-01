@@ -83,7 +83,7 @@
         in project files, with pointers in <code>AGENTS.md</code>. Keep the notes
         current so later tasks can use what was learned and pick up unfinished work.</p>
       <p>Stage images or files with <code>/attach PATH</code> and submit them with
-        your prompt. Development source builds provide a native workstation wrapper:
+        your prompt. Current source provides a workstation wrapper:
         <code>snajpagent remote ssh -t target snajpagent</code>.
         For stock Mosh use <code>snajpagent remote mosh -- target snajpagent</code>:
         a checked, slower screen-state mode keeps transfer frames out of scrollback.
@@ -92,10 +92,9 @@
         Omit the ID to choose a running session.
         Use <code>/receive</code> to select a workstation file, then review
         <code>/attachments</code> before submitting. Use <code>/send PATH</code>
-        to save a remote file under <code>~/Downloads</code>. Transfers show progress
-        while keeping the conversation visible. Model exports while
-        detached stay in the saved session until wrapped reattachment; receipts
-        identify actual local paths. The trzsz-go wrapper remains an alternative
+        to save a remote file under <code>~/Downloads</code>. Transfers preserve the conversation. Detached exports stay queued: fast-stream
+        reattachment delivers them automatically; on Mosh use <code>/send PATH</code>.
+        Receipts identify local paths. The trzsz-go wrapper remains an alternative
         for explicit transfers (<code>brew install trzsz-go</code> on macOS,
         then <code>trzsz --dragfile ssh target</code>). See the manual's
         Terminal file transfers section.</p>
