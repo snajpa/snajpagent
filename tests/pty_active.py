@@ -2595,7 +2595,8 @@ def test_irc_update_prompt_names_update_and_replay_resolves_it():
         # The peer JOIN/MODE events can start a later background turn before
         # exit. Resume shows that unfinished turn by default; request enough
         # retained turns to inspect the message we deliberately rewrote.
-        child.wait_idle_prompt()
+        child.wait(chat_prompt("replayop"))
+        child.send_wait_idle(b"/rollout\r", "── rollout ──".encode())
         child.send_wait(b"/history 20\r", b"network_zero")
         end = len(child.buf)
         child.exit_now()
