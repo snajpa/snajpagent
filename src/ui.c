@@ -1048,8 +1048,12 @@ finish_input(struct snag_ui_display *display, struct ui_action *item, int rc)
             item->view_applied = true;
             take_snapshot(display, &item->snapshot);
         } else if (snag_verbosity_command(item->text, strlen(item->text))) {
-            verbosity_command(display, item->text);
-            item->local = true;
+            const char *value = item->text + 8u;
+            while (isspace((unsigned char)*value)) ++value;
+            if (*value) {
+                verbosity_command(display, item->text);
+                item->local = true;
+            }
         }
     }
     if (item->local) {
@@ -1908,6 +1912,7 @@ snag_ui_orientation(struct snag_ui *ui, const struct snag_session *session, bool
 
 struct history_replay {
     struct snag_ui *ui;
+    struct snag_render *report;
     struct snag_history_turn turn;
     struct snag_buf response;
     struct history_irc_payload *payloads;
@@ -2003,6 +2008,10 @@ fail:
 static int
 history_display(struct history_replay *history, const struct snag_history_turn *turn)
 {
+    if (history->report) {
+        return snag_render_history(history->report, turn, history->shown,
+            history->completed, history->total);
+    }
     return snag_ui_send(history->ui, (struct snag_ui_command){.kind = SNAG_UI_HISTORY,
         .data.replay = {.turn = turn, .shown = history->shown,
             .completed = history->completed, .total = history->total}});
@@ -2088,6 +2097,10 @@ history_event(void *opaque, const struct snag_session *state, uint64_t seq,
         return -1;
     if (!strcmp(type, "voice_event")) {
         if (history_flush(history, false) < 0) return -1;
+        if (history->report) {
+            return snag_render_voice_event(history->report,
+                json_object_get(data, "event"), 0u, 0u);
+        }
         return snag_ui_send(history->ui, (struct snag_ui_command){.kind = SNAG_UI_VOICE_EVENT,
             .data.voice = json_object_get(data, "event")});
     }
@@ -2165,12 +2178,13 @@ history_collect(void *opaque, const struct snag_session *state, uint64_t seq,
     return done ? SNAG_JOURNAL_STOP_AFTER : 0;
 }
 
-int
-snag_ui_history(struct snag_ui *ui, struct snag_session *session, uint64_t count)
+static int
+history_show(struct snag_ui *ui, struct snag_session *session, uint64_t count,
+    struct snag_render *report)
 {
     /* One response's public text plus one separator per fragment, under the
      * response-public byte bound. */
-    struct history_replay history = {.ui = ui, .total = session->turn_count,
+    struct history_replay history = {.ui = ui, .report = report, .total = session->turn_count,
         .response = {.max = 3u * SNAG_MAX_RESPONSE_GRAPH}};
     struct history_window window = {.ui = ui, .remaining = count, .events = json_array()};
     uint64_t before = 0u;
@@ -2195,11 +2209,15 @@ snag_ui_history(struct snag_ui *ui, struct snag_session *session, uint64_t count
             (void)snprintf(notice, sizeof(notice),
                 "History scan window ended; earlier events: read_session_history before_seq=%llu.",
                 (unsigned long long)before);
-            rc = snag_ui_text(ui, SNAG_UI_HOST, notice);
+            rc = report ? snag_render_host(report, notice) :
+                snag_ui_text(ui, SNAG_UI_HOST, notice);
         }
     }
-    if (rc == 0 && count && session->pending_input)
-        rc = snag_ui_submitted(ui, "pending input › ", snag_json_string(session->pending_input, "text"), false);
+    if (rc == 0 && count && session->pending_input) {
+        const char *text = snag_json_string(session->pending_input, "text");
+        rc = report ? snag_render_submitted(report, "pending input › ", text) :
+            snag_ui_submitted(ui, "pending input › ", text, false);
+    }
     if (rc == 0) rc = history_display(&history, NULL);
     free(history.turn.user);
     free(history.turn.assistant);
@@ -2208,6 +2226,31 @@ snag_ui_history(struct snag_ui *ui, struct snag_session *session, uint64_t count
         for (size_t i = 0u; i < HISTORY_IRC_PAYLOADS; ++i) free(history.payloads[i].text);
     free(history.payloads);
     json_decref(window.events);
+    return rc;
+}
+
+int
+snag_ui_history(struct snag_ui *ui, struct snag_session *session, uint64_t count)
+{
+    return history_show(ui, session, count, NULL);
+}
+
+int
+snag_ui_history_report(struct snag_ui *ui, struct snag_session *session, uint64_t count,
+    struct snag_buf *text)
+{
+    struct snag_render render;
+    struct snag_term target = {.capture = text, .output_fd = {-1, -1}};
+    struct snag_term *previous = snag_term_output_owner();
+
+    snag_render_init(&render, snag_ui_verbosity(ui));
+    render.stdout_terminal = render.stderr_terminal = true;
+    render.markdown = false;
+    /* Only this engine thread renders into the report; the UI keeps its terminal. */
+    snag_term_output_bind(&target);
+    int rc = history_show(ui, session, count, &render);
+    snag_term_output_bind(previous);
+    snag_render_free(&render);
     return rc;
 }
 

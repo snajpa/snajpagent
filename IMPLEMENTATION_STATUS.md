@@ -2,6 +2,14 @@
 
 # Implementation status
 
+Informational slash-command reports share the configured pager. Each invocation
+collects its report before handing over the terminal; `/state` combines status
+and goals, and `/history` reuses the existing event selection and renderer with
+a thread-local report destination. Automatic resume history keeps its normal
+display. Report capture excludes ordinary engine notifications and model output.
+Verbosity queries use the engine report path; setting verbosity stays a local UI
+control. Unset/disabled paging and startup failures retain direct output.
+
 `snajpagent remote mosh HOST COMMAND...` separates Mosh options from the remote
 command automatically, including commands with --resume or --attach. Leading
 Mosh option values and explicit separators remain supported; abbreviated or

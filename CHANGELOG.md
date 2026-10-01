@@ -4,6 +4,11 @@
 
 ## Unreleased
 
+- Page informational command reports through the configured pager, including
+  status, goals, queues, session lists, history, attachments, settings and IRC
+  reports. Keep combined reports in one pager invocation and retain direct
+  output when paging is disabled, unavailable or cannot start.
+
 - Separate Mosh options from remote command arguments in the workstation wrapper,
   so `remote mosh HOST snajpagent --resume ID` works without a manual separator.
   Preserve leading Mosh option values and explicit separators.

@@ -240,6 +240,9 @@ sandbox.
 
 `/help` lists commands and keys; `/status` shows current state. `/queue` lists
 waiting work and its editor revises entries. See the manual for editing controls.
+Command reports use `$PAGER` by default; for example, export `PAGER='less -X'`
+on the host running snajpagent to scroll long reports over Mosh. Quit the pager
+to return to the prompt. `[ui] pager = off` displays reports directly.
 
 `/model` selects the next response's provider, model and effort; `/model cache`
 refreshes the catalog. Selection persists across resume; model-callable switching

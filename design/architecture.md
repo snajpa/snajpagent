@@ -508,6 +508,16 @@ are considered after the current operation. Deferred compaction waits for a safe
 prefix without spinning. Policy recovery can run controls while model work stays
 parked. Shutdown leaves remaining intent for resume rather than launching it.
 
+Informational command output is collected explicitly for one dispatcher
+invocation and passed to the configured pager as a single report. Live engine
+notifications keep their ordinary UI path. The existing external-terminal lease
+handles pager input, resize, suspension and return; its service callback keeps
+managed processes and IRC serviced. History reports share replay and formatting
+with automatic history, using a thread-local output target on the engine thread
+while the presentation thread retains its terminal. Report collection is used
+only with an interactive terminal and an enabled pager. Missing pager programs
+fall back to direct display of the collected report.
+
 UI polling drains actions in receipt order and returns the submission-time view
 and activity state. Text entered at idle just before work starts remains future
 input, rather than steering the new turn. Commands behind it stay responsive.

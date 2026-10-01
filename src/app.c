@@ -151,6 +151,29 @@ app_textf(struct app_state *app, enum snag_ui_operation operation, const char *f
     snag_buf_free(&text);
     return rc;
 }
+
+int
+snag_app_report(struct app_state *app, enum snag_ui_operation operation, const char *text)
+{
+    if (!app->command_report) return snag_ui_text(&app->ui, operation, text);
+    size_t len = strlen(text);
+    if (snag_term_append_safe(app->command_report, text, len) < 0) return -1;
+    return len && text[len - 1u] == '\n' ? 0 : snag_buf_putc(app->command_report, '\n');
+}
+
+static int
+app_reportf(struct app_state *app, const char *format, ...)
+{
+    struct snag_buf text = {.max = SIZE_MAX};
+    va_list args;
+
+    va_start(args, format);
+    int rc = snag_buf_vprintf(&text, format, args);
+    va_end(args);
+    if (!rc) rc = snag_app_report(app, SNAG_UI_HOST, (const char *)text.data);
+    snag_buf_free(&text);
+    return rc;
+}
 static int
 service_attachment(struct app_state *app, bool external)
 {
@@ -529,12 +552,17 @@ commit_input(struct app_state *app, const char *type, json_t *data,
 static int
 render_queue(struct app_state *app)
 {
-    if (app->session.pending_queue_count == 0u) return app_warning(app, "future-turn queue is empty");
+    if (app->session.pending_queue_count == 0u) {
+        return snag_app_report(app, SNAG_UI_WARNING, "future-turn queue is empty");
+    }
     for (size_t i = 0; i < app->session.pending_queue_count; ++i) {
         char label[64];
         (void)snprintf(label, sizeof(label), "%zu %.8s%s › ", i + 1u, app->session.pending_queue[i].queue_id,
                        app->session.pending_queue[i].read_only ? " /ro" : "");
-        if (snag_ui_submitted(&app->ui, label, app->session.pending_queue[i].text, false) < 0) return -1;
+        const char *text = app->session.pending_queue[i].text;
+        int rc = app->command_report ? app_reportf(app, "%s%s", label, text) :
+            snag_ui_submitted(&app->ui, label, text, false);
+        if (rc < 0) return -1;
     }
     return 0;
 }
@@ -1308,7 +1336,7 @@ render_status(struct app_state *app)
     if (app->irc && (snag_buf_putc(&text, '\n') < 0 || snag_irc_state(app->irc, &text, NULL, 0u) < 0))
         goto out;
     if (snag_buf_terminate(&text) < 0) goto out;
-    rc = snag_ui_text(&app->ui, SNAG_UI_HOST, (const char *)text.data);
+    rc = snag_app_report(app, SNAG_UI_HOST, (const char *)text.data);
 out: snag_buf_free(&text);
     return rc;
 }
@@ -1375,8 +1403,9 @@ snag_app_help(struct app_state *app, const char *command)
 {
     struct snag_buf text = {.max = 64u * 1024u};
     int rc = snag_app_help_text(&text, command);
-    if (!rc && !page_reference(app, (const char *)text.data, text.len)) {
-        rc = snag_ui_text(&app->ui, SNAG_UI_HELP, (const char *)text.data);
+    if (!rc && (app->command_report ||
+        !page_reference(app, (const char *)text.data, text.len))) {
+        rc = snag_app_report(app, SNAG_UI_HELP, (const char *)text.data);
     }
     snag_buf_free(&text);
     return rc;
@@ -1384,7 +1413,7 @@ snag_app_help(struct app_state *app, const char *command)
 static int
 show_setting(struct app_state *app, const char *name, const char *value)
 {
-    return app_textf(app, SNAG_UI_HOST, "%s for next turn: %s (until changed)", name, value);
+    return app_reportf(app, "%s for next turn: %s (until changed)", name, value);
 }
 static int
 refresh_model_cache(struct app_state *app, char *error, size_t error_size)
@@ -1635,7 +1664,8 @@ page_reference(struct app_state *app, const char *text, size_t length)
     bool shown = false;
     int rc;
 
-    if (!command || snag_isatty(STDERR_FILENO) != 1) return false;
+    if (!command || app->execute || !app->ui.opened ||
+        snag_isatty(STDIN_FILENO) != 1 || snag_isatty(STDERR_FILENO) != 1) return false;
     if (snag_ui_external(&app->ui, true, error, sizeof(error)) < 0) return false;
     rc = snag_pager_show(command, text, length, &shown, service_external, suspend_external, app,
         app->ui.native ? &app->ui.profile : NULL);
@@ -1693,10 +1723,10 @@ render_model_catalog(struct app_state *app)
     cache_timestamp(timestamp, sizeof(timestamp), app->model_cache.updated_at_ms);
     if (snag_buf_printf(&text, "\ncache updated: %s", timestamp) < 0) goto out;
     if (snag_buf_terminate(&text) < 0) goto out;
-    if (page_reference(app, (const char *)text.data, text.len))
+    if (!app->command_report && page_reference(app, (const char *)text.data, text.len))
         rc = 0;
     else
-        rc = snag_ui_text(&app->ui, SNAG_UI_HOST, (const char *)text.data);
+        rc = snag_app_report(app, SNAG_UI_HOST, (const char *)text.data);
 out: snag_buf_free(&text);
     return rc;
 }
@@ -2367,7 +2397,7 @@ report_context(struct app_state *app, const struct snag_provider_config *provide
             "\nthe next request compacts first: the measured input is over this budget",
             strlen("\nthe next request compacts first: the measured input is over this budget")) < 0) goto out;
     if (snag_buf_terminate(&text) < 0) goto out;
-    rc = snag_ui_text(&app->ui, SNAG_UI_HOST, (const char *)text.data);
+    rc = snag_app_report(app, SNAG_UI_HOST, (const char *)text.data);
 out: snag_buf_free(&text);
     return rc;
 }
@@ -2527,7 +2557,7 @@ network_command(struct app_state *app, const char *line, bool *handled)
     if (!count || count == 4u || (!server && count > 2u))
         return app_error(app, "usage: /server [start [ENDPOINT]|stop], /connect [ENDPOINT], /disconnect [ENDPOINT]");
     if (server) {
-        if (count == 1u) return app_textf(app, SNAG_UI_HOST, config->listen_explicit ?
+        if (count == 1u) return app_reportf(app, config->listen_explicit ?
                 "hosting %s" : "hosting is off; use /server start [ENDPOINT]", config->listen);
         if (count == 2u && strcmp(words[1], "stop") == 0) {
             if (!config->listen_explicit)
@@ -2636,7 +2666,7 @@ change_nick(struct app_state *app, const char *line)
     end = start + strlen(start);
     while (end > start && isspace((unsigned char)end[-1])) --end;
     if (end == start) {
-        return app_textf(app, SNAG_UI_HOST, "model nick: %s\noperator nick: %s",
+        return app_reportf(app, "model nick: %s\noperator nick: %s",
             model_nick && *model_nick ? model_nick : "<none>",
             operator_nick && *operator_nick ? operator_nick : "<none>");
     }
@@ -2700,7 +2730,7 @@ change_steering(struct app_state *app, const char *line)
     while (end > start && isspace((unsigned char)end[-1])) --end;
     if (end == start) {
         effective = effective_steering(app, &overridden);
-        return app_textf(app, SNAG_UI_HOST, "steering for next turn: %s (%s)",
+        return app_reportf(app, "steering for next turn: %s (%s)",
             effective, overridden ? "session override" : "config");
     }
     len = (size_t)(end - start);
@@ -2734,8 +2764,8 @@ change_banner(struct app_state *app, const char *line)
     while (end > start && isspace((unsigned char)end[-1])) --end;
     if (end == start) {
         if (!app->session.banner_text || !*app->session.banner_text)
-            return app_textf(app, SNAG_UI_HOST, "banner: none");
-        return app_textf(app, SNAG_UI_HOST, "banner:\n%s", app->session.banner_text);
+            return app_reportf(app, "banner: none");
+        return app_reportf(app, "banner:\n%s", app->session.banner_text);
     }
     if ((size_t)(end - start) == 5u && strncmp(start, "clear", 5u) == 0) {
         if (snag_app_commit_event(app, "banner_updated", json_pack("{s:s}", "text", ""),
@@ -2876,12 +2906,12 @@ state_command(struct app_state *app, const char *line, bool active)
     if (!*argument) {
         if (render_status(app) < 0) return -1;
         if (snag_app_goal_command(app, "/goal", active) < 0) return -1;
-        return snag_ui_text(&app->ui, SNAG_UI_HOST, goal_actions_text);
+        return snag_app_report(app, SNAG_UI_HOST, goal_actions_text);
     }
     if (strncmp(argument, "goal", 4u) == 0 && (!argument[4] || isspace((unsigned char)argument[4]))) {
         if (!argument[4]) {
             if (snag_app_goal_command(app, "/goal", active) < 0) return -1;
-            return snag_ui_text(&app->ui, SNAG_UI_HOST, goal_actions_text);
+            return snag_app_report(app, SNAG_UI_HOST, goal_actions_text);
         }
         size_t rest = strlen(argument + 4u);
         char *mapped = malloc(5u + rest + 1u);
@@ -2922,6 +2952,16 @@ handle_common_command(struct app_state *app, const char *line, bool active, bool
         *handled = true;
     }
     if (strcmp(line, "/help") == 0 || strcmp(line, "/?") == 0) return snag_app_help(app, NULL);
+    if (snag_verbosity_command(line, strlen(line))) {
+        const char *value = line + 8u;
+        while (isspace((unsigned char)*value)) ++value;
+        if (!*value) {
+            unsigned int level = snag_ui_verbosity(&app->ui);
+            return app_reportf(app, "verbosity: %u (%s)%s", level,
+                snag_verbosity_name(level), snag_ui_view(&app->ui) == SNAG_RENDER_CHAT ?
+                " · work detail is in /rollout" : "");
+        }
+    }
     if (strncmp(line, "/compact", 8u) == 0 && (!line[8] || isspace((unsigned char)line[8]))) {
         const char *rest = line + 8u;
         while (isspace((unsigned char)*rest)) ++rest;
@@ -3015,7 +3055,7 @@ handle_common_command(struct app_state *app, const char *line, bool active, bool
             (len != 4u || strncmp(argument, "list", 4u)))
             return app_error(app,
                 "usage: /session [list|l|name NAME|attach|a ID|detach|d] (alias /s)");
-        if (app_textf(app, SNAG_UI_HOST, "current session: %s%s\n%s sessions:",
+        if (app_reportf(app, "current session: %s%s\n%s sessions:",
                       app->session.id, app->session.pending_log ? " (not yet saved)" : "",
                       len ? "saved" : "running") < 0) return -1;
         if (snag_store_list(&app->store, &app->session,
@@ -3023,14 +3063,16 @@ handle_common_command(struct app_state *app, const char *line, bool active, bool
                             list_columns(app), list_row, app, error, sizeof(error)) < 0) {
             return app_error(app, error);
         }
-        return error[0] ? app_textf(app, SNAG_UI_HOST, "%s", error) : 0;
+        return error[0] ? app_reportf(app, "%s", error) : 0;
     }
     if (strncmp(line, "/history", 8u) == 0 && (!line[8] || isspace((unsigned char)line[8]))) {
         const char *argument = line + 8u;
         uint64_t count = 1u;
         while (isspace((unsigned char)*argument)) ++argument;
         if (*argument && snag_parse_count(argument, &count) < 0) return app_error(app, "usage: /history [N]");
-        return snag_ui_history(&app->ui, &app->session, count);
+        return app->command_report ?
+            snag_ui_history_report(&app->ui, &app->session, count, app->command_report) :
+            snag_ui_history(&app->ui, &app->session, count);
     }
     if (strncmp(line, "/cat", 4u) == 0 && (!line[4] || isspace((unsigned char)line[4])))
         return page_local_file(app, line + 4u);
@@ -3102,7 +3144,7 @@ handle_common_command(struct app_state *app, const char *line, bool active, bool
         rc = snag_buf_printf(&state, "selected destination: %u\n", app->ui.selection.id);
         if (rc == 0) rc = snag_irc_state(app->irc, &state, error, sizeof(error));
         if (rc == 0) rc = snag_buf_terminate(&state);
-        if (rc == 0) rc = snag_ui_text(&app->ui, SNAG_UI_HOST, (const char *)state.data);
+        if (rc == 0) rc = snag_app_report(app, SNAG_UI_HOST, (const char *)state.data);
         snag_buf_free(&state);
         return rc < 0 ? app_error(app, error[0] ? error : "IRC state could not be displayed") : 0;
     }
@@ -3186,8 +3228,8 @@ input_view_toggle(struct app_state *app)
     return toggle_view(app);
 }
 
-int
-snag_app_input_command(struct app_state *app, const char *line, bool active,
+static int
+input_command(struct app_state *app, const char *line, bool active,
                      bool *handled, bool *prompt_ready)
 {
     bool single_line = strchr(line, '\n') == NULL;
@@ -3214,6 +3256,29 @@ snag_app_input_command(struct app_state *app, const char *line, bool active,
         rc = handle_queue_command(app, line, active, handled, error, sizeof(error));
         if (rc != 0 && error[0]) (void)app_error(app, error);
     }
+    return rc;
+}
+
+int
+snag_app_input_command(struct app_state *app, const char *line, bool active,
+    bool *handled, bool *prompt_ready)
+{
+    if (app->command_report || !app->ui.opened || app->execute || !pager_command(app) ||
+        snag_isatty(STDIN_FILENO) != 1 || snag_isatty(STDERR_FILENO) != 1) {
+        return input_command(app, line, active, handled, prompt_ready);
+    }
+
+    struct snag_buf report = {.max = SIZE_MAX};
+    app->command_report = &report;
+    int rc = input_command(app, line, active, handled, prompt_ready);
+    app->command_report = NULL;
+    if (rc == 0 && report.len) {
+        rc = snag_buf_terminate(&report);
+        if (!rc && !page_reference(app, (const char *)report.data, report.len)) {
+            rc = snag_ui_text(&app->ui, SNAG_UI_HELP, (const char *)report.data);
+        }
+    }
+    snag_buf_free(&report);
     return rc;
 }
 
@@ -5253,6 +5318,7 @@ static int
 list_row(void *opaque, const char *text, size_t len)
 {
     struct app_state *app = opaque;
+    if (app->command_report) return snag_buf_append(app->command_report, text, len);
     return snag_ui_send(&app->ui, (struct snag_ui_command){
         .kind = SNAG_UI_RAW, .data.value = (unsigned int)(app->cli->list ? STDOUT_FILENO : STDERR_FILENO), .text = text, .len = len});
 }

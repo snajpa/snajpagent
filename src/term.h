@@ -58,6 +58,8 @@ struct snag_term_command {
 };
 
 struct snag_term {
+    /* A thread-local rendering target for generated reports. */
+    struct snag_buf *capture;
     int (*input_checkpoint)(void *);
     void *input_opaque;
     int (*suspend)(void *);

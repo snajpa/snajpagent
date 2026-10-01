@@ -1617,6 +1617,29 @@ process handles cannot be reused.  Terminal drafts and submissions awaiting
 engine acknowledgement are not yet durable work; the submitted-text or control
 acknowledgement follows event-log acceptance.
 .SS Session and model
+.PP
+Informational command reports use the configured
+.B pager
+on an interactive terminal. This includes /help, /status, /state, goal status,
+/queue, /session lists, /history, /model lists, /context, /effort, /verbose,
+/banner, /attachments, /voice devices, /names, /topic, /nick, /steering and
+/server status, including their aliases. Each command opens one report;
+/state combines session status, goal status and goal actions in that report.
+Commands that display an updated report after a setting change also page it.
+Quit the pager to return to the composer. Brief acknowledgements, errors,
+view switches and ongoing model output remain in the normal terminal display.
+.PP
+With the default
+.BR "pager = on" ,
+set
+.B PAGER
+in the environment where snajpagent runs, for example
+.BR "export PAGER='less -X'" .
+Over Mosh, set it on the remote host; use the pager's scrolling and search keys
+to read reports taller than the terminal. Disabled or unset paging and a pager
+that cannot start use direct output. Noninteractive CLI output stays direct.
+Paged reports contain
+plain text; /history retains its turn labels and displays Markdown source.
 .TP
 .BR /help , " /?"
 Show commands grouped by settings, models/context, goals/queue, sessions,
@@ -3061,19 +3084,19 @@ also restores its room history.
 Output pause after an input edit, 0 through 5000.  Default: 500.
 .TP
 .B pager
-Help, model-catalogue and /cat paging:
+Interactive command-report and /cat paging:
 .B on
 (the default) runs
 .B $PAGER
-when reference text is displayed on a terminal and the variable is set;
+when a report is displayed on a terminal and the variable is set;
 .B off
-prints help and catalogues directly and disables /cat; any other value is a command template.  A
+prints command reports directly and disables /cat; any other value is a command template. A
 template may contain
 .B %s
-where the quoted file path goes; without it the path is appended.  Listings
+where the quoted file path goes; without it the path is appended. Reports
 use a private temporary file, while /cat passes the requested file to the
 pager directly.  The command runs only in interactive mode with terminal
-output; a command that cannot start leaves the listing to the normal display,
+input and output; a command that cannot start leaves the report to the normal display,
 while /cat reports an error.  Example:
 .BR "pager = less -R %s" .
 .TP

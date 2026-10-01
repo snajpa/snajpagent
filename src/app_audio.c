@@ -270,7 +270,7 @@ snag_app_audio_command(struct app_state *app, const char *line, bool *handled)
         snag_buf_init(&names, 128u * 1024u);
         int rc = snag_audio_devices(&names, error, sizeof(error));
         if (!rc) rc = snag_buf_terminate(&names);
-        if (!rc) rc = snag_ui_text(&app->ui, SNAG_UI_HOST, (char *)names.data);
+        if (!rc) rc = snag_app_report(app, SNAG_UI_HOST, (char *)names.data);
         else rc = snag_ui_text(&app->ui, SNAG_UI_ERROR, error);
         snag_buf_free(&names); return rc;
     }

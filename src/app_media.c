@@ -44,7 +44,7 @@ show_attachments(struct app_state *app)
         if (!rc && note) rc = snag_buf_printf(&text, "   %s\n", note);
     }
     if (rc == 0 && snag_buf_terminate(&text) == 0)
-        rc = snag_ui_text(&app->ui, SNAG_UI_HOST, (char *)text.data);
+        rc = snag_app_report(app, SNAG_UI_HOST, (char *)text.data);
     else rc = -1;
     snag_buf_free(&text);
     return rc;

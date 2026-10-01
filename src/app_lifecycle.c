@@ -287,7 +287,7 @@ render_goal(struct app_state *app)
     int rc;
 
     if (app->session.goal_status == SNAG_GOAL_NONE)
-        return snag_ui_text(&app->ui, SNAG_UI_WARNING, "no goal has been set");
+        return snag_app_report(app, SNAG_UI_WARNING, "no goal has been set");
     struct snag_buf text = {.max = SNAG_MAX_GOAL_PROMPT + SNAG_MAX_GOAL_BLOCKER + 512u};
     rc = snag_buf_printf(&text, "goal %s: %s%s\n"
         "turns: %llu · revision: %llu · prompt: %zu/%u bytes\n" "%s",
@@ -301,7 +301,7 @@ render_goal(struct app_state *app)
     if (rc == 0 && app->session.goal_blocker)
         rc = snag_buf_printf(&text, "\nblocker: %s", app->session.goal_blocker);
     if (rc == 0 && snag_buf_terminate(&text) < 0) rc = -1;
-    if (rc == 0) rc = snag_ui_text(&app->ui, SNAG_UI_HOST, (const char *)text.data);
+    if (rc == 0) rc = snag_app_report(app, SNAG_UI_HOST, (const char *)text.data);
     snag_buf_free(&text);
     return rc;
 }

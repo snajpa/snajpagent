@@ -256,6 +256,7 @@ check: $(BIN) $(TEST_BIN)
 	python3 tests/test_upload_client.py
 	python3 tests/test_download_client.py
 	python3 tests/test_remote_terminal.py
+	python3 tests/test_command_pager.py
 	python3 tests/test_remote_ssh.py
 	./tests/test_responses
 	python3 tests/test_response_keepalive.py ./$(BIN)

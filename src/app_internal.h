@@ -44,6 +44,8 @@ struct snag_output_cache {
     bool valid;
 };
 struct app_state {
+    /* Informational output from one command is shown in one pager invocation. */
+    struct snag_buf *command_report;
     /* A user-requested view switch is "in flight" while its target view has not become current;
      * further switch requests are ignored until then, with a deadline so the block cannot stick
      * if the view never lands. SNAG_RENDER_VIEW_COUNT in switch_target means "none in flight". */
@@ -251,6 +253,7 @@ int snag_app_context_preview(struct app_state *app, const struct snag_provider_c
 void snag_app_record_model_accounting(struct app_state *app, enum snag_count_capability capability,
                                      uint64_t hard_input_tokens);
 int snag_app_help(struct app_state *app, const char *command);
+int snag_app_report(struct app_state *, enum snag_ui_operation, const char *);
 int snag_app_help_text(struct snag_buf *text, const char *command);
 int snag_app_goal_command(struct app_state *app, const char *line, bool active);
 int snag_app_goal_tool(struct app_state *app, const struct snag_response_item *call,

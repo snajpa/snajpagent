@@ -176,6 +176,7 @@ snag_term_write(int fd, const void *text, size_t len)
     if (term && term->input_only) return 0;
 
     if (fd < 0) return snag_errno(EBADF);
+    if (term && term->capture) return snag_buf_append(term->capture, text, len);
     return snag_term_output_write(term ? &term->host : NULL, target >= 0 ? target : fd,
         text, len, term && term->raw, term && term->input_checkpoint ? output_checkpoint : NULL, term);
 }
@@ -2041,7 +2042,14 @@ complete_action(struct snag_term *term, enum snag_term_action action, enum snag_
         (!strcmp((const char *)term->draft.data, "trz") ||
          !strcmp((const char *)term->draft.data, "trz -d"))) action = SNAG_TERM_UPLOAD;
     if (action == SNAG_TERM_QUEUE && verbosity) action = SNAG_TERM_SUBMIT;
-    bool local = action == SNAG_TERM_SUBMIT && (destination == SNAG_IRC_TARGET_SELECT || verbosity ||
+    bool verbosity_setting = false;
+    if (verbosity) {
+        size_t value = 8u;
+        while (value < term->draft.len && word_space(term->draft.data[value])) ++value;
+        verbosity_setting = value < term->draft.len;
+    }
+    bool local = action == SNAG_TERM_SUBMIT &&
+        (destination == SNAG_IRC_TARGET_SELECT || verbosity_setting ||
                   (term->blank_local && snag_text_blank((char *)term->draft.data)));
     if (local ? term->local_backlog : term->input_backlog) return snag_term_write(STDERR_FILENO, "\a", 1u);
     if (action == SNAG_TERM_SUBMIT && !local && term->draft.len) {
