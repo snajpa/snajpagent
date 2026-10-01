@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Restore the workstation terminal promptly when its wrapped transport exits,
+  including when background descendants retain an open child terminal.
+
 - Recognize acknowledgements of requested IRC nick changes for both local roles
   and refresh saved identities on every endpoint. Session lists apply later
   recorded renames when an older owner retained a stale nickname snapshot.

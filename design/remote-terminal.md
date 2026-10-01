@@ -5,6 +5,8 @@
 `snajpagent remote COMMAND…` dispatches before ordinary agent CLI/config startup.
 It reads only the local terminal section, chooses a literal command vector (or
 SHELL), owns a child PTY and forwards input, resize, signals and exit status.
+After the child exits, it drains ready output and restores the terminal even
+when a background descendant still holds the child PTY open.
 It creates no local session, provider, tools, IRC runtime or media state.
 `[terminal] download_dir` defaults to `~/Downloads`.
 

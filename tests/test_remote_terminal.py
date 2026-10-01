@@ -145,11 +145,12 @@ class RemoteStartupTests(unittest.TestCase):
                 subprocess.Popen([sys.executable, "-c", "import time; time.sleep(3)"],
                                  stdin=0, stdout=1, stderr=2, start_new_session=True)
                 print("FRONTEND_EXITED", flush=True)
+                sys.exit(7)
             ''')
             child = RemoteProcess(root, [sys.executable, "-u", "-c", peer])
             try:
                 child.until(b"FRONTEND_EXITED", 8)
-                self.assertEqual(child.process.wait(timeout=1.5), 0)
+                self.assertEqual(child.process.wait(timeout=1.5), 7)
             finally:
                 child.close()
 

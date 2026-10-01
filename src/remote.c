@@ -846,6 +846,10 @@ remote_proxy(const char *executable, const char *const *command, const char *dow
             if (!n) ended = true;
             else if (remote_output(&client, bytes, (size_t)n) < 0) { rc = -1; break; }
         }
+        /* A descendant may retain the slave after the transport exits.
+         * Drain ready output, then return ownership of the local terminal. */
+        if (!(ready[0].revents & POLLIN) && snag_child_exited(&child) == 1)
+            ended = true;
         if (!ended && (ready[1].revents & (POLLIN | POLLHUP | POLLERR))) {
             ssize_t n = read(STDIN_FILENO, bytes, sizeof(bytes));
             if (n < 0 && errno == EINTR) continue;

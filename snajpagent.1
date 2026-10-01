@@ -1413,7 +1413,9 @@ The syntax is
 Arguments after the client options are passed literally to a child PTY;
 shell expressions require an explicit shell command. With no command, the
 client starts SHELL, or /bin/sh when SHELL is unset. Resize, terminal signals
-and the child's exit status propagate through the wrapper. Ordinary agent
+and the child's exit status propagate through the wrapper. When the child exits,
+the wrapper drains ready output and restores the terminal, including when a
+background descendant retains the child terminal. Ordinary agent
 options and prompts retain their existing meaning outside this subcommand.
 .PP
 Client mode reads only the workstation configuration's terminal section. It
