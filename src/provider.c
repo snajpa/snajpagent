@@ -1187,8 +1187,12 @@ provider_request_setup(struct provider_ctx *ctx, const struct snag_credential *c
     if (render_request_headers(ctx, request_line, accept, has_body) < 0)
         return snag_errorf(error, error_size, ctx->error[0] ? ctx->error :
                    "provider request headers could not be rendered");
+    /* Each exchange has its own connection; HTTP/2 adds no multiplexing here
+     * and gateway stream resets can discard a long-running Responses request. */
     if (snag_http_trust(ctx->curl) != CURLE_OK ||
         curl_easy_setopt(ctx->curl, CURLOPT_URL, endpoint) != CURLE_OK ||
+        curl_easy_setopt(ctx->curl, CURLOPT_HTTP_VERSION,
+                         (long)CURL_HTTP_VERSION_1_1) != CURLE_OK ||
         curl_easy_setopt(ctx->curl, CURLOPT_NOSIGNAL, 1L) != CURLE_OK ||
         curl_easy_setopt(ctx->curl, CURLOPT_HTTPHEADER, ctx->headers) != CURLE_OK || (has_body ?
          (curl_easy_setopt(ctx->curl, CURLOPT_POST, 1L) != CURLE_OK ||

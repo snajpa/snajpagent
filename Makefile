@@ -263,6 +263,7 @@ check: $(BIN) $(TEST_BIN)
 	python3 tests/test_resume_options.py ./$(BIN)
 	./tests/test_provider_retry
 	./tests/test_provider_transport
+	python3 tests/test_provider_https.py ./$(BIN)
 	./tests/test_context
 	./tests/test_model_cache
 	./tests/test_render

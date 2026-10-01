@@ -4702,6 +4702,11 @@ Older sessions cannot recover reasoning discarded by an earlier executable.
 Plaintext provider reasoning is sensitive journal data:
 protect the session directory and its backups as you would the conversation.
 .SS Provider failures
+Provider HTTP requests use HTTP/1.1, including HTTPS Responses streams, to avoid
+HTTP/2 framing failures from intermediaries during long responses. TLS certificate
+and hostname verification remain enabled. Each exchange has its own connection;
+provider requests do not share a multiplexed HTTP/2 connection.
+.PP
 If a provider stream closes before
 .BR response.completed ,
 the incomplete response enters ordinary recovery. Public text remains retained;

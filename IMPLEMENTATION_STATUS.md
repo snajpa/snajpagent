@@ -2,6 +2,11 @@
 
 # Implementation status
 
+Provider HTTP requests explicitly use HTTP/1.1. The HTTPS ALPN regression
+reproduces an HTTP/2 stream reset with the previous executable, then verifies
+completion, no replay after partial output and rejection of an untrusted TLS
+certificate. Existing transport retries and Responses validation remain intact.
+
 Custom `[ui] prompt` templates expose `{operator}`, `{model_nick}` and
 `{session_name}`. Nick fields follow accepted endpoint identities; saved names
 survive resume and update on rename. Default prompts retain their existing layout.

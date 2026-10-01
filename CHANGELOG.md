@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Use HTTP/1.1 for provider requests so HTTPS Responses streams avoid HTTP/2
+  gateway resets. Preserve TLS verification and partial-output replay guards.
+
 - Add optional `{model_nick}` and `{session_name}` prompt fields beside
   `{operator}`. Nick fields follow the selected IRC endpoint in chat; session
   names follow saved renames and resume. Default prompts retain their layout.

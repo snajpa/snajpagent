@@ -665,6 +665,15 @@ capacity metadata in the local catalog; Codex routes use their dedicated
 catalog shape. Capacity is source-bound to the configured URL and protocol,
 while typed model identifiers are not checked against the catalog.
 
+The common provider request setup explicitly selects HTTP/1.1, including HTTPS
+Responses, count/compact, catalog and media requests. Every exchange creates its
+own curl multi handle and connection; there is no shared HTTP/2 multiplexing to
+retain. Avoiding HTTP/2 prevents gateway stream resets from discarding long
+Responses requests. TLS verification, cancellation and the existing retry
+admission rules remain unchanged. The HTTPS fixture offers HTTP/2 first and
+resets those streams, verifying HTTP/1.1 completion, TLS trust rejection and no
+replay after partial output.
+
 Hosted web search is exposed as a Responses request tool. There is no separate
 helper binary for web search.
 The active turn's provider URL selects `openrouter:web_search` for the exact
@@ -680,7 +689,7 @@ resume; it never enters the local call graph, dispatcher, or model context.
 The same hostname identity recognizes OpenRouter's absent optional token-count
 route (404) in automatic counting; strict counting still fails, and generic
 404/authentication failures remain errors. HTTP response status comes from
-libcurl, including HTTP/2 and HTTP/3 status lines without reason phrases.
+libcurl rather than depending on a reason phrase in the status line.
 An unlabelled SSE `[DONE]` sentinel is accepted only after a valid Responses
 terminal event; it cannot complete an otherwise unfinished response.
 SSE comments and the subscription-usage trailer remain accepted. Structured
