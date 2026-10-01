@@ -2910,11 +2910,12 @@ def run_help_case(binary, root, active=False, chat=False, width=80):
             assert syntax in text, (syntax, screen)
         for syntax in ("/help", "/?", "/status", "/history [N]", "/config", "/effort [LEVEL]",
                 "/ro QUERY", "/verbose [0..6]", "/queue [TEXT]", "/queue clear|c", "/queue pop|p",
-                "/next", "/retry", "/yield", "/archive", "/compact", "/delete", "/exit",
+                "/next", "/retry", "/yield", "/compact", "/delete", "/exit",
                 "/chat", "/rollout", "/topic [TEXT]", "/names", "/server [start [ENDPOINT]|stop]",
                 "/connect [ENDPOINT]", "/disconnect [ENDPOINT]", "/N [TEXT]", "/all TEXT"):
             assert syntax + " — " in text, (syntax, screen)
         assert "alias /q" in text and "save (s)" in text
+        assert "/archive" not in text
         assert "[COMMAND|TEXT]" not in text and "[TEXT|ACTION]" not in text
         assert "blank Enter" in text and "empty Ctrl-D" in text
         assert "host[:port]" in text and "[IPv6][:port]" in text
@@ -3473,9 +3474,11 @@ def run_pre_request_composer_case(binary, root, early_steer=False):
     config.write_text(config.read_text().replace("idle_timeout_ms = 3000", "idle_timeout_ms = 120000")
                       .replace("request_timeout_ms = 5000", "request_timeout_ms = 120000"))
     entered, release = threading.Event(), threading.Event()
+    steer_release = threading.Event()
 
     def respond(handler, request, sequence):
         if early_steer and sequence != 1:
+            assert steer_release.wait(90), "the fixture did not release steering"
             provider.reply(handler, provider.response_body(sequence, "pre-ack steer settled").encode())
             return
         entered.set()
@@ -3505,6 +3508,7 @@ def run_pre_request_composer_case(binary, root, early_steer=False):
             events = wait_event_count(case / "s", "steering_added", 1)
             assert event_list(events, "steering_added")[0]["data"]["text"] == "steer-before-created"
             assert not event_list(events, "response_completed")
+            steer_release.set()
             terminal.wait("pre-ack steer settled")
             assert len(provider.requests) >= 2
             assert provider.latest_user(provider.requests[-1]["body"]) == "steer-before-created"
@@ -3522,6 +3526,7 @@ def run_pre_request_composer_case(binary, root, early_steer=False):
             raise AssertionError(provider.failure)
     finally:
         release.set()
+        steer_release.set()
         if terminal is not None:
             terminal.close()
         provider.close()
@@ -7047,9 +7052,11 @@ def run_nested_command_cases(binary, root, modes=("nested", "nested-resume", "po
                 wait_event_count(state, "control_finished", 1, timeout=2)
                 assert len(seen) == before
                 terminal.submit("/archive")
-                terminal.wait_dead()
+                terminal.wait("unknown slash command")
+                assert not terminal.dead()
+                terminal.exit()
                 events = read_events(state)[1]
-                assert event_list(events, "session_archived")
+                assert not event_list(events, "session_archived")
             elif mode in ("editor", "idle-editor"):
                 if mode == "editor":
                     terminal.submit("hold")
