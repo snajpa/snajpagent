@@ -311,10 +311,11 @@ int snag_store_find_name(struct snag_store *, const char *name, char id[SNAG_ID_
  * On EEXIST, matches_emit (if non-NULL) receives each full matching ID + newline. */
 int snag_session_locate(struct snag_store *, struct snag_session *, const char *prefix,
                         snag_store_emit_fn matches_emit, void *, char *error, size_t error_size);
-enum snag_session_list { SNAG_SESSIONS_ALL, SNAG_SESSIONS_RUNNING };
-/* Supply the caller's owned session so probing never opens/closes its lock. */
+/* Supply the caller's owned session so probing never opens/closes its lock.
+ * All running sessions precede up to stored_limit saved sessions, newest first
+ * within each attachment state. UINT64_MAX includes all stored sessions. */
 int snag_store_list(struct snag_store *store, const struct snag_session *owned,
-                    enum snag_session_list filter, unsigned int columns,
+                    uint64_t stored_limit, unsigned int columns,
                     snag_store_emit_fn emit, void *opaque,
                     char *error, size_t error_size);
 int snag_session_delete(struct snag_store *store, struct snag_session *session,

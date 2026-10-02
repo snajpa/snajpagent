@@ -3059,7 +3059,7 @@ handle_common_command(struct app_state *app, const char *line, bool active, bool
                       app->session.id, app->session.pending_log ? " (not yet saved)" : "",
                       len ? "saved" : "running") < 0) return -1;
         if (snag_store_list(&app->store, &app->session,
-                            len ? SNAG_SESSIONS_ALL : SNAG_SESSIONS_RUNNING,
+                            len ? UINT64_MAX : 0u,
                             list_columns(app), list_row, app, error, sizeof(error)) < 0) {
             return app_error(app, error);
         }
@@ -5324,7 +5324,7 @@ list_row(void *opaque, const char *text, size_t len)
 }
 
 static int
-pick_session_id(struct app_state *app, enum snag_session_list filter, char **id,
+pick_session_id(struct app_state *app, uint64_t stored_limit, char **id,
                  char *error, size_t error_size)
 {
     const char *frames[SNAG_TERM_SPINNER_COUNT] = {" ", " ", " "};
@@ -5333,7 +5333,7 @@ pick_session_id(struct app_state *app, enum snag_session_list filter, char **id,
     int rc = -1;
 
     *id = NULL;
-    if (snag_store_list(&app->store, NULL, filter, list_columns(app),
+    if (snag_store_list(&app->store, NULL, stored_limit, list_columns(app),
             list_row, app, error, error_size) < 0 ||
         snag_ui_open(&app->ui, error, error_size) < 0 ||
         snag_ui_prompt(&app->ui, false, "session › ", frames, 1u, 0u) < 0) return -1;
@@ -5358,7 +5358,7 @@ static int
 pick_session(struct app_state *app, char *error, size_t error_size)
 {
     char *prefix = NULL;
-    int rc = pick_session_id(app, SNAG_SESSIONS_ALL, &prefix, error, error_size);
+    int rc = pick_session_id(app, UINT64_MAX, &prefix, error, error_size);
     if (!rc) rc = snag_session_open(&app->store, &app->session, prefix, error, error_size);
     free(prefix);
     return rc;
@@ -5881,7 +5881,7 @@ run_owner(const struct snag_cli *cli, const char *program, struct snag_session_p
         "cannot use the home directory as the default working directory");
     if (!cwd) goto fail;
     if (cli->list) {
-        rc = snag_store_list(&app.store, NULL, SNAG_SESSIONS_ALL,
+        rc = snag_store_list(&app.store, NULL, cli->list_stored,
                             list_columns(&app), list_row, &app,
                             error, sizeof(error)) < 0 ? 3 : 0;
         if (rc) (void)snag_ui_text(&app.ui, SNAG_UI_ERROR, error);
@@ -6100,7 +6100,7 @@ select_startup_session(const struct snag_cli *cli, char **selected, bool *live,
             prefix = id;
         } else {
             if (snag_ui_init(&app.ui) < 0) goto out;
-            rc = pick_session_id(&app, cli->resume ? SNAG_SESSIONS_ALL : SNAG_SESSIONS_RUNNING,
+            rc = pick_session_id(&app, cli->resume ? UINT64_MAX : 0u,
                                   &picked, error, error_size);
             snag_ui_free(&app.ui);
             if (rc < 0) goto out;

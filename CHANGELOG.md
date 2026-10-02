@@ -4,6 +4,12 @@
 
 ## Unreleased
 
+- Sort session lists by status: attached, detached, then stored, with the latest
+  saved activity first in each group. Rename PROCESS to STATUS. `-l` includes
+  all running sessions and the 10 most recent stored sessions; `-l N` changes
+  the stored count, including zero. Resume pickers and `/session list` include
+  all stored sessions.
+
 - Page informational command reports through the configured pager, including
   status, goals, queues, session lists, history, attachments, settings and IRC
   reports. Keep combined reports in one pager invocation and retain direct

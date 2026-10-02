@@ -105,10 +105,14 @@ List sessions or reopen the latest one:
 
 ```sh
 snajpagent -l
+snajpagent -l 25
 snajpagent --resume --last
 ```
 
-Tables show `attached`/`detached`/`stored`, prompts and IRC `nick@endpoint` (`s/` server, `c/` client). Name sessions with
+Current-source `-l` lists all attached sessions, then all detached sessions, then
+the 10 most recent stored sessions. `-l N` changes the stored count; `-l 0` shows
+running sessions only. Each group puts the latest saved activity first.
+Tables show `STATUS`, prompts and IRC `nick@endpoint` (`s/` server, `c/` client). Name sessions with
 `snajpagent -N lead`, or `/session name lead`.
 `snajpagent --attach -N lead` reconnects while it runs;
 `snajpagent --resume -N lead` attaches if running or reopens it if stored.

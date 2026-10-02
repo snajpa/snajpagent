@@ -19,6 +19,7 @@ void
 snag_cli_init(struct snag_cli *cli)
 {
     memset(cli, 0, sizeof(*cli));
+    cli->list_stored = 10u;
 }
 
 enum snag_color_mode
@@ -193,7 +194,7 @@ parse_options(struct snag_cli *cli, int argc, char **argv, int *index, char *err
         {"--attach", 'A', false, NULL, &cli->attach},
         {"--no-listen", 0, false, NULL, &cli->irc_no_listen},
         {"--no-client", 0, false, NULL, &cli->irc_no_client}, {NULL, 'e', false, NULL, &cli->execute},
-        {NULL, 'l', false, NULL, &cli->list}, {"--help", 'h', false, NULL, &cli->help},
+        {NULL, 'l', true, NULL, &cli->list}, {"--help", 'h', false, NULL, &cli->help},
         {"--update-model-cache", 0, false, NULL, &cli->update_model_cache},
         {NULL, 'V', false, NULL, &cli->version}, {NULL, 'v', false, NULL, NULL},
         {NULL, 'd', true, NULL, NULL}, {"--color", 0, true, NULL, NULL},
@@ -233,6 +234,13 @@ parse_options(struct snag_cli *cli, int argc, char **argv, int *index, char *err
                 return snag_errorf(error, error_size, "duplicate %s option", name);
             *option->toggle = true;
             if (flag == 'h' && long_option) cli->manual = true;
+            if (flag == 'l') {
+                const char *count = attached && *attached ? attached : NULL;
+                if (!count && *index + 1 < argc && argv[*index + 1][0] != '-')
+                    count = argv[++*index];
+                if (count && snag_parse_count(count, &cli->list_stored) < 0)
+                    return snag_errorf(error, error_size, "-l count must be a nonnegative integer");
+            }
         } else if (flag == 'v') {
             if (cli->verbosity == SNAG_VERBOSITY_MAX)
                 return snag_errorf(error, error_size, "at most six -v flags are allowed");
@@ -334,6 +342,8 @@ snag_cli_parse(struct snag_cli *cli, int argc, char **argv, char *error, size_t 
     }
     if ((cli->irc_no_listen && cli->irc_listen) || (cli->irc_no_client && cli->irc_client_count))
         return snag_errorf(error, error_size, "conflicting positive and negative IRC role options");
+    if (cli->list && positional >= 0 && positional < argc)
+        return snag_errorf(error, error_size, "-l accepts one optional stored-session count");
     if (!cli->execute && !cli->resume && !dashdash && positional >= 0 &&
         (strcmp(argv[positional], "login") == 0 || strcmp(argv[positional], "logout") == 0))
         return parse_auth_command(cli, argc, argv, positional, error, error_size);
@@ -398,7 +408,8 @@ snag_cli_usage(int fd)
         "       " SNAJPAGENT_NAME
         " --resume [OPTIONS] [SESSION_ID|-N NAME|--last] [-- FOLLOW-UP...]\n"
         "       " SNAJPAGENT_NAME " --attach [--dotdir DIR] [SESSION_ID|-N NAME] (alias -A)\n"
-        "       " SNAJPAGENT_NAME " -e [OPTIONS] [-- PROMPT...]\n" "       " SNAJPAGENT_NAME " -l [OPTIONS]\n"
+        "       " SNAJPAGENT_NAME " -e [OPTIONS] [-- PROMPT...]\n"
+        "       " SNAJPAGENT_NAME " -l [N] [OPTIONS]\n"
         "       " SNAJPAGENT_NAME " [OPTIONS] login [PROVIDER] [--openai-device-auth|--meta-device-auth|--with-api-key]\n"
         "       " SNAJPAGENT_NAME " [OPTIONS] login status [PROVIDER]\n"
         "       " SNAJPAGENT_NAME " [OPTIONS] logout [PROVIDER]\n"
@@ -426,7 +437,9 @@ snag_cli_usage(int fd)
         "                               4 debug; 5 protocol; 6 wire (default 0)\n"
         "      --resume [ID|--last]      attach if running; resume if stored\n"
         "  -e                           one-shot execution (prompt/stdin, or saved work on resume)\n"
-        "  -l                           list sessions\n" "  -h                           show short help\n"
+        "  -l [N]                       list running sessions, then N recent stored sessions\n"
+        "                               (default 10; zero for running only)\n"
+        "  -h                           show short help\n"
         "      --help                   open the manual (short help if unavailable)\n"
         "  -V                           show version\n";
     (void)snag_write_full(fd, text, sizeof(text) - 1u);

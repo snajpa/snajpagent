@@ -2084,13 +2084,13 @@ main(void)
     {
         int fd = open(list_path, O_CREAT | O_TRUNC | O_WRONLY, 0600);
         assert(fd >= 0);
-        assert(snag_store_list(&store, &session, SNAG_SESSIONS_ALL, 0u,
+        assert(snag_store_list(&store, &session, UINT64_MAX, 0u,
                               list_to_fd, &fd, error, sizeof(error)) == 0);
         assert(close(fd) == 0);
         assert(read_file(list_path, list_buf, sizeof(list_buf)) > 0u);
         assert(strstr(list_buf, id_prefix) != NULL);
         assert(strstr(list_buf, unique_prefix) != NULL);
-        assert(strstr(list_buf, "STATUS") == NULL);
+        assert(strstr(list_buf, "\tSTATUS\t") != NULL);
     }
     assert_session_lock_retained(&session, "after listing");
     assert(unlinkat(store.sessions_fd, collision, AT_REMOVEDIR) == 0);

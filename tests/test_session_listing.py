@@ -19,7 +19,7 @@ from pathlib import Path
 import tmux_terminal as harness
 
 
-HEADER = ["SESSION", "NAME", "MODEL", "TURNS", "PROCESS", "LAST PROMPT", "IRC"]
+HEADER = ["SESSION", "NAME", "MODEL", "TURNS", "STATUS", "LAST PROMPT", "IRC"]
 
 
 def canonical(value):

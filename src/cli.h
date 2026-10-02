@@ -7,6 +7,7 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 
 #define SNAG_CLI_IRC_CLIENT_MAX 16u
 
@@ -23,6 +24,7 @@ struct snag_cli {
     bool attach;
     bool execute;
     bool list;
+    uint64_t list_stored;
     bool last;
     bool prompt_after_dashdash;
     bool help;

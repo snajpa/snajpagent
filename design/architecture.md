@@ -42,7 +42,11 @@ existing string table retains it; older checkpoints have no name. `-N` names new
 sessions and selects an exact name for attach/resume. Name lookup reads snapshots
 without acquiring the session writer lock. Duplicate names list candidate IDs.
 `/session name` updates the owned session, including during active work. Lists
-show column headings and attached/detached/stored process state. The writer lock
+show column headings and attached/detached/stored status. Rows sort in that order,
+then by latest journal timestamp descending and session ID descending for ties.
+`-l` includes every running session and the latest 10 stored sessions; `-l N`
+changes the stored count, including zero. Resume pickers and `/session list`
+include all stored sessions. The writer lock
 distinguishes stored sessions; a read-only STATUS request to the native relay
 distinguishes an activated (or suspended) terminal from a detached owner. New
 connections send RESERVE or STATUS before they can acquire a terminal reservation.

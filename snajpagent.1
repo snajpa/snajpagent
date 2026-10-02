@@ -22,6 +22,7 @@ snajpagent \- terminal coding agent with built-in IRC
 .RI "[-- " prompt " ...]"
 .br
 .B snajpagent \-l
+.RI [ N ]
 .RI [ options ]
 .br
 .B snajpagent
@@ -529,6 +530,12 @@ that exact session. You can also list sessions with
 .B snajpagent -l
 or reopen the newest session with
 .BR "snajpagent --resume --last" .
+Listing shows all attached sessions, then all detached sessions, then the 10
+most recent stored sessions. Use
+.B snajpagent -l 25
+to include 25 stored sessions, or
+.B snajpagent -l 0
+for running sessions only. Each group shows the latest saved activity first.
 Use
 .B snajpagent --resume -N lead
 to attach to a running session or resume a stored one by name.
@@ -959,15 +966,21 @@ Execute one turn and exit.  The prompt must follow
 .B \-\-
 or arrive on non-terminal standard input.  Network options are not accepted.
 .TP
-.BR \-l
-List saved sessions and exit. Only
+.BR \-l " [N]"
+List all attached sessions, then all detached sessions, then up to N stored
+sessions and exit. N defaults to 10 and must be a nonnegative integer; zero
+shows running sessions only. Put N immediately after -l, before other options.
+Each status group sorts by latest saved activity, newest first; equal timestamps
+sort by session ID descending. The count applies to stored sessions only.
+Resume pickers and /session list include all saved sessions.
+Only
 .BR \-\-dotdir ,
 .BR \-\-config ,
 color options, Markdown presentation options, and
 .B \-\-update-model-cache
 may accompany it.  Markdown
 presentation has no useful effect on session-list output. The table has headings
-for session ID, name, model, turn count, process state, last prompt and IRC.
+for session ID, name, model, turn count, status, last prompt and IRC.
 The last two columns share the remaining terminal width equally. Long cells end
 with an ellipsis; session IDs stay intact and expand beyond eight characters
 when needed to distinguish sessions. Widths account for wide Unicode characters. Redirected output
@@ -983,7 +996,7 @@ endpoints. Stored sessions show their last recorded topology and nicks. An IRC p
 ENDPOINT: MESSAGE, resolving saved event references to the latest message
 in that prompt. Ordinary prompts show the latest saved user text.
 An unnamed session shows a dash in the name column.
-The process column shows attached while a terminal client is connected,
+The STATUS column shows attached while a terminal client is connected,
 detached while the session runs without one, and stored when only saved history
 remains. A suspended terminal retains its attachment. A connection still reserving
 or repainting its terminal becomes attached after activation. Listing queries the
@@ -1667,7 +1680,8 @@ session is identified as not yet saved; listing does not start a model turn.
 .TP
 .BR "/session list" , " /session l" , " /s list" , " /s l"
 Print the current session ID and all saved sessions,
-with column headings and their attached, detached or stored process state.
+with column headings and their attached, detached or stored status, in that order.
+Each group shows the latest saved activity first.
 This does not attach to or resume a session.
 .TP
 .BR "/session attach ID" , " /session a ID" , " /s a ID"

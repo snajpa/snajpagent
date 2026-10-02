@@ -669,19 +669,37 @@ list_text_width(const char *text)
     return width;
 }
 
+struct session_list_row {
+    json_t *cells;
+    uint64_t time_ms;
+    unsigned int status;
+};
+
 static int
-emit_list(const json_t *rows, unsigned int columns, snag_store_emit_fn emit, void *opaque)
+compare_list_rows(const void *left, const void *right)
+{
+    const struct session_list_row *a = left, *b = right;
+
+    if (a->status != b->status) return a->status < b->status ? -1 : 1;
+    if (a->time_ms != b->time_ms) return a->time_ms > b->time_ms ? -1 : 1;
+    return strcmp(json_string_value(json_array_get(b->cells, 0u)),
+        json_string_value(json_array_get(a->cells, 0u)));
+}
+
+static int
+emit_list(const struct session_list_row *rows, size_t count, unsigned int columns,
+    snag_store_emit_fn emit, void *opaque)
 {
     static const char *const headers[] = {
-        "SESSION", "NAME", "MODEL", "TURNS", "PROCESS", "LAST PROMPT", "IRC"};
-    size_t widths[] = {8u, 4u, 5u, 5u, 7u, 11u, 3u};
+        "SESSION", "NAME", "MODEL", "TURNS", "STATUS", "LAST PROMPT", "IRC"};
+    size_t widths[] = {8u, 4u, 5u, 5u, 6u, 11u, 3u};
     struct snag_buf line = {.max = SNAG_MAX_DIRECT_PROMPT};
     int rc = -1;
 
-    for (size_t row = 0u; row < json_array_size(rows); ++row) {
+    for (size_t row = 0u; row < count; ++row) {
         for (size_t col = 0u; col < 5u; ++col) {
             size_t width = list_text_width(json_string_value(
-                json_array_get(json_array_get(rows, row), col)));
+                json_array_get(rows[row].cells, col)));
             if (width > widths[col]) widths[col] = width;
         }
     }
@@ -705,11 +723,11 @@ emit_list(const json_t *rows, unsigned int columns, snag_store_emit_fn emit, voi
         widths[5] = remaining / 2u;
         widths[6] = remaining - widths[5];
     }
-    for (size_t row = 0u; row <= json_array_size(rows); ++row) {
+    for (size_t row = 0u; row <= count; ++row) {
         line.len = 0u;
         for (size_t col = 0u; col < 7u; ++col) {
             const char *text = row ? json_string_value(
-                json_array_get(json_array_get(rows, row - 1u), col)) : headers[col];
+                json_array_get(rows[row - 1u].cells, col)) : headers[col];
             if ((col && snag_buf_append(&line, columns ? "  " : "\t", columns ? 2u : 1u) < 0) ||
                 append_list_preview(&line, text, columns ? widths[col] : 80u,
                     columns && col != 6u) < 0) goto out;
@@ -725,43 +743,67 @@ out:
 
 int
 snag_store_list(struct snag_store *store, const struct snag_session *owned,
-    enum snag_session_list filter, unsigned int columns, snag_store_emit_fn emit,
+    uint64_t stored_limit, unsigned int columns, snag_store_emit_fn emit,
     void *opaque, char *error, size_t error_size)
 {
     struct snag_directory *dir = open_sessions_dir(store, error, error_size);
     const char *entry;
-    json_t *rows = json_array();
+    struct session_list_row *rows = NULL;
+    size_t count = 0u, capacity = 0u;
     int rc = -1;
 
-    if (!dir || !rows) goto out;
+    if (!dir) goto out;
     while ((entry = snag_directory_next(dir)) != NULL) {
         struct snag_session snapshot;
         if (matching_snapshot(store, &snapshot, entry) < 0) continue;
         /* Closing a second descriptor of our lock drops the owner's POSIX lock. */
         bool live = owned && owned->lock_fd >= 0 && !strcmp(owned->id, entry);
         if (!live) live = snag_session_is_live(&snapshot);
-        if (filter == SNAG_SESSIONS_RUNNING && !live) {
+        if (!stored_limit && !live) {
             snag_session_close(&snapshot);
             continue;
         }
-        const char *state = !live ? "stored" :
+        unsigned int status = !live ? 2u :
             snag_session_endpoint_status(snapshot.dir_fd, snapshot.dir_path) > 0 ?
-            "attached" : "detached";
-        json_t *cells = list_cells(store, &snapshot, state, columns);
+            0u : 1u;
+        static const char *const states[] = {"attached", "detached", "stored"};
+        uint64_t time_ms = snapshot.last_time_ms;
+        json_t *cells = list_cells(store, &snapshot, states[status], columns);
         snag_session_close(&snapshot);
-        if (!cells || json_array_append_new(rows, cells) < 0) goto out;
+        if (!cells) goto out;
+        if (count == capacity) {
+            size_t next = capacity ? capacity * 2u : 16u;
+            struct session_list_row *grown = NULL;
+            if (next > capacity && next <= SIZE_MAX / sizeof(*rows))
+                grown = realloc(rows, next * sizeof(*rows));
+            if (!grown) {
+                json_decref(cells);
+                goto out;
+            }
+            rows = grown;
+            capacity = next;
+        }
+        rows[count++] = (struct session_list_row){cells, time_ms, status};
     }
     rc = finish_directory(dir, error, error_size);
     dir = NULL;
     if (rc < 0) goto out;
-    if (!json_array_size(rows)) {
+    if (!count) {
         (void)snag_errorf(error, error_size, "no matching sessions");
     } else {
-        rc = emit_list(rows, columns, emit, opaque);
+        qsort(rows, count, sizeof(*rows), compare_list_rows);
+        size_t visible = 0u;
+        uint64_t stored = 0u;
+        while (visible < count) {
+            if (rows[visible].status == 2u && stored++ >= stored_limit) break;
+            ++visible;
+        }
+        rc = emit_list(rows, visible, columns, emit, opaque);
     }
 out:
     if (dir) (void)snag_directory_close(dir);
-    json_decref(rows);
+    for (size_t row = 0u; row < count; ++row) json_decref(rows[row].cells);
+    free(rows);
     if (rc < 0 && error_size && !error[0])
         (void)snag_errorf(error, error_size, "cannot write session list");
     return rc;

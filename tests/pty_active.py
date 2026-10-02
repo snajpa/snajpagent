@@ -670,7 +670,7 @@ def test_session_list_keeps_live_owner():
         child.wait_idle_prompt(start=end)
         return bytes(child.buf[start:])
 
-    header = rb"SESSION +NAME +MODEL +TURNS +PROCESS +LAST PROMPT +IRC"
+    header = rb"SESSION +NAME +MODEL +TURNS +STATUS +LAST PROMPT +IRC"
     with Child([], ready=DEFAULT_IDLE_PROMPT, cols=160) as stopped:
         end = stopped.send_wait(b"stopped-session-regression\r", b"fixture answer")
         stopped.wait_idle_prompt(start=end)
@@ -866,7 +866,7 @@ def test_session_names():
     listed = run("-l")
     assert listed.returncode == 0, listed
     assert listed.stdout.splitlines()[0].split("\t") == [
-        "SESSION", "NAME", "MODEL", "TURNS", "PROCESS", "LAST PROMPT", "IRC"], listed
+        "SESSION", "NAME", "MODEL", "TURNS", "STATUS", "LAST PROMPT", "IRC"], listed
     row = next(line.split("\t") for line in listed.stdout.splitlines()
                if line.startswith(sid[:8] + "\t"))
     assert row[1] == name and row[4] == "stored", row

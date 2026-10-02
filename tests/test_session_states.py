@@ -112,8 +112,80 @@ def check(binary, previous=None):
             records = list(map(json.loads, next(p for p in journals() if p.parent.name == sid)
                                .read_text().splitlines()))
             assert [e["data"]["text"] for e in records if e["type"] == "turn_started"] == ["ping"]
+
+            # Interleave live states, then create newer stored sessions. Running
+            # sessions must all stay ahead of even the most recently saved work.
+            statuses = {p.parent.name: "stored" for p in journals()}
+            attached = []
+            for name, status in (("attached-old", "attached"), ("detached-old", "detached"),
+                                 ("attached-new", "attached"), ("detached-new", "detached")):
+                child = start(["-N", name], "›".encode())
+                live_id = next(p.parent.name for p in journals() if p.parent.name not in statuses)
+                if status == "detached":
+                    finish(child, b"/s d")
+                else:
+                    attached.append(child)
+                statuses[live_id] = status
+            for number in range(12):
+                result = subprocess.run(prefix + ["-N", f"stored-{number}", "-e", "--", "ping"],
+                                        cwd=root, env={**os.environ, **env},
+                                        capture_output=True, timeout=20)
+                assert result.returncode == 0, result.stderr
+                new_id = next(p.parent.name for p in journals() if p.parent.name not in statuses)
+                statuses[new_id] = "stored"
+            # An old session with new activity belongs at the top of stored rows.
+            result = subprocess.run(prefix + ["--resume", sid, "-e", "--", "recent activity"],
+                                    cwd=root, env={**os.environ, **env},
+                                    capture_output=True, timeout=20)
+            assert result.returncode == 0, result.stderr
+            saved = {p: p.read_bytes() for p in journals()}
+            times = {p.parent.name: json.loads(data.splitlines()[-1])["time_ms"]
+                     for p, data in saved.items()}
+            ordered = {status: sorted((key for key in statuses if statuses[key] == status),
+                                     key=lambda key: (times[key], key), reverse=True)
+                       for status in ("attached", "detached", "stored")}
+            assert ordered["stored"][0] == sid
+
+            def listing(args, limit):
+                result = subprocess.run(prefix + args, cwd=root, env={**os.environ, **env},
+                                        capture_output=True, text=True, timeout=10)
+                assert result.returncode == 0 and not result.stderr, result.stderr
+                lines = result.stdout.splitlines()
+                rows = [line.split("\t") for line in lines[1:]]
+                expected = ordered["attached"] + ordered["detached"] + ordered["stored"][:limit]
+                actual = [next(key for key in statuses if key.startswith(row[0])) for row in rows]
+                assert actual == expected, (args, actual, expected)
+                assert lines[0].split("\t")[4] == "STATUS", lines[0]
+                assert [row[4] for row in rows] == [statuses[key] for key in expected]
+
+            listing(["-l"], 10)
+            listing(["-l", "0"], 0)
+            listing(["-l", "1"], 1)
+            listing(["-l", "3", "--no-color"], 3)
+            listing(["-l3"], 3)
+            listing(["-l", "14"], 14)
+            listing(["-l", "18446744073709551615"], 14)
+            for args in (["-l", "nope"], ["-l", "-1"], ["-l", "1.5"], ["-l", ""],
+                         ["-l", "1", "2"], ["-l", "3", "-l"], ["-l", "3", "-e"]):
+                result = subprocess.run(prefix + args, cwd=root, env={**os.environ, **env},
+                                        capture_output=True, timeout=10)
+                assert result.returncode != 0 and result.stderr, args
+            assert all(p.read_bytes() == data for p, data in saved.items()), "listing changed history"
+
+            # The complete saved-session picker and slash list retain older rows.
+            picker = start(["--resume"], "session › ".encode())
+            for key in statuses:
+                assert key[:8].encode() in picker.output, (key, bytes(picker.output))
+            picker.close()
+            attached[0].output.clear()
+            os.write(attached[0].master, b"/s l\r")
+            for key in statuses:
+                attached[0].until(key[:8].encode(), 10)
+            for child in attached:
+                finish(child, b"/exit")
             assert not provider.failure, provider.failure
             print("session states, CLI/picker/slash short IDs and read-only listing: ok", flush=True)
+            print("session list status order, recent stored counts and argument validation: ok", flush=True)
     finally:
         for pid, saved in owners.items():
             if identity(pid) == saved:
