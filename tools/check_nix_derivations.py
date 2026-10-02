@@ -75,6 +75,18 @@ def check_device_audio() -> None:
     print("nixcheck: ok (production platform recipes enable device audio)")
 
 
+def check_speex_cross_build() -> None:
+    """Patched Speex inputs regenerate, and LLVM installs avoid BSD ranlib -t."""
+    text = (ROOT / "nix" / "voice-rtc-cross.nix").read_text(encoding="utf-8")
+    speex = text.split("  speex =", 1)[1].split("  juice =", 1)[0]
+    require("nativeBuildInputs" in speex and "pkgs.autoreconfHook" in speex,
+            "cross Speex must regenerate the Makefile.am changed by Windows patches")
+    require("postConfigure" in speex and "substituteInPlace libtool" in speex
+            and "--replace-quiet 'RANLIB -t' 'RANLIB'" in speex,
+            "cross Speex must remove LLVM's unsupported ranlib -t after configure")
+    print("nixcheck: ok (cross Speex regeneration and LLVM archive installation)")
+
+
 def check_riscv64_matrix() -> None:
     """riscv64 stays in PROD only with its pin fix present."""
     makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
@@ -120,6 +132,7 @@ def check_ppc32_ssp() -> None:
 def main() -> int:
     check_derivations()
     check_device_audio()
+    check_speex_cross_build()
     check_riscv64_matrix()
 
     check_ppc32_ssp()

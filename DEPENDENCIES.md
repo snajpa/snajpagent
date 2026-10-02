@@ -138,6 +138,9 @@ engine, resource manager, node graph and file decoders are disabled. SpeexDSP
 uses BSD redistribution terms. `AEC_CFLAGS`/`AEC_LIBS` select nonstandard paths;
 the default uses its `speexdsp` pkg-config metadata. Portable recipes use the
 existing Autoconf builders with scalar DSP for the supported CPU baselines.
+Cross-platform Speex builds regenerate Autotools files after applying source
+patches. The generated libtool installation command omits OpenBSD ranlib's
+timestamp-only `-t` option because LLVM ranlib rebuilds the archive index.
 No third-party source is copied into the repository.
 
 Supply the miniaudio header using `MINIAUDIO_CFLAGS=-I/PATH/TO/HEADERS` when

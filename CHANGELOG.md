@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Repair SpeexDSP cross-builds: regenerate patched Windows Autotools inputs and
+  install OpenBSD static archives with LLVM's supported ranlib command.
+
 ## 0.99.8c — October 2, 2026
 
 - Keep active-turn verbosity queries responsive while the engine is blocked.

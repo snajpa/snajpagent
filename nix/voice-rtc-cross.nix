@@ -4,9 +4,17 @@
   rtcPatches ? [], srtpPatches ? [], srtpFlags ? [], sctpPatches ? [] }:
 let
   source = import ./voice-rtc.nix { inherit pkgs; target = sourcePkgs; };
-  speex = autotoolsLibrary sourcePkgs.speexdsp [
+  speex = (autotoolsLibrary sourcePkgs.speexdsp [
     "--disable-examples" "--disable-sse" "--disable-neon"
-  ] [];
+  ] []).overrideAttrs (old: {
+    # The Windows source patch changes Makefile.am; regenerate its outputs.
+    nativeBuildInputs = (old.nativeBuildInputs or []) ++ [ pkgs.autoreconfHook ];
+    postConfigure = (old.postConfigure or "") + ''
+      # OpenBSD libtool assumes native ranlib's timestamp-only option.
+      # LLVM rebuilds the archive index; other targets have no -t to remove.
+      substituteInPlace libtool --replace-quiet 'RANLIB -t' 'RANLIB'
+    '';
+  });
   juice = cmakeLibrary source.juice [ "-DNO_TESTS=ON" "-DNO_SERVER=ON" ] [];
   srtp = (cmakeLibrary sourcePkgs.srtp ([ "-DENABLE_OPENSSL=OFF" "-DLIBSRTP_TEST_APPS=OFF" ] ++ srtpFlags) []).overrideAttrs (old: {
     patches = (old.patches or []) ++ srtpPatches;
