@@ -45,7 +45,7 @@ class RemoteProcess:
             fcntl.ioctl(self.slave, termios.TIOCSWINSZ,
                         struct.pack("HHHH", winsize[0], winsize[1], 0, 0))
         self.original = termios.tcgetattr(self.slave)
-        env = dict(os.environ, HOME=str(home), TERM="xterm-256color", SHELL="/bin/sh")
+        env = dict(os.environ, HOME=str(home), TERM="xterm-256color", SHELL="/bin/sh", PAGER="")
         if extra_env:
             env.update(extra_env)
             env = {key: value for key, value in env.items() if value is not None}
