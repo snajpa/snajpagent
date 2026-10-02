@@ -9166,6 +9166,54 @@ test_voice_handover(void)
 }
 
 static void
+pager_observation(void *opaque, const char *kind, const char *text, const char *input)
+{
+    (void)kind;
+    (void)input;
+    if (strstr(text, "session:") && strstr(text, "provider:")) {
+        ++*(unsigned int *)opaque;
+    }
+}
+
+static void
+test_native_pager_reports(struct app_state *app, struct snag_config *config, const char *root)
+{
+    char pager[SNAG_CONFIG_PAGER_MAX], called[SNAG_CONFIG_PAGER_MAX + 8u];
+    char saved[sizeof(config->pager)];
+    memcpy(saved, config->pager, sizeof(saved));
+    int length = snprintf(pager, sizeof(pager), "%s/report-pager", root);
+    assert(length > 0 && (size_t)length + 8u < sizeof(pager));
+    assert(snprintf(called, sizeof(called), "%s.calls", pager) > 0);
+    int fd = open(pager, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0700);
+    const char script[] = "#!/bin/sh\nprintf x >> \"$0.calls\"\ncat \"$1\"\n";
+    assert(fd >= 0 && write(fd, script, sizeof(script) - 1u) == (ssize_t)sizeof(script) - 1);
+    assert(close(fd) == 0);
+    struct snag_ui *ui = &app->ui;
+    void (*observe)(void *, const char *, const char *, const char *) = ui->observe;
+    void *opaque = ui->observe_opaque;
+    bool interface = ui->input_interface;
+    /* Paged keyboard report, interface report, failed pager, disabled pager. */
+    for (unsigned int trial = 0u; trial < 4u; ++trial) {
+        unsigned int observations = 0u;
+        ui->observe = pager_observation;
+        ui->observe_opaque = &observations;
+        ui->input_interface = trial == 1u;
+        strcpy(config->pager, pager);
+        if (trial == 2u) strcat(config->pager, ".missing");
+        else if (trial == 3u) strcpy(config->pager, "off");
+        bool handled = false, prompt_ready = false;
+        assert(snag_app_input_command(app, "/status", false, &handled, &prompt_ready) == 0);
+        assert(handled && observations == 1u);
+        struct stat st;
+        assert(stat(called, &st) == 0 && st.st_size == 1);
+    }
+    ui->observe = observe;
+    ui->observe_opaque = opaque;
+    ui->input_interface = interface;
+    memcpy(config->pager, saved, sizeof(saved));
+}
+
+static void
 test_native_ui(void)
 {
     char *saved_term = snag_environment("TERM");
@@ -9276,6 +9324,7 @@ test_native_ui(void)
         assert(snag_ui_session_listen(ui, session) == 0);
         assert(snag_ui_simple_prompt(ui, false) == 0);
         assert(snag_ui_insert_draft(ui, "retained draft") == 0);
+        test_native_pager_reports(&app, &config, path);
         assert(snag_ui_input(ui, "/status", 2u) < 0 && errno == ESTALE);
         assert(snag_ui_input(ui, "/verbose 2", 1u) == 0);
         assert(snag_ui_verbosity(ui) == 2u);

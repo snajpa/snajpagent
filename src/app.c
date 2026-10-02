@@ -1667,11 +1667,16 @@ page_reference(struct app_state *app, const char *text, size_t length)
     bool shown = false;
     int rc;
 
-    if (!command || app->execute || !app->ui.opened ||
-        snag_isatty(STDIN_FILENO) != 1 || snag_isatty(STDERR_FILENO) != 1) return false;
+    if (!command || app->execute || !app->ui.opened || app->ui.input_interface ||
+        snag_isatty(STDIN_FILENO) != 1 || snag_isatty(STDERR_FILENO) != 1) {
+        return false;
+    }
     if (snag_ui_external(&app->ui, true, error, sizeof(error)) < 0) return false;
     rc = snag_pager_show(command, text, length, &shown, service_external, suspend_external, app,
         app->ui.native ? &app->ui.profile : NULL);
+    if (rc == 0 && shown && app->ui.observe) {
+        app->ui.observe(app->ui.observe_opaque, "help", text, NULL);
+    }
     if (snag_ui_external(&app->ui, false, error, sizeof(error)) < 0) return shown;
     return rc == 0 && shown;
 }
@@ -3270,7 +3275,8 @@ int
 snag_app_input_command(struct app_state *app, const char *line, bool active,
     bool *handled, bool *prompt_ready)
 {
-    if (app->command_report || !app->ui.opened || app->execute || !pager_command(app) ||
+    if (app->command_report || !app->ui.opened || app->ui.input_interface ||
+        app->execute || !pager_command(app) ||
         snag_isatty(STDIN_FILENO) != 1 || snag_isatty(STDERR_FILENO) != 1) {
         return input_command(app, line, active, handled, prompt_ready);
     }

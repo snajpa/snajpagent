@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Preserve successful paged command reports in voice observations and display
+  voice-submitted reference commands directly. Keep `/cat` contents operator-only.
+
 - Keep provider context prefixes and retry notices stable across repeated request
   preparation and checkpoint reopening. Rebuild older cached views from their
   retained events, preserving the original session history.
