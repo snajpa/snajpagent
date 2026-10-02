@@ -1118,6 +1118,9 @@ def run_markdown_case(binary, root):
             if (len(completed) != 1 or
                     completed[0]["data"]["items"][0]["text"] != MARKDOWN_TEXT):
                 raise AssertionError("Markdown rendering changed durable model text")
+            # The durable turn boundary precedes the presentation's idle repaint.
+            terminal.wait(DEFAULT_ACCOUNTED_IDLE_PROMPT, timeout=5.0,
+                          join_wrapped=True)
             screen = terminal.capture(join_wrapped=True)
             if rendered:
                 if "└─" not in screen:
