@@ -4,6 +4,8 @@
 
 ## Unreleased
 
+## 0.99.8c — October 2, 2026
+
 - Preserve successful paged command reports in voice observations and display
   voice-submitted reference commands directly. Keep `/cat` contents operator-only.
 

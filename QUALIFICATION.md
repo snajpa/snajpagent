@@ -9,6 +9,19 @@ runs each cover different behavior. Report the actual scope of each result.
 The [2026-10-01 regression audit](design/regression-audit-20261001.md) maps the
 32 audited development commits to their permanent tests and records coverage additions.
 
+## 0.99.8c voice scope
+
+The provider-transport and native-PTY fixtures cover command-report observations
+across keyboard paging, interface input, pager failure and disabled paging.
+They also exercise context handover, caption accumulation and the shared voice/UI
+command path. The context suite covers cached request prefixes, retained retry
+notices and old-checkpoint reconstruction across repeated compaction.
+
+Target-device and live-provider voice checks remain outstanding for this version.
+Long-session voice continuity and recovery against live providers remain
+unqualified by these hermetic results. Earlier platform observations retain their
+recorded source revisions and do not qualify a newer executable automatically.
+
 ## Source-archive evidence
 
 The repository provides these existing checks. `make check` runs unit, CLI,
