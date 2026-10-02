@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Keep provider context prefixes and retry notices stable across repeated request
+  preparation and checkpoint reopening. Rebuild older cached views from their
+  retained events, preserving the original session history.
+
 - Clarify voice task delegation and distinguish UI controls from executable work.
   Keep spoken requests and derived interpretations separate under existing session
   permissions. Voice guidance covers progress questions and ordinary requests to

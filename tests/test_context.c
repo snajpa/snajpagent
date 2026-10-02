@@ -1134,7 +1134,9 @@ test_repeated_compaction_active_seam(struct snag_store *store, const char *cwd)
                 assert(snag_session_checkpoint(&session, error, sizeof(error)) == 0);
                 snag_session_close(&session);
                 assert(snag_session_open(store, &session, session_id, error, sizeof(error)) == 0);
-                /* Older embedded views retained the installed summary prefix. */
+                /* Older views retained the summary prefix and lacked retry cursors. */
+                assert(json_object_del(session.checkpoint_context, "recovery_count") == 0);
+                assert(json_object_del(session.checkpoint_context, "recovery_index") == 0);
                 json_t *legacy = json_object_get(session.checkpoint_context, "request_input");
                 assert(json_array_insert(legacy, 0u, json_array_get(output, 0u)) == 0);
                 build_context(&session, cycle + 1u, empty, &instructions, &projection);
@@ -2202,14 +2204,30 @@ test_input_time_and_recovery(struct snag_store *store, const char *cwd)
         }
     }
     assert(metadata == 2u && failures == 1u && json_array_size(input) < 12u);
+    assert(snag_session_checkpoint(&session, error, sizeof(error)) == 0);
     snag_session_close(&session);
     assert(snag_session_open(store, &session, session_id, error, sizeof(error)) == 0);
+    assert(json_integer_value(json_object_get(session.checkpoint_context,
+        "recovery_count")) == 1000);
+    json_int_t notice = json_integer_value(json_object_get(session.checkpoint_context,
+        "recovery_index"));
+    assert(notice >= 0 && (uint64_t)notice < json_array_size(json_object_get(
+        session.checkpoint_context, "request_input")));
     assert(session.pending_steering[0].received_ms == steer_received);
     assert(session.input_received_ms == 1788739200000ULL);
     assert(session.input_first_context_ms == 1788739290000ULL);
     assert(session.recovery_count == 1000u);
     build_context(&session, 1u, snapshot, &instructions, &replay);
     assert(json_equal(projection.create_request.value, replay.create_request.value));
+    void *cache = session.on_commit_opaque;
+    snag_context_projection_free(&replay);
+    commit_event(&session, "turn_recovery", json_pack("{s:s,s:s,s:s}",
+        "class", "provider", "message", "retry after checkpoint", "turn_id", turn));
+    build_context(&session, 2u, snapshot, &instructions, &replay);
+    assert(session.on_commit_opaque == cache);
+    input = json_object_get(replay.create_request.value, "input");
+    assert(message_matching(input, "1001 failed attempts"));
+    assert(!message_matching(input, "1000 failed attempts"));
     snag_context_projection_free(&projection);
     snag_context_projection_free(&replay);
     snag_instructions_free(&instructions);
@@ -2236,9 +2254,11 @@ test_unsettled_final_recovery_guidance(struct snag_store *store, const char *cwd
         "Use write_stdin for each handle"));
     snag_context_projection_free(&projection);
 
+    void *cache = session.on_commit_opaque;
     commit_event(&session, "turn_recovery", json_pack("{s:s,s:s,s:s}",
         "class", "protocol", "message", SNAG_UNSETTLED_COMMANDS_MESSAGE, "turn_id", turn));
     build_context(&session, 2u, empty, NULL, &projection);
+    assert(session.on_commit_opaque == cache);
     json_t *input = json_object_get(projection.create_request.value, "input");
     assert(message_matching(input, "The previous response was rejected with unsettled commands"));
     assert(message_matching(input, "Use write_stdin for each handle"));
@@ -4524,6 +4544,114 @@ test_embedded_provider_checkpoint(struct snag_store *store, const char *cwd)
 }
 
 static void
+test_provider_suffix_checkpoint(struct snag_store *store, const char *cwd)
+{
+    const char *turn = "ca000000000000000000000000000011";
+    const char *response = "ca000000000000000000000000000012";
+    const char *compact = "ca000000000000000000000000000013";
+    for (unsigned int summary = 0u; summary < 2u; ++summary) {
+        for (unsigned int older = 0u; older < 3u; ++older) {
+            struct snag_session session;
+            struct snag_context_projection first = {0}, next = {0};
+            json_t *empty = json_array();
+            char id[SNAG_ID_HEX_LEN + 1u], error[512] = {0};
+            assert(empty);
+            create_session(store, &session, cwd, "medium");
+            memcpy(id, session.id, sizeof(id));
+            commit_event(&session, "turn_started",
+                turn_started(turn, 1u, "keep the context prefix once", cwd, NULL));
+            if (summary) {
+                commit_event(&session, "response_started", response_started(turn, response, NULL));
+                commit_event(&session, "response_completed",
+                    response_completed(turn, response, "ready for compaction"));
+                assert(snag_context_compact_request_build(&session, SNAJPAGENT_MODEL, "medium",
+                    true, 0u, false, NULL, &next, error, sizeof(error), NULL) == 0);
+                json_t *output = compact_output_fixture();
+                commit_counted_compaction(&session, compact, "manual", SNAJPAGENT_MODEL,
+                    &next, output);
+                json_decref(output);
+                snag_context_projection_free(&next);
+            } else {
+                commit_event(&session, "context_rebased", json_pack("{s:s,s:s}",
+                    "reason", "turn_recovery", "turn_id", turn));
+            }
+            build_context(&session, 2u, empty, NULL, &first);
+            void *cache = session.on_commit_opaque;
+            build_context(&session, 2u, empty, NULL, &next);
+            assert(session.on_commit_opaque == cache);
+            assert(json_equal(first.model_input.value, next.model_input.value));
+            assert(json_equal(first.create_request.value, next.create_request.value));
+            snag_context_projection_free(&next);
+            assert(snag_session_checkpoint(&session, error, sizeof(error)) == 0);
+            snag_session_close(&session);
+            snag_session_init(&session);
+            assert(snag_session_open(store, &session, id, error, sizeof(error)) == 0);
+            json_t *doc = session.checkpoint_context;
+            assert(doc && json_is_false(json_object_get(doc, "rebuild_images")));
+            json_t *count = json_incref(json_object_get(doc, "recovery_count"));
+            json_t *index = json_incref(json_object_get(doc, "recovery_index"));
+            assert(json_is_integer(count) && json_is_integer(index));
+            if (!summary && !older) {
+                for (unsigned int bad = 0u; bad < 5u; ++bad) {
+                    if (bad == 0u) assert(json_object_del(doc, "recovery_index") == 0);
+                    if (bad == 1u) assert(json_object_del(doc, "recovery_count") == 0);
+                    if (bad == 2u) {
+                        assert(json_object_set_new(doc, "recovery_count", json_null()) == 0);
+                    }
+                    if (bad == 3u) {
+                        assert(json_object_set_new(doc, "recovery_index", json_integer(-1)) == 0);
+                    }
+                    if (bad == 4u) {
+                        assert(json_object_set_new(doc, "recovery_count", json_integer(1)) == 0);
+                        assert(json_object_set_new(doc, "recovery_index",
+                            json_integer(INT64_MAX)) == 0);
+                    }
+                    assert(snag_context_build(&session, SNAJPAGENT_MODEL, "medium", 2u, empty,
+                        0u, false, NULL, NULL, NULL, NULL, &next,
+                        error, sizeof(error), NULL) < 0);
+                    assert(strstr(error, "invalid embedded provider checkpoint"));
+                    assert(!session.on_commit && !session.on_commit_opaque);
+                    assert(session.checkpoint_context == doc);
+                    snag_context_projection_free(&next);
+                    assert(json_object_set(doc, "recovery_count", count) == 0);
+                    assert(json_object_set(doc, "recovery_index", index) == 0);
+                }
+            }
+            if (older) {
+                /* Recreate the old decoded cache shape, including its prefix.
+                 * A dirty interrupted view likewise keeps only its seam as a
+                 * reconstruction source. Neither changes canonical history. */
+                const json_t *items = json_object_get(first.model_input.value, "items");
+                assert(json_array_size(items) > 1u);
+                assert(json_array_insert(json_object_get(doc, "request_input"), 0u,
+                    json_array_get(items, 1u)) == 0);
+                if (older == 1u) {
+                    assert(json_object_del(doc, "recovery_count") == 0);
+                    assert(json_object_del(doc, "recovery_index") == 0);
+                } else {
+                    assert(json_object_set_new(doc, "rebuild_images", json_true()) == 0);
+                    assert(json_object_set_new(doc, "recovery_count", json_integer(1)) == 0);
+                    size_t outside = json_array_size(json_object_get(doc, "request_input"));
+                    assert(json_object_set_new(doc, "recovery_index",
+                        json_integer((json_int_t)outside)) == 0);
+                }
+            }
+            json_decref(count);
+            json_decref(index);
+            for (unsigned int pass = 0u; pass < 2u; ++pass) {
+                build_context(&session, 2u, empty, NULL, &next);
+                assert(json_equal(first.model_input.value, next.model_input.value));
+                assert(json_equal(first.create_request.value, next.create_request.value));
+                snag_context_projection_free(&next);
+            }
+            snag_context_projection_free(&first);
+            json_decref(empty);
+            snag_session_close(&session);
+        }
+    }
+}
+
+static void
 test_host_fact_cache_prefix(struct snag_store *store, const char *cwd)
 {
     struct snag_session session;
@@ -4799,6 +4927,7 @@ main(int argc, char **argv)
     assert(snag_store_open(&store, state, error, sizeof(error)) == 0);
     test_live_projection_without_journal_read(&store, cwd);
     test_embedded_provider_checkpoint(&store, cwd);
+    test_provider_suffix_checkpoint(&store, cwd);
     test_host_snapshot_replay(&store, cwd);
     test_host_fact_cache_prefix(&store, cwd);
     test_office_commands_export(&store, cwd);

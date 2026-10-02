@@ -251,7 +251,8 @@ context_cache_checkpoint(void *opaque, const struct snag_session *session)
     if (v->f > INT64_MAX || \
         snag_json_set_new(doc, #f, json_integer((json_int_t)v->f)) < 0) goto fail; \
 } while (0)
-    CI(recovery_first_ms); CI(event_time_ms); CI(deferred_irc_seq);
+    CI(recovery_count); CI(recovery_index); CI(recovery_first_ms);
+    CI(event_time_ms); CI(deferred_irc_seq);
     CI(steering_seen); CI(tool_result_bytes); CI(compact_seq); CI(compact_walk_seq);
 #undef CI
     if (cache->compact_seq > INT64_MAX || cache->rebase_seq > INT64_MAX ||
@@ -343,6 +344,18 @@ context_cache_restore(struct snag_session *session, struct context_cache **out,
     uint64_t n; if (snag_json_integer_u64(doc, #f, &n) < 0) goto invalid; \
     cache->view.f = n; \
 } while (0)
+    /* Older caches can include the separately installed context prefix and
+     * omit the retry cursor. Their retained event seam rebuilds both correctly. */
+    bool old_view = !json_object_get(doc, "recovery_count") &&
+        !json_object_get(doc, "recovery_index");
+    if (!old_view) {
+        uint64_t index;
+        GET_I(recovery_count);
+        if (snag_json_integer_u64(doc, "recovery_index", &index) < 0 || index > SIZE_MAX) {
+            goto invalid;
+        }
+        cache->view.recovery_index = (size_t)index;
+    }
     GET_I(recovery_first_ms); GET_I(event_time_ms); GET_I(deferred_irc_seq);
     GET_I(steering_seen); GET_I(tool_result_bytes); GET_I(compact_seq); GET_I(compact_walk_seq);
 #undef GET_I
@@ -363,11 +376,13 @@ context_cache_restore(struct snag_session *session, struct context_cache **out,
         !json_is_boolean(rebuild_images)) goto invalid;
     cache->view.active_turn = json_is_true(active_turn);
     cache->view.input_timed = json_is_true(input_timed);
-    /* Older compacted views include the separately installed summary/rebase
-     * prefix. Rebuild once from their retained event seam on restore. The
-     * legacy flag also covers interrupted updates and image resolution. */
-    cache->rebuild_view = json_is_true(rebuild_images) ||
-        cache->compact_seq != 0u || cache->rebase_seq != 0u;
+    /* Older views lack retry cursors and may include the installed prefix.
+     * The legacy flag also covers interrupted updates and image resolution. */
+    cache->rebuild_view = old_view || json_is_true(rebuild_images);
+    if (!cache->rebuild_view && cache->view.recovery_count &&
+        cache->view.recovery_index >= json_array_size(cache->view.request_input)) {
+        goto invalid;
+    }
     cache->view.control = control;
     if (snag_session_each_event_from_checkpoint(session, session->checkpoint_state,
         checkpoint_context_event, cache, error, error_size) < 0) goto fail;
@@ -2716,9 +2731,19 @@ snag_context_cache_key(const struct snag_session *session, const char *provider,
 static int
 context_copy_events(struct context_builder *dest, const struct context_builder *source, size_t start)
 {
+    /* The view stores only a suffix; request indexes include the base prefix.
+     * Translate the retry notice just like the input-timing message bindings. */
     size_t offset = json_array_size(dest->request_input);
-    dest->recovery_index = source->recovery_count ?
-        offset + source->recovery_index - start : 0u;
+    dest->recovery_index = 0u;
+    if (source->recovery_count) {
+        if (source->recovery_index < start ||
+            source->recovery_index >= json_array_size(source->request_input)) {
+            return snag_errno(EINVAL);
+        }
+        size_t index = source->recovery_index - start;
+        if (index > SIZE_MAX - offset) return snag_errno(EOVERFLOW);
+        dest->recovery_index = offset + index;
+    }
     dest->recovery_count = source->recovery_count;
     dest->recovery_first_ms = source->recovery_first_ms;
     dest->event_time_ms = source->event_time_ms;

@@ -80,6 +80,13 @@ used live. Checkpoint creation changes no conversation meaning or goal state.
 The cache, checkpoint encoding and request projection are representations of
 that state, not competing owners of it.
 
+The provider cache holds the event suffix after the separately installed rebase
+or compaction prefix. Translate recovery-notice indexes between that suffix and
+the complete request, and retain the retry count and index in its checkpoint.
+Older views without these cursor fields rebuild from their retained event seam.
+Repeated preparation and reopening must agree with a fresh projection of the
+same events, including after another recovery event.
+
 There are two explicit ways to change coverage in that state:
 
 - **Compaction completion:** a validated summary with source boundary, predecessor
