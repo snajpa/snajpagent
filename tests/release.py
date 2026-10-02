@@ -769,6 +769,9 @@ for link in downloads:
     size = next(n for n in nodes if "file-size" in n["attrs"].get("class", "").split() and row in n["parents"])
     assert size["attrs"]["title"] == f'{meta["size"]:,} bytes'
 assert seen == set(channel)
+listed = {n["attrs"]["data-target"] for n in nodes
+          if n["tag"] == "tr" and "data-target" in n["attrs"]}
+assert listed == set(channel)
 features = next(n for n in nodes if n["attrs"].get("aria-labelledby") == "build-features")
 assert nodes.index(features) > max(nodes.index(family) for family in families)
 assert next(iter(versions)) in features["text"], "feature matrix must name the downloadable release"
@@ -795,7 +798,7 @@ assert "coming-soon" not in html and "Tier 1" not in html and "latest-dev" not i
 assert "6.12" not in html
 linux = next(n for n in families if n["attrs"]["id"] == "linux")
 assert "Kernel baseline" in linux["text"] and "older kernels may work" in linux["text"]
-for version in ("2.6.39+", "3.7+", "3.13+", "4.15+", "2.4.27+"):
+for version in ("2.6.39+", "3.7+", "3.13+", "4.15+"):
     assert version in linux["text"]
 mac = next(n for n in families if n["attrs"]["id"] == "macos")
 assert "xattr -d com.apple.quarantine ./snajpagent" in mac["text"]

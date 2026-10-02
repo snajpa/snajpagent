@@ -137,9 +137,9 @@ snajpagent remote mosh target snajpagent --attach SESSION_ID
 Use `/session detach` to leave work running; omit `SESSION_ID` to choose a session.
 `remote` passes child arguments literally through a PTY without starting a local
 agent. Put Mosh options before the hostname; the wrapper separates them from
-remote application options. Keep the wrapper outside SSH or Mosh, with current
-development builds at both ends. Capability handshakes select the fast SSH stream or a slower, checked
-stock-Mosh channel within the same terminal connection, without SCP or SFTP.
+remote application options. Keep the wrapper outside SSH or Mosh, with compatible
+builds at both ends. Capability handshakes select the fast SSH stream or a slower,
+checked stock-Mosh channel within the same terminal connection, without SCP or SFTP.
 
 Drop one regular file into the POSIX composer, or use `/receive` and enter its
 path. Uploads reject directories and empty files; verified files become unsent
@@ -160,8 +160,7 @@ on macOS and use `trzsz --dragfile ssh target`. Its `~/.trzsz.conf`
 cancel a draft or work.
 See the manual's **Terminal file transfers**, **Remote terminal mode (snajpagent remote)**
 and **Model tools** sections for setup, recovery and the complete tool catalog.
-Native wrapper, downloads and outbox are development-source features; the
-0.99.8b stable binary supports uploads.
+Native wrapper, downloads and the durable outbox are included in 0.99.8c.
 
 ### Attach files and use voice
 

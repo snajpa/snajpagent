@@ -36,7 +36,7 @@ provider catalogs and returns selectable rows; failed refresh leaves the prior
 cache and model selection intact. Operator `/model` retains typed uncached
 selection.
 
-Current development source includes client-only `snajpagent remote COMMAND…`
+Version 0.99.8c includes client-only `snajpagent remote COMMAND…`
 and native POSIX workstation file endpoints via `/receive` (into the agent)
 and `/send PATH` (to the workstation). The wrapper prefers the verified fast
 SSH byte stream; stock Mosh uses a nonce-negotiated title-state channel with
@@ -56,8 +56,8 @@ passed over local loopback and from a Mac to a Linux VM, including `--no-init`
 and default prediction, with exact bytes, receipts and prompt reuse. The
 screen-state PTY relay covers loss, replay, cancellation and resize. Desktop
 GUI drag and bulk-throughput qualification remain separate. See QUALIFICATION.md
-for terminal/SSH scenarios and file sizes. The 0.99.8b stable downloads
-predate native remote mode, downloads and the durable outbox.
+for terminal/SSH scenarios and file sizes. Native remote mode, downloads and the
+durable outbox are included in the 0.99.8c stable downloads.
 
 Voice supports native Codex subscription calls and public Realtime BYOK.
 The selected provider supplies credentials and defaults. Native media uses
@@ -76,12 +76,12 @@ bounding uses on any route when exact counting is unavailable. Configuration
 overrides discovery without altering its cache; explicit efforts remain available.
 Numeric capacity provenance stays independent.
 
-The multimodal branch implements session-owned image, audio, video and document
+Version 0.99.8c includes session-owned image, audio, video and document
 assets, normalized image/page/frame input, audio API operations, local dictation
 and playback, and realtime voice with durable handoff to the existing coding
 turn/queue owner. Native generated-media, context/replay and voice transport
-fixtures pass. Production dependency closure remains unfinished, including the
-remaining platform builds. LibreOffice is never bundled: host builds resolve a
+fixtures pass. The complete production matrix builds with device audio and
+native voice backends. LibreOffice is never bundled: host builds resolve a
 separately installed runtime, and release artifacts take the commanded engine
 (`WITH_OFFICE=0` with `WITH_OFFICE_COMMANDS=1`).
 Source builds can probe the compiler and the optional modalities with
@@ -95,7 +95,7 @@ executables and dSYMs preserves each original slice's bytes and matching UUID.
 These diagnostics exclude Office; cross-linking does not qualify target-OS
 execution, physical audio devices or live providers.
 Target-OS execution, physical audio devices and live media-provider qualification
-are separate from these local fixture results. Multimodal is not shipped yet.
+are separate from these local fixture and production-build results.
 
 Current source includes the shared native tool contract: required operands and
 optional controls, explicit legacy spellings with ambiguity rejection, truthful
@@ -105,8 +105,8 @@ all providers. Goal-turn requests retain labelled conversation-level transport
 input through instruction-hoisting gateways, including with retained history;
 original goal events and explicit pauses stay intact. In-progress interactive and one-shot resume retain original tool
 calls and mark unknown outcomes without rerunning them; empty stdin needs no new
-prompt. User, tool and saved reasoning data retain their provenance. These changes are development-source
-behavior above stable 0.99.5; its downloadable assets remain unchanged.
+prompt. User, tool and saved reasoning data retain their provenance. These
+behaviors are included in 0.99.8c; older release assets remain unchanged.
 
 IRC snapshots and steering are projected after complete tool exchanges, including
 on replay of affected sessions. Interactive resume applies current startup
