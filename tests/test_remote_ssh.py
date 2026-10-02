@@ -145,13 +145,32 @@ class RemoteSSHTests(unittest.TestCase):
                             events = [json.loads(line) for line in journal.read_text().splitlines()]
                             self.assertEqual(sum(e["type"] == "download_removed" for e in events), 1)
                             if scenario in ("lost-client", "blackhole"):
+                                # Transfer acknowledgement precedes turn completion. Starting
+                                # the next command earlier admits steering, not a second turn.
+                                deadline = time.monotonic() + 10
+                                while True:
+                                    events = [json.loads(line) for line in
+                                              journal.read_text().splitlines(keepends=True)
+                                              if line.endswith("\n")]
+                                    if sum(e["type"] == "turn_completed" for e in events) == 1:
+                                        break
+                                    self.assertLess(time.monotonic(), deadline,
+                                                    "download turn did not complete")
+                                    child.remember_children()
+                                    if select.select([child.master], [], [], .05)[0]:
+                                        child.output.extend(os.read(child.master, 65536))
                                 started = state / "native-process-started"
                                 finished = state / "native-process-finished"
                                 os.write(child.master, b"native_attachment_process\r")
                                 deadline = time.monotonic() + 10
                                 while not started.exists():
-                                    self.assertLess(time.monotonic(), deadline,
-                                                    "remote command did not start")
+                                    if time.monotonic() >= deadline:
+                                        pending = [json.loads(line) for line in
+                                                   journal.read_text().splitlines()]
+                                        facts = [(event["type"], event["data"].get("text"),
+                                                  event["data"].get("prompt"),
+                                                  event["data"].get("cwd")) for event in pending]
+                                        self.fail(f"remote command did not start: {facts!r}")
                                     child.remember_children()
                                     time.sleep(0.02)
                                 self.assertFalse(finished.exists(),
