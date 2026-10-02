@@ -17,6 +17,8 @@ voice-continuity changes. Sessions retain JSONL storage.
 - Native terminal attachment publishes a handover after the destination frontend
   confirms it is bound. Input and audio activation follow that acknowledgement;
   managed work stays with the session owner through detach and attachment changes.
+  Buffered composer edits share one repaint, preserving displayed response rows
+  when the terminal is resized during typing.
 - Context preparation retains cached request prefixes, retry notices and completed
   tool results across compaction, recovery and model changes. Token preflight keeps
   generation-only controls out of count requests. HTTP response streams use

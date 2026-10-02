@@ -225,8 +225,11 @@ output and termination of the replaceable client.
 
 The presentation thread drives the relay at idle, input and output checkpoints.
 Native editor polling yields between buffered input bytes so output credits and
-resize controls are serviced before the next repaint. Input-only output
-checkpoints retain burst admission without recursively painting the composer.
+resize controls are serviced before the next repaint. The composer paints once
+at the end of that buffer; per-byte old-width paints could otherwise remain in
+the relay after a physical resize and erase previously displayed response rows.
+Input-only output checkpoints retain burst admission without recursively painting
+the composer.
 It binds nonblocking output aliases before opening input so startup output can
 progress through a full private PTY buffer. A commit wakes the engine with its
 attachment generation. The UI rebind clears physical coordinates while keeping

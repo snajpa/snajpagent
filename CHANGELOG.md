@@ -4,10 +4,13 @@
 
 ## Unreleased
 
+## 0.99.8c — October 2, 2026
+
+- Coalesce buffered native composer edits while continuing to service resize
+  controls between input bytes, preserving displayed response rows during resizing.
+
 - Repair SpeexDSP cross-builds: regenerate patched Windows Autotools inputs and
   install OpenBSD static archives with LLVM's supported ranlib command.
-
-## 0.99.8c — October 2, 2026
 
 - Keep active-turn verbosity queries responsive while the engine is blocked.
   Idle queries retain the configured pager; active queries use immediate terminal

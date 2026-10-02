@@ -723,7 +723,15 @@ test_native_input_yield(void)
     enum snag_term_action action;
     char *text = NULL;
 
+    char output[4096];
+    struct output_capture capture = capture_open(false, true);
     snag_term_init(&term);
+    term.opened = term.capable = true;
+    term.columns = 32u;
+    assert(fcntl(capture.fd, F_SETFL, O_NONBLOCK) == 0);
+    const char *frames[SNAG_TERM_SPINNER_COUNT] = {"*", "|/-", "."};
+    assert(snag_term_set_prompt_template(&term, true, "  9%> ", frames, 8u, 0u) == 0);
+    assert(prompt_output(capture.fd, output, sizeof(output)) > 0u);
     term.suspend = unexpected_native_suspend;
     memcpy(term.input, "abc", 3u);
     term.input_len = 3u;
@@ -731,13 +739,18 @@ test_native_input_yield(void)
         assert(snag_term_poll(&term, 0, -1, &action, &text) == 0);
         assert(action == SNAG_TERM_NONE && !text);
         assert(term.input_pos == i && term.draft.len == i);
+        /* Geometry is serviced per byte; only the complete edit is painted. */
+        size_t painted = prompt_output(capture.fd, output, sizeof(output));
+        assert(i == 3u ? painted > 0u : painted == 0u);
     }
     /* Output checkpoints retain burst admission without recursive painting. */
     term.input_only = true;
     editor_input(&term, "def");
     assert(term.draft.len == 6u && !memcmp(term.draft.data, "abcdef", 6u));
     term.input_only = false;
+    assert(prompt_output(capture.fd, output, sizeof(output)) == 0u);
     snag_term_close(&term);
+    (void)capture_close(&capture, output, sizeof(output), 0u);
 }
 
 static void

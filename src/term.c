@@ -1360,6 +1360,9 @@ redraw(struct snag_term *term)
     const char *label;
     int rc = -1;
 
+    /* Native input yields to geometry between bytes. Paint the completed
+     * buffered edit once, so old-width frames do not pile up in the relay. */
+    if (term->suspend && term->input_pos < term->input_len) return 0;
     if (term->submit_awaiting_activity) return 0;
     if (term->input_only || !term->opened || !term->prompt_wanted || term->output_depth) {
         snag_term_trace(term, "skip", term->input_only ? "input_only" : !term->opened ? "closed" :

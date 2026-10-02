@@ -1312,7 +1312,9 @@ def test_incremental_multiline_delete_clears_old_tail():
         child.send(b"\x7f\x7f\x7f")
         end = child.wait_quiet(0.2)
         edit = bytes(child.buf[start:end])
-        assert edit.count(b"\x1b[K") == 3, edit
+        # Each delivered input buffer clears the obsolete suffix once. PTY
+        # delivery may split the three deletions across multiple buffers.
+        assert 1 <= edit.count(b"\x1b[K") <= 3, edit
         assert b"second" not in edit and b"\n" not in edit, edit
         assert b"\x1b[2K" not in edit, edit
         assert DEFAULT_IDLE_PROMPT not in edit, edit
