@@ -68,7 +68,7 @@ EMPTY_OUTPUT_CORRECTION = (
 )
 NATIVE_FUNCTION_NAMES = {
     "view_image", "read_document", "view_video", "listen_audio", "transcribe_audio",
-    "speak_text", "send_file", "download_queue", "exec_command", "write_stdin", "apply_patch",
+    "speak_text", "voice_output", "send_file", "download_queue", "exec_command", "write_stdin", "apply_patch",
     "list_files", "read_file",
     "grep", "write_file", "edit_file", "read_tool_output", "read_session_history", "list_goals",
     "set_command_shell", "irc_send", "irc_state", "irc_topic", "irc_nick", "irc_connect",
@@ -5028,7 +5028,7 @@ def run_tool_contract_cases(binary, root, provider, environment):
             if mode != "read":
                 assert "default_timeout_ms=" in controls and "cwd=" in controls
             else:
-                assert set(tools) == NATIVE_FUNCTION_NAMES
+                assert set(tools) == NATIVE_FUNCTION_NAMES, sorted(set(tools) ^ NATIVE_FUNCTION_NAMES)
             step = len(outputs)
             if mode == "retry" and step == 1 and not recovering[0]:
                 provider.reply(handler, b'{"error":{"message":"intentional interruption","type":"invalid_request_error"}}',
@@ -5355,8 +5355,14 @@ def run_runtime_networking_cases(binary, root, provider, environment):
                     terminal.submit_wait("/rollout", "runtime completion 3")
                 terminal.exit()
                 screen = terminal.capture(join_wrapped=True)
-                resume = screen.split("You can resume this session with the following command:", 1)[1]
-                assert "--no-listen" in resume and "--no-client" in resume
+                resume = shlex.split(screen.split(
+                    "You can resume this session with the following command:", 1)[1]
+                    .strip().splitlines()[0])
+                journal, log = read_events(terminal.dotdir)
+                assert resume == [binary, "--dotdir", str(terminal.dotdir),
+                                  "--resume", journal.parent.name], resume
+                options = event_list(log, "session_options")[-1]["data"]["args"]
+                assert "--no-listen" in options and "--no-client" in options, options
                 print(f"tmux_terminal runtime input delivery {level}/{view}: ok", flush=True)
             finally:
                 release.set()
