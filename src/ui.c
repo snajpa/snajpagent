@@ -1121,7 +1121,8 @@ finish_input(struct snag_ui_display *display, struct ui_action *item, int rc)
         } else if (snag_verbosity_command(item->text, strlen(item->text))) {
             const char *value = item->text + 8u;
             while (isspace((unsigned char)*value)) ++value;
-            if (*value) {
+            /* Active queries remain responsive while the engine is held. */
+            if (*value || item->snapshot.active) {
                 verbosity_command(display, item->text);
                 item->local = true;
             }

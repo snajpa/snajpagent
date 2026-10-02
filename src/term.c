@@ -2042,14 +2042,14 @@ complete_action(struct snag_term *term, enum snag_term_action action, enum snag_
         (!strcmp((const char *)term->draft.data, "trz") ||
          !strcmp((const char *)term->draft.data, "trz -d"))) action = SNAG_TERM_UPLOAD;
     if (action == SNAG_TERM_QUEUE && verbosity) action = SNAG_TERM_SUBMIT;
-    bool verbosity_setting = false;
+    bool verbosity_local = false;
     if (verbosity) {
         size_t value = 8u;
         while (value < term->draft.len && word_space(term->draft.data[value])) ++value;
-        verbosity_setting = value < term->draft.len;
+        verbosity_local = term->active || value < term->draft.len;
     }
     bool local = action == SNAG_TERM_SUBMIT &&
-        (destination == SNAG_IRC_TARGET_SELECT || verbosity_setting ||
+        (destination == SNAG_IRC_TARGET_SELECT || verbosity_local ||
                   (term->blank_local && snag_text_blank((char *)term->draft.data)));
     if (local ? term->local_backlog : term->input_backlog) return snag_term_write(STDERR_FILENO, "\a", 1u);
     if (action == SNAG_TERM_SUBMIT && !local && term->draft.len) {

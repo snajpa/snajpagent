@@ -521,6 +521,8 @@ with automatic history, using a thread-local output target on the engine thread
 while the presentation thread retains its terminal. Report collection is used
 only with an interactive terminal and an enabled pager. Missing pager programs
 fall back to direct display of the collected report.
+The presentation owner handles verbosity changes and active-turn queries
+immediately, even while the engine is blocked; idle queries use report collection.
 
 UI polling drains actions in receipt order and returns the submission-time view
 and activity state. Text entered at idle just before work starts remains future

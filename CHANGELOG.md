@@ -6,6 +6,10 @@
 
 ## 0.99.8c — October 2, 2026
 
+- Keep active-turn verbosity queries responsive while the engine is blocked.
+  Idle queries retain the configured pager; active queries use immediate terminal
+  feedback without queuing a later pager.
+
 - Reset inherited ignored SIGINT when launching POSIX command children, keeping
   managed interruption usable from background launchers as well as foreground
   terminals. Preserve the parent's signal settings.

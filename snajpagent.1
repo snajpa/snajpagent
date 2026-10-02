@@ -1641,6 +1641,8 @@ on an interactive terminal. This includes /help, /status, /state, goal status,
 Commands that display an updated report after a setting change also page it.
 Quit the pager to return to the composer. Brief acknowledgements, errors,
 view switches and ongoing model output remain in the normal terminal display.
+During active work, keyboard /verbose queries also stay in that display for an
+immediate response; idle queries use the pager.
 .PP
 With the default
 .BR "pager = on" ,
@@ -1897,9 +1899,10 @@ and is present at the next turn. Keep it brief and specific to the ongoing work.
 .BR /verbose " [0..6]"
 Show or set this process's current verbosity immediately, even during active
 work (Enter or active-turn Tab).  Subsequent output uses the new level;
-already visited detail is not replayed.  It is local feedback, never chat or
-model input. The current level is saved on orderly exit and restored on resume
-unless explicit -v flags select another level.
+already visited detail is not replayed. Idle queries use the configured pager;
+active-turn queries and all level changes stay in the terminal. It is local
+feedback, never chat or model input. The current level is saved on orderly exit
+and restored on resume unless explicit -v flags select another level.
 .TP
 .B /compact
 Compact model context at idle or at a safe active-turn request boundary.

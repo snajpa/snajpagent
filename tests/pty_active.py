@@ -30,6 +30,10 @@ import termios
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from unittest.mock import patch
+
+# Pager-specific cases opt in; ordinary PTY reports stay in the terminal.
+os.environ["PAGER"] = ""
 
 BINARY = os.path.abspath(sys.argv[1])
 WORKSPACE = os.path.abspath(sys.argv[2])
@@ -87,6 +91,7 @@ class Child:
             else:
                 env = dict(env)
                 env.setdefault("HOME", WORKSPACE)
+                env.setdefault("PAGER", "")
             if term is not None:
                 env["TERM"] = term
             if cols is not None:
@@ -110,8 +115,9 @@ class Child:
         child.pid, child.fd = pty.fork()
         if child.pid == 0:
             os.chdir(WORKSPACE)
-            os.execle("/bin/sh", "sh", "-c", "exec " + command,
-                      os.environ if env is None else env)
+            env = dict(os.environ, PAGER="") if env is None else dict(env)
+            env.setdefault("PAGER", "")
+            os.execle("/bin/sh", "sh", "-c", "exec " + command, env)
         child.buf = bytearray()
         atexit.register(child.kill)
         return child
@@ -3116,7 +3122,10 @@ def test_goal_interrupt_blocks_background_irc_restart():
         child.kill()
 
     assert command is not None
-    with Child.from_command(command) as resumed:
+    # Resume helpers must isolate ordinary reports from the caller's pager.
+    with patch.dict(os.environ, {"PAGER": "true"}):
+        resumed = Child.from_command(command)
+    with resumed:
         ready = resumed.wait(chat_prompt("goalop"))
         switched = resumed.send_wait_idle(b"/rollout\r", "── rollout ──".encode(),
                                           start=ready)
@@ -4703,6 +4712,7 @@ def test_config_editor_reload():
     env = dict(os.environ, EDITOR=str(editor),
                SNAJPAGENT_EDITOR_PLAN=str(plan), SNAJPAGENT_EDITOR_SEEN=str(seen))
     before = session_ids()
+    env.pop("PAGER", None)
     child = Child(["--config", str(config)], PROMPT.rstrip(), env=env)
     child.assert_unsubmitted()
     child.send_wait(b"/verbose 2\r", b"verbosity: 2")
@@ -5298,7 +5308,8 @@ def test_runtime_network_commands():
         child.assert_unsubmitted()
         end = child.send_wait(b"\x15/rollout\r", "── rollout ──".encode(), start=end)
         child.wait(PROMPT.rstrip(), start=end)
-        end = child.send_wait(b"slow\r", b"working slowly", start=end)
+        # Session-list probes must finish while the provider turn stays active.
+        end = child.send_wait(b"queue_prompt_slow\r", b"working slowly", start=end)
         session_id = new_session(before)
         end = child.send_wait(f"/server start {endpoint}\r".encode(), f"hosting started on {endpoint}".encode(), start=end)
         assert not [event for event in events(session_id)
@@ -5318,6 +5329,8 @@ def test_runtime_network_commands():
         listed_endpoints(session_id, "-")
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
             assert probe.connect_ex(("127.0.0.1", int(endpoint.rsplit(":", 1)[1]))) != 0
+        assert not [event for event in events(session_id)
+                    if event["type"] in ("turn_completed", "turn_interrupted")]
         end = child.send_wait_idle(b"\x03", b"turn interrupted", start=end)
         command = child.exit_now()
         listed_endpoints(session_id, "-", "stored")
@@ -6377,7 +6390,7 @@ def test_goal_orderly_quit_resume():
         before = session_ids()
         args = []
         if mode == "host":
-            args = ["-v", "--listen", f"localhost:{free_port()}", "--no-client",
+            args = ["-v", "--listen", f"127.0.0.1:{free_port()}", "--no-client",
                     "-n", "goalagent", "-o", "goalop", "-r", "lab"]
         with Child(args, ready=chat_prompt("goalop") if mode == "host" else PROMPT.rstrip()) as child:
             if mode == "host":
@@ -6610,9 +6623,15 @@ def test_history_lock_keeps_editing_live():
             child.send_wait(b"locked-history", b"y': ", start=start, timeout=0.25)
             assert_bytes_in_order(child.buf[start:], b"locked-history")
             child.send(b"\x07draft-alive")
-            child.drain(0.1)
-            visible = re.sub(rb"\x1b\[[0-?]*[ -/]*[@-~]| \x08|\r", b"", child.buf[start:])
-            assert b"draft-alive" in visible, visible
+            # Keep the lock held until the complete incremental paint arrives.
+            deadline = time.monotonic() + 0.25
+            while True:
+                visible = re.sub(rb"\x1b\[[0-?]*[ -/]*[@-~]| \x08|\r",
+                                 b"", child.buf[start:])
+                if b"draft-alive" in visible:
+                    break
+                remaining = deadline - time.monotonic()
+                assert remaining > 0 and child.read_once(remaining), visible
             fcntl.lockf(history, fcntl.LOCK_UN)
         child.send(b"\x03")
         child.drain(0.1)
@@ -6677,8 +6696,16 @@ def test_submitted_steering_visible_before_blocked_engine_returns():
                    for item in log if item["type"] == "steering_added")
 
 
-def test_editor_during_blocked_engine(key=b"\r"):
-    child = Child([])
+def test_editor_during_blocked_engine(key=b"\r", pager=False):
+    marker = Path(os.environ["SNAJPAGENT_TEST_ROOT"]) / "blocked-query-pager-called"
+    env = None
+    if pager:
+        program = marker.with_suffix(".sh")
+        program.write_text("#!/bin/sh\nprintf called > " +
+                           shlex.quote(str(marker)) + "\nexit 1\n")
+        program.chmod(0o700)
+        env = dict(os.environ, HOME=WORKSPACE, PAGER=shlex.quote(str(program)))
+    child = Child([], env=env)
     failure = None
     try:
         child.wait_idle_prompt()
@@ -6697,7 +6724,11 @@ def test_editor_during_blocked_engine(key=b"\r"):
         after = child.send_wait(b"/verbose 2" + key, b"verbosity: 2 (previews)", start=after, timeout=0.25)
         after = child.send_wait(b"/verbose 7" + key, b"/verbose expects one integer from 0 through 6",
                            start=after, timeout=0.25)
-        after = child.send_wait(b"/verbose " + key, b"verbosity: 2 (previews)", start=after, timeout=0.25)
+        queries = ((b"/verbose", b"/verbose ") if key == b"\r"
+                   else (b"/verbose ",))
+        for query in queries:
+            after = child.send_wait(query + key, b"verbosity: 2 (previews)",
+                                    start=after, timeout=0.25)
         assert b"engine-block-end" not in child.buf
         fcntl.ioctl(child.fd, termios.TIOCSWINSZ,
                     struct.pack("HHHH", 24, 48, 0, 0))
@@ -6715,6 +6746,8 @@ def test_editor_during_blocked_engine(key=b"\r"):
             failure = exc
         end = child.send_wait(b"\x03", b"engine-block-end", start=after)
         child.exit_cleanly(end)
+        if pager:
+            assert not marker.exists(), "active verbosity query queued a pager"
     finally:
         child.kill()
         if failure:
@@ -6833,7 +6866,7 @@ if __name__ == "__main__":
     test_submitted_steering_visible_before_blocked_engine_returns()
     test_editor_during_render_flood()
     test_editor_during_blocked_engine()
-    test_editor_during_blocked_engine(b"\t")
+    test_editor_during_blocked_engine(b"\t", pager=True)
     test_pending_interrupt_during_blocked_engine()
     test_queue_editor_cancel_keeps_turn_interruptible()
     test_active_verbosity()
