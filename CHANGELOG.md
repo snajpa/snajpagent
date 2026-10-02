@@ -6,6 +6,10 @@
 
 ## 0.99.8c — October 2, 2026
 
+- Reset inherited ignored SIGINT when launching POSIX command children, keeping
+  managed interruption usable from background launchers as well as foreground
+  terminals. Preserve the parent's signal settings.
+
 - Preserve successful paged command reports in voice observations and display
   voice-submitted reference commands directly. Keep `/cat` contents operator-only.
 

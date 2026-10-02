@@ -1484,9 +1484,15 @@ child_spawn(struct snag_child *child, const char *shell, const char *command,
     child->pid = fork();
     if (child->pid < 0) goto fail;
     if (child->pid == 0) {
+        struct sigaction action = {.sa_handler = SIG_DFL};
         sigset_t unblocked;
+        sigemptyset(&action.sa_mask);
         sigemptyset(&unblocked);
-        if (sigprocmask(SIG_SETMASK, &unblocked, NULL) < 0) _exit(125);
+        /* Managed interrupts must not inherit a background shell's SIG_IGN. */
+        if (sigaction(SIGINT, &action, NULL) < 0 ||
+            sigprocmask(SIG_SETMASK, &unblocked, NULL) < 0) {
+            _exit(125);
+        }
         if (pty) {
             close_if_open(&master);
 #if defined(SNAJPAGENT_HAVE_PTY)

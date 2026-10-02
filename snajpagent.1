@@ -3743,7 +3743,8 @@ a stable external API while snajpagent remains pre-1.0.
 .TP
 .B SIGINT
 Interactive Ctrl-C follows the composer rules above.  Outside that handler it
-requests graceful shutdown.
+requests graceful shutdown. On POSIX hosts, spawned commands start with SIGINT
+unblocked and its default action, independently of the parent's signal state.
 .TP
 .BR SIGHUP , " SIGTERM"
 Request graceful shutdown, terminal restoration, IRC closure, and a resume

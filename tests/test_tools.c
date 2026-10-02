@@ -79,30 +79,47 @@ static void
 test_child_interrupt_mask(void)
 {
     sigset_t blocked, saved, current;
+    struct sigaction action = {0};
+    struct sigaction saved_action;
     char *shell = snag_default_shell();
     assert(shell);
     sigemptyset(&blocked);
     sigaddset(&blocked, SIGINT);
+    sigemptyset(&action.sa_mask);
+    assert(sigaction(SIGINT, NULL, &saved_action) == 0);
     assert(sigprocmask(SIG_BLOCK, &blocked, &saved) == 0);
-    for (unsigned int pty = 0; pty < 2u; ++pty) {
+    /* Default and ignored parent dispositions, each with pipes and a PTY. */
+    for (unsigned int trial = 0u; trial < 4u; ++trial) {
         struct snag_child child;
         char *environment[] = {"PATH=/usr/bin:/bin:/system/bin", NULL};
+        action.sa_handler = trial >= 2u ? SIG_IGN : SIG_DFL;
+        assert(sigaction(SIGINT, &action, NULL) == 0);
         snag_child_init(&child);
         assert(snag_child_spawn(&child, shell, "printf ready; exec sleep 30", "/",
-                                environment, pty != 0) == 0);
+                                environment, (trial & 1u) != 0u) == 0);
         struct snag_child_event event = {&child, 0u, SNAG_CHILD_READ, 0};
         assert(snag_child_wait(&event, 1u, SNAG_WAKE_INVALID, 1000) > 0);
         char bytes[32];
         assert(snag_child_read(&child, 0u, bytes, sizeof(bytes)) > 0);
         uint64_t start = snag_monotonic_ms();
         snag_child_signal(&child, SNAG_CHILD_INTERRUPT);
-        while (snag_child_exited(&child) == 0 && snag_monotonic_ms() - start < 1000u)
+        while (snag_child_exited(&child) == 0 && snag_monotonic_ms() - start < 1000u) {
             assert(snag_sleep_ms(1u) == 0);
-        assert(snag_child_exited(&child) == 1 && snag_child_reap(&child) == 0);
+        }
+        int exited = snag_child_exited(&child);
+        if (exited != 1) {
+            fprintf(stderr, "child interrupt: ignored=%u pty=%u\n", trial >= 2u, trial & 1u);
+            snag_child_free(&child);
+        }
+        assert(exited == 1 && snag_child_reap(&child) == 0);
         assert(child.signal_number == SIGINT);
         snag_child_free(&child);
+        struct sigaction current_action;
+        assert(sigaction(SIGINT, NULL, &current_action) == 0);
+        assert(current_action.sa_handler == action.sa_handler);
     }
     assert(sigprocmask(SIG_SETMASK, NULL, &current) == 0 && sigismember(&current, SIGINT));
+    assert(sigaction(SIGINT, &saved_action, NULL) == 0);
     assert(sigprocmask(SIG_SETMASK, &saved, NULL) == 0);
     free(shell);
 }

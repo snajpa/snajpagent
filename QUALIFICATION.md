@@ -38,6 +38,7 @@ separate opt-in tools:
 | `make evidencematrixcheck` | validates a supplied final set of external per-platform bundles for required platform coverage, unique platform ids, consistent versioning, terminal evidence, and live-provider evidence |
 | `make sizecheck` | reports source/test line counts and the largest production file, with no thresholds or line-count failures |
 | `tests/test_provider_transport` | exercises the real libcurl create/count/compact transport against a local loopback HTTP server |
+| `tests/test_tools` | checks POSIX command interruption with blocked or ignored parent SIGINT through pipes and PTYs, preserving the parent's signal state |
 | `tests/test_token_preflight.py` | verifies exact API-key token preflight, tool continuation, resume and count-endpoint authentication failure through the production CLI |
 | `tests/pty_*.py` | exercises the interactive terminal composer, live resize, suspend/continue, and TERM/width fallback behavior through a PTY on the current POSIX host |
 | `tests/test_command_pager.py` | exercises command reports and aliases through a capture pager in a six-row PTY, combined reports, retained history and queue rows, active-turn paging, template overrides and direct-output fallback; checks real less navigation after resize and physical screen contents over stock Mosh when those programs and GNU screen are installed |
