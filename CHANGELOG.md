@@ -458,6 +458,8 @@
   Add the journal I/O worker with grouped durable acknowledgements and retained
   batch reconciliation after write or sync failures. Support incremental
   checkpoint framing with bounded per-call hashing and unchanged snapshot bytes.
+  Publish alternating checkpoint generations on that same worker, yielding to
+  journal commits between chunks and retaining failed publication work for retry.
 
 - Fix a memory leak when combining compaction summaries.
 

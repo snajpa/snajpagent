@@ -2,18 +2,22 @@
 #ifndef SNAJPAGENT_STORE_BINARY_IO_H
 #define SNAJPAGENT_STORE_BINARY_IO_H
 
-#include "store_binary.h"
+#include "store_binary_publish.h"
 #include "wake.h"
 
 struct snag_binary_io;
 
-/* Narrow syscall seam for deterministic partial-write and ambiguous-sync tests.
+/* Syscall seam for deterministic journal and checkpoint publication failures.
  * NULL callbacks use the platform functions. Callback state stays alive until
- * close; callbacks run only on the I/O thread and follow those syscall contracts. */
+ * close; callbacks run only on the I/O thread and follow those syscall contracts.
+ * Creation is private/exclusive; sync_dir follows snag_sync_dir's 0/1/-1 result. */
 struct snag_binary_io_ops {
     int (*write_full)(void *, int, const void *, size_t);
     int (*sync_file)(void *, int);
     void *opaque;
+    int (*create_private)(void *, int, const char *);
+    int (*rename_at)(void *, int, const char *, int, const char *);
+    int (*sync_dir)(void *, int);
 };
 
 struct snag_binary_io_result {
@@ -28,7 +32,7 @@ struct snag_binary_io_result {
  * has already handled incomplete tails. From start until close, this worker has
  * exclusive descriptor/file access. Neither operation closes the descriptor.
  * Semantic staging stays on the engine thread. This worker never reduces state.
- * No application cutover, checkpoint/index maintenance or creation publication
+ * No application cutover, index maintenance or creation publication
  * is provided by this test-linked journal owner yet. */
 struct snag_binary_io *snag_binary_io_start(int fd,
     const struct snag_binary_anchor *boundary, const struct snag_binary_io_ops *ops);
@@ -53,8 +57,27 @@ int snag_binary_io_take(struct snag_binary_io *io, struct snag_binary_io_result 
  * A second failure requires fresh recovery before a replacement owner can start. */
 int snag_binary_io_retry(struct snag_binary_io *io);
 
+/* Configure once, while idle. Caller owns the private session directory and has
+ * independently validated its durable checkpoint generations (0 means unusable).
+ * The older/unusable slot is replaced; its peer remains untouched. Descriptor
+ * lifetime/exclusive writer ownership continue through I/O-owner close. */
+int snag_binary_io_checkpoint_setup(struct snag_binary_io *, int directory,
+    const uint64_t generations[2]);
+/* Move both owned section buffers on success only. The snapshot must describe
+ * the owner's current durable boundary. Journal commits take priority between
+ * bounded checkpoint chunks/stages. Newer commits may follow this snapshot. */
+int snag_binary_io_checkpoint_submit(struct snag_binary_io *, struct snag_binary_io_snapshot *);
+/* 1 pending, 0 durably published, -1 error. Only completed calls fill the result.
+ * Unsupported directory sync is an error, not a durable-publication claim.
+ * Consumed failures retain phase/bytes for a caller-paced retry, without blocking
+ * journal acknowledgements. The caller enforces the recovery-suffix budget. */
+int snag_binary_io_checkpoint_take(struct snag_binary_io *,
+    struct snag_binary_publication_result *);
+int snag_binary_io_checkpoint_retry(struct snag_binary_io *);
+
 /* EBUSY while a request or unconsumed completion exists. Closing a consumed
- * failure preserves all journal bytes and requires recovery before reuse. */
+ * failure preserves journal bytes and provisional checkpoint files for recovery.
+ * It never removes a published slot or closes the caller's directory/journal. */
 int snag_binary_io_close(struct snag_binary_io *io);
 
 #endif

@@ -337,6 +337,7 @@ tests/snajpagent-direct: $(COMMON_OBJ) tests/direct_session.c $(HEADERS)
 
 tests/test_store: src/store_binary_index.c src/store_binary_index.h tests/test_store_binary_index.c
 tests/test_store: src/store_binary_io.c src/store_binary_io.h tests/test_store_binary_io.c
+tests/test_store: src/store_binary_publish.c src/store_binary_publish.h tests/test_store_binary_publish.c
 
 tests/test_context tests/test_store tests/test_tools tests/test_turn: tests/checked_json.h
 

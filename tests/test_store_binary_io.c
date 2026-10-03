@@ -93,7 +93,9 @@ static struct snag_binary_io *
 start_owner(int fd, const struct snag_binary_anchor *before, struct probe *probe)
 {
     probe->caller = pthread_self();
-    struct snag_binary_io_ops ops = {probe_write, probe_sync, probe};
+    struct snag_binary_io_ops ops = {
+        .write_full = probe_write, .sync_file = probe_sync, .opaque = probe
+    };
     struct snag_binary_io *io = snag_binary_io_start(fd, before, &ops);
     assert(io && snag_binary_io_wake(io) != SNAG_WAKE_INVALID);
     return io;

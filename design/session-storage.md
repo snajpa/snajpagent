@@ -1760,8 +1760,9 @@ is required. A final cancellation/source identity/size/time check precedes joint
 adoption of the loaded core, capture and optional origins.
 
 This verified materialization still reads the whole requested prefix to establish
-authority and its canonical payload pool. Direct selected-record loading,
-index authority, alternating publication and a runtime selector remain open.
+authority and its canonical payload pool. Direct selected-record loading, index
+authority and a runtime selector remain open. The I/O owner now supplies the
+alternating publication primitive described below.
 
 The stopped checkpoint-plus-suffix consumer first verifies and materializes that
 checkpoint, then reduces later committed batches into its provisional core and
@@ -1849,9 +1850,9 @@ consistency and canonical reference provenance before adoption; an unknown requi
 section version fails state loading. Frame decoding alone supplies no state or
 resume authority. Frame tests include synthetic section bytes and snapshots larger
 than one event. Typed core/provider bodies and verified checkpoint-plus-suffix
-materialization have separate semantic tests. Efficient anchor selection
-and alternating durable publication remain under
-implementation. Runtime storage remains JSONL.
+materialization have separate semantic tests. Alternating publication is available
+on the test-linked I/O owner described below. Efficient anchor selection and
+application integration remain under implementation. Runtime storage remains JSONL.
 
 ## Checkpoint cadence and publication
 
@@ -2038,8 +2039,44 @@ deterministic partial-write and ambiguous-sync fixtures; production uses the
 platform functions. Fixtures also exercise real file-size-limit write failure,
 maximum permitted batch sizes, immutable input copies, pending responsiveness,
 one sync for grouped records, and retries without duplicate appends. These checks
-exercise the journal primitive. Application transaction batching, checkpoint/index
-maintenance and power-loss qualification remain separate integration work.
+exercise the journal primitive. Application transaction batching, index maintenance
+and power-loss qualification remain separate integration work.
+
+### Test-linked checkpoint publisher
+
+The same worker accepts an owned pair of immutable core/provider section buffers
+captured at its current durable journal boundary. Submission moves those buffers
+only on success. The engine establishes their semantic validity before submission;
+the publisher checks framing, source identity and the durable boundary. Checkpoint
+generation numbers come from independently validated durable slot metadata, advance
+monotonically, and replace the older or unusable slot while preserving its peer.
+
+The worker creates a private exclusive temporary file, frames and hashes at most
+64 KiB per step, synchronizes the complete file, renames it over the selected slot,
+and synchronizes the directory. Queued journal transactions take priority between
+steps. New journal commits may follow the captured boundary while publication is
+in progress. Snapshot size has no additional cap. Separate completion streams
+share a level-triggered wakeup, so consuming either completion preserves readiness
+for the other.
+
+Publication is acknowledged only after the directory barrier succeeds. A platform
+report that directory synchronization is unsupported remains an explicit error.
+Neither a successful write, file sync nor rename alone advances the owner's durable
+slot metadata. A failed operation retains the immutable image, generation, selected
+slot and progress for a caller-paced retry. Partial writes are compared against the
+same chunk and only its matching missing suffix is appended. A retry reconciles an
+ambiguous rename by comparing the held file identity with the destination before
+attempting another rename. The other slot remains untouched throughout failure and
+retry; journal acknowledgements remain independent of maintenance errors.
+
+Closing after a consumed publication failure closes the worker's descriptor and
+retains any provisional file for recovery. The completion includes its generated
+temporary name; after an ambiguous rename that name may already have disappeared.
+The `renamed` flag records confirmed replacement, and a false value alone cannot
+exclude an ambiguous replacement. Runtime integration supplies dirty-state cadence,
+recovery-suffix backpressure, retry pacing and provisional-file recovery. These
+components currently exercise file publication with framing fixtures; canonical
+core/provider checkpoint semantics are covered by the separate reconstruction tests.
 
 ## Compatibility and implementation order
 

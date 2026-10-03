@@ -33,6 +33,10 @@ struct snag_binary_io {
     bool stopping;
     struct io_request *request;
     struct snag_binary_io_result result;
+    int directory;
+    uint64_t generations[2];
+    enum io_phase checkpoint_phase;
+    struct snag_binary_publication *checkpoint;
 };
 
 static int
@@ -47,6 +51,38 @@ sync_native(void *opaque, int fd)
 {
     (void)opaque;
     return snag_sync_file(fd);
+}
+
+static int
+create_native(void *opaque, int directory, const char *name)
+{
+    (void)opaque;
+    return snag_create_private_at(directory, name, true);
+}
+
+static int
+rename_native(void *opaque, int from_directory, const char *from, int to_directory, const char *to)
+{
+    (void)opaque;
+    return snag_rename_at(from_directory, from, to_directory, to);
+}
+
+static int
+sync_directory(void *opaque, int fd)
+{
+    (void)opaque;
+    return snag_sync_dir(fd);
+}
+
+/* Both completion streams share a level-triggered wakeup. Consuming one must
+ * preserve readiness for an unconsumed completion on the other stream. */
+static void
+refresh_wake(struct snag_binary_io *io)
+{
+    snag_wakeup_drain(io->wake[0]);
+    if (io->phase == IO_DONE || io->checkpoint_phase == IO_DONE) {
+        snag_wakeup_send(io->wake[1]);
+    }
 }
 
 static void
@@ -185,10 +221,24 @@ run_owner(void *opaque)
     struct snag_binary_io *io = opaque;
     pthread_mutex_lock(&io->mutex);
     for (;;) {
-        while (io->phase != IO_QUEUED && !io->stopping) {
+        while (io->phase != IO_QUEUED && io->checkpoint_phase != IO_QUEUED && !io->stopping) {
             pthread_cond_wait(&io->changed, &io->mutex);
         }
         if (io->stopping) break;
+        if (io->phase != IO_QUEUED) {
+            io->checkpoint_phase = IO_RUNNING;
+            pthread_mutex_unlock(&io->mutex);
+            int rc = snag_binary_publication_step(io->checkpoint, &io->ops);
+            pthread_mutex_lock(&io->mutex);
+            io->checkpoint_phase = rc > 0 ? IO_QUEUED : IO_DONE;
+            if (!rc) {
+                struct snag_binary_publication_result result;
+                snag_binary_publication_result(io->checkpoint, &result);
+                io->generations[result.slot] = result.generation;
+            }
+            if (rc <= 0) snag_wakeup_send(io->wake[1]);
+            continue;
+        }
         struct io_request *request = io->request;
         io->phase = IO_RUNNING;
         pthread_mutex_unlock(&io->mutex);
@@ -202,6 +252,7 @@ run_owner(void *opaque)
         snag_wakeup_send(io->wake[1]);
     }
     pthread_mutex_unlock(&io->mutex);
+    snag_binary_publication_close(io->checkpoint);
     return NULL;
 }
 
@@ -218,11 +269,15 @@ snag_binary_io_start(int fd, const struct snag_binary_anchor *boundary,
     struct snag_binary_io *io = calloc(1u, sizeof(*io));
     if (!io) return NULL;
     io->fd = fd;
+    io->directory = -1;
     io->wake[0] = io->wake[1] = SNAG_WAKE_INVALID;
     io->result.written = io->result.durable = *boundary;
     if (ops) io->ops = *ops;
     if (!io->ops.write_full) io->ops.write_full = write_native;
     if (!io->ops.sync_file) io->ops.sync_file = sync_native;
+    if (!io->ops.create_private) io->ops.create_private = create_native;
+    if (!io->ops.rename_at) io->ops.rename_at = rename_native;
+    if (!io->ops.sync_dir) io->ops.sync_dir = sync_directory;
     int rc = pthread_mutex_init(&io->mutex, NULL);
     if (rc) {
         free(io);
@@ -295,7 +350,6 @@ snag_binary_io_take(struct snag_binary_io *io, struct snag_binary_io_result *out
         return pending ? 1 : snag_errno(ENOENT);
     }
     *out = io->result;
-    snag_wakeup_drain(io->wake[0]);
     if (out->error && io->request->attempted_io) {
         io->phase = IO_FAILED;
     } else {
@@ -303,6 +357,7 @@ snag_binary_io_take(struct snag_binary_io *io, struct snag_binary_io_result *out
         io->request = NULL;
         io->phase = IO_IDLE;
     }
+    refresh_wake(io);
     pthread_mutex_unlock(&io->mutex);
     return out->error ? snag_errno(out->error) : 0;
 }
@@ -327,11 +382,100 @@ snag_binary_io_retry(struct snag_binary_io *io)
 }
 
 int
+snag_binary_io_checkpoint_setup(struct snag_binary_io *io, int directory,
+    const uint64_t generations[2])
+{
+    if (!io || directory < 0 || !generations) return snag_errno(EINVAL);
+    pthread_mutex_lock(&io->mutex);
+    if (io->directory >= 0 || io->phase != IO_IDLE) {
+        pthread_mutex_unlock(&io->mutex);
+        return snag_errno(EBUSY);
+    }
+    io->directory = directory;
+    memcpy(io->generations, generations, sizeof(io->generations));
+    pthread_mutex_unlock(&io->mutex);
+    return 0;
+}
+
+static bool
+same_anchor(const struct snag_binary_anchor *left, const struct snag_binary_anchor *right)
+{
+    return left->end == right->end && left->next_seq == right->next_seq &&
+        left->turns == right->turns && left->previous == right->previous &&
+        !memcmp(left->digest, right->digest, sizeof(left->digest));
+}
+
+int
+snag_binary_io_checkpoint_submit(struct snag_binary_io *io,
+    struct snag_binary_io_snapshot *snapshot)
+{
+    if (!io || !snapshot) return snag_errno(EINVAL);
+    pthread_mutex_lock(&io->mutex);
+    int error = io->checkpoint ? EBUSY : io->directory < 0 ? EINVAL :
+        !same_anchor(&snapshot->boundary, &io->result.durable) ? ESTALE : 0;
+    if (error) {
+        pthread_mutex_unlock(&io->mutex);
+        return snag_errno(error);
+    }
+    struct snag_binary_publication *publication = snag_binary_publication_new(io->fd,
+        io->directory, io->generations, snapshot);
+    if (!publication) {
+        pthread_mutex_unlock(&io->mutex);
+        return -1;
+    }
+    io->checkpoint = publication;
+    io->checkpoint_phase = IO_QUEUED;
+    pthread_cond_signal(&io->changed);
+    pthread_mutex_unlock(&io->mutex);
+    return 0;
+}
+
+int
+snag_binary_io_checkpoint_take(struct snag_binary_io *io,
+    struct snag_binary_publication_result *out)
+{
+    if (!io || !out) return snag_errno(EINVAL);
+    pthread_mutex_lock(&io->mutex);
+    if (io->checkpoint_phase != IO_DONE) {
+        bool pending = io->checkpoint_phase == IO_QUEUED || io->checkpoint_phase == IO_RUNNING;
+        pthread_mutex_unlock(&io->mutex);
+        return pending ? 1 : snag_errno(ENOENT);
+    }
+    snag_binary_publication_result(io->checkpoint, out);
+    if (out->error) {
+        io->checkpoint_phase = IO_FAILED;
+    } else {
+        snag_binary_publication_free(io->checkpoint);
+        io->checkpoint = NULL;
+        io->checkpoint_phase = IO_IDLE;
+    }
+    refresh_wake(io);
+    pthread_mutex_unlock(&io->mutex);
+    return out->error ? snag_errno(out->error) : 0;
+}
+
+int
+snag_binary_io_checkpoint_retry(struct snag_binary_io *io)
+{
+    if (!io) return snag_errno(EINVAL);
+    pthread_mutex_lock(&io->mutex);
+    if (io->checkpoint_phase != IO_FAILED) {
+        pthread_mutex_unlock(&io->mutex);
+        return snag_errno(EBUSY);
+    }
+    io->checkpoint_phase = IO_QUEUED;
+    pthread_cond_signal(&io->changed);
+    pthread_mutex_unlock(&io->mutex);
+    return 0;
+}
+
+int
 snag_binary_io_close(struct snag_binary_io *io)
 {
     if (!io) return 0;
     pthread_mutex_lock(&io->mutex);
-    if (io->phase != IO_IDLE && io->phase != IO_FAILED) {
+    if ((io->phase != IO_IDLE && io->phase != IO_FAILED) ||
+        (io->checkpoint_phase != IO_IDLE && io->checkpoint_phase != IO_FAILED)) {
         pthread_mutex_unlock(&io->mutex);
         return snag_errno(EBUSY);
     }
@@ -340,6 +484,7 @@ snag_binary_io_close(struct snag_binary_io *io)
     pthread_mutex_unlock(&io->mutex);
     pthread_join(io->thread, NULL);
     request_free(io->request);
+    snag_binary_publication_free(io->checkpoint);
     snag_wakeup_close(io->wake);
     pthread_cond_destroy(&io->changed);
     pthread_mutex_destroy(&io->mutex);
