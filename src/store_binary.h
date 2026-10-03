@@ -146,6 +146,19 @@ int snag_binary_checkpoint_frame_from_receipt(const void *data, size_t size,
     const struct snag_binary_identity *identity,
     const struct snag_binary_checkpoint_receipt *receipt,
     struct snag_binary_checkpoint_frame *out);
+/* Find the latest receipt for each supplied image digest (NULL means absent)
+ * by walking backward from an independently trusted immutable committed tail.
+ * Follow each selected capture boundary to its exact ancestor before returning
+ * its bit (1/2) in the result. Zero means neither image is pinned in this window;
+ * -1 means corruption, read/allocation failure or cancellation (ECANCELED).
+ * floor is the oldest eligible physical boundary, not a cache-supplied anchor.
+ * Work stays between through and floor plus one predecessor batch. Cancellation
+ * is checked between batches. Output slots without a returned bit, and both
+ * slots on failure, remain unchanged. No descriptor seeks, writes or adoption.
+ * Image/section/frontier validation and source locking remain caller duties. */
+int snag_binary_checkpoint_receipts_find(int fd, const struct snag_binary_anchor *through,
+    uint64_t floor, const unsigned char *const images[2], struct snag_buf *scratch,
+    struct snag_binary_checkpoint_receipt out[2], bool (*cancelled)(void *), void *opaque);
 /* Resolve only against a verified immutable batch from this journal. Validate
  * sequence, required record status, expected type/version and slice bounds
  * before exposing a view. Required state cannot depend on optional metadata. */

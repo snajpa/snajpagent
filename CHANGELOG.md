@@ -465,6 +465,8 @@
   Resolve authenticated index entries with bounded canonical batch reads.
   Add optional checkpoint receipt encoding and exact snapshot-image binding,
   and return the completed image digest with durable publication.
+  Find paired receipts through a bounded, cancellable canonical-chain walk and
+  verify their exact earlier capture anchors before exposing checkpoint pins.
   Add a bounded reversible batch-envelope codec that separates physical commit
   delimiters from payload bytes. Adopt it in draft journal format 0.2 for the
   importer, I/O owner and forward/backward/indexed readers; retain decoded

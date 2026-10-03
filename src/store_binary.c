@@ -901,6 +901,81 @@ snag_binary_batch_find(int fd, const struct snag_binary_anchor *through, uint64_
 }
 
 int
+snag_binary_checkpoint_receipts_find(int fd, const struct snag_binary_anchor *through,
+    uint64_t floor, const unsigned char *const images[2], struct snag_buf *scratch,
+    struct snag_binary_checkpoint_receipt out[2], bool (*cancelled)(void *), void *opaque)
+{
+    if (fd < 0 || !through || !images || !scratch || !out || !anchor_valid(through) ||
+        through->turns >= through->next_seq || floor < SNAG_BINARY_HEADER_SIZE ||
+        floor > through->end) {
+        return invalid();
+    }
+    struct snag_binary_checkpoint_receipt candidates[2] = {0};
+    unsigned unseen = (images[0] ? 1u : 0u) | (images[1] ? 2u : 0u);
+    unsigned char hashes[2][32];
+    for (size_t i = 0u; i < 2u; ++i) {
+        if (images[i]) memcpy(hashes[i], images[i], 32u);
+    }
+    unsigned pending = 0u, verified = 0u;
+    struct snag_binary_anchor cursor = *through;
+    while (unseen || pending) {
+        if (cancelled && cancelled(opaque)) return snag_errno(ECANCELED);
+        if (cursor.end <= floor || cursor.previous < floor) break;
+        struct snag_binary_batch batch;
+        struct snag_binary_anchor before;
+        if (snag_binary_batch_previous(fd, &cursor, scratch, &batch, &before) != 0) {
+            return -1;
+        }
+        size_t position = SNAG_BINARY_BATCH_HEADER_SIZE;
+        struct snag_binary_record record;
+        uint64_t sequence;
+        unsigned found = 0u;
+        int rc;
+        while ((rc = snag_binary_record_next(&batch, &position, &record, &sequence)) == 0) {
+            if (record.kind != SNAG_BINARY_CHECKPOINT_RECEIPT) continue;
+            struct snag_binary_checkpoint_receipt receipt;
+            rc = snag_binary_checkpoint_receipt_decode(&record, &receipt);
+            if (rc < 0) return -1;
+            if (rc == 1) continue;
+            if (receipt.boundary.end > before.end ||
+                receipt.boundary.next_seq > before.next_seq ||
+                receipt.boundary.turns > before.turns) {
+                return invalid();
+            }
+            for (size_t i = 0u; i < 2u; ++i) {
+                unsigned bit = 1u << i;
+                if (((unseen | found) & bit) &&
+                    !memcmp(receipt.image_digest, hashes[i], 32u)) {
+                    /* Forward iteration within this backward-read batch keeps
+                     * its last matching record, not the highest generation. */
+                    candidates[i] = receipt;
+                    unseen &= ~bit;
+                    found |= bit;
+                }
+            }
+        }
+        if (rc < 0) return -1;
+        for (size_t i = 0u; i < 2u; ++i) {
+            unsigned bit = 1u << i;
+            const struct snag_binary_anchor *target = &candidates[i].boundary;
+            if ((found & bit) && target->end >= floor) pending |= bit;
+            if (!(pending & bit)) continue;
+            if (before.end < target->end) return invalid();
+            if (before.end == target->end) {
+                if (!anchors_equal(&before, target)) return invalid();
+                pending &= ~bit;
+                verified |= bit;
+            }
+        }
+        cursor = before;
+    }
+    for (size_t i = 0u; i < 2u; ++i) {
+        if (verified & (1u << i)) out[i] = candidates[i];
+    }
+    return (int)verified;
+}
+
+int
 snag_binary_record_next(const struct snag_binary_batch *batch, size_t *cursor,
     struct snag_binary_record *record, uint64_t *sequence)
 {

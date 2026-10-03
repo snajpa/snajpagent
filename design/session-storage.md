@@ -1993,8 +1993,25 @@ validation. The receipt must itself be established as a canonical record with a
 capture boundary preceding its containing batch; neither an index hint nor a
 cache-supplied anchor establishes this prerequisite.
 
-These codecs and publication digest results are test-linked. Runtime receipt
-submission, checkpoint admission and canonical-root discovery are pending. The
+The paired receipt search takes two image digests as lookup keys and walks backward
+from an independently established immutable journal tail. It selects the latest
+matching canonical record for each slot, including the last match within a batch.
+Each selected capture must precede the receipt's containing batch and match every
+field of an ancestor reached on that same chain. A matching digest alone grants
+no authority. Unsupported optional versions are skipped; malformed supported
+receipts, contradictory boundaries and damaged traversed batches fail atomically.
+
+The caller supplies the oldest eligible physical boundary. Search and ancestry
+work stay within that suffix plus one immediate predecessor batch; captures
+outside the window remain unavailable. One pass serves both slots, cancellation
+is checked between batches, and missing/unpinned slots preserve caller outputs.
+Neither an error nor cancellation publishes a partially verified pair. The search
+reads no index, changes no descriptor position and writes no bytes. It can leave
+unrelated older prefix damage uninspected; image/section/frontier decoding and
+canonical reference materialization remain separate admission obligations.
+
+These codecs, receipt search and publication digest results are test-linked.
+Runtime receipt submission and checkpoint admission remain pending. The
 publisher's file/directory ACK currently proves durable file replacement; it does
 not yet establish a receipt-backed checkpoint generation. Missing index bytes
 must remain independent of this protocol's canonical durability barriers.
