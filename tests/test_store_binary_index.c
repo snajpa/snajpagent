@@ -32,10 +32,19 @@ test_codecs(void)
     unsigned char header[SNAG_BINARY_INDEX_HEADER_SIZE];
     snag_binary_index_header_encode(header, &identity);
     assert_bytes(header, sizeof(header),
-        "534e414749445800000001007000000060000000000000000102030405060708090a0b0c0d0e0f10"
+        "534e414749445800000002007000000060000000200000000102030405060708090a0b0c0d0e0f10"
         "010203040506070831dd03c3f21f0051ef07b5e6a60169931294fefac3126a175a3639b0d5e068b4"
-        "11228e6487ef1fce908d43b2a23f355536d242621f7d18f776fdf23171b83952");
+        "4d61e7a61f89036fe4f9b1c13c6246961f32673489f51fde03515c8f3864a8ef");
     assert(!snag_binary_index_header_decode(header, sizeof(header), &identity));
+    unsigned char old[sizeof(header)];
+    memcpy(old, header, sizeof(old));
+    old[10] = 1u;
+    old[20] = 0u;
+    struct snag_sha256 hash;
+    snag_sha256_init(&hash);
+    snag_sha256_update(&hash, old, sizeof(old) - 32u);
+    snag_sha256_final(&hash, old + sizeof(old) - 32u);
+    assert(snag_binary_index_header_decode(old, sizeof(old), &identity) < 0);
     for (size_t i = 0u; i < sizeof(header); ++i) {
         assert(snag_binary_index_header_decode(header, i, &identity) == 1);
         header[i] ^= 1u;
@@ -96,11 +105,11 @@ test_codecs(void)
     }
     int64_t offset = -7;
     assert(!snag_binary_index_offset(1u, &offset) && offset == SNAG_BINARY_INDEX_HEADER_SIZE);
-    assert(!snag_binary_index_offset(7u, &offset) && offset == 688);
-    uint64_t last = ((uint64_t)INT64_MAX - SNAG_BINARY_INDEX_HEADER_SIZE) /
-        SNAG_BINARY_INDEX_ENTRY_SIZE;
+    assert(!snag_binary_index_offset(7u, &offset) && offset == 816);
+    /* Independent integer arithmetic over 112 + 128*n - 32*popcount(n). */
+    uint64_t last = UINT64_C(72057594037927935);
     assert(!snag_binary_index_offset(last, &offset));
-    assert(offset <= INT64_MAX - SNAG_BINARY_INDEX_ENTRY_SIZE);
+    assert(offset == INT64_C(9223372036854773904));
     int64_t kept = offset;
     assert(snag_binary_index_offset(last + 1u, &offset) < 0 && errno == EOVERFLOW);
     assert(offset == kept);
@@ -188,18 +197,24 @@ test_batches(void)
     unsigned char index_header[SNAG_BINARY_INDEX_HEADER_SIZE];
     snag_binary_index_header_encode(index_header, &identity);
     assert(!snag_buf_append(&index, index_header, sizeof(index_header)));
+    struct snag_binary_index_tree tree = {0};
     for (size_t i = 0u; i < 2u; ++i) {
         size_t length = index.len;
+        struct snag_binary_index_tree saved_tree = tree;
         struct snag_binary_anchor wrong = anchors[i + 1u];
         wrong.digest[0] ^= 1u;
-        assert(snag_binary_index_append_batch(&index, &identity, &anchors[i], &wrong,
+        assert(snag_binary_index_tree_append_batch(&index, &tree, &identity, &anchors[i], &wrong,
             batches[i].data, batches[i].len) < 0 && index.len == length);
-        assert(snag_binary_index_append_batch(&index, &identity, &anchors[i], &anchors[i + 1u],
-            batches[i].data, batches[i].len - 1u) < 0 && index.len == length);
-        assert(!snag_binary_index_append_batch(&index, &identity, &anchors[i], &anchors[i + 1u],
-            batches[i].data, batches[i].len));
+        assert(snag_binary_index_tree_append_batch(&index, &tree, &identity,
+            &anchors[i], &anchors[i + 1u], batches[i].data, batches[i].len - 1u) < 0 &&
+            index.len == length);
+        assert(!memcmp(&saved_tree, &tree, sizeof(tree)));
+        assert(!snag_binary_index_tree_append_batch(&index, &tree, &identity,
+            &anchors[i], &anchors[i + 1u], batches[i].data, batches[i].len));
     }
-    assert(index.len == SNAG_BINARY_INDEX_HEADER_SIZE + 7u * SNAG_BINARY_INDEX_ENTRY_SIZE);
+    assert(index.len == 912u && tree.count == 7u);
+    unsigned char root[32];
+    assert(!snag_binary_index_tree_root(&tree, root));
     /* A checksummed batch with inconsistent turn numbering cannot produce an index. */
     struct snag_buf wrong_turn = {.max = SNAG_MAX_EVENT_LINE};
     turn_payload(&wrong_turn, 9u);
@@ -226,6 +241,7 @@ test_batches(void)
     struct snag_binary_index_entry entry;
     for (uint64_t sequence = 1u; sequence <= 7u; ++sequence) {
         assert(!snag_binary_index_read_hint(fd, &identity, sequence, &entry));
+        assert(!snag_binary_index_read_verified(fd, &identity, 7u, root, sequence, &entry));
         assert(entry.sequence == sequence && entry.turn == ordinal[sequence - 1u]);
         size_t which = sequence <= 4u ? 0u : 1u;
         struct snag_binary_record record = {0};
@@ -260,6 +276,7 @@ test_batches(void)
     }
     for (uint64_t turn = 1u; turn <= 3u; ++turn) {
         assert(!snag_binary_index_turn_hint(fd, &identity, 7u, turn, &entry));
+        assert(!snag_binary_index_turn_verified(fd, &identity, 7u, root, turn, &entry));
         assert(entry.turn == turn && entry.sequence == turn * 2u &&
             entry.kind == SNAG_BINARY_TURN_STARTED);
     }
@@ -285,6 +302,7 @@ test_batches(void)
     assert(!snag_write_full(fd, wrong_entry, sizeof(wrong_entry)));
     assert(snag_seek(fd, 7, SEEK_SET) == 7);
     assert(snag_binary_index_turn_hint(fd, &identity, 7u, 2u, &entry) < 0 && errno == EINVAL);
+    assert(snag_binary_index_turn_verified(fd, &identity, 7u, root, 2u, &entry) < 0);
     assert(!memcmp(&saved, &entry, sizeof(saved)) && snag_seek(fd, 0, SEEK_CUR) == 7);
     assert(snag_seek(fd, wrong_offset, SEEK_SET) == wrong_offset);
     assert(!snag_write_full(fd, index.data + (size_t)wrong_offset, sizeof(wrong_entry)));
@@ -346,6 +364,34 @@ test_batch_limits(void)
         assert(snag_binary_index_append_batch(&bounded, &identity, &before, &after,
             bytes.data, bytes.len) < 0 && bounded.len == 1u && bounded.data[0] == '!');
         snag_buf_free(&bounded);
+        struct snag_binary_index_tree tree = {0};
+        struct snag_buf forest = {.max = SNAG_BINARY_INDEX_TREE_BATCH_MAX};
+        assert(!snag_binary_index_tree_append_batch(&forest, &tree, &identity, &before, &after,
+            bytes.data, bytes.len));
+        int64_t end;
+        assert(!snag_binary_index_end(count, &end));
+        assert(tree.count == count && forest.len == (size_t)end - SNAG_BINARY_INDEX_HEADER_SIZE);
+        unsigned char root[32];
+        assert(!snag_binary_index_tree_root(&tree, root));
+        int fd = temporary_fd();
+        unsigned char index_header[SNAG_BINARY_INDEX_HEADER_SIZE];
+        snag_binary_index_header_encode(index_header, &identity);
+        assert(!snag_write_full(fd, index_header, sizeof(index_header)));
+        assert(!snag_write_full(fd, forest.data, forest.len));
+        assert(!snag_binary_index_read_verified(fd, &identity, count, root, count, &entry));
+        struct snag_binary_index_tree restored;
+        assert(!snag_binary_index_tree_load(fd, &identity, count, root, &restored));
+        assert(!memcmp(&restored, &tree, sizeof(tree)));
+        assert(!close(fd));
+        struct snag_binary_index_tree empty = {0};
+        struct snag_binary_index_tree saved_tree = empty;
+        bounded.max = forest.len;
+        assert(!snag_buf_append(&bounded, "!", 1u));
+        assert(snag_binary_index_tree_append_batch(&bounded, &empty, &identity, &before, &after,
+            bytes.data, bytes.len) < 0 && bounded.len == 1u && bounded.data[0] == '!');
+        assert(!memcmp(&saved_tree, &empty, sizeof(empty)));
+        snag_buf_free(&bounded);
+        snag_buf_free(&forest);
         snag_buf_free(&entries);
         snag_buf_free(&bytes);
         free(records);

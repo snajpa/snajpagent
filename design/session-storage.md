@@ -1912,7 +1912,7 @@ need no independent durability barrier because the journal can reproduce them.
 ### Test-linked fixed-width index building blocks
 
 The current index codec uses a 112-byte header: magic `SNAGIDX\0`, u16 major 0,
-u16 minor 1, u32 header size, u32 entry size 96, u32 reserved zero, UUID 16,
+u16 minor 2, u32 header size, u32 entry size 96, u32 parent-hash size 32, UUID 16,
 created-ms u64, initial journal-anchor digest 32 and header checksum 32. The
 checksum covers its first 80 bytes. Header comparison uses the independently
 supplied canonical journal identity. In the current journal draft, the header
@@ -1933,9 +1933,12 @@ Each 96-byte entry contains the following little-endian fields:
 
 The entry checksum hashes the initial journal-anchor digest followed by the
 entry's first 64 bytes. It detects corruption and binds the sequence slot and
-journal namespace. Lookup computes `112 + (sequence - 1) * 96` with room for the entire
-entry inside signed file offsets. An unrepresentable index offset is an index
-error, not a new quota on the canonical session.
+journal namespace. Draft 0.2 interleaves each fixed-width entry with the 32-byte
+parent hashes completed by that leaf. A prefix containing `n` entries ends at
+`112 + 128*n - 32*popcount(n)`; entry `n+1` starts there. Offset checks reserve the
+complete next prefix, including its parents, inside signed file positions. An
+unrepresentable offset is an index error, not a quota on canonical session data.
+The earlier unpublished flat draft is rejected by its version/header fields.
 
 The batch builder and resolver require independently authenticated before/after
 anchors. They validate framing, walk real record boundaries, check turn-start
@@ -1952,12 +1955,42 @@ turn-start hint over a caller-bounded prefix. Missing or torn index bytes mean
 unavailable indexing; a negative search never proves that canonical history is
 absent. The positive result still requires canonical resolution.
 
-These building blocks are test-linked. Index publication, bounded history-page
-integration and normal admission remain unfinished. In particular, the current
-canonical batch finder still follows the backward chain. An index checksum or
-hint cannot replace that authentication or establish a checkpoint's semantic
-membership; efficient authenticated selected-record loading remains a separate
-integration dependency.
+### Append-only index proofs
+
+The index uses the SHA-256 tree-hash construction from RFC 9162 section 2.1.1.
+Leaf hashes cover a zero byte followed by the complete 96-byte encoded entry;
+parent hashes cover a one byte followed by the left and right hashes. Empty
+history uses SHA-256 of empty input. An append combines the occupied low-order
+frontier slots and writes the newly completed parent hashes after its entry.
+Old nodes remain at their original positions, preserving proofs beneath older
+checkpoint roots. The logical frontier has one 32-byte hash per sequence-width
+bit; its count identifies occupied slots. This is fixed metadata, not a lifetime
+record table or a new session capacity.
+
+The frontier root folds occupied slots from right to left using the same parent
+hash. A positional membership query reads its target entry, the sibling roots
+on that path and the remaining frontier. A complete sibling subtree requires
+one stored root read. Recursion depth and proof storage follow the sequence width;
+lookup never scans the session's entries. Turn lookup combines this check with
+the ordinal's binary search. Frontier restoration reads only occupied peaks and
+compares their combined root before adopting the frontier. Atomic single-entry
+and batch builders preserve both caller bytes and frontier on failure. A batch
+needs at most 4 MiB plus 2 KiB of staged tree bytes, derived from its record count
+and a possible carry through existing peaks, in addition to the flat-entry builder.
+
+A verifier requires an independently established root for the exact journal
+prefix. Taking a root from the index itself would discard the membership guarantee.
+A successful proof validates the location, kind, ordinal and batch digest recorded
+in that prefix; the reader still verifies the referenced canonical batch and its
+record boundaries before using content. Missing cache bytes remain unavailable
+indexing, and corruption preserves caller outputs and descriptor positions.
+Queries check the nodes they depend on rather than scanning unrelated index data.
+
+The implementation is test-linked. Runtime index maintenance, canonical root
+binding, direct batch resolution, bounded history-page integration and efficient
+checkpoint admission remain unfinished. The current ordinary batch finder still
+walks the backward chain; the proof interface alone does not change resume behavior
+or give a checkpoint semantic authority.
 
 ## One I/O owner and sparse durability barriers
 

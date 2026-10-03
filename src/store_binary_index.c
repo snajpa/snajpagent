@@ -42,9 +42,10 @@ snag_binary_index_header_encode(unsigned char out[SNAG_BINARY_INDEX_HEADER_SIZE]
     unsigned char journal[SNAG_BINARY_HEADER_SIZE];
     snag_binary_header_encode(journal, identity);
     memcpy(header, index_magic, sizeof(index_magic));
-    put_le(header + 10u, 1u, 2u);
+    put_le(header + 10u, 2u, 2u);
     put_le(header + 12u, sizeof(header), 4u);
     put_le(header + 16u, SNAG_BINARY_INDEX_ENTRY_SIZE, 4u);
+    put_le(header + 20u, SNAG_BINARY_INDEX_HASH_SIZE, 4u);
     memcpy(header + 24u, identity->id, sizeof(identity->id));
     put_le(header + 40u, identity->created_ms, 8u);
     memcpy(header + 48u, journal + SNAG_BINARY_HEADER_SIZE - 32u, 32u);
@@ -136,16 +137,30 @@ snag_binary_index_entry_decode(const void *data, size_t size,
 }
 
 int
+snag_binary_index_end(uint64_t count, int64_t *out)
+{
+    if (!out) return snag_errno(EINVAL);
+    const uint64_t stride = SNAG_BINARY_INDEX_ENTRY_SIZE + SNAG_BINARY_INDEX_HASH_SIZE;
+    if (count > UINT64_MAX / stride) return snag_errno(EOVERFLOW);
+    unsigned int peaks = 0u;
+    for (uint64_t bits = count; bits; bits &= bits - 1u) ++peaks;
+    uint64_t bytes = count * stride - peaks * SNAG_BINARY_INDEX_HASH_SIZE;
+    if (bytes > (uint64_t)INT64_MAX - SNAG_BINARY_INDEX_HEADER_SIZE) {
+        return snag_errno(EOVERFLOW);
+    }
+    *out = (int64_t)(SNAG_BINARY_INDEX_HEADER_SIZE + bytes);
+    return 0;
+}
+
+int
 snag_binary_index_offset(uint64_t sequence, int64_t *out)
 {
     if (!sequence || !out) return snag_errno(EINVAL);
-    /* Reserve the complete entry, not just its starting file offset. */
-    if (sequence > ((uint64_t)INT64_MAX - SNAG_BINARY_INDEX_HEADER_SIZE) /
-        SNAG_BINARY_INDEX_ENTRY_SIZE) {
-        return snag_errno(EOVERFLOW);
-    }
-    *out = (int64_t)(SNAG_BINARY_INDEX_HEADER_SIZE +
-        (sequence - 1u) * SNAG_BINARY_INDEX_ENTRY_SIZE);
+    int64_t end;
+    /* Reserve the complete entry and its completed parents, not just its start. */
+    if (snag_binary_index_end(sequence, &end) < 0) return -1;
+    if (snag_binary_index_end(sequence - 1u, &end) < 0) return -1;
+    *out = end;
     return 0;
 }
 
@@ -273,18 +288,23 @@ read_exact(int fd, unsigned char *bytes, size_t size, int64_t offset)
 }
 
 int
+snag_binary_index_header_read(int fd, const struct snag_binary_identity *identity)
+{
+    if (!identity) return snag_errno(EINVAL);
+    unsigned char header[SNAG_BINARY_INDEX_HEADER_SIZE];
+    int rc = read_exact(fd, header, sizeof(header), 0);
+    return rc ? rc : snag_binary_index_header_decode(header, sizeof(header), identity);
+}
+
+int
 snag_binary_index_read_hint(int fd, const struct snag_binary_identity *identity,
     uint64_t sequence, struct snag_binary_index_entry *out)
 {
     if (!identity || !out) return snag_errno(EINVAL);
     int64_t offset;
     if (snag_binary_index_offset(sequence, &offset) < 0) return -1;
-    unsigned char header[SNAG_BINARY_INDEX_HEADER_SIZE];
-    int rc = read_exact(fd, header, sizeof(header), 0);
+    int rc = snag_binary_index_header_read(fd, identity);
     if (rc) return rc;
-    if (snag_binary_index_header_decode(header, sizeof(header), identity) < 0) {
-        return -1;
-    }
     unsigned char bytes[SNAG_BINARY_INDEX_ENTRY_SIZE];
     rc = read_exact(fd, bytes, sizeof(bytes), offset);
     return rc ? rc : snag_binary_index_entry_decode(bytes, sizeof(bytes), identity, sequence, out);
@@ -297,6 +317,8 @@ snag_binary_index_turn_hint(int fd, const struct snag_binary_identity *identity,
     if (fd < 0 || !identity || !out || !turn || indexed_count >= INT64_MAX) {
         return snag_errno(EINVAL);
     }
+    int64_t end;
+    if (snag_binary_index_end(indexed_count, &end) < 0) return -1;
     uint64_t low = 1u;
     uint64_t high = indexed_count + 1u;
     while (low < high) {

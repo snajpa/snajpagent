@@ -6,9 +6,19 @@
 
 #define SNAG_BINARY_INDEX_HEADER_SIZE 112u
 #define SNAG_BINARY_INDEX_ENTRY_SIZE 96u
+#define SNAG_BINARY_INDEX_HASH_SIZE 32u
 /* At most one entry per minimum-sized record in a permitted multi-record batch. */
 #define SNAG_BINARY_INDEX_BATCH_MAX ((SNAG_BINARY_BATCH_TARGET / \
     SNAG_BINARY_RECORD_HEADER_SIZE) * SNAG_BINARY_INDEX_ENTRY_SIZE)
+/* One parent per added leaf plus the carry through at most 64 existing peaks. */
+#define SNAG_BINARY_INDEX_TREE_BATCH_MAX (SNAG_BINARY_INDEX_BATCH_MAX + \
+    (SNAG_BINARY_INDEX_BATCH_MAX / SNAG_BINARY_INDEX_ENTRY_SIZE + 64u) * \
+    SNAG_BINARY_INDEX_HASH_SIZE)
+
+struct snag_binary_index_tree {
+    uint64_t count;
+    unsigned char peaks[64][SNAG_BINARY_INDEX_HASH_SIZE];
+};
 
 struct snag_binary_index_entry {
     uint64_t sequence;
@@ -27,12 +37,36 @@ void snag_binary_index_header_encode(unsigned char out[SNAG_BINARY_INDEX_HEADER_
 /* 0 exact header, 1 incomplete, -1 malformed/wrong identity. */
 int snag_binary_index_header_decode(const void *data, size_t size,
     const struct snag_binary_identity *identity);
+int snag_binary_index_header_read(int fd, const struct snag_binary_identity *identity);
 int snag_binary_index_entry_encode(unsigned char out[SNAG_BINARY_INDEX_ENTRY_SIZE],
     const struct snag_binary_identity *identity, const struct snag_binary_index_entry *entry);
 int snag_binary_index_entry_decode(const void *data, size_t size,
     const struct snag_binary_identity *identity, uint64_t sequence,
     struct snag_binary_index_entry *out);
 int snag_binary_index_offset(uint64_t sequence, int64_t *out);
+/* Complete append-only forest prefix: fixed-width entries followed by the
+ * 32-byte parents completed by each leaf. All older prefix nodes stay in place. */
+int snag_binary_index_end(uint64_t count, int64_t *out);
+
+/* RFC 9162 tree hash over encoded entries: H(0 || entry), H(1 || left || right).
+ * A root supplied from this cache itself grants no canonical membership. */
+int snag_binary_index_tree_root(const struct snag_binary_index_tree *, unsigned char out[32]);
+int snag_binary_index_tree_append(struct snag_buf *, struct snag_binary_index_tree *,
+    const struct snag_binary_identity *, const struct snag_binary_index_entry *);
+int snag_binary_index_tree_append_batch(struct snag_buf *, struct snag_binary_index_tree *,
+    const struct snag_binary_identity *, const struct snag_binary_anchor *before,
+    const struct snag_binary_anchor *after, const void *data, size_t size);
+/* Load only the logarithmic forest frontier; compare against an independently
+ * established root for this journal prefix before replacing the caller's tree. */
+int snag_binary_index_tree_load(int fd, const struct snag_binary_identity *, uint64_t count,
+    const unsigned char root[32], struct snag_binary_index_tree *);
+/* Verify membership beneath that independently established root. Cache absence
+ * returns 1, corruption/errors -1; neither changes out or proves history absent.
+ * The resulting location still requires canonical batch/record decoding. */
+int snag_binary_index_read_verified(int fd, const struct snag_binary_identity *, uint64_t count,
+    const unsigned char root[32], uint64_t sequence, struct snag_binary_index_entry *out);
+int snag_binary_index_turn_verified(int fd, const struct snag_binary_identity *, uint64_t count,
+    const unsigned char root[32], uint64_t turn, struct snag_binary_index_entry *out);
 
 /* Build one bounded batch's entries, appended atomically. Both anchors must be
  * independently authenticated in this immutable journal. No lifetime map, index

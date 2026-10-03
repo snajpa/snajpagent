@@ -460,6 +460,8 @@
   checkpoint framing with bounded per-call hashing and unchanged snapshot bytes.
   Publish alternating checkpoint generations on that same worker, yielding to
   journal commits between chunks and retaining failed publication work for retry.
+  Add append-only index hash proofs and bounded frontier restoration, with
+  independently supplied roots and preserved earlier-prefix lookups.
 
 - Fix a memory leak when combining compaction summaries.
 
