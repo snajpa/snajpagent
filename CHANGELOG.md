@@ -444,6 +444,12 @@
   networking is disabled on resume. Report the journal sequence when an IRC
   event cannot be restored.
 
+- Add typed native-storage replay, canonical field references and paired
+  core/provider checkpoint building blocks with legacy-data conversion tests.
+  Preserve IRC display metadata and current session-list behavior when loading
+  these checkpoints. Runtime storage remains JSONL while the native writer,
+  migration and application integration are completed.
+
 ## 0.99.8c — October 2, 2026
 
 - Coalesce buffered native composer edits while continuing to service resize

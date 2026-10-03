@@ -34,6 +34,17 @@ int snag_store_reconcile_legacy(struct snag_session *source, struct snag_session
     snag_session_event_fn fn, void *opaque, struct snag_legacy_recovery *recovery,
     char *error, size_t error_size);
 
+/* Shared strict state transition for verified history. The caller supplies a
+ * provisional state/clock and validated record identity and discards it on error.
+ * No live filesystem checks or legacy invalid-transition downgrade. */
+int snag_store_reduce_event(struct snag_session *state, const char *type, const json_t *data,
+    uint64_t sequence, char *error, size_t error_size);
+
+/* Derive pending-call metadata from a validated graph item and its graph-time
+ * directory. Failure preserves out; lifecycle flags start cleared. */
+int snag_pending_call_from_item(const struct snag_response_item *, const char *cwd,
+    struct snag_pending_call *out);
+
 json_t *snag_checkpoint_state_encode(const struct snag_session *session);
 int snag_checkpoint_state_decode(const json_t *data, struct snag_session *state);
 

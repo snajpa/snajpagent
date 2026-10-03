@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "checked_json.h"
 #include "store.h"
+#include "store_binary_legacy.h"
 #include "store_internal.h"
 #include "media.h"
 #include "fs.h"
@@ -52,10 +53,26 @@ commit_event(struct snag_session *session, const char *type, json_t *data)
     assert(rc == 0);
 }
 
+struct listed_session {
+    const char *prefix;
+    struct snag_buf *text;
+    size_t rows;
+    bool found;
+    bool header;
+};
+
 static int
-list_to_fd(void *opaque, const char *text, size_t len)
+find_listed_session(void *opaque, const char *text, size_t len)
 {
-    return snag_write_full(*(int *)opaque, text, len);
+    struct listed_session *seen = opaque;
+    size_t prefix = strlen(seen->prefix);
+    ++seen->rows;
+    for (size_t i = 0u; i + 8u <= len; ++i) {
+        if (!memcmp(text + i, "\tSTATUS\t", 8u)) seen->header = true;
+    }
+    if (len > prefix && text[prefix] == '\t' && !memcmp(text, seen->prefix, prefix))
+        seen->found = true;
+    return seen->text ? snag_buf_append(seen->text, text, len) : 0;
 }
 
 static int
@@ -239,6 +256,37 @@ turn_started_data(const struct snag_session *session, const char *turn_id)
         "turn_number", (int)session->turn_count + 1, "cwd", session->cwd));
 }
 
+static void
+test_long_session_list(struct snag_store *store, const char *cwd)
+{
+    char error[512], prompt[16385];
+    memset(prompt, 'x', sizeof(prompt) - 1u);
+    prompt[sizeof(prompt) - 1u] = '\0';
+    struct snag_session session;
+    snag_session_init(&session);
+    assert(!snag_session_create(store, &session, cwd, "default", "fixture", "default",
+        error, sizeof(error)));
+    json_t *data = turn_started_data(&session, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    assert(!snag_json_set_new(data, "text", json_string(prompt)));
+    commit_event(&session, "turn_started", data);
+    char prefix[9];
+    memcpy(prefix, session.id, 8u);
+    prefix[8] = '\0';
+    const uint64_t limits[] = {0u, 1u, UINT64_MAX};
+    for (size_t i = 0u; i < sizeof(limits) / sizeof(limits[0]); ++i) {
+        struct listed_session listed = {.prefix = prefix};
+        assert(!snag_store_list(store, &session, limits[i], 0u, find_listed_session,
+            &listed, error, sizeof(error)));
+        assert(listed.found && listed.header);
+        assert(!strcmp(session.first_user, prompt));
+        assert_session_lock_retained(&session, "after listing long prompt");
+    }
+    assert(snag_store_list(store, &session, UINT64_MAX, 0u, matches_fail, NULL,
+        error, sizeof(error)) < 0 && errno == EPIPE);
+    assert_session_lock_retained(&session, "after failed listing long prompt");
+    snag_session_close(&session);
+}
+
 static json_t *
 goal_started_data(const char *goal_id, const char *prompt)
 {
@@ -287,19 +335,6 @@ static json_t *
 compaction_interrupted_data(const char *compact_id, const char *reason)
 {
     return checked_json(json_pack("{s:s,s:s}", "compact_id", compact_id, "reason", reason));
-}
-
-static size_t
-read_file(const char *path, char *buf, size_t size)
-{
-    int fd = open(path, O_RDONLY);
-    ssize_t n;
-    assert(fd >= 0);
-    n = read(fd, buf, size - 1u);
-    assert(n >= 0);
-    buf[n] = '\0';
-    assert(close(fd) == 0);
-    return (size_t)n;
 }
 
 static int
@@ -1672,6 +1707,156 @@ test_pending_input_media(struct snag_store *store, const char *cwd)
     json_decref(input); json_decref(content); json_decref(asset);
 }
 
+struct config_replay_check {
+    const json_t *data;
+    uint64_t seq;
+    size_t seen;
+};
+
+static int
+check_config_replay(void *opaque, const struct snag_session *state, uint64_t seq,
+    const char *type, const json_t *data, char *error, size_t error_size)
+{
+    struct config_replay_check *check = opaque;
+    (void)error;
+    (void)error_size;
+    if (seq != check->seq) return 0;
+    assert(!strcmp(type, "turn_started") && json_equal(data, check->data));
+    assert(state && state->active_turn && state->max_parallel_commands == 1u);
+    check->seen++;
+    return 0;
+}
+
+static void
+test_turn_config_domain(struct snag_store *store, const char *cwd)
+{
+    static const char *const names[] = {
+        "prompt_schema", "replay_schema", "tool_schema", "capability_version",
+        "profile_id", "max_output_tokens"
+    };
+    json_t *values = checked_json(json_loads(
+        "[null,false,true,-9223372036854775808,\"text\",[1,null],{\"nested\":false}]", 0u, NULL));
+    struct snag_session session;
+    char error[256];
+    char id[SNAG_ID_HEX_LEN + 1u];
+    for (size_t i = 0u; i < json_array_size(values); ++i) {
+        snag_session_init(&session);
+        assert(!snag_session_create(store, &session, cwd, "default", "fixture", "medium",
+            error, sizeof(error)));
+        memcpy(id, session.id, sizeof(id));
+        char turn[SNAG_ID_HEX_LEN + 1u];
+        assert(snprintf(turn, sizeof(turn), "%032x", (unsigned int)i + 1u) == 32);
+        json_t *data = turn_started_data(&session, turn);
+        json_t *config = json_object_get(data, "config");
+        json_t *value = json_array_get(values, i);
+        for (size_t j = 0u; j < sizeof(names) / sizeof(names[0]); ++j) {
+            assert(!json_object_set(config, names[j], value));
+        }
+        assert(!json_object_set(config, "", value));
+        assert(!json_object_set(config, "extension", value));
+        /* Legacy replay narrows this without rejecting the original literal. */
+        assert(!json_object_set_new(config, "max_parallel_commands",
+            json_integer((json_int_t)UINT32_MAX + 2)));
+        struct config_replay_check check = {.data = data, .seq = session.next_seq};
+        commit_event(&session, "turn_started", json_incref(data));
+        snag_session_close(&session);
+        assert(!snag_session_open(store, &session, id, error, sizeof(error)));
+        assert(session.active_turn && session.max_parallel_commands == 1u);
+        assert(!snag_session_each_event(&session, check_config_replay, &check,
+            error, sizeof(error)));
+        assert(check.seen == 1u);
+        snag_session_close(&session);
+        json_decref(data);
+    }
+    json_decref(values);
+}
+
+struct archive_projection_check {
+    json_t *records;
+    size_t seen;
+};
+
+static int
+check_archive_projection(void *opaque, const struct snag_session *state, uint64_t seq,
+    const char *type, const json_t *data, char *error, size_t error_size)
+{
+    struct archive_projection_check *check = opaque;
+    (void)seq;
+    (void)error;
+    (void)error_size;
+    if (strcmp(type, "voice_transfer_record")) return 0;
+    assert(check->seen < json_array_size(check->records));
+    assert(json_equal(data, json_array_get(check->records, check->seen)));
+    assert(!state->active_turn && !state->response_open && !state->process_count);
+    assert(!state->voice_history.adopted_seq);
+    ++check->seen;
+    return 0;
+}
+
+static void
+test_archive_projection_data(struct snag_store *store, const char *cwd)
+{
+    /* Public shapes from app_events.c, plus the wider source archive domain.
+     * These observations do not satisfy ordinary executable-event schemas. */
+    static const struct { const char *type; const char *data; } cases[] = {
+        {"session_checkpoint", "{\"covers_through_seq\":1,\"provider_view\":true,"
+            "\"snapshot_v\":2}"},
+        {"voice_transfer_adopted", "{\"session_boundary\":true,\"source_session_id\":\"redacted\","
+            "\"target_session_id\":\"redacted\",\"source_as_of_seq\":1}"},
+        {"response_completed", "{\"turn_id\":\"redacted\",\"response_id\":\"redacted\","
+            "\"cycle\":1,\"status\":\"completed\",\"provider_response_id\":\"p\",\"items\":[],"
+            "\"usage\":{\"input_tokens\":null,\"output_tokens\":null,\"reasoning_tokens\":null,"
+            "\"total_tokens\":null},\"continuation_scope\":\"redacted\","
+            "\"provider_payload_omitted\":true}"},
+        {"compaction_completed", "{\"compact_id\":\"redacted\",\"count_method\":\"unknown\","
+            "\"input_tokens_bound\":0,\"output_count_method\":\"exact\",\"output_tokens_bound\":1,"
+            "\"output_count_request_sha256\":\"redacted\",\"source_sha256\":\"redacted\","
+            "\"output_sha256\":\"redacted\",\"output\":[{\"type\":\"compaction\"}],"
+            "\"provider_payload_omitted\":true}"},
+        {"input_received", "{}"},
+        {"tool_started", "{\"action_sha256\":false,\"\":null,"
+            "\"extra\":[-9223372036854775808,{\"data\":\"uninterpreted\"}]}"},
+        {"unassigned_source_type", "{\"any\":[null,false,true,3,\"t\",[],{}]}"}
+    };
+    struct snag_session session;
+    snag_session_init(&session);
+    char error[256];
+    assert(!snag_session_create(store, &session, cwd, "default", "fixture", "medium",
+        error, sizeof(error)));
+    char id[SNAG_ID_HEX_LEN + 1u];
+    memcpy(id, session.id, sizeof(id));
+    struct archive_projection_check check = {.records = checked_json(json_array())};
+    for (size_t i = 0u; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+        json_t *source = checked_json(json_loads(cases[i].data, JSON_REJECT_DUPLICATES, NULL));
+        json_t *data = checked_json(json_pack("{s:s,s:s,s:s,s:I,s:s,s:o}",
+            "transfer_id", id, "target_session_id", id, "source_session_id", id,
+            "source_seq", (json_int_t)(i + 1u), "source_type", cases[i].type, "data", source));
+        assert(!json_array_append(check.records, data));
+        commit_event(&session, "voice_transfer_record", data);
+    }
+    snag_session_close(&session);
+    assert(!snag_session_open(store, &session, id, error, sizeof(error)));
+    assert(!snag_session_each_event(&session, check_archive_projection, &check,
+        error, sizeof(error)));
+    assert(check.seen == sizeof(cases) / sizeof(cases[0]));
+    snag_session_close(&session);
+    for (size_t i = 0u; i < check.seen; ++i) {
+        const json_t *data = json_array_get(check.records, i);
+        struct snag_buf bytes = {.max = SNAG_MAX_EVENT_LINE};
+        enum snag_binary_kind kind;
+        assert(!snag_binary_legacy_encode(&bytes, "voice_transfer_record", data, &kind));
+        struct snag_binary_record record = {.kind = (uint16_t)kind,
+            .version = snag_binary_event_version(kind), .payload = bytes.data, .size = bytes.len};
+        const char *type = NULL;
+        json_t *projected = NULL;
+        assert(!snag_binary_legacy_decode(&record, &type, &projected));
+        assert(!strcmp(type, "voice_transfer_record") && json_equal(data, projected));
+        json_decref(projected);
+        snag_buf_free(&bytes);
+    }
+    json_decref(check.records);
+}
+
 static void
 test_journal_lifetime_boundaries(struct snag_store *store, const char *cwd)
 {
@@ -2457,13 +2642,30 @@ test_checkpoint_text_width(void)
 }
 
 void test_store_binary(void);
+void test_store_binary_checkpoint(void);
+void test_store_binary_controls(void);
+void test_store_binary_texts(void);
+void test_store_binary_calls(void);
+void test_store_binary_processes(void);
+void test_store_binary_inputs(void);
+void test_store_binary_payloads(void);
 void test_store_binary_event(void);
+void test_store_binary_legacy(void);
+void test_store_binary_replay(struct snag_store *store, const char *cwd);
 
 int
 main(void)
 {
     test_store_binary();
+    test_store_binary_checkpoint();
+    test_store_binary_controls();
+    test_store_binary_texts();
+    test_store_binary_calls();
+    test_store_binary_processes();
+    test_store_binary_inputs();
+    test_store_binary_payloads();
     test_store_binary_event();
+    test_store_binary_legacy();
     test_checkpoint_text_width();
     char *temp = snag_path_join(getenv("TMPDIR") ? getenv("TMPDIR") : "/tmp",
                                 "snajpagent-store-XXXXXX");
@@ -2473,8 +2675,6 @@ main(void)
     char id[SNAG_ID_HEX_LEN + 1u];
     char id_prefix[9];
     char trash_name[SNAG_ID_HEX_LEN + 1u + SNAG_ID_HEX_LEN + 1u];
-    char list_path[4096];
-    char list_buf[4096];
     char error[256];
     struct snag_store store;
     struct snag_session session;
@@ -2493,6 +2693,7 @@ main(void)
     snag_session_init(&session);
     assert(snag_store_open(&store, state, error, sizeof(error)) == 0);
     test_pending_session(&store, cwd);
+    test_long_session_list(&store, cwd);
     test_reverse_history(&store, cwd);
     test_forward_history(&store, cwd);
     test_history_prefix(&store, cwd);
@@ -2507,6 +2708,9 @@ main(void)
     test_large_embedded_checkpoint(&store, cwd);
     test_failed_append_retry(&store, cwd);
     test_pending_input_media(&store, cwd);
+    test_turn_config_domain(&store, cwd);
+    test_archive_projection_data(&store, cwd);
+    test_store_binary_replay(&store, cwd);
     test_journal_lifetime_boundaries(&store, cwd);
     assert(snag_session_create(&store, &session, cwd, "default",
             "gpt-5.5-2026-04-23", "default",
@@ -2770,23 +2974,16 @@ main(void)
     assert(mkdirat(store.sessions_fd, collision, 0700) == 0);
     memcpy(unique_prefix, session.id, 9u);
     unique_prefix[9] = '\0';
-    assert(snprintf(list_path, sizeof(list_path), "%s/list", temp) > 0);
-    {
-        int fd = open(list_path, O_CREAT | O_TRUNC | O_WRONLY, 0600);
-        assert(fd >= 0);
-        assert(snag_store_list(&store, &session, UINT64_MAX, 0u,
-                              list_to_fd, &fd, error, sizeof(error)) == 0);
-        assert(close(fd) == 0);
-        assert(read_file(list_path, list_buf, sizeof(list_buf)) > 0u);
-        assert(strstr(list_buf, id_prefix) != NULL);
-        assert(strstr(list_buf, unique_prefix) != NULL);
-        assert(strstr(list_buf, "\tSTATUS\t") != NULL);
-    }
+    struct snag_buf list_text = {.max = 1024u * 1024u};
+    struct listed_session listed = {.prefix = unique_prefix, .text = &list_text};
+    assert(!snag_store_list(&store, &session, UINT64_MAX, 0u, find_listed_session,
+        &listed, error, sizeof(error)));
+    assert(listed.rows && listed.found && listed.header);
     assert_session_lock_retained(&session, "after listing");
     json_t *catalog = snag_store_catalog(&store, &session, UINT64_MAX, NULL, NULL, error, sizeof(error));
     assert(catalog && json_array_size(catalog));
     bool catalog_found = false;
-    struct snag_buf catalog_text = {.max = sizeof(list_buf)};
+    struct snag_buf catalog_text = {.max = list_text.max};
     for (size_t i = 0u; i < json_array_size(catalog); ++i) {
         const json_t *row = json_array_get(catalog, i);
         const char *full_id = snag_json_string(row, "id");
@@ -2802,8 +2999,10 @@ main(void)
         assert(snag_buf_putc(&catalog_text, '\n') == 0);
     }
     assert(snag_buf_terminate(&catalog_text) == 0 && catalog_found);
-    assert(strchr(list_buf, '\n') && !strcmp(strchr(list_buf, '\n') + 1,
-        (const char *)catalog_text.data));
+    assert(snag_buf_terminate(&list_text) == 0);
+    const char *rows = strchr((const char *)list_text.data, '\n');
+    assert(rows && !strcmp(rows + 1, (const char *)catalog_text.data));
+    snag_buf_free(&list_text);
     snag_buf_free(&catalog_text);
     json_decref(catalog);
     assert_session_lock_retained(&session, "after structured catalog");

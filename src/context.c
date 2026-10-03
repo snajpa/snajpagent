@@ -60,10 +60,11 @@ struct context_builder {
 
 /* The journal is a recovery record, not the live provider's read model.
  * A resume constructs this view once; new committed events extend it. */
-struct context_cache {
+struct snag_context_capture {
     struct context_builder view;
     json_t *pending;
     json_t *recent; /* Uncompressed events needed for compaction boundaries. */
+    json_t *history_sources; /* Owned IRC lookup closure for state-only projection. */
     json_t *steering_snapshot;
     uint64_t compact_seq, rebase_seq;
     char scope[SNAG_SHA256_HEX_LEN + 1u];
@@ -87,11 +88,12 @@ context_builder_release(struct context_builder *builder)
 static void
 context_cache_free(void *opaque)
 {
-    struct context_cache *cache = opaque;
+    struct snag_context_capture *cache = opaque;
     if (!cache) return;
     context_builder_release(&cache->view);
     json_decref(cache->pending);
     json_decref(cache->recent);
+    json_decref(cache->history_sources);
     json_decref(cache->steering_snapshot);
     free(cache);
 }
@@ -117,7 +119,7 @@ context_cache_unconsumed_irc(const json_t *entry, uint64_t consumed)
 }
 
 static int
-context_cache_trim(struct context_cache *cache, const struct snag_session *session,
+context_cache_trim(struct snag_context_capture *cache, const struct snag_session *session,
                    uint64_t boundary)
 {
     uint64_t overlap = boundary > SNAG_CONTEXT_COMPACT_OVERLAP_EVENTS ?
@@ -150,7 +152,7 @@ fail:
 }
 
 static int
-context_cache_record(struct context_cache *cache, const struct snag_session *session,
+context_cache_record(struct snag_context_capture *cache, const struct snag_session *session,
                      uint64_t seq, const char *type, const json_t *data)
 {
     bool unfinished = false;
@@ -175,17 +177,17 @@ static void
 context_cache_commit(void *opaque, const struct snag_session *session, uint64_t seq,
                      const char *type, const json_t *data)
 {
-    struct context_cache *cache = opaque;
+    struct snag_context_capture *cache = opaque;
     if (cache->invalid || !strcmp(type, "session_checkpoint")) return;
     if (context_cache_record(cache, session, seq, type, data) < 0)
         cache->invalid = true; /* A durable event is never retroactively failed. */
     if (!strcmp(type, "irc_compacted")) cache->rebuild_view = true;
 }
 
-static struct context_cache *
+static struct snag_context_capture *
 context_cache_new(void)
 {
-    struct context_cache *cache = calloc(1u, sizeof(*cache));
+    struct snag_context_capture *cache = calloc(1u, sizeof(*cache));
     if (!cache) return NULL;
     cache->pending = json_array();
     cache->recent = json_array();
@@ -228,7 +230,7 @@ checkpoint_input_timing(const struct context_builder *view)
 static json_t *
 context_cache_checkpoint(void *opaque, const struct snag_session *session)
 {
-    struct context_cache *cache = opaque;
+    struct snag_context_capture *cache = opaque;
     struct context_builder *v = &cache->view;
     if (cache->invalid || !json_is_array(cache->pending)) return NULL;
     json_t *timings = checkpoint_input_timing(v);
@@ -244,6 +246,8 @@ context_cache_checkpoint(void *opaque, const struct snag_session *session)
     CJ(call_ids); CJ(request_input); CJ(tool_feedback); CJ(deferred_input);
     CJ(deferred_irc); CJ(last_host_context);
 #undef CJ
+    if (cache->history_sources && snag_json_set_new(doc, "history_sources",
+        json_incref(cache->history_sources)) < 0) goto fail;
     uint64_t pending_first = session->next_seq;
     if (json_array_size(cache->pending) &&
         snag_json_integer_u64(json_array_get(cache->pending, 0u), "seq",
@@ -277,6 +281,20 @@ fail:
     return NULL;
 }
 
+int
+snag_context_capture_seam(const struct snag_session *session,
+    const json_t **recent, const json_t **history)
+{
+    if (!session || !recent || !history || session->on_commit != context_cache_commit ||
+        !session->on_commit_opaque) return snag_errno(EINVAL);
+    const struct snag_context_capture *cache = session->on_commit_opaque;
+    if (cache->invalid || !json_is_array(cache->recent) ||
+        !json_is_array(cache->history_sources)) return snag_errno(EINVAL);
+    *recent = cache->recent;
+    *history = cache->history_sources;
+    return 0;
+}
+
 static int
 restore_input_timing(struct context_builder *v)
 {
@@ -293,25 +311,217 @@ restore_input_timing(struct context_builder *v)
     return 0;
 }
 
-static int
-checkpoint_context_event(void *opaque, const struct snag_session *state, uint64_t seq,
+int
+snag_context_capture_event(void *opaque, const struct snag_session *state, uint64_t seq,
                          const char *type, const json_t *data, char *error, size_t error_size)
 {
-    struct context_cache *cache = opaque;
+    struct snag_context_capture *cache = opaque;
+    if (!cache || !state || !type || !json_is_object(data))
+        return snag_fail(error, error_size, EINVAL, "invalid provider capture event");
+    if (seq > INT64_MAX || state->last_time_ms > INT64_MAX) {
+        return snag_fail(error, error_size, EOVERFLOW,
+            "provider capture position exceeds its JSON projection domain");
+    }
     const struct snag_context_control *control = cache->view.control;
     if (control && control->cancelled && control->cancelled(control->opaque))
         return snag_fail(error, error_size, ECANCELED, "context restoration cancelled");
     context_cache_commit(cache, state, seq, type, data);
     return cache->invalid ? snag_fail(error, error_size, ENOMEM,
-        "cannot apply embedded checkpoint suffix") : 0;
+        "cannot capture provider event") : 0;
+}
+
+struct snag_context_capture *
+snag_context_capture_new(const struct snag_context_control *control)
+{
+    struct snag_context_capture *cache = context_cache_new();
+    if (cache) {
+        cache->view.control = control;
+        cache->rebuild_view = true;
+    }
+    return cache;
+}
+
+int
+snag_context_capture_seed(struct snag_context_capture *cache,
+    const json_t *recent, const json_t *history)
+{
+    if (!cache || cache->invalid || !cache->rebuild_view || cache->history_sources ||
+        json_array_size(cache->recent) || json_array_size(cache->pending) ||
+        !json_is_array(recent) || !json_array_size(recent) || !json_is_array(history)) {
+        return snag_errno(EINVAL);
+    }
+    const struct snag_context_control *control = cache->view.control;
+    if (control && control->cancelled && control->cancelled(control->opaque))
+        return snag_errno(ECANCELED);
+    json_t *events = json_copy((json_t *)recent), *pending = json_copy((json_t *)recent);
+    json_t *sources = json_copy((json_t *)history);
+    if (!events || !pending || !sources) {
+        json_decref(events);
+        json_decref(pending);
+        json_decref(sources);
+        return snag_errno(ENOMEM);
+    }
+    json_decref(cache->recent);
+    json_decref(cache->pending);
+    cache->recent = events;
+    cache->pending = pending;
+    cache->history_sources = sources;
+    return 0;
+}
+
+void
+snag_context_capture_free(struct snag_context_capture *capture)
+{
+    context_cache_free(capture);
+}
+
+int
+snag_context_capture_bind(struct snag_context_capture **capture, struct snag_session *session,
+    char *error, size_t error_size)
+{
+    struct snag_context_capture *cache = capture ? *capture : NULL;
+    if (!cache || cache->invalid || !session || session->dir_fd >= 0 ||
+        session->log_fd >= 0 || session->lock_fd >= 0 || session->pending_log ||
+        session->on_commit || session->on_commit_free || session->on_commit_opaque ||
+        session->on_checkpoint || session->checkpoint_context || session->checkpoint_state ||
+        !session->format_version || !json_array_size(cache->recent) ||
+        !json_is_array(cache->history_sources)) {
+        return snag_fail(error, error_size, EINVAL, "invalid state-only provider capture target");
+    }
+    const struct snag_context_control *control = cache->view.control;
+    if (control && control->cancelled && control->cancelled(control->opaque))
+        return snag_fail(error, error_size, ECANCELED, "context restoration cancelled");
+    cache->view.control = NULL;
+    session->on_commit = context_cache_commit;
+    session->on_commit_free = context_cache_free;
+    session->on_commit_opaque = cache;
+    session->on_checkpoint = context_cache_checkpoint;
+    *capture = NULL;
+    return 0;
+}
+
+struct capture_sources {
+    const struct snag_context_control *control;
+    const char *prompt;
+    json_t *wanted, *events;
+};
+
+static bool
+source_wanted(const json_t *wanted, uint64_t seq)
+{
+    char key[32];
+    (void)snprintf(key, sizeof(key), "%llu", (unsigned long long)seq);
+    return json_object_get(wanted, key) != NULL;
 }
 
 static int
-context_cache_restore(struct snag_session *session, struct context_cache **out,
+capture_source(void *opaque, const struct snag_session *state, uint64_t seq,
+    const char *type, const json_t *data, char *error, size_t error_size)
+{
+    struct capture_sources *sources = opaque;
+    (void)state;
+    if (sources->control && sources->control->cancelled &&
+        sources->control->cancelled(sources->control->opaque)) {
+        return snag_fail(error, error_size, ECANCELED, "context source lookup cancelled");
+    }
+    if (strcmp(type, "irc_event") && strcmp(type, "session_checkpoint")) return 0;
+    bool needed = source_wanted(sources->wanted, seq) ||
+        (seq && source_wanted(sources->wanted, seq - 1u));
+    if (sources->prompt && !strcmp(type, "irc_event")) {
+        struct snag_irc_event event;
+        if (snag_irc_event_read(data, &event) < 0) return -1;
+        char reference[SNAG_ID_HEX_LEN + 48u];
+        (void)snprintf(reference, sizeof(reference), "[IRC update id=%s:%llu ",
+            event.stream, (unsigned long long)event.sequence);
+        needed |= event.input && strstr(sources->prompt, reference) != NULL;
+    }
+    if (!needed) return 0;
+    if (seq > INT64_MAX) return snag_errno(EOVERFLOW);
+    json_t *payload = !strcmp(type, "session_checkpoint") ? json_object() :
+        json_incref((json_t *)data);
+    if (!payload) return snag_fail(error, error_size, ENOMEM, "cannot capture context source");
+    json_t *entry = json_pack("{s:I,s:s,s:o}", "seq", (json_int_t)seq, "type", type,
+        "data", payload);
+    if (!entry || json_array_append_new(sources->events, entry) < 0)
+        return snag_fail(error, error_size, ENOMEM, "cannot retain context source");
+    return 0;
+}
+
+int
+snag_context_capture_sources(struct snag_context_capture *cache,
+    const struct snag_session *state, snag_context_source_walk_fn walk, void *source,
+    char *error, size_t error_size)
+{
+    if (!cache || cache->invalid || !state || !walk)
+        return snag_fail(error, error_size, EINVAL, "invalid context source capture");
+    struct capture_sources sources = {.control = cache->view.control,
+        .wanted = json_object(), .events = json_array()};
+    int rc = -1;
+    if (!sources.wanted || !sources.events) goto memory;
+    if (state->active_prompt && strstr(state->active_prompt, "[IRC update id="))
+        sources.prompt = state->active_prompt;
+    for (size_t i = 0u; i < json_array_size(cache->recent); ++i) {
+        const json_t *entry = json_array_get(cache->recent, i);
+        if (strcmp(snag_json_string(entry, "type"), "irc_admitted")) continue;
+        const json_t *sequences = json_object_get(json_object_get(entry, "data"), "sequences");
+        for (size_t j = 0u; j < json_array_size(sequences); ++j) {
+            char key[32];
+            (void)snprintf(key, sizeof(key), "%lld",
+                (long long)json_integer_value(json_array_get(sequences, j)));
+            if (json_object_set_new(sources.wanted, key, json_true()) < 0) goto memory;
+        }
+    }
+    if ((sources.prompt || json_object_size(sources.wanted)) &&
+        walk(source, capture_source, &sources, error, error_size) < 0) goto done;
+    json_decref(cache->history_sources);
+    cache->history_sources = sources.events;
+    sources.events = NULL;
+    rc = 0;
+    goto done;
+ memory:
+    snag_fail(error, error_size, ENOMEM, "cannot prepare context source lookup");
+ done:
+    json_decref(sources.wanted);
+    json_decref(sources.events);
+    return rc;
+}
+
+/* State-only candidates have no journal descriptor. Their lookup closure is
+ * prepared under the source lock before binding; live legacy owners retain
+ * their existing journal lookup, including historical adjacent-checkpoint repair. */
+static int
+context_history_each(const struct snag_session *session, snag_session_event_fn fn, void *opaque,
+    char *error, size_t error_size)
+{
+    if (session->log_fd >= 0) {
+        return snag_session_each_event((struct snag_session *)session, fn, opaque,
+            error, error_size);
+    }
+    const struct snag_context_capture *cache = session->on_commit == context_cache_commit ?
+        session->on_commit_opaque : NULL;
+    if (!cache || cache->invalid || !json_is_array(cache->history_sources))
+        return snag_fail(error, error_size, EINVAL, "context has no verified source lookup");
+    for (size_t i = 0u; i < json_array_size(cache->history_sources); ++i) {
+        const json_t *entry = json_array_get(cache->history_sources, i);
+        uint64_t seq;
+        const char *type = snag_json_string(entry, "type");
+        const json_t *data = json_object_get(entry, "data");
+        if (!type || !snag_string_in(type, "irc_event session_checkpoint") ||
+            !json_is_object(data) || snag_json_integer_u64(entry, "seq", &seq) < 0 ||
+            !seq || seq >= session->next_seq) {
+            return snag_fail(error, error_size, EINVAL, "invalid captured context source");
+        }
+        if (fn(opaque, NULL, seq, type, data, error, error_size) < 0) return -1;
+    }
+    return 0;
+}
+
+static int
+context_cache_restore(struct snag_session *session, struct snag_context_capture **out,
     char *error, size_t error_size, const struct snag_context_control *control)
 {
     const json_t *doc = session->checkpoint_context;
-    struct context_cache *cache = context_cache_new();
+    struct snag_context_capture *cache = context_cache_new();
     if (!cache) goto memory;
     if (!json_is_object(doc) || !session->checkpoint_state) goto invalid;
 #define GET_J(f) do { \
@@ -323,6 +533,9 @@ context_cache_restore(struct snag_session *session, struct context_cache **out,
     GET_J(call_ids); GET_J(request_input); GET_J(tool_feedback); GET_J(deferred_input);
     GET_J(deferred_irc); GET_J(last_host_context);
 #undef GET_J
+    const json_t *history_sources = json_object_get(doc, "history_sources");
+    if (history_sources && !json_is_array(history_sources)) goto invalid;
+    cache->history_sources = json_incref((json_t *)history_sources);
     const json_t *timings = json_object_get(doc, "timings");
     const json_t *steering = json_object_get(doc, "steering_snapshot");
     const json_t *recent = json_object_get(doc, "recent");
@@ -396,7 +609,7 @@ context_cache_restore(struct snag_session *session, struct context_cache **out,
     }
     cache->view.control = control;
     if (snag_session_each_event_from_checkpoint(session, session->checkpoint_state,
-        checkpoint_context_event, cache, error, error_size) < 0) goto fail;
+        snag_context_capture_event, cache, error, error_size) < 0) goto fail;
     cache->view.control = NULL;
     *out = cache;
     return 0;
@@ -411,12 +624,12 @@ fail:
 }
 
 static int
-context_cache_get(struct snag_session *session, struct context_cache **out,
+context_cache_get(struct snag_session *session, struct snag_context_capture **out,
     char *error, size_t error_size, const struct snag_context_control *control)
 {
     if (control && control->cancelled && control->cancelled(control->opaque))
         return snag_fail(error, error_size, ECANCELED, "context preparation cancelled");
-    struct context_cache *old = session->on_commit == context_cache_commit ?
+    struct snag_context_capture *old = session->on_commit == context_cache_commit ?
         session->on_commit_opaque : NULL;
     if (old && !old->invalid) { *out = old; return 0; }
     if (old || (session->checkpoint_has_context && !session->checkpoint_context)) {
@@ -428,7 +641,7 @@ context_cache_get(struct snag_session *session, struct context_cache **out,
         session->checkpoint_state = state;
         session->checkpoint_context = context;
     }
-    struct context_cache *cache = NULL;
+    struct snag_context_capture *cache = NULL;
     if (session->checkpoint_has_context) {
         if (context_cache_restore(session, &cache, error, error_size, control) < 0) return -1;
     } else {
@@ -437,7 +650,7 @@ context_cache_get(struct snag_session *session, struct context_cache **out,
         cache = context_cache_new();
         if (!cache) return snag_fail(error, error_size, ENOMEM, "cannot capture provider context");
         cache->view.control = control;
-        if (snag_session_each_event(session, checkpoint_context_event, cache,
+        if (snag_session_each_event(session, snag_context_capture_event, cache,
                 error, error_size) < 0) {
             context_cache_free(cache);
             return -1;
@@ -464,7 +677,7 @@ snag_context_start_new(struct snag_session *session)
     /* session_created carries no provider conversation; subsequent committed
      * events feed this view, so a new live session never reads the journal. */
     if (!session || session->on_commit || session->next_seq != 2u) return;
-    struct context_cache *cache = context_cache_new();
+    struct snag_context_capture *cache = context_cache_new();
     if (!cache) return; /* Allocation failure retains the durable slow path. */
     session->on_commit = context_cache_commit;
     session->on_commit_free = context_cache_free;
@@ -1573,7 +1786,7 @@ prepare_history_recovery_orientation(struct context_builder *builder,
             ++expected;
             part += sizeof("[IRC update id=") - 1u;
         }
-        if (snag_session_each_event((struct snag_session *)session, recovery_room_event,
+        if (context_history_each(session, recovery_room_event,
                 &room, error, error_size) < 0) return -1;
         if (room.matched != expected)
             return snag_fail(error, error_size, EPROTO,
@@ -1670,6 +1883,40 @@ recover_irc_source(void *opaque, const struct snag_session *state, uint64_t seq,
     return SNAG_JOURNAL_STOP_AFTER;
 }
 
+/* Native state-only consumers have an independently prepared retained table,
+ * not a JSONL descriptor. Visit its selected neighbor before the source, matching
+ * the direct reverse journal lookup without changing general history ordering. */
+static int
+context_irc_source_lookup(const struct snag_session *session, struct irc_source_lookup *lookup,
+    char *error, size_t error_size)
+{
+    if (session->log_fd >= 0) {
+        uint64_t next_before;
+        return snag_session_each_event_reverse((struct snag_session *)session,
+            lookup->wanted + 2u, SIZE_MAX, recover_irc_source, lookup,
+            &next_before, error, error_size);
+    }
+    const struct snag_context_capture *cache = session->on_commit == context_cache_commit ?
+        session->on_commit_opaque : NULL;
+    if (!cache || cache->invalid || !json_is_array(cache->history_sources))
+        return snag_fail(error, error_size, EINVAL, "context has no verified source lookup");
+    for (size_t i = json_array_size(cache->history_sources); i > 0u; --i) {
+        const json_t *entry = json_array_get(cache->history_sources, i - 1u);
+        uint64_t seq;
+        const char *type = snag_json_string(entry, "type");
+        const json_t *data = json_object_get(entry, "data");
+        if (!type || !json_is_object(data) || snag_json_integer_u64(entry, "seq", &seq) < 0 ||
+            !seq || seq >= session->next_seq)
+            return snag_fail(error, error_size, EINVAL, "invalid captured context source");
+        if (seq > lookup->wanted + 1u) continue;
+        if (seq < lookup->wanted) break;
+        int rc = recover_irc_source(lookup, NULL, seq, type, data, error, error_size);
+        if (rc < 0) return -1;
+        if (rc == SNAG_JOURNAL_STOP_AFTER) break;
+    }
+    return 0;
+}
+
 static int
 context_event(void *opaque, const struct snag_session *state,
               uint64_t seq, const char *type, const json_t *data, char *error, size_t error_size)
@@ -1742,15 +1989,12 @@ context_event(void *opaque, const struct snag_session *state,
             if (present) continue;
             if (!lookup.sources) lookup.sources = json_array();
             lookup.wanted = (uint64_t)wanted;
-            uint64_t next_before;
             /* Seek directly to the source and its possible checkpoint shift.
              * Full reducer replay here stalls the engine and hosted IRC for
              * the lifetime of the journal, even after the source is found. */
             if (!lookup.sources || !builder->session ||
                 lookup.wanted >= seq ||
-                snag_session_each_event_reverse((struct snag_session *)builder->session,
-                    lookup.wanted + 2u, SIZE_MAX, recover_irc_source, &lookup,
-                    &next_before, error, error_size) < 0) {
+                context_irc_source_lookup(builder->session, &lookup, error, error_size) < 0) {
                 json_decref(lookup.following);
                 json_decref(lookup.sources);
                 return -1;
@@ -2549,7 +2793,7 @@ compact_event(void *opaque, const struct snag_session *state,
  * post-summary provider use the same events and the same context_event logic.
  * Old summarized prefixes are never reparsed to select a new boundary. */
 static int
-context_recent_each(struct context_cache *cache, struct context_builder *builder,
+context_recent_each(struct snag_context_capture *cache, struct context_builder *builder,
                     snag_session_event_fn fn, char *error, size_t error_size)
 {
     if (!cache || cache->invalid || !json_is_array(cache->recent)) return -1;
@@ -2742,7 +2986,7 @@ snag_context_compact_request_build(struct snag_session *session, const char *mod
         }
     }
     {
-        struct context_cache *cache = NULL;
+        struct snag_context_capture *cache = NULL;
         if (context_cache_get(session, &cache, error, error_size, control) < 0 ||
             context_recent_each(cache, &builder, compact_event, error, error_size) < 0) goto out;
     }
@@ -2906,7 +3150,7 @@ context_copy_events(struct context_builder *dest, const struct context_builder *
 }
 
 static int
-context_cache_update(struct context_cache *cache, struct snag_session *session,
+context_cache_update(struct snag_context_capture *cache, struct snag_session *session,
                      const struct snag_instruction_set *instructions, const json_t *steering,
                      const struct snag_context_control *control, bool networked,
                      char *error, size_t error_size)
@@ -3125,7 +3369,7 @@ snag_context_build(struct snag_session *session, const char *model, const char *
          * only the following journal-derived items, so reuse cannot repeat
          * provider IDs or shift the input-timing references. */
         builder.base_request_count = json_array_size(builder.request_input);
-        struct context_cache *cache = NULL;
+        struct snag_context_capture *cache = NULL;
         if (context_cache_get(session, &cache, error, error_size, control) < 0) goto out;
         if (!cache->scope[0] && continuation_scope &&
             !snag_strcpy(cache->scope, sizeof(cache->scope), continuation_scope)) {
@@ -3156,7 +3400,7 @@ snag_context_build(struct snag_session *session, const char *model, const char *
             }
         }
         if (!used_cache) {
-            struct context_cache *old_cache = cache;
+            struct snag_context_capture *old_cache = cache;
             cache = context_cache_new();
             if (!cache) {
                 (void)snag_fail(error, error_size, ENOMEM, "cannot capture provider checkpoint");
@@ -3164,6 +3408,7 @@ snag_context_build(struct snag_session *session, const char *model, const char *
             }
             json_decref(cache->recent);
             cache->recent = json_incref(old_cache->recent);
+            cache->history_sources = json_incref(old_cache->history_sources);
             if (context_recent_each(old_cache, &builder, context_event, error, error_size) < 0) {
                 context_cache_free(cache);
                 goto out;
@@ -3314,8 +3559,10 @@ projection_error: snag_errorf(error, error_size, "response request projection ex
         goto out;
     }
     projection->input_tokens_bound = 0u; /* Unknown until counted by the provider. */
-    if (session->checkpoint_seq && !session->checkpoint_has_context &&
-        session->on_checkpoint &&
+    /* Reconstructed state-only views have no journal writer. A live legacy
+     * owner may still persist its first materialized provider checkpoint. */
+    if (session->log_fd >= 0 && session->lock_fd >= 0 && session->checkpoint_seq &&
+        !session->checkpoint_has_context && session->on_checkpoint &&
         snag_session_checkpoint(session, error, error_size) < 0) goto out;
     rc = 0;
 out:

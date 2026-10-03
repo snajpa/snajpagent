@@ -542,6 +542,32 @@ process_label(char out[257], const char *text)
 }
 
 int
+snag_pending_call_from_item(const struct snag_response_item *item, const char *cwd,
+    struct snag_pending_call *out)
+{
+    if (!item || !cwd || !out || item->kind != SNAG_ITEM_TOOL_CALL || !item->name ||
+        !json_is_object(item->arguments) || !snag_hex_is_lower(item->call_id, SNAG_ID_HEX_LEN))
+        return snag_errno(EINVAL);
+    struct snag_pending_call value = {0};
+    memcpy(value.call_id, item->call_id, sizeof(value.call_id));
+    if (!snag_strcpy(value.tool_name, sizeof(value.tool_name), item->name))
+        return snag_errno(EINVAL);
+    if (!strcmp(item->name, "write_stdin")) {
+        const char *handle = snag_json_string(item->arguments, "handle");
+        if (handle && snag_hex_is_lower(handle, SNAG_ID_HEX_LEN))
+            memcpy(value.process_handle, handle, sizeof(value.process_handle));
+    }
+    if (!strcmp(item->name, "exec_command")) {
+        memcpy(value.process_handle, item->call_id, sizeof(value.process_handle));
+        process_label(value.command, snag_json_string(item->arguments, "command"));
+        process_label(value.workdir, snag_json_string(item->arguments, "workdir"));
+    }
+    if (snag_tool_action_digest(item, cwd, value.action_sha256) < 0) return -1;
+    *out = value;
+    return 0;
+}
+
+int
 snag_process_output_decode(const json_t *data, struct snag_buf *bytes)
 {
     const char *encoding = snag_json_string(data, "encoding");
@@ -2426,24 +2452,12 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
                     session->pending_call_capacity = capacity;
                 }
                 pending = &session->pending_calls[session->pending_call_count++];
-                memset(pending, 0, sizeof(*pending));
-                memcpy(pending->call_id, item->call_id, sizeof(pending->call_id));
-                if (!snag_strcpy(pending->tool_name, sizeof(pending->tool_name), item->name)) {
+                if (strlen(item->name) >= sizeof(pending->tool_name)) {
                     clause = "tool-name";
                     diag_call = item->call_id;
                     goto invalid;
                 }
-                if (strcmp(item->name, "write_stdin") == 0) {
-                    const char *handle = snag_json_string(item->arguments, "handle");
-                    if (handle && snag_hex_is_lower(handle, SNAG_ID_HEX_LEN))
-                        memcpy(pending->process_handle, handle, sizeof(pending->process_handle));
-                }
-                if (strcmp(item->name, "exec_command") == 0) {
-                    memcpy(pending->process_handle, item->call_id, sizeof(pending->process_handle));
-                    process_label(pending->command, snag_json_string(item->arguments, "command"));
-                    process_label(pending->workdir, snag_json_string(item->arguments, "workdir"));
-                }
-                if (snag_tool_action_digest(item, session->cwd, pending->action_sha256) < 0) {
+                if (snag_pending_call_from_item(item, session->cwd, pending) < 0) {
                     return -1;
                 }
             }
@@ -2773,6 +2787,15 @@ invalid:
         }
         return snag_fail(error, error_size, EINVAL, "%s", detail);
     }
+}
+
+int
+snag_store_reduce_event(struct snag_session *state, const char *type, const json_t *data,
+    uint64_t sequence, char *error, size_t error_size)
+{
+    if (!state || !type || !json_is_object(data) || !sequence)
+        return snag_fail(error, error_size, EINVAL, "invalid verified state transition");
+    return apply_event(state, type, data, sequence, false, true, error, error_size);
 }
 
 static ssize_t

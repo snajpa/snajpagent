@@ -378,6 +378,7 @@ int snag_session_each_event_since(struct snag_session *, const struct snag_proce
 int snag_session_each_event_from_checkpoint(struct snag_session *, const json_t *,
                                             snag_session_event_fn, void *, char *, size_t);
 
+/* Consumes data on success and failure. */
 int snag_session_commit(struct snag_session *session, const char *type, json_t *data, uint64_t *written_seq,
                        char *error, size_t error_size);
 /* One indexed checkpoint record in events.jsonl; never a second session file. */

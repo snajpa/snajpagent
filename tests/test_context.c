@@ -84,8 +84,13 @@ cancel_preparation(void *opaque)
     return --*remaining == 0u;
 }
 
+void test_context_binary_report(void);
+void test_context_binary_projection(struct snag_session *source, unsigned int cycle,
+    const json_t *steering, const struct snag_instruction_set *instructions,
+    const struct snag_context_projection *expected);
+
 static void
-build_context(struct snag_session *session, unsigned int cycle, const json_t *steering,
+build_context_cached(struct snag_session *session, unsigned int cycle, const json_t *steering,
               const struct snag_instruction_set *instructions, struct snag_context_projection *projection)
 {
     char error[512] = {0};
@@ -100,6 +105,15 @@ build_context(struct snag_session *session, unsigned int cycle, const json_t *st
     json_t *last = json_array_get(input, json_array_size(input) - 1u);
     assert_string(last, "role", "developer");
     assert(strstr(snag_json_string(last, "content"), "Host continuation:") != NULL);
+}
+
+static void
+build_context(struct snag_session *session, unsigned int cycle, const json_t *steering,
+              const struct snag_instruction_set *instructions,
+              struct snag_context_projection *projection)
+{
+    build_context_cached(session, cycle, steering, instructions, projection);
+    test_context_binary_projection(session, cycle, steering, instructions, projection);
 }
 
 static void
@@ -4519,7 +4533,9 @@ test_lost_cache_source_recovers(struct snag_store *store, const char *cwd)
             assert(snag_session_open(store, &session, id, error, sizeof(error)) == 0);
         }
         for (unsigned int again = 0u; again < 2u; ++again) {
-            build_context(&session, 1u, steering, &instructions, &projection);
+            /* This fixture deliberately corrupts the pre-checkpoint prefix.
+             * Full-journal equivalence is checked after restoring that byte. */
+            build_context_cached(&session, 1u, steering, &instructions, &projection);
             json_t *input = json_object_get(projection.create_request.value, "input");
             const char *needles[] = {"lost-cache-input", "lost-cache-answer"};
             for (size_t n = 0u; n < 2u; ++n) {
@@ -4536,6 +4552,7 @@ test_lost_cache_source_recovers(struct snag_store *store, const char *cwd)
         if (checkpoint) {
             assert(pwrite(writer, &original, 1u, 0) == 1 && close(writer) == 0);
         }
+        test_context_binary_projection(&session, 1u, steering, &instructions, NULL);
         json_decref(steering);
         snag_session_close(&session);
     }
@@ -5952,6 +5969,7 @@ main(int argc, char **argv)
     snag_session_close(&session);
     snag_store_close(&store);
     free(temp);
+    test_context_binary_report();
     puts("test_context: ok");
     return 0;
 }
