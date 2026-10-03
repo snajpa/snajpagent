@@ -1900,6 +1900,56 @@ history tools report incomplete indexing and resumable progress. New work and
 normal checkpoint-based resume do not require a full index rebuild. Index writes
 need no independent durability barrier because the journal can reproduce them.
 
+### Test-linked fixed-width index building blocks
+
+The current index codec uses a 112-byte header: magic `SNAGIDX\0`, u16 major 0,
+u16 minor 1, u32 header size, u32 entry size 96, u32 reserved zero, UUID 16,
+created-ms u64, initial journal-anchor digest 32 and header checksum 32. The
+checksum covers its first 80 bytes. Header comparison uses the independently
+supplied canonical journal identity. In the current journal draft, the header
+is 96 bytes; its last 32 bytes hash the first 64. Batch headers/footers are 112/80
+bytes and the ordinary batch target is 1 MiB.
+
+Each 96-byte entry contains the following little-endian fields:
+
+| Offset | Field |
+|---|---|
+| 0 | Canonical sequence, u64 |
+| 8 | Containing batch offset, u64 |
+| 16 | Actual record-header offset within the batch, u32 |
+| 20 | Record kind, u16; reserved zero, u16 |
+| 24 | Surrounding session turn ordinal, u64 |
+| 32 | Committed containing-batch digest, 32 bytes |
+| 64 | Entry checksum, 32 bytes |
+
+The entry checksum hashes the initial journal-anchor digest followed by the
+entry's first 64 bytes. It detects corruption and binds the sequence slot and
+journal namespace. Lookup computes `112 + (sequence - 1) * 96` with room for the entire
+entry inside signed file offsets. An unrepresentable index offset is an index
+error, not a new quota on the canonical session.
+
+The batch builder and resolver require independently authenticated before/after
+anchors. They validate framing, walk real record boundaries, check turn-start
+numbers and surrounding ordinals, and compare the canonical containing-batch
+digest. A checksummed entry pointing inside another record, naming another kind
+or claiming another turn supplies no record view. An old process's originating
+turn ID remains separate from the current surrounding ordinal.
+
+One builder call appends a batch's entries atomically using at most 3 MiB of
+intermediate index data, derived from the 1 MiB batch target and 32-byte minimum
+record header. It retains no lifetime table. Positional sequence reads preserve
+caller outputs and descriptor positions on failure. Binary search returns a
+turn-start hint over a caller-bounded prefix. Missing or torn index bytes mean
+unavailable indexing; a negative search never proves that canonical history is
+absent. The positive result still requires canonical resolution.
+
+These building blocks are test-linked. Index publication, bounded history-page
+integration and normal admission remain unfinished. In particular, the current
+canonical batch finder still follows the backward chain. An index checksum or
+hint cannot replace that authentication or establish a checkpoint's semantic
+membership; efficient authenticated selected-record loading remains a separate
+integration dependency.
+
 ## One I/O owner and sparse durability barriers
 
 Use one session I/O worker for ordered append, hashing, checkpoint encoding and

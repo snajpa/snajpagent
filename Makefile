@@ -335,6 +335,8 @@ tests/snajpagent-direct: $(COMMON_OBJ) tests/direct_session.c $(HEADERS)
 	$(CC) $(filter-out -municode,$(LDFLAGS)) -o $@ $(COMMON_OBJ) \
 		build/direct_session.o $(LDLIBS) $(CURL_LIBS)
 
+tests/test_store: src/store_binary_index.c src/store_binary_index.h tests/test_store_binary_index.c
+
 tests/test_context tests/test_store tests/test_tools tests/test_turn: tests/checked_json.h
 
 tests/test_base tests/test_sse tests/test_provider_retry tests/test_upload_wire:

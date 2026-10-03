@@ -454,6 +454,7 @@
   checkpoint-plus-suffix reconstruction with atomic core/context adoption.
   Relocate adopted voice-history starts and process-output ranges through canonical
   native references, preserving historical tool-result presentation metadata.
+  Add fixed-width history-index codecs and canonical-batch hint verification.
 
 - Fix a memory leak when combining compaction summaries.
 
