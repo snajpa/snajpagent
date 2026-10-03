@@ -54,6 +54,27 @@ struct snag_binary_checkpoint_frame {
     struct snag_binary_checkpoint_section core, provider;
 };
 
+/* Fixed-size framing state. Sections stay immutable/alive until completion and
+ * cannot borrow this encoder's storage. Initialize before requesting chunks. */
+struct snag_binary_checkpoint_encoder {
+    struct snag_binary_checkpoint_frame frame;
+    struct snag_sha256 hash;
+    unsigned char header[SNAG_BINARY_CHECKPOINT_HEADER_SIZE];
+    unsigned char footer[SNAG_BINARY_CHECKPOINT_FOOTER_SIZE];
+    size_t position;
+    size_t total;
+};
+
+/* No snapshot-sized allocation or per-event cap. Init preserves out on failure.
+ * Next advances by at most budget bytes, returning a borrowed chunk (0), complete
+ * (1), or error (-1). EOF/error preserve chunk outputs; invalid arguments also
+ * preserve encoder state. Callers can yield between chunks. This supplies framing
+ * only, without section semantics, publication, durability or resume authority. */
+int snag_binary_checkpoint_encoder_init(struct snag_binary_checkpoint_encoder *out,
+    const struct snag_binary_checkpoint_frame *frame);
+int snag_binary_checkpoint_encoder_next(struct snag_binary_checkpoint_encoder *encoder,
+    size_t budget, const unsigned char **data, size_t *size);
+
 /* Append atomically. Section bytes may borrow the destination buffer. The caller
  * supplies a nonzero generation and two nonempty, separately versioned sections.
  * No per-event limit applies to the complete active-state snapshot. */

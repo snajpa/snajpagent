@@ -183,7 +183,7 @@ anchor_valid(const struct snag_binary_anchor *anchor)
 }
 
 int
-snag_binary_checkpoint_frame_encode(struct snag_buf *out,
+snag_binary_checkpoint_encoder_init(struct snag_binary_checkpoint_encoder *out,
     const struct snag_binary_checkpoint_frame *frame)
 {
     if (!out || !frame || !frame->generation || !anchor_valid(&frame->boundary) ||
@@ -197,12 +197,11 @@ snag_binary_checkpoint_frame_encode(struct snag_buf *out,
             SNAG_BINARY_CHECKPOINT_FOOTER_SIZE, &size) || size > INT64_MAX) {
         return snag_errno(EOVERFLOW);
     }
-    if (out->len > out->max || size > out->max - out->len) return snag_errno(EOVERFLOW);
-
-    unsigned char header[SNAG_BINARY_CHECKPOINT_HEADER_SIZE] = {0};
+    struct snag_binary_checkpoint_encoder encoder = {.frame = *frame, .total = size};
+    unsigned char *header = encoder.header;
     memcpy(header, checkpoint_magic, sizeof(checkpoint_magic));
     put_le(header + 10u, 1u, 2u);
-    put_le(header + 12u, sizeof(header), 4u);
+    put_le(header + 12u, sizeof(encoder.header), 4u);
     put_le(header + 16u, size, 8u);
     put_le(header + 24u, frame->generation, 8u);
     memcpy(header + 32u, frame->identity.id, sizeof(frame->identity.id));
@@ -216,21 +215,80 @@ snag_binary_checkpoint_frame_encode(struct snag_buf *out,
     put_le(header + 122u, frame->provider.version, 2u);
     put_le(header + 128u, frame->core.size, 8u);
     put_le(header + 136u, frame->provider.size, 8u);
-    unsigned char footer[SNAG_BINARY_CHECKPOINT_FOOTER_SIZE] = {0};
+    unsigned char *footer = encoder.footer;
     memcpy(footer, checkpoint_footer_magic, sizeof(checkpoint_footer_magic));
     put_le(footer + 8u, size, 8u);
+    snag_sha256_init(&encoder.hash);
+    *out = encoder;
+    return 0;
+}
+
+int
+snag_binary_checkpoint_encoder_next(struct snag_binary_checkpoint_encoder *encoder,
+    size_t budget, const unsigned char **data, size_t *size)
+{
+    if (!encoder || !budget || !data || !size ||
+        encoder->total < SNAG_BINARY_CHECKPOINT_HEADER_SIZE +
+            SNAG_BINARY_CHECKPOINT_FOOTER_SIZE + 2u || encoder->position > encoder->total) {
+        return invalid();
+    }
+    if (encoder->position == encoder->total) return 1;
+    size_t offset = encoder->position;
+    size_t count;
+    const unsigned char *chunk;
+    size_t core_end = sizeof(encoder->header) + encoder->frame.core.size;
+    size_t footer_start = encoder->total - sizeof(encoder->footer);
+    size_t digest_start = encoder->total - 32u;
+    if (offset < sizeof(encoder->header)) {
+        chunk = encoder->header + offset;
+        count = sizeof(encoder->header) - offset;
+    } else if (offset < core_end) {
+        chunk = encoder->frame.core.data + offset - sizeof(encoder->header);
+        count = core_end - offset;
+    } else if (offset < footer_start) {
+        chunk = encoder->frame.provider.data + offset - core_end;
+        count = footer_start - offset;
+    } else if (offset < digest_start) {
+        chunk = encoder->footer + offset - footer_start;
+        count = digest_start - offset;
+    } else {
+        if (offset == digest_start) {
+            snag_sha256_final(&encoder->hash, encoder->footer + sizeof(encoder->footer) - 32u);
+        }
+        chunk = encoder->footer + offset - footer_start;
+        count = encoder->total - offset;
+    }
+    if (count > budget) count = budget;
+    if (offset < digest_start) snag_sha256_update(&encoder->hash, chunk, count);
+    encoder->position += count;
+    *data = chunk;
+    *size = count;
+    return 0;
+}
+
+int
+snag_binary_checkpoint_frame_encode(struct snag_buf *out,
+    const struct snag_binary_checkpoint_frame *frame)
+{
+    if (!out) return invalid();
+    struct snag_binary_checkpoint_encoder encoder;
+    if (snag_binary_checkpoint_encoder_init(&encoder, frame) < 0) return -1;
+    if (out->len > out->max || encoder.total > out->max - out->len) {
+        return snag_errno(EOVERFLOW);
+    }
 
     /* Keep source views alive through the final append, including aliases into
      * out. Reserve scratch once instead of reallocating it for each section. */
-    struct snag_buf encoded = {.max = size};
-    if (snag_buf_reserve(&encoded, size) < 0 ||
-        snag_buf_append(&encoded, header, sizeof(header)) < 0 ||
-        snag_buf_append(&encoded, frame->core.data, frame->core.size) < 0 ||
-        snag_buf_append(&encoded, frame->provider.data, frame->provider.size) < 0 ||
-        snag_buf_append(&encoded, footer, sizeof(footer) - 32u) < 0) goto fail;
-    digest(encoded.data, encoded.len, footer + sizeof(footer) - 32u);
-    if (snag_buf_append(&encoded, footer + sizeof(footer) - 32u, 32u) < 0 ||
-        snag_buf_append(out, encoded.data, encoded.len) < 0) goto fail;
+    struct snag_buf encoded = {.max = encoder.total};
+    if (snag_buf_reserve(&encoded, encoder.total) < 0) goto fail;
+    const unsigned char *data;
+    size_t size;
+    int rc;
+    while ((rc = snag_binary_checkpoint_encoder_next(&encoder,
+        SIZE_MAX, &data, &size)) == 0) {
+        if (snag_buf_append(&encoded, data, size) < 0) goto fail;
+    }
+    if (rc < 0 || snag_buf_append(out, encoded.data, encoded.len) < 0) goto fail;
     snag_buf_free(&encoded);
     return 0;
 fail:

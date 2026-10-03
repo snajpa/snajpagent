@@ -1835,6 +1835,14 @@ overflow, mismatched boundaries,
 unsupported frame versions/features and checksum failures are errors. Encode
 appends atomically and permits source sections to borrow its destination buffer.
 
+Incremental framing retains only fixed header/footer storage and SHA state. Each
+call emits and hashes at most the caller's positive byte quantum, borrowing its
+immutable core/provider sections without a snapshot-sized allocation. This lets
+maintenance yield between chunks; the quantum imposes no total snapshot limit.
+The complete-buffer encoder uses the same wire representation and retains atomic
+append and aliased-section behavior. Neither encoder publishes files or supplies
+semantic checkpoint authority.
+
 Each section's own version is retained for its required field-shaped semantic
 decoder. Those decoders must validate complete core/provider state, common-boundary
 consistency and canonical reference provenance before adoption; an unknown required
