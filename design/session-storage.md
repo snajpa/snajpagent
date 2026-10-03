@@ -169,8 +169,8 @@ record sequence, without treating a decoded record offset as a file position.
 Forward reads check every available byte of an incomplete candidate for an early
 delimiter, using a fixed read buffer. Missing bytes beneath a supplied immutable
 boundary are read errors. Full reads decode the envelope, then verify the batch
-hash and fields. These checks also apply to backward and indexed reads. Canonical
-end discovery and fast checkpoint admission remain separate integration work.
+hash and fields. These checks also apply to backward and indexed reads. The bounded physical end-discovery primitive supplies a starting anchor; fast
+checkpoint admission and application integration remain pending.
 
 ### Draft 0.2 decoded framing
 
@@ -202,6 +202,18 @@ for one permitted batch and distinguishes incomplete tails from corruption and u
 beneath that boundary. Source identity, exclusive writer ownership and any tail
 truncation remain the session backend's responsibility. Failed verification
 leaves the committed anchor unchanged. No framing API modifies a file.
+
+`snag_binary_journal_tail` discovers a physical committed end from the captured
+file EOF. It scans at most one maximum wire batch to find the last delimiter and
+at most another to find that batch's start, excluding the immutable header. It
+verifies that entire batch and its immediate predecessor, then validates any
+remaining open tail. A corrupt closed frame or a missing expected delimiter is
+an error; recovery cannot skip it to select an older checkpoint. The caller owns
+source identity, prefix immutability and the exclusive writer lock. An arbitrary
+cache-supplied offset cannot stand in for captured EOF. The result authenticates
+this bounded physical suffix; earlier-prefix integrity, session creation, receipt
+ancestry and checkpoint semantics still need their corresponding readers. A
+header-only file returns its framing root for the new-writer path.
 
 `snag_binary_batch_previous` reads backward from an already trusted committed
 anchor. It authenticates the current batch against that anchor, then authenticates

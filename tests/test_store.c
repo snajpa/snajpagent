@@ -2668,6 +2668,7 @@ test_checkpoint_text_width(void)
 void test_store_binary(void);
 void test_store_binary_receipt(void);
 void test_store_binary_wire(void);
+void test_store_binary_tail(void);
 void test_store_binary_index(void);
 void test_store_binary_index_tree(void);
 void test_store_binary_io(void);
@@ -2689,6 +2690,7 @@ main(void)
     test_store_binary();
     test_store_binary_receipt();
     test_store_binary_wire();
+    test_store_binary_tail();
     test_store_binary_index();
     test_store_binary_index_tree();
     test_store_binary_io();

@@ -471,6 +471,8 @@
   record positions separately from physical commit anchors.
   Return prepared commit anchors from the batch encoder, avoiding a second full
   batch hash in the journal writer and importer.
+  Discover the committed physical end from captured EOF with bounded delimiter
+  scans and canonical batch checks, rejecting corrupt closed frames and tails.
 
 - Fix a memory leak when combining compaction summaries.
 

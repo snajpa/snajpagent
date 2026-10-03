@@ -180,6 +180,18 @@ int snag_binary_batch_read(int fd, uint64_t boundary,
     const struct snag_binary_anchor *anchor, struct snag_buf *scratch,
     struct snag_binary_batch *batch, struct snag_binary_anchor *next);
 
+/* Discover the physical committed end from this descriptor's captured EOF, never
+ * from an index/checkpoint hint. Caller owns identity checks, an immutable prefix
+ * and exclusive writer/repair ownership. Scans bounded envelope delimiters and
+ * verifies the last batch plus its immediate predecessor, then checks any open
+ * tail. Corrupt closed frames are errors, never skipped. Returns 0/-1, preserving
+ * all outputs on error and never seeking/writing. Scratch views always expire.
+ * A header-only file returns its root (next_seq=1); session creation and all other
+ * record semantics remain unverified. Earlier-prefix integrity, receipt ancestry
+ * and snapshot admission are separate checks; this is not a full replay. */
+int snag_binary_journal_tail(int fd, uint64_t boundary, struct snag_buf *scratch,
+    struct snag_binary_identity *identity, struct snag_binary_anchor *out, uint64_t *incomplete);
+
 /* Walk backward from an already trusted committed anchor in the same immutable
  * journal prefix. The caller owns identity/immutability; an untrusted index entry is
  * not such an anchor. Verify the current batch against that digest and verify

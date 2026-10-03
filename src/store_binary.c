@@ -711,7 +711,8 @@ batch_header_anchor(const unsigned char header[SNAG_BINARY_BATCH_HEADER_SIZE], u
     return 0;
 }
 
-/* Read at a separately authenticated physical position/digest. The header's
+/* The hash may be absent only for EOF discovery at actual physical delimiters.
+ * All indexed/backward callers supply an independently established digest. The
  * predecessor turn count is provisional until that whole predecessor is checked. */
 static int
 read_linked_batch(int fd, uint64_t boundary, uint64_t offset, const unsigned char hash[32],
@@ -737,7 +738,7 @@ read_linked_batch(int fd, uint64_t boundary, uint64_t offset, const unsigned cha
     int rc = snag_binary_batch_read(fd, offset + wire_size, &previous,
         scratch, &decoded, &checked);
     if (rc < 0) return -1;
-    if (rc != 0 || memcmp(checked.digest, hash, 32u)) return invalid();
+    if (rc != 0 || (hash && memcmp(checked.digest, hash, 32u))) return invalid();
     if (previous.end == SNAG_BINARY_HEADER_SIZE && verify_root(fd, &previous) < 0) {
         return -1;
     }
@@ -761,6 +762,75 @@ verify_parent(int fd, struct snag_binary_anchor *previous, uint64_t turns)
     if (rc < 0) return -1;
     previous->turns = after.turns;
     if (!anchors_equal(previous, &after) || after.turns > turns) return invalid();
+    return 0;
+}
+
+/* Search at most one physical batch back from a captured end. Zero bytes inside
+ * the immutable file header are outside the envelope and cannot be delimiters. */
+static int
+last_wire_end(int fd, uint64_t end, uint64_t *out)
+{
+    unsigned char bytes[65536];
+    uint64_t position = end;
+    size_t remaining = SNAG_BINARY_WIRE_BATCH_MAX;
+    while (position > SNAG_BINARY_HEADER_SIZE && remaining) {
+        uint64_t available = position - SNAG_BINARY_HEADER_SIZE;
+        size_t size = available > sizeof(bytes) ? sizeof(bytes) : (size_t)available;
+        if (size > remaining) size = remaining;
+        position -= size;
+        if (read_full_at(fd, bytes, size, position) < 0) return -1;
+        for (size_t i = size; i > 0u; --i) {
+            if (!bytes[i - 1u]) {
+                *out = position + i;
+                return 0;
+            }
+        }
+        remaining -= size;
+    }
+    if (position != SNAG_BINARY_HEADER_SIZE) return invalid();
+    *out = SNAG_BINARY_HEADER_SIZE;
+    return 0;
+}
+
+int
+snag_binary_journal_tail(int fd, uint64_t boundary, struct snag_buf *scratch,
+    struct snag_binary_identity *identity, struct snag_binary_anchor *out, uint64_t *incomplete)
+{
+    if (fd < 0 || !scratch || !identity || !out || !incomplete ||
+        boundary < SNAG_BINARY_HEADER_SIZE || boundary > INT64_MAX) {
+        return invalid();
+    }
+    snag_buf_reset(scratch);
+    unsigned char header[SNAG_BINARY_HEADER_SIZE];
+    struct snag_binary_identity found;
+    struct snag_binary_anchor committed;
+    if (read_full_at(fd, header, sizeof(header), 0u) < 0) return -1;
+    if (snag_binary_header_decode(header, sizeof(header), &found, &committed) != 0) {
+        return invalid();
+    }
+    uint64_t end;
+    if (last_wire_end(fd, boundary, &end) < 0) return -1;
+    if (end != SNAG_BINARY_HEADER_SIZE) {
+        uint64_t start;
+        if (last_wire_end(fd, end - 1u, &start) < 0) return -1;
+        struct snag_binary_anchor before;
+        struct snag_binary_batch batch;
+        if (read_linked_batch(fd, end, start, NULL, scratch, &batch, &before, &committed) < 0) {
+            return -1;
+        }
+        if (committed.end != end) return invalid();
+        if (verify_parent(fd, &before, committed.turns) < 0) return -1;
+    }
+    /* A lost final delimiter must fail at its declared position, rather than
+     * quietly rewinding an already complete batch to the preceding delimiter. */
+    struct snag_binary_batch tail;
+    struct snag_binary_anchor next;
+    int rc = snag_binary_batch_read(fd, boundary, &committed, scratch, &tail, &next);
+    if (rc < 0) return -1;
+    if (rc != 1) return invalid();
+    *identity = found;
+    *out = committed;
+    *incomplete = boundary - committed.end;
     return 0;
 }
 
