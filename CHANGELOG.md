@@ -465,6 +465,8 @@
   Resolve authenticated index entries with bounded canonical batch reads.
   Add optional checkpoint receipt encoding and exact snapshot-image binding,
   and return the completed image digest with durable publication.
+  Add a bounded reversible batch-envelope codec that separates physical commit
+  delimiters from payload bytes, ready for journal framing integration.
 
 - Fix a memory leak when combining compaction summaries.
 

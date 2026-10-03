@@ -130,6 +130,39 @@ verify the complete bounded batch before adopting any record in it. Footer
 links support backward navigation; byte offsets support direct seek. Headers
 and footers provide framing, not a promise of hardware-atomic sector writes.
 
+### Zero-free physical batch envelope
+
+A bounded recovery root needs a physical commit boundary distinguishable from
+arbitrary payload bytes. An embedded, self-consistent batch must not become a
+commit merely because a derived pointer or a torn file happens to end there.
+The test-linked wire codec prepares a reversible, zero-free envelope for this
+purpose. Runtime journal I/O still uses the earlier draft framing below; adopting
+the envelope and a corresponding journal format revision remains pending.
+
+Split a decoded batch into blocks of at most 254 bytes. Within each block,
+replace each zero-separated run with a one-byte value equal to its nonzero length
+plus one, followed by that run. Include the empty final run when the block ends
+with a zero. Decode each block independently. Every full decoded block produces
+255 nonzero bytes; a final shorter block produces its length plus one. Append a
+single zero after the entire encoded batch. For `n` decoded bytes, the physical
+size is exactly `n + ceil(n/254) + 1`, with one final delimiter and no zero inside
+the envelope. The block width follows the one-byte run code's range.
+
+The envelope adds metadata without another stored copy of the payload. A reader
+can reconstruct the 112-byte batch header from its first 113 encoded bytes,
+then validate the existing header checksum and length before any length-driven
+allocation or tail classification. An expected terminator replaced by a nonzero
+byte must be corruption, not a shorter committed prefix. A delimiter before the
+checked length likewise cannot become a valid shorter batch. Whole-envelope
+decoding rejects interior zeroes, overlong runs and noncanonical empty blocks;
+the existing batch checksum and semantic codecs remain necessary afterward.
+
+The byte codec provides atomic bounded encode/decode, including aliased input,
+and a non-adopting header-prefix decoder. The first journal header remains
+outside this envelope. File readers/writers, canonical end discovery, physical
+anchor accounting and format admission are not yet connected to it. Current
+passing raw-framing tests do not establish envelope-backed normal recovery.
+
 ### Draft 0.1 framing
 
 The framing codec uses the following fixed widths. All integer fields are
