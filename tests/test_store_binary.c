@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
+#include "fixture_store_binary.h"
 #include "store_binary.h"
 #include "fs.h"
 
@@ -126,7 +127,9 @@ test_encoded_anchor(const struct snag_binary_anchor *root)
     assert(!snag_binary_batch_decode(encoded.data + 4u, encoded.len - 4u,
         root, &batch, &verified));
     assert_anchor(&prepared, &verified);
-    assert(prepared.end == root->end + batch.size);
+    size_t wire_size;
+    assert(!snag_binary_wire_size(batch.size, &wire_size));
+    assert(prepared.end == root->end + wire_size);
     size_t original_size = encoded.len;
     struct snag_binary_anchor cursor = *root;
     records[0].payload = encoded.data + 4u + SNAG_BINARY_BATCH_HEADER_SIZE +
@@ -137,7 +140,7 @@ test_encoded_anchor(const struct snag_binary_anchor *root)
         !memcmp(encoded.data + 4u, encoded.data + original_size, batch.size));
     records[0].payload = payload;
     struct snag_binary_anchor sentinel = {.end = 17u, .next_seq = 19u, .turns = 3u};
-    for (size_t fault = 0u; fault < 8u; ++fault) {
+    for (size_t fault = 0u; fault < 9u; ++fault) {
         struct snag_binary_anchor before = *root;
         struct snag_binary_record bad[2] = {records[0], records[1]};
         uint32_t count = 2u;
@@ -154,6 +157,10 @@ test_encoded_anchor(const struct snag_binary_anchor *root)
         }
         if (fault == 7u) {
             before.end = INT64_MAX - 1u;
+            before.previous = root->end;
+        }
+        if (fault == 8u) {
+            before.end = (uint64_t)INT64_MAX - batch.size;
             before.previous = root->end;
         }
         size_t kept = encoded.len;
@@ -233,8 +240,12 @@ test_direct_reader(int fd, const struct snag_buf *joined, const struct snag_bina
             &scratch, &batch, &before, &after));
         assert_anchor(&before, starts[i]);
         assert_anchor(&after, ends[i]);
-        assert(batch.size == ends[i]->end - starts[i]->end);
-        assert(!memcmp(batch.data, joined->data + starts[i]->end - root->end, batch.size));
+        struct snag_buf expected = {.max = SNAG_BINARY_BATCH_MAX};
+        size_t size = (size_t)(ends[i]->end - starts[i]->end);
+        assert(!snag_binary_wire_decode(&expected,
+            joined->data + starts[i]->end - root->end, size));
+        assert(batch.size == expected.len && !memcmp(batch.data, expected.data, expected.len));
+        snag_buf_free(&expected);
         assert(!snag_binary_batch_at(fd, ends[i]->end, starts[i]->end, ends[i]->digest,
             &scratch, &batch, &before, &after));
     }
@@ -271,8 +282,11 @@ test_backward_reader(int fd, const unsigned char *header, const struct snag_buf 
     assert(!snag_binary_batch_previous(fd, tail, &scratch, &batch, &before));
     assert_anchor(&before, middle);
     assert(batch.first_seq == middle->next_seq);
-    assert(batch.size == tail->end - middle->end);
-    assert(!memcmp(batch.data, joined->data + middle->end - root->end, batch.size));
+    struct snag_buf expected = {.max = SNAG_BINARY_BATCH_MAX};
+    assert(!snag_binary_wire_decode(&expected, joined->data + middle->end - root->end,
+        (size_t)(tail->end - middle->end)));
+    assert(batch.size == expected.len && !memcmp(batch.data, expected.data, expected.len));
+    snag_buf_free(&expected);
     /* The output cursor may alias the input; its anchor works forward too. */
     struct snag_binary_anchor cursor = before;
     assert(!snag_binary_batch_previous(fd, &cursor, &scratch, &batch, &cursor));
@@ -369,6 +383,62 @@ test_backward_reader(int fd, const unsigned char *header, const struct snag_buf 
     snag_buf_free(&scratch);
 }
 
+/* Every non-final byte must stay nonzero, including in a truncated candidate.
+ * A valid header declaring more bytes cannot hide an already closed envelope. */
+static void
+test_wire_tails(int fd, const struct snag_binary_anchor *before, const struct snag_buf *joined,
+    uint64_t boundary, struct snag_buf *scratch)
+{
+    size_t start = (size_t)(before->end - SNAG_BINARY_HEADER_SIZE);
+    size_t size = joined->len - start;
+    struct snag_binary_batch batch = {.data = (const unsigned char *)"kept", .size = 4u};
+    struct snag_binary_batch saved;
+    memcpy(&saved, &batch, sizeof(saved));
+    for (size_t i = 0u; i + 1u < size; ++i) {
+        unsigned char zero = 0u;
+        assert(joined->data[start + i] != 0u);
+        int64_t position = (int64_t)(before->end + i);
+        assert(snag_seek(fd, position, SEEK_SET) == position);
+        assert(!snag_write_full(fd, &zero, 1u));
+        struct snag_binary_anchor next = *before;
+        assert(snag_binary_batch_read(fd, (uint64_t)position + 1u, before,
+            scratch, &batch, &next) < 0);
+        assert_anchor(&next, before);
+        assert(!memcmp(&batch, &saved, sizeof(saved)));
+        assert(snag_binary_batch_read(fd, boundary, before, scratch, &batch, &next) < 0);
+        assert_anchor(&next, before);
+        assert(snag_seek(fd, position, SEEK_SET) == position);
+        assert(!snag_write_full(fd, joined->data + start + i, 1u));
+    }
+    unsigned char one = 1u;
+    assert(snag_seek(fd, (int64_t)boundary - 1, SEEK_SET) == (int64_t)boundary - 1);
+    assert(!snag_write_full(fd, &one, 1u));
+    struct snag_binary_anchor next = *before;
+    assert(snag_binary_batch_read(fd, boundary, before, scratch, &batch, &next) < 0);
+    assert_anchor(&next, before);
+    assert(snag_binary_batch_read(fd, boundary - 1u, before, scratch, &batch, &next) == 1);
+
+    struct snag_buf raw = {.max = SNAG_BINARY_BATCH_MAX};
+    struct snag_buf wire = {.max = SNAG_BINARY_WIRE_BATCH_MAX};
+    assert(!snag_binary_wire_decode(&raw, joined->data + start, size));
+    uint64_t larger = raw.len + 500u;
+    for (size_t i = 0u; i < 8u; ++i) raw.data[8u + i] = (unsigned char)(larger >> (8u * i));
+    rehash(raw.data, SNAG_BINARY_BATCH_HEADER_SIZE);
+    assert(!snag_binary_wire_encode(&wire, raw.data, raw.len));
+    assert(wire.len == size);
+    assert(snag_seek(fd, (int64_t)before->end, SEEK_SET) == (int64_t)before->end);
+    assert(!snag_write_full(fd, wire.data, wire.len));
+    assert(snag_binary_batch_read(fd, boundary, before, scratch, &batch, &next) < 0);
+    assert_anchor(&next, before);
+    assert(!memcmp(&batch, &saved, sizeof(saved)));
+    assert(scratch->len == SNAG_BINARY_BATCH_HEADER_SIZE);
+    assert(snag_seek(fd, (int64_t)before->end, SEEK_SET) == (int64_t)before->end);
+    assert(!snag_write_full(fd, joined->data + start, size));
+    assert(snag_seek(fd, 13, SEEK_SET) == 13);
+    snag_buf_free(&raw);
+    snag_buf_free(&wire);
+}
+
 static void
 test_file_reader(const unsigned char *header, const struct snag_buf *joined,
     const struct snag_binary_anchor *anchor, const struct snag_binary_anchor *next)
@@ -397,6 +467,7 @@ test_file_reader(const unsigned char *header, const struct snag_buf *joined,
         assert(!memcmp(&candidate, next, sizeof(candidate)));
         assert(scratch.len <= SNAG_BINARY_BATCH_HEADER_SIZE);
     }
+    test_wire_tails(fd, next, joined, boundary, &scratch);
     assert(snag_seek(fd, 0, SEEK_END) == (int64_t)boundary);
     assert(snag_binary_batch_read(fd, next->end - 1u, next,
         &scratch, &batch, &candidate) < 0);
@@ -419,7 +490,7 @@ test_file_reader(const unsigned char *header, const struct snag_buf *joined,
     const unsigned char wrong = 0xffu;
     assert(!snag_write_full(fd, &wrong, 1u));
     assert(snag_binary_batch_read(fd, boundary, next, &scratch, &batch, &candidate) < 0);
-    assert(scratch.len == SNAG_BINARY_BATCH_HEADER_SIZE);
+    assert(scratch.len <= SNAG_BINARY_BATCH_HEADER_SIZE);
     snag_buf_free(&scratch);
     assert(!close(fd));
     assert(!unlink(path));
@@ -428,7 +499,7 @@ test_file_reader(const unsigned char *header, const struct snag_buf *joined,
 
 static void
 test_direct_isolation(int fd, const struct snag_binary_anchor *root,
-    const struct snag_buf *first, const struct snag_binary_anchor *tail)
+    const struct snag_binary_anchor *tail)
 {
     struct snag_buf encoded = {.max = SNAG_BINARY_BATCH_MAX};
     struct snag_binary_anchor anchors[3] = {*tail};
@@ -441,12 +512,13 @@ test_direct_isolation(int fd, const struct snag_binary_anchor *root,
         assert(!snag_binary_batch_encode(&encoded, &anchors[i], &record, 1u, tail->turns, NULL));
         assert(!snag_binary_batch_decode(encoded.data, encoded.len,
             &anchors[i], &batch, &anchors[i + 1u]));
-        assert(!snag_write_full(fd, encoded.data, encoded.len));
+        assert(!binary_fixture_write(fd, encoded.data, encoded.len));
     }
     /* The fourth batch and its predecessor are sufficient. Damage elsewhere in
      * the immutable prefix is discovered when that history is actually queried. */
     uint64_t damaged = root->end + SNAG_BINARY_BATCH_HEADER_SIZE + SNAG_BINARY_RECORD_HEADER_SIZE;
-    unsigned char original = first->data[damaged - root->end];
+    unsigned char original;
+    assert(snag_pread(fd, &original, 1u, (int64_t)damaged) == 1);
     unsigned char bad = original ^ 1u;
     assert(snag_seek(fd, (int64_t)damaged, SEEK_SET) == (int64_t)damaged);
     assert(!snag_write_full(fd, &bad, 1u));
@@ -462,16 +534,18 @@ test_direct_isolation(int fd, const struct snag_binary_anchor *root,
     assert(snag_binary_batch_find(fd, &anchors[2], 1u, &scratch, &batch, &before) < 0);
     assert(snag_seek(fd, (int64_t)damaged, SEEK_SET) == (int64_t)damaged);
     assert(!snag_write_full(fd, &original, 1u));
-    /* Every byte of the selected batch is covered by its independent digest. */
-    for (size_t i = 0u; i < encoded.len; ++i) {
+    /* Every physical byte, including the delimiter, is checked. */
+    struct snag_buf wire = {.max = SNAG_BINARY_WIRE_BATCH_MAX};
+    assert(!snag_binary_wire_encode(&wire, encoded.data, encoded.len));
+    for (size_t i = 0u; i < wire.len; ++i) {
         int64_t position = (int64_t)(anchors[1].end + i);
-        bad = encoded.data[i] ^ 1u;
+        bad = wire.data[i] ^ 1u;
         assert(snag_seek(fd, position, SEEK_SET) == position);
         assert(!snag_write_full(fd, &bad, 1u));
         assert(snag_seek(fd, 13, SEEK_SET) == 13);
         reject_at(fd, anchors[2].end, anchors[1].end, anchors[2].digest, &scratch);
         assert(snag_seek(fd, position, SEEK_SET) == position);
-        assert(!snag_write_full(fd, encoded.data + i, 1u));
+        assert(!snag_write_full(fd, wire.data + i, 1u));
     }
     /* Rechecksummed unsafe lengths still fail before allocating batch storage. */
     unsigned char invalid_header[SNAG_BINARY_BATCH_HEADER_SIZE];
@@ -479,15 +553,18 @@ test_direct_isolation(int fd, const struct snag_binary_anchor *root,
     memset(invalid_header + 8u, 0xff, 8u);
     rehash(invalid_header, sizeof(invalid_header));
     assert(snag_seek(fd, (int64_t)anchors[1].end, SEEK_SET) == (int64_t)anchors[1].end);
-    assert(!snag_write_full(fd, invalid_header, sizeof(invalid_header)));
+    snag_buf_reset(&wire);
+    assert(!snag_binary_wire_encode(&wire, invalid_header, sizeof(invalid_header)));
+    assert(!snag_write_full(fd, wire.data, wire.len - 1u));
     assert(snag_seek(fd, 13, SEEK_SET) == 13);
     struct snag_buf empty = {.max = SNAG_BINARY_BATCH_MAX};
     reject_at(fd, anchors[2].end, anchors[1].end, anchors[2].digest, &empty);
     assert(!empty.data && !empty.cap && !empty.len);
     assert(snag_seek(fd, (int64_t)anchors[1].end, SEEK_SET) == (int64_t)anchors[1].end);
-    assert(!snag_write_full(fd, encoded.data, encoded.len));
+    assert(!binary_fixture_write(fd, encoded.data, encoded.len));
     assert(snag_seek(fd, 13, SEEK_SET) == 13);
     snag_buf_free(&scratch);
+    snag_buf_free(&wire);
     snag_buf_free(&encoded);
 }
 
@@ -503,8 +580,8 @@ test_backward_special(const unsigned char *header, const struct snag_binary_anch
     assert(!snag_binary_batch_encode(&nested, &fake, &record, 1u, 0u, NULL));
     struct snag_binary_batch batch;
     struct snag_binary_anchor next;
-    /* An embedded batch can be locally well-formed at its exact physical offset.
-     * Its fabricated predecessor does not establish membership in the journal. */
+    /* A payload can contain a self-consistent decoded batch image. Its physical
+     * envelope and fabricated predecessor cannot establish journal membership. */
     assert(!snag_binary_batch_decode(nested.data, nested.len, &fake, &batch, &next));
     struct snag_binary_ref reference = {.sequence = 1u, .size = 6u};
     const unsigned char *view;
@@ -530,8 +607,8 @@ test_backward_special(const unsigned char *header, const struct snag_binary_anch
     int fd = mkstemp(path);
     assert(fd >= 0);
     assert(!snag_write_full(fd, header, SNAG_BINARY_HEADER_SIZE));
-    assert(!snag_write_full(fd, first.data, first.len));
-    assert(!snag_write_full(fd, second.data, second.len));
+    assert(!binary_fixture_write(fd, first.data, first.len));
+    assert(!binary_fixture_write(fd, second.data, second.len));
     assert(snag_seek(fd, 13, SEEK_SET) == 13);
     struct snag_buf scratch = {.max = SNAG_BINARY_BATCH_MAX};
     struct snag_binary_anchor before;
@@ -566,7 +643,7 @@ test_backward_special(const unsigned char *header, const struct snag_binary_anch
     assert_anchor(&before, &middle);
     assert_anchor(&direct_after, &tail);
     reject_at(fd, tail.end, fake.end, next.digest, &scratch);
-    test_direct_isolation(fd, root, &first, &tail);
+    test_direct_isolation(fd, root, &tail);
 
     /* Both batches have valid hashes, but the child lies about cumulative turns.
      * Recover the authenticated parent counter instead of assuming zero. */
@@ -576,7 +653,7 @@ test_backward_special(const unsigned char *header, const struct snag_binary_anch
     assert(!snag_binary_batch_encode(&second, &fake, &record, 1u, 1u, NULL));
     assert(!snag_binary_batch_decode(second.data, second.len, &fake, &batch, &next));
     assert(snag_seek(fd, (int64_t)middle.end, SEEK_SET) == (int64_t)middle.end);
-    assert(!snag_write_full(fd, second.data, second.len));
+    assert(!binary_fixture_write(fd, second.data, second.len));
     assert(snag_seek(fd, 13, SEEK_SET) == 13);
     reject_previous(fd, &next, &scratch);
     assert(errno == EINVAL);
@@ -672,11 +749,11 @@ test_checkpoint_frames(const struct snag_binary_identity *identity,
     assert(!snag_binary_checkpoint_frame_encode(&encoded, &frame));
     assert_bytes(encoded.data, encoded.len,
         "534e414743484b0000000100a0000000d70000000000000088776655443322110001020304050607"
-        "08090a0b0c0d0e0f0807060504030201450100000000000002000000000000000000000000000000"
-        "6000000000000000a912c826c16f98a7eb7ccadbd3d458a45575d4e72b072cde445bafcaa820a234"
+        "08090a0b0c0d0e0f0807060504030201470100000000000002000000000000000000000000000000"
+        "6000000000000000779a3cacad07d9d88bf0606fefb185d27a0df6754016387dad0e71953699a30e"
         "01000200000000000300000000000000040000000000000000000000000000000000000000000000"
-        "63007280010070534e414743504500d700000000000000c9cf98720207d63cfd991d687426b0ea7d"
-        "427457233c94ebb0cd57cce7767bba");
+        "63007280010070534e414743504500d7000000000000001af17a53296f01e688f6793cc5288c1919"
+        "d2f1dce93e06b24efcc4a4913b748f");
     size_t length = encoded.len;
     /* Every small quantum crosses different header/body/footer/hash boundaries.
      * The fixture above is independently hashed, not generated by this stream. */
@@ -898,9 +975,9 @@ test_store_binary(void)
     /* Independent explicit little-endian fixtures; neither C layout nor an
      * encode/decode round trip supplies their expected bytes. */
     assert_bytes(header, sizeof(header),
-        "534e41474a4e4c00000001006000000000000000000000000000000000000000"
-        "000102030405060708090a0b0c0d0e0f08070605040302010000000000000000"
-        "8e943e61bd08692bc6f5e3b9c0711533fd76a2276eb9813bb7c6eb1e8959dcdb");
+        "534e41474a4e4c000000020060000000000000000000000000000000000000000001020304050607"
+        "08090a0b0c0d0e0f0807060504030201000000000000000010a796059b17bf9ad3178b99bf4af435"
+        "3a1d038ad9749aa99cdab968b500278d");
     struct snag_binary_identity decoded = {0};
     struct snag_binary_anchor anchor = {0};
     for (size_t i = 0; i < sizeof(header); ++i) {
@@ -931,6 +1008,17 @@ test_store_binary(void)
         rehash(bad, sizeof(bad));
         assert(snag_binary_header_decode(bad, sizeof(bad), &decoded, &anchor) < 0);
     }
+    const unsigned int old_minor[] = {0u, 1u, 3u, 65535u};
+    for (size_t i = 0u; i < 4u; ++i) {
+        unsigned char bad[SNAG_BINARY_HEADER_SIZE];
+        memcpy(bad, header, sizeof(bad));
+        bad[10] = (unsigned char)old_minor[i];
+        bad[11] = (unsigned char)(old_minor[i] >> 8u);
+        rehash(bad, sizeof(bad));
+        struct snag_binary_anchor kept = anchor;
+        assert(snag_binary_header_decode(bad, sizeof(bad), &decoded, &kept) < 0);
+        assert_anchor(&kept, &anchor);
+    }
     static const unsigned char payload[] = {'a', 'b', 'c', 0, 'z'};
     struct snag_binary_record record = {
         .kind = 7u, .version = 1u, .timestamp_ms = identity.created_ms,
@@ -939,14 +1027,12 @@ test_store_binary(void)
     struct snag_buf encoded = {.max = SNAG_BINARY_BATCH_MAX};
     assert(!snag_binary_batch_encode(&encoded, &anchor, &record, 1u, 0u, NULL));
     assert_bytes(encoded.data, encoded.len,
-        "534e414742415400e50000000000000001000000700000000100000000000000"
-        "00000000000000008e943e61bd08692bc6f5e3b9c0711533fd76a2276eb9813b"
-        "b7c6eb1e8959dcdb0000000000000000e4cd61a31ac3ff3752125a7d1c9a0f2b"
-        "f974fca21e24ff4f4e0cc9b68a7e544625000000000000000100000000000000"
-        "08070605040302010700010000000000616263007a534e4147454e4400600000"
-        "0000000000e50000000000000001000000000000000000000000000000000000"
-        "0000000000a912c826c16f98a7eb7ccadbd3d458a45575d4e72b072cde445baf"
-        "caa820a234");
+        "534e414742415400e500000000000000010000007000000001000000000000000000000000000000"
+        "10a796059b17bf9ad3178b99bf4af4353a1d038ad9749aa99cdab968b500278d0000000000000000"
+        "bf7d080b1eb86dcc6506f3970cd9ea1659f3b242bebe555ec99527178ac86c5e2500000000000000"
+        "010000000000000008070605040302010700010000000000616263007a534e4147454e4400600000"
+        "0000000000e500000000000000010000000000000000000000000000000000000000000000779a3c"
+        "acad07d9d88bf0606fefb185d27a0df6754016387dad0e71953699a30e");
     struct snag_binary_batch batch = {0};
     struct snag_binary_anchor next = anchor;
     for (size_t i = 0; i < encoded.len; ++i) {
@@ -955,7 +1041,7 @@ test_store_binary(void)
     }
     assert(!snag_binary_batch_decode(encoded.data, encoded.len, &anchor, &batch, &next));
     assert(batch.count == 1u && batch.first_seq == 1u && batch.size == encoded.len);
-    assert(next.previous == sizeof(header) && next.end == sizeof(header) + encoded.len);
+    assert(next.previous == sizeof(header) && next.end == sizeof(header) + encoded.len + 2u);
     assert(next.next_seq == 2u && !next.turns);
     test_checkpoint_frames(&identity, &next);
     struct snag_binary_record read;
@@ -1012,7 +1098,11 @@ test_store_binary(void)
             &next, &batch, &kept) == 1);
         assert(!memcmp(&kept, &next, sizeof(kept)));
     }
-    test_file_reader(header, &joined, &anchor, &next);
+    struct snag_buf wire = {.max = 2u * SNAG_BINARY_WIRE_BATCH_MAX};
+    assert(!snag_binary_wire_encode(&wire, encoded.data, encoded.len));
+    assert(!snag_binary_wire_encode(&wire, second.data, second.len));
+    test_file_reader(header, &wire, &anchor, &next);
+    snag_buf_free(&wire);
     snag_buf_free(&joined);
     snag_buf_free(&second);
     /* Invalid input/allocation bounds do not append partially encoded batches. */

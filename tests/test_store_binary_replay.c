@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
+#include "fixture_store_binary.h"
 #include "store_binary_replay.h"
 #include "store_binary_import.h"
 #include "fs.h"
@@ -77,7 +78,7 @@ fixture_flush(struct replay_fixture *fixture)
     assert(!snag_binary_batch_encode(&bytes, &fixture->anchor, fixture->records,
         (uint32_t)fixture->count, fixture->turns, NULL));
     assert(!snag_binary_batch_decode(bytes.data, bytes.len, &fixture->anchor, &batch, &next));
-    assert(!snag_buf_append(&fixture->file, bytes.data, bytes.len));
+    assert(!snag_binary_wire_encode(&fixture->file, bytes.data, bytes.len));
     if (!fixture->first_end) fixture->first_end = fixture->file.len;
     fixture->anchor = next;
     fixture->count = 0u;
@@ -239,7 +240,7 @@ append_record(struct replay_fixture *fixture, struct snag_buf *file,
 {
     snag_buf_reset(file);
     assert(!snag_buf_append(file, fixture->file.data, fixture->file.len));
-    assert(!snag_binary_batch_encode(file, &fixture->anchor, record, 1u, turns, NULL));
+    assert(!binary_fixture_append(file, &fixture->anchor, record, 1u, turns, NULL));
 }
 
 static struct snag_binary_record
@@ -340,7 +341,7 @@ test_creation_rejection(struct replay_fixture *fixture, struct snag_session *sou
     struct snag_session *restored)
 {
     struct snag_buf payload = {.max = SNAG_MAX_EVENT_LINE};
-    struct snag_buf file = {.max = SNAG_BINARY_BATCH_MAX + SNAG_BINARY_HEADER_SIZE};
+    struct snag_buf file = {.max = SNAG_BINARY_WIRE_BATCH_MAX + SNAG_BINARY_HEADER_SIZE};
     struct snag_binary_recovery recovery;
     struct snag_binary_anchor root;
     struct snag_binary_identity identity;
@@ -350,13 +351,13 @@ test_creation_rejection(struct replay_fixture *fixture, struct snag_session *sou
     records[0] = encode_record(&payload, "session_created", fixture->creation);
     records[0].timestamp_ms = identity.created_ms + 1u;
     assert(!snag_buf_append(&file, fixture->file.data, SNAG_BINARY_HEADER_SIZE));
-    assert(!snag_binary_batch_encode(&file, &root, records, 1u, 0u, NULL));
+    assert(!binary_fixture_append(&file, &root, records, 1u, 0u, NULL));
     assert(replay_check(source, restored, &recovery, file.data, file.len) < 0 && errno == EINVAL);
     assert(recovery.problem_seq == 1u && !recovery.batches);
     records[0].timestamp_ms = identity.created_ms;
     records[0].flags = SNAG_BINARY_RECORD_OPTIONAL;
     file.len = SNAG_BINARY_HEADER_SIZE;
-    assert(!snag_binary_batch_encode(&file, &root, records, 1u, 0u, NULL));
+    assert(!binary_fixture_append(&file, &root, records, 1u, 0u, NULL));
     assert(replay_check(source, restored, &recovery, file.data, file.len) < 0 && errno == EINVAL);
 
     /* Format-2 semantics remain strict here: an invalid transition cannot use
@@ -375,7 +376,7 @@ test_creation_rejection(struct replay_fixture *fixture, struct snag_session *sou
     records[1] = encode_record(&bad_payload, "goal_reworded", bad);
     json_decref(bad);
     file.len = SNAG_BINARY_HEADER_SIZE;
-    assert(!snag_binary_batch_encode(&file, &root, records, 2u, 0u, NULL));
+    assert(!binary_fixture_append(&file, &root, records, 2u, 0u, NULL));
     assert(replay_check(source, restored, &recovery, file.data, file.len) < 0 && errno == EINVAL);
     assert(recovery.problem_seq == 2u && recovery.verified.end == SNAG_BINARY_HEADER_SIZE);
     snag_buf_free(&bad_payload);
@@ -403,17 +404,19 @@ static struct snag_binary_ref
 fixture_reference(const struct replay_fixture *fixture, uint64_t wanted,
     enum snag_binary_input_leaf field)
 {
+    struct snag_buf decoded = {.max = SNAG_BINARY_BATCH_MAX};
     struct snag_binary_identity identity;
     struct snag_binary_anchor anchor;
     assert(!snag_binary_header_decode(fixture->file.data, fixture->file.len, &identity, &anchor));
     while (anchor.end < fixture->file.len) {
         struct snag_binary_batch batch;
         struct snag_binary_anchor next;
-        assert(!snag_binary_batch_decode(fixture->file.data + anchor.end,
-            fixture->file.len - anchor.end, &anchor, &batch, &next));
+        assert(!binary_fixture_read(fixture->file.data + anchor.end,
+            fixture->file.len - anchor.end, &anchor, &decoded, &batch, &next));
         if (wanted >= batch.first_seq && wanted < next.next_seq) {
             struct snag_binary_ref reference;
             assert(!snag_binary_input_ref_create(&batch, wanted, field, &reference));
+            snag_buf_free(&decoded);
             return reference;
         }
         anchor = next;
@@ -428,14 +431,15 @@ static struct snag_binary_input_reference
 fixture_declaration(const struct replay_fixture *fixture, uint64_t wanted,
     enum snag_binary_input_leaf field)
 {
+    struct snag_buf decoded = {.max = SNAG_BINARY_BATCH_MAX};
     struct snag_binary_identity identity;
     struct snag_binary_anchor anchor;
     assert(!snag_binary_header_decode(fixture->file.data, fixture->file.len, &identity, &anchor));
     while (anchor.end < fixture->file.len) {
         struct snag_binary_batch batch;
         struct snag_binary_anchor next;
-        assert(!snag_binary_batch_decode(fixture->file.data + anchor.end,
-            fixture->file.len - anchor.end, &anchor, &batch, &next));
+        assert(!binary_fixture_read(fixture->file.data + anchor.end,
+            fixture->file.len - anchor.end, &anchor, &decoded, &batch, &next));
         size_t cursor = SNAG_BINARY_BATCH_HEADER_SIZE;
         for (uint32_t i = 0u; i < batch.count; ++i) {
             struct snag_binary_record record;
@@ -469,6 +473,7 @@ fixture_declaration(const struct replay_fixture *fixture, uint64_t wanted,
                     field == SNAG_BINARY_INPUT_VOICE_REQUEST ? event.data.queued.voice.request_ref :
                     event.data.queued.content_ref;
             }
+            snag_buf_free(&decoded);
             if (declared.field) return declared;
             return (struct snag_binary_input_reference){.field = field,
                 .target = fixture_reference(fixture, wanted, field)};
@@ -555,6 +560,7 @@ static void
 rewrite_turn(const struct replay_fixture *fixture, const struct turn_sources *sequences,
     enum turn_ref_case mode, struct snag_buf *file)
 {
+    struct snag_buf decoded = {.max = SNAG_BINARY_BATCH_MAX};
     struct snag_binary_identity identity;
     struct snag_binary_anchor input;
     assert(!snag_binary_header_decode(fixture->file.data, fixture->file.len, &identity, &input));
@@ -564,8 +570,8 @@ rewrite_turn(const struct replay_fixture *fixture, const struct turn_sources *se
     while (input.end < fixture->file.len) {
         struct snag_binary_batch batch;
         struct snag_binary_anchor next;
-        assert(!snag_binary_batch_decode(fixture->file.data + input.end,
-            fixture->file.len - input.end, &input, &batch, &next));
+        assert(!binary_fixture_read(fixture->file.data + input.end,
+            fixture->file.len - input.end, &input, &decoded, &batch, &next));
         assert(batch.count <= 3u);
         struct snag_binary_record records[3];
         struct snag_buf payload = {.max = SNAG_MAX_EVENT_LINE};
@@ -589,14 +595,11 @@ rewrite_turn(const struct replay_fixture *fixture, const struct turn_sources *se
             assert(snag_binary_legacy_decode(&records[i], &literal_type, &literal_data) < 0 &&
                 errno == ENOTSUP && !literal_type && !literal_data);
         }
-        size_t start = file->len;
-        assert(!snag_binary_batch_encode(file, &output, records, batch.count, next.turns, NULL));
-        struct snag_binary_batch verified;
-        assert(!snag_binary_batch_decode(file->data + start, file->len - start,
-            &output, &verified, &output));
+        assert(!binary_fixture_append(file, &output, records, batch.count, next.turns, &output));
         snag_buf_free(&payload);
         input = next;
     }
+    snag_buf_free(&decoded);
 }
 
 enum receipt_fault {
@@ -615,6 +618,7 @@ static void
 rewrite_receipt(const struct replay_fixture *fixture, uint64_t receipt, uint64_t canonical,
     unsigned int fields, enum receipt_fault fault, struct snag_buf *file)
 {
+    struct snag_buf decoded = {.max = SNAG_BINARY_BATCH_MAX};
     struct snag_binary_identity identity;
     struct snag_binary_anchor input;
     assert(!snag_binary_header_decode(fixture->file.data, fixture->file.len, &identity, &input));
@@ -624,8 +628,8 @@ rewrite_receipt(const struct replay_fixture *fixture, uint64_t receipt, uint64_t
     while (input.end < fixture->file.len) {
         struct snag_binary_batch batch;
         struct snag_binary_anchor next;
-        assert(!snag_binary_batch_decode(fixture->file.data + input.end,
-            fixture->file.len - input.end, &input, &batch, &next));
+        assert(!binary_fixture_read(fixture->file.data + input.end,
+            fixture->file.len - input.end, &input, &decoded, &batch, &next));
         assert(batch.count <= 3u);
         struct snag_binary_record records[3];
         struct snag_buf payload = {.max = SNAG_MAX_EVENT_LINE};
@@ -760,15 +764,12 @@ rewrite_receipt(const struct replay_fixture *fixture, uint64_t receipt, uint64_t
             assert(snag_binary_legacy_decode(&records[i], &type, &data) < 0 && errno == ENOTSUP);
             assert(!type && !data);
         }
-        size_t start = file->len;
-        assert(!snag_binary_batch_encode(file, &output, records, batch.count, next.turns, NULL));
-        struct snag_binary_batch verified;
-        assert(!snag_binary_batch_decode(file->data + start, file->len - start,
-            &output, &verified, &output));
+        assert(!binary_fixture_append(file, &output, records, batch.count, next.turns, &output));
         snag_buf_free(&child);
         snag_buf_free(&payload);
         input = next;
     }
+    snag_buf_free(&decoded);
 }
 
 void test_store_binary_checkpoint_state(const struct snag_session *);
@@ -1174,14 +1175,15 @@ test_import_markers(struct replay_fixture *fixture, struct snag_session *source,
 static void
 prefix_through(const struct snag_buf *file, uint64_t wanted, struct snag_buf *prefix)
 {
+    struct snag_buf decoded = {.max = SNAG_BINARY_BATCH_MAX};
     struct snag_binary_identity identity;
     struct snag_binary_anchor anchor;
     assert(!snag_binary_header_decode(file->data, file->len, &identity, &anchor));
     while (anchor.end < file->len) {
         struct snag_binary_batch batch;
         struct snag_binary_anchor next;
-        assert(!snag_binary_batch_decode(file->data + anchor.end,
-            file->len - anchor.end, &anchor, &batch, &next));
+        assert(!binary_fixture_read(file->data + anchor.end,
+            file->len - anchor.end, &anchor, &decoded, &batch, &next));
         if (wanted >= batch.first_seq && wanted < next.next_seq) {
             size_t cursor = SNAG_BINARY_BATCH_HEADER_SIZE;
             uint64_t turns = anchor.turns;
@@ -1195,8 +1197,9 @@ prefix_through(const struct snag_buf *file, uint64_t wanted, struct snag_buf *pr
             }
             snag_buf_reset(prefix);
             assert(!snag_buf_append(prefix, file->data, (size_t)anchor.end));
-            assert(!snag_binary_batch_encode(prefix, &anchor, records, count, turns, NULL));
+            assert(!binary_fixture_append(prefix, &anchor, records, count, turns, NULL));
             free(records);
+            snag_buf_free(&decoded);
             return;
         }
         anchor = next;
@@ -2083,7 +2086,7 @@ snapshot_fields(struct snag_binary_event *event)
 
 static struct snag_binary_response_output
 fixture_output(const struct replay_fixture *fixture, uint64_t first,
-    struct snag_binary_ref *reference)
+    struct snag_binary_ref *reference, struct snag_buf *decoded)
 {
     struct snag_binary_identity identity;
     struct snag_binary_anchor position, next;
@@ -2091,8 +2094,8 @@ fixture_output(const struct replay_fixture *fixture, uint64_t first,
         &identity, &position));
     while (position.end < fixture->file.len) {
         struct snag_binary_batch batch;
-        assert(!snag_binary_batch_decode(fixture->file.data + position.end,
-            fixture->file.len - position.end, &position, &batch, &next));
+        assert(!binary_fixture_read(fixture->file.data + position.end,
+            fixture->file.len - position.end, &position, decoded, &batch, &next));
         size_t cursor = SNAG_BINARY_BATCH_HEADER_SIZE;
         struct snag_binary_record record;
         uint64_t sequence;
@@ -2116,7 +2119,9 @@ static struct snag_binary_output_span
 fixture_span(const struct replay_fixture *fixture, uint64_t first, uint64_t last, size_t bytes)
 {
     struct snag_binary_ref reference;
-    (void)fixture_output(fixture, first, &reference);
+    struct snag_buf decoded = {.max = SNAG_BINARY_BATCH_MAX};
+    (void)fixture_output(fixture, first, &reference, &decoded);
+    snag_buf_free(&decoded);
     return (struct snag_binary_output_span){.first = reference,
         .last_sequence = bytes == reference.size ? first : last, .bytes = bytes};
 }
@@ -2174,9 +2179,13 @@ static void
 rewrite_snapshot(const struct replay_fixture *fixture, const struct snapshot_sources *sources,
     unsigned int mask, enum snapshot_fault fault, bool single, struct snag_buf *file)
 {
+    struct snag_buf decoded = {.max = SNAG_BINARY_BATCH_MAX};
     size_t count = json_array_size(fixture->events), used = 0u;
     struct snag_binary_record *records = calloc(count, sizeof(*records));
     assert(records);
+    unsigned char *retained = malloc(fixture->file.len);
+    assert(retained);
+    size_t retained_size = 0u;
     struct snag_binary_identity identity;
     struct snag_binary_anchor input, output, next;
     assert(!snag_binary_header_decode(fixture->file.data, SNAG_BINARY_HEADER_SIZE,
@@ -2186,20 +2195,26 @@ rewrite_snapshot(const struct replay_fixture *fixture, const struct snapshot_sou
     struct snag_buf encoded = {.max = SNAG_MAX_EVENT_LINE};
     struct snag_buf public = {.max = SNAG_MAX_EVENT_LINE};
     struct snag_binary_ref reference;
-    struct snag_binary_response_output originals[2];
+    unsigned char original_ids[2][16];
     for (size_t i = 0u; i < 2u; ++i) {
-        originals[i] = fixture_output(fixture, sources->first[1][i], &reference);
+        struct snag_binary_response_output original =
+            fixture_output(fixture, sources->first[1][i], &reference, &decoded);
+        memcpy(original_ids[i], original.item.id, sizeof(original_ids[i]));
     }
     while (input.end < fixture->file.len) {
         struct snag_binary_batch batch;
-        assert(!snag_binary_batch_decode(fixture->file.data + input.end,
-            fixture->file.len - input.end, &input, &batch, &next));
+        assert(!binary_fixture_read(fixture->file.data + input.end,
+            fixture->file.len - input.end, &input, &decoded, &batch, &next));
         size_t cursor = SNAG_BINARY_BATCH_HEADER_SIZE;
         uint64_t sequence;
         struct snag_binary_record record;
         while (snag_binary_record_next(&batch, &cursor, &record, &sequence) == 0) {
             assert(used < count && sequence == used + 1u);
-            records[used++] = record;
+            assert(record.size <= fixture->file.len - retained_size);
+            memcpy(retained + retained_size, record.payload, record.size);
+            records[used] = record;
+            records[used++].payload = retained + retained_size;
+            retained_size += record.size;
             if (sequence != sources->target) continue;
             struct snag_binary_event event;
             assert(!snag_binary_event_decode(&record, &event));
@@ -2224,8 +2239,8 @@ rewrite_snapshot(const struct replay_fixture *fixture, const struct snapshot_sou
             for (size_t i = 0u; i < item_count; ++i) {
                 assert(!snag_binary_public_items_next(fields.items, &offset, &values[i]));
                 if (i >= 2u || !(mask & (1u << i))) continue;
-                size_t source_index = memcmp(values[i].item.id, originals[0].item.id, 16u) != 0;
-                assert(!memcmp(values[i].item.id, originals[source_index].item.id, 16u));
+                size_t source_index = memcmp(values[i].item.id, original_ids[0], 16u) != 0;
+                assert(!memcmp(values[i].item.id, original_ids[source_index], 16u));
                 values[i].source = fixture_span(fixture, sources->first[generation][source_index],
                     sources->last[generation][source_index], values[i].item.text.size);
                 values[i].item.text = (struct snag_binary_text){0};
@@ -2235,7 +2250,7 @@ rewrite_snapshot(const struct replay_fixture *fixture, const struct snapshot_sou
                 index = 1u - index;
             }
             struct snag_binary_public_value *selected = &values[index];
-            size_t source_index = memcmp(selected->item.id, originals[0].item.id, 16u) != 0;
+            size_t source_index = memcmp(selected->item.id, original_ids[0], 16u) != 0;
             struct snag_binary_output_span *span = &selected->source;
             if (fault == SNAPSHOT_SELF) {
                 span->first.sequence = sources->target;
@@ -2313,11 +2328,7 @@ rewrite_snapshot(const struct replay_fixture *fixture, const struct snapshot_sou
         for (size_t i = 0u; i < n; ++i) {
             if (records[begin + i].kind == SNAG_BINARY_TURN_STARTED) ++turns;
         }
-        size_t start = file->len;
-        assert(!snag_binary_batch_encode(file, &output, records + begin, n, turns, NULL));
-        struct snag_binary_batch verified;
-        assert(!snag_binary_batch_decode(file->data + start, file->len - start,
-            &output, &verified, &output));
+        assert(!binary_fixture_append(file, &output, records + begin, n, turns, &output));
         begin += n;
     }
     assert(turns == input.turns);
@@ -2325,6 +2336,8 @@ rewrite_snapshot(const struct replay_fixture *fixture, const struct snapshot_sou
     snag_buf_free(&encoded);
     snag_buf_free(&payload);
     free(records);
+    free(retained);
+    snag_buf_free(&decoded);
 }
 
 static json_t *
@@ -3186,12 +3199,12 @@ reject_result_ranges(struct snag_session *source, struct snag_session *restored,
             ref->end_sequence = sequence + 1u; /* Includes its own result. */
         }
         struct snag_buf payload = {.max = SNAG_MAX_EVENT_LINE};
-        struct snag_buf file = {.max = SNAG_BINARY_BATCH_MAX + SNAG_BINARY_HEADER_SIZE};
+        struct snag_buf file = {.max = SNAG_BINARY_WIRE_BATCH_MAX + SNAG_BINARY_HEADER_SIZE};
         assert(!snag_binary_event_encode(&payload, &event));
         record->payload = payload.data;
         record->size = payload.len;
         assert(!snag_buf_append(&file, header, sizeof(header)));
-        assert(!snag_binary_batch_encode(&file, &before, records, batch.count,
+        assert(!binary_fixture_append(&file, &before, records, batch.count,
             imported->native.verified.turns, NULL));
         int bad_fd = temporary_fd();
         assert(!snag_write_full(bad_fd, file.data, file.len));
@@ -3944,11 +3957,12 @@ test_store_binary_replay(struct snag_store *store, const char *cwd)
     struct snag_binary_anchor root;
     assert(!snag_binary_header_decode(fixture.file.data, SNAG_BINARY_HEADER_SIZE,
         &identity, &root));
-    assert(!snag_binary_batch_decode(fixture.file.data + root.end,
-        fixture.file.len - (size_t)root.end, &root, &batch, &first));
+    struct snag_buf decoded_batch = {.max = SNAG_BINARY_BATCH_MAX};
+    assert(!binary_fixture_read(fixture.file.data + root.end,
+        fixture.file.len - (size_t)root.end, &root, &decoded_batch, &batch, &first));
     struct snag_binary_anchor second;
-    assert(!snag_binary_batch_decode(fixture.file.data + first.end,
-        fixture.file.len - (size_t)first.end, &first, &batch, &second));
+    assert(!binary_fixture_read(fixture.file.data + first.end,
+        fixture.file.len - (size_t)first.end, &first, &decoded_batch, &batch, &second));
     for (size_t cut = fixture.first_end; cut < second.end; ++cut) {
         assert(!replay_check(&source, &restored, &recovery, fixture.file.data, cut));
         assert(recovery.verified.end == first.end && restored.next_seq == first.next_seq);
@@ -3984,7 +3998,7 @@ test_store_binary_replay(struct snag_store *store, const char *cwd)
     append_record(&fixture, &file, &record, 0u);
     assert(replay_check(&source, &restored, &recovery, file.data, file.len) < 0 && errno == EINVAL);
     assert(recovery.problem_seq == fixture.anchor.next_seq);
-    assert(recovery.problem_start == fixture.anchor.end + SNAG_BINARY_BATCH_HEADER_SIZE);
+    assert(recovery.problem_start == fixture.anchor.end);
     record.flags = SNAG_BINARY_RECORD_OPTIONAL;
     append_record(&fixture, &file, &record, 0u);
     assert(replay_check(&source, &restored, &recovery, file.data, file.len) < 0 && errno == EINVAL);
@@ -3997,7 +4011,7 @@ test_store_binary_replay(struct snag_store *store, const char *cwd)
         .flags = SNAG_BINARY_RECORD_OPTIONAL};
     append_record(&fixture, &file, &record, 1u);
     assert(replay_check(&source, &restored, &recovery, file.data, file.len) < 0 && errno == EINVAL);
-    assert(recovery.problem_start == file.len - SNAG_BINARY_BATCH_FOOTER_SIZE);
+    assert(recovery.problem_start == fixture.anchor.end);
     append_record(&fixture, &file, &record, 0u);
     file.data[file.len - 1u] ^= 1u;
     assert(replay_check(&source, &restored, &recovery, file.data, file.len) < 0);
@@ -4020,4 +4034,5 @@ test_store_binary_replay(struct snag_store *store, const char *cwd)
     snag_session_close(&source);
     snag_session_close(&expected);
     snag_session_close(&original);
+    snag_buf_free(&decoded_batch);
 }

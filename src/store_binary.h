@@ -27,8 +27,8 @@ struct snag_binary_legacy_checkpoint {
     unsigned char digest[32];
 };
 
-/* Draft 0.1: framing only. Runtime storage remains JSONL until the typed event,
- * full-state checkpoint and conversion implementations are complete. */
+/* Draft 0.2: zero-free physical batch envelope. Runtime storage remains JSONL
+ * until native backend and conversion integration are complete. */
 struct snag_binary_identity {
     unsigned char id[16];
     uint64_t created_ms;
@@ -111,7 +111,7 @@ struct snag_binary_record {
 
 struct snag_binary_batch {
     const unsigned char *data;
-    size_t size;
+    size_t size; /* Decoded image length; record positions address this view. */
     uint32_t count;
     uint64_t first_seq;
 };
@@ -161,7 +161,8 @@ void snag_binary_header_encode(unsigned char out[SNAG_BINARY_HEADER_SIZE],
  * reject unknown required record kinds/versions before applying transitions. */
 int snag_binary_header_decode(const void *data, size_t size,
     struct snag_binary_identity *identity, struct snag_binary_anchor *anchor);
-/* Encode once; optionally return the anchor computed from those same bytes.
+/* Encode a decoded batch image; wire_encode supplies its physical envelope.
+ * Optionally return the physical anchor computed from those same bytes.
  * Both bytes and next remain unchanged on failure. next may alias anchor, but
  * its storage must be independent of out's buffer. */
 int snag_binary_batch_encode(struct snag_buf *out, const struct snag_binary_anchor *anchor,

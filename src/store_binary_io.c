@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "store_binary_io.h"
 #include "fs.h"
+#include "store_binary_wire.h"
 
 #include <errno.h>
 #include <pthread.h>
@@ -138,7 +139,7 @@ request_copy(const struct snag_binary_record *records, uint32_t count, uint64_t 
     }
     request->count = count;
     request->turns = turns;
-    request->bytes.max = SNAG_BINARY_BATCH_MAX;
+    request->bytes.max = SNAG_BINARY_WIRE_BATCH_MAX;
     return request;
 }
 
@@ -146,10 +147,14 @@ static int
 encode_request(struct io_request *request)
 {
     if (request->bytes.len) return 0;
-    if (snag_binary_batch_encode(&request->bytes, &request->before,
-        request->records, request->count, request->turns, &request->after) < 0) {
-        return -1;
-    }
+    struct snag_buf decoded = {.max = SNAG_BINARY_BATCH_MAX};
+    struct snag_binary_anchor after;
+    int rc = snag_binary_batch_encode(&decoded, &request->before,
+        request->records, request->count, request->turns, &after);
+    if (rc == 0) rc = snag_binary_wire_encode(&request->bytes, decoded.data, decoded.len);
+    snag_buf_free(&decoded);
+    if (rc < 0) return -1;
+    request->after = after;
     free(request->records);
     request->records = NULL;
     free(request->payloads);

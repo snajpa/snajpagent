@@ -2,6 +2,7 @@
 #include "store_binary_import.h"
 #include "fs.h"
 #include "store_binary_legacy.h"
+#include "store_binary_wire.h"
 
 #include <errno.h>
 #include <stdlib.h>
@@ -92,8 +93,11 @@ flush_batch(struct import_writer *writer)
     struct snag_binary_anchor next;
     int rc = snag_binary_batch_encode(&bytes, &writer->anchor, writer->records,
         (uint32_t)writer->count, writer->turns, &next);
-    if (rc == 0) rc = snag_write_full(writer->fd, bytes.data, bytes.len);
+    struct snag_buf wire = {.max = SNAG_BINARY_WIRE_BATCH_MAX};
+    if (rc == 0) rc = snag_binary_wire_encode(&wire, bytes.data, bytes.len);
+    if (rc == 0) rc = snag_write_full(writer->fd, wire.data, wire.len);
     int code = errno;
+    snag_buf_free(&wire);
     snag_buf_free(&bytes);
     if (rc == 0) {
         writer->anchor = next;

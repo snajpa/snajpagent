@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "store_binary_io.h"
+#include "store_binary_wire.h"
 #include "fs.h"
 
 #include <assert.h>
@@ -335,8 +336,11 @@ test_batch_limits(void)
         struct snag_binary_io_result result;
         assert(!await_result(io, &result));
         assert(!snag_binary_io_close(io));
-        assert(result.durable.next_seq == count + 1u && result.durable.end - before.end ==
-            (large ? SNAG_BINARY_BATCH_MAX : SNAG_BINARY_BATCH_TARGET));
+        size_t wire_size;
+        assert(!snag_binary_wire_size(large ? SNAG_BINARY_BATCH_MAX :
+            SNAG_BINARY_BATCH_TARGET, &wire_size));
+        assert(result.durable.next_seq == count + 1u &&
+            result.durable.end - before.end == wire_size);
         struct snag_buf bytes = {.max = SNAG_BINARY_BATCH_MAX};
         struct snag_binary_batch batch;
         struct snag_binary_anchor after;

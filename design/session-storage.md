@@ -135,9 +135,10 @@ and footers provide framing, not a promise of hardware-atomic sector writes.
 A bounded recovery root needs a physical commit boundary distinguishable from
 arbitrary payload bytes. An embedded, self-consistent batch must not become a
 commit merely because a derived pointer or a torn file happens to end there.
-The test-linked wire codec prepares a reversible, zero-free envelope for this
-purpose. Runtime journal I/O still uses the earlier draft framing below; adopting
-the envelope and a corresponding journal format revision remains pending.
+Draft journal format 0.2 uses a reversible, zero-free envelope in the test-linked
+I/O owner, importer and positional readers. Application runtime storage remains
+JSONL while native backend integration continues. Earlier draft 0.1 files are
+rejected; regenerate development fixtures from their retained originals.
 
 Split a decoded batch into blocks of at most 254 bytes. Within each block,
 replace each zero-separated run with a one-byte value equal to its nonzero length
@@ -157,16 +158,26 @@ checked length likewise cannot become a valid shorter batch. Whole-envelope
 decoding rejects interior zeroes, overlong runs and noncanonical empty blocks;
 the existing batch checksum and semantic codecs remain necessary afterward.
 
-The byte codec provides atomic bounded encode/decode, including aliased input,
-and a non-adopting header-prefix decoder. The first journal header remains
-outside this envelope. File readers/writers, canonical end discovery, physical
-anchor accounting and format admission are not yet connected to it. Current
-passing raw-framing tests do not establish envelope-backed normal recovery.
+The first journal header remains outside this envelope. Batch anchors and
+predecessor links are physical file offsets. Batch sizes, record positions and
+payload slices address decoded images; their bytes remain unchanged by the wire
+codec. The pure batch encoder/decoder computes physical end anchors using the
+envelope geometry. Writers envelope each complete decoded image exactly once.
+Recovery diagnostics identify the physical containing batch and the failing
+record sequence, without treating a decoded record offset as a file position.
 
-### Draft 0.1 framing
+Forward reads check every available byte of an incomplete candidate for an early
+delimiter, using a fixed read buffer. Missing bytes beneath a supplied immutable
+boundary are read errors. Full reads decode the envelope, then verify the batch
+hash and fields. These checks also apply to backward and indexed reads. Canonical
+end discovery and fast checkpoint admission remain separate integration work.
+
+### Draft 0.2 decoded framing
 
 The framing codec uses the following fixed widths. All integer fields are
-little-endian. Checksums are SHA-256 bytes; lengths include their framing.
+little-endian. Checksums are SHA-256 bytes; batch lengths include their decoded
+framing and exclude the physical envelope overhead. The file header carries
+major 0, minor 2; its own size remains 96 bytes.
 
 | Structure | Layout in bytes |
 |---|---|
@@ -186,8 +197,8 @@ kind/version compatibility before adopting any state. Framing verification alone
 cannot establish semantic compatibility or prove a tool effect occurred.
 
 The forward positional reader operates beneath an immutable boundary supplied by its
-caller. It preserves the descriptor offset, allocates at most one permitted
-batch and distinguishes incomplete tails from corruption and unexpected EOF
+caller. It preserves the descriptor offset, uses bounded wire/decode scratch
+for one permitted batch and distinguishes incomplete tails from corruption and unexpected EOF
 beneath that boundary. Source identity, exclusive writer ownership and any tail
 truncation remain the session backend's responsibility. Failed verification
 leaves the committed anchor unchanged. No framing API modifies a file.
@@ -206,12 +217,13 @@ unchanged.
 
 `snag_binary_batch_find` uses those authenticated links to locate an existing
 sequence beneath a trusted snapshot anchor. It never scans for batch magic or
-promotes a derived index offset into authority. Lookup uses at most two permitted
-batch buffers and work proportional to distance from the supplied anchor; this
+promotes a derived index offset into authority. Lookup retains at most the current and predecessor decoded
+images plus bounded temporary wire/decode buffers, with work proportional to
+distance from the supplied anchor; this
 is not the durable index or a constant-time arbitrary-history lookup. Callers
 still own journal identity, immutable-prefix lifetime, causal ordering, field
-role and semantic owner checks. These test-only primitives do not establish
-reference-field authority or change the wire format.
+role and semantic owner checks. These test-linked primitives leave reference-field authority and normal
+resume admission to their callers.
 
 The batch encoder optionally returns the complete next anchor from the same
 serialization and batch digest it just produced. Bytes and anchor advance only

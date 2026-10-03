@@ -11,7 +11,8 @@ struct snag_binary_recovery {
     uint64_t batches;
     uint64_t incomplete_tail_bytes;
     uint64_t problem_seq; /* Zero on success. */
-    uint64_t problem_start, problem_end; /* Half-open physical byte range. */
+    /* Physical error range; decoded-record errors identify their containing batch. */
+    uint64_t problem_start, problem_end;
 };
 
 /* Core-state replay from a stopped native journal, not application resume.

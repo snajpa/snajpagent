@@ -907,13 +907,12 @@ replay_batches(struct replay_context *context, struct snag_session *state,
             struct snag_binary_record record;
             uint64_t sequence;
             recovery->problem_seq = batch.first_seq + i;
-            recovery->problem_start = anchor.end + cursor;
+            recovery->problem_start = anchor.end;
             recovery->problem_end = next.end;
             if (snag_binary_record_next(&batch, &cursor, &record, &sequence) != 0) {
                 snag_fail(error, error_size, EINVAL, "invalid verified native record");
                 goto done;
             }
-            recovery->problem_end = anchor.end + cursor;
             if (sequence == 1u && (record.kind != SNAG_BINARY_SESSION_CREATED || record.flags ||
                 record.timestamp_ms != identity->created_ms)) {
                 snag_fail(error, error_size, EINVAL, "native creation does not match its header");
@@ -927,7 +926,7 @@ replay_batches(struct replay_context *context, struct snag_session *state,
             }
         }
         if (next.turns != state->turn_count) {
-            recovery->problem_start = next.end - SNAG_BINARY_BATCH_FOOTER_SIZE;
+            recovery->problem_start = anchor.end;
             recovery->problem_end = next.end;
             snag_fail(error, error_size, EINVAL, "native batch turn count does not match replay");
             goto done;

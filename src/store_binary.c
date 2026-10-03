@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "store_binary.h"
 #include "fs.h"
+#include "store_binary_wire.h"
 
 #include <errno.h>
 #include <limits.h>
@@ -141,7 +142,7 @@ snag_binary_header_encode(unsigned char out[SNAG_BINARY_HEADER_SIZE],
 {
     memset(out, 0, SNAG_BINARY_HEADER_SIZE);
     memcpy(out, journal_magic, sizeof(journal_magic));
-    put_le(out + 10, 1u, 2u); /* Draft major 0, minor 1. */
+    put_le(out + 10, 2u, 2u); /* Draft major 0, minor 2: zero-free batch envelope. */
     put_le(out + 12, SNAG_BINARY_HEADER_SIZE, 4u);
     /* Required reader/writer feature bits at 16/24 and reserved bytes at 56
      * are zero in this draft. */
@@ -158,7 +159,7 @@ snag_binary_header_decode(const void *data, size_t size,
     unsigned char hash[32];
     if (size < SNAG_BINARY_HEADER_SIZE) return 1;
     if (memcmp(bytes, journal_magic, sizeof(journal_magic)) ||
-        get_le(bytes + 8, 2u) != 0u || get_le(bytes + 10, 2u) != 1u ||
+        get_le(bytes + 8, 2u) != 0u || get_le(bytes + 10, 2u) != 2u ||
         get_le(bytes + 12, 4u) != SNAG_BINARY_HEADER_SIZE ||
         get_le(bytes + 16, 8u) || get_le(bytes + 24, 8u) ||
         get_le(bytes + 56, 8u)) return invalid();
@@ -445,7 +446,11 @@ snag_binary_batch_encode(struct snag_buf *out, const struct snag_binary_anchor *
             return invalid();
         size += SNAG_BINARY_RECORD_HEADER_SIZE + records[i].size;
     }
-    if (size > (uint64_t)INT64_MAX - anchor->end) return invalid();
+    size_t wire_size;
+    if (snag_binary_wire_size(size, &wire_size) < 0 ||
+        wire_size > (uint64_t)INT64_MAX - anchor->end) {
+        return invalid();
+    }
     /* Build separately: a failed allocation or invalid record cannot leave a
      * partial batch in the caller's pending transaction. */
     struct snag_buf encoded = {.max = SNAG_BINARY_BATCH_MAX};
@@ -480,7 +485,7 @@ snag_binary_batch_encode(struct snag_buf *out, const struct snag_binary_anchor *
     if (snag_buf_append(&encoded, footer, sizeof(footer) - 32u) < 0) goto fail;
     digest(encoded.data, encoded.len, footer + sizeof(footer) - 32u);
     struct snag_binary_anchor prepared = {
-        .end = anchor->end + size, .next_seq = anchor->next_seq + count,
+        .end = anchor->end + wire_size, .next_seq = anchor->next_seq + count,
         .turns = turns, .previous = anchor->end
     };
     memcpy(prepared.digest, footer + sizeof(footer) - 32u, sizeof(prepared.digest));
@@ -544,6 +549,11 @@ snag_binary_batch_decode(const void *data, size_t size,
         get_le(bytes + 32, 8u) != anchor->previous ||
         memcmp(bytes + 40, anchor->digest, sizeof(anchor->digest)) ||
         get_le(bytes + 72, 8u)) return invalid();
+    size_t wire_size;
+    if (snag_binary_wire_size((size_t)length, &wire_size) < 0 ||
+        wire_size > (uint64_t)INT64_MAX - anchor->end) {
+        return invalid();
+    }
     if (size < length) return 1;
     size_t footer_offset = (size_t)length - SNAG_BINARY_BATCH_FOOTER_SIZE;
     const unsigned char *footer = bytes + footer_offset;
@@ -566,7 +576,7 @@ snag_binary_batch_decode(const void *data, size_t size,
     }
     if (offset != footer_offset) return invalid();
     struct snag_binary_anchor committed = {
-        .end = anchor->end + length, .next_seq = anchor->next_seq + count,
+        .end = anchor->end + wire_size, .next_seq = anchor->next_seq + count,
         .turns = get_le(footer + 32, 8u), .previous = anchor->end
     };
     memcpy(committed.digest, hash, sizeof(hash));
@@ -576,41 +586,6 @@ snag_binary_batch_decode(const void *data, size_t size,
     };
     *next = committed;
     return 0;
-}
-
-int
-snag_binary_batch_read(int fd, uint64_t boundary,
-    const struct snag_binary_anchor *anchor, struct snag_buf *scratch,
-    struct snag_binary_batch *batch, struct snag_binary_anchor *next)
-{
-    snag_buf_reset(scratch);
-    if (!anchor_valid(anchor) || boundary > INT64_MAX || boundary < anchor->end)
-        return invalid();
-    if (boundary - anchor->end < SNAG_BINARY_BATCH_HEADER_SIZE) return 1;
-    size_t needed = SNAG_BINARY_BATCH_HEADER_SIZE;
-    for (;;) {
-        if (snag_buf_reserve(scratch, needed - scratch->len) < 0) return -1;
-        while (scratch->len < needed) {
-            size_t chunk = needed - scratch->len;
-            if (chunk > 65536u) chunk = 65536u;
-            ssize_t got = snag_pread(fd, scratch->data + scratch->len, chunk,
-                (int64_t)(anchor->end + scratch->len));
-            if (got < 0 && errno == EINTR) continue;
-            if (got < 0) return -1;
-            if (!got) {
-                errno = EIO; /* File became shorter than the verified boundary. */
-                return -1;
-            }
-            scratch->len += (size_t)got;
-        }
-        int rc = snag_binary_batch_decode(scratch->data, scratch->len, anchor, batch, next);
-        if (rc != 1) return rc;
-        /* The checksummed header has passed all length/sequence/link bounds.
-         * Never allocate based on an unchecked on-disk length. */
-        uint64_t length = get_le(scratch->data + 8, 8u);
-        if (length > boundary - anchor->end) return 1;
-        needed = (size_t)length;
-    }
 }
 
 static int
@@ -628,6 +603,71 @@ read_full_at(int fd, unsigned char *out, size_t size, uint64_t offset)
         size -= (size_t)got;
     }
     return 0;
+}
+
+/* An incomplete candidate can be discarded only if no earlier delimiter closes
+ * it. Check the entire bounded tail without allocating its declared full size. */
+static int
+tail_is_open(int fd, uint64_t start, uint64_t end)
+{
+    unsigned char bytes[65536];
+    while (start < end) {
+        size_t size = end - start > sizeof(bytes) ? sizeof(bytes) : (size_t)(end - start);
+        if (read_full_at(fd, bytes, size, start) < 0) return -1;
+        if (memchr(bytes, 0, size)) return invalid();
+        start += size;
+    }
+    return 1;
+}
+
+static int
+read_wire_header(int fd, uint64_t offset,
+    unsigned char header[SNAG_BINARY_BATCH_HEADER_SIZE])
+{
+    unsigned char wire[SNAG_BINARY_BATCH_HEADER_SIZE + 1u];
+    if (read_full_at(fd, wire, sizeof(wire), offset) < 0) return -1;
+    return snag_binary_wire_header(wire, sizeof(wire), header) == 0 ? 0 : invalid();
+}
+
+int
+snag_binary_batch_read(int fd, uint64_t boundary,
+    const struct snag_binary_anchor *anchor, struct snag_buf *scratch,
+    struct snag_binary_batch *batch, struct snag_binary_anchor *next)
+{
+    if (fd < 0 || !anchor || !scratch || !batch || !next) return invalid();
+    snag_buf_reset(scratch);
+    if (!anchor_valid(anchor) || boundary > INT64_MAX || boundary < anchor->end) {
+        return invalid();
+    }
+    if (boundary - anchor->end < SNAG_BINARY_BATCH_HEADER_SIZE + 1u) {
+        return tail_is_open(fd, anchor->end, boundary);
+    }
+    unsigned char header[SNAG_BINARY_BATCH_HEADER_SIZE];
+    if (read_wire_header(fd, anchor->end, header) < 0 ||
+        snag_buf_append(scratch, header, sizeof(header)) < 0) {
+        return -1;
+    }
+    if (snag_binary_batch_decode(header, sizeof(header), anchor, batch, next) != 1) {
+        return invalid();
+    }
+    /* Only a checked header may determine allocation and physical extent. */
+    size_t needed;
+    if (snag_binary_wire_size((size_t)get_le(header + 8, 8u), &needed) < 0) return -1;
+    if (needed > boundary - anchor->end) {
+        return tail_is_open(fd, anchor->end, boundary);
+    }
+    struct snag_buf wire = {.max = SNAG_BINARY_WIRE_BATCH_MAX};
+    int rc = -1;
+    if (snag_buf_reserve(&wire, needed) < 0 ||
+        read_full_at(fd, wire.data, needed, anchor->end) < 0) {
+        goto done;
+    }
+    snag_buf_reset(scratch);
+    if (snag_binary_wire_decode(scratch, wire.data, needed) < 0) goto done;
+    rc = snag_binary_batch_decode(scratch->data, scratch->len, anchor, batch, next);
+done:
+    snag_buf_free(&wire);
+    return rc;
 }
 
 static bool
@@ -671,37 +711,56 @@ batch_header_anchor(const unsigned char header[SNAG_BINARY_BATCH_HEADER_SIZE], u
     return 0;
 }
 
-/* Authenticate one complete batch from its committed end. The returned previous
- * turn count is provisional zero: it is absent from this batch's header. */
+/* Read at a separately authenticated physical position/digest. The header's
+ * predecessor turn count is provisional until that whole predecessor is checked. */
 static int
-read_authenticated_batch(int fd, const struct snag_binary_anchor *after,
-    struct snag_buf *scratch, struct snag_binary_batch *batch, struct snag_binary_anchor *before)
+read_linked_batch(int fd, uint64_t boundary, uint64_t offset, const unsigned char hash[32],
+    struct snag_buf *scratch, struct snag_binary_batch *batch,
+    struct snag_binary_anchor *before, struct snag_binary_anchor *after)
 {
-    if (!anchor_valid(after) || after->end == SNAG_BINARY_HEADER_SIZE) return invalid();
-    uint64_t length = after->end - after->previous;
-    if (length > SNAG_BINARY_BATCH_MAX || length < SNAG_BINARY_BATCH_HEADER_SIZE +
-        SNAG_BINARY_RECORD_HEADER_SIZE + SNAG_BINARY_BATCH_FOOTER_SIZE) return invalid();
+    if (offset < SNAG_BINARY_HEADER_SIZE || boundary > INT64_MAX || boundary < offset ||
+        boundary - offset < SNAG_BINARY_BATCH_HEADER_SIZE + 1u) {
+        return invalid();
+    }
     unsigned char header[SNAG_BINARY_BATCH_HEADER_SIZE];
-    if (read_full_at(fd, header, sizeof(header), after->previous) < 0) return -1;
+    if (read_wire_header(fd, offset, header) < 0) return -1;
     struct snag_binary_anchor previous;
+    uint64_t length;
+    size_t wire_size;
+    if (batch_header_anchor(header, offset, &previous, &length) < 0 ||
+        snag_binary_wire_size((size_t)length, &wire_size) < 0 ||
+        wire_size > boundary - offset) {
+        return invalid();
+    }
     struct snag_binary_anchor checked;
     struct snag_binary_batch decoded;
-    uint64_t header_length;
-    if (batch_header_anchor(header, after->previous, &previous, &header_length) < 0 ||
-        header_length != length) {
-        return invalid();
+    int rc = snag_binary_batch_read(fd, offset + wire_size, &previous,
+        scratch, &decoded, &checked);
+    if (rc < 0) return -1;
+    if (rc != 0 || memcmp(checked.digest, hash, 32u)) return invalid();
+    if (previous.end == SNAG_BINARY_HEADER_SIZE && verify_root(fd, &previous) < 0) {
+        return -1;
     }
-    snag_buf_reset(scratch);
-    if (snag_buf_reserve(scratch, (size_t)length) < 0) return -1;
-    if (read_full_at(fd, scratch->data, (size_t)length, after->previous) < 0) return -1;
-    scratch->len = (size_t)length;
-    if (snag_binary_batch_decode(scratch->data, scratch->len,
-            &previous, &decoded, &checked) != 0 || !anchors_equal(&checked, after)) {
-        return invalid();
-    }
-    if (previous.end == SNAG_BINARY_HEADER_SIZE && verify_root(fd, &previous) < 0) return -1;
     *batch = decoded;
     *before = previous;
+    *after = checked;
+    return 0;
+}
+
+static int
+verify_parent(int fd, struct snag_binary_anchor *previous, uint64_t turns)
+{
+    if (previous->end == SNAG_BINARY_HEADER_SIZE) return 0;
+    struct snag_buf bytes = {.max = SNAG_BINARY_BATCH_MAX};
+    struct snag_binary_batch parent;
+    struct snag_binary_anchor before;
+    struct snag_binary_anchor after;
+    int rc = read_linked_batch(fd, previous->end, previous->previous, previous->digest,
+        &bytes, &parent, &before, &after);
+    snag_buf_free(&bytes);
+    if (rc < 0) return -1;
+    previous->turns = after.turns;
+    if (!anchors_equal(previous, &after) || after.turns > turns) return invalid();
     return 0;
 }
 
@@ -714,24 +773,14 @@ snag_binary_batch_previous(int fd, const struct snag_binary_anchor *after,
     if (!anchor_valid(after)) return invalid();
     if (after->end == SNAG_BINARY_HEADER_SIZE) return verify_root(fd, after) < 0 ? -1 : 1;
     struct snag_binary_anchor previous;
+    struct snag_binary_anchor checked;
     struct snag_binary_batch current;
-    if (read_authenticated_batch(fd, after, scratch, &current, &previous) < 0) return -1;
-    if (previous.end != SNAG_BINARY_HEADER_SIZE) {
-        unsigned char footer[SNAG_BINARY_BATCH_FOOTER_SIZE];
-        if (previous.end < SNAG_BINARY_HEADER_SIZE + sizeof(footer)) return invalid();
-        if (read_full_at(fd, footer, sizeof(footer), previous.end - sizeof(footer)) < 0) return -1;
-        previous.turns = get_le(footer + 32, 8u);
-        /* Merely comparing the footer's digest field would not authenticate its
-         * turn count. Hash/decode that whole predecessor against the link in the
-         * already authenticated current batch before exposing the anchor. */
-        struct snag_buf parent_bytes = {.max = SNAG_BINARY_BATCH_MAX};
-        struct snag_binary_batch parent;
-        struct snag_binary_anchor grandparent;
-        int rc = read_authenticated_batch(fd, &previous, &parent_bytes, &parent, &grandparent);
-        snag_buf_free(&parent_bytes);
-        if (rc < 0) return -1;
-        if (previous.turns > after->turns) return invalid();
+    if (read_linked_batch(fd, after->end, after->previous, after->digest,
+            scratch, &current, &previous, &checked) < 0) {
+        return -1;
     }
+    if (!anchors_equal(&checked, after)) return invalid();
+    if (verify_parent(fd, &previous, after->turns) < 0) return -1;
     *batch = current;
     *before = previous;
     return 0;
@@ -742,32 +791,16 @@ snag_binary_batch_at(int fd, uint64_t boundary, uint64_t offset,
     const unsigned char hash[32], struct snag_buf *scratch, struct snag_binary_batch *batch,
     struct snag_binary_anchor *before, struct snag_binary_anchor *after)
 {
-    if (fd < 0 || !hash || !scratch || !batch || !before || !after ||
-        offset < SNAG_BINARY_HEADER_SIZE || boundary > INT64_MAX || boundary < offset ||
-        boundary - offset < SNAG_BINARY_BATCH_HEADER_SIZE) {
-        return invalid();
-    }
-    unsigned char header[SNAG_BINARY_BATCH_HEADER_SIZE];
-    if (read_full_at(fd, header, sizeof(header), offset) < 0) return -1;
+    if (fd < 0 || !hash || !scratch || !batch || !before || !after) return invalid();
+    snag_buf_reset(scratch);
     struct snag_binary_anchor previous;
-    uint64_t length;
-    if (batch_header_anchor(header, offset, &previous, &length) < 0 ||
-        length > boundary - offset) {
-        return invalid();
-    }
-    unsigned char footer[SNAG_BINARY_BATCH_FOOTER_SIZE];
-    if (read_full_at(fd, footer, sizeof(footer), offset + length - sizeof(footer)) < 0) {
-        return -1;
-    }
-    struct snag_binary_anchor committed = {
-        .end = offset + length, .previous = offset,
-        .next_seq = get_le(footer + 24, 8u) + 1u, .turns = get_le(footer + 32, 8u)
-    };
-    memcpy(committed.digest, hash, sizeof(committed.digest));
+    struct snag_binary_anchor committed;
     struct snag_binary_batch found;
-    if (snag_binary_batch_previous(fd, &committed, scratch, &found, &previous) < 0) {
+    if (read_linked_batch(fd, boundary, offset, hash, scratch, &found,
+            &previous, &committed) < 0) {
         return -1;
     }
+    if (verify_parent(fd, &previous, committed.turns) < 0) return -1;
     *batch = found;
     *before = previous;
     *after = committed;

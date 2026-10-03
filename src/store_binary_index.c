@@ -2,6 +2,7 @@
 #include "store_binary_index.h"
 #include "fs.h"
 #include "store_binary_event.h"
+#include "store_binary_wire.h"
 
 #include <errno.h>
 #include <string.h>
@@ -68,13 +69,19 @@ snag_binary_index_header_decode(const void *data, size_t size,
 static bool
 entry_valid(const struct snag_binary_index_entry *entry)
 {
-    return entry->sequence && entry->sequence <= INT64_MAX && entry->turn < entry->sequence &&
-        entry->kind && entry->batch_offset >= SNAG_BINARY_HEADER_SIZE &&
-        entry->record_offset >= SNAG_BINARY_BATCH_HEADER_SIZE &&
-        entry->record_offset <= SNAG_BINARY_BATCH_MAX - SNAG_BINARY_BATCH_FOOTER_SIZE -
-            SNAG_BINARY_RECORD_HEADER_SIZE &&
-        entry->batch_offset <= (uint64_t)INT64_MAX - entry->record_offset -
-            SNAG_BINARY_RECORD_HEADER_SIZE - SNAG_BINARY_BATCH_FOOTER_SIZE;
+    if (!entry->sequence || entry->sequence > INT64_MAX || entry->turn >= entry->sequence ||
+        !entry->kind || entry->batch_offset < SNAG_BINARY_HEADER_SIZE ||
+        entry->record_offset < SNAG_BINARY_BATCH_HEADER_SIZE ||
+        entry->record_offset > SNAG_BINARY_BATCH_MAX - SNAG_BINARY_BATCH_FOOTER_SIZE -
+            SNAG_BINARY_RECORD_HEADER_SIZE) {
+        return false;
+    }
+    size_t minimum;
+    if (snag_binary_wire_size(entry->record_offset + SNAG_BINARY_RECORD_HEADER_SIZE +
+            SNAG_BINARY_BATCH_FOOTER_SIZE, &minimum) < 0) {
+        return false;
+    }
+    return entry->batch_offset <= (uint64_t)INT64_MAX - minimum;
 }
 
 static void

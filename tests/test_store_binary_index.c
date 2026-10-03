@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
+#include "fixture_store_binary.h"
 #include "store_binary_index.h"
 #include "fs.h"
 #include "store_binary_event.h"
@@ -33,8 +34,8 @@ test_codecs(void)
     snag_binary_index_header_encode(header, &identity);
     assert_bytes(header, sizeof(header),
         "534e414749445800000002007000000060000000200000000102030405060708090a0b0c0d0e0f10"
-        "010203040506070831dd03c3f21f0051ef07b5e6a60169931294fefac3126a175a3639b0d5e068b4"
-        "4d61e7a61f89036fe4f9b1c13c6246961f32673489f51fde03515c8f3864a8ef");
+        "0102030405060708978a63988f750912742c7606679740ff8ff7637a4386200e6f204f47e1e4aae7"
+        "da56fb9828bdfb8cb8474fb2ede8ad9fd2d5adc8ede4a90fb3f422b158ebe46c");
     assert(!snag_binary_index_header_decode(header, sizeof(header), &identity));
     unsigned char old[sizeof(header)];
     memcpy(old, header, sizeof(old));
@@ -68,8 +69,8 @@ test_codecs(void)
     assert(!snag_binary_index_entry_encode(bytes, &identity, &entry));
     assert_bytes(bytes, sizeof(bytes),
         "07000000000000000002000000000000800000008000000003000000000000000001020304050607"
-        "08090a0b0c0d0e0f101112131415161718191a1b1c1d1e1ff6a3a853056b489903f4f8b6e81378c5"
-        "dcc777ba3c59be5d9e906f558922f5ef");
+        "08090a0b0c0d0e0f101112131415161718191a1b1c1d1e1ff866ddb63408bf433dae0329a72b60e5"
+        "8491a88f2105dc86bb623fe7ee85db20");
     struct snag_binary_index_entry decoded = {0};
     assert(!snag_binary_index_entry_decode(bytes, sizeof(bytes), &identity, 7u, &decoded));
     assert(decoded.sequence == 7u && decoded.batch_offset == 512u &&
@@ -90,7 +91,7 @@ test_codecs(void)
     assert(snag_binary_index_entry_decode(bytes, sizeof(bytes) + 1u, &identity, 7u, &decoded) < 0);
     unsigned char encoded[sizeof(bytes)];
     memcpy(encoded, bytes, sizeof(encoded));
-    for (unsigned int bad = 0u; bad < 8u; ++bad) {
+    for (unsigned int bad = 0u; bad < 9u; ++bad) {
         struct snag_binary_index_entry changed = entry;
         if (bad == 0u) changed.sequence = 0u;
         if (bad == 1u) changed.sequence = UINT64_MAX;
@@ -100,6 +101,10 @@ test_codecs(void)
         if (bad == 5u) changed.batch_offset = INT64_MAX;
         if (bad == 6u) changed.record_offset = SNAG_BINARY_BATCH_HEADER_SIZE - 1u;
         if (bad == 7u) changed.record_offset = UINT32_MAX;
+        if (bad == 8u) {
+            changed.batch_offset = (uint64_t)INT64_MAX - changed.record_offset -
+                SNAG_BINARY_RECORD_HEADER_SIZE - SNAG_BINARY_BATCH_FOOTER_SIZE;
+        }
         assert(snag_binary_index_entry_encode(bytes, &identity, &changed) < 0);
         assert(!memcmp(bytes, encoded, sizeof(bytes)));
     }
@@ -239,8 +244,8 @@ test_batches(void)
     assert(snag_seek(fd, 7, SEEK_SET) == 7);
     int journal = temporary_fd();
     assert(!snag_write_full(journal, header, sizeof(header)));
-    assert(!snag_write_full(journal, batches[0].data, batches[0].len));
-    assert(!snag_write_full(journal, batches[1].data, batches[1].len));
+    assert(!binary_fixture_write(journal, batches[0].data, batches[0].len));
+    assert(!binary_fixture_write(journal, batches[1].data, batches[1].len));
     assert(snag_seek(journal, 9, SEEK_SET) == 9);
     struct snag_buf scratch = {.max = SNAG_BINARY_BATCH_MAX};
     const uint64_t ordinal[] = {0u, 1u, 1u, 2u, 2u, 3u, 3u};

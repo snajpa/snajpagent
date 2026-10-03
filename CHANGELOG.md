@@ -466,7 +466,9 @@
   Add optional checkpoint receipt encoding and exact snapshot-image binding,
   and return the completed image digest with durable publication.
   Add a bounded reversible batch-envelope codec that separates physical commit
-  delimiters from payload bytes, ready for journal framing integration.
+  delimiters from payload bytes. Adopt it in draft journal format 0.2 for the
+  importer, I/O owner and forward/backward/indexed readers; retain decoded
+  record positions separately from physical commit anchors.
   Return prepared commit anchors from the batch encoder, avoiding a second full
   batch hash in the journal writer and importer.
 

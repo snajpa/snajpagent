@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
+#include "fixture_store_binary.h"
 #include "store_binary_event.h"
 #include "fs.h"
 #include "instructions.h"
@@ -2136,11 +2137,11 @@ output_span_fixture(int fd, const struct snag_binary_event events[6], unsigned i
     assert(!snag_truncate(fd, 0));
     assert(snag_seek(fd, 0, SEEK_SET) == 0);
     assert(!snag_write_full(fd, header, sizeof(header)));
-    assert(!snag_write_full(fd, bytes.data, bytes.len));
+    assert(!binary_fixture_write(fd, bytes.data, bytes.len));
     snag_buf_reset(&bytes);
     assert(!snag_binary_batch_encode(&bytes, middle, records + 3u, 3u, 0u, NULL));
     assert(!snag_binary_batch_decode(bytes.data, bytes.len, middle, &batch, &next));
-    assert(!snag_write_full(fd, bytes.data, bytes.len));
+    assert(!binary_fixture_write(fd, bytes.data, bytes.len));
     snag_buf_free(&bytes);
     for (size_t i = 0u; i < 6u; ++i) snag_buf_free(&payloads[i]);
     return next.end;
@@ -2568,7 +2569,7 @@ test_response_output_limits(struct snag_binary_event event)
     int fd = mkstemp(path);
     assert(fd >= 0);
     assert(!snag_write_full(fd, header, sizeof(header)));
-    assert(!snag_write_full(fd, bytes.data, bytes.len));
+    assert(!binary_fixture_write(fd, bytes.data, bytes.len));
     struct snag_binary_output_span span = {
         .first = reference, .last_sequence = 1u, .bytes = SNAG_MAX_PUBLIC_ITEM
     };
