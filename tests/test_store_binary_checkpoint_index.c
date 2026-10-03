@@ -246,6 +246,7 @@ test_direct_reads(void)
     struct snag_binary_anchor before;
     assert(!snag_binary_header_decode(header, sizeof(header), &identity, &before));
     assert(!snag_write_full(fd, header, sizeof(header)));
+    struct snag_binary_anchor anchors[7] = {before};
     struct snag_buf raw = {.max = SNAG_BINARY_BATCH_MAX};
     struct snag_buf flat = {.max = SNAG_BINARY_INDEX_BATCH_MAX};
     struct snag_binary_index_tree tree = {0};
@@ -269,6 +270,7 @@ test_direct_reads(void)
                 &identity, sequence, &active[count++]));
         }
         before = after;
+        anchors[sequence] = after;
     }
     assert(count == 3u);
     struct snag_buf metadata = {.max = SIZE_MAX};
@@ -289,6 +291,56 @@ test_direct_reads(void)
             !record.payload[1] && record.payload[2] == 111u);
         assert(snag_seek(fd, 0, SEEK_CUR) == 13);
     }
+    struct snag_binary_batch batch;
+    struct snag_binary_anchor previous;
+    for (size_t i = 0u; i < count; ++i) {
+        assert(!snag_binary_checkpoint_batch_find(fd, &before, &decoded, active[i].sequence,
+            &raw, &batch, &previous));
+        assert(batch.first_seq == active[i].sequence && previous.next_seq == active[i].sequence);
+    }
+    assert(!snag_binary_checkpoint_batch_find(fd, &anchors[1], &decoded, 1u,
+        &raw, &batch, &previous));
+    batch = (struct snag_binary_batch){.first_seq = 999u};
+    previous = (struct snag_binary_anchor){.end = 99u};
+    unsigned char saved_batch[sizeof(batch)], saved_before[sizeof(previous)];
+    memcpy(saved_batch, &batch, sizeof(batch));
+    memcpy(saved_before, &previous, sizeof(previous));
+    assert(snag_binary_checkpoint_batch_find(fd, &before, &decoded, 2u,
+        &raw, &batch, &previous) < 0 && errno == ENOENT);
+    assert(!memcmp(saved_batch, &batch, sizeof(batch)) &&
+        !memcmp(saved_before, &previous, sizeof(previous)));
+    struct snag_binary_record added = {.kind = 77u, .version = 1u,
+        .payload = (const unsigned char *)"later", .size = 5u};
+    struct snag_binary_anchor later;
+    snag_buf_reset(&raw);
+    assert(!snag_binary_batch_encode(&raw, &before, &added, 1u, 0u, &later));
+    assert(snag_seek(fd, (int64_t)before.end, SEEK_SET) == (int64_t)before.end);
+    assert(!binary_fixture_write(fd, raw.data, raw.len));
+    assert(snag_seek(fd, 13, SEEK_SET) == 13);
+    assert(!snag_binary_checkpoint_batch_find(fd, &later, &decoded, 7u,
+        &raw, &batch, &previous));
+    assert(batch.first_seq == 7u && previous.end == before.end);
+    /* Old unrelated damage blocks a lifetime walk, not pinned direct lookup
+     * or lookup in the newer bounded suffix. Missing old entries still fail. */
+    int64_t damaged = (int64_t)anchors[1].end + 20;
+    unsigned char byte;
+    assert(snag_pread(fd, &byte, 1u, damaged) == 1);
+    byte ^= 1u;
+    assert(snag_seek(fd, damaged, SEEK_SET) == damaged);
+    assert(!snag_write_full(fd, &byte, 1u));
+    assert(snag_seek(fd, 13, SEEK_SET) == 13);
+    assert(!snag_binary_checkpoint_batch_find(fd, &later, &decoded, 1u,
+        &raw, &batch, &previous));
+    assert(!snag_binary_checkpoint_batch_find(fd, &later, &decoded, 7u,
+        &raw, &batch, &previous));
+    assert(snag_binary_checkpoint_batch_find(fd, &later, NULL, 1u,
+        &raw, &batch, &previous) < 0);
+    assert(snag_binary_checkpoint_batch_find(fd, &later, &decoded, 2u,
+        &raw, &batch, &previous) < 0 && errno == ENOENT);
+    struct snag_binary_checkpoint_index invalid = {0};
+    assert(snag_binary_checkpoint_batch_find(fd, &later, &invalid, 7u,
+        &raw, &batch, &previous) < 0 && errno == EINVAL);
+    assert(snag_seek(fd, 0, SEEK_CUR) == 13);
     snag_buf_free(&metadata);
     snag_buf_free(&raw);
     snag_buf_free(&flat);

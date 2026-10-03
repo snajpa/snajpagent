@@ -62,6 +62,17 @@ int snag_binary_checkpoint_index_decode(const void *data, size_t size,
 int snag_binary_checkpoint_index_find(const struct snag_binary_checkpoint_index *,
     uint64_t sequence, struct snag_binary_index_entry *out);
 
+/* Locate a canonical batch using already pinned, immutable checkpoint access
+ * metadata. Old sequences must be in that table; missing entries fail ENOENT.
+ * Newer sequences use backward lookup through the caller-bounded suffix. The
+ * caller establishes the common journal/ancestry and suffix budget separately.
+ * NULL access retains full backward lookup for independent repair/oracles.
+ * Canonical batch/record checks still apply; no index file is read. Return0/-1,
+ * preserving batch/before and fd position on failure; scratch views expire. */
+int snag_binary_checkpoint_batch_find(int fd, const struct snag_binary_anchor *through,
+    const struct snag_binary_checkpoint_index *access, uint64_t sequence,
+    struct snag_buf *scratch, struct snag_binary_batch *batch, struct snag_binary_anchor *before);
+
 /* Draft derived index. Header identity is supplied independently from the
  * canonical journal. Entry checksums bind that identity and their sequence slot;
  * neither checksum grants semantic state or canonical-batch authority. */

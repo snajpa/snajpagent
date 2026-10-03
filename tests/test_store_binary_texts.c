@@ -24,6 +24,69 @@ static const struct { const char *name; size_t offset; } slots[] = {
 #undef SLOT
 };
 
+/* Independent fixture construction walks the canonical prefix. Production
+ * obtains authority by pinning the complete image, not by trusting its table. */
+struct access_fixture {
+    struct snag_buf bytes;
+    struct snag_binary_checkpoint_index index;
+    struct snag_binary_index_entry entries[2u * SNAG_BINARY_CHECKPOINT_TEXT_COUNT];
+    size_t count;
+};
+
+static bool
+wanted_text(const struct snag_binary_checkpoint_texts *texts, uint64_t sequence)
+{
+    for (size_t i = 0u; i < COUNT(texts->slots); ++i) {
+        if (texts->slots[i].declaration == sequence ||
+            texts->slots[i].original.target.sequence == sequence) return true;
+    }
+    return false;
+}
+
+static void
+make_access(int fd, const struct snag_binary_anchor *through,
+    const struct snag_binary_checkpoint_texts *texts, struct access_fixture *out)
+{
+    unsigned char header[SNAG_BINARY_HEADER_SIZE];
+    assert(snag_pread(fd, header, sizeof(header), 0) == (ssize_t)sizeof(header));
+    struct snag_binary_identity identity;
+    struct snag_binary_anchor cursor;
+    assert(!snag_binary_header_decode(header, sizeof(header), &identity, &cursor));
+    struct snag_binary_index_tree tree = {0};
+    struct snag_buf scratch = {.max = SNAG_BINARY_BATCH_MAX};
+    struct snag_buf flat = {.max = SNAG_BINARY_INDEX_BATCH_MAX};
+    while (cursor.end < through->end) {
+        struct snag_binary_batch batch;
+        struct snag_binary_anchor after;
+        assert(!snag_binary_batch_read(fd, through->end, &cursor, &scratch, &batch, &after));
+        assert(!snag_binary_index_tree_append_batch(NULL, &tree, &identity,
+            &cursor, &after, batch.data, batch.size));
+        snag_buf_reset(&flat);
+        assert(!snag_binary_index_append_batch(&flat, &identity, &cursor, &after,
+            batch.data, batch.size));
+        for (uint64_t sequence = cursor.next_seq; sequence < after.next_seq; ++sequence) {
+            if (!wanted_text(texts, sequence)) continue;
+            assert(out->count < COUNT(out->entries));
+            size_t offset = (size_t)(sequence - cursor.next_seq) * SNAG_BINARY_INDEX_ENTRY_SIZE;
+            assert(!snag_binary_index_entry_decode(flat.data + offset,
+                SNAG_BINARY_INDEX_ENTRY_SIZE, &identity, sequence, &out->entries[out->count++]));
+        }
+        cursor = after;
+    }
+    assert(cursor.end == through->end && cursor.next_seq == through->next_seq &&
+        cursor.turns == through->turns && cursor.previous == through->previous &&
+        !memcmp(cursor.digest, through->digest, 32u));
+    out->bytes.max = SIZE_MAX;
+    assert(!snag_binary_checkpoint_index_encode(&out->bytes, &identity,
+        through, &tree, out->entries, out->count));
+    unsigned char root[32];
+    assert(!snag_binary_index_tree_root(&tree, root));
+    assert(!snag_binary_checkpoint_index_decode(out->bytes.data, out->bytes.len,
+        &identity, through, root, &out->index));
+    snag_buf_free(&scratch);
+    snag_buf_free(&flat);
+}
+
 static void
 same(const struct snag_binary_checkpoint_texts *a, const struct snag_binary_checkpoint_texts *b)
 {
@@ -65,8 +128,30 @@ test_store_binary_texts_state(int fd, const struct snag_binary_anchor *anchor,
     json_t *old = json_string("keep"), *strings = old;
     int64_t position = snag_seek(fd, 0, SEEK_CUR);
     assert(position >= 0);
-    assert(!snag_binary_checkpoint_texts_read(fd, anchor, &restored, &strings));
+    assert(!snag_binary_checkpoint_texts_read(fd, anchor, NULL, &restored, &strings));
     assert(!strcmp(json_string_value(old), "keep") && old != strings);
+    struct access_fixture access = {0};
+    make_access(fd, anchor, &restored, &access);
+    json_t *indexed = NULL;
+    assert(!snag_binary_checkpoint_texts_read(fd, anchor, &access.index, &restored, &indexed));
+    assert(json_equal(strings, indexed));
+    json_decref(indexed);
+    /* A structurally valid table omitting a required old record must fail;
+     * readable canonical history is not permission for a lifetime fallback. */
+    assert(access.count);
+    struct snag_buf missing = {.max = SIZE_MAX};
+    assert(!snag_binary_checkpoint_index_encode(&missing, &access.index.identity,
+        anchor, &access.index.tree, access.entries + 1u, access.count - 1u));
+    unsigned char root[32];
+    assert(!snag_binary_index_tree_root(&access.index.tree, root));
+    struct snag_binary_checkpoint_index incomplete;
+    assert(!snag_binary_checkpoint_index_decode(missing.data, missing.len,
+        &access.index.identity, anchor, root, &incomplete));
+    indexed = old;
+    assert(snag_binary_checkpoint_texts_read(fd, anchor, &incomplete, &restored, &indexed) < 0);
+    assert(errno == ENOENT && indexed == old);
+    snag_buf_free(&missing);
+    snag_buf_free(&access.bytes);
     assert(snag_seek(fd, 0, SEEK_CUR) == position);
     size_t present = 0u;
     for (size_t i = 0u; i < COUNT(slots); ++i) {
@@ -90,31 +175,37 @@ test_store_binary_texts_state(int fd, const struct snag_binary_anchor *anchor,
 
 static void
 reject_read(int fd, const struct snag_binary_anchor *anchor,
+    const struct snag_binary_checkpoint_index *access,
     const struct snag_binary_checkpoint_texts *value)
 {
-    json_t *old = json_string("keep"), *out = old;
-    assert(snag_binary_checkpoint_texts_read(fd, anchor, value, &out) < 0);
-    assert(out == old && !strcmp(json_string_value(out), "keep"));
-    json_decref(old);
+    for (unsigned mode = 0u; mode < 2u; ++mode) {
+        json_t *old = json_string("keep"), *out = old;
+        assert(snag_binary_checkpoint_texts_read(fd, anchor, mode ? access : NULL,
+            value, &out) < 0);
+        assert(out == old && !strcmp(json_string_value(out), "keep"));
+        json_decref(old);
+    }
 }
 
 void
 test_store_binary_texts_bad(int fd, const struct snag_binary_anchor *anchor,
     const struct snag_binary_checkpoint_texts *value)
 {
-    reject_read(-1, anchor, value);
-    reject_read(fd, NULL, value);
-    reject_read(fd, anchor, NULL);
-    assert(snag_binary_checkpoint_texts_read(fd, anchor, value, NULL) < 0);
+    struct access_fixture access = {0};
+    make_access(fd, anchor, value, &access);
+    reject_read(-1, anchor, &access.index, value);
+    reject_read(fd, NULL, &access.index, value);
+    reject_read(fd, anchor, &access.index, NULL);
+    assert(snag_binary_checkpoint_texts_read(fd, anchor, NULL, value, NULL) < 0);
     int closed = dup(fd);
     assert(closed >= 0 && !close(closed));
-    reject_read(closed, anchor, value);
+    reject_read(closed, anchor, &access.index, value);
     struct snag_binary_anchor wrong = *anchor;
     wrong.digest[0] ^= 1u;
-    reject_read(fd, &wrong, value);
+    reject_read(fd, &wrong, &access.index, value);
     struct snag_binary_checkpoint_texts changed = *value;
     changed.through = anchor->next_seq;
-    reject_read(fd, anchor, &changed);
+    reject_read(fd, anchor, &access.index, &changed);
     for (size_t i = 0u; i < COUNT(value->slots); ++i) {
         if (!value->slots[i].declaration || i == SNAG_BINARY_TEXT_STEERING) continue;
         for (unsigned fault = 0u; fault < 3u; ++fault) {
@@ -127,17 +218,19 @@ test_store_binary_texts_bad(int fd, const struct snag_binary_anchor *anchor,
                 changed.slots[i] = value->slots[SNAG_BINARY_TEXT_CWD];
                 if (i == SNAG_BINARY_TEXT_CWD) continue;
             }
-            reject_read(fd, anchor, &changed);
+            reject_read(fd, anchor, &access.index, &changed);
         }
     }
     changed = *value;
     if (value->slots[SNAG_BINARY_TEXT_GOAL_PROMPT].declaration) {
         changed.slots[SNAG_BINARY_TEXT_FIRST_USER] = value->slots[SNAG_BINARY_TEXT_GOAL_PROMPT];
-        reject_read(fd, anchor, &changed); /* This fixture's prompt is a model reword. */
+        /* This fixture's prompt is a model reword. */
+        reject_read(fd, anchor, &access.index, &changed);
         changed = *value;
         changed.slots[SNAG_BINARY_TEXT_LAST_USER] = value->slots[SNAG_BINARY_TEXT_GOAL_PROMPT];
-        reject_read(fd, anchor, &changed);
+        reject_read(fd, anchor, &access.index, &changed);
     }
+    snag_buf_free(&access.bytes);
 }
 
 static void

@@ -481,6 +481,8 @@
   canonical locations, with sorted lookup and whole-image trust requirements.
   Carry access metadata through draft checkpoint framing 0.2 and durable publication,
   with bounded streaming and ownership transfer alongside core/provider sections.
+  Resolve checkpoint text declarations and original fields through pinned locations;
+  missing old entries fail instead of triggering an unbounded fallback.
 
 - Fix a memory leak when combining compaction summaries.
 

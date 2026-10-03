@@ -312,6 +312,7 @@ find_declaration(const struct snag_binary_batch *batch, uint64_t sequence,
 
 int
 snag_binary_checkpoint_texts_read(int fd, const struct snag_binary_anchor *through,
+    const struct snag_binary_checkpoint_index *access,
     const struct snag_binary_checkpoint_texts *texts, json_t **out)
 {
     if (fd < 0 || !through || !out || !valid_texts(texts) || texts->through >= through->next_seq)
@@ -329,7 +330,7 @@ snag_binary_checkpoint_texts_read(int fd, const struct snag_binary_anchor *throu
         struct snag_binary_record record;
         struct snag_binary_event event;
         struct snag_binary_checkpoint_text_source expected;
-        if (snag_binary_batch_find(fd, through, source->declaration,
+        if (snag_binary_checkpoint_batch_find(fd, through, access, source->declaration,
                 &scratch, &batch, &before) < 0 ||
             find_declaration(&batch, source->declaration, &record) < 0) goto done;
         if (changed_slot((enum snag_binary_kind)record.kind) == COUNT(text_slots)) {
@@ -364,8 +365,8 @@ snag_binary_checkpoint_texts_read(int fd, const struct snag_binary_anchor *throu
             size = strlen((const char *)text);
         } else if (source->original.field) {
             if (source->original.target.sequence != source->declaration &&
-                snag_binary_batch_find(fd, through, source->original.target.sequence,
-                    &scratch, &batch, &before) < 0) goto done;
+                snag_binary_checkpoint_batch_find(fd, through, access,
+                    source->original.target.sequence, &scratch, &batch, &before) < 0) goto done;
             if (snag_binary_input_ref_resolve(&source->original.target, &batch,
                     source->original.field, &text) < 0) goto done;
         } else {

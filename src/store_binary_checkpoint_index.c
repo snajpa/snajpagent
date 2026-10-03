@@ -151,6 +151,54 @@ snag_binary_checkpoint_index_decode(const void *data, size_t size,
 }
 
 int
+snag_binary_checkpoint_batch_find(int fd, const struct snag_binary_anchor *through,
+    const struct snag_binary_checkpoint_index *access, uint64_t sequence,
+    struct snag_buf *scratch, struct snag_binary_batch *batch, struct snag_binary_anchor *before)
+{
+    if (fd < 0 || !boundary_valid(through) || !sequence || sequence >= through->next_seq ||
+        !scratch || !batch || !before) {
+        return snag_errno(EINVAL);
+    }
+    if (access && (!boundary_valid(&access->boundary) ||
+        access->tree.count != access->boundary.next_seq - 1u)) {
+        return snag_errno(EINVAL);
+    }
+    if (access) {
+        const struct snag_binary_anchor *captured = &access->boundary;
+        if (through->end == captured->end && (through->next_seq != captured->next_seq ||
+            through->turns != captured->turns || through->previous != captured->previous ||
+            memcmp(through->digest, captured->digest, 32u))) {
+            return snag_errno(EINVAL);
+        }
+        if (through->end < captured->end && (through->next_seq >= captured->next_seq ||
+            through->turns > captured->turns)) {
+            return snag_errno(EINVAL);
+        }
+        if (through->end > captured->end && (through->next_seq <= captured->next_seq ||
+            through->turns < captured->turns)) {
+            return snag_errno(EINVAL);
+        }
+    }
+    if (!access || sequence >= access->boundary.next_seq) {
+        return snag_binary_batch_find(fd, through, sequence, scratch, batch, before);
+    }
+    struct snag_binary_index_entry entry;
+    int rc = snag_binary_checkpoint_index_find(access, sequence, &entry);
+    if (rc != 0) return rc < 0 ? rc : snag_errno(ENOENT);
+    struct snag_binary_batch found;
+    struct snag_binary_anchor previous, after;
+    struct snag_binary_record record;
+    if (snag_binary_batch_at(fd, through->end, entry.batch_offset, entry.batch_digest,
+            scratch, &found, &previous, &after) < 0 ||
+        snag_binary_index_resolve(&entry, &previous, &after, found.data, found.size, &record) < 0) {
+        return -1;
+    }
+    *batch = found;
+    *before = previous;
+    return 0;
+}
+
+int
 snag_binary_checkpoint_index_find(const struct snag_binary_checkpoint_index *index,
     uint64_t sequence, struct snag_binary_index_entry *out)
 {

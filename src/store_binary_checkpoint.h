@@ -4,6 +4,7 @@
 
 #include "store.h"
 #include "store_binary_event.h"
+#include "store_binary_index.h"
 
 /* Provider version 1 is an explicit rebuild recipe. Each recent row names one
  * canonical sequence and saves post-reduction time/turn/flags. Historical rows
@@ -89,9 +90,11 @@ int snag_binary_checkpoint_texts_decode(const void *, size_t,
  * from a decoded table. The complete consumer must establish that this table
  * belongs to its snapshot. No state adoption; only success replaces *out with
  * a new owned JSON object (the caller retains ownership of its old *out).
- * Reads use bounded backward lookup, not an index or a constant-time guarantee. */
+ * Pinned access uses direct old-record locations and a caller-bounded newer
+ * suffix; NULL retains backward lookup for the independent full-prefix oracle. */
 int snag_binary_checkpoint_texts_read(int fd, const struct snag_binary_anchor *,
-    const struct snag_binary_checkpoint_texts *, json_t **out);
+    const struct snag_binary_checkpoint_index *, const struct snag_binary_checkpoint_texts *,
+    json_t **out);
 
 struct snag_binary_checkpoint_call_source {
     uint64_t graph;

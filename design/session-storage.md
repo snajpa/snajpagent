@@ -2125,6 +2125,20 @@ admission work. Encoding is atomic with aliased inputs; failed decode/lookup pre
 caller outputs. The access block supports logical frontiers beyond derived-file
 offset limits and imposes no session-wide entry quota.
 
+The checkpoint batch locator uses this pinned table for records older than its
+capture. It validates the canonical containing batch, predecessor, record position,
+kind and turn; a missing old entry fails without falling back to a lifetime scan.
+Newer records use backward lookup in the caller-bounded suffix. Independent
+full-prefix repair/oracles retain explicit table-free backward lookup. Common
+journal identity/ancestry and the suffix budget are established by the consumer.
+
+The fixed-text materializer now accepts this access metadata for declarations and
+original literal fields, preserving its source-role, slice and atomic-output
+checks. Tests build sparse tables from an independent canonical-prefix walk and
+compare indexed and unindexed strings, reject omitted required entries, and run
+malformed text candidates through both paths. Other materializers, complete
+reference-closure capture and bounded application admission remain pending.
+
 ### Append-only index proofs
 
 The index uses the SHA-256 tree-hash construction from RFC 9162 section 2.1.1.

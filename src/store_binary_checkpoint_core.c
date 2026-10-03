@@ -235,7 +235,7 @@ snag_binary_checkpoint_core_read(int fd, const struct snag_binary_checkpoint_fra
     const struct snag_binary_anchor *anchor = &frame->boundary;
     if (voice && snag_binary_checkpoint_voice_read(fd, anchor, voice, state.id,
         &state.voice_history) < 0) goto done;
-    if (snag_binary_checkpoint_texts_read(fd, anchor, &sources.texts, &state.strings) < 0 ||
+    if (snag_binary_checkpoint_texts_read(fd, anchor, NULL, &sources.texts, &state.strings) < 0 ||
         snag_binary_checkpoint_calls_read(fd, anchor, &calls, &state, &state.pending_calls) < 0 ||
         snag_binary_checkpoint_processes_read(fd, anchor, &processes, &state,
             &state.processes) < 0 ||
