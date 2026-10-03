@@ -616,6 +616,19 @@ static int
 project_record(const struct replay_context *context, const struct snag_session *state,
     const struct snag_binary_record *record, const char **type, json_t **data)
 {
+    if (record->kind == SNAG_BINARY_TOOL_FINISHED || record->kind == SNAG_BINARY_PROCESS_CLOSED) {
+        struct snag_binary_event event;
+        if (snag_binary_event_decode(record, &event) < 0) return -1;
+        const struct snag_binary_tool_result *result = event.kind == SNAG_BINARY_TOOL_FINISHED ?
+            &event.data.tool_finished.result : &event.data.process_closed.result;
+        if (result->has_output_ref) {
+            if (!result->output_ref.native) return snag_errno(ENOTSUP);
+            /* The verified prefix is gapless. A half-open range may end at
+             * this record, but may not include its own result or a later one.
+             * Presentation coordinates stay unchanged; they are not I/O hints. */
+            if (result->output_ref.end_sequence > context->sequence) return snag_errno(EINVAL);
+        }
+    }
     if (record->kind == SNAG_BINARY_VOICE_TRANSFER_ADOPTED)
         return project_voice(context, record, type, data);
     if (record->kind == SNAG_BINARY_RESPONSE_INTERRUPTED ||
@@ -832,16 +845,7 @@ reduce_record(struct replay_context *context, struct snag_session *state,
         return snag_fail(error, error_size, errno,
             "cannot project native record %llu (kind %u, version %u)",
             (unsigned long long)sequence, record->kind, record->version);
-    int rc;
-    if ((record->kind == SNAG_BINARY_TOOL_FINISHED ||
-          record->kind == SNAG_BINARY_PROCESS_CLOSED) &&
-         json_object_get(json_object_get(data, "result"), "output_ref")) {
-        rc = snag_fail(error, error_size, ENOTSUP,
-            "native journal coordinate resolution is not integrated for record %llu",
-            (unsigned long long)sequence);
-    } else {
-        rc = snag_store_reduce_event(state, type, data, sequence, error, error_size);
-    }
+    int rc = snag_store_reduce_event(state, type, data, sequence, error, error_size);
     if (rc == 0 && update_sources(context, state,
             (enum snag_binary_kind)record->kind, data) < 0) {
         rc = snag_fail(error, error_size, errno, "native input provenance does not match replay");

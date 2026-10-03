@@ -2437,7 +2437,13 @@ tool_output_ref_valid(const struct snag_binary_tool_result *result)
     const struct snag_binary_tool_output_ref *ref = &result->output_ref;
     if (!result->max_output_tokens || ref->log_end > INT64_MAX || ref->log_start > ref->log_end ||
         ref->stdin_accepted > INT64_MAX || ref->stdin_written > ref->stdin_accepted ||
-        ref->stdin_pending > ref->stdin_accepted - ref->stdin_written) {
+        ref->stdin_pending > ref->stdin_accepted - ref->stdin_written ||
+        (!ref->native && (ref->first_sequence || ref->end_sequence)) ||
+        (ref->native && (ref->end_sequence > INT64_MAX ||
+            ref->first_sequence > ref->end_sequence ||
+            ((ref->first_sequence == ref->end_sequence) != (ref->log_start == ref->log_end)) ||
+            ((!ref->first_sequence) != (!ref->end_sequence)) ||
+            ((!ref->first_sequence) != (!ref->log_start && !ref->log_end))))) {
         return false;
     }
     for (size_t i = 0u; i < 2u; ++i) {
@@ -2481,6 +2487,7 @@ tool_result_valid(const struct snag_binary_tool_result *result)
         !text_valid(result->model_text, 0u, SNAG_MAX_EVENT_LINE) ||
         !tool_excerpt_valid(&result->streams[0]) || !tool_excerpt_valid(&result->streams[1]) ||
         (result->has_output_ref && !tool_output_ref_valid(result)) ||
+        (!result->has_output_ref && result->output_ref.native) ||
         !tool_result_content_valid(result->content) ||
         snag_binary_result_value_decode(result->exit_code.data, result->exit_code.size,
             &exit_code) < 0 ||
@@ -2551,7 +2558,10 @@ write_tool_output_ref(struct snag_buf *out, const struct snag_binary_tool_output
         write_uint(out, value->log_start, 8u) < 0) {
         return -1;
     }
-    return write_uint(out, value->log_end, 8u);
+    if (write_uint(out, value->log_end, 8u) < 0) return -1;
+    if (value->native && (write_uint(out, value->first_sequence, 8u) < 0 ||
+        write_uint(out, value->end_sequence, 8u) < 0)) return -1;
+    return 0;
 }
 
 static int
@@ -2559,7 +2569,8 @@ write_tool_result(struct snag_buf *out, const struct snag_binary_tool_result *va
 {
     if (!tool_result_valid(value)) return invalid();
     unsigned int flags = (value->max_output_tokens ? 1u : 0u) |
-        (value->has_output_ref ? 2u : 0u) | (value->content.data ? 4u : 0u);
+        (value->has_output_ref ? 2u : 0u) | (value->content.data ? 4u : 0u) |
+        (value->output_ref.native ? 8u : 0u);
     if (write_uint(out, value->status, 1u) < 0 || write_uint(out, value->reason, 1u) < 0 ||
         write_uint(out, flags, 1u) < 0 || write_uint(out, value->duration_ms, 8u) < 0 ||
         snag_buf_append(out, value->exit_code.data, value->exit_code.size) < 0 ||
@@ -2618,7 +2629,8 @@ read_tool_result(struct fields *fields, struct snag_binary_tool_result *out)
     uint64_t reason;
     uint64_t flags;
     if (!read_uint(fields, 1u, &status) || !read_uint(fields, 1u, &reason) ||
-        !read_uint(fields, 1u, &flags) || (flags & ~7u) ||
+        !read_uint(fields, 1u, &flags) || (flags & ~(fields->references ? 15u : 7u)) ||
+        ((flags & 8u) && !(flags & 2u)) ||
         !read_uint(fields, 8u, &out->duration_ms) ||
         read_result_value(fields, 3u, &out->exit_code, NULL) < 0 ||
         read_result_value(fields, 3u, &out->signal, NULL) < 0) {
@@ -2628,6 +2640,7 @@ read_tool_result(struct fields *fields, struct snag_binary_tool_result *out)
     out->reason = (enum snag_binary_tool_reason)reason;
     out->has_handle = out->status == SNAG_BINARY_TOOL_RUNNING;
     out->has_output_ref = (flags & 2u) != 0u;
+    out->output_ref.native = (flags & 8u) != 0u;
     if ((out->has_handle && !read_bytes(fields, out->handle, 16u)) ||
         !read_text(fields, &out->model_text, 0u, SNAG_MAX_EVENT_LINE) ||
         !read_tool_excerpt(fields, &out->streams[0]) ||
@@ -2635,6 +2648,9 @@ read_tool_result(struct fields *fields, struct snag_binary_tool_result *out)
         ((flags & 1u) && (!read_uint(fields, 8u, &out->max_output_tokens) ||
             !out->max_output_tokens)) ||
         (out->has_output_ref && !read_tool_output_ref(fields, &out->output_ref)) ||
+        (out->output_ref.native &&
+            (!read_uint(fields, 8u, &out->output_ref.first_sequence) ||
+             !read_uint(fields, 8u, &out->output_ref.end_sequence))) ||
         ((flags & 4u) && !read_content(fields, &out->content))) {
         return false;
     }
@@ -4417,7 +4433,7 @@ snag_binary_event_version(enum snag_binary_kind kind)
         return 1u;
     }
     if (kind == SNAG_BINARY_TOOL_FINISHED || kind == SNAG_BINARY_PROCESS_CLOSED) {
-        return 1u;
+        return 2u;
     }
     return 0u;
 }

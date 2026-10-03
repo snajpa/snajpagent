@@ -1188,6 +1188,25 @@ turn_interrupted_data(const char *turn_id)
         "origin", "recovery", "reason", "session_recovered", "turn_id", turn_id));
 }
 
+static json_t *
+collected_unknown_result(const char *handle, int64_t log_start, int64_t log_end,
+    uint64_t from, uint64_t to)
+{
+    json_t *result = snag_tool_result_outcome_unknown("owner_lost");
+    assert(result);
+    assert(!snag_json_set_new(result, "max_output_tokens", json_integer(16000)));
+    assert(!snag_json_set_new(result, "stdout", json_pack("{s:s,s:s,s:i,s:I,s:I}",
+        "encoding", "utf8", "retained", "", "retained_bytes", 0,
+        "original_bytes", (json_int_t)(to - from), "discarded_bytes", (json_int_t)(to - from))));
+    assert(!snag_json_set_new(result, "output_ref", json_pack(
+        "{s:s,s:I,s:I,s:i,s:i,s:i,s:i,s:i,s:b,s:I,s:I}", "handle", handle,
+        "stdout_start", (json_int_t)from, "stdout_end", (json_int_t)to,
+        "stderr_start", 0, "stderr_end", 0, "stdin_accepted", 0, "stdin_written", 0,
+        "stdin_pending", 0, "stdin_open", false,
+        "log_start", (json_int_t)log_start, "log_end", (json_int_t)log_end)));
+    return result;
+}
+
 static void
 test_parallel_journal_recovery(struct snag_store *store, const char *cwd)
 {
@@ -1207,6 +1226,7 @@ test_parallel_journal_recovery(struct snag_store *store, const char *cwd)
     assert(json_object_set_new(second, "provider_item_id", json_string("item_second")) == 0);
     assert(json_array_append_new(json_object_get(data, "items"), second) == 0);
     commit_event(&session, "response_completed", data);
+    int64_t output_begin = session.log_end;
     for (size_t i = 0u; i < 2u; ++i) commit_event(&session, "tool_started",
                      tool_started_data(turn, i ? b : a,
                          session.pending_calls[i].action_sha256, cwd));
@@ -1219,10 +1239,25 @@ test_parallel_journal_recovery(struct snag_store *store, const char *cwd)
     assert(session.log_end == end && snag_session_process(&session, b)->output_bytes[0] == 2u);
     /* Resolve B first without claiming its lost owner completed successfully. */
     commit_event(&session, "tool_finished", tool_finished_data(turn, b,
-                     snag_tool_result_outcome_unknown("owner_lost")));
+        collected_unknown_result(b, output_begin, session.log_end, 0u, 2u)));
     commit_event(&session, "tool_finished", tool_finished_data(turn, a,
                      running_result_limit(a, "alive", NULL, 6000)));
     assert(!session.pending_call_count && session.process_count == 2u);
+    {
+        struct snag_context_projection collected = {0};
+        struct snag_instruction_set none = {0};
+        json_t *empty = checked_json(json_array());
+        build_context(&session, 2u, empty, &none, &collected);
+        json_t *input = json_object_get(collected.create_request.value, "input");
+        bool found_reference = false;
+        for (size_t i = 0u; i < json_array_size(input); ++i) {
+            const char *text = snag_json_string(json_array_get(input, i), "output");
+            if (text && strstr(text, "output_ref=")) found_reference = true;
+        }
+        assert(found_reference);
+        snag_context_projection_free(&collected);
+        json_decref(empty);
+    }
     snag_session_close(&session);
     assert(snag_session_open(store, &session, id, error, sizeof(error)) == 0);
     assert(session.process_count == 2u && !session.pending_call_count);
@@ -1290,14 +1325,16 @@ test_parallel_journal_recovery(struct snag_store *store, const char *cwd)
         "content");
     assert(strstr(summary, a) && strstr(summary, b));
     snag_context_projection_free(&projection);
+    commit_event(&session, "process_closed", process_closed_data(turn, b,
+        collected_unknown_result(b, session.log_end, session.log_end, 2u, 2u)));
+    commit_event(&session, "process_closed", process_closed_data(turn, a,
+                     snag_tool_result_outcome_unknown("owner_lost")));
+    build_context(&session, 2u, snapshot, &instructions, &projection);
+    snag_context_projection_free(&projection);
     snag_instructions_free(&instructions);
     json_decref(snapshot);
     snag_context_projection_free(&prefix);
     json_decref(output);
-    commit_event(&session, "process_closed", process_closed_data(turn, b,
-                     snag_tool_result_outcome_unknown("owner_lost")));
-    commit_event(&session, "process_closed", process_closed_data(turn, a,
-                     snag_tool_result_outcome_unknown("owner_lost")));
     commit_event(&session, "turn_interrupted", turn_interrupted_data(turn));
     snag_session_close(&session);
 }

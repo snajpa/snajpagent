@@ -3150,6 +3150,185 @@ close_fixture_process(struct snag_session *session)
 }
 
 static void
+reject_result_ranges(struct snag_session *source, struct snag_session *restored,
+    int fd, struct snag_binary_import_result *imported, uint64_t sequence)
+{
+    struct snag_buf scratch = {.max = SNAG_BINARY_BATCH_MAX};
+    struct snag_binary_batch batch;
+    struct snag_binary_anchor before;
+    assert(!snag_binary_batch_find(fd, &imported->native.verified, sequence,
+        &scratch, &batch, &before));
+    /* This small fixture deliberately keeps the result and its range in one
+     * batch: a committed batch boundary alone cannot prove result causality. */
+    assert(before.end == SNAG_BINARY_HEADER_SIZE && before.next_seq == 1u);
+    struct snag_binary_record *records = calloc(batch.count, sizeof(*records));
+    assert(records);
+    size_t offset = SNAG_BINARY_BATCH_HEADER_SIZE;
+    for (uint32_t i = 0u; i < batch.count; ++i) {
+        uint64_t found;
+        assert(!snag_binary_record_next(&batch, &offset, &records[i], &found));
+        assert(found == i + 1u);
+    }
+    struct snag_binary_record *record = &records[sequence - 1u];
+    struct snag_binary_event event;
+    assert(!snag_binary_event_decode(record, &event));
+    struct snag_binary_tool_output_ref *ref = event.kind == SNAG_BINARY_TOOL_FINISHED ?
+        &event.data.tool_finished.result.output_ref : &event.data.process_closed.result.output_ref;
+    unsigned char header[SNAG_BINARY_HEADER_SIZE];
+    assert(snag_pread(fd, header, sizeof(header), 0) == (ssize_t)sizeof(header));
+    json_t *old_state = checked_json(snag_checkpoint_state_encode(restored));
+    struct snag_binary_checkpoint_sources old_sources = imported->sources;
+    for (unsigned int literal = 0u; literal < 2u; ++literal) {
+        if (literal) {
+            ref->native = false;
+            ref->first_sequence = ref->end_sequence = 0u;
+        } else {
+            ref->end_sequence = sequence + 1u; /* Includes its own result. */
+        }
+        struct snag_buf payload = {.max = SNAG_MAX_EVENT_LINE};
+        struct snag_buf file = {.max = SNAG_BINARY_BATCH_MAX + SNAG_BINARY_HEADER_SIZE};
+        assert(!snag_binary_event_encode(&payload, &event));
+        record->payload = payload.data;
+        record->size = payload.len;
+        assert(!snag_buf_append(&file, header, sizeof(header)));
+        assert(!snag_binary_batch_encode(&file, &before, records, batch.count,
+            imported->native.verified.turns));
+        int bad_fd = temporary_fd();
+        assert(!snag_write_full(bad_fd, file.data, file.len));
+        struct snag_session view = *source; /* Borrowed source identity/lock only. */
+        view.log_fd = bad_fd;
+        struct snag_binary_recovery recovery;
+        char error[256];
+        int rc = snag_store_reconcile_binary(&view, restored, NULL, NULL,
+            &recovery, &imported->sources, error, sizeof(error));
+        assert(rc < 0 && errno == (literal ? ENOTSUP : EINVAL));
+        assert(recovery.problem_seq == sequence && recovery.verified.end == before.end);
+        assert(strstr(error, "cannot project native record"));
+        json_t *after = checked_json(snag_checkpoint_state_encode(restored));
+        assert(json_equal(old_state, after));
+        assert(!memcmp(&old_sources, &imported->sources, sizeof(old_sources)));
+        json_decref(after);
+        assert(!close(bad_fd));
+        snag_buf_free(&file);
+        snag_buf_free(&payload);
+    }
+    json_decref(old_state);
+    free(records);
+    snag_buf_free(&scratch);
+}
+
+static void
+test_output_references(struct snag_store *store, const char *cwd, unsigned int mode)
+{
+    struct snag_session original, restored;
+    snag_session_init(&original);
+    snag_session_init(&restored);
+    char error[512] = {0};
+    assert(!snag_session_create(store, &original, cwd, "default", "fixture", "default",
+        error, sizeof(error)));
+    struct snag_response_graph graph = {0};
+    assert(!snag_response_graph_add_call(&graph, "run", "run", "exec_command",
+        json_pack("{s:s}", "command", "fixture only")));
+    json_t *paths = checked_json(json_array());
+    commit_data(&original, "turn_started",
+        direct_turn_data(cwd, "Preserve collected output.", GOAL_ID, 1u, false, paths));
+    json_decref(paths);
+    commit_data(&original, "response_started", response_data());
+    commit_data(&original, "response_completed", json_pack(
+        "{s:s,s:s,s:i,s:s,s:s,s:O,s:{s:i,s:i,s:i,s:i}}", "turn_id", GOAL_ID,
+        "response_id", OTHER_ID, "cycle", 1, "status", "completed",
+        "provider_response_id", "fixture", "items", graph.items, "usage",
+        "input_tokens", 17, "output_tokens", 7, "reasoning_tokens", 3, "total_tokens", 24));
+    int64_t start = original.log_end;
+    uint64_t first_sequence = original.next_seq;
+    start_process_call(&original, 0u);
+    char handle[SNAG_ID_HEX_LEN + 1u], call[SNAG_ID_HEX_LEN + 1u];
+    memcpy(handle, original.processes[0].handle, sizeof(handle));
+    memcpy(call, original.pending_calls[0].call_id, sizeof(call));
+    if (mode != 1u) commit_data(&original, "process_output", json_pack("{s:s,s:s,s:i,s:i,s:s,s:s}",
+        "turn_id", GOAL_ID, "handle", handle, "stream", 0, "offset", 0,
+        "encoding", "utf8", "data", "abc"));
+    for (unsigned int closing = 0u; closing < 2u; ++closing) {
+        int bytes = mode == 1u ? 0 : 3;
+        int64_t from = mode == 1u ? original.log_end : mode == 2u || mode == 3u ? 0 : start;
+        int64_t to = mode == 2u ? 0 : original.log_end;
+        uint64_t sequence = original.next_seq;
+        bool bad = closing && mode >= 4u;
+        if (bad && mode == 4u) from++;
+        if (bad && mode == 5u) to--;
+        if (bad && mode == 6u) to++;
+
+        json_t *result = snag_tool_result_outcome_unknown("owner_lost");
+        assert(result);
+        assert(!snag_json_set_new(result, "max_output_tokens", json_integer(16000)));
+        assert(!snag_json_set_new(result, "stdout", json_pack("{s:s,s:s,s:i,s:i,s:i}",
+            "encoding", "utf8", "retained", bytes ? "abc" : "", "retained_bytes", bytes,
+            "original_bytes", bytes, "discarded_bytes", 0)));
+        assert(!snag_json_set_new(result, "output_ref", json_pack(
+            "{s:s,s:i,s:i,s:i,s:i,s:i,s:i,s:i,s:b,s:I,s:I}", "handle", handle,
+            "stdout_start", 0, "stdout_end", bytes, "stderr_start", 0, "stderr_end", 0,
+            "stdin_accepted", 0, "stdin_written", 0, "stdin_pending", 0, "stdin_open", false,
+            "log_start", (json_int_t)from, "log_end", (json_int_t)to)));
+        json_t *data = json_pack("{s:s,s:s,s:O}", "turn_id", GOAL_ID,
+            closing ? "handle" : "call_id", closing ? handle : call, "result", result);
+        assert(data);
+        if (closing) assert(!snag_json_set_new(data, "cause", json_string("user_interrupt")));
+        commit_data(&original, closing ? "process_closed" : "tool_finished", data);
+        int fd = temporary_fd();
+        struct snag_binary_import_result imported = {0};
+        json_t *before_state = bad ? checked_json(snag_checkpoint_state_encode(&restored)) : NULL;
+        int64_t position = snag_seek(original.log_fd, 0, SEEK_CUR);
+        int rc = snag_store_import_binary_journal(&original, fd, &restored, &imported,
+            error, sizeof(error));
+        assert(snag_seek(original.log_fd, 0, SEEK_CUR) == position);
+        if (bad) {
+            assert(rc < 0 && errno == EINVAL);
+            json_t *after_state = checked_json(snag_checkpoint_state_encode(&restored));
+            assert(json_equal(before_state, after_state));
+            json_decref(before_state);
+            json_decref(after_state);
+        } else {
+            if (rc) fprintf(stderr, "output reference import: %s\n", error);
+            assert(!rc);
+            test_store_binary_core_state(fd, &imported.native.verified,
+                &imported.sources, &restored);
+            struct snag_buf scratch = {.max = SNAG_BINARY_BATCH_MAX};
+            struct snag_binary_batch batch;
+            struct snag_binary_anchor before;
+            assert(!snag_binary_batch_find(fd, &imported.native.verified, sequence,
+                &scratch, &batch, &before));
+            struct snag_binary_record record;
+            uint64_t found;
+            size_t offset = SNAG_BINARY_BATCH_HEADER_SIZE;
+            do { assert(!snag_binary_record_next(&batch, &offset, &record, &found)); }
+            while (found != sequence);
+            struct snag_binary_event event;
+            assert(!snag_binary_event_decode(&record, &event));
+            const struct snag_binary_tool_output_ref *ref = closing ?
+                &event.data.process_closed.result.output_ref :
+                &event.data.tool_finished.result.output_ref;
+            assert(ref->native && ref->log_start == (uint64_t)from && ref->log_end == (uint64_t)to);
+            assert(ref->first_sequence == (mode == 1u ? sequence : mode == 2u ? 0u :
+                mode == 3u ? 1u : first_sequence));
+            assert(ref->end_sequence == (mode == 2u ? 0u : sequence));
+            const char *type;
+            json_t *projected = NULL;
+            assert(!snag_binary_legacy_decode(&record, &type, &projected));
+            assert(json_equal(json_object_get(projected, "result"), result));
+            json_decref(projected);
+            snag_buf_free(&scratch);
+            if (!mode) reject_result_ranges(&original, &restored, fd, &imported, sequence);
+        }
+        snag_binary_checkpoint_sources_free(&imported.sources);
+        assert(!close(fd));
+        json_decref(result);
+    }
+    snag_response_graph_free(&graph);
+    snag_session_close(&restored);
+    snag_session_close(&original);
+}
+
+static void
 test_process_origins(struct snag_store *store, const char *cwd)
 {
     char error[512] = {0};
@@ -3658,6 +3837,7 @@ test_store_binary_replay(struct snag_store *store, const char *cwd)
     test_text_origins(store, cwd);
     test_metadata_origins(store, cwd);
     test_call_origins(store, cwd);
+    for (unsigned int mode = 0u; mode < 7u; ++mode) test_output_references(store, cwd, mode);
     test_process_origins(store, cwd);
     test_legacy_process_origin(store, cwd);
     test_import_batches(store, cwd);

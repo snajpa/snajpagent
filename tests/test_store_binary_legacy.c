@@ -240,7 +240,7 @@ roundtrip_checked(const char *type, const json_t *data, unsigned int expected_ki
     assert(!snag_binary_legacy_encode(&bytes, type, data, &kind));
     assert((unsigned int)kind == expected_kind && !memcmp(bytes.data, "pre", 3u));
     uint16_t version = (expected_kind >= 96u && expected_kind <= 105u) ||
-        expected_kind == 266u ? 2u : 1u;
+        expected_kind == 177u || expected_kind == 193u || expected_kind == 266u ? 2u : 1u;
     assert(snag_binary_event_version(kind) == version);
     struct snag_binary_record record = {
         .kind = (uint16_t)kind, .version = version,

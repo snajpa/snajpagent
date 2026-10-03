@@ -738,7 +738,11 @@ struct snag_binary_tool_output_ref {
     unsigned char handle[16];
     uint64_t from[2], to[2];
     uint64_t stdin_accepted, stdin_written, stdin_pending;
+    /* Original presentation coordinates remain exact in provider/history views.
+     * Native readers use the separate half-open sequence range, never these. */
     uint64_t log_start, log_end;
+    uint64_t first_sequence, end_sequence; /* Both zero: no recorded log hint. */
+    bool native;
     bool stdin_open;
 };
 

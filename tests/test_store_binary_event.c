@@ -4810,6 +4810,67 @@ test_tool_result_options(void)
 }
 
 static void
+test_native_tool_output_ref(void)
+{
+    struct snag_binary_event event = {.kind = SNAG_BINARY_TOOL_FINISHED};
+    struct snag_binary_tool_result *result = &event.data.tool_finished.result;
+    *result = binary_tool_result();
+    result->max_output_tokens = 16000u;
+    result->has_output_ref = true;
+    result->output_ref = (struct snag_binary_tool_output_ref){.native = true,
+        .log_start = 100u, .log_end = 200u, .first_sequence = 2u, .end_sequence = 7u};
+    struct snag_binary_tool_result valid = *result;
+    roundtrip(&event);
+    struct snag_buf bytes = {.max = SNAG_MAX_EVENT_LINE};
+    assert(!snag_binary_event_encode(&bytes, &event));
+    assert(bytes.len == 222u && bytes.data[34] == 11u);
+    const unsigned char expected[16] = {2u, 0, 0, 0, 0, 0, 0, 0, 7u};
+    assert(!memcmp(bytes.data + 206u, expected, sizeof(expected)));
+    struct snag_binary_record record = {.kind = 177u, .version = 1u,
+        .payload = bytes.data, .size = bytes.len};
+    assert_rejected(record);
+    record.version = 2u;
+    bytes.data[34] = 9u; /* Native range without an output reference. */
+    assert_rejected(record);
+    bytes.data[34] = 27u; /* Unknown flag. */
+    assert_rejected(record);
+    bytes.data[34] = 11u;
+    memset(bytes.data + 206u, 0, 8u); /* Only one zero endpoint. */
+    assert_rejected(record);
+    snag_buf_free(&bytes);
+    for (unsigned int bad = 0u; bad < 7u; ++bad) {
+        *result = valid;
+        struct snag_binary_tool_output_ref *ref = &result->output_ref;
+        if (bad == 0u) ref->end_sequence = 0u;
+        if (bad == 1u) ref->first_sequence = 8u;
+        if (bad == 2u) ref->end_sequence = UINT64_MAX;
+        if (bad == 3u) ref->native = false;
+        if (bad == 4u) result->has_output_ref = false;
+        if (bad == 5u) ref->log_start = ref->log_end = 0u;
+        if (bad == 6u) ref->first_sequence = ref->end_sequence;
+        assert_event_encode_rejected(&event);
+    }
+    *result = valid;
+    result->output_ref.log_start = result->output_ref.log_end;
+    result->output_ref.first_sequence = result->output_ref.end_sequence;
+    roundtrip(&event); /* A recorded empty interval is distinct from no hint. */
+    result->output_ref.log_start = result->output_ref.log_end = 0u;
+    result->output_ref.first_sequence = result->output_ref.end_sequence = 0u;
+    roundtrip(&event);
+    *result = valid;
+    result->output_ref.log_start = 0u;
+    result->output_ref.first_sequence = 1u;
+    roundtrip(&event);
+    result->output_ref.first_sequence = INT64_MAX - 1u;
+    result->output_ref.end_sequence = INT64_MAX;
+    roundtrip(&event); /* Range membership is checked by the journal consumer. */
+    struct snag_binary_event close = {.kind = SNAG_BINARY_PROCESS_CLOSED};
+    close.data.process_closed.cause = SNAG_BINARY_PROCESS_USER_INTERRUPT;
+    close.data.process_closed.result = valid;
+    roundtrip(&close);
+}
+
+static void
 test_tool_result_excerpts(void)
 {
     struct snag_binary_event event = {.kind = SNAG_BINARY_TOOL_FINISHED};
@@ -4938,6 +4999,7 @@ test_tool_result_records(void)
     snag_buf_free(&payload);
     test_tool_result_statuses();
     test_tool_result_options();
+    test_native_tool_output_ref();
     test_tool_result_excerpts();
 }
 
@@ -5306,7 +5368,7 @@ test_result_references(void)
         input_reference_batch(&record, &bytes, &batch);
         assert_result_original_missing(&batch, 2u, kinds[k]);
         payload.data[payload.len - 1u] = 0u;
-        record.version = 2u;
+        record.version = 3u;
         input_reference_batch(&record, &bytes, &batch);
         assert_result_original_missing(&batch, 2u, kinds[k]);
         record.version = 1u;

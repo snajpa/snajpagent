@@ -53,10 +53,13 @@ struct snag_binary_recovery {
  * sequence as well as original scope/item metadata and contiguous fragments.
  * Literal snapshot entries retain their independent reducer validation.
  * Completed-response graphs use the same span bindings while retaining tool
- * calls, graph ordering, usage and continuation placement. Other payload refs,
- * result log coordinates remain ENOTSUP; voice starts use native sequence references.
+ * calls, graph ordering, usage and continuation placement. Result log references
+ * require native half-open sequence ranges ending no later than their owning
+ * record. Their original presentation coordinates stay unchanged; native readers
+ * must use the logical range, process/stream identity and byte window instead.
+ * Voice starts use native sequence references. Other payload refs remain ENOTSUP.
  * Provider-view reconstruction, checkpoints, indexes and cutover remain separate.
- * Linked only by store tests while native backend integration is unfinished. */
+ * Linked only by tests while native backend integration is unfinished. */
 int snag_store_reconcile_binary(struct snag_session *source, struct snag_session *restored,
     snag_session_event_fn fn, void *opaque, struct snag_binary_recovery *recovery,
     struct snag_binary_checkpoint_sources *, char *error, size_t error_size);

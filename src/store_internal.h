@@ -21,6 +21,11 @@ struct snag_legacy_recovery {
     int64_t problem_start, problem_end;
 };
 
+/* Resolve one line boundary inside an independently verified, immutable legacy
+ * prefix. No prefix scan or file-position change; failure preserves out. */
+int snag_store_legacy_cursor_at(struct snag_session *session, int64_t offset,
+    struct snag_journal_cursor *out, char *error, size_t error_size);
+
 /* Explicit offline import only. Caller holds the original source writer lock
  * throughout replay/publication. No source/cwd writes or descriptor seeks.
  * Replays canonical records from byte zero, ignoring derived checkpoint bodies

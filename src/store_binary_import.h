@@ -14,7 +14,7 @@ struct snag_binary_import_result {
     unsigned char semantic_digest[32];
 };
 
-/* Stage a literal native journal from a stopped, exclusively locked JSONL source.
+/* Stage a native journal from a stopped, exclusively locked JSONL source.
  * The caller owns an empty, readable/writable, private regular destination and
  * excludes all other access to it. Descriptors remain caller-owned. The source,
  * including its descriptor position, is unchanged; destination position advances.
@@ -32,8 +32,9 @@ struct snag_binary_import_result {
  * Source identity is rechecked after verification. Reports and retains an
  * incomplete source tail without repair. Adoption cursors are verified in the
  * legacy prefix and replaced by native logical starts; physical cursors are
- * independently reconstructed for comparison. Coordinate-bearing process results
- * still fail until their relocation is implemented.
+ * independently reconstructed for comparison. Process-result log boundaries map
+ * to native half-open sequence ranges. Original presentation coordinates remain
+ * exact for provider/history reconstruction and never become native I/O hints.
  * No other reference construction, provider checkpoint, index, fsync, format selection,
  * old-writer exclusion or publication is provided by this test-linked stage. */
 int snag_store_import_binary_journal(struct snag_session *source, int destination,

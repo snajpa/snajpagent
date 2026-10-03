@@ -1236,8 +1236,8 @@ an immutable borrowed view.
 
 ### Tool results and process closure
 
-Draft kind 177/version 1 (`tool_finished`) stores turn/call IDs (16 bytes each)
-and a typed result. Kind 193/version 1 (`process_closed`) stores turn/process IDs,
+Draft kind 177/version 2 (`tool_finished`) stores turn/call IDs (16 bytes each)
+and a typed result. Kind 193/version 2 (`process_closed`) stores turn/process IDs,
 a one-byte cause and the same result fields. Causes 1..6 mean user interrupt,
 provider failure, protocol failure, tool failure, output failure and internal
 failure. Closure admits succeeded, failed, signaled, timed-out, cancelled,
@@ -1249,9 +1249,11 @@ duration (8), native exit/signal field values, the running handle (16, only for
 running status), length-prefixed model text, stdout excerpt and stderr excerpt.
 Status/reason numbers are the explicit enums in `store_binary_event.h`; reason
 zero represents null. The existing status-specific reason and exit/signal type
-rules apply. Presence bits 1/2/4 select a token limit (8), output reference and
+rules apply. Presence masks1/2/4 select a token limit (8), output reference and
 typed content, in that order. A reference requires the token-limit field.
-The limit remains 1..4000000000. Unknown flags are invalid.
+Version2 adds mask8 for a native log range; it requires an output reference.
+The limit remains1..4000000000. Unknown flags are invalid. Version1 literal
+results remain decodable, including archived values.
 
 Each excerpt stores encoding (one byte: 1 UTF-8, 2 base64), discarded/original/
 retained byte counters (8 each) and the length-prefixed original retained string.
@@ -1267,10 +1269,34 @@ The output reference carries process ID (16), stdout start/end then stderr
 start/end (8 each), stdin accepted/written/pending (8 each), stdin-open (one
 boolean byte) and log start/end (8 each). Ranges, stream original-byte counts and
 stdin accounting retain the legacy validator's relationships. The saved log
-coordinates remain original data. Conversion and history rendering must resolve
-their source identity and mapped range; they cannot be treated as byte positions
-in a different journal. Canonical source validation remains part of import, and
-resolved projection limits remain with their composers.
+coordinates remain original presentation data: the provider renderer includes
+them in tool-result text, so conversion preserves their exact values.
+
+Mask8 appends LEu64 first/end sequences immediately after those coordinates and
+before optional content. The native reference is105 bytes, compared with89 for
+a literal reference. A positive half-open range names canonical records in this
+journal; its exclusive end may equal the owning result's sequence. It cannot
+include the result itself or later records. Equal positive endpoints retain a
+recorded empty interval. Both zero mean the original result had no log hint;
+this requires both presentation coordinates to be zero. A single zero endpoint,
+reversed range, oversized sequence or disagreement about interval emptiness is
+invalid. Native replay requires mask8 for every output reference. Literal-only
+records remain available to the compatibility/display adapter.
+
+Import resolves each legacy line boundary inside the already verified, locked
+prefix. It reads at most one record per endpoint, preserves the source descriptor
+position, and checks the range ends before the current result. Discarded derived
+checkpoint pointers are independent of these canonical line boundaries. The
+same bounded cursor helper validates adopted voice-history starts. No lifetime
+offset table or additional prefix scan is needed.
+
+The display adapter returns the original metadata without resolving native I/O.
+Native history readers must authenticate containing batches and select records
+by logical sequence, process/stream identity and stream-byte window. Presentation
+coordinates never locate native bytes. The full import verifier still compares
+every public result field exactly; provider requests and warm checkpoint views
+retain the same values. Runtime output reading and new native-result emission
+remain part of application integration.
 
 Canonical result references select the complete result after its owner prefix,
 including all optional fields. Creation and resolution require the expected

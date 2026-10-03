@@ -3157,6 +3157,47 @@ invalid:
     return snag_fail(error, error_size, EINVAL, "invalid history record boundary");
 }
 
+int
+snag_store_legacy_cursor_at(struct snag_session *session, int64_t offset,
+    struct snag_journal_cursor *out, char *error, size_t error_size)
+{
+    if (!session || !out || session->log_fd < 0 || session->pending_log ||
+        offset < 0 || offset > session->log_end || !session->next_seq)
+        return snag_fail(error, error_size, EINVAL, "invalid legacy cursor boundary");
+    struct snag_journal_cursor cursor = {.offset = offset};
+    if (offset == session->log_end) {
+        cursor.next_seq = session->next_seq;
+        memcpy(cursor.prev_sha256, session->prev_sha256, sizeof(cursor.prev_sha256));
+    } else {
+        unsigned char delimiter;
+        ssize_t got;
+        if (offset) {
+            do { got = session_read_at(session, &delimiter, 1u, offset - 1); }
+            while (got < 0 && errno == EINTR);
+            if (got < 0) return -1;
+            if (got != 1 || delimiter != '\n')
+                return snag_fail(error, error_size, EINVAL, "legacy cursor is not a line boundary");
+        }
+        int64_t end = 0;
+        errno = 0;
+        json_t *record = read_record_at(session, offset, &end);
+        if (!record) return snag_fail(error, error_size, errno ? errno : EINVAL,
+            "cannot read legacy cursor record");
+        /* Offline replay already verified this envelope and chain. Its derived
+         * checkpoint pointer may have been discarded; it is not cursor authority. */
+        const char *prev = snag_json_string(record, "prev_sha256");
+        int rc = snag_json_integer_u64(record, "seq", &cursor.next_seq);
+        if (!rc && (!cursor.next_seq || cursor.next_seq >= session->next_seq ||
+            (offset == 0) != (cursor.next_seq == 1u) || end <= offset || end > session->log_end ||
+            !prev || !snag_hex_is_lower(prev, SNAG_SHA256_HEX_LEN))) rc = snag_errno(EINVAL);
+        if (!rc) memcpy(cursor.prev_sha256, prev, sizeof(cursor.prev_sha256));
+        json_decref(record);
+        if (rc < 0) return -1;
+    }
+    *out = cursor;
+    return 0;
+}
+
 static int
 history_error(struct snag_session *session, char *error, size_t error_size, const char *detail)
 {

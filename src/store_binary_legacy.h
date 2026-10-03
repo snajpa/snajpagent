@@ -31,7 +31,10 @@
  * The importer must separately verify the complete legacy envelope, chain,
  * source-platform admission rules and reducer transitions before publication.
  * Failure leaves output bytes, kind, type and owned data outputs unchanged.
- * Decode validates the record view and returns an owned data object. */
+ * Decode validates the record view and returns an owned data object. Native tool
+ * results expose their original presentation metadata, not their hidden logical
+ * ranges. This display projection neither resolves nor authorizes journal I/O;
+ * the journal consumer must first verify native range membership. */
 int snag_binary_legacy_encode(struct snag_buf *out, const char *type, const json_t *data,
                               enum snag_binary_kind *kind);
 int snag_binary_legacy_decode(const struct snag_binary_record *record, const char **type,

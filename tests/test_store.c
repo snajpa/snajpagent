@@ -2520,6 +2520,30 @@ test_legacy_reconciliation(struct snag_store *store, const char *cwd)
     assert(!restored.checkpoint_state && !restored.checkpoint_context);
     assert(restored.dir_fd < 0 && restored.log_fd < 0 && restored.lock_fd < 0);
     assert(snag_seek(source.log_fd, 0, SEEK_CUR) == 7 && source.log_end == size);
+    {
+        struct snag_session view = restored; /* Verified prefix, borrowed descriptor. */
+        view.log_fd = source.log_fd;
+        struct snag_journal_cursor cursor = {0};
+        assert(!snag_store_legacy_cursor_at(&view, 0, &cursor, error, sizeof(error)));
+        assert(cursor.next_seq == 1u && cursor.offset == 0 &&
+            strspn(cursor.prev_sha256, "0") == SNAG_SHA256_HEX_LEN);
+        assert(!snag_store_legacy_cursor_at(&view, bad_checkpoint, &cursor, error, sizeof(error)));
+        assert(cursor.next_seq == source.next_seq - 2u && cursor.offset == bad_checkpoint);
+        assert(!snag_store_legacy_cursor_at(&view, checkpoint_end, &cursor, error, sizeof(error)));
+        assert(cursor.next_seq == source.next_seq - 1u && cursor.offset == checkpoint_end);
+        assert(!snag_store_legacy_cursor_at(&view, size, &cursor, error, sizeof(error)));
+        assert(cursor.next_seq == source.next_seq && cursor.offset == size &&
+            !strcmp(cursor.prev_sha256, source.prev_sha256));
+        struct snag_journal_cursor saved;
+        memcpy(&saved, &cursor, sizeof(saved));
+        const int64_t invalid[] = {-1, size + 1, bad_checkpoint + 1, checkpoint_end - 1};
+        for (size_t i = 0u; i < sizeof(invalid) / sizeof(invalid[0]); ++i) {
+            assert(snag_store_legacy_cursor_at(&view, invalid[i], &cursor,
+                error, sizeof(error)) < 0);
+            assert(errno == EINVAL && !memcmp(&saved, &cursor, sizeof(saved)));
+        }
+        assert(snag_seek(source.log_fd, 0, SEEK_CUR) == 7);
+    }
     json_t *expected = snag_checkpoint_state_encode(&source);
     json_t *actual = snag_checkpoint_state_encode(&restored);
     assert(expected && actual && json_equal(expected, actual));
