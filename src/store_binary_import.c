@@ -22,6 +22,7 @@ struct input_source {
 
 struct import_writer {
     int fd;
+    int source_fd;
     struct snag_binary_anchor anchor;
     struct snag_binary_record *records;
     size_t count, capacity;
@@ -52,7 +53,18 @@ semantic_event(void *opaque, const struct snag_session *state, uint64_t sequence
 {
     if (!strcmp(type, "session_checkpoint")) return 0;
     char digest[SNAG_SHA256_HEX_LEN + 1u];
-    if (snag_json_digest(data, digest) < 0) {
+    json_t *logical = NULL;
+    if (!strcmp(type, "voice_transfer_adopted")) {
+        /* Each side validates its own physical cursor. Identity, logical start,
+         * source coverage and count must remain exactly equal across formats. */
+        logical = json_deep_copy(data);
+        if (!logical) return snag_errno(ENOMEM);
+        json_object_del(logical, "begin_offset");
+        json_object_del(logical, "begin_sha256");
+    }
+    int rc = snag_json_digest(logical ? logical : data, digest);
+    json_decref(logical);
+    if (rc < 0) {
         return snag_fail(error, error_size, errno, "cannot digest imported semantic event");
     }
     unsigned char position[16];
@@ -422,6 +434,45 @@ out:
 }
 
 static int
+cursor_record(void *opaque, const struct snag_session *state, uint64_t sequence,
+    const char *type, const json_t *data, char *error, size_t error_size)
+{
+    (void)opaque; (void)state; (void)sequence; (void)type; (void)data;
+    (void)error; (void)error_size;
+    return SNAG_JOURNAL_STOP_AFTER;
+}
+
+static int
+reference_voice(struct import_writer *writer, const struct snag_session *state,
+    const struct snag_binary_record *record, char *error, size_t error_size)
+{
+    struct snag_binary_event event;
+    if (snag_binary_event_decode(record, &event) < 0) return -1;
+    struct snag_binary_voice_adopted *value = &event.data.voice_transfer_adopted;
+    /* This prefix has already passed the strict legacy walker. A real line
+     * boundary plus the exact next sequence and predecessor digest validates
+     * the old cursor without another lifetime scan or a growing offset table. */
+    unsigned char delimiter;
+    if (value->begin_offset >= (uint64_t)state->log_end) return snag_errno(EINVAL);
+    ssize_t got;
+    do {
+        got = snag_pread(writer->source_fd, &delimiter, 1u, (int64_t)value->begin_offset - 1);
+    } while (got < 0 && errno == EINTR);
+    if (got < 0) return -1;
+    if (got != 1 || delimiter != '\n') return snag_errno(EINVAL);
+    struct snag_session view = *state;
+    view.log_fd = writer->source_fd;
+    struct snag_journal_cursor cursor = state->voice_history.begin;
+    if (snag_session_each_event_forward(&view, &cursor, 1u, cursor_record, NULL,
+        error, error_size) < 0) return -1;
+    if (cursor.next_seq != value->begin_seq + 1u) return snag_errno(EINVAL);
+    value->native = true;
+    value->begin_offset = 0u;
+    memset(value->begin_sha256, 0, sizeof(value->begin_sha256));
+    return replace_event(writer, &event);
+}
+
+static int
 import_event(void *opaque, const struct snag_session *state, uint64_t sequence,
     const char *type, const json_t *data, char *error, size_t error_size)
 {
@@ -454,6 +505,8 @@ import_event(void *opaque, const struct snag_session *state, uint64_t sequence,
         record.version = snag_binary_event_version(kind);
         record.payload = writer->field.data;
         record.size = writer->field.len;
+        if (kind == SNAG_BINARY_VOICE_TRANSFER_ADOPTED &&
+            reference_voice(writer, state, &record, error, error_size) < 0) goto fail;
         if (remember_input(writer, state, sequence, &record) < 0) goto fail;
         if (kind == SNAG_BINARY_TURN_STARTED ||
             (kind >= SNAG_BINARY_RESPONSE_OUTPUT && kind <= SNAG_BINARY_RESPONSE_COMPLETED)) {
@@ -502,6 +555,12 @@ compare_core(const struct snag_session *legacy, const struct snag_session *nativ
         json_object_del(left, coordinates[i]);
         json_object_del(right, coordinates[i]);
     }
+    json_t *old_voice = json_object_get(left, "voice_history");
+    json_t *new_voice = json_object_get(right, "voice_history");
+    json_object_del(old_voice, "begin.offset");
+    json_object_del(new_voice, "begin.offset");
+    json_object_del(old_voice, "begin.prev_sha256");
+    json_object_del(new_voice, "begin.prev_sha256");
     if (!json_equal(left, right) || legacy->next_seq != native->next_seq ||
         legacy->last_time_ms != native->last_time_ms) {
         errno = EINVAL;
@@ -547,7 +606,7 @@ snag_store_import_binary_journal(struct snag_session *source, int destination,
     /* Borrow descriptors only for the read-only verifier; never close them. */
     staged.log_fd = destination;
     staged.lock_fd = source->lock_fd;
-    struct import_writer writer = {.fd = destination,
+    struct import_writer writer = {.fd = destination, .source_fd = source->log_fd,
         .payload = {.max = SNAG_MAX_EVENT_LINE}, .field = {.max = SNAG_MAX_EVENT_LINE}};
     snag_sha256_init(&writer.semantic);
     int rc = snag_store_reconcile_legacy(source, &legacy, import_event, &writer,

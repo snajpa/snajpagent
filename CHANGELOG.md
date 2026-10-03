@@ -452,6 +452,7 @@
   migration and application integration are completed. Preserve provider-hosted
   search observations through native replay and paired checkpoints. Add stopped
   checkpoint-plus-suffix reconstruction with atomic core/context adoption.
+  Relocate adopted voice-history starts through canonical native references.
 
 - Fix a memory leak when combining compaction summaries.
 

@@ -905,21 +905,31 @@ text for the fixed operation `dictation`. Provider/model use their existing
 name bounds; report text is 1..262143 UTF-8 bytes. The report remains auxiliary
 billing information, separate from coding-token accounting and execution state.
 
-Kinds 265/266 version 1 retain sealed/adopted voice-transfer metadata. Their
-common prefix is transfer/target/source IDs (16 bytes each), source-as-of
-sequence8 and record count8. Both numbers are positive signed-64 values.
-Adoption appends begin-offset8, begin-sequence8 and begin-hash32; offset is
-positive, sequence is at least2, and both retain signed-64 bounds. The reducer
-must verify session identities, earlier sequences, count versus the adopted
-range, a valid prefix boundary and its hash before changing the history root.
-The sealed record does not change that root.
+Kind265 version1 retains sealed voice-transfer metadata: transfer/target/source
+IDs (16 bytes each), source-as-of sequence8 and record count8. Both numbers are
+positive signed-64 values. The sealed record leaves the history root unchanged.
+Kind266 version1 appends literal JSONL begin-offset8, begin-sequence8 and
+begin-hash32. Its offset is positive and its sequence is at least2; both retain
+signed-64 bounds.
 
-Historical JSONL offsets and prefix hashes belong to their original coordinate
-space. Conversion must resolve the corresponding native journal boundary;
-copying those numbers into a binary cursor would not establish that boundary.
-These codecs preserve the metadata without reading another journal or adopting
-history. Archive source-reference rules remain separate work alongside the
-converter and native reducer.
+Kind266 version2 starts with a one-byte coordinate tag, then the same64-byte
+transfer metadata. Tag0 appends the version1 literal coordinates. Tag1 appends
+only the8-byte logical begin sequence; its113-byte and73-byte forms are exact.
+Unknown tags, missing fields and trailing bytes fail. The standalone legacy
+adapter preserves literal coordinates and returns ENOTSUP for an unresolved
+native start. Native replay requires tag1 and checks identities, earlier sequence
+and count versus the adopted range before replacing the history root.
+
+The stopped importer validates a JSONL cursor against its already verified
+prefix: the offset must be a line boundary and the next record must match the
+exact sequence and predecessor hash. It then writes a native sequence reference.
+Native resolution locates that sequence through authenticated batches. A cursor
+contains the containing batch's start and predecessor digest, plus the logical
+start sequence, which can be inside that batch. Native iteration must verify the
+batch and skip its earlier records. No legacy offset becomes a native address.
+Semantic conversion comparisons retain identities, source coverage, counts and
+logical starts; each side independently validates its physical coordinates.
+Archive observations retain their original fields and remain inert.
 
 ### Filter-rule records
 
@@ -1626,11 +1636,13 @@ the enclosing complete snapshot consumer owns membership, lifecycle, immutable
 journal identity and atomic core/provider adoption. Provider-view snapshots and
 native process collection cursors remain separate dependencies.
 
-The version1 core candidate in `store_binary_checkpoint_core.c` joins these
+The version2 core candidate in `store_binary_checkpoint_core.c` joins these
 seven components in fixed order: controls, accounting, fixed texts, pending
-calls, processes, pending inputs and dynamic payloads. Its76-byte header contains
-LEu16 version1, LEu16 component count7, LEu64 active-compaction accepting sequence,
-LEu64 retained-response accepting sequence, then seven LEu64 component sizes.
+calls, processes, pending inputs and dynamic payloads. Its84-byte header contains
+LEu16 version2, LEu16 component count7, LEu64 active-compaction accepting sequence,
+LEu64 retained-response accepting sequence, LEu64 voice-adoption sequence (zero
+when absent), then seven LEu64 component sizes. Earlier draft core versions fail
+explicitly; the application has not published native checkpoints.
 Every component retains its own version and exact-length validation. The active
 compaction attempt is separate from the last completed compaction; a retained
 response epoch also survives when no public stream has been emitted. Neither
@@ -1646,10 +1658,11 @@ must match their control metadata and accepting boundaries. Re-encoding uses
 the returned origins without copying journal payloads into the core body.
 
 Only reachable string owners are retained. Process scan caches, callbacks,
-resources and derived provider/history views start empty. Existing voice-history
-adoption cursors still require relocation; a core producer with such a cursor
-returns `ENOTSUP`. The native replay guard for adoption remains in place. Full
-latest-membership/lifecycle validation, provider decoding, native process scan
+resources and derived provider/history views start empty. Voice history stores
+its adoption sequence once. Loading verifies the canonical adoption's kind,
+native-reference form, target identity and earlier logical start, then derives
+the cursor and transfer identity. Partial or malformed roots fail encoding.
+Latest-membership/lifecycle validation, provider decoding, native process scan
 cursors and atomic joint adoption remain the enclosing consumer's work. This
 assembly layer remains test-linked; runtime storage continues to use JSONL.
 
@@ -1748,7 +1761,12 @@ payloads, then compare midpoint-checkpoint-plus-suffix results with independent
 full replay. They exercise restored open response epochs, active processes and
 growing/shrinking input/download tables; corruption, incomplete tails, final
 cancellation, source append and same-size overwrite retain separate assertions.
-The core encoder's outstanding voice-root relocation restriction remains ENOTSUP.
+Voice roots use the same canonical adoption-reference reader as full replay.
+The fixtures replace an adopted root during suffix replay and separately reject
+omitted or stale root references in otherwise valid, checksummed checkpoints.
+Cross-format provider comparisons normalize only the two physical adoption
+coordinates after independent validation; native-to-native comparisons and the
+final rendered provider requests remain exact.
 Generation selection and durable publication remain writer responsibilities.
 
 ## Checkpoint file framing
@@ -1797,8 +1815,8 @@ consistency and canonical reference provenance before adoption; an unknown requi
 section version fails state loading. Frame decoding alone supplies no state or
 resume authority. Frame tests include synthetic section bytes and snapshots larger
 than one event. Typed core/provider bodies and verified checkpoint-plus-suffix
-materialization have separate semantic tests. Efficient anchor selection,
-voice-root relocation and alternating durable publication remain under
+materialization have separate semantic tests. Efficient anchor selection
+and alternating durable publication remain under
 implementation. Runtime storage remains JSONL.
 
 ## Checkpoint cadence and publication

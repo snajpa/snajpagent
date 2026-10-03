@@ -239,7 +239,8 @@ roundtrip_checked(const char *type, const json_t *data, unsigned int expected_ki
     enum snag_binary_kind kind = 0;
     assert(!snag_binary_legacy_encode(&bytes, type, data, &kind));
     assert((unsigned int)kind == expected_kind && !memcmp(bytes.data, "pre", 3u));
-    uint16_t version = expected_kind >= 96u && expected_kind <= 105u ? 2u : 1u;
+    uint16_t version = (expected_kind >= 96u && expected_kind <= 105u) ||
+        expected_kind == 266u ? 2u : 1u;
     assert(snag_binary_event_version(kind) == version);
     struct snag_binary_record record = {
         .kind = (uint16_t)kind, .version = version,
@@ -548,14 +549,14 @@ wire_bytes(void)
     unsigned char irc_admitted[18] = {3u, 0u, 0u, 0u, 1u, 128u, 1u};
     memset(irc_admitted + 7u, 255, 8u);
     irc_admitted[15] = 127u;
-    unsigned char voice_seal[64] = {0}, voice_adopted[112] = {0};
+    unsigned char voice_seal[64] = {0}, voice_adopted[113] = {0};
     memcpy(voice_seal, tool_start, 32u);
     memcpy(voice_seal + 32u, completed, 16u);
     voice_seal[48] = voice_seal[56] = 1u;
-    memcpy(voice_adopted, voice_seal, sizeof(voice_seal));
-    voice_adopted[64] = 1u;
-    voice_adopted[72] = 2u;
-    memset(voice_adopted + 80u, 255, 32u);
+    memcpy(voice_adopted + 1u, voice_seal, sizeof(voice_seal));
+    voice_adopted[65] = 1u;
+    voice_adopted[73] = 2u;
+    memset(voice_adopted + 81u, 255, 32u);
     const struct { size_t sample; const unsigned char *bytes; size_t size; } cases[] = {
         {61u, turn_start, sizeof(turn_start) - 1u},
         {64u, response_start, sizeof(response_start)}, {65u, response_full, sizeof(response_full)},

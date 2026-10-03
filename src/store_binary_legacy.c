@@ -2884,6 +2884,7 @@ put_transfer_metadata(json_t *data, const struct snag_binary_event *event)
     }
     if (!adopted) return 0;
     const struct snag_binary_voice_adopted *value = &event->data.voice_transfer_adopted;
+    if (value->native) return snag_errno(ENOTSUP);
     if (snag_json_set_new(data, "begin_offset",
         json_integer((json_int_t)value->begin_offset)) < 0 ||
         snag_json_set_new(data, "begin_seq", json_integer((json_int_t)value->begin_seq)) < 0) {

@@ -268,6 +268,25 @@ test_reference_rejection(struct replay_fixture *fixture, struct snag_session *so
     append_record(fixture, &file, &record, fixture->turns);
     assert(replay_check(source, restored, &recovery, file.data, file.len) < 0 && errno == ENOTSUP);
 
+    struct snag_binary_event adoption;
+    assert(!snag_binary_event_decode(&record, &adoption));
+    struct snag_binary_voice_adopted *voice = &adoption.data.voice_transfer_adopted;
+    voice->native = true;
+    voice->begin_offset = 0u;
+    memset(voice->begin_sha256, 0, sizeof(voice->begin_sha256));
+    for (unsigned int bad = 0u; bad < 4u; ++bad) {
+        voice->begin_seq = bad < 2u ? fixture->anchor.next_seq + bad : 2u;
+        voice->transfer.count = bad == 2u ? fixture->anchor.next_seq : 1u;
+        if (bad == 3u) voice->transfer.target[0] ^= 1u;
+        snag_buf_reset(&payload);
+        assert(!snag_binary_event_encode(&payload, &adoption));
+        record.payload = payload.data;
+        record.size = payload.len;
+        append_record(fixture, &file, &record, fixture->turns);
+        assert(replay_check(source, restored, &recovery, file.data, file.len) < 0);
+        assert(errno == EINVAL && recovery.verified.end == fixture->anchor.end);
+    }
+
     json_t *result = checked_json(json_pack("{s:s,s:n,s:n,s:i,s:i,s:n,s:s,s:i}",
         "status", "succeeded", "reason", "handle", "duration_ms", 0, "exit_code", 0,
         "signal", "model_text", "", "max_output_tokens", 1));
@@ -3549,9 +3568,89 @@ test_metadata_origins(struct snag_store *store, const char *cwd)
     snag_session_close(&original);
 }
 
+static void
+test_voice_adoption(struct snag_store *store, const char *cwd, unsigned int bad)
+{
+    struct snag_session original, restored;
+    snag_session_init(&original);
+    snag_session_init(&restored);
+    char error[512] = {0};
+    assert(!snag_session_create(store, &original, cwd, "default", "fixture", "default",
+        error, sizeof(error)));
+    commit_data(&original, "banner_updated", json_pack("{s:s}", "text", "destination"));
+    for (unsigned int phase = 0u; phase < 2u; ++phase) {
+        const char *id = phase ? GOAL_ID : OTHER_ID;
+        struct snag_journal_cursor begin = {.offset = original.log_end,
+            .next_seq = original.next_seq};
+        memcpy(begin.prev_sha256, original.prev_sha256, sizeof(begin.prev_sha256));
+        commit_data(&original, "voice_transfer_record",
+            json_pack("{s:s,s:s,s:s,s:i,s:s,s:{s:s,s:s}}", "transfer_id", id,
+                "target_session_id", original.id, "source_session_id", OTHER_ID,
+                "source_seq", 1, "source_type", "goal_started", "data",
+                "goal_id", OTHER_ID, "prompt", "inert archived goal"));
+        commit_data(&original, "banner_updated",
+            json_pack("{s:s}", "text", "destination continues"));
+        assert(!snag_session_checkpoint(&original, error, sizeof(error)));
+        if (phase) {
+            if (bad == 1u) ++begin.offset;
+            if (bad == 2u) begin.prev_sha256[0] = begin.prev_sha256[0] == '0' ? '1' : '0';
+            if (bad == 3u) ++begin.next_seq;
+        }
+        commit_data(&original, "voice_transfer_adopted",
+            json_pack("{s:s,s:s,s:s,s:i,s:I,s:I,s:s,s:i}", "transfer_id", id,
+                "target_session_id", original.id, "source_session_id", OTHER_ID,
+                "source_as_of_seq", 1, "begin_offset", (json_int_t)begin.offset,
+                "begin_seq", (json_int_t)begin.next_seq, "begin_sha256", begin.prev_sha256,
+                "count", 1));
+        int fd = temporary_fd();
+        int64_t position = snag_seek(original.log_fd, 0, SEEK_CUR);
+        struct snag_binary_import_result result;
+        struct snag_session saved = restored, saved_source = original;
+        json_t *old = snag_checkpoint_state_encode(&restored);
+        assert(old);
+        int rc = snag_store_import_binary_journal(&original, fd, &restored, &result,
+            error, sizeof(error));
+        assert(!memcmp(&saved_source, &original, sizeof(original)));
+        assert(snag_seek(original.log_fd, 0, SEEK_CUR) == position);
+        if (bad && phase) {
+            assert(rc < 0 && errno == EINVAL && *error);
+            assert(!memcmp(&saved, &restored, sizeof(restored)));
+            json_t *unchanged = snag_checkpoint_state_encode(&restored);
+            assert(unchanged && json_equal(old, unchanged));
+            json_decref(unchanged);
+        } else {
+            if (rc) fprintf(stderr, "voice adoption import: %s\n", error);
+            assert(!rc);
+            assert(restored.voice_history.adopted_seq == original.voice_history.adopted_seq);
+            assert(restored.voice_history.begin.next_seq == begin.next_seq);
+            assert(!strcmp(restored.voice_history.transfer_id, id));
+            assert(restored.voice_history.begin.offset == SNAG_BINARY_HEADER_SIZE);
+            assert(strcmp(restored.voice_history.begin.prev_sha256, begin.prev_sha256));
+            assert(!restored.goal_prompt && !restored.active_turn);
+            assert(!strcmp(restored.banner_text, "destination continues"));
+            struct snag_session source;
+            snag_session_init(&source);
+            memcpy(source.id, original.id, sizeof(source.id));
+            source.log_fd = fd;
+            source.lock_fd = original.lock_fd;
+            prefix_matches(&source, &restored, &result.native.verified);
+            struct snag_voice_history_root root = restored.voice_history, previous = root;
+            assert(snag_binary_checkpoint_voice_read(fd, &result.native.verified,
+                root.adopted_seq, OTHER_ID, &root) < 0);
+            assert(!memcmp(&root, &previous, sizeof(root)));
+        }
+        json_decref(old);
+        snag_binary_checkpoint_sources_free(&result.sources);
+        assert(!close(fd));
+    }
+    snag_session_close(&restored);
+    snag_session_close(&original);
+}
+
 void
 test_store_binary_replay(struct snag_store *store, const char *cwd)
 {
+    for (unsigned int bad = 0u; bad < 4u; ++bad) test_voice_adoption(store, cwd, bad);
     test_compact_origins(store, cwd, false);
     test_compact_origins(store, cwd, true);
     test_download_origins(store, cwd);

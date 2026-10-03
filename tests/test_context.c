@@ -5107,11 +5107,27 @@ test_count_request_schema(void)
 }
 
 static void
+adopt_native_history_fixture(struct snag_session *session, const char *transfer)
+{
+    struct snag_journal_cursor begin = {.offset = session->log_end, .next_seq = session->next_seq};
+    memcpy(begin.prev_sha256, session->prev_sha256, sizeof(begin.prev_sha256));
+    commit_event(session, "voice_transfer_record", json_pack("{s:s,s:s,s:s,s:i,s:s,s:{s:s,s:s}}",
+        "transfer_id", transfer, "target_session_id", session->id, "source_session_id", transfer,
+        "source_seq", 1, "source_type", "goal_started", "data", "goal_id", transfer,
+        "prompt", "inert source goal"));
+    commit_event(session, "voice_transfer_adopted", json_pack("{s:s,s:s,s:s,s:i,s:I,s:I,s:s,s:i}",
+        "transfer_id", transfer, "target_session_id", session->id, "source_session_id", transfer,
+        "source_as_of_seq", 1, "begin_offset", (json_int_t)begin.offset,
+        "begin_seq", (json_int_t)begin.next_seq, "begin_sha256", begin.prev_sha256, "count", 1));
+}
+
+static void
 test_pending_native_sources(struct snag_store *store, const char *cwd)
 {
     struct snag_session session;
     const char *turn = "70000000000000000000000000000000";
     create_session(store, &session, cwd, "medium");
+    adopt_native_history_fixture(&session, "80000000000000000000000000000000");
     commit_event(&session, "turn_started", turn_started(turn, 1u, "pending sources", cwd, NULL));
     for (unsigned int i = 1u; i <= 3u; ++i) {
         char queue[33], download[33];
@@ -5125,6 +5141,7 @@ test_pending_native_sources(struct snag_store *store, const char *cwd)
             "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
             "queued_ms", (json_int_t)17));
     }
+    adopt_native_history_fixture(&session, "90000000000000000000000000000000");
     for (unsigned int i = 1u; i <= 2u; ++i) {
         char queue[33], download[33];
         snprintf(queue, sizeof(queue), "%032x", i);

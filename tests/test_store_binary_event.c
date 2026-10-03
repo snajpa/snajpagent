@@ -6204,7 +6204,9 @@ test_voice_archives(void)
     event.data.voice_transfer_record.source_kind = (uint16_t)child.kind;
     event.data.voice_transfer_record.data = bytes.data;
     event.data.voice_transfer_record.size = bytes.len;
+    event.data.voice_transfer_record.source_version = 2u;
     roundtrip(&event);
+    event.data.voice_transfer_record.source_version = 1u;
     child = (struct snag_binary_event){.kind = SNAG_BINARY_STEERING_DEFERRED};
     bytes.len = 0u;
     assert(!snag_binary_event_encode(&bytes, &child));
@@ -6324,7 +6326,8 @@ test_voice_transfer_anchors(void)
         .transfer = transfer, .begin_offset = 6u, .begin_seq = 7u, .begin_sha256 = {8u}};
     payload.len = 0u;
     assert(!snag_binary_event_encode(&payload, &event));
-    assert(payload.len == sizeof(expected) && !memcmp(payload.data, expected, sizeof(expected)));
+    assert(payload.len == sizeof(expected) + 1u && !payload.data[0] &&
+        !memcmp(payload.data + 1u, expected, sizeof(expected)));
     roundtrip(&event);
     uint64_t *fields[] = {&event.data.voice_transfer_adopted.transfer.source_as_of,
         &event.data.voice_transfer_adopted.transfer.count,
@@ -6343,7 +6346,7 @@ test_voice_transfer_anchors(void)
                 payload.data[48u + i * 8u + k] = (unsigned char)(numbers[j] >> (k * 8u));
             }
             struct snag_binary_record record = {.kind = 266u, .version = 1u,
-                .payload = payload.data, .size = payload.len};
+                .payload = payload.data, .size = sizeof(expected)};
             if (valid) {
                 struct snag_binary_event decoded;
                 assert(!snag_binary_event_decode(&record, &decoded));
@@ -6367,6 +6370,26 @@ test_voice_transfer_anchors(void)
         }
         *fields[i] = saved;
     }
+    event.data.voice_transfer_adopted = (struct snag_binary_voice_adopted){
+        .transfer = transfer, .begin_seq = 7u, .native = true};
+    snag_buf_reset(&payload);
+    assert(!snag_binary_event_encode(&payload, &event));
+    const unsigned char native[73] = {[0] = 1u, [1] = 1u, [17] = 2u, [33] = 3u,
+        [49] = 4u, [57] = 5u, [65] = 7u};
+    assert(payload.len == sizeof(native) && !memcmp(payload.data, native, sizeof(native)));
+    roundtrip(&event);
+    event.data.voice_transfer_adopted.begin_offset = 1u;
+    assert_event_encode_rejected(&event);
+    event.data.voice_transfer_adopted.begin_offset = 0u;
+    event.data.voice_transfer_adopted.begin_sha256[0] = 1u;
+    assert_event_encode_rejected(&event);
+    struct snag_binary_record record = {.kind = 266u, .version = 2u,
+        .payload = payload.data, .size = payload.len};
+    payload.data[0] = 2u;
+    assert_rejected(record);
+    payload.data[0] = 1u;
+    payload.data[65] = 1u;
+    assert_rejected(record);
     snag_buf_free(&payload);
 }
 

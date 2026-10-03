@@ -9,9 +9,9 @@
 #include <string.h>
 
 /* Each component keeps its own version. Sizes delimit the fixed-order blocks;
- * the two extra epochs survive even without retained output payloads. */
+ * the two extra epochs and adoption reference survive without copied payloads. */
 enum core_block { CONTROLS, ACCOUNTING, TEXTS, CALLS, PROCESSES, INPUTS, PAYLOADS, BLOCKS };
-#define CORE_HEADER (20u + BLOCKS * 8u)
+#define CORE_HEADER (28u + BLOCKS * 8u)
 
 static void
 put_number(unsigned char *out, uint64_t number)
@@ -54,8 +54,15 @@ snag_binary_checkpoint_core_encode(struct snag_buf *out,
 {
     if (!out || !sources || !state || out->len > out->max) return snag_errno(EINVAL);
     const struct snag_voice_history_root *voice = &state->voice_history;
-    if (voice->adopted_seq || voice->transfer_id[0] || voice->begin.offset ||
-        voice->begin.next_seq || voice->begin.prev_sha256[0]) return snag_errno(ENOTSUP);
+    if (voice->adopted_seq) {
+        if (voice->adopted_seq >= state->next_seq || voice->begin.next_seq < 2u ||
+            voice->begin.next_seq >= voice->adopted_seq ||
+            voice->begin.offset < SNAG_BINARY_HEADER_SIZE || voice->begin.offset > state->log_end ||
+            !snag_hex_is_lower(voice->transfer_id, SNAG_ID_HEX_LEN) ||
+            !snag_hex_is_lower(voice->begin.prev_sha256, SNAG_SHA256_HEX_LEN))
+            return snag_errno(EINVAL);
+    } else if (voice->transfer_id[0] || voice->begin.offset ||
+        voice->begin.next_seq || voice->begin.prev_sha256[0]) return snag_errno(EINVAL);
     struct snag_buf blocks[BLOCKS] = {0}, staged = {.max = out->max - out->len};
     for (size_t i = 0u; i < BLOCKS; ++i) blocks[i].max = staged.max;
     struct snag_binary_checkpoint_accounting accounting = {
@@ -70,10 +77,11 @@ snag_binary_checkpoint_core_encode(struct snag_buf *out,
         snag_binary_checkpoint_processes_encode(&blocks[PROCESSES], sources, state) < 0 ||
         snag_binary_checkpoint_inputs_encode(&blocks[INPUTS], sources, state) < 0 ||
         snag_binary_checkpoint_payloads_encode(&blocks[PAYLOADS], sources, state) < 0) goto done;
-    unsigned char header[CORE_HEADER] = {1u, 0u, BLOCKS, 0u};
+    unsigned char header[CORE_HEADER] = {SNAG_BINARY_CORE_VERSION, 0u, BLOCKS, 0u};
     put_number(header + 4u, sources->active_compact);
     put_number(header + 12u, sources->response_start);
-    for (size_t i = 0u; i < BLOCKS; ++i) put_number(header + 20u + i * 8u, blocks[i].len);
+    put_number(header + 20u, voice->adopted_seq);
+    for (size_t i = 0u; i < BLOCKS; ++i) put_number(header + 28u + i * 8u, blocks[i].len);
     if (snag_buf_append(&staged, header, sizeof(header)) < 0) goto done;
     for (size_t i = 0u; i < BLOCKS; ++i) {
         if (snag_buf_append(&staged, blocks[i].data, blocks[i].len) < 0) goto done;
@@ -88,16 +96,19 @@ done:
 static int
 split(const struct snag_binary_checkpoint_section *core,
     struct snag_binary_checkpoint_section blocks[BLOCKS],
-    struct snag_binary_checkpoint_sources *sources)
+    struct snag_binary_checkpoint_sources *sources, uint64_t *voice)
 {
-    if (core->version != 1u || !core->data || core->size < CORE_HEADER) return snag_errno(EINVAL);
+    if (core->version != SNAG_BINARY_CORE_VERSION || !core->data || core->size < CORE_HEADER)
+        return snag_errno(EINVAL);
     const unsigned char *bytes = core->data;
-    if (bytes[0] != 1u || bytes[1] || bytes[2] != BLOCKS || bytes[3]) return snag_errno(EINVAL);
+    if (bytes[0] != SNAG_BINARY_CORE_VERSION || bytes[1] || bytes[2] != BLOCKS || bytes[3])
+        return snag_errno(EINVAL);
     sources->active_compact = get_number(bytes + 4u);
     sources->response_start = get_number(bytes + 12u);
+    *voice = get_number(bytes + 20u);
     size_t position = CORE_HEADER;
     for (size_t i = 0u; i < BLOCKS; ++i) {
-        uint64_t size = get_number(bytes + 20u + i * 8u);
+        uint64_t size = get_number(bytes + 28u + i * 8u);
         if (!size || size > core->size - position) return snag_errno(EINVAL);
         blocks[i] = (struct snag_binary_checkpoint_section){.data = bytes + position,
             .size = (size_t)size};
@@ -200,8 +211,9 @@ snag_binary_checkpoint_core_read(int fd, const struct snag_binary_checkpoint_fra
     struct snag_binary_checkpoint_payloads payloads;
     struct snag_binary_checkpoint_inputs_state input_state = {0};
     struct snag_binary_checkpoint_payloads_state payload_state = {0};
+    uint64_t voice;
     int rc = -1;
-    if (split(&frame->core, blocks, &sources) < 0) goto done;
+    if (split(&frame->core, blocks, &sources, &voice) < 0) goto done;
 #define DECODE(n, f, v) snag_binary_checkpoint_##f##_decode(blocks[n].data, blocks[n].size, v)
     if (DECODE(CONTROLS, controls, &state) < 0 ||
         DECODE(ACCOUNTING, accounting, &accounting) < 0 ||
@@ -221,6 +233,8 @@ snag_binary_checkpoint_core_read(int fd, const struct snag_binary_checkpoint_fra
     state.usage_totals = accounting.usage_totals;
     sources.calls = calls.source;
     const struct snag_binary_anchor *anchor = &frame->boundary;
+    if (voice && snag_binary_checkpoint_voice_read(fd, anchor, voice, state.id,
+        &state.voice_history) < 0) goto done;
     if (snag_binary_checkpoint_texts_read(fd, anchor, &sources.texts, &state.strings) < 0 ||
         snag_binary_checkpoint_calls_read(fd, anchor, &calls, &state, &state.pending_calls) < 0 ||
         snag_binary_checkpoint_processes_read(fd, anchor, &processes, &state,

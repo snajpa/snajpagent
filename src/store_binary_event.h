@@ -690,12 +690,14 @@ int snag_binary_archive_fields_decode(uint16_t kind, const void *data, size_t si
 /* Revalidates kind+bytes, ignoring derived type/mask/value views. */
 int snag_binary_archive_fields_json(const struct snag_binary_archive_fields *fields, json_t **out);
 
-/* Historical JSONL coordinates need mapping before binary storage use. The
- * codec preserves fields; it neither resolves a cursor nor adopts history. */
+/* Version2 distinguishes a native sequence reference from literal JSONL
+ * coordinates. Native references carry only begin_seq; their physical cursor
+ * is derived from the authenticated containing batch. Version1 is literal. */
 struct snag_binary_voice_adopted {
     struct snag_binary_voice_transfer transfer;
     uint64_t begin_offset, begin_seq;
     unsigned char begin_sha256[32];
+    bool native;
 };
 
 enum snag_binary_tool_status {

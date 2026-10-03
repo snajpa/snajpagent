@@ -104,7 +104,7 @@ verify_checkpoint(int fd, const struct snag_binary_anchor *boundary,
     struct snag_binary_checkpoint_frame frame;
     if (source_header(fd, &identity, &root) < 0) return -1;
     if (snag_binary_checkpoint_frame_decode(bytes, size, &identity, boundary, &frame) != 0 ||
-        frame.core.version != 1u || frame.provider.version != 1u) {
+        frame.core.version != SNAG_BINARY_CORE_VERSION || frame.provider.version != 1u) {
         return snag_fail(error, error_size, EINVAL, "invalid native checkpoint frame");
     }
     struct snag_binary_checkpoint_provider view;

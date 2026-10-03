@@ -3775,12 +3775,16 @@ decode_voice_transfer(struct fields *fields, struct snag_binary_voice_transfer *
 static int
 encode_voice_adopted(struct snag_buf *out, const struct snag_binary_voice_adopted *value)
 {
-    if (!value->begin_offset || value->begin_offset > INT64_MAX ||
-        value->begin_seq < 2u || value->begin_seq > INT64_MAX) {
+    static const unsigned char zero[32] = {0};
+    if (value->begin_seq < 2u || value->begin_seq > INT64_MAX ||
+        (value->native ? (value->begin_offset || memcmp(value->begin_sha256, zero, 32u)) :
+        (!value->begin_offset || value->begin_offset > INT64_MAX))) {
         return invalid();
     }
-    if (encode_voice_transfer(out, &value->transfer) < 0 ||
-        write_uint(out, value->begin_offset, 8u) < 0 ||
+    if (write_uint(out, value->native, 1u) < 0 ||
+        encode_voice_transfer(out, &value->transfer) < 0) return -1;
+    if (value->native) return write_uint(out, value->begin_seq, 8u);
+    if (write_uint(out, value->begin_offset, 8u) < 0 ||
         write_uint(out, value->begin_seq, 8u) < 0) {
         return -1;
     }
@@ -3790,8 +3794,15 @@ encode_voice_adopted(struct snag_buf *out, const struct snag_binary_voice_adopte
 static bool
 decode_voice_adopted(struct fields *fields, struct snag_binary_voice_adopted *out)
 {
-    return decode_voice_transfer(fields, &out->transfer) &&
-        read_uint(fields, 8u, &out->begin_offset) && out->begin_offset &&
+    uint64_t native = 0u;
+    if (fields->references && (!read_uint(fields, 1u, &native) || native > 1u)) return false;
+    out->native = native != 0u;
+    if (!decode_voice_transfer(fields, &out->transfer)) return false;
+    if (out->native) {
+        return read_uint(fields, 8u, &out->begin_seq) && out->begin_seq >= 2u &&
+            out->begin_seq <= INT64_MAX;
+    }
+    return read_uint(fields, 8u, &out->begin_offset) && out->begin_offset &&
         out->begin_offset <= INT64_MAX && read_uint(fields, 8u, &out->begin_seq) &&
         out->begin_seq >= 2u && out->begin_seq <= INT64_MAX &&
         read_bytes(fields, out->begin_sha256, 32u);
@@ -4387,13 +4398,13 @@ snag_binary_event_version(enum snag_binary_kind kind)
         kind == SNAG_BINARY_RULE_LOG || kind == SNAG_BINARY_RULE_TRANSFORM ||
         kind == SNAG_BINARY_AUDIO_USAGE || kind == SNAG_BINARY_VOICE_EVENT ||
         kind == SNAG_BINARY_VOICE_TRANSFER_RECORD || kind == SNAG_BINARY_VOICE_TRANSFER_SEALED ||
-        kind == SNAG_BINARY_VOICE_TRANSFER_ADOPTED ||
         (kind >= SNAG_BINARY_COMPACTION_STARTED && kind <= SNAG_BINARY_CONTEXT_REBASED) ||
         (kind >= SNAG_BINARY_DOWNLOAD_QUEUED && kind <= SNAG_BINARY_DOWNLOADS_CLEARED) ||
         kind == SNAG_BINARY_RESPONSE_CAPACITY_REJECTED) {
         return 1u;
     }
-    if (kind >= SNAG_BINARY_INPUT_RECEIVED && kind <= SNAG_BINARY_FUTURE_TURN_EDITED) return 2u;
+    if (kind == SNAG_BINARY_VOICE_TRANSFER_ADOPTED ||
+        (kind >= SNAG_BINARY_INPUT_RECEIVED && kind <= SNAG_BINARY_FUTURE_TURN_EDITED)) return 2u;
     if ((kind >= SNAG_BINARY_SESSION_CREATED && kind <= SNAG_BINARY_SESSION_OPTIONS) ||
         timer_kind(kind) || goal_kind(kind) || hosted_search_kind(kind) ||
         kind == SNAG_BINARY_TURN_STARTED ||

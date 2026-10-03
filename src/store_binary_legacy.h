@@ -21,6 +21,7 @@
  * Results and process closure preserve typed values, excerpts, options and log coordinates.
  * IRC retains watermark/classification presence, snapshots and typed admitted inputs.
  * Voice sealing/adoption retains identities, counters and original begin coordinates.
+ * Native adoption starts require journal-aware resolution and return ENOTSUP here.
  * Voice archives use the enclosed public field profile, including checkpoint views
  * and unassigned source names. Literal ordinary typed snapshots also decode.
  * Native input references return ENOTSUP here; journal-aware resolution is separate.

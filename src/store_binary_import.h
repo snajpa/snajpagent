@@ -30,8 +30,10 @@ struct snag_binary_import_result {
  * remain literal. Receipt-backed turns reuse matching fields from the current
  * input or queue head, preserving creation/content and latest-edit text ownership.
  * Source identity is rechecked after verification. Reports and retains an
- * incomplete source tail without repair. Coordinate-bearing results/adoption
- * fail until relocation is implemented.
+ * incomplete source tail without repair. Adoption cursors are verified in the
+ * legacy prefix and replaced by native logical starts; physical cursors are
+ * independently reconstructed for comparison. Coordinate-bearing process results
+ * still fail until their relocation is implemented.
  * No other reference construction, provider checkpoint, index, fsync, format selection,
  * old-writer exclusion or publication is provided by this test-linked stage. */
 int snag_store_import_binary_journal(struct snag_session *source, int destination,

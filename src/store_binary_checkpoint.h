@@ -254,7 +254,13 @@ void snag_binary_checkpoint_payloads_free(struct snag_binary_checkpoint_payloads
 int snag_binary_checkpoint_epochs_check(int fd, const struct snag_binary_anchor *,
     const struct snag_binary_checkpoint_sources *, const struct snag_session *);
 
-/* Version-1 core candidate: seven field-shaped components and two accepting
+/* Resolve an adoption and its logical begin within a verified native boundary.
+ * Returns a fresh physical cursor; never accepts stored JSONL coordinates.
+ * Snapshot membership/authority belongs to the enclosing checkpoint consumer. */
+int snag_binary_checkpoint_voice_read(int fd, const struct snag_binary_anchor *,
+    uint64_t sequence, const char *session_id, struct snag_voice_history_root *out);
+
+/* Version-2 core candidate: seven field-shaped components, an adoption and two accepting
  * epochs. Encode appends atomically, including when inputs borrow its buffer.
  * Read requires a frame already decoded against an independently authenticated
  * identity/boundary in this immutable journal. It returns new state-only and
@@ -263,9 +269,10 @@ int snag_binary_checkpoint_epochs_check(int fd, const struct snag_binary_anchor 
  *
  * This is provisional assembly, not resume authority. Latest membership and
  * lifecycle validation, provider decoding, native process scan cursors and
- * joint adoption remain with the enclosing consumer. Legacy voice-history
- * cursors are rejected until their native relocation is implemented. Resources,
+ * joint adoption remain with the enclosing consumer. Voice history names its
+ * native adoption record; its cursor is reconstructed from the journal. Resources,
  * callbacks, derived caches and unreachable private string owners are omitted. */
+#define SNAG_BINARY_CORE_VERSION 2u
 int snag_binary_checkpoint_core_encode(struct snag_buf *,
     const struct snag_binary_checkpoint_sources *, const struct snag_session *);
 int snag_binary_checkpoint_core_read(int fd, const struct snag_binary_checkpoint_frame *,

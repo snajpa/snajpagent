@@ -13,7 +13,7 @@
 #include <unistd.h>
 
 #define COUNT(a) (sizeof(a) / sizeof((a)[0]))
-#define CORE_HEADER 76u
+#define CORE_HEADER 84u
 
 static const struct slot { const char *key; size_t offset; } slots[] = {
 #define SLOT(f) {#f, offsetof(struct snag_session, f)}
@@ -150,6 +150,7 @@ encode_checks(const struct snag_buf *core, const struct snag_binary_checkpoint_s
     assert(snag_binary_checkpoint_core_encode(&output, sources, NULL) < 0);
     for (size_t i = 0u; i < 5u; ++i) {
         struct snag_session unsupported = *state;
+        unsupported.voice_history = (struct snag_voice_history_root){0};
         switch (i) {
         case 0u: unsupported.voice_history.adopted_seq = 1u; break;
         case 1u: unsupported.voice_history.transfer_id[0] = '1'; break;
@@ -158,7 +159,7 @@ encode_checks(const struct snag_buf *core, const struct snag_binary_checkpoint_s
         default: unsupported.voice_history.begin.prev_sha256[0] = '1'; break;
         }
         assert(snag_binary_checkpoint_core_encode(&output, sources, &unsupported) < 0 &&
-            errno == ENOTSUP);
+            errno == EINVAL);
         assert(output.len == 6u && !memcmp(output.data, "prefix", 6u));
     }
     snag_buf_free(&output);
@@ -183,7 +184,7 @@ golden_header(const struct snag_binary_checkpoint_sources *original,
     const struct snag_session *snapshot)
 {
     /* Structural prefix only: these epochs do not claim a valid journal state. */
-    const unsigned char golden[] = {1u, 0u, 7u, 0u, 8u, 7u, 6u, 5u, 4u, 3u, 2u, 1u,
+    const unsigned char golden[] = {2u, 0u, 7u, 0u, 8u, 7u, 6u, 5u, 4u, 3u, 2u, 1u,
         0x18u, 0x17u, 0x16u, 0x15u, 0x14u, 0x13u, 0x12u, 0x11u};
     struct snag_binary_checkpoint_sources sources = *original;
     sources.active_compact = 0x0102030405060708ULL;
@@ -210,24 +211,31 @@ bad_wire(int fd, struct snag_binary_checkpoint_frame frame)
     copy[size] = 0u;
     reject(fd, &frame);
     frame.core.size = size;
-    frame.core.version = 2u;
-    reject(fd, &frame);
     frame.core.version = 1u;
+    reject(fd, &frame);
+    frame.core.version = SNAG_BINARY_CORE_VERSION;
     size_t bad[] = {0u, 1u, 2u, 3u};
     for (size_t i = 0u; i < COUNT(bad); ++i) {
         copy[bad[i]] ^= 0x80u;
         reject(fd, &frame);
         copy[bad[i]] ^= 0x80u;
     }
+    uint64_t voice = number(copy + 20u);
+    uint64_t bad_voice[] = {1u, 2u, frame.boundary.next_seq, UINT64_MAX};
+    for (size_t i = 0u; i < COUNT(bad_voice); ++i) {
+        put_number(copy + 20u, bad_voice[i]);
+        reject(fd, &frame);
+    }
+    put_number(copy + 20u, voice);
     size_t offset = CORE_HEADER;
     for (size_t i = 0u; i < 7u; ++i) {
         unsigned char saved[8];
-        memcpy(saved, copy + 20u + i * 8u, sizeof(saved));
-        memset(copy + 20u + i * 8u, 0xff, sizeof(saved));
+        memcpy(saved, copy + 28u + i * 8u, sizeof(saved));
+        memset(copy + 28u + i * 8u, 0xff, sizeof(saved));
         reject(fd, &frame);
-        memset(copy + 20u + i * 8u, 0, sizeof(saved));
+        memset(copy + 28u + i * 8u, 0, sizeof(saved));
         reject(fd, &frame);
-        memcpy(copy + 20u + i * 8u, saved, sizeof(saved));
+        memcpy(copy + 28u + i * 8u, saved, sizeof(saved));
         copy[offset] = 2u;
         reject(fd, &frame);
         copy[offset] = 1u;
@@ -267,7 +275,8 @@ test_store_binary_core_state(int fd, const struct snag_binary_anchor *anchor,
     unsigned char header[SNAG_BINARY_HEADER_SIZE];
     assert(snag_pread(fd, header, sizeof(header), 0) == sizeof(header));
     struct snag_binary_checkpoint_frame frame = {.boundary = *anchor, .generation = 1u,
-        .core = {.version = 1u, .data = (const unsigned char *)core.data, .size = core.len},
+        .core = {.version = SNAG_BINARY_CORE_VERSION,
+            .data = (const unsigned char *)core.data, .size = core.len},
         /* Opaque framing fixture only; this consumer does not decode a provider view. */
         .provider = {.version = 1u, .data = (const unsigned char *)"x", .size = 1u}};
     struct snag_binary_anchor root;

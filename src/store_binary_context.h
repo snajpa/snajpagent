@@ -30,9 +30,9 @@ int snag_store_reconcile_binary_context_prefix(struct snag_session *source,
  * both decoded frame sections must equal the canonical core and provider recipe
  * at that boundary. All source-recheck/atomic adoption rules above apply. Success
  * adopts core state read from the frame and a provider seam materialized from
- * its recipe, using the replay-verified canonical payload pool. Unsupported core
- * fields (currently nonempty voice roots) retain ENOTSUP. This still reads the
- * complete prefix: no efficient loader, suffix cursor or publication is supplied. */
+ * its recipe, using the replay-verified canonical payload pool. Voice roots are
+ * reconstructed from native adoption references. This still reads the complete
+ * prefix: no efficient loader, suffix cursor or publication is supplied. */
 int snag_store_verify_binary_context_checkpoint(struct snag_session *source,
     struct snag_session *restored, const struct snag_binary_anchor *prefix,
     const void *checkpoint, size_t checkpoint_size, struct snag_binary_recovery *recovery,

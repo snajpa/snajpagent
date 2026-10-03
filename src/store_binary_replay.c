@@ -527,9 +527,97 @@ done:
 }
 
 static int
+resolve_voice(const struct replay_context *context, const struct snag_binary_record *record,
+    struct snag_binary_event *event)
+{
+    if (snag_binary_event_decode(record, event) < 0) return -1;
+    struct snag_binary_voice_adopted *value = &event->data.voice_transfer_adopted;
+    if (!value->native) return snag_errno(ENOTSUP);
+    if (value->begin_seq >= context->sequence ||
+        value->transfer.count > context->sequence - value->begin_seq) return snag_errno(EINVAL);
+    struct snag_buf scratch = {.max = SNAG_BINARY_BATCH_MAX};
+    struct snag_binary_batch batch;
+    struct snag_binary_anchor before;
+    int rc = snag_binary_batch_find(context->fd, &context->through, value->begin_seq,
+        &scratch, &batch, &before);
+    if (!rc) {
+        /* The logical start can be inside a batch. The native cursor resumes
+         * from its authenticated predecessor and skips earlier records. */
+        value->begin_offset = before.end;
+        memcpy(value->begin_sha256, before.digest, sizeof(value->begin_sha256));
+        value->native = false;
+    }
+    snag_buf_free(&scratch);
+    return rc;
+}
+
+int
+snag_binary_checkpoint_voice_read(int fd, const struct snag_binary_anchor *anchor,
+    uint64_t sequence, const char *id, struct snag_voice_history_root *out)
+{
+    if (!anchor || !out || !snag_hex_is_lower(id, SNAG_ID_HEX_LEN) ||
+        sequence < 2u || sequence >= anchor->next_seq) return snag_errno(EINVAL);
+    struct snag_buf scratch = {.max = SNAG_BINARY_BATCH_MAX};
+    struct snag_binary_batch batch;
+    struct snag_binary_anchor before;
+    struct snag_binary_record record;
+    struct snag_binary_event event;
+    size_t offset = SNAG_BINARY_BATCH_HEADER_SIZE;
+    uint64_t found;
+    int rc = snag_binary_batch_find(fd, anchor, sequence, &scratch, &batch, &before);
+    if (rc < 0) goto done;
+    while ((rc = snag_binary_record_next(&batch, &offset, &record, &found)) == 0) {
+        if (found == sequence) break;
+    }
+    if (rc || record.kind != SNAG_BINARY_VOICE_TRANSFER_ADOPTED) {
+        rc = snag_errno(EINVAL);
+        goto done;
+    }
+    struct replay_context context = {.fd = fd, .through = *anchor, .sequence = sequence};
+    rc = resolve_voice(&context, &record, &event);
+    if (rc < 0) goto done;
+    const struct snag_binary_voice_adopted *value = &event.data.voice_transfer_adopted;
+    char target[SNAG_ID_HEX_LEN + 1u];
+    bytes_hex(target, value->transfer.target, sizeof(value->transfer.target));
+    if (strcmp(target, id)) {
+        rc = snag_errno(EINVAL);
+        goto done;
+    }
+    struct snag_voice_history_root root = {.adopted_seq = sequence,
+        .begin = {.offset = (int64_t)value->begin_offset, .next_seq = value->begin_seq}};
+    bytes_hex(root.transfer_id, value->transfer.id, sizeof(value->transfer.id));
+    bytes_hex(root.begin.prev_sha256, value->begin_sha256, sizeof(value->begin_sha256));
+    *out = root;
+done:
+    snag_buf_free(&scratch);
+    return rc;
+}
+
+static int
+project_voice(const struct replay_context *context, const struct snag_binary_record *record,
+    const char **type, json_t **data)
+{
+    struct snag_binary_event event;
+    if (resolve_voice(context, record, &event) < 0) return -1;
+    struct snag_buf literal = {.max = SNAG_MAX_EVENT_LINE};
+    int rc = snag_binary_event_encode(&literal, &event);
+    if (!rc) {
+        struct snag_binary_record resolved = *record;
+        resolved.payload = literal.data;
+        resolved.size = literal.len;
+        resolved.version = snag_binary_event_version(event.kind);
+        rc = snag_binary_legacy_decode(&resolved, type, data);
+    }
+    snag_buf_free(&literal);
+    return rc;
+}
+
+static int
 project_record(const struct replay_context *context, const struct snag_session *state,
     const struct snag_binary_record *record, const char **type, json_t **data)
 {
+    if (record->kind == SNAG_BINARY_VOICE_TRANSFER_ADOPTED)
+        return project_voice(context, record, type, data);
     if (record->kind == SNAG_BINARY_RESPONSE_INTERRUPTED ||
         record->kind == SNAG_BINARY_RESPONSE_FAILED ||
         record->kind == SNAG_BINARY_RESPONSE_OUTPUT_CORRECTION) {
@@ -745,10 +833,9 @@ reduce_record(struct replay_context *context, struct snag_session *state,
             "cannot project native record %llu (kind %u, version %u)",
             (unsigned long long)sequence, record->kind, record->version);
     int rc;
-    if (record->kind == SNAG_BINARY_VOICE_TRANSFER_ADOPTED ||
-        ((record->kind == SNAG_BINARY_TOOL_FINISHED ||
+    if ((record->kind == SNAG_BINARY_TOOL_FINISHED ||
           record->kind == SNAG_BINARY_PROCESS_CLOSED) &&
-         json_object_get(json_object_get(data, "result"), "output_ref"))) {
+         json_object_get(json_object_get(data, "result"), "output_ref")) {
         rc = snag_fail(error, error_size, ENOTSUP,
             "native journal coordinate resolution is not integrated for record %llu",
             (unsigned long long)sequence);
