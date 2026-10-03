@@ -132,6 +132,7 @@ test_all_prefixes(void)
     struct snag_binary_identity identity = {.created_ms = 42u};
     identity.id[0] = 17u;
     struct snag_binary_index_tree tree = {0};
+    struct snag_binary_index_tree logical = {0};
     unsigned char roots[258][32];
     unsigned char entries[257u * SNAG_BINARY_INDEX_ENTRY_SIZE];
     struct snag_buf image = {.max = 65536u};
@@ -144,6 +145,8 @@ test_all_prefixes(void)
             assert(!snag_binary_index_entry_encode(
                 entries + (n - 1u) * SNAG_BINARY_INDEX_ENTRY_SIZE, &identity, &entry));
             assert(!snag_binary_index_tree_append(&image, &tree, &identity, &entry));
+            assert(!snag_binary_index_tree_append(NULL, &logical, &identity, &entry));
+            assert(!memcmp(&tree, &logical, sizeof(tree)));
         }
         assert(tree.count == n);
         assert(!snag_binary_index_tree_root(&tree, roots[n]));
@@ -289,6 +292,91 @@ test_corruptions(void)
     snag_buf_free(&image);
 }
 
+/* Synthetic frontiers exercise large carries without creating enormous files.
+ * Python hashlib/struct and recursive peak folding supplied these fixed roots. */
+static void
+test_logical_frontier(void)
+{
+    struct snag_binary_identity identity = {.created_ms = 42u};
+    identity.id[0] = 17u;
+    struct snag_binary_index_tree tree = {.count = (UINT64_C(1) << 56u) - 1u};
+    for (unsigned int level = 0u; level < 56u; ++level) {
+        unsigned char bytes[8] = {0};
+        bytes[0] = (unsigned char)level;
+        hash_bytes(bytes, sizeof(bytes), tree.peaks[level]);
+    }
+    unsigned char root[32];
+    assert(!snag_binary_index_tree_root(&tree, root));
+    assert_hex(root, "e89c4f9ec8fc35e54542aa8a7e3da055399f95a865a6587badbd412143a159ff");
+    struct snag_binary_index_tree saved = tree;
+    struct snag_binary_index_entry entry = {.sequence = tree.count + 1u,
+        .batch_offset = UINT64_C(1) << 62u, .record_offset = 112u, .kind = 77u};
+    memset(entry.batch_digest, 0x3c, sizeof(entry.batch_digest));
+    struct snag_buf out = {.max = 4096u};
+    assert(!snag_buf_append(&out, "kept", 4u));
+    assert(snag_binary_index_tree_append(&out, &tree, &identity, &entry) < 0);
+    assert(errno == EOVERFLOW && out.len == 4u && !memcmp(out.data, "kept", 4u));
+    assert(!memcmp(&saved, &tree, sizeof(tree)));
+    assert(!snag_binary_index_tree_append(NULL, &tree, &identity, &entry));
+    assert(tree.count == entry.sequence);
+    assert(!snag_binary_index_tree_root(&tree, root));
+    assert_hex(root, "fd9341ee015066d548ae15c054625b3299795ed8565945f5d8efe9c6b8b7968f");
+    for (unsigned int level = 0u; level < 56u; ++level) {
+        unsigned char zero[32] = {0};
+        assert(!memcmp(tree.peaks[level], zero, sizeof(zero)));
+    }
+    int64_t end = -7;
+    assert(snag_binary_index_end(tree.count, &end) < 0 && errno == EOVERFLOW && end == -7);
+    struct snag_binary_index_tree kept = tree;
+    entry.sequence++;
+    entry.kind = 0u;
+    assert(snag_binary_index_tree_append(NULL, &tree, &identity, &entry) < 0);
+    assert(!memcmp(&kept, &tree, sizeof(tree)));
+
+    struct snag_binary_anchor before = {.end = (UINT64_C(1) << 62u) + 8192u,
+        .previous = UINT64_C(1) << 62u, .next_seq = saved.count + 1u};
+    memset(before.digest, 0x3c, sizeof(before.digest));
+    struct snag_binary_record records[2] = {
+        {.kind = 0x8fffu, .version = 1u, .flags = SNAG_BINARY_RECORD_OPTIONAL},
+        {.kind = 0x8fffu, .version = 1u, .flags = SNAG_BINARY_RECORD_OPTIONAL}
+    };
+    struct snag_buf batch = {.max = SNAG_BINARY_BATCH_MAX};
+    struct snag_binary_anchor after;
+    assert(!snag_binary_batch_encode(&batch, &before, records, 2u, 0u, &after));
+    tree = saved;
+    assert(snag_binary_index_tree_append_batch(&out, &tree, &identity,
+        &before, &after, batch.data, batch.len) < 0 && errno == EOVERFLOW);
+    assert(!memcmp(&saved, &tree, sizeof(tree)) && out.len == 4u);
+    batch.data[batch.len - 1u] ^= 1u;
+    assert(snag_binary_index_tree_append_batch(NULL, &tree, &identity,
+        &before, &after, batch.data, batch.len) < 0 && errno == EINVAL);
+    assert(!memcmp(&saved, &tree, sizeof(tree)));
+    batch.data[batch.len - 1u] ^= 1u;
+    assert(!snag_binary_index_tree_append_batch(NULL, &tree, &identity,
+        &before, &after, batch.data, batch.len));
+    assert(tree.count == after.next_seq - 1u);
+    struct snag_buf entries = {.max = SNAG_BINARY_INDEX_BATCH_MAX};
+    assert(!snag_binary_index_append_batch(&entries, &identity, &before, &after,
+        batch.data, batch.len));
+    for (size_t i = 0u; i < 2u; ++i) {
+        assert(!snag_binary_index_entry_decode(entries.data + i * SNAG_BINARY_INDEX_ENTRY_SIZE,
+            SNAG_BINARY_INDEX_ENTRY_SIZE, &identity, before.next_seq + i, &entry));
+        assert(!snag_binary_index_tree_append(NULL, &saved, &identity, &entry));
+    }
+    assert(!memcmp(&saved, &tree, sizeof(tree)));
+    tree.count = UINT64_MAX;
+    for (unsigned int level = 0u; level < 64u; ++level) {
+        unsigned char bytes[8] = {0};
+        bytes[0] = (unsigned char)level;
+        hash_bytes(bytes, sizeof(bytes), tree.peaks[level]);
+    }
+    assert(!snag_binary_index_tree_root(&tree, root));
+    assert_hex(root, "ea14713215f622e1edf677a4c48b3d086a283d6ca29a9909f391c907c428aaa4");
+    snag_buf_free(&entries);
+    snag_buf_free(&batch);
+    snag_buf_free(&out);
+}
+
 static void
 test_failures(void)
 {
@@ -305,7 +393,7 @@ test_failures(void)
     entry.sequence = 2u;
     assert(snag_binary_index_tree_append(&out, &tree, &identity, &entry) < 0);
     entry = entry_at(1u);
-    assert(snag_binary_index_tree_append(NULL, &tree, &identity, &entry) < 0);
+    assert(snag_binary_index_tree_append(NULL, NULL, &identity, &entry) < 0);
     assert(snag_binary_index_tree_append(&out, NULL, &identity, &entry) < 0);
     assert(snag_binary_index_tree_append(&out, &tree, NULL, &entry) < 0);
     assert(snag_binary_index_tree_append(&out, &tree, &identity, NULL) < 0);
@@ -313,9 +401,10 @@ test_failures(void)
     memset(root, 0x5a, sizeof(root));
     assert(snag_binary_index_tree_root(NULL, root) < 0);
     assert(snag_binary_index_tree_root(&tree, NULL) < 0);
-    tree.count = UINT64_MAX;
-    assert(snag_binary_index_tree_root(&tree, root) < 0 && errno == EOVERFLOW);
     for (size_t i = 0u; i < sizeof(root); ++i) assert(root[i] == 0x5a);
+    tree.count = UINT64_MAX;
+    assert(!snag_binary_index_tree_root(&tree, root));
+    assert(snag_binary_index_tree_append(NULL, &tree, &identity, &entry) < 0);
     assert(snag_binary_index_tree_append(&out, &tree, &identity, &entry) < 0);
     int64_t offset = -7;
     assert(snag_binary_index_end(UINT64_MAX, &offset) < 0 && offset == -7);
@@ -346,4 +435,5 @@ test_store_binary_index_tree(void)
     test_all_prefixes();
     test_corruptions();
     test_failures();
+    test_logical_frontier();
 }

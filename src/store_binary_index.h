@@ -49,8 +49,13 @@ int snag_binary_index_offset(uint64_t sequence, int64_t *out);
 int snag_binary_index_end(uint64_t count, int64_t *out);
 
 /* RFC 9162 tree hash over encoded entries: H(0 || entry), H(1 || left || right).
+ * Logical root calculation is independent of persisted cache addressability.
  * A root supplied from this cache itself grants no canonical membership. */
 int snag_binary_index_tree_root(const struct snag_binary_index_tree *, unsigned char out[32]);
+/* Append advances a staged frontier atomically. A non-NULL output additionally
+ * emits cache bytes and checks their physical file geometry. NULL output advances
+ * only the logical frontier, so unavailable/unrepresentable derived storage does
+ * not limit canonical journaling. Entry/anchor validation still applies. */
 int snag_binary_index_tree_append(struct snag_buf *, struct snag_binary_index_tree *,
     const struct snag_binary_identity *, const struct snag_binary_index_entry *);
 int snag_binary_index_tree_append_batch(struct snag_buf *, struct snag_binary_index_tree *,

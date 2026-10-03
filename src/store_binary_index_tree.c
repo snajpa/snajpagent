@@ -33,8 +33,6 @@ int
 snag_binary_index_tree_root(const struct snag_binary_index_tree *tree, unsigned char out[32])
 {
     if (!tree || !out) return snag_errno(EINVAL);
-    int64_t end;
-    if (snag_binary_index_end(tree->count, &end) < 0) return -1;
     unsigned char root[32];
     bool found = false;
     for (unsigned int level = 0u; level < 64u; ++level) {
@@ -60,7 +58,7 @@ static int
 append_leaf(struct snag_buf *out, struct snag_binary_index_tree *tree,
     const unsigned char entry[SNAG_BINARY_INDEX_ENTRY_SIZE])
 {
-    if (snag_buf_append(out, entry, SNAG_BINARY_INDEX_ENTRY_SIZE) < 0) {
+    if (out && snag_buf_append(out, entry, SNAG_BINARY_INDEX_ENTRY_SIZE) < 0) {
         return -1;
     }
     unsigned char root[32];
@@ -68,7 +66,7 @@ append_leaf(struct snag_buf *out, struct snag_binary_index_tree *tree,
     unsigned int level = 0u;
     for (uint64_t carried = tree->count; carried & 1u; carried >>= 1u) {
         parent_hash(tree->peaks[level], root, root);
-        if (snag_buf_append(out, root, sizeof(root)) < 0) return -1;
+        if (out && snag_buf_append(out, root, sizeof(root)) < 0) return -1;
         memset(tree->peaks[level], 0, sizeof(tree->peaks[level]));
         ++level;
     }
@@ -81,19 +79,19 @@ int
 snag_binary_index_tree_append(struct snag_buf *out, struct snag_binary_index_tree *tree,
     const struct snag_binary_identity *identity, const struct snag_binary_index_entry *entry)
 {
-    if (!out || !tree || !identity || !entry || tree->count == UINT64_MAX ||
+    if (!tree || !identity || !entry || tree->count == UINT64_MAX ||
         entry->sequence != tree->count + 1u) {
         return snag_errno(EINVAL);
     }
     int64_t end;
-    if (snag_binary_index_end(entry->sequence, &end) < 0) return -1;
+    if (out && snag_binary_index_end(entry->sequence, &end) < 0) return -1;
     unsigned char leaf[SNAG_BINARY_INDEX_ENTRY_SIZE];
     if (snag_binary_index_entry_encode(leaf, identity, entry) < 0) return -1;
     unsigned char storage[SNAG_BINARY_INDEX_ENTRY_SIZE + 64u * SNAG_BINARY_INDEX_HASH_SIZE];
     struct snag_buf staged = {.data = storage, .cap = sizeof(storage), .max = sizeof(storage)};
     struct snag_binary_index_tree next = *tree;
-    if (append_leaf(&staged, &next, leaf) < 0 ||
-        snag_buf_append(out, staged.data, staged.len) < 0) {
+    if (append_leaf(out ? &staged : NULL, &next, leaf) < 0 ||
+        (out && snag_buf_append(out, staged.data, staged.len) < 0)) {
         return -1;
     }
     *tree = next;
@@ -105,13 +103,13 @@ snag_binary_index_tree_append_batch(struct snag_buf *out, struct snag_binary_ind
     const struct snag_binary_identity *identity, const struct snag_binary_anchor *before,
     const struct snag_binary_anchor *after, const void *data, size_t size)
 {
-    if (!out || !tree || !identity || !before || !after || !after->next_seq ||
+    if (!tree || !identity || !before || !after || !after->next_seq ||
         tree->count == UINT64_MAX || before->next_seq != tree->count + 1u) {
         return snag_errno(EINVAL);
     }
     int64_t end;
-    if (snag_binary_index_end(tree->count, &end) < 0 ||
-        snag_binary_index_end(after->next_seq - 1u, &end) < 0) {
+    if (out && (snag_binary_index_end(tree->count, &end) < 0 ||
+        snag_binary_index_end(after->next_seq - 1u, &end) < 0)) {
         return -1;
     }
     struct snag_buf entries = {.max = SNAG_BINARY_INDEX_BATCH_MAX};
@@ -120,10 +118,10 @@ snag_binary_index_tree_append_batch(struct snag_buf *out, struct snag_binary_ind
     int rc = snag_binary_index_append_batch(&entries, identity, before, after, data, size);
     if (rc < 0) goto done;
     for (size_t offset = 0u; offset < entries.len; offset += SNAG_BINARY_INDEX_ENTRY_SIZE) {
-        rc = append_leaf(&staged, &next, entries.data + offset);
+        rc = append_leaf(out ? &staged : NULL, &next, entries.data + offset);
         if (rc < 0) goto done;
     }
-    rc = snag_buf_append(out, staged.data, staged.len);
+    rc = out ? snag_buf_append(out, staged.data, staged.len) : 0;
     if (!rc) *tree = next;
 done:
     snag_buf_free(&entries);

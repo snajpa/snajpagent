@@ -2090,6 +2090,14 @@ and batch builders preserve both caller bytes and frontier on failure. A batch
 needs at most 4 MiB plus 2 KiB of staged tree bytes, derived from its record count
 and a possible carry through existing peaks, in addition to the flat-entry builder.
 
+Logical frontier calculation is independent of the derived file's address range.
+The same single-entry and batch builders accept a null byte output to advance
+only the frontier, retaining entry/anchor validation and atomic failure behavior.
+With byte output requested they also enforce the persisted index geometry. An
+unavailable or unrepresentable cache can therefore stop cache output without
+stopping canonical journaling; positional cache readers always retain their file
+bounds. Hash-only batch advancement stages flat entries but no parent-byte image.
+
 A verifier requires an independently established root for the exact journal
 prefix. Taking a root from the index itself would discard the membership guarantee.
 A successful proof validates the location, kind, ordinal and batch digest recorded

@@ -473,6 +473,8 @@
   batch hash in the journal writer and importer.
   Discover the committed physical end from captured EOF with bounded delimiter
   scans and canonical batch checks, rejecting corrupt closed frames and tails.
+  Advance the logical history-index frontier independently of optional cache output
+  and its file-offset range.
 
 - Fix a memory leak when combining compaction summaries.
 

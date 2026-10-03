@@ -413,6 +413,10 @@ test_batch_limits(void)
         int64_t end;
         assert(!snag_binary_index_end(count, &end));
         assert(tree.count == count && forest.len == (size_t)end - SNAG_BINARY_INDEX_HEADER_SIZE);
+        struct snag_binary_index_tree logical = {0};
+        assert(!snag_binary_index_tree_append_batch(NULL, &logical, &identity,
+            &before, &after, bytes.data, bytes.len));
+        assert(!memcmp(&logical, &tree, sizeof(tree)));
         unsigned char root[32];
         assert(!snag_binary_index_tree_root(&tree, root));
         int fd = temporary_fd();
