@@ -455,6 +455,8 @@
   Relocate adopted voice-history starts and process-output ranges through canonical
   native references, preserving historical tool-result presentation metadata.
   Add fixed-width history-index codecs and canonical-batch hint verification.
+  Add the journal I/O worker with grouped durable acknowledgements and retained
+  batch reconciliation after write or sync failures.
 
 - Fix a memory leak when combining compaction summaries.
 

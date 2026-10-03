@@ -1999,6 +1999,40 @@ acknowledged input, completed tool work or committed history. The design adds no
 silent five-minute loss mode. A timed lossy mode would be a separate product
 contract and is not selected here.
 
+### Test-linked journal I/O owner
+
+The journal owner accepts one explicitly staged batch of immutable record copies.
+The engine keeps its staged state until a durable acknowledgement. Another batch
+can branch from the resulting anchor after that acknowledgement is consumed.
+This admission rule follows the engine's single pending state transition; the
+existing framing limits bound the copied record array and payload bytes.
+
+The worker uses the existing pthread and wake facilities. It encodes and hashes
+records, checks the expected file end, appends, and calls the platform file-sync
+primitive. A queued submission and a complete write both remain unacknowledged
+until sync succeeds. Completion preserves separate written and durable anchors.
+Pending calls and unconsumed completions prevent replacement or close; an idle
+close joins the worker and leaves the caller's journal descriptor and lock intact.
+
+An I/O failure retains the serialized batch and rejects new admissions. One
+explicit reconciliation attempt compares the existing tail with that exact
+batch, appends only a matching missing suffix, and synchronizes again. Conflicting
+bytes or an unexpected file end fail without truncation. The attempt reuses the
+original sequence range and digest. A second failure leaves the journal for
+fresh recovery; neither failure grants permission to release a dependent effect.
+Framing failures detected before I/O preserve the durable boundary and leave the
+owner available for a corrected submission.
+
+The file and its lock are supplied after independent recovery. The owner requires
+exclusive file access throughout its lifetime. It provides no semantic reducer,
+source recovery or checkpoint trust. The callback seam for file write/sync permits
+deterministic partial-write and ambiguous-sync fixtures; production uses the
+platform functions. Fixtures also exercise real file-size-limit write failure,
+maximum permitted batch sizes, immutable input copies, pending responsiveness,
+one sync for grouped records, and retries without duplicate appends. These checks
+exercise the journal primitive. Application transaction batching, checkpoint/index
+maintenance and power-loss qualification remain separate integration work.
+
 ## Compatibility and implementation order
 
 Ship new-format writing only after typed event coverage and recovery semantics
