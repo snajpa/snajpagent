@@ -1872,14 +1872,15 @@ Generation selection and durable publication remain writer responsibilities.
 ## Checkpoint file framing
 
 The test-linked frame codec binds separately versioned core and provider sections
-to one generation, journal identity and committed boundary. Its draft0.1 envelope
-uses a160-byte header, the core bytes, the provider bytes, and a48-byte footer.
+to one generation, journal identity and committed boundary. Its draft0.2 envelope
+uses a160-byte header, core bytes, provider bytes, optional access bytes, and a48-byte
+footer. Draft0.1 images require regeneration; the runtime backend remains JSONL.
 All integer fields are little-endian. Header offsets are:
 
 | Offset | Bytes | Field |
 | --- | --- | --- |
 | 0 | 8 | Magic `SNAGCHK` followed by NUL |
-| 8 | 2+2 | Frame major0, minor1 |
+| 8 | 2+2 | Frame major0, minor2 |
 | 12 | 4 | Header size160 |
 | 16 | 8 | Complete file size, including footer |
 | 24 | 8 | Nonzero checkpoint generation |
@@ -1891,9 +1892,16 @@ All integer fields are little-endian. Header offsets are:
 | 80 | 8 | Start of the last committed batch, or zero at the journal header |
 | 88 | 32 | Committed boundary digest |
 | 120 | 2+2 | Core and provider schema versions, each nonzero |
-| 124 | 4 | Reserved feature bits, zero |
+| 124 | 2+2 | Access schema version and reserved zero |
 | 128 | 8+8 | Core and provider section sizes, each nonzero |
-| 144 | 16 | Reserved, zero |
+| 144 | 8 | Access section size |
+| 152 | 8 | Reserved, zero |
+
+Access version and size are either both zero (absent) or both nonzero. Bounded
+resume requires the supported access codec and its validated working-set closure.
+The independent full-prefix verifier reconstructs from the journal and grants no
+authority to these lookup hints; it can verify core/provider-only images. Access
+bytes have their own streaming stage and are covered by the complete frame digest.
 
 The footer contains `SNAGCPE` followed by NUL, the repeated complete file size,
 and SHA-256 of every preceding byte, including the footer magic and size. The
@@ -2089,7 +2097,8 @@ absent. The positive result still requires canonical resolution.
 The version-1 access block stores a fixed frontier and sorted canonical locations
 for the caller's active working set. It contains no event payloads and requires
 no lifetime location table or addressable `history.idx` prefix. The field-shaped
-codec is test-linked; capture/image integration and materializers remain pending.
+codec and its framing/publication section are test-linked; working-set capture and
+materializer integration remain pending.
 
 | Offset | Field |
 |---|---|

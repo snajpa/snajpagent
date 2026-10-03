@@ -30,9 +30,13 @@ snag_binary_publication_new(int journal, int directory, const uint64_t generatio
 {
     if (journal < 0 || directory < 0 || !generations || !snapshot ||
         snapshot->core.data == snapshot->provider.data ||
+        (snapshot->access.data && (snapshot->access.data == snapshot->core.data ||
+            snapshot->access.data == snapshot->provider.data)) ||
         snapshot->core.len > snapshot->core.max || snapshot->core.len > snapshot->core.cap ||
         snapshot->provider.len > snapshot->provider.max ||
-        snapshot->provider.len > snapshot->provider.cap) {
+        snapshot->provider.len > snapshot->provider.cap ||
+        snapshot->access.len > snapshot->access.max ||
+        snapshot->access.len > snapshot->access.cap) {
         errno = EINVAL;
         return NULL;
     }
@@ -53,7 +57,8 @@ snag_binary_publication_new(int journal, int directory, const uint64_t generatio
         .identity = snapshot->identity, .boundary = snapshot->boundary,
         .generation = publication->result.generation,
         .core = {snapshot->core_version, snapshot->core.data, snapshot->core.len},
-        .provider = {snapshot->provider_version, snapshot->provider.data, snapshot->provider.len}
+        .provider = {snapshot->provider_version, snapshot->provider.data, snapshot->provider.len},
+        .access = {snapshot->access_version, snapshot->access.data, snapshot->access.len}
     };
     if (snag_binary_checkpoint_encoder_init(&publication->encoder, &frame) < 0) {
         free(publication);
@@ -260,5 +265,6 @@ snag_binary_publication_free(struct snag_binary_publication *publication)
     if (!publication) return;
     snag_buf_free(&publication->snapshot.core);
     snag_buf_free(&publication->snapshot.provider);
+    snag_buf_free(&publication->snapshot.access);
     free(publication);
 }

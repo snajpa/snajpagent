@@ -479,6 +479,8 @@
   and its file-offset range.
   Add field-shaped checkpoint access metadata for the frontier and working-set
   canonical locations, with sorted lookup and whole-image trust requirements.
+  Carry access metadata through draft checkpoint framing 0.2 and durable publication,
+  with bounded streaming and ownership transfer alongside core/provider sections.
 
 - Fix a memory leak when combining compaction summaries.
 

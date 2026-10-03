@@ -719,9 +719,13 @@ checkpoint_stream_matches(const struct snag_binary_checkpoint_frame *frame,
             offset < SNAG_BINARY_CHECKPOINT_HEADER_SIZE + frame->core.size) {
             assert(chunk == frame->core.data + offset - SNAG_BINARY_CHECKPOINT_HEADER_SIZE);
         } else if (offset >= SNAG_BINARY_CHECKPOINT_HEADER_SIZE + frame->core.size &&
-            offset < total - SNAG_BINARY_CHECKPOINT_FOOTER_SIZE) {
+            offset < SNAG_BINARY_CHECKPOINT_HEADER_SIZE + frame->core.size + frame->provider.size) {
             assert(chunk == frame->provider.data + offset -
                 SNAG_BINARY_CHECKPOINT_HEADER_SIZE - frame->core.size);
+        } else if (offset >= SNAG_BINARY_CHECKPOINT_HEADER_SIZE + frame->core.size +
+            frame->provider.size && offset < total - SNAG_BINARY_CHECKPOINT_FOOTER_SIZE) {
+            assert(chunk == frame->access.data + offset - SNAG_BINARY_CHECKPOINT_HEADER_SIZE -
+                frame->core.size - frame->provider.size);
         }
         offset += size;
         assert(encoder.position == offset);
@@ -735,6 +739,68 @@ checkpoint_stream_matches(const struct snag_binary_checkpoint_frame *frame,
 }
 
 static void
+test_checkpoint_access(struct snag_binary_checkpoint_frame frame)
+{
+    static const unsigned char access[] = {0u, 1u, 2u, 128u, 'a'};
+    frame.access = (struct snag_binary_checkpoint_section){1u, access, sizeof(access)};
+    struct snag_buf encoded = {.max = 1024u};
+    assert(!snag_binary_checkpoint_frame_encode(&encoded, &frame));
+    assert_bytes(encoded.data, encoded.len,
+        "534e414743484b0000000200a0000000dc0000000000000088776655443322110001020304050607"
+        "08090a0b0c0d0e0f0807060504030201470100000000000002000000000000000000000000000000"
+        "6000000000000000779a3cacad07d9d88bf0606fefb185d27a0df6754016387dad0e71953699a30e"
+        "01000200010000000300000000000000040000000000000005000000000000000000000000000000"
+        "630072800100700001028061534e414743504500dc000000000000009b076b48e8f985f2fabd5148"
+        "99685d032e3ce16bfed3c20e80b2d7164eb5a102");
+    size_t length = encoded.len;
+    for (size_t budget = 1u; budget <= length + 1u; ++budget) {
+        checkpoint_stream_matches(&frame, encoded.data, length, budget);
+    }
+    checkpoint_stream_matches(&frame, encoded.data, length, SIZE_MAX);
+    struct snag_binary_checkpoint_frame decoded;
+    assert(!snag_binary_checkpoint_frame_decode(encoded.data, length,
+        &frame.identity, &frame.boundary, &decoded));
+    assert(decoded.access.version == 1u && decoded.access.size == sizeof(access) &&
+        decoded.access.data == decoded.provider.data + decoded.provider.size &&
+        !memcmp(decoded.access.data, access, sizeof(access)));
+    for (size_t i = 0u; i < length; ++i) {
+        checkpoint_decode_fails(encoded.data, i, &frame.identity, &frame.boundary, 1);
+        encoded.data[i] ^= 1u;
+        checkpoint_decode_fails(encoded.data, length, &frame.identity, &frame.boundary, -1);
+        encoded.data[i] ^= 1u;
+    }
+    const size_t fields[] = {124u, 126u, 144u, 152u};
+    for (size_t i = 0u; i < sizeof(fields) / sizeof(*fields); ++i) {
+        unsigned char bad[220];
+        assert(sizeof(bad) == length);
+        memcpy(bad, encoded.data, length);
+        bad[fields[i]] ^= 1u;
+        rehash(bad, sizeof(bad));
+        checkpoint_decode_fails(bad, sizeof(bad), &frame.identity, &frame.boundary, -1);
+    }
+    assert(!snag_binary_checkpoint_frame_encode(&encoded, &decoded));
+    assert(encoded.len == 2u * length && !memcmp(encoded.data, encoded.data + length, length));
+    for (unsigned int fault = 0u; fault < 6u; ++fault) {
+        struct snag_binary_checkpoint_frame bad = frame;
+        if (fault == 0u) bad.access.version = 0u;
+        if (fault == 1u) bad.access.data = NULL;
+        if (fault == 2u) bad.access.size = 0u;
+        if (fault == 3u) bad.access.size = SIZE_MAX;
+        if (fault == 4u) bad.access.size = SIZE_MAX - bad.core.size - bad.provider.size;
+        if (fault == 5u) bad.access.size = INT64_MAX;
+        struct snag_binary_checkpoint_encoder encoder, saved;
+        memset(&encoder, 0x5a, sizeof(encoder));
+        memcpy(&saved, &encoder, sizeof(saved));
+        assert(snag_binary_checkpoint_encoder_init(&encoder, &bad) < 0);
+        assert(errno == (fault < 3u ? EINVAL : EOVERFLOW));
+        assert(!memcmp(&encoder, &saved, sizeof(saved)));
+        assert(snag_binary_checkpoint_frame_encode(&encoded, &bad) < 0);
+        assert(encoded.len == 2u * length && !memcmp(encoded.data, encoded.data + length, length));
+    }
+    snag_buf_free(&encoded);
+}
+
+static void
 test_checkpoint_frames(const struct snag_binary_identity *identity,
     const struct snag_binary_anchor *anchor)
 {
@@ -745,15 +811,16 @@ test_checkpoint_frames(const struct snag_binary_identity *identity,
         .generation = UINT64_C(0x1122334455667788),
         .core = {.version = 1u, .data = core, .size = sizeof(core)},
         .provider = {.version = 2u, .data = provider, .size = sizeof(provider)}};
+    test_checkpoint_access(frame);
     struct snag_buf encoded = {.max = 1024u};
     assert(!snag_binary_checkpoint_frame_encode(&encoded, &frame));
     assert_bytes(encoded.data, encoded.len,
-        "534e414743484b0000000100a0000000d70000000000000088776655443322110001020304050607"
+        "534e414743484b0000000200a0000000d70000000000000088776655443322110001020304050607"
         "08090a0b0c0d0e0f0807060504030201470100000000000002000000000000000000000000000000"
         "6000000000000000779a3cacad07d9d88bf0606fefb185d27a0df6754016387dad0e71953699a30e"
         "01000200000000000300000000000000040000000000000000000000000000000000000000000000"
-        "63007280010070534e414743504500d7000000000000001af17a53296f01e688f6793cc5288c1919"
-        "d2f1dce93e06b24efcc4a4913b748f");
+        "63007280010070534e414743504500d7000000000000001d28ce02ba6bd34f99f4f82b4bf5c2ca9a"
+        "c85d17d67999325382c69ac381f370");
     size_t length = encoded.len;
     /* Every small quantum crosses different header/body/footer/hash boundaries.
      * The fixture above is independently hashed, not generated by this stream. */
@@ -779,6 +846,13 @@ test_checkpoint_frames(const struct snag_binary_identity *identity,
         checkpoint_decode_fails(encoded.data, length, identity, anchor, -1);
         encoded.data[i] ^= 1u;
     }
+
+    assert(!decoded.access.version && !decoded.access.size && !decoded.access.data);
+    unsigned char old_format[215];
+    memcpy(old_format, encoded.data, sizeof(old_format));
+    old_format[10] = 1u;
+    rehash(old_format, sizeof(old_format));
+    checkpoint_decode_fails(old_format, sizeof(old_format), identity, anchor, -1);
 
     /* A rehashed envelope cannot change identity, any anchor member, framing,
      * reserved features or required section presence. */

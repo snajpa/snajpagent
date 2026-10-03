@@ -63,7 +63,7 @@ int snag_binary_io_retry(struct snag_binary_io *io);
  * lifetime/exclusive writer ownership continue through I/O-owner close. */
 int snag_binary_io_checkpoint_setup(struct snag_binary_io *, int directory,
     const uint64_t generations[2]);
-/* Move both owned section buffers on success only. The snapshot must describe
+/* Move all owned section buffers on success only. The snapshot must describe
  * the owner's current durable boundary. Journal commits take priority between
  * bounded checkpoint chunks/stages. Newer commits may follow this snapshot. */
 int snag_binary_io_checkpoint_submit(struct snag_binary_io *, struct snag_binary_io_snapshot *);

@@ -32,7 +32,8 @@ int snag_store_reconcile_binary_context_prefix(struct snag_session *source,
  * adopts core state read from the frame and a provider seam materialized from
  * its recipe, using the replay-verified canonical payload pool. Voice roots are
  * reconstructed from native adoption references. This still reads the complete
- * prefix: no efficient loader, suffix cursor or publication is supplied. */
+ * prefix: no efficient loader, suffix cursor or publication is supplied. Access
+ * metadata is unused here; this verifier grants no location-table authority. */
 int snag_store_verify_binary_context_checkpoint(struct snag_session *source,
     struct snag_session *restored, const struct snag_binary_anchor *prefix,
     const void *checkpoint, size_t checkpoint_size, struct snag_binary_recovery *recovery,

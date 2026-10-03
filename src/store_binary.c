@@ -261,11 +261,14 @@ snag_binary_checkpoint_encoder_init(struct snag_binary_checkpoint_encoder *out,
 {
     if (!out || !frame || !frame->generation || !anchor_valid(&frame->boundary) ||
         !frame->core.version || !frame->core.size || !frame->core.data ||
-        !frame->provider.version || !frame->provider.size || !frame->provider.data) {
+        !frame->provider.version || !frame->provider.size || !frame->provider.data ||
+        (frame->access.size && (!frame->access.version || !frame->access.data)) ||
+        (!frame->access.size && frame->access.version)) {
         return invalid();
     }
     size_t size;
     if (!snag_size_add(frame->core.size, frame->provider.size, &size) ||
+        !snag_size_add(size, frame->access.size, &size) ||
         !snag_size_add(size, SNAG_BINARY_CHECKPOINT_HEADER_SIZE +
             SNAG_BINARY_CHECKPOINT_FOOTER_SIZE, &size) || size > INT64_MAX) {
         return snag_errno(EOVERFLOW);
@@ -273,7 +276,7 @@ snag_binary_checkpoint_encoder_init(struct snag_binary_checkpoint_encoder *out,
     struct snag_binary_checkpoint_encoder encoder = {.frame = *frame, .total = size};
     unsigned char *header = encoder.header;
     memcpy(header, checkpoint_magic, sizeof(checkpoint_magic));
-    put_le(header + 10u, 1u, 2u);
+    put_le(header + 10u, 2u, 2u);
     put_le(header + 12u, sizeof(encoder.header), 4u);
     put_le(header + 16u, size, 8u);
     put_le(header + 24u, frame->generation, 8u);
@@ -286,8 +289,10 @@ snag_binary_checkpoint_encoder_init(struct snag_binary_checkpoint_encoder *out,
     memcpy(header + 88u, frame->boundary.digest, sizeof(frame->boundary.digest));
     put_le(header + 120u, frame->core.version, 2u);
     put_le(header + 122u, frame->provider.version, 2u);
+    put_le(header + 124u, frame->access.version, 2u);
     put_le(header + 128u, frame->core.size, 8u);
     put_le(header + 136u, frame->provider.size, 8u);
+    put_le(header + 144u, frame->access.size, 8u);
     unsigned char *footer = encoder.footer;
     memcpy(footer, checkpoint_footer_magic, sizeof(checkpoint_footer_magic));
     put_le(footer + 8u, size, 8u);
@@ -310,6 +315,7 @@ snag_binary_checkpoint_encoder_next(struct snag_binary_checkpoint_encoder *encod
     size_t count;
     const unsigned char *chunk;
     size_t core_end = sizeof(encoder->header) + encoder->frame.core.size;
+    size_t provider_end = core_end + encoder->frame.provider.size;
     size_t footer_start = encoder->total - sizeof(encoder->footer);
     size_t digest_start = encoder->total - 32u;
     if (offset < sizeof(encoder->header)) {
@@ -318,8 +324,11 @@ snag_binary_checkpoint_encoder_next(struct snag_binary_checkpoint_encoder *encod
     } else if (offset < core_end) {
         chunk = encoder->frame.core.data + offset - sizeof(encoder->header);
         count = core_end - offset;
-    } else if (offset < footer_start) {
+    } else if (offset < provider_end) {
         chunk = encoder->frame.provider.data + offset - core_end;
+        count = provider_end - offset;
+    } else if (offset < footer_start) {
+        chunk = encoder->frame.access.data + offset - provider_end;
         count = footer_start - offset;
     } else if (offset < digest_start) {
         chunk = encoder->footer + offset - footer_start;
@@ -382,14 +391,18 @@ snag_binary_checkpoint_frame_decode(const void *data, size_t size,
     uint64_t total = get_le(bytes + 16u, 8u);
     uint64_t core = get_le(bytes + 128u, 8u);
     uint64_t provider = get_le(bytes + 136u, 8u);
+    uint64_t access = get_le(bytes + 144u, 8u);
+    uint16_t access_version = (uint16_t)get_le(bytes + 124u, 2u);
     size_t overhead = SNAG_BINARY_CHECKPOINT_HEADER_SIZE + SNAG_BINARY_CHECKPOINT_FOOTER_SIZE;
     if (memcmp(bytes, checkpoint_magic, sizeof(checkpoint_magic)) ||
-        get_le(bytes + 8u, 2u) || get_le(bytes + 10u, 2u) != 1u ||
+        get_le(bytes + 8u, 2u) || get_le(bytes + 10u, 2u) != 2u ||
         get_le(bytes + 12u, 4u) != SNAG_BINARY_CHECKPOINT_HEADER_SIZE ||
         total > INT64_MAX || total > SIZE_MAX || total < overhead ||
-        !core || core > total - overhead || !provider || provider != total - overhead - core ||
+        !core || core > total - overhead || !provider || provider > total - overhead - core ||
+        access != total - overhead - core - provider ||
+        (access && !access_version) || (!access && access_version) ||
         !get_le(bytes + 24u, 8u) || !get_le(bytes + 120u, 2u) || !get_le(bytes + 122u, 2u) ||
-        get_le(bytes + 124u, 4u) || get_le(bytes + 144u, 8u) || get_le(bytes + 152u, 8u)) {
+        get_le(bytes + 126u, 2u) || get_le(bytes + 152u, 8u)) {
         return invalid();
     }
     /* Identity and every anchor member must come from independent verification,
@@ -417,7 +430,10 @@ snag_binary_checkpoint_frame_decode(const void *data, size_t size,
             .data = bytes + SNAG_BINARY_CHECKPOINT_HEADER_SIZE, .size = (size_t)core},
         .provider = {.version = (uint16_t)get_le(bytes + 122u, 2u),
             .data = bytes + SNAG_BINARY_CHECKPOINT_HEADER_SIZE + (size_t)core,
-            .size = (size_t)provider}};
+            .size = (size_t)provider},
+        .access = {.version = access_version,
+            .data = access ? bytes + SNAG_BINARY_CHECKPOINT_HEADER_SIZE +
+                (size_t)core + (size_t)provider : NULL, .size = (size_t)access}};
     *frame = decoded;
     return 0;
 }

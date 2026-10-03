@@ -185,8 +185,9 @@ snapshot(const struct fixture *fixture, const struct snag_binary_anchor *boundar
 {
     struct snag_binary_io_snapshot out = {
         .identity = fixture->identity, .boundary = *boundary,
-        .core_version = 1u, .provider_version = 1u,
-        .core = {.max = SIZE_MAX}, .provider = {.max = SIZE_MAX}
+        .core_version = 1u, .provider_version = 1u, .access_version = 1u,
+        .core = {.max = SIZE_MAX}, .provider = {.max = SIZE_MAX},
+        .access = {.max = SIZE_MAX}
     };
     /* Opaque framing fixtures; section semantics have separate codec coverage. */
     unsigned char bytes[4096u];
@@ -199,6 +200,7 @@ snapshot(const struct fixture *fixture, const struct snag_binary_anchor *boundar
         size -= count;
     }
     assert(!snag_buf_append(&out.provider, "provider section", 16u));
+    assert(!snag_buf_append(&out.access, "access section", 14u));
     return out;
 }
 
@@ -210,7 +212,8 @@ image(const struct snag_binary_io_snapshot *snapshot, uint64_t generation)
         .identity = snapshot->identity, .boundary = snapshot->boundary,
         .generation = generation,
         .core = {snapshot->core_version, snapshot->core.data, snapshot->core.len},
-        .provider = {snapshot->provider_version, snapshot->provider.data, snapshot->provider.len}
+        .provider = {snapshot->provider_version, snapshot->provider.data, snapshot->provider.len},
+        .access = {snapshot->access_version, snapshot->access.data, snapshot->access.len}
     };
     assert(!snag_binary_checkpoint_frame_encode(&bytes, &frame));
     return bytes;
@@ -221,6 +224,7 @@ free_snapshot(struct snag_binary_io_snapshot *snapshot)
 {
     snag_buf_free(&snapshot->core);
     snag_buf_free(&snapshot->provider);
+    snag_buf_free(&snapshot->access);
 }
 
 static void
@@ -334,9 +338,13 @@ test_publication_gates(enum gate gate)
     struct probe probe = {.gate = gate};
     struct snag_binary_io *io = start_owner(&fixture, &probe);
     struct snag_binary_io_snapshot capture = snapshot(&fixture, &fixture.before, 200003u);
+    if (gate == GATE_DIR_SYNC) {
+        snag_buf_free(&capture.access);
+        capture.access_version = 0u;
+    }
     struct snag_buf expected = image(&capture, 9u);
     assert(!snag_binary_io_checkpoint_submit(io, &capture));
-    assert(!capture.core.data && !capture.provider.data);
+    assert(!capture.core.data && !capture.provider.data && !capture.access.data);
     wait_flag(&probe.entered);
     struct snag_binary_publication_result result;
     memset(&result, 0x5a, sizeof(result));
@@ -426,6 +434,11 @@ test_priority_and_wake(bool checkpoint_first)
     struct snag_binary_io *io = start_owner(&fixture, &probe);
     struct snag_binary_io_snapshot capture = snapshot(&fixture, &fixture.before,
         (size_t)SNAG_MAX_EVENT_LINE + 1u);
+    if (checkpoint_first) {
+        struct snag_buf swap = capture.core;
+        capture.core = capture.access;
+        capture.access = swap;
+    }
     struct snag_buf expected = image(&capture, 9u);
     assert(!snag_binary_io_checkpoint_submit(io, &capture));
     wait_flag(&probe.first_entered);
@@ -640,12 +653,19 @@ test_invalid(void)
     assert(snag_binary_io_checkpoint_submit(io, NULL) < 0);
     assert(snag_binary_io_checkpoint_retry(NULL) < 0);
     assert(snag_binary_io_checkpoint_retry(io) < 0 && errno == EBUSY);
-    for (unsigned int mode = 0u; mode < 4u; ++mode) {
+    for (unsigned int mode = 0u; mode < 11u; ++mode) {
         capture = saved;
         if (mode == 0u) capture.boundary.digest[0] ^= 1u;
         if (mode == 1u) capture.provider = capture.core;
         if (mode == 2u) capture.provider_version = 0u;
         if (mode == 3u) capture.core.len = capture.core.cap + 1u;
+        if (mode == 4u) capture.access = capture.core;
+        if (mode == 5u) capture.access = capture.provider;
+        if (mode == 6u) capture.access_version = 0u;
+        if (mode == 7u) capture.access.len = capture.access.cap + 1u;
+        if (mode == 8u) capture.access.max = 0u;
+        if (mode == 9u) capture.access.data = NULL;
+        if (mode == 10u) capture.access.len = 0u;
         struct snag_binary_io_snapshot bad = capture;
         assert(snag_binary_io_checkpoint_submit(io, &capture) < 0);
         assert(!memcmp(&capture, &bad, sizeof(capture)));

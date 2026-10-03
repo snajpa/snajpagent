@@ -57,13 +57,13 @@ struct snag_binary_checkpoint_section {
     size_t size;
 };
 
-/* Frame only: both sections require their own field-shaped semantic codecs.
+/* Draft frame 0.2: sections require their own field-shaped semantic codecs.
  * A frame checksum does not validate those fields or authenticate its anchor. */
 struct snag_binary_checkpoint_frame {
     struct snag_binary_identity identity;
     struct snag_binary_anchor boundary;
     uint64_t generation;
-    struct snag_binary_checkpoint_section core, provider;
+    struct snag_binary_checkpoint_section core, provider, access;
 };
 
 /* Fixed-size framing state. Sections stay immutable/alive until completion and
@@ -88,7 +88,9 @@ int snag_binary_checkpoint_encoder_next(struct snag_binary_checkpoint_encoder *e
     size_t budget, const unsigned char **data, size_t *size);
 
 /* Append atomically. Section bytes may borrow the destination buffer. The caller
- * supplies a nonzero generation and two nonempty, separately versioned sections.
+ * supplies a nonzero generation and nonempty core/provider sections. Access
+ * metadata is separately versioned; zero version/size means absent and cannot
+ * support bounded resume. Full-prefix verification can reconstruct from journal.
  * No per-event limit applies to the complete active-state snapshot. */
 int snag_binary_checkpoint_frame_encode(struct snag_buf *out,
     const struct snag_binary_checkpoint_frame *frame);
@@ -140,7 +142,7 @@ int snag_binary_checkpoint_receipt_decode(const struct snag_binary_record *recor
     struct snag_binary_checkpoint_receipt *out);
 /* Match the frame's identity, generation, exact boundary and complete image
  * checksum to an independently authenticated receipt. Same 0/1/-1 framing and
- * borrowed-view rules as frame_decode. The two section codecs and the index
+ * borrowed-view rules as frame_decode. The section codecs and the index
  * frontier still require validation; this is not a journal bootstrap routine. */
 int snag_binary_checkpoint_frame_from_receipt(const void *data, size_t size,
     const struct snag_binary_identity *identity,

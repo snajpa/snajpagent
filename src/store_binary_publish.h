@@ -7,14 +7,18 @@
 #define SNAG_BINARY_CP_TEMP_SIZE (SNAG_ID_HEX_LEN + sizeof(".checkpoint..tmp"))
 
 /* Owned immutable section buffers captured at one already durable boundary.
- * Their semantic validity is established by the engine before submission. */
+ * Their semantic validity is established by the engine before submission.
+ * Core/provider are required; access version/length may both be zero for an
+ * image requiring independent full-prefix verification instead of bounded resume. */
 struct snag_binary_io_snapshot {
     struct snag_binary_identity identity;
     struct snag_binary_anchor boundary;
     struct snag_buf core;
     struct snag_buf provider;
+    struct snag_buf access;
     uint16_t core_version;
     uint16_t provider_version;
+    uint16_t access_version;
 };
 
 /* Renamed means confirmed replacement; false does not exclude an ambiguous

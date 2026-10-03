@@ -122,11 +122,12 @@ test_metadata(void)
     assert(!snag_binary_index_entry_encode(last, &identity, &active[2]));
     /* A root authenticates the frontier, not an arbitrary location table.
      * Pin the whole image before accepting a structurally valid replacement.
-     * This framing test uses opaque section bytes, not a provider recipe. */
+     * Core/provider bytes here are opaque framing fixtures. */
     struct snag_binary_checkpoint_frame frame = {.identity = identity, .boundary = boundary,
         .generation = 1u,
         .core = {.version = 1u, .data = (const unsigned char *)"core", .size = 4u},
-        .provider = {.version = 1u, .data = metadata.data, .size = metadata.len}};
+        .provider = {.version = 1u, .data = (const unsigned char *)"provider", .size = 8u},
+        .access = {.version = 1u, .data = metadata.data, .size = metadata.len}};
     struct snag_buf image = {.max = SIZE_MAX};
     assert(!snag_binary_checkpoint_frame_encode(&image, &frame));
     struct snag_binary_checkpoint_receipt receipt = {.generation = 1u, .boundary = boundary};
