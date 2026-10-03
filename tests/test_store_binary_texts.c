@@ -20,7 +20,7 @@ static const struct { const char *name; size_t offset; } slots[] = {
 #define SLOT(f) {#f, offsetof(struct snag_session, f)}
     SLOT(cwd), SLOT(first_user), SLOT(last_user), SLOT(active_prompt), SLOT(goal_prompt),
     SLOT(goal_blocker), SLOT(timer_text), SLOT(banner_text), SLOT(steering_override),
-    {"irc_snapshot", 0u}
+    {"irc_snapshot", 0u}, SLOT(name)
 #undef SLOT
 };
 
@@ -42,7 +42,7 @@ roundtrip(const struct snag_binary_checkpoint_texts *value, struct snag_buf *wir
 {
     snag_buf_reset(wire);
     assert(!snag_binary_checkpoint_texts_encode(wire, value));
-    assert(wire->len == 260u);
+    assert(wire->len == 285u);
     struct snag_binary_checkpoint_texts restored;
     memset(&restored, 0xa5, sizeof(restored));
     assert(!snag_binary_checkpoint_texts_decode(wire->data, wire->len, &restored));
@@ -252,7 +252,7 @@ test_store_binary_texts(void)
     step_test();
     const uint64_t base = UINT64_C(0x0102030405060700);
     struct snag_binary_checkpoint_texts value = {.through = base + 15u};
-    static const unsigned fields[] = {0u, 1u, 1u, 5u, 0u, 0u, 0u, 0u, 0u, 0u};
+    static const unsigned fields[] = {0u, 1u, 1u, 5u, 0u, 0u, 0u, 0u, 0u, 0u, 0u};
     for (size_t i = 0u; i < COUNT(value.slots); ++i) {
         value.slots[i].declaration = base + i + 1u;
         if (i == SNAG_BINARY_TEXT_STEERING) continue;
@@ -265,13 +265,13 @@ test_store_binary_texts(void)
     char hash[65];
     snag_sha256_hex(wire.data, wire.len, hash);
     /* Independent Python struct/hashlib fixture. */
-    assert(!strcmp(hash, "7023d1dfb168eb085be1482173376e6bc86fad2313f6c9fdef5ff29ac88586ff"));
+    assert(!strcmp(hash, "bfa56d64001041accb473e982cb1e5d539962544c61f2aabf943849dd34ac261"));
     for (size_t size = 0u; size < wire.len; ++size) reject_decode(wire.data, size);
     reject_decode(NULL, wire.len);
     assert(snag_binary_checkpoint_texts_decode(wire.data, wire.len, NULL) < 0);
     reject_encode(NULL);
     assert(snag_binary_checkpoint_texts_encode(NULL, &value) < 0);
-    unsigned char bad[261];
+    unsigned char bad[286];
     for (unsigned version = 0u; version < 3u; ++version) {
         memcpy(bad, wire.data, wire.len);
         bad[0] = version ? 2u : 0u;
@@ -279,7 +279,7 @@ test_store_binary_texts(void)
         reject_decode(bad, wire.len);
     }
     memcpy(bad, wire.data, wire.len);
-    bad[260] = 0u;
+    bad[285] = 0u;
     reject_decode(bad, sizeof(bad));
     for (size_t i = 0u; i < COUNT(value.slots); ++i) {
         size_t pos = 10u + 25u * i;

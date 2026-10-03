@@ -326,6 +326,8 @@ int snag_store_find_last(struct snag_store *, char id[SNAG_ID_HEX_LEN + 1u],
 bool snag_session_is_live(const struct snag_session *);
 typedef int (*snag_store_emit_fn)(void *, const char *, size_t);
 bool snag_session_name_valid(const char *name);
+/* Stored launch-option grammar shared by the JSON and native readers. */
+int snag_session_option_arity(const char *name);
 bool snag_session_options_valid(const json_t *args);
 int snag_store_find_name(struct snag_store *, const char *name, char id[SNAG_ID_HEX_LEN + 1u],
                          snag_store_emit_fn matches_emit, void *, char *error, size_t error_size);

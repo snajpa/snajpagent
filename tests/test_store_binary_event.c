@@ -734,7 +734,7 @@ test_control_text_references(void)
     static const enum snag_binary_kind kinds[] = {SNAG_BINARY_SESSION_CREATED,
         SNAG_BINARY_CWD_CHANGED, SNAG_BINARY_BANNER_UPDATED, SNAG_BINARY_TIMER_SCHEDULED,
         SNAG_BINARY_GOAL_STARTED, SNAG_BINARY_GOAL_REPLACED, SNAG_BINARY_GOAL_REWORDED,
-        SNAG_BINARY_GOAL_BLOCKED, SNAG_BINARY_BANNER_UPDATED};
+        SNAG_BINARY_GOAL_BLOCKED, SNAG_BINARY_BANNER_UPDATED, SNAG_BINARY_SESSION_NAMED};
     struct snag_buf payload = {.max = SNAG_MAX_EVENT_LINE};
     struct snag_buf bytes = {.max = SNAG_BINARY_BATCH_MAX};
     struct snag_buf again = {.max = SNAG_MAX_EVENT_LINE};
@@ -751,6 +751,8 @@ test_control_text_references(void)
             event.data.cwd.before = event.data.cwd.after = expected;
         } else if (event.kind == SNAG_BINARY_BANNER_UPDATED) {
             event.data.banner = expected;
+        } else if (event.kind == SNAG_BINARY_SESSION_NAMED) {
+            event.data.name = expected;
         } else if (i == 3u) {
             memset(event.data.timer.id, 0x11, 16u);
             event.data.timer.due_ms = UINT64_C(0x1122334455667788);
@@ -5708,6 +5710,7 @@ test_event_names(void)
         {4u, "session_unarchived"}, {5u, "session_delete_requested"}, {6u, "banner_updated"},
         {7u, "steering_updated"}, {8u, "model_selection_changed"}, {9u, "turn_model_changed"},
         {10u, "effort_changed"}, {11u, "context_selection_changed"}, {12u, "command_shell_changed"},
+        {13u, "session_named"}, {14u, "session_options"},
         {16u, "control_requested"}, {17u, "control_started"}, {18u, "control_finished"},
         {32u, "timer_scheduled"}, {33u, "timer_fired"}, {34u, "timer_cancelled"},
         {64u, "goal_started"}, {65u, "goal_replaced"}, {66u, "goal_reworded"},

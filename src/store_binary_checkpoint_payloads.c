@@ -7,7 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define PAYLOAD_HEADER 51u
+#define PAYLOAD_HEADER 59u
 
 static uint64_t
 number(const unsigned char *data)
@@ -27,7 +27,7 @@ static bool
 valid(const struct snag_binary_checkpoint_payloads *view)
 {
     if (!view || view->turn == UINT64_MAX || view->compact_end == UINT64_MAX ||
-        view->response_end == UINT64_MAX ||
+        view->response_end == UINT64_MAX || view->resume_options == UINT64_MAX ||
         (!!view->compact_start != !!view->compact_end) ||
         (view->compact_end && view->compact_start >= view->compact_end) ||
         (!!view->response_start != !!view->response_end) ||
@@ -58,7 +58,8 @@ snag_binary_checkpoint_payloads_decode(const void *data, size_t size,
         .turn = number(bytes + 2u), .compact_start = number(bytes + 10u),
         .compact_end = number(bytes + 18u), .response_start = number(bytes + 26u),
         .response_end = number(bytes + 34u), .download_count = (size_t)count,
-        .downloads_present = bytes[50] != 0u, .downloads = bytes + PAYLOAD_HEADER};
+        .downloads_present = bytes[50] != 0u, .downloads = bytes + PAYLOAD_HEADER,
+        .resume_options = number(bytes + 51u)};
     if (!valid(&value)) return snag_errno(EINVAL);
     *out = value;
     return 0;
@@ -68,7 +69,10 @@ int
 snag_binary_checkpoint_payloads_encode(struct snag_buf *out,
     const struct snag_binary_checkpoint_sources *sources, const struct snag_session *state)
 {
-    if (!out || !sources || !state ||
+    if (!out || !sources || !state) return snag_errno(EINVAL);
+    json_t *options = json_object_get(state->strings, "resume_options");
+    if ((options && !snag_session_options_valid(options)) ||
+        (!!options != !!sources->resume_options) ||
         sources->download_count != json_array_size(state->download_queue) ||
         (sources->download_count && !sources->downloads) ||
         (state->download_queue && !json_is_array(state->download_queue)) ||
@@ -87,6 +91,7 @@ snag_binary_checkpoint_payloads_encode(struct snag_buf *out,
     put_number(header + 34u, sources->response_end);
     put_number(header + 42u, sources->download_count);
     header[50] = state->download_queue != NULL;
+    put_number(header + 51u, sources->resume_options);
     struct snag_buf staged = {.max = out->max};
     int rc = snag_buf_append(&staged, header, sizeof(header));
     for (size_t i = 0u; rc == 0 && i < sources->download_count; ++i) {
@@ -109,6 +114,7 @@ snag_binary_checkpoint_payloads_free(struct snag_binary_checkpoint_payloads_stat
     json_decref(value->compact_output);
     json_decref(value->response_public);
     json_decref(value->downloads);
+    json_decref(value->resume_options);
     memset(value, 0, sizeof(*value));
 }
 
@@ -219,6 +225,23 @@ read_instructions(int fd, const struct snag_binary_anchor *through, uint64_t seq
 }
 
 static int
+read_options(int fd, const struct snag_binary_anchor *through, uint64_t sequence,
+    struct snag_buf *scratch, json_t **out)
+{
+    struct snag_binary_batch batch;
+    struct snag_binary_record record;
+    struct snag_binary_event event;
+    if (find_record(fd, through, sequence, SNAG_BINARY_SESSION_OPTIONS,
+        scratch, &batch, &record, &event) < 0) return -1;
+    const char *type;
+    json_t *data = NULL;
+    if (snag_binary_legacy_decode(&record, &type, &data) < 0) return -1;
+    *out = json_incref(json_object_get(data, "args"));
+    json_decref(data);
+    return 0;
+}
+
+static int
 read_compaction(int fd, const struct snag_binary_anchor *through,
     const struct snag_binary_checkpoint_payloads *view, const struct snag_session *state,
     struct snag_buf *scratch, json_t **out)
@@ -326,7 +349,7 @@ snag_binary_checkpoint_payloads_read(int fd, const struct snag_binary_anchor *th
         (!!view->turn != state->active_turn) ||
         (!!view->compact_end != !!state->compact_id[0]) ||
         (!!view->response_end != !!state->response_public_bytes) ||
-        view->turn >= through->next_seq ||
+        view->turn >= through->next_seq || view->resume_options >= through->next_seq ||
         view->compact_end >= through->next_seq || view->response_end >= through->next_seq) {
         return snag_errno(EINVAL);
     }
@@ -336,6 +359,8 @@ snag_binary_checkpoint_payloads_read(int fd, const struct snag_binary_anchor *th
     if (!staged) return -1;
     snag_session_init(staged);
     int rc = -1;
+    if (view->resume_options && read_options(fd, through, view->resume_options,
+        &scratch, &value.resume_options) < 0) goto done;
     if (view->turn && read_instructions(fd, through, view->turn, state,
         &scratch, &value.instructions) < 0) goto done;
     if (view->compact_end && read_compaction(fd, through, view, state,

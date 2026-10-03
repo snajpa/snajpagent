@@ -5085,6 +5085,31 @@ test_count_request_schema(void)
     json_decref(expected);
 }
 
+static void
+test_saved_metadata(struct snag_store *store, const char *cwd)
+{
+    struct snag_session session;
+    struct snag_instruction_set instructions = {0};
+    json_t *steering = json_array();
+    assert(steering);
+    create_session(store, &session, cwd, "medium");
+    commit_event(&session, "turn_started", turn_started("12345678123456781234567812345678",
+        1u, "Preserve saved session metadata across paired checkpoints.", cwd, NULL));
+    for (unsigned int phase = 0u; phase < 3u; ++phase) {
+        if (phase) {
+            commit_event(&session, "session_named", json_pack("{s:s}", "name", "named é"));
+            commit_event(&session, "session_options", phase == 1u ?
+                json_pack("{s:[s,s,s]}", "args", "--config", "./config", "-v") :
+                json_pack("{s:[]}", "args"));
+        }
+        struct snag_context_projection projection = {0};
+        build_context(&session, 1u, steering, &instructions, &projection);
+        snag_context_projection_free(&projection);
+    }
+    json_decref(steering);
+    snag_session_close(&session);
+}
+
 int
 main(int argc, char **argv)
 {
@@ -5244,6 +5269,7 @@ main(int argc, char **argv)
     test_cache_accounting(&store, cwd);
     test_prompt_cache_key(&store, cwd);
     test_history_orientation(&store, cwd);
+    test_saved_metadata(&store, cwd);
     test_worknote(&store, cwd);
     test_worknote_moments(&store, cwd);
     test_request_prefix_stability(&store, cwd);

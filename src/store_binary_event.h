@@ -22,6 +22,8 @@ enum snag_binary_kind {
     SNAG_BINARY_EFFORT_CHANGED = 10,
     SNAG_BINARY_CONTEXT_SELECTION_CHANGED = 11,
     SNAG_BINARY_COMMAND_SHELL_CHANGED = 12,
+    SNAG_BINARY_SESSION_NAMED = 13,
+    SNAG_BINARY_SESSION_OPTIONS = 14,
     SNAG_BINARY_CONTROL_REQUESTED = 16,
     SNAG_BINARY_CONTROL_STARTED = 17,
     SNAG_BINARY_CONTROL_FINISHED = 18,
@@ -143,6 +145,13 @@ struct snag_binary_instruction {
  * policy, duplicate paths, image totals, actual assets) remain reducer work. */
 struct snag_binary_content { const unsigned char *data; size_t size; };
 struct snag_binary_instructions { const unsigned char *data; size_t size; };
+/* Ordered stored arguments: u32 count and bounded NUL-terminated UTF-8 strings.
+ * The same borrowed-view/atomic-output rules apply as for the lists below. */
+struct snag_binary_options { const unsigned char *data; size_t size; };
+int snag_binary_options_encode(struct snag_buf *out, const json_t *args);
+int snag_binary_options_decode(const void *data, size_t size, struct snag_binary_options *out);
+int snag_binary_options_next(const struct snag_binary_options *options, size_t *offset,
+    struct snag_binary_text *out);
 int snag_binary_content_encode(struct snag_buf *out, const struct snag_binary_part *parts,
     size_t count);
 int snag_binary_content_decode(const void *data, size_t size, struct snag_binary_content *out);
@@ -841,7 +850,8 @@ struct snag_binary_event {
         struct {
             unsigned char confirmed_prefix[4], session[16], nonce[16];
         } deletion;
-        struct snag_binary_text banner, shell;
+        struct snag_binary_text banner, shell, name;
+        struct snag_binary_options options;
         enum snag_binary_steering steering;
         struct { struct snag_binary_selection before, after; } model;
         struct {
@@ -995,7 +1005,7 @@ struct snag_binary_control_text_source {
 };
 
 /* Whole canonical state text: created/current cwd (never the previous cwd),
- * banner, scheduled timer text, goal prompt or blocker. Pin the exact source
+ * session name, banner, scheduled timer text, goal prompt or blocker. Pin the exact source
  * kind, validate its entire record and return the decoded event with the leaf.
  * Empty banner text is a present clearing field. Other control events supply no
  * text. Caller owns same-journal, causal, current owner/provenance and lifecycle

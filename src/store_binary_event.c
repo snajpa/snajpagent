@@ -89,6 +89,97 @@ read_text(struct fields *fields, struct snag_binary_text *text, size_t minimum, 
     return true;
 }
 
+static bool
+read_terminated_text(struct fields *fields, struct snag_binary_text *out)
+{
+    size_t remaining = fields->size - fields->offset;
+    size_t limit = remaining < SNAG_PATH_MAX_BYTES + 1u ? remaining : SNAG_PATH_MAX_BYTES + 1u;
+    const unsigned char *start = fields->data + fields->offset;
+    const unsigned char *end = memchr(start, 0, limit);
+    if (!end) return false;
+    struct snag_binary_text text = {start, (size_t)(end - start)};
+    if (!text_valid(text, 1u, SNAG_PATH_MAX_BYTES)) return false;
+    fields->offset += text.size + 1u;
+    *out = text;
+    return true;
+}
+
+static bool
+read_options(struct fields *fields, struct snag_binary_options *out)
+{
+    size_t start = fields->offset;
+    uint64_t count;
+    if (!read_uint(fields, 4u, &count) || count > (fields->size - fields->offset) / 2u) {
+        return false;
+    }
+    bool argument = false;
+    for (uint64_t i = 0u; i < count; ++i) {
+        struct snag_binary_text text;
+        if (!read_terminated_text(fields, &text)) return false;
+        if (argument) {
+            argument = false;
+            continue;
+        }
+        int arity = snag_session_option_arity((const char *)text.data);
+        if (arity < 0) return false;
+        argument = arity != 0;
+    }
+    if (argument) return false;
+    *out = (struct snag_binary_options){fields->data + start, fields->offset - start};
+    return true;
+}
+
+int
+snag_binary_options_encode(struct snag_buf *out, const json_t *args)
+{
+    if (!out || !snag_session_options_valid(args) || json_array_size(args) > UINT32_MAX) {
+        return invalid();
+    }
+    struct snag_buf staged = {.max = SNAG_MAX_EVENT_LINE};
+    int rc = write_uint(&staged, json_array_size(args), 4u);
+    for (size_t i = 0u; rc == 0 && i < json_array_size(args); ++i) {
+        const json_t *arg = json_array_get(args, i);
+        struct snag_binary_text text = {
+            (const unsigned char *)json_string_value(arg), json_string_length(arg)};
+        /* A terminator fits every legacy argument list within the existing
+         * event budget and lets readers apply the shared grammar in place. */
+        if (!text_valid(text, 1u, SNAG_PATH_MAX_BYTES)) rc = invalid();
+        else if (snag_buf_append(&staged, text.data, text.size) < 0) rc = -1;
+        else rc = write_uint(&staged, 0u, 1u);
+    }
+    if (rc == 0) rc = snag_buf_append(out, staged.data, staged.len);
+    snag_buf_free(&staged);
+    return rc;
+}
+
+int
+snag_binary_options_decode(const void *data, size_t size, struct snag_binary_options *out)
+{
+    struct fields fields = {.data = data, .size = size};
+    struct snag_binary_options value;
+    if (!data || !out || size > SNAG_MAX_EVENT_LINE || !read_options(&fields, &value) ||
+        fields.offset != size) return invalid();
+    *out = value;
+    return 0;
+}
+
+int
+snag_binary_options_next(const struct snag_binary_options *options, size_t *offset,
+    struct snag_binary_text *out)
+{
+    if (!options || !options->data || options->size < 4u ||
+        options->size > SNAG_MAX_EVENT_LINE || !offset || !out ||
+        (*offset && *offset < 4u) || *offset > options->size) return invalid();
+    struct fields fields = {.data = options->data, .size = options->size,
+        .offset = *offset ? *offset : 4u};
+    if (fields.offset == fields.size) return 1;
+    struct snag_binary_text value;
+    if (!read_terminated_text(&fields, &value)) return invalid();
+    *offset = fields.offset;
+    *out = value;
+    return 0;
+}
+
 static int
 write_asset(struct snag_buf *out, const struct snag_binary_asset *asset)
 {
@@ -220,14 +311,7 @@ read_instruction(struct fields *fields, struct snag_binary_instruction *instruct
 {
     uint64_t value;
     if (!read_uint(fields, 1u, &value) || value > 1u) return false;
-    size_t remaining = fields->size - fields->offset;
-    size_t limit = remaining < SNAG_PATH_MAX_BYTES + 1u ? remaining : SNAG_PATH_MAX_BYTES + 1u;
-    const unsigned char *start = fields->data + fields->offset;
-    const unsigned char *end = memchr(start, 0, limit);
-    if (!end) return false;
-    instruction->path = (struct snag_binary_text){start, (size_t)(end - start)};
-    if (!text_valid(instruction->path, 1u, SNAG_PATH_MAX_BYTES)) return false;
-    fields->offset += instruction->path.size + 1u;
+    if (!read_terminated_text(fields, &instruction->path)) return false;
     instruction->has_snapshot = value != 0;
     return !instruction->has_snapshot || (read_uint(fields, 8u, &instruction->bytes) &&
         read_bytes(fields, instruction->sha256, 32u));
@@ -797,6 +881,16 @@ read_choice(struct fields *fields, struct snag_binary_context_choice *choice)
     return true;
 }
 
+static bool
+session_name_valid(struct snag_binary_text text)
+{
+    if (!text_valid(text, 1u, SNAG_PATH_MAX_BYTES)) return false;
+    char name[SNAG_PATH_MAX_BYTES + 1u];
+    memcpy(name, text.data, text.size);
+    name[text.size] = '\0';
+    return snag_session_name_valid(name);
+}
+
 static int
 encode_metadata(struct snag_buf *out, const struct snag_binary_event *event)
 {
@@ -842,6 +936,15 @@ encode_metadata(struct snag_buf *out, const struct snag_binary_event *event)
         return write_choice(out, event->data.context.after);
     case SNAG_BINARY_COMMAND_SHELL_CHANGED:
         return write_text(out, event->data.shell, 1u, SNAG_CONFIG_PATH_MAX);
+    case SNAG_BINARY_SESSION_NAMED:
+        if (!session_name_valid(event->data.name)) return invalid();
+        return write_text(out, event->data.name, 1u, SNAG_PATH_MAX_BYTES);
+    case SNAG_BINARY_SESSION_OPTIONS: {
+        struct snag_binary_options view;
+        if (snag_binary_options_decode(event->data.options.data,
+            event->data.options.size, &view) < 0) return -1;
+        return snag_buf_append(out, view.data, view.size);
+    }
     default:
         return invalid();
     }
@@ -892,6 +995,11 @@ decode_metadata(struct fields *fields, struct snag_binary_event *event)
             read_choice(fields, &event->data.context.after);
     case SNAG_BINARY_COMMAND_SHELL_CHANGED:
         return read_text(fields, &event->data.shell, 1u, SNAG_CONFIG_PATH_MAX);
+    case SNAG_BINARY_SESSION_NAMED:
+        return read_text(fields, &event->data.name, 1u, SNAG_PATH_MAX_BYTES) &&
+            session_name_valid(event->data.name);
+    case SNAG_BINARY_SESSION_OPTIONS:
+        return read_options(fields, &event->data.options);
     default:
         return false;
     }
@@ -3229,6 +3337,8 @@ static const struct archive_schema archive_schemas[] = {
     ARCHIVE_SCHEMA(SNAG_BINARY_CONTEXT_SELECTION_CHANGED, "new_mode", "new_tokens", "old_mode",
         "old_tokens"),
     ARCHIVE_SCHEMA(SNAG_BINARY_COMMAND_SHELL_CHANGED, "shell"),
+    ARCHIVE_SCHEMA(SNAG_BINARY_SESSION_NAMED, "name"),
+    ARCHIVE_SCHEMA(SNAG_BINARY_SESSION_OPTIONS, "args"),
     ARCHIVE_SCHEMA(SNAG_BINARY_CONTROL_REQUESTED, "control", "origin", "source_seq"),
     ARCHIVE_SCHEMA(SNAG_BINARY_CONTROL_STARTED, "control"),
     ARCHIVE_SCHEMA(SNAG_BINARY_CONTROL_FINISHED, "control"),
@@ -4057,7 +4167,7 @@ encode_fields(struct snag_buf *out, const struct snag_binary_event *event)
     if (event->kind >= SNAG_BINARY_INPUT_RECEIVED &&
         event->kind <= SNAG_BINARY_FUTURE_TURN_EDITED) return encode_input(out, event);
     if (event->kind >= SNAG_BINARY_SESSION_CREATED &&
-        event->kind <= SNAG_BINARY_COMMAND_SHELL_CHANGED) return encode_metadata(out, event);
+        event->kind <= SNAG_BINARY_SESSION_OPTIONS) return encode_metadata(out, event);
     if (timer_kind(event->kind)) {
         if (snag_buf_append(out, event->data.timer.id, 16u) < 0) return -1;
         if (event->kind != SNAG_BINARY_TIMER_SCHEDULED) return 0;
@@ -4112,6 +4222,8 @@ static const struct {
     {SNAG_BINARY_EFFORT_CHANGED, "effort_changed"},
     {SNAG_BINARY_CONTEXT_SELECTION_CHANGED, "context_selection_changed"},
     {SNAG_BINARY_COMMAND_SHELL_CHANGED, "command_shell_changed"},
+    {SNAG_BINARY_SESSION_NAMED, "session_named"},
+    {SNAG_BINARY_SESSION_OPTIONS, "session_options"},
     {SNAG_BINARY_CONTROL_REQUESTED, "control_requested"},
     {SNAG_BINARY_CONTROL_STARTED, "control_started"},
     {SNAG_BINARY_CONTROL_FINISHED, "control_finished"},
@@ -4211,7 +4323,7 @@ snag_binary_event_version(enum snag_binary_kind kind)
         return 1u;
     }
     if (kind >= SNAG_BINARY_INPUT_RECEIVED && kind <= SNAG_BINARY_FUTURE_TURN_EDITED) return 2u;
-    if ((kind >= SNAG_BINARY_SESSION_CREATED && kind <= SNAG_BINARY_COMMAND_SHELL_CHANGED) ||
+    if ((kind >= SNAG_BINARY_SESSION_CREATED && kind <= SNAG_BINARY_SESSION_OPTIONS) ||
         timer_kind(kind) || goal_kind(kind) || kind == SNAG_BINARY_TURN_STARTED ||
         turn_outcome_kind(kind) || kind == SNAG_BINARY_RESPONSE_STARTED ||
         kind == SNAG_BINARY_RESPONSE_OUTPUT || kind == SNAG_BINARY_RESPONSE_INTERRUPTED ||
@@ -4339,7 +4451,7 @@ decode_fields(struct fields *fields, struct snag_binary_event *event)
     if (event->kind >= SNAG_BINARY_INPUT_RECEIVED &&
         event->kind <= SNAG_BINARY_FUTURE_TURN_EDITED) return decode_input(fields, event);
     if (event->kind >= SNAG_BINARY_SESSION_CREATED &&
-        event->kind <= SNAG_BINARY_COMMAND_SHELL_CHANGED) return decode_metadata(fields, event);
+        event->kind <= SNAG_BINARY_SESSION_OPTIONS) return decode_metadata(fields, event);
     if (timer_kind(event->kind)) {
         if (!read_id(fields, event->data.timer.id)) return false;
         if (event->kind != SNAG_BINARY_TIMER_SCHEDULED) return true;
@@ -4552,6 +4664,9 @@ find_control_text(const struct snag_binary_batch *batch, uint64_t sequence,
         break;
     case SNAG_BINARY_BANNER_UPDATED:
         source.text = source.event.data.banner;
+        break;
+    case SNAG_BINARY_SESSION_NAMED:
+        source.text = source.event.data.name;
         break;
     case SNAG_BINARY_TIMER_SCHEDULED:
         source.text = source.event.data.timer.text;

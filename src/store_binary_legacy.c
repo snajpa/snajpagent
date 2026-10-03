@@ -98,7 +98,7 @@ rule_voice_kind(enum snag_binary_kind kind)
 static bool
 metadata_kind(enum snag_binary_kind kind)
 {
-    return kind >= SNAG_BINARY_SESSION_CREATED && kind <= SNAG_BINARY_COMMAND_SHELL_CHANGED;
+    return kind >= SNAG_BINARY_SESSION_CREATED && kind <= SNAG_BINARY_SESSION_OPTIONS;
 }
 
 static bool
@@ -280,7 +280,7 @@ read_created(const json_t *data, struct snag_binary_event *event)
 }
 
 static int
-read_metadata(const json_t *data, struct snag_binary_event *event)
+read_metadata(const json_t *data, struct snag_binary_event *event, struct snag_buf *scratch)
 {
     switch (event->kind) {
     case SNAG_BINARY_SESSION_CREATED:
@@ -389,6 +389,17 @@ read_metadata(const json_t *data, struct snag_binary_event *event)
     case SNAG_BINARY_COMMAND_SHELL_CHANGED:
         if (!snag_json_exact_keys(data, "shell")) return invalid();
         return read_text(data, "shell", &event->data.shell);
+    case SNAG_BINARY_SESSION_NAMED:
+        if (!snag_json_exact_keys(data, "name") ||
+            !snag_session_name_valid(json_string_value(json_object_get(data, "name")))) {
+            return invalid();
+        }
+        return read_text(data, "name", &event->data.name);
+    case SNAG_BINARY_SESSION_OPTIONS:
+        if (!snag_json_exact_keys(data, "args")) return invalid();
+        if (snag_binary_options_encode(scratch, json_object_get(data, "args")) < 0) return -1;
+        event->data.options = (struct snag_binary_options){scratch->data, scratch->len};
+        return 0;
     default: return unsupported();
     }
 }
@@ -1991,7 +2002,7 @@ snag_binary_legacy_encode(struct snag_buf *out, const char *type, const json_t *
     if (canonical_data(data) < 0) return -1;
     struct snag_buf scratch = {.max = SNAG_MAX_EVENT_LINE};
     int rc;
-    if (metadata_kind(event.kind)) rc = read_metadata(data, &event);
+    if (metadata_kind(event.kind)) rc = read_metadata(data, &event, &scratch);
     else if (timer_kind(event.kind)) rc = read_timer(data, &event);
     else if (goal_kind(event.kind)) rc = read_goal(data, &event);
     else if (control_kind(event.kind)) rc = read_control(data, &event);
@@ -2164,6 +2175,27 @@ put_metadata(json_t *data, const struct snag_binary_event *event)
     }
     case SNAG_BINARY_COMMAND_SHELL_CHANGED:
         return put_text(data, "shell", event->data.shell);
+    case SNAG_BINARY_SESSION_NAMED:
+        return put_text(data, "name", event->data.name);
+    case SNAG_BINARY_SESSION_OPTIONS: {
+        json_t *args = json_array();
+        if (!args) return -1;
+        size_t offset = 0u;
+        struct snag_binary_text text;
+        int rc;
+        while ((rc = snag_binary_options_next(&event->data.options, &offset, &text)) == 0) {
+            if (json_array_append_new(args,
+                json_stringn((const char *)text.data, text.size)) < 0) {
+                rc = -1;
+                break;
+            }
+        }
+        if (rc < 0) {
+            json_decref(args);
+            return -1;
+        }
+        return snag_json_set_new(data, "args", args);
+    }
     default: return unsupported();
     }
 }

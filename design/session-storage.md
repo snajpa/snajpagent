@@ -7,7 +7,7 @@
 Engineering design, September 27, 2026, with framing implementation begun
 September 28. Installed builds keep the existing JSONL format. The draft header,
 commit-batch codec and bounded positional reader are exercised by the store tests.
-Typed payloads and data adapters cover all 73 assigned semantic kinds. Archive
+Typed payloads and data adapters cover all 75 assigned semantic kinds. Archive
 profiles also preserve public checkpoint views and explicitly unassigned source
 names as inert observations.
 Public snapshots preserve literal or span-backed text. Canonical input, output,
@@ -30,11 +30,11 @@ The measured failure makes the first optimization clear: 422 embedded full
 checkpoints accounted for 2,050,400,577 of 2,113,498,737 journal bytes. Changing
 serialization alone would leave that repeated-state growth intact.
 
-The current integration also retains the runtime's IRC display snapshot in
-checkpoint text provenance. Session naming, saved resume options and hosted-search
-records introduced after the original native adapters still need their typed
-adapters and checkpoint handling before runtime cutover. The currently passing
-store/context fixtures do not establish complete coverage of those workflows.
+The current integration retains IRC display metadata, session names and saved
+resume options in native replay and paired checkpoints. Names refer to their
+canonical text; options retain the accepting declaration and preserve argument
+order, duplicates and the distinction between absent options and an empty list.
+Hosted-search records still need typed adapters before runtime cutover.
 
 ## Format evolution and compatibility
 
@@ -591,9 +591,9 @@ acceptance remain importer/reducer checks. Begin coordinates still require journ
 relocation; projecting metadata does not adopt history or change attachment state.
 Archive264 preserves public projections through its enclosed public field profile,
 including the smaller checkpoint view and explicitly unassigned source names.
-All73 assigned semantic kinds have data adapters. Unresolved native references
+All75 assigned semantic kinds have data adapters. Unresolved native references
 return `ENOTSUP`; known records never use a generic whole-record fallback.
-The module is linked only into the store test target.
+The module is linked into the store and context test targets.
 
 Canonical validation checks data at its original envelope nesting level before
 conversion. The complete source envelope, sequence/hash chain, source-platform
@@ -605,11 +605,11 @@ integration and the four-file backend remain implementation work.
 
 ### Typed control payloads
 
-Payload version1 assigns session/configuration IDs1..12, timer
+Payload version1 assigns session/configuration IDs1..14, timer
 schedule/fire/cancel IDs32..34, goal
 start/replace/reword/lock/pause/block/complete/resume/cancel IDs64..72 and initial
 input/steering IDs96..105. Session control request/start/finish use IDs16..18;
-IDs13..15 and19..31 remain reserved for session metadata. Required semantic kinds occupy the low
+ID15 and IDs19..31 remain reserved for session metadata. Required semantic kinds occupy the low
 half of the 16-bit namespace. The high half permits explicitly optional metadata;
 unknown required records, unsupported semantic payload versions and optional
 flags on semantic kinds are errors before state adoption.
@@ -623,6 +623,14 @@ followed by exact UTF-8 bytes, with existing field-size limits and embedded NUL
 rejection. Actor values1/2 are user/model; pause reason values1..6 retain the
 legacy order input-closed, provider-policy, refusal, session-resumed, turn-stopped,
 user. These are compatibility representations, not new automatic transitions.
+
+Names use the existing nonblank, C0/DEL-free name grammar. Saved options share
+the current launch-option arity validator with the JSON reducer. The argument
+list uses bounded NUL-terminated strings, like instruction paths: it remains
+smaller than its legacy JSON source, including near the event-size boundary,
+and readers validate option names in place. Every argument has the existing
+path/text bound. This representation preserves spelling, repeated options and
+option-like argument values; it does not normalize or apply configuration.
 
 The codec returns typed C values and borrowed text slices. It performs no JSON
 serialization and preserves caller output on malformed input. Current-state,
@@ -645,6 +653,8 @@ Session/configuration records use fixed field order:
 | 10 | effort changed | previous effort text, new effort text |
 | 11 | context selection changed | previous mode1/tokens8, new mode1/tokens8 |
 | 12 | command shell changed | shell path text |
+| 13 | session named | validated name text |
+| 14 | saved resume options | LEu32 count, ordered NUL-terminated UTF-8 arguments |
 | 16 | control requested | control bit1, image-boundary origin presence1, optional source sequence8 |
 | 17/18 | control started/finished | control bit1 |
 
@@ -1417,8 +1427,9 @@ remain test-linked building blocks rather than complete core/provider decoders.
 
 The fixed-text origin block in `store_binary_checkpoint_text.c` records cwd,
 first/last user text, active prompt, goal prompt/blocker, timer text, banner and
-steering mode, then the latest IRC display snapshot. It is260 bytes: LEu16 version1, LEu64 last observed
-semantic sequence, then ten25-byte entries. An entry contains the accepting
+steering mode, then the latest IRC display snapshot and session name. It is285
+bytes: LEu16 version1, LEu64 last observed semantic sequence, then eleven25-byte
+entries. An entry contains the accepting
 LEu64 declaration sequence, a u8 field selector and the16-byte original-field
 reference. Absent entries are entirely zero. Selector0 identifies control text
 in the declaration itself; input selectors1/4/5 identify original text, voice
@@ -1549,16 +1560,19 @@ all core/provider fields together. This component performs no reduction, dispatc
 or live input admission. Active-turn instructions and provider-view state remain
 outside this pending-input block.
 
-The test-linked dynamic-core payload block stores version1 in a 51-byte header:
+The test-linked dynamic-core payload block stores version1 in a 59-byte header:
 LEu16 version, then six LEu64 values (accepting turn, compaction start, compaction
 completion, response start, last streamed output, download count), followed by a
-one-byte download-presence flag. Ordered eight-byte download receipt sequences
-follow. Zero declarations mean absent payloads; compaction and response pairs
+one-byte download-presence flag and the LEu64 saved-options declaration. Ordered
+eight-byte download receipt sequences follow. Zero declarations mean absent
+payloads; compaction and response pairs
 must be complete and ordered. A response range starts after its accepting turn.
 The flag distinguishes an absent download queue from a present empty queue.
+A saved-options declaration selects the exact validated argument list in that
+session-options record. An empty list retains its declaration; absence uses zero.
 There are no copied instruction lists, compaction arrays, stream strings or
-file metadata in the checkpoint. Decode borrows receipt bytes; encode stages an
-atomic append, including when source storage aliases its destination.
+file metadata or saved argument lists in the checkpoint. Decode borrows receipt
+bytes; encode stages an atomic append, including when source storage aliases its destination.
 
 Full replay retains the streamed response's start origin and last output,
 the most recent completed compaction's start/completion pair, and only pending

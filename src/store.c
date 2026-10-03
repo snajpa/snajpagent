@@ -184,17 +184,26 @@ snag_session_pending_steering_unadmitted(const struct snag_session *session)
         if (session->pending_steering[i].first_context_ms) return false;
     return true;
 }
+int
+snag_session_option_arity(const char *name)
+{
+    if (snag_string_in(name, "--no-listen --no-client --markdown --no-markdown -v")) return 0;
+    if (snag_string_in(name,
+        "--config -d --color --listen --client --model-nick --operator-nick --room-name")) {
+        return 1;
+    }
+    return -1;
+}
+
 bool
 snag_session_options_valid(const json_t *args)
 {
     if (!json_is_array(args)) return false;
     for (size_t i = 0u; i < json_array_size(args); ++i) {
         const char *name = json_string_value(json_array_get(args, i));
-        if (snag_string_in(name, "--no-listen --no-client --markdown --no-markdown -v"))
-            continue;
-        if (!snag_string_in(name,
-                "--config -d --color --listen --client --model-nick --operator-nick --room-name") ||
-            !snag_text_valid(json_string_value(json_array_get(args, ++i)),
+        int arity = snag_session_option_arity(name);
+        if (arity == 0) continue;
+        if (arity < 0 || !snag_text_valid(json_string_value(json_array_get(args, ++i)),
                 1u, SNAG_PATH_MAX_BYTES)) return false;
     }
     return true;

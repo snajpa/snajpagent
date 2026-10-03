@@ -201,7 +201,10 @@ static const struct legacy_sample {
         "\"begin_sha256\":\"" HASHF "\"}", 266},
     {"voice_transfer_record", "{\"transfer_id\":\"" ID "\",\"target_session_id\":\"" NEW_ID "\","
         "\"source_session_id\":\"" ID "\",\"source_seq\":1,\"source_type\":\"session_checkpoint\","
-        "\"data\":{\"covers_through_seq\":257,\"provider_view\":true,\"snapshot_v\":2}}", 264}
+        "\"data\":{\"covers_through_seq\":257,\"provider_view\":true,\"snapshot_v\":2}}", 264},
+    {"session_named", "{\"name\":\"work é\"}", 13},
+    {"session_options", "{\"args\":[\"--config\",\"./config\",\"--markdown\",\"-v\","
+        "\"--listen\",\"[::1]:1234\",\"--no-listen\"]}", 14},
 };
 
 static void
@@ -782,6 +785,109 @@ metadata_variants(void)
     reject_json("session_archived", data);
     reject_json("session_unarchived", data);
     json_decref(data);
+}
+
+static void
+session_metadata_variants(void)
+{
+    const char *const names[] = {"work é", " work ", "a/b", "", " ", "a\tb", "a\nb", "a\177"};
+    for (size_t i = 0u; i < sizeof(names) / sizeof(*names); ++i) {
+        json_t *data = json_pack("{s:s}", "name", names[i]);
+        assert(data);
+        if (i < 3u) roundtrip("session_named", data, 13u);
+        else reject_json("session_named", data);
+        json_decref(data);
+    }
+    const char *const options[] = {
+        "[]", "[\"-v\",\"-v\"]", "[\"--config\",\"--no-client\"]",
+        "[\"--config\",\"é\",\"-d\",\"./state\",\"--color\",\"never\","
+        "\"--listen\",\"[::1]:1234\",\"--client\",\"host:1\","
+        "\"--model-nick\",\"agent\",\"--operator-nick\",\"operator\","
+        "\"--room-name\",\"#room\",\"--no-listen\",\"--no-client\","
+        "\"--markdown\",\"--no-markdown\",\"-v\"]",
+        "null", "{}", "[true]", "[1]", "[null]", "[\"--config\"]",
+        "[\"--unknown\"]", "[\"--color\",\"\"]", "[\"-v\",\"extra\"]"
+    };
+    for (size_t i = 0u; i < sizeof(options) / sizeof(*options); ++i) {
+        json_t *args = json_loads(options[i], JSON_DECODE_ANY, NULL);
+        json_t *data = json_object();
+        assert(args && data && !json_object_set_new(data, "args", args));
+        if (i < 4u) roundtrip("session_options", data, 14u);
+        else reject_json("session_options", data);
+        json_decref(data);
+    }
+    char *long_text = malloc(SNAG_PATH_MAX_BYTES + 2u);
+    assert(long_text);
+    memset(long_text, 'x', SNAG_PATH_MAX_BYTES + 1u);
+    long_text[SNAG_PATH_MAX_BYTES + 1u] = '\0';
+    for (size_t n = SNAG_PATH_MAX_BYTES; n <= SNAG_PATH_MAX_BYTES + 1u; ++n) {
+        json_t *data = json_object();
+        assert(data && !json_object_set_new(data, "name", json_stringn(long_text, n)));
+        if (n == SNAG_PATH_MAX_BYTES) roundtrip_checked("session_named", data, 13u, false);
+        else reject_json("session_named", data);
+        json_decref(data);
+        json_t *args = json_array();
+        data = json_object();
+        assert(args && data && !json_array_append_new(args, json_string("--config")));
+        assert(!json_array_append_new(args, json_stringn(long_text, n)));
+        assert(!json_object_set_new(data, "args", args));
+        if (n == SNAG_PATH_MAX_BYTES) roundtrip_checked("session_options", data, 14u, false);
+        else reject_json("session_options", data);
+        json_decref(data);
+    }
+    free(long_text);
+}
+
+static void
+session_metadata_wire(void)
+{
+    const unsigned char name[] = {7, 0, 0, 0, 'w', 'o', 'r', 'k', ' ', 0xc3, 0xa9};
+    unsigned char options[] = {1, 0, 0, 0, '-', 'v', 0};
+    struct snag_buf bytes = {.max = SNAG_MAX_EVENT_LINE};
+    json_t *data = json_pack("{s:s}", "name", "work é");
+    enum snag_binary_kind kind = 0;
+    assert(data && !snag_binary_legacy_encode(&bytes, "session_named", data, &kind));
+    assert(kind == 13u && bytes.len == sizeof(name) && !memcmp(bytes.data, name, sizeof(name)));
+    json_decref(data);
+    snag_buf_free(&bytes);
+    bytes.max = SNAG_MAX_EVENT_LINE;
+    data = json_pack("{s:[s]}", "args", "-v");
+    assert(data && !snag_binary_legacy_encode(&bytes, "session_options", data, &kind));
+    assert(kind == 14u && bytes.len == sizeof(options) &&
+        !memcmp(bytes.data, options, sizeof(options)));
+    struct snag_binary_options view = {.data = name, .size = sizeof(name)};
+    for (size_t n = 0u; n < sizeof(options); ++n) {
+        assert(snag_binary_options_decode(options, n, &view) < 0);
+        assert(view.data == name && view.size == sizeof(name));
+    }
+    assert(!snag_binary_options_decode(options, sizeof(options), &view));
+    size_t offset = 0u;
+    struct snag_binary_text text = {0};
+    assert(!snag_binary_options_next(&view, &offset, &text));
+    assert(text.size == 2u && !memcmp(text.data, "-v", 2u) && offset == sizeof(options));
+    assert(snag_binary_options_next(&view, &offset, &text) == 1 && offset == sizeof(options));
+    assert(text.data == options + 4u && text.size == 2u);
+    offset = 1u;
+    assert(snag_binary_options_next(&view, &offset, &text) < 0 && offset == 1u);
+    struct snag_binary_record record = {.kind = 14u, .version = 1u,
+        .payload = options, .size = sizeof(options)};
+    options[0] = 0u;
+    reject_record(&record);
+    options[0] = 0xffu;
+    reject_record(&record);
+    options[0] = 1u;
+    options[5] = 'x';
+    reject_record(&record);
+    options[5] = 'v';
+    options[4] = 0u;
+    reject_record(&record);
+    struct snag_buf small = {.max = 4u};
+    assert(!snag_buf_append(&small, "keep", 4u));
+    assert(snag_binary_options_encode(&small, json_object_get(data, "args")) < 0);
+    assert(small.len == 4u && !memcmp(small.data, "keep", 4u));
+    snag_buf_free(&small);
+    json_decref(data);
+    snag_buf_free(&bytes);
 }
 
 static void
@@ -3802,6 +3908,8 @@ test_store_binary_legacy(void)
     bounds_and_atomicity();
     creation_and_key_errors();
     metadata_variants();
+    session_metadata_variants();
+    session_metadata_wire();
     rule_voice_variants();
     rule_storage_and_aggregate();
     control_variants();

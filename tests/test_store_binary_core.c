@@ -18,7 +18,7 @@
 static const struct slot { const char *key; size_t offset; } slots[] = {
 #define SLOT(f) {#f, offsetof(struct snag_session, f)}
     SLOT(cwd), SLOT(first_user), SLOT(last_user), SLOT(active_prompt), SLOT(goal_prompt),
-    SLOT(goal_blocker), SLOT(timer_text), SLOT(banner_text), SLOT(steering_override)
+    SLOT(goal_blocker), SLOT(timer_text), SLOT(banner_text), SLOT(steering_override), SLOT(name)
 #undef SLOT
 };
 
@@ -55,6 +55,8 @@ semantic_state(const struct snag_session *state)
         keep_text(owners, slots[i].key, text);
     }
     keep_text(owners, "irc_snapshot", snag_json_string(state->strings, "irc_snapshot"));
+    json_t *options = json_object_get(state->strings, "resume_options");
+    if (options) assert(!json_object_set(owners, "resume_options", options));
     for (size_t i = 0u; i < state->pending_queue_count; ++i)
         keep_text(owners, state->pending_queue[i].queue_id, state->pending_queue[i].text);
     for (size_t i = 0u; i < state->pending_steering_count; ++i)
@@ -290,7 +292,8 @@ test_store_binary_core_state(int fd, const struct snag_binary_anchor *anchor,
     frame.provider.data = (const unsigned char *)"x";
     same(state, &restored);
     assert(recovered.response_start == sources->response_start &&
-        recovered.active_compact == sources->active_compact);
+        recovered.active_compact == sources->active_compact &&
+        recovered.resume_options == sources->resume_options);
     struct snag_buf again = {.max = SIZE_MAX};
     assert(!snag_binary_checkpoint_core_encode(&again, &recovered, &restored));
     assert(core.len == again.len && !memcmp(core.data, again.data, core.len));

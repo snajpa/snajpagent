@@ -16,10 +16,10 @@ static const struct text_slot {
 #define SLOT(f) {#f, offsetof(struct snag_session, f)}
     SLOT(cwd), SLOT(first_user), SLOT(last_user), SLOT(active_prompt), SLOT(goal_prompt),
     SLOT(goal_blocker), SLOT(timer_text), SLOT(banner_text), SLOT(steering_override),
-    {"irc_snapshot", 0u}
+    {"irc_snapshot", 0u}, SLOT(name)
 #undef SLOT
 };
-_Static_assert(COUNT(text_slots) == 10u && SNAG_BINARY_CHECKPOINT_TEXT_COUNT == 10u,
+_Static_assert(COUNT(text_slots) == 11u && SNAG_BINARY_CHECKPOINT_TEXT_COUNT == 11u,
     "version-1 fixed text slots");
 
 static const char *
@@ -89,6 +89,7 @@ record_source(const struct snag_binary_record *record, uint64_t sequence,
     case SNAG_BINARY_SESSION_CREATED: text = event->data.created.cwd; break;
     case SNAG_BINARY_CWD_CHANGED: text = event->data.cwd.after; break;
     case SNAG_BINARY_BANNER_UPDATED: text = event->data.banner; break;
+    case SNAG_BINARY_SESSION_NAMED: text = event->data.name; break;
     case SNAG_BINARY_IRC_SNAPSHOT: text = event->data.irc_snapshot.text; break;
     case SNAG_BINARY_TIMER_SCHEDULED: text = event->data.timer.text; break;
     case SNAG_BINARY_GOAL_STARTED:
@@ -128,6 +129,7 @@ changed_slot(enum snag_binary_kind kind)
     case SNAG_BINARY_SESSION_CREATED:
     case SNAG_BINARY_CWD_CHANGED: return SNAG_BINARY_TEXT_CWD;
     case SNAG_BINARY_BANNER_UPDATED: return SNAG_BINARY_TEXT_BANNER;
+    case SNAG_BINARY_SESSION_NAMED: return SNAG_BINARY_TEXT_NAME;
     case SNAG_BINARY_IRC_SNAPSHOT: return SNAG_BINARY_TEXT_IRC_SNAPSHOT;
     case SNAG_BINARY_STEERING_UPDATED: return SNAG_BINARY_TEXT_STEERING;
     case SNAG_BINARY_TIMER_SCHEDULED: return SNAG_BINARY_TEXT_TIMER;
@@ -285,6 +287,7 @@ slot_accepts(size_t slot, const struct snag_binary_event *event)
             event->data.goal.actor == SNAG_BINARY_MODEL;
     case SNAG_BINARY_TEXT_TIMER: return event->kind == SNAG_BINARY_TIMER_SCHEDULED;
     case SNAG_BINARY_TEXT_BANNER: return event->kind == SNAG_BINARY_BANNER_UPDATED;
+    case SNAG_BINARY_TEXT_NAME: return event->kind == SNAG_BINARY_SESSION_NAMED;
     case SNAG_BINARY_TEXT_IRC_SNAPSHOT:
         return event->kind == SNAG_BINARY_SESSION_CREATED ||
             event->kind == SNAG_BINARY_IRC_SNAPSHOT;

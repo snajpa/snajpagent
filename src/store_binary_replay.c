@@ -133,6 +133,8 @@ update_sources(struct replay_context *context, const struct snag_session *state,
     enum snag_binary_kind kind, const json_t *data)
 {
     struct snag_binary_checkpoint_sources *sources = &context->sources;
+    if (kind == SNAG_BINARY_SESSION_OPTIONS) sources->resume_options = context->sequence;
+    if (!json_object_get(state->strings, "resume_options")) sources->resume_options = 0u;
     if (kind == SNAG_BINARY_RESPONSE_STARTED) {
         context->response_sequence = context->sequence;
         sources->response_start = context->sequence;

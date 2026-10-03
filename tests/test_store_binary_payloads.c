@@ -12,8 +12,9 @@ static const unsigned char golden[] = {
     0x06, 0x05, 0x04, 0x03, 0x02, 0x01, 0x03, 0x07, 0x06, 0x05, 0x04, 0x03,
     0x02, 0x01, 0x04, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01, 0x05, 0x07,
     0x06, 0x05, 0x04, 0x03, 0x02, 0x01, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x01, 0x06, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01, 0x07,
-    0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01,
+    0x00, 0x00, 0x01, 0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01, 0x06,
+    0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01, 0x07, 0x07, 0x06, 0x05, 0x04,
+    0x03, 0x02, 0x01,
 };
 
 static bool
@@ -59,10 +60,11 @@ test_store_binary_payloads_state(int fd, const struct snag_binary_anchor *anchor
     assert(equal_json(restored.compact_output, state->compact_output));
     assert(equal_json(restored.response_public, state->response_public));
     assert(equal_json(restored.downloads, state->download_queue));
+    assert(equal_json(restored.resume_options, json_object_get(state->strings, "resume_options")));
     assert(restored.response_public_bytes == state->response_public_bytes);
     snag_binary_checkpoint_payloads_free(&restored);
     assert(!restored.instructions && !restored.compact_output && !restored.response_public &&
-        !restored.downloads && !restored.response_public_bytes);
+        !restored.downloads && !restored.response_public_bytes && !restored.resume_options);
     snag_binary_checkpoint_payloads_free(&restored);
     snag_binary_checkpoint_payloads_free(NULL);
     bad_read(-1, anchor, &view, state);
@@ -73,6 +75,12 @@ test_store_binary_payloads_state(int fd, const struct snag_binary_anchor *anchor
     early.next_seq = 1u;
     bad_read(fd, &early, &view, state);
     struct snag_binary_checkpoint_payloads bad = view;
+    bad.resume_options = anchor->next_seq;
+    bad_read(fd, anchor, &bad, state);
+    bad = view;
+    bad.resume_options = 1u;
+    bad_read(fd, anchor, &bad, state);
+    bad = view;
     bad.download_count = SIZE_MAX;
     bad_read(fd, anchor, &bad, state);
     struct snag_session changed = *state;
@@ -153,10 +161,12 @@ test_store_binary_payloads(void)
     struct snag_binary_checkpoint_sources sources = {
         .compact_start = base + 2u, .compact_end = base + 3u,
         .response_start = base + 4u, .response_end = base + 5u,
-        .downloads = downloads, .download_count = 2u};
+        .downloads = downloads, .download_count = 2u, .resume_options = base + 8u};
     sources.texts.slots[SNAG_BINARY_TEXT_ACTIVE_PROMPT].declaration = base + 1u;
     struct snag_session state;
     snag_session_init(&state);
+    state.strings = json_pack("{s:[]}", "resume_options");
+    assert(state.strings);
     state.active_turn = true;
     state.active_instructions = json_array();
     state.response_public = json_array();
@@ -171,7 +181,8 @@ test_store_binary_payloads(void)
     assert(!snag_binary_checkpoint_payloads_decode(golden, sizeof(golden), &view));
     assert(view.turn == base + 1u && view.compact_start == base + 2u &&
         view.compact_end == base + 3u && view.response_start == base + 4u &&
-        view.response_end == base + 5u && view.download_count == 2u && view.downloads_present);
+        view.response_end == base + 5u && view.download_count == 2u && view.downloads_present &&
+        view.resume_options == base + 8u);
     for (size_t i = 0u; i < sizeof(golden); ++i) bad_decode(golden, i);
     bad_decode(NULL, sizeof(golden));
     assert(snag_binary_checkpoint_payloads_decode(golden, sizeof(golden), NULL) < 0);
@@ -179,21 +190,21 @@ test_store_binary_payloads(void)
     memcpy(changed, golden, sizeof(golden));
     changed[sizeof(golden)] = 0u;
     bad_decode(changed, sizeof(changed));
-    const size_t offsets[] = {0u, 1u, 2u, 10u, 18u, 26u, 34u, 42u, 50u, 51u, 59u};
+    const size_t offsets[] = {0u, 1u, 2u, 10u, 18u, 26u, 34u, 42u, 50u, 51u, 59u, 67u};
     for (size_t i = 0u; i < sizeof(offsets) / sizeof(*offsets); ++i) {
         memcpy(changed, golden, sizeof(golden));
         size_t length = offsets[i] < 2u || offsets[i] == 50u ? 1u : 8u;
         memset(changed + offsets[i], 255, length);
         bad_decode(changed, sizeof(golden));
     }
-    const size_t zeroes[] = {2u, 10u, 18u, 26u, 34u, 42u, 50u, 51u, 59u};
+    const size_t zeroes[] = {2u, 10u, 18u, 26u, 34u, 42u, 50u, 59u, 67u};
     for (size_t i = 0u; i < sizeof(zeroes) / sizeof(*zeroes); ++i) {
         memcpy(changed, golden, sizeof(golden));
         memset(changed + zeroes[i], 0, zeroes[i] == 50u ? 1u : 8u);
         bad_decode(changed, sizeof(golden));
     }
     memcpy(changed, golden, sizeof(golden));
-    memcpy(changed + 59u, changed + 51u, 8u);
+    memcpy(changed + 67u, changed + 59u, 8u);
     bad_decode(changed, sizeof(golden));
     struct snag_buf limited = {.max = sizeof(golden) + 3u};
     assert(!snag_buf_append(&limited, "keep", 4u));
@@ -216,8 +227,8 @@ test_store_binary_payloads(void)
     sources = (struct snag_binary_checkpoint_sources){0};
     encoded.len = 0u;
     assert(!snag_binary_checkpoint_payloads_encode(&encoded, &sources, &state));
-    assert(encoded.len == 51u);
-    unsigned char empty[51] = {1u};
+    assert(encoded.len == 59u);
+    unsigned char empty[59] = {1u};
     assert(!memcmp(encoded.data, empty, sizeof(empty)));
     state.download_queue = json_array();
     assert(state.download_queue);

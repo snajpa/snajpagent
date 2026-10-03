@@ -3513,6 +3513,43 @@ test_text_origins(struct snag_store *store, const char *cwd)
     snag_session_close(&original);
 }
 
+static void
+test_metadata_origins(struct snag_store *store, const char *cwd)
+{
+    char error[512];
+    struct snag_session original, restored;
+    snag_session_init(&original);
+    snag_session_init(&restored);
+    assert(!snag_session_create(store, &original, cwd, "default", "fixture", "default",
+        error, sizeof(error)));
+    struct snag_binary_import_result result = {0};
+    uint64_t name_sequence = 0u, options_sequence = 0u;
+    for (unsigned int phase = 0u; phase < 4u; ++phase) {
+        if (phase) {
+            name_sequence = commit_data(&original, "session_named", json_pack("{s:s}", "name",
+                phase == 3u ? "renamed é" : "same"));
+            options_sequence = commit_data(&original, "session_options", phase == 2u ?
+                json_pack("{s:[]}", "args") :
+                json_pack("{s:[s,s,s,s]}", "args", "--config", "--markdown", "-v", "-v"));
+        }
+        int fd = temporary_fd();
+        assert(!import_checked(&original, fd, &restored, &result));
+        assert(!!original.name == !!restored.name);
+        if (original.name) assert(!strcmp(original.name, restored.name));
+        json_t *before = json_object_get(original.strings, "resume_options");
+        json_t *after = json_object_get(restored.strings, "resume_options");
+        assert(!!before == !!after && (!before || json_equal(before, after)));
+        assert(result.sources.texts.slots[SNAG_BINARY_TEXT_NAME].declaration == name_sequence);
+        assert(result.sources.resume_options == options_sequence);
+        test_store_binary_texts_bad(fd, &result.native.verified, &result.sources.texts);
+        test_store_binary_core_state(fd, &result.native.verified, &result.sources, &restored);
+        assert(!close(fd));
+    }
+    snag_binary_checkpoint_sources_free(&result.sources);
+    snag_session_close(&restored);
+    snag_session_close(&original);
+}
+
 void
 test_store_binary_replay(struct snag_store *store, const char *cwd)
 {
@@ -3521,6 +3558,7 @@ test_store_binary_replay(struct snag_store *store, const char *cwd)
     test_download_origins(store, cwd);
     test_input_context_origins(store, cwd);
     test_text_origins(store, cwd);
+    test_metadata_origins(store, cwd);
     test_call_origins(store, cwd);
     test_process_origins(store, cwd);
     test_legacy_process_origin(store, cwd);

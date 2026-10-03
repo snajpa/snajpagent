@@ -44,7 +44,7 @@ static const struct text_slot {
 } text_slots[] = {
 #define SLOT(f) {#f, offsetof(struct snag_session, f)}
     SLOT(cwd), SLOT(first_user), SLOT(last_user), SLOT(active_prompt), SLOT(goal_prompt),
-    SLOT(goal_blocker), SLOT(timer_text), SLOT(banner_text), SLOT(steering_override)
+    SLOT(goal_blocker), SLOT(timer_text), SLOT(banner_text), SLOT(steering_override), SLOT(name)
 #undef SLOT
 };
 
@@ -123,6 +123,7 @@ copy_sources(struct snag_binary_checkpoint_sources *sources,
     sources->compact_start = payloads->compact_start;
     sources->compact_end = payloads->compact_end;
     sources->response_end = payloads->response_end;
+    sources->resume_options = payloads->resume_options;
     if (sources->process_count) {
         sources->processes = calloc(sources->process_count, sizeof(*sources->processes));
         if (!sources->processes) return -1;
@@ -161,7 +162,7 @@ check_sources(const struct snag_binary_checkpoint_sources *sources,
     uint64_t through = sources->texts.through;
     if (through >= state->next_seq || sources->input > through ||
         sources->calls.graph > through || sources->compact_end > through ||
-        sources->response_end > through ||
+        sources->response_end > through || sources->resume_options > through ||
         (payloads->response_start && payloads->response_start != sources->response_start) ||
         (payloads->turn &&
             payloads->turn != sources->texts.slots[SNAG_BINARY_TEXT_ACTIVE_PROMPT].declaration))
@@ -237,6 +238,13 @@ snag_binary_checkpoint_core_read(int fd, const struct snag_binary_checkpoint_fra
         snag_errno(ENOMEM);
         goto done;
     }
+    if (payload_state.resume_options &&
+        json_object_set(state.strings, "resume_options", payload_state.resume_options) < 0) {
+        snag_errno(ENOMEM);
+        goto done;
+    }
+    json_decref(payload_state.resume_options);
+    payload_state.resume_options = NULL;
     for (size_t i = 0u; i < sizeof(text_slots) / sizeof(*text_slots); ++i) {
         const char *text = snag_json_string(state.strings, text_slots[i].key);
         memcpy((unsigned char *)&state + text_slots[i].offset, &text, sizeof(text));
