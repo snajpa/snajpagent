@@ -110,6 +110,73 @@ assert_anchor(const struct snag_binary_anchor *a, const struct snag_binary_ancho
 }
 
 static void
+test_encoded_anchor(const struct snag_binary_anchor *root)
+{
+    static const unsigned char payload[] = {'a', 0u, 'b'};
+    struct snag_binary_record records[] = {
+        {.kind = 77u, .version = 1u, .payload = payload, .size = sizeof(payload)},
+        {.kind = 0x8fffu, .version = 1u, .flags = SNAG_BINARY_RECORD_OPTIONAL}
+    };
+    struct snag_buf encoded = {.max = SNAG_BINARY_BATCH_MAX};
+    assert(!snag_buf_append(&encoded, "kept", 4u));
+    struct snag_binary_anchor prepared;
+    assert(!snag_binary_batch_encode(&encoded, root, records, 2u, 0u, &prepared));
+    struct snag_binary_batch batch;
+    struct snag_binary_anchor verified;
+    assert(!snag_binary_batch_decode(encoded.data + 4u, encoded.len - 4u,
+        root, &batch, &verified));
+    assert_anchor(&prepared, &verified);
+    assert(prepared.end == root->end + batch.size);
+    size_t original_size = encoded.len;
+    struct snag_binary_anchor cursor = *root;
+    records[0].payload = encoded.data + 4u + SNAG_BINARY_BATCH_HEADER_SIZE +
+        SNAG_BINARY_RECORD_HEADER_SIZE;
+    assert(!snag_binary_batch_encode(&encoded, &cursor, records, 2u, 0u, &cursor));
+    assert_anchor(&cursor, &verified);
+    assert(encoded.len == original_size + batch.size &&
+        !memcmp(encoded.data + 4u, encoded.data + original_size, batch.size));
+    records[0].payload = payload;
+    struct snag_binary_anchor sentinel = {.end = 17u, .next_seq = 19u, .turns = 3u};
+    for (size_t fault = 0u; fault < 8u; ++fault) {
+        struct snag_binary_anchor before = *root;
+        struct snag_binary_record bad[2] = {records[0], records[1]};
+        uint32_t count = 2u;
+        if (fault == 0u) bad[0].kind = 0u;
+        if (fault == 1u) bad[0].version = 0u;
+        if (fault == 2u) bad[0].flags = 2u;
+        if (fault == 3u) bad[0].size = SNAG_MAX_EVENT_LINE + 1u;
+        if (fault == 4u) count = 0u;
+        if (fault == 5u) count = UINT32_MAX;
+        if (fault == 6u) {
+            before.end = 200u;
+            before.previous = root->end;
+            before.next_seq = UINT64_MAX;
+        }
+        if (fault == 7u) {
+            before.end = INT64_MAX - 1u;
+            before.previous = root->end;
+        }
+        size_t kept = encoded.len;
+        prepared = sentinel;
+        assert(snag_binary_batch_encode(&encoded, &before, bad, count, 0u, &prepared) < 0);
+        assert_anchor(&prepared, &sentinel);
+        assert(encoded.len == kept && !memcmp(encoded.data, "kept", 4u));
+    }
+    struct snag_buf small = {.max = 4u + batch.size - 1u};
+    assert(!snag_buf_append(&small, "kept", 4u));
+    prepared = sentinel;
+    assert(snag_binary_batch_encode(&small, root, records, 2u, 0u, &prepared) < 0);
+    assert(errno == EOVERFLOW && small.len == 4u && !memcmp(small.data, "kept", 4u));
+    assert_anchor(&prepared, &sentinel);
+    assert(snag_binary_batch_encode(NULL, root, records, 2u, 0u, &prepared) < 0);
+    assert(snag_binary_batch_encode(&encoded, NULL, records, 2u, 0u, &prepared) < 0);
+    assert(snag_binary_batch_encode(&encoded, root, NULL, 2u, 0u, &prepared) < 0);
+    assert_anchor(&prepared, &sentinel);
+    snag_buf_free(&small);
+    snag_buf_free(&encoded);
+}
+
+static void
 reject_previous(int fd, const struct snag_binary_anchor *after, struct snag_buf *scratch)
 {
     struct snag_binary_anchor before = *after;
@@ -371,7 +438,7 @@ test_direct_isolation(int fd, const struct snag_binary_anchor *root,
     assert(snag_seek(fd, (int64_t)tail->end, SEEK_SET) == (int64_t)tail->end);
     for (size_t i = 0u; i < 2u; ++i) {
         snag_buf_reset(&encoded);
-        assert(!snag_binary_batch_encode(&encoded, &anchors[i], &record, 1u, tail->turns));
+        assert(!snag_binary_batch_encode(&encoded, &anchors[i], &record, 1u, tail->turns, NULL));
         assert(!snag_binary_batch_decode(encoded.data, encoded.len,
             &anchors[i], &batch, &anchors[i + 1u]));
         assert(!snag_write_full(fd, encoded.data, encoded.len));
@@ -433,7 +500,7 @@ test_backward_special(const unsigned char *header, const struct snag_binary_anch
     fake.end += SNAG_BINARY_BATCH_HEADER_SIZE + SNAG_BINARY_RECORD_HEADER_SIZE;
     fake.previous = root->end;
     struct snag_buf nested = {.max = SNAG_BINARY_BATCH_MAX};
-    assert(!snag_binary_batch_encode(&nested, &fake, &record, 1u, 0u));
+    assert(!snag_binary_batch_encode(&nested, &fake, &record, 1u, 0u, NULL));
     struct snag_binary_batch batch;
     struct snag_binary_anchor next;
     /* An embedded batch can be locally well-formed at its exact physical offset.
@@ -452,10 +519,10 @@ test_backward_special(const unsigned char *header, const struct snag_binary_anch
     struct snag_buf second = {.max = SNAG_BINARY_BATCH_MAX};
     struct snag_binary_anchor middle;
     struct snag_binary_anchor tail;
-    assert(!snag_binary_batch_encode(&first, root, &outer, 1u, 2u));
+    assert(!snag_binary_batch_encode(&first, root, &outer, 1u, 2u, NULL));
     assert(first.len == SNAG_BINARY_BATCH_MAX);
     assert(!snag_binary_batch_decode(first.data, first.len, root, &batch, &middle));
-    assert(!snag_binary_batch_encode(&second, &middle, &record, 1u, 3u));
+    assert(!snag_binary_batch_encode(&second, &middle, &record, 1u, 3u, NULL));
     assert(!snag_binary_batch_decode(second.data, second.len, &middle, &batch, &tail));
     char *path = snag_path_join(getenv("TMPDIR") ? getenv("TMPDIR") : "/tmp",
         "snajpagent-backward-XXXXXX");
@@ -506,7 +573,7 @@ test_backward_special(const unsigned char *header, const struct snag_binary_anch
     fake = middle;
     fake.turns = 0u;
     snag_buf_reset(&second);
-    assert(!snag_binary_batch_encode(&second, &fake, &record, 1u, 1u));
+    assert(!snag_binary_batch_encode(&second, &fake, &record, 1u, 1u, NULL));
     assert(!snag_binary_batch_decode(second.data, second.len, &fake, &batch, &next));
     assert(snag_seek(fd, (int64_t)middle.end, SEEK_SET) == (int64_t)middle.end);
     assert(!snag_write_full(fd, second.data, second.len));
@@ -753,7 +820,7 @@ test_checkpoint_frames(const struct snag_binary_identity *identity,
     struct snag_buf journal = {.max = SNAG_BINARY_BATCH_MAX};
     struct snag_binary_batch batch;
     struct snag_binary_anchor next;
-    assert(!snag_binary_batch_encode(&journal, anchor, &record, 1u, anchor->turns));
+    assert(!snag_binary_batch_encode(&journal, anchor, &record, 1u, anchor->turns, NULL));
     assert(!snag_binary_batch_decode(journal.data, journal.len, anchor, &batch, &next));
     checkpoint_decode_fails(encoded.data, encoded.len, identity, &next, -1);
     frame.boundary = next;
@@ -843,6 +910,7 @@ test_store_binary(void)
     assert(!snag_binary_header_decode(header, sizeof(header), &decoded, &anchor));
     assert(!memcmp(identity.id, decoded.id, sizeof(identity.id)));
     assert(identity.created_ms == decoded.created_ms);
+    test_encoded_anchor(&anchor);
     test_backward_special(header, &anchor);
     assert(anchor.end == sizeof(header) && anchor.next_seq == 1u && !anchor.turns);
     for (size_t i = 0; i < sizeof(header); ++i) {
@@ -869,7 +937,7 @@ test_store_binary(void)
         .payload = payload, .size = sizeof(payload)
     };
     struct snag_buf encoded = {.max = SNAG_BINARY_BATCH_MAX};
-    assert(!snag_binary_batch_encode(&encoded, &anchor, &record, 1u, 0u));
+    assert(!snag_binary_batch_encode(&encoded, &anchor, &record, 1u, 0u, NULL));
     assert_bytes(encoded.data, encoded.len,
         "534e414742415400e50000000000000001000000700000000100000000000000"
         "00000000000000008e943e61bd08692bc6f5e3b9c0711533fd76a2276eb9813b"
@@ -927,7 +995,7 @@ test_store_binary(void)
     struct snag_binary_record records[2] = {record, record};
     records[1].flags = SNAG_BINARY_RECORD_OPTIONAL;
     struct snag_buf second = {.max = SNAG_BINARY_BATCH_MAX};
-    assert(!snag_binary_batch_encode(&second, &next, records, 2u, 1u));
+    assert(!snag_binary_batch_encode(&second, &next, records, 2u, 1u, NULL));
     struct snag_binary_anchor third;
     assert(!snag_binary_batch_decode(second.data, second.len, &next, &batch, &third));
     test_references(&batch);
@@ -951,16 +1019,16 @@ test_store_binary(void)
     size_t saved = encoded.len;
     struct snag_binary_anchor invalid = next;
     invalid.next_seq = UINT64_MAX;
-    assert(snag_binary_batch_encode(&encoded, &invalid, &record, 1u, 1u) < 0);
+    assert(snag_binary_batch_encode(&encoded, &invalid, &record, 1u, 1u, NULL) < 0);
     invalid = next;
     invalid.end = INT64_MAX;
-    assert(snag_binary_batch_encode(&encoded, &invalid, &record, 1u, 1u) < 0);
-    assert(snag_binary_batch_encode(&encoded, &third, &record, 1u, 0u) < 0);
-    assert(snag_binary_batch_encode(&encoded, &next, NULL, 0u, 1u) < 0);
-    assert(snag_binary_batch_encode(&encoded, &next, &record, UINT32_MAX, 1u) < 0);
+    assert(snag_binary_batch_encode(&encoded, &invalid, &record, 1u, 1u, NULL) < 0);
+    assert(snag_binary_batch_encode(&encoded, &third, &record, 1u, 0u, NULL) < 0);
+    assert(snag_binary_batch_encode(&encoded, &next, NULL, 0u, 1u, NULL) < 0);
+    assert(snag_binary_batch_encode(&encoded, &next, &record, UINT32_MAX, 1u, NULL) < 0);
     assert(encoded.len == saved);
     struct snag_buf too_small = {.max = 1u};
-    assert(snag_binary_batch_encode(&too_small, &anchor, &record, 1u, 0u) < 0);
+    assert(snag_binary_batch_encode(&too_small, &anchor, &record, 1u, 0u, NULL) < 0);
     assert(!too_small.len);
     snag_buf_free(&too_small);
     snag_buf_free(&encoded);
@@ -970,16 +1038,16 @@ test_store_binary(void)
     assert(large);
     record.payload = large;
     record.size = SNAG_MAX_EVENT_LINE;
-    assert(!snag_binary_batch_encode(&encoded, &anchor, &record, 1u, 0u));
+    assert(!snag_binary_batch_encode(&encoded, &anchor, &record, 1u, 0u, NULL));
     assert(encoded.len == SNAG_BINARY_BATCH_MAX);
     assert(!snag_binary_batch_decode(encoded.data, encoded.len, &anchor, &batch, &next));
     snag_buf_free(&encoded);
     encoded.max = SNAG_BINARY_BATCH_MAX;
     records[0] = record;
     records[0].size = SNAG_BINARY_BATCH_TARGET;
-    assert(snag_binary_batch_encode(&encoded, &anchor, records, 2u, 0u) < 0);
+    assert(snag_binary_batch_encode(&encoded, &anchor, records, 2u, 0u, NULL) < 0);
     record.size = SNAG_MAX_EVENT_LINE + 1u;
-    assert(snag_binary_batch_encode(&encoded, &anchor, &record, 1u, 0u) < 0);
+    assert(snag_binary_batch_encode(&encoded, &anchor, &record, 1u, 0u, NULL) < 0);
     assert(!encoded.len);
     free(large);
 }

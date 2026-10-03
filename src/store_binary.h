@@ -161,8 +161,12 @@ void snag_binary_header_encode(unsigned char out[SNAG_BINARY_HEADER_SIZE],
  * reject unknown required record kinds/versions before applying transitions. */
 int snag_binary_header_decode(const void *data, size_t size,
     struct snag_binary_identity *identity, struct snag_binary_anchor *anchor);
+/* Encode once; optionally return the anchor computed from those same bytes.
+ * Both bytes and next remain unchanged on failure. next may alias anchor, but
+ * its storage must be independent of out's buffer. */
 int snag_binary_batch_encode(struct snag_buf *out, const struct snag_binary_anchor *anchor,
-    const struct snag_binary_record *records, uint32_t count, uint64_t turns);
+    const struct snag_binary_record *records, uint32_t count, uint64_t turns,
+    struct snag_binary_anchor *next);
 int snag_binary_batch_decode(const void *data, size_t size,
     const struct snag_binary_anchor *anchor, struct snag_binary_batch *batch,
     struct snag_binary_anchor *next);

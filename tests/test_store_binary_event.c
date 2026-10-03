@@ -680,7 +680,7 @@ input_reference_batch(const struct snag_binary_record *source, struct snag_buf *
         {.kind = SNAG_BINARY_INPUT_CANCELLED, .version = 1u}, *source
     };
     snag_buf_reset(bytes);
-    assert(!snag_binary_batch_encode(bytes, &anchor, records, 2u, 0u));
+    assert(!snag_binary_batch_encode(bytes, &anchor, records, 2u, 0u, NULL));
     assert(!snag_binary_batch_decode(bytes->data, bytes->len, &anchor, batch, &next));
 }
 
@@ -1116,7 +1116,7 @@ test_input_reference_variants(void)
     struct snag_binary_anchor anchor, next;
     assert(!snag_binary_header_decode(header, sizeof(header), &identity, &anchor));
     snag_buf_reset(&bytes);
-    assert(!snag_binary_batch_encode(&bytes, &anchor, records, 4u, 0u));
+    assert(!snag_binary_batch_encode(&bytes, &anchor, records, 4u, 0u, NULL));
     assert(!snag_binary_batch_decode(bytes.data, bytes.len, &anchor, &batch, &next));
     size_t cursor = SNAG_BINARY_BATCH_HEADER_SIZE;
     unsigned int originals = 0u;
@@ -1459,7 +1459,7 @@ test_turn_input_references(void)
     struct snag_binary_anchor anchor, next;
     assert(!snag_binary_header_decode(header, sizeof(header), &identity, &anchor));
     snag_buf_reset(&bytes);
-    assert(!snag_binary_batch_encode(&bytes, &anchor, records, 3u, 1u));
+    assert(!snag_binary_batch_encode(&bytes, &anchor, records, 3u, 1u, NULL));
     assert(!snag_binary_batch_decode(bytes.data, bytes.len, &anchor, &batch, &next));
     struct snag_binary_event decoded;
     assert(!snag_binary_event_decode(&records[2], &decoded));
@@ -2128,7 +2128,7 @@ output_span_fixture(int fd, const struct snag_binary_event events[6], unsigned i
     struct snag_buf bytes = {.max = SNAG_BINARY_BATCH_MAX};
     struct snag_binary_batch batch;
     struct snag_binary_anchor next;
-    assert(!snag_binary_batch_encode(&bytes, anchor, records, 3u, 0u));
+    assert(!snag_binary_batch_encode(&bytes, anchor, records, 3u, 0u, NULL));
     assert(!snag_binary_batch_decode(bytes.data, bytes.len, anchor, &batch, middle));
     assert(!snag_binary_output_ref_create(&batch, 2u, &span->first));
     span->last_sequence = 5u;
@@ -2138,7 +2138,7 @@ output_span_fixture(int fd, const struct snag_binary_event events[6], unsigned i
     assert(!snag_write_full(fd, header, sizeof(header)));
     assert(!snag_write_full(fd, bytes.data, bytes.len));
     snag_buf_reset(&bytes);
-    assert(!snag_binary_batch_encode(&bytes, middle, records + 3u, 3u, 0u));
+    assert(!snag_binary_batch_encode(&bytes, middle, records + 3u, 3u, 0u, NULL));
     assert(!snag_binary_batch_decode(bytes.data, bytes.len, middle, &batch, &next));
     assert(!snag_write_full(fd, bytes.data, bytes.len));
     snag_buf_free(&bytes);
@@ -2554,7 +2554,7 @@ test_response_output_limits(struct snag_binary_event event)
     snag_binary_header_encode(header, &identity);
     struct snag_binary_anchor anchor, next;
     assert(!snag_binary_header_decode(header, sizeof(header), &identity, &anchor));
-    assert(!snag_binary_batch_encode(&bytes, &anchor, &record, 1u, 0u));
+    assert(!snag_binary_batch_encode(&bytes, &anchor, &record, 1u, 0u, NULL));
     assert(!snag_binary_batch_decode(bytes.data, bytes.len, &anchor, &batch, &next));
     struct snag_binary_ref reference;
     struct snag_binary_response_output source;
@@ -3271,7 +3271,7 @@ test_large_graph_reference(const struct snag_binary_graph_items *items,
     assert(!snag_binary_header_decode(header, sizeof(header), &identity, &anchor));
     struct snag_buf bytes = {.max = SNAG_MAX_EVENT_LINE};
     struct snag_binary_batch batch;
-    assert(!snag_binary_batch_encode(&bytes, &anchor, &record, 1u, 0u));
+    assert(!snag_binary_batch_encode(&bytes, &anchor, &record, 1u, 0u, NULL));
     assert(!snag_binary_batch_decode(bytes.data, bytes.len, &anchor, &batch, &next));
     struct snag_binary_ref reference;
     assert(!snag_binary_graph_ref_create(&batch, 1u, 0u, SNAG_BINARY_ITEM_TOOL_CALL, &reference));

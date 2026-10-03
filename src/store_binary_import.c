@@ -89,13 +89,9 @@ flush_batch(struct import_writer *writer)
         offset += writer->records[i].size;
     }
     struct snag_buf bytes = {.max = SNAG_BINARY_BATCH_MAX};
-    struct snag_binary_batch batch;
     struct snag_binary_anchor next;
     int rc = snag_binary_batch_encode(&bytes, &writer->anchor, writer->records,
-        (uint32_t)writer->count, writer->turns);
-    if (rc == 0) {
-        rc = snag_binary_batch_decode(bytes.data, bytes.len, &writer->anchor, &batch, &next);
-    }
+        (uint32_t)writer->count, writer->turns, &next);
     if (rc == 0) rc = snag_write_full(writer->fd, bytes.data, bytes.len);
     int code = errno;
     snag_buf_free(&bytes);

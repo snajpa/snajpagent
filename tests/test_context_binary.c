@@ -450,7 +450,7 @@ separate_batches(FILE *original)
             assert(seq == output.next_seq);
             write.len = 0u;
             uint64_t turns = output.turns + (record.kind == SNAG_BINARY_TURN_STARTED);
-            assert(snag_binary_batch_encode(&write, &output, &record, 1u, turns) == 0);
+            assert(snag_binary_batch_encode(&write, &output, &record, 1u, turns, NULL) == 0);
             assert(fwrite(write.data, 1u, write.len, file) == write.len);
             struct snag_binary_batch committed;
             struct snag_binary_anchor committed_end;
@@ -736,7 +736,7 @@ suffix_failure_paths(struct snag_session *source, struct snag_session *target,
             struct snag_binary_record record = {.kind = SNAG_BINARY_LEGACY_CHECKPOINT,
                 .version = 1u, .flags = SNAG_BINARY_RECORD_OPTIONAL,
                 .timestamp_ms = target->last_time_ms, .payload = &payload, .size = 1u};
-            assert(snag_binary_batch_encode(&bad, full, &record, 1u, full->turns) == 0);
+            assert(snag_binary_batch_encode(&bad, full, &record, 1u, full->turns, NULL) == 0);
             assert(pwrite(source->log_fd, bad.data, bad.len, (off_t)full->end) ==
                 (ssize_t)bad.len);
         } else {
@@ -870,7 +870,7 @@ failure_paths(struct snag_session *source, struct snag_session *target,
         .flags = SNAG_BINARY_RECORD_OPTIONAL, .timestamp_ms = target->last_time_ms,
         .payload = &bad, .size = 1u};
     struct snag_buf suffix = {.max = SNAG_BINARY_BATCH_MAX};
-    assert(snag_binary_batch_encode(&suffix, anchor, &record, 1u, anchor->turns) == 0);
+    assert(snag_binary_batch_encode(&suffix, anchor, &record, 1u, anchor->turns, NULL) == 0);
     assert(pwrite(source->log_fd, suffix.data, suffix.len, (off_t)anchor->end) ==
         (ssize_t)suffix.len);
     failed_replay(source, target, origins, NULL, EINVAL);

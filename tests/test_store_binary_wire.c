@@ -213,7 +213,7 @@ test_batch_envelope(void)
     struct snag_buf batch = {.max = SNAG_BINARY_BATCH_MAX};
     struct snag_buf wire = {.max = SNAG_BINARY_WIRE_BATCH_MAX};
     struct snag_buf plain = {.max = SNAG_BINARY_BATCH_MAX};
-    assert(!snag_binary_batch_encode(&batch, &before, &record, 1u, 0u));
+    assert(!snag_binary_batch_encode(&batch, &before, &record, 1u, 0u, NULL));
     assert(!snag_binary_wire_encode(&wire, batch.data, batch.len));
     assert(!memchr(wire.data, 0, wire.len - 1u));
     unsigned char prefix[SNAG_BINARY_BATCH_HEADER_SIZE];

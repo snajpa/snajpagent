@@ -75,7 +75,7 @@ fixture_flush(struct replay_fixture *fixture)
     struct snag_binary_anchor next;
     struct snag_binary_batch batch;
     assert(!snag_binary_batch_encode(&bytes, &fixture->anchor, fixture->records,
-        (uint32_t)fixture->count, fixture->turns));
+        (uint32_t)fixture->count, fixture->turns, NULL));
     assert(!snag_binary_batch_decode(bytes.data, bytes.len, &fixture->anchor, &batch, &next));
     assert(!snag_buf_append(&fixture->file, bytes.data, bytes.len));
     if (!fixture->first_end) fixture->first_end = fixture->file.len;
@@ -239,7 +239,7 @@ append_record(struct replay_fixture *fixture, struct snag_buf *file,
 {
     snag_buf_reset(file);
     assert(!snag_buf_append(file, fixture->file.data, fixture->file.len));
-    assert(!snag_binary_batch_encode(file, &fixture->anchor, record, 1u, turns));
+    assert(!snag_binary_batch_encode(file, &fixture->anchor, record, 1u, turns, NULL));
 }
 
 static struct snag_binary_record
@@ -350,13 +350,13 @@ test_creation_rejection(struct replay_fixture *fixture, struct snag_session *sou
     records[0] = encode_record(&payload, "session_created", fixture->creation);
     records[0].timestamp_ms = identity.created_ms + 1u;
     assert(!snag_buf_append(&file, fixture->file.data, SNAG_BINARY_HEADER_SIZE));
-    assert(!snag_binary_batch_encode(&file, &root, records, 1u, 0u));
+    assert(!snag_binary_batch_encode(&file, &root, records, 1u, 0u, NULL));
     assert(replay_check(source, restored, &recovery, file.data, file.len) < 0 && errno == EINVAL);
     assert(recovery.problem_seq == 1u && !recovery.batches);
     records[0].timestamp_ms = identity.created_ms;
     records[0].flags = SNAG_BINARY_RECORD_OPTIONAL;
     file.len = SNAG_BINARY_HEADER_SIZE;
-    assert(!snag_binary_batch_encode(&file, &root, records, 1u, 0u));
+    assert(!snag_binary_batch_encode(&file, &root, records, 1u, 0u, NULL));
     assert(replay_check(source, restored, &recovery, file.data, file.len) < 0 && errno == EINVAL);
 
     /* Format-2 semantics remain strict here: an invalid transition cannot use
@@ -375,7 +375,7 @@ test_creation_rejection(struct replay_fixture *fixture, struct snag_session *sou
     records[1] = encode_record(&bad_payload, "goal_reworded", bad);
     json_decref(bad);
     file.len = SNAG_BINARY_HEADER_SIZE;
-    assert(!snag_binary_batch_encode(&file, &root, records, 2u, 0u));
+    assert(!snag_binary_batch_encode(&file, &root, records, 2u, 0u, NULL));
     assert(replay_check(source, restored, &recovery, file.data, file.len) < 0 && errno == EINVAL);
     assert(recovery.problem_seq == 2u && recovery.verified.end == SNAG_BINARY_HEADER_SIZE);
     snag_buf_free(&bad_payload);
@@ -590,7 +590,7 @@ rewrite_turn(const struct replay_fixture *fixture, const struct turn_sources *se
                 errno == ENOTSUP && !literal_type && !literal_data);
         }
         size_t start = file->len;
-        assert(!snag_binary_batch_encode(file, &output, records, batch.count, next.turns));
+        assert(!snag_binary_batch_encode(file, &output, records, batch.count, next.turns, NULL));
         struct snag_binary_batch verified;
         assert(!snag_binary_batch_decode(file->data + start, file->len - start,
             &output, &verified, &output));
@@ -761,7 +761,7 @@ rewrite_receipt(const struct replay_fixture *fixture, uint64_t receipt, uint64_t
             assert(!type && !data);
         }
         size_t start = file->len;
-        assert(!snag_binary_batch_encode(file, &output, records, batch.count, next.turns));
+        assert(!snag_binary_batch_encode(file, &output, records, batch.count, next.turns, NULL));
         struct snag_binary_batch verified;
         assert(!snag_binary_batch_decode(file->data + start, file->len - start,
             &output, &verified, &output));
@@ -1195,7 +1195,7 @@ prefix_through(const struct snag_buf *file, uint64_t wanted, struct snag_buf *pr
             }
             snag_buf_reset(prefix);
             assert(!snag_buf_append(prefix, file->data, (size_t)anchor.end));
-            assert(!snag_binary_batch_encode(prefix, &anchor, records, count, turns));
+            assert(!snag_binary_batch_encode(prefix, &anchor, records, count, turns, NULL));
             free(records);
             return;
         }
@@ -2314,7 +2314,7 @@ rewrite_snapshot(const struct replay_fixture *fixture, const struct snapshot_sou
             if (records[begin + i].kind == SNAG_BINARY_TURN_STARTED) ++turns;
         }
         size_t start = file->len;
-        assert(!snag_binary_batch_encode(file, &output, records + begin, n, turns));
+        assert(!snag_binary_batch_encode(file, &output, records + begin, n, turns, NULL));
         struct snag_binary_batch verified;
         assert(!snag_binary_batch_decode(file->data + start, file->len - start,
             &output, &verified, &output));
@@ -3192,7 +3192,7 @@ reject_result_ranges(struct snag_session *source, struct snag_session *restored,
         record->size = payload.len;
         assert(!snag_buf_append(&file, header, sizeof(header)));
         assert(!snag_binary_batch_encode(&file, &before, records, batch.count,
-            imported->native.verified.turns));
+            imported->native.verified.turns, NULL));
         int bad_fd = temporary_fd();
         assert(!snag_write_full(bad_fd, file.data, file.len));
         struct snag_session view = *source; /* Borrowed source identity/lock only. */

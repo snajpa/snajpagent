@@ -168,7 +168,7 @@ test_image_binding(void)
         .payload = payload.data, .size = payload.len};
     struct snag_buf committed = {.max = SNAG_BINARY_BATCH_MAX};
     assert(!snag_binary_batch_encode(&committed, &frame.boundary, &metadata, 1u,
-        frame.boundary.turns));
+        frame.boundary.turns, NULL));
     struct snag_binary_batch batch;
     struct snag_binary_anchor after;
     assert(!snag_binary_batch_decode(committed.data, committed.len,

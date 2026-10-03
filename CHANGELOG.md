@@ -467,6 +467,8 @@
   and return the completed image digest with durable publication.
   Add a bounded reversible batch-envelope codec that separates physical commit
   delimiters from payload bytes, ready for journal framing integration.
+  Return prepared commit anchors from the batch encoder, avoiding a second full
+  batch hash in the journal writer and importer.
 
 - Fix a memory leak when combining compaction summaries.
 

@@ -431,11 +431,12 @@ record_valid(const struct snag_binary_record *record)
 
 int
 snag_binary_batch_encode(struct snag_buf *out, const struct snag_binary_anchor *anchor,
-    const struct snag_binary_record *records, uint32_t count, uint64_t turns)
+    const struct snag_binary_record *records, uint32_t count, uint64_t turns,
+    struct snag_binary_anchor *next)
 {
     size_t size = SNAG_BINARY_BATCH_HEADER_SIZE + SNAG_BINARY_BATCH_FOOTER_SIZE;
     size_t maximum = count == 1u ? SNAG_BINARY_BATCH_MAX : SNAG_BINARY_BATCH_TARGET;
-    if (!anchor_valid(anchor) || !records || !count ||
+    if (!out || !anchor || !anchor_valid(anchor) || !records || !count ||
         count > (SNAG_BINARY_BATCH_TARGET - size) / SNAG_BINARY_RECORD_HEADER_SIZE ||
         turns < anchor->turns || count > UINT64_MAX - anchor->next_seq) return invalid();
     for (uint32_t i = 0; i < count; ++i) {
@@ -478,8 +479,14 @@ snag_binary_batch_encode(struct snag_buf *out, const struct snag_binary_anchor *
     put_le(footer + 32, turns, 8u);
     if (snag_buf_append(&encoded, footer, sizeof(footer) - 32u) < 0) goto fail;
     digest(encoded.data, encoded.len, footer + sizeof(footer) - 32u);
+    struct snag_binary_anchor prepared = {
+        .end = anchor->end + size, .next_seq = anchor->next_seq + count,
+        .turns = turns, .previous = anchor->end
+    };
+    memcpy(prepared.digest, footer + sizeof(footer) - 32u, sizeof(prepared.digest));
     if (snag_buf_append(&encoded, footer + sizeof(footer) - 32u, 32u) < 0 ||
         snag_buf_append(out, encoded.data, encoded.len) < 0) goto fail;
+    if (next) *next = prepared;
     snag_buf_free(&encoded);
     return 0;
 fail:

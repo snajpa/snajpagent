@@ -147,13 +147,8 @@ encode_request(struct io_request *request)
 {
     if (request->bytes.len) return 0;
     if (snag_binary_batch_encode(&request->bytes, &request->before,
-        request->records, request->count, request->turns) < 0) {
+        request->records, request->count, request->turns, &request->after) < 0) {
         return -1;
-    }
-    struct snag_binary_batch batch;
-    if (snag_binary_batch_decode(request->bytes.data, request->bytes.len,
-        &request->before, &batch, &request->after) != 0) {
-        return snag_errno(EINVAL);
     }
     free(request->records);
     request->records = NULL;

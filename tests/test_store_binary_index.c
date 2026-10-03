@@ -175,7 +175,7 @@ test_batches(void)
         {.kind = SNAG_BINARY_TURN_STARTED, .version = 1u,
             .payload = turns[1].data, .size = turns[1].len}
     };
-    assert(!snag_binary_batch_encode(&batches[0], &anchors[0], records, 4u, 2u));
+    assert(!snag_binary_batch_encode(&batches[0], &anchors[0], records, 4u, 2u, NULL));
     struct snag_binary_batch batch;
     assert(!snag_binary_batch_decode(batches[0].data, batches[0].len,
         &anchors[0], &batch, &anchors[1]));
@@ -190,7 +190,7 @@ test_batches(void)
         .version = 1u, .payload = captured.data, .size = captured.len};
     records[1].payload = turns[2].data;
     records[1].size = turns[2].len;
-    assert(!snag_binary_batch_encode(&batches[1], &anchors[1], records, 3u, 3u));
+    assert(!snag_binary_batch_encode(&batches[1], &anchors[1], records, 3u, 3u, NULL));
     assert(!snag_binary_batch_decode(batches[1].data, batches[1].len,
         &anchors[1], &batch, &anchors[2]));
     struct snag_buf index = {.max = 8192u};
@@ -224,7 +224,7 @@ test_batches(void)
             .payload = wrong_turn.data, .size = wrong_turn.len}
     };
     struct snag_buf wrong_batch = {.max = SNAG_BINARY_BATCH_MAX};
-    assert(!snag_binary_batch_encode(&wrong_batch, &anchors[0], wrong_records, 2u, 1u));
+    assert(!snag_binary_batch_encode(&wrong_batch, &anchors[0], wrong_records, 2u, 1u, NULL));
     struct snag_binary_anchor wrong_after;
     assert(!snag_binary_batch_decode(wrong_batch.data, wrong_batch.len,
         &anchors[0], &batch, &wrong_after));
@@ -380,7 +380,7 @@ test_batch_limits(void)
         }
         struct snag_buf bytes = {.max = SNAG_BINARY_BATCH_MAX};
         struct snag_buf entries = {.max = SNAG_BINARY_INDEX_BATCH_MAX};
-        assert(!snag_binary_batch_encode(&bytes, &before, records, count, 0u));
+        assert(!snag_binary_batch_encode(&bytes, &before, records, count, 0u, NULL));
         assert(bytes.len == (large ? SNAG_BINARY_BATCH_MAX : SNAG_BINARY_BATCH_TARGET));
         struct snag_binary_batch batch;
         struct snag_binary_anchor after;

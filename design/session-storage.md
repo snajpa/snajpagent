@@ -213,6 +213,13 @@ still own journal identity, immutable-prefix lifetime, causal ordering, field
 role and semantic owner checks. These test-only primitives do not establish
 reference-field authority or change the wire format.
 
+The batch encoder optionally returns the complete next anchor from the same
+serialization and batch digest it just produced. Bytes and anchor advance only
+after the whole buffer append succeeds; the output anchor may replace the input
+anchor. The I/O owner and importer use this result without decoding and hashing
+their own new batch again. Journal readers still verify framing and hashes;
+encoding an anchor supplies no durability acknowledgement.
+
 `snag_binary_batch_at` reads a containing batch from an independently authenticated
 physical offset and digest. It checks header geometry before length-driven reads,
 then verifies the entire batch and its immediate predecessor. Both returned
