@@ -447,8 +447,10 @@
 - Add typed native-storage replay, canonical field references and paired
   core/provider checkpoint building blocks with legacy-data conversion tests.
   Preserve IRC display metadata, session names, ordered saved launch options and
-  current session-list behavior when loading these checkpoints. Runtime storage remains JSONL while the native writer,
-  migration and application integration are completed.
+  current session-list behavior when loading these checkpoints. Runtime storage
+  remains JSONL while the native writer,
+  migration and application integration are completed. Preserve provider-hosted
+  search observations through native replay and paired checkpoints.
 
 ## 0.99.8c — October 2, 2026
 

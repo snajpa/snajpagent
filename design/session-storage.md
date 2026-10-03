@@ -7,7 +7,7 @@
 Engineering design, September 27, 2026, with framing implementation begun
 September 28. Installed builds keep the existing JSONL format. The draft header,
 commit-batch codec and bounded positional reader are exercised by the store tests.
-Typed payloads and data adapters cover all 75 assigned semantic kinds. Archive
+Typed payloads and data adapters cover all 77 assigned semantic kinds. Archive
 profiles also preserve public checkpoint views and explicitly unassigned source
 names as inert observations.
 Public snapshots preserve literal or span-backed text. Canonical input, output,
@@ -34,7 +34,8 @@ The current integration retains IRC display metadata, session names and saved
 resume options in native replay and paired checkpoints. Names refer to their
 canonical text; options retain the accepting declaration and preserve argument
 order, duplicates and the distinction between absent options and an empty list.
-Hosted-search records still need typed adapters before runtime cutover.
+Hosted-search start/finish observations retain their typed provider evidence
+through replay and paired checkpoints without creating local calls or processes.
 
 ## Format evolution and compatibility
 
@@ -591,7 +592,7 @@ acceptance remain importer/reducer checks. Begin coordinates still require journ
 relocation; projecting metadata does not adopt history or change attachment state.
 Archive264 preserves public projections through its enclosed public field profile,
 including the smaller checkpoint view and explicitly unassigned source names.
-All75 assigned semantic kinds have data adapters. Unresolved native references
+All77 assigned semantic kinds have data adapters. Unresolved native references
 return `ENOTSUP`; known records never use a generic whole-record fallback.
 The module is linked into the store and context test targets.
 
@@ -602,6 +603,24 @@ deadlines beyond signed64 cannot be projected into legacy JSON. Failed conversio
 preserves caller outputs, including append prefixes. These adapters do not load,
 repair, publish or resume a session; journal-aware reference resolution, replay
 integration and the four-file backend remain implementation work.
+
+### Hosted-search observations
+
+Payload version 1 assigns 167 to `hosted_search_started` and 168 to
+`hosted_search_finished`. Both begin with the turn UUID and provider item-ID text.
+Finish adds status text before the one-byte optional-detail presence flag. Start
+may carry an action object; finish may carry an array of source strings. Their
+native field-value encodings preserve provider members, source order, duplicates
+and explicit empty objects/arrays. The body has fixed field positions; only the
+provider-owned action has an open object schema.
+
+The adapters retain the existing provider-ID grammar, 64-byte nonempty status,
+16KiB canonical action-object bound and 2048-byte nonempty source-string bound.
+Source strings are retained as supplied, without URL normalization or a source
+count quota. Action on finish and sources on start remain invalid. The strict
+reducer requires the current turn and an open response. These display-only
+observations create no pending-call/result contract or process state, and their
+conversion performs no search or other network operation.
 
 ### Typed control payloads
 

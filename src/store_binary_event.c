@@ -2353,6 +2353,71 @@ snag_binary_rule_value_json(const struct snag_binary_result_value *value, json_t
 }
 
 static bool
+hosted_search_kind(enum snag_binary_kind kind)
+{
+    return kind == SNAG_BINARY_HOSTED_SEARCH_STARTED || kind == SNAG_BINARY_HOSTED_SEARCH_FINISHED;
+}
+
+static bool
+hosted_detail_valid(bool started, const struct snag_binary_result_value *value)
+{
+    if (started) {
+        return value->kind == SNAG_BINARY_RESULT_OBJECT &&
+            value->canonical_size <= SNAG_MAX_HOSTED_ACTION;
+    }
+    if (value->kind != SNAG_BINARY_RESULT_ARRAY) return false;
+    struct fields fields = {.data = value->data, .size = value->size, .offset = 1u};
+    while (fields.offset < fields.size) {
+        uint64_t tag;
+        if (!read_uint(&fields, 1u, &tag)) return false;
+        if (tag == SNAG_BINARY_RESULT_VALUE_END) return fields.offset == fields.size;
+        struct snag_binary_text text;
+        if (tag != SNAG_BINARY_RESULT_STRING || !read_result_string(&fields, &text) ||
+            !text_valid(text, 1u, SNAG_MAX_HOSTED_SOURCE_URL)) return false;
+    }
+    return false;
+}
+
+static int
+encode_hosted_search(struct snag_buf *out, const struct snag_binary_event *event)
+{
+    const struct snag_binary_hosted_search *value = &event->data.hosted_search;
+    bool started = event->kind == SNAG_BINARY_HOSTED_SEARCH_STARTED;
+    if (!provider_id_valid(value->item_id) ||
+        (started && (value->status.data || value->status.size)) ||
+        (!value->has_detail && (value->detail.data || value->detail.size))) return invalid();
+    if (snag_buf_append(out, value->turn, 16u) < 0 ||
+        write_text(out, value->item_id, 1u, SNAG_MAX_PROVIDER_ID) < 0 ||
+        (!started && write_text(out, value->status, 1u, 64u) < 0) ||
+        write_uint(out, value->has_detail, 1u) < 0) return -1;
+    if (value->has_detail) {
+        struct snag_binary_result_value checked;
+        if (snag_binary_rule_value_decode(value->detail.data, value->detail.size, &checked) < 0) {
+            return -1;
+        }
+        if (!hosted_detail_valid(started, &checked)) return invalid();
+        return snag_buf_append(out, checked.data, checked.size);
+    }
+    return 0;
+}
+
+static bool
+decode_hosted_search(struct fields *fields, struct snag_binary_event *event)
+{
+    struct snag_binary_hosted_search *value = &event->data.hosted_search;
+    bool started = event->kind == SNAG_BINARY_HOSTED_SEARCH_STARTED;
+    uint64_t present;
+    if (!read_id(fields, value->turn) ||
+        !read_text(fields, &value->item_id, 1u, SNAG_MAX_PROVIDER_ID) ||
+        !provider_id_valid(value->item_id) ||
+        (!started && !read_text(fields, &value->status, 1u, 64u)) ||
+        !read_uint(fields, 1u, &present) || present > 1u) return false;
+    value->has_detail = present != 0u;
+    return !value->has_detail || (read_result_value(fields, 2u, &value->detail, NULL) == 0 &&
+        hosted_detail_valid(started, &value->detail));
+}
+
+static bool
 tool_excerpt_valid(const struct snag_binary_tool_excerpt *value)
 {
     if (value->original_bytes > INT64_MAX || value->retained_bytes > INT64_MAX ||
@@ -3403,6 +3468,9 @@ static const struct archive_schema archive_schemas[] = {
         "request_sha256", "requested_input_tokens", "response_id", "turn_id"),
     ARCHIVE_SCHEMA(SNAG_BINARY_TOOL_STARTED, "action_sha256", "call_id", "resolved_workdir",
         "turn_id"),
+    ARCHIVE_SCHEMA(SNAG_BINARY_HOSTED_SEARCH_STARTED, "action", "item_id", "turn_id"),
+    ARCHIVE_SCHEMA(SNAG_BINARY_HOSTED_SEARCH_FINISHED, "item_id", "sources", "status",
+        "turn_id"),
     ARCHIVE_SCHEMA(SNAG_BINARY_TOOL_FINISHED, "call_id", "result", "turn_id"),
     ARCHIVE_SCHEMA(SNAG_BINARY_PROCESS_OUTPUT, "data", "encoding", "handle", "offset", "stream",
         "turn_id"),
@@ -4142,6 +4210,7 @@ encode_fields(struct snag_buf *out, const struct snag_binary_event *event)
     if (event->kind == SNAG_BINARY_TOOL_STARTED) {
         return encode_tool_start(out, &event->data.tool_started);
     }
+    if (hosted_search_kind(event->kind)) return encode_hosted_search(out, event);
     if (event->kind == SNAG_BINARY_TOOL_FINISHED) {
         return encode_tool_finish(out, &event->data.tool_finished);
     }
@@ -4264,6 +4333,8 @@ static const struct {
     {SNAG_BINARY_RESPONSE_OUTPUT_CORRECTION, "response_output_correction"},
     {SNAG_BINARY_RESPONSE_COMPLETED, "response_completed"},
     {SNAG_BINARY_RESPONSE_CAPACITY_REJECTED, "response_capacity_rejected"},
+    {SNAG_BINARY_HOSTED_SEARCH_STARTED, "hosted_search_started"},
+    {SNAG_BINARY_HOSTED_SEARCH_FINISHED, "hosted_search_finished"},
     {SNAG_BINARY_TOOL_STARTED, "tool_started"},
     {SNAG_BINARY_TOOL_FINISHED, "tool_finished"},
     {SNAG_BINARY_PROCESS_OUTPUT, "process_output"},
@@ -4324,7 +4395,8 @@ snag_binary_event_version(enum snag_binary_kind kind)
     }
     if (kind >= SNAG_BINARY_INPUT_RECEIVED && kind <= SNAG_BINARY_FUTURE_TURN_EDITED) return 2u;
     if ((kind >= SNAG_BINARY_SESSION_CREATED && kind <= SNAG_BINARY_SESSION_OPTIONS) ||
-        timer_kind(kind) || goal_kind(kind) || kind == SNAG_BINARY_TURN_STARTED ||
+        timer_kind(kind) || goal_kind(kind) || hosted_search_kind(kind) ||
+        kind == SNAG_BINARY_TURN_STARTED ||
         turn_outcome_kind(kind) || kind == SNAG_BINARY_RESPONSE_STARTED ||
         kind == SNAG_BINARY_RESPONSE_OUTPUT || kind == SNAG_BINARY_RESPONSE_INTERRUPTED ||
         kind == SNAG_BINARY_RESPONSE_FAILED || kind == SNAG_BINARY_RESPONSE_OUTPUT_CORRECTION ||
@@ -4426,6 +4498,7 @@ decode_fields(struct fields *fields, struct snag_binary_event *event)
     if (event->kind == SNAG_BINARY_TOOL_STARTED) {
         return decode_tool_start(fields, &event->data.tool_started);
     }
+    if (hosted_search_kind(event->kind)) return decode_hosted_search(fields, event);
     if (event->kind == SNAG_BINARY_TOOL_FINISHED) {
         return decode_tool_finish(fields, &event->data.tool_finished);
     }

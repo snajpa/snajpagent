@@ -205,6 +205,9 @@ static const struct legacy_sample {
     {"session_named", "{\"name\":\"work é\"}", 13},
     {"session_options", "{\"args\":[\"--config\",\"./config\",\"--markdown\",\"-v\","
         "\"--listen\",\"[::1]:1234\",\"--no-listen\"]}", 14},
+    {"hosted_search_started", "{\"turn_id\":\"" ID "\",\"item_id\":\"ws_search\"}", 167},
+    {"hosted_search_finished", "{\"turn_id\":\"" ID "\",\"item_id\":\"ws_search\","
+        "\"status\":\"completed\"}", 168},
 };
 
 static void
@@ -888,6 +891,128 @@ session_metadata_wire(void)
     snag_buf_free(&small);
     json_decref(data);
     snag_buf_free(&bytes);
+}
+
+static void
+hosted_search_variants(void)
+{
+    const char *const details[] = {
+        "{}", "{\"type\":\"search\",\"query\":\"é\",\"extra\":[true,null,17,{\"\":false}]}",
+        "[]", "[\"https://example.test/a\",\"https://example.test/a\",\"unparsed source\"]",
+        "null", "1", "true", "\"text\"", "[null]", "[\"\"]", "[{}]"
+    };
+    for (unsigned int finished = 0u; finished < 2u; ++finished) {
+        const char *type = finished ? "hosted_search_finished" : "hosted_search_started";
+        unsigned int kind = finished ? 168u : 167u;
+        json_t *data = json_pack("{s:s,s:s}", "turn_id", ID, "item_id", "ws_é");
+        assert(data);
+        if (finished) assert(!json_object_set_new(data, "status", json_string("provider status")));
+        roundtrip(type, data, kind);
+        for (size_t i = 0u; i < sizeof(details) / sizeof(*details); ++i) {
+            json_t *detail = json_loads(details[i], JSON_DECODE_ANY, NULL);
+            assert(detail && !json_object_set_new(data, finished ? "sources" : "action", detail));
+            if ((finished && (i == 2u || i == 3u)) || (!finished && i < 2u)) {
+                roundtrip(type, data, kind);
+            } else {
+                reject_json(type, data);
+            }
+        }
+        assert(!json_object_del(data, finished ? "sources" : "action"));
+        assert(!json_object_set_new(data, finished ? "action" : "sources", json_object()));
+        reject_json(type, data);
+        assert(!json_object_del(data, finished ? "action" : "sources"));
+        if (finished) {
+            char status[66];
+            memset(status, 's', sizeof(status));
+            for (size_t n = 64u; n <= 65u; ++n) {
+                assert(!json_object_set_new(data, "status", json_stringn(status, n)));
+                if (n == 64u) roundtrip(type, data, kind);
+                else reject_json(type, data);
+            }
+            assert(!json_object_set_new(data, "status", json_string("")));
+            reject_json(type, data);
+            assert(!json_object_set_new(data, "status", json_string(" ")));
+            roundtrip(type, data, kind);
+        }
+        const char *const bad_ids[] = {"", "x\n", "x\177", "x\302\200"};
+        for (size_t i = 0u; i < sizeof(bad_ids) / sizeof(*bad_ids); ++i) {
+            assert(!json_object_set_new(data, "item_id", json_string(bad_ids[i])));
+            reject_json(type, data);
+        }
+        json_decref(data);
+    }
+    char *text = malloc(SNAG_MAX_HOSTED_ACTION + 1u);
+    assert(text);
+    memset(text, 'x', SNAG_MAX_HOSTED_ACTION);
+    text[SNAG_MAX_HOSTED_ACTION] = '\0';
+    for (unsigned int excess = 0u; excess < 2u; ++excess) {
+        json_t *action = json_object();
+        json_t *data = json_pack("{s:s,s:s}", "turn_id", ID, "item_id", "ws");
+        assert(action && data && !json_object_set_new(action, "q",
+            json_stringn(text, SNAG_MAX_HOSTED_ACTION - 8u + excess)));
+        assert(!json_object_set_new(data, "action", action));
+        if (!excess) roundtrip_checked("hosted_search_started", data, 167u, false);
+        else reject_json("hosted_search_started", data);
+        json_decref(data);
+        json_t *sources = json_array();
+        data = json_pack("{s:s,s:s,s:s}", "turn_id", ID, "item_id", "ws", "status", "done");
+        assert(sources && data && !json_array_append_new(sources,
+            json_stringn(text, SNAG_MAX_HOSTED_SOURCE_URL + excess)));
+        assert(!json_object_set_new(data, "sources", sources));
+        if (!excess) roundtrip_checked("hosted_search_finished", data, 168u, false);
+        else reject_json("hosted_search_finished", data);
+        json_decref(data);
+    }
+    free(text);
+}
+
+static void
+hosted_search_wire(void)
+{
+    const unsigned char id[] = {0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef,
+        0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77};
+    unsigned char started[25] = {0}, finished[31] = {0};
+    memcpy(started, id, sizeof(id));
+    started[16] = 2u;
+    started[20] = 'w';
+    started[21] = 's';
+    started[22] = 1u;
+    started[23] = 6u;
+    started[24] = 7u;
+    memcpy(finished, started, 22u);
+    finished[22] = 2u;
+    finished[26] = 'o';
+    finished[27] = 'k';
+    finished[28] = 1u;
+    finished[29] = 5u;
+    finished[30] = 7u;
+    for (unsigned int end = 0u; end < 2u; ++end) {
+        json_t *data = json_pack("{s:s,s:s}", "turn_id", ID, "item_id", "ws");
+        assert(data);
+        if (end) assert(!json_object_set_new(data, "status", json_string("ok")));
+        assert(!json_object_set_new(data, end ? "sources" : "action",
+            end ? json_array() : json_object()));
+        struct snag_buf bytes = {.max = SNAG_MAX_EVENT_LINE};
+        enum snag_binary_kind kind = 0;
+        assert(!snag_binary_legacy_encode(&bytes,
+            end ? "hosted_search_finished" : "hosted_search_started", data, &kind));
+        unsigned char *golden = end ? finished : started;
+        size_t size = end ? sizeof(finished) : sizeof(started);
+        assert((unsigned int)kind == (end ? 168u : 167u));
+        assert(bytes.len == size && !memcmp(bytes.data, golden, size));
+        struct snag_binary_record record = {.kind = (uint16_t)kind, .version = 1u,
+            .payload = golden, .size = size};
+        size_t present = end ? 28u : 22u;
+        golden[present] = 2u;
+        reject_record(&record);
+        golden[present] = 0u;
+        reject_record(&record);
+        golden[present] = 1u;
+        golden[present + 1u] = end ? 6u : 5u;
+        reject_record(&record);
+        snag_buf_free(&bytes);
+        json_decref(data);
+    }
 }
 
 static void
@@ -3910,6 +4035,8 @@ test_store_binary_legacy(void)
     metadata_variants();
     session_metadata_variants();
     session_metadata_wire();
+    hosted_search_variants();
+    hosted_search_wire();
     rule_voice_variants();
     rule_storage_and_aggregate();
     control_variants();

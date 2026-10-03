@@ -4665,6 +4665,8 @@ test_hosted_search_many_sources(struct snag_store *store, const char *cwd)
     create_session(store, &session, cwd, "medium");
     commit_event(&session, "turn_started", turn_started(turn, 1, "hosted sources", cwd, NULL));
     commit_event(&session, "response_started", response_started(turn, response, NULL));
+    commit_event(&session, "hosted_search_started", json_pack("{s:s,s:s,s:{s:s,s:s}}",
+        "turn_id", turn, "item_id", "ws_many", "action", "type", "search", "query", "fixture"));
     json_t *event = json_object();
     assert(event);
     assert(json_object_set_new(event, "item_id", json_string("ws_many")) == 0);
@@ -4672,6 +4674,18 @@ test_hosted_search_many_sources(struct snag_store *store, const char *cwd)
     assert(json_object_set_new(event, "status", json_string("completed")) == 0);
     assert(json_object_set_new(event, "turn_id", json_string(turn)) == 0);
     commit_event(&session, "hosted_search_finished", event);
+    assert(!session.pending_call_count && !session.process_count);
+    commit_event(&session, "response_completed", response_completed(turn, response, "evidence"));
+    commit_event(&session, "turn_completed", turn_completed(turn, response));
+    commit_event(&session, "turn_started", turn_started("e3000000000000000000000000000000",
+        2u, "next request", cwd, NULL));
+    struct snag_context_projection projection = {0};
+    struct snag_instruction_set instructions = {0};
+    json_t *steering = json_array();
+    assert(steering);
+    build_context(&session, 1u, steering, &instructions, &projection);
+    snag_context_projection_free(&projection);
+    json_decref(steering);
     snag_session_close(&session);
 }
 

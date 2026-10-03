@@ -160,9 +160,16 @@ _Static_assert(sizeof(turn_values) / sizeof(turn_values[0]) == SNAG_BINARY_TURN_
     "Turn value field positions must match the native schema");
 
 static bool
+hosted_search_kind(enum snag_binary_kind kind)
+{
+    return kind == SNAG_BINARY_HOSTED_SEARCH_STARTED || kind == SNAG_BINARY_HOSTED_SEARCH_FINISHED;
+}
+
+static bool
 legacy_kind(enum snag_binary_kind kind)
 {
-    return metadata_kind(kind) || timer_kind(kind) || goal_kind(kind) || rule_voice_kind(kind) ||
+    return hosted_search_kind(kind) || metadata_kind(kind) || timer_kind(kind) ||
+        goal_kind(kind) || rule_voice_kind(kind) ||
         control_kind(kind) || download_kind(kind) || context_kind(kind) ||
         kind == SNAG_BINARY_RESPONSE_STARTED || kind == SNAG_BINARY_RESPONSE_OUTPUT ||
         response_end_kind(kind) || kind == SNAG_BINARY_RESPONSE_COMPLETED ||
@@ -565,6 +572,25 @@ read_context(const json_t *data, struct snag_binary_event *event)
         return invalid();
     }
     return 0;
+}
+
+static int
+read_hosted_search(const json_t *data, struct snag_binary_event *event, struct snag_buf *scratch)
+{
+    bool started = event->kind == SNAG_BINARY_HOSTED_SEARCH_STARTED;
+    if (started ? (!snag_json_exact_keys(data, "item_id turn_id") &&
+        !snag_json_exact_keys(data, "action item_id turn_id")) :
+        (!snag_json_exact_keys(data, "item_id status turn_id") &&
+        !snag_json_exact_keys(data, "item_id sources status turn_id"))) return invalid();
+    struct snag_binary_hosted_search *value = &event->data.hosted_search;
+    if (read_id(data, "turn_id", value->turn) < 0 ||
+        read_text(data, "item_id", &value->item_id) < 0 ||
+        (!started && read_text(data, "status", &value->status) < 0)) return -1;
+    json_t *detail = json_object_get(data, started ? "action" : "sources");
+    value->has_detail = detail != NULL;
+    if (!detail) return 0;
+    if (snag_binary_rule_value_encode(scratch, detail) < 0) return -1;
+    return snag_binary_rule_value_decode(scratch->data, scratch->len, &value->detail);
 }
 
 static int
@@ -2009,6 +2035,7 @@ snag_binary_legacy_encode(struct snag_buf *out, const char *type, const json_t *
     else if (download_kind(event.kind)) rc = read_download(data, &event);
     else if (context_kind(event.kind)) rc = read_context(data, &event);
     else if (rule_voice_kind(event.kind)) rc = read_rule_voice(data, &event, &scratch);
+    else if (hosted_search_kind(event.kind)) rc = read_hosted_search(data, &event, &scratch);
     else if (event.kind == SNAG_BINARY_TURN_STARTED) {
         rc = read_turn_start(data, &event.data.started, &scratch);
     } else if (event.kind == SNAG_BINARY_RESPONSE_STARTED) {
@@ -2314,6 +2341,19 @@ put_context(json_t *data, const struct snag_binary_event *event)
         return -1;
     }
     return 0;
+}
+
+static int
+put_hosted_search(json_t *data, const struct snag_binary_event *event)
+{
+    bool started = event->kind == SNAG_BINARY_HOSTED_SEARCH_STARTED;
+    const struct snag_binary_hosted_search *value = &event->data.hosted_search;
+    if (put_id(data, "turn_id", value->turn) < 0 || put_text(data, "item_id", value->item_id) < 0 ||
+        (!started && put_text(data, "status", value->status) < 0)) return -1;
+    if (!value->has_detail) return 0;
+    json_t *detail = NULL;
+    if (snag_binary_rule_value_json(&value->detail, &detail) < 0) return -1;
+    return snag_json_set_new(data, started ? "action" : "sources", detail);
 }
 
 static int
@@ -3390,6 +3430,7 @@ snag_binary_legacy_decode(const struct snag_binary_record *record, const char **
     else if (download_kind(event.kind)) rc = put_download(result, &event);
     else if (context_kind(event.kind)) rc = put_context(result, &event);
     else if (rule_voice_kind(event.kind)) rc = put_rule_voice(result, &event);
+    else if (hosted_search_kind(event.kind)) rc = put_hosted_search(result, &event);
     else if (event.kind == SNAG_BINARY_TURN_STARTED) {
         rc = put_turn_start(result, &event.data.started);
     } else if (event.kind == SNAG_BINARY_RESPONSE_STARTED) {

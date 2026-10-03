@@ -16,6 +16,7 @@
  * Stream output, interruptions, failures and corrections retain typed public items.
  * Unresolved public output spans return ENOTSUP, never substituted text.
  * Completed responses retain typed graphs, nullable usage and provider continuation.
+ * Hosted-search observations retain bounded provider actions and ordered source strings.
  * Tool starts and process-output chunks preserve binding fields and original encoding.
  * Results and process closure preserve typed values, excerpts, options and log coordinates.
  * IRC retains watermark/classification presence, snapshots and typed admitted inputs.
@@ -24,7 +25,7 @@
  * and unassigned source names. Literal ordinary typed snapshots also decode.
  * Native input references return ENOTSUP here; journal-aware resolution is separate.
  * Encode uses the current payload version returned by snag_binary_event_version.
- * All 75 assigned source kinds have adapters; unresolved references return ENOTSUP.
+ * All 77 assigned source kinds have adapters; unresolved references return ENOTSUP.
  * Archive observations never fall back to an opaque known record or mutate source state.
  * The importer must separately verify the complete legacy envelope, chain,
  * source-platform admission rules and reducer transitions before publication.

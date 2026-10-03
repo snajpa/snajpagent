@@ -64,6 +64,8 @@ enum snag_binary_kind {
     SNAG_BINARY_RESPONSE_OUTPUT_CORRECTION = 164,
     SNAG_BINARY_RESPONSE_COMPLETED = 165,
     SNAG_BINARY_RESPONSE_CAPACITY_REJECTED = 166,
+    SNAG_BINARY_HOSTED_SEARCH_STARTED = 167,
+    SNAG_BINARY_HOSTED_SEARCH_FINISHED = 168,
     SNAG_BINARY_TOOL_STARTED = 176,
     SNAG_BINARY_TOOL_FINISHED = 177,
     SNAG_BINARY_PROCESS_OUTPUT = 192,
@@ -290,6 +292,15 @@ struct snag_binary_result_value {
     size_t canonical_size;
     enum snag_binary_result_value_kind kind;
     int64_t integer;
+};
+
+/* Display-only provider observations. Detail is an optional action object on
+ * start, or an optional string array of sources on finish. */
+struct snag_binary_hosted_search {
+    unsigned char turn[16];
+    struct snag_binary_text item_id, status;
+    struct snag_binary_result_value detail;
+    bool has_detail;
 };
 
 int snag_binary_result_value_encode(struct snag_buf *out, const json_t *value);
@@ -867,6 +878,7 @@ struct snag_binary_event {
         struct snag_binary_response_failure response_failed;
         struct snag_binary_response_correction response_correction;
         struct snag_binary_response_complete response_completed;
+        struct snag_binary_hosted_search hosted_search;
         struct snag_binary_control control;
         struct snag_binary_rule_log rule_log;
         struct snag_binary_rule_transform rule_transform;
