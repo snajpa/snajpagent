@@ -2671,6 +2671,7 @@ void test_store_binary_receipts_find(void);
 void test_store_binary_wire(void);
 void test_store_binary_tail(void);
 void test_store_binary_index(void);
+void test_store_binary_checkpoint_index(void);
 void test_store_binary_index_tree(void);
 void test_store_binary_io(void);
 void test_store_binary_publish(void);
@@ -2694,6 +2695,7 @@ main(void)
     test_store_binary_wire();
     test_store_binary_tail();
     test_store_binary_index();
+    test_store_binary_checkpoint_index();
     test_store_binary_index_tree();
     test_store_binary_io();
     test_store_binary_publish();

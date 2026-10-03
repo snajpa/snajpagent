@@ -477,6 +477,8 @@
   scans and canonical batch checks, rejecting corrupt closed frames and tails.
   Advance the logical history-index frontier independently of optional cache output
   and its file-offset range.
+  Add field-shaped checkpoint access metadata for the frontier and working-set
+  canonical locations, with sorted lookup and whole-image trust requirements.
 
 - Fix a memory leak when combining compaction summaries.
 

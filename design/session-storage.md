@@ -2084,6 +2084,38 @@ turn-start hint over a caller-bounded prefix. Missing or torn index bytes mean
 unavailable indexing; a negative search never proves that canonical history is
 absent. The positive result still requires canonical resolution.
 
+### Checkpoint access metadata
+
+The version-1 access block stores a fixed frontier and sorted canonical locations
+for the caller's active working set. It contains no event payloads and requires
+no lifetime location table or addressable `history.idx` prefix. The field-shaped
+codec is test-linked; capture/image integration and materializers remain pending.
+
+| Offset | Field |
+|---|---|
+| 0 | access version 1, index major 0, index minor 2, reserved zero: four u16s |
+| 8 | frontier record count, u64 |
+| 16 | location count, u64 |
+| 24 | 64 frontier peaks, 32 bytes each; unoccupied slots are zero |
+| 2072 | strictly increasing 96-byte index entries for the working set |
+
+The frontier count equals captured next-sequence minus one. Decode checks its
+root against the independently established receipt root, exact input consumption,
+entry identity/checksums, sequence order and captured sequence/turn/physical bounds.
+These are structural checks. The complete enclosing image must match its canonical
+receipt before its location table can establish membership: recomputing an entry's
+checksum while retaining the same frontier does not prove that replacement entry
+belongs to the journal. This distinction is covered by a whole-image binding test.
+
+Successful decode borrows immutable entry bytes. Binary search returns one location
+or an unavailable result without scanning history. A required absent location means
+an incomplete checkpoint. The canonical direct reader still checks the containing
+batch, predecessor, record boundary, kind and turn before exposing payload bytes;
+field roles, ownership and the complete required-reference closure remain semantic
+admission work. Encoding is atomic with aliased inputs; failed decode/lookup preserves
+caller outputs. The access block supports logical frontiers beyond derived-file
+offset limits and imposes no session-wide entry quota.
+
 ### Append-only index proofs
 
 The index uses the SHA-256 tree-hash construction from RFC 9162 section 2.1.1.

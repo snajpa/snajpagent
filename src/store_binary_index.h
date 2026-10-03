@@ -29,6 +29,39 @@ struct snag_binary_index_entry {
     unsigned char batch_digest[32];
 };
 
+#define SNAG_BINARY_CHECKPOINT_INDEX_HEADER_SIZE (24u + 64u * SNAG_BINARY_INDEX_HASH_SIZE)
+
+/* Version-1 checkpoint access metadata. The frontier covers every canonical
+ * record; the sorted entry table holds only the caller's working-set locations.
+ * Decoded entries borrow immutable bytes. The entire enclosing image must be
+ * pinned by a canonical receipt before these locations grant source membership;
+ * matching the frontier root alone cannot authenticate the location table. */
+struct snag_binary_checkpoint_index {
+    struct snag_binary_identity identity;
+    struct snag_binary_anchor boundary;
+    struct snag_binary_index_tree tree;
+    const unsigned char *entries;
+    size_t entry_count;
+};
+
+/* Atomic append, permitting inputs to borrow out. The frontier count must match
+ * the captured boundary; unused peaks are zero and entries strictly ordered.
+ * No cache-file geometry check or lifetime record table is required. */
+int snag_binary_checkpoint_index_encode(struct snag_buf *out,
+    const struct snag_binary_identity *, const struct snag_binary_anchor *,
+    const struct snag_binary_index_tree *, const struct snag_binary_index_entry *, size_t count);
+/* Exact structural decoding against an independently established boundary/root.
+ * Validate every location and frontier slot before replacing out. This does not
+ * establish whole-image authority, working-set completeness or source semantics. */
+int snag_binary_checkpoint_index_decode(const void *data, size_t size,
+    const struct snag_binary_identity *, const struct snag_binary_anchor *,
+    const unsigned char root[32], struct snag_binary_checkpoint_index *out);
+/* Binary search in successfully decoded, unchanged metadata: 0 found, 1 absent,
+ * -1 invalid. Every nonzero result preserves out. A required absent location is
+ * an incomplete checkpoint, never permission to invent content or skip history. */
+int snag_binary_checkpoint_index_find(const struct snag_binary_checkpoint_index *,
+    uint64_t sequence, struct snag_binary_index_entry *out);
+
 /* Draft derived index. Header identity is supplied independently from the
  * canonical journal. Entry checksums bind that identity and their sequence slot;
  * neither checksum grants semantic state or canonical-batch authority. */
