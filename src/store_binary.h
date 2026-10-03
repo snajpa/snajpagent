@@ -15,6 +15,8 @@
 #define SNAG_BINARY_REF_SIZE 16u
 #define SNAG_BINARY_LEGACY_CHECKPOINT 0x8000u
 #define SNAG_BINARY_LEGACY_CHECKPOINT_SIZE 48u
+#define SNAG_BINARY_CHECKPOINT_RECEIPT 0x8001u
+#define SNAG_BINARY_CHECKPOINT_RECEIPT_SIZE 144u
 #define SNAG_BINARY_CHECKPOINT_HEADER_SIZE 160u
 #define SNAG_BINARY_CHECKPOINT_FOOTER_SIZE 48u
 
@@ -37,6 +39,16 @@ struct snag_binary_identity {
 struct snag_binary_anchor {
     uint64_t end, next_seq, turns, previous;
     unsigned char digest[32];
+};
+
+/* Optional canonical metadata pins one immutable checkpoint image and the
+ * index-format-0.2 tree root at its captured boundary. This decoded value alone
+ * does not establish membership in the journal or snapshot semantic validity. */
+struct snag_binary_checkpoint_receipt {
+    uint64_t generation;
+    struct snag_binary_anchor boundary;
+    unsigned char image_digest[32];
+    unsigned char index_root[32];
 };
 
 struct snag_binary_checkpoint_section {
@@ -118,6 +130,22 @@ int snag_binary_legacy_checkpoint_encode(struct snag_buf *out,
     const struct snag_binary_legacy_checkpoint *checkpoint);
 int snag_binary_legacy_checkpoint_decode(const struct snag_binary_record *record,
     struct snag_binary_legacy_checkpoint *checkpoint);
+/* Encode version 1 atomically. Decode returns 0 for supported metadata, 1 for
+ * an unknown optional version/index format, -1 for malformed supported fields.
+ * Every nonzero result preserves out. A caller using the receipt must separately
+ * establish its canonical membership and earlier committed capture boundary. */
+int snag_binary_checkpoint_receipt_encode(struct snag_buf *out,
+    const struct snag_binary_checkpoint_receipt *receipt);
+int snag_binary_checkpoint_receipt_decode(const struct snag_binary_record *record,
+    struct snag_binary_checkpoint_receipt *out);
+/* Match the frame's identity, generation, exact boundary and complete image
+ * checksum to an independently authenticated receipt. Same 0/1/-1 framing and
+ * borrowed-view rules as frame_decode. The two section codecs and the index
+ * frontier still require validation; this is not a journal bootstrap routine. */
+int snag_binary_checkpoint_frame_from_receipt(const void *data, size_t size,
+    const struct snag_binary_identity *identity,
+    const struct snag_binary_checkpoint_receipt *receipt,
+    struct snag_binary_checkpoint_frame *out);
 /* Resolve only against a verified immutable batch from this journal. Validate
  * sequence, required record status, expected type/version and slice bounds
  * before exposing a view. Required state cannot depend on optional metadata. */

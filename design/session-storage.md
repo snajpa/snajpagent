@@ -1896,6 +1896,45 @@ A damaged canonical batch is an error, not permission to skip it. If both
 snapshots are unusable, repair is an explicit, interruptible operation; normal
 resume does not silently scan an arbitrarily long lifetime prefix.
 
+### Canonical checkpoint receipt codec
+
+Optional metadata kind `0x8001`, payload version 1, identifies an immutable
+checkpoint image and the index tree at its captured journal boundary. Its
+144-byte payload has explicit little-endian fields:
+
+| Offset | Field |
+|---|---|
+| 0 | generation, u64 |
+| 8 | captured end, next sequence, turn count and previous batch offset, four u64s |
+| 40 | captured batch digest, 32 bytes |
+| 72 | complete checkpoint frame digest, 32 bytes |
+| 104 | captured index tree root, 32 bytes |
+| 136 | index major 0 and minor 2, two u16s |
+| 140 | reserved zero, u32 |
+
+The frame digest is the existing final 32 bytes of the fully verified checkpoint
+frame. The publisher exposes it only with successful durable publication; failed
+results leave that field zero. The receipt codec validates generation, boundary
+geometry and reserved fields before returning a value. Unsupported optional
+payload/index versions return an unavailable result without replacing the caller's
+output. Invalid supported fields remain errors. Receipt metadata carries no
+reducer or provider payload and changes no execution ownership.
+
+The image-binding decoder compares session identity, generation, every captured
+boundary field and the exact frame digest against an independently authenticated
+receipt. A self-consistent replacement frame with different section bytes fails
+that comparison even if all its own checksums were recomputed. Both section
+codecs, reference materialization and the index frontier still require their own
+validation. The receipt must itself be established as a canonical record with a
+capture boundary preceding its containing batch; neither an index hint nor a
+cache-supplied anchor establishes this prerequisite.
+
+These codecs and publication digest results are test-linked. Runtime receipt
+submission, checkpoint admission and canonical-root discovery are pending. The
+publisher's file/directory ACK currently proves durable file replacement; it does
+not yet establish a receipt-backed checkpoint generation. Missing index bytes
+must remain independent of this protocol's canonical durability barriers.
+
 ## Index and bounded navigation
 
 Use a fixed-width entry per canonical sequence in `history.idx`, containing the

@@ -316,7 +316,7 @@ static struct snag_binary_io_result
 journal_commit(struct snag_binary_io *io)
 {
     struct snag_binary_record record = {
-        .kind = 0x8001u, .version = 1u, .flags = SNAG_BINARY_RECORD_OPTIONAL,
+        .kind = 0x8fffu, .version = 1u, .flags = SNAG_BINARY_RECORD_OPTIONAL,
         .timestamp_ms = 100u, .payload = (const unsigned char *)"later", .size = 5u
     };
     assert(!snag_binary_io_submit(io, &record, 1u, 0u));
@@ -354,6 +354,7 @@ test_publication_gates(enum gate gate)
     atomic_store(&probe.released, true);
     assert(!await_checkpoint(io, &result));
     assert(result.published && result.renamed && !result.error && result.generation == 9u);
+    assert(!memcmp(result.image_digest, expected.data + expected.len - 32u, 32u));
     assert(result.slot == 0u && probe.largest_write == 65536u);
     assert(probe.file_syncs == 1u && probe.renames == 1u && probe.dir_syncs == 1u);
     check_file(&fixture, "checkpoint.0", &expected);
@@ -378,6 +379,8 @@ test_retry(enum fault fault)
     struct snag_binary_publication_result result;
     assert(await_checkpoint(io, &result) < 0);
     assert(!result.published && result.error && result.generation == 9u && result.slot == 0u);
+    static const unsigned char zero[32] = {0};
+    assert(!memcmp(result.image_digest, zero, sizeof(zero)));
     if (fault == FAULT_UNSUPPORTED) assert(result.error == ENOTSUP);
     check_file(&fixture, "checkpoint.1", &fixture.slots[1]);
     bool replaced = fault >= FAULT_RENAMED;
@@ -390,6 +393,7 @@ test_retry(enum fault fault)
     assert(result.published && result.generation == failed.generation &&
         result.slot == failed.slot);
     assert(result.boundary.end == fixture.before.end);
+    assert(!memcmp(result.image_digest, expected.data + expected.len - 32u, 32u));
     assert(fault == FAULT_CREATE || !strcmp(result.temporary, failed.temporary));
     assert(probe.creates == (fault == FAULT_CREATE ? 2u : 1u));
     assert(probe.renames == (fault == FAULT_RENAME ? 2u : 1u));
@@ -404,6 +408,7 @@ test_retry(enum fault fault)
     assert(!snag_binary_io_checkpoint_submit(io, &capture));
     assert(!await_checkpoint(io, &result));
     assert(result.generation == 10u && result.slot == 1u);
+    assert(!memcmp(result.image_digest, newer.data + newer.len - 32u, 32u));
     check_file(&fixture, "checkpoint.0", &expected);
     check_file(&fixture, "checkpoint.1", &newer);
     assert(!snag_binary_io_close(io));
@@ -425,7 +430,7 @@ test_priority_and_wake(bool checkpoint_first)
     assert(!snag_binary_io_checkpoint_submit(io, &capture));
     wait_flag(&probe.first_entered);
     struct snag_binary_record record = {
-        .kind = 0x8001u, .version = 1u, .flags = SNAG_BINARY_RECORD_OPTIONAL
+        .kind = 0x8fffu, .version = 1u, .flags = SNAG_BINARY_RECORD_OPTIONAL
     };
     assert(!snag_binary_io_submit(io, &record, 1u, 0u));
     atomic_store(&probe.first_released, true);

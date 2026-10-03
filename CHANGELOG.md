@@ -463,6 +463,8 @@
   Add append-only index hash proofs and bounded frontier restoration, with
   independently supplied roots and preserved earlier-prefix lookups.
   Resolve authenticated index entries with bounded canonical batch reads.
+  Add optional checkpoint receipt encoding and exact snapshot-image binding,
+  and return the completed image digest with durable publication.
 
 - Fix a memory leak when combining compaction summaries.
 

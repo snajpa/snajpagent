@@ -117,7 +117,7 @@ fixture_event(void *opaque, const struct snag_session *state, uint64_t seq,
     size_t slot = fixture->count;
     struct snag_binary_record record = {.version = 1u, .timestamp_ms = state->last_time_ms};
     if (!strcmp(type, "session_checkpoint")) {
-        record.kind = 0x8001u;
+        record.kind = 0x8fffu;
         record.flags = SNAG_BINARY_RECORD_OPTIONAL;
     } else {
         enum snag_binary_kind kind;
