@@ -237,6 +237,12 @@ test_batches(void)
     int fd = temporary_fd();
     assert(!snag_write_full(fd, index.data, index.len));
     assert(snag_seek(fd, 7, SEEK_SET) == 7);
+    int journal = temporary_fd();
+    assert(!snag_write_full(journal, header, sizeof(header)));
+    assert(!snag_write_full(journal, batches[0].data, batches[0].len));
+    assert(!snag_write_full(journal, batches[1].data, batches[1].len));
+    assert(snag_seek(journal, 9, SEEK_SET) == 9);
+    struct snag_buf scratch = {.max = SNAG_BINARY_BATCH_MAX};
     const uint64_t ordinal[] = {0u, 1u, 1u, 2u, 2u, 3u, 3u};
     struct snag_binary_index_entry entry;
     for (uint64_t sequence = 1u; sequence <= 7u; ++sequence) {
@@ -248,6 +254,12 @@ test_batches(void)
         assert(!snag_binary_index_resolve(&entry, &anchors[which], &anchors[which + 1u],
             batches[which].data, batches[which].len, &record));
         assert(record.kind == entry.kind);
+        struct snag_binary_record expected = record;
+        assert(!snag_binary_index_load_record(journal, &anchors[2], &entry, &scratch, &record));
+        assert(record.kind == expected.kind && record.version == expected.version &&
+            record.flags == expected.flags && record.timestamp_ms == expected.timestamp_ms &&
+            record.size == expected.size && !memcmp(record.payload, expected.payload, record.size));
+        assert(snag_seek(journal, 0, SEEK_CUR) == 9);
         if (sequence == 5u) {
             struct snag_binary_event event;
             assert(entry.turn == 2u && !snag_binary_event_decode(&record, &event));
@@ -272,8 +284,33 @@ test_batches(void)
             assert(snag_binary_index_resolve(&changed, &anchors[which], &anchors[which + 1u],
                 batches[which].data, batches[which].len, &record) < 0);
             assert(!memcmp(&record, &saved, sizeof(saved)));
+            assert(snag_binary_index_load_record(journal, &anchors[2], &changed,
+                &scratch, &record) < 0);
+            assert(!memcmp(&record, &saved, sizeof(saved)) && snag_seek(journal, 0, SEEK_CUR) == 9);
         }
     }
+    struct snag_binary_record retained = {.kind = 77u, .size = 7u};
+    struct snag_binary_record unchanged;
+    memcpy(&unchanged, &retained, sizeof(unchanged));
+    for (size_t fault = 0u; fault < 6u; ++fault) {
+        struct snag_binary_anchor wrong = anchors[2];
+        if (fault == 0u) ++wrong.end;
+        if (fault == 1u) --wrong.end;
+        if (fault == 2u) ++wrong.next_seq;
+        if (fault == 3u) ++wrong.turns;
+        if (fault == 4u) ++wrong.previous;
+        if (fault == 5u) wrong.digest[0] ^= 1u;
+        assert(snag_binary_index_load_record(journal, &wrong, &entry, &scratch, &retained) < 0);
+        assert(!memcmp(&retained, &unchanged, sizeof(retained)));
+    }
+    assert(snag_binary_index_load_record(journal, &anchors[1], &entry, &scratch, &retained) < 0);
+    assert(snag_binary_index_load_record(-1, &anchors[2], &entry, &scratch, &retained) < 0);
+    assert(!snag_truncate(journal, (int64_t)anchors[2].end - 1));
+    assert(snag_binary_index_load_record(journal, &anchors[2], &entry, &scratch, &retained) < 0);
+    assert(errno == EIO && !memcmp(&retained, &unchanged, sizeof(retained)));
+    assert(snag_seek(journal, 0, SEEK_CUR) == 9);
+    assert(!close(journal));
+    snag_buf_free(&scratch);
     for (uint64_t turn = 1u; turn <= 3u; ++turn) {
         assert(!snag_binary_index_turn_hint(fd, &identity, 7u, turn, &entry));
         assert(!snag_binary_index_turn_verified(fd, &identity, 7u, root, turn, &entry));

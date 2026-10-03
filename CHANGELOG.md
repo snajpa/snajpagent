@@ -462,6 +462,7 @@
   journal commits between chunks and retaining failed publication work for retry.
   Add append-only index hash proofs and bounded frontier restoration, with
   independently supplied roots and preserved earlier-prefix lookups.
+  Resolve authenticated index entries with bounded canonical batch reads.
 
 - Fix a memory leak when combining compaction summaries.
 

@@ -570,6 +570,28 @@ verify_root(int fd, const struct snag_binary_anchor *anchor)
     return 0;
 }
 
+/* Structural header checks precede every length-driven read/allocation. The
+ * predecessor turn count is absent from this header and remains provisional. */
+static int
+batch_header_anchor(const unsigned char header[SNAG_BINARY_BATCH_HEADER_SIZE], uint64_t offset,
+    struct snag_binary_anchor *before, uint64_t *length)
+{
+    struct snag_binary_anchor previous = {
+        .end = offset, .next_seq = get_le(header + 24, 8u),
+        .previous = get_le(header + 32, 8u)
+    };
+    memcpy(previous.digest, header + 40, sizeof(previous.digest));
+    struct snag_binary_anchor checked;
+    struct snag_binary_batch decoded;
+    if (snag_binary_batch_decode(header, SNAG_BINARY_BATCH_HEADER_SIZE,
+            &previous, &decoded, &checked) != 1) {
+        return invalid();
+    }
+    *length = get_le(header + 8, 8u);
+    *before = previous;
+    return 0;
+}
+
 /* Authenticate one complete batch from its committed end. The returned previous
  * turn count is provisional zero: it is absent from this batch's header. */
 static int
@@ -582,18 +604,14 @@ read_authenticated_batch(int fd, const struct snag_binary_anchor *after,
         SNAG_BINARY_RECORD_HEADER_SIZE + SNAG_BINARY_BATCH_FOOTER_SIZE) return invalid();
     unsigned char header[SNAG_BINARY_BATCH_HEADER_SIZE];
     if (read_full_at(fd, header, sizeof(header), after->previous) < 0) return -1;
-    struct snag_binary_anchor previous = {
-        .end = after->previous, .next_seq = get_le(header + 24, 8u),
-        .previous = get_le(header + 32, 8u)
-    };
-    memcpy(previous.digest, header + 40, sizeof(previous.digest));
+    struct snag_binary_anchor previous;
     struct snag_binary_anchor checked;
     struct snag_binary_batch decoded;
-    /* Validate the checksummed header, including count/length/link bounds, before
-     * allocation. Full authentication against after still follows below. */
-    if (get_le(header + 8, 8u) != length ||
-        snag_binary_batch_decode(header, sizeof(header), &previous, &decoded, &checked) != 1)
+    uint64_t header_length;
+    if (batch_header_anchor(header, after->previous, &previous, &header_length) < 0 ||
+        header_length != length) {
         return invalid();
+    }
     snag_buf_reset(scratch);
     if (snag_buf_reserve(scratch, (size_t)length) < 0) return -1;
     if (read_full_at(fd, scratch->data, (size_t)length, after->previous) < 0) return -1;
@@ -637,6 +655,43 @@ snag_binary_batch_previous(int fd, const struct snag_binary_anchor *after,
     }
     *batch = current;
     *before = previous;
+    return 0;
+}
+
+int
+snag_binary_batch_at(int fd, uint64_t boundary, uint64_t offset,
+    const unsigned char hash[32], struct snag_buf *scratch, struct snag_binary_batch *batch,
+    struct snag_binary_anchor *before, struct snag_binary_anchor *after)
+{
+    if (fd < 0 || !hash || !scratch || !batch || !before || !after ||
+        offset < SNAG_BINARY_HEADER_SIZE || boundary > INT64_MAX || boundary < offset ||
+        boundary - offset < SNAG_BINARY_BATCH_HEADER_SIZE) {
+        return invalid();
+    }
+    unsigned char header[SNAG_BINARY_BATCH_HEADER_SIZE];
+    if (read_full_at(fd, header, sizeof(header), offset) < 0) return -1;
+    struct snag_binary_anchor previous;
+    uint64_t length;
+    if (batch_header_anchor(header, offset, &previous, &length) < 0 ||
+        length > boundary - offset) {
+        return invalid();
+    }
+    unsigned char footer[SNAG_BINARY_BATCH_FOOTER_SIZE];
+    if (read_full_at(fd, footer, sizeof(footer), offset + length - sizeof(footer)) < 0) {
+        return -1;
+    }
+    struct snag_binary_anchor committed = {
+        .end = offset + length, .previous = offset,
+        .next_seq = get_le(footer + 24, 8u) + 1u, .turns = get_le(footer + 32, 8u)
+    };
+    memcpy(committed.digest, hash, sizeof(committed.digest));
+    struct snag_binary_batch found;
+    if (snag_binary_batch_previous(fd, &committed, scratch, &found, &previous) < 0) {
+        return -1;
+    }
+    *batch = found;
+    *before = previous;
+    *after = committed;
     return 0;
 }
 

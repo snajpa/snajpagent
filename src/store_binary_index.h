@@ -80,6 +80,15 @@ int snag_binary_index_append_batch(struct snag_buf *out,
 int snag_binary_index_resolve(const struct snag_binary_index_entry *entry,
     const struct snag_binary_anchor *before, const struct snag_binary_anchor *after,
     const void *data, size_t size, struct snag_binary_record *out);
+/* Load a previously authenticated entry's canonical record directly. The entry
+ * must be established independently as a member of through in this immutable
+ * journal, e.g. by a verified tree proof, never by read_hint alone. Validates the
+ * batch digest, sequence/record position/kind and actual surrounding turn. Reads
+ * at most the containing batch and its predecessor; no lifetime scan. Return
+ * 0/-1, preserve out and fd position on error; all older scratch views expire. */
+int snag_binary_index_load_record(int fd, const struct snag_binary_anchor *through,
+    const struct snag_binary_index_entry *entry, struct snag_buf *scratch,
+    struct snag_binary_record *out);
 
 /* Positional reads preserve fd position and caller output. Return 1 for missing
  * or torn index data, -1 for errors/corruption. A successful hint still requires

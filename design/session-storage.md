@@ -180,6 +180,15 @@ still own journal identity, immutable-prefix lifetime, causal ordering, field
 role and semantic owner checks. These test-only primitives do not establish
 reference-field authority or change the wire format.
 
+`snag_binary_batch_at` reads a containing batch from an independently authenticated
+physical offset and digest. It checks header geometry before length-driven reads,
+then verifies the entire batch and its immediate predecessor. Both returned
+anchors are complete; the reader performs no lifetime walk and ignores bytes
+beyond the supplied committed boundary. Missing committed bytes are errors, while
+failure preserves output structures and the descriptor position. Its scratch
+views expire on every call. A digest copied from the target file or an unverified
+index entry cannot establish the required canonical membership.
+
 ### Core-state replay integration
 
 `snag_store_reconcile_binary` reads a stopped native journal from its immutable
@@ -1986,9 +1995,16 @@ record boundaries before using content. Missing cache bytes remain unavailable
 indexing, and corruption preserves caller outputs and descriptor positions.
 Queries check the nodes they depend on rather than scanning unrelated index data.
 
+The direct record loader accepts an already authenticated index entry, loads its
+containing batch and immediate predecessor, then checks the exact sequence,
+record boundary, kind and surrounding turn against the decoded records. The
+containing batch must lie within the trusted prefix and agree with its anchor
+when it reaches that boundary. This separates cache membership from canonical
+content validation while keeping both reads bounded.
+
 The implementation is test-linked. Runtime index maintenance, canonical root
-binding, direct batch resolution, bounded history-page integration and efficient
-checkpoint admission remain unfinished. The current ordinary batch finder still
+binding, bounded history-page integration and efficient checkpoint admission
+remain unfinished. The current ordinary batch finder still
 walks the backward chain; the proof interface alone does not change resume behavior
 or give a checkpoint semantic authority.
 

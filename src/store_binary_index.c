@@ -269,6 +269,32 @@ snag_binary_index_resolve(const struct snag_binary_index_entry *entry,
     return 0;
 }
 
+int
+snag_binary_index_load_record(int fd, const struct snag_binary_anchor *through,
+    const struct snag_binary_index_entry *entry, struct snag_buf *scratch,
+    struct snag_binary_record *out)
+{
+    if (!through || !entry || !scratch || !out || !entry_valid(entry) ||
+        entry->sequence >= through->next_seq || entry->turn > through->turns) {
+        return snag_errno(EINVAL);
+    }
+    struct snag_binary_batch batch;
+    struct snag_binary_anchor before;
+    struct snag_binary_anchor after;
+    if (snag_binary_batch_at(fd, through->end, entry->batch_offset, entry->batch_digest,
+            scratch, &batch, &before, &after) < 0) {
+        return -1;
+    }
+    if (after.next_seq > through->next_seq || after.turns > through->turns ||
+        ((after.end == through->end || after.next_seq == through->next_seq) &&
+            (after.end != through->end || after.next_seq != through->next_seq ||
+            after.turns != through->turns || after.previous != through->previous ||
+            memcmp(after.digest, through->digest, sizeof(after.digest))))) {
+        return snag_errno(EINVAL);
+    }
+    return snag_binary_index_resolve(entry, &before, &after, batch.data, batch.size, out);
+}
+
 static int
 read_exact(int fd, unsigned char *bytes, size_t size, int64_t offset)
 {

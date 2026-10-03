@@ -159,6 +159,17 @@ int snag_binary_batch_read(int fd, uint64_t boundary,
 int snag_binary_batch_previous(int fd, const struct snag_binary_anchor *after,
     struct snag_buf *scratch, struct snag_binary_batch *batch, struct snag_binary_anchor *before);
 
+/* Read a batch at an independently authenticated offset/digest beneath an
+ * immutable committed boundary. A bare index hint or a digest read from the
+ * target file is insufficient. Reads this batch and its immediate predecessor,
+ * without walking the lifetime chain; returns fully checked anchors on either
+ * side. Identity/immutability and prefix membership remain caller obligations.
+ * Return 0/-1; missing committed bytes are errors. No seeks/writes. Outputs stay
+ * unchanged on failure, but all earlier scratch views expire on every call. */
+int snag_binary_batch_at(int fd, uint64_t boundary, uint64_t offset,
+    const unsigned char digest[32], struct snag_buf *scratch, struct snag_binary_batch *batch,
+    struct snag_binary_anchor *before, struct snag_binary_anchor *after);
+
 /* Find an existing sequence by walking backward from a trusted snapshot anchor.
  * Uses bounded scratch, not an untrusted seek hint or a scan for magic bytes.
  * The caller still validates field role, causal ordering and owner identity.

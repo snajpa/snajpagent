@@ -134,10 +134,70 @@ restore_file(int fd, const unsigned char *header, const struct snag_buf *joined)
 }
 
 static void
+reject_at(int fd, uint64_t boundary, uint64_t offset, const unsigned char hash[32],
+    struct snag_buf *scratch)
+{
+    struct snag_binary_anchor before = {.end = 41u};
+    struct snag_binary_anchor after = {.end = 42u};
+    struct snag_binary_anchor saved_before = before;
+    struct snag_binary_anchor saved_after = after;
+    struct snag_binary_batch batch = {.data = (const unsigned char *)"kept", .size = 7u};
+    struct snag_binary_batch saved;
+    memcpy(&saved, &batch, sizeof(saved));
+    assert(snag_binary_batch_at(fd, boundary, offset, hash, scratch, &batch, &before, &after) < 0);
+    assert_anchor(&before, &saved_before);
+    assert_anchor(&after, &saved_after);
+    assert(!memcmp(&saved, &batch, sizeof(saved)));
+    if (fd >= 0) assert(snag_seek(fd, 0, SEEK_CUR) == 13);
+}
+
+static void
+test_direct_reader(int fd, const struct snag_buf *joined, const struct snag_binary_anchor *root,
+    const struct snag_binary_anchor *middle, const struct snag_binary_anchor *tail)
+{
+    struct snag_buf scratch = {.max = SNAG_BINARY_BATCH_MAX};
+    const struct snag_binary_anchor *ends[] = {middle, tail};
+    const struct snag_binary_anchor *starts[] = {root, middle};
+    for (size_t i = 0u; i < 2u; ++i) {
+        struct snag_binary_batch batch;
+        struct snag_binary_anchor before;
+        struct snag_binary_anchor after;
+        assert(!snag_binary_batch_at(fd, tail->end, starts[i]->end, ends[i]->digest,
+            &scratch, &batch, &before, &after));
+        assert_anchor(&before, starts[i]);
+        assert_anchor(&after, ends[i]);
+        assert(batch.size == ends[i]->end - starts[i]->end);
+        assert(!memcmp(batch.data, joined->data + starts[i]->end - root->end, batch.size));
+        assert(!snag_binary_batch_at(fd, ends[i]->end, starts[i]->end, ends[i]->digest,
+            &scratch, &batch, &before, &after));
+    }
+    reject_at(fd, tail->end - 1u, middle->end, tail->digest, &scratch);
+    reject_at(fd, UINT64_MAX, middle->end, tail->digest, &scratch);
+    const uint64_t offsets[] = {0u, root->end - 1u, middle->end + 1u, tail->end, UINT64_MAX};
+    for (size_t i = 0u; i < 5u; ++i) {
+        reject_at(fd, tail->end, offsets[i], tail->digest, &scratch);
+    }
+    for (size_t i = 0u; i < sizeof(tail->digest); ++i) {
+        unsigned char bad[32];
+        memcpy(bad, tail->digest, sizeof(bad));
+        bad[i] ^= 1u;
+        reject_at(fd, tail->end, middle->end, bad, &scratch);
+    }
+    reject_at(fd, tail->end, middle->end, NULL, &scratch);
+    reject_at(-1, tail->end, middle->end, tail->digest, &scratch);
+    struct snag_buf small = {.max = 1u};
+    reject_at(fd, tail->end, middle->end, tail->digest, &small);
+    assert(errno == EOVERFLOW && !small.len);
+    snag_buf_free(&small);
+    snag_buf_free(&scratch);
+}
+
+static void
 test_backward_reader(int fd, const unsigned char *header, const struct snag_buf *joined,
     const struct snag_binary_anchor *root, const struct snag_binary_anchor *middle,
     const struct snag_binary_anchor *tail)
 {
+    test_direct_reader(fd, joined, root, middle, tail);
     struct snag_buf scratch = {.max = SNAG_BINARY_BATCH_MAX};
     struct snag_binary_batch batch;
     struct snag_binary_anchor before;
@@ -205,6 +265,7 @@ test_backward_reader(int fd, const unsigned char *header, const struct snag_buf 
         assert(!snag_write_full(fd, &byte, 1u));
         assert(snag_seek(fd, 13, SEEK_SET) == 13);
         reject_previous(fd, tail, &scratch);
+        reject_at(fd, tail->end, middle->end, tail->digest, &scratch);
         restore_file(fd, header, joined);
     }
     /* A different self-consistent file identity also cannot supply this root. */
@@ -219,9 +280,12 @@ test_backward_reader(int fd, const unsigned char *header, const struct snag_buf 
     assert(snag_seek(fd, 13, SEEK_SET) == 13);
     reject_previous(fd, tail, &scratch);
     reject_previous(fd, root, &scratch);
+    reject_at(fd, tail->end, root->end, middle->digest, &scratch);
     restore_file(fd, header, joined);
     assert(!snag_truncate(fd, (int64_t)tail->end - 1));
     reject_previous(fd, tail, &scratch);
+    assert(errno == EIO);
+    reject_at(fd, tail->end, middle->end, tail->digest, &scratch);
     assert(errno == EIO);
     assert(!snag_truncate(fd, SNAG_BINARY_HEADER_SIZE - 1u));
     reject_previous(fd, root, &scratch);
@@ -233,6 +297,7 @@ test_backward_reader(int fd, const unsigned char *header, const struct snag_buf 
     assert(snag_seek(fd, 13, SEEK_SET) == 13);
     assert(!snag_binary_batch_previous(fd, tail, &scratch, &batch, &before));
     assert_anchor(&before, middle);
+    test_direct_reader(fd, joined, root, middle, tail);
     restore_file(fd, header, joined);
     snag_buf_free(&scratch);
 }
@@ -292,6 +357,71 @@ test_file_reader(const unsigned char *header, const struct snag_buf *joined,
     assert(!close(fd));
     assert(!unlink(path));
     free(path);
+}
+
+static void
+test_direct_isolation(int fd, const struct snag_binary_anchor *root,
+    const struct snag_buf *first, const struct snag_binary_anchor *tail)
+{
+    struct snag_buf encoded = {.max = SNAG_BINARY_BATCH_MAX};
+    struct snag_binary_anchor anchors[3] = {*tail};
+    struct snag_binary_record record = {.kind = 77u, .version = 1u,
+        .payload = (const unsigned char *)"direct", .size = 6u};
+    struct snag_binary_batch batch;
+    assert(snag_seek(fd, (int64_t)tail->end, SEEK_SET) == (int64_t)tail->end);
+    for (size_t i = 0u; i < 2u; ++i) {
+        snag_buf_reset(&encoded);
+        assert(!snag_binary_batch_encode(&encoded, &anchors[i], &record, 1u, tail->turns));
+        assert(!snag_binary_batch_decode(encoded.data, encoded.len,
+            &anchors[i], &batch, &anchors[i + 1u]));
+        assert(!snag_write_full(fd, encoded.data, encoded.len));
+    }
+    /* The fourth batch and its predecessor are sufficient. Damage elsewhere in
+     * the immutable prefix is discovered when that history is actually queried. */
+    uint64_t damaged = root->end + SNAG_BINARY_BATCH_HEADER_SIZE + SNAG_BINARY_RECORD_HEADER_SIZE;
+    unsigned char original = first->data[damaged - root->end];
+    unsigned char bad = original ^ 1u;
+    assert(snag_seek(fd, (int64_t)damaged, SEEK_SET) == (int64_t)damaged);
+    assert(!snag_write_full(fd, &bad, 1u));
+    assert(snag_seek(fd, 13, SEEK_SET) == 13);
+    struct snag_buf scratch = {.max = SNAG_BINARY_BATCH_MAX};
+    struct snag_binary_anchor before;
+    struct snag_binary_anchor after;
+    assert(!snag_binary_batch_at(fd, anchors[2].end, anchors[1].end, anchors[2].digest,
+        &scratch, &batch, &before, &after));
+    assert_anchor(&before, &anchors[1]);
+    assert_anchor(&after, &anchors[2]);
+    assert(!memcmp(batch.data, encoded.data, encoded.len));
+    assert(snag_binary_batch_find(fd, &anchors[2], 1u, &scratch, &batch, &before) < 0);
+    assert(snag_seek(fd, (int64_t)damaged, SEEK_SET) == (int64_t)damaged);
+    assert(!snag_write_full(fd, &original, 1u));
+    /* Every byte of the selected batch is covered by its independent digest. */
+    for (size_t i = 0u; i < encoded.len; ++i) {
+        int64_t position = (int64_t)(anchors[1].end + i);
+        bad = encoded.data[i] ^ 1u;
+        assert(snag_seek(fd, position, SEEK_SET) == position);
+        assert(!snag_write_full(fd, &bad, 1u));
+        assert(snag_seek(fd, 13, SEEK_SET) == 13);
+        reject_at(fd, anchors[2].end, anchors[1].end, anchors[2].digest, &scratch);
+        assert(snag_seek(fd, position, SEEK_SET) == position);
+        assert(!snag_write_full(fd, encoded.data + i, 1u));
+    }
+    /* Rechecksummed unsafe lengths still fail before allocating batch storage. */
+    unsigned char invalid_header[SNAG_BINARY_BATCH_HEADER_SIZE];
+    memcpy(invalid_header, encoded.data, sizeof(invalid_header));
+    memset(invalid_header + 8u, 0xff, 8u);
+    rehash(invalid_header, sizeof(invalid_header));
+    assert(snag_seek(fd, (int64_t)anchors[1].end, SEEK_SET) == (int64_t)anchors[1].end);
+    assert(!snag_write_full(fd, invalid_header, sizeof(invalid_header)));
+    assert(snag_seek(fd, 13, SEEK_SET) == 13);
+    struct snag_buf empty = {.max = SNAG_BINARY_BATCH_MAX};
+    reject_at(fd, anchors[2].end, anchors[1].end, anchors[2].digest, &empty);
+    assert(!empty.data && !empty.cap && !empty.len);
+    assert(snag_seek(fd, (int64_t)anchors[1].end, SEEK_SET) == (int64_t)anchors[1].end);
+    assert(!snag_write_full(fd, encoded.data, encoded.len));
+    assert(snag_seek(fd, 13, SEEK_SET) == 13);
+    snag_buf_free(&scratch);
+    snag_buf_free(&encoded);
 }
 
 static void
@@ -358,6 +488,19 @@ test_backward_special(const unsigned char *header, const struct snag_binary_anch
     assert(!memcmp(view, "nested", 6u));
     assert(snag_seek(fd, 0, SEEK_CUR) == 13);
 
+    struct snag_binary_anchor direct_after;
+    assert(!snag_binary_batch_at(fd, tail.end, root->end, middle.digest,
+        &scratch, &batch, &before, &direct_after));
+    assert_anchor(&before, root);
+    assert_anchor(&direct_after, &middle);
+    assert(batch.size == SNAG_BINARY_BATCH_MAX);
+    assert(!snag_binary_batch_at(fd, tail.end, middle.end, tail.digest,
+        &scratch, &batch, &before, &direct_after));
+    assert_anchor(&before, &middle);
+    assert_anchor(&direct_after, &tail);
+    reject_at(fd, tail.end, fake.end, next.digest, &scratch);
+    test_direct_isolation(fd, root, &first, &tail);
+
     /* Both batches have valid hashes, but the child lies about cumulative turns.
      * Recover the authenticated parent counter instead of assuming zero. */
     fake = middle;
@@ -369,6 +512,8 @@ test_backward_special(const unsigned char *header, const struct snag_binary_anch
     assert(!snag_write_full(fd, second.data, second.len));
     assert(snag_seek(fd, 13, SEEK_SET) == 13);
     reject_previous(fd, &next, &scratch);
+    assert(errno == EINVAL);
+    reject_at(fd, next.end, middle.end, next.digest, &scratch);
     assert(errno == EINVAL);
     assert(!close(fd));
     assert(!unlink(path));
