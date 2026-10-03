@@ -15,6 +15,26 @@
 #include <uniwidth.h>
 #endif
 
+bool
+snag_file_unchanged(const snag_file_info *before, const snag_file_info *after)
+{
+    if (before->st_dev != after->st_dev || before->st_ino != after->st_ino ||
+        before->st_size != after->st_size || before->st_mode != after->st_mode ||
+        before->st_mtime != after->st_mtime) return false;
+#ifdef _WIN32
+    return before->mtime_nsec == after->mtime_nsec;
+#else
+    if (before->st_ctime != after->st_ctime) return false;
+#ifdef __APPLE__
+    return before->st_mtimespec.tv_nsec == after->st_mtimespec.tv_nsec &&
+        before->st_ctimespec.tv_nsec == after->st_ctimespec.tv_nsec;
+#else
+    return before->st_mtim.tv_nsec == after->st_mtim.tv_nsec &&
+        before->st_ctim.tv_nsec == after->st_ctim.tv_nsec;
+#endif
+#endif
+}
+
 void
 snag_environment_entries_free(char **entries)
 {
@@ -837,6 +857,7 @@ file_info(HANDLE handle, snag_file_info *out)
         uint64_t ticks = ((uint64_t)info.ftLastWriteTime.dwHighDateTime << 32u) |
                          info.ftLastWriteTime.dwLowDateTime;
         st.st_mtime = (int64_t)(ticks / 10000000u) - INT64_C(11644473600);
+        st.mtime_nsec = (unsigned int)((ticks % 10000000u) * 100u);
         if (info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) st.st_mode = S_IFLNK;
         else if (info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) st.st_mode = S_IFDIR;
         else st.st_mode = S_IFREG;

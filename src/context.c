@@ -400,6 +400,31 @@ snag_context_capture_bind(struct snag_context_capture **capture, struct snag_ses
     return 0;
 }
 
+int
+snag_context_capture_take(struct snag_session *session,
+    const struct snag_context_control *control, struct snag_context_capture **capture,
+    char *error, size_t error_size)
+{
+    struct snag_context_capture *cache = session && session->on_commit == context_cache_commit ?
+        session->on_commit_opaque : NULL;
+    if (!cache || cache->invalid || !capture || *capture || session->dir_fd >= 0 ||
+        session->log_fd >= 0 || session->lock_fd >= 0 || session->pending_log ||
+        session->on_commit_free != context_cache_free ||
+        session->on_checkpoint != context_cache_checkpoint ||
+        session->checkpoint_context || session->checkpoint_state) {
+        return snag_fail(error, error_size, EINVAL, "invalid provisional context capture owner");
+    }
+    if (control && control->cancelled && control->cancelled(control->opaque))
+        return snag_fail(error, error_size, ECANCELED, "context restoration cancelled");
+    cache->view.control = control;
+    session->on_commit = NULL;
+    session->on_commit_free = NULL;
+    session->on_commit_opaque = NULL;
+    session->on_checkpoint = NULL;
+    *capture = cache;
+    return 0;
+}
+
 struct capture_sources {
     const struct snag_context_control *control;
     const char *prompt;
@@ -2902,7 +2927,6 @@ snag_context_compact_reduce_request_build(struct snag_session *session,
         "parallel_tool_calls", session->parallel_tool_calls, "reasoning", "effort", effort,
         "store", 0, "stream", 1, "tool_choice", "auto", "truncation", "disabled");
     if (!request) goto out;
-    input = NULL; /* owned by the request now */
     if (snag_json_set_new(request, "prompt_cache_key", json_string(cache_key)) < 0 ||
         snag_json_set_new(request, "include", json_pack("[s]", "reasoning.encrypted_content")) < 0 ||
         (provider && snag_auth_uses_codex(provider->auth) &&

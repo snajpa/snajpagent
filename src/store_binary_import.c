@@ -576,9 +576,7 @@ snag_store_import_binary_journal(struct snag_session *source, int destination,
         rc = snag_fail(error, error_size, errno, "cannot verify staged native core state");
         goto out;
     }
-    if (snag_fstat(source->log_fd, &after) < 0 || before.st_dev != after.st_dev ||
-        before.st_ino != after.st_ino || before.st_size != after.st_size ||
-        before.st_mtime != after.st_mtime) {
+    if (snag_fstat(source->log_fd, &after) < 0 || !snag_file_unchanged(&before, &after)) {
         rc = snag_fail(error, error_size, EAGAIN,
             "legacy source changed during staging verification");
         goto out;

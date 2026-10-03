@@ -3000,8 +3000,7 @@ snag_store_reconcile_legacy(struct snag_session *source, struct snag_session *re
     int rc = read_event_log(source, &verifier, before.st_size, SNAG_TAIL_IGNORE,
         fn, opaque, NULL, false, recovery, &complete_end, &next_seq, error, error_size);
     if (rc == 0 && (snag_fstat(source->log_fd, &after) < 0 ||
-        before.st_dev != after.st_dev || before.st_ino != after.st_ino ||
-        before.st_size != after.st_size || before.st_mtime != after.st_mtime)) {
+        !snag_file_unchanged(&before, &after))) {
         recovery->problem_seq = 1u;
         recovery->problem_start = 0;
         recovery->problem_end = before.st_size;

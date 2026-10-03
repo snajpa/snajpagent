@@ -190,10 +190,9 @@ replay_visit(struct snag_session *source, struct snag_session *restored,
     write_fixture(source, bytes, size);
     struct snag_session saved_source = *source, saved_restored = *restored;
     char error[512] = {0};
-    struct snag_binary_checkpoint_sources sources;
+    struct snag_binary_checkpoint_sources sources = {.response_start = UINT64_MAX};
     unsigned char saved_sources[sizeof(sources)];
-    memset(saved_sources, 0xa5, sizeof(saved_sources));
-    memcpy(&sources, saved_sources, sizeof(sources));
+    memcpy(saved_sources, &sources, sizeof(sources));
     int rc = snag_store_reconcile_binary(source, restored, fn, opaque,
         recovery, &sources, error, sizeof(error));
     int code = errno;

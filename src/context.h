@@ -85,6 +85,13 @@ int snag_context_capture_sources(struct snag_context_capture *capture,
     const struct snag_session *state, snag_context_source_walk_fn walk, void *source,
     char *error, size_t error_size);
 
+/* Temporarily transfer a disposable state-only session's capture back to its
+ * caller for further verified replay. Requires an empty output; failure is
+ * atomic. The supplied control is borrowed until free or rebind. Core reduction
+ * then has no live callbacks; explicit capture_event reports cancellation/OOM. */
+int snag_context_capture_take(struct snag_session *session,
+    const struct snag_context_control *control, struct snag_context_capture **capture,
+    char *error, size_t error_size);
 /* Borrow the retained event seam and its historical IRC closure from a bound
  * capture. They remain owned by the session and may change on the next commit.
  * The materialized request cache is not exposed. Canonical event data remains

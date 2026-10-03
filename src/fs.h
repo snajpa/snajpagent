@@ -43,7 +43,7 @@
 typedef struct {
     uint64_t st_dev, st_ino, st_nlink, st_rdev;
     int64_t st_size, st_mtime;
-    unsigned int st_mode;
+    unsigned int st_mode, mtime_nsec;
 } snag_file_info;
 
 #ifndef S_IFLNK
@@ -55,6 +55,9 @@ typedef struct stat snag_file_info;
 #endif
 
 int snag_fstat(int fd, snag_file_info *out);
+/* Compare identity, size, mode and available write/change stamps, ignoring
+ * access time. This supplements the caller's locking and content validation. */
+bool snag_file_unchanged(const snag_file_info *before, const snag_file_info *after);
 int snag_stat(const char *path, snag_file_info *out);
 int snag_lstat(const char *path, snag_file_info *out);
 int snag_lstat_at(int dirfd, const char *path, snag_file_info *out);

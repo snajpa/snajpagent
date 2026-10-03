@@ -18,7 +18,9 @@ struct snag_binary_recovery {
  * Caller holds source's exclusive writer lock throughout replay/publication.
  * Source descriptors/bytes/position are unchanged; restored must be initialized
  * and state-only. Only full success replaces restored and the optional, distinct
- * owning payload-origin output (release with checkpoint_sources_free). Origins
+ * owning payload-origin output. Origins must be initialized (normally zeroed);
+ * success releases their replaced storage, and failure leaves it untouched.
+ * Release the final output with checkpoint_sources_free. Origins
  * are provisional until then, tracking fixed text, graph-time directories and
  * unsettled process origins separately from original literal fields.
  * Recovery is diagnostic on failure and identifies the last fully interpreted
@@ -68,6 +70,18 @@ int snag_store_reconcile_binary(struct snag_session *source, struct snag_session
  * The anchor may alias recovery->verified. This is not checkpoint/suffix resume. */
 int snag_store_reconcile_binary_prefix(struct snag_session *source, struct snag_session *restored,
     const struct snag_binary_anchor *prefix, snag_session_event_fn fn, void *opaque,
+    struct snag_binary_recovery *recovery, struct snag_binary_checkpoint_sources *sources,
+    char *error, size_t error_size);
+
+/* Reduce a suffix into DISPOSABLE state/origins already semantically verified
+ * at start in this locked immutable journal. This does not authenticate that
+ * prefix or permit arbitrary-offset/index authority. State must be unbound and
+ * state-only. It may be partially advanced on failure; caller must discard it.
+ * Sources retain owned storage on every return. Callbacks are provisional; only
+ * successful source recheck supplies tail diagnostics, never truncation itself.
+ * recovery.batches counts suffix batches only; start may alias recovery.verified. */
+int snag_store_reduce_binary_suffix(struct snag_session *source, struct snag_session *state,
+    const struct snag_binary_anchor *start, snag_session_event_fn fn, void *opaque,
     struct snag_binary_recovery *recovery, struct snag_binary_checkpoint_sources *sources,
     char *error, size_t error_size);
 

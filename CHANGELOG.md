@@ -450,7 +450,10 @@
   current session-list behavior when loading these checkpoints. Runtime storage
   remains JSONL while the native writer,
   migration and application integration are completed. Preserve provider-hosted
-  search observations through native replay and paired checkpoints.
+  search observations through native replay and paired checkpoints. Add stopped
+  checkpoint-plus-suffix reconstruction with atomic core/context adoption.
+
+- Fix a memory leak when combining compaction summaries.
 
 ## 0.99.8c — October 2, 2026
 

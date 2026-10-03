@@ -783,6 +783,96 @@ reduce_record(struct replay_context *context, struct snag_session *state,
 }
 
 static int
+replay_batches(struct replay_context *context, struct snag_session *state,
+    const struct snag_binary_identity *identity, struct snag_binary_anchor *position,
+    uint64_t boundary, struct snag_binary_recovery *recovery, char *error, size_t error_size)
+{
+    struct snag_binary_anchor anchor = *position;
+    struct snag_buf scratch = {.max = SNAG_BINARY_BATCH_MAX};
+    int rc = -1;
+    for (;;) {
+        recovery->problem_seq = anchor.next_seq;
+        recovery->problem_start = anchor.end;
+        recovery->problem_end = boundary;
+        struct snag_binary_batch batch;
+        struct snag_binary_anchor next;
+        int read = snag_binary_batch_read(context->fd, boundary, &anchor,
+            &scratch, &batch, &next);
+        if (read < 0) {
+            snag_fail(error, error_size, errno, "invalid native batch at byte %llu",
+                (unsigned long long)anchor.end);
+            goto done;
+        }
+        if (read == 1) {
+            if (anchor.next_seq == 1u) {
+                snag_fail(error, error_size, EINVAL, "native journal has no committed creation");
+                goto done;
+            }
+            break;
+        }
+        size_t cursor = SNAG_BINARY_BATCH_HEADER_SIZE;
+        context->through = next;
+        for (uint32_t i = 0u; i < batch.count; ++i) {
+            struct snag_binary_record record;
+            uint64_t sequence;
+            recovery->problem_seq = batch.first_seq + i;
+            recovery->problem_start = anchor.end + cursor;
+            recovery->problem_end = next.end;
+            if (snag_binary_record_next(&batch, &cursor, &record, &sequence) != 0) {
+                snag_fail(error, error_size, EINVAL, "invalid verified native record");
+                goto done;
+            }
+            recovery->problem_end = anchor.end + cursor;
+            if (sequence == 1u && (record.kind != SNAG_BINARY_SESSION_CREATED || record.flags ||
+                record.timestamp_ms != identity->created_ms)) {
+                snag_fail(error, error_size, EINVAL, "native creation does not match its header");
+                goto done;
+            }
+            state->next_seq = sequence;
+            state->last_time_ms = record.timestamp_ms;
+            context->sequence = sequence;
+            if (reduce_record(context, state, &record, sequence, error, error_size) < 0) {
+                goto done;
+            }
+        }
+        if (next.turns != state->turn_count) {
+            recovery->problem_start = next.end - SNAG_BINARY_BATCH_FOOTER_SIZE;
+            recovery->problem_end = next.end;
+            snag_fail(error, error_size, EINVAL, "native batch turn count does not match replay");
+            goto done;
+        }
+        state->next_seq = next.next_seq;
+        state->log_end = (int64_t)next.end;
+        bytes_hex(state->prev_sha256, next.digest, sizeof(next.digest));
+        anchor = next;
+        *position = anchor;
+        recovery->verified = anchor;
+        ++recovery->batches;
+    }
+    rc = 0;
+done:
+    snag_buf_free(&scratch);
+    return rc;
+}
+
+static void
+normalize_sources(struct snag_binary_checkpoint_sources *sources)
+{
+    if (!sources->process_count) {
+        free(sources->processes);
+        sources->processes = NULL;
+    }
+    if (!sources->queue_count) {
+        free(sources->queue);
+        sources->queue = NULL;
+    }
+    if (!sources->download_count) {
+        free(sources->downloads);
+        sources->downloads = NULL;
+    }
+}
+
+static int
 reconcile_binary(struct snag_session *source, struct snag_session *restored,
     const struct snag_binary_anchor *prefix, snag_session_event_fn fn, void *opaque,
     struct snag_binary_recovery *recovery, struct snag_binary_checkpoint_sources *sources,
@@ -820,76 +910,17 @@ reconcile_binary(struct snag_session *source, struct snag_session *restored,
     struct snag_session state;
     snag_session_init(&state);
     memcpy(state.id, id, sizeof(state.id));
-    struct snag_buf scratch = {.max = SNAG_BINARY_BATCH_MAX};
     struct replay_context context = {.fd = source->log_fd, .fn = fn, .opaque = opaque};
     int rc = -1;
-    for (;;) {
-        recovery->problem_seq = anchor.next_seq;
-        recovery->problem_start = anchor.end;
-        recovery->problem_end = boundary;
-        struct snag_binary_batch batch;
-        struct snag_binary_anchor next;
-        int read = snag_binary_batch_read(source->log_fd, boundary, &anchor,
-            &scratch, &batch, &next);
-        if (read < 0) {
-            snag_fail(error, error_size, errno, "invalid native batch at byte %llu",
-                (unsigned long long)anchor.end);
-            goto done;
-        }
-        if (read == 1) {
-            if (anchor.next_seq == 1u) {
-                snag_fail(error, error_size, EINVAL, "native journal has no committed creation");
-                goto done;
-            }
-            break;
-        }
-        size_t cursor = SNAG_BINARY_BATCH_HEADER_SIZE;
-        context.through = next;
-        for (uint32_t i = 0u; i < batch.count; ++i) {
-            struct snag_binary_record record;
-            uint64_t sequence;
-            recovery->problem_seq = batch.first_seq + i;
-            recovery->problem_start = anchor.end + cursor;
-            recovery->problem_end = next.end;
-            if (snag_binary_record_next(&batch, &cursor, &record, &sequence) != 0) {
-                snag_fail(error, error_size, EINVAL, "invalid verified native record");
-                goto done;
-            }
-            recovery->problem_end = anchor.end + cursor;
-            if (sequence == 1u && (record.kind != SNAG_BINARY_SESSION_CREATED || record.flags ||
-                record.timestamp_ms != identity.created_ms)) {
-                snag_fail(error, error_size, EINVAL, "native creation does not match its header");
-                goto done;
-            }
-            state.next_seq = sequence;
-            state.last_time_ms = record.timestamp_ms;
-            context.sequence = sequence;
-            if (reduce_record(&context, &state, &record, sequence, error, error_size) < 0) {
-                goto done;
-            }
-        }
-        if (next.turns != state.turn_count) {
-            recovery->problem_start = next.end - SNAG_BINARY_BATCH_FOOTER_SIZE;
-            recovery->problem_end = next.end;
-            snag_fail(error, error_size, EINVAL, "native batch turn count does not match replay");
-            goto done;
-        }
-        state.next_seq = next.next_seq;
-        state.log_end = (int64_t)next.end;
-        bytes_hex(state.prev_sha256, next.digest, sizeof(next.digest));
-        anchor = next;
-        recovery->verified = anchor;
-        ++recovery->batches;
-    }
+    if (replay_batches(&context, &state, &identity, &anchor, boundary, recovery,
+        error, error_size) < 0) goto done;
     if (prefix && (anchor.end != expected.end || anchor.next_seq != expected.next_seq ||
         anchor.previous != expected.previous || anchor.turns != expected.turns ||
         memcmp(anchor.digest, expected.digest, sizeof(anchor.digest)))) {
         snag_fail(error, error_size, EINVAL, "native prefix does not match its committed boundary");
         goto done;
     }
-    if (snag_fstat(source->log_fd, &after) < 0 || before.st_dev != after.st_dev ||
-        before.st_ino != after.st_ino || before.st_size != after.st_size ||
-        before.st_mtime != after.st_mtime) {
+    if (snag_fstat(source->log_fd, &after) < 0 || !snag_file_unchanged(&before, &after)) {
         recovery->problem_seq = 1u;
         recovery->problem_start = 0u;
         recovery->problem_end = boundary;
@@ -901,26 +932,15 @@ reconcile_binary(struct snag_session *source, struct snag_session *restored,
     recovery->problem_start = recovery->problem_end = 0u;
     snag_session_close(restored);
     *restored = state;
-    if (!context.sources.process_count) {
-        free(context.sources.processes);
-        context.sources.processes = NULL;
-    }
-    if (!context.sources.queue_count) {
-        free(context.sources.queue);
-        context.sources.queue = NULL;
-    }
-    if (!context.sources.download_count) {
-        free(context.sources.downloads);
-        context.sources.downloads = NULL;
-    }
+    normalize_sources(&context.sources);
     if (sources) {
+        snag_binary_checkpoint_sources_free(sources);
         *sources = context.sources;
         context.sources = (struct snag_binary_checkpoint_sources){0};
     }
     rc = 0;
  done:
     if (rc < 0) snag_session_close(&state);
-    snag_buf_free(&scratch);
     snag_binary_checkpoint_sources_free(&context.sources);
     return rc;
 }
@@ -943,4 +963,70 @@ snag_store_reconcile_binary_prefix(struct snag_session *source, struct snag_sess
     if (!prefix) return snag_fail(error, error_size, EINVAL, "missing native prefix boundary");
     return reconcile_binary(source, restored, prefix, fn, opaque, recovery, sources,
         error, error_size);
+}
+
+int
+snag_store_reduce_binary_suffix(struct snag_session *source, struct snag_session *state,
+    const struct snag_binary_anchor *start, snag_session_event_fn fn, void *opaque,
+    struct snag_binary_recovery *recovery, struct snag_binary_checkpoint_sources *sources,
+    char *error, size_t error_size)
+{
+    if (!source || !state || source == state || !start || !recovery || !sources ||
+        source->log_fd < 0 || source->lock_fd < 0 || source->pending_log ||
+        state->dir_fd >= 0 || state->log_fd >= 0 || state->lock_fd >= 0 || state->pending_log ||
+        state->on_commit || state->on_commit_free || state->on_commit_opaque ||
+        state->on_checkpoint || state->checkpoint_context || state->checkpoint_state ||
+        !state->format_version || !snag_hex_is_lower(source->id, SNAG_ID_HEX_LEN) ||
+        start->next_seq <= 1u || start->end < SNAG_BINARY_HEADER_SIZE ||
+        state->next_seq != start->next_seq || state->log_end < 0 ||
+        (uint64_t)state->log_end != start->end || state->turn_count != start->turns ||
+        sources->process_count != state->process_count ||
+        sources->queue_count != state->pending_queue_count ||
+        sources->download_count != json_array_size(state->download_queue) ||
+        (sources->process_count && !sources->processes) ||
+        (sources->queue_count && !sources->queue) ||
+        (sources->download_count && !sources->downloads) ||
+        (state->response_open && (!sources->response_start ||
+            sources->response_start >= start->next_seq))) {
+        return snag_fail(error, error_size, EINVAL, "invalid provisional native suffix state");
+    }
+    /* Copy first: start may alias the caller's previous recovery.verified. */
+    struct snag_binary_anchor anchor = *start, root;
+    *recovery = (struct snag_binary_recovery){.verified = anchor,
+        .problem_seq = anchor.next_seq, .problem_start = anchor.end};
+    snag_file_info before, after;
+    if (snag_fstat(source->log_fd, &before) < 0 || !S_ISREG(before.st_mode) ||
+        before.st_size < 0 || anchor.end > (uint64_t)before.st_size)
+        return snag_fail(error, error_size, EINVAL, "cannot inspect native suffix source");
+    uint64_t boundary = (uint64_t)before.st_size;
+    recovery->problem_end = boundary;
+    struct snag_binary_identity identity;
+    if (read_identity(source->log_fd, boundary, &identity, &root) < 0)
+        return snag_fail(error, error_size, errno, "invalid native suffix source header");
+    char id[SNAG_ID_HEX_LEN + 1u], hash[65];
+    bytes_hex(id, identity.id, sizeof(identity.id));
+    bytes_hex(hash, anchor.digest, sizeof(anchor.digest));
+    if (strcmp(id, source->id) || strcmp(id, state->id) || strcmp(hash, state->prev_sha256))
+        return snag_fail(error, error_size, EINVAL, "native suffix identity/boundary mismatch");
+    struct replay_context context = {.fd = source->log_fd, .fn = fn, .opaque = opaque,
+        .sequence = anchor.next_seq - 1u, .through = anchor, .sources = *sources,
+        .response_sequence = state->response_open ? sources->response_start : 0u,
+        .process_capacity = sources->process_count, .queue_capacity = sources->queue_count,
+        .download_capacity = sources->download_count};
+    *sources = (struct snag_binary_checkpoint_sources){0};
+    int rc = replay_batches(&context, state, &identity, &anchor, boundary, recovery,
+        error, error_size);
+    /* Return ownership even on failure: this candidate is disposable, not the
+     * caller's adopted session. Nothing dispatches or repairs the source. */
+    *sources = context.sources;
+    if (rc == 0 && (snag_fstat(source->log_fd, &after) < 0 ||
+        !snag_file_unchanged(&before, &after))) {
+        rc = snag_fail(error, error_size, EAGAIN, "native source changed during suffix replay");
+    }
+    if (rc == 0) {
+        normalize_sources(sources);
+        recovery->incomplete_tail_bytes = boundary - anchor.end;
+        recovery->problem_seq = recovery->problem_start = recovery->problem_end = 0u;
+    }
+    return rc;
 }

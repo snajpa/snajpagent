@@ -16,7 +16,7 @@ fixed-size output spans assemble contiguous item text across verified batches.
 A test-only native reader resolves input and public-snapshot references before
 projection through the strict core-state reducer. Legacy journal staging builds
 matching receipt-backed turn fields and streamed-output spans, then verifies
-semantic events and core state. Complete checkpoints, indexed runtime storage,
+semantic events and core state. Direct checkpoint loading, indexed runtime storage,
 grouped durability, reference relocation and full conversion remain under
 implementation. The application does not yet read or write binary sessions.
 
@@ -1721,8 +1721,33 @@ is required. A final cancellation/source identity/size/time check precedes joint
 adoption of the loaded core, capture and optional origins.
 
 This verified materialization still reads the whole requested prefix to establish
-authority and its canonical payload pool. Direct selected-record loading, suffix
-resume, index authority, alternating publication and a runtime selector remain open.
+authority and its canonical payload pool. Direct selected-record loading,
+index authority, alternating publication and a runtime selector remain open.
+
+The stopped checkpoint-plus-suffix consumer first verifies and materializes that
+checkpoint, then reduces later committed batches into its provisional core and
+provider capture. The shared strict batch loop retains the loaded accepting
+response epoch and initializes provenance-array capacities from their restored
+counts. The provider capture temporarily transfers out of the provisional session
+for event delivery and rebuilding its complete current IRC lookup closure. Only
+final cancellation/source checks allow joint destination/origin adoption. A bad
+suffix or capture failure discards the candidate; only complete success reports
+an incomplete tail, and the reader never truncates it. This operation still
+verifies the checkpoint prefix from byte zero and is not application resume.
+Replaced origin arrays are released only at successful adoption; initialized
+output owners and their existing core/capture remain intact on failure. Source
+rechecks compare identity, size, mode and available full-precision write/change
+timestamps while ignoring access time. They supplement the required writer lock
+and content validation; writes with identical filesystem stamps cannot be
+distinguished by metadata alone. Immutable source ownership remains required.
+Windows file information retains the existing write
+stamp's subsecond component.
+
+The context fixtures split commit framing without changing record sequences or
+payloads, then compare midpoint-checkpoint-plus-suffix results with independent
+full replay. They exercise restored open response epochs, active processes and
+growing/shrinking input/download tables; corruption, incomplete tails, final
+cancellation, source append and same-size overwrite retain separate assertions.
 The core encoder's outstanding voice-root relocation restriction remains ENOTSUP.
 Generation selection and durable publication remain writer responsibilities.
 
@@ -1770,10 +1795,11 @@ Each section's own version is retained for its required field-shaped semantic
 decoder. Those decoders must validate complete core/provider state, common-boundary
 consistency and canonical reference provenance before adoption; an unknown required
 section version fails state loading. Frame decoding alone supplies no state or
-resume authority. The current tests use synthetic section bytes to exercise
-framing, including snapshots larger than one event. Complete typed checkpoint
-bodies, generation selection, alternating durable publication and suffix resume
-remain unfinished. Runtime storage remains JSONL.
+resume authority. Frame tests include synthetic section bytes and snapshots larger
+than one event. Typed core/provider bodies and verified checkpoint-plus-suffix
+materialization have separate semantic tests. Efficient anchor selection,
+voice-root relocation and alternating durable publication remain under
+implementation. Runtime storage remains JSONL.
 
 ## Checkpoint cadence and publication
 

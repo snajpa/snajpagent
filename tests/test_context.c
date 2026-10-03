@@ -501,6 +501,7 @@ test_worknote_moments(struct snag_store *store, const char *cwd)
             assert(reduce_rc == 0);
             json_t *reduce_input = json_object_get(reduce.value, "input");
             assert(json_is_array(reduce_input) && json_array_size(reduce_input) == 1);
+            assert(reduce_input->refcount == 1u); /* The request is its only owner. */
             json_t *reduce_item = json_array_get(reduce_input, 0);
             assert_string(reduce_item, "role", "user");
             const char *reduce_text = json_string_value(json_object_get(reduce_item, "content"));
@@ -1741,6 +1742,7 @@ test_leading_instructions_boundary(struct snag_store *store, const char *temp)
     struct snag_context_projection projection = {0};
 
     snag_config_init(&config);
+    snag_secret_source_free(&config.providers[0].api_key);
     snag_config_provider_init(&config.providers[0], "default");
     /* llama.cpp-style endpoint: instruction roles must lead, so the trailing
      * host boundary moves to the labelled user transport slot. */
@@ -4241,6 +4243,7 @@ test_cache_accounting(struct snag_store *store, const char *cwd)
     json_decref(snapshot);
     json_decref(five);
     json_decref(four);
+    snag_session_close(&session);
 }
 
 static void
@@ -4284,6 +4287,8 @@ test_prompt_cache_key(struct snag_store *store, const char *cwd)
     snag_context_projection_free(&again);
     snag_context_projection_free(&alien);
     json_decref(empty);
+    snag_session_close(&session);
+    snag_session_close(&other);
 }
 
 /* A provider reuses a cached prefix only while the earlier part of the request stays
@@ -4376,6 +4381,8 @@ test_request_prefix_stability(struct snag_store *store, const char *cwd)
     snag_context_projection_free(&first);
     snag_context_projection_free(&second);
     json_decref(empty);
+    snag_session_close(&session);
+    snag_config_free(&config);
 }
 
 static void
@@ -5100,6 +5107,44 @@ test_count_request_schema(void)
 }
 
 static void
+test_pending_native_sources(struct snag_store *store, const char *cwd)
+{
+    struct snag_session session;
+    const char *turn = "70000000000000000000000000000000";
+    create_session(store, &session, cwd, "medium");
+    commit_event(&session, "turn_started", turn_started(turn, 1u, "pending sources", cwd, NULL));
+    for (unsigned int i = 1u; i <= 3u; ++i) {
+        char queue[33], download[33];
+        snprintf(queue, sizeof(queue), "%032x", i);
+        snprintf(download, sizeof(download), "%032x", i + 100u);
+        commit_event(&session, "future_turn_queued", json_pack("{s:s,s:b,s:s,s:s}",
+            "queue_id", queue, "read_only", false, "text", "later", "while_turn_id", turn));
+        commit_event(&session, "download_queued", json_pack("{s:s,s:s,s:s,s:I,s:I,s:s,s:I}",
+            "id", download, "path", "/tmp/native-checkpoint-download", "name", "download",
+            "bytes", (json_int_t)i, "mtime", (json_int_t)0, "sha256",
+            "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "queued_ms", (json_int_t)17));
+    }
+    for (unsigned int i = 1u; i <= 2u; ++i) {
+        char queue[33], download[33];
+        snprintf(queue, sizeof(queue), "%032x", i);
+        snprintf(download, sizeof(download), "%032x", i + 100u);
+        commit_event(&session, "future_turn_cancelled", json_pack("{s:s,s:[s]}",
+            "reason", "user", "queue_ids", queue));
+        commit_event(&session, "download_removed", json_pack("{s:s,s:s}",
+            "id", download, "reason", "fixture"));
+    }
+    assert(session.pending_queue_count == 1u && json_array_size(session.download_queue) == 1u);
+    struct snag_context_projection projection = {0};
+    json_t *steering = json_array();
+    assert(steering);
+    build_context(&session, 1u, steering, NULL, &projection);
+    snag_context_projection_free(&projection);
+    json_decref(steering);
+    snag_session_close(&session);
+}
+
+static void
 test_saved_metadata(struct snag_store *store, const char *cwd)
 {
     struct snag_session session;
@@ -5284,6 +5329,7 @@ main(int argc, char **argv)
     test_prompt_cache_key(&store, cwd);
     test_history_orientation(&store, cwd);
     test_saved_metadata(&store, cwd);
+    test_pending_native_sources(&store, cwd);
     test_worknote(&store, cwd);
     test_worknote_moments(&store, cwd);
     test_request_prefix_stability(&store, cwd);

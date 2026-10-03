@@ -39,4 +39,17 @@ int snag_store_verify_binary_context_checkpoint(struct snag_session *source,
     struct snag_binary_checkpoint_sources *sources, const struct snag_context_control *control,
     char *error, size_t error_size);
 
+/* Verify/materialize the checkpoint as above, then strictly reduce its suffix
+ * and rebuild the current historical lookup closure before joint adoption.
+ * The entire operation rechecks the locked source. No failure replaces restored
+ * or optional sources, or supplies tail-repair authority. Successful recovery
+ * describes the full verified journal (prefix plus suffix batches) and any
+ * incomplete tail, which this read-only consumer never truncates. This still
+ * replays the prefix and is test-linked, not efficient application resume. */
+int snag_store_resume_binary_context_checkpoint(struct snag_session *source,
+    struct snag_session *restored, const struct snag_binary_anchor *prefix,
+    const void *checkpoint, size_t checkpoint_size, struct snag_binary_recovery *recovery,
+    struct snag_binary_checkpoint_sources *sources, const struct snag_context_control *control,
+    char *error, size_t error_size);
+
 #endif

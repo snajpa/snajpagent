@@ -158,7 +158,7 @@ done:
 static int
 reconcile_context(struct snag_session *source, struct snag_session *restored,
     const struct snag_binary_anchor *prefix, const void *checkpoint, size_t checkpoint_size,
-    struct snag_binary_recovery *recovery,
+    bool suffix, struct snag_binary_recovery *recovery,
     struct snag_binary_checkpoint_sources *sources, const struct snag_context_control *control,
     char *error, size_t error_size)
 {
@@ -196,11 +196,23 @@ reconcile_context(struct snag_session *source, struct snag_session *restored,
             rc = snag_fail(error, error_size, ECANCELED, "checkpoint verification cancelled");
         }
     }
+    if (rc == 0 && suffix) {
+        uint64_t prefix_batches = recovery->batches;
+        rc = snag_context_capture_take(&candidate, control, &capture, error, error_size);
+        if (rc == 0) {
+            rc = snag_store_reduce_binary_suffix(source, &candidate, &recovery->verified,
+                snag_context_capture_event, capture, recovery, &origins, error, error_size);
+            recovery->batches += prefix_batches;
+        }
+        if (rc == 0) rc = snag_context_capture_sources(capture, &candidate, walk_sources,
+            &walk, error, error_size);
+        if (rc == 0) rc = snag_context_capture_bind(&capture, &candidate, error, error_size);
+        if (rc == 0 && control && control->cancelled && control->cancelled(control->opaque))
+            rc = snag_fail(error, error_size, ECANCELED, "checkpoint suffix replay cancelled");
+    }
     if (rc == 0 && snag_fstat(source->log_fd, &after) < 0)
         rc = snag_fail(error, error_size, errno, "cannot recheck native context source");
-    if (rc == 0 && (before.st_dev != after.st_dev ||
-        before.st_ino != after.st_ino || before.st_size != after.st_size ||
-        before.st_mtime != after.st_mtime)) {
+    if (rc == 0 && !snag_file_unchanged(&before, &after)) {
         rc = snag_fail(error, error_size, EAGAIN, "native source changed during context capture");
     }
     if (rc == 0) {
@@ -208,10 +220,12 @@ reconcile_context(struct snag_session *source, struct snag_session *restored,
         *restored = candidate;
         snag_session_init(&candidate);
         if (sources) {
+            snag_binary_checkpoint_sources_free(sources);
             *sources = origins;
             origins = (struct snag_binary_checkpoint_sources){0};
         }
     }
+    if (rc < 0) recovery->incomplete_tail_bytes = 0u;
     snag_session_close(&candidate);
     snag_binary_checkpoint_sources_free(&origins);
     snag_context_capture_free(capture);
@@ -224,7 +238,7 @@ snag_store_reconcile_binary_context(struct snag_session *source,
     struct snag_binary_checkpoint_sources *sources, const struct snag_context_control *control,
     char *error, size_t error_size)
 {
-    return reconcile_context(source, restored, NULL, NULL, 0u, recovery, sources, control,
+    return reconcile_context(source, restored, NULL, NULL, 0u, false, recovery, sources, control,
         error, error_size);
 }
 
@@ -235,7 +249,7 @@ snag_store_reconcile_binary_context_prefix(struct snag_session *source,
     const struct snag_context_control *control, char *error, size_t error_size)
 {
     if (!prefix) return snag_fail(error, error_size, EINVAL, "missing native context boundary");
-    return reconcile_context(source, restored, prefix, NULL, 0u, recovery, sources, control,
+    return reconcile_context(source, restored, prefix, NULL, 0u, false, recovery, sources, control,
         error, error_size);
 }
 
@@ -249,5 +263,18 @@ snag_store_verify_binary_context_checkpoint(struct snag_session *source,
     if (!prefix || !checkpoint || !checkpoint_size)
         return snag_fail(error, error_size, EINVAL, "missing native checkpoint candidate");
     return reconcile_context(source, restored, prefix, checkpoint, checkpoint_size,
-        recovery, sources, control, error, error_size);
+        false, recovery, sources, control, error, error_size);
+}
+
+int
+snag_store_resume_binary_context_checkpoint(struct snag_session *source,
+    struct snag_session *restored, const struct snag_binary_anchor *prefix,
+    const void *checkpoint, size_t checkpoint_size, struct snag_binary_recovery *recovery,
+    struct snag_binary_checkpoint_sources *sources, const struct snag_context_control *control,
+    char *error, size_t error_size)
+{
+    if (!prefix || !checkpoint || !checkpoint_size)
+        return snag_fail(error, error_size, EINVAL, "missing native checkpoint candidate");
+    return reconcile_context(source, restored, prefix, checkpoint, checkpoint_size,
+        true, recovery, sources, control, error, error_size);
 }

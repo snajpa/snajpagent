@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "context.h"
+#include "fs.h"
 #include "json.h"
 #include "snajpagent.h"
 #include "store_binary_context.h"
@@ -15,11 +16,21 @@
 static unsigned int compared, without_journal, prefix_compared, prefix_rejected;
 static bool checked_failures, checked_source_failures;
 static unsigned int warm_compared, checkpoint_compared, checkpoint_rejected;
-static unsigned int checkpoint_late_rejected;
+static unsigned int checkpoint_late_rejected, suffix_compared;
+static unsigned int suffix_late_rejected, suffix_bad_rejected, suffix_tails;
+static unsigned int checkpoint_rewrite_rejected;
+static unsigned int suffix_open, suffix_process, suffix_queue, suffix_download;
+
+typedef int (*checkpoint_reader)(struct snag_session *, struct snag_session *,
+    const struct snag_binary_anchor *, const void *, size_t, struct snag_binary_recovery *,
+    struct snag_binary_checkpoint_sources *, const struct snag_context_control *, char *, size_t);
 
 static void checkpoint_late_failures(struct snag_session *, struct snag_session *,
     struct snag_binary_checkpoint_sources *, const struct snag_binary_anchor *,
-    const void *, size_t);
+    const void *, size_t, checkpoint_reader, uint64_t);
+static void suffix_failure_paths(struct snag_session *, struct snag_session *,
+    struct snag_binary_checkpoint_sources *, const struct snag_binary_anchor *,
+    const struct snag_binary_anchor *, const void *, size_t);
 
 static void
 same_document(const struct snag_json_document *a, const struct snag_json_document *b)
@@ -314,8 +325,24 @@ checkpoint_matches(struct snag_session *source, struct snag_session *expected,
             snag_buf_free(&other_core);
             ++checkpoint_rejected;
         }
-        checkpoint_late_failures(source, &checked, &adopted, anchor, bytes.data, bytes.len);
+        checkpoint_late_failures(source, &checked, &adopted, anchor, bytes.data, bytes.len,
+            snag_store_verify_binary_context_checkpoint, anchor->end);
     }
+    /* Empty suffix and successful replacement of an already owning destination. */
+    assert(snag_store_resume_binary_context_checkpoint(source, &checked, anchor,
+        bytes.data, bytes.len, &recovery, &adopted, NULL, error, sizeof(error)) == 0);
+    assert(recovery.verified.end == anchor->end && !recovery.incomplete_tail_bytes);
+    same_cache(expected, &checked);
+    struct snag_session core_only;
+    snag_session_init(&core_only);
+    assert(snag_store_reconcile_binary(source, &core_only, NULL, NULL, &recovery,
+        &adopted, error, sizeof(error)) == 0);
+    left = snag_checkpoint_state_encode(&core_only);
+    right = snag_checkpoint_state_encode(&checked);
+    assert(left && right && json_equal(left, right));
+    json_decref(left);
+    json_decref(right);
+    snag_session_close(&core_only);
     /* All subsequent projection checks now use the jointly verified candidate. */
     snag_session_close(expected);
     *expected = checked;
@@ -324,6 +351,135 @@ checkpoint_matches(struct snag_session *source, struct snag_session *expected,
     snag_buf_free(&bytes);
     snag_buf_free(&core);
     snag_buf_free(&provider);
+}
+
+/* Make checkpoint boundaries independent of the importer's batching policy.
+ * Sequence-based canonical references keep their exact source record/payload;
+ * only framing offsets and the commit-chain hashes change. */
+static FILE *
+separate_batches(FILE *original)
+{
+    int fd = fileno(original);
+    off_t size = lseek(fd, 0, SEEK_END);
+    assert(size >= (off_t)SNAG_BINARY_HEADER_SIZE);
+    unsigned char header[SNAG_BINARY_HEADER_SIZE];
+    assert(pread(fd, header, sizeof(header), 0) == (ssize_t)sizeof(header));
+    struct snag_binary_identity identity;
+    struct snag_binary_anchor input;
+    assert(snag_binary_header_decode(header, sizeof(header), &identity, &input) == 0);
+    struct snag_binary_anchor output = input;
+    FILE *file = tmpfile();
+    assert(file && fwrite(header, 1u, sizeof(header), file) == sizeof(header));
+    struct snag_buf read = {.max = SNAG_BINARY_BATCH_MAX};
+    struct snag_buf write = {.max = SNAG_BINARY_BATCH_MAX};
+    while (input.end < (uint64_t)size) {
+        struct snag_binary_batch batch;
+        struct snag_binary_anchor next;
+        assert(snag_binary_batch_read(fd, (uint64_t)size, &input, &read, &batch, &next) == 0);
+        size_t cursor = SNAG_BINARY_BATCH_HEADER_SIZE;
+        for (uint32_t i = 0u; i < batch.count; ++i) {
+            struct snag_binary_record record;
+            uint64_t seq;
+            assert(snag_binary_record_next(&batch, &cursor, &record, &seq) == 0);
+            assert(seq == output.next_seq);
+            write.len = 0u;
+            uint64_t turns = output.turns + (record.kind == SNAG_BINARY_TURN_STARTED);
+            assert(snag_binary_batch_encode(&write, &output, &record, 1u, turns) == 0);
+            assert(fwrite(write.data, 1u, write.len, file) == write.len);
+            struct snag_binary_batch committed;
+            struct snag_binary_anchor committed_end;
+            assert(snag_binary_batch_decode(write.data, write.len, &output,
+                &committed, &committed_end) == 0);
+            output = committed_end;
+        }
+        input = next;
+    }
+    assert(input.next_seq == output.next_seq && input.turns == output.turns);
+    assert(fflush(file) == 0);
+    snag_buf_free(&read);
+    snag_buf_free(&write);
+    return file;
+}
+
+static void
+checkpoint_suffix_matches(struct snag_session *source, struct snag_session *expected,
+    const struct snag_binary_anchor *full, struct snag_binary_checkpoint_sources *origins)
+{
+    if (full->next_seq <= 2u) return;
+    unsigned char header[SNAG_BINARY_HEADER_SIZE];
+    assert(pread(source->log_fd, header, sizeof(header), 0) == (ssize_t)sizeof(header));
+    struct snag_binary_checkpoint_frame frame = {.generation = 1u};
+    struct snag_binary_anchor anchor;
+    assert(snag_binary_header_decode(header, sizeof(header), &frame.identity, &anchor) == 0);
+    struct snag_buf batch_bytes = {.max = SNAG_BINARY_BATCH_MAX};
+    while (anchor.next_seq < (full->next_seq + 1u) / 2u) {
+        struct snag_binary_batch batch;
+        struct snag_binary_anchor next;
+        assert(snag_binary_batch_read(source->log_fd, full->end, &anchor,
+            &batch_bytes, &batch, &next) == 0);
+        anchor = next;
+    }
+    snag_buf_free(&batch_bytes);
+    assert(anchor.next_seq > 1u && anchor.next_seq < full->next_seq);
+    struct snag_session prefix, resumed;
+    snag_session_init(&prefix);
+    snag_session_init(&resumed);
+    struct snag_binary_recovery recovery = {0};
+    struct snag_binary_checkpoint_sources before = {0}, after = {0};
+    char error[256] = {0};
+    assert(snag_store_reconcile_binary_context_prefix(source, &prefix, &anchor,
+        &recovery, &before, NULL, error, sizeof(error)) == 0);
+    suffix_open += prefix.response_open;
+    suffix_process += prefix.process_count != 0u;
+    suffix_queue += prefix.pending_queue_count != 0u;
+    suffix_download += json_array_size(prefix.download_queue) != 0u;
+    const json_t *recent, *history;
+    assert(snag_context_capture_seam(&prefix, &recent, &history) == 0);
+    struct snag_buf core = {.max = SIZE_MAX}, provider = {.max = SIZE_MAX};
+    assert(snag_binary_checkpoint_core_encode(&core, &before, &prefix) == 0);
+    assert(snag_binary_checkpoint_provider_encode(&provider, &prefix, recent, history) == 0);
+    frame.boundary = anchor;
+    frame.core = (struct snag_binary_checkpoint_section){.version = 1u,
+        .data = (unsigned char *)core.data, .size = core.len};
+    frame.provider = (struct snag_binary_checkpoint_section){.version = 1u,
+        .data = (unsigned char *)provider.data, .size = provider.len};
+    struct snag_buf bytes = {.max = SIZE_MAX};
+    assert(snag_binary_checkpoint_frame_encode(&bytes, &frame) == 0);
+    int rc = snag_store_resume_binary_context_checkpoint(source, &resumed, &anchor,
+        bytes.data, bytes.len, &recovery, &after, NULL, error, sizeof(error));
+    if (rc < 0) fprintf(stderr, "checkpoint suffix: %s (%d)\n", error, errno);
+    assert(rc == 0 && !recovery.incomplete_tail_bytes);
+    assert(recovery.batches == full->next_seq - 1u && recovery.verified.end == full->end);
+    same_cache(expected, &resumed);
+    json_t *left = snag_checkpoint_state_encode(expected);
+    json_t *right = snag_checkpoint_state_encode(&resumed);
+    assert(left && right && json_equal(left, right));
+    json_decref(left);
+    json_decref(right);
+    struct snag_buf want = {.max = SIZE_MAX}, got = {.max = SIZE_MAX};
+    assert(snag_binary_checkpoint_core_encode(&want, origins, expected) == 0);
+    assert(snag_binary_checkpoint_core_encode(&got, &after, &resumed) == 0);
+    assert(want.len == got.len && !memcmp(want.data, got.data, want.len));
+    snag_buf_free(&want);
+    snag_buf_free(&got);
+    static bool plain, with_history;
+    const json_t *final_recent, *final_history;
+    assert(snag_context_capture_seam(&resumed, &final_recent, &final_history) == 0);
+    bool *done = json_array_size(final_history) ? &with_history : &plain;
+    if (!*done) {
+        *done = true;
+        suffix_failure_paths(source, &resumed, &after, &anchor, full, bytes.data, bytes.len);
+    }
+    snag_session_close(expected);
+    *expected = resumed;
+    snag_binary_checkpoint_sources_free(origins);
+    *origins = after;
+    snag_session_close(&prefix);
+    snag_binary_checkpoint_sources_free(&before);
+    snag_buf_free(&bytes);
+    snag_buf_free(&core);
+    snag_buf_free(&provider);
+    ++suffix_compared;
 }
 
 static void
@@ -401,6 +557,8 @@ struct capture_hook {
     unsigned int calls, change_at;
     int fd;
     uint64_t end;
+    unsigned char byte;
+    bool overwrite;
 };
 
 static bool
@@ -408,23 +566,39 @@ observe_capture(void *opaque)
 {
     struct capture_hook *hook = opaque;
     ++hook->calls;
-    if (hook->change_at && hook->calls == hook->change_at)
-        assert(pwrite(hook->fd, "X", 1u, (off_t)hook->end) == 1);
+    if (hook->change_at && hook->calls == hook->change_at) {
+        snag_file_info before;
+        if (hook->overwrite) assert(snag_fstat(hook->fd, &before) == 0);
+        const void *data = hook->overwrite ? (const void *)&hook->byte : (const void *)"X";
+        assert(pwrite(hook->fd, data, 1u, (off_t)hook->end) == 1);
+        if (hook->overwrite) {
+            /* Automatic write stamps may share a filesystem clock tick. Force
+             * a distinct fractional stamp in the same second to test the guard
+             * deterministically; metadata never substitutes for source locking. */
+            struct timespec times[2] = {{.tv_nsec = UTIME_OMIT}, {.tv_sec = before.st_mtime}};
+#ifdef __APPLE__
+            times[1].tv_nsec = (before.st_mtimespec.tv_nsec + 1l) % 1000000000l;
+#else
+            times[1].tv_nsec = (before.st_mtim.tv_nsec + 1l) % 1000000000l;
+#endif
+            assert(futimens(hook->fd, times) == 0);
+        }
+    }
     return false;
 }
 
 static void
 checkpoint_late_failures(struct snag_session *source, struct snag_session *target,
     struct snag_binary_checkpoint_sources *origins, const struct snag_binary_anchor *anchor,
-    const void *bytes, size_t size)
+    const void *bytes, size_t size, checkpoint_reader read, uint64_t source_end)
 {
-    struct capture_hook hook = {.fd = source->log_fd, .end = anchor->end};
+    struct capture_hook hook = {.fd = source->log_fd, .end = source_end};
     struct snag_context_control control = {.opaque = &hook, .cancelled = observe_capture};
     struct snag_session probe;
     snag_session_init(&probe);
     struct snag_binary_recovery recovery = {0};
     char error[256] = {0};
-    assert(snag_store_verify_binary_context_checkpoint(source, &probe, anchor,
+    assert(read(source, &probe, anchor,
         bytes, size, &recovery, NULL, &control, error, sizeof(error)) == 0);
     same_cache(target, &probe);
     snag_session_close(&probe);
@@ -432,8 +606,10 @@ checkpoint_late_failures(struct snag_session *source, struct snag_session *targe
     assert(calls > 3u);
     /* Last three hooks are seed, loaded capture bind, and final cancellation
      * before source recheck. None may replace the already adopted destination. */
+    unsigned char last;
+    assert(pread(source->log_fd, &last, 1u, (off_t)source_end - 1) == 1);
     for (unsigned int offset = 0u; offset < 3u; ++offset) {
-        for (unsigned int change = 0u; change < 2u; ++change) {
+        for (unsigned int change = 0u; change < (offset ? 2u : 3u); ++change) {
             unsigned char old_state[sizeof(*target)], old_origins[sizeof(*origins)];
             memcpy(old_state, target, sizeof(*target));
             memcpy(old_origins, origins, sizeof(*origins));
@@ -442,9 +618,12 @@ checkpoint_late_failures(struct snag_session *source, struct snag_session *targe
             unsigned int remaining = calls - offset;
             hook.calls = 0u;
             hook.change_at = remaining;
+            hook.overwrite = change == 2u;
+            hook.end = hook.overwrite ? source_end - 1u : source_end;
+            hook.byte = last ^ 1u;
             control.cancelled = change ? observe_capture : cancel_capture;
             control.opaque = change ? (void *)&hook : (void *)&remaining;
-            assert(snag_store_verify_binary_context_checkpoint(source, target, anchor,
+            assert(read(source, target, anchor,
                 bytes, size, &recovery, origins, &control, error, sizeof(error)) < 0);
             assert(errno == (change ? EAGAIN : ECANCELED));
             assert(!recovery.incomplete_tail_bytes);
@@ -454,9 +633,100 @@ checkpoint_late_failures(struct snag_session *source, struct snag_session *targe
             assert(new_cache && json_equal(old_cache, new_cache));
             json_decref(old_cache);
             json_decref(new_cache);
-            if (change) assert(ftruncate(source->log_fd, (off_t)anchor->end) == 0);
-            ++checkpoint_late_rejected;
+            if (change) assert(ftruncate(source->log_fd, (off_t)source_end) == 0);
+            if (hook.overwrite) {
+                assert(pwrite(source->log_fd, &last, 1u, (off_t)source_end - 1) == 1);
+                ++checkpoint_rewrite_rejected;
+            } else if (read == snag_store_resume_binary_context_checkpoint) {
+                ++suffix_late_rejected;
+            } else {
+                ++checkpoint_late_rejected;
+            }
         }
+    }
+}
+
+static void
+suffix_failure_paths(struct snag_session *source, struct snag_session *target,
+    struct snag_binary_checkpoint_sources *origins, const struct snag_binary_anchor *anchor,
+    const struct snag_binary_anchor *full, const void *bytes, size_t size)
+{
+    checkpoint_late_failures(source, target, origins, anchor, bytes, size,
+        snag_store_resume_binary_context_checkpoint, full->end);
+    unsigned char old_state[sizeof(*target)], old_origins[sizeof(*origins)];
+    memcpy(old_state, target, sizeof(*target));
+    memcpy(old_origins, origins, sizeof(*origins));
+    json_t *old_cache = target->on_checkpoint(target->on_commit_opaque, target);
+    assert(old_cache);
+    unsigned char last;
+    assert(pread(source->log_fd, &last, 1u, (off_t)full->end - 1) == 1);
+    struct snag_binary_recovery recovery = {0};
+    char error[256] = {0};
+    for (unsigned int variant = 0u; variant < 2u; ++variant) {
+        struct snag_buf bad = {.max = SNAG_BINARY_BATCH_MAX};
+        if (!variant) {
+            unsigned char payload = 0u;
+            struct snag_binary_record record = {.kind = SNAG_BINARY_LEGACY_CHECKPOINT,
+                .version = 1u, .flags = SNAG_BINARY_RECORD_OPTIONAL,
+                .timestamp_ms = target->last_time_ms, .payload = &payload, .size = 1u};
+            assert(snag_binary_batch_encode(&bad, full, &record, 1u, full->turns) == 0);
+            assert(pwrite(source->log_fd, bad.data, bad.len, (off_t)full->end) ==
+                (ssize_t)bad.len);
+        } else {
+            unsigned char changed = last ^ 1u;
+            assert(pwrite(source->log_fd, &changed, 1u, (off_t)full->end - 1) == 1);
+        }
+        assert(snag_store_resume_binary_context_checkpoint(source, target, anchor,
+            bytes, size, &recovery, origins, NULL, error, sizeof(error)) < 0);
+        assert(errno == EINVAL && !recovery.incomplete_tail_bytes);
+        assert(!memcmp(old_state, target, sizeof(*target)));
+        assert(!memcmp(old_origins, origins, sizeof(*origins)));
+        json_t *cache = target->on_checkpoint(target->on_commit_opaque, target);
+        assert(cache && json_equal(old_cache, cache));
+        json_decref(cache);
+        snag_file_info info;
+        assert(snag_fstat(source->log_fd, &info) == 0);
+        assert((uint64_t)info.st_size == full->end + bad.len);
+        assert(ftruncate(source->log_fd, (off_t)full->end) == 0);
+        assert(pwrite(source->log_fd, &last, 1u, (off_t)full->end - 1) == 1);
+        snag_buf_free(&bad);
+        ++suffix_bad_rejected;
+    }
+    json_decref(old_cache);
+
+    /* Incomplete data is reported only after complete successful adoption;
+     * the reader leaves both an appended byte and a partial batch untouched. */
+    for (unsigned int partial = 0u; partial < 2u; ++partial) {
+        uint64_t end = partial ? full->end - 1u : full->end + 1u;
+        if (partial) assert(ftruncate(source->log_fd, (off_t)end) == 0);
+        else assert(pwrite(source->log_fd, "x", 1u, (off_t)full->end) == 1);
+        struct snag_session expected, resumed;
+        snag_session_init(&expected);
+        snag_session_init(&resumed);
+        struct snag_binary_recovery baseline = {0};
+        struct snag_binary_checkpoint_sources wanted = {0}, got = {0};
+        assert(snag_store_reconcile_binary_context(source, &expected, &baseline,
+            &wanted, NULL, error, sizeof(error)) == 0);
+        assert(snag_store_resume_binary_context_checkpoint(source, &resumed, anchor,
+            bytes, size, &recovery, &got, NULL, error, sizeof(error)) == 0);
+        assert(recovery.incomplete_tail_bytes == baseline.incomplete_tail_bytes);
+        assert(recovery.incomplete_tail_bytes && recovery.batches == baseline.batches);
+        assert(recovery.verified.end == baseline.verified.end);
+        same_cache(&expected, &resumed);
+        json_t *left = snag_checkpoint_state_encode(&expected);
+        json_t *right = snag_checkpoint_state_encode(&resumed);
+        assert(left && right && json_equal(left, right));
+        json_decref(left);
+        json_decref(right);
+        snag_file_info info;
+        assert(snag_fstat(source->log_fd, &info) == 0 && (uint64_t)info.st_size == end);
+        snag_session_close(&expected);
+        snag_session_close(&resumed);
+        snag_binary_checkpoint_sources_free(&wanted);
+        snag_binary_checkpoint_sources_free(&got);
+        assert(ftruncate(source->log_fd, (off_t)full->end) == 0);
+        assert(pwrite(source->log_fd, &last, 1u, (off_t)full->end - 1) == 1);
+        ++suffix_tails;
     }
 }
 
@@ -598,6 +868,9 @@ test_context_binary_projection(struct snag_session *source, unsigned int cycle,
         error, sizeof(error));
     if (rc < 0) fprintf(stderr, "native provider import: %s\n", error);
     assert(rc == 0);
+    FILE *separate = separate_batches(file);
+    assert(fclose(file) == 0);
+    file = separate;
     native_source.log_fd = fileno(file);
     native_source.lock_fd = source->lock_fd;
     memcpy(native_source.id, source->id, sizeof(source->id));
@@ -613,6 +886,7 @@ test_context_binary_projection(struct snag_session *source, unsigned int cycle,
     assert(native.on_commit && native.on_commit_free && native.on_commit_opaque);
     same_cache(&legacy, &native);
     checkpoint_matches(&native_source, &native, &recovery.verified, &origins);
+    checkpoint_suffix_matches(&native_source, &native, &recovery.verified, &origins);
     prefix_matches(&native_source, &native, &recovery.verified);
 
     if (!checked_failures && native.next_seq > 2u) {
@@ -686,4 +960,16 @@ test_context_binary_report(void)
         checkpoint_late_rejected);
     printf("native context prefix: %u matches; %u rejected boundaries\n",
         prefix_compared, prefix_rejected);
+    assert(suffix_compared == compared && suffix_late_rejected == 12u);
+    assert(suffix_bad_rejected == 4u && suffix_tails == 4u);
+    assert(checkpoint_rewrite_rejected == 4u);
+    assert(suffix_open && suffix_process && suffix_queue && suffix_download);
+    printf("native checkpoint suffix: %u matches; %u late failures; %u corruptions; %u tails\n",
+        suffix_compared, suffix_late_rejected, suffix_bad_rejected, suffix_tails);
+    printf("native suffix starting state: %u open responses; %u processes; "
+        "%u queues; %u downloads\n",
+        suffix_open, suffix_process, suffix_queue, suffix_download);
+    printf("native checkpoint source recheck: %u same-size rewrites rejected\n",
+        checkpoint_rewrite_rejected);
+    fflush(stdout);
 }
