@@ -362,6 +362,7 @@ test_publication_gates(enum gate gate)
     atomic_store(&probe.released, true);
     assert(!await_checkpoint(io, &result));
     assert(result.published && result.renamed && !result.error && result.generation == 9u);
+    assert(result.image_size == expected.len);
     assert(!memcmp(result.image_digest, expected.data + expected.len - 32u, 32u));
     assert(result.slot == 0u && probe.largest_write == 65536u);
     assert(probe.file_syncs == 1u && probe.renames == 1u && probe.dir_syncs == 1u);
@@ -388,6 +389,7 @@ test_retry(enum fault fault)
     assert(await_checkpoint(io, &result) < 0);
     assert(!result.published && result.error && result.generation == 9u && result.slot == 0u);
     static const unsigned char zero[32] = {0};
+    assert(!result.image_size);
     assert(!memcmp(result.image_digest, zero, sizeof(zero)));
     if (fault == FAULT_UNSUPPORTED) assert(result.error == ENOTSUP);
     check_file(&fixture, "checkpoint.1", &fixture.slots[1]);
@@ -401,6 +403,7 @@ test_retry(enum fault fault)
     assert(result.published && result.generation == failed.generation &&
         result.slot == failed.slot);
     assert(result.boundary.end == fixture.before.end);
+    assert(result.image_size == expected.len);
     assert(!memcmp(result.image_digest, expected.data + expected.len - 32u, 32u));
     assert(fault == FAULT_CREATE || !strcmp(result.temporary, failed.temporary));
     assert(probe.creates == (fault == FAULT_CREATE ? 2u : 1u));

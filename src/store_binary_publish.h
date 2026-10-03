@@ -24,11 +24,12 @@ struct snag_binary_io_snapshot {
 /* Renamed means confirmed replacement; false does not exclude an ambiguous
  * rename. The temporary name identifies this request's created file and may
  * already be absent after rename, including an ambiguously failed rename.
- * image_digest is available only when published, otherwise zero. It identifies
- * exact frame bytes; publication alone does not bind them to canonical state. */
+ * image_digest/image_size are available only when published, otherwise zero.
+ * They identify exact frame bytes; publication alone does not bind them to
+ * canonical state. */
 struct snag_binary_publication_result {
     struct snag_binary_anchor boundary;
-    uint64_t generation;
+    uint64_t generation, image_size;
     unsigned char image_digest[32];
     unsigned int slot;
     int error;

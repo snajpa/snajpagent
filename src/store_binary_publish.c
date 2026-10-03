@@ -226,6 +226,7 @@ snag_binary_publication_step(struct snag_binary_publication *publication,
         if (rc > 0) rc = snag_errno(ENOTSUP);
         if (!rc) {
             publication->result.published = true;
+            publication->result.image_size = publication->encoder.total;
             memcpy(publication->result.image_digest,
                 publication->encoder.footer + SNAG_BINARY_CHECKPOINT_FOOTER_SIZE - 32u, 32u);
             publication->phase = CP_COMPLETE;

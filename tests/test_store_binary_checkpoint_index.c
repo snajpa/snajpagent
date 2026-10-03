@@ -130,7 +130,8 @@ test_metadata(void)
         .access = {.version = 1u, .data = metadata.data, .size = metadata.len}};
     struct snag_buf image = {.max = SIZE_MAX};
     assert(!snag_binary_checkpoint_frame_encode(&image, &frame));
-    struct snag_binary_checkpoint_receipt receipt = {.generation = 1u, .boundary = boundary};
+    struct snag_binary_checkpoint_receipt receipt = {
+        .generation = 1u, .image_size = image.len, .boundary = boundary};
     memcpy(receipt.image_digest, image.data + image.len - 32u, 32u);
     memcpy(receipt.index_root, root, 32u);
     struct snag_binary_index_entry forged = active[2];

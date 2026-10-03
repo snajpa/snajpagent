@@ -16,7 +16,8 @@
 #define SNAG_BINARY_LEGACY_CHECKPOINT 0x8000u
 #define SNAG_BINARY_LEGACY_CHECKPOINT_SIZE 48u
 #define SNAG_BINARY_CHECKPOINT_RECEIPT 0x8001u
-#define SNAG_BINARY_CHECKPOINT_RECEIPT_SIZE 144u
+#define SNAG_BINARY_CHECKPOINT_RECEIPT_VERSION 2u
+#define SNAG_BINARY_CHECKPOINT_RECEIPT_SIZE 152u
 #define SNAG_BINARY_CHECKPOINT_HEADER_SIZE 160u
 #define SNAG_BINARY_CHECKPOINT_FOOTER_SIZE 48u
 
@@ -45,7 +46,7 @@ struct snag_binary_anchor {
  * index-format-0.2 tree root at its captured boundary. This decoded value alone
  * does not establish membership in the journal or snapshot semantic validity. */
 struct snag_binary_checkpoint_receipt {
-    uint64_t generation;
+    uint64_t generation, image_size;
     struct snag_binary_anchor boundary;
     unsigned char image_digest[32];
     unsigned char index_root[32];
@@ -132,7 +133,8 @@ int snag_binary_legacy_checkpoint_encode(struct snag_buf *out,
     const struct snag_binary_legacy_checkpoint *checkpoint);
 int snag_binary_legacy_checkpoint_decode(const struct snag_binary_record *record,
     struct snag_binary_legacy_checkpoint *checkpoint);
-/* Encode version 1 atomically. Decode returns 0 for supported metadata, 1 for
+/* Encode version 2 atomically. The image size bounds cache loading independently
+ * of cache-supplied fields. Decode returns 0 for supported metadata, 1 for
  * an unknown optional version/index format, -1 for malformed supported fields.
  * Every nonzero result preserves out. A caller using the receipt must separately
  * establish its canonical membership and earlier committed capture boundary. */
@@ -140,7 +142,7 @@ int snag_binary_checkpoint_receipt_encode(struct snag_buf *out,
     const struct snag_binary_checkpoint_receipt *receipt);
 int snag_binary_checkpoint_receipt_decode(const struct snag_binary_record *record,
     struct snag_binary_checkpoint_receipt *out);
-/* Match the frame's identity, generation, exact boundary and complete image
+/* Match the frame's identity, generation, exact size/boundary and complete image
  * checksum to an independently authenticated receipt. Same 0/1/-1 framing and
  * borrowed-view rules as frame_decode. The section codecs and the index
  * frontier still require validation; this is not a journal bootstrap routine. */

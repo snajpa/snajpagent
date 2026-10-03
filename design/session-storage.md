@@ -1970,9 +1970,9 @@ resume does not silently scan an arbitrarily long lifetime prefix.
 
 ### Canonical checkpoint receipt codec
 
-Optional metadata kind `0x8001`, payload version 1, identifies an immutable
+Optional metadata kind `0x8001`, payload version 2, identifies an immutable
 checkpoint image and the index tree at its captured journal boundary. Its
-144-byte payload has explicit little-endian fields:
+152-byte payload has explicit little-endian fields:
 
 | Offset | Field |
 |---|---|
@@ -1983,17 +1983,23 @@ checkpoint image and the index tree at its captured journal boundary. Its
 | 104 | captured index tree root, 32 bytes |
 | 136 | index major 0 and minor 2, two u16s |
 | 140 | reserved zero, u32 |
+| 144 | complete checkpoint image byte length, u64 |
 
 The frame digest is the existing final 32 bytes of the fully verified checkpoint
-frame. The publisher exposes it only with successful durable publication; failed
-results leave that field zero. The receipt codec validates generation, boundary
-geometry and reserved fields before returning a value. Unsupported optional
+frame. The publisher exposes the digest and exact image byte length only with
+successful durable publication; failed results leave both fields zero. The length
+must fit the signed file-offset range and hold the frame header/footer plus its
+two required nonempty sections. It provides an independent bound for cache
+allocation and reading; the loader must compare the actual file extent against
+this canonical value before reading the body. The receipt codec validates length,
+generation, boundary geometry and reserved fields before returning a value. Unsupported optional
 payload/index versions return an unavailable result without replacing the caller's
-output. Invalid supported fields remain errors. Receipt metadata carries no
+output. Earlier draft version1 receipts lack the image length and are unavailable
+for bounded admission. Invalid supported fields remain errors. Receipt metadata carries no
 reducer or provider payload and changes no execution ownership.
 
 The image-binding decoder compares session identity, generation, every captured
-boundary field and the exact frame digest against an independently authenticated
+boundary field, image byte length and the exact frame digest against an independently authenticated
 receipt. A self-consistent replacement frame with different section bytes fails
 that comparison even if all its own checksums were recomputed. Both section
 codecs, reference materialization and the index frontier still require their own

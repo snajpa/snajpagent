@@ -37,6 +37,7 @@ make_image(struct receipt_fixture *fixture, size_t slot, size_t boundary)
     struct snag_binary_checkpoint_receipt *receipt = &fixture->receipts[slot];
     memset(receipt, 0, sizeof(*receipt));
     receipt->generation = frame.generation;
+    receipt->image_size = image->len;
     receipt->boundary = frame.boundary;
     memcpy(receipt->image_digest, image->data + image->len - 32u, 32u);
     memset(receipt->index_root, (int)(slot + 1u), 32u);
@@ -69,7 +70,7 @@ build_fixture(struct receipt_fixture *fixture, unsigned fault)
     struct snag_buf old = {.max = 4096u};
     assert(!snag_binary_checkpoint_receipt_encode(&old, &fixture->receipts[1]));
     struct snag_binary_record metadata = {.kind = SNAG_BINARY_CHECKPOINT_RECEIPT,
-        .version = 1u, .flags = SNAG_BINARY_RECORD_OPTIONAL,
+        .version = SNAG_BINARY_CHECKPOINT_RECEIPT_VERSION, .flags = SNAG_BINARY_RECORD_OPTIONAL,
         .payload = old.data, .size = old.len};
     append_batch(fixture, 2u, &metadata, 1u, 1u);
     append_batch(fixture, 3u, &data, 1u, 2u);
@@ -96,12 +97,12 @@ build_fixture(struct receipt_fixture *fixture, unsigned fault)
         if (fault == 9u) memset(payloads[i].data, 0, 8u);
         if (fault == 10u) record->flags = 0u;
         if (fault == 11u) --record->size;
-        if (fault == 12u) record->version = 2u;
+        if (fault == 12u) record->version = SNAG_BINARY_CHECKPOINT_RECEIPT_VERSION + 1u;
         if (fault == 13u) payloads[i].data[138u] = 3u;
     }
     append_batch(fixture, 4u, records, 3u, 2u);
     append_batch(fixture, 5u, &data, 1u, 3u);
-    metadata.version = 2u;
+    metadata.version = SNAG_BINARY_CHECKPOINT_RECEIPT_VERSION + 1u;
     metadata.payload = NULL;
     metadata.size = 0u;
     append_batch(fixture, 6u, &metadata, 1u, 3u);

@@ -464,7 +464,8 @@
   independently supplied roots and preserved earlier-prefix lookups.
   Resolve authenticated index entries with bounded canonical batch reads.
   Add optional checkpoint receipt encoding and exact snapshot-image binding,
-  and return the completed image digest with durable publication.
+  and return the completed image digest and byte length with durable publication.
+  Pin the image length in receipt version 2 for independently bounded cache loading.
   Find paired receipts through a bounded, cancellable canonical-chain walk and
   verify their exact earlier capture anchors before exposing checkpoint pins.
   Add a bounded reversible batch-envelope codec that separates physical commit

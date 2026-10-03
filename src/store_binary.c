@@ -186,7 +186,10 @@ anchor_valid(const struct snag_binary_anchor *anchor)
 static bool
 receipt_valid(const struct snag_binary_checkpoint_receipt *receipt)
 {
-    return receipt && receipt->generation && anchor_valid(&receipt->boundary) &&
+    return receipt && receipt->generation &&
+        receipt->image_size >= SNAG_BINARY_CHECKPOINT_HEADER_SIZE +
+            SNAG_BINARY_CHECKPOINT_FOOTER_SIZE + 2u &&
+        receipt->image_size <= INT64_MAX && anchor_valid(&receipt->boundary) &&
         receipt->boundary.turns < receipt->boundary.next_seq;
 }
 
@@ -205,6 +208,7 @@ snag_binary_checkpoint_receipt_encode(struct snag_buf *out,
     memcpy(bytes + 72u, receipt->image_digest, 32u);
     memcpy(bytes + 104u, receipt->index_root, 32u);
     put_le(bytes + 138u, 2u, 2u);
+    put_le(bytes + 144u, receipt->image_size, 8u);
     return snag_buf_append(out, bytes, sizeof(bytes));
 }
 
@@ -217,13 +221,13 @@ snag_binary_checkpoint_receipt_decode(const struct snag_binary_record *record,
         (!record->payload && record->size)) {
         return invalid();
     }
-    if (record->version != 1u) return 1;
+    if (record->version != SNAG_BINARY_CHECKPOINT_RECEIPT_VERSION) return 1;
     if (record->size != SNAG_BINARY_CHECKPOINT_RECEIPT_SIZE || !record->payload) {
         return invalid();
     }
     const unsigned char *bytes = record->payload;
     struct snag_binary_checkpoint_receipt decoded = {
-        .generation = get_le(bytes, 8u), .boundary = {
+        .generation = get_le(bytes, 8u), .image_size = get_le(bytes + 144u, 8u), .boundary = {
             .end = get_le(bytes + 8u, 8u), .next_seq = get_le(bytes + 16u, 8u),
             .turns = get_le(bytes + 24u, 8u), .previous = get_le(bytes + 32u, 8u)}
     };
@@ -242,12 +246,12 @@ snag_binary_checkpoint_frame_from_receipt(const void *data, size_t size,
     const struct snag_binary_checkpoint_receipt *receipt,
     struct snag_binary_checkpoint_frame *out)
 {
-    if (!out || !receipt_valid(receipt)) return invalid();
+    if (!out || !receipt_valid(receipt) || size > receipt->image_size) return invalid();
     struct snag_binary_checkpoint_frame frame;
     int rc = snag_binary_checkpoint_frame_decode(data, size, identity, &receipt->boundary, &frame);
     if (rc) return rc;
     const unsigned char *bytes = data;
-    if (frame.generation != receipt->generation ||
+    if (size != receipt->image_size || frame.generation != receipt->generation ||
         memcmp(bytes + size - 32u, receipt->image_digest, 32u)) {
         return invalid();
     }
