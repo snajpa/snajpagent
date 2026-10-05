@@ -1968,6 +1968,25 @@ A damaged canonical batch is an error, not permission to skip it. If both
 snapshots are unusable, repair is an explicit, interruptible operation; normal
 resume does not silently scan an arbitrarily long lifetime prefix.
 
+### Pinned working-set range reads
+
+The checkpoint range iterator enumerates a half-open sequence interval. With
+pinned access, its older part contains only listed working-set records. It loads
+each selected physical batch once, verifies its predecessor/framing and checks
+selected positions, kinds, digest and turn labels against the canonical records.
+Typed turn starts must have the next turn number and match the batch's final
+turn count. The newer part reads the contiguous caller-bounded suffix. NULL
+access preserves the independent contiguous prefix/oracle path. Empty selections
+are valid; range enumeration does not infer closure completeness from gaps.
+
+The producer and adopting consumer establish complete required-reference closure,
+common identity/ancestry, immutable bytes and suffix budget. The iterator uses
+bounded batch scratch and pread; it reads no derived index file. Cancellation is
+checked before reads and record visits. Callbacks borrow each record until they
+return and stage any resulting state until complete success. A failure can follow
+earlier visits, so this API provides no callback-output rollback or adoption.
+Call-transformation, response-stream and provider wiring remain pending.
+
 ### Indexed pending-input materialization
 
 Pending input, queued-turn creation/latest-text and steering receipt readers take

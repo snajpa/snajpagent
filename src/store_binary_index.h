@@ -73,6 +73,20 @@ int snag_binary_checkpoint_batch_find(int fd, const struct snag_binary_anchor *t
     const struct snag_binary_checkpoint_index *access, uint64_t sequence,
     struct snag_buf *scratch, struct snag_binary_batch *batch, struct snag_binary_anchor *before);
 
+/* Enumerate [first,end) in sequence order. Pinned access selects only listed
+ * old working-set records, grouping physical batches; the newer suffix remains
+ * contiguous. NULL access enumerates the contiguous independent oracle prefix.
+ * The producer/consumer must establish complete closure, common identity,
+ * ancestry, immutable bytes and the suffix work bound before using this API.
+ * Visit borrows a record until return: 0 continues, -1 aborts with its errno;
+ * positive returns are invalid. Callbacks must stage any state until complete
+ * success; this iterator does not roll back their outputs. Cancellation checks
+ * precede reads and record visits. Uses pread, never seeks/writes. Return0/-1. */
+int snag_binary_checkpoint_records_read(int fd, const struct snag_binary_anchor *through,
+    const struct snag_binary_checkpoint_index *access, uint64_t first, uint64_t end,
+    int (*visit)(void *, const struct snag_binary_record *, uint64_t),
+    bool (*cancelled)(void *), void *opaque);
+
 /* Draft derived index. Header identity is supplied independently from the
  * canonical journal. Entry checksums bind that identity and their sequence slot;
  * neither checksum grants semantic state or canonical-batch authority. */

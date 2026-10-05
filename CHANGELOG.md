@@ -3,6 +3,10 @@
 # Changelog
 
 ## Unreleased
+- A cancellable native checkpoint range iterator reads listed old working-set
+  records by physical batch and newer suffix records contiguously. It checks
+  exact canonical positions, kinds and typed turn counts; callers stage visited
+  state until successful closure validation. Runtime integration remains pending.
 - Native checkpoint input, queue and steering readers use pinned working-set
   locations for accepting receipts and their original literal fields, including
   queued voice ASR/request provenance. Missing

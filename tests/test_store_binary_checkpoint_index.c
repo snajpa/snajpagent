@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "fixture_store_binary.h"
 #include "store_binary_index.h"
+#include "store_binary_event.h"
 
 #include <assert.h>
 #include <errno.h>
@@ -232,6 +233,67 @@ test_extremes(void)
     snag_buf_free(&bytes);
 }
 
+struct range_visit {
+    uint64_t sequences[9]; /* The largest journal fixture below has nine records. */
+    size_t count;
+    unsigned calls, stop;
+    uint64_t fail_at;
+    int failure;
+};
+
+static int
+collect_range(void *opaque, const struct snag_binary_record *record, uint64_t sequence)
+{
+    struct range_visit *visit = opaque;
+    assert(visit->count < sizeof(visit->sequences) / sizeof(*visit->sequences));
+    if (visit->count) assert(sequence > visit->sequences[visit->count - 1u]);
+    assert(record->kind == 77u || record->kind == SNAG_BINARY_TURN_STARTED);
+    if (record->kind == 77u) {
+        assert(record->size == 3u || record->size == 5u);
+        if (record->size == 3u) assert(record->payload[0] == sequence && !record->payload[1]);
+        else assert(sequence == 7u && !memcmp(record->payload, "later", 5u));
+    }
+    visit->sequences[visit->count++] = sequence;
+    if (sequence == visit->fail_at) {
+        errno = EACCES;
+        return visit->failure;
+    }
+    return 0;
+}
+
+static bool
+cancel_range(void *opaque)
+{
+    struct range_visit *visit = opaque;
+    return ++visit->calls == visit->stop;
+}
+
+static void
+check_ranges(int fd, const struct snag_binary_anchor *through,
+    const struct snag_binary_checkpoint_index *access, bool grouped)
+{
+    for (uint64_t first = 1u; first <= through->next_seq; ++first) {
+        for (uint64_t end = first; end <= through->next_seq; ++end) {
+            for (unsigned mode = 0u; mode < 2u; ++mode) {
+                struct range_visit visit = {0};
+                assert(!snag_binary_checkpoint_records_read(fd, through, mode ? access : NULL,
+                    first, end, collect_range, NULL, &visit));
+                size_t count = 0u;
+                for (uint64_t sequence = first; sequence < end; ++sequence) {
+                    bool listed = grouped ? sequence == 2u || sequence == 3u ||
+                        sequence == 5u || sequence == 6u : sequence == 1u ||
+                        sequence == 4u || sequence == 6u;
+                    if (!mode || listed || sequence >= access->boundary.next_seq) {
+                        assert(count < visit.count && visit.sequences[count++] == sequence);
+                    }
+                }
+                assert(count == visit.count);
+                assert(snag_seek(fd, 0, SEEK_CUR) == 13);
+            }
+        }
+    }
+}
+
 static void
 test_direct_reads(void)
 {
@@ -321,6 +383,54 @@ test_direct_reads(void)
     assert(!snag_binary_checkpoint_batch_find(fd, &later, &decoded, 7u,
         &raw, &batch, &previous));
     assert(batch.first_seq == 7u && previous.end == before.end);
+    check_ranges(fd, &later, &decoded, false);
+    for (unsigned mode = 0u; mode < 2u; ++mode) {
+        struct range_visit visit = {0};
+        assert(!snag_binary_checkpoint_records_read(fd, &later, mode ? &decoded : NULL,
+            1u, later.next_seq, collect_range, cancel_range, &visit));
+        unsigned checks = visit.calls;
+        for (unsigned stop = 1u; stop <= checks; ++stop) {
+            visit = (struct range_visit){.stop = stop};
+            assert(snag_binary_checkpoint_records_read(fd, &later, mode ? &decoded : NULL,
+                1u, later.next_seq, collect_range, cancel_range, &visit) < 0);
+            assert(errno == ECANCELED && visit.calls == stop);
+        }
+        for (int failure = -1; failure <= 1; failure += 2) {
+            visit = (struct range_visit){.fail_at = 4u, .failure = failure};
+            assert(snag_binary_checkpoint_records_read(fd, &later, mode ? &decoded : NULL,
+                1u, later.next_seq, collect_range, NULL, &visit) < 0);
+            assert(errno == (failure < 0 ? EACCES : EINVAL));
+        }
+        assert(snag_seek(fd, 0, SEEK_CUR) == 13);
+    }
+    struct range_visit visit = {0};
+    assert(!snag_binary_checkpoint_records_read(fd, &anchors[1], &decoded,
+        1u, 2u, collect_range, NULL, &visit));
+    assert(visit.count == 1u && visit.sequences[0] == 1u);
+    struct snag_buf empty_bytes = {.max = SIZE_MAX};
+    assert(!snag_binary_checkpoint_index_encode(&empty_bytes, &identity, &before,
+        &tree, NULL, 0u));
+    struct snag_binary_checkpoint_index empty;
+    assert(!snag_binary_checkpoint_index_decode(empty_bytes.data, empty_bytes.len,
+        &identity, &before, root, &empty));
+    visit = (struct range_visit){0};
+    assert(!snag_binary_checkpoint_records_read(fd, &later, &empty,
+        1u, later.next_seq, collect_range, NULL, &visit));
+    assert(visit.count == 1u && visit.sequences[0] == 7u);
+    snag_buf_free(&empty_bytes);
+    for (unsigned fault = 0u; fault < 6u; ++fault) {
+        visit = (struct range_visit){0};
+        assert(snag_binary_checkpoint_records_read(fault == 0u ? -1 : fd,
+            fault == 1u ? NULL : &later, &decoded, fault == 2u ? 0u : 7u,
+            fault == 3u ? 6u : fault == 4u ? later.next_seq + 1u : later.next_seq,
+            fault == 5u ? NULL : collect_range, NULL, &visit) < 0 && errno == EINVAL);
+        assert(!visit.count);
+    }
+    int closed = dup(fd);
+    assert(closed >= 0 && !close(closed));
+    assert(snag_binary_checkpoint_records_read(closed, &later, &decoded,
+        1u, later.next_seq, collect_range, NULL, &visit) < 0 && errno == EBADF);
+    assert(!visit.count);
     /* Old unrelated damage blocks a lifetime walk, not pinned direct lookup
      * or lookup in the newer bounded suffix. Missing old entries still fail. */
     int64_t damaged = (int64_t)anchors[1].end + 20;
@@ -338,13 +448,173 @@ test_direct_reads(void)
         &raw, &batch, &previous) < 0);
     assert(snag_binary_checkpoint_batch_find(fd, &later, &decoded, 2u,
         &raw, &batch, &previous) < 0 && errno == ENOENT);
+    visit = (struct range_visit){0};
+    assert(!snag_binary_checkpoint_records_read(fd, &later, &decoded,
+        1u, later.next_seq, collect_range, NULL, &visit));
+    assert(visit.count == 4u && visit.sequences[0] == 1u && visit.sequences[1] == 4u &&
+        visit.sequences[2] == 6u && visit.sequences[3] == 7u);
+    visit = (struct range_visit){0};
+    assert(snag_binary_checkpoint_records_read(fd, &later, NULL,
+        1u, later.next_seq, collect_range, NULL, &visit) < 0 && !visit.count);
     struct snag_binary_checkpoint_index invalid = {0};
     assert(snag_binary_checkpoint_batch_find(fd, &later, &invalid, 7u,
         &raw, &batch, &previous) < 0 && errno == EINVAL);
+    assert(snag_binary_checkpoint_records_read(fd, &later, &invalid,
+        1u, later.next_seq, collect_range, NULL, &visit) < 0 && errno == EINVAL);
     assert(snag_seek(fd, 0, SEEK_CUR) == 13);
     snag_buf_free(&metadata);
     snag_buf_free(&raw);
     snag_buf_free(&flat);
+    assert(!close(fd));
+}
+
+static void
+range_turn(struct snag_buf *out, uint64_t number)
+{
+    static const unsigned char empty[4];
+    struct snag_binary_event event = {.kind = SNAG_BINARY_TURN_STARTED};
+    event.data.started.number = number;
+    event.data.started.id[0] = (unsigned char)number;
+    event.data.started.cwd = (struct snag_binary_text){(const unsigned char *)"/w", 2u};
+    event.data.started.text = (struct snag_binary_text){(const unsigned char *)"range", 5u};
+    event.data.started.instructions = (struct snag_binary_instructions){empty, sizeof(empty)};
+    event.data.started.config.selection = (struct snag_binary_selection){
+        {(const unsigned char *)"p", 1u}, {(const unsigned char *)"m", 1u},
+        {(const unsigned char *)"e", 1u}};
+    snag_buf_reset(out);
+    assert(!snag_binary_event_encode(out, &event));
+}
+
+static void
+test_grouped_ranges(void)
+{
+    char *path = snag_path_join(getenv("TMPDIR") ? getenv("TMPDIR") : "/tmp",
+        "snag-checkpoint-range-XXXXXX");
+    assert(path);
+    int fd = mkstemp(path);
+    assert(fd >= 0 && !unlink(path));
+    free(path);
+    struct snag_binary_identity identity = {.created_ms = 42u};
+    unsigned char header[SNAG_BINARY_HEADER_SIZE];
+    snag_binary_header_encode(header, &identity);
+    struct snag_binary_anchor before, anchors[4];
+    assert(!snag_binary_header_decode(header, sizeof(header), &identity, &before));
+    assert(!snag_write_full(fd, header, sizeof(header)));
+    anchors[0] = before;
+    struct snag_buf raw = {.max = SNAG_BINARY_BATCH_MAX};
+    struct snag_buf flat = {.max = SNAG_BINARY_INDEX_BATCH_MAX};
+    struct snag_buf turn = {.max = SNAG_BINARY_BATCH_MAX};
+    struct snag_binary_index_tree tree = {0};
+    struct snag_binary_index_entry active[4];
+    size_t count = 0u;
+    for (unsigned group = 0u; group < 3u; ++group) {
+        unsigned char payloads[3][3];
+        struct snag_binary_record records[3];
+        for (unsigned i = 0u; i < 3u; ++i) {
+            payloads[i][0] = (unsigned char)(before.next_seq + i);
+            payloads[i][1] = 0u;
+            payloads[i][2] = 111u;
+            records[i] = (struct snag_binary_record){.kind = 77u, .version = 1u,
+                .payload = payloads[i], .size = sizeof(payloads[i])};
+        }
+        if (group < 2u) {
+            range_turn(&turn, group + 1u);
+            records[1] = (struct snag_binary_record){.kind = SNAG_BINARY_TURN_STARTED,
+                .version = snag_binary_event_version(SNAG_BINARY_TURN_STARTED),
+                .payload = turn.data, .size = turn.len};
+        }
+        struct snag_binary_anchor after;
+        snag_buf_reset(&raw);
+        assert(!snag_binary_batch_encode(&raw, &before, records, 3u,
+            before.turns + (group < 2u), &after));
+        assert(!binary_fixture_write(fd, raw.data, raw.len));
+        if (group < 2u) {
+            assert(!snag_binary_index_tree_append_batch(NULL, &tree, &identity,
+                &before, &after, raw.data, raw.len));
+            snag_buf_reset(&flat);
+            assert(!snag_binary_index_append_batch(&flat, &identity, &before, &after,
+                raw.data, raw.len));
+            for (unsigned i = 1u; i < 3u; ++i) {
+                assert(!snag_binary_index_entry_decode(flat.data + i * SNAG_BINARY_INDEX_ENTRY_SIZE,
+                    SNAG_BINARY_INDEX_ENTRY_SIZE, &identity, before.next_seq + i,
+                    &active[count++]));
+            }
+        }
+        before = after;
+        anchors[group + 1u] = after;
+    }
+    assert(count == 4u);
+    struct snag_buf metadata = {.max = SIZE_MAX};
+    assert(!snag_binary_checkpoint_index_encode(&metadata, &identity, &anchors[2],
+        &tree, active, count));
+    unsigned char root[32];
+    assert(!snag_binary_index_tree_root(&tree, root));
+    struct snag_binary_checkpoint_index decoded;
+    assert(!snag_binary_checkpoint_index_decode(metadata.data, metadata.len,
+        &identity, &anchors[2], root, &decoded));
+    assert(snag_seek(fd, 13, SEEK_SET) == 13);
+    check_ranges(fd, &anchors[3], &decoded, true);
+    /* Well-formed, checksummed table replacements still need canonical checks. */
+    for (unsigned fault = 0u; fault < 5u; ++fault) {
+        struct snag_binary_index_entry entry = active[0];
+        if (fault == 0u) ++entry.record_offset;
+        if (fault == 1u) entry.kind = 78u;
+        if (fault == 2u) entry.turn = 0u;
+        if (fault == 3u) entry.batch_digest[0] ^= 1u;
+        if (fault == 4u) {
+            entry.sequence = 1u;
+            entry.turn = 0u;
+        }
+        assert(!snag_binary_index_entry_encode(metadata.data +
+            SNAG_BINARY_CHECKPOINT_INDEX_HEADER_SIZE, &identity, &entry));
+        assert(!snag_binary_checkpoint_index_decode(metadata.data, metadata.len,
+            &identity, &anchors[2], root, &decoded));
+        struct range_visit visit = {0};
+        assert(snag_binary_checkpoint_records_read(fd, &anchors[3], &decoded,
+            1u, anchors[3].next_seq, collect_range, NULL, &visit) < 0 && errno == EINVAL);
+        assert(!visit.count && snag_seek(fd, 0, SEEK_CUR) == 13);
+    }
+    assert(!snag_binary_index_entry_encode(metadata.data +
+        SNAG_BINARY_CHECKPOINT_INDEX_HEADER_SIZE, &identity, &active[0]));
+    assert(!snag_binary_checkpoint_index_decode(metadata.data, metadata.len,
+        &identity, &anchors[2], root, &decoded));
+    /* Corrupt a selected physical batch; no callback from it is exposed. */
+    unsigned char byte;
+    int64_t offset = (int64_t)anchors[0].end + 20;
+    assert(snag_pread(fd, &byte, 1u, offset) == 1);
+    unsigned char changed = byte ^ 1u;
+    assert(snag_seek(fd, offset, SEEK_SET) == offset);
+    assert(!snag_write_full(fd, &changed, 1u));
+    assert(snag_seek(fd, 13, SEEK_SET) == 13);
+    struct range_visit visit = {0};
+    assert(snag_binary_checkpoint_records_read(fd, &anchors[3], &decoded,
+        1u, anchors[3].next_seq, collect_range, NULL, &visit) < 0 && !visit.count);
+    assert(snag_seek(fd, offset, SEEK_SET) == offset);
+    assert(!snag_write_full(fd, &byte, 1u));
+    /* A valid envelope/count cannot substitute for the typed turn number. */
+    range_turn(&turn, 9u);
+    unsigned char first[3] = {1u, 0u, 111u}, last[3] = {3u, 0u, 111u};
+    struct snag_binary_record records[3] = {
+        {.kind = 77u, .version = 1u, .payload = first, .size = sizeof(first)},
+        {.kind = SNAG_BINARY_TURN_STARTED,
+            .version = snag_binary_event_version(SNAG_BINARY_TURN_STARTED),
+            .payload = turn.data, .size = turn.len},
+        {.kind = 77u, .version = 1u, .payload = last, .size = sizeof(last)}};
+    snag_buf_reset(&raw);
+    struct snag_binary_anchor bad;
+    assert(!snag_binary_batch_encode(&raw, &anchors[0], records, 3u, 1u, &bad));
+    assert(!snag_truncate(fd, (int64_t)anchors[0].end));
+    assert(snag_seek(fd, (int64_t)anchors[0].end, SEEK_SET) == (int64_t)anchors[0].end);
+    assert(!binary_fixture_write(fd, raw.data, raw.len));
+    assert(snag_seek(fd, 13, SEEK_SET) == 13);
+    visit = (struct range_visit){0};
+    assert(snag_binary_checkpoint_records_read(fd, &bad, NULL,
+        1u, bad.next_seq, collect_range, NULL, &visit) < 0 && errno == EINVAL);
+    assert(visit.count == 1u && snag_seek(fd, 0, SEEK_CUR) == 13);
+    snag_buf_free(&metadata);
+    snag_buf_free(&raw);
+    snag_buf_free(&flat);
+    snag_buf_free(&turn);
     assert(!close(fd));
 }
 
@@ -354,4 +624,5 @@ test_store_binary_checkpoint_index(void)
     test_metadata();
     test_extremes();
     test_direct_reads();
+    test_grouped_ranges();
 }
