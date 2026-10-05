@@ -21,6 +21,7 @@ static unsigned int warm_compared, checkpoint_compared, checkpoint_rejected;
 static unsigned int checkpoint_voice_rejected;
 static unsigned int direct_compared, direct_rejected, direct_uninspected;
 static unsigned int bounded_suffix_compared, bounded_suffix_rejected;
+static unsigned int pinned_resume_compared, pinned_resume_rejected, pinned_history_missing;
 static unsigned int checkpoint_late_rejected, suffix_compared;
 static unsigned int suffix_late_rejected, suffix_bad_rejected, suffix_tails;
 static unsigned int checkpoint_rewrite_rejected;
@@ -114,6 +115,20 @@ same_cache(struct snag_session *a, struct snag_session *b, bool relocated)
          * must match; warm caches retain exact cursor comparison below. */
         assert(json_object_del(left, "pending_first_seq") == 0);
         assert(json_object_del(right, "pending_first_seq") == 0);
+    }
+    if (!json_equal(left, right)) {
+        const char *key;
+        json_t *value;
+        json_object_foreach(left, key, value) {
+            json_t *other = json_object_get(right, key);
+            if (json_equal(value, other)) continue;
+            char *wanted = json_dumps(value, JSON_ENCODE_ANY);
+            char *got = json_dumps(other, JSON_ENCODE_ANY);
+            fprintf(stderr, "provider cache %s differs: wanted=%s got=%s\n",
+                key, wanted ? wanted : "<absent>", got ? got : "<absent>");
+            free(wanted);
+            free(got);
+        }
     }
     assert(json_equal(left, right));
     json_decref(left);
@@ -977,6 +992,137 @@ bounded_suffix_checks(struct snag_session *source, const struct snag_session *ex
 }
 
 static void
+reject_pinned_resume(struct snag_session *source, const struct snag_binary_checkpoint_frame *frame,
+    const struct snag_binary_checkpoint_receipt *receipt, const struct snag_binary_anchor *stop,
+    const struct snag_binary_checkpoint_index *available,
+    const struct snag_context_control *control, int expected_errno)
+{
+    struct snag_session target;
+    snag_session_init(&target);
+    target.strings = json_pack("{s:s}", "keep", "old owner");
+    assert(target.strings);
+    struct snag_session saved;
+    memcpy(&saved, &target, sizeof(saved));
+    struct snag_binary_checkpoint_sources origins = {.response_start = 1234u};
+    struct snag_binary_checkpoint_sources old_origins;
+    memcpy(&old_origins, &origins, sizeof(old_origins));
+    char error[128] = {0};
+    int64_t position = snag_seek(source->log_fd, 0, SEEK_CUR);
+    errno = 0;
+    int rc = snag_store_resume_pinned_binary_context_checkpoint(source, &target, frame, receipt,
+        stop, available, &origins, control, error, sizeof(error));
+    if (rc >= 0 || errno != expected_errno) {
+        fprintf(stderr, "pinned reject: rc=%d errno=%d expected=%d error=%s\n",
+            rc, errno, expected_errno, error);
+    }
+    assert(rc < 0);
+    assert(errno == expected_errno && !memcmp(&target, &saved, sizeof(saved)) &&
+        !memcmp(&origins, &old_origins, sizeof(old_origins)));
+    assert(!strcmp(snag_json_string(target.strings, "keep"), "old owner") &&
+        snag_seek(source->log_fd, 0, SEEK_CUR) == position);
+    snag_session_close(&target);
+    ++pinned_resume_rejected;
+}
+
+static void
+pinned_resume_checks(struct snag_session *source, struct snag_session *expected,
+    const struct snag_binary_checkpoint_sources *expected_origins,
+    const struct snag_binary_checkpoint_frame *base, const struct snag_binary_anchor *stop)
+{
+    struct snag_buf locations = {.max = SIZE_MAX};
+    struct snag_binary_checkpoint_index available;
+    binary_fixture_access(source->log_fd, &base->boundary, &locations, &available);
+    unsigned char root[32];
+    assert(!snag_binary_index_tree_root(&available.tree, root));
+    struct snag_binary_checkpoint_frame frame = *base;
+    frame.access = (struct snag_binary_checkpoint_section){.version = 1u,
+        .data = (const unsigned char *)locations.data, .size = locations.len};
+    struct snag_binary_checkpoint_receipt receipt;
+    struct snag_buf image = {.max = SIZE_MAX};
+    seal_checkpoint(&frame, &receipt, root, &image);
+    struct snag_session target;
+    snag_session_init(&target);
+    struct snag_binary_checkpoint_sources origins = {0};
+    struct provider_cancel cancel = {0};
+    struct snag_context_control control = {.cancelled = cancel_provider, .opaque = &cancel};
+    char error[128] = {0};
+    int64_t position = snag_seek(source->log_fd, 0, SEEK_CUR);
+    int rc = snag_store_resume_pinned_binary_context_checkpoint(source, &target, &frame, &receipt,
+        stop, NULL, &origins, &control, error, sizeof(error));
+    if (rc < 0) fprintf(stderr, "pinned context resume: %s (%d)\n", error, errno);
+    assert(!rc && snag_seek(source->log_fd, 0, SEEK_CUR) == position);
+    same_cache(expected, &target, false);
+    struct snag_buf wanted = {.max = SIZE_MAX}, got = {.max = SIZE_MAX};
+    assert(!snag_binary_checkpoint_core_encode(&wanted, expected_origins, expected));
+    assert(!snag_binary_checkpoint_core_encode(&got, &origins, &target));
+    assert(wanted.len == got.len && !memcmp(wanted.data, got.data, got.len));
+    snag_buf_free(&wanted);
+    snag_buf_free(&got);
+    ++pinned_resume_compared;
+    const json_t *recent, *history;
+    assert(!snag_context_capture_seam(expected, &recent, &history));
+    bool has_old_history = false;
+    for (size_t i = 0u; i < json_array_size(history); ++i) {
+        uint64_t sequence;
+        assert(!snag_json_integer_u64(json_array_get(history, i), "seq", &sequence));
+        has_old_history |= sequence < base->boundary.next_seq;
+    }
+    if (has_old_history && !pinned_history_missing) {
+        struct snag_buf empty_bytes = {.max = SIZE_MAX};
+        assert(!snag_binary_checkpoint_index_encode(&empty_bytes, &available.identity,
+            &available.boundary, &available.tree, NULL, 0u));
+        struct snag_binary_checkpoint_index empty;
+        assert(!snag_binary_checkpoint_index_decode(empty_bytes.data, empty_bytes.len,
+            &available.identity, &available.boundary, root, &empty));
+        reject_pinned_resume(source, &frame, &receipt, stop, &empty, NULL, ENOENT);
+        ++pinned_history_missing;
+        snag_buf_free(&empty_bytes);
+    }
+    static bool checked[2];
+    unsigned int class_mode = json_array_size(history) ? 1u : 0u;
+    if (!checked[class_mode] && stop->next_seq > base->boundary.next_seq) {
+        checked[class_mode] = true;
+        for (size_t i = 1u; i <= cancel.calls; ++i) {
+            struct provider_cancel stopped = {.fail_at = i};
+            struct snag_context_control cancelled = {.cancelled = cancel_provider,
+                .opaque = &stopped};
+            reject_pinned_resume(source, &frame, &receipt, stop, NULL, &cancelled, ECANCELED);
+            assert(stopped.calls == i);
+        }
+        struct snag_binary_anchor bad = *stop;
+        bad.digest[0] ^= 1u;
+        reject_pinned_resume(source, &frame, &receipt, &bad, NULL, NULL, EINVAL);
+        struct snag_binary_checkpoint_receipt wrong = receipt;
+        wrong.image_digest[0] ^= 1u;
+        reject_pinned_resume(source, &frame, &wrong, stop, NULL, NULL, EINVAL);
+        struct snag_binary_checkpoint_index bad_available = available;
+        ++bad_available.identity.created_ms;
+        reject_pinned_resume(source, &frame, &receipt, stop, &bad_available, NULL, EINVAL);
+        snag_file_info before;
+        assert(!snag_fstat(source->log_fd, &before));
+        struct direct_mutation mutation = {.cancel = {.fail_at = cancel.calls},
+            .fd = source->log_fd, .size = before.st_size};
+        assert(snag_pread(source->log_fd, &mutation.first, 1u, 0) == 1);
+        struct snag_context_control changed = {.cancelled = mutate_materialization,
+            .opaque = &mutation};
+        reject_pinned_resume(source, &frame, &receipt, stop, NULL, &changed, EAGAIN);
+        assert(mutation.changed);
+        write_source_byte(source->log_fd, 0, mutation.first);
+        struct snag_session supplemental;
+        snag_session_init(&supplemental);
+        assert(!snag_store_resume_pinned_binary_context_checkpoint(source, &supplemental, &frame,
+            &receipt, stop, &available, NULL, NULL, error, sizeof(error)));
+        same_cache(expected, &supplemental, false);
+        snag_session_close(&supplemental);
+    }
+    snag_buf_free(&image);
+    snag_buf_free(&locations);
+    same_cache(expected, &target, false);
+    snag_session_close(&target);
+    snag_binary_checkpoint_sources_free(&origins);
+}
+
+static void
 checkpoint_suffix_matches(struct snag_session *source, struct snag_session *expected,
     const struct snag_binary_anchor *full, struct snag_binary_checkpoint_sources *origins)
 {
@@ -1020,6 +1166,7 @@ checkpoint_suffix_matches(struct snag_session *source, struct snag_session *expe
     frame.provider = (struct snag_binary_checkpoint_section){.version = 1u,
         .data = (unsigned char *)provider.data, .size = provider.len};
     bounded_suffix_checks(source, expected, origins, &frame, full);
+    pinned_resume_checks(source, expected, origins, &frame, full);
     struct snag_buf bytes = {.max = SIZE_MAX};
     assert(snag_binary_checkpoint_frame_encode(&bytes, &frame) == 0);
     int rc = snag_store_resume_binary_context_checkpoint(source, &resumed, &anchor,
@@ -1396,9 +1543,11 @@ failure_paths(struct snag_session *source, struct snag_session *target,
 }
 
 static int
-legacy_sources(void *source, snag_session_event_fn fn, void *opaque,
-    char *error, size_t error_size)
+legacy_sources(void *source, const json_t *wanted, const char *prompt,
+    snag_session_event_fn fn, void *opaque, char *error, size_t error_size)
 {
+    (void)wanted;
+    (void)prompt;
     struct snag_session discarded;
     struct snag_legacy_recovery recovery = {0};
     snag_session_init(&discarded);
@@ -1555,5 +1704,9 @@ test_context_binary_report(void)
         direct_uninspected);
     printf("native bounded suffix: %u comparisons; %u rejected boundaries/stages\n",
         bounded_suffix_compared, bounded_suffix_rejected);
+    assert(pinned_history_missing);
+    printf("native pinned context suffix: %u comparisons; %u rejected stages; "
+        "%u missing historical closure\n", pinned_resume_compared, pinned_resume_rejected,
+        pinned_history_missing);
     fflush(stdout);
 }

@@ -44,6 +44,24 @@ int snag_store_materialize_binary_context_checkpoint(struct snag_session *source
     struct snag_binary_checkpoint_sources *sources, const struct snag_context_control *control,
     char *error, size_t error_size);
 
+/* Joint materialization followed by exact bounded suffix reduction and current
+ * historical lookup. stop is independently established, within the caller's
+ * byte-work budget; its later bytes remain uninspected with no tail authority.
+ * available may supplement the embedded old table with independently proved
+ * required locations at the same capture/frontier. NULL uses the embedded table,
+ * never a lifetime fallback. Caller supplies complete old dependencies needed
+ * by actual suffix fields and current IRC lookup, including the canonical next-row
+ * discriminator retained by legacy admission lookup, not guessed stream ordinals.
+ * Missing required locations/structured labels fail unavailable. All frame/receipt/locking
+ * prerequisites above apply. Failure preserves both initialized output owners;
+ * success installs state-only core/origins/provider capture and no live resources. */
+int snag_store_resume_pinned_binary_context_checkpoint(struct snag_session *source,
+    struct snag_session *restored, const struct snag_binary_checkpoint_frame *frame,
+    const struct snag_binary_checkpoint_receipt *receipt, const struct snag_binary_anchor *stop,
+    const struct snag_binary_checkpoint_index *available,
+    struct snag_binary_checkpoint_sources *sources, const struct snag_context_control *control,
+    char *error, size_t error_size);
+
 /* Slow independent checkpoint verifier. Strict replay establishes prefix authority;
  * both decoded frame sections must equal the canonical core and provider recipe
  * at that boundary. All source-recheck/atomic adoption rules above apply. Success

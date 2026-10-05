@@ -3,15 +3,19 @@
 
 #include "base.h"
 #include "fs.h"
+#include "irc.h"
 #include "store_binary_legacy.h"
 
 #include <errno.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 struct source_walk {
     int fd;
     const struct snag_context_control *control;
     const struct snag_binary_anchor *verified;
+    const struct snag_binary_checkpoint_index *access;
 };
 
 static int
@@ -30,13 +34,177 @@ source_header(int fd, struct snag_binary_identity *identity, struct snag_binary_
     return snag_binary_header_decode(header, sizeof(header), identity, anchor);
 }
 
+struct source_selection {
+    const struct source_walk *source;
+    const char *prompt;
+    json_t *rows, *seen;
+    size_t matched;
+};
+
+static int
+select_source(struct source_selection *selection, uint64_t sequence,
+    const char *type, json_t *data)
+{
+    char key[32];
+    (void)snprintf(key, sizeof(key), "%llu", (unsigned long long)sequence);
+    if (json_object_get(selection->seen, key)) return 0;
+    if (selection->prompt && !strcmp(type, "irc_event")) {
+        struct snag_irc_event event;
+        if (snag_irc_event_read(data, &event) < 0) return -1;
+        char reference[SNAG_ID_HEX_LEN + 48u];
+        (void)snprintf(reference, sizeof(reference), "[IRC update id=%s:%llu ",
+            event.stream, (unsigned long long)event.sequence);
+        selection->matched += event.input && strstr(selection->prompt, reference) != NULL;
+    }
+    if (sequence > INT64_MAX) return snag_errno(EOVERFLOW);
+    json_t *row = json_pack("{s:I,s:s,s:o}", "seq", (json_int_t)sequence,
+        "type", type, "data", json_incref(data));
+    if (!row || json_array_append_new(selection->rows, row) < 0 ||
+        json_object_set_new(selection->seen, key, json_true()) < 0) return snag_errno(ENOMEM);
+    return 0;
+}
+
+static int
+source_point(struct source_selection *selection, uint64_t sequence, bool adjacent)
+{
+    const struct source_walk *source = selection->source;
+    if (!sequence || sequence >= source->verified->next_seq) return snag_errno(ENOENT);
+    if (source->control && source->control->cancelled &&
+        source->control->cancelled(source->control->opaque)) return snag_errno(ECANCELED);
+    const char *type = NULL;
+    json_t *data = NULL;
+    if (snag_binary_checkpoint_projection_read(source->fd, source->verified,
+            source->access, sequence, &type, &data) < 0) return -1;
+    bool marker = !strcmp(type, "session_checkpoint");
+    int rc = (!strcmp(type, "irc_event") || (adjacent && marker)) ?
+        select_source(selection, sequence, type, data) : snag_errno(EINVAL);
+    json_decref(data);
+    if (!rc && marker) rc = source_point(selection, sequence + 1u, false);
+    return rc;
+}
+
+static bool
+source_selection_cancelled(void *opaque)
+{
+    const struct source_selection *selection = opaque;
+    const struct snag_context_control *control = selection->source->control;
+    return control && control->cancelled && control->cancelled(control->opaque);
+}
+
+static int
+source_record(void *opaque, const struct snag_binary_record *record, uint64_t sequence)
+{
+    struct source_selection *selection = opaque;
+    if (record->kind != SNAG_BINARY_IRC_EVENT) return 0;
+    const char *type = NULL;
+    json_t *data = NULL;
+    int rc = snag_binary_legacy_decode(record, &type, &data);
+    if (!rc) rc = select_source(selection, sequence, type, data);
+    json_decref(data);
+    return rc;
+}
+
+static int
+compare_sources(const void *left, const void *right)
+{
+    json_int_t a = json_integer_value(json_object_get(*(json_t *const *)left, "seq"));
+    json_int_t b = json_integer_value(json_object_get(*(json_t *const *)right, "seq"));
+    return (a > b) - (a < b);
+}
+
+static int
+walk_selected_sources(const struct source_walk *source, const json_t *wanted,
+    const char *prompt, snag_session_event_fn fn, void *argument, char *error, size_t error_size)
+{
+    struct source_selection selection = {.source = source, .prompt = prompt,
+        .rows = json_array(), .seen = json_object()};
+    int rc = -1;
+    json_t **ordered = NULL;
+    if (!selection.rows || !selection.seen) { snag_errno(ENOMEM); goto done; }
+    const char *key;
+    json_t *value;
+    json_object_foreach((json_t *)wanted, key, value) {
+        (void)value;
+        uint64_t sequence = 0u;
+        for (const char *p = key; *p; ++p) {
+            if (*p < '0' || *p > '9' || sequence > (UINT64_MAX - (unsigned int)(*p - '0')) / 10u) {
+                snag_errno(EINVAL);
+                goto done;
+            }
+            sequence = sequence * 10u + (unsigned int)(*p - '0');
+        }
+        if (source_point(&selection, sequence, true) < 0) goto done;
+        uint64_t next = sequence + 1u;
+        if (next >= source->verified->next_seq) continue;
+        if (next < source->access->boundary.next_seq) {
+            struct snag_binary_index_entry adjacent;
+            int found = snag_binary_checkpoint_index_find(source->access, next, &adjacent);
+            if (found < 0) goto done;
+            if (found) { snag_errno(ENOENT); goto done; }
+            if (adjacent.kind != SNAG_BINARY_IRC_EVENT) continue;
+        }
+        /* Match the legacy collector's canonical next-row seam exactly, including
+         * non-input IRC metadata. A stream counter never supplies this ordinal. */
+        if (snag_binary_checkpoint_records_read(source->fd, source->verified, source->access,
+                next, next + 1u, source_record, source_selection_cancelled, &selection) < 0)
+            goto done;
+    }
+    if (prompt) {
+        if (snag_binary_checkpoint_records_read(source->fd, source->verified, source->access,
+                1u, source->verified->next_seq, source_record,
+                source_selection_cancelled, &selection) < 0) goto done;
+        size_t expected = 0u;
+        const char *part = prompt;
+        while ((part = strstr(part, "[IRC update id=")) != NULL) {
+            part += sizeof("[IRC update id=") - 1u;
+            size_t stream = strspn(part, "0123456789abcdef");
+            if (stream != SNAG_ID_HEX_LEN || part[stream] != ':') continue;
+            const char *counter = part + stream + 1u;
+            size_t digits = strspn(counter, "0123456789");
+            /* Canonical admissions identify legacy plain labels independently.
+             * Only the structured stream-reference prefix names this lookup. */
+            expected += digits && counter[digits] == ' ';
+        }
+        if (selection.matched != expected) {
+            snag_fail(error, error_size, ENOENT, "current IRC source closure unavailable");
+            goto done;
+        }
+    }
+    size_t count = json_array_size(selection.rows);
+    if (count > SIZE_MAX / sizeof(*ordered)) { snag_errno(EOVERFLOW); goto done; }
+    ordered = count ? malloc(count * sizeof(*ordered)) : NULL;
+    if (count && !ordered) { snag_errno(ENOMEM); goto done; }
+    for (size_t i = 0u; i < count; ++i) ordered[i] = json_array_get(selection.rows, i);
+    if (count > 1u) qsort(ordered, count, sizeof(*ordered), compare_sources);
+    for (size_t i = 0u; i < count; ++i) {
+        if (source->control && source->control->cancelled &&
+            source->control->cancelled(source->control->opaque)) {
+            snag_errno(ECANCELED);
+            goto done;
+        }
+        json_t *row = ordered[i];
+        uint64_t sequence = (uint64_t)json_integer_value(json_object_get(row, "seq"));
+        if (fn(argument, NULL, sequence, snag_json_string(row, "type"),
+                json_object_get(row, "data"), error, error_size) < 0) goto done;
+    }
+    rc = 0;
+done:
+    free(ordered);
+    json_decref(selection.rows);
+    json_decref(selection.seen);
+    return rc;
+}
+
 /* This is lookup under the already verified full-prefix anchor, not another
  * semantic replay. Import markers supply only the old adjacent-IRC lookup seam. */
 static int
-walk_sources(void *opaque, snag_session_event_fn fn, void *argument,
-    char *error, size_t error_size)
+walk_sources(void *opaque, const json_t *wanted, const char *prompt,
+    snag_session_event_fn fn, void *argument, char *error, size_t error_size)
 {
     const struct source_walk *source = opaque;
+    if (source->access) {
+        return walk_selected_sources(source, wanted, prompt, fn, argument, error, error_size);
+    }
     struct snag_binary_identity identity;
     struct snag_binary_anchor anchor;
     if (source_header(source->fd, &identity, &anchor) < 0) return -1;
@@ -201,6 +369,80 @@ done:
     snag_context_capture_free(capture);
     json_decref(recent);
     json_decref(history);
+    return rc;
+}
+
+int
+snag_store_resume_pinned_binary_context_checkpoint(struct snag_session *source,
+    struct snag_session *restored, const struct snag_binary_checkpoint_frame *frame,
+    const struct snag_binary_checkpoint_receipt *receipt, const struct snag_binary_anchor *stop,
+    const struct snag_binary_checkpoint_index *available,
+    struct snag_binary_checkpoint_sources *sources, const struct snag_context_control *control,
+    char *error, size_t error_size)
+{
+    if (!source || !restored || source == restored || !frame || !receipt || !stop ||
+        source->log_fd < 0 || source->lock_fd < 0 || source->pending_log ||
+        restored->dir_fd >= 0 || restored->log_fd >= 0 || restored->lock_fd >= 0 ||
+        restored->pending_log) {
+        return snag_fail(error, error_size, EINVAL, "invalid pinned native resume target");
+    }
+    if (frame->access.version != 1u || !frame->access.size) {
+        return snag_fail(error, error_size, ENOTSUP, "pinned resume access unavailable");
+    }
+    struct snag_binary_checkpoint_index embedded;
+    if (!available) {
+        if (snag_binary_checkpoint_index_decode(frame->access.data, frame->access.size,
+                &frame->identity, &frame->boundary, receipt->index_root, &embedded) < 0) return -1;
+        available = &embedded;
+    }
+    unsigned char root[32];
+    if (!same_anchor(&available->boundary, &frame->boundary) ||
+        available->identity.created_ms != frame->identity.created_ms ||
+        memcmp(available->identity.id, frame->identity.id, sizeof(frame->identity.id)) ||
+        snag_binary_index_tree_root(&available->tree, root) < 0 ||
+        memcmp(root, receipt->index_root, sizeof(root))) {
+        return snag_fail(error, error_size, EINVAL, "pinned resume source frontier mismatch");
+    }
+    snag_file_info before;
+    if (snag_fstat(source->log_fd, &before) < 0) return -1;
+    struct snag_session candidate;
+    snag_session_init(&candidate);
+    struct snag_binary_checkpoint_sources origins = {0};
+    struct snag_context_capture *capture = NULL;
+    struct snag_binary_recovery recovery = {0};
+    int rc = -1;
+    if (snag_store_materialize_binary_context_checkpoint(source, &candidate, frame, receipt,
+            &origins, control, error, error_size) < 0) goto done;
+    if (snag_context_capture_take(&candidate, control, &capture, error, error_size) < 0) goto done;
+    if (snag_store_reduce_binary_suffix_prefix(source, &candidate, &frame->boundary,
+            stop, available, snag_context_capture_event, capture,
+            control ? control->cancelled : NULL, control ? control->opaque : NULL,
+            &recovery, &origins, error, error_size) < 0) goto done;
+    struct source_walk walk = {.fd = source->log_fd, .control = control,
+        .verified = &recovery.verified, .access = available};
+    if (snag_context_capture_sources(capture, &candidate, walk_sources, &walk,
+            error, error_size) < 0 ||
+        snag_context_capture_bind(&capture, &candidate, error, error_size) < 0 ||
+        checkpoint_cancelled(control, error, error_size) < 0) goto done;
+    snag_file_info after;
+    if (snag_fstat(source->log_fd, &after) < 0) goto done;
+    if (!snag_file_unchanged(&before, &after)) {
+        snag_fail(error, error_size, EAGAIN, "native source changed during pinned resume");
+        goto done;
+    }
+    snag_session_close(restored);
+    *restored = candidate;
+    snag_session_init(&candidate);
+    if (sources) {
+        snag_binary_checkpoint_sources_free(sources);
+        *sources = origins;
+        origins = (struct snag_binary_checkpoint_sources){0};
+    }
+    rc = 0;
+done:
+    snag_session_close(&candidate);
+    snag_binary_checkpoint_sources_free(&origins);
+    snag_context_capture_free(capture);
     return rc;
 }
 

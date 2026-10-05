@@ -3,6 +3,9 @@
 # Changelog
 
 ## Unreleased
+- Reconstruct native checkpoint core/provider state from pinned sources, then
+  reduce an exact bounded suffix and retain current historical IRC lookup before
+  joint adoption. Runtime backend wiring and live closure maintenance remain pending.
 - Select native checkpoint access locations from current core/provider roots and
   required original fields, voice starts, response spans and graph transforms.
   Capture deduplicates canonical locations with bounded batch scratch and atomic

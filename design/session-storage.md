@@ -2603,3 +2603,40 @@ same sparse table to compare exact bytes. Actual paired provider recipe captures
 are restored against the same canonical oracle as dense/unindexed reads. Live
 producer table maintenance, receipt-bound joint admission, runtime ownership and
 backend/converter integration remain separate work; the application uses JSONL.
+
+### Joint pinned checkpoint and bounded suffix restoration
+
+The state-only restore consumer composes receipt-pinned core/provider hydration,
+strict suffix reduction through an independently established complete stop, and
+current historical source capture in a private candidate. It adopts core state,
+origins and provider capture together after final cancellation and source-stamp
+checks. Failed stages retain both initialized output owners. It installs no file,
+configuration, network, process or audio resource ownership. Bytes after the stop
+are outside this read-only operation, including any incomplete tail.
+
+Historical queries name canonical admission sequences separately from IRC stream
+IDs/counters in structured current-input labels. Canonical point lookup retains
+legacy checkpoint adjacency and the collector's next-row IRC metadata, including
+non-input rows with their original classification. Structured label lookup visits
+only the pinned old working set and bounded newer suffix. Plain labels in older
+admitted input retain their independent canonical source lookup and original text.
+Rows are staged, deduplicated and emitted in canonical order; missing required old
+locations or structured label sources return unavailable data with no lifetime
+fallback. An absent old next-row discriminator cannot prove that it was non-IRC.
+
+The caller establishes latest receipt membership, capture ancestry, immutable
+image/source bytes, producer semantics, complete source closure, exclusive writer
+ownership and total byte-work bounds. An optional supplemental old table must have
+independently proved membership at the same capture/frontier; matching its root
+metadata alone authenticates no extra location. The embedded image table is used
+when no supplemental table is supplied. Actual suffix references and current
+historical queries may require old locations outside the original checkpoint's
+working set; those locations must be retained/proved before this consumer runs.
+
+Fixtures compare joint core/origin/provider output against the independent full
+prefix oracle, including legacy plain labels and non-input IRC neighbors, then
+free image/access bytes before another provider comparison. Failure coverage
+checks cancellation across observed restore/lookup stages, receipt/frontier/stop
+mismatch, late source mutation and missing historical closure. Runtime receipt
+selection, live producer closure/frontier maintenance, sole I/O ownership and
+backend/converter integration remain pending; the application uses JSONL.

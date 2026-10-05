@@ -497,7 +497,8 @@ snag_context_capture_sources(struct snag_context_capture *cache,
         }
     }
     if ((sources.prompt || json_object_size(sources.wanted)) &&
-        walk(source, capture_source, &sources, error, error_size) < 0) goto done;
+        walk(source, sources.wanted, sources.prompt, capture_source, &sources,
+            error, error_size) < 0) goto done;
     json_decref(cache->history_sources);
     cache->history_sources = sources.events;
     sources.events = NULL;
