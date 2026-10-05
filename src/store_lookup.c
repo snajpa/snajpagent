@@ -763,10 +763,10 @@ snag_store_list(struct snag_store *store, const struct snag_session *owned,
             snag_session_close(&snapshot);
             continue;
         }
-        unsigned int status = !live ? 2u :
-            snag_session_endpoint_status(snapshot.dir_fd, snapshot.dir_path) > 0 ?
-            0u : 1u;
-        static const char *const states[] = {"attached", "detached", "stored"};
+        int attachment = live ?
+            snag_session_endpoint_status(snapshot.dir_fd, snapshot.dir_path) : -1;
+        unsigned int status = !live ? 3u : attachment > 0 ? 0u : attachment == 0 ? 1u : 2u;
+        static const char *const states[] = {"attached", "detached", "running", "stored"};
         uint64_t time_ms = snapshot.last_time_ms;
         json_t *cells = list_cells(store, &snapshot, states[status], columns);
         snag_session_close(&snapshot);
@@ -795,7 +795,7 @@ snag_store_list(struct snag_store *store, const struct snag_session *owned,
         size_t visible = 0u;
         uint64_t stored = 0u;
         while (visible < count) {
-            if (rows[visible].status == 2u && stored++ >= stored_limit) break;
+            if (rows[visible].status == 3u && stored++ >= stored_limit) break;
             ++visible;
         }
         rc = emit_list(rows, visible, columns, emit, opaque);

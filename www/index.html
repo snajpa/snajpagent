@@ -71,9 +71,9 @@
         draft. Without an ID, attach lists running sessions. Current source accepts
         <code>-N NAME</code> to name a new session and select it on attach or resume;
         <code>/session name NAME</code> names an existing session. <code>--resume</code> attaches to a running owner and restarts a stored session. Session lists show
-        <code>attached</code>, <code>detached</code> or <code>stored</code> with prompts and IRC <code>nick@endpoint</code> (<code>s/</code> server, <code>c/</code> client).
+        <code>attached</code>, <code>detached</code>, <code>running</code> (attachment status unavailable) or <code>stored</code> with prompts and IRC <code>nick@endpoint</code> (<code>s/</code> server, <code>c/</code> client).
         <code>snajpagent -l</code> lists all attached sessions, then all detached
-        sessions, then the 10 most recent stored sessions, newest activity first
+        sessions, then those with unavailable attachment status, then the 10 most recent stored sessions, newest activity first
         in each group. Use <code>-l N</code> to change the stored count, or
         <code>-l 0</code> for running sessions only.
         Resume retains saved settings unless overridden. Terminal file transfers

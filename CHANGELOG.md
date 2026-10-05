@@ -4,6 +4,11 @@
 
 ## Unreleased
 
+- Preserve attached/detached status when listing owners started by older binaries.
+  Read-only queries support previous status protocols within one shared deadline.
+  Unavailable attachment status appears as running, after confirmed attached and
+  detached sessions and before stored sessions.
+
 - Keep the cursor in place when a delayed prompt-history refresh returns the
   same recalled entry, preserving multiline Up/Down navigation.
 

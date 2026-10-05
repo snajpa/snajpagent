@@ -261,6 +261,7 @@ check: $(BIN) $(TEST_BIN)
 	./tests/test_responses
 	python3 tests/test_response_keepalive.py ./$(BIN)
 	python3 tests/test_session_states.py ./$(BIN)
+	python3 tests/test_session_status_protocol.py ./$(BIN)
 	python3 tests/test_resume_options.py ./$(BIN)
 	./tests/test_provider_retry
 	./tests/test_provider_transport

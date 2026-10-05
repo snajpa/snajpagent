@@ -109,9 +109,9 @@ snajpagent -l 25
 snajpagent --resume --last
 ```
 
-Current-source `-l` lists all attached sessions, then all detached sessions, then
-the 10 most recent stored sessions. `-l N` changes the stored count; `-l 0` shows
-running sessions only. Each group puts the latest saved activity first.
+Current-source `-l` lists attached sessions, detached sessions, sessions whose
+attachment status is unavailable (`running`), then the 10 most recent stored
+sessions. `-l N` changes the stored count; `-l 0` shows running sessions only. Each group puts the latest saved activity first.
 Tables show `STATUS`, prompts and IRC `nick@endpoint` (`s/` server, `c/` client). Name sessions with
 `snajpagent -N lead`, or `/session name lead`.
 `snajpagent --attach -N lead` reconnects while it runs;

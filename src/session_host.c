@@ -484,15 +484,16 @@ snag_session_stream_pair(int fds[2])
     return 0;
 }
 
-int
-snag_session_packet_read(int fd, struct snag_session_packet *packet)
+static int
+packet_read_version(int fd, struct snag_session_packet *packet,
+    unsigned char version, unsigned char last_type)
 {
     size_t target = SNAG_SESSION_HEADER;
     for (;;) {
         if (packet->used >= SNAG_SESSION_HEADER) {
-            if (packet->bytes[0] != 'S' || packet->bytes[1] != 'A' || packet->bytes[2] != 4u ||
+            if (packet->bytes[0] != 'S' || packet->bytes[1] != 'A' || packet->bytes[2] != version ||
                 packet->bytes[3] < SNAG_SESSION_RESERVE ||
-                packet->bytes[3] > SNAG_SESSION_STATUS ||
+                packet->bytes[3] > last_type ||
                 snag_session_packet_length(packet) > SNAG_SESSION_FRAME_MAX)
                 return snag_errno(EPROTO);
             target += snag_session_packet_length(packet);
@@ -506,6 +507,12 @@ snag_session_packet_read(int fd, struct snag_session_packet *packet)
         packet->used += (size_t)count;
         target = SNAG_SESSION_HEADER;
     }
+}
+
+int
+snag_session_packet_read(int fd, struct snag_session_packet *packet)
+{
+    return packet_read_version(fd, packet, 4u, SNAG_SESSION_STATUS);
 }
 
 int
@@ -619,17 +626,17 @@ snag_session_packet_write(int fd, struct snag_session_packet *packet)
 }
 #endif /* SNAG_SESSION_NATIVE */
 
-int
-snag_session_endpoint_status(int dir_fd, const char *dir_path)
-{
 #ifdef SNAG_SESSION_NATIVE
+static int
+endpoint_status_version(int dir_fd, const char *dir_path, unsigned char version,
+    unsigned char status_type, uint64_t deadline)
+{
     struct snag_session_packet request = {0}, reply = {0};
     int fd = snag_session_endpoint_connect(dir_fd, dir_path);
     if (fd < 0) return -1;
     (void)snag_session_packet_set(&request, SNAG_SESSION_STATUS, NULL, 0u);
-    /* The local UI thread answers independently of provider work. Bound a
-     * stopped or older owner so listing cannot wait indefinitely on one row. */
-    uint64_t deadline = snag_monotonic_ms() + 1000u;
+    request.bytes[2] = version;
+    request.bytes[3] = status_type;
     int result = -1;
     bool verified = false;
     while (snag_monotonic_ms() < deadline) {
@@ -640,15 +647,14 @@ snag_session_endpoint_status(int dir_fd, const char *dir_path)
             if (rc < 0) break;
             if (rc == 1) {
                 verified = true;
-                rc = snag_session_packet_read(fd, &reply);
+                rc = packet_read_version(fd, &reply, version, status_type);
                 if (rc < 0) break;
                 if (rc == 1) {
                     size_t length = snag_session_packet_length(&reply);
                     const unsigned char *data = reply.bytes + SNAG_SESSION_HEADER;
-                    if (snag_session_packet_type(&reply) == SNAG_SESSION_STATUS &&
+                    if (reply.bytes[3] == status_type &&
                         length == 1u && data[0] <= 1u) result = data[0];
-                    /* Already-running older owners reject every extra socket
-                     * while occupied; their detached relay closes STATUS. */
+                    /* Owners predating STATUS reject extra sockets while occupied. */
                     static const char busy[] =
                         "session already has a terminal or attachment reservation";
                     if (snag_session_packet_type(&reply) == SNAG_SESSION_ERROR &&
@@ -664,6 +670,25 @@ snag_session_endpoint_status(int dir_fd, const char *dir_path)
     }
     (void)close(fd);
     return result;
+}
+#endif /* SNAG_SESSION_NATIVE */
+
+int
+snag_session_endpoint_status(int dir_fd, const char *dir_path)
+{
+#ifdef SNAG_SESSION_NATIVE
+    /* Listing spans binary upgrades. Only the read-only status exchange uses
+     * old wire versions; attachment and input retain strict current framing.
+     * One deadline bounds all attempts, including a stopped owner. */
+    static const unsigned char versions[][2] = {{4u, SNAG_SESSION_STATUS}, {3u, 15u}, {2u, 14u}};
+    uint64_t deadline = snag_monotonic_ms() + 1000u;
+    for (size_t i = 0u; i < sizeof(versions) / sizeof(versions[0]); ++i) {
+        if (snag_monotonic_ms() >= deadline) break;
+        int result = endpoint_status_version(dir_fd, dir_path, versions[i][0],
+            versions[i][1], deadline);
+        if (result >= 0) return result;
+    }
+    return -1;
 #else
     (void)dir_fd;
     (void)dir_path;

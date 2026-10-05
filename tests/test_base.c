@@ -2807,6 +2807,14 @@ test_session_transport(void)
     received = (struct snag_session_packet){0};
     assert(snag_session_packet_read(pair[1], &received) == 1);
     assert(snag_session_packet_type(&received) == SNAG_SESSION_DETACH);
+    /* Legacy status support must not admit old attachment/input frames. */
+    for (unsigned char version = 2u; version <= 3u; ++version) {
+        struct snag_session_packet legacy = sent;
+        legacy.bytes[2] = version;
+        assert(write(pair[0], legacy.bytes, legacy.used) == (ssize_t)legacy.used);
+        received = (struct snag_session_packet){0};
+        assert(snag_session_packet_read(pair[1], &received) < 0 && errno == EPROTO);
+    }
     for (size_t bad = 0u; bad < SNAG_SESSION_HEADER; ++bad) {
         struct snag_session_packet corrupt = sent;
         corrupt.bytes[bad] = 255u;

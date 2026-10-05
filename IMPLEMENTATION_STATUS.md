@@ -2,8 +2,9 @@
 
 # Implementation status
 
-Session lists group attached, detached and stored sessions under the STATUS
-heading, newest saved activity first within each group. `-l` includes all running
+Session lists group attached, detached, running (attachment status unavailable)
+and stored sessions under the STATUS heading, newest saved activity first
+within each group. `-l` includes all running
 sessions and up to 10 stored sessions; `-l N` sets the stored count, with zero
 showing only running sessions. Resume pickers and `/session list` retain all
 stored sessions. Listing remains read-only and preserves terminal width fitting.

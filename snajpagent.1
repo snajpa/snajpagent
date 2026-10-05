@@ -531,8 +531,8 @@ that exact session. You can also list sessions with
 .B snajpagent -l
 or reopen the newest session with
 .BR "snajpagent --resume --last" .
-Listing shows all attached sessions, then all detached sessions, then the 10
-most recent stored sessions. Use
+Listing shows all attached sessions, then detached sessions, then sessions whose
+attachment status is unavailable, then the 10 most recent stored sessions. Use
 .B snajpagent -l 25
 to include 25 stored sessions, or
 .B snajpagent -l 0
@@ -970,9 +970,9 @@ Execute one turn and exit.  The prompt must follow
 or arrive on non-terminal standard input.  Network options are not accepted.
 .TP
 .BR \-l " [N]"
-List all attached sessions, then all detached sessions, then up to N stored
-sessions and exit. N defaults to 10 and must be a nonnegative integer; zero
-shows running sessions only. Put N immediately after -l, before other options.
+List attached sessions, detached sessions, running sessions with unavailable
+attachment status, then up to N stored sessions and exit. N defaults to 10 and
+must be a nonnegative integer; zero shows running sessions only. Put N immediately after -l, before other options.
 Each status group sorts by latest saved activity, newest first; equal timestamps
 sort by session ID descending. The count applies to stored sessions only.
 Resume pickers and /session list include all saved sessions.
@@ -1000,10 +1000,14 @@ ENDPOINT: MESSAGE, resolving saved event references to the latest message
 in that prompt. Ordinary prompts show the latest saved user text.
 An unnamed session shows a dash in the name column.
 The STATUS column shows attached while a terminal client is connected,
-detached while the session runs without one, and stored when only saved history
-remains. A suspended terminal retains its attachment. A connection still reserving
-or repainting its terminal becomes attached after activation. Listing queries the
-owner without reserving a terminal or changing saved history.
+detached while the session runs without one, running when the owner is live but
+its attachment status is unavailable, and stored when only saved history remains.
+A suspended terminal retains its attachment. A connection still reserving or
+repainting its terminal becomes attached after activation. Listing queries the
+owner without reserving a terminal or changing saved history. Status queries
+support owners started before a binary upgrade and share a one-second deadline
+per owner. A failed query appears as running; retry the list after the owner
+responds again.
 Use --attach to reconnect to a running native session. --resume attaches if
 running and starts the session if stored.
 .TP
@@ -1686,7 +1690,8 @@ session is identified as not yet saved; listing does not start a model turn.
 .TP
 .BR "/session list" , " /session l" , " /s list" , " /s l"
 Print the current session ID and all saved sessions,
-with column headings and their attached, detached or stored status, in that order.
+with column headings and their attached, detached, running or stored status,
+in that order. Running means the attachment status is unavailable.
 Each group shows the latest saved activity first.
 This does not attach to or resume a session.
 .TP
