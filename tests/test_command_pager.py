@@ -38,7 +38,7 @@ class CommandPagerTests(unittest.TestCase):
         self.pager.chmod(0o700)
         self.pager_open = False
 
-    def start(self, pager=None, configured=None):
+    def start(self, pager=None, configured=None, environment=None):
         self.dotdir = self.root / "dotdir"
         self.home = self.root / "home"
         self.dotdir.mkdir(mode=0o700)
@@ -52,6 +52,8 @@ class CommandPagerTests(unittest.TestCase):
             "PAGER": shlex.quote(str(self.pager)) if pager is None else pager,
             "REPORT_CAPTURE": str(self.capture), "REPORT_CALLS": str(self.calls),
         })
+        self.env.update(environment or {})
+        self.env = {key: value for key, value in self.env.items() if value is not None}
         child = Session(self.root, command=[str(PRODUCT), "--dotdir", str(self.dotdir)],
                         ready="›".encode(), cwd=self.home, env=self.env)
         self.addCleanup(self.stop, child)
@@ -188,8 +190,53 @@ class CommandPagerTests(unittest.TestCase):
         child.read_until("›".encode())
         self.assertFalse(self.calls.exists())
 
-    def test_unset_pager_retains_direct_output(self):
+    def test_empty_pager_retains_direct_output(self):
         child = self.start(pager="")
+        child.write(b"/state\r")
+        child.read_until(b"goal actions:")
+        child.read_until("›".encode())
+        self.assertFalse(self.calls.exists())
+
+    def less_fixture(self):
+        directory = self.root / "bin"
+        directory.mkdir()
+        self.arguments = self.root / "arguments.txt"
+        less = directory / "less"
+        less.write_text(
+            '#!/bin/sh\nprintf "%s\\n" "$@" > "$REPORT_ARGS"\n'
+            'for file do :; done\n'
+            + shlex.quote(shutil.which("cat")) + ' "$file" > "$REPORT_CAPTURE"\n'
+            'printf "call\\n" >> "$REPORT_CALLS"\n'
+            'printf "REPORT_READY\\n"\nread -r answer < /dev/tty\n'
+        )
+        less.chmod(0o700)
+        return {"PATH": str(directory), "REPORT_ARGS": str(self.arguments)}
+
+    def test_unset_pager_defaults_to_less_X_for_reports_and_files(self):
+        environment = self.less_fixture()
+        environment["PAGER"] = None
+        child = self.start(environment=environment)
+        self.report(child, "/status", "session:", "provider:")
+        self.assertEqual(self.arguments.read_text().splitlines()[:-1], ["-X"])
+        local_file = self.home / "notes.txt"
+        local_file.write_text("local file in default pager\n")
+        self.report(child, "/cat notes.txt", "local file in default pager")
+        self.assertEqual(self.arguments.read_text().splitlines(), ["-X", str(local_file)])
+
+    def test_bare_less_gets_X(self):
+        child = self.start(pager="less", environment=self.less_fixture())
+        self.report(child, "/status", "session:")
+        self.assertEqual(self.arguments.read_text().splitlines()[:-1], ["-X"])
+
+    def test_explicit_less_arguments_are_preserved(self):
+        child = self.start(pager="less -R", environment=self.less_fixture())
+        self.report(child, "/status", "session:")
+        self.assertEqual(self.arguments.read_text().splitlines()[:-1], ["-R"])
+
+    def test_unset_pager_without_less_retains_direct_output(self):
+        directory = self.root / "empty-bin"
+        directory.mkdir()
+        child = self.start(environment={"PAGER": None, "PATH": str(directory)})
         child.write(b"/state\r")
         child.read_until(b"goal actions:")
         child.read_until("›".encode())
@@ -227,7 +274,7 @@ class CommandPagerTests(unittest.TestCase):
 
     @unittest.skipUnless(shutil.which("less"), "less unavailable")
     def test_real_less_reaches_both_ends_after_resize(self):
-        child = self.start(pager="less -X")
+        child = self.start(environment={"PAGER": None})
         child.write(b"/status\r")
         child.read_until(b"session:")
         child.write(b"G")

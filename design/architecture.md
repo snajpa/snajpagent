@@ -524,6 +524,9 @@ with automatic history, using a thread-local output target on the engine thread
 while the presentation thread retains its terminal. Report collection is used
 only with an interactive terminal and an enabled pager. Missing pager programs
 fall back to direct display of the collected report.
+Default selection uses available `less -X` when `PAGER` is absent or exactly
+`less`; explicit arguments, empty `PAGER` and configured commands retain their
+meaning. Reports and `/cat` share this selection.
 The presentation owner handles verbosity changes and active-turn queries
 immediately, even while the engine is blocked; idle queries use report collection.
 

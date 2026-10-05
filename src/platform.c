@@ -555,6 +555,17 @@ out: free(command);
     return rc;
 }
 
+const char *
+snag_default_pager(void)
+{
+    wchar_t path[32768];
+    DWORD size = SearchPathW(NULL, L"less", L".exe", 32768u, path, NULL);
+    if (!size || size >= 32768u) return NULL;
+    DWORD attributes = GetFileAttributesW(path);
+    return attributes != INVALID_FILE_ATTRIBUTES && !(attributes & FILE_ATTRIBUTE_DIRECTORY) ?
+        "less -X" : NULL;
+}
+
 /* The same command template serves generated text and local files. */
 static int
 pager_run(const char *command, const wchar_t *file, bool *shown,
@@ -2338,6 +2349,18 @@ snag_editor_run(const char *path, bool *success, void (*service)(void *),
                       service, suspend, opaque, profile) < 0) return -1;
     *success = WIFEXITED(status) && WEXITSTATUS(status) == 0;
     return 0;
+}
+
+const char *
+snag_default_pager(void)
+{
+    char *path = snag_program_path("less");
+    snag_file_info info;
+    bool available = path && snag_path_root_len(path) &&
+        snag_stat(path, &info) == 0 && S_ISREG(info.st_mode) &&
+        snag_file_executable(path) == 0;
+    free(path);
+    return available ? "less -X" : NULL;
 }
 
 /* A pager command may place %s where the quoted path goes; without it the path

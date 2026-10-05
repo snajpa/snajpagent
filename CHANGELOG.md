@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Default interactive reports and `/cat` to `less -X` when less is available
+  and `$PAGER` is unset or simply `less`. Keep explicit pager arguments and
+  disabled paging unchanged.
+
 - Add model tools `irc_sleep` for timed IRC delivery with mention/message-count
   wakeups, and `irc_compact` for asynchronous IRC context summaries using the
   current model and context. Preserve the complete operator transcript and new

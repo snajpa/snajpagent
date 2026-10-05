@@ -1566,7 +1566,8 @@ pager_command(const struct app_state *app)
     if (!*value || strcmp(value, "off") == 0) return NULL;
     if (strcmp(value, "on") != 0) return value;
     pager = getenv("PAGER");
-    return pager && *pager ? pager : NULL;
+    if (!pager || !strcmp(pager, "less")) return snag_default_pager();
+    return *pager ? pager : NULL;
 }
 
 /* /cat is an operator-only display: the file goes to the pager, not into a
@@ -1592,7 +1593,7 @@ page_local_file(struct app_state *app, const char *argument)
     if (!command) {
         return app_error(app, !strcmp(app->config->pager, "off") || !*app->config->pager ?
             "pager is off; set [ui] pager to on or a command" :
-            "$PAGER is not set; set it or configure [ui] pager");
+            "no pager is available; set $PAGER or configure [ui] pager");
     }
     if (snag_isatty(STDERR_FILENO) != 1) {
         return app_error(app, "/cat needs an interactive terminal");

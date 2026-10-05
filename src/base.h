@@ -97,6 +97,7 @@ bool snag_terminal_profile_ansi(const struct snag_terminal_profile *);
 int snag_editor_run(const char *path, bool *success, void (*service)(void *),
                 int (*suspend)(void *), void *opaque,
                 const struct snag_terminal_profile *profile);
+const char *snag_default_pager(void);
 /* Show text through an external pager command; *shown reports that it ran. */
 int snag_pager_show(const char *command, const char *text, size_t length, bool *shown,
                     void (*service)(void *), int (*suspend)(void *), void *opaque,
