@@ -117,10 +117,8 @@ class RemoteSSHTests(unittest.TestCase):
                         dotdir = state / "agent"
                         # SSH starts a fresh environment on the server side.
                         # Transfer reports stay inline in this protocol fixture.
-                        command = ["env", "LC_ALL=C.UTF-8", "PAGER=", str(PRODUCT),
-                                   "--dotdir", str(dotdir)]
-                        if scenario in ("lost-client", "blackhole"):
-                            command.insert(1, f"HOME={state}")
+                        command = ["env", f"HOME={state}", "LC_ALL=C.UTF-8", "PAGER=",
+                                   str(PRODUCT), "--dotdir", str(dotdir)]
                         screen_env = None
                         if scenario == "tmux":
                             tmux_socket = state / "tmux.sock"
@@ -137,7 +135,7 @@ class RemoteSSHTests(unittest.TestCase):
                                 self.assertLess(time.monotonic(), deadline)
                                 time.sleep(.02)
                             command = ["env", "LC_ALL=C.UTF-8", "tmux", "-u", "-S", str(tmux_socket), "new-session",
-                                       "env", f"HOME={state}", *command]
+                                       *command]
                         if scenario == "screen":
                             sockets = state / "screens"
                             sockets.mkdir(mode=0o700)

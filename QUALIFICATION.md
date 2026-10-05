@@ -105,6 +105,12 @@ a 10x48 terminal with another writing pane, cancellation of 2 MiB files, ambiguo
 clients, client detach/reattach, local wrapper placement, dropped files, model
 send_file and stock Mosh. Loopback OpenSSH includes remote tmux. Foreground tmux
 servers and Linux pidfd tracking constrain teardown to fixture-owned processes.
+Private server homes and disabled paging keep operator configuration and pagers
+out of transfer and subsequent-input checks, matching the raw-PTY fixtures.
+Loopback SSH likewise supplies each agent its private home and disables paging,
+including inside the remote tmux pane.
+Small panes wait for the attached-state prompt and verify retained bytes, rather
+than requiring the entire listing banner to fit in their viewport.
 Mac native tmux execution and arbitrary nested tmux/remote-wrapper chains remain
 unqualified. These fixtures do not test desktop drag gestures or live providers.
 
