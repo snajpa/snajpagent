@@ -28,6 +28,23 @@ int snag_binary_checkpoint_provider_decode(const void *, size_t,
 int snag_binary_checkpoint_provider_materialize(const void *, size_t,
     const json_t *source_recent, const json_t *source_history, json_t **recent, json_t **history);
 
+/* Hydrate one canonical source event without replaying or adopting its state.
+ * Requires independently trusted immutable source membership and complete
+ * dependency closure. Typed roles, original scope/field tuples and causality are
+ * checked; producer lifecycle/receipt authority is not re-established here.
+ * NULL access retains independent backward lookup. Outputs change on success. */
+int snag_binary_checkpoint_projection_read(int fd, const struct snag_binary_anchor *,
+    const struct snag_binary_checkpoint_index *, uint64_t sequence,
+    const char **type, json_t **out);
+
+/* Restore this recipe directly from canonical sources and complete pinned
+ * working-set closure. Recent/history membership, metadata and lifecycle require
+ * joint checkpoint admission; this materializer grants no resume authority.
+ * Cancellation before each source row; pread only, both outputs atomic. */
+int snag_binary_checkpoint_provider_read(int fd, const struct snag_binary_anchor *,
+    const struct snag_binary_checkpoint_index *, const void *data, size_t size,
+    bool (*cancelled)(void *), void *opaque, json_t **recent, json_t **history);
+
 /* Field-shaped accounting block, version 1. The observations have independent
  * lifetimes; invalid observations retain their metadata and counter values.
  * This block alone is neither a complete core snapshot nor resume authority. */

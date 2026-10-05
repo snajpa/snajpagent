@@ -1134,4 +1134,15 @@ int snag_binary_output_span_resolve(int fd, uint64_t boundary,
     const unsigned char turn[16], const unsigned char response[16], uint32_t cycle,
     const struct snag_binary_public_item *item, struct snag_buf *out);
 
+struct snag_binary_checkpoint_index;
+/* Source-only span assembly under independently trusted immutable membership.
+ * Access names every fragment in this span; NULL walks the contiguous oracle.
+ * Preserve original scope, item/index, offsets, exact first tuple and total.
+ * Missing fragments fail, including zero-byte ends. Atomic append and pread;
+ * this does not establish snapshot membership or lifecycle authority. */
+int snag_binary_output_span_read(int fd, const struct snag_binary_anchor *through,
+    const struct snag_binary_checkpoint_index *access, const struct snag_binary_output_span *span,
+    const unsigned char turn[16], const unsigned char response[16], uint32_t cycle,
+    const struct snag_binary_public_item *item, struct snag_buf *out);
+
 #endif

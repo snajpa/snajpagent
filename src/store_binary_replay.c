@@ -18,6 +18,7 @@ struct replay_context {
     void *opaque;
     uint64_t sequence;
     uint64_t response_sequence;
+    bool source_projection; /* Pinned source hydration, without semantic reduction. */
     struct snag_binary_anchor through;
     const struct snag_binary_checkpoint_index *access;
     struct snag_binary_checkpoint_sources sources;
@@ -340,7 +341,7 @@ preflight_public(const struct replay_context *context,
     const struct snag_binary_public_value *value, size_t *bytes)
 {
     bool referenced = value->source.first.sequence != 0u;
-    if (referenced && (!context->response_sequence ||
+    if (referenced && ((!context->source_projection && !context->response_sequence) ||
         value->source.first.sequence <= context->response_sequence ||
         value->source.last_sequence >= context->sequence)) {
         return snag_errno(EINVAL);
@@ -356,18 +357,12 @@ preflight_public(const struct replay_context *context,
 static int
 resolve_public(const struct replay_context *context, const unsigned char turn[16],
     const unsigned char response[16], uint32_t cycle, struct snag_binary_public_value *item,
-    struct snag_buf *scratch, struct snag_buf *text)
+    struct snag_buf *text)
 {
     if (!item->source.first.sequence) return 0;
-    struct snag_binary_batch batch;
-    struct snag_binary_anchor before;
     text->max = SNAG_MAX_EVENT_LINE;
-    if (snag_binary_checkpoint_batch_find(context->fd, &context->through, context->access,
-            item->source.first.sequence, scratch, &batch, &before) < 0 ||
-        snag_binary_output_span_resolve(context->fd, context->through.end, &before,
-            &item->source, turn, response, cycle, &item->item, text) < 0) {
-        return -1;
-    }
+    if (snag_binary_output_span_read(context->fd, &context->through, context->access,
+            &item->source, turn, response, cycle, &item->item, text) < 0) return -1;
     item->item.text = (struct snag_binary_text){text->data, text->len};
     item->source = (struct snag_binary_output_span){0};
     return 0;
@@ -423,7 +418,6 @@ project_partial(const struct replay_context *context, const struct snag_binary_r
 
     struct snag_binary_public_value *values = calloc(count, sizeof(*values));
     struct snag_buf *texts = calloc(count, sizeof(*texts));
-    struct snag_buf scratch = {.max = SNAG_BINARY_BATCH_MAX};
     struct snag_buf items = {.max = SNAG_MAX_EVENT_LINE};
     struct snag_buf literal = {.max = SNAG_MAX_EVENT_LINE};
     rc = -1;
@@ -434,7 +428,7 @@ project_partial(const struct replay_context *context, const struct snag_binary_r
             goto done;
         }
         if (resolve_public(context, fields.turn, fields.response, fields.cycle,
-            &values[i], &scratch, &texts[i]) < 0) {
+            &values[i], &texts[i]) < 0) {
             goto done;
         }
     }
@@ -449,7 +443,6 @@ project_partial(const struct replay_context *context, const struct snag_binary_r
 done:
     snag_buf_free(&literal);
     snag_buf_free(&items);
-    snag_buf_free(&scratch);
     if (texts) {
         for (size_t i = 0u; i < count; ++i) snag_buf_free(&texts[i]);
     }
@@ -489,7 +482,6 @@ project_graph(const struct replay_context *context, const struct snag_binary_rec
 
     struct snag_binary_graph_item *values = calloc(count, sizeof(*values));
     struct snag_buf *texts = calloc(count, sizeof(*texts));
-    struct snag_buf scratch = {.max = SNAG_BINARY_BATCH_MAX};
     struct snag_buf items = {.max = SNAG_MAX_EVENT_LINE};
     struct snag_buf literal = {.max = SNAG_MAX_EVENT_LINE};
     rc = -1;
@@ -501,7 +493,7 @@ project_graph(const struct replay_context *context, const struct snag_binary_rec
         }
         if (values[i].kind != SNAG_BINARY_ITEM_TOOL_CALL &&
             resolve_public(context, fields->turn, fields->response, fields->cycle,
-                &values[i].data.output, &scratch, &texts[i]) < 0) {
+                &values[i].data.output, &texts[i]) < 0) {
             goto done;
         }
     }
@@ -518,7 +510,6 @@ project_graph(const struct replay_context *context, const struct snag_binary_rec
 done:
     snag_buf_free(&literal);
     snag_buf_free(&items);
-    snag_buf_free(&scratch);
     if (texts) {
         for (size_t i = 0u; i < count; ++i) snag_buf_free(&texts[i]);
     }
@@ -669,7 +660,7 @@ project_record(const struct replay_context *context, const struct snag_session *
     }
     struct snag_binary_turn_start *turn = event.kind == SNAG_BINARY_TURN_STARTED ?
         &event.data.started : NULL;
-    if (turn) {
+    if (turn && !context->source_projection) {
         bool queued = turn->origin == SNAG_BINARY_TURN_QUEUED;
         if (turn->origin == SNAG_BINARY_TURN_GOAL) {
             /* Goal turns are host-generated, with no input receipt. Current
@@ -700,20 +691,21 @@ project_record(const struct replay_context *context, const struct snag_session *
     const unsigned char *view;
     int rc = -1;
     if (fields.text_ref->field) {
-        if (read_input_field(context, turn, fields.text_ref,
+        if (read_input_field(context, context->source_projection ? NULL : turn, fields.text_ref,
                 SNAG_BINARY_INPUT_TEXT, &text, &view) < 0) goto done;
         *fields.text = (struct snag_binary_text){view, fields.text_ref->target.size};
         *fields.text_ref = (struct snag_binary_input_reference){0};
     }
     if (fields.content_ref->field) {
-        if (read_input_field(context, turn, fields.content_ref,
+        if (read_input_field(context, context->source_projection ? NULL : turn, fields.content_ref,
                 SNAG_BINARY_INPUT_CONTENT, &content, &view) < 0 ||
             snag_binary_content_decode(view, fields.content_ref->target.size,
                 fields.content) < 0) goto done;
         *fields.content_ref = (struct snag_binary_input_reference){0};
     }
     if (fields.instructions_ref && fields.instructions_ref->field) {
-        if (read_input_field(context, turn, fields.instructions_ref,
+        if (read_input_field(context, context->source_projection ? NULL : turn,
+                fields.instructions_ref,
                 SNAG_BINARY_INPUT_INSTRUCTIONS, &instructions, &view) < 0 ||
             snag_binary_instructions_decode(view, fields.instructions_ref->target.size,
                 fields.instructions) < 0) goto done;
@@ -756,6 +748,51 @@ project_record(const struct replay_context *context, const struct snag_session *
     snag_buf_free(&instructions);
     snag_buf_free(&content);
     snag_buf_free(&text);
+    return rc;
+}
+
+int
+snag_binary_checkpoint_projection_read(int fd, const struct snag_binary_anchor *through,
+    const struct snag_binary_checkpoint_index *access, uint64_t wanted,
+    const char **type, json_t **out)
+{
+    if (fd < 0 || !through || !wanted || wanted >= through->next_seq || !type || !out)
+        return snag_errno(EINVAL);
+    struct snag_buf scratch = {.max = SNAG_BINARY_BATCH_MAX};
+    struct snag_binary_batch batch;
+    struct snag_binary_anchor before;
+    int rc = snag_binary_checkpoint_batch_find(fd, through, access, wanted,
+        &scratch, &batch, &before);
+    if (rc < 0) goto done;
+    struct snag_binary_record record;
+    size_t cursor = SNAG_BINARY_BATCH_HEADER_SIZE;
+    uint64_t sequence;
+    while ((rc = snag_binary_record_next(&batch, &cursor, &record, &sequence)) == 0) {
+        if (sequence != wanted) continue;
+        if (record.flags) { rc = snag_errno(EINVAL); goto done; }
+        const char *name;
+        json_t *data = NULL;
+        if (record.kind == SNAG_BINARY_LEGACY_CHECKPOINT) {
+            struct snag_binary_legacy_checkpoint marker;
+            rc = snag_binary_legacy_checkpoint_decode(&record, &marker);
+            if (rc < 0) goto done;
+            name = "session_checkpoint";
+            data = json_object();
+            if (!data) { rc = snag_errno(ENOMEM); goto done; }
+        } else {
+            struct replay_context context = {.fd = fd, .through = *through,
+                .sequence = wanted, .access = access, .source_projection = true};
+            rc = project_record(&context, NULL, &record, &name, &data);
+            if (rc < 0) goto done;
+        }
+        *type = name;
+        *out = data;
+        rc = 0;
+        goto done;
+    }
+    if (rc > 0) rc = snag_errno(EINVAL);
+done:
+    snag_buf_free(&scratch);
     return rc;
 }
 

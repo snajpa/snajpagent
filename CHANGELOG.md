@@ -3,6 +3,11 @@
 # Changelog
 
 ## Unreleased
+- Read native provider-recipe events directly from canonical checkpoint sources,
+  including original input/voice fields and selected response-fragment spans.
+  Preserve scope, item, first-field and offset checks while assembling fresh
+  provider arrays atomically, with cancellation between source rows. Complete
+  closure capture and runtime admission remain pending.
 - Native core snapshot assembly propagates pinned access through graph, process,
   voice, epoch and payload readers. Graph transforms and retained response
   fragments use selected old batches and the newer contiguous suffix; mandatory

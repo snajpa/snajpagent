@@ -2147,6 +2147,76 @@ output_span_fixture(int fd, const struct snag_binary_event events[6], unsigned i
     return next.end;
 }
 
+static bool
+span_boundary(int fd, uint64_t boundary, struct snag_binary_anchor *through)
+{
+    unsigned char header[SNAG_BINARY_HEADER_SIZE];
+    struct snag_binary_identity identity;
+    struct snag_binary_anchor cursor;
+    if (snag_pread(fd, header, sizeof(header), 0) != sizeof(header) ||
+        snag_binary_header_decode(header, sizeof(header), &identity, &cursor) < 0) return false;
+    struct snag_buf scratch = {.max = SNAG_BINARY_BATCH_MAX};
+    bool good = true;
+    while (cursor.end < boundary) {
+        struct snag_binary_batch batch;
+        struct snag_binary_anchor after;
+        if (snag_binary_batch_read(fd, boundary, &cursor, &scratch, &batch, &after) != 0) {
+            good = false;
+            break;
+        }
+        cursor = after;
+    }
+    snag_buf_free(&scratch);
+    if (!good || cursor.end != boundary) return false;
+    *through = cursor;
+    return true;
+}
+
+static void
+pinned_span_checks(int fd, uint64_t boundary, const struct snag_binary_output_span *span,
+    const struct snag_binary_response_output *expected)
+{
+    struct snag_binary_anchor through;
+    assert(span_boundary(fd, boundary, &through));
+    struct snag_buf access_bytes = {.max = SIZE_MAX};
+    struct snag_binary_checkpoint_index access;
+    binary_fixture_access(fd, &through, &access_bytes, &access);
+    struct snag_buf selected = {.max = SIZE_MAX};
+    uint64_t fragments[] = {2u, 4u, 5u};
+    for (size_t i = 0u; i < sizeof(fragments) / sizeof(fragments[0]); ++i) {
+        size_t offset = (size_t)(fragments[i] - 1u) * SNAG_BINARY_INDEX_ENTRY_SIZE;
+        assert(!snag_buf_append(&selected, access.entries + offset, SNAG_BINARY_INDEX_ENTRY_SIZE));
+    }
+    struct snag_binary_checkpoint_index sparse = access;
+    sparse.entries = (const unsigned char *)selected.data;
+    sparse.entry_count = sizeof(fragments) / sizeof(fragments[0]);
+    for (unsigned int mode = 0u; mode < 3u; ++mode) {
+        const struct snag_binary_checkpoint_index *chosen = mode == 2u ? &sparse :
+            mode == 1u ? &access : NULL;
+        struct snag_buf output = {.max = 64u};
+        assert(!snag_buf_append(&output, "keep", 4u));
+        assert(!snag_binary_output_span_read(fd, &through, chosen, span, expected->turn,
+            expected->response, expected->cycle, &expected->item, &output));
+        assert(output.len == 8u && !memcmp(output.data, "keepA\xc3\xa9Z", 8u));
+        snag_buf_free(&output);
+    }
+    for (size_t i = 0u; i < sizeof(fragments) / sizeof(fragments[0]); ++i) {
+        struct snag_buf omitted = {.max = SIZE_MAX};
+        struct snag_binary_checkpoint_index missing;
+        binary_fixture_access_omit(&access, fragments[i], &omitted, &missing);
+        struct snag_buf output = {.max = 64u};
+        assert(!snag_buf_append(&output, "keep", 4u));
+        assert(snag_binary_output_span_read(fd, &through, &missing, span, expected->turn,
+            expected->response, expected->cycle, &expected->item, &output) < 0);
+        assert(output.len == 4u && !memcmp(output.data, "keep", 4u));
+        snag_buf_free(&output);
+        snag_buf_free(&omitted);
+    }
+    assert(snag_seek(fd, 0, SEEK_CUR) == 7);
+    snag_buf_free(&selected);
+    snag_buf_free(&access_bytes);
+}
+
 static void
 assert_output_span_unresolved(int fd, uint64_t boundary, const struct snag_binary_anchor *anchor,
     const struct snag_binary_output_span *span, const struct snag_binary_response_output *expected)
@@ -2158,6 +2228,19 @@ assert_output_span_unresolved(int fd, uint64_t boundary, const struct snag_binar
         expected->turn, expected->response, expected->cycle, &expected->item, &out) < 0);
     assert(out.len == 4u && !memcmp(out.data, "keep", 4u));
     assert(snag_seek(fd, 0, SEEK_CUR) == 7);
+    struct snag_binary_anchor through;
+    if (span_boundary(fd, boundary, &through) && anchor->end == SNAG_BINARY_HEADER_SIZE) {
+        struct snag_buf access_bytes = {.max = SIZE_MAX};
+        struct snag_binary_checkpoint_index access;
+        binary_fixture_access(fd, &through, &access_bytes, &access);
+        for (unsigned int mode = 0u; mode < 2u; ++mode) {
+            assert(snag_binary_output_span_read(fd, &through, mode ? &access : NULL,
+                span, expected->turn, expected->response, expected->cycle,
+                &expected->item, &out) < 0);
+            assert(out.len == 4u && !memcmp(out.data, "keep", 4u));
+        }
+        snag_buf_free(&access_bytes);
+    }
     snag_buf_free(&out);
 }
 
@@ -2282,6 +2365,9 @@ test_output_span_file(void)
     assert(!snag_binary_output_span_resolve(fd, boundary, &anchor, &span, expected.turn,
         expected.response, expected.cycle, &expected.item, &out));
     assert(out.len == 8u && !memcmp(out.data, "keepA\xc3\xa9Z", 8u));
+    pinned_span_checks(fd, boundary, &span, &expected);
+    struct snag_binary_anchor verified;
+    assert(span_boundary(fd, boundary, &verified));
     assert(snag_seek(fd, 0, SEEK_CUR) == 7);
     snag_buf_reset(&out);
     struct snag_binary_output_span single = span;
@@ -2362,11 +2448,20 @@ test_output_span_file(void)
     assert(snag_seek(fd, (int64_t)boundary - 1, SEEK_SET) == (int64_t)boundary - 1);
     assert(!snag_write_full(fd, &byte, 1u));
     assert_output_span_unresolved(fd, boundary, &anchor, &span, &expected);
+    struct snag_buf rejected = {.max = 64u};
+    assert(!snag_buf_append(&rejected, "keep", 4u));
+    assert(snag_binary_output_span_read(fd, &verified, NULL, &span, expected.turn,
+        expected.response, expected.cycle, &expected.item, &rejected) < 0);
+    assert(rejected.len == 4u && !memcmp(rejected.data, "keep", 4u));
     byte ^= 1u;
     assert(snag_seek(fd, (int64_t)boundary - 1, SEEK_SET) == (int64_t)boundary - 1);
     assert(!snag_write_full(fd, &byte, 1u));
     assert(!snag_truncate(fd, (int64_t)boundary - 1));
     assert_output_span_unresolved(fd, boundary, &anchor, &span, &expected);
+    assert(snag_binary_output_span_read(fd, &verified, NULL, &span, expected.turn,
+        expected.response, expected.cycle, &expected.item, &rejected) < 0);
+    assert(rejected.len == 4u && !memcmp(rejected.data, "keep", 4u));
+    snag_buf_free(&rejected);
     snag_buf_free(&out);
     assert(!close(fd));
     assert(!unlink(path));

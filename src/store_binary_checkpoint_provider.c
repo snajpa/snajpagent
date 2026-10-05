@@ -221,3 +221,56 @@ done:
     json_decref(sources);
     return rc;
 }
+
+static int
+read_source_rows(int fd, const struct snag_binary_anchor *through,
+    const struct snag_binary_checkpoint_index *access, const unsigned char *rows,
+    size_t count, size_t stride, bool historical, bool (*cancelled)(void *), void *opaque,
+    json_t *out)
+{
+    for (size_t i = 0u; i < count; ++i) {
+        if (cancelled && cancelled(opaque)) return snag_errno(ECANCELED);
+        uint64_t sequence = get_number(rows + i * stride);
+        if (sequence > INT64_MAX) return snag_errno(EOVERFLOW);
+        const char *type;
+        json_t *data = NULL;
+        if (snag_binary_checkpoint_projection_read(fd, through, access, sequence,
+                &type, &data) < 0) return -1;
+        if (historical && strcmp(type, "irc_event") && strcmp(type, "session_checkpoint")) {
+            json_decref(data);
+            return snag_errno(EINVAL);
+        }
+        json_t *entry = json_pack("{s:I,s:s,s:O}", "seq", (json_int_t)sequence,
+            "type", type, "data", data);
+        json_decref(data);
+        int rc = entry ? json_array_append(out, entry) : -1;
+        json_decref(entry);
+        if (rc < 0) return snag_errno(ENOMEM);
+    }
+    return 0;
+}
+
+int
+snag_binary_checkpoint_provider_read(int fd, const struct snag_binary_anchor *through,
+    const struct snag_binary_checkpoint_index *access, const void *data, size_t size,
+    bool (*cancelled)(void *), void *opaque, json_t **recent, json_t **history)
+{
+    if (fd < 0 || !through || !recent || !history || recent == history) return snag_errno(EINVAL);
+    struct snag_binary_checkpoint_provider view;
+    if (snag_binary_checkpoint_provider_decode(data, size, &view) < 0) return -1;
+    if (view.next_seq != through->next_seq) return snag_errno(EINVAL);
+    json_t *events = json_array();
+    json_t *sources = json_array();
+    int rc = -1;
+    if (!events || !sources) { snag_errno(ENOMEM); goto done; }
+    if (read_source_rows(fd, through, access, view.recent, view.recent_count, RECENT_ROW,
+            false, cancelled, opaque, events) < 0 ||
+        read_source_rows(fd, through, access, view.history, view.history_count, HISTORY_ROW,
+            true, cancelled, opaque, sources) < 0) goto done;
+    if (cancelled && cancelled(opaque)) { snag_errno(ECANCELED); goto done; }
+    rc = snag_binary_checkpoint_provider_materialize(data, size, events, sources, recent, history);
+done:
+    json_decref(events);
+    json_decref(sources);
+    return rc;
+}

@@ -123,6 +123,98 @@ provider_number(unsigned char *out, uint64_t number)
     for (size_t i = 0u; i < 8u; ++i) out[i] = (unsigned char)(number >> (i * 8u));
 }
 
+struct provider_cancel {
+    size_t calls, fail_at;
+};
+
+static bool
+cancel_provider(void *opaque)
+{
+    struct provider_cancel *cancel = opaque;
+    return ++cancel->calls == cancel->fail_at;
+}
+
+static void
+provider_source_checks(int fd, const struct snag_binary_anchor *through,
+    const json_t *recent, const json_t *history, const struct snag_buf *provider)
+{
+    struct snag_buf access_bytes = {.max = SIZE_MAX};
+    struct snag_binary_checkpoint_index access;
+    binary_fixture_access(fd, through, &access_bytes, &access);
+    int64_t position = snag_seek(fd, 0, SEEK_CUR);
+    for (unsigned int mode = 0u; mode < 2u; ++mode) {
+        json_t *events = NULL;
+        json_t *sources = NULL;
+        int rc = snag_binary_checkpoint_provider_read(fd, through, mode ? &access : NULL,
+            provider->data, provider->len, NULL, NULL, &events, &sources);
+        if (rc < 0) fprintf(stderr, "provider source mode %u: %d\n", mode, errno);
+        assert(!rc && json_equal(events, recent) && json_equal(sources, history));
+        assert(events != recent && sources != history);
+        json_decref(events);
+        json_decref(sources);
+    }
+    struct snag_binary_checkpoint_provider view;
+    assert(!snag_binary_checkpoint_provider_decode(provider->data, provider->len, &view));
+    json_t *events = (json_t *)&view;
+    json_t *sources = (json_t *)&access;
+    json_t *old_events = events;
+    json_t *old_sources = sources;
+    uint64_t required[4];
+    assert(!snag_json_integer_u64(json_array_get(recent, 0u), "seq", &required[0]));
+    assert(!snag_json_integer_u64(json_array_get(recent, json_array_size(recent) / 2u),
+        "seq", &required[1]));
+    assert(!snag_json_integer_u64(json_array_get(recent, json_array_size(recent) - 1u),
+        "seq", &required[2]));
+    required[3] = 0u;
+    if (json_array_size(history))
+        assert(!snag_json_integer_u64(json_array_get(history, 0u), "seq", &required[3]));
+    for (size_t i = 0u; i < sizeof(required) / sizeof(required[0]); ++i) {
+        if (!required[i]) continue;
+        struct snag_buf omitted = {.max = SIZE_MAX};
+        struct snag_binary_checkpoint_index missing;
+        binary_fixture_access_omit(&access, required[i], &omitted, &missing);
+        errno = 0;
+        assert(snag_binary_checkpoint_provider_read(fd, through, &missing,
+            provider->data, provider->len, NULL, NULL, &events, &sources) < 0 && errno == ENOENT);
+        assert(events == old_events && sources == old_sources);
+        snag_buf_free(&omitted);
+    }
+    static bool cancellation_checked[2];
+    unsigned int class_mode = view.history_count ? 1u : 0u;
+    if (!cancellation_checked[class_mode]) {
+        cancellation_checked[class_mode] = true;
+        for (size_t i = 1u; i <= view.recent_count + view.history_count + 1u; ++i) {
+            struct provider_cancel cancel = {.fail_at = i};
+            errno = 0;
+            assert(snag_binary_checkpoint_provider_read(fd, through, &access,
+                provider->data, provider->len, cancel_provider, &cancel, &events, &sources) < 0 &&
+                errno == ECANCELED && cancel.calls == i);
+            assert(events == old_events && sources == old_sources);
+        }
+        if (view.history_count) {
+            struct snag_buf changed = {.max = SIZE_MAX};
+            assert(!snag_buf_append(&changed, provider->data, provider->len));
+            size_t offset = (size_t)(view.history - (const unsigned char *)provider->data);
+            provider_number((unsigned char *)changed.data + offset, 1u);
+            assert(snag_binary_checkpoint_provider_read(fd, through, &access,
+                changed.data, changed.len, NULL, NULL, &events, &sources) < 0 && errno == EINVAL);
+            assert(events == old_events && sources == old_sources);
+            snag_buf_free(&changed);
+        }
+    }
+    struct snag_binary_anchor wrong = *through;
+    ++wrong.next_seq;
+    assert(snag_binary_checkpoint_provider_read(fd, &wrong, &access,
+        provider->data, provider->len, NULL, NULL, &events, &sources) < 0 && errno == EINVAL);
+    assert(snag_binary_checkpoint_provider_read(-1, through, &access,
+        provider->data, provider->len, NULL, NULL, &events, &sources) < 0 && errno == EINVAL);
+    assert(snag_binary_checkpoint_provider_read(fd, through, &access,
+        provider->data, provider->len, NULL, NULL, &events, &events) < 0 && errno == EINVAL);
+    assert(events == old_events && sources == old_sources);
+    assert(snag_seek(fd, 0, SEEK_CUR) == position);
+    snag_buf_free(&access_bytes);
+}
+
 static void
 provider_codec_checks(struct snag_session *state, const json_t *recent,
     const json_t *history, const struct snag_buf *provider)
@@ -245,6 +337,7 @@ checkpoint_matches(struct snag_session *source, struct snag_session *expected,
     assert(snag_binary_checkpoint_core_encode(&core, origins, expected) == 0);
     assert(snag_binary_checkpoint_provider_encode(&provider, expected, recent, history) == 0);
     provider_codec_checks(expected, recent, history, &provider);
+    provider_source_checks(source->log_fd, anchor, recent, history, &provider);
     unsigned char header[SNAG_BINARY_HEADER_SIZE];
     assert(pread(source->log_fd, header, sizeof(header), 0) == (ssize_t)sizeof(header));
     struct snag_binary_checkpoint_frame frame = {.generation = 1u, .boundary = *anchor,

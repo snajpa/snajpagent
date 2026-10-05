@@ -1985,7 +1985,8 @@ bounded batch scratch and pread; it reads no derived index file. Cancellation is
 checked before reads and record visits. Callbacks borrow each record until they
 return and stage any resulting state until complete success. A failure can follow
 earlier visits, so this API provides no callback-output rollback or adoption.
-Call-transformation, response-stream and provider wiring remain pending.
+Call transformations, retained response streams and provider span hydration
+use this iterator; producer closure and runtime admission remain pending.
 
 ### Indexed pending-input materialization
 
@@ -2153,8 +2154,8 @@ absent. The positive result still requires canonical resolution.
 The version-1 access block stores a fixed frontier and sorted canonical locations
 for the caller's active working set. It contains no event payloads and requires
 no lifetime location table or addressable `history.idx` prefix. The field-shaped
-codec and its framing/publication section are test-linked; working-set capture and
-materializer integration remain pending.
+codec, framing/publication and core/provider source materializers are test-linked;
+working-set capture and runtime admission remain pending.
 
 | Offset | Field |
 |---|---|
@@ -2486,3 +2487,32 @@ live closure selection. Indexed and unindexed readers compare to the original
 semantic state, exercise malformed metadata in both paths and remove mandatory
 point entries to check atomic failure and preservation of the read descriptor's
 position. The runtime backend remains JSONL pending native backend integration.
+
+### Direct provider source hydration
+
+The provider materializer reads only the recipe's named recent and historical
+sources and their original-field/span dependencies. Canonical point lookup uses
+pinned access; NULL retains the independent backward lookup path. Original input,
+queued voice, native adoption and completed/partial response payloads use the same
+typed projection helpers as strict replay. Source-only hydration checks declared
+roles, exact literal tuples, scope and causality under independently trusted
+immutable membership. Producer lifecycle and accepting-receipt authority remain
+joint admission requirements; hydration performs no semantic state reduction.
+Strict replay continues to check those obligations against its actual reducer
+state and current original sources.
+
+Referenced response spans use the range iterator. Every consumed fragment must
+match turn/response/cycle, public item identity/metadata and index, starting at
+zero with contiguous byte offsets. First-field offset/size, consumption of both
+endpoints and the final byte total are checked before any append reaches the
+caller. The caller supplies every fragment in the complete old closure; the newer
+suffix remains contiguous. The original explicit-boundary span resolver remains
+available for independent fixture comparison.
+
+Both provider arrays replace outputs together after every named source and row
+has succeeded. The reader preserves descriptor position and cancellation is
+checked before each source row and before final materialization. Historical rows
+are restricted to canonical IRC metadata or validated legacy-checkpoint markers.
+Source decoding and array allocation do not confer current membership, epoch,
+configuration or resume authority. Normal bounded admission and live capture of
+complete producer closure remain integration work; the runtime backend is JSONL.

@@ -4,6 +4,7 @@
 #include "json.h"
 #include "media.h"
 #include "store.h"
+#include "store_binary_index.h"
 
 #include <errno.h>
 #include <stddef.h>
@@ -5257,5 +5258,67 @@ invalid_span:
 out:
     snag_buf_free(&text);
     snag_buf_free(&scratch);
+    return rc;
+}
+
+struct span_read {
+    const struct snag_binary_output_span *span;
+    const unsigned char *turn, *response;
+    uint32_t cycle;
+    const struct snag_binary_public_item *item;
+    struct snag_buf text;
+    uint64_t index, last;
+    bool first;
+};
+
+static int
+read_span_fragment(void *opaque, const struct snag_binary_record *record, uint64_t sequence)
+{
+    struct span_read *state = opaque;
+    const struct snag_binary_output_span *span = state->span;
+    if (record->kind != SNAG_BINARY_RESPONSE_OUTPUT) {
+        return sequence == span->first.sequence || sequence == span->last_sequence ? invalid() : 0;
+    }
+    struct snag_binary_event event;
+    int decoded = snag_binary_event_decode(record, &event);
+    if (decoded != 0) return decoded < 0 ? -1 : invalid();
+    const struct snag_binary_response_output *source = &event.data.response_output;
+    if (memcmp(source->turn, state->turn, 16u) ||
+        memcmp(source->response, state->response, 16u) || source->cycle != state->cycle ||
+        !public_metadata_equal(&source->item, state->item) || source->offset != state->text.len)
+        return invalid();
+    if (sequence == span->first.sequence) {
+        size_t offset = (size_t)(source->item.text.data - record->payload);
+        if (span->first.offset != offset || span->first.size != source->item.text.size)
+            return invalid();
+        state->index = source->index;
+        state->first = true;
+    } else if (!state->first || state->index != source->index) {
+        return invalid();
+    }
+    if (snag_buf_append(&state->text, source->item.text.data, source->item.text.size) < 0)
+        return -1;
+    state->last = sequence;
+    return 0;
+}
+
+int
+snag_binary_output_span_read(int fd, const struct snag_binary_anchor *through,
+    const struct snag_binary_checkpoint_index *access, const struct snag_binary_output_span *span,
+    const unsigned char turn[16], const unsigned char response[16], uint32_t cycle,
+    const struct snag_binary_public_item *item, struct snag_buf *out)
+{
+    if (!out || !through || !output_span_valid(span) || !turn || !response || !cycle ||
+        !item || item->text.data || item->text.size || !public_metadata_valid(item) ||
+        span->last_sequence >= through->next_seq) return invalid();
+    struct span_read state = {.span = span, .turn = turn, .response = response,
+        .cycle = cycle, .item = item, .text = {.max = span->bytes}};
+    int rc = snag_binary_checkpoint_records_read(fd, through, access,
+        span->first.sequence, span->last_sequence + 1u, read_span_fragment, NULL, &state);
+    if (rc == 0) {
+        rc = state.first && state.last == span->last_sequence && state.text.len == span->bytes ?
+            snag_buf_append(out, state.text.data, state.text.len) : invalid();
+    }
+    snag_buf_free(&state.text);
     return rc;
 }
