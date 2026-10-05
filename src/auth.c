@@ -256,6 +256,16 @@ snag_auth_load(int root_fd, const struct snag_provider_config *provider,
     snag_auth_clear(tokens);
     if (!provider_valid(provider))
         return snag_errorf(error, error_size, "invalid stored credential provider");
+    if (provider->auth_state) {
+        struct snag_auth_state *state = provider->auth_state;
+        if (pthread_mutex_lock(&state->mutex))
+            return snag_errorf(error, error_size, "cannot read provider credential snapshot");
+        rc = state->result;
+        if (rc == 0) *tokens = state->tokens;
+        else snag_errorf(error, error_size, "%s", state->error);
+        pthread_mutex_unlock(&state->mutex);
+        return rc;
+    }
     dir = auth_dir(root_fd, false);
     if (dir < 0) {
         rc = errno == ENOENT ? 1 : -1;
@@ -361,15 +371,17 @@ snag_auth_config_close(struct snag_config *config)
 int
 snag_auth_config_open(int root_fd, struct snag_config *config, char *error, size_t error_size)
 {
+    for (size_t i = 0; i < config->secret_count; ++i)
+        snag_secret_source_snapshot(&config->secrets[i]);
     for (size_t i = 0; i < config->provider_count; ++i) {
         struct snag_provider_config *provider = &config->providers[i];
+        snag_secret_source_snapshot(&provider->api_key);
         struct snag_auth_state *state = calloc(1u, sizeof(*state));
         if (!state) goto fail;
         if (pthread_mutex_init(&state->mutex, NULL)) {
             free(state);
             goto fail;
         }
-        provider->auth_state = state;
         snag_auth_clear(&state->tokens);
         if (provider->api_key.kind != SNAG_SECRET_NONE) {
             state->result = snag_credential_resolve(&state->tokens.credential,
@@ -379,6 +391,7 @@ snag_auth_config_open(int root_fd, struct snag_config *config, char *error, size
                 state->error, sizeof(state->error));
         }
         state->tokens.credential.root_fd = root_fd;
+        provider->auth_state = state;
     }
     return 0;
 fail:

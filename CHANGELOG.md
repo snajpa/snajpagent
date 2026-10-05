@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Include the saved model cache in `/configure`, with rollback on invalid cache
+  data. Retain file-based redaction secrets until explicit reload, and use the
+  owner's credential snapshot for offline voice handoff checks.
+
 - Request the current Codex model catalog so GPT-6 models remain available
   in model selection with ChatGPT device and Enterprise access-token logins.
 

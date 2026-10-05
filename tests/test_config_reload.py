@@ -181,6 +181,8 @@ def check(binary):
                 assert 'at-fixture-enterprise' not in text and 'fixture-third' not in text
             check_active(f)
             check_oauth(f)
+            check_cache(f)
+            check_secret_files(f)
             print('configuration reload: owner isolation, model selection, rollback, PAT name and resume: ok')
         finally:
             f.close()
@@ -241,6 +243,88 @@ def check_oauth(f):
         f.query(child, '/responses', 'fixture-renewed', account='workspace')
         assert path.read_bytes() == saved if replaced else not path.exists()
         f.finish(child)
+
+
+def check_cache(f):
+    base = f.save_config('cache')
+    f.key('openai', 'fixture-cache-old', base)
+    path = f.state / 'models.json'
+
+    def save_cache(capacity, endpoint=base):
+        limits = dict.fromkeys(('auto_compact_input_tokens', 'context_window_tokens',
+            'effective_context_window_percent', 'input_context_window_tokens',
+            'max_context_window_tokens', 'max_input_tokens', 'max_output_tokens'))
+        limits['context_window_tokens'] = capacity
+        model = dict(id='gpt-saved', default_effort='high', efforts=['high'], limits=limits,
+            count_capability='unknown', observed_hard_input_tokens=0,
+            observed_input_tokens=0, observed_input_bytes=0)
+        path.write_text(json.dumps(dict(schema_version=1, updated_at_ms=1,
+            providers=[dict(name='openai', base_url=endpoint, protocol='openai', models=[model])])))
+        path.chmod(0o600)
+
+    def capacity(child, value):
+        output = f.send(child, '/status', 'provider model: gpt-saved')
+        assert f'context={value}'.encode() in output, output[-2500:]
+
+    save_cache(272000)
+    a, b = f.start(), f.start()
+    capacity(a, 272000)
+    save_cache(512000)
+    capacity(a, 272000)
+    f.send(a, '/configure', 'configuration reloaded:')
+    capacity(a, 512000)
+    capacity(b, 272000)
+    # A broken cache must not partially adopt new settings or credentials.
+    next_base = f.save_config('cache-next')
+    f.key('openai', 'fixture-cache-next', next_base)
+    path.write_text('{}')
+    f.send(a, '/configure', 'model cache is unusable')
+    capacity(a, 512000)
+    f.query(a, '/cache/v1/responses', 'fixture-cache-old')
+    save_cache(1048576, next_base)
+    f.send(a, '/configure', 'configuration reloaded:')
+    capacity(a, 1048576)
+    f.query(a, '/cache-next/v1/responses', 'fixture-cache-next')
+    path.unlink()
+    f.send(a, '/configure', 'configuration reloaded:')
+    capacity(a, 1048576)
+    # An active request admits the replacement only at the queued safe boundary.
+    f.server.entered.clear()
+    f.server.release.clear()
+    f.send(a, 'answer once', 'BUSY>')
+    assert f.server.entered.wait(5)
+    save_cache(2097152, next_base)
+    f.send(a, '/configure', '/configure accepted;')
+    f.server.release.set()
+    a.until(b'configuration reloaded:', 10)
+    a.until(b'READY>', 10)
+    capacity(a, 2097152)
+    f.finish(a)
+    f.finish(b)
+    path.unlink()
+    print('configuration reload: catalog isolation, metadata and rollback: ok')
+
+
+def check_secret_files(f):
+    f.save_config('secrets')
+    f.config.write_text(f.config.read_text().replace('[provider openai]\n',
+        '[provider openai]\napi_key=provider.key\n') + '[tool]\nsecret=redaction.key\n')
+    key = f.state / 'provider.key'
+    secret = f.state / 'redaction.key'
+    key.write_text('fixture-file-old')
+    secret.write_text('fixture-redaction-old')
+    child = f.start()
+    key.unlink()
+    secret.unlink()
+    f.query(child, '/secrets/v1/responses', 'fixture-file-old')
+    key.write_text('fixture-file-new')
+    f.send(child, '/configure', 'redaction.key is unavailable')
+    f.query(child, '/secrets/v1/responses', 'fixture-file-old')
+    secret.write_text('fixture-redaction-new')
+    f.send(child, '/configure', 'configuration reloaded:')
+    f.query(child, '/secrets/v1/responses', 'fixture-file-new')
+    f.finish(child)
+    print('configuration reload: file secrets retained and failed reload rolls back: ok')
 
 
 if __name__ == '__main__':

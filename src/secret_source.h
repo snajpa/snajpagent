@@ -2,6 +2,7 @@
 #ifndef SNAJPAGENT_SECRET_SOURCE_H
 #define SNAJPAGENT_SECRET_SOURCE_H
 
+#include <stdbool.h>
 #include <stddef.h>
 
 #define SNAG_SECRET_MAX 16384u
@@ -15,11 +16,15 @@ struct snag_secret_source {
     char *expression;
     char *value;
     char *path;
+    char *snapshot;
+    bool retained;
 };
 
 void snag_secret_bytes_free(char *value);
 void snag_secret_clear(void *data, size_t len);
 void snag_secret_source_free(struct snag_secret_source *source);
+/* Retain the resolved value or its absence until this parsed source is freed. */
+void snag_secret_source_snapshot(struct snag_secret_source *source);
 int snag_secret_source_parse(struct snag_secret_source *out, const char *expression,
                             const char *config_path, char *error, size_t error_size);
 int snag_secret_source_resolve(const struct snag_secret_source *source, char **out,

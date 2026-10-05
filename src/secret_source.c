@@ -32,6 +32,7 @@ snag_secret_source_free(struct snag_secret_source *source)
     snag_secret_bytes_free(source->expression);
     snag_secret_bytes_free(source->value);
     snag_secret_bytes_free(source->path);
+    snag_secret_bytes_free(source->snapshot);
     memset(source, 0, sizeof(*source));
 }
 
@@ -124,7 +125,12 @@ snag_secret_source_resolve(const struct snag_secret_source *source, char **out,
     int fd = -1, rc = -1;
 
     *out = NULL;
-    if (source->kind == SNAG_SECRET_ENV) {
+    if (source->retained) {
+        if (source->snapshot) {
+            len = strlen(source->snapshot);
+            value = snag_strdup_checked(source->snapshot, SNAG_SECRET_MAX);
+        }
+    } else if (source->kind == SNAG_SECRET_ENV) {
         value = snag_environment(source->value);
         if (value) len = strlen(value);
     } else if (source->kind == SNAG_SECRET_LITERAL) {
@@ -172,6 +178,14 @@ done:
                    source->kind == SNAG_SECRET_FILE ? source->path : "");
     }
     return rc;
+}
+
+void
+snag_secret_source_snapshot(struct snag_secret_source *source)
+{
+    if (source->retained || source->kind == SNAG_SECRET_NONE) return;
+    (void)snag_secret_source_resolve(source, &source->snapshot, NULL, 0u);
+    source->retained = true;
 }
 
 const char *

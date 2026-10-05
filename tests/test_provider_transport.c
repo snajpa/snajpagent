@@ -5591,6 +5591,18 @@ test_provider_auth(void)
                          NULL, NULL, error, sizeof(error)) == 0);
     assert(strcmp(credential.value, "stored-key") == 0);
     assert(credential.root_fd == store.root_fd);
+    /* Offline voice handoff checks must use the owner's retained login. */
+    assert(snag_auth_config_open(store.root_fd, &config, error, sizeof(error)) == 0);
+    assert(snag_auth_logout(store.root_fd, &config.providers[0], NULL, NULL,
+        error, sizeof(error)) == 0);
+    assert(snag_auth_load(store.root_fd, &config.providers[0], &loaded,
+        error, sizeof(error)) == 0);
+    assert(strcmp(loaded.credential.value, "stored-key") == 0);
+    snag_auth_config_close(&config);
+    assert(snag_auth_load(store.root_fd, &config.providers[0], &loaded,
+        error, sizeof(error)) == 1);
+    assert(snag_auth_save(store.root_fd, &config.providers[0], &tokens, &previous,
+        NULL, NULL, error, sizeof(error)) == 0);
     assert(snag_secret_source_parse(&config.providers[0].api_key, "${SNAG_MISSING_EXPLICIT_KEY}",
                                     NULL, error, sizeof(error)) == 0);
     assert(unsetenv("SNAG_MISSING_EXPLICIT_KEY") == 0);

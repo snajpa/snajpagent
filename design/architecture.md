@@ -572,11 +572,13 @@ provider URL. Selector `cache` runs the existing atomic provider refresh and
 returns available cached rows; a failed refresh retains the previous cache.
 An operator's typed `/model` remains able to choose a new uncached identifier.
 
-Interactive `/configure` reloads the saved configuration and credentials without
-an editor, at a durable safe request boundary. Each owner retains its provider
+Interactive `/configure` reloads saved configuration, credentials, redaction
+secrets and the local model cache without an editor, at a durable safe request
+boundary. Each owner retains its provider
 credential snapshots until reload or exit, with OAuth renewal within the current
-login. The selected provider/model/effort remain session state. Failed parsing or
-selected-login validation keeps the prior configuration and snapshots active.
+login. The selected provider/model/effort remain session state. Failed validation
+keeps the prior configuration and snapshots active. A missing model-cache file
+retains the last valid in-memory copy; an invalid file rejects the reload.
 
 Interactive `/config` opens the exact active configuration path in `$EDITOR`.
 The terminal returns to ordinary cooked mode while the editor owns it. After

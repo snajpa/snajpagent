@@ -227,7 +227,7 @@ static const struct snag_term_command commands[] = {
     {"/?", "same as /help"},
     {"/status", "session and next-turn settings"},
     {"/config", "edit/reload configuration at a safe boundary"},
-    {"/configure", "reload saved configuration and credentials at a safe boundary"},
+    {"/configure", "reload saved configuration, credentials and model cache"},
     {"/verbose [0..6]", "show/set verbosity for this process"},
     {"/banner [TEXT|clear]", "show/set session banner echoed in later requests"},
     {"/model [list|cache]", "list cached models; cache refreshes all providers"},
@@ -2201,6 +2201,7 @@ reload_config(struct app_state *app, char *error, size_t error_size)
 {
     struct snag_config candidate;
     struct snag_config previous;
+    struct snag_model_cache cache = {0};
     const char *selected_provider = app->session.default_provider[0] ? app->session.default_provider : NULL;
     struct snag_irc_config file_network;
     int rc = 1;
@@ -2244,11 +2245,24 @@ reload_config(struct app_state *app, char *error, size_t error_size)
         goto out;
     }
 #endif
+    for (size_t i = 0; i < candidate.secret_count; ++i) {
+        char *value = NULL;
+        if (snag_secret_source_resolve(&candidate.secrets[i], &value, error, error_size) < 0)
+            goto out;
+        snag_secret_bytes_free(value);
+    }
+    if (snag_model_cache_load(&app->store, &cache, error, error_size) < 0) goto out;
     rc = apply_network(app, &candidate, error, error_size);
     if (rc != 0) goto out;
     previous = *app->config;
     *app->config = candidate;
     memset(&candidate, 0, sizeof(candidate));
+    if (cache.providers) {
+        snag_model_cache_free(&app->model_cache);
+        app->model_cache = cache;
+        memset(&cache, 0, sizeof(cache));
+    }
+    app->capacity_cache_error[0] = '\0';
     app->irc_file_config = file_network;
     app->turn_provider = snag_config_provider(app->config, app->session.active_turn ?
         app->session.active_turn_provider : selected_provider);
@@ -2268,6 +2282,7 @@ reload_config(struct app_state *app, char *error, size_t error_size)
     snag_config_free(&previous);
     rc = 0;
 out:
+    snag_model_cache_free(&cache);
     snag_auth_config_close(&candidate);
     snag_config_free(&candidate);
     return rc;

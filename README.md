@@ -447,8 +447,8 @@ api_key = ${OPENAI_API_KEY}
 
 Export `OPENAI_API_KEY` before launch; provider names are local labels retained
 in saved model selections. Each running owner keeps its settings and credentials.
-Use `/configure` to reload the saved settings and credentials for that owner;
-`/config` opens `$EDITOR` first. Invalid changes leave the previous settings active.
+Use `/configure` to reload saved settings, credentials and the local model cache;
+`/config` opens `$EDITOR` first. Invalid changes leave the previous state active.
 
 On Windows, setup uses `HOME/.snajpagent`, falling back to
 `USERPROFILE/.snajpagent`, and `--dotdir DIR` overrides it; the same `config.ini`

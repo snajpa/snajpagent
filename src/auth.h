@@ -25,7 +25,8 @@ int snag_auth_config_check(const struct snag_provider_config *provider,
 void snag_auth_json_free(json_t *value);
 const char *snag_auth_kind_name(enum snag_auth_kind kind);
 int snag_auth_key(struct snag_auth_tokens *tokens, const char *key, char *error, size_t error_size);
-/* Offline load returns 1 for a missing credential, -1 for an invalid store. */
+/* Offline load uses an attached owner snapshot; otherwise reads the store.
+ * Returns 1 for a missing credential, -1 for invalid credentials. */
 int snag_auth_load(int root_fd, const struct snag_provider_config *provider,
                   struct snag_auth_tokens *tokens, char *error, size_t error_size);
 int snag_auth_save(int root_fd, const struct snag_provider_config *provider,

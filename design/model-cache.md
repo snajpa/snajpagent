@@ -153,8 +153,12 @@ mutated. Positive-only capacity facts use zero for absence
 internally, while cache JSON still requires positive integers or explicit null.
 Hard input budgets retain separate validity because a known zero is exhausted.
 
-The catalog is loaded once at startup, including resume and launches without a
-model override. A missing or invalid catalog leaves the idle context meter
+The catalog is loaded at startup, including resume and launches without a
+model override, and on explicit configuration reload. Reload stages the saved
+catalog alongside configuration and credentials before changing runtime state;
+an invalid catalog rejects the transaction, while a missing file preserves the
+last valid in-memory catalog. No provider discovery runs during this reload.
+A missing or invalid startup catalog leaves the idle context meter
 unknown when a saved selection needs unavailable facts; `/model cache` remains
 usable to recover those facts, and request preparation still validates the
 selection. Ordinary request preparation, context

@@ -41,7 +41,8 @@ Session owners snapshot every configured provider's credentials at startup and
 explicit `/configure` reload. Missing inactive credentials remain unavailable
 until reload; model changes use the existing snapshot. Config and selected-login
 validation precede swapping the snapshot. Failed reloads keep the working state.
-Voice borrows the same provider snapshot; reload remains excluded while local
+Voice, including offline handoff validation, borrows the same provider snapshot;
+reload remains excluded while local
 audio is open. Snapshot memory is cleared at replacement and owner shutdown.
 
 Each provider has an advisory lock for store writes and a process-local mutex
@@ -122,7 +123,10 @@ and does not weaken the no-symlink managed credential store. One final LF/CRLF
 is removed; no other credential bytes are trimmed. Generic protection values
 support UTF-8; API keys retain printable-ASCII/no-whitespace header validation.
 
-Repeatable `[tool] secret` entries share this parser/resolver. Protection snapshots
+Repeatable `[tool] secret` entries share this parser/resolver. Owners retain
+explicit provider and protection sources at startup and explicit config reload,
+including unavailable-source results. A reload validates required protection
+sources before adopting any changes. Protection snapshots
 own their resolved values, retain earlier values while a request/command is still
 using them, and scrub owned bytes on release. Missing required protection sources
 fail before the operation; missing inactive-provider credentials do not force

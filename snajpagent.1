@@ -1787,7 +1787,9 @@ without changing configuration or model context.
 Read the local provider/model catalog.  No provider request is made.  On an
 interactive terminal the displayed catalogue pages through the configured
 .BR pager .
-The catalog is loaded at startup; ordinary requests, context meters and status
+The catalog is loaded at startup and by
+.BR /configure ;
+ordinary requests, context meters and status
 use that in-memory copy.  Model commands check for a changed cache file and
 load it only when changed.  Missing or invalid replacements preserve the last
 valid copy.  Selecting a numbered row through the model tool uses its listed
@@ -1849,11 +1851,14 @@ option, which uses the first configured or cached effort. Two components mean mo
 include all three components to name a provider explicitly.
 .TP
 .B /configure
-Reload the saved configuration and provider credentials for this session owner
-at a safe request boundary. Preserve the selected provider, model and effort.
-Configuration or selected-login validation failures leave the current settings
-and credentials active. This command also reloads a changed login when the
-configuration file is unchanged. Stop local audio before reloading.
+Reload the saved configuration, provider credentials, redaction secrets and local
+model cache for this session owner at a safe request boundary. Preserve the
+selected provider, model and effort. Validation failures leave the current
+settings, credentials and cache active. A missing cache retains the last valid
+copy; an invalid cache rejects the reload. The command reloads saved values even
+when the configuration file is unchanged. Use
+.B /model cache
+to fetch a new catalog from providers. Stop local audio before reloading.
 .TP
 .B /config
 Open the active configuration with
@@ -3511,8 +3516,10 @@ tool-call bound.  Default: 0.
 .B secret
 Repeatable additional value to protect, using the same source syntax as api_key.
 Environment references are removed from child environments;
-files/literals are not exported. Missing required sources fail before protected
-work. The obsolete secret_env key is rejected.
+files/literals are not exported. Values are retained at startup and explicit
+configuration reload; changes to their files affect that owner after reload.
+Missing required sources fail before protected work and reject an explicit reload.
+The obsolete secret_env key is rejected.
 .SS irc
 .TP
 .B listen
@@ -4868,8 +4875,8 @@ uses retained context/results and does not replay completed tools.
 .B /configure
 and edited
 .B /config
-changes keep the previous runtime settings and credentials when validation fails.
-Fix the reported file or login error, then run
+changes keep the previous runtime settings, credentials and model cache when
+validation fails. Fix the reported file, login or cache error, then run
 .B /configure
 again. Only changed IRC fields replace current runtime network state; unrelated
 edits preserve it.
