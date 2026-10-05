@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Add `/fast` to toggle priority service with explicit ON/OFF feedback, status
+  reporting and resume persistence while preserving model and reasoning effort.
+
 - Keep entered slash commands visible with their submitted prompt immediately,
   including `/configure` while the engine is busy, without duplicate echoes
   when commands finish or switch views.

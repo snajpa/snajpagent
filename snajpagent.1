@@ -1715,7 +1715,7 @@ is an alias for
 .BR /state " goal" .
 .TP
 .B /status
-Show session, selection, queue, verbosity, capacity, token accounting, requested
+Show session, model and fast-mode selections, queue, verbosity, capacity, token accounting, requested
 network roles and actual connection state.
 .TP
 .BR /session , " /s"
@@ -1852,6 +1852,27 @@ selection differs from the startup
 .B \-m
 option, which uses the first configured or cached effort. Two components mean model/effort;
 include all three components to name a provider explicitly.
+.TP
+.BR /fast " [on|off|status]"
+Toggle fast service and print the resulting ON or OFF state. The optional
+.B on
+and
+.B off
+set it explicitly;
+.B status
+shows the current selection. The selected model and reasoning effort stay the
+same. ON requests the priority service tier; OFF requests standard processing.
+The selection applies to subsequent Responses requests, including compaction,
+and survives session resume and configuration reload. A request already in
+flight continues with its admitted tier.
+.sp
+Until this command sets a tier, requests retain the provider's default behavior.
+Fast service availability and pricing depend on the provider and model; a
+provider can refuse or downgrade the request. The confirmation reports the
+requested mode. Use
+.B /status
+to inspect it. Sessions that have used this command require a reader with
+service-tier support when resumed.
 .TP
 .B /configure
 Reload the saved configuration, provider credentials, redaction secrets and local

@@ -858,6 +858,48 @@ test_upload_staging_lifecycle(struct snag_store *store, const char *cwd)
 }
 
 static void
+test_service_tier(struct snag_store *store, const char *cwd)
+{
+    struct snag_session session, restored;
+    char error[256], id[SNAG_ID_HEX_LEN + 1u];
+    snag_session_init(&session);
+    assert(snag_session_create(store, &session, cwd, "default", "model", "high",
+        error, sizeof(error)) == 0);
+    memcpy(id, session.id, sizeof(id));
+    json_t *state = snag_checkpoint_state_encode(&session);
+    assert(state && snag_checkpoint_state_decode(state, &restored) == 0);
+    assert(!restored.service_tier);
+    snag_session_close(&restored);
+    json_decref(state);
+    commit_event(&session, "service_tier_changed", json_pack("{s:s}", "value", "priority"));
+    assert(snag_session_checkpoint(&session, error, sizeof(error)) == 0);
+    snag_session_close(&session);
+    snag_session_init(&session);
+    assert(snag_session_open(store, &session, id, error, sizeof(error)) == 0);
+    assert(session.checkpoint_seq && !strcmp(session.service_tier, "priority"));
+    int64_t end = session.log_end;
+    assert(snag_session_commit(&session, "service_tier_changed",
+        json_pack("{s:s}", "value", "unknown"), NULL, error, sizeof(error)) < 0);
+    assert(session.log_end == end && !strcmp(session.service_tier, "priority"));
+    state = snag_checkpoint_state_encode(&session);
+    assert(state && json_object_set_new(state, "strings",
+        json_copy(json_object_get(state, "strings"))) == 0);
+    assert(json_object_set_new(json_object_get(state, "strings"),
+        "service_tier", json_true()) == 0);
+    assert(snag_checkpoint_state_decode(state, &restored) < 0);
+    snag_session_close(&restored);
+    json_decref(state);
+    commit_event(&session, "service_tier_changed", json_pack("{s:s}", "value", "default"));
+    snag_session_close(&session);
+    snag_session_init(&session);
+    assert(snag_session_open(store, &session, id, error, sizeof(error)) == 0);
+    assert(!strcmp(session.service_tier, "default"));
+    id[8] = '\0';
+    assert(snag_session_delete(store, &session, id, NULL, error, sizeof(error)) == 0);
+    snag_session_close(&session);
+}
+
+static void
 test_checkpoint_optional_download_queue(struct snag_store *store, const char *cwd)
 {
     struct snag_session session, restored;
@@ -1962,6 +2004,7 @@ main(void)
     test_forward_history(&store, cwd);
     test_history_prefix(&store, cwd);
     test_upload_staging_lifecycle(&store, cwd);
+    test_service_tier(&store, cwd);
     test_checkpoint_optional_download_queue(&store, cwd);
     test_one_file_checkpoint(&store, cwd);
     test_legacy_reconciliation(&store, cwd);

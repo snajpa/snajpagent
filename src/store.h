@@ -174,6 +174,7 @@ struct snag_session {
      * absolute shell path is replayed from command_shell_changed. */
     char command_shell[SNAG_CONFIG_PATH_MAX + 1u];
     const char *cwd;
+    const char *service_tier; /* NULL preserves the provider's default. */
     char trash_name[SNAG_ID_HEX_LEN + 1u + SNAG_ID_HEX_LEN + 1u];
     char *dir_path;
     const char *name;

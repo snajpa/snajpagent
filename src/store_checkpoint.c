@@ -467,6 +467,9 @@ decode_state(const json_t *data, struct snag_session *s)
         s->strings = copy;
     }
     s->name = snag_json_string(s->strings, "name");
+    s->service_tier = snag_json_string(s->strings, "service_tier");
+    if (json_object_get(s->strings, "service_tier") &&
+        !snag_string_in(s->service_tier, "priority default")) return -1;
     if (json_object_get(s->strings, "name") && !snag_session_name_valid(s->name)) return -1;
 #define TEXT_FIELD(f) do { \
     const json_t *value = json_object_get(data, "has_" #f); \

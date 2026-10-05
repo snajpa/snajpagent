@@ -3669,6 +3669,88 @@ def write_catalog_config(path, provider_port):
     )
 
 
+def run_fast_case(binary, root, provider, environment):
+    case = root / "fast-mode"
+    workspace, config = irc_workspace(case / "workspace", provider.port, "host-model")
+    config.write_text(config.read_text().replace("idle_timeout_ms = 3000", "idle_timeout_ms = 15000")
+                      .replace("request_timeout_ms = 5000", "request_timeout_ms = 20000"))
+    state = case / "state"
+    seen, held, release = [], threading.Event(), threading.Event()
+
+    def respond(handler, request, sequence):
+        seen.append(request)
+        latest = provider.latest_user(request)
+        if latest == "fast-held":
+            held.set()
+            assert release.wait(15), "fast-mode test did not release its request"
+        provider.reply(handler, provider.response_body(sequence, "done " + latest).encode(),
+                       close_header=True)
+        handler.close_connection = True
+
+    def acknowledge(terminal, command, message):
+        before = terminal.capture(join_wrapped=True).count(message)
+        terminal.submit(command)
+        return terminal.wait_until(lambda s: s.count(message) == before + 1, message,
+                                   join_wrapped=True)
+
+    def ask(terminal, marker, tier):
+        terminal.submit_wait(marker, "done " + marker, join_wrapped=True)
+        assert seen[-1].get("service_tier") == tier, seen[-1]
+        assert seen[-1]["model"] == "host-model", seen[-1]
+        assert seen[-1]["reasoning"]["effort"] == "medium", seen[-1]
+
+    provider.runtime_handler = respond
+    try:
+        with fixture_terminal(TmuxTerminal(case / "terminal", binary, workspace, state, config,
+                140, 12, args=("--no-listen", "--no-client"), environment=environment),
+                case / "screen.txt") as terminal:
+            terminal.wait("fake/host-model/medium")
+            acknowledge(terminal, "/fast status", "Fast mode: OFF (provider default)")
+            ask(terminal, "fast-initial", None)
+            screen = acknowledge(terminal, "/fast", "Fast mode: ON")
+            assert len(re.findall(r"^.*› /fast$", screen, re.MULTILINE)) == 1, screen
+            acknowledge(terminal, "/fast invalid", "usage: /fast [on|off|status]")
+            acknowledge(terminal, "/configure", "configuration reloaded:")
+            acknowledge(terminal, "/status", "fast: ON (priority requested)")
+            ask(terminal, "fast-enabled", "priority")
+            terminal.submit("fast-held")
+            assert held.wait(10), terminal.capture()
+            acknowledge(terminal, "/fast", "Fast mode: OFF (standard")
+            assert seen[-1]["service_tier"] == "priority"
+            assert len(seen) == 3, seen
+            release.set()
+            terminal.wait("done fast-held")
+            ask(terminal, "fast-disabled", "default")
+            acknowledge(terminal, "/fast on", "Fast mode: ON")
+            terminal.exit()
+        path, events = read_events(state)
+        assert [e["data"]["value"] for e in event_list(events, "service_tier_changed")] == [
+            "priority", "default", "priority"]
+        for index, tier in enumerate(("priority", "default")):
+            with fixture_terminal(TmuxTerminal(case / f"resume-{index}", binary, workspace,
+                    state, None, 140, 12, args=("--resume", path.parent.name),
+                    environment=environment), case / f"resume-{index}.txt") as terminal:
+                terminal.wait("fake/host-model/medium")
+                acknowledge(terminal, "/fast status", "Fast mode: " +
+                            ("ON" if tier == "priority" else "OFF"))
+                ask(terminal, f"fast-resumed-{index}", tier)
+                if index == 0:
+                    acknowledge(terminal, "/compact", "Compacted")
+                    assert seen[-1]["service_tier"] == "priority", seen[-1]
+                    assert seen[-1]["input"][-1]["role"] == "developer", seen[-1]
+                acknowledge(terminal, "/fast off", "Fast mode: OFF (standard")
+                terminal.exit()
+        assert len({request["prompt_cache_key"] for request in seen}) == 1
+        _, events = read_events(state)
+        assert not event_list(events, "turn_interrupted"), events
+        assert not event_list(events, "turn_failed"), events
+        assert provider.failure is None, provider.failure
+    finally:
+        release.set()
+        provider.runtime_handler = None
+    print("tmux_terminal fast mode: ok", flush=True)
+
+
 def run_configured_efforts_case(binary, root, provider, environment):
     case = root / "configured-efforts"
     workspace = case / "workspace"
@@ -9613,6 +9695,7 @@ def run_irc_case(binary, root, group="all"):
             run_ctrl_d_cases(binary, root, provider, environment)
             run_model_catalog_case(binary, root, provider, environment)
             run_configured_efforts_case(binary, root, provider, environment)
+            run_fast_case(binary, root, provider, environment)
     finally:
         provider.close()
     if group == "network":

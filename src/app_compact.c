@@ -415,6 +415,8 @@ run_compaction_attempt(struct app_state *app, const char *reason, bool active_pr
             snag_json_set_new(projection.create_request.value, "prompt_cache_key",
                 json_string(compact_cache_key)) < 0) goto out;
         if (!projection.create_request.value || !projection.count_request.value ||
+            (app->session.service_tier && snag_json_set_new(projection.create_request.value,
+                "service_tier", json_string(app->session.service_tier)) < 0) ||
             snag_context_provider_model(app->turn_provider, model, projection.create_request.value) < 0 ||
             snag_context_provider_model(app->turn_provider, model, projection.count_request.value) < 0) {
             (void)snag_fail(error, error_size, ENOMEM, "cannot build bounded compaction provider request");

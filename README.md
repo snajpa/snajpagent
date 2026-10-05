@@ -254,6 +254,8 @@ to return to the prompt. `[ui] pager = off` displays reports directly.
 refreshes the catalog. Selection persists across resume; model-callable switching
 uses `[agent] allow_model_change=true` (default off). Switching retains tool
 results and running commands, compacting smaller contexts when needed.
+`/fast` toggles priority service with ON/OFF feedback while preserving that
+selection. Its setting persists across resume; provider support and pricing apply.
 
 `/context default` uses the configured or advertised normal window, `max` the
 maximum, and a number an explicit token count for the session. Append `s` or

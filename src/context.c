@@ -3153,6 +3153,8 @@ snag_context_build(struct snag_session *session, const char *model, const char *
           "prompt_cache_key", cache_key);
     if ((max_output_known && snag_json_set_new(projection->create_request.value, "max_output_tokens",
              json_integer((json_int_t)max_output_tokens)) < 0) ||
+        (session->service_tier && snag_json_set_new(projection->create_request.value,
+            "service_tier", json_string(session->service_tier)) < 0) ||
         snag_json_set_new(projection->create_request.value, "include",
                          json_pack("[s]", "reasoning.encrypted_content")) < 0 ||
         (provider && snag_auth_uses_codex(provider->auth) &&

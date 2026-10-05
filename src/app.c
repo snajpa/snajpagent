@@ -234,6 +234,7 @@ static const struct snag_term_command commands[] = {
     {"/model [#]N [save|s]", "select numbered model/effort row (N starts at 1)"},
     {"/model MODEL[/EFFORT] [save|s]", "select on the next-turn provider"},
     {"/model PROVIDER/MODEL/EFFORT [save|s]", "select explicit provider/model/effort"},
+    {"/fast [on|off|status]", "toggle fast service; retain the selected model and effort"},
     {"/effort [LEVEL]", "show/set provider-defined effort (default means medium)"},
     {"/context", "show the context window, its reserve and compaction budget"},
     {"/context default", "use the configured or advertised working window"},
@@ -1219,13 +1220,16 @@ render_status(struct app_state *app)
         advertised = snag_model_metadata(&app->model_cache, provider, app->session.default_model);
     struct snag_buf text = {.max = 64u * 1024u};
     if (snag_buf_printf(&text, "session: %s\n" "name: %s\n" "state: %s\n" "tools: %s\n"
-        "provider: %s\n" "model: %s\n" "effort: %s\n" "cwd: %s\n"
+        "provider: %s\n" "model: %s\n" "effort: %s\n" "fast: %s\n" "cwd: %s\n"
         "turns: %llu\n" "queue: %zu%s\n" "verbosity: %u\n" "context: source=%s",
         id, app->session.name ? app->session.name : "-",
         app->session.active_turn ? "active" : "idle",
         app->session.active_read_only ? "read-only query" : "normal",
         next_provider(app) ? next_provider(app)->name : "<missing>", app->session.default_model,
-        app->session.default_effort, app->session.cwd,
+        app->session.default_effort,
+        snag_string_in(app->session.service_tier, "priority") ? "ON (priority requested)" :
+            app->session.service_tier ? "OFF (standard requested)" : "OFF (provider default)",
+        app->session.cwd,
         (unsigned long long)app->session.turn_count, app->session.pending_queue_count,
         app->session.pending_queue_count && !app->session.queue_armed ? " paused" : "",
         snag_ui_verbosity(&app->ui), snag_capacity_source_name(capacity.source)) < 0 ||
@@ -1773,6 +1777,27 @@ trim_selector_part(char *part)
     *end = '\0';
     return part;
 }
+static int
+change_fast(struct app_state *app, const char *argument)
+{
+    const char *current = app->session.service_tier;
+    bool enabled = snag_string_in(current, "priority");
+    if (argument && strcmp(argument, "on") && strcmp(argument, "off") &&
+        strcmp(argument, "status")) return app_error(app, "usage: /fast [on|off|status]");
+    if (!argument || strcmp(argument, "status")) {
+        enabled = argument ? !strcmp(argument, "on") : !enabled;
+        const char *tier = enabled ? "priority" : "default";
+        if (!current || strcmp(current, tier)) {
+            char error[256] = {0};
+            if (commit_event(app, "service_tier_changed", json_pack("{s:s}", "value", tier),
+                    error, sizeof(error)) < 0) return app_error(app, error), -1;
+        }
+    }
+    return app_textf(app, SNAG_UI_HOST, "Fast mode: %s (%s); model and effort unchanged",
+        enabled ? "ON" : "OFF", enabled ? "priority for subsequent requests" :
+            app->session.service_tier ? "standard for subsequent requests" : "provider default");
+}
+
 static int
 record_model_selection(struct app_state *app, const char *provider,
                         const char *model, const char *effort, char *error, size_t error_size)
@@ -3152,6 +3177,11 @@ handle_common_command(struct app_state *app, const char *line, bool active, bool
         return change_model(app, NULL, active);
     if (strncmp(line, "/model ", 7u) == 0)
         return change_model(app, line + 7u, active);
+    if (!strncmp(line, "/fast", 5u) && (!line[5] || isspace((unsigned char)line[5]))) {
+        const char *argument = line + 5u;
+        while (isspace((unsigned char)*argument)) ++argument;
+        return change_fast(app, *argument ? argument : NULL);
+    }
     if (strcmp(line, "/config") == 0)
         return (app->audio || app->voice) ? app_error(app, "Stop local audio before reloading configuration.") : change_config(app, active);
     if (strcmp(line, "/configure") == 0) {
@@ -4557,7 +4587,10 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
             result = finish_turn_failure(app, retry, turn_id, NULL, "context", failure, error, sizeof(error));
             goto out;
         }
-        if (app->control_requested) goto rebuild_request;
+        const char *request_tier = snag_json_string(projection.create_request.value,
+            "service_tier");
+        if (app->control_requested || strcmp(request_tier ? request_tier : "",
+                app->session.service_tier ? app->session.service_tier : "")) goto rebuild_request;
         if (app->history_recovery_rebase && commit_event(app, "context_rebased",
                 json_pack("{s:s,s:s}", "reason", app->session.active_goal ? "goal_recovery" :
                     "turn_recovery", "turn_id", turn_id),

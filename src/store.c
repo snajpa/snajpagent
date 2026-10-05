@@ -1447,6 +1447,12 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             !snag_text_valid(new_effort, 1u, sizeof(session->default_effort) - 1u) ||
             strcmp(old_effort, session->default_effort) != 0 || strcmp(old_effort, new_effort) == 0 ||
             !snag_strcpy(session->default_effort, sizeof(session->default_effort), new_effort)) goto invalid;
+    } else if (strcmp(type, "service_tier_changed") == 0) {
+        const char *value = snag_json_string(data, "value");
+        if (!snag_json_exact_keys(data, "value") ||
+            !snag_string_in(value, "priority default")) goto invalid;
+        if (replace_text(session, &session->service_tier, "service_tier", value,
+                sizeof("priority") - 1u) < 0) return -1;
     } else if (strcmp(type, "context_selection_changed") == 0) {
         const char *old_mode = snag_json_string(data, "old_mode");
         const char *new_mode = snag_json_string(data, "new_mode");

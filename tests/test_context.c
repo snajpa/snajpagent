@@ -1575,6 +1575,8 @@ test_read_only_and_queue_controllers(struct snag_store *store, const char *temp)
                        "%s", codex ? SNAG_CHATGPT_BASE :
                        openrouter ? "https://openrouter.ai/api/v1" : "https://api.openai.com");
         config.providers[1].auth = codex ? SNAG_AUTH_CHATGPT : SNAG_AUTH_API_KEY;
+        if (variant == 15u) commit_event(&session, "service_tier_changed",
+            json_pack("{s:s}", "value", "priority"));
 
         session.active_read_only = pass == 0u;
         session.active_queued = pass == 1u;
@@ -1601,6 +1603,10 @@ test_read_only_and_queue_controllers(struct snag_store *store, const char *temp)
         }
         assert(json_is_false(json_object_get(projection.create_request.value, "store")));
         assert(json_is_true(json_object_get(projection.create_request.value, "stream")));
+        if (variant >= 15u) assert_string(projection.create_request.value,
+            "service_tier", "priority");
+        else assert(!json_object_get(projection.create_request.value, "service_tier"));
+        assert(!json_object_get(projection.count_request.value, "service_tier"));
         assert(!json_object_get(projection.count_request.value, "include"));
         assert(!json_object_get(projection.count_request.value, "prompt_cache_key"));
         requests[0] = projection.model_input.value;
