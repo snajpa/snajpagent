@@ -377,6 +377,31 @@ closure_core_checks(int fd, const struct snag_binary_anchor *through,
         checked[class_mode] = true;
         struct snag_buf output = {.max = SIZE_MAX};
         assert(!snag_buf_append(&output, "keep", 4u));
+        struct snag_binary_checkpoint_access_plan plan = {0};
+        assert(!snag_binary_checkpoint_access_plan_build(&plan, through, sources, state,
+            provider.data, provider.len, NULL, NULL));
+        struct snag_binary_checkpoint_access_plan saved = plan;
+        struct snag_binary_anchor bad_boundary = *through;
+        ++bad_boundary.next_seq;
+        assert(snag_binary_checkpoint_access_plan_build(&plan, &bad_boundary, sources, state,
+            provider.data, provider.len, NULL, NULL) < 0 && errno == EINVAL &&
+            !memcmp(&plan, &saved, sizeof(saved)));
+        assert(snag_binary_checkpoint_access_plan_build(&plan, through, sources, state,
+            provider.data, provider.len - 1u, NULL, NULL) < 0 &&
+            !memcmp(&plan, &saved, sizeof(saved)));
+        struct closure_cancel plan_cancel = {.fail_at = 1u};
+        assert(snag_binary_checkpoint_access_plan_build(&plan, through, sources, state,
+            provider.data, provider.len, cancel_closure, &plan_cancel) < 0 && errno == ECANCELED &&
+            !memcmp(&plan, &saved, sizeof(saved)));
+        assert(snag_binary_checkpoint_access_plan_read(-1, &plan, available, &available->tree,
+            NULL, NULL, &output) < 0 && errno == EINVAL);
+        uint64_t invalid_range[3] = {1u, through->next_seq, UINT64_MAX};
+        assert(!snag_buf_append(&plan.ranges, invalid_range, sizeof(invalid_range)));
+        assert(snag_binary_checkpoint_access_plan_read(fd, &plan, available, &available->tree,
+            NULL, NULL, &output) < 0 && errno == EINVAL);
+        assert(output.len == 4u && !memcmp(output.data, "keep", 4u));
+        assert(snag_seek(fd, 0, SEEK_CUR) == position);
+        snag_binary_checkpoint_access_plan_free(&plan);
         for (size_t i = 1u; i <= cancel.calls; ++i) {
             struct closure_cancel stopped = {.fail_at = i};
             assert(snag_binary_checkpoint_access_capture(fd, through, available, &available->tree,

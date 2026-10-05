@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Separate native checkpoint dependency-query capture from canonical source I/O,
+  preserving the pinned working-set and bounded-suffix closure rules.
+
 - Freeze native core and provider checkpoint sections at the same acknowledged
   frontier, retaining owned origins and index state. An absent provider cache
   fails capture rather than emitting a partial image; access closure and image

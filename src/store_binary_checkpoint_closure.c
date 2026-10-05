@@ -14,6 +14,7 @@ struct closure_capture {
     bool (*cancelled)(void *);
     void *opaque;
     struct snag_buf roots, needed, entries;
+    struct snag_buf *ranges; /* Non-NULL only during pure producer query capture. */
     struct snag_buf scratch, flat;
     struct snag_binary_batch batch;
     struct snag_binary_anchor before, after;
@@ -121,6 +122,13 @@ collect_range(struct closure_capture *capture, uint64_t first, uint64_t end,
     int (*visit)(void *, const struct snag_binary_record *, uint64_t))
 {
     if (!first) return end ? snag_errno(EINVAL) : 0;
+    if (first > end || end > capture->through->next_seq) return snag_errno(EINVAL);
+    if (cancel_capture(capture)) return snag_errno(ECANCELED);
+    if (capture->ranges) {
+        uint64_t range[3] = {first, end, visit == collect_transform ?
+            SNAG_BINARY_RULE_TRANSFORM : SNAG_BINARY_RESPONSE_OUTPUT};
+        return snag_buf_append(capture->ranges, range, sizeof(range));
+    }
     return snag_binary_checkpoint_records_read(capture->fd, capture->through,
         capture->available, first, end, visit, cancel_capture, capture);
 }
@@ -306,17 +314,25 @@ collect_roots(struct closure_capture *capture,
     return 0;
 }
 
-int
-snag_binary_checkpoint_access_capture(int fd, const struct snag_binary_anchor *through,
-    const struct snag_binary_checkpoint_index *available,
-    const struct snag_binary_index_tree *frontier,
-    const struct snag_binary_checkpoint_sources *sources, const struct snag_session *state,
-    const void *provider_bytes, size_t provider_size, bool (*cancelled)(void *), void *opaque,
-    struct snag_buf *out)
+void
+snag_binary_checkpoint_access_plan_free(struct snag_binary_checkpoint_access_plan *plan)
 {
-    if (fd < 0 || !through || !available || !frontier || !sources || !state || !out ||
+    if (!plan) return;
+    snag_buf_free(&plan->roots);
+    snag_buf_free(&plan->needed);
+    snag_buf_free(&plan->ranges);
+    *plan = (struct snag_binary_checkpoint_access_plan){0};
+}
+
+int
+snag_binary_checkpoint_access_plan_build(struct snag_binary_checkpoint_access_plan *out,
+    const struct snag_binary_anchor *through, const struct snag_binary_checkpoint_sources *sources,
+    const struct snag_session *state, const void *provider_bytes, size_t provider_size,
+    bool (*cancelled)(void *), void *opaque)
+{
+    if (!out || !through || !sources || !state ||
         !through->next_seq || through->next_seq != state->next_seq ||
-        frontier->count != through->next_seq - 1u || sources->texts.through >= through->next_seq ||
+        sources->texts.through >= through->next_seq ||
         sources->process_count != state->process_count ||
         sources->queue_count != state->pending_queue_count ||
         (sources->process_count && !sources->processes) ||
@@ -327,6 +343,44 @@ snag_binary_checkpoint_access_capture(int fd, const struct snag_binary_anchor *t
     if (snag_binary_checkpoint_provider_decode(provider_bytes, provider_size, &provider) < 0)
         return -1;
     if (provider.next_seq != through->next_seq) return snag_errno(EINVAL);
+    struct snag_binary_checkpoint_access_plan staged = {.boundary = *through,
+        .ranges = {.max = SIZE_MAX}};
+    struct closure_capture capture = {.through = through, .cancelled = cancelled,
+        .opaque = opaque, .roots = {.max = SIZE_MAX}, .needed = {.max = SIZE_MAX},
+        .ranges = &staged.ranges};
+    int rc = collect_roots(&capture, sources, state, &provider);
+    if (!rc && cancel_capture(&capture)) rc = snag_errno(ECANCELED);
+    if (rc < 0) {
+        int saved = errno;
+        snag_buf_free(&capture.roots);
+        snag_buf_free(&capture.needed);
+        snag_binary_checkpoint_access_plan_free(&staged);
+        return snag_errno(saved);
+    }
+    unique(&capture.roots);
+    unique(&capture.needed);
+    staged.roots = capture.roots;
+    staged.needed = capture.needed;
+    snag_binary_checkpoint_access_plan_free(out);
+    *out = staged;
+    return 0;
+}
+
+int
+snag_binary_checkpoint_access_plan_read(int fd,
+    const struct snag_binary_checkpoint_access_plan *plan,
+    const struct snag_binary_checkpoint_index *available,
+    const struct snag_binary_index_tree *frontier, bool (*cancelled)(void *), void *opaque,
+    struct snag_buf *out)
+{
+    if (fd < 0 || !plan || !available || !frontier || !out || !plan->boundary.next_seq ||
+        frontier->count != plan->boundary.next_seq - 1u ||
+        plan->roots.len % sizeof(uint64_t) || plan->needed.len % sizeof(uint64_t) ||
+        plan->ranges.len % (3u * sizeof(uint64_t)) ||
+        (plan->roots.len && !plan->roots.data) || (plan->needed.len && !plan->needed.data) ||
+        (plan->ranges.len && !plan->ranges.data)) return snag_errno(EINVAL);
+    const struct snag_binary_anchor *through = &plan->boundary;
+    if (cancelled && cancelled(opaque)) return snag_errno(ECANCELED);
     unsigned char header[SNAG_BINARY_HEADER_SIZE];
     struct snag_binary_identity identity;
     struct snag_binary_anchor root;
@@ -347,8 +401,16 @@ snag_binary_checkpoint_access_capture(int fd, const struct snag_binary_anchor *t
         .needed = {.max = SIZE_MAX}, .entries = {.max = SIZE_MAX},
         .scratch = {.max = SNAG_BINARY_BATCH_MAX}, .flat = {.max = SNAG_BINARY_INDEX_BATCH_MAX}};
     int rc = -1;
-    if (collect_roots(&capture, sources, state, &provider) < 0) goto done;
-    unique(&capture.roots);
+    if (snag_buf_append(&capture.roots, plan->roots.data, plan->roots.len) < 0 ||
+        snag_buf_append(&capture.needed, plan->needed.data, plan->needed.len) < 0) goto done;
+    for (size_t i = 0u; i < plan->ranges.len / (3u * sizeof(uint64_t)); ++i) {
+        uint64_t range[3];
+        memcpy(range, plan->ranges.data + i * sizeof(range), sizeof(range));
+        if (range[2] != SNAG_BINARY_RULE_TRANSFORM &&
+            range[2] != SNAG_BINARY_RESPONSE_OUTPUT) { snag_errno(EINVAL); goto done; }
+        if (collect_range(&capture, range[0], range[1], range[2] == SNAG_BINARY_RULE_TRANSFORM ?
+                collect_transform : collect_output) < 0) goto done;
+    }
     for (size_t i = 0u; i < capture.roots.len / sizeof(uint64_t); ++i) {
         uint64_t sequence = ((const uint64_t *)capture.roots.data)[i];
         struct snag_binary_record record;
@@ -375,5 +437,25 @@ done:
     snag_buf_free(&capture.entries);
     snag_buf_free(&capture.scratch);
     snag_buf_free(&capture.flat);
+    return rc;
+}
+
+int
+snag_binary_checkpoint_access_capture(int fd, const struct snag_binary_anchor *through,
+    const struct snag_binary_checkpoint_index *available,
+    const struct snag_binary_index_tree *frontier,
+    const struct snag_binary_checkpoint_sources *sources, const struct snag_session *state,
+    const void *provider_bytes, size_t provider_size, bool (*cancelled)(void *), void *opaque,
+    struct snag_buf *out)
+{
+    if (fd < 0 || !through || !available || !frontier || !out) return snag_errno(EINVAL);
+    struct snag_binary_checkpoint_access_plan plan = {0};
+    if (snag_binary_checkpoint_access_plan_build(&plan, through, sources, state,
+            provider_bytes, provider_size, cancelled, opaque) < 0) return -1;
+    int rc = snag_binary_checkpoint_access_plan_read(fd, &plan, available, frontier,
+        cancelled, opaque, out);
+    int saved = errno;
+    snag_binary_checkpoint_access_plan_free(&plan);
+    errno = saved;
     return rc;
 }

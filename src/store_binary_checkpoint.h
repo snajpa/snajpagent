@@ -172,6 +172,25 @@ struct snag_binary_checkpoint_calls {
     size_t count;
 };
 
+/* Immutable owning in-memory query at one verified producer boundary. Ranges
+ * select causal metadata/output intervals; no source locations or membership
+ * authority are inferred until the I/O owner resolves against pinned sources.
+ * Build does no I/O. Initialized owning output changes only on success. */
+struct snag_binary_checkpoint_access_plan {
+    struct snag_binary_anchor boundary;
+    struct snag_buf roots, needed, ranges;
+};
+void snag_binary_checkpoint_access_plan_free(struct snag_binary_checkpoint_access_plan *);
+int snag_binary_checkpoint_access_plan_build(struct snag_binary_checkpoint_access_plan *,
+    const struct snag_binary_anchor *, const struct snag_binary_checkpoint_sources *,
+    const struct snag_session *, const void *provider, size_t provider_size,
+    bool (*cancelled)(void *), void *opaque);
+int snag_binary_checkpoint_access_plan_read(int fd,
+    const struct snag_binary_checkpoint_access_plan *,
+    const struct snag_binary_checkpoint_index *available,
+    const struct snag_binary_index_tree *frontier, bool (*cancelled)(void *), void *opaque,
+    struct snag_buf *out);
+
 /* Select complete core/provider materializer closure from an independently
  * verified snapshot and available old working-set sources plus bounded suffix.
  * Available must contain every old field/span/transform dependency; omissions

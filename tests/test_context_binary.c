@@ -166,6 +166,22 @@ provider_source_checks(int fd, const struct snag_binary_anchor *through,
     struct snag_buf selected = {.max = SIZE_MAX};
     assert(!snag_binary_checkpoint_access_capture(fd, through, &access, &access.tree,
         origins, state, provider->data, provider->len, NULL, NULL, &selected));
+    /* Freeze before source I/O, then release the borrowed provider bytes. The
+     * separate reader must reproduce the complete paired core/provider closure. */
+    struct snag_buf copy = {.max = SIZE_MAX}, split = {.max = SIZE_MAX};
+    assert(!snag_buf_append(&copy, provider->data, provider->len));
+    struct snag_binary_checkpoint_access_plan plan = {0};
+    off_t plan_position = lseek(fd, 0, SEEK_CUR);
+    assert(!snag_binary_checkpoint_access_plan_build(&plan, through, origins, state,
+        copy.data, copy.len, NULL, NULL));
+    assert(lseek(fd, 0, SEEK_CUR) == plan_position);
+    snag_buf_free(&copy);
+    assert(!snag_binary_checkpoint_access_plan_read(fd, &plan, &access, &access.tree,
+        NULL, NULL, &split));
+    assert(split.len == selected.len && !memcmp(split.data, selected.data, split.len));
+    assert(lseek(fd, 0, SEEK_CUR) == plan_position);
+    snag_buf_free(&split);
+    snag_binary_checkpoint_access_plan_free(&plan);
     unsigned char root[32];
     assert(!snag_binary_index_tree_root(&access.tree, root));
     struct snag_binary_checkpoint_index captured;

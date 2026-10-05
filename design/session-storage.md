@@ -2636,6 +2636,20 @@ complete producer closure remain integration work; the runtime backend is JSONL.
 
 ### Snapshot closure selection
 
+Producer query capture is separate from source I/O. It freezes the common
+boundary, current materializer roots, literal/metadata dependencies and filtered
+causal intervals into owning in-memory buffers. This is not another file format
+or a membership certificate. The producer establishes the same core/provider
+semantics as before; capture needs no descriptor and borrows no provider/state
+objects after success. Failure preserves a previously owned query.
+
+The read half resolves that immutable query using the independently pinned old
+working set and caller-bounded suffix, retaining the existing canonical location,
+kind, causality and hash checks. It never reduces engine state. The convenience
+access-capture interface composes these halves; the future live I/O owner can
+consume the frozen query without borrowing a mutable session. Reader integration,
+working-set custody and image publication remain separate unfinished work.
+
 The access capture helper selects locations for a verified producer snapshot from
 an independently pinned available working set plus a caller-bounded newer suffix.
 It takes the complete index frontier at the new capture boundary; this helper
