@@ -3687,7 +3687,7 @@ def test_command_name_completion():
         (b"/q", b"/queue"),
         (b"/ne", b"/next"),
         (b"/com", b"/compact"),
-        (b"/conf", b"/config"),
+        (b"/configu", b"/configure"),
         (b"/del", b"/delete"),
         (b"/det", b"/detach"),
         (b"/ex", b"/exit"),
@@ -3698,7 +3698,7 @@ def test_command_name_completion():
 
     for prefix, choices in ((b"/sta", (b"/state", b"/status")),
                             (b"/h", (b"/help", b"/history")),
-                            (b"/c", (b"/compact", b"/config")),
+                            (b"/c", (b"/compact", b"/config", b"/configure")),
                             (b"/v", (b"/verbose", b"/voice")),
                             (b"/de", (b"/delete", b"/detach"))):
         start = len(child.buf)
@@ -3711,6 +3711,13 @@ def test_command_name_completion():
         # The prefix also occurs inside choices; observe the repainted prompt.
         child.wait(PROMPT + prefix, start=child.buf.rfind(choices[-1]))
         clear_draft_incrementally(child)
+
+    start = len(child.buf)
+    child.send_wait(b"/conf\t", b"/config", start=start)
+    child.send(b"\t")
+    child.wait(b"/configure", start=start)
+    child.wait(PROMPT + b"/config", start=child.buf.rfind(b"/configure"))
+    clear_draft_incrementally(child)
 
     start = len(child.buf)
     end = child.send_wait(b"/mo gpt\x1b[D\x1b[D\x1b[D\x1b[D\t", b"del gpt", start=start)
