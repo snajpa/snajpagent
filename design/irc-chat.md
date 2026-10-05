@@ -614,6 +614,12 @@ events from the local IRC cache. This keeps live room state outside the text
 that compaction may summarize. Snapshot insertion is itself a durable event,
 so restart and replay cannot change which network context the model saw.
 
+`/nick NICK` changes the operator identity through the UI's selected destination
+route. Bare `/nick` reports both identities. Accepted operator changes update the
+prompt; the primary connection's accepted operator name updates saved resume
+settings. Rejected names leave the accepted identity intact. The configuration
+file retains its default. Model renames use `irc_nick`.
+
 ## Model IRC Tools
 
 Every provider request exposes the same bounded IRC tool schemas alongside the

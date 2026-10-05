@@ -5261,7 +5261,9 @@ def test_live_nick_listing():
                 raise AssertionError("client did not finish joining the IRC room")
             for old, nick in (("minion4", "docsowner"), ("docsowner", "docsreviewer")):
                 start = len(client.buf)
-                client.send(f"/nick {nick}\r".encode())
+                client.send_wait(b"/rollout\r", PROMPT.rstrip())
+                client.send_wait_idle(f"irc_nick_test {nick}\r".encode(), b"IRC nick changed")
+                client.send_wait(b"/chat\r", chat_prompt("clientop"))
                 deadline = time.monotonic() + MIN_WAIT_S
                 while time.monotonic() < deadline:
                     if any(e["type"] == "irc_event" and e["data"]["kind"] == "nick" and
@@ -5282,6 +5284,61 @@ def test_live_nick_listing():
                 assert row[6] == f"c/{nick}@{endpoint}", row
             client.exit_now()
         server.exit_now()
+
+
+def test_operator_nick():
+    endpoint = f"127.0.0.1:{free_port()}"
+    with Child(["--no-color", "-s", endpoint, "-n", "hostbot", "-o", "hostop", "-r", "lab"],
+               chat_prompt("hostop")) as server:
+        with Child(["--no-color", "-c", endpoint, "-n", "peerbot", "-o", "peerop"],
+                   chat_prompt("peerop")) as client:
+            for child, model, old, new in ((server, "hostbot", "hostop", "hosthuman"),
+                                         (client, "peerbot", "peerop", "peerhuman")):
+                identity = child.session_id()
+                start = len(child.buf)
+                child.send(f"/nick {new}\r".encode())
+                deadline = time.monotonic() + MIN_WAIT_S
+                while time.monotonic() < deadline:
+                    changes = [e["data"] for e in events(identity)
+                               if e["type"] == "irc_event" and e["data"]["kind"] == "nick"
+                               and e["data"]["text"] == new]
+                    if changes:
+                        assert changes[-1]["nick"] == old, changes
+                        break
+                    child.read_once(0.02)
+                else:
+                    raise AssertionError(("operator rename was not acknowledged", bytes(child.buf)))
+                child.wait(chat_prompt(new), start=start)
+                queried = child.send_wait(b"/nick\r", f"model nick: {model}".encode())
+                child.wait(f"operator nick: {new}".encode(), start=queried)
+                child.send_wait(b"/nick 9bad nick\r", b"IRC nick is invalid")
+                child.send(b"\x15")
+                refused = (b"-server - Nickname is already in use" if child is client
+                           else b"already in use")
+                child.send_wait(f"/nick {model}\r".encode(), refused)
+                child.send(b"\x15")
+                queried = child.send_wait(b"/nick\r", f"model nick: {model}".encode())
+                child.wait(f"operator nick: {new}".encode(), start=queried)
+            sent = len(server.buf)
+            client.send(b"operator rename message\r")
+            server.wait(b"operator rename message", start=sent)
+            assert any(e["type"] == "irc_event" and e["data"]["kind"] == "message"
+                       and e["data"]["nick"] == "peerhuman"
+                       and e["data"]["text"] == "operator rename message"
+                       for e in events(server.session_id()))
+            command = client.exit_now()
+        with Child.from_command(command) as restored:
+            restored.wait(chat_prompt("peerhuman"))
+            queried = restored.send_wait(b"/nick\r", b"model nick: peerbot")
+            restored.wait(b"operator nick: peerhuman", start=queried)
+            restored.exit_now()
+        command = server.exit_now()
+    with Child.from_command(command) as restored:
+        restored.wait(chat_prompt("hosthuman"))
+        queried = restored.send_wait(b"/nick\r", b"model nick: hostbot")
+        restored.wait(b"operator nick: hosthuman", start=queried)
+        restored.exit_now()
+
 
 def test_runtime_network_commands():
     endpoint = f"127.0.0.1:{free_port()}"
@@ -6986,6 +7043,7 @@ if __name__ == "__main__":
     test_exit_resume_matrix()
     test_runtime_network_commands()
     test_live_nick_listing()
+    test_operator_nick()
     test_network_resume_roles()
     test_network_collision_prompts()
     test_network_live_nick_prompt()

@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Make `/nick NICK` rename the operator identity and retain its accepted name
+  on resume. Reject hosted nickname collisions and display server refusals;
+  keep model renames available through the `irc_nick` tool.
+
 - Include the saved model cache in `/configure`, with rollback on invalid cache
   data. Retain file-based redaction secrets until explicit reload, and use the
   owner's credential snapshot for offline voice handoff checks.

@@ -1744,6 +1744,12 @@ client_dispatch(struct snag_irc_core *irc, struct irc_conn *link, char *line)
             message.params[0], sender, message.params[1], member && member->op, timestamp_ms);
     }
     if (strcmp(message.command, "433") == 0 && !link->registered) return link_retry_nick(link);
+    if (link->registered && link->joined &&
+        snag_string_in(message.command, "432 433 436 437") && message.param_count &&
+        *message.params[message.param_count - 1u]) {
+        return link_emit(irc, link, SNAG_IRC_NOTICE, link->room, "",
+            message.params[message.param_count - 1u], false, timestamp_ms);
+    }
     if (snag_string_in(message.command, "ERROR 403 404")) return 1;
     return 0;
 }
@@ -2274,6 +2280,11 @@ set_nick_as(struct snag_irc_core *irc, const char *nick, enum link_role role,
     identity = &irc->conns[role];
     if (!snag_strcpy(old, sizeof(old), identity->nick)) old[0] = '\0';
     if (irc->hosting) {
+        struct irc_conn *collision = server_peer_by_nick(irc, clean);
+        if (collision && collision != identity) {
+            return snag_fail(error, error_size, EINVAL, "IRC nickname is already in use");
+        }
+        if (strcmp(old, clean) == 0) return 0;
         if (!snag_strcpy(identity->nick, sizeof(identity->nick), clean) ||
             !snag_strcpy(identity->accepted_nick, sizeof(identity->accepted_nick), clean))
             goto fail;
@@ -2427,7 +2438,10 @@ restored_event_shape_valid(const struct snag_irc_event *event)
     case SNAG_IRC_JOIN: return room && nick && !event->text[0];
     case SNAG_IRC_PART: case SNAG_IRC_QUIT: return room && nick;
     case SNAG_IRC_NICK: return room && nick && nick_valid(event->text);
-    case SNAG_IRC_MESSAGE: case SNAG_IRC_NOTICE: return (room || (event->local && !event->room[0])) && nick &&
+    case SNAG_IRC_NOTICE:
+        if (!event->nick[0]) return room && !event->op && event->text[0];
+        /* FALLTHROUGH */
+    case SNAG_IRC_MESSAGE: return (room || (event->local && !event->room[0])) && nick &&
                event->text[0];
     case SNAG_IRC_TOPIC: return room && (!event->nick[0] || nick) && (event->nick[0] || !event->op);
     case SNAG_IRC_MODE: return room && nick &&

@@ -1932,10 +1932,14 @@ with
 to remove a saved override.
 .TP
 .BR /nick " [" NICK "]"
-Show the agent and operator nicks, or rename the agent nick. The new nick is
-shared through IRC so other clients see lead/worker renames; the config file
-keeps the configured default. Names follow IRC nick rules; invalid names are
-rejected and a server refusal arrives as a server notice.
+Show the model and operator nicks, or rename your operator nick on the selected
+IRC destination. For example, /nick alice changes your name to alice.
+Other clients see the accepted change, which also updates your prompt.
+The primary connection's accepted operator name is saved for session resume.
+The config file keeps the configured default.
+Names follow IRC nick rules; invalid names are rejected and a server refusal
+arrives as a server notice. A refused name leaves your accepted identity intact.
+The model changes its own identity through the irc_nick tool.
 .TP
 .BR /steering " [mentions|all|clear]"
 Show or set which IRC traffic reaches the model as steering: only mentions, or

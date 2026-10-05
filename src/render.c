@@ -3109,7 +3109,7 @@ render_irc_event_now(struct snag_render *render, const struct snag_irc_event *ev
         goto out;
     if (event->kind == SNAG_IRC_MESSAGE || event->kind == SNAG_IRC_NOTICE) {
         n = snprintf(prefix, sizeof(prefix), "%s%s%s ", event->kind == SNAG_IRC_NOTICE ? "-" : "",
-                     event->op ? "@" : "", event->nick);
+            event->op ? "@" : "", event->nick[0] ? event->nick : "server");
         if (n < 0 || (size_t)n >= sizeof(prefix) || irc_piece(render, prefix, true) < 0) goto out;
         if (colored && !highlight && irc_piece(render, COLOR_RESET, false) < 0) goto out;
         if (irc_piece(render, event->kind == SNAG_IRC_NOTICE ? "- " : "› ", true) < 0) goto out;

@@ -282,7 +282,7 @@ static const struct snag_term_command commands[] = {
     {"/chat", "show IRC room activity"},
     {"/rollout", "show local model activity"},
     {"/topic [TEXT]", "show/set selected room topic"},
-    {"/nick [NICK]", "show/set agent nick (shared via IRC)"},
+    {"/nick [NICK]", "show nicks/set your operator nick (shared via IRC)"},
     {"/steering [mentions|all|clear]", "show/set steering admission for next turn"},
     {"/names", "numbered destinations, members and modes"},
     {"/server [start [ENDPOINT]|stop]", "show/start/stop hosting; default localhost:6667"},
@@ -807,7 +807,14 @@ tick_irc(struct app_state *app, char *error, size_t error_size)
         if (snag_app_irc_snapshot(app, "topology", error, error_size) < 0) return -1;
     }
     if (!snag_irc_identity_changed(app->irc)) return 0;
+    const char *operator_nick = snag_irc_operator_nick(app->irc);
+    if (operator_nick && strcmp(app->config->irc.operator_nick, operator_nick)) {
+        if (!snag_strcpy(app->config->irc.operator_nick,
+                sizeof(app->config->irc.operator_nick), operator_nick)) return -1;
+        app->config->irc.operator_nick_implicit = false;
+    }
     if (snag_app_irc_snapshot(app, "nick", error, error_size) < 0) return -1;
+    if (snag_app_save_resume_options(app, error, error_size) < 0) return -1;
     if (!app->ui.opened || !app->ui.prompt_wanted) return 0;
     return set_input_prompt(app, app->ui.active);
 }
@@ -2661,15 +2668,15 @@ network_command(struct app_state *app, const char *line, bool *handled)
 }
 
 static int
-send_irc_routed(struct app_state *app, const char *line, const char *text, enum snag_irc_event_kind kind,
-                bool model)
+send_operator_routed(struct app_state *app, const char *line, const char *text,
+    enum snag_irc_event_kind kind)
 {
     char error[256] = {0};
     int rc;
     bool show = app->ui.input_route.count > 1u;
 
     struct snag_buf report = {.max = 8192u};
-    rc = snag_irc_send_route(app->irc, &app->ui.input_route, model, kind,
+    rc = snag_irc_send_route(app->irc, &app->ui.input_route, false, kind,
                               text, &report, error, sizeof(error));
     if ((rc == 0 || rc == 2) && persist_session(app, error, sizeof(error)) < 0) {
         snag_buf_reset(&report);
@@ -2687,12 +2694,6 @@ send_irc_routed(struct app_state *app, const char *line, const char *text, enum 
     if (rc == 1) return snag_ui_send(&app->ui, (struct snag_ui_command){
             .kind = SNAG_UI_DRAFT, .text = line});
     return rc < 0 ? -1 : 0;
-}
-
-static int
-send_operator_routed(struct app_state *app, const char *line, const char *text, enum snag_irc_event_kind kind)
-{
-    return send_irc_routed(app, line, text, kind, false);
 }
 
 static int
@@ -2718,18 +2719,7 @@ change_nick(struct app_state *app, const char *line)
         snag_buf_free(&nick);
         return -1;
     }
-    if (model_nick && strcmp(model_nick, (const char *)nick.data) == 0) {
-        snag_buf_free(&nick);
-        return app_textf(app, SNAG_UI_HOST, "nick unchanged: %s", model_nick);
-    }
-    rc = send_irc_routed(app, line, (const char *)nick.data, SNAG_IRC_NICK, true);
-    if (rc == 0 && snag_strcpy(app->config->irc.model_nick,
-            sizeof(app->config->irc.model_nick), (const char *)nick.data))
-        app->config->irc.model_nick_implicit = false;
-    else if (rc == 0) {
-        snag_buf_free(&nick);
-        return -1;
-    }
+    rc = send_operator_routed(app, line, (const char *)nick.data, SNAG_IRC_NICK);
     snag_buf_free(&nick);
     return rc;
 }
