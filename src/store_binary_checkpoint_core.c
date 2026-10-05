@@ -195,6 +195,7 @@ check_sources(const struct snag_binary_checkpoint_sources *sources,
 
 int
 snag_binary_checkpoint_core_read(int fd, const struct snag_binary_checkpoint_frame *frame,
+    const struct snag_binary_checkpoint_index *access,
     struct snag_session *out, struct snag_binary_checkpoint_sources *out_sources)
 {
     if (fd < 0 || !frame || !out || !out_sources || !frame->boundary.next_seq ||
@@ -233,14 +234,16 @@ snag_binary_checkpoint_core_read(int fd, const struct snag_binary_checkpoint_fra
     state.usage_totals = accounting.usage_totals;
     sources.calls = calls.source;
     const struct snag_binary_anchor *anchor = &frame->boundary;
-    if (voice && snag_binary_checkpoint_voice_read(fd, anchor, voice, state.id,
+    if (voice && snag_binary_checkpoint_voice_read(fd, anchor, access, voice, state.id,
         &state.voice_history) < 0) goto done;
-    if (snag_binary_checkpoint_texts_read(fd, anchor, NULL, &sources.texts, &state.strings) < 0 ||
-        snag_binary_checkpoint_calls_read(fd, anchor, &calls, &state, &state.pending_calls) < 0 ||
-        snag_binary_checkpoint_processes_read(fd, anchor, &processes, &state,
+    if (snag_binary_checkpoint_texts_read(fd, anchor, access, &sources.texts, &state.strings) < 0 ||
+        snag_binary_checkpoint_calls_read(fd, anchor, access, &calls, &state,
+            &state.pending_calls) < 0 ||
+        snag_binary_checkpoint_processes_read(fd, anchor, access, &processes, &state,
             &state.processes) < 0 ||
-        snag_binary_checkpoint_inputs_read(fd, anchor, NULL, &inputs, &state, &input_state) < 0 ||
-        snag_binary_checkpoint_payloads_read(fd, anchor, &payloads, &state, &payload_state) < 0)
+        snag_binary_checkpoint_inputs_read(fd, anchor, access, &inputs, &state, &input_state) < 0 ||
+        snag_binary_checkpoint_payloads_read(fd, anchor, access, &payloads, &state,
+            &payload_state) < 0)
         goto done;
     if (input_state.queue_bytes != state.pending_queue_bytes ||
         input_state.steering_bytes != state.pending_steering_bytes ||
@@ -280,7 +283,7 @@ snag_binary_checkpoint_core_read(int fd, const struct snag_binary_checkpoint_fra
     payload_state = (struct snag_binary_checkpoint_payloads_state){0};
     if (copy_sources(&sources, &processes, &inputs, &payloads, &state) < 0 ||
         check_sources(&sources, &payloads, &state) < 0 ||
-        snag_binary_checkpoint_epochs_check(fd, anchor, &sources, &state) < 0) goto done;
+        snag_binary_checkpoint_epochs_check(fd, anchor, access, &sources, &state) < 0) goto done;
     *out = state;
     *out_sources = sources;
     return 0;

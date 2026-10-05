@@ -131,13 +131,15 @@ hex_equal(const unsigned char *bytes, size_t size, const char *text)
 }
 
 static int
-find_record(int fd, const struct snag_binary_anchor *through, uint64_t wanted,
+find_record(int fd, const struct snag_binary_anchor *through,
+    const struct snag_binary_checkpoint_index *access, uint64_t wanted,
     enum snag_binary_kind kind, struct snag_buf *scratch, struct snag_binary_batch *batch,
     struct snag_binary_record *record, struct snag_binary_event *event)
 {
     struct snag_binary_anchor before;
     if (!wanted || wanted >= through->next_seq) return snag_errno(EINVAL);
-    if (snag_binary_batch_find(fd, through, wanted, scratch, batch, &before) < 0) return -1;
+    if (snag_binary_checkpoint_batch_find(fd, through, access, wanted,
+            scratch, batch, &before) < 0) return -1;
     size_t offset = SNAG_BINARY_BATCH_HEADER_SIZE;
     uint64_t sequence;
     int rc;
@@ -151,6 +153,7 @@ find_record(int fd, const struct snag_binary_anchor *through, uint64_t wanted,
 
 int
 snag_binary_checkpoint_epochs_check(int fd, const struct snag_binary_anchor *through,
+    const struct snag_binary_checkpoint_index *access,
     const struct snag_binary_checkpoint_sources *sources, const struct snag_session *state)
 {
     if (fd < 0 || !through || !sources || !state ||
@@ -166,7 +169,7 @@ snag_binary_checkpoint_epochs_check(int fd, const struct snag_binary_anchor *thr
     if (sources->response_start) {
         uint64_t turn = sources->texts.slots[SNAG_BINARY_TEXT_ACTIVE_PROMPT].declaration;
         if (!turn || sources->response_start <= turn) { snag_errno(EINVAL); goto done; }
-        if (find_record(fd, through, sources->response_start, SNAG_BINARY_RESPONSE_STARTED,
+        if (find_record(fd, through, access, sources->response_start, SNAG_BINARY_RESPONSE_STARTED,
                 &scratch, &batch, &record, &event) < 0) goto done;
         const struct snag_binary_response_start *start = &event.data.response_started;
         if (!hex_equal(start->turn, sizeof(start->turn), state->active_turn_id) ||
@@ -175,7 +178,8 @@ snag_binary_checkpoint_epochs_check(int fd, const struct snag_binary_anchor *thr
     }
     if (sources->active_compact) {
         if (sources->active_compact <= sources->compact_end) { snag_errno(EINVAL); goto done; }
-        if (find_record(fd, through, sources->active_compact, SNAG_BINARY_COMPACTION_STARTED,
+        if (find_record(fd, through, access, sources->active_compact,
+                SNAG_BINARY_COMPACTION_STARTED,
                 &scratch, &batch, &record, &event) < 0) goto done;
         const struct snag_binary_compact_start *start = &event.data.compaction_started;
         if (!hex_equal(start->id, sizeof(start->id), state->active_compact_id) ||
@@ -196,13 +200,14 @@ done:
 }
 
 static int
-read_instructions(int fd, const struct snag_binary_anchor *through, uint64_t sequence,
+read_instructions(int fd, const struct snag_binary_anchor *through,
+    const struct snag_binary_checkpoint_index *access, uint64_t sequence,
     const struct snag_session *state, struct snag_buf *scratch, json_t **out)
 {
     struct snag_binary_batch batch;
     struct snag_binary_record record;
     struct snag_binary_event event;
-    if (find_record(fd, through, sequence, SNAG_BINARY_TURN_STARTED,
+    if (find_record(fd, through, access, sequence, SNAG_BINARY_TURN_STARTED,
         scratch, &batch, &record, &event) < 0) return -1;
     struct snag_binary_turn_start *turn = &event.data.started;
     if (!hex_equal(turn->id, sizeof(turn->id), state->active_turn_id) ||
@@ -213,7 +218,7 @@ read_instructions(int fd, const struct snag_binary_anchor *through, uint64_t seq
         if (reference.field != SNAG_BINARY_INPUT_INSTRUCTIONS ||
             reference.target.sequence >= sequence) return snag_errno(EINVAL);
         struct snag_binary_anchor before;
-        if (snag_binary_batch_find(fd, through, reference.target.sequence,
+        if (snag_binary_checkpoint_batch_find(fd, through, access, reference.target.sequence,
             scratch, &batch, &before) < 0) return -1;
         const unsigned char *bytes;
         if (snag_binary_input_ref_resolve(&reference.target, &batch, reference.field, &bytes) < 0 ||
@@ -225,13 +230,14 @@ read_instructions(int fd, const struct snag_binary_anchor *through, uint64_t seq
 }
 
 static int
-read_options(int fd, const struct snag_binary_anchor *through, uint64_t sequence,
+read_options(int fd, const struct snag_binary_anchor *through,
+    const struct snag_binary_checkpoint_index *access, uint64_t sequence,
     struct snag_buf *scratch, json_t **out)
 {
     struct snag_binary_batch batch;
     struct snag_binary_record record;
     struct snag_binary_event event;
-    if (find_record(fd, through, sequence, SNAG_BINARY_SESSION_OPTIONS,
+    if (find_record(fd, through, access, sequence, SNAG_BINARY_SESSION_OPTIONS,
         scratch, &batch, &record, &event) < 0) return -1;
     const char *type;
     json_t *data = NULL;
@@ -243,13 +249,14 @@ read_options(int fd, const struct snag_binary_anchor *through, uint64_t sequence
 
 static int
 read_compaction(int fd, const struct snag_binary_anchor *through,
+    const struct snag_binary_checkpoint_index *access,
     const struct snag_binary_checkpoint_payloads *view, const struct snag_session *state,
     struct snag_buf *scratch, json_t **out)
 {
     struct snag_binary_batch batch;
     struct snag_binary_record record;
     struct snag_binary_event event;
-    if (find_record(fd, through, view->compact_start, SNAG_BINARY_COMPACTION_STARTED,
+    if (find_record(fd, through, access, view->compact_start, SNAG_BINARY_COMPACTION_STARTED,
         scratch, &batch, &record, &event) < 0) return -1;
     /* Only fixed metadata survives the next scratch read. */
     struct snag_binary_compact_start start = event.data.compaction_started;
@@ -257,7 +264,7 @@ read_compaction(int fd, const struct snag_binary_anchor *through,
         start.source_seq != state->compact_seq || start.source_seq >= view->compact_start) {
         return snag_errno(EINVAL);
     }
-    if (find_record(fd, through, view->compact_end, SNAG_BINARY_COMPACTION_COMPLETED,
+    if (find_record(fd, through, access, view->compact_end, SNAG_BINARY_COMPACTION_COMPLETED,
         scratch, &batch, &record, &event) < 0) return -1;
     struct snag_binary_ref reference;
     struct snag_binary_compact_complete complete;
@@ -288,15 +295,37 @@ response_boundary(uint16_t kind)
         kind == SNAG_BINARY_TURN_INTERRUPTED || kind == SNAG_BINARY_TURN_FAILED;
 }
 
+struct response_state {
+    struct snag_session *staged;
+    uint64_t last;
+};
+
+static int
+read_fragment(void *opaque, const struct snag_binary_record *record, uint64_t sequence)
+{
+    struct response_state *state = opaque;
+    if (response_boundary(record->kind)) return snag_errno(EINVAL);
+    if (record->kind != SNAG_BINARY_RESPONSE_OUTPUT) return 0;
+    const char *type;
+    json_t *data = NULL;
+    if (record->flags) return snag_errno(EINVAL);
+    if (snag_binary_legacy_decode(record, &type, &data) < 0) return -1;
+    int rc = snag_store_reduce_event(state->staged, type, data, sequence, NULL, 0u);
+    json_decref(data);
+    if (rc == 0) state->last = sequence;
+    return rc;
+}
+
 static int
 read_response(int fd, const struct snag_binary_anchor *through,
+    const struct snag_binary_checkpoint_index *access,
     const struct snag_binary_checkpoint_payloads *view, const struct snag_session *state,
     struct snag_buf *scratch, struct snag_session *staged)
 {
     struct snag_binary_batch batch;
     struct snag_binary_record record;
     struct snag_binary_event event;
-    if (find_record(fd, through, view->response_start, SNAG_BINARY_RESPONSE_STARTED,
+    if (find_record(fd, through, access, view->response_start, SNAG_BINARY_RESPONSE_STARTED,
         scratch, &batch, &record, &event) < 0) return -1;
     const struct snag_binary_response_start *start = &event.data.response_started;
     if (!hex_equal(start->turn, sizeof(start->turn), state->active_turn_id) ||
@@ -307,41 +336,17 @@ read_response(int fd, const struct snag_binary_anchor *through,
     memcpy(staged->active_turn_id, state->active_turn_id, sizeof(staged->active_turn_id));
     memcpy(staged->active_response_id, state->active_response_id,
         sizeof(staged->active_response_id));
-    struct snag_binary_anchor anchor, next;
-    if (snag_binary_batch_find(fd, through, view->response_start,
-        scratch, &batch, &anchor) < 0) return -1;
-    while (anchor.next_seq <= view->response_end) {
-        int rc = snag_binary_batch_read(fd, through->end, &anchor, scratch, &batch, &next);
-        if (rc != 0) return rc < 0 ? -1 : snag_errno(EINVAL);
-        size_t offset = SNAG_BINARY_BATCH_HEADER_SIZE;
-        uint64_t sequence;
-        while ((rc = snag_binary_record_next(&batch, &offset, &record, &sequence)) == 0) {
-            if (sequence <= view->response_start) continue;
-            if (sequence > view->response_end) return snag_errno(EINVAL);
-            if (response_boundary(record.kind)) return snag_errno(EINVAL);
-            if (record.kind != SNAG_BINARY_RESPONSE_OUTPUT) continue;
-            const char *type;
-            json_t *data = NULL;
-            if (record.flags || snag_binary_legacy_decode(&record, &type, &data) < 0) {
-                if (record.flags) (void)snag_errno(EINVAL);
-                return -1;
-            }
-            rc = snag_store_reduce_event(staged, type, data, sequence, NULL, 0u);
-            json_decref(data);
-            if (rc < 0) return -1;
-            if (sequence == view->response_end) {
-                return staged->response_public_bytes == state->response_public_bytes ?
-                    0 : snag_errno(EINVAL);
-            }
-        }
-        if (rc < 0) return -1;
-        anchor = next;
-    }
-    return snag_errno(EINVAL);
+    struct response_state fragments = {.staged = staged};
+    if (snag_binary_checkpoint_records_read(fd, through, access,
+            view->response_start + 1u, view->response_end + 1u,
+            read_fragment, NULL, &fragments) < 0) return -1;
+    return fragments.last == view->response_end &&
+        staged->response_public_bytes == state->response_public_bytes ? 0 : snag_errno(EINVAL);
 }
 
 int
 snag_binary_checkpoint_payloads_read(int fd, const struct snag_binary_anchor *through,
+    const struct snag_binary_checkpoint_index *access,
     const struct snag_binary_checkpoint_payloads *view, const struct snag_session *state,
     struct snag_binary_checkpoint_payloads_state *out)
 {
@@ -359,13 +364,14 @@ snag_binary_checkpoint_payloads_read(int fd, const struct snag_binary_anchor *th
     if (!staged) return -1;
     snag_session_init(staged);
     int rc = -1;
-    if (view->resume_options && read_options(fd, through, view->resume_options,
+    if (view->resume_options && read_options(fd, through, access, view->resume_options,
         &scratch, &value.resume_options) < 0) goto done;
-    if (view->turn && read_instructions(fd, through, view->turn, state,
+    if (view->turn && read_instructions(fd, through, access, view->turn, state,
         &scratch, &value.instructions) < 0) goto done;
-    if (view->compact_end && read_compaction(fd, through, view, state,
+    if (view->compact_end && read_compaction(fd, through, access, view, state,
         &scratch, &value.compact_output) < 0) goto done;
-    if (view->response_end && read_response(fd, through, view, state, &scratch, staged) < 0) {
+    if (view->response_end && read_response(fd, through, access, view, state,
+            &scratch, staged) < 0) {
         goto done;
     }
     if (view->downloads_present) {
@@ -377,7 +383,7 @@ snag_binary_checkpoint_payloads_read(int fd, const struct snag_binary_anchor *th
         struct snag_binary_record record;
         struct snag_binary_event event;
         uint64_t sequence = number(view->downloads + i * 8u);
-        if (find_record(fd, through, sequence, SNAG_BINARY_DOWNLOAD_QUEUED,
+        if (find_record(fd, through, access, sequence, SNAG_BINARY_DOWNLOAD_QUEUED,
             &scratch, &batch, &record, &event) < 0) goto done;
         const char *type;
         json_t *data = NULL;

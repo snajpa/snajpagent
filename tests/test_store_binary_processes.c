@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
+#include "fixture_store_binary.h"
 #include "fs.h"
 #include "store_binary_checkpoint.h"
 
@@ -35,18 +36,25 @@ bad_decode(const void *data, size_t size)
 
 static void
 bad_read(int fd, const struct snag_binary_anchor *anchor,
+    const struct snag_binary_checkpoint_index *access,
     const struct snag_binary_checkpoint_processes *view, const struct snag_session *state)
 {
-    struct snag_process_state canary;
-    struct snag_process_state *out = &canary;
-    assert(snag_binary_checkpoint_processes_read(fd, anchor, view, state, &out) < 0);
-    assert(out == &canary);
+    for (unsigned int mode = 0u; mode < 2u; ++mode) {
+        struct snag_process_state canary;
+        struct snag_process_state *out = &canary;
+        assert(snag_binary_checkpoint_processes_read(fd, anchor, mode ? access : NULL, view,
+            state, &out) < 0);
+        assert(out == &canary);
+    }
 }
 
 void
 test_store_binary_processes_state(int fd, const struct snag_binary_anchor *anchor,
     const struct snag_binary_checkpoint_sources *sources, const struct snag_session *state)
 {
+    struct snag_buf access_bytes = {.max = SIZE_MAX};
+    struct snag_binary_checkpoint_index access;
+    binary_fixture_access(fd, anchor, &access_bytes, &access);
     assert(sources->process_count == state->process_count);
     struct snag_buf wire = {.max = SIZE_MAX};
     assert(!snag_binary_checkpoint_processes_encode(&wire, sources, state));
@@ -55,44 +63,49 @@ test_store_binary_processes_state(int fd, const struct snag_binary_anchor *ancho
     assert(!snag_binary_checkpoint_processes_decode(wire.data, wire.len, &view));
     struct snag_process_state *restored = NULL;
     int64_t position = snag_seek(fd, 0, SEEK_CUR);
-    assert(!snag_binary_checkpoint_processes_read(fd, anchor, &view, state, &restored));
-    for (size_t i = 0u; i < view.count; ++i) same_process(&restored[i], &state->processes[i]);
-    if (!view.count) assert(!restored);
-    free(restored);
-    bad_read(-1, anchor, &view, state);
-    bad_read(fd, NULL, &view, state);
-    bad_read(fd, anchor, NULL, state);
-    bad_read(fd, anchor, &view, NULL);
-    assert(snag_binary_checkpoint_processes_read(fd, anchor, &view, state, NULL) < 0);
+    for (unsigned int mode = 0u; mode < 2u; ++mode) {
+        assert(!snag_binary_checkpoint_processes_read(fd, anchor, mode ? &access : NULL, &view,
+            state, &restored));
+        for (size_t i = 0u; i < view.count; ++i) same_process(&restored[i], &state->processes[i]);
+        if (!view.count) assert(!restored);
+        free(restored);
+        restored = NULL;
+    }
+    bad_read(-1, anchor, &access, &view, state);
+    bad_read(fd, NULL, &access, &view, state);
+    bad_read(fd, anchor, &access, NULL, state);
+    bad_read(fd, anchor, &access, &view, NULL);
+    assert(snag_binary_checkpoint_processes_read(fd, anchor, NULL, &view, state, NULL) < 0);
     if (view.count) {
         struct snag_session wrong = *state;
         wrong.active_turn_id[0] = wrong.active_turn_id[0] == 'a' ? 'b' : 'a';
-        bad_read(fd, anchor, &view, &wrong);
+        bad_read(fd, anchor, &access, &view, &wrong);
         wrong = *state;
         wrong.active_turn = false;
-        bad_read(fd, anchor, &view, &wrong);
+        bad_read(fd, anchor, &access, &view, &wrong);
         struct snag_binary_anchor early = *anchor;
         early.next_seq = sources->processes[0].started;
-        bad_read(fd, &early, &view, state);
+        bad_read(fd, &early, &access, &view, state);
         struct snag_binary_checkpoint_processes bad = view;
         bad.data = NULL;
-        bad_read(fd, anchor, &bad, state);
+        bad_read(fd, anchor, &access, &bad, state);
         bad = view;
         bad.count = SIZE_MAX;
-        bad_read(fd, anchor, &bad, state);
+        bad_read(fd, anchor, &access, &bad, state);
         unsigned char *changed = malloc(wire.len);
         assert(changed);
         memcpy(changed, wire.data, wire.len);
         bad = view;
         bad.data = changed + 10u;
         changed[10u + 32u] ^= 1u; /* Canonical cwd field offset. */
-        bad_read(fd, anchor, &bad, state);
+        bad_read(fd, anchor, &access, &bad, state);
         memcpy(changed, wire.data, wire.len);
         memset(changed + 10u + 40u, 255, 56u);
         for (unsigned int flags = 0u; flags < 4u; ++flags) {
             changed[106] = (unsigned char)flags;
             assert(!snag_binary_checkpoint_processes_decode(changed, wire.len, &bad));
-            assert(!snag_binary_checkpoint_processes_read(fd, anchor, &bad, state, &restored));
+            assert(!snag_binary_checkpoint_processes_read(fd, anchor, NULL, &bad,
+                state, &restored));
             assert(restored[0].output_bytes[0] == UINT64_MAX);
             assert(restored[0].output_bytes[1] == UINT64_MAX);
             assert(restored[0].collected_bytes[0] == UINT64_MAX);
@@ -110,11 +123,27 @@ test_store_binary_processes_state(int fd, const struct snag_binary_anchor *ancho
         memset(&canary, 0xa5, sizeof(canary));
         saved = canary;
         bad_source.handle[0] = bad_source.handle[0] == 'a' ? 'b' : 'a';
-        assert(snag_binary_checkpoint_process_source_read(fd, anchor, &bad_source, state,
+        assert(snag_binary_checkpoint_process_source_read(fd, anchor, NULL, &bad_source, state,
             &canary) < 0);
         assert(!memcmp(&canary, &saved, sizeof(canary)));
     }
     assert(snag_seek(fd, 0, SEEK_CUR) == position);
+    for (size_t i = 0u; i < sources->process_count; ++i) {
+        uint64_t required[] = {sources->processes[i].started, sources->processes[i].call.graph,
+            sources->processes[i].call.cwd.declaration};
+        for (size_t j = 0u; j < sizeof(required) / sizeof(required[0]); ++j) {
+            struct snag_buf omitted = {.max = SIZE_MAX};
+            struct snag_binary_checkpoint_index missing;
+            binary_fixture_access_omit(&access, required[j], &omitted, &missing);
+            struct snag_process_state canary;
+            struct snag_process_state *output = &canary;
+            errno = 0;
+            assert(snag_binary_checkpoint_processes_read(fd, anchor, &missing,
+                &view, state, &output) < 0 && errno == ENOENT && output == &canary);
+            snag_buf_free(&omitted);
+        }
+    }
+    snag_buf_free(&access_bytes);
     snag_buf_free(&wire);
 }
 

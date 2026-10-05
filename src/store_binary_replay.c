@@ -554,6 +554,7 @@ resolve_voice(const struct replay_context *context, const struct snag_binary_rec
 
 int
 snag_binary_checkpoint_voice_read(int fd, const struct snag_binary_anchor *anchor,
+    const struct snag_binary_checkpoint_index *access,
     uint64_t sequence, const char *id, struct snag_voice_history_root *out)
 {
     if (!anchor || !out || !snag_hex_is_lower(id, SNAG_ID_HEX_LEN) ||
@@ -565,7 +566,8 @@ snag_binary_checkpoint_voice_read(int fd, const struct snag_binary_anchor *ancho
     struct snag_binary_event event;
     size_t offset = SNAG_BINARY_BATCH_HEADER_SIZE;
     uint64_t found;
-    int rc = snag_binary_batch_find(fd, anchor, sequence, &scratch, &batch, &before);
+    int rc = snag_binary_checkpoint_batch_find(fd, anchor, access, sequence,
+        &scratch, &batch, &before);
     if (rc < 0) goto done;
     while ((rc = snag_binary_record_next(&batch, &offset, &record, &found)) == 0) {
         if (found == sequence) break;
@@ -574,7 +576,8 @@ snag_binary_checkpoint_voice_read(int fd, const struct snag_binary_anchor *ancho
         rc = snag_errno(EINVAL);
         goto done;
     }
-    struct replay_context context = {.fd = fd, .through = *anchor, .sequence = sequence};
+    struct replay_context context = {.fd = fd, .through = *anchor, .sequence = sequence,
+        .access = access};
     rc = resolve_voice(&context, &record, &event);
     if (rc < 0) goto done;
     const struct snag_binary_voice_adopted *value = &event.data.voice_transfer_adopted;

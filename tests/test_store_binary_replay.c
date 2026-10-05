@@ -3431,7 +3431,7 @@ test_process_origins(struct snag_store *store, const char *cwd)
     struct snag_process_state canary, saved;
     memset(&canary, 0xa5, sizeof(canary));
     saved = canary;
-    assert(snag_binary_checkpoint_process_source_read(output, &result.native.verified,
+    assert(snag_binary_checkpoint_process_source_read(output, &result.native.verified, NULL,
         &bad, &restored, &canary) < 0);
     assert(!memcmp(&canary, &saved, sizeof(canary)));
     snag_response_graph_free(&graph);
@@ -3547,7 +3547,7 @@ test_legacy_process_origin(struct snag_store *store, const char *cwd)
     struct snag_process_state process, saved;
     memset(&process, 0xa5, sizeof(process));
     saved = process;
-    assert(snag_binary_checkpoint_process_source_read(source.log_fd, &recovery.verified,
+    assert(snag_binary_checkpoint_process_source_read(source.log_fd, &recovery.verified, NULL,
         &origins.processes[0], &wrong, &process) < 0);
     assert(!memcmp(&process, &saved, sizeof(process)));
     snag_binary_checkpoint_sources_free(&origins);
@@ -3827,7 +3827,7 @@ test_voice_adoption(struct snag_store *store, const char *cwd, unsigned int bad)
             source.lock_fd = original.lock_fd;
             prefix_matches(&source, &restored, &result.native.verified);
             struct snag_voice_history_root root = restored.voice_history, previous = root;
-            assert(snag_binary_checkpoint_voice_read(fd, &result.native.verified,
+            assert(snag_binary_checkpoint_voice_read(fd, &result.native.verified, NULL,
                 root.adopted_seq, OTHER_ID, &root) < 0);
             assert(!memcmp(&root, &previous, sizeof(root)));
         }

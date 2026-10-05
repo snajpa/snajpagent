@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
+#include "fixture_store_binary.h"
 #include "fs.h"
 #include "json.h"
 #include "store_binary_checkpoint.h"
@@ -122,7 +123,7 @@ reject(int fd, const struct snag_binary_checkpoint_frame *frame)
     memset(&sources, 0x5a, sizeof(sources));
     memcpy(&saved, &sources, sizeof(saved));
     int64_t position = snag_seek(fd, 0, SEEK_CUR);
-    assert(snag_binary_checkpoint_core_read(fd, frame, &state, &sources) < 0);
+    assert(snag_binary_checkpoint_core_read(fd, frame, NULL, &state, &sources) < 0);
     assert(!memcmp(&before, &state, sizeof(state)));
     assert(!memcmp(&saved, &sources, sizeof(sources)));
     assert(position == snag_seek(fd, 0, SEEK_CUR));
@@ -284,6 +285,19 @@ test_store_binary_core_state(int fd, const struct snag_binary_anchor *anchor,
     assert(!snag_binary_checkpoint_frame_encode(&encoded, &frame));
     assert(!snag_binary_checkpoint_frame_decode(encoded.data, encoded.len,
         &frame.identity, anchor, &frame));
+    struct snag_buf access_bytes = {.max = SIZE_MAX};
+    struct snag_binary_checkpoint_index access;
+    binary_fixture_access(fd, anchor, &access_bytes, &access);
+    struct snag_session indexed;
+    snag_session_init(&indexed);
+    struct snag_binary_checkpoint_sources indexed_sources = {0};
+    int64_t indexed_position = snag_seek(fd, 0, SEEK_CUR);
+    assert(!snag_binary_checkpoint_core_read(fd, &frame, &access, &indexed, &indexed_sources));
+    assert(indexed_position == snag_seek(fd, 0, SEEK_CUR));
+    snag_buf_free(&access_bytes);
+    same(state, &indexed);
+    snag_binary_checkpoint_sources_free(&indexed_sources);
+    snag_session_close(&indexed);
     struct snag_session restored, old;
     snag_session_init(&restored);
     restored.strings = json_pack("{s:s}", "keep", "old owner");
@@ -291,7 +305,7 @@ test_store_binary_core_state(int fd, const struct snag_binary_anchor *anchor,
     old = restored;
     struct snag_binary_checkpoint_sources recovered = {0};
     int64_t position = snag_seek(fd, 0, SEEK_CUR);
-    assert(!snag_binary_checkpoint_core_read(fd, &frame, &restored, &recovered));
+    assert(!snag_binary_checkpoint_core_read(fd, &frame, NULL, &restored, &recovered));
     assert(!strcmp(snag_json_string(old.strings, "keep"), "old owner"));
     snag_session_close(&old);
     assert(position == snag_seek(fd, 0, SEEK_CUR));

@@ -2461,3 +2461,28 @@ Checked September 27, 2026:
 These sources support the persistence primitives and failure model. The file
 layout and scheduling policy above are this project's engineering decisions;
 the references do not validate an implementation that has not been built.
+
+## Core access materialization
+
+The read-only core assembler carries one optional pinned access view through
+texts, pending inputs, calls, processes, voice adoption, epoch declarations and
+retained payloads. Canonical accepting records and original literal fields use
+point lookup; graph transformations and response output use the half-open range
+iterator. Graph order, turn/response/cycle ownership, graph-time cwd, transformation
+digest chains, exact literals and native voice-source checks retain their source
+validation. The retained response requires its final output record to be visited
+and its byte total to match the snapshot.
+
+The enclosing consumer supplies complete working-set and causal-range closure,
+common identity/ancestry, immutable bytes and a bounded newer suffix. A missing
+old point fails `ENOENT`. Sparse ranges require complete producer closure: an
+unlisted mutation or boundary cannot be inferred from absence. The independent
+prefix oracle passes NULL access explicitly. Core outputs remain provisional,
+privately owned and unchanged on failure; joint provider/core admission and runtime
+resource/ownership adoption remain separate integration work.
+
+Fixture access views are built from canonical prefix bytes, independently of
+live closure selection. Indexed and unindexed readers compare to the original
+semantic state, exercise malformed metadata in both paths and remove mandatory
+point entries to check atomic failure and preservation of the read descriptor's
+position. The runtime backend remains JSONL pending native backend integration.

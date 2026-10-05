@@ -301,7 +301,7 @@ checkpoint_matches(struct snag_session *source, struct snag_session *expected,
             struct snag_session candidate;
             struct snag_binary_checkpoint_sources candidate_sources = {0};
             snag_session_init(&candidate);
-            assert(!snag_binary_checkpoint_core_read(source->log_fd, &wrong,
+            assert(!snag_binary_checkpoint_core_read(source->log_fd, &wrong, NULL,
                 &candidate, &candidate_sources));
             assert(candidate.voice_history.adopted_seq == (stale ? previous : 0u));
             snag_session_close(&candidate);

@@ -130,7 +130,7 @@ verify_checkpoint(int fd, const struct snag_binary_anchor *boundary,
     /* Keep strict replay as the source/epoch authority, while materializing the
      * returned state from the candidate sections. Payload values are shared from
      * its verified canonical pool; no weaker inert record decoder is needed. */
-    if (snag_binary_checkpoint_core_read(fd, &frame, &loaded, &loaded_origins) < 0 ||
+    if (snag_binary_checkpoint_core_read(fd, &frame, NULL, &loaded, &loaded_origins) < 0 ||
         snag_binary_checkpoint_provider_materialize(frame.provider.data, frame.provider.size,
             recent, history, &events, &history_events) < 0) goto done;
     capture = snag_context_capture_new(control);

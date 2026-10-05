@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "store_binary_checkpoint.h"
+#include "fixture_store_binary.h"
 #include "fs.h"
 #include "store_binary_legacy.h"
 
@@ -35,120 +36,148 @@ bad_decode(const void *data, size_t size)
 
 static void
 bad_read(int fd, const struct snag_binary_anchor *anchor,
+    const struct snag_binary_checkpoint_index *access,
     const struct snag_binary_checkpoint_payloads *view, const struct snag_session *state)
 {
-    struct snag_binary_checkpoint_payloads_state before, after;
-    memset(&before, 0x6d, sizeof(before));
-    after = before;
-    assert(snag_binary_checkpoint_payloads_read(fd, anchor, view, state, &after) < 0);
-    assert(!memcmp(&before, &after, sizeof(before)));
+    for (unsigned int mode = 0u; mode < 2u; ++mode) {
+        struct snag_binary_checkpoint_payloads_state before, after;
+        memset(&before, 0x6d, sizeof(before));
+        after = before;
+        assert(snag_binary_checkpoint_payloads_read(fd, anchor, mode ? access : NULL, view,
+            state, &after) < 0);
+        assert(!memcmp(&before, &after, sizeof(before)));
+    }
 }
 
 void
 test_store_binary_payloads_state(int fd, const struct snag_binary_anchor *anchor,
     const struct snag_binary_checkpoint_sources *sources, const struct snag_session *state)
 {
+    struct snag_buf access_bytes = {.max = SIZE_MAX};
+    struct snag_binary_checkpoint_index access;
+    binary_fixture_access(fd, anchor, &access_bytes, &access);
     struct snag_buf bytes = {.max = SIZE_MAX};
     assert(!snag_binary_checkpoint_payloads_encode(&bytes, sources, state));
     struct snag_binary_checkpoint_payloads view;
     assert(!snag_binary_checkpoint_payloads_decode(bytes.data, bytes.len, &view));
     struct snag_binary_checkpoint_payloads_state restored = {0};
     int64_t position = snag_seek(fd, 0, SEEK_CUR);
-    assert(!snag_binary_checkpoint_payloads_read(fd, anchor, &view, state, &restored));
-    assert(snag_seek(fd, 0, SEEK_CUR) == position);
-    assert(equal_json(restored.instructions, state->active_instructions));
-    assert(equal_json(restored.compact_output, state->compact_output));
-    assert(equal_json(restored.response_public, state->response_public));
-    assert(equal_json(restored.downloads, state->download_queue));
-    assert(equal_json(restored.resume_options, json_object_get(state->strings, "resume_options")));
-    assert(restored.response_public_bytes == state->response_public_bytes);
-    snag_binary_checkpoint_payloads_free(&restored);
-    assert(!restored.instructions && !restored.compact_output && !restored.response_public &&
-        !restored.downloads && !restored.response_public_bytes && !restored.resume_options);
-    snag_binary_checkpoint_payloads_free(&restored);
-    snag_binary_checkpoint_payloads_free(NULL);
-    bad_read(-1, anchor, &view, state);
-    bad_read(fd, NULL, &view, state);
-    bad_read(fd, anchor, NULL, state);
-    bad_read(fd, anchor, &view, NULL);
+    for (unsigned int mode = 0u; mode < 2u; ++mode) {
+        assert(!snag_binary_checkpoint_payloads_read(fd, anchor, mode ? &access : NULL, &view,
+            state, &restored));
+        assert(snag_seek(fd, 0, SEEK_CUR) == position);
+        assert(equal_json(restored.instructions, state->active_instructions));
+        assert(equal_json(restored.compact_output, state->compact_output));
+        assert(equal_json(restored.response_public, state->response_public));
+        assert(equal_json(restored.downloads, state->download_queue));
+        assert(equal_json(restored.resume_options,
+            json_object_get(state->strings, "resume_options")));
+        assert(restored.response_public_bytes == state->response_public_bytes);
+        snag_binary_checkpoint_payloads_free(&restored);
+        assert(!restored.instructions && !restored.compact_output && !restored.response_public &&
+            !restored.downloads && !restored.response_public_bytes && !restored.resume_options);
+        snag_binary_checkpoint_payloads_free(&restored);
+        snag_binary_checkpoint_payloads_free(NULL);
+    }
+    bad_read(-1, anchor, &access, &view, state);
+    bad_read(fd, NULL, &access, &view, state);
+    bad_read(fd, anchor, &access, NULL, state);
+    bad_read(fd, anchor, &access, &view, NULL);
     struct snag_binary_anchor early = *anchor;
     early.next_seq = 1u;
-    bad_read(fd, &early, &view, state);
+    bad_read(fd, &early, &access, &view, state);
     struct snag_binary_checkpoint_payloads bad = view;
     bad.resume_options = anchor->next_seq;
-    bad_read(fd, anchor, &bad, state);
+    bad_read(fd, anchor, &access, &bad, state);
     bad = view;
     bad.resume_options = 1u;
-    bad_read(fd, anchor, &bad, state);
+    bad_read(fd, anchor, &access, &bad, state);
     bad = view;
     bad.download_count = SIZE_MAX;
-    bad_read(fd, anchor, &bad, state);
+    bad_read(fd, anchor, &access, &bad, state);
     struct snag_session changed = *state;
     changed.active_turn = !state->active_turn;
-    bad_read(fd, anchor, &view, &changed);
+    bad_read(fd, anchor, &access, &view, &changed);
     if (view.turn) {
         bad = view;
         bad.turn = 1u;
-        bad_read(fd, anchor, &bad, state);
+        bad_read(fd, anchor, &access, &bad, state);
         changed = *state;
         changed.active_turn_id[0] = state->active_turn_id[0] == 'a' ? 'b' : 'a';
-        bad_read(fd, anchor, &view, &changed);
+        bad_read(fd, anchor, &access, &view, &changed);
         changed = *state;
         changed.turn_count ^= 1u;
-        bad_read(fd, anchor, &view, &changed);
+        bad_read(fd, anchor, &access, &view, &changed);
     }
     if (view.compact_end) {
         bad = view;
         bad.compact_start = 1u;
-        bad_read(fd, anchor, &bad, state);
+        bad_read(fd, anchor, &access, &bad, state);
         if (view.compact_start > 2u) {
             bad.compact_start = 2u; /* Earlier valid start, even with a reused ID. */
-            bad_read(fd, anchor, &bad, state);
+            bad_read(fd, anchor, &access, &bad, state);
         }
         bad = view;
         bad.compact_end = anchor->next_seq;
-        bad_read(fd, anchor, &bad, state);
+        bad_read(fd, anchor, &access, &bad, state);
         changed = *state;
         changed.compact_seq ^= 1u;
-        bad_read(fd, anchor, &view, &changed);
+        bad_read(fd, anchor, &access, &view, &changed);
         changed = *state;
         changed.compact_id[0] = state->compact_id[0] == 'a' ? 'b' : 'a';
-        bad_read(fd, anchor, &view, &changed);
+        bad_read(fd, anchor, &access, &view, &changed);
         changed = *state;
         memcpy(changed.compact_scope,
             "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd", 65u);
         if (strcmp(changed.compact_scope, state->compact_scope)) {
-            bad_read(fd, anchor, &view, &changed);
+            bad_read(fd, anchor, &access, &view, &changed);
         }
     }
     if (view.response_end) {
         bad = view;
         bad.response_start = view.turn;
-        bad_read(fd, anchor, &bad, state);
+        bad_read(fd, anchor, &access, &bad, state);
         bad = view;
         bad.response_end = anchor->next_seq;
-        bad_read(fd, anchor, &bad, state);
+        bad_read(fd, anchor, &access, &bad, state);
         changed = *state;
         changed.response_public_bytes ^= 1u;
-        bad_read(fd, anchor, &view, &changed);
+        bad_read(fd, anchor, &access, &view, &changed);
         changed = *state;
         changed.active_response_id[0] = '\0';
-        bad_read(fd, anchor, &view, &changed);
+        bad_read(fd, anchor, &access, &view, &changed);
         changed = *state;
         changed.active_cycle ^= 1u;
-        bad_read(fd, anchor, &view, &changed);
+        bad_read(fd, anchor, &access, &view, &changed);
         changed = *state;
         changed.active_response_id[0] = state->active_response_id[0] == 'a' ? 'b' : 'a';
-        bad_read(fd, anchor, &view, &changed);
+        bad_read(fd, anchor, &access, &view, &changed);
     }
     if (view.download_count) {
         const unsigned char wrong[8] = {1u};
         bad = view;
         bad.downloads = wrong;
         bad.download_count = 1u;
-        bad_read(fd, anchor, &bad, state);
+        bad_read(fd, anchor, &access, &bad, state);
     }
     assert(snag_seek(fd, 0, SEEK_CUR) == position);
+    uint64_t required[] = {view.turn, view.resume_options, view.compact_start,
+        view.compact_end, view.response_start};
+    for (size_t i = 0u; i < sizeof(required) / sizeof(required[0]); ++i) {
+        if (!required[i]) continue;
+        struct snag_buf omitted = {.max = SIZE_MAX};
+        struct snag_binary_checkpoint_index missing;
+        binary_fixture_access_omit(&access, required[i], &omitted, &missing);
+        struct snag_binary_checkpoint_payloads_state output;
+        memset(&output, 0xa5, sizeof(output));
+        struct snag_binary_checkpoint_payloads_state saved = output;
+        errno = 0;
+        assert(snag_binary_checkpoint_payloads_read(fd, anchor, &missing,
+            &view, state, &output) < 0 && errno == ENOENT &&
+            !memcmp(&output, &saved, sizeof(output)));
+        snag_buf_free(&omitted);
+    }
+    snag_buf_free(&access_bytes);
     snag_buf_free(&bytes);
 }
 

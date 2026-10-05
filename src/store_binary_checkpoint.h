@@ -154,15 +154,19 @@ int snag_binary_checkpoint_calls_decode(const void *, size_t,
  * and canonical graph-time cwd. Return a new owned array on success, leaving
  * the caller's previous *out owned by the caller. Empty calls yield NULL.
  * The anchor must already authenticate the immutable same-journal prefix.
+ * Access pins the complete graph/transform/literal closure; NULL retains the
+ * independent contiguous oracle. Missing old point sources fail ENOENT.
  * Source checks do not prove current snapshot membership or status authority;
  * complete checkpoint validation/adoption remains the enclosing consumer's job. */
 int snag_binary_checkpoint_calls_read(int fd, const struct snag_binary_anchor *,
+    const struct snag_binary_checkpoint_index *,
     const struct snag_binary_checkpoint_calls *, const struct snag_session *,
     struct snag_pending_call **out);
 
 /* Derive a process's immutable handle/labels from its accepting tool start and
  * original graph. Status, counters and journal scan caches remain zero. */
 int snag_binary_checkpoint_process_source_read(int fd, const struct snag_binary_anchor *,
+    const struct snag_binary_checkpoint_index *,
     const struct snag_binary_checkpoint_process_source *, const struct snag_session *,
     struct snag_process_state *out);
 
@@ -185,6 +189,7 @@ int snag_binary_checkpoint_processes_decode(const void *, size_t,
 int snag_binary_checkpoint_processes_origin(const struct snag_binary_checkpoint_processes *,
     size_t index, struct snag_binary_checkpoint_process_source *);
 int snag_binary_checkpoint_processes_read(int fd, const struct snag_binary_anchor *,
+    const struct snag_binary_checkpoint_index *,
     const struct snag_binary_checkpoint_processes *, const struct snag_session *,
     struct snag_process_state **out);
 
@@ -252,6 +257,7 @@ int snag_binary_checkpoint_payloads_encode(struct snag_buf *,
 int snag_binary_checkpoint_payloads_decode(const void *, size_t,
     struct snag_binary_checkpoint_payloads *);
 int snag_binary_checkpoint_payloads_read(int fd, const struct snag_binary_anchor *,
+    const struct snag_binary_checkpoint_index *,
     const struct snag_binary_checkpoint_payloads *, const struct snag_session *,
     struct snag_binary_checkpoint_payloads_state *);
 void snag_binary_checkpoint_payloads_free(struct snag_binary_checkpoint_payloads_state *);
@@ -259,19 +265,24 @@ void snag_binary_checkpoint_payloads_free(struct snag_binary_checkpoint_payloads
 /* Check accepting response/active-compaction declarations against provisional
  * control state. An empty retained stream still has a response epoch. */
 int snag_binary_checkpoint_epochs_check(int fd, const struct snag_binary_anchor *,
+    const struct snag_binary_checkpoint_index *,
     const struct snag_binary_checkpoint_sources *, const struct snag_session *);
 
 /* Resolve an adoption and its logical begin within a verified native boundary.
  * Returns a fresh physical cursor; never accepts stored JSONL coordinates.
  * Snapshot membership/authority belongs to the enclosing checkpoint consumer. */
 int snag_binary_checkpoint_voice_read(int fd, const struct snag_binary_anchor *,
+    const struct snag_binary_checkpoint_index *,
     uint64_t sequence, const char *session_id, struct snag_voice_history_root *out);
 
 /* Version-2 core candidate: seven field-shaped components, an adoption and two accepting
  * epochs. Encode appends atomically, including when inputs borrow its buffer.
  * Read requires a frame already decoded against an independently authenticated
  * identity/boundary in this immutable journal. It returns new state-only and
- * source ownership together; failure leaves both outputs untouched. Callers
+ * source ownership together; failure leaves both outputs untouched. Pinned
+ * access supplies the complete working-set and causal-range closure, with its
+ * common identity/ancestry and bounded newer suffix established by the caller.
+ * NULL access retains the independent prefix oracle. Callers
  * release old outputs separately, and close the returned session normally.
  *
  * This is provisional assembly, not resume authority. Latest membership and
@@ -283,6 +294,7 @@ int snag_binary_checkpoint_voice_read(int fd, const struct snag_binary_anchor *,
 int snag_binary_checkpoint_core_encode(struct snag_buf *,
     const struct snag_binary_checkpoint_sources *, const struct snag_session *);
 int snag_binary_checkpoint_core_read(int fd, const struct snag_binary_checkpoint_frame *,
+    const struct snag_binary_checkpoint_index *,
     struct snag_session *, struct snag_binary_checkpoint_sources *);
 
 #endif

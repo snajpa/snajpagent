@@ -3,6 +3,11 @@
 # Changelog
 
 ## Unreleased
+- Native core snapshot assembly propagates pinned access through graph, process,
+  voice, epoch and payload readers. Graph transforms and retained response
+  fragments use selected old batches and the newer contiguous suffix; mandatory
+  old point sources fail without lifetime fallback. Runtime integration remains
+  pending.
 - A cancellable native checkpoint range iterator reads listed old working-set
   records by physical batch and newer suffix records contiguously. It checks
   exact canonical positions, kinds and typed turn counts; callers stage visited

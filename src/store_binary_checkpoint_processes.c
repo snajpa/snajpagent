@@ -151,6 +151,7 @@ snag_binary_checkpoint_processes_origin(const struct snag_binary_checkpoint_proc
 
 int
 snag_binary_checkpoint_processes_read(int fd, const struct snag_binary_anchor *anchor,
+    const struct snag_binary_checkpoint_index *access,
     const struct snag_binary_checkpoint_processes *view, const struct snag_session *state,
     struct snag_process_state **out)
 {
@@ -166,7 +167,7 @@ snag_binary_checkpoint_processes_read(int fd, const struct snag_binary_anchor *a
         struct snag_binary_checkpoint_process_source source;
         struct snag_process_state metadata;
         if (read_entry(view->data + i * PROCESS_ENTRY, previous, &source, &metadata) < 0 ||
-            snag_binary_checkpoint_process_source_read(fd, anchor, &source, state,
+            snag_binary_checkpoint_process_source_read(fd, anchor, access, &source, state,
                 &processes[i]) < 0) goto fail;
         for (size_t j = 0u; j < i; ++j) {
             if (!strcmp(processes[j].handle, processes[i].handle)) {

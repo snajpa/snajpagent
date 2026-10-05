@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
+#include "fixture_store_binary.h"
 #include "fs.h"
 #include "store_binary_checkpoint.h"
 #include "store_internal.h"
@@ -34,18 +35,25 @@ bad_decode(const void *data, size_t size)
 
 static void
 bad_read(int fd, const struct snag_binary_anchor *anchor,
+    const struct snag_binary_checkpoint_index *access,
     const struct snag_binary_checkpoint_calls *calls, const struct snag_session *state)
 {
-    struct snag_pending_call canary;
-    struct snag_pending_call *out = &canary;
-    assert(snag_binary_checkpoint_calls_read(fd, anchor, calls, state, &out) < 0);
-    assert(out == &canary);
+    for (unsigned int mode = 0u; mode < 2u; ++mode) {
+        struct snag_pending_call canary;
+        struct snag_pending_call *out = &canary;
+        assert(snag_binary_checkpoint_calls_read(fd, anchor, mode ? access : NULL, calls,
+            state, &out) < 0);
+        assert(out == &canary);
+    }
 }
 
 void
 test_store_binary_calls_state(int fd, const struct snag_binary_anchor *anchor,
     const struct snag_binary_checkpoint_call_source *source, const struct snag_session *state)
 {
+    struct snag_buf access_bytes = {.max = SIZE_MAX};
+    struct snag_binary_checkpoint_index access;
+    binary_fixture_access(fd, anchor, &access_bytes, &access);
     struct snag_buf encoded = {.max = SIZE_MAX};
     assert(!snag_binary_checkpoint_calls_encode(&encoded, source, state));
     assert(encoded.len == 42u + state->pending_call_count);
@@ -54,39 +62,44 @@ test_store_binary_calls_state(int fd, const struct snag_binary_anchor *anchor,
     assert(view.count == state->pending_call_count);
     struct snag_pending_call *calls = NULL;
     int64_t position = snag_seek(fd, 0, SEEK_CUR);
-    assert(!snag_binary_checkpoint_calls_read(fd, anchor, &view, state, &calls));
-    for (size_t i = 0u; i < view.count; ++i) same_call(&calls[i], &state->pending_calls[i]);
-    assert(snag_seek(fd, 0, SEEK_CUR) == position);
-    bad_read(-1, anchor, &view, state);
-    bad_read(fd, NULL, &view, state);
-    bad_read(fd, anchor, NULL, state);
-    bad_read(fd, anchor, &view, NULL);
-    assert(snag_binary_checkpoint_calls_read(fd, anchor, &view, state, NULL) < 0);
+    for (unsigned int mode = 0u; mode < 2u; ++mode) {
+        assert(!snag_binary_checkpoint_calls_read(fd, anchor, mode ? &access : NULL, &view,
+            state, &calls));
+        for (size_t i = 0u; i < view.count; ++i) same_call(&calls[i], &state->pending_calls[i]);
+        assert(snag_seek(fd, 0, SEEK_CUR) == position);
+        free(calls);
+        calls = NULL;
+    }
+    bad_read(-1, anchor, &access, &view, state);
+    bad_read(fd, NULL, &access, &view, state);
+    bad_read(fd, anchor, &access, NULL, state);
+    bad_read(fd, anchor, &access, &view, NULL);
+    assert(snag_binary_checkpoint_calls_read(fd, anchor, NULL, &view, state, NULL) < 0);
     if (view.count) {
         struct snag_session wrong = *state;
         wrong.active_cycle = state->active_cycle == UINT32_MAX ? 0u : state->active_cycle + 1u;
-        bad_read(fd, anchor, &view, &wrong);
+        bad_read(fd, anchor, &access, &view, &wrong);
         wrong = *state;
         wrong.active_turn_id[0] = wrong.active_turn_id[0] == 'a' ? 'b' : 'a';
-        bad_read(fd, anchor, &view, &wrong);
+        bad_read(fd, anchor, &access, &view, &wrong);
         wrong = *state;
         wrong.active_response_id[0] = wrong.active_response_id[0] == 'a' ? 'b' : 'a';
-        bad_read(fd, anchor, &view, &wrong);
+        bad_read(fd, anchor, &access, &view, &wrong);
         struct snag_binary_checkpoint_calls bad = view;
         ++bad.source.cwd.original.target.offset;
-        bad_read(fd, anchor, &bad, state);
+        bad_read(fd, anchor, &access, &bad, state);
         bad = view;
         --bad.source.cwd.original.target.size;
-        bad_read(fd, anchor, &bad, state);
+        bad_read(fd, anchor, &access, &bad, state);
         bad = view;
         bad.source.graph = anchor->next_seq;
-        bad_read(fd, anchor, &bad, state);
+        bad_read(fd, anchor, &access, &bad, state);
         bad = view;
         bad.source.graph = bad.source.cwd.declaration;
-        bad_read(fd, anchor, &bad, state);
+        bad_read(fd, anchor, &access, &bad, state);
         bad = view;
         bad.flags = NULL;
-        bad_read(fd, anchor, &bad, state);
+        bad_read(fd, anchor, &access, &bad, state);
         unsigned char *flags = malloc(view.count + 1u);
         assert(flags);
         memcpy(flags, view.flags, view.count);
@@ -94,17 +107,30 @@ test_store_binary_calls_state(int fd, const struct snag_binary_anchor *anchor,
         bad = view;
         bad.flags = flags;
         ++bad.count;
-        bad_read(fd, anchor, &bad, state);
+        bad_read(fd, anchor, &access, &bad, state);
         bad.count = view.count - 1u;
-        bad_read(fd, anchor, &bad, state);
+        bad_read(fd, anchor, &access, &bad, state);
         bad.count = view.count;
         flags[0] = 4u;
-        bad_read(fd, anchor, &bad, state);
+        bad_read(fd, anchor, &access, &bad, state);
         free(flags);
     } else {
-        assert(!calls && !source->graph);
+        assert(!source->graph);
     }
     free(calls);
+    uint64_t required[] = {view.source.cwd.declaration, view.source.graph};
+    for (size_t i = 0u; view.count && i < sizeof(required) / sizeof(required[0]); ++i) {
+        struct snag_buf omitted = {.max = SIZE_MAX};
+        struct snag_binary_checkpoint_index missing;
+        binary_fixture_access_omit(&access, required[i], &omitted, &missing);
+        struct snag_pending_call canary;
+        struct snag_pending_call *output = &canary;
+        errno = 0;
+        assert(snag_binary_checkpoint_calls_read(fd, anchor, &missing,
+            &view, state, &output) < 0 && errno == ENOENT && output == &canary);
+        snag_buf_free(&omitted);
+    }
+    snag_buf_free(&access_bytes);
     snag_buf_free(&encoded);
 }
 
