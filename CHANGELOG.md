@@ -4,6 +4,8 @@
 
 ## Unreleased
 
+- Preserve explicit credential-reload controls in native event payloads and
+  checkpoint metadata, with six-slot checkpoint compatibility for older drafts.
 - Capture native voice-import starts from the acknowledged destination cursor.
   Adoption verifies the import identity, source boundary, original cursor and
   durability-acknowledged copy count; abandoned archive records remain inert.

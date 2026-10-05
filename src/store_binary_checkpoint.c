@@ -257,7 +257,7 @@ static const struct number_field {
     U64(pending_steering_bytes), U64(pending_queue_bytes), U32(active_cycle),
     U64(turn_retry_attempts), U32(turn_retry_limit),
     NUMBER(response_outcome, 4u, SNAG_GRAPH_CONFLICT),
-    NUMBER(pending_controls, 4u, 63u), NUMBER(started_controls, 4u, 63u),
+    NUMBER(pending_controls, 4u, 127u), NUMBER(started_controls, 4u, 127u),
     U64(compact_control_source_seq), NUMBER(policy_stopped, 4u, SNAG_POLICY_STOP_REFUSAL),
     NUMBER(response_terminal, 4u, SNAG_RESPONSE_TERMINAL_FAILED),
     NUMBER(goal_status, 4u, SNAG_GOAL_CANCELLED)
@@ -279,8 +279,8 @@ static const size_t control_flags[] = {
 };
 
 _Static_assert(COUNT(control_flags) == 21u, "version-1 control flags");
-_Static_assert(sizeof(((struct snag_session *)0)->control_seq) == 6u * sizeof(uint64_t),
-    "version-1 control sequences");
+_Static_assert(sizeof(((struct snag_session *)0)->control_seq) == 7u * sizeof(uint64_t),
+    "version-2 control sequences");
 
 static int
 load_number(const void *base, const struct number_field *field, uint64_t *out)
@@ -335,7 +335,7 @@ snag_binary_checkpoint_controls_encode(struct snag_buf *out, const struct snag_s
         memcpy(&flag, base + control_flags[i], sizeof(flag));
         if (flag) flags |= UINT32_C(1) << i;
     }
-    int rc = put_number(&encoded, 1u, 2u);
+    int rc = put_number(&encoded, 2u, 2u);
     if (!rc) rc = put_number(&encoded, flags, 4u);
     for (size_t i = 0u; !rc && i < COUNT(control_texts); ++i) {
         const struct text_field *field = &control_texts[i];
@@ -360,7 +360,7 @@ snag_binary_checkpoint_controls_decode(const void *data, size_t size, struct sna
     if (!data || !out) return snag_errno(EINVAL);
     struct fields fields = {.data = data, .size = size};
     uint64_t version, flags;
-    if (get_number(&fields, 2u, &version) < 0 || version != 1u ||
+    if (get_number(&fields, 2u, &version) < 0 || (version != 1u && version != 2u) ||
         get_number(&fields, 4u, &flags) < 0 || flags >> COUNT(control_flags))
         return snag_errno(EINVAL);
     struct snag_session value = {0};
@@ -381,7 +381,10 @@ snag_binary_checkpoint_controls_decode(const void *data, size_t size, struct sna
         if (get_number(&fields, control_numbers[i].wire, &number) < 0 ||
             save_number(&value, &control_numbers[i], number) < 0) return -1;
     }
-    for (size_t i = 0u; i < COUNT(value.control_seq); ++i)
+    size_t sequences = version == 1u ? 6u : COUNT(value.control_seq);
+    if (version == 1u && ((value.pending_controls | value.started_controls) & ~63u))
+        return snag_errno(EINVAL);
+    for (size_t i = 0u; i < sequences; ++i)
         if (get_number(&fields, 8u, &value.control_seq[i]) < 0) return -1;
     if (value.format_version < 2u || fields.offset != fields.size) return snag_errno(EINVAL);
     unsigned char *target = (unsigned char *)out;

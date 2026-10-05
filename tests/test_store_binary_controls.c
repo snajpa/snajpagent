@@ -46,8 +46,8 @@ static const struct field numbers[] = {
     W(capacity_ceiling_input_tokens), W(input_received_ms), W(input_first_context_ms),
     W(recovery_count), W(goal_revision), W(goal_turn_count), W(timer_due_ms),
     W(pending_steering_bytes), W(pending_queue_bytes), N(active_cycle), W(turn_retry_attempts),
-    N(turn_retry_limit), FIELD(response_outcome, 4u, 4u), FIELD(pending_controls, 4u, 63u),
-    FIELD(started_controls, 4u, 63u), W(compact_control_source_seq), FIELD(policy_stopped, 4u, 2u),
+    N(turn_retry_limit), FIELD(response_outcome, 4u, 4u), FIELD(pending_controls, 4u, 127u),
+    FIELD(started_controls, 4u, 127u), W(compact_control_source_seq), FIELD(policy_stopped, 4u, 2u),
     FIELD(response_terminal, 4u, 3u), FIELD(goal_status, 4u, 5u)
 #undef N
 #undef W
@@ -243,21 +243,34 @@ test_store_binary_controls(void)
     test_store_binary_controls_state(&value);
     char digest[65];
     snag_sha256_hex(wire.data, wire.len, digest);
-    /* Independent Python struct/hashlib field-order golden. */
-    assert(wire.len == 634u);
+    /* Preserve the independent v1 Python struct/hashlib golden, checking v2's
+     * version and additional zero reload slot separately. */
+    assert(wire.len == 642u && wire.data[0] == 2u && wire.data[1] == 0u);
+    unsigned char legacy[634];
+    memcpy(legacy, wire.data, sizeof(legacy));
+    legacy[0] = 1u;
+    snag_sha256_hex(legacy, sizeof(legacy), digest);
     assert(!strcmp(digest, "4453683d780181253a8fcf02d29dd3e56cf8da2e6c7eb075c2ff6388bb55b8d0"));
+    for (size_t i = sizeof(legacy); i < wire.len; ++i) assert(!wire.data[i]);
+    struct snag_session restored;
+    snag_session_init(&restored);
+    restored.control_seq[6] = UINT64_MAX;
+    assert(!snag_binary_checkpoint_controls_decode(legacy, sizeof(legacy), &restored));
+    assert(!restored.control_seq[6]);
+    same_controls(&value, &restored);
+    snag_session_close(&restored);
     for (size_t i = 0u; i < wire.len; ++i) reject_decode(wire.data, i);
     reject_decode(NULL, wire.len);
     reject_encode(NULL);
     assert(snag_binary_checkpoint_controls_decode(wire.data, wire.len, NULL) < 0);
     assert(snag_binary_checkpoint_controls_encode(NULL, &value) < 0);
-    unsigned char bad[635];
+    unsigned char bad[643];
     memcpy(bad, wire.data, wire.len);
-    bad[634] = 0u;
+    bad[642] = 0u;
     reject_decode(bad, sizeof(bad));
     for (unsigned version = 0u; version < 3u; ++version) {
         memcpy(bad, wire.data, wire.len);
-        bad[version == 2u ? 1u : 0u] = version == 1u ? 2u : 0u;
+        bad[version == 2u ? 1u : 0u] = version == 1u ? 3u : 0u;
         if (version == 2u) bad[1] = 1u;
         reject_decode(bad, wire.len);
     }
@@ -362,7 +375,7 @@ test_store_binary_controls(void)
         }
         position += f->wire;
     }
-    assert(position + 48u == wire.len);
+    assert(position + 56u == wire.len);
     struct snag_buf limited;
     snag_buf_init(&limited, wire.len + 3u);
     assert(!snag_buf_append(&limited, "keep", 4u));
@@ -394,7 +407,7 @@ test_store_binary_controls(void)
         snag_session_init(&minimal);
         minimal.format_version = version;
         roundtrip(&minimal, &wire);
-        assert(wire.len == 316u && wire.data[0] == 1u && wire.data[112] == version);
+        assert(wire.len == 324u && wire.data[0] == 2u && wire.data[112] == version);
         for (size_t i = 1u; i < wire.len; ++i)
             if (i != 112u) assert(wire.data[i] == 0u);
         snag_session_close(&minimal);
@@ -407,8 +420,15 @@ test_store_binary_controls(void)
         memset(text, texts[i].wire ? '0' : 'p', texts[i].size - 1u);
         roundtrip(&changed, &wire);
     }
-    for (size_t i = 0u; i < 6u; ++i) value.control_seq[i] = UINT64_MAX - i;
+    for (size_t i = 0u; i < COUNT(value.control_seq); ++i)
+        value.control_seq[i] = UINT64_MAX - i;
+    value.pending_controls |= SNAG_CONTROL_RELOAD;
+    value.started_controls |= SNAG_CONTROL_RELOAD;
     roundtrip(&value, &wire);
+    /* A v1 block cannot acquire reload authority just by truncating its last
+     * sequence; failures preserve every destination byte. */
+    wire.data[0] = 1u;
+    reject_decode(wire.data, wire.len - 8u);
     snag_buf_free(&wire);
     snag_session_close(&value);
 }

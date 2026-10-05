@@ -1133,11 +1133,11 @@ control_variants(void)
     json_t *data = json_object();
     assert(data);
     for (size_t i = 0u; i < 3u; ++i) {
-        for (unsigned int bit = 1u; bit <= 32u; bit <<= 1u) {
+        for (unsigned int bit = 1u; bit <= 64u; bit <<= 1u) {
             assert(!json_object_set_new(data, "control", json_integer(bit)));
             roundtrip(types[i], data, 16u + (unsigned int)i);
         }
-        const json_int_t invalid[] = {-1, 0, 3, 64, 256, 4294967297LL, INT64_MAX};
+        const json_int_t invalid[] = {-1, 0, 3, 128, 256, 4294967297LL, INT64_MAX};
         for (size_t j = 0u; j < sizeof(invalid) / sizeof(invalid[0]); ++j) {
             assert(!json_object_set_new(data, "control", json_integer(invalid[j])));
             reject_json(types[i], data);

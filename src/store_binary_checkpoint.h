@@ -62,7 +62,8 @@ int snag_binary_checkpoint_accounting_encode(struct snag_buf *,
 int snag_binary_checkpoint_accounting_decode(const void *, size_t,
     struct snag_binary_checkpoint_accounting *);
 
-/* Version-1 control metadata and six control sequences. Decode updates only
+/* Version-2 control metadata includes reload and seven control sequences.
+ * Version1 restores the absent reload slot as zero. Decode updates only
  * its listed scalar fields, after full validation. Common frame identity/counts,
  * journal/checkpoint coordinates, payloads, accounting, voice history, arrays,
  * resources and callbacks remain untouched. Use a provisional state; this is

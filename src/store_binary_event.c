@@ -4055,7 +4055,7 @@ control_kind(enum snag_binary_kind kind)
 static bool
 control_valid(enum snag_binary_kind kind, const struct snag_binary_control *value)
 {
-    if (!value->control || value->control > SNAG_CONTROL_RETRY ||
+    if (!value->control || value->control > SNAG_CONTROL_RELOAD ||
         (value->control & (value->control - 1u)) || value->source_seq > INT64_MAX) {
         return false;
     }

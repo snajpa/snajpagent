@@ -237,9 +237,10 @@ bad_wire(int fd, struct snag_binary_checkpoint_frame frame)
         memset(copy + 28u + i * 8u, 0, sizeof(saved));
         reject(fd, &frame);
         memcpy(copy + 28u + i * 8u, saved, sizeof(saved));
-        copy[offset] = 2u;
+        unsigned char version = copy[offset];
+        copy[offset] = 255u;
         reject(fd, &frame);
-        copy[offset] = 1u;
+        copy[offset] = version;
         offset += (size_t)number(saved);
     }
     assert(offset == size);

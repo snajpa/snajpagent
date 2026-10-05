@@ -6828,7 +6828,7 @@ test_binary_controls(void)
         struct snag_binary_event event = {.kind = (enum snag_binary_kind)kind};
         for (unsigned int control = 0u; control < 256u; ++control) {
             event.data.control = (struct snag_binary_control){.control = control};
-            bool valid = control && control <= 32u && !(control & (control - 1u));
+            bool valid = control && control <= 64u && !(control & (control - 1u));
             if (valid) roundtrip(&event);
             else assert_event_encode_rejected(&event);
             event.data.control.image_boundary = true;

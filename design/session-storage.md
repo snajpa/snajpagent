@@ -1528,7 +1528,7 @@ and preserves the destination on failure. This block carries metadata only;
 complete core/provider bodies, reference authority and snapshot adoption remain
 separate work.
 
-The control-metadata block has its own u16 version (currently1), followed by a
+The control-metadata block has its own u16 version (currently2), followed by a
 u32 bitmap for21 booleans; higher bits are reserved zero. The draft omits the
 retired session-archive flag, matching the current runtime state. Its24 fixed metadata
 fields follow `control_texts` order in `store_binary_checkpoint.c`: optional
@@ -1538,7 +1538,11 @@ IDs. The37 numeric fields follow `control_numbers` order, with explicit u32/u64
 wire widths independent of C member layout. Current enum and control-mask values
 are checked; the retained source semantic format is2,3 or4. Size-dependent C
 counters use u64 on disk and fail with overflow if a reader cannot represent them.
-Six u64 control-event sequences finish the block. `control_flags` defines the
+Seven u64 control-event sequences finish version2, including explicit saved-setting
+reload at control bit64. The masks admit bits1..64. Version1 retains its six
+sequences and bits1..32; decoding it clears the absent reload sequence to zero.
+Each version consumes its exact layout and reserved control bits fail validation.
+`control_flags` defines the
 boolean bit order. The existing bounded text/hex primitives are shared with the
 accounting block without changing its wire layout.
 
