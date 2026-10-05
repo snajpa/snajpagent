@@ -9,7 +9,8 @@
 
 /* Attach the live commit path to an independently verified native state and
  * exact EOF boundary under its exclusive lock. The caller proves identity,
- * frontier membership and complete working provenance. Clone producer metadata
+ * frontier membership, native process scan cursors and complete working provenance.
+ * Clone producer metadata
  * on success; caller retains all input owners. No file conversion or creation. */
 int snag_session_bind_binary(struct snag_session *, const struct snag_binary_identity *,
     const struct snag_binary_anchor *, const struct snag_binary_index_tree *,

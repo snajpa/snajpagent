@@ -4,10 +4,13 @@
 
 ## Unreleased
 
+- Produce native tool/process result ranges from captured process and durable
+  session cursors while preserving presentation offsets. Stale or conflicting
+  coordinates fail before I/O; result adoption remains durability-gated.
 - Connect native session commits to the single I/O owner with private reducer,
   producer and frontier staging. Durable ACK alone adopts state and invokes the
   commit observer; failed writes retain frozen admission data for exact retry.
-  Native backend selection, creation/recovery activation and live voice/result
+  Native backend selection, creation/recovery activation and live voice
   coordinate production remain pending.
 - Preserve owning process storage when session-state cloning fails before its
   process vector allocation.

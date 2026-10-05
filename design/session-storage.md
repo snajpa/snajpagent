@@ -2710,8 +2710,8 @@ backend/converter integration remain pending; the application uses JSONL.
 ### Shared native reference production
 
 `store_binary_producer.c` owns the pending-input, queued-input and open-response
-reference mapping formerly private to the verified importer. The importer uses
-this implementation; engine transactions will share it. A strictly reduced
+reference mapping formerly private to the verified importer. The importer and
+bound native engine transactions share this implementation. A strictly reduced
 candidate supplies literal typed fields,
 then the producer substitutes exact input/public-output references and prunes
 closed working sources. Queue edits retain original content and replace text
@@ -2749,5 +2749,12 @@ constructor checks represented state/cursor geometry and the journal header/EOF;
 these checks do not supply the caller's semantic or membership proof. Existing
 JSONL sessions keep their original commit path. Default creation/open/resume
 selection and native checkpoint publication are still to be connected. Native
-voice-adoption and referenced tool/process results require their live canonical
-coordinate producer; admission rejects them until that producer is installed.
+voice-adoption still requires its proved live start boundary. Referenced tool
+and process results use the committed process scan cursor for their first native
+sequence and the current acknowledged boundary for their exclusive end. The
+literal saved offsets must match those captured cursors; stale endpoints fail
+before I/O. The typed range excludes its owning result and leaves the original
+presentation fields unchanged. A result with no recorded log hint keeps both
+native endpoints zero. The backend binder's caller must supply native process
+scan cursors established by its engine or recovery, rather than legacy offsets
+with guessed ordinals. Converter-only legacy coordinate lookup stays separate.

@@ -4090,6 +4090,7 @@ binary_prepare_candidate(struct snag_session *session, const char *type, json_t 
 {
     struct snag_binary_session *binary = session->binary;
     struct snag_buf decoded = {.max = SNAG_BINARY_BATCH_MAX};
+    const char *stage = "clone";
     binary->candidate = calloc(1u, sizeof(*binary->candidate));
     binary->type = strdup(type);
     binary->data = json_deep_copy(data);
@@ -4100,34 +4101,33 @@ binary_prepare_candidate(struct snag_session *session, const char *type, json_t 
     struct snag_session *candidate = binary->candidate;
     candidate->last_time_ms = session->next_seq == 1u ?
         binary->identity.created_ms : snag_time_ms();
+    stage = "reducer";
     if (apply_event(candidate, type, data, session->next_seq, true, false,
         error, error_size) < 0) goto fail;
     enum snag_binary_kind kind;
+    stage = "literal fields";
     if (snag_binary_legacy_encode(&binary->proposed.field, type, data, &kind) < 0) goto fail;
     struct snag_binary_record record = {.kind = (uint16_t)kind,
         .version = snag_binary_event_version(kind), .timestamp_ms = candidate->last_time_ms,
         .payload = binary->proposed.field.data, .size = binary->proposed.field.len};
-    /* Legacy physical-coordinate adapters cannot label native locations. Their
-     * live canonical projections must be supplied before those events can write. */
-    if (kind == SNAG_BINARY_VOICE_TRANSFER_ADOPTED || kind == SNAG_BINARY_TOOL_FINISHED ||
-        kind == SNAG_BINARY_PROCESS_CLOSED) {
-        struct snag_binary_event event;
-        if (snag_binary_event_decode(&record, &event) < 0) goto fail;
-        if (kind == SNAG_BINARY_VOICE_TRANSFER_ADOPTED ||
-            (kind == SNAG_BINARY_TOOL_FINISHED && event.data.tool_finished.result.has_output_ref) ||
-            (kind == SNAG_BINARY_PROCESS_CLOSED &&
-                event.data.process_closed.result.has_output_ref)) {
-            errno = ENOTSUP;
-            goto fail;
-        }
+    /* Voice adoption still needs a proved native start boundary. */
+    if (kind == SNAG_BINARY_VOICE_TRANSFER_ADOPTED) {
+        errno = ENOTSUP;
+        goto fail;
     }
+    stage = "result range";
+    if (snag_binary_producer_live_result(&binary->proposed, session, &record) < 0) goto fail;
+    stage = "working references";
     if (snag_binary_producer_reference(&binary->proposed, candidate, session->next_seq,
-            &record, data) < 0 ||
-        snag_binary_batch_encode(&decoded, &binary->boundary, &record, 1u,
-            candidate->turn_count, &binary->proposed_boundary) < 0) goto fail;
+        &record, data) < 0) goto fail;
+    stage = "batch";
+    if (snag_binary_batch_encode(&decoded, &binary->boundary, &record, 1u,
+        candidate->turn_count, &binary->proposed_boundary) < 0) goto fail;
     binary->proposed_tree = binary->tree;
+    stage = "frontier";
     if (snag_binary_index_tree_append_batch(NULL, &binary->proposed_tree, &binary->identity,
         &binary->boundary, &binary->proposed_boundary, decoded.data, decoded.len) < 0) goto fail;
+    stage = "I/O admission";
     if (snag_binary_io_submit(binary->io, &record, 1u, candidate->turn_count) < 0) goto fail;
     binary->io_pending = true;
     snag_buf_free(&decoded);
@@ -4137,7 +4137,7 @@ fail:
         int code = errno;
         snag_buf_free(&decoded);
         binary_discard_candidate(binary);
-        return snag_fail(error, error_size, code, "cannot stage native %s event", type);
+        return snag_fail(error, error_size, code, "cannot stage native %s event (%s)", type, stage);
     }
 }
 

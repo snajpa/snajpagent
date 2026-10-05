@@ -44,6 +44,86 @@ void test_store_binary_texts_bad(int, const struct snag_binary_anchor *,
 #define ZERO_HASH "0000000000000000000000000000000000000000000000000000000000000000"
 
 static void
+test_live_result_coordinates(enum snag_binary_kind kind, unsigned int variant)
+{
+    struct snag_binary_producer producer = {.field = {.max = SNAG_MAX_EVENT_LINE}};
+    struct snag_process_state process = {.log_offset = 100u, .log_seq = 3u};
+    strcpy(process.handle, GOAL_ID);
+    strcpy(process.log_hash, ZERO_HASH);
+    struct snag_session committed = {.log_end = 200, .next_seq = 9u,
+        .processes = &process, .process_count = 1u};
+    uint64_t start = 100u, end = 200u;
+    if (variant == 1u) { start = 200u; process.log_offset = 200u; process.log_seq = 9u; }
+    if (variant == 2u) { start = end = 0u; committed.process_count = 0u; }
+    if (variant == 3u) committed.process_count = 0u;
+    if (variant == 4u) strcpy(process.handle, OTHER_ID);
+    if (variant == 5u) process.log_offset = 99u;
+    if (variant == 6u) committed.log_end = 201;
+    if (variant == 7u) process.log_seq = 0u;
+    if (variant == 8u) process.log_seq = 10u;
+    if (variant == 9u) process.log_hash[0] = 'x';
+    if (variant == 10u) process.log_seq = 9u; /* Nonempty bytes cannot name an empty range. */
+    if (variant == 11u) { start = 200u; process.log_offset = 200u; }
+    json_t *result = snag_tool_result_terminal(true, "fixture result");
+    assert(result);
+    assert(!snag_json_set_new(result, "max_output_tokens", json_integer(16000)));
+    assert(!snag_json_set_new(result, "output_ref",
+        json_pack("{s:s,s:i,s:i,s:i,s:i,s:i,s:i,s:i,s:b,s:I,s:I}",
+            "handle", GOAL_ID, "stdout_start", 0, "stdout_end", 0,
+            "stderr_start", 0, "stderr_end", 0, "stdin_accepted", 0,
+            "stdin_written", 0, "stdin_pending", 0, "stdin_open", 0,
+            "log_start", (json_int_t)start, "log_end", (json_int_t)end)));
+    const char *type = kind == SNAG_BINARY_TOOL_FINISHED ? "tool_finished" : "process_closed";
+    json_t *data = kind == SNAG_BINARY_TOOL_FINISHED ?
+        json_pack("{s:s,s:s,s:o}", "turn_id", OTHER_ID, "call_id", GOAL_ID, "result", result) :
+        json_pack("{s:s,s:s,s:s,s:o}", "turn_id", OTHER_ID, "handle", GOAL_ID,
+            "cause", "user_interrupt", "result", result);
+    if (variant == 12u && kind == SNAG_BINARY_PROCESS_CLOSED)
+        assert(!snag_json_set_new(data, "handle", json_string(OTHER_ID)));
+    if (variant == 12u && kind == SNAG_BINARY_TOOL_FINISHED) committed.log_end = -1;
+    json_t *original = json_deep_copy(data);
+    enum snag_binary_kind encoded;
+    assert(data && original && !snag_binary_legacy_encode(&producer.field, type, data, &encoded));
+    assert(encoded == kind);
+    struct snag_binary_record record = {.kind = (uint16_t)kind,
+        .version = snag_binary_event_version(kind), .payload = producer.field.data,
+        .size = producer.field.len};
+    struct snag_binary_record saved_record = record;
+    struct snag_buf saved = {.max = SNAG_MAX_EVENT_LINE};
+    assert(!snag_buf_append(&saved, producer.field.data, producer.field.len));
+    struct snag_process_state saved_process = process;
+    int rc = snag_binary_producer_live_result(&producer, &committed, &record);
+    assert(!memcmp(&process, &saved_process, sizeof(process)) && json_equal(data, original));
+    if (variant >= 3u) {
+        assert(rc < 0 && errno == EINVAL);
+        assert(!memcmp(&record, &saved_record, sizeof(record)) && producer.field.len == saved.len &&
+            !memcmp(producer.field.data, saved.data, saved.len));
+    } else {
+        assert(!rc);
+        struct snag_binary_event event;
+        assert(!snag_binary_event_decode(&record, &event));
+        struct snag_binary_tool_output_ref *ref = kind == SNAG_BINARY_TOOL_FINISHED ?
+            &event.data.tool_finished.result.output_ref :
+            &event.data.process_closed.result.output_ref;
+        assert(ref->native && ref->log_start == start && ref->log_end == end);
+        assert(ref->first_sequence == (variant == 2u ? 0u : process.log_seq) &&
+            ref->end_sequence == (variant == 2u ? 0u : committed.next_seq));
+        const char *decoded_type = NULL;
+        json_t *decoded_data = NULL;
+        assert(!snag_binary_legacy_decode(&record, &decoded_type, &decoded_data));
+        assert(!strcmp(type, decoded_type) && json_equal(data, decoded_data));
+        json_decref(decoded_data);
+        /* This entrypoint accepts literal admission only, never a second projection. */
+        assert(snag_binary_producer_live_result(&producer, &committed, &record) < 0 &&
+            errno == EINVAL);
+    }
+    json_decref(data);
+    json_decref(original);
+    snag_buf_free(&saved);
+    snag_binary_producer_free(&producer);
+}
+
+static void
 test_producer_candidate_ownership(void)
 {
     struct snag_binary_producer source = {.field = {.max = SNAG_MAX_EVENT_LINE}};
@@ -3965,6 +4045,10 @@ void
 test_store_binary_replay(struct snag_store *store, const char *cwd)
 {
     test_producer_candidate_ownership();
+    for (unsigned int variant = 0u; variant < 13u; ++variant) {
+        test_live_result_coordinates(SNAG_BINARY_TOOL_FINISHED, variant);
+        test_live_result_coordinates(SNAG_BINARY_PROCESS_CLOSED, variant);
+    }
     for (unsigned int bad = 0u; bad < 4u; ++bad) test_voice_adoption(store, cwd, bad);
     test_compact_origins(store, cwd, false);
     test_compact_origins(store, cwd, true);

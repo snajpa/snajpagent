@@ -35,6 +35,13 @@ int snag_binary_producer_clone(struct snag_binary_producer *destination,
     const struct snag_binary_producer *source);
 void snag_binary_producer_free(struct snag_binary_producer *producer);
 
+/* The caller supplies native, engine-owned process and durable-boundary cursors.
+ * Legacy/import presentation offsets alone cannot establish these sequences.
+ * Literal field bytes are prepared in producer.field. On error discard the
+ * staged producer; on success record borrows the rewritten field. */
+int snag_binary_producer_live_result(struct snag_binary_producer *producer,
+    const struct snag_session *committed, struct snag_binary_record *record);
+
 /* The caller has strictly reduced the event into state and encoded its literal
  * body into producer.field. Replace repeated input/public-output bytes with typed
  * canonical references, then retain/prune provenance for that candidate. On error

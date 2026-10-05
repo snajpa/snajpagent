@@ -10,6 +10,7 @@
 #include <errno.h>
 #include <pthread.h>
 #include <signal.h>
+#include <stdio.h>
 #include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
@@ -615,6 +616,73 @@ test_native_session_retry(bool partial, unsigned int failures)
 }
 
 static void
+test_native_result_retry(void)
+{
+    struct snag_session session;
+    struct probe probe = {0};
+    native_fixture(&session, &probe);
+    /* Inject accepted engine-owned process state to isolate result admission
+     * and ACK ownership. This fixture does not qualify production lifecycle. */
+    session.active_turn = true;
+    strcpy(session.active_turn_id, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+    session.processes = calloc(1u, sizeof(*session.processes));
+    assert(session.processes);
+    session.process_count = session.process_capacity = 1u;
+    struct snag_process_state *process = session.processes;
+    strcpy(process->handle, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    process->log_offset = (uint64_t)session.log_end;
+    process->log_seq = session.next_seq;
+    strcpy(process->log_hash, session.prev_sha256);
+    json_t *result = snag_tool_result_terminal(true, "fixture result");
+    assert(result && !snag_json_set_new(result, "max_output_tokens", json_integer(16000)));
+    assert(result && !snag_json_set_new(result, "output_ref",
+        json_pack("{s:s,s:i,s:i,s:i,s:i,s:i,s:i,s:i,s:b,s:I,s:I}",
+            "handle", process->handle, "stdout_start", 0, "stdout_end", 0,
+            "stderr_start", 0, "stderr_end", 0, "stdin_accepted", 0,
+            "stdin_written", 0, "stdin_pending", 0, "stdin_open", 0,
+            "log_start", (json_int_t)session.log_end, "log_end", (json_int_t)session.log_end)));
+    json_t *data = json_pack("{s:s,s:s,s:s,s:o}", "turn_id", session.active_turn_id,
+        "handle", process->handle, "cause", "user_interrupt", "result", result);
+    assert(data);
+    probe.sync_failures = 1u;
+    char error[256];
+    int64_t end = session.log_end;
+    int rc = snag_session_commit(&session, "process_closed", json_incref(data), NULL,
+        error, sizeof(error));
+    if (rc >= 0 || errno != EIO)
+        fprintf(stderr, "native result failure: rc=%d errno=%d %s\n", rc, errno, error);
+    assert(rc < 0 && errno == EIO);
+    assert(session.next_seq == 2u && session.log_end == end && session.process_count == 1u &&
+        atomic_load(&probe.effects) == 1u);
+    assert(!snag_session_commit(&session, "process_closed", data, NULL, error, sizeof(error)));
+    assert(session.next_seq == 3u && !session.process_count && atomic_load(&probe.effects) == 2u);
+    struct snag_buf bytes = {.max = SNAG_BINARY_BATCH_MAX};
+    unsigned char header[SNAG_BINARY_HEADER_SIZE];
+    struct snag_binary_identity identity;
+    struct snag_binary_anchor before, created, after;
+    struct snag_binary_batch batch;
+    assert(snag_pread(session.log_fd, header, sizeof(header), 0) == (ssize_t)sizeof(header));
+    assert(!snag_binary_header_decode(header, sizeof(header), &identity, &before));
+    assert(!snag_binary_batch_read(session.log_fd, (uint64_t)session.log_end,
+        &before, &bytes, &batch, &created));
+    assert(!snag_binary_batch_read(session.log_fd, (uint64_t)session.log_end,
+        &created, &bytes, &batch, &after));
+    size_t offset = SNAG_BINARY_BATCH_HEADER_SIZE;
+    uint64_t sequence;
+    struct snag_binary_record record;
+    struct snag_binary_event event;
+    assert(!snag_binary_record_next(&batch, &offset, &record, &sequence));
+    assert(sequence == 2u && !snag_binary_event_decode(&record, &event));
+    assert(event.kind == SNAG_BINARY_PROCESS_CLOSED &&
+        event.data.process_closed.result.output_ref.native);
+    struct snag_binary_tool_output_ref *ref = &event.data.process_closed.result.output_ref;
+    assert(ref->first_sequence == 2u && ref->end_sequence == 2u &&
+        ref->log_start == (uint64_t)end && ref->log_end == (uint64_t)end);
+    snag_buf_free(&bytes);
+    snag_session_close(&session);
+}
+
+static void
 test_native_clone_failure(void)
 {
     struct snag_session session;
@@ -646,6 +714,7 @@ test_store_binary_io(void)
     test_native_session_retry(true, 2u);
     test_native_session_retry(false, 2u);
     test_native_clone_failure();
+    test_native_result_retry();
     test_group_ack();
     test_failed_commit(true, 1u);
     test_failed_commit(false, 1u);

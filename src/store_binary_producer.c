@@ -18,6 +18,55 @@ replace_event(struct snag_binary_producer *writer, const struct snag_binary_even
     return 0;
 }
 
+int
+snag_binary_producer_live_result(struct snag_binary_producer *producer,
+    const struct snag_session *committed, struct snag_binary_record *record)
+{
+    if (record->kind != SNAG_BINARY_TOOL_FINISHED && record->kind != SNAG_BINARY_PROCESS_CLOSED)
+        return 0;
+    struct snag_binary_event event;
+    if (snag_binary_event_decode(record, &event) < 0) return -1;
+    struct snag_binary_tool_result *result = event.kind == SNAG_BINARY_TOOL_FINISHED ?
+        &event.data.tool_finished.result : &event.data.process_closed.result;
+    if (!result->has_output_ref) return 0;
+    struct snag_binary_tool_output_ref *ref = &result->output_ref;
+    if (ref->native) return snag_errno(EINVAL);
+    if (event.kind == SNAG_BINARY_PROCESS_CLOSED &&
+        memcmp(event.data.process_closed.handle, ref->handle, sizeof(ref->handle)))
+        return snag_errno(EINVAL);
+    if (ref->log_end) {
+        char handle[SNAG_ID_HEX_LEN + 1u];
+        static const char hex[] = "0123456789abcdef";
+        for (size_t i = 0u; i < sizeof(ref->handle); ++i) {
+            handle[2u * i] = hex[ref->handle[i] >> 4];
+            handle[2u * i + 1u] = hex[ref->handle[i] & 15u];
+        }
+        handle[SNAG_ID_HEX_LEN] = '\0';
+        const struct snag_process_state *process = NULL;
+        for (size_t i = 0u; i < committed->process_count; ++i) {
+            if (!strcmp(committed->processes[i].handle, handle)) {
+                process = &committed->processes[i];
+                break;
+            }
+        }
+        /* These are captured native cursors, not a lookup by caller-supplied
+         * presentation offset. A stale endpoint must be recaptured by its
+         * engine owner, never guessed or widened to include later records. */
+        if (!process || committed->log_end < 0 ||
+            ref->log_end != (uint64_t)committed->log_end ||
+            ref->log_start != process->log_offset || !process->log_seq ||
+            process->log_seq > committed->next_seq ||
+            !snag_hex_is_lower(process->log_hash, SNAG_SHA256_HEX_LEN)) return snag_errno(EINVAL);
+        ref->first_sequence = process->log_seq;
+        ref->end_sequence = committed->next_seq;
+    }
+    ref->native = true;
+    if (replace_event(producer, &event) < 0) return -1;
+    record->payload = producer->field.data;
+    record->size = producer->field.len;
+    return 0;
+}
+
 static void
 clear_input(struct snag_binary_input_source *source)
 {
