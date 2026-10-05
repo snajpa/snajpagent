@@ -693,6 +693,8 @@ compaction inject bounded room history.  The runtime reconnects outgoing links a
 Pending room messages and notices retain their original journal event across
 compaction and resume, including on plain IRC servers without catch-up stream IDs.
 Later admission presents each saved input once.
+Recovering a retained source uses a targeted, verified journal lookup so
+request preparation does not replay the entire journal for that input.
 Older admissions shifted by an inserted checkpoint can recover on resume when
 the adjacent saved IRC event exactly matches the admission's recorded identity.
 The journal remains unchanged; a missing or mismatched source still fails.

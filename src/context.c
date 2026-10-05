@@ -1597,11 +1597,11 @@ defer_room_event(struct context_builder *builder, const json_t *data, bool has_p
 }
 
 struct irc_source_lookup {
-    const json_t *sequences;
     json_t *sources;
-    uint64_t admission_seq;
-    uint64_t checkpoint_seq;
+    json_t *following;
+    uint64_t wanted;
     const char *prompt;
+    const struct snag_context_control *control;
 };
 
 static bool
@@ -1626,32 +1626,32 @@ recover_irc_source(void *opaque, const struct snag_session *state, uint64_t seq,
 {
     struct irc_source_lookup *lookup = opaque;
     (void)state;
-    (void)error;
-    (void)error_size;
-    if (seq >= lookup->admission_seq) return 0;
-    uint64_t wanted = 0;
-    for (size_t i = 0u; i < json_array_size(lookup->sequences); ++i) {
-        if ((uint64_t)json_integer_value(json_array_get(lookup->sequences, i)) != seq) continue;
-        wanted = seq;
-        break;
+    if (lookup->control && lookup->control->cancelled &&
+        lookup->control->cancelled(lookup->control->opaque)) {
+        return snag_fail(error, error_size, ECANCELED, "context preparation cancelled");
     }
-    if (wanted && !strcmp(type, "session_checkpoint")) {
-        lookup->checkpoint_seq = seq;
+    if (seq == lookup->wanted + 1u) {
+        if (!strcmp(type, "irc_event")) lookup->following = json_incref((json_t *)data);
         return 0;
     }
-    if (strcmp(type, "irc_event")) return 0;
+    if (seq != lookup->wanted) return SNAG_JOURNAL_STOP_AFTER;
     struct snag_irc_event event;
-    if (snag_irc_event_read(data, &event) < 0 || !event.input) return 0;
     /* Older writers captured next_seq before commit inserted a checkpoint.
      * Repair only that adjacent shift with an exact durable input identity;
      * a missing source or unrelated neighboring event remains an error. */
-    if (!wanted && lookup->checkpoint_seq && seq == lookup->checkpoint_seq + 1u &&
-        irc_source_prompt_matches(lookup->prompt, &event)) wanted = lookup->checkpoint_seq;
-    if (!wanted) return 0;
-    json_t *source = json_pack("{s:I,s:I,s:O}", "seq", (json_int_t)wanted,
+    if (!strcmp(type, "session_checkpoint") && lookup->following &&
+        snag_irc_event_read(lookup->following, &event) == 0 && event.input &&
+        irc_source_prompt_matches(lookup->prompt, &event)) {
+        data = lookup->following;
+        ++seq;
+    } else if (strcmp(type, "irc_event") ||
+        snag_irc_event_read(data, &event) < 0 || !event.input) {
+        return SNAG_JOURNAL_STOP_AFTER;
+    }
+    json_t *source = json_pack("{s:I,s:I,s:O}", "seq", (json_int_t)lookup->wanted,
         "source_seq", (json_int_t)seq, "event", data);
     if (!source || json_array_append_new(lookup->sources, source) < 0) return -1;
-    return 0;
+    return SNAG_JOURNAL_STOP_AFTER;
 }
 
 static int
@@ -1714,7 +1714,7 @@ context_event(void *opaque, const struct snag_session *state,
         const json_t *steering = json_object_get(data, "steering");
         bool has_prompt = json_is_object(steering) ||
             json_is_object(json_object_get(data, "input"));
-        struct irc_source_lookup lookup = {.sequences = sequences, .admission_seq = seq,
+        struct irc_source_lookup lookup = {.control = builder->control,
             .prompt = snag_json_string(json_is_object(steering) ? steering :
                 json_object_get(data, "input"), "text")};
         if (!summarized) for (size_t i = 0u; i < json_array_size(sequences); ++i) {
@@ -1724,14 +1724,23 @@ context_event(void *opaque, const struct snag_session *state,
                 if (json_integer_value(json_object_get(json_array_get(builder->deferred_irc, j),
                         "seq")) == wanted) { present = true; break; }
             if (present) continue;
-            lookup.sources = json_array();
+            if (!lookup.sources) lookup.sources = json_array();
+            lookup.wanted = (uint64_t)wanted;
+            uint64_t next_before;
+            /* Seek directly to the source and its possible checkpoint shift.
+             * Full reducer replay here stalls the engine and hosted IRC for
+             * the lifetime of the journal, even after the source is found. */
             if (!lookup.sources || !builder->session ||
-                snag_session_each_event((struct snag_session *)builder->session,
-                    recover_irc_source, &lookup, error, error_size) < 0) {
+                lookup.wanted >= seq ||
+                snag_session_each_event_reverse((struct snag_session *)builder->session,
+                    lookup.wanted + 2u, SIZE_MAX, recover_irc_source, &lookup,
+                    &next_before, error, error_size) < 0) {
+                json_decref(lookup.following);
                 json_decref(lookup.sources);
                 return -1;
             }
-            break;
+            json_decref(lookup.following);
+            lookup.following = NULL;
         }
         for (size_t i = 0u; i < json_array_size(sequences); ++i) {
             json_int_t wanted = json_integer_value(json_array_get(sequences, i));
@@ -1741,9 +1750,14 @@ context_event(void *opaque, const struct snag_session *state,
                 json_t *pending = json_array_get(builder->deferred_irc, j);
                 if (json_integer_value(json_object_get(pending, "seq")) == wanted) {
                     if (!summarized && defer_room_event(builder,
-                            json_object_get(pending, "event"), has_prompt) < 0)
+                            json_object_get(pending, "event"), has_prompt) < 0) {
+                        json_decref(lookup.sources);
                         return -1;
-                    if (json_array_remove(builder->deferred_irc, j) < 0) return -1;
+                    }
+                    if (json_array_remove(builder->deferred_irc, j) < 0) {
+                        json_decref(lookup.sources);
+                        return -1;
+                    }
                     found = true;
                     break;
                 }

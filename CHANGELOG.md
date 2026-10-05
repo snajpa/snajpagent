@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Resolve retained IRC inputs with verified journal lookups. Avoid replaying
+  the complete journal for each missing source, which can stall request
+  preparation and delay hosted IRC delivery in long-running sessions.
+
 - Default interactive reports and `/cat` to `less -X` when less is available
   and `$PAGER` is unset or simply `less`. Keep explicit pager arguments and
   disabled paging unchanged.

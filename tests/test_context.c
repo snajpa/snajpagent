@@ -2122,6 +2122,62 @@ test_irc_source_shifted_by_checkpoint(struct snag_store *store, const char *cwd)
 }
 
 static void
+test_irc_source_lookup_bounds(struct snag_store *store, const char *cwd)
+{
+    const char *turn = "edededededededededededededededed";
+    const char *prompt = "[IRC update id=11111111111111111111111111111111:44 "
+        "endpoint=fixture:1234 room=#work event=message sender=peer]\n";
+    for (unsigned int damaged = 0u; damaged < 3u; ++damaged) {
+        struct snag_session session;
+        struct snag_context_projection projection = {0};
+        struct snag_irc_event event = {.kind = SNAG_IRC_MESSAGE, .timestamp_ms = 1u,
+            .endpoint = "fixture:1234", .room = "#work", .nick = "peer",
+            .text = "bounded source lookup", .classified = true, .input = true,
+            .stream = "11111111111111111111111111111111", .sequence = 44u};
+        char error[512] = {0};
+        json_t *empty = json_array();
+        create_session(store, &session, cwd, "medium");
+        snag_context_start_new(&session);
+        for (unsigned int i = 0u; i < 128u; ++i) {
+            commit_event(&session, "effort_changed", json_pack("{s:s,s:s}",
+                "old_effort", i % 2u ? "high" : "medium",
+                "new_effort", i % 2u ? "medium" : "high"));
+        }
+        uint64_t checkpoint = session.next_seq;
+        int64_t checkpoint_offset = session.log_end;
+        assert(snag_session_checkpoint(&session, error, sizeof(error)) == 0);
+        int64_t source_offset = session.log_end;
+        commit_event(&session, "irc_event", snag_irc_event_data(&event));
+        commit_event(&session, "irc_admitted", json_pack("{s:[I],s:o}",
+            "sequences", (json_int_t)checkpoint, "input", input_received_data(prompt)));
+        commit_event(&session, "turn_started",
+            turn_started(turn, 1u, prompt, cwd, json_array()));
+
+        /* The live cache already owns the validated prefix. A targeted lookup
+         * must inspect its source and adjacent checkpoint, not replay genesis.
+         * Damage in either requested record must still fail verification. */
+        int writer = openat(session.dir_fd, "events.jsonl", O_WRONLY | O_CLOEXEC);
+        int64_t offset = damaged == 0u ? 0 :
+            damaged == 1u ? checkpoint_offset : source_offset;
+        assert(writer >= 0 && pwrite(writer, "[", 1u, offset) == 1);
+        int rc = snag_context_build(&session, SNAJPAGENT_MODEL, "medium", 1u, empty,
+            0u, false, NULL, NULL, NULL, NULL, &projection, error, sizeof(error), NULL);
+        if (damaged) {
+            assert(rc < 0);
+        } else {
+            if (rc < 0) fprintf(stderr, "bounded IRC lookup: %s\n", error);
+            assert(rc == 0);
+            assert(message_matching(json_object_get(projection.create_request.value,
+                "input"), event.text));
+        }
+        assert(pwrite(writer, "{", 1u, offset) == 1 && close(writer) == 0);
+        snag_context_projection_free(&projection);
+        snag_session_close(&session);
+        json_decref(empty);
+    }
+}
+
+static void
 test_admitted_room_event_stays_out_of_tool_exchange(struct snag_store *store, const char *cwd)
 {
     const char *turn = "e1000000000000000000000000000000";
@@ -5019,6 +5075,7 @@ main(int argc, char **argv)
     test_rebased_irc_admission_overlap(&store, cwd);
     test_pending_irc_source_across_rebase(&store, cwd);
     test_irc_source_shifted_by_checkpoint(&store, cwd);
+    test_irc_source_lookup_bounds(&store, cwd);
     test_irc_context_summary(&store, cwd);
     test_admitted_room_event_stays_out_of_tool_exchange(&store, cwd);
     test_compact_groups(&store, cwd);
