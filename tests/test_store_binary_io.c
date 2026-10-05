@@ -3,6 +3,8 @@
 #include "store_binary_index.h"
 #include "store_binary_wire.h"
 #include "fs.h"
+#include "store_internal.h"
+#include "store_binary_replay.h"
 
 #include <assert.h>
 #include <errno.h>
@@ -31,6 +33,7 @@ struct probe {
     size_t writes;
     size_t syncs;
     size_t bytes;
+    atomic_uint effects;
 };
 
 static void
@@ -444,9 +447,205 @@ test_rejected_input(void)
     assert(!close(fd));
 }
 
+static void
+native_effect(void *opaque, const struct snag_session *session, uint64_t sequence,
+    const char *type, const json_t *data)
+{
+    struct probe *probe = opaque;
+    assert(pthread_equal(probe->caller, pthread_self()));
+    assert(sequence + 1u == session->next_seq && type && data);
+    atomic_fetch_add(&probe->effects, 1u);
+}
+
+static void
+native_fixture(struct snag_session *session, struct probe *probe)
+{
+    struct snag_binary_anchor before;
+    snag_session_init(session);
+    session->log_fd = journal_fd(&before);
+    session->lock_fd = dup(session->log_fd);
+    assert(session->lock_fd >= 0);
+    session->log_end = (int64_t)before.end;
+    strcpy(session->id, "11000000000000000000000000000000");
+    static const char digits[] = "0123456789abcdef";
+    for (size_t i = 0u; i < sizeof(before.digest); ++i) {
+        session->prev_sha256[i * 2u] = digits[before.digest[i] >> 4u];
+        session->prev_sha256[i * 2u + 1u] = digits[before.digest[i] & 15u];
+    }
+    session->prev_sha256[SNAG_SHA256_HEX_LEN] = '\0';
+    struct snag_binary_identity identity = {.created_ms = 42u};
+    identity.id[0] = 17u;
+    struct snag_binary_index_tree tree = {0};
+    struct snag_binary_producer producer = {0};
+    struct snag_binary_io_ops ops = {
+        .write_full = probe_write, .sync_file = probe_sync, .opaque = probe};
+    char error[256];
+    struct snag_binary_anchor bad = before;
+    ++bad.end;
+    assert(snag_session_bind_binary(session, &identity, &bad, &tree, &producer,
+        &ops, error, sizeof(error)) < 0 && errno == EINVAL && !session->binary);
+    probe->caller = pthread_self();
+    assert(!snag_session_bind_binary(session, &identity, &before, &tree, &producer,
+        &ops, error, sizeof(error)));
+    session->on_commit = native_effect;
+    session->on_commit_opaque = probe;
+    assert(!snag_session_commit(session, "session_created",
+        json_pack("{s:s,s:s,s:s,s:i,s:s,s:s}", "default_effort", "medium",
+            "default_model", "gpt-5", "default_provider", "openai", "format", 4,
+            "protocol", "responses", "cwd", "/"), NULL, error, sizeof(error)));
+    assert(session->next_seq == 2u && session->last_time_ms == 42u);
+    assert(session->committed_start == (int64_t)before.end &&
+        session->committed_end == session->log_end);
+    assert(atomic_load(&probe->effects) == 1u);
+}
+
+static json_t *
+native_goal(const char *prompt)
+{
+    return json_pack("{s:s,s:s}", "goal_id", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "prompt", prompt);
+}
+
+struct native_call {
+    struct snag_session *session;
+    struct probe *probe;
+    uint64_t sequence;
+    int rc;
+};
+
+static void *
+native_call_main(void *opaque)
+{
+    struct native_call *call = opaque;
+    call->probe->caller = pthread_self();
+    char error[256];
+    call->rc = snag_session_commit(call->session, "goal_started", native_goal("native goal"),
+        &call->sequence, error, sizeof(error));
+    return NULL;
+}
+
+static void
+test_native_session_ack(void)
+{
+    struct snag_session session;
+    struct probe probe = {0};
+    native_fixture(&session, &probe);
+    uint64_t before_seq = session.next_seq;
+    int64_t before_end = session.log_end;
+    enum snag_goal_status before_goal = session.goal_status;
+    int64_t before_start = session.committed_start;
+    probe.block_sync = true;
+    atomic_store(&probe.sync_entered, false);
+    struct native_call call = {.session = &session, .probe = &probe};
+    pthread_t caller;
+    assert(!pthread_create(&caller, NULL, native_call_main, &call));
+    wait_flag(&probe.sync_entered);
+    assert(session.next_seq == before_seq && session.log_end == before_end &&
+        session.goal_status == before_goal && atomic_load(&probe.effects) == 1u);
+    assert(session.committed_start == before_start && session.committed_end == before_end);
+    atomic_store(&probe.release_sync, true);
+    assert(!pthread_join(caller, NULL));
+    assert(!call.rc && call.sequence == before_seq && session.next_seq == before_seq + 1u);
+    assert(session.log_end > before_end && !strcmp(session.goal_prompt, "native goal"));
+    assert(session.committed_start == before_end && session.committed_end == session.log_end);
+    assert(atomic_load(&probe.effects) == 2u);
+    struct snag_session restored;
+    snag_session_init(&restored);
+    struct snag_binary_recovery recovery;
+    struct snag_binary_checkpoint_sources sources = {0};
+    char error[256];
+    assert(!snag_store_reconcile_binary(&session, &restored, NULL, NULL, &recovery,
+        &sources, error, sizeof(error)));
+    assert(restored.next_seq == session.next_seq && restored.log_end == session.log_end &&
+        !strcmp(restored.prev_sha256, session.prev_sha256) &&
+        !strcmp(restored.goal_prompt, session.goal_prompt));
+    snag_binary_checkpoint_sources_free(&sources);
+    snag_session_close(&restored);
+    snag_session_close(&session);
+}
+
+static void
+test_native_session_retry(bool partial, unsigned int failures)
+{
+    struct snag_session session;
+    struct probe probe = {0};
+    native_fixture(&session, &probe);
+    uint64_t before_seq = session.next_seq;
+    int64_t before_end = session.log_end;
+    json_t *data = native_goal("retained native goal");
+    int64_t before_start = session.committed_start;
+    assert(data);
+    if (partial) probe.partial_failures = failures;
+    else probe.sync_failures = failures;
+    char error[256];
+    uint64_t sequence = 999u;
+    assert(snag_session_commit(&session, "goal_started", json_incref(data), &sequence,
+        error, sizeof(error)) < 0 && errno == EIO);
+    assert(session.next_seq == before_seq && session.log_end == before_end &&
+        sequence == 999u && atomic_load(&probe.effects) == 1u);
+    assert(session.committed_start == before_start && session.committed_end == before_end);
+    size_t writes = probe.writes, syncs = probe.syncs;
+    assert(snag_session_commit(&session, "goal_started", native_goal("different"), &sequence,
+        error, sizeof(error)) < 0 && errno == EBUSY);
+    assert(probe.writes == writes && probe.syncs == syncs);
+    assert(!json_object_set_new(data, "prompt", json_string("mutated caller")));
+    assert(snag_session_commit(&session, "goal_started", json_incref(data), &sequence,
+        error, sizeof(error)) < 0 && errno == EBUSY);
+    assert(probe.writes == writes && probe.syncs == syncs);
+    assert(!json_object_set_new(data, "prompt", json_string("retained native goal")));
+    int rc = snag_session_commit(&session, "goal_started", json_incref(data), &sequence,
+        error, sizeof(error));
+    if (failures == 1u) {
+        assert(!rc && sequence == before_seq && session.next_seq == before_seq + 1u);
+        assert(session.committed_start == before_end && session.committed_end == session.log_end);
+        assert(!strcmp(session.goal_prompt, "retained native goal"));
+        assert(atomic_load(&probe.effects) == 2u);
+    } else {
+        assert(rc < 0 && errno == EIO && session.next_seq == before_seq &&
+            session.log_end == before_end && atomic_load(&probe.effects) == 1u);
+        assert(session.committed_start == before_start && session.committed_end == before_end);
+        writes = probe.writes;
+        syncs = probe.syncs;
+        assert(snag_session_commit(&session, "goal_started", json_incref(data), &sequence,
+            error, sizeof(error)) < 0 && errno == EIO);
+        assert(probe.writes == writes && probe.syncs == syncs);
+    }
+    json_decref(data);
+    snag_session_close(&session);
+}
+
+static void
+test_native_clone_failure(void)
+{
+    struct snag_session session;
+    struct probe probe = {0};
+    native_fixture(&session, &probe);
+    session.processes = calloc(1u, sizeof(*session.processes));
+    session.pending_calls = calloc(1u, sizeof(*session.pending_calls));
+    assert(session.processes && session.pending_calls);
+    session.process_count = session.process_capacity = 1u;
+    session.pending_call_count = 1u;
+    /* Force the first vector reservation to fail before the process vector is
+     * copied. No invalid geometry is dereferenced on this failure path. */
+    session.pending_call_capacity = SIZE_MAX / sizeof(*session.pending_calls);
+    char error[256];
+    assert(snag_session_commit(&session, "goal_started", native_goal("uncommitted"), NULL,
+        error, sizeof(error)) < 0 && errno == ENOMEM);
+    assert(session.processes && session.process_count == 1u && session.next_seq == 2u &&
+        atomic_load(&probe.effects) == 1u);
+    session.pending_call_capacity = 1u;
+    snag_session_close(&session); /* Owning process storage was never freed by the failed clone. */
+}
+
 void
 test_store_binary_io(void)
 {
+    test_native_session_ack();
+    test_native_session_retry(true, 1u);
+    test_native_session_retry(false, 1u);
+    test_native_session_retry(true, 2u);
+    test_native_session_retry(false, 2u);
+    test_native_clone_failure();
     test_group_ack();
     test_failed_commit(true, 1u);
     test_failed_commit(false, 1u);

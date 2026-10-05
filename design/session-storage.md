@@ -2301,7 +2301,8 @@ only the frontier, retaining entry/anchor validation and atomic failure behavior
 With byte output requested they also enforce the persisted index geometry. An
 unavailable or unrepresentable cache can therefore stop cache output without
 stopping canonical journaling; positional cache readers always retain their file
-bounds. Hash-only batch advancement stages flat entries but no parent-byte image.
+bounds. Logical-only batch advancement walks entries directly into a fixed-sized
+staged frontier, without allocating a flat-entry or parent-byte image.
 
 A verifier requires an independently established root for the exact journal
 prefix. Taking a root from the index itself would discard the membership guarantee.
@@ -2724,3 +2725,29 @@ committed producer intact. Successful journal durability ACK is the engine's
 adoption boundary. Application transaction/backend wiring remains to be completed.
 The existing importer parity and closure fixtures exercise this shared mapping;
 ownership regressions cover aborted candidates and source-owner teardown.
+
+### Native session commit boundary
+
+The live `snag_session_commit` API dispatches bound native sessions through an
+engine-owned transaction: clone reducer/working provenance, freeze admission data,
+encode typed fields and preflight the logical frontier, then submit immutable
+records to the sole I/O worker. The API retains its synchronous durability result;
+file writes and synchronization run on the worker. Successful ACK transfers exact
+decoded batch ownership to the engine. Allocation-free frontier advancement uses
+those bytes before reducer/provenance adoption and the existing commit observer.
+Derived index availability never determines canonical durability.
+
+A failed write keeps its candidate, timestamp, canonical sequence and immutable
+admission. Another event or mutated admission returns EBUSY. An exact caller-paced
+reattempt reconciles the retained batch once; a second failure requires fresh
+recovery. Close drains outstanding I/O before descriptor/lock teardown, preserving
+real journal bytes and releasing no dependent effect for an unadopted transaction.
+
+The internal binding requires independently verified identity, EOF boundary,
+frontier membership and complete working provenance under an exclusive lock. The
+constructor checks represented state/cursor geometry and the journal header/EOF;
+these checks do not supply the caller's semantic or membership proof. Existing
+JSONL sessions keep their original commit path. Default creation/open/resume
+selection and native checkpoint publication are still to be connected. Native
+voice-adoption and referenced tool/process results require their live canonical
+coordinate producer; admission rejects them until that producer is installed.

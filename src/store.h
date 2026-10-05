@@ -225,6 +225,9 @@ struct snag_session {
     /* Owner-local derived view; borrowed by staged commits, freed only on close.
      * Its verified cursor and bounded excerpts never enter durable state. */
     struct snag_voice_projection *voice_projection;
+    /* Native engine owner; borrowed by staged reducer states, closed only by
+     * the live session. Existing JSONL sessions leave this null. */
+    struct snag_binary_session *binary;
     unsigned int format_version;
     /* An optional in-process consumer of newly committed events. The durable
      * state remains authoritative; a failed consumer must invalidate itself,

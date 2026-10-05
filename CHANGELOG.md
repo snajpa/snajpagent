@@ -4,6 +4,14 @@
 
 ## Unreleased
 
+- Connect native session commits to the single I/O owner with private reducer,
+  producer and frontier staging. Durable ACK alone adopts state and invokes the
+  commit observer; failed writes retain frozen admission data for exact retry.
+  Native backend selection, creation/recovery activation and live voice/result
+  coordinate production remain pending.
+- Preserve owning process storage when session-state cloning fails before its
+  process vector allocation.
+
 - Extract native input, queue and public-output reference production from the
   verified importer for reuse by staged engine transactions. Cloned working provenance
   owns independent metadata and retains only pending-input, queue and open-response

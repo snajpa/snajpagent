@@ -3,6 +3,17 @@
 #define SNAJPAGENT_STORE_INTERNAL_H
 
 #include "store.h"
+#include "store_binary_io.h"
+#include "store_binary_index.h"
+#include "store_binary_producer.h"
+
+/* Attach the live commit path to an independently verified native state and
+ * exact EOF boundary under its exclusive lock. The caller proves identity,
+ * frontier membership and complete working provenance. Clone producer metadata
+ * on success; caller retains all input owners. No file conversion or creation. */
+int snag_session_bind_binary(struct snag_session *, const struct snag_binary_identity *,
+    const struct snag_binary_anchor *, const struct snag_binary_index_tree *,
+    const struct snag_binary_producer *, const struct snag_binary_io_ops *, char *, size_t);
 
 #include <stdbool.h>
 #include <stddef.h>

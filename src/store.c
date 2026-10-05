@@ -5,6 +5,7 @@
 #include "instructions.h"
 #include "irc.h"
 #include "snajpagent.h"
+#include "store_binary_legacy.h"
 #include "store_record.h"
 #include <errno.h>
 #include <limits.h>
@@ -20,6 +21,7 @@
  * event. Its maximum covers the active provider request and pending state. */
 #define SNAG_CHECKPOINT_EVENT_MAX (128u * 1024u * 1024u)
 static void voice_projection_free(struct snag_voice_projection *);
+static void close_binary_session(struct snag_session *);
 static int
 open_dir_path(const char *path)
 {
@@ -244,6 +246,7 @@ free_session_state(struct snag_session *session)
 void
 snag_session_close(struct snag_session *session)
 {
+    close_binary_session(session);
     if (session->on_commit_free) session->on_commit_free(session->on_commit_opaque);
     voice_projection_free(session->voice_projection);
     if (session->log_fd >= 0) (void)close(session->log_fd);
@@ -3883,6 +3886,9 @@ clone_session_state(const struct snag_session *source, struct snag_session *stag
 {
     *staged = *source;
     staged->pending_calls = NULL;
+    staged->processes = NULL;
+    staged->process_count = 0u;
+    staged->process_capacity = 0u;
     staged->pending_call_capacity = 0u;
     staged->pending_steering = NULL;
     staged->pending_steering_count = 0u;
@@ -3927,9 +3933,6 @@ clone_session_state(const struct snag_session *source, struct snag_session *stag
         for(size_t i=0;i<staged->pending_queue_count;++i)
             staged->pending_queue[i].content=json_incref(source->pending_queue[i].content);
     }
-    staged->processes = NULL;
-    staged->process_count = 0u;
-    staged->process_capacity = 0u;
     if (source->process_capacity) {
         staged->processes = malloc(source->process_capacity * sizeof(*staged->processes));
         if (!staged->processes) return -1;
@@ -3942,9 +3945,289 @@ clone_session_state(const struct snag_session *source, struct snag_session *stag
            (source->download_queue && !staged->download_queue) ? -1 : 0;
 }
 
+/* One engine-owned native transaction. The worker owns immutable write bytes;
+ * this object owns mutable frontier/provenance and the provisional reducer. */
+struct snag_binary_session {
+    struct snag_binary_identity identity;
+    struct snag_binary_anchor boundary, proposed_boundary;
+    struct snag_binary_index_tree tree, proposed_tree;
+    struct snag_binary_producer producer, proposed;
+    struct snag_binary_io *io;
+    struct snag_session *candidate;
+    char *type;
+    json_t *data;
+    bool io_pending, retryable, retried, faulted;
+};
+
+static void
+binary_hex(char *out, const unsigned char *bytes, size_t size)
+{
+    static const char digits[] = "0123456789abcdef";
+    for (size_t i = 0u; i < size; ++i) {
+        out[i * 2u] = digits[bytes[i] >> 4u];
+        out[i * 2u + 1u] = digits[bytes[i] & 15u];
+    }
+    out[size * 2u] = '\0';
+}
+
+static bool
+binary_anchor_equal(const struct snag_binary_anchor *a, const struct snag_binary_anchor *b)
+{
+    return a->end == b->end && a->next_seq == b->next_seq && a->turns == b->turns &&
+        a->previous == b->previous && !memcmp(a->digest, b->digest, sizeof(a->digest));
+}
+
+static void
+binary_discard_candidate(struct snag_binary_session *binary)
+{
+    if (binary->candidate) {
+        free_session_state(binary->candidate);
+        free(binary->candidate);
+        binary->candidate = NULL;
+    }
+    snag_binary_producer_free(&binary->proposed);
+    free(binary->type);
+    binary->type = NULL;
+    json_decref(binary->data);
+    binary->data = NULL;
+}
+
+static int
+binary_take(struct snag_binary_session *binary, struct snag_binary_io_result *result,
+    struct snag_buf *batch)
+{
+    for (;;) {
+        int rc = snag_binary_io_take_batch(binary->io, result, batch);
+        if (rc != 1) {
+            binary->io_pending = false;
+            return rc;
+        }
+        if (snag_wakeup_wait(snag_binary_io_wake(binary->io), -1) < 0 && errno != EINTR) {
+            return -1;
+        }
+    }
+}
+
+static void
+close_binary_session(struct snag_session *session)
+{
+    struct snag_binary_session *binary = session->binary;
+    if (!binary) return;
+    /* Drain before descriptor/lock teardown. Closing never releases effects for
+     * an otherwise unacknowledged transaction; recovery observes its real bytes. */
+    if (binary->io_pending) {
+        struct snag_binary_io_result result;
+        struct snag_buf batch = {0};
+        while (binary->io_pending) {
+            if (binary_take(binary, &result, &batch) < 0 && binary->io_pending) {
+                (void)snag_sleep_ms(1u);
+            }
+        }
+        snag_buf_free(&batch);
+    }
+    (void)snag_binary_io_close(binary->io);
+    binary_discard_candidate(binary);
+    snag_binary_producer_free(&binary->producer);
+    free(binary);
+    session->binary = NULL;
+}
+
+int
+snag_session_bind_binary(struct snag_session *session, const struct snag_binary_identity *identity,
+    const struct snag_binary_anchor *boundary, const struct snag_binary_index_tree *tree,
+    const struct snag_binary_producer *producer, const struct snag_binary_io_ops *ops,
+    char *error, size_t error_size)
+{
+    if (!session || !identity || !boundary || !tree || !producer || session->binary ||
+        session->pending_log || session->log_fd < 0 || session->lock_fd < 0 ||
+        session->log_end < 0 || boundary->end != (uint64_t)session->log_end ||
+        boundary->next_seq != session->next_seq || boundary->turns != session->turn_count ||
+        !boundary->next_seq || tree->count != boundary->next_seq - 1u ||
+        producer->queue_count != session->pending_queue_count ||
+        (!!producer->input.creation != !!session->pending_input)) {
+        return snag_fail(error, error_size, EINVAL, "invalid native session binding");
+    }
+    unsigned char bytes[SNAG_BINARY_HEADER_SIZE];
+    struct snag_binary_identity found;
+    struct snag_binary_anchor initial;
+    snag_file_info info;
+    char id[SNAG_ID_HEX_LEN + 1u], digest[SNAG_SHA256_HEX_LEN + 1u];
+    binary_hex(id, identity->id, sizeof(identity->id));
+    binary_hex(digest, boundary->digest, sizeof(boundary->digest));
+    if (strcmp(id, session->id) || strcmp(digest, session->prev_sha256) ||
+        snag_fstat(session->log_fd, &info) < 0 || !S_ISREG(info.st_mode) || info.st_size < 0 ||
+        (uint64_t)info.st_size != boundary->end ||
+        snag_pread(session->log_fd, bytes, sizeof(bytes), 0) != (ssize_t)sizeof(bytes) ||
+        snag_binary_header_decode(bytes, sizeof(bytes), &found, &initial) < 0 ||
+        found.created_ms != identity->created_ms ||
+        memcmp(found.id, identity->id, sizeof(found.id))) {
+        return snag_fail(error, error_size, EINVAL,
+            "native session boundary does not match journal");
+    }
+    if (boundary->next_seq == 1u && !binary_anchor_equal(boundary, &initial)) {
+        return snag_fail(error, error_size, EINVAL,
+            "native initial boundary does not match header");
+    }
+    struct snag_binary_session *binary = calloc(1u, sizeof(*binary));
+    if (!binary) return snag_fail(error, error_size, ENOMEM, "cannot stage native session owner");
+    binary->identity = *identity;
+    binary->boundary = *boundary;
+    binary->tree = *tree;
+    if (snag_binary_producer_clone(&binary->producer, producer) < 0 ||
+        !(binary->io = snag_binary_io_start(session->log_fd, boundary, ops))) {
+        int code = errno;
+        snag_binary_producer_free(&binary->producer);
+        free(binary);
+        return snag_fail(error, error_size, code, "cannot start native session owner");
+    }
+    session->binary = binary;
+    return 0;
+}
+
+static int
+binary_prepare_candidate(struct snag_session *session, const char *type, json_t *data,
+    char *error, size_t error_size)
+{
+    struct snag_binary_session *binary = session->binary;
+    struct snag_buf decoded = {.max = SNAG_BINARY_BATCH_MAX};
+    binary->candidate = calloc(1u, sizeof(*binary->candidate));
+    binary->type = strdup(type);
+    binary->data = json_deep_copy(data);
+    if (!binary->candidate || !binary->type || !binary->data ||
+        clone_session_state(session, binary->candidate) < 0 ||
+        snag_binary_producer_clone(&binary->proposed, &binary->producer) < 0) goto fail;
+    data = binary->data;
+    struct snag_session *candidate = binary->candidate;
+    candidate->last_time_ms = session->next_seq == 1u ?
+        binary->identity.created_ms : snag_time_ms();
+    if (apply_event(candidate, type, data, session->next_seq, true, false,
+        error, error_size) < 0) goto fail;
+    enum snag_binary_kind kind;
+    if (snag_binary_legacy_encode(&binary->proposed.field, type, data, &kind) < 0) goto fail;
+    struct snag_binary_record record = {.kind = (uint16_t)kind,
+        .version = snag_binary_event_version(kind), .timestamp_ms = candidate->last_time_ms,
+        .payload = binary->proposed.field.data, .size = binary->proposed.field.len};
+    /* Legacy physical-coordinate adapters cannot label native locations. Their
+     * live canonical projections must be supplied before those events can write. */
+    if (kind == SNAG_BINARY_VOICE_TRANSFER_ADOPTED || kind == SNAG_BINARY_TOOL_FINISHED ||
+        kind == SNAG_BINARY_PROCESS_CLOSED) {
+        struct snag_binary_event event;
+        if (snag_binary_event_decode(&record, &event) < 0) goto fail;
+        if (kind == SNAG_BINARY_VOICE_TRANSFER_ADOPTED ||
+            (kind == SNAG_BINARY_TOOL_FINISHED && event.data.tool_finished.result.has_output_ref) ||
+            (kind == SNAG_BINARY_PROCESS_CLOSED &&
+                event.data.process_closed.result.has_output_ref)) {
+            errno = ENOTSUP;
+            goto fail;
+        }
+    }
+    if (snag_binary_producer_reference(&binary->proposed, candidate, session->next_seq,
+            &record, data) < 0 ||
+        snag_binary_batch_encode(&decoded, &binary->boundary, &record, 1u,
+            candidate->turn_count, &binary->proposed_boundary) < 0) goto fail;
+    binary->proposed_tree = binary->tree;
+    if (snag_binary_index_tree_append_batch(NULL, &binary->proposed_tree, &binary->identity,
+        &binary->boundary, &binary->proposed_boundary, decoded.data, decoded.len) < 0) goto fail;
+    if (snag_binary_io_submit(binary->io, &record, 1u, candidate->turn_count) < 0) goto fail;
+    binary->io_pending = true;
+    snag_buf_free(&decoded);
+    return 0;
+fail:
+    {
+        int code = errno;
+        snag_buf_free(&decoded);
+        binary_discard_candidate(binary);
+        return snag_fail(error, error_size, code, "cannot stage native %s event", type);
+    }
+}
+
+static int
+commit_binary_session(struct snag_session *session, const char *type, json_t *data,
+    uint64_t *written_seq, char *error, size_t error_size)
+{
+    struct snag_binary_session *binary = session->binary;
+    if (!type || !data || !strcmp(type, "session_checkpoint")) {
+        return snag_fail(error, error_size, ENOTSUP,
+            "native event requires its canonical producer");
+    }
+    if (binary->faulted) {
+        return snag_fail(error, error_size, ESTALE, "native session requires fresh recovery");
+    }
+    if (binary->candidate) {
+        if (strcmp(type, binary->type) || !json_equal(data, binary->data)) {
+            return snag_fail(error, error_size, EBUSY,
+                "native transaction still awaits durability");
+        }
+        if (!binary->io_pending) {
+            if (!binary->retryable || snag_binary_io_retry(binary->io) < 0) {
+                return snag_fail(error, error_size, EIO, "native write requires fresh recovery");
+            }
+            binary->io_pending = true;
+            binary->retried = true;
+        }
+    } else if (binary_prepare_candidate(session, type, data, error, error_size) < 0) {
+        return -1;
+    }
+    struct snag_binary_io_result result = {0};
+    struct snag_buf batch = {0};
+    if (binary_take(binary, &result, &batch) < 0) {
+        int code = errno;
+        binary->retryable = result.retryable;
+        ++session->write_failures;
+        if (!binary->io_pending && !binary->retryable && !binary->retried) {
+            /* The owner's pre-I/O encoding failure consumed no canonical work
+             * and returned to idle. Keep that corrected-admission contract. */
+            binary_discard_candidate(binary);
+        }
+        return snag_fail(error, error_size, code, "native write not durably acknowledged");
+    }
+    struct snag_binary_index_tree next = binary->tree;
+    if (!binary_anchor_equal(&result.durable, &binary->proposed_boundary) ||
+        snag_binary_index_tree_append_batch(NULL, &next, &binary->identity,
+            &binary->boundary, &result.durable, batch.data, batch.len) < 0) {
+        binary->faulted = true;
+        snag_buf_free(&batch);
+        return snag_fail(error, error_size, ESTALE,
+            "native durability ACK violates staged boundary");
+    }
+    snag_buf_free(&batch);
+    uint64_t sequence = session->next_seq;
+    struct snag_session *candidate = binary->candidate;
+    candidate->committed_start = (int64_t)binary->boundary.end;
+    candidate->committed_end = (int64_t)result.durable.end;
+    candidate->log_end = (int64_t)result.durable.end;
+    candidate->next_seq = result.durable.next_seq;
+    binary_hex(candidate->prev_sha256, result.durable.digest, sizeof(result.durable.digest));
+    candidate->write_failures = session->write_failures;
+    binary->boundary = result.durable;
+    binary->tree = next;
+    snag_binary_producer_free(&binary->producer);
+    binary->producer = binary->proposed;
+    binary->proposed = (struct snag_binary_producer){0};
+    free_session_state(session);
+    *session = *candidate;
+    free(candidate);
+    binary->candidate = NULL;
+    binary->retryable = binary->retried = false;
+    if (written_seq) *written_seq = sequence;
+    char *committed_type = binary->type;
+    json_t *committed_data = binary->data;
+    binary->type = NULL;
+    binary->data = NULL;
+    if (session->on_commit) session->on_commit(session->on_commit_opaque,
+        session, sequence, committed_type, committed_data);
+    free(committed_type);
+    json_decref(committed_data);
+    return 0;
+}
+
 int
 snag_session_checkpoint(struct snag_session *session, char *error, size_t error_size)
 {
+    if (session && session->binary) {
+        return snag_fail(error, error_size, ENOTSUP,
+            "native checkpoint publisher is not installed");
+    }
     if (!session || session->pending_log || session->log_fd < 0 || session->lock_fd < 0)
         return snag_fail(error, error_size, EINVAL, "session has no durable checkpoint boundary");
     json_t *state = snag_checkpoint_state_encode(session);
@@ -3967,6 +4250,11 @@ int
 snag_session_commit(struct snag_session *session, const char *type, json_t *data,
                    uint64_t *written_seq, char *error, size_t error_size)
 {
+    if (session->binary) {
+        int rc = commit_binary_session(session, type, data, written_seq, error, error_size);
+        json_decref(data);
+        return rc;
+    }
     struct snag_session staged = {0};
     int rc = -1;
     bool append_attempted = false;

@@ -33,8 +33,9 @@ struct snag_binary_io_result {
  * has already handled incomplete tails. From start until close, this worker has
  * exclusive descriptor/file access. Neither operation closes the descriptor.
  * Semantic staging stays on the engine thread. This worker never reduces state.
- * No application cutover, index maintenance or creation publication
- * is provided by this test-linked journal owner yet. */
+ * Session commits stage reducer/provenance outside this worker. Backend
+ * selection, independently verified recovery and creation publication remain
+ * caller prerequisites; this worker supplies no semantic authority. */
 struct snag_binary_io *snag_binary_io_start(int fd,
     const struct snag_binary_anchor *boundary, const struct snag_binary_io_ops *ops);
 
