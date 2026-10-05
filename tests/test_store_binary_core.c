@@ -267,6 +267,153 @@ bad_totals(int fd, struct snag_binary_checkpoint_frame frame,
     snag_buf_free(&core);
 }
 
+struct closure_cancel {
+    size_t calls, fail_at;
+};
+
+static bool
+cancel_closure(void *opaque)
+{
+    struct closure_cancel *cancel = opaque;
+    return ++cancel->calls == cancel->fail_at;
+}
+
+static void
+closure_label_precision(int fd, const struct snag_binary_anchor *through,
+    const struct snag_binary_checkpoint_sources *sources, const struct snag_session *state,
+    const struct snag_binary_checkpoint_index *available,
+    const struct snag_binary_checkpoint_index *selected)
+{
+    if (!sources->process_count || sources->response_end || state->pending_steering_count) return;
+    for (size_t i = 0u; i < SNAG_BINARY_CHECKPOINT_TEXT_COUNT; ++i) {
+        uint64_t sequence = sources->texts.slots[i].declaration;
+        struct snag_binary_index_entry entry;
+        if (sequence && !snag_binary_checkpoint_index_find(available, sequence, &entry) &&
+            entry.kind == SNAG_BINARY_RESPONSE_OUTPUT_CORRECTION) return;
+    }
+    struct snag_buf scratch = {.max = SNAG_BINARY_BATCH_MAX};
+    for (size_t i = 0u; i < sources->process_count; ++i) {
+        uint64_t wanted = sources->processes[i].call.graph;
+        struct snag_binary_batch batch;
+        struct snag_binary_anchor before;
+        assert(!snag_binary_checkpoint_batch_find(fd, through, available, wanted,
+            &scratch, &batch, &before));
+        size_t cursor = SNAG_BINARY_BATCH_HEADER_SIZE;
+        struct snag_binary_record record;
+        uint64_t sequence;
+        int rc;
+        while ((rc = snag_binary_record_next(&batch, &cursor, &record, &sequence)) == 0) {
+            if (sequence != wanted) continue;
+            struct snag_binary_event event;
+            assert(!snag_binary_event_decode(&record, &event));
+            assert(event.kind == SNAG_BINARY_RESPONSE_COMPLETED);
+            size_t offset = 0u;
+            struct snag_binary_graph_item item;
+            while ((rc = snag_binary_graph_items_next(&event.data.response_completed.items,
+                    &offset, &item)) == 0) {
+                if (item.kind == SNAG_BINARY_ITEM_TOOL_CALL ||
+                    !item.data.output.source.first.sequence) continue;
+                struct snag_binary_index_entry entry;
+                assert(snag_binary_checkpoint_index_find(selected,
+                    item.data.output.source.first.sequence, &entry) == 1);
+                assert(snag_binary_checkpoint_index_find(selected,
+                    item.data.output.source.last_sequence, &entry) == 1);
+            }
+            assert(rc == 1);
+            break;
+        }
+    }
+    snag_buf_free(&scratch);
+}
+
+static void
+closure_core_checks(int fd, const struct snag_binary_anchor *through,
+    const struct snag_binary_checkpoint_sources *sources, const struct snag_session *state,
+    const struct snag_binary_checkpoint_frame *frame,
+    const struct snag_binary_checkpoint_index *available)
+{
+    /* Core-only fixture recipe names creation. Paired context fixtures exercise
+     * their actual recent/history recipe roots independently. */
+    json_t *recent = json_pack("[{s:I,s:I,s:s,s:b,s:b,s:b}]", "seq", (json_int_t)1u,
+        "time", (json_int_t)available->identity.created_ms, "turn", "", "active", false,
+        "unfinished", false, "processes", false);
+    json_t *history = json_array();
+    assert(recent && history);
+    struct snag_buf provider = {.max = SIZE_MAX};
+    assert(!snag_binary_checkpoint_provider_encode(&provider, state, recent, history));
+    struct snag_buf selected = {.max = SIZE_MAX};
+    struct closure_cancel cancel = {0};
+    int64_t position = snag_seek(fd, 0, SEEK_CUR);
+    int rc = snag_binary_checkpoint_access_capture(fd, through, available, &available->tree,
+        sources, state, provider.data, provider.len, cancel_closure, &cancel, &selected);
+    if (rc < 0) fprintf(stderr, "core closure sequence %llu: %d\n",
+        (unsigned long long)through->next_seq, errno);
+    assert(!rc && selected.len <= SNAG_BINARY_CHECKPOINT_INDEX_HEADER_SIZE +
+        available->entry_count * SNAG_BINARY_INDEX_ENTRY_SIZE);
+    unsigned char root[32];
+    assert(!snag_binary_index_tree_root(&available->tree, root));
+    struct snag_binary_checkpoint_index access;
+    assert(!snag_binary_checkpoint_index_decode(selected.data, selected.len,
+        &available->identity, through, root, &access));
+    struct snag_buf repeated = {.max = SIZE_MAX};
+    assert(!snag_binary_checkpoint_access_capture(fd, through, &access, &access.tree,
+        sources, state, provider.data, provider.len, NULL, NULL, &repeated));
+    assert(selected.len == repeated.len && !memcmp(selected.data, repeated.data, selected.len));
+    struct snag_session restored;
+    snag_session_init(&restored);
+    struct snag_binary_checkpoint_sources origins = {0};
+    assert(!snag_binary_checkpoint_core_read(fd, frame, &access, &restored, &origins));
+    closure_label_precision(fd, through, sources, state, available, &access);
+    snag_buf_free(&selected);
+    same(state, &restored);
+    snag_session_close(&restored);
+    snag_binary_checkpoint_sources_free(&origins);
+    unsigned int class_mode = (!!state->pending_call_count) | (!!state->process_count << 1u) |
+        (!!state->voice_history.adopted_seq << 2u) | (!!sources->response_end << 3u) |
+        (!!state->pending_queue_count << 4u);
+    static bool checked[32];
+    if (!checked[class_mode]) {
+        checked[class_mode] = true;
+        struct snag_buf output = {.max = SIZE_MAX};
+        assert(!snag_buf_append(&output, "keep", 4u));
+        for (size_t i = 1u; i <= cancel.calls; ++i) {
+            struct closure_cancel stopped = {.fail_at = i};
+            assert(snag_binary_checkpoint_access_capture(fd, through, available, &available->tree,
+                sources, state, provider.data, provider.len, cancel_closure, &stopped,
+                &output) < 0 && errno == ECANCELED);
+            assert(stopped.calls == i && output.len == 4u && !memcmp(output.data, "keep", 4u));
+        }
+        struct snag_buf omitted = {.max = SIZE_MAX};
+        struct snag_binary_checkpoint_index missing;
+        binary_fixture_access_omit(available, 1u, &omitted, &missing);
+        assert(snag_binary_checkpoint_access_capture(fd, through, &missing, &missing.tree,
+            sources, state, provider.data, provider.len, NULL, NULL, &output) < 0 &&
+            errno == ENOENT);
+        assert(output.len == 4u && !memcmp(output.data, "keep", 4u));
+        snag_buf_free(&omitted);
+        struct snag_binary_index_tree bad = available->tree;
+        --bad.count;
+        assert(snag_binary_checkpoint_access_capture(fd, through, available, &bad,
+            sources, state, provider.data, provider.len, NULL, NULL, &output) < 0 &&
+            errno == EINVAL);
+        struct snag_binary_checkpoint_index wrong = *available;
+        wrong.identity.id[0] ^= 1u;
+        assert(snag_binary_checkpoint_access_capture(fd, through, &wrong, &available->tree,
+            sources, state, provider.data, provider.len, NULL, NULL, &output) < 0 &&
+            errno == EINVAL);
+        assert(snag_binary_checkpoint_access_capture(-1, through, available, &available->tree,
+            sources, state, provider.data, provider.len, NULL, NULL, &output) < 0 &&
+            errno == EINVAL);
+        assert(output.len == 4u && !memcmp(output.data, "keep", 4u));
+        snag_buf_free(&output);
+    }
+    assert(snag_seek(fd, 0, SEEK_CUR) == position);
+    snag_buf_free(&repeated);
+    snag_buf_free(&provider);
+    json_decref(recent);
+    json_decref(history);
+}
+
 void
 test_store_binary_core_state(int fd, const struct snag_binary_anchor *anchor,
     const struct snag_binary_checkpoint_sources *sources, const struct snag_session *state)
@@ -288,6 +435,7 @@ test_store_binary_core_state(int fd, const struct snag_binary_anchor *anchor,
     struct snag_buf access_bytes = {.max = SIZE_MAX};
     struct snag_binary_checkpoint_index access;
     binary_fixture_access(fd, anchor, &access_bytes, &access);
+    closure_core_checks(fd, anchor, sources, state, &frame, &access);
     struct snag_session indexed;
     snag_session_init(&indexed);
     struct snag_binary_checkpoint_sources indexed_sources = {0};

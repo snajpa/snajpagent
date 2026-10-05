@@ -3,6 +3,10 @@
 # Changelog
 
 ## Unreleased
+- Select native checkpoint access locations from current core/provider roots and
+  required original fields, voice starts, response spans and graph transforms.
+  Capture deduplicates canonical locations with bounded batch scratch and atomic
+  output ownership. Live closure maintenance and runtime admission remain pending.
 - Read native provider-recipe events directly from canonical checkpoint sources,
   including original input/voice fields and selected response-fragment spans.
   Preserve scope, item, first-field and offset checks while assembling fresh

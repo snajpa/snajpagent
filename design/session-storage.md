@@ -2155,7 +2155,8 @@ The version-1 access block stores a fixed frontier and sorted canonical location
 for the caller's active working set. It contains no event payloads and requires
 no lifetime location table or addressable `history.idx` prefix. The field-shaped
 codec, framing/publication and core/provider source materializers are test-linked;
-working-set capture and runtime admission remain pending.
+snapshot closure selection is available; live working-set maintenance and runtime
+admission remain pending.
 
 | Offset | Field |
 |---|---|
@@ -2516,3 +2517,39 @@ are restricted to canonical IRC metadata or validated legacy-checkpoint markers.
 Source decoding and array allocation do not confer current membership, epoch,
 configuration or resume authority. Normal bounded admission and live capture of
 complete producer closure remain integration work; the runtime backend is JSONL.
+
+### Snapshot closure selection
+
+The access capture helper selects locations for a verified producer snapshot from
+an independently pinned available working set plus a caller-bounded newer suffix.
+It takes the complete index frontier at the new capture boundary; this helper
+performs no lifetime index-file scan, frontier rebuild or prefix replay. Available
+old membership must already include every needed field, span and transform. Sparse
+absence cannot prove that an intermediate fragment or mutation never occurred.
+
+Roots include fixed text declarations/originals, current accepting input and queue
+receipts, pending steering, unsettled process origins, call-time directories,
+retained response/compaction and launch-option sources, queued downloads, adopted
+voice history and the provider recipe's recent/historical rows. Typed projection
+roots add their older literal fields, native voice starts and public span fragments.
+Call/process labels retain graph metadata, graph-time cwd and accepted
+transformations in their causal interval. Public span dependencies enter through
+actual retained provider graphs or response roots. Reference
+causality is checked and all selected locations are compared to canonical batch
+positions, kinds, turn ordinals and hashes before sorted/deduplicated encoding.
+
+Scratch retains one permitted batch and its per-record location table. Root and
+selected-location storage scales with the producer working set. Capture uses
+read-only positional I/O, checks cancellation during root collection, interval
+visits and batch loads, and appends the encoded access section only after complete
+success. Previously owned output bytes remain unchanged on failure. The enclosing
+producer establishes snapshot semantics and complete membership; selecting source
+locations does not independently replay lifecycle authority or publish a checkpoint.
+Lazy historical tool-output ranges remain history-navigation work; source hydration
+of a retained result uses its encoded excerpt and presentation metadata.
+
+Fixtures restore core state from captured sparse metadata and recapture from that
+same sparse table to compare exact bytes. Actual paired provider recipe captures
+are restored against the same canonical oracle as dense/unindexed reads. Live
+producer table maintenance, receipt-bound joint admission, runtime ownership and
+backend/converter integration remain separate work; the application uses JSONL.

@@ -136,16 +136,27 @@ cancel_provider(void *opaque)
 
 static void
 provider_source_checks(int fd, const struct snag_binary_anchor *through,
+    const struct snag_binary_checkpoint_sources *origins, const struct snag_session *state,
     const json_t *recent, const json_t *history, const struct snag_buf *provider)
 {
     struct snag_buf access_bytes = {.max = SIZE_MAX};
     struct snag_binary_checkpoint_index access;
     binary_fixture_access(fd, through, &access_bytes, &access);
+    struct snag_buf selected = {.max = SIZE_MAX};
+    assert(!snag_binary_checkpoint_access_capture(fd, through, &access, &access.tree,
+        origins, state, provider->data, provider->len, NULL, NULL, &selected));
+    unsigned char root[32];
+    assert(!snag_binary_index_tree_root(&access.tree, root));
+    struct snag_binary_checkpoint_index captured;
+    assert(!snag_binary_checkpoint_index_decode(selected.data, selected.len,
+        &access.identity, through, root, &captured));
     int64_t position = snag_seek(fd, 0, SEEK_CUR);
-    for (unsigned int mode = 0u; mode < 2u; ++mode) {
+    for (unsigned int mode = 0u; mode < 3u; ++mode) {
         json_t *events = NULL;
         json_t *sources = NULL;
-        int rc = snag_binary_checkpoint_provider_read(fd, through, mode ? &access : NULL,
+        const struct snag_binary_checkpoint_index *chosen = mode == 2u ? &captured :
+            mode ? &access : NULL;
+        int rc = snag_binary_checkpoint_provider_read(fd, through, chosen,
             provider->data, provider->len, NULL, NULL, &events, &sources);
         if (rc < 0) fprintf(stderr, "provider source mode %u: %d\n", mode, errno);
         assert(!rc && json_equal(events, recent) && json_equal(sources, history));
@@ -212,6 +223,7 @@ provider_source_checks(int fd, const struct snag_binary_anchor *through,
         provider->data, provider->len, NULL, NULL, &events, &events) < 0 && errno == EINVAL);
     assert(events == old_events && sources == old_sources);
     assert(snag_seek(fd, 0, SEEK_CUR) == position);
+    snag_buf_free(&selected);
     snag_buf_free(&access_bytes);
 }
 
@@ -337,7 +349,7 @@ checkpoint_matches(struct snag_session *source, struct snag_session *expected,
     assert(snag_binary_checkpoint_core_encode(&core, origins, expected) == 0);
     assert(snag_binary_checkpoint_provider_encode(&provider, expected, recent, history) == 0);
     provider_codec_checks(expected, recent, history, &provider);
-    provider_source_checks(source->log_fd, anchor, recent, history, &provider);
+    provider_source_checks(source->log_fd, anchor, origins, expected, recent, history, &provider);
     unsigned char header[SNAG_BINARY_HEADER_SIZE];
     assert(pread(source->log_fd, header, sizeof(header), 0) == (ssize_t)sizeof(header));
     struct snag_binary_checkpoint_frame frame = {.generation = 1u, .boundary = *anchor,

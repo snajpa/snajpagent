@@ -159,6 +159,20 @@ struct snag_binary_checkpoint_calls {
     size_t count;
 };
 
+/* Select complete core/provider materializer closure from an independently
+ * verified snapshot and available old working-set sources plus bounded suffix.
+ * Available must contain every old field/span/transform dependency; omissions
+ * are not absence proofs. The caller supplies the full frontier at through and
+ * establishes common identity/ancestry, immutable bytes and snapshot semantics.
+ * Current roots and their required locations are sorted/deduplicated; no lifetime
+ * map/index file/replay is read. Atomic encoded append; pread and cancellation. */
+int snag_binary_checkpoint_access_capture(int fd, const struct snag_binary_anchor *through,
+    const struct snag_binary_checkpoint_index *available,
+    const struct snag_binary_index_tree *frontier,
+    const struct snag_binary_checkpoint_sources *, const struct snag_session *,
+    const void *provider, size_t provider_size, bool (*cancelled)(void *), void *opaque,
+    struct snag_buf *out);
+
 /* Calls all originate in one completed graph. Save its directory before a
  * later cwd change; status bits come from the same provisional core snapshot.
  * Decode borrows the block. Encode appends atomically and supports aliasing. */
