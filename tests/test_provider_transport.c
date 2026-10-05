@@ -9217,6 +9217,16 @@ test_native_pager_reports(struct app_state *app, struct snag_config *config, con
         else if (trial == 3u) strcpy(config->pager, "off");
         bool handled = false, prompt_ready = false;
         assert(snag_app_input_command(app, "/status", false, &handled, &prompt_ready) == 0);
+        /* Keyboard pagers finish through the same pump used during a turn. */
+        assert(handled);
+        if (app->pager) {
+            assert(observations == 0u);
+            uint64_t deadline = snag_monotonic_ms() + 5000u;
+            while (app->pager) {
+                assert(snag_monotonic_ms() < deadline);
+                assert(snag_app_active_input_pump(app, 10u) == 0);
+            }
+        }
         assert(handled && observations == 1u);
         struct stat st;
         assert(stat(called, &st) == 0 && st.st_size == 1);
