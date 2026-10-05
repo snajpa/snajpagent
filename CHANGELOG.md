@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Request the current Codex model catalog so GPT-6 models remain available
+  in model selection with ChatGPT device and Enterprise access-token logins.
+
 - Keep each running owner's provider credentials until an explicit `/configure`
   reload or restart. Reload saved settings and credentials at a safe request
   boundary while preserving session model selection; failed reloads retain the

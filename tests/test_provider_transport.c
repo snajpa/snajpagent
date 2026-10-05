@@ -1050,7 +1050,7 @@ auth_server_child(int listen_fd, enum model_fixture fixture)
         if (fd < 0) server_fail("auth accept failed");
         read_request(fd, &request);
         if (fixture >= MODEL_AUTH_401 && i != 1u) {
-            if (strcmp(request.path, "/models?client_version=0.146.0") ||
+            if (strcmp(request.path, "/models?client_version=0.159.2") ||
                 !strstr(request.headers, "ChatGPT-Account-Id: acct-test") ||
                 !strstr(request.headers, i == 0u ? "Bearer old-access" : "Bearer new-access"))
                 server_fail("wrong Codex account or access header");
@@ -1758,9 +1758,11 @@ server_child(int listen_fd, enum model_fixture models, bool transport)
          "event: response.failed\n" "data: {\"type\":\"response.failed\",\"response\":{"
          "\"error\":{\"code\":\"context_length_exceeded\","
          "\"message\":\"stream too large transport-secret\"," "\"context_length\":872000}}}\n\n"},
-        {MODEL_CODEX_FAILURE, 400u, "GET", "/backend-api/codex/models?client_version=0.146.0", "application/json",
+        {MODEL_CODEX_FAILURE, 400u, "GET", "/backend-api/codex/models?client_version=0.159.2",
+         "application/json",
          "{\"error\":{\"message\":\"catalog rejected\"}}"},
-        {MODEL_CODEX_MALFORMED, 200u, "GET", "/backend-api/codex/models?client_version=0.146.0", "application/json",
+        {MODEL_CODEX_MALFORMED, 200u, "GET", "/backend-api/codex/models?client_version=0.159.2",
+         "application/json",
          "{\"models\":[{\"slug\":\"malformed\",\"visibility\":\"list\",\"priority\":1,\"supported_reasoning_levels\":[\"high\"]}]}"},
         {MODEL_CODEX_LOOKALIKE, 200u, "GET", "/backend-api/codexish/v1/models", "application/json",
          "{\"data\":[{\"id\":\"lookalike-openai\"}]}"},

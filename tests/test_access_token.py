@@ -9,6 +9,7 @@ import sys
 import tempfile
 import threading
 from pathlib import Path
+from urllib.parse import parse_qs, urlsplit
 
 from test_provider_https import response
 
@@ -30,8 +31,21 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     def do_GET(self):
         self.server.requests.append(("GET", self.path, dict(self.headers), None))
-        assert self.path == "/api/accounts/v1/user-auth-credential/whoami", self.path
         assert self.headers.get("Authorization") == "Bearer " + self.server.token
+        url = urlsplit(self.path)
+        if url.path == "/models":
+            assert self.headers.get("ChatGPT-Account-Id") == self.server.account
+            version = tuple(int(part) for part in parse_qs(url.query)["client_version"][0].split("."))
+            names = ["gpt-5.6-sol"]
+            if version >= (0, 159, 2):
+                names += ["gpt-6.1-sol", "gpt-6-astra"]
+            models = [{"slug": name, "visibility": "list", "priority": i,
+                       "default_reasoning_level": "high", "context_window": 272000,
+                       "supported_reasoning_levels": [{"effort": "high"}, {"effort": "xhigh"}]}
+                      for i, name in enumerate(names)]
+            self.reply(200, json.dumps({"models": models}).encode())
+            return
+        assert self.path == "/api/accounts/v1/user-auth-credential/whoami", self.path
         self.reply(self.server.status, json.dumps(self.server.metadata).encode())
 
     def do_POST(self):
@@ -89,6 +103,15 @@ def check(binary):
             assert "codex_token" in config.read_text() and TOKEN not in config.read_text()
             assert "codex_token (stored)" in run("login", "status", "codex").stdout
             before = auth.read_bytes(), config.read_bytes()
+            # The native catalog filters current models by client compatibility version.
+            run("--update-model-cache", "-l", "0")
+            providers = json.loads((state / "models.json").read_text())["providers"]
+            catalog = next(provider for provider in providers if provider["name"] == "codex")
+            models = {model["id"]: model for model in catalog["models"]}
+            for name in ("gpt-6.1-sol", "gpt-6-astra"):
+                assert name in models, ("current model missing from catalog", name, list(models))
+                assert models[name]["efforts"] == ["high", "xhigh"]
+                assert models[name]["limits"]["context_window_tokens"] == 272000
             run("login", "codex")
             assert (auth.read_bytes(), config.read_bytes()) == before
             result = run("login", "codex", "--openai-device-auth", ok=False)

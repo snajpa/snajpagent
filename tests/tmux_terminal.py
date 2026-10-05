@@ -516,7 +516,7 @@ class FakeResponses:
                     }],
                 }
             elif handler.path == (
-                    "/backend-api/codex/models?client_version=0.146.0"):
+                    "/backend-api/codex/models?client_version=0.159.2"):
                 status = 200
                 response = {
                     "models": [
@@ -3719,7 +3719,7 @@ def run_model_catalog_case(binary, root, provider, environment):
         terminal.submit_wait("/verbose 6", "verbosity: 6")
         before = provider.catalog_paths()
         refresh_screen = terminal.submit_wait("/model cache", "cache updated:", join_wrapped=True)
-        assert "> GET /backend-api/codex/models?client_version=0.146.0 HTTP/1.1" in refresh_screen
+        assert "> GET /backend-api/codex/models?client_version=0.159.2 HTTP/1.1" in refresh_screen
         assert "> authorization:" in refresh_screen and "<redacted:bearer>" in refresh_screen
         assert "irc-ui-secret" not in refresh_screen
         screen = terminal.submit_wait("/model list", "5. codex / codex-late / ultra",
@@ -3759,7 +3759,7 @@ def run_model_catalog_case(binary, root, provider, environment):
         assert limits["effective_context_window_percent"] is None
         expected_paths = [
             "/v1/models",
-            "/backend-api/codex/models?client_version=0.146.0",
+            "/backend-api/codex/models?client_version=0.159.2",
         ]
         if provider.catalog_paths()[len(before):] != expected_paths:
             raise AssertionError("mixed refresh used unexpected catalog endpoints")

@@ -72,18 +72,22 @@ catalog refresh is introduced.
 ## Persistent Discovery
 
 `/model cache` discovers models from every configured provider, records all of
-them in `DOTDIR/models.json`, and then displays the new catalog. Discovery is
-selected by the normalized configured API path, never the provider name:
+them in `DOTDIR/models.json`, and reports the refresh timestamp. `/model list`
+displays the catalog. Discovery is selected by the normalized configured API
+path, never the provider name:
 
 - a path ending in the exact case-sensitive `/backend-api/codex` component
   sequence uses authenticated
-  `GET <base>/models?client_version=0.146.0`; and
+  `GET <base>/models?client_version=0.159.2`; and
 - every other path uses authenticated `GET <base>/v1/models`.
 
-`0.146.0` is the dedicated Codex catalog compatibility version supported by
-this decoder and its Codex response fixture, selected from the inspected Codex
-0.146.0 catalog contract; it is not the snajpagent product version. The Codex
-endpoint reads `models[].slug`, keeps only entries whose `visibility` is exactly `list`,
+`0.159.2` is the dedicated Codex catalog compatibility version supported by
+this decoder, verified against the native catalog and the installed official
+client. The server uses this version to filter model availability; an older
+value can hide models that already accept inference requests. The regression
+fixture covers version-filtered model discovery, reasoning efforts and limits.
+The Codex endpoint reads `models[].slug`, keeps only entries whose `visibility`
+is exactly `list`,
 stably orders them by ascending numeric `priority`, and preserves advertised
 `supported_reasoning_levels[].effort` order and `default_reasoning_level`.
 Hidden, `none`, missing, and unknown visibility values do not become selectable.
