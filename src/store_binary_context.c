@@ -90,6 +90,120 @@ walk_sources(void *opaque, snag_session_event_fn fn, void *argument,
     return rc;
 }
 
+static bool
+same_anchor(const struct snag_binary_anchor *left, const struct snag_binary_anchor *right)
+{
+    return left->end == right->end && left->next_seq == right->next_seq &&
+        left->turns == right->turns && left->previous == right->previous &&
+        !memcmp(left->digest, right->digest, sizeof(left->digest));
+}
+
+static int
+checkpoint_cancelled(const struct snag_context_control *control, char *error, size_t error_size)
+{
+    if (control && control->cancelled && control->cancelled(control->opaque)) {
+        return snag_fail(error, error_size, ECANCELED, "checkpoint materialization cancelled");
+    }
+    return 0;
+}
+
+int
+snag_store_materialize_binary_context_checkpoint(struct snag_session *source,
+    struct snag_session *restored, const struct snag_binary_checkpoint_frame *frame,
+    const struct snag_binary_checkpoint_receipt *receipt,
+    struct snag_binary_checkpoint_sources *sources, const struct snag_context_control *control,
+    char *error, size_t error_size)
+{
+    if (!source || !restored || source == restored || !frame || !receipt ||
+        source->log_fd < 0 || source->lock_fd < 0 || source->pending_log ||
+        !snag_hex_is_lower(source->id, SNAG_ID_HEX_LEN) ||
+        restored->dir_fd >= 0 || restored->log_fd >= 0 || restored->lock_fd >= 0 ||
+        restored->pending_log) {
+        return snag_fail(error, error_size, EINVAL, "invalid native checkpoint target");
+    }
+    if (frame->core.version != SNAG_BINARY_CORE_VERSION || frame->provider.version != 1u ||
+        frame->access.version != 1u || !frame->access.size) {
+        return snag_fail(error, error_size, ENOTSUP, "native checkpoint sections unavailable");
+    }
+    struct snag_binary_checkpoint_encoder dimensions;
+    if (snag_binary_checkpoint_encoder_init(&dimensions, frame) < 0 ||
+        frame->generation != receipt->generation || dimensions.total != receipt->image_size ||
+        !same_anchor(&frame->boundary, &receipt->boundary) ||
+        memcmp(frame->image_digest, receipt->image_digest, sizeof(frame->image_digest))) {
+        return snag_fail(error, error_size, EINVAL, "checkpoint receipt/boundary mismatch");
+    }
+    if (checkpoint_cancelled(control, error, error_size) < 0) return -1;
+    snag_file_info before;
+    if (snag_fstat(source->log_fd, &before) < 0) return -1;
+    if (!S_ISREG(before.st_mode) || before.st_size < 0 ||
+        frame->boundary.end > (uint64_t)before.st_size) {
+        return snag_fail(error, error_size, EINVAL, "checkpoint lies outside the native source");
+    }
+    struct snag_binary_identity identity;
+    struct snag_binary_anchor root;
+    if (source_header(source->log_fd, &identity, &root) < 0) return -1;
+    if (identity.created_ms != frame->identity.created_ms ||
+        memcmp(identity.id, frame->identity.id, sizeof(identity.id))) {
+        return snag_fail(error, error_size, EINVAL, "checkpoint source identity mismatch");
+    }
+    struct snag_binary_checkpoint_index access;
+    if (snag_binary_checkpoint_index_decode(frame->access.data, frame->access.size,
+            &identity, &frame->boundary, receipt->index_root, &access) < 0) return -1;
+    struct snag_session candidate;
+    snag_session_init(&candidate);
+    struct snag_binary_checkpoint_sources origins = {0};
+    struct snag_context_capture *capture = NULL;
+    json_t *recent = NULL;
+    json_t *history = NULL;
+    int rc = -1;
+    if (checkpoint_cancelled(control, error, error_size) < 0 ||
+        snag_binary_checkpoint_core_read(source->log_fd, frame, &access, &candidate,
+            &origins) < 0 ||
+        checkpoint_cancelled(control, error, error_size) < 0) goto done;
+    struct snag_binary_checkpoint_provider provider;
+    if (snag_binary_checkpoint_provider_decode(frame->provider.data, frame->provider.size,
+            &provider) < 0) goto done;
+    if (strcmp(candidate.id, source->id) || provider.next_seq != candidate.next_seq ||
+        provider.compact_seq != candidate.compact_seq ||
+        provider.rebase_seq != candidate.context_rebase_seq) {
+        snag_fail(error, error_size, EINVAL, "checkpoint core/provider boundary mismatch");
+        goto done;
+    }
+    if (snag_binary_checkpoint_provider_read(source->log_fd, &frame->boundary, &access,
+            frame->provider.data, frame->provider.size, control ? control->cancelled : NULL,
+            control ? control->opaque : NULL, &recent, &history) < 0) goto done;
+    capture = snag_context_capture_new(control);
+    if (!capture) { snag_errno(ENOMEM); goto done; }
+    if (snag_context_capture_seed(capture, recent, history) < 0 ||
+        snag_context_capture_bind(&capture, &candidate, error, error_size) < 0 ||
+        checkpoint_cancelled(control, error, error_size) < 0) goto done;
+    /* The last callback precedes this stamp check: a callback cannot rewrite
+     * the source after its final validation and still expose adopted state. */
+    snag_file_info after;
+    if (snag_fstat(source->log_fd, &after) < 0) goto done;
+    if (!snag_file_unchanged(&before, &after)) {
+        snag_fail(error, error_size, EAGAIN,
+            "native checkpoint source changed during materialization");
+        goto done;
+    }
+    snag_session_close(restored);
+    *restored = candidate;
+    snag_session_init(&candidate);
+    if (sources) {
+        snag_binary_checkpoint_sources_free(sources);
+        *sources = origins;
+        origins = (struct snag_binary_checkpoint_sources){0};
+    }
+    rc = 0;
+done:
+    snag_session_close(&candidate);
+    snag_binary_checkpoint_sources_free(&origins);
+    snag_context_capture_free(capture);
+    json_decref(recent);
+    json_decref(history);
+    return rc;
+}
+
 /* Replaying the exact boundary is deliberately the independent semantic oracle.
  * Checksums alone cannot prove that an otherwise valid older control/reference
  * remains current, or that a saved seam includes every required event. */

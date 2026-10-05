@@ -181,6 +181,7 @@ test_store_binary_image(void)
     assert(!snag_binary_checkpoint_image_read(fixture.fd, &fixture.identity,
         &fixture.receipt, &out, &frame, interfere, &event));
     assert(event.calls == 5u && out.len == fixture.bytes.len);
+    assert(!memcmp(frame.image_digest, fixture.receipt.image_digest, 32u));
     assert(!memcmp(out.data, fixture.bytes.data, out.len));
     assert(frame.core.data == out.data + SNAG_BINARY_CHECKPOINT_HEADER_SIZE);
     assert(frame.core.size == 150009u && frame.provider.size == 8u && frame.access.size == 6u);

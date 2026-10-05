@@ -433,6 +433,8 @@ checkpoint_frame_view(const void *data, size_t size,
         .access = {.version = access_version,
             .data = access ? bytes + SNAG_BINARY_CHECKPOINT_HEADER_SIZE +
                 (size_t)core + (size_t)provider : NULL, .size = (size_t)access}};
+    memcpy(decoded.image_digest, bytes + size - sizeof(decoded.image_digest),
+        sizeof(decoded.image_digest));
     *frame = decoded;
     return 0;
 }

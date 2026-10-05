@@ -64,6 +64,9 @@ struct snag_binary_checkpoint_frame {
     struct snag_binary_identity identity;
     struct snag_binary_anchor boundary;
     uint64_t generation;
+    /* Decoders retain the verified footer digest for later receipt joins.
+     * Encoders derive it from sections; it is not an additional wire field. */
+    unsigned char image_digest[32];
     struct snag_binary_checkpoint_section core, provider, access;
 };
 

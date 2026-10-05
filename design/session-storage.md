@@ -1911,7 +1911,8 @@ frame has no per-event size cap; its caller supplies the buffer resource budget.
 
 Decode requires an independently authenticated identity and boundary from the
 same immutable journal, and matches every member before returning borrowed
-section views. A short header or an otherwise valid incomplete frame returns the
+section views and the verified footer digest. The digest remains in decoded
+metadata for receipt joins; encoders compute it from the immutable sections. A short header or an otherwise valid incomplete frame returns the
 incomplete result without changing the output. Malformed complete headers,
 overflow, mismatched boundaries,
 unsupported frame versions/features and checksum failures are errors. Encode
@@ -1986,7 +1987,8 @@ checked before reads and record visits. Callbacks borrow each record until they
 return and stage any resulting state until complete success. A failure can follow
 earlier visits, so this API provides no callback-output rollback or adoption.
 Call transformations, retained response streams and provider span hydration
-use this iterator; producer closure and runtime admission remain pending.
+use this iterator. Snapshot closure selection is available; live producer
+maintenance and runtime admission remain pending.
 
 ### Indexed pending-input materialization
 
@@ -2004,6 +2006,33 @@ bound remain the enclosing consumer's responsibilities. Successful reads return
 fresh ownership; failed reads retain prior outputs and descriptor position. This
 component does not establish pending membership, adopt core/provider state or
 change the application's JSONL backend.
+
+### Joint checkpoint materialization
+
+The state-only materializer takes an immutable decoded image already matched to
+its canonical journal receipt. It checks the image digest, generation, dimensions,
+full captured boundary, source-header identity and the embedded access frontier.
+Core and provider sections share next sequence, compaction and rebase boundaries.
+Required canonical fields, graphs, input receipts, voice roots and provider spans
+resolve through the pinned working-set table. It reads neither a lifetime prefix
+nor a derived index file. An absent required old location is an error; absent or
+unsupported access is unavailable rather than permission to scan history.
+
+Core state, origin arrays and the provider capture remain private until complete
+success. Phase and provider-row cancellation, followed by the final source-stamp
+check, precede joint adoption. Initialized destination owners and descriptor
+positions survive failure. Cancellation does not yet interrupt an individual core
+phase or nested provider span. The adopted state owns its decoded values and
+capture, without installing file descriptors, provider configuration, running
+processes or voice-device ownership. Bytes after capture remain uninspected.
+
+The enclosing loader establishes current receipt membership, captured-anchor
+ancestry and the producer's complete semantic closure under the exclusive writer
+lock. A digest or sparse range alone proves none of those conditions. Immutable
+frame and source ownership remain required; source stamps cannot detect a write
+with identical filesystem metadata. This test-linked component supplies neither
+bounded suffix lookup nor tail-repair authority. Live producer maintenance and
+application admission remain under implementation; runtime storage is JSONL.
 
 ### Canonical checkpoint receipt codec
 
@@ -2194,8 +2223,9 @@ The fixed-text materializer now accepts this access metadata for declarations an
 original literal fields, preserving its source-role, slice and atomic-output
 checks. Tests build sparse tables from an independent canonical-prefix walk and
 compare indexed and unindexed strings, reject omitted required entries, and run
-malformed text candidates through both paths. Other materializers, complete
-reference-closure capture and bounded application admission remain pending.
+malformed text candidates through both paths. The other core/provider readers
+use the same pinned lookup rules; snapshot closure selection is available.
+Live closure maintenance and bounded application admission remain pending.
 
 ### Append-only index proofs
 

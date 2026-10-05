@@ -26,6 +26,24 @@ int snag_store_reconcile_binary_context_prefix(struct snag_session *source,
     struct snag_binary_recovery *recovery, struct snag_binary_checkpoint_sources *sources,
     const struct snag_context_control *control, char *error, size_t error_size);
 
+/* Joint state-only core/provider materialization from a frame already decoded
+ * and pinned against this independently authenticated canonical receipt.
+ * The caller establishes latest membership, capture ancestry, complete producer
+ * closure and immutable frame/source ownership under the exclusive writer lock.
+ * Compare common frame/receipt/index/section boundaries, resolve all required
+ * sources through pinned access and recheck source stamps before joint adoption.
+ * Work uses the working-set table and canonical batches; no prefix replay or
+ * index file is read. Missing/unsupported access is unavailable (ENOTSUP), never
+ * an implicit lifetime fallback. Cancellation is between materialization phases
+ * and provider rows; both initialized outputs remain unchanged on failure.
+ * Bytes after capture stay uninspected. No suffix/tail-repair, live resources,
+ * provider configuration, process or voice-device ownership is installed. */
+int snag_store_materialize_binary_context_checkpoint(struct snag_session *source,
+    struct snag_session *restored, const struct snag_binary_checkpoint_frame *frame,
+    const struct snag_binary_checkpoint_receipt *receipt,
+    struct snag_binary_checkpoint_sources *sources, const struct snag_context_control *control,
+    char *error, size_t error_size);
+
 /* Slow independent checkpoint verifier. Strict replay establishes prefix authority;
  * both decoded frame sections must equal the canonical core and provider recipe
  * at that boundary. All source-recheck/atomic adoption rules above apply. Success
