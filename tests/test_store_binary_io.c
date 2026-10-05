@@ -5,6 +5,7 @@
 #include "fs.h"
 #include "store_internal.h"
 #include "store_binary_replay.h"
+#include "store_binary_legacy.h"
 
 #include <assert.h>
 #include <errno.h>
@@ -637,6 +638,38 @@ test_native_checkpoint_origins(void)
     assert(!captured.queue_count && !captured.download_count &&
         !captured.texts.slots[SNAG_BINARY_TEXT_BANNER].declaration);
     snag_binary_checkpoint_sources_free(&captured);
+    native_checkpoint_commit(&session, "service_tier_changed",
+        json_pack("{s:s}", "value", "priority"));
+    assert(!strcmp(session.service_tier, "priority"));
+    assert(!snag_session_binary_checkpoint_capture(&session, &boundary, &tree,
+        &captured, error, sizeof(error)));
+    assert(captured.texts.slots[SNAG_BINARY_TEXT_SERVICE_TIER].declaration ==
+        session.next_seq - 1u);
+    struct snag_buf service_wire = {.max = SIZE_MAX};
+    assert(!snag_binary_checkpoint_texts_encode(&service_wire, &captured.texts));
+    assert(service_wire.len == 310u && service_wire.data[0] == 2u);
+    snag_buf_free(&service_wire);
+    snag_binary_checkpoint_sources_free(&captured);
+    struct snag_buf bad_tier = {.max = SIZE_MAX};
+    enum snag_binary_kind kind;
+    json_t *bad_value = json_pack("{s:s}", "value", "unknown");
+    assert(snag_binary_legacy_encode(&bad_tier, "service_tier_changed", bad_value, &kind) < 0 &&
+        errno == EINVAL && !bad_tier.len);
+    json_decref(bad_value);
+    json_t *valid_value = json_pack("{s:s}", "value", "priority");
+    assert(!snag_binary_legacy_encode(&bad_tier, "service_tier_changed", valid_value, &kind));
+    assert(kind == SNAG_BINARY_SERVICE_TIER_CHANGED && bad_tier.len >= 8u);
+    struct snag_binary_record tier_record = {.kind = (uint16_t)kind,
+        .version = snag_binary_event_version(kind), .payload = bad_tier.data, .size = bad_tier.len};
+    struct snag_binary_event tier_event;
+    assert(!snag_binary_event_decode(&tier_record, &tier_event));
+    memcpy(bad_tier.data + bad_tier.len - 8u, "invalid!", 8u);
+    assert(snag_binary_event_decode(&tier_record, &tier_event) < 0 && errno == EINVAL);
+    json_decref(valid_value);
+    snag_buf_free(&bad_tier);
+    native_checkpoint_commit(&session, "service_tier_changed",
+        json_pack("{s:s}", "value", "default"));
+    assert(!strcmp(session.service_tier, "default"));
     snag_session_close(&session);
     memset(&boundary, 0xa5, sizeof(boundary));
     memset(&tree, 0x5a, sizeof(tree));

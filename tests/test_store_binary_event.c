@@ -5868,7 +5868,7 @@ test_event_names(void)
         {4u, "session_unarchived"}, {5u, "session_delete_requested"}, {6u, "banner_updated"},
         {7u, "steering_updated"}, {8u, "model_selection_changed"}, {9u, "turn_model_changed"},
         {10u, "effort_changed"}, {11u, "context_selection_changed"}, {12u, "command_shell_changed"},
-        {13u, "session_named"}, {14u, "session_options"},
+        {13u, "session_named"}, {14u, "session_options"}, {15u, "service_tier_changed"},
         {16u, "control_requested"}, {17u, "control_started"}, {18u, "control_finished"},
         {32u, "timer_scheduled"}, {33u, "timer_fired"}, {34u, "timer_cancelled"},
         {64u, "goal_started"}, {65u, "goal_replaced"}, {66u, "goal_reworded"},

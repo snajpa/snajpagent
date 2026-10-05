@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Retain explicit service-tier changes in native metadata and checkpoints,
+  including older eleven-slot text dictionaries without a saved override.
+
 - Stage native checkpoint origins with each live transaction. Replay and the
   commit owner share declaration, queue-edit, call-time directory and unsettled
   process rules; only durable ACK exposes the new origins and frontier.

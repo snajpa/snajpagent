@@ -24,6 +24,7 @@ enum snag_binary_kind {
     SNAG_BINARY_COMMAND_SHELL_CHANGED = 12,
     SNAG_BINARY_SESSION_NAMED = 13,
     SNAG_BINARY_SESSION_OPTIONS = 14,
+    SNAG_BINARY_SERVICE_TIER_CHANGED = 15,
     SNAG_BINARY_CONTROL_REQUESTED = 16,
     SNAG_BINARY_CONTROL_STARTED = 17,
     SNAG_BINARY_CONTROL_FINISHED = 18,
@@ -867,7 +868,7 @@ struct snag_binary_event {
         struct {
             unsigned char confirmed_prefix[4], session[16], nonce[16];
         } deletion;
-        struct snag_binary_text banner, shell, name;
+        struct snag_binary_text banner, shell, name, service_tier;
         struct snag_binary_options options;
         enum snag_binary_steering steering;
         struct { struct snag_binary_selection before, after; } model;

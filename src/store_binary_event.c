@@ -892,6 +892,13 @@ session_name_valid(struct snag_binary_text text)
     return snag_session_name_valid(name);
 }
 
+static bool
+service_tier_valid(struct snag_binary_text text)
+{
+    return text.data && ((text.size == 8u && !memcmp(text.data, "priority", 8u)) ||
+        (text.size == 7u && !memcmp(text.data, "default", 7u)));
+}
+
 static int
 encode_metadata(struct snag_buf *out, const struct snag_binary_event *event)
 {
@@ -940,6 +947,9 @@ encode_metadata(struct snag_buf *out, const struct snag_binary_event *event)
     case SNAG_BINARY_SESSION_NAMED:
         if (!session_name_valid(event->data.name)) return invalid();
         return write_text(out, event->data.name, 1u, SNAG_PATH_MAX_BYTES);
+    case SNAG_BINARY_SERVICE_TIER_CHANGED:
+        if (!service_tier_valid(event->data.service_tier)) return invalid();
+        return write_text(out, event->data.service_tier, 7u, 8u);
     case SNAG_BINARY_SESSION_OPTIONS: {
         struct snag_binary_options view;
         if (snag_binary_options_decode(event->data.options.data,
@@ -999,6 +1009,9 @@ decode_metadata(struct fields *fields, struct snag_binary_event *event)
     case SNAG_BINARY_SESSION_NAMED:
         return read_text(fields, &event->data.name, 1u, SNAG_PATH_MAX_BYTES) &&
             session_name_valid(event->data.name);
+    case SNAG_BINARY_SERVICE_TIER_CHANGED:
+        return read_text(fields, &event->data.service_tier, 7u, 8u) &&
+            service_tier_valid(event->data.service_tier);
     case SNAG_BINARY_SESSION_OPTIONS:
         return read_options(fields, &event->data.options);
     default:
@@ -3421,6 +3434,7 @@ static const struct archive_schema archive_schemas[] = {
     ARCHIVE_SCHEMA(SNAG_BINARY_COMMAND_SHELL_CHANGED, "shell"),
     ARCHIVE_SCHEMA(SNAG_BINARY_SESSION_NAMED, "name"),
     ARCHIVE_SCHEMA(SNAG_BINARY_SESSION_OPTIONS, "args"),
+    ARCHIVE_SCHEMA(SNAG_BINARY_SERVICE_TIER_CHANGED, "value"),
     ARCHIVE_SCHEMA(SNAG_BINARY_CONTROL_REQUESTED, "control", "origin", "source_seq"),
     ARCHIVE_SCHEMA(SNAG_BINARY_CONTROL_STARTED, "control"),
     ARCHIVE_SCHEMA(SNAG_BINARY_CONTROL_FINISHED, "control"),
@@ -4264,7 +4278,7 @@ encode_fields(struct snag_buf *out, const struct snag_binary_event *event)
     if (event->kind >= SNAG_BINARY_INPUT_RECEIVED &&
         event->kind <= SNAG_BINARY_FUTURE_TURN_EDITED) return encode_input(out, event);
     if (event->kind >= SNAG_BINARY_SESSION_CREATED &&
-        event->kind <= SNAG_BINARY_SESSION_OPTIONS) return encode_metadata(out, event);
+        event->kind <= SNAG_BINARY_SERVICE_TIER_CHANGED) return encode_metadata(out, event);
     if (timer_kind(event->kind)) {
         if (snag_buf_append(out, event->data.timer.id, 16u) < 0) return -1;
         if (event->kind != SNAG_BINARY_TIMER_SCHEDULED) return 0;
@@ -4321,6 +4335,7 @@ static const struct {
     {SNAG_BINARY_COMMAND_SHELL_CHANGED, "command_shell_changed"},
     {SNAG_BINARY_SESSION_NAMED, "session_named"},
     {SNAG_BINARY_SESSION_OPTIONS, "session_options"},
+    {SNAG_BINARY_SERVICE_TIER_CHANGED, "service_tier_changed"},
     {SNAG_BINARY_CONTROL_REQUESTED, "control_requested"},
     {SNAG_BINARY_CONTROL_STARTED, "control_started"},
     {SNAG_BINARY_CONTROL_FINISHED, "control_finished"},
@@ -4422,7 +4437,7 @@ snag_binary_event_version(enum snag_binary_kind kind)
     }
     if (kind == SNAG_BINARY_VOICE_TRANSFER_ADOPTED ||
         (kind >= SNAG_BINARY_INPUT_RECEIVED && kind <= SNAG_BINARY_FUTURE_TURN_EDITED)) return 2u;
-    if ((kind >= SNAG_BINARY_SESSION_CREATED && kind <= SNAG_BINARY_SESSION_OPTIONS) ||
+    if ((kind >= SNAG_BINARY_SESSION_CREATED && kind <= SNAG_BINARY_SERVICE_TIER_CHANGED) ||
         timer_kind(kind) || goal_kind(kind) || hosted_search_kind(kind) ||
         kind == SNAG_BINARY_TURN_STARTED ||
         turn_outcome_kind(kind) || kind == SNAG_BINARY_RESPONSE_STARTED ||
@@ -4552,7 +4567,7 @@ decode_fields(struct fields *fields, struct snag_binary_event *event)
     if (event->kind >= SNAG_BINARY_INPUT_RECEIVED &&
         event->kind <= SNAG_BINARY_FUTURE_TURN_EDITED) return decode_input(fields, event);
     if (event->kind >= SNAG_BINARY_SESSION_CREATED &&
-        event->kind <= SNAG_BINARY_SESSION_OPTIONS) return decode_metadata(fields, event);
+        event->kind <= SNAG_BINARY_SERVICE_TIER_CHANGED) return decode_metadata(fields, event);
     if (timer_kind(event->kind)) {
         if (!read_id(fields, event->data.timer.id)) return false;
         if (event->kind != SNAG_BINARY_TIMER_SCHEDULED) return true;
@@ -4768,6 +4783,9 @@ find_control_text(const struct snag_binary_batch *batch, uint64_t sequence,
         break;
     case SNAG_BINARY_SESSION_NAMED:
         source.text = source.event.data.name;
+        break;
+    case SNAG_BINARY_SERVICE_TIER_CHANGED:
+        source.text = source.event.data.service_tier;
         break;
     case SNAG_BINARY_TIMER_SCHEDULED:
         source.text = source.event.data.timer.text;

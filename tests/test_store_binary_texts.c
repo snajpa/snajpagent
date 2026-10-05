@@ -105,7 +105,8 @@ roundtrip(const struct snag_binary_checkpoint_texts *value, struct snag_buf *wir
 {
     snag_buf_reset(wire);
     assert(!snag_binary_checkpoint_texts_encode(wire, value));
-    assert(wire->len == 285u);
+    assert(wire->len ==
+        (value->slots[SNAG_BINARY_TEXT_SERVICE_TIER].declaration ? 310u : 285u));
     struct snag_binary_checkpoint_texts restored;
     memset(&restored, 0xa5, sizeof(restored));
     assert(!snag_binary_checkpoint_texts_decode(wire->data, wire->len, &restored));
@@ -346,7 +347,7 @@ test_store_binary_texts(void)
     const uint64_t base = UINT64_C(0x0102030405060700);
     struct snag_binary_checkpoint_texts value = {.through = base + 15u};
     static const unsigned fields[] = {0u, 1u, 1u, 5u, 0u, 0u, 0u, 0u, 0u, 0u, 0u};
-    for (size_t i = 0u; i < COUNT(value.slots); ++i) {
+    for (size_t i = 0u; i < SNAG_BINARY_TEXT_SERVICE_TIER; ++i) {
         value.slots[i].declaration = base + i + 1u;
         if (i == SNAG_BINARY_TEXT_STEERING) continue;
         value.slots[i].original.field = fields[i];
@@ -374,7 +375,7 @@ test_store_binary_texts(void)
     memcpy(bad, wire.data, wire.len);
     bad[285] = 0u;
     reject_decode(bad, sizeof(bad));
-    for (size_t i = 0u; i < COUNT(value.slots); ++i) {
+    for (size_t i = 0u; i < SNAG_BINARY_TEXT_SERVICE_TIER; ++i) {
         size_t pos = 10u + 25u * i;
         for (unsigned fault = 0u; fault < 5u; ++fault) {
             memcpy(bad, wire.data, wire.len);
@@ -440,5 +441,26 @@ test_store_binary_texts(void)
     assert(!snag_binary_checkpoint_texts_decode(overlap, wire.len, overlap));
     same(&value, overlap);
     snag_buf_free(&alias);
+    /* Keep the independent eleven-slot v1 golden above. The added slot has
+     * an explicit v2 shape, and old decode clears an existing service slot. */
+    struct snag_binary_checkpoint_texts extended = value;
+    extended.slots[SNAG_BINARY_TEXT_SERVICE_TIER] =
+        (struct snag_binary_checkpoint_text_source){.declaration = base + 12u,
+            .original = {.target = {base + 12u, 20u, 8u}}};
+    struct snag_buf newer = {.max = SIZE_MAX};
+    roundtrip(&extended, &newer);
+    assert(newer.len == wire.len + 25u && newer.data[0] == 2u && wire.data[0] == 1u);
+    struct snag_binary_checkpoint_texts cleared = extended;
+    assert(!snag_binary_checkpoint_texts_decode(wire.data, wire.len, &cleared));
+    same(&value, &cleared);
+    for (size_t size = 0u; size < newer.len; ++size) reject_decode(newer.data, size);
+    newer.data[0] = 1u;
+    reject_decode(newer.data, newer.len);
+    newer.data[0] = 3u;
+    reject_decode(newer.data, newer.len);
+    newer.data[0] = 2u;
+    newer.data[1] = 1u;
+    reject_decode(newer.data, newer.len);
+    snag_buf_free(&newer);
     snag_buf_free(&wire);
 }

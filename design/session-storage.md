@@ -2747,6 +2747,14 @@ reattempt reconciles the retained batch once; a second failure requires fresh
 recovery. Close drains outstanding I/O before descriptor/lock teardown, preserving
 real journal bytes and releasing no dependent effect for an unadopted transaction.
 
+Explicit service-tier changes use a typed metadata record with the supported
+`priority` or `default` value. Its checkpoint origin is a twelfth fixed text slot,
+restored through the same declaration/field scope as other saved text. A text
+block with that slot uses version2; snapshots without an override retain the
+original eleven-slot version1 representation. Version1 decode initializes the
+absent slot to zero. Invalid values, unsupported versions, wrong lengths and
+extra bytes fail without partial output adoption.
+
 The commit owner also stages current checkpoint origins. Strict replay and live
 commits share one source-step implementation for fixed text declarations, resume
 options, pending input, queue creation versus replacement text, downloads,
