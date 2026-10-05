@@ -3,6 +3,10 @@
 # Changelog
 
 ## Unreleased
+- Bind native checkpoint file publication to a canonical receipt committed by
+  the same I/O owner. Advance usable slots only after journal durability ACK,
+  choose replacement by verified receipt order, and retain exact failed requests
+  for paced retry. Engine/backend integration remains pending.
 - Admit native checkpoints from the discovered physical tail, canonical receipt
   order and receipt-bounded images through joint state-only suffix restoration.
   Preserve output owners on failure and report open-tail bytes without repair.

@@ -25,6 +25,7 @@ struct snag_binary_io_result {
     struct snag_binary_anchor durable;
     int error;
     bool retryable;
+    bool checkpoint_receipt;
 };
 
 /* Caller owns a private regular read/write journal and its exclusive lock.
@@ -58,11 +59,12 @@ int snag_binary_io_take(struct snag_binary_io *io, struct snag_binary_io_result 
 int snag_binary_io_retry(struct snag_binary_io *io);
 
 /* Configure once, while idle. Caller owns the private session directory and has
- * independently validated its durable checkpoint generations (0 means unusable).
- * The older/unusable slot is replaced; its peer remains untouched. Descriptor
+ * independently authenticated both usable generation/receipt ordinal pairs
+ * (both zero means unusable). Replace the earlier canonical receipt or an absent
+ * slot, keeping its peer. Generation claims do not establish recency. Descriptor
  * lifetime/exclusive writer ownership continue through I/O-owner close. */
 int snag_binary_io_checkpoint_setup(struct snag_binary_io *, int directory,
-    const uint64_t generations[2]);
+    const uint64_t generations[2], const uint64_t sequences[2]);
 /* Move all owned section buffers on success only. The snapshot must describe
  * the owner's current durable boundary. Journal commits take priority between
  * bounded checkpoint chunks/stages. Newer commits may follow this snapshot. */
@@ -74,6 +76,15 @@ int snag_binary_io_checkpoint_submit(struct snag_binary_io *, struct snag_binary
 int snag_binary_io_checkpoint_take(struct snag_binary_io *,
     struct snag_binary_publication_result *);
 int snag_binary_io_checkpoint_retry(struct snag_binary_io *);
+/* After consuming successful file publication, queue its exact canonical receipt
+ * through the ordinary journal owner. index_root belongs to that captured snapshot,
+ * not a newer frontier; timestamp comes from the engine. No engine state is adopted
+ * here. Its journal ACK alone marks checkpoint_receipt and makes the slot usable.
+ * Failed writes/sync retain the exact request for the existing paced retry. Other
+ * journal work may precede this receipt; another checkpoint remains EBUSY until
+ * its receipt is durable. Closing idle preserves an unreceipted image. */
+int snag_binary_io_checkpoint_receipt_submit(struct snag_binary_io *,
+    const unsigned char index_root[32], uint64_t timestamp);
 
 /* EBUSY while a request or unconsumed completion exists. Closing a consumed
  * failure preserves journal bytes and provisional checkpoint files for recovery.

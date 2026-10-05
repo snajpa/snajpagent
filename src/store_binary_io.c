@@ -21,6 +21,7 @@ struct io_request {
     struct snag_buf bytes;
     bool attempted_io;
     bool retried;
+    bool checkpoint_receipt;
 };
 
 struct snag_binary_io {
@@ -36,6 +37,9 @@ struct snag_binary_io {
     struct snag_binary_io_result result;
     int directory;
     uint64_t generations[2];
+    uint64_t sequences[2];
+    bool awaiting_receipt;
+    struct snag_binary_publication_result published;
     enum io_phase checkpoint_phase;
     struct snag_binary_publication *checkpoint;
 };
@@ -231,11 +235,6 @@ run_owner(void *opaque)
             int rc = snag_binary_publication_step(io->checkpoint, &io->ops);
             pthread_mutex_lock(&io->mutex);
             io->checkpoint_phase = rc > 0 ? IO_QUEUED : IO_DONE;
-            if (!rc) {
-                struct snag_binary_publication_result result;
-                snag_binary_publication_result(io->checkpoint, &result);
-                io->generations[result.slot] = result.generation;
-            }
             if (rc <= 0) snag_wakeup_send(io->wake[1]);
             continue;
         }
@@ -247,7 +246,16 @@ run_owner(void *opaque)
         pthread_mutex_lock(&io->mutex);
         io->result.error = error;
         io->result.retryable = error && request->attempted_io && !request->retried;
-        if (!error) io->result.durable = request->after;
+        if (!error) {
+            io->result.durable = request->after;
+            if (request->checkpoint_receipt) {
+                unsigned int slot = io->published.slot;
+                io->generations[slot] = io->published.generation;
+                io->sequences[slot] = request->before.next_seq;
+                io->awaiting_receipt = false;
+                io->result.checkpoint_receipt = true;
+            }
+        }
         io->phase = IO_DONE;
         snag_wakeup_send(io->wake[1]);
     }
@@ -308,29 +316,33 @@ failed:
     return NULL;
 }
 
+static int
+submit_request(struct snag_binary_io *io, const struct snag_binary_record *records,
+    uint32_t count, uint64_t turns, bool checkpoint_receipt)
+{
+    if (io->phase != IO_IDLE) return snag_errno(EBUSY);
+    struct io_request *request = request_copy(records, count, turns);
+    if (!request) return -1;
+    request->before = io->result.durable;
+    request->checkpoint_receipt = checkpoint_receipt;
+    io->request = request;
+    io->result.error = 0;
+    io->result.retryable = false;
+    io->result.checkpoint_receipt = false;
+    io->phase = IO_QUEUED;
+    pthread_cond_signal(&io->changed);
+    return 0;
+}
+
 int
 snag_binary_io_submit(struct snag_binary_io *io,
     const struct snag_binary_record *records, uint32_t count, uint64_t turns)
 {
     if (!io) return snag_errno(EINVAL);
     pthread_mutex_lock(&io->mutex);
-    if (io->phase != IO_IDLE) {
-        pthread_mutex_unlock(&io->mutex);
-        return snag_errno(EBUSY);
-    }
-    struct io_request *request = request_copy(records, count, turns);
-    if (!request) {
-        pthread_mutex_unlock(&io->mutex);
-        return -1;
-    }
-    request->before = io->result.durable;
-    io->request = request;
-    io->result.error = 0;
-    io->result.retryable = false;
-    io->phase = IO_QUEUED;
-    pthread_cond_signal(&io->changed);
+    int rc = submit_request(io, records, count, turns, false);
     pthread_mutex_unlock(&io->mutex);
-    return 0;
+    return rc;
 }
 
 snag_wake_fd
@@ -383,16 +395,27 @@ snag_binary_io_retry(struct snag_binary_io *io)
 
 int
 snag_binary_io_checkpoint_setup(struct snag_binary_io *io, int directory,
-    const uint64_t generations[2])
+    const uint64_t generations[2], const uint64_t sequences[2])
 {
-    if (!io || directory < 0 || !generations) return snag_errno(EINVAL);
+    if (!io || directory < 0 || !generations || !sequences) return snag_errno(EINVAL);
     pthread_mutex_lock(&io->mutex);
     if (io->directory >= 0 || io->phase != IO_IDLE) {
         pthread_mutex_unlock(&io->mutex);
         return snag_errno(EBUSY);
     }
+    for (size_t i = 0u; i < 2u; ++i) {
+        if (!!generations[i] != !!sequences[i] || sequences[i] >= io->result.durable.next_seq) {
+            pthread_mutex_unlock(&io->mutex);
+            return snag_errno(EINVAL);
+        }
+    }
+    if (sequences[0] == sequences[1] && generations[0] != generations[1]) {
+        pthread_mutex_unlock(&io->mutex);
+        return snag_errno(EINVAL);
+    }
     io->directory = directory;
     memcpy(io->generations, generations, sizeof(io->generations));
+    memcpy(io->sequences, sequences, sizeof(io->sequences));
     pthread_mutex_unlock(&io->mutex);
     return 0;
 }
@@ -411,14 +434,15 @@ snag_binary_io_checkpoint_submit(struct snag_binary_io *io,
 {
     if (!io || !snapshot) return snag_errno(EINVAL);
     pthread_mutex_lock(&io->mutex);
-    int error = io->checkpoint ? EBUSY : io->directory < 0 ? EINVAL :
+    int error = io->checkpoint || io->awaiting_receipt ? EBUSY : io->directory < 0 ? EINVAL :
         !same_anchor(&snapshot->boundary, &io->result.durable) ? ESTALE : 0;
     if (error) {
         pthread_mutex_unlock(&io->mutex);
         return snag_errno(error);
     }
+    unsigned int slot = io->sequences[0] <= io->sequences[1] ? 0u : 1u;
     struct snag_binary_publication *publication = snag_binary_publication_new(io->fd,
-        io->directory, io->generations, snapshot);
+        io->directory, io->generations, slot, snapshot);
     if (!publication) {
         pthread_mutex_unlock(&io->mutex);
         return -1;
@@ -445,6 +469,8 @@ snag_binary_io_checkpoint_take(struct snag_binary_io *io,
     if (out->error) {
         io->checkpoint_phase = IO_FAILED;
     } else {
+        io->published = *out;
+        io->awaiting_receipt = true;
         snag_binary_publication_free(io->checkpoint);
         io->checkpoint = NULL;
         io->checkpoint_phase = IO_IDLE;
@@ -452,6 +478,36 @@ snag_binary_io_checkpoint_take(struct snag_binary_io *io,
     refresh_wake(io);
     pthread_mutex_unlock(&io->mutex);
     return out->error ? snag_errno(out->error) : 0;
+}
+
+int
+snag_binary_io_checkpoint_receipt_submit(struct snag_binary_io *io,
+    const unsigned char index_root[32], uint64_t timestamp)
+{
+    if (!io || !index_root) return snag_errno(EINVAL);
+    pthread_mutex_lock(&io->mutex);
+    int error = !io->awaiting_receipt ? ENOENT : io->phase != IO_IDLE ? EBUSY : 0;
+    if (error) {
+        pthread_mutex_unlock(&io->mutex);
+        return snag_errno(error);
+    }
+    struct snag_binary_checkpoint_receipt receipt = {
+        .generation = io->published.generation, .image_size = io->published.image_size,
+        .boundary = io->published.boundary
+    };
+    memcpy(receipt.image_digest, io->published.image_digest, sizeof(receipt.image_digest));
+    memcpy(receipt.index_root, index_root, sizeof(receipt.index_root));
+    struct snag_buf payload = {.max = SIZE_MAX};
+    int rc = snag_binary_checkpoint_receipt_encode(&payload, &receipt);
+    if (!rc) {
+        struct snag_binary_record record = {.kind = SNAG_BINARY_CHECKPOINT_RECEIPT,
+            .version = SNAG_BINARY_CHECKPOINT_RECEIPT_VERSION, .flags = SNAG_BINARY_RECORD_OPTIONAL,
+            .timestamp_ms = timestamp, .payload = payload.data, .size = payload.len};
+        rc = submit_request(io, &record, 1u, io->result.durable.turns, true);
+    }
+    snag_buf_free(&payload);
+    pthread_mutex_unlock(&io->mutex);
+    return rc;
 }
 
 int

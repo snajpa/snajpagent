@@ -47,7 +47,7 @@ struct snag_binary_publication_result {
 struct snag_binary_publication;
 struct snag_binary_io_ops;
 struct snag_binary_publication *snag_binary_publication_new(int journal, int directory,
-    const uint64_t generations[2], struct snag_binary_io_snapshot *snapshot);
+    const uint64_t generations[2], unsigned int slot, struct snag_binary_io_snapshot *snapshot);
 int snag_binary_publication_step(struct snag_binary_publication *,
     const struct snag_binary_io_ops *);
 void snag_binary_publication_result(const struct snag_binary_publication *,

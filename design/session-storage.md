@@ -2150,10 +2150,10 @@ Required old locations outside the supplied closure remain unavailable. Separate
 explicit repair still owns full-prefix interpretation and any tail correction.
 
 These codecs, admission and publication digest results are test-linked.
-Runtime receipt submission and application checkpoint admission remain pending. The
-publisher's file/directory ACK currently proves durable file replacement; it does
-not yet establish a receipt-backed checkpoint generation. Missing index bytes
-must remain independent of this protocol's canonical durability barriers.
+The I/O owner now commits a published image's receipt through its ordinary journal
+ACK; normal application receipt submission and checkpoint admission remain pending.
+File/directory ACK alone proves durable replacement, not a usable canonical slot.
+Missing index bytes remain independent of this protocol's durability barriers.
 
 ## Index and bounded navigation
 
@@ -2373,6 +2373,26 @@ acknowledged input, completed tool work or committed history. The design adds no
 silent five-minute loss mode. A timed lossy mode would be a separate product
 contract and is not selected here.
 
+### Canonical receipt acknowledgement ownership
+
+The test-linked I/O owner's checkpoint protocol couples file publication to
+canonical receipt commitment. Initial usable slots carry independently authenticated receipt ordinals
+and generations. Replacement chooses the earlier ordinal; generation numbering
+uses the largest usable generation only to identify the new image. File/directory
+publication returns exact image bytes and retains a pending receipt, without
+advancing the usable slot. Further checkpoint replacement waits for that receipt.
+
+The engine supplies the captured index root and record timestamp to a dedicated
+receipt submission on the same journal owner. This queues one optional canonical
+record at the current durable anchor through the ordinary journal request path.
+Only its successful journal synchronization advances the usable slot and reports
+receipt commitment in the consumed journal ACK. Failed write/sync and paced retry
+retain the exact request; new journal work stays subject to its existing failure
+rules. Ordinary journal commits may proceed between image publication and receipt
+submission, without changing the image's captured boundary. Engine state and
+external effects still wait for the journal ACK. Closing an idle owner with an
+unreceipted image preserves that image and the older canonical peer for recovery.
+
 ### Test-linked journal I/O owner
 
 The journal owner accepts one explicitly staged batch of immutable record copies.
@@ -2413,8 +2433,9 @@ The same worker accepts an owned pair of immutable core/provider section buffers
 captured at its current durable journal boundary. Submission moves those buffers
 only on success. The engine establishes their semantic validity before submission;
 the publisher checks framing, source identity and the durable boundary. Checkpoint
-generation numbers come from independently validated durable slot metadata, advance
-monotonically, and replace the older or unusable slot while preserving its peer.
+generation is one above the largest independently validated usable generation.
+Replacement selects the earlier authenticated receipt ordinal or an unusable slot,
+keeping the newer canonical peer; generation numbers do not determine recency.
 
 The worker creates a private exclusive temporary file, frames and hashes at most
 64 KiB per step, synchronizes the complete file, renames it over the selected slot,
@@ -2424,10 +2445,11 @@ in progress. Snapshot size has no additional cap. Separate completion streams
 share a level-triggered wakeup, so consuming either completion preserves readiness
 for the other.
 
-Publication is acknowledged only after the directory barrier succeeds. A platform
-report that directory synchronization is unsupported remains an explicit error.
-Neither a successful write, file sync nor rename alone advances the owner's durable
-slot metadata. A failed operation retains the immutable image, generation, selected
+File publication is acknowledged only after the directory barrier succeeds. A
+platform report that directory synchronization is unsupported remains an explicit
+error. Usable slot metadata advances only after its canonical receipt is committed
+and synchronized by the same journal owner. Until that ACK, another checkpoint
+replacement returns EBUSY while ordinary journal work may continue. A failed operation retains the immutable image, generation, selected
 slot and progress for a caller-paced retry. Partial writes are compared against the
 same chunk and only its matching missing suffix is appended. A retry reconciles an
 ambiguous rename by comparing the held file identity with the destination before

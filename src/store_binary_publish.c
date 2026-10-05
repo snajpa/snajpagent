@@ -26,9 +26,9 @@ struct snag_binary_publication {
 
 struct snag_binary_publication *
 snag_binary_publication_new(int journal, int directory, const uint64_t generations[2],
-    struct snag_binary_io_snapshot *snapshot)
+    unsigned int slot, struct snag_binary_io_snapshot *snapshot)
 {
-    if (journal < 0 || directory < 0 || !generations || !snapshot ||
+    if (journal < 0 || directory < 0 || !generations || slot > 1u || !snapshot ||
         snapshot->core.data == snapshot->provider.data ||
         (snapshot->access.data && (snapshot->access.data == snapshot->core.data ||
             snapshot->access.data == snapshot->provider.data)) ||
@@ -52,7 +52,7 @@ snag_binary_publication_new(int journal, int directory, const uint64_t generatio
     publication->file = -1;
     publication->result.boundary = snapshot->boundary;
     publication->result.generation = latest + 1u;
-    publication->result.slot = generations[0] <= generations[1] ? 0u : 1u;
+    publication->result.slot = slot;
     struct snag_binary_checkpoint_frame frame = {
         .identity = snapshot->identity, .boundary = snapshot->boundary,
         .generation = publication->result.generation,

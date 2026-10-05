@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "store_binary_io.h"
+#include "fixture_store_binary.h"
 #include "fs.h"
 
 #include <assert.h>
@@ -19,9 +20,9 @@ void test_store_binary_publish(void);
 enum fault {
     FAULT_NONE, FAULT_CREATE, FAULT_PARTIAL, FAULT_WRITTEN, FAULT_FILE_SYNC,
     FAULT_FILE_SYNCED, FAULT_RENAME, FAULT_RENAMED, FAULT_DIR_SYNC,
-    FAULT_DIR_SYNCED, FAULT_UNSUPPORTED
+    FAULT_DIR_SYNCED, FAULT_UNSUPPORTED, FAULT_RECEIPT_PARTIAL, FAULT_RECEIPT_SYNC
 };
-enum gate { GATE_NONE, GATE_FILE_SYNC, GATE_RENAME, GATE_DIR_SYNC };
+enum gate { GATE_NONE, GATE_FILE_SYNC, GATE_RENAME, GATE_DIR_SYNC, GATE_RECEIPT_SYNC };
 
 struct probe {
     int journal;
@@ -57,6 +58,7 @@ struct fixture {
     struct snag_binary_identity identity;
     struct snag_binary_anchor before;
     struct snag_buf slots[2];
+    uint64_t sequences[2];
 };
 
 static void
@@ -112,7 +114,13 @@ probe_write(void *opaque, int fd, const void *bytes, size_t size)
 {
     struct probe *probe = opaque;
     check_owner(probe);
-    if (fd == probe->journal) return snag_write_full(fd, bytes, size);
+    if (fd == probe->journal) {
+        if (fail(probe, FAULT_RECEIPT_PARTIAL)) {
+            assert(!snag_write_full(fd, bytes, size / 2u));
+            return snag_errno(ENOSPC);
+        }
+        return snag_write_full(fd, bytes, size);
+    }
     ++probe->writes;
     if (size > probe->largest_write) probe->largest_write = size;
     if (probe->priority && probe->writes == 1u) {
@@ -139,6 +147,8 @@ probe_sync(void *opaque, int fd)
     struct probe *probe = opaque;
     check_owner(probe);
     if (fd == probe->journal) {
+        pause_stage(probe, GATE_RECEIPT_SYNC);
+        if (fail(probe, FAULT_RECEIPT_SYNC)) return snag_errno(EIO);
         int rc = snag_sync_file(fd);
         if (!rc) atomic_store(&probe->journal_synced, true);
         return rc;
@@ -258,6 +268,28 @@ fixture_init(struct fixture *fixture)
         assert(!snag_sync_file(fd) && !close(fd));
     }
     assert(!snag_sync_dir(fixture->directory));
+    struct snag_buf payloads[2] = {{.max = SIZE_MAX}, {.max = SIZE_MAX}};
+    struct snag_binary_record records[2];
+    for (size_t i = 0u; i < 2u; ++i) {
+        struct snag_binary_checkpoint_receipt receipt = {.generation = i ? 8u : 5u,
+            .image_size = fixture->slots[i].len, .boundary = fixture->before};
+        memcpy(receipt.image_digest, fixture->slots[i].data + fixture->slots[i].len - 32u, 32u);
+        receipt.index_root[0] = 17u;
+        assert(!snag_binary_checkpoint_receipt_encode(&payloads[i], &receipt));
+        records[i] = (struct snag_binary_record){.kind = SNAG_BINARY_CHECKPOINT_RECEIPT,
+            .version = SNAG_BINARY_CHECKPOINT_RECEIPT_VERSION, .flags = SNAG_BINARY_RECORD_OPTIONAL,
+            .timestamp_ms = fixture->identity.created_ms,
+            .payload = payloads[i].data, .size = payloads[i].len};
+        fixture->sequences[i] = fixture->before.next_seq + i;
+    }
+    struct snag_buf wire = {.max = SNAG_BINARY_BATCH_MAX};
+    struct snag_binary_anchor after;
+    assert(!binary_fixture_append(&wire, &fixture->before, records, 2u, 0u, &after));
+    assert(!snag_write_full(fixture->journal, wire.data, wire.len));
+    assert(!snag_sync_file(fixture->journal));
+    fixture->before = after;
+    snag_buf_free(&wire);
+    for (size_t i = 0u; i < 2u; ++i) snag_buf_free(&payloads[i]);
 }
 
 static struct snag_binary_io *
@@ -272,7 +304,8 @@ start_owner(struct fixture *fixture, struct probe *probe)
     struct snag_binary_io *io = snag_binary_io_start(fixture->journal, &fixture->before, &ops);
     assert(io);
     uint64_t generations[] = {5u, 8u};
-    assert(!snag_binary_io_checkpoint_setup(io, fixture->directory, generations));
+    assert(!snag_binary_io_checkpoint_setup(io, fixture->directory,
+        generations, fixture->sequences));
     return io;
 }
 
@@ -326,7 +359,18 @@ journal_commit(struct snag_binary_io *io)
     assert(!snag_binary_io_submit(io, &record, 1u, 0u));
     assert(snag_wakeup_wait(snag_binary_io_wake(io), 10000) == 1);
     struct snag_binary_io_result result;
-    assert(!snag_binary_io_take(io, &result));
+    assert(!snag_binary_io_take(io, &result) && !result.checkpoint_receipt);
+    return result;
+}
+
+static struct snag_binary_io_result
+pin_publication(struct snag_binary_io *io)
+{
+    unsigned char root[32] = {17u};
+    assert(!snag_binary_io_checkpoint_receipt_submit(io, root, 101u));
+    assert(snag_wakeup_wait(snag_binary_io_wake(io), 10000) == 1);
+    struct snag_binary_io_result result;
+    assert(!snag_binary_io_take(io, &result) && result.checkpoint_receipt);
     return result;
 }
 
@@ -412,9 +456,13 @@ test_retry(enum fault fault)
     check_file(&fixture, "checkpoint.1", &fixture.slots[1]);
     capture = snapshot(&fixture, &fixture.before, 1u);
     struct snag_binary_io_snapshot saved = capture;
+    assert(snag_binary_io_checkpoint_submit(io, &capture) < 0 && errno == EBUSY);
+    assert(!memcmp(&capture, &saved, sizeof(capture)));
+    struct snag_binary_io_result pinned = pin_publication(io);
+    assert(pinned.durable.next_seq == committed.durable.next_seq + 1u);
     assert(snag_binary_io_checkpoint_submit(io, &capture) < 0 && errno == ESTALE);
     assert(!memcmp(&capture, &saved, sizeof(capture)));
-    capture.boundary = committed.durable;
+    capture.boundary = pinned.durable;
     struct snag_buf newer = image(&capture, 10u);
     assert(!snag_binary_io_checkpoint_submit(io, &capture));
     assert(!await_checkpoint(io, &result));
@@ -593,13 +641,20 @@ test_termination(enum gate gate)
     assert(WTERMSIG(status) == SIGKILL && !close(notice[0]));
     check_file(&fixture, "checkpoint.0", gate == GATE_DIR_SYNC ? &expected : &fixture.slots[0]);
     check_file(&fixture, "checkpoint.1", &fixture.slots[1]);
-    unsigned char header[SNAG_BINARY_HEADER_SIZE];
+    snag_file_info info;
+    assert(!snag_fstat(fixture.journal, &info) &&
+        (uint64_t)info.st_size == fixture.before.end);
+    struct snag_buf scratch = {.max = SNAG_BINARY_BATCH_MAX};
     struct snag_binary_identity identity;
     struct snag_binary_anchor anchor;
-    assert(snag_pread(fixture.journal, header, sizeof(header), 0) == (ssize_t)sizeof(header));
-    assert(!snag_binary_header_decode(header, sizeof(header), &identity, &anchor));
-    assert(anchor.end == fixture.before.end &&
+    uint64_t incomplete = 0u;
+    assert(!snag_binary_journal_tail(fixture.journal, fixture.before.end, &scratch,
+        &identity, &anchor, &incomplete));
+    assert(!incomplete && anchor.end == fixture.before.end &&
+        anchor.next_seq == fixture.before.next_seq && anchor.turns == fixture.before.turns &&
+        anchor.previous == fixture.before.previous &&
         !memcmp(anchor.digest, fixture.before.digest, sizeof(anchor.digest)));
+    snag_buf_free(&scratch);
     snag_buf_free(&expected);
     free_snapshot(&capture);
     fixture_free(&fixture);
@@ -616,7 +671,8 @@ test_empty_slots(void)
     struct snag_binary_io *io = snag_binary_io_start(fixture.journal, &fixture.before, NULL);
     assert(io);
     uint64_t generations[] = {0u, 0u};
-    assert(!snag_binary_io_checkpoint_setup(io, fixture.directory, generations));
+    uint64_t sequences[] = {0u, 0u};
+    assert(!snag_binary_io_checkpoint_setup(io, fixture.directory, generations, sequences));
     for (unsigned int slot = 0u; slot < 2u; ++slot) {
         struct snag_binary_io_snapshot capture = snapshot(&fixture, &fixture.before, slot + 1u);
         struct snag_buf expected = image(&capture, slot + 1u);
@@ -629,9 +685,155 @@ test_empty_slots(void)
         snag_file_info info;
         assert(!snag_lstat_at(fixture.directory, name, &info));
         assert(S_ISREG(info.st_mode) && !(info.st_mode & 077u));
+        struct snag_binary_io_result pinned = pin_publication(io);
+        fixture.before = pinned.durable;
         snag_buf_free(&expected);
     }
     assert(!snag_binary_io_close(io));
+    fixture_free(&fixture);
+}
+
+static void
+check_receipt(struct fixture *fixture, const struct snag_binary_publication_result *published,
+    const struct snag_binary_anchor *through, bool pinned)
+{
+    const unsigned char *keys[2];
+    for (size_t i = 0u; i < 2u; ++i)
+        keys[i] = i == published->slot ? published->image_digest :
+            (const unsigned char *)fixture->slots[i].data + fixture->slots[i].len - 32u;
+    struct snag_binary_checkpoint_receipt receipts[2];
+    uint64_t sequences[2] = {0};
+    struct snag_buf scratch = {.max = SNAG_BINARY_BATCH_MAX};
+    int expected = pinned ? 3 : published->slot ? 1 : 2;
+    assert(snag_binary_checkpoint_receipts_find(fixture->journal, through,
+        SNAG_BINARY_HEADER_SIZE, keys, &scratch, receipts, sequences, NULL, NULL) == expected);
+    if (pinned) {
+        const struct snag_binary_checkpoint_receipt *receipt = &receipts[published->slot];
+        assert(receipt->generation == published->generation &&
+            receipt->image_size == published->image_size &&
+            receipt->boundary.end == published->boundary.end &&
+            receipt->boundary.next_seq == published->boundary.next_seq &&
+            !memcmp(receipt->image_digest, published->image_digest, 32u));
+        unsigned char root[32] = {17u};
+        assert(!memcmp(receipt->index_root, root, sizeof(root)));
+        assert(sequences[published->slot] == through->next_seq - 1u);
+    }
+    snag_buf_free(&scratch);
+}
+
+static void
+test_unreceipted_close(void)
+{
+    struct fixture fixture;
+    fixture_init(&fixture);
+    struct probe probe = {0};
+    struct snag_binary_io *io = start_owner(&fixture, &probe);
+    struct snag_binary_io_snapshot capture = snapshot(&fixture, &fixture.before, 21u);
+    struct snag_buf expected = image(&capture, 9u);
+    assert(!snag_binary_io_checkpoint_submit(io, &capture));
+    struct snag_binary_publication_result published;
+    assert(!await_checkpoint(io, &published));
+    assert(published.published && !snag_binary_io_close(io));
+    check_file(&fixture, "checkpoint.0", &expected);
+    check_file(&fixture, "checkpoint.1", &fixture.slots[1]);
+    check_receipt(&fixture, &published, &fixture.before, false);
+    snag_buf_free(&expected);
+    fixture_free(&fixture);
+}
+
+static void
+test_receipt_barrier(unsigned int mode)
+{
+    struct fixture fixture;
+    fixture_init(&fixture);
+    struct probe probe = {0};
+    struct snag_binary_io *io = start_owner(&fixture, &probe);
+    struct snag_binary_io_snapshot capture = snapshot(&fixture, &fixture.before, 21u);
+    assert(!snag_binary_io_checkpoint_submit(io, &capture));
+    struct snag_binary_publication_result published;
+    assert(!await_checkpoint(io, &published));
+    struct snag_binary_io_result preceding = journal_commit(io);
+    unsigned char root[32] = {17u};
+    if (!mode) probe.gate = GATE_RECEIPT_SYNC;
+    else {
+        probe.fault = mode == 1u ? FAULT_RECEIPT_PARTIAL : FAULT_RECEIPT_SYNC;
+        probe.failures = 1u;
+    }
+    assert(!snag_binary_io_checkpoint_receipt_submit(io, root, 101u));
+    struct snag_binary_io_snapshot extra = snapshot(&fixture, &preceding.durable, 1u);
+    struct snag_binary_io_snapshot saved = extra;
+    assert(snag_binary_io_checkpoint_submit(io, &extra) < 0 && errno == EBUSY);
+    assert(!memcmp(&extra, &saved, sizeof(extra)));
+    struct snag_binary_io_result result;
+    if (!mode) {
+        wait_flag(&probe.entered);
+        memset(&result, 0x5a, sizeof(result));
+        struct snag_binary_io_result sentinel;
+        memcpy(&sentinel, &result, sizeof(sentinel));
+        assert(snag_binary_io_take(io, &result) == 1);
+        assert(!memcmp(&result, &sentinel, sizeof(result)));
+        assert(snag_binary_io_close(io) < 0 && errno == EBUSY);
+        atomic_store(&probe.released, true);
+    } else {
+        assert(snag_wakeup_wait(snag_binary_io_wake(io), 10000) == 1);
+        assert(snag_binary_io_take(io, &result) < 0);
+        assert(result.error == (mode == 1u ? ENOSPC : EIO) && result.retryable &&
+            !result.checkpoint_receipt && result.durable.end == preceding.durable.end);
+        assert(snag_binary_io_checkpoint_submit(io, &extra) < 0 && errno == EBUSY);
+        assert(snag_binary_io_checkpoint_receipt_submit(io, root, 102u) < 0 && errno == EBUSY);
+        assert(!snag_binary_io_retry(io));
+    }
+    assert(snag_wakeup_wait(snag_binary_io_wake(io), 10000) == 1);
+    assert(!snag_binary_io_take(io, &result) && result.checkpoint_receipt);
+    assert(result.durable.next_seq == preceding.durable.next_seq + 1u);
+    assert(snag_binary_io_checkpoint_receipt_submit(io, root, 102u) < 0 && errno == ENOENT);
+    assert(!snag_binary_io_close(io));
+    check_receipt(&fixture, &published, &result.durable, true);
+    free_snapshot(&extra);
+    fixture_free(&fixture);
+}
+
+static void
+test_receipt_slot_order(void)
+{
+    struct fixture fixture;
+    fixture_init(&fixture);
+    unsigned char header[SNAG_BINARY_HEADER_SIZE];
+    struct snag_binary_identity identity;
+    struct snag_binary_anchor root;
+    assert(snag_pread(fixture.journal, header, sizeof(header), 0) == (ssize_t)sizeof(header));
+    assert(!snag_binary_header_decode(header, sizeof(header), &identity, &root));
+    struct snag_binary_checkpoint_receipt later = {.generation = 5u,
+        .image_size = fixture.slots[0].len, .boundary = root};
+    memcpy(later.image_digest, fixture.slots[0].data + fixture.slots[0].len - 32u, 32u);
+    later.index_root[0] = 17u;
+    struct snag_buf payload = {.max = SIZE_MAX};
+    assert(!snag_binary_checkpoint_receipt_encode(&payload, &later));
+    struct snag_binary_record record = {.kind = SNAG_BINARY_CHECKPOINT_RECEIPT,
+        .version = SNAG_BINARY_CHECKPOINT_RECEIPT_VERSION, .flags = SNAG_BINARY_RECORD_OPTIONAL,
+        .timestamp_ms = identity.created_ms, .payload = payload.data, .size = payload.len};
+    struct snag_buf wire = {.max = SNAG_BINARY_BATCH_MAX};
+    struct snag_binary_anchor after;
+    assert(!binary_fixture_append(&wire, &fixture.before, &record, 1u, 0u, &after));
+    assert(!snag_write_full(fixture.journal, wire.data, wire.len) &&
+        !snag_sync_file(fixture.journal));
+    fixture.sequences[0] = fixture.before.next_seq;
+    fixture.before = after;
+    struct probe probe = {0};
+    struct snag_binary_io *io = start_owner(&fixture, &probe);
+    struct snag_binary_io_snapshot capture = snapshot(&fixture, &fixture.before, 21u);
+    struct snag_buf expected = image(&capture, 9u);
+    assert(!snag_binary_io_checkpoint_submit(io, &capture));
+    struct snag_binary_publication_result result;
+    assert(!await_checkpoint(io, &result));
+    assert(result.slot == 1u && result.generation == 9u);
+    assert(!snag_binary_io_close(io));
+    check_file(&fixture, "checkpoint.0", &fixture.slots[0]);
+    check_file(&fixture, "checkpoint.1", &expected);
+    check_receipt(&fixture, &result, &fixture.before, false);
+    snag_buf_free(&payload);
+    snag_buf_free(&wire);
+    snag_buf_free(&expected);
     fixture_free(&fixture);
 }
 
@@ -647,11 +849,22 @@ test_invalid(void)
     assert(snag_binary_io_checkpoint_submit(io, &capture) < 0 && errno == EINVAL);
     assert(!memcmp(&capture, &saved, sizeof(capture)));
     uint64_t generations[] = {5u, 8u};
-    assert(snag_binary_io_checkpoint_setup(NULL, fixture.directory, generations) < 0);
-    assert(snag_binary_io_checkpoint_setup(io, -1, generations) < 0);
-    assert(snag_binary_io_checkpoint_setup(io, fixture.directory, NULL) < 0);
-    assert(!snag_binary_io_checkpoint_setup(io, fixture.directory, generations));
-    assert(snag_binary_io_checkpoint_setup(io, fixture.directory, generations) < 0);
+    assert(snag_binary_io_checkpoint_setup(NULL, fixture.directory,
+        generations, fixture.sequences) < 0);
+    assert(snag_binary_io_checkpoint_setup(io, -1, generations, fixture.sequences) < 0);
+    assert(snag_binary_io_checkpoint_setup(io, fixture.directory, NULL, fixture.sequences) < 0);
+    assert(snag_binary_io_checkpoint_receipt_submit(NULL, (unsigned char[32]){0}, 1u) < 0);
+    assert(snag_binary_io_checkpoint_receipt_submit(io, NULL, 1u) < 0);
+    assert(snag_binary_io_checkpoint_receipt_submit(io, (unsigned char[32]){0}, 1u) < 0 &&
+        errno == ENOENT);
+    assert(snag_binary_io_checkpoint_setup(io, fixture.directory, generations, NULL) < 0);
+    uint64_t inconsistent[2] = {fixture.sequences[0], fixture.before.next_seq};
+    assert(snag_binary_io_checkpoint_setup(io, fixture.directory, generations, inconsistent) < 0);
+    inconsistent[1] = inconsistent[0];
+    assert(snag_binary_io_checkpoint_setup(io, fixture.directory, generations, inconsistent) < 0);
+    assert(!snag_binary_io_checkpoint_setup(io, fixture.directory, generations, fixture.sequences));
+    assert(snag_binary_io_checkpoint_setup(io, fixture.directory,
+        generations, fixture.sequences) < 0);
     assert(snag_binary_io_checkpoint_submit(NULL, &capture) < 0);
     assert(snag_binary_io_checkpoint_submit(io, NULL) < 0);
     assert(snag_binary_io_checkpoint_retry(NULL) < 0);
@@ -683,7 +896,7 @@ test_invalid(void)
     io = snag_binary_io_start(fixture.journal, &fixture.before, NULL);
     assert(io);
     generations[1] = UINT64_MAX;
-    assert(!snag_binary_io_checkpoint_setup(io, fixture.directory, generations));
+    assert(!snag_binary_io_checkpoint_setup(io, fixture.directory, generations, fixture.sequences));
     capture = snapshot(&fixture, &fixture.before, 1u);
     saved = capture;
     assert(snag_binary_io_checkpoint_submit(io, &capture) < 0 && errno == EOVERFLOW);
@@ -698,6 +911,9 @@ test_store_binary_publish(void)
 {
     test_invalid();
     test_empty_slots();
+    test_unreceipted_close();
+    test_receipt_slot_order();
+    for (unsigned int mode = 0u; mode < 3u; ++mode) test_receipt_barrier(mode);
     for (enum gate gate = GATE_FILE_SYNC; gate <= GATE_DIR_SYNC; ++gate) {
         test_publication_gates(gate);
         test_termination(gate);
