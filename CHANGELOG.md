@@ -4,6 +4,11 @@
 
 ## Unreleased
 
+- Extract native input, queue and public-output reference production from the
+  verified importer for reuse by staged engine transactions. Cloned working provenance
+  owns independent metadata and retains only pending-input, queue and open-response
+  sources. Application backend activation remains pending.
+
 - Advance native logical batch frontiers without a temporary heap table when
   derived-cache output is absent. Preserve canonical and turn validation,
   atomic tree replacement and separate optional cache geometry checks. Runtime

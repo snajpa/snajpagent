@@ -2705,3 +2705,22 @@ checks cancellation across observed restore/lookup stages, receipt/frontier/stop
 mismatch, late source mutation and missing historical closure. Runtime receipt
 selection, live producer closure/frontier maintenance, sole I/O ownership and
 backend/converter integration remain pending; the application uses JSONL.
+
+### Shared native reference production
+
+`store_binary_producer.c` owns the pending-input, queued-input and open-response
+reference mapping formerly private to the verified importer. The importer uses
+this implementation; engine transactions will share it. A strictly reduced
+candidate supplies literal typed fields,
+then the producer substitutes exact input/public-output references and prunes
+closed working sources. Queue edits retain original content and replace text
+provenance; public snapshots retain stream indices while matching output identity.
+Legacy file-offset conversion remains in the importer.
+
+Engine integration must stage a clone of this working provenance with its
+private reducer candidate. Cloning copies metadata vectors, retains immutable reducer JSON owners
+and leaves prepared field scratch empty. Discarding a failed candidate leaves the
+committed producer intact. Successful journal durability ACK is the engine's
+adoption boundary. Application transaction/backend wiring remains to be completed.
+The existing importer parity and closure fixtures exercise this shared mapping;
+ownership regressions cover aborted candidates and source-owner teardown.

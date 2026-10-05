@@ -2,6 +2,7 @@
 #include "fixture_store_binary.h"
 #include "store_binary_replay.h"
 #include "store_binary_import.h"
+#include "store_binary_producer.h"
 #include "fs.h"
 #include "irc.h"
 #include "store_binary_legacy.h"
@@ -41,6 +42,55 @@ void test_store_binary_texts_bad(int, const struct snag_binary_anchor *,
 #define GOAL_ID "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 #define OTHER_ID "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 #define ZERO_HASH "0000000000000000000000000000000000000000000000000000000000000000"
+
+static void
+test_producer_candidate_ownership(void)
+{
+    struct snag_binary_producer source = {.field = {.max = SNAG_MAX_EVENT_LINE}};
+    source.input.creation = 7u;
+    source.input.text = (struct snag_binary_input_reference){
+        .field = SNAG_BINARY_INPUT_TEXT, .target = {7u, 20u, 5u}};
+    source.input.paths = json_pack("[s]", "AGENTS.md");
+    source.queue_count = source.queue_capacity = 1u;
+    source.queue = calloc(1u, sizeof(*source.queue));
+    source.output_count = source.output_capacity = 1u;
+    source.outputs = calloc(1u, sizeof(*source.outputs));
+    source.public = json_pack("[{s:s,s:s}]", "provider_item_id", "part", "text", "hello");
+    assert(source.input.paths && source.queue && source.outputs && source.public);
+    source.queue[0] = (struct snag_binary_input_source){.creation = 8u,
+        .text = {.field = SNAG_BINARY_INPUT_TEXT, .target = {10u, 40u, 5u}},
+        .content = {.field = SNAG_BINARY_INPUT_CONTENT, .target = {8u, 60u, 4u}},
+        .paths = json_incref(source.input.paths)};
+    source.outputs[0].value.source = (struct snag_binary_output_span){
+        .first = {11u, 30u, 2u}, .last_sequence = 12u, .bytes = 5u};
+    assert(!snag_buf_append(&source.field, "scratch", 7u));
+    struct snag_binary_producer staged = {.field = {.max = 16u}};
+    assert(!snag_buf_append(&staged.field, "canary", 6u));
+    struct snag_buf saved = staged.field;
+    assert(snag_binary_producer_clone(&staged, NULL) < 0 && errno == EINVAL);
+    assert(!memcmp(&saved, &staged.field, sizeof(saved)) &&
+        !memcmp(staged.field.data, "canary", 6u));
+    assert(snag_binary_producer_clone(&source, &source) < 0 && errno == EINVAL);
+    assert(!snag_binary_producer_clone(&staged, &source));
+    assert(!staged.field.data && !staged.field.len && staged.field.max == SNAG_MAX_EVENT_LINE);
+    assert(staged.queue != source.queue && staged.outputs != source.outputs);
+    assert(staged.input.paths == source.input.paths && staged.public == source.public);
+    staged.queue[0].text.target.sequence = 99u;
+    staged.outputs[0].value.source.bytes = 99u;
+    assert(source.queue[0].text.target.sequence == 10u &&
+        source.outputs[0].value.source.bytes == 5u);
+    snag_binary_producer_free(&staged); /* Abandoned candidate leaves its owner intact. */
+    assert(source.input.creation == 7u && source.queue_count == 1u && source.output_count == 1u);
+    assert(!snag_binary_producer_clone(&staged, &source));
+    snag_binary_producer_free(&source);
+    assert(staged.input.creation == 7u && staged.queue[0].text.target.sequence == 10u &&
+        staged.queue[0].content.target.sequence == 8u);
+    assert(staged.outputs[0].value.source.last_sequence == 12u);
+    assert(!strcmp(json_string_value(json_array_get(staged.input.paths, 0u)), "AGENTS.md"));
+    assert(!strcmp(snag_json_string(json_array_get(staged.public, 0u), "text"), "hello"));
+    snag_binary_producer_free(&staged);
+    snag_binary_producer_free(&staged);
+}
 
 /* A small fixture builder, not the production converter. The source is verified
  * by the existing strict reader; three records per batch exercise partial-batch
@@ -3914,6 +3964,7 @@ test_voice_adoption(struct snag_store *store, const char *cwd, unsigned int bad)
 void
 test_store_binary_replay(struct snag_store *store, const char *cwd)
 {
+    test_producer_candidate_ownership();
     for (unsigned int bad = 0u; bad < 4u; ++bad) test_voice_adoption(store, cwd, bad);
     test_compact_origins(store, cwd, false);
     test_compact_origins(store, cwd, true);
