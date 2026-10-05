@@ -372,7 +372,8 @@ while ! grep -q 'waiting for shutdown' "$root/live-hold.err"; do
 done
 $bin --dotdir "$live_state" -l >"$root/live-list" 2>"$root/live-list.err"
 [ "$(head -n 1 "$root/live-list")" = "$(printf 'SESSION\tNAME\tMODEL\tTURNS\tSTATUS\tLAST PROMPT\tIRC')" ]
-grep -q "^$(printf %.8s "$live_id").*detached" "$root/live-list"
+# Execute-mode owners have no terminal endpoint to report an attachment state.
+grep -q "^$(printf %.8s "$live_id").*running" "$root/live-list"
 kill -s TERM "$live_pid"
 set +e
 wait "$live_pid"
