@@ -195,8 +195,18 @@ def check_network(binary, previous=None):
 
 def check_hosted_rename_resume(binary):
     provider = harness.FakeResponses()
-    provider.runtime_handler = lambda handler, request, sequence: provider.reply(
-        handler, provider.response_body(sequence, "rename observed").encode(), close_header=True)
+
+    def respond(handler, request, sequence):
+        renamed = any(i.get("type") == "function_call_output" and
+                      i.get("call_id") == "rename-model" for i in request["input"])
+        if provider.latest_user(request) == "rename model" and not renamed:
+            wire = provider.function_body(sequence, "rename-model", "irc_nick",
+                                          {"destination": None, "nick": "after"})
+        else:
+            wire = provider.response_body(sequence, "rename observed")
+        provider.reply(handler, wire.encode(), close_header=True)
+
+    provider.runtime_handler = respond
     try:
         with tempfile.TemporaryDirectory(prefix="snag-resume-nick-") as tmp:
             root = Path(tmp).resolve()
@@ -223,8 +233,16 @@ def check_hosted_rename_resume(binary):
                     journal = state / "sessions" / sid / "events.jsonl"
                     assert journal.read_bytes().startswith(before)
                     if options is None:
-                        os.write(child.master, b"/nick after\r/nick\r")
-                        child.until(b"model nick: after", 10)
+                        os.write(child.master, b"/nick operatorafter\r/nick\r")
+                        child.until(b"operator nick: operatorafter", 10)
+                        assert b"model nick: before" in child.output
+                        child.output.clear()
+                        os.write(child.master, b"/rollout\rrename model\r")
+                        child.until(b"observed", 10)
+                    child.output.clear()
+                    os.write(child.master, b"/nick\r")
+                    child.until(b"model nick: after", 10)
+                    child.until(b"operator nick: operatorafter", 10)
                     child.output.clear()
                     os.write(child.master, b"/exit\r")
                     child.until(b"--resume", 10)
@@ -234,6 +252,8 @@ def check_hosted_rename_resume(binary):
                                if e["type"] == "irc_event" and e["data"]["kind"] == "nick"]
                     assert any(e["local"] and e["nick"] == "before" and e["text"] == "after"
                                for e in renames), renames
+                    assert any(e["local"] and e["nick"] == "renameop" and
+                               e["text"] == "operatorafter" for e in renames), renames
                 finally:
                     child.close()
             # A correctly hashed envelope still needs IRC shape validation.
