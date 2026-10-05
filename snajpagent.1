@@ -1848,6 +1848,13 @@ selection differs from the startup
 option, which uses the first configured or cached effort. Two components mean model/effort;
 include all three components to name a provider explicitly.
 .TP
+.B /configure
+Reload the saved configuration and provider credentials for this session owner
+at a safe request boundary. Preserve the selected provider, model and effort.
+Configuration or selected-login validation failures leave the current settings
+and credentials active. This command also reloads a changed login when the
+configuration file is unchanged. Stop local audio before reloading.
+.TP
 .B /config
 Open the active configuration with
 .BR EDITOR .
@@ -2721,7 +2728,10 @@ For first setup, put
 .B -m MODEL
 before
 .BR login .
-Existing configurations retain their default provider; select codex with
+Provider names are local labels stored with model selection. An existing name
+such as openai can use auth=codex_token and the Codex endpoint. The codex preset
+creates a separate provider; existing configurations retain their default.
+Select a separate provider with
 .B -m
 or the session's
 .B /model
@@ -2738,6 +2748,15 @@ provider or refreshing tokens.  Provider entitlements require a remote check.
 Remove only the selected provider's stored login.  If omitted, select the
 configured default provider.  Environment variables and the Codex or Meta CLI credentials
 are not modified; other provider logins remain intact.
+.PP
+Each session owner snapshots provider credentials at startup. Replacing a login
+or key file affects new owners; use
+.B /configure
+to adopt it in a running owner. Logging out removes the saved login; running
+owners keep their in-memory credential until a successful reload or exit. Revoke the token
+at its issuer when access must end immediately. OAuth expiry and a pre-output
+401 still renew the current login automatically; renewal leaves a replacement
+shared login intact. API keys and Enterprise tokens have no automatic renewal.
 .PP
 Configuring a provider probes the native compaction endpoint once and records
 the answer as
@@ -4550,6 +4569,13 @@ Private credentials bound to provider, endpoint, and auth method.  Files must
 be user-owned regular files with no group/other permissions.  Per-provider
 locks coordinate refresh rotation and atomic replacement across processes.
 Do not share or commit these files.  An alternate dotdir has independent logins.
+.TP
+.I $HOME/.snajpagent/auth/PROVIDER.AUTH.json
+When present, the selected auth method's file takes precedence over PROVIDER.json.
+This permits a new authentication method under the same provider name while
+retaining the legacy credential for older running binaries. It has the same
+permissions and binding requirements. Login updates and logout removes the
+selected file.
 .TP
 .I $HOME/.snajpagent/models.json
 Atomically replaced versioned provider/model registry containing advertised

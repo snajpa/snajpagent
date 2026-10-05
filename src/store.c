@@ -1364,7 +1364,7 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         if (!(requested ? snag_json_arg_keys(data, "control", "origin source_seq", error, error_size) :
                           snag_json_exact_keys(data, "control")) ||
             snag_json_integer_u64(data, "control", &control) < 0 ||
-            !control || control > SNAG_CONTROL_RETRY || (control & (control - 1u)) ||
+            !control || control > SNAG_CONTROL_RELOAD || (control & (control - 1u)) ||
             (live && requested && control == SNAG_CONTROL_LEGACY_ARCHIVE)) goto invalid;
         if ((origin_value && !origin) || (origin &&
              (control != SNAG_CONTROL_COMPACT || strcmp(origin, "image_boundary") || !source_value ||

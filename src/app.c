@@ -227,6 +227,7 @@ static const struct snag_term_command commands[] = {
     {"/?", "same as /help"},
     {"/status", "session and next-turn settings"},
     {"/config", "edit/reload configuration at a safe boundary"},
+    {"/configure", "reload saved configuration and credentials at a safe boundary"},
     {"/verbose [0..6]", "show/set verbosity for this process"},
     {"/banner [TEXT|clear]", "show/set session banner echoed in later requests"},
     {"/model [list|cache]", "list cached models; cache refreshes all providers"},
@@ -2227,6 +2228,22 @@ reload_config(struct app_state *app, char *error, size_t error_size)
             "reloaded prompt cannot be rendered with the current selection");
         goto out;
     }
+    if (snag_auth_config_open(app->store.root_fd, &candidate, error, error_size) < 0) {
+        goto out;
+    }
+#ifndef SNAJPAGENT_TEST_FIXTURE
+    if (snag_auth_config_check(snag_config_provider(&candidate, selected_provider),
+            error, error_size) < 0 ||
+        (app->session.active_turn &&
+         snag_auth_config_check(snag_config_provider(&candidate,
+             app->session.active_turn_provider), error, error_size) < 0) ||
+        (app->session.pending_input &&
+         snag_auth_config_check(snag_config_provider(&candidate,
+             snag_json_string(app->session.pending_input, "provider")),
+             error, error_size) < 0)) {
+        goto out;
+    }
+#endif
     rc = apply_network(app, &candidate, error, error_size);
     if (rc != 0) goto out;
     previous = *app->config;
@@ -2247,9 +2264,12 @@ reload_config(struct app_state *app, char *error, size_t error_size)
         .kind = SNAG_UI_COMMANDS, .data.commands = {commands, command_count()}});
     snag_ui_send(&app->ui, (struct snag_ui_command){
         .kind = SNAG_UI_PAUSE, .data.timing = {app->config->typing_pause_ms, app->config->prompt_tool_spinner_off_delay_ms}});
+    snag_auth_config_close(&previous);
     snag_config_free(&previous);
     rc = 0;
-out: snag_config_free(&candidate);
+out:
+    snag_auth_config_close(&candidate);
+    snag_config_free(&candidate);
     return rc;
 }
 
@@ -2845,7 +2865,7 @@ apply_controls(struct app_state *app)
         unsigned int pending = app->session.pending_controls & ~deferred;
         unsigned int bit = 0u;
         uint64_t first = UINT64_MAX;
-        for (unsigned int i = 0u; i < 6u; ++i)
+        for (unsigned int i = 0u; i < 7u; ++i)
             if ((pending & (1u << i)) && app->session.control_seq[i] < first) {
                 first = app->session.control_seq[i]; bit = 1u << i;
             }
@@ -2859,7 +2879,11 @@ apply_controls(struct app_state *app)
         }
         int rc = 0;
         bool exit_now = false, handled = false;
-        if (bit == SNAG_CONTROL_CONFIG) {
+        if (bit == SNAG_CONTROL_RELOAD) {
+            rc = reload_config(app, error, sizeof(error));
+            if (!rc) rc = app_textf(app, SNAG_UI_HOST,
+                "configuration reloaded: %s", app->config_path);
+        } else if (bit == SNAG_CONTROL_CONFIG) {
             if (started) {
                 (void)app_warning(app, "Previous configuration editor outcome is uncertain; reloading the saved file without reopening the editor.");
                 rc = reload_config(app, error, sizeof(error));
@@ -3125,6 +3149,12 @@ handle_common_command(struct app_state *app, const char *line, bool active, bool
         return change_model(app, line + 7u, active);
     if (strcmp(line, "/config") == 0)
         return (app->audio || app->voice) ? app_error(app, "Stop local audio before reloading configuration.") : change_config(app, active);
+    if (strcmp(line, "/configure") == 0) {
+        if (app->audio || app->voice) {
+            return app_error(app, "Stop local audio before reloading configuration.");
+        }
+        return request_control(app, SNAG_CONTROL_RELOAD, "/configure");
+    }
     if (strcmp(line, "/effort") == 0)
         return change_effort(app, NULL, active);
     if (strncmp(line, "/effort ", 8u) == 0)
@@ -4336,7 +4366,8 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
         snag_app_response_cycle_release(app, &graph, &steering, &projection, &request_body);
         memset(&provider_failure, 0, sizeof(provider_failure));
         error[0] = '\0';
-        bool reconfigured = (app->session.pending_controls & SNAG_CONTROL_CONFIG) != 0u;
+        bool reconfigured = (app->session.pending_controls &
+            (SNAG_CONTROL_CONFIG | SNAG_CONTROL_RELOAD)) != 0u;
         if (apply_controls(app) < 0) goto fail;
         if (app->input_closed) { result = 0; goto out; }
         if (app->interrupt_requested) goto user_interrupted;
@@ -5841,6 +5872,9 @@ run_owner(const struct snag_cli *cli, const char *program, struct snag_session_p
     config_path = snag_config_path(cli->config_path, dotdir, error, sizeof(error));
     if (!config_path) goto invalid;
     if (!cli->resume && snag_store_open(&app.store, dotdir, error, sizeof(error)) < 0) goto fail;
+    if (snag_auth_config_open(app.store.root_fd, &config, error, sizeof(error)) < 0) {
+        goto invalid;
+    }
     if (cli->update_model_cache) {
         if (refresh_model_cache(&app, error, sizeof(error)) < 0) goto fail;
     } else {
@@ -6051,6 +6085,7 @@ out:
     json_decref(app.draft_content);
     snag_session_close(&app.session);
     snag_store_close(&app.store);
+    snag_auth_config_close(&config);
     snag_config_free(&config);
     if (signal_handlers_installed) snag_shutdown_finish(&signal_handlers);
     if (app.shutdown_signal > 0 && app.shutdown_signal < 128) rc = 128 + app.shutdown_signal;

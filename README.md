@@ -445,9 +445,10 @@ base_url = https://api.openai.com
 api_key = ${OPENAI_API_KEY}
 ```
 
-Export `OPENAI_API_KEY` before launch; provider names are local labels. `/config`
-opens the active file in `$EDITOR` and reloads valid changes, and an invalid
-edit leaves the previous configuration active until you fix the file and restart.
+Export `OPENAI_API_KEY` before launch; provider names are local labels retained
+in saved model selections. Each running owner keeps its settings and credentials.
+Use `/configure` to reload the saved settings and credentials for that owner;
+`/config` opens `$EDITOR` first. Invalid changes leave the previous settings active.
 
 On Windows, setup uses `HOME/.snajpagent`, falling back to
 `USERPROFILE/.snajpagent`, and `--dotdir DIR` overrides it; the same `config.ini`

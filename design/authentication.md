@@ -37,13 +37,28 @@ redaction uses the same bound. Stored-login credentials are not embedded in
 config, prompt history, session events, or command arguments. Login input never reaches the
 model. No Codex auth/cache file or keyring is borrowed.
 
-Each provider has its own advisory lock. Refresh re-reads after locking and
-reuses another process's newly rotated token. Credentials are reloaded for
-requests; an expired OAuth token is refreshed before use and one pre-output HTTP 401
-can force a refresh/retry. A second rejection is terminal, not a loop. Device
-polling and lock/network waits are bounded and cancellable. Status is offline.
-Logout removes the local managed provider credential only, not explicit config sources,
-other providers, or all remote account sessions.
+Session owners snapshot every configured provider's credentials at startup and
+explicit `/configure` reload. Missing inactive credentials remain unavailable
+until reload; model changes use the existing snapshot. Config and selected-login
+validation precede swapping the snapshot. Failed reloads keep the working state.
+Voice borrows the same provider snapshot; reload remains excluded while local
+audio is open. Snapshot memory is cleared at replacement and owner shutdown.
+
+Each provider has an advisory lock for store writes and a process-local mutex
+for renewal. Expired OAuth tokens renew before use, and one pre-output HTTP 401
+can force renewal/retry. Renewal can reuse shared tokens for the same nonempty
+account (or a matching access/refresh token when account IDs are absent), and
+otherwise renews its own retained login without
+overwriting a replacement or recreating a logout. API keys and Enterprise tokens
+never reload during requests. Device polling and lock/network waits remain
+cancellable. Status is offline. Logout removes the saved credential; live owners
+retain their snapshot until a successful explicit reload or exit. Issuer revocation ends
+remote access independently of local snapshots.
+
+An existing `PROVIDER.AUTH.json` takes precedence over the legacy credential
+file for that method. This lets a provider change method while preserving the
+file used by an older running binary. Writes and logout select the same file,
+under the existing provider lock and private-file checks.
 
 Configuration and credentials are individually atomic files, not a multi-file
 crash-atomic transaction. Failed configuration installation rolls back the

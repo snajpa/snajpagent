@@ -870,6 +870,8 @@ test_checkpoint_optional_download_queue(struct snag_store *store, const char *cw
     memcpy(id, session.id, sizeof(id));
     state = snag_checkpoint_state_encode(&session);
     assert(state && json_object_del(state, "download_queue") == 0);
+    /* Old checkpoints have six control slots, before explicit reload existed. */
+    assert(json_array_remove(json_object_get(state, "control_seq"), 6u) == 0);
     assert(json_object_set_new(state, "archived", json_true()) == 0);
     /* Retired archive flags in old checkpoints have no selection effect. */
     /* Earlier snapshot-v1 writers predate the download outbox. Their verified

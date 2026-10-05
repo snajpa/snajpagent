@@ -406,8 +406,11 @@ decode_state(const json_t *data, struct snag_session *s)
     if (decode_fields(json_object_get(data, "usage_totals"), &s->usage_totals,
                       usage_fields, COUNT(usage_fields)) < 0) return -1;
     const json_t *controls = json_object_get(data, "control_seq");
-    if (!json_is_array(controls) || json_array_size(controls) != COUNT(s->control_seq)) return -1;
-    for (size_t i = 0; i < COUNT(s->control_seq); ++i) {
+    size_t control_count = json_array_size(controls);
+    if (!json_is_array(controls) ||
+        (control_count != 6u && control_count != COUNT(s->control_seq))) return -1;
+    memset(s->control_seq, 0, sizeof(s->control_seq));
+    for (size_t i = 0; i < control_count; ++i) {
         const json_t *value = json_array_get(controls, i);
         if (!json_is_integer(value) || json_integer_value(value) < 0) return -1;
         s->control_seq[i] = (uint64_t)json_integer_value(value);

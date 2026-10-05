@@ -5,6 +5,7 @@
 #include "json.h"
 
 #include <errno.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -12,6 +13,14 @@
 #include <unistd.h>
 
 #define AUTH_FILE_MAX (96u * 1024u)
+#define AUTH_PATH_MAX (SNAG_CONFIG_PROVIDER_NAME_MAX + 32u)
+
+struct snag_auth_state {
+    pthread_mutex_t mutex;
+    struct snag_auth_tokens tokens;
+    int result;
+    char error[256];
+};
 
 void
 snag_auth_clear(struct snag_auth_tokens *tokens)
@@ -136,17 +145,32 @@ fail: (void)close(fd);
     return -1;
 }
 
+/* A method-specific login can coexist with the legacy file still read by an
+ * older running binary. Keep legacy paths for existing stores and writers. */
+static int
+auth_path(int dir, const struct snag_provider_config *provider, char path[AUTH_PATH_MAX])
+{
+    snag_file_info st;
+
+    (void)snprintf(path, AUTH_PATH_MAX, "%s.%s.json", provider->name,
+        snag_auth_kind_name(provider->auth));
+    if (snag_lstat_at(dir, path, &st) == 0) return 0;
+    if (errno != ENOENT) return -1;
+    (void)snprintf(path, AUTH_PATH_MAX, "%s.json", provider->name);
+    return 0;
+}
+
 static int
 read_tokens(int dir, const struct snag_provider_config *provider, struct snag_auth_tokens *tokens)
 {
-    char path[SNAG_CONFIG_PROVIDER_NAME_MAX + 8u], error[128];
+    char path[AUTH_PATH_MAX], error[128];
     json_t *value = NULL;
     const char *kind, *base;
     snag_file_info st;
     int fd, rc = -1;
 
     snag_auth_clear(tokens);
-    (void)snprintf(path, sizeof(path), "%s.json", provider->name);
+    if (auth_path(dir, provider, path) < 0) return -1;
     fd = snag_open_read_security_at(dir, path, false);
     if (fd < 0) return errno == ENOENT ? 1 : -1;
     struct snag_buf text = {.max = AUTH_FILE_MAX};
@@ -193,7 +217,7 @@ out: snag_auth_json_free(value);
 static int
 write_tokens(int dir, const struct snag_provider_config *provider, const struct snag_auth_tokens *tokens)
 {
-    char path[SNAG_CONFIG_PROVIDER_NAME_MAX + 8u];
+    char path[AUTH_PATH_MAX];
     char temp[SNAG_ID_HEX_LEN + 8u], id[SNAG_ID_HEX_LEN + 1u];
     json_t *value = json_object();
     int fd = -1, rc = -1;
@@ -207,7 +231,7 @@ write_tokens(int dir, const struct snag_provider_config *provider, const struct 
         snag_json_set_new(value, "account_id", json_string(tokens->credential.account_id)) < 0 ||
         snag_json_set_new(value, "expires_at_ms", json_integer((json_int_t)tokens->expires_at_ms)) < 0 ||
         snag_json_canonical(value, &text) < 0 || snag_random_id(id) < 0) goto out;
-    (void)snprintf(path, sizeof(path), "%s.json", provider->name);
+    if (auth_path(dir, provider, path) < 0) goto out;
     (void)snprintf(temp, sizeof(temp), "%s.tmp", id);
     fd = snag_create_private_at(dir, temp, true);
     if (fd < 0 || snag_write_full(fd, text.data, text.len) < 0 || snag_fsync(fd) < 0 ||
@@ -272,7 +296,7 @@ snag_auth_restore(int root_fd, const struct snag_provider_config *provider,
                  char *error, size_t error_size)
 {
     struct snag_auth_tokens current;
-    char path[SNAG_CONFIG_PROVIDER_NAME_MAX + 8u];
+    char path[AUTH_PATH_MAX];
     int dir = auth_dir(root_fd, false), lock = -1, rc = -1;
     if (dir < 0 || (lock = lock_provider(dir, provider->name, NULL, NULL)) < 0 ||
         read_tokens(dir, provider, &current) != 0) goto out;
@@ -285,7 +309,7 @@ snag_auth_restore(int root_fd, const struct snag_provider_config *provider,
     if (previous->credential.len) {
         rc = write_tokens(dir, provider, previous);
     } else {
-        (void)snprintf(path, sizeof(path), "%s.json", provider->name);
+        if (auth_path(dir, provider, path) < 0) goto out;
         if (snag_unlink_at(dir, path, false) == 0) rc = snag_fsync(dir);
     }
 out: snag_auth_clear(&current);
@@ -300,7 +324,7 @@ int
 snag_auth_logout(int root_fd, const struct snag_provider_config *provider,
                 snag_auth_pump_fn pump, void *opaque, char *error, size_t error_size)
 {
-    char path[SNAG_CONFIG_PROVIDER_NAME_MAX + 8u];
+    char path[AUTH_PATH_MAX];
     struct snag_auth_tokens tokens;
     int dir = -1, lock = -1, rc = -1;
     if (!provider_valid(provider)) goto out;
@@ -311,13 +335,151 @@ snag_auth_logout(int root_fd, const struct snag_provider_config *provider,
     }
     lock = lock_provider(dir, provider->name, pump, opaque);
     if (lock < 0 || read_tokens(dir, provider, &tokens) < 0) goto out;
-    (void)snprintf(path, sizeof(path), "%s.json", provider->name);
+    if (auth_path(dir, provider, path) < 0) goto out;
     if (snag_unlink_at(dir, path, false) < 0 && errno != ENOENT) goto out;
     rc = snag_fsync(dir);
 out: snag_auth_clear(&tokens);
     if (lock >= 0) (void)close(lock);
     if (dir >= 0) (void)close(dir);
     if (rc < 0) snag_errorf(error, error_size, "cannot remove provider credentials safely");
+    return rc;
+}
+
+void
+snag_auth_config_close(struct snag_config *config)
+{
+    for (size_t i = 0; i < config->provider_count; ++i) {
+        struct snag_auth_state *state = config->providers[i].auth_state;
+        if (!state) continue;
+        pthread_mutex_destroy(&state->mutex);
+        snag_auth_clear(&state->tokens);
+        free(state);
+        config->providers[i].auth_state = NULL;
+    }
+}
+
+int
+snag_auth_config_open(int root_fd, struct snag_config *config, char *error, size_t error_size)
+{
+    for (size_t i = 0; i < config->provider_count; ++i) {
+        struct snag_provider_config *provider = &config->providers[i];
+        struct snag_auth_state *state = calloc(1u, sizeof(*state));
+        if (!state) goto fail;
+        if (pthread_mutex_init(&state->mutex, NULL)) {
+            free(state);
+            goto fail;
+        }
+        provider->auth_state = state;
+        snag_auth_clear(&state->tokens);
+        if (provider->api_key.kind != SNAG_SECRET_NONE) {
+            state->result = snag_credential_resolve(&state->tokens.credential,
+                &provider->api_key, state->error, sizeof(state->error));
+        } else {
+            state->result = snag_auth_load(root_fd, provider, &state->tokens,
+                state->error, sizeof(state->error));
+        }
+        state->tokens.credential.root_fd = root_fd;
+    }
+    return 0;
+fail:
+    snag_auth_config_close(config);
+    return snag_errorf(error, error_size, "cannot snapshot provider credentials");
+}
+
+int
+snag_auth_config_check(const struct snag_provider_config *provider,
+                       char *error, size_t error_size)
+{
+    if (!provider || !provider->auth_state) {
+        return snag_errorf(error, error_size, "provider credential snapshot is unavailable");
+    }
+    if (provider->auth_state->result != 0) {
+        return snag_errorf(error, error_size, "%s; use /configure after correcting the login",
+            provider->auth_state->error);
+    }
+    return 0;
+}
+
+/* Renewal may consult the shared store to reuse another owner's renewal for
+ * this account. A different login never replaces this owner's credentials. */
+static int
+refresh_snapshot(int root_fd, const struct snag_provider_config *provider,
+                 struct snag_auth_tokens *tokens, bool force, const char *stale,
+                 snag_auth_pump_fn pump, void *opaque, char *error, size_t error_size)
+{
+    struct snag_auth_tokens current;
+    struct snag_auth_tokens next = *tokens;
+    int dir = auth_dir(root_fd, false);
+    int lock = -1;
+    int rc = -1;
+    bool same_login = false;
+
+    snag_auth_clear(&current);
+    if (dir >= 0) {
+        lock = lock_provider(dir, provider->name, pump, opaque);
+        if (lock < 0) goto out;
+        if (read_tokens(dir, provider, &current) == 0) {
+            same_login = tokens->credential.account_id[0] ||
+                !strcmp(current.credential.value, tokens->credential.value) ||
+                (tokens->refresh_token[0] &&
+                 !strcmp(current.refresh_token, tokens->refresh_token));
+            if (strcmp(current.credential.account_id, tokens->credential.account_id)) {
+                same_login = false;
+            }
+            if (same_login) next = current;
+        }
+    }
+    if ((force && stale && !strcmp(stale, next.credential.value)) ||
+        next.expires_at_ms <= snag_time_ms() + 60000u) {
+        int (*refresh)(struct snag_auth_tokens *, snag_auth_pump_fn,
+            void *, char *, size_t) = provider->auth == SNAG_AUTH_META ?
+            snag_auth_refresh_meta : snag_auth_refresh;
+        if (refresh(&next, pump, opaque, error, error_size) < 0) goto out;
+        /* Leave a newer login or logout untouched. */
+        if (same_login && write_tokens(dir, provider, &next) < 0) {
+            (void)snag_errorf(error, error_size, "cannot save renewed provider credentials");
+            goto out;
+        }
+    }
+    *tokens = next;
+    tokens->credential.root_fd = root_fd;
+    rc = 0;
+out:
+    snag_auth_clear(&current);
+    snag_auth_clear(&next);
+    if (lock >= 0) (void)close(lock);
+    if (dir >= 0) (void)close(dir);
+    return rc;
+}
+
+static int
+read_snapshot(int root_fd, const struct snag_provider_config *provider,
+              bool force, const char *stale, struct snag_credential *out,
+              snag_auth_pump_fn pump, void *opaque, char *error, size_t error_size)
+{
+    struct snag_auth_state *state = provider->auth_state;
+    uint64_t deadline = snag_monotonic_ms() + 30000u;
+    int rc;
+
+    while ((rc = pthread_mutex_trylock(&state->mutex)) != 0) {
+        if (rc != EBUSY || snag_monotonic_ms() >= deadline) {
+            return snag_errorf(error, error_size, "provider credential renewal is busy");
+        }
+        if (pump ? pump(opaque, 50u) != 0 : snag_sleep_ms(50u) < 0) {
+            return snag_fail(error, error_size, ECANCELED, "credential renewal interrupted");
+        }
+    }
+    rc = snag_auth_config_check(provider, error, error_size);
+    if (!rc && (provider->auth == SNAG_AUTH_CHATGPT || provider->auth == SNAG_AUTH_META) &&
+        (force || state->tokens.expires_at_ms <= snag_time_ms() + 60000u)) {
+        rc = refresh_snapshot(root_fd, provider, &state->tokens, force, stale,
+            pump, opaque, error, error_size);
+    }
+    if (!rc) *out = state->tokens.credential;
+    pthread_mutex_unlock(&state->mutex);
+    if (rc < 0 && error && error_size && !error[0]) {
+        (void)snag_errorf(error, error_size, "cannot renew provider credentials");
+    }
     return rc;
 }
 
@@ -329,6 +491,10 @@ snag_auth_read(int root_fd, const struct snag_provider_config *provider,
     struct snag_auth_tokens tokens;
     int dir = -1, lock = -1, rc;
     snag_credential_clear(out);
+    if (provider->auth_state) {
+        return read_snapshot(root_fd, provider, force, stale, out,
+            pump, opaque, error, error_size);
+    }
     if (provider->api_key.kind != SNAG_SECRET_NONE) {
         rc = snag_credential_resolve(out, &provider->api_key, error, error_size);
         if (rc == 0) out->root_fd = root_fd;

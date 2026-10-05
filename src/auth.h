@@ -15,6 +15,13 @@ struct snag_auth_tokens {
 };
 
 void snag_auth_clear(struct snag_auth_tokens *tokens);
+/* Snapshot every provider at owner startup or explicit configuration reload.
+ * Missing/invalid inactive logins remain errors until the next snapshot. */
+int snag_auth_config_open(int root_fd, struct snag_config *config,
+                         char *error, size_t error_size);
+void snag_auth_config_close(struct snag_config *config);
+int snag_auth_config_check(const struct snag_provider_config *provider,
+                          char *error, size_t error_size);
 void snag_auth_json_free(json_t *value);
 const char *snag_auth_kind_name(enum snag_auth_kind kind);
 int snag_auth_key(struct snag_auth_tokens *tokens, const char *key, char *error, size_t error_size);

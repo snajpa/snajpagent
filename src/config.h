@@ -99,6 +99,8 @@ struct snag_provider_config {
     bool leading_instructions;
     char base_url[SNAG_CONFIG_URL_MAX];
     struct snag_secret_source api_key;
+    /* Borrowed runtime snapshot; the session owner controls its lifetime. */
+    struct snag_auth_state *auth_state;
     char openrouter_referer[SNAG_CONFIG_URL_MAX];
     char openrouter_title[SNAG_CONFIG_MODEL_MAX];
     struct snag_provider_model *models;

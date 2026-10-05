@@ -270,6 +270,7 @@ check: $(BIN) $(TEST_BIN)
 	./tests/test_provider_retry
 	./tests/test_provider_transport
 	python3 tests/test_access_token.py ./tests/snajpagent-transport
+	python3 tests/test_config_reload.py ./tests/snajpagent-transport
 	python3 tests/test_provider_https.py ./$(BIN)
 	python3 tests/test_token_preflight.py ./$(BIN)
 	./tests/test_context

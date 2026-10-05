@@ -4,6 +4,12 @@
 
 ## Unreleased
 
+- Keep each running owner's provider credentials until an explicit `/configure`
+  reload or restart. Reload saved settings and credentials at a safe request
+  boundary while preserving session model selection; failed reloads retain the
+  working settings. Allow method-specific credential files alongside legacy
+  logins still used by older running binaries.
+
 - Authenticate Enterprise Codex personal access tokens with `login codex
   --with-access-token`, including workspace validation, private storage and
   native Codex request routing.

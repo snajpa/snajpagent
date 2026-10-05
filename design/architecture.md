@@ -572,6 +572,12 @@ provider URL. Selector `cache` runs the existing atomic provider refresh and
 returns available cached rows; a failed refresh retains the previous cache.
 An operator's typed `/model` remains able to choose a new uncached identifier.
 
+Interactive `/configure` reloads the saved configuration and credentials without
+an editor, at a durable safe request boundary. Each owner retains its provider
+credential snapshots until reload or exit, with OAuth renewal within the current
+login. The selected provider/model/effort remain session state. Failed parsing or
+selected-login validation keeps the prior configuration and snapshots active.
+
 Interactive `/config` opens the exact active configuration path in `$EDITOR`.
 The terminal returns to ordinary cooked mode while the editor owns it. After
 the editor exits, snajpagent compares the file contents, transactionally parses

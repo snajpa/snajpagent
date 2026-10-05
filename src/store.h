@@ -47,7 +47,8 @@ enum snag_session_control {
     SNAG_CONTROL_CONFIG = 1u, SNAG_CONTROL_CACHE = 2u, SNAG_CONTROL_COMPACT = 4u,
     /* Retained only to finish controls recorded by older builds. */
     SNAG_CONTROL_LEGACY_ARCHIVE = 8u,
-    SNAG_CONTROL_DELETE = 16u, SNAG_CONTROL_RETRY = 32u };
+    SNAG_CONTROL_DELETE = 16u, SNAG_CONTROL_RETRY = 32u,
+    SNAG_CONTROL_RELOAD = 64u };
 
 struct snag_pending_call {
     char call_id[SNAG_ID_HEX_LEN + 1u];
@@ -255,7 +256,7 @@ struct snag_session {
     unsigned int pending_controls, started_controls;
     bool compact_control_image_boundary;
     uint64_t compact_control_source_seq;
-    uint64_t control_seq[6];
+    uint64_t control_seq[7];
     bool queue_armed;
     bool active_turn;
     bool last_turn_failed;
