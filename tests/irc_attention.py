@@ -36,6 +36,11 @@ def run_irc_attention_case(binary, root):
         "compact-fail": ("irc_compact", {"after_updates": 1}),
         "compact-reload": ("irc_compact", {"after_updates": 1}),
         "compact-stale": ("irc_compact", {"after_updates": 1}),
+        "compact-interrupt": ("irc_compact", {"after_updates": 1}),
+        "interrupt-tool": ("exec_command", {
+            "command": "touch interrupt-ready; exec sleep 30", "workdir": str(workspace),
+            "stdin": None, "pty": False, "timeout_ms": None, "max_output_tokens": None}),
+        "inspect-interrupt": ("irc_state", {}),
         "rename-model": ("irc_nick", {"destination": None, "nick": "newbot"}),
         "sleep-renamed": ("irc_sleep", {"delay_ms": 60000, "wake_after_messages": 20}),
         "restore-model": ("irc_nick", {"destination": None, "nick": "hostbot"}),
@@ -189,6 +194,28 @@ def run_irc_attention_case(binary, root):
                      "failure follow-up missing")
             checked = next(r for r in seen if provider.latest_user(r) == "verify-failure-kept")
             assert contains(checked, "keep-after-summary-failure")
+
+            # Ctrl-C while waiting for a shell tool also cancels the summary branch.
+            branch_failure = False
+            release.clear()
+            started.clear()
+            tool(term, "compact-interrupt", "irc_compact_configured")
+            assert started.wait(10)
+            interrupted = len(event_list(read_events(state)[1], "turn_interrupted"))
+            term.submit("interrupt-tool")
+            wait_for(lambda: (workspace / "interrupt-ready").exists(), "shell tool did not start")
+            term.send_key("C-c")
+            wait_event_count(state, "turn_interrupted", interrupted + 1)
+            term.submit("inspect-interrupt")
+
+            def interrupt_state():
+                return next((i for r in seen for i in r["input"]
+                    if i.get("type") == "function_call_output" and
+                    i.get("call_id") == "attn_inspect-interrupt"), None)
+
+            wait_for(interrupt_state, "IRC state after interruption was not returned")
+            assert "background_request=idle" in json.dumps(interrupt_state())
+            release.set()
 
             # A whole-conversation compaction must not adopt an older branch afterwards.
             branch_failure = False

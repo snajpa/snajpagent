@@ -3657,6 +3657,7 @@ interrupt_turn(struct app_state *app, const char *turn_id, const char *cause, bo
                const char *origin, const char *reason, char *error, size_t error_size)
 {
     char id[SNAG_ID_HEX_LEN + 1u];
+    snag_app_irc_summary_close(app);
     memcpy(id, turn_id, sizeof(id));
     if (snag_app_close_active_processes(app, id, cause, user_interrupt, error, error_size) < 0) return -1;
     if (app->input_closed && !app->session.cancel_requested) return commit_event(app, "turn_recovery",
@@ -5064,7 +5065,6 @@ rebuild_request: --cycle;
     }
     goto out;
 user_interrupted:
-    snag_app_irc_summary_close(app);
     result = finish_user_interrupt(app, turn_id, error, sizeof(error));
     goto out;
 output_fail: result = 6;
