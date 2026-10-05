@@ -4,6 +4,11 @@
 
 ## Unreleased
 
+- Freeze native core and provider checkpoint sections at the same acknowledged
+  frontier, retaining owned origins and index state. An absent provider cache
+  fails capture rather than emitting a partial image; access closure and image
+  publication remain separate integration work.
+
 - Retain IRC sleep, wake and context-summary settings and boundaries in native
   history and checkpoints, including older blocks without the added IRC state.
 

@@ -23,6 +23,14 @@ int snag_session_bind_binary(struct snag_session *, const struct snag_binary_ide
 int snag_session_binary_checkpoint_capture(const struct snag_session *, struct snag_binary_anchor *,
     struct snag_binary_index_tree *, struct snag_binary_checkpoint_sources *, char *, size_t);
 
+/* Freeze ACK-visible core and the existing provider checkpoint callback's seam
+ * into owning image sections. Callback is the matching committed cache owner.
+ * Outputs are initialized/owning and change together on success; no I/O. Access
+ * closure remains the caller's next step, never inferred from an empty section. */
+int snag_session_binary_snapshot_capture(const struct snag_session *,
+    struct snag_binary_io_snapshot *, struct snag_binary_index_tree *,
+    struct snag_binary_checkpoint_sources *, char *, size_t);
+
 #include <stdbool.h>
 #include <stddef.h>
 

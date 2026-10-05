@@ -4166,6 +4166,62 @@ snag_session_binary_checkpoint_capture(const struct snag_session *session,
     return 0;
 }
 
+int
+snag_session_binary_snapshot_capture(const struct snag_session *session,
+    struct snag_binary_io_snapshot *snapshot, struct snag_binary_index_tree *tree,
+    struct snag_binary_checkpoint_sources *sources, char *error, size_t error_size)
+{
+    if (!session || !snapshot || !tree || !sources)
+        return snag_fail(error, error_size, EINVAL, "invalid native snapshot capture");
+    const struct snag_binary_session *binary = session->binary;
+    if (!binary) return snag_fail(error, error_size, ENOTSUP, "session is not native");
+    if (binary->faulted)
+        return snag_fail(error, error_size, ESTALE, "native session requires fresh recovery");
+    if (!session->on_checkpoint)
+        return snag_fail(error, error_size, ENOTSUP, "native provider cache is not captured");
+    json_t *context = session->on_checkpoint(session->on_commit_opaque, session);
+    if (!context)
+        return snag_fail(error, error_size, ENOMEM, "cannot capture native provider cache");
+    const json_t *recent = json_object_get(context, "recent");
+    const json_t *history = json_object_get(context, "history_sources");
+    struct snag_binary_io_snapshot staged = {.identity = binary->identity,
+        .boundary = binary->boundary, .core = {.max = SIZE_MAX}, .provider = {.max = SIZE_MAX},
+        .access = {.max = SIZE_MAX}, .core_version = SNAG_BINARY_CORE_VERSION,
+        .provider_version = 1u};
+    struct snag_binary_checkpoint_sources origins = {0};
+    int rc = -1;
+    if (!json_is_array(recent) || !json_is_array(history) ||
+        session->next_seq != binary->boundary.next_seq) {
+        snag_fail(error, error_size, EINVAL,
+            "native provider seam is not available at the frontier");
+        goto done;
+    }
+    if (snag_binary_checkpoint_sources_clone(&origins, &binary->sources) < 0 ||
+        snag_binary_checkpoint_core_encode(&staged.core, &origins, session) < 0 ||
+        snag_binary_checkpoint_provider_encode(&staged.provider,
+            session, recent, history) < 0) {
+        snag_fail(error, error_size, errno, "cannot freeze native checkpoint sections");
+        goto done;
+    }
+    snag_buf_free(&snapshot->core);
+    snag_buf_free(&snapshot->provider);
+    snag_buf_free(&snapshot->access);
+    *snapshot = staged;
+    staged = (struct snag_binary_io_snapshot){0};
+    snag_binary_checkpoint_sources_free(sources);
+    *sources = origins;
+    origins = (struct snag_binary_checkpoint_sources){0};
+    *tree = binary->tree;
+    rc = 0;
+done:
+    json_decref(context);
+    snag_buf_free(&staged.core);
+    snag_buf_free(&staged.provider);
+    snag_buf_free(&staged.access);
+    snag_binary_checkpoint_sources_free(&origins);
+    return rc;
+}
+
 static int
 binary_voice_reference(struct snag_binary_session *binary, struct snag_binary_record *record)
 {

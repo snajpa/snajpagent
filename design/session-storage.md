@@ -2828,3 +2828,24 @@ archive bytes remain inert observations. Recovery does not implicitly resume an
 unfinished import; a fresh operation captures the current destination boundary.
 The app's source-history walker and normal session lifecycle remain JSONL until
 their native reader/backend integration is completed.
+
+### Live acknowledged core/provider capture
+
+The engine's internal snapshot capture freezes the acknowledged identity and
+frontier, core section, provider recipe, working origins and index tree together.
+It invokes the existing committed provider cache's checkpoint callback and uses
+its canonical recent/history seam; no second cache or callback is introduced.
+The callback must belong to that session's matching committed consumer. Missing
+or malformed seams reject rather than supplying an empty provider view.
+
+Capture does no journal I/O and does not submit or publish an image. Encoding and
+owning source copies are staged before replacing any caller output. A failure
+preserves the old snapshot, origins and tree. Subsequent commits cannot change
+the returned section bytes. A retained unacknowledged transaction remains separate
+from the captured ACK-visible reducer/cache, as with origin-only capture.
+
+The returned access section is intentionally unset. The caller still must
+establish the bounded complete source closure before choosing a bounded-resume
+image; empty access does not prove closure or authorize a historical-prefix scan.
+The ordinary native creation/open/resume lifecycle and receipt publication remain
+unfinished integration, not enabled by this internal capture seam.

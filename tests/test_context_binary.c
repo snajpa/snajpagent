@@ -6,6 +6,7 @@
 #include "snajpagent.h"
 #include "store_binary_context.h"
 #include "store_binary_import.h"
+#include "store_binary_legacy.h"
 #include "store_internal.h"
 
 #include <assert.h>
@@ -1853,6 +1854,108 @@ legacy_sources(void *source, const json_t *wanted, const char *prompt,
     return rc;
 }
 
+static void
+live_snapshot_capture(void)
+{
+    static bool checked;
+    if (checked) return;
+    checked = true;
+    FILE *file = tmpfile();
+    assert(file);
+    struct snag_binary_identity identity = {.created_ms = 42u};
+    identity.id[0] = 17u;
+    unsigned char header[SNAG_BINARY_HEADER_SIZE];
+    snag_binary_header_encode(header, &identity);
+    struct snag_binary_anchor root, boundary;
+    assert(!snag_binary_header_decode(header, sizeof(header), &identity, &root));
+    struct snag_buf payload = {.max = SIZE_MAX}, decoded = {.max = SIZE_MAX};
+    struct snag_buf wire = {.max = SIZE_MAX};
+    enum snag_binary_kind kind;
+    json_t *created = json_pack("{s:s,s:s,s:s,s:i,s:s,s:s}", "default_effort", "medium",
+        "default_model", "gpt-5", "default_provider", "openai", "format", 4,
+        "protocol", "responses", "cwd", "/");
+    assert(created && !snag_binary_legacy_encode(&payload, "session_created", created, &kind));
+    json_decref(created);
+    struct snag_binary_record record = {.kind = (uint16_t)kind,
+        .version = snag_binary_event_version(kind), .timestamp_ms = 42u,
+        .payload = payload.data, .size = payload.len};
+    assert(!snag_binary_batch_encode(&decoded, &root, &record, 1u, 0u, &boundary));
+    assert(!snag_binary_wire_encode(&wire, decoded.data, decoded.len));
+    assert(!snag_write_full(fileno(file), header, sizeof(header)) &&
+        !snag_write_full(fileno(file), wire.data, wire.len));
+    assert(!snag_sync_file(fileno(file)));
+    struct snag_session source, state;
+    snag_session_init(&source);
+    snag_session_init(&state);
+    source.log_fd = fileno(file);
+    source.lock_fd = dup(fileno(file));
+    assert(source.lock_fd >= 0);
+    strcpy(source.id, "11000000000000000000000000000000");
+    struct snag_binary_recovery recovery = {0};
+    struct snag_binary_checkpoint_sources origins = {0}, captured = {0};
+    char error[256];
+    int rc = snag_store_reconcile_binary_context(&source, &state, &recovery, &origins,
+        NULL, error, sizeof(error));
+    if (rc < 0) fprintf(stderr, "live snapshot source: %s\n", error);
+    assert(!rc);
+    struct snag_binary_index_tree tree = {0};
+    struct snag_binary_batch batch;
+    assert(!snag_binary_batch_decode(decoded.data, decoded.len, &root, &batch, &boundary));
+    assert(!snag_binary_index_tree_append_batch(NULL, &tree, &identity,
+        &root, &boundary, decoded.data, decoded.len));
+    struct snag_binary_producer producer = {0};
+    state.log_fd = dup(fileno(file));
+    state.lock_fd = dup(fileno(file));
+    assert(state.log_fd >= 0 && state.lock_fd >= 0);
+    assert(!snag_session_bind_binary(&state, &identity, &boundary, &tree, &producer,
+        &origins, NULL, error, sizeof(error)));
+    struct snag_binary_io_snapshot snapshot = {0};
+    off_t position = lseek(state.log_fd, 0, SEEK_CUR);
+    assert(!snag_session_binary_snapshot_capture(&state, &snapshot, &tree, &captured,
+        error, sizeof(error)));
+    assert(snapshot.boundary.next_seq == state.next_seq && snapshot.core.len &&
+        snapshot.provider.len && !snapshot.access.len && !snapshot.access_version);
+    assert(lseek(state.log_fd, 0, SEEK_CUR) == position);
+    const json_t *recent, *history;
+    assert(!snag_context_capture_seam(&state, &recent, &history));
+    struct snag_buf expected_core = {.max = SIZE_MAX}, expected_provider = {.max = SIZE_MAX};
+    assert(!snag_binary_checkpoint_core_encode(&expected_core, &origins, &state));
+    assert(!snag_binary_checkpoint_provider_encode(&expected_provider, &state, recent, history));
+    assert(expected_core.len == snapshot.core.len &&
+        !memcmp(expected_core.data, snapshot.core.data, expected_core.len));
+    assert(expected_provider.len == snapshot.provider.len &&
+        !memcmp(expected_provider.data, snapshot.provider.data, expected_provider.len));
+    struct snag_binary_io_snapshot saved = snapshot;
+    json_t *(*callback)(void *, const struct snag_session *) = state.on_checkpoint;
+    state.on_checkpoint = NULL;
+    assert(snag_session_binary_snapshot_capture(&state, &snapshot, &tree, &captured,
+        error, sizeof(error)) < 0 && errno == ENOTSUP &&
+        !memcmp(&saved, &snapshot, sizeof(saved)));
+    state.on_checkpoint = callback;
+    assert(!snag_session_commit(&state, "banner_updated", json_pack("{s:s}", "text", "new"),
+        NULL, error, sizeof(error)));
+    assert(saved.boundary.next_seq + 1u == state.next_seq &&
+        !memcmp(expected_provider.data, saved.provider.data, expected_provider.len));
+    assert(!snag_session_binary_snapshot_capture(&state, &snapshot, &tree, &captured,
+        error, sizeof(error)));
+    assert(snapshot.boundary.next_seq == state.next_seq &&
+        captured.texts.slots[SNAG_BINARY_TEXT_BANNER].declaration == state.next_seq - 1u);
+    snag_buf_free(&snapshot.core);
+    snag_buf_free(&snapshot.provider);
+    snag_buf_free(&snapshot.access);
+    snag_buf_free(&expected_core);
+    snag_buf_free(&expected_provider);
+    snag_binary_checkpoint_sources_free(&captured);
+    snag_binary_checkpoint_sources_free(&origins);
+    snag_session_close(&state);
+    source.log_fd = -1;
+    snag_session_close(&source);
+    snag_buf_free(&payload);
+    snag_buf_free(&decoded);
+    snag_buf_free(&wire);
+    assert(!fclose(file));
+}
+
 void
 test_context_binary_projection(struct snag_session *source, unsigned int cycle,
     const json_t *steering, const struct snag_instruction_set *instructions,
@@ -1860,6 +1963,7 @@ test_context_binary_projection(struct snag_session *source, unsigned int cycle,
 {
     /* Memory-only and deliberately detached cache fixtures have no stopped
      * journal. Their original context assertions remain in the calling test. */
+    live_snapshot_capture();
     if (source->pending_log || source->log_fd < 0 || source->lock_fd < 0) {
         ++without_journal;
         return;
