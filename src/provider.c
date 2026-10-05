@@ -332,7 +332,8 @@ provider_endpoint_url(const struct snag_provider_config *provider, const char *p
     }
 #endif
     append_path = path;
-    if (provider->auth == SNAG_AUTH_CHATGPT && strncmp(path, "/v1/", 4u) == 0) append_path = path + 3u;
+    if (snag_auth_uses_codex(provider->auth) && strncmp(path, "/v1/", 4u) == 0)
+        append_path = path + 3u;
     base_len = strlen(base);
     while (base_len && base[base_len - 1u] == '/') --base_len;
     if (snag_provider_native_audio(provider) && !strcmp(path, "/v1/audio/transcriptions")) {
@@ -357,8 +358,11 @@ receive_body(char *data, size_t size, size_t count, void *opaque)
     return snag_buf_append(buf, data, size) == 0 ? size : 0;
 }
 
-int
-snag_provider_auth_post(const char *issuer, const char *path, const char *type, const void *body, size_t size,
+static int append_authorization(struct curl_slist **, const struct snag_credential *);
+
+static int
+auth_request(const char *issuer, const char *path, const char *type, const void *body,
+           size_t size, const struct snag_credential *credential,
            json_t **response, long *status, snag_provider_pump_fn pump, void *opaque,
            char *error, size_t error_size)
 {
@@ -373,14 +377,19 @@ snag_provider_auth_post(const char *issuer, const char *path, const char *type, 
     if (snprintf(url, sizeof(url), "%s%s", issuer, path) >= (int)sizeof(url) || snag_http_init() != CURLE_OK)
         goto out;
     curl = curl_easy_init();
-    (void)snprintf(header, sizeof(header), "Content-Type: %s", type);
-    headers = curl_slist_append(NULL, header);
+    if (credential) {
+        if (append_authorization(&headers, credential) < 0) goto out;
+    } else {
+        (void)snprintf(header, sizeof(header), "Content-Type: %s", type);
+        headers = curl_slist_append(NULL, header);
+    }
     if (!curl || !headers || snag_http_trust(curl) != CURLE_OK ||
         curl_easy_setopt(curl, CURLOPT_URL, url) != CURLE_OK ||
         curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers) != CURLE_OK ||
-        curl_easy_setopt(curl, CURLOPT_POST, 1L) != CURLE_OK ||
-        curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body) != CURLE_OK ||
-        curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE_LARGE, (curl_off_t)size) != CURLE_OK ||
+        (credential ? curl_easy_setopt(curl, CURLOPT_HTTPGET, 1L) != CURLE_OK :
+         (curl_easy_setopt(curl, CURLOPT_POST, 1L) != CURLE_OK ||
+          curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body) != CURLE_OK ||
+          curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE_LARGE, (curl_off_t)size) != CURLE_OK)) ||
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, receive_body) != CURLE_OK ||
         curl_easy_setopt(curl, CURLOPT_WRITEDATA, &output) != CURLE_OK ||
         curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L) != CURLE_OK ||
@@ -422,6 +431,24 @@ out:
             snag_errorf(error, error_size, "authentication request failed (response details withheld)");
     }
     return rc;
+}
+
+int
+snag_provider_auth_post(const char *issuer, const char *path, const char *type,
+                       const void *body, size_t size, json_t **response, long *status,
+                       snag_provider_pump_fn pump, void *opaque, char *error, size_t error_size)
+{
+    return auth_request(issuer, path, type, body, size, NULL, response, status,
+                        pump, opaque, error, error_size);
+}
+
+int
+snag_provider_auth_get(const char *issuer, const char *path,
+                      const struct snag_credential *credential, json_t **response, long *status,
+                      snag_provider_pump_fn pump, void *opaque, char *error, size_t error_size)
+{
+    return auth_request(issuer, path, NULL, NULL, 0u, credential, response, status,
+                        pump, opaque, error, error_size);
 }
 
 static int
@@ -1035,7 +1062,7 @@ snag_provider_catalog_protocol(const struct snag_provider_config *provider)
 bool
 snag_provider_native_audio(const struct snag_provider_config *provider)
 {
-    return provider && (provider->auth == SNAG_AUTH_CHATGPT ||
+    return provider && (snag_auth_uses_codex(provider->auth) ||
         provider_uses_codex_catalog(provider));
 }
 
@@ -1299,7 +1326,7 @@ snag_provider_responses_count(struct snag_provider_connection connection,
     if (!connection_valid(connection) || !count_request || !input_tokens)
         return snag_fail(error, error_size, EINVAL, "invalid input-token count request");
     *input_tokens = 0u;
-    if (connection.provider->auth == SNAG_AUTH_CHATGPT) {
+    if (snag_auth_uses_codex(connection.provider->auth)) {
         if (endpoint_unsupported) *endpoint_unsupported = true;
         return snag_fail(error, error_size, ENOTSUP, "direct Codex does not provide exact input-token preflight");
     }
@@ -1791,7 +1818,7 @@ voice_connect(const struct snag_provider_config *provider,const struct snag_cred
         snag_errorf(error,size,"Realtime voice requires an explicit API-key route and model");return -1;
     }
     if (call) {
-        if (provider->auth==SNAG_AUTH_CHATGPT) {
+        if (snag_auth_uses_codex(provider->auth)) {
             if (snprintf(endpoint,sizeof(endpoint),
                     "https://api.openai.com/v1/live/%s",call)>=
                     (int)sizeof(endpoint))

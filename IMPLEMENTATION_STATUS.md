@@ -2,6 +2,12 @@
 
 # Implementation status
 
+Enterprise Codex personal access tokens use native `--with-access-token` login,
+validated workspace metadata and the Codex backend. Managed tokens are reloaded
+for each request and use the same Codex formatting/compaction/count behavior as
+device login. Token rotation requires a new login; OAuth refresh is exclusive
+to the existing device flows. Local HTTP tests exercise the real CLI/transport.
+
 Remote tmux supports bidirectional native file transfers using its single writable
 client focused on the agent pane. Checked envelopes preserve pane history while
 other panes render; byte streams negotiate larger frames and stock Mosh retains

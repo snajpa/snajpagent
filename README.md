@@ -416,6 +416,17 @@ authenticate and choose a [supported model](#supported-providers). `snajpagent l
 reports local credential sources without contacting a provider, and the manual
 explains login methods and logout.
 
+For an Enterprise Admin Console token with Codex permission:
+
+```sh
+printf '%s\n' "$CODEX_ACCESS_TOKEN" | snajpagent login codex --with-access-token
+snajpagent -m codex/gpt-6.1-sol/xhigh
+```
+
+First setup also needs `-m MODEL` before `login`. Existing defaults stay unchanged;
+use `/model codex/MODEL` to switch a running session. Replace expired or revoked
+tokens by repeating login. Platform API keys use `login openai --with-api-key`.
+
 For manual configuration on POSIX systems, create a private directory:
 
 ```sh

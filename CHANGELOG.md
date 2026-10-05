@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Authenticate Enterprise Codex personal access tokens with `login codex
+  --with-access-token`, including workspace validation, private storage and
+  native Codex request routing.
+
 - Transfer files through remote tmux with checked framing, current client-tty
   selection and unchanged tmux options. Support short panes, concurrent pane
   output, cancellation, reattachment and stock Mosh; reject ambiguous clients.

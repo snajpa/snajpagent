@@ -157,12 +157,14 @@ choose_provider(const struct snag_cli *cli, struct snag_config *config,
                            sizeof(provider->base_url), false, false, error, error_size) < 0) return -1;
         }
     }
-    if (cli->openai_device_auth || cli->meta_device_auth) {
+    if (cli->openai_device_auth || cli->meta_device_auth || cli->with_access_token) {
         if (cli->meta_device_auth && !snag_is_meta_base(provider->base_url))
             return snag_errorf(error, error_size, "--meta-device-auth requires a Meta provider");
-        if (cli->openai_device_auth && strcmp(provider->base_url, SNAG_CHATGPT_BASE) != 0)
-            return snag_errorf(error, error_size, "--openai-device-auth requires a direct Codex provider");
-        provider->auth = cli->meta_device_auth ? SNAG_AUTH_META : SNAG_AUTH_CHATGPT;
+        if ((cli->openai_device_auth || cli->with_access_token) &&
+            strcmp(provider->base_url, SNAG_CHATGPT_BASE) != 0)
+            return snag_errorf(error, error_size, "Codex login requires a direct Codex provider");
+        provider->auth = cli->with_access_token ? SNAG_AUTH_CODEX_TOKEN :
+            cli->meta_device_auth ? SNAG_AUTH_META : SNAG_AUTH_CHATGPT;
         snag_secret_source_free(&provider->api_key);
     }
     if (!*existing && !cli->auth_provider && strcmp(selection, "custom") != 0) {
@@ -196,10 +198,12 @@ acquire_login(const struct snag_cli *cli, struct snag_provider_config *provider,
     char key[SNAG_CREDENTIAL_MAX + 1u];
     int rc;
     if (provider->api_key.kind == SNAG_SECRET_NONE && root_fd >= 0 &&
-        !cli->openai_device_auth && !cli->meta_device_auth && !cli->with_api_key) {
+        !cli->openai_device_auth && !cli->meta_device_auth &&
+        !cli->with_api_key && !cli->with_access_token) {
         rc = snag_auth_load(root_fd, provider, tokens, error, error_size);
         if (rc < 0) return -1;
-        if (rc == 0 && (provider->auth == SNAG_AUTH_API_KEY ||
+        if (rc == 0 && (provider->auth == SNAG_AUTH_CODEX_TOKEN ||
+                       provider->auth == SNAG_AUTH_API_KEY ||
                        tokens->expires_at_ms > snag_time_ms() + 60000u)) {
             if (!snag_isatty(STDIN_FILENO) || !snag_isatty(STDERR_FILENO)) return 0;
             if (read_line("Use the existing stored login? [Y/n]: ", key, sizeof(key),
@@ -208,6 +212,14 @@ acquire_login(const struct snag_cli *cli, struct snag_provider_config *provider,
         }
         snag_auth_clear(tokens);
         error[0] = '\0';
+    }
+    if (provider->auth == SNAG_AUTH_CODEX_TOKEN) {
+        rc = read_line("Codex access token (hidden): ", key, sizeof(key), true,
+                       cli->with_access_token, error, error_size);
+        if (rc == 0)
+            rc = snag_auth_access_token(tokens, key, login_pump, NULL, error, error_size);
+        snag_secret_clear(key, sizeof(key));
+        return rc;
     }
     if (provider->auth == SNAG_AUTH_META)
         return snag_auth_device_meta(tokens, login_pump, NULL, error, error_size);
@@ -396,6 +408,18 @@ snag_login_dispatch(const struct snag_cli *cli, bool *handled)
     }
     root_fd = snag_open_read(dotdir, true);
     if (root_fd < 0 && errno != ENOENT) goto out;
+    if (existing && root_fd >= 0) {
+        const struct snag_provider_config *old = snag_config_provider(&config, provider.name);
+        if (old && old->auth != provider.auth && old->api_key.kind == SNAG_SECRET_NONE) {
+            int saved = snag_auth_load(root_fd, old, &previous, error, sizeof(error));
+            if (saved < 0) goto out;
+            if (saved == 0) {
+                snag_errorf(error, sizeof(error),
+                    "run logout %s before changing its authentication method", provider.name);
+                goto out;
+            }
+        }
+    }
     if (acquire_login(cli, &provider, path, root_fd, &tokens, error, sizeof(error)) < 0) goto out;
     if (first && choose_model(cli, &config, &provider, &tokens, model, effort, error, sizeof(error)) < 0)
         goto out;
@@ -406,8 +430,8 @@ snag_login_dispatch(const struct snag_cli *cli, bool *handled)
                           login_pump, NULL, error, sizeof(error)) < 0) goto out;
         credentials_written = true;
     }
-    if ((provider.auth == SNAG_AUTH_API_KEY || provider.auth == SNAG_AUTH_CHATGPT) &&
-        (provider.auth == SNAG_AUTH_CHATGPT || tokens.credential.value[0] != '\0')) {
+    if ((provider.auth == SNAG_AUTH_API_KEY || snag_auth_uses_codex(provider.auth)) &&
+        (snag_auth_uses_codex(provider.auth) || tokens.credential.value[0] != '\0')) {
         const char *probe_model = model[0] ? model :
             (provider.models && provider.model_count ? provider.models[0].upstream : NULL);
         if (probe_model) {

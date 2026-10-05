@@ -37,6 +37,49 @@ auth_issuer(void)
     return AUTH_ISSUER;
 }
 
+int
+snag_auth_access_token(struct snag_auth_tokens *tokens, const char *key,
+                       snag_auth_pump_fn pump, void *opaque, char *error, size_t error_size)
+{
+    json_t *response = NULL;
+    long status = 0;
+    int rc = -1;
+
+    snag_auth_clear(tokens);
+    if (!key || strncmp(key, "at-", 3u) || !key[3])
+        return snag_errorf(error, error_size, "expected a Codex personal access token (at-)");
+    if (snag_auth_key(tokens, key, error, error_size) < 0) return -1;
+    if (snag_provider_auth_get(auth_issuer(), "/api/accounts/v1/user-auth-credential/whoami",
+            &tokens->credential, &response, &status, pump, opaque, error, error_size) < 0)
+        goto out;
+    if (status != 200) {
+        snag_errorf(error, error_size, "Codex access token validation failed (HTTP %ld); "
+                    "check token validity and workspace access", status);
+        goto out;
+    }
+    const char *account = auth_string(response, "chatgpt_account_id");
+    json_t *fedramp = json_object_get(response, "chatgpt_account_is_fedramp");
+    if (!account || !*account || strlen(account) > SNAG_ACCOUNT_ID_MAX ||
+        !json_is_boolean(fedramp)) goto invalid;
+    for (const unsigned char *p = (const unsigned char *)account; *p; ++p)
+        if (*p < 0x21u || *p > 0x7eu) goto invalid;
+    if (json_is_true(fedramp)) {
+        snag_errorf(error, error_size, "FedRAMP Codex workspaces require an unsupported backend");
+        goto out;
+    }
+    (void)snag_strcpy(tokens->credential.account_id,
+                      sizeof(tokens->credential.account_id), account);
+    rc = 0;
+    goto out;
+invalid:
+    snag_errorf(error, error_size,
+                "Codex access token validation returned invalid workspace metadata");
+out:
+    snag_auth_json_free(response);
+    if (rc < 0) snag_auth_clear(tokens);
+    return rc;
+}
+
 /* Same overrides the Meta launcher honors; anything else keeps the default. */
 static const char *
 meta_issuer(void)

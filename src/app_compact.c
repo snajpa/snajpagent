@@ -403,7 +403,8 @@ run_compaction_attempt(struct app_state *app, const char *reason, bool active_pr
          * supplies no summary instruction; omission is rejected as invalid. */
         if (projection.create_request.value && native &&
             snag_json_set_new(projection.create_request.value, "instructions", json_string("")) < 0) goto out;
-        if (projection.create_request.value && !native && app->turn_provider->auth == SNAG_AUTH_CHATGPT &&
+        if (projection.create_request.value && !native &&
+            snag_auth_uses_codex(app->turn_provider->auth) &&
             snag_context_codex_request(projection.create_request.value) < 0) goto out;
         /* Summary generation shares the ordinary turn's session cache space.
          * Input-token counting accepts no cache-routing fields. */

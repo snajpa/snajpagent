@@ -257,7 +257,7 @@ snag_app_provider_compact(struct app_state *app, const json_t *compact_request,
 
     (void)compact_request;
     (void)credential;
-    if (app->turn_provider->auth == SNAG_AUTH_CHATGPT &&
+    if (snag_auth_uses_codex(app->turn_provider->auth) &&
         app->session.last_user && strcmp(app->session.last_user, "native_compact_unavailable") == 0) {
         json_decref(fixture_output);
         return SNAG_PROVIDER_UNSUPPORTED;

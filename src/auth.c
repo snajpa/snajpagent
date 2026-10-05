@@ -40,6 +40,7 @@ snag_auth_kind_name(enum snag_auth_kind kind)
     switch (kind) {
     case SNAG_AUTH_API_KEY: return "api_key";
     case SNAG_AUTH_CHATGPT: return "chatgpt";
+    case SNAG_AUTH_CODEX_TOKEN: return "codex_token";
     case SNAG_AUTH_META: return "meta";
     }
     return "invalid";
@@ -79,9 +80,9 @@ static bool
 provider_valid(const struct snag_provider_config *provider)
 {
     if (!provider || !snag_config_name_valid(provider->name) ||
-        (provider->auth != SNAG_AUTH_API_KEY && provider->auth != SNAG_AUTH_CHATGPT &&
+        (provider->auth != SNAG_AUTH_API_KEY && !snag_auth_uses_codex(provider->auth) &&
          provider->auth != SNAG_AUTH_META)) return false;
-    if (provider->auth == SNAG_AUTH_CHATGPT)
+    if (snag_auth_uses_codex(provider->auth))
         return strcmp(provider->base_url, SNAG_CHATGPT_BASE) == 0;
     if (provider->auth == SNAG_AUTH_META)
         return snag_is_meta_base(provider->base_url);
@@ -162,6 +163,7 @@ read_tokens(int dir, const struct snag_provider_config *provider, struct snag_au
                      snag_json_string(value, "access_token"), false) ||
         !token_copy(tokens->refresh_token, sizeof(tokens->refresh_token),
                      snag_json_string(value, "refresh_token"),
+                     provider->auth == SNAG_AUTH_CODEX_TOKEN ||
                      provider->auth == SNAG_AUTH_API_KEY ||
                      provider->auth == SNAG_AUTH_META) ||
         !token_copy(tokens->credential.account_id, sizeof(tokens->credential.account_id),
@@ -171,6 +173,8 @@ read_tokens(int dir, const struct snag_provider_config *provider, struct snag_au
         snag_json_integer_u64(value, "expires_at_ms", &tokens->expires_at_ms) < 0 ||
         ((provider->auth == SNAG_AUTH_CHATGPT || provider->auth == SNAG_AUTH_META) &&
          !tokens->expires_at_ms) ||
+        (provider->auth == SNAG_AUTH_CODEX_TOKEN &&
+         (tokens->expires_at_ms || tokens->refresh_token[0])) ||
         (provider->auth == SNAG_AUTH_API_KEY && (tokens->expires_at_ms ||
             tokens->refresh_token[0] || tokens->credential.account_id[0]))) goto out;
     tokens->credential.len = strlen(tokens->credential.value);

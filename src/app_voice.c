@@ -2796,7 +2796,7 @@ interface_compact_start(struct app_state *app, const json_t *history,
     json_decref(tools);
     request = base ? snag_app_summary_request(base, snag_json_string(base, "model"),
         effort, capacity) : NULL;
-    if (!request || (provider->auth == SNAG_AUTH_CHATGPT &&
+    if (!request || (snag_auth_uses_codex(provider->auth) &&
             snag_context_codex_request(request) < 0)) {
         goto out;
     }

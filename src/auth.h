@@ -33,6 +33,8 @@ int snag_auth_logout(int root_fd, const struct snag_provider_config *provider,
 int snag_auth_read(int root_fd, const struct snag_provider_config *provider,
                   bool force, const char *stale, struct snag_credential *out,
                   snag_auth_pump_fn pump, void *opaque, char *error, size_t error_size);
+int snag_auth_access_token(struct snag_auth_tokens *tokens, const char *key,
+                           snag_auth_pump_fn pump, void *opaque, char *error, size_t error_size);
 int snag_auth_device(struct snag_auth_tokens *tokens, snag_auth_pump_fn pump, void *opaque,
                     char *error, size_t error_size);
 int snag_auth_refresh(struct snag_auth_tokens *tokens, snag_auth_pump_fn pump, void *opaque,

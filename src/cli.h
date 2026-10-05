@@ -19,6 +19,7 @@ struct snag_cli {
     bool openai_device_auth;
     bool meta_device_auth;
     bool with_api_key;
+    bool with_access_token;
     const char *auth_provider;
     bool resume;
     bool attach;

@@ -90,6 +90,10 @@ int snag_provider_voice_wait(struct snag_voice_socket *,bool writing,unsigned in
 void snag_provider_voice_close(struct snag_voice_socket *);
 
 /* Fixed-issuer auth transport: bounded, cancellable, and never body-logged. */
+int snag_provider_auth_get(const char *issuer, const char *path,
+                          const struct snag_credential *credential, json_t **response,
+                          long *status, snag_provider_pump_fn pump, void *opaque,
+                          char *error, size_t error_size);
 int snag_provider_auth_post(const char *issuer, const char *path, const char *type,
                             const void *body, size_t size, json_t **response,
                             long *status, snag_provider_pump_fn pump, void *opaque,

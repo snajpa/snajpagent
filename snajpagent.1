@@ -29,7 +29,7 @@ snajpagent \- terminal coding agent with built-in IRC
 .RI [ options ]
 .B login
 .RI [ provider ]
-.RI [ --openai-device-auth " | --meta-device-auth | --with-api-key]"
+.RI [ --openai-device-auth " | --meta-device-auth | --with-api-key | --with-access-token]"
 .br
 .B snajpagent
 .RI [ options ]
@@ -2707,6 +2707,29 @@ Noninteractive first setup also requires
 before
 .BR login .
 .TP
+.B --with-access-token
+Read one Enterprise Codex personal access token (at-) from stdin.  Validate it
+with OpenAI and save its workspace identity for the direct Codex provider.
+Use an Admin Console token with Codex permission:
+.PP
+.nf
+printf '%s\\n' "$CODEX_ACCESS_TOKEN" | snajpagent login codex --with-access-token
+snajpagent -m codex/gpt-6.1-sol/xhigh
+.fi
+.PP
+For first setup, put
+.B -m MODEL
+before
+.BR login .
+Existing configurations retain their default provider; select codex with
+.B -m
+or the session's
+.B /model
+command.  Token expiration and revocation require a replacement login; access
+tokens have no OAuth refresh.  Switching an existing provider between device
+login and token login requires logging that provider out first.
+FedRAMP workspaces and agent-identity JWTs are unsupported by this login method.
+.TP
 .BI "login status " [provider]
 Report configured credential sources and local state without contacting a
 provider or refreshing tokens.  Provider entitlements require a remote check.
@@ -2884,7 +2907,9 @@ Authentication method:
 (default) uses the explicit source or, when absent, the provider's stored key; and
 .B chatgpt
 uses stored Codex OAuth credentials with automatic refresh.
-ChatGPT auth requires the exact base
+.B codex_token
+uses a validated stored Enterprise Codex personal access token.
+Both Codex methods require the exact base
 .BR https://chatgpt.com/backend-api/codex
 and no api_key setting.
 .B meta

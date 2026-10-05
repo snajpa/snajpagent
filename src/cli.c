@@ -150,6 +150,8 @@ parse_auth_command(struct snag_cli *cli, int argc, char **argv, int first, char 
         if (strcmp(argv[i], "--openai-device-auth") == 0 && !cli->openai_device_auth) cli->openai_device_auth = true;
         else if (strcmp(argv[i], "--meta-device-auth") == 0 && !cli->meta_device_auth) cli->meta_device_auth = true;
         else if (strcmp(argv[i], "--with-api-key") == 0 && !cli->with_api_key) cli->with_api_key = true;
+        else if (!strcmp(argv[i], "--with-access-token") && !cli->with_access_token)
+            cli->with_access_token = true;
         else if (argv[i][0] != '-' && !cli->auth_provider) {
             if (strlen(argv[i]) > SNAG_CONFIG_PROVIDER_NAME_MAX) {
                 errno = EOVERFLOW;
@@ -162,9 +164,11 @@ parse_auth_command(struct snag_cli *cli, int argc, char **argv, int first, char 
         cli->irc_listen || cli->irc_client_count ||
         cli->doc_instructions.count || cli->irc_no_listen || cli->irc_no_client ||
         cli->irc_model_nick || cli->irc_operator_nick || cli->irc_room_name ||
-        ((cli->openai_device_auth || cli->meta_device_auth) && cli->with_api_key) ||
-        (cli->openai_device_auth && cli->meta_device_auth) ||
-        (cli->auth_command != SNAG_CLI_LOGIN && (cli->openai_device_auth || cli->meta_device_auth || cli->with_api_key || cli->model || cli->effort)))
+        (cli->openai_device_auth + cli->meta_device_auth + cli->with_api_key +
+         cli->with_access_token > 1) ||
+        (cli->auth_command != SNAG_CLI_LOGIN && (cli->openai_device_auth ||
+         cli->meta_device_auth || cli->with_api_key || cli->with_access_token ||
+         cli->model || cli->effort)))
         goto invalid;
     return 0;
 invalid:
@@ -410,7 +414,9 @@ snag_cli_usage(int fd)
         "       " SNAJPAGENT_NAME " --attach [--dotdir DIR] [SESSION_ID|-N NAME] (alias -A)\n"
         "       " SNAJPAGENT_NAME " -e [OPTIONS] [-- PROMPT...]\n"
         "       " SNAJPAGENT_NAME " -l [N] [OPTIONS]\n"
-        "       " SNAJPAGENT_NAME " [OPTIONS] login [PROVIDER] [--openai-device-auth|--meta-device-auth|--with-api-key]\n"
+        "       " SNAJPAGENT_NAME " [OPTIONS] login [PROVIDER] [AUTH_OPTION]\n"
+        "       AUTH_OPTION: --openai-device-auth | --meta-device-auth |\n"
+        "                    --with-api-key | --with-access-token\n"
         "       " SNAJPAGENT_NAME " [OPTIONS] login status [PROVIDER]\n"
         "       " SNAJPAGENT_NAME " [OPTIONS] logout [PROVIDER]\n"
         "  -s, --listen[=ENDPOINT]      host the IRC server on ENDPOINT\n"

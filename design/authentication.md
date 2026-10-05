@@ -10,7 +10,8 @@ share the dependency and certificate policy rather than a second network library
 Authentication belongs to a named provider, independently of model selection.
 `auth=api_key` reads the explicit `api_key` source, or a private stored key when
 that setting is absent; `auth=chatgpt` reads and refreshes OAuth credentials for the
-canonical HTTPS ChatGPT Codex endpoint. There is no implicit fallback between
+canonical HTTPS ChatGPT Codex endpoint. `auth=codex_token` uses a validated
+Enterprise personal access token and workspace identity at that same endpoint. There is no implicit fallback between
 sources, endpoints, accounts, or billing methods. OpenRouter uses its ordinary
 Responses endpoint and hosted-search dialect, not Codex protocol behavior.
 
@@ -38,7 +39,7 @@ model. No Codex auth/cache file or keyring is borrowed.
 
 Each provider has its own advisory lock. Refresh re-reads after locking and
 reuses another process's newly rotated token. Credentials are reloaded for
-requests; an expired token is refreshed before use and one pre-output HTTP 401
+requests; an expired OAuth token is refreshed before use and one pre-output HTTP 401
 can force a refresh/retry. A second rejection is terminal, not a loop. Device
 polling and lock/network waits are bounded and cancellable. Status is offline.
 Logout removes the local managed provider credential only, not explicit config sources,
@@ -56,6 +57,21 @@ access/refresh token with account identity and expiry. Token claims are decoded
 only from the trusted issuer exchange/private store, not accepted as untrusted
 proof of identity. Refresh rejects an account mismatch. Auth response bodies
 and tokens are never included in diagnostics.
+
+Enterprise personal access tokens use `login codex --with-access-token` and stdin.
+The fixed issuer validates the token with GET
+`/api/accounts/v1/user-auth-credential/whoami`; the response supplies the account
+ID for `ChatGPT-Account-Id`. Requests retain the original bearer token. Login
+stores no refresh token or inferred expiry; expiration and revocation are checked
+by the server. A failed validation leaves the previous login/config intact.
+FedRAMP metadata fails explicitly because its backend is not implemented.
+The `codex_token` store has an account ID, empty refresh token and zero expiry;
+request-time loading is local and never attempts OAuth refresh for this kind.
+Explicit `api_key` sources remain exclusive to API-key routes. A shell pipe from
+`CODEX_ACCESS_TOKEN` supplies the token without adding an automatic environment
+fallback. Existing provider method changes require logout first.
+`tests/test_access_token.py` drives a real transport-enabled CLI against loopback
+for login, rotation, rejection, route/headers/body, secret redaction and logout.
 
 Direct Codex requests use native endpoint paths and the account header. Create
 requests keep `store=false`, streaming, existing developer instructions and

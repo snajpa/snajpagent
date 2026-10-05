@@ -2329,7 +2329,7 @@ snag_context_interface_request(const struct snag_session *session,
         "tool_choice", "auto", "tools", tools, "include", "reasoning.encrypted_content",
         "truncation", "disabled", "prompt_cache_key", cache_key);
     if (!request || snag_context_provider_model(provider, model, request) < 0 ||
-        (provider->auth == SNAG_AUTH_CHATGPT && snag_context_codex_request(request) < 0) ||
+        (snag_auth_uses_codex(provider->auth) && snag_context_codex_request(request) < 0) ||
         snag_json_digest_bounded(request, SNAG_CONTEXT_MAX_REQUEST, NULL, NULL) < 0) {
         json_decref(request);
         return NULL;
@@ -2547,7 +2547,8 @@ snag_context_compact_reduce_request_build(struct snag_session *session,
     input = NULL; /* owned by the request now */
     if (snag_json_set_new(request, "prompt_cache_key", json_string(cache_key)) < 0 ||
         snag_json_set_new(request, "include", json_pack("[s]", "reasoning.encrypted_content")) < 0 ||
-        (provider && provider->auth == SNAG_AUTH_CHATGPT && snag_context_codex_request(request) < 0))
+        (provider && snag_auth_uses_codex(provider->auth) &&
+         snag_context_codex_request(request) < 0))
         goto out;
     if (snag_json_document_set(create_request, request, SNAG_CONTEXT_MAX_REQUEST) < 0) {
         snag_errorf(error, error_size, "compaction reduce request exceeds 32 MiB");
@@ -3154,7 +3155,7 @@ snag_context_build(struct snag_session *session, const char *model, const char *
              json_integer((json_int_t)max_output_tokens)) < 0) ||
         snag_json_set_new(projection->create_request.value, "include",
                          json_pack("[s]", "reasoning.encrypted_content")) < 0 ||
-        (provider && provider->auth == SNAG_AUTH_CHATGPT &&
+        (provider && snag_auth_uses_codex(provider->auth) &&
          snag_context_codex_request(projection->create_request.value) < 0)) goto projection_error;
     /* Only the envelope differs; input, reasoning and tools stay immutable. */
     projection->count_request.value =

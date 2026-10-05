@@ -97,7 +97,7 @@ HEADERS = src/tmux.h src/session_host.h src/session_relay.h src/session_client.h
 DEPFLAGS = -MMD -MP
 HEADERS += src/upload_wire.h src/upload_md5.h src/upload.h src/screen_wire.h src/remote.h
 FIXTURE_BIN = tests/$(NAME)-fixture
-TEST_BIN = tests/test_base tests/test_config tests/test_irc tests/test_instructions tests/test_credential tests/test_sse tests/test_json tests/test_rules tests/test_wire tests/test_responses tests/test_provider_retry tests/test_provider_transport tests/test_context tests/test_model_cache tests/test_render tests/test_turn tests/test_tools tests/test_store tests/test_write tests/test_upload_wire $(FIXTURE_BIN)
+TEST_BIN = tests/snajpagent-transport tests/test_base tests/test_config tests/test_irc tests/test_instructions tests/test_credential tests/test_sse tests/test_json tests/test_rules tests/test_wire tests/test_responses tests/test_provider_retry tests/test_provider_transport tests/test_context tests/test_model_cache tests/test_render tests/test_turn tests/test_tools tests/test_store tests/test_write tests/test_upload_wire $(FIXTURE_BIN)
 BUILD_INPUTS = build/.build-inputs
 
 all: $(BIN)
@@ -204,6 +204,8 @@ tests/test_responses: $(PLATFORM_SRC) src/json.c src/sse.c src/responses.c src/m
 
 tests/test_provider_retry: src/provider_retry.c tests/test_provider_retry.c src/provider_retry.h
 
+tests/snajpagent-transport: $(COMMON_SRC) src/main.c $(HEADERS) $(PDF_OBJ) $(AUDIO_DEVICE_OBJ)
+
 tests/test_provider_transport: $(COMMON_SRC) tests/test_provider_transport.c $(HEADERS) $(PDF_OBJ) $(AUDIO_DEVICE_OBJ)
 
 tests/test_context: CPPFLAGS += $(PDF_CFLAGS)
@@ -230,7 +232,7 @@ tests/test_config tests/test_irc tests/test_credential tests/test_instructions t
 	$(CC) $(CPPFLAGS) $(JANSSON_CFLAGS) $(CFLAGS) $(LDFLAGS) -Isrc \
 		-o $@ $(filter %.c %.o,$^) $(LDLIBS)
 
-tests/test_provider_transport:
+tests/test_provider_transport tests/snajpagent-transport:
 	$(CC) $(CPPFLAGS) -DSNAJPAGENT_TEST_TRANSPORT_ENDPOINTS=1 $(JANSSON_CFLAGS) $(CURL_CFLAGS) $(CFLAGS) $(LDFLAGS) -Isrc \
 		-o $@ $(filter %.c %.o,$^) $(LDLIBS) $(CURL_LIBS)
 
@@ -267,6 +269,7 @@ check: $(BIN) $(TEST_BIN)
 	python3 tests/test_resume_options.py ./$(BIN)
 	./tests/test_provider_retry
 	./tests/test_provider_transport
+	python3 tests/test_access_token.py ./tests/snajpagent-transport
 	python3 tests/test_provider_https.py ./$(BIN)
 	python3 tests/test_token_preflight.py ./$(BIN)
 	./tests/test_context
