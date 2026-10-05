@@ -9,7 +9,12 @@ The next-format [binary storage design](session-storage.md) defines replacement
 checkpoints and indexed history. The storage implementation described here is
 the current JSONL format.
 
-Linux interactive ANSI sessions have an owner process with a private PTY and a
+The proposed [Vim workspace and pager-retention design](vim-mode.md) adds an
+explicit full-screen frontend over semantic session history. Its windowed
+renderer and attachment protocol are planned work; the streaming interface
+described below remains the default.
+
+Supported POSIX interactive ANSI sessions have an owner process with a private PTY and a
 replaceable terminal frontend. The owner retains provider requests, commands and
 IRC connections across terminal loss. A new frontend attaches through the private
 session socket; explicit exit stops the owner. One-shot execution and plain

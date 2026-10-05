@@ -5,9 +5,14 @@
 This note defines how streamed model output and the active input composer share
 the terminal, and how users inspect and modify queued turns.
 
+The proposed [pager-retention and Vim workspace design](vim-mode.md) specifies
+external-terminal buffering and a separate, explicitly selected full-screen
+interface. Its history redraw and window controls apply to that optional mode;
+the streaming presentation contract here continues to apply to ordinary startup.
+
 ## Runtime Ownership And Scheduling
 
-### Native session attachment (implementation in progress)
+### Native session attachment
 
 The operator must be able to leave a live session without a terminal multiplexer
 and reconnect without restarting its engine. `--attach` / `-A` attach to a live
