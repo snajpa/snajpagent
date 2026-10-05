@@ -175,11 +175,14 @@ int snag_binary_checkpoint_image_read(int fd, const struct snag_binary_identity 
  * floor is the oldest eligible physical boundary, not a cache-supplied anchor.
  * Work stays between through and floor plus one predecessor batch. Cancellation
  * is checked between batches. Output slots without a returned bit, and both
- * slots on failure, remain unchanged. No descriptor seeks, writes or adoption.
- * Image/section/frontier validation and source locking remain caller duties. */
+ * slots on failure, remain unchanged. Optional sequences receives the verified
+ * canonical receipt ordinal for each returned slot under the same atomic rule;
+ * use it for cross-slot recency, never an image's claimed generation. No descriptor
+ * seeks, writes or adoption. Image/section/frontier and locking remain caller duties. */
 int snag_binary_checkpoint_receipts_find(int fd, const struct snag_binary_anchor *through,
     uint64_t floor, const unsigned char *const images[2], struct snag_buf *scratch,
-    struct snag_binary_checkpoint_receipt out[2], bool (*cancelled)(void *), void *opaque);
+    struct snag_binary_checkpoint_receipt out[2], uint64_t sequences[2],
+    bool (*cancelled)(void *), void *opaque);
 /* Resolve only against a verified immutable batch from this journal. Validate
  * sequence, required record status, expected type/version and slice bounds
  * before exposing a view. Required state cannot depend on optional metadata. */

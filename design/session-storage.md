@@ -2110,6 +2110,9 @@ or falls back to a history scan.
 The paired receipt search takes two image digests as lookup keys and walks backward
 from an independently established immutable journal tail. It selects the latest
 matching canonical record for each slot, including the last match within a batch.
+Optional result ordinals identify those exact canonical records for cross-slot
+recency. Their output ownership follows the receipt pair, including cancellation,
+missing slots and corruption; image generation claims never decide journal order.
 Each selected capture must precede the receipt's containing batch and match every
 field of an ancestor reached on that same chain. A matching digest alone grants
 no authority. Unsupported optional versions are skipped; malformed supported

@@ -1013,7 +1013,8 @@ snag_binary_batch_find(int fd, const struct snag_binary_anchor *through, uint64_
 int
 snag_binary_checkpoint_receipts_find(int fd, const struct snag_binary_anchor *through,
     uint64_t floor, const unsigned char *const images[2], struct snag_buf *scratch,
-    struct snag_binary_checkpoint_receipt out[2], bool (*cancelled)(void *), void *opaque)
+    struct snag_binary_checkpoint_receipt out[2], uint64_t sequences[2],
+    bool (*cancelled)(void *), void *opaque)
 {
     if (fd < 0 || !through || !images || !scratch || !out || !anchor_valid(through) ||
         through->turns >= through->next_seq || floor < SNAG_BINARY_HEADER_SIZE ||
@@ -1021,6 +1022,7 @@ snag_binary_checkpoint_receipts_find(int fd, const struct snag_binary_anchor *th
         return invalid();
     }
     struct snag_binary_checkpoint_receipt candidates[2] = {0};
+    uint64_t positions[2] = {0};
     unsigned unseen = (images[0] ? 1u : 0u) | (images[1] ? 2u : 0u);
     unsigned char hashes[2][32];
     for (size_t i = 0u; i < 2u; ++i) {
@@ -1059,6 +1061,7 @@ snag_binary_checkpoint_receipts_find(int fd, const struct snag_binary_anchor *th
                     /* Forward iteration within this backward-read batch keeps
                      * its last matching record, not the highest generation. */
                     candidates[i] = receipt;
+                    positions[i] = sequence;
                     unseen &= ~bit;
                     found |= bit;
                 }
@@ -1080,7 +1083,10 @@ snag_binary_checkpoint_receipts_find(int fd, const struct snag_binary_anchor *th
         cursor = before;
     }
     for (size_t i = 0u; i < 2u; ++i) {
-        if (verified & (1u << i)) out[i] = candidates[i];
+        if (verified & (1u << i)) {
+            out[i] = candidates[i];
+            if (sequences) sequences[i] = positions[i];
+        }
     }
     return (int)verified;
 }

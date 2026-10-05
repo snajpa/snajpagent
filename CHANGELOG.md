@@ -3,6 +3,8 @@
 # Changelog
 
 ## Unreleased
+- Expose verified canonical receipt ordinals for native checkpoint-slot selection;
+  cross-slot recency follows journal order rather than image generation claims.
 - Retain canonical IRC admission sources and their next-row lookup discriminators
   in native snapshot access closure, including original non-input metadata.
 - Reconstruct native checkpoint core/provider state from pinned sources, then

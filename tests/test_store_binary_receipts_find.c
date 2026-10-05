@@ -26,7 +26,7 @@ make_image(struct receipt_fixture *fixture, size_t slot, size_t boundary)
     static const unsigned char core[] = "core", provider[] = "provider";
     struct snag_binary_checkpoint_frame frame = {
         .identity = fixture->identity, .boundary = fixture->anchors[boundary],
-        .generation = 20u - slot,
+        .generation = 19u + slot,
         .core = {.version = 1u, .data = core, .size = sizeof(core)},
         .provider = {.version = 1u, .data = provider, .size = sizeof(provider)}
     };
@@ -121,18 +121,21 @@ check_find(struct receipt_fixture *fixture, const struct snag_binary_anchor *thr
     struct snag_binary_checkpoint_receipt found[2], saved[2];
     memset(found, 0x5a, sizeof(found));
     memcpy(saved, found, sizeof(found));
+    uint64_t positions[2] = {1234u, 5678u};
     int rc = snag_binary_checkpoint_receipts_find(fixture->fd, through, floor,
-        images, scratch, found, NULL, NULL);
+        images, scratch, found, positions, NULL, NULL);
     assert(rc == expected);
     for (size_t i = 0u; i < 2u; ++i) {
         if (rc > 0 && ((unsigned)rc & (1u << i))) {
             assert(found[i].generation == fixture->receipts[i].generation);
+            assert(positions[i] == (i ? (through->next_seq > 6u ? 5u : 2u) : 6u));
             assert(!memcmp(found[i].index_root, fixture->receipts[i].index_root, 32u));
             struct snag_binary_checkpoint_frame frame;
             assert(!snag_binary_checkpoint_frame_from_receipt(fixture->images[i].data,
                 fixture->images[i].len, &fixture->identity, &found[i], &frame));
         } else {
             assert(!memcmp(&found[i], &saved[i], sizeof(found[i])));
+            assert(positions[i] == (i ? 5678u : 1234u));
         }
     }
     assert(snag_seek(fixture->fd, 0, SEEK_CUR) == 13);
@@ -182,6 +185,12 @@ test_store_binary_receipts_find(void)
         check_find(&fixture, through, SNAG_BINARY_HEADER_SIZE,
             selected, &scratch, (int)present);
     }
+    /* Cross-slot recency follows canonical order even when generation decreases. */
+    struct snag_binary_checkpoint_receipt ranked[2];
+    uint64_t ranks[2] = {0};
+    assert(snag_binary_checkpoint_receipts_find(fixture.fd, through, SNAG_BINARY_HEADER_SIZE,
+        images, &scratch, ranked, ranks, NULL, NULL) == 3);
+    assert(ranks[0] > ranks[1] && ranked[0].generation < ranked[1].generation);
     unsigned char unknown[32] = {0};
     const unsigned char *missing[2] = {unknown, images[1]};
     check_find(&fixture, through, SNAG_BINARY_HEADER_SIZE, missing, &scratch, 2);
@@ -189,17 +198,20 @@ test_store_binary_receipts_find(void)
     const unsigned char *duplicates[2] = {images[0], images[0]};
     struct snag_binary_checkpoint_receipt found[2], saved[2];
     assert(snag_binary_checkpoint_receipts_find(fixture.fd, through,
-        SNAG_BINARY_HEADER_SIZE, duplicates, &scratch, found, NULL, NULL) == 3);
-    assert(found[0].generation == 20u && found[1].generation == 20u);
+        SNAG_BINARY_HEADER_SIZE, duplicates, &scratch, found, NULL, NULL, NULL) == 3);
+    assert(found[0].generation == fixture.receipts[0].generation &&
+        found[1].generation == fixture.receipts[0].generation);
     for (unsigned stop = 1u; stop <= 6u; ++stop) {
         struct cancellation cancel = {.stop = stop};
         memset(found, 0x5a, sizeof(found));
         memcpy(saved, found, sizeof(found));
+        uint64_t positions[2] = {1234u, 5678u};
         int rc = snag_binary_checkpoint_receipts_find(fixture.fd, through,
-            SNAG_BINARY_HEADER_SIZE, images, &scratch, found, cancelled, &cancel);
+            SNAG_BINARY_HEADER_SIZE, images, &scratch, found, positions, cancelled, &cancel);
         if (stop <= 5u) {
             assert(rc == -1 && errno == ECANCELED);
             assert(!memcmp(found, saved, sizeof(found)));
+            assert(positions[0] == 1234u && positions[1] == 5678u);
         } else {
             assert(rc == 3 && cancel.calls == 5u);
         }
@@ -246,15 +258,15 @@ test_store_binary_receipts_find(void)
     memset(found, 0x5a, sizeof(found));
     memcpy(saved, found, sizeof(found));
     assert(snag_binary_checkpoint_receipts_find(-1, through, SNAG_BINARY_HEADER_SIZE,
-        images, &scratch, found, NULL, NULL) < 0);
+        images, &scratch, found, NULL, NULL, NULL) < 0);
     assert(snag_binary_checkpoint_receipts_find(fixture.fd, NULL, SNAG_BINARY_HEADER_SIZE,
-        images, &scratch, found, NULL, NULL) < 0);
+        images, &scratch, found, NULL, NULL, NULL) < 0);
     assert(snag_binary_checkpoint_receipts_find(fixture.fd, through, SNAG_BINARY_HEADER_SIZE,
-        NULL, &scratch, found, NULL, NULL) < 0);
+        NULL, &scratch, found, NULL, NULL, NULL) < 0);
     assert(snag_binary_checkpoint_receipts_find(fixture.fd, through, SNAG_BINARY_HEADER_SIZE,
-        images, NULL, found, NULL, NULL) < 0);
+        images, NULL, found, NULL, NULL, NULL) < 0);
     assert(snag_binary_checkpoint_receipts_find(fixture.fd, through, SNAG_BINARY_HEADER_SIZE,
-        images, &scratch, NULL, NULL, NULL) < 0);
+        images, &scratch, NULL, NULL, NULL, NULL) < 0);
     assert(!memcmp(found, saved, sizeof(found)));
     snag_buf_free(&scratch);
     for (size_t i = 0u; i < 2u; ++i) snag_buf_free(&fixture.images[i]);
