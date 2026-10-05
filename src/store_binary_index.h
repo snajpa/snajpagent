@@ -113,7 +113,8 @@ int snag_binary_index_tree_root(const struct snag_binary_index_tree *, unsigned 
 /* Append advances a staged frontier atomically. A non-NULL output additionally
  * emits cache bytes and checks their physical file geometry. NULL output advances
  * only the logical frontier, so unavailable/unrepresentable derived storage does
- * not limit canonical journaling. Entry/anchor validation still applies. */
+ * not limit canonical journaling. Logical-only entry and batch appends use no
+ * allocation; entry/anchor validation still applies. */
 int snag_binary_index_tree_append(struct snag_buf *, struct snag_binary_index_tree *,
     const struct snag_binary_identity *, const struct snag_binary_index_entry *);
 int snag_binary_index_tree_append_batch(struct snag_buf *, struct snag_binary_index_tree *,

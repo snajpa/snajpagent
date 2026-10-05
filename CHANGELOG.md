@@ -4,6 +4,11 @@
 
 ## Unreleased
 
+- Advance native logical batch frontiers without a temporary heap table when
+  derived-cache output is absent. Preserve canonical and turn validation,
+  atomic tree replacement and separate optional cache geometry checks. Runtime
+  integration remains pending.
+
 - Transfer optional ownership of the exact decoded native batch with its
   durable acknowledgement, including internally constructed receipts. Pending
   and failed acknowledgements preserve the caller's buffer; successful transfer

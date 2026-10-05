@@ -200,6 +200,25 @@ advance_turn(const struct snag_binary_record *record, uint64_t *turn)
     return 0;
 }
 
+static int
+batch_entry(const struct snag_binary_batch *batch, const struct snag_binary_anchor *before,
+    const struct snag_binary_anchor *after, size_t *offset, uint64_t *turn,
+    struct snag_binary_index_entry *entry)
+{
+    struct snag_binary_record record;
+    *entry = (struct snag_binary_index_entry){
+        .batch_offset = before->end, .record_offset = (uint32_t)*offset
+    };
+    if (snag_binary_record_next(batch, offset, &record, &entry->sequence) != 0 ||
+        advance_turn(&record, turn) < 0) {
+        return -1;
+    }
+    entry->kind = record.kind;
+    entry->turn = *turn;
+    memcpy(entry->batch_digest, after->digest, sizeof(entry->batch_digest));
+    return 0;
+}
+
 int
 snag_binary_index_append_batch(struct snag_buf *out,
     const struct snag_binary_identity *identity, const struct snag_binary_anchor *before,
@@ -213,17 +232,8 @@ snag_binary_index_append_batch(struct snag_buf *out,
     size_t offset = SNAG_BINARY_BATCH_HEADER_SIZE;
     int rc = -1;
     for (uint32_t i = 0u; i < batch.count; ++i) {
-        struct snag_binary_record record;
-        struct snag_binary_index_entry entry = {
-            .batch_offset = before->end, .record_offset = (uint32_t)offset
-        };
-        if (snag_binary_record_next(&batch, &offset, &record, &entry.sequence) != 0 ||
-            advance_turn(&record, &turn) < 0) {
-            goto done;
-        }
-        entry.kind = record.kind;
-        entry.turn = turn;
-        memcpy(entry.batch_digest, after->digest, sizeof(entry.batch_digest));
+        struct snag_binary_index_entry entry;
+        if (batch_entry(&batch, before, after, &offset, &turn, &entry) < 0) goto done;
         unsigned char bytes[SNAG_BINARY_INDEX_ENTRY_SIZE];
         if (snag_binary_index_entry_encode(bytes, identity, &entry) < 0 ||
             snag_buf_append(&encoded, bytes, sizeof(bytes)) < 0) {
@@ -237,6 +247,45 @@ snag_binary_index_append_batch(struct snag_buf *out,
     rc = snag_buf_append(out, encoded.data, encoded.len);
 done:
     snag_buf_free(&encoded);
+    return rc;
+}
+
+int
+snag_binary_index_tree_append_batch(struct snag_buf *out, struct snag_binary_index_tree *tree,
+    const struct snag_binary_identity *identity, const struct snag_binary_anchor *before,
+    const struct snag_binary_anchor *after, const void *data, size_t size)
+{
+    if (!tree || !identity || !before || !after || !after->next_seq ||
+        tree->count == UINT64_MAX || before->next_seq != tree->count + 1u) {
+        return snag_errno(EINVAL);
+    }
+    int64_t end;
+    if (out && (snag_binary_index_end(tree->count, &end) < 0 ||
+        snag_binary_index_end(after->next_seq - 1u, &end) < 0)) {
+        return -1;
+    }
+    struct snag_binary_batch batch;
+    if (checked_batch(before, after, data, size, &batch) < 0) return -1;
+    struct snag_buf staged = {.max = SNAG_BINARY_INDEX_TREE_BATCH_MAX};
+    struct snag_binary_index_tree next = *tree;
+    uint64_t turn = before->turns;
+    size_t offset = SNAG_BINARY_BATCH_HEADER_SIZE;
+    int rc = -1;
+    for (uint32_t i = 0u; i < batch.count; ++i) {
+        struct snag_binary_index_entry entry;
+        if (batch_entry(&batch, before, after, &offset, &turn, &entry) < 0 ||
+            snag_binary_index_tree_append(out ? &staged : NULL, &next, identity, &entry) < 0) {
+            goto done;
+        }
+    }
+    if (turn != after->turns) {
+        errno = EINVAL;
+        goto done;
+    }
+    rc = out ? snag_buf_append(out, staged.data, staged.len) : 0;
+    if (!rc) *tree = next;
+done:
+    snag_buf_free(&staged);
     return rc;
 }
 

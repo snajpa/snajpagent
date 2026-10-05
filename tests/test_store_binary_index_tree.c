@@ -8,6 +8,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#ifdef __linux__
+#include <sys/resource.h>
+#include <sys/wait.h>
+#endif
 
 void test_store_binary_index_tree(void);
 
@@ -429,9 +433,57 @@ test_failures(void)
     snag_buf_free(&out);
 }
 
+static void
+test_batch_without_heap(void)
+{
+#ifdef __linux__
+    struct snag_binary_identity identity = {.created_ms = 42u};
+    identity.id[0] = 17u;
+    unsigned char header[SNAG_BINARY_HEADER_SIZE];
+    snag_binary_header_encode(header, &identity);
+    struct snag_binary_anchor before, after;
+    assert(!snag_binary_header_decode(header, sizeof(header), &identity, &before));
+    struct snag_binary_record records[256];
+    for (size_t i = 0u; i < 256u; ++i) {
+        records[i] = (struct snag_binary_record){.kind = 0x8fffu, .version = 1u,
+            .flags = SNAG_BINARY_RECORD_OPTIONAL};
+    }
+    struct snag_buf batch = {.max = SNAG_BINARY_BATCH_MAX};
+    assert(!snag_binary_batch_encode(&batch, &before, records, 256u, 0u, &after));
+    struct snag_binary_index_tree expected = {0};
+    struct snag_buf cache = {.max = SNAG_BINARY_INDEX_TREE_BATCH_MAX};
+    assert(!snag_binary_index_tree_append_batch(&cache, &expected, &identity,
+        &before, &after, batch.data, batch.len));
+    pid_t child = fork();
+    assert(child >= 0);
+    if (!child) {
+        struct rlimit limit;
+        assert(!getrlimit(RLIMIT_AS, &limit));
+        limit.rlim_cur = 0u;
+        assert(!setrlimit(RLIMIT_AS, &limit));
+        /* Existing allocator arenas remain mapped. Exhaust those too without
+         * touching the parent or retaining anything after this child exits. */
+        for (size_t size = 65536u; size; size >>= 4u) {
+            while (malloc(size)) {}
+        }
+        assert(!malloc(1u));
+        struct snag_binary_index_tree tree = {0};
+        int rc = snag_binary_index_tree_append_batch(NULL, &tree, &identity,
+            &before, &after, batch.data, batch.len);
+        _exit(rc || memcmp(&tree, &expected, sizeof(tree)) ? 2 : 0);
+    }
+    int status;
+    assert(waitpid(child, &status, 0) == child);
+    assert(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+    snag_buf_free(&cache);
+    snag_buf_free(&batch);
+#endif
+}
+
 void
 test_store_binary_index_tree(void)
 {
+    test_batch_without_heap();
     test_all_prefixes();
     test_corruptions();
     test_failures();

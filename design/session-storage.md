@@ -2413,6 +2413,11 @@ later submissions and owner close. This includes internally constructed receipts
 so every canonical record can advance the engine's existing logical frontier;
 derived-cache absence or geometry cannot become a canonical durability condition.
 The I/O worker supplies bytes, not semantic adoption or mutable frontier ownership.
+Logical-only batch frontier advancement walks canonical entries directly into a
+fixed-sized staged tree, with no heap allocation after ACK. Its shared row parser
+checks record boundaries and turn declarations; failure leaves the caller tree
+unchanged. Optional forest serialization remains buffered and atomic, and still
+has its separate derived-file geometry checks.
 
 Pending calls and unconsumed completions prevent replacement or close; an idle
 close joins the worker and leaves the caller's journal descriptor and lock intact.

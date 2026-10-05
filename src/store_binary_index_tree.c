@@ -98,37 +98,6 @@ snag_binary_index_tree_append(struct snag_buf *out, struct snag_binary_index_tre
     return 0;
 }
 
-int
-snag_binary_index_tree_append_batch(struct snag_buf *out, struct snag_binary_index_tree *tree,
-    const struct snag_binary_identity *identity, const struct snag_binary_anchor *before,
-    const struct snag_binary_anchor *after, const void *data, size_t size)
-{
-    if (!tree || !identity || !before || !after || !after->next_seq ||
-        tree->count == UINT64_MAX || before->next_seq != tree->count + 1u) {
-        return snag_errno(EINVAL);
-    }
-    int64_t end;
-    if (out && (snag_binary_index_end(tree->count, &end) < 0 ||
-        snag_binary_index_end(after->next_seq - 1u, &end) < 0)) {
-        return -1;
-    }
-    struct snag_buf entries = {.max = SNAG_BINARY_INDEX_BATCH_MAX};
-    struct snag_buf staged = {.max = SNAG_BINARY_INDEX_TREE_BATCH_MAX};
-    struct snag_binary_index_tree next = *tree;
-    int rc = snag_binary_index_append_batch(&entries, identity, before, after, data, size);
-    if (rc < 0) goto done;
-    for (size_t offset = 0u; offset < entries.len; offset += SNAG_BINARY_INDEX_ENTRY_SIZE) {
-        rc = append_leaf(out ? &staged : NULL, &next, entries.data + offset);
-        if (rc < 0) goto done;
-    }
-    rc = out ? snag_buf_append(out, staged.data, staged.len) : 0;
-    if (!rc) *tree = next;
-done:
-    snag_buf_free(&entries);
-    snag_buf_free(&staged);
-    return rc;
-}
-
 static int
 read_node(int fd, const struct snag_binary_identity *identity, uint64_t last,
     unsigned int level, unsigned char out[32])
