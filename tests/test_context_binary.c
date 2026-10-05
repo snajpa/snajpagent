@@ -20,8 +20,10 @@ static bool checked_failures, checked_source_failures;
 static unsigned int warm_compared, checkpoint_compared, checkpoint_rejected;
 static unsigned int checkpoint_voice_rejected;
 static unsigned int direct_compared, direct_rejected, direct_uninspected;
+static unsigned int sparse_resume_compared;
 static unsigned int bounded_suffix_compared, bounded_suffix_rejected;
 static unsigned int pinned_resume_compared, pinned_resume_rejected, pinned_history_missing;
+static unsigned int pinned_neighbor_missing;
 static unsigned int checkpoint_late_rejected, suffix_compared;
 static unsigned int suffix_late_rejected, suffix_bad_rejected, suffix_tails;
 static unsigned int checkpoint_rewrite_rejected;
@@ -545,6 +547,15 @@ joint_materialization_checks(struct snag_session *source, struct snag_session *e
     frame.access = (struct snag_binary_checkpoint_section){.version = 1u,
         .data = (const unsigned char *)selected.data, .size = selected.len};
     seal_checkpoint(&frame, &receipt, root, &bytes);
+    struct snag_session sparse;
+    snag_session_init(&sparse);
+    rc = snag_store_resume_pinned_binary_context_checkpoint(source, &sparse, &frame, &receipt,
+        &frame.boundary, NULL, NULL, NULL, error, sizeof(error));
+    if (rc < 0) fprintf(stderr, "sparse bounded restoration: %s (%d)\n", error, errno);
+    assert(!rc && snag_seek(source->log_fd, 0, SEEK_CUR) == position);
+    same_cache(expected, &sparse, false);
+    snag_session_close(&sparse);
+    ++sparse_resume_compared;
     uninspected_materialization(source, expected, &frame, &receipt, &available, &access);
     static bool negatives[2];
     struct snag_binary_checkpoint_provider provider;
@@ -1061,6 +1072,41 @@ pinned_resume_checks(struct snag_session *source, struct snag_session *expected,
     ++pinned_resume_compared;
     const json_t *recent, *history;
     assert(!snag_context_capture_seam(expected, &recent, &history));
+    if (!pinned_neighbor_missing) {
+        uint64_t neighbor = 0u;
+        for (size_t i = 0u; i < json_array_size(recent) && !neighbor; ++i) {
+            const json_t *row = json_array_get(recent, i);
+            if (strcmp(snag_json_string(row, "type"), "irc_admitted")) continue;
+            const json_t *sequences = json_object_get(json_object_get(row, "data"), "sequences");
+            for (size_t j = 0u; j < json_array_size(sequences); ++j) {
+                uint64_t sequence = (uint64_t)json_integer_value(json_array_get(sequences, j));
+                if (!sequence || sequence >= base->boundary.next_seq - 1u) continue;
+                struct snag_binary_index_entry primary;
+                assert(!snag_binary_checkpoint_index_find(&available, sequence, &primary));
+                if (primary.kind == SNAG_BINARY_IRC_EVENT) { neighbor = sequence + 1u; break; }
+            }
+        }
+        if (neighbor) {
+            struct snag_buf entries = {.max = SIZE_MAX}, omitted = {.max = SIZE_MAX};
+            for (uint64_t sequence = 1u; sequence < base->boundary.next_seq; ++sequence) {
+                struct snag_binary_index_entry entry;
+                assert(!snag_binary_checkpoint_index_find(&available, sequence, &entry));
+                if (sequence != neighbor)
+                    assert(!snag_buf_append(&entries, &entry, sizeof(entry)));
+            }
+            assert(!snag_binary_checkpoint_index_encode(&omitted, &available.identity,
+                &available.boundary, &available.tree,
+                (const struct snag_binary_index_entry *)entries.data,
+                entries.len / sizeof(struct snag_binary_index_entry)));
+            struct snag_binary_checkpoint_index missing_neighbor;
+            assert(!snag_binary_checkpoint_index_decode(omitted.data, omitted.len,
+                &available.identity, &available.boundary, root, &missing_neighbor));
+            reject_pinned_resume(source, &frame, &receipt, stop, &missing_neighbor, NULL, ENOENT);
+            ++pinned_neighbor_missing;
+            snag_buf_free(&omitted);
+            snag_buf_free(&entries);
+        }
+    }
     bool has_old_history = false;
     for (size_t i = 0u; i < json_array_size(history); ++i) {
         uint64_t sequence;
@@ -1704,6 +1750,11 @@ test_context_binary_report(void)
         direct_uninspected);
     printf("native bounded suffix: %u comparisons; %u rejected boundaries/stages\n",
         bounded_suffix_compared, bounded_suffix_rejected);
+    assert(pinned_neighbor_missing);
+    printf("native missing IRC neighbor: %u unavailable closure\n", pinned_neighbor_missing);
+    assert(sparse_resume_compared == direct_compared);
+    printf("native sparse current IRC closure: %u bounded restorations\n",
+        sparse_resume_compared);
     assert(pinned_history_missing);
     printf("native pinned context suffix: %u comparisons; %u rejected stages; "
         "%u missing historical closure\n", pinned_resume_compared, pinned_resume_rejected,

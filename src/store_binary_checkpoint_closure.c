@@ -170,6 +170,17 @@ collect_dependencies(struct closure_capture *capture,
     int rc = snag_binary_event_decode(record, &event);
     if (rc != 0) return rc < 0 ? -1 : snag_errno(EINVAL);
     if (event.kind == SNAG_BINARY_IRC_ADMITTED) {
+        size_t offset = 0u;
+        uint64_t sequence;
+        while ((rc = snag_binary_sequences_next(&event.data.irc_admitted.sequences,
+                &offset, &sequence)) == 0) {
+            if (!sequence || sequence >= owner) return snag_errno(EINVAL);
+            /* Canonical admission lookup keeps its exact next-row seam, including
+             * non-input IRC and the discriminator proving a non-IRC neighbor. */
+            if (need(capture, &capture->needed, sequence) < 0 ||
+                need(capture, &capture->needed, sequence + 1u) < 0) return -1;
+        }
+        if (rc < 0) return -1;
         if (!event.data.irc_admitted.input.kind) return 0;
         struct snag_binary_record embedded = event.data.irc_admitted.input;
         rc = snag_binary_event_decode(&embedded, &event);

@@ -2582,6 +2582,10 @@ receipts, pending steering, unsettled process origins, call-time directories,
 retained response/compaction and launch-option sources, queued downloads, adopted
 voice history and the provider recipe's recent/historical rows. Typed projection
 roots add their older literal fields, native voice starts and public span fragments.
+Current native IRC admissions add their named canonical source locations and the
+exact next-row discriminator used by historical lookup. That neighbor retains its
+original input classification; it may be non-IRC metadata proving that no adjacent
+IRC row belongs to the lookup. Stream counters supply no canonical ordinal.
 Call/process labels retain graph metadata, graph-time cwd and accepted
 transformations in their causal interval. Public span dependencies enter through
 actual retained provider graphs or response roots. Reference

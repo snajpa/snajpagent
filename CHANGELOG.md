@@ -3,6 +3,8 @@
 # Changelog
 
 ## Unreleased
+- Retain canonical IRC admission sources and their next-row lookup discriminators
+  in native snapshot access closure, including original non-input metadata.
 - Reconstruct native checkpoint core/provider state from pinned sources, then
   reduce an exact bounded suffix and retain current historical IRC lookup before
   joint adoption. Runtime backend wiring and live closure maintenance remain pending.
