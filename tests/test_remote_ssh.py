@@ -85,6 +85,7 @@ class RemoteSSHTests(unittest.TestCase):
                                       stdout=log, stderr=log)
             server_children = FixtureChildren(server.pid)
             pinned = []
+            tmux_servers = []
             ssh = ["ssh", "-tt", "-p", str(port), "-i", str(root / "client-key"),
                    "-o", "IdentitiesOnly=yes", "-o", "BatchMode=yes",
                    "-o", "StrictHostKeyChecking=yes", "-o", f"UserKnownHostsFile={known}",
@@ -103,6 +104,8 @@ class RemoteSSHTests(unittest.TestCase):
                 else:
                     self.fail("private sshd did not listen")
                 scenarios = ["first", "screen", "nested"]
+                if shutil.which("tmux"):
+                    scenarios.append("tmux")
                 if server_children.handles:
                     scenarios.extend(("lost-client", "blackhole"))
                 for scenario in scenarios:
@@ -116,6 +119,22 @@ class RemoteSSHTests(unittest.TestCase):
                         if scenario in ("lost-client", "blackhole"):
                             command.insert(1, f"HOME={state}")
                         screen_env = None
+                        if scenario == "tmux":
+                            tmux_socket = state / "tmux.sock"
+                            tmux_config = state / "tmux.conf"
+                            tmux_config.write_text("set -g status off\n")
+                            tmux = subprocess.Popen(["tmux", "-D", "-S", str(tmux_socket),
+                                                     "-f", str(tmux_config)], stdout=log, stderr=log)
+                            tmux_servers.append(tmux)
+                            if server_children.handles:
+                                server_children.pin(tmux.pid, os.getpid())
+                            deadline = time.monotonic() + 5
+                            while not tmux_socket.exists():
+                                self.assertIsNone(tmux.poll())
+                                self.assertLess(time.monotonic(), deadline)
+                                time.sleep(.02)
+                            command = ["env", "LC_ALL=C.UTF-8", "tmux", "-u", "-S", str(tmux_socket), "new-session",
+                                       "env", f"HOME={state}", *command]
                         if scenario == "screen":
                             sockets = state / "screens"
                             sockets.mkdir(mode=0o700)
@@ -227,6 +246,16 @@ class RemoteSSHTests(unittest.TestCase):
                                                   ("turn_interrupted", "response_interrupted",
                                                    "turn_recovery", "turn_failed")])
                             else:
+                                if scenario == "tmux":
+                                    upload = home / "ssh-tmux-upload.bin"
+                                    upload.write_bytes(bytes(reversed(range(256))) * 256)
+                                    os.write(child.master, b"/receive\r")
+                                    child.until(b"Select local file", 10)
+                                    os.write(child.master, f"{upload}\r".encode())
+                                    child.until(b"1 unsent attachment(s)", 15)
+                                    media = journal.parent / "media"
+                                    self.assertTrue(any(p.read_bytes() == upload.read_bytes()
+                                                        for p in media.iterdir()))
                                 os.write(child.master, b"/exit\r")
                                 child.wait(0)
                         finally:
@@ -249,6 +278,10 @@ class RemoteSSHTests(unittest.TestCase):
                     server_children.close()
                     for fd in pinned:
                         os.close(fd)
+                    for tmux in tmux_servers:
+                        if tmux.poll() is None:
+                            tmux.terminate()
+                        tmux.wait(timeout=5)
                     log.close()
 
 

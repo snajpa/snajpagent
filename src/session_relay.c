@@ -224,6 +224,8 @@ peer_message(struct snag_session_relay *relay, enum snag_session_message *event)
         const unsigned char *p = relay->input.bytes + SNAG_SESSION_HEADER + 4u;
         memcpy(profile.term, p, SNAG_TERMINAL_NAME_BYTES);
         memcpy(profile.sty, p + SNAG_TERMINAL_NAME_BYTES, SNAG_TERMINAL_NAME_BYTES);
+        memcpy(profile.tmux, p + 2u * SNAG_TERMINAL_NAME_BYTES, SNAG_TERMINAL_NAME_BYTES);
+        memcpy(profile.pane, p + 3u * SNAG_TERMINAL_NAME_BYTES, SNAG_TERMINAL_NAME_BYTES);
         if (!snag_terminal_profile_ansi(&profile)) return snag_errno(EPROTO);
         if (resize_terminal(relay, true) < 0) return -1;
         relay->profile = profile;

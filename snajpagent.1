@@ -468,7 +468,7 @@ their common beginning; another consecutive Tab lists the choices.  No match
 leaves the draft unchanged, not queued.  Full cursor and command exceptions
 are listed under INTERACTIVE INPUT.
 .SS Edit or stop
-Ctrl-J inserts a newline.  Bracketed paste keeps pasted newlines in the draft
+Ctrl-J inserts a newline.  A completed bracketed paste appears immediately and keeps pasted newlines in the draft
 instead of submitting each line.  Up/Down move through wrapped or multiline
 draft rows, then prompt history at the start or end of the text.  Ctrl-A/Ctrl-E
 jump to the start/end of the whole prompt.  Ctrl-P/Ctrl-N go directly through
@@ -1487,6 +1487,35 @@ can contain the workstation wrapper. For two nested screen backends, place
 an inner native wrapper between them to relay passthrough to the outer client.
 GNU screen passthrough keeps transfer
 frames out of its display and scrollback; its settings remain unchanged.
+.SS "Files through tmux"
+Keep the workstation wrapper outside the connection and start or attach tmux
+on the remote host:
+.PP
+.nf
+    snajpagent remote ssh -t target tmux new-session snajpagent
+    snajpagent remote mosh target tmux attach
+.fi
+.PP
+Focus the agent pane and keep one writable tmux client viewing it for the
+transfer. Other panes may continue producing output. The native wrapper supports
+/receive, /send and model send_file through tmux without changing its options.
+SSH also supports dropping a local file into the composer; on Mosh use /receive.
+A workstation tmux pane may contain the outer wrapper too. Place the wrapper
+at the workstation boundary; nested remote wrappers inside tmux are unqualified.
+.PP
+The agent uses tmux's client terminal for checked transfer frames, preserving
+pane history and normal rendering. Byte-stream connections negotiate larger
+frames; Mosh retains short checked title updates. Multiple writable clients
+viewing the agent pane make the destination ambiguous: detach the extra clients
+and retry. Detached panes and control-mode clients cannot receive files.
+Keep the pane focused until the transfer finishes. Cancellation removes the
+native client's unpublished temporary file and restores input.
+.PP
+Use compatible updated binaries at both ends. Already-running session owners
+keep their loaded executable; exit and resume the agent normally to load
+updated in-session transport and paste handling. Native attachment metadata
+now includes the tmux server and pane; earlier attachment wire drafts require
+an owner restart before a new frontend can attach.
 .SS "Alternative workstation client: trzsz-go"
 The Go trzsz wrapper remains usable with the target's /receive and /send
 commands. On macOS:
@@ -1529,7 +1558,8 @@ Receiving a file alone submits no message. Preparation failure removes new files
 from that batch and retains existing unsent attachments. A batch has at most eight
 files; retained files are at most 256 MiB each, and prepared image content uses
 the existing 12 MiB input budget.
-Native uploads use acknowledged blocks of at most 1 KiB to preserve input
+Native uploads through tmux negotiate 8 KiB blocks on byte-stream connections.
+Other native uploads use acknowledged blocks of at most 1 KiB to preserve input
 through GNU screen, including screen boundaries hidden behind a relay. The
 Mosh title-state mode limits blocks to 256 bytes, then divides each wire line
 into short checked title updates. A stale or repeated update cannot append
@@ -1591,7 +1621,8 @@ commands and steering are unavailable while the transfer owns input. Per-frame
 I/O waits are bounded at 20 seconds; a missing wrapper returns a transfer error.
 Transfers through GNU screen use 1 KiB DATA blocks to keep input frames within
 its terminal input burst capacity; Mosh screen-state uses 256-byte blocks and
-checked, retransmitted short title frames. Other connections use up to 64 KiB
+checked, retransmitted short title frames. Native tmux byte streams use 8 KiB
+blocks with checked envelopes. Other connections use up to 64 KiB
 blocks. An interrupted or lost screen frame fails without publishing an
 incomplete file.
 The native client removes unpublished temporary files on transfer failure;

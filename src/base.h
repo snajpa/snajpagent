@@ -89,6 +89,8 @@ int snag_file_executable(const char *path);
 #define SNAG_TERMINAL_NAME_BYTES 256u
 struct snag_terminal_profile {
     char term[SNAG_TERMINAL_NAME_BYTES], sty[SNAG_TERMINAL_NAME_BYTES];
+    char tmux[SNAG_TERMINAL_NAME_BYTES];
+    char pane[SNAG_TERMINAL_NAME_BYTES];
 };
 int snag_terminal_profile_capture(struct snag_terminal_profile *);
 bool snag_terminal_profile_ansi(const struct snag_terminal_profile *);

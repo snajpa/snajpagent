@@ -17,7 +17,7 @@ from pathlib import Path
 import tmux_terminal as harness
 
 
-STATUS = {2: 14, 3: 15, 4: 19}
+STATUS = {2: 14, 3: 15, 4: 19, 5: 19}
 BUSY = b"session already has a terminal or attachment reservation"
 
 

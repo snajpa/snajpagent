@@ -89,7 +89,7 @@ starting file-transfer frames. GNU screen receives it through DCS passthrough.
 Replies are consumed as terminal events and accepted only against the current
 nonce and response window. An inner wrapper probes upstream before spawning its
 child; an upstream native wrapper makes it a byte relay rather than a second
-filesystem endpoint. Each wrapper clears inherited STY for its new child
+filesystem endpoint. Each wrapper clears inherited STY, TMUX and TMUX_PANE for its new child
 PTY. Relays re-envelope recognized probes, markers and protocol frame lines for
 the parent GNU screen; ordinary UI output stays in its normal display lifecycle.
 Keep the workstation wrapper outside SSH hops and reattach through it. Extra
@@ -131,13 +131,44 @@ cancels export intent only, preserving source and already-landed files. Read-onl
 permits list and refuses all mutations. Replay, checkpoints and session staging
 carry the queue; deletion follows ordinary session deletion.
 
+## tmux client output
+
+The current attachment profile carries TMUX and TMUX_PANE. A direct argv call to
+that socket's tmux list-clients identifies the sole writable, non-control client
+whose active pane matches. The route opens that client's character-device tty,
+checks its owner and tty identity, and writes protocol output there. Ordinary UI
+output stays in the pane. Missing or ambiguous clients fail before file frames;
+no tmux options are modified. Input modes and capability probes follow the same
+route. Client refresh after the transfer restores tmux's physical display state.
+
+Other panes can render concurrently. Checked title envelopes separate file bytes
+from their display output. A positive byte-stream probe enables an extended
+HELLO ending in :8192; only its acknowledgement permits 8 KiB title payloads and
+upload blocks. An older wrapper ignores that HELLO, then negotiates the original
+120-byte envelope. Mosh cannot answer the byte-stream probe and keeps the small
+mode. Decoding checks negotiated capacity before writing decoded bytes; CRC,
+nonce, sequence, duplicate handling and publication receipts remain shared.
+
+The client-terminal route is resolved afresh for each transfer and capability
+probe, so tmux detach/reattach selects the current terminal. Keep the pane focused
+and one writable client attached throughout a transfer. Native owner attachment
+loss still cancels the transfer lease. Arbitrary nested tmux/remote-wrapper chains
+and tmux control mode remain outside the qualified paths; use one workstation
+wrapper outside the remote tmux connection.
+
 ## Regression surfaces
 
 - `tests/test_remote_terminal.py`: pure startup, literal argv, Mosh option boundaries,
   terminal restoration,
   native transfer/receipt, upstream ownership, local GNU screen, detach/reattach,
   unwrapped pending and changed-source retention.
-- `tests/test_remote_ssh.py`: disposable authenticated loopback SSH, remote screen
+- `tests/test_tmux_transfers.py`: real tmux between file endpoints, bidirectional
+  incompressible bytes, short/noisy panes, cancellation and recovery, multiple
+  clients, detach/reattach, local wrapper placement, dropped files, model receipts
+  and stock Mosh. Each server and its children belong to the fixture.
+- `tests/test_paste_display.py`: single-line, multiline UTF-8 and long completed
+  pastes render without another key, directly and through the native wrapper.
+- `tests/test_remote_ssh.py`: disposable authenticated loopback SSH, remote tmux/screen
   and a second SSH hop; no shared server configuration or credentials.
 - `tests/test_download_client.py`: synthetic wire, durable outbox/list/remove/clear,
   read-only and pinned Go client interoperability.
@@ -152,7 +183,8 @@ carry the queue; deletion follows ordinary session deletion.
 
 Qualification records distinguish PTY/path selection from desktop GUI actions.
 
-Native uploads use the existing 1 KiB screen-safe DATA burst even when the peer
+Native uploads outside negotiated tmux title streams use the existing 1 KiB
+screen-safe DATA burst even when the peer
 advertises a larger wire block. An intermediate relay clears inherited STY at
 its child PTY, so the agent may not see an upstream screen input queue. Larger
 incompressible DATA lines reproduced a one-byte loss there. This per-frame bound

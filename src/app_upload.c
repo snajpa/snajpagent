@@ -2,6 +2,7 @@
 #include "app_internal.h"
 #include "fs.h"
 #include "media.h"
+#include "tmux.h"
 #include "tools.h"
 #include "upload.h"
 
@@ -282,6 +283,20 @@ snag_app_remote_probe(struct app_state *app)
     bool screen = app->ui.native ? app->ui.profile.sty[0] != '\0' : sty && *sty;
     int n = snprintf(query, sizeof(query), "%s\033[?9001;%sn%s",
                      screen ? "\033P" : "", app->remote_nonce, screen ? "\033\\" : "");
+    struct snag_terminal_profile captured;
+    const struct snag_terminal_profile *profile = &app->ui.profile;
+    if (!app->ui.native) {
+        if (snag_terminal_profile_capture(&captured) < 0) return 0;
+        profile = &captured;
+    }
+    if (profile->tmux[0]) {
+        n = snprintf(query, sizeof(query), "\033[?9001;%sn", app->remote_nonce);
+        int fd = snag_tmux_output_open(profile, NULL);
+        if (fd < 0) return 0;
+        if (n > 0 && (size_t)n < sizeof(query)) (void)write(fd, query, (size_t)n);
+        (void)close(fd);
+        return 0;
+    }
     return n < 0 || (size_t)n >= sizeof(query) ? -1 :
         snag_ui_send(&app->ui, (struct snag_ui_command){.kind = SNAG_UI_RAW,
             .data.value = STDERR_FILENO, .text = query, .len = (size_t)n});

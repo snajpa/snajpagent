@@ -4,6 +4,7 @@
 #include "media.h"
 #include "process_host.h"
 #include "screen_wire.h"
+#include "tmux.h"
 #include "upload_md5.h"
 #include "upload_wire.h"
 
@@ -71,11 +72,15 @@ snag_upload_cleanup(int stage_fd, struct snag_upload_result *result)
 
 struct upload_io {
     int fd;
+    int output_fd;
+    char output_tty[SNAG_TERMINAL_NAME_BYTES];
     struct snag_child *child;
     int stage_fd;
     bool display_started;
     bool screen;
+    bool tmux_unavailable;
     bool title;
+    size_t title_chunk;
     char title_nonce[9];
     uint32_t title_sequence;
     snag_screen_reader title_reader;
@@ -110,6 +115,7 @@ wait_ready(struct upload_io *io, short events, uint64_t deadline)
             if (event.revents & (SNAG_CHILD_END | SNAG_CHILD_ERROR)) return snag_errno(EIO);
             continue;
         }
+        int fd = events == POLLOUT && io->output_fd >= 0 ? io->output_fd : io->fd;
         int rc;
 #ifdef __APPLE__
         /* Darwin poll reports POLLNVAL for a valid controlling /dev/tty.
@@ -118,13 +124,13 @@ wait_ready(struct upload_io *io, short events, uint64_t deadline)
         fd_set writable;
         FD_ZERO(&readable);
         FD_ZERO(&writable);
-        FD_SET(io->fd, events == POLLIN ? &readable : &writable);
+        FD_SET(fd, events == POLLIN ? &readable : &writable);
         struct timeval wait = {.tv_sec = timeout / 1000,
                                .tv_usec = (timeout % 1000) * 1000};
-        rc = select(io->fd + 1, events == POLLIN ? &readable : NULL,
+        rc = select(fd + 1, events == POLLIN ? &readable : NULL,
                     events == POLLOUT ? &writable : NULL, NULL, &wait);
 #else
-        struct pollfd pollfd = {.fd = io->fd, .events = events};
+        struct pollfd pollfd = {.fd = fd, .events = events};
         rc = poll(&pollfd, 1u, timeout);
 #endif
         if (rc < 0 && errno == EINTR) continue;
@@ -143,7 +149,8 @@ wait_ready(struct upload_io *io, short events, uint64_t deadline)
 static ssize_t
 stream_write(struct upload_io *io, const unsigned char *bytes, size_t length)
 {
-    return io->child ? snag_child_write(io->child, bytes, length) : write(io->fd, bytes, length);
+    int fd = io->output_fd >= 0 ? io->output_fd : io->fd;
+    return io->child ? snag_child_write(io->child, bytes, length) : write(fd, bytes, length);
 }
 
 static int
@@ -220,6 +227,7 @@ stream_handshake(struct upload_io *io)
 static int
 title_handshake(struct upload_io *io, char direction)
 {
+    if (!io->title_chunk) io->title_chunk = SNAG_SCREEN_CHUNK;
     char id[SNAG_ID_HEX_LEN + 1u];
     if (snag_random_id(id) < 0) return -1;
     memcpy(io->title_nonce, id, 8u);
@@ -227,7 +235,8 @@ title_handshake(struct upload_io *io, char direction)
 
     char challenge[96];
     int length = snprintf(challenge, sizeof(challenge),
-        "\033]2;" SNAG_SCREEN_PREFIX "HELLO:%s:%c\a", io->title_nonce, direction);
+        "\033]2;" SNAG_SCREEN_PREFIX "HELLO:%s:%c%s\a", io->title_nonce, direction,
+        io->title_chunk == SNAG_SCREEN_STREAM_CHUNK ? ":8192" : "");
     if (length < 0 || (size_t)length >= sizeof(challenge) ||
         plain_write_bytes(io, (const unsigned char *)challenge, (size_t)length) < 0) return -1;
 
@@ -258,7 +267,7 @@ static int
 title_write(struct upload_io *io, const unsigned char *bytes, size_t length)
 {
     while (length) {
-        size_t chunk = length > SNAG_SCREEN_CHUNK ? SNAG_SCREEN_CHUNK : length;
+        size_t chunk = length > io->title_chunk ? io->title_chunk : length;
         uint32_t checksum = snag_screen_checksum(bytes, chunk);
         char ack[96];
         int ack_len = snprintf(ack, sizeof(ack),
@@ -270,7 +279,7 @@ title_write(struct upload_io *io, const unsigned char *bytes, size_t length)
         size_t matched = 0u;
         size_t failed = 0u;
         for (;;) {
-            char title[256];
+            char title[SNAG_SCREEN_TITLE_MAX];
             int n = snag_screen_encode(title, sizeof(title), io->title_nonce,
                                        io->title_sequence, attempt++ % 16u, bytes, chunk);
             if (n < 0 || plain_write_bytes(io, (const unsigned char *)title, (size_t)n) < 0)
@@ -313,6 +322,29 @@ static int
 transfer_begin(struct upload_io *io, char direction, const struct snag_terminal_profile *profile,
                bool probe_title, bool allow_legacy)
 {
+    struct snag_terminal_profile captured;
+    if (!profile) {
+        if (snag_terminal_profile_capture(&captured) < 0) return -1;
+        profile = &captured;
+    }
+    if (profile->tmux[0]) {
+        io->output_fd = snag_tmux_output_open(profile, io->output_tty);
+        if (io->output_fd < 0) {
+            io->tmux_unavailable = errno == ENOTSUP;
+            return -1;
+        }
+        /* Other panes keep rendering. Framed titles separate their output
+         * from file bytes without changing tmux's pane or server options. */
+        int stream = stream_handshake(io);
+        if (stream < 0) return -1;
+        io->title_chunk = stream ? SNAG_SCREEN_STREAM_CHUNK : SNAG_SCREEN_CHUNK;
+        int title = title_handshake(io, direction);
+        if (!title && stream) {
+            io->title_chunk = SNAG_SCREEN_CHUNK;
+            title = title_handshake(io, direction);
+        }
+        return title < 0 ? -1 : title ? 0 : snag_errno(ENOTSUP);
+    }
     /* GNU screen unwraps DCS before the native wrapper sees the CSI probe. */
     const char *sty = getenv("STY");
     io->screen = profile ? profile->sty[0] != '\0' : sty && *sty;
@@ -504,7 +536,8 @@ send_config(struct upload_io *io)
     char config[256];
     /* screen's input queue can lose a large pasted protocol-1 DATA line.
      * Keep client DATA frames within a small raw-tty input burst there. */
-    unsigned int block = io->title ? 256u :
+    unsigned int block = io->title ?
+        (io->title_chunk == SNAG_SCREEN_STREAM_CHUNK ? SNAG_SCREEN_STREAM_CHUNK : 256u) :
         io->screen ? SNAG_UPLOAD_SCREEN_BLOCK : SNAG_UPLOAD_BLOCK_MAX;
     int n = snprintf(config, sizeof(config),
         "{\"lang\":\"c-snajpagent\",\"protocol\":1,\"binary\":false,"
@@ -661,7 +694,7 @@ snag_upload_receive(int tty, int stage_fd, size_t slots, bool directory,
                     int (*checkpoint)(void *), void *opaque,
                     struct snag_upload_result *result, char *error, size_t error_size)
 {
-    struct upload_io io = {.fd = tty, .stage_fd = stage_fd,
+    struct upload_io io = {.fd = tty, .output_fd = -1, .stage_fd = stage_fd,
                            .checkpoint = checkpoint, .opaque = opaque};
     struct upload_frame frame;
     const char *phase = "handshake";
@@ -718,10 +751,14 @@ snag_upload_receive(int tty, int stage_fd, size_t slots, bool directory,
 done:
     if (rc < 0) {
         int cause = errno;
-        if (cause != ECANCELED && cause != ETIMEDOUT && cause != EPIPE && cause != EIO) {
+        if (io.display_started && cause != ECANCELED && cause != ETIMEDOUT &&
+            cause != EPIPE && cause != EIO) {
             (void)send_encoded(&io, "FAIL", "upload rejected", sizeof("upload rejected") - 1u);
         }
-        (void)snag_errorf(error, error_size, "%s: %s", phase, strerror(cause));
+        if (io.tmux_unavailable)
+            (void)snag_errorf(error, error_size,
+                "tmux file transfers require one writable client focused on this pane");
+        else (void)snag_errorf(error, error_size, "%s: %s", phase, strerror(cause));
         if (cause == ECANCELED) rc = 1;
         snag_upload_cleanup(stage_fd, result);
         errno = cause;
@@ -731,6 +768,10 @@ done:
                           strerror(errno));
         snag_upload_cleanup(stage_fd, result);
         rc = -1;
+    }
+    if (io.output_fd >= 0) {
+        snag_tmux_refresh(profile, io.output_tty);
+        (void)close(io.output_fd);
     }
     snag_buf_free(&frame.payload);
     return rc;
@@ -756,7 +797,8 @@ snag_download_send(int tty, int file_fd, const char *name, const char *expected_
                     int (*checkpoint)(void *), void *opaque,
                     struct snag_upload_result *result, char *error, size_t error_size)
 {
-    struct upload_io io = {.fd = tty, .checkpoint = checkpoint, .opaque = opaque};
+    struct upload_io io = {.fd = tty, .output_fd = -1,
+        .checkpoint = checkpoint, .opaque = opaque};
     struct upload_frame frame;
     snag_file_info before, after;
     const char *phase = "download handshake";
@@ -806,7 +848,9 @@ snag_download_send(int tty, int file_fd, const char *name, const char *expected_
     snag_sha256_init(&queued_hash);
     uint64_t sent = 0;
     while (sent < (uint64_t)before.st_size) {
-        size_t limit = io.title ? 256u : io.screen ? 1024u : sizeof(block);
+        size_t limit = io.title ?
+            (io.title_chunk == SNAG_SCREEN_STREAM_CHUNK ? SNAG_SCREEN_STREAM_CHUNK : 256u) :
+            io.screen ? 1024u : sizeof(block);
         size_t want = (uint64_t)before.st_size - sent > limit ? limit :
                       (size_t)((uint64_t)before.st_size - sent);
         ssize_t amount = read(file_fd, block, want);
@@ -868,7 +912,10 @@ done:
         int cause = errno;
         if (started && cause != EPIPE && cause != EIO && cause != ETIMEDOUT && cause != ECANCELED)
             (void)send_encoded(&io, "FAIL", "download failed", sizeof("download failed") - 1u);
-        (void)snag_errorf(error, error_size, "%s: %s", phase, strerror(cause));
+        if (io.tmux_unavailable)
+            (void)snag_errorf(error, error_size,
+                "tmux file transfers require one writable client focused on this pane");
+        else (void)snag_errorf(error, error_size, "%s: %s", phase, strerror(cause));
         if (cause == ECANCELED) rc = 1;
         errno = cause;
     }
@@ -877,6 +924,10 @@ done:
         (void)snag_errorf(error, error_size, "Cannot restore transfer display: %s",
                           strerror(errno));
         rc = -1;
+    }
+    if (io.output_fd >= 0) {
+        snag_tmux_refresh(profile, io.output_tty);
+        (void)close(io.output_fd);
     }
     snag_buf_free(&frame.payload);
     return rc;
@@ -1031,7 +1082,7 @@ done:
 
 int
 snag_client_upload(struct snag_child *child, int fd, const char *name,
-                   snag_screen_reader title_reader,
+                   snag_screen_reader title_reader, bool stream_titles,
                    int (*progress)(void *, uint64_t, uint64_t),
                    int (*checkpoint)(void *), void *opaque,
                    struct snag_client_result *result, char *error, size_t error_size)
@@ -1056,8 +1107,9 @@ snag_client_upload(struct snag_child *child, int fd, const char *name,
         download_integer(&io, &frame, "SIZE", (uint64_t)before.st_size) < 0) goto done;
     /* A relay can hide STY while an upstream screen still carries input. Match
      * its safe burst even when the peer advertises the full wire block size. */
-    if (block > (title_reader ? 256u : SNAG_UPLOAD_SCREEN_BLOCK))
-        block = title_reader ? 256u : SNAG_UPLOAD_SCREEN_BLOCK;
+    size_t input_block = title_reader ?
+        (stream_titles ? SNAG_SCREEN_STREAM_CHUNK : 256u) : SNAG_UPLOAD_SCREEN_BLOCK;
+    if (block > input_block) block = input_block;
     struct snag_upload_md5 hash;
     snag_upload_md5_init(&hash);
     uint64_t sent = 0u;

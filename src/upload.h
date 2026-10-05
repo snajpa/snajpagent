@@ -60,7 +60,7 @@ int snag_client_download(struct snag_child *child, int directory, const char *pa
                          int (*checkpoint)(void *), void *opaque,
                          struct snag_client_result *result, char *error, size_t error_size);
 int snag_client_upload(struct snag_child *child, int fd, const char *name,
-                       snag_screen_reader title_reader,
+                       snag_screen_reader title_reader, bool stream_titles,
                        int (*progress)(void *, uint64_t, uint64_t),
                        int (*checkpoint)(void *), void *opaque,
                        struct snag_client_result *result, char *error, size_t error_size);

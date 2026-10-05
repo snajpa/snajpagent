@@ -177,9 +177,9 @@ transfer results remain valid; only the old attachment's keyboard tail is
 discarded. A replacement terminal performs its own workstation capability probe.
 
 Attachment metadata must describe the new physical terminal, not the surviving
-owner's startup environment. The unreleased native wire draft 2 carries TERM and
-STY with the existing geometry commit. Earlier wire drafts are rejected rather
-than silently losing the profile. Each name is bounded to 255 bytes plus its
+owner's startup environment. The native wire draft 5 carries TERM, STY, TMUX and TMUX_PANE
+with the geometry commit. Earlier attachment drafts are rejected; the read-only
+status query separately supports drafts 2 through 5 for listings across upgrades. Each name is bounded to 255 bytes plus its
 terminator, matching a terminal-name
 or screen socket-name component. Validate the complete metadata before changing
 attachment state. The native frontend requires an ANSI-capable terminal; plain
@@ -196,7 +196,7 @@ delegate suspension to the frontend.
 Apply the accepted profile at the existing rebind barrier. Screen passthrough
 for input modes, workstation probes and transfers uses that profile. Owner
 preferences, including color policy, stay unchanged. Newly launched editors and
-pagers receive TERM/STY overrides in their own child environment, without
+pagers receive TERM/STY/TMUX/TMUX_PANE overrides in their own child environment, without
 interpolating metadata into shell source. Never change the multithreaded owner's
 environment.
 An already-running external program keeps its launch environment and receives
@@ -859,3 +859,8 @@ chosen provider/model recorded in its evidence. Compare normalized rendered
 text with durable public response data, verify advertised instruction paths,
 and close only test-owned processes. Existing host-specific live-run records
 are historical evidence, not reusable task authority or a mandatory prompt.
+
+A completed bracketed paste requests the final composer redraw. Native input
+coalesces intermediate edits until the last buffered byte; the closing paste
+marker inserts no text but still completes the edit. This preserves batching
+while making the complete draft visible without another key or engine output.

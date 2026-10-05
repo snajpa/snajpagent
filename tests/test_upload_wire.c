@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "base64.h"
+#include "screen_wire.h"
 #include "upload.h"
 #include "upload_md5.h"
 #include "upload_wire.h"
@@ -116,6 +117,43 @@ roundtrip(size_t length)
 }
 
 static void
+check_titles(void)
+{
+    unsigned char source[SNAG_SCREEN_STREAM_CHUNK];
+    unsigned char decoded[SNAG_SCREEN_STREAM_CHUNK + 1u];
+    char wire[SNAG_SCREEN_TITLE_MAX];
+    static const size_t sizes[] = {1u, 2u, 3u, 119u, 120u, 121u, 8191u, 8192u};
+    for (size_t i = 0u; i < sizeof(source); ++i) source[i] = (unsigned char)(i * 71u);
+    for (size_t i = 0u; i < sizeof(sizes) / sizeof(sizes[0]); ++i) {
+        size_t length = sizes[i], written = 0u;
+        uint32_t sequence, checksum;
+        int n = snag_screen_encode(wire, sizeof(wire), "01234567", 42u, 15u, source, length);
+        assert(n > 0);
+        const unsigned char *body = (unsigned char *)strstr(wire, "DATA:");
+        size_t body_length = (size_t)n - (size_t)(body - (unsigned char *)wire) - 1u;
+        memset(decoded, 0xa5, sizeof(decoded));
+        assert(snag_screen_decode(body, body_length, "01234567", &sequence, &checksum,
+            decoded, length, &written) == 0);
+        assert(written == length && sequence == 42u);
+        assert(checksum == snag_screen_checksum(source, length));
+        assert(!memcmp(source, decoded, length) && decoded[length] == 0xa5u);
+        memset(decoded, 0xa5, sizeof(decoded));
+        assert(snag_screen_decode(body, body_length, "01234567", &sequence, &checksum,
+            decoded, length - 1u, &written) < 0);
+        for (size_t j = 0u; j < sizeof(decoded); ++j) assert(decoded[j] == 0xa5u);
+        assert(snag_screen_decode(body, body_length - 1u, "01234567", &sequence, &checksum,
+            decoded, sizeof(source), &written) < 0);
+        assert(snag_screen_decode(body, body_length, "deadbeef", &sequence, &checksum,
+            decoded, sizeof(source), &written) < 0);
+        wire[n - 2] = wire[n - 2] == 'A' ? 'B' : 'A';
+        assert(snag_screen_decode(body, body_length, "01234567", &sequence, &checksum,
+            decoded, sizeof(source), &written) < 0);
+    }
+    assert(snag_screen_encode(wire, sizeof(wire), "01234567", 0u, 0u,
+        source, sizeof(source) + 1u) < 0);
+}
+
+static void
 check_digest(const char *text, const char *expected)
 {
     struct snag_upload_md5 hash;
@@ -146,6 +184,7 @@ main(int argc, char **argv)
     size_t written = 0;
     struct snag_buf wire;
 
+    check_titles();
     roundtrip(0u);
     roundtrip(1u);
     roundtrip(2u);

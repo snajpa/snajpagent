@@ -2,6 +2,17 @@
 
 # Implementation status
 
+Remote tmux supports bidirectional native file transfers using its single writable
+client focused on the agent pane. Checked envelopes preserve pane history while
+other panes render; byte streams negotiate larger frames and stock Mosh retains
+short title frames. The attachment profile includes TMUX/TMUX_PANE. Native file
+drops over SSH and model send_file share this path; detached/control-mode or
+ambiguous clients leave delivery unavailable. Existing owners require normal
+exit/resume to load the updated native attachment draft and in-session code.
+
+Completed bracketed pastes request their final composer redraw, including when
+the closing marker is the last byte in a coalesced native input batch.
+
 Session lists group attached, detached, running (attachment status unavailable)
 and stored sessions under the STATUS heading, newest saved activity first
 within each group. `-l` includes all running

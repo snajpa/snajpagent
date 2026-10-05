@@ -9,6 +9,23 @@ runs each cover different behavior. Report the actual scope of each result.
 The [2026-10-01 regression audit](design/regression-audit-20261001.md) maps the
 32 audited development commits to their permanent tests and records coverage additions.
 
+## tmux transfers and paste display
+
+Permanent real-tmux fixtures place the multiplexer between the workstation
+wrapper and agent and verify both file directions, exact bytes, receipts, clean
+pane history and subsequent input. Cases include incompressible 64 KiB files,
+a 10x48 terminal with another writing pane, cancellation of 2 MiB files, ambiguous
+clients, client detach/reattach, local wrapper placement, dropped files, model
+send_file and stock Mosh. Loopback OpenSSH includes remote tmux. Foreground tmux
+servers and Linux pidfd tracking constrain teardown to fixture-owned processes.
+Mac native tmux execution and arbitrary nested tmux/remote-wrapper chains remain
+unqualified. These fixtures do not test desktop drag gestures or live providers.
+
+The paste-display PTY fixture sends a complete bracketed paste and no subsequent
+key until its final text is visible. It covers short, multiline UTF-8 and long
+input, directly and through the native workstation wrapper. The installed
+52200a9d baseline reproduced missing redraws; the fix renders at paste completion.
+
 ## 0.99.8c voice scope
 
 The provider-transport and native-PTY fixtures cover command-report observations

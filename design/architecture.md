@@ -909,3 +909,10 @@ chunks, keeping frames out of its virtual display and scrollback. In screen,
 1 KiB DATA blocks avoid long input bursts that exceed its pasted-input capacity.
 These are in-band transfers; there is no helper executable, listener or network
 connection outside the terminal chain. Screen settings are never modified.
+
+Remote tmux transfer output uses the current attachment's server and pane to
+select one writable client tty. Checked title envelopes separate transfer data
+from concurrent pane output, with 8 KiB frames negotiated over byte streams and
+120-byte frames retained for stock Mosh. Input modes and workstation probes use
+the same route; display output and tmux options retain their normal behavior.
+See remote-terminal.md for endpoint selection, compatibility and qualification.

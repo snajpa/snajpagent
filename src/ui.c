@@ -740,6 +740,7 @@ apply_session(struct snag_ui_display *display, const struct snag_ui_command *com
         display->native = true;
         display->profile = display->relay.profile = display->native_process.profile;
         display->term.screen = display->profile.sty[0] != '\0';
+        display->term.backend = display->profile;
         atomic_store(&runtime->session_attachment, display->relay.generation);
         display->term.suspend = session_suspend;
         display->term.suspend_opaque = display;
@@ -816,6 +817,7 @@ apply_session(struct snag_ui_display *display, const struct snag_ui_command *com
                                          display->native_process.slave) < 0) return -1;
         display->profile = display->relay.profile;
         display->term.screen = display->profile.sty[0] != '\0';
+        display->term.backend = display->profile;
         atomic_store(&runtime->session_pending, 0u);
         if (display->suspended)
             (void)snag_session_process_redraw(&display->native_process);

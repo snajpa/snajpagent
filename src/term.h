@@ -69,6 +69,7 @@ struct snag_term {
     char audio_label[64];
     char caption[2][384]; /* Display-only recent text, never composer input. */
     struct snag_term_host host;
+    struct snag_terminal_profile backend;
     struct snag_buf draft;
     struct snag_buf search_label;
     struct snag_buf search_query;

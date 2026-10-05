@@ -71,7 +71,7 @@ snag_session_packet_set(struct snag_session_packet *packet, enum snag_session_me
         length > SNAG_SESSION_FRAME_MAX || (length && !data)) return snag_errno(EINVAL);
     packet->bytes[0] = 'S';
     packet->bytes[1] = 'A';
-    packet->bytes[2] = 4u;
+    packet->bytes[2] = 5u;
     packet->bytes[3] = (unsigned char)type;
     for (size_t i = 0u; i < 4u; ++i) packet->bytes[4u + i] = (unsigned char)(length >> (8u * i));
     if (length) memcpy(packet->bytes + SNAG_SESSION_HEADER, data, length);
@@ -89,6 +89,8 @@ snag_session_commit_set(struct snag_session_packet *packet, const unsigned char 
     memcpy(data, geometry, 4u);
     memcpy(data + 4u, profile->term, SNAG_TERMINAL_NAME_BYTES);
     memcpy(data + 4u + SNAG_TERMINAL_NAME_BYTES, profile->sty, SNAG_TERMINAL_NAME_BYTES);
+    memcpy(data + 4u + 2u * SNAG_TERMINAL_NAME_BYTES, profile->tmux, SNAG_TERMINAL_NAME_BYTES);
+    memcpy(data + 4u + 3u * SNAG_TERMINAL_NAME_BYTES, profile->pane, SNAG_TERMINAL_NAME_BYTES);
     return snag_session_packet_set(packet, SNAG_SESSION_COMMIT, data, sizeof(data));
 }
 
@@ -512,7 +514,7 @@ packet_read_version(int fd, struct snag_session_packet *packet,
 int
 snag_session_packet_read(int fd, struct snag_session_packet *packet)
 {
-    return packet_read_version(fd, packet, 4u, SNAG_SESSION_STATUS);
+    return packet_read_version(fd, packet, 5u, SNAG_SESSION_STATUS);
 }
 
 int
@@ -680,7 +682,8 @@ snag_session_endpoint_status(int dir_fd, const char *dir_path)
     /* Listing spans binary upgrades. Only the read-only status exchange uses
      * old wire versions; attachment and input retain strict current framing.
      * One deadline bounds all attempts, including a stopped owner. */
-    static const unsigned char versions[][2] = {{4u, SNAG_SESSION_STATUS}, {3u, 15u}, {2u, 14u}};
+    static const unsigned char versions[][2] = {
+        {5u, SNAG_SESSION_STATUS}, {4u, 19u}, {3u, 15u}, {2u, 14u}};
     uint64_t deadline = snag_monotonic_ms() + 1000u;
     for (size_t i = 0u; i < sizeof(versions) / sizeof(versions[0]); ++i) {
         if (snag_monotonic_ms() >= deadline) break;

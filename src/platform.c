@@ -32,11 +32,17 @@ int
 snag_terminal_profile_capture(struct snag_terminal_profile *profile)
 {
     const char *term = getenv("TERM"), *sty = getenv("STY");
+    const char *tmux = getenv("TMUX");
+    const char *pane = getenv("TMUX_PANE");
     memset(profile, 0, sizeof(*profile));
     if ((term && strlen(term) >= sizeof(profile->term)) ||
-        (sty && strlen(sty) >= sizeof(profile->sty))) return snag_errno(ENAMETOOLONG);
+        (sty && strlen(sty) >= sizeof(profile->sty)) ||
+        (tmux && strlen(tmux) >= sizeof(profile->tmux)) ||
+        (pane && strlen(pane) >= sizeof(profile->pane))) return snag_errno(ENAMETOOLONG);
     if (term) memcpy(profile->term, term, strlen(term));
     if (sty) memcpy(profile->sty, sty, strlen(sty));
+    if (tmux) memcpy(profile->tmux, tmux, strlen(tmux));
+    if (pane) memcpy(profile->pane, pane, strlen(pane));
     return 0;
 }
 
@@ -44,6 +50,8 @@ bool
 snag_terminal_profile_ansi(const struct snag_terminal_profile *profile)
 {
     return memchr(profile->term, 0, sizeof(profile->term)) &&
+        memchr(profile->tmux, 0, sizeof(profile->tmux)) &&
+        memchr(profile->pane, 0, sizeof(profile->pane)) &&
         memchr(profile->sty, 0, sizeof(profile->sty)) && profile->term[0] &&
         strcmp(profile->term, "dumb");
 }
@@ -2186,31 +2194,34 @@ terminal_environment(const struct snag_terminal_profile *profile)
     if (!entries) return NULL;
     size_t count = 0u, used = 0u;
     while (entries[count]) ++count;
-    char **next = realloc(entries, (count + 3u) * sizeof(*entries));
+    static const char *const names[] = {"TERM", "STY", "TMUX", "TMUX_PANE"};
+    const char *values[] = {profile->term, profile->sty, profile->tmux, profile->pane};
+    char **next = realloc(entries, (count + 5u) * sizeof(*entries));
     if (!next) { snag_environment_entries_free(entries); errno = ENOMEM; return NULL; }
     entries = next;
     for (size_t i = 0u; i < count; ++i) {
-        if (!strncmp(entries[i], "TERM=", 5u) || !strncmp(entries[i], "STY=", 4u))
-            free(entries[i]);
+        bool replaced = false;
+        for (size_t j = 0u; j < 4u; ++j) {
+            size_t length = strlen(names[j]);
+            if (!strncmp(entries[i], names[j], length) && entries[i][length] == '=')
+                replaced = true;
+        }
+        if (replaced) free(entries[i]);
         else entries[used++] = entries[i];
     }
     entries[used] = NULL;
-    char *term = malloc(sizeof(profile->term) + 5u);
-    char *sty = profile->sty[0] ? malloc(sizeof(profile->sty) + 4u) : NULL;
-    if (!term || (profile->sty[0] && !sty)) {
-        free(term);
-        free(sty);
-        snag_environment_entries_free(entries);
-        errno = ENOMEM;
-        return NULL;
+    for (size_t i = 0u; i < 4u; ++i) {
+        if (!values[i][0]) continue;
+        size_t size = strlen(names[i]) + strlen(values[i]) + 2u;
+        char *value = malloc(size);
+        if (!value) {
+            snag_environment_entries_free(entries);
+            return NULL;
+        }
+        (void)snprintf(value, size, "%s=%s", names[i], values[i]);
+        entries[used++] = value;
+        entries[used] = NULL;
     }
-    (void)snprintf(term, sizeof(profile->term) + 5u, "TERM=%s", profile->term);
-    entries[used++] = term;
-    if (sty) {
-        (void)snprintf(sty, sizeof(profile->sty) + 4u, "STY=%s", profile->sty);
-        entries[used++] = sty;
-    }
-    entries[used] = NULL;
     return entries;
 }
 

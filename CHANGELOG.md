@@ -4,6 +4,13 @@
 
 ## Unreleased
 
+- Transfer files through remote tmux with checked framing, current client-tty
+  selection and unchanged tmux options. Support short panes, concurrent pane
+  output, cancellation, reattachment and stock Mosh; reject ambiguous clients.
+  Native attachment profiles now carry tmux server/pane metadata.
+- Display completed bracketed pastes immediately when native input batches end
+  with the paste terminator, without waiting for another keypress.
+
 - Preserve attached/detached status when listing owners started by older binaries.
   Read-only queries support previous status protocols within one shared deadline.
   Unavailable attachment status appears as running, after confirmed attached and

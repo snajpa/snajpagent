@@ -109,7 +109,7 @@ struct remote_transfer {
     bool screen;
     bool relay_transfer;
     bool relay_frame;
-    unsigned char marker[512];
+    unsigned char marker[SNAG_SCREEN_TITLE_MAX];
     size_t marker_len;
     bool osc_forward;
     bool osc_drop;
@@ -119,7 +119,8 @@ struct remote_transfer {
     char title_nonce[9];
     uint32_t title_next;
     uint32_t title_last_checksum;
-    unsigned char title_bytes[SNAG_SCREEN_CHUNK];
+    unsigned char title_bytes[SNAG_SCREEN_STREAM_CHUNK];
+    size_t title_chunk;
     size_t title_at;
     size_t title_len;
     unsigned char keys[4096];
@@ -428,6 +429,7 @@ remote_transfer_run(struct remote_transfer *client, char direction)
         client->drop_fd = -1;
         rc = snag_client_upload(client->child, fd, client->drop_name,
             client->title_active ? remote_screen_receive : NULL,
+            client->title_chunk == SNAG_SCREEN_STREAM_CHUNK,
             remote_progress, remote_checkpoint, client, &result, error, sizeof(error));
     } else {
         char path[SNAG_PATH_MAX_BYTES + 1u];
@@ -436,6 +438,7 @@ remote_transfer_run(struct remote_transfer *client, char direction)
             const char *name = strrchr(path, '/');
             if (fd >= 0) rc = snag_client_upload(client->child, fd,
                 name ? name + 1u : path, client->title_active ? remote_screen_receive : NULL,
+                client->title_chunk == SNAG_SCREEN_STREAM_CHUNK,
                 remote_progress, remote_checkpoint, client,
                 &result, error, sizeof(error));
         }
@@ -526,11 +529,12 @@ remote_title(struct remote_transfer *client, const unsigned char *data, size_t l
         !memcmp(body + sizeof(prefix) - 1u, "DATA:", 5u)) {
         uint32_t sequence;
         uint32_t checksum;
-        unsigned char chunk[SNAG_SCREEN_CHUNK];
+        unsigned char chunk[SNAG_SCREEN_STREAM_CHUNK];
         size_t count;
         if (snag_screen_decode(body + sizeof(prefix) - 1u,
                                size - (sizeof(prefix) - 1u), client->title_nonce,
-                               &sequence, &checksum, chunk, &count) < 0) return 1;
+                               &sequence, &checksum, chunk, client->title_chunk, &count) < 0)
+            return 1;
         if (sequence == client->title_next && client->title_at == client->title_len) {
             memcpy(client->title_bytes, chunk, count);
             client->title_at = 0u;
@@ -549,7 +553,8 @@ remote_title(struct remote_transfer *client, const unsigned char *data, size_t l
         return 1;
     }
     if (end >= at && (size == sizeof(hello) - 1u + 8u ||
-                      size == sizeof(hello) - 1u + 10u) &&
+                      size == sizeof(hello) - 1u + 10u ||
+                      size == sizeof(hello) - 1u + 15u) &&
         !memcmp(body, hello, sizeof(hello) - 1u)) {
         const unsigned char *id = body + sizeof(hello) - 1u;
         bool valid = true;
@@ -559,7 +564,9 @@ remote_title(struct remote_transfer *client, const unsigned char *data, size_t l
                 break;
             }
         }
-        char direction = size == sizeof(hello) - 1u + 10u ? (char)id[9] : 0;
+        bool stream = size == sizeof(hello) - 1u + 15u;
+        if (stream && memcmp(id + 10u, ":8192", 5u)) valid = false;
+        char direction = size >= sizeof(hello) - 1u + 10u ? (char)id[9] : 0;
         if (direction && (id[8] != ':' || (direction != 'R' && direction != 'S'))) valid = false;
         if (valid) {
             /* Screen redraws can repeat HELLO during a transfer or after END.
@@ -576,6 +583,7 @@ remote_title(struct remote_transfer *client, const unsigned char *data, size_t l
                 memcpy(client->title_nonce, id, 8u);
                 client->title_nonce[8] = '\0';
                 client->title_next = 0u;
+                client->title_chunk = stream ? SNAG_SCREEN_STREAM_CHUNK : SNAG_SCREEN_CHUNK;
                 client->title_at = client->title_len = 0u;
                 client->title_ended = false;
                 client->title_active = true;
@@ -794,22 +802,32 @@ remote_proxy(const char *executable, const char *const *command, const char *dow
     if (rc == 0) rc = remote_upstream(&client);
     const char *sty = getenv("STY");
     client.screen = sty && *sty;
-    char *screen_backend = client.screen ? strdup(sty) : NULL;
-    if (client.screen && !screen_backend) rc = -1;
-    /* Each wrapper terminates the inherited backend at its child PTY. Relays
-     * envelope probes and file frames for the parent screen, leaving UI ordinary. */
-    if (rc == 0 && screen_backend) {
-        /* Legacy BSD unsetenv returns void; verify the environment itself. */
-        (void)unsetenv("STY");
-        if (getenv("STY")) rc = snag_errno(EIO);
+    static const char *const backend_names[] = {"STY", "TMUX", "TMUX_PANE"};
+    char *backends[3] = {NULL, NULL, NULL};
+    /* The wrapper terminates these backends at its child PTY. Child agents
+     * must use that PTY instead of bypassing this wrapper through an ancestor. */
+    for (size_t i = 0u; i < 3u; ++i) {
+        const char *value = getenv(backend_names[i]);
+        if (value) {
+            backends[i] = strdup(value);
+            if (!backends[i]) rc = -1;
+        }
+    }
+    if (rc == 0) {
+        for (size_t i = 0u; i < 3u; ++i) {
+            (void)unsetenv(backend_names[i]);
+            if (getenv(backend_names[i])) rc = snag_errno(EIO);
+        }
     }
     if (rc == 0) rc = snag_child_spawn_terminal(&child, executable, command);
     int spawn_errno = errno;
-    if (screen_backend && setenv("STY", screen_backend, 1) < 0 && rc == 0) {
-        spawn_errno = errno;
-        rc = -1;
+    for (size_t i = 0u; i < 3u; ++i) {
+        if (backends[i] && setenv(backend_names[i], backends[i], 1) < 0 && rc == 0) {
+            spawn_errno = errno;
+            rc = -1;
+        }
+        free(backends[i]);
     }
-    free(screen_backend);
     if (rc < 0) errno = spawn_errno;
     if (rc == 0 && client.key_len) {
         rc = remote_child_write(&child, client.keys, client.key_len);

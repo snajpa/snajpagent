@@ -140,6 +140,9 @@ agent. Put Mosh options before the hostname; the wrapper separates them from
 remote application options. Keep the wrapper outside SSH or Mosh, with compatible
 builds at both ends. Capability handshakes select the fast SSH stream or a slower,
 checked stock-Mosh channel within the same terminal connection, without SCP or SFTP.
+For remote tmux, use `snajpagent remote ssh -t target tmux attach` or
+`snajpagent remote mosh target tmux attach`. Keep the agent pane focused with
+one writable client viewing it during file transfers; tmux options stay unchanged.
 
 Drop one regular file into the POSIX composer, or use `/receive` and enter its
 path. Uploads reject directories and empty files; verified files become unsent

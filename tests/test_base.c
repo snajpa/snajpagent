@@ -2808,7 +2808,7 @@ test_session_transport(void)
     assert(snag_session_packet_read(pair[1], &received) == 1);
     assert(snag_session_packet_type(&received) == SNAG_SESSION_DETACH);
     /* Legacy status support must not admit old attachment/input frames. */
-    for (unsigned char version = 2u; version <= 3u; ++version) {
+    for (unsigned char version = 2u; version <= 4u; ++version) {
         struct snag_session_packet legacy = sent;
         legacy.bytes[2] = version;
         assert(write(pair[0], legacy.bytes, legacy.used) == (ssize_t)legacy.used);
@@ -3289,7 +3289,7 @@ test_session_terminal(void)
 static void
 test_session_voice_client(void)
 {
-    for (unsigned int trial = 0u; trial < 7u; ++trial) {
+    for (unsigned int trial = 0u; trial < 9u; ++trial) {
         int terminal[2], source[2], target[2];
         assert(snag_session_stream_pair(terminal) == 0);
         assert(snag_session_stream_pair(source) == 0);
@@ -4150,9 +4150,12 @@ test_session_relay(void)
         } else if (trial < 5u) {
             memset(profile + (trial == 4u ? SNAG_TERMINAL_NAME_BYTES : 0u),
                    'x', SNAG_TERMINAL_NAME_BYTES);
-        } else {
+        } else if (trial < 7u) {
             memset(profile, 0, SNAG_TERMINAL_NAME_BYTES);
             if (trial == 6u) memcpy(profile, "dumb", 4u);
+        } else {
+            memset(profile + (trial - 5u) * SNAG_TERMINAL_NAME_BYTES,
+                   'x', SNAG_TERMINAL_NAME_BYTES);
         }
         assert(snag_session_packet_write(client, &packet) == 1);
         relay_wait_event(&relay, &listener, SNAG_SESSION_DETACH);

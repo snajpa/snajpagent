@@ -26,11 +26,11 @@ snag_screen_encode(char *out, size_t capacity, const char *nonce, uint32_t seque
                    unsigned int attempt, const unsigned char *bytes, size_t length)
 {
     if (!out || !nonce || strlen(nonce) != 8u || !bytes || !length ||
-        length > SNAG_SCREEN_CHUNK || attempt > 15u) {
+        length > SNAG_SCREEN_STREAM_CHUNK || attempt > 15u) {
         return snag_errno(EINVAL);
     }
     struct snag_buf encoded;
-    snag_buf_init(&encoded, 4u * (SNAG_SCREEN_CHUNK / 3u) + 1u);
+    snag_buf_init(&encoded, 4u * ((length + 2u) / 3u) + 1u);
     struct snag_base64_stream encoder = {0};
     int rc = -1;
     if (snag_base64_write(&encoder, bytes, length, append_title, &encoded) < 0 ||
@@ -76,11 +76,12 @@ base64_digit(unsigned char c)
 int
 snag_screen_decode(const unsigned char *body, size_t length, const char *nonce,
                    uint32_t *sequence, uint32_t *checksum,
-                   unsigned char bytes[SNAG_SCREEN_CHUNK], size_t *written)
+                   unsigned char *bytes, size_t capacity, size_t *written)
 {
     /* DATA:nonce:sequence:attempt:crc:base64. All fields are fixed-width
      * except the bounded, padded payload. Reject truncated title updates. */
     if (!body || !nonce || !sequence || !checksum || !bytes || !written ||
+        !capacity || capacity > SNAG_SCREEN_STREAM_CHUNK ||
         length < 5u + 8u + 1u + 8u + 1u + 1u + 1u + 8u + 1u + 4u ||
         memcmp(body, "DATA:", 5u) || memcmp(body + 5u, nonce, 8u) ||
         body[13] != ':' || body[22] != ':' || body[24] != ':' || body[33] != ':' ||
@@ -90,9 +91,12 @@ snag_screen_decode(const unsigned char *body, size_t length, const char *nonce,
         return snag_errno(EPROTO);
     }
     size_t size = length - 34u;
-    if (!size || size > 4u * (SNAG_SCREEN_CHUNK / 3u) || size % 4u) {
+    if (!size || size > 4u * ((capacity + 2u) / 3u) || size % 4u) {
         return snag_errno(EPROTO);
     }
+    size_t decoded = size / 4u * 3u - (body[length - 1u] == '=') -
+        (body[length - 2u] == '=');
+    if (decoded > capacity) return snag_errno(EPROTO);
     size_t count = 0u;
     for (size_t i = 34u; i < length; i += 4u) {
         int a = base64_digit(body[i]);

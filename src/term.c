@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "term.h"
 #include "fs.h"
+#include "tmux.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -214,6 +215,7 @@ snag_term_init(struct snag_term *term)
     memset(term, 0, sizeof(*term));
     const char *sty = getenv("STY");
     term->screen = sty && *sty;
+    (void)snag_terminal_profile_capture(&term->backend);
     term->output_fd[0] = term->output_fd[1] = -1;
     snag_buf_init(&term->draft, SNAG_MAX_DIRECT_PROMPT + 1u);
     snag_buf_init(&term->search_label, SNAG_MAX_DIRECT_PROMPT + 64u);
@@ -488,6 +490,15 @@ input_modes(const struct snag_term *term, bool enabled)
     const char *paste = enabled ? "\033[?2004h" : "\033[?2004l";
     if (snag_term_write(STDERR_FILENO, paste, 8u) < 0) return -1;
 #ifndef _WIN32
+    if (term->backend.tmux[0]) {
+        int fd = snag_tmux_output_open(&term->backend, NULL);
+        if (fd >= 0) {
+            const char *mode = enabled ? "\033[?9002h" : "\033[?9002l";
+            (void)write(fd, mode, 8u);
+            (void)close(fd);
+        }
+        return 0;
+    }
     bool screen = term->screen;
     char mode[16];
     int n = snprintf(mode, sizeof(mode), "%s\033[?9002%c%s",
@@ -2317,6 +2328,9 @@ feed_paste(struct snag_term *term, unsigned char byte)
         if (term->paste_end_match == sizeof(end) - 1u) {
             term->paste = false;
             term->paste_end_match = 0u;
+            /* A native input batch defers painting until its last byte. The
+             * paste terminator completes that edit without inserting text. */
+            return redraw(term);
         }
         return 0;
     }

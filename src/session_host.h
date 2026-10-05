@@ -12,7 +12,7 @@
 #define SNAG_SESSION_FRAME_MAX 16384u
 #define SNAG_SESSION_HEADER 8u
 #define SNAG_SESSION_ENDPOINT "terminal.sock"
-#define SNAG_SESSION_COMMIT_BYTES (4u + 2u * SNAG_TERMINAL_NAME_BYTES)
+#define SNAG_SESSION_COMMIT_BYTES (4u + 4u * SNAG_TERMINAL_NAME_BYTES)
 /* Transfer/source UUIDs, two offset/sequence/SHA-256 cursors, source sequence,
  * record count, and requested mode. Integers use explicit little-endian bytes. */
 #define SNAG_SESSION_VOICE_BYTES (16u + 16u + 48u + 48u + 8u + 8u + 1u)
