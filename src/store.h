@@ -388,6 +388,13 @@ int snag_session_commit(struct snag_session *session, const char *type, json_t *
                        char *error, size_t error_size);
 /* One indexed checkpoint record in events.jsonl; never a second session file. */
 int snag_session_checkpoint(struct snag_session *, char *error, size_t error_size);
+/* Capture the existing voice import operation's current durable destination
+ * cursor. Native admission retains its identity/count proof until adoption or
+ * explicit abandonment; copied source-data records remain inert. */
+int snag_session_voice_import_cursor(struct snag_session *session, const char *transfer_id,
+    const char *source_id, uint64_t source_as_of, uint64_t count,
+    struct snag_journal_cursor *out, char *error, size_t error_size);
+void snag_session_voice_import_abandon(struct snag_session *session, const char *transfer_id);
 /* Read owned snapshot documents without replacing current live state.
  * No established checkpoint returns NULL documents; a damaged one fails. */
 int snag_session_checkpoint_read(struct snag_session *, json_t **state, json_t **context,

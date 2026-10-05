@@ -3945,6 +3945,14 @@ clone_session_state(const struct snag_session *source, struct snag_session *stag
            (source->download_queue && !staged->download_queue) ? -1 : 0;
 }
 
+/* Ephemeral proof for the existing single app voice-import operation. Partial
+ * archive bytes outlive this proof and remain inert after abandonment/recovery. */
+struct binary_voice_import {
+    char id[SNAG_ID_HEX_LEN + 1u], source[SNAG_ID_HEX_LEN + 1u];
+    struct snag_journal_cursor begin;
+    uint64_t source_as_of, count, copied;
+};
+
 /* One engine-owned native transaction. The worker owns immutable write bytes;
  * this object owns mutable frontier/provenance and the provisional reducer. */
 struct snag_binary_session {
@@ -3952,6 +3960,7 @@ struct snag_binary_session {
     struct snag_binary_anchor boundary, proposed_boundary;
     struct snag_binary_index_tree tree, proposed_tree;
     struct snag_binary_producer producer, proposed;
+    struct binary_voice_import voice_import, proposed_voice_import;
     struct snag_binary_io *io;
     struct snag_session *candidate;
     char *type;
@@ -3968,6 +3977,49 @@ binary_hex(char *out, const unsigned char *bytes, size_t size)
         out[i * 2u + 1u] = digits[bytes[i] & 15u];
     }
     out[size * 2u] = '\0';
+}
+
+int
+snag_session_voice_import_cursor(struct snag_session *session, const char *transfer_id,
+    const char *source_id, uint64_t source_as_of, uint64_t count,
+    struct snag_journal_cursor *out, char *error, size_t error_size)
+{
+    if (!session || !out || !snag_hex_is_lower(transfer_id, SNAG_ID_HEX_LEN) ||
+        !snag_hex_is_lower(source_id, SNAG_ID_HEX_LEN) || !strcmp(source_id, session->id) ||
+        !count || count > source_as_of || session->log_end <= 0 || session->next_seq < 2u ||
+        !snag_hex_is_lower(session->prev_sha256, SNAG_SHA256_HEX_LEN))
+        return snag_fail(error, error_size, EINVAL, "invalid voice import capture");
+    struct snag_journal_cursor cursor = {.offset = session->log_end,
+        .next_seq = session->next_seq};
+    strcpy(cursor.prev_sha256, session->prev_sha256);
+    struct snag_binary_session *binary = session->binary;
+    if (binary) {
+        if (binary->candidate || binary->faulted || binary->voice_import.id[0])
+            return snag_fail(error, error_size, EBUSY, "native voice import capture is busy");
+        cursor.offset = (int64_t)binary->boundary.end;
+        cursor.next_seq = binary->boundary.next_seq;
+        binary_hex(cursor.prev_sha256, binary->boundary.digest, sizeof(binary->boundary.digest));
+        struct binary_voice_import proof = {.begin = cursor,
+            .source_as_of = source_as_of, .count = count};
+        strcpy(proof.id, transfer_id);
+        strcpy(proof.source, source_id);
+        binary->voice_import = proof;
+    }
+    *out = cursor;
+    return 0;
+}
+
+void
+snag_session_voice_import_abandon(struct snag_session *session, const char *transfer_id)
+{
+    if (!session || !session->binary || !transfer_id) return;
+    struct snag_binary_session *binary = session->binary;
+    if (!strcmp(binary->voice_import.id, transfer_id))
+        binary->voice_import = (struct binary_voice_import){0};
+    /* A retained immutable archive batch is still canonical work, but its ACK
+     * cannot resurrect an abandoned ephemeral import proof. */
+    if (!strcmp(binary->proposed_voice_import.id, transfer_id))
+        binary->proposed_voice_import = (struct binary_voice_import){0};
 }
 
 static bool
@@ -4085,6 +4137,58 @@ snag_session_bind_binary(struct snag_session *session, const struct snag_binary_
 }
 
 static int
+binary_voice_reference(struct snag_binary_session *binary, struct snag_binary_record *record)
+{
+    if (record->kind != SNAG_BINARY_VOICE_TRANSFER_RECORD &&
+        record->kind != SNAG_BINARY_VOICE_TRANSFER_ADOPTED) return 0;
+    struct snag_binary_event event;
+    if (snag_binary_event_decode(record, &event) < 0) return -1;
+    struct binary_voice_import *proof = &binary->proposed_voice_import;
+    char id[SNAG_ID_HEX_LEN + 1u], target[SNAG_ID_HEX_LEN + 1u];
+    char session_id[SNAG_ID_HEX_LEN + 1u];
+    binary_hex(session_id, binary->identity.id, sizeof(binary->identity.id));
+    if (event.kind == SNAG_BINARY_VOICE_TRANSFER_RECORD) {
+        const struct snag_binary_voice_archive *archive = &event.data.voice_transfer_record;
+        binary_hex(id, archive->id, sizeof(archive->id));
+        binary_hex(target, archive->target, sizeof(archive->target));
+        if (proof->id[0] && !strcmp(id, proof->id) && !strcmp(target, session_id)) {
+            if (proof->copied >= proof->count) return snag_errno(EINVAL);
+            ++proof->copied;
+        }
+        /* Other archive copies are still inert source data, with no import
+         * authority and no effect on this operation's accepted record count. */
+        return 0;
+    }
+    struct snag_binary_voice_adopted *value = &event.data.voice_transfer_adopted;
+    char source[SNAG_ID_HEX_LEN + 1u], hash[SNAG_SHA256_HEX_LEN + 1u];
+    binary_hex(id, value->transfer.id, sizeof(value->transfer.id));
+    binary_hex(target, value->transfer.target, sizeof(value->transfer.target));
+    binary_hex(source, value->transfer.source, sizeof(value->transfer.source));
+    binary_hex(hash, value->begin_sha256, sizeof(value->begin_sha256));
+    if (value->native || !proof->id[0] || strcmp(id, proof->id) ||
+        strcmp(target, session_id) || strcmp(source, proof->source) ||
+        value->transfer.source_as_of != proof->source_as_of ||
+        value->transfer.count != proof->count || proof->copied != proof->count ||
+        value->begin_seq != proof->begin.next_seq ||
+        value->begin_offset != (uint64_t)proof->begin.offset ||
+        strcmp(hash, proof->begin.prev_sha256)) return snag_errno(EINVAL);
+    value->native = true;
+    value->begin_offset = 0u;
+    memset(value->begin_sha256, 0, sizeof(value->begin_sha256));
+    struct snag_buf field = {.max = SNAG_MAX_EVENT_LINE};
+    if (snag_binary_event_encode(&field, &event) < 0) {
+        snag_buf_free(&field);
+        return -1;
+    }
+    snag_buf_free(&binary->proposed.field);
+    binary->proposed.field = field;
+    record->payload = field.data;
+    record->size = field.len;
+    *proof = (struct binary_voice_import){0};
+    return 0;
+}
+
+static int
 binary_prepare_candidate(struct snag_session *session, const char *type, json_t *data,
     char *error, size_t error_size)
 {
@@ -4094,6 +4198,7 @@ binary_prepare_candidate(struct snag_session *session, const char *type, json_t 
     binary->candidate = calloc(1u, sizeof(*binary->candidate));
     binary->type = strdup(type);
     binary->data = json_deep_copy(data);
+    binary->proposed_voice_import = binary->voice_import;
     if (!binary->candidate || !binary->type || !binary->data ||
         clone_session_state(session, binary->candidate) < 0 ||
         snag_binary_producer_clone(&binary->proposed, &binary->producer) < 0) goto fail;
@@ -4110,11 +4215,8 @@ binary_prepare_candidate(struct snag_session *session, const char *type, json_t 
     struct snag_binary_record record = {.kind = (uint16_t)kind,
         .version = snag_binary_event_version(kind), .timestamp_ms = candidate->last_time_ms,
         .payload = binary->proposed.field.data, .size = binary->proposed.field.len};
-    /* Voice adoption still needs a proved native start boundary. */
-    if (kind == SNAG_BINARY_VOICE_TRANSFER_ADOPTED) {
-        errno = ENOTSUP;
-        goto fail;
-    }
+    stage = "voice import boundary";
+    if (binary_voice_reference(binary, &record) < 0) goto fail;
     stage = "result range";
     if (snag_binary_producer_live_result(&binary->proposed, session, &record) < 0) goto fail;
     stage = "working references";
@@ -4203,6 +4305,7 @@ commit_binary_session(struct snag_session *session, const char *type, json_t *da
     binary->tree = next;
     snag_binary_producer_free(&binary->producer);
     binary->producer = binary->proposed;
+    binary->voice_import = binary->proposed_voice_import;
     binary->proposed = (struct snag_binary_producer){0};
     free_session_state(session);
     *session = *candidate;

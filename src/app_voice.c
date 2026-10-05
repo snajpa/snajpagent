@@ -1957,7 +1957,7 @@ struct app_voice_import {
     struct snag_secret_set secrets;
     uint64_t records, attachment;
     unsigned int mode;
-    bool sealed, verified;
+    bool sealed, verified, captured;
 };
 
 struct app_voice_switch {
@@ -1975,6 +1975,8 @@ snag_app_voice_import_close(struct app_state *app)
 {
     struct app_voice_import *import = app->voice_import;
     if (!import) return;
+    if (import->captured)
+        snag_session_voice_import_abandon(&app->session, import->archive.transfer_id);
     snag_session_close(&import->source);
     snag_secret_set_free(&import->secrets);
     free(import);
@@ -2011,7 +2013,13 @@ snag_app_voice_import_begin(struct app_state *app, const struct snag_voice_archi
         snag_app_voice_import_close(app);
         return -1;
     }
-    import->begin = voice_journal_tail(&app->session);
+    if (snag_session_voice_import_cursor(&app->session, archive->transfer_id,
+        archive->source_id, archive->source_seq, archive->records, &import->begin,
+        error, size) < 0) {
+        snag_app_voice_import_close(app);
+        return -1;
+    }
+    import->captured = true;
     return 0;
 }
 

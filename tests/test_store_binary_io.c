@@ -682,6 +682,182 @@ test_native_result_retry(void)
     snag_session_close(&session);
 }
 
+static json_t *
+native_voice_record(const struct snag_session *session)
+{
+    /* The offered archive can contain observations originating in an older
+     * source session. Its enclosed goal is data, never a destination goal. */
+    return json_pack("{s:s,s:s,s:s,s:i,s:s,s:{s:s,s:s}}",
+        "transfer_id", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "target_session_id", session->id,
+        "source_session_id", "dddddddddddddddddddddddddddddddd", "source_seq", 1,
+        "source_type", "goal_started", "data",
+        "goal_id", "cccccccccccccccccccccccccccccccc", "prompt", "inert archived goal");
+}
+
+static json_t *
+native_voice_adoption(const struct snag_session *session, const struct snag_journal_cursor *begin,
+    uint64_t count)
+{
+    return json_pack("{s:s,s:s,s:s,s:i,s:I,s:I,s:s,s:I}",
+        "transfer_id", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "target_session_id", session->id,
+        "source_session_id", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "source_as_of_seq", 2,
+        "begin_offset", (json_int_t)begin->offset, "begin_seq", (json_int_t)begin->next_seq,
+        "begin_sha256", begin->prev_sha256, "count", (json_int_t)count);
+}
+
+static void
+test_native_voice_import(unsigned int variant)
+{
+    struct snag_session session;
+    struct probe probe = {0};
+    native_fixture(&session, &probe);
+    const char *id = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const char *source = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    struct snag_journal_cursor begin = {.offset = session.log_end, .next_seq = session.next_seq};
+    strcpy(begin.prev_sha256, session.prev_sha256);
+    char error[256];
+    uint64_t count = variant == 7u ? 2u : 1u;
+    struct snag_journal_cursor canary = {.offset = -42, .next_seq = 99u}, saved = canary;
+    assert(snag_session_voice_import_cursor(&session, id, session.id, 2u, 1u,
+        &canary, error, sizeof(error)) < 0 && errno == EINVAL);
+    assert(!memcmp(&canary, &saved, sizeof(canary)));
+    if (variant != 5u) {
+        assert(!snag_session_voice_import_cursor(&session, id, source, 2u, count,
+            &begin, error, sizeof(error)));
+        assert(begin.offset == session.log_end && begin.next_seq == session.next_seq &&
+            !strcmp(begin.prev_sha256, session.prev_sha256));
+        assert(snag_session_voice_import_cursor(&session, id, source, 2u, count,
+            &canary, error, sizeof(error)) < 0 && errno == EBUSY);
+        assert(!memcmp(&canary, &saved, sizeof(canary)));
+    }
+    assert(!snag_session_commit(&session, "banner_updated", json_pack("{s:s}",
+        "text", "destination continues"), NULL, error, sizeof(error)));
+    /* The captured start stays before intervening ordinary metadata. */
+    if (variant == 1u || variant == 4u) probe.sync_failures = 1u;
+    if (variant == 2u) probe.partial_failures = 1u;
+    json_t *record = native_voice_record(&session);
+    assert(record);
+    if (variant == 1u || variant == 2u || variant == 4u) {
+        int64_t end = session.log_end;
+        assert(snag_session_commit(&session, "voice_transfer_record", json_incref(record),
+            NULL, error, sizeof(error)) < 0 && errno == EIO);
+        assert(session.next_seq == 3u && session.log_end == end &&
+            !session.voice_history.adopted_seq && !session.goal_id[0] &&
+            atomic_load(&probe.effects) == 2u);
+        if (variant == 4u) snag_session_voice_import_abandon(&session, id);
+    }
+    assert(!snag_session_commit(&session, "voice_transfer_record", record,
+        NULL, error, sizeof(error)));
+    assert(session.next_seq == 4u && !session.goal_id[0] && !session.active_turn &&
+        !session.pending_queue_count && !session.voice_history.adopted_seq &&
+        atomic_load(&probe.effects) == 3u);
+    if (variant == 6u) {
+        /* An old close must not discard another operation's capture. */
+        snag_session_voice_import_abandon(&session, "cccccccccccccccccccccccccccccccc");
+    }
+    size_t writes = probe.writes, syncs = probe.syncs;
+    int64_t before_end = session.log_end;
+    if (variant == 4u || variant == 5u || variant == 7u) {
+        assert(snag_session_commit(&session, "voice_transfer_adopted",
+            native_voice_adoption(&session, &begin, count), NULL,
+            error, sizeof(error)) < 0 && errno == EINVAL);
+        assert(probe.writes == writes && probe.syncs == syncs &&
+            session.next_seq == 4u && session.log_end == before_end &&
+            !session.voice_history.adopted_seq && atomic_load(&probe.effects) == 3u);
+        snag_session_voice_import_abandon(&session, id);
+        /* Abandoned/unregistered archive bytes stay inert; a fresh operation
+         * starts at the current ACK instead of acquiring an old prefix. */
+        assert(!snag_session_voice_import_cursor(&session, id, source, 2u, 1u,
+            &canary, error, sizeof(error)));
+        assert(canary.next_seq == 4u && canary.offset == session.log_end);
+        snag_session_voice_import_abandon(&session, id);
+        snag_session_close(&session);
+        return;
+    }
+    for (unsigned int bad = 0u; bad < 8u; ++bad) {
+        json_t *data = native_voice_adoption(&session, &begin, count);
+        assert(data);
+        const char *field = NULL;
+        json_t *replacement = NULL;
+        switch (bad) {
+        case 0u:
+            field = "transfer_id";
+            replacement = json_string("cccccccccccccccccccccccccccccccc");
+            break;
+        case 1u:
+            field = "source_session_id";
+            replacement = json_string("cccccccccccccccccccccccccccccccc");
+            break;
+        case 2u:
+            field = "target_session_id";
+            replacement = json_string("cccccccccccccccccccccccccccccccc");
+            break;
+        case 3u:
+            field = "source_as_of_seq";
+            replacement = json_integer(3);
+            break;
+        case 4u:
+            field = "count";
+            replacement = json_integer(2);
+            break;
+        case 5u:
+            field = "begin_offset";
+            replacement = json_integer((json_int_t)begin.offset + 1);
+            break;
+        case 6u:
+            field = "begin_seq";
+            replacement = json_integer((json_int_t)begin.next_seq + 1);
+            break;
+        case 7u:
+            field = "begin_sha256";
+            replacement = json_string(
+                "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");
+            break;
+        }
+        assert(field && replacement && !snag_json_set_new(data, field, replacement));
+        assert(snag_session_commit(&session, "voice_transfer_adopted", data,
+            NULL, error, sizeof(error)) < 0 && errno == EINVAL);
+        assert(probe.writes == writes && probe.syncs == syncs &&
+            session.next_seq == 4u && session.log_end == before_end &&
+            !session.voice_history.adopted_seq && atomic_load(&probe.effects) == 3u);
+    }
+    if (variant == 3u) {
+        probe.sync_failures = 1u;
+        assert(snag_session_commit(&session, "voice_transfer_adopted",
+            native_voice_adoption(&session, &begin, count), NULL,
+            error, sizeof(error)) < 0 && errno == EIO);
+        assert(session.next_seq == 4u && session.log_end == before_end &&
+            !session.voice_history.adopted_seq && atomic_load(&probe.effects) == 3u);
+    }
+    assert(!snag_session_commit(&session, "voice_transfer_adopted",
+        native_voice_adoption(&session, &begin, count), NULL, error, sizeof(error)));
+    assert(session.next_seq == 5u && session.voice_history.adopted_seq == 4u &&
+        !strcmp(session.voice_history.transfer_id, id) &&
+        session.voice_history.begin.offset == begin.offset &&
+        session.voice_history.begin.next_seq == begin.next_seq &&
+        !strcmp(session.voice_history.begin.prev_sha256, begin.prev_sha256) &&
+        !session.goal_id[0] && !session.active_turn && atomic_load(&probe.effects) == 4u);
+    struct snag_session restored;
+    snag_session_init(&restored);
+    struct snag_binary_recovery recovery;
+    struct snag_binary_checkpoint_sources sources = {0};
+    assert(!snag_store_reconcile_binary(&session, &restored, NULL, NULL,
+        &recovery, &sources, error, sizeof(error)));
+    assert(restored.voice_history.adopted_seq == 4u &&
+        !strcmp(restored.voice_history.transfer_id, id) &&
+        restored.voice_history.begin.offset == begin.offset &&
+        restored.voice_history.begin.next_seq == begin.next_seq &&
+        !strcmp(restored.voice_history.begin.prev_sha256, begin.prev_sha256) &&
+        !restored.goal_id[0] && !restored.active_turn && !restored.pending_queue_count);
+    snag_binary_checkpoint_sources_free(&sources);
+    snag_session_close(&restored);
+    assert(!snag_session_voice_import_cursor(&session, id, source, 2u, 1u,
+        &canary, error, sizeof(error)));
+    assert(canary.next_seq == 5u && canary.offset == session.log_end);
+    snag_session_voice_import_abandon(&session, id);
+    snag_session_close(&session);
+}
+
 static void
 test_native_clone_failure(void)
 {
@@ -715,6 +891,8 @@ test_store_binary_io(void)
     test_native_session_retry(false, 2u);
     test_native_clone_failure();
     test_native_result_retry();
+    for (unsigned int variant = 0u; variant < 8u; ++variant)
+        test_native_voice_import(variant);
     test_group_ack();
     test_failed_commit(true, 1u);
     test_failed_commit(false, 1u);

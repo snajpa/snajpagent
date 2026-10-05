@@ -2748,8 +2748,7 @@ frontier membership and complete working provenance under an exclusive lock. The
 constructor checks represented state/cursor geometry and the journal header/EOF;
 these checks do not supply the caller's semantic or membership proof. Existing
 JSONL sessions keep their original commit path. Default creation/open/resume
-selection and native checkpoint publication are still to be connected. Native
-voice-adoption still requires its proved live start boundary. Referenced tool
+selection and native checkpoint publication are still to be connected. Referenced tool
 and process results use the committed process scan cursor for their first native
 sequence and the current acknowledged boundary for their exclusive end. The
 literal saved offsets must match those captured cursors; stale endpoints fail
@@ -2758,3 +2757,24 @@ presentation fields unchanged. A result with no recorded log hint keeps both
 native endpoints zero. The backend binder's caller must supply native process
 scan cursors established by its engine or recovery, rather than legacy offsets
 with guessed ordinals. Converter-only legacy coordinate lookup stays separate.
+
+The existing voice-import operation captures its destination start through the
+session owner after source-history open and destination persistence. A bound
+native owner supplies its acknowledged batch boundary, preserving the exact
+logical sequence, physical offset and predecessor digest for admission. Its
+ephemeral proof retains the transfer identity, offered source session/as-of
+sequence and expected record count. The producer stages the count of matching
+destination archive records with each transaction; only durability ACK adopts
+that count. Intervening ordinary metadata leaves the captured start unchanged.
+Copied observations may themselves originate in older source sessions.
+
+Voice adoption must match the entire captured tuple and offered identity/count,
+with all expected archive records acknowledged. The writer then emits the native
+sequence reference; recovery derives its physical cursor from the authenticated
+containing batch. Adoption and its observer remain durability-gated. Abandonment
+clears the operation's ephemeral proof, including any retained archive candidate's
+copy proof, so a later ACK cannot recreate import authority. Existing canonical
+archive bytes remain inert observations. Recovery does not implicitly resume an
+unfinished import; a fresh operation captures the current destination boundary.
+The app's source-history walker and normal session lifecycle remain JSONL until
+their native reader/backend integration is completed.
