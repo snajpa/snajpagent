@@ -62,6 +62,24 @@ int snag_store_resume_pinned_binary_context_checkpoint(struct snag_session *sour
     struct snag_binary_checkpoint_sources *sources, const struct snag_context_control *control,
     char *error, size_t error_size);
 
+/* Read-only admission from the actual physical tail and two caller-owned image
+ * descriptors (-1 absent). floor is the independently set oldest eligible capture
+ * offset, not cache-supplied; receipt/ancestry work stays in that window plus one
+ * predecessor. Probe footer keys, authenticate both canonical receipts and select
+ * their latest ordinal, then read exactly its pinned image and jointly restore
+ * through the discovered tail. A damaged/unsupported selected image fails; no
+ * implicit lifetime scan, older-state adoption, rewrite or truncation follows.
+ * Optional available[slot] supplements that capture under the independent proof
+ * contract above. Caller owns immutable source/images and exclusive writer lock.
+ * Success atomically installs state-only core/origins/provider; recovery counts
+ * only suffix batches and reports physical open-tail bytes without repair authority.
+ * Missing image/pin is ENOENT. Failure preserves all initialized output owners. */
+int snag_store_admit_binary_context_checkpoint(struct snag_session *source,
+    struct snag_session *restored, const int images[2], uint64_t floor,
+    const struct snag_binary_checkpoint_index *const available[2],
+    struct snag_binary_recovery *recovery, struct snag_binary_checkpoint_sources *sources,
+    const struct snag_context_control *control, char *error, size_t error_size);
+
 /* Slow independent checkpoint verifier. Strict replay establishes prefix authority;
  * both decoded frame sections must equal the canonical core and provider recipe
  * at that boundary. All source-recheck/atomic adoption rules above apply. Success

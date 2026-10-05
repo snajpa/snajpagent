@@ -372,11 +372,11 @@ done:
     return rc;
 }
 
-int
-snag_store_resume_pinned_binary_context_checkpoint(struct snag_session *source,
-    struct snag_session *restored, const struct snag_binary_checkpoint_frame *frame,
+static int
+resume_pinned(struct snag_session *source, struct snag_session *restored,
+    const struct snag_binary_checkpoint_frame *frame,
     const struct snag_binary_checkpoint_receipt *receipt, const struct snag_binary_anchor *stop,
-    const struct snag_binary_checkpoint_index *available,
+    const struct snag_binary_checkpoint_index *available, struct snag_binary_recovery *recovered,
     struct snag_binary_checkpoint_sources *sources, const struct snag_context_control *control,
     char *error, size_t error_size)
 {
@@ -438,11 +438,109 @@ snag_store_resume_pinned_binary_context_checkpoint(struct snag_session *source,
         *sources = origins;
         origins = (struct snag_binary_checkpoint_sources){0};
     }
+    if (recovered) *recovered = recovery;
     rc = 0;
 done:
     snag_session_close(&candidate);
     snag_binary_checkpoint_sources_free(&origins);
     snag_context_capture_free(capture);
+    return rc;
+}
+
+int
+snag_store_resume_pinned_binary_context_checkpoint(struct snag_session *source,
+    struct snag_session *restored, const struct snag_binary_checkpoint_frame *frame,
+    const struct snag_binary_checkpoint_receipt *receipt, const struct snag_binary_anchor *stop,
+    const struct snag_binary_checkpoint_index *available,
+    struct snag_binary_checkpoint_sources *sources, const struct snag_context_control *control,
+    char *error, size_t error_size)
+{
+    return resume_pinned(source, restored, frame, receipt, stop, available, NULL,
+        sources, control, error, error_size);
+}
+
+int
+snag_store_admit_binary_context_checkpoint(struct snag_session *source,
+    struct snag_session *restored, const int images[2], uint64_t floor,
+    const struct snag_binary_checkpoint_index *const available[2],
+    struct snag_binary_recovery *recovery, struct snag_binary_checkpoint_sources *sources,
+    const struct snag_context_control *control, char *error, size_t error_size)
+{
+    if (!source || !restored || source == restored || !images || !recovery ||
+        images[0] < -1 || images[1] < -1 || source->log_fd < 0 || source->lock_fd < 0 ||
+        source->pending_log ||
+        restored->dir_fd >= 0 || restored->log_fd >= 0 || restored->lock_fd >= 0 ||
+        restored->pending_log || floor < SNAG_BINARY_HEADER_SIZE) {
+        return snag_fail(error, error_size, EINVAL, "invalid native checkpoint admission");
+    }
+    snag_file_info before;
+    if (snag_fstat(source->log_fd, &before) < 0) return -1;
+    struct snag_binary_identity identity;
+    struct snag_binary_recovery found = {0};
+    struct snag_buf scratch = {.max = SNAG_BINARY_BATCH_MAX};
+    struct snag_buf image = {.max = SIZE_MAX};
+    struct snag_session candidate;
+    snag_session_init(&candidate);
+    struct snag_binary_checkpoint_sources origins = {0};
+    int rc = -1;
+    if (checkpoint_cancelled(control, error, error_size) < 0 ||
+        snag_binary_journal_tail(source->log_fd, before.st_size, &scratch,
+            &identity, &found.verified, &found.incomplete_tail_bytes) < 0 ||
+        checkpoint_cancelled(control, error, error_size) < 0) goto done;
+    if (floor > found.verified.end) {
+        snag_fail(error, error_size, EINVAL, "native receipt window beyond committed tail");
+        goto done;
+    }
+    unsigned char hashes[2][32];
+    const unsigned char *keys[2] = {NULL, NULL};
+    for (size_t i = 0u; i < 2u; ++i) {
+        if (checkpoint_cancelled(control, error, error_size) < 0) goto done;
+        if (images[i] < 0) continue;
+        if (snag_binary_checkpoint_image_probe(images[i], hashes[i]) < 0) goto done;
+        keys[i] = hashes[i];
+    }
+    struct snag_binary_checkpoint_receipt receipts[2];
+    uint64_t sequences[2] = {0};
+    int pinned = snag_binary_checkpoint_receipts_find(source->log_fd, &found.verified,
+        floor, keys, &scratch, receipts, sequences, control ? control->cancelled : NULL,
+        control ? control->opaque : NULL);
+    if (pinned < 0) goto done;
+    if (!pinned) {
+        snag_fail(error, error_size, ENOENT, "no canonical checkpoint in native receipt window");
+        goto done;
+    }
+    size_t slot = (pinned & 1) ? 0u : 1u;
+    if ((pinned & 3) == 3 && sequences[1] > sequences[0]) slot = 1u;
+    struct snag_binary_checkpoint_frame frame;
+    struct snag_binary_recovery suffix = {0};
+    if (snag_binary_checkpoint_image_read(images[slot], &identity, &receipts[slot], &image,
+            &frame, control ? control->cancelled : NULL, control ? control->opaque : NULL) < 0 ||
+        resume_pinned(source, &candidate, &frame, &receipts[slot], &found.verified,
+            available ? available[slot] : NULL, &suffix, &origins,
+            control, error, error_size) < 0 ||
+        checkpoint_cancelled(control, error, error_size) < 0) goto done;
+    snag_file_info after;
+    if (snag_fstat(source->log_fd, &after) < 0) goto done;
+    if (!snag_file_unchanged(&before, &after)) {
+        snag_fail(error, error_size, EAGAIN, "native source changed during checkpoint admission");
+        goto done;
+    }
+    found.batches = suffix.batches;
+    snag_session_close(restored);
+    *restored = candidate;
+    snag_session_init(&candidate);
+    if (sources) {
+        snag_binary_checkpoint_sources_free(sources);
+        *sources = origins;
+        origins = (struct snag_binary_checkpoint_sources){0};
+    }
+    *recovery = found;
+    rc = 0;
+done:
+    snag_session_close(&candidate);
+    snag_binary_checkpoint_sources_free(&origins);
+    snag_buf_free(&scratch);
+    snag_buf_free(&image);
     return rc;
 }
 

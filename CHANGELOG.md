@@ -3,6 +3,10 @@
 # Changelog
 
 ## Unreleased
+- Admit native checkpoints from the discovered physical tail, canonical receipt
+  order and receipt-bounded images through joint state-only suffix restoration.
+  Preserve output owners on failure and report open-tail bytes without repair.
+  Application backend integration and live closure maintenance remain pending.
 - Expose verified canonical receipt ordinals for native checkpoint-slot selection;
   cross-slot recency follows journal order rather than image generation claims.
 - Retain canonical IRC admission sources and their next-row lookup discriminators

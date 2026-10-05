@@ -2008,7 +2008,8 @@ checkpoint's current working set, such as earlier output from an unsettled
 process. Those locations require independently proved membership before use;
 missing locations fail instead of triggering a lifetime scan. The existing
 full-suffix adapter retains table-free lookup for explicit repair/oracles.
-Current historical lookup and joint bounded application admission remain pending.
+Current historical lookup is available in the joint state-only consumer; application
+admission and live closure maintenance remain pending.
 
 ### Indexed pending-input materialization
 
@@ -2127,8 +2128,29 @@ reads no index, changes no descriptor position and writes no bytes. It can leave
 unrelated older prefix damage uninspected; image/section/frontier decoding and
 canonical reference materialization remain separate admission obligations.
 
-These codecs, receipt search and publication digest results are test-linked.
-Runtime receipt submission and checkpoint admission remain pending. The
+### Read-only bounded checkpoint admission
+
+The internal admission transaction discovers the actual committed physical tail,
+probes the two borrowed image descriptors for lookup keys, authenticates their
+matching receipts and capture ancestry, and selects the later canonical receipt
+ordinal. It reads only that receipt-bounded image, materializes core/provider state,
+reduces the exact suffix and reconstructs current historical lookup before adoption.
+A caller-set oldest eligible capture offset bounds receipt and ancestry work;
+cache fields never choose that window. Selected image corruption or unsupported
+sections fail without substituting the older slot or scanning lifetime history.
+Missing images or eligible pins return ENOENT. Probe/read errors remain errors.
+
+Source locking, immutable image/source ownership, complete producer closure and
+independently proved supplementary old locations remain caller prerequisites.
+The recovery result counts only reduced suffix batches and reports incomplete
+physical-tail bytes. This state-only consumer never truncates or rewrites them.
+Core state, origin arrays, provider capture and recovery are adopted together after
+final cancellation and source-stamp validation; failed outputs retain their owners.
+Required old locations outside the supplied closure remain unavailable. Separate
+explicit repair still owns full-prefix interpretation and any tail correction.
+
+These codecs, admission and publication digest results are test-linked.
+Runtime receipt submission and application checkpoint admission remain pending. The
 publisher's file/directory ACK currently proves durable file replacement; it does
 not yet establish a receipt-backed checkpoint generation. Missing index bytes
 must remain independent of this protocol's canonical durability barriers.

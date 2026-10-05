@@ -495,6 +495,255 @@ uninspected_materialization(struct snag_session *source, struct snag_session *ex
     ++direct_uninspected;
 }
 
+static unsigned int admitted_compared;
+static unsigned int admitted_rejected;
+static unsigned int admitted_ordered;
+
+static int
+admission_image(const struct snag_buf *image)
+{
+    char *path = snag_path_join(getenv("TMPDIR") ? getenv("TMPDIR") : "/tmp",
+        "snag-admit-image-XXXXXX");
+    assert(path);
+    int fd = mkstemp(path);
+    assert(fd >= 0 && !unlink(path));
+    free(path);
+    assert(!snag_write_full(fd, image->data, image->len));
+    return fd;
+}
+
+static void
+reject_admission(struct snag_session *source, const int images[2], uint64_t floor,
+    const struct snag_context_control *control, int expected_errno)
+{
+    struct snag_session target;
+    snag_session_init(&target);
+    target.strings = json_pack("{s:s}", "keep", "old owner");
+    assert(target.strings);
+    struct snag_session saved;
+    memcpy(&saved, &target, sizeof(saved));
+    struct snag_binary_checkpoint_sources origins = {.response_start = 1234u};
+    struct snag_binary_checkpoint_sources old_origins;
+    memcpy(&old_origins, &origins, sizeof(origins));
+    struct snag_binary_recovery recovery;
+    struct snag_binary_recovery previous;
+    memset(&recovery, 0x5a, sizeof(recovery));
+    memcpy(&previous, &recovery, sizeof(previous));
+    int64_t position = snag_seek(source->log_fd, 0, SEEK_CUR);
+    int64_t image_positions[2] = {-1, -1};
+    for (size_t i = 0u; i < 2u; ++i)
+        if (images[i] >= 0) image_positions[i] = snag_seek(images[i], 0, SEEK_CUR);
+    char error[128] = {0};
+    errno = 0;
+    int rc = snag_store_admit_binary_context_checkpoint(source, &target, images, floor,
+        NULL, &recovery, &origins, control, error, sizeof(error));
+    if (rc >= 0 || errno != expected_errno)
+        fprintf(stderr, "admission rejection: rc=%d errno=%d expected=%d %s\n",
+            rc, errno, expected_errno, error);
+    assert(rc < 0 && errno == expected_errno);
+    assert(!memcmp(&target, &saved, sizeof(target)) &&
+        !memcmp(&origins, &old_origins, sizeof(origins)) &&
+        !memcmp(&recovery, &previous, sizeof(recovery)));
+    assert(!strcmp(snag_json_string(target.strings, "keep"), "old owner"));
+    assert(snag_seek(source->log_fd, 0, SEEK_CUR) == position);
+    for (size_t i = 0u; i < 2u; ++i)
+        if (images[i] >= 0) assert(snag_seek(images[i], 0, SEEK_CUR) == image_positions[i]);
+    snag_session_close(&target);
+    ++admitted_rejected;
+}
+
+static void
+admission_result(struct snag_session *source, struct snag_session *expected,
+    const struct snag_binary_checkpoint_sources *wanted, const int images[2], uint64_t floor,
+    uint64_t batches, uint64_t incomplete, const struct snag_context_control *control)
+{
+    struct snag_session restored;
+    snag_session_init(&restored);
+    struct snag_binary_recovery recovered = {0};
+    struct snag_binary_checkpoint_sources got = {0};
+    char error[128] = {0};
+    int64_t position = snag_seek(source->log_fd, 0, SEEK_CUR);
+    snag_file_info before;
+    assert(!snag_fstat(source->log_fd, &before));
+    int64_t image_positions[2] = {-1, -1};
+    for (size_t i = 0u; i < 2u; ++i)
+        if (images[i] >= 0) image_positions[i] = snag_seek(images[i], 0, SEEK_CUR);
+    int rc = snag_store_admit_binary_context_checkpoint(source, &restored, images, floor,
+        NULL, &recovered, &got, control, error, sizeof(error));
+    if (rc < 0) fprintf(stderr, "native checkpoint admission: %s (%d)\n", error, errno);
+    assert(!rc && recovered.verified.end == (uint64_t)expected->log_end &&
+        recovered.verified.next_seq == expected->next_seq && recovered.batches == batches &&
+        recovered.incomplete_tail_bytes == incomplete &&
+        snag_seek(source->log_fd, 0, SEEK_CUR) == position);
+    assert(restored.dir_fd < 0 && restored.log_fd < 0 && restored.lock_fd < 0 &&
+        !restored.pending_log);
+    snag_file_info after;
+    assert(!snag_fstat(source->log_fd, &after) && snag_file_unchanged(&before, &after));
+    for (size_t i = 0u; i < 2u; ++i)
+        if (images[i] >= 0) assert(snag_seek(images[i], 0, SEEK_CUR) == image_positions[i]);
+    same_cache(expected, &restored, false);
+    struct snag_buf left = {.max = SIZE_MAX};
+    struct snag_buf right = {.max = SIZE_MAX};
+    assert(!snag_binary_checkpoint_core_encode(&left, wanted, expected));
+    assert(!snag_binary_checkpoint_core_encode(&right, &got, &restored));
+    assert(left.len == right.len && !memcmp(left.data, right.data, left.len));
+    snag_session_close(&restored);
+    snag_binary_checkpoint_sources_free(&got);
+    snag_buf_free(&left);
+    snag_buf_free(&right);
+}
+
+static void
+append_admission_receipt(struct snag_session *source, struct snag_binary_anchor *stop,
+    const struct snag_binary_checkpoint_receipt *receipt, uint64_t timestamp)
+{
+    struct snag_buf payload = {.max = SIZE_MAX};
+    struct snag_buf wire = {.max = SNAG_BINARY_BATCH_MAX};
+    assert(!snag_binary_checkpoint_receipt_encode(&payload, receipt));
+    struct snag_binary_record record = {.kind = SNAG_BINARY_CHECKPOINT_RECEIPT,
+        .version = SNAG_BINARY_CHECKPOINT_RECEIPT_VERSION, .flags = SNAG_BINARY_RECORD_OPTIONAL,
+        .timestamp_ms = timestamp, .payload = payload.data, .size = payload.len};
+    struct snag_binary_anchor after;
+    assert(!binary_fixture_append(&wire, stop, &record, 1u, stop->turns, &after));
+    int64_t position = snag_seek(source->log_fd, 0, SEEK_CUR);
+    assert(snag_seek(source->log_fd, (int64_t)stop->end, SEEK_SET) >= 0);
+    assert(!snag_write_full(source->log_fd, wire.data, wire.len));
+    assert(snag_seek(source->log_fd, position, SEEK_SET) == position);
+    *stop = after;
+    snag_buf_free(&payload);
+    snag_buf_free(&wire);
+}
+
+static void
+admission_edges(struct snag_session *source, struct snag_session *expected,
+    struct snag_binary_checkpoint_sources *wanted, const struct snag_binary_checkpoint_frame *frame,
+    const struct snag_binary_checkpoint_receipt *receipt, int fd,
+    const struct snag_binary_anchor *first)
+{
+    int images[2] = {fd, -1};
+    int absent[2] = {-1, -1};
+    int invalid[2] = {-2, fd};
+    uint64_t floor = frame->boundary.end;
+    reject_admission(source, absent, floor, NULL, ENOENT);
+    reject_admission(source, invalid, floor, NULL, EINVAL);
+    reject_admission(source, images, SNAG_BINARY_HEADER_SIZE - 1u, NULL, EINVAL);
+    reject_admission(source, images, first->end + 1u, NULL, EINVAL);
+    reject_admission(source, images, first->end, NULL, ENOENT);
+    unsigned char byte;
+    int64_t offset = SNAG_BINARY_CHECKPOINT_HEADER_SIZE + 1;
+    assert(snag_pread(fd, &byte, 1u, offset) == 1);
+    write_source_byte(fd, offset, byte ^ 1u);
+    reject_admission(source, images, floor, NULL, EINVAL);
+    write_source_byte(fd, offset, byte);
+    struct provider_cancel cancel = {0};
+    struct snag_context_control control = {.cancelled = cancel_provider, .opaque = &cancel};
+    admission_result(source, expected, wanted, images, floor, 1u, 0u, &control);
+    size_t calls = cancel.calls;
+    assert(calls);
+    for (size_t i = 1u; i <= calls; ++i) {
+        cancel = (struct provider_cancel){.fail_at = i};
+        reject_admission(source, images, floor, &control, ECANCELED);
+    }
+    for (unsigned int kind = 0u; kind < 3u; ++kind) {
+        struct direct_mutation mutation = {.cancel = {.fail_at = calls},
+            .fd = source->log_fd, .kind = kind, .size = (int64_t)first->end};
+        assert(snag_pread(source->log_fd, &mutation.first, 1u, 0) == 1);
+        assert(snag_pread(source->log_fd, &mutation.last, 1u, mutation.size - 1) == 1);
+        struct snag_context_control changing = {.cancelled = mutate_materialization,
+            .opaque = &mutation};
+        reject_admission(source, images, floor, &changing, EAGAIN);
+        assert(mutation.changed);
+        if (!kind) write_source_byte(source->log_fd, 0, mutation.first);
+        else if (kind == 1u) assert(!snag_truncate(source->log_fd, mutation.size));
+        else write_source_byte(source->log_fd, mutation.size - 1, mutation.last);
+    }
+    int64_t position = snag_seek(source->log_fd, 0, SEEK_CUR);
+    assert(snag_seek(source->log_fd, (int64_t)first->end, SEEK_SET) >= 0);
+    assert(!snag_write_full(source->log_fd, "abc", 3u));
+    assert(snag_seek(source->log_fd, position, SEEK_SET) == position);
+    admission_result(source, expected, wanted, images, floor, 1u, 3u, NULL);
+    snag_file_info physical;
+    assert(!snag_fstat(source->log_fd, &physical) &&
+        (uint64_t)physical.st_size == first->end + 3u);
+    assert(!snag_truncate(source->log_fd, (int64_t)first->end));
+    write_source_byte(source->log_fd, (int64_t)first->end, 0u);
+    reject_admission(source, images, floor, NULL, EINVAL);
+    assert(!snag_truncate(source->log_fd, (int64_t)first->end));
+    struct snag_binary_checkpoint_frame older = *frame;
+    ++older.generation;
+    struct snag_binary_checkpoint_receipt old_receipt;
+    struct snag_buf old_image = {.max = SIZE_MAX};
+    seal_checkpoint(&older, &old_receipt, receipt->index_root, &old_image);
+    int old_fd = admission_image(&old_image);
+    struct snag_binary_anchor stop = *first;
+    append_admission_receipt(source, &stop, &old_receipt, expected->last_time_ms);
+    append_admission_receipt(source, &stop, receipt, expected->last_time_ms);
+    struct snag_binary_recovery oracle = {0};
+    char error[128] = {0};
+    assert(!snag_store_reconcile_binary_context(source, expected, &oracle, wanted,
+        NULL, error, sizeof(error)));
+    assert(snag_pread(old_fd, &byte, 1u, offset) == 1);
+    write_source_byte(old_fd, offset, byte ^ 1u);
+    images[1] = old_fd;
+    admission_result(source, expected, wanted, images, floor, 3u, 0u, NULL);
+    int reversed[2] = {old_fd, fd};
+    int duplicate[2] = {fd, fd};
+    admission_result(source, expected, wanted, reversed, floor, 3u, 0u, NULL);
+    admission_result(source, expected, wanted, duplicate, floor, 3u, 0u, NULL);
+    admitted_ordered += 3u;
+    for (size_t i = 0u; i < 4u; ++i) {
+        struct snag_binary_checkpoint_frame unsupported = *frame;
+        if (!i) ++unsupported.core.version;
+        else if (i == 1u) ++unsupported.provider.version;
+        else if (i == 2u) ++unsupported.access.version;
+        else unsupported.access = (struct snag_binary_checkpoint_section){0};
+        struct snag_binary_checkpoint_receipt unavailable_receipt;
+        struct snag_buf unavailable_image = {.max = SIZE_MAX};
+        seal_checkpoint(&unsupported, &unavailable_receipt, receipt->index_root,
+            &unavailable_image);
+        int unavailable = admission_image(&unavailable_image);
+        append_admission_receipt(source, &stop, &unavailable_receipt, expected->last_time_ms);
+        int newest[2] = {fd, unavailable};
+        reject_admission(source, newest, floor, NULL, ENOTSUP);
+        assert(!close(unavailable));
+        snag_buf_free(&unavailable_image);
+    }
+    assert(!snag_truncate(source->log_fd, (int64_t)first->end));
+    assert(!close(old_fd));
+    snag_buf_free(&old_image);
+}
+
+static void
+admission_matches(struct snag_session *source, const struct snag_session *prefix,
+    const struct snag_binary_checkpoint_frame *frame,
+    const struct snag_binary_checkpoint_receipt *receipt, const struct snag_buf *image)
+{
+    int fd = admission_image(image);
+    int images[2] = {fd, -1};
+    snag_file_info before;
+    assert(!snag_fstat(source->log_fd, &before) && before.st_size >= 0 &&
+        (uint64_t)before.st_size == frame->boundary.end);
+    if (!admitted_compared) reject_admission(source, images, frame->boundary.end, NULL, ENOENT);
+    struct snag_binary_anchor stop = frame->boundary;
+    append_admission_receipt(source, &stop, receipt, prefix->last_time_ms);
+    struct snag_session expected;
+    snag_session_init(&expected);
+    struct snag_binary_recovery oracle = {0};
+    struct snag_binary_checkpoint_sources wanted = {0};
+    char error[128] = {0};
+    int rc = snag_store_reconcile_binary_context(source, &expected, &oracle, &wanted,
+        NULL, error, sizeof(error));
+    if (rc < 0) fprintf(stderr, "admission replay oracle: %s (%d)\n", error, errno);
+    assert(!rc);
+    admission_result(source, &expected, &wanted, images, frame->boundary.end, 1u, 0u, NULL);
+    if (!admitted_compared) admission_edges(source, &expected, &wanted, frame, receipt, fd, &stop);
+    snag_session_close(&expected);
+    snag_binary_checkpoint_sources_free(&wanted);
+    assert(!snag_truncate(source->log_fd, (int64_t)before.st_size));
+    assert(!close(fd));
+    ++admitted_compared;
+}
+
 static void
 joint_materialization_checks(struct snag_session *source, struct snag_session *expected,
     const struct snag_binary_checkpoint_sources *origins,
@@ -556,6 +805,7 @@ joint_materialization_checks(struct snag_session *source, struct snag_session *e
     same_cache(expected, &sparse, false);
     snag_session_close(&sparse);
     ++sparse_resume_compared;
+    admission_matches(source, expected, &frame, &receipt, &bytes);
     uninspected_materialization(source, expected, &frame, &receipt, &available, &access);
     static bool negatives[2];
     struct snag_binary_checkpoint_provider provider;
@@ -1750,6 +2000,11 @@ test_context_binary_report(void)
         direct_uninspected);
     printf("native bounded suffix: %u comparisons; %u rejected boundaries/stages\n",
         bounded_suffix_compared, bounded_suffix_rejected);
+    assert(admitted_compared == direct_compared);
+    assert(admitted_ordered == 3u && admitted_rejected);
+    printf("native checkpoint admission: %u physical-tail/receipt/image comparisons, "
+        "%u atomic rejections, %u paired-order comparisons\n", admitted_compared,
+        admitted_rejected, admitted_ordered);
     assert(pinned_neighbor_missing);
     printf("native missing IRC neighbor: %u unavailable closure\n", pinned_neighbor_missing);
     assert(sparse_resume_compared == direct_compared);
