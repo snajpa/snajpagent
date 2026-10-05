@@ -2551,7 +2551,7 @@ or
 The direct API accepts xhigh as an alias for high. Refreshing the catalog visits
 all providers in the loaded configuration, including those other than the selected
 provider. Reload edited configuration with
-.B /config
+.B /configure
 or restart before refreshing or selecting a newly configured provider.
 .PP
 Token accounting prefers exact provider preflight when supported, then uses
@@ -3209,7 +3209,7 @@ list. A configured list also applies to typed models before cache discovery;
 listing an undiscovered model still requires a model-alias declaration.
 .PP
 The array remains in configuration; /model cache stores only provider metadata.
-Reload configuration with /config or start a new process to apply an edited
+Reload configuration with /configure or start a new process to apply an edited
 list. Invalid lists reject the reload while preserving the active configuration.
 Existing turn/session effort preferences remain unchanged until selected again.
 .SS "model-alias PROVIDER/NAME"
@@ -4865,10 +4865,14 @@ processes.  After a failed turn,
 uses retained context/results and does not replay completed tools.
 .TP
 .B Configuration reload failed.
+.B /configure
+and edited
 .B /config
-leaves invalid edited text on disk while keeping the previous valid runtime
-configuration.  Fix the file before restarting.  Only changed IRC fields
-replace current runtime network state; unrelated edits preserve it.
+changes keep the previous runtime settings and credentials when validation fails.
+Fix the reported file or login error, then run
+.B /configure
+again. Only changed IRC fields replace current runtime network state; unrelated
+edits preserve it.
 .TP
 .B Session resume reports a lock or incompatible format.
 A live session cannot be resumed concurrently.  Do not delete its lock to start
