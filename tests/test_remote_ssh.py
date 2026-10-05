@@ -115,7 +115,10 @@ class RemoteSSHTests(unittest.TestCase):
                         source = state / "report.bin"
                         source.write_bytes(bytes(range(256)) * 300)
                         dotdir = state / "agent"
-                        command = ["env", "LC_ALL=C.UTF-8", str(PRODUCT), "--dotdir", str(dotdir)]
+                        # SSH starts a fresh environment on the server side.
+                        # Transfer reports stay inline in this protocol fixture.
+                        command = ["env", "LC_ALL=C.UTF-8", "PAGER=", str(PRODUCT),
+                                   "--dotdir", str(dotdir)]
                         if scenario in ("lost-client", "blackhole"):
                             command.insert(1, f"HOME={state}")
                         screen_env = None
