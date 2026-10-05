@@ -792,7 +792,7 @@ fixture_response(const char *prompt, const json_t *steering, const json_t *reque
 flood_done: snag_buf_free(&text);
         return rc;
     }
-    if (strcmp(prompt, "engine_blocked") == 0) {
+    if (strcmp(prompt, "engine_blocked") == 0 || strcmp(prompt, "engine_gated") == 0) {
         static const char text[] = "engine-block-start engine-block-end";
         size_t index = graph->count;
 
@@ -800,7 +800,15 @@ flood_done: snag_buf_free(&text);
                 SNAG_PHASE_FINAL_ANSWER, "msg_engine_blocked", text) < 0 ||
             emit_fragment(&out, index, text, 19u) < 0) goto allocation;
         /* Intentionally no pump: models a sync/lock/DNS/library stall. */
-        (void)snag_sleep_ms(2500u);
+        if (strcmp(prompt, "engine_gated") == 0) {
+            uint64_t deadline = snag_monotonic_ms() + 60000u;
+            while (access("engine.release", F_OK) != 0) {
+                if (errno != ENOENT || snag_monotonic_ms() >= deadline) {
+                    return snag_errorf(error, error_size, "fixture engine gate was not released");
+                }
+                (void)snag_sleep_ms(5u);
+            }
+        } else (void)snag_sleep_ms(2500u);
         if (emit_fragment(&out, index, text + 19u, sizeof(text) - 1u - 19u) < 0) goto allocation;
         return 0;
     }

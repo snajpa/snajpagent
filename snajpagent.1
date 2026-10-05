@@ -1637,6 +1637,9 @@ the transfer fails. Interactive terminal transfers require POSIX hosts. One-shot
 its export for wrapped attachment. Read-only model turns reject send_file.
 .SH "Commands"
 Commands normally occupy a single submitted line.
+Each entered command stays visible with its original prompt before its feedback,
+including while the engine is busy. The displayed line confirms terminal input;
+the command's acknowledgement reports acceptance or completion.
 .BR /ro ,
 numbered sends and
 .B /all

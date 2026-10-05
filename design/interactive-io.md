@@ -284,6 +284,12 @@ and queue-edit prompts continue delivering blank answers to their existing
 owners. Ctrl-J remains newline insertion, and nonempty Enter keeps its normal
 submission/steering/chat behavior. Continuing work requires explicit text.
 
+The presentation owner echoes entered commands with their frozen prompt before
+dispatch, including during engine stalls. Local controls and later engine
+acknowledgements share the same echo marker to keep one submitted line. View
+switches retain that line in the originating view before switching. A displayed
+command confirms terminal receipt; acceptance and completion remain separate.
+
 The command/completion table lists each accepted syntax form with a short
 explanation. `/help` groups that table by topic with a required/optional legend;
 `/goal help` selects its goal rows from the same owner. Completion deduplicates

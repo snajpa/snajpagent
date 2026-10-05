@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Keep entered slash commands visible with their submitted prompt immediately,
+  including `/configure` while the engine is busy, without duplicate echoes
+  when commands finish or switch views.
+
 - Make `/nick NICK` rename the operator identity and retain its accepted name
   on resume. Reject hosted nickname collisions and display server refusals;
   keep model renames available through the `irc_nick` tool.

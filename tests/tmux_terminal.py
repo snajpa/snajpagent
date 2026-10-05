@@ -3536,6 +3536,45 @@ def run_pre_request_composer_case(binary, root, early_steer=False):
     print("tmux_terminal pre-request", "steer" if early_steer else "composer", "ok", flush=True)
 
 
+def run_command_echo_case(binary, root):
+    commands = ("/configure", "/status", "/verbose 2", "/999", "/chat",
+                "/rollout", "/not-a-command")
+    for index, command in enumerate(commands):
+        case = root / f"command-echo-{index}"
+        with TmuxTerminal.fixture(binary, case, 100, 8, markdown=False,
+                prompt="{chat:C>}{rollout-idle:I>}{rollout-active:A>}",
+                args=("--no-listen", "--no-client")) as terminal:
+            terminal.wait("I>")
+            if index == 0:
+                terminal.submit("/configure")
+                screen = terminal.wait("configuration reloaded:", join_wrapped=True)
+                assert screen.splitlines().count("I> /configure") == 1, screen
+            terminal.submit("engine_gated")
+            terminal.wait("engine-block-start")
+            terminal.submit(command)
+            expected = "A> " + command
+
+            def committed(screen):
+                history, cursor = map(int, terminal.run("display-message", "-p", "-t",
+                    terminal.target, "#{history_size} #{cursor_y}").split())
+                return any(line == expected and row < history + cursor
+                           for row, line in enumerate(screen.splitlines()))
+
+            screen = terminal.wait_until(committed, f"committed command {command}")
+            assert "engine-block-end" not in screen, screen
+            assert screen.splitlines().count(expected) == 1, screen
+            # Only the test releases the engine, after checking a line above
+            # the cursor; an editable draft alone cannot satisfy the check.
+            (case / "workspace/engine.release").touch()
+            terminal.submit("/command-echo-barrier")
+            errors = 2 if command == "/not-a-command" else 1
+            screen = terminal.wait_until(
+                lambda s: s.count("unknown slash command") == errors,
+                "engine command acknowledgement")
+            assert screen.splitlines().count(expected) == 1, screen
+    print("command echo: ok", flush=True)
+
+
 def run_fixture(binary, workspace, root):
     del workspace
     root.mkdir(mode=0o700, parents=True)
@@ -3553,6 +3592,7 @@ def run_fixture(binary, workspace, root):
         run_banner_layout_case(binary, root, width)
     run_resume_history_case(binary, root)
     run_pager_case(binary, root)
+    run_command_echo_case(binary, root)
     run_status_case(binary, root)
     run_paced_decode_case(binary, root)
     run_paced_decode_case(binary, root, width=24)
@@ -9032,7 +9072,9 @@ def run_tool_yield_cases(binary, root, provider, environment):
                 # Tool admission can race the transition from an open prompt
                 # into a held tool wait; the priority control must still land.
                 wait_event_count(terminal.dotdir, "turn_yield_requested", 1)
-            terminal.wait("tool yield complete " + mode, timeout=10.0, join_wrapped=True)
+            screen = terminal.wait("tool yield complete " + mode, timeout=10.0, join_wrapped=True)
+            echoed = re.findall(r"^.*[›»] /yield$", screen, re.MULTILINE)
+            assert len(echoed) == 1 + int(operator), screen
             _, log = read_events(terminal.dotdir)
             assert not event_list(log, "turn_failed"), log[-6:]
             assert not event_list(log, "steering_received")

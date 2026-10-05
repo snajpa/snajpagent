@@ -1,9 +1,10 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "ui.h"
 #include "irc.h"
-#include "wake.h"
-#include "update.h"
 #include "session_relay.h"
+#include "turn.h"
+#include "update.h"
+#include "wake.h"
 
 #include <assert.h>
 #include <ctype.h>
@@ -86,7 +87,8 @@ struct snag_ui_runtime {
     pthread_t thread, engine;
     struct snag_signal_mask saved_mask;
     atomic_int fatal;
-    atomic_bool exit_requested, cancel, hard_exit_acknowledged, yield_requested;
+    atomic_bool exit_requested, cancel, hard_exit_acknowledged;
+    atomic_uint yield_requested; /* 1: pending echo, 2: already echoed. */
     atomic_bool hard_exit_requested;
     atomic_uint steering_pending, dictation_control;
     atomic_uint level, view;
@@ -1034,19 +1036,6 @@ finish_input(struct snag_ui_display *display, struct ui_action *item, int rc)
     struct snag_ui_runtime *runtime = display->runtime;
     struct snag_term *term = &display->term;
 
-    /* The prompt can be held while snag_term_poll is waiting for input. A
-     * /yield completed at that boundary must take the same priority path as
-     * a line found in the held input ring, rather than waiting in the action
-     * queue until the tool/provider handoff has already finished. */
-    if (rc > 0 && item->action == SNAG_TERM_SUBMIT && item->text &&
-        !strcmp(item->text, "/yield") &&
-        (term->spinner_states & (1u << SNAG_TERM_SPINNER_TOOL))) {
-        atomic_store(&runtime->yield_requested, true);
-        snag_wakeup_send(runtime->actions.wake[1]);
-        free(item->text);
-        free(item);
-        return 0;
-    }
     item->history_warning = term->history_reader.warning;
     term->history_reader.warning = false;
     if (item->text) item->received_ms = snag_time_ms();
@@ -1055,6 +1044,25 @@ finish_input(struct snag_ui_display *display, struct ui_action *item, int rc)
         item->action = SNAG_TERM_NONE;
     }
     take_snapshot(display, &item->snapshot);
+    /* The presentation owner retains commands before engine work can stall.
+     * Their later acknowledgements use this flag to avoid a second echo. */
+    if (rc > 0 && item->action == SNAG_TERM_SUBMIT && !term->input_only &&
+        snag_prompt_command(item->text)) {
+        if (snag_render_input_submitted(&display->render, item->snapshot.label,
+                item->text) < 0) goto fail;
+        item->submission_echoed = true;
+    }
+    /* A /yield completed as the prompt becomes held uses the same priority
+     * path as a line found in the held input ring. */
+    if (rc > 0 && item->action == SNAG_TERM_SUBMIT && item->text &&
+        !strcmp(item->text, "/yield") &&
+        (term->spinner_states & (1u << SNAG_TERM_SPINNER_TOOL))) {
+        atomic_store(&runtime->yield_requested, item->submission_echoed ? 2u : 1u);
+        snag_wakeup_send(runtime->actions.wake[1]);
+        free(item->text);
+        free(item);
+        return 0;
+    }
     if (item->text && item->action != SNAG_TERM_UPLOAD)
         snag_term_destination_route(term, item->text, &item->route);
     if (item->action == SNAG_TERM_INTERRUPT) term->interrupt_pending = true;
@@ -1099,12 +1107,6 @@ finish_input(struct snag_ui_display *display, struct ui_action *item, int rc)
         } else if (!strcmp(item->text, "/chat") || !strcmp(item->text, "/rollout")) {
             enum snag_render_view view = !strcmp(item->text, "/chat") ?
                 SNAG_RENDER_CHAT : SNAG_RENDER_ROLLOUT;
-            /* The presentation owner acknowledges the view immediately. Echo
-             * the submitted command in the old view first, or the engine's
-             * later durable echo can appear after the new-view banner. */
-            if (snag_render_input_submitted(&display->render, item->snapshot.label,
-                                            item->text) < 0) goto fail;
-            item->submission_echoed = true;
             if (view == SNAG_RENDER_CHAT) {
                 const struct snag_irc_destination *destination = selected_destination(term);
                 if (!destination && term->destinations && term->destinations->count) {
@@ -1166,8 +1168,7 @@ finish_input(struct snag_ui_display *display, struct ui_action *item, int rc)
             }
         }
         /* Keep an active rollout steer visible even when the engine cannot
-         * accept another composer yet. Slash commands and queued controls
-         * retain their engine-owned acknowledgements. */
+         * accept another composer yet. */
         if (item->action == SNAG_TERM_SUBMIT && item->text && item->snapshot.active &&
             item->snapshot.view == SNAG_RENDER_ROLLOUT && !item->submission_echoed &&
             (item->text[0] != '/' || item->text[1] == '/') &&
@@ -1216,6 +1217,8 @@ admit_input(struct snag_ui_display *display, const char *text, uint64_t attachme
     return finish_input(display, item, 1);
 }
 
+static int local_feedback(struct snag_ui_display *display);
+
 static int
 read_input(struct snag_ui_display *display, int timeout_ms)
 {
@@ -1226,7 +1229,11 @@ read_input(struct snag_ui_display *display, int timeout_ms)
     struct ui_action *item;
     int rc;
 
-    bool held = !term->prompt_wanted && !term->dictating && !term->input_only;
+    /* Output checkpoints can leave a local submission waiting to be painted.
+     * Settle it before reading the next Enter from the same input burst. */
+    if (!term->input_only && local_feedback(display) < 0) return -1;
+    bool held = display->painting_feedback ||
+        (!term->prompt_wanted && !term->dictating && !term->input_only);
     if (term->opened && !display->suspended && !display->input_closed && held) {
         enum held_control control = input_take_held_control(&runtime->input,
             (term->spinner_states & (1u << SNAG_TERM_SPINNER_TOOL)) != 0u);
@@ -1235,7 +1242,13 @@ read_input(struct snag_ui_display *display, int timeout_ms)
         if (control == HELD_INTERRUPT)
             atomic_store(&runtime->interrupt,
                 display->turn_generation ? display->turn_generation : UINT64_MAX);
-        if (control == HELD_YIELD) atomic_store(&runtime->yield_requested, true);
+        if (control == HELD_YIELD) {
+            if (!term->input_only &&
+                snag_render_input_submitted(&display->render, term->label, "/yield") < 0) {
+                return -1;
+            }
+            atomic_store(&runtime->yield_requested, term->input_only ? 1u : 2u);
+        }
         if (control != HELD_NONE) {
             snag_wakeup_send(runtime->actions.wake[1]);
             return 0;
@@ -1269,7 +1282,9 @@ local_feedback(struct snag_ui_display *display)
     if (!item || display->painting_feedback) return 0;
     if (!display->local_acknowledged) {
         display->painting_feedback = true;
-        rc = snag_render_submitted(&display->render, item->snapshot.label, item->text);
+        if (!item->submission_echoed) {
+            rc = snag_render_submitted(&display->render, item->snapshot.label, item->text);
+        }
         if (rc == 0 && display->feedback[0]) rc = snag_render_host(&display->render, display->feedback);
         if (rc == 0) memcpy(item->feedback, display->feedback, sizeof(item->feedback));
         display->painting_feedback = false;
@@ -1920,9 +1935,11 @@ snag_ui_poll(struct snag_ui *ui, int timeout_ms, enum snag_term_action *action, 
             *action = SNAG_TERM_CANCEL;
             return 1;
         }
-        if (atomic_exchange(&runtime->yield_requested, false)) {
+        unsigned int yield = atomic_exchange(&runtime->yield_requested, 0u);
+        if (yield) {
             *text = snag_strdup_checked("/yield", 16u);
             if (!*text) return -1;
+            ui->input_echoed = yield == 2u;
             *action = SNAG_TERM_SUBMIT;
             return 1;
         }
