@@ -60,7 +60,8 @@
         a file in your pager. Current-source keyboard command reports, including
         <code>/status</code> and <code>/history</code>, use <code>$PAGER</code>,
         or <code>less -X</code> when unset and less is available,
-        for scrolling and search. <code>/ro QUERY</code> queues read-only inspection,
+        for scrolling and search. Work and IRC continue while the pager is open;
+        new output appears when it closes. <code>/ro QUERY</code> queues read-only inspection,
         and <code>/compact</code> summarizes context while preserving the local log.</p>
       <p>Resume continues unfinished work without a new prompt. For scripts, use
         <code>snajpagent -e --resume SESSION_ID &lt;/dev/null</code>. Calls with

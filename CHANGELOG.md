@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Keep provider turns, managed processes and IRC running while a pager is open.
+  Retain new output until the pager exits, then show it before the current prompt.
+  Queue model-requested downloads while the pager owns the terminal.
+
 - Resolve retained IRC inputs with verified journal lookups. Avoid replaying
   the complete journal for each missing source, which can stall request
   preparation and delay hosted IRC delivery in long-running sessions.

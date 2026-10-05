@@ -3498,6 +3498,7 @@ snag_session_commit(struct snag_session *session, const char *type, json_t *data
         json_decref(data);
         return -1;
     }
+    int64_t start = session->log_end;
     if (!data || clone_session_state(session, &staged) < 0) {
         (void)snag_fail(error, error_size, ENOMEM, "cannot stage %s event", type);
     } else if ((staged.last_time_ms = snag_time_ms(),
@@ -3518,6 +3519,7 @@ snag_session_commit(struct snag_session *session, const char *type, json_t *data
     } else {
         free_session_state(session);
         *session = staged;
+        int64_t end = session->log_end;
         if (session->on_commit) session->on_commit(session->on_commit_opaque,
             session, session->next_seq - 1u, type, data);
         /* No retroactive failure after a synced ordinary event. A failed
@@ -3528,6 +3530,8 @@ snag_session_commit(struct snag_session *session, const char *type, json_t *data
             char ignored[128];
             (void)snag_session_checkpoint(session, ignored, sizeof(ignored));
         }
+        session->committed_start = start;
+        session->committed_end = end;
     }
     json_decref(data);
     return rc;

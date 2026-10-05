@@ -925,6 +925,21 @@ flood_done: snag_buf_free(&text);
         }
         return final_answer(&out, "msg_fixture_one_shot_signal_final", "shutdown was not requested");
     }
+    if (snag_string_in(prompt, "slow_failure slow_tool") ||
+        !strncmp(prompt, "slow_download ", 14u)) {
+        if (cycle == 1u) {
+            if (emit_public(&out, SNAG_ITEM_ASSISTANT, SNAG_PHASE_COMMENTARY,
+                "msg_fixture_slow_commentary", "working slowly\n", 0) < 0) goto allocation;
+            if ((control = wait_ticks(&out, 100u)) != 0) return control;
+            if (!strcmp(prompt, "slow_failure"))
+                return snag_errorf(error, error_size, "fixture delayed provider failure");
+            if (!strcmp(prompt, "slow_tool"))
+                return add_call(graph, workspace, cycle, 0u, "fixture ok");
+            return indexed_call(graph, cycle, 0u, "send_file",
+                json_pack("{s:s}", "path", prompt + 14u));
+        }
+        return final_answer(&out, "msg_fixture_slow_final", "slow complete");
+    }
     if (snag_string_in(prompt,
             "slow slow_utf8 queue_slow queue_prompt_slow slow_resteer compaction_steer")) {
         /* Pre-response compaction can finish with an already-submitted steer;

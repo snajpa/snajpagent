@@ -1686,6 +1686,10 @@ on an interactive terminal. This includes /help, /status, /state, goal status,
 Commands that display an updated report after a setting change also page it.
 Quit the pager to return to the composer. Brief acknowledgements, errors,
 view switches and ongoing model output remain in the normal terminal display.
+While a pager is open, provider turns, managed processes and IRC continue.
+New session output waits until the pager exits, then appears in order before
+the current prompt. Model-requested file downloads stay queued while the pager
+owns the terminal and can be delivered to a wrapped client after it closes.
 During active work, keyboard /verbose queries also stay in that display for an
 immediate response; idle queries use the pager.
 .PP

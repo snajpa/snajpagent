@@ -50,6 +50,8 @@ struct snag_output_cache {
 struct app_state {
     /* Informational output from one command is shown in one pager invocation. */
     struct snag_buf *command_report;
+    struct snag_pager *pager;
+    char *pager_report;
     /* A user-requested view switch is "in flight" while its target view has not become current;
      * further switch requests are ignored until then, with a deadline so the block cannot stick
      * if the view never lands. SNAG_RENDER_VIEW_COUNT in switch_target means "none in flight". */

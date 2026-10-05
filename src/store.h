@@ -206,6 +206,9 @@ struct snag_session {
     int lock_fd;
     struct snag_buf *pending_log; /* New sessions stay in memory until input. */
     int64_t log_end;
+    /* Exact range of the last successful commit call, excluding automatic
+     * checkpoints before/after it. Derived owner state, never serialized. */
+    int64_t committed_start, committed_end;
     uint64_t next_seq;
     int64_t checkpoint_offset;
     uint64_t checkpoint_seq;

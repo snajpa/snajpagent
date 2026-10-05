@@ -461,7 +461,6 @@ snag_app_commit_event(struct app_state *app, const char *type, json_t *data, cha
         json_decref(data);
         return -1;
     }
-    int64_t offset = app->session.log_end;
     json_t *voice_event=app->voice?json_incref(data):NULL;
     int committed=snag_session_commit(&app->session,type,data,&seq,error,error_size);
     if(!committed && voice_event)snag_app_voice_event(app,type,voice_event);
@@ -475,7 +474,8 @@ snag_app_commit_event(struct app_state *app, const char *type, json_t *data, cha
     if (snag_string_in(type, "steering_added future_turn_queued future_turn_edited")) ++app->input_generation;
     /* Chunk durability must not insert debug notices inside the public text. */
     if (!strcmp(type, "response_output")) return 0;
-    struct snag_render_source source = {offset, (size_t)(app->session.log_end - offset)};
+    struct snag_render_source source = {app->session.committed_start,
+        (size_t)(app->session.committed_end - app->session.committed_start)};
     if ((!app->session.pending_log && snag_ui_send(&app->ui, (struct snag_ui_command){
              .kind = SNAG_UI_DURABLE, .text = type, .data.durable = {app->session.log_fd, source,
                  app->config->default_timeout_ms, app->config->max_output_bytes}}) < 0) ||
@@ -1556,6 +1556,54 @@ append_model_row(void *opaque, size_t index, const char *provider, const char *m
 static void service_external(void *opaque);
 static int suspend_external(void *opaque);
 
+static int
+start_pager(struct app_state *app, const char *command, const char *path,
+    const char *text, size_t length)
+{
+    char error[256] = {0};
+    if (app->pager) return snag_errno(EBUSY);
+    char *report = text ? snag_strdup_checked(text, length) : NULL;
+    if (text && !report) return -1;
+    if (snag_ui_external(&app->ui, true, error, sizeof(error)) < 0) {
+        free(report);
+        return -1;
+    }
+    app->pager = snag_pager_start(command, path, text, length,
+        app->ui.native ? &app->ui.profile : NULL);
+    if (!app->pager) {
+        int failure = errno;
+        (void)snag_ui_external(&app->ui, false, error, sizeof(error));
+        free(report);
+        return snag_errno(failure);
+    }
+    app->pager_report = report;
+    return 0;
+}
+
+static int
+service_pager(struct app_state *app)
+{
+    if (!app->pager) return 0;
+    bool shown = false;
+    char error[256] = {0};
+    int rc = snag_pager_poll(app->pager, &shown, suspend_external, app), failure = errno;
+    if (!rc) return 0;
+    snag_pager_close(app->pager);
+    app->pager = NULL;
+    char *report = app->pager_report;
+    app->pager_report = NULL;
+    int restored = snag_ui_external(&app->ui, false, error, sizeof(error));
+    if (restored == 0 && (!shown || rc < 0)) {
+        if (report) restored = snag_ui_text(&app->ui, SNAG_UI_HELP, report);
+        else restored = app_textf(app, SNAG_UI_ERROR, "cannot run pager: %s",
+            rc < 0 ? strerror(failure) : "command could not start");
+    }
+    if (shown && report && app->ui.observe)
+        app->ui.observe(app->ui.observe_opaque, "help", report, NULL);
+    free(report);
+    return restored;
+}
+
 /* The configured pager command, or NULL for direct reference display. */
 static const char *
 pager_command(const struct app_state *app)
@@ -1579,9 +1627,7 @@ page_local_file(struct app_state *app, const char *argument)
     char *input = NULL;
     char *path = NULL;
     char *resolved = NULL;
-    char error[256] = {0};
     snag_file_info info;
-    bool shown = false;
     size_t length;
     int fd;
     int rc;
@@ -1649,21 +1695,10 @@ page_local_file(struct app_state *app, const char *argument)
         rc = app_textf(app, SNAG_UI_ERROR, "cannot open file: %s", reason);
         goto out;
     }
-    if (snag_ui_external(&app->ui, true, error, sizeof(error)) < 0) {
-        rc = app_error(app, error);
-        goto out;
-    }
-    rc = snag_pager_file(command, resolved, &shown, service_external, suspend_external, app,
-        app->ui.native ? &app->ui.profile : NULL);
+    rc = start_pager(app, command, resolved, NULL, 0u);
     saved = errno;
-    if (snag_ui_external(&app->ui, false, error, sizeof(error)) < 0) {
-        rc = -1;
-        goto out;
-    }
     if (rc < 0) {
         rc = app_textf(app, SNAG_UI_ERROR, "cannot run pager: %s", strerror(saved));
-    } else if (!shown) {
-        rc = app_error(app, "pager could not start");
     }
 out:
     free(input);
@@ -1677,22 +1712,12 @@ static bool
 page_reference(struct app_state *app, const char *text, size_t length)
 {
     const char *command = pager_command(app);
-    char error[256] = {0};
-    bool shown = false;
-    int rc;
 
     if (!command || app->execute || !app->ui.opened || app->ui.input_interface ||
         snag_isatty(STDIN_FILENO) != 1 || snag_isatty(STDERR_FILENO) != 1) {
         return false;
     }
-    if (snag_ui_external(&app->ui, true, error, sizeof(error)) < 0) return false;
-    rc = snag_pager_show(command, text, length, &shown, service_external, suspend_external, app,
-        app->ui.native ? &app->ui.profile : NULL);
-    if (rc == 0 && shown && app->ui.observe) {
-        app->ui.observe(app->ui.observe_opaque, "help", text, NULL);
-    }
-    if (snag_ui_external(&app->ui, false, error, sizeof(error)) < 0) return shown;
-    return rc == 0 && shown;
+    return start_pager(app, command, NULL, text, length) == 0;
 }
 
 /* Format the catalogue timestamp for the refresh report and the listing footer. */
@@ -3264,7 +3289,8 @@ static int
 flush_download_queue(struct app_state *app)
 {
     if (!app->session.download_queue || !json_array_size(app->session.download_queue)) return 0;
-    if (app->session.active_turn || app->attaching || app->execute || !app->ui.opened)
+    if (app->pager || app->session.active_turn || app->attaching ||
+        app->execute || !app->ui.opened)
         return 0;
     json_t *snapshot = json_deep_copy(app->session.download_queue);
     if (!snapshot) return -1;
@@ -3376,7 +3402,8 @@ again:;
     int rc;
     if (snag_app_flush_public(app, false) < 0)
         return -1;
-    if (service_attachment(app, false) < 0) return -1;
+    if (service_pager(app) < 0 || service_attachment(app, app->pager != NULL) < 0) return -1;
+    if (app->pager && timeout_ms > 25u) timeout_ms = 25u;
     if (snag_app_shutdown(app) || (app->interrupt_requested && !leaving)) {
         snag_app_audio_close(app);
         app->interrupt_requested = true;
@@ -3386,7 +3413,8 @@ again:;
                      (app->control_requested && !app->applying_controls) ||
                      (app->model_switch_requested && app->session.response_open)))
         return 1;
-    if (snag_app_audio_service(app) < 0) return -1;
+    if ((!app->pager || (app->ui.native && !snag_ui_session_attachment(&app->ui))) &&
+        snag_app_audio_service(app) < 0) return -1;
     if ((app->audio || app->voice) && timeout_ms > 25u) timeout_ms = 25u;
     bool busy = snag_tools_busy();
     if (snag_tools_service(0, snag_ui_wake_fd(&app->ui), error, sizeof(error)) < 0) {
@@ -5502,7 +5530,8 @@ run_due_timer(struct app_state *app)
 static int
 idle_poll_timeout(const struct app_state *app)
 {
-    int timeout = app->audio || app->voice || app->networked || app->irc_background.len ? 25 : -1;
+    int timeout = app->pager || app->audio || app->voice ||
+        app->networked || app->irc_background.len ? 25 : -1;
     if (json_array_size(app->session.download_queue) && (timeout < 0 || timeout > 250))
         timeout = 250;
     if (app->session.timer_id[0] && app->session.timer_due_ms) {
@@ -5681,13 +5710,17 @@ interactive_loop(struct app_state *app, const char *initial)
         initial = NULL;
         free(owned);
         owned = NULL;
-        if (service_attachment(app, false) < 0) { rc = 6; break; }
+        if (service_pager(app) < 0 || service_attachment(app, app->pager != NULL) < 0) {
+            rc = 6;
+            break;
+        }
         if (snag_app_shutdown(app) || app->input_closed) {
             rc = 0;
             break;
         }
         if (snag_app_irc_summary_take(app, NULL, 0) < 0) { rc = 6; break; }
-        if (snag_app_audio_service(app) < 0) { rc = 6; break; }
+        if ((!app->pager || (app->ui.native && !snag_ui_session_attachment(&app->ui))) &&
+            snag_app_audio_service(app) < 0) { rc = 6; break; }
         if (!prompt && !snag_ui_leaving(&app->ui) && app->session.queue_armed &&
             !app->queue_edit_id[0] && app->session.pending_queue_count) {
             rc = run_ready_chains(app);
@@ -5716,7 +5749,8 @@ interactive_loop(struct app_state *app, const char *initial)
                 goto ui_failed;
             if (snag_monotonic_ms() - app->remote_reply_at >= 2000u)
                 app->remote_available = false;
-            if (json_array_size(app->session.download_queue) && !app->session.active_turn &&
+            if (!app->pager && json_array_size(app->session.download_queue) &&
+                !app->session.active_turn &&
                 snag_monotonic_ms() - app->remote_probe_at >= 1000u &&
                 snag_app_remote_probe(app) < 0) goto ui_failed;
             int poll_rc = snag_ui_poll(&app->ui, idle_poll_timeout(app), &action, &owned);
@@ -6094,6 +6128,13 @@ out:
         if (!rc) rc = 3;
     }
     snag_app_voice_attachment_close(&app);
+    if (app.pager) {
+        snag_pager_close(app.pager);
+        app.pager = NULL;
+        free(app.pager_report);
+        app.pager_report = NULL;
+        (void)snag_ui_external(&app.ui, false, error, sizeof(error));
+    }
     snag_app_irc_summary_close(&app);
     snag_app_audio_close(&app);
     (void)snag_app_shutdown(&app);

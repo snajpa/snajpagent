@@ -112,6 +112,7 @@ struct snag_term {
     unsigned int output_gap;
     unsigned int output_detour;
     bool defer_redraw;
+    bool external;
     /* An insert was dropped because the draft is at SNAG_MAX_DIRECT_PROMPT. */
     bool draft_clamped;
     uint32_t typing_pause_ms;

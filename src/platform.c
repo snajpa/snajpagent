@@ -567,21 +567,21 @@ snag_default_pager(void)
 }
 
 /* The same command template serves generated text and local files. */
-static int
-pager_run(const char *command, const wchar_t *file, bool *shown,
-          void (*service)(void *), int (*suspend)(void *), void *opaque,
-                const struct snag_terminal_profile *profile)
+struct snag_pager {
+    HANDLE process;
+    wchar_t *path;
+    bool done;
+};
+
+static struct snag_pager *
+pager_start_file(const char *command, const wchar_t *file)
 {
-    (void)profile;
-    (void)suspend;
     wchar_t *template = NULL, *quoted = NULL, *line = NULL;
-    DWORD status = 0, waited;
     PROCESS_INFORMATION child;
     STARTUPINFOW startup = {.cb = sizeof(startup)};
     size_t at, occurrences = 0u, quoted_size, line_size;
-    int rc = -1;
-
-    *shown = false;
+    struct snag_pager *job = calloc(1u, sizeof(*job));
+    if (!job) return NULL;
     if (!(template = snag_utf8_to_wide(command))) goto out;
     for (const wchar_t *p = template; (p = wcsstr(p, L"%s")) != NULL; p += 2) ++occurrences;
     quoted_size = wcslen(file) * 2u + 3u;
@@ -626,78 +626,129 @@ pager_run(const char *command, const wchar_t *file, bool *shown,
         goto out;
     }
     (void)CloseHandle(child.hThread);
-    do {
-        waited = WaitForSingleObject(child.hProcess, service ? 25u : INFINITE);
-        if (waited == WAIT_TIMEOUT && service) service(opaque);
-    } while (waited == WAIT_TIMEOUT);
-    if (waited != WAIT_OBJECT_0 || !GetExitCodeProcess(child.hProcess, &status)) {
-        path_error(GetLastError());
-        (void)CloseHandle(child.hProcess);
-        goto out;
-    }
-    (void)CloseHandle(child.hProcess);
-    *shown = true;
-    rc = 0;
+    job->process = child.hProcess;
+    free(template);
+    free(quoted);
+    free(line);
+    return job;
 out:
     free(template);
     free(quoted);
     free(line);
-    return rc;
+    free(job);
+    return NULL;
 }
 
 int
-snag_pager_file(const char *command, const char *path, bool *shown,
-                void (*service)(void *), int (*suspend)(void *), void *opaque,
-                const struct snag_terminal_profile *profile)
+snag_pager_poll(struct snag_pager *job, bool *shown, int (*suspend)(void *), void *opaque)
 {
-    (void)profile;
-    wchar_t *wide = snag_utf8_to_wide(path);
-    int rc;
-
+    (void)suspend;
+    (void)opaque;
     *shown = false;
-    if (!wide) return -1;
-    rc = pager_run(command, wide, shown, service, suspend, opaque, profile);
-    free(wide);
-    return rc;
+    DWORD waited = WaitForSingleObject(job->process, 0);
+    if (waited == WAIT_TIMEOUT) return 0;
+    if (waited != WAIT_OBJECT_0) return path_error(GetLastError());
+    job->done = true;
+    *shown = true;
+    return 1;
 }
 
-int
-snag_pager_show(const char *command, const char *text, size_t length, bool *shown,
-                void (*service)(void *), int (*suspend)(void *), void *opaque,
-                const struct snag_terminal_profile *profile)
+void
+snag_pager_close(struct snag_pager *job)
+{
+    if (!job) return;
+    if (!job->done) {
+        (void)TerminateProcess(job->process, 1u);
+        (void)WaitForSingleObject(job->process, INFINITE);
+    }
+    (void)CloseHandle(job->process);
+    if (job->path) (void)DeleteFileW(job->path);
+    free(job->path);
+    free(job);
+}
+
+struct snag_pager *
+snag_pager_start(const char *command, const char *path, const char *text, size_t length,
+    const struct snag_terminal_profile *profile)
 {
     (void)profile;
+    if (path) {
+        wchar_t *wide = snag_utf8_to_wide(path);
+        if (!wide) return NULL;
+        struct snag_pager *job = pager_start_file(command, wide);
+        free(wide);
+        return job;
+    }
     wchar_t directory[32768], file[32768];
-    DWORD directory_length, written;
+    DWORD written;
     HANDLE handle = INVALID_HANDLE_VALUE;
-    size_t at;
-    bool created = false;
-    int rc = -1;
-
-    *shown = false;
-    directory_length = GetTempPathW((DWORD)(sizeof(directory) / sizeof(directory[0])), directory);
-    if (!directory_length) return -1;
-    if (!GetTempFileNameW(directory, L"snp", 0, file)) return -1;
-    created = true;
+    struct snag_pager *job = NULL;
+    if (!GetTempPathW(32768u, directory) ||
+        !GetTempFileNameW(directory, L"snp", 0, file)) {
+        path_error(GetLastError());
+        return NULL;
+    }
+    wchar_t *owned = _wcsdup(file);
+    if (!owned) goto out;
     handle = CreateFileW(file, GENERIC_WRITE, 0, NULL, TRUNCATE_EXISTING,
-                         FILE_ATTRIBUTE_TEMPORARY, NULL);
-    if (handle == INVALID_HANDLE_VALUE) goto out;
-    for (at = 0u; at < length;) {
+        FILE_ATTRIBUTE_TEMPORARY, NULL);
+    if (handle == INVALID_HANDLE_VALUE) { path_error(GetLastError()); goto out; }
+    for (size_t at = 0u; at < length;) {
         size_t chunk = length - at > 0x40000000u ? 0x40000000u : length - at;
-        written = 0u;
-        if (!WriteFile(handle, text + at, (DWORD)chunk, &written, NULL) || !written) goto out;
+        if (!WriteFile(handle, text + at, (DWORD)chunk, &written, NULL) || !written) {
+            path_error(GetLastError());
+            goto out;
+        }
         at += (size_t)written;
     }
     if (!CloseHandle(handle)) {
         handle = INVALID_HANDLE_VALUE;
+        path_error(GetLastError());
         goto out;
     }
     handle = INVALID_HANDLE_VALUE;
-    rc = pager_run(command, file, shown, service, suspend, opaque, profile);
+    job = pager_start_file(command, file);
+    if (job) { job->path = owned; owned = NULL; }
 out:
     if (handle != INVALID_HANDLE_VALUE) (void)CloseHandle(handle);
-    if (created) (void)DeleteFileW(file);
-    return rc;
+    if (!job) (void)DeleteFileW(file);
+    free(owned);
+    return job;
+}
+
+static int
+pager_wait(struct snag_pager *job, bool *shown, void (*service)(void *),
+    int (*suspend)(void *), void *opaque)
+{
+    *shown = false;
+    if (!job) return -1;
+    int rc;
+    while ((rc = snag_pager_poll(job, shown, suspend, opaque)) == 0) {
+        if (service) service(opaque);
+        (void)snag_sleep_ms(25u);
+    }
+    int failure = errno;
+    snag_pager_close(job);
+    errno = failure;
+    return rc < 0 ? -1 : 0;
+}
+
+int
+snag_pager_file(const char *command, const char *path, bool *shown,
+    void (*service)(void *), int (*suspend)(void *), void *opaque,
+    const struct snag_terminal_profile *profile)
+{
+    return pager_wait(snag_pager_start(command, path, NULL, 0u, profile),
+        shown, service, suspend, opaque);
+}
+
+int
+snag_pager_show(const char *command, const char *text, size_t length, bool *shown,
+    void (*service)(void *), int (*suspend)(void *), void *opaque,
+    const struct snag_terminal_profile *profile)
+{
+    return pager_wait(snag_pager_start(command, NULL, text, length, profile),
+        shown, service, suspend, opaque);
 }
 
 struct nt_path {
@@ -2238,36 +2289,55 @@ terminal_environment(const struct snag_terminal_profile *profile)
 
 /* Exclusive editor/pager ownership includes a foreground process group. The
  * pipe prevents exec/read before the parent has handed over the terminal. */
-static int
-external_run(const char *script, const char *path, int *status,
-              void (*service)(void *), int (*suspend)(void *), void *opaque,
-                const struct snag_terminal_profile *profile)
-{
-    pid_t foreground = tcgetpgrp(STDIN_FILENO), child, got;
-    bool terminal = foreground > 0 && foreground == getpgrp();
-    int gate[2] = {-1, -1}, rc = -1;
-    char **environment = NULL;
-    struct termios original, stopped;
-    sigset_t block, saved;
+struct snag_pager {
+    pid_t child, foreground;
+    bool terminal, done;
+    int status;
+    struct termios original;
+    char *path;
+};
 
-    if (terminal && (tcgetattr(STDIN_FILENO, &original) < 0 || pipe(gate) < 0)) return -1;
-    if (terminal && (snag_fd_cloexec(gate[0]) < 0 || snag_fd_cloexec(gate[1]) < 0)) {
-        int failure = errno;
-        (void)close(gate[0]);
-        (void)close(gate[1]);
-        return snag_errno(failure);
-    }
+/* SIGTTOU belongs to terminal handover, not the controller's whole event loop. */
+static int
+external_foreground(pid_t group)
+{
+    sigset_t block, saved;
     sigemptyset(&block);
     sigaddset(&block, SIGTTOU);
-    int err = pthread_sigmask(SIG_BLOCK, &block, &saved);
-    if (err) {
-        if (gate[0] >= 0) { (void)close(gate[0]); (void)close(gate[1]); }
-        return snag_errno(err);
+    int error = pthread_sigmask(SIG_BLOCK, &block, &saved);
+    if (error) return snag_errno(error);
+    int rc = tcsetpgrp(STDIN_FILENO, group), failure = errno;
+    (void)pthread_sigmask(SIG_SETMASK, &saved, NULL);
+    errno = failure;
+    return rc;
+}
+
+static void
+external_restore(struct snag_pager *job)
+{
+    if (job->terminal) {
+        (void)external_foreground(job->foreground);
+        (void)tcsetattr(STDIN_FILENO, TCSANOW, &job->original);
     }
-    if (profile && !(environment = terminal_environment(profile))) goto out;
-    child = fork();
-    if (!child) {
-        if (terminal) {
+}
+
+static struct snag_pager *
+external_start(const char *script, const char *path,
+    const struct snag_terminal_profile *profile)
+{
+    struct snag_pager *job = calloc(1u, sizeof(*job));
+    int gate[2] = {-1, -1};
+    char **environment = NULL;
+    if (!job) return NULL;
+    job->foreground = tcgetpgrp(STDIN_FILENO);
+    job->terminal = job->foreground > 0 && job->foreground == getpgrp();
+    if (job->terminal && tcgetattr(STDIN_FILENO, &job->original) < 0) goto fail;
+    if (job->terminal && (pipe(gate) < 0 || snag_fd_cloexec(gate[0]) < 0 ||
+        snag_fd_cloexec(gate[1]) < 0)) goto fail;
+    if (profile && !(environment = terminal_environment(profile))) goto fail;
+    job->child = fork();
+    if (!job->child) {
+        if (job->terminal) {
             unsigned char ready;
             (void)close(gate[1]);
             if (setpgid(0, 0) < 0) _exit(127);
@@ -2281,8 +2351,9 @@ external_run(const char *script, const char *path, int *status,
         sigemptyset(&action.sa_mask);
         for (size_t i = 0u; i < sizeof(controls) / sizeof(controls[0]); ++i)
             (void)sigaction(controls[i], &action, NULL);
-        sigemptyset(&block);
-        (void)sigprocmask(SIG_SETMASK, &block, NULL);
+        sigset_t mask;
+        sigemptyset(&mask);
+        (void)sigprocmask(SIG_SETMASK, &mask, NULL);
         char *const arguments[] = {"sh", "-c", (char *)script,
             "snajpagent-terminal", (char *)path, NULL};
         extern char **environ;
@@ -2290,50 +2361,89 @@ external_run(const char *script, const char *path, int *status,
         _exit(127);
     }
     if (gate[0] >= 0) { (void)close(gate[0]); gate[0] = -1; }
-    if (child < 0) goto out;
-    if (terminal) {
-        bool ready = setpgid(child, child) == 0 && tcsetpgrp(STDIN_FILENO, child) == 0;
-        if (ready) ready = snag_write_full(gate[1], "r", 1u) == 0;
+    if (job->child < 0) goto fail;
+    if (job->terminal) {
+        if (setpgid(job->child, job->child) < 0 ||
+            external_foreground(job->child) < 0 || snag_write_full(gate[1], "r", 1u) < 0)
+            goto fail;
         (void)close(gate[1]);
-        gate[1] = -1;
-        if (!ready) {
-            do { got = waitpid(child, status, 0); } while (got < 0 && errno == EINTR);
-            goto out;
-        }
     }
-    for (;;) {
-        got = waitpid(child, status, WUNTRACED | (service ? WNOHANG : 0));
-        if (got == child) {
-            if (!WIFSTOPPED(*status)) { rc = 0; break; }
-            bool modes = terminal && tcgetattr(STDIN_FILENO, &stopped) == 0;
-            if (terminal) {
-                (void)tcsetpgrp(STDIN_FILENO, foreground);
-                (void)tcsetattr(STDIN_FILENO, TCSANOW, &original);
-            }
-            if (suspend) (void)suspend(opaque);
-            else (void)raise(SIGTSTP);
-            if (modes) (void)tcsetattr(STDIN_FILENO, TCSANOW, &stopped);
-            if (terminal) (void)tcsetpgrp(STDIN_FILENO, child);
-            (void)kill(terminal ? -child : child, SIGCONT);
-        } else if (got < 0 && errno != EINTR) break;
-        if (service) {
-            service(opaque);
-            (void)snag_sleep_ms(25u);
-        }
-    }
-out: {
+    snag_environment_entries_free(environment);
+    return job;
+fail: {
         int failure = errno;
         if (gate[0] >= 0) (void)close(gate[0]);
         if (gate[1] >= 0) (void)close(gate[1]);
-        if (terminal) {
-            (void)tcsetpgrp(STDIN_FILENO, foreground);
-            (void)tcsetattr(STDIN_FILENO, TCSANOW, &original);
-        }
-        (void)pthread_sigmask(SIG_SETMASK, &saved, NULL);
         snag_environment_entries_free(environment);
+        if (job->child > 0) {
+            (void)kill(job->child, SIGKILL);
+            while (waitpid(job->child, NULL, 0) < 0 && errno == EINTR) {}
+            external_restore(job);
+        }
+        free(job);
         errno = failure;
-        return rc;
+        return NULL;
     }
+}
+
+int
+snag_pager_poll(struct snag_pager *job, bool *shown, int (*suspend)(void *), void *opaque)
+{
+    *shown = false;
+    if (!job->done) {
+        pid_t got = waitpid(job->child, &job->status, WUNTRACED | WNOHANG);
+        if (got < 0) {
+            int failure = errno;
+            if (failure == ECHILD) {
+                job->done = true;
+                external_restore(job);
+            }
+            return failure == EINTR ? 0 : snag_errno(failure);
+        }
+        if (!got) return 0;
+        if (WIFSTOPPED(job->status)) {
+            struct termios stopped;
+            bool modes = job->terminal && tcgetattr(STDIN_FILENO, &stopped) == 0;
+            external_restore(job);
+            if (suspend) (void)suspend(opaque);
+            else (void)raise(SIGTSTP);
+            if (modes) (void)tcsetattr(STDIN_FILENO, TCSANOW, &stopped);
+            if (job->terminal) (void)external_foreground(job->child);
+            (void)kill(job->terminal ? -job->child : job->child, SIGCONT);
+            return 0;
+        }
+        job->done = true;
+        external_restore(job);
+    }
+    *shown = !WIFEXITED(job->status) ||
+        (WEXITSTATUS(job->status) != 126 && WEXITSTATUS(job->status) != 127);
+    return 1;
+}
+
+void
+snag_pager_close(struct snag_pager *job)
+{
+    if (!job) return;
+    if (!job->done) {
+        (void)kill(job->terminal ? -job->child : job->child, SIGKILL);
+        while (waitpid(job->child, NULL, 0) < 0 && errno == EINTR) {}
+        external_restore(job);
+    }
+    if (job->path) (void)unlink(job->path);
+    free(job->path);
+    free(job);
+}
+
+static int
+external_wait(struct snag_pager *job, bool *shown, void (*service)(void *),
+    int (*suspend)(void *), void *opaque)
+{
+    int rc;
+    while ((rc = snag_pager_poll(job, shown, suspend, opaque)) == 0) {
+        if (service) service(opaque);
+        (void)snag_sleep_ms(25u);
+    }
+    return rc < 0 ? -1 : 0;
 }
 
 int
@@ -2342,13 +2452,17 @@ snag_editor_run(const char *path, bool *success, void (*service)(void *),
                 const struct snag_terminal_profile *profile)
 {
     const char *editor = getenv("EDITOR");
-    int status;
     *success = false;
     if (!editor || !*editor) return snag_errno(ENOENT);
-    if (external_run("exec $EDITOR \"$1\"", path, &status,
-                      service, suspend, opaque, profile) < 0) return -1;
-    *success = WIFEXITED(status) && WEXITSTATUS(status) == 0;
-    return 0;
+    struct snag_pager *job = external_start("exec $EDITOR \"$1\"", path, profile);
+    if (!job) return -1;
+    bool shown;
+    int rc = external_wait(job, &shown, service, suspend, opaque);
+    if (!rc) *success = WIFEXITED(job->status) && WEXITSTATUS(job->status) == 0;
+    int failure = errno;
+    snag_pager_close(job);
+    errno = failure;
+    return rc;
 }
 
 const char *
@@ -2365,15 +2479,13 @@ snag_default_pager(void)
 
 /* A pager command may place %s where the quoted path goes; without it the path
  * is appended. *shown is false when the command could not start. */
-static int
-pager_run(const char *command, const char *path, bool *shown,
-          void (*service)(void *), int (*suspend)(void *), void *opaque,
-                const struct snag_terminal_profile *profile)
+static struct snag_pager *
+pager_start_file(const char *command, const char *path,
+    const struct snag_terminal_profile *profile)
 {
     char *quoted = NULL, *script = NULL;
     size_t quoted_length = 2u, script_length, at = 0u, occurrences = 0u;
-    int status, rc = -1;
-    *shown = false;
+    struct snag_pager *job = NULL;
     for (const char *p = path; *p; ++p) quoted_length += *p == '\'' ? 4u : 1u;
     if (!(quoted = malloc(quoted_length + 1u))) goto out;
     at = 0u;
@@ -2407,9 +2519,7 @@ pager_run(const char *command, const char *path, bool *shown,
         int written = snprintf(script, script_length, "%s %s", command, quoted);
         if (written < 0 || (size_t)written >= script_length) goto out;
     }
-    if (external_run(script, NULL, &status, service, suspend, opaque, profile) < 0) goto out;
-    *shown = WIFEXITED(status) && WEXITSTATUS(status) != 126 && WEXITSTATUS(status) != 127;
-    rc = 0;
+    job = external_start(script, NULL, profile);
 out:
     {
         int saved = errno;
@@ -2417,55 +2527,63 @@ out:
         free(script);
         errno = saved;
     }
-    return rc;
+    return job;
+}
+
+struct snag_pager *
+snag_pager_start(const char *command, const char *file, const char *text, size_t length,
+    const struct snag_terminal_profile *profile)
+{
+    if (file) return pager_start_file(command, file, profile);
+    char *path = NULL;
+    const char *directory = getenv("TMPDIR");
+    struct snag_pager *job = NULL;
+    int fd = -1;
+    if (!directory || !*directory) directory = "/tmp";
+    size_t path_size = strlen(directory) + sizeof("/snajpagent-pager-XXXXXX");
+    if (!(path = malloc(path_size))) goto out;
+    (void)snprintf(path, path_size, "%s/snajpagent-pager-XXXXXX", directory);
+    if ((fd = mkstemp(path)) < 0) goto out;
+    if (snag_write_full(fd, text, length) < 0) goto out;
+    if (close(fd) < 0) { fd = -1; goto out; }
+    fd = -1;
+    job = pager_start_file(command, path, profile);
+    if (job) { job->path = path; path = NULL; }
+out: {
+        int failure = errno;
+        if (fd >= 0) (void)close(fd);
+        if (path) (void)unlink(path);
+        free(path);
+        errno = failure;
+        return job;
+    }
 }
 
 int
 snag_pager_file(const char *command, const char *path, bool *shown,
-                void (*service)(void *), int (*suspend)(void *), void *opaque,
-                const struct snag_terminal_profile *profile)
+    void (*service)(void *), int (*suspend)(void *), void *opaque,
+    const struct snag_terminal_profile *profile)
 {
-    return pager_run(command, path, shown, service, suspend, opaque, profile);
+    *shown = false;
+    struct snag_pager *job = snag_pager_start(command, path, NULL, 0u, profile);
+    if (!job) return -1;
+    int rc = external_wait(job, shown, service, suspend, opaque), failure = errno;
+    snag_pager_close(job);
+    errno = failure;
+    return rc;
 }
 
-/* Show generated text through a private temporary file; file paging above
- * passes the user's file directly, without an intermediate copy. */
 int
 snag_pager_show(const char *command, const char *text, size_t length, bool *shown,
-                void (*service)(void *), int (*suspend)(void *), void *opaque,
-                const struct snag_terminal_profile *profile)
+    void (*service)(void *), int (*suspend)(void *), void *opaque,
+    const struct snag_terminal_profile *profile)
 {
-    char *path = NULL;
-    const char *directory = getenv("TMPDIR");
-    size_t path_size, at = 0u;
-    int fd = -1, rc = -1;
-
     *shown = false;
-    if (!directory || !*directory) directory = "/tmp";
-    path_size = strlen(directory) + sizeof("/snajpagent-pager-XXXXXX");
-    if (!(path = malloc(path_size))) goto out;
-    (void)snprintf(path, path_size, "%s/snajpagent-pager-XXXXXX", directory);
-    if ((fd = mkstemp(path)) < 0) goto out;
-    while (at < length) {
-        ssize_t written = write(fd, text + at, length - at);
-        if (written < 0 && errno == EINTR) continue;
-        if (written <= 0) {
-            if (!written) errno = EIO;
-            goto out;
-        }
-        at += (size_t)written;
-    }
-    if (close(fd) < 0) { fd = -1; goto out; }
-    fd = -1;
-    rc = pager_run(command, path, shown, service, suspend, opaque, profile);
-out:
-    {
-        int saved = errno;
-        if (fd >= 0) (void)close(fd);
-        if (path) (void)unlink(path);
-        free(path);
-        errno = saved;
-    }
+    struct snag_pager *job = snag_pager_start(command, NULL, text, length, profile);
+    if (!job) return -1;
+    int rc = external_wait(job, shown, service, suspend, opaque), failure = errno;
+    snag_pager_close(job);
+    errno = failure;
     return rc;
 }
 

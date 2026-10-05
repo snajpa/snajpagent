@@ -8,6 +8,7 @@ import select
 import shlex
 import shutil
 import signal
+import socket
 import struct
 import subprocess
 import sys
@@ -17,6 +18,7 @@ import time
 import unittest
 from pathlib import Path
 
+from irc_client import IRCClient
 from test_upload_client import PRODUCT, Session
 
 
@@ -38,14 +40,16 @@ class CommandPagerTests(unittest.TestCase):
         self.pager.chmod(0o700)
         self.pager_open = False
 
-    def start(self, pager=None, configured=None, environment=None):
+    def start(self, pager=None, configured=None, environment=None, arguments=(), config="",
+              ready="›".encode()):
         self.dotdir = self.root / "dotdir"
         self.home = self.root / "home"
         self.dotdir.mkdir(mode=0o700)
         self.home.mkdir(mode=0o700)
-        if configured is not None:
+        if configured is not None or config:
             (self.dotdir / "config.ini").write_text(
-                "[provider openai]\n[ui]\npager = " + configured + "\n")
+                "[provider openai]\n" + config +
+                ("[ui]\npager = " + configured + "\n" if configured is not None else ""))
         self.env = dict(os.environ, HOME=str(self.home), TERM="xterm-256color",
                         SNAJPAGENT_DOTDIR=str(self.dotdir))
         self.env.update({
@@ -54,8 +58,10 @@ class CommandPagerTests(unittest.TestCase):
         })
         self.env.update(environment or {})
         self.env = {key: value for key, value in self.env.items() if value is not None}
-        child = Session(self.root, command=[str(PRODUCT), "--dotdir", str(self.dotdir)],
-                        ready="›".encode(), cwd=self.home, env=self.env)
+        self.ready = ready
+        child = Session(self.root,
+                        command=[str(PRODUCT), "--dotdir", str(self.dotdir), *arguments],
+                        ready=ready, cwd=self.home, env=self.env)
         self.addCleanup(self.stop, child)
         fcntl.ioctl(child.master, termios.TIOCSWINSZ,
                     struct.pack("HHHH", 6, 60, 0, 0))
@@ -66,7 +72,7 @@ class CommandPagerTests(unittest.TestCase):
             if child.process.poll() is None:
                 if self.pager_open:
                     child.write(b"q\n")
-                    child.read_until("›".encode())
+                    child.read_until(self.ready)
                 child.write(b"\x03" * 5)
                 child.process.wait(timeout=5)
         finally:
@@ -80,7 +86,7 @@ class CommandPagerTests(unittest.TestCase):
         prefix = f"{PRODUCT} --dotdir {dotdir}"
         for row in subprocess.check_output(["ps", "-axo", "pid=,args="], text=True).splitlines():
             pid, _, command = row.strip().partition(" ")
-            if command.lstrip() == prefix:
+            if command.lstrip() == prefix or command.lstrip().startswith(prefix + " "):
                 try:
                     os.kill(int(pid), signal.SIGKILL)
                 except ProcessLookupError:
@@ -179,6 +185,156 @@ class CommandPagerTests(unittest.TestCase):
         child.read_until(b" complete", seconds=12)
         child.read_until("›".encode())
         self.report(child, "/history", "user: slow", "slow complete", "1 completed")
+
+    @staticmethod
+    def available_output(child):
+        output = child.pending
+        child.pending = b""
+        deadline = time.monotonic() + 1
+        while time.monotonic() < deadline and select.select([child.master], [], [], 0.15)[0]:
+            output += os.read(child.master, 65536)
+        return output
+
+    def test_held_pager_retains_irc_until_terminal_returns(self):
+        with socket.socket() as listener:
+            listener.bind(("127.0.0.1", 0))
+            port = listener.getsockname()[1]
+        child = self.start(arguments=("-s", f"127.0.0.1:{port}", "-r", "lab",
+                                      "-n", "pagerbot", "-o", "pagerop"),
+                           ready=b"pagerop@")
+        peer = IRCClient(port, "pagerpeer")
+        self.addCleanup(peer.close)
+        peer.message("pager-before-hold")
+        child.read_until(b"pager-before-hold")
+        child.write(b"/status\r")
+        child.read_until(b"REPORT_READY")
+        self.pager_open = True
+
+        # Cross the journal's automatic checkpoint boundary while display is held.
+        messages = [f"pager-held-{index:03d}" for index in range(160)]
+        for message in messages:
+            peer.message(message)
+        # Hosted broadcasts follow the engine's durable event/UI acceptance.
+        # Receiving the last echo establishes that all these events arrived.
+        held_output = child.pending
+        child.pending = b""
+        deadline = time.monotonic() + 5
+        while messages[-1].encode() not in peer.buf:
+            remaining = deadline - time.monotonic()
+            self.assertGreater(remaining, 0, "IRC stopped while the pager was open")
+            ready, _, _ = select.select([peer.sock, child.master], [], [], remaining)
+            if peer.sock in ready:
+                peer.buf.extend(peer.sock.recv(65536))
+            if child.master in ready:
+                held_output += os.read(child.master, 65536)
+        journal = next((self.dotdir / "sessions").glob("*/events.jsonl"))
+        records = journal.read_text().rsplit("\n", 1)[0].splitlines()
+        events = [json.loads(line) for line in records]
+        self.assertTrue(any(event["type"] == "session_checkpoint" for event in events))
+        retained = [event["data"]["text"] for event in events
+                    if event["type"] == "irc_event" and
+                    event["data"]["text"] in messages]
+        self.assertEqual(retained, messages)
+        held_output += self.available_output(child)
+        child.write(b"q\n")
+        self.pager_open = False
+        resumed = child.read_until(self.ready)
+        resumed += self.available_output(child)
+        self.assertNotIn(messages[0].encode(), held_output,
+                         "session output painted while the pager owned the terminal")
+        for message in messages:
+            self.assertEqual(resumed.count(message.encode()), 1, message)
+
+    def test_provider_finishes_while_pager_remains_open(self):
+        child = self.start()
+        child.write(b"slow\r")
+        child.read_until(b"working slowly")
+        child.write(b"/status\r")
+        child.read_until(b"REPORT_READY")
+        self.pager_open = True
+        journal = next((self.dotdir / "sessions").glob("*/events.jsonl"))
+        deadline = time.monotonic() + 6
+        completed = False
+        while time.monotonic() < deadline:
+            records = journal.read_text().rsplit("\n", 1)[0].splitlines()
+            completed = any(json.loads(line)["type"] == "turn_completed"
+                            for line in records)
+            if completed:
+                break
+            time.sleep(0.025)
+        held_output = self.available_output(child)
+        child.write(b"q\n")
+        self.pager_open = False
+        resumed = child.read_until(self.ready)
+        self.assertTrue(completed, "provider progress stopped for the pager's lifetime")
+        self.assertNotIn(b"slow complete", held_output)
+        self.assertIn(b"slow complete", resumed)
+
+    def complete_under_pager(self, child, prompt, event):
+        child.write(prompt.encode() + b"\r")
+        child.read_until(b"working slowly")
+        child.write(b"/status\r")
+        child.read_until(b"REPORT_READY")
+        self.pager_open = True
+        journal = next((self.dotdir / "sessions").glob("*/events.jsonl"))
+        deadline = time.monotonic() + 7
+        held = b""
+        records = []
+        while time.monotonic() < deadline:
+            held += self.available_output(child)
+            records = [json.loads(line) for line in
+                       journal.read_text().rsplit("\n", 1)[0].splitlines()]
+            if any(row["type"] == event for row in records):
+                break
+        held += self.available_output(child)
+        child.write(b"q\n")
+        self.pager_open = False
+        resumed = child.read_until(self.ready)
+        self.assertTrue(any(row["type"] == event for row in records),
+                        f"{event} blocked by the open pager")
+        return held, resumed, records
+
+    def test_provider_failure_is_retained_until_pager_exits(self):
+        child = self.start(config="[agent]\nmax_turn_retries=0\n")
+        held, resumed, _ = self.complete_under_pager(child, "slow_failure", "turn_failed")
+        self.assertNotIn(b"fixture delayed provider failure", held)
+        self.assertIn(b"fixture delayed provider failure", resumed)
+        child.write(b"ping\r")
+        child.read_until(b"pong")
+
+    def test_tool_finishes_and_retains_output_under_pager(self):
+        child = self.start()
+        child.write(b"/verbose 2\r")
+        child.read_until(b"verbosity: 2")
+        child.read_until(self.ready)
+        held, resumed, records = self.complete_under_pager(child, "slow_tool", "turn_completed")
+        self.assertTrue(any(row["type"] == "tool_finished" for row in records))
+        self.assertNotIn(b"fixture command succeeded", held)
+        self.assertIn(b"fixture command succeeded", resumed)
+        self.assertIn(b"slow complete", resumed)
+
+    def test_model_download_stays_queued_while_pager_owns_input(self):
+        child = self.start()
+        (self.home / "report.bin").write_bytes(b"pager transfer regression\n")
+        held, resumed, records = self.complete_under_pager(
+            child, "slow_download report.bin", "turn_completed")
+        self.assertEqual(sum(row["type"] == "download_queued" for row in records), 1)
+        self.assertFalse(any(row["type"] == "download_removed" for row in records))
+        self.assertNotIn(b"\x1b[?9001;", held)
+        self.assertNotIn(b"slow complete", held)
+        self.assertIn(b"slow complete", resumed)
+
+    def test_interrupting_pager_restores_composer(self):
+        child = self.start()
+        child.write(b"/status\r")
+        child.read_until(b"REPORT_READY")
+        self.pager_open = True
+        child.write(b"\x03")
+        child.read_until(self.ready)
+        self.pager_open = False
+        child.write(b"ping\r")
+        child.read_until(b"pong")
+        child.read_until(self.ready)
 
     def test_disabled_pager_retains_direct_output(self):
         child = self.start(configured="off")

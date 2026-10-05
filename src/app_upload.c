@@ -263,7 +263,8 @@ out:
 int
 snag_app_remote_probe(struct app_state *app)
 {
-    if (app->execute || !app->ui.opened || snag_isatty(STDERR_FILENO) != 1) return 0;
+    if (app->pager || app->execute || !app->ui.opened ||
+        snag_isatty(STDERR_FILENO) != 1) return 0;
     app->remote_attachment = snag_ui_session_attachment(&app->ui);
     if (app->ui.native && !app->remote_attachment) {
         app->remote_verified = app->remote_available = false;

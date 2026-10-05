@@ -106,6 +106,14 @@ int snag_pager_show(const char *command, const char *text, size_t length, bool *
 int snag_pager_file(const char *command, const char *path, bool *shown,
                     void (*service)(void *), int (*suspend)(void *), void *opaque,
                     const struct snag_terminal_profile *profile);
+/* An external pager owns the terminal while its caller continues normal work.
+ * Poll returns 0 while running, 1 on exit, or -1 on failure. Close reaps the
+ * child, restores terminal ownership and removes any private report file. */
+struct snag_pager;
+struct snag_pager *snag_pager_start(const char *, const char *, const char *, size_t,
+    const struct snag_terminal_profile *);
+int snag_pager_poll(struct snag_pager *, bool *, int (*)(void *), void *);
+void snag_pager_close(struct snag_pager *);
 int snag_hostname(char *out, size_t size);
 /* Owned UTF-8 copies; absent environment variables return NULL/ENOENT. */
 char *snag_environment(const char *name);

@@ -5,8 +5,8 @@
 This note defines how streamed model output and the active input composer share
 the terminal, and how users inspect and modify queued turns.
 
-The proposed [pager-retention and Vim workspace design](vim-mode.md) specifies
-external-terminal buffering and a separate, explicitly selected full-screen
+The [pager-retention and Vim workspace design](vim-mode.md) specifies
+external-terminal buffering and a proposed, explicitly selected full-screen
 interface. Its history redraw and window controls apply to that optional mode;
 the streaming presentation contract here continues to apply to ordinary startup.
 
@@ -354,7 +354,15 @@ Durable append-and-sync-before-adopt/ack remains unchanged. Display messages
 retain engine order; public deltas acknowledge their exact delivered prefix
 before the callback returns, including cancellation and failure paths. Editor
 and pager handoff restores cooked mode before the external program starts and
-reclaims the terminal after it exits. `/cat` resolves cwd-relative paths
+reclaims the terminal after it exits. Pagers run asynchronously: the engine polls
+their process state during ordinary provider and idle service. The renderer
+closes its physical stream before handover, retains unpainted records and reads
+durable IRC payloads from journal offsets. Provider deltas remain accepted while
+their physical display cursor stays parked. Return drains the selected view and
+restores the latest prompt. Model downloads remain queued during pager ownership.
+The configuration editor remains a synchronous boundary operation; its existing
+service callback maintains managed processes, IRC and native attachment.
+`/cat` resolves cwd-relative paths
 and passes the file to the configured pager without copying its contents into
 the conversation. Shutdown closes admission, restores output
 and terminal state, and joins the presentation thread; no thread is detached.

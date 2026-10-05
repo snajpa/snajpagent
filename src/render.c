@@ -185,13 +185,13 @@ write_literal(int fd, const char *s)
 static int
 output_begin(struct snag_render *render)
 {
-    return render->term ? snag_term_output_begin(render->term) : 0;
+    return render->term && !render->suspended ? snag_term_output_begin(render->term) : 0;
 }
 
 static int
 output_end(struct snag_render *render)
 {
-    return render->term ? snag_term_output_end(render->term) : 0;
+    return render->term && !render->suspended ? snag_term_output_end(render->term) : 0;
 }
 
 static bool
@@ -267,10 +267,16 @@ out:
     return rc;
 }
 
+static int view_block(struct snag_render *, unsigned int, enum snag_render_view, int,
+    const char *, const char *, size_t, size_t, bool, bool);
+
 static int
 write_role_block(struct snag_render *render, unsigned int boundary, int fd, const char *color,
                  const char *text, size_t len, size_t colored_len, bool terminal_safe, bool persistent)
 {
+    if (render->suspended)
+        return view_block(render, boundary, render->view, fd, color, text, len,
+            colored_len, terminal_safe, persistent);
     bool deferred = render->term && render->term->defer_redraw;
     bool prose = len && boundary == BOUNDARY_CONTENT &&
                  render->public_item_open && render->markdown_rendering &&
@@ -337,6 +343,10 @@ write_optional_block(struct snag_render *render, enum snag_presentation kind,
     bool wrote = false;
     int rc = -1;
 
+    if (render->suspended)
+        return snag_render_enabled(render, kind) ?
+            view_block(render, BOUNDARY_CONTENT, render->view, STDERR_FILENO, color,
+                text, len, colored_len, render->stderr_terminal, true) : 0;
     /* A block parks and repaints the composer once, not once per slice. */
     if (output_begin(render) < 0) return -1;
     while (len) {
@@ -458,7 +468,7 @@ view_block(struct snag_render *render, unsigned int boundary, enum snag_render_v
 {
     struct snag_render_record *record;
 
-    if (render->view == view && !render->view_head[view])
+    if (!render->suspended && render->view == view && !render->view_head[view])
         return write_role_block(render, boundary, fd, color, text, len, colored_len,
                                 terminal_safe, persistent);
     record = calloc(1u, sizeof(*record));
@@ -804,6 +814,14 @@ pause_rollout(struct snag_render *render)
         if (snag_render_public_end(render) < 0) return -1;
         open->physical_open = false;
     }
+    return 0;
+}
+
+int
+snag_render_suspend(struct snag_render *render, bool suspended)
+{
+    if (suspended && !render->suspended && pause_rollout(render) < 0) return -1;
+    render->suspended = suspended;
     return 0;
 }
 
@@ -2786,7 +2804,7 @@ snag_render_rollout(struct snag_render *render, const char *text, size_t len, st
         if (snag_buf_reserve(&record->text, filtered.len) < 0 ||
             (delivered && snag_buf_reserve(delivered, filtered.len) < 0) ||
             snag_buf_append(&record->text, filtered.data, filtered.len) < 0) goto out;
-        if (render->view == SNAG_RENDER_ROLLOUT &&
+        if (!render->suspended && render->view == SNAG_RENDER_ROLLOUT &&
             render->view_head[SNAG_RENDER_ROLLOUT] == record && rollout_physical_append(render, record,
                                     (const char *)filtered.data, filtered.len) < 0) goto out;
         if (delivered && snag_buf_append(delivered, filtered.data, filtered.len) < 0) goto out;
@@ -2820,7 +2838,7 @@ close_rollout_record(struct snag_render *render, bool abort)
             if (snag_buf_reserve(&record->text, tail.len) < 0 ||
                 snag_buf_append(&record->text, tail.data, tail.len) < 0) {
                 rc = -1;
-            } else if (render->view == SNAG_RENDER_ROLLOUT &&
+            } else if (!render->suspended && render->view == SNAG_RENDER_ROLLOUT &&
                        render->view_head[SNAG_RENDER_ROLLOUT] == record &&
                        rollout_physical_append(render, record,
                                                (const char *)tail.data, tail.len) < 0) {
@@ -3159,21 +3177,26 @@ snag_render_irc_event(struct snag_render *render, const struct snag_irc_event *e
     struct snag_render_record *record;
 
     if (!render || !event) return snag_errno(EINVAL);
+    struct snag_render_source source = render->irc_source;
     render->irc_source = (struct snag_render_source){0};
     bool unscoped = !event->room[0];
     bool selected = (unscoped && !render->chat_endpoint[0] && !render->chat_room[0]) ||
         (!strcmp(render->chat_endpoint, event->endpoint) && !strcmp(render->chat_room, event->room));
-    if (selected && render->view == SNAG_RENDER_CHAT && !render->view_head[SNAG_RENDER_CHAT])
+    if (!render->suspended && selected && render->view == SNAG_RENDER_CHAT &&
+        !render->view_head[SNAG_RENDER_CHAT])
         return render_irc_event_now(render, event);
     record = calloc(1u, sizeof(*record));
     if (!record) return -1;
     record->kind = SNAG_RENDER_RECORD_IRC;
-    record->irc = malloc(sizeof(*record->irc));
-    if (!record->irc) {
-        free_record(record);
-        return -1;
+    record->source = source;
+    if (!source.len) {
+        record->irc = malloc(sizeof(*record->irc));
+        if (!record->irc) {
+            free_record(record);
+            return -1;
+        }
+        *record->irc = *event;
     }
-    *record->irc = *event;
     if (queue_chat_record(render, record, event->endpoint, event->room) < 0) {
         free_record(record);
         return -1;
@@ -3200,7 +3223,8 @@ flush_view(struct snag_render *render, enum snag_render_view view, size_t record
 {
     size_t completed = 0u;
 
-    while (render->view == view && render->view_head[view] && completed < records) {
+    while (!render->suspended && render->view == view &&
+           render->view_head[view] && completed < records) {
         struct snag_render_record *record = render->view_head[view];
         int rc;
 
@@ -3322,7 +3346,7 @@ snag_render_view_runnable(const struct snag_render *render)
 {
     const struct snag_render_record *record;
 
-    if (!snag_render_view_pending(render) ||
+    if (render->suspended || !snag_render_view_pending(render) ||
         !(record = render->view_head[render->view])) return false;
     return record->source_state != BACKFILL_QUEUED &&
            record->response_state != BACKFILL_QUEUED;

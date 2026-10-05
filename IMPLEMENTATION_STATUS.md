@@ -33,6 +33,11 @@ a thread-local report destination. Automatic resume history keeps its normal
 display. Report capture excludes ordinary engine notifications and model output.
 Verbosity queries use the engine report path; setting verbosity stays a local UI
 control. Unset/disabled paging and startup failures retain direct output.
+Pagers run asynchronously while provider turns, managed processes and IRC keep
+progressing. Rendering retains incoming output until terminal ownership returns;
+durable IRC records use exact journal event ranges across automatic checkpoints.
+Model downloads stay queued during pager ownership. The optional Vim workspace
+remains described in [its implementation design](design/vim-mode.md).
 
 `snajpagent remote mosh HOST COMMAND...` separates Mosh options from the remote
 command automatically, including commands with --resume or --attach. Leading

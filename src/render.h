@@ -93,6 +93,7 @@ struct snag_render {
     void *checkpoint_opaque;
     unsigned int verbosity;
     bool suppress_optional;
+    bool suspended;
     int history_fd;
     struct snag_render_source response_source;
     struct snag_render_source irc_source;
@@ -142,6 +143,7 @@ struct snag_render {
 };
 
 void snag_render_init(struct snag_render *render, unsigned int verbosity);
+int snag_render_suspend(struct snag_render *, bool);
 bool snag_render_enabled(const struct snag_render *render, enum snag_presentation kind);
 void snag_render_free(struct snag_render *render);
 void snag_render_set_color(struct snag_render *render, enum snag_color_mode mode);

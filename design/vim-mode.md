@@ -7,6 +7,12 @@ against `7a70d81d336ef6f14d91ef944b1226c8efa65636`. This document describes the
 intended behavior; the `vm` command and semantic attachment described below are
 not implemented at that revision.
 
+Implementation checkpoint: asynchronous pager ownership and retained rendering
+are implemented in this branch. Held-pager regressions cover IRC delivery and
+provider completion; interaction tests cover failures, tools and queued downloads.
+The bounded history reader, optional workspace module, semantic attachment and
+IRC conversation work below remain to be implemented.
+
 ## 1. Outcome and decisions
 
 Keep receiving and retaining session output while a pager, editor or transfer

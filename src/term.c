@@ -578,6 +578,7 @@ snag_term_external_begin(struct snag_term *term, char *error, size_t error_size)
     if (term->raw && snag_term_input_restore(&term->host, true) < 0) goto fail;
     term->raw = false;
     if (snag_term_output_mode(&term->host, false) < 0) goto fail;
+    term->external = true;
     return 0;
 fail: return snag_errorf(error, error_size, "cannot release terminal for editor: %s", strerror(errno));
 }
@@ -596,6 +597,7 @@ snag_term_external_end(struct snag_term *term, char *error, size_t error_size)
     if ((term->capable || term->suspend) && set_raw(term) < 0) goto fail;
     if (term->capable && input_modes(term, true) < 0) goto fail;
     term->bracketed_paste = term->capable;
+    term->external = false;
     return 0;
 fail: return snag_errorf(error, error_size, "cannot restore terminal after editor: %s", strerror(errno));
 }
@@ -1375,7 +1377,8 @@ redraw(struct snag_term *term)
      * buffered edit once, so old-width frames do not pile up in the relay. */
     if (term->suspend && term->input_pos < term->input_len) return 0;
     if (term->submit_awaiting_activity) return 0;
-    if (term->input_only || !term->opened || !term->prompt_wanted || term->output_depth) {
+    if (term->external || term->input_only || !term->opened ||
+        !term->prompt_wanted || term->output_depth) {
         snag_term_trace(term, "skip", term->input_only ? "input_only" : !term->opened ? "closed" :
             !term->prompt_wanted ? "not-wanted" : "output_depth");
         return 0;

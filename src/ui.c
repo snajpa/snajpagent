@@ -909,11 +909,20 @@ apply_message(struct snag_ui_display *display, struct snag_ui_command *command,
     case SNAG_UI_EXTERNAL: {
         int rc;
         if (command->data.value) {
+            if (snag_render_suspend(render, true) < 0) return -1;
             input_stop(display);
             rc = snag_term_external_begin(term, error, error_size);
-            if (rc < 0) (void)input_start(display, NULL, 0u);
+            if (rc < 0) {
+                (void)snag_render_suspend(render, false);
+                (void)input_start(display, NULL, 0u);
+            }
         } else {
             rc = snag_term_external_end(term, error, error_size);
+            if (rc == 0) {
+                (void)snag_render_suspend(render, false);
+                display->view_repainting = true;
+                term->defer_redraw = true;
+            }
             if (rc == 0 && command->len && (!command->text || command->len > UI_INPUT_CAPACITY))
                 rc = snag_errorf(error, error_size,
                                 "transfer input tail exceeds terminal capacity");
@@ -1279,7 +1288,7 @@ local_feedback(struct snag_ui_display *display)
     struct ui_action *item = display->local;
     int rc = 0;
 
-    if (!item || display->painting_feedback) return 0;
+    if (!item || display->suspended || display->painting_feedback) return 0;
     if (!display->local_acknowledged) {
         display->painting_feedback = true;
         if (!item->submission_echoed) {
@@ -1446,13 +1455,15 @@ presentation_main(void *opaque)
                 if (stop) break;
             }
         }
-        if (!display.native_barrier && snag_render_view_pending(&display.render) &&
+        if (!display.suspended && !display.native_barrier &&
+            snag_render_view_pending(&display.render) &&
             snag_render_flush_pending(&display.render, UI_RENDER_BATCH) < 0) {
             atomic_store(&runtime->fatal, errno ? errno : EIO);
             display.input_closed = true;
             snag_wakeup_send(runtime->actions.wake[1]);
         }
-        if (display.view_repainting && !snag_render_view_pending(&display.render)) {
+        if (!display.suspended && display.view_repainting &&
+            !snag_render_view_pending(&display.render)) {
             display.view_repainting = false;
             display.term.defer_redraw = display.native_barrier;
             if (!display.native_barrier && display.prompt.source && apply_prompt(&display) < 0) {
