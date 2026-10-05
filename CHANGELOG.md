@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Stage native checkpoint origins with each live transaction. Replay and the
+  commit owner share declaration, queue-edit, call-time directory and unsettled
+  process rules; only durable ACK exposes the new origins and frontier.
+
 - Preserve explicit credential-reload controls in native event payloads and
   checkpoint metadata, with six-slot checkpoint compatibility for older drafts.
 - Capture native voice-import starts from the acknowledged destination cursor.

@@ -2747,6 +2747,25 @@ reattempt reconciles the retained batch once; a second failure requires fresh
 recovery. Close drains outstanding I/O before descriptor/lock teardown, preserving
 real journal bytes and releasing no dependent effect for an unadopted transaction.
 
+The commit owner also stages current checkpoint origins. Strict replay and live
+commits share one source-step implementation for fixed text declarations, resume
+options, pending input, queue creation versus replacement text, downloads,
+response/compaction epochs, call-time directories and unsettled process starts.
+The step consumes the final canonical record after literal/reference production;
+it never guesses origins from equal bytes. Dynamic entries describe the current
+working set rather than completed lifetime history.
+
+Origins are cloned before admission and adopted alongside the reducer and
+frontier only after canonical durability ACK. A retained failed transaction keeps
+its provisional origins separate; capture still returns only the last ACK-visible
+state. Capture copies the owning source vectors and frontier without journal I/O,
+so callers cannot mutate live provenance through returned storage. Clone failure
+preserves both owners. Capacities are memory bookkeeping, not checkpoint fields.
+The binder accepts independently established origins with the semantic state and
+producer. This capture seam does not publish an image or enable default native
+creation/open/resume. Provider capture and bounded dependency-closure maintenance
+still need their corresponding live integration.
+
 The internal binding requires independently verified identity, EOF boundary,
 frontier membership and complete working provenance under an exclusive lock. The
 constructor checks represented state/cursor geometry and the journal header/EOF;

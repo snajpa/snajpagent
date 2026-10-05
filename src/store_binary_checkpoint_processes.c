@@ -19,16 +19,6 @@ static const size_t counters[] = {
     offsetof(struct snag_process_state, input_pending)
 };
 
-void
-snag_binary_checkpoint_sources_free(struct snag_binary_checkpoint_sources *sources)
-{
-    if (!sources) return;
-    free(sources->processes);
-    free(sources->queue);
-    free(sources->downloads);
-    memset(sources, 0, sizeof(*sources));
-}
-
 static void
 put_number(unsigned char *out, uint64_t value, size_t size)
 {

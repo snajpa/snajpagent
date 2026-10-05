@@ -3960,6 +3960,7 @@ struct snag_binary_session {
     struct snag_binary_anchor boundary, proposed_boundary;
     struct snag_binary_index_tree tree, proposed_tree;
     struct snag_binary_producer producer, proposed;
+    struct snag_binary_checkpoint_sources sources, proposed_sources;
     struct binary_voice_import voice_import, proposed_voice_import;
     struct snag_binary_io *io;
     struct snag_session *candidate;
@@ -4038,6 +4039,7 @@ binary_discard_candidate(struct snag_binary_session *binary)
         binary->candidate = NULL;
     }
     snag_binary_producer_free(&binary->proposed);
+    snag_binary_checkpoint_sources_free(&binary->proposed_sources);
     free(binary->type);
     binary->type = NULL;
     json_decref(binary->data);
@@ -4080,6 +4082,7 @@ close_binary_session(struct snag_session *session)
     (void)snag_binary_io_close(binary->io);
     binary_discard_candidate(binary);
     snag_binary_producer_free(&binary->producer);
+    snag_binary_checkpoint_sources_free(&binary->sources);
     free(binary);
     session->binary = NULL;
 }
@@ -4087,15 +4090,22 @@ close_binary_session(struct snag_session *session)
 int
 snag_session_bind_binary(struct snag_session *session, const struct snag_binary_identity *identity,
     const struct snag_binary_anchor *boundary, const struct snag_binary_index_tree *tree,
-    const struct snag_binary_producer *producer, const struct snag_binary_io_ops *ops,
+    const struct snag_binary_producer *producer,
+    const struct snag_binary_checkpoint_sources *sources, const struct snag_binary_io_ops *ops,
     char *error, size_t error_size)
 {
-    if (!session || !identity || !boundary || !tree || !producer || session->binary ||
+    if (!session || !identity || !boundary || !tree || !producer || !sources || session->binary ||
         session->pending_log || session->log_fd < 0 || session->lock_fd < 0 ||
         session->log_end < 0 || boundary->end != (uint64_t)session->log_end ||
         boundary->next_seq != session->next_seq || boundary->turns != session->turn_count ||
         !boundary->next_seq || tree->count != boundary->next_seq - 1u ||
         producer->queue_count != session->pending_queue_count ||
+        sources->queue_count != session->pending_queue_count ||
+        sources->process_count != session->process_count ||
+        sources->download_count != json_array_size(session->download_queue) ||
+        (!!sources->input != !!session->pending_input) ||
+        (!!sources->texts.through != (boundary->next_seq != 1u)) ||
+        sources->texts.through >= boundary->next_seq ||
         (!!producer->input.creation != !!session->pending_input)) {
         return snag_fail(error, error_size, EINVAL, "invalid native session binding");
     }
@@ -4126,13 +4136,33 @@ snag_session_bind_binary(struct snag_session *session, const struct snag_binary_
     binary->boundary = *boundary;
     binary->tree = *tree;
     if (snag_binary_producer_clone(&binary->producer, producer) < 0 ||
+        snag_binary_checkpoint_sources_clone(&binary->sources, sources) < 0 ||
         !(binary->io = snag_binary_io_start(session->log_fd, boundary, ops))) {
         int code = errno;
         snag_binary_producer_free(&binary->producer);
+        snag_binary_checkpoint_sources_free(&binary->sources);
         free(binary);
         return snag_fail(error, error_size, code, "cannot start native session owner");
     }
     session->binary = binary;
+    return 0;
+}
+
+int
+snag_session_binary_checkpoint_capture(const struct snag_session *session,
+    struct snag_binary_anchor *boundary, struct snag_binary_index_tree *tree,
+    struct snag_binary_checkpoint_sources *sources, char *error, size_t error_size)
+{
+    if (!session || !boundary || !tree || !sources)
+        return snag_fail(error, error_size, EINVAL, "invalid native checkpoint capture");
+    const struct snag_binary_session *binary = session->binary;
+    if (!binary) return snag_fail(error, error_size, ENOTSUP, "session is not native");
+    if (binary->faulted)
+        return snag_fail(error, error_size, ESTALE, "native session requires fresh recovery");
+    if (snag_binary_checkpoint_sources_clone(sources, &binary->sources) < 0)
+        return snag_fail(error, error_size, errno, "cannot capture native checkpoint origins");
+    *boundary = binary->boundary;
+    *tree = binary->tree;
     return 0;
 }
 
@@ -4201,7 +4231,9 @@ binary_prepare_candidate(struct snag_session *session, const char *type, json_t 
     binary->proposed_voice_import = binary->voice_import;
     if (!binary->candidate || !binary->type || !binary->data ||
         clone_session_state(session, binary->candidate) < 0 ||
-        snag_binary_producer_clone(&binary->proposed, &binary->producer) < 0) goto fail;
+        snag_binary_producer_clone(&binary->proposed, &binary->producer) < 0 ||
+        snag_binary_checkpoint_sources_clone(&binary->proposed_sources, &binary->sources) < 0)
+        goto fail;
     data = binary->data;
     struct snag_session *candidate = binary->candidate;
     candidate->last_time_ms = session->next_seq == 1u ?
@@ -4222,6 +4254,9 @@ binary_prepare_candidate(struct snag_session *session, const char *type, json_t 
     stage = "working references";
     if (snag_binary_producer_reference(&binary->proposed, candidate, session->next_seq,
         &record, data) < 0) goto fail;
+    stage = "checkpoint origins";
+    if (snag_binary_checkpoint_sources_step(&binary->proposed_sources, candidate,
+        &record, session->next_seq, data) < 0) goto fail;
     stage = "batch";
     if (snag_binary_batch_encode(&decoded, &binary->boundary, &record, 1u,
         candidate->turn_count, &binary->proposed_boundary) < 0) goto fail;
@@ -4305,6 +4340,9 @@ commit_binary_session(struct snag_session *session, const char *type, json_t *da
     binary->tree = next;
     snag_binary_producer_free(&binary->producer);
     binary->producer = binary->proposed;
+    snag_binary_checkpoint_sources_free(&binary->sources);
+    binary->sources = binary->proposed_sources;
+    binary->proposed_sources = (struct snag_binary_checkpoint_sources){0};
     binary->voice_import = binary->proposed_voice_import;
     binary->proposed = (struct snag_binary_producer){0};
     free_session_state(session);

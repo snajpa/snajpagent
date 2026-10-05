@@ -6,15 +6,22 @@
 #include "store_binary_io.h"
 #include "store_binary_index.h"
 #include "store_binary_producer.h"
+#include "store_binary_checkpoint.h"
 
 /* Attach the live commit path to an independently verified native state and
  * exact EOF boundary under its exclusive lock. The caller proves identity,
  * frontier membership, native process scan cursors and complete working provenance.
- * Clone producer metadata
+ * Clone producer metadata and checkpoint origins
  * on success; caller retains all input owners. No file conversion or creation. */
 int snag_session_bind_binary(struct snag_session *, const struct snag_binary_identity *,
     const struct snag_binary_anchor *, const struct snag_binary_index_tree *,
-    const struct snag_binary_producer *, const struct snag_binary_io_ops *, char *, size_t);
+    const struct snag_binary_producer *, const struct snag_binary_checkpoint_sources *,
+    const struct snag_binary_io_ops *, char *, size_t);
+
+/* Capture only acknowledged engine-owned origins/frontier. Sources is initialized
+ * and owning; no output changes on failure. No derived file publication or I/O. */
+int snag_session_binary_checkpoint_capture(const struct snag_session *, struct snag_binary_anchor *,
+    struct snag_binary_index_tree *, struct snag_binary_checkpoint_sources *, char *, size_t);
 
 #include <stdbool.h>
 #include <stddef.h>

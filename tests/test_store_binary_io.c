@@ -455,6 +455,15 @@ native_effect(void *opaque, const struct snag_session *session, uint64_t sequenc
     struct probe *probe = opaque;
     assert(pthread_equal(probe->caller, pthread_self()));
     assert(sequence + 1u == session->next_seq && type && data);
+    struct snag_binary_anchor boundary;
+    struct snag_binary_index_tree tree;
+    struct snag_binary_checkpoint_sources sources = {0};
+    char error[256];
+    assert(!snag_session_binary_checkpoint_capture(session, &boundary, &tree,
+        &sources, error, sizeof(error)));
+    assert(boundary.next_seq == session->next_seq && tree.count == sequence &&
+        sources.texts.through == sequence);
+    snag_binary_checkpoint_sources_free(&sources);
     atomic_fetch_add(&probe->effects, 1u);
 }
 
@@ -478,15 +487,16 @@ native_fixture(struct snag_session *session, struct probe *probe)
     identity.id[0] = 17u;
     struct snag_binary_index_tree tree = {0};
     struct snag_binary_producer producer = {0};
+    struct snag_binary_checkpoint_sources sources = {0};
     struct snag_binary_io_ops ops = {
         .write_full = probe_write, .sync_file = probe_sync, .opaque = probe};
     char error[256];
     struct snag_binary_anchor bad = before;
     ++bad.end;
-    assert(snag_session_bind_binary(session, &identity, &bad, &tree, &producer,
+    assert(snag_session_bind_binary(session, &identity, &bad, &tree, &producer, &sources,
         &ops, error, sizeof(error)) < 0 && errno == EINVAL && !session->binary);
     probe->caller = pthread_self();
-    assert(!snag_session_bind_binary(session, &identity, &before, &tree, &producer,
+    assert(!snag_session_bind_binary(session, &identity, &before, &tree, &producer, &sources,
         &ops, error, sizeof(error)));
     session->on_commit = native_effect;
     session->on_commit_opaque = probe;
@@ -498,6 +508,146 @@ native_fixture(struct snag_session *session, struct probe *probe)
     assert(session->committed_start == (int64_t)before.end &&
         session->committed_end == session->log_end);
     assert(atomic_load(&probe->effects) == 1u);
+}
+
+/* Compare the ACK snapshot with independent prefix replay, not the provisional
+ * producer's own staged state. This also works beside a failed physical suffix. */
+static void
+native_checkpoint_matches(struct snag_session *session)
+{
+    struct snag_binary_anchor boundary;
+    struct snag_binary_index_tree tree;
+    struct snag_binary_checkpoint_sources captured = {0}, replayed = {0};
+    struct snag_session restored;
+    snag_session_init(&restored);
+    struct snag_binary_recovery recovery;
+    char error[256];
+    assert(!snag_session_binary_checkpoint_capture(session, &boundary, &tree,
+        &captured, error, sizeof(error)));
+    assert(boundary.next_seq == session->next_seq && tree.count == session->next_seq - 1u &&
+        captured.texts.through == session->next_seq - 1u);
+    assert(!snag_store_reconcile_binary_prefix(session, &restored, &boundary, NULL,
+        NULL, &recovery, &replayed, error, sizeof(error)));
+    struct snag_buf live = {.max = SIZE_MAX}, replay = {.max = SIZE_MAX};
+    assert(!snag_binary_checkpoint_core_encode(&live, &captured, session));
+    assert(!snag_binary_checkpoint_core_encode(&replay, &replayed, &restored));
+    assert(live.len == replay.len && !memcmp(live.data, replay.data, live.len));
+    json_t *left = snag_checkpoint_state_encode(session);
+    json_t *right = snag_checkpoint_state_encode(&restored);
+    assert(left && right && json_equal(left, right));
+    json_decref(left);
+    json_decref(right);
+    snag_buf_free(&live);
+    snag_buf_free(&replay);
+    snag_binary_checkpoint_sources_free(&captured);
+    snag_binary_checkpoint_sources_free(&replayed);
+    snag_session_close(&restored);
+}
+
+static void
+native_checkpoint_commit(struct snag_session *session, const char *type, json_t *data)
+{
+    char error[256];
+    assert(data);
+    int rc = snag_session_commit(session, type, data, NULL, error, sizeof(error));
+    if (rc < 0) fprintf(stderr, "native checkpoint fixture %s: %s\n", type, error);
+    assert(!rc);
+    native_checkpoint_matches(session);
+}
+
+static void
+test_native_checkpoint_origins(void)
+{
+    struct snag_session session;
+    struct probe probe = {0};
+    native_fixture(&session, &probe);
+    native_checkpoint_matches(&session);
+    char id[SNAG_ID_HEX_LEN + 1u];
+    for (unsigned int i = 1u; i <= 12u; ++i) {
+        assert(snprintf(id, sizeof(id), "%032x", i) == SNAG_ID_HEX_LEN);
+        native_checkpoint_commit(&session, "future_turn_queued", json_pack(
+            "{s:s,s:s,s:b,s:s,s:[{s:s,s:s}]}", "queue_id", id, "text", "original text",
+            "read_only", 0, "while_turn_id", "", "content", "type", "input_text",
+            "text", "original content"));
+    }
+    struct snag_binary_anchor boundary;
+    struct snag_binary_index_tree tree;
+    struct snag_binary_checkpoint_sources captured = {0}, again = {0};
+    char error[256];
+    assert(!snag_session_binary_checkpoint_capture(&session, &boundary, &tree,
+        &captured, error, sizeof(error)));
+    assert(captured.queue_count == 12u && captured.queue[0].creation == 2u &&
+        captured.queue[0].text == 2u);
+    assert(!snag_binary_checkpoint_sources_clone(&again, &captured));
+    assert(again.queue != captured.queue && again.queue_count == captured.queue_count &&
+        !memcmp(again.queue, captured.queue, captured.queue_count * sizeof(*captured.queue)));
+    struct snag_binary_checkpoint_sources saved = again, bad = captured;
+    bad.queue_count = SIZE_MAX;
+    assert(snag_binary_checkpoint_sources_clone(&again, &bad) < 0 && errno == EOVERFLOW &&
+        !memcmp(&saved, &again, sizeof(saved)));
+    assert(snag_binary_checkpoint_sources_clone(&again, &again) < 0 && errno == EINVAL &&
+        !memcmp(&saved, &again, sizeof(saved)));
+    captured.queue[0].text = UINT64_MAX; /* Returned copies never mutate the live owner. */
+    native_checkpoint_commit(&session, "future_turn_edited", json_pack("{s:s,s:s,s:b,s:b}",
+        "queue_id", "00000000000000000000000000000001", "text", "edited text",
+        "read_only", 0, "armed", 1));
+    assert(!snag_session_binary_checkpoint_capture(&session, &boundary, &tree,
+        &captured, error, sizeof(error)));
+    assert(captured.queue[0].creation == 2u && captured.queue[0].text == 14u &&
+        again.queue[0].text == 2u);
+    snag_binary_checkpoint_sources_free(&again);
+    snag_binary_checkpoint_sources_free(&captured);
+    for (unsigned int i = 1u; i <= 12u; ++i) {
+        assert(snprintf(id, sizeof(id), "%032x", i) == SNAG_ID_HEX_LEN);
+        native_checkpoint_commit(&session, "download_queued", json_pack(
+            "{s:s,s:s,s:s,s:I,s:I,s:s,s:I}", "id", id, "path", "/tmp/native-checkpoint",
+            "name", "download", "bytes", (json_int_t)i, "mtime", (json_int_t)0, "sha256",
+            "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "queued_ms", (json_int_t)17));
+    }
+    assert(!snag_session_binary_checkpoint_capture(&session, &boundary, &tree,
+        &captured, error, sizeof(error)));
+    assert(captured.download_count == 12u && captured.downloads[0].receipt == 15u);
+    assert(!snag_binary_checkpoint_sources_clone(&again, &captured));
+    assert(again.downloads != captured.downloads &&
+        !memcmp(again.downloads, captured.downloads,
+            captured.download_count * sizeof(*captured.downloads)));
+    snag_binary_checkpoint_sources_free(&again);
+    snag_binary_checkpoint_sources_free(&captured);
+    native_checkpoint_commit(&session, "download_removed", json_pack("{s:s,s:s}",
+        "id", "00000000000000000000000000000003", "reason", "fixture"));
+    native_checkpoint_commit(&session, "downloads_cleared",
+        json_pack("{s:s}", "reason", "fixture"));
+    for (unsigned int i = 1u; i <= 12u; ++i) {
+        assert(snprintf(id, sizeof(id), "%032x", i) == SNAG_ID_HEX_LEN);
+        native_checkpoint_commit(&session, "future_turn_cancelled",
+            json_pack("{s:[s],s:s}", "queue_ids", id, "reason", "user"));
+    }
+    for (unsigned int i = 0u; i < 2u; ++i) {
+        native_checkpoint_commit(&session, "banner_updated", json_pack("{s:s}",
+            "text", "same bytes, distinct declarations"));
+        assert(!snag_session_binary_checkpoint_capture(&session, &boundary, &tree,
+            &captured, error, sizeof(error)));
+        assert(captured.texts.slots[SNAG_BINARY_TEXT_BANNER].declaration == session.next_seq - 1u);
+        snag_binary_checkpoint_sources_free(&captured);
+    }
+    native_checkpoint_commit(&session, "banner_updated", json_pack("{s:s}", "text", ""));
+    assert(!snag_session_binary_checkpoint_capture(&session, &boundary, &tree,
+        &captured, error, sizeof(error)));
+    assert(!captured.queue_count && !captured.download_count &&
+        !captured.texts.slots[SNAG_BINARY_TEXT_BANNER].declaration);
+    snag_binary_checkpoint_sources_free(&captured);
+    snag_session_close(&session);
+    memset(&boundary, 0xa5, sizeof(boundary));
+    memset(&tree, 0x5a, sizeof(tree));
+    struct snag_binary_anchor saved_boundary = boundary;
+    struct snag_binary_index_tree saved_tree = tree;
+    captured.texts.through = UINT64_MAX;
+    assert(snag_session_binary_checkpoint_capture(&session, &boundary, &tree,
+        &captured, error, sizeof(error)) < 0 && errno == ENOTSUP &&
+        !memcmp(&saved_boundary, &boundary, sizeof(boundary)) &&
+        !memcmp(&saved_tree, &tree, sizeof(tree)) && captured.texts.through == UINT64_MAX);
+    snag_binary_checkpoint_sources_free(&captured);
 }
 
 static json_t *
@@ -585,6 +735,7 @@ test_native_session_retry(bool partial, unsigned int failures)
     assert(session.next_seq == before_seq && session.log_end == before_end &&
         sequence == 999u && atomic_load(&probe.effects) == 1u);
     assert(session.committed_start == before_start && session.committed_end == before_end);
+    native_checkpoint_matches(&session);
     size_t writes = probe.writes, syncs = probe.syncs;
     assert(snag_session_commit(&session, "goal_started", native_goal("different"), &sequence,
         error, sizeof(error)) < 0 && errno == EBUSY);
@@ -601,6 +752,7 @@ test_native_session_retry(bool partial, unsigned int failures)
         assert(session.committed_start == before_end && session.committed_end == session.log_end);
         assert(!strcmp(session.goal_prompt, "retained native goal"));
         assert(atomic_load(&probe.effects) == 2u);
+        native_checkpoint_matches(&session);
     } else {
         assert(rc < 0 && errno == EIO && session.next_seq == before_seq &&
             session.log_end == before_end && atomic_load(&probe.effects) == 1u);
@@ -884,6 +1036,7 @@ test_native_clone_failure(void)
 void
 test_store_binary_io(void)
 {
+    test_native_checkpoint_origins();
     test_native_session_ack();
     test_native_session_retry(true, 1u);
     test_native_session_retry(false, 1u);

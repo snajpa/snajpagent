@@ -134,7 +134,7 @@ struct snag_binary_checkpoint_download_source {
     uint64_t receipt;
 };
 
-/* Current payload origins, published together only after complete replay. */
+/* Current payload origins, adopted with the replay result or durable native ACK. */
 struct snag_binary_checkpoint_sources {
     struct snag_binary_checkpoint_texts texts;
     struct snag_binary_checkpoint_call_source calls;
@@ -148,11 +148,22 @@ struct snag_binary_checkpoint_sources {
     uint64_t resume_options;
     struct snag_binary_checkpoint_download_source *downloads;
     size_t download_count;
+    size_t process_capacity, queue_capacity, download_capacity; /* Owning memory only. */
 };
 
 /* Release an initialized/returned owning source set, then zero it. Successful
  * replay returns new ownership; callers release old sources before reusing them. */
 void snag_binary_checkpoint_sources_free(struct snag_binary_checkpoint_sources *);
+
+/* Initialized owning destinations. Clone failure preserves both owners. */
+int snag_binary_checkpoint_sources_clone(struct snag_binary_checkpoint_sources *,
+    const struct snag_binary_checkpoint_sources *);
+
+/* After strict reduction of the canonical typed event. Mutates only provisional
+ * origins; on failure discard that candidate. Metadata uses the same rule as
+ * turns, and literal/reference tuples come from final canonical record bytes. */
+int snag_binary_checkpoint_sources_step(struct snag_binary_checkpoint_sources *,
+    const struct snag_session *, const struct snag_binary_record *, uint64_t, const json_t *);
 
 struct snag_binary_checkpoint_calls {
     struct snag_binary_checkpoint_call_source source;
