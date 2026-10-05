@@ -794,6 +794,75 @@ same_core_state(const struct snag_session *expected, const struct snag_session *
     assert(expected->last_time_ms == actual->last_time_ms);
 }
 
+static unsigned int bounded_reference_suffixes;
+
+static void
+bounded_reference_suffix(struct snag_session *source, const struct snag_session *expected,
+    const struct snag_binary_anchor *stop, uint64_t turn_sequence)
+{
+    unsigned char header[SNAG_BINARY_HEADER_SIZE];
+    assert(snag_pread(source->log_fd, header, sizeof(header), 0) == (ssize_t)sizeof(header));
+    struct snag_binary_identity identity;
+    struct snag_binary_anchor start;
+    assert(!snag_binary_header_decode(header, sizeof(header), &identity, &start));
+    struct snag_buf scratch = {.max = SNAG_BINARY_BATCH_MAX};
+    for (;;) {
+        struct snag_binary_batch batch;
+        struct snag_binary_anchor next;
+        assert(!snag_binary_batch_read(source->log_fd, stop->end, &start, &scratch, &batch, &next));
+        if (turn_sequence < next.next_seq) break;
+        start = next;
+    }
+    snag_buf_free(&scratch);
+    assert(start.next_seq > 1u && start.next_seq <= turn_sequence);
+    struct snag_session prefix, loaded;
+    snag_session_init(&prefix);
+    snag_session_init(&loaded);
+    struct snag_binary_checkpoint_sources origins = {0}, restored = {0};
+    struct snag_binary_recovery recovery = {0};
+    char error[128] = {0};
+    assert(!snag_store_reconcile_binary_prefix(source, &prefix, &start, NULL, NULL,
+        &recovery, &origins, error, sizeof(error)));
+    struct snag_buf core = {.max = SIZE_MAX};
+    assert(!snag_binary_checkpoint_core_encode(&core, &origins, &prefix));
+    struct snag_binary_checkpoint_frame frame = {.identity = identity, .boundary = start,
+        .generation = 1u, .core = {.version = SNAG_BINARY_CORE_VERSION,
+            .data = (const unsigned char *)core.data, .size = core.len}};
+    struct snag_buf locations = {.max = SIZE_MAX};
+    struct snag_binary_checkpoint_index access;
+    binary_fixture_access(source->log_fd, &start, &locations, &access);
+    assert(!snag_binary_checkpoint_core_read(source->log_fd, &frame, &access, &loaded, &restored));
+    int64_t position = snag_seek(source->log_fd, 0, SEEK_CUR);
+    assert(!snag_store_reduce_binary_suffix_prefix(source, &loaded, &start, stop, &access,
+        NULL, NULL, NULL, NULL, &recovery, &restored, error, sizeof(error)));
+    same_core_state(expected, &loaded);
+    assert(loaded.log_end == (int64_t)stop->end && !recovery.incomplete_tail_bytes);
+    snag_session_close(&loaded);
+    snag_binary_checkpoint_sources_free(&restored);
+    unsigned char root[32];
+    assert(!snag_binary_index_tree_root(&access.tree, root));
+    struct snag_buf empty_bytes = {.max = SIZE_MAX};
+    assert(!snag_binary_checkpoint_index_encode(&empty_bytes, &identity, &start,
+        &access.tree, NULL, 0u));
+    struct snag_binary_checkpoint_index empty;
+    assert(!snag_binary_checkpoint_index_decode(empty_bytes.data, empty_bytes.len,
+        &identity, &start, root, &empty));
+    snag_session_init(&loaded);
+    assert(!snag_binary_checkpoint_core_read(source->log_fd, &frame, &access, &loaded, &restored));
+    assert(snag_store_reduce_binary_suffix_prefix(source, &loaded, &start, stop, &empty,
+        NULL, NULL, NULL, NULL, &recovery, &restored, error, sizeof(error)) < 0 && errno == ENOENT);
+    assert(recovery.problem_seq == turn_sequence && !recovery.incomplete_tail_bytes &&
+        snag_seek(source->log_fd, 0, SEEK_CUR) == position);
+    ++bounded_reference_suffixes;
+    snag_session_close(&loaded);
+    snag_session_close(&prefix);
+    snag_binary_checkpoint_sources_free(&restored);
+    snag_binary_checkpoint_sources_free(&origins);
+    snag_buf_free(&empty_bytes);
+    snag_buf_free(&locations);
+    snag_buf_free(&core);
+}
+
 static void
 file_digest(int fd, unsigned char digest[32])
 {
@@ -1633,6 +1702,9 @@ test_direct_references(struct snag_store *store, const char *cwd, bool timer, bo
             same_core_state(&expected, &restored);
             assert(restored.log_end == (int64_t)file.len);
             if (mode == TURN_REF_BOTH) assert(file.len < fixture.file.len);
+            if (mode == TURN_REF_BOTH && !irc) {
+                bounded_reference_suffix(&source, &restored, &recovery.verified, sequences.turn);
+            }
             /* Inspect the referenced turn before later turns replace its state. */
             prefix_through(&file, sequences.turn, &prefix);
             assert(!replay_check(&source, &restored, &recovery, prefix.data, prefix.len));
@@ -4024,6 +4096,9 @@ test_store_binary_replay(struct snag_store *store, const char *cwd)
 
     assert(prefix_comparisons);
     printf("native core prefix: %u state/origin comparisons\n", prefix_comparisons);
+    assert(bounded_reference_suffixes);
+    printf("native bounded referenced suffix: %u complete/missing-old pairs\n",
+        bounded_reference_suffixes);
 
     snag_buf_free(&payload);
     snag_buf_free(&file);

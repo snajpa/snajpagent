@@ -89,4 +89,21 @@ int snag_store_reduce_binary_suffix(struct snag_session *source, struct snag_ses
     struct snag_binary_recovery *recovery, struct snag_binary_checkpoint_sources *sources,
     char *error, size_t error_size);
 
+/* The same disposable reduction through an exact independently established
+ * committed stop. A partial batch or any mismatched stop member fails; bytes
+ * after stop remain UNINSPECTED and success supplies no tail-repair authority.
+ * Required older locations use a pinned table at start, never a lifetime scan.
+ * The caller proves its identity/membership, start ancestry, immutable ownership
+ * and byte-work budget. Actual suffix references can require additional old
+ * locations beyond the checkpoint's current closure; those must be supplied
+ * with independent membership proof, or reduction fails unavailable.
+ * Cancellation precedes batch reads, record visits and the final source check.
+ * Both anchors may alias recovery. State/callbacks remain disposable on error;
+ * sources retain ownership, recovery.batches counts only the inspected suffix. */
+int snag_store_reduce_binary_suffix_prefix(struct snag_session *source, struct snag_session *state,
+    const struct snag_binary_anchor *start, const struct snag_binary_anchor *stop,
+    const struct snag_binary_checkpoint_index *access, snag_session_event_fn fn, void *opaque,
+    bool (*cancelled)(void *opaque), void *cancel_opaque, struct snag_binary_recovery *recovery,
+    struct snag_binary_checkpoint_sources *sources, char *error, size_t error_size);
+
 #endif

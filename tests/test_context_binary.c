@@ -20,6 +20,7 @@ static bool checked_failures, checked_source_failures;
 static unsigned int warm_compared, checkpoint_compared, checkpoint_rejected;
 static unsigned int checkpoint_voice_rejected;
 static unsigned int direct_compared, direct_rejected, direct_uninspected;
+static unsigned int bounded_suffix_compared, bounded_suffix_rejected;
 static unsigned int checkpoint_late_rejected, suffix_compared;
 static unsigned int suffix_late_rejected, suffix_bad_rejected, suffix_tails;
 static unsigned int checkpoint_rewrite_rejected;
@@ -853,6 +854,129 @@ separate_batches(FILE *original)
 }
 
 static void
+reject_bounded_suffix(struct snag_session *source, const struct snag_binary_checkpoint_frame *frame,
+    const struct snag_binary_checkpoint_index *original,
+    const struct snag_binary_checkpoint_index *access, const struct snag_binary_anchor *stop,
+    bool (*cancelled)(void *opaque), void *opaque, int expected_errno)
+{
+    struct snag_session state;
+    snag_session_init(&state);
+    struct snag_binary_checkpoint_sources origins = {0};
+    assert(!snag_binary_checkpoint_core_read(source->log_fd, frame, original, &state, &origins));
+    struct snag_binary_recovery recovery = {0};
+    char error[128] = {0};
+    int64_t position = snag_seek(source->log_fd, 0, SEEK_CUR);
+    errno = 0;
+    assert(snag_store_reduce_binary_suffix_prefix(source, &state, &frame->boundary, stop, access,
+        NULL, NULL, cancelled, opaque, &recovery, &origins, error, sizeof(error)) < 0);
+    assert(errno == expected_errno && !recovery.incomplete_tail_bytes);
+    assert(snag_seek(source->log_fd, 0, SEEK_CUR) == position);
+    snag_session_close(&state);
+    snag_binary_checkpoint_sources_free(&origins);
+    ++bounded_suffix_rejected;
+}
+
+static void
+bounded_suffix_checks(struct snag_session *source, const struct snag_session *expected,
+    const struct snag_binary_checkpoint_sources *expected_origins,
+    const struct snag_binary_checkpoint_frame *frame, const struct snag_binary_anchor *stop)
+{
+    struct snag_buf locations = {.max = SIZE_MAX};
+    struct snag_binary_checkpoint_index access;
+    binary_fixture_access(source->log_fd, &frame->boundary, &locations, &access);
+    struct snag_session state;
+    snag_session_init(&state);
+    struct snag_binary_checkpoint_sources origins = {0};
+    assert(!snag_binary_checkpoint_core_read(source->log_fd, frame, &access, &state, &origins));
+    struct snag_binary_recovery recovery = {.verified = *stop};
+    struct provider_cancel cancel = {0};
+    char error[128] = {0};
+    int64_t position = snag_seek(source->log_fd, 0, SEEK_CUR);
+    int rc = snag_store_reduce_binary_suffix_prefix(source, &state, &frame->boundary,
+        &recovery.verified, &access, NULL, NULL, cancel_provider, &cancel, &recovery, &origins,
+        error, sizeof(error));
+    if (rc < 0) fprintf(stderr, "bounded suffix: %s (%d)\n", error, errno);
+    assert(!rc && !recovery.incomplete_tail_bytes && !recovery.problem_seq &&
+        recovery.verified.end == stop->end && recovery.verified.next_seq == stop->next_seq);
+    assert(recovery.batches == stop->next_seq - frame->boundary.next_seq &&
+        snag_seek(source->log_fd, 0, SEEK_CUR) == position);
+    json_t *left = snag_checkpoint_state_encode(expected);
+    json_t *right = snag_checkpoint_state_encode(&state);
+    assert(left && right && json_equal(left, right));
+    json_decref(left);
+    json_decref(right);
+    struct snag_buf wanted = {.max = SIZE_MAX};
+    struct snag_buf got = {.max = SIZE_MAX};
+    assert(!snag_binary_checkpoint_core_encode(&wanted, expected_origins, expected));
+    assert(!snag_binary_checkpoint_core_encode(&got, &origins, &state));
+    assert(wanted.len == got.len && !memcmp(wanted.data, got.data, got.len));
+    snag_buf_free(&wanted);
+    snag_buf_free(&got);
+    snag_session_close(&state);
+    snag_binary_checkpoint_sources_free(&origins);
+    ++bounded_suffix_compared;
+    static bool checked[2];
+    struct snag_binary_checkpoint_provider provider;
+    assert(!snag_binary_checkpoint_provider_decode(frame->provider.data, frame->provider.size,
+        &provider));
+    unsigned int class_mode = provider.history_count ? 1u : 0u;
+    if (!checked[class_mode] && stop->next_seq > frame->boundary.next_seq) {
+        checked[class_mode] = true;
+        for (size_t i = 1u; i <= cancel.calls; ++i) {
+            struct provider_cancel stopped = {.fail_at = i};
+            reject_bounded_suffix(source, frame, &access, &access, stop, cancel_provider,
+                &stopped, ECANCELED);
+            assert(stopped.calls == i);
+        }
+        for (unsigned int field = 0u; field < 6u; ++field) {
+            struct snag_binary_anchor bad = *stop;
+            if (field == 0u) --bad.end;
+            if (field == 1u) ++bad.end;
+            if (field == 2u) ++bad.next_seq;
+            if (field == 3u) ++bad.turns;
+            if (field == 4u) ++bad.previous;
+            if (field == 5u) bad.digest[0] ^= 1u;
+            reject_bounded_suffix(source, frame, &access, &access, &bad, NULL, NULL, EINVAL);
+        }
+        reject_bounded_suffix(source, frame, &access, NULL, stop, NULL, NULL, ENOTSUP);
+        struct snag_binary_checkpoint_index bad_access = access;
+        ++bad_access.boundary.next_seq;
+        reject_bounded_suffix(source, frame, &access, &bad_access, stop, NULL, NULL, EINVAL);
+        bad_access = access;
+        ++bad_access.identity.created_ms;
+        reject_bounded_suffix(source, frame, &access, &bad_access, stop, NULL, NULL, EINVAL);
+        snag_file_info before;
+        assert(!snag_fstat(source->log_fd, &before));
+        struct direct_mutation mutation = {.cancel = {.fail_at = cancel.calls},
+            .fd = source->log_fd, .size = before.st_size};
+        assert(snag_pread(source->log_fd, &mutation.first, 1u, 0) == 1);
+        reject_bounded_suffix(source, frame, &access, &access, stop, mutate_materialization,
+            &mutation, EAGAIN);
+        assert(mutation.changed);
+        write_source_byte(source->log_fd, 0, mutation.first);
+    }
+    /* A stop at capture inspects no suffix or later corrupt wire bytes. */
+    snag_session_init(&state);
+    assert(!snag_binary_checkpoint_core_read(source->log_fd, frame, &access, &state, &origins));
+    unsigned char next_byte = 0u;
+    bool has_tail = frame->boundary.end < stop->end;
+    if (has_tail) {
+        assert(snag_pread(source->log_fd, &next_byte, 1u, (int64_t)frame->boundary.end) == 1);
+        write_source_byte(source->log_fd, (int64_t)frame->boundary.end, next_byte ^ 1u);
+    }
+    recovery.verified = frame->boundary;
+    assert(!snag_store_reduce_binary_suffix_prefix(source, &state, &recovery.verified,
+        &recovery.verified, &access, NULL, NULL, NULL, NULL, &recovery, &origins,
+        error, sizeof(error)));
+    assert(!recovery.batches && !recovery.incomplete_tail_bytes &&
+        recovery.verified.end == frame->boundary.end);
+    if (has_tail) write_source_byte(source->log_fd, (int64_t)frame->boundary.end, next_byte);
+    snag_session_close(&state);
+    snag_binary_checkpoint_sources_free(&origins);
+    snag_buf_free(&locations);
+}
+
+static void
 checkpoint_suffix_matches(struct snag_session *source, struct snag_session *expected,
     const struct snag_binary_anchor *full, struct snag_binary_checkpoint_sources *origins)
 {
@@ -895,6 +1019,7 @@ checkpoint_suffix_matches(struct snag_session *source, struct snag_session *expe
         .data = (unsigned char *)core.data, .size = core.len};
     frame.provider = (struct snag_binary_checkpoint_section){.version = 1u,
         .data = (unsigned char *)provider.data, .size = provider.len};
+    bounded_suffix_checks(source, expected, origins, &frame, full);
     struct snag_buf bytes = {.max = SIZE_MAX};
     assert(snag_binary_checkpoint_frame_encode(&bytes, &frame) == 0);
     int rc = snag_store_resume_binary_context_checkpoint(source, &resumed, &anchor,
@@ -1428,5 +1553,7 @@ test_context_binary_report(void)
     printf("native direct checkpoint: %u joint comparisons; %u rejected stages; "
         "%u unrelated old corruption skipped\n", direct_compared, direct_rejected,
         direct_uninspected);
+    printf("native bounded suffix: %u comparisons; %u rejected boundaries/stages\n",
+        bounded_suffix_compared, bounded_suffix_rejected);
     fflush(stdout);
 }

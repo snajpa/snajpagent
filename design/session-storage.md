@@ -1990,6 +1990,26 @@ Call transformations, retained response streams and provider span hydration
 use this iterator. Snapshot closure selection is available; live producer
 maintenance and runtime admission remain pending.
 
+### Bounded semantic suffix reduction
+
+The exact-prefix suffix reducer takes trusted start and stop commit anchors and
+pinned old locations at start. It strictly reduces each intervening batch into
+disposable core/origin state, with cancellation before reads and record visits.
+Every stop member must match the resulting canonical anchor; a partial batch is
+an error rather than a shorter accepted prefix. Bytes beyond stop stay
+uninspected, and success supplies no tail-repair authority. Source stamps are
+checked after the final cancellation callback. A failed candidate and provisional
+callbacks are discarded by their enclosing adoption transaction; origin storage
+remains owned on every return.
+
+The caller establishes identity, old membership, start ancestry and the suffix
+byte-work budget. New suffix records can reference older sources beyond the
+checkpoint's current working set, such as earlier output from an unsettled
+process. Those locations require independently proved membership before use;
+missing locations fail instead of triggering a lifetime scan. The existing
+full-suffix adapter retains table-free lookup for explicit repair/oracles.
+Current historical lookup and joint bounded application admission remain pending.
+
 ### Indexed pending-input materialization
 
 Pending input, queued-turn creation/latest-text and steering receipt readers take

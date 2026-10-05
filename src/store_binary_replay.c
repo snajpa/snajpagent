@@ -16,6 +16,8 @@ struct replay_context {
     int fd;
     snag_session_event_fn fn;
     void *opaque;
+    bool (*cancelled)(void *opaque);
+    void *cancel_opaque;
     uint64_t sequence;
     uint64_t response_sequence;
     bool source_projection; /* Pinned source hydration, without semantic reduction. */
@@ -918,6 +920,15 @@ reduce_record(struct replay_context *context, struct snag_session *state,
 }
 
 static int
+replay_cancelled(const struct replay_context *context, char *error, size_t error_size)
+{
+    if (context->cancelled && context->cancelled(context->cancel_opaque)) {
+        return snag_fail(error, error_size, ECANCELED, "native suffix reduction cancelled");
+    }
+    return 0;
+}
+
+static int
 replay_batches(struct replay_context *context, struct snag_session *state,
     const struct snag_binary_identity *identity, struct snag_binary_anchor *position,
     uint64_t boundary, struct snag_binary_recovery *recovery, char *error, size_t error_size)
@@ -931,6 +942,7 @@ replay_batches(struct replay_context *context, struct snag_session *state,
         recovery->problem_end = boundary;
         struct snag_binary_batch batch;
         struct snag_binary_anchor next;
+        if (replay_cancelled(context, error, error_size) < 0) goto done;
         int read = snag_binary_batch_read(context->fd, boundary, &anchor,
             &scratch, &batch, &next);
         if (read < 0) {
@@ -953,6 +965,7 @@ replay_batches(struct replay_context *context, struct snag_session *state,
             recovery->problem_seq = batch.first_seq + i;
             recovery->problem_start = anchor.end;
             recovery->problem_end = next.end;
+            if (replay_cancelled(context, error, error_size) < 0) goto done;
             if (snag_binary_record_next(&batch, &cursor, &record, &sequence) != 0) {
                 snag_fail(error, error_size, EINVAL, "invalid verified native record");
                 goto done;
@@ -1099,11 +1112,12 @@ snag_store_reconcile_binary_prefix(struct snag_session *source, struct snag_sess
         error, error_size);
 }
 
-int
-snag_store_reduce_binary_suffix(struct snag_session *source, struct snag_session *state,
-    const struct snag_binary_anchor *start, snag_session_event_fn fn, void *opaque,
-    struct snag_binary_recovery *recovery, struct snag_binary_checkpoint_sources *sources,
-    char *error, size_t error_size)
+static int
+reduce_binary_suffix(struct snag_session *source, struct snag_session *state,
+    const struct snag_binary_anchor *start, const struct snag_binary_anchor *stop,
+    const struct snag_binary_checkpoint_index *access, snag_session_event_fn fn, void *opaque,
+    bool (*cancelled)(void *opaque), void *cancel_opaque, struct snag_binary_recovery *recovery,
+    struct snag_binary_checkpoint_sources *sources, char *error, size_t error_size)
 {
     if (!source || !state || source == state || !start || !recovery || !sources ||
         source->log_fd < 0 || source->lock_fd < 0 || source->pending_log ||
@@ -1126,13 +1140,28 @@ snag_store_reduce_binary_suffix(struct snag_session *source, struct snag_session
     }
     /* Copy first: start may alias the caller's previous recovery.verified. */
     struct snag_binary_anchor anchor = *start, root;
+    struct snag_binary_anchor expected = stop ? *stop : (struct snag_binary_anchor){0};
+    if (stop && (expected.end < anchor.end || expected.next_seq < anchor.next_seq ||
+        expected.turns < anchor.turns || expected.previous < anchor.previous ||
+        expected.turns >= expected.next_seq || expected.previous >= expected.end)) {
+        return snag_fail(error, error_size, EINVAL, "invalid native suffix stop boundary");
+    }
+    if (access && (access->tree.count != anchor.next_seq - 1u ||
+        access->boundary.end != anchor.end || access->boundary.next_seq != anchor.next_seq ||
+        access->boundary.turns != anchor.turns || access->boundary.previous != anchor.previous ||
+        memcmp(access->boundary.digest, anchor.digest, sizeof(anchor.digest)))) {
+        return snag_fail(error, error_size, EINVAL, "native suffix access boundary mismatch");
+    }
     *recovery = (struct snag_binary_recovery){.verified = anchor,
         .problem_seq = anchor.next_seq, .problem_start = anchor.end};
     snag_file_info before, after;
     if (snag_fstat(source->log_fd, &before) < 0 || !S_ISREG(before.st_mode) ||
         before.st_size < 0 || anchor.end > (uint64_t)before.st_size)
         return snag_fail(error, error_size, EINVAL, "cannot inspect native suffix source");
-    uint64_t boundary = (uint64_t)before.st_size;
+    uint64_t boundary = stop ? expected.end : (uint64_t)before.st_size;
+    if (boundary > (uint64_t)before.st_size) {
+        return snag_fail(error, error_size, EINVAL, "native suffix stop lies outside the source");
+    }
     recovery->problem_end = boundary;
     struct snag_binary_identity identity;
     if (read_identity(source->log_fd, boundary, &identity, &root) < 0)
@@ -1140,10 +1169,14 @@ snag_store_reduce_binary_suffix(struct snag_session *source, struct snag_session
     char id[SNAG_ID_HEX_LEN + 1u], hash[65];
     bytes_hex(id, identity.id, sizeof(identity.id));
     bytes_hex(hash, anchor.digest, sizeof(anchor.digest));
-    if (strcmp(id, source->id) || strcmp(id, state->id) || strcmp(hash, state->prev_sha256))
+    if (strcmp(id, source->id) || strcmp(id, state->id) || strcmp(hash, state->prev_sha256) ||
+        (access && (access->identity.created_ms != identity.created_ms ||
+            memcmp(access->identity.id, identity.id, sizeof(identity.id))))) {
         return snag_fail(error, error_size, EINVAL, "native suffix identity/boundary mismatch");
+    }
     struct replay_context context = {.fd = source->log_fd, .fn = fn, .opaque = opaque,
         .sequence = anchor.next_seq - 1u, .through = anchor, .sources = *sources,
+        .access = access, .cancelled = cancelled, .cancel_opaque = cancel_opaque,
         .response_sequence = state->response_open ? sources->response_start : 0u,
         .process_capacity = sources->process_count, .queue_capacity = sources->queue_count,
         .download_capacity = sources->download_count};
@@ -1153,6 +1186,12 @@ snag_store_reduce_binary_suffix(struct snag_session *source, struct snag_session
     /* Return ownership even on failure: this candidate is disposable, not the
      * caller's adopted session. Nothing dispatches or repairs the source. */
     *sources = context.sources;
+    if (rc == 0 && stop && (anchor.end != expected.end || anchor.next_seq != expected.next_seq ||
+        anchor.turns != expected.turns || anchor.previous != expected.previous ||
+        memcmp(anchor.digest, expected.digest, sizeof(anchor.digest)))) {
+        rc = snag_fail(error, error_size, EINVAL, "native suffix stop does not match replay");
+    }
+    if (rc == 0) rc = replay_cancelled(&context, error, error_size);
     if (rc == 0 && (snag_fstat(source->log_fd, &after) < 0 ||
         !snag_file_unchanged(&before, &after))) {
         rc = snag_fail(error, error_size, EAGAIN, "native source changed during suffix replay");
@@ -1163,4 +1202,31 @@ snag_store_reduce_binary_suffix(struct snag_session *source, struct snag_session
         recovery->problem_seq = recovery->problem_start = recovery->problem_end = 0u;
     }
     return rc;
+}
+
+int
+snag_store_reduce_binary_suffix(struct snag_session *source, struct snag_session *state,
+    const struct snag_binary_anchor *start, snag_session_event_fn fn, void *opaque,
+    struct snag_binary_recovery *recovery, struct snag_binary_checkpoint_sources *sources,
+    char *error, size_t error_size)
+{
+    return reduce_binary_suffix(source, state, start, NULL, NULL, fn, opaque, NULL, NULL,
+        recovery, sources, error, error_size);
+}
+
+int
+snag_store_reduce_binary_suffix_prefix(struct snag_session *source, struct snag_session *state,
+    const struct snag_binary_anchor *start, const struct snag_binary_anchor *stop,
+    const struct snag_binary_checkpoint_index *access, snag_session_event_fn fn, void *opaque,
+    bool (*cancelled)(void *opaque), void *cancel_opaque, struct snag_binary_recovery *recovery,
+    struct snag_binary_checkpoint_sources *sources, char *error, size_t error_size)
+{
+    if (!stop) {
+        return snag_fail(error, error_size, EINVAL, "missing native suffix stop boundary");
+    }
+    if (!access) {
+        return snag_fail(error, error_size, ENOTSUP, "native suffix access unavailable");
+    }
+    return reduce_binary_suffix(source, state, start, stop, access, fn, opaque, cancelled,
+        cancel_opaque, recovery, sources, error, error_size);
 }
