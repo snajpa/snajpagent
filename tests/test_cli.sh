@@ -85,9 +85,12 @@ git("config", "user.email", "version@example.test")
 git("add", ".")
 git("commit", "-qm", "baseline")
 recipe = "version-test:;@printf '%s\\n' '$(BUILD_VERSION)'"
+version_env = {key: value for key, value in os.environ.items()
+               if key not in ("MAKEFLAGS", "MFLAGS", "MAKEOVERRIDES")}
 def version():
     return subprocess.run(["make", "--no-print-directory", "-s", "--eval", recipe,
-                           "version-test"], cwd=work, text=True, capture_output=True)
+                           "version-test"], cwd=work, env=version_env,
+                          text=True, capture_output=True)
 assert version().returncode != 0  # No guessed version without a tag.
 git("tag", "0.98")
 assert version().stdout.strip() == "0.98"
