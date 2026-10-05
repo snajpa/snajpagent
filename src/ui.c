@@ -920,8 +920,11 @@ apply_message(struct snag_ui_display *display, struct snag_ui_command *command,
             rc = snag_term_external_end(term, error, error_size);
             if (rc == 0) {
                 (void)snag_render_suspend(render, false);
-                display->view_repainting = true;
-                term->defer_redraw = true;
+                /* Transfers can return keyboard typeahead before the engine
+                 * finishes admitting the file. Only an acknowledged prompt
+                 * may release that input; restoring terminal modes cannot. */
+                display->view_repainting = term->prompt_wanted;
+                term->defer_redraw = display->native_barrier || display->view_repainting;
             }
             if (rc == 0 && command->len && (!command->text || command->len > UI_INPUT_CAPACITY))
                 rc = snag_errorf(error, error_size,
