@@ -69,6 +69,9 @@ class TmuxTransfers(unittest.TestCase):
             config.write_text("set -g status off\nset -g history-limit 10000\n")
             sock = root / "socket"
             env = {key: value for key, value in os.environ.items() if key != "TMUX"}
+            # Pane commands inherit the server environment. Keep transfer reports
+            # inline just as RemoteProcess does for the workstation wrapper.
+            env["PAGER"] = ""
             server = subprocess.Popen(["tmux", "-D", "-S", str(sock), "-f", str(config)],
                                       env=env, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
             children = FixtureChildren(server.pid)
