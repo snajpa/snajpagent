@@ -3832,15 +3832,17 @@ suffix, or separate search credential is required.  This applies equally to
 normal and read-only turns.  OpenRouter chooses the search engine by default;
 search incurs provider charges in addition to model usage.
 .PP
-Networked mode adds
+IRC controls include
 .BR irc_state ,
 .BR irc_send ,
 .BR irc_nick ,
 .BR irc_topic ,
 .BR irc_connect ,
 .BR irc_host ,
+.BR irc_disconnect ,
+.BR irc_sleep ,
 and
-.BR irc_disconnect .
+.BR irc_compact .
 Sending, live nick changes and topic changes require a nullable string
 .B destination
 argument: a number from
@@ -3941,7 +3943,7 @@ defer_steering.
 .TP
 .B IRC
 irc_state, irc_send, irc_topic, irc_nick, irc_connect, irc_host,
-irc_disconnect.
+irc_disconnect, irc_sleep, irc_compact.
 .TP
 .B Search
 Provider-hosted web search, when supplied by the provider request format.
@@ -4493,6 +4495,45 @@ takes no arguments. The model calls it to switch steering off for the
 remainder of the turn. Steering messages queue and run after the turn ends
 instead of interrupting. New turns start with steers on.
 .SS Model IRC controls
+.B irc_sleep
+accepts delay_ms (0 through 4294967295) and wake_after_messages (1 through
+4294967295). It returns immediately and holds incoming IRC updates from model
+context until the delay expires, a new message mentions the model's accepted
+nickname on its endpoint, or the specified number of new PRIVMSG/NOTICE messages
+arrives. Historical replay does not count toward that threshold. delay_ms 0
+releases the hold. Released updates enter at the next safe model-input boundary;
+the operator can continue sending local work throughout the sleep. Connections,
+room display and the durable transcript continue normally. The deadline and
+count survive resume; an expired deadline releases pending updates on startup.
+.PP
+.B irc_compact
+accepts after_updates (0 through 4294967295) and optional instruction text.
+Zero disables automatic IRC compaction; a positive value starts a background
+summary after that many additional admitted IRC updates, including history and
+membership events. One requests a summary at the next eligible response boundary.
+The instruction supplies optional summary guidance, up to 262144 UTF-8 bytes.
+Settings survive resume. The feature starts disabled.
+.PP
+Each summary request branches from the current request's complete context,
+using the same endpoint, model, reasoning effort and service tier. It runs
+concurrently with ordinary work and makes an additional provider request.
+Successful completion replaces covered IRC entries only in future model context.
+Operator conversation, tool results, later admissions and the complete visible
+transcript remain available. The summary preserves room/sender provenance;
+room text keeps its original authority. Ordinary conversation compaction may
+subsequently incorporate that summary.
+.PP
+At most one IRC summary runs per owner. A failed request leaves the original
+context intact; another attempt requires more admitted updates or a new
+irc_compact call. A concurrent conversation compaction or context reset supersedes
+the branch. Interrupting a foreground turn, configuration reload,
+disabling/reconfiguring this tool and
+owner exit cancel the owned background request. Resume retains completed
+summaries and settings and can start a fresh request at an eligible boundary.
+Runtime notices report completion or failure; irc_state reports the current
+delivery and compaction settings. Existing older binaries cannot read sessions
+that have used these new durable controls.
+.PP
 .B irc_connect
 accepts endpoint and adds an outgoing endpoint using the current IRC identity
 and room settings.

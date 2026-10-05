@@ -54,6 +54,15 @@ static const struct checkpoint_field session_fields[] = {
     U(struct snag_session, irc_received_seq),
     U(struct snag_session, irc_consumed_seq),
     U(struct snag_session, response_irc_seq),
+    U(struct snag_session, irc_message_count),
+    U(struct snag_session, irc_sleep_until_ms),
+    U(struct snag_session, irc_sleep_start_count),
+    U(struct snag_session, irc_sleep_messages),
+    U(struct snag_session, irc_compact_updates),
+    U(struct snag_session, irc_admitted_count),
+    U(struct snag_session, irc_compact_count),
+    U(struct snag_session, irc_compact_seq),
+    U(struct snag_session, irc_summary_seq),
     U(struct snag_session, max_parallel_commands),
     U(struct snag_session, default_yield_ms),
     U(struct snag_session, max_wait_ms),
@@ -231,6 +240,11 @@ decode_fields(const json_t *source, void *target,
         const struct checkpoint_field *f = &fields[i];
         unsigned char *p = (unsigned char *)target + f->offset;
         const json_t *value = json_object_get(source, f->name);
+        /* These optional counters were added after checkpoint v1. */
+        if (!value && snag_string_in(f->name,
+                "irc_message_count irc_sleep_until_ms irc_sleep_start_count irc_sleep_messages "
+                "irc_compact_updates irc_admitted_count irc_compact_count "
+                "irc_compact_seq irc_summary_seq")) continue;
         if (f->kind == CK_TEXT) {
             const char *text = json_string_value(value);
             if (!text || json_string_length(value) >= f->width ||
@@ -467,6 +481,14 @@ decode_state(const json_t *data, struct snag_session *s)
         s->strings = copy;
     }
     s->name = snag_json_string(s->strings, "name");
+    const char *irc_instruction = snag_json_string(s->strings, "irc_compact_instruction");
+    if ((json_object_get(s->strings, "irc_compact_instruction") &&
+            !snag_text_valid(irc_instruction, 0, SNAG_MAX_STEERING_TEXT)) ||
+        s->irc_sleep_start_count > s->irc_message_count ||
+        s->irc_compact_count > s->irc_admitted_count ||
+        s->irc_sleep_messages > UINT32_MAX || s->irc_compact_updates > UINT32_MAX ||
+        (s->irc_sleep_until_ms && !s->irc_sleep_messages) ||
+        s->irc_compact_seq >= s->next_seq || s->irc_summary_seq >= s->next_seq) return -1;
     s->service_tier = snag_json_string(s->strings, "service_tier");
     if (json_object_get(s->strings, "service_tier") &&
         !snag_string_in(s->service_tier, "priority default")) return -1;

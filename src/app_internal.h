@@ -38,6 +38,7 @@ struct app_audio;
 struct app_voice;
 struct app_voice_import;
 struct app_voice_switch;
+struct app_irc_summary;
 struct snag_wire_secrets;
 struct snag_output_cache {
     char handle[SNAG_ID_HEX_LEN + 1u];
@@ -91,6 +92,9 @@ struct app_state {
     struct snag_buf irc_urgent;
     struct snag_buf irc_urgent_refs, irc_background_refs;
     struct snag_buf irc_background;
+    struct app_irc_summary *irc_summary;
+    uint64_t irc_summary_attempt_count;
+    bool irc_sleep_released;
     struct snag_instruction_set turn_instructions;
     struct snag_model_cache model_cache;
     struct snag_model_capacity turn_capacity;
@@ -370,6 +374,13 @@ int snag_app_irc_flush_urgent(struct app_state *app, char *error, size_t error_s
 char *snag_app_irc_take_pending(struct app_state *app, bool *local_operator, bool force_background);
 bool snag_app_irc_prompt(const char *text);
 int snag_app_irc_snapshot(struct app_state *app, const char *reason, char *error, size_t error_size);
+int snag_app_irc_sleeping(struct app_state *, char *, size_t);
+int snag_app_irc_attention_tool(struct app_state *, const struct snag_response_item *,
+                              json_t **, char *, size_t);
+void snag_app_irc_summary_start(struct app_state *, const struct snag_context_projection *,
+                              const struct snag_credential *);
+int snag_app_irc_summary_take(struct app_state *, char *, size_t);
+void snag_app_irc_summary_close(struct app_state *);
 bool snag_app_exact_count_enabled(enum snag_token_count_mode mode, enum snag_count_capability capability);
 int snag_app_provider_count(struct app_state *app, const json_t *count_request,
                            const struct snag_credential *credential, uint64_t *input_tokens,

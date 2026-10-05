@@ -1035,6 +1035,9 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         struct snag_irc_event event;
         if (snag_irc_event_read(data, &event) < 0) goto invalid;
         if (event.input) session->irc_received_seq = seq;
+        if (event.input && !event.historical &&
+            (event.kind == SNAG_IRC_MESSAGE || event.kind == SNAG_IRC_NOTICE))
+            ++session->irc_message_count;
     } else if (strcmp(type, "irc_admitted") == 0) {
         const json_t *items = json_object_get(data, "sequences");
         uint64_t previous = 0u;
@@ -1053,6 +1056,43 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
                                 error, error_size) < 0) return -1;
         if (steering && apply_event(session, "steering_added", steering, seq, true, importing,
                                    error, error_size) < 0) return -1;
+        session->irc_admitted_count += json_array_size(items);
+    } else if (!strcmp(type, "irc_sleep_set")) {
+        uint64_t until, messages;
+        if (!snag_json_exact_keys(data, "until_ms messages") ||
+            snag_json_integer_u64(data, "until_ms", &until) < 0 ||
+            snag_json_integer_u64(data, "messages", &messages) < 0 ||
+            messages > UINT32_MAX || (until && !messages)) goto invalid;
+        session->irc_sleep_until_ms = until;
+        session->irc_sleep_messages = messages;
+        session->irc_sleep_start_count = session->irc_message_count;
+    } else if (!strcmp(type, "irc_sleep_woke")) {
+        if (!snag_json_exact_keys(data, "reason") ||
+            !snag_string_in(snag_json_string(data, "reason"), "timeout mention messages"))
+            goto invalid;
+        session->irc_sleep_until_ms = 0;
+    } else if (!strcmp(type, "irc_compact_configured")) {
+        uint64_t updates;
+        const char *instruction = snag_json_string(data, "instruction");
+        if (!snag_json_exact_keys(data, "after_updates instruction") ||
+            snag_json_integer_u64(data, "after_updates", &updates) < 0 ||
+            updates > UINT32_MAX || !snag_text_valid(instruction, 0, SNAG_MAX_STEERING_TEXT))
+            goto invalid;
+        if (snag_json_set_new(session->strings, "irc_compact_instruction",
+                json_string(instruction)) < 0) return -1;
+        session->irc_compact_updates = updates;
+    } else if (!strcmp(type, "irc_compacted")) {
+        uint64_t through, count;
+        const char *summary = snag_json_string(data, "summary");
+        if (!snag_json_exact_keys(data, "through_seq count summary") ||
+            snag_json_integer_u64(data, "through_seq", &through) < 0 ||
+            snag_json_integer_u64(data, "count", &count) < 0 ||
+            through <= session->irc_compact_seq || through >= seq ||
+            count <= session->irc_compact_count || count > session->irc_admitted_count ||
+            !snag_text_valid(summary, 1, SNAG_MAX_IRC_SNAPSHOT)) goto invalid;
+        session->irc_compact_seq = through;
+        session->irc_summary_seq = seq;
+        session->irc_compact_count = count;
     } else if (strcmp(type, "irc_snapshot") == 0) {
         const char *reason = snag_json_string(data, "reason");
         const char *text = snag_json_string(data, "text");

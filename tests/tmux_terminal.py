@@ -72,7 +72,8 @@ NATIVE_FUNCTION_NAMES = {
     "list_files", "read_file",
     "grep", "write_file", "edit_file", "read_tool_output", "read_session_history", "list_goals",
     "set_command_shell", "irc_send", "irc_state", "irc_topic", "irc_nick", "irc_connect",
-    "irc_host", "irc_disconnect", "create_goal", "update_goal", "timer", "defer_steering",
+    "irc_host", "irc_disconnect", "irc_sleep", "irc_compact",
+    "create_goal", "update_goal", "timer", "defer_steering",
     "get_cwd", "cd",
 }
 
@@ -9696,6 +9697,8 @@ def run_irc_case(binary, root, group="all"):
             run_model_catalog_case(binary, root, provider, environment)
             run_configured_efforts_case(binary, root, provider, environment)
             run_fast_case(binary, root, provider, environment)
+            from irc_attention import run_irc_attention_case
+            run_irc_attention_case(binary, root / "irc-attention")
     finally:
         provider.close()
     if group == "network":

@@ -195,7 +195,8 @@ snag_app_irc_snapshot(struct app_state *app, const char *reason, char *error, si
     if (snag_app_sync_destinations(app) < 0) return -1;
     if (snag_app_save_resume_options(app, error, error_size) < 0) return -1;
     struct snag_buf snapshot = {.max = SNAG_MAX_IRC_SNAPSHOT};
-    rc = strcmp(reason, "compaction") != 0 ? snag_irc_state(app->irc, &snapshot, error, error_size) :
+    rc = strcmp(reason, "compaction") != 0 || app->session.irc_sleep_until_ms ||
+        app->session.irc_compact_updates ? snag_irc_state(app->irc, &snapshot, error, error_size) :
         snag_irc_snapshot(app->irc, &snapshot, error, error_size);
     if (rc < 0) goto out;
     rc = -1;
@@ -253,11 +254,12 @@ snag_app_irc_event(void *opaque, const struct snag_irc_event *event)
         if (snag_app_irc_snapshot(app, "join", error, sizeof(error)) < 0) return -1;
     }
 
-    if (chat) ++app->input_generation;
+    if (chat && (!app->session.irc_sleep_until_ms || accepted.urgent))
+        ++app->input_generation;
     urgent = chat && !event->historical && snag_irc_mentions_agent(app->irc, event->endpoint, event->text);
     reply_offset = app->irc_urgent.len;
     if (append_irc_projection(urgent ? &app->irc_urgent : &app->irc_background, event) < 0) return -1;
-    if (accepted.input && event->historical) {
+    if (accepted.input && event->historical && !app->session.irc_sleep_until_ms) {
         /* Catch-up is background context, but unlike newly arriving ordinary
          * chat it is available at the existing join-history response boundary. */
         if (snag_app_commit_event(app, "irc_admitted", json_pack("{s:[I]}",
@@ -343,11 +345,14 @@ snag_app_irc_flush_urgent(struct app_state *app, char *error, size_t error_size)
     bool admit_all;
 
     if (!app || !app->session.active_turn) return 0;
+    int sleeping = snag_app_irc_sleeping(app, error, error_size);
+    if (sleeping) return sleeping < 0 ? -1 : 0;
     limit = snag_config_model_limit_exact(app->config, app->session.active_turn_provider,
         app->config->model);
     admit_all = (app->session.steering_override && *app->session.steering_override) ?
         strcmp(app->session.steering_override, "all") == 0 :
         (limit && strcmp(limit->steering, "all") == 0);
+    admit_all = admit_all || app->irc_sleep_released;
     if (!app->irc_urgent.len && !(admit_all && app->irc_background.len)) return 0;
     if (app->irc_urgent.len) {
         if (snag_random_id(steering_id) < 0 || !(text = pending_batch(&app->irc_urgent, &used)))
@@ -369,7 +374,10 @@ snag_app_irc_flush_urgent(struct app_state *app, char *error, size_t error_size)
         free(text);
         if (rc < 0) return -1;
         consume_pending(&app->irc_background, used);
-        if (!app->irc_background.len) app->irc_background_since_ms = 0u;
+        if (!app->irc_background.len) {
+            app->irc_background_since_ms = 0u;
+            app->irc_sleep_released = false;
+        }
     }
     return 0;
 }
@@ -381,6 +389,11 @@ snag_app_irc_take_pending(struct app_state *app, bool *local_operator, bool forc
     char *copy;
     size_t used;
 
+    if (app) {
+        int sleeping = snag_app_irc_sleeping(app, NULL, 0);
+        if (sleeping < 0) app->input_closed = true;
+        if (sleeping) return NULL;
+    }
     if (local_operator) *local_operator = false;
     /* Background room traffic waits for the current turn. Admitting a second
        input_received while one is active is an invalid store transition, which
@@ -419,6 +432,7 @@ snag_app_irc_take_pending(struct app_state *app, bool *local_operator, bool forc
         admit_replies(app, used);
         if (local_operator) *local_operator = app->irc_turn_replies.count != 0u;
     } else if (!source->len) {
+        app->irc_sleep_released = false;
         app->irc_background_since_ms = 0u;
     }
     return copy;
@@ -603,6 +617,7 @@ snag_app_request_build(struct app_state *app, const json_t *steering, unsigned i
     if (snag_context_continuation_scope(app->turn_provider, app->turn_model,
                                        credential, continuation_scope) < 0)
         return snag_errorf(error, error_size, "cannot bind provider continuation");
+    if (snag_app_irc_summary_take(app, error, error_size) < 0) return -1;
     if (snag_app_provider_activity(app, true) < 0) return -1;
     rc = snag_context_build(&app->session, app->turn_model, app->turn_effort,
         cycle, steering, app->turn_capacity.max_output_tokens,
@@ -616,6 +631,8 @@ snag_app_request_build(struct app_state *app, const json_t *steering, unsigned i
         errno = context_errno;
         return -1;
     }
+    projection->irc_boundary = app->session.next_seq - 1;
+    projection->irc_count = app->session.irc_admitted_count;
     memcpy(projection->continuation_scope, continuation_scope, sizeof(projection->continuation_scope));
     *count_method = "unknown";
     rc = 0;

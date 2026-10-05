@@ -1626,8 +1626,9 @@ test_read_only_and_queue_controllers(struct snag_store *store, const char *temp)
                 "read_session_history", "list_goals", "set_command_shell",
                 "apply_patch", "get_cwd", "cd", "list_files", "read_file",
                 "grep", "write_file", "edit_file", "irc_send", "irc_state", "irc_topic", "irc_nick", "irc_connect",
-                "irc_host", "irc_disconnect", "create_goal", "update_goal", "timer", "defer_steering" };
-            assert(json_array_size(ts) == (config.allow_model_change ? 36u : 35u));
+                "irc_host", "irc_disconnect", "irc_sleep", "irc_compact",
+                "create_goal", "update_goal", "timer", "defer_steering" };
+            assert(json_array_size(ts) == (config.allow_model_change ? 38u : 37u));
             assert((item_by_field(ts, "name", "select_model") != NULL) ==
                    config.allow_model_change);
             for (size_t k = 0u; k < sizeof(unconditional) / sizeof(unconditional[0]); ++k)
@@ -1902,6 +1903,66 @@ test_durable_irc_input_watermark(struct snag_store *store, const char *path)
     snag_buf_free(&serialized);
     snag_context_projection_free(&projection); json_decref(empty);
     snag_session_close(&session);
+}
+
+static void
+test_irc_context_summary(struct snag_store *store, const char *cwd)
+{
+    struct snag_session session;
+    struct snag_context_projection projection = {0};
+    json_t *empty = json_array();
+    char error[256], id[SNAG_ID_HEX_LEN + 1];
+    const char *turn = "ec100000000000000000000000000000";
+    struct snag_irc_event event = {.kind = SNAG_IRC_MESSAGE, .timestamp_ms = 1,
+        .endpoint = "127.0.0.1:6667", .room = "#lab", .nick = "peer",
+        .text = "covered-IRC-detail", .stream = "11111111111111111111111111111111",
+        .sequence = 1, .input = true};
+
+    create_session(store, &session, cwd, "medium");
+    memcpy(id, session.id, sizeof(id));
+    commit_event(&session, "turn_started", turn_started(turn, 1,
+        "[IRC update id=operator-task-kept", cwd, NULL));
+    commit_event(&session, "irc_event", snag_irc_event_data(&event));
+    uint64_t first = session.irc_received_seq;
+    commit_event(&session, "irc_admitted", json_pack("{s:[I]}", "sequences", (json_int_t)first));
+    /* This source predates the branch, but its admission follows the summary. */
+    strcpy(event.text, "pending-IRC-detail");
+    event.sequence++;
+    commit_event(&session, "irc_event", snag_irc_event_data(&event));
+    uint64_t pending = session.irc_received_seq;
+    uint64_t boundary = session.next_seq - 1;
+    build_context(&session, 1, empty, NULL, &projection);
+    assert(message_matching(json_object_get(projection.create_request.value, "input"),
+        "covered-IRC-detail"));
+    commit_event(&session, "irc_compacted", json_pack("{s:I,s:I,s:s}",
+        "through_seq", (json_int_t)boundary, "count", (json_int_t)1,
+        "summary", "IRC-summary-kept"));
+    commit_event(&session, "irc_admitted", json_pack("{s:[I]}", "sequences", (json_int_t)pending));
+    strcpy(event.text, "newer-IRC-detail");
+    event.sequence++;
+    commit_event(&session, "irc_event", snag_irc_event_data(&event));
+    commit_event(&session, "irc_admitted", json_pack("{s:[I]}",
+        "sequences", (json_int_t)session.irc_received_seq));
+    commit_event(&session, "irc_sleep_set", json_pack("{s:I,s:I}",
+        "until_ms", (json_int_t)2000000000000LL, "messages", (json_int_t)12));
+    commit_event(&session, "irc_compact_configured", json_pack("{s:I,s:s}",
+        "after_updates", (json_int_t)20, "instruction", "retain decisions"));
+    for (unsigned int resume = 0; resume < 2; ++resume) {
+        build_context(&session, 2, empty, NULL, &projection);
+        char *encoded = json_dumps(projection.create_request.value, JSON_COMPACT);
+        assert(encoded && !strstr(encoded, "covered-IRC-detail"));
+        assert(strstr(encoded, "operator-task-kept") && strstr(encoded, "IRC-summary-kept"));
+        assert(strstr(encoded, "pending-IRC-detail") && strstr(encoded, "newer-IRC-detail"));
+        free(encoded);
+        assert(session.irc_sleep_messages == 12 && session.irc_compact_updates == 20);
+        assert(session.irc_compact_seq == boundary && session.irc_compact_count == 1);
+        snag_context_projection_free(&projection);
+        snag_session_close(&session);
+        snag_session_init(&session);
+        assert(snag_session_open(store, &session, id, error, sizeof(error)) == 0);
+    }
+    snag_session_close(&session);
+    json_decref(empty);
 }
 
 static void
@@ -4958,6 +5019,7 @@ main(int argc, char **argv)
     test_rebased_irc_admission_overlap(&store, cwd);
     test_pending_irc_source_across_rebase(&store, cwd);
     test_irc_source_shifted_by_checkpoint(&store, cwd);
+    test_irc_context_summary(&store, cwd);
     test_admitted_room_event_stays_out_of_tool_exchange(&store, cwd);
     test_compact_groups(&store, cwd);
     test_repeated_compaction_active_seam(&store, cwd);
@@ -5336,7 +5398,7 @@ main(int argc, char **argv)
     assert_string(projection.count_request.value, "model", SNAJPAGENT_MODEL);
     {
         json_t *tools = json_object_get(projection.create_request.value, "tools");
-        assert(json_array_size(tools) == 35u);
+        assert(json_array_size(tools) == 37u);
         assert(item_by_field(tools, "name", "select_model") == NULL);
         assert_context_tool_schemas(tools, NULL, 60000u, 86400000u, 6000u);
         assert(item_by_field(tools, "name", "create_goal") != NULL);
@@ -5421,7 +5483,7 @@ main(int argc, char **argv)
         json_t *gate;
         const char *gate_text;
         assert(json_is_array(tools));
-        assert(json_array_size(tools) == 35u);
+        assert(json_array_size(tools) == 37u);
         assert(item_by_field(tools, "name", "select_model") == NULL);
         assert(item_by_field(tools, "name", "create_goal") != NULL);
         assert(item_by_field(tools, "name", "update_goal") != NULL);
@@ -5464,7 +5526,7 @@ main(int argc, char **argv)
                                  &instructions, NULL, &projection, error, sizeof(error), NULL) == 0);
         tools = json_object_get(projection.create_request.value, "tools");
         input = json_object_get(projection.create_request.value, "input");
-        assert(json_array_size(tools) == 35u);
+        assert(json_array_size(tools) == 37u);
         assert(item_by_field(tools, "name", "select_model") == NULL);
         assert(item_by_field(tools, "name", "irc_send"));
         assert(item_by_field(tools, "name", "irc_state"));
@@ -5520,7 +5582,7 @@ main(int argc, char **argv)
             json_object_get(projection.create_request.value, "input"), "type", "function_call_output");
         const char *historical_text;
 
-        assert(json_array_size(tools) == 35u);
+        assert(json_array_size(tools) == 37u);
         assert(item_by_field(tools, "name", "select_model") == NULL);
         assert_context_tool_schemas(tools, NULL, 60000u, 86400000u, 6000u);
         assert(item_by_field(tools, "name", "create_goal") != NULL);
@@ -5575,7 +5637,7 @@ main(int argc, char **argv)
         tools = json_object_get(projection.create_request.value, "tools");
         semantic = json_object_get(projection.model_input.value, "items");
         harness = message_matching(semantic, "When IRC chat mode is active,");
-        assert(json_array_size(tools) == 35u);
+        assert(json_array_size(tools) == 37u);
         assert(item_by_field(tools, "name", "select_model") == NULL);
         assert_context_tool_schemas(tools, NULL, network_config.max_wait_ms, 86400000u, 6000u);
         assert(item_by_field(tools, "name", "irc_send") != NULL);
@@ -5614,7 +5676,7 @@ main(int argc, char **argv)
         json_t *tools = json_object_get(projection.create_request.value, "tools");
         json_t *semantic = json_object_get(projection.model_input.value, "items");
 
-        assert(json_array_size(tools) == 35u);
+        assert(json_array_size(tools) == 37u);
         assert(item_by_field(tools, "name", "select_model") == NULL);
         assert_context_tool_schemas(tools, NULL, 60000u, 86400000u, 6000u);
         assert(item_by_field(tools, "name", "create_goal") != NULL);

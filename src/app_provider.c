@@ -381,7 +381,8 @@ tool_input_pump(void *opaque, unsigned int timeout_ms)
     struct app_state *app = opaque;
     int rc = snag_app_active_input_pump(opaque, timeout_ms);
 
-    if (rc == 0 && app->irc_urgent.len) return 1;
+    if (rc == 0 && (app->irc_urgent.len ||
+            (app->irc_sleep_released && app->irc_background.len))) return 1;
     return rc;
 }
 
@@ -659,6 +660,8 @@ snag_app_tool_run(struct app_state *app, const struct snag_response_item *call,
         return (*result = snag_tool_result_terminal(true, message)) ? 0 : -1;
     }
 
+    if (call && call->name && snag_string_in(call->name, "irc_sleep irc_compact"))
+        return snag_app_irc_attention_tool(app, call, result, error, error_size);
     if (call && call->name && strcmp(call->name, "timer") == 0)
         return snag_app_timer_tool(app, call, result, error, error_size);
     if (call && call->name && strcmp(call->name, "defer_steering") == 0) {
@@ -724,6 +727,15 @@ snag_app_tool_run(struct app_state *app, const struct snag_response_item *call,
         struct snag_buf state = {.max = SNAG_MAX_IRC_SNAPSHOT};
         rc = app->irc ? snag_irc_state(app->irc, &state, error, error_size) :
             snag_buf_printf(&state, "no active endpoints\n");
+        if (!rc) rc = snag_buf_printf(&state,
+            "IRC model delivery: %s; sleep_until_ms=%llu; wake_after_messages=%llu\n"
+            "IRC context compaction: after_updates=%llu; background_request=%s; through_seq=%llu\n",
+            app->session.irc_sleep_until_ms ? "sleeping" : "awake",
+            (unsigned long long)app->session.irc_sleep_until_ms,
+            (unsigned long long)app->session.irc_sleep_messages,
+            (unsigned long long)app->session.irc_compact_updates,
+            app->irc_summary ? "running" : "idle",
+            (unsigned long long)app->session.irc_compact_seq);
         if (rc == 0) rc = snag_buf_terminate(&state);
         if (rc == 0) *result = snag_tool_result_terminal(true, (const char *)state.data);
         snag_buf_free(&state);

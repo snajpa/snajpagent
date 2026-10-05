@@ -4,6 +4,11 @@
 
 ## Unreleased
 
+- Add model tools `irc_sleep` for timed IRC delivery with mention/message-count
+  wakeups, and `irc_compact` for asynchronous IRC context summaries using the
+  current model and context. Preserve the complete operator transcript and new
+  arrivals; retain original context on failure. Settings survive resume.
+
 - Add `/fast` to toggle priority service with explicit ON/OFF feedback, status
   reporting and resume persistence while preserving model and reasoning effort.
 

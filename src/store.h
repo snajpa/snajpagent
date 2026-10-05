@@ -145,6 +145,9 @@ struct snag_session {
     struct snag_process_state *processes;
     size_t process_count, process_capacity;
     uint64_t irc_received_seq, irc_consumed_seq, response_irc_seq;
+    uint64_t irc_message_count, irc_sleep_until_ms, irc_sleep_start_count, irc_sleep_messages;
+    uint64_t irc_compact_updates, irc_admitted_count, irc_compact_count;
+    uint64_t irc_compact_seq, irc_summary_seq;
     uint32_t max_parallel_commands;
     uint32_t default_yield_ms, max_wait_ms;
     uint32_t default_timeout_ms, max_timeout_ms;

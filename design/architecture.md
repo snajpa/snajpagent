@@ -745,7 +745,8 @@ The first-party tool surface is deliberately small:
 - `apply_patch` for strict file edits using the patch grammar.
 - `update_goal` while a persistent goal is active.
 - `irc_send`, `irc_state`, `irc_nick`, `irc_topic`, `irc_connect`, `irc_host`
-  and `irc_disconnect` in networked mode.
+  and `irc_disconnect` for room networking; `irc_sleep` controls model admission
+  and `irc_compact` asynchronously summarizes IRC context.
 
 Provider credentials and configured secret environment variables are removed
 from child tool environments or redacted before output is persisted or shown.

@@ -792,3 +792,45 @@ message directions, all three model paths, durable room attribution, and the
 rendered verbosity/color UI. It exits the clients in sequence, admits their
 durable leave notifications, then exits the server cleanly. Do not introduce a
 separate validation or evidence framework for this feature.
+
+## Model-controlled attention and IRC context summaries
+
+`irc_sleep(delay_ms, wake_after_messages)` returns immediately. The owner keeps
+journaling and displaying IRC, and holds model admission until the wall-clock
+resume-safe deadline, a mention of the accepted endpoint-local model nick, or
+that many new incoming non-historical PRIVMSG/NOTICE messages. Sleep preserves
+pending source IDs across resume. Wake releases the backlog at a safe input
+boundary, including during active tools; operator input remains independent.
+Zero delay releases the hold. A persistent paused/blocked goal still controls
+ordinary background turn scheduling.
+
+`irc_compact(after_updates, instruction)` configures a durable admitted-update
+threshold (zero disables, initially disabled), with optional summary guidance.
+One independent worker snapshots an ordinary request's complete input, provider,
+model, effort, tier, credential and protection set. It clears tools and appends
+an IRC-summary instruction. Ordinary requests continue while it runs. The worker
+owns only its request/graph; it never mutates the session or renders its answer.
+The owner adopts a complete successful final text at a closed response/tool
+boundary, recording `irc_compacted` with the frozen admission sequence/count.
+
+Context projection suppresses covered IRC admissions, their scheduler prompts,
+and covered topology/history snapshots, then installs the latest IRC summary.
+Conversation and tool exchanges remain. An old source admitted after the branch
+boundary remains fresh. Cache rebuilding uses the retained event seam; the raw
+journal and operator presentation are unchanged. Conversation compaction can
+incorporate the summary later. With IRC compaction enabled, fresh ordinary
+compaction snapshots contain topology only, avoiding reintroducing raw history.
+
+A conversation compaction/context reset supersedes an in-flight branch. Failure
+retains original context and waits for additional admitted updates or explicit
+reconfiguration before retrying. Reload, foreground-turn interruption, reconfiguration and exit
+join the owned worker before releasing configuration credentials. Completed
+summary state and sleep/configuration counters are checkpointed; fields absent
+from older checkpoints default to zero. Older binaries cannot replay the new
+control events. Each branch is an additional provider request.
+
+Qualification: `tests/irc_attention.py` covers real IRC/HTTP/tmux sleep and branch
+behavior; `test_irc_context_summary` covers projection cache/resume and a queued
+source admitted after the summary boundary. The network tmux lane includes the
+integration case. No live provider quality, speed or billing behavior is inferred
+from the fixtures.

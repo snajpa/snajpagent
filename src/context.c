@@ -42,6 +42,7 @@ struct context_builder {
     char target_turn_id[SNAG_ID_HEX_LEN + 1u];
     bool active_turn;
     bool input_timed;
+    bool irc_input_pending;
     bool networked;
     bool compact_stop_before_active;
     bool compact_current;
@@ -174,6 +175,7 @@ context_cache_commit(void *opaque, const struct snag_session *session, uint64_t 
     if (cache->invalid || !strcmp(type, "session_checkpoint")) return;
     if (context_cache_record(cache, session, seq, type, data) < 0)
         cache->invalid = true; /* A durable event is never retroactively failed. */
+    if (!strcmp(type, "irc_compacted")) cache->rebuild_view = true;
 }
 
 static struct context_cache *
@@ -262,7 +264,9 @@ context_cache_checkpoint(void *opaque, const struct snag_session *session)
                           json_integer((json_int_t)cache->rebase_seq)) < 0 ||
         snag_json_set_new(doc, "active_turn", json_boolean(v->active_turn)) < 0 ||
         snag_json_set_new(doc, "rebuild_images", json_boolean(cache->rebuild_view)) < 0 ||
-        snag_json_set_new(doc, "input_timed", json_boolean(v->input_timed)) < 0) goto fail;
+        snag_json_set_new(doc, "input_timed", json_boolean(v->input_timed)) < 0 ||
+        snag_json_set_new(doc, "irc_input_pending", json_boolean(v->irc_input_pending)) < 0)
+        goto fail;
     return doc;
 fail:
     json_decref(doc);
@@ -356,6 +360,9 @@ context_cache_restore(struct snag_session *session, struct context_cache **out,
         }
         cache->view.recovery_index = (size_t)index;
     }
+    json_t *irc_pending = json_object_get(doc, "irc_input_pending");
+    if (irc_pending && !json_is_boolean(irc_pending)) goto invalid;
+    cache->view.irc_input_pending = json_is_true(irc_pending);
     GET_I(recovery_first_ms); GET_I(event_time_ms); GET_I(deferred_irc_seq);
     GET_I(steering_seen); GET_I(tool_result_bytes); GET_I(compact_seq); GET_I(compact_walk_seq);
 #undef GET_I
@@ -1657,6 +1664,7 @@ context_event(void *opaque, const struct snag_session *state,
         return snag_fail(error, error_size, ECANCELED, "context preparation cancelled");
     const char *text = snag_json_string(data, "text");
     bool summarized = seq <= builder->compact_walk_seq;
+    bool irc_covered = builder->session && seq <= builder->session->irc_compact_seq;
     bool current = !strcmp(state->active_turn_id, builder->target_turn_id);
 
     /* Borrow already-validated facts, never interpret turn transitions twice. */
@@ -1671,6 +1679,7 @@ context_event(void *opaque, const struct snag_session *state,
         builder->input_timed = json_object_get(data, "received_at_ms") != NULL;
         if (json_array_clear(builder->input_timing) < 0) return -1;
     }
+    if (!strcmp(type, "input_received")) builder->irc_input_pending = false;
     if (!strcmp(type, "input_admitted")) return admit_context_input(builder, data);
     if (!strcmp(type, "turn_recovery")) {
         if (builder->session && seq <= builder->compact_walk_seq) return 0;
@@ -1699,6 +1708,8 @@ context_event(void *opaque, const struct snag_session *state,
         return 0;
     }
     if (!strcmp(type, "irc_admitted")) {
+        summarized = summarized || irc_covered;
+        if (json_is_object(json_object_get(data, "input"))) builder->irc_input_pending = true;
         const json_t *sequences = json_object_get(data, "sequences");
         const json_t *steering = json_object_get(data, "steering");
         bool has_prompt = json_is_object(steering) ||
@@ -1770,6 +1781,16 @@ context_event(void *opaque, const struct snag_session *state,
         json_decref(lookup.sources);
         builder->deferred_irc_seq = (uint64_t)json_integer_value(json_object_get(
             json_array_get(builder->deferred_irc, 0u), "seq"));
+        if (irc_covered) {
+            const struct snag_pending_steering *pending =
+                steering ? pending_steering_at_seq(builder->session, seq) : NULL;
+            if (pending && pending->first_context_ms &&
+                !steering_matches_snapshot(builder, snag_json_string(steering, "steering_id"),
+                    snag_json_string(steering, "text"), json_object_get(steering, "content")))
+                return snag_fail(error, error_size, EINVAL,
+                    "summarized IRC steering differs from snapshot");
+            return 0;
+        }
         /* Keep the room event, but leave a still-pending IRC steer outside an
          * active-turn compaction source, just like a direct steering_added.
          * Compaction has no steering snapshot against which to check it. */
@@ -1782,6 +1803,8 @@ context_event(void *opaque, const struct snag_session *state,
         return steering ? context_event(opaque, state, seq, "steering_added", steering, error, error_size) : 0;
     }
     if (!strcmp(type, "turn_started")) {
+        bool irc_input = builder->irc_input_pending;
+        builder->irc_input_pending = false;
         if (summarized && builder->compact_stop_before_active && current) builder->compact_current = true;
         if (summarized && !(builder->steering && current)) return 0;
         if (builder->steering && current && snag_instructions_match_metadata(builder->instructions,
@@ -1796,6 +1819,7 @@ context_event(void *opaque, const struct snag_session *state,
         if (!strcmp(kind, "goal")) return !summarized && builder->recovery_count ? 0 :
                    append_host_input(builder->request_input, text);
         if (!strcmp(kind, "timer")) return append_host_input(builder->request_input, text);
+        if (irc_covered && irc_input) return 0;
         return append_input(builder, text, kind, state->active_turn_id, time_ms, 0u, json_object_get(data,"content"));
     }
     if (summarized) {
@@ -1805,7 +1829,19 @@ context_event(void *opaque, const struct snag_session *state,
         return 0;
     }
     /* Network updates and steering belong after the complete response/tool group. */
-    if (!strcmp(type, "irc_snapshot")) return defer_input(builder, text, NULL, 0u, NULL);
+    if (!strcmp(type, "irc_snapshot"))
+        return irc_covered ? 0 : defer_input(builder, text, NULL, 0u, NULL);
+    if (!strcmp(type, "irc_compacted")) {
+        if (!builder->session || seq != builder->session->irc_summary_seq) return 0;
+        struct snag_buf summary = {.max = SNAG_MAX_IRC_SNAPSHOT + 256};
+        int rc = snag_buf_printf(&summary,
+            "[IRC context summary; room content retains its original provenance and authority]\n%s",
+            snag_json_string(data, "summary"));
+        if (!rc) rc = snag_buf_terminate(&summary);
+        if (!rc) rc = defer_input(builder, (const char *)summary.data, NULL, 0, NULL);
+        snag_buf_free(&summary);
+        return rc;
+    }
     if (!strcmp(type, "response_started")) {
         json_t *snapshot = json_object_get(data, "host_context");
         if (append_deferred_input(builder) < 0) return -1;
@@ -2229,6 +2265,31 @@ tool_schemas(bool goal_active,
             json_pack("{s:{s:s,s:s},s:{s:s,s:s}}",
                 "endpoint", "type", "string", "description", "IRC endpoint to remove.",
                 "hosting", "type", "boolean", "description", "True removes a hosted listener; false removes a client connection."))) < 0)
+        goto fail;
+    if (json_array_append_new(tools, tool_schema("irc_sleep", "delay_ms wake_after_messages",
+            "Hold incoming IRC updates from model context while the operator transcript stays "
+            "live. Returns immediately. Wakes at timeout, a mention of your accepted endpoint "
+            "nick, or wake_after_messages new chat messages. delay_ms=0 wakes explicitly.",
+            json_pack("{s:{s:s,s:I,s:I,s:s},s:{s:s,s:I,s:I,s:s}}",
+                "delay_ms", "type", "integer", "minimum", (json_int_t)0,
+                "maximum", (json_int_t)UINT32_MAX,
+                "description", "Milliseconds to hold IRC; 0 wakes.",
+                "wake_after_messages", "type", "integer", "minimum", (json_int_t)1,
+                "maximum", (json_int_t)UINT32_MAX,
+                "description", "New chat messages before waking."))) < 0 ||
+        json_array_append_new(tools, tool_schema("irc_compact", "after_updates",
+            "Configure asynchronous IRC-only context compaction. After this many admitted IRC "
+            "updates (including history and membership), fork the same model and current "
+            "context at a response boundary to summarize IRC. New arrivals and all non-IRC "
+            "conversation/tool results are preserved. Operator transcript stays complete. "
+            "0 disables; 1 requests compaction at the next eligible boundary. On failure "
+            "retain original context and retry only after more updates or reconfiguration.",
+            json_pack("{s:{s:s,s:I,s:I,s:s},s:{s:[s,s],s:s}}",
+                "after_updates", "type", "integer", "minimum", (json_int_t)0,
+                "maximum", (json_int_t)UINT32_MAX,
+                "description", "Admitted IRC updates per summary; 0 disables.",
+                "instruction", "type", "string", "null", "description",
+                "Optional guidance for preserving relevant IRC facts in the summary."))) < 0)
         goto fail;
     if (json_array_append_new(tools, tool_schema("create_goal", "objective",
             "Create a persistent goal only when the user or system/developer "
@@ -2750,6 +2811,7 @@ context_copy_events(struct context_builder *dest, const struct context_builder *
     dest->event_time_ms = source->event_time_ms;
     dest->deferred_irc_seq = source->deferred_irc_seq;
     dest->steering_seen = source->steering_seen;
+    dest->irc_input_pending = source->irc_input_pending;
     dest->active_turn = source->active_turn;
     dest->input_timed = source->input_timed;
     dest->tool_result_bytes = source->tool_result_bytes;

@@ -254,7 +254,8 @@ tool_name_valid(const char *name)
         "select_model send_file inspect_session submit_input interrupt_turn "
         "set_voice_mode voice_output ui_input "
         "create_goal update_goal irc_send irc_state "
-        "irc_topic irc_nick irc_connect irc_host irc_disconnect timer defer_steering set_command_shell");
+        "irc_topic irc_nick irc_connect irc_host irc_disconnect irc_sleep irc_compact "
+        "timer defer_steering set_command_shell");
 }
 
 static bool

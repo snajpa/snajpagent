@@ -807,6 +807,7 @@ tick_irc(struct app_state *app, char *error, size_t error_size)
     if (revision != snag_irc_routing_revision(app->irc)) {
         if (snag_app_irc_snapshot(app, "topology", error, error_size) < 0) return -1;
     }
+    if (snag_app_irc_sleeping(app, error, error_size) < 0) return -1;
     if (!snag_irc_identity_changed(app->irc)) return 0;
     const char *operator_nick = snag_irc_operator_nick(app->irc);
     if (operator_nick && strcmp(app->config->irc.operator_nick, operator_nick)) {
@@ -2286,6 +2287,8 @@ reload_config(struct app_state *app, char *error, size_t error_size)
     if (snag_model_cache_load(&app->store, &cache, error, error_size) < 0) goto out;
     rc = apply_network(app, &candidate, error, error_size);
     if (rc != 0) goto out;
+    snag_app_irc_summary_close(app);
+    app->irc_summary_attempt_count = 0;
     previous = *app->config;
     *app->config = candidate;
     memset(&candidate, 0, sizeof(candidate));
@@ -3940,7 +3943,8 @@ run_call_batch(struct app_state *app, const char *turn_id, const struct snag_cre
                 handoff = "turn_cancelled";
                 goto handoff;
             }
-            if (control == 1 || app->irc_urgent.len) {
+            if (control == 1 || app->irc_urgent.len ||
+                (app->irc_sleep_released && app->irc_background.len)) {
                 if (snag_app_irc_flush_urgent(app, error, error_size) < 0) return -1;
                 steering_handoff = true;
             }
@@ -4510,7 +4514,8 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
                 error[0] ? error : "input-token count failed", error, sizeof(error));
             goto out;
         }
-        if (app->irc_urgent.len) goto rebuild_request;
+        if (app->irc_urgent.len ||
+            (app->irc_sleep_released && app->irc_background.len)) goto rebuild_request;
         {
             bool compacted = false;
             bool over_hard = !strcmp(count_method, "exact") &&
@@ -4633,6 +4638,7 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
         response_begin_ms = snag_time_ms();
         error[0] = '\0';
         if (snag_app_provider_activity(app, true) < 0) goto fail;
+        snag_app_irc_summary_start(app, &projection, &credential);
         provider_rc = snag_app_provider_run(app, prompt, steering, cycle,
                                    projection.create_request.value, &credential, &graph, &provider_failure,
                                    error, sizeof(error), &provider_retry_count);
@@ -5057,7 +5063,9 @@ rebuild_request: --cycle;
                                       "resource", message, error, sizeof(error));
     }
     goto out;
-user_interrupted: result = finish_user_interrupt(app, turn_id, error, sizeof(error));
+user_interrupted:
+    snag_app_irc_summary_close(app);
+    result = finish_user_interrupt(app, turn_id, error, sizeof(error));
     goto out;
 output_fail: result = 6;
     goto report;
@@ -5539,8 +5547,9 @@ run_ready_chains(struct app_state *app)
                 return turn_rc;
             continue;
         }
-        if (app->irc_urgent.len || ((!app->session.queue_armed || app->session.pending_queue_count == 0u) &&
-              app->goal_armed && app->irc_background.len)) {
+        if (app->irc_urgent.len || (app->irc_sleep_released && app->irc_background.len) ||
+            ((!app->session.queue_armed || app->session.pending_queue_count == 0u) &&
+             app->goal_armed && app->irc_background.len)) {
             bool local_operator = false;
             char *prompt = snag_app_irc_take_pending(app, &local_operator, true);
             if (prompt) {
@@ -5676,6 +5685,7 @@ interactive_loop(struct app_state *app, const char *initial)
             rc = 0;
             break;
         }
+        if (snag_app_irc_summary_take(app, NULL, 0) < 0) { rc = 6; break; }
         if (snag_app_audio_service(app) < 0) { rc = 6; break; }
         if (!prompt && !snag_ui_leaving(&app->ui) && app->session.queue_armed &&
             !app->queue_edit_id[0] && app->session.pending_queue_count) {
@@ -6083,6 +6093,7 @@ out:
         if (!rc) rc = 3;
     }
     snag_app_voice_attachment_close(&app);
+    snag_app_irc_summary_close(&app);
     snag_app_audio_close(&app);
     (void)snag_app_shutdown(&app);
     /* A POSIX process lock is released by closing any descriptor on its inode. */

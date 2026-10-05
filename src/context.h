@@ -53,6 +53,7 @@ struct snag_context_projection {
     size_t request_controller_count;
     uint64_t input_tokens_bound;
     uint64_t irc_seq;
+    uint64_t irc_boundary, irc_count;
     char request_input_sha256[SNAG_SHA256_HEX_LEN + 1u];
     uint64_t source_seq; /* Selected complete group for compaction. */
 };

@@ -222,6 +222,10 @@ Rollout and chat retain separate drafts and history. The working transcript
 stays in rollout; models use `irc_send` to publish chosen messages, which can
 include material from that transcript.
 
+Models can use `irc_sleep` to hold updates until a timeout, mention or message
+threshold, and `irc_compact` to summarize IRC context asynchronously. Your
+transcript stays complete. See the manual's model IRC controls.
+
 In chat, Tab completes `@nickname` words. At the end of a finished message,
 Enter sends to the room; Tab queues a local follow-up while your model works.
 

@@ -39,7 +39,10 @@ endpoint transitions. `irc_send`, `irc_state`, and `irc_topic` remain available
 in the same catalog. Endpoint/privilege/connection checks happen at dispatch;
 there is no schema gate based on whether the process started networked. A
 successful dynamic connect/host enables the existing runtime tick and future
-room-context projection.
+room-context projection. `irc_sleep` holds model delivery with timeout, accepted-nick
+mention and message-count wakeups. `irc_compact` configures asynchronous IRC-only
+context summaries through a branch of the same model and context. Both controls
+persist; the operator transcript remains complete. See [IRC attention](irc-chat.md#model-controlled-attention-and-irc-context-summaries).
 
 ## Audit
 
