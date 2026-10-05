@@ -86,7 +86,7 @@ git("add", ".")
 git("commit", "-qm", "baseline")
 recipe = "version-test:;@printf '%s\\n' '$(BUILD_VERSION)'"
 version_env = {key: value for key, value in os.environ.items()
-               if key not in ("MAKEFLAGS", "MFLAGS", "MAKEOVERRIDES")}
+               if key not in ("MAKEFLAGS", "MFLAGS", "MAKEOVERRIDES", "BUILD_VERSION")}
 def version():
     return subprocess.run(["make", "--no-print-directory", "-s", "--eval", recipe,
                            "version-test"], cwd=work, env=version_env,

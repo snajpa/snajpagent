@@ -310,16 +310,18 @@ with tempfile.TemporaryDirectory(prefix="release-tag-", dir=root / "build") as t
     git("tag", "-a", "0.99.3", "-m", "approved fixture release")
     probe = "version-test:;@printf '%s\\n' '$(BUILD_VERSION)'"
     command = ["make", "--no-print-directory", "-s", "--eval", probe, "version-test"]
-    assert subprocess.check_output(command, cwd=tmp, text=True).strip() == "0.99.3"
+    version_env = {key: value for key, value in os.environ.items()
+                   if key not in ("MAKEFLAGS", "MFLAGS", "MAKEOVERRIDES", "BUILD_VERSION")}
+    assert subprocess.check_output(command, cwd=tmp, env=version_env, text=True).strip() == "0.99.3"
     # Recursive make exports -w even when the probe asks for silent recipes.
     # Directory banners are build chatter, not part of the version value.
-    nested = dict(os.environ, MAKEFLAGS="w", MAKELEVEL="2")
+    nested = dict(version_env, MAKEFLAGS="w", MAKELEVEL="2")
     assert subprocess.check_output(command, cwd=tmp, env=nested, text=True) == "0.99.3\n"
     matrix_plan = subprocess.check_output(["make", "-n", "prod-linux-x86_64",
-        "UPDATE_BASE_URL=https://publisher.test"], cwd=tmp, text=True)
+        "UPDATE_BASE_URL=https://publisher.test"], cwd=tmp, env=version_env, text=True)
     assert "--argstr buildVersion '0.99.3'" in matrix_plan
     # Keep the existing manual override available independently of the tag.
-    assert subprocess.check_output(command + ["BUILD_VERSION=7.8.9"], cwd=tmp, text=True).strip() == "7.8.9"
+    assert subprocess.check_output(command + ["BUILD_VERSION=7.8.9"], cwd=tmp, env=version_env, text=True).strip() == "7.8.9"
     # A development tag names its exact commit; later/dirty builds retain the
     # approved base and their own revision, rather than stacking Git suffixes.
     for base in ("0.99.3", "0.99.3a"):
@@ -327,15 +329,15 @@ with tempfile.TemporaryDirectory(prefix="release-tag-", dir=root / "build") as t
         revision = git("rev-parse", "--short", "HEAD")
         version = f"{base}-{revision}"
         git("tag", "-a", version, "-m", "approved fixture development snapshot")
-        assert subprocess.check_output(command, cwd=tmp, text=True).strip() == version
+        assert subprocess.check_output(command, cwd=tmp, env=version_env, text=True).strip() == version
         metadata = tmp / "META"
         metadata.write_text(metadata.read_text() + "\n")
-        actual = subprocess.check_output(command, cwd=tmp, text=True).strip()
+        actual = subprocess.check_output(command, cwd=tmp, env=version_env, text=True).strip()
         assert actual == version + "-dirty", (actual, version + "-dirty")
         git("restore", "META")
         git("commit", "--allow-empty", "-qm", "after development snapshot")
         expected = f"{base}-{git('rev-parse', '--short', 'HEAD')}"
-        actual = subprocess.check_output(command, cwd=tmp, text=True).strip()
+        actual = subprocess.check_output(command, cwd=tmp, env=version_env, text=True).strip()
         assert actual == expected, (actual, expected)
     git("switch", "--quiet", "--detach", "0.99.3")
     print("PASS: development tags preserve one current Git suffix and the approved base")

@@ -3463,7 +3463,7 @@ def run_pager_case(binary, root):
                 args=("--no-listen", "--no-client"),
                 environment={**env, "PAGER": ""}) as terminal:
             terminal.wait("host-model/medium", join_wrapped=True)
-            terminal.submit_wait("/cat absent.txt", "$PAGER is not set", join_wrapped=True)
+            terminal.submit_wait("/cat absent.txt", "no pager is available", join_wrapped=True)
     finally:
         provider.close()
     print("pager catalogue: ok", flush=True)

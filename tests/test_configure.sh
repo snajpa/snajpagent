@@ -13,6 +13,12 @@
 
 set -u
 
+# Exercise configure's native defaults independently of the enclosing make.
+# Explicit cross/audio compiler cases set their own compiler below.
+CC=cc
+CXX=c++
+export CC CXX
+
 if [ ! -f ./configure ]; then
 	printf '%s\n' 'test_configure: skipped (no ./configure in this tree)'
 	exit 0
