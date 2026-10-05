@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "store_binary_io.h"
+#include "store_binary_index.h"
 #include "store_binary_wire.h"
 #include "fs.h"
 
@@ -146,6 +147,36 @@ await_result(struct snag_binary_io *io, struct snag_binary_io_result *out)
     return rc;
 }
 
+static int
+await_batch(struct snag_binary_io *io, struct snag_binary_io_result *out,
+    struct snag_buf *batch)
+{
+    assert(snag_wakeup_wait(snag_binary_io_wake(io), 10000) == 1);
+    int rc = snag_binary_io_take_batch(io, out, batch);
+    assert(rc != 1);
+    return rc;
+}
+
+static void
+verify_commit_bytes(int fd, const struct snag_binary_anchor *before,
+    const struct snag_binary_anchor *after, const struct snag_buf *committed)
+{
+    struct snag_buf bytes = {.max = SNAG_BINARY_BATCH_MAX};
+    struct snag_binary_batch batch;
+    struct snag_binary_anchor found;
+    assert(!snag_binary_batch_read(fd, after->end, before, &bytes, &batch, &found));
+    assert(same_anchor(&found, after) && bytes.len == committed->len &&
+        !memcmp(bytes.data, committed->data, bytes.len));
+    struct snag_binary_identity identity = {.created_ms = 42u};
+    identity.id[0] = 17u;
+    struct snag_binary_index_tree tree = {0};
+    assert(before->next_seq == 1u);
+    assert(!snag_binary_index_tree_append_batch(NULL, &tree, &identity, before,
+        after, committed->data, committed->len));
+    assert(tree.count == after->next_seq - 1u);
+    snag_buf_free(&bytes);
+}
+
 static void
 verify_batch(int fd, const struct snag_binary_anchor *before,
     const struct snag_binary_anchor *after, const struct snag_binary_record *records,
@@ -182,21 +213,34 @@ test_group_ack(void)
     memset(first, 'x', 3u);
     memset(second, 'y', 3u);
     records[0].kind++;
+    struct snag_buf committed = {.max = 16u};
+    assert(!snag_buf_append(&committed, "canary", 6u));
+    struct snag_buf original;
+    memcpy(&original, &committed, sizeof(original));
     wait_flag(&probe.write_entered);
     struct snag_binary_io_result result;
     memset(&result, 0xa5, sizeof(result));
     struct snag_binary_io_result saved;
     memcpy(&saved, &result, sizeof(saved));
-    assert(snag_binary_io_take(io, &result) == 1 && !memcmp(&saved, &result, sizeof(saved)));
+    assert(snag_binary_io_take_batch(io, &result, &committed) == 1 &&
+        !memcmp(&saved, &result, sizeof(saved)));
+    assert(!memcmp(&committed, &original, sizeof(original)) &&
+        !memcmp(committed.data, "canary", 6u));
+    assert(snag_binary_io_take_batch(io, &result, NULL) < 0 && errno == EINVAL);
+    assert(snag_binary_io_take_batch(NULL, &result, &committed) < 0 && errno == EINVAL);
+    assert(snag_binary_io_take_batch(io, NULL, &committed) < 0 && errno == EINVAL);
     assert(snag_binary_io_submit(io, records, 2u, 0u) < 0 && errno == EBUSY);
     assert(snag_binary_io_close(io) < 0 && errno == EBUSY);
     atomic_store(&probe.release_write, true);
     wait_flag(&probe.sync_entered);
-    assert(snag_binary_io_take(io, &result) == 1 && !memcmp(&saved, &result, sizeof(saved)));
+    assert(snag_binary_io_take_batch(io, &result, &committed) == 1 &&
+        !memcmp(&saved, &result, sizeof(saved)));
+    assert(!memcmp(&committed, &original, sizeof(original)) &&
+        !memcmp(committed.data, "canary", 6u));
     atomic_store(&probe.release_sync, true);
     assert(snag_wakeup_wait(snag_binary_io_wake(io), 10000) == 1);
     assert(snag_binary_io_close(io) < 0 && errno == EBUSY);
-    assert(!snag_binary_io_take(io, &result));
+    assert(!snag_binary_io_take_batch(io, &result, &committed));
     assert(!result.error && !result.retryable && result.durable.next_seq == 3u &&
         same_anchor(&result.written, &result.durable));
     assert(snag_binary_io_take(io, &saved) < 0 && errno == ENOENT);
@@ -210,6 +254,8 @@ test_group_ack(void)
     struct snag_binary_record originals[] = {record("one"), record("two")};
     verify_batch(fd, &before, &middle, originals, 2u);
     verify_batch(fd, &middle, &result.durable, &last, 1u);
+    verify_commit_bytes(fd, &before, &middle, &committed);
+    snag_buf_free(&committed);
     assert(!close(fd));
 }
 
@@ -223,24 +269,33 @@ test_failed_commit(bool partial, unsigned int failures)
     struct snag_binary_io *io = start_owner(fd, &before, &probe);
     struct snag_binary_record records[] = {record("alpha"), record("beta")};
     assert(!snag_binary_io_submit(io, records, 2u, 0u));
+    struct snag_buf committed = {.max = 16u};
+    assert(!snag_buf_append(&committed, "canary", 6u));
+    struct snag_buf original;
+    memcpy(&original, &committed, sizeof(original));
     struct snag_binary_io_result result;
-    assert(await_result(io, &result) < 0 && errno == EIO && result.error == EIO);
+    assert(await_batch(io, &result, &committed) < 0 && errno == EIO && result.error == EIO);
     assert(result.retryable && same_anchor(&result.durable, &before));
+    assert(!memcmp(&committed, &original, sizeof(original)) &&
+        !memcmp(committed.data, "canary", 6u));
     assert(partial ? same_anchor(&result.written, &before) : result.written.next_seq == 3u);
     assert(snag_binary_io_submit(io, records, 2u, 0u) < 0 && errno == EBUSY);
     assert(!snag_binary_io_retry(io));
     if (failures == 1u) {
-        assert(!await_result(io, &result) && result.durable.next_seq == 3u &&
+        assert(!await_batch(io, &result, &committed) && result.durable.next_seq == 3u &&
             same_anchor(&result.written, &result.durable));
         assert(!snag_binary_io_close(io));
         assert(probe.writes == (partial ? 2u : 1u));
         assert(probe.syncs == (partial ? 1u : 2u));
         assert(probe.bytes == result.durable.end - before.end);
         verify_batch(fd, &before, &result.durable, records, 2u);
+        verify_commit_bytes(fd, &before, &result.durable, &committed);
         assert(snag_seek(fd, 0, SEEK_END) == (int64_t)result.durable.end);
     } else {
-        assert(await_result(io, &result) < 0 && errno == EIO && !result.retryable);
+        assert(await_batch(io, &result, &committed) < 0 && errno == EIO && !result.retryable);
         assert(same_anchor(&result.durable, &before));
+        assert(!memcmp(&committed, &original, sizeof(original)) &&
+            !memcmp(committed.data, "canary", 6u));
         assert(snag_binary_io_retry(io) < 0 && errno == EALREADY);
         assert(snag_binary_io_submit(io, records, 2u, 0u) < 0 && errno == EBUSY);
         assert(!snag_binary_io_close(io));
@@ -248,6 +303,7 @@ test_failed_commit(bool partial, unsigned int failures)
         assert(probe.syncs == (partial ? 0u : 2u));
         assert(snag_seek(fd, 0, SEEK_END) > (int64_t)before.end);
     }
+    snag_buf_free(&committed);
     assert(!close(fd));
 }
 

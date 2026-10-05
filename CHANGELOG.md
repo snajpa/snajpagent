@@ -3,6 +3,12 @@
 # Changelog
 
 ## Unreleased
+
+- Transfer optional ownership of the exact decoded native batch with its
+  durable acknowledgement, including internally constructed receipts. Pending
+  and failed acknowledgements preserve the caller's buffer; successful transfer
+  survives later submissions and close. Engine frontier integration remains
+  pending.
 - Bind native checkpoint file publication to a canonical receipt committed by
   the same I/O owner. Advance usable slots only after journal durability ACK,
   choose replacement by verified receipt order, and retain exact failed requests

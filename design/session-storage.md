@@ -2405,6 +2405,15 @@ The worker uses the existing pthread and wake facilities. It encodes and hashes
 records, checks the expected file end, appends, and calls the platform file-sync
 primitive. A queued submission and a complete write both remain unacknowledged
 until sync succeeds. Completion preserves separate written and durable anchors.
+The engine can consume a durable acknowledgement with ownership of the exact
+decoded batch. Transfer replaces an initialized caller buffer without allocation
+or re-encoding after sync. Pending and failed calls preserve that buffer, while
+retry retains the same encoded and decoded bytes. Transferred storage survives
+later submissions and owner close. This includes internally constructed receipts,
+so every canonical record can advance the engine's existing logical frontier;
+derived-cache absence or geometry cannot become a canonical durability condition.
+The I/O worker supplies bytes, not semantic adoption or mutable frontier ownership.
+
 Pending calls and unconsumed completions prevent replacement or close; an idle
 close joins the worker and leaves the caller's journal descriptor and lock intact.
 

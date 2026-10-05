@@ -19,6 +19,7 @@ struct io_request {
     struct snag_binary_anchor before;
     struct snag_binary_anchor after;
     struct snag_buf bytes;
+    struct snag_buf decoded;
     bool attempted_io;
     bool retried;
     bool checkpoint_receipt;
@@ -97,6 +98,7 @@ request_free(struct io_request *request)
     free(request->records);
     free(request->payloads);
     snag_buf_free(&request->bytes);
+    snag_buf_free(&request->decoded);
     free(request);
 }
 
@@ -156,8 +158,12 @@ encode_request(struct io_request *request)
     int rc = snag_binary_batch_encode(&decoded, &request->before,
         request->records, request->count, request->turns, &after);
     if (rc == 0) rc = snag_binary_wire_encode(&request->bytes, decoded.data, decoded.len);
-    snag_buf_free(&decoded);
-    if (rc < 0) return -1;
+    if (rc < 0) {
+        int code = errno;
+        snag_buf_free(&decoded);
+        return snag_errno(code);
+    }
+    request->decoded = decoded;
     request->after = after;
     free(request->records);
     request->records = NULL;
@@ -351,8 +357,9 @@ snag_binary_io_wake(const struct snag_binary_io *io)
     return io ? io->wake[0] : SNAG_WAKE_INVALID;
 }
 
-int
-snag_binary_io_take(struct snag_binary_io *io, struct snag_binary_io_result *out)
+static int
+take_result(struct snag_binary_io *io, struct snag_binary_io_result *out,
+    struct snag_buf *batch)
 {
     if (!io || !out) return snag_errno(EINVAL);
     pthread_mutex_lock(&io->mutex);
@@ -362,6 +369,11 @@ snag_binary_io_take(struct snag_binary_io *io, struct snag_binary_io_result *out
         return pending ? 1 : snag_errno(ENOENT);
     }
     *out = io->result;
+    if (!out->error && batch) {
+        snag_buf_free(batch);
+        *batch = io->request->decoded;
+        io->request->decoded = (struct snag_buf){0};
+    }
     if (out->error && io->request->attempted_io) {
         io->phase = IO_FAILED;
     } else {
@@ -372,6 +384,20 @@ snag_binary_io_take(struct snag_binary_io *io, struct snag_binary_io_result *out
     refresh_wake(io);
     pthread_mutex_unlock(&io->mutex);
     return out->error ? snag_errno(out->error) : 0;
+}
+
+int
+snag_binary_io_take(struct snag_binary_io *io, struct snag_binary_io_result *out)
+{
+    return take_result(io, out, NULL);
+}
+
+int
+snag_binary_io_take_batch(struct snag_binary_io *io, struct snag_binary_io_result *out,
+    struct snag_buf *batch)
+{
+    if (!batch) return snag_errno(EINVAL);
+    return take_result(io, out, batch);
 }
 
 int

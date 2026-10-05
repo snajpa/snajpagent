@@ -52,6 +52,17 @@ snag_wake_fd snag_binary_io_wake(const struct snag_binary_io *io);
  * after sync failure. Such a failure retains the exact batch and bars new work. */
 int snag_binary_io_take(struct snag_binary_io *io, struct snag_binary_io_result *out);
 
+/* The same acknowledgement, additionally transferring ownership of its exact
+ * decoded batch on durable success. batch is an initialized owning buffer;
+ * success frees/replaces its old storage without allocation or re-encoding.
+ * Pending, invalid and failed calls preserve it. Caller releases it separately;
+ * subsequent submissions, retries and close cannot invalidate transferred bytes.
+ * This includes internally constructed checkpoint receipts. The engine advances
+ * its logical frontier from these bytes and its independently known before anchor;
+ * this worker still neither reduces state nor confers authority on index hints. */
+int snag_binary_io_take_batch(struct snag_binary_io *, struct snag_binary_io_result *,
+    struct snag_buf *batch);
+
 /* One explicit reconciliation attempt after consuming an I/O failure. Check
  * existing tail bytes against the retained batch; append only a matching missing
  * suffix, then sync again. Never truncate, resequence or re-encode the batch.

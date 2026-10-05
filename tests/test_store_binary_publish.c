@@ -764,31 +764,57 @@ test_receipt_barrier(unsigned int mode)
     struct snag_binary_io_snapshot saved = extra;
     assert(snag_binary_io_checkpoint_submit(io, &extra) < 0 && errno == EBUSY);
     assert(!memcmp(&extra, &saved, sizeof(extra)));
+    struct snag_buf committed = {.max = 16u};
+    assert(!snag_buf_append(&committed, "canary", 6u));
+    struct snag_buf original;
+    memcpy(&original, &committed, sizeof(original));
     struct snag_binary_io_result result;
     if (!mode) {
         wait_flag(&probe.entered);
         memset(&result, 0x5a, sizeof(result));
         struct snag_binary_io_result sentinel;
         memcpy(&sentinel, &result, sizeof(sentinel));
-        assert(snag_binary_io_take(io, &result) == 1);
+        assert(snag_binary_io_take_batch(io, &result, &committed) == 1);
         assert(!memcmp(&result, &sentinel, sizeof(result)));
         assert(snag_binary_io_close(io) < 0 && errno == EBUSY);
         atomic_store(&probe.released, true);
     } else {
         assert(snag_wakeup_wait(snag_binary_io_wake(io), 10000) == 1);
-        assert(snag_binary_io_take(io, &result) < 0);
+        assert(snag_binary_io_take_batch(io, &result, &committed) < 0);
         assert(result.error == (mode == 1u ? ENOSPC : EIO) && result.retryable &&
             !result.checkpoint_receipt && result.durable.end == preceding.durable.end);
         assert(snag_binary_io_checkpoint_submit(io, &extra) < 0 && errno == EBUSY);
         assert(snag_binary_io_checkpoint_receipt_submit(io, root, 102u) < 0 && errno == EBUSY);
         assert(!snag_binary_io_retry(io));
     }
+    assert(!memcmp(&committed, &original, sizeof(original)) &&
+        !memcmp(committed.data, "canary", 6u));
     assert(snag_wakeup_wait(snag_binary_io_wake(io), 10000) == 1);
-    assert(!snag_binary_io_take(io, &result) && result.checkpoint_receipt);
+    assert(!snag_binary_io_take_batch(io, &result, &committed) && result.checkpoint_receipt);
     assert(result.durable.next_seq == preceding.durable.next_seq + 1u);
     assert(snag_binary_io_checkpoint_receipt_submit(io, root, 102u) < 0 && errno == ENOENT);
     assert(!snag_binary_io_close(io));
+    struct snag_binary_batch batch;
+    struct snag_binary_anchor after;
+    assert(!snag_binary_batch_decode(committed.data, committed.len,
+        &preceding.durable, &batch, &after));
+    assert(batch.count == 1u && after.end == result.durable.end &&
+        !memcmp(after.digest, result.durable.digest, sizeof(after.digest)));
+    size_t offset = SNAG_BINARY_BATCH_HEADER_SIZE;
+    struct snag_binary_record record;
+    uint64_t sequence;
+    assert(!snag_binary_record_next(&batch, &offset, &record, &sequence));
+    assert(sequence == preceding.durable.next_seq &&
+        record.kind == SNAG_BINARY_CHECKPOINT_RECEIPT);
+    struct snag_binary_checkpoint_receipt receipt;
+    assert(!snag_binary_checkpoint_receipt_decode(&record, &receipt));
+    assert(receipt.generation == published.generation &&
+        receipt.image_size == published.image_size &&
+        !memcmp(receipt.image_digest, published.image_digest, sizeof(receipt.image_digest)) &&
+        !memcmp(receipt.index_root, root, sizeof(root)) &&
+        receipt.boundary.end == published.boundary.end);
     check_receipt(&fixture, &published, &result.durable, true);
+    snag_buf_free(&committed);
     free_snapshot(&extra);
     fixture_free(&fixture);
 }
