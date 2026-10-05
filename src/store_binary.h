@@ -150,6 +150,20 @@ int snag_binary_checkpoint_frame_from_receipt(const void *data, size_t size,
     const struct snag_binary_identity *identity,
     const struct snag_binary_checkpoint_receipt *receipt,
     struct snag_binary_checkpoint_frame *out);
+/* Probe only the final digest of a regular cache file, without reading its body.
+ * This is an untrusted lookup key, never a checkpoint pin. Returns 0/-1 and
+ * preserves digest on failure. Neither probe nor read seeks the descriptor. */
+int snag_binary_checkpoint_image_probe(int fd, unsigned char digest[32]);
+/* Read an image bounded by an independently authenticated canonical receipt.
+ * Reject nonregular/extent-mismatched files before allocation, then read in 64KiB
+ * chunks and verify framing, identity, receipt binding and unchanged file stamps.
+ * Cancellation is checked before allocation, between chunks and after validation.
+ * Success replaces image with owned bytes and out with borrowed section views;
+ * failure preserves both outputs. Their storage must be independent. No adoption,
+ * section semantics or journal ancestry checks; no implicit history fallback. */
+int snag_binary_checkpoint_image_read(int fd, const struct snag_binary_identity *identity,
+    const struct snag_binary_checkpoint_receipt *receipt, struct snag_buf *image,
+    struct snag_binary_checkpoint_frame *out, bool (*cancelled)(void *), void *opaque);
 /* Find the latest receipt for each supplied image digest (NULL means absent)
  * by walking backward from an independently trusted immutable committed tail.
  * Follow each selected capture boundary to its exact ancestor before returning

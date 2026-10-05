@@ -2007,6 +2007,20 @@ validation. The receipt must itself be established as a canonical record with a
 capture boundary preceding its containing batch; neither an index hint nor a
 cache-supplied anchor establishes this prerequisite.
 
+The file probe reads only the final digest from a regular cache file and rechecks
+its available file metadata. This yields an untrusted search key without allocating
+or reading a cache-supplied body size. The image reader requires a separately
+pinned receipt, rejects nonregular files and mismatched extents before allocation,
+and reads/hashes exactly the canonical image size in64KiB chunks, without a
+second whole-image checksum pass. It validates framing,
+session identity, receipt binding and unchanged file metadata before replacing the
+caller's owned image and borrowed section views together. Failures retain both
+previous outputs and the descriptor cursor. Cancellation is checked before
+allocation, between read/hash chunks and after image validation. A final file
+metadata recheck follows the last cancellation callback before exposure. Section semantics and
+normal-resume integration remain separate obligations; neither helper adopts state
+or falls back to a history scan.
+
 The paired receipt search takes two image digests as lookup keys and walks backward
 from an independently established immutable journal tail. It selects the latest
 matching canonical record for each slot, including the last match within a batch.

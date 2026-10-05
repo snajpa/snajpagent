@@ -382,8 +382,8 @@ fail:
     return -1;
 }
 
-int
-snag_binary_checkpoint_frame_decode(const void *data, size_t size,
+static int
+checkpoint_frame_view(const void *data, size_t size,
     const struct snag_binary_identity *identity, const struct snag_binary_anchor *boundary,
     struct snag_binary_checkpoint_frame *frame)
 {
@@ -421,13 +421,8 @@ snag_binary_checkpoint_frame_decode(const void *data, size_t size,
     if (size < total) return 1;
     if (size != total) return invalid();
     const unsigned char *footer = bytes + size - SNAG_BINARY_CHECKPOINT_FOOTER_SIZE;
-    unsigned char hash[32];
-    digest(bytes, size - sizeof(hash), hash);
     if (memcmp(footer, checkpoint_footer_magic, sizeof(checkpoint_footer_magic)) ||
-        get_le(footer + 8u, 8u) != total ||
-        memcmp(hash, footer + SNAG_BINARY_CHECKPOINT_FOOTER_SIZE - sizeof(hash), sizeof(hash))) {
-        return invalid();
-    }
+        get_le(footer + 8u, 8u) != total) return invalid();
     struct snag_binary_checkpoint_frame decoded = {
         .identity = *identity, .boundary = *boundary, .generation = get_le(bytes + 24u, 8u),
         .core = {.version = (uint16_t)get_le(bytes + 120u, 2u),
@@ -439,6 +434,23 @@ snag_binary_checkpoint_frame_decode(const void *data, size_t size,
             .data = access ? bytes + SNAG_BINARY_CHECKPOINT_HEADER_SIZE +
                 (size_t)core + (size_t)provider : NULL, .size = (size_t)access}};
     *frame = decoded;
+    return 0;
+}
+
+int
+snag_binary_checkpoint_frame_decode(const void *data, size_t size,
+    const struct snag_binary_identity *identity, const struct snag_binary_anchor *boundary,
+    struct snag_binary_checkpoint_frame *frame)
+{
+    if (!frame) return invalid();
+    struct snag_binary_checkpoint_frame candidate;
+    int rc = checkpoint_frame_view(data, size, identity, boundary, &candidate);
+    if (rc) return rc;
+    const unsigned char *bytes = data;
+    unsigned char hash[32];
+    digest(bytes, size - sizeof(hash), hash);
+    if (memcmp(hash, bytes + size - sizeof(hash), sizeof(hash))) return invalid();
+    *frame = candidate;
     return 0;
 }
 
@@ -623,6 +635,82 @@ read_full_at(int fd, unsigned char *out, size_t size, uint64_t offset)
         size -= (size_t)got;
     }
     return 0;
+}
+
+int
+snag_binary_checkpoint_image_probe(int fd, unsigned char image_digest[32])
+{
+    if (fd < 0 || !image_digest) return invalid();
+    snag_file_info before, after;
+    if (snag_fstat(fd, &before) < 0) return -1;
+    if (!S_ISREG(before.st_mode) || before.st_size <
+        SNAG_BINARY_CHECKPOINT_HEADER_SIZE + SNAG_BINARY_CHECKPOINT_FOOTER_SIZE + 2u) {
+        return invalid();
+    }
+    unsigned char hash[32];
+    if (read_full_at(fd, hash, sizeof(hash), (uint64_t)before.st_size - sizeof(hash)) < 0 ||
+        snag_fstat(fd, &after) < 0) return -1;
+    if (!snag_file_unchanged(&before, &after)) return snag_errno(ESTALE);
+    memcpy(image_digest, hash, sizeof(hash));
+    return 0;
+}
+
+int
+snag_binary_checkpoint_image_read(int fd, const struct snag_binary_identity *identity,
+    const struct snag_binary_checkpoint_receipt *receipt, struct snag_buf *image,
+    struct snag_binary_checkpoint_frame *out, bool (*cancelled)(void *), void *opaque)
+{
+    if (fd < 0 || !identity || !receipt_valid(receipt) || !image || !out) return invalid();
+    snag_file_info before, after;
+    if (snag_fstat(fd, &before) < 0) return -1;
+    if (!S_ISREG(before.st_mode) || before.st_size < 0 ||
+        (uint64_t)before.st_size != receipt->image_size) return invalid();
+    if (receipt->image_size > SIZE_MAX) return snag_errno(EOVERFLOW);
+    if (cancelled && cancelled(opaque)) return snag_errno(ECANCELED);
+    struct snag_buf staged = {.max = image->max};
+    struct snag_binary_checkpoint_frame frame;
+    size_t size = (size_t)receipt->image_size;
+    if (snag_buf_reserve(&staged, size) < 0) goto done;
+    struct snag_sha256 hashing;
+    snag_sha256_init(&hashing);
+    while (staged.len < size) {
+        if (cancelled && cancelled(opaque)) {
+            errno = ECANCELED;
+            goto done;
+        }
+        size_t chunk = size - staged.len;
+        if (chunk > 65536u) chunk = 65536u;
+        if (read_full_at(fd, staged.data + staged.len, chunk, staged.len) < 0) goto done;
+        size_t hashed = staged.len < size - 32u ? size - 32u - staged.len : 0u;
+        if (hashed > chunk) hashed = chunk;
+        snag_sha256_update(&hashing, staged.data + staged.len, hashed);
+        staged.len += chunk;
+    }
+    unsigned char hash[32];
+    snag_sha256_final(&hashing, hash);
+    if (checkpoint_frame_view(staged.data, staged.len, identity, &receipt->boundary, &frame) ||
+        frame.generation != receipt->generation ||
+        memcmp(hash, staged.data + size - sizeof(hash), sizeof(hash)) ||
+        memcmp(hash, receipt->image_digest, sizeof(hash))) {
+        errno = EINVAL;
+        goto done;
+    }
+    if (cancelled && cancelled(opaque)) {
+        errno = ECANCELED;
+        goto done;
+    }
+    if (snag_fstat(fd, &after) < 0) goto done;
+    if (!snag_file_unchanged(&before, &after)) {
+        errno = ESTALE;
+        goto done;
+    }
+    snag_buf_free(image);
+    *image = staged;
+    *out = frame;
+    return 0;
+done:
+    snag_buf_free(&staged);
+    return -1;
 }
 
 /* An incomplete candidate can be discarded only if no earlier delimiter closes

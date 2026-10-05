@@ -466,6 +466,8 @@
   Add optional checkpoint receipt encoding and exact snapshot-image binding,
   and return the completed image digest and byte length with durable publication.
   Pin the image length in receipt version 2 for independently bounded cache loading.
+  Probe cache digests without reading bodies and load receipt-bounded images with
+  cancellation, exact framing checks and atomic output ownership.
   Find paired receipts through a bounded, cancellable canonical-chain walk and
   verify their exact earlier capture anchors before exposing checkpoint pins.
   Add a bounded reversible batch-envelope codec that separates physical commit
