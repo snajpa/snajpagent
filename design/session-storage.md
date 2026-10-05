@@ -2755,6 +2755,25 @@ original eleven-slot version1 representation. Version1 decode initializes the
 absent slot to zero. Invalid values, unsupported versions, wrong lengths and
 extra bytes fail without partial output adoption.
 
+IRC sleep/wake and summary configuration/adoption use typed records211–214:
+`irc_sleep_set`, `irc_sleep_woke`, `irc_compact_configured`, and `irc_compacted`.
+They retain the reducer's exact payload fields, supported wake reasons, integer
+ranges and text bounds. The reducer checks a summary's monotone admission
+sequence/count against the current state. Summary text remains provider context
+data; a nested event spelling does not execute an event or change its authority.
+
+Controls block version3 appends nine LEu64 IRC counters, sleep settings and
+summary cursors after the existing seven control sequences. The encoder emits
+version3 when any added scalar is nonzero; all-zero state keeps version2.
+Version1/2 decode initializes those fields to zero without changing other
+checkpoint members. The fixed text table adds `irc_compact_instruction` as a
+thirteenth declaration/field slot, including a retained empty instruction.
+That slot selects version3/335 bytes; its absence preserves version2/310 bytes
+or version1/285 bytes. Older text blocks clear the absent slots. These shapes
+retain the independent older golden encodings and reject partial or trailing
+bytes before adoption. The existing owner/replay and provider-context seams
+consume the saved state; decoding a checkpoint does not launch a worker.
+
 The commit owner also stages current checkpoint origins. Strict replay and live
 commits share one source-step implementation for fixed text declarations, resume
 options, pending input, queue creation versus replacement text, downloads,

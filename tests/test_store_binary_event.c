@@ -5887,6 +5887,8 @@ test_event_names(void)
         {168u, "hosted_search_finished"}, {176u, "tool_started"}, {177u, "tool_finished"},
         {192u, "process_output"}, {193u, "process_closed"}, {208u, "irc_event"},
         {209u, "irc_snapshot"}, {210u, "irc_admitted"}, {224u, "compaction_started"},
+        {211u, "irc_sleep_set"}, {212u, "irc_sleep_woke"},
+        {213u, "irc_compact_configured"}, {214u, "irc_compacted"},
         {225u, "compaction_interrupted"}, {226u, "compaction_completed"}, {227u, "context_rebased"},
         {240u, "download_queued"}, {241u, "download_removed"}, {242u, "downloads_cleared"},
         {248u, "rule_log"}, {249u, "rule_transform"}, {256u, "audio_usage"}, {257u, "voice_event"},

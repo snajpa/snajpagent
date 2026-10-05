@@ -16,17 +16,17 @@ static const struct text_slot {
 #define SLOT(f) {#f, offsetof(struct snag_session, f)}
     SLOT(cwd), SLOT(first_user), SLOT(last_user), SLOT(active_prompt), SLOT(goal_prompt),
     SLOT(goal_blocker), SLOT(timer_text), SLOT(banner_text), SLOT(steering_override),
-    {"irc_snapshot", 0u}, SLOT(name), SLOT(service_tier)
+    {"irc_snapshot", 0u}, SLOT(name), SLOT(service_tier), {"irc_compact_instruction", 0u}
 #undef SLOT
 };
-_Static_assert(COUNT(text_slots) == 12u && SNAG_BINARY_CHECKPOINT_TEXT_COUNT == 12u,
-    "version-2 fixed text slots");
+_Static_assert(COUNT(text_slots) == 13u && SNAG_BINARY_CHECKPOINT_TEXT_COUNT == 13u,
+    "version-3 fixed text slots");
 
 static const char *
 slot_text(const struct snag_session *state, size_t slot)
 {
-    if (slot == SNAG_BINARY_TEXT_IRC_SNAPSHOT)
-        return snag_json_string(state->strings, "irc_snapshot");
+    if (slot == SNAG_BINARY_TEXT_IRC_SNAPSHOT || slot == SNAG_BINARY_TEXT_IRC_COMPACT_INSTRUCTION)
+        return snag_json_string(state->strings, text_slots[slot].name);
     const char *text;
     memcpy(&text, (const unsigned char *)state + text_slots[slot].offset, sizeof(text));
     return text;
@@ -92,6 +92,9 @@ record_source(const struct snag_binary_record *record, uint64_t sequence,
     case SNAG_BINARY_SESSION_NAMED: text = event->data.name; break;
     case SNAG_BINARY_SERVICE_TIER_CHANGED: text = event->data.service_tier; break;
     case SNAG_BINARY_IRC_SNAPSHOT: text = event->data.irc_snapshot.text; break;
+    case SNAG_BINARY_IRC_COMPACT_CONFIGURED:
+        text = event->data.irc_compact_configured.instruction;
+        break;
     case SNAG_BINARY_TIMER_SCHEDULED: text = event->data.timer.text; break;
     case SNAG_BINARY_GOAL_STARTED:
     case SNAG_BINARY_GOAL_REPLACED:
@@ -133,6 +136,7 @@ changed_slot(enum snag_binary_kind kind)
     case SNAG_BINARY_SESSION_NAMED: return SNAG_BINARY_TEXT_NAME;
     case SNAG_BINARY_SERVICE_TIER_CHANGED: return SNAG_BINARY_TEXT_SERVICE_TIER;
     case SNAG_BINARY_IRC_SNAPSHOT: return SNAG_BINARY_TEXT_IRC_SNAPSHOT;
+    case SNAG_BINARY_IRC_COMPACT_CONFIGURED: return SNAG_BINARY_TEXT_IRC_COMPACT_INSTRUCTION;
     case SNAG_BINARY_STEERING_UPDATED: return SNAG_BINARY_TEXT_STEERING;
     case SNAG_BINARY_TIMER_SCHEDULED: return SNAG_BINARY_TEXT_TIMER;
     case SNAG_BINARY_GOAL_STARTED:
@@ -228,10 +232,12 @@ snag_binary_checkpoint_texts_encode(struct snag_buf *out,
     const struct snag_binary_checkpoint_texts *texts)
 {
     if (!out || !valid_texts(texts)) return snag_errno(EINVAL);
-    size_t count = texts->slots[SNAG_BINARY_TEXT_SERVICE_TIER].declaration ?
-        COUNT(texts->slots) : SNAG_BINARY_TEXT_SERVICE_TIER;
+    size_t count = texts->slots[SNAG_BINARY_TEXT_IRC_COMPACT_INSTRUCTION].declaration ?
+        COUNT(texts->slots) : texts->slots[SNAG_BINARY_TEXT_SERVICE_TIER].declaration ?
+        SNAG_BINARY_TEXT_IRC_COMPACT_INSTRUCTION : SNAG_BINARY_TEXT_SERVICE_TIER;
     unsigned char encoded[TEXT_WIRE_SIZE] = {0};
-    encoded[0] = count == SNAG_BINARY_TEXT_SERVICE_TIER ? 1u : 2u;
+    encoded[0] = count == SNAG_BINARY_TEXT_SERVICE_TIER ? 1u :
+        count == SNAG_BINARY_TEXT_IRC_COMPACT_INSTRUCTION ? 2u : 3u;
     put64(encoded + 2u, texts->through);
     for (size_t i = 0u; i < count; ++i) {
         const struct snag_binary_checkpoint_text_source *source = &texts->slots[i];
@@ -250,8 +256,9 @@ snag_binary_checkpoint_texts_decode(const void *data, size_t size,
 {
     if (!data || !out || size < 2u) return snag_errno(EINVAL);
     const unsigned char *bytes = data;
-    if ((bytes[0] != 1u && bytes[0] != 2u) || bytes[1]) return snag_errno(EINVAL);
+    if (bytes[0] < 1u || bytes[0] > 3u || bytes[1]) return snag_errno(EINVAL);
     size_t count = bytes[0] == 1u ? SNAG_BINARY_TEXT_SERVICE_TIER :
+        bytes[0] == 2u ? SNAG_BINARY_TEXT_IRC_COMPACT_INSTRUCTION :
         SNAG_BINARY_CHECKPOINT_TEXT_COUNT;
     if (size != 10u + 25u * count) return snag_errno(EINVAL);
     struct snag_binary_checkpoint_texts value = {.through = get64(bytes + 2u)};
@@ -297,6 +304,8 @@ slot_accepts(size_t slot, const struct snag_binary_event *event)
     case SNAG_BINARY_TEXT_BANNER: return event->kind == SNAG_BINARY_BANNER_UPDATED;
     case SNAG_BINARY_TEXT_NAME: return event->kind == SNAG_BINARY_SESSION_NAMED;
     case SNAG_BINARY_TEXT_SERVICE_TIER: return event->kind == SNAG_BINARY_SERVICE_TIER_CHANGED;
+    case SNAG_BINARY_TEXT_IRC_COMPACT_INSTRUCTION:
+        return event->kind == SNAG_BINARY_IRC_COMPACT_CONFIGURED;
     case SNAG_BINARY_TEXT_IRC_SNAPSHOT:
         return event->kind == SNAG_BINARY_SESSION_CREATED ||
             event->kind == SNAG_BINARY_IRC_SNAPSHOT;

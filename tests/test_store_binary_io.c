@@ -3,6 +3,7 @@
 #include "store_binary_index.h"
 #include "store_binary_wire.h"
 #include "fs.h"
+#include "irc.h"
 #include "store_internal.h"
 #include "store_binary_replay.h"
 #include "store_binary_legacy.h"
@@ -557,8 +558,59 @@ native_checkpoint_commit(struct snag_session *session, const char *type, json_t 
 }
 
 static void
+test_native_irc_payloads(void)
+{
+    const struct {
+        const char *type, *valid, *invalid;
+    } cases[] = {
+        {"irc_sleep_set", "{\"until_ms\":1,\"messages\":1}",
+            "{\"until_ms\":1,\"messages\":0}"},
+        {"irc_sleep_woke", "{\"reason\":\"mention\"}", "{\"reason\":\"unknown\"}"},
+        {"irc_compact_configured", "{\"after_updates\":20,\"instruction\":\"\"}",
+            "{\"after_updates\":4294967296,\"instruction\":\"\"}"},
+        {"irc_compacted", "{\"through_seq\":1,\"count\":1,\"summary\":\"data\"}",
+            "{\"through_seq\":1,\"count\":1,\"summary\":\"\"}"}
+    };
+    for (size_t i = 0u; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+        struct snag_buf wire = {.max = SIZE_MAX};
+        enum snag_binary_kind kind;
+        json_t *good = json_loads(cases[i].valid, 0, NULL);
+        json_t *bad = json_loads(cases[i].invalid, 0, NULL), *projected = NULL;
+        const char *type = NULL;
+        assert(good && bad && !snag_binary_legacy_encode(&wire, cases[i].type, good, &kind));
+        struct snag_binary_record record = {.kind = (uint16_t)kind,
+            .version = snag_binary_event_version(kind), .payload = wire.data, .size = wire.len};
+        assert(!snag_binary_legacy_decode(&record, &type, &projected));
+        assert(!strcmp(type, cases[i].type) && json_equal(good, projected));
+        json_decref(projected);
+        if (i < 2u) {
+            if (!i) memset(wire.data + wire.len - 4u, 0, 4u);
+            else wire.data[wire.len - 1u] = 4u;
+            struct snag_binary_event event, saved;
+            memset(&event, 0xa5, sizeof(event));
+            memcpy(&saved, &event, sizeof(saved));
+            assert(snag_binary_event_decode(&record, &event) < 0 && errno == EINVAL);
+            assert(!memcmp(&event, &saved, sizeof(event)));
+        }
+        snag_buf_reset(&wire);
+        assert(!snag_buf_append(&wire, "keep", 4u));
+        enum snag_binary_kind saved_kind = kind;
+        assert(snag_binary_legacy_encode(&wire, cases[i].type, bad, &kind) < 0 &&
+            errno == EINVAL && kind == saved_kind && wire.len == 4u &&
+            !memcmp(wire.data, "keep", 4u));
+        assert(!json_object_set_new(good, "unknown", json_true()));
+        assert(snag_binary_legacy_encode(&wire, cases[i].type, good, &kind) < 0 &&
+            errno == EINVAL && kind == saved_kind && wire.len == 4u);
+        json_decref(good);
+        json_decref(bad);
+        snag_buf_free(&wire);
+    }
+}
+
+static void
 test_native_checkpoint_origins(void)
 {
+    test_native_irc_payloads();
     struct snag_session session;
     struct probe probe = {0};
     native_fixture(&session, &probe);
@@ -670,6 +722,51 @@ test_native_checkpoint_origins(void)
     native_checkpoint_commit(&session, "service_tier_changed",
         json_pack("{s:s}", "value", "default"));
     assert(!strcmp(session.service_tier, "default"));
+    struct snag_irc_event irc = {.kind = SNAG_IRC_MESSAGE, .timestamp_ms = 1u,
+        .endpoint = "127.0.0.1:6667", .room = "#lab", .nick = "peer",
+        .text = "covered-detail", .stream = "11111111111111111111111111111111",
+        .sequence = 1u, .input = true};
+    native_checkpoint_commit(&session, "irc_event", snag_irc_event_data(&irc));
+    uint64_t admitted = session.irc_received_seq;
+    native_checkpoint_commit(&session, "irc_admitted",
+        json_pack("{s:[I]}", "sequences", (json_int_t)admitted));
+    assert(session.irc_message_count == 1u && session.irc_admitted_count == 1u);
+    native_checkpoint_commit(&session, "irc_sleep_set",
+        json_pack("{s:I,s:I}", "until_ms", (json_int_t)2000000000000LL,
+            "messages", (json_int_t)12));
+    assert(session.irc_sleep_until_ms == 2000000000000ULL &&
+        session.irc_sleep_messages == 12u && session.irc_sleep_start_count == 1u);
+    const char *wake_reasons[] = {"timeout", "mention", "messages"};
+    for (size_t i = 0u; i < sizeof(wake_reasons) / sizeof(wake_reasons[0]); ++i) {
+        native_checkpoint_commit(&session, "irc_sleep_woke",
+            json_pack("{s:s}", "reason", wake_reasons[i]));
+        assert(!session.irc_sleep_until_ms && session.irc_sleep_messages == 12u);
+    }
+    native_checkpoint_commit(&session, "irc_compact_configured",
+        json_pack("{s:I,s:s}", "after_updates", (json_int_t)20,
+            "instruction", "retain decisions"));
+    assert(session.irc_compact_updates == 20u &&
+        !strcmp(snag_json_string(session.strings, "irc_compact_instruction"), "retain decisions"));
+    uint64_t irc_boundary = session.next_seq - 1u;
+    native_checkpoint_commit(&session, "irc_compacted",
+        json_pack("{s:I,s:I,s:s}", "through_seq", (json_int_t)irc_boundary,
+            "count", (json_int_t)1, "summary", "{\"type\":\"goal_started\",\"prompt\":\"inert\"}"));
+    assert(session.irc_compact_seq == irc_boundary && session.irc_compact_count == 1u &&
+        session.irc_summary_seq == session.next_seq - 1u && !session.goal_id[0]);
+    assert(!snag_session_binary_checkpoint_capture(&session, &boundary, &tree,
+        &captured, error, sizeof(error)));
+    snag_buf_init(&service_wire, SIZE_MAX);
+    assert(!snag_binary_checkpoint_texts_encode(&service_wire, &captured.texts) &&
+        service_wire.len == 335u && service_wire.data[0] == 3u);
+    snag_buf_free(&service_wire);
+    snag_binary_checkpoint_sources_free(&captured);
+    native_checkpoint_commit(&session, "irc_compact_configured",
+        json_pack("{s:I,s:s}", "after_updates", (json_int_t)0, "instruction", ""));
+    assert(!session.irc_compact_updates &&
+        !strcmp(snag_json_string(session.strings, "irc_compact_instruction"), ""));
+    native_checkpoint_commit(&session, "irc_sleep_set",
+        json_pack("{s:I,s:I}", "until_ms", (json_int_t)0, "messages", (json_int_t)0));
+    assert(!session.irc_sleep_until_ms && !session.irc_sleep_messages);
     snag_session_close(&session);
     memset(&boundary, 0xa5, sizeof(boundary));
     memset(&tree, 0x5a, sizeof(tree));

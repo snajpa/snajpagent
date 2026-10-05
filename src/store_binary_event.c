@@ -2867,6 +2867,67 @@ decode_irc_event(struct fields *fields, struct snag_binary_irc_event *event)
 }
 
 static int
+encode_irc_settings(struct snag_buf *out, const struct snag_binary_event *event)
+{
+    switch (event->kind) {
+    case SNAG_BINARY_IRC_SLEEP_SET:
+        if (event->data.irc_sleep_set.until_ms > INT64_MAX ||
+            (event->data.irc_sleep_set.until_ms && !event->data.irc_sleep_set.messages))
+            return invalid();
+        if (write_uint(out, event->data.irc_sleep_set.until_ms, 8u) < 0) return -1;
+        return write_uint(out, event->data.irc_sleep_set.messages, 4u);
+    case SNAG_BINARY_IRC_SLEEP_WOKE:
+        if (event->data.irc_sleep_woke < SNAG_BINARY_IRC_WAKE_TIMEOUT ||
+            event->data.irc_sleep_woke > SNAG_BINARY_IRC_WAKE_MESSAGES) return invalid();
+        return write_uint(out, event->data.irc_sleep_woke, 1u);
+    case SNAG_BINARY_IRC_COMPACT_CONFIGURED:
+        if (write_uint(out, event->data.irc_compact_configured.after_updates, 4u) < 0) return -1;
+        return write_text(out, event->data.irc_compact_configured.instruction,
+            0u, SNAG_MAX_STEERING_TEXT);
+    case SNAG_BINARY_IRC_COMPACTED:
+        if (!event->data.irc_compacted.through_seq || !event->data.irc_compacted.count ||
+            event->data.irc_compacted.through_seq > INT64_MAX ||
+            event->data.irc_compacted.count > INT64_MAX) return invalid();
+        if (write_uint(out, event->data.irc_compacted.through_seq, 8u) < 0 ||
+            write_uint(out, event->data.irc_compacted.count, 8u) < 0) return -1;
+        return write_text(out, event->data.irc_compacted.summary, 1u, SNAG_MAX_IRC_SNAPSHOT);
+    default: return invalid();
+    }
+}
+
+static bool
+decode_irc_settings(struct fields *fields, struct snag_binary_event *event)
+{
+    uint64_t value;
+    switch (event->kind) {
+    case SNAG_BINARY_IRC_SLEEP_SET:
+        if (!read_uint(fields, 8u, &event->data.irc_sleep_set.until_ms) ||
+            !read_uint(fields, 4u, &value)) return false;
+        event->data.irc_sleep_set.messages = (uint32_t)value;
+        return event->data.irc_sleep_set.until_ms <= INT64_MAX &&
+            (!event->data.irc_sleep_set.until_ms || event->data.irc_sleep_set.messages);
+    case SNAG_BINARY_IRC_SLEEP_WOKE:
+        if (!read_uint(fields, 1u, &value) || value < SNAG_BINARY_IRC_WAKE_TIMEOUT ||
+            value > SNAG_BINARY_IRC_WAKE_MESSAGES) return false;
+        event->data.irc_sleep_woke = value;
+        return true;
+    case SNAG_BINARY_IRC_COMPACT_CONFIGURED:
+        if (!read_uint(fields, 4u, &value)) return false;
+        event->data.irc_compact_configured.after_updates = (uint32_t)value;
+        return read_text(fields, &event->data.irc_compact_configured.instruction,
+            0u, SNAG_MAX_STEERING_TEXT);
+    case SNAG_BINARY_IRC_COMPACTED:
+        return read_uint(fields, 8u, &event->data.irc_compacted.through_seq) &&
+            read_uint(fields, 8u, &event->data.irc_compacted.count) &&
+            event->data.irc_compacted.through_seq && event->data.irc_compacted.count &&
+            event->data.irc_compacted.through_seq <= INT64_MAX &&
+            event->data.irc_compacted.count <= INT64_MAX &&
+            read_text(fields, &event->data.irc_compacted.summary, 1u, SNAG_MAX_IRC_SNAPSHOT);
+    default: return false;
+    }
+}
+
+static int
 encode_irc_snapshot(struct snag_buf *out, const struct snag_binary_irc_snapshot *snapshot)
 {
     if (snapshot->reason < SNAG_BINARY_IRC_SNAPSHOT_JOIN ||
@@ -3510,6 +3571,10 @@ static const struct archive_schema archive_schemas[] = {
         "nick", "op", "reply", "room", "sequence", "stream", "text", "timestamp_ms", "urgent"),
     ARCHIVE_SCHEMA(SNAG_BINARY_IRC_SNAPSHOT, "reason", "text", "timestamp_ms"),
     ARCHIVE_SCHEMA(SNAG_BINARY_IRC_ADMITTED, "input", "sequences", "steering"),
+    ARCHIVE_SCHEMA(SNAG_BINARY_IRC_SLEEP_SET, "until_ms", "messages"),
+    ARCHIVE_SCHEMA(SNAG_BINARY_IRC_SLEEP_WOKE, "reason"),
+    ARCHIVE_SCHEMA(SNAG_BINARY_IRC_COMPACT_CONFIGURED, "after_updates", "instruction"),
+    ARCHIVE_SCHEMA(SNAG_BINARY_IRC_COMPACTED, "through_seq", "count", "summary"),
     ARCHIVE_SCHEMA(SNAG_BINARY_COMPACTION_STARTED, "capability_version", "compact_id",
         "compaction_model", "continuation_scope", "count_method", "count_request_sha256",
         "input_tokens_bound", "model", "predecessor_compact_id", "profile_id", "reason",
@@ -4271,6 +4336,8 @@ encode_fields(struct snag_buf *out, const struct snag_binary_event *event)
     if (event->kind == SNAG_BINARY_IRC_ADMITTED) {
         return encode_irc_admission(out, &event->data.irc_admitted);
     }
+    if (event->kind >= SNAG_BINARY_IRC_SLEEP_SET && event->kind <= SNAG_BINARY_IRC_COMPACTED)
+        return encode_irc_settings(out, event);
     if (event->kind == SNAG_BINARY_TURN_STARTED) {
         return encode_turn_start(out, &event->data.started);
     }
@@ -4385,6 +4452,10 @@ static const struct {
     {SNAG_BINARY_IRC_EVENT, "irc_event"},
     {SNAG_BINARY_IRC_SNAPSHOT, "irc_snapshot"},
     {SNAG_BINARY_IRC_ADMITTED, "irc_admitted"},
+    {SNAG_BINARY_IRC_SLEEP_SET, "irc_sleep_set"},
+    {SNAG_BINARY_IRC_SLEEP_WOKE, "irc_sleep_woke"},
+    {SNAG_BINARY_IRC_COMPACT_CONFIGURED, "irc_compact_configured"},
+    {SNAG_BINARY_IRC_COMPACTED, "irc_compacted"},
     {SNAG_BINARY_COMPACTION_STARTED, "compaction_started"},
     {SNAG_BINARY_COMPACTION_INTERRUPTED, "compaction_interrupted"},
     {SNAG_BINARY_COMPACTION_COMPLETED, "compaction_completed"},
@@ -4445,7 +4516,8 @@ snag_binary_event_version(enum snag_binary_kind kind)
         kind == SNAG_BINARY_RESPONSE_FAILED || kind == SNAG_BINARY_RESPONSE_OUTPUT_CORRECTION ||
         kind == SNAG_BINARY_RESPONSE_COMPLETED || kind == SNAG_BINARY_TOOL_STARTED ||
         kind == SNAG_BINARY_PROCESS_OUTPUT || kind == SNAG_BINARY_IRC_EVENT ||
-        kind == SNAG_BINARY_IRC_SNAPSHOT || kind == SNAG_BINARY_IRC_ADMITTED) {
+        kind == SNAG_BINARY_IRC_SNAPSHOT ||
+        (kind >= SNAG_BINARY_IRC_ADMITTED && kind <= SNAG_BINARY_IRC_COMPACTED)) {
         return 1u;
     }
     if (kind == SNAG_BINARY_TOOL_FINISHED || kind == SNAG_BINARY_PROCESS_CLOSED) {
@@ -4560,6 +4632,8 @@ decode_fields(struct fields *fields, struct snag_binary_event *event)
     if (event->kind == SNAG_BINARY_IRC_ADMITTED) {
         return decode_irc_admission(fields, &event->data.irc_admitted);
     }
+    if (event->kind >= SNAG_BINARY_IRC_SLEEP_SET && event->kind <= SNAG_BINARY_IRC_COMPACTED)
+        return decode_irc_settings(fields, event);
     if (event->kind == SNAG_BINARY_TURN_STARTED) {
         return decode_turn_start(fields, &event->data.started);
     }
@@ -4786,6 +4860,9 @@ find_control_text(const struct snag_binary_batch *batch, uint64_t sequence,
         break;
     case SNAG_BINARY_SERVICE_TIER_CHANGED:
         source.text = source.event.data.service_tier;
+        break;
+    case SNAG_BINARY_IRC_COMPACT_CONFIGURED:
+        source.text = source.event.data.irc_compact_configured.instruction;
         break;
     case SNAG_BINARY_TIMER_SCHEDULED:
         source.text = source.event.data.timer.text;

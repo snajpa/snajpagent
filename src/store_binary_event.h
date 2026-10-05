@@ -74,6 +74,10 @@ enum snag_binary_kind {
     SNAG_BINARY_IRC_EVENT = 208,
     SNAG_BINARY_IRC_SNAPSHOT = 209,
     SNAG_BINARY_IRC_ADMITTED = 210,
+    SNAG_BINARY_IRC_SLEEP_SET = 211,
+    SNAG_BINARY_IRC_SLEEP_WOKE = 212,
+    SNAG_BINARY_IRC_COMPACT_CONFIGURED = 213,
+    SNAG_BINARY_IRC_COMPACTED = 214,
     SNAG_BINARY_COMPACTION_STARTED = 224,
     SNAG_BINARY_COMPACTION_INTERRUPTED = 225,
     SNAG_BINARY_COMPACTION_COMPLETED = 226,
@@ -912,6 +916,17 @@ struct snag_binary_event {
         struct snag_binary_irc_event irc_event;
         struct snag_binary_irc_snapshot irc_snapshot;
         struct snag_binary_irc_admission irc_admitted;
+        struct { uint64_t until_ms; uint32_t messages; } irc_sleep_set;
+        enum { SNAG_BINARY_IRC_WAKE_TIMEOUT = 1, SNAG_BINARY_IRC_WAKE_MENTION = 2,
+            SNAG_BINARY_IRC_WAKE_MESSAGES = 3 } irc_sleep_woke;
+        struct {
+            uint32_t after_updates;
+            struct snag_binary_text instruction;
+        } irc_compact_configured;
+        struct {
+            uint64_t through_seq, count;
+            struct snag_binary_text summary;
+        } irc_compacted;
         struct { unsigned char turn[16], response[16], item[16]; } completed;
         struct {
             unsigned char turn[16], response[16];

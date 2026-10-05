@@ -106,7 +106,8 @@ roundtrip(const struct snag_binary_checkpoint_texts *value, struct snag_buf *wir
     snag_buf_reset(wire);
     assert(!snag_binary_checkpoint_texts_encode(wire, value));
     assert(wire->len ==
-        (value->slots[SNAG_BINARY_TEXT_SERVICE_TIER].declaration ? 310u : 285u));
+        (value->slots[SNAG_BINARY_TEXT_IRC_COMPACT_INSTRUCTION].declaration ? 335u :
+        value->slots[SNAG_BINARY_TEXT_SERVICE_TIER].declaration ? 310u : 285u));
     struct snag_binary_checkpoint_texts restored;
     memset(&restored, 0xa5, sizeof(restored));
     assert(!snag_binary_checkpoint_texts_decode(wire->data, wire->len, &restored));
@@ -461,6 +462,21 @@ test_store_binary_texts(void)
     newer.data[0] = 2u;
     newer.data[1] = 1u;
     reject_decode(newer.data, newer.len);
+    newer.data[1] = 0u;
+    extended.slots[SNAG_BINARY_TEXT_IRC_COMPACT_INSTRUCTION] =
+        (struct snag_binary_checkpoint_text_source){.declaration = base + 13u,
+            .original = {.target = {base + 13u, 24u, 0u}}};
+    struct snag_buf irc = {.max = SIZE_MAX};
+    roundtrip(&extended, &irc);
+    assert(irc.len == 335u && irc.data[0] == 3u);
+    for (size_t size = 310u; size < irc.len; ++size) reject_decode(irc.data, size);
+    cleared = extended;
+    assert(!snag_binary_checkpoint_texts_decode(newer.data, newer.len, &cleared));
+    assert(!cleared.slots[SNAG_BINARY_TEXT_IRC_COMPACT_INSTRUCTION].declaration);
+    assert(cleared.slots[SNAG_BINARY_TEXT_SERVICE_TIER].declaration == base + 12u);
+    irc.data[0] = 4u;
+    reject_decode(irc.data, irc.len);
+    snag_buf_free(&irc);
     snag_buf_free(&newer);
     snag_buf_free(&wire);
 }

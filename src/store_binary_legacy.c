@@ -57,6 +57,7 @@ static const char *const irc_kinds[] = {
     "topic", "mode", "history_ready"
 };
 static const char *const irc_snapshot_reasons[] = {NULL, "join", "nick", "topology", "compaction"};
+static const char *const irc_wake_reasons[] = {NULL, "timeout", "mention", "messages"};
 static const char *const quiet_reasons[] = {
     NULL, "room_update_quiet", "reply_reminder_exhausted"
 };
@@ -175,7 +176,7 @@ legacy_kind(enum snag_binary_kind kind)
         response_end_kind(kind) || kind == SNAG_BINARY_RESPONSE_COMPLETED ||
         kind == SNAG_BINARY_TOOL_STARTED || kind == SNAG_BINARY_PROCESS_OUTPUT ||
         kind == SNAG_BINARY_TOOL_FINISHED || kind == SNAG_BINARY_PROCESS_CLOSED ||
-        (kind >= SNAG_BINARY_IRC_EVENT && kind <= SNAG_BINARY_IRC_ADMITTED) ||
+        (kind >= SNAG_BINARY_IRC_EVENT && kind <= SNAG_BINARY_IRC_COMPACTED) ||
         (kind >= SNAG_BINARY_VOICE_TRANSFER_RECORD && kind <= SNAG_BINARY_VOICE_TRANSFER_ADOPTED) ||
         (kind >= SNAG_BINARY_COMPACTION_STARTED && kind <= SNAG_BINARY_COMPACTION_COMPLETED) ||
         (kind >= SNAG_BINARY_TURN_STARTED && kind <= SNAG_BINARY_TURN_FAILED) ||
@@ -1402,6 +1403,39 @@ read_irc_event(const json_t *data, struct snag_binary_irc_event *event)
 static int
 read_irc(const json_t *data, struct snag_binary_event *event, struct snag_buf *scratch)
 {
+    if (event->kind == SNAG_BINARY_IRC_SLEEP_SET) {
+        uint64_t messages;
+        if (!snag_json_exact_keys(data, "until_ms messages") ||
+            snag_json_integer_u64(data, "until_ms", &event->data.irc_sleep_set.until_ms) < 0 ||
+            snag_json_integer_u64(data, "messages", &messages) < 0 || messages > UINT32_MAX)
+            return invalid();
+        event->data.irc_sleep_set.messages = (uint32_t)messages;
+        return 0;
+    }
+    if (event->kind == SNAG_BINARY_IRC_SLEEP_WOKE) {
+        int reason = read_name(data, "reason", irc_wake_reasons, 4u);
+        if (!snag_json_exact_keys(data, "reason") || reason < 0) return invalid();
+        event->data.irc_sleep_woke = reason;
+        return 0;
+    }
+    if (event->kind == SNAG_BINARY_IRC_COMPACT_CONFIGURED) {
+        uint64_t updates;
+        if (!snag_json_exact_keys(data, "after_updates instruction") ||
+            snag_json_integer_u64(data, "after_updates", &updates) < 0 || updates > UINT32_MAX ||
+            read_text(data, "instruction", &event->data.irc_compact_configured.instruction) < 0) {
+            return invalid();
+        }
+        event->data.irc_compact_configured.after_updates = (uint32_t)updates;
+        return 0;
+    }
+    if (event->kind == SNAG_BINARY_IRC_COMPACTED) {
+        uint64_t *through = &event->data.irc_compacted.through_seq;
+        if (!snag_json_exact_keys(data, "through_seq count summary") ||
+            snag_json_integer_u64(data, "through_seq", through) < 0 ||
+            snag_json_integer_u64(data, "count", &event->data.irc_compacted.count) < 0 ||
+            read_text(data, "summary", &event->data.irc_compacted.summary) < 0) return invalid();
+        return 0;
+    }
     if (event->kind == SNAG_BINARY_IRC_EVENT) {
         return read_irc_event(data, &event->data.irc_event);
     }
@@ -2054,7 +2088,7 @@ snag_binary_legacy_encode(struct snag_buf *out, const char *type, const json_t *
     } else if (event.kind == SNAG_BINARY_TOOL_FINISHED ||
                event.kind == SNAG_BINARY_PROCESS_CLOSED) {
         rc = read_result_event(data, &event, &scratch);
-    } else if (event.kind >= SNAG_BINARY_IRC_EVENT && event.kind <= SNAG_BINARY_IRC_ADMITTED) {
+    } else if (event.kind >= SNAG_BINARY_IRC_EVENT && event.kind <= SNAG_BINARY_IRC_COMPACTED) {
         rc = read_irc(data, &event, &scratch);
     } else if (event.kind == SNAG_BINARY_VOICE_TRANSFER_RECORD) {
         rc = read_transfer_archive(data, &event.data.voice_transfer_record, &scratch);
@@ -2932,6 +2966,29 @@ put_irc_event(json_t *data, const struct snag_binary_irc_event *event)
 static int
 put_irc(json_t *data, const struct snag_binary_event *event)
 {
+    if (event->kind == SNAG_BINARY_IRC_SLEEP_SET) {
+        if (snag_json_set_new(data, "until_ms",
+            json_integer((json_int_t)event->data.irc_sleep_set.until_ms)) < 0) return -1;
+        return snag_json_set_new(data, "messages",
+            json_integer((json_int_t)event->data.irc_sleep_set.messages));
+    }
+    if (event->kind == SNAG_BINARY_IRC_SLEEP_WOKE) {
+        return snag_json_set_new(data, "reason", json_string(irc_wake_reasons[
+            event->data.irc_sleep_woke]));
+    }
+    if (event->kind == SNAG_BINARY_IRC_COMPACT_CONFIGURED) {
+        if (snag_json_set_new(data, "after_updates",
+            json_integer((json_int_t)event->data.irc_compact_configured.after_updates)) < 0)
+            return -1;
+        return put_text(data, "instruction", event->data.irc_compact_configured.instruction);
+    }
+    if (event->kind == SNAG_BINARY_IRC_COMPACTED) {
+        if (snag_json_set_new(data, "through_seq",
+            json_integer((json_int_t)event->data.irc_compacted.through_seq)) < 0 ||
+            snag_json_set_new(data, "count",
+            json_integer((json_int_t)event->data.irc_compacted.count)) < 0) return -1;
+        return put_text(data, "summary", event->data.irc_compacted.summary);
+    }
     if (event->kind == SNAG_BINARY_IRC_EVENT) {
         return put_irc_event(data, &event->data.irc_event);
     }
@@ -3452,7 +3509,7 @@ snag_binary_legacy_decode(const struct snag_binary_record *record, const char **
     } else if (event.kind == SNAG_BINARY_TOOL_FINISHED ||
                event.kind == SNAG_BINARY_PROCESS_CLOSED) {
         rc = put_result_event(result, &event);
-    } else if (event.kind >= SNAG_BINARY_IRC_EVENT && event.kind <= SNAG_BINARY_IRC_ADMITTED) {
+    } else if (event.kind >= SNAG_BINARY_IRC_EVENT && event.kind <= SNAG_BINARY_IRC_COMPACTED) {
         rc = put_irc(result, &event);
     } else if (event.kind == SNAG_BINARY_VOICE_TRANSFER_RECORD) {
         rc = put_transfer_archive(result, &event.data.voice_transfer_record);

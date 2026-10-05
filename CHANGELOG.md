@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Retain IRC sleep, wake and context-summary settings and boundaries in native
+  history and checkpoints, including older blocks without the added IRC state.
+
 - Retain explicit service-tier changes in native metadata and checkpoints,
   including older eleven-slot text dictionaries without a saved override.
 

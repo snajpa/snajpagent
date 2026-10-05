@@ -65,6 +65,16 @@ static const struct field flags[] = {
 };
 #undef FIELD
 
+static const struct field irc_numbers[] = {
+#define IRC(f, m) {#f, offsetof(struct snag_session, f), sizeof(uint64_t), 8u, m}
+    IRC(irc_message_count, UINT64_MAX), IRC(irc_sleep_until_ms, INT64_MAX),
+    IRC(irc_sleep_start_count, UINT64_MAX), IRC(irc_sleep_messages, UINT32_MAX),
+    IRC(irc_compact_updates, UINT32_MAX), IRC(irc_admitted_count, UINT64_MAX),
+    IRC(irc_compact_count, UINT64_MAX), IRC(irc_compact_seq, UINT64_MAX),
+    IRC(irc_summary_seq, UINT64_MAX)
+#undef IRC
+};
+
 static const char *outside[] = {
     "id", "prev_sha256", "log_end", "next_seq", "checkpoint_offset", "checkpoint_seq", "turn_count",
     "active_accounting", "usage_anchor", "context_meter", "capacity_rejection", "usage_totals",
@@ -91,7 +101,7 @@ same_controls(const struct snag_session *a, const struct snag_session *b)
         assert(!json_object_del(left, outside[i]));
         assert(!json_object_del(right, outside[i]));
     }
-    assert(json_object_size(left) == 83u && json_equal(left, right));
+    assert(json_object_size(left) == 92u && json_equal(left, right));
     json_decref(left);
     json_decref(right);
 }
@@ -130,6 +140,7 @@ roundtrip(const struct snag_session *value, struct snag_buf *wire)
     memset(expected, 0xa5, sizeof(expected));
     copy_fields(expected, value, texts, COUNT(texts));
     copy_fields(expected, value, numbers, COUNT(numbers));
+    copy_fields(expected, value, irc_numbers, COUNT(irc_numbers));
     copy_fields(expected, value, flags, COUNT(flags));
     memcpy(expected + offsetof(struct snag_session, control_seq),
         value->control_seq, sizeof(value->control_seq));
@@ -159,6 +170,10 @@ fixture(struct snag_session *out)
      * omitted native scalar cannot disappear behind its original zero value. */
     json_object_foreach(doc, name, value) {
         if (outside_field(name)) continue;
+        bool new_irc = false;
+        for (size_t i = 0u; i < COUNT(irc_numbers); ++i)
+            if (!strcmp(name, irc_numbers[i].name)) new_irc = true;
+        if (new_irc) continue; /* Keep the independent pre-IRC golden unchanged. */
         if (json_is_integer(value)) {
             uint64_t n = UINT64_C(0x01020304) + number++;
             if (!strcmp(name, "format_version")) n = 4u;
@@ -259,6 +274,42 @@ test_store_binary_controls(void)
     assert(!restored.control_seq[6]);
     same_controls(&value, &restored);
     snag_session_close(&restored);
+    struct snag_session irc = value;
+    struct snag_buf extended = {.max = SIZE_MAX};
+    for (size_t i = 0u; i < COUNT(irc_numbers); ++i) {
+        uint64_t number = UINT64_C(0x01020304) + i;
+        set_number(&irc, &irc_numbers[i], number);
+    }
+    roundtrip(&irc, &extended);
+    assert(extended.len == wire.len + 72u && extended.data[0] == 3u);
+    for (size_t i = wire.len; i < extended.len; ++i) reject_decode(extended.data, i);
+    unsigned char bad_irc[714];
+    assert(extended.len == sizeof(bad_irc));
+    for (size_t i = 0u; i < COUNT(irc_numbers); ++i) {
+        const struct field *field = &irc_numbers[i];
+        memcpy(bad_irc, extended.data, extended.len);
+        if (field->maximum < UINT64_MAX) {
+            memset(bad_irc + wire.len + 8u * i, 255, 8u);
+            reject_decode(bad_irc, sizeof(bad_irc));
+            struct snag_session invalid = irc;
+            set_number(&invalid, field, field->maximum + 1u);
+            reject_encode(&invalid);
+        }
+        uint64_t number;
+        memcpy(&number, (unsigned char *)&irc + field->offset, sizeof(number));
+        for (size_t j = 0u; j < 8u; ++j)
+            assert(extended.data[wire.len + 8u * i + j] == (unsigned char)(number >> (8u * j)));
+    }
+    assert(!snag_binary_checkpoint_controls_decode(wire.data, wire.len, &irc));
+    same_controls(&value, &irc); /* v2 clears all nine previously nonzero fields. */
+    assert(!snag_binary_checkpoint_controls_decode(legacy, sizeof(legacy), &irc));
+    same_controls(&value, &irc);
+    memcpy(bad_irc, extended.data, extended.len);
+    bad_irc[0] = 2u;
+    reject_decode(bad_irc, sizeof(bad_irc));
+    bad_irc[0] = 4u;
+    reject_decode(bad_irc, sizeof(bad_irc));
+    snag_buf_free(&extended);
     for (size_t i = 0u; i < wire.len; ++i) reject_decode(wire.data, i);
     reject_decode(NULL, wire.len);
     reject_encode(NULL);
