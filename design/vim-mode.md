@@ -10,8 +10,9 @@ not implemented at that revision.
 Implementation checkpoint: asynchronous pager ownership and retained rendering
 are implemented in this branch. Held-pager regressions cover IRC delivery and
 provider completion; interaction tests cover failures, tools and queued downloads.
-The bounded history reader, optional workspace module, semantic attachment and
-IRC conversation work below remain to be implemented.
+History cursor reads now validate checkpoint bodies through a streaming parser
+and return display metadata. The optional workspace module, semantic attachment
+and IRC conversation work below remain to be implemented.
 
 ## 1. Outcome and decisions
 
@@ -655,16 +656,19 @@ can exceed it. Parsing a large checkpoint may still be expensive. Perform it in
 the worker, cancel at available parse/read boundaries, and avoid repeating it on
 every motion. Never call full-session reducer replay to paint or search a page.
 
-The current reader still materializes a complete JSON record. Consequently,
-bounded page caches alone do not bound peak memory for a large checkpoint.
-Add a history-only streaming path for checkpoint records: validate canonical
-JSON and envelope fields, compute the existing digest with `event_sha256`
-omitted, and consume the checkpoint payload without constructing its state tree.
-Maintain the same hash-chain checks and reject malformed/noncanonical data.
-This is a reader optimization with byte-for-byte equivalence fixtures against
-the existing validator, not a change to journal format or recovery semantics.
-Ordinary display records retain their existing record-size contract. Measure
-peak memory and cancellation latency for both record classes independently.
+History cursor readers stream checkpoint records: validate canonical JSON and
+envelope fields, compute the existing digest with `event_sha256` omitted, and
+consume the payload without constructing its state tree. Callbacks receive only
+format, snapshot version and provider-view presence. Full state loading and native
+recovery retain their existing path. Hash-chain checks and rejection of malformed
+or noncanonical data remain in force. Ordinary display records retain their
+existing record-size contract.
+
+Canonical equivalence tests cover both record versions, UTF-8/escaped keys,
+integer bounds, tiny read chunks and hash boundaries. The storage test traverses
+a 17 MiB checkpoint forward and backward with only 12 MiB of additional address space
+available on Linux. Worker scheduling and measured cancellation latency remain
+part of the workspace reader integration below.
 
 Maintain sparse offsets for visited pages. They are a disposable acceleration,
 not a new required on-disk index. `gg` seeks the earliest displayable event and

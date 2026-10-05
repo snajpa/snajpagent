@@ -376,7 +376,8 @@ int snag_session_checkpoint_read(struct snag_session *, json_t **state, json_t *
 /* Backward, envelope/hash-verified records without reducer replay. The callback
  * gets NULL state; positive pauses before consuming that record, negative fails.
  * SNAG_JOURNAL_STOP_AFTER consumes that record and stops without reading another.
- * A byte quantum may include one larger complete record. Zero next_before is EOF. */
+ * A byte quantum may include one larger complete record. Zero next_before is EOF.
+ * Cursor scans project checkpoints to format/snapshot_v/provider_view metadata. */
 #define SNAG_JOURNAL_PAGE_BYTES (4u * 1024u * 1024u)
 #define SNAG_JOURNAL_STOP_AFTER 2
 int snag_session_each_event_reverse(struct snag_session *, uint64_t before_seq, size_t scan_bytes,
@@ -390,7 +391,9 @@ int snag_session_each_event_forward(struct snag_session *, struct snag_journal_c
  * owner supplies the tail; opening verifies its last record, and scans verify
  * the visited chain. No writer lock, reducer replay, repair or suffix adoption.
  * Supply an initialized unopened session and close it on every outcome.
- * Records are raw; callers still apply their public projection/secret filter. */
+ * Checkpoint data contains format/snapshot_v/provider_view display metadata;
+ * use checkpoint_read for full state/context. Other records are raw; callers
+ * still apply their public projection/secret filter. */
 int snag_session_history_open(struct snag_store *, struct snag_session *, const char *id,
     const struct snag_journal_cursor *tail, char *error, size_t error_size);
 

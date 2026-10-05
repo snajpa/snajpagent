@@ -386,6 +386,11 @@ forward_event(void *opaque, const struct snag_session *state, uint64_t seq,
 {
     struct forward_scan *scan = opaque;
     assert(!state && seq == scan->next && type && json_is_object(data));
+    if (!strcmp(type, "session_checkpoint")) {
+        assert(json_object_size(data) == 3u);
+        assert(json_is_boolean(json_object_get(data, "provider_view")));
+        assert(!json_object_get(data, "state") && !json_object_get(data, "context"));
+    }
     if (scan->action < 0)
         return snag_fail(error, error_size, ECANCELED, "test forward cancellation");
     if (scan->action != 1) ++scan->next;
@@ -1059,6 +1064,31 @@ large_checkpoint_context(void *opaque, const struct snag_session *session)
 }
 
 static void
+checkpoint_metadata_view(struct snag_store *store, struct snag_session *session)
+{
+    struct snag_session view;
+    snag_session_init(&view);
+    struct snag_journal_cursor tail = {.offset = session->log_end, .next_seq = session->next_seq};
+    memcpy(tail.prev_sha256, session->prev_sha256, sizeof(tail.prev_sha256));
+    char error[256];
+    assert(snag_session_history_open(store, &view, session->id, &tail,
+        error, sizeof(error)) == 0);
+    struct snag_journal_cursor cursor = {0};
+    struct forward_scan scan = {.next = 1u};
+    assert(snag_session_each_event_forward(&view, &cursor, 1u, forward_event,
+        &scan, error, sizeof(error)) == 0 && scan.next == 2u);
+    /* The existing quantum admits one complete large checkpoint. */
+    assert(snag_session_each_event_forward(&view, &cursor, 1u, forward_event,
+        &scan, error, sizeof(error)) == 0 && scan.next == tail.next_seq);
+    assert(cursor.offset == tail.offset && !strcmp(cursor.prev_sha256, tail.prev_sha256));
+    struct reverse_scan reverse = {.next = tail.next_seq, .limit = SIZE_MAX};
+    uint64_t before = 0u;
+    assert(snag_session_each_event_reverse(&view, 0u, SIZE_MAX, reverse_event,
+        &reverse, &before, error, sizeof(error)) == 0 && !before && reverse.count == 2u);
+    snag_session_close(&view);
+}
+
+static void
 test_large_embedded_checkpoint(struct snag_store *store, const char *cwd)
 {
     struct snag_session session;
@@ -1070,21 +1100,42 @@ test_large_embedded_checkpoint(struct snag_store *store, const char *cwd)
     session.on_checkpoint = large_checkpoint_context;
     assert(snag_session_checkpoint(&session, error, sizeof(error)) == 0);
     session.on_checkpoint = NULL;
+#if defined(__linux__) && !defined(__SANITIZE_ADDRESS__)
+    pid_t reader = fork();
+    assert(reader >= 0);
+    if (!reader) {
+        /* Allow small reader allocations but not even one 17 MiB body copy. */
+        FILE *statm = fopen("/proc/self/statm", "r");
+        unsigned long pages;
+        assert(statm && fscanf(statm, "%lu", &pages) == 1 && fclose(statm) == 0);
+        long page_size = sysconf(_SC_PAGESIZE);
+        assert(page_size > 0 && pages < SIZE_MAX / (unsigned long)page_size);
+        struct rlimit limit;
+        assert(getrlimit(RLIMIT_AS, &limit) == 0);
+        limit.rlim_cur = (rlim_t)pages * (rlim_t)page_size + 12u * 1024u * 1024u;
+        assert(setrlimit(RLIMIT_AS, &limit) == 0);
+        checkpoint_metadata_view(store, &session);
+        _exit(0);
+    }
+    int status;
+    assert(waitpid(reader, &status, 0) == reader && WIFEXITED(status) && WEXITSTATUS(status) == 0);
+#else
+    checkpoint_metadata_view(store, &session);
+#endif /* __linux__ && !__SANITIZE_ADDRESS__ */
+    /* A changed byte in the skipped provider payload still invalidates its hash. */
+    int64_t changed = session.checkpoint_offset + 8u * 1024u * 1024u;
+    int writer = openat(session.dir_fd, "events.jsonl", O_WRONLY | O_CLOEXEC);
+    unsigned char original;
+    assert(writer >= 0 && pread(session.log_fd, &original, 1u, changed) == 1 && original == 'x');
+    assert(pwrite(writer, "y", 1u, changed) == 1);
     struct snag_session view;
     snag_session_init(&view);
     struct snag_journal_cursor tail = {.offset = session.log_end, .next_seq = session.next_seq};
     memcpy(tail.prev_sha256, session.prev_sha256, sizeof(tail.prev_sha256));
     assert(snag_session_history_open(store, &view, session.id, &tail,
-        error, sizeof(error)) == 0);
-    struct snag_journal_cursor cursor = {0};
-    struct forward_scan scan = {.next = 1u};
-    assert(snag_session_each_event_forward(&view, &cursor, 1u, forward_event,
-        &scan, error, sizeof(error)) == 0 && scan.next == 2u);
-    /* The existing quantum admits one complete large checkpoint, not a new cap. */
-    assert(snag_session_each_event_forward(&view, &cursor, 1u, forward_event,
-        &scan, error, sizeof(error)) == 0 && scan.next == tail.next_seq);
-    assert(cursor.offset == tail.offset && !strcmp(cursor.prev_sha256, tail.prev_sha256));
+        error, sizeof(error)) < 0);
     snag_session_close(&view);
+    assert(pwrite(writer, &original, 1u, changed) == 1 && close(writer) == 0);
     assert_session_lock_retained(&session, "after large checkpoint history view");
     snag_session_close(&session);
     snag_session_init(&session);

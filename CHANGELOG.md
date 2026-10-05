@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Bound history-reader memory when browsing across large context checkpoints.
+  Preserve complete event verification and retained session history.
+
 - Recover interrupted provider streams containing only private reasoning, and
   preserve validated completed responses when the connection loses its HTTP
   terminator. Keep partial text and tool activity outside transport replay.
