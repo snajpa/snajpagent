@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Keep the cursor in place when a delayed prompt-history refresh returns the
+  same recalled entry, preserving multiline Up/Down navigation.
+
 - Resume hosted IRC sessions after local nickname changes, including when
   networking is disabled on resume. Report the journal sequence when an IRC
   event cannot be restored.

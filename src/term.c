@@ -1669,9 +1669,24 @@ snag_term_history_set(struct snag_term *term, struct snag_history_snapshot *snap
             return search_find(term, snag_history_end(&term->history));
         }
         size_t distance = term->history_pos;
+        size_t cursor = term->cursor;
+        struct snag_buf previous = {.max = term->draft.max};
+        int rc = snag_buf_append(&previous, term->draft.data, term->draft.len);
+        if (rc < 0) {
+            snag_buf_free(&previous);
+            return -1;
+        }
         term->history_pos = 0u;
         term->history_start = snag_history_end(&term->history);
-        while (distance--) if (history_up(term) < 0) return -1;
+        while (distance-- && !rc) rc = history_up(term);
+        /* A delayed refresh of the same entry must retain intervening cursor keys. */
+        if (!rc && previous.len == term->draft.len &&
+            (!previous.len || !memcmp(previous.data, term->draft.data, previous.len))) {
+            term->cursor = cursor;
+            rc = redraw(term);
+        }
+        snag_buf_free(&previous);
+        return rc;
     }
     return 0;
 }

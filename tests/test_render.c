@@ -717,6 +717,49 @@ unexpected_native_suspend(void *opaque)
 }
 
 static void
+test_history_refresh_cursor(void)
+{
+    struct snag_term term;
+    struct snag_history_snapshot snapshot = {0};
+    struct output_capture capture = capture_open(false, true);
+    char output[8192];
+
+    snag_term_init(&term);
+    term.opened = term.raw = term.capable = true;
+    term.columns = 24u;
+    memcpy(term.label, "> ", 3u);
+    snapshot.items = calloc(1u, sizeof(*snapshot.items));
+    assert(snapshot.items);
+    snapshot.items[0] = strdup("first\nsecond");
+    assert(snapshot.items[0]);
+    snapshot.count = snapshot.capacity = 1u;
+    snapshot.bytes = 12u;
+    assert(snag_term_history_set(&term, &snapshot, false) == 0);
+    assert(snag_term_restore_draft(&term, "unsent") == 0);
+    editor_input(&term, "\020\033OA");
+    assert(term.cursor == 5u);
+    size_t preferred = term.preferred_column;
+    assert(snag_history_snapshot_copy(&snapshot, &term.history) == 0);
+    /* The engine's refresh can arrive between two cursor keys. */
+    assert(snag_term_history_set(&term, &snapshot, true) == 0);
+    assert(term.cursor == 5u && term.preferred_column == preferred);
+    editor_input(&term, "\033OBY");
+    assert(term.draft.len == 13u && !memcmp(term.draft.data, "first\nsecondY", 13u));
+
+    editor_input(&term, "\025\020\033OA");
+    assert(snag_history_snapshot_copy(&snapshot, &term.history) == 0);
+    free(snapshot.items[0]);
+    snapshot.items[0] = strdup("new");
+    assert(snapshot.items[0]);
+    snapshot.bytes = 3u;
+    assert(snag_term_history_set(&term, &snapshot, true) == 0);
+    assert(term.cursor == 3u && term.draft.len == 3u);
+    assert(!memcmp(term.draft.data, "new", 3u));
+    snag_term_close(&term);
+    (void)capture_close(&capture, output, sizeof(output), 0u);
+}
+
+static void
 test_native_input_yield(void)
 {
     struct snag_term term;
@@ -3294,6 +3337,7 @@ main(void)
     test_native_input_yield();
     test_retained_prompt();
     test_native_rebind();
+    test_history_refresh_cursor();
     test_tool_ref_rows();
     test_output_span_prompt_repaint();
     test_mention_completion();
