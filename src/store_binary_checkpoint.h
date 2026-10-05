@@ -203,9 +203,12 @@ struct snag_binary_checkpoint_inputs_state {
 
 /* Read one accepted receipt, including embedded IRC input/steering. Steering
  * also accepts reply reminders and output-correction prompts. References use
- * the replay resolver; output is new ownership only on success. No reduction. */
+ * the replay resolver; output is new ownership only on success. No reduction.
+ * Pinned access covers declarations and original literal fields; missing old
+ * entries fail. NULL access retains the independent full-prefix oracle path. */
 int snag_binary_checkpoint_receipt_read(int fd, const struct snag_binary_anchor *,
-    uint64_t sequence, enum snag_binary_kind, json_t **out, uint64_t *timestamp);
+    const struct snag_binary_checkpoint_index *, uint64_t sequence, enum snag_binary_kind,
+    json_t **out, uint64_t *timestamp);
 
 /* Version1: direct receipt, ordered queue creation/latest-text receipts and
  * steering receipts, plus first-context timestamps. Payloads stay in the
@@ -218,7 +221,8 @@ int snag_binary_checkpoint_inputs_encode(struct snag_buf *,
 int snag_binary_checkpoint_inputs_decode(const void *, size_t,
     struct snag_binary_checkpoint_inputs *);
 int snag_binary_checkpoint_inputs_read(int fd, const struct snag_binary_anchor *,
-    const struct snag_binary_checkpoint_inputs *, const struct snag_session *,
+    const struct snag_binary_checkpoint_index *, const struct snag_binary_checkpoint_inputs *,
+    const struct snag_session *,
     struct snag_binary_checkpoint_inputs_state *out);
 void snag_binary_checkpoint_inputs_free(struct snag_binary_checkpoint_inputs_state *);
 

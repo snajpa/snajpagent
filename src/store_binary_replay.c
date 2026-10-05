@@ -19,6 +19,7 @@ struct replay_context {
     uint64_t sequence;
     uint64_t response_sequence;
     struct snag_binary_anchor through;
+    const struct snag_binary_checkpoint_index *access;
     struct snag_binary_checkpoint_sources sources;
     size_t process_capacity;
     size_t queue_capacity, download_capacity;
@@ -259,7 +260,7 @@ turn_field_matches(const struct replay_context *context,
     struct snag_binary_batch batch;
     struct snag_binary_anchor before;
     int rc = -1;
-    if (snag_binary_batch_find(context->fd, &context->through, wanted,
+    if (snag_binary_checkpoint_batch_find(context->fd, &context->through, context->access, wanted,
             &scratch, &batch, &before) < 0) goto done;
     size_t cursor = SNAG_BINARY_BATCH_HEADER_SIZE;
     struct snag_binary_record record;
@@ -326,8 +327,8 @@ read_input_field(const struct replay_context *context,
     }
     struct snag_binary_batch batch;
     struct snag_binary_anchor before;
-    if (snag_binary_batch_find(context->fd, &context->through, reference->target.sequence,
-            scratch, &batch, &before) < 0) return -1;
+    if (snag_binary_checkpoint_batch_find(context->fd, &context->through, context->access,
+            reference->target.sequence, scratch, &batch, &before) < 0) return -1;
     /* Text destinations may reuse compatible original text roles. The decoder
      * checks destination shape; this checks the exact original role.
      * A source field containing a reference has no literal view and fails. */
@@ -361,8 +362,8 @@ resolve_public(const struct replay_context *context, const unsigned char turn[16
     struct snag_binary_batch batch;
     struct snag_binary_anchor before;
     text->max = SNAG_MAX_EVENT_LINE;
-    if (snag_binary_batch_find(context->fd, &context->through, item->source.first.sequence,
-            scratch, &batch, &before) < 0 ||
+    if (snag_binary_checkpoint_batch_find(context->fd, &context->through, context->access,
+            item->source.first.sequence, scratch, &batch, &before) < 0 ||
         snag_binary_output_span_resolve(context->fd, context->through.end, &before,
             &item->source, turn, response, cycle, &item->item, text) < 0) {
         return -1;
@@ -538,8 +539,8 @@ resolve_voice(const struct replay_context *context, const struct snag_binary_rec
     struct snag_buf scratch = {.max = SNAG_BINARY_BATCH_MAX};
     struct snag_binary_batch batch;
     struct snag_binary_anchor before;
-    int rc = snag_binary_batch_find(context->fd, &context->through, value->begin_seq,
-        &scratch, &batch, &before);
+    int rc = snag_binary_checkpoint_batch_find(context->fd, &context->through, context->access,
+        value->begin_seq, &scratch, &batch, &before);
     if (!rc) {
         /* The logical start can be inside a batch. The native cursor resumes
          * from its authenticated predecessor and skips earlier records. */
@@ -757,7 +758,8 @@ project_record(const struct replay_context *context, const struct snag_session *
 
 int
 snag_binary_checkpoint_receipt_read(int fd, const struct snag_binary_anchor *anchor,
-    uint64_t wanted, enum snag_binary_kind kind, json_t **out, uint64_t *timestamp)
+    const struct snag_binary_checkpoint_index *access, uint64_t wanted, enum snag_binary_kind kind,
+    json_t **out, uint64_t *timestamp)
 {
     if (fd < 0 || !anchor || !wanted || wanted >= anchor->next_seq || !out || !timestamp ||
         (kind != SNAG_BINARY_INPUT_RECEIVED && kind != SNAG_BINARY_FUTURE_TURN_QUEUED &&
@@ -767,7 +769,8 @@ snag_binary_checkpoint_receipt_read(int fd, const struct snag_binary_anchor *anc
     struct snag_binary_batch batch;
     struct snag_binary_anchor before;
     json_t *data = NULL;
-    int rc = snag_binary_batch_find(fd, anchor, wanted, &scratch, &batch, &before);
+    int rc = snag_binary_checkpoint_batch_find(fd, anchor, access, wanted,
+        &scratch, &batch, &before);
     if (rc < 0) goto done;
     struct snag_binary_record record;
     size_t offset = SNAG_BINARY_BATCH_HEADER_SIZE;
@@ -801,7 +804,8 @@ snag_binary_checkpoint_receipt_read(int fd, const struct snag_binary_anchor *anc
         }
         if (found != kind && !(kind == SNAG_BINARY_STEERING_ADDED &&
             found == SNAG_BINARY_IRC_REPLY_REMINDER)) goto done;
-        struct replay_context context = {.fd = fd, .through = *anchor, .sequence = wanted};
+        struct replay_context context = {.fd = fd, .through = *anchor, .sequence = wanted,
+            .access = access};
         const char *type;
         if (project_record(&context, NULL, &record, &type, &data) < 0) goto done;
         json_t *receipt = embedded ? json_object_get(data,

@@ -1968,6 +1968,23 @@ A damaged canonical batch is an error, not permission to skip it. If both
 snapshots are unusable, repair is an explicit, interruptible operation; normal
 resume does not silently scan an arbitrarily long lifetime prefix.
 
+### Indexed pending-input materialization
+
+Pending input, queued-turn creation/latest-text and steering receipt readers take
+an already pinned access table. They use its checked old-record locations for
+both accepting declarations and referenced original literal text, content,
+instructions and queued voice ASR/request fields. The replay resolver keeps original field-role and exact-slice
+checks; embedded IRC receipts, reply reminders and correction prompts retain
+their existing projections. Missing old locations return ENOENT instead of
+scanning the lifetime journal. Newer receipts/references use the caller-bounded
+suffix. Passing NULL retains the independent full-prefix oracle's lookup path.
+
+The table's image/session identity, ancestry, closure completeness and suffix
+bound remain the enclosing consumer's responsibilities. Successful reads return
+fresh ownership; failed reads retain prior outputs and descriptor position. This
+component does not establish pending membership, adopt core/provider state or
+change the application's JSONL backend.
+
 ### Canonical checkpoint receipt codec
 
 Optional metadata kind `0x8001`, payload version 2, identifies an immutable

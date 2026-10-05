@@ -3,6 +3,11 @@
 # Changelog
 
 ## Unreleased
+- Native checkpoint input, queue and steering readers use pinned working-set
+  locations for accepting receipts and their original literal fields, including
+  queued voice ASR/request provenance. Missing
+  old locations fail without a lifetime-history fallback; the independent
+  prefix oracle retains its unindexed path. Runtime integration remains pending.
 
 - Print a copyable return command when detaching a native session or leaving a
   saved workspace. Use the current full ID and shell-quote custom state paths.

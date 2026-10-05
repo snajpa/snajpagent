@@ -239,7 +239,7 @@ snag_binary_checkpoint_core_read(int fd, const struct snag_binary_checkpoint_fra
         snag_binary_checkpoint_calls_read(fd, anchor, &calls, &state, &state.pending_calls) < 0 ||
         snag_binary_checkpoint_processes_read(fd, anchor, &processes, &state,
             &state.processes) < 0 ||
-        snag_binary_checkpoint_inputs_read(fd, anchor, &inputs, &state, &input_state) < 0 ||
+        snag_binary_checkpoint_inputs_read(fd, anchor, NULL, &inputs, &state, &input_state) < 0 ||
         snag_binary_checkpoint_payloads_read(fd, anchor, &payloads, &state, &payload_state) < 0)
         goto done;
     if (input_state.queue_bytes != state.pending_queue_bytes ||

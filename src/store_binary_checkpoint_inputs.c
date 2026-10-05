@@ -144,16 +144,17 @@ received_time(const json_t *receipt, uint64_t fallback, uint64_t *out)
 }
 
 static int
-read_queue(int fd, const struct snag_binary_anchor *anchor, const unsigned char *entry,
+read_queue(int fd, const struct snag_binary_anchor *anchor,
+    const struct snag_binary_checkpoint_index *access, const unsigned char *entry,
     struct snag_binary_checkpoint_inputs_state *state, struct snag_queued_turn *out)
 {
     uint64_t creation = get_number(entry), text = get_number(entry + 8u), timestamp;
     json_t *original = NULL, *latest = NULL;
     int rc = -1;
-    if (snag_binary_checkpoint_receipt_read(fd, anchor, creation,
+    if (snag_binary_checkpoint_receipt_read(fd, anchor, access, creation,
             SNAG_BINARY_FUTURE_TURN_QUEUED, &original, &timestamp) < 0) goto done;
     if (text != creation) {
-        if (snag_binary_checkpoint_receipt_read(fd, anchor, text,
+        if (snag_binary_checkpoint_receipt_read(fd, anchor, access, text,
                 SNAG_BINARY_FUTURE_TURN_EDITED, &latest, &timestamp) < 0) goto done;
     } else {
         latest = json_incref(original);
@@ -182,13 +183,14 @@ done:
 }
 
 static int
-read_steering(int fd, const struct snag_binary_anchor *anchor, const unsigned char *entry,
+read_steering(int fd, const struct snag_binary_anchor *anchor,
+    const struct snag_binary_checkpoint_index *access, const unsigned char *entry,
     const struct snag_session *snapshot, struct snag_binary_checkpoint_inputs_state *state,
     struct snag_pending_steering *out)
 {
     uint64_t receipt = get_number(entry), timestamp;
     json_t *data = NULL;
-    if (snag_binary_checkpoint_receipt_read(fd, anchor, receipt,
+    if (snag_binary_checkpoint_receipt_read(fd, anchor, access, receipt,
             SNAG_BINARY_STEERING_ADDED, &data, &timestamp) < 0) return -1;
     int rc = -1;
     const char *id = snag_json_string(data, "steering_id");
@@ -212,6 +214,7 @@ done:
 
 int
 snag_binary_checkpoint_inputs_read(int fd, const struct snag_binary_anchor *anchor,
+    const struct snag_binary_checkpoint_index *access,
     const struct snag_binary_checkpoint_inputs *view, const struct snag_session *snapshot,
     struct snag_binary_checkpoint_inputs_state *out)
 {
@@ -225,7 +228,7 @@ snag_binary_checkpoint_inputs_read(int fd, const struct snag_binary_anchor *anch
     if (!valid_entries(view) || (view->input && snapshot->active_turn)) return snag_errno(EINVAL);
     struct snag_binary_checkpoint_inputs_state state = {0};
     uint64_t timestamp;
-    if (view->input && snag_binary_checkpoint_receipt_read(fd, anchor, view->input,
+    if (view->input && snag_binary_checkpoint_receipt_read(fd, anchor, access, view->input,
             SNAG_BINARY_INPUT_RECEIVED, &state.input, &timestamp) < 0) goto fail;
     state.strings = json_object();
     if (!state.strings) {
@@ -243,11 +246,11 @@ snag_binary_checkpoint_inputs_read(int fd, const struct snag_binary_anchor *anch
         state.steering_count = view->steering_count;
     }
     for (size_t i = 0u; i < state.queue_count; ++i) {
-        if (read_queue(fd, anchor, view->queue + i * QUEUE_ENTRY, &state,
+        if (read_queue(fd, anchor, access, view->queue + i * QUEUE_ENTRY, &state,
                 &state.queue[i]) < 0) goto fail;
     }
     for (size_t i = 0u; i < state.steering_count; ++i) {
-        if (read_steering(fd, anchor, view->steering + i * STEERING_ENTRY, snapshot,
+        if (read_steering(fd, anchor, access, view->steering + i * STEERING_ENTRY, snapshot,
                 &state, &state.steering[i]) < 0) goto fail;
     }
     *out = state;
