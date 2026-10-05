@@ -15,12 +15,22 @@ history navigation, search, selection, splits and mouse controls. History comes
 from retained session events and remains navigable across context compaction.
 Verbosity changes apply to the historical text currently being viewed.
 
+October 6 amendments make IRC conversations first-class buffers and give the
+workspace its own saved-session namespace. A split can show a session's IRC
+connection, channel or direct query independently of its agent transcript.
+Qualified conversation addresses use `session/endpoint/target`. Workspace names
+and `vm --resume` refer to saved layouts, separate from agent session names.
+
 The main decisions are:
 
 - `snajpagent vm` explicitly enters the workspace. Plain `snajpagent` keeps its
   current interface. Output height never activates full-screen mode.
 - One workspace process owns the terminal and every window. Existing session
   owner processes continue owning their engines, tools, IRC and journals.
+- Windows display buffers: agent transcripts, IRC connections, channels, direct
+  queries and reports. Several buffers share one session owner/IRC connection.
+- Named workspace snapshots retain the layout and buffer state. `vm -l` lists
+  these workspaces; `vm --resume` restores one without submitting saved drafts.
 - The workspace renders semantic history. It does not reconstruct history by
   interpreting the current terminal byte stream.
 - A new private semantic attachment shares controller ownership with the
@@ -30,8 +40,9 @@ The main decisions are:
   visible layouts; cache eviction never deletes history.
 - Explicit yanks update an internal register and attempt workstation clipboard
   delivery. Remote delivery uses the existing negotiated wrapper transport.
-- `:q` explicitly quits the focused session; `:detach` preserves its running
-  owner. `:close` closes a window. These distinctions are visible in help.
+- `:q` in an agent transcript explicitly quits that session. In an IRC or report
+  buffer it closes the window. `:detach` preserves the session owner; `:close`
+  closes any window. These distinctions are visible in help.
 - `WITH_VM=1` includes the module in ordinary and release builds. `WITH_VM=0`
   removes its implementation. Runtime activation remains explicit.
 
@@ -56,6 +67,8 @@ The current source already provides most of the durable foundation:
 | Old-history reads | `snag_session_history_open()` opens a verified committed prefix without a writer lock or recovery mutation. Forward/reverse iterators provide bounded work and cursors. |
 | Existing `/history` | A report reads a bounded page, currently 4 MiB, and reports earlier history. This is not an all-history viewport. |
 | Remote terminal | `remote.c` owns a local PTY wrapper. `screen_wire.c` supplies checked, acknowledged title-state framing for Mosh and a negotiated byte-stream path. Clipboard delivery is absent. |
+| IRC targets | `server_chat()` accepts only the hosted room; incoming client `PRIVMSG`/`NOTICE` handling filters to the joined room. Nick-target routing and `/query` are absent. Agent/operator identities use separate links; channel event emission uses the operator link to avoid duplicates. |
+| IRC history | `irc_event.c` validates an exact field set including endpoint, room and nick. Receiving identity and direct recipient are absent. Durable direct messages need a schema extension. |
 
 Source entry points: [app.c](../src/app.c), [app_stream.c](../src/app_stream.c),
 [app_events.c](../src/app_events.c), [ui.c](../src/ui.c),
@@ -144,57 +157,115 @@ Keep current pager selection: when available, unset `PAGER` and bare `less` use
 `less -X`; explicit pager commands retain their arguments. The retention fix
 applies with the VM module compiled out.
 
-## 4. CLI, startup and session selection
+## 4. CLI, workspace persistence and session selection
 
-Proposed examples:
+A **workspace** is the Vim-style application session: its name, windows, displayed
+buffers and view state. An **agent session** owns a model engine and its journal.
+A workspace can display several agent sessions and their IRC conversations. Each
+namespace has independent names and IDs; identical names across namespaces are
+valid and never imply the same object.
+
+### 4.1 Commands and startup
 
 ```sh
-snajpagent vm
-snajpagent vm --resume SESSION_ID
-snajpagent vm --attach SESSION_ID
-snajpagent vm -N session-name
-snajpagent remote ssh -t host snajpagent vm
-snajpagent remote mosh host snajpagent vm --resume SESSION_ID
+snajpagent vm                         # new workspace, agent-session picker
+snajpagent vm -N operations           # create a named workspace
+snajpagent vm -l                      # list saved/open workspaces
+snajpagent vm -l 30                   # include up to 30 stored workspaces
+snajpagent vm --resume operations     # restore that workspace
+snajpagent vm --last                  # restore the most recently active workspace
+snajpagent vm --session SESSION_ID    # new workspace opening an agent session
+snajpagent remote ssh -t host snajpagent vm --resume operations
+snajpagent remote mosh host snajpagent vm --resume operations
 ```
 
-Dispatch `vm` beside `remote` in `main.c`, before normal session startup. Reuse
-existing session selectors and compatible model/configuration options. A bare
-launch opens the picker and creates no session, provider request or IRC owner.
-`--resume` attaches to a live owner or starts a stopped session; `--attach`
-requires a live owner. `-N` keeps the existing exact-name behavior. Ambiguous
-names and ID prefixes remain errors with visible candidates. An explicit initial
-prompt or a new-session action creates a session through the ordinary startup
-path. Noninteractive execution flags are rejected by `vm` with a specific
-diagnostic; listing, help and version work without entering the alternate screen.
+Dispatch `vm` beside `remote` before normal session startup. `vm -l`, help and
+version perform no provider/IRC startup and do not enter the alternate screen.
+Workspace selectors accept exact names and unique ID prefixes; ambiguity lists
+candidates. `-N` names a new workspace and rejects an existing workspace name.
+`--resume` requires a workspace selector; `--last` resolves by activity. A bare
+launch creates a workspace only when there is state worth saving; leaving an
+untouched initial picker does not accumulate empty records.
 
-The picker uses the same data and comparator as `snajpagent -l`: attached,
+`vm --session ID` explicitly uses the normal agent resume behavior: attach a live
+owner or start a stopped one. Restoring a saved workspace is more conservative:
+reconnect its live owners, show stopped sessions as stored history and offer
+explicit resume for those sessions. Restore never replays prompts, sends saved
+chat text, reconnects an explicitly removed IRC endpoint or automatically starts
+all previously open model engines. Existing ordinary `snajpagent -l`, `--resume`,
+`--attach` and `-N` retain their agent-session meanings. `vm --attach` is not
+introduced: `vm --resume` restores workspace state and `--session` selects an
+agent. This supersedes the initial design's `vm --resume AGENT_SESSION` examples;
+that CLI was proposed, not shipped.
+
+Inside VM, `:workspace` shows its name, full ID and save status; `:workspace name
+NAME` renames it and `:workspace save` writes a snapshot immediately. `:workspaces`
+opens the workspace picker. Selecting another workspace saves and detaches the
+current one, then restores the destination; a failed destination open keeps the
+current workspace usable. `:sessions` opens the agent-session picker, `:new [NAME]`
+creates an agent session, `:buffer ADDRESS` selects a buffer and `:help` shows the
+supported controls. Session names, endpoint names and peer nicks in examples are
+ordinary user-selected identifiers, never special roles.
+
+### 4.2 Saved state and workspace listing
+
+Store workspace state privately under `$DOTDIR/workspaces/<workspace-id>/`,
+separate from `$DOTDIR/sessions/`. A versioned `workspace.json` contains the name,
+last meaningful activity, referenced agent IDs, buffer descriptors, split tree,
+focus, cursor/top anchors, per-window verbosity/follow state and draft recovery
+state. Connection descriptors reference their owning session and stable endpoint
+identity. Credentials, sockets, controller generations and serialized engine
+state are not copied into this file.
+
+Write snapshots atomically through a private temporary file, file sync, rename
+and directory sync using existing platform helpers. Debounce editing/layout
+updates to avoid syncing every key; explicit save, detach, switch and clean exit
+flush them. Report save failure without discarding the working state. Recovery
+may lose the edit suffix since the last successful save after a hard process or
+machine failure. A live owner's newer acknowledged draft takes precedence over
+an old workspace snapshot; retain conflicting unacknowledged local edits as a
+recovery draft for explicit selection. Never silently replace a live draft.
+
+One frontend may actively use a saved workspace at a time. A private lock provides
+that authority; a PID file alone does not. `vm --resume` reports an already-open
+workspace rather than stealing it. A dead frontend leaves a resumable snapshot
+and surviving agent owners. An old half-open SSH frontend remains open until its
+normal transport detection releases it; resume must not kill it behind the user's
+back. Saved workspaces are host/store-local. Running `vm` through `remote` lists
+and restores the remote host's workspace namespace.
+
+`vm -l` shows ID, name, `open`/`stored` status, last meaningful activity and
+window/session counts. List all open workspaces first, then newest stored ones;
+the default stored count is ten and `-l N` changes it, including zero. Timestamp
+means user/layout/session activity, not filesystem atime, a repaint or a probe.
+The listing reads snapshots and probes ownership without reserving a workspace
+or attaching any agent. Preserve the last good snapshot on corruption; report
+its error and never repair an unrelated file during listing. Unknown newer
+snapshot versions fail explicitly.
+
+### 4.3 Agent-session and buffer pickers
+
+The agent picker keeps the same data and comparator as `snajpagent -l`: attached,
 detached, running with unknown attachment state, then stored; newest journal
-activity first within each group, with the existing ID tie-break. Initial stored
-rows use the CLI's default count, currently ten. Scrolling past them or selecting
-“load older sessions” retrieves more. Viewing metadata never acquires control.
+activity within groups and the existing ID tie-break. Initially show the CLI's
+ten stored rows and load more on demand. Keep selection anchored to ID while
+activity reorders rows. Enter attaches/resumes, `o` opens read-only history,
+`n` creates, `/` filters metadata and `R` refreshes. Preview columns collapse on
+narrow terminals while ID/name and state stay readable.
 
-Keep ID/name, status, last activity, last prompt and IRC preview, progressively
-hiding preview columns on narrow terminals. The selected row stays anchored to
-the session ID as live activity reorders other rows. Enter opens a selected live
-session or resumes a stored one. A read-only action opens its history without
-starting it. A new-session action opens the normal creation flow.
+`:buffers` shows a tree of workspace agent sessions, their IRC connections,
+channels, operator queries, agent queries and reports. Selecting a child changes
+only the focused window. Agent-query buffers are labelled with the agent's IRC
+identity and are read-only for operator sending. Buffer activity does not create
+a second session or connection. Closing/replacing the last window associated
+with a controlled agent detaches that agent; another window of any of its IRC
+buffers keeps the shared controller alive. Drafts survive the detach path.
 
-Picker keys are `j`/`k` or arrows to move, Enter to attach/resume, `o` to inspect
-read-only, `n` to create, `/` to filter metadata and `R` to refresh. Workspace
-commands `:sessions`, `:new [NAME]`, `:buffer SESSION` and `:help` open the picker,
-create a session, change the focused buffer or show the supported controls.
-Replacing the last window of a controlled buffer detaches it through the same
-draft-preserving path as `:close`; a failed destination open retains the source.
-
-An already controlled session opens read-only with its attachment state shown.
-An explicit attach attempt may report busy; it never steals another frontend.
-The picker reports an unreachable owner as unknown/running rather than guessing
-detached. Status freshness is visible when a probe fails.
-
-Runtime opt-in uses the explicit command in this design. A shell alias can make
-it convenient. Whether plain startup should be locally redirected on particular
-machines is an outstanding preference; it does not block implementation and no
-local default changes follow from this note.
+An agent already controlled elsewhere opens read-only. Explicit attachment may
+report busy and never steals its frontend. Metadata/history inspection acquires
+no controller. An unreachable owner remains unknown/running; failed probes do
+not classify it as detached. Runtime VM activation stays explicit. A local alias
+for plain startup remains a preference, independent of workspace persistence.
 
 ## 5. Process, thread and ownership model
 
@@ -217,10 +288,12 @@ and prioritize visible-page requests ahead of speculative prefetch and search.
 Add concurrency only if measurements show a concrete need. Worker results carry
 buffer and layout generations so obsolete results cannot move a newer viewport.
 
-Each session buffer has one backend connection, one shared draft per input route
-and one submission state. Windows reference buffers and independently own their
-viewport, cursor, verbosity and follow state. Splitting one session does not open
-a second engine, writer or controller. Two windows cannot submit one draft twice.
+Each agent session has one backend connection/controller shared by all its
+buffers. Each writable conversation buffer owns a distinct draft and submission
+state. Windows independently own viewport, cursor, verbosity and follow state.
+Two windows of the same conversation share its draft; different conversations
+never share a draft or implicit target. Splitting a buffer creates no additional
+engine, IRC connection, writer or controller.
 
 The existing engine remains the sole journal writer. UI navigation does not
 replay tools, trigger model requests or enqueue IRC messages. Existing synchronous
@@ -233,6 +306,202 @@ The tunnel carries terminal state and input; multi-gigabyte history remains on
 the host and is read there. The workstation wrapper handles workstation effects
 such as clipboard publication. Multiple host domains can use separate workspaces
 or an existing terminal multiplexer; a new network session daemon is unnecessary.
+
+### 5.1 IRC connections, channels and direct queries
+
+#### Buffer identity and addresses
+
+A window is a view onto a buffer. A session owns a set of buffers, and its IRC
+runtime owns the connections underneath them. Opening a window never implicitly
+creates another network connection or changes another window's destination.
+
+| Address / buffer | Meaning |
+| --- | --- |
+| `SESSION` | Agent transcript for an exact name or unique session-ID prefix. |
+| `SESSION/ENDPOINT/` | Connection status, notices and conversation directory; trailing slash makes this a connection address. |
+| `SESSION/ENDPOINT/#CHANNEL` | One channel conversation on that connection. |
+| `SESSION/ENDPOINT/NICK` | Operator direct-message conversation with that nick on that connection. |
+
+The session component names an agent session, not the saved Vim workspace.
+Example: `:vsp work/localhost:6667/peer` opens a query beside the current buffer.
+An equally useful sequence is `:vsp`, then `/query peer` in the new window.
+Names such as work/peer are examples. Completion lists real session names/IDs,
+endpoints and conversation targets, and the header always shows the resolved
+session, endpoint, accepted sending nick and target.
+
+`ENDPOINT` resolves an existing connection within that session. A displayed
+connection label must resolve uniquely; the canonical host:port form remains
+available, including bracketed IPv6. A label such as `local` in an example means
+one exact connection, never the old fan-out meaning of an aggregate local route.
+No query address accepts `all`, wildcard expansion or an implicit broadcast.
+Opening an unknown endpoint reports an error; `/connect` is an explicit action.
+
+The client keeps joined-channel state per connection so an external server can
+have several channel buffers without extra sockets or losing an existing join.
+The built-in server may retain its configured single room; its new DM support
+does not require general multi-channel hosting. Its unsupported JOIN response
+is displayed normally.
+
+Split address components before percent-decoding them. Escape literal slash and
+percent inside a component as `%2F` and `%25`; quoted command operands can contain
+spaces. Use a full session ID if its name would be awkward. Treat `#` as channel
+text inside this command parser, not a shell comment. The endpoint's advertised
+channel prefixes determine channel versus nick targets; `/query` rejects a
+channel target. Parsing and completion share this grammar.
+
+Internally identify a conversation by owning session UUID, stable connection ID,
+local identity role (operator/agent), conversation kind and conversation ID.
+Connection generations and accepted nick aliases are live routing data, not its
+permanent identity. Titles can change on a verified NICK event without losing
+history, draft or viewport. Reconnect/removal cannot silently bind an old queued
+send to a new connection occupying the same numbered list slot. Two sessions
+connected to the same server still have distinct identities and buffers.
+
+The buffer tree also exposes queries addressed to the agent identity, labelled
+`agent` and read-only for operator sending. `:buffer --identity agent ADDRESS`
+selects one explicitly. The ordinary three-component address and `/query` select
+the operator identity. Operator input never impersonates the agent nick.
+
+#### Commands, focus and sending
+
+These IRC commands belong to the common application/IRC layer and work in the
+classic interface too. VM supplies the per-window buffer and draft. The classic
+interface supplies a single selected conversation. A compile-out build retains
+functional direct messaging without VM.
+
+| Command | Behavior |
+| --- | --- |
+| `/query NICK [TEXT]` | Open/focus an operator query in this window using its pinned session and endpoint; optional text sends once. Opening without text sends nothing. |
+| `/query ENDPOINT/NICK [TEXT]` | Use an explicit endpoint in the focused agent session. |
+| `/query SESSION/ENDPOINT/NICK [TEXT]` | Select the fully qualified query, including a different session owner. |
+| `/query` | Pick an existing query in the current session; never invent a target. |
+| `/msg ADDRESS TEXT` | Send once to a nick or channel using the same resolution rules, without changing the selected buffer. Retain its result in the target conversation. |
+| `/notice ADDRESS TEXT` | Send a NOTICE explicitly as the operator identity. |
+| `/me TEXT` | Send an action to the current channel/query, preserving its target and identity. |
+| `/chat [ADDRESS]` | Select the current/default channel, or an explicit channel address. If there is no unique channel, open a picker. |
+| `/connections [SESSION]` | Show connection status and child conversations for that session. Selection opens its connection buffer. |
+| `/join CHANNEL` / `/part [CHANNEL]` | Explicitly join/leave a channel on the pinned connection; window close does neither. An unsupported channel reports the endpoint's result. |
+| `/whois [NICK]`, `/names`, `/topic` | Query the appropriate peer/channel/connection; unsupported operations on a query report their scope without falling back to a channel. |
+| `/nick [NICK]` | Inspect/change the operator nick on the pinned endpoint. Agent nick changes retain their separate tool semantics. |
+
+A short `/query nick` inherits an endpoint only from the focused conversation,
+connection buffer or an agent session with exactly one eligible connection.
+Ambiguity opens endpoint selection and sends nothing. Once resolved, the buffer
+pins the route. Creating or focusing a split cannot retarget another window's
+composer. Plain text in a query goes to that peer; in a channel it goes to that
+channel; in a transcript it remains normal agent input. A connection-status buffer
+requires an explicit target before ordinary text can send. All entered commands,
+resolved routes and failures remain visible.
+
+Keep a draft per conversation and reuse it when returning to that buffer. At
+submission, freeze session, connection identity/generation, local identity,
+conversation/target, draft revision and request ID. Validate them at the owner.
+A focus change while the request waits does not change its target. A stale,
+removed or disconnected route yields a visible unsent/uncertain result and
+retains recoverable text. A reconnect can restore the same buffer; it cannot
+silently submit its draft. `/all` keeps its existing explicit channel-destination
+scope within the selected agent session and never includes private queries.
+
+The existing one-controller-per-agent contract applies across all its buffers.
+Another session's connection can be displayed read-only without taking control;
+sending requires that session's controller. A busy owner is reported rather
+than stealing its existing terminal or creating a replacement connection.
+
+#### Incoming messages, identity and attention
+
+Incoming operator DMs create/reopen the corresponding hidden query buffer and
+add an unread indication without moving focus or submitting a model turn.
+Unread state is per conversation. A focused window following its latest painted
+message advances the presentation read cursor; held/background views do not.
+This UI cursor is independent of IRC delivery, model admission and compaction.
+Closing a query view preserves history, draft and connection; later traffic
+continues to accumulate and can make it visible in the buffer tree again.
+
+IRC `PRIVMSG` can target a nick or a channel; `NOTICE` must not trigger automatic
+replies. Match nick/channel spellings with the endpoint's advertised CASEMAPPING,
+with the protocol fallback when it is absent.
+See the [IRC client protocol reference](https://modern.ircdocs.horse/).
+Follow verified peer NICK events within a connection, preserve old nick markers
+and distinguish unrelated peers on different endpoints. After a disconnect or
+nick reuse, retain the prior conversation as history with a discontinuity marker;
+a matching nick alone does not establish persistent identity. Reconcile known
+account metadata when actually negotiated, without treating it as task authority.
+Keep uncertain queued sends unsent rather than delivering them to a reclaimed nick.
+
+The local operator and agent already have distinct IRC identities. Preserve that
+separation in the client and hosted server. Channel traffic seen by both links
+is admitted once; direct messages to each identity must be received from its own
+link. The current operator-only emission filter therefore needs a target-aware
+replacement. Query lookup cannot require shared-channel membership.
+
+DMs addressed to the operator remain operator conversation history and are
+excluded from automatic model input, IRC compaction and default model-facing
+history reports. Explicitly sharing one with a model uses normal operator input
+and provenance. DMs addressed to the agent are admitted as targeted IRC input and
+wake `irc_sleep` like an accepted direct mention. Preserve existing cancellation,
+paused-goal and scheduling rules; a UI unread flag cannot alter them. Historical
+replay and NOTICE do not generate automatic replies. Summaries keep private
+conversation boundaries and never project private text into a public reply route.
+This is an admission/projection rule within the existing same-user process/store
+boundary, not a new filesystem access-control boundary.
+
+Extend the existing `irc_send` tool with an explicit optional `target` (nick or
+channel) on an exact `destination`. Omitting target preserves the existing channel
+behavior. A nick target rejects destination `all` and ambiguous/null endpoint
+selection. `irc_state` reports the agent's available conversations and targets;
+model sends always use its agent identity. Freeze reply provenance through a turn;
+concurrent channel and DM inputs never turn a private reply into a public send.
+Tool schemas, context labels, summaries and tests must include the recipient and
+local identity. An operator-focused window is never a model routing instruction.
+
+#### Hosted delivery, receipts and durability
+
+Add nick lookup and private delivery to the hosted server. Resolve connected
+registered recipients independently of room membership, apply normal text/line
+validation and send only to the intended peer plus a negotiated sender echo.
+Private delivery must bypass the channel broadcast/history path. Third-party
+peer-to-peer bodies never enter the hosting agent's conversation journal or the
+room's replay. Only local participant identities retain their own DM history.
+Error replies name the actual target; a missing nick, denied send or away notice
+stays in the relevant conversation rather than forcing a channel reconnect.
+Existing endpoint authentication/encryption properties apply to direct traffic.
+
+Use a stable local send ID and explicit states: pending locally, written to the
+connection, server-acknowledged where supported, failed or uncertain. Split long
+messages on UTF-8 boundaries within the actual negotiated line budget and retain
+per-chunk outcomes. Disconnection never automatically replays an uncertain chunk.
+Allow an explicit retry using the original buffer/target after revalidation.
+
+Negotiate `echo-message` and applicable correlation capabilities where supported.
+A server echo acknowledges the server's handling, not the human recipient reading
+it; servers may alter or filter a message. Correlate by supported labels/IDs and
+stream order where unambiguous; identical text alone cannot deduplicate distinct
+sends. Retain uncertainty where a unique match is unavailable.
+See [IRCv3 echo-message](https://ircv3.net/specs/extensions/echo-message).
+The built-in server can provide exact local send receipts. Incoming replay uses
+real source IDs when available and marks uncertain historical duplication rather
+than deleting legitimate repeated text.
+
+Persist participant DMs before publishing them to the UI or admitting them to a
+model. Introduce `irc_event_v2` with explicit connection ID, local identity,
+conversation ID/kind, sender, target, direction, source message ID when available,
+send ID/state, timestamp and text, in addition to existing IRC provenance needed
+for replay. Normalize legacy `irc_event` records as channel events; never pretend
+a nick is a channel in the old `room` field. Persist conversation/connection
+identity and alias changes needed to recover the same buffers after resume.
+
+This expands the original UI-only storage scope. Implement compatible readers,
+checkpoint projection and context filters first. Direct-message-capable writers
+use a new checkpoint snapshot revision when this schema becomes active; existing
+records remain unchanged. Older binaries cannot resume a journal containing the
+new DM schema and must fail on its unsupported event/checkpoint, before mutation.
+Test that failure explicitly; a binary rollback is not a journal downgrade.
+Keep prior binaries for unaffected sessions and retain the matching new reader
+for DM-enabled journals. Announce this concrete compatibility boundary in the
+manual and development delivery notes. No existing owner or journal is converted
+merely by installing or opening the workspace. Old owners without the negotiated
+DM capability offer inspection/classic attachment and a clear unsupported-send
+result, never a channel fallback.
 
 ## 6. Semantic attachment and compatibility
 
@@ -274,11 +543,11 @@ versions fail explicitly before acquiring control.
 | Exchange | Required information and effect |
 | --- | --- |
 | `HELLO` / `CAPABILITIES` | Version, session identity, owner instance, supported history schema, observer/control and external-I/O capabilities. |
-| `OPEN` / `SNAPSHOT` | Observer or controller intent; committed sequence, byte end and digest; current status, model, effort, priority, route and draft revision. Snapshot and subsequent changes share one ordering boundary. |
+| `OPEN` / `SNAPSHOT` | Observer or controller intent; committed sequence, byte end and digest; status, model, effort, priority, connection/conversation catalogue and revisioned drafts. Snapshot and subsequent changes share one ordering boundary. |
 | `RESERVE` / `COMMIT` / `BOUND` | Reuse the existing reservation-generation semantics and exclusive controller arbitration. Input starts only after BOUND. |
 | `TAIL` / `STATE` | Coalescible committed-tail watermark and revisioned ephemeral status. They never contain an uncommitted journal suffix. |
-| `DRAFT` | Controller generation, route, expected revision and replacement draft or edit. Accepted revisions are retained by the owner for later attachments. |
-| `SUBMIT` / `RESULT` | Connection request ID, controller generation, draft revision and submission result, including the durable input identity once admitted. |
+| `DRAFT` | Controller generation, stable buffer/route identity, expected revision and replacement draft or edit. Accepted revisions are retained by the owner for later attachments. |
+| `SUBMIT` / `RESULT` | Connection request ID, controller generation, stable buffer/route identity, draft revision and result, including the durable input/send identity once admitted. |
 | `COMMAND` / `RESULT` | Existing command dispatch with explicit scope; report, error, state change or exclusive-terminal request as a typed result. |
 | `CANCEL`, `QUIT`, `DETACH` | Distinct operations against the controlled session. Quit acknowledges intent and then completion through normal owner shutdown. |
 | `REPORT` / external lease | Immutable report handle and metadata, or an attachment-bound terminal transaction. Workspace receives no arbitrary owner-supplied workstation command. |
@@ -407,11 +676,12 @@ external programs' private screens are outside the transcript.
 
 Keep report snapshots in private spill files while referenced, including a
 command-result entry from which the buffer can be reopened. Do not silently
-delete a report while a window or selection references it. This design adds no
-new journal event types: current reducers reject unknown types, and a cosmetic
-UI upgrade must not unexpectedly make existing journals unreadable by the
-previous binary. Persisting presentation-only reports across owner restarts would
-be an explicit later storage-format decision.
+delete a report while a window or selection references it. Presentation reports
+add no journal event type. The newly requested durable direct messages do require
+a typed IRC schema extension, covered in section 5.1. Current reducers reject
+unknown types, so that extension needs an explicit reader/writer compatibility
+transition; it cannot inherit the original UI-only rollback promise. Persisting
+presentation-only reports across restarts remains a separate storage decision.
 
 ### 7.3 Verbosity, following and selection stability
 
@@ -422,8 +692,9 @@ containing visible heading or nearest visible neighbor and show that adjustment.
 Keep the original source anchor so restoring detail can recover the position.
 
 The existing `/verbose [0..6]` command reads or changes the focused window's
-verbosity in VM. `/chat` and `/rollout` select that window's view. These are
-frontend presentation settings; other windows of the same session retain theirs.
+verbosity in VM. `/chat` selects a channel buffer and `/rollout` the associated
+agent transcript in that window. These are frontend presentation settings; other
+windows of the same session retain theirs.
 The controlling window's next presentation hint communicates the applicable
 setting to the owner without rewriting durable session history.
 
@@ -530,9 +801,10 @@ modifier or by disabling mouse reporting. Leaving VM restores mouse modes.
 ### 8.4 Windows and quit semantics
 
 Use [Vim's split and focus conventions](https://vimhelp.org/windows.txt.html):
-`:split [SESSION]`, `:vsplit [SESSION]`, `Ctrl-W s/v`, `Ctrl-W h/j/k/l/w`,
-`Ctrl-W =`, and size adjustments `Ctrl-W +`, `-`, `>` and `<`. No argument splits
-the same buffer; an argument resolves a session through the picker rules.
+`:split [ADDRESS]` (`:sp`), `:vsplit [ADDRESS]` (`:vsp`), `Ctrl-W s/v`,
+`Ctrl-W h/j/k/l/w`, `Ctrl-W =`, and size adjustments `Ctrl-W +`, `-`, `>` and `<`.
+No argument splits the same buffer. A bare agent-session selector opens its
+transcript; a qualified address opens its IRC connection/channel/query.
 
 Keep a binary layout tree with orientation and proportions. Terminal shrink
 temporarily hides windows that cannot fit their content/status minima, prioritizing
@@ -543,15 +815,17 @@ Session quit deliberately follows the session lifecycle requested for this UI:
 
 | Command/context | Effect |
 | --- | --- |
-| `:q` in a controlled session | Dispatch normal `/exit`: interrupt/settle active work, preserve the session and stop its owner. All windows of that session show its stopped state. Other owners keep running. |
-| `:q` in a read-only session or report | Close that view; no control operation is authorized by observation. |
+| `:q` in a controlled agent transcript | Dispatch normal `/exit`: interrupt/settle active work, preserve the session and stop its owner. All buffers of that session show their offline/stopped state. Other owners keep running. |
+| `:q` in an IRC buffer, read-only session or report | Close this window, preserving its draft/history. No IRC PART/QUIT, endpoint removal or agent shutdown occurs. |
 | `:q` in the picker with no active view | Exit the workspace, releasing any remaining leases through detach. |
 | `:close` | Close this window. If it was the last view of a controlled session, detach and preserve the owner and its draft. |
-| `:detach` | Release this buffer's controller, leave the owner running and show read-only history or the picker. |
+| `:detach` | Release the associated agent-session controller for all its buffers, leave its engine/connections running and show read-only history or the picker. |
 | `:qa` | Explicitly quit the sessions controlled by this workspace, then exit after their normal shutdown acknowledgements. Unrelated and observed owners remain running. |
 
-An unsent draft blocks `:q`/`:qa` with a clear message. `:q!` discards that
-session's draft and requests the same normal shutdown; it is never SIGKILL.
+Unsent conversation drafts block a session-quitting `:q`/`:qa` with a clear
+message. `:q!` in the agent transcript discards that session's drafts and requests
+the same normal shutdown; it is never SIGKILL. An IRC-buffer `:q` only closes the
+view and retains its draft; `/exit` remains explicit agent shutdown from there.
 `:qa!` applies that rule to the workspace's controlled sessions. A slow quit
 shows “waiting for session shutdown” and permits inspection or explicit detach.
 It does not silently turn a timeout into a kill. Terminal close, broken SSH,
@@ -691,8 +965,9 @@ clear:
 | Component | Responsibility |
 | --- | --- |
 | Existing `ui`, `render`, `platform` | Pager lease fix, asynchronous external jobs, shared formatting and classic presentation. Always compiled. |
+| Existing `irc`, `irc_runtime`, event/store/context layers | Channel/query routing, recipient-specific delivery, common commands/tools, durable DM schema and model/operator projection. Available with VM compiled out. |
 | `session_view` | Semantic endpoint, controller arbitration and typed dispatch. Compiled with VM; existing terminal attachment remains independent. |
-| `vm` | CLI entry, buffers/windows, input modes, layout and grid output. |
+| `vm` | CLI entry, named workspace snapshots/locks/listing, buffers/windows, input modes, layout and grid output. |
 | `vm_history` | Read-only source paging, stable anchors, projection, search and cache ownership. |
 | `clipboard` | Register backing and workstation publication; wrapper protocol integrates in existing remote/screen code. |
 | `vm_stub` | Helpful unsupported-feature result for a `WITH_VM=0` binary. |
@@ -747,7 +1022,10 @@ data-structure shape.
 | View projection | Retrospective verbosity toggles preserve source position; hidden anchors restore predictably. Completion records do not duplicate streamed text. HOLD does not move on incoming output. |
 | Input | Slow/fragmented Escape, UTF-8 and bracketed paste; a paste ending exactly at a read boundary appears without an extra key. Pasted Vim commands never execute. Composer edits, undo and queue handling preserve text. |
 | Grid | PTY screen assertions cover partial writes, blocked output, resize, wide/combining text, external return and force-redraw. No protocol frame or raw model escape reaches the visible terminal. |
-| Windows and lifecycle | Same-session splits share one draft/controller. Different sessions progress independently. Verify `:q`, `:close`, `:detach`, unsent drafts, failed attach, stale generation and lost acknowledgement without a duplicate prompt or owner kill. |
+| Windows and lifecycle | Same-conversation splits share one draft; different queries/channels have distinct drafts and frozen routes. Session buffers share one controller. Verify transcript versus query `:q`, `:close`, `:detach`, unsent drafts, failed attach, stale generation and lost acknowledgement without duplicate input or owner kill. |
+| Saved workspaces | `vm -N`, `-l N`, `--resume`, `--last`, rename and atomic save use a separate namespace from agent CLI flags. Restore split proportions, buffer addresses and anchors across exit/crash; detect live locks and corrupt/newer snapshots. Retain conflicting newer drafts. Never send saved text or restart stopped agents implicitly. |
+| IRC direct routing | Operator and agent DMs work with the built-in and an external IRC fixture, including peers without common channels. Verify exact recipient/identity, same nick on different endpoints/sessions, nick changes/reuse, reconnect, line splitting, errors, NOTICE/actions and mid-send focus changes. Public `/all` never includes queries. |
+| IRC privacy and history | Uninvolved clients, channel history and hosting-agent context never receive peer DMs. Operator DMs stay out of model admission/default history and IRC summaries. Agent DMs wake the right admission path. Resume and read-only history retain recipient/provenance; older readers reject the new schema before mutation. |
 | Session list | Observers leave status unchanged; VM controllers show attached; disconnect shows detached only after verified release. Newest activity ordering and selected-row identity survive refresh. |
 | Clipboard | Exact UTF-8 bytes and line/block selection; large streamed copy, unavailable helper, denied clipboard, digest mismatch, duplicated chunks, cancelled/lost receipt and nested wrappers. Internal register survives each external failure. |
 | Remote and files | Real SSH, stock Mosh, tmux and GNU screen fixtures for the matrix above; clipboard and existing upload/download both work with resize, disconnect and background output. Test refusal for ambiguous tmux clients. |
@@ -777,13 +1055,17 @@ do not hide a slow linear scan behind an unsupported constant-time promise.
    history reader, modes, movement, retrospective verbosity, search and visual
    registers. Exercise large fixture history and tiny terminals before connecting
    live control. Keep the command clearly experimental while incomplete.
-3. **Live semantic attachment.** Implement common controller arbitration, tail
+3. **IRC conversations and workspace persistence.** Add explicit target-aware
+   routing, common `/query` commands, recipient history and compatible readers
+   before enabling new-schema writers. Implement workspace naming/listing/restore
+   and buffer identities with isolated drafts. Qualify classic/compile-out DMs.
+4. **Live semantic attachment.** Implement common controller arbitration, tail
    snapshots, drafts, typed commands, external-I/O transactions and disconnect
    recovery. Cover old owners and old frontends. Add picker and command reports.
-4. **Windows and clipboard.** Complete split ownership, mouse, quit/detach,
+5. **Windows and clipboard.** Complete split ownership, mouse, quit/detach,
    native clipboard and remote capability/receipt integration. Qualify file
    transfer and copy through SSH/Mosh/tmux/screen with all panes active.
-5. **Platform and workflow completion.** Finish the Windows direct adapter and
+6. **Platform and workflow completion.** Finish the Windows direct adapter and
    BSD qualification, compile-out checks and documentation. Publish the exact
    supported Vim subset and platform differences. Full feature completion means
    these acceptance cases pass, not merely that a full-screen demo launches.
