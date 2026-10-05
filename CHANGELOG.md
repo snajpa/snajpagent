@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Resume hosted IRC sessions after local nickname changes, including when
+  networking is disabled on resume. Report the journal sequence when an IRC
+  event cannot be restored.
+
 ## 0.99.8c — October 2, 2026
 
 - Coalesce buffered native composer edits while continuing to service resize

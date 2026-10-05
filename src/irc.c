@@ -2415,7 +2415,8 @@ restored_event_shape_valid(const struct snag_irc_event *event)
         !event_field_safe(event->room) || !event_field_safe(event->nick) ||
         !event_field_safe(event->text) || (event->historical && (event->local || !remembered)) ||
         (event->local && event->kind != SNAG_IRC_MESSAGE &&
-         event->kind != SNAG_IRC_NOTICE && event->kind != SNAG_IRC_TOPIC)) return false;
+         event->kind != SNAG_IRC_NOTICE && event->kind != SNAG_IRC_TOPIC &&
+         event->kind != SNAG_IRC_NICK)) return false;
     switch (event->kind) {
     case SNAG_IRC_CONNECTED: return nick && !event->room[0] && !event->text[0] && !event->op &&
                !event->historical && !event->local;

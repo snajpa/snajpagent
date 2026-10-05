@@ -437,7 +437,6 @@ restore_irc_event(void *opaque, const struct snag_session *state,
     struct irc_restore *restore = opaque;
     struct app_state *app = restore->app;
     struct snag_irc_event event;
-    (void)error; (void)error_size;
     if (!strcmp(type, "turn_started")) restore->turn_replies = restore->pending_replies;
     if (!state->pending_input) restore->pending_replies.count = 0u;
     if (!state->active_turn) restore->turn_replies.count = 0u;
@@ -462,7 +461,15 @@ restore_irc_event(void *opaque, const struct snag_session *state,
         return 0;
     }
     if (strcmp(type, "irc_event")) return 0;
-    if (snag_irc_event_read(data, &event) < 0 || snag_irc_restore_event(app->irc, &event) < 0) return -1;
+    if (snag_irc_event_read(data, &event) < 0) {
+        return snag_fail(error, error_size, errno,
+            "cannot decode IRC event at journal sequence %llu", (unsigned long long)seq);
+    }
+    if (snag_irc_restore_event(app->irc, &event) < 0) {
+        return snag_fail(error, error_size, errno,
+            "cannot restore IRC %s event at journal sequence %llu: %s",
+            snag_irc_kind_name(event.kind), (unsigned long long)seq, strerror(errno));
+    }
     if (event.input && json_array_append_new(restore->pending,
             json_pack("{s:I,s:O}", "seq", (json_int_t)seq, "data", (json_t *)data)) < 0) return -1;
     return 0;

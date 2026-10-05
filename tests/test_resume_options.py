@@ -15,6 +15,7 @@ from pathlib import Path
 
 import tmux_terminal as harness
 from test_remote_terminal import RemoteProcess
+from test_session_listing import append_event
 
 
 def check(binary):
@@ -192,6 +193,66 @@ def check_network(binary, previous=None):
             provider.close()
 
 
+def check_hosted_rename_resume(binary):
+    provider = harness.FakeResponses()
+    provider.runtime_handler = lambda handler, request, sequence: provider.reply(
+        handler, provider.response_body(sequence, "rename observed").encode(), close_header=True)
+    try:
+        with tempfile.TemporaryDirectory(prefix="snag-resume-nick-") as tmp:
+            root = Path(tmp).resolve()
+            config = root / "config.ini"
+            harness.write_irc_config(config, provider.port, "host-model")
+            with config.open("a") as out:
+                out.write("prompt = {chat:READY>}{rollout-idle:READY>}{rollout-active:WORK>}\n")
+            state = root / "state"
+            with socket.socket() as sock:
+                sock.bind(("127.0.0.1", 0))
+                hosted = f"127.0.0.1:{sock.getsockname()[1]}"
+            base = [str(binary), "--dotdir", str(state)]
+            env = {"SNAJPAGENT_IRC_UI_KEY": "irc-ui-secret"}
+            sid = None
+            before = b""
+            for options in (None, [], ["--no-listen", "--no-client"]):
+                args = (["--config", str(config), "-s", hosted, "--no-client",
+                         "-n", "before", "-o", "renameop", "-r", "lab", "--no-color"]
+                        if options is None else ["--resume", sid, *options])
+                child = RemoteProcess(root, [*base, *args], wrapped=None, extra_env=env)
+                try:
+                    child.until(b"READY>", 10)
+                    sid = next((state / "sessions").iterdir()).name
+                    journal = state / "sessions" / sid / "events.jsonl"
+                    assert journal.read_bytes().startswith(before)
+                    if options is None:
+                        os.write(child.master, b"/nick after\r/nick\r")
+                        child.until(b"model nick: after", 10)
+                    child.output.clear()
+                    os.write(child.master, b"/exit\r")
+                    child.until(b"--resume", 10)
+                    child.wait(0)
+                    before = journal.read_bytes()
+                    renames = [e["data"] for e in map(json.loads, before.splitlines())
+                               if e["type"] == "irc_event" and e["data"]["kind"] == "nick"]
+                    assert any(e["local"] and e["nick"] == "before" and e["text"] == "after"
+                               for e in renames), renames
+                finally:
+                    child.close()
+            # A correctly hashed envelope still needs IRC shape validation.
+            invalid = dict(renames[-1], text="invalid nick", stream="", sequence=0, input=False)
+            seq = json.loads(before.splitlines()[-1])["seq"] + 1
+            append_event(journal, "irc_event", invalid)
+            child = RemoteProcess(root, [*base, "--resume", sid], wrapped=None, extra_env=env)
+            try:
+                child.until(f"cannot restore IRC nick event at journal sequence {seq}:".encode(), 10)
+                child.until(b"--resume", 10)
+                child.wait(3)
+            finally:
+                child.close()
+            assert not provider.failure, provider.failure
+            print("resume hosted nickname history with active and disabled networking: ok")
+    finally:
+        provider.close()
+
+
 def check_display_preferences(binary):
     provider = harness.FakeResponses()
     provider.runtime_handler = lambda handler, request, sequence: provider.reply(
@@ -253,4 +314,5 @@ if __name__ == "__main__":
     binary = Path(sys.argv[1] if len(sys.argv) > 1 else "./snajpagent").resolve()
     check(binary)
     check_network(binary, Path(sys.argv[2]).resolve() if len(sys.argv) > 2 else None)
+    check_hosted_rename_resume(binary)
     check_display_preferences(binary)
