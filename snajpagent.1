@@ -425,10 +425,11 @@ Up, Ctrl-P and Ctrl-R.  Compaction reduces model context, not the full local
 conversation log available to /history.
 .SS Page a local file
 .B /cat PATH
-opens a regular file with the configured pager and returns to the prompt when
+in the classic terminal opens a regular file with the configured pager and returns when
 the pager exits.  For example,
 .B /cat ~/notes.txt
-opens a file in the current working directory; absolute paths and
+opens a file under the home directory. Relative paths use the current working
+directory; absolute paths and
 .B ~/
 paths also work.  Spaces in a path are literal; you may enclose the whole
 path in single or double quotes.  Shell expansions in PATH are not evaluated.
@@ -440,7 +441,15 @@ The default
 uses $PAGER, or less \-X when $PAGER is unset and less is available.
 If no pager is available, set $PAGER or choose a
 .B pager
-command in the configuration.  A missing or non-regular file reports an error.
+command in the configuration. A missing or non-regular file reports an error.
+.PP
+In a Vim workspace, /cat retains a private file snapshot and opens it as a report.
+It uses the owner's working directory and the same path syntax. Pager settings
+do not affect this display. Repeat /cat to capture a fresh version; existing
+reports retain their earlier bytes even if the source changes or is deleted.
+NORMAL-mode Ctrl-C can interrupt copying. A detected source change aborts the copy;
+retry /cat to read it again. File contents remain outside model context.
+Older owners may use the whole-terminal pager adapter for this command.
 .SS Complete names with Tab
 Command completion starts with a slash at the beginning of the draft.
 Type
@@ -1859,7 +1868,7 @@ IRC routes and attachments remain under development.
 .SS "Read command output"
 Submit a slash command from the transcript composer. Supported commands include
 /help, /status, /history, /model, /fast, /effort, /context, /state, /goal,
-/steering, /banner, /configure, /compact, /yield, /verbose and /session list or name.
+/steering, /banner, /configure, /compact, /yield, /verbose, /cat and /session list or name.
 The command echo and immediate result open a retained report when that transcript
 is still focused and its next draft is empty. Newer typing remains in the composer;
 use
@@ -1876,10 +1885,17 @@ closes a report window and preserves its owner; :qa still requests owner shutdow
 Report references and positions survive named-workspace resume, including after
 an owner has stopped. Reading saved reports never starts an owner.
 .PP
+:reports and :report read the private session catalogue in the background, so a
+fresh workspace can discover output from stopped or restarted owners. R refreshes
+the report list. A damaged complete catalogue entry reports an error and preserves
+the loaded list or report; an incomplete final entry leaves the complete prefix
+available. Older reports remain accessible through their saved workspace references.
+.PP
 Each report is a private immutable session file. Background loading verifies
 its length and digest, redacts known secrets and renders terminal controls inert.
 Changed or missing files display an error; a previously loaded view remains readable.
-R retries the source. Explicit session deletion removes its reports.
+R rereads and verifies the retained snapshot. Explicit session deletion removes
+its reports and catalogue.
 Reports stay outside model context. Deferred controls such as /configure,
 /model cache and /compact initially report acceptance, then add a separate
 completion report. A notification makes it available through :reports while
@@ -1891,7 +1907,7 @@ requests produce one completion report for the operation they share.
 when the owner selects priority service. With a supporting owner, commands needing
 terminal interaction automatically open its whole terminal and execute there.
 Both the workspace draft and the classic prompt's existing draft remain intact.
-/config, /send and /cat return automatically after their editor, transfer or pager
+/config and /send return automatically after their editor or transfer
 finishes. Their receipt remains pending until completion; /config's report includes
 the deferred configuration result. A replacement terminal attachment remains open
 when an earlier command finishes. Other terminal commands use /s d to return.
@@ -1958,7 +1974,7 @@ ordered report notifications and replay on reconnect to the live owner. A
 terminal-required command can transfer to a bound
 classic attachment using its advertised terminal_commands capability. The owner
 admits that saved reference before accepting following keyboard input. The current
-handoff returns automatically after finite /config, /send or /cat operations;
+handoff returns automatically after finite /config or /send operations;
 other commands return on /s d.
 .PP
 The backend also offers revisioned rollout drafts. Bound controllers can read,

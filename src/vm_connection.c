@@ -454,6 +454,54 @@ retain_report(struct snag_vm_connection *connection, const json_t *report, bool 
     return 1;
 }
 
+int
+snag_vm_reports_merge(struct snag_vm_connection *connection, const json_t *catalog,
+    const json_t *known)
+{
+    json_t *ids = json_object();
+    json_t *disk_ids = json_object();
+    json_t *known_ids = json_object();
+    json_t *merged = json_array();
+    int rc = -1;
+    if (!ids || !disk_ids || !known_ids || !merged ||
+        !json_is_array(catalog) || !json_is_array(known)) goto out;
+    const json_t *sources[] = {connection->reports, catalog, known};
+    for (size_t source = 0u; source < 3u; ++source) {
+        for (size_t i = 0u; i < json_array_size(sources[source]); ++i) {
+            json_t *report = json_array_get(sources[source], i);
+            if (!snag_vm_report_valid(report)) { errno = EILSEQ; goto out; }
+            const char *id = snag_json_string(report, "id");
+            const json_t *previous = json_object_get(ids, id);
+            if (previous && !json_equal(previous, report)) { errno = ESTALE; goto out; }
+            if (json_object_set(ids, id, report) < 0 ||
+                (source == 1u && json_object_set(disk_ids, id, report) < 0) ||
+                (source == 2u && json_object_set(known_ids, id, report) < 0)) goto out;
+        }
+    }
+    for (unsigned int phase = 0u; phase < 3u; ++phase) {
+        const json_t *rows = phase == 1u ? catalog : connection->reports;
+        for (size_t i = 0u; i < json_array_size(rows); ++i) {
+            json_t *report = json_array_get(rows, i);
+            const char *id = snag_json_string(report, "id");
+            if (phase != 1u && (json_object_get(disk_ids, id) ||
+                (json_object_get(known_ids, id) != NULL) != (phase == 0u))) continue;
+            if (json_array_append(merged, report) < 0) goto out;
+        }
+    }
+    if (!json_equal(connection->reports, merged)) {
+        json_decref(connection->reports);
+        connection->reports = json_incref(merged);
+        ++connection->revision;
+    }
+    rc = 0;
+out:
+    json_decref(ids);
+    json_decref(disk_ids);
+    json_decref(known_ids);
+    json_decref(merged);
+    return rc;
+}
+
 static int
 receive(struct snag_vm_connection *connection, const json_t *value)
 {

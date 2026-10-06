@@ -39,6 +39,7 @@ snag_vm_read_result_free(struct snag_vm_read_result *result)
     if (!result) return;
     json_decref(result->request.retained_sessions);
     json_decref(result->request.report);
+    json_decref(result->request.known_reports);
     json_decref(result->events);
     json_decref(result->catalog);
     json_decref(result->blocks);
@@ -196,6 +197,12 @@ read_page(struct snag_vm_reader *reader, struct snag_vm_read_result *result)
 {
     const struct snag_vm_read_request *request = &result->request;
     retain_views(reader, request);
+    if (request->kind == SNAG_VM_READ_REPORTS) {
+        result->catalog = snag_vm_report_catalog(reader->store, request->session_id,
+            read_canceled, reader, &result->incomplete, result->error, sizeof(result->error));
+        if (!result->catalog) goto failed;
+        return;
+    }
     if (request->kind == SNAG_VM_READ_REPORT) {
         result->document = snag_vm_report_read(reader->store, request->session_id,
             request->report, request->columns, &reader->secrets, read_canceled, reader,
@@ -404,7 +411,7 @@ snag_vm_reader_request(struct snag_vm_reader *reader, const struct snag_vm_read_
 {
     if (!reader || !request ||
         (request->kind != SNAG_VM_READ_HISTORY && request->kind != SNAG_VM_READ_SESSIONS &&
-         request->kind != SNAG_VM_READ_REPORT) ||
+         request->kind != SNAG_VM_READ_REPORT && request->kind != SNAG_VM_READ_REPORTS) ||
         request->verbosity > SNAG_VERBOSITY_MAX ||
         (request->kind != SNAG_VM_READ_SESSIONS &&
          !snag_hex_is_lower(request->session_id, SNAG_ID_HEX_LEN)) ||
@@ -414,7 +421,8 @@ snag_vm_reader_request(struct snag_vm_reader *reader, const struct snag_vm_read_
         return 0u;
     }
     if ((request->kind == SNAG_VM_READ_REPORT && !snag_vm_report_valid(request->report)) ||
-        (request->retained_sessions && !json_is_array(request->retained_sessions))) {
+        (request->retained_sessions && !json_is_array(request->retained_sessions)) ||
+        (request->kind == SNAG_VM_READ_REPORTS && !json_is_array(request->known_reports))) {
         errno = EINVAL;
         return 0u;
     }
@@ -440,8 +448,11 @@ snag_vm_reader_request(struct snag_vm_reader *reader, const struct snag_vm_read_
     result->request.retained_sessions = request->retained_sessions ?
         json_deep_copy(request->retained_sessions) : NULL;
     result->request.report = request->report ? json_deep_copy(request->report) : NULL;
+    result->request.known_reports = request->known_reports ?
+        json_deep_copy(request->known_reports) : NULL;
     if ((request->retained_sessions && !result->request.retained_sessions) ||
-        (request->report && !result->request.report)) {
+        (request->report && !result->request.report) ||
+        (request->known_reports && !result->request.known_reports)) {
         snag_vm_read_result_free(result);
         return 0u;
     }

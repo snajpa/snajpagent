@@ -73,6 +73,8 @@ struct vm_window {
     struct snag_vm_rectangle rectangle;
     struct snag_vm_document *document;
     json_t *report;
+    bool report_catalog, report_open_pending;
+    char report_selector[SNAG_ID_HEX_LEN + 1u];
     char session_id[SNAG_ID_HEX_LEN + 1u], anchor_key[160];
     uint64_t anchor_seq;
     size_t anchor_byte;
@@ -405,6 +407,7 @@ state_restore(struct vm *vm, const json_t *state, char *error, size_t size)
             if (!sid || strlen(sid) != SNAG_ID_HEX_LEN ||
                 !snag_hex_is_lower(sid, SNAG_ID_HEX_LEN)) goto invalid;
             memcpy(window->session_id, sid, sizeof(window->session_id));
+            window->report_catalog = reports;
             if (report) {
                 uint64_t byte;
                 json_t *value = json_object_get(row, "report");
@@ -588,6 +591,7 @@ split(struct vm *vm, enum snag_vm_split axis)
     }
     copy.document = snag_vm_document_ref(copy.document);
     copy.report = json_incref(copy.report);
+    if (copy.report_open_pending || copy.kind == VIEW_REPORTS) copy.report_catalog = true;
     if (document_view(&copy) && !copy.document)
         copy.load = copy.kind == VIEW_REPORT ? LOAD_KEEP :
             copy.anchor_seq ? LOAD_ANCHOR : LOAD_LAST;
@@ -633,6 +637,8 @@ view(struct vm *vm, enum view_kind kind)
     window->document = NULL;
     json_decref(window->report);
     window->report = NULL;
+    window->report_catalog = window->report_open_pending = false;
+    window->report_selector[0] = '\0';
     window->load = LOAD_NONE;
     window->follow = window->source_failed = false;
     window->follow_at = 0u;
@@ -988,6 +994,20 @@ load_history(struct vm *vm)
 {
     for (size_t i = 0u; i < vm->count; ++i) {
         struct vm_window *window = &vm->windows[(vm->focus + i) % vm->count];
+        if (window->report_catalog && window->rectangle.visible) {
+            if (vm->generation && (i || !vm->reading_window)) return;
+            struct snag_vm_connection *c = connection_for(vm, window->session_id, false);
+            struct snag_vm_read_request request = {.kind = SNAG_VM_READ_REPORTS,
+                .known_reports = c ? c->reports : NULL};
+            memcpy(request.session_id, window->session_id, sizeof(request.session_id));
+            vm->generation = reader_request(vm, &request);
+            if (!vm->generation) notice(vm, "Cannot start report catalogue read");
+            vm->reading_window = vm->generation ? window->id : 0u;
+            vm->reading_load = LOAD_NONE;
+            window->report_catalog = false;
+            window->load = LOAD_NONE;
+            return;
+        }
         if (!document_view(window) || !window->load || !window->rectangle.visible)
             continue;
         if (vm->generation && (i || !vm->reading_window || window->load == LOAD_POLL)) return;
@@ -1069,21 +1089,19 @@ command(struct vm *vm, const char *text)
         else {
             view(vm, VIEW_REPORTS);
             memcpy(vm->windows[vm->focus].session_id, c->session, sizeof(c->session));
+            vm->windows[vm->focus].report_catalog = true;
             notice(vm, "Command reports  Enter: open  :history: return to session");
         }
     } else if (!strcmp(word, "report")) {
         struct snag_vm_connection *c = focused_connection(vm);
-        json_t *selected = NULL;
-        size_t matches = 0u;
-        for (size_t i = 0u; c && i < json_array_size(c->reports); ++i) {
-            json_t *report = json_array_get(c->reports, i);
-            if (!*rest || !strncmp(snag_json_string(report, "id"), rest, strlen(rest))) {
-                selected = report;
-                ++matches;
-            }
+        if (!c || strlen(rest) > SNAG_ID_HEX_LEN) {
+            notice(vm, "No retained command report; use :reports");
+        } else {
+            struct vm_window *window = &vm->windows[vm->focus];
+            memcpy(window->report_selector, rest, strlen(rest) + 1u);
+            window->report_catalog = window->report_open_pending = true;
+            notice(vm, "Reading retained report catalogue");
         }
-        if (*rest && matches > 1u) notice(vm, "Ambiguous report ID");
-        else open_report(vm, c, selected);
     } else if (!strcmp(word, "history")) {
         char id[SNAG_ID_HEX_LEN + 1u];
         memcpy(id, vm->windows[vm->focus].session_id, sizeof(id));
@@ -1538,6 +1556,7 @@ input_event(void *opaque, const struct snag_vm_input_event *event)
             move(vm, false, window->rectangle.rows / 2u + 1u);
         else if (key == 'R') {
             if (document_view(window)) queue_history(vm, window, LOAD_REFRESH);
+            else if (window->kind == VIEW_REPORTS) window->report_catalog = true;
             else refresh(vm);
         }
         else if (key == 'o' && window->kind == VIEW_SESSIONS) {
@@ -1914,12 +1933,50 @@ collect(struct vm *vm)
         for (size_t i = 0u; i < vm->count; ++i) {
             if (vm->windows[i].id != target) continue;
             vm->windows[i].source_failed = true;
+            vm->windows[i].report_open_pending = false;
             vm->windows[i].follow_at = UINT64_MAX;
             vm->windows[i].load = LOAD_NONE;
         }
     } else if (target) {
         for (size_t i = 0u; i < vm->count; ++i) {
             struct vm_window *window = &vm->windows[i];
+            if (window->id == target && result->request.kind == SNAG_VM_READ_REPORTS &&
+                !strcmp(window->session_id, result->request.session_id)) {
+                struct snag_vm_connection *c = connection_for(vm, window->session_id, false);
+                bool open = window->report_open_pending;
+                window->report_open_pending = false;
+                if (!c || snag_vm_reports_merge(c, result->catalog,
+                    result->request.known_reports) < 0) {
+                    notice(vm, "Report catalogue conflicts with retained references");
+                    continue;
+                }
+                if (result->incomplete)
+                    notice(vm, "Showing reports before incomplete final catalogue entry");
+                if (open) {
+                    json_t *selected = NULL;
+                    size_t matches = 0u;
+                    const char *prefix = window->report_selector;
+                    for (size_t n = 0u; n < json_array_size(c->reports); ++n) {
+                        json_t *report = json_array_get(c->reports, n);
+                        if (!*prefix ||
+                            !strncmp(snag_json_string(report, "id"), prefix, strlen(prefix))) {
+                            selected = report;
+                            ++matches;
+                        }
+                    }
+                    if (*prefix && matches > 1u) notice(vm, "Ambiguous report ID");
+                    else {
+                        size_t focus = vm->focus;
+                        bool composer = vm->composer, insert = vm->insert;
+                        vm->focus = i;
+                        open_report(vm, c, selected);
+                        vm->focus = focus;
+                        if (focus != i) { vm->composer = composer; vm->insert = insert; }
+                    }
+                }
+                changed(vm);
+                continue;
+            }
             if (window->id == target && window->kind == VIEW_REPORT &&
                 !strcmp(window->session_id, result->request.session_id) &&
                 json_equal(window->report, result->request.report)) {

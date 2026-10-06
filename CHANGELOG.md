@@ -4,6 +4,14 @@
 
 ## Unreleased
 
+- Discover retained command reports after owner restart through a private ordered
+  catalogue. Load it in the background for `:reports` and `:report`, preserve
+  live notifications and saved references, and recover incomplete final appends.
+- Open `/cat PATH` as an immutable workspace file snapshot, independent of pager
+  settings. Stream the copy with cancellation, retain earlier versions after
+  source changes, and keep file bytes outside model context. Classic `/cat`
+  continues to use the configured pager.
+
 - Retain deferred Vim command completion reports separately from admission.
   Reconnect replays reports from the live owner, preserving newer drafts and
   the selected window. Report IDs prevent duplicates; output stays outside
@@ -11,8 +19,8 @@
 - Preserve classic command output when attaching during a deferred workspace
   operation, and restore that operation's report after nested commands finish.
 
-- Return Vim terminal commands /config, /send and /cat to the workspace after
-  their editor, transfer or pager finishes. Retain deferred configuration output
+- Return Vim terminal commands /config and /send to the workspace after
+  their editor or transfer finishes. Retain deferred configuration output
   in the command report and preserve a replacement terminal attachment.
 
 - Hand terminal-required workspace commands to a bound native attachment using

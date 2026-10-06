@@ -405,11 +405,13 @@ register and draft-local undo/redo. Slash-command output opens retained reports;
 `:reports` lists them, and `:history` returns to the session. Report positions
 survive workspace resume; `:q` closes a report while preserving its owner.
 Deferred controls add completion reports, available through `:reports` after reconnect.
+The report catalogue also recovers output after owner restart. `/cat PATH` opens
+a retained file snapshot; repeating it reads a fresh copy into another report.
 Conflicting saved/owner drafts offer `:draft local` and `:draft owner`.
 `:classic [SESSION_ID]` opens an owner's full terminal, including owners started
 before workspace support. Commands needing terminal interaction open it automatically
-with supporting owners, preserving both drafts. `/config`, `/send` and `/cat`
-return when their operation finishes; `/s d` returns from other terminal commands.
+with supporting owners, preserving both drafts. `/config` and `/send` return
+when their operation finishes; `/s d` returns from other terminal commands.
 See the manual's Vim workspace
 section for available controls and `design/vim-mode.md` for implementation status.
 `make WITH_VM=0` omits the optional interface; the default includes it.

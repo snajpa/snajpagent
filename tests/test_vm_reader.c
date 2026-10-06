@@ -39,6 +39,14 @@ cancel_report(void *opaque)
     return ++*calls >= 3u;
 }
 
+static bool
+grow_snapshot_source(void *opaque)
+{
+    int *fd = opaque;
+    assert(snag_write_full(*fd, "x", 1u) == 0);
+    return false;
+}
+
 static void
 report_test(struct snag_store *store, const char *root)
 {
@@ -73,6 +81,34 @@ report_test(struct snag_store *store, const char *root)
     unsigned int calls = 0u;
     assert(!snag_vm_report_read(store, sid, report, 80u, &secrets,
         cancel_report, &calls, error, sizeof(error)) && errno == ECANCELED);
+    int file_fd = snag_open_read_at(source.dir_fd, name, false);
+    assert(file_fd >= 0);
+    calls = 0u;
+    assert(!snag_vm_report_file(source.dir_fd, "/cat source", "/cat source\n", 12u,
+        file_fd, cancel_report, &calls) && errno == ECANCELED);
+    bool incomplete;
+    error[0] = '\0';
+    json_t *catalog = snag_vm_report_catalog(store, sid, NULL, NULL,
+        &incomplete, error, sizeof(error));
+    assert(catalog && !incomplete && json_array_size(catalog) == 0u);
+    json_decref(catalog);
+    int changing = snag_create_private_at(source.dir_fd, "snapshot-input", true);
+    assert(changing >= 0);
+    assert(!snag_vm_report_file(source.dir_fd, "/cat changed", "/cat changed\n", 13u,
+        changing, grow_snapshot_source, &changing) && errno == ESTALE);
+    assert(close(changing) == 0);
+    json_t *snapshot = snag_vm_report_file(source.dir_fd, "/cat source", "/cat source\n", 12u,
+        file_fd, NULL, NULL);
+    assert(snapshot && close(file_fd) == 0);
+    assert(json_integer_value(json_object_get(snapshot, "bytes")) == (json_int_t)length + 12);
+    struct snag_vm_document *file_view = snag_vm_report_read(store, sid, snapshot, 80u,
+        &secrets, NULL, NULL, error, sizeof(error));
+    assert(file_view);
+    const char *file_text = snag_json_string(snag_vm_document_block(file_view, 0u), "text");
+    assert(!strncmp(file_text, "/cat source\n\\xff\\x00", 20u));
+    assert(strstr(file_text, "[redacted]") && !strstr(file_text, values[0]));
+    snag_vm_document_free(file_view);
+    json_decref(snapshot);
     /* Report reads remain available after the session's owner exits. */
     snag_session_close(&source);
     struct snag_vm_reader *reader = snag_vm_reader_open(store, &secrets, error, sizeof(error));
@@ -129,6 +165,98 @@ report_test(struct snag_store *store, const char *root)
     snag_vm_reader_close(reader);
     snag_session_close(&source);
     free(data);
+}
+
+static void
+report_catalog_test(struct snag_store *store, const char *root)
+{
+    struct snag_session source;
+    char error[256] = "";
+    snag_session_init(&source);
+    assert(snag_session_create(store, &source, root, "default", "catalog", "high",
+        error, sizeof(error)) == 0);
+    json_t *reports = json_array();
+    for (unsigned int i = 0u; i < 4u; ++i) {
+        json_t *report = snag_vm_report_store(source.dir_fd, "/status", "private output", 14u);
+        assert(report && json_array_append_new(reports, report) == 0);
+    }
+    bool incomplete;
+    json_t *catalog = snag_vm_report_catalog(store, source.id, NULL, NULL,
+        &incomplete, error, sizeof(error));
+    assert(catalog && !incomplete && json_equal(catalog, reports));
+    json_decref(catalog);
+    int fd = snag_open_private_append_at(source.dir_fd, ".view-reports.jsonl", false);
+    assert(fd >= 0);
+    snag_file_info info;
+    assert(snag_fstat(fd, &info) == 0);
+    int64_t original = info.st_size;
+    assert(snag_write_full(fd, "{\"partial\":", 11u) == 0);
+    struct snag_vm_reader *reader = snag_vm_reader_open(store, NULL, error, sizeof(error));
+    assert(reader);
+    json_t *known = json_array();
+    struct snag_vm_read_request request = {.kind = SNAG_VM_READ_REPORTS, .known_reports = known};
+    memcpy(request.session_id, source.id, sizeof(request.session_id));
+    uint64_t generation = snag_vm_reader_request(reader, &request);
+    assert(generation && json_array_append(known, json_array_get(reports, 0u)) == 0);
+    struct snag_vm_read_result *result = await_page(reader, generation);
+    assert(!result->error_number && result->incomplete && json_equal(result->catalog, reports));
+    assert(!json_array_size(result->request.known_reports));
+    snag_vm_read_result_free(result);
+    json_decref(known);
+    snag_vm_reader_close(reader);
+    assert(snag_truncate(fd, original) == 0);
+
+    /* A catalogue can outgrow one read without losing cancellation or
+     * duplicating repeated immutable references. */
+    char *row = json_dumps(json_array_get(reports, 0u), JSON_COMPACT);
+    assert(row);
+    size_t length = strlen(row);
+    row[length] = '\n';
+    for (size_t i = 0u; i < 3u * 65536u / length + 1u; ++i)
+        assert(snag_write_full(fd, row, length + 1u) == 0);
+    free(row);
+    unsigned int calls = 0u;
+    assert(!snag_vm_report_catalog(store, source.id, cancel_report, &calls,
+        &incomplete, error, sizeof(error)) && errno == ECANCELED);
+    error[0] = '\0';
+    catalog = snag_vm_report_catalog(store, source.id, NULL, NULL,
+        &incomplete, error, sizeof(error));
+    assert(catalog && !incomplete && json_equal(catalog, reports));
+    json_decref(catalog);
+    assert(snag_write_full(fd, "{}\n", 3u) == 0);
+    assert(!snag_vm_report_catalog(store, source.id, NULL, NULL,
+        &incomplete, error, sizeof(error)) && errno == EILSEQ);
+    assert(snag_truncate(fd, original) == 0 && close(fd) == 0);
+#ifndef _WIN32
+    assert(fchmodat(source.dir_fd, ".view-reports.jsonl", 0644, 0) == 0);
+    error[0] = '\0';
+    assert(!snag_vm_report_catalog(store, source.id, NULL, NULL,
+        &incomplete, error, sizeof(error)));
+    assert(snag_unlink_at(source.dir_fd, ".view-reports.jsonl", false) == 0);
+    assert(symlinkat("events.jsonl", source.dir_fd, ".view-reports.jsonl") == 0);
+    error[0] = '\0';
+    assert(!snag_vm_report_catalog(store, source.id, NULL, NULL,
+        &incomplete, error, sizeof(error)));
+#endif
+    struct snag_vm_connection *c = snag_vm_connection_new(source.id);
+    assert(c);
+    assert(json_array_append(c->reports, json_array_get(reports, 0u)) == 0);
+    assert(json_array_append(c->reports, json_array_get(reports, 2u)) == 0);
+    known = json_deep_copy(c->reports);
+    assert(known && json_array_append(c->reports, json_array_get(reports, 3u)) == 0);
+    catalog = json_pack("[O,O]", json_array_get(reports, 1u), json_array_get(reports, 2u));
+    assert(catalog && snag_vm_reports_merge(c, catalog, known) == 0);
+    assert(json_equal(c->reports, reports));
+    json_t *conflict = json_deep_copy(json_array_get(catalog, 1u));
+    assert(conflict && json_object_set_new(conflict, "command", json_string("changed")) == 0);
+    assert(json_array_set_new(catalog, 1u, conflict) == 0);
+    assert(snag_vm_reports_merge(c, catalog, known) < 0 && errno == ESTALE);
+    assert(json_equal(c->reports, reports));
+    json_decref(catalog);
+    json_decref(known);
+    json_decref(reports);
+    snag_vm_connections_free(c);
+    snag_session_close(&source);
 }
 
 static json_t *
@@ -539,6 +667,7 @@ main(void)
     snag_session_close(&source);
     mode_identity_test(&store, root);
     report_test(&store, root);
+    report_catalog_test(&store, root);
     snag_store_close(&store);
     free(root);
     puts("test_vm_reader: ok");

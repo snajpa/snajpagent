@@ -19,6 +19,9 @@
 #include "term_host.h"
 #include "turn.h"
 #include "tools.h"
+#if SNAJPAGENT_VM
+#include "vm_report.h"
+#endif
 #include "wire.h"
 #include <ctype.h>
 #include <errno.h>
@@ -38,6 +41,10 @@
 #define RESUME_COMMAND_MAX (4u * 1024u * 1024u)
 
 #if SNAJPAGENT_VM
+struct app_view_command {
+    const char *line;
+    json_t *snapshot;
+};
 struct app_view_terminal {
     char id[SNAG_ID_HEX_LEN + 1u];
     char *command;
@@ -549,7 +556,7 @@ view_control_requested(struct app_state *app, unsigned int control)
 #if SNAJPAGENT_VM
     if (app->view_terminal && app->view_terminal->dispatching)
         app->view_terminal->controls |= control;
-    if (app->view_command_capture) app->view_controls |= control;
+    if (app->view_command) app->view_controls |= control;
 #else
     (void)app;
     (void)control;
@@ -1692,8 +1699,16 @@ pager_command(const struct app_state *app)
     return *pager ? pager : NULL;
 }
 
-/* /cat is an operator-only display: the file goes to the pager, not into a
- * session event, provider request, or the UI scrollback. */
+#if SNAJPAGENT_VM
+static bool
+view_file_cancel(void *opaque)
+{
+    return snag_app_active_input_pump(opaque, 0u) != 0;
+}
+#endif
+
+/* /cat is operator-only: classic display uses the pager; a semantic command
+ * keeps an immutable snapshot. Neither path adds file bytes to model context. */
 static int
 page_local_file(struct app_state *app, const char *argument)
 {
@@ -1706,16 +1721,21 @@ page_local_file(struct app_state *app, const char *argument)
     int fd;
     int rc;
     int saved;
+#if SNAJPAGENT_VM
+    struct app_view_command *view = app->view_command;
+#else
+    const void *view = NULL;
+#endif
 
     while (isspace((unsigned char)*argument)) ++argument;
     if (!*argument) return app_error(app, "usage: /cat PATH");
     command = pager_command(app);
-    if (!command) {
+    if (!view && !command) {
         return app_error(app, !strcmp(app->config->pager, "off") || !*app->config->pager ?
             "pager is off; set [ui] pager to on or a command" :
             "no pager is available; set $PAGER or configure [ui] pager");
     }
-    if (snag_isatty(STDERR_FILENO) != 1) {
+    if (!view && snag_isatty(STDERR_FILENO) != 1) {
         return app_error(app, "/cat needs an interactive terminal");
     }
     if (!(input = strdup(argument))) {
@@ -1763,12 +1783,25 @@ page_local_file(struct app_state *app, const char *argument)
     }
     rc = snag_fstat(fd, &info);
     saved = errno;
-    (void)close(fd);
     if (rc < 0 || !S_ISREG(info.st_mode)) {
+        (void)close(fd);
         const char *reason = rc < 0 ? strerror(saved) : "not a regular file";
         rc = app_textf(app, SNAG_UI_ERROR, "cannot open file: %s", reason);
         goto out;
     }
+#if SNAJPAGENT_VM
+    if (view) {
+        if (!app->session.active_turn) app->interrupt_requested = false;
+        view->snapshot = snag_vm_report_file(app->session.dir_fd, view->line,
+            app->command_report->data, app->command_report->len, fd, view_file_cancel, app);
+        saved = errno;
+        (void)close(fd);
+        rc = view->snapshot ? 0 : app_textf(app, SNAG_UI_ERROR,
+            "cannot retain file snapshot: %s", strerror(saved));
+        goto out;
+    }
+#endif /* SNAJPAGENT_VM */
+    (void)close(fd);
     rc = start_pager(app, command, resolved, NULL, 0u);
     saved = errno;
     if (rc < 0) {
@@ -3507,7 +3540,7 @@ view_command_native(const char *line)
     memcpy(verb, line, length);
     verb[length] = '\0';
     if (snag_string_in(verb, "/help /? /status /history /model /fast /effort /context "
-        "/state /goal /steering /banner /configure /compact /yield /verbose")) return true;
+        "/state /goal /steering /banner /configure /compact /yield /verbose /cat")) return true;
     if (strcmp(verb, "/session") && strcmp(verb, "/s")) return false;
     const char *argument = line + length;
     while (isspace((unsigned char)*argument)) ++argument;
@@ -3521,27 +3554,7 @@ view_command_native(const char *line)
 static json_t *
 view_command_report(struct app_state *app, const char *command, const struct snag_buf *text)
 {
-    char id[SNAG_ID_HEX_LEN + 1u], hash[SNAG_SHA256_HEX_LEN + 1u], name[64];
-    if (text->len > INT64_MAX || snag_random_id(id) < 0) return NULL;
-    snag_sha256_hex(text->data, text->len, hash);
-    json_t *report = json_pack("{s:s,s:I,s:s,s:s}", "id", id,
-        "bytes", (json_int_t)text->len, "sha256", hash, "command", command);
-    if (!report) return NULL;
-    (void)snprintf(name, sizeof(name), ".view-report-%s", id);
-    int fd = snag_create_private_at(app->session.dir_fd, name, true);
-    if (fd < 0) { json_decref(report); return NULL; }
-    int rc = snag_write_full(fd, text->data, text->len);
-    if (!rc) rc = snag_sync_file(fd);
-    int saved = errno;
-    if (close(fd) < 0 && !rc) { rc = -1; saved = errno; }
-    if (!rc && snag_sync_dir(app->session.dir_fd) < 0) { rc = -1; saved = errno; }
-    if (rc < 0) {
-        (void)snag_unlink_at(app->session.dir_fd, name, false);
-        json_decref(report);
-        report = NULL;
-    }
-    errno = saved;
-    return report;
+    return snag_vm_report_store(app->session.dir_fd, command, text->data, text->len);
 }
 
 static int
@@ -3566,9 +3579,9 @@ view_control_publish(struct app_state *app, unsigned int index, bool interrupted
 
 static int
 view_command_complete(struct app_state *app, const char *id, const char *line,
-    const struct snag_buf *report, bool failed, bool terminal)
+    const struct snag_buf *report, bool failed, bool terminal, json_t *snapshot)
 {
-    json_t *saved = view_command_report(app, line, report);
+    json_t *saved = snapshot ? json_incref(snapshot) : view_command_report(app, line, report);
     char error[256] = "";
     if (!saved) (void)snprintf(error, sizeof(error), "cannot retain command report: %s",
         strerror(errno));
@@ -3598,7 +3611,7 @@ view_terminal_finish(struct app_state *app)
     struct app_view_terminal *command = app->view_terminal;
     if (!command || command->dispatching || command->controls || command->pager) return 0;
     int rc = view_command_complete(app, command->id, command->command,
-        &command->report, command->failed, true);
+        &command->report, command->failed, true, NULL);
     view_terminal_free(app);
     return rc;
 }
@@ -3663,10 +3676,11 @@ view_input_command(struct app_state *app, const char *line, bool active,
     app->ui.command_report = &report;
     app->ui.command_report_passthrough = terminal;
     app->ui.command_error = false;
-    bool previous_capture = app->view_command_capture;
-    app->view_command_capture = !terminal;
+    struct app_view_command capture = {.line = line};
+    struct app_view_command *previous_capture = app->view_command;
+    app->view_command = terminal ? NULL : &capture;
     rc = input_command(app, line, active, handled, prompt_ready);
-    app->view_command_capture = previous_capture;
+    app->view_command = previous_capture;
     if (!rc && !*handled) rc = app_error(app, "unknown slash command");
     bool failed = rc < 0 || app->ui.command_error;
     app->command_report = previous_app_report;
@@ -3682,7 +3696,8 @@ view_input_command(struct app_state *app, const char *line, bool active,
         int completed = view_terminal_finish(app);
         return rc < 0 ? rc : completed;
     }
-    int published = view_command_complete(app, id, line, &report, failed, false);
+    int published = view_command_complete(app, id, line, &report, failed, false, capture.snapshot);
+    json_decref(capture.snapshot);
     snag_buf_free(&report);
     return rc < 0 ? rc : published;
 }
@@ -3705,8 +3720,8 @@ snag_app_input_command(struct app_state *app, const char *line, bool active,
         bool previous_passthrough = app->ui.command_report_passthrough;
         bool previous_error = app->ui.command_error;
 #if SNAJPAGENT_VM
-        bool previous_capture = app->view_command_capture;
-        app->view_command_capture = false;
+        struct app_view_command *previous_capture = app->view_command;
+        app->view_command = NULL;
 #endif
         app->command_report = app->ui.command_report = NULL;
         app->ui.command_report_passthrough = app->ui.command_error = false;
@@ -3716,7 +3731,7 @@ snag_app_input_command(struct app_state *app, const char *line, bool active,
         app->ui.command_report_passthrough = previous_passthrough;
         app->ui.command_error = previous_error;
 #if SNAJPAGENT_VM
-        app->view_command_capture = previous_capture;
+        app->view_command = previous_capture;
 #endif
         return rc;
     }

@@ -165,8 +165,9 @@ remove_view_reports(int dir_fd, char *error, size_t error_size)
         errno = 0;
         const char *name = snag_directory_next(dir);
         if (!name) { if (errno) rc = -1; break; }
-        if (strncmp(name, ".view-report-", 13u) || strlen(name + 13u) != SNAG_ID_HEX_LEN ||
-            !snag_hex_is_lower(name + 13u, SNAG_ID_HEX_LEN)) continue;
+        if (strcmp(name, ".view-reports.jsonl") &&
+            (strncmp(name, ".view-report-", 13u) || strlen(name + 13u) != SNAG_ID_HEX_LEN ||
+             !snag_hex_is_lower(name + 13u, SNAG_ID_HEX_LEN))) continue;
         int file = snag_open_read_security_at(dir_fd, name, false);
         if (file < 0) { rc = -1; break; }
         rc = snag_store_verify_private_fd(file, false, "command report", error, error_size);

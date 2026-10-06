@@ -86,14 +86,17 @@ The terminal-command adapter now releases semantic controllers, binds the owner'
 classic terminal and sends a saved command reference, preserving both drafts.
 It checks owner identity, deduplicates dispatch and gates later keyboard input on
 admission. Saved workspace requests require explicit recovery or :classic.
-/config, /send and /cat return automatically after their finite external operation;
+/config and /send return automatically after their finite external operation;
 their receipt stays pending and includes deferred configuration output. Completion
 can detach only its original terminal generation. /s d returns from other terminal
 commands. Semantic deferred controls now publish separate completion reports.
 The frontend subscribes to live-owner report replay and deduplicates IDs across
 reconnect without changing focus or newer drafts. Coalesced requests share one
-completion result. A persistent catalogue for discovering missed references
-after owner restart remains work alongside immutable file snapshots.
+completion result. Private ordered catalogue entries now recover missed references
+after owner restart through background :reports/:report reads. Complete rows are
+validated; a partial final append remains distinguishable from committed entries.
+Native /cat copies an open regular file into a retained snapshot in cancellable
+chunks. New captures preserve older report bytes; classic /cat keeps its pager.
 The frontend connection manager now shares one draft and owner lease per session
 across split windows. Workspace state v3 adds drafts and pending request identities,
 accepts v1/v2 layouts, and saves before transmitting a submission. Reconnect queries
@@ -873,6 +876,10 @@ presentation-only reports across restarts uses private immutable session files:
 `.view-report-ID`, with random ID, exact length and digest in the command receipt.
 They remain until explicit session deletion. Workspace references and the reader
 validate identity and digest before display; no report bytes enter model events.
+The private .view-reports.jsonl catalogue records ordered references after report
+bytes are synced. Background discovery handles complete-prefix reads, partial
+final appends and notifications arriving during a read. Missing older catalogues
+leave saved references usable. Catalogue corruption preserves the loaded view.
 
 ### 7.3 Verbosity, following and selection stability
 

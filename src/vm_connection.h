@@ -46,5 +46,9 @@ int snag_vm_draft_replace(struct snag_vm_connection *, size_t begin, size_t end,
     const void *text, size_t length);
 json_t *snag_vm_connections_json(const struct snag_vm_connection *);
 int snag_vm_connections_load(const json_t *, struct snag_vm_connection **);
+/* known is the reference snapshot taken when the catalogue read began.
+ * Notifications arriving after it remain newer than that disk snapshot. */
+int snag_vm_reports_merge(struct snag_vm_connection *, const json_t *catalog,
+    const json_t *known);
 
 #endif

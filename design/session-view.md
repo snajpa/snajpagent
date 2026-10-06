@@ -113,7 +113,7 @@ journal watermark, and `outcome` is `ok` or `error`; it does not invent an input
 admission event. A deferred operation such as `/configure` reports that it was
 scheduled. Later completion is separate from this receipt. Native adapters cover
 help/status/history, model/effort/context/fast settings, verbosity, goal/state,
-steering/banner, configure/compact/yield and session list/name. Commands needing
+steering/banner, configure/compact/yield, file snapshots and session list/name. Commands needing
 terminal input or IRC scope return `terminal` before dispatch. The client can
 refer to that original request through a bound whole-terminal transaction;
 this result never contains a shell command supplied by the owner.
@@ -127,6 +127,29 @@ The random 32-character lowercase hexadecimal ID is a basename component, never
 an arbitrary path. Report readers must validate the private regular file, exact
 byte length and SHA256, then apply presentation redaction and inert-control
 rendering. The frontend loads reports on its cancellable background reader.
+
+After syncing report bytes and their directory entry, the owner appends the
+reference as one private `.view-reports.jsonl` line and syncs that catalogue before
+publication. The catalogue preserves creation order and allows discovery after
+owner restart. A failed append is rolled back when possible; complete report bytes
+remain available if catalogue publication fails. Subsequent writers remove only
+an incomplete final append. Readers validate complete entries in a fixed file-size
+snapshot and expose an incomplete tail separately. The row bound derives from
+the existing command field's maximum JSON expansion; the catalogue has no row quota.
+
+`:reports` and `:report` request this catalogue on the background reader and merge
+it with saved references and notifications that arrived during the read. Exact
+duplicate IDs are deduplicated; changed metadata for an existing ID is an error.
+Old workspace references remain usable when their owner has no catalogue. Explicit
+deletion removes the catalogue even in a build with the workspace omitted.
+
+Native `/cat` copies an open regular-file descriptor into a private report in
+64KiB chunks, checks cancellation between chunks and detects changed size or
+modification time. Its command echo precedes the retained bytes. It records ordinary
+file reads while source writers remain unlocked. New captures have new report IDs;
+refreshing a rendered report
+only rereads its immutable bytes. File bytes never enter session events or
+provider requests. Classic `/cat` retains its configured external pager.
 
 The report content is outside the transport message buffer and has no report-size
 quota. Existing commands retain their own output policies, including `/history`'s
@@ -148,10 +171,8 @@ metadata for an existing ID.
 Deferred semantic controls retain their actual completion output separately from
 the immediate admission receipt. Coalesced requests share one completion report.
 Notifications add report references without changing frontend focus or drafts;
-only the response to its own submitted command can auto-open a report. The
-notification catalogue currently lives for the owner instance. Saved workspace
-references survive owner restart; discovering missed reports across an owner
-restart still requires the persistent catalogue work.
+only the response to its own submitted command can auto-open a report. Notification
+replay covers the live owner instance; disk-catalogue discovery covers owner restart.
 
 Draft snapshots contain `route`, `revision`, `text` and byte `cursor`.
 Draft refusals echo a valid `edit` token, independently of submission IDs.
@@ -185,7 +206,7 @@ reference and appends0 (refused, no new effect) or1 (admitted/already admitted).
 Following keyboard input waits for this acknowledgement. Admission queues the
 same engine command while preserving the classic editor's independent draft.
 The receipt changes to `pending`, then `completed` or `rejected`; duplicate
-references never enqueue another execution. Terminal /config, /send and /cat keep
+references never enqueue another execution. Terminal /config and /send keep
 their receipt pending through the editor, transfer or asynchronous pager. Their
 final report includes deferred configuration output. The owner publishes the result
 before detaching that command's original terminal generation. Every service step

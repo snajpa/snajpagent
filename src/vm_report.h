@@ -10,6 +10,14 @@
 int snag_vm_report_text(const unsigned char *, size_t, const struct snag_wire_secrets *,
     bool (*cancel)(void *), void *, struct snag_buf *);
 bool snag_vm_report_valid(const json_t *);
+/* The caller holds the native session writer. Bytes and ordered catalogue
+ * publication are durable before the returned reference may be advertised. */
+json_t *snag_vm_report_store(int dir_fd, const char *command, const void *, size_t);
+json_t *snag_vm_report_file(int dir_fd, const char *command, const void *prefix, size_t,
+    int source_fd, bool (*cancel)(void *), void *);
+/* Read a complete catalogue prefix without acquiring or disturbing its writer. */
+json_t *snag_vm_report_catalog(struct snag_store *, const char *session,
+    bool (*cancel)(void *), void *, bool *incomplete, char *error, size_t size);
 /* Reads a private immutable report without a writer lock. Verification,
  * redaction and reflow run on the caller's background worker. */
 struct snag_vm_document *snag_vm_report_read(struct snag_store *, const char *session,

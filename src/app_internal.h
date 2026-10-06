@@ -55,7 +55,7 @@ struct app_state {
 #if SNAJPAGENT_VM
     struct snag_buf view_control_reports[7];
     unsigned int view_controls, view_control_errors;
-    bool view_command_capture;
+    struct app_view_command *view_command;
 #endif
     struct snag_pager *pager;
     char *pager_report;
