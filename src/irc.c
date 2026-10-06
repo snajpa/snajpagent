@@ -51,6 +51,15 @@ struct irc_member {
     bool op;
 };
 
+struct irc_channel {
+    struct irc_channel *next;
+    char room[SNAG_CONFIG_IRC_ROOM_MAX + 2u];
+    char topic[513u];
+    struct irc_member *members;
+    size_t member_count, member_capacity;
+    bool joined, wanted, op, names_active;
+};
+
 struct irc_replay_member {
     char endpoint[SNAG_CONFIG_IRC_ENDPOINT_MAX + 1u];
     char room[SNAG_CONFIG_IRC_ROOM_MAX + 2u];
@@ -88,9 +97,8 @@ struct irc_conn {
     bool nick_implicit;
     char room[SNAG_CONFIG_IRC_ROOM_MAX + 2u];
     char previous_room[SNAG_CONFIG_IRC_ROOM_MAX + 2u];
-    char topic[513u];
-    struct irc_member members[IRC_MEMBERS_MAX];
-    size_t member_count;
+    struct irc_channel *channels;
+    char chantypes[128u];
     size_t nick_suffix;
     uint64_t retry_at_ms;
     enum link_role role;
@@ -114,6 +122,7 @@ struct irc_conn {
     char since_stream[SNAG_ID_HEX_LEN + 1u];
     uint64_t since_sequence;
     char batch[64u];
+    char batch_room[SNAG_CONFIG_IRC_ROOM_MAX + 2u];
     char event_stream[SNAG_ID_HEX_LEN + 1u];
     uint64_t event_sequence;
     bool event_op;
@@ -124,7 +133,6 @@ struct irc_conn {
     bool op;
     bool historical;
     bool batch_query;
-    bool names_active;
 };
 
 struct irc_message {
@@ -182,6 +190,7 @@ static int trace_wire(struct irc_conn *, char, const char *, size_t);
 static int private_flush(struct irc_conn *);
 static int private_discard(struct irc_conn *, bool record);
 static bool private_ready(const struct irc_conn *);
+static void channels_free(struct irc_conn *);
 static int
 sanitize_text(char *dst, size_t size, const char *src)
 {
@@ -558,6 +567,7 @@ conn_init(struct irc_conn *conn, struct snag_irc_core *owner)
     conn->owner = owner;
     conn->fd = SNAG_SOCKET_INVALID;
     conn->line_limit = 512u;
+    memcpy(conn->chantypes, "#&", 3u);
     snag_buf_init(&conn->output, IRC_OUTPUT_MAX);
     snag_buf_init(&conn->pending, IRC_PENDING_MAX);
 }
@@ -569,6 +579,7 @@ conn_release(struct irc_conn *conn)
     if (conn->fd != SNAG_SOCKET_INVALID) (void)snag_socket_close(conn->fd);
     snag_buf_free(&conn->output);
     snag_buf_free(&conn->pending);
+    channels_free(conn);
     memset(conn, 0, sizeof(*conn));
     conn->fd = SNAG_SOCKET_INVALID;
 }
@@ -1141,25 +1152,116 @@ prefix_nick(const char *prefix, char out[SNAG_CONFIG_IRC_NICK_MAX + 1u])
     return nick_valid(out) ? out : NULL;
 }
 
-static struct irc_member *
-member_find(struct irc_conn *conn, const char *nick)
+static bool
+channel_name_valid(const struct irc_conn *link, const char *room)
 {
-    for (size_t i = 0; i < conn->member_count; ++i)
-        if (link_name_equal(conn, conn->members[i].nick, nick)) return &conn->members[i];
+    if (!room || !room[0] || !strchr(link->chantypes, room[0])) return false;
+    size_t len = strlen(room);
+    if (len < 2u || len > SNAG_CONFIG_IRC_ROOM_MAX + 1u ||
+        !snag_utf8_valid((const unsigned char *)room, len, true) || identifier_unicode_unsafe(room))
+        return false;
+    for (const unsigned char *at = (const unsigned char *)room; *at; ++at)
+        if (*at < 0x21u || *at == 0x7fu || *at == ',') return false;
+    return true;
+}
+
+static struct irc_channel *
+channel_find(const struct irc_conn *link, const char *room)
+{
+    for (struct irc_channel *channel = link->channels; channel; channel = channel->next)
+        if (link_name_equal(link, channel->room, room)) return channel;
+    return NULL;
+}
+
+static struct irc_channel *
+channel_open(struct irc_conn *link, const char *room)
+{
+    struct irc_channel *channel = channel_find(link, room);
+    if (channel) return channel;
+    if (!channel_name_valid(link, room)) {
+        errno = EINVAL;
+        return NULL;
+    }
+    channel = calloc(1u, sizeof(*channel));
+    if (!channel) return NULL;
+    (void)snag_strcpy(channel->room, sizeof(channel->room), room);
+    channel->next = link->channels;
+    link->channels = channel;
+    return channel;
+}
+
+static void
+channels_free(struct irc_conn *link)
+{
+    while (link->channels) {
+        struct irc_channel *channel = link->channels;
+        link->channels = channel->next;
+        free(channel->members);
+        free(channel);
+    }
+}
+
+static void
+channel_clear(struct irc_channel *channel)
+{
+    free(channel->members);
+    channel->members = NULL;
+    channel->member_count = channel->member_capacity = 0u;
+    channel->topic[0] = '\0';
+    channel->joined = channel->op = channel->names_active = false;
+}
+
+static void
+channels_reset(struct irc_conn *link)
+{
+    for (struct irc_channel *channel = link->channels; channel; channel = channel->next)
+        channel_clear(channel);
+    link->joined = link->op = false;
+}
+
+/* The numbered legacy destination still names the configured default room. */
+static void
+channel_default_status(struct irc_conn *link)
+{
+    const struct irc_channel *channel = channel_find(link, link->room);
+    link->joined = channel && channel->joined;
+    link->op = link->joined && channel->op;
+}
+
+static struct irc_member *
+member_find(const struct irc_conn *link, struct irc_channel *channel, const char *nick)
+{
+    for (size_t i = 0u; channel && i < channel->member_count; ++i)
+        if (link_name_equal(link, channel->members[i].nick, nick)) return &channel->members[i];
     return NULL;
 }
 
 static struct irc_member *
-member_add(struct irc_conn *conn, const char *nick, bool op)
+member_add(const struct irc_conn *link, struct irc_channel *channel, const char *nick, bool op)
 {
-    struct irc_member *member = member_find(conn, nick);
+    struct irc_member *member = member_find(link, channel, nick);
 
     if (member) {
         member->op = op || member->op;
         return member;
     }
-    if (conn->member_count >= IRC_MEMBERS_MAX || !nick_valid(nick)) return NULL;
-    member = &conn->members[conn->member_count++];
+    if (!channel || !nick_valid(nick)) {
+        errno = EINVAL;
+        return NULL;
+    }
+    if (channel->member_count == channel->member_capacity) {
+        size_t capacity = channel->member_capacity ? channel->member_capacity : 16u;
+        if (capacity > SIZE_MAX / 2u / sizeof(*channel->members)) {
+            errno = EOVERFLOW;
+            return NULL;
+        }
+        capacity *= 2u;
+        struct irc_member *members = realloc(channel->members, capacity * sizeof(*members));
+        if (!members) return NULL;
+        channel->members = members;
+        channel->member_capacity = capacity;
+    }
+    member = &channel->members[channel->member_count++];
     memset(member, 0, sizeof(*member));
     (void)snag_strcpy(member->nick, sizeof(member->nick), nick);
     member->op = op;
@@ -1167,13 +1269,13 @@ member_add(struct irc_conn *conn, const char *nick, bool op)
 }
 
 static void
-member_remove(struct irc_conn *conn, const char *nick)
+member_remove(const struct irc_conn *link, struct irc_channel *channel, const char *nick)
 {
-    for (size_t i = 0; i < conn->member_count; ++i) {
-        if (!link_name_equal(conn, conn->members[i].nick, nick)) continue;
-        memmove(&conn->members[i], &conn->members[i + 1u],
-                (conn->member_count - i - 1u) * sizeof(conn->members[0]));
-        --conn->member_count;
+    for (size_t i = 0u; channel && i < channel->member_count; ++i) {
+        if (!link_name_equal(link, channel->members[i].nick, nick)) continue;
+        memmove(&channel->members[i], &channel->members[i + 1u],
+                (channel->member_count - i - 1u) * sizeof(channel->members[0]));
+        --channel->member_count;
         return;
     }
 }
@@ -1973,12 +2075,12 @@ client_handshake(struct snag_irc_core *irc, struct irc_conn *link)
     link->cap_offered = 0u;
     link->line_limit = 512u;
     link->casemapping = SNAG_IRC_RFC1459;
+    memcpy(link->chantypes, "#&", 3u);
     link->batch[0] = '\0';
-    link->member_count = 0u;
-    link->op = false;
+    link->batch_room[0] = '\0';
+    channels_reset(link);
     link->room[0] = '\0';
     if (irc->room_explicit) (void)snag_strcpy(link->room, sizeof(link->room), irc->room);
-    link->topic[0] = '\0';
     if (queue_line(link, "CAP LS 302") < 0 ||
         queue_line(link, "NICK %s", link->nick) < 0 ||
         queue_line(link, "USER %s 0 * :" SNAJPAGENT_NAME " %s", link->nick, role_text) < 0)
@@ -2097,10 +2199,13 @@ link_emit(struct snag_irc_core *irc, struct irc_conn *link,
 {
     struct snag_irc_event event;
 
+    if (kind == SNAG_IRC_TOPIC) {
+        struct irc_channel *channel = channel_find(link, room);
+        if (channel && sanitize_text(channel->topic, sizeof(channel->topic), text) < 0) return 1;
+    }
     if (!link_emit_enabled(link)) return 0;
     event_init(irc, &event, kind, link->endpoint, room, nick, text, op, link->historical, false);
     if (timestamp_ms) event.timestamp_ms = timestamp_ms;
-    if (kind == SNAG_IRC_TOPIC && !snag_strcpy(link->topic, sizeof(link->topic), event.text)) return 1;
     if (link->event_stream[0]) {
         memcpy(event.stream, link->event_stream, sizeof(event.stream));
         event.sequence = link->event_sequence;
@@ -2281,8 +2386,10 @@ client_dispatch(struct snag_irc_core *irc, struct irc_conn *link, char *line)
     }
     if (strcmp(message.command, "005") == 0) {
         for (size_t i = 1u; i < message.param_count; ++i) {
-            if (!strncmp(message.params[i], "CASEMAPPING=", 12u)) {
-                const char *mapping = message.params[i] + 12u;
+            if (!strncmp(message.params[i], "CASEMAPPING=", 12u) ||
+                !strcmp(message.params[i], "-CASEMAPPING")) {
+                const char *mapping = message.params[i][0] == '-' ?
+                    "rfc1459" : message.params[i] + 12u;
                 enum snag_irc_casemapping next = !strcmp(mapping, "ascii") ? SNAG_IRC_ASCII :
                     !strcmp(mapping, "rfc1459") ? SNAG_IRC_RFC1459 :
                     !strcmp(mapping, "rfc1459-strict") ? SNAG_IRC_RFC1459_STRICT :
@@ -2299,8 +2406,21 @@ client_dispatch(struct snag_irc_core *irc, struct irc_conn *link, char *line)
                     link->line_limit = limit > SNAG_IRC_LINE_MAX ? SNAG_IRC_LINE_MAX : limit;
             }
             if (!strcmp(message.params[i], "-LINELEN")) link->line_limit = 512u;
+            if (!strncmp(message.params[i], "CHANTYPES=", 10u)) {
+                const char *types = message.params[i] + 10u;
+                bool valid = strlen(types) < sizeof(link->chantypes);
+                for (const unsigned char *at = (const unsigned char *)types; *at; ++at)
+                    if (*at < 0x21u || *at >= 0x7fu || *at == ',' || *at == ':') valid = false;
+                if (valid) (void)snag_strcpy(link->chantypes, sizeof(link->chantypes), types);
+            }
+            if (!strcmp(message.params[i], "-CHANTYPES")) memcpy(link->chantypes, "#&", 3u);
             if (strncmp(message.params[i], "SAJROOM=", 8u) == 0 && room_valid(message.params[i] + 8u)) {
+                struct irc_channel *previous = channel_find(link,
+                    link->room[0] ? link->room : link->previous_room);
                 (void)normalize_room(link->room, sizeof(link->room), message.params[i] + 8u);
+                if (previous && !link_name_equal(link, previous->room, link->room))
+                    previous->wanted = false;
+                channel_default_status(link);
                 if (link->previous_room[0] && strcmp(link->previous_room, link->room)) {
                     ++irc->route_revision;
                     snag_buf_reset(&link->pending);
@@ -2314,12 +2434,21 @@ client_dispatch(struct snag_irc_core *irc, struct irc_conn *link, char *line)
         return 0;
     }
     if (snag_string_in(message.command, "376 422")) {
-        if (!link->room[0]) return 0;
-        struct irc_cursor *cursor = find_cursor(irc, link->endpoint, link->room, false);
-        if (link->cap_catchup && queue_line(link, "SAJCATCHUP %s %s %llu", link->room,
-            cursor && cursor->stream[0] ? cursor->stream : "-",
-            (unsigned long long)(cursor ? cursor->sequence : 0u)) < 0) return -1;
-        return queue_line(link, "JOIN %s", link->room);
+        if (link->room[0] && !channel_find(link, link->room) &&
+            channel_name_valid(link, link->room)) {
+            struct irc_channel *channel = channel_open(link, link->room);
+            if (!channel) return -1;
+            channel->wanted = true;
+        }
+        for (struct irc_channel *channel = link->channels; channel; channel = channel->next) {
+            if (!channel->wanted || !channel_name_valid(link, channel->room)) continue;
+            struct irc_cursor *cursor = find_cursor(irc, link->endpoint, channel->room, false);
+            if (link->cap_catchup && queue_line(link, "SAJCATCHUP %s %s %llu", channel->room,
+                cursor && cursor->stream[0] ? cursor->stream : "-",
+                (unsigned long long)(cursor ? cursor->sequence : 0u)) < 0) return -1;
+            if (queue_line(link, "JOIN %s", channel->room) < 0) return -1;
+        }
+        return 0;
     }
     if (strcmp(message.command, "BATCH") == 0 && message.param_count) {
         const char *id = message.params[0];
@@ -2327,9 +2456,11 @@ client_dispatch(struct snag_irc_core *irc, struct irc_conn *link, char *line)
             nick_valid(message.params[2]);
         if (*id == '+' && message.param_count >= 3u &&
             !strcmp(message.params[1], "chathistory") &&
-            (!strcmp(message.params[2], link->room) || query)) {
+            (channel_find(link, message.params[2]) || query)) {
             if (link->batch[0] || !snag_strcpy(link->batch, sizeof(link->batch), id + 1u)) return 1;
             link->batch_query = query;
+            if (!query) (void)snag_strcpy(link->batch_room,
+                sizeof(link->batch_room), message.params[2]);
             link->replayed = 0u;
             link->history_gap = message.param_count >= 5u && !strcmp(message.params[4], "1");
         } else if (*id == '-' && link->batch[0] && !strcmp(id + 1u, link->batch)) {
@@ -2339,41 +2470,51 @@ client_dispatch(struct snag_irc_core *irc, struct irc_conn *link, char *line)
                 link->batch_query = false;
                 return 0;
             }
-            if (link_flush_pending(link) < 0) return -1;
-            return link_emit(irc, link, SNAG_IRC_HISTORY_READY, link->room, "",
+            if (link_name_equal(link, link->batch_room, link->room) &&
+                link_flush_pending(link) < 0) return -1;
+            return link_emit(irc, link, SNAG_IRC_HISTORY_READY, link->batch_room, "",
                 link->history_gap ? "history gap: earlier events are no longer retained" :
                 link->replayed ? "replayed" : "", false, timestamp_ms);
         }
         return 0;
     }
     if (strcmp(message.command, "353") == 0 && message.param_count >= 4u) {
+        struct irc_channel *channel = channel_find(link, message.params[2]);
+        if (!channel || (!channel->joined && !(link->cap_catchup && channel->wanted))) return 0;
+        if (!channel->names_active) {
+            channel->member_count = 0u;
+            channel->names_active = true;
+        }
         char *save = NULL;
-
-        if (!link->room[0] || !link_name_equal(link, message.params[2], link->room)) return 0;
-
-        if (!link->names_active) {
-            link->member_count = 0u;
-            link->names_active = true;
-        }
-        for (char *nick = strtok_r(message.params[3], " ", &save); nick;
-             nick = strtok_r(NULL, " ", &save)) {
-            bool op = *nick == '@';
-            (void)member_add(link, nick + (size_t)op, op);
+        for (char *name = strtok_r(message.params[3], " ", &save); name;
+            name = strtok_r(NULL, " ", &save)) {
+            bool op = false;
+            while (*name && strchr("~&@%+", *name)) {
+                if (strchr("~&@", *name)) op = true;
+                ++name;
+            }
+            if (nick_valid(name) && !member_add(link, channel, name, op)) return -1;
         }
         return 0;
     }
-    if (strcmp(message.command, "366") == 0 && message.param_count >= 2u &&
-        link->room[0] && link_name_equal(link, message.params[1], link->room)) {
-        struct irc_member *self = member_find(link, link->nick);
-        link->op = self && self->op;
-        link->names_active = false;
-        if (self) link->joined = true;
+    if (strcmp(message.command, "366") == 0 && message.param_count >= 2u) {
+        struct irc_channel *channel = channel_find(link, message.params[1]);
+        if (!channel || (!channel->joined && !(link->cap_catchup && channel->wanted))) return 0;
+        struct irc_member *self = member_find(link, channel, link->accepted_nick);
+        channel->op = self && self->op;
+        /* Native catch-up defers the self JOIN into history; its initial
+         * NAMES snapshot confirms the requested room's current membership. */
+        if (link->cap_catchup && channel->wanted && self) channel->joined = true;
+        channel->names_active = false;
+        channel_default_status(link);
         return 0;
     }
-    if (strcmp(message.command, "332") == 0 && message.param_count >= 3u &&
-        link->room[0] && link_name_equal(link, message.params[1], link->room))
-        return link_emit(irc, link, SNAG_IRC_TOPIC, message.params[1],
-                         "", message.params[2], false, timestamp_ms);
+    if (snag_string_in(message.command, "331 332") && message.param_count >= 2u &&
+        channel_find(link, message.params[1])) {
+        if (!strcmp(message.command, "332") && message.param_count < 3u) return 0;
+        return link_emit(irc, link, SNAG_IRC_TOPIC, message.params[1], "",
+            !strcmp(message.command, "332") ? message.params[2] : "", false, timestamp_ms);
+    }
     sender = prefix_nick(message.prefix, nick);
     if (direct && sender && link->registered) {
         enum snag_irc_event_kind kind = !strcmp(message.command, "PRIVMSG") ?
@@ -2391,8 +2532,6 @@ client_dispatch(struct snag_irc_core *irc, struct irc_conn *link, char *line)
             link->historical, timestamp_ms,
             private_source(message.tags, source) ? source : NULL, action);
     }
-    if (snag_string_in(message.command, "PRIVMSG NOTICE") && message.param_count >= 2u &&
-        (!link->room[0] || !link_name_equal(link, message.params[0], link->room))) return 0;
     if (link->historical && link->batch_query) return 0;
     if (link->historical && link->event_stream[0] && sender) {
         char kind[32u];
@@ -2406,103 +2545,148 @@ client_dispatch(struct snag_irc_core *irc, struct irc_conn *link, char *line)
             } else if (k == SNAG_IRC_NICK || k == SNAG_IRC_QUIT)
                 text = message.param_count ? message.params[0] : "";
             else if (k != SNAG_IRC_JOIN) text = message.param_count >= 2u ? message.params[1] : "";
-            return link_emit(irc, link, k, link->room, sender, text, link->event_op, timestamp_ms);
+            return link_emit(irc, link, k, link->batch_room, sender, text,
+                link->event_op, timestamp_ms);
         }
         return 1;
     }
-    if (strcmp(message.command, "JOIN") == 0 && sender) {
-        const char *room = message.param_count ? message.params[0] : link->room;
-        bool self = link_name_equal(link, sender, link->nick);
-        struct irc_member *member;
-
-        if (!link->room[0] || !link_name_equal(link, room, link->room)) return self ? 1 : 0;
-        member = member_add(link, sender, false);
-        if (self) {
-            link->joined = true;
-            (void)snag_strcpy(link->room, sizeof(link->room), room);
-            if (link_flush_pending(link) < 0) return -1;
+    if (strcmp(message.command, "JOIN") == 0 && sender && message.param_count) {
+        const char *room = message.params[0];
+        bool self = link_name_equal(link, sender, link->accepted_nick);
+        struct irc_channel *channel = channel_find(link, room);
+        if (!channel && self && channel_name_valid(link, room)) {
+            channel = channel_open(link, room);
+            if (!channel) return -1;
         }
-        return link_emit(irc, link, SNAG_IRC_JOIN, room, sender, "",
-                         member ? member->op : false, timestamp_ms);
+        if (!channel || (!channel->joined && !self)) return 0;
+        if (self) {
+            channel->joined = channel->wanted = true;
+            channel_default_status(link);
+            if (link_name_equal(link, room, link->room) && link_flush_pending(link) < 0)
+                return -1;
+        }
+        struct irc_member *member = member_add(link, channel, sender, false);
+        if (!member) return -1;
+        return link_emit(irc, link, SNAG_IRC_JOIN, channel->room, sender, "",
+            member && member->op, timestamp_ms);
     }
-    if (strcmp(message.command, "PART") == 0 && sender) {
-        const char *room = message.param_count ? message.params[0] : link->room;
-        struct irc_member *member = member_find(link, sender);
+    if (snag_string_in(message.command, "PART KICK") && sender && message.param_count) {
+        bool kick = !strcmp(message.command, "KICK");
+        if (kick && message.param_count < 2u) return 0;
+        struct irc_channel *channel = channel_find(link, message.params[0]);
+        if (!channel || !channel->joined) return 0;
+        const char *leaving = kick ? message.params[1] : sender;
+        struct irc_member *member = member_find(link, channel, leaving);
         bool op = member && member->op;
-        const char *reason = message.param_count > 1u ? message.params[1] : "";
-
-        if (!link->room[0] || !link_name_equal(link, room, link->room)) return 0;
-        member_remove(link, sender);
-        if (link_name_equal(link, sender, link->nick)) link->joined = false;
-        return link_emit(irc, link, SNAG_IRC_PART, room, sender, reason, op, timestamp_ms);
+        const char *reason = message.param_count > (kick ? 2u : 1u) ?
+            message.params[kick ? 2u : 1u] : "";
+        char description[SNAG_IRC_TEXT_MAX + 1u];
+        if (kick) {
+            size_t prefix = strlen(sender) + sizeof("kicked by : ") - 1u;
+            size_t take = utf8_chunk(reason, strlen(reason), SNAG_IRC_TEXT_MAX - prefix);
+            (void)snprintf(description, sizeof(description), "kicked by %s: %.*s",
+                sender, (int)take, reason);
+            reason = description;
+        }
+        member_remove(link, channel, leaving);
+        if (link_name_equal(link, leaving, link->accepted_nick)) {
+            channel->wanted = false;
+            channel_clear(channel);
+            channel_default_status(link);
+        }
+        return link_emit(irc, link, SNAG_IRC_PART, channel->room,
+            leaving, reason, op, timestamp_ms);
     }
     if (strcmp(message.command, "QUIT") == 0 && sender) {
-        struct irc_member *member = member_find(link, sender);
-        bool op = member && member->op;
         const char *reason = message.param_count ? message.params[0] : "";
-
         if (!link->historical && query_lifecycle(irc, link, SNAG_IRC_QUIT,
             sender, reason, timestamp_ms) < 0) return -1;
-        if (!member) return 0;
-        member_remove(link, sender);
-        return link_emit(irc, link, SNAG_IRC_QUIT, link->room, sender, reason, op, timestamp_ms);
+        for (struct irc_channel *channel = link->channels; channel; channel = channel->next) {
+            struct irc_member *member = member_find(link, channel, sender);
+            if (!member) continue;
+            bool op = member->op;
+            member_remove(link, channel, sender);
+            if (link_emit(irc, link, SNAG_IRC_QUIT, channel->room,
+                sender, reason, op, timestamp_ms) < 0) return -1;
+        }
+        return 0;
     }
     if (strcmp(message.command, "NICK") == 0 && sender && message.param_count) {
-        struct irc_member *member = member_find(link, sender);
-        bool op = member && member->op;
-        bool self = link_name_equal(link, sender, link->accepted_nick);
-
+        bool known = link_name_equal(link, sender, link->accepted_nick);
         if (!nick_valid(message.params[0]) || strcmp(sender, message.params[0]) == 0) return 0;
         if (!link->historical && query_lifecycle(irc, link, SNAG_IRC_NICK,
             sender, message.params[0], timestamp_ms) < 0) return -1;
+        for (struct irc_channel *channel = link->channels; channel; channel = channel->next)
+            if (member_find(link, channel, sender)) known = true;
         /* Either role may hear its partner's rename before the self ack. */
-        if (!link->historical && (member || self))
+        if (!link->historical && known) {
             for (size_t i = 0u; i < irc->conn_count; ++i) {
                 struct irc_conn *own = &irc->conns[i];
                 if (own->registered && link_name_equal(link, own->accepted_nick, sender)) {
-                    /* Keep a later requested name while earlier acks arrive. */
+                    /* Keep a later requested name until its own acknowledgement. */
                     if (link_name_equal(link, own->nick, own->accepted_nick))
                         (void)snag_strcpy(own->nick, sizeof(own->nick), message.params[0]);
-                    (void)snag_strcpy(own->accepted_nick, sizeof(own->accepted_nick),
-                        message.params[0]);
+                    (void)snag_strcpy(own->accepted_nick,
+                        sizeof(own->accepted_nick), message.params[0]);
                 }
             }
-        if (!member) return 0;
-        (void)snag_strcpy(member->nick, sizeof(member->nick), message.params[0]);
-        return link_emit(irc, link, SNAG_IRC_NICK, link->room, sender, message.params[0], op, timestamp_ms);
+        }
+        for (struct irc_channel *channel = link->channels; channel; channel = channel->next) {
+            struct irc_member *member = member_find(link, channel, sender);
+            if (!member) continue;
+            bool op = member->op;
+            (void)snag_strcpy(member->nick, sizeof(member->nick), message.params[0]);
+            if (link_emit(irc, link, SNAG_IRC_NICK, channel->room,
+                sender, message.params[0], op, timestamp_ms) < 0) return -1;
+        }
+        return 0;
     }
+    struct irc_channel *channel = message.param_count ?
+        channel_find(link, message.params[0]) : NULL;
     if (strcmp(message.command, "MODE") == 0 && sender && message.param_count >= 3u &&
-        link->room[0] && link_name_equal(link, message.params[0], link->room) &&
-        nick_valid(message.params[2]) &&
+        channel && channel->joined && nick_valid(message.params[2]) &&
         (strcmp(message.params[1], "+o") == 0 || strcmp(message.params[1], "-o") == 0)) {
-        struct irc_member *target = member_add(link, message.params[2], false);
-        struct irc_member *actor = member_find(link, sender);
+        struct irc_member *target = member_add(link, channel, message.params[2], false);
+        if (!target) return -1;
+        struct irc_member *actor = member_find(link, channel, sender);
         char mode_text[SNAG_CONFIG_IRC_NICK_MAX + 4u];
         if (target) target->op = message.params[1][0] == '+';
-        if (link_name_equal(link, message.params[2], link->nick))
-            link->op = message.params[1][0] == '+';
+        if (link_name_equal(link, message.params[2], link->accepted_nick))
+            channel->op = message.params[1][0] == '+';
+        channel_default_status(link);
         (void)snprintf(mode_text, sizeof(mode_text), "%s %s", message.params[1], message.params[2]);
-        return link_emit(irc, link, SNAG_IRC_MODE, message.params[0], sender,
-                         mode_text, actor && actor->op, timestamp_ms);
+        return link_emit(irc, link, SNAG_IRC_MODE, channel->room, sender,
+            mode_text, actor && actor->op, timestamp_ms);
     }
-    if (strcmp(message.command, "TOPIC") == 0 && sender && message.param_count >= 2u && link->room[0] &&
-        link_name_equal(link, message.params[0], link->room)) {
-        struct irc_member *member = member_find(link, sender);
-        return link_emit(irc, link, SNAG_IRC_TOPIC, message.params[0], sender,
-                         message.params[1], member && member->op, timestamp_ms);
+    if (strcmp(message.command, "TOPIC") == 0 && sender && message.param_count >= 2u &&
+        channel && channel->joined) {
+        struct irc_member *member = member_find(link, channel, sender);
+        return link_emit(irc, link, SNAG_IRC_TOPIC, channel->room, sender,
+            message.params[1], member && member->op, timestamp_ms);
     }
-    if ((snag_string_in(message.command, "PRIVMSG NOTICE")) && sender &&
-        message.param_count >= 2u && link->joined && link->room[0] &&
-        link_name_equal(link, message.params[0], link->room)) {
-        struct irc_member *member;
+    if (snag_string_in(message.command, "PRIVMSG NOTICE") && sender &&
+        message.param_count >= 2u && channel && channel->joined) {
         for (size_t i = 0u; i < irc->conn_count; ++i)
-            if (!link->event_stream[0] && !link->historical && irc->conns[i].joined &&
-                link_name_equal(link, sender, irc->conns[i].nick)) return 0;
+            if (!link->event_stream[0] && !link->historical && irc->conns[i].registered &&
+                link_name_equal(link, sender, irc->conns[i].accepted_nick)) return 0;
         if (strlen(message.params[1]) > SNAG_IRC_TEXT_MAX) return 1;
-        member = member_find(link, sender);
-        return link_emit(irc, link, strcmp(message.command, "NOTICE") == 0 ? SNAG_IRC_NOTICE :
-                                                     SNAG_IRC_MESSAGE,
-            message.params[0], sender, message.params[1], member && member->op, timestamp_ms);
+        struct irc_member *member = member_find(link, channel, sender);
+        return link_emit(irc, link, strcmp(message.command, "NOTICE") == 0 ?
+            SNAG_IRC_NOTICE : SNAG_IRC_MESSAGE, channel->room, sender,
+            message.params[1], member && member->op, timestamp_ms);
+    }
+    if (link->registered && message.param_count >= 3u &&
+        snag_string_in(message.command, "403 404 405 407 442 471 473 474 475 476 477 482 489") &&
+        channel_name_valid(link, message.params[1])) {
+        channel = channel_find(link, message.params[1]);
+        if (channel && !channel->joined) channel->wanted = false;
+        char description[SNAG_IRC_TEXT_MAX + 1u];
+        const char *reason = message.params[message.param_count - 1u];
+        size_t take = utf8_chunk(reason, strlen(reason), SNAG_IRC_TEXT_MAX - 4u);
+        (void)snprintf(description, sizeof(description), "%s %.*s",
+            message.command, (int)take, reason);
+        return link_emit(irc, link, SNAG_IRC_NOTICE, message.params[1], "",
+            description, false, timestamp_ms);
     }
     if (strcmp(message.command, "433") == 0 && !link->registered) return link_retry_nick(link);
     if (link->registered && link->joined &&
@@ -2511,7 +2695,7 @@ client_dispatch(struct snag_irc_core *irc, struct irc_conn *link, char *line)
         return link_emit(irc, link, SNAG_IRC_NOTICE, link->room, "",
             message.params[message.param_count - 1u], false, timestamp_ms);
     }
-    if (snag_string_in(message.command, "ERROR 403 404")) return 1;
+    if (!strcmp(message.command, "ERROR")) return 1;
     return 0;
 }
 
@@ -2527,9 +2711,7 @@ link_disconnect(struct snag_irc_core *irc, struct irc_conn *link, const char *re
     link->registered = false;
     link->joined = false;
     link->input_len = 0u;
-    link->member_count = 0u;
-    link->op = false;
-    link->names_active = false;
+    channels_reset(link);
     snag_buf_reset(&link->output);
     link->output_offset = 0u;
     link->pending_inflight = 0u;
@@ -3130,8 +3312,25 @@ snag_irc_core_send(struct snag_irc_core *irc, bool model, enum snag_irc_event_ki
 static int
 snapshot_member(struct snag_buf *out, struct snag_buf *nicks, const char *nick, bool op)
 {
-    return snag_buf_printf(out, " %s%s", op ? "@" : "", nick) < 0 ||
-           snag_buf_printf(nicks, "%s\n", nick) < 0 ? -1 : 0;
+    if (snag_buf_printf(out, " %s%s", op ? "@" : "", nick) < 0) return -1;
+    if (nicks && strlen(nick) + 1u <= nicks->max - nicks->len &&
+        snag_buf_printf(nicks, "%s\n", nick) < 0) return -1;
+    return 0;
+}
+
+static int
+snapshot_channel(const struct irc_conn *link, const struct irc_channel *channel,
+                 struct snag_buf *out, struct snag_buf *nicks)
+{
+    if (!channel || !channel->joined) return 0;
+    if (snag_buf_printf(out, "channel[%s/%s]: joined%s\ntopic[%s/%s]: %s\nmembers[%s/%s]:",
+        link->endpoint, channel->room, channel->op ? " as operator" : "",
+        link->endpoint, channel->room, channel->topic,
+        link->endpoint, channel->room) < 0) return -1;
+    for (size_t j = 0u; j < channel->member_count; ++j)
+        if (snapshot_member(out, nicks, channel->members[j].nick, channel->members[j].op) < 0)
+            return -1;
+    return snag_buf_putc(out, '\n');
 }
 
 static int
@@ -3152,18 +3351,16 @@ snapshot_network(const struct snag_irc_core *irc, struct snag_buf *out, struct s
         const struct irc_conn *agent = &irc->conns[LINK_AGENT];
 
         if (snag_buf_printf(out, "endpoint[%s]: %s%s%s\n", link->endpoint,
-                           link->joined ? "joined " : link->connecting ? "connecting" : "disconnected",
+                           link->joined ? "joined " : link->registered ? "registered" :
+                           link->connecting ? "connecting" : "disconnected",
                            link->joined ? link->room : "",
                            link->joined && link->op ? " as operator" : "") < 0) goto fail;
         if (snag_buf_printf(out, "aliases[%s]: model %s operator %s\n", link->endpoint, agent->accepted_nick,
                            link->accepted_nick) < 0) goto fail;
-        if (link->joined) {
-            if (snag_buf_printf(out, "topic[%s]: %s\nmembers[%s]:", link->endpoint, link->topic,
-                               link->endpoint) < 0) goto fail;
-            for (size_t j = 0; j < link->member_count; ++j)
-                if (snapshot_member(out, nicks, link->members[j].nick, link->members[j].op) < 0) goto fail;
-            if (snag_buf_append(out, "\n", 1u) < 0) goto fail;
-        }
+        const struct irc_channel *primary = channel_find(link, link->room);
+        if (snapshot_channel(link, primary, out, nicks) < 0) goto fail;
+        for (const struct irc_channel *channel = link->channels; channel; channel = channel->next)
+            if (channel != primary && snapshot_channel(link, channel, out, NULL) < 0) goto fail;
     }
     return 0;
 fail: return -1;
@@ -3186,9 +3383,15 @@ snag_irc_core_view(const struct snag_irc_core *irc, struct snag_irc_view *view)
     if (irc->hosting || irc->conns[LINK_AGENT].outgoing) (void)snag_strcpy(view->room, sizeof(view->room),
                         irc->hosting ? irc->room : irc->conns[0].room[0] ?
                         irc->conns[0].room : irc->conns[0].previous_room);
-    struct snag_buf text = {.max = sizeof(view->text) - 1u};
+    const char truncated[] = "\n[IRC state abbreviated; remaining members/channels omitted]\n";
+    struct snag_buf text = {.max = sizeof(view->text) - sizeof(truncated)};
     struct snag_buf nicks = {.max = sizeof(view->nicks) - 1u};
-    if (snapshot_network(irc, &text, &nicks) == 0) {
+    int snapshot = snapshot_network(irc, &text, &nicks);
+    if (snapshot < 0 && errno == EOVERFLOW) {
+        text.max = sizeof(view->text) - 1u;
+        snapshot = snag_buf_append(&text, truncated, sizeof(truncated) - 1u);
+    }
+    if (snapshot == 0) {
         memcpy(view->text, text.data, text.len);
         if (nicks.len) memcpy(view->nicks, nicks.data, nicks.len);
         rc = 0;

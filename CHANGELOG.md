@@ -4,6 +4,12 @@
 
 ## Unreleased
 
+- Track external IRC channel membership, topics and names separately on each
+  connection. Keep other channels connected after PART, KICK or a channel error;
+  rejoin retained channels after a disconnect. Retain complete live member lists
+  while abbreviating oversized status summaries. Use the advertised nickname
+  mapping when detecting agent mentions.
+
 - Add Vim private conversation buffers with separate drafts, undo histories and
   pending submissions while sharing one owner controller. `/query` opens the
   originating window; `:buffers`, `:buffer`, `:bn`/`:bp` and addressed splits

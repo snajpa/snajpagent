@@ -22,26 +22,45 @@ snag_irc_capture_scopes(const struct snag_irc_destinations *destinations,
     }
 }
 
+static unsigned char
+name_fold(enum snag_irc_casemapping mapping, unsigned char c)
+{
+    if (mapping == SNAG_IRC_CASE_UNKNOWN) return c;
+    if (c >= 'A' && c <= 'Z') c += 'a' - 'A';
+    if (mapping != SNAG_IRC_ASCII) {
+        if (c >= '[' && c <= ']') c += '{' - '[';
+        if (mapping == SNAG_IRC_RFC1459 && c == '^') c = '~';
+    }
+    return c;
+}
+
 bool
 snag_irc_name_equal(enum snag_irc_casemapping mapping, const char *a, const char *b)
 {
-    if (mapping == SNAG_IRC_CASE_UNKNOWN) return !strcmp(a, b);
     for (;; ++a, ++b) {
-        unsigned char ac = (unsigned char)*a;
-        unsigned char bc = (unsigned char)*b;
-        if (ac >= 'A' && ac <= 'Z') ac += 'a' - 'A';
-        if (bc >= 'A' && bc <= 'Z') bc += 'a' - 'A';
-        if (mapping != SNAG_IRC_ASCII) {
-            if (ac >= '[' && ac <= ']') ac += '{' - '[';
-            if (bc >= '[' && bc <= ']') bc += '{' - '[';
-            if (mapping == SNAG_IRC_RFC1459) {
-                if (ac == '^') ac = '~';
-                if (bc == '^') bc = '~';
-            }
-        }
+        unsigned char ac = name_fold(mapping, (unsigned char)*a);
+        unsigned char bc = name_fold(mapping, (unsigned char)*b);
         if (ac != bc) return false;
         if (!ac) return true;
     }
+}
+
+bool
+snag_irc_name_mentioned(enum snag_irc_casemapping mapping, const char *text, const char *nick)
+{
+    size_t len = strlen(nick);
+    if (!len) return false;
+    for (size_t i = 0u; text[i]; ++i) {
+        if (i && ((unsigned char)text[i - 1u] >= 0x80u ||
+            snag_irc_nick_char((unsigned char)text[i - 1u]))) continue;
+        size_t j = 0u;
+        while (j < len && text[i + j] &&
+            name_fold(mapping, (unsigned char)text[i + j]) ==
+            name_fold(mapping, (unsigned char)nick[j])) ++j;
+        if (j == len && (unsigned char)text[i + len] < 0x80u &&
+            !snag_irc_nick_char((unsigned char)text[i + len])) return true;
+    }
+    return false;
 }
 
 const char *

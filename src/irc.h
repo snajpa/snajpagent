@@ -78,6 +78,7 @@ struct snag_irc_scopes {
 
 void snag_irc_capture_scopes(const struct snag_irc_destinations *, struct snag_irc_scopes *);
 bool snag_irc_name_equal(enum snag_irc_casemapping, const char *, const char *);
+bool snag_irc_name_mentioned(enum snag_irc_casemapping, const char *, const char *);
 const struct snag_irc_scope *snag_irc_scope_resolve(const struct snag_irc_scopes *,
     uint32_t, const char *, char *, size_t);
 

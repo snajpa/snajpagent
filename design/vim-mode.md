@@ -6,6 +6,16 @@ Status: implementation in progress, October 6, 2026. The original inspection
 was against `7a70d81d336ef6f14d91ef944b1226c8efa65636`. The checkpoint below
 distinguishes implemented components from the complete intended behavior.
 
+External channel-state checkpoint: each client identity keeps separate channel
+membership, names and topics. JOIN/PART/KICK are channel-scoped; NICK/QUIT update
+all common channels. Advertised CHANTYPES and CASEMAPPING govern names, and agent
+mentions use the agent link's mapping. Requested membership survives network
+reconnect, while explicit leave/kick clears it. Native catch-up's initial NAMES
+confirmation remains supported. Live member lists grow as needed; the existing
+bounded owner status summary abbreviates overflow without disconnecting. Channel
+errors remain visible on their target and preserve unrelated traffic. Named
+channel actions, durable channel routes and their CLI/VM integration are next.
+
 Conversation frontend checkpoint: version8 workspace snapshots retain exact
 query routes per window and separate draft/editor/pending state per conversation,
 with one owner connection per session. Earlier flat rollout snapshots remain
@@ -45,7 +55,7 @@ its hovered window while retaining keyboard focus. Separator drags use the same
 geometry as layout placement and save proportional sizes; stale drags cannot
 retain pointers to edited trees. SGR button-motion reporting is runtime-toggleable
 with :set mouse/nomouse and is restored through terminal handoffs.
-Clipboard publication and the remaining workspace/IRC/remote delivery are pending.
+Clipboard publication is implemented below; complete workspace/IRC/remote delivery remains active.
 
 Implementation checkpoint: asynchronous pager ownership and retained rendering
 are implemented in this branch. Held-pager regressions cover IRC delivery and
@@ -802,15 +812,16 @@ query resolution with model tools. UI admission captures connection scopes and
 known peer handles before queued commands can observe later NICK/QUIT events.
 `/query` without operands lists existing operator-query selectors. Explicit
 addresses stay within the current session owner. Channel address commands,
-channel actions, a richer ambiguity picker and VM connection/channel/query
-buffers remain next. The semantic owner now accepts frozen operator-query
+channel actions, a richer ambiguity picker and VM connection/channel buffers
+remain next. The semantic owner now accepts frozen operator-query
 routes, independent revisioned drafts and scoped commands. Request IDs bind
 route and text; private admission clears only its exact draft revision. Query
 selection returns to the requesting frontend while preserving classic focus.
 The compact query catalogue excludes bodies, and incoming metadata stays current
-while the semantic controller is attached. Vim still needs per-conversation
-composers, reader filters and window selection using this owner capability. External multi-channel state and labeled responses are
-unfinished. The nickname mapping helper follows the
+while the semantic controller is attached. Vim now provides per-conversation
+composers, reader filters and origin-window selection. External receive state
+tracks multiple joined channels; scoped channel actions/routes and labeled
+responses remain unfinished. The nickname mapping helper follows the
 [IRC CASEMAPPING definitions](https://modern.ircdocs.horse/#casemapping-parameter).
 
 This expands the original UI-only storage scope. Implement compatible readers,

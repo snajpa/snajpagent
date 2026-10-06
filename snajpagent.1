@@ -773,6 +773,14 @@ names/who, nick and mode changes, liveness, and bounded history, not the entire
 IRC protocol. Clients negotiate supported capabilities before completing
 registration and use the advertised room, or the explicitly configured room
 on an external server. A connection without a selected room remains connected.
+Each server-confirmed channel retains its own membership, topic and names.
+PART and KICK remove membership in that channel; channel errors appear with their
+target and preserve the connection. Reconnect rejoins channels still retained
+by the running client, excluding those explicitly left or kicked from.
+Numbered destinations continue to select the configured default room.
+Oversized state summaries are labelled abbreviated; live membership remains
+complete. Nickname matching and agent mentions follow the endpoint's advertised
+CASEMAPPING. An unknown mapping uses exact spelling.
 .PP
 Registered external IRC clients can send private messages and notices to each
 other through the built-in server, including after leaving its room. Delivery
@@ -793,7 +801,7 @@ keeps its draft while this process runs. Drafts and queued submissions retain
 their original recipient across nickname changes; a stale send is rejected and
 an entirely unsent draft is restored. Resume restores query tabs; use /history
 for retained messages. Use /query NICK to open or select an operator query.
-Vim conversation buffers remain under development.
+Vim private buffers and their controls are described under Private conversation windows.
 .PP
 The development query transport retains a separate send result for each chunk.
 It records pending before transmission, written after the complete frame, and

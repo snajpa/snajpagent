@@ -1065,7 +1065,8 @@ snag_irc_mentions_agent(const struct snag_irc *irc, const char *endpoint, const 
 
         if (owner->view.joined && (strcmp(endpoint, "local") == 0 ||
             snag_irc_endpoint_equal(endpoint, owner->endpoint))
-            && snag_irc_nick_mentioned(text, owner->view.model)) return true;
+            && snag_irc_name_mentioned(owner->view.casemapping[SNAG_IRC_AGENT],
+                text, owner->view.model)) return true;
     }
     return false;
 }
