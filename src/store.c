@@ -3171,7 +3171,7 @@ int
 snag_store_legacy_cursor_at(struct snag_session *session, int64_t offset,
     struct snag_journal_cursor *out, char *error, size_t error_size)
 {
-    if (!session || !out || session->log_fd < 0 || session->pending_log ||
+    if (!session || !out || (!session->pending_log && session->log_fd < 0) ||
         offset < 0 || offset > session->log_end || !session->next_seq)
         return snag_fail(error, error_size, EINVAL, "invalid legacy cursor boundary");
     struct snag_journal_cursor cursor = {.offset = offset};
@@ -3193,7 +3193,7 @@ snag_store_legacy_cursor_at(struct snag_session *session, int64_t offset,
         json_t *record = read_record_at(session, offset, &end);
         if (!record) return snag_fail(error, error_size, errno ? errno : EINVAL,
             "cannot read legacy cursor record");
-        /* Offline replay already verified this envelope and chain. Its derived
+        /* The caller already verified this envelope and chain. Its derived
          * checkpoint pointer may have been discarded; it is not cursor authority. */
         const char *prev = snag_json_string(record, "prev_sha256");
         int rc = snag_json_integer_u64(record, "seq", &cursor.next_seq);

@@ -3113,6 +3113,25 @@ through bounded joint admission; provisional native creation, stopped conversion
 and native checkpoint-suffix dispatch remain unfinished. New session creation
 continues to use JSONL until those factory steps are integrated.
 
+### Prepared native seed
+
+The internal `snag_store_seed_binary_session` stage reads a prepared session's
+verified in-memory event journal and writes typed native batches to a separate
+empty private journal under its caller-held exclusive lock. It creates no JSONL
+file. Original event times and semantic payloads survive the existing typed
+producer's reference construction; provisional voice/process presentation cursors
+resolve against the same verified memory source. The stage computes the native
+index frontier as it writes, syncs the journal, and independently compares native
+semantic digests and core state with the prepared owner before binding.
+
+The resulting owner has committed provider capture, payload origins, producer
+provenance and an I/O writer at the same acknowledged boundary. The original
+prepared state, callbacks and bytes remain unchanged. Failure leaves target
+descriptor/path ownership unchanged; partial journal bytes remain unpublished
+for the caller to discard. Checkpoint-slot setup, index attachment and directory
+publication belong to the factory. The stage remains test-linked while ordinary
+creation continues through the JSONL factory.
+
 ### Existing native session opening
 
 The ordinary exclusive opener prefers `journal.bin`; only ENOENT selects legacy

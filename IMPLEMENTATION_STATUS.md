@@ -152,8 +152,12 @@ their original events and completed tool outcomes.
 Development source opens existing native journals through verified checkpoints
 and a bounded suffix. Routed IRC records retain connection/conversation identity,
 generation, membership, actions, delivery receipts and captured replies. Native
-checkpoints retain the IRC directory through canonical event references. New
-session creation still uses the legacy log while native creation and conversion
+checkpoints retain the IRC directory through canonical event references.
+
+Prepared-session native seeding verifies the provisional in-memory journal and
+its native semantic projection before adopting provider capture and writer
+provenance into a separate owner. The original prepared session stays intact.
+Session creation still uses the legacy log while native creation and conversion
 are being integrated.
 
 snajpagent is a pre-1.0 terminal coding agent. One interactive session supports

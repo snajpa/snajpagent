@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Add prepared-session native seeding with verified semantic state, committed
+  provider capture and writer provenance. Seeding reads provisional bytes in
+  memory and preserves their original owner; default creation remains JSONL.
+
 - Encode routed IRC observations in a typed native record, preserving connection
   generation, conversation identity, actions, delivery state, membership and
   captured reply targets. Historical source projection accepts both IRC event

@@ -4,6 +4,7 @@
 #include "store_binary_import.h"
 #include "store_binary_producer.h"
 #include "fs.h"
+#include "context.h"
 #include "irc.h"
 #include "store_binary_legacy.h"
 #include "store_internal.h"
@@ -4041,9 +4042,115 @@ test_voice_adoption(struct snag_store *store, const char *cwd, unsigned int bad)
     snag_session_close(&original);
 }
 
+static void
+test_prepared_native_seed(const char *cwd)
+{
+    char error[512];
+    for (unsigned int variant = 0u; variant < 11u; ++variant) {
+        struct snag_session prepared;
+        struct snag_session target;
+        snag_session_init(&prepared);
+        snag_session_init(&target);
+        assert(!snag_session_prepare(&prepared, cwd, "default", "fixture", "default",
+            error, sizeof(error)));
+        commit_data(&prepared, "model_selection_changed", json_pack("{s:s,s:s,s:s,s:s,s:s,s:s}",
+            "old_provider", "default", "new_provider", "default",
+            "old_model", "fixture", "new_model", "selected",
+            "old_effort", "default", "new_effort", "low"));
+        struct snag_journal_cursor cursor;
+        assert(!snag_store_legacy_cursor_at(&prepared, 0, &cursor, error, sizeof(error)));
+        assert(cursor.next_seq == 1u);
+        assert(!snag_store_legacy_cursor_at(&prepared, prepared.log_end, &cursor,
+            error, sizeof(error)) && cursor.next_seq == prepared.next_seq);
+        assert(snag_store_legacy_cursor_at(&prepared, 1, &cursor, error, sizeof(error)) < 0);
+        if (variant == 1u || variant == 6u) {
+            json_t *instructions = json_array();
+            assert(instructions);
+            size_t length = SNAG_BINARY_BATCH_TARGET;
+            char *large = variant == 6u ? malloc(length + 1u) : NULL;
+            if (variant == 6u) {
+                assert(large);
+                memset(large, 'a', length);
+                large[length] = '\0';
+            }
+            commit_data(&prepared, "input_received", input_data(large ? large :
+                "pending native input", false, instructions));
+            free(large);
+            json_decref(instructions);
+        }
+        target.log_fd = temporary_fd();
+        target.lock_fd = temporary_fd();
+        int log_fd = target.log_fd;
+        int lock_fd = target.lock_fd;
+        json_t *before = snag_checkpoint_state_encode(&prepared);
+        assert(before);
+        struct snag_buf pending = {.max = SIZE_MAX};
+        assert(!snag_buf_append(&pending, prepared.pending_log->data, prepared.pending_log->len));
+        void *callback = prepared.on_commit_opaque;
+        uint64_t sequence = prepared.next_seq;
+        if (variant == 2u) ++prepared.next_seq;
+        if (variant == 3u) prepared.pending_log->data[0] ^= 1u;
+        if (variant == 4u) target.lock_fd = target.log_fd;
+        if (variant == 5u) {
+            snag_strcpy(prepared.default_model, sizeof(prepared.default_model), "unrecorded model");
+        }
+        if (variant == 7u) --prepared.pending_log->len;
+        if (variant == 8u) assert(!snag_write_full(target.log_fd, "x", 1u));
+        if (variant == 9u) prepared.snapshot_read_only = true;
+        if (variant == 10u) target.snapshot_read_only = true;
+        int rc = snag_store_seed_binary_session(&prepared, &target, error, sizeof(error));
+        if (variant < 2u || variant == 6u) {
+            if (rc < 0) fprintf(stderr, "prepared native seed: %s (%d)\n", error, errno);
+            assert(!rc && target.binary && target.log_fd == log_fd && target.lock_fd == lock_fd);
+            same_core_state(&prepared, &target);
+            const json_t *recent;
+            const json_t *history;
+            assert(!snag_context_capture_seam(&target, &recent, &history));
+            assert(json_is_array(recent) && json_is_array(history));
+            struct snag_binary_anchor boundary;
+            struct snag_binary_index_tree tree;
+            struct snag_binary_checkpoint_sources sources = {0};
+            assert(!snag_session_binary_checkpoint_capture(&target, &boundary, &tree, &sources,
+                error, sizeof(error)));
+            assert(boundary.next_seq == sequence && tree.count == sequence - 1u);
+            assert(sources.input == (variant == 1u || variant == 6u ? sequence - 1u : 0u));
+            snag_binary_checkpoint_sources_free(&sources);
+            commit_data(&target, "model_selection_changed", json_pack("{s:s,s:s,s:s,s:s,s:s,s:s}",
+                "old_provider", "default", "new_provider", "default",
+                "old_model", "selected", "new_model", "after seed",
+                "old_effort", "low", "new_effort", "high"));
+            assert(target.next_seq == sequence + 1u && !strcmp(target.default_model, "after seed"));
+        } else {
+            assert(rc < 0 && !target.binary && !target.id[0] && target.next_seq == 1u);
+            assert(target.log_fd == log_fd && target.lock_fd == (variant == 4u ? log_fd : lock_fd));
+            assert(fcntl(log_fd, F_GETFD) >= 0 && fcntl(lock_fd, F_GETFD) >= 0);
+        }
+        if (variant == 2u) prepared.next_seq = sequence;
+        if (variant == 3u) prepared.pending_log->data[0] ^= 1u;
+        if (variant == 4u) target.lock_fd = lock_fd;
+        if (variant == 5u) {
+            snag_strcpy(prepared.default_model, sizeof(prepared.default_model), "selected");
+        }
+        if (variant == 7u) ++prepared.pending_log->len;
+        if (variant == 9u) prepared.snapshot_read_only = false;
+        if (variant == 10u) target.snapshot_read_only = false;
+        json_t *after = snag_checkpoint_state_encode(&prepared);
+        assert(after && json_equal(before, after));
+        assert(prepared.on_commit_opaque == callback && prepared.pending_log &&
+            prepared.pending_log->len == pending.len &&
+            !memcmp(prepared.pending_log->data, pending.data, pending.len));
+        json_decref(before);
+        json_decref(after);
+        snag_buf_free(&pending);
+        snag_session_close(&target);
+        snag_session_close(&prepared);
+    }
+}
+
 void
 test_store_binary_replay(struct snag_store *store, const char *cwd)
 {
+    test_prepared_native_seed(cwd);
     test_producer_candidate_ownership();
     for (unsigned int variant = 0u; variant < 13u; ++variant) {
         test_live_result_coordinates(SNAG_BINARY_TOOL_FINISHED, variant);

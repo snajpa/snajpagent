@@ -4,6 +4,8 @@
 #include "store_binary_legacy.h"
 #include "store_binary_wire.h"
 #include "store_binary_producer.h"
+#include "store_binary_context.h"
+#include "store_binary_index.h"
 
 #include <errno.h>
 #include <stdlib.h>
@@ -19,6 +21,9 @@ struct import_writer {
     struct snag_buf payload;
     struct snag_binary_producer producer;
     struct snag_sha256 semantic;
+    struct snag_buf *prepared_log;
+    struct snag_binary_identity identity;
+    struct snag_binary_index_tree tree;
     uint64_t source_end, turns;
 };
 
@@ -78,6 +83,9 @@ flush_batch(struct import_writer *writer)
     struct snag_binary_anchor next;
     int rc = snag_binary_batch_encode(&bytes, &writer->anchor, writer->records,
         (uint32_t)writer->count, writer->turns, &next);
+    if (rc == 0 && writer->prepared_log)
+        rc = snag_binary_index_tree_append_batch(NULL, &writer->tree, &writer->identity,
+            &writer->anchor, &next, bytes.data, bytes.len);
     struct snag_buf wire = {.max = SNAG_BINARY_WIRE_BATCH_MAX};
     if (rc == 0) rc = snag_binary_wire_encode(&wire, bytes.data, bytes.len);
     if (rc == 0) rc = snag_write_full(writer->fd, wire.data, wire.len);
@@ -149,6 +157,7 @@ reference_voice(struct import_writer *writer, const struct snag_session *state,
     if (value->begin_offset >= (uint64_t)state->log_end) return snag_errno(EINVAL);
     struct snag_session view = *state;
     view.log_fd = writer->source_fd;
+    view.pending_log = writer->prepared_log;
     struct snag_journal_cursor cursor;
     if (snag_store_legacy_cursor_at(&view, (int64_t)value->begin_offset, &cursor,
         error, error_size) < 0) return -1;
@@ -174,6 +183,7 @@ reference_result(struct import_writer *writer, const struct snag_session *state,
     if (ref->log_end > writer->source_end) return snag_errno(EINVAL);
     struct snag_session view = *state;
     view.log_fd = writer->source_fd;
+    view.pending_log = writer->prepared_log;
     if (ref->log_end) {
         struct snag_journal_cursor first, end;
         if (snag_store_legacy_cursor_at(&view, (int64_t)ref->log_start, &first,
@@ -201,6 +211,7 @@ import_event(void *opaque, const struct snag_session *state, uint64_t sequence,
             snag_write_full(writer->fd, header, sizeof(header)) < 0) {
             goto fail;
         }
+        writer->identity = identity;
     }
     snag_buf_reset(&writer->producer.field);
     struct snag_binary_record record = {.version = 1u, .timestamp_ms = state->last_time_ms};
@@ -360,6 +371,98 @@ out:
         free(writer.records);
         snag_buf_free(&writer.payload);
         errno = code;
+    }
+    return rc;
+}
+
+int
+snag_store_seed_binary_session(struct snag_session *prepared, struct snag_session *target,
+    char *error, size_t error_size)
+{
+    if (!prepared || !target || prepared == target || !prepared->pending_log ||
+        prepared->binary || prepared->snapshot_read_only || prepared->dir_fd >= 0 ||
+        prepared->log_fd >= 0 ||
+        prepared->lock_fd >= 0 || !snag_hex_is_lower(prepared->id, SNAG_ID_HEX_LEN) ||
+        target->pending_log || target->binary || target->snapshot_read_only || target->id[0] ||
+        target->on_commit || target->on_commit_free || target->on_commit_opaque ||
+        target->on_checkpoint || target->checkpoint_state || target->checkpoint_context ||
+        target->log_fd < 0 || target->lock_fd < 0 || target->next_seq != 1u) {
+        return snag_fail(error, error_size, EINVAL, "invalid prepared native seed owners");
+    }
+    snag_file_info output;
+    snag_file_info lock;
+    if (snag_fstat(target->log_fd, &output) < 0 || !S_ISREG(output.st_mode) ||
+        output.st_size != 0 || snag_fstat(target->lock_fd, &lock) < 0 ||
+        !S_ISREG(lock.st_mode) ||
+        (output.st_dev == lock.st_dev && output.st_ino == lock.st_ino)) {
+        return snag_fail(error, error_size, EINVAL,
+            "native seed requires a separate empty journal");
+    }
+    if (snag_seek(target->log_fd, 0, SEEK_SET) < 0)
+        return snag_fail(error, error_size, errno, "cannot position native seed journal");
+    struct import_writer writer = {.fd = target->log_fd, .source_fd = -1,
+        .prepared_log = prepared->pending_log, .payload = {.max = SNAG_MAX_EVENT_LINE},
+        .producer.field = {.max = SNAG_MAX_EVENT_LINE}};
+    snag_sha256_init(&writer.semantic);
+    struct snag_session source;
+    struct snag_session candidate;
+    struct snag_session verified;
+    snag_session_init(&source);
+    snag_session_init(&candidate);
+    snag_session_init(&verified);
+    memcpy(source.id, prepared->id, sizeof(source.id));
+    source.log_fd = target->log_fd;
+    source.lock_fd = target->lock_fd;
+    struct snag_binary_recovery recovery;
+    struct snag_binary_checkpoint_sources sources = {0};
+    int rc = snag_session_each_event(prepared, import_event, &writer, error, error_size);
+    if (rc < 0) goto done;
+    if (writer.anchor.next_seq + writer.count != prepared->next_seq ||
+        writer.source_end != (uint64_t)prepared->log_end || !writer.source_end) {
+        rc = snag_fail(error, error_size, EINVAL, "native seed does not cover prepared events");
+        goto done;
+    }
+    if (flush_batch(&writer) < 0 || snag_sync_file(target->log_fd) < 0) {
+        rc = snag_fail(error, error_size, errno, "cannot finish native seed journal");
+        goto done;
+    }
+    struct snag_sha256 semantic;
+    snag_sha256_init(&semantic);
+    rc = snag_store_reconcile_binary(&source, &verified, semantic_event, &semantic,
+        &recovery, NULL, error, error_size);
+    if (rc < 0) goto done;
+    unsigned char expected[32];
+    unsigned char actual[32];
+    snag_sha256_final(&writer.semantic, expected);
+    snag_sha256_final(&semantic, actual);
+    if (recovery.incomplete_tail_bytes || memcmp(expected, actual, sizeof(actual)) ||
+        compare_core(prepared, &verified) < 0) {
+        rc = snag_fail(error, error_size, EINVAL, "native seed differs from its prepared source");
+        goto done;
+    }
+    rc = snag_store_reconcile_binary_context(&source, &candidate, &recovery, &sources,
+        NULL, error, error_size);
+    if (rc < 0) goto done;
+    candidate.log_fd = target->log_fd;
+    candidate.lock_fd = target->lock_fd;
+    rc = snag_session_bind_binary(&candidate, &writer.identity, &recovery.verified,
+        &writer.tree, &writer.producer, &sources, NULL, error, error_size);
+    if (rc < 0) goto done;
+    candidate.dir_fd = target->dir_fd;
+    candidate.dir_path = target->dir_path;
+    *target = candidate;
+    snag_session_init(&candidate);
+done:
+    {
+        int saved = errno;
+        candidate.log_fd = candidate.lock_fd = -1;
+        snag_session_close(&candidate);
+        snag_session_close(&verified);
+        snag_binary_checkpoint_sources_free(&sources);
+        snag_binary_producer_free(&writer.producer);
+        free(writer.records);
+        snag_buf_free(&writer.payload);
+        errno = saved;
     }
     return rc;
 }

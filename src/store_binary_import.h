@@ -41,4 +41,15 @@ int snag_store_import_binary_journal(struct snag_session *source, int destinatio
     struct snag_session *restored, struct snag_binary_import_result *result,
     char *error, size_t error_size);
 
+/* Seed a new native writer from a strictly verified in-memory prepared journal.
+ * prepared stays unchanged, including its callbacks and pending bytes. target
+ * holds a separate empty private journal and its exclusive lock; it has no state
+ * or callback owner yet. Only success adopts native state, provider capture and
+ * writer provenance into target, retaining its descriptor/path ownership.
+ * Failure leaves target ownership unchanged and may leave unpublished journal
+ * bytes for the caller to discard. No JSONL file, checkpoint or index is created;
+ * the caller establishes publication and directory durability separately. */
+int snag_store_seed_binary_session(struct snag_session *prepared, struct snag_session *target,
+    char *error, size_t error_size);
+
 #endif
