@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Append derived native history-index entries through the journal I/O owner after
+  durable commits, checking the independently established forest frontier and
+  reporting cache failures separately from canonical acknowledgements.
+
 - Read native IRC context sources through acknowledged checkpoint custody and
   bounded canonical point projection, including typed checkpoint lookup markers.
 

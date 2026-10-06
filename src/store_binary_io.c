@@ -43,6 +43,9 @@ struct snag_binary_io {
     struct snag_binary_publication_result published;
     enum io_phase checkpoint_phase;
     struct snag_binary_publication *checkpoint;
+    int index_fd;
+    struct snag_binary_identity identity;
+    struct snag_binary_index_tree index_tree;
 };
 
 static int
@@ -225,6 +228,54 @@ commit_request(struct snag_binary_io *io, struct io_request *request)
     return io->ops.sync_file(io->ops.opaque, io->fd);
 }
 
+static int
+append_index(struct snag_binary_io *io, const struct io_request *request)
+{
+    struct snag_binary_index_tree next = io->index_tree, loaded;
+    struct snag_buf bytes = {.max = SNAG_BINARY_INDEX_TREE_BATCH_MAX};
+    unsigned char root[32];
+    int64_t end;
+    snag_file_info info;
+    int rc = -1;
+    if (snag_binary_index_end(next.count, &end) < 0 ||
+        snag_fstat(io->index_fd, &info) < 0) goto done;
+    if (!S_ISREG(info.st_mode) || info.st_size != end) {
+        errno = ESTALE;
+        goto done;
+    }
+    if (snag_binary_index_tree_root(&next, root) < 0) goto done;
+    int available = snag_binary_index_tree_load(io->index_fd, &io->identity,
+        next.count, root, &loaded);
+    if (available) {
+        if (available > 0) errno = ESTALE;
+        goto done;
+    }
+    if (snag_binary_index_tree_append_batch(&bytes, &next, &io->identity,
+            &request->before, &request->after, request->decoded.data,
+            request->decoded.len) < 0) goto done;
+    int64_t position = snag_seek(io->index_fd, end, SEEK_SET);
+    if (position < 0) goto done;
+    if (position != end) {
+        errno = ESTALE;
+        goto done;
+    }
+    if (io->ops.write_full(io->ops.opaque, io->index_fd, bytes.data, bytes.len) < 0 ||
+        snag_binary_index_end(next.count, &end) < 0 ||
+        snag_fstat(io->index_fd, &info) < 0) goto done;
+    if (info.st_size != end) {
+        errno = ESTALE;
+        goto done;
+    }
+    io->index_tree = next;
+    rc = 0;
+done:
+    {
+        int code = errno;
+        snag_buf_free(&bytes);
+        return rc ? snag_errno(code ? code : EIO) : 0;
+    }
+}
+
 static void *
 run_owner(void *opaque)
 {
@@ -249,7 +300,11 @@ run_owner(void *opaque)
         pthread_mutex_unlock(&io->mutex);
         int rc = commit_request(io, request);
         int error = rc < 0 ? (errno ? errno : EIO) : 0;
+        int index_error = 0;
+        if (!error && io->index_fd >= 0 && !io->result.index_error &&
+            append_index(io, request) < 0) index_error = errno ? errno : EIO;
         pthread_mutex_lock(&io->mutex);
+        if (index_error) io->result.index_error = index_error;
         io->result.error = error;
         io->result.retryable = error && request->attempted_io && !request->retried;
         if (!error) {
@@ -284,6 +339,7 @@ snag_binary_io_start(int fd, const struct snag_binary_anchor *boundary,
     if (!io) return NULL;
     io->fd = fd;
     io->directory = -1;
+    io->index_fd = -1;
     io->wake[0] = io->wake[1] = SNAG_WAKE_INVALID;
     io->result.written = io->result.durable = *boundary;
     if (ops) io->ops = *ops;
@@ -320,6 +376,26 @@ failed:
     free(io);
     errno = rc;
     return NULL;
+}
+
+int
+snag_binary_io_index_setup(struct snag_binary_io *io, int fd,
+    const struct snag_binary_identity *identity, const struct snag_binary_index_tree *tree)
+{
+    if (!io || fd < 0 || fd == io->fd || !identity || !tree) return snag_errno(EINVAL);
+    unsigned char root[32];
+    if (snag_binary_index_tree_root(tree, root) < 0) return -1;
+    pthread_mutex_lock(&io->mutex);
+    int error = io->index_fd >= 0 || io->phase != IO_IDLE ||
+        io->checkpoint_phase != IO_IDLE ? EBUSY :
+        tree->count != io->result.durable.next_seq - 1u ? ESTALE : 0;
+    if (!error) {
+        io->index_fd = fd;
+        io->identity = *identity;
+        io->index_tree = *tree;
+    }
+    pthread_mutex_unlock(&io->mutex);
+    return error ? snag_errno(error) : 0;
 }
 
 static int

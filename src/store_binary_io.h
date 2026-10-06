@@ -26,6 +26,8 @@ struct snag_binary_io_result {
     int error;
     bool retryable;
     bool checkpoint_receipt;
+    /* Sticky derived-cache failure; canonical acknowledgement remains successful. */
+    int index_error;
 };
 
 /* Caller owns a private regular read/write journal and its exclusive lock.
@@ -38,6 +40,17 @@ struct snag_binary_io_result {
  * caller prerequisites; this worker supplies no semantic authority. */
 struct snag_binary_io *snag_binary_io_start(int fd,
     const struct snag_binary_anchor *boundary, const struct snag_binary_io_ops *ops);
+
+/* Configure once while both streams are idle. Caller supplies a private regular
+ * derived index, canonical identity and independently established logical tree
+ * for the owner's durable prefix. No descriptor I/O occurs during setup. The
+ * owner verifies the header, exact extent and forest root before each append;
+ * this grants no authority to cache claims. Descriptor custody continues until
+ * owner close; neither setup nor close closes it. Index bytes follow journal
+ * durability without an independent sync. Failure disables further cache writes
+ * and appears in index_error, preserving canonical ACK/retry/effect semantics. */
+int snag_binary_io_index_setup(struct snag_binary_io *, int fd,
+    const struct snag_binary_identity *, const struct snag_binary_index_tree *);
 
 /* Copy one explicitly grouped transaction into immutable worker-owned inputs.
  * The framing limits bound this copy. Only one unacknowledged engine transaction

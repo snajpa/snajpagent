@@ -2227,6 +2227,25 @@ turn-start hint over a caller-bounded prefix. Missing or torn index bytes mean
 unavailable indexing; a negative search never proves that canonical history is
 absent. The positive result still requires canonical resolution.
 
+### Native I/O owner index appends
+
+The native owner accepts a borrowed private index descriptor together with the
+canonical journal identity and independently established logical frontier. Setup
+copies fixed-size custody while both request streams are idle. Before appending,
+the owner checks the cache's exact extent, identity and logarithmic forest root
+against that frontier. Each append derives entries from the exact decoded batch
+after successful journal synchronization. Grouped transactions and checkpoint
+receipts use this same path; index writes require no separate durability barrier.
+
+Cache errors remain separate from the canonical result. The completion retains
+its successful journal acknowledgement and reports a sticky `index_error`, then
+disables further cache writes for that owner. A partial cache write, wrong identity,
+stale extent or corrupt forest therefore leaves semantic admission and the journal
+retry contract intact. A journal sync failure writes no cache entries; its exact
+retry appends them only after successful synchronization. Missing derived bytes
+remain unavailable lookup acceleration. Native lifecycle descriptor attachment,
+cursor dispatch and resumable cache rebuilding are separate runtime integration.
+
 ### Checkpoint access metadata
 
 The version-1 access block stores a fixed frontier and sorted canonical locations

@@ -37,6 +37,10 @@ struct probe {
     size_t syncs;
     size_t bytes;
     atomic_uint effects;
+    bool index_enabled;
+    int index_fd;
+    unsigned int index_failures;
+    size_t index_writes;
 };
 
 static void
@@ -66,6 +70,14 @@ probe_write(void *opaque, int fd, const void *data, size_t size)
     struct probe *probe = opaque;
     check_owner(probe);
     ++probe->writes;
+    if (probe->index_enabled && fd == probe->index_fd) {
+        ++probe->index_writes;
+        if (probe->index_failures) {
+            --probe->index_failures;
+            assert(!snag_write_full(fd, data, size / 2u));
+            return snag_errno(EIO);
+        }
+    }
     atomic_store(&probe->write_entered, true);
     if (probe->block_write) wait_flag(&probe->release_write);
     if (probe->partial_failures) {
@@ -1163,9 +1175,119 @@ test_native_clone_failure(void)
     snag_session_close(&session); /* Owning process storage was never freed by the failed clone. */
 }
 
+static void
+test_index_cache(unsigned int variant)
+{
+    struct snag_binary_anchor before;
+    int fd = journal_fd(&before);
+    struct snag_binary_identity identity = {.created_ms = 42u};
+    identity.id[0] = 17u;
+    char *path = snag_path_join(getenv("TMPDIR") ? getenv("TMPDIR") : "/tmp",
+        "snag-index-io-XXXXXX");
+    assert(path);
+    int index = mkstemp(path);
+    assert(index >= 0 && !unlink(path));
+    free(path);
+    unsigned char header[SNAG_BINARY_INDEX_HEADER_SIZE];
+    snag_binary_index_header_encode(header, &identity);
+    if (variant == 2u) header[0] ^= 1u;
+    if (variant == 6u) {
+        struct snag_binary_identity other = identity;
+        other.id[0] ^= 1u;
+        snag_binary_index_header_encode(header, &other);
+    }
+    assert(!snag_write_full(index, header, sizeof(header)));
+    if (variant == 3u) assert(!snag_write_full(index, "x", 1u));
+    struct snag_binary_index_tree tree = {0};
+    struct probe probe = {.index_enabled = true, .index_fd = index,
+        .index_failures = variant == 1u, .sync_failures = variant == 4u};
+    struct snag_binary_io *io = start_owner(fd, &before, &probe);
+    assert(snag_binary_io_index_setup(io, fd, &identity, &tree) < 0 && errno == EINVAL);
+    struct snag_binary_index_tree stale = {.count = 1u};
+    assert(snag_binary_io_index_setup(io, index, &identity, &stale) < 0 && errno == ESTALE);
+    int64_t setup_position = snag_seek(index, 0, SEEK_CUR);
+    assert(!snag_binary_io_index_setup(io, index, &identity, &tree));
+    assert(snag_seek(index, 0, SEEK_CUR) == setup_position);
+    assert(snag_binary_io_index_setup(io, index, &identity, &tree) < 0 && errno == EBUSY);
+    struct snag_binary_io_result result;
+    struct snag_buf committed = {0};
+    int expected = variant == 1u ? EIO : variant == 2u || variant == 6u ? EINVAL :
+        variant == 3u ? ESTALE : 0;
+    for (unsigned int turn = 0u; turn < 2u; ++turn) {
+        struct snag_binary_record items[2] = {record("indexed canonical payload"),
+            record("grouped canonical payload")};
+        uint32_t count = turn ? 1u : 2u;
+        assert(!snag_binary_io_submit(io, items, count, 0u));
+        if (variant == 4u && !turn) {
+            assert(await_batch(io, &result, &committed) < 0 && errno == EIO);
+            assert(!probe.index_writes && !result.index_error);
+            snag_file_info info;
+            assert(!snag_fstat(index, &info) && info.st_size == sizeof(header));
+            assert(!snag_binary_io_retry(io));
+        }
+        assert(!await_batch(io, &result, &committed));
+        assert(!result.error && !result.retryable && result.index_error == expected);
+        assert(!snag_binary_index_tree_append_batch(NULL, &tree, &identity, &before,
+            &result.durable, committed.data, committed.len));
+        before = result.durable;
+        assert(probe.syncs == turn + 1u + (variant == 4u));
+        if (!expected) {
+            unsigned char root[32];
+            assert(!snag_binary_index_tree_root(&tree, root));
+            struct snag_binary_index_entry entry;
+            int64_t position = snag_seek(index, 0, SEEK_CUR);
+            assert(!snag_binary_index_read_verified(index, &identity, tree.count,
+                root, tree.count, &entry));
+            assert(snag_seek(index, 0, SEEK_CUR) == position);
+            struct snag_buf scratch = {.max = SNAG_BINARY_BATCH_MAX};
+            struct snag_binary_record read;
+            assert(!snag_binary_index_load_record(fd, &before, &entry, &scratch, &read));
+            assert(read.size == items[count - 1u].size &&
+                !memcmp(read.payload, items[count - 1u].payload, read.size));
+            snag_buf_free(&scratch);
+        }
+    }
+    assert(probe.index_writes == (variant == 1u ? 1u : expected ? 0u : 2u));
+    assert(!snag_binary_io_close(io));
+    if (!expected) {
+        /* Resume only from independently known canonical state/frontier. */
+        if (variant == 5u) {
+            int64_t end;
+            assert(!snag_binary_index_end(tree.count, &end));
+            int64_t offset = end - 1;
+            unsigned char value;
+            assert(snag_pread(index, &value, 1u, offset) == 1);
+            value ^= 1u;
+            assert(snag_seek(index, offset, SEEK_SET) == offset);
+            assert(!snag_write_full(index, &value, 1u));
+        }
+        io = start_owner(fd, &before, &probe);
+        assert(!snag_binary_io_index_setup(io, index, &identity, &tree));
+        struct snag_binary_record item = record("resumed canonical payload");
+        assert(!snag_binary_io_submit(io, &item, 1u, 0u));
+        assert(!await_batch(io, &result, &committed));
+        assert(!result.error && result.index_error == (variant == 5u ? EINVAL : 0));
+        assert(!snag_binary_index_tree_append_batch(NULL, &tree, &identity, &before,
+            &result.durable, committed.data, committed.len));
+        if (variant != 5u) {
+            unsigned char root[32];
+            assert(!snag_binary_index_tree_root(&tree, root));
+            for (uint64_t seq = 1u; seq <= tree.count; ++seq) {
+                struct snag_binary_index_entry entry;
+                assert(!snag_binary_index_read_verified(index, &identity, tree.count,
+                    root, seq, &entry));
+            }
+        }
+        assert(!snag_binary_io_close(io));
+    }
+    snag_buf_free(&committed);
+    assert(!close(index) && !close(fd));
+}
+
 void
 test_store_binary_io(void)
 {
+    for (unsigned int variant = 0u; variant < 7u; ++variant) test_index_cache(variant);
     test_native_checkpoint_origins();
     test_native_session_ack();
     test_native_session_retry(true, 1u);
