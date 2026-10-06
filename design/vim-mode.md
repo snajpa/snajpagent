@@ -6,6 +6,12 @@ Status: implementation in progress, October 6, 2026. The original inspection
 was against `7a70d81d336ef6f14d91ef944b1226c8efa65636`. The checkpoint below
 distinguishes implemented components from the complete intended behavior.
 
+File-transfer checkpoint: /receive and /attach use the existing whole-terminal
+transaction and return on completion or cancellation. /attachments and /detach
+run as native reports. The owner retains files for its next private submission;
+IRC conversation submissions leave them pending. Workspace splits and retained
+output return after the exclusive transaction.
+
 Cross-session command checkpoint: qualified /query, /msg, /notice, /chat, /join,
 /part and /connections resolve a saved session name or unique ID prefix in the
 workspace. The addressed session must already have a controller in this workspace;
@@ -16,7 +22,8 @@ selection and :recover return there. New typing and focus changes suppress autom
 selection. Successful /msg and /notice preserve the window. Version12 snapshots
 retain forwarded submissions and read versions1–11; resume queries their receipts
 without resubmission. Owner admission recovery remains separate from IRC chunk
-delivery receipts.
+delivery receipts. Older owners accept exact saved names and full session IDs;
+abbreviated IDs in forwarded slash commands require the updated owner parser.
 
 Activity checkpoint: :buffers groups stable rows by session, endpoint and kind,
 with unread counts, connection state, draft/pending flags and local message time.

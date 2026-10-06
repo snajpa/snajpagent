@@ -1,19 +1,23 @@
 # SPDX-License-Identifier: GPL-2.0-only
 """Capability-gated terminal transactions preserve both prompt drafts."""
 
+import hashlib
 import json
 import os
 import select
+import shutil
 import signal
 import struct
 import subprocess
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
 from unittest import mock
 
 import test_vm_control as control
+import test_vm_clipboard as clipboard
 from test_vm_frontend import rollout
 
 
@@ -232,6 +236,181 @@ input()
         self.assertEqual((self.root / 'Downloads' / path.name).read_bytes(), path.read_bytes())
         for protocol in (b'#DATA:', b'#CFG:', b'::TRZSZ:TRANSFER:'):
             self.assertNotIn(protocol, child.output)
+        child.finish('close')
+        self.assertEqual(self.inputs(), [])
+        self.owner.status('detached')
+
+    def transfer_terminal(self, name, mux=None, mosh=False, ssh=False):
+        transport = [str(control.frontend.BINARY), 'remote']
+        env = {}
+        if mux == 'screen':
+            sockets = self.root / 'screens'
+            sockets.mkdir(mode=0o700)
+            env['SCREENDIR'] = str(sockets)
+            config = self.root / 'screenrc'
+            config.write_text('startup_message off\naltscreen on\n')
+            multiplexer = ['screen', '-U', '-c', str(config), '-S', 'transfer']
+            self.addCleanup(subprocess.run, ['screen', '-S', 'transfer', '-X', 'quit'],
+                            env={**os.environ, **env}, stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL, timeout=5)
+        elif mux == 'tmux':
+            tmux = ['tmux', '-S', str(self.root / 'transfer-tmux.sock')]
+            multiplexer = [*tmux, '-f', '/dev/null', 'new-session', '-s', 'transfer', '--']
+            self.addCleanup(subprocess.run, [*tmux, 'kill-server'],
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
+        else:
+            multiplexer = []
+        if ssh:
+            transport.extend(clipboard.ClipboardTests.ssh_transport(self, env))
+        if mosh:
+            transport.extend(['mosh', '--local', '--predict=never', '127.0.0.1'])
+        transport.extend(multiplexer)
+        return self.start('-N', name, columns=200, transport=transport, extra_env=env)
+
+    def receive_and_send(self, background=False, **transport):
+        path = self.root / 'notes file.txt'
+        body = 'résumé workspace upload\n' * 300
+        path.write_text(body)
+        requests = []
+        previous = self.owner.provider.runtime_handler
+        started, release, answered = threading.Event(), threading.Event(), threading.Event()
+        self.addCleanup(release.set)
+
+        def record(handler, request, sequence):
+            requests.append(request)
+            if background and len(requests) == 1:
+                started.set()
+                release.wait(15)
+            result = previous(handler, request, sequence)
+            answered.set()
+            return result
+
+        self.owner.provider.runtime_handler = record
+        child = self.transfer_terminal('receive', **transport)
+        child.command('attach ' + self.owner.sid)
+        child.repaint_until(b'ATTACHED')
+        child.command('vsp')
+        if background:
+            child.write(b'iwork during upload\r')
+            self.assertTrue(started.wait(5))
+            child.write(b'\x1b:workspace save\r')
+            child.repaint_until(b'Workspace saved')
+        child.write(b'i/receive\r')
+        child.until(b'Select local file', 10)
+        if background:
+            release.set()
+            self.assertTrue(answered.wait(5))
+        child.output.clear()
+        child.write((str(path) + '\r').encode())
+        child.until(b'1 unsent attachment(s)', 15)
+        self.assertEqual(len(self.inputs()), int(background))
+        self.assertEqual(len(requests), int(background))
+        child.repaint_until(b'REPORT')
+        self.assertEqual(self.owner.identity(), self.owner.owner_identity)
+        child.repaint_until(b'1 unsent attachment(s)')
+        child.command('history')
+        if background:
+            self.owner.wait_event('turn_completed')
+            child.repaint_until(b'semantic-answer')
+        child.output.clear()
+        child.write(('i/send ' + str(path) + '\r').encode())
+        child.until(b'Client acknowledged the file digest and final EXIT.', 15)
+        child.repaint_until(b'REPORT')
+        self.assertEqual((self.root / 'Downloads' / path.name).read_bytes(), body.encode())
+        child.command('history')
+        child.write(b'iinspect uploaded notes\r')
+        deadline = time.monotonic() + 10
+        while len(requests) < 1 + int(background) and time.monotonic() < deadline:
+            child.read(.05)
+        self.assertEqual(len(self.inputs()), 1 + int(background))
+        self.assertEqual(len(requests), 1 + int(background))
+        part, = self.inputs()[-1]['data']['content']
+        self.assertEqual(part['type'], 'file')
+        asset = part['asset']
+        self.assertEqual(asset['sha256'], hashlib.sha256(body.encode()).hexdigest())
+        self.assertEqual((self.owner.directory / 'media' / asset['id']).read_bytes(), body.encode())
+        self.assertIn('asset:' + asset['id'], json.dumps(requests[-1]))
+        self.assertIn('inspect uploaded notes', json.dumps(requests[-1]))
+        child.write(b'\x1b:workspace save\r')
+        child.repaint_until(b'Workspace saved')
+        child.command('close')
+        child.finish('close')
+        self.owner.status('detached')
+
+    def test_receive_through_remote_keeps_attachment_for_workspace_submit(self):
+        self.receive_and_send(background=True)
+
+    @unittest.skipUnless(shutil.which('screen'), 'GNU Screen unavailable')
+    def test_transfers_with_workspace_in_screen(self):
+        self.receive_and_send(mux='screen')
+
+    @unittest.skipUnless(shutil.which('tmux'), 'tmux unavailable')
+    def test_transfers_with_workspace_in_tmux(self):
+        self.receive_and_send(mux='tmux')
+
+    @unittest.skipUnless(shutil.which('mosh') and shutil.which('mosh-server') and
+                         shutil.which('screen'), 'Mosh/GNU Screen unavailable')
+    def test_transfers_with_workspace_in_mosh_screen(self):
+        self.receive_and_send(mosh=True, mux='screen')
+
+    @unittest.skipUnless(shutil.which('mosh') and shutil.which('mosh-server') and
+                         shutil.which('tmux'), 'Mosh/tmux unavailable')
+    def test_transfers_with_workspace_in_mosh_tmux(self):
+        self.receive_and_send(mosh=True, mux='tmux')
+
+    @unittest.skipUnless(shutil.which('sshd') and shutil.which('ssh-keygen') and
+                         shutil.which('screen') and os.getuid() == 0 and
+                         Path('/run/sshd').is_dir(), 'isolated OpenSSH/Screen requires root')
+    def test_transfers_with_workspace_in_ssh_screen(self):
+        self.receive_and_send(ssh=True, mux='screen')
+
+    @unittest.skipUnless(shutil.which('sshd') and shutil.which('ssh-keygen') and
+                         shutil.which('tmux') and os.getuid() == 0 and
+                         Path('/run/sshd').is_dir(), 'isolated OpenSSH/tmux requires root')
+    def test_transfers_with_workspace_in_ssh_tmux(self):
+        self.receive_and_send(ssh=True, mux='tmux')
+
+    def test_cancelled_upload_returns_without_attachments_or_model_input(self):
+        child = self.start('-N', 'cancel-receive',
+                           transport=[str(control.frontend.BINARY), 'remote'])
+        child.command('attach ' + self.owner.sid)
+        child.repaint_until(b'ATTACHED')
+        child.write(b'i/receive\r')
+        child.until(b'Select local file', 10)
+        child.output.clear()
+        child.write(b'\x03')
+        self.return_to_workspace(child)
+        child.repaint_until(b'REPORT')
+        child.repaint_until(b'Upload cancelled; no files attached.')
+        child.command('history')
+        child.write(b'i/attachments\r')
+        child.repaint_until(b'0 unsent attachment(s)')
+        child.finish('close')
+        self.assertEqual(self.inputs(), [])
+        self.owner.status('detached')
+
+    def test_attach_list_remove_and_failure_return_to_workspace(self):
+        path = self.root / 'local notes.txt'
+        path.write_text('local attachment\n')
+        child = self.attached('local-files')
+        child.write(('i/attach ' + str(path) + '\r').encode())
+        child.repaint_until(b'REPORT')
+        child.repaint_until(b'1 unsent attachment(s)')
+        for command, count in (('/attachments', 1), ('/detach all', 0)):
+            child.command('history')
+            child.repaint_until(b'ATTACHED')
+            child.write(('i' + command + '\r').encode())
+            self.wait_snapshot(lambda rows:
+                rollout(next(iter(rows.values()))['state']['buffers'][0])['pending'] is None and
+                any(report['command'] == command for report in
+                    next(iter(rows.values()))['state']['buffers'][0]['reports']))
+            child.repaint_until(b'REPORT')
+            child.repaint_until(str(count).encode() + b' unsent attachment(s)')
+            self.assertNotIn(b'\x1b[?1049l', child.output)
+        child.command('history')
+        child.write(('i/attach ' + str(self.root / 'missing.txt') + '\r').encode())
+        child.repaint_until(b'REPORT')
+        child.repaint_until(b'No such file')
         child.finish('close')
         self.assertEqual(self.inputs(), [])
         self.owner.status('detached')

@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Return to the Vim workspace after upload selection, file preparation or
+  cancellation. /attachments and /detach show retained reports in the workspace;
+  received files stay with their session until the next private submission.
+
 - Route qualified Vim IRC commands to another attached session's owner. Preserve
   that owner's draft and return selection or recovery to the originating composer.
   A session controlled elsewhere remains read-only. Version 12 workspaces retain

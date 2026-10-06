@@ -136,9 +136,10 @@ For tmux, replace the final command with `tmux attach`. During transfers, keep
 the agent pane focused with one writable client viewing it.
 
 Drop one regular file into the POSIX composer, or use `/receive`. Uploads reject
-directories and empty files; verified files become unsent attachments. Review
-`/attachments` before submitting. `/send PATH` and model `send_file` download
-files, including empty files and `asset:ID` references. Transfers show progress
+directories and empty files; verified files become unsent attachments. In a Vim
+rollout composer, `/receive` and `/attach PATH` return to the workspace after file
+preparation. Review `/attachments` before submitting. `/send PATH` and model
+`send_file` download files, including empty files and `asset:ID` references. Transfers show progress
 and saved-path receipts, then restore the draft. Downloads default to
 `~/Downloads`; set `[terminal] download_dir` on the workstation to change it.
 

@@ -2086,7 +2086,7 @@ Inspect history, then use
 with an empty draft to recover its text if needed. A refused submission also
 remains recoverable. Each conversation retains its own pending submission and
 frozen recipient. A nick or connection change preserves the old draft and rejects
-sending it to a different recipient. File attachments remain under development.
+sending it to a different recipient.
 .SS "IRC connection and conversation windows"
 Open a known connection with :buffer SESSION/ENDPOINT/ or :vsp SESSION/ENDPOINT/.
 The trailing slash selects status and server notices for both local identities.
@@ -2118,6 +2118,8 @@ Qualified /msg, /notice, /chat, /join, /part and /connections commands use the s
 dispatch. The workspace sends through the addressed owner's existing controller
 and preserves its draft. A session controlled elsewhere remains read-only;
 refusal keeps the command in the originating composer.
+Older running owners accept exact saved names and full session IDs; abbreviated
+IDs in forwarded slash commands require the updated owner parser.
 .PP
 Selections and command output return to the originating window while it remains
 focused with an empty next draft. New typing preserves that window and its draft.
@@ -2221,11 +2223,21 @@ requests produce one completion report for the operation they share.
 when the owner selects priority service. With a supporting owner, commands needing
 terminal interaction automatically open its whole terminal and execute there.
 Both the workspace draft and the classic prompt's existing draft remain intact.
-/config and /send return automatically after their editor or transfer
-finishes. Their receipt remains pending until completion; /config's report includes
-the deferred configuration result. A replacement terminal attachment remains open
+/config, /send, /receive and /attach return automatically after their editor,
+transfer or file preparation finishes. Their receipt remains pending until
+completion; /config's report includes the deferred configuration result.
+A replacement terminal attachment remains open
 when an earlier command finishes. Other terminal commands use /s d to return.
 New typing in the workspace before the handoff remains saved in its draft.
+.PP
+Use /receive in a rollout composer to upload workstation files through
+snajpagent remote, or /attach PATH for a file on the owner's host. The whole
+terminal handles selection and transfer, then returns to the workspace on
+completion or cancellation. /attachments lists pending files in a retained
+report; /detach N|all removes them. Files remain with that session's rollout
+until its next private prompt, queue or steer is admitted. IRC messages and
+transfer commands do not submit them to the model. Older owners may require
+/s d after file preparation to return to the workspace.
 .PP
 The handoff references the already submitted command and live owner instance;
 repeated references cannot execute it twice. A command recovered from a saved

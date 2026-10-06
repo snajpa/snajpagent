@@ -3628,6 +3628,7 @@ view_command_native(const char *line)
     verb[length] = '\0';
     if (snag_string_in(verb, "/help /? /status /history /model /fast /effort /context "
         "/state /goal /steering /banner /configure /compact /yield /verbose /cat "
+        "/attachments /detach "
         "/query /msg /notice /me /chat /join /part /names /topic /connections /whois /nick"))
         return true;
     if (strcmp(verb, "/session") && strcmp(verb, "/s")) return false;
@@ -3711,7 +3712,8 @@ view_terminal_finish(struct app_state *app)
 static bool
 view_terminal_finite(const char *line)
 {
-    return !strcmp(line, "/config") ||
+    return !strcmp(line, "/config") || !strcmp(line, "/receive") ||
+        (!strncmp(line, "/attach", 7u) && (!line[7] || isspace((unsigned char)line[7]))) ||
         (!strncmp(line, "/send", 5u) && (!line[5] || isspace((unsigned char)line[5]))) ||
         (!strncmp(line, "/cat", 4u) && (!line[4] || isspace((unsigned char)line[4])));
 }
