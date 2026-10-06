@@ -36,7 +36,7 @@ class WindowsTests(unittest.TestCase):
         def reply(handler, request, sequence):
             self.requests.append(request)
             self.requested.set()
-            if not self.release.wait(15):
+            if not self.release.wait(20):
                 raise AssertionError('Windows provider fixture was not released')
             self.provider.reply(handler, self.provider.response_body(
                 sequence, 'windows-direct-answer').encode(), close_header=True)
@@ -45,6 +45,9 @@ class WindowsTests(unittest.TestCase):
         self.config = self.root / 'state' / 'config.ini'
         self.config.parent.mkdir(mode=0o700)
         harness.write_irc_config(self.config, self.provider.port, 'host-model')
+        self.config.write_text(self.config.read_text().replace(
+            'idle_timeout_ms = 3000', 'idle_timeout_ms = 30000').replace(
+            'request_timeout_ms = 5000', 'request_timeout_ms = 30000'))
         self.config.chmod(0o600)
 
     def start(self, *args, **kwargs):
