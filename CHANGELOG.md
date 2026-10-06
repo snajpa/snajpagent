@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Fix Windows directory rescans through a held handle, allowing named Vim
+  workspaces to check name uniqueness and save their state.
+
 - Wire a single Windows live agent into the Vim workspace through a private
   semantic channel. Closing panes retains its engine and drafts; explicit quit
   ends it before workspace exit. Unsupported detach and multi-agent controls

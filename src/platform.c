@@ -1008,6 +1008,8 @@ open_read(int dirfd, const char *path, bool relative, bool directory, bool secur
     if (!path || ((!root && (path[0] == '/' || path[0] == '\\')) || strchr(path + root, ':')))
         return snag_errno(EINVAL);
     if (nt_path_init(&name, dirfd, path, relative) < 0) goto out;
+    /* NT reopens the held directory with an empty name; a literal dot is invalid. */
+    if (name.parent && !strcmp(path, ".")) name.name.Length = 0;
     /* DOS aliases such as C:\\NUL can translate outside a filesystem root. */
     if (!filesystem_path(&name)) {
         errno = EACCES;

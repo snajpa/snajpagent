@@ -1521,12 +1521,13 @@ test_private_directory(void)
         strcat(long_name, "-\xf0\x9f\x98\x80");
         int file = snag_create_private_at(fd, long_name, true);
         assert(file >= 0 && close(file) == 0);
-        int read_fd = snag_open_read(renamed, true);
+        int read_fd = snag_open_read_at(fd, ".", true);
         struct snag_directory *dir = snag_directory_open(read_fd);
         const char *entry;
         size_t found = 0u;
         assert(read_fd >= 0 && dir);
         assert(snag_fstat(read_fd, &path_info) == 0);
+        assert(path_info.st_dev == root_info.st_dev && path_info.st_ino == root_info.st_ino);
         assert(snag_lstat_at(read_fd, long_name, &path_info) == 0);
         errno = 0;
         while ((entry = snag_directory_next(dir)))
@@ -1539,8 +1540,10 @@ test_private_directory(void)
         errno = 0;
         assert(snag_fstat(read_fd, &path_info) == -1 && errno == EBADF);
         assert(snag_unlink_at(fd, long_name, false) == 0);
-        read_fd = snag_open_read_security_at(-1, renamed, true);
+        read_fd = snag_open_read_security_at(fd, ".", true);
         assert(read_fd >= 0 && snag_fd_privacy(read_fd, &privacy) == 0 && privacy.private_access);
+        assert(snag_fstat(read_fd, &path_info) == 0);
+        assert(path_info.st_dev == root_info.st_dev && path_info.st_ino == root_info.st_ino);
         dir = snag_directory_open(read_fd);
         assert(dir);
         while ((entry = snag_directory_next(dir))) assert(!strcmp(entry, ".") || !strcmp(entry, ".."));
