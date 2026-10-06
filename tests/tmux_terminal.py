@@ -6009,7 +6009,8 @@ def run_provider_retry_input_cases(binary, root, provider, environment):
                 deadline = time.monotonic() + 5.0
                 while True:
                     _, events = read_events(terminal.dotdir)
-                    if any(e["data"].get("text") == text for e in event_list(events, "irc_event")):
+                    if any(e["data"].get("text") == text for e in events
+                           if e["type"] in ("irc_event", "irc_event_v2")):
                         break
                     assert time.monotonic() < deadline, "chat was not admitted during retry"
                     time.sleep(0.02)
@@ -9027,7 +9028,8 @@ def run_capacity_handoff_cases(binary, root, modes=("queue", "chat", "cancel")):
                 peer.sendall(b"PRIVMSG #lab :fresh-capacity-input\r\n")
                 deadline = time.monotonic() + 3
                 while not any(e["data"].get("text") == "fresh-capacity-input"
-                              for e in event_list(read_events(state)[1], "irc_event")):
+                              for e in read_events(state)[1]
+                              if e["type"] in ("irc_event", "irc_event_v2")):
                     assert time.monotonic() < deadline, "chat was not admitted"
                     time.sleep(0.02)
             else:
