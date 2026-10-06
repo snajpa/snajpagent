@@ -2593,7 +2593,9 @@ Selection is accepted during active work and changes the next response in that
 turn, then later turns until changed. An in-progress streaming request is
 interrupted; the new provider request receives the retained conversation and
 tool results, including still-running command handles. It persists across
-session resume without a save suffix. The final save suffix also
+session resume without a save suffix. After a credential error, selecting another
+configured provider continues the same unfinished turn using that provider's login.
+The final save suffix also
 works with numbered rows. A bare model name uses the highest recognized effort
 in its configured or cached effort list (or the first unrecognized effort if none are ranked),
 then the cached default, then the currently selected effort. This interactive
@@ -5920,8 +5922,13 @@ This includes compaction failures and exhausted preparation-attempt budgets.
 Provider capacity exhaustion, protocol errors, context recovery failures and
 local prerequisites do not pause or block the goal.  Recovery preserves
 completed tool effects, partial output and unsettled command handles.  Unsafe
-local state must be reconciled before new tools are admitted.  Credentials are
-read again on each attempt; next-turn model settings keep their normal boundary.
+local state must be reconciled before new tools are admitted. Credentials come
+from the owner's retained snapshot. After correcting a stored login, use
+.B /configure
+to reload it. To continue the unfinished turn with another configured provider,
+use
+.BR "/model PROVIDER/MODEL/EFFORT" .
+This also works after resuming a session whose previous provider has invalid credentials.
 Explicit pause, cancellation and exit remain available during backoff.
 An exited process resumes work when its saved session is reopened.
 .PP

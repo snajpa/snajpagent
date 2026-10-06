@@ -82,13 +82,13 @@ class Fixture:
         path.chmod(0o600)
         return path
 
-    def start(self, *args, codex=False):
+    def start(self, *args, codex=False, ready=b'READY>'):
         child = RemoteProcess(self.root, [self.binary, '--dotdir', str(self.state),
             '--no-listen', '--no-client', *args], wrapped=None, winsize=(30, 200),
             extra_env={'EDITOR': 'false', 'SNAJPAGENT_TEST_OPENAI_BASE': self.base if codex else None,
                        'SNAJPAGENT_TEST_AUTH_BASE': self.base, 'NO_PROXY': '127.0.0.1', 'no_proxy': '127.0.0.1'})
         self.children.append(child)
-        child.until(b'READY>', 10)
+        child.until(ready, 10)
         return child
 
     def send(self, child, command, marker):

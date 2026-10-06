@@ -4895,16 +4895,6 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
         report_message = "active prompt could not be displayed";
         goto output_fail;
     }
-    /* prepare_turn_settings owns the identity, including after the reducer
-     * clears its active-turn fields at completion. */
-#ifndef SNAJPAGENT_TEST_FIXTURE
-    if (snag_auth_read(app->store.root_fd, app->turn_provider, false, NULL,
-                      &credential, snag_app_active_input_pump, app, error, sizeof(error)) < 0) {
-        (void)app_error(app, error);
-        snag_credential_clear(&credential);
-        return 2;
-    }
-#endif
     if (app_textf(app, SNAG_UI_RUNTIME, "turn › %s started%s · model=%s · effort=%s · cwd=%s",
             turn_id, read_only ? " (read-only)" : "", app->turn_model,
             app->turn_effort, app->session.cwd) < 0) {
@@ -4946,10 +4936,16 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
         }
         if (!app->execute && ensure_turn_prompt(app) < 0) goto fail;
 #ifndef SNAJPAGENT_TEST_FIXTURE
-        if (reconfigured || selected_new_model) {
+        /* Recovery must apply /model and /configure before checking credentials;
+         * the old provider's failed snapshot must not prevent either remedy. */
+        bool initial_auth = credential.len == 0u;
+        if (initial_auth || reconfigured || selected_new_model) {
             snag_credential_clear(&credential);
             if (snag_auth_read(app->store.root_fd, app->turn_provider, false, NULL,
-                    &credential, snag_app_active_input_pump, app, error, sizeof(error)) < 0) goto fail;
+                    &credential, snag_app_active_input_pump, app, error, sizeof(error)) < 0) {
+                result = initial_auth ? 2 : 3;
+                goto report;
+            }
         }
 #endif
 

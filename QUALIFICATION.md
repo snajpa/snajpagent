@@ -9,6 +9,12 @@ runs each cover different behavior. Report the actual scope of each result.
 The [2026-10-01 regression audit](design/regression-audit-20261001.md) maps the
 32 audited development commits to their permanent tests and records coverage additions.
 
+Credential-recovery PTY fixtures exercise the production authentication path with
+local HTTP providers. They verify switching away from an invalid endpoint-bound
+login during a failed turn and after session resume, plus explicit credential
+reload. Each case asserts one completed original turn, the selected provider's
+actual request and credential, and no duplicate prompt or credential in the journal.
+
 ## Development Vim workspace
 
 The optional workspace and classic conversation tabs are development features.

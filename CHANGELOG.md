@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Apply a pending provider/model switch before checking credentials when
+  continuing a failed or resumed turn. A broken login for the previous provider
+  no longer prevents recovery through another configured provider.
+
 - Recognize Windows Escape key events even when the console supplies no
   translated character, including leaving the Vim composer's Insert mode.
 
