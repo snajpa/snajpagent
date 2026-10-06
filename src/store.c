@@ -4179,6 +4179,23 @@ snag_session_bind_binary(struct snag_session *session, const struct snag_binary_
 }
 
 int
+snag_session_binary_projection_read(const struct snag_session *session, uint64_t sequence,
+    const char **type, json_t **out, char *error, size_t error_size)
+{
+    if (!session || !type || !out)
+        return snag_fail(error, error_size, EINVAL, "invalid native source lookup");
+    const struct snag_binary_session *binary = session->binary;
+    if (!binary) return snag_fail(error, error_size, ENOTSUP, "session is not native");
+    if (binary->faulted) return snag_fail(error, error_size, ESTALE, "native writer is faulted");
+    if (!binary->checkpoint_configured)
+        return snag_fail(error, error_size, ENOTSUP, "native source custody is not installed");
+    if (snag_binary_checkpoint_projection_read(session->log_fd, &binary->boundary,
+            &binary->available, sequence, type, out) < 0)
+        return snag_errorf(error, error_size, "cannot read native source: %s", strerror(errno));
+    return 0;
+}
+
+int
 snag_session_binary_checkpoint_capture(const struct snag_session *session,
     struct snag_binary_anchor *boundary, struct snag_binary_index_tree *tree,
     struct snag_binary_checkpoint_sources *sources, char *error, size_t error_size)

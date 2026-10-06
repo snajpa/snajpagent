@@ -2924,6 +2924,13 @@ semantic transactions reach their original ACK/retry path; retained checkpoint
 receipts finish through checkpoint retry before ordinary admission. Fixture
 bindings acquire checkpoint custody explicitly through the existing setup API.
 
+Live native source projection reads against the acknowledged boundary and installed
+working-set table. Later candidate bytes stay outside that view, missing older
+locations remain unavailable, and point reads preserve descriptor position. IRC
+context source lookup dispatches there before the legacy reverse walker. Typed
+checkpoint receipts hydrate as lookup-only checkpoint markers; the existing exact
+adjacent IRC identity repair remains separate from reducer/provider admission.
+
 Close drains owned publication or journal work before descriptor/lock teardown
 while releasing no abandoned candidate effects. It preserves provisional files
 and already-canonical receipts for recovery. Ordinary native creation/open/resume

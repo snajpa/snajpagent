@@ -1,7 +1,9 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "fixture_store_binary.h"
-#include "store_binary.h"
 #include "fs.h"
+#include "json.h"
+#include "store_binary.h"
+#include "store_binary_checkpoint.h"
 
 #include <assert.h>
 #include <errno.h>
@@ -1002,6 +1004,46 @@ test_checkpoint_frames(const struct snag_binary_identity *identity,
     free(large);
 }
 
+static void
+test_marker_projection(const unsigned char header[SNAG_BINARY_HEADER_SIZE])
+{
+    struct snag_binary_identity identity;
+    struct snag_binary_anchor before, after;
+    assert(!snag_binary_header_decode(header, SNAG_BINARY_HEADER_SIZE, &identity, &before));
+    struct snag_binary_legacy_checkpoint marker = {.start = 17u, .end = 29u};
+    struct snag_buf payload = {.max = SNAG_BINARY_LEGACY_CHECKPOINT_SIZE};
+    struct snag_buf raw = {.max = SNAG_BINARY_BATCH_MAX}, wire = {.max = SIZE_MAX};
+    assert(!snag_binary_legacy_checkpoint_encode(&payload, &marker));
+    struct snag_binary_record record = {.kind = SNAG_BINARY_LEGACY_CHECKPOINT,
+        .version = 1u, .flags = SNAG_BINARY_RECORD_OPTIONAL,
+        .timestamp_ms = identity.created_ms, .payload = payload.data, .size = payload.len};
+    assert(!snag_binary_batch_encode(&raw, &before, &record, 1u, 0u, &after));
+    assert(!snag_binary_wire_encode(&wire, raw.data, raw.len));
+    const char *tmp = getenv("TMPDIR");
+    char *path = snag_path_join(tmp ? tmp : "/tmp", "snajpagent-marker-XXXXXX");
+    assert(path);
+    int fd = mkstemp(path);
+    assert(fd >= 0 && !unlink(path));
+    free(path);
+    assert(!snag_write_full(fd, header, SNAG_BINARY_HEADER_SIZE));
+    assert(!snag_write_full(fd, wire.data, wire.len));
+    struct snag_binary_batch batch;
+    snag_buf_reset(&raw);
+    assert(!snag_binary_batch_read(fd, (uint64_t)snag_seek(fd, 0, SEEK_CUR),
+        &before, &raw, &batch, &after));
+    int64_t position = snag_seek(fd, 0, SEEK_CUR);
+    const char *type = NULL;
+    json_t *data = NULL;
+    assert(!snag_binary_checkpoint_projection_read(fd, &after, NULL, 1u, &type, &data));
+    assert(!strcmp(type, "session_checkpoint") && json_is_object(data) && !json_object_size(data));
+    assert(position == snag_seek(fd, 0, SEEK_CUR));
+    json_decref(data);
+    assert(!close(fd));
+    snag_buf_free(&wire);
+    snag_buf_free(&raw);
+    snag_buf_free(&payload);
+}
+
 void
 test_store_binary(void)
 {
@@ -1046,6 +1088,7 @@ test_store_binary(void)
     for (size_t i = 0; i < sizeof(identity.id); ++i) identity.id[i] = (unsigned char)i;
     unsigned char header[SNAG_BINARY_HEADER_SIZE];
     snag_binary_header_encode(header, &identity);
+    test_marker_projection(header);
     /* Independent explicit little-endian fixtures; neither C layout nor an
      * encode/decode round trip supplies their expected bytes. */
     assert_bytes(header, sizeof(header),

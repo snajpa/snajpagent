@@ -2,6 +2,7 @@
 #include "fixture_store_binary.h"
 #include "context.h"
 #include "fs.h"
+#include "irc.h"
 #include "json.h"
 #include "snajpagent.h"
 #include "store_binary_context.h"
@@ -1968,6 +1969,12 @@ live_snapshot_capture(void)
     off_t position = lseek(state.log_fd, 0, SEEK_CUR);
     assert(snag_session_binary_snapshot_capture(&state, NULL, &snapshot, &tree, &captured,
         error, sizeof(error)) < 0 && errno == ENOTSUP && !snapshot.selection);
+    const char *source_type = "keep";
+    json_t *source_data = json_string("keep");
+    json_t *source_saved = source_data;
+    assert(source_data && snag_session_binary_projection_read(&state, 1u,
+        &source_type, &source_data, error, sizeof(error)) < 0 && errno == ENOTSUP &&
+        !strcmp(source_type, "keep") && source_data == source_saved);
     char *directory_path = snag_path_join(getenv("TMPDIR") ? getenv("TMPDIR") : "/tmp",
         "snag-native-checkpoint-XXXXXX");
     assert(directory_path && mkdtemp(directory_path));
@@ -1987,6 +1994,13 @@ live_snapshot_capture(void)
         &available, error, sizeof(error)) < 0 && errno == EINVAL);
     assert(!snag_session_binary_checkpoint_setup(&state, directory, generations, sequences,
         &available, error, sizeof(error)));
+    json_decref(source_data);
+    source_data = NULL;
+    assert(!snag_session_binary_projection_read(&state, 1u, &source_type, &source_data,
+        error, sizeof(error)) && !strcmp(source_type, "session_created"));
+    json_decref(source_data);
+    source_data = NULL;
+    assert(lseek(state.log_fd, 0, SEEK_CUR) == position);
     assert(snag_session_binary_checkpoint_setup(&state, directory, generations, sequences,
         &available, error, sizeof(error)) < 0 && errno == EBUSY);
     assert(!snag_session_binary_snapshot_capture(&state, &available, &snapshot, &tree, &captured,
@@ -2022,14 +2036,23 @@ live_snapshot_capture(void)
     state.on_checkpoint = callback;
     assert(!snag_session_commit(&state, "banner_updated", json_pack("{s:s}", "text", "new"),
         NULL, error, sizeof(error)));
+    uint64_t banner_sequence = state.next_seq - 1u;
+    assert(!snag_session_binary_projection_read(&state, banner_sequence,
+        &source_type, &source_data, error, sizeof(error)) &&
+        !strcmp(source_type, "banner_updated") &&
+        !strcmp(snag_json_string(source_data, "text"), "new"));
+    json_decref(source_data);
+    source_data = NULL;
     assert(saved.boundary.next_seq + 1u == state.next_seq &&
         !memcmp(expected_provider.data, saved.provider.data, expected_provider.len));
     assert(!snag_session_binary_snapshot_capture(&state, NULL, &snapshot, &tree, &captured,
         error, sizeof(error)));
     assert(snapshot.boundary.next_seq == state.next_seq &&
         captured.texts.slots[SNAG_BINARY_TEXT_BANNER].declaration == state.next_seq - 1u);
+    uint64_t old_receipt_sequence = 0u;
     for (unsigned int generation = 1u; generation <= 2u; ++generation) {
         uint64_t before_sequence = state.next_seq;
+        if (generation == 1u) old_receipt_sequence = before_sequence;
         int64_t before_end = state.log_end;
         int64_t before_start = state.committed_start;
         if (generation == 1u) {
@@ -2055,6 +2078,20 @@ live_snapshot_capture(void)
         assert(!snag_session_checkpoint(&state, error, sizeof(error)));
         assert(state.next_seq == before_sequence + 1u && state.checkpoint_seq == before_sequence);
         assert(state.committed_start == before_end && state.committed_end == state.log_end);
+        position = lseek(state.log_fd, 0, SEEK_CUR);
+        assert(!snag_session_binary_projection_read(&state, before_sequence,
+            &source_type, &source_data, error, sizeof(error)) &&
+            !strcmp(source_type, "session_checkpoint") && json_is_object(source_data) &&
+            !json_object_size(source_data));
+        json_decref(source_data);
+        source_data = NULL;
+        assert(!snag_session_binary_projection_read(&state, banner_sequence,
+            &source_type, &source_data, error, sizeof(error)) &&
+            !strcmp(source_type, "banner_updated") &&
+            !strcmp(snag_json_string(source_data, "text"), "new"));
+        json_decref(source_data);
+        source_data = NULL;
+        assert(lseek(state.log_fd, 0, SEEK_CUR) == position);
         struct snag_binary_io_snapshot after = {0};
         struct snag_binary_checkpoint_sources after_sources = {0};
         struct snag_binary_index_tree after_tree;
@@ -2108,6 +2145,66 @@ live_snapshot_capture(void)
     assert(written == before_maintenance + 1u && state.next_seq == before_maintenance + 2u &&
         state.checkpoint_seq == before_maintenance && state.committed_start > committed_end &&
         state.committed_end == state.log_end);
+    source_type = "keep";
+    source_data = json_string("keep");
+    source_saved = source_data;
+    position = lseek(state.log_fd, 0, SEEK_CUR);
+    assert(source_data && snag_session_binary_projection_read(&state, old_receipt_sequence,
+        &source_type, &source_data, error, sizeof(error)) < 0 && errno == ENOENT &&
+        !strcmp(source_type, "keep") && source_data == source_saved);
+    json_decref(source_data);
+    assert(lseek(state.log_fd, 0, SEEK_CUR) == position);
+    const char *irc_prompt = "[IRC update id=11111111111111111111111111111111:44 "
+        "endpoint=fixture:1234 room=#work event=message sender=peer]\n";
+    assert(!snag_session_checkpoint(&state, error, sizeof(error)));
+    uint64_t shifted = state.next_seq - 1u;
+    struct snag_irc_event irc_event = {.kind = SNAG_IRC_MESSAGE, .timestamp_ms = 1u,
+        .endpoint = "fixture:1234", .room = "#work", .nick = "peer",
+        .text = "native checkpoint shifted source payload", .classified = true, .input = true,
+        .stream = "11111111111111111111111111111111", .sequence = 44u};
+    assert(!snag_session_commit(&state, "irc_event", snag_irc_event_data(&irc_event),
+        NULL, error, sizeof(error)));
+    json_t *input_receipt = json_pack("{s:s,s:o,s:s,s:s,s:b,s:I,s:s}",
+        "effort", "medium", "instructions", json_array(), "model", SNAJPAGENT_MODEL,
+        "provider", "default", "read_only", 0, "received_at_ms", (json_int_t)1788739200000ULL,
+        "text", irc_prompt);
+    assert(input_receipt && !snag_session_commit(&state, "irc_admitted",
+        json_pack("{s:[I],s:o}", "sequences", (json_int_t)shifted, "input", input_receipt),
+        NULL, error, sizeof(error)));
+    json_t *turn_receipt = json_pack("{s:{s:s,s:s,s:n,s:s,s:s,s:s,s:i,s:i,s:i,s:i,s:b},"
+        "s:s,s:b,s:o,s:n,s:n,s:s,s:s,s:I,s:s}",
+        "config", "capability_version", SNAJPAGENT_CAPABILITY_VERSION, "effort", "medium",
+        "max_output_tokens", "model", SNAJPAGENT_MODEL, "provider", "default",
+        "profile_id", SNAJPAGENT_PROFILE_ID, "prompt_schema", 1, "replay_schema", 1,
+        "tool_schema", 1, "max_parallel_commands", 4, "parallel_tool_calls", 1,
+        "input_kind", "direct", "read_only", 0,
+        "instructions", json_array(), "queue_id", "queue_seq", "text", irc_prompt,
+        "turn_id", "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", "turn_number", (json_int_t)1u,
+        "cwd", "/");
+    assert(turn_receipt && !snag_session_commit(&state, "turn_started", turn_receipt,
+        NULL, error, sizeof(error)));
+    state.dir_path = strdup(directory_path);
+    json_t *empty = json_array();
+    assert(state.dir_path && empty);
+    for (unsigned int pass = 0u; pass < 2u; ++pass) {
+        struct snag_context_projection projection = {0};
+        rc = snag_context_build(&state, SNAJPAGENT_MODEL, "medium", 1u, empty,
+            0u, false, NULL, NULL, NULL, NULL, &projection, error, sizeof(error), NULL);
+        if (rc < 0) fprintf(stderr, "live native IRC point: %s\n", error);
+        assert(!rc);
+        const json_t *input = json_object_get(projection.create_request.value, "input");
+        size_t copies = 0u;
+        for (size_t i = 0u; i < json_array_size(input); ++i) {
+            const char *text = snag_json_string(json_array_get(input, i), "content");
+            copies += text && strstr(text, irc_event.text) != NULL;
+        }
+        if (copies != 1u || projection.irc_seq < shifted + 1u)
+            fprintf(stderr, "native IRC point copies=%zu seq=%llu wanted=%llu\n",
+                copies, (unsigned long long)projection.irc_seq, (unsigned long long)(shifted + 1u));
+        assert(copies == 1u && projection.irc_seq >= shifted + 1u);
+        snag_context_projection_free(&projection);
+    }
+    json_decref(empty);
     assert(!snag_binary_checkpoint_index_decode(selection->available.data,
         selection->available.len, &identity, &selection->available_boundary,
         selection->available_root, &frozen));

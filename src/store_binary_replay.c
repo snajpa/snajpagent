@@ -618,10 +618,22 @@ snag_binary_checkpoint_projection_read(int fd, const struct snag_binary_anchor *
     uint64_t sequence;
     while ((rc = snag_binary_record_next(&batch, &cursor, &record, &sequence)) == 0) {
         if (sequence != wanted) continue;
-        if (record.flags) { rc = snag_errno(EINVAL); goto done; }
+        bool marker = record.kind == SNAG_BINARY_CHECKPOINT_RECEIPT ||
+            record.kind == SNAG_BINARY_LEGACY_CHECKPOINT;
+        if (record.flags != (marker ? SNAG_BINARY_RECORD_OPTIONAL : 0u)) {
+            rc = snag_errno(EINVAL);
+            goto done;
+        }
         const char *name;
         json_t *data = NULL;
-        if (record.kind == SNAG_BINARY_LEGACY_CHECKPOINT) {
+        if (record.kind == SNAG_BINARY_CHECKPOINT_RECEIPT) {
+            struct snag_binary_checkpoint_receipt receipt;
+            rc = snag_binary_checkpoint_receipt_decode(&record, &receipt);
+            if (rc < 0) goto done;
+            name = "session_checkpoint";
+            data = json_object();
+            if (!data) { rc = snag_errno(ENOMEM); goto done; }
+        } else if (record.kind == SNAG_BINARY_LEGACY_CHECKPOINT) {
             struct snag_binary_legacy_checkpoint marker;
             rc = snag_binary_legacy_checkpoint_decode(&record, &marker);
             if (rc < 0) goto done;

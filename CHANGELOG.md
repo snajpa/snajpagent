@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Read native IRC context sources through acknowledged checkpoint custody and
+  bounded canonical point projection, including typed checkpoint lookup markers.
+
 - Apply the established automatic checkpoint cadence to configured native
   sessions while preserving closure-event exclusions and retained transaction
   retry ordering.

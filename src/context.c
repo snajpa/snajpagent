@@ -7,6 +7,7 @@
 #include "base.h"
 #include "json.h"
 #include "snajpagent.h"
+#include "store_internal.h"
 
 #include <errno.h>
 #include <limits.h>
@@ -1909,13 +1910,39 @@ recover_irc_source(void *opaque, const struct snag_session *state, uint64_t seq,
     return SNAG_JOURNAL_STOP_AFTER;
 }
 
-/* Native state-only consumers have an independently prepared retained table,
- * not a JSONL descriptor. Visit its selected neighbor before the source, matching
- * the direct reverse journal lookup without changing general history ordering. */
+/* Live native lookup uses acknowledged custody. State-only consumers use their
+ * independently prepared retained table; legacy descriptors keep reverse lookup. */
 static int
 context_irc_source_lookup(const struct snag_session *session, struct irc_source_lookup *lookup,
     char *error, size_t error_size)
 {
+    if (session->binary) {
+        if (lookup->control && lookup->control->cancelled &&
+            lookup->control->cancelled(lookup->control->opaque))
+            return snag_fail(error, error_size, ECANCELED, "context preparation cancelled");
+        const char *type = NULL;
+        json_t *data = NULL;
+        if (snag_session_binary_projection_read(session, lookup->wanted, &type, &data,
+                error, error_size) < 0) return -1;
+        if (!strcmp(type, "session_checkpoint") && lookup->wanted + 1u < session->next_seq) {
+            if (lookup->control && lookup->control->cancelled &&
+                lookup->control->cancelled(lookup->control->opaque)) {
+                json_decref(data);
+                return snag_fail(error, error_size, ECANCELED, "context preparation cancelled");
+            }
+            const char *following_type = NULL;
+            json_t *following = NULL;
+            int rc = snag_session_binary_projection_read(session, lookup->wanted + 1u,
+                &following_type, &following, error, error_size);
+            if (!rc) rc = recover_irc_source(lookup, NULL, lookup->wanted + 1u,
+                following_type, following, error, error_size);
+            json_decref(following);
+            if (rc < 0) { json_decref(data); return -1; }
+        }
+        int rc = recover_irc_source(lookup, NULL, lookup->wanted, type, data, error, error_size);
+        json_decref(data);
+        return rc < 0 ? -1 : 0;
+    }
     if (session->log_fd >= 0) {
         uint64_t next_before;
         return snag_session_each_event_reverse((struct snag_session *)session,

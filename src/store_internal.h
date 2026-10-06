@@ -30,6 +30,12 @@ int snag_session_binary_checkpoint_setup(struct snag_session *, int directory,
     const uint64_t generations[2], const uint64_t sequences[2],
     const struct snag_binary_checkpoint_index *, char *, size_t);
 
+/* Hydrate one source against ACK-visible native custody and its bounded suffix.
+ * Pread only; outputs change on success. Missing old access remains unavailable;
+ * no prefix replay, reducer adoption or pending-candidate visibility. */
+int snag_session_binary_projection_read(const struct snag_session *, uint64_t sequence,
+    const char **type, json_t **out, char *, size_t);
+
 /* Freeze ACK-visible sections, query and old working-set access for the I/O owner.
  * Callback is the matching committed cache owner. Caller establishes immutable
  * old access custody/ancestry/completeness and bounded suffix before capture.
