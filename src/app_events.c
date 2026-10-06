@@ -361,8 +361,14 @@ snag_app_irc_event(void *opaque, const struct snag_irc_event *event)
         if (snag_app_irc_snapshot(app, "join", error, sizeof(error)) < 0) return -1;
     }
 
-    if (chat && (!app->session.irc_sleep_until_ms || accepted.urgent))
+    /* Buffered chat cannot take over a failed request while the goal's idle
+     * boundary prevents that chat from starting a turn. Keep recovery armed. */
+    bool background_ready = app->session.goal_status != SNAG_GOAL_PAUSED &&
+        app->session.goal_status != SNAG_GOAL_BLOCKED;
+    if (chat && (!app->session.irc_sleep_until_ms || accepted.urgent) &&
+        (accepted.urgent || background_ready)) {
         ++app->input_generation;
+    }
     urgent = accepted.urgent;
     reply_offset = app->irc_urgent.len;
     if (append_irc_projection(urgent ? &app->irc_urgent : &app->irc_background, &accepted) < 0)

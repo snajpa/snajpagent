@@ -442,6 +442,7 @@ endif
 	python3 tests/test_model_auth_recovery.py ./tests/snajpagent-transport
 	python3 tests/test_goal_wait_channel.py ./$(BIN)
 	python3 tests/test_provider_https.py ./$(BIN)
+	python3 tests/test_provider_irc_retry.py ./$(BIN)
 	python3 tests/test_token_preflight.py ./$(BIN)
 	./tests/test_context
 	./tests/test_model_cache

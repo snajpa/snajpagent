@@ -5937,7 +5937,7 @@ in the
 section. Retries continue the same logical turn with retained context and tool
 results; they do not replay completed commands or duplicate the original prompt.
 Steering and explicit interruption remain responsive during backoff. Fresh queued
-or background chat input at a failed request keeps its normal next-turn handoff.
+or eligible background chat input at a failed request keeps its normal next-turn handoff.
 Successful refusals and ordinary failed tool results retain their existing handling.
 The retry hint appears once when the ordinary budget is exhausted or disabled.
 .PP
@@ -5967,8 +5967,10 @@ policy or changing the request's purpose.
 Transient transport, HTTP rate-limit/server, and structured Responses stream
 failures receive at most two retries of the same request, with bounded backoff
 and cancellation available during the wait.  Earlier turn/tool work is not
-replayed.  Additional live chat, steering or queued input prevents further
-retries, including during backoff.  Steering keeps its immediate handoff;
+replayed. Additional eligible live chat, steering or queued input prevents further
+retries, including during backoff. Ordinary chat buffered behind a paused or
+blocked goal leaves recovery running and stays pending until its normal admission
+boundary. Direct mentions remain eligible. Steering keeps its immediate handoff;
 background chat and queued turns retain their normal admission rules, without
 interrupting a healthy response.  When new input stops retrying a failed
 response, armed queued turns proceed automatically, without an extra

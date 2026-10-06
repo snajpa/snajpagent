@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Keep provider recovery running when ordinary IRC chat arrives during a turn
+  with a paused or blocked goal. Buffered chat remains pending; direct mentions
+  and queued work retain their normal handoff.
+
 - Reduce CPU use when preparing IRC context from long session histories. Seek
   past unrelated checkpoint bodies while verifying selected records and their
   hash chain.
