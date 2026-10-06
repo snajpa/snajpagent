@@ -15,6 +15,9 @@ and return display metadata. Read-only snapshots preserve unfinished tails, and
 refresh validates file identity and each appended record before extending a view.
 The background reader returns bounded public event pages, cancels obsolete
 requests and wakes the frontend only when a current result is ready.
+The grid composes UTF-8 graphemes into a back frame and publishes differences
+only after successful output. Unicode 17 tables supply shared cluster boundaries
+and width policy; all 766 official grapheme-boundary cases pass locally.
 The optional workspace interface, semantic attachment
 and IRC conversation work below remain to be implemented.
 
@@ -905,6 +908,18 @@ UTF-8 helpers alone are not evidence of complete grapheme support. Use portable
 tables/helpers for combining sequences and wide characters; test invalid UTF-8,
 tabs, wide glyphs at the right edge and ambiguous-width terminal differences.
 Preserve logical bytes even when the terminal renders an unusual cluster poorly.
+
+The current helper implements the extended grapheme rules from
+[Unicode 17 UAX #29](https://www.unicode.org/reports/tr29/tr29-47.html), checked
+against its complete official test file. Generated data and source hashes are
+retained; builds do not fetch Unicode data. Width is an explicit terminal policy:
+wide/fullwidth characters use two cells, combining marks attach to their base,
+emoji sequences/flags/keycaps use two, and ambiguous-width characters accept a
+narrow or wide profile. This width policy is separate from normative grapheme
+boundaries. The grid clips whole clusters, handles overlapping wide cells and
+renders raw controls visibly. A failed output callback retains the prior front
+frame and forces a full repaint; unchanged frames and cursors produce no output.
+Frontend event-loop backpressure and real terminal qualification remain ahead.
 
 Decode escape/key sequences incrementally. Use the existing terminal parser where
 possible, extending it for mouse and VM commands. Lone Escape disambiguation must

@@ -2,6 +2,15 @@
 
 # Dependency and vendoring inventory
 
+## Unicode text data
+
+Vim workspace navigation and rendering use first-party Unicode 17 grapheme
+segmentation and terminal-width helpers. `src/unicode_tables.inc` contains
+compact property ranges generated from official UCD files; regeneration
+checks the source hashes recorded in `tools/generate_unicode.py`. Normal builds
+use the checked-in data offline. The official grapheme test fixture and generated
+data retain Unicode-3.0 notices in `COPYING.UNICODE` and `LICENSE_SCOPE`.
+
 ## Linked Office import (native development)
 
 LibreOffice is never bundled. `WITH_OFFICE=1` stays the default wherever a

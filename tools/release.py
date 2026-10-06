@@ -112,7 +112,7 @@ def stage(args):
                           dereference=True) as archive:
             archive.add(symbols, arcname=symbols.name)
     load_channel(descriptions, required)
-    for name in ("COPYING", "LICENSE_SCOPE", "snajpagent.1", "RELEASE.md", "RELEASE-NOTES.md", "DEPENDENCIES.md"):
+    for name in ("COPYING", "COPYING.UNICODE", "LICENSE_SCOPE", "snajpagent.1", "RELEASE.md", "RELEASE-NOTES.md", "DEPENDENCIES.md"):
         (args.output / name).write_text(git_text(revision, name))
     with (args.output / f"snajpagent-{version}-source.tar.gz").open("wb") as output:
         subprocess.run(["git", "archive", "--format=tar.gz", f"--prefix=snajpagent-{version}/", revision],

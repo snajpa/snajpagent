@@ -297,7 +297,7 @@ with tempfile.TemporaryDirectory(prefix="release-", dir=root / "build") as tmp:
 # An annotated tag supplies the canonical native/matrix and staging identity.
 with tempfile.TemporaryDirectory(prefix="release-tag-", dir=root / "build") as tmp:
     tmp = Path(tmp)
-    for name in ("Makefile", "config.mk", "META", "COPYING", "LICENSE_SCOPE", "snajpagent.1",
+    for name in ("Makefile", "config.mk", "META", "COPYING", "COPYING.UNICODE", "LICENSE_SCOPE", "snajpagent.1",
                  "RELEASE.md", "RELEASE-NOTES.md", "DEPENDENCIES.md"):
         shutil.copyfile(root / name, tmp / name)
     def git(*args):

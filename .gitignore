@@ -26,6 +26,8 @@
 /tests/test_store
 /tests/test_store_record
 /tests/test_vm_reader
+/tests/test_vm_grid
+/tests/test_unicode
 /tests/test_tools
 /tests/test_turn
 /tests/test_write

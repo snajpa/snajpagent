@@ -42,3 +42,9 @@ release follows RELEASE.md: every implemented target ships with matching
 source, licenses, symbols and checksums, with its actual platform/testing scope.
 Optional historical evidence bundles do not replace that production matrix or
 turn experimental cross-builds into runtime-qualified platforms.
+
+`src/unicode_tables.inc` and `tests/fixtures/unicode-17.0.0/GraphemeBreakTest.txt`
+contain Unicode 17.0.0 data under Unicode-3.0. Preserve COPYING.UNICODE when
+redistributing these data or executables containing them. The first-party
+segmentation implementation and table generator retain GPL-2.0-only. The generator
+records exact official source URLs and SHA256 digests; ordinary builds are offline.
