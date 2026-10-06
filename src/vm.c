@@ -111,6 +111,9 @@ struct vm_launch {
     int fd;
     uint64_t child, token;
     char session[SNAG_ID_HEX_LEN + 1u];
+    struct snag_app_direct *direct;
+    struct snag_view_channel channel;
+    bool ready;
 };
 
 struct vm_pending_input {
@@ -289,10 +292,18 @@ static void
 detach_unused(struct vm *vm)
 {
     for (struct snag_vm_connection *c = vm->connections; c; c = c->next) {
-        if (connection_visible(vm, c)) continue;
+        if (c->direct || connection_visible(vm, c)) continue;
         c->control = false;
         if (!c->detaching) snag_vm_connection_detach(c);
     }
+}
+
+static struct vm_launch *
+direct_session(struct vm *vm)
+{
+    for (struct vm_launch *job = vm->launches; job; job = job->next)
+        if (job->direct) return job;
+    return NULL;
 }
 
 static void
@@ -806,6 +817,10 @@ install_workspace(struct vm *vm, struct snag_vm_workspace *next)
 static int
 restore_workspace(struct vm *vm, const char *selector)
 {
+    if (direct_session(vm)) {
+        notice(vm, "Quit the live session before switching workspaces");
+        return -1;
+    }
     struct snag_vm_workspace *next = calloc(1u, sizeof(*next));
     if (!next) return -1;
     snag_vm_workspace_init(next);
@@ -826,7 +841,7 @@ restore_workspace(struct vm *vm, const char *selector)
     }
     bool connected = false;
     for (struct snag_vm_connection *c = vm->connections; c; c = c->next) {
-        if (c->channel.fd < 0) continue;
+        if (!snag_view_channel_opened(&c->channel)) continue;
         connected = true;
         snag_vm_connection_detach(c);
     }
@@ -869,11 +884,18 @@ split(struct vm *vm, enum snag_vm_split axis)
     changed(vm);
 }
 
+static void view(struct vm *vm, enum view_kind kind);
+
 static void
 close_window(struct vm *vm)
 {
     cancel_search(vm);
     if (vm->count == 1u) {
+        if (direct_session(vm)) {
+            view(vm, VIEW_SESSIONS);
+            notice(vm, "Live session hidden; :buffers reopens it, :qa quits it and the workspace");
+            return;
+        }
         if (save(vm, NULL) == 0) {
             vm->detach_exit = true;
             for (struct snag_vm_connection *c = vm->connections; c; c = c->next)
@@ -949,9 +971,11 @@ open_history(struct vm *vm, const char *selector)
         window->follow = true;
         window->best_effort = true;
         struct snag_vm_connection *c = connection_for(vm, location.id, true);
-        if (c && c->channel.fd < 0) (void)snag_vm_connection_open(c, &vm->store, false);
+        if (c && !snag_view_channel_opened(&c->channel) && snag_session_host_supported())
+            (void)snag_vm_connection_open(c, &vm->store, false);
         queue_history(vm, window, LOAD_LAST);
-        notice(vm, "Read-only retained history  gg/G: oldest/newest  :verbosity 0..6");
+        notice(vm, c && c->bound ? c->message :
+            "Read-only retained history  gg/G: oldest/newest  :verbosity 0..6");
     }
     snag_session_close(&location);
     detach_unused(vm);
@@ -1146,7 +1170,8 @@ open_buffer_row(struct vm *vm, const json_t *row)
     if (!b) { notice(vm, "Buffer is no longer available"); return; }
     if (json_is_object(b->route)) {
         open_conversation(vm, b);
-        if (c->channel.fd < 0) (void)snag_vm_connection_open(c, &vm->store, c->control);
+        if (!snag_view_channel_opened(&c->channel) && snag_session_host_supported())
+            (void)snag_vm_connection_open(c, &vm->store, c->control);
     } else (void)open_history(vm, c->session);
 }
 
@@ -1266,7 +1291,12 @@ attach(struct vm *vm, const char *selector)
     }
     struct snag_vm_connection *c = connection_for(vm, window->session_id, true);
     if (!c) return;
-    if (!c->bound) (void)snag_vm_connection_open(c, &vm->store, true);
+    if (!snag_session_host_supported() && !c->direct) {
+        notice(vm, "Use :session to start a stored session; "
+            "attaching another process is unavailable");
+        return;
+    }
+    if (!c->bound && !c->direct) (void)snag_vm_connection_open(c, &vm->store, true);
     notice(vm, c->message);
     changed(vm);
 }
@@ -1274,6 +1304,10 @@ attach(struct vm *vm, const char *selector)
 static void
 launch_owner(struct vm *vm, const char *id, const char *name)
 {
+    if (direct_session(vm)) {
+        notice(vm, "One live session per workspace on this host; quit it before starting another");
+        return;
+    }
     for (struct vm_launch *job = vm->launches; id && job; job = job->next) {
         if (job->fd >= 0 && !strcmp(job->session, id)) {
             vm->windows[vm->focus].launch = job->token;
@@ -1283,9 +1317,14 @@ launch_owner(struct vm *vm, const char *id, const char *name)
     }
     struct vm_launch *job = calloc(1u, sizeof(*job));
     if (!job) return;
-    job->fd = snag_session_launch(vm->program, &vm->terminal, vm->store.root_path,
-        id, name, &job->child);
-    if (job->fd < 0) {
+    job->fd = -1;
+    snag_view_channel_init(&job->channel, -1);
+    if (snag_session_host_supported())
+        job->fd = snag_session_launch(vm->program, &vm->terminal, vm->store.root_path,
+            id, name, &job->child);
+    else job->direct = snag_app_direct_start(vm->program, vm->store.root_path,
+        id, name, &job->channel);
+    if (job->fd < 0 && !job->direct) {
         char error[256];
         (void)snprintf(error, sizeof(error), "Cannot launch owner: %s", strerror(errno));
         notice(vm, error);
@@ -1299,7 +1338,8 @@ launch_owner(struct vm *vm, const char *id, const char *name)
     job->next = vm->launches;
     vm->launches = job;
     detach_unused(vm);
-    notice(vm, "Starting owner; workspace remains available. Closing it leaves the owner running.");
+    notice(vm, job->direct ? "Starting live session; this workspace owns its lifetime" :
+        "Starting owner; workspace remains available. Closing it leaves the owner running.");
 }
 
 static void
@@ -1328,11 +1368,72 @@ session_request(struct vm *vm, const char *selector)
 }
 
 static void
+launch_result(struct vm *vm, struct vm_launch *job, const char *id, const char *message)
+{
+    refresh(vm);
+    for (size_t i = 0u; i < vm->count; ++i) {
+        if (vm->windows[i].launch != job->token) continue;
+        vm->windows[i].launch = 0u;
+        if (!id) continue;
+        size_t focus = vm->focus;
+        bool composer = vm->composer, insert = vm->insert;
+        vm->focus = i;
+        if (job->direct) (void)open_history(vm, id);
+        else attach(vm, id);
+        vm->focus = focus;
+        if (focus != i) {
+            vm->composer = composer;
+            vm->insert = insert;
+        }
+    }
+    notice(vm, message);
+}
+
+static bool
+direct_step(struct vm *vm, struct vm_launch *job)
+{
+    char id[SNAG_ID_HEX_LEN + 1u], error[256];
+    int status;
+    enum snag_app_direct_state state = snag_app_direct_state(job->direct,
+        id, error, sizeof(error), &status);
+    if (!job->ready && state == SNAG_APP_DIRECT_READY) {
+        memcpy(job->session, id, sizeof(job->session));
+        struct snag_vm_connection *c = connection_for(vm, id, true);
+        if (!c || snag_vm_connection_direct(c, &job->channel) < 0) {
+            snag_app_direct_stop(job->direct);
+            notice(vm, "Cannot connect the live session; waiting for shutdown");
+        } else launch_result(vm, job, id, "Live session ready; :close hides it, :q quits it");
+        job->ready = true;
+    }
+    if (state != SNAG_APP_DIRECT_FINISHED) return false;
+    struct snag_vm_connection *c = connection_for(vm, job->session, false);
+    /* Keep the endpoint until the client consumes the final queued EXIT. */
+    if (c && snag_view_channel_opened(&c->channel)) return false;
+    if (!job->ready) launch_result(vm, job, NULL, *error ? error : "Session startup stopped");
+    else if (c && !c->exited) {
+        c->exited = true;
+        c->control = false;
+        ++c->revision;
+        notice(vm, *error ? error : status ? "Live session failed" : "Live session stopped");
+    }
+    snag_view_channel_close(&job->channel);
+    snag_app_direct_free(job->direct);
+    return true;
+}
+
+static void
 launches_step(struct vm *vm)
 {
     struct vm_launch **link = &vm->launches;
     while (*link) {
         struct vm_launch *job = *link;
+        if (job->direct) {
+            if (direct_step(vm, job)) {
+                *link = job->next;
+                free(job);
+            } else link = &job->next;
+            continue;
+        }
         snag_session_launch_reap(&job->child);
         int rc = job->fd < 0 ? 0 : snag_session_packet_read(job->fd, &job->packet);
         if (rc) {
@@ -1353,22 +1454,7 @@ launches_step(struct vm *vm)
                 (void)snprintf(message, sizeof(message), "%.*s", (int)length, data);
             else (void)snprintf(message, sizeof(message),
                 "Owner startup report lost; inspect :sessions before trying again");
-            refresh(vm);
-            for (size_t i = 0u; i < vm->count; ++i) {
-                if (vm->windows[i].launch != job->token) continue;
-                vm->windows[i].launch = 0u;
-                if (!ready) continue;
-                size_t focus = vm->focus;
-                bool composer = vm->composer, insert = vm->insert;
-                vm->focus = i;
-                attach(vm, id);
-                vm->focus = focus;
-                if (focus != i) {
-                    vm->composer = composer;
-                    vm->insert = insert;
-                }
-            }
-            notice(vm, message);
+            launch_result(vm, job, ready ? id : NULL, message);
         }
         if (job->fd < 0 && !job->child) {
             *link = job->next;
@@ -1492,6 +1578,7 @@ static void
 quit_sessions(struct vm *vm, bool all, bool force)
 {
     struct snag_vm_connection *focused = focused_connection(vm);
+    struct vm_launch *direct = direct_session(vm);
     bool any = false;
     if (vm->classic.bytes.len && (all || vm->count == 1u || (focused &&
         !strcmp(focused->session, vm->classic.session)))) {
@@ -1504,9 +1591,10 @@ quit_sessions(struct vm *vm, bool all, bool force)
         vm->classic_uncertain = false;
     }
     for (struct snag_vm_connection *c = vm->connections; c; c = c->next) {
-        if (!c->bound || (!all && c != focused)) continue;
+        if ((!c->bound && !(all && direct && !strcmp(c->session, direct->session))) ||
+            (!all && c != focused)) continue;
         if (!force && snag_vm_connection_unsaved(c)) {
-            notice(vm, "Unsent draft or unresolved submission; :close detaches, :q! discards");
+            notice(vm, "Unsent draft or unresolved submission; :close preserves it, :q! discards");
             return;
         }
         bool synchronizing = c->draft_wait != NULL;
@@ -1533,10 +1621,17 @@ quit_sessions(struct vm *vm, bool all, bool force)
         }
         any = true;
     }
+    if (all && direct && !any) {
+        struct snag_vm_connection *c = connection_for(vm, direct->session, false);
+        if (force && c) snag_vm_connection_discard(c);
+        snag_app_direct_stop(direct->direct);
+        any = true;
+    }
     if (any) {
         vm->quit_all = all;
         vm->quit_window = all ? 0u : vm->windows[vm->focus].id;
-        notice(vm, "Waiting for session shutdown; :detach stops waiting");
+        notice(vm, direct ? "Waiting for live session shutdown" :
+            "Waiting for session shutdown; :detach stops waiting");
         changed(vm);
     } else if (all) {
         if (save(vm, NULL) == 0) vm->quit = true;
@@ -1743,7 +1838,9 @@ command(struct vm *vm, const char *text)
         quit_sessions(vm, true, word[2] == '!');
     else if (!strcmp(word, "detach")) {
         struct snag_vm_connection *c = focused_connection(vm);
-        if (c) {
+        if (c && c->direct) {
+            notice(vm, "This session runs inside the workspace; :close hides it, :q quits it");
+        } else if (c) {
             c->control = false;
             snag_vm_connection_detach(c);
             vm->composer = vm->insert = false;
@@ -2940,6 +3037,10 @@ input_event(void *opaque, const struct snag_vm_input_event *event)
     if (history_key(vm, event, key, control)) return 0;
     if (key == SNAG_VM_KEY_ESCAPE) vm->prefix = 0;
     else if (control && key == 'z') {
+        if (!snag_term_can_suspend()) {
+            notice(vm, "Suspension is unavailable on this host");
+            return 0;
+        }
         cancel_search(vm);
         vm->detach_suspend = true;
         for (struct snag_vm_connection *c = vm->connections; c; c = c->next)
@@ -3071,6 +3172,10 @@ drain_input(struct vm *vm)
 static int
 input_ready(struct vm *vm, int timeout)
 {
+    uint64_t now = snag_monotonic_ms();
+    for (struct snag_vm_connection *c = vm->connections; c; c = c->next)
+        timeout = snag_vm_connection_wait(c, now, timeout);
+    if (direct_session(vm) && (timeout < 0 || timeout > 16)) timeout = 16;
     bool buffered = vm->clipboard.packet_at < vm->clipboard.packet_length;
     int copy_wait = buffered ? -1 :
         snag_clipboard_send_wait(vm->clipboard.send, snag_monotonic_ms());
@@ -3082,10 +3187,8 @@ input_ready(struct vm *vm, int timeout)
     int ready = snag_term_input_wait(&vm->terminal, snag_vm_reader_fd(vm->reader), timeout);
 #else
     size_t count = 4u;
-    uint64_t now = snag_monotonic_ms();
     for (struct snag_vm_connection *c = vm->connections; c; c = c->next) {
         if (c->channel.fd >= 0) ++count;
-        timeout = snag_vm_connection_wait(c, now, timeout);
     }
     for (struct vm_launch *job = vm->launches; job; job = job->next) {
         if (job->fd >= 0) ++count;
@@ -3193,7 +3296,7 @@ connections_step(struct vm *vm)
         if (catalog && revision != c->revision && buffer_catalog(vm) < 0)
             notice(vm, "Cannot update buffer list");
         if (c->quitting && !c->exited && c->control) waiting = true;
-        if (c->channel.fd >= 0) connected = true;
+        if (snag_view_channel_opened(&c->channel)) connected = true;
     }
     if (vm->detach_exit && !connected) {
         vm->detach_exit = false;
@@ -3209,7 +3312,7 @@ connections_step(struct vm *vm)
         vm->suspend = true;
     }
     if (vm->classic_pending && !connected) vm->classic_ready = true;
-    if (waiting) return;
+    if (waiting || (direct_session(vm) && (vm->quit_all || vm->quit_window))) return;
     if (vm->quit_all) {
         vm->quit_all = false;
         if (save(vm, NULL) == 0) vm->quit = true;
@@ -4383,6 +4486,8 @@ out:
         vm.launches = job->next;
         if (job->fd >= 0) (void)close(job->fd);
         snag_session_launch_reap(&job->child);
+        snag_view_channel_close(&job->channel);
+        snag_app_direct_free(job->direct);
         free(job);
     }
     free(vm.program);

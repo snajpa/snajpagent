@@ -239,7 +239,7 @@ void
 snag_vm_connection_close(struct snag_vm_connection *connection)
 {
     snag_view_channel_close(&connection->channel);
-    connection->bound = connection->hello = false;
+    connection->bound = connection->hello = connection->direct = false;
     connection->generation = connection->deadline = connection->draft_deadline = 0u;
     connection->commands = connection->terminal_commands = connection->irc_queries = false;
     connection->irc_channels = connection->irc_connections = false;
@@ -294,10 +294,45 @@ send_message(struct snag_vm_connection *connection, json_t *value)
     return rc;
 }
 
+static int
+connection_begin(struct snag_vm_connection *connection)
+{
+    connection->deadline = snag_monotonic_ms() + 15000u;
+    for (struct snag_vm_buffer *b = connection->buffers; b; b = b->next) {
+        b->query = b->pending != NULL;
+        b->reconcile_pending = b->query;
+    }
+    message(connection, connection->control ? "Attaching to owner" : "Observing owner");
+    return send_message(connection, json_pack("{s:s,s:i}", "type", "hello", "version", 1));
+}
+
+int
+snag_vm_connection_direct(struct snag_vm_connection *connection, struct snag_view_channel *channel)
+{
+    if (!channel->local) return snag_errno(EINVAL);
+    snag_vm_connection_close(connection);
+    connection->control = true;
+    connection->exited = connection->quitting = false;
+    connection->channel = *channel;
+    if (connection_begin(connection) < 0) {
+        *channel = connection->channel;
+        snag_view_channel_init(&connection->channel, -1);
+        return -1;
+    }
+    snag_view_channel_init(channel, -1);
+    connection->direct = true;
+    return 0;
+}
+
 int
 snag_vm_connection_open(struct snag_vm_connection *connection, struct snag_store *store,
     bool control)
 {
+    if (connection->direct) return snag_errno(ENOTSUP);
+    if (!snag_session_host_supported()) {
+        message(connection, "Stored history; :session starts a live session in this workspace");
+        return snag_errno(ENOTSUP);
+    }
     snag_vm_connection_close(connection);
     connection->control = control;
     connection->exited = connection->quitting = false;
@@ -318,13 +353,7 @@ snag_vm_connection_open(struct snag_vm_connection *connection, struct snag_store
         return -1;
     }
     snag_view_channel_init(&connection->channel, fd);
-    connection->deadline = snag_monotonic_ms() + 15000u;
-    for (struct snag_vm_buffer *b = connection->buffers; b; b = b->next) {
-        b->query = b->pending != NULL;
-        b->reconcile_pending = b->query;
-    }
-    message(connection, control ? "Attaching to owner" : "Observing owner");
-    return send_message(connection, json_pack("{s:s,s:i}", "type", "hello", "version", 1));
+    return connection_begin(connection);
 }
 
 int
@@ -466,6 +495,10 @@ snag_vm_draft_choose(struct snag_vm_buffer *buffer, bool local)
 void
 snag_vm_connection_detach(struct snag_vm_connection *connection)
 {
+    if (connection->direct) {
+        message(connection, "Direct session stays in this workspace; quit it before exiting");
+        return;
+    }
     if (!connection->bound || connection->quitting) {
         snag_vm_connection_close(connection);
         return;
@@ -558,6 +591,7 @@ snag_vm_buffer_recover(struct snag_vm_buffer *buffer, struct snag_vm_buffer *tar
 int
 snag_vm_connection_control(struct snag_vm_connection *connection, const char *intent)
 {
+    if (connection->direct && !strcmp(intent, "detach")) return snag_errno(ENOTSUP);
     if (!connection->bound || connection->channel.output) return snag_errno(EBUSY);
     int rc = send_message(connection, json_pack("{s:s,s:I}", "type", intent,
         "generation", (json_int_t)connection->generation));
@@ -781,7 +815,9 @@ receive(struct snag_vm_connection *connection, const json_t *value)
             bool found = false;
             for (size_t j = 0u; j < json_array_size(features); ++j) {
                 const char *feature = json_string_value(json_array_get(features, j));
-                if (feature && !strcmp(feature, required[i])) found = true;
+                const char *expected = connection->direct && !strcmp(required[i], "detach") ?
+                    "direct" : required[i];
+                if (feature && !strcmp(feature, expected)) found = true;
             }
             if (!found) return snag_errno(ENOTSUP);
         }
@@ -817,7 +853,9 @@ receive(struct snag_vm_connection *connection, const json_t *value)
         connection->deadline = 0u;
         for (struct snag_vm_buffer *b = connection->buffers; b; b = b->next)
             b->draft_get = connection->drafts;
-        message(connection, "Attached  i: edit prompt  :detach: keep owner running");
+        message(connection, connection->direct ?
+            "Attached direct session  i: edit prompt  :close: hide  :q: quit session" :
+            "Attached  i: edit prompt  :detach: keep owner running");
     } else if (!strcmp(type, "draft")) {
         json_t *draft = json_object_get(value, "draft");
         struct snag_vm_buffer *buffer = snag_vm_buffer_get(connection,
@@ -1033,7 +1071,8 @@ receive(struct snag_vm_connection *connection, const json_t *value)
 void
 snag_vm_connection_step(struct snag_vm_connection *connection)
 {
-    if (connection->channel.fd < 0) return;
+    if (!snag_view_channel_opened(&connection->channel)) return;
+    bool direct = connection->direct;
     uint64_t now = snag_monotonic_ms();
     uint64_t deadlines[] = {connection->deadline, connection->channel.read_deadline,
         connection->channel.write_deadline, connection->draft_deadline};
@@ -1089,7 +1128,8 @@ snag_vm_connection_step(struct snag_vm_connection *connection)
     return;
 failed:
     snag_vm_connection_close(connection);
-    message(connection, "Owner connection lost; drafts/submissions retained; :attach reconnects");
+    message(connection, direct ? "Direct session connection lost; drafts/submissions retained" :
+        "Owner connection lost; drafts/submissions retained; :attach reconnects");
 }
 
 int

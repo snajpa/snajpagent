@@ -4,6 +4,11 @@
 
 ## Unreleased
 
+- Wire a single Windows live agent into the Vim workspace through a private
+  semantic channel. Closing panes retains its engine and drafts; explicit quit
+  ends it before workspace exit. Unsupported detach and multi-agent controls
+  report their platform limitation.
+
 - Document Vim file-transfer recovery after reconnecting to Screen or tmux,
   with permanent SSH/Mosh tests for retained drafts and an explicit upload retry.
 

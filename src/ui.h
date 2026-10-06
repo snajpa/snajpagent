@@ -12,7 +12,7 @@ struct snag_ui {
     struct snag_history history;
     enum snag_render_view view;
     bool opened;
-    bool native, native_continuing;
+    bool native, native_continuing, direct;
     struct snag_terminal_profile profile;
     bool prompt_wanted;
     bool active, input_active, input_echoed, input_view_applied;
@@ -50,7 +50,8 @@ enum snag_ui_operation {
     SNAG_UI_VIEW, SNAG_UI_SUBMITTED, SNAG_UI_PUBLIC_BEGIN, SNAG_UI_PUBLIC, SNAG_UI_VALIDATE,
     SNAG_UI_ORIENTATION, SNAG_UI_HISTORY, SNAG_UI_IRC, SNAG_UI_DURABLE, SNAG_UI_EVENT,
     SNAG_UI_RESUME, SNAG_UI_PROTOCOL, SNAG_UI_TRANSPORT, SNAG_UI_RAW, SNAG_UI_HISTORY_SNAPSHOT,
-    SNAG_UI_UPDATE, SNAG_UI_SESSION_START, SNAG_UI_SESSION_LISTEN, SNAG_UI_SESSION_CONTROL,
+    SNAG_UI_UPDATE, SNAG_UI_SESSION_START, SNAG_UI_SESSION_DIRECT,
+    SNAG_UI_SESSION_LISTEN, SNAG_UI_SESSION_CONTROL,
     SNAG_UI_SESSION_REBIND, SNAG_UI_SESSION_OFFER, SNAG_UI_SESSION_PROGRESS,
     SNAG_UI_SESSION_REFUSE, SNAG_UI_SESSION_RELEASED, SNAG_UI_SESSION_BOUND,
     SNAG_UI_SESSION_READY,
@@ -77,6 +78,7 @@ struct snag_ui_command {
     union {
         unsigned int value;
         struct snag_session_process *session_process;
+        struct snag_view_channel *view_channel;
         struct { uint64_t generation; unsigned char *bytes; bool *present;
             unsigned int mode; } session_voice;
         const struct snag_session *session;
@@ -104,6 +106,9 @@ int snag_ui_send(struct snag_ui *ui, struct snag_ui_command command);
 int snag_ui_init(struct snag_ui *ui);
 /* Transfer owner descriptors to the presentation thread before opening input. */
 int snag_ui_session_start(struct snag_ui *, struct snag_session_process *);
+#if SNAJPAGENT_VM
+int snag_ui_session_direct(struct snag_ui *, struct snag_view_channel *);
+#endif
 int snag_ui_session_listen(struct snag_ui *, const struct snag_session *);
 int snag_ui_view_state(struct snag_ui *, const struct snag_session *);
 int snag_ui_view_result(struct snag_ui *, const char *id, const char *status,
@@ -148,6 +153,8 @@ int snag_ui_validate_prompt(struct snag_ui *ui, const char *label,
                     const char *const spinners[SNAG_TERM_SPINNER_COUNT], uint32_t per_second);
 int snag_ui_simple_prompt(struct snag_ui *ui, bool active);
 bool snag_ui_leaving(const struct snag_ui *ui);
+/* May be called by the workspace while it retains the UI's lifetime. */
+void snag_ui_request_exit(struct snag_ui *);
 bool snag_ui_interrupt_pending(const struct snag_ui *ui);
 bool snag_ui_yield_pending(const struct snag_ui *ui);
 int snag_ui_insert_draft(struct snag_ui *, const char *);

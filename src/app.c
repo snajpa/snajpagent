@@ -28,6 +28,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
+#include <pthread.h>
 #include <signal.h>
 #include <stdatomic.h>
 #include <stdarg.h>
@@ -42,6 +43,19 @@
 #define RESUME_COMMAND_MAX (4u * 1024u * 1024u)
 
 #if SNAJPAGENT_VM
+struct snag_app_direct {
+    pthread_mutex_t lock;
+    pthread_t thread;
+    struct snag_ui *ui;
+    struct snag_view_channel channel;
+    char *program, *dotdir, *resume, *name;
+    char session[SNAG_ID_HEX_LEN + 1u], error[256];
+    bool ready, finished, stop;
+    int status;
+};
+
+static atomic_bool direct_busy;
+
 struct app_view_command {
     const char *line;
     json_t *snapshot, *selection;
@@ -6351,9 +6365,32 @@ owner_report(int *fd, const char *session, const char *error)
     *fd = -1;
 }
 
+#if SNAJPAGENT_VM
+static void
+direct_report(struct snag_app_direct *direct, const char *session, const char *error)
+{
+    if (!direct) return;
+    (void)pthread_mutex_lock(&direct->lock);
+    if (session && *session) (void)snag_strcpy(direct->session, sizeof(direct->session), session);
+    if (error && *error) (void)snag_strcpy(direct->error, sizeof(direct->error), error);
+    else if (session && *session) direct->ready = true;
+    (void)pthread_mutex_unlock(&direct->lock);
+}
+
+static void
+direct_ui(struct snag_app_direct *direct, struct snag_ui *ui)
+{
+    if (!direct) return;
+    (void)pthread_mutex_lock(&direct->lock);
+    direct->ui = ui;
+    if (ui && direct->stop) snag_ui_request_exit(ui);
+    (void)pthread_mutex_unlock(&direct->lock);
+}
+#endif /* SNAJPAGENT_VM */
+
 static int
 run_owner(const struct snag_cli *cli, const char *program, struct snag_session_process *process,
-    int report_fd)
+    int report_fd, struct snag_app_direct *direct)
 {
     struct snag_cli effective = *cli, saved;
     json_t *saved_options = NULL;
@@ -6386,8 +6423,19 @@ run_owner(const struct snag_cli *cli, const char *program, struct snag_session_p
     (void)snag_http_init();
     if (snag_ui_init(&app.ui) < 0) {
         owner_report(&report_fd, NULL, "Cannot initialize owner UI");
+#if SNAJPAGENT_VM
+        direct_report(direct, NULL, "Cannot initialize owner UI");
+#endif
         return 3;
     }
+#if SNAJPAGENT_VM
+    if (direct && snag_ui_session_direct(&app.ui, &direct->channel) < 0) {
+        direct_report(direct, NULL, "Cannot start direct owner UI");
+        snag_ui_free(&app.ui);
+        return 3;
+    }
+    direct_ui(direct, &app.ui);
+#endif /* SNAJPAGENT_VM */
     if (process && snag_ui_session_start(&app.ui, process) < 0) {
         owner_report(&report_fd, NULL, "Cannot start native owner UI");
         snag_ui_free(&app.ui);
@@ -6402,11 +6450,11 @@ run_owner(const struct snag_cli *cli, const char *program, struct snag_session_p
     app.config_allow_create = cli->config_path == NULL;
     app.execute = cli->execute;
     pending_shutdown_signal = 0;
-    if (snag_shutdown_install(&signal_handlers, mark_shutdown_signal, true) < 0) {
+    if (!direct && snag_shutdown_install(&signal_handlers, mark_shutdown_signal, true) < 0) {
         invalid_message = "cannot install shutdown signal handlers";
         goto invalid;
     }
-    signal_handlers_installed = true;
+    signal_handlers_installed = direct == NULL;
     if (!snag_text_locale_init()) {
         invalid_message = "a UTF-8 locale is required";
         goto invalid;
@@ -6442,6 +6490,7 @@ run_owner(const struct snag_cli *cli, const char *program, struct snag_session_p
     }
     app.config_allow_create = cli->config_path == NULL;
     if (snag_config_load(&config, cli->config_path, dotdir, error, sizeof(error)) < 0) goto invalid;
+    if (direct && snag_ui_leaving(&app.ui)) { rc = 0; goto out; }
     if (!cli->list && ((!config.provider_count) ||
         (cli->provider && !snag_config_provider(&config, cli->provider)))) {
         invalid_message = cli->provider ? "--provider names an unconfigured provider" :
@@ -6476,7 +6525,8 @@ run_owner(const struct snag_cli *cli, const char *program, struct snag_session_p
     snag_ui_send(&app.ui, (struct snag_ui_command){
         .kind = SNAG_UI_PAUSE, .data.timing = {config.typing_pause_ms, config.prompt_tool_spinner_off_delay_ms}});
     if (snag_ui_set_verbosity(&app.ui, cli->verbosity) < 0) goto out;
-    if (!cli->execute && !cli->list && (snag_isatty(STDIN_FILENO) != 1 || snag_isatty(STDERR_FILENO) != 1)) {
+    if (!direct && !cli->execute && !cli->list &&
+        (snag_isatty(STDIN_FILENO) != 1 || snag_isatty(STDERR_FILENO) != 1)) {
         invalid_message = "interactive mode requires terminal stdin and stderr; use -e for scripts";
         goto invalid;
     }
@@ -6569,6 +6619,7 @@ run_owner(const struct snag_cli *cli, const char *program, struct snag_session_p
     }
     app.resume_options_ready = true;
     if (snag_app_save_resume_options(&app, error, sizeof(error)) < 0) goto fail;
+    if (direct && snag_ui_leaving(&app.ui)) { rc = 0; goto out; }
     if (!cli->execute) {
         if (snag_irc_open(&app.irc, &config, app.session.cwd,
                          snag_app_irc_event, snag_app_irc_trace, &app, error, sizeof(error)) < 0 ||
@@ -6592,7 +6643,7 @@ run_owner(const struct snag_cli *cli, const char *program, struct snag_session_p
         goto out;
     }
     if (snag_ui_open(&app.ui, error, sizeof(error)) < 0) goto fail;
-    if (app.ui.native && (persist_session(&app, error, sizeof(error)) < 0 ||
+    if ((app.ui.native || app.ui.direct) && (persist_session(&app, error, sizeof(error)) < 0 ||
         snag_ui_session_listen(&app.ui, &app.session) < 0)) {
         if (!error[0]) (void)snag_errorf(error, sizeof(error),
             "cannot publish session attachment: %s", strerror(errno));
@@ -6611,6 +6662,9 @@ run_owner(const struct snag_cli *cli, const char *program, struct snag_session_p
         goto out;
     }
     owner_report(&report_fd, app.session.id, NULL);
+#if SNAJPAGENT_VM
+    direct_report(direct, app.session.id, NULL);
+#endif
     rc = interactive_loop(&app, cli->prompt);
     goto out;
 invalid: rc = 2;
@@ -6621,6 +6675,10 @@ report:
     (void)snag_ui_text(&app.ui, SNAG_UI_ERROR, invalid_message);
 out:
     owner_report(&report_fd, app.session.log_fd >= 0 ? app.session.id : NULL, invalid_message);
+#if SNAJPAGENT_VM
+    if (direct && rc) direct_report(direct, NULL,
+        invalid_message[0] ? invalid_message : "Direct session stopped before startup completed");
+#endif
     if (app.session.log_fd >= 0 &&
         snag_app_save_resume_options(&app, error, sizeof(error)) < 0) {
         (void)snag_ui_text(&app.ui, SNAG_UI_ERROR, error);
@@ -6647,7 +6705,7 @@ out:
     atomic_store(&shutdown_ui, NULL);
     snag_tools_shutdown();
     snag_tools_journal(NULL, NULL, NULL);
-    if (app.ui.native) {
+    if (app.ui.native || app.ui.direct) {
         /* Stop accepting controllers before releasing the original writer
          * lock. EXIT acknowledges a stopped owner to the frontend. */
         (void)snag_ui_session_listen(&app.ui, NULL);
@@ -6656,6 +6714,9 @@ out:
             128 + app.shutdown_signal : rc);
         (void)snag_ui_session_control(&app.ui, SNAG_SESSION_EXIT, &status, 1u);
     }
+#if SNAJPAGENT_VM
+    direct_ui(direct, NULL);
+#endif
     snag_ui_free(&app.ui);
 #if SNAJPAGENT_VM
     view_terminal_free(&app);
@@ -6689,6 +6750,115 @@ out:
     if (app.shutdown_signal > 0 && app.shutdown_signal < 128) rc = 128 + app.shutdown_signal;
     return rc;
 }
+
+#if SNAJPAGENT_VM
+static void *
+direct_main(void *opaque)
+{
+    struct snag_app_direct *direct = opaque;
+    struct snag_cli cli;
+    snag_cli_init(&cli);
+    cli.dotdir = direct->dotdir;
+    cli.resume = direct->resume != NULL;
+    cli.resume_id = direct->resume;
+    cli.session_name = direct->name;
+    int status = run_owner(&cli, direct->program, NULL, -1, direct);
+    snag_cli_free(&cli);
+    snag_view_channel_close(&direct->channel);
+    (void)pthread_mutex_lock(&direct->lock);
+    direct->status = status;
+    direct->finished = true;
+    (void)pthread_mutex_unlock(&direct->lock);
+    return NULL;
+}
+
+static void
+direct_free(struct snag_app_direct *direct)
+{
+    free(direct->program);
+    free(direct->dotdir);
+    free(direct->resume);
+    free(direct->name);
+    (void)pthread_mutex_destroy(&direct->lock);
+    free(direct);
+}
+
+struct snag_app_direct *
+snag_app_direct_start(const char *program, const char *dotdir, const char *session,
+    const char *name, struct snag_view_channel *channel)
+{
+    bool expected = false;
+    if (!atomic_compare_exchange_strong(&direct_busy, &expected, true)) {
+        errno = EBUSY;
+        return NULL;
+    }
+    struct snag_app_direct *direct = calloc(1u, sizeof(*direct));
+    if (!direct) goto failed;
+    int error = pthread_mutex_init(&direct->lock, NULL);
+    if (error) {
+        free(direct);
+        errno = error;
+        goto failed;
+    }
+    direct->program = strdup(program);
+    direct->dotdir = strdup(dotdir);
+    direct->resume = session ? strdup(session) : NULL;
+    direct->name = name ? strdup(name) : NULL;
+    if (!direct->program || !direct->dotdir || (session && !direct->resume) ||
+        (name && !direct->name)) goto strings;
+    struct snag_view_channel pair[2];
+    if (snag_view_channel_pair(pair) < 0) goto strings;
+    direct->channel = pair[1];
+    error = pthread_create(&direct->thread, NULL, direct_main, direct);
+    if (error) {
+        snag_view_channel_close(&pair[0]);
+        snag_view_channel_close(&direct->channel);
+        errno = error;
+        goto strings;
+    }
+    *channel = pair[0];
+    return direct;
+strings:
+    direct_free(direct);
+failed:
+    atomic_store(&direct_busy, false);
+    return NULL;
+}
+
+enum snag_app_direct_state
+snag_app_direct_state(struct snag_app_direct *direct, char session[SNAG_ID_HEX_LEN + 1u],
+    char *error, size_t error_size, int *status)
+{
+    (void)pthread_mutex_lock(&direct->lock);
+    memcpy(session, direct->session, sizeof(direct->session));
+    if (error && error_size) (void)snprintf(error, error_size, "%s", direct->error);
+    *status = direct->status;
+    enum snag_app_direct_state state = direct->finished ? SNAG_APP_DIRECT_FINISHED :
+        direct->ready ? SNAG_APP_DIRECT_READY : SNAG_APP_DIRECT_STARTING;
+    (void)pthread_mutex_unlock(&direct->lock);
+    return state;
+}
+
+void
+snag_app_direct_stop(struct snag_app_direct *direct)
+{
+    if (!direct) return;
+    (void)pthread_mutex_lock(&direct->lock);
+    direct->stop = true;
+    if (direct->ui) snag_ui_request_exit(direct->ui);
+    (void)pthread_mutex_unlock(&direct->lock);
+}
+
+void
+snag_app_direct_free(struct snag_app_direct *direct)
+{
+    if (!direct) return;
+    snag_app_direct_stop(direct);
+    (void)pthread_join(direct->thread, NULL);
+    direct_free(direct);
+    atomic_store(&direct_busy, false);
+}
+#endif /* SNAJPAGENT_VM */
 
 static int
 attachment_candidate(void *opaque, const char *text, size_t length)
@@ -6799,15 +6969,15 @@ run_session(const struct snag_cli *cli, const char *program)
         rc = attach_session(cli, error, sizeof(error));
     } else if (cli->execute || cli->list || !snag_session_host_supported() ||
                !snag_term_host_capable()) {
-        return run_owner(cli, program, NULL, -1);
+        return run_owner(cli, program, NULL, -1, NULL);
     } else {
         rc = snag_session_process_start(&process);
         if (rc < 0) {
-            if (errno == ENOTTY) return run_owner(cli, program, NULL, -1);
+            if (errno == ENOTTY) return run_owner(cli, program, NULL, -1, NULL);
             (void)snag_errorf(error, sizeof(error),
                 "cannot start native session: %s", strerror(errno));
         } else if (rc == 0) {
-            rc = run_owner(cli, program, &process, -1);
+            rc = run_owner(cli, program, &process, -1, NULL);
             snag_session_process_close(&process);
             return rc;
         } else {
@@ -6891,7 +7061,7 @@ snag_app_owner_main(int argc, char **argv)
         owner_report(&report_fd, cli.resume_id, error);
         return 3;
     }
-    if (!rc) rc = run_owner(&cli, argv[0], &process, report_fd);
+    if (!rc) rc = run_owner(&cli, argv[0], &process, report_fd, NULL);
     else {
         (void)close(report_fd);
         rc = 0;

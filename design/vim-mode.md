@@ -12,8 +12,12 @@ native owners. One queued frame per direction preserves backpressure; peer loss
 requests shutdown of the workspace-owned engine. Capabilities identify the direct
 lifetime and exclude detach and whole-terminal takeover. Portable C tests cover
 fragmentation, backpressure, thread ownership, close, receipt ordering and these
-restrictions. Engine/UI wiring, workspace lifecycle and Windows runtime
-qualification remain in progress; the Windows CLI still provides stored viewing.
+restrictions. The engine/UI and VM client now use this channel without console
+I/O from the presenter. Native integration tests cover /fast, a real HTTP request,
+newer draft retention, resume, startup failure and cancellation during a held
+provider request. Windows workspace wiring owns one engine, retains it when hidden
+and requires explicit quit before workspace exit or switching. Windows runtime
+qualification remains pending; no platform execution result is claimed here.
 
 IRC recovery checkpoint: selection-only /query, /chat, /join and /connections
 use the current connection scope when entered from an obsolete Vim pane.

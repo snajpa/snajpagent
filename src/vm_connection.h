@@ -45,7 +45,7 @@ struct snag_vm_connection {
     json_t *state, *draft_sent, *reports;
     char message[256];
     uint64_t generation, deadline, revision, draft_edit, draft_deadline;
-    bool control, bound, hello, quitting, exited;
+    bool control, bound, hello, quitting, exited, direct;
     bool commands, drafts, terminal_commands, irc_queries, irc_channels, irc_connections;
     bool reports_supported, reports_subscribed, detaching, detach_sent;
 };
@@ -61,6 +61,8 @@ struct snag_vm_connection *snag_vm_connection_new(const char *session);
 void snag_vm_connections_free(struct snag_vm_connection *);
 void snag_vm_connection_close(struct snag_vm_connection *);
 int snag_vm_connection_open(struct snag_vm_connection *, struct snag_store *, bool control);
+/* Takes the workspace-owned engine endpoint on success. */
+int snag_vm_connection_direct(struct snag_vm_connection *, struct snag_view_channel *);
 void snag_vm_connection_step(struct snag_vm_connection *);
 bool snag_vm_connection_tail(const struct snag_vm_connection *, struct snag_journal_cursor *);
 int snag_vm_connection_wait(const struct snag_vm_connection *, uint64_t now, int timeout);

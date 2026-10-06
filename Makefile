@@ -132,6 +132,9 @@ TEST_BIN += tests/test_json_abi
 BUILD_INPUTS = build/.build-inputs
 TEST_BIN += tests/test_irc_address
 TEST_BIN += tests/test_irc_event
+ifeq ($(WITH_VM),1)
+TEST_BIN += tests/snajpagent-direct
+endif
 TEST_BIN += tests/test_irc_send
 
 all: $(BIN)
@@ -326,6 +329,10 @@ tests/test_session_draft: $(PLATFORM_SRC) src/json.c src/media.c src/turn.c src/
 
 tests/test_session_direct: $(PLATFORM_SRC) src/json.c src/media.c src/turn.c src/session_view.c src/vm_text.c src/unicode.c tests/test_session_direct.c $(HEADERS)
 
+tests/snajpagent-direct: $(COMMON_OBJ) tests/direct_session.c $(HEADERS)
+	$(CC) $(CPPFLAGS) $(JANSSON_CFLAGS) $(CFLAGS) $(filter-out -municode,$(LDFLAGS)) -Isrc \
+		-o $@ $(filter %.c %.o,$^) $(LDLIBS) $(CURL_LIBS)
+
 tests/test_context tests/test_store tests/test_tools tests/test_turn: tests/checked_json.h
 
 tests/test_base tests/test_sse tests/test_provider_retry tests/test_upload_wire:
@@ -378,6 +385,7 @@ ifeq ($(WITH_VM),1)
 	./tests/test_vm_navigation
 	./tests/test_session_draft
 	./tests/test_session_direct
+	python3 tests/test_vm_direct.py ./tests/snajpagent-direct ./$(BIN)
 	python3 tests/test_vm_frontend.py ./$(BIN)
 	python3 tests/test_vm_control.py ./$(BIN)
 	python3 tests/test_vm_queries.py ./$(BIN)

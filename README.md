@@ -371,9 +371,11 @@ tracked `config.mk`; `make WITH_*=…` stays an explicit override.
 
 The development `snajpagent vm` frontend provides named workspaces, splits,
 retained transcripts, retrospective verbosity, search, mouse controls and Vim
-editing. `:new [NAME]` creates an agent; `:session ID` resumes one. `:close`
+editing. `:new [NAME]` creates an agent; `:session ID` resumes one. On POSIX, `:close`
 detaches; `:q` shuts down an attached rollout owner or closes a conversation pane.
 Restoring a workspace leaves stopped owners stopped.
+The experimental Windows workspace runs one live agent: `:close` hides it and
+`:qa` quits it before exiting. Additional live agents and persistent detach are unavailable.
 
 `/query NICK` opens a private conversation; `/chat #CHANNEL` opens a known channel.
 `:buffers` lists conversations;

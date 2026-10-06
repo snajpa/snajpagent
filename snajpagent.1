@@ -2000,7 +2000,8 @@ performs the same explicit action at workspace startup, optionally alongside
 the normal agent resume rules. Browsing history and restoring a workspace alone
 leave stopped owners stopped.
 .PP
-Startup runs asynchronously. Other windows, commands and drafts remain usable.
+On supported POSIX hosts, startup runs asynchronously. Other windows, commands
+and drafts remain usable.
 When ready, the owner opens in the requesting window. Selecting another buffer,
 closing that window or switching workspaces leaves the new owner detached;
 find it in :sessions. Closing or losing the frontend during startup also leaves
@@ -2009,6 +2010,25 @@ report is lost, inspect :sessions before issuing another :new command.
 Saved workspaces never replay launch commands. New owners keep their own private
 terminal and can later be reached through ordinary snajpagent --resume or :classic.
 Native owner launch requires a supported POSIX host.
+.SS "Live workspace sessions on Windows"
+The experimental Windows workspace runs one live agent inside its own process.
+.B :new
+creates it; :session or vm --session starts a stored session with its saved options.
+Splits share this agent and can also display other stored histories. Closing its
+last window keeps the agent and drafts hidden; :buffers reopens them. Closing the
+last workspace window returns to the picker while the agent remains live.
+.PP
+Use :q in the agent transcript to quit it, or :qa to quit it and the workspace.
+Unsent drafts block shutdown; :q! and :qa! explicitly discard them.
+Workspace switching requires the live agent to finish shutting down first.
+Closing the console or terminating the workspace ends its in-process agent;
+resume the stored session explicitly to continue.
+.PP
+Persistent attachment to other processes, :detach, :classic and additional live
+agents are unavailable. Commands requiring a whole terminal keep their text for
+recovery; use the ordinary interface for its file-transfer dialogs and editors.
+The remote wrapper is available on supported POSIX hosts. Stored workspace resume
+restores layout and drafts; it starts an agent only with an explicit session action.
 .SS "Attach and compose"
 .B :attach SESSION_ID
 opens and controls an existing workspace-capable owner. With no operand,

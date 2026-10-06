@@ -41,6 +41,7 @@
 /tests/test_vm_transcript
 /tests/test_session_draft
 /tests/test_session_direct
+/tests/snajpagent-direct
 /tests/test_vm_grid
 /tests/test_unicode
 /tests/test_tools
