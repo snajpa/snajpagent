@@ -43,6 +43,9 @@ ordinal, independently of final graph local IDs or interleaved tool calls.
 Terminal snapshots replace matching streamed text; unmatched observed text stays
 labelled unconfirmed. Original byte counts survive redaction, and joined text is
 redacted again to cover credentials split across fragments.
+The shared IRC address parser handles qualified buffers, short message targets,
+quoted operands and percent escaping before owner-specific route resolution.
+It remains available when VM is compiled out.
 The workspace interface, semantic attachment
 and IRC conversation work below remain to be implemented.
 
@@ -372,7 +375,9 @@ session, endpoint, accepted sending nick and target.
 connection label must resolve uniquely; the canonical host:port form remains
 available, including bracketed IPv6. A label such as `local` in an example means
 one exact connection, never the old fan-out meaning of an aggregate local route.
-No query address accepts `all`, wildcard expansion or an implicit broadcast.
+Queries resolve one exact endpoint and peer. Address parsing never expands `all`
+or wildcard text into multiple destinations; a literal nick such as `all` remains
+a unicast target. The existing `/all` command retains its separate channel scope.
 Opening an unknown endpoint reports an error; `/connect` is an explicit action.
 
 The client keeps joined-channel state per connection so an external server can
