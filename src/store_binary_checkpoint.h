@@ -132,7 +132,7 @@ struct snag_binary_checkpoint_call_source {
 
 struct snag_binary_checkpoint_process_source {
     char handle[SNAG_ID_HEX_LEN + 1u]; /* Producer correlation, derived on read. */
-    uint64_t started;
+    uint64_t started, scan; /* Canonical start/latest collection, not a byte cache. */
     struct snag_binary_checkpoint_call_source call;
 };
 
@@ -256,8 +256,9 @@ int snag_binary_checkpoint_process_source_read(int fd, const struct snag_binary_
     struct snag_process_state *out);
 
 struct snag_binary_checkpoint_processes {
-    const unsigned char *data; /* Borrowed entries, each 97 bytes in version1. */
+    const unsigned char *data; /* Borrowed entries: v1 97 bytes, v2 105 bytes. */
     size_t count;
+    uint16_t version;
 };
 
 /* Exact field-shaped metadata plus original-source references. No argument or
@@ -277,6 +278,13 @@ int snag_binary_checkpoint_processes_read(int fd, const struct snag_binary_ancho
     const struct snag_binary_checkpoint_index *,
     const struct snag_binary_checkpoint_processes *, const struct snag_session *,
     struct snag_process_state **out);
+
+/* Construct native scan cuts on disposable admitted state from canonical process
+ * source records. Caller pins same-journal ancestry/complete access. No live
+ * process or execution ownership is installed; discard state on any failure. */
+int snag_binary_checkpoint_processes_cursors(int fd, const struct snag_binary_anchor *,
+    const struct snag_binary_checkpoint_index *, const struct snag_binary_checkpoint_sources *,
+    struct snag_session *, bool (*cancelled)(void *), void *opaque);
 
 struct snag_binary_checkpoint_inputs {
     uint64_t input;

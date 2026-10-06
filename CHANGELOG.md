@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Restore native process scan cursors during bounded checkpoint admission and
+  suffix resume from verified start/collection sources, preserving imported
+  write_stdin process identity and leaving execution ownership with the live host.
+
 - Read explicit full native semantic history through strict replay at the
   acknowledged frontier, providing genuine post-event core state and preserving
   provisional callback failures without JSONL parsing or live-state replacement.

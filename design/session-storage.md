@@ -1634,6 +1634,14 @@ not copied into this block. The source reader binds the tool start's call, turn
 and action digest to the original graph. A legacy write_stdin-created process
 retains its historical empty previews and referenced handle.
 
+Version2 retains that layout and appends one LEu64 scan-source sequence to each
+entry, for105 bytes per process. Current producer provenance starts the scan
+source at the accepting start and advances it to matching collection results
+while the process remains in the working set. Checkpoint access custody retains
+that source with the original start/graph origins. The version1 reader derives
+its scan source from the start; byte/hash scan caches remain excluded in both
+versions. Decode rejects sources preceding the start and sequence overflow.
+
 Action digests can change through accepted `rule_transform` records after a graph
 completes. Pending-call readers apply each matching original/effective digest pair
 in sequence through the trusted checkpoint boundary; process readers stop before
@@ -1651,13 +1659,18 @@ domain; cross-field coherence and lifecycle authority are complete-consumer work
 Decode borrows its immutable input; encode stages an atomic append, and read
 returns a newly owned array or preserves the old output pointer on failure.
 
-The reducer does not derive the process log_offset/log_seq/log_hash scan caches;
-the JSONL app updates them after starts and collections. These physical caches
-are excluded from native process metadata. A complete native consumer must build
-its own verified scan cursors and retain byte-collection semantics, not reinterpret
-old JSONL offsets. Saved ready/draining flags describe snapshot observations and
+The JSONL app updates process log_offset/log_seq/log_hash caches after starts and
+collections. Native checkpoint materialization and pinned suffix resume instead
+construct each process's exact after-source cut from its verified canonical
+batch, including an inside-batch logical ordinal. The original graph binds a
+start to its process handle; imported write_stdin call IDs can differ from that
+handle. Collection sources must identify the same process. Missing old source
+custody fails with ENOENT; cancellation and validation failures discard the
+provisional candidate. Descriptor position, live state and byte-collection facts
+remain unchanged. The enclosing source-stamp checks precede atomic adoption.
+Saved ready/draining flags describe snapshot observations and
 do not recreate a live process or prove its current OS ownership. Complete
-snapshot/lifecycle authority and native cursor construction remain separate.
+snapshot/lifecycle authority and live execution binding remain separate.
 
 The pending-input block in `store_binary_checkpoint_inputs.c` references accepted
 direct input, queued work and steering without copying their payloads. Version1

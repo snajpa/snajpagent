@@ -32,6 +32,24 @@ static unsigned int suffix_late_rejected, suffix_bad_rejected, suffix_tails;
 static unsigned int checkpoint_rewrite_rejected;
 static unsigned int suffix_open, suffix_process, suffix_queue, suffix_download, suffix_voice;
 
+static json_t *
+checkpoint_facts(const struct snag_session *state)
+{
+    json_t *snapshot = snag_checkpoint_state_encode(state);
+    if (!snapshot) return NULL;
+    /* Full-prefix oracle state has no live process scan cache. Joint admission
+     * supplies verified native cuts, compared separately from semantic facts. */
+    json_t *processes = json_object_get(snapshot, "processes");
+    size_t i;
+    json_t *process;
+    json_array_foreach(processes, i, process) {
+        json_object_del(process, "log_offset");
+        json_object_del(process, "log_seq");
+        json_object_del(process, "log_hash");
+    }
+    return snapshot;
+}
+
 typedef int (*checkpoint_reader)(struct snag_session *, struct snag_session *,
     const struct snag_binary_anchor *, const void *, size_t, struct snag_binary_recovery *,
     struct snag_binary_checkpoint_sources *, const struct snag_context_control *, char *, size_t);
@@ -601,6 +619,12 @@ admission_result(struct snag_session *source, struct snag_session *expected,
     for (size_t i = 0u; i < 2u; ++i)
         if (images[i] >= 0) assert(snag_seek(images[i], 0, SEEK_CUR) == image_positions[i]);
     same_cache(expected, &restored, false);
+    for (size_t i = 0u; i < restored.process_count; ++i) {
+        const struct snag_process_state *process = &restored.processes[i];
+        assert(process->log_seq && process->log_seq <= restored.next_seq &&
+            process->log_offset <= (uint64_t)restored.log_end &&
+            snag_hex_is_lower(process->log_hash, SNAG_SHA256_HEX_LEN));
+    }
     struct snag_buf left = {.max = SIZE_MAX};
     struct snag_buf right = {.max = SIZE_MAX};
     assert(!snag_binary_checkpoint_core_encode(&left, wanted, expected));
@@ -802,8 +826,8 @@ joint_materialization_checks(struct snag_session *source, struct snag_session *e
     /* Neither the returned core nor its provider capture borrows image bytes. */
     snag_buf_free(&bytes);
     same_cache(expected, &restored, false);
-    json_t *left = snag_checkpoint_state_encode(expected);
-    json_t *right = snag_checkpoint_state_encode(&restored);
+    json_t *left = checkpoint_facts(expected);
+    json_t *right = checkpoint_facts(&restored);
     assert(left && right && json_equal(left, right));
     json_decref(left);
     json_decref(right);
@@ -950,8 +974,8 @@ checkpoint_matches(struct snag_session *source, struct snag_session *expected,
     if (rc < 0) fprintf(stderr, "checkpoint oracle: %s (%d)\n", error, errno);
     assert(rc == 0 && !recovery.incomplete_tail_bytes);
     same_cache(expected, &checked, false);
-    json_t *left = snag_checkpoint_state_encode(expected);
-    json_t *right = snag_checkpoint_state_encode(&checked);
+    json_t *left = checkpoint_facts(expected);
+    json_t *right = checkpoint_facts(&checked);
     if (left && right && !json_equal(left, right)) {
         const char *key;
         json_t *value;
@@ -1089,8 +1113,8 @@ checkpoint_matches(struct snag_session *source, struct snag_session *expected,
     snag_session_init(&core_only);
     assert(snag_store_reconcile_binary(source, &core_only, NULL, NULL, &recovery,
         &adopted, error, sizeof(error)) == 0);
-    left = snag_checkpoint_state_encode(&core_only);
-    right = snag_checkpoint_state_encode(&checked);
+    left = checkpoint_facts(&core_only);
+    right = checkpoint_facts(&checked);
     assert(left && right && json_equal(left, right));
     json_decref(left);
     json_decref(right);
@@ -1195,8 +1219,8 @@ bounded_suffix_checks(struct snag_session *source, const struct snag_session *ex
         recovery.verified.end == stop->end && recovery.verified.next_seq == stop->next_seq);
     assert(recovery.batches == stop->next_seq - frame->boundary.next_seq &&
         snag_seek(source->log_fd, 0, SEEK_CUR) == position);
-    json_t *left = snag_checkpoint_state_encode(expected);
-    json_t *right = snag_checkpoint_state_encode(&state);
+    json_t *left = checkpoint_facts(expected);
+    json_t *right = checkpoint_facts(&state);
     assert(left && right && json_equal(left, right));
     json_decref(left);
     json_decref(right);
@@ -1490,8 +1514,8 @@ checkpoint_suffix_matches(struct snag_session *source, struct snag_session *expe
     assert(rc == 0 && !recovery.incomplete_tail_bytes);
     assert(recovery.batches == full->next_seq - 1u && recovery.verified.end == full->end);
     same_cache(expected, &resumed, false);
-    json_t *left = snag_checkpoint_state_encode(expected);
-    json_t *right = snag_checkpoint_state_encode(&resumed);
+    json_t *left = checkpoint_facts(expected);
+    json_t *right = checkpoint_facts(&resumed);
     assert(left && right && json_equal(left, right));
     json_decref(left);
     json_decref(right);
@@ -1534,8 +1558,8 @@ prefix_matches(struct snag_session *source, struct snag_session *expected,
         &recovery, &origins, NULL, error, sizeof(error)) == 0);
     assert(!recovery.incomplete_tail_bytes && !recovery.problem_seq);
     same_cache(expected, &prefix, false);
-    json_t *left = snag_checkpoint_state_encode(expected);
-    json_t *right = snag_checkpoint_state_encode(&prefix);
+    json_t *left = checkpoint_facts(expected);
+    json_t *right = checkpoint_facts(&prefix);
     assert(left && right && json_equal(left, right));
     json_decref(left);
     json_decref(right);
@@ -1752,8 +1776,8 @@ suffix_failure_paths(struct snag_session *source, struct snag_session *target,
         assert(recovery.incomplete_tail_bytes && recovery.batches == baseline.batches);
         assert(recovery.verified.end == baseline.verified.end);
         same_cache(&expected, &resumed, false);
-        json_t *left = snag_checkpoint_state_encode(&expected);
-        json_t *right = snag_checkpoint_state_encode(&resumed);
+        json_t *left = checkpoint_facts(&expected);
+        json_t *right = checkpoint_facts(&resumed);
         assert(left && right && json_equal(left, right));
         json_decref(left);
         json_decref(right);

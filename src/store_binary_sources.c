@@ -67,7 +67,8 @@ fail:
 
 static int
 update_process_sources(struct snag_binary_checkpoint_sources *sources,
-    const struct snag_session *state, uint64_t sequence, enum snag_binary_kind kind)
+    const struct snag_session *state, uint64_t sequence, enum snag_binary_kind kind,
+    const json_t *data)
 {
     size_t old_count = sources->process_count;
     if (state->process_count > old_count) {
@@ -86,7 +87,7 @@ update_process_sources(struct snag_binary_checkpoint_sources *sources,
         }
         struct snag_binary_checkpoint_process_source *added = &sources->processes[old_count];
         *added = (struct snag_binary_checkpoint_process_source){
-            .started = sequence, .call = sources->calls};
+            .started = sequence, .scan = sequence, .call = sources->calls};
         memcpy(added->handle, state->processes[old_count].handle, sizeof(added->handle));
         ++old_count;
     }
@@ -96,6 +97,18 @@ update_process_sources(struct snag_binary_checkpoint_sources *sources,
             strcmp(sources->processes[previous].handle, state->processes[i].handle)) ++previous;
         if (previous == old_count) return snag_errno(EINVAL);
         sources->processes[i] = sources->processes[previous++];
+        if (kind == SNAG_BINARY_TOOL_FINISHED) {
+            const json_t *result = json_object_get(data, "result");
+            const char *handle = snag_json_string(result, "handle");
+            const char *recorded =
+                snag_json_string(json_object_get(result, "output_ref"), "handle");
+            const char *call = snag_json_string(data, "call_id");
+            if ((handle && !strcmp(handle, state->processes[i].handle)) ||
+                (recorded && !strcmp(recorded, state->processes[i].handle)) ||
+                (call && !strcmp(call, state->processes[i].handle))) {
+                sources->processes[i].scan = sequence;
+            }
+        }
     }
     sources->process_count = state->process_count;
     return 0;
@@ -228,5 +241,5 @@ snag_binary_checkpoint_sources_step(struct snag_binary_checkpoint_sources *sourc
         sources->calls = (struct snag_binary_checkpoint_call_source){
             .graph = sequence, .cwd = sources->texts.slots[SNAG_BINARY_TEXT_CWD]};
     }
-    return update_process_sources(sources, state, sequence, kind);
+    return update_process_sources(sources, state, sequence, kind, data);
 }

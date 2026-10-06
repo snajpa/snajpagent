@@ -343,6 +343,7 @@ collect_roots(struct closure_capture *capture,
     for (size_t i = 0u; i < sources->process_count; ++i) {
         const struct snag_binary_checkpoint_process_source *source = &sources->processes[i];
         if (need(capture, &capture->roots, source->started) < 0 ||
+            need(capture, &capture->roots, source->scan) < 0 ||
             collect_call(capture, &source->call, source->started) < 0) return -1;
     }
     for (size_t i = 0u; i < sources->queue_count; ++i) {

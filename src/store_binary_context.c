@@ -327,6 +327,9 @@ snag_store_materialize_binary_context_checkpoint(struct snag_session *source,
     if (checkpoint_cancelled(control, error, error_size) < 0 ||
         snag_binary_checkpoint_core_read(source->log_fd, frame, &access, &candidate,
             &origins) < 0 ||
+        snag_binary_checkpoint_processes_cursors(source->log_fd, &frame->boundary, &access,
+            &origins, &candidate, control ? control->cancelled : NULL,
+            control ? control->opaque : NULL) < 0 ||
         checkpoint_cancelled(control, error, error_size) < 0) goto done;
     struct snag_binary_checkpoint_provider provider;
     if (snag_binary_checkpoint_provider_decode(frame->provider.data, frame->provider.size,
@@ -418,6 +421,9 @@ resume_pinned(struct snag_session *source, struct snag_session *restored,
             stop, available, snag_context_capture_event, capture,
             control ? control->cancelled : NULL, control ? control->opaque : NULL,
             &recovery, &origins, error, error_size) < 0) goto done;
+    if (snag_binary_checkpoint_processes_cursors(source->log_fd, &recovery.verified, available,
+        &origins, &candidate, control ? control->cancelled : NULL,
+        control ? control->opaque : NULL) < 0) goto done;
     struct source_walk walk = {.fd = source->log_fd, .control = control,
         .verified = &recovery.verified, .access = available};
     if (snag_context_capture_sources(capture, &candidate, walk_sources, &walk,

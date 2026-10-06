@@ -48,6 +48,59 @@ bad_read(int fd, const struct snag_binary_anchor *anchor,
     }
 }
 
+static bool
+cancel_scan(void *opaque)
+{
+    (void)opaque;
+    return true;
+}
+
+static void
+scan_cursors(int fd, const struct snag_binary_anchor *anchor,
+    const struct snag_binary_checkpoint_index *access,
+    const struct snag_binary_checkpoint_sources *sources, const struct snag_session *state)
+{
+    if (!state->process_count) return;
+    size_t size = state->process_count * sizeof(*state->processes);
+    struct snag_session candidate = *state;
+    candidate.processes = malloc(size);
+    assert(candidate.processes);
+    memcpy(candidate.processes, state->processes, size);
+    assert(!snag_binary_checkpoint_processes_cursors(fd, anchor, access, sources,
+        &candidate, NULL, NULL));
+    for (size_t i = 0u; i < candidate.process_count; ++i) {
+        assert(candidate.processes[i].log_seq == sources->processes[i].scan + 1u);
+        assert(candidate.processes[i].log_offset <= anchor->end);
+        assert(snag_hex_is_lower(candidate.processes[i].log_hash, SNAG_SHA256_HEX_LEN));
+    }
+    struct snag_binary_checkpoint_sources bad = {0};
+    assert(!snag_binary_checkpoint_sources_clone(&bad, sources));
+    uint64_t saved = bad.processes[0].scan;
+    uint64_t invalid[] = {bad.processes[0].started - 1u, anchor->next_seq, UINT64_MAX};
+    for (size_t i = 0u; i < sizeof(invalid) / sizeof(*invalid); ++i) {
+        bad.processes[0].scan = invalid[i];
+        errno = 0;
+        assert(snag_binary_checkpoint_processes_cursors(fd, anchor, access, &bad,
+            &candidate, NULL, NULL) < 0 && errno == EINVAL);
+    }
+    bad.processes[0].scan = saved;
+    bad.processes[0].handle[0] = bad.processes[0].handle[0] == 'a' ? 'b' : 'a';
+    assert(snag_binary_checkpoint_processes_cursors(fd, anchor, access, &bad,
+        &candidate, NULL, NULL) < 0 && errno == EINVAL);
+    snag_binary_checkpoint_sources_free(&bad);
+    assert(snag_binary_checkpoint_processes_cursors(fd, anchor, access, sources,
+        &candidate, cancel_scan, NULL) < 0 && errno == ECANCELED);
+    for (size_t i = 0u; i < sources->process_count; ++i) {
+        struct snag_buf omitted = {.max = SIZE_MAX};
+        struct snag_binary_checkpoint_index missing;
+        binary_fixture_access_omit(access, sources->processes[i].scan, &omitted, &missing);
+        assert(snag_binary_checkpoint_processes_cursors(fd, anchor, &missing, sources,
+            &candidate, NULL, NULL) < 0 && errno == ENOENT);
+        snag_buf_free(&omitted);
+    }
+    free(candidate.processes);
+}
+
 void
 test_store_binary_processes_state(int fd, const struct snag_binary_anchor *anchor,
     const struct snag_binary_checkpoint_sources *sources, const struct snag_session *state)
@@ -56,9 +109,10 @@ test_store_binary_processes_state(int fd, const struct snag_binary_anchor *ancho
     struct snag_binary_checkpoint_index access;
     binary_fixture_access(fd, anchor, &access_bytes, &access);
     assert(sources->process_count == state->process_count);
+    scan_cursors(fd, anchor, &access, sources, state);
     struct snag_buf wire = {.max = SIZE_MAX};
     assert(!snag_binary_checkpoint_processes_encode(&wire, sources, state));
-    assert(wire.len == 10u + 97u * state->process_count);
+    assert(wire.len == 10u + 105u * state->process_count);
     struct snag_binary_checkpoint_processes view;
     assert(!snag_binary_checkpoint_processes_decode(wire.data, wire.len, &view));
     struct snag_process_state *restored = NULL;
@@ -183,17 +237,32 @@ test_store_binary_processes(void)
     assert(!snag_binary_checkpoint_processes_encode(&wire, &sources, &state));
     char hash[65];
     snag_sha256_hex(wire.data, wire.len, hash);
-    assert(wire.len == 204u);
-    assert(!strcmp(hash, "b38cee6f739dc7d7b01864ebafed256369ae4acd10b33f4219db778821704995"));
+    assert(wire.len == 220u);
+    assert(!strcmp(hash, "57aa1b5e9cf81a8df37f1faf19d880207591cb93036a468305f4dd1431cb5111"));
     struct snag_binary_checkpoint_processes view;
     assert(!snag_binary_checkpoint_processes_decode(wire.data, wire.len, &view));
-    assert(view.count == 2u && view.data == wire.data + 10u);
+    assert(view.version == 2u && view.count == 2u && view.data == wire.data + 10u);
+    unsigned char legacy[204];
+    memcpy(legacy, wire.data, 10u);
+    legacy[0] = 1u;
+    for (size_t i = 0u; i < 2u; ++i)
+        memcpy(legacy + 10u + i * 97u, wire.data + 10u + i * 105u, 97u);
+    snag_sha256_hex(legacy, sizeof(legacy), hash);
+    assert(!strcmp(hash, "b38cee6f739dc7d7b01864ebafed256369ae4acd10b33f4219db778821704995"));
+    struct snag_binary_checkpoint_processes old;
+    assert(!snag_binary_checkpoint_processes_decode(legacy, sizeof(legacy), &old));
+    assert(old.version == 1u && old.count == 2u);
+    for (size_t i = 0u; i < old.count; ++i) {
+        struct snag_binary_checkpoint_process_source origin;
+        assert(!snag_binary_checkpoint_processes_origin(&old, i, &origin));
+        assert(origin.scan == origin.started && origin.started == sources.processes[i].started);
+    }
     for (size_t size = 0u; size < wire.len; ++size) bad_decode(wire.data, size);
     bad_decode(NULL, wire.len);
     assert(snag_binary_checkpoint_processes_decode(wire.data, wire.len, NULL) < 0);
-    unsigned char changed[205];
+    unsigned char changed[221];
     memcpy(changed, wire.data, wire.len);
-    changed[204] = 0u;
+    changed[220] = 0u;
     bad_decode(changed, sizeof(changed));
     for (size_t i = 0u; i < 2u; ++i) {
         memcpy(changed, wire.data, wire.len);
@@ -201,9 +270,16 @@ test_store_binary_processes(void)
         bad_decode(changed, wire.len);
         for (unsigned int bit = 2u; bit < 8u; ++bit) {
             memcpy(changed, wire.data, wire.len);
-            changed[10u + i * 97u + 96u] |= (unsigned char)(1u << bit);
+            changed[10u + i * 105u + 96u] |= (unsigned char)(1u << bit);
             bad_decode(changed, wire.len);
         }
+    }
+    for (size_t i = 0u; i < 2u; ++i) {
+        memcpy(changed, wire.data, wire.len);
+        memset(changed + 10u + i * 105u + 97u, 0, 8u);
+        bad_decode(changed, wire.len);
+        memset(changed + 10u + i * 105u + 97u, 255, 8u);
+        bad_decode(changed, wire.len);
     }
     memcpy(changed, wire.data, wire.len);
     memset(changed + 2u, 255, 8u);
@@ -214,7 +290,7 @@ test_store_binary_processes(void)
         bad_decode(changed, wire.len);
     }
     memcpy(changed, wire.data, wire.len);
-    memcpy(changed + 107u, changed + 10u, 8u);
+    memcpy(changed + 115u, changed + 10u, 8u);
     bad_decode(changed, wire.len);
     struct snag_buf limited = {.max = wire.len + 3u};
     assert(!snag_buf_append(&limited, "keep", 4u));
@@ -239,7 +315,7 @@ test_store_binary_processes(void)
     sources.processes[0].handle[0] = 'a';
     --sources.process_count;
     assert(snag_binary_checkpoint_processes_encode(&wire, &sources, &state) < 0);
-    assert(wire.len == 204u);
+    assert(wire.len == 220u);
     snag_binary_checkpoint_sources_free(&sources);
     assert(!sources.processes && !sources.process_count && !sources.calls.graph);
     snag_binary_checkpoint_sources_free(&sources);
@@ -247,7 +323,7 @@ test_store_binary_processes(void)
     state.process_count = 0u;
     snag_buf_reset(&wire);
     assert(!snag_binary_checkpoint_processes_encode(&wire, &sources, &state));
-    assert(wire.len == 10u && wire.data[0] == 1u);
+    assert(wire.len == 10u && wire.data[0] == 2u);
     for (size_t i = 1u; i < wire.len; ++i) assert(!wire.data[i]);
     assert(!snag_binary_checkpoint_processes_decode(wire.data, wire.len, &view));
     assert(!view.count);
