@@ -3976,7 +3976,7 @@ struct snag_binary_session {
     bool io_pending, retryable, retried, faulted, checkpoint_configured;
     bool checkpoint_pending, checkpoint_failed, checkpoint_published, receipt_candidate;
     bool index_configured;
-    int index_error;
+    int index_error, index_fd;
 };
 
 static void
@@ -4196,6 +4196,7 @@ snag_session_binary_index_setup(struct snag_session *session, int fd,
     if (snag_binary_io_index_setup(binary->io, fd, &binary->identity, &binary->tree) < 0)
         return snag_errorf(error, error_size, "cannot attach native index: %s", strerror(errno));
     binary->index_configured = true;
+    binary->index_fd = fd;
     return 0;
 }
 
@@ -4226,8 +4227,27 @@ snag_session_binary_projection_read(const struct snag_session *session, uint64_t
     if (binary->faulted) return snag_fail(error, error_size, ESTALE, "native writer is faulted");
     if (!binary->checkpoint_configured)
         return snag_fail(error, error_size, ENOTSUP, "native source custody is not installed");
-    if (snag_binary_checkpoint_projection_read(session->log_fd, &binary->boundary,
-            &binary->available, sequence, type, out) < 0)
+    int rc = snag_binary_checkpoint_projection_read(session->log_fd, &binary->boundary,
+        &binary->available, sequence, type, out);
+    if (rc < 0 && errno == ENOENT && binary->index_configured) {
+        struct snag_buf bytes = {.max = SIZE_MAX};
+        rc = snag_binary_checkpoint_query_read(session->log_fd, binary->index_fd,
+            &binary->boundary, &binary->available, &binary->tree, &sequence, 1u,
+            NULL, NULL, &bytes);
+        if (!rc) {
+            unsigned char root[32];
+            struct snag_binary_checkpoint_index query;
+            rc = snag_binary_index_tree_root(&binary->tree, root);
+            if (!rc) rc = snag_binary_checkpoint_index_decode(bytes.data, bytes.len,
+                &binary->identity, &binary->boundary, root, &query);
+            if (!rc) rc = snag_binary_checkpoint_projection_read(session->log_fd,
+                &binary->boundary, &query, sequence, type, out);
+        }
+        int saved = errno;
+        snag_buf_free(&bytes);
+        errno = saved;
+    }
+    if (rc < 0)
         return snag_errorf(error, error_size, "cannot read native source: %s", strerror(errno));
     return 0;
 }

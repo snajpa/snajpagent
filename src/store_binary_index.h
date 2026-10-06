@@ -34,8 +34,9 @@ struct snag_binary_index_entry {
 /* Version-1 checkpoint access metadata. The frontier covers every canonical
  * record; the sorted entry table holds only the caller's working-set locations.
  * Decoded entries borrow immutable bytes. The entire enclosing image must be
- * pinned by a canonical receipt before these locations grant source membership;
- * matching the frontier root alone cannot authenticate the location table. */
+ * pinned by a canonical receipt for checkpoint source custody. Query-built views
+ * instead prove each row independently beneath an admitted frontier. Merely
+ * matching the frontier root cannot authenticate a self-supplied location table. */
 struct snag_binary_checkpoint_index {
     struct snag_binary_identity identity;
     struct snag_binary_anchor boundary;

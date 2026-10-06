@@ -823,6 +823,8 @@ producer_output(struct snag_session *session, unsigned int index, unsigned int o
     snag_buf_free(&payload);
 }
 
+static void native_query_closure(struct snag_session *, uint64_t, size_t, const char *);
+
 static void
 test_native_producer_resume(bool queued)
 {
@@ -917,6 +919,8 @@ test_native_producer_resume(bool queued)
         value.source.bytes == 6u);
     producer_resume_owner(&session, &probe); /* Closed response never resurrects spans. */
     native_checkpoint_commit(&session, "banner_updated", json_pack("{s:s}", "text", "after"));
+    native_query_closure(&session, text_sequence + 1u, queued ? 3u : 2u, "turn_started");
+    native_query_closure(&session, last + 1u, 5u, "response_interrupted");
     snag_buf_free(&scratch);
     snag_session_close(&session);
 }
@@ -1349,6 +1353,155 @@ native_voice_adoption(const struct snag_session *session, const struct snag_jour
         "source_session_id", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "source_as_of_seq", 2,
         "begin_offset", (json_int_t)begin->offset, "begin_seq", (json_int_t)begin->next_seq,
         "begin_sha256", begin->prev_sha256, "count", (json_int_t)count);
+}
+
+static int
+native_query_index(struct snag_session *session)
+{
+    struct snag_binary_anchor through, before;
+    struct snag_binary_index_tree expected, tree = {0};
+    struct snag_binary_checkpoint_sources sources = {0};
+    char error[256];
+    assert(!snag_session_binary_checkpoint_capture(session, &through, &expected,
+        &sources, error, sizeof(error)));
+    snag_binary_checkpoint_sources_free(&sources);
+    unsigned char header[SNAG_BINARY_HEADER_SIZE];
+    struct snag_binary_identity identity;
+    assert(snag_pread(session->log_fd, header, sizeof(header), 0) == sizeof(header));
+    assert(!snag_binary_header_decode(header, sizeof(header), &identity, &before));
+    char *path = snag_path_join(getenv("TMPDIR") ? getenv("TMPDIR") : "/tmp",
+        "snag-query-index-XXXXXX");
+    assert(path);
+    int fd = mkstemp(path);
+    assert(fd >= 0 && !unlink(path));
+    free(path);
+    unsigned char index_header[SNAG_BINARY_INDEX_HEADER_SIZE];
+    snag_binary_index_header_encode(index_header, &identity);
+    assert(!snag_write_full(fd, index_header, sizeof(index_header)));
+    struct snag_buf scratch = {.max = SNAG_BINARY_BATCH_MAX};
+    struct snag_buf bytes = {.max = SNAG_BINARY_INDEX_TREE_BATCH_MAX};
+    /* Independent oracle over this explicitly small admitted fixture, never a
+     * production lifetime rebuild or an index supplied root as authority. */
+    while (before.next_seq < through.next_seq) {
+        struct snag_binary_batch batch;
+        struct snag_binary_anchor after;
+        assert(!snag_binary_batch_read(session->log_fd, through.end, &before,
+            &scratch, &batch, &after));
+        snag_buf_reset(&bytes);
+        assert(!snag_binary_index_tree_append_batch(&bytes, &tree, &identity,
+            &before, &after, batch.data, batch.size));
+        assert(!snag_write_full(fd, bytes.data, bytes.len));
+        before = after;
+    }
+    unsigned char actual[32], wanted[32];
+    assert(!snag_binary_index_tree_root(&tree, actual));
+    assert(!snag_binary_index_tree_root(&expected, wanted) && !memcmp(actual, wanted, 32u));
+    snag_buf_free(&bytes);
+    snag_buf_free(&scratch);
+    return fd;
+}
+
+struct native_query_cancel {
+    size_t calls, at;
+};
+
+static bool
+native_query_cancelled(void *opaque)
+{
+    struct native_query_cancel *cancel = opaque;
+    return ++cancel->calls == cancel->at;
+}
+
+static void
+native_query_closure(struct snag_session *session, uint64_t wanted, size_t count, const char *type)
+{
+    struct snag_binary_anchor through;
+    struct snag_binary_index_tree tree;
+    struct snag_binary_checkpoint_sources sources = {0};
+    char error[256];
+    assert(!snag_session_binary_checkpoint_capture(session, &through, &tree,
+        &sources, error, sizeof(error)));
+    snag_binary_checkpoint_sources_free(&sources);
+    unsigned char header[SNAG_BINARY_HEADER_SIZE], root[32];
+    struct snag_binary_identity identity;
+    struct snag_binary_anchor begin;
+    assert(snag_pread(session->log_fd, header, sizeof(header), 0) == sizeof(header));
+    assert(!snag_binary_header_decode(header, sizeof(header), &identity, &begin));
+    assert(!snag_binary_index_tree_root(&tree, root));
+    struct snag_buf bytes = {.max = SIZE_MAX}, query = {.max = SIZE_MAX};
+    struct snag_binary_checkpoint_index available, selected;
+    /* Empty old location custody at the independently known ACK frontier:
+     * neither a core image nor a claim that the unselected history is absent. */
+    assert(!snag_binary_checkpoint_index_encode(&bytes, &identity, &through, &tree, NULL, 0u));
+    assert(!snag_binary_checkpoint_index_decode(bytes.data, bytes.len, &identity,
+        &through, root, &available));
+    int index = native_query_index(session);
+    assert(snag_seek(session->log_fd, 13, SEEK_SET) == 13 && snag_seek(index, 31, SEEK_SET) == 31);
+    const char *name = "unchanged";
+    json_t *data = NULL;
+    assert(snag_binary_checkpoint_projection_read(session->log_fd, &through, &available,
+        wanted, &name, &data) < 0 && errno == ENOENT && !data && !strcmp(name, "unchanged"));
+    struct native_query_cancel cancel = {.at = SIZE_MAX};
+    uint64_t roots[3] = {wanted, wanted, wanted};
+    assert(!snag_buf_append(&query, "canary", 6u));
+    assert(!snag_binary_checkpoint_query_read(session->log_fd, index, &through, &available,
+        &tree, roots, 3u, native_query_cancelled, &cancel, &query));
+    assert(!memcmp(query.data, "canary", 6u) && cancel.calls > 1u);
+    assert(!snag_binary_checkpoint_index_decode(query.data + 6u, query.len - 6u,
+        &identity, &through, root, &selected) && selected.entry_count == count);
+    assert(!snag_binary_checkpoint_projection_read(session->log_fd, &through, &selected,
+        wanted, &name, &data) && !strcmp(name, type));
+    if (!strcmp(type, "turn_started")) {
+        assert(!strcmp(snag_json_string(data, "text"), "native reference"));
+        assert(!strcmp(snag_json_string(json_array_get(json_object_get(data, "content"), 0u),
+            "text"), "original content"));
+    } else {
+        json_t *items = json_object_get(data, "partial_public");
+        assert(json_array_size(items) == 2u &&
+            !strcmp(snag_json_string(json_array_get(items, 0u), "text"), "hello") &&
+            !strcmp(snag_json_string(json_array_get(items, 1u), "text"), "second"));
+    }
+    json_decref(data);
+    size_t checks = cancel.calls;
+    for (size_t at = 1u; at <= checks; ++at) {
+        query.len = 6u;
+        cancel = (struct native_query_cancel){.at = at};
+        assert(snag_binary_checkpoint_query_read(session->log_fd, index, &through, &available,
+            &tree, &wanted, 1u, native_query_cancelled, &cancel, &query) < 0 &&
+            errno == ECANCELED && query.len == 6u && !memcmp(query.data, "canary", 6u));
+    }
+    uint64_t invalid[2] = {0u, through.next_seq};
+    for (size_t i = 0u; i < 2u; ++i) {
+        assert(snag_binary_checkpoint_query_read(session->log_fd, index, &through, &available,
+            &tree, &invalid[i], 1u, NULL, NULL, &query) < 0 && errno == EINVAL);
+        assert(query.len == 6u && !memcmp(query.data, "canary", 6u));
+    }
+    assert(snag_binary_checkpoint_query_read(session->log_fd, index, &through, &available,
+        &tree, &wanted, SIZE_MAX, NULL, NULL, &query) < 0 && errno == EOVERFLOW && query.len == 6u);
+    struct snag_binary_index_tree wrong = tree;
+    ++wrong.count;
+    assert(snag_binary_checkpoint_query_read(session->log_fd, index, &through, &available,
+        &wrong, &wanted, 1u, NULL, NULL, &query) < 0 && errno == EINVAL && query.len == 6u);
+    wrong = tree;
+    unsigned int peak = 0u;
+    while (!(wrong.count & (UINT64_C(1) << peak))) ++peak;
+    wrong.peaks[peak][0] ^= 1u;
+    assert(snag_binary_checkpoint_query_read(session->log_fd, index, &through, &available,
+        &wrong, &wanted, 1u, NULL, NULL, &query) < 0 && errno == EINVAL && query.len == 6u);
+    struct snag_binary_checkpoint_index foreign = available;
+    ++foreign.identity.created_ms;
+    assert(snag_binary_checkpoint_query_read(session->log_fd, index, &through, &foreign,
+        &tree, &wanted, 1u, NULL, NULL, &query) < 0 && errno == EINVAL && query.len == 6u);
+    assert(snag_binary_checkpoint_query_read(session->log_fd, -1, &through, &available,
+        &tree, &wanted, 1u, NULL, NULL, &query) < 0 && errno == EINVAL && query.len == 6u);
+    query.max = query.len;
+    assert(snag_binary_checkpoint_query_read(session->log_fd, index, &through, &available,
+        &tree, &wanted, 1u, NULL, NULL, &query) < 0 && query.len == 6u &&
+        !memcmp(query.data, "canary", 6u));
+    assert(snag_seek(session->log_fd, 0, SEEK_CUR) == 13 && snag_seek(index, 0, SEEK_CUR) == 31);
+    assert(session->next_seq == through.next_seq && !close(index));
+    snag_buf_free(&query);
+    snag_buf_free(&bytes);
 }
 
 static void
@@ -1794,6 +1947,84 @@ test_native_voice_grouped(void)
 }
 
 static void
+test_native_historical_point(void)
+{
+    struct snag_session session;
+    struct probe probe = {0};
+    native_fixture(&session, &probe);
+    char error[256];
+    assert(!snag_session_commit(&session, "voice_event", native_voice_data("user",
+        "Historical observation outside current core closure"), NULL, error, sizeof(error)));
+    int directory;
+    char *path;
+    native_voice_access(&session, &directory, &path, true);
+    int index = native_query_index(&session);
+    assert(!snag_session_binary_index_setup(&session, index, error, sizeof(error)));
+    assert(snag_seek(session.log_fd, 13, SEEK_SET) == 13 && snag_seek(index, 31, SEEK_SET) == 31);
+    const char *type;
+    json_t *data = NULL;
+    int rc = snag_session_binary_projection_read(&session, 2u, &type, &data,
+        error, sizeof(error));
+    if (rc < 0) fprintf(stderr, "historical native point: %s\n", error);
+    assert(!rc && !strcmp(type, "voice_event") &&
+        !strcmp(snag_json_string(json_object_get(data, "event"), "text"),
+            "Historical observation outside current core closure"));
+    json_decref(data);
+    assert(snag_seek(session.log_fd, 0, SEEK_CUR) == 13 && snag_seek(index, 0, SEEK_CUR) == 31);
+    assert(session.next_seq == 3u && atomic_load(&probe.effects) == 2u);
+    int64_t extent, offset;
+    assert(!snag_binary_index_end(2u, &extent) && !snag_binary_index_offset(2u, &offset));
+    struct snag_buf saved = {.max = SNAG_BINARY_INDEX_TREE_BATCH_MAX};
+    assert(!snag_buf_reserve(&saved, (size_t)extent));
+    assert(snag_pread(index, saved.data, (size_t)extent, 0) == extent);
+    struct snag_binary_identity identity = {.created_ms = 42u};
+    identity.id[0] = 17u;
+    for (unsigned int fault = 0u; fault < 3u; ++fault) {
+        if (!fault) {
+            unsigned char bad = saved.data[0] ^ 1u;
+            assert(snag_seek(index, 0, SEEK_SET) == 0 && !snag_write_full(index, &bad, 1u));
+        } else if (fault == 1u) {
+            assert(!snag_truncate(index, SNAG_BINARY_INDEX_HEADER_SIZE));
+        } else {
+            struct snag_binary_index_entry entry;
+            unsigned char bad[SNAG_BINARY_INDEX_ENTRY_SIZE];
+            assert(!snag_binary_index_entry_decode(saved.data + offset,
+                sizeof(bad), &identity, 2u, &entry));
+            entry.kind = SNAG_BINARY_BANNER_UPDATED;
+            assert(!snag_binary_index_entry_encode(bad, &identity, &entry));
+            assert(snag_seek(index, offset, SEEK_SET) == offset &&
+                !snag_write_full(index, bad, sizeof(bad)));
+        }
+        assert(snag_seek(index, 31, SEEK_SET) == 31);
+        type = "unchanged";
+        data = json_pack("{s:i}", "canary", 17);
+        assert(data);
+        json_t *canary = data;
+        assert(snag_session_binary_projection_read(&session, 2u, &type, &data,
+            error, sizeof(error)) < 0 && errno == (fault == 1u ? ENOENT : EINVAL));
+        assert(data == canary && !strcmp(type, "unchanged") &&
+            json_integer_value(json_object_get(data, "canary")) == 17);
+        json_decref(data);
+        data = NULL;
+        /* Installed canonical working-set membership is independent of cache
+         * health. A cache failure never makes valid old custody unavailable. */
+        assert(!snag_session_binary_projection_read(&session, 1u, &type, &data,
+            error, sizeof(error)) && !strcmp(type, "session_created"));
+        json_decref(data);
+        assert(snag_seek(session.log_fd, 0, SEEK_CUR) == 13 &&
+            snag_seek(index, 0, SEEK_CUR) == 31 && session.next_seq == 3u &&
+            atomic_load(&probe.effects) == 2u);
+        assert(snag_seek(index, 0, SEEK_SET) == 0 &&
+            !snag_write_full(index, saved.data, (size_t)extent) &&
+            snag_seek(index, 31, SEEK_SET) == 31);
+    }
+    snag_buf_free(&saved);
+    snag_session_close(&session);
+    assert(!close(index) && !close(directory) && !rmdir(path));
+    free(path);
+}
+
+static void
 test_native_clone_failure(void)
 {
     struct snag_session session;
@@ -2036,6 +2267,7 @@ test_store_binary_io(void)
     test_native_voice_context(false);
     test_native_voice_context(true);
     test_native_voice_grouped();
+    test_native_historical_point();
     test_group_ack();
     test_failed_commit(true, 1u);
     test_failed_commit(false, 1u);

@@ -201,6 +201,18 @@ int snag_binary_checkpoint_access_plan_read(int fd,
     const struct snag_binary_index_tree *frontier, bool (*cancelled)(void *), void *opaque,
     struct snag_buf *out);
 
+/* Capture only requested canonical roots and causal field/span/transform sources.
+ * Missing old working-set rows may use individual index proofs beneath the
+ * independently admitted frontier at through; the cache never supplies that root.
+ * Missing cache data is unavailable, not absence. No prefix scan, reduction,
+ * resume or execution authority. Caller pins common identity/ancestry, immutable
+ * bytes and explicit query work. Atomic encoded append; pread only;
+ * cancellation before source rows/final adoption. */
+int snag_binary_checkpoint_query_read(int fd, int index_fd, const struct snag_binary_anchor *,
+    const struct snag_binary_checkpoint_index *, const struct snag_binary_index_tree *,
+    const uint64_t *sequences, size_t count, bool (*cancelled)(void *), void *opaque,
+    struct snag_buf *out);
+
 /* Select complete core/provider materializer closure from an independently
  * verified snapshot and available old working-set sources plus bounded suffix.
  * Available must contain every old field/span/transform dependency; omissions

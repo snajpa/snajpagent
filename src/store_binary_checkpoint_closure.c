@@ -11,6 +11,9 @@ struct closure_capture {
     int fd;
     const struct snag_binary_anchor *through;
     const struct snag_binary_checkpoint_index *available;
+    const struct snag_binary_index_tree *frontier;
+    int index_fd;
+    unsigned char index_root[32];
     bool (*cancelled)(void *);
     void *opaque;
     struct snag_buf roots, needed, entries;
@@ -59,6 +62,18 @@ unique(struct snag_buf *buffer)
     buffer->len = kept * sizeof(*sequences);
 }
 
+static int
+old_member(struct closure_capture *capture, uint64_t sequence,
+    struct snag_binary_index_entry *out)
+{
+    int rc = snag_binary_checkpoint_index_find(capture->available, sequence, out);
+    if (rc <= 0) return rc;
+    if (capture->index_fd < 0) return snag_errno(ENOENT);
+    rc = snag_binary_index_read_verified(capture->index_fd, &capture->available->identity,
+        capture->frontier->count, capture->index_root, sequence, out);
+    return rc > 0 ? snag_errno(ENOENT) : rc;
+}
+
 /* Retain only one bounded physical batch/index scratch. Even cached payloads
  * require old table membership, so a neighboring point cannot fill an old gap. */
 static int
@@ -66,10 +81,25 @@ load(struct closure_capture *capture, uint64_t sequence,
     struct snag_binary_record *record, struct snag_binary_index_entry *entry)
 {
     if (cancel_capture(capture)) return snag_errno(ECANCELED);
+    bool old = sequence < capture->available->boundary.next_seq;
+    struct snag_binary_index_entry listed;
+    if (old && old_member(capture, sequence, &listed) < 0) return -1;
     if (!capture->batch.count || sequence < capture->before.next_seq ||
         sequence >= capture->after.next_seq) {
+        struct snag_binary_checkpoint_index verified;
+        unsigned char encoded[SNAG_BINARY_INDEX_ENTRY_SIZE];
+        const struct snag_binary_checkpoint_index *access = capture->available;
+        if (old && capture->index_fd >= 0) {
+            /* This row has independent membership, not merely a matching
+             * frontier stored beside self-supplied source locations. */
+            if (snag_binary_index_entry_encode(encoded, &access->identity, &listed) < 0) return -1;
+            verified = (struct snag_binary_checkpoint_index){.identity = access->identity,
+                .boundary = *capture->through, .tree = *capture->frontier,
+                .entries = encoded, .entry_count = 1u};
+            access = &verified;
+        }
         if (snag_binary_checkpoint_batch_find(capture->fd, capture->through,
-                capture->available, sequence, &capture->scratch, &capture->batch,
+                access, sequence, &capture->scratch, &capture->batch,
                 &capture->before) < 0) return -1;
         int read = snag_binary_batch_read(capture->fd, capture->through->end, &capture->before,
             &capture->scratch, &capture->batch, &capture->after);
@@ -84,10 +114,7 @@ load(struct closure_capture *capture, uint64_t sequence,
     if (snag_binary_index_entry_decode(capture->flat.data + offset,
             SNAG_BINARY_INDEX_ENTRY_SIZE, &capture->available->identity, sequence,
             &canonical) < 0) return -1;
-    if (sequence < capture->available->boundary.next_seq) {
-        struct snag_binary_index_entry listed;
-        int found = snag_binary_checkpoint_index_find(capture->available, sequence, &listed);
-        if (found != 0) return found < 0 ? -1 : snag_errno(ENOENT);
+    if (old) {
         if (listed.batch_offset != canonical.batch_offset || listed.turn != canonical.turn ||
             listed.record_offset != canonical.record_offset || listed.kind != canonical.kind ||
             memcmp(listed.batch_digest, canonical.batch_digest, sizeof(listed.batch_digest)))
@@ -128,6 +155,28 @@ collect_range(struct closure_capture *capture, uint64_t first, uint64_t end,
         uint64_t range[3] = {first, end, visit == collect_transform ?
             SNAG_BINARY_RULE_TRANSFORM : SNAG_BINARY_RESPONSE_OUTPUT};
         return snag_buf_append(capture->ranges, range, sizeof(range));
+    }
+    if (capture->index_fd >= 0) {
+        /* Prove every query interval row before classification; an unselected
+         * old gap is never interpreted as absent output or transformation. */
+        struct closure_capture interval = *capture;
+        interval.scratch = (struct snag_buf){.max = SNAG_BINARY_BATCH_MAX};
+        interval.flat = (struct snag_buf){.max = SNAG_BINARY_INDEX_BATCH_MAX};
+        interval.batch = (struct snag_binary_batch){0};
+        /* The owner graph still borrows capture's batch while its next span
+         * is decoded. Interval I/O must not overwrite that borrowed payload. */
+        int rc = 0;
+        for (uint64_t sequence = first; sequence < end; ++sequence) {
+            struct snag_binary_record record;
+            struct snag_binary_index_entry entry;
+            if (load(&interval, sequence, &record, &entry) < 0 ||
+                visit(capture, &record, sequence) < 0) { rc = -1; break; }
+        }
+        int saved = errno;
+        snag_buf_free(&interval.scratch);
+        snag_buf_free(&interval.flat);
+        errno = saved;
+        return rc;
     }
     return snag_binary_checkpoint_records_read(capture->fd, capture->through,
         capture->available, first, end, visit, cancel_capture, capture);
@@ -174,6 +223,15 @@ collect_dependencies(struct closure_capture *capture,
     const struct snag_binary_record *record, uint64_t owner)
 {
     if (record->kind == SNAG_BINARY_LEGACY_CHECKPOINT) return 0;
+    if (record->kind == SNAG_BINARY_CHECKPOINT_RECEIPT) {
+        struct snag_binary_checkpoint_receipt receipt;
+        return snag_binary_checkpoint_receipt_decode(record, &receipt) < 0 ? -1 : 0;
+    }
+    if (record->flags) {
+        if (record->flags != SNAG_BINARY_RECORD_OPTIONAL ||
+            snag_binary_event_name((enum snag_binary_kind)record->kind)) return snag_errno(EINVAL);
+        return 0;
+    }
     struct snag_binary_event event;
     int rc = snag_binary_event_decode(record, &event);
     if (rc != 0) return rc < 0 ? -1 : snag_errno(EINVAL);
@@ -345,7 +403,7 @@ snag_binary_checkpoint_access_plan_build(struct snag_binary_checkpoint_access_pl
     if (provider.next_seq != through->next_seq) return snag_errno(EINVAL);
     struct snag_binary_checkpoint_access_plan staged = {.boundary = *through,
         .ranges = {.max = SIZE_MAX}};
-    struct closure_capture capture = {.through = through, .cancelled = cancelled,
+    struct closure_capture capture = {.through = through, .index_fd = -1, .cancelled = cancelled,
         .opaque = opaque, .roots = {.max = SIZE_MAX}, .needed = {.max = SIZE_MAX},
         .ranges = &staged.ranges};
     int rc = collect_roots(&capture, sources, state, &provider);
@@ -366,8 +424,8 @@ snag_binary_checkpoint_access_plan_build(struct snag_binary_checkpoint_access_pl
     return 0;
 }
 
-int
-snag_binary_checkpoint_access_plan_read(int fd,
+static int
+access_read(int fd, int index_fd,
     const struct snag_binary_checkpoint_access_plan *plan,
     const struct snag_binary_checkpoint_index *available,
     const struct snag_binary_index_tree *frontier, bool (*cancelled)(void *), void *opaque,
@@ -397,10 +455,12 @@ snag_binary_checkpoint_access_plan_read(int fd,
     if (identity.created_ms != available->identity.created_ms ||
         memcmp(identity.id, available->identity.id, sizeof(identity.id))) return snag_errno(EINVAL);
     struct closure_capture capture = {.fd = fd, .through = through, .available = available,
+        .frontier = frontier, .index_fd = index_fd,
         .cancelled = cancelled, .opaque = opaque, .roots = {.max = SIZE_MAX},
         .needed = {.max = SIZE_MAX}, .entries = {.max = SIZE_MAX},
         .scratch = {.max = SNAG_BINARY_BATCH_MAX}, .flat = {.max = SNAG_BINARY_INDEX_BATCH_MAX}};
     int rc = -1;
+    if (index_fd >= 0 && snag_binary_index_tree_root(frontier, capture.index_root) < 0) goto done;
     if (snag_buf_append(&capture.roots, plan->roots.data, plan->roots.len) < 0 ||
         snag_buf_append(&capture.needed, plan->needed.data, plan->needed.len) < 0) goto done;
     for (size_t i = 0u; i < plan->ranges.len / (3u * sizeof(uint64_t)); ++i) {
@@ -437,6 +497,50 @@ done:
     snag_buf_free(&capture.entries);
     snag_buf_free(&capture.scratch);
     snag_buf_free(&capture.flat);
+    return rc;
+}
+
+int
+snag_binary_checkpoint_access_plan_read(int fd,
+    const struct snag_binary_checkpoint_access_plan *plan,
+    const struct snag_binary_checkpoint_index *available,
+    const struct snag_binary_index_tree *frontier, bool (*cancelled)(void *), void *opaque,
+    struct snag_buf *out)
+{
+    return access_read(fd, -1, plan, available, frontier, cancelled, opaque, out);
+}
+
+int
+snag_binary_checkpoint_query_read(int fd, int index_fd, const struct snag_binary_anchor *through,
+    const struct snag_binary_checkpoint_index *available,
+    const struct snag_binary_index_tree *frontier, const uint64_t *sequences, size_t count,
+    bool (*cancelled)(void *), void *opaque, struct snag_buf *out)
+{
+    if (index_fd < 0 || !through || !out || out->len > out->max ||
+        (count && !sequences)) return snag_errno(EINVAL);
+    if (count > SIZE_MAX / sizeof(*sequences)) return snag_errno(EOVERFLOW);
+    struct snag_binary_checkpoint_access_plan plan = {.boundary = *through,
+        .roots = {.max = SIZE_MAX}};
+    struct snag_buf staged = {.max = out->max - out->len};
+    int rc = -1;
+    if (snag_buf_append(&plan.roots, sequences, count * sizeof(*sequences)) < 0) goto done;
+    for (size_t i = 0u; i < count; ++i) {
+        uint64_t sequence;
+        memcpy(&sequence, plan.roots.data + i * sizeof(sequence), sizeof(sequence));
+        if (!sequence || sequence >= through->next_seq) { snag_errno(EINVAL); goto done; }
+    }
+    unique(&plan.roots);
+    if (access_read(fd, index_fd, &plan, available, frontier, cancelled, opaque, &staged) < 0)
+        goto done;
+    if (cancelled && cancelled(opaque)) { snag_errno(ECANCELED); goto done; }
+    rc = snag_buf_append(out, staged.data, staged.len);
+done:
+    {
+        int saved = errno;
+        snag_binary_checkpoint_access_plan_free(&plan);
+        snag_buf_free(&staged);
+        errno = saved;
+    }
     return rc;
 }
 

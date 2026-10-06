@@ -3017,10 +3017,29 @@ bindings acquire checkpoint custody explicitly through the existing setup API.
 
 Live native source projection reads against the acknowledged boundary and installed
 working-set table. Later candidate bytes stay outside that view, missing older
-locations remain unavailable, and point reads preserve descriptor position. IRC
+locations require independent proof, and point reads preserve descriptor position. IRC
 context source lookup dispatches there before the legacy reverse walker. Typed
 checkpoint receipts hydrate as lookup-only checkpoint markers; the existing exact
 adjacent IRC identity repair remains separate from reducer/provider admission.
+
+Point hydration may resolve an unavailable old source through the attached,
+borrowed derived-index descriptor. The independently acknowledged frontier supplies
+the expected root; neither the cache header nor the requested location table does.
+The query captures only explicit root records and their causal field/span/transform
+dependencies. Every requested old row, including one borrowed from an already
+decoded neighboring batch, retains its own installed membership or a verified
+index proof and exact canonical tuple check. Referenced intervals prove each row
+before classification, so an unselected old gap is never an absence proof. Span
+I/O uses separate bounded scratch while the owning graph still borrows its batch.
+
+The encoded query view is temporary source custody, not a checkpoint image, reducer
+state, provider admission or execution permission. Query capture is cancellable and
+failure-atomic through its final encoded adoption; journal/index positions do not
+change. Only unavailable-source failures try this path. Corrupt installed locations
+or unsupported semantic data are not retried against the cache. Bad or missing cache
+data stays unavailable, while already-installed source membership remains usable.
+Current checkpoint core/provider selection still requires complete admitted old
+working-set closure and bounded suffix; it never consults this derived index.
 
 Close drains owned publication or journal work before descriptor/lock teardown
 while releasing no abandoned candidate effects. It preserves provisional files

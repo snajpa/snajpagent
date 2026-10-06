@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Resolve unavailable historical native point sources through query-specific
+  canonical membership proofs under the acknowledged frontier, without treating
+  derived-cache data as authority or replaying the old prefix.
+
 - Read incremental native voice snapshots at exact batch cuts with pinned old
   source custody, preserving imported/live observation provenance and honest
   unavailable-history failures without JSONL cursor assumptions.
