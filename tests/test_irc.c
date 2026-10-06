@@ -52,6 +52,7 @@ struct capture {
     unsigned int query_count[2u];
     unsigned int delivery[2u][SNAG_IRC_UNCERTAIN + 1u];
     struct snag_irc_event outgoing[2u];
+    unsigned int channel_delivery[2u][SNAG_IRC_UNCERTAIN + 1u];
 };
 
 static pthread_t engine_thread;
@@ -84,6 +85,8 @@ capture_event(void *opaque, const struct snag_irc_event *event)
                 capture->outgoing[event->route.identity] = *event;
             }
         }
+        if (event->route.kind == SNAG_IRC_CHANNEL && event->route.direction == SNAG_IRC_OUTGOING)
+            ++capture->channel_delivery[event->route.identity][event->route.delivery];
     }
     if (event->kind == SNAG_IRC_MESSAGE) {
         size_t used = strlen(capture->message_text);
@@ -1714,6 +1717,50 @@ test_channel_routes(void)
         NULL, error, sizeof(error)) < 0);
     send_text(peers[SNAG_IRC_OPERATOR], ":operator!u@fake JOIN #side\r\n");
     tick(client, 5u);
+    struct snag_buf report = {.max = 8192u};
+    assert(snag_irc_channel_send(client, &side, SNAG_IRC_MESSAGE,
+        "channel-body é界", false, &report, error, sizeof(error)) == 0);
+    wait_wire(client, peers[SNAG_IRC_OPERATOR], wire, sizeof(wire),
+        "PRIVMSG #side :channel-body é界\r\n");
+    tick(client, 2u);
+    assert(capture.channel_delivery[SNAG_IRC_OPERATOR][SNAG_IRC_PENDING] == 1u);
+    assert(capture.channel_delivery[SNAG_IRC_OPERATOR][SNAG_IRC_WRITTEN] == 1u);
+    assert(!capture.channel_delivery[SNAG_IRC_OPERATOR][SNAG_IRC_ACKNOWLEDGED]);
+    assert(!capture.channel_delivery[SNAG_IRC_AGENT][SNAG_IRC_PENDING]);
+    assert(snag_buf_terminate(&report) == 0 && strstr((char *)report.data, "queued to #side"));
+    snag_buf_free(&report);
+    assert(snag_irc_channel_send(client, &side, SNAG_IRC_NOTICE,
+        "channel notice", false, NULL, error, sizeof(error)) == 0);
+    wait_wire(client, peers[SNAG_IRC_OPERATOR], wire, sizeof(wire),
+        "NOTICE #side :channel notice\r\n");
+    assert(snag_irc_channel_send(client, &side, SNAG_IRC_MESSAGE,
+        "channel action", true, NULL, error, sizeof(error)) == 0);
+    wait_wire(client, peers[SNAG_IRC_OPERATOR], wire, sizeof(wire),
+        "PRIVMSG #side :\001ACTION channel action\001\r\n");
+    char long_text[905u];
+    for (size_t i = 0u; i < 300u; ++i) memcpy(long_text + i * 3u, "界", 3u);
+    memcpy(long_text + 900u, "tail", 5u);
+    assert(snag_irc_channel_send(client, &side, SNAG_IRC_MESSAGE,
+        long_text, false, NULL, error, sizeof(error)) == 0);
+    wait_wire(client, peers[SNAG_IRC_OPERATOR], wire, sizeof(wire), "tail\r\n");
+    char recovered[sizeof(long_text)] = {0};
+    size_t used = 0u;
+    for (char *line = wire; *line;) {
+        char *end = strstr(line, "\r\n");
+        assert(end && end - line + 2 <= 512);
+        const char *prefix = "PRIVMSG #side :";
+        size_t prefix_len = strlen(prefix);
+        assert(!strncmp(line, prefix, prefix_len));
+        size_t bytes = (size_t)(end - line) - prefix_len;
+        assert(snag_utf8_valid((unsigned char *)line + prefix_len, bytes, true));
+        assert(bytes < sizeof(recovered) - used);
+        memcpy(recovered + used, line + prefix_len, bytes);
+        used += bytes;
+        line = end + 2u;
+    }
+    assert(!strcmp(recovered, long_text));
+    assert(snag_irc_channel_send(client, &side, SNAG_IRC_MESSAGE,
+        "\n\r\n", false, NULL, error, sizeof(error)) < 0);
     assert(snag_irc_channel_action(client, &side, SNAG_IRC_CHANNEL_TOPIC,
         "é界 channel topic", error, sizeof(error)) == 0);
     wait_wire(client, peers[SNAG_IRC_OPERATOR], wire, sizeof(wire),
@@ -1729,6 +1776,8 @@ test_channel_routes(void)
         "leaving", error, sizeof(error)) == 0);
     assert(snag_irc_channel_action(client, &side, SNAG_IRC_CHANNEL_NAMES,
         NULL, error, sizeof(error)) < 0);
+    assert(snag_irc_channel_send(client, &side, SNAG_IRC_MESSAGE,
+        "stale channel send", false, NULL, error, sizeof(error)) < 0);
     assert(snag_irc_channel_open(client, &scope, "#side", true,
         &current, error, sizeof(error)) < 0);
     wait_wire(client, peers[SNAG_IRC_OPERATOR], wire, sizeof(wire), "PART #side :leaving\r\n");

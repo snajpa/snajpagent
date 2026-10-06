@@ -23,6 +23,17 @@ These lifecycle records stay outside model admission and channel replay. Legacy
 channel records remain readable. The public CLI/VM channel frontend, hosted room
 actions and channel chat delivery states are still being integrated.
 
+Channel send checkpoint: the external owner API now queues messages, notices and
+actions through the private-query frame writer. The common writer preserves UTF-8
+boundaries within advertised LINELEN, records chunk IDs before writing and validates
+channel membership and local identity on every write. An unwritten stale frame
+fails; a partially written stale frame closes its link with an uncertain outcome.
+Other channels survive cancellation of an entirely unwritten frame. Public echo
+ordering alone cannot distinguish these chunks from legacy channel sends, so this
+API records written/unconfirmed outcomes pending exact server receipt correlation.
+These outgoing records remain outside public channel replay. Channel frontend
+admission, hosted sends and echo/body reconciliation remain in progress.
+
 Conversation frontend checkpoint: version8 workspace snapshots retain exact
 query routes per window and separate draft/editor/pending state per conversation,
 with one owner connection per session. Earlier flat rollout snapshots remain

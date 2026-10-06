@@ -26,6 +26,7 @@ struct irc_request {
     const struct snag_irc_channel_target *channel_target;
     enum snag_irc_channel_action channel_action;
     bool channel_join;
+    bool channel_send;
     struct snag_buf *report;
     bool action;
     bool retire;
@@ -137,7 +138,8 @@ receive_event(void *opaque, const struct snag_irc_event *event)
     }
     uint64_t through = 0u;
     if (publish(owner, record, &through) < 0) return -1;
-    if (event->routed && event->route.kind == SNAG_IRC_QUERY) {
+    if (event->routed && (event->route.kind == SNAG_IRC_QUERY ||
+        event->route.direction == SNAG_IRC_OUTGOING)) {
         /* A hosted participant's echo must follow durable admission. Private
          * records use this same mailbox order without channel stream acks. */
         struct snag_irc *irc = owner->runtime;
@@ -204,6 +206,9 @@ execute(struct irc_owner *owner, struct irc_request *request)
     if (request->channel_open)
         return snag_irc_core_channel_open(core, request->query_send, request->text,
             request->channel_join, request->channel_open, error, size);
+    if (request->channel_send)
+        return snag_irc_core_channel_send(core, request->channel_target, request->kind,
+            request->text, request->action, request->report, error, size);
     if (request->channel_target)
         return snag_irc_core_channel_action(core, request->channel_target, request->channel_action,
             request->text, error, size);
@@ -1037,6 +1042,26 @@ snag_irc_channel_action(struct snag_irc *irc, const struct snag_irc_channel_targ
         return rc;
     }
     return snag_fail(error, error_size, ESTALE, "IRC channel destination is unavailable");
+}
+
+int
+snag_irc_channel_send(struct snag_irc *irc, const struct snag_irc_channel_target *target,
+                     enum snag_irc_event_kind kind, const char *text, bool action,
+                     struct snag_buf *report, char *error, size_t error_size)
+{
+    if (!irc || !target || !text) return snag_errno(EINVAL);
+    struct snag_irc_channel_target frozen = *target;
+    if (start_owners(irc) < 0) return -1;
+    for (size_t i = 0u; i < irc->owner_count; ++i) {
+        struct irc_owner *owner = irc->owners[i];
+        if (owner->target.id != frozen.destination) continue;
+        struct irc_request request = {.channel_target = &frozen, .channel_send = true,
+            .kind = kind, .text = text, .action = action, .report = report};
+        int rc = request_owner(owner, &request);
+        if (rc != 0) (void)snag_strcpy(error, error_size, request.error);
+        return rc;
+    }
+    return snag_fail(error, error_size, ESTALE, "IRC channel destination is unavailable; not sent");
 }
 
 int

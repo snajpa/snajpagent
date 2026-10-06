@@ -46,6 +46,9 @@ int snag_irc_core_channel_open(struct snag_irc_core *, const struct snag_irc_que
                               const char *, bool, struct snag_irc_channel_target *, char *, size_t);
 int snag_irc_core_channel_action(struct snag_irc_core *, const struct snag_irc_channel_target *,
                                 enum snag_irc_channel_action, const char *, char *, size_t);
+int snag_irc_core_channel_send(struct snag_irc_core *, const struct snag_irc_channel_target *,
+                              enum snag_irc_event_kind, const char *, bool, struct snag_buf *,
+                              char *, size_t);
 int snag_irc_core_view(const struct snag_irc_core *irc, struct snag_irc_view *view);
 int snag_irc_core_history(const struct snag_irc_core *irc, struct snag_buf *out);
 void snag_irc_core_remember(struct snag_irc_core *irc, const struct snag_irc_event *event);

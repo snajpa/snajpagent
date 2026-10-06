@@ -187,6 +187,9 @@ int snag_irc_channel_open(struct snag_irc *, const struct snag_irc_query_target 
                           char *, size_t);
 int snag_irc_channel_action(struct snag_irc *, const struct snag_irc_channel_target *,
                             enum snag_irc_channel_action, const char *, char *, size_t);
+int snag_irc_channel_send(struct snag_irc *, const struct snag_irc_channel_target *,
+                          enum snag_irc_event_kind, const char *, bool, struct snag_buf *,
+                          char *, size_t);
 int snag_irc_apply_cli(struct snag_config *config, const struct snag_cli *cli,
                       char *error, size_t error_size);
 int snag_irc_normalize(struct snag_config *config, char *error, size_t error_size);

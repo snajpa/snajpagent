@@ -28,6 +28,7 @@ struct fixture {
     snag_wake_fd wake[2u];
     unsigned short port;
     unsigned int delivery[SNAG_IRC_UNCERTAIN + 1u];
+    struct snag_irc_event last_send;
     char wire[32768u];
     size_t used;
 };
@@ -36,8 +37,10 @@ static int
 capture(void *opaque, const struct snag_irc_event *event)
 {
     struct fixture *fixture = opaque;
-    if (event->routed && event->route.direction == SNAG_IRC_OUTGOING)
+    if (event->routed && event->route.direction == SNAG_IRC_OUTGOING) {
         ++fixture->delivery[event->route.delivery];
+        fixture->last_send = *event;
+    }
     return 0;
 }
 
@@ -139,8 +142,8 @@ open_fixture(struct fixture *fixture)
     assert(snag_irc_core_bind(fixture->core, NULL, fixture->config.irc.listen, 1u) == 0);
 }
 
-int
-main(void)
+static void
+private_frames(void)
 {
     struct fixture fixture;
     open_fixture(&fixture);
@@ -223,6 +226,144 @@ main(void)
     snag_config_free(&fixture.config);
     snag_wakeup_close(fixture.wake);
     snag_network_free();
+}
+
+static void
+channel_frames(void)
+{
+    struct fixture fixture = {0};
+    assert(snag_network_init() == 0);
+    snag_config_init(&fixture.config);
+    snag_socket listener = snag_socket_open(AF_INET, SOCK_STREAM, 0);
+    struct sockaddr_in address = {.sin_family = AF_INET};
+    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    socklen_t length = sizeof(address);
+    assert(snag_socket_bind(listener, (struct sockaddr *)&address, sizeof(address)) == 0);
+    assert(getsockname(listener, (struct sockaddr *)&address, &length) == 0);
+    assert(snag_socket_listen(listener, 2) == 0);
+    fixture.config.irc.client_count = 1u;
+    snprintf(fixture.config.irc.clients[0], sizeof(fixture.config.irc.clients[0]),
+        "127.0.0.1:%u", ntohs(address.sin_port));
+    strcpy(fixture.config.irc.model_nick, "agent");
+    strcpy(fixture.config.irc.operator_nick, "operator");
+    strcpy(fixture.config.irc.room_name, "#lab");
+    char error[256u] = {0};
+    struct snag_cli cli = {0};
+    assert(snag_irc_apply_cli(&fixture.config, &cli, error, sizeof(error)) == 0);
+    assert(snag_wakeup_create(fixture.wake) == 0);
+    assert(snag_irc_core_open(&fixture.core, &fixture.config, "/test", true,
+        capture, NULL, &fixture, error, sizeof(error)) == 0);
+    assert(snag_irc_core_bind(fixture.core, NULL, fixture.config.irc.clients[0], 1u) == 0);
+    write_budget = SIZE_MAX;
+    pump(&fixture);
+    snag_socket peers[2u];
+    for (size_t i = 0u; i < 2u; ++i) {
+        snag_socket_event ready = {listener, SNAG_NET_READ, 0};
+        assert(snag_socket_poll(&ready, 1u, 1000) > 0);
+        snag_socket fd = snag_socket_accept(listener);
+        assert(fd != SNAG_SOCKET_INVALID);
+        snag_socket_nodelay(fd);
+        fixture.used = 0u;
+        fixture.wire[0] = '\0';
+        wait_text(&fixture, fd, "USER ");
+        bool model = strstr(fixture.wire, "NICK agent\r\n") != NULL;
+        peers[model ? SNAG_IRC_AGENT : SNAG_IRC_OPERATOR] = fd;
+        write_peer(fd, model ? ":fake 001 agent :welcome\r\n:fake 376 agent :end\r\n" :
+            ":fake 001 operator :welcome\r\n:fake 376 operator :end\r\n");
+        fixture.used = 0u;
+        fixture.wire[0] = '\0';
+        wait_text(&fixture, fd, "JOIN #lab\r\n");
+        write_peer(fd, model ? ":agent!u@fake JOIN #lab\r\n" :
+            ":operator!u@fake JOIN #lab\r\n:operator!u@fake JOIN #side\r\n");
+    }
+    for (size_t i = 0u; i < 10u; ++i) pump(&fixture);
+    struct snag_irc_view view;
+    assert(snag_irc_core_view(fixture.core, &view) == 0);
+    struct snag_irc_query_target scope = {.identity = SNAG_IRC_OPERATOR,
+        .generation = view.generation};
+    memcpy(scope.connection, view.connection, sizeof(scope.connection));
+    struct snag_irc_channel_target lab, side;
+    assert(snag_irc_core_channel_open(fixture.core, &scope, "#lab", false,
+        &lab, error, sizeof(error)) == 0);
+    assert(snag_irc_core_channel_open(fixture.core, &scope, "#side", false,
+        &side, error, sizeof(error)) == 0);
+    snag_socket peer = peers[SNAG_IRC_OPERATOR];
+    fixture.used = 0u;
+    fixture.wire[0] = '\0';
+    write_peer(peer, ":fake CAP * ACK :" SNAJPAGENT_NAME "/catchup echo-message\r\n");
+    wait_text(&fixture, peer, "CAP END\r\n");
+    fixture.used = 0u;
+    fixture.wire[0] = '\0';
+    assert(snag_irc_core_channel_send(fixture.core, &lab, SNAG_IRC_MESSAGE,
+        "channel frame", false, NULL, error, sizeof(error)) == 0);
+    write_budget = 7u;
+    wait_partial(&fixture, peer);
+    write_peer(peer, "PING :between-channel-frames\r\n");
+    pump(&fixture);
+    write_budget = SIZE_MAX;
+    wait_text(&fixture, peer, " :between-channel-frames\r\n");
+    char *body = strstr(fixture.wire, "PRIVMSG #lab :channel frame\r\n");
+    char *pong = strstr(fixture.wire, "PONG ");
+    assert(body && pong && body < pong);
+    assert(fixture.delivery[SNAG_IRC_WRITTEN] == 1u);
+    assert(!fixture.delivery[SNAG_IRC_ACKNOWLEDGED]);
+    write_peer(peer, "@saj-id=11111111111111111111111111111111:1 "
+        ":operator!u@fake PRIVMSG #lab :channel frame\r\n");
+    for (size_t i = 0u; i < 5u; ++i) pump(&fixture);
+    assert(!fixture.delivery[SNAG_IRC_ACKNOWLEDGED]);
+
+    /* Only the kicked channel loses an entirely unwritten message. */
+    fixture.used = 0u;
+    fixture.wire[0] = '\0';
+    write_budget = 0u;
+    assert(snag_irc_core_channel_send(fixture.core, &side, SNAG_IRC_MESSAGE,
+        "cancelled side", false, NULL, error, sizeof(error)) == 0);
+    assert(snag_irc_core_channel_send(fixture.core, &lab, SNAG_IRC_MESSAGE,
+        "retained lab", false, NULL, error, sizeof(error)) == 0);
+    write_peer(peer, ":peer!u@fake KICK #side operator :bye\r\n");
+    uint64_t until = snag_monotonic_ms() + 1000u;
+    while (!fixture.delivery[SNAG_IRC_FAILED]) {
+        assert(snag_monotonic_ms() < until);
+        pump(&fixture);
+    }
+    assert(fixture.delivery[SNAG_IRC_FAILED] == 1u);
+    assert(!strcmp(fixture.last_send.route.conversation, side.conversation));
+    write_budget = SIZE_MAX;
+    wait_text(&fixture, peer, "PRIVMSG #lab :retained lab\r\n");
+    assert(!strstr(fixture.wire, "cancelled side"));
+
+    /* A partial frame cannot be completed after its membership ends. */
+    fixture.used = 0u;
+    fixture.wire[0] = '\0';
+    assert(snag_irc_core_channel_send(fixture.core, &lab, SNAG_IRC_MESSAGE,
+        "uncertain channel", false, NULL, error, sizeof(error)) == 0);
+    write_budget = 7u;
+    wait_partial(&fixture, peer);
+    write_peer(peer, ":peer!u@fake KICK #lab operator :bye\r\n");
+    until = snag_monotonic_ms() + 1000u;
+    while (!read_peer(&fixture, peer)) {
+        assert(snag_monotonic_ms() < until);
+        pump(&fixture);
+    }
+    assert(fixture.delivery[SNAG_IRC_UNCERTAIN] == 1u);
+    assert(fixture.used == 7u);
+    assert(!strcmp(fixture.last_send.route.conversation, lab.conversation));
+    assert(snag_irc_core_channel_send(fixture.core, &lab, SNAG_IRC_MESSAGE,
+        "stale channel", false, NULL, error, sizeof(error)) < 0);
+    write_budget = SIZE_MAX;
+    for (size_t i = 0u; i < 2u; ++i) snag_socket_close(peers[i]);
+    snag_socket_close(listener);
+    snag_irc_core_close(fixture.core);
+    snag_config_free(&fixture.config);
+    snag_wakeup_close(fixture.wake);
+    snag_network_free();
+}
+
+int
+main(void)
+{
+    private_frames();
+    channel_frames();
     puts("IRC partial-write tests passed");
     return 0;
 }
