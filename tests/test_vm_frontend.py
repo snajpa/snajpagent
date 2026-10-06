@@ -206,8 +206,8 @@ class WorkspaceTests(unittest.TestCase):
         return {path.parent.name: json.loads(path.read_text()) for path in
                 (self.root / 'state' / 'workspaces').glob('*/workspace.json')}
 
-    def wait_snapshot(self, predicate):
-        deadline = time.monotonic() + 5
+    def wait_snapshot(self, predicate, timeout=5):
+        deadline = time.monotonic() + timeout
         values = {}
         while time.monotonic() < deadline:
             for child in getattr(self, '_terminals', []):

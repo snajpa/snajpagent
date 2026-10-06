@@ -58,7 +58,12 @@ with approximately 13 MiB RSS. A full cold search took 358 s and cancelled in
 A permanent 128 MiB PTY regression checks live output in another pane during an
 active history search, cancellation, tiny-terminal resize and an unchanged
 stored source. It reproduces stale output with the shared reader and passes with
-separate page/scan readers on macOS. Existing search, navigation, selection,
+separate page/scan readers on macOS and Linux. With the same 2 GiB Linux source and a live
+pane receiving 300 KiB, completion painted during the scan in 297 ms. Canceling
+took 5 ms; shrinking to 3x18 and restoring the panes took 57 ms from cancellation.
+Observed workspace RSS was 23–33 MiB during these steps. A subsequent two-second
+idle interval had zero CPU ticks and zero terminal output. Both stored journals
+retained their size and modification time. Existing search, navigation, selection,
 anchor, controller and frontend cases also pass; the report suite passes across
 four cases and its corrected legacy-snapshot consumer.
 A full FreeBSD executable built against the 8.4 SDK passes twelve launch,

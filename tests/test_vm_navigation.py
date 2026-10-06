@@ -4,6 +4,7 @@
 import time
 import unittest
 
+import test_vm_frontend as frontend
 import test_vm_selection as selection
 
 
@@ -20,10 +21,12 @@ class NavigationTests(unittest.TestCase):
     def save(self, child):
         # A periodic autosave can precede completion of a queued motion. Wait
         # for this command's unique acknowledgement in the persisted snapshot.
+        # Cold counted motions traverse hundreds of thousands of rows; their
+        # completion uses a longer deadline than an ordinary UI autosave.
         name = 'navigation-' + str(time.monotonic_ns())
         child.command('workspace name ' + name)
-        rows = self.wait_snapshot(lambda rows: rows and
-            next(iter(rows.values()))['name'] == name)
+        rows = frontend.WorkspaceTests.wait_snapshot(self, lambda rows: rows and
+            next(iter(rows.values()))['name'] == name, timeout=15)
         return next(iter(rows.values()))['state']
 
     def test_numbered_lines_and_queued_motions_include_headings(self):

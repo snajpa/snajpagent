@@ -6,6 +6,13 @@ Status: implementation in progress, October 6, 2026. The original inspection
 was against `7a70d81d336ef6f14d91ef944b1226c8efa65636`. The checkpoint below
 distinguishes implemented components from the complete intended behavior.
 
+History scheduling checkpoint: separate visible-page and scan workers keep other
+panes following live output during search, copy and distant cursor motion.
+Cancellation and saved motion restoration remain associated with their window.
+A permanent two-pane regression and the retained 2 GiB Linux fixture cover live
+completion, cancellation, tiny resize and idle behavior; measurements are in
+[QUALIFICATION.md](../QUALIFICATION.md).
+
 Windows adapter checkpoint: the private in-process channel and direct semantic
 server share SV/1 framing, validation, draft revisions and admission receipts with
 native owners. One queued frame per direction preserves backpressure; peer loss
@@ -1732,19 +1739,18 @@ features only on its normal exit/resume; installation never authorizes restartin
 it. Source/development delivery does not select a new release version, tag or
 website publication. No release is produced on E2B hardware.
 
-## 14. Remaining decisions and risks
+## 14. Operational boundaries
 
-The engineering defaults above are sufficient to begin implementation. Local
-automatic opt-in remains a user preference; the command works without resolving
-it. The first development step is the held-pager regression, followed by its
-retention and scheduling fix.
+Vim remains opt-in through `snajpagent vm`; ordinary startup keeps the classic
+interface. Pager retention, native controller transitions and whole-terminal
+transactions are implemented with permanent failure-path coverage.
 
-The largest implementation risks are the shared controller transition between
-two frontend types, separating pure formatting from fd writes, and preserving
-all external-terminal paths while the engine continues running. They deserve
-focused early tests. The main performance risk is historical JSONL parsing,
-especially large individual checkpoints; worker scheduling and visited-page
-caches are required even before a future binary journal exists.
+Whole-history JSONL searches still scale with retained source size, including
+large individual checkpoints. Visible-page reads and projection use their own
+worker so a scan can continue while another pane follows live output. Canceling
+the scan releases its work without disturbing other panes. Cached local movement
+and unchanged polling preserve the idle behavior recorded in the qualification
+ledger.
 
 Clipboard qualification depends on actual terminal/mux placement and desktop
 access. The checked wrapper protocol makes transport completion explicit, while
