@@ -4,6 +4,14 @@
 
 ## Unreleased
 
+- Relay private messages between registered IRC peers, with negotiated sender
+  echoes, silent NOTICE failures and private-body exclusion from channel replay
+  and raw traces. Add session-bound operator/agent query receive paths, verified
+  nickname continuity and resumed connection generations. Application commands,
+  model reply routing and query buffers remain under development.
+  Negotiate the capabilities an endpoint advertises before ending registration;
+  preserve earlier capabilities across subsequent requests.
+
 - Add the recipient-aware IRC event codec for direct-message integration,
   with strict legacy separation, delivery states and operator-query exclusion
   from model projection and model-facing history reads. Retain conversation

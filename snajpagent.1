@@ -757,8 +757,9 @@ those belonging to the current pending input or active turn.
 The accepted per-server nick drives mentions, echo suppression, and model
 instructions.  Live IRC nick changes retain op status and produce room
 notifications.  Chat uses the selected destination's accepted operator nick.
-There is no local slash command for changing
-nicks; standard IRC clients can use
+Use
+.B /nick
+to inspect or change the operator nickname. Standard IRC clients can use
 .BR NICK .
 .PP
 Nicks are at most 30 bytes and local model/operator preferences must differ
@@ -766,7 +767,18 @@ under IRC case folding.  Room names are at most 50 bytes excluding
 .BR # .
 The server implements registration, join/part, messages/notices, topic,
 names/who, nick and mode changes, liveness, and bounded history, not the entire
-IRC protocol.  snajpagent clients expect its advertised single-room behavior.
+IRC protocol. Clients negotiate supported capabilities before completing
+registration and use the advertised room, or the explicitly configured room
+on an external server. A connection without a selected room remains connected.
+.PP
+Registered external IRC clients can send private messages and notices to each
+other through the built-in server, including after leaving its room. Delivery
+goes to the named recipient and, when echo-message is negotiated, the sender.
+Private bodies are excluded from the host session's room history and raw
+transport traces. A missing recipient produces an error for PRIVMSG; NOTICE
+failures produce no automatic reply. Direct messages to the host session's own
+nicknames currently return a cannot-send error; application query commands and
+buffers remain under development.
 .PP
 The built-in IRC subset has no TLS or authentication.  A non-loopback listener
 is suitable only for a trusted network or a separately secured tunnel.

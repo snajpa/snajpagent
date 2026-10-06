@@ -22,6 +22,8 @@ int snag_irc_core_open(struct snag_irc_core **out, const struct snag_config *con
                       snag_irc_event_fn event_fn, snag_irc_trace_fn trace_fn,
                       void *opaque, char *error, size_t error_size);
 void snag_irc_core_close(struct snag_irc_core *irc);
+int snag_irc_core_bind(struct snag_irc_core *, const char *connection,
+                       const char *endpoint, uint64_t generation);
 size_t snag_irc_core_pending(const struct snag_irc_core *irc);
 int snag_irc_core_copy_history(struct snag_irc_core *dst, const struct snag_irc_core *src, bool hosted_only);
 int snag_irc_core_tick(struct snag_irc_core *irc, int timeout_ms, snag_wake_fd wake_fd,

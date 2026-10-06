@@ -149,6 +149,9 @@ int snag_irc_state(const struct snag_irc *irc, struct snag_buf *out, char *error
 int snag_irc_tick(struct snag_irc *irc, int timeout_ms, char *error, size_t error_size);
 int snag_irc_snapshot(const struct snag_irc *irc, struct snag_buf *out, char *error, size_t error_size);
 int snag_irc_restore_event(struct snag_irc *irc, const struct snag_irc_event *event);
+/* Initialize session-owned conversations before starting endpoint threads.
+ * Resume preserves connection IDs and advances their network generations. */
+int snag_irc_bind_conversations(struct snag_irc *, const json_t *conversations);
 /* Render-only replay; no re-recording or sends. Nonempty replay ends with HISTORY_READY. */
 int snag_irc_replay_hosted_history(const struct snag_irc *irc, snag_irc_event_fn render, void *opaque);
 /* Hosted identity, or the first configured server's last accepted identity. */

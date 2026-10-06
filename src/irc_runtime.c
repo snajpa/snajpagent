@@ -1,7 +1,8 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "irc_internal.h"
-#include "wake.h"
 #include "fs.h"
+#include "json.h"
+#include "wake.h"
 
 #include <errno.h>
 #include <pthread.h>
@@ -71,6 +72,7 @@ struct snag_irc {
     snag_wake_fd wake[2];
     bool stopping;
     bool identity_changed; /* Mailbox-locked; retained across command drains. */
+    bool conversations_bound;
     int failure;
 };
 
@@ -116,13 +118,27 @@ receive_event(void *opaque, const struct snag_irc_event *event)
     if (!record) return -1;
     record->kind = IRC_EVENT;
     record->event = *event;
-    if (event->local) (void)snag_strcpy(record->event.endpoint, sizeof(record->event.endpoint),
+    if (event->local && !event->routed)
+        (void)snag_strcpy(record->event.endpoint, sizeof(record->event.endpoint),
                            owner->endpoint);
     if (capture_view(owner, record) < 0) {
         free(record);
         return -1;
     }
-    return publish(owner, record, NULL);
+    uint64_t through = 0u;
+    if (publish(owner, record, &through) < 0) return -1;
+    if (event->routed && event->route.kind == SNAG_IRC_QUERY) {
+        /* A hosted participant's echo must follow durable admission. Private
+         * records use this same mailbox order without channel stream acks. */
+        struct snag_irc *irc = owner->runtime;
+        pthread_mutex_lock(&irc->mutex);
+        while (irc->admitted < through && !irc->failure && !irc->stopping && !owner->stopping)
+            pthread_cond_wait(&irc->changed, &irc->mutex);
+        bool failed = irc->failure || irc->stopping || owner->stopping;
+        pthread_mutex_unlock(&irc->mutex);
+        if (failed) return -1;
+    }
+    return 0;
 }
 
 static int
@@ -428,6 +444,8 @@ snag_irc_add(struct snag_irc *irc, const struct snag_config *config,
                            irc->trace_fn ? receive_trace : NULL, owner, error, error_size) < 0 ||
         snag_irc_core_copy_history(owner->core, irc->history, hosting) < 0 ||
         snag_irc_core_view(owner->core, &owner->view) < 0) goto fail;
+    if (irc->conversations_bound &&
+        snag_irc_core_bind(owner->core, NULL, owner->endpoint, 1u) < 0) goto fail;
     snag_irc_core_defer(owner->core);
     owner->sent = owner->view;
     owner->target.revision = owner->view.revision;
@@ -445,6 +463,46 @@ snag_irc_add(struct snag_irc *irc, const struct snag_config *config,
     return 0;
 fail: free_owner(owner);
     return -1;
+}
+
+int
+snag_irc_bind_conversations(struct snag_irc *irc, const json_t *conversations)
+{
+    if (!irc || irc->conversations_bound ||
+        (conversations && !snag_irc_conversations_valid(conversations, UINT64_MAX)))
+        return snag_errno(EINVAL);
+    for (size_t i = 0u; i < irc->owner_count; ++i)
+        if (irc->owners[i]->started) return snag_errno(EBUSY);
+    for (size_t i = 0u; i < irc->owner_count; ++i) {
+        struct irc_owner *owner = irc->owners[i];
+        const char *connection = NULL;
+        const char *endpoint = owner->endpoint;
+        const char *key;
+        json_t *entry;
+        uint64_t newest = 0u;
+        uint64_t generation = 1u;
+        json_object_foreach((json_t *)conversations, key, entry) {
+            if (!snag_irc_endpoint_equal(owner->endpoint, snag_json_string(entry, "endpoint")))
+                continue;
+            const char *conversation;
+            json_t *item;
+            json_object_foreach(json_object_get(entry, "conversations"), conversation, item) {
+                uint64_t seq = 0u;
+                (void)conversation;
+                if (snag_json_integer_u64(item, "seq", &seq) < 0) return -1;
+                if (seq <= newest) continue;
+                newest = seq;
+                connection = key;
+                endpoint = snag_json_string(entry, "endpoint");
+                if (snag_json_integer_u64(entry, "generation", &generation) < 0 ||
+                    generation == INT64_MAX) return snag_errno(EOVERFLOW);
+                ++generation;
+            }
+        }
+        if (snag_irc_core_bind(owner->core, connection, endpoint, generation) < 0) return -1;
+    }
+    irc->conversations_bound = true;
+    return 0;
 }
 
 int

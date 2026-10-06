@@ -729,8 +729,27 @@ conversation remains in the journal. Suffix replay and failed commits preserve
 the saved checkpoint. Conversation IDs bind the connection, local role and kind;
 peer renames require a matching NICK event within the same generation.
 The first routed event activates checkpoint revision 3; unaffected sessions
-retain revisions 1/2. Live runtime restoration, v2 writing and direct-message
-routing remain the next implementation step.
+retain revisions 1/2.
+
+The protocol runtime now relays registered peer-to-peer queries independently
+of room membership, including negotiated echoes, NOTICE error suppression and
+private-body masking in raw traces. Its session binding initializer restores
+connection IDs/endpoint spelling from the conversation directory and advances
+the network generation. Each receiving identity has a separate query directory;
+verified NICK events preserve a query and QUIT/disconnection ends continuity.
+ASCII, RFC1459 and strict RFC1459 query matching follow the advertised mapping;
+unknown mappings use exact spelling. Query history, actions and source message
+IDs retain their provenance. Private records bypass channel replay/cursors, and
+hosted local-participant echoes wait for the engine's durable callback.
+
+Wire fixtures cover both local identities, third-party privacy, failed admission,
+resume generations, nickname reuse, UTF-8 chunks, external registration without
+a room, multiline capability negotiation and capability rejection. Application
+startup still leaves this session binding uninitialized. Next: frozen query
+send routes/receipts, typed application writing/restoration and private reply
+provenance, then common commands/tools and VM connection/channel/query buffers.
+Outgoing private replay/correlation and external multi-channel state remain
+unfinished; the receiver checkpoint does not enable application direct messaging.
 
 This expands the original UI-only storage scope. Implement compatible readers,
 checkpoint projection and context filters first. Direct-message-capable writers
