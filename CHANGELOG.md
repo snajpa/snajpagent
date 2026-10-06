@@ -20,6 +20,11 @@
   reconnect receipts, cancellation and distinct detach/quit controls. Durable
   receipts reference the existing journal format.
 
+- Retain revisioned rollout drafts in the native owner across controller changes.
+  Draft edits leave session/model history unchanged. Revision-aware submission
+  clears only its admitted draft; newer edits survive. Workspace reconciliation
+  with these owner drafts remains under development.
+
 - Bound history-reader memory when browsing across large context checkpoints.
   Preserve complete event verification and retained session history.
 

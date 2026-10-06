@@ -115,6 +115,15 @@ class View:
         return self.until('result', lambda message: message['id'] == request and
                           message['status'] != 'pending')
 
+    def draft(self):
+        self.send(type='draft_get', generation=self.generation, route='rollout')
+        return self.until('draft', lambda message: message['status'] == 'snapshot')['draft']
+
+    def replace_draft(self, revision, text, cursor=None, edit=1):
+        self.send(type='draft', generation=self.generation, route='rollout', revision=revision,
+                  edit=edit, text=text, cursor=len(text.encode()) if cursor is None else cursor)
+        return self.until('draft', lambda message: message['edit'] == edit)
+
     def close(self):
         self.peer.close()
 
@@ -402,6 +411,80 @@ class SessionViewTests(unittest.TestCase):
         self.assertEqual(peer.result(request)['status'], 'rejected')
         self.assertFalse(any(event['type'] == 'input_received' for event in self.events()))
         self.assertEqual(self.identity(), self.owner_identity)
+
+    def test_revisioned_draft_survives_disconnect_without_journal_mutation(self):
+        self.detach()
+        original = self.journal.read_bytes()
+        peer = self.view(bind=True)
+        self.assertIn('drafts', peer.capabilities['features'])
+        first = peer.draft()
+        self.assertEqual(first['text'], '')
+        text = 'unsent 👩‍💻\n' + 'draft data ' * 2500
+        result = peer.replace_draft(first['revision'], text, edit=9)
+        self.assertEqual(result['status'], 'accepted')
+        self.assertEqual(result['draft']['text'], text)
+        self.assertEqual(result['draft']['cursor'], len(text.encode()))
+        self.assertGreater(result['draft']['revision'], first['revision'])
+        peer.close()
+        self.views.remove(peer)
+        self.status('detached')
+        replacement = self.view(bind=True)
+        self.assertEqual(replacement.draft(), result['draft'])
+        self.assertEqual(self.journal.read_bytes(), original)
+        self.assertEqual(self.identity(), self.owner_identity)
+
+    def test_draft_cas_cursor_route_and_controller_validation(self):
+        self.detach()
+        observer = self.view()
+        observer.send(type='draft_get', generation=0, route='rollout')
+        self.assertIn('generation', observer.until('error')['message'])
+        peer = self.view(bind=True)
+        first = peer.draft()
+        accepted = peer.replace_draft(first['revision'], '👩‍💻')
+        stale = peer.replace_draft(first['revision'], 'stale edit', edit=2)
+        self.assertEqual(stale['status'], 'conflict')
+        self.assertEqual(stale['draft'], accepted['draft'])
+        peer.send(type='draft', generation=peer.generation, route='rollout',
+                  revision=accepted['draft']['revision'], edit=3, text='👩‍💻', cursor=4)
+        invalid = peer.until('error')
+        self.assertIn('invalid draft', invalid['message'])
+        self.assertEqual(invalid['edit'], 3)
+        peer.send(type='draft', generation=peer.generation, route='irc',
+                  revision=accepted['draft']['revision'], edit=4, text='wrong route', cursor=0)
+        invalid = peer.until('error')
+        self.assertIn('unsupported route', invalid['message'])
+        self.assertEqual(invalid['edit'], 4)
+        self.assertEqual(peer.draft(), accepted['draft'])
+
+    def test_revisioned_submission_clears_only_its_admitted_draft(self):
+        self.detach()
+        peer = self.view(bind=True)
+        first = peer.draft()
+        changed = peer.replace_draft(first['revision'], 'draft-bound prompt')['draft']
+        refused = peer.submit('draft-bound prompt', route='rollout',
+                              draft_revision=first['revision'])
+        error = peer.until('error')
+        self.assertEqual(error['id'], refused)
+        self.assertIn('draft changed', error['message'])
+        mismatch = peer.submit('different text', route='rollout', draft_revision=changed['revision'])
+        self.assertEqual(peer.until('error')['id'], mismatch)
+        self.assertFalse(any(event['type'] == 'input_received' for event in self.events()))
+        request = peer.submit('draft-bound prompt', route='rollout',
+                              draft_revision=changed['revision'])
+        result = peer.result(request)
+        self.assertEqual(result['status'], 'committed')
+        empty = peer.draft()
+        self.assertEqual(empty['text'], '')
+        self.assertEqual(empty['cursor'], 0)
+        self.assertEqual(empty['revision'], result['draft_cleared'])
+        self.assertGreater(empty['revision'], changed['revision'])
+        newer = peer.replace_draft(empty['revision'], 'next unsent draft', edit=5)['draft']
+        peer.submit('draft-bound prompt', request, route='rollout',
+                    draft_revision=changed['revision'])
+        self.assertEqual(peer.result(request), result)
+        self.assertEqual(peer.draft(), newer)
+        self.assertEqual(len([event for event in self.events()
+                              if event['type'] == 'input_received']), 1)
 
     def test_listener_cleanup_preserves_replaced_endpoint(self):
         self.detach()

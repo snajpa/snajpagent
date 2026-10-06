@@ -15,8 +15,9 @@ workspace frontend uses these capabilities for live attachment and prompt editin
 Local drafts and pending request identities are saved in private workspace snapshots
 before submission; reconnect queries receipts without resending text. Pending
 receipt queries repeat until resolved, and unknown outcomes require explicit recovery.
-Owner draft synchronization, commands/reports,
-external-terminal transactions and IRC routes are subsequent protocol features;
+The owner also retains revisioned rollout drafts through controller changes.
+Frontend draft reconciliation, commands/reports, external-terminal transactions
+and IRC routes remain subsequent integration work;
 clients use only advertised capabilities. A classic owner without this endpoint
 continues to offer its existing terminal attachment and best-effort history.
 
@@ -48,7 +49,7 @@ All message names below are the JSON `type` value. A new client sends
 `{"type":"hello","version":1}`. `capabilities` supplies `version`, the full
 `session` ID, a random live-owner `instance` ID and `features`.
 The implemented features are `observe`, `control`, `submit`, `cancel`, `quit`,
-`detach` and `receipts`.
+`detach`, `receipts` and `drafts`.
 
 After hello, `state` messages contain a `state` object with committed `seq`,
 byte `end`, `sha256`, journal `schema`, `active`, and the next-turn `provider`,
@@ -64,6 +65,8 @@ the classic session list's attachment status.
 | `commit` with `generation` | `bound` with that generation. The client may then submit input. Classic STATUS now reports attached. |
 | `submit` with `generation`, 32-character lowercase hexadecimal `id`, and `text` | `result` with that ID and `pending`, followed by `committed` or `rejected`. Plain input addresses the rollout, including when the previous terminal showed IRC. Active work uses existing steering/queue admission. Slash commands require a future command capability; `/ro` retains the ordinary read-only prompt syntax. |
 | `receipt` with `id` | Current `result`, or `unknown`. Requires hello but no controller lease. |
+| `draft_get` with `generation` and `route: rollout` | Current `draft` snapshot and subscription to later owner changes. Requires a bound controller. |
+| `draft` with `generation`, `route: rollout`, expected `revision`, positive `edit`, `text` and byte `cursor` | A `draft` response echoes `edit`, with `status: accepted` or `conflict` and the current snapshot. The cursor must lie on a grapheme boundary. Unsupported routes and invalid text/cursors leave the draft unchanged. |
 | `cancel` with `generation` | `control` with `intent: cancel`; the existing owner interrupt path performs cancellation. |
 | `detach` with `generation` | `detached`, then connection close. The owner continues. |
 | `quit` with `generation` | `control` with `intent: quit`; normal owner shutdown follows, then `exit` with its `status` and connection close. |
@@ -90,6 +93,24 @@ before admission and receive a rejected receipt.
 Submission refusals include the request ID when it is valid. A control error
 does not resolve a pending submission; clients query that submission's receipt
 before offering recovery.
+
+Draft snapshots contain `route`, `revision`, `text` and byte `cursor`.
+Draft refusals echo a valid `edit` token, independently of submission IDs.
+Unsolicited snapshots use `edit: 0` and `status: snapshot`; they begin only
+after a controller requests the draft capability. Observers and older clients
+receive no unsolicited draft text. Updates and submissions run on the same
+presentation owner. Drafts are ephemeral owner state; editing them adds no
+journal event or model input.
+
+A revision-aware submission adds `route: rollout` and `draft_revision`.
+The revision and exact text must match the current owner draft. Legacy plain
+submissions remain supported. Duplicate request IDs return their saved receipt
+before consulting the current draft, so later edits cannot invalidate a receipt.
+On successful admission, the owner clears the draft only if that exact revision
+is still current. A newer edit, including one from a replacement controller,
+survives the older admission. The receipt's `draft_cleared` is the resulting
+empty-draft revision, or zero when no draft was cleared. Clients use that identity
+to distinguish admission's clear from an independently edited remote draft.
 
 ## Presentation boundary
 

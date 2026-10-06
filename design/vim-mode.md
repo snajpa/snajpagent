@@ -80,7 +80,11 @@ receipts; unknown outcomes retain text for explicit recovery. Newer drafts survi
 older receipts. The composer supports grapheme edits, multiline literal paste and
 basic NORMAL/INSERT motions. Poll includes owner sockets and progress deadlines;
 idle connections do not trigger redraws. Quit/detach use the normal owner lifecycle.
-Canonical owner draft revisions, the rest of the editor subset, classic attachment
+The owner now stores revisioned rollout drafts, rejects stale replacements, and
+accepts submissions tied to an exact draft revision. Successful admission clears
+only that revision; newer drafts survive, including edits from a new controller.
+Draft notifications require an explicit bound-controller subscription.
+Frontend reconciliation with these drafts, the rest of the editor subset, classic attachment
 fallback, new/stopped-owner launch, command/report adapters, cross-page tool
 dependencies, search/selection/clipboard and IRC conversations still need integration.
 This development frontend has

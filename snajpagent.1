@@ -1784,6 +1784,13 @@ receipts, cancellation, detach and normal owner shutdown. Reconnect can query
 a receipt without repeating a prompt. A changed owner instance with an unknown
 receipt requires explicit reconciliation against history. Command/report adapters
 remain under development.
+.PP
+The backend also offers revisioned rollout drafts. Bound controllers can read,
+replace and subscribe to a draft, using its expected revision to reject stale edits.
+Revision-aware admission clears only the submitted revision; newer drafts survive.
+These drafts stay in owner memory and do not enter model history until submitted.
+The current workspace composer retains its local snapshots while owner-draft
+reconciliation is being integrated.
 Existing owners retain their advertised capabilities. Builds using
 .B WITH_VM=0
 omit this endpoint; Windows currently lacks the native-owner backend.
