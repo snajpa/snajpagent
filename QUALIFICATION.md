@@ -24,6 +24,10 @@ redacts the blocker text through its ordinary source mapping.
 
 ## Development Vim workspace
 
+Pager fixtures cover continued provider work and exactly-once catch-up after a
+nonzero pager exit, as well as missing executables, interruption and resize.
+Native terminal fixtures cover suspend/reattach with the external job retained.
+
 The optional workspace and classic conversation tabs are development features.
 Native macOS/Linux fixtures cover session creation/resume and controller ownership,
 saved workspace layouts, independent drafts, command reports, IRC channel/query

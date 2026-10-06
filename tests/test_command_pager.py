@@ -302,6 +302,18 @@ class CommandPagerTests(unittest.TestCase):
         child.write(b"ping\r")
         child.read_until(b"pong")
 
+    def test_nonzero_pager_exit_preserves_completed_output(self):
+        self.pager.write_text(self.pager.read_text() + "exit 7\n")
+        child = self.start()
+        held, resumed, records = self.complete_under_pager(child, "slow", "turn_completed")
+        resumed += self.available_output(child)
+        self.assertNotIn(b"slow complete", held)
+        self.assertEqual(resumed.count(b"slow complete"), 1)
+        self.assertEqual(sum(row["type"] == "turn_completed" for row in records), 1)
+        child.write(b"ping\r")
+        child.read_until(b"pong")
+        child.read_until(self.ready)
+
     def test_tool_finishes_and_retains_output_under_pager(self):
         child = self.start()
         child.write(b"/verbose 2\r")
