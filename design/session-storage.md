@@ -2243,8 +2243,14 @@ disables further cache writes for that owner. A partial cache write, wrong ident
 stale extent or corrupt forest therefore leaves semantic admission and the journal
 retry contract intact. A journal sync failure writes no cache entries; its exact
 retry appends them only after successful synchronization. Missing derived bytes
-remain unavailable lookup acceleration. Native lifecycle descriptor attachment,
-cursor dispatch and resumable cache rebuilding are separate runtime integration.
+remain unavailable lookup acceleration.
+
+Live native sessions attach that borrowed descriptor using their ACK-owned identity
+and frontier. Completed owner results retain cache failure status independently of
+semantic commit/effect success. The CPU-only status accessor reports attachment or
+observed failure; a zero status supplies no lookup membership or completeness proof.
+Normal four-file lifecycle creation/open, cursor dispatch and resumable cache
+rebuilding remain separate runtime integration.
 
 ### Checkpoint access metadata
 

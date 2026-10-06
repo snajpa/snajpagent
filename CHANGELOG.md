@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Attach derived history-index custody through live native sessions using their
+  acknowledged frontier, preserving successful semantic commits and effects when
+  cache writes fail and retaining independent cache failure status.
+
 - Append derived native history-index entries through the journal I/O owner after
   durable commits, checking the independently established forest frontier and
   reporting cache failures separately from canonical acknowledgements.

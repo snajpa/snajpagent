@@ -30,6 +30,15 @@ int snag_session_binary_checkpoint_setup(struct snag_session *, int directory,
     const uint64_t generations[2], const uint64_t sequences[2],
     const struct snag_binary_checkpoint_index *, char *, size_t);
 
+/* Attach borrowed private derived-index custody using this session's ACK-owned
+ * identity/frontier, once while idle. Caller keeps the fd alive through session
+ * close. CPU-only setup; cache claims confer no journal or semantic authority. */
+int snag_session_binary_index_setup(struct snag_session *, int fd, char *, size_t);
+/* Last completed cache-write status, independent of semantic commit success.
+ * ENOTSUP means unattached; zero means no observed failure, not verified lookup
+ * completeness. Point readers still verify membership and canonical bytes. */
+int snag_session_binary_index_status(const struct snag_session *, char *, size_t);
+
 /* Hydrate one source against ACK-visible native custody and its bounded suffix.
  * Pread only; outputs change on success. Missing old access remains unavailable;
  * no prefix replay, reducer adoption or pending-candidate visibility. */

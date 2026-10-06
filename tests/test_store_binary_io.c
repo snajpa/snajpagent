@@ -1176,6 +1176,96 @@ test_native_clone_failure(void)
 }
 
 static void
+test_native_index_attachment(unsigned int variant)
+{
+    struct snag_session session;
+    struct probe probe = {0};
+    char error[256];
+    snag_session_init(&session);
+    assert(snag_session_binary_index_status(&session, error, sizeof(error)) < 0 &&
+        errno == ENOTSUP);
+    assert(snag_session_binary_index_setup(&session, -1, error, sizeof(error)) < 0 &&
+        errno == EINVAL);
+    snag_session_close(&session);
+    native_fixture(&session, &probe);
+    assert(snag_session_binary_index_status(&session, error, sizeof(error)) < 0 &&
+        errno == ENOTSUP);
+    struct snag_binary_anchor boundary, before;
+    struct snag_binary_index_tree tree, seed = {0};
+    struct snag_binary_checkpoint_sources sources = {0};
+    assert(!snag_session_binary_checkpoint_capture(&session, &boundary, &tree, &sources,
+        error, sizeof(error)));
+    snag_binary_checkpoint_sources_free(&sources);
+    struct snag_binary_identity identity = {.created_ms = 42u};
+    identity.id[0] = 17u;
+    struct snag_buf scratch = {.max = SNAG_BINARY_BATCH_MAX};
+    struct snag_buf entries = {.max = SNAG_BINARY_INDEX_TREE_BATCH_MAX};
+    struct snag_binary_batch batch;
+    assert(!snag_binary_batch_previous(session.log_fd, &boundary, &scratch, &batch, &before));
+    assert(!snag_binary_index_tree_append_batch(&entries, &seed, &identity, &before,
+        &boundary, batch.data, batch.size));
+    unsigned char actual[32], expected[32];
+    assert(!snag_binary_index_tree_root(&seed, actual));
+    assert(!snag_binary_index_tree_root(&tree, expected) && !memcmp(actual, expected, 32u));
+    char *path = snag_path_join(getenv("TMPDIR") ? getenv("TMPDIR") : "/tmp",
+        "snag-session-index-XXXXXX");
+    assert(path);
+    int index = mkstemp(path);
+    assert(index >= 0 && !unlink(path));
+    free(path);
+    unsigned char header[SNAG_BINARY_INDEX_HEADER_SIZE];
+    snag_binary_index_header_encode(header, &identity);
+    assert(!snag_write_full(index, header, sizeof(header)));
+    if (variant != 2u) assert(!snag_write_full(index, entries.data, entries.len));
+    snag_buf_free(&scratch);
+    snag_buf_free(&entries);
+    probe.index_enabled = true;
+    probe.index_fd = index;
+    probe.index_failures = variant == 1u;
+    int64_t position = snag_seek(index, 0, SEEK_CUR);
+    assert(!snag_session_binary_index_setup(&session, index, error, sizeof(error)));
+    assert(snag_seek(index, 0, SEEK_CUR) == position);
+    assert(!snag_session_binary_index_status(&session, error, sizeof(error)));
+    assert(snag_session_binary_index_setup(&session, index, error, sizeof(error)) < 0 &&
+        errno == EBUSY);
+    const char *types[2] = {"banner_updated", "goal_started"};
+    int cache_error = variant == 1u ? EIO : variant == 2u ? ESTALE : 0;
+    for (unsigned int i = 0u; i < 2u; ++i) {
+        uint64_t sequence = session.next_seq, written = 0u;
+        json_t *data = i ? json_pack("{s:s,s:s}", "goal_id",
+            "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", "prompt", "native indexed value") :
+            json_pack("{s:s}", "text", "native indexed value");
+        int rc = snag_session_commit(&session, types[i], data, &written, error, sizeof(error));
+        if (rc < 0) fprintf(stderr, "native index attachment %s: %s\n", types[i], error);
+        assert(!rc);
+        assert(written == sequence && session.next_seq == sequence + 1u);
+        assert(atomic_load(&probe.effects) == i + 2u && !session.write_failures);
+        if (cache_error) {
+            assert(snag_session_binary_index_status(&session, error, sizeof(error)) < 0 &&
+                errno == cache_error);
+        } else {
+            assert(!snag_session_binary_index_status(&session, error, sizeof(error)));
+        }
+    }
+    if (!cache_error) {
+        assert(!snag_session_binary_checkpoint_capture(&session, &boundary, &tree, &sources,
+            error, sizeof(error)));
+        assert(!snag_binary_index_tree_root(&tree, expected));
+        for (uint64_t seq = 1u; seq <= tree.count; ++seq) {
+            struct snag_binary_index_entry entry;
+            assert(!snag_binary_index_read_verified(index, &identity, tree.count,
+                expected, seq, &entry));
+        }
+        snag_binary_checkpoint_sources_free(&sources);
+    }
+    assert(probe.index_writes == (variant == 1u ? 1u : variant == 2u ? 0u : 2u));
+    snag_session_close(&session);
+    snag_file_info info;
+    assert(!snag_fstat(index, &info));
+    assert(!close(index));
+}
+
+static void
 test_index_cache(unsigned int variant)
 {
     struct snag_binary_anchor before;
@@ -1287,6 +1377,8 @@ test_index_cache(unsigned int variant)
 void
 test_store_binary_io(void)
 {
+    for (unsigned int variant = 0u; variant < 3u; ++variant)
+        test_native_index_attachment(variant);
     for (unsigned int variant = 0u; variant < 7u; ++variant) test_index_cache(variant);
     test_native_checkpoint_origins();
     test_native_session_ack();

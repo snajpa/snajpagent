@@ -3975,6 +3975,8 @@ struct snag_binary_session {
     json_t *data;
     bool io_pending, retryable, retried, faulted, checkpoint_configured;
     bool checkpoint_pending, checkpoint_failed, checkpoint_published, receipt_candidate;
+    bool index_configured;
+    int index_error;
 };
 
 static void
@@ -4063,6 +4065,7 @@ binary_take(struct snag_binary_session *binary, struct snag_binary_io_result *re
         int rc = snag_binary_io_take_batch(binary->io, result, batch);
         if (rc != 1) {
             binary->io_pending = false;
+            binary->index_error = result->index_error;
             return rc;
         }
         if (snag_wakeup_wait(snag_binary_io_wake(binary->io), -1) < 0 && errno != EINTR) {
@@ -4175,6 +4178,40 @@ snag_session_bind_binary(struct snag_session *session, const struct snag_binary_
         return snag_fail(error, error_size, code, "cannot start native session owner");
     }
     session->binary = binary;
+    return 0;
+}
+
+int
+snag_session_binary_index_setup(struct snag_session *session, int fd,
+    char *error, size_t error_size)
+{
+    if (!session || fd < 0)
+        return snag_fail(error, error_size, EINVAL, "invalid native index attachment");
+    struct snag_binary_session *binary = session->binary;
+    if (!binary) return snag_fail(error, error_size, ENOTSUP, "session has no native owner");
+    if (binary->faulted)
+        return snag_fail(error, error_size, ESTALE, "native session needs fresh recovery");
+    if (binary->candidate)
+        return snag_fail(error, error_size, EBUSY, "native commit is pending");
+    if (snag_binary_io_index_setup(binary->io, fd, &binary->identity, &binary->tree) < 0)
+        return snag_errorf(error, error_size, "cannot attach native index: %s", strerror(errno));
+    binary->index_configured = true;
+    return 0;
+}
+
+int
+snag_session_binary_index_status(const struct snag_session *session,
+    char *error, size_t error_size)
+{
+    if (!session) return snag_fail(error, error_size, EINVAL, "invalid native index status");
+    const struct snag_binary_session *binary = session->binary;
+    if (!binary || !binary->index_configured)
+        return snag_fail(error, error_size, ENOTSUP, "native index is not attached");
+    if (binary->faulted)
+        return snag_fail(error, error_size, ESTALE, "native session needs fresh recovery");
+    if (binary->index_error)
+        return snag_fail(error, error_size, binary->index_error,
+            "native index unavailable: %s", strerror(binary->index_error));
     return 0;
 }
 
