@@ -380,21 +380,21 @@ class CommandPagerTests(unittest.TestCase):
         less.chmod(0o700)
         return {"PATH": str(directory), "REPORT_ARGS": str(self.arguments)}
 
-    def test_unset_pager_defaults_to_less_X_for_reports_and_files(self):
+    def test_unset_pager_defaults_to_less_FX_for_reports_and_files(self):
         environment = self.less_fixture()
         environment["PAGER"] = None
         child = self.start(environment=environment)
         self.report(child, "/status", "session:", "provider:")
-        self.assertEqual(self.arguments.read_text().splitlines()[:-1], ["-X"])
+        self.assertEqual(self.arguments.read_text().splitlines()[:-1], ["-FX"])
         local_file = self.home / "notes.txt"
         local_file.write_text("local file in default pager\n")
         self.report(child, "/cat notes.txt", "local file in default pager")
-        self.assertEqual(self.arguments.read_text().splitlines(), ["-X", str(local_file)])
+        self.assertEqual(self.arguments.read_text().splitlines(), ["-FX", str(local_file)])
 
-    def test_bare_less_gets_X(self):
+    def test_bare_less_gets_FX(self):
         child = self.start(pager="less", environment=self.less_fixture())
         self.report(child, "/status", "session:")
-        self.assertEqual(self.arguments.read_text().splitlines()[:-1], ["-X"])
+        self.assertEqual(self.arguments.read_text().splitlines()[:-1], ["-FX"])
 
     def test_explicit_less_arguments_are_preserved(self):
         child = self.start(pager="less -R", environment=self.less_fixture())
@@ -439,6 +439,39 @@ class CommandPagerTests(unittest.TestCase):
         child.read_until(b"banner updated")
         child.read_until("›".encode())
         self.report(child, "/banner", "retained banner")
+
+    @unittest.skipUnless(shutil.which("less"), "less unavailable")
+    def test_real_less_returns_for_fitting_reports_and_files(self):
+        child = self.start(environment={"PAGER": None, "LESS": None})
+        # A short report must hand control back without a quit keystroke.
+        fcntl.ioctl(child.master, termios.TIOCSWINSZ,
+                    struct.pack("HHHH", 24, 80, 0, 0))
+        child.write(b"/history 0\r")
+        self.pager_open = True
+        output = child.read_until(b"0 shown")
+        output += child.read_until(self.ready, seconds=3)
+        self.pager_open = False
+        self.assertNotIn(b"\x1b[?1049h", output)
+        self.assertNotIn(b"\x1b[?1049l", output)
+        local_file = self.home / "short.txt"
+        local_file.write_text("fitting pager sentinel\n")
+        child.write(b"/cat short.txt\r")
+        self.pager_open = True
+        output = child.read_until(b"fitting pager sentinel")
+        output += child.read_until(self.ready, seconds=3)
+        self.pager_open = False
+        self.assertNotIn(b"\x1b[?1049h", output)
+        self.assertNotIn(b"\x1b[?1049l", output)
+        # One logical line can still be too tall when wrapped by less.
+        local_file.write_text("wrapped-line " * 200 + "WRAPPED_END\n")
+        child.write(b"/cat short.txt\r")
+        self.pager_open = True
+        child.read_until(b"wrapped-line")
+        child.write(b"G")
+        child.read_until(b"WRAPPED_END")
+        child.write(b"q")
+        child.read_until(self.ready)
+        self.pager_open = False
 
     @unittest.skipUnless(shutil.which("less"), "less unavailable")
     def test_real_less_reaches_both_ends_after_resize(self):

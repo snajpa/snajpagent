@@ -563,7 +563,7 @@ snag_default_pager(void)
     if (!size || size >= 32768u) return NULL;
     DWORD attributes = GetFileAttributesW(path);
     return attributes != INVALID_FILE_ATTRIBUTES && !(attributes & FILE_ATTRIBUTE_DIRECTORY) ?
-        "less -X" : NULL;
+        "less -FX" : NULL;
 }
 
 /* The same command template serves generated text and local files. */
@@ -2476,7 +2476,7 @@ snag_default_pager(void)
         snag_stat(path, &info) == 0 && S_ISREG(info.st_mode) &&
         snag_file_executable(path) == 0;
     free(path);
-    return available ? "less -X" : NULL;
+    return available ? "less -FX" : NULL;
 }
 
 /* A pager command may place %s where the quoted path goes; without it the path

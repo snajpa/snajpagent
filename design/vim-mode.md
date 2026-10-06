@@ -571,7 +571,7 @@ the session owner. Raw external-program screen contents need not be replayed.
 Their generated report snapshot and the session transcript remain available.
 
 Keep current pager selection: when available, unset `PAGER` and bare `less` use
-`less -X`; explicit pager commands retain their arguments. The retention fix
+`less -FX`; explicit pager commands retain their arguments. The retention fix
 applies with the VM module compiled out.
 
 ## 4. CLI, workspace persistence and session selection

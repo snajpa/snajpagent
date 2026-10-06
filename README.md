@@ -247,9 +247,9 @@ sandbox.
 
 `/help` lists commands and keys; `/status` shows current state. `/queue` lists
 waiting work and its editor revises entries. See the manual for editing controls.
-Keyboard command reports use `$PAGER`, defaulting to `less -X` when it is unset
-or just `less` and less is available. With `-X`, less leaves the report visible
-after quitting. Work and IRC continue while the pager is open; new output appears
+Keyboard command reports use `$PAGER`, defaulting to `less -FX` when it is unset
+or just `less` and less is available. Short reports return automatically; longer
+reports stay open until you quit. The text remains visible afterward. Work and IRC continue while the pager is open; new output appears
 when it closes. `[ui] pager = off` displays reports directly.
 
 `/model` selects the next response's provider, model and effort; `/model cache`

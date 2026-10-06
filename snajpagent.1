@@ -439,7 +439,7 @@ conversation or sending them to a provider.  This command also works while a
 turn is active.  It requires an interactive terminal and an enabled pager.
 The default
 .B pager = on
-uses $PAGER, or less \-X when $PAGER is unset and less is available.
+uses $PAGER, or less \-FX when $PAGER is unset and less is available.
 If no pager is available, set $PAGER or choose a
 .B pager
 command in the configuration. A missing or non-regular file reports an error.
@@ -2444,8 +2444,10 @@ With the default
 an unset $PAGER or
 .B PAGER=less
 selects
-.B less \-X
-when less is available. The \-X option keeps the report on screen after quitting.
+.B less \-FX
+when less is available. The \-F option returns automatically when the report fits
+on one screen; \-X keeps its text visible after exit. Longer reports wait for
+the pager's quit command.
 Explicit pager options are preserved; an empty $PAGER disables paging.
 Set $PAGER on the remote host when using Mosh. Use the pager's scrolling and
 search keys to read reports taller than the terminal. Disabled paging, unavailable
@@ -4172,7 +4174,7 @@ Interactive command-report and /cat paging:
 (the default) uses $PAGER. When $PAGER is unset or exactly
 .BR less ,
 it uses
-.B less \-X
+.B less \-FX
 if less is available. An explicitly empty $PAGER disables paging;
 .B off
 prints command reports directly and disables /cat; any other value is a command template. A

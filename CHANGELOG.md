@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Default to `less -FX` so reports and files that fit on one screen return
+  automatically and remain visible. Explicit pager arguments are preserved.
+
 - Read retained tool output through verified recent journal records, stopping
   when the requested window is complete instead of replaying the whole session.
 
