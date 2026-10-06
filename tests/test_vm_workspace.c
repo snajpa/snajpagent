@@ -91,9 +91,12 @@ owner_exit_test(struct snag_store *store, json_t *state)
 int
 main(void)
 {
+    char id[SNAG_ID_HEX_LEN + 1u], name[64];
+    assert(snag_random_id(id) == 0);
+    (void)snprintf(name, sizeof(name), "snajpagent-vm-workspace-%s", id);
     char *root = snag_path_join(getenv("TMPDIR") ? getenv("TMPDIR") : "/tmp",
-        "snajpagent-vm-workspace-XXXXXX");
-    assert(root && mkdtemp(root));
+        name);
+    assert(root && snag_mkdir_private(root) == 0);
     char *resolved = snag_realpath(root);
     free(root);
     root = resolved;
