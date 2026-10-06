@@ -939,6 +939,7 @@ encode_key(struct snag_term_host *host, const KEY_EVENT_RECORD *key)
         host->input_key_len = 3u;
         return 0;
     }
+    if (!c && key->wVirtualKeyCode == VK_ESCAPE) c = '\033';
     if (!c) {
         if (!ctrl || key->wVirtualKeyCode != VK_SPACE) return 0;
         host->input_key[0] = 0;

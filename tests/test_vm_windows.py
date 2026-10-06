@@ -141,6 +141,7 @@ class WindowsTests(unittest.TestCase):
         resumed.write(b'iresumed-windows-prompt\r')
         self.complete(resumed, session)
         resumed.repaint_until(b'windows-direct-answer')
+        self.escape(resumed)
         resumed.finish('qa')
         self.assertEqual(len(self.requests), 1)
         self.assertEqual(self.provider.latest_user(self.requests[0]), 'resumed-windows-prompt')

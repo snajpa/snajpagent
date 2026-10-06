@@ -2116,6 +2116,8 @@ test_console_keys(struct snag_term_host *host)
         const char *bytes;
         size_t size;
     } cases[] = {
+        {VK_ESCAPE, 0, 0, 1, "\033", 1}, {VK_ESCAPE, 27, 0, 1, "\033", 1},
+        {VK_ESCAPE, 0, SHIFT_PRESSED, 2, "\033\033", 2},
         {VK_UP, 0, 0, 1, "\033[A", 3}, {VK_LEFT, 0, LEFT_CTRL_PRESSED, 1, "\033[1;5D", 6},
         {VK_HOME, 0, SHIFT_PRESSED | LEFT_ALT_PRESSED, 1, "\033[1;4H", 6},
         {VK_DELETE, 0, LEFT_ALT_PRESSED, 1, "\033[3;3~", 6}, {VK_TAB, L'\t', SHIFT_PRESSED, 1, "\033[Z", 3},
@@ -4715,6 +4717,16 @@ run_base(int argc, char **argv)
 #endif
     test_wide_division();
 #ifdef _WIN32
+    if (argc == 2 && !strcmp(argv[1], "--console-keys")) {
+        struct snag_term_host host = {0};
+        assert(snag_term_input_capture(&host) == 0);
+        assert(snag_term_input_raw(&host, true) == 0);
+        assert(snag_term_input_flush(&host) == 0);
+        test_console_keys(&host);
+        assert(snag_term_input_restore(&host, true) == 0);
+        (void)puts("test_console_keys: ok");
+        return 0;
+    }
     if (argc == 2 && !strcmp(argv[1], "--standard-console-creation")) {
         test_standard_console_creation();
         return 0;

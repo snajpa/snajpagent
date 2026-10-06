@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Recognize Windows Escape key events even when the console supplies no
+  translated character, including leaving the Vim composer's Insert mode.
+
 - Fix Windows directory rescans through a held handle, allowing named Vim
   workspaces to check name uniqueness and save their state.
 
