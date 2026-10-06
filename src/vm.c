@@ -35,7 +35,7 @@
 enum view_kind { VIEW_SESSIONS, VIEW_WORKSPACES, VIEW_HELP, VIEW_TRANSCRIPT,
     VIEW_REPORT, VIEW_REPORTS };
 enum history_load { LOAD_NONE, LOAD_FIRST, LOAD_LAST, LOAD_PREVIOUS, LOAD_NEXT,
-    LOAD_KEEP, LOAD_ANCHOR, LOAD_REFRESH, LOAD_POLL };
+    LOAD_KEEP, LOAD_ANCHOR, LOAD_REFRESH, LOAD_POLL, LOAD_KEEP_NEXT, LOAD_KEEP_PREVIOUS };
 static const char *const view_names[] = {"sessions", "workspaces", "help", "transcript",
     "report", "reports"};
 static const char *const help_rows[] = {
@@ -78,7 +78,7 @@ struct vm_window {
     char session_id[SNAG_ID_HEX_LEN + 1u], anchor_key[160];
     uint64_t anchor_seq;
     size_t anchor_byte;
-    bool anchor_heading, incomplete, best_effort, follow, source_failed;
+    bool anchor_heading, anchor_source, incomplete, best_effort, follow, source_failed;
     uint64_t follow_at;
     unsigned int verbosity;
     enum history_load load;
@@ -223,8 +223,24 @@ remember_anchor(struct vm_window *window)
     (void)snprintf(window->anchor_key, sizeof(window->anchor_key), "%s",
         snag_json_string(block, "key"));
     window->anchor_seq = (uint64_t)json_integer_value(json_object_get(block, "seq"));
-    window->anchor_byte = row.begin;
+    window->anchor_byte = snag_vm_document_source(window->document, &row, row.begin);
     window->anchor_heading = row.heading;
+    window->anchor_source = true;
+}
+
+static size_t
+locate_anchor(const struct vm_window *window)
+{
+    return (window->anchor_source ? snag_vm_document_locate_source :
+        snag_vm_document_locate)(window->document, window->anchor_key,
+            window->anchor_seq, window->anchor_byte, window->anchor_heading);
+}
+
+static bool
+keeps_anchor(enum history_load load)
+{
+    return load == LOAD_KEEP || load == LOAD_ANCHOR || load == LOAD_REFRESH ||
+        load == LOAD_KEEP_NEXT || load == LOAD_KEEP_PREVIOUS;
 }
 
 static void
@@ -235,7 +251,9 @@ queue_history(struct vm *vm, struct vm_window *window, enum history_load load)
         if (window->source_failed) notice(vm, "Loading retained history");
         window->source_failed = false;
     }
-    if (load == LOAD_KEEP || load == LOAD_REFRESH) remember_anchor(window);
+    if ((load == LOAD_KEEP || load == LOAD_REFRESH) && !window->anchor_key[0]) {
+        remember_anchor(window);
+    }
     window->load = load;
     vm->dirty = true;
 }
@@ -252,11 +270,11 @@ state_snapshot(const struct vm *vm)
             "top", (json_int_t)window->top, "row", (json_int_t)window->selected,
             "filter", window->filter ? window->filter : "");
         if (row && window->kind == VIEW_TRANSCRIPT) {
-            json_t *history = json_pack("{s:s,s:s,s:I,s:I,s:b,s:i,s:b}",
+            json_t *history = json_pack("{s:s,s:s,s:I,s:I,s:b,s:i,s:b,s:b}",
                 "session", window->session_id, "key", window->anchor_key,
                 "seq", (json_int_t)window->anchor_seq, "byte", (json_int_t)window->anchor_byte,
                 "heading", window->anchor_heading, "verbosity", (int)window->verbosity,
-                "follow", window->follow);
+                "follow", window->follow, "source", window->anchor_source);
             if (!history || json_object_set_new(row, "history", history) < 0) {
                 json_decref(row);
                 row = NULL;
@@ -267,7 +285,8 @@ state_snapshot(const struct vm *vm)
                 (window->kind == VIEW_REPORT &&
                  (json_object_set(row, "report", window->report) < 0 ||
                   json_object_set_new(row, "byte", json_integer(
-                    (json_int_t)window->anchor_byte)) < 0))) {
+                    (json_int_t)window->anchor_byte)) < 0 ||
+                  json_object_set_new(row, "source", json_boolean(window->anchor_source)) < 0))) {
                 json_decref(row);
                 row = NULL;
             }
@@ -288,7 +307,7 @@ state_snapshot(const struct vm *vm)
         json_decref(windows);
         return NULL;
     }
-    json_t *result = json_pack("{s:i,s:I,s:o,s:o,s:o}", "v", 6,
+    json_t *result = json_pack("{s:i,s:I,s:o,s:o,s:o}", "v", 7,
         "focus", (json_int_t)vm->windows[vm->focus].id, "layout", layout,
         "windows", windows, "buffers", buffers);
     json_t *classic = json_null();
@@ -318,7 +337,7 @@ state_restore(struct vm *vm, const json_t *state, char *error, size_t size)
     size_t count = json_array_size(json_object_get(state, "windows")), focus = SIZE_MAX;
     if (!snag_json_exact_keys(state, version >= 5 ? "v focus layout windows buffers classic" :
         version >= 3 ? "v focus layout windows buffers" :
-        "v focus layout windows") || (version < 1 || version > 6) || !count ||
+        "v focus layout windows") || (version < 1 || version > 7) || !count ||
         (version >= 3 &&
          snag_vm_connections_load(json_object_get(state, "buffers"), &connections) < 0) ||
         snag_json_integer_u64(state, "focus", &focus_id) < 0 ||
@@ -346,7 +365,8 @@ state_restore(struct vm *vm, const json_t *state, char *error, size_t size)
         bool history = kind && !strcmp(kind, "transcript") && version >= 2;
         bool report = kind && !strcmp(kind, "report") && version >= 6;
         bool reports = kind && !strcmp(kind, "reports") && version >= 6;
-        if (!snag_json_exact_keys(row, report ?
+        if (!snag_json_exact_keys(row, report && version >= 7 ?
+            "id kind selected top row filter session report byte source" : report ?
             "id kind selected top row filter session report byte" :
             reports ? "id kind selected top row filter session" :
             history ? "id kind selected top row filter history" :
@@ -378,10 +398,12 @@ state_restore(struct vm *vm, const json_t *state, char *error, size_t size)
             const char *key = snag_json_string(saved, "key");
             uint64_t byte, level;
             bool following = json_object_get(saved, "follow") != NULL;
-            if (!snag_json_exact_keys(saved, following ?
+            if (!snag_json_exact_keys(saved, version >= 7 ?
+                "session key seq byte heading verbosity follow source" : following ?
                 "session key seq byte heading verbosity follow" :
                 "session key seq byte heading verbosity") ||
                 (following && !json_is_boolean(json_object_get(saved, "follow"))) ||
+                (version >= 7 && !json_is_boolean(json_object_get(saved, "source"))) ||
                 !sid || strlen(sid) != SNAG_ID_HEX_LEN ||
                 json_string_length(json_object_get(saved, "session")) != SNAG_ID_HEX_LEN ||
                 !snag_hex_is_lower(sid, SNAG_ID_HEX_LEN) ||
@@ -397,6 +419,7 @@ state_restore(struct vm *vm, const json_t *state, char *error, size_t size)
             memcpy(window->anchor_key, key, strlen(key) + 1u);
             window->anchor_byte = (size_t)byte;
             window->anchor_heading = json_is_true(json_object_get(saved, "heading"));
+            window->anchor_source = json_is_true(json_object_get(saved, "source"));
             window->verbosity = (unsigned int)level;
             window->follow = json_is_true(json_object_get(saved, "follow"));
             window->load = !window->follow && window->anchor_seq ? LOAD_ANCHOR : LOAD_LAST;
@@ -412,9 +435,13 @@ state_restore(struct vm *vm, const json_t *state, char *error, size_t size)
                 uint64_t byte;
                 json_t *value = json_object_get(row, "report");
                 if (!snag_vm_report_valid(value) ||
-                    snag_json_integer_u64(row, "byte", &byte) < 0 || byte > SIZE_MAX) goto invalid;
+                    snag_json_integer_u64(row, "byte", &byte) < 0 || byte > SIZE_MAX ||
+                    (version >= 7 && !json_is_boolean(json_object_get(row, "source")))) {
+                    goto invalid;
+                }
                 window->report = json_incref(value);
                 window->anchor_byte = (size_t)byte;
+                window->anchor_source = json_is_true(json_object_get(row, "source"));
                 memcpy(window->anchor_key, snag_json_string(value, "id"), SNAG_ID_HEX_LEN + 1u);
                 window->load = LOAD_KEEP;
             }
@@ -644,7 +671,8 @@ view(struct vm *vm, enum view_kind kind)
     window->follow_at = 0u;
     window->session_id[0] = window->anchor_key[0] = 0;
     window->launch = 0u;
-    window->anchor_seq = 0u;
+    window->anchor_seq = window->anchor_byte = 0u;
+    window->anchor_heading = window->anchor_source = false;
     window->kind = kind;
     window->selected = window->top = 0u;
     window->selected_id[0] = 0;
@@ -1026,12 +1054,20 @@ load_history(struct vm *vm)
             request.if_changed = true;
             request.tail_only = !window->follow;
         }
+        /* A lower verbosity may have skipped the anchor's entire page. Reload
+         * from that source event when detail returns or the view is reflowed. */
+        if ((load == LOAD_KEEP || load == LOAD_REFRESH) && window->anchor_seq &&
+            (window->anchor_seq < window->begin.next_seq ||
+             (window->end.next_seq && window->anchor_seq >= window->end.next_seq))) {
+            load = LOAD_ANCHOR;
+        }
         if (load == LOAD_LAST || load == LOAD_PREVIOUS || load == LOAD_ANCHOR ||
-            load == LOAD_POLL) {
+            load == LOAD_POLL || load == LOAD_KEEP_PREVIOUS) {
             request.reverse = true;
-            if (load == LOAD_PREVIOUS) request.before_seq = window->begin.next_seq;
+            if (load == LOAD_PREVIOUS || load == LOAD_KEEP_PREVIOUS)
+                request.before_seq = window->begin.next_seq;
             if (load == LOAD_ANCHOR) request.before_seq = window->anchor_seq + 1u;
-        } else if (load == LOAD_NEXT) request.cursor = window->end;
+        } else if (load == LOAD_NEXT || load == LOAD_KEEP_NEXT) request.cursor = window->end;
         else if (load == LOAD_KEEP || load == LOAD_REFRESH) request.cursor = window->begin;
         vm->generation = reader_request(vm, &request);
         if (!vm->generation) notice(vm, "Cannot start history read");
@@ -1985,10 +2021,9 @@ collect(struct vm *vm)
                 result->document = NULL;
                 size_t count = snag_vm_document_rows(window->document);
                 window->selected = load == LOAD_LAST ? (count ? count - 1u : 0u) :
-                    load == LOAD_FIRST ? 0u : snag_vm_document_locate(window->document,
-                        window->anchor_key, 0u, window->anchor_byte, false);
+                    load == LOAD_FIRST ? 0u : locate_anchor(window);
                 window->top = window->selected;
-                remember_anchor(window);
+                if (load != LOAD_KEEP || !window->anchor_source) remember_anchor(window);
                 changed(vm);
                 continue;
             }
@@ -2027,19 +2062,22 @@ collect(struct vm *vm)
             window->document = result->document;
             result->document = NULL;
             size_t count = snag_vm_document_rows(window->document);
-            if (load == LOAD_KEEP || load == LOAD_ANCHOR || load == LOAD_REFRESH)
-                window->selected = snag_vm_document_locate(window->document, window->anchor_key,
-                    window->anchor_seq, window->anchor_byte, window->anchor_heading);
+            if (keeps_anchor(load)) window->selected = locate_anchor(window);
             else if (load == LOAD_LAST || load == LOAD_PREVIOUS || load == LOAD_POLL)
                 window->selected = count ? count - 1u : 0u;
             else window->selected = 0u;
             size_t height = window->rectangle.rows > 1u ? window->rectangle.rows - 1u : 1u;
             window->top = window->selected >= height ? window->selected - height + 1u : 0u;
-            if (count) remember_anchor(window);
-            else if (result->request.reverse && window->begin.offset)
-                queue_history(vm, window, LOAD_PREVIOUS);
-            else if (!result->request.reverse && window->end.offset < window->tail.offset)
-                queue_history(vm, window, LOAD_NEXT);
+            if (count) {
+                if (!keeps_anchor(load) || !window->anchor_source) remember_anchor(window);
+            } else if (load != LOAD_ANCHOR) {
+                if (result->request.reverse && window->begin.offset) {
+                    queue_history(vm, window,
+                        keeps_anchor(load) ? LOAD_KEEP_PREVIOUS : LOAD_PREVIOUS);
+                } else if (!result->request.reverse && window->end.offset < window->tail.offset) {
+                    queue_history(vm, window, keeps_anchor(load) ? LOAD_KEEP_NEXT : LOAD_NEXT);
+                }
+            }
             changed(vm);
         }
     } else {

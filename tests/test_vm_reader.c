@@ -5,6 +5,7 @@
 #include "json.h"
 #include "vm_connection.h"
 #include "vm_report.h"
+#include "vm_source.h"
 
 #include <assert.h>
 #include <errno.h>
@@ -207,6 +208,13 @@ report_test(struct snag_store *store, const char *root)
     const char *file_text = snag_json_string(snag_vm_document_block(file_view, 0u), "text");
     assert(!strncmp(file_text, "/cat source\n\\xff\\x00", 20u));
     assert(strstr(file_text, "[redacted]") && !strstr(file_text, values[0]));
+    const json_t *file_block = snag_vm_document_block(file_view, 0u);
+    assert(snag_vm_source_position(file_block, 12u, true) == 12u);
+    assert(snag_vm_source_position(file_block, 16u, true) == 13u);
+    assert(snag_vm_source_position(file_block, 20u, true) == 14u);
+    assert(snag_vm_source_position(file_block, 65542u, false) == 65548u);
+    assert(snag_vm_source_position(file_block, 65548u, true) == 65542u);
+    assert(snag_vm_source_position(file_block, 65558u, true) == 65542u + strlen(values[0]));
     snag_vm_document_free(file_view);
     json_decref(snapshot);
     /* Report reads remain available after the session's owner exits. */

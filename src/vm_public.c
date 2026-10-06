@@ -2,6 +2,7 @@
 #include "vm_public.h"
 #include "secret_source.h"
 #include "turn.h"
+#include "vm_source.h"
 
 #include <errno.h>
 #include <stdio.h>
@@ -13,6 +14,7 @@ struct public_item {
     char key[SNAG_ID_HEX_LEN + 24u];
     const char *response, *kind, *phase, *state;
     uint64_t ordinal, seq, last_seq, begin, end;
+    bool source_exact;
 };
 
 struct projection {
@@ -47,7 +49,7 @@ find_item(struct projection *projection, const char *response, uint64_t ordinal,
         return NULL;
     struct public_item *item = &projection->items[projection->count++];
     *item = (struct public_item){.response = response, .ordinal = ordinal, .seq = seq,
-        .state = "streaming", .text = {.max = SNAG_MEMORY_LIMIT / 2u}};
+        .state = "streaming", .source_exact = true, .text = {.max = SNAG_MEMORY_LIMIT / 2u}};
     memcpy(item->key, key, strlen(key) + 1u);
     return item;
 }
@@ -77,8 +79,10 @@ record_item(struct projection *projection, const char *response, uint64_t ordina
         projection->bytes -= item->text.len;
         snag_secret_clear(item->text.data, item->text.len);
         item->text.len = 0u;
+        item->source_exact = true;
     }
     size_t length = strlen(text);
+    if (source_length != length) item->source_exact = false;
     /* This is a working projection of a bounded event page, not retained
      * history. Leave half the existing process budget for source/grid caches. */
     if (length > SNAG_MEMORY_LIMIT / 2u - projection->bytes) return snag_errno(EOVERFLOW);
@@ -175,27 +179,44 @@ snag_vm_public_source_bytes(json_t *event, const json_t *source)
 }
 
 static json_t *
-redact_text(const struct public_item *item, const struct snag_wire_secrets *secrets)
+redact_text(const struct public_item *item, const struct snag_wire_secrets *secrets, json_t *map)
 {
     struct snag_buf text = {.max = SNAG_MEMORY_LIMIT / 2u};
-    bool streaming = !strcmp(item->state, "streaming");
+    bool streaming = !strcmp(item->state, "streaming") || !strcmp(item->state, "unconfirmed");
     for (size_t at = 0u; at < item->text.len;) {
         const unsigned char *bytes = item->text.data + at;
         size_t remaining = item->text.len - at;
         size_t matched = snag_wire_secret_match(bytes, remaining, secrets);
-        if (streaming && secrets) {
+        if (secrets) {
             for (size_t i = 0u; i < secrets->count; ++i) {
                 const char *secret = secrets->values[i];
-                if (secret && strlen(secret) > remaining && !memcmp(secret, bytes, remaining))
-                    matched = remaining;
+                if (streaming && secret && strlen(secret) > remaining &&
+                    !memcmp(secret, bytes, remaining)) matched = remaining;
+                if (secret && !at && item->begin) {
+                    size_t length = strlen(secret);
+                    for (size_t suffix = 1u; suffix < length && suffix <= remaining; ++suffix) {
+                        if (!memcmp(secret + length - suffix, bytes, suffix) && suffix > matched) {
+                            matched = suffix;
+                        }
+                    }
+                }
             }
         }
         if (matched) {
+            if (item->source_exact && snag_vm_source_replace(map, text.len,
+                item->begin + at, 17u, matched) < 0) goto failed;
             if (snag_buf_append(&text, "<redacted:secret>", 17u) < 0) goto failed;
             at += matched;
         } else {
             if (snag_buf_putc(&text, item->text.data[at++]) < 0) goto failed;
         }
+    }
+    /* A caller may supply already-redacted text with only its original byte
+     * count. That preserves the whole source span, not invented inner offsets.
+     * The native transcript worker supplies raw validated events. */
+    if (!item->source_exact && text.len && item->end > item->begin &&
+        snag_vm_source_replace(map, 0u, item->begin, text.len, item->end - item->begin) < 0) {
+        goto failed;
     }
     json_t *result = json_stringn(text.data ? (const char *)text.data : "", text.len);
     snag_buf_free(&text);
@@ -230,12 +251,15 @@ snag_vm_public_blocks(const json_t *events, const struct snag_wire_secrets *secr
     result = json_array();
     for (size_t i = 0u; result && i < projection.count; ++i) {
         const struct public_item *item = &projection.items[i];
-        json_t *text = redact_text(item, secrets);
-        json_t *block = text ? json_pack("{s:s,s:s,s:I,s:I,s:I,s:I,s:I,s:s,s:s,s:s,s:o}",
+        json_t *map = json_array();
+        json_t *text = map ? redact_text(item, secrets, map) : NULL;
+        json_t *block = text ? json_pack("{s:s,s:s,s:I,s:I,s:I,s:I,s:I,s:s,s:s,s:s,s:o,s:O}",
             "key", item->key, "response_id", item->response, "ordinal", (json_int_t)item->ordinal,
             "seq", (json_int_t)item->seq, "last_seq", (json_int_t)item->last_seq,
             "source_begin", (json_int_t)item->begin, "source_end", (json_int_t)item->end,
-            "kind", item->kind, "phase", item->phase, "state", item->state, "text", text) : NULL;
+            "kind", item->kind, "phase", item->phase, "state", item->state, "text", text,
+            "source_map", map) : NULL;
+        json_decref(map);
         if (!block || json_array_append_new(result, block) < 0) {
             json_decref(result);
             result = NULL;

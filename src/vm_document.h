@@ -27,5 +27,11 @@ const char *snag_vm_document_text(const struct snag_vm_document *,
  * nearest later source event, or the final row when it is beyond the page. */
 size_t snag_vm_document_locate(const struct snag_vm_document *, const char *key,
     uint64_t seq, size_t byte, bool heading);
+/* The source variant uses the original body byte, independent of page prefix,
+ * redaction expansion and binary escaping. Headings keep rendered coordinates. */
+size_t snag_vm_document_locate_source(const struct snag_vm_document *, const char *key,
+    uint64_t seq, size_t byte, bool heading);
+size_t snag_vm_document_source(const struct snag_vm_document *,
+    const struct snag_vm_document_row *, size_t display_byte);
 
 #endif

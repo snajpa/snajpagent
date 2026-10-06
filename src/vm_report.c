@@ -3,6 +3,7 @@
 #include "fs.h"
 #include "secret_source.h"
 #include "store_internal.h"
+#include "vm_source.h"
 #include "unicode.h"
 
 #include <errno.h>
@@ -256,10 +257,10 @@ out: {
     }
 }
 
-int
-snag_vm_report_text(const unsigned char *data, size_t length,
+static int
+report_text(const unsigned char *data, size_t length,
     const struct snag_wire_secrets *secrets, bool (*cancel)(void *), void *opaque,
-    struct snag_buf *out)
+    struct snag_buf *out, json_t *map)
 {
     /* Match across read boundaries before replacing invalid bytes. Grid
      * rendering makes all remaining control characters inert. */
@@ -274,15 +275,25 @@ snag_vm_report_text(const unsigned char *data, size_t length,
         int rc;
         if (secret) {
             unit = secret;
+            if (map && snag_vm_source_replace(map, out->len, at, 10u, unit) < 0) return -1;
             rc = snag_buf_append(out, "[redacted]", 10u);
         } else if (!unit || !cp) {
             unit = 1u;
+            if (map && snag_vm_source_replace(map, out->len, at, 4u, 1u) < 0) return -1;
             rc = snag_buf_printf(out, "\\x%02x", data[at]);
         } else rc = snag_buf_append(out, data + at, unit);
         if (rc < 0) return -1;
         at += unit;
     }
     return 0;
+}
+
+int
+snag_vm_report_text(const unsigned char *data, size_t length,
+    const struct snag_wire_secrets *secrets, bool (*cancel)(void *), void *opaque,
+    struct snag_buf *out)
+{
+    return report_text(data, length, secrets, cancel, opaque, out, NULL);
 }
 
 struct snag_vm_document *
@@ -294,7 +305,7 @@ snag_vm_report_read(struct snag_store *store, const char *session, const json_t 
     snag_session_init(&location);
     struct snag_buf raw = {.max = SIZE_MAX}, text = {.max = SIZE_MAX};
     struct snag_vm_document *document = NULL;
-    json_t *blocks = NULL;
+    json_t *blocks = NULL, *map = NULL;
     int fd = -1;
     if (!snag_vm_report_valid(report) || !columns) {
         (void)snag_fail(error, size, EINVAL, "invalid report reference");
@@ -334,21 +345,24 @@ snag_vm_report_read(struct snag_store *store, const char *session, const json_t 
         (void)snag_fail(error, size, ESTALE, "command report digest changed");
         goto out;
     }
-    if (snag_vm_report_text(raw.data, raw.len, secrets, cancel, opaque, &text) < 0) goto out;
+    map = json_array();
+    if (!map || report_text(raw.data, raw.len, secrets, cancel, opaque, &text, map) < 0) goto out;
     if (snag_fstat(fd, &info) < 0) goto out;
     if (info.st_size < 0 || (uint64_t)info.st_size != bytes) {
         (void)snag_fail(error, size, ESTALE, "command report size changed");
         goto out;
     }
-    blocks = json_pack("[{s:s,s:i,s:s,s:o}]", "key", snag_json_string(report, "id"),
+    blocks = json_pack("[{s:s,s:i,s:s,s:o,s:i,s:I,s:O}]", "key", snag_json_string(report, "id"),
         "seq", 0, "label", "", "text",
-        json_stringn(text.data ? (const char *)text.data : "", text.len));
+        json_stringn(text.data ? (const char *)text.data : "", text.len),
+        "source_begin", 0, "source_end", (json_int_t)raw.len, "source_map", map);
     if (blocks) document = snag_vm_document_open(blocks, columns, cancel, opaque);
 out: {
         int saved = errno;
         if (fd >= 0) (void)close(fd);
         snag_session_close(&location);
         json_decref(blocks);
+        json_decref(map);
         snag_secret_clear(raw.data, raw.len);
         snag_buf_free(&raw);
         snag_buf_free(&text);

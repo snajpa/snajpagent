@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "vm_public.h"
 #include "history_view.h"
+#include "vm_source.h"
 
 #include <assert.h>
 #include <errno.h>
@@ -106,7 +107,10 @@ main(void)
     json_array_clear(events);
     output(events, 0u, 20u, "continued");
     blocks = project(events);
-    assert(json_integer_value(json_object_get(json_array_get(blocks, 0u), "source_begin")) == 20);
+    block = json_array_get(blocks, 0u);
+    assert(json_integer_value(json_object_get(block, "source_begin")) == 20);
+    assert(snag_vm_source_position(block, 3u, true) == 23u);
+    assert(snag_vm_source_position(block, 23u, false) == 3u);
     json_decref(blocks);
     output(events, 0u, 99u, "gap");
     char error[256] = "";
@@ -130,6 +134,23 @@ main(void)
     json_decref(blocks);
     assert(json_array_append(events, json_array_get(events, 0u)) == 0);
     assert(!snag_vm_public_blocks(events, &secrets, error, sizeof(error)) && errno == EINVAL);
+    json_array_clear(events);
+    output(events, 0u, 11u, "a-secret and sk-testing-");
+    blocks = project(events);
+    assert(!strcmp(snag_json_string(json_array_get(blocks, 0u), "text"),
+        "<redacted:secret> and <redacted:secret>"));
+    block = json_array_get(blocks, 0u);
+    assert(snag_vm_source_position(block, 0u, true) == 11u);
+    assert(snag_vm_source_position(block, 16u, true) == 11u);
+    assert(snag_vm_source_position(block, 17u, true) == 19u);
+    assert(snag_vm_source_position(block, 19u, false) == 17u);
+    json_decref(blocks);
+    append_event(events, "response_failed", json_pack("{s:s,s:[]}",
+        "response_id", response, "partial_public"));
+    blocks = project(events);
+    assert(!strcmp(snag_json_string(json_array_get(blocks, 0u), "text"),
+        "<redacted:secret> and <redacted:secret>"));
+    json_decref(blocks);
     json_decref(events);
     puts("test_vm_public: ok");
     return 0;

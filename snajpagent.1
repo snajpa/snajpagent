@@ -1710,7 +1710,11 @@ when an unfinished record follows it. The journal stays unchanged.
 .B :verbosity 0..6
 re-renders the current historical range. Source anchors retain the position
 through verbosity and width changes; when a block becomes hidden, selection
-moves to the next visible event. Level 0 shows conversation, level 1 adds tool
+moves to the next visible event. Restoring detail returns to the original anchor
+until a navigation command selects another position. Redaction and binary escapes
+retain offsets into the original text, including when a source page starts midway
+through output. Older workspace positions are converted when loaded.
+Level 0 shows conversation, level 1 adds tool
 headings, level 2 adds arguments and result previews of up to 512 characters,
 and level 3 adds retained process bytes.
 Higher levels also show event markers. Binary output uses visible byte escapes;

@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "vm_document.h"
+#include "vm_source.h"
 #include "vm_text.h"
 
 #include <errno.h>
@@ -169,9 +170,9 @@ before(const struct position *at, size_t block, bool heading, size_t byte)
     return at->byte <= byte;
 }
 
-size_t
-snag_vm_document_locate(const struct snag_vm_document *doc, const char *key,
-    uint64_t seq, size_t byte, bool heading)
+static size_t
+locate(const struct snag_vm_document *doc, const char *key,
+    uint64_t seq, size_t byte, bool heading, bool source)
 {
     if (!doc || !doc->rows) return 0u;
     size_t block = json_array_size(doc->blocks), nearest = block;
@@ -179,10 +180,13 @@ snag_vm_document_locate(const struct snag_vm_document *doc, const char *key,
         const json_t *candidate = json_array_get(doc->blocks, i);
         const char *name = snag_json_string(candidate, "key");
         if (key && name && !strcmp(key, name)) { block = i; break; }
-        uint64_t source = (uint64_t)json_integer_value(json_object_get(candidate, "seq"));
-        if (nearest == json_array_size(doc->blocks) && source >= seq) nearest = i;
+        uint64_t event = (uint64_t)json_integer_value(json_object_get(candidate, "seq"));
+        if (nearest == json_array_size(doc->blocks) && event >= seq) nearest = i;
     }
     if (block == json_array_size(doc->blocks)) { block = nearest; byte = 0u; heading = true; }
+    if (source && !heading) {
+        byte = (size_t)snag_vm_source_position(json_array_get(doc->blocks, block), byte, false);
+    }
     size_t low = 0u, high = doc->count;
     while (low < high) {
         size_t middle = low + (high - low) / 2u;
@@ -199,4 +203,26 @@ snag_vm_document_locate(const struct snag_vm_document *doc, const char *key,
         ++index;
     }
     return doc->rows - 1u;
+}
+
+size_t
+snag_vm_document_locate(const struct snag_vm_document *doc, const char *key,
+    uint64_t seq, size_t byte, bool heading)
+{
+    return locate(doc, key, seq, byte, heading, false);
+}
+
+size_t
+snag_vm_document_locate_source(const struct snag_vm_document *doc, const char *key,
+    uint64_t seq, size_t byte, bool heading)
+{
+    return locate(doc, key, seq, byte, heading, true);
+}
+
+size_t
+snag_vm_document_source(const struct snag_vm_document *doc,
+    const struct snag_vm_document_row *row, size_t display_byte)
+{
+    return row->heading ? display_byte : (size_t)snag_vm_source_position(
+        snag_vm_document_block(doc, row->block), display_byte, true);
 }

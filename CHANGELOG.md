@@ -4,6 +4,11 @@
 
 ## Unreleased
 
+- Preserve Vim transcript/report positions through redaction, binary escaping,
+  page-prefix changes and reflow. Restore temporarily hidden anchors when detail
+  returns; accept earlier saved workspace positions. Mask protected-value fragments
+  at public-response page boundaries, including output left unconfirmed by failure.
+
 - Resolve historical tool names and arguments across source-page boundaries.
   Level 2 recovers decoded, redacted output previews from retained references;
   cancellable reads preserve the displayed page and its source position.

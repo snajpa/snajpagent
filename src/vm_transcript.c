@@ -6,6 +6,7 @@
 #include "secret_source.h"
 #include "store.h"
 #include "vm_public.h"
+#include "vm_source.h"
 
 #include <errno.h>
 #include <stdio.h>
@@ -17,6 +18,7 @@ struct output_fragment {
     uint64_t display_begin, display_end;
     size_t stream, at, length;
     struct snag_buf text;
+    json_t *map;
     bool binary;
 };
 
@@ -110,6 +112,8 @@ collect_output(struct transcript *view, const json_t *event)
         .end = offset + decoded.len, .stream = index, .at = output->raw.len,
         .length = decoded.len, .text = {.max = 17u * 16384u + 4u}};
     ++view->fragment_count;
+    view->fragments[count].map = json_array();
+    if (!view->fragments[count].map) goto out;
     if (snag_buf_append(&output->raw, decoded.data, decoded.len) < 0) goto out;
     output->end += decoded.len;
     view->bytes += decoded.len;
@@ -159,6 +163,8 @@ decode_output(struct transcript *view)
             if (!part->text.len) part->display_begin = stream->begin + at;
             size_t matched = secret_span(stream, at, view->secrets);
             if (matched) {
+                if (snag_vm_source_replace(part->map, part->text.len,
+                    stream->begin + at, 17u, matched) < 0) return -1;
                 if (snag_buf_append(&part->text, "<redacted:secret>", 17u) < 0) return -1;
                 at += matched;
                 part->display_end = stream->begin + at;
@@ -167,6 +173,8 @@ decode_output(struct transcript *view)
             uint32_t cp;
             size_t bytes = snag_utf8_decode(stream->raw.data + at, stream->raw.len - at, &cp);
             if (!bytes || !cp) {
+                if (snag_vm_source_replace(part->map, part->text.len,
+                    stream->begin + at, 4u, 1u) < 0) return -1;
                 if (snag_buf_printf(&part->text, "\\x%02X", stream->raw.data[at]) < 0) return -1;
                 part->binary = true;
                 ++at;
@@ -203,6 +211,7 @@ output_blocks(struct transcript *view)
             }
         }
         if (!block || json_object_set_new(block, "last_seq", json_integer(last_seq)) < 0 ||
+            json_object_set(block, "source_map", part->map) < 0 ||
             json_object_set_new(block, "handle", json_string(stream->handle)) < 0 ||
             json_object_set_new(block, "stream", json_integer(stream->stream)) < 0) return -1;
     }
@@ -230,7 +239,7 @@ public_blocks(struct transcript *view, const json_t *events, char *error, size_t
             (uint64_t)json_integer_value(json_object_get(public, "source_end")));
         if (!block) goto out;
         static const char *const keys[] = {
-            "key", "last_seq", "response_id", "ordinal", "phase", "state"};
+            "key", "last_seq", "response_id", "ordinal", "phase", "state", "source_map"};
         for (size_t k = 0u; k < sizeof(keys) / sizeof(keys[0]); ++k)
             if (json_object_set(block, keys[k], json_object_get(public, keys[k])) < 0) goto out;
     }
@@ -302,12 +311,29 @@ out:
 }
 
 static int
-event_block(struct transcript *view, uint64_t seq, const char *type, const json_t *data)
+text_block(struct transcript *view, uint64_t seq, const char *kind, const char *label,
+    const char *text, const char *source, json_t **out)
+{
+    json_t *block = append_block(view, seq, kind, label, text, strlen(text), 0u,
+        strlen(source ? source : text));
+    if (!block) return -1;
+    if (source) {
+        json_t *map = snag_vm_source_redactions(source, text, view->secrets);
+        if (!map || json_object_set_new(block, "source_map", map) < 0) return -1;
+    }
+    if (out) *out = block;
+    return 0;
+}
+
+static int
+event_block(struct transcript *view, uint64_t seq, const char *type,
+    const json_t *data, const json_t *source)
 {
     if (!strcmp(type, "response_completed")) return call_metadata(view, data);
     if (!strcmp(type, "tool_started") || !strcmp(type, "tool_finished"))
         return tool_block(view, seq, type, data);
     const char *text = snag_json_string(data, "text");
+    const char *field = "text";
     const char *label = NULL;
     if (!strcmp(type, "input_received")) label = "operator";
     else if (!strcmp(type, "steering_added")) label = "operator / steering";
@@ -315,6 +341,7 @@ event_block(struct transcript *view, uint64_t seq, const char *type, const json_
     else if (!strcmp(type, "future_turn_edited")) label = "operator / edited queue";
     else if (!strcmp(type, "goal_started")) {
         label = "goal";
+        field = "prompt";
         text = snag_json_string(data, "prompt");
     }
     else if (!strcmp(type, "irc_event")) {
@@ -329,28 +356,35 @@ event_block(struct transcript *view, uint64_t seq, const char *type, const json_
         int rc = snag_buf_printf(&heading, "%s/%s <%s> %s", endpoint,
             room, *nick ? nick : "server", !strcmp(kind, "message") ? "" : kind);
         if (!rc) rc = snag_buf_terminate(&heading);
-        json_t *block = rc ? NULL : append_block(view, seq, "irc", (const char *)heading.data,
-            text, strlen(text), 0u, strlen(text));
+        json_t *block = NULL;
+        if (!rc) rc = text_block(view, seq, "irc", (const char *)heading.data,
+            text, snag_json_string(source, "text"), &block);
+        if (rc < 0) block = NULL;
         if (block && (json_object_set_new(block, "endpoint", json_string(endpoint)) < 0 ||
             json_object_set_new(block, "target", json_string(room)) < 0)) block = NULL;
         snag_buf_free(&heading);
         return block ? 0 : -1;
     } else if (!strcmp(type, "response_failed") || !strcmp(type, "turn_failed")) {
         label = type;
+        field = "message";
         text = snag_json_string(data, "message");
     } else if (!strcmp(type, "response_interrupted") || !strcmp(type, "turn_interrupted")) {
         label = "interrupted";
+        field = "reason";
         text = snag_json_string(data, "reason");
     } else if (!strcmp(type, "compaction_completed") || !strcmp(type, "irc_compaction_completed")) {
         label = "context compacted";
+        field = NULL;
         text = "Earlier transcript remains in retained history.";
     } else if (!strcmp(type, "session_created")) {
         label = "session";
+        field = "cwd";
         text = snag_json_string(data, "cwd");
     }
     if (!label) return 0;
     if (!text) text = "";
-    return append_block(view, seq, type, label, text, strlen(text), 0u, strlen(text)) ? 0 : -1;
+    return text_block(view, seq, type, label, text,
+        field ? snag_json_string(source, field) : NULL, NULL);
 }
 
 static int
@@ -429,7 +463,7 @@ snag_vm_transcript_blocks(const json_t *events, unsigned int verbosity, unsigned
         json_t *data = filtered ? json_loads(filtered, JSON_REJECT_DUPLICATES, NULL) : NULL;
         free(filtered);
         if (!data) goto out;
-        int rc = event_block(&view, seq, type, data);
+        int rc = event_block(&view, seq, type, data, json_object_get(event, "data"));
         if (!rc && verbosity >= 4u)
             rc = append_block(&view, seq, "event", type, NULL, 0u, 0u, 0u) ? 0 : -1;
         json_decref(data);
@@ -443,7 +477,10 @@ out:
         snag_secret_clear(view.streams[i].raw.data, view.streams[i].raw.len);
         snag_buf_free(&view.streams[i].raw);
     }
-    for (size_t i = 0u; i < view.fragment_count; ++i) snag_buf_free(&view.fragments[i].text);
+    for (size_t i = 0u; i < view.fragment_count; ++i) {
+        snag_buf_free(&view.fragments[i].text);
+        json_decref(view.fragments[i].map);
+    }
     free(view.streams);
     free(view.fragments);
     json_decref(view.blocks);

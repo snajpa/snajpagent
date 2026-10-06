@@ -81,12 +81,26 @@ class ReportTests(unittest.TestCase):
         peer.send(type='quit', generation=peer.generation)
         peer.until('control')
         self.owner.status('stored')
-        resumed = self.start('--resume', 'saved-report', expect=b'REPORT')
-        resumed.repaint_until(report['id'][:8].encode())
-        resumed.write(b'gg')
-        resumed.repaint_until(b'/help')
-        self.owner.status('stored')
-        resumed.finish('q')
+        path, = (self.root / 'state' / 'workspaces').glob('*/workspace.json')
+        original = json.loads(path.read_text())
+        for version in (6, 7):
+            snapshot = json.loads(json.dumps(original))
+            snapshot['state']['v'] = version
+            if version == 6:
+                del snapshot['state']['windows'][0]['source']
+            path.write_text(json.dumps(snapshot))
+            resumed = self.start('--resume', 'saved-report', expect=b'REPORT')
+            resumed.repaint_until(report['id'][:8].encode())
+            resumed.command('workspace save')
+            rows = self.wait_snapshot(lambda rows:
+                next(iter(rows.values()))['state']['v'] == 7 and
+                next(iter(rows.values()))['state']['windows'][0].get('source'))
+            window = next(iter(rows.values()))['state']['windows'][0]
+            self.assertEqual(window['byte'], saved['windows'][0]['byte'])
+            resumed.write(b'gg')
+            resumed.repaint_until(b'/help')
+            self.owner.status('stored')
+            resumed.finish('q')
         self.assertEqual(self.inputs(), [])
 
     def test_new_typing_survives_report_and_report_list_redacts(self):

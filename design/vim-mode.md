@@ -168,8 +168,15 @@ redaction. Missing metadata keeps its call ID. Level2 loads a bounded prefix of
 referenced stdout/stderr by verified journal offsets, decodes interleaved chunks,
 redacts across chunk boundaries and applies the existing512-character preview.
 Dependency reads run on the cancellable worker and preserve the page cursor.
-Public-response dependencies across pages, exact redaction anchors,
-search/selection/clipboard and IRC conversations still need integration.
+Version7 snapshots use original text-byte anchors for transcript and report bodies.
+Compact replacement runs map redacted text and escaped binary back to source bytes;
+plain spans remain implicit. Reflow and temporary verbosity filtering preserve the
+original anchor until explicit navigation. Version1..6 snapshots remain readable,
+with earlier display-byte positions converted when the document is loaded. Public
+stream fragments mask partial protected values at both loaded-page boundaries,
+including unconfirmed output after a failed response.
+Public-response dependencies across pages, search/selection/clipboard and IRC
+conversations still need integration.
 This development frontend has
 not been installed on the operator's machines or merged into the release line.
 

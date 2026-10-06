@@ -4,6 +4,7 @@
 #include "irc.h"
 #include "render.h"
 #include "vm_document.h"
+#include "vm_source.h"
 
 #include <assert.h>
 #include <errno.h>
@@ -182,7 +183,14 @@ redaction_expansion(void)
     json_t *blocks = snag_vm_transcript_blocks(events, 3u, 80u, &one, NULL, NULL,
         error, sizeof(error));
     assert(blocks && json_array_size(blocks) == 1u);
-    assert(strlen(snag_json_string(json_array_get(blocks, 0u), "text")) == 17u * sizeof(bytes));
+    json_t *block = json_array_get(blocks, 0u);
+    assert(strlen(snag_json_string(block, "text")) == 17u * sizeof(bytes));
+    assert(json_array_size(json_object_get(block, "source_map")) == 1u);
+    for (size_t i = 0u; i < sizeof(bytes); ++i) {
+        assert(snag_vm_source_position(block, 17u * i + 8u, true) == i);
+        assert(snag_vm_source_position(block, i, false) == 17u * i);
+    }
+    assert(snag_vm_source_position(block, 17u * sizeof(bytes), true) == sizeof(bytes));
     json_decref(blocks);
     json_decref(events);
 }
@@ -254,6 +262,52 @@ resolved_call_metadata(void)
 }
 
 static void
+source_coordinates(void)
+{
+    json_t *events = json_array();
+    event(events, "input_received", json_pack("{s:s}", "text", "top-secret\nmarker"));
+    event(events, "response_output", json_pack("{s:s,s:i,s:i,s:o}", "response_id", response,
+        "index", 0, "offset", 50, "item", public_item("prefix top-secret\nmarker 界")));
+    const unsigned char bytes[] = {0xff, 0, 'a', '\n', 'm', 'a', 'r', 'k', 'e', 'r'};
+    output(events, 0u, 90u, bytes, sizeof(bytes));
+    json_t *blocks = project(events, 3u);
+    json_t *input = find(blocks, "input_received", 0u);
+    json_t *answer = find(blocks, "assistant", 0u);
+    json_t *process = find(blocks, "output", 0u);
+    assert(snag_vm_source_position(input, 18u, true) == 11u);
+    assert(snag_vm_source_position(answer, 25u, true) == 68u);
+    assert(snag_vm_source_position(answer, 68u, false) == 25u);
+    assert(snag_vm_source_position(process, 0u, true) == 90u);
+    assert(snag_vm_source_position(process, 4u, true) == 91u);
+    assert(snag_vm_source_position(process, 8u, true) == 92u);
+    assert(snag_vm_source_position(process, 94u, false) == 10u);
+    const char *key = snag_json_string(answer, "key");
+    for (unsigned int width = 5u; width < 80u; width += 11u) {
+        struct snag_vm_document *doc = snag_vm_document_open(blocks, width, NULL, NULL);
+        assert(doc);
+        size_t at = snag_vm_document_locate_source(doc, key, 2u, 68u, false);
+        struct snag_vm_document_row row;
+        assert(snag_vm_document_row(doc, at, &row) == 0 && !row.heading);
+        assert(!strncmp(snag_vm_document_text(doc, &row) + row.begin, "mark", 4u));
+        assert(snag_vm_document_source(doc, &row, row.begin) == 68u);
+        snag_vm_document_free(doc);
+    }
+    json_decref(blocks);
+    /* The same public item can be loaded with an earlier prefix. Its source
+     * coordinate keeps the marker in place despite the changed display offset. */
+    json_t *data = json_object_get(json_array_get(events, 1u), "data");
+    assert(json_object_set_new(data, "offset", json_integer(43)) == 0);
+    assert(json_object_set_new(json_object_get(data, "item"), "text",
+        json_string("earlierprefix top-secret\nmarker 界")) == 0);
+    blocks = project(events, 3u);
+    answer = find(blocks, "assistant", 0u);
+    assert(snag_vm_source_position(answer, 68u, false) == 32u);
+    assert(!strncmp(snag_json_string(answer, "text") + 32u, "marker", 6u));
+    json_decref(blocks);
+    json_decref(events);
+}
+
+static void
 failure_paths(void)
 {
     char error[256];
@@ -280,6 +334,7 @@ main(void)
     conversation_and_tools();
     encoded_interleaving();
     redaction_expansion();
+    source_coordinates();
     sparse_document();
     resolved_call_metadata();
     failure_paths();
