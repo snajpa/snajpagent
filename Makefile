@@ -330,8 +330,10 @@ tests/test_session_draft: $(PLATFORM_SRC) src/json.c src/media.c src/turn.c src/
 tests/test_session_direct: $(PLATFORM_SRC) src/json.c src/media.c src/turn.c src/session_view.c src/vm_text.c src/unicode.c tests/test_session_direct.c $(HEADERS)
 
 tests/snajpagent-direct: $(COMMON_OBJ) tests/direct_session.c $(HEADERS)
-	$(CC) $(CPPFLAGS) $(JANSSON_CFLAGS) $(CFLAGS) $(filter-out -municode,$(LDFLAGS)) -Isrc \
-		-o $@ $(filter %.c %.o,$^) $(LDLIBS) $(CURL_LIBS)
+	$(CC) $(CPPFLAGS) $(JANSSON_CFLAGS) $(CFLAGS) -Isrc \
+		-c tests/direct_session.c -o build/direct_session.o
+	$(CC) $(filter-out -municode,$(LDFLAGS)) -o $@ $(COMMON_OBJ) \
+		build/direct_session.o $(LDLIBS) $(CURL_LIBS)
 
 tests/test_context tests/test_store tests/test_tools tests/test_turn: tests/checked_json.h
 
