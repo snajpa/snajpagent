@@ -2782,7 +2782,7 @@ mouse_cancel_operator(struct vm_window *window)
 }
 
 static int
-mouse_event(struct vm *vm, const struct snag_vm_input_event *event)
+mouse_input(struct vm *vm, const struct snag_vm_input_event *event)
 {
     unsigned int button = event->button & ~28u;
     bool motion = button == 32u;
@@ -2921,7 +2921,7 @@ input_event(void *opaque, const struct snag_vm_input_event *event)
         vm->dirty = true;
         return 0;
     }
-    if (event->kind == SNAG_VM_MOUSE) return mouse_event(vm, event);
+    if (event->kind == SNAG_VM_MOUSE) return mouse_input(vm, event);
     vm->mouse_down = false;
     if (vm->copying || vm->navigating || vm->motion_loading) {
         bool control = (event->modifiers & SNAG_VM_CTRL) != 0u;
