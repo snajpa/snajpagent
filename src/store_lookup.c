@@ -216,11 +216,13 @@ open_snapshot(struct snag_store *store, struct snag_session *session,
 /* On success the caller owns the snapshot; no selected-field copies. */
 static int
 matching_snapshot(struct snag_store *store, struct snag_session *snapshot,
-                   const char *id)
+    const char *id, bool (*cancel)(void *), void *cancel_opaque)
 {
     char error[128];
 
     snag_session_init(snapshot);
+    snapshot->history_cancel = cancel;
+    snapshot->history_cancel_opaque = cancel_opaque;
     if (strlen(id) == SNAG_ID_HEX_LEN && snag_hex_is_lower(id, SNAG_ID_HEX_LEN) &&
         open_snapshot(store, snapshot, id, error, sizeof(error)) == 0 &&
         !snapshot->delete_requested) return 0;
@@ -252,7 +254,7 @@ snag_store_find_name(struct snag_store *store, const char *name, char id[SNAG_ID
     if (!dir) return -1;
     while ((entry = snag_directory_next(dir)) != NULL) {
         struct snag_session snapshot;
-        if (matching_snapshot(store, &snapshot, entry) < 0) continue;
+        if (matching_snapshot(store, &snapshot, entry, NULL, NULL) < 0) continue;
         bool match = snapshot.name && !strcmp(snapshot.name, name);
         snag_session_close(&snapshot);
         if (!match) continue;
@@ -287,7 +289,7 @@ snag_store_find_last(struct snag_store *store, char id[SNAG_ID_HEX_LEN + 1u],
     if (!dir) return -1;
     while ((entry = snag_directory_next(dir)) != NULL) {
         struct snag_session snapshot;
-        if (matching_snapshot(store, &snapshot, entry) < 0) continue;
+        if (matching_snapshot(store, &snapshot, entry, NULL, NULL) < 0) continue;
         uint64_t last = snapshot.last_time_ms;
         if (!best[0] || last > best_time || (last == best_time && strcmp(entry, best) > 0)) {
             memcpy(best, entry, sizeof(best));
@@ -745,7 +747,8 @@ out:
 static int
 list_sessions(struct snag_store *store, const struct snag_session *owned,
     uint64_t stored_limit, unsigned int columns, snag_store_emit_fn emit,
-    void *opaque, json_t *catalog, char *error, size_t error_size)
+    void *opaque, json_t *catalog, bool (*cancel)(void *), void *cancel_opaque,
+    char *error, size_t error_size)
 {
     struct snag_directory *dir = open_sessions_dir(store, error, error_size);
     const char *entry;
@@ -755,8 +758,12 @@ list_sessions(struct snag_store *store, const struct snag_session *owned,
 
     if (!dir) goto out;
     while ((entry = snag_directory_next(dir)) != NULL) {
+        if (cancel && cancel(cancel_opaque)) goto canceled;
         struct snag_session snapshot;
-        if (matching_snapshot(store, &snapshot, entry) < 0) continue;
+        if (matching_snapshot(store, &snapshot, entry, cancel, cancel_opaque) < 0) {
+            if (cancel && cancel(cancel_opaque)) goto canceled;
+            continue;
+        }
         /* Closing a second descriptor of our lock drops the owner's POSIX lock. */
         bool live = owned && owned->lock_fd >= 0 && !strcmp(owned->id, entry);
         if (!live) live = snag_session_is_live(&snapshot);
@@ -771,6 +778,10 @@ list_sessions(struct snag_store *store, const struct snag_session *owned,
         uint64_t time_ms = snapshot.last_time_ms;
         json_t *cells = list_cells(store, &snapshot, states[status], columns);
         snag_session_close(&snapshot);
+        if (cancel && cancel(cancel_opaque)) {
+            json_decref(cells);
+            goto canceled;
+        }
         if (!cells) goto out;
         if (count == capacity) {
             size_t next = capacity ? capacity * 2u : 16u;
@@ -789,6 +800,7 @@ list_sessions(struct snag_store *store, const struct snag_session *owned,
         memcpy(rows[count].id, entry, sizeof(rows[count].id));
         ++count;
     }
+    if (cancel && cancel(cancel_opaque)) goto canceled;
     rc = finish_directory(dir, error, error_size);
     dir = NULL;
     if (rc < 0) goto out;
@@ -816,6 +828,9 @@ list_sessions(struct snag_store *store, const struct snag_session *owned,
             rc = emit_list(rows, visible, columns, emit, opaque);
         }
     }
+    goto out;
+canceled:
+    rc = snag_fail(error, error_size, ECANCELED, "session list loading canceled");
 out:
     if (dir) (void)snag_directory_close(dir);
     for (size_t row = 0u; row < count; ++row) json_decref(rows[row].cells);
@@ -830,17 +845,17 @@ snag_store_list(struct snag_store *store, const struct snag_session *owned,
     uint64_t stored_limit, unsigned int columns, snag_store_emit_fn emit,
     void *opaque, char *error, size_t error_size)
 {
-    return list_sessions(store, owned, stored_limit, columns, emit, opaque, NULL,
+    return list_sessions(store, owned, stored_limit, columns, emit, opaque, NULL, NULL, NULL,
         error, error_size);
 }
 
 json_t *
 snag_store_catalog(struct snag_store *store, const struct snag_session *owned,
-    uint64_t stored_limit, char *error, size_t error_size)
+    uint64_t stored_limit, bool (*cancel)(void *), void *cancel_opaque, char *error, size_t error_size)
 {
     json_t *rows = json_array();
     if (rows && list_sessions(store, owned, stored_limit, 0u, NULL, NULL, rows,
-        error, error_size) < 0) {
+        cancel, cancel_opaque, error, error_size) < 0) {
         json_decref(rows);
         rows = NULL;
     }

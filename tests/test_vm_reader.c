@@ -11,6 +11,10 @@
 #include <string.h>
 #include <unistd.h>
 
+#ifndef _WIN32
+#include <sys/wait.h>
+#endif
+
 static struct snag_vm_read_result *
 await_page(struct snag_vm_reader *reader, uint64_t generation)
 {
@@ -156,6 +160,34 @@ main(void)
     result = await_page(reader, generation);
     assert(!result->error_number && !result->more && result->cursor.next_seq == source.next_seq);
     snag_vm_read_result_free(result);
+    /* Catalogue reads use the same cancellable worker and immutable secrets.
+     * Identifying an in-process writer avoids dropping its POSIX lock. */
+    struct snag_vm_read_request catalog = {.kind = SNAG_VM_READ_SESSIONS, .stored_limit = 10u};
+    memcpy(catalog.owned_session_id, source.id, sizeof(catalog.owned_session_id));
+    generation = snag_vm_reader_request(reader, &catalog);
+    result = await_page(reader, generation);
+    assert(!result->error_number && !result->events && json_array_size(result->catalog) == 1u);
+    assert(!strcmp(snag_json_string(json_array_get(result->catalog, 0u), "id"), source.id));
+    dump = json_dumps(result->catalog, JSON_COMPACT);
+    assert(dump && !strstr(dump, "test-secret-value"));
+    free(dump);
+    snag_vm_read_result_free(result);
+    for (unsigned int i = 0u; i < 20u; ++i) {
+        assert(snag_vm_reader_request(reader, &catalog));
+        generation = snag_vm_reader_request(reader, &request);
+    }
+    result = await_page(reader, generation);
+    assert(!result->error_number && result->events && !result->catalog);
+    snag_vm_read_result_free(result);
+#ifndef _WIN32
+    pid_t probe = fork();
+    assert(probe >= 0);
+    if (!probe) {
+        _exit(snag_lock_file(source.lock_fd, false) < 0 && errno == EAGAIN ? 0 : 1);
+    }
+    int status;
+    assert(waitpid(probe, &status, 0) == probe && WIFEXITED(status) && WEXITSTATUS(status) == 0);
+#endif
     /* Replacement invalidates the old descriptor even with identical contents. */
     assert(snag_rename_at(source.dir_fd, "events.jsonl", source.dir_fd, "events.before") == 0);
     int replacement = snag_create_private_at(source.dir_fd, "events.jsonl", true);
@@ -170,8 +202,7 @@ main(void)
     snag_vm_reader_cancel(reader);
     assert(!snag_vm_reader_take(reader));
     /* Shutdown cancels a large read and joins its worker before releasing store. */
-    request.refresh = true;
-    assert(snag_vm_reader_request(reader, &request) > generation);
+    assert(snag_vm_reader_request(reader, &catalog) > generation);
     snag_vm_reader_close(reader);
     snag_session_close(&source);
     snag_store_close(&store);

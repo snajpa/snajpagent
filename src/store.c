@@ -3508,9 +3508,13 @@ scan_checkpoint_suffix(struct snag_session *session, int64_t checkpoint_offset,
             &restored, error, error_size) < 0) return -1;
     int dir_fd = session->dir_fd, log_fd = session->log_fd, lock_fd = session->lock_fd;
     char *dir_path = session->dir_path;
+    bool (*cancel)(void *) = session->history_cancel;
+    void *cancel_opaque = session->history_cancel_opaque;
     *session = restored;
     session->dir_fd = dir_fd; session->log_fd = log_fd; session->lock_fd = lock_fd;
     session->dir_path = dir_path;
+    session->history_cancel = cancel;
+    session->history_cancel_opaque = cancel_opaque;
     struct snag_process_state anchor = {0};
     anchor.log_offset = (uint64_t)session->log_end;
     anchor.log_seq = session->next_seq;

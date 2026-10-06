@@ -31,6 +31,7 @@ snag_vm_read_result_free(struct snag_vm_read_result *result)
 {
     if (!result) return;
     json_decref(result->events);
+    json_decref(result->catalog);
     free(result);
 }
 
@@ -114,6 +115,27 @@ static void
 read_page(struct snag_vm_reader *reader, struct snag_vm_read_result *result)
 {
     const struct snag_vm_read_request *request = &result->request;
+    if (request->kind == SNAG_VM_READ_SESSIONS) {
+        struct snag_session owned = {.lock_fd = -1};
+        if (request->owned_session_id[0]) {
+            memcpy(owned.id, request->owned_session_id, sizeof(owned.id));
+            owned.lock_fd = 0;
+        }
+        json_t *catalog = snag_store_catalog(reader->store, &owned, request->stored_limit,
+            read_canceled, reader, result->error, sizeof(result->error));
+        char *encoded = catalog ? json_dumps(catalog, JSON_COMPACT) : NULL;
+        json_decref(catalog);
+        if (!encoded) goto failed;
+        struct snag_buf filtered = {.max = SNAG_MEMORY_LIMIT / 4u};
+        int rc = snag_wire_json_redact_bounded((const unsigned char *)encoded, strlen(encoded),
+            filtered.max, &reader->secrets, &filtered, result->error, sizeof(result->error));
+        snag_secret_bytes_free(encoded);
+        json_error_t parse;
+        if (!rc) result->catalog = json_loadb((const char *)filtered.data, filtered.len, 0u, &parse);
+        snag_buf_free(&filtered);
+        if (!result->catalog) goto failed;
+        return;
+    }
     if (view_open(reader, request, result->error, sizeof(result->error)) < 0) goto failed;
     result->tail = view_tail(&reader->view);
     result->best_effort = reader->best_effort;
@@ -262,7 +284,11 @@ uint64_t
 snag_vm_reader_request(struct snag_vm_reader *reader, const struct snag_vm_read_request *request)
 {
     if (!reader || !request ||
-        !snag_hex_is_lower(request->session_id, SNAG_ID_HEX_LEN)) {
+        (request->kind != SNAG_VM_READ_HISTORY && request->kind != SNAG_VM_READ_SESSIONS) ||
+        (request->kind == SNAG_VM_READ_HISTORY &&
+         !snag_hex_is_lower(request->session_id, SNAG_ID_HEX_LEN)) ||
+        (request->owned_session_id[0] &&
+         !snag_hex_is_lower(request->owned_session_id, SNAG_ID_HEX_LEN))) {
         errno = EINVAL;
         return 0u;
     }

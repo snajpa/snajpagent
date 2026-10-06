@@ -7,8 +7,14 @@
 #include "wire.h"
 
 struct snag_vm_reader;
+enum snag_vm_read_kind { SNAG_VM_READ_HISTORY, SNAG_VM_READ_SESSIONS };
 
 struct snag_vm_read_request {
+    enum snag_vm_read_kind kind;
+    uint64_t stored_limit;
+    /* Required if this process holds a writer: never probe/close its lock.
+     * The caller preserves ownership through this request's completion. */
+    char owned_session_id[SNAG_ID_HEX_LEN + 1u];
     char session_id[SNAG_ID_HEX_LEN + 1u];
     bool trusted_tail, refresh, reverse;
     struct snag_journal_cursor tail, cursor;
@@ -23,6 +29,7 @@ struct snag_vm_read_result {
      * counts for offsets through redaction. Checkpoints are metadata.
      * Private provider payloads and the reader's secret snapshot are filtered. */
     json_t *events;
+    json_t *catalog;
     bool best_effort, incomplete, more;
     int error_number;
     char error[256];
@@ -30,7 +37,8 @@ struct snag_vm_read_result {
 
 /* Store remains open and immutable until close. Secrets are copied; rebuilding
  * the reader installs a new configuration/redaction snapshot. One background
- * worker owns journal descriptors and never acquires a session writer lock. */
+ * worker owns read-only journal descriptors and performs catalogue/status reads.
+ * The request identifies any writer already owned by the calling process. */
 struct snag_vm_reader *snag_vm_reader_open(struct snag_store *,
     const struct snag_wire_secrets *, char *, size_t);
 void snag_vm_reader_close(struct snag_vm_reader *);

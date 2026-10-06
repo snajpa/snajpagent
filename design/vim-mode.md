@@ -25,6 +25,9 @@ existing locks; a lost frontend leaves a resumable snapshot. The frontend still
 needs to define and validate its layout/draft payload and expose the commands.
 The typed agent-session catalogue shares the classic list's collection, live
 status probes, ordering and stored-row selection, and retains full session IDs.
+Catalogue loading now runs on the background reader with the same cancellation
+and redaction snapshot as history. Checkpoint restoration preserves cancellation
+through the remaining journal, and in-process writer ownership survives probes.
 The split tree now supports horizontal/vertical division, proportional resize,
 equalization, collapse on close and strict round-trip snapshots. Terminal shrink
 hides unfocused branches temporarily while preserving the tree for expansion.

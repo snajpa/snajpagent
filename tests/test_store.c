@@ -1228,12 +1228,50 @@ test_checkpoint_cancellation(struct snag_store *store, struct snag_session *sour
     view.history_cancel = NULL;
     assert(snag_session_history_refresh(&view, &tail, error, sizeof(error)) == 0);
     snag_session_close(&view);
+    remaining = 64u;
+    assert(!snag_store_catalog(store, source, UINT64_MAX, cancel_history_read,
+        &remaining, error, sizeof(error)) && errno == ECANCELED && !remaining);
     assert_session_lock_retained(source, "after canceled checkpoint reads");
+}
+
+static bool
+cancel_after_checkpoint(void *opaque)
+{
+    struct snag_session *view = opaque;
+    return view->checkpoint_seq != 0u;
+}
+
+static void
+test_catalog_checkpoint_suffix(struct snag_store *store, const char *cwd)
+{
+    struct snag_session source, view;
+    char error[256];
+    snag_session_init(&source);
+    snag_session_init(&view);
+    assert(snag_session_create(store, &source, cwd, "default", "model", "high",
+        error, sizeof(error)) == 0);
+    assert(snag_session_checkpoint(&source, error, sizeof(error)) == 0);
+    assert(snag_session_commit(&source, "effort_changed", json_pack("{s:s,s:s}",
+        "old_effort", "high", "new_effort", "low"), NULL, error, sizeof(error)) == 0);
+    memcpy(view.id, source.id, sizeof(view.id));
+    view.log_fd = snag_open_read_security_at(source.dir_fd, "events.jsonl", false);
+    assert(view.log_fd >= 0);
+    view.log_end = source.log_end;
+    view.history_cancel = cancel_after_checkpoint;
+    view.history_cancel_opaque = &view;
+    /* Replacing reducer state with a checkpoint must preserve cancellation
+     * during the remaining journal and later IRC metadata scans. */
+    assert(snag_store_scan_log(&view, SNAG_TAIL_IGNORE, error, sizeof(error)) < 0 &&
+        errno == ECANCELED && view.checkpoint_seq == source.checkpoint_seq);
+    snag_session_close(&view);
+    assert_session_lock_retained(&source, "after canceled checkpoint suffix");
+    snag_session_close(&source);
 }
 
 static void
 test_large_embedded_checkpoint(struct snag_store *store, const char *cwd)
 {
+    test_catalog_checkpoint_suffix(store, cwd);
     struct snag_session session;
     char id[SNAG_ID_HEX_LEN + 1u], error[256];
     snag_session_init(&session);
@@ -2483,7 +2521,7 @@ main(void)
         assert(strstr(list_buf, "\tSTATUS\t") != NULL);
     }
     assert_session_lock_retained(&session, "after listing");
-    json_t *catalog = snag_store_catalog(&store, &session, UINT64_MAX, error, sizeof(error));
+    json_t *catalog = snag_store_catalog(&store, &session, UINT64_MAX, NULL, NULL, error, sizeof(error));
     assert(catalog && json_array_size(catalog));
     bool catalog_found = false;
     struct snag_buf catalog_text = {.max = sizeof(list_buf)};

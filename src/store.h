@@ -340,7 +340,7 @@ int snag_store_list(struct snag_store *store, const struct snag_session *owned,
 /* Same selection/comparator as the CLI. Owned rows contain the full id,
  * activity_ms, status_rank and seven display cells. Empty stores return []. */
 json_t *snag_store_catalog(struct snag_store *, const struct snag_session *owned,
-    uint64_t stored_limit, char *, size_t);
+    uint64_t stored_limit, bool (*cancel)(void *), void *cancel_opaque, char *, size_t);
 int snag_session_delete(struct snag_store *store, struct snag_session *session,
                        const char *confirmed_prefix, uint64_t *written_seq, char *error, size_t error_size);
 int snag_session_complete_delete(struct snag_store *store, struct snag_session *session,
