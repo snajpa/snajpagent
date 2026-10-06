@@ -731,6 +731,14 @@ SSE comments and the subscription-usage trailer remain accepted. Structured
 `keepalive` events are ignored before, during and after a response, following
 JSON-object and SSE/JSON type validation. They do not mutate output or retry state.
 Duplicate terminal events and other response events after completion remain errors.
+On a partial-file, receive or timeout error after terminal completion, the provider
+finishes SSE parsing and validates the response graph before accepting success.
+This preserves completed work when an intermediary omits the HTTP terminator,
+while retaining errors for partial trailers and inconsistent output. Before
+completion, private reasoning alone permits the existing bounded transport retry;
+the next attempt resets all reasoning state. Public output, local/hosted tools,
+unknown activity and partial SSE records still prohibit exact request replay.
+Disconnect diagnostics include attempt duration and the observed progress class.
 
 When a goal is active, context projection appends the current durable wording
 and controller rules after replay and compaction. It also exposes the strict

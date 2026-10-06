@@ -67,6 +67,7 @@ struct provider_ctx {
     bool semantic_body_seen;
     bool request_may_have_been_sent;
     bool new_input;
+    uint64_t attempt_started_ms;
     char error[256];
     struct snag_provider_failure provider_failure;
 };
@@ -508,6 +509,7 @@ low_speed_seconds(uint32_t idle_timeout_ms)
 static void
 begin_attempt(struct provider_ctx *ctx)
 {
+    ctx->attempt_started_ms = snag_monotonic_ms();
     if (ctx->sse.record) {
         snag_responses_emit_fn emit = ctx->stream.emit;
         snag_responses_hosted_fn hosted = ctx->stream.hosted;
@@ -636,7 +638,15 @@ perform_with_retry(CURL *curl, struct provider_ctx *ctx, char *error, size_t err
         long request_size = 0;
         begin_attempt(ctx);
         code = perform_request(curl, process_controls, ctx, snag_ui_wake_fd(ctx->render), 25);
-        if (code == CURLE_OK && ctx->sse.record && ctx->http_status >= 200 && ctx->http_status < 300) {
+        /* A validated terminal response survives a lost HTTP terminator. Still
+         * finish the SSE parser so malformed or partial trailers remain errors. */
+        bool completed_disconnect = ctx->stream.terminal && !ctx->stream.failed &&
+            !ctx->body_failed && !ctx->cancel_code &&
+            (code == CURLE_PARTIAL_FILE || code == CURLE_RECV_ERROR ||
+             code == CURLE_OPERATION_TIMEDOUT);
+        if ((code == CURLE_OK || completed_disconnect) && ctx->sse.record &&
+            ctx->http_status >= 200 && ctx->http_status < 300) {
+            code = CURLE_OK;
             if (snag_sse_finish(&ctx->sse, ctx->error, sizeof(ctx->error)) < 0) code = CURLE_WRITE_ERROR;
             else if (!ctx->stream.terminal) {
                 ctx_error(ctx, "provider stream ended before response.completed");
@@ -1279,6 +1289,19 @@ provider_request_perform(struct provider_ctx *ctx, const char *failure, char *er
     if (code != CURLE_OK) {
         snag_errorf(error, error_size, "%s%s%s", ctx->error[0] ? ctx->error : failure,
                    ctx->error[0] ? "" : ": ", ctx->error[0] ? "" : curl_easy_strerror(code));
+        if (error && error_size && ctx->sse.record && !ctx->error[0] && !ctx->stream.terminal &&
+            (code == CURLE_PARTIAL_FILE || code == CURLE_RECV_ERROR ||
+             code == CURLE_OPERATION_TIMEDOUT)) {
+            size_t len = strlen(error);
+            uint64_t elapsed = (snag_monotonic_ms() - ctx->attempt_started_ms) / 1000u;
+            if (len < error_size) {
+                (void)snprintf(error + len, error_size - len,
+                    "; response incomplete after %llus (%s)", (unsigned long long)elapsed,
+                    !ctx->stream.created ? "awaiting response" :
+                    ctx->stream.retry_unsafe ? "output/activity received" :
+                    ctx->stream.item_count ? "reasoning only" : "before output");
+            }
+        }
         append_retry_suffix(error, error_size, *retry_out, ctx->request_may_have_been_sent);
         return snag_errno(EIO);
     }

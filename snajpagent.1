@@ -5025,11 +5025,20 @@ the incomplete response enters ordinary recovery. Public text remains retained;
 unadmitted tool proposals from that response do not execute. Completed tool
 results from earlier responses remain available. A warning identifies automatic
 recovery while the session continues working.
+Transport retries can restart a request containing only private reasoning:
+the unfinished reasoning is discarded before the next attempt. Delivered text,
+tool activity, unknown events and incomplete SSE records prevent that replay.
+Disconnect diagnostics include the elapsed request time and whether output or
+only reasoning had arrived. A repeated cutoff at the same elapsed time can
+indicate an upstream request deadline; client retries cannot extend that deadline.
 .PP
 Valid structured keepalive events may arrive before, during or after a response.
 They leave completed responses successful and do not trigger recovery or repeat
 their output. Malformed records, conflicting event types, duplicate completions
 and additional response data after completion remain protocol errors.
+A validated complete response survives a subsequent connection loss or timeout,
+including a missing HTTP chunk terminator. The SSE stream and completed output
+still have to validate; a partial trailing event remains an error.
 .PP
 Ordinary failures that otherwise offer
 .B /retry

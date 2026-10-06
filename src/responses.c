@@ -1011,14 +1011,16 @@ dispatch_event(struct snag_responses_stream *stream, const char *type, const jso
         stream->provider_failure = failure;
     }
     if (output && (!json_is_array(output) || json_array_size(output))) {
-        stream->retry_unsafe = true;
-        if (!json_is_array(output))
+        if (!json_is_array(output)) {
+            stream->retry_unsafe = true;
             (void)snprintf(stream->clarification_skipped, sizeof(stream->clarification_skipped),
                            "response_output_snapshot");
+        }
         for (size_t i = 0; i < json_array_size(output); ++i) {
             const json_t *item = json_array_get(output, i);
             const char *kind = snag_json_string(item, "type");
             if (kind && !strcmp(kind, "reasoning")) continue;
+            stream->retry_unsafe = true;
             if (snag_string_in(type, "response.failed response.incomplete error") &&
                 stream->created && clarification_item_safe(item)) {
                 /* Validate snapshots through their existing identity reducer.
@@ -1054,7 +1056,17 @@ dispatch_event(struct snag_responses_stream *stream, const char *type, const jso
             snag_string_in(type, "response.reasoning_summary_part.added response.reasoning_summary_part.done "
                 "response.reasoning_summary_text.delta response.reasoning_summary_text.done "
                 "response.reasoning_text.delta response.reasoning_text.done");
-        stream->retry_unsafe = true;
+        /* Private reasoning has no delivered output or tool side effects.
+         * A new attempt discards its unfinished continuation with the stream. */
+        bool reasoning =
+            (snag_string_in(type, "response.output_item.added response.output_item.done") &&
+             snag_string_in(snag_json_string(json_object_get(root, "item"), "type"),
+                            "reasoning")) ||
+            snag_string_in(type,
+                "response.reasoning_summary_part.added response.reasoning_summary_part.done "
+                "response.reasoning_summary_text.delta response.reasoning_summary_text.done "
+                "response.reasoning_text.delta response.reasoning_text.done");
+        if (!reasoning) stream->retry_unsafe = true;
         if (!safe && !stream->clarification_skipped[0]) {
             const char *kind = snag_json_string(json_object_get(root, "item"), "type");
             (void)snprintf(stream->clarification_skipped, sizeof(stream->clarification_skipped),

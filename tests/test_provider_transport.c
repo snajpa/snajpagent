@@ -2235,7 +2235,20 @@ test_create_retries(void)
         "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"id\":\"m\",\"type\":\"message\",\"status\":\"in_progress\",\"role\":\"assistant\",\"phase\":\"commentary\",\"content\":[]}}\n\n"
         "data: {\"type\":\"response.content_part.added\",\"output_index\":0,\"item_id\":\"m\",\"content_index\":0,\"part\":{\"type\":\"output_text\",\"text\":\"\"}}\n\n"
         "data: {\"type\":\"response.output_text.delta\",\"output_index\":0,\"item_id\":\"m\",\"content_index\":0,\"delta\":\"once\"}\n\n";
+    static const char reasoning[] =
+        "data: {\"type\":\"response.output_item.added\",\"output_index\":0,"
+        "\"item\":{\"id\":\"thought\",\"type\":\"reasoning\",\"summary\":[]}}\n\n"
+        "data: {\"type\":\"response.output_item.done\",\"output_index\":0,"
+        "\"item\":{\"id\":\"thought\",\"type\":\"reasoning\",\"summary\":[],"
+        "\"encrypted_content\":\"discarded continuation\"}}\n\n";
     const struct retry_case cases[] = {
+        {created, reasoning, 200, 1, 1, true, NULL, "local transport"},
+        {created, reasoning, 200, 3, 2, true, "retried 2 times", ""},
+        {created,
+            "data: {\"type\":\"response.failed\",\"response\":{\"output\":["
+            "{\"id\":\"thought\",\"type\":\"reasoning\",\"summary\":[]}],"
+            "\"error\":{\"code\":\"server_error\"}}}\n\n",
+            200, 1, 1, false, NULL, "local transport"},
         {created, transient, 200, 1, 1, false, NULL, "local transport"},
         {created, transient, 200, 3, 2, false, "retried 2 times", ""},
         {"", "data: {\"type\":\"error\",\"code\":\"rate_limit_exceeded\"}\n\n",

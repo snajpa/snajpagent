@@ -4,6 +4,11 @@
 
 ## Unreleased
 
+- Recover interrupted provider streams containing only private reasoning, and
+  preserve validated completed responses when the connection loses its HTTP
+  terminator. Keep partial text and tool activity outside transport replay.
+  Report elapsed time and stream progress when an incomplete response disconnects.
+
 - Keep provider turns, managed processes and IRC running while a pager is open.
   Retain new output until the pager exits, then show it before the current prompt.
   Queue model-requested downloads while the pager owns the terminal.
