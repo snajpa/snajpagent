@@ -1210,12 +1210,23 @@ test_checkpoint_cancellation(struct snag_store *store, struct snag_session *sour
     uint64_t before;
     assert(snag_session_each_event_reverse(&view, 0u, SIZE_MAX, reverse_event,
         &reverse, &before, error, sizeof(error)) < 0 && errno == ECANCELED && !reverse.count);
-    remaining = 64u;
-    assert(snag_session_history_refresh(&view, &tail, error, sizeof(error)) < 0 &&
-        errno == ECANCELED && view.log_end == tail.offset && view.next_seq == tail.next_seq);
     view.history_cancel = NULL;
     assert(snag_session_each_event_reverse(&view, 0u, SIZE_MAX, reverse_event,
         &reverse, &before, error, sizeof(error)) == 0 && !before && reverse.count == 2u);
+    snag_session_close(&view);
+    cursor = (struct snag_journal_cursor){0};
+    scan = (struct forward_scan){.next = 1u};
+    assert(snag_session_each_event_forward(source, &cursor, 1u, forward_event,
+        &scan, error, sizeof(error)) == 0 && cursor.next_seq == 2u);
+    assert(snag_session_history_open(store, &view, source->id, &cursor,
+        error, sizeof(error)) == 0);
+    remaining = 64u;
+    view.history_cancel = cancel_history_read;
+    view.history_cancel_opaque = &remaining;
+    assert(snag_session_history_refresh(&view, &tail, error, sizeof(error)) < 0 &&
+        errno == ECANCELED && view.log_end == cursor.offset && view.next_seq == cursor.next_seq);
+    view.history_cancel = NULL;
+    assert(snag_session_history_refresh(&view, &tail, error, sizeof(error)) == 0);
     snag_session_close(&view);
     assert_session_lock_retained(source, "after canceled checkpoint reads");
 }

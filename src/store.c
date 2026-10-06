@@ -3218,8 +3218,9 @@ snag_session_history_refresh(struct snag_session *session, const struct snag_jou
         (tail->offset == session->log_end && strcmp(tail->prev_sha256, session->prev_sha256))) {
         return snag_fail(error, error_size, ESTALE, "history prefix changed");
     }
-    if (history_identity_valid(session, tail->offset, error, error_size) < 0 ||
-        history_boundary_valid(session, error, error_size) < 0) return -1;
+    if (history_identity_valid(session, tail->offset, error, error_size) < 0) return -1;
+    if (tail->offset == session->log_end) return 0;
+    if (history_boundary_valid(session, error, error_size) < 0) return -1;
     struct snag_journal_cursor previous = {.offset = session->log_end,
         .next_seq = session->next_seq};
     memcpy(previous.prev_sha256, session->prev_sha256, sizeof(previous.prev_sha256));

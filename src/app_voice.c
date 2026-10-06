@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "app_internal.h"
 #include "audio_device.h"
+#include "history_view.h"
 #include "provider.h"
 #include "provider_retry.h"
 #include "secret.h"
@@ -1764,7 +1765,7 @@ transfer_history_record(void *opaque, const struct snag_session *session, uint64
     int selected = history_origin(&read->voice->history_root, seq, &type, &data,
         &origin, &origin_seq);
     if (selected <= 0) return selected;
-    char *encoded = snag_app_history_data(origin_seq, type, data,
+    char *encoded = snag_history_event_data(origin_seq, type, data,
         &read->voice->secrets.wire, error, size);
     json_t *view = encoded ? json_loads(encoded, JSON_REJECT_DUPLICATES, NULL) : NULL;
     if (encoded) snag_secret_clear(encoded, strlen(encoded));
@@ -2651,7 +2652,7 @@ interface_history_event(void *opaque, const struct snag_session *state, uint64_t
     int selected = history_origin(&v->history_root, seq, &type, &data, &origin, &origin_seq);
     if (selected <= 0) return selected;
     if (!history_observation(v, seq, type, data, true)) return 0;
-    char *encoded = snag_app_history_data(origin_seq, type, data, &v->secrets.wire, error, size);
+    char *encoded = snag_history_event_data(origin_seq, type, data, &v->secrets.wire, error, size);
     json_t *view = encoded ? json_loads(encoded, JSON_REJECT_DUPLICATES, NULL) : NULL;
     if (encoded) snag_secret_clear(encoded, strlen(encoded));
     free(encoded);
@@ -3318,7 +3319,7 @@ observation_record(struct app_state *app, uint64_t seq,
     char *error, size_t size)
 {
     struct app_voice *v = app->voice;
-    char *encoded = snag_app_history_data(origin_seq, type, data, &v->secrets.wire, error, size);
+    char *encoded = snag_history_event_data(origin_seq, type, data, &v->secrets.wire, error, size);
     if (!encoded) return NULL;
     size_t length = strlen(encoded);
     json_t *record = json_pack("{s:s,s:s,s:I,s:s,s:I,s:s%,s:s,s:I}",

@@ -270,8 +270,6 @@ int snag_app_recovered_output(struct app_state *, const char *, json_t *);
 int snag_app_output_page(struct app_state *, const struct snag_response_item *, json_t **,
                          char *, size_t);
 /* Filter structured records before quoting or excerpting their public data. */
-char *snag_app_history_data(uint64_t, const char *, const json_t *,
-    const struct snag_wire_secrets *, char *, size_t);
 int snag_app_history_page(struct app_state *, const struct snag_response_item *,
     const struct snag_wire_secrets *, json_t **, char *, size_t);
 int snag_app_goal_list(struct app_state *, const struct snag_response_item *, json_t **,

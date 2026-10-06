@@ -4,6 +4,7 @@
 #include "app_internal.h"
 #include "config.h"
 #include "credential.h"
+#include "history_view.h"
 #include "http.h"
 #include "json.h"
 #include "model_cache.h"
@@ -3003,7 +3004,7 @@ voice_fixture_transition(struct app_state *app, const char *type, json_t *data, 
 {
     char error[256];
     uint64_t seq = app->session.next_seq;
-    char *expected = observe ? snag_app_history_data(seq, type, data, NULL, NULL, 0u) : NULL;
+    char *expected = observe ? snag_history_event_data(seq, type, data, NULL, NULL, 0u) : NULL;
     assert(data && (!observe || expected));
     assert(snag_session_commit(&app->session, type, data, NULL, error, sizeof(error)) == 0);
     if (!observe) return 0u;
@@ -3757,7 +3758,7 @@ test_voice_observation_cursor(void)
             assert(json_object_set_new(json_object_get(safe, "event"), "text",
                 json_string("Correction <redacted:secret>")) == 0);
         }
-        archive_expected[i] = snag_app_history_data(archive_seq + i, archive_types[i], safe,
+        archive_expected[i] = snag_history_event_data(archive_seq + i, archive_types[i], safe,
             NULL, NULL, 0u);
         json_decref(safe);
         assert(archive_expected[i] && snag_session_commit(&app.session, archive_types[i],
@@ -3868,7 +3869,7 @@ test_voice_observation_cursor(void)
     strcpy(prompt + 6000u, "<redacted:secret>");
     json_t *redacted = json_deep_copy(data);
     assert(redacted && json_object_set_new(redacted, "prompt", json_string(prompt)) == 0);
-    char *expected = snag_app_history_data(seq, "goal_started", redacted, NULL, NULL, 0u);
+    char *expected = snag_history_event_data(seq, "goal_started", redacted, NULL, NULL, 0u);
     json_decref(redacted);
     assert(expected && snag_session_commit(&app.session, "goal_started", data,
         NULL, error, sizeof(error)) == 0);

@@ -13,7 +13,9 @@ provider completion; interaction tests cover failures, tools and queued download
 History cursor reads now validate checkpoint bodies through a streaming parser
 and return display metadata. Read-only snapshots preserve unfinished tails, and
 refresh validates file identity and each appended record before extending a view.
-The optional workspace module, semantic attachment
+The background reader returns bounded public event pages, cancels obsolete
+requests and wakes the frontend only when a current result is ready.
+The optional workspace interface, semantic attachment
 and IRC conversation work below remain to be implemented.
 
 ## 1. Outcome and decisions
@@ -683,8 +685,19 @@ certify its committed boundary; label that view best effort. New owners provide
 the committed cursor through semantic attachment. A refresh validates the old
 boundary and appended hash chain before extending a view. Directory/journal
 replacement or truncation invalidates cached pages; failure preserves the prior
-bound. Tests keep the native writer active, preserve partial tails and reject a
-byte-identical journal replacement as a different source.
+bound. An unchanged tail needs only an identity check; its verified checkpoint
+is reused across page requests. Tests keep the native writer active, preserve
+partial tails and reject a byte-identical journal replacement as a different source.
+
+The background reader owns its read-only journal view and immutable redaction
+snapshot. It processes one visible-page request at a time, cancels superseded
+work at read boundaries and publishes only the current request generation.
+Results own their public event payloads and verified cursors. Pages use the
+existing 4 MiB read quantum, allowing one larger valid record; large checkpoints
+still produce only small metadata. The worker sleeps on a condition variable
+between requests and wakes the frontend through the existing portable wakeup
+channel. Refresh and source failure invalidate its cached view. Search and
+viewport caches will build on this reader.
 
 Maintain sparse offsets for visited pages. They are a disposable acceleration,
 not a new required on-disk index. `gg` seeks the earliest displayable event and
