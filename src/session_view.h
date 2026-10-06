@@ -11,6 +11,8 @@
 #define SNAG_VIEW_MESSAGE_MAX (6u * SNAG_MAX_DIRECT_PROMPT + SNAG_SESSION_FRAME_MAX)
 struct snag_view_channel {
     int fd;
+    struct snag_view_local *local;
+    unsigned int local_side;
     bool verified;
     struct snag_session_packet incoming, outgoing;
     struct snag_buf input;
@@ -21,6 +23,11 @@ struct snag_view_channel {
 
 void snag_view_channel_init(struct snag_view_channel *, int fd);
 void snag_view_channel_close(struct snag_view_channel *);
+/* A private pair for one engine and its workspace. Each endpoint has one owning
+ * thread; closing either endpoint is reported by the peer's next I/O operation.
+ * A single queued frame per direction preserves transport backpressure. */
+int snag_view_channel_pair(struct snag_view_channel pair[2]);
+bool snag_view_channel_opened(const struct snag_view_channel *);
 /* Queue one JSON message; borrows the value. EAGAIN preserves pending output. */
 int snag_view_channel_send(struct snag_view_channel *, const json_t *);
 /* One transport slice per call. 1 complete, 0 partial/would-block, -1 failure.
@@ -51,6 +58,10 @@ struct snag_view_callbacks {
 #if SNAJPAGENT_VM
 struct snag_view_server *snag_view_server_open(int dir_fd, const char *path, int lock_fd,
     const char *session, struct snag_session_relay *, struct snag_view_callbacks);
+/* Takes a private endpoint on success. Loss requests engine shutdown; detach
+ * and whole-terminal takeover are unavailable for this workspace-owned engine. */
+struct snag_view_server *snag_view_server_direct(struct snag_view_channel *,
+    const char *session, struct snag_view_callbacks);
 void snag_view_server_close(struct snag_view_server *);
 /* Stop admission before dropping the writer lock; publish exit after it closes. */
 void snag_view_server_stop(struct snag_view_server *);

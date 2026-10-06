@@ -5,6 +5,7 @@
 #include "vm_text.h"
 
 #include <errno.h>
+#include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -13,6 +14,85 @@
  * have no deadline; partial messages and unconsumed writes do. */
 #define VIEW_STALL_MS 5000u
 #define VIEW_HANDSHAKE_MS 15000u
+
+struct snag_view_local {
+    pthread_mutex_t lock;
+    struct snag_session_packet incoming[2];
+    bool closed[2];
+};
+
+int
+snag_view_channel_pair(struct snag_view_channel pair[2])
+{
+    snag_view_channel_init(&pair[0], -1);
+    snag_view_channel_init(&pair[1], -1);
+    struct snag_view_local *local = calloc(1u, sizeof(*local));
+    if (!local) return -1;
+    int error = pthread_mutex_init(&local->lock, NULL);
+    if (error) {
+        free(local);
+        return snag_errno(error);
+    }
+    for (unsigned int i = 0u; i < 2u; ++i) {
+        pair[i].local = local;
+        pair[i].local_side = i;
+        pair[i].verified = true;
+    }
+    return 0;
+}
+
+bool
+snag_view_channel_opened(const struct snag_view_channel *channel)
+{
+    return channel->local || channel->fd >= 0;
+}
+
+static void
+local_close(struct snag_view_channel *channel)
+{
+    struct snag_view_local *local = channel->local;
+    if (!local) return;
+    (void)pthread_mutex_lock(&local->lock);
+    local->closed[channel->local_side] = true;
+    memset(&local->incoming[channel->local_side], 0, sizeof(local->incoming[0]));
+    bool finished = local->closed[1u - channel->local_side];
+    (void)pthread_mutex_unlock(&local->lock);
+    if (finished) {
+        (void)pthread_mutex_destroy(&local->lock);
+        free(local);
+    }
+}
+
+static int
+local_read(struct snag_view_channel *channel)
+{
+    struct snag_view_local *local = channel->local;
+    (void)pthread_mutex_lock(&local->lock);
+    struct snag_session_packet *packet = &local->incoming[channel->local_side];
+    int rc = packet->used ? 1 : local->closed[1u - channel->local_side] ? -1 : 0;
+    if (rc > 0) {
+        channel->incoming = *packet;
+        memset(packet, 0, sizeof(*packet));
+    }
+    (void)pthread_mutex_unlock(&local->lock);
+    return rc < 0 ? snag_errno(ECONNRESET) : rc;
+}
+
+static int
+local_write(struct snag_view_channel *channel)
+{
+    struct snag_view_local *local = channel->local;
+    unsigned int peer = 1u - channel->local_side;
+    (void)pthread_mutex_lock(&local->lock);
+    struct snag_session_packet *packet = &local->incoming[peer];
+    int rc = local->closed[peer] ? -1 : packet->used ? 0 : 1;
+    if (rc > 0) {
+        *packet = channel->outgoing;
+        channel->outgoing.offset = channel->outgoing.used;
+    }
+    (void)pthread_mutex_unlock(&local->lock);
+    return rc < 0 ? snag_errno(EPIPE) : rc;
+}
 
 static uint64_t
 read_u64(const unsigned char *bytes)
@@ -38,6 +118,7 @@ snag_view_channel_init(struct snag_view_channel *channel, int fd)
 void
 snag_view_channel_close(struct snag_view_channel *channel)
 {
+    local_close(channel);
     if (channel->fd >= 0) (void)close(channel->fd);
     if (channel->input.data) memset(channel->input.data, 0, channel->input.len);
     snag_buf_free(&channel->input);
@@ -79,7 +160,8 @@ snag_view_channel_write(struct snag_view_channel *channel)
         if (snag_session_view_packet_set(&channel->outgoing, slice, len + 16u) < 0) return -1;
     }
     size_t before = channel->outgoing.offset;
-    int rc = snag_session_packet_write(channel->fd, &channel->outgoing);
+    int rc = channel->local ? local_write(channel) :
+        snag_session_packet_write(channel->fd, &channel->outgoing);
     if (channel->outgoing.offset != before)
         channel->write_deadline = snag_monotonic_ms() + VIEW_STALL_MS;
     if (rc <= 0) return rc;
@@ -104,7 +186,8 @@ snag_view_channel_read(struct snag_view_channel *channel, json_t **value)
         channel->verified = true;
     }
     size_t before = channel->incoming.used;
-    int rc = snag_session_view_packet_read(channel->fd, &channel->incoming);
+    int rc = channel->local ? local_read(channel) :
+        snag_session_view_packet_read(channel->fd, &channel->incoming);
     if (channel->incoming.used != before)
         channel->read_deadline = snag_monotonic_ms() + VIEW_STALL_MS;
     if (rc <= 0) return rc;
@@ -293,7 +376,7 @@ struct snag_view_server {
     json_t *empty_draft;
     struct view_draft *drafts;
     uint64_t revision;
-    bool stopping, exiting;
+    bool stopping, exiting, direct_quit;
     unsigned int exit_status;
     struct view_peer *peers;
     struct view_receipt *receipts, *pending;
@@ -321,31 +404,61 @@ static void
 release_peer(struct snag_view_server *server, struct view_peer *peer)
 {
     if (!peer->generation) return;
-    snag_session_relay_view_release(server->relay, peer->generation);
+    if (server->relay) snag_session_relay_view_release(server->relay, peer->generation);
     if (peer->bound) server->callbacks.bound(server->callbacks.opaque, 0u);
     peer->generation = 0u;
     peer->bound = false;
 }
 
-struct snag_view_server *
-snag_view_server_open(int dir_fd, const char *path, int lock_fd, const char *session,
-    struct snag_session_relay *relay, struct snag_view_callbacks callbacks)
+static struct snag_view_server *
+server_new(const char *session, struct snag_view_callbacks callbacks)
 {
     struct snag_view_server *server = calloc(1u, sizeof(*server));
     if (!server) return NULL;
     server->listener = (struct snag_session_listener){.fd = -1, .dir_fd = -1};
-    server->relay = relay;
     server->callbacks = callbacks;
     server->empty_draft = json_string("");
     server->reports = json_array();
     if (!server->empty_draft || !server->reports ||
         !callbacks.bound || !callbacks.submit || !callbacks.control ||
         !snag_strcpy(server->session, sizeof(server->session), session) ||
-        snag_random_id(server->instance) < 0 ||
-        snag_session_view_listen(&server->listener, dir_fd, path, lock_fd) < 0) {
+        snag_random_id(server->instance) < 0) {
         snag_view_server_close(server);
         return NULL;
     }
+    return server;
+}
+
+struct snag_view_server *
+snag_view_server_open(int dir_fd, const char *path, int lock_fd, const char *session,
+    struct snag_session_relay *relay, struct snag_view_callbacks callbacks)
+{
+    struct snag_view_server *server = server_new(session, callbacks);
+    if (!server) return NULL;
+    server->relay = relay;
+    if (snag_session_view_listen(&server->listener, dir_fd, path, lock_fd) < 0) {
+        snag_view_server_close(server);
+        return NULL;
+    }
+    return server;
+}
+
+struct snag_view_server *
+snag_view_server_direct(struct snag_view_channel *channel, const char *session,
+    struct snag_view_callbacks callbacks)
+{
+    if (!channel->local) { errno = EINVAL; return NULL; }
+    struct snag_view_server *server = server_new(session, callbacks);
+    if (!server) return NULL;
+    struct view_peer *peer = calloc(1u, sizeof(*peer));
+    if (!peer) {
+        snag_view_server_close(server);
+        return NULL;
+    }
+    peer->channel = *channel;
+    snag_view_channel_init(channel, -1);
+    peer->deadline = snag_monotonic_ms() + VIEW_HANDSHAKE_MS;
+    server->peers = peer;
     return server;
 }
 
@@ -407,7 +520,8 @@ snag_view_server_busy(const struct snag_view_server *server)
 bool
 snag_view_server_attached(const struct snag_view_server *server)
 {
-    return server && server->relay->view_attached;
+    return server && (server->relay ? server->relay->view_attached :
+        server->peers && server->peers->bound);
 }
 
 void
@@ -515,7 +629,7 @@ snag_view_server_terminal_generation(struct snag_view_server *server, const char
 int
 snag_view_server_terminal(struct snag_view_server *server, const unsigned char *reference)
 {
-    if (!server || server->stopping || !reference ||
+    if (!server || !server->relay || server->stopping || !reference ||
         server->relay->phase != SNAG_SESSION_ATTACHED || server->relay->peer < 0 ||
         memcmp(reference, server->instance, SNAG_ID_HEX_LEN)) return snag_errno(ESTALE);
     char id[SNAG_ID_HEX_LEN + 1u];
@@ -711,12 +825,20 @@ dispatch(struct snag_view_server *server, struct view_peer *peer, const json_t *
             version != 1u) return snag_errno(EPROTO);
         peer->hello = true;
         peer->deadline = 0u;
-        return reply(peer, json_pack("{s:s,s:i,s:s,s:s,s:[s,s,s,s,s,s,s,s,s,s,s,s,s,s]}",
+        json_t *capabilities = json_pack("{s:s,s:i,s:s,s:s,s:[s,s,s,s,s,s,s,s,s,s,s,s]}",
             "type", "capabilities", "version", 1, "session", server->session,
             "instance", server->instance, "features",
-            "observe", "control", "submit", "cancel", "quit", "detach", "receipts", "drafts",
-            "commands", "terminal_commands", "reports", "irc_queries", "irc_channels",
-            "irc_connections"));
+            "observe", "control", "submit", "cancel", "quit", "receipts", "drafts",
+            "commands", "reports", "irc_queries", "irc_channels", "irc_connections");
+        json_t *features = json_object_get(capabilities, "features");
+        if (!capabilities || json_array_append_new(features,
+            json_string(server->relay ? "detach" : "direct")) < 0 ||
+            (server->relay &&
+            json_array_append_new(features, json_string("terminal_commands")) < 0)) {
+            json_decref(capabilities);
+            return -1;
+        }
+        return reply(peer, capabilities);
     }
     if (!strcmp(type, "reports")) {
         peer->reports = true;
@@ -732,9 +854,10 @@ dispatch(struct snag_view_server *server, struct view_peer *peer, const json_t *
             json_pack("{s:s,s:s,s:s}", "type", "result", "id", id, "status", "unknown"));
     }
     if (!strcmp(type, "reserve")) {
-        if (peer->generation ||
-            snag_session_relay_view_reserve(server->relay, &peer->generation) < 0)
+        if (peer->generation || (server->relay &&
+            snag_session_relay_view_reserve(server->relay, &peer->generation) < 0))
             return refuse(peer, "session already has a controller or reservation");
+        if (!server->relay) peer->generation = 1u;
         peer->deadline = snag_monotonic_ms() + VIEW_HANDSHAKE_MS;
         return reply(peer, json_pack("{s:s,s:I}", "type", "reserved", "generation",
             (json_int_t)peer->generation));
@@ -744,7 +867,8 @@ dispatch(struct snag_view_server *server, struct view_peer *peer, const json_t *
         !generation || generation != peer->generation)
         return refuse_request(peer, message, "stale controller generation");
     if (!strcmp(type, "commit")) {
-        if (peer->bound || snag_session_relay_view_bind(server->relay, generation) < 0)
+        if (peer->bound || (server->relay &&
+            snag_session_relay_view_bind(server->relay, generation) < 0))
             return refuse(peer, "controller cannot bind");
         peer->bound = true;
         peer->deadline = 0u;
@@ -753,6 +877,10 @@ dispatch(struct snag_view_server *server, struct view_peer *peer, const json_t *
             (json_int_t)generation));
     }
     if (!strcmp(type, "detach")) {
+        if (!server->relay) {
+            return refuse(peer,
+                "direct session stays with its workspace; quit the session to exit");
+        }
         release_peer(server, peer);
         peer->closing = true;
         return reply(peer, json_pack("{s:s}", "type", "detached"));
@@ -771,6 +899,7 @@ dispatch(struct snag_view_server *server, struct view_peer *peer, const json_t *
     if (!strcmp(type, "cancel") || !strcmp(type, "quit")) {
         if (server->callbacks.control(server->callbacks.opaque, !strcmp(type, "quit")) < 0)
             return refuse(peer, "control unavailable");
+        if (!server->relay && !strcmp(type, "quit")) server->direct_quit = true;
         return reply(peer, json_pack("{s:s,s:s}", "type", "control", "intent", type));
     }
     return refuse(peer, "unsupported message");
@@ -824,7 +953,8 @@ void
 snag_view_server_step(struct snag_view_server *server)
 {
     if (!server) return;
-    int fd = server->stopping ? -1 : snag_session_listener_accept(&server->listener);
+    int fd = server->stopping || !server->relay ? -1 :
+        snag_session_listener_accept(&server->listener);
     if (fd >= 0) {
         struct view_peer *peer = calloc(1u, sizeof(*peer));
         if (!peer) (void)close(fd);
@@ -846,5 +976,9 @@ snag_view_server_step(struct snag_view_server *server)
         release_peer(server, peer);
         snag_view_channel_close(&peer->channel);
         free(peer);
+        if (!server->relay && !server->stopping && !server->direct_quit) {
+            server->direct_quit = true;
+            (void)server->callbacks.control(server->callbacks.opaque, true);
+        }
     }
 }

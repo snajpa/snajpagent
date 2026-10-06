@@ -107,7 +107,7 @@ VM_TEST_BIN = tests/test_vm_reader tests/test_vm_grid tests/test_unicode tests/t
 VM_TEST_BIN += tests/test_vm_input tests/test_vm_text
 VM_TEST_BIN += tests/test_vm_public
 VM_TEST_BIN += tests/test_vm_transcript tests/test_vm_selection tests/test_vm_navigation
-VM_TEST_BIN += tests/test_session_draft
+VM_TEST_BIN += tests/test_session_draft tests/test_session_direct
 endif
 COMMON_OBJ = $(COMMON_SRC:.c=.o) $(PDF_OBJ) $(AUDIO_DEVICE_OBJ)
 HEADERS = src/tmux.h src/session_host.h src/session_relay.h src/session_client.h src/snajpagent.h src/base.h src/fs.h src/term_host.h src/wake.h src/net.h src/config.h src/secret_source.h src/credential.h src/auth.h src/login.h src/secret.h src/instructions.h src/json.h src/snag_jansson.h src/snag_jansson_abi.h src/wire.h src/context.h src/provider_retry.h src/http.h src/update.h src/provider.h src/model_cache.h src/tools.h src/process_host.h src/tools_patch.h src/irc.h src/irc_internal.h src/sse.h src/responses.h src/turn.h src/store.h src/store_internal.h src/store_record.h src/term.h src/render.h src/cli.h src/app.h src/app_internal.h src/ui.h src/history.h src/history_view.h src/vm_reader.h src/vm_grid.h src/unicode.h src/unicode_tables.inc src/base64.h src/convert.h src/media.h src/rules.h src/tools_write.h src/tools_file.h
@@ -324,6 +324,8 @@ tests/test_vm_workspace: $(PLATFORM_SRC) src/json.c src/instructions.c src/media
 
 tests/test_session_draft: $(PLATFORM_SRC) src/json.c src/media.c src/turn.c src/session_view.c src/vm_text.c src/unicode.c tests/test_session_draft.c $(HEADERS)
 
+tests/test_session_direct: $(PLATFORM_SRC) src/json.c src/media.c src/turn.c src/session_view.c src/vm_text.c src/unicode.c tests/test_session_direct.c $(HEADERS)
+
 tests/test_context tests/test_store tests/test_tools tests/test_turn: tests/checked_json.h
 
 tests/test_base tests/test_sse tests/test_provider_retry tests/test_upload_wire:
@@ -375,6 +377,7 @@ ifeq ($(WITH_VM),1)
 	./tests/test_vm_selection
 	./tests/test_vm_navigation
 	./tests/test_session_draft
+	./tests/test_session_direct
 	python3 tests/test_vm_frontend.py ./$(BIN)
 	python3 tests/test_vm_control.py ./$(BIN)
 	python3 tests/test_vm_queries.py ./$(BIN)

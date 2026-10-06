@@ -6,6 +6,15 @@ Status: implementation in progress, October 6, 2026. The original inspection
 was against `7a70d81d336ef6f14d91ef944b1226c8efa65636`. The checkpoint below
 distinguishes implemented components from the complete intended behavior.
 
+Windows adapter checkpoint: the private in-process channel and direct semantic
+server share SV/1 framing, validation, draft revisions and admission receipts with
+native owners. One queued frame per direction preserves backpressure; peer loss
+requests shutdown of the workspace-owned engine. Capabilities identify the direct
+lifetime and exclude detach and whole-terminal takeover. Portable C tests cover
+fragmentation, backpressure, thread ownership, close, receipt ordering and these
+restrictions. Engine/UI wiring, workspace lifecycle and Windows runtime
+qualification remain in progress; the Windows CLI still provides stored viewing.
+
 IRC recovery checkpoint: selection-only /query, /chat, /join and /connections
 use the current connection scope when entered from an obsolete Vim pane.
 Message-bearing commands and drafts retain the pane's captured generation.
@@ -67,7 +76,6 @@ events and excludes public/private messages. Server notices and otherwise
 unhandled numeric replies stay outside model context. /whois and conversation
 /nick validate the captured operator generation, and ordinary connection text
 keeps its draft. Version11 snapshots retain connection routes and read versions1–10.
-Complete remote acceptance remains open.
 The presentation thread owns heap-allocated display state, allocated before
 thread creation and freed after its workers and terminal close. Queued private
 message rendering therefore retains stack space for its input checkpoint on musl.
