@@ -22,6 +22,13 @@ ZLIB_LIBS ?= $(shell pkg-config --libs zlib)
 override LDLIBS += $(ZLIB_LIBS)
 CURL_CFLAGS =
 CURL_LIBS = -lcurl
+WITH_VM ?= 1
+ifneq ($(WITH_VM),0)
+ifneq ($(WITH_VM),1)
+$(error WITH_VM must be 1 or 0)
+endif
+endif
+override CPPFLAGS += -DSNAJPAGENT_VM=$(WITH_VM)
 WITH_AV ?= 1
 ifeq ($(WITH_AV),1)
 AV_CFLAGS ?= $(shell pkg-config --cflags libavformat libavcodec libavutil libswresample libswscale)

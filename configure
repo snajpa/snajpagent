@@ -22,6 +22,7 @@ CC=${CC:-cc}
 CXX=${CXX:-c++}
 HOST=
 DEBUG=0
+WITH_VM=1
 OFFICE_ROOT=/usr/lib/libreoffice
 manprefix_given=no
 office_root_given=no
@@ -42,6 +43,8 @@ usage: ./configure [options]
   --cxx=CXX               C++ compiler (default $CXX or c++; src/pdf.cpp needs it)
   --host=TRIPLE           cross target; uses TRIPLE-cc when available
   --debug                 debug build (DEBUG=1, default 0)
+  --with-vm               include Vim workspace components (default)
+  --without-vm            omit Vim workspace components
   --office-root=DIR       installed LibreOffice root (default /usr/lib/libreoffice)
   --with-av               require linked audio/video (FFmpeg)
   --without-av            disable linked audio/video
@@ -95,6 +98,8 @@ for arg in "$@"; do
 		--cxx=*) CXX=${arg#*=} ;;
 		--host=*) HOST=${arg#*=} ;;
 		--debug) DEBUG=1 ;;
+		--with-vm) WITH_VM=1 ;;
+		--without-vm) WITH_VM=0 ;;
 		--office-root=*) OFFICE_ROOT=${arg#*=}; office_root_given=yes ;;
 		--with-av|--require-av) want_av=require ;;
 		--without-av) want_av=off ;;
@@ -330,6 +335,7 @@ set_key PREFIX "$PREFIX"
 set_key CC "$CC"
 set_key CXX "$CXX"
 set_key DEBUG "$DEBUG"
+set_key WITH_VM "$WITH_VM"
 set_key WITH_AV "$WITH_AV"
 set_key WITH_PDF "$WITH_PDF"
 set_key HAVE_POPPLER_NEW_API "$HAVE_POPPLER_NEW_API"
@@ -340,6 +346,7 @@ set_key WITH_OFFICE_COMMANDS "$WITH_OFFICE_COMMANDS"
 [ "$office_root_given" = yes ] && set_key OFFICE_ROOT "$OFFICE_ROOT"
 
 printf 'configure: C compiler %s; pkg-config %s\n' "$CC" "$have_pc"
+printf 'configure: vm=%s\n' "$WITH_VM"
 printf 'configure: av=%s (%s)\n' "$WITH_AV" "$av_note"
 printf 'configure: pdf=%s (%s; API generation %s)\n' "$WITH_PDF" "$pdf_note" "$HAVE_POPPLER_NEW_API"
 printf 'configure: audio-device=%s (%s)\n' "$WITH_AUDIO_DEVICE" "$audio_note"

@@ -91,13 +91,17 @@ PLATFORM_SRC = src/base64.c src/base.c src/platform.c src/term_host.c src/tmux.c
 COMMON_SRC = $(PLATFORM_SRC) src/config.c src/rules.c src/secret_source.c src/credential.c src/auth.c src/auth_http.c src/login.c src/secret.c src/instructions.c src/json.c src/wire.c src/context.c src/provider_retry.c src/http.c src/update.c src/provider.c src/model_cache.c src/tools.c src/tools_read.c src/irc.c src/irc_runtime.c src/sse.c src/responses.c src/turn.c src/store.c src/store_record.c src/store_checkpoint.c src/irc_event.c src/store_lookup.c src/store_lifecycle.c src/tools_patch.c src/tools_write.c src/history.c src/history_view.c src/term.c src/render.c src/render_prepare.c src/cli.c src/ui.c src/app_events.c src/app_irc_attention.c src/app_stream.c src/app_lifecycle.c src/app_compact.c src/app_provider.c src/app.c
 COMMON_SRC += src/convert.c src/tools_media.c src/media.c src/tools_document.c src/tools_audio.c src/app_media.c src/app_upload.c src/app_audio.c src/av.c src/pcm.c src/audio_device.c src/office.c src/office_package.c src/office_confine.c src/office_sheet.c src/voice.c src/voice_rtc.c src/app_voice.c
 COMMON_SRC += src/upload_wire.c src/upload_md5.c src/screen_wire.c src/upload.c src/remote.c
-COMMON_SRC += src/app_resume.c src/vm_reader.c src/vm_grid.c src/unicode.c
+COMMON_SRC += src/app_resume.c
+ifeq ($(WITH_VM),1)
+COMMON_SRC += src/vm_reader.c src/vm_grid.c src/unicode.c
+VM_TEST_BIN = tests/test_vm_reader tests/test_vm_grid tests/test_unicode
+endif
 COMMON_OBJ = $(COMMON_SRC:.c=.o) $(PDF_OBJ) $(AUDIO_DEVICE_OBJ)
 HEADERS = src/tmux.h src/session_host.h src/session_relay.h src/session_client.h src/snajpagent.h src/base.h src/fs.h src/term_host.h src/wake.h src/net.h src/config.h src/secret_source.h src/credential.h src/auth.h src/login.h src/secret.h src/instructions.h src/json.h src/snag_jansson.h src/snag_jansson_abi.h src/wire.h src/context.h src/provider_retry.h src/http.h src/update.h src/provider.h src/model_cache.h src/tools.h src/process_host.h src/tools_patch.h src/irc.h src/irc_internal.h src/sse.h src/responses.h src/turn.h src/store.h src/store_internal.h src/store_record.h src/term.h src/render.h src/cli.h src/app.h src/app_internal.h src/ui.h src/history.h src/history_view.h src/vm_reader.h src/vm_grid.h src/unicode.h src/unicode_tables.inc src/base64.h src/convert.h src/media.h src/rules.h src/tools_write.h src/tools_file.h
 DEPFLAGS = -MMD -MP
 HEADERS += src/upload_wire.h src/upload_md5.h src/upload.h src/screen_wire.h src/remote.h
 FIXTURE_BIN = tests/$(NAME)-fixture
-TEST_BIN = tests/snajpagent-transport tests/test_base tests/test_config tests/test_irc tests/test_instructions tests/test_credential tests/test_sse tests/test_json tests/test_store_record tests/test_vm_reader tests/test_vm_grid tests/test_unicode tests/test_rules tests/test_wire tests/test_responses tests/test_provider_retry tests/test_provider_transport tests/test_context tests/test_model_cache tests/test_render tests/test_turn tests/test_tools tests/test_store tests/test_write tests/test_upload_wire $(FIXTURE_BIN)
+TEST_BIN = tests/snajpagent-transport tests/test_base tests/test_config tests/test_irc tests/test_instructions tests/test_credential tests/test_sse tests/test_json tests/test_store_record $(VM_TEST_BIN) tests/test_rules tests/test_wire tests/test_responses tests/test_provider_retry tests/test_provider_transport tests/test_context tests/test_model_cache tests/test_render tests/test_turn tests/test_tools tests/test_store tests/test_write tests/test_upload_wire $(FIXTURE_BIN)
 BUILD_INPUTS = build/.build-inputs
 
 all: $(BIN)
@@ -238,7 +242,7 @@ tests/test_context tests/test_store tests/test_tools tests/test_turn: tests/chec
 tests/test_base tests/test_sse tests/test_provider_retry tests/test_upload_wire:
 	$(CC) $(CPPFLAGS) $(JANSSON_CFLAGS) $(CFLAGS) $(LDFLAGS) -Isrc -o $@ $(filter %.c,$^) $(LDLIBS)
 
-tests/test_config tests/test_irc tests/test_credential tests/test_instructions tests/test_json tests/test_store_record tests/test_vm_reader tests/test_vm_grid tests/test_unicode tests/test_rules tests/test_wire tests/test_responses tests/test_context tests/test_model_cache tests/test_render tests/test_turn tests/test_write:
+tests/test_config tests/test_irc tests/test_credential tests/test_instructions tests/test_json tests/test_store_record $(VM_TEST_BIN) tests/test_rules tests/test_wire tests/test_responses tests/test_context tests/test_model_cache tests/test_render tests/test_turn tests/test_write:
 	$(CC) $(CPPFLAGS) $(JANSSON_CFLAGS) $(CFLAGS) $(LDFLAGS) -Isrc \
 		-o $@ $(filter %.c %.o,$^) $(LDLIBS)
 
@@ -263,9 +267,11 @@ check: $(BIN) $(TEST_BIN)
 	./tests/test_sse
 	./tests/test_json
 	./tests/test_store_record
+ifeq ($(WITH_VM),1)
 	./tests/test_vm_reader
 	./tests/test_vm_grid
 	./tests/test_unicode
+endif
 	./tests/test_rules
 	./tests/test_wire
 	./tests/test_upload_wire

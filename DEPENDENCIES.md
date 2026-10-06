@@ -2,6 +2,12 @@
 
 # Dependency and vendoring inventory
 
+## Optional Vim workspace
+
+`WITH_VM=1` builds the workspace reader, grid and Unicode helpers. Custom builds
+can select `WITH_VM=0` or `./configure --without-vm` to omit those objects and
+tables. The flag participates in the existing build-input fingerprint.
+
 ## Unicode text data
 
 Vim workspace navigation and rendering use first-party Unicode 17 grapheme

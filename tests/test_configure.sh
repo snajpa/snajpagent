@@ -87,6 +87,13 @@ cp "$tmp/config.mk" "$tmp/once.mk"
 	--without-office --without-office-commands >"$tmp/out2" 2>&1)
 cmp -s "$tmp/once.mk" "$tmp/config.mk" || fail 'all-off run is not idempotent'
 
+check 'workspace can be omitted' 0 changed --without-vm --without-av --without-pdf \
+	--without-audio-device --without-office --without-office-commands
+grep -q '^WITH_VM ?= 0$' "$tmp/config.mk" || fail '--without-vm was not recorded'
+check 'workspace is included explicitly' 0 changed --with-vm --without-av --without-pdf \
+	--without-audio-device --without-office --without-office-commands
+grep -q '^WITH_VM ?= 1$' "$tmp/config.mk" || fail '--with-vm was not recorded'
+
 # Cross builds select a target pkg-config explicitly.  Every query, including
 # API-generation checks, must use it rather than an unrelated native command
 # found through PATH.

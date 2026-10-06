@@ -18,7 +18,8 @@ requests and wakes the frontend only when a current result is ready.
 The grid composes UTF-8 graphemes into a back frame and publishes differences
 only after successful output. Unicode 17 tables supply shared cluster boundaries
 and width policy; all 766 official grapheme-boundary cases pass locally.
-The optional workspace interface, semantic attachment
+The build switch `WITH_VM=0` omits these optional workspace objects.
+The workspace interface, semantic attachment
 and IRC conversation work below remain to be implemented.
 
 ## 1. Outcome and decisions
