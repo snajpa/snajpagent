@@ -14,7 +14,14 @@ reconnect, while explicit leave/kick clears it. Native catch-up's initial NAMES
 confirmation remains supported. Live member lists grow as needed; the existing
 bounded owner status summary abbreviates overflow without disconnecting. Channel
 errors remain visible on their target and preserve unrelated traffic. Named
-channel actions, durable channel routes and their CLI/VM integration are next.
+channel actions now have an owner-mailbox API: selection/JOIN captures connection,
+role, stable conversation and membership token; PART/NAMES/TOPIC reject stale
+memberships. Pending PART invalidates the old route and blocks rejoin until its
+server acknowledgement. Durable local channel state retains rejoin intent and
+conversation IDs across session resume, with fresh generation/membership tokens.
+These lifecycle records stay outside model admission and channel replay. Legacy
+channel records remain readable. The public CLI/VM channel frontend, hosted room
+actions and channel chat delivery states are still being integrated.
 
 Conversation frontend checkpoint: version8 workspace snapshots retain exact
 query routes per window and separate draft/editor/pending state per conversation,

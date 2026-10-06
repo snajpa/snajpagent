@@ -63,6 +63,19 @@ struct snag_irc_query_target {
     uint64_t generation;
     enum snag_irc_identity identity;
 };
+
+struct snag_irc_channel_target {
+    uint32_t destination;
+    char connection[SNAG_ID_HEX_LEN + 1u];
+    char conversation[SNAG_ID_HEX_LEN + 1u];
+    char membership[SNAG_ID_HEX_LEN + 1u];
+    char room[SNAG_CONFIG_IRC_ROOM_MAX + 2u];
+    uint64_t generation;
+    enum snag_irc_identity identity;
+};
+
+enum snag_irc_channel_action { SNAG_IRC_CHANNEL_PART, SNAG_IRC_CHANNEL_NAMES,
+    SNAG_IRC_CHANNEL_TOPIC };
 /* Address resolution captures connection identity without copying member lists. */
 struct snag_irc_scope {
     struct snag_irc_query_target target;
@@ -104,6 +117,9 @@ struct snag_irc_event_route {
     enum snag_irc_direction direction;
     enum snag_irc_delivery delivery;
     bool action;
+    /* Present on channel records that carry the current membership lifetime. */
+    char membership[SNAG_ID_HEX_LEN + 1u];
+    bool joined, rejoin;
 };
 
 struct snag_irc_event {
@@ -166,6 +182,11 @@ bool snag_irc_event_query_target(const struct snag_irc *, const struct snag_irc_
 int snag_irc_query_send(struct snag_irc *, const struct snag_irc_query_target *,
                         enum snag_irc_event_kind, const char *text, bool action,
                         struct snag_buf *report, char *, size_t);
+int snag_irc_channel_open(struct snag_irc *, const struct snag_irc_query_target *scope,
+                          const char *room, bool join, struct snag_irc_channel_target *,
+                          char *, size_t);
+int snag_irc_channel_action(struct snag_irc *, const struct snag_irc_channel_target *,
+                            enum snag_irc_channel_action, const char *, char *, size_t);
 int snag_irc_apply_cli(struct snag_config *config, const struct snag_cli *cli,
                       char *error, size_t error_size);
 int snag_irc_normalize(struct snag_config *config, char *error, size_t error_size);

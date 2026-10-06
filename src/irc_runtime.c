@@ -22,6 +22,10 @@ struct irc_request {
     const struct snag_irc_event *event;
     struct snag_irc_query_target *query_open;
     const struct snag_irc_query_target *query_send;
+    struct snag_irc_channel_target *channel_open;
+    const struct snag_irc_channel_target *channel_target;
+    enum snag_irc_channel_action channel_action;
+    bool channel_join;
     struct snag_buf *report;
     bool action;
     bool retire;
@@ -197,6 +201,12 @@ execute(struct irc_owner *owner, struct irc_request *request)
         return snag_fail(error, size, ESTALE, "destination room changed; not performed");
     if (request->event) return snag_irc_core_restore_event(core, request->event);
     if (request->retire) return snag_irc_core_retire(core);
+    if (request->channel_open)
+        return snag_irc_core_channel_open(core, request->query_send, request->text,
+            request->channel_join, request->channel_open, error, size);
+    if (request->channel_target)
+        return snag_irc_core_channel_action(core, request->channel_target, request->channel_action,
+            request->text, error, size);
     if (request->query_open && request->query_send)
         return snag_irc_core_query_open_frozen(core, request->query_send, request->text,
             request->query_open, error, size);
@@ -515,7 +525,8 @@ snag_irc_bind_conversations(struct snag_irc *irc, const json_t *conversations)
                 ++generation;
             }
         }
-        if (snag_irc_core_bind(owner->core, connection, endpoint, generation) < 0) return -1;
+        if (snag_irc_core_bind(owner->core, connection, endpoint, generation) < 0 ||
+            snag_irc_core_restore_channels(owner->core, conversations) < 0) return -1;
     }
     irc->conversations_bound = true;
     return 0;
@@ -985,6 +996,47 @@ snag_irc_query_send(struct snag_irc *irc, const struct snag_irc_query_target *ta
         return rc;
     }
     return snag_fail(error, error_size, ESTALE, "IRC query destination is unavailable; not sent");
+}
+
+int
+snag_irc_channel_open(struct snag_irc *irc, const struct snag_irc_query_target *scope,
+                     const char *room, bool join, struct snag_irc_channel_target *target,
+                     char *error, size_t error_size)
+{
+    if (!irc || !scope || !room || !target) return snag_errno(EINVAL);
+    struct snag_irc_query_target frozen = *scope;
+    if (start_owners(irc) < 0) return -1;
+    for (size_t i = 0u; i < irc->owner_count; ++i) {
+        struct irc_owner *owner = irc->owners[i];
+        if (owner->target.id != frozen.destination) continue;
+        struct irc_request request = {.channel_open = target, .query_send = &frozen,
+            .text = room, .channel_join = join};
+        int rc = request_owner(owner, &request);
+        if (rc == 0) target->destination = frozen.destination;
+        else (void)snag_strcpy(error, error_size, request.error);
+        return rc;
+    }
+    return snag_fail(error, error_size, ESTALE, "IRC channel destination is unavailable");
+}
+
+int
+snag_irc_channel_action(struct snag_irc *irc, const struct snag_irc_channel_target *target,
+                       enum snag_irc_channel_action action, const char *text,
+                       char *error, size_t error_size)
+{
+    if (!irc || !target) return snag_errno(EINVAL);
+    struct snag_irc_channel_target frozen = *target;
+    if (start_owners(irc) < 0) return -1;
+    for (size_t i = 0u; i < irc->owner_count; ++i) {
+        struct irc_owner *owner = irc->owners[i];
+        if (owner->target.id != frozen.destination) continue;
+        struct irc_request request = {.channel_target = &frozen,
+            .channel_action = action, .text = text};
+        int rc = request_owner(owner, &request);
+        if (rc != 0) (void)snag_strcpy(error, error_size, request.error);
+        return rc;
+    }
+    return snag_fail(error, error_size, ESTALE, "IRC channel destination is unavailable");
 }
 
 int

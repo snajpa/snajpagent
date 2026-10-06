@@ -4,6 +4,12 @@
 
 ## Unreleased
 
+- Restore external channel join intent and conversation identity across session
+  resume. Keep local membership metadata outside model input and channel replay.
+  Add owner-validated channel selection/JOIN and PART/NAMES/TOPIC actions with
+  membership tokens, rejecting old routes after PART, KICK or reconnect. Public
+  channel commands, chat delivery states and Vim channel panes remain in progress.
+
 - Track external IRC channel membership, topics and names separately on each
   connection. Keep other channels connected after PART, KICK or a channel error;
   rejoin retained channels after a disconnect. Retain complete live member lists
@@ -41,15 +47,15 @@
   replies keep their captured recipient and agent query composers are read-only.
   Show private message bodies once, with separate send-state receipts.
   Resume restores query tabs, and retained history remains available through
-  `/history`. Vim conversation windows are in progress.
+  `/history`. Vim exposes these conversations through buffers and splits.
 
 - Enable session-bound operator and agent IRC queries. Agent DMs enter model
   context with exact reply provenance; operator DMs remain outside provider
   input and model history. Private NOTICE, history and nickname changes add
   context without demanding a reply. Resume restores pending reply obligations.
   Extend `irc_send` with explicit query IDs and endpoint/nick addresses, private
-  actions and request-time recipient validation. Vim conversation buffers remain
-  in progress.
+  actions and request-time recipient validation. Vim query buffers retain
+  conversation-scoped history and drafts.
 
 - Add owner-validated private IRC send handles and separate frame queues, with
   durable chunk IDs and pending/written/acknowledged/failed/uncertain outcomes.

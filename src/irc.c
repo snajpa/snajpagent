@@ -53,11 +53,14 @@ struct irc_member {
 
 struct irc_channel {
     struct irc_channel *next;
+    char id[SNAG_ID_HEX_LEN + 1u];
+    char membership[SNAG_ID_HEX_LEN + 1u];
     char room[SNAG_CONFIG_IRC_ROOM_MAX + 2u];
     char topic[513u];
     struct irc_member *members;
     size_t member_count, member_capacity;
-    bool joined, wanted, op, names_active;
+    uint64_t restored_seq;
+    bool joined, wanted, op, names_active, parting, published;
 };
 
 struct irc_replay_member {
@@ -699,7 +702,8 @@ snag_irc_core_remember(struct snag_irc_core *irc, const struct snag_irc_event *e
 {
     size_t index;
 
-    if (event->routed && event->route.kind != SNAG_IRC_CHANNEL) return;
+    if (event->routed && (event->route.kind != SNAG_IRC_CHANNEL ||
+        !snag_irc_event_model_visible(event))) return;
     for (size_t i = 0u; event->stream[0] && i < irc->history_count; ++i) {
         const struct snag_irc_event *old = &irc->history[(irc->history_start + i) % irc->history_limit];
         if (old->sequence == event->sequence && !strcmp(old->stream, event->stream)) return;
@@ -922,6 +926,8 @@ connection_event(struct snag_irc_core *irc, struct irc_conn *link, const char *r
     return emit_event(irc, &event, false);
 }
 
+static int channel_state(struct irc_conn *, struct irc_channel *, const char *);
+
 static int
 query_epoch_end(struct snag_irc_core *irc, const char *reason)
 {
@@ -930,8 +936,12 @@ query_epoch_end(struct snag_irc_core *irc, const char *reason)
     if (irc->generation == INT64_MAX) return snag_errno(EOVERFLOW);
     ++irc->generation;
     queries_free(irc);
-    for (size_t role = 0u; role < 2u; ++role)
+    for (size_t role = 0u; role < 2u; ++role) {
         if (connection_event(irc, &irc->conns[role], reason) < 0) return -1;
+        for (struct irc_channel *channel = irc->conns[role].channels; channel;
+            channel = channel->next)
+            if (channel_state(&irc->conns[role], channel, reason) < 0) return -1;
+    }
     return 0;
 }
 
@@ -1153,9 +1163,9 @@ prefix_nick(const char *prefix, char out[SNAG_CONFIG_IRC_NICK_MAX + 1u])
 }
 
 static bool
-channel_name_valid(const struct irc_conn *link, const char *room)
+channel_syntax_valid(const char *room)
 {
-    if (!room || !room[0] || !strchr(link->chantypes, room[0])) return false;
+    if (!room || !room[0] || (unsigned char)room[0] >= 0x7fu || room[0] == ':') return false;
     size_t len = strlen(room);
     if (len < 2u || len > SNAG_CONFIG_IRC_ROOM_MAX + 1u ||
         !snag_utf8_valid((const unsigned char *)room, len, true) || identifier_unicode_unsafe(room))
@@ -1163,6 +1173,12 @@ channel_name_valid(const struct irc_conn *link, const char *room)
     for (const unsigned char *at = (const unsigned char *)room; *at; ++at)
         if (*at < 0x21u || *at == 0x7fu || *at == ',') return false;
     return true;
+}
+
+static bool
+channel_name_valid(const struct irc_conn *link, const char *room)
+{
+    return channel_syntax_valid(room) && strchr(link->chantypes, room[0]);
 }
 
 static struct irc_channel *
@@ -1184,6 +1200,10 @@ channel_open(struct irc_conn *link, const char *room)
     }
     channel = calloc(1u, sizeof(*channel));
     if (!channel) return NULL;
+    if (snag_random_id(channel->id) < 0 || snag_random_id(channel->membership) < 0) {
+        free(channel);
+        return NULL;
+    }
     (void)snag_strcpy(channel->room, sizeof(channel->room), room);
     channel->next = link->channels;
     link->channels = channel;
@@ -1208,7 +1228,7 @@ channel_clear(struct irc_channel *channel)
     channel->members = NULL;
     channel->member_count = channel->member_capacity = 0u;
     channel->topic[0] = '\0';
-    channel->joined = channel->op = channel->names_active = false;
+    channel->joined = channel->op = channel->names_active = channel->parting = false;
 }
 
 static void
@@ -1224,8 +1244,120 @@ static void
 channel_default_status(struct irc_conn *link)
 {
     const struct irc_channel *channel = channel_find(link, link->room);
-    link->joined = channel && channel->joined;
+    link->joined = channel && channel->joined && !channel->parting;
     link->op = link->joined && channel->op;
+}
+
+static int
+channel_state(struct irc_conn *link, struct irc_channel *channel, const char *reason)
+{
+    struct snag_irc_core *irc = link->owner;
+    if (!irc->connection[0]) return 0;
+    struct snag_irc_event event;
+    bool joined = channel->joined && !channel->parting;
+    event_init(irc, &event, joined ? SNAG_IRC_CONNECTED : SNAG_IRC_DISCONNECTED,
+        irc->connection_endpoint, channel->room, link->accepted_nick, reason,
+        channel->op, false, true);
+    route_init(irc, &event, link->role, SNAG_IRC_CHANNEL, channel->id);
+    memcpy(event.route.target, channel->room, sizeof(event.route.target));
+    memcpy(event.route.membership, channel->membership, sizeof(event.route.membership));
+    event.route.joined = joined;
+    event.route.rejoin = channel->wanted;
+    int rc = emit_event(irc, &event, false);
+    if (rc == 0) channel->published = true;
+    return rc;
+}
+
+static int
+channel_leave(struct irc_conn *link, struct irc_channel *channel, const char *reason)
+{
+    if (query_cancel_sends(link->owner, channel->id) < 0) return -1;
+    channel->wanted = false;
+    channel_clear(channel);
+    channel_default_status(link);
+    if (snag_random_id(channel->membership) < 0) return -1;
+    return channel_state(link, channel, reason);
+}
+
+int
+snag_irc_core_channel_open(struct snag_irc_core *irc, const struct snag_irc_query_target *scope,
+                          const char *room, bool join, struct snag_irc_channel_target *target,
+                          char *error, size_t error_size)
+{
+    if (!irc || !scope || !target || !room ||
+        (unsigned int)scope->identity > SNAG_IRC_AGENT) return snag_errno(EINVAL);
+    if (!irc->connection[0] || strcmp(scope->connection, irc->connection) ||
+        scope->generation != irc->generation)
+        return snag_fail(error, error_size, ESTALE, "IRC connection changed; refresh channels");
+    if (irc->hosting)
+        return snag_fail(error, error_size, ENOTSUP, "hosted channel actions are unavailable");
+    struct irc_conn *link = &irc->conns[scope->identity == SNAG_IRC_AGENT ?
+        LINK_AGENT : LINK_OPERATOR];
+    if (!link->registered)
+        return snag_fail(error, error_size, ENOTCONN, "IRC identity is disconnected");
+    if (!channel_name_valid(link, room))
+        return snag_fail(error, error_size, EINVAL, "invalid IRC channel name");
+    struct irc_channel *channel = channel_find(link, room);
+    if (!channel && !join)
+        return snag_fail(error, error_size, ENOENT, "IRC channel is not open");
+    if (!channel && !(channel = channel_open(link, room))) return -1;
+    if (channel->parting)
+        return snag_fail(error, error_size, EAGAIN, "IRC channel is still parting");
+    bool changed = !channel->published;
+    if (join && !channel->wanted) {
+        if (!channel->joined && queue_line(link, "JOIN %s", channel->room) < 0) return -1;
+        channel->wanted = true;
+        changed = true;
+    }
+    if (changed && channel_state(link, channel, "channel opened") < 0) return -1;
+    *target = (struct snag_irc_channel_target){.identity = scope->identity,
+        .generation = irc->generation};
+    memcpy(target->connection, irc->connection, sizeof(target->connection));
+    memcpy(target->conversation, channel->id, sizeof(target->conversation));
+    memcpy(target->membership, channel->membership, sizeof(target->membership));
+    memcpy(target->room, channel->room, sizeof(target->room));
+    return 0;
+}
+
+int
+snag_irc_core_channel_action(struct snag_irc_core *irc,
+                            const struct snag_irc_channel_target *target,
+                            enum snag_irc_channel_action action, const char *text,
+                            char *error, size_t error_size)
+{
+    if (!irc || !target || (unsigned int)target->identity > SNAG_IRC_AGENT ||
+        (unsigned int)action > SNAG_IRC_CHANNEL_TOPIC) return snag_errno(EINVAL);
+    struct irc_conn *link = &irc->conns[target->identity == SNAG_IRC_AGENT ?
+        LINK_AGENT : LINK_OPERATOR];
+    struct irc_channel *channel = channel_find(link, target->room);
+    if (irc->hosting || !link->registered || !channel || !channel->joined || channel->parting ||
+        strcmp(target->connection, irc->connection) || target->generation != irc->generation ||
+        strcmp(target->conversation, channel->id) ||
+        strcmp(target->membership, channel->membership))
+        return snag_fail(error, error_size, ESTALE, "IRC membership changed; not performed");
+    if (text && (strchr(text, '\r') || strchr(text, '\n') ||
+        !snag_utf8_valid((const unsigned char *)text, strlen(text), true)))
+        return snag_fail(error, error_size, EINVAL, "invalid IRC channel text");
+    char clean[SNAG_IRC_LINE_MAX];
+    if (text && sanitize_text(clean, sizeof(clean), text) < 0) return -1;
+    const char *command = action == SNAG_IRC_CHANNEL_PART ? "PART" :
+        action == SNAG_IRC_CHANNEL_NAMES ? "NAMES" : "TOPIC";
+    if (text && action != SNAG_IRC_CHANNEL_NAMES) {
+        if (strlen(command) + strlen(channel->room) + strlen(clean) + 5u > link->line_limit)
+            return snag_fail(error, error_size, EMSGSIZE, "IRC command exceeds server LINELEN");
+        if (queue_line(link, "%s %s :%s", command, channel->room, clean) < 0) return -1;
+    } else if (queue_line(link, "%s %s", command, channel->room) < 0) return -1;
+    /* Invalidate immediately: a queued PART must not leave a writable old draft
+     * while its acknowledgement is still in flight. */
+    if (action == SNAG_IRC_CHANNEL_PART) {
+        if (query_cancel_sends(irc, channel->id) < 0 ||
+            snag_random_id(channel->membership) < 0) return -1;
+        channel->wanted = false;
+        channel->parting = true;
+        channel_default_status(link);
+        return channel_state(link, channel, "part requested");
+    }
+    return 0;
 }
 
 static struct irc_member *
@@ -2418,8 +2550,10 @@ client_dispatch(struct snag_irc_core *irc, struct irc_conn *link, char *line)
                 struct irc_channel *previous = channel_find(link,
                     link->room[0] ? link->room : link->previous_room);
                 (void)normalize_room(link->room, sizeof(link->room), message.params[i] + 8u);
-                if (previous && !link_name_equal(link, previous->room, link->room))
+                if (previous && !link_name_equal(link, previous->room, link->room)) {
                     previous->wanted = false;
+                    if (channel_state(link, previous, "default room changed") < 0) return -1;
+                }
                 channel_default_status(link);
                 if (link->previous_room[0] && strcmp(link->previous_room, link->room)) {
                     ++irc->route_revision;
@@ -2439,6 +2573,7 @@ client_dispatch(struct snag_irc_core *irc, struct irc_conn *link, char *line)
             struct irc_channel *channel = channel_open(link, link->room);
             if (!channel) return -1;
             channel->wanted = true;
+            if (channel_state(link, channel, "join requested") < 0) return -1;
         }
         for (struct irc_channel *channel = link->channels; channel; channel = channel->next) {
             if (!channel->wanted || !channel_name_valid(link, channel->room)) continue;
@@ -2504,9 +2639,11 @@ client_dispatch(struct snag_irc_core *irc, struct irc_conn *link, char *line)
         channel->op = self && self->op;
         /* Native catch-up defers the self JOIN into history; its initial
          * NAMES snapshot confirms the requested room's current membership. */
-        if (link->cap_catchup && channel->wanted && self) channel->joined = true;
+        bool confirmed = link->cap_catchup && channel->wanted && self && !channel->joined;
+        if (confirmed) channel->joined = true;
         channel->names_active = false;
         channel_default_status(link);
+        if (confirmed && channel_state(link, channel, "joined") < 0) return -1;
         return 0;
     }
     if (snag_string_in(message.command, "331 332") && message.param_count >= 2u &&
@@ -2560,8 +2697,11 @@ client_dispatch(struct snag_irc_core *irc, struct irc_conn *link, char *line)
         }
         if (!channel || (!channel->joined && !self)) return 0;
         if (self) {
-            channel->joined = channel->wanted = true;
+            bool changed = !channel->joined;
+            channel->joined = true;
+            if (!channel->parting) channel->wanted = true;
             channel_default_status(link);
+            if (changed && channel_state(link, channel, "joined") < 0) return -1;
             if (link_name_equal(link, room, link->room) && link_flush_pending(link) < 0)
                 return -1;
         }
@@ -2590,9 +2730,7 @@ client_dispatch(struct snag_irc_core *irc, struct irc_conn *link, char *line)
         }
         member_remove(link, channel, leaving);
         if (link_name_equal(link, leaving, link->accepted_nick)) {
-            channel->wanted = false;
-            channel_clear(channel);
-            channel_default_status(link);
+            if (channel_leave(link, channel, reason) < 0) return -1;
         }
         return link_emit(irc, link, SNAG_IRC_PART, channel->room,
             leaving, reason, op, timestamp_ms);
@@ -2679,7 +2817,10 @@ client_dispatch(struct snag_irc_core *irc, struct irc_conn *link, char *line)
         snag_string_in(message.command, "403 404 405 407 442 471 473 474 475 476 477 482 489") &&
         channel_name_valid(link, message.params[1])) {
         channel = channel_find(link, message.params[1]);
-        if (channel && !channel->joined) channel->wanted = false;
+        if (channel && (!channel->joined || !strcmp(message.command, "442"))) {
+            if (channel_leave(link, channel, message.params[message.param_count - 1u]) < 0)
+                return -1;
+        }
         char description[SNAG_IRC_TEXT_MAX + 1u];
         const char *reason = message.params[message.param_count - 1u];
         size_t take = utf8_chunk(reason, strlen(reason), SNAG_IRC_TEXT_MAX - 4u);
@@ -2968,7 +3109,13 @@ int
 snag_irc_core_retire(struct snag_irc_core *irc)
 {
     if (!irc->connection[0]) return 0;
-    for (size_t role = 0u; role < 2u; ++role) irc->conns[role].registered = false;
+    for (size_t role = 0u; role < 2u; ++role) {
+        struct irc_conn *link = &irc->conns[role];
+        link->registered = false;
+        for (struct irc_channel *channel = link->channels; channel; channel = channel->next)
+            channel->wanted = false;
+        channels_reset(link);
+    }
     return query_epoch_end(irc, "endpoint removed");
 }
 
@@ -2987,6 +3134,45 @@ snag_irc_core_bind(struct snag_irc_core *irc, const char *connection,
     irc->generation = generation;
     return snag_random_id(irc->connection_events[0]) < 0 ||
         snag_random_id(irc->connection_events[1]) < 0 ? -1 : 0;
+}
+
+int
+snag_irc_core_restore_channels(struct snag_irc_core *irc, const json_t *directory)
+{
+    if (!irc || !irc->connection[0] || irc->connections_announced) return snag_errno(EINVAL);
+    const json_t *connection = json_object_get(directory, irc->connection);
+    const json_t *entries = json_object_get(connection, "conversations");
+    const char *id;
+    const json_t *entry;
+    json_object_foreach((json_t *)entries, id, entry) {
+        struct snag_irc_event event;
+        uint64_t seq;
+        const json_t *data = json_object_get(entry, "data");
+        if (snag_irc_event_record_read("irc_event_v2", data, &event) < 0 ||
+            snag_json_integer_u64(entry, "seq", &seq) < 0) return -1;
+        if (event.route.kind != SNAG_IRC_CHANNEL || !event.route.membership[0]) continue;
+        if (!channel_syntax_valid(event.room)) return snag_errno(EINVAL);
+        struct irc_conn *link = &irc->conns[event.route.identity == SNAG_IRC_AGENT ?
+            LINK_AGENT : LINK_OPERATOR];
+        struct irc_channel *channel = link->channels;
+        while (channel && strcmp(channel->room, event.room)) channel = channel->next;
+        if (channel && channel->restored_seq >= seq) continue;
+        if (!channel) {
+            channel = calloc(1u, sizeof(*channel));
+            if (!channel) return -1;
+            if (snag_random_id(channel->membership) < 0) {
+                free(channel);
+                return -1;
+            }
+            memcpy(channel->room, event.room, sizeof(channel->room));
+            channel->next = link->channels;
+            link->channels = channel;
+        }
+        memcpy(channel->id, id, sizeof(channel->id));
+        channel->wanted = event.route.rejoin;
+        channel->restored_seq = seq;
+    }
+    return 0;
 }
 
 size_t
@@ -3051,8 +3237,12 @@ snag_irc_core_tick(struct snag_irc_core *irc, int timeout_ms, snag_wake_fd wake_
     if (!irc) return snag_errno(EINVAL);
     if (irc->connection[0] && !irc->connections_announced) {
         irc->connections_announced = true;
-        for (size_t role = 0u; role < 2u; ++role)
+        for (size_t role = 0u; role < 2u; ++role) {
             if (connection_event(irc, &irc->conns[role], "") < 0) goto fail;
+            for (struct irc_channel *channel = irc->conns[role].channels; channel;
+                channel = channel->next)
+                if (channel_state(&irc->conns[role], channel, "resumed") < 0) goto fail;
+        }
     }
     if (start_due_links(irc) < 0) goto fail;
     for (size_t i = 0u; i < irc->conn_count; ++i) {
@@ -3563,9 +3753,10 @@ replay_transition(struct snag_irc_core *irc, const struct snag_irc_event *event)
 int
 snag_irc_core_restore_event(struct snag_irc_core *irc, const struct snag_irc_event *event)
 {
-    if (irc && event && event->routed && event->route.kind != SNAG_IRC_CHANNEL) {
-        /* Private history is reconstructed from its session directory. It
-         * cannot establish a live peer identity or populate channel replay. */
+    if (irc && event && event->routed && (event->route.kind != SNAG_IRC_CHANNEL ||
+        !snag_irc_event_model_visible(event))) {
+        /* Conversation metadata is reconstructed from its session directory.
+         * It cannot establish live membership or populate channel replay. */
         json_t *data = snag_irc_event_data(event);
         struct snag_irc_event decoded;
         int rc = snag_irc_event_record_read("irc_event_v2", data, &decoded);

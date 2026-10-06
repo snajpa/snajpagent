@@ -28,6 +28,7 @@ void snag_irc_core_close(struct snag_irc_core *irc);
 int snag_irc_core_retire(struct snag_irc_core *irc);
 int snag_irc_core_bind(struct snag_irc_core *, const char *connection,
                        const char *endpoint, uint64_t generation);
+int snag_irc_core_restore_channels(struct snag_irc_core *, const json_t *);
 size_t snag_irc_core_pending(const struct snag_irc_core *irc);
 int snag_irc_core_copy_history(struct snag_irc_core *dst, const struct snag_irc_core *src, bool hosted_only);
 int snag_irc_core_tick(struct snag_irc_core *irc, int timeout_ms, snag_wake_fd wake_fd,
@@ -41,6 +42,10 @@ int snag_irc_core_query_open_frozen(struct snag_irc_core *, const struct snag_ir
 int snag_irc_core_query_send(struct snag_irc_core *, const struct snag_irc_query_target *,
                              enum snag_irc_event_kind, const char *, bool, struct snag_buf *,
                              char *, size_t);
+int snag_irc_core_channel_open(struct snag_irc_core *, const struct snag_irc_query_target *,
+                              const char *, bool, struct snag_irc_channel_target *, char *, size_t);
+int snag_irc_core_channel_action(struct snag_irc_core *, const struct snag_irc_channel_target *,
+                                enum snag_irc_channel_action, const char *, char *, size_t);
 int snag_irc_core_view(const struct snag_irc_core *irc, struct snag_irc_view *view);
 int snag_irc_core_history(const struct snag_irc_core *irc, struct snag_buf *out);
 void snag_irc_core_remember(struct snag_irc_core *irc, const struct snag_irc_event *event);

@@ -94,6 +94,52 @@ privacy_and_provenance(void)
 }
 
 static void
+channel_membership(void)
+{
+    struct snag_irc_event event = query();
+    event.kind = SNAG_IRC_CONNECTED;
+    event.local = true;
+    event.route.kind = SNAG_IRC_CHANNEL;
+    event.route.peer[0] = '\0';
+    strcpy(event.room, "#room");
+    strcpy(event.route.target, event.room);
+    strcpy(event.route.membership, "44444444444444444444444444444444");
+    event.route.joined = event.route.rejoin = true;
+    roundtrip(&event);
+    assert(!snag_irc_event_model_visible(&event));
+    json_t *data = snag_irc_event_data(&event);
+    json_t *directory = snag_irc_conversations_update(NULL, data, 1u);
+    assert(directory && snag_irc_conversations_valid(directory, 2u));
+    const char *fields[] = {"membership", "joined", "rejoin"};
+    struct snag_irc_event decoded;
+    for (size_t i = 0u; i < 3u; ++i) {
+        json_t *bad = json_deep_copy(data);
+        assert(bad && json_object_del(json_object_get(bad, "routing"), fields[i]) == 0);
+        assert(snag_irc_event_record_read("irc_event_v2", bad, &decoded) < 0);
+        json_decref(bad);
+    }
+    json_decref(data);
+    event.input = true;
+    data = snag_irc_event_data(&event);
+    assert(snag_irc_event_record_read("irc_event_v2", data, &decoded) < 0);
+    json_decref(data);
+    event.input = false;
+    event.kind = SNAG_IRC_DISCONNECTED;
+    event.route.joined = event.route.rejoin = false;
+    strcpy(event.route.membership, "55555555555555555555555555555555");
+    data = snag_irc_event_data(&event);
+    json_t *parted = snag_irc_conversations_update(directory, data, 2u);
+    assert(parted && snag_irc_conversations_valid(parted, 3u));
+    json_decref(parted);
+    json_decref(data);
+    json_decref(directory);
+    roundtrip(&event);
+    event.kind = SNAG_IRC_MESSAGE;
+    assert(snag_irc_event_model_visible(&event));
+    roundtrip(&event);
+}
+
+static void
 delivery_states(void)
 {
     struct snag_irc_event event = query();
@@ -257,6 +303,7 @@ main(void)
 {
     nickname_mappings();
     privacy_and_provenance();
+    channel_membership();
     delivery_states();
     invalid_fields();
     directory_update_test();

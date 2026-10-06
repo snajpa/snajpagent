@@ -89,13 +89,21 @@ route_data(const struct snag_irc_event_route *route)
         errno = EINVAL;
         return NULL;
     }
-    return json_pack("{s:s,s:s,s:s,s:s,s:s,s:s,s:s,s:s,s:s,s:s,s:I,s:b}",
+    json_t *data = json_pack("{s:s,s:s,s:s,s:s,s:s,s:s,s:s,s:s,s:s,s:s,s:I,s:b}",
         "connection_id", route->connection, "conversation_id", route->conversation,
         "identity", identities[route->identity], "conversation_kind", conversations[route->kind],
         "peer", route->peer, "target", route->target, "direction", directions[route->direction],
         "send_id", route->send, "state", deliveries[route->delivery],
         "source_message_id", route->source, "generation", (json_int_t)route->generation,
         "action", route->action);
+    if (route->membership[0] &&
+        (snag_json_set_new(data, "membership", json_string(route->membership)) < 0 ||
+         snag_json_set_new(data, "joined", json_boolean(route->joined)) < 0 ||
+         snag_json_set_new(data, "rejoin", json_boolean(route->rejoin)) < 0)) {
+        json_decref(data);
+        return NULL;
+    }
+    return data;
 }
 
 json_t *
@@ -144,6 +152,9 @@ named_value(const json_t *data, const char *key, const char *const *names, size_
 bool
 snag_irc_event_model_visible(const struct snag_irc_event *event)
 {
+    if (event->routed && event->route.kind == SNAG_IRC_CHANNEL &&
+        event->route.membership[0] &&
+        (event->kind == SNAG_IRC_CONNECTED || event->kind == SNAG_IRC_DISCONNECTED)) return false;
     return !event->routed || event->route.kind == SNAG_IRC_CHANNEL ||
         (event->route.kind == SNAG_IRC_QUERY && event->route.identity == SNAG_IRC_AGENT);
 }
@@ -156,8 +167,13 @@ route_read(const json_t *data, struct snag_irc_event *event)
     int kind = named_value(data, "conversation_kind", conversations, 3u);
     int direction = named_value(data, "direction", directions, 2u);
     int delivery = named_value(data, "state", deliveries, 6u);
-    if (!snag_json_exact_keys(data, "connection_id conversation_id generation identity "
-        "conversation_kind peer target direction send_id state source_message_id action") ||
+    bool membership = json_object_get(data, "membership") != NULL;
+    const char *keys = membership ?
+        "connection_id conversation_id generation identity conversation_kind peer target "
+        "direction send_id state source_message_id action membership joined rejoin" :
+        "connection_id conversation_id generation identity conversation_kind peer target "
+        "direction send_id state source_message_id action";
+    if (!snag_json_exact_keys(data, keys) ||
         identity < 0 || kind < 0 || direction < 0 || delivery < 0 ||
         !event_field(data, "connection_id", route->connection, sizeof(route->connection)) ||
         !snag_hex_is_lower(route->connection, SNAG_ID_HEX_LEN) ||
@@ -174,6 +190,18 @@ route_read(const json_t *data, struct snag_irc_event *event)
     route->direction = (enum snag_irc_direction)direction;
     route->delivery = (enum snag_irc_delivery)delivery;
     route->action = json_is_true(json_object_get(data, "action"));
+    if (membership) {
+        if (kind != SNAG_IRC_CHANNEL ||
+            !event_field(data, "membership", route->membership, sizeof(route->membership)) ||
+            !snag_hex_is_lower(route->membership, SNAG_ID_HEX_LEN) ||
+            !json_is_boolean(json_object_get(data, "joined")) ||
+            !json_is_boolean(json_object_get(data, "rejoin"))) return -1;
+        route->joined = json_is_true(json_object_get(data, "joined"));
+        route->rejoin = json_is_true(json_object_get(data, "rejoin"));
+        if ((event->kind == SNAG_IRC_CONNECTED || event->kind == SNAG_IRC_DISCONNECTED) &&
+            (!event->local || event->historical ||
+             (event->kind == SNAG_IRC_CONNECTED) != route->joined)) return -1;
+    }
     bool chat = event->kind == SNAG_IRC_MESSAGE || event->kind == SNAG_IRC_NOTICE;
     if ((route->kind == SNAG_IRC_QUERY && (!route->peer[0] || event->room[0])) ||
         (route->kind != SNAG_IRC_QUERY && route->peer[0]) ||

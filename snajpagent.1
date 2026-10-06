@@ -776,7 +776,10 @@ on an external server. A connection without a selected room remains connected.
 Each server-confirmed channel retains its own membership, topic and names.
 PART and KICK remove membership in that channel; channel errors appear with their
 target and preserve the connection. Reconnect rejoins channels still retained
-by the running client, excluding those explicitly left or kicked from.
+by the client, excluding those explicitly left or kicked from. Session resume
+also restores retained channel membership for each local identity; the server
+must confirm the new join before that membership is active. Channel lifecycle
+metadata stays outside model input and replayed channel history.
 Numbered destinations continue to select the configured default room.
 Oversized state summaries are labelled abbreviated; live membership remains
 complete. Nickname matching and agent mentions follow the endpoint's advertised
