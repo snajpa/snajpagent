@@ -857,8 +857,8 @@ irc_checkpoint_checks(struct snag_session *source, const struct snag_session *ex
     if (checked || !expected->irc_conversations) return;
     checked = true;
     const unsigned char *bytes = frame->core.data;
-    assert(frame->core.version == 3u && bytes[0] == 3u && bytes[2] == 8u);
-    size_t offset = 92u;
+    assert(frame->core.version == 4u && bytes[0] == 4u && bytes[2] == 9u);
+    size_t offset = 100u;
     for (size_t i = 0u; i < 7u; ++i) {
         uint64_t size = 0u;
         for (size_t j = 0u; j < 8u; ++j)
@@ -899,6 +899,62 @@ irc_checkpoint_checks(struct snag_session *source, const struct snag_session *ex
     binary_fixture_access_omit(access, reference, &omitted, &missing);
     reject_irc_checkpoint(source, frame, &missing, ENOENT);
     snag_buf_free(&omitted);
+}
+
+static void
+old_core_materialization_checks(struct snag_session *source, struct snag_session *expected,
+    const struct snag_binary_checkpoint_sources *origins,
+    const struct snag_binary_checkpoint_frame *current, const unsigned char root[32])
+{
+    static bool checked[2];
+    for (uint16_t version = 2u; version <= 3u; ++version) {
+        size_t slot = version - 2u;
+        if (checked[slot] || (version == 2u &&
+            (expected->irc_conversations || expected->irc_activity)) ||
+            (version == 3u && !json_object_size(
+                json_object_get(expected->irc_activity, "items")))) continue;
+        struct snag_binary_checkpoint_frame frame = *current;
+        struct snag_buf core = {.max = SIZE_MAX};
+        assert(!snag_binary_checkpoint_core_encode_version(&core, origins, expected, version));
+        frame.core = (struct snag_binary_checkpoint_section){.version = version,
+            .data = (const unsigned char *)core.data, .size = core.len};
+        struct snag_binary_checkpoint_receipt receipt;
+        struct snag_buf bytes = {.max = SIZE_MAX};
+        seal_checkpoint(&frame, &receipt, root, &bytes);
+        struct snag_session restored;
+        snag_session_init(&restored);
+        struct snag_binary_checkpoint_sources adopted = {0};
+        char error[128] = {0};
+        int64_t position = snag_seek(source->log_fd, 0, SEEK_CUR);
+        int rc = snag_store_materialize_binary_context_checkpoint(source, &restored, &frame,
+            &receipt, &adopted, NULL, error, sizeof(error));
+        if (rc < 0) fprintf(stderr, "old core materialization: %s (%d)\n", error, errno);
+        assert(!rc && !restored.irc_activity &&
+            snag_seek(source->log_fd, 0, SEEK_CUR) == position);
+        struct snag_session unknown = *expected;
+        unknown.irc_activity = NULL;
+        same_cache(&unknown, &restored, false);
+        json_t *left = checkpoint_facts(&unknown);
+        json_t *right = checkpoint_facts(&restored);
+        assert(left && right && json_equal(left, right));
+        json_decref(left);
+        json_decref(right);
+        snag_session_close(&restored);
+        snag_binary_checkpoint_sources_free(&adopted);
+        snag_session_init(&restored);
+        struct snag_binary_recovery recovery = {0};
+        rc = snag_store_verify_binary_context_checkpoint(source, &restored, &frame.boundary,
+            bytes.data, bytes.len, &recovery, &adopted, NULL, error, sizeof(error));
+        if (rc < 0) fprintf(stderr, "old core prefix oracle: %s (%d)\n", error, errno);
+        assert(!rc && !restored.irc_activity &&
+            snag_seek(source->log_fd, 0, SEEK_CUR) == position);
+        same_cache(&unknown, &restored, false);
+        snag_session_close(&restored);
+        snag_binary_checkpoint_sources_free(&adopted);
+        snag_buf_free(&core);
+        snag_buf_free(&bytes);
+        checked[slot] = true;
+    }
 }
 
 static void
@@ -967,6 +1023,7 @@ joint_materialization_checks(struct snag_session *source, struct snag_session *e
     frame = *base;
     frame.access = (struct snag_binary_checkpoint_section){.version = 1u,
         .data = (const unsigned char *)selected.data, .size = selected.len};
+    old_core_materialization_checks(source, expected, origins, &frame, root);
     seal_checkpoint(&frame, &receipt, root, &bytes);
     struct snag_session sparse;
     snag_session_init(&sparse);

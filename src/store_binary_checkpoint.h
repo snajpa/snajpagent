@@ -368,7 +368,7 @@ int snag_binary_checkpoint_voice_read(int fd, const struct snag_binary_anchor *,
     const struct snag_binary_checkpoint_index *,
     uint64_t sequence, const char *session_id, struct snag_voice_history_root *out);
 
-/* Version-2 core candidate: seven field-shaped components, an adoption and two accepting
+/* Version-4 core candidate: nine field-shaped components, an adoption and two accepting
  * epochs. Encode appends atomically, including when inputs borrow its buffer.
  * Read requires a frame already decoded against an independently authenticated
  * identity/boundary in this immutable journal. It returns new state-only and
@@ -383,9 +383,15 @@ int snag_binary_checkpoint_voice_read(int fd, const struct snag_binary_anchor *,
  * joint adoption remain with the enclosing consumer. Voice history names its
  * native adoption record; its cursor is reconstructed from the journal. Resources,
  * callbacks, derived caches and unreachable private string owners are omitted. */
-#define SNAG_BINARY_CORE_VERSION 3u
+#define SNAG_BINARY_CORE_VERSION 4u
 int snag_binary_checkpoint_core_encode(struct snag_buf *,
     const struct snag_binary_checkpoint_sources *, const struct snag_session *);
+/* Reproduce an older core layout for independent prefix comparison. Version3
+ * omits activity (an honest unknown gap on read); version2 additionally requires
+ * no routed directory or activity. Normal publication uses the current encoder
+ * above. Unsupported versions fail without appending. */
+int snag_binary_checkpoint_core_encode_version(struct snag_buf *,
+    const struct snag_binary_checkpoint_sources *, const struct snag_session *, uint16_t);
 int snag_binary_checkpoint_core_read(int fd, const struct snag_binary_checkpoint_frame *,
     const struct snag_binary_checkpoint_index *,
     struct snag_session *, struct snag_binary_checkpoint_sources *);

@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Preserve derived IRC activity in typed native checkpoint metadata. Older core
+  layouts retain an explicit missing-activity state. Native routed records accept
+  connection-scoped notices under the live validator's rules.
+
 - Add prepared-session native seeding with verified semantic state, committed
   provider capture and writer provenance. Seeding reads provisional bytes in
   memory and preserves their original owner; default creation remains JSONL.

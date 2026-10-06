@@ -1773,14 +1773,28 @@ the enclosing complete snapshot consumer owns membership, lifecycle, immutable
 journal identity and atomic core/provider adoption. Provider-view snapshots and
 native process collection cursors remain separate dependencies.
 
-The version3 core in `store_binary_checkpoint_core.c` joins eight components in
+The version4 core in `store_binary_checkpoint_core.c` joins nine components in
 fixed order: controls, accounting, fixed texts, pending calls, processes, pending
-inputs, dynamic payloads and the IRC directory. Its92-byte header contains
-LEu16 version3, LEu16 component count8, LEu64 active-compaction accepting sequence,
+inputs, dynamic payloads, the IRC directory and derived IRC activity. Its100-byte
+header contains LEu16 version4, LEu16 component count9, LEu64 active-compaction accepting sequence,
 LEu64 retained-response accepting sequence, LEu64 voice-adoption sequence (zero
-when absent), then eight LEu64 component sizes. Version2's84-byte, seven-component
-header remains readable with an absent IRC directory. Earlier draft versions
+when absent), then nine LEu64 component sizes. Version3's92-byte, eight-component
+header remains readable with an absent activity field; version2's84-byte,
+seven-component header additionally lacks the directory. Earlier draft versions
 fail explicitly; the application has not published native checkpoints.
+
+The activity block stores presence1, an LEu64 observed-after watermark and an
+LEu64 item count. Each item has conversation UUID16 and four LEu64 values:
+accepting sequence, timestamp, received count and last incoming sequence.
+An absent block has zero watermark/count and no rows. Count is bounded by the
+remaining bytes; rows must be unique, belong to the retained directory and pass
+the live activity validator, including aggregate count/sequence bounds. It
+stores derived scalars and references; endpoint and message bytes stay in the
+canonical routed records. Missing activity in older cores remains NULL rather
+than synthesizing lifetime counts. Subsequent live reduction uses its ordinary
+missing-activity watermark rule. The prefix oracle encodes the captured state
+in the frame's declared supported layout before comparing canonical bytes;
+normal publication always uses version4.
 
 The IRC block starts with presence1 and connection-count8. An absent directory
 has zero count and no rows. Each connection stores UUID16, generation8,

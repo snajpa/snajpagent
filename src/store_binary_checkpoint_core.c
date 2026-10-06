@@ -8,10 +8,19 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* Each component keeps its own version. Sizes delimit the fixed-order blocks;
- * the two extra epochs and adoption reference survive without copied payloads. */
-enum core_block { CONTROLS, ACCOUNTING, TEXTS, CALLS, PROCESSES, INPUTS, PAYLOADS, IRC, BLOCKS };
+/* Sizes delimit the fixed-order blocks; the core version identifies the typed
+ * directory/activity layouts. Epochs and adoption survive without copied payloads. */
+enum core_block {
+    CONTROLS, ACCOUNTING, TEXTS, CALLS, PROCESSES, INPUTS, PAYLOADS, IRC, ACTIVITY, BLOCKS
+};
 #define CORE_HEADER (28u + BLOCKS * 8u)
+
+static size_t
+core_blocks(uint16_t version)
+{
+    return version == 2u ? IRC : version == 3u ? ACTIVITY :
+        version == SNAG_BINARY_CORE_VERSION ? BLOCKS : 0u;
+}
 
 static void
 put_number(unsigned char *out, uint64_t number)
@@ -169,6 +178,84 @@ fail:
     return -1;
 }
 
+static int
+activity_encode(struct snag_buf *out, const struct snag_session *state)
+{
+    const json_t *activity = state->irc_activity;
+    if (activity && !snag_irc_activity_valid(activity, state->irc_conversations,
+        state->next_seq)) return snag_errno(EINVAL);
+    const json_t *items = json_object_get(activity, "items");
+    uint64_t after = 0u;
+    if (activity && snag_json_integer_u64(activity, "after", &after) < 0) return -1;
+    unsigned char header[17] = {activity ? 1u : 0u};
+    put_number(header + 1u, after);
+    put_number(header + 9u, json_object_size(items));
+    if (snag_buf_append(out, header, sizeof(header)) < 0) return -1;
+    const char *id;
+    const json_t *item;
+    json_object_foreach((json_t *)items, id, item) {
+        unsigned char row[48];
+        for (size_t i = 0u; i < 16u; ++i) {
+            unsigned int hi = id[i * 2u] <= '9' ? (unsigned)(id[i * 2u] - '0') :
+                (unsigned)(id[i * 2u] - 'a') + 10u;
+            unsigned int lo = id[i * 2u + 1u] <= '9' ? (unsigned)(id[i * 2u + 1u] - '0') :
+                (unsigned)(id[i * 2u + 1u] - 'a') + 10u;
+            row[i] = (unsigned char)(hi << 4u | lo);
+        }
+        static const char *fields[] = {"seq", "time", "received", "incoming"};
+        for (size_t i = 0u; i < sizeof(fields) / sizeof(fields[0]); ++i) {
+            uint64_t number;
+            if (snag_json_integer_u64(item, fields[i], &number) < 0) return -1;
+            put_number(row + 16u + i * 8u, number);
+        }
+        if (snag_buf_append(out, row, sizeof(row)) < 0) return -1;
+    }
+    return 0;
+}
+
+static int
+activity_read(const struct snag_binary_checkpoint_section *block,
+    struct snag_session *state)
+{
+    if (!block->data || block->size < 17u) return snag_errno(EINVAL);
+    const unsigned char *bytes = block->data;
+    uint64_t after = get_number(bytes + 1u);
+    uint64_t count = get_number(bytes + 9u);
+    if (bytes[0] > 1u || after > INT64_MAX || count > (block->size - 17u) / 48u ||
+        block->size != 17u + count * 48u) return snag_errno(EINVAL);
+    if (!bytes[0]) {
+        return !after && !count ? 0 : snag_errno(EINVAL);
+    }
+    json_t *activity = json_pack("{s:I,s:{}}", "after", (json_int_t)after, "items");
+    if (!activity) return snag_errno(ENOMEM);
+    json_t *items = json_object_get(activity, "items");
+    for (uint64_t i = 0u; i < count; ++i) {
+        const unsigned char *row = bytes + 17u + (size_t)i * 48u;
+        char id[SNAG_ID_HEX_LEN + 1u];
+        bytes_hex(id, row, 16u);
+        uint64_t values[4];
+        for (size_t j = 0u; j < sizeof(values) / sizeof(values[0]); ++j) {
+            values[j] = get_number(row + 16u + j * 8u);
+            if (values[j] > INT64_MAX) goto invalid;
+        }
+        if (json_object_get(items, id)) goto invalid;
+        json_t *item = json_pack("{s:I,s:I,s:I,s:I}",
+            "seq", (json_int_t)values[0], "time", (json_int_t)values[1],
+            "received", (json_int_t)values[2], "incoming", (json_int_t)values[3]);
+        if (!item || snag_json_set_new(items, id, item) < 0) goto fail;
+    }
+    if (!snag_irc_activity_valid(activity, state->irc_conversations, state->next_seq)) {
+        goto invalid;
+    }
+    state->irc_activity = activity;
+    return 0;
+invalid:
+    snag_errno(EINVAL);
+fail:
+    json_decref(activity);
+    return -1;
+}
+
 static const struct text_slot {
     const char *key;
     size_t offset;
@@ -181,10 +268,15 @@ static const struct text_slot {
 };
 
 int
-snag_binary_checkpoint_core_encode(struct snag_buf *out,
-    const struct snag_binary_checkpoint_sources *sources, const struct snag_session *state)
+snag_binary_checkpoint_core_encode_version(struct snag_buf *out,
+    const struct snag_binary_checkpoint_sources *sources, const struct snag_session *state,
+    uint16_t version)
 {
     if (!out || !sources || !state || out->len > out->max) return snag_errno(EINVAL);
+    size_t count = core_blocks(version);
+    if (!count || (version == 2u && (state->irc_conversations || state->irc_activity))) {
+        return snag_errno(EINVAL);
+    }
     const struct snag_voice_history_root *voice = &state->voice_history;
     if (voice->adopted_seq) {
         if (voice->adopted_seq >= state->next_seq || voice->begin.next_seq < 2u ||
@@ -209,14 +301,15 @@ snag_binary_checkpoint_core_encode(struct snag_buf *out,
         snag_binary_checkpoint_processes_encode(&blocks[PROCESSES], sources, state) < 0 ||
         snag_binary_checkpoint_inputs_encode(&blocks[INPUTS], sources, state) < 0 ||
         snag_binary_checkpoint_payloads_encode(&blocks[PAYLOADS], sources, state) < 0 ||
-        irc_encode(&blocks[IRC], state) < 0) goto done;
-    unsigned char header[CORE_HEADER] = {SNAG_BINARY_CORE_VERSION, 0u, BLOCKS, 0u};
+        (count > IRC && irc_encode(&blocks[IRC], state) < 0) ||
+        (count > ACTIVITY && activity_encode(&blocks[ACTIVITY], state) < 0)) goto done;
+    unsigned char header[CORE_HEADER] = {(unsigned char)version, 0u, (unsigned char)count, 0u};
     put_number(header + 4u, sources->active_compact);
     put_number(header + 12u, sources->response_start);
     put_number(header + 20u, voice->adopted_seq);
-    for (size_t i = 0u; i < BLOCKS; ++i) put_number(header + 28u + i * 8u, blocks[i].len);
-    if (snag_buf_append(&staged, header, sizeof(header)) < 0) goto done;
-    for (size_t i = 0u; i < BLOCKS; ++i) {
+    for (size_t i = 0u; i < count; ++i) put_number(header + 28u + i * 8u, blocks[i].len);
+    if (snag_buf_append(&staged, header, 28u + count * 8u) < 0) goto done;
+    for (size_t i = 0u; i < count; ++i) {
         if (snag_buf_append(&staged, blocks[i].data, blocks[i].len) < 0) goto done;
     }
     rc = snag_buf_append(out, staged.data, staged.len);
@@ -226,14 +319,22 @@ done:
     return rc;
 }
 
+int
+snag_binary_checkpoint_core_encode(struct snag_buf *out,
+    const struct snag_binary_checkpoint_sources *sources, const struct snag_session *state)
+{
+    return snag_binary_checkpoint_core_encode_version(out, sources, state,
+        SNAG_BINARY_CORE_VERSION);
+}
+
 static int
 split(const struct snag_binary_checkpoint_section *core,
     struct snag_binary_checkpoint_section blocks[BLOCKS],
     struct snag_binary_checkpoint_sources *sources, uint64_t *voice)
 {
-    size_t count = core->version == 2u ? IRC : BLOCKS;
+    size_t count = core_blocks(core->version);
     size_t header = 28u + count * 8u;
-    if ((core->version != 2u && core->version != SNAG_BINARY_CORE_VERSION) ||
+    if (!count ||
         !core->data || core->size < header) return snag_errno(EINVAL);
     const unsigned char *bytes = core->data;
     if (bytes[0] != core->version || bytes[1] || bytes[2] != count || bytes[3])
@@ -418,6 +519,7 @@ snag_binary_checkpoint_core_read(int fd, const struct snag_binary_checkpoint_fra
     payload_state = (struct snag_binary_checkpoint_payloads_state){0};
     if ((blocks[IRC].size &&
         irc_read(fd, anchor, access, &blocks[IRC], &state.irc_conversations) < 0) ||
+        (blocks[ACTIVITY].size && activity_read(&blocks[ACTIVITY], &state) < 0) ||
         copy_sources(&sources, &processes, &inputs, &payloads, &state) < 0 ||
         check_sources(&sources, &payloads, &state) < 0 ||
         snag_binary_checkpoint_epochs_check(fd, anchor, access, &sources, &state) < 0) goto done;

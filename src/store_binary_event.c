@@ -2900,7 +2900,8 @@ irc_route_valid(const struct snag_binary_irc_event *event)
         (route->kind != SNAG_IRC_CHANNEL || (event->room.size &&
             event->room.size == route->target.size &&
             !memcmp(event->room.data, route->target.data, event->room.size))) &&
-        (route->kind != SNAG_IRC_CONNECTION_EVENTS || (!event->room.size && !chat)) &&
+        (route->kind != SNAG_IRC_CONNECTION_EVENTS ||
+            (!event->room.size && event->kind != SNAG_BINARY_IRC_MESSAGE)) &&
         (!chat || route->target.size) && (!route->action ||
             event->kind == SNAG_BINARY_IRC_MESSAGE) &&
         (route->direction == SNAG_IRC_INCOMING ?

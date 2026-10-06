@@ -4046,7 +4046,7 @@ static void
 test_prepared_native_seed(const char *cwd)
 {
     char error[512];
-    for (unsigned int variant = 0u; variant < 11u; ++variant) {
+    for (unsigned int variant = 0u; variant < 12u; ++variant) {
         struct snag_session prepared;
         struct snag_session target;
         snag_session_init(&prepared);
@@ -4078,6 +4078,36 @@ test_prepared_native_seed(const char *cwd)
             free(large);
             json_decref(instructions);
         }
+        if (variant == 11u) {
+            struct snag_irc_event event = {.kind = SNAG_IRC_MESSAGE, .timestamp_ms = 123u,
+                .sequence = 1u, .input = true, .classified = true, .routed = true};
+            assert(snag_strcpy(event.stream, sizeof(event.stream),
+                "11111111111111111111111111111111"));
+            assert(snag_strcpy(event.endpoint, sizeof(event.endpoint), "127.0.0.1:6667"));
+            assert(snag_strcpy(event.room, sizeof(event.room), "#seeded"));
+            assert(snag_strcpy(event.nick, sizeof(event.nick), "peer"));
+            assert(snag_strcpy(event.text, sizeof(event.text), "original routed message"));
+            struct snag_irc_event_route *route = &event.route;
+            route->generation = 1u;
+            route->kind = SNAG_IRC_CHANNEL;
+            route->identity = SNAG_IRC_AGENT;
+            assert(snag_strcpy(route->connection, sizeof(route->connection),
+                "22222222222222222222222222222222"));
+            assert(snag_strcpy(route->conversation, sizeof(route->conversation),
+                "33333333333333333333333333333333"));
+            assert(snag_strcpy(route->target, sizeof(route->target), event.room));
+            commit_data(&prepared, "irc_event_v2", snag_irc_event_data(&event));
+            event.kind = SNAG_IRC_NOTICE;
+            event.input = false;
+            ++event.sequence;
+            ++event.timestamp_ms;
+            event.room[0] = '\0';
+            route->kind = SNAG_IRC_CONNECTION_EVENTS;
+            assert(snag_strcpy(route->conversation, sizeof(route->conversation),
+                "44444444444444444444444444444444"));
+            assert(snag_strcpy(route->target, sizeof(route->target), "accepted-nick"));
+            commit_data(&prepared, "irc_event_v2", snag_irc_event_data(&event));
+        }
         target.log_fd = temporary_fd();
         target.lock_fd = temporary_fd();
         int log_fd = target.log_fd;
@@ -4099,7 +4129,7 @@ test_prepared_native_seed(const char *cwd)
         if (variant == 9u) prepared.snapshot_read_only = true;
         if (variant == 10u) target.snapshot_read_only = true;
         int rc = snag_store_seed_binary_session(&prepared, &target, error, sizeof(error));
-        if (variant < 2u || variant == 6u) {
+        if (variant < 2u || variant == 6u || variant == 11u) {
             if (rc < 0) fprintf(stderr, "prepared native seed: %s (%d)\n", error, errno);
             assert(!rc && target.binary && target.log_fd == log_fd && target.lock_fd == lock_fd);
             same_core_state(&prepared, &target);
@@ -4114,6 +4144,11 @@ test_prepared_native_seed(const char *cwd)
                 error, sizeof(error)));
             assert(boundary.next_seq == sequence && tree.count == sequence - 1u);
             assert(sources.input == (variant == 1u || variant == 6u ? sequence - 1u : 0u));
+            if (variant == 11u) {
+                assert(target.irc_activity && json_object_size(
+                    json_object_get(target.irc_activity, "items")) == 2u);
+                test_store_binary_core_state(target.log_fd, &boundary, &sources, &target);
+            }
             snag_binary_checkpoint_sources_free(&sources);
             commit_data(&target, "model_selection_changed", json_pack("{s:s,s:s,s:s,s:s,s:s,s:s}",
                 "old_provider", "default", "new_provider", "default",

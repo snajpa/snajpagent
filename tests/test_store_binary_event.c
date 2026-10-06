@@ -4103,6 +4103,19 @@ test_routed_irc_event(void)
         route->identity = (enum snag_irc_identity)identity;
         routed_irc_roundtrip(&source, &payload);
     }
+    source.kind = SNAG_IRC_NOTICE;
+    route->kind = SNAG_IRC_CONNECTION_EVENTS;
+    route->direction = SNAG_IRC_INCOMING;
+    route->delivery = SNAG_IRC_DELIVERY_NONE;
+    route->action = route->revised = false;
+    route->peer[0] = route->send[0] = '\0';
+    assert(snag_strcpy(route->target, sizeof(route->target), "accepted-nick"));
+    routed_irc_roundtrip(&source, &payload);
+    assert(!snag_binary_event_decode(&(struct snag_binary_record){
+        .kind = SNAG_BINARY_IRC_EVENT_V2, .version = 1u,
+        .payload = payload.data, .size = payload.len}, &decoded));
+    decoded.data.irc_event.kind = SNAG_BINARY_IRC_MESSAGE;
+    assert_irc_encode_rejected(&decoded);
     snag_buf_free(&base);
     snag_buf_free(&payload);
 }

@@ -5650,6 +5650,9 @@ Legacy fallback applies only when this file is absent.
 Alternating native state and provider checkpoints, pinned by journal receipts.
 IRC directory recovery retains connection generations, conversation identities,
 membership and captured reply targets through canonical event references.
+Current checkpoints also retain derived conversation activity. Older checkpoint
+layouts leave these counts unavailable until new routed activity establishes a
+recorded range.
 Keep them with the journal when backing up a native session.
 .TP
 .I $HOME/.snajpagent/sessions/SESSION/history.idx
