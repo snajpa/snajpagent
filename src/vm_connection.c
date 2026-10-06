@@ -38,7 +38,8 @@ snag_vm_buffer_supported(const struct snag_vm_buffer *buffer)
 {
     return buffer && (!json_is_object(buffer->route) ||
         (json_object_get(buffer->route, "room") ? buffer->connection->irc_channels :
-            buffer->connection->irc_queries));
+            json_object_get(buffer->route, "peer") ? buffer->connection->irc_queries :
+            buffer->connection->irc_connections));
 }
 
 static void
@@ -117,7 +118,7 @@ snag_vm_connection_close(struct snag_vm_connection *connection)
     connection->bound = connection->hello = false;
     connection->generation = connection->deadline = connection->draft_deadline = 0u;
     connection->commands = connection->terminal_commands = connection->irc_queries = false;
-    connection->irc_channels = false;
+    connection->irc_channels = connection->irc_connections = false;
     connection->reports_supported = connection->reports_subscribed = false;
     connection->drafts = connection->detaching = connection->detach_sent = false;
     connection->draft_wait = connection->inflight = NULL;
@@ -642,6 +643,7 @@ receive(struct snag_vm_connection *connection, const json_t *value)
             if (feature && !strcmp(feature, "drafts")) connection->drafts = true;
             if (feature && !strcmp(feature, "irc_queries")) connection->irc_queries = true;
             if (feature && !strcmp(feature, "irc_channels")) connection->irc_channels = true;
+            if (feature && !strcmp(feature, "irc_connections")) connection->irc_connections = true;
             if (feature && !strcmp(feature, "commands")) connection->commands = true;
             if (feature && !strcmp(feature, "terminal_commands"))
                 connection->terminal_commands = true;
@@ -714,8 +716,8 @@ receive(struct snag_vm_connection *connection, const json_t *value)
              json_integer_value(json_object_get(state, "schema")) <
              json_integer_value(json_object_get(connection->state, "schema"))))
             return snag_errno(EPROTO);
-        const char *catalogs[] = {"queries", "channels"};
-        for (size_t kind = 0u; kind < 2u; ++kind) {
+        const char *catalogs[] = {"queries", "channels", "connections"};
+        for (size_t kind = 0u; kind < 3u; ++kind) {
             const json_t *rows = json_object_get(state, catalogs[kind]);
             if (rows && !json_is_array(rows)) return snag_errno(EPROTO);
             bool changed = !json_equal(rows, json_object_get(connection->state, catalogs[kind]));
@@ -725,7 +727,8 @@ receive(struct snag_vm_connection *connection, const json_t *value)
                     SNAG_CONFIG_IRC_ENDPOINT_MAX);
                 const json_t *route = json_object_get(row, "route");
                 if (!endpoint || !json_is_object(route) ||
-                    (json_object_get(route, "room") != NULL) != (kind == 1u))
+                    (json_object_get(route, "room") != NULL) != (kind == 1u) ||
+                    (json_object_get(route, "peer") != NULL) != (kind == 0u))
                     return snag_errno(EPROTO);
                 struct snag_vm_buffer *b = snag_vm_buffer_get(connection, route, true);
                 if (!b) return -1;

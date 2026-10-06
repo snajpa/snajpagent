@@ -2084,7 +2084,14 @@ with an empty draft to recover its text if needed. A refused submission also
 remains recoverable. Each conversation retains its own pending submission and
 frozen recipient. A nick or connection change preserves the old draft and rejects
 sending it to a different recipient. File attachments remain under development.
-.SS "Channel and private conversation windows"
+.SS "IRC connection and conversation windows"
+Open a known connection with :buffer SESSION/ENDPOINT/ or :vsp SESSION/ENDPOINT/.
+The trailing slash selects status and server notices for both local identities.
+Use :buffers for its channel and private conversations, or enter /connections
+in the composer for the current connection directory. /query and /join inherit
+the pane's endpoint. Ordinary text requires an explicit target and stays in the
+draft. Connection panes share the session's existing owner and sockets.
+.PP
 In an INSERT-mode conversation composer, Ctrl-N and Ctrl-P complete and cycle
 matching @nickname words forward and backward. Candidates come from that
 channel or private query. Completion preserves surrounding text and stays in
@@ -2103,13 +2110,13 @@ membership; PART, KICK and reconnect reject stale sends. Use /chat or /join
 explicitly to select the current membership before composing a new send.
 .PP
 .B :buffers
-lists the workspace's rollout, channel and private conversation buffers, including
+lists the workspace's rollout, connection, channel and private conversation buffers, including
 operator and read-only agent conversations. The list shows buffer IDs, qualified
 addresses, identity, drafts and pending submissions. Use / to filter, then Enter
 to open the selected buffer in the current window.
 .B :buffer ADDRESS
 or :b ADDRESS opens a known operator buffer by session/endpoint/nick or
-session/endpoint/#channel address; session names
+session/endpoint/#channel address, or a connection at session/endpoint/; session names
 and ID prefixes are accepted. :buffer ID accepts a unique ID prefix from :buffers,
 which also distinguishes retained routes after a nick or connection change.
 An ambiguous address leaves the selected buffer unchanged.
@@ -2611,11 +2618,15 @@ to remove a saved override.
 .BR /nick " [" NICK "]"
 Show the model and operator nicks, or rename your operator nick on the selected
 IRC destination. For example, /nick alice changes your name to alice.
+In a connection or conversation buffer, inspection and changes use its exact
+operator connection. A stale connection is rejected. From rollout, inspection
+shows the primary identities and changes retain the selected destination scope.
 Other clients see the accepted change, which also updates your prompt.
 The primary connection's accepted operator name is saved for session resume.
 The config file keeps the configured default.
 Names follow IRC nick rules; invalid names are rejected and a server refusal
-arrives as a server notice. A refused name leaves your accepted identity intact.
+arrives in the connection view. A refused name leaves your accepted identity
+usable for subsequent messages.
 The model changes its own identity through the irc_nick tool.
 .TP
 .BR /steering " [mentions|all|clear]"
@@ -3187,6 +3198,25 @@ endpoint. Quote an address containing spaces; encode literal slash and percent
 in its components as %2F and %25. Nick comparison follows the endpoint's
 advertised case mapping. A query:ID selects that retained conversation;
 a stale conversation remains readable and rejects sends.
+.TP
+.BR /connections " [" session "|" address "]"
+List connections, operator/agent status and channel/private conversations for
+the current session. An optional session name or full ID must identify the
+current session. Use /connections SESSION/ENDPOINT/ to open its connection view;
+an endpoint spelling or destination number also selects it. The connection view
+shows status and server notices for both local identities. It becomes an opened
+classic tab, included in Tab/Shift-Tab cycling with its own draft. Incoming
+connection notices preserve focus. Ordinary text requires /query, /chat or an
+explicit /msg target and remains unsent in the draft.
+.TP
+.BR /whois " [" nick "]"
+Request information on the selected operator connection. Without an argument,
+use the selected private peer or your operator nick. From rollout, a single
+connection is required. External server replies appear in the connection view;
+open it with /connections ENDPOINT. The built-in server reports its registered
+peer's nick, user and server directly. A disconnected or stale connection is
+rejected. Server notices and WHOIS replies remain outside model context and
+private-query history.
 .TP
 .BR /msg " " address " " text
 Send a message as the operator, preserving the focused tab. Use the same

@@ -172,11 +172,12 @@ snag_view_query_read(const json_t *route, struct snag_irc_query_target *target)
 json_t *
 snag_view_conversation_route(const struct snag_irc_conversation_target *target)
 {
-    if (target->kind == SNAG_IRC_QUERY) {
+    if (target->kind == SNAG_IRC_QUERY || target->kind == SNAG_IRC_CONNECTION_EVENTS) {
         return json_pack("{s:s,s:s,s:I,s:s,s:s}", "connection", target->connection,
             "conversation", target->conversation, "generation", (json_int_t)target->generation,
             "identity", target->identity == SNAG_IRC_OPERATOR ? "operator" : "agent",
-            "peer", target->peer);
+            target->kind == SNAG_IRC_QUERY ? "peer" : "endpoint",
+            target->kind == SNAG_IRC_QUERY ? target->peer : target->endpoint);
     }
     if (target->kind != SNAG_IRC_CHANNEL) { errno = EINVAL; return NULL; }
     return json_pack("{s:s,s:s,s:I,s:s,s:s,s:s,s:s,s:i}", "connection", target->connection,
@@ -190,7 +191,8 @@ const char *
 snag_view_conversation_name(const json_t *route)
 {
     const char *room = snag_json_string(route, "room");
-    return room ? room : snag_json_string(route, "peer");
+    const char *peer = snag_json_string(route, "peer");
+    return room ? room : peer ? peer : snag_json_string(route, "endpoint");
 }
 
 int
@@ -216,22 +218,25 @@ snag_view_conversation_read(const json_t *route, struct snag_irc_conversation_ta
         SNAG_CONFIG_IRC_ROOM_MAX + 1u);
     const char *endpoint = snag_json_bounded_string(json_object_get(route, "endpoint"),
         SNAG_CONFIG_IRC_ENDPOINT_MAX);
-    uint64_t generation, casemapping;
-    if (!snag_json_exact_keys(route,
-        "connection conversation generation identity room membership endpoint casemapping") ||
+    bool channel = json_object_get(route, "room") != NULL;
+    uint64_t generation, casemapping = SNAG_IRC_CASE_UNKNOWN;
+    if (!snag_json_exact_keys(route, channel ?
+        "connection conversation generation identity room membership endpoint casemapping" :
+        "connection conversation generation identity endpoint") ||
         !connection || !snag_hex_is_lower(connection, SNAG_ID_HEX_LEN) ||
         !conversation || !snag_hex_is_lower(conversation, SNAG_ID_HEX_LEN) ||
-        !membership || !snag_hex_is_lower(membership, SNAG_ID_HEX_LEN) ||
+        (channel && (!membership || !snag_hex_is_lower(membership, SNAG_ID_HEX_LEN))) ||
         !identity || (strcmp(identity, "operator") && strcmp(identity, "agent")) ||
-        !room || !snag_text_valid(room, 1u, SNAG_CONFIG_IRC_ROOM_MAX + 1u) ||
-        strcspn(room, " \t\r\n") != strlen(room) ||
+        (channel && (!room || !snag_text_valid(room, 1u, SNAG_CONFIG_IRC_ROOM_MAX + 1u) ||
+        strcspn(room, " \t\r\n") != strlen(room))) ||
         !endpoint || !snag_text_valid(endpoint, 1u, SNAG_CONFIG_IRC_ENDPOINT_MAX) ||
         strcspn(endpoint, " \t\r\n") != strlen(endpoint) ||
-        snag_json_integer_u64(route, "casemapping", &casemapping) < 0 ||
-        casemapping > SNAG_IRC_CASE_UNKNOWN ||
+        (channel && (snag_json_integer_u64(route, "casemapping", &casemapping) < 0 ||
+        casemapping > SNAG_IRC_CASE_UNKNOWN)) ||
         snag_json_integer_u64(route, "generation", &generation) < 0 || !generation)
         return snag_errno(EINVAL);
-    *target = (struct snag_irc_conversation_target){.kind = SNAG_IRC_CHANNEL,
+    *target = (struct snag_irc_conversation_target){
+        .kind = channel ? SNAG_IRC_CHANNEL : SNAG_IRC_CONNECTION_EVENTS,
         .generation = generation, .casemapping = (enum snag_irc_casemapping)casemapping,
         .identity = !strcmp(identity, "operator") ? SNAG_IRC_OPERATOR : SNAG_IRC_AGENT};
     (void)snag_strcpy(target->connection, sizeof(target->connection), connection);
@@ -706,11 +711,12 @@ dispatch(struct snag_view_server *server, struct view_peer *peer, const json_t *
             version != 1u) return snag_errno(EPROTO);
         peer->hello = true;
         peer->deadline = 0u;
-        return reply(peer, json_pack("{s:s,s:i,s:s,s:s,s:[s,s,s,s,s,s,s,s,s,s,s,s,s]}",
+        return reply(peer, json_pack("{s:s,s:i,s:s,s:s,s:[s,s,s,s,s,s,s,s,s,s,s,s,s,s]}",
             "type", "capabilities", "version", 1, "session", server->session,
             "instance", server->instance, "features",
             "observe", "control", "submit", "cancel", "quit", "detach", "receipts", "drafts",
-            "commands", "terminal_commands", "reports", "irc_queries", "irc_channels"));
+            "commands", "terminal_commands", "reports", "irc_queries", "irc_channels",
+            "irc_connections"));
     }
     if (!strcmp(type, "reports")) {
         peer->reports = true;

@@ -445,7 +445,7 @@ state_snapshot(const struct vm *vm)
         json_decref(windows);
         return NULL;
     }
-    json_t *result = json_pack("{s:i,s:I,s:o,s:o,s:o}", "v", 9,
+    json_t *result = json_pack("{s:i,s:I,s:o,s:o,s:o}", "v", 10,
         "focus", (json_int_t)vm->windows[vm->focus].id, "layout", layout,
         "windows", windows, "buffers", buffers);
     json_t *classic = json_null();
@@ -475,7 +475,7 @@ state_restore(struct vm *vm, const json_t *state, char *error, size_t size)
     size_t count = json_array_size(json_object_get(state, "windows")), focus = SIZE_MAX;
     if (!snag_json_exact_keys(state, version >= 5 ? "v focus layout windows buffers classic" :
         version >= 3 ? "v focus layout windows buffers" :
-        "v focus layout windows") || (version < 1 || version > 9) || !count ||
+        "v focus layout windows") || (version < 1 || version > 10) || !count ||
         (version >= 3 &&
          snag_vm_connections_load(json_object_get(state, "buffers"), &connections) < 0) ||
         snag_json_integer_u64(state, "focus", &focus_id) < 0 ||
@@ -958,12 +958,16 @@ buffer_address(const struct snag_vm_buffer *buffer)
 {
     struct snag_irc_address address = {.kind = json_is_object(buffer->route) ?
         SNAG_IRC_CONVERSATION : SNAG_IRC_TRANSCRIPT};
+    if (address.kind == SNAG_IRC_CONVERSATION &&
+        !json_object_get(buffer->route, "room") && !json_object_get(buffer->route, "peer"))
+        address.kind = SNAG_IRC_CONNECTION;
     (void)snag_strcpy(address.session, sizeof(address.session), buffer->connection->session);
-    if (address.kind == SNAG_IRC_CONVERSATION) {
+    if (address.kind != SNAG_IRC_TRANSCRIPT) {
         (void)snag_strcpy(address.endpoint, sizeof(address.endpoint), buffer->endpoint[0] ?
             buffer->endpoint : snag_json_string(buffer->route, "connection"));
-        (void)snag_strcpy(address.target, sizeof(address.target),
-            snag_view_conversation_name(buffer->route));
+        if (address.kind == SNAG_IRC_CONVERSATION)
+            (void)snag_strcpy(address.target, sizeof(address.target),
+                snag_view_conversation_name(buffer->route));
     }
     return snag_irc_address_format(&address);
 }
@@ -1060,6 +1064,9 @@ buffer_select(struct vm *vm, const char *text)
                     struct snag_vm_buffer *b = snag_vm_buffer_get(c, route, false);
                     if (!b || strcmp(location.id, snag_json_string(row, "session"))) continue;
                     bool same = address.kind == SNAG_IRC_TRANSCRIPT && json_is_string(route);
+                    if (address.kind == SNAG_IRC_CONNECTION && json_is_object(route))
+                        same = !json_object_get(route, "peer") && !json_object_get(route, "room") &&
+                            snag_vm_buffer_writable(b) && !strcmp(address.endpoint, b->endpoint);
                     if (address.kind == SNAG_IRC_CONVERSATION && json_is_object(route))
                         same = snag_vm_buffer_writable(b) &&
                             !strcmp(address.endpoint, b->endpoint) &&
@@ -1788,6 +1795,11 @@ submit_draft(struct vm *vm)
     struct snag_vm_buffer *c = focused_buffer(vm);
     if (!c) return;
     const char *text = c->draft.len ? (const char *)c->draft.data : "";
+    if (*text && json_is_object(c->route) && !json_object_get(c->route, "peer") &&
+        !json_object_get(c->route, "room") && !snag_prompt_command(text)) {
+        notice(vm, "Connection text needs an explicit target; use /query, /chat or /msg");
+        return;
+    }
     if (!strncmp(text, "/search", 7u) && (!text[7] || isspace((unsigned char)text[7]))) {
         if (c->pending || c->draft_conflict) {
             notice(vm, "Resolve the retained submission or draft conflict first");
@@ -3273,7 +3285,8 @@ draw_window(void *opaque, const struct snag_vm_rectangle *rectangle)
         if (window->route) {
             const char *identity = snag_json_string(window->route, "identity");
             (void)snprintf(owner, sizeof(owner), " %s/%s [%s%s]",
-                json_object_get(window->route, "room") ? "channel" : "query",
+                json_object_get(window->route, "room") ? "channel" :
+                    json_object_get(window->route, "peer") ? "query" : "connection",
                 snag_view_conversation_name(window->route), identity,
                 snag_vm_buffer_writable(b) ? "" : " read-only");
         }

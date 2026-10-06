@@ -205,6 +205,12 @@ conversation_event(const json_t *route, const char *type, const json_t *data)
     }
     if (strcmp(type, "irc_event_v2")) return false;
     const json_t *routing = json_object_get(data, "routing");
+    if (!json_object_get(route, "peer")) {
+        const char *kind = snag_json_string(routing, "conversation_kind");
+        return kind && !strcmp(kind, "connection") &&
+            json_equal(json_object_get(route, "connection"),
+                json_object_get(routing, "connection_id"));
+    }
     static const char *const fields[] = {"connection", "conversation", "identity"};
     static const char *const stored[] = {"connection_id", "conversation_id", "identity"};
     for (size_t i = 0u; i < sizeof(fields) / sizeof(fields[0]); ++i)

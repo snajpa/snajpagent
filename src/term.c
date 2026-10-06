@@ -289,9 +289,11 @@ snag_term_destination_prefix(const struct snag_term *term, char *out, size_t siz
     }
     if (term->chat && term->conversation.conversation[0]) {
         (void)snprintf(out, size, "[%u %s %s %s] ", term->conversation.destination,
-            term->conversation.kind == SNAG_IRC_CHANNEL ? "channel" : "query",
+            term->conversation.kind == SNAG_IRC_CHANNEL ? "channel" :
+                term->conversation.kind == SNAG_IRC_QUERY ? "query" : "connection",
             term->conversation.kind == SNAG_IRC_CHANNEL ?
-                term->conversation.room : term->conversation.peer,
+                term->conversation.room : term->conversation.kind == SNAG_IRC_QUERY ?
+                term->conversation.peer : term->conversation.endpoint,
             term->conversation.identity == SNAG_IRC_OPERATOR ? "operator" : "agent read-only");
         return;
     }

@@ -148,7 +148,9 @@ snag_app_irc_conversation_send(struct app_state *app,
         return snag_irc_query_send(app->irc, &query, kind, text, action,
             report, error, error_size);
     }
-    if (target->kind != SNAG_IRC_CHANNEL) return snag_errno(EINVAL);
+    if (target->kind != SNAG_IRC_CHANNEL)
+        return snag_fail(error, error_size, EINVAL,
+            "connection text needs an explicit target; use /query, /chat or /msg");
     struct snag_irc_channel_target channel = {.destination = target->destination,
         .generation = target->generation, .identity = target->identity};
     memcpy(channel.connection, target->connection, sizeof(channel.connection));
@@ -310,6 +312,129 @@ operator_conversation(struct app_state *app, const char *operand,
     return 0;
 }
 
+static int
+connection_command(struct app_state *app, const char *text)
+{
+    struct snag_buf report = {.max = SNAG_MAX_IRC_SNAPSHOT};
+    char error[256u] = {0};
+    char *operand = NULL;
+    struct snag_irc_address address = {0};
+    const struct snag_irc_scope *scope = NULL;
+    int rc = 0;
+    if (*text) {
+        if (snag_irc_address_operand(text, &operand, &text, error, sizeof(error)) < 0)
+            goto failed;
+        if (*text) {
+            (void)snag_errorf(error, sizeof(error), "use /connections [SESSION|SESSION/ENDPOINT/]");
+            goto failed;
+        }
+        bool session = !strcmp(operand, app->session.id) ||
+            (app->session.name && !strcmp(operand, app->session.name));
+        if (!session) {
+            const char *endpoint = operand;
+            if (strchr(operand, '/')) {
+                if (snag_irc_address_parse(&address, operand, SNAG_IRC_BUFFER_ADDRESS,
+                    error, sizeof(error)) < 0) goto failed;
+                if (address.kind != SNAG_IRC_CONNECTION ||
+                    (strcmp(address.session, app->session.id) &&
+                     (!app->session.name || strcmp(address.session, app->session.name)))) {
+                    (void)snag_errorf(error, sizeof(error),
+                        "select this session's SESSION/ENDPOINT/ connection address");
+                    goto failed;
+                }
+                endpoint = address.endpoint;
+            }
+            scope = snag_irc_scope_resolve(&app->ui.input_scopes, 0u, endpoint,
+                error, sizeof(error));
+            if (!scope) goto failed;
+        }
+    }
+    const char *id;
+    json_t *entry;
+    json_object_foreach(app->session.irc_conversations, id, entry) {
+        if (scope && strcmp(id, scope->target.connection)) continue;
+        const char *endpoint = snag_json_string(entry, "endpoint");
+        const json_t *status = json_object_get(entry, "connected");
+        if (snag_buf_printf(&report, "%s/%s/  operator %s; agent %s\n", app->session.id,
+            endpoint, json_is_true(json_object_get(status, "operator")) ? "connected" :
+            "disconnected", json_is_true(json_object_get(status, "agent")) ? "connected" :
+            "disconnected") < 0) goto fail;
+        const char *conversation;
+        json_t *item;
+        json_object_foreach(json_object_get(entry, "conversations"), conversation, item) {
+            (void)conversation;
+            struct snag_irc_event event;
+            if (snag_irc_event_record_read("irc_event_v2", json_object_get(item, "data"),
+                &event) < 0) goto fail;
+            if (event.route.kind == SNAG_IRC_CONNECTION_EVENTS) {
+                if (scope && event.route.identity == SNAG_IRC_OPERATOR) {
+                    struct snag_irc_conversation_target target = {
+                        .kind = SNAG_IRC_CONNECTION_EVENTS, .identity = SNAG_IRC_OPERATOR,
+                        .destination = scope->target.destination,
+                        .generation = scope->target.generation};
+                    memcpy(target.connection, event.route.connection, sizeof(target.connection));
+                    memcpy(target.conversation, event.route.conversation,
+                        sizeof(target.conversation));
+                    (void)snag_strcpy(target.endpoint, sizeof(target.endpoint), endpoint);
+                    rc = snag_app_irc_select_conversation(app, &target);
+                    goto done;
+                }
+                continue;
+            }
+            if (snag_buf_printf(&report, "  %s/%s [%s]\n", endpoint,
+                event.route.kind == SNAG_IRC_QUERY ? event.route.peer : event.room,
+                event.route.identity == SNAG_IRC_OPERATOR ? "operator" : "agent") < 0) goto fail;
+        }
+    }
+    if (!report.len && snag_buf_printf(&report, "No IRC connections. Use /connect ENDPOINT.\n") < 0)
+        goto fail;
+    if (snag_buf_terminate(&report) < 0) goto fail;
+    rc = snag_app_report(app, SNAG_UI_HOST, (const char *)report.data);
+    goto done;
+failed:
+    rc = snag_app_report(app, SNAG_UI_ERROR, error);
+    goto done;
+fail:
+    rc = -1;
+done:
+    free(operand);
+    snag_buf_free(&report);
+    return rc;
+}
+
+static int
+connection_action(struct app_state *app, bool whois, const char *text)
+{
+    char error[256u] = {0};
+    struct snag_buf report = {.max = SNAG_MAX_IRC_SNAPSHOT};
+    const struct snag_irc_scope *scope = snag_irc_scope_resolve(&app->ui.input_scopes,
+        app->ui.input_view == SNAG_RENDER_CHAT ? app->ui.input_destination : 0u,
+        "", error, sizeof(error));
+    int rc = -1;
+    if (!scope) goto done;
+    struct snag_irc_query_target frozen = scope->target;
+    frozen.identity = SNAG_IRC_OPERATOR;
+    const struct snag_irc_conversation_target *selected = &app->ui.input_conversation;
+    if (app->ui.input_view == SNAG_RENDER_CHAT && selected->conversation[0]) {
+        frozen.identity = selected->identity;
+        frozen.generation = selected->generation;
+        memcpy(frozen.connection, selected->connection, sizeof(frozen.connection));
+        if (whois && !*text && selected->kind == SNAG_IRC_QUERY) text = selected->peer;
+    }
+    rc = snag_irc_connection_action(app->irc, &frozen,
+        whois ? SNAG_IRC_CONNECTION_WHOIS : SNAG_IRC_CONNECTION_NICK,
+        *text ? text : NULL, &report, error, sizeof(error));
+done:
+    if (rc < 0) rc = snag_app_report(app, SNAG_UI_ERROR,
+        error[0] ? error : "IRC connection command failed");
+    else if (report.len) {
+        rc = snag_buf_terminate(&report);
+        if (!rc) rc = snag_app_report(app, SNAG_UI_HOST, (const char *)report.data);
+    }
+    snag_buf_free(&report);
+    return rc;
+}
+
 int
 snag_app_irc_command(struct app_state *app, const char *line, bool *handled)
 {
@@ -325,6 +450,12 @@ snag_app_irc_command(struct app_state *app, const char *line, bool *handled)
     bool topic = verb == 6u && !strncmp(line, "/topic", verb);
     const char *text = line + verb;
     while (isspace((unsigned char)*text)) ++text;
+    *handled = true;
+    if (verb == 12u && !strncmp(line, "/connections", verb)) return connection_command(app, text);
+    if (verb == 6u && !strncmp(line, "/whois", verb)) return connection_action(app, true, text);
+    if (verb == 5u && !strncmp(line, "/nick", verb) &&
+        app->ui.input_view == SNAG_RENDER_CHAT && app->ui.input_conversation.conversation[0])
+        return connection_action(app, false, text);
     if ((chat && !*text && !app->ui.input_interface &&
         !app->ui.input_conversation.conversation[0]) ||
         ((names || topic) && !app->ui.input_conversation.conversation[0])) {

@@ -4,6 +4,13 @@
 
 ## Unreleased
 
+- Add connection views at SESSION/ENDPOINT/, a shared /connections directory,
+  and scoped /whois and /nick commands. Retain both identities' server notices
+  outside model context and private chats. Connection drafts require an explicit
+  target; opened classic connection tabs and Vim splits preserve their scope.
+  Keep the accepted operator identity usable after a refused nick change.
+  Version 10 workspaces retain connection routes and read earlier snapshots.
+
 - Restore typed IRC channel history with server-advertised prefixes beyond #,
   preserving checkpoint membership and replay cursors. Keep received channel
   actions distinct from ordinary messages in live traffic and history.

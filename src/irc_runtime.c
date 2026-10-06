@@ -25,6 +25,8 @@ struct irc_request {
     struct snag_irc_channel_target *channel_open;
     const struct snag_irc_channel_target *channel_target;
     enum snag_irc_channel_action channel_action;
+    const struct snag_irc_query_target *connection_target;
+    enum snag_irc_connection_action connection_action;
     bool channel_join;
     bool channel_send;
     struct snag_buf *report;
@@ -231,6 +233,9 @@ execute(struct irc_owner *owner, struct irc_request *request)
         return snag_fail(error, size, ESTALE, "destination room changed; not performed");
     if (request->event) return snag_irc_core_restore_event(core, request->event);
     if (request->retire) return snag_irc_core_retire(core);
+    if (request->connection_target)
+        return snag_irc_core_connection_action(core, request->connection_target,
+            request->connection_action, request->text, request->report, error, size);
     if (request->channel_open)
         return snag_irc_core_channel_open(core, request->query_send, request->text,
             request->channel_join, request->channel_open, error, size);
@@ -1079,6 +1084,26 @@ snag_irc_channel_open(struct snag_irc *irc, const struct snag_irc_query_target *
         return rc;
     }
     return snag_fail(error, error_size, ESTALE, "IRC channel destination is unavailable");
+}
+
+int
+snag_irc_connection_action(struct snag_irc *irc, const struct snag_irc_query_target *target,
+    enum snag_irc_connection_action action, const char *text,
+    struct snag_buf *report, char *error, size_t error_size)
+{
+    if (!irc || !target) return snag_errno(EINVAL);
+    struct snag_irc_query_target frozen = *target;
+    if (start_owners(irc) < 0) return -1;
+    for (size_t i = 0u; i < irc->owner_count; ++i) {
+        struct irc_owner *owner = irc->owners[i];
+        if (owner->target.id != frozen.destination) continue;
+        struct irc_request request = {.connection_target = &frozen,
+            .connection_action = action, .text = text, .report = report};
+        int rc = request_owner(owner, &request);
+        if (rc != 0) (void)snag_strcpy(error, error_size, request.error);
+        return rc;
+    }
+    return snag_fail(error, error_size, ESTALE, "IRC connection is unavailable");
 }
 
 int

@@ -103,7 +103,7 @@ class QueryWorkspaceTests(QueryFixture):
         self.normal()
         child.command('workspace save')
         self.wait_snapshot(lambda rows: rows and self.state()['buffers'] and
-                           len(self.state()['buffers'][0]['buffers']) == 5)
+                           len(self.state()['buffers'][0]['buffers']) == 6)
         self.assertTrue(all(not b['draft'] and not b['pending']
                             for b in self.state()['buffers'][0]['buffers']))
         child.command('bn')
@@ -130,7 +130,7 @@ class QueryWorkspaceTests(QueryFixture):
         child.command('workspace save')
         self.wait_snapshot(lambda rows: rows and self.state()['buffers'] and
                            self.buffers().get('query-peer', {}).get('draft') == 'shared text')
-        self.assertEqual(len(self.state()['buffers'][0]['buffers']), 4)
+        self.assertEqual(len(self.state()['buffers'][0]['buffers']), 5)
         child.command('close')
         child.finish('close')
 

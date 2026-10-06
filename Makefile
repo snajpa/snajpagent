@@ -355,6 +355,7 @@ check: $(BIN) $(TEST_BIN)
 	python3 tests/test_irc_queries.py ./$(BIN)
 	python3 tests/test_irc_hosted_channels.py ./$(BIN)
 	python3 tests/test_irc_channels.py ./$(BIN)
+	python3 tests/test_irc_connections.py ./$(BIN)
 	./tests/test_instructions
 	./tests/test_credential
 	./tests/test_sse
@@ -378,6 +379,7 @@ ifeq ($(WITH_VM),1)
 	python3 tests/test_vm_control.py ./$(BIN)
 	python3 tests/test_vm_queries.py ./$(BIN)
 	python3 tests/test_vm_channels.py ./$(BIN)
+	python3 tests/test_vm_connections.py ./$(BIN)
 	python3 tests/test_vm_reports.py ./$(BIN)
 	python3 tests/test_vm_notifications.py ./$(BIN)
 	python3 tests/test_vm_catalog.py ./$(BIN)

@@ -6,6 +6,19 @@ Status: implementation in progress, October 6, 2026. The original inspection
 was against `7a70d81d336ef6f14d91ef944b1226c8efa65636`. The checkpoint below
 distinguishes implemented components from the complete intended behavior.
 
+Connection checkpoint: five-field connection routes carry endpoint, connection,
+conversation, generation and operator identity under an independent
+irc_connections capability. Classic /connections lists connection status and
+children or selects an explicit endpoint. Opened connection tabs join Tab cycling;
+unopened server traffic does not add tabs. Vim trailing-slash addresses use the
+same owner, composer and reader path. History includes both identities' connection
+events and excludes public/private messages. Server notices and otherwise
+unhandled numeric replies stay outside model context. /whois and conversation
+/nick validate the captured operator generation, and ordinary connection text
+keeps its draft. Version10 snapshots retain connection routes and read versions1–9.
+The buffer picker remains flat; grouped activity/read markers and the broader
+recovery/remote acceptance remain open.
+
 History checkpoint: typed channel replay accepts the same channel syntax as
 live membership, including server-advertised prefixes and colons within names.
 Checkpoint members/cursors retain those names; legacy untyped events keep their
@@ -81,8 +94,8 @@ same states. A send to the local nick suppresses its separate delivered self-cop
 when echo-message supplies the receipt. Operator queries remain private in both
 interfaces, including builds with WITH_VM=0.
 
-Conversation frontend checkpoint: version9 workspace snapshots retain exact
-query and channel routes per window and separate draft/editor/pending state per conversation,
+Conversation frontend checkpoint: version10 workspace snapshots retain exact
+query, channel and connection routes per window and separate draft/editor/pending state per buffer,
 with one owner connection per session. Earlier flat rollout snapshots remain
 readable. Owner conversation metadata populates :buffers without changing focus; agent
 conversations are read-only. /query, /chat and /join select its originating focused window only while
@@ -104,7 +117,7 @@ history without joining. /part immediately invalidates queued sends. /names show
 cached state and requests refresh; /topic, /msg, /notice and /me use captured scope.
 Classic tabs keep drafts through both cycle directions. VM channel history includes
 both local roles and compatible legacy room records while excluding private queries.
-Version9 reads earlier snapshots; exact five-key query routes remain compatible.
+Version10 reads earlier snapshots; exact five-key query routes remain compatible.
 Qualified buffer addresses resolve saved session names and select operator buffers.
 
 Selection checkpoint: character, line and rectangular transcript/report selection
@@ -916,8 +929,8 @@ query resolution with model tools. UI admission captures connection scopes and
 known peer handles before queued commands can observe later NICK/QUIT events.
 `/query` without operands lists existing operator-query selectors. Explicit
 addresses stay within the current session owner. Channel address commands and
-panes are implemented as described in the current checkpoint; connection buffers
-and a richer ambiguity picker remain next. The semantic owner accepts frozen conversation
+panes and connection buffers are implemented as described in the current checkpoints;
+a richer ambiguity/activity picker remains next. The semantic owner accepts frozen conversation
 routes, independent revisioned drafts and scoped commands. Request IDs bind
 route and text; private admission clears only its exact draft revision. Query
 selection returns to the requesting frontend while preserving classic focus.

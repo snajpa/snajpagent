@@ -36,7 +36,7 @@ struct snag_vm_connection {
     char message[256];
     uint64_t generation, deadline, revision, draft_edit, draft_deadline;
     bool control, bound, hello, quitting, exited;
-    bool commands, drafts, terminal_commands, irc_queries, irc_channels;
+    bool commands, drafts, terminal_commands, irc_queries, irc_channels, irc_connections;
     bool reports_supported, reports_subscribed, detaching, detach_sent;
 };
 

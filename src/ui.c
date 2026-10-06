@@ -110,6 +110,7 @@ struct ui_conversation_tab {
     struct snag_buf draft;
     size_t cursor;
     uint64_t unread;
+    bool opened;
 };
 
 struct ui_channel_draft {
@@ -657,6 +658,9 @@ same_conversation_view(const struct ui_conversation_tab *a, const struct ui_conv
 {
     if (!a || !b) return false;
     if (a == b) return true;
+    if (a->target.kind == SNAG_IRC_CONNECTION_EVENTS &&
+        b->target.kind == SNAG_IRC_CONNECTION_EVENTS)
+        return !strcmp(a->target.connection, b->target.connection);
     return a->target.kind == SNAG_IRC_CHANNEL && b->target.kind == SNAG_IRC_CHANNEL &&
         !strcmp(a->target.connection, b->target.connection) &&
         snag_irc_name_equal(a->target.casemapping, a->target.room, b->target.room);
@@ -679,6 +683,7 @@ display_select_draft(struct snag_ui_display *display, struct ui_conversation_tab
     if (!next) display->main_draft = main;
     term->conversation = next ? next->target : (struct snag_irc_conversation_target){0};
     if (next) {
+        next->opened = true;
         for (struct ui_conversation_tab *tab = display->conversations; tab; tab = tab->next) {
             if (!same_conversation_view(next, tab)) continue;
             term->conversation_unread -= tab->unread;
@@ -695,8 +700,8 @@ static int
 display_conversation_event(struct snag_ui_display *display, const struct snag_irc_event *event,
                     bool unread)
 {
-    if (!event->routed || (event->route.kind != SNAG_IRC_QUERY &&
-        (event->route.kind != SNAG_IRC_CHANNEL || !event->route.membership[0]))) return 0;
+    if (!event->routed ||
+        (event->route.kind == SNAG_IRC_CHANNEL && !event->route.membership[0])) return 0;
     struct snag_term *term = &display->term;
     struct ui_conversation_tab **slot = &display->conversations;
     while (*slot && strcmp((*slot)->target.conversation, event->route.conversation))
@@ -759,6 +764,7 @@ display_conversation_event(struct snag_ui_display *display, const struct snag_ir
     bool visible = display->render.view == SNAG_RENDER_CHAT &&
         same_conversation_view(display->conversation, tab);
     if (unread && !visible && event->route.direction == SNAG_IRC_INCOMING &&
+        (tab->target.kind != SNAG_IRC_CONNECTION_EVENTS || tab->opened) &&
         (event->kind == SNAG_IRC_MESSAGE || event->kind == SNAG_IRC_NOTICE) &&
         tab->unread < UINT64_MAX && term->conversation_unread < UINT64_MAX) {
         ++tab->unread;
@@ -830,6 +836,8 @@ display_set_view(struct snag_ui_display *display, enum snag_render_view view, bo
 static bool
 extra_tab(const struct snag_ui_display *display, const struct ui_conversation_tab *tab)
 {
+    if (tab->target.kind == SNAG_IRC_CONNECTION_EVENTS)
+        return tab->opened && tab->target.identity == SNAG_IRC_OPERATOR;
     if (tab->target.kind != SNAG_IRC_CHANNEL) return true;
     if (tab->target.identity == SNAG_IRC_AGENT) {
         for (const struct ui_conversation_tab *other = display->conversations; other;
@@ -2123,7 +2131,8 @@ view_conversations(const struct snag_session *session, enum snag_irc_conversatio
             const json_t *data = json_object_get(item, "data");
             const json_t *routing = json_object_get(data, "routing");
             const char *kind = snag_json_string(routing, "conversation_kind");
-            if (!kind || strcmp(kind, wanted == SNAG_IRC_CHANNEL ? "channel" : "query"))
+            if (!kind || strcmp(kind, wanted == SNAG_IRC_CHANNEL ? "channel" :
+                wanted == SNAG_IRC_QUERY ? "query" : "connection"))
                 continue;
             struct snag_irc_conversation_target target = {0};
             target.kind = wanted;
@@ -2131,6 +2140,8 @@ view_conversations(const struct snag_session *session, enum snag_irc_conversatio
             (void)snag_strcpy(target.connection, sizeof(target.connection), connection);
             (void)snag_strcpy(target.conversation, sizeof(target.conversation), conversation);
             (void)snag_strcpy(target.peer, sizeof(target.peer), snag_json_string(routing, "peer"));
+            (void)snag_strcpy(target.endpoint, sizeof(target.endpoint),
+                snag_json_string(entry, "endpoint"));
             if (wanted == SNAG_IRC_CHANNEL) {
                 const char *membership = snag_json_string(routing, "membership");
                 if (!membership || !*membership) continue;
@@ -2141,6 +2152,8 @@ view_conversations(const struct snag_session *session, enum snag_irc_conversatio
             }
             target.identity = !strcmp(snag_json_string(routing, "identity"), "operator") ?
                 SNAG_IRC_OPERATOR : SNAG_IRC_AGENT;
+            if (wanted == SNAG_IRC_CONNECTION_EVENTS && target.identity == SNAG_IRC_AGENT)
+                continue;
             (void)snag_json_integer_u64(routing, "generation", &target.generation);
             json_t *route = snag_view_conversation_route(&target);
             json_t *query = route ? json_pack("{s:O,s:O,s:O}", "route", route,
@@ -2176,6 +2189,11 @@ snag_ui_view_state(struct snag_ui *ui, const struct snag_session *session)
     }
     json_t *channels = view_conversations(session, SNAG_IRC_CHANNEL);
     if (!channels || json_object_set_new(state, "channels", channels) < 0) {
+        json_decref(state);
+        return -1;
+    }
+    json_t *connections = view_conversations(session, SNAG_IRC_CONNECTION_EVENTS);
+    if (!connections || json_object_set_new(state, "connections", connections) < 0) {
         json_decref(state);
         return -1;
     }

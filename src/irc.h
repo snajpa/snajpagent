@@ -78,6 +78,7 @@ struct snag_irc_channel_target {
 
 enum snag_irc_channel_action { SNAG_IRC_CHANNEL_PART, SNAG_IRC_CHANNEL_NAMES,
     SNAG_IRC_CHANNEL_TOPIC };
+enum snag_irc_connection_action { SNAG_IRC_CONNECTION_NICK, SNAG_IRC_CONNECTION_WHOIS };
 /* Address resolution captures connection identity without copying member lists. */
 struct snag_irc_scope {
     struct snag_irc_query_target target;
@@ -93,6 +94,8 @@ struct snag_irc_scopes {
 };
 
 struct snag_irc;
+int snag_irc_connection_action(struct snag_irc *, const struct snag_irc_query_target *,
+    enum snag_irc_connection_action, const char *, struct snag_buf *, char *, size_t);
 void snag_irc_capture_scopes(const struct snag_irc_destinations *, struct snag_irc_scopes *);
 json_t *snag_irc_names(const struct snag_irc *);
 unsigned char snag_irc_name_fold(enum snag_irc_casemapping, unsigned char);

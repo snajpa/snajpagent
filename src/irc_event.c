@@ -257,7 +257,8 @@ route_read(const json_t *data, struct snag_irc_event *event)
         (route->kind != SNAG_IRC_QUERY && route->peer[0]) ||
         (route->kind == SNAG_IRC_CHANNEL && (!event->room[0] ||
             strcmp(route->target, event->room))) ||
-        (route->kind == SNAG_IRC_CONNECTION_EVENTS && (event->room[0] || chat)) ||
+        (route->kind == SNAG_IRC_CONNECTION_EVENTS &&
+            (event->room[0] || event->kind == SNAG_IRC_MESSAGE)) ||
         (chat && !route->target[0]) || (route->action && event->kind != SNAG_IRC_MESSAGE) ||
         (route->direction == SNAG_IRC_INCOMING &&
             (route->delivery != SNAG_IRC_DELIVERY_NONE || route->send[0])) ||

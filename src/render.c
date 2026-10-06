@@ -3219,8 +3219,8 @@ snag_render_irc_event(struct snag_render *render, const struct snag_irc_event *e
     if (!render || !event) return snag_errno(EINVAL);
     struct snag_render_source source = render->irc_source;
     render->irc_source = (struct snag_render_source){0};
-    const char *conversation = event->routed && event->route.kind == SNAG_IRC_QUERY ?
-        event->route.conversation : "";
+    const char *conversation = !event->routed || event->route.kind == SNAG_IRC_CHANNEL ? "" :
+        event->route.kind == SNAG_IRC_QUERY ? event->route.conversation : event->route.connection;
     bool unscoped = !event->room[0] && !conversation[0];
     bool selected = !strcmp(render->chat_conversation, conversation) &&
         ((unscoped && !render->chat_endpoint[0] && !render->chat_room[0]) ||
@@ -3335,8 +3335,8 @@ render_view_banner(struct snag_render *render, enum snag_render_view view)
 
     if (view == SNAG_RENDER_ROLLOUT) return render_banner(render, "── rollout ──\n");
     if (render->chat_conversation[0]) {
-        rc = snag_buf_printf(&banner, "── query %s/%s (%s) ──\n",
-            render->chat_endpoint, render->chat_peer,
+        rc = snag_buf_printf(&banner, "── %s %s/%s (%s) ──\n",
+            render->chat_peer[0] ? "query" : "connection", render->chat_endpoint, render->chat_peer,
             render->chat_identity == SNAG_IRC_OPERATOR ? "operator" : "agent, read-only");
     } else if (!render->chat_endpoint[0] && !render->chat_room[0]) {
         return render_banner(render, "── chat ──\n");
@@ -3370,10 +3370,10 @@ snag_render_set_chat_conversation(struct snag_render *render, const char *endpoi
     if (!render || !endpoint || !query || !query->conversation[0]) return snag_errno(EINVAL);
     if (query->kind == SNAG_IRC_CHANNEL)
         return snag_render_set_chat_room(render, endpoint, query->room, announce);
-    if (query->kind != SNAG_IRC_QUERY) return snag_errno(EINVAL);
-    bool changed = strcmp(render->chat_conversation, query->conversation) != 0;
+    const char *id = query->kind == SNAG_IRC_QUERY ? query->conversation : query->connection;
+    bool changed = strcmp(render->chat_conversation, id) != 0;
     if (changed && render->view == SNAG_RENDER_CHAT && pause_rollout(render) < 0) return -1;
-    if (changed && select_room_queue(render, endpoint, "", query->conversation) < 0) return -1;
+    if (changed && select_room_queue(render, endpoint, "", id) < 0) return -1;
     if (!snag_strcpy(render->chat_peer, sizeof(render->chat_peer), query->peer)) return -1;
     render->chat_identity = query->identity;
     if (!changed || render->view != SNAG_RENDER_CHAT || !announce) return 0;

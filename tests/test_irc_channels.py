@@ -23,6 +23,7 @@ class ChannelServer:
         self.lines = []
         self.defer_operator_join = False
         self.chantypes = '#&+!'
+        self.rejected_nick = None
         self.failure = None
         self.stopping = threading.Event()
         self.workers = []
@@ -59,6 +60,12 @@ class ChannelServer:
                     line = raw.decode()
                     self.lines.append((nick, line))
                     if line.startswith('NICK '):
+                        if nick and line[5:] == self.rejected_nick:
+                            self.send(nick, f':fake 433 {nick} {line[5:]} :Nick is in use\r\n')
+                            continue
+                        if nick:
+                            self.send(nick, f':{nick}!u@fake {line}\r\n')
+                            del self.links[nick]
                         nick = line[5:]
                         self.links[nick] = link
                     elif line.startswith('USER '):

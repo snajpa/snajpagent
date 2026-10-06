@@ -105,6 +105,7 @@ struct irc_conn {
     char nick[SNAG_CONFIG_IRC_NICK_MAX + 1u];
     char user[SNAG_CONFIG_IRC_NICK_MAX + 1u];
     char accepted_nick[SNAG_CONFIG_IRC_NICK_MAX + 1u];
+    char server[SNAG_IRC_LINE_MAX + 1u];
     char preferred_nick[SNAG_CONFIG_IRC_NICK_MAX + 1u];
     bool nick_implicit;
     char room[SNAG_CONFIG_IRC_ROOM_MAX + 2u];
@@ -974,6 +975,19 @@ connection_event(struct snag_irc_core *irc, struct irc_conn *link, const char *r
 }
 
 static int channel_state(struct irc_conn *, struct irc_channel *, const char *);
+
+static int
+connection_notice(struct snag_irc_core *irc, struct irc_conn *link, const char *text)
+{
+    if (!irc->connection[0]) return 0;
+    struct snag_irc_event event;
+    event_init(irc, &event, SNAG_IRC_NOTICE, irc->connection_endpoint, NULL, NULL,
+        text, false, false, false);
+    route_init(irc, &event, link->role, SNAG_IRC_CONNECTION_EVENTS,
+        irc->connection_events[link->role]);
+    (void)snag_strcpy(event.route.target, sizeof(event.route.target), link->accepted_nick);
+    return emit_event(irc, &event, false);
+}
 
 static int
 query_epoch_end(struct snag_irc_core *irc, const char *reason)
@@ -2882,6 +2896,7 @@ client_dispatch(struct snag_irc_core *irc, struct irc_conn *link, char *line)
         if (link->registered || !message.param_count || !nick_valid(message.params[0])) return 0;
         (void)snag_strcpy(link->nick, sizeof(link->nick), message.params[0]);
         (void)snag_strcpy(link->accepted_nick, sizeof(link->accepted_nick), link->nick);
+        (void)snag_strcpy(link->server, sizeof(link->server), message.prefix);
         link->registered = true;
         link->outage_reported = false;
         if (irc->connection[0]) return connection_event(irc, link, "");
@@ -3025,6 +3040,10 @@ client_dispatch(struct snag_irc_core *irc, struct irc_conn *link, char *line)
             !strcmp(message.command, "332") ? message.params[2] : "", false, timestamp_ms);
     }
     sender = prefix_nick(message.prefix, nick);
+    if (!strcmp(message.command, "NOTICE") && message.param_count >= 2u &&
+        (direct || !strcmp(message.params[0], "*")) &&
+        message.prefix && !strcmp(message.prefix, link->server))
+        return connection_notice(irc, link, message.params[message.param_count - 1u]);
     if (direct && sender && link->registered) {
         /* echo-message supplies the send receipt separately from the delivered
          * copy of a message addressed to our own nick. */
@@ -3207,13 +3226,27 @@ client_dispatch(struct snag_irc_core *irc, struct irc_conn *link, char *line)
             description, false, timestamp_ms);
     }
     if (strcmp(message.command, "433") == 0 && !link->registered) return link_retry_nick(link);
-    if (link->registered && link->joined &&
+    if (link->registered &&
         snag_string_in(message.command, "432 433 436 437") && message.param_count &&
         *message.params[message.param_count - 1u]) {
-        return link_emit(irc, link, SNAG_IRC_NOTICE, link->room, "",
+        if (message.param_count >= 2u && link_name_equal(link, message.params[1], link->nick))
+            (void)snag_strcpy(link->nick, sizeof(link->nick), link->accepted_nick);
+        if (!irc->connection[0]) return link_emit(irc, link, SNAG_IRC_NOTICE, link->room, "",
             message.params[message.param_count - 1u], false, timestamp_ms);
+        return connection_notice(irc, link, message.params[message.param_count - 1u]);
     }
     if (!strcmp(message.command, "ERROR")) return 1;
+    if (link->registered && strlen(message.command) == 3u &&
+        strspn(message.command, "0123456789") == 3u) {
+        struct snag_buf text = {.max = SNAG_IRC_LINE_MAX};
+        int rc = snag_buf_printf(&text, "%s", message.command);
+        for (size_t i = 1u; !rc && i < message.param_count; ++i)
+            rc = snag_buf_printf(&text, " %s", message.params[i]);
+        if (!rc) rc = snag_buf_terminate(&text);
+        if (!rc) rc = connection_notice(irc, link, (const char *)text.data);
+        snag_buf_free(&text);
+        return rc;
+    }
     return 0;
 }
 
@@ -3900,6 +3933,40 @@ snag_irc_core_send(struct snag_irc_core *irc, bool model, enum snag_irc_event_ki
     if (kind == SNAG_IRC_TOPIC) return set_topic_as(irc, text, role, error, error_size);
     if (kind == SNAG_IRC_NICK) return set_nick_as(irc, text, role, error, error_size);
     return send_chat(irc, role, kind, text, error, error_size);
+}
+
+int
+snag_irc_core_connection_action(struct snag_irc_core *irc,
+    const struct snag_irc_query_target *target, enum snag_irc_connection_action action,
+    const char *text, struct snag_buf *report, char *error, size_t error_size)
+{
+    if (!irc || !target || (unsigned int)action > SNAG_IRC_CONNECTION_WHOIS)
+        return snag_errno(EINVAL);
+    if (target->identity != SNAG_IRC_OPERATOR)
+        return snag_fail(error, error_size, EACCES, "agent connections are read-only");
+    if (strcmp(target->connection, irc->connection) || target->generation != irc->generation)
+        return snag_fail(error, error_size, ESTALE, "IRC connection changed; not performed");
+    struct irc_conn *link = &irc->conns[LINK_OPERATOR];
+    if (!link->registered)
+        return snag_fail(error, error_size, ENOTCONN, "IRC operator identity is disconnected");
+    if (!text) {
+        if (action == SNAG_IRC_CONNECTION_WHOIS) text = link->accepted_nick;
+        else return snag_buf_printf(report, "%s operator nick: %s\n", irc->connection_endpoint,
+            link->accepted_nick);
+    }
+    if (!nick_valid(text)) return snag_fail(error, error_size, EINVAL, "IRC nick is invalid");
+    if (action == SNAG_IRC_CONNECTION_NICK)
+        return set_nick_as(irc, text, LINK_OPERATOR, error, error_size);
+    if (!irc->hosting) {
+        if (queue_line(link, "WHOIS %s", text) < 0) return -1;
+        return snag_buf_printf(report, "WHOIS %s requested on %s; replies in /connections.\n",
+            text, irc->connection_endpoint);
+    }
+    struct irc_conn *peer = server_peer_by_nick(irc, text);
+    if (!peer) return snag_fail(error, error_size, ENOENT, "IRC nick is unavailable: %s", text);
+    if (snag_buf_printf(report, "WHOIS %s: user %s; server %s\n", peer->nick,
+        peer->user, irc->server_name) < 0 || snag_buf_terminate(report) < 0) return -1;
+    return connection_notice(irc, link, (const char *)report->data);
 }
 
 static int

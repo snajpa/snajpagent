@@ -1699,6 +1699,22 @@ test_channel_routes(void)
     assert(snag_irc_bind_conversations(client, NULL) == 0);
     channel_fixture_connect(client, listener, peers, false);
     struct snag_irc_query_target scope = channel_fixture_scope(client);
+    struct snag_buf connection_report = {.max = SNAG_MAX_IRC_SNAPSHOT};
+    struct snag_irc_query_target stale_scope = scope;
+    ++stale_scope.generation;
+    assert(snag_irc_connection_action(client, &stale_scope, SNAG_IRC_CONNECTION_NICK,
+        "stale-operator", &connection_report, error, sizeof(error)) < 0 && errno == ESTALE);
+    stale_scope = scope;
+    stale_scope.identity = SNAG_IRC_AGENT;
+    assert(snag_irc_connection_action(client, &stale_scope, SNAG_IRC_CONNECTION_WHOIS,
+        "peer", &connection_report, error, sizeof(error)) < 0 && errno == EACCES);
+    assert(snag_irc_connection_action(client, &scope, SNAG_IRC_CONNECTION_WHOIS,
+        "peer\r\nNICK injected", &connection_report, error, sizeof(error)) < 0);
+    assert(snag_irc_connection_action(client, &scope, SNAG_IRC_CONNECTION_WHOIS,
+        "peer", &connection_report, error, sizeof(error)) == 0);
+    wait_wire(client, peers[SNAG_IRC_OPERATOR], wire, sizeof(wire), "WHOIS peer\r\n");
+    assert(!strstr(wire, "stale-operator") && !strstr(wire, "injected"));
+    snag_buf_free(&connection_report);
     struct snag_irc_channel_target lab, side, current, closed;
     assert(snag_irc_channel_open(client, &scope, "#LAB", false, &lab, error, sizeof(error)) == 0);
     assert(!strcmp(lab.room, "#lab"));

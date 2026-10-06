@@ -311,6 +311,8 @@ static const struct snag_term_command commands[] = {
     {"/chat [ADDRESS]", "show the selected or addressed channel"},
     {"/rollout", "show local model activity"},
     {"/query [ADDRESS [TEXT]]", "open a private chat; no address lists opened queries"},
+    {"/connections [SESSION|ADDRESS]", "list connections or open SESSION/ENDPOINT/"},
+    {"/whois [NICK]", "inspect a nick on the selected connection"},
     {"/msg ADDRESS TEXT", "send to a nick or channel without changing tabs"},
     {"/notice ADDRESS TEXT", "send a notice to a nick or channel"},
     {"/me TEXT", "send an action to the selected operator conversation"},
@@ -3626,7 +3628,8 @@ view_command_native(const char *line)
     verb[length] = '\0';
     if (snag_string_in(verb, "/help /? /status /history /model /fast /effort /context "
         "/state /goal /steering /banner /configure /compact /yield /verbose /cat "
-        "/query /msg /notice /me /chat /join /part /names /topic")) return true;
+        "/query /msg /notice /me /chat /join /part /names /topic /connections /whois /nick"))
+        return true;
     if (strcmp(verb, "/session") && strcmp(verb, "/s")) return false;
     const char *argument = line + length;
     while (isspace((unsigned char)*argument)) ++argument;
