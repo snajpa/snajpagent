@@ -269,7 +269,7 @@ snag_app_irc_event(void *opaque, const struct snag_irc_event *event)
         snag_irc_mentions_agent(app->irc, event->endpoint, event->text);
     accepted.reply = accepted.urgent && snag_irc_local_identity(app->irc, event, false);
     bool private = event->routed && (event->route.kind != SNAG_IRC_CHANNEL ||
-        !snag_irc_event_model_visible(event));
+        event->route.direction == SNAG_IRC_OUTGOING || !snag_irc_event_model_visible(event));
     if (private) {
         accepted.input = event->route.kind == SNAG_IRC_QUERY &&
             event->route.identity == SNAG_IRC_AGENT &&

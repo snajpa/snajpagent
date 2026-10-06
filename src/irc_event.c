@@ -96,6 +96,10 @@ route_data(const struct snag_irc_event_route *route)
         "send_id", route->send, "state", deliveries[route->delivery],
         "source_message_id", route->source, "generation", (json_int_t)route->generation,
         "action", route->action);
+    if (route->revised && snag_json_set_new(data, "revised", json_true()) < 0) {
+        json_decref(data);
+        return NULL;
+    }
     if (route->membership[0] &&
         (snag_json_set_new(data, "membership", json_string(route->membership)) < 0 ||
          snag_json_set_new(data, "joined", json_boolean(route->joined)) < 0 ||
@@ -173,7 +177,7 @@ route_read(const json_t *data, struct snag_irc_event *event)
         "direction send_id state source_message_id action membership joined rejoin" :
         "connection_id conversation_id generation identity conversation_kind peer target "
         "direction send_id state source_message_id action";
-    if (!snag_json_exact_keys(data, keys) ||
+    if (!snag_json_arg_keys(data, keys, "revised", NULL, 0u) ||
         identity < 0 || kind < 0 || direction < 0 || delivery < 0 ||
         !event_field(data, "connection_id", route->connection, sizeof(route->connection)) ||
         !snag_hex_is_lower(route->connection, SNAG_ID_HEX_LEN) ||
@@ -190,6 +194,9 @@ route_read(const json_t *data, struct snag_irc_event *event)
     route->direction = (enum snag_irc_direction)direction;
     route->delivery = (enum snag_irc_delivery)delivery;
     route->action = json_is_true(json_object_get(data, "action"));
+    route->revised = json_object_get(data, "revised") != NULL;
+    if (route->revised && (!json_is_true(json_object_get(data, "revised")) ||
+        direction != SNAG_IRC_OUTGOING || delivery < SNAG_IRC_ACKNOWLEDGED)) return -1;
     if (membership) {
         if (kind != SNAG_IRC_CHANNEL ||
             !event_field(data, "membership", route->membership, sizeof(route->membership)) ||

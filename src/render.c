@@ -3117,7 +3117,7 @@ render_irc_event_now(struct snag_render *render, const struct snag_irc_event *ev
             event->route.kind == SNAG_IRC_QUERY ? event->route.peer : event->room,
             event->route.identity == SNAG_IRC_AGENT ? "agent" : "operator",
             event->route.kind == SNAG_IRC_QUERY ? " query" : "");
-        if (event->route.kind == SNAG_IRC_QUERY && event->route.direction == SNAG_IRC_OUTGOING &&
+        if (event->route.direction == SNAG_IRC_OUTGOING &&
             event->route.delivery == SNAG_IRC_PENDING) {
             size_t used = strlen(source);
             (void)snprintf(source + used, sizeof(source) - used,
@@ -3155,14 +3155,16 @@ render_irc_event_now(struct snag_render *render, const struct snag_irc_event *ev
     if (n < 0 || (size_t)n >= sizeof(prefix) || irc_piece(render, prefix, true) < 0) goto out;
     if (colored && (irc_piece(render, COLOR_RESET, false) < 0 || irc_piece(render, nick_color, false) < 0))
         goto out;
-    bool private_send = event->routed && event->route.kind == SNAG_IRC_QUERY &&
-        event->route.direction == SNAG_IRC_OUTGOING;
-    if (private_send && event->route.delivery >= SNAG_IRC_WRITTEN &&
+    bool outgoing = event->routed && event->route.direction == SNAG_IRC_OUTGOING;
+    if (outgoing && event->route.delivery >= SNAG_IRC_WRITTEN &&
         event->route.delivery <= SNAG_IRC_UNCERTAIN) {
         static const char *const outcomes[] = {"written", "acknowledged", "failed", "uncertain"};
         n = snprintf(prefix, sizeof(prefix), "· send %.8s %s", event->route.send,
             outcomes[event->route.delivery - SNAG_IRC_WRITTEN]);
         if (n < 0 || (size_t)n >= sizeof(prefix) || irc_piece(render, prefix, true) < 0) goto out;
+        if (event->route.revised && (irc_piece(render, " · server text: ", true) < 0 ||
+            (event->route.action && irc_piece(render, "* ", true) < 0) ||
+            irc_piece(render, event->text, true) < 0)) goto out;
     } else if (event->kind == SNAG_IRC_MESSAGE || event->kind == SNAG_IRC_NOTICE) {
         n = snprintf(prefix, sizeof(prefix), "%s%s%s ", event->kind == SNAG_IRC_NOTICE ? "-" : "",
             event->op ? "@" : "", event->nick[0] ? event->nick : "server");

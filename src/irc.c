@@ -41,7 +41,15 @@ struct irc_private_send {
     struct snag_irc_event event;
     size_t length, offset;
     bool await_receipt;
+    bool labeled, receipt_echo;
+    enum snag_irc_delivery receipt;
     char wire[];
+};
+
+struct irc_receipt_batch {
+    struct irc_receipt_batch *next, *parent;
+    char label[SNAG_ID_HEX_LEN + 1u];
+    char id[];
 };
 
 struct snag_irc_core;
@@ -87,6 +95,7 @@ struct irc_conn {
     size_t pending_inflight;
     struct irc_private_send *private_sends;
     struct irc_private_send *private_active;
+    struct irc_receipt_batch *receipt_batches;
     size_t private_bytes;
     size_t line_limit;
     bool private_broken;
@@ -118,6 +127,7 @@ struct irc_conn {
     bool cap_batch;
     bool cap_server_time;
     bool cap_echo;
+    bool cap_labeled;
     unsigned int cap_offered;
     bool cap_catchup;
     bool syncing;
@@ -576,9 +586,21 @@ conn_init(struct irc_conn *conn, struct snag_irc_core *owner)
 }
 
 static void
+receipt_batches_free(struct irc_conn *conn)
+{
+    while (conn->receipt_batches) {
+        struct irc_receipt_batch *batch = conn->receipt_batches;
+        conn->receipt_batches = batch->next;
+        conn->private_bytes -= sizeof(*batch) + strlen(batch->id) + 1u;
+        free(batch);
+    }
+}
+
+static void
 conn_release(struct irc_conn *conn)
 {
     (void)private_discard(conn, false);
+    receipt_batches_free(conn);
     if (conn->fd != SNAG_SOCKET_INVALID) (void)snag_socket_close(conn->fd);
     snag_buf_free(&conn->output);
     snag_buf_free(&conn->pending);
@@ -1771,6 +1793,9 @@ chat_send_chunk(struct snag_irc_core *irc, struct irc_conn *sender, struct irc_c
     raw[length] = '\0';
     if (sanitize_text(clean, sizeof(clean), raw) < 0) return -1;
     if (!clean[0]) return 0;
+    char id[SNAG_ID_HEX_LEN + 1u];
+    if (snag_random_id(id) < 0) return -1;
+    bool labeled = !irc->hosting && sender->cap_batch && sender->cap_labeled;
     char wire[SNAG_IRC_LINE_MAX + 1u];
     char prefix[3u * SNAG_CONFIG_IRC_NICK_MAX + 8u] = {0};
     if (irc->hosting) {
@@ -1778,7 +1803,8 @@ chat_send_chunk(struct snag_irc_core *irc, struct irc_conn *sender, struct irc_c
             sender->user, irc->server_name);
         if (n < 0 || (size_t)n >= sizeof(prefix)) return snag_errno(EOVERFLOW);
     }
-    int n = snprintf(wire, sizeof(wire), "%s%s %s :%s%s%s\r\n", prefix,
+    int n = snprintf(wire, sizeof(wire), "%s%s%s%s%s %s :%s%s%s\r\n",
+        labeled ? "@label=" : "", labeled ? id : "", labeled ? " " : "", prefix,
         kind == SNAG_IRC_MESSAGE ? "PRIVMSG" : "NOTICE", route->target,
         action ? "\001ACTION " : "", clean, action ? "\001" : "");
     if (n < 0 || (size_t)n >= sizeof(wire)) return snag_errno(EMSGSIZE);
@@ -1789,10 +1815,10 @@ chat_send_chunk(struct snag_irc_core *irc, struct irc_conn *sender, struct irc_c
     if (!send) return -1;
     send->length = (size_t)n;
     memcpy(send->wire, wire, send->length + 1u);
-    /* Public echoes can interleave with legacy channel sends on this link.
-     * They cannot identify a particular chunk without a server receipt ID. */
-    send->await_receipt = route->kind == SNAG_IRC_QUERY && !irc->hosting &&
-        sender->cap_catchup && sender->cap_echo && kind == SNAG_IRC_MESSAGE;
+    send->labeled = labeled;
+    /* Only the native private-query path has unambiguous unlabeled ordering. */
+    send->await_receipt = labeled || (route->kind == SNAG_IRC_QUERY && !irc->hosting &&
+        sender->cap_catchup && sender->cap_echo && kind == SNAG_IRC_MESSAGE);
     const struct irc_channel *channel = route->kind == SNAG_IRC_CHANNEL ?
         channel_find(sender, route->target) : NULL;
     event_init(irc, &send->event, kind, irc->connection_endpoint,
@@ -1802,10 +1828,7 @@ chat_send_chunk(struct snag_irc_core *irc, struct irc_conn *sender, struct irc_c
     send->event.route = *route;
     send->event.route.direction = SNAG_IRC_OUTGOING;
     send->event.route.action = action;
-    if (snag_random_id(send->event.route.send) < 0) {
-        free(send);
-        return -1;
-    }
+    memcpy(send->event.route.send, id, sizeof(id));
     /* Reserve the report before committing a send so an allocation failure
      * cannot conceal an accepted chunk from the caller. */
     size_t before = report ? report->len : 0u;
@@ -1845,6 +1868,7 @@ chat_send(struct snag_irc_core *irc, struct irc_conn *sender, struct irc_conn *r
         strlen(route->target) + 5u + (action ? 9u : 0u);
     if (irc->hosting) overhead += strlen(sender->accepted_nick) + strlen(sender->user) +
         strlen(irc->server_name) + 4u;
+    else if (sender->cap_batch && sender->cap_labeled) overhead += SNAG_ID_HEX_LEN + 8u;
     if (budget <= overhead) return snag_fail(error, error_size, EMSGSIZE, "IRC line is too short");
     budget -= overhead;
     if (budget > SNAG_IRC_TEXT_MAX) budget = SNAG_IRC_TEXT_MAX;
@@ -2267,6 +2291,8 @@ client_handshake(struct snag_irc_core *irc, struct irc_conn *link)
     link->cap_batch = false;
     link->cap_server_time = false;
     link->cap_echo = false;
+    link->cap_labeled = false;
+    receipt_batches_free(link);
     link->cap_offered = 0u;
     link->line_limit = 512u;
     link->casemapping = SNAG_IRC_RFC1459;
@@ -2433,10 +2459,31 @@ message_tag(const char *tags, const char *key, char *out, size_t size)
 }
 
 static int
+private_capabilities_changed(struct irc_conn *link)
+{
+    struct irc_private_send **previous = &link->private_sends;
+    while (*previous) {
+        struct irc_private_send *send = *previous;
+        bool supported = send->labeled ? link->cap_batch && link->cap_labeled :
+            !send->await_receipt || (link->cap_catchup && link->cap_echo);
+        if (supported) {
+            previous = &send->next;
+            continue;
+        }
+        if (send->offset && send->offset < send->length) link->private_broken = true;
+        if (private_state(link, send, send->offset ? SNAG_IRC_UNCERTAIN : SNAG_IRC_FAILED) < 0)
+            return -1;
+        private_remove(link, previous);
+    }
+    return 0;
+}
+
+static int
 client_cap(struct irc_conn *link, struct irc_message *message)
 {
     static const char *const wanted[] = {"batch", "server-time", "draft/chathistory",
-        "message-tags", SNAJPAGENT_NAME "/catchup", SNAJPAGENT_NAME "/agent", "echo-message"};
+        "message-tags", SNAJPAGENT_NAME "/catchup", SNAJPAGENT_NAME "/agent",
+        "echo-message", "labeled-response"};
     const char *sub = message->params[1];
     char *caps = message->params[message->param_count - 1u];
     char *save = NULL;
@@ -2454,6 +2501,7 @@ client_cap(struct irc_conn *link, struct irc_message *message)
         size_t used = 0u;
         for (size_t i = 0u; i < sizeof(wanted) / sizeof(wanted[0]); ++i) {
             if (!(link->cap_offered & (1u << i))) continue;
+            if (!strcmp(wanted[i], "labeled-response") && !(link->cap_offered & 1u)) continue;
             int n = snprintf(requested + used, sizeof(requested) - used, "%s%s",
                 used ? " " : "", wanted[i]);
             if (n < 0 || (size_t)n >= sizeof(requested) - used) return snag_errno(EOVERFLOW);
@@ -2467,8 +2515,10 @@ client_cap(struct irc_conn *link, struct irc_message *message)
             if (!strcmp(cap, "batch")) link->cap_batch = enabled;
             if (!strcmp(cap, "server-time")) link->cap_server_time = enabled;
             if (!strcmp(cap, "echo-message")) link->cap_echo = enabled;
+            if (!strcmp(cap, "labeled-response")) link->cap_labeled = enabled;
             if (!strcmp(cap, SNAJPAGENT_NAME "/catchup")) link->cap_catchup = enabled;
         }
+        if (private_capabilities_changed(link) < 0) return -1;
         if (!strcmp(sub, "DEL")) return 0;
     } else if (strcmp(sub, "NAK")) {
         return 0;
@@ -2479,10 +2529,10 @@ client_cap(struct irc_conn *link, struct irc_message *message)
 }
 
 static bool
-private_source(const char *tags, char source[SNAG_IRC_LINE_MAX + 1u])
+decoded_tag(const char *tags, const char *key, char *out, size_t size)
 {
     char encoded[SNAG_IRC_LINE_MAX + 1u];
-    if (!message_tag(tags, "msgid", encoded, sizeof(encoded))) return false;
+    if (!size || !message_tag(tags, key, encoded, sizeof(encoded))) return false;
     size_t used = 0u;
     for (size_t i = 0u; encoded[i]; ++i) {
         unsigned char c = (unsigned char)encoded[i];
@@ -2493,17 +2543,165 @@ private_source(const char *tags, char source[SNAG_IRC_LINE_MAX + 1u])
             else if (c == 's') c = ' ';
             else if (c == 'r' || c == 'n') return false;
         }
-        if (c < 0x20u || c == 0x7fu) return false;
-        source[used++] = (char)c;
+        if (c < 0x20u || c == 0x7fu || used >= size - 1u) return false;
+        out[used++] = (char)c;
     }
-    source[used] = '\0';
-    return snag_utf8_valid((const unsigned char *)source, used, true);
+    out[used] = '\0';
+    return snag_utf8_valid((const unsigned char *)out, used, true);
+}
+
+static bool
+private_source(const char *tags, char source[SNAG_IRC_LINE_MAX + 1u])
+{
+    return decoded_tag(tags, "msgid", source, SNAG_IRC_LINE_MAX + 1u);
+}
+
+static struct irc_private_send **
+receipt_send(struct irc_conn *link, const char *label)
+{
+    for (struct irc_private_send **at = &link->private_sends; *at; at = &(*at)->next)
+        if ((*at)->labeled && !strcmp((*at)->event.route.send, label)) return at;
+    return NULL;
+}
+
+static struct irc_receipt_batch **
+receipt_batch(struct irc_conn *link, const char *id)
+{
+    for (struct irc_receipt_batch **at = &link->receipt_batches; *at; at = &(*at)->next)
+        if (!strcmp((*at)->id, id)) return at;
+    return NULL;
+}
+
+static int
+receipt_finish(struct irc_conn *link, struct irc_private_send **previous)
+{
+    if (!previous || (*previous)->offset != (*previous)->length) return 0;
+    struct irc_private_send *send = *previous;
+    int rc = private_state(link, send, send->receipt ? send->receipt : SNAG_IRC_UNCERTAIN);
+    private_remove(link, previous);
+    return rc;
+}
+
+static int
+receipt_message(struct irc_conn *link, struct irc_private_send *send,
+                const struct irc_message *message)
+{
+    const char *command = message->command;
+    bool numeric = strlen(command) == 3u && command[0] >= '4' && command[0] <= '5' &&
+        command[1] >= '0' && command[1] <= '9' && command[2] >= '0' && command[2] <= '9';
+    if (numeric || !strcmp(command, "FAIL")) {
+        send->receipt = SNAG_IRC_FAILED;
+        return 0;
+    }
+    bool ack = !strcmp(command, "ACK") && !message->param_count;
+    char nick[SNAG_CONFIG_IRC_NICK_MAX + 1u];
+    const char *sender = prefix_nick(message->prefix, nick);
+    bool echo = message->param_count == 2u && sender &&
+        !strcmp(command, send->event.kind == SNAG_IRC_MESSAGE ? "PRIVMSG" : "NOTICE") &&
+        (link_name_equal(link, sender, send->event.nick) ||
+         link_name_equal(link, sender, link->accepted_nick)) &&
+        link_name_equal(link, message->params[0], send->event.route.target);
+    if (echo) {
+        /* Multiple echoes for one frame do not identify a unique final body. */
+        if (send->receipt_echo) {
+            if (send->receipt != SNAG_IRC_FAILED) send->receipt = SNAG_IRC_UNCERTAIN;
+            return 0;
+        }
+        const char *text = message->params[1];
+        size_t length = strlen(text);
+        bool action = send->event.kind == SNAG_IRC_MESSAGE && length >= 9u &&
+            !memcmp(text, "\001ACTION ", 8u) && text[length - 1u] == '\001';
+        char raw[SNAG_IRC_TEXT_MAX + 1u];
+        if (action) {
+            text += 8u;
+            length -= 9u;
+        }
+        if (length >= sizeof(raw) ||
+            !snag_utf8_valid((const unsigned char *)text, length, true)) return 1;
+        memcpy(raw, text, length);
+        raw[length] = '\0';
+        char clean[sizeof(raw)];
+        if (sanitize_text(clean, sizeof(clean), raw) < 0) return -1;
+        send->event.route.revised = strcmp(clean, send->event.text) != 0 ||
+            action != send->event.route.action;
+        memcpy(send->event.text, clean, strlen(clean) + 1u);
+        send->event.route.action = action;
+        char source[SNAG_IRC_LINE_MAX + 1u];
+        if (private_source(message->tags, source))
+            memcpy(send->event.route.source, source, strlen(source) + 1u);
+        send->receipt_echo = true;
+    }
+    if ((echo || ack) && !send->receipt) send->receipt = SNAG_IRC_ACKNOWLEDGED;
+    return 0;
+}
+
+static int
+labeled_receipt(struct irc_conn *link, const struct irc_message *message, bool *handled)
+{
+    char label[SNAG_ID_HEX_LEN + 1u] = {0};
+    char batch_id[SNAG_IRC_LINE_MAX + 1u];
+    bool labeled = decoded_tag(message->tags, "label", label, sizeof(label)) &&
+        snag_hex_is_lower(label, SNAG_ID_HEX_LEN);
+    struct irc_receipt_batch **parent = decoded_tag(message->tags, "batch",
+        batch_id, sizeof(batch_id)) ? receipt_batch(link, batch_id) : NULL;
+    struct irc_receipt_batch *batch = parent ? *parent : NULL;
+    if (!labeled && batch) memcpy(label, batch->label, sizeof(label));
+    if (!strcmp(message->command, "BATCH") && message->param_count) {
+        const char *id = message->params[0];
+        struct irc_receipt_batch **previous = receipt_batch(link, id + (*id != '\0'));
+        if (*id == '-' && previous) {
+            *handled = true;
+            struct irc_receipt_batch *closed = *previous;
+            for (struct irc_receipt_batch *at = link->receipt_batches; at; at = at->next)
+                if (at->parent == closed) return 1;
+            if (closed->parent != batch) return 1;
+            int rc = closed->parent ? 0 : receipt_finish(link, receipt_send(link, closed->label));
+            *previous = closed->next;
+            link->private_bytes -= sizeof(*closed) + strlen(closed->id) + 1u;
+            free(closed);
+            return rc;
+        }
+        if (*id != '+' || (!labeled && !batch)) return 0;
+        *handled = true;
+        if (previous || !id[1] || message->param_count < 2u ||
+            (labeled && batch && strcmp(label, batch->label))) return 1;
+        if (!batch) {
+            for (struct irc_receipt_batch *at = link->receipt_batches; at; at = at->next)
+                if (!strcmp(at->label, label)) return 1;
+        }
+        for (const char *p = id + 1u; *p; ++p)
+            if (!((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') ||
+                (*p >= '0' && *p <= '9') || *p == '-')) return 1;
+        /* Retain cancelled labels until BATCH ends: late errors must not
+         * change membership in a conversation that has since rejoined. */
+        size_t bytes = sizeof(struct irc_receipt_batch) + strlen(id);
+        if (bytes > IRC_PENDING_MAX - link->pending.len - link->private_bytes)
+            return snag_errno(EOVERFLOW);
+        struct irc_receipt_batch *opened = calloc(1u, bytes);
+        if (!opened) return -1;
+        memcpy(opened->label, label, sizeof(label));
+        memcpy(opened->id, id + 1u, strlen(id));
+        opened->parent = batch;
+        opened->next = link->receipt_batches;
+        link->receipt_batches = opened;
+        link->private_bytes += bytes;
+        return 0;
+    }
+    if (!labeled && !batch) return 0;
+    *handled = true;
+    if (link->historical || (labeled && batch && strcmp(label, batch->label))) return 0;
+    struct irc_private_send **previous = receipt_send(link, label);
+    if (!previous || (*previous)->offset != (*previous)->length) return 0;
+    int rc = receipt_message(link, *previous, message);
+    return rc || batch ? rc : receipt_finish(link, previous);
 }
 
 static int
 private_receipt(struct irc_conn *link, const struct irc_message *message, bool *handled)
 {
     *handled = false;
+    int labeled = labeled_receipt(link, message, handled);
+    if (labeled || *handled) return labeled;
     if (!link->cap_catchup || !link->cap_echo || link->historical) return 0;
     bool failed = snag_string_in(message->command, "401 404 407 411 412 531");
     char nick[SNAG_CONFIG_IRC_NICK_MAX + 1u];
@@ -2515,7 +2713,7 @@ private_receipt(struct irc_conn *link, const struct irc_message *message, bool *
     struct irc_private_send **previous = &link->private_sends;
     while (*previous) {
         struct irc_private_send *send = *previous;
-        if (!send->await_receipt || send->offset != send->length ||
+        if (send->labeled || !send->await_receipt || send->offset != send->length ||
             !link_name_equal(link, send->event.route.target, target)) {
             previous = &send->next;
             continue;
@@ -2564,7 +2762,8 @@ client_dispatch(struct snag_irc_core *irc, struct irc_conn *link, char *line)
     timestamp_ms = server_time_tag(message.tags);
     if (trace_message(irc, link->endpoint, &message) < 0) return -1;
     bool receipt = false;
-    if (private_receipt(link, &message, &receipt) < 0) return -1;
+    int receipt_rc = private_receipt(link, &message, &receipt);
+    if (receipt_rc) return receipt_rc;
     if (receipt) return 0;
     if (!strcmp(message.command, "CAP") && message.param_count >= 3u)
         return client_cap(link, &message);
@@ -2717,6 +2916,10 @@ client_dispatch(struct snag_irc_core *irc, struct irc_conn *link, char *line)
     }
     sender = prefix_nick(message.prefix, nick);
     if (direct && sender && link->registered) {
+        /* echo-message supplies the send receipt separately from the delivered
+         * copy of a message addressed to our own nick. */
+        if (!link->historical && link->cap_echo &&
+            link_name_equal(link, sender, link->accepted_nick)) return 0;
         enum snag_irc_event_kind kind = !strcmp(message.command, "PRIVMSG") ?
             SNAG_IRC_MESSAGE : SNAG_IRC_NOTICE;
         char *text = message.params[1];

@@ -89,6 +89,42 @@ query_conversations(void)
 }
 
 static void
+outgoing_receipts(void)
+{
+    json_t *events = json_array();
+    struct snag_irc_event irc = {.routed = true, .kind = SNAG_IRC_MESSAGE,
+        .timestamp_ms = 1u, .endpoint = "test:6667", .nick = "operator",
+        .text = "pending top-secret body", .route = {
+            .connection = "11111111111111111111111111111111",
+            .conversation = "22222222222222222222222222222222",
+            .send = "33333333333333333333333333333333",
+            .generation = 1u, .identity = SNAG_IRC_OPERATOR, .kind = SNAG_IRC_QUERY,
+            .direction = SNAG_IRC_OUTGOING, .peer = "peer", .target = "peer"}};
+    for (unsigned int state = SNAG_IRC_PENDING; state <= SNAG_IRC_ACKNOWLEDGED; ++state) {
+        irc.route.delivery = (enum snag_irc_delivery)state;
+        event(events, "irc_event_v2", snag_irc_event_data(&irc));
+    }
+    irc.route.revised = true;
+    strcpy(irc.text, "server top-secret revision");
+    event(events, "irc_event_v2", snag_irc_event_data(&irc));
+    for (unsigned int level = 0u; level <= 6u; ++level) {
+        json_t *blocks = project(events, level);
+        json_t *pending = find(blocks, "irc", 0u);
+        json_t *written = find(blocks, "irc", 1u);
+        json_t *ack = find(blocks, "irc", 2u);
+        json_t *revised = find(blocks, "irc", 3u);
+        assert(pending && written && ack && revised);
+        assert(strstr(snag_json_string(pending, "text"), "pending <redacted:secret> body"));
+        assert(!*snag_json_string(written, "text") && !*snag_json_string(ack, "text"));
+        assert(strstr(snag_json_string(written, "label"), "send 33333333 written"));
+        assert(strstr(snag_json_string(revised, "label"), "acknowledged; server text"));
+        assert(strstr(snag_json_string(revised, "text"), "server <redacted:secret> revision"));
+        json_decref(blocks);
+    }
+    json_decref(events);
+}
+
+static void
 conversation_and_tools(void)
 {
     json_t *events = json_array();
@@ -366,6 +402,7 @@ int
 main(void)
 {
     query_conversations();
+    outgoing_receipts();
     conversation_and_tools();
     encoded_interleaving();
     redaction_expansion();

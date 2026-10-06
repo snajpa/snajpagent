@@ -46,13 +46,14 @@ static bool
 next(const struct snag_vm_document *doc, struct position *at, struct snag_vm_document_row *row)
 {
     size_t length = 0u;
-    const char *text;
-    while (at->block < json_array_size(doc->blocks)) {
+    size_t count = json_array_size(doc->blocks);
+    const char *text = NULL;
+    while (at->block < count) {
         text = field(doc, at, &length);
         if (text && at->byte < length) break;
         advance(at);
     }
-    if (at->block == json_array_size(doc->blocks)) return false;
+    if (!text || at->block >= count) return false;
     *row = (struct snag_vm_document_row){.block = at->block, .begin = at->byte,
         .column = at->column, .heading = at->heading};
     size_t cells = 0u;

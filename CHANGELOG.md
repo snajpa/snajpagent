@@ -4,12 +4,20 @@
 
 ## Unreleased
 
+- Correlate IRC query and channel sends through negotiated labeled responses,
+  including nested/interleaved batches, ACKs, errors, NOTICE and actions. Keep
+  UTF-8 chunks within the line budget and cancel safely when capabilities or
+  membership change. Retain server-revised text and show its correction in both
+  classic and Vim conversations; ordinary receipt rows display without repeating
+  the pending body. Direct chats and their Tab cycle remain available without Vim.
+  Fix GCC build diagnostics in terminal cleanup and Vim input/document handling,
+  and preserve complete workspace error messages.
+
 - Share IRC frame construction between private queries and the external channel
   owner API. Validate channel membership on every write, preserve UTF-8 line
   boundaries and record pending/written/failed/uncertain chunk outcomes. Cancel
   unwritten messages only in the departed channel; close a partially written
-  frame's connection without replay. Channel commands/panes and exact public
-  echo correlation remain in progress.
+  frame's connection without replay. Channel commands/panes remain in progress.
 
 - Restore external channel join intent and conversation identity across session
   resume. Keep local membership metadata outside model input and channel replay.

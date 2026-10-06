@@ -3932,7 +3932,7 @@ snag_vm_main(int argc, char **argv, const char *program)
     bool list = false, last = false;
     struct vm vm = {.output = -1, .stored_limit = 10u, .next_window = 2u, .mouse = true,
         .clipboard = {.output = -1, .pending_fd = -1}};
-    char error[256] = "invalid workspace arguments";
+    char error[sizeof(vm.message)] = "invalid workspace arguments";
     int rc = 2;
     snag_store_init(&vm.store);
     snag_config_init(&vm.config);

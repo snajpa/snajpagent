@@ -808,11 +808,19 @@ Vim private buffers and their controls are described under Private conversation 
 .PP
 The development query transport retains a separate send result for each chunk.
 It records pending before transmission, written after the complete frame, and
-acknowledged after local delivery or an ordered native-server echo. An external
-unlabeled write remains unconfirmed. Nick changes, disconnection and endpoint
+acknowledged after local delivery, an ordered native-server echo, or an exact
+labeled server response. External servers offering labeled-response and batch
+receive a unique label for each chunk. ACK replies and matching echoes acknowledge
+server handling; batched replies wait for the enclosing batch to finish, and
+server errors produce failed results. An acknowledgement does not prove the peer
+read the message. An external unlabeled write remains unconfirmed.
+Nick changes, disconnection, loss of the required capabilities and endpoint
 removal cancel unwritten chunks and mark started, unconfirmed sends uncertain.
-The classic query view prints the body once with a pending send ID, followed by
-compact delivery-state rows for that ID.
+Classic and Vim conversation views print the body once with a pending send ID,
+followed by compact delivery-state rows for that ID. When the server changes the
+text or action, its result includes an explicit server-text correction, retained
+in history. Labels and action framing count toward the client's line budget;
+UTF-8 characters remain intact across chunks.
 Private queues are never replayed on reconnect. Model sends use the exact query
 captured when their request started. A changed nickname or connection generation
 rejects that send, with no channel fallback; inspect irc_state before choosing

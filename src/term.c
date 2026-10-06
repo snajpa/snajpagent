@@ -505,7 +505,8 @@ input_modes(const struct snag_term *term, bool enabled)
         int fd = snag_tmux_output_open(&term->backend, NULL);
         if (fd >= 0) {
             const char *mode = enabled ? "\033[?9002h" : "\033[?9002l";
-            (void)write(fd, mode, 8u);
+            ssize_t ignored = write(fd, mode, 8u);
+            (void)ignored;
             (void)close(fd);
         }
         return 0;

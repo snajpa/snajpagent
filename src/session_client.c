@@ -653,8 +653,10 @@ out: {
         if (raw_active) {
             static const char reset[] = "\033[?2004l\033[0m\r\n";
             /* Plain/narrow owners may never have enabled ANSI terminal state. */
-            if (client.ansi_output)
-                (void)write(client.terminal, reset, sizeof(reset) - 1u);
+            if (client.ansi_output) {
+                ssize_t ignored = write(client.terminal, reset, sizeof(reset) - 1u);
+                (void)ignored;
+            }
             if (tcsetattr(client.terminal, TCSANOW, &original) < 0 && result >= 0) {
                 result = -1;
                 saved = errno;

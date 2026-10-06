@@ -28,11 +28,23 @@ actions through the private-query frame writer. The common writer preserves UTF-
 boundaries within advertised LINELEN, records chunk IDs before writing and validates
 channel membership and local identity on every write. An unwritten stale frame
 fails; a partially written stale frame closes its link with an uncertain outcome.
-Other channels survive cancellation of an entirely unwritten frame. Public echo
-ordering alone cannot distinguish these chunks from legacy channel sends, so this
-API records written/unconfirmed outcomes pending exact server receipt correlation.
-These outgoing records remain outside public channel replay. Channel frontend
-admission, hosted sends and echo/body reconciliation remain in progress.
+Other channels survive cancellation of an entirely unwritten frame. Negotiated
+labeled-response plus batch now correlates server ACKs, errors and echoes by the
+durable chunk ID. Nested and interleaved response batches finish at their root;
+a late error after PART/KICK cannot change a new membership. Correlation metadata
+shares the existing pending-memory budget. Required capability loss cancels
+unwritten frames and marks started sends uncertain. Public unlabeled echo order
+remains insufficient to confirm a channel send. These outgoing records remain
+outside public replay and model admission. Channel frontend and hosted sends
+remain in progress.
+
+Receipt bodies retain the server's final text/action and optional source ID.
+The optional v2 routing flag revised marks a correction to the local pending body;
+classic and Vim views show that correction with its send ID. Ordinary status
+updates display once without repeating the body; historical rendering uses the
+same states. A send to the local nick suppresses its separate delivered self-copy
+when echo-message supplies the receipt. Operator queries remain private in both
+interfaces, including builds with WITH_VM=0.
 
 Conversation frontend checkpoint: version8 workspace snapshots retain exact
 query routes per window and separate draft/editor/pending state per conversation,
@@ -799,7 +811,14 @@ queues retain per-chunk send IDs and delivery outcomes under the existing pendin
 memory budget. A chunk's pending record is admitted before its bytes can leave.
 Hosted local delivery and native ordered PRIVMSG echoes yield acknowledgements;
 external unlabeled writes remain unconfirmed. Standard labeled-response support
-is still pending. A nickname discontinuity or disconnect cancels unsent chunks,
+requires batch negotiation and uses per-chunk send IDs, including NOTICE and
+actions. An ACK or echo confirms server handling; a complete batch can report
+failure after an earlier echo. Ambiguous or missing results retain uncertainty.
+The optional revised routing flag carries server text/action changes through
+durable receipt records and both renderers. See the
+[labeled-response specification](https://ircv3.net/specs/extensions/labeled-response)
+and [batch specification](https://ircv3.net/specs/extensions/batch).
+A nickname discontinuity or disconnect cancels unsent chunks,
 retains uncertainty for started writes and never replays the private queue.
 Endpoint removal finishes those outcomes before stopping its owner. UTF-8 chunks
 respect the negotiated line budget, including action and recipient overhead.

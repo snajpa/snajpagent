@@ -66,7 +66,7 @@ ordinary(struct snag_vm_input *input, unsigned char byte, unsigned int modifiers
         return key(emit, opaque, SNAG_VM_KEY_BACKSPACE, modifiers);
     if (byte == 0x1bu) return key(emit, opaque, SNAG_VM_KEY_ESCAPE, modifiers);
     if (byte < 0x20u)
-        return key(emit, opaque, byte ? byte <= 26u ? 'a' + byte - 1u : '@' + byte : '@',
+        return key(emit, opaque, byte ? byte <= 26u ? 'a' + byte - 1 : '@' + byte : '@',
             modifiers | SNAG_VM_CTRL);
     return text(emit, opaque, SNAG_VM_TEXT, &byte, 1u, modifiers);
 }

@@ -117,6 +117,8 @@ struct snag_irc_event_route {
     enum snag_irc_direction direction;
     enum snag_irc_delivery delivery;
     bool action;
+    /* A receipt carries different server text/action from the pending chunk. */
+    bool revised;
     /* Present on channel records that carry the current membership lifetime. */
     char membership[SNAG_ID_HEX_LEN + 1u];
     bool joined, rejoin;

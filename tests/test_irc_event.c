@@ -153,6 +153,23 @@ delivery_states(void)
     }
     event.route.action = true;
     roundtrip(&event);
+    event.route.revised = true;
+    for (unsigned int state = SNAG_IRC_ACKNOWLEDGED; state <= SNAG_IRC_UNCERTAIN; ++state) {
+        event.route.delivery = (enum snag_irc_delivery)state;
+        roundtrip(&event);
+    }
+    struct snag_irc_event decoded;
+    for (unsigned int state = SNAG_IRC_PENDING; state <= SNAG_IRC_WRITTEN; ++state) {
+        event.route.delivery = (enum snag_irc_delivery)state;
+        json_t *data = snag_irc_event_data(&event);
+        assert(data && snag_irc_event_record_read("irc_event_v2", data, &decoded) < 0);
+        json_decref(data);
+    }
+    event.route.delivery = SNAG_IRC_ACKNOWLEDGED;
+    json_t *data = snag_irc_event_data(&event);
+    assert(json_object_set_new(json_object_get(data, "routing"), "revised", json_false()) == 0);
+    assert(snag_irc_event_record_read("irc_event_v2", data, &decoded) < 0);
+    json_decref(data);
     event = query();
     event.kind = SNAG_IRC_NOTICE;
     roundtrip(&event);

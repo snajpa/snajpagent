@@ -294,7 +294,10 @@ snag_app_remote_probe(struct app_state *app)
         n = snprintf(query, sizeof(query), "\033[?9001;%sn", app->remote_nonce);
         int fd = snag_tmux_output_open(profile, NULL);
         if (fd < 0) return 0;
-        if (n > 0 && (size_t)n < sizeof(query)) (void)write(fd, query, (size_t)n);
+        if (n > 0 && (size_t)n < sizeof(query)) {
+            ssize_t ignored = write(fd, query, (size_t)n);
+            (void)ignored;
+        }
         (void)close(fd);
         return 0;
     }

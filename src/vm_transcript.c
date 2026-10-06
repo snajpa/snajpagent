@@ -362,10 +362,22 @@ event_block(struct transcript *view, uint64_t seq, const char *type,
         int rc = snag_buf_printf(&heading, "%s/%s <%s> %s", endpoint,
             target, *nick ? nick : "server", !strcmp(kind, "message") ? "" : kind);
         if (!rc && routing) rc = snag_buf_printf(&heading, " [%s %s]", identity, conversation);
+        const char *source_text = snag_json_string(source, "text");
+        const char *direction = snag_json_string(routing, "direction");
+        if (!rc && direction && !strcmp(direction, "outgoing")) {
+            const char *state = snag_json_string(routing, "state");
+            const char *send = snag_json_string(routing, "send_id");
+            bool revised = json_is_true(json_object_get(routing, "revised"));
+            rc = state && send ? snag_buf_printf(&heading, " [send %.8s %s%s%s]", send,
+                state, revised ? "; server text" : "",
+                json_is_true(json_object_get(routing, "action")) ? "; action" : "") :
+                snag_errno(EINVAL);
+            if (state && strcmp(state, "pending") && !revised) text = source_text = "";
+        }
         if (!rc) rc = snag_buf_terminate(&heading);
         json_t *block = NULL;
         if (!rc) rc = text_block(view, seq, "irc", (const char *)heading.data,
-            text, snag_json_string(source, "text"), &block);
+            text, source_text, &block);
         if (rc < 0) block = NULL;
         if (block && (json_object_set_new(block, "endpoint", json_string(endpoint)) < 0 ||
             json_object_set_new(block, "target", json_string(target)) < 0 ||

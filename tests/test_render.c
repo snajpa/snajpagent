@@ -2022,12 +2022,17 @@ test_query_send_receipts(void)
         event.route.delivery = (enum snag_irc_delivery)state;
         assert(snag_render_irc_event(&render, &event) == 0);
     }
+    event.route.revised = true;
+    strcpy(event.text, "server-revised-body");
+    assert(snag_render_irc_event(&render, &event) == 0);
     snag_render_free(&render);
     (void)capture_close(&capture, output, sizeof(output), 0u);
     assert(count_text(output, "one-private-body") == 1u);
     assert(strstr(output, "send 33333333 pending"));
     assert(strstr(output, "send 33333333 written"));
     assert(strstr(output, "send 33333333 acknowledged"));
+    assert(count_text(output, "server-revised-body") == 1u);
+    assert(strstr(output, "server text: server-revised-body"));
 }
 
 static void
