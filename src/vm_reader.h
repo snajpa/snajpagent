@@ -19,7 +19,8 @@ struct snag_vm_read_result {
     uint64_t generation;
     struct snag_vm_read_request request;
     struct snag_journal_cursor tail, cursor;
-    /* In scan order; each entry is {seq, type, data}. Checkpoints are metadata.
+    /* In scan order; entries have seq, type, data and original public-text byte
+     * counts for offsets through redaction. Checkpoints are metadata.
      * Private provider payloads and the reader's secret snapshot are filtered. */
     json_t *events;
     bool best_effort, incomplete, more;

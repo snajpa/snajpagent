@@ -71,6 +71,10 @@ main(void)
         "snajpagent-vm-reader-XXXXXX");
     char error[256];
     assert(root && mkdtemp(root));
+    char *resolved = snag_realpath(root);
+    assert(resolved);
+    free(root);
+    root = resolved;
     struct snag_store store;
     struct snag_session source;
     snag_store_init(&store);

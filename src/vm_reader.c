@@ -2,6 +2,7 @@
 #include "vm_reader.h"
 #include "history_view.h"
 #include "json.h"
+#include "vm_public.h"
 
 #include <errno.h>
 #include <pthread.h>
@@ -101,6 +102,10 @@ read_event(void *opaque, const struct snag_session *state, uint64_t seq,
     if (!filtered) return snag_fail(error, size, EINVAL, "invalid public history projection");
     json_t *event = json_pack("{s:I,s:s,s:o}", "seq", (json_int_t)seq,
         "type", type, "data", filtered);
+    if (event && snag_vm_public_source_bytes(event, data) < 0) {
+        json_decref(event);
+        return -1;
+    }
     if (!event || json_array_append_new(page->events, event) < 0) return -1;
     return 0;
 }

@@ -38,6 +38,11 @@ Rendering, wrapping and byte/cell navigation now share one source-unit policy,
 including whole graphemes, inert controls, tab stops and ambiguous widths.
 Wrapped rows retain logical tab columns and complete source anchors, including
 units clipped by a one-cell viewport.
+Public response projection now merges fragments by response ID and public-item
+ordinal, independently of final graph local IDs or interleaved tool calls.
+Terminal snapshots replace matching streamed text; unmatched observed text stays
+labelled unconfirmed. Original byte counts survive redaction, and joined text is
+redacted again to cover credentials split across fragments.
 The workspace interface, semantic attachment
 and IRC conversation work below remain to be implemented.
 
