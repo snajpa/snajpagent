@@ -19,8 +19,10 @@ The owner also retains revisioned rollout drafts through controller changes.
 The workspace reconciles owner and saved drafts using their last shared text
 digest and owner identity; conflicts retain both copies for an explicit choice.
 The backend also accepts typed commands and retains immutable command reports.
-Frontend report buffers, terminal handoff for command results, deferred-control
-notifications and IRC routes remain integration work; clients use only advertised capabilities. A classic owner without this endpoint
+The frontend retains report buffers and hands terminal-required commands to a
+bound classic attachment. Deferred-control notifications, automatic return after
+asynchronous terminal effects and IRC routes remain integration work; clients use
+only advertised capabilities. A classic owner without this endpoint
 continues to offer its existing terminal attachment and best-effort history.
 
 ## Framing and service
@@ -53,7 +55,7 @@ All message names below are the JSON `type` value. A new client sends
 `{"type":"hello","version":1}`. `capabilities` supplies `version`, the full
 `session` ID, a random live-owner `instance` ID and `features`.
 The implemented features are `observe`, `control`, `submit`, `cancel`, `quit`,
-`detach`, `receipts`, `drafts` and `commands`.
+`detach`, `receipts`, `drafts`, `commands` and `terminal_commands`.
 
 After hello, `state` messages contain a `state` object with committed `seq`,
 byte `end`, `sha256`, journal `schema`, `active`, and the next-turn `provider`,
@@ -112,8 +114,8 @@ admission event. A deferred operation such as `/configure` reports that it was
 scheduled. Later completion is separate from this receipt. Native adapters cover
 help/status/history, model/effort/context/fast settings, verbosity, goal/state,
 steering/banner, configure/compact/yield and session list/name. Commands needing
-terminal input or IRC scope return `terminal` before dispatch. The client must
-use its own retained command text for an explicit whole-terminal transaction;
+terminal input or IRC scope return `terminal` before dispatch. The client can
+refer to that original request through a bound whole-terminal transaction;
 this result never contains a shell command supplied by the owner.
 
 A completed receipt includes `report: {id, bytes, sha256, command}` and an empty
@@ -124,7 +126,7 @@ command echo and immediate report/host/error output. The private session file
 The random 32-character lowercase hexadecimal ID is a basename component, never
 an arbitrary path. Report readers must validate the private regular file, exact
 byte length and SHA256, then apply presentation redaction and inert-control
-rendering. The frontend reader adapter remains to be implemented.
+rendering. The frontend loads reports on its cancellable background reader.
 
 The report content is outside the transport message buffer and has no report-size
 quota. Existing commands retain their own output policies, including `/history`'s
@@ -152,14 +154,38 @@ survives the older admission. The receipt's `draft_cleared` is the resulting
 empty-draft revision, or zero when no draft was cleared. Clients use that identity
 to distinguish admission's clear from an independently edited remote draft.
 
+## Terminal command references
+
+`terminal_commands` advertises a capability-gated SA/5 frame, type20 (`COMMAND`).
+Its64-byte request contains the32 ASCII lowercase-hex owner-instance bytes followed
+by the32 request-ID bytes. Only a bound classic terminal can send it, after its
+BOUND barrier. It refers to a saved command whose semantic receipt is `terminal`;
+no command text is interpreted from terminal input bytes.
+
+The owner retains the command text until dispatch and verifies its instance,
+receipt, current attachment and queue availability. Its65-byte reply echoes the
+reference and appends0 (refused, no new effect) or1 (admitted/already admitted).
+Following keyboard input waits for this acknowledgement. Admission queues the
+same engine command while preserving the classic editor's independent draft.
+The receipt changes to `pending`, then `completed` or `rejected`; duplicate
+references never enqueue another execution. A completed receipt can still mean
+accepted deferred work, as for ordinary commands. The terminal remains attached
+until /s d, ensuring an editor or transfer can complete before returning.
+
+VM automatically hands off only a newly submitted terminal-required command.
+Saved pending requests and failed/uncertain handoffs require explicit :classic
+or :recover. An owner restart changes instance and cannot consume an old reference.
+Classic SA/5 clients send their existing frames; older owners never receive the
+extension because they do not advertise this capability.
+
 ## Presentation boundary
 
 A bound semantic controller retains the canonical owner editor and prompt
 state. Transcript fragments go to durable history and typed state publication;
 the owner skips the second classic transcript render. A classic reattachment
-restores its ordinary prompt and history catch-up boundary. Full command reports
-and external I/O will get explicit typed adapters before those capabilities are
-advertised. The current protocol grants no frontend-supplied shell operation.
+restores its ordinary prompt and history catch-up boundary. Command reports use
+immutable presentation files; external I/O uses the capability-gated terminal
+transaction above. The protocol grants no frontend-supplied shell operation.
 
 ## Verification
 

@@ -3451,7 +3451,8 @@ view_input_command(struct app_state *app, const char *line, bool active,
     app->ui.view_request[0] = '\0';
     *handled = true;
     *prompt_ready = false;
-    if (!view_command_native(line)) {
+    bool terminal = app->ui.input_terminal_command;
+    if (!terminal && !view_command_native(line)) {
         json_t *result = json_pack("{s:s,s:s,s:I,s:s}", "id", id, "status", "terminal",
             "seq", (json_int_t)(app->session.next_seq - 1u),
             "reason", "command requires the session's whole-terminal interface");
@@ -3466,12 +3467,15 @@ view_input_command(struct app_state *app, const char *line, bool active,
         snag_buf_free(&report);
         return snag_ui_view_result(&app->ui, id, "rejected", 0u, "cannot retain command");
     }
-    app->command_report = app->ui.command_report = &report;
+    app->command_report = terminal ? NULL : &report;
+    app->ui.command_report = &report;
+    app->ui.command_report_passthrough = terminal;
     app->ui.command_error = false;
     rc = input_command(app, line, active, handled, prompt_ready);
     if (!rc && !*handled) rc = app_error(app, "unknown slash command");
     bool failed = rc < 0 || app->ui.command_error;
     app->command_report = app->ui.command_report = NULL;
+    app->ui.command_report_passthrough = false;
     *handled = true;
     json_t *saved = view_command_report(app, line, &report);
     char error[256] = "";
@@ -3494,7 +3498,8 @@ snag_app_input_command(struct app_state *app, const char *line, bool active,
     bool *handled, bool *prompt_ready)
 {
 #if SNAJPAGENT_VM
-    if (app->ui.input_interface && app->ui.view_request[0] && snag_prompt_command(line))
+    if ((app->ui.input_interface || app->ui.input_terminal_command) &&
+        app->ui.view_request[0] && snag_prompt_command(line))
         return view_input_command(app, line, active, handled, prompt_ready);
 #endif
     if (app->command_report || !app->ui.opened || app->ui.input_interface ||

@@ -32,7 +32,8 @@ struct snag_view_server;
 struct snag_view_callbacks {
     /* All callbacks run on the presentation owner, never on the engine. */
     void (*bound)(void *, uint64_t generation);
-    int (*submit)(void *, const char *id, const char *text, uint64_t generation);
+    int (*submit)(void *, const char *id, const char *text, uint64_t generation,
+        bool terminal);
     int (*control)(void *, bool quit);
     void *opaque;
 };
@@ -54,8 +55,18 @@ int snag_view_server_result(struct snag_view_server *, const char *id,
     const char *status, uint64_t seq, const char *event);
 int snag_view_server_command_result(struct snag_view_server *, const json_t *);
 bool snag_view_server_attached(const struct snag_view_server *);
+/* Called only for the bound terminal peer, after its repaint barrier. */
+int snag_view_server_terminal(struct snag_view_server *, const unsigned char *reference);
 
 #else
+static inline int
+snag_view_server_terminal(struct snag_view_server *server, const unsigned char *reference)
+{
+    (void)server;
+    (void)reference;
+    return -1;
+}
+
 static inline int
 snag_view_server_command_result(struct snag_view_server *server, const json_t *result)
 {

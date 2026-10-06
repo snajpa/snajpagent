@@ -45,6 +45,7 @@ peer_drop(struct snag_session_relay *relay)
     relay->input_pending = relay->closing = false;
     relay->peer_verified = false;
     relay->voice_offered = false;
+    relay->command_reply = relay->command_admitted = false;
     relay->input_offset = 0u;
 }
 
@@ -255,6 +256,16 @@ peer_message(struct snag_session_relay *relay, enum snag_session_message *event)
                 relay->output_length = relay->output_acknowledged = 0u;
                 relay->output_ack_deadline = 0u;
             }
+        } else if (type == SNAG_SESSION_COMMAND && !suspended &&
+            length == SNAG_SESSION_COMMAND_BYTES && !relay->command_reply) {
+            const unsigned char *reference = relay->input.bytes + SNAG_SESSION_HEADER;
+            for (size_t i = 0u; i < length; ++i)
+                if (!reference[i] || !strchr("0123456789abcdef", reference[i]))
+                    return snag_errno(EPROTO);
+            memcpy(relay->command_reference, reference, length);
+            relay->command_reply = true;
+            relay->command_admitted = false;
+            *event = SNAG_SESSION_COMMAND;
         } else if (type == SNAG_SESSION_RESIZE) {
             if (resize_terminal(relay, false) < 0) return -1;
             *event = SNAG_SESSION_RESIZE;
@@ -399,6 +410,13 @@ snag_session_relay_step(struct snag_session_relay *relay,
     relay->event_length = 0u;
     if (timeout_ms < -1 || relay->master < 0) return snag_errno(EINVAL);
     uint64_t now = snag_monotonic_ms();
+    if (relay->command_reply && !relay->output.used) {
+        unsigned char reply[SNAG_SESSION_COMMAND_BYTES + 1u];
+        memcpy(reply, relay->command_reference, SNAG_SESSION_COMMAND_BYTES);
+        reply[SNAG_SESSION_COMMAND_BYTES] = relay->command_admitted;
+        if (queue_output(relay, SNAG_SESSION_COMMAND, reply, sizeof(reply)) < 0) return -1;
+        relay->command_reply = false;
+    }
     expire(relay, now, event);
     if (*event) timeout_ms = 0;
     timeout_ms = deadline_wait(timeout_ms, now, relay->handshake_deadline);

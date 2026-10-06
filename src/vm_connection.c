@@ -34,7 +34,8 @@ snag_vm_connection_close(struct snag_vm_connection *connection)
     snag_view_channel_close(&connection->channel);
     connection->bound = connection->hello = connection->submitting = false;
     connection->generation = connection->deadline = connection->receipt_at = 0u;
-    connection->commands = false;
+    connection->commands = connection->terminal_commands = false;
+    connection->terminal_result = connection->terminal_auto = false;
     connection->drafts = connection->draft_ready = connection->draft_get = false;
     connection->send_pending = connection->detaching = connection->detach_sent = false;
     connection->draft_deadline = 0u;
@@ -255,6 +256,7 @@ snag_vm_connection_prepare(struct snag_vm_connection *connection)
         "text", (const char *)connection->draft.data);
     if (!pending) return -1;
     connection->pending = pending;
+    connection->terminal_auto = connection->terminal_commands;
     connection->reconcile_pending = true;
     snag_vm_editor_reset(&connection->editor);
     /* The pending copy is persisted before transmission; new typing belongs
@@ -285,6 +287,7 @@ snag_vm_connection_recover(struct snag_vm_connection *connection)
     snag_vm_editor_reset(&connection->editor);
     json_decref(connection->pending);
     connection->pending = NULL;
+    connection->terminal_result = connection->terminal_auto = false;
     connection->query = false;
     connection->send_pending = connection->reconcile_pending = false;
     connection->draft_get = connection->drafts;
@@ -455,6 +458,8 @@ receive(struct snag_vm_connection *connection, const json_t *value)
             const char *feature = json_string_value(json_array_get(features, j));
             if (feature && !strcmp(feature, "drafts")) connection->drafts = true;
             if (feature && !strcmp(feature, "commands")) connection->commands = true;
+            if (feature && !strcmp(feature, "terminal_commands"))
+                connection->terminal_commands = true;
         }
         memcpy(connection->instance, instance, sizeof(connection->instance));
         connection->hello = true;
@@ -537,7 +542,7 @@ receive(struct snag_vm_connection *connection, const json_t *value)
             if (receipt_draft(connection, value) < 0) return -1;
             connection->submitting = connection->query = false;
             connection->receipt_at = 0u;
-            connection->reconcile_pending = true;
+            connection->reconcile_pending = connection->terminal_result = true;
             message(connection, "Command needs :classic; not executed; :recover restores its text");
         } else if (!strcmp(status, "committed") || !strcmp(status, "completed")) {
             uint64_t seq;
@@ -569,6 +574,7 @@ receive(struct snag_vm_connection *connection, const json_t *value)
             }
             json_decref(connection->pending);
             connection->pending = NULL;
+            connection->terminal_result = connection->terminal_auto = false;
             connection->submitting = false;
             connection->query = false;
             connection->receipt_at = 0u;

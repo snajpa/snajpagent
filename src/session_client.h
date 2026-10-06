@@ -25,7 +25,7 @@ struct snag_session_client {
     unsigned char voice_offer[SNAG_SESSION_VOICE_BYTES];
     bool output_pending, resize_pending, quitting, peer_ended, ack_pending;
     bool ansi_output, target_verified, peer_draining;
-    bool voice_offered, voice_released;
+    bool voice_offered, voice_released, input_blocked;
 };
 
 /* Takes ownership on success; peer may be an already-attached initial socket
@@ -40,6 +40,7 @@ typedef int (*snag_session_connect_fn)(void *, const char *, char *selected, cha
 struct snag_term_host;
 struct snag_session_typeahead {
     struct snag_buf bytes;
+    unsigned char command[SNAG_SESSION_COMMAND_BYTES];
     char session[SNAG_ID_HEX_LEN + 1u];
     int signal;
     const volatile sig_atomic_t *cancelled;
@@ -47,6 +48,8 @@ struct snag_session_typeahead {
 };
 /* On supported hosts, own the real terminal and consume peer on every outcome. An initial owner
  * socket is already attached; other peers perform reserve/commit first.
+ * An optional command reference is sent once after BOUND, before keyboard input.
+ * Its acknowledgement gates following input; this call never retries the reference.
  * child is the optional owner PID created by this frontend, never a signal
  * target. Optional typeahead precedes new terminal input after BOUND; complete
  * frames consume its prefix, leaving unsent bytes on return. Its session follows

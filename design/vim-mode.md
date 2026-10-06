@@ -82,7 +82,12 @@ references; `:report [ID]` reopens one. Version6 workspace snapshots retain repo
 metadata and positions while accepting earlier layouts. Background reads verify
 private regular-file access, exact bytes and SHA256, then redact and build the
 wrapped document. Loaded reports support splits and navigation without rereads.
-Deferred-result notifications and automated terminal transactions remain work.
+The terminal-command adapter now releases semantic controllers, binds the owner's
+classic terminal and sends a saved command reference, preserving both drafts.
+It checks owner identity, deduplicates dispatch and gates later keyboard input on
+admission. Saved workspace requests require explicit recovery or :classic.
+/s d returns after the command; automatic return after deferred effects and
+retained completion notifications remain work.
 The frontend connection manager now shares one draft and owner lease per session
 across split windows. Workspace state v3 adds drafts and pending request identities,
 accepts v1/v2 layouts, and saves before transmitting a submission. Reconnect queries

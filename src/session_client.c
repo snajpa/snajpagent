@@ -302,6 +302,8 @@ peer_read(struct snag_session_client *client, enum snag_session_message *event)
                  (type == SNAG_SESSION_EXIT && length == 1u) ||
                  (type == SNAG_SESSION_SWITCH && ((length >= 8u && length <= 32u) ||
                      length == SNAG_ID_HEX_LEN + SNAG_SESSION_VOICE_BYTES)) ||
+                 (type == SNAG_SESSION_COMMAND && length == SNAG_SESSION_COMMAND_BYTES + 1u &&
+                    bytes[SNAG_SESSION_COMMAND_BYTES] <= 1u) ||
                  (type == SNAG_SESSION_ERROR && length && length < sizeof(client->event_data));
     if (!valid) return snag_errno(EPROTO);
     /* Ordinary controls stay after their display bytes. Only hard-exit intent
@@ -374,7 +376,7 @@ snag_session_client_step(struct snag_session_client *client, int timeout_ms,
                                  snag_session_packet_length(&client->incoming);
     if (incoming_ready && !client->output_pending) timeout_ms = 0;
     /* Keep source input usable until acceptance, then drain only its queued frame. */
-    bool source_input = client->peer >= 0 && !client->peer_draining &&
+    bool source_input = client->peer >= 0 && !client->peer_draining && !client->input_blocked &&
         (client->target < 0 || client->phase != SNAG_CLIENT_READY);
     struct pollfd fds[] = {
         {client->terminal, (source_input && !client->input.used ?
@@ -475,6 +477,9 @@ snag_session_client_terminal(int peer, bool attached, uint64_t child,
     const volatile sig_atomic_t *cancelled = typeahead ? typeahead->cancelled : NULL;
     int terminal = -1, result = -1, notice_peer = -1;
     size_t queued = 0u;
+    bool command = typeahead && typeahead->command[0];
+    bool command_sent = false;
+    uint64_t command_deadline = 0u;
     terminal_signal = terminal_resize = 0;
     if (typeahead) typeahead->signal = 0;
     if (error_size) error[0] = '\0';
@@ -490,6 +495,7 @@ snag_session_client_terminal(int peer, bool attached, uint64_t child,
     if (terminal < 0 || tcgetattr(terminal, &original) < 0) goto out;
     if (snag_session_client_init(&client, terminal, attached ? peer : -1) < 0) goto out;
     terminal = -1;
+    client.input_blocked = command;
     if (attached) peer = -1;
     if (!snag_terminal_profile_ansi(&client.profile)) {
         errno = ENOTSUP;
@@ -531,7 +537,19 @@ snag_session_client_terminal(int peer, bool attached, uint64_t child,
             if (snag_session_client_error(&client, notice) == 0) notice[0] = '\0';
             else if (errno != EAGAIN) goto out;
         }
-        if (prefix && prefix->len && !queued && client.peer >= 0 &&
+        if (command && !command_sent && client.peer >= 0 && client.target < 0 &&
+            !client.input.used && !client.ack_pending && !client.resize_pending) {
+            if (snag_session_packet_set(&client.input, SNAG_SESSION_COMMAND,
+                typeahead->command, SNAG_SESSION_COMMAND_BYTES) < 0) goto out;
+            command_sent = true;
+            command_deadline = snag_monotonic_ms() + HANDSHAKE_MS;
+        }
+        if (command_deadline && snag_monotonic_ms() >= command_deadline) {
+            (void)snag_fail(error, error_size, ETIMEDOUT,
+                "terminal command acknowledgement timed out; inspect its receipt");
+            goto out;
+        }
+        if (!client.input_blocked && prefix && prefix->len && !queued && client.peer >= 0 &&
             client.target < 0 && !client.input.used &&
             !client.ack_pending && !client.resize_pending) {
             queued = prefix->len < SNAG_SESSION_FRAME_MAX ?
@@ -556,7 +574,20 @@ snag_session_client_terminal(int peer, bool attached, uint64_t child,
             result = event == SNAG_SESSION_EXIT ? client.event_data[0] : 0;
             goto out;
         }
-        if (event == SNAG_SESSION_ERROR) {
+        if (event == SNAG_SESSION_COMMAND) {
+            if (!command || !command_sent ||
+                memcmp(client.event_data, typeahead->command, SNAG_SESSION_COMMAND_BYTES)) {
+                errno = EPROTO;
+                goto out;
+            }
+            command_deadline = 0u;
+            if (!client.event_data[SNAG_SESSION_COMMAND_BYTES]) {
+                (void)snag_fail(error, error_size, EAGAIN,
+                    "terminal command was not admitted; inspect its receipt");
+                goto out;
+            }
+            client.input_blocked = false;
+        } else if (event == SNAG_SESSION_ERROR) {
             destination[0] = 0;
             notice_peer = client.peer;
             (void)snprintf(notice, sizeof(notice), "%s", client.event_data);

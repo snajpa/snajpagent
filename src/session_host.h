@@ -31,8 +31,12 @@ enum snag_session_message {
     SNAG_SESSION_DETACH, SNAG_SESSION_EXIT, SNAG_SESSION_SWITCH,
     SNAG_SESSION_ERROR, SNAG_SESSION_SUSPEND, SNAG_SESSION_QUITTING, SNAG_SESSION_OUTPUT_ACK,
     SNAG_SESSION_BOUND, SNAG_SESSION_OFFER, SNAG_SESSION_PROGRESS,
-    SNAG_SESSION_RELEASE, SNAG_SESSION_RELEASED, SNAG_SESSION_STATUS
+    SNAG_SESSION_RELEASE, SNAG_SESSION_RELEASED, SNAG_SESSION_STATUS, SNAG_SESSION_COMMAND
 };
+
+/* Capability-gated command reference: owner instance + request ID (hex bytes).
+ * Its acknowledgement echoes that reference followed by one admission byte. */
+#define SNAG_SESSION_COMMAND_BYTES (2u * SNAG_ID_HEX_LEN)
 
 struct snag_session_packet {
     unsigned char bytes[SNAG_SESSION_HEADER + SNAG_SESSION_FRAME_MAX];
@@ -77,7 +81,7 @@ int snag_session_listener_open(struct snag_session_listener *, int dir_fd,
 int snag_session_view_listen(struct snag_session_listener *, int dir_fd,
                               const char *dir_path, int lock_fd);
 int snag_session_view_connect(int dir_fd, const char *dir_path);
-/* Independently versioned SV/1 frames; terminal SA/5 remains unchanged. */
+/* Independently versioned SV/1 frames; terminal commands are capability-gated SA/5. */
 int snag_session_view_packet_read(int fd, struct snag_session_packet *);
 int snag_session_view_packet_set(struct snag_session_packet *, const void *, size_t);
 void snag_session_listener_close(struct snag_session_listener *);

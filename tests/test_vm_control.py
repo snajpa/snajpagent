@@ -339,11 +339,14 @@ class ControlTests(unittest.TestCase):
         child = self.start('-N', 'rejection')
         child.command('attach ' + self.owner.sid)
         child.until(b'ATTACHED')
-        child.write(b'i/config\r')
-        child.repaint_until(b'Command needs :classic')
+        # Keep Ex entry active while the terminal requirement arrives, so
+        # explicit recovery takes precedence over automatic terminal handoff.
+        child.write(b'i/config\r\x1b:')
+        self.wait_snapshot(lambda rows:
+            (next(iter(rows.values()))['state']['buffers'][0].get('base') or {}).get(
+                'revision', 0) >= 3)
         self.assertEqual(self.inputs(), [])
-        self.escape(child)
-        child.command('recover')
+        child.write(b'recover\r')
         child.repaint_until(b'Submission recovered')
         rows = self.wait_snapshot(lambda rows:
                                   next(iter(rows.values()))['state']['buffers'][0]['draft']

@@ -17,10 +17,10 @@ struct snag_ui {
     bool prompt_wanted;
     bool active, input_active, input_echoed, input_view_applied;
     bool input_error;
-    bool input_interface;
+    bool input_interface, input_terminal_command;
     /* Engine-local capture for the duration of semantic command dispatch. */
     struct snag_buf *command_report;
-    bool command_error;
+    bool command_error, command_report_passthrough;
     bool view_listening;
     char view_request[SNAG_ID_HEX_LEN + 1u];
     uint64_t view_state_seq;

@@ -136,7 +136,8 @@ snag_view_channel_read(struct snag_view_channel *channel, json_t **value)
 struct view_receipt {
     char id[SNAG_ID_HEX_LEN + 1u], sha256[SNAG_SHA256_HEX_LEN + 1u];
     json_t *result;
-    bool pending, command;
+    char *command_text;
+    bool pending, command, terminal_dispatched;
     uint64_t draft_revision;
     struct view_receipt *next;
 };
@@ -212,6 +213,7 @@ snag_view_server_close(struct snag_view_server *server)
         struct view_receipt *receipt = server->receipts;
         server->receipts = receipt->next;
         json_decref(receipt->result);
+        free(receipt->command_text);
         free(receipt);
     }
     json_decref(server->state);
@@ -287,6 +289,10 @@ finish_receipt(struct snag_view_server *server, struct view_receipt *receipt,
     }
     json_decref(receipt->result);
     receipt->result = result;
+    if (strcmp(snag_json_string(result, "status"), "terminal")) {
+        free(receipt->command_text);
+        receipt->command_text = NULL;
+    }
     receipt->pending = false;
     if (server->pending == receipt) server->pending = NULL;
     return 0;
@@ -312,6 +318,35 @@ snag_view_server_command_result(struct snag_view_server *server, const json_t *r
     struct view_receipt *receipt = id ? find_receipt(server, id) : NULL;
     if (!receipt || !receipt->command) return snag_errno(ENOENT);
     return finish_receipt(server, receipt, json_deep_copy(result), true);
+}
+
+int
+snag_view_server_terminal(struct snag_view_server *server, const unsigned char *reference)
+{
+    if (!server || server->stopping || !reference ||
+        server->relay->phase != SNAG_SESSION_ATTACHED || server->relay->peer < 0 ||
+        memcmp(reference, server->instance, SNAG_ID_HEX_LEN)) return snag_errno(ESTALE);
+    char id[SNAG_ID_HEX_LEN + 1u];
+    memcpy(id, reference + SNAG_ID_HEX_LEN, SNAG_ID_HEX_LEN);
+    id[SNAG_ID_HEX_LEN] = 0;
+    struct view_receipt *receipt = find_receipt(server, id);
+    if (!receipt || !receipt->command) return snag_errno(ENOENT);
+    if (receipt->terminal_dispatched) return 0;
+    if (server->pending || !receipt->command_text ||
+        strcmp(snag_json_string(receipt->result, "status"), "terminal"))
+        return snag_errno(EBUSY);
+    json_t *pending = json_pack("{s:s,s:s,s:s}", "type", "result", "id", id,
+        "status", "pending");
+    if (!pending) return -1;
+    int rc = server->callbacks.submit(server->callbacks.opaque, id, receipt->command_text,
+        server->relay->generation, true);
+    if (rc < 0) { json_decref(pending); return -1; }
+    receipt->terminal_dispatched = receipt->pending = true;
+    receipt->draft_revision = 0u;
+    server->pending = receipt;
+    json_decref(receipt->result);
+    receipt->result = pending;
+    return 0;
 }
 
 static int
@@ -427,7 +462,10 @@ submit(struct snag_view_server *server, struct view_peer *peer, const json_t *me
     memcpy(receipt->sha256, digest, sizeof(receipt->sha256));
     receipt->result = json_pack("{s:s,s:s,s:s}", "type", "result", "id", id,
         "status", "pending");
-    if (!receipt->result) {
+    receipt->command_text = command ? strdup(text) : NULL;
+    if (!receipt->result || (command && !receipt->command_text)) {
+        json_decref(receipt->result);
+        free(receipt->command_text);
         free(receipt);
         return -1;
     }
@@ -437,7 +475,7 @@ submit(struct snag_view_server *server, struct view_peer *peer, const json_t *me
     receipt->next = server->receipts;
     server->receipts = server->pending = receipt;
     peer->waiting = receipt;
-    if (server->callbacks.submit(server->callbacks.opaque, id, text, peer->generation) < 0)
+    if (server->callbacks.submit(server->callbacks.opaque, id, text, peer->generation, false) < 0)
         return snag_view_server_result(server, id, "rejected", 0u, "admission unavailable");
     /* Pending is deliberately not an acceptance acknowledgement. The final
      * result is published by the engine only after its durable admission. */
@@ -469,11 +507,11 @@ dispatch(struct snag_view_server *server, struct view_peer *peer, const json_t *
             version != 1u) return snag_errno(EPROTO);
         peer->hello = true;
         peer->deadline = 0u;
-        return reply(peer, json_pack("{s:s,s:i,s:s,s:s,s:[s,s,s,s,s,s,s,s,s]}",
+        return reply(peer, json_pack("{s:s,s:i,s:s,s:s,s:[s,s,s,s,s,s,s,s,s,s]}",
             "type", "capabilities", "version", 1, "session", server->session,
             "instance", server->instance, "features",
             "observe", "control", "submit", "cancel", "quit", "detach", "receipts", "drafts",
-            "commands"));
+            "commands", "terminal_commands"));
     }
     if (!strcmp(type, "receipt")) {
         const char *id = snag_json_string(message, "id");

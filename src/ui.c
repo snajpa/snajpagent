@@ -69,7 +69,7 @@ struct ui_hard_exit_watchdog {
 struct ui_action {
     uint64_t received_ms;
     uint64_t attachment;
-    bool interface_input;
+    bool interface_input, terminal_command;
     char view_request[SNAG_ID_HEX_LEN + 1u];
     enum snag_term_action action;
     char *text;
@@ -657,7 +657,8 @@ view_bound(void *opaque, uint64_t generation)
 }
 
 static int
-view_submit(void *opaque, const char *id, const char *text, uint64_t generation)
+view_submit(void *opaque, const char *id, const char *text, uint64_t generation,
+    bool terminal)
 {
     struct snag_ui_display *display = opaque;
     struct snag_ui_runtime *runtime = display->runtime;
@@ -676,6 +677,16 @@ view_submit(void *opaque, const char *id, const char *text, uint64_t generation)
     item->action = SNAG_TERM_SUBMIT;
     item->attachment = generation;
     item->interface_input = true;
+    item->terminal_command = terminal;
+    if (terminal) {
+        if (snag_term_hide(&display->term) < 0) {
+            free(item->text);
+            free(item);
+            return -1;
+        }
+        display->term.prompt_wanted = false;
+        snag_term_destination_route(&display->term, text, &item->route);
+    }
     take_snapshot(display, &item->snapshot);
     item->snapshot.view = SNAG_RENDER_ROLLOUT;
     item->steering = item->snapshot.active && !snag_prompt_command(text);
@@ -737,6 +748,9 @@ session_service(struct snag_ui_display *display, int timeout_ms)
         }
         atomic_store(&display->runtime->session_attachment, display->relay.generation);
         snag_wakeup_send(display->runtime->actions.wake[1]);
+    } else if (event == SNAG_SESSION_COMMAND) {
+        display->relay.command_admitted = snag_view_server_terminal(display->view,
+            display->relay.command_reference) == 0;
     } else if (event == SNAG_SESSION_RELEASE) {
         atomic_store(&display->runtime->session_attachment, 0u);
         atomic_store(&display->runtime->session_releasing, display->relay.generation);
@@ -1892,11 +1906,11 @@ snag_ui_text(struct snag_ui *ui, enum snag_ui_operation op, const char *text)
         size_t length = strlen(text);
         if (snag_term_append_safe(ui->command_report, text, length) < 0) return -1;
         int rc = length && text[length - 1u] == '\n' ? 0 : snag_buf_putc(ui->command_report, '\n');
-        if (!rc && ui->observe && op != SNAG_UI_RUNTIME)
+        if (!rc && !ui->command_report_passthrough && ui->observe && op != SNAG_UI_RUNTIME)
             ui->observe(ui->observe_opaque, op == SNAG_UI_ERROR ? "error" :
                 op == SNAG_UI_WARNING ? "warning" : op == SNAG_UI_HELP ? "help" : "host",
                 text, NULL);
-        return rc;
+        if (rc < 0 || !ui->command_report_passthrough) return rc;
     }
     struct ui_message message = {.command = {.kind = op}};
     return send_message(ui, &message, text);
@@ -2101,7 +2115,7 @@ snag_ui_poll(struct snag_ui *ui, int timeout_ms, enum snag_term_action *action, 
     *text = NULL;
     ui->input_echoed = false;
     ui->input_error = false;
-    ui->input_interface = false;
+    ui->input_interface = ui->input_terminal_command = false;
     if (ui->view_request[0] && snag_ui_view_result(ui, ui->view_request,
             "rejected", 0u, "input was not admitted") < 0) return -1;
     for (;;) {
@@ -2171,7 +2185,8 @@ snag_ui_poll(struct snag_ui *ui, int timeout_ms, enum snag_term_action *action, 
     memcpy(ui->view_request, item->view_request, sizeof(ui->view_request));
     ui->input_received_ms = item->received_ms;
     ui->input_error = item->input_error;
-    ui->input_interface = item->interface_input;
+    ui->input_terminal_command = item->terminal_command;
+    ui->input_interface = item->interface_input && !item->terminal_command;
     ui->input_view = item->snapshot.view;
     ui->input_active = item->snapshot.active;
     ui->input_route = item->route;

@@ -68,7 +68,7 @@ int
 snag_session_packet_set(struct snag_session_packet *packet, enum snag_session_message type,
                          const void *data, size_t length)
 {
-    if (type < SNAG_SESSION_RESERVE || type > SNAG_SESSION_STATUS ||
+    if (type < SNAG_SESSION_RESERVE || type > SNAG_SESSION_COMMAND ||
         length > SNAG_SESSION_FRAME_MAX || (length && !data)) return snag_errno(EINVAL);
     packet->bytes[0] = 'S';
     packet->bytes[1] = 'A';
@@ -642,7 +642,7 @@ packet_read_version(int fd, struct snag_session_packet *packet,
 int
 snag_session_packet_read(int fd, struct snag_session_packet *packet)
 {
-    return packet_read_version(fd, packet, 'A', 5u, SNAG_SESSION_STATUS);
+    return packet_read_version(fd, packet, 'A', 5u, SNAG_SESSION_COMMAND);
 }
 
 int

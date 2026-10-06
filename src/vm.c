@@ -865,6 +865,14 @@ classic_request(struct vm *vm, const char *selector)
         notice(vm, "Queued classic input belongs to another session; :recover it first");
         return;
     }
+    memset(vm->classic.command, 0, sizeof(vm->classic.command));
+    struct snag_vm_connection *source = connection_for(vm, id, false);
+    if (source && source->terminal_commands && source->terminal_result && source->pending) {
+        memcpy(vm->classic.command, source->instance, SNAG_ID_HEX_LEN);
+        memcpy(vm->classic.command + SNAG_ID_HEX_LEN,
+            snag_json_string(source->pending, "id"), SNAG_ID_HEX_LEN);
+        source->terminal_auto = false;
+    }
     memcpy(vm->classic.session, id, sizeof(id));
     vm->classic_pending = true;
     vm->classic_ready = false;
@@ -1630,6 +1638,12 @@ connections_step(struct vm *vm)
             !vm->classic_pending && !vm->detach_exit && !vm->switch_workspace &&
             !vm->detach_suspend && !vm->quit_all && !vm->quit_window)
             open_report(vm, c, json_array_get(c->reports, json_array_size(c->reports) - 1u));
+        if (c->terminal_result && c->terminal_auto && focused_connection(vm) == c &&
+            !vm->classic_pending && !vm->mode && !vm->detach_exit && !vm->switch_workspace &&
+            !vm->detach_suspend && !vm->quit_all && !vm->quit_window) {
+            c->terminal_auto = false;
+            classic_request(vm, c->session);
+        }
         if (c->quitting && !c->exited && c->control) waiting = true;
         if (c->channel.fd >= 0) connected = true;
     }
@@ -2039,6 +2053,7 @@ classic_run(struct vm *vm)
         int peer = classic_connect(vm, vm->classic.session, NULL, error, sizeof(error));
         if (peer >= 0) rc = snag_session_client_terminal(peer, false, 0u,
             classic_connect, vm, &vm->classic, error, sizeof(error));
+        memset(vm->classic.command, 0, sizeof(vm->classic.command));
         if (vm->classic.signal) stopped = vm->classic.signal;
         if (rc > 0 && !stopped) (void)snprintf(error, sizeof(error),
             "Classic owner exited with status %d", rc);

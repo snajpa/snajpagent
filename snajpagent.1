@@ -1884,9 +1884,18 @@ Reports stay outside model context. Deferred controls initially report acceptanc
 their later result notifications remain under development.
 .PP
 /fast confirms ON or OFF in its report; an attached transcript also shows FAST
-when the owner selects priority service. Commands needing terminal interaction
-remain retained for :recover and execution through :classic. They are not executed
-by the semantic frontend. An owner without command support preserves the draft.
+when the owner selects priority service. With a supporting owner, commands needing
+terminal interaction automatically open its whole terminal and execute there.
+Both the workspace draft and the classic prompt's existing draft remain intact.
+Use /s d to return after the editor, transfer or other command finishes.
+New typing in the workspace before the handoff remains saved in its draft.
+.PP
+The handoff references the already submitted command and live owner instance;
+repeated references cannot execute it twice. A command recovered from a saved
+workspace waits for an explicit :classic or :recover. Uncertain attachment outcomes
+are reconciled through the existing command receipt, without automatic replay.
+Owners lacking terminal-command support require :recover and manual execution
+through :classic. An owner without semantic command support preserves the draft.
 .SS "Use an owner's full terminal"
 .B :classic [SESSION_ID]
 opens an existing native owner's terminal, including owners started before
@@ -1937,8 +1946,11 @@ immediate output. Reports stay outside model context, survive owner restarts,
 and are removed by explicit session deletion. Deferred controls acknowledge
 scheduling before their later completion. Commands needing a terminal transaction
 return that requirement before execution. The workspace retains report references
-and opens their contents on its background reader. Automatic terminal transactions
-remain under development; use :classic for commands requiring an external terminal.
+and opens their contents on its background reader. Deferred result notifications
+remain under development. A terminal-required command can transfer to a bound
+classic attachment using its advertised terminal_commands capability. The owner
+admits that saved reference before accepting following keyboard input. The current
+handoff returns on /s d; deferred controls remain on the terminal through completion.
 .PP
 The backend also offers revisioned rollout drafts. Bound controllers can read,
 replace and subscribe to a draft, using its expected revision to reject stale edits.

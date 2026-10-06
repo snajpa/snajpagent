@@ -4,6 +4,12 @@
 
 ## Unreleased
 
+- Hand terminal-required workspace commands to a bound native attachment using
+  their saved request and owner identity. Preserve classic and workspace drafts,
+  gate following input on admission, and deduplicate command references.
+  Workspace resume leaves uncertain handoffs for explicit :classic or :recover.
+  /s d returns from the command's terminal to the workspace.
+
 - Add the development `vm` workspace frontend with named layout persistence,
   session/workspace pickers, Vim-style splits and focus, metadata filtering,
   mouse input, paged retained transcripts, retrospective verbosity and terminal

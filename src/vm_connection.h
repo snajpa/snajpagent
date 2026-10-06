@@ -22,6 +22,7 @@ struct snag_vm_connection {
     uint64_t draft_edit, draft_deadline;
     bool control, bound, hello, query, submitting, quitting, exited;
     bool commands, drafts, draft_ready, draft_dirty, draft_conflict, draft_get;
+    bool terminal_commands, terminal_result, terminal_auto;
     bool send_pending, reconcile_pending, detaching, detach_sent;
 };
 

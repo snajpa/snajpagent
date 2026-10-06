@@ -26,8 +26,10 @@ bound(void *opaque, uint64_t generation)
 }
 
 static int
-submit(void *opaque, const char *id, const char *text, uint64_t generation)
+submit(void *opaque, const char *id, const char *text, uint64_t generation,
+    bool terminal)
 {
+    assert(!terminal);
     struct engine *engine = opaque;
     assert(strlen(id) == SNAG_ID_HEX_LEN && *text && generation == engine->generation);
     ++engine->submissions;

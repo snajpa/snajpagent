@@ -27,6 +27,8 @@ struct snag_session_relay {
     size_t event_length;
     bool input_pending, closing, peer_verified, reject_verified, reject_reply;
     bool voice_offered;
+    unsigned char command_reference[SNAG_SESSION_COMMAND_BYTES];
+    bool command_reply, command_admitted;
     bool view_reserved, view_attached;
 };
 
@@ -38,6 +40,8 @@ void snag_session_relay_close(struct snag_session_relay *);
  * this attachment), RESIZE, DETACH, ERROR or zero.
  * ERROR is a client diagnostic in event_data/event_length until the next step;
  * it never becomes PTY input or releases the current attachment.
+ * COMMAND publishes command_reference; the presentation owner sets command_admitted
+ * before its next step. The relay then sends the reference acknowledgement.
  * Returns 1 on PTY EOF, 0 on progress/timeout, -1 on a PTY/poll failure. Peer
  * failures only detach. The listener is borrowed; NULL disables new accepts. */
 int snag_session_relay_step(struct snag_session_relay *, const struct snag_session_listener *,
