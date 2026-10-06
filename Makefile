@@ -93,6 +93,7 @@ COMMON_SRC += src/convert.c src/tools_media.c src/media.c src/tools_document.c s
 COMMON_SRC += src/upload_wire.c src/upload_md5.c src/screen_wire.c src/upload.c src/remote.c
 COMMON_SRC += src/app_resume.c
 COMMON_SRC += src/irc_address.c
+COMMON_SRC += src/vm.c
 ifeq ($(WITH_VM),1)
 COMMON_SRC += src/vm_reader.c src/vm_grid.c src/unicode.c src/vm_workspace.c src/vm_layout.c
 COMMON_SRC += src/vm_input.c src/vm_text.c
@@ -110,6 +111,7 @@ HEADERS += src/vm_layout.h
 HEADERS += src/vm_input.h
 HEADERS += src/vm_text.h
 HEADERS += src/vm_public.h
+HEADERS += src/vm.h
 HEADERS += src/irc_address.h
 FIXTURE_BIN = tests/$(NAME)-fixture
 TEST_BIN = tests/snajpagent-transport tests/test_base tests/test_config tests/test_irc tests/test_instructions tests/test_credential tests/test_sse tests/test_json tests/test_store_record $(VM_TEST_BIN) tests/test_rules tests/test_wire tests/test_responses tests/test_provider_retry tests/test_provider_transport tests/test_context tests/test_model_cache tests/test_render tests/test_turn tests/test_tools tests/test_store tests/test_write tests/test_upload_wire $(FIXTURE_BIN)
@@ -305,6 +307,7 @@ ifeq ($(WITH_VM),1)
 	./tests/test_vm_input
 	./tests/test_vm_text
 	./tests/test_vm_public
+	python3 tests/test_vm_frontend.py ./$(BIN)
 endif
 	./tests/test_rules
 	./tests/test_wire

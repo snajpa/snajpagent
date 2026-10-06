@@ -46,6 +46,10 @@ snajpagent \- terminal coding agent with built-in IRC
 .RI [ --dotdir " PATH]"
 .RI [ -- ]
 .RI [ COMMAND " ARG ...]"
+.br
+.B snajpagent vm
+.RI [ --dotdir " PATH]"
+.RI [ -N " NAME | --resume WORKSPACE | --last | -l [N]]"
 .SH DESCRIPTION
 .B snajpagent
 is a coding agent for the terminal, with a built-in IRC server and client.
@@ -1638,6 +1642,70 @@ replays keyboard bytes received after the final EXIT. Source files are unchanged
 If the source's size or modification timestamp changes while being sent,
 the transfer fails. Interactive terminal transfers require POSIX hosts. One-shot send_file queues
 its export for wrapped attachment. Read-only model turns reject send_file.
+.SH "Vim workspace"
+The development workspace opens with
+.BR "snajpagent vm" .
+It currently provides agent-session and workspace pickers, help, filters and
+persistent split layouts. Agent execution still uses the ordinary
+.B snajpagent --resume SESSION_ID
+command. Workspace browsing does not start model turns or IRC connections.
+Runtime activation is explicit; ordinary startup retains its terminal interface.
+.PP
+.B vm -N NAME
+creates a named workspace.
+.B vm --resume WORKSPACE
+restores an exact workspace name or a unique ID prefix;
+.B vm --last
+restores the most recently active workspace.
+An open workspace remains exclusively owned by its frontend. A second resume
+reports that ownership without stealing or stopping it.
+Workspace names and IDs are separate from agent-session names and IDs.
+.PP
+.B vm -l [N]
+lists all open workspaces and up to N stored workspaces, newest activity first.
+The default stored count is ten; zero keeps only open/error rows.
+Listing, help and version leave terminal modes unchanged and perform no
+provider startup. Interactive use requires a capable terminal on stdin/stdout.
+.PP
+Use j/k or arrows to select, gg/G for the first/last row, Ctrl-D/U to move half
+a window and / to filter picker metadata. R refreshes the lists; selection
+follows the same full ID when activity reorders agent rows. The session picker
+uses the classic list's attached/detached/running/stored ordering and data.
+In the workspace picker, Enter restores the selected workspace. A failed open
+or invalid snapshot keeps the current workspace usable.
+.PP
+.B :sessions
+opens the agent picker;
+.B :workspaces
+opens the workspace picker;
+.B :help
+shows the current controls.
+.B :split
+or :sp divides horizontally; :vsplit or :vsp divides vertically.
+Ctrl-W s/v also splits, Ctrl-W w cycles focus and Ctrl-W h/j/k/l selects a
+neighbor. Ctrl-W = equalizes proportions, +/- changes height and >/< changes width.
+Terminal shrink temporarily hides windows while preserving their layout.
+Mouse clicks focus/select; the wheel moves the selection.
+.PP
+In these pickers and help views,
+.B :q
+or :close closes the window; the last window exits the workspace.
+.B :qa
+exits the workspace.
+.B :workspace
+shows its name, ID and save status;
+.B :workspace name NAME
+renames it and :workspace save writes immediately. Quote names containing spaces.
+Layout and filter changes save after a one-second editing pause; clean exit,
+switch and suspend also save. A save failure stays visible and can be retried.
+Leaving an untouched initial picker creates no saved workspace.
+.PP
+Snapshots are private files under $DOTDIR/workspaces/WORKSPACE_ID/workspace.json.
+They retain the layout, focus, selection and filters. Corrupt or newer unsupported
+state is reported and preserved. Bracketed paste inserts literal text in command
+or filter input; it cannot execute a command by itself. Escape returns to normal
+mode, Ctrl-L redraws and Ctrl-Z suspends on supported platforms. Clean exit and
+handled shutdown signals restore cooked input, cursor, mouse and screen modes.
 .SH "Commands"
 Commands normally occupy a single submitted line.
 Each entered command stays visible with its original prompt before its feedback,

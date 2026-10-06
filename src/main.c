@@ -7,6 +7,7 @@
 #include "render.h"
 #include "remote.h"
 #include "snajpagent.h"
+#include "vm.h"
 #ifdef _WIN32
 #include "process_host.h"
 #endif
@@ -24,6 +25,7 @@ run(int argc, char **argv)
 
     snag_ignore_sigpipe();
     if (argc > 1 && !strcmp(argv[1], "remote")) return snag_remote_main(argc - 2, argv + 2);
+    if (argc > 1 && !strcmp(argv[1], "vm")) return snag_vm_main(argc - 2, argv + 2);
     snag_office_program(argv[0]);
     (void)snag_office_worker(argc,argv);
     snag_cli_init(&cli);

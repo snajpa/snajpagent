@@ -2,10 +2,9 @@
 
 # Pager retention and the Vim workspace
 
-Status: proposed implementation design, October 6, 2026. Source inspection is
-against `7a70d81d336ef6f14d91ef944b1226c8efa65636`. This document describes the
-intended behavior; the `vm` command and semantic attachment described below are
-not implemented at that revision.
+Status: implementation in progress, October 6, 2026. The original inspection
+was against `7a70d81d336ef6f14d91ef944b1226c8efa65636`. The checkpoint below
+distinguishes implemented components from the complete intended behavior.
 
 Implementation checkpoint: asynchronous pager ownership and retained rendering
 are implemented in this branch. Held-pager regressions cover IRC delivery and
@@ -21,8 +20,7 @@ and width policy; all 766 official grapheme-boundary cases pass locally.
 The build switch `WITH_VM=0` omits these optional workspace objects.
 Private workspace storage now supports atomic snapshots, unique names and ID
 prefixes, exclusive ownership and open-first activity ordering. Probes preserve
-existing locks; a lost frontend leaves a resumable snapshot. The frontend still
-needs to define and validate its layout/draft payload and expose the commands.
+existing locks; a lost frontend leaves a resumable snapshot.
 The typed agent-session catalogue shares the classic list's collection, live
 status probes, ordering and stored-row selection, and retains full session IDs.
 Catalogue loading now runs on the background reader with the same cancellation
@@ -49,8 +47,17 @@ redacted again to cover credentials split across fragments.
 The shared IRC address parser handles qualified buffers, short message targets,
 quoted operands and percent escaping before owner-specific route resolution.
 It remains available when VM is compiled out.
-The workspace interface, semantic attachment
-and IRC conversation work below remain to be implemented.
+The `vm` frontend now integrates terminal/grid/input ownership with asynchronous
+agent catalogues, workspace listing/resume, metadata filters, mouse selection,
+Vim-style splits/focus and help. A strict versioned state records window kinds,
+stable selections, filters, focus and layout. Destination validation completes
+under its own exclusive lock before switching; a failure preserves the current
+workspace. Real PTY tests cover normal/signal exit, blocked output, suspend,
+small-terminal restoration, exclusive ownership, failed switches and literal
+paste on Mac and Linux. The frontend also builds out to a diagnostic stub.
+Agent transcript projection/navigation, composition, semantic attachment and
+IRC conversations below still need integration. This development frontend has
+not been installed on the operator's machines or merged into the release line.
 
 ## 1. Outcome and decisions
 

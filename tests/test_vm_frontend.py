@@ -1,0 +1,369 @@
+# SPDX-License-Identifier: GPL-2.0-only
+"""Workspace CLI, real terminal ownership, persistence and input boundaries."""
+
+import fcntl
+import json
+import os
+import pty
+import select
+import signal
+import struct
+import subprocess
+import sys
+import tempfile
+import termios
+import time
+import unittest
+import uuid
+from pathlib import Path
+
+
+BINARY = Path(sys.argv.pop(1)).resolve() if len(sys.argv) > 1 and not sys.argv[1].startswith('-') else (
+    Path(__file__).resolve().parents[1] / 'snajpagent')
+
+
+# Keep the controlling process alive until the child's restored modes have been
+# captured. Darwin revokes a session leader's slave PTY on exit, even while the
+# test holds an open descriptor. This also makes suspend state observable.
+KEEPER = r"""
+import json, os, subprocess, sys, termios
+from pathlib import Path
+path = Path(sys.argv[1])
+p = subprocess.Popen(sys.argv[2:])
+def record(state, **fields):
+    tmp = path.with_suffix('.new')
+    tmp.write_text(json.dumps(dict(pid=p.pid, state=state, **fields)))
+    tmp.replace(path)
+record('running')
+while True:
+    _, status = os.waitpid(p.pid, os.WUNTRACED | os.WCONTINUED)
+    if os.WIFSTOPPED(status):
+        record('stopped')
+    elif os.WIFCONTINUED(status):
+        record('running')
+    else:
+        p.returncode = os.waitstatus_to_exitcode(status)
+        modes = termios.tcgetattr(0)
+        modes[6] = [x[0] if isinstance(x, bytes) else x for x in modes[6]]
+        record('exited', modes=modes, returncode=p.returncode)
+        sys.exit(p.returncode)
+"""
+
+
+def normalized_modes(modes):
+    modes = list(modes)
+    # PENDIN records pending kernel retyping, not an application mode setting.
+    modes[3] &= ~getattr(termios, 'PENDIN', 0)
+    modes[6] = [x[0] if isinstance(x, bytes) else x for x in modes[6]]
+    return modes
+
+
+class Terminal:
+    def __init__(self, root, args=(), rows=12, columns=100):
+        self.master, self.slave = pty.openpty()
+        self.original = normalized_modes(termios.tcgetattr(self.slave))
+        self.receipt = root / ('terminal-' + uuid.uuid4().hex + '.json')
+        self.resize(rows, columns)
+        env = dict(os.environ, HOME=str(root), TERM='xterm-256color')
+        for key in ('TMUX', 'TMUX_PANE', 'STY', 'SNAJPAGENT_DOTDIR', 'OPENAI_API_KEY'):
+            env.pop(key, None)
+
+        def controlling_terminal():
+            os.setsid()
+            fcntl.ioctl(self.slave, termios.TIOCSCTTY, 0)
+
+        self.process = subprocess.Popen([sys.executable, '-c', KEEPER, str(self.receipt),
+                                         str(BINARY), 'vm', '--dotdir', str(root / 'state'), *args],
+                                        stdin=self.slave, stdout=self.slave, stderr=self.slave,
+                                        cwd=root, env=env, preexec_fn=controlling_terminal)
+        self.output = bytearray()
+
+    def resize(self, rows, columns):
+        fcntl.ioctl(self.slave, termios.TIOCSWINSZ, struct.pack('HHHH', rows, columns, 0, 0))
+        if hasattr(self, 'process'):
+            self.signal(signal.SIGWINCH)
+
+    def state(self):
+        return json.loads(self.receipt.read_text()) if self.receipt.exists() else {}
+
+    def signal(self, number):
+        state = self.state()
+        if state and state['state'] != 'exited':
+            try:
+                os.kill(state['pid'], number)
+            except ProcessLookupError:
+                pass
+
+    def read(self, timeout=.05):
+        if select.select([self.master], [], [], timeout)[0]:
+            try:
+                data = os.read(self.master, 65536)
+            except OSError:
+                return b''
+            self.output.extend(data)
+            return data
+        return b''
+
+    def until(self, marker, timeout=5):
+        deadline = time.monotonic() + timeout
+        while marker not in self.output and time.monotonic() < deadline:
+            self.read()
+        if marker not in self.output:
+            raise AssertionError((marker, self.process.poll(), bytes(self.output[-5000:])))
+
+    def write(self, text):
+        os.write(self.master, text)
+
+    def command(self, text):
+        self.write(b':' + text.encode() + b'\r')
+
+    def finish(self, command='qa'):
+        if self.process.poll() is None:
+            self.command(command)
+        self.wait_exit()
+        assert self.process.poll() == 0, bytes(self.output[-3000:])
+        assert normalized_modes(self.state()['modes']) == self.original, 'terminal modes were not restored'
+        assert b'\x1b[?1049l' in self.output, 'alternate screen was not released'
+
+    def wait_exit(self):
+        # Drain output while the controlling process exits. A Darwin PTY's
+        # final close can wait for its pending output to be consumed.
+        deadline = time.monotonic() + 5
+        while self.process.poll() is None and time.monotonic() < deadline:
+            self.read()
+        self.read(0)
+        assert self.process.poll() is not None, bytes(self.output[-3000:])
+
+    def close(self):
+        try:
+            if self.process.poll() is None:
+                self.signal(signal.SIGCONT)
+                self.signal(signal.SIGTERM)
+                deadline = time.monotonic() + 3
+                while self.process.poll() is None and time.monotonic() < deadline:
+                    self.read()
+                if self.process.poll() is None:
+                    os.killpg(self.process.pid, signal.SIGKILL)
+                    self.process.wait(3)
+        finally:
+            os.close(self.master)
+            os.close(self.slave)
+
+
+class WorkspaceTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix='snag-vm-',
+                                               dir='/private/tmp' if sys.platform == 'darwin' else None)
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name).resolve()
+
+    def start(self, *args, **kwargs):
+        child = Terminal(self.root, args, **kwargs)
+        self.addCleanup(child.close)
+        child.until(b'\x1b[?1049h')
+        child.until(b'sessions')
+        return child
+
+    def snapshots(self):
+        return {path.parent.name: json.loads(path.read_text()) for path in
+                (self.root / 'state' / 'workspaces').glob('*/workspace.json')}
+
+    def wait_snapshot(self, predicate):
+        deadline = time.monotonic() + 5
+        values = {}
+        while time.monotonic() < deadline:
+            values = self.snapshots()
+            if predicate(values):
+                return values
+            time.sleep(.02)
+        self.fail(f'snapshot did not reach expected state: {values}')
+
+    def cli(self, *args):
+        return subprocess.run([str(BINARY), 'vm', '--dotdir', str(self.root / 'state'), *args],
+                              env={**os.environ, 'HOME': str(self.root)},
+                              capture_output=True, timeout=5)
+
+    def test_help_list_and_nonterminal_do_not_start_agents(self):
+        result = self.cli('--help')
+        self.assertEqual(result.returncode, 0)
+        self.assertIn(b'--resume', result.stdout)
+        self.assertFalse((self.root / 'state').exists())
+        result = self.cli('-N', 'unusable')
+        self.assertEqual(result.returncode, 2)
+        self.assertNotIn(b'\x1b', result.stdout + result.stderr)
+        self.assertFalse((self.root / 'state').exists())
+        result = self.cli('-l', '0')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.count(b'\n'), 1)
+        self.assertFalse((self.root / 'state' / 'workspaces').exists())
+        self.assertEqual(list((self.root / 'state' / 'sessions').iterdir()), [])
+
+    def test_untouched_picker_does_not_create_workspace(self):
+        child = self.start()
+        child.finish('q')
+        self.assertEqual(self.snapshots(), {})
+        self.assertEqual(list((self.root / 'state' / 'sessions').iterdir()), [])
+
+    def test_split_layout_named_resume_and_tiny_resize(self):
+        child = self.start('-N', 'operations')
+        child.command('vsp')
+        child.command('sp')
+        child.command('help')
+        child.command('workspace save')
+        saved = self.wait_snapshot(lambda values: len(values) == 1 and
+                                  len(next(iter(values.values()))['state']['windows']) == 3)
+        sid, snapshot = next(iter(saved.items()))
+        child.resize(1, 1)
+        child.write(b'\x17w')
+        time.sleep(.1)
+        child.resize(12, 100)
+        child.write(b'\x17=')
+        child.finish()
+        final = self.snapshots()[sid]
+        resumed = self.start('--resume', 'operations')
+        resumed.command('workspace save')
+        restored = self.wait_snapshot(lambda values: values[sid]['activity_ms'] > final['activity_ms'])
+        self.assertEqual(restored[sid]['state'], final['state'])
+        resumed.finish()
+
+    def test_live_workspace_refuses_second_owner(self):
+        child = self.start('-N', 'busy')
+        other = Terminal(self.root, ('--resume', 'busy'))
+        self.addCleanup(other.close)
+        other.wait_exit()
+        while other.read(0):
+            pass
+        self.assertEqual(other.process.returncode, 2)
+        self.assertNotIn(b'\x1b[?1049h', other.output)
+        listing = self.cli('-l', '0')
+        self.assertEqual(listing.returncode, 0)
+        self.assertIn(b'\tbusy\topen\t', listing.stdout)
+        child.command('workspace name "renamed workspace"')
+        self.wait_snapshot(lambda values: next(iter(values.values()))['name'] == 'renamed workspace')
+        child.finish()
+        resumed = self.start('--resume', 'renamed workspace')
+        resumed.finish()
+
+    def test_paste_and_lone_escape_do_not_execute_commands(self):
+        child = self.start('-N', 'paste')
+        child.write(b'\x1b[200~:qa\r\x03\x1b[201~')
+        time.sleep(.1)
+        self.assertIsNone(child.process.poll())
+        child.write(b'/\x1b[200~')
+        for byte in 'e\u0301界'.encode():
+            child.write(bytes([byte]))
+        time.sleep(.06)
+        child.write(b'\x1b[201~\r')
+        child.command('workspace save')
+        self.wait_snapshot(lambda values: next(iter(values.values()))['state']['windows'][0]['filter']
+                           == 'e\u0301界')
+        child.write(b':qa\x1b')
+        time.sleep(.1)
+        self.assertIsNone(child.process.poll())
+        child.command('workspace name survived')
+        self.wait_snapshot(lambda values: next(iter(values.values()))['name'] == 'survived')
+        child.finish()
+
+    def test_signal_restores_terminal_and_saved_layout(self):
+        child = self.start('-N', 'signal')
+        child.command('vsp')
+        child.command('workspace save')
+        self.wait_snapshot(lambda values: len(next(iter(values.values()))['state']['windows']) == 2)
+        child.signal(signal.SIGTERM)
+        child.finish()
+        resumed = self.start('--last')
+        resumed.finish()
+
+    def test_suspend_restores_terminal_then_redraws(self):
+        child = self.start('-N', 'suspend')
+        child.write(b'\x1a')
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            if child.state().get('state') == 'stopped':
+                break
+            child.read()
+        self.assertEqual(child.state().get('state'), 'stopped')
+        self.assertEqual(normalized_modes(termios.tcgetattr(child.slave)), child.original)
+        before = child.output.count(b'\x1b[?1049h')
+        child.signal(signal.SIGCONT)
+        deadline = time.monotonic() + 5
+        while child.output.count(b'\x1b[?1049h') == before and time.monotonic() < deadline:
+            child.read()
+        self.assertGreater(child.output.count(b'\x1b[?1049h'), before)
+        child.finish()
+
+    def test_unknown_state_is_preserved_and_terminal_not_entered(self):
+        child = self.start('-N', 'future')
+        child.finish()
+        path = next((self.root / 'state' / 'workspaces').glob('*/workspace.json'))
+        value = json.loads(path.read_text())
+        value['state']['v'] = 100
+        path.write_text(json.dumps(value))
+        before = path.read_bytes()
+        other = Terminal(self.root, ('--resume', 'future'))
+        self.addCleanup(other.close)
+        other.wait_exit()
+        while other.read(0):
+            pass
+        self.assertEqual(other.process.returncode, 2)
+        self.assertNotIn(b'\x1b[?1049h', other.output)
+        self.assertEqual(path.read_bytes(), before)
+
+    def test_workspace_picker_switch_and_failed_switch_preserve_owner(self):
+        first = self.start('-N', 'first')
+        first.finish()
+        second = self.start('-N', 'second')
+        second.finish()
+        child = self.start('--resume', 'first')
+        child.command('workspaces')
+        child.write(b'G\r')
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            child.read()
+            listing = self.cli('-l').stdout
+            if b'\tsecond\topen\t' in listing:
+                break
+        self.assertIn(b'\tsecond\topen\t', listing)
+        self.assertIn(b'\tfirst\tstored\t', listing)
+        path = next(path for path in (self.root / 'state' / 'workspaces').glob('*/workspace.json')
+                    if json.loads(path.read_text())['name'] == 'first')
+        value = json.loads(path.read_text())
+        value['state']['windows'][0]['id'] = 999
+        path.write_text(json.dumps(value))
+        original = path.read_bytes()
+        child.command('workspaces')
+        child.write(b'G\r')
+        child.until(b'invalid workspace views')
+        self.assertIn(b'\tsecond\topen\t', self.cli('-l').stdout)
+        self.assertEqual(path.read_bytes(), original)
+        child.command('workspace name still-owned')
+        self.wait_snapshot(lambda values: any(x['name'] == 'still-owned' for x in values.values()))
+        child.finish()
+
+    def test_stalled_output_still_accepts_signal_and_restores_modes(self):
+        child = self.start('-N', 'backpressure')
+        child.command('help')
+        child.until(b'Ctrl-D/U')
+        # Repaint into a PTY whose master deliberately stops consuming output.
+        for _ in range(60):
+            child.write(b'\x0c')
+            time.sleep(.01)
+        child.signal(signal.SIGTERM)
+        deadline = time.monotonic() + 5
+        while child.state().get('state') != 'exited' and time.monotonic() < deadline:
+            time.sleep(.01)
+        self.assertEqual(child.state().get('state'), 'exited')
+        self.assertEqual(normalized_modes(child.state()['modes']), child.original)
+        child.wait_exit()
+        self.assertEqual(child.process.returncode, 0)
+
+    def test_idle_workspace_emits_no_frames(self):
+        child = self.start()
+        while child.read(.1):
+            pass
+        self.assertEqual(child.read(.25), b'')
+        child.finish()
+
+
+if __name__ == '__main__':
+    unittest.main()

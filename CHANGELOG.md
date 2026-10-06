@@ -4,6 +4,11 @@
 
 ## Unreleased
 
+- Add the development `vm` workspace frontend with named layout persistence,
+  session/workspace pickers, Vim-style splits and focus, metadata filtering,
+  mouse input and terminal restoration. Live session controls remain in the
+  ordinary interface while semantic attachment is under development.
+
 - Bound history-reader memory when browsing across large context checkpoints.
   Preserve complete event verification and retained session history.
 
