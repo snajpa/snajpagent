@@ -20,6 +20,16 @@ class ConnectionTests(ChannelFixture):
         self.command('/query peer after-nick-refusal', 'query peer operator')
         self.operator_wire('PRIVMSG peer :after-nick-refusal')
         self.assertIn('queryop', self.server.links)
+        # Selecting the query flushes its queued body through the input checkpoint.
+        self.term.until(b'after-nick-refusal')
+        self.term.output.clear()
+        self.term.write(b'usable-query-draft\t')
+        self.term.until(b'rollout')
+        self.term.output.clear()
+        self.term.write(b'\x1b[Z')
+        self.term.until(b'query peer operator')
+        self.term.until(b'usable-query-draft')
+        self.assert_no_wire('usable-query-draft')
 
     def test_open_connection_tab_keeps_draft_through_cycle(self):
         self.command('/connections 1', 'connection ' + self.server.endpoint)

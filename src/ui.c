@@ -1907,48 +1907,48 @@ input_condition(int error)
 static void *
 presentation_main(void *opaque)
 {
-    struct snag_ui_runtime *runtime = opaque;
-    struct snag_ui_display display = {.runtime = runtime};
+    struct snag_ui_display *display = opaque;
+    struct snag_ui_runtime *runtime = display->runtime;
 
-    snag_term_init(&display.term);
-    snag_buf_init(&display.rollout_draft.text, SNAG_MAX_DIRECT_PROMPT + 1u);
-    display.main_draft = &display.rollout_draft;
-    display.term.input_checkpoint = output_input_checkpoint;
-    display.term.input_opaque = &display;
-    snag_render_init(&display.render, 0u);
-    display.render.checkpoint = render_input_checkpoint;
-    display.render.checkpoint_opaque = &display;
-    (void)snag_render_backfill_start(&display.render, runtime->commands[1]);
+    snag_term_init(&display->term);
+    snag_buf_init(&display->rollout_draft.text, SNAG_MAX_DIRECT_PROMPT + 1u);
+    display->main_draft = &display->rollout_draft;
+    display->term.input_checkpoint = output_input_checkpoint;
+    display->term.input_opaque = display;
+    snag_render_init(&display->render, 0u);
+    display->render.checkpoint = render_input_checkpoint;
+    display->render.checkpoint_opaque = display;
+    (void)snag_render_backfill_start(&display->render, runtime->commands[1]);
     (void)snag_term_signals_unblock();
     for (;;) {
         struct ui_message *message;
         snag_wakeup_drain(runtime->commands[0]);
-        if (snag_render_backfill_collect(&display.render) < 0)
+        if (snag_render_backfill_collect(&display->render) < 0)
             atomic_store(&runtime->fatal, errno ? errno : EIO);
         message = atomic_exchange_explicit(&runtime->request, NULL, memory_order_acquire);
-        const char *banner = display.suspended ? NULL : snag_update_take(display.update);
-        bool runnable = !snag_view_server_attached(display.view) &&
-            snag_render_view_runnable(&display.render);
-        if (banner) (void)snag_render_update(&display.render, banner);
-        if (read_input(&display, message || banner || runnable ? 0 : -1) < 0) {
+        const char *banner = display->suspended ? NULL : snag_update_take(display->update);
+        bool runnable = !snag_view_server_attached(display->view) &&
+            snag_render_view_runnable(&display->render);
+        if (banner) (void)snag_render_update(&display->render, banner);
+        if (read_input(display, message || banner || runnable ? 0 : -1) < 0) {
             int error = errno ? errno : EIO;
             atomic_store(&runtime->fatal, error);
-            if (!input_condition(error)) display.input_closed = true;
+            if (!input_condition(error)) display->input_closed = true;
             snag_wakeup_send(runtime->actions.wake[1]);
         }
-        if (local_feedback(&display) < 0) atomic_store(&runtime->fatal, errno ? errno : EIO);
-        if (display.native_notice[0] && !display.suspended && !display.native_barrier) {
-            char notice[sizeof(display.native_notice)];
-            memcpy(notice, display.native_notice, sizeof(notice));
-            display.native_notice[0] = '\0';
-            if (snag_render_warning_ctx(&display.render, notice) < 0)
+        if (local_feedback(display) < 0) atomic_store(&runtime->fatal, errno ? errno : EIO);
+        if (display->native_notice[0] && !display->suspended && !display->native_barrier) {
+            char notice[sizeof(display->native_notice)];
+            memcpy(notice, display->native_notice, sizeof(notice));
+            display->native_notice[0] = '\0';
+            if (snag_render_warning_ctx(&display->render, notice) < 0)
                 atomic_store(&runtime->fatal, errno ? errno : EIO);
         }
         if (message) {
             /* A short delivery may release a citation held by the renderer. */
             snag_buf_init(&message->delivered,
                 message->command.len + 4u + SNAG_CITE_BLOCK_MAX);
-            message->result = apply_display(&display, message);
+            message->result = apply_display(display, message);
             message->saved_errno = errno;
             if (message->result < 0 && message->command.kind != SNAG_UI_VALIDATE &&
                 !(message->command.kind == SNAG_UI_INPUT &&
@@ -1958,10 +1958,10 @@ presentation_main(void *opaque)
                 !(message->saved_errno == ECANCELED && atomic_load(&runtime->exit_requested))) {
                 int error = errno ? errno : EIO;
                 atomic_store(&runtime->fatal, error);
-                if (!input_condition(error)) display.input_closed = true;
+                if (!input_condition(error)) display->input_closed = true;
             }
-            take_snapshot(&display, &message->snapshot, message->command.text);
-            atomic_store(&runtime->view, (unsigned int)display.render.view);
+            take_snapshot(display, &message->snapshot, message->command.text);
+            atomic_store(&runtime->view, (unsigned int)display->render.view);
             {
                 bool stop = message->command.kind == SNAG_UI_STOP;
                 atomic_store_explicit(&message->done, true, memory_order_release);
@@ -1969,20 +1969,21 @@ presentation_main(void *opaque)
                 if (stop) break;
             }
         }
-        if (!display.suspended && !display.native_barrier &&
-            !snag_view_server_attached(display.view) && snag_render_view_pending(&display.render) &&
-            snag_render_flush_pending(&display.render, UI_RENDER_BATCH) < 0) {
+        if (!display->suspended && !display->native_barrier &&
+            !snag_view_server_attached(display->view) &&
+            snag_render_view_pending(&display->render) &&
+            snag_render_flush_pending(&display->render, UI_RENDER_BATCH) < 0) {
             atomic_store(&runtime->fatal, errno ? errno : EIO);
-            display.input_closed = true;
+            display->input_closed = true;
             snag_wakeup_send(runtime->actions.wake[1]);
         }
-        if (!display.suspended && display.view_repainting &&
-            !snag_render_view_pending(&display.render)) {
-            display.view_repainting = false;
-            display.term.defer_redraw = display.native_barrier;
-            if (!display.native_barrier && display.prompt.source && apply_prompt(&display) < 0) {
+        if (!display->suspended && display->view_repainting &&
+            !snag_render_view_pending(&display->render)) {
+            display->view_repainting = false;
+            display->term.defer_redraw = display->native_barrier;
+            if (!display->native_barrier && display->prompt.source && apply_prompt(display) < 0) {
                 atomic_store(&runtime->fatal, errno ? errno : EIO);
-                display.input_closed = true;
+                display->input_closed = true;
                 snag_wakeup_send(runtime->actions.wake[1]);
             }
         }
@@ -1991,40 +1992,41 @@ presentation_main(void *opaque)
     (void)pthread_mutex_lock(&runtime->input.lock);
     hard_exit = runtime->input.hard_exit_deadline_ms != 0u;
     (void)pthread_mutex_unlock(&runtime->input.lock);
-    char *banner = snag_update_stop(display.update);
+    char *banner = snag_update_stop(display->update);
     if (banner) {
-        (void)snag_render_update(&display.render, banner);
+        (void)snag_render_update(&display->render, banner);
         free(banner);
     }
-    snag_render_free(&display.render);
-    if (display.local) {
-        free(display.local->text);
-        free(display.local);
+    snag_render_free(&display->render);
+    if (display->local) {
+        free(display->local->text);
+        free(display->local);
     }
-    input_stop(&display);
-    if (hard_exit) snag_term_abort(&display.term);
-    else snag_term_close(&display.term);
-    if (display.native) {
-        snag_view_server_close(display.view);
-        snag_session_listener_close(&display.listener);
-        snag_session_relay_close(&display.relay);
-        snag_session_process_close(&display.native_process);
+    input_stop(display);
+    if (hard_exit) snag_term_abort(&display->term);
+    else snag_term_close(&display->term);
+    if (display->native) {
+        snag_view_server_close(display->view);
+        snag_session_listener_close(&display->listener);
+        snag_session_relay_close(&display->relay);
+        snag_session_process_close(&display->native_process);
     }
-    while (display.conversations) {
-        struct ui_conversation_tab *tab = display.conversations;
-        display.conversations = tab->next;
+    while (display->conversations) {
+        struct ui_conversation_tab *tab = display->conversations;
+        display->conversations = tab->next;
         snag_buf_free(&tab->draft);
         free(tab);
     }
-    while (display.channel_drafts) {
-        struct ui_channel_draft *draft = display.channel_drafts;
-        display.channel_drafts = draft->next;
+    while (display->channel_drafts) {
+        struct ui_channel_draft *draft = display->channel_drafts;
+        display->channel_drafts = draft->next;
         snag_buf_free(&draft->text);
         free(draft);
     }
-    snag_buf_free(&display.rollout_draft.text);
-    json_decref(display.view_state);
-    prompt_free(&display.prompt);
+    snag_buf_free(&display->rollout_draft.text);
+    json_decref(display->view_state);
+    prompt_free(&display->prompt);
+    free(display);
     return NULL;
 }
 
@@ -2286,10 +2288,14 @@ int
 snag_ui_init(struct snag_ui *ui)
 {
     struct snag_ui_runtime *runtime;
+    struct snag_ui_display *display;
     int rc;
     memset(ui, 0, sizeof(*ui));
     runtime = calloc(1u, sizeof(*runtime));
     if (!runtime) return -1;
+    display = calloc(1u, sizeof(*display));
+    if (!display) goto fail;
+    display->runtime = runtime;
     atomic_init(&runtime->fatal, 0);
     atomic_init(&runtime->session_pending, 0u);
     atomic_init(&runtime->session_attachment, 0u);
@@ -2315,7 +2321,7 @@ snag_ui_init(struct snag_ui *ui)
     if (snag_wakeup_create(runtime->commands) < 0) goto input_control;
     if (queue_open(&runtime->actions) < 0) goto commands;
     if (snag_term_signals_block(&runtime->saved_mask) < 0) goto actions;
-    rc = pthread_create(&runtime->thread, NULL, presentation_main, runtime);
+    rc = pthread_create(&runtime->thread, NULL, presentation_main, display);
     if (rc != 0) {
         (void)snag_term_signals_restore(&runtime->saved_mask);
         errno = rc;
@@ -2329,7 +2335,8 @@ commands: snag_wakeup_close(runtime->commands);
 input_control: snag_wakeup_close(runtime->input.control);
 input_mutex: (void)pthread_mutex_destroy(&runtime->input.lock);
 input_buffer: free(runtime->input.bytes);
-fail: free(runtime);
+fail: free(display);
+    free(runtime);
     return -1;
 }
 

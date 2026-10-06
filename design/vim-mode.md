@@ -18,6 +18,9 @@ unhandled numeric replies stay outside model context. /whois and conversation
 keeps its draft. Version10 snapshots retain connection routes and read versions1–9.
 The buffer picker remains flat; grouped activity/read markers and the broader
 recovery/remote acceptance remain open.
+The presentation thread owns heap-allocated display state, allocated before
+thread creation and freed after its workers and terminal close. Queued private
+message rendering therefore retains stack space for its input checkpoint on musl.
 
 History checkpoint: typed channel replay accepts the same channel syntax as
 live membership, including server-advertised prefixes and colons within names.

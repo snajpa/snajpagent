@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Keep the presentation state off the UI thread stack so opening private
+  conversations remains reliable in static Linux builds.
+
 - Add connection views at SESSION/ENDPOINT/, a shared /connections directory,
   and scoped /whois and /nick commands. Retain both identities' server notices
   outside model context and private chats. Connection drafts require an explicit
