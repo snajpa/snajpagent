@@ -192,6 +192,9 @@ int snag_irc_event_payload_read(const json_t *, struct snag_irc_event *);
 /* Immutable conversation directory; update returns a new owned reference. */
 json_t *snag_irc_conversations_update(const json_t *, const json_t *, uint64_t);
 bool snag_irc_conversations_valid(const json_t *, uint64_t);
+json_t *snag_irc_activity_update(const json_t *, const struct snag_irc_event *, uint64_t, uint64_t);
+bool snag_irc_activity_valid(const json_t *, const json_t *, uint64_t);
+bool snag_irc_activity_item_valid(const json_t *, uint64_t, uint64_t);
 
 typedef int (*snag_irc_event_fn)(void *opaque, const struct snag_irc_event *event);
 typedef int (*snag_irc_trace_fn)(void *opaque, unsigned int level, char direction, const char *endpoint,

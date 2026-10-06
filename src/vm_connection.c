@@ -26,6 +26,33 @@ valid_route(const json_t *route)
     return snag_view_conversation_read(route, &target) == 0;
 }
 
+static bool
+valid_activity(const json_t *state, uint64_t next)
+{
+    if (!json_object_get(state, "irc_activity_after")) return true;
+    uint64_t after, total = 0u;
+    if (snag_json_integer_u64(state, "irc_activity_after", &after) < 0 || after >= next)
+        return false;
+    const char *catalogs[] = {"queries", "channels", "connections"};
+    for (size_t kind = 0u; kind < 3u; ++kind) {
+        const json_t *rows = json_object_get(state, catalogs[kind]);
+        if (!json_is_array(rows)) return false;
+        for (size_t i = 0u; i < json_array_size(rows); ++i) {
+            const json_t *row = json_array_get(rows, i);
+            const json_t *item = json_object_get(row, "activity");
+            uint64_t seq;
+            if (!item || snag_json_integer_u64(row, "seq", &seq) < 0 || !seq || seq >= next)
+                return false;
+            if (json_is_null(item)) continue;
+            if (!snag_irc_activity_item_valid(item, after, seq + 1u)) return false;
+            uint64_t count = (uint64_t)json_integer_value(json_object_get(item, "received"));
+            if (count > next - 1u - after - total) return false;
+            total += count;
+        }
+    }
+    return true;
+}
+
 bool
 snag_vm_buffer_writable(const struct snag_vm_buffer *buffer)
 {
@@ -49,6 +76,93 @@ buffer_message(struct snag_vm_buffer *buffer, const char *text)
     ++buffer->connection->revision;
 }
 
+static bool
+same_history(const json_t *a, const json_t *b)
+{
+    if (!json_is_object(a) || !json_is_object(b)) return json_equal(a, b);
+    if (!json_equal(json_object_get(a, "connection"), json_object_get(b, "connection")))
+        return false;
+    const char *room = snag_json_string(a, "room");
+    const char *other = snag_json_string(b, "room");
+    if (room || other) {
+        enum snag_irc_casemapping mapping = (enum snag_irc_casemapping)
+            json_integer_value(json_object_get(a, "casemapping"));
+        return room && other && snag_irc_name_equal(mapping, room, other);
+    }
+    bool query = json_object_get(a, "peer") != NULL;
+    if (query != (json_object_get(b, "peer") != NULL)) return false;
+    return !query ||
+        (json_equal(json_object_get(a, "conversation"), json_object_get(b, "conversation")) &&
+         json_equal(json_object_get(a, "identity"), json_object_get(b, "identity")));
+}
+
+void
+snag_vm_buffer_activity(const struct snag_vm_buffer *buffer, struct snag_vm_activity *activity)
+{
+    memset(activity, 0, sizeof(*activity));
+    if (!buffer || !json_is_object(buffer->route)) return;
+    const json_t *state = buffer->connection->state;
+    activity->known = snag_json_integer_u64(state, "irc_activity_after", &activity->after) == 0;
+    const char *kind = json_object_get(buffer->route, "room") ? "channels" :
+        json_object_get(buffer->route, "peer") ? "queries" : "connections";
+    const json_t *rows = json_object_get(state, kind);
+    for (size_t i = 0u; i < json_array_size(rows); ++i) {
+        const json_t *row = json_array_get(rows, i);
+        if (!same_history(buffer->route, json_object_get(row, "route"))) continue;
+        const json_t *item = json_object_get(row, "activity");
+        uint64_t seq = (uint64_t)json_integer_value(json_object_get(item, "seq"));
+        if (seq > activity->seq) {
+            activity->seq = seq;
+            activity->time = (uint64_t)json_integer_value(json_object_get(item, "time"));
+        }
+        activity->received += (uint64_t)json_integer_value(json_object_get(item, "received"));
+        seq = (uint64_t)json_integer_value(json_object_get(item, "incoming"));
+        if (seq > activity->incoming) activity->incoming = seq;
+    }
+    if (!activity->known) return;
+    if (activity->incoming <= buffer->read_seq && activity->after <= buffer->read_seq) {
+        activity->exact = true;
+    } else if (activity->after == buffer->read_after &&
+        activity->received >= buffer->read_received) {
+        activity->exact = true;
+        activity->unread = activity->received - buffer->read_received;
+    }
+}
+
+bool
+snag_vm_buffer_read(struct snag_vm_buffer *buffer, uint64_t through)
+{
+    struct snag_vm_activity activity;
+    snag_vm_buffer_activity(buffer, &activity);
+    if (!activity.known || through < activity.seq || through < activity.after) return false;
+    bool changed = false;
+    for (struct snag_vm_buffer *b = buffer->connection->buffers; b; b = b->next) {
+        if (!same_history(buffer->route, b->route) || !same_history(b->route, buffer->route) ||
+            b->read_seq >= through) continue;
+        b->read_seq = through;
+        b->read_received = activity.received;
+        b->read_after = activity.after;
+        changed = true;
+    }
+    return changed;
+}
+
+const json_t *
+snag_vm_buffer_state(const struct snag_vm_buffer *buffer)
+{
+    if (!buffer || !json_is_object(buffer->route)) return NULL;
+    const char *kind = json_object_get(buffer->route, "room") ? "channels" :
+        json_object_get(buffer->route, "peer") ? "queries" : "connections";
+    const json_t *rows = json_object_get(buffer->connection->state, kind);
+    for (size_t i = 0u; i < json_array_size(rows); ++i) {
+        const json_t *row = json_array_get(rows, i);
+        const json_t *route = json_object_get(row, "route");
+        if (json_equal(json_object_get(buffer->route, "conversation"),
+            json_object_get(route, "conversation"))) return row;
+    }
+    return NULL;
+}
+
 struct snag_vm_buffer *
 snag_vm_buffer_get(struct snag_vm_connection *connection, const json_t *route, bool create)
 {
@@ -63,6 +177,14 @@ snag_vm_buffer_get(struct snag_vm_connection *connection, const json_t *route, b
     buffer->route = route ? json_deep_copy(route) : json_string("rollout");
     if (!buffer->route) { free(buffer); return NULL; }
     buffer->connection = connection;
+    for (struct snag_vm_buffer *b = connection->buffers; b; b = b->next) {
+        if (same_history(buffer->route, b->route) && same_history(b->route, buffer->route) &&
+            b->read_seq > buffer->read_seq) {
+            buffer->read_seq = b->read_seq;
+            buffer->read_received = b->read_received;
+            buffer->read_after = b->read_after;
+        }
+    }
     snag_buf_init(&buffer->draft, SNAG_MAX_DIRECT_PROMPT + 1u);
     buffer->draft_get = connection->drafts;
     buffer->next = connection->buffers;
@@ -704,7 +826,7 @@ receive(struct snag_vm_connection *connection, const json_t *value)
     } else if (!strcmp(type, "state")) {
         json_t *state = json_object_get(value, "state");
         struct snag_journal_cursor next, previous;
-        if (state_tail(state, &next) < 0 ||
+        if (state_tail(state, &next) < 0 || !valid_activity(state, next.next_seq) ||
             !json_is_boolean(json_object_get(state, "active")) ||
             !json_is_string(json_object_get(state, "provider")) ||
             !json_is_string(json_object_get(state, "model")) ||
@@ -966,13 +1088,15 @@ snag_vm_connection_wait(const struct snag_vm_connection *connection, uint64_t no
 static json_t *
 buffer_json(const struct snag_vm_buffer *buffer)
 {
-    return json_pack("{s:O,s:s,s:I,s:O,s:O,s:O,s:I,s:s}", "route", buffer->route,
+    return json_pack("{s:O,s:s,s:I,s:O,s:O,s:O,s:I,s:s,s:{s:I,s:I,s:I}}", "route", buffer->route,
         "draft", buffer->draft.len ? (const char *)buffer->draft.data : "",
         "cursor", (json_int_t)buffer->cursor,
         "pending", buffer->pending ? buffer->pending : json_null(),
         "base", buffer->draft_base ? buffer->draft_base : json_null(),
         "conflict", buffer->conflict_draft ? buffer->conflict_draft : json_null(),
-        "window", (json_int_t)buffer->request_window, "endpoint", buffer->endpoint);
+        "window", (json_int_t)buffer->request_window, "endpoint", buffer->endpoint,
+        "read", "seq", (json_int_t)buffer->read_seq,
+        "received", (json_int_t)buffer->read_received, "after", (json_int_t)buffer->read_after);
 }
 
 json_t *
@@ -1005,11 +1129,13 @@ load_buffer(struct snag_vm_connection *connection, const json_t *row, bool legac
 {
     const json_t *route = legacy ? NULL : json_object_get(row, "route");
     const char *draft = snag_json_string(row, "draft");
+    const json_t *read = json_object_get(row, "read");
     uint64_t cursor, window = 0u;
     const char *endpoint = legacy ? "" : snag_json_string(row, "endpoint");
     if (!endpoint || strlen(endpoint) > SNAG_CONFIG_IRC_ENDPOINT_MAX ||
         (!legacy && strlen(endpoint) != json_string_length(json_object_get(row, "endpoint"))) ||
-        (!legacy && (!snag_json_exact_keys(row,
+        (!legacy && (!snag_json_exact_keys(row, read ?
+            "route draft cursor pending base conflict window endpoint read" :
             "route draft cursor pending base conflict window endpoint") ||
             !valid_route(route) || snag_json_integer_u64(row, "window", &window) < 0)) ||
         !draft || strlen(draft) > SNAG_MAX_DIRECT_PROMPT ||
@@ -1018,6 +1144,19 @@ load_buffer(struct snag_vm_connection *connection, const json_t *row, bool legac
         snag_vm_text_floor(draft, strlen(draft), (size_t)cursor) != cursor) return -1;
     struct snag_vm_buffer *buffer = snag_vm_buffer_get(connection, route, true);
     if (!buffer || snag_vm_draft_replace(buffer, 0u, 0u, draft, strlen(draft)) < 0) return -1;
+    if (read) {
+        uint64_t seq, received, after;
+        if (!snag_json_exact_keys(read, "seq received after") ||
+            snag_json_integer_u64(read, "seq", &seq) < 0 ||
+            snag_json_integer_u64(read, "received", &received) < 0 ||
+            snag_json_integer_u64(read, "after", &after) < 0 || after > seq ||
+            received > seq - after) return -1;
+        if (seq > buffer->read_seq) {
+            buffer->read_seq = seq;
+            buffer->read_received = received;
+            buffer->read_after = after;
+        }
+    }
     buffer->cursor = (size_t)cursor;
     buffer->request_window = window;
     (void)snag_strcpy(buffer->endpoint, sizeof(buffer->endpoint), endpoint);

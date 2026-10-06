@@ -4,6 +4,12 @@
 
 ## Unreleased
 
+- Group the Vim conversation directory by session and endpoint, with unread
+  counts, connection state and last message time. Read markers advance after
+  the focused FOLLOW pane paints its tail; HOLD, background panes and terminal
+  focus loss preserve unread messages. Version 11 workspaces retain read positions
+  across resume and accept earlier snapshots. Older owners expose unknown counts.
+
 - Keep the presentation state off the UI thread stack so opening private
   conversations remains reliable in static Linux builds.
 

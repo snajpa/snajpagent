@@ -201,6 +201,7 @@ struct snag_session {
     json_t *checkpoint_context, *checkpoint_state;
     json_t *download_queue; /* Pending workstation downloads, durable in the journal. */
     json_t *irc_conversations; /* Immutable connection/conversation directory, snapshot v3. */
+    json_t *irc_activity; /* Optional derived counters; older checkpoints leave a known gap. */
     size_t response_public_bytes;
     int dir_fd;
     int log_fd;

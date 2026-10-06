@@ -916,7 +916,7 @@ static void
 owner_state_test(void)
 {
 #ifndef _WIN32
-    for (unsigned int variant = 0u; variant < 9u; ++variant) {
+    for (unsigned int variant = 0u; variant < 12u; ++variant) {
         int sockets[2];
         assert(socketpair(AF_UNIX, SOCK_STREAM, 0, sockets) == 0);
         for (unsigned int i = 0u; i < 2u; ++i)
@@ -954,6 +954,19 @@ owner_state_test(void)
             assert(json_object_set_new(state, "active", json_integer(1)) == 0);
         else if (variant == 8u)
             assert(json_object_set_new(state, "seq", json_integer(-1)) == 0);
+        else if (variant >= 9u) {
+            assert(json_object_set_new(state, "irc_activity_after", json_integer(0)) == 0);
+            assert(json_object_set_new(state, "queries", json_array()) == 0);
+            assert(json_object_set_new(state, "channels", json_array()) == 0);
+            assert(json_object_set_new(state, "connections", json_array()) == 0);
+            if (variant == 10u)
+                assert(json_object_set_new(state, "irc_activity_after", json_integer(11)) == 0);
+            if (variant == 11u) {
+                json_t *row = json_pack("{s:i,s:{s:i,s:i,s:i,s:i}}", "seq", 10,
+                    "activity", "seq", 10, "time", 1, "received", 11, "incoming", 10);
+                assert(row && json_array_append_new(json_object_get(state, "queries"), row) == 0);
+            }
+        }
         struct snag_view_channel peer;
         snag_view_channel_init(&peer, sockets[1]);
         json_t *message = json_pack("{s:s,s:O}", "type", "state", "state", state);
@@ -967,9 +980,10 @@ owner_state_test(void)
             snag_vm_connection_step(connection);
         }
         struct snag_journal_cursor tail;
-        if (variant < 2u) {
+        if (variant < 2u || variant == 9u) {
             assert(connection->channel.fd >= 0 && snag_vm_connection_tail(connection, &tail));
-            assert(json_equal(connection->state, state) && tail.next_seq == 11u + variant);
+            assert(json_equal(connection->state, state) &&
+                tail.next_seq == (variant == 1u ? 12u : 11u));
         } else assert(connection->channel.fd < 0 && !snag_vm_connection_tail(connection, &tail));
         assert(connection->rollout->draft.len == 14u &&
             !memcmp(connection->rollout->draft.data, "retained draft", 14u));
@@ -1213,6 +1227,32 @@ conversation_snapshot_test(void)
     owner->irc_channels = true;
     assert(snag_vm_buffer_supported(room));
     assert(snag_vm_draft_replace(room, 0u, 0u, "channel draft", 13u) == 0);
+    owner->state = json_pack("{s:i,s:[{s:O,s:{s:i,s:i,s:i,s:i}}]}",
+        "irc_activity_after", 10, "queries", "route", first->route, "activity",
+        "seq", 20, "time", 100, "received", 2, "incoming", 18);
+    assert(owner->state);
+    struct snag_vm_activity activity;
+    snag_vm_buffer_activity(first, &activity);
+    assert(activity.known && !activity.exact && activity.seq == 20u && activity.received == 2u);
+    assert(!snag_vm_buffer_read(first, 19u) && snag_vm_buffer_read(first, 20u));
+    assert(later->read_seq == 20u && !agent->read_seq && !room->read_seq);
+    assert(first->draft.len == 13u && !later->draft.len);
+    snag_vm_buffer_activity(later, &activity);
+    assert(activity.exact && !activity.unread);
+    json_t *counter = json_object_get(json_array_get(json_object_get(owner->state, "queries"), 0u),
+        "activity");
+    assert(json_object_set_new(counter, "seq", json_integer(25)) == 0);
+    assert(json_object_set_new(counter, "incoming", json_integer(25)) == 0);
+    assert(json_object_set_new(counter, "received", json_integer(3)) == 0);
+    snag_vm_buffer_activity(first, &activity);
+    assert(activity.exact && activity.unread == 1u);
+    assert(json_object_set_new(owner->state, "irc_activity_after", json_integer(0)) == 0);
+    snag_vm_buffer_activity(first, &activity);
+    assert(activity.known && !activity.exact);
+    assert(snag_vm_buffer_read(first, 25u));
+    assert(json_object_del(owner->state, "irc_activity_after") == 0);
+    snag_vm_buffer_activity(first, &activity);
+    assert(!activity.known && !snag_vm_buffer_read(first, 30u));
     json_t *saved = snag_vm_connections_json(owner);
     struct snag_vm_connection *restored = NULL;
     assert(saved && snag_vm_connections_load(saved, &restored) == 0);
@@ -1223,6 +1263,7 @@ conversation_snapshot_test(void)
     struct snag_vm_buffer *copy = snag_vm_buffer_get(restored, first->route, false);
     assert(copy && copy->draft.len == first->draft.len &&
         !memcmp(copy->draft.data, first->draft.data, first->draft.len));
+    assert(copy->read_seq == 25u && copy->read_received == 3u && !copy->read_after);
     assert(snag_vm_buffer_get(restored, later->route, false));
     assert(!snag_vm_buffer_writable(snag_vm_buffer_get(restored, agent->route, false)));
     struct snag_vm_buffer *restored_room = snag_vm_buffer_get(restored, channel_route, false);
@@ -1232,6 +1273,11 @@ conversation_snapshot_test(void)
     snag_vm_connections_free(restored);
     restored = NULL;
     json_t *buffers = json_object_get(json_array_get(saved, 0u), "buffers");
+    json_t *read = json_object_get(json_array_get(buffers, 0u), "read");
+    json_t *valid_read = json_deep_copy(read);
+    assert(json_object_set_new(read, "received", json_integer(INT64_MAX)) == 0);
+    assert(snag_vm_connections_load(saved, &restored) < 0 && !restored);
+    assert(json_object_set_new(json_array_get(buffers, 0u), "read", valid_read) == 0);
     assert(json_array_append(buffers, json_array_get(buffers, 0u)) == 0);
     assert(snag_vm_connections_load(saved, &restored) < 0 && !restored);
     snag_vm_connection_discard(owner);

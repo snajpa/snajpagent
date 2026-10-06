@@ -6,6 +6,21 @@ Status: implementation in progress, October 6, 2026. The original inspection
 was against `7a70d81d336ef6f14d91ef944b1226c8efa65636`. The checkpoint below
 distinguishes implemented components from the complete intended behavior.
 
+Activity checkpoint: :buffers groups stable rows by session, endpoint and kind,
+with unread counts, connection state, draft/pending flags and local message time.
+Empty obsolete routes leave the directory once no window displays or selects them; retained
+drafts keep their pinned send route. The owner derives message/notice counters
+outside model admission, excluding historical replay, local and outgoing events.
+An optional checkpoint field preserves the unchanged conversation-directory
+schema for older readers. Its sequence basis records missing older accounting.
+Owner state publishes the counters as advisory metadata; older owners show unknown.
+Version11 workspace read markers keep sequence, received count and accounting basis.
+Only a successfully flushed focused FOLLOW pane at its loaded tail marks read;
+HOLD, hidden/background panes, terminal focus loss and interrupted painting preserve
+unread counts. Public channel and connection views share the history's local-role
+scope; private queries remain role/conversation scoped. Draft routes never refresh
+as a side effect of reading. Earlier workspace formats remain readable.
+
 Connection checkpoint: five-field connection routes carry endpoint, connection,
 conversation, generation and operator identity under an independent
 irc_connections capability. Classic /connections lists connection status and
@@ -15,9 +30,8 @@ same owner, composer and reader path. History includes both identities' connecti
 events and excludes public/private messages. Server notices and otherwise
 unhandled numeric replies stay outside model context. /whois and conversation
 /nick validate the captured operator generation, and ordinary connection text
-keeps its draft. Version10 snapshots retain connection routes and read versions1–9.
-The buffer picker remains flat; grouped activity/read markers and the broader
-recovery/remote acceptance remain open.
+keeps its draft. Version11 snapshots retain connection routes and read versions1–10.
+Explicit uncertain-send recovery and complete remote acceptance remain open.
 The presentation thread owns heap-allocated display state, allocated before
 thread creation and freed after its workers and terminal close. Queued private
 message rendering therefore retains stack space for its input checkpoint on musl.
@@ -97,7 +111,7 @@ same states. A send to the local nick suppresses its separate delivered self-cop
 when echo-message supplies the receipt. Operator queries remain private in both
 interfaces, including builds with WITH_VM=0.
 
-Conversation frontend checkpoint: version10 workspace snapshots retain exact
+Conversation frontend checkpoint: version11 workspace snapshots retain exact
 query, channel and connection routes per window and separate draft/editor/pending state per buffer,
 with one owner connection per session. Earlier flat rollout snapshots remain
 readable. Owner conversation metadata populates :buffers without changing focus; agent
@@ -108,8 +122,8 @@ Successful private sends retain the current pane while retaining command reports
 Query projection, search, navigation and copy filter stable connection/conversation
 IDs and local identity across retained epochs. Empty filtered journal pages advance
 until matching events or the pinned boundary; every read remains cancellable.
-Activity badges, protocol/recovery and complete remote qualification
-remain in the delivery plan below.
+Explicit uncertain-send recovery and complete remote qualification remain in the
+delivery plan below.
 
 Operator channel checkpoint: a shared presentation selector and tab/draft path
 serves queries and channels; runtime sends keep kind-specific validators. Channel
@@ -120,7 +134,7 @@ history without joining. /part immediately invalidates queued sends. /names show
 cached state and requests refresh; /topic, /msg, /notice and /me use captured scope.
 Classic tabs keep drafts through both cycle directions. VM channel history includes
 both local roles and compatible legacy room records while excluding private queries.
-Version10 reads earlier snapshots; exact five-key query routes remain compatible.
+Version11 reads earlier snapshots; exact five-key query routes remain compatible.
 Qualified buffer addresses resolve saved session names and select operator buffers.
 
 Selection checkpoint: character, line and rectangular transcript/report selection
@@ -900,7 +914,7 @@ use their written record, explicitly labelled with that unconfirmed state;
 native catch-up instead supplies its public source event. The typed input and
 its delivery label survive checkpoint/resume. NOTICE receipts add context at
 the next natural request, without starting an automatic reply. Channel tabs and
-panes, including hosted rooms, are implemented; connection views remain in progress.
+panes, including hosted rooms and connection views, are implemented.
 A nickname discontinuity or disconnect cancels unsent chunks,
 retains uncertainty for started writes and never replays the private queue.
 Endpoint removal finishes those outcomes before stopping its owner. UTF-8 chunks
@@ -932,8 +946,9 @@ query resolution with model tools. UI admission captures connection scopes and
 known peer handles before queued commands can observe later NICK/QUIT events.
 `/query` without operands lists existing operator-query selectors. Explicit
 addresses stay within the current session owner. Channel address commands and
-panes and connection buffers are implemented as described in the current checkpoints;
-a richer ambiguity/activity picker remains next. The semantic owner accepts frozen conversation
+panes, connection buffers and the grouped activity directory are implemented as
+described in the current checkpoints. Cross-session command selection remains
+in the delivery audit. The semantic owner accepts frozen conversation
 routes, independent revisioned drafts and scoped commands. Request IDs bind
 route and text; private admission clears only its exact draft revision. Query
 selection returns to the requesting frontend while preserving classic focus.

@@ -373,6 +373,7 @@ encode_state(const struct snag_session *s)
     JSON_FIELD(strings); JSON_FIELD(compact_output); JSON_FIELD(pending_input);
     JSON_FIELD(active_instructions); JSON_FIELD(response_public); JSON_FIELD(download_queue);
     if (s->irc_conversations) JSON_FIELD(irc_conversations);
+    if (s->irc_activity) JSON_FIELD(irc_activity);
 #undef JSON_FIELD
 #define TEXT_FIELD(f) PUT("has_" #f, json_boolean(s->f != NULL))
     TEXT_FIELD(cwd); TEXT_FIELD(first_user); TEXT_FIELD(last_user);
@@ -469,6 +470,11 @@ decode_state(const json_t *data, struct snag_session *s)
     if (conversations) {
         if (!snag_irc_conversations_valid(conversations, s->next_seq)) return -1;
         s->irc_conversations = json_incref(conversations);
+    }
+    json_t *activity = json_object_get(data, "irc_activity");
+    if (activity) {
+        if (!snag_irc_activity_valid(activity, conversations, s->next_seq)) return -1;
+        s->irc_activity = json_incref(activity);
     }
     const json_t *options = json_object_get(s->strings, "resume_options");
     if (options && !snag_session_options_valid(options)) return -1;

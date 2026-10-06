@@ -229,6 +229,7 @@ free_session_state(struct snag_session *session)
     json_decref(session->checkpoint_state);
     json_decref(session->download_queue);
     json_decref(session->irc_conversations);
+    json_decref(session->irc_activity);
 }
 
 void
@@ -1050,8 +1051,13 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             json_t *directory = snag_irc_conversations_update(
                 session->irc_conversations, data, seq);
             if (!directory) goto invalid;
+            json_t *activity = snag_irc_activity_update(session->irc_activity, &event,
+                seq, session->irc_conversations ? seq - 1u : 0u);
+            if (!activity) { json_decref(directory); goto invalid; }
             json_decref(session->irc_conversations);
             session->irc_conversations = directory;
+            json_decref(session->irc_activity);
+            session->irc_activity = activity;
         }
         if (event.input) session->irc_received_seq = seq;
         if (event.input && !event.historical &&
@@ -2678,6 +2684,9 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             ((revision == 3u) != (json_object_get(state, "irc_conversations") != NULL)) ||
             (revision == 3u &&
                 !snag_irc_conversations_valid(json_object_get(state, "irc_conversations"), seq)) ||
+            (json_object_get(state, "irc_activity") &&
+                !snag_irc_activity_valid(json_object_get(state, "irc_activity"),
+                    json_object_get(state, "irc_conversations"), seq)) ||
             snag_json_integer_u64(data, "format", &n) < 0 || n != 4u ||
             strcmp(snag_json_string(state, "id") ? snag_json_string(state, "id") : "", session->id))
             goto invalid;
@@ -3723,6 +3732,7 @@ clone_session_state(const struct snag_session *source, struct snag_session *stag
     staged->checkpoint_state = json_incref(source->checkpoint_state);
     staged->download_queue = json_deep_copy(source->download_queue);
     staged->irc_conversations = json_incref(source->irc_conversations);
+    staged->irc_activity = json_incref(source->irc_activity);
     if (source->pending_call_count) {
         staged->pending_calls = malloc(source->pending_call_capacity * sizeof(*staged->pending_calls));
         if (!staged->pending_calls) return -1;

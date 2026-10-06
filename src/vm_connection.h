@@ -21,10 +21,20 @@ struct snag_vm_buffer {
     char message[256];
     char endpoint[SNAG_CONFIG_IRC_ENDPOINT_MAX + 1u];
     uint64_t receipt_at, request_window;
+    uint64_t read_seq, read_received, read_after;
     bool query, submitting, send_pending, reconcile_pending;
     bool draft_ready, draft_dirty, draft_conflict, draft_get;
     bool terminal_result, terminal_auto;
 };
+
+struct snag_vm_activity {
+    uint64_t after, seq, time, received, incoming, unread;
+    bool known, exact;
+};
+
+void snag_vm_buffer_activity(const struct snag_vm_buffer *, struct snag_vm_activity *);
+bool snag_vm_buffer_read(struct snag_vm_buffer *, uint64_t);
+const json_t *snag_vm_buffer_state(const struct snag_vm_buffer *);
 
 /* One transport and controller lease per session, shared by all buffers. */
 struct snag_vm_connection {

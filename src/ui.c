@@ -2120,6 +2120,33 @@ snag_ui_session_listen(struct snag_ui *ui, const struct snag_session *session)
 
 #if SNAJPAGENT_VM
 static json_t *
+connection_activity(const struct snag_session *session, const json_t *connection, uint64_t *seq)
+{
+    uint64_t latest = 0u, time = 0u, received = 0u, incoming = 0u;
+    const char *id;
+    const json_t *item;
+    json_object_foreach(json_object_get(connection, "conversations"), id, item) {
+        const json_t *routing = json_object_get(json_object_get(item, "data"), "routing");
+        if (strcmp(snag_json_string(routing, "conversation_kind"), "connection")) continue;
+        uint64_t at = (uint64_t)json_integer_value(json_object_get(item, "seq"));
+        if (at > *seq) *seq = at;
+        const json_t *activity =
+            json_object_get(json_object_get(session->irc_activity, "items"), id);
+        at = (uint64_t)json_integer_value(json_object_get(activity, "seq"));
+        if (at > latest) {
+            latest = at;
+            time = (uint64_t)json_integer_value(json_object_get(activity, "time"));
+        }
+        received += (uint64_t)json_integer_value(json_object_get(activity, "received"));
+        at = (uint64_t)json_integer_value(json_object_get(activity, "incoming"));
+        if (at > incoming) incoming = at;
+    }
+    return latest ? json_pack("{s:I,s:I,s:I,s:I}", "seq", (json_int_t)latest,
+        "time", (json_int_t)time, "received", (json_int_t)received,
+        "incoming", (json_int_t)incoming) : json_null();
+}
+
+static json_t *
 view_conversations(const struct snag_session *session, enum snag_irc_conversation_kind wanted)
 {
     json_t *queries = json_array();
@@ -2158,9 +2185,19 @@ view_conversations(const struct snag_session *session, enum snag_irc_conversatio
                 continue;
             (void)snag_json_integer_u64(routing, "generation", &target.generation);
             json_t *route = snag_view_conversation_route(&target);
-            json_t *query = route ? json_pack("{s:O,s:O,s:O}", "route", route,
+            uint64_t seq = (uint64_t)json_integer_value(json_object_get(item, "seq"));
+            json_t *activity = wanted == SNAG_IRC_CONNECTION_EVENTS ?
+                connection_activity(session, entry, &seq) : json_incref(json_object_get(
+                    json_object_get(session->irc_activity, "items"), conversation));
+            if (!activity && wanted != SNAG_IRC_CONNECTION_EVENTS) activity = json_null();
+            json_t *query = route && activity ? json_pack("{s:O,s:O,s:O,s:I,s:O,s:O}",
+                "route", route,
                 "endpoint", json_object_get(entry, "endpoint"),
-                "connected", json_object_get(entry, "connected")) : NULL;
+                "connected", json_object_get(entry, "connected"),
+                "seq", (json_int_t)seq, "activity", activity,
+                "joined", json_object_get(routing, "joined") ?
+                    json_object_get(routing, "joined") : json_null()) : NULL;
+            json_decref(activity);
             json_decref(route);
             if (!query || json_array_append_new(queries, query) < 0) {
                 json_decref(queries);
@@ -2176,14 +2213,20 @@ int
 snag_ui_view_state(struct snag_ui *ui, const struct snag_session *session)
 {
     if (!ui->view_listening || ui->view_state_seq == session->next_seq) return 0;
-    json_t *state = json_pack("{s:I,s:I,s:s,s:i,s:b,s:s,s:s,s:s,s:s}",
+    json_t *state = json_pack("{s:I,s:I,s:s,s:i,s:b,s:s,s:s,s:s,s:s,s:s}",
         "seq", (json_int_t)(session->next_seq - 1u), "end", (json_int_t)session->log_end,
         "sha256", session->prev_sha256, "schema", (int)session->format_version,
         "active", session->active_turn, "provider", session->default_provider,
         "model", session->default_model, "effort", session->default_effort,
-        "service_tier", session->service_tier ? session->service_tier : "");
+        "service_tier", session->service_tier ? session->service_tier : "",
+        "name", session->name ? session->name : "");
     if (!state) return -1;
 #if SNAJPAGENT_VM
+    if (session->irc_activity && json_object_set(state, "irc_activity_after",
+        json_object_get(session->irc_activity, "after")) < 0) {
+        json_decref(state);
+        return -1;
+    }
     json_t *queries = view_conversations(session, SNAG_IRC_QUERY);
     if (!queries || json_object_set_new(state, "queries", queries) < 0) {
         json_decref(state);

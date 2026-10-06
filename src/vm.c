@@ -31,6 +31,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 
 #ifndef _WIN32
@@ -180,7 +181,7 @@ struct vm {
     bool dirty, save_dirty, meaningful, quit, suspend, entering, paste_failed;
     bool composer, insert, quit_all, detach_exit, detach_suspend;
     bool classic_pending, classic_ready, classic_uncertain;
-    bool mouse, mouse_reported, mouse_down, mouse_select;
+    bool mouse, mouse_reported, mouse_down, mouse_select, unfocused;
     uint64_t mouse_window;
     struct snag_vm_separator mouse_separator;
     uint64_t quit_window;
@@ -191,6 +192,7 @@ static volatile sig_atomic_t stopped, resized;
 
 static json_t *selected_row(struct vm *, const struct vm_window *);
 static int buffer_catalog(struct vm *);
+static bool matches(const struct vm_window *, const json_t *);
 static int clipboard_step(struct vm *);
 static void clipboard_settle(struct vm *);
 
@@ -445,7 +447,7 @@ state_snapshot(const struct vm *vm)
         json_decref(windows);
         return NULL;
     }
-    json_t *result = json_pack("{s:i,s:I,s:o,s:o,s:o}", "v", 10,
+    json_t *result = json_pack("{s:i,s:I,s:o,s:o,s:o}", "v", 11,
         "focus", (json_int_t)vm->windows[vm->focus].id, "layout", layout,
         "windows", windows, "buffers", buffers);
     json_t *classic = json_null();
@@ -475,7 +477,7 @@ state_restore(struct vm *vm, const json_t *state, char *error, size_t size)
     size_t count = json_array_size(json_object_get(state, "windows")), focus = SIZE_MAX;
     if (!snag_json_exact_keys(state, version >= 5 ? "v focus layout windows buffers classic" :
         version >= 3 ? "v focus layout windows buffers" :
-        "v focus layout windows") || (version < 1 || version > 10) || !count ||
+        "v focus layout windows") || (version < 1 || version > 11) || !count ||
         (version >= 3 &&
          snag_vm_connections_load(json_object_get(state, "buffers"), &connections) < 0) ||
         snag_json_integer_u64(state, "focus", &focus_id) < 0 ||
@@ -973,12 +975,78 @@ buffer_address(const struct snag_vm_buffer *buffer)
 }
 
 static int
+buffer_rank(const json_t *route)
+{
+    return !json_is_object(route) ? -1 : json_object_get(route, "room") ? 1 :
+        json_object_get(route, "peer") ? 2 : 0;
+}
+
+static int
+compare_buffers(const void *left, const void *right)
+{
+    const json_t *a = *(json_t *const *)left;
+    const json_t *b = *(json_t *const *)right;
+    const char *fields[] = {"session_name", "session", "endpoint"};
+    for (size_t i = 0u; i < sizeof(fields) / sizeof(fields[0]); ++i) {
+        int order = strcmp(snag_json_string(a, fields[i]), snag_json_string(b, fields[i]));
+        if (order) return order;
+    }
+    const json_t *ar = json_object_get(a, "route");
+    const json_t *br = json_object_get(b, "route");
+    const char *ac = snag_json_string(ar, "connection");
+    const char *bc = snag_json_string(br, "connection");
+    int order = strcmp(ac ? ac : "", bc ? bc : "");
+    if (order) return order;
+    order = buffer_rank(ar) - buffer_rank(br);
+    if (order) return order;
+    order = strcmp(snag_json_string(a, "label"), snag_json_string(b, "label"));
+    if (order) return order;
+    const char *ai = snag_json_string(ar, "identity");
+    const char *bi = snag_json_string(br, "identity");
+    order = (ai && !strcmp(ai, "agent")) - (bi && !strcmp(bi, "agent"));
+    return order ? order : strcmp(snag_json_string(a, "id"), snag_json_string(b, "id"));
+}
+
+static bool
+buffer_stale(const struct snag_vm_buffer *buffer, const json_t *state)
+{
+    if (!state) return false;
+    const json_t *route = json_object_get(state, "route");
+    const char *fields[] = {"generation", "peer", "room", "membership"};
+    for (size_t i = 0u; i < sizeof(fields) / sizeof(fields[0]); ++i) {
+        const json_t *a = json_object_get(buffer->route, fields[i]);
+        const json_t *b = json_object_get(route, fields[i]);
+        if ((a || b) && !json_equal(a, b)) return true;
+    }
+    return false;
+}
+
+static bool
+buffer_visible(struct vm *vm, const struct snag_vm_buffer *buffer)
+{
+    for (size_t i = 0u; i < vm->count; ++i) {
+        const struct vm_window *window = &vm->windows[i];
+        if (window_buffer(vm, window) == buffer) return true;
+        const json_t *row = window->kind == VIEW_BUFFERS ? selected_row(vm, window) : NULL;
+        const char *session = snag_json_string(row, "session");
+        if (session && !strcmp(session, buffer->connection->session) &&
+            json_equal(json_object_get(row, "route"), buffer->route)) return true;
+    }
+    return false;
+}
+
+static int
 buffer_catalog(struct vm *vm)
 {
     json_t *rows = json_array();
+    json_t **ordered = NULL;
     if (!rows) return -1;
     for (struct snag_vm_connection *c = vm->connections; c; c = c->next) {
         for (struct snag_vm_buffer *b = c->buffers; b; b = b->next) {
+            const json_t *state = snag_vm_buffer_state(b);
+            bool stale = buffer_stale(b, state);
+            if (stale && !b->draft.len && !b->pending && !b->draft_conflict &&
+                !buffer_visible(vm, b)) continue;
             char *address = buffer_address(b);
             char *route = json_dumps(b->route, JSON_COMPACT | JSON_SORT_KEYS | JSON_ENCODE_ANY);
             char digest[SNAG_SHA256_HEX_LEN + 1u];
@@ -987,18 +1055,64 @@ buffer_catalog(struct vm *vm)
             free(route);
             digest[SNAG_ID_HEX_LEN] = 0;
             if (json_is_string(b->route)) memcpy(digest, c->session, sizeof(c->session));
-            json_t *row = json_pack("{s:s,s:s,s:s,s:O,s:b,s:b}",
+            const char *name = snag_json_string(c->state, "name");
+            const char *label = buffer_rank(b->route) < 0 ? name && *name ? name : "session" :
+                snag_view_conversation_name(b->route);
+            struct snag_vm_activity activity;
+            snag_vm_buffer_activity(b, &activity);
+            json_t *row = json_pack("{s:s,s:s,s:s,s:O,s:b,s:b,s:s,s:s,s:s,s:b,s:O,s:O,"
+                "s:b,s:b,s:I,s:I,s:s}",
                 "id", digest, "name", address, "session", c->session, "route", b->route,
-                "draft", b->draft.len != 0u, "pending", b->pending != NULL);
+                "draft", b->draft.len != 0u, "pending", b->pending != NULL,
+                "session_name", name ? name : "", "endpoint", b->endpoint, "label", label,
+                "stale", stale, "connected", state && json_object_get(state, "connected") ?
+                    json_object_get(state, "connected") : json_null(),
+                "joined", state && json_object_get(state, "joined") ?
+                    json_object_get(state, "joined") : json_null(),
+                "activity_known", activity.known, "activity_exact", activity.exact,
+                "unread", (json_int_t)activity.unread, "time", (json_int_t)activity.time,
+                "owner", c->bound ? "attached" : c->hello ? "observing" : "stored");
             free(address);
             if (!row || json_array_append_new(rows, row) < 0) goto failed;
         }
     }
+    size_t count = json_array_size(rows);
+    ordered = calloc(count ? count : 1u, sizeof(*ordered));
+    if (!ordered) goto failed;
+    for (size_t i = 0u; i < count; ++i) ordered[i] = json_array_get(rows, i);
+    if (count > 1u) qsort(ordered, count, sizeof(*ordered), compare_buffers);
+    json_t *sorted = json_array();
+    if (!sorted) goto failed;
+    for (size_t i = 0u; i < count; ++i) {
+        if (json_array_append(sorted, ordered[i]) < 0) {
+            json_decref(sorted);
+            goto failed;
+        }
+    }
+    free(ordered);
+    ordered = NULL;
+    json_decref(rows);
+    rows = sorted;
     if (json_equal(vm->buffers, rows)) { json_decref(rows); return 0; }
+    for (size_t i = 0u; i < vm->count; ++i) {
+        struct vm_window *window = &vm->windows[i];
+        if (window->kind != VIEW_BUFFERS) continue;
+        const char *id = snag_json_string(selected_row(vm, window), "id");
+        if (id) (void)snag_strcpy(window->selected_id, sizeof(window->selected_id), id);
+        size_t visible = 0u;
+        for (size_t j = 0u; j < count; ++j) {
+            const json_t *row = json_array_get(rows, j);
+            if (!matches(window, row)) continue;
+            if (!strcmp(window->selected_id, snag_json_string(row, "id")))
+                window->selected = visible;
+            ++visible;
+        }
+    }
     json_decref(vm->buffers);
     vm->buffers = rows;
     return 0;
 failed:
+    free(ordered);
     json_decref(rows);
     return -1;
 }
@@ -1660,9 +1774,11 @@ matches(const struct vm_window *window, const json_t *row)
     if (!filter || !*filter) return true;
     const char *id = snag_json_string(row, "id"), *name = snag_json_string(row, "name");
     const char *command = snag_json_string(row, "command");
+    const char *session = snag_json_string(row, "session_name");
     const char *identity = snag_json_string(json_object_get(row, "route"), "identity");
     if ((id && strstr(id, filter)) || (name && strstr(name, filter)) ||
-        (command && strstr(command, filter)) || (identity && strstr(identity, filter))) return true;
+        (command && strstr(command, filter)) || (identity && strstr(identity, filter)) ||
+        (session && strstr(session, filter))) return true;
     json_t *cells = json_object_get(row, "cells");
     for (size_t i = 0u; i < json_array_size(cells); ++i) {
         const char *cell = json_string_value(json_array_get(cells, i));
@@ -2625,9 +2741,14 @@ input_event(void *opaque, const struct snag_vm_input_event *event)
         notice(vm, "Canceling clipboard copy; register retained");
         return 0;
     }
-    if (event->kind == SNAG_VM_FOCUS && !event->focused) vm->mouse_down = false;
+    if (event->kind == SNAG_VM_FOCUS) {
+        vm->unfocused = !event->focused;
+        if (vm->unfocused) vm->mouse_down = false;
+        vm->dirty = true;
+        return 0;
+    }
     if (event->kind == SNAG_VM_MOUSE) return mouse_event(vm, event);
-    if (event->kind != SNAG_VM_FOCUS) vm->mouse_down = false;
+    vm->mouse_down = false;
     if (vm->copying || vm->navigating || vm->motion_loading) {
         bool control = (event->modifiers & SNAG_VM_CTRL) != 0u;
         bool cancel = event->kind == SNAG_VM_KEY &&
@@ -2638,7 +2759,6 @@ input_event(void *opaque, const struct snag_vm_input_event *event)
             (event->text[0] == 'i' || event->text[0] == 'a' || event->text[0] == 'A') &&
             snag_vm_buffer_writable(focused_buffer(vm));
         if (cancel || compose) cancel_search(vm);
-        else if (event->kind == SNAG_VM_FOCUS) return 0;
         else if (event->kind == SNAG_VM_KEY && control && event->key == 'l') {
             resized = 1;
             vm->dirty = true;
@@ -3135,6 +3255,49 @@ highlight_selection(struct vm *vm, const struct vm_window *window,
 }
 
 static int
+buffer_row(struct snag_buf *text, const json_t *row)
+{
+    const json_t *route = json_object_get(row, "route");
+    int rank = buffer_rank(route);
+    const char *identity = snag_json_string(route, "identity");
+    const char *label = snag_json_string(row, "label");
+    if (snag_buf_printf(text, "%.8s %s%s%s [%s]", snag_json_string(row, "id"),
+        rank < 0 ? "" : rank ? "    /" : "  ", label, rank == 0 ? "/" : "",
+        identity ? identity : "rollout") < 0) return -1;
+    if (rank >= 0) {
+        if (!json_is_true(json_object_get(row, "activity_exact"))) {
+            if (snag_buf_printf(text, " [? unread]") < 0) return -1;
+        } else if (snag_buf_printf(text, " [%llu unread]", (unsigned long long)
+            json_integer_value(json_object_get(row, "unread"))) < 0) return -1;
+    } else if (snag_buf_printf(text, " [%s]", snag_json_string(row, "owner")) < 0) return -1;
+    const char *flags[] = {"draft", "pending", "stale"};
+    for (size_t i = 0u; i < sizeof(flags) / sizeof(flags[0]); ++i) {
+        if (json_is_true(json_object_get(row, flags[i])) &&
+            snag_buf_printf(text, " [%s]", i == 2u ? "old route" : flags[i]) < 0) return -1;
+    }
+    const json_t *connected = json_object_get(row, "connected");
+    if (json_is_object(connected)) connected = json_object_get(connected, identity);
+    if (rank >= 0 && snag_buf_printf(text, " [%s]", json_is_true(connected) ?
+        json_is_false(json_object_get(row, "joined")) ? "left" : "connected" :
+        json_is_false(connected) ? "disconnected" : "unknown") < 0) return -1;
+    if (rank == 0) {
+        const json_t *agent = json_object_get(json_object_get(row, "connected"), "agent");
+        if (snag_buf_printf(text, " [agent %s]", json_is_true(agent) ? "connected" :
+            json_is_false(agent) ? "disconnected" : "unknown") < 0) return -1;
+    }
+    json_int_t timestamp = json_integer_value(json_object_get(row, "time"));
+    if (timestamp > 0) {
+        time_t seconds = (time_t)(timestamp / 1000);
+        struct tm local;
+        char time[32];
+        if (localtime_r(&seconds, &local) &&
+            strftime(time, sizeof(time), "%m-%d %H:%M:%S", &local) &&
+            snag_buf_printf(text, "  %s", time) < 0) return -1;
+    }
+    return 0;
+}
+
+static int
 draw_window(void *opaque, const struct snag_vm_rectangle *rectangle)
 {
     struct vm *vm = opaque;
@@ -3240,12 +3403,7 @@ draw_window(void *opaque, const struct snag_vm_rectangle *rectangle)
                 return -1;
             }
         } else if (window->kind == VIEW_BUFFERS) {
-            const json_t *route = json_object_get(row, "route");
-            const char *identity = snag_json_string(route, "identity");
-            (void)snag_buf_printf(&text, "%.8s %s [%s]%s%s", snag_json_string(row, "id"),
-                snag_json_string(row, "name"), identity ? identity : "rollout",
-                json_is_true(json_object_get(row, "draft")) ? " [draft]" : "",
-                json_is_true(json_object_get(row, "pending")) ? " [pending]" : "");
+            if (buffer_row(&text, row) < 0) { snag_buf_free(&text); return -1; }
         } else if (window->kind == VIEW_WORKSPACES) {
             const char *error = snag_json_string(row, "error");
             const char *name = snag_json_string(row, "name");
@@ -3321,6 +3479,27 @@ draw_window(void *opaque, const struct snag_vm_rectangle *rectangle)
 }
 
 static int
+painted_read(struct vm *vm)
+{
+    if (vm->dirty || resized || vm->unfocused) return 0;
+    struct vm_window *window = &vm->windows[vm->focus];
+    if (window->kind != VIEW_TRANSCRIPT || !window->rectangle.visible || !window->follow ||
+        !window->document || window->incomplete || window->source_failed ||
+        window->load || vm->reading_window == window->id ||
+        window->end.offset != window->tail.offset || !window->end.next_seq) return 0;
+    size_t count = row_count(vm, window);
+    if (!count || count - 1u < window->top ||
+        count - 1u - window->top >= window->history_rows) return 0;
+    struct snag_vm_buffer *buffer = window_buffer(vm, window);
+    if (!buffer || !json_is_object(buffer->route) ||
+        !snag_vm_buffer_read(buffer, window->end.next_seq - 1u)) return 0;
+    changed(vm);
+    for (size_t i = 0u; i < vm->count; ++i)
+        if (vm->windows[i].kind == VIEW_BUFFERS) return buffer_catalog(vm);
+    return 0;
+}
+
+static int
 draw(struct vm *vm)
 {
     size_t rows = snag_term_host_rows(), columns = snag_term_host_columns();
@@ -3358,9 +3537,10 @@ draw(struct vm *vm)
         if (cursor >= columns) cursor = columns - 1u;
     } else if (snag_vm_grid_text(&vm->grid, rows - 1u, 0u, columns,
         vm->message, strlen(vm->message), 0u) < 0) return -1;
-    if (!vm->mode && vm->cursor_row < rows && vm->cursor_column < columns)
-        return snag_vm_grid_flush(&vm->grid, vm->cursor_row, vm->cursor_column, true, emit, vm);
-    return snag_vm_grid_flush(&vm->grid, rows - 1u, cursor, vm->mode != 0, emit, vm);
+    int rc = !vm->mode && vm->cursor_row < rows && vm->cursor_column < columns ?
+        snag_vm_grid_flush(&vm->grid, vm->cursor_row, vm->cursor_column, true, emit, vm) :
+        snag_vm_grid_flush(&vm->grid, rows - 1u, cursor, vm->mode != 0, emit, vm);
+    return rc < 0 ? rc : painted_read(vm);
 }
 
 static void

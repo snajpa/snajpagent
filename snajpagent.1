@@ -2111,9 +2111,25 @@ explicitly to select the current membership before composing a new send.
 .PP
 .B :buffers
 lists the workspace's rollout, connection, channel and private conversation buffers, including
-operator and read-only agent conversations. The list shows buffer IDs, qualified
-addresses, identity, drafts and pending submissions. Use / to filter, then Enter
-to open the selected buffer in the current window.
+operator and read-only agent conversations. Rows group by session and endpoint,
+with connection views above their channels and private queries. Each row shows
+its buffer ID, identity, unread count, connection state, drafts, pending submissions
+and last message time in local time. Use / to filter by name, qualified address,
+identity or ID, then Enter to open the selected buffer in the current window.
+Retained drafts keep their captured destination and show old route after a nick,
+membership or connection change. Empty obsolete routes disappear from the directory
+when no window displays or selects them.
+.PP
+Unread counts include incoming messages and notices since this workspace last
+displayed the conversation's tail in a focused FOLLOW window. Held history,
+background splits and the directory preserve unread counts. Terminal focus reports,
+when available, also preserve them while another application is focused.
+Public channels and connection views share read positions across local identities;
+private queries keep separate operator and agent read positions. Workspace resume
+retains these markers. Historical replay and outgoing messages do not add unread counts.
+A question mark means the owner or an older checkpoint lacks complete accounting;
+reading the tail establishes a new position when the owner supplies counters.
+.PP
 .B :buffer ADDRESS
 or :b ADDRESS opens a known operator buffer by session/endpoint/nick or
 session/endpoint/#channel address, or a connection at session/endpoint/; session names

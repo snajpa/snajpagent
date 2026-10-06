@@ -420,6 +420,86 @@ conversation_entry(const json_t *entry, uint64_t *seq, struct snag_irc_event *ev
 }
 
 bool
+snag_irc_activity_item_valid(const json_t *item, uint64_t after, uint64_t next)
+{
+    uint64_t seq, time, received, incoming;
+    return snag_json_exact_keys(item, "seq time received incoming") &&
+        snag_json_integer_u64(item, "seq", &seq) == 0 && seq > after && seq < next &&
+        snag_json_integer_u64(item, "time", &time) == 0 &&
+        snag_json_integer_u64(item, "received", &received) == 0 &&
+        snag_json_integer_u64(item, "incoming", &incoming) == 0 && incoming <= seq &&
+        (received ? incoming > after && received <= incoming - after : !incoming);
+}
+
+bool
+snag_irc_activity_valid(const json_t *activity, const json_t *directory, uint64_t next)
+{
+    uint64_t after;
+    const json_t *items = json_object_get(activity, "items");
+    if (!snag_json_exact_keys(activity, "after items") || !json_is_object(items) ||
+        snag_json_integer_u64(activity, "after", &after) < 0 || after >= next ||
+        !json_is_object(directory)) return false;
+    size_t found = 0u;
+    uint64_t received = 0u;
+    const char *connection, *conversation;
+    const json_t *entry, *row;
+    json_object_foreach((json_t *)directory, connection, entry) {
+        (void)connection;
+        json_object_foreach(json_object_get(entry, "conversations"), conversation, row) {
+            const json_t *item = json_object_get(items, conversation);
+            if (!item) continue;
+            uint64_t seq;
+            if (!snag_irc_activity_item_valid(item, after, next) ||
+                snag_json_integer_u64(row, "seq", &seq) < 0 ||
+                (uint64_t)json_integer_value(json_object_get(item, "seq")) > seq) return false;
+            uint64_t count = (uint64_t)json_integer_value(json_object_get(item, "received"));
+            if (count > next - 1u - after - received) return false;
+            received += count;
+            ++found;
+        }
+    }
+    return found == json_object_size(items);
+}
+
+json_t *
+snag_irc_activity_update(const json_t *activity, const struct snag_irc_event *event,
+                         uint64_t seq, uint64_t after)
+{
+    if (!seq || seq > INT64_MAX || after >= seq) { errno = EINVAL; return NULL; }
+    if (activity && snag_json_integer_u64(activity, "after", &after) < 0) return NULL;
+    bool message = !event->historical &&
+        (event->kind == SNAG_IRC_MESSAGE || event->kind == SNAG_IRC_NOTICE);
+    if (activity && !message) return json_incref((json_t *)activity);
+    json_t *items = activity ? json_copy(json_object_get(activity, "items")) : json_object();
+    json_t *result = NULL;
+    if (!items) return NULL;
+    if (message) {
+        const json_t *previous = json_object_get(items, event->route.conversation);
+        uint64_t received = 0u, incoming = 0u;
+        if (previous) {
+            if (!snag_irc_activity_item_valid(previous, after, seq)) {
+                errno = EINVAL;
+                goto out;
+            }
+            received = (uint64_t)json_integer_value(json_object_get(previous, "received"));
+            incoming = (uint64_t)json_integer_value(json_object_get(previous, "incoming"));
+        }
+        if (!event->local && event->route.direction == SNAG_IRC_INCOMING) {
+            ++received;
+            incoming = seq;
+        }
+        json_t *item = json_pack("{s:I,s:I,s:I,s:I}", "seq", (json_int_t)seq,
+            "time", (json_int_t)event->timestamp_ms, "received", (json_int_t)received,
+            "incoming", (json_int_t)incoming);
+        if (!item || json_object_set_new(items, event->route.conversation, item) < 0) goto out;
+    }
+    result = json_pack("{s:I,s:O}", "after", (json_int_t)after, "items", items);
+out:
+    json_decref(items);
+    return result;
+}
+
+bool
 snag_irc_conversations_valid(const json_t *state, uint64_t next_seq)
 {
     if (!json_is_object(state) || !json_object_size(state)) return false;
