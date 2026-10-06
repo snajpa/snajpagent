@@ -814,6 +814,9 @@ receive a unique label for each chunk. ACK replies and matching echoes acknowled
 server handling; batched replies wait for the enclosing batch to finish, and
 server errors produce failed results. An acknowledgement does not prove the peer
 read the message. An external unlabeled write remains unconfirmed.
+Model-facing outgoing history includes the delivery state. A written result
+means the complete frame reached the socket; acknowledged records mean the
+server or local recipient accepted it.
 Nick changes, disconnection, loss of the required capabilities and endpoint
 removal cancel unwritten chunks and mark started, unconfirmed sends uncertain.
 Classic and Vim conversation views print the body once with a pending send ID,

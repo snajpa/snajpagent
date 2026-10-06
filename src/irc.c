@@ -829,6 +829,13 @@ private_state(struct irc_conn *conn, struct irc_private_send *send, enum snag_ir
 {
     send->event.route.delivery = state;
     send->event.timestamp_ms = snag_time_ms();
+    /* A correlated result supplies the final server body once. Native
+     * catch-up supplies its own canonical public event; an ordinary external
+     * write without receipts remains explicitly unconfirmed model input. */
+    send->event.input = send->event.route.kind == SNAG_IRC_CHANNEL &&
+        send->event.route.identity == SNAG_IRC_OPERATOR &&
+        (state == SNAG_IRC_ACKNOWLEDGED || (state == SNAG_IRC_WRITTEN &&
+            !send->await_receipt && !conn->cap_catchup && !conn->owner->hosting));
     struct irc_query *query = query_by_id(conn->owner, send->event.route.conversation);
     if (query)
         (void)snag_strcpy(send->event.route.peer, sizeof(send->event.route.peer), query->peer);

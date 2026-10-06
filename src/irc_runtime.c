@@ -786,6 +786,10 @@ bool
 snag_irc_local_identity(const struct snag_irc *irc, const struct snag_irc_event *event, bool model)
 {
     if (!event->local) return false;
+    /* Receipts retain the sending identity even if its accepted nick changed
+     * while the server was constructing the response. */
+    if (event->routed && event->route.direction == SNAG_IRC_OUTGOING)
+        return event->route.identity == (model ? SNAG_IRC_AGENT : SNAG_IRC_OPERATOR);
     for (size_t i = 0u; irc && i < irc->owner_count; ++i) {
         const struct irc_owner *owner = irc->owners[i];
         if (snag_irc_endpoint_equal(owner->endpoint, event->endpoint) &&

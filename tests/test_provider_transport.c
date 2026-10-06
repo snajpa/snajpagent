@@ -207,8 +207,9 @@ write_all_or_die(int fd, const char *data, size_t len)
 static void
 server_fail(const char *message)
 {
-    (void)write(STDERR_FILENO, message, strlen(message));
-    (void)write(STDERR_FILENO, "\n", 1u);
+    ssize_t ignored = write(STDERR_FILENO, message, strlen(message));
+    ignored = write(STDERR_FILENO, "\n", 1u);
+    (void)ignored;
     _exit(92);
 }
 
@@ -5947,6 +5948,94 @@ test_irc_steering_mode(void)
 }
 
 static void
+test_channel_receipt_admission(void)
+{
+    struct snag_config config;
+    struct app_state app = {0};
+    char path[4096u], id[SNAG_ID_HEX_LEN + 1u], error[256u] = {0};
+    const char *tmp = getenv("TMPDIR");
+    assert(snprintf(path, sizeof(path), "%s/snajpagent-channel-input-XXXXXX",
+        tmp ? tmp : "/tmp") > 0 && mkdtemp(path));
+    snag_config_init(&config);
+    app.config = &config;
+    snag_store_init(&app.store);
+    snag_session_init(&app.session);
+    assert(snag_store_open(&app.store, path, error, sizeof(error)) == 0);
+    assert(snag_ui_init(&app.ui) == 0);
+    struct snag_irc_event event = {.routed = true, .local = true,
+        .kind = SNAG_IRC_MESSAGE, .timestamp_ms = 1u, .endpoint = "fixture:6667",
+        .room = "#lab", .nick = "previous-operator", .text = "unconfirmed body",
+        .route = {.connection = "11111111111111111111111111111111",
+            .conversation = "22222222222222222222222222222222",
+            .send = "33333333333333333333333333333333", .generation = 1u,
+            .kind = SNAG_IRC_CHANNEL, .direction = SNAG_IRC_OUTGOING,
+            .delivery = SNAG_IRC_PENDING, .identity = SNAG_IRC_OPERATOR, .target = "#lab"}};
+    uint64_t received = 0u;
+    for (unsigned int phase = 0u; phase < 2u; ++phase) {
+        snag_buf_init(&app.irc_background, 32768u);
+        snag_buf_init(&app.irc_background_refs, 1024u);
+        snag_buf_init(&app.irc_urgent, 32768u);
+        snag_buf_init(&app.irc_urgent_refs, 1024u);
+        if (!phase) {
+            assert(snag_session_create(&app.store, &app.session, path, "default",
+                "fixture", "medium", error, sizeof(error)) == 0);
+            strcpy(id, app.session.id);
+        } else {
+            assert(snag_session_open(&app.store, &app.session, id, error, sizeof(error)) == 0);
+        }
+        assert(snag_irc_open(&app.irc, &config, path, NULL, NULL, NULL,
+            error, sizeof(error)) == 0);
+        if (!phase) {
+            assert(snag_app_irc_event(&app, &event) == 0);
+            event.route.delivery = SNAG_IRC_WRITTEN;
+            assert(snag_app_irc_event(&app, &event) == 0);
+            assert(!app.session.irc_received_seq && !app.irc_background.len);
+            strcpy(event.text, "confirmed server body");
+            event.route.delivery = SNAG_IRC_ACKNOWLEDGED;
+            event.route.revised = event.input = true;
+            assert(snag_irc_local_identity(app.irc, &event, false));
+            assert(!snag_irc_local_identity(app.irc, &event, true));
+            assert(snag_app_irc_event(&app, &event) == 0);
+            received = app.session.irc_received_seq;
+            assert(received);
+            event.input = event.route.revised = false;
+            event.route.delivery = SNAG_IRC_FAILED;
+            strcpy(event.route.send, "44444444444444444444444444444444");
+            strcpy(event.text, "failed body");
+            assert(snag_app_irc_event(&app, &event) == 0);
+            assert(app.session.irc_received_seq == received);
+        } else {
+            assert(snag_app_irc_restore(&app, error, sizeof(error)) == 0);
+        }
+        assert(snag_buf_terminate(&app.irc_background) == 0);
+        const char *body = (const char *)app.irc_background.data;
+        const char *found = strstr(body, "confirmed server body");
+        assert(found && !strstr(found + 1u, "confirmed server body"));
+        assert(!strstr(body, "unconfirmed body") && !strstr(body, "failed body"));
+        assert(strstr(body, "delivery=acknowledged"));
+        size_t before = app.irc_background.len;
+        event.kind = SNAG_IRC_NOTICE;
+        event.route.delivery = SNAG_IRC_ACKNOWLEDGED;
+        event.input = true;
+        strcpy(event.route.send, "55555555555555555555555555555555");
+        strcpy(event.text, "quiet notice");
+        assert(snag_app_irc_event(&app, &event) == 0);
+        assert(app.irc_background.len == before && !app.irc_urgent.len);
+        assert(snag_session_checkpoint(&app.session, error, sizeof(error)) == 0);
+        snag_irc_close(app.irc);
+        app.irc = NULL;
+        snag_session_close(&app.session);
+        snag_buf_free(&app.irc_background);
+        snag_buf_free(&app.irc_background_refs);
+        snag_buf_free(&app.irc_urgent);
+        snag_buf_free(&app.irc_urgent_refs);
+    }
+    snag_ui_free(&app.ui);
+    snag_store_close(&app.store);
+    snag_config_free(&config);
+}
+
+static void
 test_plain_irc_pending_resume(void)
 {
     struct snag_config config;
@@ -6050,6 +6139,7 @@ test_irc_reply_restore_scope(void)
         bool active = steer_current || (mode & 1u);
         bool current_reply = steer_current || (mode & 2u), cancel_old = mode & 4u;
         app.config = &config;
+        assert(snag_ui_init(&app.ui) == 0);
         snag_session_init(&app.session);
         assert(snag_session_create(&store, &app.session, path, "default", "fixture",
             "medium", error, sizeof(error)) == 0);
@@ -6131,6 +6221,7 @@ test_irc_reply_restore_scope(void)
         if (current_reply) assert(app.irc_turn_replies.targets[0].id == target.id);
         assert(!app.irc_urgent.len && !app.irc_background.len);
         snag_irc_close(app.irc);
+        snag_ui_free(&app.ui);
         snag_buf_free(&app.irc_background);
         snag_buf_free(&app.irc_background_refs);
         snag_buf_free(&app.irc_urgent);
@@ -9775,6 +9866,7 @@ main(void)
     test_native_media();
 #endif
     test_irc_steering_mode();
+    test_channel_receipt_admission();
     test_plain_irc_pending_resume();
     test_irc_reply_restore_scope();
     test_irc_failed_intent_retains_pending();

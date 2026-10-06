@@ -1838,6 +1838,53 @@ test_query_context_privacy(struct snag_store *store, const char *path)
 }
 
 static void
+test_channel_send_context(struct snag_store *store, const char *path)
+{
+    struct snag_session session;
+    char error[256u], id[SNAG_ID_HEX_LEN + 1u];
+    create_session(store, &session, path, "medium");
+    strcpy(id, session.id);
+    struct snag_irc_event event = {.routed = true, .local = true,
+        .kind = SNAG_IRC_MESSAGE, .timestamp_ms = 1u, .endpoint = "fixture:6667",
+        .room = "#lab", .nick = "operator", .text = "pending-channel-sentinel", .route = {
+            .connection = "11111111111111111111111111111111",
+            .conversation = "22222222222222222222222222222222",
+            .send = "33333333333333333333333333333333", .target = "#lab", .generation = 1u,
+            .identity = SNAG_IRC_OPERATOR, .kind = SNAG_IRC_CHANNEL,
+            .direction = SNAG_IRC_OUTGOING, .delivery = SNAG_IRC_PENDING}};
+    commit_event(&session, "irc_event_v2", snag_irc_event_data(&event));
+    event.route.delivery = SNAG_IRC_WRITTEN;
+    commit_event(&session, "irc_event_v2", snag_irc_event_data(&event));
+    event.input = event.route.revised = true;
+    event.route.delivery = SNAG_IRC_ACKNOWLEDGED;
+    strcpy(event.text, "server-channel-sentinel");
+    commit_event(&session, "irc_event_v2", snag_irc_event_data(&event));
+    uint64_t received = session.irc_received_seq;
+    assert(snag_session_checkpoint(&session, error, sizeof(error)) == 0);
+    commit_event(&session, "irc_admitted", json_pack("{s:[I]}",
+        "sequences", (json_int_t)received));
+    commit_event(&session, "turn_started", turn_started(
+        "44444444444444444444444444444444", 1u, "read channel", path, json_array()));
+    for (unsigned int reopened = 0u; reopened < 2u; ++reopened) {
+        struct snag_context_projection projection = {0};
+        json_t *empty = json_array();
+        build_context(&session, 1u, empty, NULL, &projection);
+        char *text = json_dumps(projection.create_request.value, JSON_COMPACT);
+        const char *found = text ? strstr(text, "server-channel-sentinel") : NULL;
+        assert(found && !strstr(found + 1u, "server-channel-sentinel"));
+        assert(!strstr(text, "pending-channel-sentinel"));
+        assert(strstr(text, "target=#lab") && strstr(text, "delivery=acknowledged"));
+        free(text);
+        json_decref(empty);
+        snag_context_projection_free(&projection);
+        snag_session_close(&session);
+        snag_session_init(&session);
+        if (!reopened)
+            assert(snag_session_open(store, &session, id, error, sizeof(error)) == 0);
+    }
+}
+
+static void
 test_plain_irc_admission_projection(struct snag_store *store, const char *path)
 {
     const char *turn = "22222222222222222222222222222222";
@@ -5122,6 +5169,7 @@ main(int argc, char **argv)
     test_leading_instructions_boundary(&store, cwd);
     test_reasoning_continuation(&store, cwd);
     test_query_context_privacy(&store, cwd);
+    test_channel_send_context(&store, cwd);
     test_plain_irc_admission_projection(&store, cwd);
     test_durable_irc_input_watermark(&store, cwd);
     test_rebased_irc_admission_overlap(&store, cwd);

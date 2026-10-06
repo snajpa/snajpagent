@@ -129,7 +129,8 @@ struct snag_irc_event {
     uint64_t timestamp_ms;
     char stream[SNAG_ID_HEX_LEN + 1u];
     uint64_t sequence;
-    bool input; /* Engine-classified durable model input. */
+    /* Engine-classified durable input; transport marks eligible sent receipts. */
+    bool input;
     bool classified, urgent, reply;
     char endpoint[SNAG_CONFIG_IRC_ENDPOINT_MAX + 1u];
     char room[SNAG_CONFIG_IRC_ROOM_MAX + 2u];

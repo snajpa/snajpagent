@@ -210,6 +210,10 @@ route_read(const json_t *data, struct snag_irc_event *event)
              (event->kind == SNAG_IRC_CONNECTED) != route->joined)) return -1;
     }
     bool chat = event->kind == SNAG_IRC_MESSAGE || event->kind == SNAG_IRC_NOTICE;
+    bool sent_input = chat && event->local && !event->historical && event->input &&
+        route->kind == SNAG_IRC_CHANNEL && route->identity == SNAG_IRC_OPERATOR &&
+        route->direction == SNAG_IRC_OUTGOING &&
+        (route->delivery == SNAG_IRC_WRITTEN || route->delivery == SNAG_IRC_ACKNOWLEDGED);
     if ((route->kind == SNAG_IRC_QUERY && (!route->peer[0] || event->room[0])) ||
         (route->kind != SNAG_IRC_QUERY && route->peer[0]) ||
         (route->kind == SNAG_IRC_CHANNEL && (!event->room[0] ||
@@ -220,10 +224,12 @@ route_read(const json_t *data, struct snag_irc_event *event)
             (route->delivery != SNAG_IRC_DELIVERY_NONE || route->send[0])) ||
         (route->direction == SNAG_IRC_OUTGOING &&
             (route->delivery == SNAG_IRC_DELIVERY_NONE ||
-                !snag_hex_is_lower(route->send, SNAG_ID_HEX_LEN) || event->input)) ||
+                !snag_hex_is_lower(route->send, SNAG_ID_HEX_LEN) ||
+                (event->input && !sent_input))) ||
         (!snag_irc_event_model_visible(event) && (event->input || event->urgent || event->reply)) ||
         ((event->historical || event->kind != SNAG_IRC_MESSAGE ||
-            route->direction != SNAG_IRC_INCOMING) && (event->urgent || event->reply)) ||
+            (route->direction != SNAG_IRC_INCOMING && !sent_input)) &&
+            (event->urgent || event->reply)) ||
         (event->reply && !event->urgent)) return -1;
     return 0;
 }
@@ -456,15 +462,18 @@ snag_irc_event_reference(struct snag_buf *out, const struct snag_irc_event *even
     const struct snag_irc_event_route *route = &event->route;
     if ((unsigned int)route->identity > SNAG_IRC_AGENT ||
         (unsigned int)route->kind > SNAG_IRC_QUERY ||
-        (unsigned int)route->direction > SNAG_IRC_OUTGOING) return snag_errno(EINVAL);
+        (unsigned int)route->direction > SNAG_IRC_OUTGOING ||
+        (unsigned int)route->delivery > SNAG_IRC_UNCERTAIN) return snag_errno(EINVAL);
     return snag_buf_printf(out, "[IRC update id=%s:%llu endpoint=%s connection=%s "
         "generation=%llu identity=%s conversation=%s kind=%s peer=%s target=%s "
-        "direction=%s event=%s sender=%s action=%s]\n",
+        "direction=%s event=%s sender=%s action=%s%s%s]\n",
         event->stream, (unsigned long long)event->sequence, event->endpoint, route->connection,
         (unsigned long long)route->generation, identities[route->identity], route->conversation,
         conversations[route->kind], route->peer, route->target, directions[route->direction],
         snag_irc_kind_name(event->kind), event->nick[0] ? event->nick : "server",
-        route->action ? "true" : "false");
+        route->action ? "true" : "false",
+        route->direction == SNAG_IRC_OUTGOING ? " delivery=" : "",
+        route->direction == SNAG_IRC_OUTGOING ? deliveries[route->delivery] : "");
 }
 
 int
@@ -475,16 +484,19 @@ snag_irc_event_projection(struct snag_buf *out, const struct snag_irc_event *eve
         const struct snag_irc_event_route *route = &event->route;
         if ((unsigned int)route->identity > SNAG_IRC_AGENT ||
             (unsigned int)route->kind > SNAG_IRC_QUERY ||
-            (unsigned int)route->direction > SNAG_IRC_OUTGOING) return snag_errno(EINVAL);
+            (unsigned int)route->direction > SNAG_IRC_OUTGOING ||
+            (unsigned int)route->delivery > SNAG_IRC_UNCERTAIN) return snag_errno(EINVAL);
         return snag_buf_printf(out, "[IRC endpoint=%s connection=%s generation=%llu "
             "identity=%s conversation=%s kind=%s peer=%s target=%s direction=%s "
-            "event=%s sender=%s action=%s historical=%s id=%s:%llu]\n%s\n",
+            "event=%s sender=%s action=%s historical=%s id=%s:%llu%s%s]\n%s\n",
             event->endpoint, route->connection, (unsigned long long)route->generation,
             identities[route->identity], route->conversation, conversations[route->kind],
             route->peer, route->target, directions[route->direction],
             snag_irc_kind_name(event->kind), event->nick[0] ? event->nick : "server",
             route->action ? "true" : "false", event->historical ? "true" : "false",
-            event->stream, (unsigned long long)event->sequence, event->text);
+            event->stream, (unsigned long long)event->sequence,
+            route->direction == SNAG_IRC_OUTGOING ? " delivery=" : "",
+            route->direction == SNAG_IRC_OUTGOING ? deliveries[route->delivery] : "", event->text);
     }
     return snag_buf_printf(out,
         "[IRC endpoint=%s room=%s event=%s sender=%s operator=%s historical=%s id=%s:%llu]\n%s\n",

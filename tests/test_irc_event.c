@@ -140,6 +140,50 @@ channel_membership(void)
 }
 
 static void
+channel_send_input(void)
+{
+    struct snag_irc_event event = query();
+    event.local = event.input = event.urgent = event.reply = true;
+    event.route.kind = SNAG_IRC_CHANNEL;
+    event.route.peer[0] = '\0';
+    event.route.direction = SNAG_IRC_OUTGOING;
+    event.route.delivery = SNAG_IRC_ACKNOWLEDGED;
+    strcpy(event.route.send, "44444444444444444444444444444444");
+    strcpy(event.room, "#room");
+    strcpy(event.route.target, event.room);
+    roundtrip(&event);
+    event.route.delivery = SNAG_IRC_WRITTEN;
+    roundtrip(&event);
+    struct snag_irc_event decoded;
+    for (unsigned int state = SNAG_IRC_PENDING; state <= SNAG_IRC_UNCERTAIN; ++state) {
+        if (state == SNAG_IRC_WRITTEN || state == SNAG_IRC_ACKNOWLEDGED) continue;
+        event.route.delivery = (enum snag_irc_delivery)state;
+        json_t *data = snag_irc_event_data(&event);
+        assert(data && snag_irc_event_record_read("irc_event_v2", data, &decoded) < 0);
+        json_decref(data);
+    }
+    event.route.delivery = SNAG_IRC_ACKNOWLEDGED;
+    event.route.identity = SNAG_IRC_AGENT;
+    json_t *data = snag_irc_event_data(&event);
+    assert(data && snag_irc_event_record_read("irc_event_v2", data, &decoded) < 0);
+    json_decref(data);
+    event.route.identity = SNAG_IRC_OPERATOR;
+    event.local = false;
+    data = snag_irc_event_data(&event);
+    assert(data && snag_irc_event_record_read("irc_event_v2", data, &decoded) < 0);
+    json_decref(data);
+    event.local = true;
+    event.input = false;
+    data = snag_irc_event_data(&event);
+    assert(data && snag_irc_event_record_read("irc_event_v2", data, &decoded) < 0);
+    json_decref(data);
+    event.input = true;
+    event.urgent = event.reply = false;
+    event.kind = SNAG_IRC_NOTICE;
+    roundtrip(&event);
+}
+
+static void
 delivery_states(void)
 {
     struct snag_irc_event event = query();
@@ -321,6 +365,7 @@ main(void)
     nickname_mappings();
     privacy_and_provenance();
     channel_membership();
+    channel_send_input();
     delivery_states();
     invalid_fields();
     directory_update_test();

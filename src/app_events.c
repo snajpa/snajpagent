@@ -262,14 +262,17 @@ snag_app_irc_event(void *opaque, const struct snag_irc_event *event)
     if (snag_app_sync_destinations(app) < 0) return -1;
     chat = event->kind == SNAG_IRC_MESSAGE || event->kind == SNAG_IRC_NOTICE;
     struct snag_irc_event accepted = *event;
+    bool outgoing = event->routed && event->route.direction == SNAG_IRC_OUTGOING;
+    bool sent_input = outgoing && event->route.kind == SNAG_IRC_CHANNEL && event->input;
     accepted.input = !snag_irc_local_identity(app->irc, event, true) &&
         event->kind != SNAG_IRC_HISTORY_READY && (event->stream[0] || event->historical || chat);
+    if (outgoing) accepted.input = sent_input;
     accepted.classified = true;
     accepted.urgent = event->kind == SNAG_IRC_MESSAGE && !event->historical &&
         snag_irc_mentions_agent(app->irc, event->endpoint, event->text);
     accepted.reply = accepted.urgent && snag_irc_local_identity(app->irc, event, false);
     bool private = event->routed && (event->route.kind != SNAG_IRC_CHANNEL ||
-        event->route.direction == SNAG_IRC_OUTGOING || !snag_irc_event_model_visible(event));
+        (outgoing && !sent_input) || !snag_irc_event_model_visible(event));
     if (private) {
         accepted.input = event->route.kind == SNAG_IRC_QUERY &&
             event->route.identity == SNAG_IRC_AGENT &&
@@ -287,9 +290,9 @@ snag_app_irc_event(void *opaque, const struct snag_irc_event *event)
     if (snag_ui_send(&app->ui, (struct snag_ui_command){
         .kind = SNAG_UI_IRC, .data.irc = event}) < 0) return -1;
     if (private && !accepted.input) return query_replied(app->irc_turn_queries, event);
-    /* Private NOTICE and replay add context at the next natural request. They
-     * never create an input intent or an automatic reply obligation. */
-    if (private && (event->historical || event->kind != SNAG_IRC_MESSAGE) &&
+    /* Query replay and NOTICE receipts add context at the next natural
+     * request, without creating an input intent or reply obligation. */
+    if ((private || sent_input) && (event->historical || event->kind != SNAG_IRC_MESSAGE) &&
         !app->session.irc_sleep_until_ms) {
         return snag_app_commit_event(app, "irc_admitted",
             json_pack("{s:[I]}", "sequences", (json_int_t)accepted_seq), error, sizeof(error));
@@ -331,7 +334,8 @@ snag_app_irc_event(void *opaque, const struct snag_irc_event *event)
         reply_target(&app->irc_urgent_replies, target, true);
         if (app->irc_urgent_replies.count > before) app->irc_urgent_reply_offsets[before] = reply_offset;
     }
-    if (!urgent && !private && !app->irc_background_since_ms)
+    if (!urgent && !private && (!sent_input || event->kind == SNAG_IRC_MESSAGE) &&
+        !app->irc_background_since_ms)
         app->irc_background_since_ms = snag_time_ms();
     return 0;
 }
@@ -621,9 +625,11 @@ snag_app_irc_restore(struct app_state *app, char *error, size_t error_size)
         const json_t *entry = json_array_get(restore.pending, i);
         struct snag_irc_event event;
         if (pending_event(entry, &event) < 0) { rc = -1; break; }
-        if (event.routed && event.route.kind == SNAG_IRC_QUERY &&
-            (event.historical || event.kind != SNAG_IRC_MESSAGE) &&
-            !app->session.irc_sleep_until_ms) {
+        bool quiet = event.routed && (event.route.kind == SNAG_IRC_QUERY ||
+            (event.route.kind == SNAG_IRC_CHANNEL &&
+                event.route.direction == SNAG_IRC_OUTGOING)) &&
+            (event.historical || event.kind != SNAG_IRC_MESSAGE);
+        if (quiet && !app->session.irc_sleep_until_ms) {
             rc = snag_app_commit_event(app, "irc_admitted", json_pack("{s:[O]}", "sequences",
                 json_object_get(entry, "seq")), error, error_size);
             continue;
@@ -631,7 +637,7 @@ snag_app_irc_restore(struct app_state *app, char *error, size_t error_size)
         bool urgent = event.classified ? event.urgent : !event.historical &&
             snag_irc_mentions_agent(app->irc, event.endpoint, event.text);
         struct snag_buf *buffer = urgent ? &app->irc_urgent : &app->irc_background;
-        if (!urgent && (!event.routed || event.route.kind == SNAG_IRC_CHANNEL))
+        if (!urgent && !quiet && (!event.routed || event.route.kind == SNAG_IRC_CHANNEL))
             app->irc_background_since_ms = snag_time_ms();
         size_t offset = buffer->len;
         rc = append_irc_projection(buffer, &event);

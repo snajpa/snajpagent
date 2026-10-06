@@ -29,6 +29,8 @@ struct fixture {
     unsigned short port;
     unsigned int delivery[SNAG_IRC_UNCERTAIN + 1u];
     struct snag_irc_event last_send;
+    struct snag_irc_event last_input;
+    unsigned int inputs;
     unsigned int incoming_messages;
     char wire[32768u];
     size_t used;
@@ -38,6 +40,10 @@ static int
 capture(void *opaque, const struct snag_irc_event *event)
 {
     struct fixture *fixture = opaque;
+    if (event->input) {
+        ++fixture->inputs;
+        fixture->last_input = *event;
+    }
     if (event->routed && event->route.kind == SNAG_IRC_QUERY &&
         event->route.direction == SNAG_IRC_INCOMING && event->kind == SNAG_IRC_MESSAGE)
         ++fixture->incoming_messages;
@@ -660,6 +666,75 @@ labeled_capability_loss(void)
 }
 
 static void
+channel_send_input(void)
+{
+    struct fixture fixture;
+    snag_socket peers[2u];
+    external_fixture(&fixture, peers);
+    char error[256u] = {0};
+    struct snag_irc_query_target scope;
+    assert(snag_irc_core_query_open(fixture.core, SNAG_IRC_OPERATOR, "peer",
+        &scope, error, sizeof(error)) == 0);
+    struct snag_irc_channel_target lab;
+    assert(snag_irc_core_channel_open(fixture.core, &scope, "#lab", false,
+        &lab, error, sizeof(error)) == 0);
+    snag_socket peer = peers[SNAG_IRC_OPERATOR];
+    assert(snag_irc_core_channel_send(fixture.core, &lab, SNAG_IRC_MESSAGE,
+        "unconfirmed operator input", false, NULL, error, sizeof(error)) == 0);
+    assert(!fixture.inputs);
+    wait_text(&fixture, peer, "PRIVMSG #lab :unconfirmed operator input\r\n");
+    assert(fixture.inputs == 1u && fixture.last_input.route.delivery == SNAG_IRC_WRITTEN);
+    peer_sync(&fixture, peer,
+        ":operator!u@fake PRIVMSG #lab :unconfirmed operator input\r\n");
+    peer_sync(&fixture, peers[SNAG_IRC_AGENT],
+        ":operator!u@fake PRIVMSG #lab :unconfirmed operator input\r\n");
+    assert(fixture.inputs == 1u);
+
+    peer_sync(&fixture, peer, ":fake CAP * ACK :batch echo-message labeled-response\r\n");
+    assert(snag_irc_core_channel_send(fixture.core, &lab, SNAG_IRC_MESSAGE,
+        "pending body", false, NULL, error, sizeof(error)) == 0);
+    char id[SNAG_ID_HEX_LEN + 1u];
+    strcpy(id, fixture.last_send.route.send);
+    wait_text(&fixture, peer, "PRIVMSG #lab :pending body\r\n");
+    assert(fixture.inputs == 1u);
+    char response[1024u];
+    snprintf(response, sizeof(response), "@label=%s :fake BATCH +receipt labeled-response\r\n"
+        "@batch=receipt :operator!u@fake PRIVMSG #lab :final server body\r\n", id);
+    peer_sync(&fixture, peer, response);
+    assert(fixture.inputs == 1u);
+    peer_sync(&fixture, peer, ":fake BATCH -receipt\r\n");
+    assert(fixture.inputs == 2u && fixture.last_input.route.delivery == SNAG_IRC_ACKNOWLEDGED);
+    assert(!strcmp(fixture.last_input.text, "final server body"));
+    assert(fixture.last_input.route.revised);
+    snprintf(response, sizeof(response), "@label=%s :fake ACK\r\n", id);
+    peer_sync(&fixture, peer, response);
+    assert(fixture.inputs == 2u);
+
+    assert(snag_irc_core_channel_send(fixture.core, &lab, SNAG_IRC_MESSAGE,
+        "rejected body", false, NULL, error, sizeof(error)) == 0);
+    strcpy(id, fixture.last_send.route.send);
+    wait_text(&fixture, peer, "PRIVMSG #lab :rejected body\r\n");
+    snprintf(response, sizeof(response), "@label=%s :fake 404 operator #lab :denied\r\n", id);
+    peer_sync(&fixture, peer, response);
+    assert(fixture.inputs == 2u);
+
+    assert(snag_irc_core_query_open(fixture.core, SNAG_IRC_AGENT, "peer",
+        &scope, error, sizeof(error)) == 0);
+    assert(snag_irc_core_channel_open(fixture.core, &scope, "#lab", false,
+        &lab, error, sizeof(error)) == 0);
+    peer = peers[SNAG_IRC_AGENT];
+    peer_sync(&fixture, peer, ":fake CAP * ACK :batch labeled-response\r\n");
+    assert(snag_irc_core_channel_send(fixture.core, &lab, SNAG_IRC_MESSAGE,
+        "agent reply", false, NULL, error, sizeof(error)) == 0);
+    strcpy(id, fixture.last_send.route.send);
+    wait_text(&fixture, peer, "PRIVMSG #lab :agent reply\r\n");
+    snprintf(response, sizeof(response), "@label=%s :fake ACK\r\n", id);
+    peer_sync(&fixture, peer, response);
+    assert(fixture.inputs == 2u);
+    close_external(&fixture, peers);
+}
+
+static void
 channel_frames(void)
 {
     struct fixture fixture;
@@ -696,10 +771,12 @@ channel_frames(void)
     assert(body && pong && body < pong);
     assert(fixture.delivery[SNAG_IRC_WRITTEN] == 1u);
     assert(!fixture.delivery[SNAG_IRC_ACKNOWLEDGED]);
+    assert(!fixture.inputs);
     write_peer(peer, "@saj-id=11111111111111111111111111111111:1 "
         ":operator!u@fake PRIVMSG #lab :channel frame\r\n");
     for (size_t i = 0u; i < 5u; ++i) pump(&fixture);
     assert(!fixture.delivery[SNAG_IRC_ACKNOWLEDGED]);
+    assert(!fixture.inputs);
 
     /* Only the kicked channel loses an entirely unwritten message. */
     fixture.used = 0u;
@@ -747,6 +824,7 @@ main(void)
 {
     private_frames();
     channel_frames();
+    channel_send_input();
     labeled_receipts();
     labeled_line_budget();
     label_requires_batch();

@@ -4,6 +4,13 @@
 
 ## Unreleased
 
+- Admit a confirmed operator channel send once, using the server's final text.
+  Retain receipt input through checkpoint/resume and include its delivery state
+  in model context. Pending, failed, uncertain and agent sends stay outside input;
+  NOTICE receipts add context without starting a reply. External writes without
+  receipts remain explicitly unconfirmed; native catch-up supplies its public
+  event. Channel frontend and reply-route integration remain in progress.
+
 - Correlate IRC query and channel sends through negotiated labeled responses,
   including nested/interleaved batches, ACKs, errors, NOTICE and actions. Keep
   UTF-8 chunks within the line budget and cancel safely when capabilities or

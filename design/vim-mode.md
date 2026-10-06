@@ -818,6 +818,14 @@ The optional revised routing flag carries server text/action changes through
 durable receipt records and both renderers. See the
 [labeled-response specification](https://ircv3.net/specs/extensions/labeled-response)
 and [batch specification](https://ircv3.net/specs/extensions/batch).
+Channel-send admission uses the successful operator receipt once, including its
+final server text and action. Pending/failed/uncertain sends and the agent's own
+receipts cannot become input. Ordinary external writes without exact receipts
+use their written record, explicitly labelled with that unconfirmed state;
+native catch-up instead supplies its public source event. The typed input and
+its delivery label survive checkpoint/resume. NOTICE receipts add context at
+the next natural request, without starting an automatic reply. Channel frontend
+and exact channel reply-route integration remain in progress.
 A nickname discontinuity or disconnect cancels unsent chunks,
 retains uncertainty for started writes and never replays the private queue.
 Endpoint removal finishes those outcomes before stopping its owner. UTF-8 chunks
