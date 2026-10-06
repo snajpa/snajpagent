@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Resolve historical tool names and arguments across source-page boundaries.
+  Level 2 recovers decoded, redacted output previews from retained references;
+  cancellable reads preserve the displayed page and its source position.
+
 - Discover retained command reports after owner restart through a private ordered
   catalogue. Load it in the background for `:reports` and `:report`, preserve
   live notifications and saved references, and recover incomplete final appends.

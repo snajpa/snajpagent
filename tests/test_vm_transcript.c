@@ -230,6 +230,30 @@ sparse_document(void)
 }
 
 static void
+resolved_call_metadata(void)
+{
+    json_t *events = json_array();
+    event(events, "tool_started", json_pack("{s:s,s:s}", "call_id", handle,
+        "resolved_workdir", "/work"));
+    json_t *call = json_pack("{s:s,s:s,s:s,s:{s:s}}", "kind", "tool_call", "call_id", handle,
+        "name", "exec_command", "arguments", "cmd", "echo top-secret");
+    assert(json_object_set_new(json_array_get(events, 0u), "call", call) == 0);
+    json_t *blocks = project(events, 2u);
+    json_t *block = json_array_get(blocks, 0u);
+    assert(strstr(snag_json_string(block, "label"), "exec_command"));
+    assert(!json_object_get(block, "needs_call"));
+    char *encoded = json_dumps(blocks, JSON_COMPACT);
+    assert(encoded && !strstr(encoded, "top-secret") && strstr(encoded, "<redacted:secret>"));
+    free(encoded);
+    json_decref(blocks);
+    assert(json_object_set_new(json_array_get(events, 0u), "call", json_null()) == 0);
+    blocks = project(events, 2u);
+    assert(!strcmp(snag_json_string(json_array_get(blocks, 0u), "needs_call"), handle));
+    json_decref(blocks);
+    json_decref(events);
+}
+
+static void
 failure_paths(void)
 {
     char error[256];
@@ -257,6 +281,7 @@ main(void)
     encoded_interleaving();
     redaction_expansion();
     sparse_document();
+    resolved_call_metadata();
     failure_paths();
     puts("test_vm_transcript: ok");
     return 0;

@@ -20,9 +20,10 @@ The workspace reconciles owner and saved drafts using their last shared text
 digest and owner identity; conflicts retain both copies for an explicit choice.
 The backend also accepts typed commands and retains immutable command reports.
 The frontend retains report buffers and hands terminal-required commands to a
-bound classic attachment. Finite editor, transfer and pager commands return after
-completion. Semantic deferred-control notifications and IRC routes remain
-integration work; clients use only advertised capabilities. A classic owner without this endpoint
+bound classic attachment. Finite editor and transfer commands return after
+completion; native /cat retains a report snapshot. Deferred-control reports
+replay across reconnect, and their catalogue survives owner restart. IRC routes
+remain integration work; clients use only advertised capabilities. An owner without this endpoint
 continues to offer its existing terminal attachment and best-effort history.
 
 ## Framing and service

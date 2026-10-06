@@ -388,6 +388,10 @@ int snag_session_checkpoint_read(struct snag_session *, json_t **state, json_t *
  * Cursor scans project checkpoints to format/snapshot_v/provider_view metadata. */
 #define SNAG_JOURNAL_PAGE_BYTES (4u * 1024u * 1024u)
 #define SNAG_JOURNAL_STOP_AFTER 2
+/* Verify a record boundary already referenced by this pinned journal. Failure
+ * preserves the caller's cursor; the committed end is a valid empty boundary. */
+int snag_session_history_cursor_at(struct snag_session *, int64_t offset,
+    struct snag_journal_cursor *, char *, size_t);
 int snag_session_each_event_reverse(struct snag_session *, uint64_t before_seq, size_t scan_bytes,
     snag_session_event_fn, void *opaque, uint64_t *next_before, char *error, size_t error_size);
 /* Forward envelope/hash-verified records; zero cursor starts at the beginning.

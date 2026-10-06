@@ -39,6 +39,106 @@ cancel_report(void *opaque)
     return ++*calls >= 3u;
 }
 
+/* Deliberately bypass reducer semantics for projection fixtures (including
+ * foreign/reused call IDs). Envelopes and chain hashes remain fully verified. */
+static void
+projection_record(struct snag_session *source, const char *type, json_t *data)
+{
+    json_t *event = json_pack("{s:o,s:s,s:I,s:s,s:I,s:s,s:i,s:I}", "data", data,
+        "prev_sha256", source->prev_sha256, "seq", (json_int_t)source->next_seq,
+        "session_id", source->id, "time_ms", (json_int_t)source->last_time_ms,
+        "type", type, "v", 2, "checkpoint_offset", (json_int_t)source->checkpoint_offset);
+    char digest[SNAG_SHA256_HEX_LEN + 1u];
+    struct snag_buf line = {.max = SNAG_MAX_EVENT_LINE};
+    assert(event && snag_json_digest(event, digest) == 0);
+    assert(json_object_set_new(event, "event_sha256", json_string(digest)) == 0);
+    assert(snag_json_canonical(event, &line) == 0 && snag_buf_putc(&line, '\n') == 0);
+    assert(snag_write_full(source->log_fd, line.data, line.len) == 0);
+    source->log_end += (int64_t)line.len;
+    ++source->next_seq;
+    memcpy(source->prev_sha256, digest, sizeof(digest));
+    snag_buf_free(&line);
+    json_decref(event);
+}
+
+static void
+dependency_test(struct snag_store *store, const char *root)
+{
+    const char *turn = "0123456789abcdef0123456789abcdef";
+    const char *foreign = "fedcba9876543210fedcba9876543210";
+    const char *values[] = {"test-secret-value"};
+    struct snag_wire_secrets secrets = {.values = values, .count = 1u};
+    for (unsigned int variant = 0u; variant < 6u; ++variant) {
+        struct snag_session source;
+        snag_session_init(&source);
+        char error[256] = "";
+        assert(snag_session_create(store, &source, root, "default", "dependencies", "high",
+            error, sizeof(error)) == 0);
+        projection_record(&source, "response_completed", json_pack("{s:s,s:[{s:s,s:s,s:s,s:{}}]}",
+            "turn_id", turn, "items", "kind", "tool_call", "call_id", "reused-call",
+            "name", "exec_command", "arguments"));
+        projection_record(&source, "response_completed", json_pack("{s:s,s:[{s:s,s:s,s:s,s:{}}]}",
+            "turn_id", variant == 5u ? turn : foreign,
+            "items", "kind", "tool_call", "call_id", "reused-call",
+            "name", "write_stdin", "arguments"));
+        int64_t begin = source.log_end;
+        const char *chunks[] = {"prefix test-", "error\n", "secret-value €"};
+        const unsigned int streams[] = {0u, 1u, 0u};
+        size_t lengths[2] = {0u, 0u};
+        for (size_t i = 0u; i < 3u; ++i) {
+            unsigned int stream = streams[i];
+            projection_record(&source, "process_output", json_pack("{s:s,s:s,s:i,s:I,s:s,s:s}",
+                "turn_id", turn, "handle", turn, "stream", (int)stream,
+                "offset", (json_int_t)lengths[stream], "encoding", "utf8", "data", chunks[i]));
+            lengths[stream] += strlen(chunks[i]);
+        }
+        int64_t end = source.log_end;
+        struct snag_vm_read_request request = {.trusted_tail = true, .project = true,
+            .verbosity = 2u, .columns = 80u};
+        request.cursor.offset = end;
+        request.cursor.next_seq = source.next_seq;
+        memcpy(request.cursor.prev_sha256, source.prev_sha256, sizeof(source.prev_sha256));
+        json_t *ref = json_pack("{s:s,s:I,s:I,s:i,s:I,s:i,s:I}", "handle", turn,
+            "log_start", (json_int_t)begin + (variant == 1u),
+            "log_end", (json_int_t)end + (variant == 2u ? 1 : 0),
+            "stdout_start", 0, "stdout_end", (json_int_t)lengths[0] + (variant == 3u),
+            "stderr_start", 0, "stderr_end", (json_int_t)lengths[1]);
+        projection_record(&source, "tool_finished", json_pack("{s:s,s:s,s:{s:s,s:i,s:o}}",
+            "turn_id", variant == 4u ? "missing-turn" : turn, "call_id", "reused-call",
+            "result", "status", "succeeded", "exit_code", 0, "output_ref", ref));
+        request.tail.offset = source.log_end;
+        request.tail.next_seq = source.next_seq;
+        memcpy(request.tail.prev_sha256, source.prev_sha256, sizeof(source.prev_sha256));
+        memcpy(request.session_id, source.id, sizeof(source.id));
+        struct snag_vm_reader *reader = snag_vm_reader_open(store, &secrets, error, sizeof(error));
+        assert(reader);
+        struct snag_vm_read_result *result = await_page(reader,
+            snag_vm_reader_request(reader, &request));
+        if (variant >= 1u && variant <= 3u) {
+            assert(result->error_number && !result->document);
+        } else {
+            if (result->error_number) (void)fprintf(stderr, "%s\n", result->error);
+            assert(!result->error_number && json_array_size(result->blocks) == 1u);
+            const json_t *block = json_array_get(result->blocks, 0u);
+            assert(strstr(snag_json_string(block, "label"),
+                variant == 4u ? "tool" : variant == 5u ? "write_stdin" : "exec_command"));
+            const char *body = snag_json_string(block, "text");
+            assert(strstr(body, "prefix <redacted:secret>") && strstr(body, "error") &&
+                strstr(body, "€") && !strstr(body, "test-secret-value"));
+            assert((json_object_get(block, "needs_call") != NULL) == (variant == 4u));
+            assert(result->cursor.offset == request.tail.offset &&
+                result->cursor.next_seq == request.tail.next_seq);
+        }
+        snag_vm_read_result_free(result);
+        snag_vm_reader_close(reader);
+        char prefix[9];
+        memcpy(prefix, source.id, 8u);
+        prefix[8] = '\0';
+        assert(snag_session_delete(store, &source, prefix, NULL, error, sizeof(error)) == 0);
+        snag_session_close(&source);
+    }
+}
+
 static bool
 grow_snapshot_source(void *opaque)
 {
@@ -484,6 +584,7 @@ main(void)
     snag_store_init(&store);
     snag_session_init(&source);
     assert(snag_store_open(&store, root, error, sizeof(error)) == 0);
+    dependency_test(&store, root);
     assert(snag_session_create(&store, &source, root, "default", "test-secret-value", "high",
         error, sizeof(error)) == 0);
     source.on_checkpoint = large_context;

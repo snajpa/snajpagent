@@ -260,7 +260,8 @@ tool_block(struct transcript *view, uint64_t seq, const char *type, const json_t
     if (!view->level) return 0;
     const char *id = snag_json_string(data, "call_id");
     if (!id) return snag_errno(EINVAL);
-    const json_t *metadata = json_object_get(view->calls, id);
+    const json_t *metadata = json_object_get(data, "call");
+    if (!metadata) metadata = json_object_get(view->calls, id);
     const char *name = snag_json_string(metadata, "name");
     const char *workdir = snag_json_string(data, "resolved_workdir");
     bool start = !strcmp(type, "tool_started");
@@ -285,6 +286,11 @@ tool_block(struct transcript *view, uint64_t seq, const char *type, const json_t
         snag_buf_append(&body, formatted.body.data, formatted.body.len) < 0 ||
         (formatted.truncated && snag_buf_append(&body, "\n…", 4u) < 0) ||
         snag_buf_terminate(&formatted.text) < 0) goto out;
+    const char *preview = snag_json_string(data, "output_preview");
+    if (view->level == 2u && preview &&
+        (snag_buf_append(&body, preview, strlen(preview)) < 0 ||
+         (json_is_true(json_object_get(data, "preview_truncated")) &&
+          snag_buf_append(&body, "…\n", 4u) < 0))) goto out;
     json_t *block = append_block(view, seq, type, (const char *)formatted.text.data,
         body.data, body.len, 0u, body.len);
     rc = block ? 0 : -1;
@@ -409,8 +415,17 @@ snag_vm_transcript_blocks(const json_t *events, unsigned int verbosity, unsigned
         uint64_t seq = (uint64_t)json_integer_value(json_object_get(event, "seq"));
         if (canceled(&view)) goto out;
         if (!strcmp(type, "process_output")) continue;
-        char *filtered = snag_history_event_data(seq, type, json_object_get(event, "data"),
-            secrets, error, size);
+        json_t *source = json_copy(json_object_get(event, "data"));
+        if (!source) goto out;
+        static const char *const references[] = {"call", "output_preview", "preview_truncated"};
+        bool copied = true;
+        for (size_t k = 0u; k < sizeof(references) / sizeof(references[0]); ++k) {
+            json_t *value = json_object_get(event, references[k]);
+            if (value && json_object_set(source, references[k], value) < 0) copied = false;
+        }
+        if (!copied) { json_decref(source); goto out; }
+        char *filtered = snag_history_event_data(seq, type, source, secrets, error, size);
+        json_decref(source);
         json_t *data = filtered ? json_loads(filtered, JSON_REJECT_DUPLICATES, NULL) : NULL;
         free(filtered);
         if (!data) goto out;

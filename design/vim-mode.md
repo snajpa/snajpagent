@@ -162,8 +162,14 @@ reaps only short-lived bootstrap children and never signals launched owners.
 Each pending launch targets its requesting window until that window is closed or
 repurposed. Workspace restoration keeps launch requests inert; new owners remain
 in the agent catalogue when the frontend disappears before readiness.
-Command/report adapters, cross-page tool
-dependencies, search/selection/clipboard and IRC conversations still need integration.
+Projected tool events now resolve their call metadata through earlier verified
+records, matching the nearest response by original turn/call identity before
+redaction. Missing metadata keeps its call ID. Level2 loads a bounded prefix of
+referenced stdout/stderr by verified journal offsets, decodes interleaved chunks,
+redacts across chunk boundaries and applies the existing512-character preview.
+Dependency reads run on the cancellable worker and preserve the page cursor.
+Public-response dependencies across pages, exact redaction anchors,
+search/selection/clipboard and IRC conversations still need integration.
 This development frontend has
 not been installed on the operator's machines or merged into the release line.
 
@@ -850,6 +856,16 @@ still produce only small metadata. The worker sleeps on a condition variable
 between requests and wakes the frontend through the existing portable wakeup
 channel. Refresh and source failure invalidate its cached view. Search and
 viewport caches will build on this reader.
+
+Tool metadata resolution walks the page backwards, then reads older verified
+records only for unresolved calls. It matches original turn/call identities and
+retains only their metadata; missing definitions stay explicit. Level2 output
+previews verify the output reference's start/end record boundaries in the pinned
+journal and scan forwards from that start. Sampling keeps a prefix per stream:
+four bytes per allowed display character plus the longest redaction value and
+UTF-8 lookahead, rounded up to complete16KiB output records. The normal transcript
+decoder joins interleaved streams and redacts before the512-character display
+limit is applied. These reads leave page cursors and journal bytes unchanged.
 
 Maintain sparse offsets for visited pages. They are a disposable acceleration,
 not a new required on-disk index. `gg` seeks the earliest displayable event and

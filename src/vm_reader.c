@@ -2,6 +2,7 @@
 #include "vm_reader.h"
 #include "history_view.h"
 #include "json.h"
+#include "render.h"
 #include "vm_public.h"
 #include "vm_report.h"
 #include "vm_transcript.h"
@@ -192,6 +193,201 @@ read_event(void *opaque, const struct snag_session *state, uint64_t seq,
     return 0;
 }
 
+struct call_dependencies {
+    struct snag_vm_reader *reader;
+    json_t *pending;
+};
+
+static int
+resolve_calls(void *opaque, const struct snag_session *state, uint64_t seq,
+    const char *type, const json_t *data, char *error, size_t size)
+{
+    struct call_dependencies *calls = opaque;
+    (void)state;
+    (void)seq;
+    (void)error;
+    (void)size;
+    if (read_canceled(calls->reader)) return snag_errno(ECANCELED);
+    if (strcmp(type, "response_completed")) return 0;
+    const char *turn = snag_json_string(data, "turn_id");
+    const json_t *items = json_object_get(data, "items");
+    for (size_t i = 0u; turn && i < json_array_size(items); ++i) {
+        json_t *call = json_array_get(items, i);
+        const char *id = snag_json_string(call, "call_id");
+        if (!snag_string_in(snag_json_string(call, "kind"), "tool_call") || !id) continue;
+        for (size_t n = json_array_size(calls->pending); n; --n) {
+            json_t *event = json_array_get(calls->pending, n - 1u);
+            const json_t *tool = json_object_get(event, "data");
+            const char *owner = snag_json_string(tool, "turn_id");
+            const char *wanted = snag_json_string(tool, "call_id");
+            if (!owner || !wanted || strcmp(owner, turn) || strcmp(wanted, id)) continue;
+            if (json_object_set(event, "call", call) < 0) return -1;
+            (void)json_array_remove(calls->pending, n - 1u);
+        }
+    }
+    return json_array_size(calls->pending) ? 0 : SNAG_JOURNAL_STOP_AFTER;
+}
+
+static int
+load_calls(struct snag_vm_reader *reader, json_t *events, char *error, size_t size)
+{
+    struct call_dependencies calls = {.reader = reader, .pending = json_array()};
+    if (!calls.pending) return -1;
+    int rc = -1;
+    /* Walk the page backwards so reused provider call IDs resolve to their
+     * nearest preceding response in the same turn, before any redaction. */
+    for (size_t n = json_array_size(events); n; --n) {
+        if (read_canceled(reader)) { errno = ECANCELED; goto out; }
+        json_t *event = json_array_get(events, n - 1u);
+        const char *type = snag_json_string(event, "type");
+        if (snag_string_in(type, "tool_started tool_finished")) {
+            if (json_array_append(calls.pending, event) < 0) goto out;
+        } else if (resolve_calls(&calls, NULL, 0u, type,
+            json_object_get(event, "data"), error, size) < 0) goto out;
+    }
+    struct snag_session *view = &reader->current->session;
+    struct snag_journal_cursor position = view->history_cursor;
+    uint64_t before = (uint64_t)json_integer_value(
+        json_object_get(json_array_get(events, 0u), "seq"));
+    rc = 0;
+    while (before > 1u && json_array_size(calls.pending)) {
+        rc = snag_session_each_event_reverse(view, before, SNAG_JOURNAL_PAGE_BYTES,
+            resolve_calls, &calls, &before, error, size);
+        if (rc < 0) break;
+    }
+    view->history_cursor = position;
+    for (size_t n = 0u; !rc && n < json_array_size(calls.pending); ++n)
+        rc = json_object_set(json_array_get(calls.pending, n), "call", json_null());
+out:
+    json_decref(calls.pending);
+    return rc;
+}
+
+struct output_preview {
+    struct snag_vm_reader *reader;
+    const char *handle;
+    uint64_t from[2], end[2], needed[2], covered[2];
+    json_t *events;
+};
+
+static bool
+preview_ready(const struct output_preview *preview)
+{
+    return preview->covered[0] >= preview->needed[0] &&
+        preview->covered[1] >= preview->needed[1];
+}
+
+static int
+preview_event(void *opaque, const struct snag_session *state, uint64_t seq,
+    const char *type, const json_t *data, char *error, size_t size)
+{
+    struct output_preview *preview = opaque;
+    (void)state;
+    (void)error;
+    (void)size;
+    if (read_canceled(preview->reader)) return snag_errno(ECANCELED);
+    const char *handle = snag_json_string(data, "handle");
+    if (strcmp(type, "process_output") || !handle || strcmp(handle, preview->handle)) return 0;
+    uint64_t stream, offset;
+    if (snag_json_integer_u64(data, "stream", &stream) < 0 || stream > 1u ||
+        snag_json_integer_u64(data, "offset", &offset) < 0) return snag_errno(EINVAL);
+    if (offset < preview->from[stream] || preview->covered[stream] >= preview->needed[stream])
+        return 0;
+    struct snag_buf decoded = {.max = 16384u};
+    int rc = snag_process_output_decode(data, &decoded);
+    if (!rc && (offset != preview->covered[stream] || offset > preview->end[stream] ||
+        decoded.len > preview->end[stream] - offset)) rc = snag_errno(EINVAL);
+    if (!rc) {
+        preview->covered[stream] += decoded.len;
+        json_t *event = json_pack("{s:I,s:s,s:O}", "seq", (json_int_t)seq,
+            "type", type, "data", data);
+        rc = event ? json_array_append_new(preview->events, event) : -1;
+    }
+    snag_secret_clear(decoded.data, decoded.len);
+    snag_buf_free(&decoded);
+    return rc < 0 ? rc : preview_ready(preview) ? SNAG_JOURNAL_STOP_AFTER : 0;
+}
+
+static int
+load_preview(struct snag_vm_reader *reader, json_t *event, const json_t *ref,
+    unsigned int columns, char *error, size_t size)
+{
+    struct output_preview preview = {.reader = reader, .handle = snag_json_string(ref, "handle")};
+    uint64_t begin, end;
+    if (!preview.handle || snag_json_integer_u64(ref, "log_start", &begin) < 0 ||
+        snag_json_integer_u64(ref, "log_end", &end) < 0 || begin > end ||
+        end > (uint64_t)reader->current->session.log_end) return snag_errno(EINVAL);
+    size_t limit = snag_presentation_limit(SNAG_PRESENT_OUTPUT, 2u), secret = 0u;
+    for (size_t i = 0u; i < reader->secrets.count; ++i) {
+        size_t length = strlen(reader->secrets.values[i]);
+        if (length > secret) secret = length;
+    }
+    /* Four bytes per displayed scalar plus redaction/UTF-8 lookahead. Keep
+     * whole output records; the extra final record is at most 16KiB. */
+    if (secret > SIZE_MAX - 3u || limit > (SIZE_MAX - secret - 3u) / 4u)
+        return snag_errno(EOVERFLOW);
+    size_t capture = limit * 4u + secret + 3u;
+    const char *starts[] = {"stdout_start", "stderr_start"};
+    const char *ends[] = {"stdout_end", "stderr_end"};
+    for (size_t i = 0u; i < 2u; ++i) {
+        if (snag_json_integer_u64(ref, starts[i], &preview.from[i]) < 0 ||
+            snag_json_integer_u64(ref, ends[i], &preview.end[i]) < 0 ||
+            preview.from[i] > preview.end[i]) return snag_errno(EINVAL);
+        uint64_t bytes = preview.end[i] - preview.from[i];
+        preview.needed[i] = preview.from[i] + (bytes < capture ? bytes : capture);
+        preview.covered[i] = preview.from[i];
+    }
+    if (preview_ready(&preview)) return 0;
+    struct snag_session *view = &reader->current->session;
+    struct snag_journal_cursor cursor, tail;
+    if (snag_session_history_cursor_at(view, (int64_t)begin, &cursor, error, size) < 0 ||
+        snag_session_history_cursor_at(view, (int64_t)end, &tail, error, size) < 0) return -1;
+    if (tail.next_seq > (uint64_t)json_integer_value(json_object_get(event, "seq")))
+        return snag_errno(EINVAL);
+    int rc = -1;
+    json_t *blocks = NULL;
+    struct snag_buf text = {.max = SNAG_MEMORY_LIMIT / 2u};
+    preview.events = json_array();
+    if (!preview.events) goto out;
+    while (cursor.offset < (int64_t)end && !preview_ready(&preview)) {
+        uint64_t left = end - (uint64_t)cursor.offset;
+        size_t bytes = left < SNAG_JOURNAL_PAGE_BYTES ? (size_t)left : SNAG_JOURNAL_PAGE_BYTES;
+        if (snag_session_each_event_forward(view, &cursor, bytes,
+            preview_event, &preview, error, size) < 0) goto out;
+    }
+    if (!preview_ready(&preview) || cursor.offset > (int64_t)end) { errno = EINVAL; goto out; }
+    blocks = snag_vm_transcript_blocks(preview.events, 3u, columns, &reader->secrets,
+        read_canceled, reader, error, size);
+    if (!blocks) goto out;
+    size_t characters = 0u;
+    bool truncated = preview.covered[0] < preview.end[0] || preview.covered[1] < preview.end[1];
+    for (size_t i = 0u; i < json_array_size(blocks); ++i) {
+        const json_t *block = json_array_get(blocks, i);
+        const char *body = snag_json_string(block, "text");
+        size_t length = strlen(body), shown = 0u;
+        while (shown < length && characters < limit) {
+            uint32_t cp;
+            size_t unit = snag_utf8_decode((const unsigned char *)body + shown,
+                length - shown, &cp);
+            if (!unit) { errno = EILSEQ; goto out; }
+            shown += unit;
+            ++characters;
+        }
+        if (shown && (snag_buf_printf(&text, "[%s]\n", snag_json_string(block, "label")) < 0 ||
+            snag_buf_append(&text, body, shown) < 0 || snag_buf_putc(&text, '\n') < 0)) goto out;
+        truncated = truncated || shown < length;
+    }
+    if (json_object_set_new(event, "output_preview", json_stringn(
+        text.data ? (const char *)text.data : "", text.len)) < 0 ||
+        json_object_set_new(event, "preview_truncated", json_boolean(truncated)) < 0) goto out;
+    rc = 0;
+out:
+    json_decref(blocks);
+    json_decref(preview.events);
+    snag_buf_free(&text);
+    return rc;
+}
+
 static void
 read_page(struct snag_vm_reader *reader, struct snag_vm_read_result *result)
 {
@@ -269,6 +465,16 @@ read_page(struct snag_vm_reader *reader, struct snag_vm_read_result *result)
                 json_decref(first);
                 if (rc < 0) goto failed;
             }
+        }
+        if (request->verbosity && load_calls(reader, result->events,
+            result->error, sizeof(result->error)) < 0) goto failed;
+        for (size_t i = 0u; request->verbosity == 2u && i < json_array_size(result->events); ++i) {
+            json_t *event = json_array_get(result->events, i);
+            if (strcmp(snag_json_string(event, "type"), "tool_finished")) continue;
+            const json_t *ref = json_object_get(json_object_get(
+                json_object_get(event, "data"), "result"), "output_ref");
+            if (ref && load_preview(reader, event, ref, request->columns,
+                result->error, sizeof(result->error)) < 0) goto failed;
         }
         result->blocks = snag_vm_transcript_blocks(result->events, request->verbosity,
             request->columns, &reader->secrets, read_canceled, reader,

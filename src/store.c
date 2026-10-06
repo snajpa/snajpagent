@@ -3336,6 +3336,33 @@ invalid:
 }
 
 int
+snag_session_history_cursor_at(struct snag_session *session, int64_t offset,
+    struct snag_journal_cursor *cursor, char *error, size_t error_size)
+{
+    if (!session || !cursor || offset < 0 || offset > session->log_end)
+        return snag_fail(error, error_size, EINVAL, "invalid history offset");
+    if (offset == session->log_end) {
+        *cursor = (struct snag_journal_cursor){.offset = offset, .next_seq = session->next_seq};
+        memcpy(cursor->prev_sha256, session->prev_sha256, sizeof(cursor->prev_sha256));
+        return 0;
+    }
+    int64_t end = -1;
+    char digest[SNAG_SHA256_HEX_LEN + 1u];
+    json_t *record = history_record_read(session, offset, &end, digest);
+    uint64_t seq;
+    int rc = snag_json_integer_u64(record, "seq", &seq) == 0 && seq < session->next_seq ?
+        history_record_valid(session, record, offset, end, seq, digest, error, error_size) : -1;
+    if (!rc) {
+        *cursor = (struct snag_journal_cursor){.offset = offset, .next_seq = seq};
+        memcpy(cursor->prev_sha256, snag_json_string(record, "prev_sha256"),
+            sizeof(cursor->prev_sha256));
+    }
+    json_decref(record);
+    return rc < 0 ? history_error(session, error, error_size,
+        "cannot locate verified history offset") : 0;
+}
+
+int
 snag_session_each_event_reverse(struct snag_session *session, uint64_t before, size_t scan_bytes,
     snag_session_event_fn fn, void *opaque, uint64_t *next_before, char *error, size_t error_size)
 {

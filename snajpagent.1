@@ -1711,12 +1711,15 @@ when an unfinished record follows it. The journal stays unchanged.
 re-renders the current historical range. Source anchors retain the position
 through verbosity and width changes; when a block becomes hidden, selection
 moves to the next visible event. Level 0 shows conversation, level 1 adds tool
-headings, level 2 adds arguments/results, and level 3 adds retained process bytes.
+headings, level 2 adds arguments and result previews of up to 512 characters,
+and level 3 adds retained process bytes.
 Higher levels also show event markers. Binary output uses visible byte escapes;
 terminal controls remain text. Provider continuation and private compaction
-payloads are omitted. A tool whose call metadata precedes the loaded range shows
-its call ID until that dependency is available. Output referenced outside the
-loaded range requires further history navigation.
+payloads are omitted. Tool names and arguments are recovered from earlier
+responses when needed, and level 2 reads referenced output even when it precedes
+the current page. These cancellable background reads preserve the page and its
+source anchor. A call without matching retained metadata keeps its call ID.
+Use level 3 and history navigation to read output beyond a result preview.
 .PP
 .B :sessions
 opens the agent picker;
