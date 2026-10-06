@@ -130,6 +130,7 @@ class Child:
         return new_session(self.sessions_before, self)
 
     def assert_unsubmitted(self):
+        self.remember_owner()
         before = self.sessions_before
         if self.native_owner:
             # Native startup saves exactly one session, before any model input.
@@ -335,7 +336,7 @@ class Child:
                 if len(fields) != 8 or int(fields[1]) != self.pid:
                     continue
                 argv = shlex.split(fields[7])
-                if argv[:3] == [BINARY, "--dotdir", DOTDIR]:
+                if argv and argv[0] == BINARY:
                     identity = row.strip()
                     if self.mac_owner_identity(int(fields[0])) == identity:
                         self.owner_identity = identity

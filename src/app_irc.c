@@ -75,6 +75,62 @@ snag_app_irc_query_target(struct app_state *app, const struct snag_irc_scopes *s
     return snag_irc_query_open_frozen(app->irc, &frozen, address.target, target, error, error_size);
 }
 
+int
+snag_app_irc_channel_target(struct app_state *app, const struct snag_irc_scopes *scopes,
+    const json_t *directory, enum snag_irc_identity identity, uint32_t preferred,
+    const char *selector, struct snag_irc_channel_target *target, char *error, size_t error_size)
+{
+    const char *id = !strncmp(selector, "channel:", 8u) ? selector + 8u : NULL;
+    struct snag_irc_address address = {0};
+    const struct snag_irc_scope *selected = NULL;
+    if (id) {
+        if (!snag_hex_is_lower(id, SNAG_ID_HEX_LEN))
+            return snag_fail(error, error_size, EINVAL, "invalid channel conversation ID");
+    } else {
+        if (snag_irc_address_parse(&address, selector, SNAG_IRC_MESSAGE_ADDRESS,
+            error, error_size) < 0) return -1;
+        if (address.session[0] && strcmp(address.session, app->session.id) &&
+            (!app->session.name || strcmp(address.session, app->session.name)))
+            return snag_fail(error, error_size, EACCES, "select the addressed session first");
+        selected = snag_irc_scope_resolve(scopes, preferred, address.endpoint, error, error_size);
+        if (!selected) return -1;
+    }
+    for (size_t i = 0u; i < scopes->count; ++i) {
+        const struct snag_irc_scope *scope = &scopes->items[i];
+        if (selected && selected != scope) continue;
+        const json_t *connection = json_object_get(directory, scope->target.connection);
+        const char *key;
+        json_t *item;
+        json_object_foreach(json_object_get(connection, "conversations"), key, item) {
+            const json_t *data = json_object_get(item, "data");
+            const json_t *route = json_object_get(data, "routing");
+            const char *kind = snag_json_string(route, "conversation_kind");
+            const char *role = snag_json_string(route, "identity");
+            if (!kind || !role || strcmp(kind, "channel") ||
+                strcmp(role, identity == SNAG_IRC_AGENT ? "agent" : "operator") ||
+                (id && strcmp(key, id))) continue;
+            struct snag_irc_event event;
+            if (snag_irc_event_record_read("irc_event_v2", data, &event) < 0) return -1;
+            if (!id && !snag_irc_name_equal(scope->casemapping[identity],
+                address.target, event.room)) continue;
+            if (!event.route.joined || !event.route.membership[0] ||
+                event.route.generation != scope->target.generation)
+                return snag_fail(error, error_size, ESTALE, "IRC channel is not joined");
+            /* The caller's directory pins the membership. Never reopen it in
+             * the live runtime: PART/rejoin may have replaced that membership. */
+            *target = (struct snag_irc_channel_target){.identity = identity,
+                .destination = scope->target.destination, .generation = event.route.generation};
+            memcpy(target->connection, event.route.connection, sizeof(target->connection));
+            memcpy(target->conversation, event.route.conversation, sizeof(target->conversation));
+            memcpy(target->membership, event.route.membership, sizeof(target->membership));
+            memcpy(target->room, event.room, sizeof(target->room));
+            return 0;
+        }
+    }
+    return snag_fail(error, error_size, ENOENT,
+        "channel is unavailable for this identity; use irc_state for joined channels");
+}
+
 static int
 query_list(struct app_state *app)
 {

@@ -5207,8 +5207,9 @@ true removes the hosted endpoint. Each call reports the requested local endpoint
 transition. Use irc_state to inspect the current endpoint and room state after it.
 .PP
 .B irc_state
-accepts an empty object and reports the actual current destinations, room state
-and retained agent query IDs with their endpoint, peer and generation.
+accepts an empty object and reports the actual current destinations, room state,
+agent channel IDs with joined status, and retained agent query IDs with their
+endpoint, peer and generation.
 Operator queries are excluded. This tool does not open connections.
 .B irc_send
 accepts destination, notice, action and text. Null/false notice sends a normal
@@ -5217,8 +5218,12 @@ reply. A private destination can be query:CONVERSATION_ID, endpoint/nick or
 session/endpoint/nick. A bare nick requires a unique endpoint; the session
 component must name the current session. Queries always use the agent identity.
 Use a query ID to reply to that exact conversation. Addressing a nick can open a
-new query on an existing endpoint. action true sends a private CTCP action and
-cannot be combined with notice true. Each accepted chunk reports its send ID;
+new query on an existing endpoint. A channel destination can be
+channel:CONVERSATION_ID, endpoint/#room or session/endpoint/#room;
+a bare #room requires a unique endpoint. It selects an already joined agent
+channel on an external server. action true sends a CTCP action to an explicit
+query or channel and cannot be combined with notice true.
+Each accepted chunk reports its send ID;
 partial acceptance reports the accepted chunks alongside the failure.
 .B irc_nick
 accepts destination and nick and changes the agent identity on one endpoint or
@@ -5228,13 +5233,21 @@ slash-command control of those live connections.
 accepts destination and topic. Runtime authorization follows the room's live
 policy: mode +t requires channel-operator status; without +t any joined member
 may change the topic.
+It accepts the same exact channel selectors as irc_send.
 .PP
-For channel operations, destination is a numeric string from irc_state, all for
-an explicit channel-only broadcast, or null only when exactly one destination
-exists. irc_send also requires an explicit destination once private query
-context exists. The model never implicitly follows the operator's selected
-conversation. Text and topic are bounded UTF-8;
-topic is at most 280 bytes with no newline. Successful send acceptance is not
+Exact channel selectors preserve connection identity, generation and membership
+from the provider request. A PART, KICK or reconnect invalidates that target;
+the next request can explicitly select a current joined target from irc_state.
+Channel selection never joins a room or substitutes the endpoint's default room.
+.PP
+A numeric destination string from irc_state selects that endpoint's default room;
+all explicitly broadcasts to the default rooms. Null requires exactly one
+destination and no additional channel context. irc_send also requires an explicit
+destination once private query context exists. The model never implicitly follows
+the operator's selected conversation. Text and topic are bounded UTF-8.
+Numeric/default-room topics allow 280 bytes; exact channel topics must fit one
+negotiated IRC line, including command and room overhead. Topics cannot contain
+newlines. Successful send acceptance is not
 proof that every remote participant received it. The runtime owns joining,
 history, reconnecting and room traffic after an endpoint transition. A
 destination number keeps naming the same endpoint across reconnects: a send

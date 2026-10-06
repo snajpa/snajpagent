@@ -2264,19 +2264,25 @@ tool_schemas(bool goal_active,
             json_pack("{s:{s:[s,s],s:s},s:{s:[s,s],s:s},s:{s:[s,s],s:s},s:{s:s,s:s}}",
                 "destination", "type", "string", "null", "description",
                 "query:CONVERSATION_ID replies privately; endpoint/nick or session/endpoint/nick "
-                "opens/sends a private query. A number string selects a channel destination; "
-                "all broadcasts only to channels. "
-                "Null requires a sole channel and no private query context.",
+                "opens/sends a private query. channel:CONVERSATION_ID or endpoint/#room "
+                "selects an exact joined agent channel; session/endpoint/#room is also accepted. "
+                "A number string selects an endpoint's default room; "
+                "all broadcasts to those rooms. Null requires a sole destination "
+                "with no private query or additional channel context.",
                 "notice", "type", "boolean", "null", "description", "True sends NOTICE; false/null sends PRIVMSG.",
                 "action", "type", "boolean", "null", "description",
-                "True sends a private CTCP action. Incompatible with notice=true.",
+                "True sends a CTCP action to an explicit query or channel. "
+                "Incompatible with notice=true.",
                 "text", "type", "string", "description", "Nonempty UTF-8 message for the selected recipients; maximum 2097152 bytes."))) < 0 ||
         json_array_append_new(tools, tool_schema("irc_state", "",
             "Read the already-maintained room, topic, endpoint, membership, and operator state without polling or changing connections.", json_object())) < 0 ||
         json_array_append_new(tools, tool_schema("irc_topic", "topic",
             "Change the room topic as the agent identity; execution checks the room's live topic policy at runtime.",
             json_pack("{s:{s:[s,s],s:s},s:{s:s,s:s}}",
-                "destination", "type", "string", "null", "description", "Number string from irc_state, all for broadcast, or null for a sole destination.",
+                "destination", "type", "string", "null", "description",
+                "channel:CONVERSATION_ID or endpoint/#room selects a joined agent channel. "
+                "A number selects an endpoint's default room, all broadcasts to default rooms, "
+                "and null requires a sole destination with no additional channel context.",
                 "topic", "type", "string", "description", "UTF-8 channel topic (at most 2097152 bytes); empty string clears it."))) < 0 ||
         json_array_append_new(tools, tool_schema("irc_nick", "nick",
             "Change the agent's live IRC nickname on one endpoint or all endpoints.",
@@ -2993,8 +2999,11 @@ snag_context_build(struct snag_session *session, const char *model, const char *
             "messages, and membership/topic notifications "
             "are conversational context and may be left unanswered. Assistant "
             "speech remains in the local rollout; irc_send is the only way "
-            "you address a room or query. Select its numbered destination from the "
-            "snapshot; reply to the originating room, not another room. "
+            "you address a room or query. Select channel:CONVERSATION_ID or endpoint/#room "
+            "from irc_state for a joined agent channel; a numbered destination selects "
+            "that endpoint's default room. Reply to the originating conversation. "
+            "Exact channel sends preserve the request's membership; a leave/rejoin "
+            "requires a fresh explicit target. "
             "All is an explicit broadcast, never an automatic default. "
             "Agent-identity private query entries name their conversation ID, peer and endpoint. "
             "Reply using destination=query:CONVERSATION_ID; keep private content in that query. "

@@ -353,6 +353,7 @@ check: $(BIN) $(TEST_BIN)
 	./tests/test_irc_event
 	./tests/test_irc_send
 	python3 tests/test_irc_queries.py ./$(BIN)
+	python3 tests/test_irc_channels.py ./$(BIN)
 	./tests/test_instructions
 	./tests/test_credential
 	./tests/test_sse

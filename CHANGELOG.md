@@ -4,6 +4,12 @@
 
 ## Unreleased
 
+- Select exact joined agent channels with channel:ID or endpoint/#room in
+  irc_send and irc_topic; irc_state lists those IDs. Pin sends to the provider
+  request's membership, reject routes replaced during a request, and support
+  channel actions and notices. Numeric/all destinations retain default-room
+  behavior; additional channel context requires an explicit destination.
+
 - Keep session-list snapshots off the history worker stack so the Vim workspace
   opens and attaches sessions in static Linux builds.
 

@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "app_internal.h"
 #include "context.h"
+#include "irc_address.h"
 #include "json.h"
 #include "media.h"
 #include "provider.h"
@@ -453,6 +454,78 @@ irc_tool_query_target(struct app_state *app, const char *selector,
 }
 
 static int
+channel_listing(struct snag_buf *out, const struct snag_irc_destinations *destinations,
+    const json_t *directory)
+{
+    bool extra = false;
+    for (size_t i = 0u; i < destinations->count; ++i) {
+        const struct snag_irc_destination *scope = &destinations->items[i];
+        const json_t *connection = json_object_get(directory, scope->connection);
+        const char *id;
+        json_t *item;
+        json_object_foreach(json_object_get(connection, "conversations"), id, item) {
+            const json_t *data = json_object_get(item, "data");
+            const json_t *route = json_object_get(data, "routing");
+            const char *kind = snag_json_string(route, "conversation_kind");
+            const char *identity = snag_json_string(route, "identity");
+            if (!kind || !identity || strcmp(kind, "channel") || strcmp(identity, "agent"))
+                continue;
+            struct snag_irc_event event;
+            if (snag_irc_event_record_read("irc_event_v2", data, &event) < 0) return -1;
+            if (!snag_irc_name_equal(scope->casemapping[SNAG_IRC_AGENT], event.room, scope->room))
+                extra = true;
+            bool joined = event.route.joined && event.route.generation == scope->generation;
+            if (out && snag_buf_printf(out,
+                "channel:%s endpoint=%s room=%s generation=%llu joined=%s\n", id,
+                scope->endpoint, event.room, (unsigned long long)event.route.generation,
+                joined ? "true" : "false") < 0) return -1;
+        }
+    }
+    return extra ? 1 : 0;
+}
+
+static bool
+channel_selector(const char *selector)
+{
+    if (!strncmp(selector, "channel:", 8u)) return true;
+    struct snag_irc_address address;
+    return snag_irc_address_parse(&address, selector, SNAG_IRC_MESSAGE_ADDRESS, NULL, 0u) == 0 &&
+        strchr("#&+!", address.target[0]) != NULL;
+}
+
+static int
+irc_tool_channel_send(struct app_state *app, const char *selector, const char *text,
+    bool topic, bool notice, bool action, json_t **result, char *error, size_t error_size)
+{
+    struct snag_irc_scopes scopes;
+    snag_irc_capture_scopes(&app->irc_request_destinations, &scopes);
+    struct snag_irc_channel_target target;
+    struct snag_buf report = {.max = SNAG_MAX_IRC_SNAPSHOT};
+    int rc = snag_app_irc_channel_target(app, &scopes, app->irc_request_conversations,
+        SNAG_IRC_AGENT, 0u, selector, &target, error, error_size);
+    if (!rc) {
+        if (topic) {
+            rc = snag_irc_channel_action(app->irc, &target, SNAG_IRC_CHANNEL_TOPIC,
+                text, error, error_size);
+            if (!rc) rc = snag_buf_printf(&report, "Topic command queued to %s.\n", target.room);
+        } else {
+            rc = snag_irc_channel_send(app->irc, &target,
+                notice ? SNAG_IRC_NOTICE : SNAG_IRC_MESSAGE, text, action,
+                &report, error, error_size);
+        }
+    }
+    if (rc && snag_buf_printf(&report, "%s\n", error[0] ? error : "channel command failed") < 0)
+        goto fail;
+    if (snag_buf_terminate(&report) < 0) goto fail;
+    *result = snag_tool_result_terminal(rc == 0, (const char *)report.data);
+    snag_buf_free(&report);
+    return *result ? 0 : -1;
+fail:
+    snag_buf_free(&report);
+    return -1;
+}
+
+static int
 irc_tool_query_send(struct app_state *app, const char *selector, const char *text,
                     bool notice, bool action, json_t **result, char *error, size_t error_size)
 {
@@ -789,6 +862,10 @@ snag_app_tool_run(struct app_state *app, const struct snag_response_item *call,
         rc = app->irc ? snag_irc_state(app->irc, &state, error, error_size) :
             snag_buf_printf(&state, "no active endpoints\n");
         if (!rc && query_listing(&state, app->session.irc_conversations) < 0) rc = -1;
+        struct snag_irc_destinations destinations;
+        snag_irc_destinations(app->irc, &destinations);
+        if (!rc && channel_listing(&state, &destinations,
+            app->session.irc_conversations) < 0) rc = -1;
         if (!rc) rc = snag_buf_printf(&state,
             "IRC model delivery: %s; sleep_until_ms=%llu; wake_after_messages=%llu\n"
             "IRC context compaction: after_updates=%llu; background_request=%s; through_seq=%llu\n",
@@ -833,6 +910,9 @@ snag_app_tool_run(struct app_state *app, const struct snag_response_item *call,
         }
         const json_t *destination = json_object_get(call->arguments, "destination");
         const char *selector = json_is_string(destination) ? json_string_value(destination) : NULL;
+        if (!nick && selector && channel_selector(selector))
+            return irc_tool_channel_send(app, selector, text, topic, notice, action,
+                result, error, error_size);
         if (!topic && !nick && selector && strcmp(selector, "all") &&
             (!*selector || strspn(selector, "0123456789") != strlen(selector))) {
             return irc_tool_query_send(app, selector, text, notice, action,
@@ -844,9 +924,16 @@ snag_app_tool_run(struct app_state *app, const struct snag_response_item *call,
                 "select an explicit destination number for channel chat. No message was sent.");
             return *result ? 0 : -1;
         }
+        if (!nick && !selector && channel_listing(NULL, &app->irc_request_destinations,
+            app->irc_request_conversations)) {
+            *result = snag_tool_result_terminal(false,
+                "Select channel:CONVERSATION_ID or endpoint/#room for channel chat, "
+                "or an explicit destination number for its default room. No command was sent.");
+            return *result ? 0 : -1;
+        }
         if (action) {
             *result = snag_tool_result_terminal(false,
-                "IRC actions currently require a query target.");
+                "IRC actions require an explicit query or channel target.");
             return *result ? 0 : -1;
         }
         if (!irc_tool_route(app, json_object_get(call->arguments, "destination"), &route)) {

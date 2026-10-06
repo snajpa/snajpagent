@@ -20,8 +20,17 @@ memberships. Pending PART invalidates the old route and blocks rejoin until its
 server acknowledgement. Durable local channel state retains rejoin intent and
 conversation IDs across session resume, with fresh generation/membership tokens.
 These lifecycle records stay outside model admission and channel replay. Legacy
-channel records remain readable. The public CLI/VM channel frontend, hosted room
-actions and channel chat delivery states are still being integrated.
+channel records remain readable. The public CLI/VM channel frontend and hosted
+room actions are still being integrated.
+
+Model channel checkpoint: irc_state lists agent channel IDs and joined status;
+irc_send/irc_topic accept exact IDs and session/endpoint/#room addresses.
+Request snapshots pin connection, generation, conversation and membership through
+the existing send/action validator. A replaced membership fails without resolving
+a new target or falling back to the default room. Channel NOTICE and CTCP actions
+use the same path. Numeric/all targets retain default-room behavior, while
+additional channel context requires an explicit destination. Exact automatic
+reply obligations and agent-only receive admission remain next.
 
 Channel send checkpoint: the external owner API now queues messages, notices and
 actions through the private-query frame writer. The common writer preserves UTF-8
@@ -35,8 +44,9 @@ a late error after PART/KICK cannot change a new membership. Correlation metadat
 shares the existing pending-memory budget. Required capability loss cancels
 unwritten frames and marks started sends uncertain. Public unlabeled echo order
 remains insufficient to confirm a channel send. These outgoing records remain
-outside public replay and model admission. Channel frontend and hosted sends
-remain in progress.
+outside public replay. A successful operator receipt admits its final message
+once; failed, uncertain and agent receipts stay outside model input.
+Channel frontend and hosted sends remain in progress.
 
 Receipt bodies retain the server's final text/action and optional source ID.
 The optional v2 routing flag revised marks a correction to the local pending body;
@@ -732,9 +742,16 @@ boundary, not a new filesystem access-control boundary.
 
 The existing `irc_send` destination accepts `query:CONVERSATION_ID` for an exact
 reply, or `endpoint/nick` and `session/endpoint/nick` to open/send a query.
-A bare nick requires a unique endpoint. Numeric destinations retain channel
-behavior and `all` broadcasts only to channels. An implicit channel send is
-rejected when private query context exists. `irc_state` reports agent queries;
+A bare nick requires a unique endpoint. Model `irc_send` and `irc_topic` also
+accept `channel:CONVERSATION_ID`, `endpoint/#room` and `session/endpoint/#room`
+for an already joined external agent channel. Bare channel names require a unique
+endpoint. Resolve against the immutable request directory, preserving the exact
+connection, generation, conversation and membership through runtime validation.
+PART/KICK/rejoin during the request rejects the old handle. No implicit JOIN or
+default-room fallback occurs. Numeric destinations select endpoint default rooms
+and `all` broadcasts to those rooms. An implicit channel send is rejected when
+private query or additional channel context exists. `irc_state` reports agent queries
+and channel IDs with membership status;
 model sends always use its agent identity. Freeze reply provenance through a turn;
 concurrent channel and DM inputs never turn a private reply into a public send.
 Tool schemas, context labels, summaries and tests must include the recipient and
@@ -825,7 +842,7 @@ use their written record, explicitly labelled with that unconfirmed state;
 native catch-up instead supplies its public source event. The typed input and
 its delivery label survive checkpoint/resume. NOTICE receipts add context at
 the next natural request, without starting an automatic reply. Channel frontend
-and exact channel reply-route integration remain in progress.
+and exact channel reply-obligation integration remain in progress.
 A nickname discontinuity or disconnect cancels unsent chunks,
 retains uncertainty for started writes and never replays the private queue.
 Endpoint removal finishes those outcomes before stopping its owner. UTF-8 chunks
@@ -865,8 +882,8 @@ selection returns to the requesting frontend while preserving classic focus.
 The compact query catalogue excludes bodies, and incoming metadata stays current
 while the semantic controller is attached. Vim now provides per-conversation
 composers, reader filters and origin-window selection. External receive state
-tracks multiple joined channels; scoped channel actions/routes and labeled
-responses remain unfinished. The nickname mapping helper follows the
+tracks multiple joined channels; operator channel routes, hosted actions and
+agent-only channel receive admission remain unfinished. The nickname mapping helper follows the
 [IRC CASEMAPPING definitions](https://modern.ircdocs.horse/#casemapping-parameter).
 
 This expands the original UI-only storage scope. Implement compatible readers,
