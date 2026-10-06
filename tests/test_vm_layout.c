@@ -60,6 +60,38 @@ rectangle(const struct placement *p, uint64_t window)
 }
 
 static void
+mouse(void)
+{
+    struct snag_vm_layout *layout = snag_vm_layout_new(1u);
+    assert(layout && snag_vm_layout_split(layout, 1u, 2u, SNAG_VM_VERTICAL) == 0);
+    assert(snag_vm_layout_split(layout, 2u, 3u, SNAG_VM_HORIZONTAL) == 0);
+    struct snag_vm_separator vertical, horizontal, missed;
+    assert(snag_vm_layout_separator(layout, 1u, 21u, 81u, 10u, 40u, &vertical) == 1);
+    assert(snag_vm_layout_separator(layout, 1u, 21u, 81u, 10u, 70u, &horizontal) == 1);
+    assert(snag_vm_layout_separator(layout, 1u, 21u, 81u, 0u, 0u, &missed) == 0);
+    assert(!missed.first && !missed.second);
+    assert(snag_vm_layout_separator(layout, 1u, 21u, 81u, 30u, 40u, &missed) == 0);
+    assert(snag_vm_layout_separator(layout, 3u, 1u, 1u, 0u, 0u, &missed) == 0);
+    assert(snag_vm_layout_drag(layout, 1u, 21u, 81u, &vertical, 0u, 57u) == 1);
+    struct placement p = arrange(layout, 1u, 21u, 81u);
+    assert(rectangle(&p, 1u)->columns == 57u && rectangle(&p, 2u)->column == 58u);
+    assert(snag_vm_layout_drag(layout, 1u, 21u, 81u, &horizontal, 5u, 70u) == 1);
+    p = arrange(layout, 1u, 21u, 81u);
+    assert(rectangle(&p, 2u)->rows == 5u && rectangle(&p, 3u)->row == 6u);
+    assert(snag_vm_layout_drag(layout, 1u, 21u, 81u, &horizontal, 5u, 70u) == 0);
+    assert(snag_vm_layout_drag(layout, 1u, 21u, 81u, &horizontal, UINT_MAX, 0u) == 1);
+    p = arrange(layout, 1u, 21u, 81u);
+    assert(rectangle(&p, 3u)->rows == 2u);
+    assert(snag_vm_layout_drag(layout, 1u, 21u, 81u, &vertical, 0u, 0u) == 1);
+    p = arrange(layout, 1u, 21u, 81u);
+    assert(rectangle(&p, 1u)->columns == 1u);
+    assert(snag_vm_layout_drag(layout, 3u, 1u, 1u, &horizontal, 0u, 0u) == 0);
+    assert(snag_vm_layout_close(layout, 2u) == 0);
+    assert(snag_vm_layout_drag(layout, 1u, 21u, 81u, &horizontal, 0u, 0u) < 0);
+    snag_vm_layout_free(layout);
+}
+
+static void
 invalid(const char *text)
 {
     json_error_t json_error;
@@ -73,6 +105,7 @@ invalid(const char *text)
 int
 main(void)
 {
+    mouse();
     assert(!snag_vm_layout_new(0u) && errno == EINVAL);
     assert(!snag_vm_layout_new(UINT64_MAX) && errno == EINVAL);
     struct snag_vm_layout *layout = snag_vm_layout_new(1u);

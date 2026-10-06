@@ -272,8 +272,9 @@ class WorkspaceTests(unittest.TestCase):
         self.wait_snapshot(lambda values:
             next(iter(values.values()))['state']['windows'][0]['history']['follow'] and
             next(iter(values.values()))['state']['windows'][0]['history']['seq'] > anchor['seq'])
-        child.write(b'\x0c')
-        child.until(b'live-append-two')
+        # The tail snapshot can precede its final response projection; a later
+        # grid diff may reuse "live-append-" already visible on another row.
+        child.repaint_until(b'live-append-two')
         child.finish()
 
     def test_replaced_history_stops_follow_until_explicit_retry(self):
@@ -443,12 +444,16 @@ class WorkspaceTests(unittest.TestCase):
             child.read()
         self.assertEqual(child.state().get('state'), 'stopped')
         self.assertEqual(normalized_modes(termios.tcgetattr(child.slave)), child.original)
+        self.assertIn(b'\x1b[?1002l', child.output)
+        mouse_before = child.output.count(b'\x1b[?1002h')
         before = child.output.count(b'\x1b[?1049h')
         child.signal(signal.SIGCONT)
         deadline = time.monotonic() + 5
-        while child.output.count(b'\x1b[?1049h') == before and time.monotonic() < deadline:
+        while (child.output.count(b'\x1b[?1049h') == before or
+               child.output.count(b'\x1b[?1002h') == mouse_before) and time.monotonic() < deadline:
             child.read()
         self.assertGreater(child.output.count(b'\x1b[?1049h'), before)
+        self.assertGreater(child.output.count(b'\x1b[?1002h'), mouse_before)
         child.finish()
 
     def test_version_one_picker_snapshot_remains_resumable(self):

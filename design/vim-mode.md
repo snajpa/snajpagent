@@ -24,8 +24,14 @@ source-addressable unit. Input received during a move or yank is queued in order
 including decoded bracketed-paste events; Ctrl-C or Escape cancels that operation.
 The queue shares the direct-input size bound. Rectangular registers insert columns
 into existing draft lines, expand intersected tabs, pad short lines, extend the
-draft and form one undo group. Clipboard publication and the remaining
-workspace/IRC/mouse/remote delivery are still pending.
+draft and form one undo group. Mouse hit testing shares the renderer's grapheme,
+tab and source mappings. Clicks place transcript/report/composer cursors;
+transcript/report drags select within their original window. The wheel scrolls
+its hovered window while retaining keyboard focus. Separator drags use the same
+geometry as layout placement and save proportional sizes; stale drags cannot
+retain pointers to edited trees. SGR button-motion reporting is runtime-toggleable
+with :set mouse/nomouse and is restored through terminal handoffs.
+Clipboard publication and the remaining workspace/IRC/remote delivery are pending.
 
 Implementation checkpoint: asynchronous pager ownership and retained rendering
 are implemented in this branch. Held-pager regressions cover IRC delivery and

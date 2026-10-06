@@ -411,6 +411,9 @@ Select transcript/report text with `v`, `V` or Ctrl-V, yank with `y`, then use
 Unicode characters; large yanks use a private file-backed register. Numbered
 `gg`/`G` and counted motions reach old pages; rectangular paste inserts columns
 into draft lines as one undoable edit.
+Click to place a cursor, drag transcript/report text to select it, and scroll
+the hovered window with the wheel. Drag separators to resize splits;
+`:set nomouse` returns selection to the terminal.
 Deferred controls add completion reports, available through `:reports` after reconnect.
 The report catalogue also recovers output after owner restart. `/cat PATH` opens
 a retained file snapshot; repeating it reads a fresh copy into another report.

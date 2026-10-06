@@ -1799,7 +1799,22 @@ or :sp divides horizontally; :vsplit or :vsp divides vertically.
 Ctrl-W s/v also splits, Ctrl-W w cycles focus and Ctrl-W h/j/k/l selects a
 neighbor. Ctrl-W = equalizes proportions, +/- changes height and >/< changes width.
 Terminal shrink temporarily hides windows while preserving their layout.
-Mouse clicks focus/select; the wheel moves the selection.
+Mouse reporting is enabled inside the workspace. Click to focus a window and
+place its transcript, report or composer cursor. Hits on a wide character,
+combining sequence, escaped control or tab retain the whole source unit.
+Drag transcript/report text to select it, then press y to copy. The drag stays
+in its original window; release leaves the selection available for keyboard
+adjustment. A single click ends the previous selection.
+The wheel scrolls the hovered window without changing keyboard focus.
+Drag a split separator to resize it; proportions survive workspace resume.
+Resize, focus loss or keyboard input ends an in-progress drag.
+.PP
+.B :set nomouse
+disables mouse reporting for terminal-native selection;
+.B :set mouse
+enables it again. The terminal's selection-bypass modifier also remains available.
+Exit, suspension and classic terminal handoff restore mouse modes; returning
+to the workspace reapplies the current setting.
 .PP
 In a read-only transcript, picker or help view,
 .B :q

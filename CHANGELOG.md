@@ -4,6 +4,12 @@
 
 ## Unreleased
 
+- Place Vim workspace cursors at the clicked grapheme, select transcript/report
+  text by dragging, scroll the hovered window without taking keyboard focus,
+  and resize splits by dragging separators. Preserve split proportions on resume.
+  Toggle terminal selection with :set mouse/nomouse and restore mouse modes
+  through exit, suspension and classic handoff.
+
 - Extend counted Vim history motions and numbered gg/G across retained pages,
   preserving columns for wrapped-row movement. Cancel a distant move without
   losing its original viewport; keep fast key sequences ordered through navigation

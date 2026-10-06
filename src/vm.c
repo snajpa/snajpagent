@@ -49,6 +49,8 @@ static const char *const help_rows[] = {
     "History: h/l w/b/e 0/^/$, j/k logical lines, gj/gk wrapped rows; counted gg/G: line",
     "v/V/Ctrl-V: character/line/block selection    y: yank    p/P: paste into composer",
     "yy or y + motion: copy    Esc: cancel selection    Ctrl-C: cancel copy",
+    "Mouse: click cursor, drag text, wheel hovered window; drag separators to resize",
+    ":set mouse/nomouse: enable/disable terminal mouse reporting",
     ":split or :sp    :vsplit or :vsp    :close    :q    :qa",
     "Ctrl-W s/v: split    Ctrl-W w/h/j/k/l: focus    Ctrl-W =: equalize",
     "Ctrl-W +/-: height    Ctrl-W >/<: width    Ctrl-W q: close",
@@ -71,7 +73,7 @@ static const char *const help_rows[] = {
 struct vm_window {
     uint64_t id, launch;
     enum view_kind kind;
-    size_t selected, top, composer_top;
+    size_t selected, top, composer_top, history_rows, composer_row, composer_rows;
     bool center_composer;
     struct snag_vm_selection visual;
     struct snag_journal_cursor visual_tail;
@@ -155,6 +157,9 @@ struct vm {
     bool dirty, save_dirty, meaningful, quit, suspend, entering, paste_failed;
     bool composer, insert, quit_all, detach_exit, detach_suspend;
     bool classic_pending, classic_ready, classic_uncertain;
+    bool mouse, mouse_reported, mouse_down, mouse_select;
+    uint64_t mouse_window;
+    struct snag_vm_separator mouse_separator;
     uint64_t quit_window;
     size_t cursor_row, cursor_column;
 };
@@ -1349,7 +1354,12 @@ command(struct vm *vm, const char *text)
             cancel_search(vm);
             vm->ignorecase = !strcmp(rest, "ignorecase");
             notice(vm, vm->ignorecase ? "ignorecase: Unicode case folding" : "noignorecase");
-        } else notice(vm, "Use :set ignorecase or :set noignorecase");
+        } else if (!strcmp(rest, "mouse") || !strcmp(rest, "nomouse")) {
+            vm->mouse = !strcmp(rest, "mouse");
+            vm->mouse_down = false;
+            notice(vm, vm->mouse ? "mouse: click, drag, scroll and resize" :
+                "nomouse: terminal selection enabled");
+        } else notice(vm, "Use :set ignorecase/noignorecase or :set mouse/nomouse");
     } else if (!strcmp(word, "classic")) classic_request(vm, rest);
     else if (*rest) notice(vm, "Unexpected command argument");
     else if (!strcmp(word, "close")) close_window(vm);
@@ -2051,17 +2061,198 @@ queue_input(struct vm *vm, const struct snag_vm_input_event *event)
     return 0;
 }
 
+static size_t
+mouse_byte(const char *text, size_t begin, size_t end, size_t logical, size_t column,
+    bool insert)
+{
+    size_t at = begin, cells = 0u, previous = begin;
+    while (at < end) {
+        struct snag_vm_glyph glyph = snag_vm_glyph(text + at, end - at, logical + cells, false);
+        if (glyph.newline || cells >= column || glyph.columns > column - cells) break;
+        previous = at;
+        at += glyph.bytes;
+        cells += glyph.columns;
+    }
+    return at == end && !insert ? previous : at;
+}
+
+struct mouse_draft {
+    struct snag_vm_connection *connection;
+    size_t index, row, column;
+    bool insert;
+};
+
+static int
+mouse_draft_row(void *opaque, const struct snag_vm_text_row *row)
+{
+    struct mouse_draft *hit = opaque;
+    if (hit->index++ != hit->row) return 0;
+    const char *text = hit->connection->draft.len ?
+        (const char *)hit->connection->draft.data : "";
+    size_t at = mouse_byte(text, row->begin, row->end, row->logical_column,
+        hit->column, hit->insert);
+    snag_vm_draft_cursor(hit->connection, at);
+    hit->connection->editor.column_valid = false;
+    if (!hit->insert) snag_vm_editor_normal(hit->connection, false);
+    return 1;
+}
+
+static void
+mouse_composer(struct vm *vm, struct vm_window *window, unsigned int row, unsigned int column)
+{
+    struct snag_vm_connection *c = focused_connection(vm);
+    if (!c) return;
+    struct mouse_draft hit = {.connection = c,
+        .row = window->composer_top + row - window->composer_row,
+        .column = column - window->rectangle.column, .insert = vm->insert};
+    (void)snag_vm_text_wrap(c->draft.len ? (const char *)c->draft.data : "", c->draft.len,
+        window->rectangle.columns, false, mouse_draft_row, &hit);
+    notice(vm, vm->insert ? "INSERT  Enter: submit  Ctrl-J: newline  Esc: NORMAL" :
+        "NORMAL composer  Tab: transcript  i: insert");
+}
+
+static void
+mouse_cancel_operator(struct vm_window *window)
+{
+    if (window->yank_motion) window->visual.kind = SNAG_VM_SELECT_NONE;
+    window->yank_motion = window->yank_after_load = false;
+    window->navigation.count = window->navigation.operator_count = 0u;
+    window->navigation.operator = window->navigation.prefix = 0u;
+    window->navigation.column_valid = false;
+}
+
+static int
+mouse_event(struct vm *vm, const struct snag_vm_input_event *event)
+{
+    unsigned int button = event->button & ~28u;
+    bool motion = button == 32u;
+    bool wheel = button == 64u || button == 65u;
+    bool dragging = vm->mouse_down && (motion || event->release);
+    if (!vm->mouse || vm->mode || (!dragging &&
+        (event->release || (button != 0u && !wheel)))) {
+        if (event->release) vm->mouse_down = false;
+        return 0;
+    }
+    cancel_search(vm);
+    if (dragging && vm->mouse_separator.first) {
+        int rc = snag_vm_layout_drag(vm->layout, vm->windows[vm->focus].id,
+            vm->grid.rows > 1u ? (unsigned int)vm->grid.rows - 1u : 1u,
+            (unsigned int)vm->grid.columns, &vm->mouse_separator, event->row, event->column);
+        if (event->release || rc < 0) vm->mouse_down = false;
+        if (rc > 0) changed(vm);
+        return 0;
+    }
+    if (!dragging) {
+        vm->mouse_down = vm->mouse_select = false;
+        if (!wheel) mouse_cancel_operator(&vm->windows[vm->focus]);
+        if (!wheel && snag_vm_layout_separator(vm->layout, vm->windows[vm->focus].id,
+            vm->grid.rows > 1u ? (unsigned int)vm->grid.rows - 1u : 1u,
+            (unsigned int)vm->grid.columns, event->row, event->column,
+            &vm->mouse_separator) == 1) {
+            vm->mouse_down = true;
+            return 0;
+        }
+    }
+    for (size_t i = 0u; i < vm->count; ++i) {
+        struct vm_window *window = &vm->windows[i];
+        const struct snag_vm_rectangle *r = &window->rectangle;
+        if (!r->visible) continue;
+        if (dragging) {
+            if (window->id != vm->mouse_window) continue;
+        } else if (event->row < r->row || event->row - r->row >= r->rows ||
+            event->column < r->column || event->column - r->column >= r->columns) continue;
+        if (wheel) {
+            size_t focus = vm->focus;
+            vm->focus = i;
+            size_t count = row_count(vm, window), height = window->history_rows;
+            size_t top = window->top;
+            if (button == 65u) {
+                size_t last = count > height ? count - height : 0u;
+                top = top >= last || last - top < 3u ? last : top + 3u;
+            } else top = top > 3u ? top - 3u : 0u;
+            if (height && top != window->top) {
+                size_t at = window->selected < top ? top : window->selected;
+                if (at - top >= height) at = top + height - 1u;
+                selection(vm, at);
+                window->top = top;
+            } else if (height) move(vm, button == 65u, 3u);
+            window->follow = false;
+            vm->focus = focus;
+            changed(vm);
+            return 0;
+        }
+        if (dragging && !vm->mouse_select && event->release) {
+            vm->mouse_down = false;
+            return 0;
+        }
+        if (!dragging) {
+            struct snag_vm_connection *old = focused_connection(vm);
+            if (old) {
+                snag_vm_editor_normal(old, vm->insert);
+                if (snag_vm_editor_end(old) < 0) return -1;
+            }
+            bool insert = vm->focus == i && vm->composer && vm->insert;
+            vm->focus = i;
+            vm->composer = vm->insert = false;
+            vm->prefix = 0;
+            window->visual.kind = SNAG_VM_SELECT_NONE;
+            mouse_cancel_operator(window);
+            if (window->composer_rows && event->row >= window->composer_row &&
+                event->row - window->composer_row < window->composer_rows) {
+                vm->composer = true;
+                vm->insert = insert;
+                mouse_composer(vm, window, event->row, event->column);
+                changed(vm);
+                return 0;
+            }
+            if (event->row - r->row >= window->history_rows) {
+                changed(vm);
+                return 0;
+            }
+            vm->mouse_window = window->id;
+            vm->mouse_down = true;
+        }
+        if (!window->history_rows) return 0;
+        size_t line = event->row > r->row ? event->row - r->row : 0u;
+        if (line >= window->history_rows) line = window->history_rows - 1u;
+        size_t index = window->top + line;
+        if (document_view(window)) {
+            struct snag_vm_document_row row;
+            size_t count = row_count(vm, window);
+            if (index >= count) index = count ? count - 1u : 0u;
+            if (snag_vm_document_row(window->document, index, &row) < 0) return 0;
+            if (dragging && !vm->mouse_select) {
+                visual_begin(vm, SNAG_VM_SELECT_CHAR);
+                vm->mouse_select = true;
+            }
+            const char *text = snag_vm_document_text(window->document, &row);
+            size_t column = event->column > r->column ? event->column - r->column : 0u;
+            if (column >= r->columns) column = r->columns - 1u;
+            size_t at = mouse_byte(text, row.begin, row.end, row.column, column, false);
+            history_cursor(vm, &row, at);
+        } else selection(vm, index);
+        if (event->release) vm->mouse_down = false;
+        changed(vm);
+        return 0;
+    }
+    if (event->release) vm->mouse_down = false;
+    return 0;
+}
+
 static int
 input_event(void *opaque, const struct snag_vm_input_event *event)
 {
     struct vm *vm = opaque;
     if (vm->detach_exit || vm->detach_suspend || vm->switch_workspace ||
         vm->classic_pending) return 0;
+    if (event->kind == SNAG_VM_FOCUS && !event->focused) vm->mouse_down = false;
+    if (event->kind == SNAG_VM_MOUSE) return mouse_event(vm, event);
+    if (event->kind != SNAG_VM_FOCUS) vm->mouse_down = false;
     if (vm->copying || vm->navigating || vm->motion_loading) {
         bool control = (event->modifiers & SNAG_VM_CTRL) != 0u;
-        bool cancel = event->kind == SNAG_VM_MOUSE || (event->kind == SNAG_VM_KEY &&
+        bool cancel = event->kind == SNAG_VM_KEY &&
             (event->key == SNAG_VM_KEY_ESCAPE ||
-             (control && (event->key == 'c' || event->key == '[' || event->key == 'z'))));
+             (control && (event->key == 'c' || event->key == '[' || event->key == 'z')));
         if (cancel) cancel_search(vm);
         else if (event->kind == SNAG_VM_FOCUS) return 0;
         else if (event->kind == SNAG_VM_KEY && control && event->key == 'l') {
@@ -2096,28 +2287,6 @@ input_event(void *opaque, const struct snag_vm_input_event *event)
             return snag_vm_editor_end(c);
         }
         notice(vm, "Enter INSERT, command or filter input before pasting text");
-        return 0;
-    }
-    if (event->kind == SNAG_VM_MOUSE) {
-        if (event->release) return 0;
-        cancel_search(vm);
-        struct snag_vm_connection *c = focused_connection(vm);
-        if (vm->insert && c) {
-            snag_vm_editor_normal(c, true);
-            if (snag_vm_editor_end(c) < 0) return -1;
-        } else if (c) snag_vm_editor_normal(c, false);
-        for (size_t i = 0u; i < vm->count; ++i) {
-            const struct snag_vm_rectangle *r = &vm->windows[i].rectangle;
-            if (!r->visible || event->row < r->row || event->row - r->row >= r->rows ||
-                event->column < r->column || event->column - r->column >= r->columns) continue;
-            vm->focus = i;
-            vm->composer = vm->insert = false;
-            if (event->button == 64u || event->button == 65u) move(vm, event->button == 65u, 3u);
-            else if (event->button == 0u && event->row - r->row + 1u < r->rows)
-                selection(vm, vm->windows[i].top + event->row - r->row);
-            vm->dirty = true;
-            break;
-        }
         return 0;
     }
     unsigned int key = event->kind == SNAG_VM_TEXT && event->length == 1u ?
@@ -2455,6 +2624,16 @@ emit(void *opaque, const void *text, size_t length)
         output_checkpoint, vm);
 }
 
+static int
+mouse_reporting(struct vm *vm)
+{
+    if (vm->mouse_reported == vm->mouse) return 0;
+    vm->mouse_reported = vm->mouse;
+    const char *modes = vm->mouse ? "\033[?1000l\033[?1002h\033[?1006h" :
+        "\033[?1002l\033[?1000l\033[?1006l";
+    return emit(vm, modes, strlen(modes));
+}
+
 struct draft_rows {
     struct vm *vm;
     struct vm_window *window;
@@ -2551,6 +2730,7 @@ draw_window(void *opaque, const struct snag_vm_rectangle *rectangle)
     if (index == vm->count) return -1;
     struct vm_window *window = &vm->windows[index];
     window->rectangle = *rectangle;
+    window->history_rows = window->composer_rows = 0u;
     if (!rectangle->visible) return 0;
     size_t height = rectangle->rows > 1u ? rectangle->rows - 1u : 0u;
     struct snag_vm_connection *c = connection_for(vm, window->session_id, false);
@@ -2577,11 +2757,14 @@ draw_window(void *opaque, const struct snag_vm_rectangle *rectangle)
         window->composer_top = draft.top;
         height -= draft.height;
         draft.first_row = rectangle->row + height;
+        window->composer_row = draft.first_row;
+        window->composer_rows = draft.height;
         draft.count = 0u;
         draft.paint = true;
         if (snag_vm_text_wrap(text, c->draft.len, rectangle->columns, false,
             draft_row, &draft) < 0) return -1;
     }
+    window->history_rows = height;
     size_t count = row_count(vm, window);
     if (window->selected >= count) window->selected = count ? count - 1u : 0u;
     if (window->top > window->selected) window->top = window->selected;
@@ -2716,6 +2899,7 @@ draw(struct vm *vm)
     if (!columns) columns = 1u;
     if (snag_vm_grid_resize(&vm->grid, rows, columns) < 0) return -1;
     vm->dirty = false;
+    if (mouse_reporting(vm) < 0) return -1;
     vm->cursor_row = vm->cursor_column = SIZE_MAX;
     snag_vm_grid_begin(&vm->grid);
     if (snag_vm_layout_place(vm->layout, vm->windows[vm->focus].id,
@@ -2994,11 +3178,12 @@ collect(struct vm *vm)
 static int
 enter_screen(struct vm *vm, bool flush_input)
 {
-    static const char modes[] = "\033[?1049h\033[?2004h\033[?1000h\033[?1006h\033[?1004h\033[?25l";
+    static const char modes[] = "\033[?1049h\033[?2004h\033[?1004h\033[?25l";
     vm->entering = true;
     int rc = snag_term_input_raw(&vm->terminal, flush_input);
     if (!rc) rc = snag_term_output_mode(&vm->terminal, true);
     if (!rc) rc = emit(vm, modes, sizeof(modes) - 1u);
+    if (!rc) rc = mouse_reporting(vm);
     vm->entering = false;
     vm->grid.valid = false;
     vm->dirty = true;
@@ -3016,7 +3201,8 @@ static void
 leave_screen(struct vm *vm, bool restore_input)
 {
     static const char modes[] = "\033[0m\033[?25h\033[?1004l\033[?1006l"
-        "\033[?1000l\033[?2004l\033[?1049l";
+        "\033[?1002l\033[?1000l\033[?2004l\033[?1049l";
+    vm->mouse_reported = vm->mouse_down = false;
     uint64_t deadline = snag_monotonic_ms() + 250u;
     (void)snag_term_output_write(&vm->terminal, vm->output, modes, sizeof(modes) - 1u,
         false, restore_checkpoint, &deadline);
@@ -3101,6 +3287,7 @@ interactive(struct vm *vm)
         }
         if (resized || snag_term_input_resized(&vm->terminal)) {
             resized = 0;
+            vm->mouse_down = false;
             vm->grid.valid = false;
             vm->dirty = true;
         }
@@ -3203,7 +3390,7 @@ snag_vm_main(int argc, char **argv, const char *program)
 {
     const char *dotdir_option = NULL, *name = NULL, *resume = NULL;
     bool list = false, last = false;
-    struct vm vm = {.output = -1, .stored_limit = 10u, .next_window = 2u};
+    struct vm vm = {.output = -1, .stored_limit = 10u, .next_window = 2u, .mouse = true};
     char error[256] = "invalid workspace arguments";
     int rc = 2;
     snag_store_init(&vm.store);

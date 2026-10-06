@@ -156,6 +156,36 @@ snag_vm_layout_resize(struct snag_vm_layout *layout, uint64_t window, enum snag_
     return 0;
 }
 
+static bool
+divide(const struct snag_vm_layout *layout, uint64_t focus, struct snag_vm_rectangle area,
+    struct snag_vm_rectangle *first, struct snag_vm_rectangle *second)
+{
+    *first = *second = area;
+    unsigned int extent = layout->split == SNAG_VM_VERTICAL ? area.columns : area.rows;
+    unsigned int minimum = layout->split == SNAG_VM_VERTICAL ? 1u : 2u;
+    if (extent < minimum * 2u + 1u || !area.rows || !area.columns) {
+        bool keep_first = !snag_vm_layout_contains(layout->second, focus);
+        struct snag_vm_rectangle *hidden = keep_first ? second : first;
+        hidden->rows = hidden->columns = 0u;
+        return false;
+    } else {
+        unsigned int available = extent - 1u;
+        unsigned int length = (unsigned int)((uint64_t)available * layout->weight / 10000u);
+        if (length < minimum) length = minimum;
+        if (length > available - minimum) length = available - minimum;
+        if (layout->split == SNAG_VM_VERTICAL) {
+            first->columns = length;
+            second->column += length + 1u;
+            second->columns = available - length;
+        } else {
+            first->rows = length;
+            second->row += length + 1u;
+            second->rows = available - length;
+        }
+    }
+    return true;
+}
+
 static int
 place(const struct snag_vm_layout *layout, uint64_t focus, struct snag_vm_rectangle area,
     int (*emit)(void *, const struct snag_vm_rectangle *), void *opaque)
@@ -165,28 +195,8 @@ place(const struct snag_vm_layout *layout, uint64_t focus, struct snag_vm_rectan
         area.visible = area.rows && area.columns;
         return emit(opaque, &area);
     }
-    struct snag_vm_rectangle first = area, second = area;
-    unsigned int extent = layout->split == SNAG_VM_VERTICAL ? area.columns : area.rows;
-    unsigned int minimum = layout->split == SNAG_VM_VERTICAL ? 1u : 2u;
-    if (extent < minimum * 2u + 1u || !area.rows || !area.columns) {
-        bool keep_first = !snag_vm_layout_contains(layout->second, focus);
-        struct snag_vm_rectangle *hidden = keep_first ? &second : &first;
-        hidden->rows = hidden->columns = 0u;
-    } else {
-        unsigned int available = extent - 1u;
-        unsigned int length = (unsigned int)((uint64_t)available * layout->weight / 10000u);
-        if (length < minimum) length = minimum;
-        if (length > available - minimum) length = available - minimum;
-        if (layout->split == SNAG_VM_VERTICAL) {
-            first.columns = length;
-            second.column += length + 1u;
-            second.columns = available - length;
-        } else {
-            first.rows = length;
-            second.row += length + 1u;
-            second.rows = available - length;
-        }
-    }
+    struct snag_vm_rectangle first, second;
+    (void)divide(layout, focus, area, &first, &second);
     int rc = place(layout->first, focus, first, emit, opaque);
     return rc ? rc : place(layout->second, focus, second, emit, opaque);
 }
@@ -200,6 +210,83 @@ snag_vm_layout_place(const struct snag_vm_layout *layout, uint64_t focus,
         return snag_errno(EINVAL);
     struct snag_vm_rectangle area = {.rows = rows, .columns = columns};
     return place(layout, focus, area, emit, opaque);
+}
+
+static bool
+inside(struct snag_vm_rectangle area, unsigned int row, unsigned int column)
+{
+    return row >= area.row && row - area.row < area.rows &&
+        column >= area.column && column - area.column < area.columns;
+}
+
+static uint64_t
+first_leaf(const struct snag_vm_layout *layout)
+{
+    while (!layout->window) layout = layout->first;
+    return layout->window;
+}
+
+int
+snag_vm_layout_separator(const struct snag_vm_layout *layout, uint64_t focus,
+    unsigned int rows, unsigned int columns, unsigned int row, unsigned int column,
+    struct snag_vm_separator *separator)
+{
+    if (!layout || !separator || !snag_vm_layout_contains(layout, focus))
+        return snag_errno(EINVAL);
+    *separator = (struct snag_vm_separator){0};
+    struct snag_vm_rectangle area = {.rows = rows, .columns = columns};
+    while (!layout->window && inside(area, row, column)) {
+        struct snag_vm_rectangle first, second;
+        bool divided = divide(layout, focus, area, &first, &second);
+        if (inside(first, row, column)) {
+            layout = layout->first;
+            area = first;
+        } else if (inside(second, row, column)) {
+            layout = layout->second;
+            area = second;
+        } else if (divided) {
+            separator->first = first_leaf(layout->first);
+            separator->second = first_leaf(layout->second);
+            return 1;
+        } else return 0;
+    }
+    return 0;
+}
+
+int
+snag_vm_layout_drag(struct snag_vm_layout *layout, uint64_t focus,
+    unsigned int rows, unsigned int columns, const struct snag_vm_separator *separator,
+    unsigned int row, unsigned int column)
+{
+    if (!layout || !separator || !separator->first || !separator->second ||
+        !snag_vm_layout_contains(layout, focus)) return snag_errno(EINVAL);
+    struct snag_vm_rectangle area = {.rows = rows, .columns = columns};
+    while (!layout->window) {
+        struct snag_vm_rectangle first, second;
+        bool divided = divide(layout, focus, area, &first, &second);
+        bool first_side = snag_vm_layout_contains(layout->first, separator->first);
+        bool second_side = snag_vm_layout_contains(layout->second, separator->second);
+        if (first_side && second_side) {
+            if (!divided) return 0;
+            bool vertical = layout->split == SNAG_VM_VERTICAL;
+            unsigned int available = (vertical ? area.columns : area.rows) - 1u;
+            unsigned int minimum = vertical ? 1u : 2u;
+            unsigned int start = vertical ? area.column : area.row;
+            unsigned int point = vertical ? column : row;
+            unsigned int length = point > start ? point - start : minimum;
+            if (length < minimum) length = minimum;
+            if (length > available - minimum) length = available - minimum;
+            unsigned int weight = (unsigned int)(((uint64_t)length * 10000u +
+                available - 1u) / available);
+            if (weight > 9999u) weight = 9999u;
+            if (layout->weight == weight) return 0;
+            layout->weight = weight;
+            return 1;
+        }
+        layout = first_side ? layout->first : layout->second;
+        area = first_side ? first : second;
+    }
+    return snag_errno(ENOENT);
 }
 
 json_t *

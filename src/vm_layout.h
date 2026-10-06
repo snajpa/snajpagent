@@ -13,6 +13,10 @@ struct snag_vm_rectangle {
     bool visible;
 };
 
+/* A separator names one leaf on each side, so tree edits cannot leave a
+ * dangling pointer in a mouse drag. A removed side invalidates the drag. */
+struct snag_vm_separator { uint64_t first, second; };
+
 struct snag_vm_layout *snag_vm_layout_new(uint64_t window);
 void snag_vm_layout_free(struct snag_vm_layout *);
 bool snag_vm_layout_contains(const struct snag_vm_layout *, uint64_t window);
@@ -31,6 +35,13 @@ int snag_vm_layout_resize(struct snag_vm_layout *, uint64_t window, enum snag_vm
 int snag_vm_layout_place(const struct snag_vm_layout *, uint64_t focus,
     unsigned int rows, unsigned int columns,
     int (*emit)(void *, const struct snag_vm_rectangle *), void *);
+/* 1 found/changed, 0 no hit/change; -1 invalid arguments or obsolete drag. */
+int snag_vm_layout_separator(const struct snag_vm_layout *, uint64_t focus,
+    unsigned int rows, unsigned int columns, unsigned int row, unsigned int column,
+    struct snag_vm_separator *);
+int snag_vm_layout_drag(struct snag_vm_layout *, uint64_t focus,
+    unsigned int rows, unsigned int columns, const struct snag_vm_separator *,
+    unsigned int row, unsigned int column);
 json_t *snag_vm_layout_json(const struct snag_vm_layout *);
 struct snag_vm_layout *snag_vm_layout_load(const json_t *, char *, size_t);
 
