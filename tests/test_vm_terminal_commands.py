@@ -100,7 +100,8 @@ input()
         self.addCleanup(self.stop_editor)
 
     def stop_editor(self):
-        rows = subprocess.check_output(['ps', '-axo', 'pid=,ppid=,command='], text=True)
+        rows = subprocess.check_output(
+            ['ps', '-axww', '-o', 'pid=', '-o', 'ppid=', '-o', 'command='], text=True)
         for row in rows.splitlines():
             fields = row.split(None, 2)
             if len(fields) == 3 and fields[1] == str(self.owner.owner) and str(self.editor) in fields[2]:

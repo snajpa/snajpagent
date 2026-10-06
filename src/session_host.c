@@ -27,7 +27,6 @@
 #include <util.h>
 #endif
 #include <signal.h>
-#include <spawn.h>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -118,6 +117,36 @@ launch_descriptor(int *fd)
     return 0;
 }
 
+static void
+launch_exec(char *const arguments[], int pair[2], int master, int slave,
+    struct snag_session_packet *failure)
+{
+    /* Signals stay blocked until inherited callbacks have been reset. This
+     * child of the threaded workspace uses only async-signal-safe operations. */
+    struct sigaction defaults = {.sa_handler = SIG_DFL};
+    sigemptyset(&defaults.sa_mask);
+    for (int number = 1; number < NSIG; ++number) {
+        struct sigaction inherited;
+        if (sigaction(number, NULL, &inherited) == 0 &&
+            inherited.sa_handler != SIG_IGN && inherited.sa_handler != SIG_DFL &&
+            sigaction(number, &defaults, NULL) < 0) goto fail;
+    }
+    (void)close(pair[0]);
+    if (setpgid(0, 0) < 0 || dup2(pair[1], 3) < 0 || dup2(master, 4) < 0) goto fail;
+    for (int fd = STDIN_FILENO; fd <= STDERR_FILENO; ++fd)
+        if (dup2(slave, fd) < 0) goto fail;
+    (void)close(master);
+    (void)close(slave);
+    sigset_t empty;
+    sigemptyset(&empty);
+    if (sigprocmask(SIG_SETMASK, &empty, NULL) < 0) goto fail;
+    /* pair[1] remains close-on-exec, available only to report exec failure. */
+    execve(arguments[0], arguments, environ);
+fail:
+    (void)snag_session_packet_write(pair[1], failure);
+    _exit(125);
+}
+
 int
 snag_session_launch(const char *program, const struct snag_term_host *terminal,
     const char *dotdir, const char *id, const char *name, uint64_t *child)
@@ -125,9 +154,6 @@ snag_session_launch(const char *program, const struct snag_term_host *terminal,
     int pair[2], master = -1, slave = -1;
     if (!program || program[0] != '/') return snag_errno(EINVAL);
     if (snag_session_stream_pair(pair) < 0) return -1;
-    posix_spawn_file_actions_t files;
-    posix_spawnattr_t attributes;
-    bool have_files = false, have_attributes = false;
     /* A temporary PTY retains the original cooked modes and current geometry
      * through exec, even if the workspace's real terminal disappears meanwhile.
      * Its inherited master stays open until the owner has made its own PTY. */
@@ -148,36 +174,22 @@ snag_session_launch(const char *program, const struct snag_term_host *terminal,
         error = errno;
         goto out;
     }
-    error = posix_spawn_file_actions_init(&files);
-    if (error) goto out;
-    have_files = true;
-    if ((error = posix_spawnattr_init(&attributes))) goto out;
-    have_attributes = true;
-    /* Keep source descriptors above the report/socket and temporary master
-     * destinations, even if the reader thread closed an older low descriptor. */
-    if ((error = posix_spawn_file_actions_addclose(&files, pair[0])) ||
-        (error = posix_spawn_file_actions_adddup2(&files, pair[1], 3)) ||
-        (error = posix_spawn_file_actions_addclose(&files, pair[1])) ||
-        (error = posix_spawn_file_actions_adddup2(&files, master, 4)) ||
-        (error = posix_spawn_file_actions_addclose(&files, master))) goto out;
-    for (int fd = 0; fd <= 2; ++fd)
-        if ((error = posix_spawn_file_actions_adddup2(&files, slave, fd))) goto out;
-    if ((error = posix_spawn_file_actions_addclose(&files, slave))) goto out;
-    sigset_t empty;
-    sigemptyset(&empty);
-    if ((error = posix_spawnattr_setsigmask(&attributes, &empty)) ||
-        (error = posix_spawnattr_setpgroup(&attributes, 0)) ||
-        (error = posix_spawnattr_setflags(&attributes,
-            POSIX_SPAWN_SETSIGMASK | POSIX_SPAWN_SETPGROUP))) goto out;
     char *const arguments[] = {(char *)program, "--internal-session-owner",
         (char *)dotdir, id ? "--resume" : "--new", (char *)(id ? id : name ? name : ""),
         NULL};
-    pid_t pid;
-    error = posix_spawn(&pid, program, &files, &attributes, arguments, environ);
-    if (!error) *child = (uint64_t)pid;
+    struct snag_session_packet failure = {0};
+    const char message[] = "Cannot start session owner";
+    (void)snag_session_packet_set(&failure, SNAG_SESSION_ERROR, message, sizeof(message) - 1u);
+    sigset_t blocked, previous;
+    sigfillset(&blocked);
+    error = pthread_sigmask(SIG_BLOCK, &blocked, &previous);
+    if (error) goto out;
+    pid_t pid = fork();
+    error = pid < 0 ? errno : 0;
+    if (!pid) launch_exec(arguments, pair, master, slave, &failure);
+    (void)pthread_sigmask(SIG_SETMASK, &previous, NULL);
+    if (pid > 0) *child = (uint64_t)pid;
 out:
-    if (have_attributes) (void)posix_spawnattr_destroy(&attributes);
-    if (have_files) (void)posix_spawn_file_actions_destroy(&files);
     (void)close(pair[1]);
     if (master >= 0) (void)close(master);
     if (slave >= 0) (void)close(slave);

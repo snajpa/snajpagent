@@ -156,7 +156,7 @@ class SessionViewTests(unittest.TestCase):
         self.journal, = (self.root / 'state' / 'sessions').glob('*/events.jsonl')
         self.directory = self.journal.parent
         self.sid = self.directory.name
-        for row in subprocess.check_output(['ps', '-axo', 'pid=,ppid=,command='],
+        for row in subprocess.check_output(['ps', '-axww', '-o', 'pid=', '-o', 'ppid=', '-o', 'command='],
                                            text=True).splitlines():
             fields = row.split(None, 2)
             if len(fields) == 3 and fields[1] == str(child.process.pid) and str(self.config) in row:
@@ -166,7 +166,7 @@ class SessionViewTests(unittest.TestCase):
         self.initial = child
 
     def identity(self):
-        return subprocess.run(['ps', '-p', str(self.owner), '-o', 'lstart=,command='],
+        return subprocess.run(['ps', '-ww', '-p', str(self.owner), '-o', 'lstart=', '-o', 'command='],
                               text=True, capture_output=True).stdout.strip()
 
     def start(self, args):

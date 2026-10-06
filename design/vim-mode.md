@@ -365,8 +365,11 @@ Signal exit restores the outer workspace handlers without reopening controllers.
 The classic editor also consumes a completed UTF-8 scalar before redraw can
 reenter input, preserving following bytes during long Unicode pastes.
 Explicit :new, :session, picker Enter and vm --session now launch fresh owners
-or resume stopped sessions asynchronously. A same-binary exec starts the normal
-native owner before any application threads exist. A temporary PTY preserves
+or resume stopped sessions asynchronously. The workspace blocks signals around
+fork; the child resets inherited handlers and uses only async-signal-safe setup
+before executing the same binary. This supports older BSD SDKs without spawn.h.
+The fresh executable starts the normal native owner before any application
+threads exist. A temporary PTY preserves
 cooked launch modes and geometry through frontend loss; the surviving owner
 creates its usual private controlling PTY. A private inherited stream reports
 readiness only after endpoint publication and initial orientation, or reports

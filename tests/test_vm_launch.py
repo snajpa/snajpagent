@@ -46,7 +46,9 @@ class LaunchTests(unittest.TestCase):
 
     def stop_owners(self):
         # Only fixture owners have this exact private dotdir in their bootstrap argv.
-        for row in subprocess.check_output(['ps', '-axo', 'pid=,command='], text=True).splitlines():
+        rows = subprocess.check_output(['ps', '-axww', '-o', 'pid=', '-o', 'command='],
+                                       text=True)
+        for row in rows.splitlines():
             fields = row.strip().split(None, 1)
             if len(fields) == 2 and '--internal-session-owner ' + str(self.state) + ' ' in fields[1]:
                 try:
@@ -61,7 +63,7 @@ class LaunchTests(unittest.TestCase):
 
     def owner_pids(self):
         return [int(row.split(None, 1)[0]) for row in subprocess.check_output(
-            ['ps', '-axo', 'pid=,command='], text=True).splitlines()
+            ['ps', '-axww', '-o', 'pid=', '-o', 'command='], text=True).splitlines()
             if '--internal-session-owner ' + str(self.state) + ' ' in row]
 
     def start(self, *args, **kwargs):
@@ -128,11 +130,13 @@ class LaunchTests(unittest.TestCase):
         receipt = self.root / 'bootstrap.json'
         release = self.root / 'release'
         replacement.write_text(f'''#!{sys.executable}
-import json, os, sys, termios, time
+import json, os, signal, sys, termios, time
 from pathlib import Path
 mode = termios.tcgetattr(0)
 mode[6] = [x[0] if isinstance(x, bytes) else x for x in mode[6]]
-Path({str(receipt)!r}).write_text(json.dumps(dict(pid=os.getpid(), modes=mode)))
+blocked = sorted(int(s) for s in signal.pthread_sigmask(signal.SIG_BLOCK, []))
+Path({str(receipt)!r}).write_text(json.dumps(dict(pid=os.getpid(), modes=mode,
+    group=os.getpgrp(), blocked=blocked)))
 deadline = time.monotonic() + 15
 while not Path({str(release)!r}).exists() and time.monotonic() < deadline:
     time.sleep(.01)
@@ -224,6 +228,8 @@ os.execv({str(BINARY)!r}, [{str(BINARY)!r}] + sys.argv[1:])
         child.command('new slow')
         saved = self.wait_file(receipt)
         self.assertEqual(frontend.normalized_modes(saved['modes']), child.original)
+        self.assertEqual(saved['blocked'], [])
+        self.assertEqual(saved['group'], saved['pid'])
         child.command('help')
         child.repaint_until(b'j/k or arrows')
         release.touch()
@@ -237,6 +243,33 @@ os.execv({str(BINARY)!r}, [{str(BINARY)!r}] + sys.argv[1:])
         child.command('session ' + journal.parent.name)
         self.ready(child)
         child.finish('q!')
+
+    def test_exec_failure_reports_then_allows_explicit_retry(self):
+        copy = self.root / 'exec-retry-binary'
+        shutil.copy2(BINARY, copy)
+        frontend.BINARY = copy
+        try:
+            child = self.start('-N', 'exec-retry')
+        finally:
+            frontend.BINARY = BINARY
+        replacement = copy.with_suffix('.new')
+        replacement.write_bytes(b'not an executable image\n')
+        replacement.chmod(0o700)
+        replacement.replace(copy)
+        child.command('new failed')
+        child.repaint_until(b'Cannot start session owner')
+        self.assertEqual(self.journals(), [])
+        deadline = time.monotonic() + 5
+        while self.owner_pids() and time.monotonic() < deadline:
+            child.read(.02)
+        self.assertEqual(self.owner_pids(), [])
+        shutil.copy2(BINARY, replacement)
+        replacement.replace(copy)
+        child.command('new retried')
+        journal = self.ready(child)
+        self.assertFalse(any(e['type'] == 'input_received' for e in self.events(journal)))
+        child.finish('q!')
+        self.status(journal.parent.name, 'stored')
 
     def test_frontend_loss_during_bootstrap_preserves_launch_and_private_pty(self):
         child, receipt, release = self.barrier()

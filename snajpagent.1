@@ -2007,7 +2007,8 @@ and drafts remain usable.
 When ready, the owner opens in the requesting window. Selecting another buffer,
 closing that window or switching workspaces leaves the new owner detached;
 find it in :sessions. Closing or losing the frontend during startup also leaves
-the owner running. Startup errors appear in the workspace. If the startup
+the owner running. Startup errors appear in the workspace; correct the reported
+problem and explicitly retry the command. If the startup
 report is lost, inspect :sessions before issuing another :new command.
 Saved workspaces never replay launch commands. New owners keep their own private
 terminal and can later be reached through ordinary snajpagent --resume or :classic.

@@ -8,6 +8,10 @@
   goal notices, status, history and restored context; name the operator only for
   an explicit operator wait and show timer scheduling separately.
 
+- Start Vim workspace owners through portable POSIX process primitives,
+  including BSD targets whose SDK predates posix_spawn. Preserve terminal modes,
+  independent owner lifetime and explicit retry after an executable-start failure.
+
 - Apply a pending provider/model switch before checking credentials when
   continuing a failed or resumed turn. A broken login for the previous provider
   no longer prevents recovery through another configured provider.
