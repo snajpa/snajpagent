@@ -322,14 +322,17 @@ snag_binary_cursor_capture(const struct snag_binary_anchor *before,
     return 0;
 }
 
-int
-snag_binary_cursor_read(int fd, const struct snag_binary_anchor *through, uint64_t end,
+static int
+cursor_read(int fd, const struct snag_binary_anchor *through,
+    const struct snag_binary_checkpoint_index *access, uint64_t end,
     struct snag_binary_cursor *cursor,
     int (*visit)(void *, const struct snag_binary_record *, uint64_t,
         const struct snag_binary_cursor *), bool (*cancelled)(void *), void *opaque)
 {
     if (fd < 0 || !boundary_valid(through) || !cursor || !boundary_valid(&cursor->before) ||
-        !batch_within(&cursor->before, through) || !visit ||
+        !batch_within(&cursor->before, through) || !visit || !access_within(through, access) ||
+        (access && ((!access->entries && access->entry_count) ||
+            access->entry_count > SIZE_MAX / SNAG_BINARY_INDEX_ENTRY_SIZE)) ||
         cursor->next_seq < cursor->before.next_seq || cursor->next_seq > end ||
         end > through->next_seq || cursor->record_offset < SNAG_BINARY_BATCH_HEADER_SIZE ||
         cursor->record_offset > SNAG_BINARY_BATCH_MAX - SNAG_BINARY_BATCH_FOOTER_SIZE ||
@@ -343,6 +346,15 @@ snag_binary_cursor_read(int fd, const struct snag_binary_anchor *through, uint64
     int rc = -1;
     while (staged.next_seq < end || staged.next_seq != staged.before.next_seq) {
         if (cancelled_read(cancelled, opaque)) goto done;
+        if (access && staged.next_seq < access->boundary.next_seq) {
+            struct snag_binary_index_entry entry;
+            int found = snag_binary_checkpoint_index_find(access, staged.next_seq, &entry);
+            if (found != 0) {
+                if (found > 0) errno = ENOENT;
+                goto done;
+            }
+            if (entry.batch_offset != staged.before.end) { errno = EINVAL; goto done; }
+        }
         int read_rc = snag_binary_batch_read(fd, through->end, &staged.before,
             &scratch, &batch, &after);
         if (read_rc != 0) {
@@ -371,6 +383,20 @@ snag_binary_cursor_read(int fd, const struct snag_binary_anchor *through, uint64
             }
             if (cancelled_read(cancelled, opaque) || advance_turn(&record, &turn) < 0) goto done;
             if (sequence < first || sequence >= end) continue;
+            if (access && sequence < access->boundary.next_seq) {
+                struct snag_binary_index_entry entry;
+                int found = snag_binary_checkpoint_index_find(access, sequence, &entry);
+                if (found != 0) {
+                    if (found > 0) errno = ENOENT;
+                    goto done;
+                }
+                if (entry.batch_offset != before.end || entry.record_offset != start ||
+                    entry.kind != record.kind || entry.turn != turn ||
+                    memcmp(entry.batch_digest, after.digest, sizeof(after.digest))) {
+                    errno = EINVAL;
+                    goto done;
+                }
+            }
             struct snag_binary_cursor cut = {.before = before, .next_seq = sequence + 1u,
                 .record_offset = (uint32_t)offset};
             if (cut.next_seq == after.next_seq) cut = (struct snag_binary_cursor){.before = after,
@@ -393,6 +419,26 @@ adopt:
 done:
     snag_buf_free(&scratch);
     return rc;
+}
+
+int
+snag_binary_cursor_read(int fd, const struct snag_binary_anchor *through, uint64_t end,
+    struct snag_binary_cursor *cursor,
+    int (*visit)(void *, const struct snag_binary_record *, uint64_t,
+        const struct snag_binary_cursor *), bool (*cancelled)(void *), void *opaque)
+{
+    return cursor_read(fd, through, NULL, end, cursor, visit, cancelled, opaque);
+}
+
+int
+snag_binary_checkpoint_cursor_read(int fd, const struct snag_binary_anchor *through,
+    const struct snag_binary_checkpoint_index *access, uint64_t end,
+    struct snag_binary_cursor *cursor,
+    int (*visit)(void *, const struct snag_binary_record *, uint64_t,
+        const struct snag_binary_cursor *), bool (*cancelled)(void *), void *opaque)
+{
+    if (!access) return snag_errno(EINVAL);
+    return cursor_read(fd, through, access, end, cursor, visit, cancelled, opaque);
 }
 
 struct contiguous_visit {

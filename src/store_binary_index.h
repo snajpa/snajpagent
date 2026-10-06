@@ -107,6 +107,16 @@ int snag_binary_cursor_read(int fd, const struct snag_binary_anchor *through, ui
         const struct snag_binary_cursor *after),
     bool (*cancelled)(void *), void *opaque);
 
+/* Same traversal with non-NULL independently admitted working-set custody.
+ * Each visited old record must have an exact canonical entry, otherwise ENOENT.
+ * Only the bounded newer suffix is contiguous; missing old entries never grant
+ * prefix access. Other cursor/callback/source authority contracts are unchanged. */
+int snag_binary_checkpoint_cursor_read(int fd, const struct snag_binary_anchor *through,
+    const struct snag_binary_checkpoint_index *, uint64_t end, struct snag_binary_cursor *,
+    int (*visit)(void *, const struct snag_binary_record *, uint64_t,
+        const struct snag_binary_cursor *after),
+    bool (*cancelled)(void *), void *opaque);
+
 /* Enumerate [first,end) in sequence order. Pinned access selects only listed
  * old working-set records, grouping physical batches; the newer suffix remains
  * contiguous. NULL access enumerates the contiguous independent oracle prefix.

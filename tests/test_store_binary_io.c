@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
+#include "fixture_store_binary.h"
 #include "store_binary_io.h"
 #include "store_binary_index.h"
 #include "store_binary_wire.h"
@@ -11,6 +12,7 @@
 
 #include <assert.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <pthread.h>
 #include <signal.h>
 #include <stdio.h>
@@ -1350,6 +1352,58 @@ native_voice_adoption(const struct snag_session *session, const struct snag_jour
 }
 
 static void
+native_voice_access(struct snag_session *session, int *directory, char **path, bool sparse)
+{
+    *path = snag_path_join(getenv("TMPDIR") ? getenv("TMPDIR") : "/tmp",
+        "snag-native-voice-XXXXXX");
+    assert(*path && mkdtemp(*path));
+    *directory = open(*path, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    assert(*directory >= 0);
+    unsigned char header[SNAG_BINARY_HEADER_SIZE], hash[32];
+    struct snag_binary_identity identity;
+    struct snag_binary_anchor root;
+    assert(snag_pread(session->log_fd, header, sizeof(header), 0) == sizeof(header));
+    assert(!snag_binary_header_decode(header, sizeof(header), &identity, &root));
+    struct snag_binary_index_tree tree = {0};
+    struct snag_buf bytes = {.max = SIZE_MAX};
+    struct snag_binary_checkpoint_index access;
+    struct snag_binary_index_entry entry;
+    size_t count = 0u;
+    if (sparse) {
+        struct snag_binary_anchor first = root, after;
+        struct snag_binary_checkpoint_sources sources = {0};
+        char error[256];
+        assert(!snag_session_binary_checkpoint_capture(session, &root, &tree,
+            &sources, error, sizeof(error)));
+        snag_binary_checkpoint_sources_free(&sources);
+        struct snag_buf scratch = {.max = SNAG_BINARY_BATCH_MAX};
+        struct snag_buf flat = {.max = SNAG_BINARY_INDEX_BATCH_MAX};
+        struct snag_binary_batch batch;
+        assert(!snag_binary_batch_read(session->log_fd, root.end, &first,
+            &scratch, &batch, &after));
+        assert(batch.count == 1u && first.next_seq == 1u);
+        assert(!snag_binary_index_append_batch(&flat, &identity, &first,
+            &after, batch.data, batch.size));
+        assert(!snag_binary_index_entry_decode(flat.data, flat.len, &identity, 1u, &entry));
+        count = 1u; /* Core creation retained; old voice observations are not. */
+        snag_buf_free(&flat);
+        snag_buf_free(&scratch);
+    }
+    assert(!snag_binary_checkpoint_index_encode(&bytes, &identity, &root, &tree,
+        count ? &entry : NULL, count));
+    assert(!snag_binary_index_tree_root(&tree, hash));
+    assert(!snag_binary_checkpoint_index_decode(bytes.data, bytes.len,
+        &identity, &root, hash, &access));
+    /* Independently decoded empty custody plus this explicitly bounded small
+     * fixture suffix, not production admission of an arbitrary old prefix. */
+    uint64_t generations[2] = {0}, sequences[2] = {0};
+    char error[256];
+    assert(!snag_session_binary_checkpoint_setup(session, *directory,
+        generations, sequences, &access, error, sizeof(error)));
+    snag_buf_free(&bytes);
+}
+
+static void
 test_native_voice_import(unsigned int variant)
 {
     struct snag_session session;
@@ -1499,7 +1553,244 @@ test_native_voice_import(unsigned int variant)
         &canary, error, sizeof(error)));
     assert(canary.next_seq == 5u && canary.offset == session.log_end);
     snag_session_voice_import_abandon(&session, id);
+    int directory = -1;
+    char *path = NULL;
+    if (!variant) {
+        native_voice_access(&session, &directory, &path, false);
+        json_t *context = NULL;
+        assert(!snag_session_voice_context(&session, &context, error, sizeof(error)));
+        assert(context && json_is_true(json_object_get(context, "history_complete")) &&
+            !strcmp(snag_json_string(context, "recent_asr"), "") && !session.goal_id[0]);
+        json_decref(context);
+    }
     snag_session_close(&session);
+    if (directory >= 0) assert(!close(directory) && !rmdir(path));
+    free(path);
+}
+
+static json_t *
+native_voice_data(const char *speaker, const char *text)
+{
+    return json_pack("{s:s,s:s,s:s,s:{s:s,s:s,s:s}}",
+        "connection_id", "0123456789abcdef0123456789abcdef", "provider", "default",
+        "model", "fixture", "event", "type", "voice_transcript", "speaker", speaker,
+        "text", text);
+}
+
+static void
+test_native_voice_context(bool sparse)
+{
+    struct snag_session session;
+    struct probe probe = {0};
+    native_fixture(&session, &probe);
+    char error[256];
+    json_t *context = NULL;
+    assert(snag_session_voice_context(&session, &context, error, sizeof(error)) < 0 &&
+        errno == ENOTSUP && !context && !session.voice_projection);
+    if (sparse) {
+        assert(!snag_session_commit(&session, "voice_event", native_voice_data("user",
+            "Old ASR outside the core working set"), NULL, error, sizeof(error)));
+    }
+    int directory;
+    char *path;
+    native_voice_access(&session, &directory, &path, sparse);
+    assert(snag_seek(session.log_fd, 13, SEEK_SET) == 13);
+    if (sparse) {
+        uint64_t sequence = session.next_seq;
+        int64_t end = session.log_end;
+        for (unsigned retry = 0u; retry < 2u; ++retry) {
+            assert(snag_session_voice_context(&session, &context, error, sizeof(error)) < 0 &&
+                errno == ENOENT && !context && !session.voice_projection);
+            assert(session.next_seq == sequence && session.log_end == end &&
+                !session.voice_history.adopted_seq && atomic_load(&probe.effects) == 2u);
+        }
+    } else {
+        assert(!snag_session_voice_context(&session, &context, error, sizeof(error)));
+        assert(json_is_true(json_object_get(context, "history_complete")) &&
+            json_integer_value(json_object_get(context, "history_as_of_seq")) == 1);
+        json_decref(context);
+        assert(!snag_session_commit(&session, "voice_event", native_voice_data("user",
+            "Original ASR, not an approved request"), NULL, error, sizeof(error)));
+        assert(!snag_session_voice_context(&session, &context, error, sizeof(error)));
+        assert(!strcmp(snag_json_string(context, "recent_asr"),
+            "Original ASR, not an approved request") &&
+            !strcmp(snag_json_string(context, "recent_asr_origin_session_id"), session.id) &&
+            json_integer_value(json_object_get(context, "recent_asr_origin_seq")) == 2);
+        json_decref(context);
+        assert(!snag_session_commit(&session, "voice_event", native_voice_data("assistant",
+            "Generated observation, not user intent"), NULL, error, sizeof(error)));
+        char *padding = malloc(1024u * 1024u + 1u);
+        assert(padding);
+        memset(padding, 'x', 1024u * 1024u);
+        padding[1024u * 1024u] = '\0';
+        for (unsigned i = 0u; i < 4u; ++i) {
+            assert(!snag_session_commit(&session, "voice_event", json_pack(
+                "{s:s,s:s,s:s,s:{s:s,s:s}}", "connection_id",
+                "0123456789abcdef0123456789abcdef", "provider", "default", "model", "fixture",
+                "event", "type", "voice_usage", "padding", padding), NULL, error, sizeof(error)));
+        }
+        free(padding);
+        assert(!snag_session_commit(&session, "voice_event", native_voice_data("user",
+            "New original ASR"), NULL, error, sizeof(error)));
+        assert(snag_seek(session.log_fd, 13, SEEK_SET) == 13);
+        assert(!snag_session_voice_context(&session, &context, error, sizeof(error)));
+        assert(json_is_false(json_object_get(context, "history_complete")) &&
+            json_integer_value(json_object_get(context, "history_as_of_seq")) == 7 &&
+            json_integer_value(json_object_get(context, "state_as_of_seq")) == 8 &&
+            !strcmp(snag_json_string(context, "recent_asr"),
+                "Original ASR, not an approved request"));
+        json_decref(context);
+        assert(!snag_session_voice_context(&session, &context, error, sizeof(error)));
+        assert(json_is_true(json_object_get(context, "history_complete")) &&
+            json_integer_value(json_object_get(context, "history_as_of_seq")) == 8 &&
+            !strcmp(snag_json_string(context, "recent_asr"), "New original ASR") &&
+            !strcmp(snag_json_string(context, "recent_generated_reply"),
+                "Generated observation, not user intent") &&
+            json_integer_value(json_object_get(context, "recent_asr_origin_seq")) == 8 &&
+            json_integer_value(json_object_get(context, "recent_generated_reply_origin_seq")) == 3);
+        json_t *again = NULL;
+        assert(!snag_session_voice_context(&session, &again, error, sizeof(error)) &&
+            json_equal(context, again));
+        json_decref(again);
+        json_decref(context);
+    }
+    assert(snag_seek(session.log_fd, 0, SEEK_CUR) == 13);
+    snag_session_close(&session);
+    assert(!close(directory) && !rmdir(path));
+    free(path);
+}
+
+static void
+native_voice_fixture_record(struct snag_buf *payload, const char *type, json_t *data,
+    struct snag_binary_record *record)
+{
+    assert(data);
+    payload->max = SNAG_MAX_EVENT_LINE;
+    enum snag_binary_kind kind;
+    assert(!snag_binary_legacy_encode(payload, type, data, &kind));
+    json_decref(data);
+    *record = (struct snag_binary_record){.kind = (uint16_t)kind,
+        .version = snag_binary_event_version(kind), .timestamp_ms = 42u,
+        .payload = payload->data, .size = payload->len};
+}
+
+static void
+test_native_voice_grouped(void)
+{
+    struct snag_session source, session;
+    snag_session_init(&source);
+    snag_session_init(&session);
+    struct snag_binary_anchor before, after;
+    source.log_fd = journal_fd(&before);
+    source.lock_fd = dup(source.log_fd);
+    assert(source.lock_fd >= 0);
+    strcpy(source.id, "11000000000000000000000000000000");
+    struct snag_buf payload[5] = {0};
+    struct snag_binary_record records[6];
+    native_voice_fixture_record(&payload[0], "session_created", json_pack(
+        "{s:s,s:s,s:s,s:i,s:s,s:s}", "default_effort", "medium", "default_model", "gpt-5",
+        "default_provider", "openai", "format", 4, "protocol", "responses", "cwd", "/"),
+        &records[0]);
+    native_voice_fixture_record(&payload[1], "voice_event",
+        native_voice_data("user", "Destination observation before adoption"), &records[1]);
+    for (unsigned i = 0u; i < 2u; ++i) {
+        native_voice_fixture_record(&payload[i + 2u], "voice_transfer_record", json_pack(
+            "{s:s,s:s,s:s,s:i,s:s,s:o}", "transfer_id", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "target_session_id", source.id, "source_session_id",
+            "dddddddddddddddddddddddddddddddd", "source_seq", (int)i + 1,
+            "source_type", "voice_event", "data", native_voice_data(i ? "assistant" : "user",
+                i ? "Imported generated reply" : "Imported original ASR")), &records[i + 2u]);
+    }
+    struct snag_binary_event adoption = {.kind = SNAG_BINARY_VOICE_TRANSFER_ADOPTED};
+    struct snag_binary_voice_adopted *value = &adoption.data.voice_transfer_adopted;
+    memset(value->transfer.id, 0xaa, sizeof(value->transfer.id));
+    value->transfer.target[0] = 17u;
+    memset(value->transfer.source, 0xbb, sizeof(value->transfer.source));
+    value->transfer.source_as_of = value->transfer.count = 2u;
+    value->begin_seq = 2u; /* Inside the one containing batch, not its predecessor. */
+    value->native = true;
+    payload[4].max = SNAG_MAX_EVENT_LINE;
+    assert(!snag_binary_event_encode(&payload[4], &adoption));
+    records[4] = (struct snag_binary_record){.kind = (uint16_t)adoption.kind,
+        .version = snag_binary_event_version(adoption.kind), .timestamp_ms = 42u,
+        .payload = payload[4].data, .size = payload[4].len};
+    static const unsigned char metadata = 0xff;
+    records[5] = (struct snag_binary_record){.kind = 77u, .version = 1u,
+        .flags = SNAG_BINARY_RECORD_OPTIONAL, .timestamp_ms = 42u,
+        .payload = &metadata, .size = 1u};
+    struct snag_buf raw = {.max = SNAG_BINARY_BATCH_MAX};
+    assert(!snag_binary_batch_encode(&raw, &before, records, 6u, 0u, &after));
+    assert(!binary_fixture_write(source.log_fd, raw.data, raw.len) &&
+        !snag_sync_file(source.log_fd));
+    char error[256];
+    struct snag_binary_recovery recovery;
+    struct snag_binary_checkpoint_sources sources = {0};
+    /* Independent complete interpretation of this stopped six-record fixture;
+     * no claim of application admission or default four-file resume. */
+    int replay = snag_store_reconcile_binary(&source, &session, NULL, NULL,
+        &recovery, &sources, error, sizeof(error));
+    if (replay < 0) fprintf(stderr, "grouped voice replay at %llu: %s\n",
+        (unsigned long long)recovery.problem_seq, error);
+    assert(!replay);
+    assert(session.next_seq == 7u && session.voice_history.adopted_seq == 5u &&
+        session.voice_history.begin.next_seq == 2u &&
+        session.voice_history.begin.offset == SNAG_BINARY_HEADER_SIZE);
+    struct snag_binary_identity identity = {.created_ms = 42u};
+    identity.id[0] = 17u;
+    struct snag_binary_index_tree tree = {0};
+    assert(!snag_binary_index_tree_append_batch(NULL, &tree, &identity,
+        &before, &after, raw.data, raw.len));
+    struct snag_binary_producer producer = {0};
+    struct probe probe = {.caller = pthread_self()};
+    struct snag_binary_io_ops ops = {.write_full = probe_write, .sync_file = probe_sync,
+        .opaque = &probe};
+    session.log_fd = dup(source.log_fd);
+    session.lock_fd = dup(source.log_fd);
+    assert(session.log_fd >= 0 && session.lock_fd >= 0);
+    assert(!snag_session_bind_binary(&session, &identity, &after, &tree, &producer,
+        &sources, &ops, error, sizeof(error)));
+    session.on_commit = native_effect;
+    session.on_commit_opaque = &probe;
+    int directory;
+    char *path;
+    native_voice_access(&session, &directory, &path, false);
+    assert(snag_seek(session.log_fd, 13, SEEK_SET) == 13);
+    const char *name = "canary";
+    json_t *canary = json_object(), *output = canary;
+    assert(canary);
+    assert(snag_binary_checkpoint_record_project(session.log_fd, &after, NULL,
+        &records[5], 6u, &name, &output) == 1 && output == canary && !strcmp(name, "canary"));
+    json_decref(canary);
+    json_t *context = NULL;
+    assert(!snag_session_voice_context(&session, &context, error, sizeof(error)));
+    assert(json_is_true(json_object_get(context, "history_complete")) &&
+        json_integer_value(json_object_get(context, "history_as_of_seq")) == 6 &&
+        !strcmp(snag_json_string(context, "recent_asr"), "Imported original ASR") &&
+        !strcmp(snag_json_string(context, "recent_generated_reply"), "Imported generated reply") &&
+        !strcmp(snag_json_string(context, "recent_asr_origin_session_id"),
+            "dddddddddddddddddddddddddddddddd") &&
+        json_integer_value(json_object_get(context, "recent_asr_seq")) == 3 &&
+        json_integer_value(json_object_get(context, "recent_asr_origin_seq")) == 1 &&
+        json_integer_value(json_object_get(context, "recent_generated_reply_origin_seq")) == 2);
+    json_decref(context);
+    assert(snag_seek(session.log_fd, 0, SEEK_CUR) == 13);
+    assert(!snag_session_commit(&session, "voice_event", native_voice_data("user",
+        "Live original ASR after adoption"), NULL, error, sizeof(error)));
+    assert(!snag_session_voice_context(&session, &context, error, sizeof(error)));
+    assert(json_is_true(json_object_get(context, "history_complete")) &&
+        !strcmp(snag_json_string(context, "recent_asr"), "Live original ASR after adoption") &&
+        !strcmp(snag_json_string(context, "recent_asr_origin_session_id"), session.id) &&
+        json_integer_value(json_object_get(context, "recent_asr_origin_seq")) == 7 &&
+        !strcmp(snag_json_string(context, "recent_generated_reply"), "Imported generated reply"));
+    json_decref(context);
+    assert(!session.goal_id[0] && !session.active_turn && !session.pending_queue_count);
+    snag_session_close(&session);
+    snag_session_close(&source);
+    assert(!close(directory) && !rmdir(path));
+    free(path);
+    snag_binary_checkpoint_sources_free(&sources);
+    snag_buf_free(&raw);
+    for (unsigned i = 0u; i < 5u; ++i) snag_buf_free(&payload[i]);
 }
 
 static void
@@ -1742,6 +2033,9 @@ test_store_binary_io(void)
     test_native_result_retry();
     for (unsigned int variant = 0u; variant < 8u; ++variant)
         test_native_voice_import(variant);
+    test_native_voice_context(false);
+    test_native_voice_context(true);
+    test_native_voice_grouped();
     test_group_ack();
     test_failed_commit(true, 1u);
     test_failed_commit(false, 1u);

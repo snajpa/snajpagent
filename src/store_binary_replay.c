@@ -382,8 +382,9 @@ resolve_voice(const struct replay_context *context, const struct snag_binary_rec
     int rc = snag_binary_checkpoint_batch_find(context->fd, &context->through, context->access,
         value->begin_seq, &scratch, &batch, &before);
     if (!rc) {
-        /* The logical start can be inside a batch. The native cursor resumes
-         * from its authenticated predecessor and skips earlier records. */
+        /* Reducer-compatibility coordinates name the containing predecessor,
+         * not a JSONL cut. Native consumers derive the exact decoded cut from
+         * begin_seq; neither this offset nor digest is a per-record position. */
         value->begin_offset = before.end;
         memcpy(value->begin_sha256, before.digest, sizeof(value->begin_sha256));
         value->native = false;
@@ -601,6 +602,44 @@ project_record(const struct replay_context *context, const struct snag_session *
 }
 
 int
+snag_binary_checkpoint_record_project(int fd, const struct snag_binary_anchor *through,
+    const struct snag_binary_checkpoint_index *access, const struct snag_binary_record *record,
+    uint64_t sequence, const char **type, json_t **out)
+{
+    if (fd < 0 || !through || !record || !sequence || sequence >= through->next_seq ||
+        !type || !out) return snag_errno(EINVAL);
+    const char *name;
+    json_t *data = NULL;
+    int rc;
+    if (record->kind == SNAG_BINARY_CHECKPOINT_RECEIPT) {
+        struct snag_binary_checkpoint_receipt receipt;
+        rc = snag_binary_checkpoint_receipt_decode(record, &receipt);
+        if (rc < 0) return -1;
+        name = "session_checkpoint";
+        data = json_object();
+    } else if (record->kind == SNAG_BINARY_LEGACY_CHECKPOINT) {
+        struct snag_binary_legacy_checkpoint marker;
+        rc = snag_binary_legacy_checkpoint_decode(record, &marker);
+        if (rc < 0) return -1;
+        name = "session_checkpoint";
+        data = json_object();
+    } else if (record->flags) {
+        if (record->flags != SNAG_BINARY_RECORD_OPTIONAL ||
+            snag_binary_event_name((enum snag_binary_kind)record->kind)) return snag_errno(EINVAL);
+        return 1;
+    } else {
+        struct replay_context context = {.fd = fd, .through = *through,
+            .sequence = sequence, .access = access, .source_projection = true};
+        rc = project_record(&context, NULL, record, &name, &data);
+        if (rc < 0) return -1;
+    }
+    if (!data) return snag_errno(ENOMEM);
+    *type = name;
+    *out = data;
+    return 0;
+}
+
+int
 snag_binary_checkpoint_projection_read(int fd, const struct snag_binary_anchor *through,
     const struct snag_binary_checkpoint_index *access, uint64_t wanted,
     const char **type, json_t **out)
@@ -624,31 +663,8 @@ snag_binary_checkpoint_projection_read(int fd, const struct snag_binary_anchor *
             rc = snag_errno(EINVAL);
             goto done;
         }
-        const char *name;
-        json_t *data = NULL;
-        if (record.kind == SNAG_BINARY_CHECKPOINT_RECEIPT) {
-            struct snag_binary_checkpoint_receipt receipt;
-            rc = snag_binary_checkpoint_receipt_decode(&record, &receipt);
-            if (rc < 0) goto done;
-            name = "session_checkpoint";
-            data = json_object();
-            if (!data) { rc = snag_errno(ENOMEM); goto done; }
-        } else if (record.kind == SNAG_BINARY_LEGACY_CHECKPOINT) {
-            struct snag_binary_legacy_checkpoint marker;
-            rc = snag_binary_legacy_checkpoint_decode(&record, &marker);
-            if (rc < 0) goto done;
-            name = "session_checkpoint";
-            data = json_object();
-            if (!data) { rc = snag_errno(ENOMEM); goto done; }
-        } else {
-            struct replay_context context = {.fd = fd, .through = *through,
-                .sequence = wanted, .access = access, .source_projection = true};
-            rc = project_record(&context, NULL, &record, &name, &data);
-            if (rc < 0) goto done;
-        }
-        *type = name;
-        *out = data;
-        rc = 0;
+        rc = snag_binary_checkpoint_record_project(fd, through, access, &record,
+            wanted, type, out);
         goto done;
     }
     if (rc > 0) rc = snag_errno(EINVAL);

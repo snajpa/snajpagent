@@ -2244,6 +2244,40 @@ still establishes source identity, prefix membership, ancestry and immutability.
 The existing contiguous checkpoint-suffix reader uses this same traversal; sparse
 old working-set selection remains separate and grants no arbitrary-history access.
 
+### Native voice snapshot cursor
+
+Native voice snapshots retain an exact native cut in their private incremental
+projection, independently of the legacy cursor-shaped semantic root. Adoption
+still persists only its native begin sequence. A begin inside a multi-record
+batch is captured at its decoded record boundary; the reducer-compatibility
+predecessor offset/digest is never sent to a JSONL history reader or treated as
+a per-record hash. The existing JSONL snapshot path is unchanged.
+
+Guarded cursor traversal requires installed, independently admitted working-set
+custody. Every visited old record must match an exact entry, kind, turn, decoded
+offset and containing canonical batch digest. Missing old observations return
+unavailable even when the semantic core's own closure is complete; a sparse
+working set is not arbitrary-history permission. The newer suffix remains
+explicitly bounded by the live engine's acknowledged anchor. There is no NULL
+access fallback or prefix scan to repair missing custody.
+
+Borrowed typed records project directly through the existing source hydrator,
+without rereading their containing record or reinterpreting it against final
+core state. Unknown optional metadata advances the cut without observations.
+The existing byte-paged snapshot budget now measures decoded native record
+bytes. Accepted pauses can publish an honest incomplete snapshot; read/projection
+failure discards the private cache and publishes nothing. Neither path changes
+authoritative session state or gives archived observations request authority.
+Imported original ASR and generated replies retain their independent originating
+session/sequence; newer live observations update only their own speaker's slot.
+
+Permanent tests reproduce the old native-to-JSONL dispatch failure, exercise
+incremental paging and unavailable old observations, and resume an adopted root
+inside one six-record batch including unknown optional metadata. Guarded cursor
+tests cover all grouped exact cuts/ranges, observed cancellation points, sparse
+old gaps and the independently bounded newer suffix. These are local native
+fixture receipts, not default four-file lifecycle or live voice acceptance.
+
 ### Native writer provenance restoration
 
 Writer working provenance has an atomic bounded restore path for independently

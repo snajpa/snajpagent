@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Read incremental native voice snapshots at exact batch cuts with pinned old
+  source custody, preserving imported/live observation provenance and honest
+  unavailable-history failures without JSONL cursor assumptions.
+
 - Resume native record traversal at exact decoded batch cuts, without fabricated
   per-record hashes or JSONL offsets, through the existing bounded suffix reader.
 

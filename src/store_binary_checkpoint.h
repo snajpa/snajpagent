@@ -37,6 +37,16 @@ int snag_binary_checkpoint_projection_read(int fd, const struct snag_binary_anch
     const struct snag_binary_checkpoint_index *, uint64_t sequence,
     const char **type, json_t **out);
 
+/* Project one borrowed, independently admitted canonical record beneath through.
+ * Hydrates references through pinned working-set access plus the bounded suffix,
+ * without rereading this record or interpreting it against final semantic state.
+ * Return0 replaces outputs,1 skips unknown optional metadata,-1 leaves outputs
+ * untouched. Source identity/ancestry/immutability/membership remain caller proof;
+ * this lookup grants no receipt authority, execution or semantic admission. */
+int snag_binary_checkpoint_record_project(int fd, const struct snag_binary_anchor *through,
+    const struct snag_binary_checkpoint_index *, const struct snag_binary_record *, uint64_t,
+    const char **type, json_t **out);
+
 /* Restore this recipe directly from canonical sources and complete pinned
  * working-set closure. Recent/history membership, metadata and lifecycle require
  * joint checkpoint admission; this materializer grants no resume authority.
