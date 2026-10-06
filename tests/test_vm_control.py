@@ -111,7 +111,7 @@ class ControlTests(unittest.TestCase):
         self.owner.status('detached')
         self.assertEqual(self.owner_draft()['text'], 'retained 👩‍💻-final')
         saved = next(iter(self.snapshots().values()))['state']
-        self.assertEqual(saved['v'], 5)
+        self.assertEqual(saved['v'], 6)
         self.assertEqual(saved['buffers'][0]['draft'], 'retained 👩‍💻-final')
         self.assertTrue(saved['buffers'][0]['control'])
         self.assertEqual(self.inputs(), [])
@@ -181,7 +181,7 @@ class ControlTests(unittest.TestCase):
         saved['state']['v'] = 3
         saved['state'].pop('classic')
         buffer = saved['state']['buffers'][0]
-        del buffer['base'], buffer['conflict']
+        del buffer['base'], buffer['conflict'], buffer['reports']
         buffer['draft'], buffer['cursor'] = '', 0
         path.write_text(json.dumps(saved))
         resumed = self.start('--resume', 'offline', expect=b'history')
@@ -339,15 +339,15 @@ class ControlTests(unittest.TestCase):
         child = self.start('-N', 'rejection')
         child.command('attach ' + self.owner.sid)
         child.until(b'ATTACHED')
-        child.write(b'i/status\r')
-        child.repaint_until(b'command capability')
+        child.write(b'i/config\r')
+        child.repaint_until(b'Command needs :classic')
         self.assertEqual(self.inputs(), [])
         self.escape(child)
         child.command('recover')
         child.repaint_until(b'Submission recovered')
         rows = self.wait_snapshot(lambda rows:
                                   next(iter(rows.values()))['state']['buffers'][0]['draft']
-                                  == '/status')
+                                  == '/config')
         self.assertIsNone(next(iter(rows.values()))['state']['buffers'][0]['pending'])
         child.finish('close')
         self.owner.status('detached')

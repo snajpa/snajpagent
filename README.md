@@ -401,7 +401,9 @@ Enter, `:session ID` and `vm --session ID` resume one. Startup runs in the
 background, and saved-workspace restoration leaves stopped owners stopped.
 `:close` saves the owner draft and detaches; `:q` requests owner shutdown.
 The composer supports counted Vim motions, delete/change/yank, a shared paste
-register and draft-local undo/redo.
+register and draft-local undo/redo. Slash-command output opens retained reports;
+`:reports` lists them, and `:history` returns to the session. Report positions
+survive workspace resume; `:q` closes a report while preserving its owner.
 Conflicting saved/owner drafts offer `:draft local` and `:draft owner`.
 `:classic [SESSION_ID]` opens an owner's full terminal, including owners started
 before workspace support. `/s d` returns to the saved workspace.

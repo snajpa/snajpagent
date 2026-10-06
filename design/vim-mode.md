@@ -76,8 +76,13 @@ implemented capability and framing contract. WITH_VM=0 omits this endpoint.
 The backend now accepts typed rollout commands through that mailbox and retains
 command echoes/results as immutable private presentation files. Completed command
 receipts survive live-owner reconnect; commands needing terminal/IRC adapters
-return a terminal requirement before effects. Report buffers, deferred-result
-notifications and automated terminal transactions remain frontend integration work.
+return a terminal requirement before effects. The frontend now submits typed
+commands and opens immediate output in report windows. `:reports` lists saved
+references; `:report [ID]` reopens one. Version6 workspace snapshots retain report
+metadata and positions while accepting earlier layouts. Background reads verify
+private regular-file access, exact bytes and SHA256, then redact and build the
+wrapped document. Loaded reports support splits and navigation without rereads.
+Deferred-result notifications and automated terminal transactions remain work.
 The frontend connection manager now shares one draft and owner lease per session
 across split windows. Workspace state v3 adds drafts and pending request identities,
 accepts v1/v2 layouts, and saves before transmitting a submission. Reconnect queries

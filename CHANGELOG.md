@@ -15,6 +15,12 @@
   receipts without resending prompts. Drafts survive detach and workspace resume.
   `:close` preserves owners; `:q`/`:qa` request normal shutdown with draft guards.
 
+- Open supported slash-command results as retained workspace report buffers.
+  Add `:reports` and `:report [ID]`, saved report positions, splits and navigation.
+  Read private reports in the background with length/digest verification and
+  secret redaction. Preserve newer typing and loaded text after source errors.
+  Show FAST in attached transcript status when priority service is selected.
+
 - Add semantic command receipts and private immutable reports in the owner
   backend, including exactly-once `/fast` dispatch across reconnects. Command
   echoes and immediate results stay outside model context. Preserve reports

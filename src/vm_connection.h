@@ -16,11 +16,12 @@ struct snag_vm_connection {
     struct snag_vm_editor editor;
     size_t cursor;
     json_t *pending, *state, *draft_base, *owner_draft, *draft_sent, *conflict_draft;
+    json_t *reports;
     char message[256];
     uint64_t generation, deadline, receipt_at, revision;
     uint64_t draft_edit, draft_deadline;
     bool control, bound, hello, query, submitting, quitting, exited;
-    bool drafts, draft_ready, draft_dirty, draft_conflict, draft_get;
+    bool commands, drafts, draft_ready, draft_dirty, draft_conflict, draft_get;
     bool send_pending, reconcile_pending, detaching, detach_sent;
 };
 

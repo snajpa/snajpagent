@@ -1854,8 +1854,39 @@ or changed owner leaves the submission retained without automatic retransmission
 Inspect history, then use
 .B :recover
 with an empty draft to recover its text if needed. A refused submission also
-remains recoverable. Plain rollout text is supported; slash commands, IRC routes
-and attachments remain under development.
+remains recoverable. Rollout text and the commands listed below are supported.
+IRC routes and attachments remain under development.
+.SS "Read command output"
+Submit a slash command from the transcript composer. Supported commands include
+/help, /status, /history, /model, /fast, /effort, /context, /state, /goal,
+/steering, /banner, /configure, /compact, /yield, /verbose and /session list or name.
+The command echo and immediate result open a retained report when that transcript
+is still focused and its next draft is empty. Newer typing remains in the composer;
+use
+.B :reports
+to list retained output, or
+.B :report [ID_PREFIX]
+to open the latest report or an exact unique prefix. Enter opens a selected report.
+.PP
+Reports support gg, G, j/k, page movement and splits. Use
+.B :history
+to return to the associated session.
+.B :q
+closes a report window and preserves its owner; :qa still requests owner shutdown.
+Report references and positions survive named-workspace resume, including after
+an owner has stopped. Reading saved reports never starts an owner.
+.PP
+Each report is a private immutable session file. Background loading verifies
+its length and digest, redacts known secrets and renders terminal controls inert.
+Changed or missing files display an error; a previously loaded view remains readable.
+R retries the source. Explicit session deletion removes its reports.
+Reports stay outside model context. Deferred controls initially report acceptance;
+their later result notifications remain under development.
+.PP
+/fast confirms ON or OFF in its report; an attached transcript also shows FAST
+when the owner selects priority service. Commands needing terminal interaction
+remain retained for :recover and execution through :classic. They are not executed
+by the semantic frontend. An owner without command support preserves the draft.
 .SS "Use an owner's full terminal"
 .B :classic [SESSION_ID]
 opens an existing native owner's terminal, including owners started before
@@ -1905,10 +1936,9 @@ Completed dispatch returns an immutable report containing the command and its
 immediate output. Reports stay outside model context, survive owner restarts,
 and are removed by explicit session deletion. Deferred controls acknowledge
 scheduling before their later completion. Commands needing a terminal transaction
-return that requirement before execution. Workspace report buffers and automatic
-command handoff remain under development; use
-.B :classic
-for slash commands in the current workspace frontend.
+return that requirement before execution. The workspace retains report references
+and opens their contents on its background reader. Automatic terminal transactions
+remain under development; use :classic for commands requiring an external terminal.
 .PP
 The backend also offers revisioned rollout drafts. Bound controllers can read,
 replace and subscribe to a draft, using its expected revision to reject stale edits.

@@ -4,6 +4,7 @@
 #include "history_view.h"
 #include "json.h"
 #include "vm_connection.h"
+#include "vm_report.h"
 
 #include <assert.h>
 #include <errno.h>
@@ -29,6 +30,105 @@ await_page(struct snag_vm_reader *reader, uint64_t generation)
     }
     assert(result->generation == generation);
     return result;
+}
+
+static bool
+cancel_report(void *opaque)
+{
+    unsigned int *calls = opaque;
+    return ++*calls >= 3u;
+}
+
+static void
+report_test(struct snag_store *store, const char *root)
+{
+    struct snag_session source;
+    char error[256] = "";
+    snag_session_init(&source);
+    assert(snag_session_create(store, &source, root, "default", "reports", "high",
+        error, sizeof(error)) == 0);
+    char sid[SNAG_ID_HEX_LEN + 1u], id[SNAG_ID_HEX_LEN + 1u], name[64];
+    memcpy(sid, source.id, sizeof(sid));
+    assert(snag_random_id(id) == 0);
+    (void)snprintf(name, sizeof(name), ".view-report-%s", id);
+    const char *values[] = {"test-secret-value"};
+    struct snag_wire_secrets secrets = {.values = values, .count = 1u};
+    size_t length = 7u * 1024u * 1024u;
+    unsigned char *data = malloc(length);
+    assert(data);
+    memset(data, 'x', length);
+    memcpy(data + 65530u, values[0], strlen(values[0]));
+    data[0] = 0xff;
+    data[1] = 0;
+    struct snag_sha256 digest;
+    char hash[SNAG_SHA256_HEX_LEN + 1u];
+    snag_sha256_init(&digest);
+    snag_sha256_update(&digest, data, length);
+    snag_sha256_final_hex(&digest, hash);
+    int fd = snag_create_private_at(source.dir_fd, name, true);
+    assert(fd >= 0 && snag_write_full(fd, data, length) == 0 && close(fd) == 0);
+    json_t *report = json_pack("{s:s,s:I,s:s,s:s}", "id", id, "bytes", (json_int_t)length,
+        "sha256", hash, "command", "/status test-secret-value");
+    assert(snag_vm_report_valid(report));
+    unsigned int calls = 0u;
+    assert(!snag_vm_report_read(store, sid, report, 80u, &secrets,
+        cancel_report, &calls, error, sizeof(error)) && errno == ECANCELED);
+    /* Report reads remain available after the session's owner exits. */
+    snag_session_close(&source);
+    struct snag_vm_reader *reader = snag_vm_reader_open(store, &secrets, error, sizeof(error));
+    assert(reader);
+    struct snag_vm_read_request request = {.kind = SNAG_VM_READ_REPORT, .report = report,
+        .columns = 80u};
+    memcpy(request.session_id, sid, sizeof(sid));
+    uint64_t generation = snag_vm_reader_request(reader, &request);
+    assert(generation);
+    assert(json_object_set_new(report, "command", json_string("changed after request")) == 0);
+    struct snag_vm_read_result *result = await_page(reader, generation);
+    assert(!result->error_number && result->document && !result->events);
+    assert(!strcmp(snag_json_string(result->request.report, "command"),
+        "/status test-secret-value"));
+    const char *text = snag_json_string(snag_vm_document_block(result->document, 0u), "text");
+    assert(text && !strncmp(text, "\\xff\\x00", 8u) && strstr(text, "[redacted]") &&
+        !strstr(text, values[0]));
+    assert(snag_vm_document_rows(result->document) > 90000u);
+    snag_vm_read_result_free(result);
+    assert(snag_session_locate(store, &source, sid, NULL, NULL, error, sizeof(error)) == 0);
+    /* Same-size edits, truncation and permissions fail closed. */
+    assert(snag_unlink_at(source.dir_fd, name, false) == 0);
+    data[10] = 'y';
+    fd = snag_create_private_at(source.dir_fd, name, true);
+    assert(fd >= 0 && snag_write_full(fd, data, length) == 0 && close(fd) == 0);
+    result = await_page(reader, snag_vm_reader_request(reader, &request));
+    assert(result->error_number == ESTALE && !result->document);
+    snag_vm_read_result_free(result);
+    assert(snag_unlink_at(source.dir_fd, name, false) == 0);
+    fd = snag_create_private_at(source.dir_fd, name, true);
+    assert(fd >= 0 && snag_write_full(fd, data, length - 1u) == 0 && close(fd) == 0);
+    result = await_page(reader, snag_vm_reader_request(reader, &request));
+    assert(result->error_number == ESTALE && !result->document);
+    snag_vm_read_result_free(result);
+#ifndef _WIN32
+    assert(fchmodat(source.dir_fd, name, 0644, 0) == 0);
+    result = await_page(reader, snag_vm_reader_request(reader, &request));
+    assert(result->error_number && !result->document);
+    snag_vm_read_result_free(result);
+    assert(snag_unlink_at(source.dir_fd, name, false) == 0);
+    assert(symlinkat("events.jsonl", source.dir_fd, name) == 0);
+    result = await_page(reader, snag_vm_reader_request(reader, &request));
+    assert(result->error_number && !result->document);
+    snag_vm_read_result_free(result);
+#endif
+    assert(snag_unlink_at(source.dir_fd, name, false) == 0);
+    result = await_page(reader, snag_vm_reader_request(reader, &request));
+    assert(result->error_number == ENOENT && !result->document);
+    snag_vm_read_result_free(result);
+    assert(json_object_set_new(report, "id", json_string("../../events.jsonl")) == 0);
+    assert(!snag_vm_report_valid(report));
+    assert(!snag_vm_reader_request(reader, &request));
+    json_decref(report);
+    snag_vm_reader_close(reader);
+    snag_session_close(&source);
+    free(data);
 }
 
 static json_t *
@@ -438,6 +538,7 @@ main(void)
     snag_vm_reader_close(reader);
     snag_session_close(&source);
     mode_identity_test(&store, root);
+    report_test(&store, root);
     snag_store_close(&store);
     free(root);
     puts("test_vm_reader: ok");

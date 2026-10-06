@@ -8,11 +8,12 @@
 #include "wire.h"
 
 struct snag_vm_reader;
-enum snag_vm_read_kind { SNAG_VM_READ_HISTORY, SNAG_VM_READ_SESSIONS };
+enum snag_vm_read_kind { SNAG_VM_READ_HISTORY, SNAG_VM_READ_SESSIONS, SNAG_VM_READ_REPORT };
 
 struct snag_vm_read_request {
     enum snag_vm_read_kind kind;
     uint64_t stored_limit;
+    json_t *report;
     /* Immutable full IDs of other open buffers whose verified descriptors stay
      * cached. Request copies the array. Omit to retain only this request's view. */
     json_t *retained_sessions;
