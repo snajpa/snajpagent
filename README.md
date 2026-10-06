@@ -396,7 +396,9 @@ tracked `config.mk`; `make WITH_*=…` stays an explicit override.
 
 The development `snajpagent vm` frontend provides named workspaces, saved
 Vim-style splits, paged transcripts with retrospective verbosity, and prompt
-editing through live owner attachment. Enter attaches from the session picker;
+editing through live owner attachment. `:new [NAME]` creates an agent; picker
+Enter, `:session ID` and `vm --session ID` resume one. Startup runs in the
+background, and saved-workspace restoration leaves stopped owners stopped.
 `:close` saves the owner draft and detaches; `:q` requests owner shutdown.
 The composer supports counted Vim motions, delete/change/yank, a shared paste
 register and draft-local undo/redo.

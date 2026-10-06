@@ -127,7 +127,18 @@ handoff directions, with cooked modes restored for suspension and final exit.
 Signal exit restores the outer workspace handlers without reopening controllers.
 The classic editor also consumes a completed UTF-8 scalar before redraw can
 reenter input, preserving following bytes during long Unicode pastes.
-New/stopped-owner launch, command/report adapters, cross-page tool
+Explicit :new, :session, picker Enter and vm --session now launch fresh owners
+or resume stopped sessions asynchronously. A same-binary exec starts the normal
+native owner before any application threads exist. A temporary PTY preserves
+cooked launch modes and geometry through frontend loss; the surviving owner
+creates its usual private controlling PTY. A private inherited stream reports
+readiness only after endpoint publication and initial orientation, or reports
+startup failure. The workspace polls launches alongside its existing connections,
+reaps only short-lived bootstrap children and never signals launched owners.
+Each pending launch targets its requesting window until that window is closed or
+repurposed. Workspace restoration keeps launch requests inert; new owners remain
+in the agent catalogue when the frontend disappears before readiness.
+Command/report adapters, cross-page tool
 dependencies, search/selection/clipboard and IRC conversations still need integration.
 This development frontend has
 not been installed on the operator's machines or merged into the release line.
@@ -328,7 +339,8 @@ NAME` renames it and `:workspace save` writes a snapshot immediately. `:workspac
 opens the workspace picker. Selecting another workspace saves and detaches the
 current one, then restores the destination; a failed destination open keeps the
 current workspace usable. `:sessions` opens the agent-session picker, `:new [NAME]`
-creates an agent session, `:buffer ADDRESS` selects a buffer and `:help` shows the
+creates an agent session, `:session [ID]` explicitly resumes the current or selected
+agent, `:buffer ADDRESS` selects a buffer and `:help` shows the
 supported controls. Session names, endpoint names and peer nicks in examples are
 ordinary user-selected identifiers, never special roles.
 

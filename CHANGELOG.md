@@ -9,11 +9,17 @@
   mouse input, paged retained transcripts, retrospective verbosity and terminal
   restoration. Transcript anchors and FOLLOW/HOLD state survive workspace resume.
   Idle live-history observation avoids rereading unchanged checkpoints or repainting.
-  Attach from the picker or with `:attach`, edit and submit plain rollout prompts,
+  Attach with `:attach`, edit and submit plain rollout prompts,
   and share each session's draft/controller across splits. Saved submissions
   retain their request IDs until durable receipts arrive; reconnect queries
   receipts without resending prompts. Drafts survive detach and workspace resume.
   `:close` preserves owners; `:q`/`:qa` request normal shutdown with draft guards.
+
+- Add asynchronous agent creation with `:new [NAME]` and explicit resume through
+  picker Enter, `:session [ID]` and `vm --session ID`. Reuse live owners and retain
+  normal saved-session recovery. Startup reports failures in the workspace,
+  preserves other windows and survives frontend loss. Saved-workspace restoration
+  leaves stopped owners stopped and never replays launch requests.
 
 - Add `:classic [SESSION_ID]` for full-terminal attachment from a workspace,
   including existing owners without semantic support. Flush workspace drafts

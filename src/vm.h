@@ -2,6 +2,6 @@
 #ifndef SNAJPAGENT_VM_H
 #define SNAJPAGENT_VM_H
 
-int snag_vm_main(int argc, char **argv);
+int snag_vm_main(int argc, char **argv, const char *program);
 
 #endif

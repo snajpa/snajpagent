@@ -27,6 +27,7 @@
 #include <util.h>
 #endif
 #include <signal.h>
+#include <spawn.h>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -95,6 +96,104 @@ snag_session_commit_set(struct snag_session_packet *packet, const unsigned char 
 }
 
 #ifdef SNAG_SESSION_NATIVE
+extern char **environ;
+
+static int
+launch_descriptor(int *fd)
+{
+    if (*fd > 4) return 0;
+#ifdef F_DUPFD_CLOEXEC
+    int copy = fcntl(*fd, F_DUPFD_CLOEXEC, 5);
+#else
+    int copy = fcntl(*fd, F_DUPFD, 5);
+#endif
+    if (copy < 0) return -1;
+    if (snag_fd_cloexec(copy) < 0) {
+        int error = errno;
+        (void)close(copy);
+        return snag_errno(error);
+    }
+    (void)close(*fd);
+    *fd = copy;
+    return 0;
+}
+
+int
+snag_session_launch(const char *program, const struct snag_term_host *terminal,
+    const char *dotdir, const char *id, const char *name, uint64_t *child)
+{
+    int pair[2], master = -1, slave = -1;
+    if (!program || program[0] != '/') return snag_errno(EINVAL);
+    if (snag_session_stream_pair(pair) < 0) return -1;
+    posix_spawn_file_actions_t files;
+    posix_spawnattr_t attributes;
+    bool have_files = false, have_attributes = false;
+    /* A temporary PTY retains the original cooked modes and current geometry
+     * through exec, even if the workspace's real terminal disappears meanwhile.
+     * Its inherited master stays open until the owner has made its own PTY. */
+    struct winsize geometry;
+    struct termios modes = terminal->input_mode;
+    int error;
+    if (ioctl(STDIN_FILENO, TIOCGWINSZ, &geometry) < 0) {
+        error = errno;
+        goto out;
+    }
+    /* The private classic renderer needs its minimum width even while the
+     * semantic workspace displays a narrower terminal or a hidden split. */
+    if (geometry.ws_col < SNAG_TERM_MIN_COLUMNS) geometry.ws_col = SNAG_TERM_MIN_COLUMNS;
+    if (openpty(&master, &slave, NULL, &modes, &geometry) < 0 ||
+        snag_fd_cloexec(master) < 0 || snag_fd_cloexec(slave) < 0 ||
+        launch_descriptor(&pair[0]) < 0 || launch_descriptor(&pair[1]) < 0 ||
+        launch_descriptor(&master) < 0 || launch_descriptor(&slave) < 0) {
+        error = errno;
+        goto out;
+    }
+    error = posix_spawn_file_actions_init(&files);
+    if (error) goto out;
+    have_files = true;
+    if ((error = posix_spawnattr_init(&attributes))) goto out;
+    have_attributes = true;
+    /* Keep source descriptors above the report/socket and temporary master
+     * destinations, even if the reader thread closed an older low descriptor. */
+    if ((error = posix_spawn_file_actions_addclose(&files, pair[0])) ||
+        (error = posix_spawn_file_actions_adddup2(&files, pair[1], 3)) ||
+        (error = posix_spawn_file_actions_addclose(&files, pair[1])) ||
+        (error = posix_spawn_file_actions_adddup2(&files, master, 4)) ||
+        (error = posix_spawn_file_actions_addclose(&files, master))) goto out;
+    for (int fd = 0; fd <= 2; ++fd)
+        if ((error = posix_spawn_file_actions_adddup2(&files, slave, fd))) goto out;
+    if ((error = posix_spawn_file_actions_addclose(&files, slave))) goto out;
+    sigset_t empty;
+    sigemptyset(&empty);
+    if ((error = posix_spawnattr_setsigmask(&attributes, &empty)) ||
+        (error = posix_spawnattr_setpgroup(&attributes, 0)) ||
+        (error = posix_spawnattr_setflags(&attributes,
+            POSIX_SPAWN_SETSIGMASK | POSIX_SPAWN_SETPGROUP))) goto out;
+    char *const arguments[] = {(char *)program, "--internal-session-owner",
+        (char *)dotdir, id ? "--resume" : "--new", (char *)(id ? id : name ? name : ""),
+        NULL};
+    pid_t pid;
+    error = posix_spawn(&pid, program, &files, &attributes, arguments, environ);
+    if (!error) *child = (uint64_t)pid;
+out:
+    if (have_attributes) (void)posix_spawnattr_destroy(&attributes);
+    if (have_files) (void)posix_spawn_file_actions_destroy(&files);
+    (void)close(pair[1]);
+    if (master >= 0) (void)close(master);
+    if (slave >= 0) (void)close(slave);
+    if (!error) return pair[0];
+    (void)close(pair[0]);
+    return snag_errno(error);
+}
+
+void
+snag_session_launch_reap(uint64_t *child)
+{
+    if (!*child) return;
+    pid_t rc = waitpid((pid_t)*child, NULL, WNOHANG);
+    if (rc > 0 || (rc < 0 && errno == ECHILD)) *child = 0u;
+}
+
 void
 snag_session_process_close(struct snag_session_process *process)
 {
@@ -585,6 +684,25 @@ snag_session_process_redraw(const struct snag_session_process *process)
 {
     (void)process;
     return snag_errno(ENOTSUP);
+}
+
+int
+snag_session_launch(const char *program, const struct snag_term_host *terminal,
+    const char *dotdir, const char *id, const char *name, uint64_t *child)
+{
+    (void)program;
+    (void)terminal;
+    (void)dotdir;
+    (void)id;
+    (void)name;
+    (void)child;
+    return snag_errno(ENOTSUP);
+}
+
+void
+snag_session_launch_reap(uint64_t *child)
+{
+    (void)child;
 }
 
 int

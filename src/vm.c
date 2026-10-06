@@ -46,7 +46,8 @@ static const char *const help_rows[] = {
     "Ctrl-W +/-: height    Ctrl-W >/<: width    Ctrl-W q: close",
     ":workspace    :workspace name NAME    :workspace save",
     "Workspace names accept quoted text. :q in these pickers closes the window.",
-    "Enter/:attach SESSION: control owner    o/:history SESSION: read-only",
+    "Enter/:session [ID]: resume owner    :new [NAME]: create owner",
+    ":attach [ID]: control a running owner    o/:history SESSION: read-only",
     ":classic [SESSION]: use its full terminal; /s d returns to this workspace",
     "i/a/A: edit prompt    Esc: NORMAL    Enter: submit    Ctrl-J: newline",
     "Composer: h/j/k/l w/b/e 0/^/$ gg/G; counts multiply (2d3w deletes six words).",
@@ -58,7 +59,7 @@ static const char *const help_rows[] = {
 };
 
 struct vm_window {
-    uint64_t id;
+    uint64_t id, launch;
     enum view_kind kind;
     size_t selected, top, composer_top;
     bool center_composer;
@@ -76,6 +77,14 @@ struct vm_window {
     struct snag_journal_cursor begin, end, tail;
 };
 
+struct vm_launch {
+    struct vm_launch *next;
+    struct snag_session_packet packet;
+    int fd;
+    uint64_t child, token;
+    char session[SNAG_ID_HEX_LEN + 1u];
+};
+
 struct vm {
     struct snag_store store;
     struct snag_config config;
@@ -83,6 +92,10 @@ struct vm {
     struct snag_vm_workspace *workspace, *switch_workspace;
     struct snag_vm_reader *reader;
     struct snag_vm_connection *connections;
+    struct vm_launch *launches;
+    char *program;
+    const char *start_session;
+    uint64_t next_launch;
     struct snag_vm_layout *layout;
     struct vm_window *windows;
     size_t count, focus;
@@ -530,6 +543,7 @@ split(struct vm *vm, enum snag_vm_split axis)
     if (copy.kind == VIEW_TRANSCRIPT && !copy.document)
         copy.load = copy.anchor_seq ? LOAD_ANCHOR : LOAD_LAST;
     copy.id = vm->next_window++;
+    copy.launch = 0u;
     vm->windows[vm->count] = copy;
     vm->focus = vm->count++;
     changed(vm);
@@ -571,6 +585,7 @@ view(struct vm *vm, enum view_kind kind)
     window->follow = window->source_failed = false;
     window->follow_at = 0u;
     window->session_id[0] = window->anchor_key[0] = 0;
+    window->launch = 0u;
     window->anchor_seq = 0u;
     window->kind = kind;
     window->selected = window->top = 0u;
@@ -621,6 +636,112 @@ attach(struct vm *vm, const char *selector)
     if (!c->bound) (void)snag_vm_connection_open(c, &vm->store, true);
     notice(vm, c->message);
     changed(vm);
+}
+
+static void
+launch_owner(struct vm *vm, const char *id, const char *name)
+{
+    for (struct vm_launch *job = vm->launches; id && job; job = job->next) {
+        if (job->fd >= 0 && !strcmp(job->session, id)) {
+            vm->windows[vm->focus].launch = job->token;
+            notice(vm, "This owner is already starting");
+            return;
+        }
+    }
+    struct vm_launch *job = calloc(1u, sizeof(*job));
+    if (!job) return;
+    job->fd = snag_session_launch(vm->program, &vm->terminal, vm->store.root_path,
+        id, name, &job->child);
+    if (job->fd < 0) {
+        char error[256];
+        (void)snprintf(error, sizeof(error), "Cannot launch owner: %s", strerror(errno));
+        notice(vm, error);
+        free(job);
+        return;
+    }
+    if (id) memcpy(job->session, id, sizeof(job->session));
+    else view(vm, VIEW_SESSIONS);
+    job->token = ++vm->next_launch;
+    vm->windows[vm->focus].launch = job->token;
+    job->next = vm->launches;
+    vm->launches = job;
+    detach_unused(vm);
+    notice(vm, "Starting owner; workspace remains available. Closing it leaves the owner running.");
+}
+
+static void
+session_request(struct vm *vm, const char *selector)
+{
+    const struct vm_window *window = &vm->windows[vm->focus];
+    if (!*selector) selector = window->kind == VIEW_TRANSCRIPT ? window->session_id :
+        window->kind == VIEW_SESSIONS ? snag_json_string(selected_row(vm, window), "id") : NULL;
+    if (!selector || !*selector) {
+        notice(vm, "Use :session SESSION_ID or select a session");
+        return;
+    }
+    struct snag_session location;
+    snag_session_init(&location);
+    char error[256], id[SNAG_ID_HEX_LEN + 1u];
+    bool live = false;
+    int rc = snag_session_locate(&vm->store, &location, selector, NULL, NULL, error, sizeof(error));
+    if (!rc) {
+        memcpy(id, location.id, sizeof(id));
+        live = snag_session_is_live(&location);
+    }
+    snag_session_close(&location);
+    if (rc < 0) notice(vm, error);
+    else if (live) attach(vm, id);
+    else if (open_history(vm, id)) launch_owner(vm, id, NULL);
+}
+
+static void
+launches_step(struct vm *vm)
+{
+    struct vm_launch **link = &vm->launches;
+    while (*link) {
+        struct vm_launch *job = *link;
+        snag_session_launch_reap(&job->child);
+        int rc = job->fd < 0 ? 0 : snag_session_packet_read(job->fd, &job->packet);
+        if (rc) {
+            (void)close(job->fd);
+            job->fd = -1;
+            const char *data = (const char *)job->packet.bytes + SNAG_SESSION_HEADER;
+            size_t length = rc > 0 ? snag_session_packet_length(&job->packet) : 0u;
+            bool ready = rc > 0 && snag_session_packet_type(&job->packet) == SNAG_SESSION_READY &&
+                length == SNAG_ID_HEX_LEN;
+            char id[SNAG_ID_HEX_LEN + 1u] = "";
+            if (ready) {
+                memcpy(id, data, length);
+                ready = snag_hex_is_lower(id, SNAG_ID_HEX_LEN);
+            }
+            char message[512];
+            if (ready) (void)snprintf(message, sizeof(message), "Session ready: %s", id);
+            else if (rc > 0 && snag_session_packet_type(&job->packet) == SNAG_SESSION_ERROR)
+                (void)snprintf(message, sizeof(message), "%.*s", (int)length, data);
+            else (void)snprintf(message, sizeof(message),
+                "Owner startup report lost; inspect :sessions before trying again");
+            refresh(vm);
+            for (size_t i = 0u; i < vm->count; ++i) {
+                if (vm->windows[i].launch != job->token) continue;
+                vm->windows[i].launch = 0u;
+                if (!ready) continue;
+                size_t focus = vm->focus;
+                bool composer = vm->composer, insert = vm->insert;
+                vm->focus = i;
+                attach(vm, id);
+                vm->focus = focus;
+                if (focus != i) {
+                    vm->composer = composer;
+                    vm->insert = insert;
+                }
+            }
+            notice(vm, message);
+        }
+        if (job->fd < 0 && !job->child) {
+            *link = job->next;
+            free(job);
+        } else link = &job->next;
+    }
 }
 
 static int
@@ -864,7 +985,17 @@ command(struct vm *vm, const char *text)
         }
     } else if (!strcmp(word, "history") && *rest) open_history(vm, rest);
     else if (!strcmp(word, "attach")) attach(vm, rest);
-    else if (!strcmp(word, "verbosity")) {
+    else if (!strcmp(word, "session")) session_request(vm, rest);
+    else if (!strcmp(word, "new")) {
+        char *name = NULL;
+        const char *tail = "";
+        if (*rest && snag_irc_address_operand(rest, &name, &tail, error, sizeof(error)) < 0)
+            notice(vm, error);
+        else if (*tail || (name && !snag_session_name_valid(name)))
+            notice(vm, "Use :new [NAME]; quote a name containing spaces");
+        else launch_owner(vm, NULL, name);
+        free(name);
+    } else if (!strcmp(word, "verbosity")) {
         struct vm_window *window = &vm->windows[vm->focus];
         uint64_t level;
         if (window->kind != VIEW_TRANSCRIPT || snag_parse_count(rest, &level) < 0 ||
@@ -1301,7 +1432,7 @@ input_event(void *opaque, const struct snag_vm_input_event *event)
             const char *id = snag_json_string(row, "id");
             if (id && window->kind == VIEW_WORKSPACES) (void)restore_workspace(vm, id);
             else if (id && window->kind == VIEW_SESSIONS)
-                attach(vm, id);
+                session_request(vm, id);
         }
     }
     return 0;
@@ -1319,6 +1450,10 @@ input_ready(struct vm *vm, int timeout)
         if (c->channel.fd >= 0) ++count;
         timeout = snag_vm_connection_wait(c, now, timeout);
     }
+    for (struct vm_launch *job = vm->launches; job; job = job->next) {
+        if (job->fd >= 0) ++count;
+        else if (job->child && (timeout < 0 || timeout > 100)) timeout = 100;
+    }
     struct pollfd *fds = calloc(count, sizeof(*fds));
     if (!fds) return -1;
     fds[0] = (struct pollfd){.fd = STDIN_FILENO,
@@ -1330,6 +1465,8 @@ input_ready(struct vm *vm, int timeout)
         fds[at++] = (struct pollfd){.fd = c->channel.fd,
             .events = POLLIN | (c->channel.output ? POLLOUT : 0)};
     }
+    for (struct vm_launch *job = vm->launches; job; job = job->next)
+        if (job->fd >= 0) fds[at++] = (struct pollfd){.fd = job->fd, .events = POLLIN};
     int ready = poll(fds, (nfds_t)count, timeout);
     if (ready >= 0) ready = (fds[0].revents & POLLIN ? SNAG_TERM_WAIT_INPUT : 0) |
         (fds[0].revents & (POLLHUP | POLLERR | POLLNVAL) ? SNAG_TERM_WAIT_END : 0);
@@ -1796,7 +1933,9 @@ interactive(struct vm *vm)
     entered = true;
     if (enter_screen(vm, true) < 0) goto out;
     refresh(vm);
+    if (vm->start_session) session_request(vm, vm->start_session);
     while (!vm->quit && !stopped) {
+        launches_step(vm);
         connections_step(vm);
         if (vm->quit || stopped) break;
         if (vm->classic_ready && classic_run(vm) < 0) goto out;
@@ -1893,6 +2032,7 @@ static void
 usage(void)
 {
     (void)puts("Usage: snajpagent vm [--dotdir DIR] [-N NAME | --resume WORKSPACE | --last]\n"
+        "                         [--session SESSION_ID]\n"
         "       snajpagent vm [--dotdir DIR] -l [STORED_COUNT]\n"
         "       snajpagent vm --help | --version\n\n"
         "Open a Vim workspace with the session picker; :help lists available controls.\n"
@@ -1900,7 +2040,7 @@ usage(void)
 }
 
 int
-snag_vm_main(int argc, char **argv)
+snag_vm_main(int argc, char **argv, const char *program)
 {
     const char *dotdir_option = NULL, *name = NULL, *resume = NULL;
     bool list = false, last = false;
@@ -1930,6 +2070,8 @@ snag_vm_main(int argc, char **argv)
         if (!strcmp(arg, "--dotdir") && !dotdir_option && i + 1 < argc) dotdir_option = argv[++i];
         else if (!strcmp(arg, "-N") && !name && i + 1 < argc) name = argv[++i];
         else if (!strcmp(arg, "--resume") && !resume && i + 1 < argc) resume = argv[++i];
+        else if (!strcmp(arg, "--session") && !vm.start_session && i + 1 < argc)
+            vm.start_session = argv[++i];
         else if (!strcmp(arg, "--last") && !last) last = true;
         else if ((!strcmp(arg, "-l") || !strcmp(arg, "--list")) && !list) {
             list = true;
@@ -1937,7 +2079,8 @@ snag_vm_main(int argc, char **argv)
                 snag_parse_count(argv[++i], &vm.stored_limit) < 0) goto invalid;
         } else goto invalid;
     }
-    if ((unsigned int)(name != NULL) + (resume != NULL) + last + list > 1u) goto invalid;
+    if ((unsigned int)(name != NULL) + (resume != NULL) + last + list > 1u ||
+        (list && vm.start_session)) goto invalid;
     if (!list && (!snag_isatty(STDIN_FILENO) || !snag_isatty(STDOUT_FILENO) ||
         !snag_term_host_capable())) {
         (void)snprintf(error, sizeof(error), "vm requires an interactive terminal");
@@ -1953,6 +2096,8 @@ snag_vm_main(int argc, char **argv)
         if (rc < 0) goto failed;
         goto out;
     }
+    vm.program = snag_program_path(program);
+    if (!vm.program) goto failed;
     vm.windows = calloc(1u, sizeof(*vm.windows));
     vm.layout = snag_vm_layout_new(1u);
     if (!vm.windows || !vm.layout) goto failed;
@@ -1981,6 +2126,14 @@ failed:
     (void)fprintf(stderr, "snajpagent: %s\n", error);
     rc = 2;
 out:
+    while (vm.launches) {
+        struct vm_launch *job = vm.launches;
+        vm.launches = job->next;
+        if (job->fd >= 0) (void)close(job->fd);
+        snag_session_launch_reap(&job->child);
+        free(job);
+    }
+    free(vm.program);
     snag_vm_reader_close(vm.reader);
     snag_vm_connections_free(vm.connections);
     if (vm.switch_workspace) {
@@ -2005,10 +2158,11 @@ out:
 }
 #else
 int
-snag_vm_main(int argc, char **argv)
+snag_vm_main(int argc, char **argv, const char *program)
 {
     (void)argc;
     (void)argv;
+    (void)program;
     (void)fprintf(stderr, "snajpagent: Vim mode is unavailable in this build (WITH_VM=0)\n");
     return 2;
 }

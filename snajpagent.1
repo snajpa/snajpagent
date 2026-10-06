@@ -1646,7 +1646,7 @@ its export for wrapped attachment. Read-only model turns reject send_file.
 The development workspace opens with
 .BR "snajpagent vm" .
 It provides session/workspace pickers, retained transcript browsing, prompt
-editing, live owner attachment and persistent split layouts.
+editing, owner creation/resumption and persistent split layouts.
 Workspace browsing does not start model turns or IRC connections.
 Runtime activation is explicit; ordinary startup retains its terminal interface.
 .PP
@@ -1670,9 +1670,9 @@ Use j/k or arrows to select, gg/G for the first/last row, Ctrl-D/U to move half
 a window and / to filter picker metadata. R refreshes the lists; selection
 follows the same full ID when activity reorders agent rows. The session picker
 uses the classic list's attached/detached/running/stored ordering and data.
-Enter in the session picker attaches to an existing owner with workspace support.
-An older or stopped owner leaves readable history and an attachment diagnostic;
-start or attach to it with the ordinary snajpagent --resume command.
+Enter in the session picker resumes the selected agent: it attaches to a live
+workspace-capable owner or starts a stopped one. An older live owner leaves
+readable history and an attachment diagnostic; :classic opens its full terminal.
 In the workspace picker, Enter restores the selected workspace. A failed open
 or invalid snapshot keeps the current workspace usable.
 .PP
@@ -1753,6 +1753,32 @@ state is reported and preserved. Bracketed paste inserts literal text in command
 or filter input; it cannot execute a command by itself. Escape returns to normal
 mode, Ctrl-L redraws and Ctrl-Z suspends on supported platforms. Clean exit and
 handled shutdown signals restore cooked input, cursor, mouse and screen modes.
+.SS "Create and resume agent sessions"
+.B :new [NAME]
+starts an agent using the current configuration in the workspace's dotdir.
+Quote a name containing spaces. The agent name belongs to the new session;
+.B vm -N
+names the workspace itself.
+.PP
+.B :session [SESSION_ID]
+attaches a live owner or starts a stopped one with its saved resume options,
+provider/model selection, working directory and ordinary recovery behavior.
+With no operand, it selects the current transcript or highlighted agent row.
+.B vm --session SESSION_ID
+performs the same explicit action at workspace startup, optionally alongside
+-N, --resume or --last. An active goal or queued work can continue according to
+the normal agent resume rules. Browsing history and restoring a workspace alone
+leave stopped owners stopped.
+.PP
+Startup runs asynchronously. Other windows, commands and drafts remain usable.
+When ready, the owner opens in the requesting window. Selecting another buffer,
+closing that window or switching workspaces leaves the new owner detached;
+find it in :sessions. Closing or losing the frontend during startup also leaves
+the owner running. Startup errors appear in the workspace. If the startup
+report is lost, inspect :sessions before issuing another :new command.
+Saved workspaces never replay launch commands. New owners keep their own private
+terminal and can later be reached through ordinary snajpagent --resume or :classic.
+Native owner launch requires a supported POSIX host.
 .SS "Attach and compose"
 .B :attach SESSION_ID
 opens and controls an existing workspace-capable owner. With no operand,

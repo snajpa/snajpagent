@@ -61,6 +61,13 @@ bool snag_session_host_supported(void);
 int snag_session_process_start(struct snag_session_process *);
 /* Close owned descriptors only; never signal the child or any process group. */
 void snag_session_process_close(struct snag_session_process *);
+/* Exec a fresh single-threaded bootstrap before it forks the native owner.
+ * The returned private stream sends one READY session ID or ERROR diagnostic.
+ * Closing it never cancels startup. Reap only the short-lived bootstrap. */
+struct snag_term_host;
+int snag_session_launch(const char *program, const struct snag_term_host *terminal,
+    const char *dotdir, const char *id, const char *name, uint64_t *child);
+void snag_session_launch_reap(uint64_t *child);
 /* Redraw an external foreground job on this owner's private controlling PTY. */
 int snag_session_process_redraw(const struct snag_session_process *);
 /* Caller holds the session's writer lock throughout listener lifetime. Never

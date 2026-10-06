@@ -5878,8 +5878,26 @@ render_room_history(void *opaque, const struct snag_irc_event *event)
         .kind = SNAG_UI_IRC, .data.irc = event});
 }
 
+static void
+owner_report(int *fd, const char *session, const char *error)
+{
+    if (*fd < 0) return;
+    struct snag_session_packet packet = {0};
+    char message[512];
+    if (error) {
+        (void)snprintf(message, sizeof(message), "%s%s%s", *error ? error : "Owner startup failed",
+            session && *session ? "; session " : "", session ? session : "");
+    }
+    const char *text = error ? message : session;
+    if (snag_session_packet_set(&packet, error ? SNAG_SESSION_ERROR : SNAG_SESSION_READY,
+        text, strlen(text)) == 0) (void)snag_session_packet_write(*fd, &packet);
+    (void)close(*fd);
+    *fd = -1;
+}
+
 static int
-run_owner(const struct snag_cli *cli, const char *program, struct snag_session_process *process)
+run_owner(const struct snag_cli *cli, const char *program, struct snag_session_process *process,
+    int report_fd)
 {
     struct snag_cli effective = *cli, saved;
     json_t *saved_options = NULL;
@@ -5888,7 +5906,7 @@ run_owner(const struct snag_cli *cli, const char *program, struct snag_session_p
     struct app_state app;
     struct snag_shutdown signal_handlers;
     struct snag_config config;
-    char error[256];
+    char error[256] = "";
     const char *invalid_message = error;
     char *dotdir = NULL;
     char *config_path = NULL;
@@ -5910,8 +5928,12 @@ run_owner(const struct snag_cli *cli, const char *program, struct snag_session_p
     snag_store_init(&app.store);
     snag_session_init(&app.session);
     (void)snag_http_init();
-    if (snag_ui_init(&app.ui) < 0) return 3;
+    if (snag_ui_init(&app.ui) < 0) {
+        owner_report(&report_fd, NULL, "Cannot initialize owner UI");
+        return 3;
+    }
     if (process && snag_ui_session_start(&app.ui, process) < 0) {
+        owner_report(&report_fd, NULL, "Cannot start native owner UI");
         snag_ui_free(&app.ui);
         return 3;
     }
@@ -6131,6 +6153,7 @@ run_owner(const struct snag_cli *cli, const char *program, struct snag_session_p
         rc = snag_ui_leaving(&app.ui) ? 0 : 6;
         goto out;
     }
+    owner_report(&report_fd, app.session.id, NULL);
     rc = interactive_loop(&app, cli->prompt);
     goto out;
 invalid: rc = 2;
@@ -6140,6 +6163,7 @@ fail:
 report:
     (void)snag_ui_text(&app.ui, SNAG_UI_ERROR, invalid_message);
 out:
+    owner_report(&report_fd, app.session.log_fd >= 0 ? app.session.id : NULL, invalid_message);
     if (app.session.log_fd >= 0 &&
         snag_app_save_resume_options(&app, error, sizeof(error)) < 0) {
         (void)snag_ui_text(&app.ui, SNAG_UI_ERROR, error);
@@ -6310,15 +6334,15 @@ run_session(const struct snag_cli *cli, const char *program)
         rc = attach_session(cli, error, sizeof(error));
     } else if (cli->execute || cli->list || !snag_session_host_supported() ||
                !snag_term_host_capable()) {
-        return run_owner(cli, program, NULL);
+        return run_owner(cli, program, NULL, -1);
     } else {
         rc = snag_session_process_start(&process);
         if (rc < 0) {
-            if (errno == ENOTTY) return run_owner(cli, program, NULL);
+            if (errno == ENOTTY) return run_owner(cli, program, NULL, -1);
             (void)snag_errorf(error, sizeof(error),
                 "cannot start native session: %s", strerror(errno));
         } else if (rc == 0) {
-            rc = run_owner(cli, program, &process);
+            rc = run_owner(cli, program, &process, -1);
             snag_session_process_close(&process);
             return rc;
         } else {
@@ -6363,5 +6387,51 @@ snag_app_run(const struct snag_cli *cli, const char *program)
     }
     int rc = run_session(&selected, program);
     free(id);
+    return rc;
+}
+
+int
+snag_app_owner_main(int argc, char **argv)
+{
+    int report_fd = 3;
+    if (argc != 5 || snag_fd_cloexec(4) < 0 || snag_fd_cloexec(report_fd) < 0 ||
+        snag_session_peer_verify(report_fd) < 0) {
+        char error[256];
+        (void)snprintf(error, sizeof(error), "Invalid owner bootstrap channel: %s",
+            strerror(errno));
+        owner_report(&report_fd, NULL, error);
+        return 2;
+    }
+    struct snag_cli cli;
+    snag_cli_init(&cli);
+    cli.dotdir = argv[2];
+    if (!strcmp(argv[3], "--resume") && snag_hex_is_lower(argv[4], SNAG_ID_HEX_LEN)) {
+        cli.resume = true;
+        cli.resume_id = argv[4];
+    } else if (!strcmp(argv[3], "--new") &&
+        (!*argv[4] || snag_session_name_valid(argv[4]))) {
+        cli.session_name = *argv[4] ? argv[4] : NULL;
+    } else {
+        owner_report(&report_fd, NULL, "Invalid owner launch arguments");
+        return 2;
+    }
+    /* This exec starts before any UI/HTTP/reader threads. The bootstrap closes
+     * its initial controller immediately; the surviving owner keeps its PTY. */
+    struct snag_session_process process;
+    int rc = snag_session_process_start(&process);
+    (void)close(4);
+    if (rc < 0) {
+        char error[256];
+        (void)snprintf(error, sizeof(error), "Cannot start native owner: %s", strerror(errno));
+        owner_report(&report_fd, cli.resume_id, error);
+        return 3;
+    }
+    if (!rc) rc = run_owner(&cli, argv[0], &process, report_fd);
+    else {
+        (void)close(report_fd);
+        rc = 0;
+    }
+    snag_session_process_close(&process);
+    snag_cli_free(&cli);
     return rc;
 }

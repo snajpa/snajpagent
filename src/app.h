@@ -6,5 +6,6 @@
 char *snag_app_dotdir(const char *override, char *error, size_t error_size);
 
 int snag_app_run(const struct snag_cli *cli, const char *program);
+int snag_app_owner_main(int argc, char **argv);
 
 #endif

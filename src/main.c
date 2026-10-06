@@ -25,8 +25,10 @@ run(int argc, char **argv)
 
     snag_ignore_sigpipe();
     if (argc > 1 && !strcmp(argv[1], "remote")) return snag_remote_main(argc - 2, argv + 2);
-    if (argc > 1 && !strcmp(argv[1], "vm")) return snag_vm_main(argc - 2, argv + 2);
+    if (argc > 1 && !strcmp(argv[1], "vm")) return snag_vm_main(argc - 2, argv + 2, argv[0]);
     snag_office_program(argv[0]);
+    if (argc > 1 && !strcmp(argv[1], "--internal-session-owner"))
+        return snag_app_owner_main(argc, argv);
     (void)snag_office_worker(argc,argv);
     snag_cli_init(&cli);
     if (snag_cli_parse(&cli, argc, argv, error, sizeof(error)) < 0) {
