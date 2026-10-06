@@ -27,7 +27,30 @@ struct unicode_range {
     uint16_t properties;
 };
 
+struct unicode_fold {
+    uint32_t codepoint, folded[3];
+    unsigned int count;
+};
+
 #include "unicode_tables.inc"
+
+unsigned int
+snag_unicode_casefold(uint32_t cp, uint32_t folded[3])
+{
+    size_t low = 0u, high = sizeof(unicode_folds) / sizeof(unicode_folds[0]);
+    while (low < high) {
+        size_t middle = low + (high - low) / 2u;
+        const struct unicode_fold *entry = unicode_folds + middle;
+        if (cp < entry->codepoint) high = middle;
+        else if (cp > entry->codepoint) low = middle + 1u;
+        else {
+            for (unsigned int i = 0u; i < entry->count; ++i) folded[i] = entry->folded[i];
+            return entry->count;
+        }
+    }
+    folded[0] = cp;
+    return 1u;
+}
 
 static unsigned int
 properties(uint32_t cp)

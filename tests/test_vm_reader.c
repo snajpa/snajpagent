@@ -336,6 +336,157 @@ public_full_pages_test(struct snag_store *store, const char *root)
     snag_session_close(&source);
 }
 
+static void
+search_blocks_test(void)
+{
+    struct snag_vm_anchor start = {.heading = true}, found;
+    bool wrapped;
+    json_t *block = json_pack("{s:s,s:i,s:i,s:i,s:s}", "key", "public/0", "seq", 1,
+        "source_begin", 0, "source_end", 21, "text", "Straße Σςσ FFI ﬃ");
+    static const char *const queries[] = {"STRASSE", "σσσ", "ffi", "ﬃ", "strasse"};
+    static const uint64_t offsets[] = {0u, 8u, 15u, 15u, 0u};
+    for (size_t i = 0u; i < 5u; ++i) {
+        struct snag_vm_search *search = snag_vm_search_open(queries[i], true, false, &start);
+        assert(search && snag_vm_search_block(search, block, NULL, NULL) == 0);
+        assert(snag_vm_search_result(search, &found, &wrapped) && !wrapped);
+        assert(found.byte == offsets[i]);
+        snag_vm_search_close(search);
+    }
+    struct snag_vm_search *search = snag_vm_search_open("STRASSE", false, false, &start);
+    assert(search && snag_vm_search_block(search, block, NULL, NULL) == 0);
+    assert(!snag_vm_search_result(search, &found, &wrapped));
+    snag_vm_search_close(search);
+    json_decref(block);
+    block = json_pack("{s:s,s:i,s:i,s:i,s:s,s:s,s:i}", "key", "event/1/output", "seq", 1,
+        "source_begin", 0, "source_end", 4, "text", "neeD", "handle", "process", "stream", 0);
+    search = snag_vm_search_open("needle", true, false, &start);
+    assert(search && snag_vm_search_block(search, block, NULL, NULL) == 0);
+    assert(!snag_vm_search_result(search, &found, &wrapped));
+    assert(json_object_set_new(block, "key", json_string("event/2/output")) == 0);
+    assert(json_object_set_new(block, "seq", json_integer(2)) == 0);
+    assert(json_object_set_new(block, "source_begin", json_integer(4)) == 0);
+    assert(json_object_set_new(block, "source_end", json_integer(6)) == 0);
+    assert(json_object_set_new(block, "text", json_string("LE")) == 0);
+    assert(snag_vm_search_block(search, block, NULL, NULL) == 0);
+    assert(snag_vm_search_result(search, &found, &wrapped) && !wrapped && found.byte == 0u &&
+        found.seq == 1u && !strcmp(found.key, "event/1/output"));
+    snag_vm_search_close(search);
+    json_decref(block);
+}
+
+static void
+search_history_test(struct snag_store *store, const char *root)
+{
+    static const char id[] = "0123456789abcdef0123456789abcdef";
+    struct snag_session source;
+    snag_session_init(&source);
+    char error[256] = "";
+    assert(snag_session_create(store, &source, root, "default", "search-pages", "high",
+        error, sizeof(error)) == 0);
+    projection_record(&source, "response_started", json_pack("{s:s}", "response_id", id));
+    json_t *items = json_array();
+    assert(items);
+    char *padding = malloc(1152u * 1024u + 1u);
+    assert(padding);
+    memset(padding, 'x', 1152u * 1024u);
+    padding[1152u * 1024u] = '\0';
+    for (unsigned int i = 0u; i < 3u; ++i) {
+        projection_record(&source, "response_output", json_pack("{s:s,s:i,s:i,s:o}",
+            "response_id", id, "index", (int)i, "offset", 0, "item", response_item(padding)));
+        assert(json_array_append_new(items, response_item(padding)) == 0);
+    }
+    free(padding);
+    size_t length = 1024u * 1024u;
+    char *body = malloc(length + 32u);
+    assert(body);
+    memset(body, 'a', length);
+    memcpy(body + length - 3u, "nee", 4u);
+    int64_t boundary = source.log_end;
+    uint64_t seq = source.next_seq;
+    projection_record(&source, "response_output", json_pack("{s:s,s:i,s:i,s:o}",
+        "response_id", id, "index", 3, "offset", 0, "item", response_item(body)));
+    projection_record(&source, "response_output", json_pack("{s:s,s:i,s:I,s:o}",
+        "response_id", id, "index", 3, "offset", (json_int_t)length,
+        "item", response_item("dle test-secret-value")));
+    strcat(body, "dle test-secret-value");
+    assert(json_array_append_new(items, response_item(body)) == 0);
+    projection_record(&source, "response_completed", json_pack("{s:s,s:o}",
+        "response_id", id, "items", items));
+    free(body);
+    const char *values[] = {"test-secret-value"};
+    struct snag_wire_secrets secrets = {.values = values, .count = 1u};
+    struct snag_vm_reader *reader = snag_vm_reader_open(store, &secrets, error, sizeof(error));
+    assert(reader);
+    struct snag_vm_read_request request = {.trusted_tail = true, .project = true,
+        .query = "needle", .columns = 80u};
+    request.search_start.heading = true;
+    request.tail = public_cursor(&source);
+    memcpy(request.session_id, source.id, sizeof(source.id));
+    for (unsigned int i = 0u; i < 3u; ++i) {
+        struct snag_vm_read_result *result = await_page(reader,
+            snag_vm_reader_request(reader, &request));
+        if (result->error_number || !result->found || result->match.seq != seq ||
+            result->match.byte != length - 3u || result->wrapped != (i == 1u))
+            (void)fprintf(stderr, "search %u: %s, found=%d seq=%llu byte=%llu wrap=%d\n", i,
+                result->error, result->found, (unsigned long long)result->match.seq,
+                (unsigned long long)result->match.byte, result->wrapped);
+        assert(!result->error_number && result->found && result->match.seq == seq &&
+            result->match.byte == length - 3u && result->wrapped == (i == 1u));
+        uint64_t bytes, events, total;
+        assert(snag_vm_reader_progress(reader, result->generation, &bytes, &events, &total));
+        assert(bytes == (uint64_t)request.tail.offset && total == bytes &&
+            events + 1u == request.tail.next_seq);
+        request.search_start = result->match;
+        if (i == 1u) { ++request.search_start.byte; request.search_reverse = true; }
+        snag_vm_read_result_free(result);
+    }
+    request.query = "test-secret-value";
+    struct snag_vm_read_result *result = await_page(reader,
+        snag_vm_reader_request(reader, &request));
+    assert(!result->error_number && !result->found);
+    snag_vm_read_result_free(result);
+    projection_record(&source, "response_completed", json_pack("{s:s,s:[o]}",
+        "response_id", "fedcba9876543210fedcba9876543210", "items",
+        response_item("new-tail-marker")));
+    request.query = "new-tail-marker";
+    result = await_page(reader, snag_vm_reader_request(reader, &request));
+    assert(!result->error_number && !result->found);
+    snag_vm_read_result_free(result);
+    request.tail = public_cursor(&source);
+    result = await_page(reader, snag_vm_reader_request(reader, &request));
+    assert(!result->error_number && result->found);
+    snag_vm_read_result_free(result);
+    request.trusted_tail = false;
+    request.refresh = true;
+    result = await_page(reader, snag_vm_reader_request(reader, &request));
+    assert(!result->error_number && result->found && result->best_effort);
+    snag_vm_read_result_free(result);
+    request.trusted_tail = true;
+    request.query = "needle";
+    assert(snag_vm_reader_request(reader, &request));
+    request.query = NULL;
+    request.reverse = true;
+    result = await_page(reader, snag_vm_reader_request(reader, &request));
+    assert(!result->error_number && result->document);
+    snag_vm_read_result_free(result);
+    int fd = openat(source.dir_fd, "events.jsonl", O_RDWR);
+    assert(fd >= 0);
+    char original;
+    assert(pread(fd, &original, 1u, boundary + 5) == 1);
+    assert(pwrite(fd, "!", 1u, boundary + 5) == 1);
+    request.query = "absent";
+    result = await_page(reader, snag_vm_reader_request(reader, &request));
+    assert(result->error_number && !result->found && strstr(result->error, "Search incomplete"));
+    snag_vm_read_result_free(result);
+    assert(pwrite(fd, &original, 1u, boundary + 5) == 1 && close(fd) == 0);
+    snag_vm_reader_close(reader);
+    char prefix[9];
+    memcpy(prefix, source.id, 8u);
+    prefix[8] = '\0';
+    assert(snag_session_delete(store, &source, prefix, NULL, error, sizeof(error)) == 0);
+    snag_session_close(&source);
+}
+
 static bool
 grow_snapshot_source(void *opaque)
 {
@@ -432,6 +583,15 @@ report_test(struct snag_store *store, const char *root)
         !strstr(text, values[0]));
     assert(snag_vm_document_rows(result->document) > 90000u);
     snag_vm_read_result_free(result);
+    request.query = "[redacted]";
+    result = await_page(reader, snag_vm_reader_request(reader, &request));
+    assert(!result->error_number && result->found);
+    snag_vm_read_result_free(result);
+    request.query = values[0];
+    result = await_page(reader, snag_vm_reader_request(reader, &request));
+    assert(!result->error_number && !result->found);
+    snag_vm_read_result_free(result);
+    request.query = NULL;
     assert(snag_session_locate(store, &source, sid, NULL, NULL, error, sizeof(error)) == 0);
     /* Same-size edits, truncation and permissions fail closed. */
     assert(snag_unlink_at(source.dir_fd, name, false) == 0);
@@ -791,6 +951,8 @@ main(void)
     dependency_test(&store, root);
     public_dependency_test(&store, root);
     public_full_pages_test(&store, root);
+    search_blocks_test();
+    search_history_test(&store, root);
     assert(snag_session_create(&store, &source, root, "default", "test-secret-value", "high",
         error, sizeof(error)) == 0);
     source.on_checkpoint = large_context;

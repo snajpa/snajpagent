@@ -4,6 +4,7 @@
 
 #include "store.h"
 #include "vm_document.h"
+#include "vm_search.h"
 #include "wake.h"
 #include "wire.h"
 
@@ -24,7 +25,12 @@ struct snag_vm_read_request {
     char session_id[SNAG_ID_HEX_LEN + 1u];
     bool trusted_tail, refresh, reverse;
     bool project, if_changed, tail_only;
+    bool blocks_only;
     unsigned int verbosity, columns;
+    /* A nonempty query scans the complete pinned history/report on the worker. */
+    const char *query;
+    bool ignorecase, search_reverse;
+    struct snag_vm_anchor search_start;
     /* tail is the owner's bound when trusted; previous is the already
      * displayed bound, independently used by if_changed and tail_only. */
     struct snag_journal_cursor tail, previous, cursor;
@@ -44,6 +50,8 @@ struct snag_vm_read_result {
      * Raw encoded output and provider payloads remain private to the worker. */
     json_t *blocks;
     struct snag_vm_document *document;
+    struct snag_vm_anchor match;
+    bool found, wrapped;
     bool best_effort, incomplete, more, unchanged;
     int error_number;
     char error[256];
@@ -63,6 +71,8 @@ void snag_vm_reader_cancel(struct snag_vm_reader *);
 snag_wake_fd snag_vm_reader_fd(const struct snag_vm_reader *);
 /* Nonblocking; ownership transfers to the caller. NULL means no completed work. */
 struct snag_vm_read_result *snag_vm_reader_take(struct snag_vm_reader *);
+bool snag_vm_reader_progress(struct snag_vm_reader *, uint64_t generation,
+    uint64_t *bytes, uint64_t *events, uint64_t *total);
 void snag_vm_read_result_free(struct snag_vm_read_result *);
 
 #endif

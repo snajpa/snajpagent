@@ -34,6 +34,7 @@ struct snag_vm_reader {
     atomic_uint_fast64_t generation;
     atomic_bool stop;
     uint64_t working_generation;
+    uint64_t progress_generation, progress_bytes, progress_events, progress_total;
     struct snag_vm_read_result *pending, *completed;
     struct source_view *views, *current;
 };
@@ -45,6 +46,7 @@ snag_vm_read_result_free(struct snag_vm_read_result *result)
     json_decref(result->request.retained_sessions);
     json_decref(result->request.report);
     json_decref(result->request.known_reports);
+    free((char *)result->request.query);
     json_decref(result->events);
     json_decref(result->catalog);
     json_decref(result->blocks);
@@ -571,10 +573,84 @@ out:
 }
 
 static void
+read_page(struct snag_vm_reader *, struct snag_vm_read_result *);
+
+static void
+search_progress(struct snag_vm_reader *reader, uint64_t bytes, uint64_t events, uint64_t total)
+{
+    (void)pthread_mutex_lock(&reader->lock);
+    reader->progress_generation = reader->working_generation;
+    reader->progress_bytes = bytes;
+    reader->progress_events = events;
+    reader->progress_total = total;
+    snag_wakeup_send(reader->wake[1]);
+    (void)pthread_mutex_unlock(&reader->lock);
+}
+
+static int
+search_page(struct snag_vm_reader *reader, struct snag_vm_read_result *result)
+{
+    const struct snag_vm_read_request *request = &result->request;
+    struct snag_vm_search *search = snag_vm_search_open(request->query, request->ignorecase,
+        request->search_reverse, &request->search_start);
+    if (!search) return -1;
+    int rc = -1;
+    struct snag_vm_read_result page = {.request = *request};
+    page.request.query = NULL;
+    page.request.blocks_only = page.request.project = true;
+    page.request.reverse = page.request.tail_only = page.request.if_changed = false;
+    page.request.before_seq = 0u;
+    page.request.cursor = (struct snag_journal_cursor){0};
+    for (;;) {
+        read_page(reader, &page);
+        if (page.error_number) {
+            (void)snprintf(result->error, sizeof(result->error), "Search incomplete: %.230s",
+                page.error);
+            errno = page.error_number;
+            goto out;
+        }
+        result->tail = page.tail;
+        if (!page.request.cursor.offset) {
+            /* Later pages pin this observed bound using the cursor API. Keep
+             * its original certification, including an old owner's suffix. */
+            result->best_effort = page.best_effort;
+            result->incomplete = page.incomplete;
+        }
+        page.request.tail = page.tail;
+        page.request.trusted_tail = request->kind == SNAG_VM_READ_HISTORY;
+        page.request.refresh = false;
+        for (size_t i = 0u;; ++i) {
+            const json_t *block = page.document ? snag_vm_document_block(page.document, i) :
+                json_array_get(page.blocks, i);
+            if (!block) break;
+            if (snag_vm_search_block(search, block, read_canceled, reader) < 0) goto out;
+        }
+        search_progress(reader, (uint64_t)page.cursor.offset,
+            page.cursor.next_seq ? page.cursor.next_seq - 1u : 0u, (uint64_t)page.tail.offset);
+        if (!page.more) break;
+        page.request.cursor = page.cursor;
+        json_decref(page.blocks);
+        page.blocks = NULL;
+    }
+    result->found = snag_vm_search_result(search, &result->match, &result->wrapped);
+    rc = 0;
+out:
+    snag_vm_search_close(search);
+    json_decref(page.events);
+    json_decref(page.blocks);
+    snag_vm_document_free(page.document);
+    return rc;
+}
+
+static void
 read_page(struct snag_vm_reader *reader, struct snag_vm_read_result *result)
 {
     const struct snag_vm_read_request *request = &result->request;
     retain_views(reader, request);
+    if (request->query) {
+        if (search_page(reader, result) < 0) goto failed;
+        return;
+    }
     if (request->kind == SNAG_VM_READ_REPORTS) {
         result->catalog = snag_vm_report_catalog(reader->store, request->session_id,
             read_canceled, reader, &result->incomplete, result->error, sizeof(result->error));
@@ -666,9 +742,11 @@ read_page(struct snag_vm_reader *reader, struct snag_vm_read_result *result)
         json_decref(result->events);
         result->events = NULL;
         if (!result->blocks) goto failed;
-        result->document = snag_vm_document_open(result->blocks,
-            request->columns ? request->columns : 80u, read_canceled, reader);
-        if (!result->document) goto failed;
+        if (!request->blocks_only) {
+            result->document = snag_vm_document_open(result->blocks,
+                request->columns ? request->columns : 80u, read_canceled, reader);
+            if (!result->document) goto failed;
+        }
     }
     return;
 failed:
@@ -811,6 +889,8 @@ snag_vm_reader_request(struct snag_vm_reader *reader, const struct snag_vm_read_
         return 0u;
     }
     if ((request->kind == SNAG_VM_READ_REPORT && !snag_vm_report_valid(request->report)) ||
+        (request->query && ((!*request->query || strlen(request->query) > SNAG_MAX_DIRECT_PROMPT) ||
+         (request->kind != SNAG_VM_READ_HISTORY && request->kind != SNAG_VM_READ_REPORT))) ||
         (request->retained_sessions && !json_is_array(request->retained_sessions)) ||
         (request->kind == SNAG_VM_READ_REPORTS && !json_is_array(request->known_reports))) {
         errno = EINVAL;
@@ -840,9 +920,11 @@ snag_vm_reader_request(struct snag_vm_reader *reader, const struct snag_vm_read_
     result->request.report = request->report ? json_deep_copy(request->report) : NULL;
     result->request.known_reports = request->known_reports ?
         json_deep_copy(request->known_reports) : NULL;
+    result->request.query = request->query ? strdup(request->query) : NULL;
     if ((request->retained_sessions && !result->request.retained_sessions) ||
         (request->report && !result->request.report) ||
-        (request->known_reports && !result->request.known_reports)) {
+        (request->known_reports && !result->request.known_reports) ||
+        (request->query && !result->request.query)) {
         snag_vm_read_result_free(result);
         return 0u;
     }
@@ -874,6 +956,21 @@ snag_vm_reader_take(struct snag_vm_reader *reader)
     reader->completed = NULL;
     (void)pthread_mutex_unlock(&reader->lock);
     return result;
+}
+
+bool
+snag_vm_reader_progress(struct snag_vm_reader *reader, uint64_t generation,
+    uint64_t *bytes, uint64_t *events, uint64_t *total)
+{
+    (void)pthread_mutex_lock(&reader->lock);
+    bool current = generation && reader->progress_generation == generation;
+    if (current) {
+        *bytes = reader->progress_bytes;
+        *events = reader->progress_events;
+        *total = reader->progress_total;
+    }
+    (void)pthread_mutex_unlock(&reader->lock);
+    return current;
 }
 
 void

@@ -16,5 +16,7 @@ size_t snag_grapheme_next(const unsigned char *, size_t);
 int snag_grapheme_width(const unsigned char *, size_t, bool ambiguous_wide);
 /* Editor words: blank, Unicode letter/number/underscore, other nonblank. */
 unsigned int snag_unicode_word_class(uint32_t);
+/* Unicode default full case folding (C + F), without normalization or locale. */
+unsigned int snag_unicode_casefold(uint32_t, uint32_t folded[3]);
 
 #endif

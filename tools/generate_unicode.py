@@ -12,6 +12,7 @@ from pathlib import Path
 from urllib.request import urlopen
 
 INPUTS = {
+    'CaseFolding.txt': 'ff8d8fefbf123574205085d6714c36149eb946d717a0c585c27f0f4ef58c4183',
     'auxiliary/GraphemeBreakProperty.txt': 'd6b51d1d2ae5c33b451b7ed994b48f1f4dc62b2272a5831e7fd418514a6bae89',
     'auxiliary/GraphemeBreakTest.txt': 'e2d134d2c52919bace503ebb6a551c1855fe1a1faec18478c78fff254a1793ec',
     'DerivedCoreProperties.txt': '24c7fed1195c482faaefd5c1e7eb821c5ee1fb6de07ecdbaa64b56a99da22c08',
@@ -53,7 +54,7 @@ def main():
         sources[Path(name).name] = data.decode('utf-8')
     values = array('H', [0]) * 0x110000
     for name, text in sources.items():
-        if name == 'GraphemeBreakTest.txt':
+        if name in ('GraphemeBreakTest.txt', 'CaseFolding.txt'):
             continue
         for low, high, props in records(text):
             bits = 0
@@ -89,6 +90,15 @@ def main():
                 output.append(f'    {{0x{low:x}u, 0x{cp - 1:x}u, 0x{values[low]:x}u}},')
             low = cp
     output.append('};')
+    output.append('static const struct unicode_fold unicode_folds[] = {')
+    for cp, _, props in records(sources['CaseFolding.txt']):
+        if props[0] not in ('C', 'F'):
+            continue
+        folded = [int(value, 16) for value in props[1].split()]
+        assert 1 <= len(folded) <= 3
+        values = ', '.join(f'0x{value:x}u' for value in folded)
+        output.append(f'    {{0x{cp:x}u, {{{values}}}, {len(folded)}u}},')
+    output.append('};')
     (ROOT / 'src/unicode_tables.inc').write_text('\n'.join(output) + '\n')
     fixture = ROOT / 'tests/fixtures/unicode-17.0.0'
     fixture.mkdir(parents=True, exist_ok=True)
@@ -97,7 +107,7 @@ def main():
         '# SPDX-License-Identifier: Unicode-3.0\n'
         '# Generated from the pinned official file; trailing comment whitespace normalized.\n'
         + normalized + '\n')
-    print('unicode: generated', len(output) - 6, 'property ranges')
+    print('unicode: generated property and full case-folding tables')
 
 
 if __name__ == '__main__':

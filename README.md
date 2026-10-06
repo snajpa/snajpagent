@@ -404,6 +404,8 @@ The composer supports counted Vim motions, delete/change/yank, a shared paste
 register and draft-local undo/redo. Slash-command output opens retained reports;
 `:reports` lists them, and `:history` returns to the session. Report positions
 survive workspace resume; `:q` closes a report while preserving its owner.
+Search the current transcript or report with `/TEXT`, `?TEXT` and `n`/`N`.
+`/search TEXT` invokes the same local search from the composer; Ctrl-C cancels it.
 Deferred controls add completion reports, available through `:reports` after reconnect.
 The report catalogue also recovers output after owner restart. `/cat PATH` opens
 a retained file snapshot; repeating it reads a fresh copy into another report.

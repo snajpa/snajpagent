@@ -1731,6 +1731,32 @@ text and state; text absent from their terminal snapshot is labelled unconfirmed
 The current history snapshot determines these labels and contents. R refreshes
 held output when the response later completes.
 .PP
+In a transcript or report, /TEXT searches forward and ?TEXT searches backward;
+n repeats the previous direction and N reverses it. Empty search input reuses the
+previous query. Search is literal UTF-8 and case-sensitive. Use
+.B :set ignorecase
+for Unicode full case folding, or
+.B :set noignorecase
+to restore exact case. Folding uses Unicode 17 default mappings, including
+multi-character mappings such as sharp s to ss; text normalization is unchanged.
+.PP
+Search covers the active view at its current verbosity, including headings and
+unloaded retained pages. Adjacent chunks of one response or output stream retain
+their overlap. A report searches only that report. The background scan shows
+source-byte/event progress and checks a fixed history boundary; n can include
+new output on its next scan. Wraparound is reported. Ctrl-C cancels a running
+search before requesting a model interruption. Navigation or a verbosity/view
+change cancels obsolete work and retains the query. Corruption reports an
+incomplete search. Search moves only the focused window and shows its cursor at
+the matched source position, including after resize.
+.PP
+The composer command
+.B /search TEXT
+invokes this local search and displays the entered command with its result.
+.B /search
+without text opens search entry. These commands also work while reading a stored
+session. Search text stays outside model prompts and session history.
+.PP
 .B :sessions
 opens the agent picker;
 .B :workspaces

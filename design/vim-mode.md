@@ -183,7 +183,18 @@ response crossing a page edge; adjacent pages reuse its verified snapshot, and a
 unfinished-response scan resumes from the previously inspected position. A verified
 sequence-to-cursor seek preserves the visible page cursor. Both scan directions
 cover all bytes once, including bodies larger than the4MiB scheduling quantum.
-Search/selection/clipboard and IRC conversations still need integration.
+Whole-history/report search now runs on the cancellable reader, with /, ?, n/N,
+local /search command entry, source positions, wrap feedback and byte/event
+progress. Each scan pins its first verified boundary and preserves its original
+committed/best-effort certification. Streaming literal matching retains overlap
+between adjacent fragments of one public item or process stream, independently
+of page boundaries; unrelated fields remain separate. Unicode 17 default full
+case folding is explicit through :set ignorecase/noignorecase, with complete
+source-codepoint boundaries and no normalization. Search memory scales with the
+query; it does not retain the scanned journal in RAM. Cold scans inspect the
+whole active buffer in chronological order, choosing the nearest directional
+match or wrap candidate. Reports stay scoped to their immutable snapshot.
+Visual selection/clipboard and IRC conversations still need integration.
 This development frontend has
 not been installed on the operator's machines or merged into the release line.
 

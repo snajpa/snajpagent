@@ -4,6 +4,11 @@
 
 ## Unreleased
 
+- Search complete Vim transcripts and reports with /, ?, n/N and local /search.
+  Keep source positions across pages and reflow, report progress and wraparound,
+  cancel without interrupting the model, and offer explicit Unicode case folding.
+  Searches use the selected verbosity and keep query text outside model context.
+
 - Reconcile completed/corrected response text across Vim history pages. Preserve
   each page's source ranges, add only the unstreamed terminal tail, retain
   unconfirmed fragments after failure, and update unfinished responses when the

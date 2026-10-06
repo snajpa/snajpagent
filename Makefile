@@ -97,7 +97,7 @@ COMMON_SRC += src/vm.c
 ifeq ($(WITH_VM),1)
 COMMON_SRC += src/session_view.c src/vm_connection.c src/vm_report.c
 COMMON_SRC += src/vm_editor.c
-COMMON_SRC += src/vm_reader.c src/vm_grid.c src/unicode.c src/vm_workspace.c src/vm_layout.c
+COMMON_SRC += src/vm_reader.c src/vm_search.c src/vm_grid.c src/unicode.c src/vm_workspace.c src/vm_layout.c
 COMMON_SRC += src/vm_input.c src/vm_text.c
 COMMON_SRC += src/vm_public.c src/vm_source.c
 COMMON_SRC += src/vm_transcript.c src/vm_document.c
@@ -113,6 +113,7 @@ DEPFLAGS = -MMD -MP
 HEADERS += src/session_view.h src/vm_connection.h src/vm_report.h
 HEADERS += src/vm_editor.h
 HEADERS += src/vm_source.h
+HEADERS += src/vm_search.h
 HEADERS += src/upload_wire.h src/upload_md5.h src/upload.h src/screen_wire.h src/remote.h
 HEADERS += src/vm_workspace.h
 HEADERS += src/vm_layout.h
@@ -274,7 +275,7 @@ tests/test_vm_reader: $(PLATFORM_SRC) src/json.c src/wire.c src/secret_source.c 
 
 tests/test_vm_reader tests/test_vm_transcript: src/history.c src/term.c src/render.c src/render_prepare.c src/vm_transcript.c src/vm_document.c src/vm_text.c src/unicode.c
 tests/test_vm_reader tests/test_vm_transcript tests/test_vm_public: src/vm_source.c
-tests/test_vm_reader: src/vm_connection.c src/vm_editor.c src/session_view.c src/vm_report.c
+tests/test_vm_reader: src/vm_connection.c src/vm_editor.c src/session_view.c src/vm_report.c src/vm_search.c
 
 tests/test_vm_transcript: $(PLATFORM_SRC) src/json.c src/wire.c src/secret_source.c src/instructions.c src/media.c src/turn.c src/store.c src/store_record.c src/store_checkpoint.c src/irc_event.c src/store_lookup.c src/store_lifecycle.c src/history_view.c src/vm_public.c tests/test_vm_transcript.c $(HEADERS)
 
@@ -334,6 +335,7 @@ ifeq ($(WITH_VM),1)
 	python3 tests/test_vm_files.py ./$(BIN)
 	python3 tests/test_vm_dependencies.py ./$(BIN)
 	python3 tests/test_vm_anchors.py ./$(BIN)
+	python3 tests/test_vm_search.py ./$(BIN)
 	python3 tests/test_vm_classic.py ./$(BIN)
 	python3 tests/test_vm_terminal_commands.py ./$(BIN)
 	python3 tests/test_vm_launch.py ./$(BIN)

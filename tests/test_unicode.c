@@ -88,6 +88,13 @@ int
 main(void)
 {
     official_boundaries();
+    uint32_t folded[3];
+    assert(snag_unicode_casefold('A', folded) == 1u && folded[0] == 'a');
+    assert(snag_unicode_casefold(0xdfu, folded) == 2u && folded[0] == 's' && folded[1] == 's');
+    assert(snag_unicode_casefold(0x3c2u, folded) == 1u && folded[0] == 0x3c3u);
+    assert(snag_unicode_casefold(0x130u, folded) == 2u && folded[0] == 'i' && folded[1] == 0x307u);
+    assert(snag_unicode_casefold(0xfb03u, folded) == 3u && folded[2] == 'i');
+    assert(snag_unicode_casefold(0x4e2du, folded) == 1u && folded[0] == 0x4e2du);
     assert(snag_unicode_word_class('A') == 1u && snag_unicode_word_class('_') == 1u);
     assert(snag_unicode_word_class(0x03b2u) == 1u && snag_unicode_word_class(0x4e2du) == 1u);
     assert(snag_unicode_word_class('!') == 2u && snag_unicode_word_class(0x1f469u) == 2u);
