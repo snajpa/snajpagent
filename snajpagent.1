@@ -2071,6 +2071,8 @@ draft conflict. Owners without this capability use the workspace's saved copy.
 Clean detach, last-window close, workspace switch and suspend flush the final
 edit before releasing control. A connection failure leaves unacknowledged text
 in the workspace snapshot; unresolved conflicts remain saved there too.
+The saving notice remains until the owner acknowledges detach; the completed
+detach notice means another client can claim the controller.
 Draft synchronization does not submit text or add it to model history.
 .PP
 Before transmitting, the workspace saves the request ID, text and owner identity.
@@ -2109,6 +2111,19 @@ to join a channel as the operator. The built-in server offers its configured
 room. Each pane keeps its exact channel
 membership; PART, KICK and reconnect reject stale sends. Use /chat or /join
 explicitly to select the current membership before composing a new send.
+.PP
+Use /query SESSION/ENDPOINT/NICK to address another session by its saved name
+or unique ID prefix. First attach that session in another split with :attach ID.
+Qualified /msg, /notice, /chat, /join, /part and /connections commands use the same
+dispatch. The workspace sends through the addressed owner's existing controller
+and preserves its draft. A session controlled elsewhere remains read-only;
+refusal keeps the command in the originating composer.
+.PP
+Selections and command output return to the originating window while it remains
+focused with an empty next draft. New typing preserves that window and its draft.
+Successful /msg and /notice preserve the selected buffer. Saved forwarded
+submissions reconcile their receipts on resume; use :recover in the original
+composer to restore an uncertain or rejected command without sending it again.
 .PP
 .B :buffers
 lists the workspace's rollout, connection, channel and private conversation buffers, including
@@ -3207,8 +3222,9 @@ Select local model activity.
 Open and select an operator private chat. Optional text sends once; opening
 without text sends nothing. With no address, list existing operator queries
 with their exact /query query:ID selectors. Address forms are nick,
-endpoint/nick and session/endpoint/nick. Session must name this session by its
-saved name or full ID. Endpoint accepts its configured spelling or destination
+endpoint/nick and session/endpoint/nick. Classic mode accepts this session's saved
+name or matching ID prefix. A Vim workspace can address another attached session
+by saved name or unique ID prefix. Endpoint accepts its configured spelling or destination
 number. Bare nicks inherit the selected chat endpoint; from rollout they require
 one endpoint. An ambiguous address sends nothing and asks for an explicit
 endpoint. Quote an address containing spaces; encode literal slash and percent
@@ -3218,8 +3234,9 @@ a stale conversation remains readable and rejects sends.
 .TP
 .BR /connections " [" session "|" address "]"
 List connections, operator/agent status and channel/private conversations for
-the current session. An optional session name or full ID must identify the
-current session. Use /connections SESSION/ENDPOINT/ to open its connection view;
+the selected session. An optional session name or ID prefix identifies the current
+session in classic mode or an attached session in a Vim workspace. A bare number
+selects a connection. Use /connections SESSION/ENDPOINT/ to open its connection view;
 an endpoint spelling or destination number also selects it. The connection view
 shows status and server notices for both local identities. It becomes an opened
 classic tab, included in Tab/Shift-Tab cycling with its own draft. Incoming

@@ -378,6 +378,8 @@ Restoring a workspace leaves stopped owners stopped.
 `:buffers` lists conversations;
 `:vsp ADDRESS` opens one in a split. Each conversation keeps its draft and undo
 history; agent conversations are read-only.
+Use `/query SESSION/ENDPOINT/NICK` to select another attached session's query;
+`:attach ID` in another split gives the workspace control of that session.
 
 `:reports` lists command output; `:history` returns to rollout. Search with
 `/TEXT`, `?TEXT` and `n`/`N`; select with `v`, `V` or Ctrl-V and yank with `y`.

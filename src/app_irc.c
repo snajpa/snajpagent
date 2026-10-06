@@ -10,6 +10,15 @@
 #include <string.h>
 
 static bool
+session_address_matches(const struct app_state *app, const char *selector)
+{
+    if (app->session.name && !strcmp(selector, app->session.name)) return true;
+    size_t length = strlen(selector);
+    return length && length <= SNAG_ID_HEX_LEN && snag_hex_is_lower(selector, length) &&
+        !strncmp(selector, app->session.id, length);
+}
+
+static bool
 query_identity(const json_t *data, enum snag_irc_identity identity)
 {
     const json_t *route = json_object_get(data, "routing");
@@ -33,8 +42,7 @@ snag_app_irc_query_target(struct app_state *app, const struct snag_irc_scopes *s
             return snag_fail(error, error_size, EINVAL, "invalid query conversation ID");
     } else if (snag_irc_address_parse(&address, selector, SNAG_IRC_MESSAGE_ADDRESS,
         error, error_size) < 0) return -1;
-    if (address.session[0] && strcmp(address.session, app->session.id) &&
-        (!app->session.name || strcmp(address.session, app->session.name)))
+    if (address.session[0] && !session_address_matches(app, address.session))
         return snag_fail(error, error_size, EACCES,
                 "select the addressed session before sending");
     if (captured && captured->conversation[0] && captured->identity == identity) {
@@ -89,8 +97,7 @@ snag_app_irc_channel_target(struct app_state *app, const struct snag_irc_scopes 
     } else {
         if (snag_irc_address_parse(&address, selector, SNAG_IRC_MESSAGE_ADDRESS,
             error, error_size) < 0) return -1;
-        if (address.session[0] && strcmp(address.session, app->session.id) &&
-            (!app->session.name || strcmp(address.session, app->session.name)))
+        if (address.session[0] && !session_address_matches(app, address.session))
             return snag_fail(error, error_size, EACCES,
                 "select the addressed session before sending");
         selected = snag_irc_scope_resolve(scopes, preferred, address.endpoint, error, error_size);
@@ -225,8 +232,7 @@ operator_conversation(struct app_state *app, const char *operand,
     if (!channel_id && !query_id) {
         if (snag_irc_address_parse(&address, operand, SNAG_IRC_MESSAGE_ADDRESS,
             error, error_size) < 0) return -1;
-        if (address.session[0] && strcmp(address.session, app->session.id) &&
-            (!app->session.name || strcmp(address.session, app->session.name)))
+        if (address.session[0] && !session_address_matches(app, address.session))
             return snag_fail(error, error_size, EACCES,
                 "select the addressed session before sending");
         scope = snag_irc_scope_resolve(&app->ui.input_scopes, preferred,
@@ -328,16 +334,17 @@ connection_command(struct app_state *app, const char *text)
             (void)snag_errorf(error, sizeof(error), "use /connections [SESSION|SESSION/ENDPOINT/]");
             goto failed;
         }
+        bool numbered = strspn(operand, "0123456789") == strlen(operand);
         bool session = !strcmp(operand, app->session.id) ||
-            (app->session.name && !strcmp(operand, app->session.name));
+            (app->session.name && !strcmp(operand, app->session.name)) ||
+            (!numbered && session_address_matches(app, operand));
         if (!session) {
             const char *endpoint = operand;
             if (strchr(operand, '/')) {
                 if (snag_irc_address_parse(&address, operand, SNAG_IRC_BUFFER_ADDRESS,
                     error, sizeof(error)) < 0) goto failed;
                 if (address.kind != SNAG_IRC_CONNECTION ||
-                    (strcmp(address.session, app->session.id) &&
-                     (!app->session.name || strcmp(address.session, app->session.name)))) {
+                    !session_address_matches(app, address.session)) {
                     (void)snag_errorf(error, sizeof(error),
                         "select this session's SESSION/ENDPOINT/ connection address");
                     goto failed;

@@ -1210,7 +1210,7 @@ conversation_snapshot_test(void)
     assert(json_object_set_new(route, "identity", json_string("agent")) == 0);
     struct snag_vm_buffer *agent = snag_vm_buffer_get(owner, route, true);
     assert(agent && !snag_vm_buffer_writable(agent));
-    assert(snag_vm_buffer_prepare(agent, 1u) < 0 && errno == EACCES);
+    assert(snag_vm_buffer_prepare(agent, agent, 1u) < 0 && errno == EACCES);
     assert(!owner->rollout->draft.len && snag_vm_connection_unsaved(owner));
 
     struct snag_irc_conversation_target channel = {.kind = SNAG_IRC_CHANNEL,
@@ -1287,6 +1287,59 @@ conversation_snapshot_test(void)
     snag_vm_connections_free(owner);
 }
 
+static void
+forwarded_snapshot_test(void)
+{
+    struct snag_vm_connection *source =
+        snag_vm_connection_new("11111111111111111111111111111111");
+    struct snag_vm_connection *target =
+        snag_vm_connection_new("22222222222222222222222222222222");
+    assert(source && target);
+    source->next = target;
+    target->bound = target->commands = true;
+    strcpy(target->instance, "33333333333333333333333333333333");
+    const char *text = "/query other/server/peer hello";
+    assert(snag_vm_draft_replace(source->rollout, 0u, 0u, text, strlen(text)) == 0);
+    assert(snag_vm_draft_replace(target->rollout, 0u, 0u, "kept", 4u) == 0);
+    assert(snag_vm_buffer_prepare(target->rollout, source->rollout, 7u) == 0);
+    assert(!source->rollout->draft.len && target->rollout->draft.len == 4u);
+    assert(!strcmp(snag_json_string(target->rollout->pending, "text"), text));
+    assert(target->rollout->request_window == 7u && target->rollout->origin);
+
+    json_t *saved = snag_vm_connections_json(source);
+    struct snag_vm_connection *restored = NULL;
+    assert(saved && snag_vm_connections_load(saved, &restored) == 0);
+    json_t *roundtrip = snag_vm_connections_json(restored);
+    assert(roundtrip && json_equal(saved, roundtrip));
+    json_decref(roundtrip);
+    snag_vm_connections_free(restored);
+    restored = NULL;
+    json_t *buffers = json_object_get(json_array_get(saved, 1u), "buffers");
+    json_t *pending = json_object_get(json_array_get(buffers, 0u), "pending");
+    json_t *origin = json_object_get(pending, "origin");
+    assert(json_object_set_new(origin, "session", json_string(target->session)) == 0);
+    assert(snag_vm_connections_load(saved, &restored) < 0 && !restored);
+    assert(json_object_set_new(origin, "session",
+        json_string("44444444444444444444444444444444")) == 0);
+    assert(snag_vm_connections_load(saved, &restored) < 0 && !restored);
+    assert(json_object_set_new(origin, "session", json_string(source->session)) == 0);
+    assert(json_object_set_new(pending, "text", json_string("not a command")) == 0);
+    assert(snag_vm_connections_load(saved, &restored) < 0 && !restored);
+    assert(json_object_set_new(pending, "text", json_string(text)) == 0);
+    assert(json_object_set_new(origin, "route", json_string("missing")) == 0);
+    assert(snag_vm_connections_load(saved, &restored) < 0 && !restored);
+    json_decref(saved);
+
+    assert(snag_vm_draft_replace(source->rollout, 0u, 0u, "new", 3u) == 0);
+    assert(snag_vm_buffer_recover(target->rollout, source->rollout) < 0 && errno == EBUSY);
+    assert(snag_vm_draft_replace(source->rollout, 0u, 3u, NULL, 0u) == 0);
+    assert(snag_vm_buffer_recover(target->rollout, source->rollout) == 0);
+    assert(!strcmp((const char *)source->rollout->draft.data, text));
+    assert(!strcmp((const char *)target->rollout->draft.data, "kept"));
+    assert(!target->rollout->pending && !target->rollout->origin);
+    snag_vm_connections_free(source);
+}
+
 int
 main(void)
 {
@@ -1301,6 +1354,7 @@ main(void)
     projection_test();
     owner_state_test();
     conversation_snapshot_test();
+    forwarded_snapshot_test();
     char *root = snag_path_join(getenv("TMPDIR") ? getenv("TMPDIR") : "/tmp",
         "snajpagent-vm-reader-XXXXXX");
     char error[256];

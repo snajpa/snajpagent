@@ -256,6 +256,26 @@ focused_buffer(struct vm *vm)
     return window_buffer(vm, &vm->windows[vm->focus]);
 }
 
+static struct snag_vm_buffer *
+submission_source(struct vm *vm, struct snag_vm_buffer *buffer)
+{
+    if (!buffer->origin) return buffer;
+    struct snag_vm_connection *c = connection_for(vm,
+        snag_json_string(buffer->origin, "session"), false);
+    return snag_vm_buffer_get(c, json_object_get(buffer->origin, "route"), false);
+}
+
+static struct snag_vm_buffer *
+submission_from(struct vm *vm, struct snag_vm_buffer *source)
+{
+    if (!source) return NULL;
+    if (source->pending) return source;
+    for (struct snag_vm_connection *c = vm->connections; c; c = c->next)
+        for (struct snag_vm_buffer *b = c->buffers; b; b = b->next)
+            if (b->pending && b->origin && submission_source(vm, b) == source) return b;
+    return NULL;
+}
+
 static bool
 connection_visible(const struct vm *vm, const struct snag_vm_connection *c)
 {
@@ -447,7 +467,7 @@ state_snapshot(const struct vm *vm)
         json_decref(windows);
         return NULL;
     }
-    json_t *result = json_pack("{s:i,s:I,s:o,s:o,s:o}", "v", 11,
+    json_t *result = json_pack("{s:i,s:I,s:o,s:o,s:o}", "v", 12,
         "focus", (json_int_t)vm->windows[vm->focus].id, "layout", layout,
         "windows", windows, "buffers", buffers);
     json_t *classic = json_null();
@@ -477,7 +497,7 @@ state_restore(struct vm *vm, const json_t *state, char *error, size_t size)
     size_t count = json_array_size(json_object_get(state, "windows")), focus = SIZE_MAX;
     if (!snag_json_exact_keys(state, version >= 5 ? "v focus layout windows buffers classic" :
         version >= 3 ? "v focus layout windows buffers" :
-        "v focus layout windows") || (version < 1 || version > 11) || !count ||
+        "v focus layout windows") || (version < 1 || version > 12) || !count ||
         (version >= 3 &&
          snag_vm_connections_load(json_object_get(state, "buffers"), &connections) < 0) ||
         snag_json_integer_u64(state, "focus", &focus_id) < 0 ||
@@ -1729,14 +1749,15 @@ command(struct vm *vm, const char *text)
             vm->composer = vm->insert = false;
             vm->quit_window = 0u;
             notice(vm, c->quitting ? "Detached from pending shutdown" :
-                "Detached; owner continues running");
+                c->detaching ? c->message : "Detached; owner continues running");
             changed(vm);
         }
     } else if (!strcmp(word, "recover") && classic_recover(vm)) {
         /* The original destination owns recovered input. */
     } else if (!strcmp(word, "recover")) {
         struct snag_vm_buffer *c = focused_buffer(vm);
-        if (!c || snag_vm_buffer_recover(c) < 0)
+        struct snag_vm_buffer *pending = submission_from(vm, c);
+        if (!pending || snag_vm_buffer_recover(pending, c) < 0)
             notice(vm, "Recovery needs an empty draft and a resolved or disconnected submission");
         else {
             vm->composer = true;
@@ -1905,11 +1926,61 @@ edit_draft(struct vm *vm, size_t begin, size_t end, const void *text, size_t siz
     return 0;
 }
 
+static struct snag_vm_buffer *
+command_buffer(struct vm *vm, struct snag_vm_buffer *source, const char *text)
+{
+    size_t verb = strcspn(text, " \t\r\n");
+    const char *commands[] = {"/query", "/msg", "/notice", "/chat", "/join", "/part",
+        "/connections"};
+    bool addressed = false;
+    for (size_t i = 0u; i < sizeof(commands) / sizeof(*commands); ++i)
+        if (strlen(commands[i]) == verb && !strncmp(text, commands[i], verb)) addressed = true;
+    if (!addressed) return source;
+    char *operand = NULL;
+    const char *rest;
+    char error[256];
+    if (snag_irc_address_operand(text + verb, &operand, &rest, error, sizeof(error)) < 0)
+        return source;
+    bool connection = verb == 12u;
+    struct snag_irc_address address;
+    int parsed = snag_irc_address_parse(&address, operand,
+        connection ? SNAG_IRC_BUFFER_ADDRESS : SNAG_IRC_MESSAGE_ADDRESS, error, sizeof(error));
+    bool numbered = connection && !strchr(operand, '/') &&
+        strspn(operand, "0123456789") == strlen(operand);
+    free(operand);
+    if (parsed < 0 || !address.session[0] || numbered) return source;
+    struct snag_session location;
+    snag_session_init(&location);
+    struct snag_vm_buffer *result = NULL;
+    if (locate_buffer_session(vm, &location, address.session, error, sizeof(error)) < 0) {
+        if (connection && address.kind == SNAG_IRC_TRANSCRIPT) result = source;
+        else notice(vm, error);
+    } else if (!strcmp(location.id, source->connection->session)) {
+        result = source;
+    } else {
+        struct snag_vm_connection *target = connection_for(vm, location.id, false);
+        if (!target || !target->bound || target->detaching || target->quitting) {
+            (void)snprintf(error, sizeof(error),
+                "Addressed session is read-only; :attach %s in another split before sending",
+                location.id);
+            notice(vm, error);
+        } else if (!target->commands) {
+            notice(vm, "Addressed owner needs :classic for slash commands");
+        } else result = target->rollout;
+    }
+    snag_session_close(&location);
+    return result;
+}
+
 static void
 submit_draft(struct vm *vm)
 {
     struct snag_vm_buffer *c = focused_buffer(vm);
     if (!c) return;
+    if (submission_from(vm, c)) {
+        notice(vm, "Previous submission still retained; inspect its receipt");
+        return;
+    }
     const char *text = c->draft.len ? (const char *)c->draft.data : "";
     if (*text && json_is_object(c->route) && !json_object_get(c->route, "peer") &&
         !json_object_get(c->route, "room") && !snag_prompt_command(text)) {
@@ -1941,19 +2012,25 @@ submit_draft(struct vm *vm)
         changed(vm);
         return;
     }
-    if (snag_vm_buffer_prepare(c, vm->windows[vm->focus].id) < 0) {
-        notice(vm, errno == ENOTSUP ? !snag_vm_buffer_supported(c) ?
+    struct snag_vm_buffer *target = command_buffer(vm, c, text);
+    if (!target) return;
+    if (target != c && submission_from(vm, target)) {
+        notice(vm, "Addressed composer has a retained submission; inspect its receipt");
+        return;
+    }
+    if (snag_vm_buffer_prepare(target, c, vm->windows[vm->focus].id) < 0) {
+        notice(vm, errno == ENOTSUP ? !snag_vm_buffer_supported(target) ?
             "This owner does not support this conversation input" :
             "This owner needs :classic for slash commands" :
-            c->pending ? "Previous submission still retained; inspect its receipt" :
+            target->pending ? "Addressed composer has a retained submission; inspect its receipt" :
             c->draft_conflict ? "Resolve the draft conflict with :draft local or :draft owner" :
-            !c->connection->bound ? "Read-only session; :attach to submit" : "Draft is empty");
+            !target->connection->bound ? "Read-only session; :attach to submit" : "Draft is empty");
         return;
     }
     changed(vm);
     if (save(vm, NULL) < 0) return;
-    if (snag_vm_buffer_send(c) < 0) notice(vm, "Submission was not sent; :recover its text");
-    else notice(vm, c->message);
+    if (snag_vm_buffer_send(target) < 0) notice(vm, "Submission was not sent; :recover its text");
+    else notice(vm, target->message);
 }
 
 static void
@@ -3070,9 +3147,11 @@ connections_step(struct vm *vm)
         if (vm->windows[i].kind == VIEW_BUFFERS) catalog = true;
     for (struct snag_vm_connection *c = vm->connections; c; c = c->next) {
         struct snag_vm_buffer *focused = focused_buffer(vm);
+        struct snag_vm_buffer *feedback = submission_from(vm, focused);
+        if (!feedback) feedback = focused;
         char buffer_previous[256] = "";
-        if (focused && focused->connection == c)
-            memcpy(buffer_previous, focused->message, sizeof(buffer_previous));
+        if (feedback && feedback->connection == c)
+            memcpy(buffer_previous, feedback->message, sizeof(buffer_previous));
         uint64_t revision = c->revision;
         char previous[sizeof(c->message)];
         memcpy(previous, c->message, sizeof(previous));
@@ -3080,13 +3159,14 @@ connections_step(struct vm *vm)
         if (revision != c->revision) {
             if (focused_connection(vm) == c && strcmp(previous, c->message))
                 notice(vm, c->message);
-            if (focused && focused->connection == c &&
-                strcmp(buffer_previous, focused->message)) notice(vm, focused->message);
+            if (feedback && feedback->connection == c &&
+                strcmp(buffer_previous, feedback->message)) notice(vm, feedback->message);
             changed(vm);
         }
         for (struct snag_vm_buffer *b = c->buffers; b; b = b->next) {
             struct vm_window *window = &vm->windows[vm->focus];
-            bool origin = focused_buffer(vm) == b &&
+            struct snag_vm_buffer *source = submission_source(vm, b);
+            bool origin = source && focused_buffer(vm) == source &&
                 (!b->request_window || b->request_window == window->id) &&
                 window->kind == VIEW_TRANSCRIPT && !window->visual.kind &&
                 !vm->copying && !vm->navigating && !vm->mode &&
@@ -3094,13 +3174,17 @@ connections_step(struct vm *vm)
                 !vm->detach_suspend && !vm->quit_all && !vm->quit_window;
             if (b->selection) {
                 struct snag_vm_buffer *selected = snag_vm_buffer_get(c, b->selection, true);
-                if (selected && origin && !b->draft.len) open_conversation(vm, selected);
-            } else if (b->report_open && origin && !b->draft.len)
+                if (selected && origin && !source->draft.len) open_conversation(vm, selected);
+            } else if (b->report_open && origin && !source->draft.len)
                 open_report(vm, c, b->report_open);
             json_decref(b->selection);
             b->selection = NULL;
             json_decref(b->report_open);
             b->report_open = NULL;
+            if (!b->pending) {
+                json_decref(b->origin);
+                b->origin = NULL;
+            }
             if (b == c->rollout && b->terminal_result && b->terminal_auto && origin) {
                 b->terminal_auto = false;
                 classic_request(vm, c->session);

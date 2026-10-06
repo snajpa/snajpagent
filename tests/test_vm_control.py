@@ -112,7 +112,7 @@ class ControlTests(unittest.TestCase):
         self.owner.status('detached')
         self.assertEqual(self.owner_draft()['text'], 'retained 👩‍💻-final')
         saved = next(iter(self.snapshots().values()))['state']
-        self.assertEqual(saved['v'], 11)
+        self.assertEqual(saved['v'], 12)
         self.assertEqual(rollout(saved['buffers'][0])['draft'], 'retained 👩‍💻-final')
         self.assertTrue(saved['buffers'][0]['control'])
         self.assertEqual(self.inputs(), [])
@@ -405,6 +405,24 @@ class ControlTests(unittest.TestCase):
         resumed.until(b'ATTACHED')
         resumed.repaint_until(b'durable-unsent')
         resumed.finish('close')
+
+    def test_detach_notice_waits_for_owner_acknowledgement(self):
+        child = self.start('-N', 'detach-ack')
+        child.command('attach ' + self.owner.sid)
+        child.until(b'ATTACHED')
+        os.kill(self.owner.owner, signal.SIGSTOP)
+        try:
+            child.write(b'ipreserve before detach')
+            self.escape(child)
+            child.command('detach')
+            child.repaint_until(b'Saving owner draft before detach', timeout=1)
+            self.assertNotIn(b'Detached; owner continues', child.output)
+        finally:
+            os.kill(self.owner.owner, signal.SIGCONT)
+        child.repaint_until(b'Detached; owner continues')
+        self.owner.status('detached')
+        self.assertEqual(self.owner_draft()['text'], 'preserve before detach')
+        child.finish('close')
 
     def test_undo_stops_at_submitted_and_adopted_draft_boundaries(self):
         child = self.start('-N', 'undo-boundaries')

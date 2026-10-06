@@ -6,6 +6,18 @@ Status: implementation in progress, October 6, 2026. The original inspection
 was against `7a70d81d336ef6f14d91ef944b1226c8efa65636`. The checkpoint below
 distinguishes implemented components from the complete intended behavior.
 
+Cross-session command checkpoint: qualified /query, /msg, /notice, /chat, /join,
+/part and /connections resolve a saved session name or unique ID prefix in the
+workspace. The addressed session must already have a controller in this workspace;
+an unattached or externally controlled session leaves the source command intact.
+Dispatch uses the target rollout mailbox without consuming its existing draft.
+The pending record retains the originating session and route, so feedback,
+selection and :recover return there. New typing and focus changes suppress automatic
+selection. Successful /msg and /notice preserve the window. Version12 snapshots
+retain forwarded submissions and read versions1–11; resume queries their receipts
+without resubmission. Owner admission recovery remains separate from IRC chunk
+delivery receipts.
+
 Activity checkpoint: :buffers groups stable rows by session, endpoint and kind,
 with unread counts, connection state, draft/pending flags and local message time.
 Empty obsolete routes leave the directory once no window displays or selects them; retained
@@ -754,6 +766,11 @@ composer. Plain text in a query goes to that peer; in a channel it goes to that
 channel; in a transcript it remains normal agent input. A connection-status buffer
 requires an explicit target before ordinary text can send. All entered commands,
 resolved routes and failures remain visible.
+
+For cross-session commands, attach the addressed session in another split before
+sending. Dispatch preserves its draft and retains the source composer for receipt
+feedback and :recover. A session controlled elsewhere stays read-only; the command
+remains in the source draft. The workspace never claims that controller implicitly.
 
 Keep a draft per conversation and reuse it when returning to that buffer. At
 submission, freeze session, connection identity/generation, local identity,

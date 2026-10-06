@@ -4,6 +4,12 @@
 
 ## Unreleased
 
+- Route qualified Vim IRC commands to another attached session's owner. Preserve
+  that owner's draft and return selection or recovery to the originating composer.
+  A session controlled elsewhere remains read-only. Version 12 workspaces retain
+  forwarded submissions and read earlier formats without replaying uncertain sends.
+  Show completed detach only after the owner acknowledges release of its controller.
+
 - Preserve newly read command prefixes when terminal resizing redraws a prompt
   while output is blocked.
 

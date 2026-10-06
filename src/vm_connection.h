@@ -17,7 +17,7 @@ struct snag_vm_buffer {
     struct snag_vm_editor editor;
     size_t cursor;
     json_t *pending, *draft_base, *owner_draft, *conflict_draft;
-    json_t *report_open, *selection;
+    json_t *report_open, *selection, *origin;
     char message[256];
     char endpoint[SNAG_CONFIG_IRC_ENDPOINT_MAX + 1u];
     uint64_t receipt_at, request_window;
@@ -66,9 +66,9 @@ bool snag_vm_connection_tail(const struct snag_vm_connection *, struct snag_jour
 int snag_vm_connection_wait(const struct snag_vm_connection *, uint64_t now, int timeout);
 int snag_vm_connection_control(struct snag_vm_connection *, const char *intent);
 /* Prepare has no wire effects. Save the workspace before calling send. */
-int snag_vm_buffer_prepare(struct snag_vm_buffer *, uint64_t window);
+int snag_vm_buffer_prepare(struct snag_vm_buffer *, struct snag_vm_buffer *source, uint64_t window);
 int snag_vm_buffer_send(struct snag_vm_buffer *);
-int snag_vm_buffer_recover(struct snag_vm_buffer *);
+int snag_vm_buffer_recover(struct snag_vm_buffer *, struct snag_vm_buffer *target);
 void snag_vm_connection_detach(struct snag_vm_connection *);
 int snag_vm_draft_choose(struct snag_vm_buffer *, bool local);
 void snag_vm_draft_cursor(struct snag_vm_buffer *, size_t cursor);
