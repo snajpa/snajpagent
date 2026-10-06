@@ -132,6 +132,9 @@ struct snag_irc_event {
     /* Engine-classified durable input; transport marks eligible sent receipts. */
     bool input;
     bool classified, urgent, reply;
+    /* The agent counterpart at receipt time; captured with empty IDs means unavailable. */
+    bool reply_captured;
+    char reply_conversation[SNAG_ID_HEX_LEN + 1u], reply_membership[SNAG_ID_HEX_LEN + 1u];
     char endpoint[SNAG_CONFIG_IRC_ENDPOINT_MAX + 1u];
     char room[SNAG_CONFIG_IRC_ROOM_MAX + 2u];
     char nick[SNAG_CONFIG_IRC_NICK_MAX + 1u];
@@ -154,6 +157,8 @@ int snag_irc_event_read(const json_t *data, struct snag_irc_event *event);
 int snag_irc_event_record_read(const char *, const json_t *, struct snag_irc_event *);
 const char *snag_irc_event_record_type(const struct snag_irc_event *);
 bool snag_irc_event_model_visible(const struct snag_irc_event *);
+int snag_irc_event_capture_reply(struct snag_irc_event *, const json_t *,
+    enum snag_irc_casemapping);
 /* Only for payloads retained after typed record validation. */
 int snag_irc_event_payload_read(const json_t *, struct snag_irc_event *);
 /* Immutable conversation directory; update returns a new owned reference. */

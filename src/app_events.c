@@ -134,7 +134,7 @@ out: snag_buf_free(&line);
 }
 
 static int
-query_pending(json_t **pending, const struct snag_irc_event *event, size_t offset)
+conversation_pending(json_t **pending, const struct snag_irc_event *event, size_t offset)
 {
     if (!*pending) *pending = json_array();
     json_t *entry = json_pack("{s:o,s:I,s:b}", "event", snag_irc_event_data(event),
@@ -143,14 +143,46 @@ query_pending(json_t **pending, const struct snag_irc_event *event, size_t offse
 }
 
 static int
-query_replied(json_t *queries, const struct snag_irc_event *event)
+conversation_replied(json_t *conversations, const struct snag_irc_event *event,
+    const json_t *directory, bool own_agent)
 {
-    if (!event->routed || event->route.kind != SNAG_IRC_QUERY ||
-        event->route.identity != SNAG_IRC_AGENT || event->route.direction != SNAG_IRC_OUTGOING ||
-        event->kind != SNAG_IRC_MESSAGE || (event->route.delivery != SNAG_IRC_WRITTEN &&
-        event->route.delivery != SNAG_IRC_ACKNOWLEDGED)) return 0;
-    json_t *entry = json_object_get(queries, event->route.conversation);
-    return entry ? json_object_set_new(entry, "replied", json_true()) : 0;
+    if (event->kind != SNAG_IRC_MESSAGE) return 0;
+    bool outgoing = event->routed && event->route.direction == SNAG_IRC_OUTGOING;
+    if (outgoing ? event->route.identity != SNAG_IRC_AGENT ||
+        (event->route.delivery != SNAG_IRC_WRITTEN &&
+         event->route.delivery != SNAG_IRC_ACKNOWLEDGED) : !own_agent) return 0;
+    const char *key;
+    json_t *entry;
+    json_object_foreach(conversations, key, entry) {
+        (void)key;
+        struct snag_irc_event original;
+        if (snag_irc_event_payload_read(json_object_get(entry, "event"), &original) < 0)
+            return -1;
+        bool channel = original.route.kind == SNAG_IRC_CHANNEL;
+        const char *id = channel ? original.reply_conversation : original.route.conversation;
+        if (!*id) continue;
+        struct snag_irc_event echo;
+        const struct snag_irc_event_route *route = &event->route;
+        if (!outgoing) {
+            /* Legacy default-room sends have a local or canonical room echo.
+             * Prove its recorded agent membership; never resolve a new target. */
+            if (!channel || strcmp(original.room, event->room) ||
+                !snag_irc_endpoint_equal(original.endpoint, event->endpoint)) continue;
+            const json_t *connection = json_object_get(directory, original.route.connection);
+            const json_t *item = json_object_get(json_object_get(connection, "conversations"), id);
+            if (!item) continue;
+            if (snag_irc_event_payload_read(json_object_get(item, "data"), &echo) < 0) return -1;
+            if (!echo.route.joined) continue;
+            route = &echo.route;
+        }
+        if (route->kind != original.route.kind || route->identity != SNAG_IRC_AGENT ||
+            route->generation != original.route.generation ||
+            strcmp(route->connection, original.route.connection) ||
+            strcmp(route->conversation, id) ||
+            (channel && strcmp(route->membership, original.reply_membership))) continue;
+        if (json_object_set_new(entry, "replied", json_true()) < 0) return -1;
+    }
+    return 0;
 }
 
 bool
@@ -159,7 +191,7 @@ snag_app_irc_replies_pending(const struct app_state *app)
     if (app->irc_turn_replies.count) return true;
     const char *key;
     json_t *entry;
-    json_object_foreach(app->irc_turn_queries, key, entry) {
+    json_object_foreach(app->irc_turn_conversations, key, entry) {
         (void)key;
         if (!json_is_true(json_object_get(entry, "replied"))) return true;
     }
@@ -281,6 +313,14 @@ snag_app_irc_event(void *opaque, const struct snag_irc_event *event)
         accepted.urgent = accepted.input && event->kind == SNAG_IRC_MESSAGE && !event->historical;
         accepted.reply = accepted.urgent;
     }
+    enum snag_irc_casemapping mapping = SNAG_IRC_CASE_UNKNOWN;
+    for (size_t i = 0u; i < app->irc_destinations.count; ++i) {
+        const struct snag_irc_destination *item = &app->irc_destinations.items[i];
+        if (!strcmp(item->connection, accepted.route.connection))
+            mapping = item->casemapping[SNAG_IRC_AGENT];
+    }
+    if (snag_irc_event_capture_reply(&accepted, app->session.irc_conversations, mapping) < 0)
+        return -1;
     if (snag_app_commit_event(app, event->routed ? "irc_event_v2" : "irc_event",
         snag_irc_event_data(&accepted), error, sizeof(error)) < 0)
         return -1;
@@ -289,7 +329,10 @@ snag_app_irc_event(void *opaque, const struct snag_irc_event *event)
     uint64_t accepted_seq = app->session.irc_received_seq;
     if (snag_ui_send(&app->ui, (struct snag_ui_command){
         .kind = SNAG_UI_IRC, .data.irc = event}) < 0) return -1;
-    if (private && !accepted.input) return query_replied(app->irc_turn_queries, event);
+    own_agent = snag_irc_local_identity(app->irc, event, true);
+    if (conversation_replied(app->irc_turn_conversations, event,
+        app->session.irc_conversations, own_agent) < 0) return -1;
+    if (private && !accepted.input) return 0;
     /* Query replay and NOTICE receipts add context at the next natural
      * request, without creating an input intent or reply obligation. */
     if ((private || sent_input) && (event->historical || event->kind != SNAG_IRC_MESSAGE) &&
@@ -300,7 +343,7 @@ snag_app_irc_event(void *opaque, const struct snag_irc_event *event)
     if (event->kind == SNAG_IRC_DISCONNECTED &&
         strstr(event->text, "endpoint removed; discarded ") == event->text &&
         snag_ui_text(&app->ui, SNAG_UI_WARNING, event->text) < 0) return -1;
-    own_agent = !private && snag_irc_local_identity(app->irc, event, true);
+    own_agent = !private && own_agent;
     local_operator = snag_irc_local_identity(app->irc, event, false);
     if (own_agent) {
         if (app->session.active_turn && event->kind == SNAG_IRC_MESSAGE &&
@@ -316,7 +359,8 @@ snag_app_irc_event(void *opaque, const struct snag_irc_event *event)
         ++app->input_generation;
     urgent = accepted.urgent;
     reply_offset = app->irc_urgent.len;
-    if (append_irc_projection(urgent ? &app->irc_urgent : &app->irc_background, event) < 0) return -1;
+    if (append_irc_projection(urgent ? &app->irc_urgent : &app->irc_background, &accepted) < 0)
+        return -1;
     if (accepted.input && event->historical && !app->session.irc_sleep_until_ms) {
         /* Catch-up is background context, but unlike newly arriving ordinary
          * chat it is available at the existing join-history response boundary. */
@@ -327,8 +371,9 @@ snag_app_irc_event(void *opaque, const struct snag_irc_event *event)
         if (snag_buf_append(urgent ? &app->irc_urgent_refs : &app->irc_background_refs,
                            &ref, sizeof(ref)) < 0) return -1;
     }
-    if (private && accepted.reply) {
-        if (query_pending(&app->irc_urgent_queries, &accepted, reply_offset) < 0) return -1;
+    if (accepted.reply && (private || accepted.reply_captured)) {
+        if (conversation_pending(&app->irc_urgent_conversations, &accepted, reply_offset) < 0)
+            return -1;
     } else if (urgent && local_operator && snag_irc_event_target(app->irc, event, &target)) {
         size_t before = app->irc_urgent_replies.count;
         reply_target(&app->irc_urgent_replies, target, true);
@@ -394,15 +439,15 @@ admit_replies(struct app_state *app, size_t used)
         }
     }
     app->irc_urgent_replies.count = kept;
-    for (size_t i = 0u; i < json_array_size(app->irc_urgent_queries);) {
-        json_t *entry = json_array_get(app->irc_urgent_queries, i);
+    for (size_t i = 0u; i < json_array_size(app->irc_urgent_conversations);) {
+        json_t *entry = json_array_get(app->irc_urgent_conversations, i);
         size_t offset = (size_t)json_integer_value(json_object_get(entry, "offset"));
         if (offset < used) {
             const char *id = snag_json_string(json_object_get(json_object_get(entry, "event"),
                 "routing"), "conversation_id");
-            if (!app->irc_turn_queries) app->irc_turn_queries = json_object();
-            if (json_object_set(app->irc_turn_queries, id, entry) < 0 ||
-                json_array_remove(app->irc_urgent_queries, i) < 0) return -1;
+            if (!app->irc_turn_conversations) app->irc_turn_conversations = json_object();
+            if (json_object_set(app->irc_turn_conversations, id, entry) < 0 ||
+                json_array_remove(app->irc_urgent_conversations, i) < 0) return -1;
         } else {
             if (json_object_set_new(entry, "offset", json_integer((json_int_t)(offset - used))) < 0)
                 return -1;
@@ -480,7 +525,7 @@ snag_app_irc_take_pending(struct app_state *app, bool *local_operator, bool forc
     if (app->irc_urgent.len) {
         source = &app->irc_urgent;
         if (local_operator) *local_operator = app->irc_urgent_replies.count != 0u ||
-            json_array_size(app->irc_urgent_queries) != 0u;
+            json_array_size(app->irc_urgent_conversations) != 0u;
     /* A paused or blocked persistent goal is an explicit idle boundary. Keep
      * ordinary room traffic pending until the operator resumes or submits new
      * work; direct mentions remain urgent and may still start a turn. */
@@ -508,8 +553,8 @@ snag_app_irc_take_pending(struct app_state *app, bool *local_operator, bool forc
     }
     consume_pending(source, used);
     app->irc_turn_replies.count = 0u;
-    json_decref(app->irc_turn_queries);
-    app->irc_turn_queries = NULL;
+    json_decref(app->irc_turn_conversations);
+    app->irc_turn_conversations = NULL;
     if (source == &app->irc_urgent) {
         if (admit_replies(app, used) < 0) {
             free(copy);
@@ -532,7 +577,7 @@ struct irc_restore {
 };
 
 static int
-restore_query_reply(json_t **queries, const struct snag_irc_event *event)
+restore_conversation_reply(json_t **queries, const struct snag_irc_event *event)
 {
     if (!*queries) *queries = json_object();
     return json_object_set_new(*queries, event->route.conversation,
@@ -586,8 +631,9 @@ restore_irc_event(void *opaque, const struct snag_session *state,
                     json_integer_value(json_array_get(seqs, j))) continue;
                 if (pending_event(entry, &event) < 0) return -1;
                 struct snag_irc_target target;
-                if (queries && event.reply && event.routed && event.route.kind == SNAG_IRC_QUERY) {
-                    if (restore_query_reply(queries, &event) < 0) return -1;
+                if (queries && event.reply && event.routed &&
+                    (event.route.kind == SNAG_IRC_QUERY || event.reply_captured)) {
+                    if (restore_conversation_reply(queries, &event) < 0) return -1;
                 } else if (replies && event.reply &&
                     snag_irc_event_target(app->irc, &event, &target)) {
                     reply_target(replies, target, true);
@@ -611,7 +657,8 @@ restore_irc_event(void *opaque, const struct snag_session *state,
     if (event.input && json_array_append_new(restore->pending,
             json_pack("{s:I,s:O,s:s}", "seq", (json_int_t)seq,
                 "data", (json_t *)data, "type", type)) < 0) return -1;
-    return query_replied(restore->turn_queries, &event);
+    return conversation_replied(restore->turn_queries, &event, state->irc_conversations,
+        snag_irc_local_identity(app->irc, &event, true));
 }
 
 int
@@ -644,8 +691,9 @@ snag_app_irc_restore(struct app_state *app, char *error, size_t error_size)
         struct irc_input_ref ref = {(uint64_t)json_integer_value(json_object_get(entry, "seq")), buffer->len};
         if (!rc) rc = snag_buf_append(urgent ? &app->irc_urgent_refs : &app->irc_background_refs, &ref, sizeof(ref));
         struct snag_irc_target target;
-        if (urgent && event.reply && event.routed && event.route.kind == SNAG_IRC_QUERY) {
-            if (query_pending(&app->irc_urgent_queries, &event, offset) < 0) rc = -1;
+        if (urgent && event.reply && event.routed &&
+            (event.route.kind == SNAG_IRC_QUERY || event.reply_captured)) {
+            if (conversation_pending(&app->irc_urgent_conversations, &event, offset) < 0) rc = -1;
         } else if (urgent && event.reply && snag_irc_event_target(app->irc, &event, &target)) {
             size_t before = app->irc_urgent_replies.count;
             reply_target(&app->irc_urgent_replies, target, true);
@@ -655,8 +703,8 @@ snag_app_irc_restore(struct app_state *app, char *error, size_t error_size)
     if (!rc) {
         app->irc_turn_replies = app->session.pending_input ?
             restore.pending_replies : restore.turn_replies;
-        json_decref(app->irc_turn_queries);
-        app->irc_turn_queries = json_incref(app->session.pending_input ?
+        json_decref(app->irc_turn_conversations);
+        app->irc_turn_conversations = json_incref(app->session.pending_input ?
             restore.pending_queries : restore.turn_queries);
     }
     json_decref(restore.pending);
@@ -755,6 +803,72 @@ snag_app_context_cancelled(void *opaque)
         (!app->queue_edit_id[0] && snag_ui_interrupt_pending(&app->ui));
 }
 
+static int
+reply_context(const struct app_state *app, struct snag_buf *text)
+{
+    if (app->irc_turn_replies.count && snag_buf_printf(text,
+        "Legacy default-room replies pending: %zu; use their originating endpoint destinations.\n",
+        app->irc_turn_replies.count) < 0) return -1;
+    bool first = true;
+    const char *key;
+    json_t *entry;
+    json_object_foreach(app->irc_turn_conversations, key, entry) {
+        (void)key;
+        if (json_is_true(json_object_get(entry, "replied"))) continue;
+        struct snag_irc_event original;
+        if (snag_irc_event_payload_read(json_object_get(entry, "event"), &original) < 0)
+            return -1;
+        bool channel = original.route.kind == SNAG_IRC_CHANNEL;
+        const char *id = channel ? original.reply_conversation : original.route.conversation;
+        const json_t *connection = json_object_get(app->irc_request_conversations,
+            original.route.connection);
+        const json_t *item = json_object_get(json_object_get(connection, "conversations"), id);
+        bool available = false;
+        if (item) {
+            struct snag_irc_event current;
+            uint64_t generation = 0u;
+            if (snag_irc_event_payload_read(json_object_get(item, "data"), &current) < 0 ||
+                snag_json_integer_u64(connection, "generation", &generation) < 0) return -1;
+            available = current.route.identity == SNAG_IRC_AGENT &&
+                current.route.kind == original.route.kind &&
+                current.route.generation == original.route.generation &&
+                generation == original.route.generation &&
+                json_is_true(json_object_get(
+                    json_object_get(connection, "connected"), "agent")) &&
+                (channel ? current.route.joined &&
+                    !strcmp(current.route.membership, original.reply_membership) :
+                    current.kind != SNAG_IRC_QUIT);
+        }
+        if (first && snag_buf_printf(text,
+            "Outstanding IRC replies for this turn: use irc_send to each available target. "
+            "Targets retain the connection and membership at receipt time. "
+            "If unavailable, explain the missing reply path; do not substitute another "
+            "conversation or a newer membership. NOTICE does not satisfy a reply.\n") < 0)
+            return -1;
+        first = false;
+        struct snag_buf line = {.max = SNAG_MAX_IRC_SNAPSHOT};
+        int rc = snag_buf_printf(&line,
+            "target=%s%s status=%s endpoint=%s %s=%s connection=%s generation=%llu%s%s\n",
+            *id ? channel ? "channel:" : "query:" : "", *id ? id : "unavailable",
+            available ? "available" : "unavailable", original.endpoint,
+            channel ? "room" : "peer", channel ? original.room : original.route.peer,
+            original.route.connection, (unsigned long long)original.route.generation,
+            channel && *id ? " membership=" : "", channel ? original.reply_membership : "");
+        const char *truncated = "Further outstanding replies omitted from this snapshot.\n";
+        bool fits = line.len + strlen(truncated) + 1u <= text->max - text->len;
+        if (!rc) rc = fits ? snag_buf_append(text, line.data, line.len) :
+            snag_buf_printf(text, "%s", truncated);
+        snag_buf_free(&line);
+        if (rc < 0) return -1;
+        if (!fits) break;
+    }
+    /* Host context survives continuations, so clearing the live obligations
+     * also needs an explicit snapshot to supersede the prior pending list. */
+    if (!text->len && app->request_networked && snag_buf_printf(text,
+        "Outstanding IRC replies for this turn: none.\n") < 0) return -1;
+    return text->len ? snag_buf_terminate(text) : 0;
+}
+
 int
 snag_app_request_build(struct app_state *app, const json_t *steering, unsigned int cycle,
                        const struct snag_credential *credential, struct snag_context_projection *projection,
@@ -762,7 +876,7 @@ snag_app_request_build(struct app_state *app, const json_t *steering, unsigned i
                        char *error, size_t error_size)
 {
     int rc;
-    const struct snag_context_control control = {
+    struct snag_context_control control = {
         .cancelled = snag_app_context_cancelled,
         .opaque = app,
         .history_orientation = app->history_orientation,
@@ -782,13 +896,19 @@ snag_app_request_build(struct app_state *app, const json_t *steering, unsigned i
                                        credential, continuation_scope) < 0)
         return snag_errorf(error, error_size, "cannot bind provider continuation");
     if (snag_app_irc_summary_take(app, error, error_size) < 0) return -1;
-    if (snag_app_provider_activity(app, true) < 0) return -1;
+    struct snag_buf replies = {.max = SNAG_MAX_IRC_SNAPSHOT};
+    if (reply_context(app, &replies) < 0 || snag_app_provider_activity(app, true) < 0) {
+        snag_buf_free(&replies);
+        return -1;
+    }
+    control.irc_replies = (const char *)replies.data;
     rc = snag_context_build(&app->session, app->turn_model, app->turn_effort,
         cycle, steering, app->turn_capacity.max_output_tokens,
         app->turn_capacity.max_output_tokens, app->config, continuation_scope,
         &app->turn_instructions, visibility, projection, error, error_size, &control);
     int context_errno = errno;
     bool cancelled = rc < 0 && errno == ECANCELED;
+    snag_buf_free(&replies);
     if (snag_app_provider_activity(app, false) < 0) return -1;
     if (cancelled) (void)snag_app_active_input_pump(app, 0u);
     if (rc < 0) {

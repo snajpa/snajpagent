@@ -29,8 +29,14 @@ Request snapshots pin connection, generation, conversation and membership throug
 the existing send/action validator. A replaced membership fails without resolving
 a new target or falling back to the default room. Channel NOTICE and CTCP actions
 use the same path. Numeric/all targets retain default-room behavior, while
-additional channel context requires an explicit destination. Exact automatic
-reply obligations and agent-only receive admission remain next.
+additional channel context requires an explicit destination. Incoming channels
+carry typed routes. Shared channels use the operator link's copy; agent-only
+channels also enter model context. Local-operator mentions capture the agent's
+conversation and membership, or an explicit unavailable result, in optional
+reply_to metadata. Admission and replay share private-query reply tracking.
+Requests list outstanding exact targets; only matching successful messages clear
+them. Notices, other rooms, failed sends and newer memberships leave them pending.
+Historical records without reply_to keep their legacy default-room behavior.
 
 Channel send checkpoint: the external owner API now queues messages, notices and
 actions through the private-query frame writer. The common writer preserves UTF-8
@@ -799,6 +805,11 @@ The event codec now has a strict v2 reader and a nested `routing` object:
 `peer` identifies the query counterpart; `target` retains the actual wire
 recipient, including the local accepted nick on incoming DMs. The decoder rejects
 operator-query model admission, invalid send states and mismatched record versions.
+Channel membership uses routing fields `membership`, `joined` and `rejoin`.
+A classified channel reply may also carry top-level `reply_to`: either an object
+with the captured agent `conversation_id` and `membership`, or null when that
+identity has no joined counterpart. Its connection and generation come from the
+source route. Older v2 records may omit this field; legacy records reject it.
 The model projection and model-facing history tool omit operator queries and
 connection notices, including explicitly filtered history calls. Typed store,
 context and presentation readers accept both revisions. A copy-on-write
@@ -842,7 +853,7 @@ use their written record, explicitly labelled with that unconfirmed state;
 native catch-up instead supplies its public source event. The typed input and
 its delivery label survive checkpoint/resume. NOTICE receipts add context at
 the next natural request, without starting an automatic reply. Channel frontend
-and exact channel reply-obligation integration remain in progress.
+integration remains in progress.
 A nickname discontinuity or disconnect cancels unsent chunks,
 retains uncertainty for started writes and never replays the private queue.
 Endpoint removal finishes those outcomes before stopping its owner. UTF-8 chunks

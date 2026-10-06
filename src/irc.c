@@ -2431,8 +2431,21 @@ link_emit(struct snag_irc_core *irc, struct irc_conn *link,
         struct irc_channel *channel = channel_find(link, room);
         if (channel && sanitize_text(channel->topic, sizeof(channel->topic), text) < 0) return 1;
     }
-    if (!link_emit_enabled(link)) return 0;
+    struct irc_channel *channel = room && *room ? channel_find(link, room) : NULL;
+    if (!link_emit_enabled(link)) {
+        struct irc_channel *operator = channel ?
+            channel_find(&irc->conns[LINK_OPERATOR], room) : NULL;
+        if (!channel || (operator && operator->joined)) return 0;
+    }
     event_init(irc, &event, kind, link->endpoint, room, nick, text, op, link->historical, false);
+    if (channel && irc->connection[0]) {
+        route_init(irc, &event, link->role, SNAG_IRC_CHANNEL, channel->id);
+        memcpy(event.room, channel->room, sizeof(event.room));
+        memcpy(event.route.target, channel->room, sizeof(event.route.target));
+        memcpy(event.route.membership, channel->membership, sizeof(event.route.membership));
+        event.route.joined = channel->joined && !channel->parting;
+        event.route.rejoin = channel->wanted;
+    }
     if (timestamp_ms) event.timestamp_ms = timestamp_ms;
     if (link->event_stream[0]) {
         memcpy(event.stream, link->event_stream, sizeof(event.stream));

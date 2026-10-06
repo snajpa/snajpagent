@@ -21,6 +21,7 @@ class ChannelServer:
         self.endpoint = '127.0.0.1:' + str(self.listener.getsockname()[1])
         self.links = {}
         self.lines = []
+        self.defer_operator_join = False
         self.failure = None
         self.stopping = threading.Event()
         self.workers = []
@@ -64,6 +65,8 @@ class ChannelServer:
                             f':fake 005 {nick} SAJROOM=#lab CASEMAPPING=rfc1459 :supported\r\n'
                             f':fake 376 {nick} :end\r\n')
                     elif line == 'JOIN #lab':
+                        if nick == 'queryop' and self.defer_operator_join:
+                            continue
                         # Server-forced joins also exercise non-default rooms.
                         self.send(nick, f':{nick}!u@fake JOIN #lab\r\n'
                             f':{nick}!u@fake JOIN #side\r\n')
@@ -156,6 +159,101 @@ class ChannelTests(QueryFixture):
 
     def assert_no_wire(self, marker):
         self.assertFalse(any(marker in line for _, line in self.server.lines), self.server.lines)
+
+    def channel_message(self, room, text, *, local=False, recipients=None):
+        prefix = '@saj-id=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:1;saj-op=1 ' if local else ''
+        sender = 'queryop' if local else 'peer'
+        for nick in recipients or ('querybot', 'queryop'):
+            self.server.send(nick, f'{prefix}:{sender}!u@fake PRIVMSG {room} :{text}\r\n')
+        self.wait(lambda: any(e['data'].get('text') == text for e in self.events()))
+        self.wait(lambda: text in json.dumps(self.seen))
+        self.wait_idle()
+        return [e for e in self.events() if e['data'].get('text') == text and
+                e['type'] in ('irc_event', 'irc_event_v2')]
+
+    def test_shared_incoming_channel_has_one_typed_copy(self):
+        events = self.channel_message('#SIDE', 'querybot: shared-channel-input')
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]['type'], 'irc_event_v2')
+        data = events[0]['data']
+        self.assertEqual(data['room'], '#side')
+        self.assertEqual(data['routing']['identity'], 'operator')
+        self.assertEqual(data['routing']['conversation_id'],
+                         self.selector(identity='operator')[8:])
+        self.assertTrue(data['urgent'])
+        self.assertFalse(data['reply'])  # A peer mention is not a local operator request.
+
+    def test_agent_only_channel_reaches_model(self):
+        self.server.send('querybot', ':querybot!u@fake JOIN #agentonly\r\n')
+        self.wait(lambda: ('agent', '#agentonly') in self.channels())
+        events = self.channel_message('#agentonly', 'querybot: agent-only-input',
+                                      recipients=('querybot',))
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]['type'], 'irc_event_v2')
+        self.assertEqual(events[0]['data']['routing']['identity'], 'agent')
+        self.assertFalse(events[0]['data']['reply'])
+
+    def test_channel_reply_requires_matching_message(self):
+        target = self.selector()
+        original = self.channels()[('agent', '#side')]['routing']
+        calls = [self.send_call(self.selector('#lab'), 'wrong-room-reply'),
+                 self.send_call(target, 'right-room-notice', notice=True), None,
+                 self.send_call(target, 'right-room-reply'), ('irc_state', {})]
+        observed = []
+
+        def respond(handler, request, sequence):
+            self.seen.append(request)
+            if 'channel-obligation-input' in json.dumps(request):
+                observed.append(request)
+                call = calls.pop(0) if calls else None
+                wire = self.provider.function_body(sequence, f'reply-{sequence}', *call) if call \
+                    else self.provider.response_body(sequence, 'channel reply boundary')
+            else:
+                wire = self.provider.response_body(sequence, 'channel fixture done')
+            self.provider.reply(handler, wire.encode(), close_header=True)
+            handler.close_connection = True
+
+        self.provider.runtime_handler = respond
+        events = self.channel_message('#side', 'querybot: channel-obligation-input', local=True)
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]['data']['reply_to'],
+                         dict(conversation_id=target[8:], membership=original['membership']))
+        self.assertFalse(calls)
+        admitted = next(e for e in self.events() if e['type'] == 'irc_admitted' and
+                        events[0]['seq'] in e['data']['sequences'])
+        turn = next(e['data']['turn_id'] for e in self.events()
+                    if e['seq'] > admitted['seq'] and e['type'] == 'turn_started')
+        self.assertEqual(sum(e['type'] == 'response_started' and
+                         e['data']['turn_id'] == turn for e in self.events()), 6)
+        self.assertEqual(sum(e['type'] == 'irc_reply_reminder' for e in self.events()), 1)
+        self.assertIn(f'target={target} status=available', json.dumps(observed[0]))
+        self.assertIn('membership=' + original['membership'], json.dumps(observed[0]))
+        self.assertIn('Outstanding IRC replies for this turn: none.', json.dumps(observed[-1]))
+        self.assert_wire('PRIVMSG #lab :wrong-room-reply')
+        self.assert_wire('NOTICE #side :right-room-notice')
+        self.assert_wire('PRIVMSG #side :right-room-reply')
+
+    def test_agent_channel_receives_while_operator_rejoin_is_pending(self):
+        self.server.defer_operator_join = True
+        self.server.links['queryop'].shutdown(socket.SHUT_RDWR)
+        self.wait(lambda: not self.channels()[('operator', '#lab')]['routing']['joined'] and
+                  self.channels()[('agent', '#lab')]['routing']['joined'])
+        events = self.channel_message('#lab', 'querybot: operator-rejoining-input',
+                                      recipients=('querybot',))
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]['data']['routing']['identity'], 'agent')
+
+    def test_operator_only_channel_records_unavailable_reply(self):
+        self.server.send('queryop', ':queryop!u@fake JOIN #operatoronly\r\n')
+        self.wait(lambda: ('operator', '#operatoronly') in self.channels())
+        events = self.channel_message('#operatoronly', 'querybot: unavailable-reply-input',
+                                      local=True, recipients=('queryop',))
+        self.assertEqual(len(events), 1)
+        self.assertTrue(events[0]['data']['reply'])
+        self.assertIsNone(events[0]['data']['reply_to'])
+        self.assertIn('target=unavailable status=unavailable', json.dumps(self.seen))
+        self.assertEqual(sum(e['type'] == 'irc_reply_reminder' for e in self.events()), 1)
+        self.assert_no_wire('unavailable-reply-input')
 
     def test_exact_id_address_action_notice_and_topic(self):
         self.run_calls(

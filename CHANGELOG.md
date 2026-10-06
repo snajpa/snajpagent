@@ -4,6 +4,11 @@
 
 ## Unreleased
 
+- Preserve exact channel reply targets through admission, checkpoint and resume.
+  Requests list outstanding replies with their original connection and membership;
+  unrelated rooms, notices, failed sends and replacement memberships leave them
+  pending. Admit agent-only channel traffic and keep shared-channel input single.
+
 - Preserve final terminal output on graceful exit and detach when a previous
   frame's acknowledgement arrives while more output is waiting in the private PTY.
 
@@ -26,7 +31,7 @@
   in model context. Pending, failed, uncertain and agent sends stay outside input;
   NOTICE receipts add context without starting a reply. External writes without
   receipts remain explicitly unconfirmed; native catch-up supplies its public
-  event. Channel frontend and reply-route integration remain in progress.
+  event. Channel frontend integration remains in progress.
 
 - Correlate IRC query and channel sends through negotiated labeled responses,
   including nested/interleaved batches, ACKs, errors, NOTICE and actions. Keep

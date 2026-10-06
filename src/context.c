@@ -3199,6 +3199,8 @@ snag_context_build(struct snag_session *session, const char *model, const char *
         snag_errorf(error, error_size, "invalid operator visibility context");
         goto out;
     }
+    if (control && control->irc_replies &&
+        append_host_input(builder.request_input, control->irc_replies) < 0) goto out;
     if (json_array_size(builder.tool_feedback)) {
         char *feedback = canonical_string(builder.tool_feedback, 256u * 1024u);
         int appended = feedback ? append_messagef(&builder, "user", 256u * 1024u,

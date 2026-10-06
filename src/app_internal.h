@@ -97,7 +97,7 @@ struct app_state {
     struct snag_irc_route irc_urgent_replies;
     size_t irc_urgent_reply_offsets[SNAG_IRC_DESTINATIONS_MAX];
     struct snag_irc_route irc_turn_replies;
-    json_t *irc_urgent_queries, *irc_turn_queries, *irc_request_conversations;
+    json_t *irc_urgent_conversations, *irc_turn_conversations, *irc_request_conversations;
     bool irc_destinations_ready;
     uint64_t irc_destinations_generation;
     struct snag_buf irc_urgent;

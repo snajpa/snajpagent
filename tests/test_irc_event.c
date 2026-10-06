@@ -140,6 +140,72 @@ channel_membership(void)
 }
 
 static void
+channel_reply_capture(void)
+{
+    struct snag_irc_event member = query();
+    member.kind = SNAG_IRC_CONNECTED;
+    member.local = true;
+    member.route.kind = SNAG_IRC_CHANNEL;
+    member.route.identity = SNAG_IRC_AGENT;
+    member.route.peer[0] = '\0';
+    strcpy(member.room, "#Room[");
+    strcpy(member.route.target, member.room);
+    strcpy(member.route.membership, "44444444444444444444444444444444");
+    member.route.joined = member.route.rejoin = true;
+    json_t *data = snag_irc_event_data(&member);
+    json_t *directory = snag_irc_conversations_update(NULL, data, 1u);
+    json_decref(data);
+    assert(directory);
+    struct snag_irc_event event = member;
+    event.kind = SNAG_IRC_MESSAGE;
+    event.route.identity = SNAG_IRC_OPERATOR;
+    strcpy(event.route.conversation, "55555555555555555555555555555555");
+    strcpy(event.route.membership, "66666666666666666666666666666666");
+    strcpy(event.room, "#room{");
+    strcpy(event.route.target, event.room);
+    event.input = event.urgent = event.reply = true;
+    assert(snag_irc_event_capture_reply(&event, directory, SNAG_IRC_RFC1459) == 0);
+    assert(event.reply_captured &&
+        !strcmp(event.reply_conversation, member.route.conversation) &&
+        !strcmp(event.reply_membership, member.route.membership));
+    roundtrip(&event);
+    data = snag_irc_event_data(&event);
+    struct snag_irc_event decoded;
+    const char *invalid[] = {"false", "{}", "{\"conversation_id\":\"invalid\"}",
+        "{\"conversation_id\":\"33333333333333333333333333333333\",\"membership\":\"bad\"}",
+        "{\"conversation_id\":\"33333333333333333333333333333333\",\"membership\":\"44444444444444444444444444444444\",\"extra\":true}"};
+    for (size_t i = 0u; i < sizeof(invalid) / sizeof(invalid[0]); ++i) {
+        json_t *bad = json_deep_copy(data);
+        assert(bad && json_object_set_new(bad, "reply_to",
+            json_loads(invalid[i], JSON_DECODE_ANY, NULL)) == 0);
+        assert(snag_irc_event_record_read("irc_event_v2", bad, &decoded) < 0);
+        json_decref(bad);
+    }
+    assert(json_object_set_new(data, "reply", json_false()) == 0);
+    assert(snag_irc_event_record_read("irc_event_v2", data, &decoded) < 0);
+    json_decref(data);
+    assert(snag_irc_event_capture_reply(&event, directory, SNAG_IRC_ASCII) == 0);
+    assert(event.reply_captured && !event.reply_conversation[0] && !event.reply_membership[0]);
+    roundtrip(&event);
+    ++event.route.generation;
+    assert(snag_irc_event_capture_reply(&event, directory, SNAG_IRC_RFC1459) == 0);
+    assert(event.reply_captured && !event.reply_conversation[0]);
+    roundtrip(&event);
+    --event.route.generation;
+    member.kind = SNAG_IRC_DISCONNECTED;
+    member.route.joined = false;
+    data = snag_irc_event_data(&member);
+    json_t *parted = snag_irc_conversations_update(directory, data, 2u);
+    assert(parted);
+    assert(snag_irc_event_capture_reply(&event, parted, SNAG_IRC_RFC1459) == 0);
+    assert(event.reply_captured && !event.reply_conversation[0]);
+    roundtrip(&event);
+    json_decref(data);
+    json_decref(parted);
+    json_decref(directory);
+}
+
+static void
 channel_send_input(void)
 {
     struct snag_irc_event event = query();
@@ -365,6 +431,7 @@ main(void)
     nickname_mappings();
     privacy_and_provenance();
     channel_membership();
+    channel_reply_capture();
     channel_send_input();
     delivery_states();
     invalid_fields();

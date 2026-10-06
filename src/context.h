@@ -42,6 +42,7 @@ struct snag_context_control {
      * process/capacity recovery boundary. An idle resume followed by a new
      * goal may still need orientation, but must retain ordinary history. */
     bool goal_recovery_rebase;
+    const char *irc_replies;
 };
 
 struct snag_context_projection {

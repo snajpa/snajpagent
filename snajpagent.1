@@ -757,6 +757,14 @@ message, the model receives one reminder.  Notices do not satisfy that reply
 requirement.  Other room traffic never forces a reply.
 Each requirement stays with the input or turn that admitted it. Resume restores
 those belonging to the current pending input or active turn.
+External channel requests retain the agent's channel ID, connection generation
+and membership at receipt time. Each request lists its outstanding reply targets.
+A successful message to that exact membership satisfies the requirement;
+messages in other channels and replacement memberships after rejoin or reconnect
+leave it pending. An unavailable agent membership is shown as unavailable.
+The model must explain that missing reply path instead of choosing another room.
+Shared channels admit one copy of incoming traffic. Channels joined only by the
+agent also reach model context.
 .PP
 The accepted per-server nick drives mentions, echo suppression, and model
 instructions.  Live IRC nick changes retain op status and produce room
