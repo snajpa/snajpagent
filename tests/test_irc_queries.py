@@ -18,7 +18,7 @@ from test_vm_frontend import Terminal
 from tmux_terminal import FakeResponses, free_loopback_port, irc_workspace, read_events
 
 
-class QueryTests(unittest.TestCase):
+class QueryFixture(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix='snag-query-')
         self.addCleanup(self.temporary.cleanup)
@@ -49,14 +49,14 @@ class QueryTests(unittest.TestCase):
                   e['data'].get('nick') == 'observer' for e in self.events()))
         self.wait_idle()
 
-    def start(self, *args):
+    def start(self, *args, ready=b'queryop@'):
         term = Terminal(self.root, ('--config', str(self.config), *args), subcommand=None,
                         extra_env={'SNAJPAGENT_IRC_UI_KEY': 'irc-ui-secret', 'PAGER': ''})
         children = FixtureChildren(term.process.pid)
         self.addCleanup(children.close)
         owners = {}
         self.addCleanup(self.close_terminal, term, owners)
-        owners.update(self.fixture_owners(term))
+        owners.update(self.fixture_owners(term, ready))
         self.terminals.append((term, children))
         return term
 
@@ -65,10 +65,10 @@ class QueryTests(unittest.TestCase):
         return subprocess.run(['ps', '-p', str(pid), '-o', 'lstart=,command='],
                               capture_output=True, text=True, check=False).stdout.strip()
 
-    def fixture_owners(self, term):
+    def fixture_owners(self, term, ready):
         # Pin portable identities while the native owners are still verified
         # descendants of this fixture. Linux also retains kernel pidfds.
-        term.until(b'queryop@')
+        term.until(ready)
         rows = []
         for row in subprocess.check_output(['ps', '-axo', 'pid=,ppid=,command='],
                                            text=True).splitlines():
@@ -215,6 +215,8 @@ class QueryTests(unittest.TestCase):
         self.term = self.start('--resume', path.parent.name)
         self.term.until(b'queryop@')
 
+
+class QueryTests(QueryFixture):
     def test_admission_identity_and_reply(self):
         self.direct('queryop', 'operator-secret-marker')
         self.direct('querybot', 'private-notice-context', notice=True)

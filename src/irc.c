@@ -1577,13 +1577,13 @@ query_send_chunk(struct snag_irc_core *irc, struct irc_conn *sender, struct irc_
                 clean, false, 0u, NULL, action);
         if (rc == 0) rc = private_state(recipient, send, SNAG_IRC_ACKNOWLEDGED);
         free(send);
-        return rc;
+        return rc < 0 ? -1 : 1;
     }
     struct irc_private_send **tail = &recipient->private_sends;
     while (*tail) tail = &(*tail)->next;
     *tail = send;
     recipient->private_bytes += bytes;
-    return 0;
+    return 1;
 }
 
 int
@@ -1617,23 +1617,27 @@ snag_irc_core_query_send(struct snag_irc_core *irc, const struct snag_irc_query_
     if (budget <= overhead) return snag_fail(error, error_size, EMSGSIZE, "IRC line is too short");
     budget -= overhead;
     if (budget > SNAG_IRC_TEXT_MAX) budget = SNAG_IRC_TEXT_MAX;
+    bool queued = false;
     const char *cursor = text;
     while (*cursor) {
         const char *newline = strchr(cursor, '\n');
         size_t remaining = newline ? (size_t)(newline - cursor) : strlen(cursor);
         while (remaining) {
             size_t take = utf8_chunk(cursor, remaining, budget);
-            if (!take || query_send_chunk(irc, sender, recipient, query, kind,
-                cursor, take, action, report) < 0) {
+            int rc = take ? query_send_chunk(irc, sender, recipient, query, kind,
+                cursor, take, action, report) : snag_errno(EINVAL);
+            if (rc < 0) {
                 return snag_errorf(error, error_size,
                     "cannot queue IRC query: %s", strerror(errno));
             }
+            queued |= rc > 0;
             cursor += take;
             remaining -= take;
         }
         if (newline) ++cursor;
     }
-    return 0;
+    return queued ? 0 : snag_fail(error, error_size, EINVAL,
+        "IRC query requires a nonempty line");
 }
 
 static int

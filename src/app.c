@@ -20,6 +20,7 @@
 #include "turn.h"
 #include "tools.h"
 #if SNAJPAGENT_VM
+#include "session_view.h"
 #include "vm_report.h"
 #endif
 #include "wire.h"
@@ -43,7 +44,7 @@
 #if SNAJPAGENT_VM
 struct app_view_command {
     const char *line;
-    json_t *snapshot;
+    json_t *snapshot, *selection;
 };
 struct app_view_terminal {
     char id[SNAG_ID_HEX_LEN + 1u];
@@ -2837,11 +2838,33 @@ network_command(struct app_state *app, const char *line, bool *handled)
         "hosting stopped; outgoing connections unchanged", config->listen);
 }
 
+int
+snag_app_irc_select_query(struct app_state *app, const struct snag_irc_query_target *target)
+{
+#if SNAJPAGENT_VM
+    if (app->view_command) {
+        json_t *route = snag_view_query_route(target);
+        if (!route) return -1;
+        json_decref(app->view_command->selection);
+        app->view_command->selection = route;
+        return 0;
+    }
+#endif
+    return snag_ui_send(&app->ui, (struct snag_ui_command){
+        .kind = SNAG_UI_QUERY_SELECT, .data.query = target});
+}
+
 static int
 send_operator_query(struct app_state *app, const char *line, const char *text,
                     enum snag_irc_event_kind kind)
 {
-    const struct snag_irc_query_target *target = &app->ui.input_query;
+    struct snag_irc_query_target frozen = app->ui.input_query;
+    const struct snag_irc_query_target *target = &frozen;
+    char id[SNAG_ID_HEX_LEN + 1u] = {0};
+    if (app->ui.input_interface && app->ui.view_request[0]) {
+        memcpy(id, app->ui.view_request, sizeof(id));
+        app->ui.view_request[0] = '\0';
+    }
     char error[256] = {0};
     struct snag_buf report = {.max = SNAG_MAX_IRC_SNAPSHOT};
     int rc;
@@ -2855,6 +2878,13 @@ send_operator_query(struct app_state *app, const char *line, const char *text,
             &report, error, sizeof(error));
     }
     bool accepted = report.len != 0u;
+    if (id[0]) {
+        int result = snag_ui_view_result(&app->ui, id,
+            rc == 0 || accepted ? "committed" : "rejected",
+            app->session.next_seq - 1u, rc < 0 ? error : "irc_event_v2");
+        snag_buf_free(&report);
+        return result;
+    }
     if (rc < 0) {
         if (snag_buf_printf(&report, "%s", error[0] ? error : "private send failed") < 0 ||
             snag_buf_terminate(&report) < 0 ||
@@ -3591,7 +3621,8 @@ view_command_native(const char *line)
     memcpy(verb, line, length);
     verb[length] = '\0';
     if (snag_string_in(verb, "/help /? /status /history /model /fast /effort /context "
-        "/state /goal /steering /banner /configure /compact /yield /verbose /cat")) return true;
+        "/state /goal /steering /banner /configure /compact /yield /verbose /cat "
+        "/query /msg /notice /me")) return true;
     if (strcmp(verb, "/session") && strcmp(verb, "/s")) return false;
     const char *argument = line + length;
     while (isspace((unsigned char)*argument)) ++argument;
@@ -3630,7 +3661,8 @@ view_control_publish(struct app_state *app, unsigned int index, bool interrupted
 
 static int
 view_command_complete(struct app_state *app, const char *id, const char *line,
-    const struct snag_buf *report, bool failed, bool terminal, json_t *snapshot)
+    const struct snag_buf *report, bool failed, bool terminal, json_t *snapshot,
+    json_t *selection)
 {
     json_t *saved = snapshot ? json_incref(snapshot) : view_command_report(app, line, report);
     char error[256] = "";
@@ -3641,7 +3673,9 @@ view_command_complete(struct app_state *app, const char *id, const char *line,
         "outcome", failed ? "error" : "ok", "report", saved ? saved : json_null(),
         "report_error", error, "return_terminal", terminal);
     json_decref(saved);
-    int rc = result ? snag_ui_command_result(&app->ui, result) : -1;
+    int rc = result ? 0 : -1;
+    if (!rc && selection) rc = json_object_set(result, "selection", selection);
+    if (!rc) rc = snag_ui_command_result(&app->ui, result);
     json_decref(result);
     return rc;
 }
@@ -3662,7 +3696,7 @@ view_terminal_finish(struct app_state *app)
     struct app_view_terminal *command = app->view_terminal;
     if (!command || command->dispatching || command->controls || command->pager) return 0;
     int rc = view_command_complete(app, command->id, command->command,
-        &command->report, command->failed, true, NULL);
+        &command->report, command->failed, true, NULL, NULL);
     view_terminal_free(app);
     return rc;
 }
@@ -3688,6 +3722,9 @@ view_input_command(struct app_state *app, const char *line, bool active,
     *prompt_ready = false;
     bool terminal = app->ui.input_terminal_command;
     if (!terminal && !view_command_native(line)) {
+        if (app->ui.input_query.conversation[0])
+            return snag_ui_view_result(&app->ui, id, "rejected", 0u,
+                "open the rollout to use this command's whole-terminal interface");
         json_t *result = json_pack("{s:s,s:s,s:I,s:s}", "id", id, "status", "terminal",
             "seq", (json_int_t)(app->session.next_seq - 1u),
             "reason", "command requires the session's whole-terminal interface");
@@ -3747,7 +3784,9 @@ view_input_command(struct app_state *app, const char *line, bool active,
         int completed = view_terminal_finish(app);
         return rc < 0 ? rc : completed;
     }
-    int published = view_command_complete(app, id, line, &report, failed, false, capture.snapshot);
+    int published = view_command_complete(app, id, line, &report, failed, false,
+        capture.snapshot, capture.selection);
+    json_decref(capture.selection);
     json_decref(capture.snapshot);
     snag_buf_free(&report);
     return rc < 0 ? rc : published;
@@ -3759,6 +3798,14 @@ snag_app_input_command(struct app_state *app, const char *line, bool active,
     bool *handled, bool *prompt_ready)
 {
 #if SNAJPAGENT_VM
+    if (app->ui.input_interface && app->ui.view_request[0] &&
+        app->ui.input_view == SNAG_RENDER_CHAT && app->ui.input_query.conversation[0] &&
+        !snag_prompt_command(line)) {
+        *handled = true;
+        *prompt_ready = false;
+        const char *text = line[0] == '/' && line[1] == '/' ? line + 1 : line;
+        return send_operator_query(app, line, text, SNAG_IRC_MESSAGE);
+    }
     if ((app->ui.input_interface || app->ui.input_terminal_command) &&
         app->ui.view_request[0] && snag_prompt_command(line))
         return view_input_command(app, line, active, handled, prompt_ready);

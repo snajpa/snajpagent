@@ -102,7 +102,7 @@ classic return and malformed/stalled peers. See [SV/1](session-view.md) for the
 implemented capability and framing contract. WITH_VM=0 omits this endpoint.
 The backend now accepts typed rollout commands through that mailbox and retains
 command echoes/results as immutable private presentation files. Completed command
-receipts survive live-owner reconnect; commands needing terminal/IRC adapters
+receipts survive live-owner reconnect; commands needing terminal adapters
 return a terminal requirement before effects. The frontend now submits typed
 commands and opens immediate output in report windows. `:reports` lists saved
 references; `:report [ID]` reopens one. Version6 workspace snapshots retain report
@@ -788,7 +788,13 @@ known peer handles before queued commands can observe later NICK/QUIT events.
 `/query` without operands lists existing operator-query selectors. Explicit
 addresses stay within the current session owner. Channel address commands,
 channel actions, a richer ambiguity picker and VM connection/channel/query
-buffers remain next. External multi-channel state and labeled responses are
+buffers remain next. The semantic owner now accepts frozen operator-query
+routes, independent revisioned drafts and scoped commands. Request IDs bind
+route and text; private admission clears only its exact draft revision. Query
+selection returns to the requesting frontend while preserving classic focus.
+The compact query catalogue excludes bodies, and incoming metadata stays current
+while the semantic controller is attached. Vim still needs per-conversation
+composers, reader filters and window selection using this owner capability. External multi-channel state and labeled responses are
 unfinished. The nickname mapping helper follows the
 [IRC CASEMAPPING definitions](https://modern.ircdocs.horse/#casemapping-parameter).
 

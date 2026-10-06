@@ -384,6 +384,7 @@ ifeq ($(WITH_VM),1)
 	python3 tests/test_vm_launch.py ./$(BIN)
 	python3 tests/test_vm_editor.py ./$(BIN)
 	python3 tests/test_session_view.py ./$(BIN)
+	python3 tests/test_session_queries.py ./$(BIN)
 	python3 tests/test_session_commands.py ./$(BIN)
 else
 	python3 tests/test_session_view.py ./$(BIN) --without-vm

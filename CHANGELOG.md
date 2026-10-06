@@ -4,6 +4,15 @@
 
 ## Unreleased
 
+- Extend the semantic owner with private-query routes, separate revisioned
+  drafts and route-bound receipts. Reject stale recipients after nick or
+  connection changes. Admit private input during provider work without model
+  steering; retain query metadata while a frontend is attached. Scoped `/query`
+  returns a window selection, and `/msg`, `/notice`, `/me` use captured routes.
+  Classic focus and drafts remain independent. Reject messages consisting only
+  of empty or stripped lines without clearing their drafts or claiming admission.
+  Vim conversation panes are in progress.
+
 - Add shared operator query commands: `/query` opens or selects a private tab,
   `/msg` and `/notice` send without changing focus, and `/me` sends a private
   action. Support quoted endpoint/nick and same-session qualified addresses,

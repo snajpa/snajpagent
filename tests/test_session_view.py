@@ -324,7 +324,7 @@ class SessionViewTests(unittest.TestCase):
         saved = hashlib.sha256(self.journal.read_bytes()).digest()
         peer.send(type='submit', generation=peer.generation, id=uuid.uuid4().hex,
                   text='must not route implicitly', route='other/endpoint/nick')
-        self.assertIn('fields', peer.until('error')['message'])
+        self.assertIn('route', peer.until('error')['message'])
         peer.send(type='submit', generation=peer.generation + 1, id=uuid.uuid4().hex, text='stale')
         peer.until('error')
         self.assertEqual(hashlib.sha256(self.journal.read_bytes()).digest(), saved)

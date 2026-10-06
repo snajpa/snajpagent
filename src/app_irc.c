@@ -155,8 +155,7 @@ snag_app_irc_command(struct app_state *app, const char *line, bool *handled)
     if (query) {
         /* Opening emits its durable metadata before returning. Existing
          * metadata is already retained in the UI's tab directory. */
-        rc = snag_ui_send(&app->ui, (struct snag_ui_command){
-            .kind = SNAG_UI_QUERY_SELECT, .data.query = &target});
+        rc = snag_app_irc_select_query(app, &target);
     }
     goto done;
 rejected:
@@ -167,8 +166,10 @@ rejected:
     if (report.len) rc = snag_app_report(app, SNAG_UI_WARNING, (const char *)report.data);
     if (!rc) rc = snag_app_report(app, SNAG_UI_ERROR,
         error[0] ? error : "IRC command failed");
-    if (!rc && !report.len) rc = snag_ui_send(&app->ui, (struct snag_ui_command){
-        .kind = SNAG_UI_DRAFT, .text = line});
+    if (!rc && !report.len && !app->ui.input_interface) {
+        rc = snag_ui_send(&app->ui, (struct snag_ui_command){
+            .kind = SNAG_UI_DRAFT, .text = line});
+    }
 done:
     free(operand);
     snag_buf_free(&report);

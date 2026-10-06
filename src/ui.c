@@ -822,8 +822,8 @@ view_bound(void *opaque, uint64_t generation)
 }
 
 static int
-view_submit(void *opaque, const char *id, const char *text, uint64_t generation,
-    bool terminal)
+view_submit(void *opaque, const char *id, const char *text, const json_t *route,
+    uint64_t generation, bool terminal)
 {
     struct snag_ui_display *display = opaque;
     struct snag_ui_runtime *runtime = display->runtime;
@@ -852,15 +852,46 @@ view_submit(void *opaque, const char *id, const char *text, uint64_t generation,
         display->term.prompt_wanted = false;
         snag_term_destination_route(&display->term, text, &item->route);
     }
-    take_snapshot(display, &item->snapshot, item->text);
+    take_snapshot(display, &item->snapshot, NULL);
     item->snapshot.view = SNAG_RENDER_ROLLOUT;
-    item->steering = item->snapshot.active && !snag_prompt_command(text);
+    item->snapshot.selection = (struct snag_irc_target){0};
+    item->snapshot.query = (struct snag_irc_query_target){0};
+    if (json_is_object(route)) {
+        struct snag_irc_query_target target;
+        if (terminal || snag_view_query_read(route, &target) < 0 ||
+            target.identity != SNAG_IRC_OPERATOR) goto stale;
+        struct ui_query_tab *tab;
+        for (tab = display->queries; tab; tab = tab->next)
+            if (!strcmp(tab->target.connection, target.connection) &&
+                !strcmp(tab->target.conversation, target.conversation) &&
+                tab->target.identity == target.identity) break;
+        if (!tab) goto stale;
+        struct snag_irc_scope *scope = NULL;
+        for (size_t i = 0u; i < item->snapshot.scopes.count; ++i)
+            if (!strcmp(item->snapshot.scopes.items[i].target.connection, target.connection)) {
+                scope = &item->snapshot.scopes.items[i];
+                break;
+            }
+        if (!scope) goto stale;
+        target.destination = scope->target.destination;
+        scope->target.generation = target.generation;
+        item->snapshot.selection.id = target.destination;
+        item->snapshot.view = SNAG_RENDER_CHAT;
+        item->snapshot.query = target;
+    }
+    display_capture_query(display, text, &item->snapshot);
+    item->steering = item->snapshot.view == SNAG_RENDER_ROLLOUT &&
+        item->snapshot.active && !snag_prompt_command(text);
     if (item->steering) atomic_fetch_add(&runtime->steering_pending, 1u);
     if (queue_push(&runtime->actions, item)) return 0;
     if (item->steering) atomic_fetch_sub(&runtime->steering_pending, 1u);
     free(item->text);
     free(item);
     return snag_errno(EAGAIN);
+stale:
+    free(item->text);
+    free(item);
+    return snag_errno(ESTALE);
 }
 
 static int
@@ -1682,11 +1713,13 @@ apply_display(struct snag_ui_display *display, struct ui_message *message)
             memset(&message->command.data.prompt, 0, sizeof(message->command.data.prompt));
             display->term.submit_awaiting_activity = false;
             return apply_prompt(display);
+        case SNAG_UI_IRC:
+            return display_query_event(display, message->command.data.irc, true);
         case SNAG_UI_HOST: case SNAG_UI_HELP: case SNAG_UI_RUNTIME:
         case SNAG_UI_ERROR: case SNAG_UI_WARNING: case SNAG_UI_ROLLOUT_END:
         case SNAG_UI_ROLLOUT_ABORT: case SNAG_UI_SUBMITTED: case SNAG_UI_PUBLIC_BEGIN:
         case SNAG_UI_PUBLIC: case SNAG_UI_ORIENTATION: case SNAG_UI_HISTORY:
-        case SNAG_UI_IRC: case SNAG_UI_DURABLE: case SNAG_UI_EVENT:
+        case SNAG_UI_DURABLE: case SNAG_UI_EVENT:
         case SNAG_UI_RESUME: case SNAG_UI_PROTOCOL: case SNAG_UI_TRANSPORT:
         case SNAG_UI_RAW: case SNAG_UI_VOICE_EVENT: case SNAG_UI_CAPTION:
             return 0;
@@ -1943,6 +1976,44 @@ snag_ui_session_listen(struct snag_ui *ui, const struct snag_session *session)
     return rc;
 }
 
+#if SNAJPAGENT_VM
+static json_t *
+view_queries(const struct snag_session *session)
+{
+    json_t *queries = json_array();
+    if (!queries) return NULL;
+    const char *connection;
+    json_t *entry;
+    json_object_foreach(session->irc_conversations, connection, entry) {
+        const char *conversation;
+        json_t *item;
+        json_object_foreach(json_object_get(entry, "conversations"), conversation, item) {
+            const json_t *data = json_object_get(item, "data");
+            const json_t *routing = json_object_get(data, "routing");
+            const char *kind = snag_json_string(routing, "conversation_kind");
+            if (!kind || strcmp(kind, "query")) continue;
+            struct snag_irc_query_target target = {0};
+            (void)snag_strcpy(target.connection, sizeof(target.connection), connection);
+            (void)snag_strcpy(target.conversation, sizeof(target.conversation), conversation);
+            (void)snag_strcpy(target.peer, sizeof(target.peer), snag_json_string(routing, "peer"));
+            target.identity = !strcmp(snag_json_string(routing, "identity"), "operator") ?
+                SNAG_IRC_OPERATOR : SNAG_IRC_AGENT;
+            (void)snag_json_integer_u64(routing, "generation", &target.generation);
+            json_t *route = snag_view_query_route(&target);
+            json_t *query = route ? json_pack("{s:O,s:O,s:O}", "route", route,
+                "endpoint", json_object_get(entry, "endpoint"),
+                "connected", json_object_get(entry, "connected")) : NULL;
+            json_decref(route);
+            if (!query || json_array_append_new(queries, query) < 0) {
+                json_decref(queries);
+                return NULL;
+            }
+        }
+    }
+    return queries;
+}
+#endif /* SNAJPAGENT_VM */
+
 int
 snag_ui_view_state(struct snag_ui *ui, const struct snag_session *session)
 {
@@ -1954,6 +2025,13 @@ snag_ui_view_state(struct snag_ui *ui, const struct snag_session *session)
         "model", session->default_model, "effort", session->default_effort,
         "service_tier", session->service_tier ? session->service_tier : "");
     if (!state) return -1;
+#if SNAJPAGENT_VM
+    json_t *queries = view_queries(session);
+    if (!queries || json_object_set_new(state, "queries", queries) < 0) {
+        json_decref(state);
+        return -1;
+    }
+#endif
     int rc = snag_ui_send(ui, (struct snag_ui_command){
         .kind = SNAG_UI_VIEW_STATE, .data.voice = state});
     json_decref(state);

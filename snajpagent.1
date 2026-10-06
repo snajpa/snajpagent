@@ -2047,7 +2047,8 @@ IRC routes and attachments remain under development.
 .SS "Read command output"
 Submit a slash command from the transcript composer. Supported commands include
 /help, /status, /history, /model, /fast, /effort, /context, /state, /goal,
-/steering, /banner, /configure, /compact, /yield, /verbose, /cat and /session list or name.
+/steering, /banner, /configure, /compact, /yield, /verbose, /cat, /msg,
+/notice and /session list or name.
 The command echo and immediate result open a retained report when that transcript
 is still focused and its next draft is empty. Newer typing remains in the composer;
 use
@@ -2156,12 +2157,27 @@ admits that saved reference before accepting following keyboard input. The curre
 handoff returns automatically after finite /config or /send operations;
 other commands return on /s d.
 .PP
-The backend also offers revisioned rollout drafts. Bound controllers can read,
+The backend offers revisioned rollout and operator-query drafts. Bound controllers can read,
 replace and subscribe to a draft, using its expected revision to reject stale edits.
 Revision-aware admission clears only the submitted revision; newer drafts survive.
 These drafts stay in owner memory and do not enter model history until submitted.
 The workspace composer reconciles these drafts with its saved local snapshots.
-Classic terminal editor drafts remain separate from this semantic rollout draft.
+Classic terminal editor drafts remain separate from these semantic drafts.
+.PP
+The irc_queries capability publishes compact query metadata and accepts private
+routes containing the connection and conversation IDs, connection generation,
+local identity and peer nick. Operator sends preserve this exact recipient;
+agent queries remain read-only. Independent routes keep separate drafts and
+revisions. A changed nick or connection generation leaves an older draft
+available under its original route, with stale sends rejected. Private sends
+stay outside model input, including during an active turn. Their receipts
+acknowledge durable local admission; delivery status remains in IRC events.
+Messages consisting only of empty or stripped lines are rejected with their drafts retained.
+.PP
+/query returns a selection route to the requesting frontend without changing
+the classic tab. /msg and /notice send explicitly; /me uses the supplied query.
+These owner capabilities support the Vim conversation windows under development.
+Commands requiring a whole terminal must originate from the rollout.
 Existing owners retain their advertised capabilities. Builds using
 .B WITH_VM=0
 omit this endpoint; Windows currently lacks the native-owner backend.

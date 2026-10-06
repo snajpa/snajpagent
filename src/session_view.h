@@ -28,12 +28,18 @@ int snag_view_channel_send(struct snag_view_channel *, const json_t *);
 int snag_view_channel_write(struct snag_view_channel *);
 int snag_view_channel_read(struct snag_view_channel *, json_t **);
 
+struct snag_irc_query_target;
+/* Query routes retain the exact local identity, connection epoch and recipient.
+ * Destination numbers are UI selectors and are resolved only by the owner. */
+json_t *snag_view_query_route(const struct snag_irc_query_target *);
+int snag_view_query_read(const json_t *, struct snag_irc_query_target *);
+
 struct snag_view_server;
 struct snag_view_callbacks {
     /* All callbacks run on the presentation owner, never on the engine. */
     void (*bound)(void *, uint64_t generation);
-    int (*submit)(void *, const char *id, const char *text, uint64_t generation,
-        bool terminal);
+    int (*submit)(void *, const char *id, const char *text, const json_t *route,
+        uint64_t generation, bool terminal);
     int (*control)(void *, bool quit);
     void *opaque;
 };

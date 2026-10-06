@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "session_view.h"
 #include "fs.h"
+#include "irc.h"
 
 #include <assert.h>
 #include <stdio.h>
@@ -26,10 +27,10 @@ bound(void *opaque, uint64_t generation)
 }
 
 static int
-submit(void *opaque, const char *id, const char *text, uint64_t generation,
+submit(void *opaque, const char *id, const char *text, const json_t *route, uint64_t generation,
     bool terminal)
 {
-    assert(!terminal);
+    assert(!terminal && route);
     struct engine *engine = opaque;
     assert(strlen(id) == SNAG_ID_HEX_LEN && *text && generation == engine->generation);
     ++engine->submissions;
@@ -84,12 +85,12 @@ attach(struct snag_view_server *server, struct snag_view_channel *peer, int dir,
 }
 
 static uint64_t
-edit(struct snag_view_server *server, struct snag_view_channel *peer,
-    uint64_t generation, uint64_t revision, const char *text)
+edit_route(struct snag_view_server *server, struct snag_view_channel *peer,
+    uint64_t generation, uint64_t revision, const char *text, const json_t *route)
 {
     json_t *reply = exchange(server, peer,
-        json_pack("{s:s,s:I,s:s,s:I,s:i,s:s,s:I}", "type", "draft",
-        "generation", (json_int_t)generation, "route", "rollout",
+        json_pack("{s:s,s:I,s:O,s:I,s:i,s:s,s:I}", "type", "draft",
+        "generation", (json_int_t)generation, "route", route,
         "revision", (json_int_t)revision, "edit", 1, "text", text,
         "cursor", (json_int_t)strlen(text)), "draft");
     assert(!strcmp(snag_json_string(reply, "status"), "accepted"));
@@ -100,17 +101,37 @@ edit(struct snag_view_server *server, struct snag_view_channel *peer,
     return next;
 }
 
-static void
-assert_draft(struct snag_view_server *server, struct snag_view_channel *peer,
+static uint64_t
+edit(struct snag_view_server *server, struct snag_view_channel *peer,
     uint64_t generation, uint64_t revision, const char *text)
 {
-    json_t *reply = exchange(server, peer, json_pack("{s:s,s:I,s:s}", "type", "draft_get",
-        "generation", (json_int_t)generation, "route", "rollout"), "draft");
+    json_t *route = json_string("rollout");
+    uint64_t next = edit_route(server, peer, generation, revision, text, route);
+    json_decref(route);
+    return next;
+}
+
+static void
+assert_route(struct snag_view_server *server, struct snag_view_channel *peer,
+    uint64_t generation, uint64_t revision, const char *text, const json_t *route)
+{
+    json_t *reply = exchange(server, peer, json_pack("{s:s,s:I,s:O}", "type", "draft_get",
+        "generation", (json_int_t)generation, "route", route), "draft");
     json_t *draft = json_object_get(reply, "draft");
+    assert(json_equal(json_object_get(draft, "route"), route));
     assert(!strcmp(snag_json_string(draft, "text"), text));
     assert(json_integer_value(json_object_get(draft, "revision")) == (json_int_t)revision);
     assert(json_integer_value(json_object_get(draft, "cursor")) == (json_int_t)strlen(text));
     json_decref(reply);
+}
+
+static void
+assert_draft(struct snag_view_server *server, struct snag_view_channel *peer,
+    uint64_t generation, uint64_t revision, const char *text)
+{
+    json_t *route = json_string("rollout");
+    assert_route(server, peer, generation, revision, text, route);
+    json_decref(route);
 }
 
 static void
@@ -206,6 +227,47 @@ test_admission_edit_order(void)
     json_decref(reply);
     assert_draft(server, &peer, generation, revision, "typed while command works");
     assert(engine.submissions == 4u);
+
+    struct snag_irc_query_target query = {.generation = 7u, .identity = SNAG_IRC_OPERATOR};
+    (void)snag_strcpy(query.connection, sizeof(query.connection), first);
+    (void)snag_strcpy(query.conversation, sizeof(query.conversation), second);
+    (void)snag_strcpy(query.peer, sizeof(query.peer), "first-peer");
+    json_t *a = snag_view_query_route(&query);
+    (void)snag_strcpy(query.conversation, sizeof(query.conversation), third);
+    (void)snag_strcpy(query.peer, sizeof(query.peer), "second-peer");
+    json_t *b = snag_view_query_route(&query);
+    assert(a && b);
+    uint64_t a_revision = edit_route(server, &peer, generation, 1u, "same text", a);
+    uint64_t b_revision = edit_route(server, &peer, generation, 1u, "same text", b);
+    const char *private_id = "55555555555555555555555555555555";
+    reply = exchange(server, &peer, json_pack("{s:s,s:I,s:O,s:I,s:s,s:s}",
+        "type", "submit", "generation", (json_int_t)generation, "route", a,
+        "draft_revision", (json_int_t)a_revision, "id", private_id, "text", "same text"),
+        "result");
+    assert(!strcmp(snag_json_string(reply, "status"), "pending"));
+    json_decref(reply);
+    b_revision = edit_route(server, &peer, generation, b_revision, "new second draft", b);
+    assert(snag_view_server_result(server, private_id, "committed", 6u, "irc_event_v2") == 0);
+    assert_receipt(server, &peer, private_id, a_revision + 1u);
+    assert_route(server, &peer, generation, a_revision + 1u, "", a);
+    assert_route(server, &peer, generation, b_revision, "new second draft", b);
+    assert_draft(server, &peer, generation, revision, "typed while command works");
+    reply = exchange(server, &peer, json_pack("{s:s,s:I,s:O,s:I,s:s,s:s}",
+        "type", "submit", "generation", (json_int_t)generation, "route", b,
+        "draft_revision", (json_int_t)a_revision, "id", private_id, "text", "same text"),
+        "error");
+    assert(strstr(snag_json_string(reply, "message"), "already used"));
+    json_decref(reply);
+    assert(engine.submissions == 5u);
+    a_revision = edit_route(server, &peer, generation, a_revision + 1u, "first retained", a);
+    ++query.generation;
+    json_t *renewed = snag_view_query_route(&query);
+    assert_route(server, &peer, generation, 1u, "", renewed);
+    assert_route(server, &peer, generation, b_revision, "new second draft", b);
+    assert_route(server, &peer, generation, a_revision, "first retained", a);
+    json_decref(renewed);
+    json_decref(a);
+    json_decref(b);
 
     snag_view_channel_close(&peer);
     snag_view_server_close(server);

@@ -15,15 +15,16 @@ workspace frontend uses these capabilities for live attachment and prompt editin
 Local drafts and pending request identities are saved in private workspace snapshots
 before submission; reconnect queries receipts without resending text. Pending
 receipt queries repeat until resolved, and unknown outcomes require explicit recovery.
-The owner also retains revisioned rollout drafts through controller changes.
+The owner retains revisioned rollout and operator-query drafts through controller changes.
 The workspace reconciles owner and saved drafts using their last shared text
 digest and owner identity; conflicts retain both copies for an explicit choice.
 The backend also accepts typed commands and retains immutable command reports.
 The frontend retains report buffers and hands terminal-required commands to a
 bound classic attachment. Finite editor and transfer commands return after
 completion; native /cat retains a report snapshot. Deferred-control reports
-replay across reconnect, and their catalogue survives owner restart. IRC routes
-remain integration work; clients use only advertised capabilities. An owner without this endpoint
+replay across reconnect, and their catalogue survives owner restart. The owner
+accepts frozen private-query routes; Vim conversation windows remain integration
+work. Clients use only advertised capabilities. An owner without this endpoint
 continues to offer its existing terminal attachment and best-effort history.
 
 ## Framing and service
@@ -56,11 +57,14 @@ All message names below are the JSON `type` value. A new client sends
 `{"type":"hello","version":1}`. `capabilities` supplies `version`, the full
 `session` ID, a random live-owner `instance` ID and `features`.
 The implemented features are `observe`, `control`, `submit`, `cancel`, `quit`,
-`detach`, `receipts`, `drafts`, `commands`, `terminal_commands` and `reports`.
+`detach`, `receipts`, `drafts`, `commands`, `terminal_commands`, `reports` and
+`irc_queries`.
 
 After hello, `state` messages contain a `state` object with committed `seq`,
 byte `end`, `sha256`, journal `schema`, `active`, and the next-turn `provider`,
-`model`, `effort` and `service_tier` (empty for the provider default). Publication follows owner admission. Registration and
+`model`, `effort` and `service_tier` (empty for the provider default). `queries`
+contains compact rows with `route`, `endpoint` and per-identity connection status
+in `connected`. Message bodies remain in the journal. Publication follows owner admission. Registration and
 snapshot selection run on the same presentation thread as state publication.
 Pending state is coalesced; a slow observer reads the complete intervening
 range from the journal. Observation never reserves a controller or changes
@@ -77,11 +81,11 @@ still causes the history reader to return its new page.
 | --- | --- |
 | `reserve` | `reserved` with a `generation`, or `error`. Uses the same exclusive reservation as the classic terminal. |
 | `commit` with `generation` | `bound` with that generation. The client may then submit input. Classic STATUS now reports attached. |
-| `submit` with `generation`, 32-character lowercase hexadecimal `id`, and `text` | `result` with that ID and `pending`, followed by `committed` or `rejected`. Plain input addresses the rollout, including when the previous terminal showed IRC. Active work uses existing steering/queue admission. Slash commands use the separate `command` exchange; `/ro` retains the ordinary read-only prompt syntax. |
-| `command` with `generation`, `id`, `text`, `route: rollout`, and optional `draft_revision` | `pending`, then `completed` with an immutable report or `terminal` before executing any effect. Uses the same mailbox, receipt and draft-revision rules as submission. |
+| `submit` with `generation`, 32-character lowercase hexadecimal `id`, and `text` | `result` with that ID and `pending`, followed by `committed` or `rejected`. Input without `route` addresses the rollout, including when the previous terminal showed IRC. A query route addresses that exact operator conversation. Active work uses existing steering/queue admission. Slash commands use the separate `command` exchange; `/ro` retains the ordinary read-only prompt syntax. |
+| `command` with `generation`, `id`, `text`, `route`, and optional `draft_revision` | `pending`, then `completed` with an immutable report or `terminal` before executing any effect. Uses the same mailbox, receipt and draft-revision rules as submission. |
 | `receipt` with `id` | Current `result`, or `unknown`. Requires hello but no controller lease. |
-| `draft_get` with `generation` and `route: rollout` | Current `draft` snapshot and subscription to later owner changes. Requires a bound controller. |
-| `draft` with `generation`, `route: rollout`, expected `revision`, positive `edit`, `text` and byte `cursor` | A `draft` response echoes `edit`, with `status: accepted` or `conflict` and the current snapshot. The cursor must lie on a grapheme boundary. Unsupported routes and invalid text/cursors leave the draft unchanged. |
+| `draft_get` with `generation` and `route` | Current `draft` snapshot and subscription to later changes to that route. Requires a bound controller. |
+| `draft` with `generation`, `route`, expected `revision`, positive `edit`, `text` and byte `cursor` | A `draft` response echoes `edit`, with `status: accepted` or `conflict` and the current snapshot. The cursor must lie on a grapheme boundary. Unsupported routes and invalid text/cursors leave the draft unchanged. |
 | `cancel` with `generation` | `control` with `intent: cancel`; the existing owner interrupt path performs cancellation. |
 | `detach` with `generation` | `detached`, then connection close. The owner continues. |
 | `quit` with `generation` | `control` with `intent: quit`; normal owner shutdown follows, then `exit` with its `status` and connection close. |
@@ -94,12 +98,13 @@ or classic terminal receives a busy response while the lease is held.
 Only one submission awaits engine admission at a time. `pending` acknowledges
 transport/queue receipt, never durable acceptance. `committed` includes `seq`
 and `event` referencing the existing journal admission (`input_received`,
-`steering_added`, or a future-turn admission). Receipt publication follows the
+`steering_added`, a future-turn admission, or durable private-send admission). Receipt publication follows the
 successful store commit and precedes presentation or provider execution.
 The journal format stays unchanged.
 
-The owner retains request IDs, text digests and results across connection loss.
-Repeating the same ID/text returns the receipt; changing its text is rejected.
+The owner retains request IDs, exact routes, text digests and results across
+connection loss. Repeating the same ID/route/text returns the receipt; changing
+its route or text is rejected.
 The workspace must query an uncertain ID before taking further action and must
 never automatically resubmit it as a new request. An owner restart changes
 `instance`; an unknown receipt remains uncertain until explicitly reconciled
@@ -114,8 +119,10 @@ journal watermark, and `outcome` is `ok` or `error`; it does not invent an input
 admission event. A deferred operation such as `/configure` reports that it was
 scheduled. Later completion is separate from this receipt. Native adapters cover
 help/status/history, model/effort/context/fast settings, verbosity, goal/state,
-steering/banner, configure/compact/yield, file snapshots and session list/name. Commands needing
-terminal input or IRC scope return `terminal` before dispatch. The client can
+steering/banner, configure/compact/yield, file snapshots, session list/name and
+private `/query`, `/msg`, `/notice`, `/me`. Commands needing terminal input return
+`terminal` before dispatch from the rollout; query-scoped requests are rejected
+with instructions to open the rollout for that transaction. The client can
 refer to that original request through a bound whole-terminal transaction;
 this result never contains a shell command supplied by the owner.
 
@@ -183,8 +190,8 @@ receive no unsolicited draft text. Updates and submissions run on the same
 presentation owner. Drafts are ephemeral owner state; editing them adds no
 journal event or model input.
 
-A revision-aware submission adds `route: rollout` and `draft_revision`.
-The revision and exact text must match the current owner draft. Legacy plain
+A revision-aware submission adds `route` and `draft_revision`.
+The revision and exact text must match the owner draft for that exact route. Legacy plain
 submissions remain supported. Duplicate request IDs return their saved receipt
 before consulting the current draft, so later edits cannot invalidate a receipt.
 On successful admission, the owner clears the draft only if that exact revision
@@ -192,6 +199,36 @@ is still current. A newer edit, including one from a replacement controller,
 survives the older admission. The receipt's `draft_cleared` is the resulting
 empty-draft revision, or zero when no draft was cleared. Clients use that identity
 to distinguish admission's clear from an independently edited remote draft.
+
+## Private query routes
+
+With `irc_queries`, `route` is either the string `rollout` or an object with
+exactly `connection`, `conversation`, `generation`, `identity` and `peer`.
+The first two fields are lowercase32-hex IDs; generation is a positive integer,
+identity is `operator` or `agent`, and peer is the retained nick. The selected
+owner supplies the session namespace. Query sends and writable drafts require
+operator identity. Agent rows support observation; writing them is rejected.
+The owner resolves its current destination number and checks the frozen handle
+on the IRC connection's owner thread. Unknown, foreign, stale and wrong-role
+routes cannot become channel messages or model prompts.
+
+Each exact route has its own draft, cursor and revision. Two windows using the
+same route share that draft. A renamed peer or changed connection generation
+has a different handle; the earlier draft stays available under its old handle
+and sends fail until the user explicitly chooses a current recipient. Clearing
+one submitted revision leaves every other route and newer revision unchanged.
+Draft subscriptions follow the last requested/edited route; a client switches
+with `draft_get` and reconciles other clears through their submission receipts.
+
+`/query ADDRESS [TEXT]` uses the captured endpoint scope and returns an optional
+`selection` route in its completed receipt. The frontend applies that selection
+to the originating window. It leaves the classic selected tab intact. `/msg`
+and `/notice` return ordinary command receipts, and `/me` uses the supplied query
+route. Plain private input is admitted during active provider work without
+adding model steering. Private `committed` confirms durable local send admission;
+IRC delivery state remains in the typed journal events. A partially admitted
+send cannot be replayed merely because its remaining chunks failed. Input
+consisting only of empty or stripped lines is rejected without clearing its draft.
 
 ## Terminal command references
 
@@ -238,3 +275,9 @@ and multiframe Unicode submissions, duplicate/reconnect/lost-ack receipts,
 active steering, provider-wait cancellation, rejection, stalled/malformed peers,
 inode-preserving cleanup and distinct detach/quit lifetimes. Existing native
 session and workspace PTY suites cover compatibility at the surrounding boundary.
+
+`tests/test_session_queries.py` covers exact query routing, independent drafts,
+request deduplication across routes, nickname reuse, active-provider privacy,
+query catalogue/reconnect, incoming queries and preserved classic focus.
+`tests/test_session_draft.c` withholds engine admission to verify deterministic
+cross-conversation edit/clear ordering and connection-epoch draft isolation.
