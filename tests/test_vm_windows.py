@@ -136,6 +136,8 @@ class WindowsTests(unittest.TestCase):
         session = self.live(child)
         child.finish('qa')
         resumed = self.start('--resume', 'windows-resume', expect=b'history')
+        resumed.write(b'/session\r')
+        resumed.repaint_until(b'Match')
         resumed.command('attach')
         resumed.repaint_until(b'Use :session to start a stored session')
         self.assertEqual(self.requests, [])
