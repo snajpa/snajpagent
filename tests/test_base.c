@@ -948,7 +948,7 @@ test_native_editor(void)
     assert(swprintf(path, MAX_PATH, L"%ls - \x4e2d & %%.ini", original) > 0);
     assert(MoveFileW(original, path));
     char utf8[MAX_PATH * 4u];
-    assert(WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, path, -1, utf8, sizeof(utf8), NULL, NULL));
+    assert(WideCharToMultiByte(CP_UTF8, 0, path, -1, utf8, sizeof(utf8), NULL, NULL));
     assert(GetModuleFileNameW(NULL, program, 32768u));
     assert(swprintf(editor, 32768u, L"\"%ls\" --editor-test-child", program) > 0);
     assert(SetEnvironmentVariableW(L"EDITOR", editor));
@@ -976,7 +976,7 @@ check_windows_permission_copy(int fd, const wchar_t *source)
     wchar_t path[MAX_PATH + 8u];
     char utf8[(MAX_PATH + 8u) * 4u];
     assert(swprintf(path, sizeof(path) / sizeof(path[0]), L"%ls-copy", source) > 0);
-    assert(WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, path, -1, utf8, sizeof(utf8), NULL, NULL));
+    assert(WideCharToMultiByte(CP_UTF8, 0, path, -1, utf8, sizeof(utf8), NULL, NULL));
     int copy = snag_create_private_at(-1, utf8, true);
     assert(copy >= 0 && snag_permissions_capture(fd, &permissions) == 0);
     assert(snag_permissions_match(fd, &permissions) == 1);
@@ -1228,7 +1228,7 @@ test_private_directory(void)
     assert(count && count < MAX_PATH);
     assert(GetTempFileNameW(temp, L"snp", 0, wide));
     assert(DeleteFileW(wide));
-    assert(WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, wide, -1, path, sizeof(path), NULL, NULL));
+    assert(WideCharToMultiByte(CP_UTF8, 0, wide, -1, path, sizeof(path), NULL, NULL));
     assert(snag_mkdir_private(path) == 0);
     root = snag_realpath(path);
     HANDLE handle = CreateFileW(wide, FILE_READ_ATTRIBUTES | READ_CONTROL,
@@ -1631,7 +1631,7 @@ test_realpath(void)
     assert(GetTempFileNameW(temp, L"snp", 0, source));
     assert(swprintf(target, sizeof(target) / sizeof(target[0]), L"%ls-\u03b1-\U0001f600", source) > 0);
     assert(MoveFileW(source, target));
-    assert(WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, target, -1, input, sizeof(input), NULL, NULL));
+    assert(WideCharToMultiByte(CP_UTF8, 0, target, -1, input, sizeof(input), NULL, NULL));
     path = snag_realpath(input);
     assert(path && strstr(path, "-\xce\xb1-\xf0\x9f\x98\x80"));
     assert(snag_utf8_valid((const unsigned char *)path, strlen(path), true));
