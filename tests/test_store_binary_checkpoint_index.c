@@ -67,6 +67,31 @@ test_metadata(void)
     assert(!snag_binary_checkpoint_index_decode(metadata.data, metadata.len,
         &identity, &boundary, root, &decoded));
     assert(decoded.entry_count == 3u && !memcmp(&decoded.tree, &tree, sizeof(tree)));
+    struct snag_buf copied = {.max = SIZE_MAX};
+    assert(!snag_binary_checkpoint_index_copy(&copied, &decoded));
+    assert(copied.len == metadata.len && !memcmp(copied.data, metadata.data, metadata.len));
+    assert(!snag_binary_checkpoint_index_copy(&copied, &decoded));
+    assert(copied.len == 2u * metadata.len &&
+        !memcmp(copied.data + metadata.len, metadata.data, metadata.len));
+    size_t saved_len = copied.len;
+    struct snag_binary_checkpoint_index bad_copy = decoded;
+    ++bad_copy.boundary.next_seq;
+    assert(snag_binary_checkpoint_index_copy(&copied, &bad_copy) < 0 && copied.len == saved_len);
+    bad_copy = decoded;
+    bad_copy.entries = NULL;
+    assert(snag_binary_checkpoint_index_copy(&copied, &bad_copy) < 0 && copied.len == saved_len);
+    bad_copy = decoded;
+    bad_copy.entry_count = SIZE_MAX;
+    assert(snag_binary_checkpoint_index_copy(&copied, &bad_copy) < 0 &&
+        errno == EOVERFLOW && copied.len == saved_len);
+    /* Borrowed inputs survive a destination reallocation during the atomic append. */
+    struct snag_binary_checkpoint_index borrowed;
+    assert(!snag_binary_checkpoint_index_decode(copied.data, metadata.len,
+        &identity, &boundary, root, &borrowed));
+    assert(!snag_binary_checkpoint_index_copy(&copied, &borrowed));
+    assert(copied.len == 3u * metadata.len &&
+        !memcmp(copied.data + 2u * metadata.len, metadata.data, metadata.len));
+    snag_buf_free(&copied);
     for (uint64_t sequence = 1u; sequence <= 8u; ++sequence) {
         struct snag_binary_index_entry entry, saved;
         memset(&entry, 0x5a, sizeof(entry));

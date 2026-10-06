@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Freeze native checkpoint queries and pinned old-access storage with the same
+  acknowledged core/provider boundary, preserving request inputs independently
+  of the producer and provider cache.
+
 - Prepare frozen native checkpoint access sections on the existing I/O owner
   before creating images, keeping source failures pre-publication and explicit
   retries pinned to the captured inputs.

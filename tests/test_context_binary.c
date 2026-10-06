@@ -1925,12 +1925,23 @@ live_snapshot_capture(void)
     assert(state.log_fd >= 0 && state.lock_fd >= 0);
     assert(!snag_session_bind_binary(&state, &identity, &boundary, &tree, &producer,
         &origins, NULL, error, sizeof(error)));
+    struct snag_binary_index_tree initial = {0};
+    struct snag_buf old_access = {.max = SIZE_MAX};
+    unsigned char old_root[32];
+    assert(!snag_binary_index_tree_root(&initial, old_root));
+    assert(!snag_binary_checkpoint_index_encode(&old_access, &identity, &root, &initial, NULL, 0u));
+    struct snag_binary_checkpoint_index available;
+    assert(!snag_binary_checkpoint_index_decode(old_access.data, old_access.len,
+        &identity, &root, old_root, &available));
     struct snag_binary_io_snapshot snapshot = {0};
     off_t position = lseek(state.log_fd, 0, SEEK_CUR);
-    assert(!snag_session_binary_snapshot_capture(&state, &snapshot, &tree, &captured,
+    assert(!snag_session_binary_snapshot_capture(&state, &available, &snapshot, &tree, &captured,
         error, sizeof(error)));
     assert(snapshot.boundary.next_seq == state.next_seq && snapshot.core.len &&
         snapshot.provider.len && !snapshot.access.len && !snapshot.access_version);
+    assert(snapshot.selection && snapshot.selection->plan.boundary.next_seq == state.next_seq);
+    assert(snapshot.selection->available.len == old_access.len &&
+        !memcmp(snapshot.selection->available.data, old_access.data, old_access.len));
     assert(lseek(state.log_fd, 0, SEEK_CUR) == position);
     const json_t *recent, *history;
     assert(!snag_context_capture_seam(&state, &recent, &history));
@@ -1943,8 +1954,13 @@ live_snapshot_capture(void)
         !memcmp(expected_provider.data, snapshot.provider.data, expected_provider.len));
     struct snag_binary_io_snapshot saved = snapshot;
     json_t *(*callback)(void *, const struct snag_session *) = state.on_checkpoint;
+    struct snag_binary_checkpoint_index wrong = available;
+    ++wrong.identity.id[0];
+    assert(snag_session_binary_snapshot_capture(&state, &wrong, &snapshot, &tree, &captured,
+        error, sizeof(error)) < 0 && errno == EINVAL &&
+        !memcmp(&saved, &snapshot, sizeof(saved)));
     state.on_checkpoint = NULL;
-    assert(snag_session_binary_snapshot_capture(&state, &snapshot, &tree, &captured,
+    assert(snag_session_binary_snapshot_capture(&state, &available, &snapshot, &tree, &captured,
         error, sizeof(error)) < 0 && errno == ENOTSUP &&
         !memcmp(&saved, &snapshot, sizeof(saved)));
     state.on_checkpoint = callback;
@@ -1952,13 +1968,23 @@ live_snapshot_capture(void)
         NULL, error, sizeof(error)));
     assert(saved.boundary.next_seq + 1u == state.next_seq &&
         !memcmp(expected_provider.data, saved.provider.data, expected_provider.len));
-    assert(!snag_session_binary_snapshot_capture(&state, &snapshot, &tree, &captured,
+    assert(!snag_session_binary_snapshot_capture(&state, &available, &snapshot, &tree, &captured,
         error, sizeof(error)));
     assert(snapshot.boundary.next_seq == state.next_seq &&
         captured.texts.slots[SNAG_BINARY_TEXT_BANNER].declaration == state.next_seq - 1u);
-    snag_buf_free(&snapshot.core);
-    snag_buf_free(&snapshot.provider);
-    snag_buf_free(&snapshot.access);
+    snag_buf_free(&old_access);
+    struct snag_binary_checkpoint_index frozen;
+    const struct snag_binary_io_access *selection = snapshot.selection;
+    assert(!snag_binary_checkpoint_index_decode(selection->available.data,
+        selection->available.len, &identity, &selection->available_boundary,
+        selection->available_root, &frozen));
+    struct snag_buf selected = {.max = SIZE_MAX};
+    off_t read_position = lseek(state.log_fd, 0, SEEK_CUR);
+    assert(!snag_binary_checkpoint_access_plan_read(state.log_fd, &selection->plan, &frozen,
+        &selection->frontier, NULL, NULL, &selected));
+    assert(selected.len && lseek(state.log_fd, 0, SEEK_CUR) == read_position);
+    snag_buf_free(&selected);
+    snag_binary_io_snapshot_free(&snapshot);
     snag_buf_free(&expected_core);
     snag_buf_free(&expected_provider);
     snag_binary_checkpoint_sources_free(&captured);

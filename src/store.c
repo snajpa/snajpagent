@@ -4168,10 +4168,11 @@ snag_session_binary_checkpoint_capture(const struct snag_session *session,
 
 int
 snag_session_binary_snapshot_capture(const struct snag_session *session,
+    const struct snag_binary_checkpoint_index *available,
     struct snag_binary_io_snapshot *snapshot, struct snag_binary_index_tree *tree,
     struct snag_binary_checkpoint_sources *sources, char *error, size_t error_size)
 {
-    if (!session || !snapshot || !tree || !sources)
+    if (!session || !available || !snapshot || !tree || !sources)
         return snag_fail(error, error_size, EINVAL, "invalid native snapshot capture");
     const struct snag_binary_session *binary = session->binary;
     if (!binary) return snag_fail(error, error_size, ENOTSUP, "session is not native");
@@ -4179,6 +4180,16 @@ snag_session_binary_snapshot_capture(const struct snag_session *session,
         return snag_fail(error, error_size, ESTALE, "native session requires fresh recovery");
     if (!session->on_checkpoint)
         return snag_fail(error, error_size, ENOTSUP, "native provider cache is not captured");
+    if (available->identity.created_ms != binary->identity.created_ms ||
+        memcmp(available->identity.id, binary->identity.id, sizeof(binary->identity.id)) ||
+        available->boundary.next_seq > binary->boundary.next_seq ||
+        available->boundary.end > binary->boundary.end ||
+        (available->boundary.next_seq == binary->boundary.next_seq &&
+            (!binary_anchor_equal(&available->boundary, &binary->boundary) ||
+                memcmp(&available->tree, &binary->tree, sizeof(binary->tree))))) {
+        return snag_fail(error, error_size, EINVAL,
+            "native access does not match captured history");
+    }
     json_t *context = session->on_checkpoint(session->on_commit_opaque, session);
     if (!context)
         return snag_fail(error, error_size, ENOMEM, "cannot capture native provider cache");
@@ -4203,6 +4214,21 @@ snag_session_binary_snapshot_capture(const struct snag_session *session,
         snag_fail(error, error_size, errno, "cannot freeze native checkpoint sections");
         goto done;
     }
+    staged.selection = calloc(1u, sizeof(*staged.selection));
+    if (!staged.selection) {
+        snag_fail(error, error_size, errno, "cannot allocate native checkpoint selection");
+        goto done;
+    }
+    staged.selection->available.max = SIZE_MAX;
+    staged.selection->available_boundary = available->boundary;
+    staged.selection->frontier = binary->tree;
+    if (snag_binary_checkpoint_index_copy(&staged.selection->available, available) < 0 ||
+        snag_binary_index_tree_root(&available->tree, staged.selection->available_root) < 0 ||
+        snag_binary_checkpoint_access_plan_build(&staged.selection->plan, &binary->boundary,
+            &origins, session, staged.provider.data, staged.provider.len, NULL, NULL) < 0) {
+        snag_fail(error, error_size, errno, "cannot freeze native checkpoint selection");
+        goto done;
+    }
     snag_binary_io_snapshot_free(snapshot);
     *snapshot = staged;
     staged = (struct snag_binary_io_snapshot){0};
@@ -4213,9 +4239,7 @@ snag_session_binary_snapshot_capture(const struct snag_session *session,
     rc = 0;
 done:
     json_decref(context);
-    snag_buf_free(&staged.core);
-    snag_buf_free(&staged.provider);
-    snag_buf_free(&staged.access);
+    snag_binary_io_snapshot_free(&staged);
     snag_binary_checkpoint_sources_free(&origins);
     return rc;
 }

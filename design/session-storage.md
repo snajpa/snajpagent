@@ -2657,9 +2657,10 @@ The read half resolves that immutable query using the independently pinned old
 working set and caller-bounded suffix, retaining the existing canonical location,
 kind, causality and hash checks. It never reduces engine state. The convenience
 access-capture interface composes these halves. The publisher can consume the
-frozen query on the existing I/O owner without borrowing a mutable session. Live
-producer request assembly, reader integration and working-set custody remain
-unfinished; these APIs do not enable the native backend by themselves.
+frozen query on the existing I/O owner without borrowing a mutable session. The
+engine's snapshot capture supplies those owning query/source inputs. Runtime
+submission, reader integration and working-set custody remain unfinished; these
+APIs do not enable the native backend by themselves.
 
 The access capture helper selects locations for a verified producer snapshot from
 an independently pinned available working set plus a caller-bounded newer suffix.
@@ -2869,8 +2870,16 @@ preserves the old snapshot, origins and tree. Subsequent commits cannot change
 the returned section bytes. A retained unacknowledged transaction remains separate
 from the captured ACK-visible reducer/cache, as with origin-only capture.
 
-The returned access section is intentionally unset. The caller still must
-establish the bounded complete source closure before choosing a bounded-resume
-image; empty access does not prove closure or authorize a historical-prefix scan.
+Capture also freezes the dependency query and an owning encoding of the caller's
+accepted old working-set view. Its identity and ordering must match captured
+history; an equal boundary must match the engine's acknowledged frontier exactly.
+Copying rechecks the existing access format without reading files or borrowing
+its original table storage. Old custody, ancestry and completeness, plus the
+newer suffix bound, remain independently established caller preconditions.
+
+The finalized access section remains unset until the worker resolves that query.
+The query, encoded old table, expected old boundary/root and captured frontier
+outlive the producer and provider callback objects. Empty section bytes before
+preparation do not prove closure or authorize a historical-prefix scan.
 The ordinary native creation/open/resume lifecycle and receipt publication remain
 unfinished integration, not enabled by this internal capture seam.

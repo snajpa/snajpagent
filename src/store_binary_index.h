@@ -56,6 +56,11 @@ int snag_binary_checkpoint_index_encode(struct snag_buf *out,
 int snag_binary_checkpoint_index_decode(const void *data, size_t size,
     const struct snag_binary_identity *, const struct snag_binary_anchor *,
     const unsigned char root[32], struct snag_binary_checkpoint_index *out);
+/* Append an owning encoding of an immutable decoded working-set view. Recheck
+ * its structural shape before changing out; inputs may borrow out. Canonical
+ * custody, ancestry and complete working-set semantics remain caller obligations. */
+int snag_binary_checkpoint_index_copy(struct snag_buf *,
+    const struct snag_binary_checkpoint_index *);
 /* Binary search in successfully decoded, unchanged metadata: 0 found, 1 absent,
  * -1 invalid. Every nonzero result preserves out. A required absent location is
  * an incomplete checkpoint, never permission to invent content or skip history. */

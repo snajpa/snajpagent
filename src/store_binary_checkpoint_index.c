@@ -151,6 +151,35 @@ snag_binary_checkpoint_index_decode(const void *data, size_t size,
     return 0;
 }
 
+int
+snag_binary_checkpoint_index_copy(struct snag_buf *out,
+    const struct snag_binary_checkpoint_index *source)
+{
+    if (!out || !source || (!source->entries && source->entry_count)) return snag_errno(EINVAL);
+    if (source->entry_count >
+        (SIZE_MAX - SNAG_BINARY_CHECKPOINT_INDEX_HEADER_SIZE) / SNAG_BINARY_INDEX_ENTRY_SIZE) {
+        return snag_errno(EOVERFLOW);
+    }
+    struct snag_buf staged = {.max = SIZE_MAX};
+    int rc = snag_binary_checkpoint_index_encode(&staged, &source->identity,
+        &source->boundary, &source->tree, NULL, 0u);
+    if (!rc) {
+        put_le(staged.data + 16u, source->entry_count, 8u);
+        rc = snag_buf_append(&staged, source->entries,
+            source->entry_count * SNAG_BINARY_INDEX_ENTRY_SIZE);
+    }
+    unsigned char root[32];
+    struct snag_binary_checkpoint_index verified;
+    if (!rc) rc = snag_binary_index_tree_root(&source->tree, root);
+    if (!rc) rc = snag_binary_checkpoint_index_decode(staged.data, staged.len,
+        &source->identity, &source->boundary, root, &verified);
+    if (!rc) rc = snag_buf_append(out, staged.data, staged.len);
+    int saved = errno;
+    snag_buf_free(&staged);
+    errno = saved;
+    return rc;
+}
+
 static bool
 access_within(const struct snag_binary_anchor *through,
     const struct snag_binary_checkpoint_index *access)
