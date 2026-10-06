@@ -3200,12 +3200,16 @@ Send a NOTICE as the operator, preserving focus. Uses /msg addressing.
 .BR /me " " text
 Send a CTCP action to the selected operator channel or query. Agent conversations
 are read-only. /N and /all send ordinary messages to endpoint default rooms.
+Incoming channel actions retain their action presentation in live chat and
+replayed history.
 .TP
 .BR /join " " address
 Join a channel as the operator and select its conversation. Uses /chat
 addressing. The server must confirm membership before messages can be sent.
 The built-in server accepts only its configured room and confirms local joins
 immediately. The agent keeps its own memberships.
+Channel names follow the server's advertised prefixes. Retained history for
+those channels survives session resume, including prefixes such as & and $.
 .TP
 .BR /part " [" address " [" reason "]]"
 Leave the selected or addressed operator channel. Queuing PART immediately

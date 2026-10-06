@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Restore typed IRC channel history with server-advertised prefixes beyond #,
+  preserving checkpoint membership and replay cursors. Keep received channel
+  actions distinct from ordinary messages in live traffic and history.
+
 - Complete nicknames from the selected channel or private query, following the
   server's case rules and current membership. Keep full completion rosters when
   status output is abbreviated. Unmatched mentions let classic Tab cycle views;

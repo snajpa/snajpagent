@@ -2496,6 +2496,69 @@ static void __attribute__((noinline)) test_callback_failure(void)
 }
 
 static void
+test_typed_channel_checkpoint(void)
+{
+    const char *rooms[] = {"$side", "&local", "+public", "!idroom", "#colon:name"};
+    struct snag_config config;
+    char error[256] = {0};
+    init_server_config(&config, 16667u);
+    config.irc.history_lines = 2u;
+    for (size_t i = 0u; i < sizeof(rooms) / sizeof(rooms[0]); ++i) {
+        struct snag_irc_core *source = NULL, *restored = NULL;
+        assert(snag_irc_core_open(&source, &config, "/fixture", false,
+            NULL, NULL, NULL, error, sizeof(error)) == 0);
+        assert(snag_irc_core_open(&restored, &config, "/fixture", false,
+            NULL, NULL, NULL, error, sizeof(error)) == 0);
+        struct snag_irc_event event = {.kind = SNAG_IRC_JOIN, .timestamp_ms = 1u,
+            .sequence = 1u, .op = true, .routed = true};
+        strcpy(event.endpoint, config.irc.listen);
+        strcpy(event.room, rooms[i]);
+        strcpy(event.nick, "operator");
+        strcpy(event.stream, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+        event.route.kind = SNAG_IRC_CHANNEL;
+        event.route.identity = SNAG_IRC_AGENT;
+        event.route.generation = 1u;
+        strcpy(event.route.connection, "11111111111111111111111111111111");
+        strcpy(event.route.conversation, "22222222222222222222222222222222");
+        strcpy(event.route.membership, "33333333333333333333333333333333");
+        strcpy(event.route.target, rooms[i]);
+        event.route.joined = event.route.rejoin = true;
+        assert(snag_irc_core_restore_event(source, &event) == 0);
+        event.kind = SNAG_IRC_MESSAGE;
+        ++event.sequence;
+        strcpy(event.text, "waves");
+        event.route.action = true;
+        assert(snag_irc_core_restore_event(source, &event) == 0);
+        json_t *saved = snag_irc_core_checkpoint(source);
+        assert(saved && snag_irc_core_restore_checkpoint(restored, saved) == 0);
+        json_t *roundtrip = snag_irc_core_checkpoint(restored);
+        assert(roundtrip && json_equal(saved, roundtrip));
+        json_decref(roundtrip);
+        assert(snag_irc_core_received(restored, &event));
+
+        /* Typed channel syntax does not broaden old untyped journal records. */
+        event.routed = false;
+        assert(snag_irc_core_restore_event(restored, &event) < 0 && errno == EINVAL);
+        for (unsigned int bad_field = 0u; bad_field < 3u; ++bad_field) {
+            json_t *bad = json_deep_copy(saved);
+            const char *section = bad_field == 0u ? "cursors" :
+                bad_field == 1u ? "members" : "history";
+            json_t *entry = json_array_get(json_object_get(bad, section), 0u);
+            assert(json_object_set_new(entry, "room", json_string(":invalid")) == 0);
+            assert(snag_irc_core_restore_checkpoint(restored, bad) < 0 && errno == EINVAL);
+            roundtrip = snag_irc_core_checkpoint(restored);
+            assert(roundtrip && json_equal(saved, roundtrip));
+            json_decref(roundtrip);
+            json_decref(bad);
+        }
+        json_decref(saved);
+        snag_irc_core_close(source);
+        snag_irc_core_close(restored);
+    }
+    snag_config_free(&config);
+}
+
+static void
 test_replay_checkpoint(void)
 {
     struct snag_config config;
@@ -2646,6 +2709,7 @@ main(int argc, char **argv)
     set_user("root");
     test_validation();
     test_replay_checkpoint();
+    test_typed_channel_checkpoint();
     test_cli_network_roles();
     test_listener_collision();
     test_runtime_roles();

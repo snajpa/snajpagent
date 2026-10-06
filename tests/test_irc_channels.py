@@ -9,7 +9,7 @@ import unittest
 from pathlib import Path
 
 from test_irc_queries import QueryFixture
-from tmux_terminal import FakeResponses, irc_workspace
+from tmux_terminal import FakeResponses, irc_workspace, read_events
 
 
 class ChannelServer:
@@ -199,6 +199,30 @@ class ChannelFixture(QueryFixture):
 
 
 class ChannelTests(ChannelFixture):
+    def test_received_actions_keep_body_and_kind_in_live_and_history(self):
+        cases = [('', 'live-action', True, False),
+                 ('@batch=old ', 'history-action', True, True),
+                 ('@batch=old;saj-id=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:21;'
+                  'saj-kind=message;saj-op=0 ', 'native-history-action', True, True),
+                 ('', 'ACTION ordinary-text', False, False)]
+        for tags, body, action, historical in cases:
+            with self.subTest(body=body):
+                if historical:
+                    self.server.send('queryop', ':fake BATCH +old chathistory #side\r\n')
+                text = '\x01ACTION ' + body + '\x01' if action else body
+                self.server.send('queryop', tags + ':peer!u@fake PRIVMSG #side :' + text + '\r\n')
+                if historical:
+                    self.server.send('queryop', ':fake BATCH -old\r\n')
+                self.wait(lambda: any(body in e['data'].get('text', '') and
+                          e['type'] == 'irc_event_v2' for e in self.events()))
+                events = [e['data'] for e in self.events() if e['type'] == 'irc_event_v2'
+                          and body in e['data'].get('text', '')]
+                self.assertEqual(len(events), 1)
+                self.assertEqual(events[0]['text'], body)
+                self.assertEqual(events[0]['routing']['action'], action)
+                self.assertEqual(events[0]['historical'], historical)
+                self.assertEqual(events[0]['room'], '#side')
+
     def test_completion_uses_case_rules_and_removes_departed_nicks(self):
         self.server.send('queryop', ':fake 005 queryop CASEMAPPING=ascii :supported\r\n'
                          ':fake 353 queryop = #side :@queryop member[one\r\n'
@@ -542,6 +566,31 @@ class ChannelTests(ChannelFixture):
 
 class ChannelPrefixTests(ChannelFixture):
     chantypes = '#$'
+
+    def test_custom_channel_history_survives_resume(self):
+        self.command('/join 1/$side', 'channel $side operator')
+        self.server.send('querybot', ':querybot!u@fake JOIN $side\r\n')
+        self.wait(lambda: self.channels().get(('agent', '$side'), {})
+                  .get('routing', {}).get('joined'))
+        self.channel_message('$side', 'retained-custom-channel')
+        before = self.channels()[('operator', '$side')]['routing']
+        sid = read_events(self.root / 'state')[0].parent.name
+        self.command('/exit')
+        self.term.wait_exit()
+        self.assertEqual(self.term.process.returncode, 0)
+        self.term = self.start('--resume', sid)
+        self.wait(lambda: self.channels()[('operator', '$side')]['routing']['generation'] >
+                  before['generation'])
+        after = self.channels()[('operator', '$side')]['routing']
+        self.assertEqual(before['conversation_id'], after['conversation_id'])
+        self.assertNotEqual(before['membership'], after['membership'])
+        self.wait_idle()
+        self.seen.clear()
+        self.submit('verify-custom-resume')
+        self.assertIn('retained-custom-channel', json.dumps(self.seen))
+        self.command('/chat 1/$side', 'channel $side operator')
+        self.command('after-custom-resume')
+        self.operator_wire('PRIVMSG $side :after-custom-resume')
 
     def test_advertised_prefix_classifies_operator_commands(self):
         self.command('/query 1/$side', 'select a nick')

@@ -2519,7 +2519,14 @@ link_emit(struct snag_irc_core *irc, struct irc_conn *link,
             channel_find(&irc->conns[LINK_OPERATOR], room) : NULL;
         if (!channel || (operator && operator->joined)) return 0;
     }
-    event_init(irc, &event, kind, link->endpoint, room, nick, text, op, link->historical, false);
+    size_t length = text ? strlen(text) : 0u;
+    bool action = kind == SNAG_IRC_MESSAGE && length >= 9u &&
+        !memcmp(text, "\001ACTION ", 8u) && text[length - 1u] == '\001';
+    /* Sanitizing removes the closing CTCP delimiter along with other controls. */
+    event_init(irc, &event, kind, link->endpoint, room, nick, action ? text + 8u : text,
+        op, link->historical, false);
+    if (action && !event.text[0]) return 0;
+    event.route.action = action;
     if (channel && irc->connection[0]) {
         route_init(irc, &event, link->role, SNAG_IRC_CHANNEL, channel->id);
         memcpy(event.room, channel->room, sizeof(event.room));
@@ -4077,7 +4084,8 @@ event_field_safe(const char *text)
 static bool
 restored_event_shape_valid(const struct snag_irc_event *event)
 {
-    bool room = event->room[0] == '#' && room_valid(event->room);
+    bool room = event->routed && event->route.kind == SNAG_IRC_CHANNEL ?
+        channel_syntax_valid(event->room) : event->room[0] == '#' && room_valid(event->room);
     bool nick = nick_valid(event->nick);
     bool remembered = event_remembered(event->kind);
 
@@ -4296,7 +4304,7 @@ snag_irc_core_restore_checkpoint(struct snag_irc_core *irc, const json_t *data)
             !endpoint || !endpoint_valid(endpoint) || !event_field_safe(endpoint) ||
             strlen(endpoint) > SNAG_CONFIG_IRC_ENDPOINT_MAX ||
             !room || !event_field_safe(room) || strlen(room) > SNAG_CONFIG_IRC_ROOM_MAX + 1u ||
-            (room[0] && (room[0] != '#' || !room_valid(room))) ||
+            (room[0] && !channel_syntax_valid(room)) ||
             !stream || !snag_hex_is_lower(stream, SNAG_ID_HEX_LEN) ||
             snag_json_integer_u64(entry, "sequence", &sequence) < 0 || !sequence ||
             find_cursor(&staged, endpoint, room, false)) goto invalid;
@@ -4313,7 +4321,7 @@ snag_irc_core_restore_checkpoint(struct snag_irc_core *irc, const json_t *data)
         const char *nick = snag_json_string(entry, "nick");
         if (!snag_json_exact_keys(entry, "endpoint room nick op") ||
             !endpoint || !endpoint_valid(endpoint) || !event_field_safe(endpoint) ||
-            !room || room[0] != '#' || !room_valid(room) || !nick || !nick_valid(nick) ||
+            !channel_syntax_valid(room) || !nick || !nick_valid(nick) ||
             !event_field_safe(room) || !event_field_safe(nick) ||
             !json_is_boolean(json_object_get(entry, "op")) ||
             replay_member_find(&staged, endpoint, room, nick) ||

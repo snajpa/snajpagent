@@ -108,6 +108,28 @@ class ChannelWorkspaceTests(ChannelFixture):
         self.child.finish('close')
 
 
+class ChannelPrefixWorkspaceTests(ChannelFixture):
+    chantypes = '#$'
+    workspace_start = queries.QueryWorkspaceTests.workspace_start
+
+    def test_stored_custom_channel_opens_with_retained_history(self):
+        self.command('/join 1/$side', 'channel $side operator')
+        self.server.send('querybot', ':querybot!u@fake JOIN $side\r\n')
+        self.wait(lambda: self.channels().get(('agent', '$side'), {})
+                  .get('routing', {}).get('joined'))
+        self.channel_message('$side', 'custom-channel-retained-in-pane')
+        sid = read_events(self.root / 'state')[0].parent.name
+        self.command('/exit')
+        self.term.wait_exit()
+        child = self.workspace_start('-N', 'custom-channel-history')
+        child.command('session ' + sid)
+        child.repaint_until(b'ATTACHED')
+        child.write(b'i/chat 1/$side\r')
+        child.repaint_until(b'channel/$side')
+        child.repaint_until(b'custom-channel-retained-in-pane')
+        child.finish('close')
+
+
 class HostedChannelWorkspaceTests(QueryFixture):
     snapshots = queries.QueryWorkspaceTests.snapshots
     wait_snapshot = queries.QueryWorkspaceTests.wait_snapshot

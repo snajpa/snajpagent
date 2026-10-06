@@ -6,6 +6,12 @@ Status: implementation in progress, October 6, 2026. The original inspection
 was against `7a70d81d336ef6f14d91ef944b1226c8efa65636`. The checkpoint below
 distinguishes implemented components from the complete intended behavior.
 
+History checkpoint: typed channel replay accepts the same channel syntax as
+live membership, including server-advertised prefixes and colons within names.
+Checkpoint members/cursors retain those names; legacy untyped events keep their
+original validation. Incoming public CTCP actions retain their body and action
+flag through live, ordinary history and native catch-up receive paths.
+
 Completion checkpoint: runtime owners publish immutable channel rosters when
 membership, names, aliases or case rules change. The UI receives independent
 snapshots, scoped by connection, generation and membership, outside the model
