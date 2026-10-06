@@ -775,8 +775,15 @@ new peer lookup. Live query messages carry a private reply obligation and wake
 IRC sleep. Model actions and explicit query/address sends use the frozen API.
 Real PTY/fake-provider fixtures cover identity isolation, private replies,
 implicit destination rejection, nickname changes during requests and resume.
-Next: common operator commands, classic query tabs and VM connection/channel/
-query buffers. External multi-channel state and labeled responses remain unfinished.
+Classic query tabs now use separate render queues keyed by conversation UUID,
+independent drafts/cursors, hidden-message unread counts and frozen input routes.
+Rollout and each channel destination also retain their own draft/cursor.
+Tab includes opened queries; Shift-Tab cycles backwards with drafts. Agent
+queries reject operator sends. Incoming events preserve focus, and restored
+conversation metadata recreates tabs without counting old history as unread.
+Drafts remain process-local; history stays in the journal and /history.
+Next: common operator commands and VM connection/channel/query buffers.
+External multi-channel state and labeled responses remain unfinished.
 
 This expands the original UI-only storage scope. Implement compatible readers,
 checkpoint projection and context filters first. Direct-message-capable writers

@@ -655,6 +655,23 @@ snag_app_irc_restore(struct app_state *app, char *error, size_t error_size)
     json_decref(restore.pending);
     json_decref(restore.pending_queries);
     json_decref(restore.turn_queries);
+    if (!rc && snag_app_sync_destinations(app) < 0) rc = -1;
+    const char *connection, *conversation;
+    json_t *entry, *item;
+    json_object_foreach(app->session.irc_conversations, connection, entry) {
+        (void)connection;
+        json_object_foreach(json_object_get(entry, "conversations"), conversation, item) {
+            (void)conversation;
+            if (rc) break;
+            struct snag_irc_event event;
+            if (snag_irc_event_record_read("irc_event_v2", json_object_get(item, "data"),
+                &event) < 0) { rc = -1; break; }
+            if (event.route.kind == SNAG_IRC_QUERY) {
+                rc = snag_ui_send(&app->ui, (struct snag_ui_command){
+                    .kind = SNAG_UI_QUERY, .data.irc = &event});
+            }
+        }
+    }
     return rc;
 }
 

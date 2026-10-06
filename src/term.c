@@ -279,6 +279,17 @@ snag_term_destination_prefix(const struct snag_term *term, char *out, size_t siz
 
     if (!size) return;
     out[0] = '\0';
+    if (term->query_unread) {
+        (void)snprintf(out, size, "[DM %llu unread] ", (unsigned long long)term->query_unread);
+        size_t used = strlen(out);
+        out += used;
+        size -= used;
+    }
+    if (term->chat && term->query.conversation[0]) {
+        (void)snprintf(out, size, "[%u query %s %s] ", term->query.destination, term->query.peer,
+            term->query.identity == SNAG_IRC_OPERATOR ? "operator" : "agent read-only");
+        return;
+    }
     if (!term->chat || !term->destinations) return;
     for (size_t i = 0u; i < term->destinations->count; ++i)
         if (term->destinations->items[i].target.id == term->destination.id &&
@@ -1531,6 +1542,26 @@ snag_term_restore_draft(struct snag_term *term, const char *text)
     return replace_draft(term, text);
 }
 
+int
+snag_term_swap_draft(struct snag_term *term, struct snag_buf *draft, size_t *cursor)
+{
+    history_reset_navigation(term);
+    free(term->search_original);
+    term->search_original = NULL;
+    term->searching = false;
+    term->completion_armed = false;
+    term->utf8_pending_len = 0u;
+    term->preferred_column = SIZE_MAX;
+    struct snag_buf previous = term->draft;
+    term->viewport_row = 0u;
+    size_t previous_cursor = term->cursor;
+    term->draft = *draft;
+    term->cursor = *cursor;
+    *draft = previous;
+    *cursor = previous_cursor;
+    return redraw(term);
+}
+
 bool
 snag_term_consume_echoed_submission(struct snag_term *term, const char *label)
 {
@@ -2286,6 +2317,14 @@ feed_escape(struct snag_term *term, unsigned char byte, enum snag_term_action *a
         return 0;
     }
     term->escape[term->escape_len++] = byte;
+    if (term->escape_len == 3u && !memcmp(term->escape, "\033[Z", 3u)) {
+        term->escape_len = 0u;
+        if (term->input_backlog || !term->blank_local)
+            return snag_term_write(STDERR_FILENO, "\a", 1u);
+        term->view_reverse = true;
+        *action = SNAG_TERM_VIEW;
+        return 1;
+    }
     /* A private live-client reply is input metadata, never draft text. */
     if (term->escape_len >= 3u && !memcmp(term->escape, "\033[>", 3u)) {
         size_t length = term->escape_len;
@@ -2445,6 +2484,7 @@ feed_byte(struct snag_term *term, unsigned char byte, enum snag_term_action *act
     case '\t':
         if (!term->draft.len) {
             if (term->input_backlog) return snag_term_write(STDERR_FILENO, "\a", 1u);
+            term->view_reverse = false;
             *action = SNAG_TERM_VIEW;
             return 1;
         }
@@ -2455,6 +2495,12 @@ feed_byte(struct snag_term *term, unsigned char byte, enum snag_term_action *act
             if (rc < 0 || handled) return rc;
             rc = complete_mention(term, &handled);
             if (rc < 0 || handled) return rc;
+        }
+        if (term->chat && term->query_tabs && term->blank_local) {
+            if (term->input_backlog) return snag_term_write(STDERR_FILENO, "\a", 1u);
+            term->view_reverse = false;
+            *action = SNAG_TERM_VIEW;
+            return 1;
         }
         if (term->active) return complete_action(term, SNAG_TERM_QUEUE, action, text);
         else {

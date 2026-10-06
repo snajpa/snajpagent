@@ -114,6 +114,7 @@ struct render_room_queue {
     struct snag_render_record *head, *tail;
     char endpoint[SNAG_CONFIG_IRC_ENDPOINT_MAX + 1u];
     char room[SNAG_CONFIG_IRC_ROOM_MAX + 2u];
+    char conversation[SNAG_ID_HEX_LEN + 1u];
 };
 
 static int render_irc_event_now(struct snag_render *render, const struct snag_irc_event *event);
@@ -382,18 +383,22 @@ queue_record(struct snag_render *render, enum snag_render_view view, struct snag
 }
 
 static struct render_room_queue *
-room_queue(struct snag_render *render, const char *endpoint, const char *room, bool create)
+room_queue(struct snag_render *render, const char *endpoint, const char *room,
+           const char *conversation, bool create)
 {
     struct render_room_queue *queue = render->chat_rooms;
 
     endpoint = endpoint ? endpoint : "";
     room = room ? room : "";
+    conversation = conversation ? conversation : "";
     for (; queue; queue = queue->next)
-        if (!strcmp(queue->endpoint, endpoint) && !strcmp(queue->room, room)) return queue;
+        if (!strcmp(queue->endpoint, endpoint) && !strcmp(queue->room, room) &&
+            !strcmp(queue->conversation, conversation)) return queue;
     if (!create) return NULL;
     queue = calloc(1u, sizeof(*queue));
     if (!queue || !snag_strcpy(queue->endpoint, sizeof(queue->endpoint), endpoint) ||
-        !snag_strcpy(queue->room, sizeof(queue->room), room)) {
+        !snag_strcpy(queue->room, sizeof(queue->room), room) ||
+        !snag_strcpy(queue->conversation, sizeof(queue->conversation), conversation)) {
         free(queue);
         return NULL;
     }
@@ -411,10 +416,11 @@ append_room_record(struct render_room_queue *queue, struct snag_render_record *r
 }
 
 static int
-select_room_queue(struct snag_render *render, const char *endpoint, const char *room)
+select_room_queue(struct snag_render *render, const char *endpoint, const char *room,
+                  const char *conversation)
 {
     struct render_room_queue *previous = room_queue(render, render->chat_endpoint,
-                                                     render->chat_room, true);
+        render->chat_room, render->chat_conversation, true);
     struct render_room_queue *next;
 
     if (!previous) return -1;
@@ -423,27 +429,30 @@ select_room_queue(struct snag_render *render, const char *endpoint, const char *
     if (render->view_tail[SNAG_RENDER_CHAT]) previous->tail = render->view_tail[SNAG_RENDER_CHAT];
     render->view_head[SNAG_RENDER_CHAT] = render->view_tail[SNAG_RENDER_CHAT] = NULL;
 
-    next = room_queue(render, endpoint, room, true);
+    next = room_queue(render, endpoint, room, conversation, true);
     if (!next) return -1;
     render->view_head[SNAG_RENDER_CHAT] = next->head;
     render->view_tail[SNAG_RENDER_CHAT] = next->tail;
     next->head = next->tail = NULL;
     if (!snag_strcpy(render->chat_endpoint, sizeof(render->chat_endpoint), endpoint ? endpoint : "") ||
-        !snag_strcpy(render->chat_room, sizeof(render->chat_room), room ? room : "")) return -1;
+        !snag_strcpy(render->chat_room, sizeof(render->chat_room), room ? room : "") ||
+        !snag_strcpy(render->chat_conversation, sizeof(render->chat_conversation),
+            conversation ? conversation : "")) return -1;
     return 0;
 }
 
 static int
 queue_chat_record(struct snag_render *render, struct snag_render_record *record,
-                  const char *endpoint, const char *room)
+                  const char *endpoint, const char *room, const char *conversation)
 {
-    bool unscoped = !room || !room[0];
-    if ((unscoped && !render->chat_endpoint[0] && !render->chat_room[0]) ||
-        (!strcmp(render->chat_endpoint, endpoint) && !strcmp(render->chat_room, room))) {
+    bool unscoped = !room[0] && !conversation[0];
+    if (!strcmp(render->chat_conversation, conversation) &&
+        ((unscoped && !render->chat_endpoint[0] && !render->chat_room[0]) ||
+        (!strcmp(render->chat_endpoint, endpoint) && !strcmp(render->chat_room, room)))) {
         queue_record(render, SNAG_RENDER_CHAT, record);
         return 0;
     }
-    struct render_room_queue *queue = room_queue(render, endpoint, room, true);
+    struct render_room_queue *queue = room_queue(render, endpoint, room, conversation, true);
     if (!queue) return -1;
     append_room_record(queue, record);
     return 0;
@@ -3108,6 +3117,12 @@ render_irc_event_now(struct snag_render *render, const struct snag_irc_event *ev
             event->route.kind == SNAG_IRC_QUERY ? event->route.peer : event->room,
             event->route.identity == SNAG_IRC_AGENT ? "agent" : "operator",
             event->route.kind == SNAG_IRC_QUERY ? " query" : "");
+        if (event->route.kind == SNAG_IRC_QUERY && event->route.direction == SNAG_IRC_OUTGOING &&
+            event->route.delivery == SNAG_IRC_PENDING) {
+            size_t used = strlen(source);
+            (void)snprintf(source + used, sizeof(source) - used,
+                "[send %.8s pending] ", event->route.send);
+        }
     } else if (render->term && render->term->destinations) {
         const struct snag_irc_destinations *destinations = render->term->destinations;
         const struct snag_irc_destination *origin = NULL;
@@ -3140,7 +3155,15 @@ render_irc_event_now(struct snag_render *render, const struct snag_irc_event *ev
     if (n < 0 || (size_t)n >= sizeof(prefix) || irc_piece(render, prefix, true) < 0) goto out;
     if (colored && (irc_piece(render, COLOR_RESET, false) < 0 || irc_piece(render, nick_color, false) < 0))
         goto out;
-    if (event->kind == SNAG_IRC_MESSAGE || event->kind == SNAG_IRC_NOTICE) {
+    bool private_send = event->routed && event->route.kind == SNAG_IRC_QUERY &&
+        event->route.direction == SNAG_IRC_OUTGOING;
+    if (private_send && event->route.delivery >= SNAG_IRC_WRITTEN &&
+        event->route.delivery <= SNAG_IRC_UNCERTAIN) {
+        static const char *const outcomes[] = {"written", "acknowledged", "failed", "uncertain"};
+        n = snprintf(prefix, sizeof(prefix), "· send %.8s %s", event->route.send,
+            outcomes[event->route.delivery - SNAG_IRC_WRITTEN]);
+        if (n < 0 || (size_t)n >= sizeof(prefix) || irc_piece(render, prefix, true) < 0) goto out;
+    } else if (event->kind == SNAG_IRC_MESSAGE || event->kind == SNAG_IRC_NOTICE) {
         n = snprintf(prefix, sizeof(prefix), "%s%s%s ", event->kind == SNAG_IRC_NOTICE ? "-" : "",
             event->op ? "@" : "", event->nick[0] ? event->nick : "server");
         if (n < 0 || (size_t)n >= sizeof(prefix) || irc_piece(render, prefix, true) < 0) goto out;
@@ -3194,9 +3217,13 @@ snag_render_irc_event(struct snag_render *render, const struct snag_irc_event *e
     if (!render || !event) return snag_errno(EINVAL);
     struct snag_render_source source = render->irc_source;
     render->irc_source = (struct snag_render_source){0};
-    bool unscoped = !event->room[0];
-    bool selected = (unscoped && !render->chat_endpoint[0] && !render->chat_room[0]) ||
-        (!strcmp(render->chat_endpoint, event->endpoint) && !strcmp(render->chat_room, event->room));
+    const char *conversation = event->routed && event->route.kind == SNAG_IRC_QUERY ?
+        event->route.conversation : "";
+    bool unscoped = !event->room[0] && !conversation[0];
+    bool selected = !strcmp(render->chat_conversation, conversation) &&
+        ((unscoped && !render->chat_endpoint[0] && !render->chat_room[0]) ||
+        (!strcmp(render->chat_endpoint, event->endpoint) &&
+         !strcmp(render->chat_room, event->room)));
     if (!render->suspended && selected && render->view == SNAG_RENDER_CHAT &&
         !render->view_head[SNAG_RENDER_CHAT])
         return render_irc_event_now(render, event);
@@ -3212,7 +3239,7 @@ snag_render_irc_event(struct snag_render *render, const struct snag_irc_event *e
         }
         *record->irc = *event;
     }
-    if (queue_chat_record(render, record, event->endpoint, event->room) < 0) {
+    if (queue_chat_record(render, record, event->endpoint, event->room, conversation) < 0) {
         free_record(record);
         return -1;
     }
@@ -3305,9 +3332,13 @@ render_view_banner(struct snag_render *render, enum snag_render_view view)
     int rc;
 
     if (view == SNAG_RENDER_ROLLOUT) return render_banner(render, "── rollout ──\n");
-    if (!render->chat_endpoint[0] && !render->chat_room[0])
+    if (render->chat_conversation[0]) {
+        rc = snag_buf_printf(&banner, "── query %s/%s (%s) ──\n",
+            render->chat_endpoint, render->chat_peer,
+            render->chat_identity == SNAG_IRC_OPERATOR ? "operator" : "agent, read-only");
+    } else if (!render->chat_endpoint[0] && !render->chat_room[0]) {
         return render_banner(render, "── chat ──\n");
-    rc = snag_buf_printf(&banner, "── chat %s%s%s ──\n", render->chat_endpoint,
+    } else rc = snag_buf_printf(&banner, "── chat %s%s%s ──\n", render->chat_endpoint,
                          render->chat_endpoint[0] && render->chat_room[0] ? " " : "",
                          render->chat_room);
     if (rc == 0) rc = snag_buf_terminate(&banner);
@@ -3321,10 +3352,26 @@ snag_render_set_chat_room(struct snag_render *render, const char *endpoint, cons
                           bool announce)
 {
     if (!render || !endpoint || !room) return snag_errno(EINVAL);
-    if (!strcmp(render->chat_endpoint, endpoint) && !strcmp(render->chat_room, room)) return 0;
+    if (!render->chat_conversation[0] && !strcmp(render->chat_endpoint, endpoint) &&
+        !strcmp(render->chat_room, room)) return 0;
     if (render->view == SNAG_RENDER_CHAT && pause_rollout(render) < 0) return -1;
-    if (select_room_queue(render, endpoint, room) < 0) return -1;
+    if (select_room_queue(render, endpoint, room, "") < 0) return -1;
     if (render->view != SNAG_RENDER_CHAT || !announce) return 0;
+    if (render_view_banner(render, SNAG_RENDER_CHAT) < 0) return -1;
+    return flush_view(render, SNAG_RENDER_CHAT, SNAG_RENDER_SWITCH_BATCH);
+}
+
+int
+snag_render_set_chat_query(struct snag_render *render, const char *endpoint,
+                          const struct snag_irc_query_target *query, bool announce)
+{
+    if (!render || !endpoint || !query || !query->conversation[0]) return snag_errno(EINVAL);
+    bool changed = strcmp(render->chat_conversation, query->conversation) != 0;
+    if (changed && render->view == SNAG_RENDER_CHAT && pause_rollout(render) < 0) return -1;
+    if (changed && select_room_queue(render, endpoint, "", query->conversation) < 0) return -1;
+    if (!snag_strcpy(render->chat_peer, sizeof(render->chat_peer), query->peer)) return -1;
+    render->chat_identity = query->identity;
+    if (!changed || render->view != SNAG_RENDER_CHAT || !announce) return 0;
     if (render_view_banner(render, SNAG_RENDER_CHAT) < 0) return -1;
     return flush_view(render, SNAG_RENDER_CHAT, SNAG_RENDER_SWITCH_BATCH);
 }

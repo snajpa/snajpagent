@@ -474,8 +474,10 @@ and leaves the cursor after it, ready for you to finish writing.
 At the end of a finished message, outside a command or nickname being completed,
 Tab queues a local follow-up while your model is active.  In chat this still
 does not send to the room; Enter does that.  While idle, Tab inserts spaces
-instead.  With an empty draft, Tab cycles through rollout and each connected
-room's chat view, then returns to rollout.
+instead. With an empty draft, Tab cycles through rollout, connected rooms and
+opened private queries. Once query tabs exist, chat Tab also cycles with a draft
+present, after command/nickname completion. Shift-Tab cycles backwards from any
+view with its draft intact. Each private query retains its own draft.
 .PP
 Completion itself never submits, sends or queues.  Multiple matches expand
 their common beginning; another consecutive Tab lists the choices.  No match
@@ -659,11 +661,12 @@ is background context, not a new task.  Models publish chosen replies through
 .B irc_send
 while their other text and tool activity remain in rollout.
 .PP
-Empty Tab cycles through rollout and each room without stopping work.
+Empty Tab cycles through rollout, each room and opened private queries without stopping work.
 Returning displays output
 that arrived while the view was hidden.  To complete a nickname, type @bu and
 Tab, then finish your message after the added space.  Enter sends it to the
-room; Tab at the end queues it locally while your own model is active.
+selected conversation. With query tabs open, chat Tab switches tabs; otherwise
+Tab at the end queues it locally while your own model is active.
 .B /chat
 and
 .B /rollout
@@ -782,14 +785,23 @@ history and are excluded from provider input, IRC compaction and model-facing
 history reads. Agent queries enter model context with their recipient and
 conversation ID. A live private message requires a reply in that query; NOTICE,
 historical messages and nickname changes add context without requiring a reply.
-Pending reply obligations survive resume. Classic query tabs, operator query
-commands and Vim conversation buffers remain under development.
+Pending reply obligations survive resume. Opened queries appear in the classic
+Tab cycle, including queries addressed to the agent. Enter replies as the
+operator in operator queries; agent queries are read-only. Incoming traffic
+adds an unread indicator and preserves the focused view. Each private query
+keeps its draft while this process runs. Drafts and queued submissions retain
+their original recipient across nickname changes; a stale send is rejected and
+an entirely unsent draft is restored. Resume restores query tabs; use /history
+for retained messages. Operator query commands and Vim conversation buffers
+remain under development.
 .PP
 The development query transport retains a separate send result for each chunk.
 It records pending before transmission, written after the complete frame, and
 acknowledged after local delivery or an ordered native-server echo. An external
 unlabeled write remains unconfirmed. Nick changes, disconnection and endpoint
 removal cancel unwritten chunks and mark started, unconfirmed sends uncertain.
+The classic query view prints the body once with a pending send ID, followed by
+compact delivery-state rows for that ID.
 Private queues are never replayed on reconnect. Model sends use the exact query
 captured when their request started. A changed nickname or connection generation
 rejects that send, with no channel fallback; inspect irc_state before choosing
@@ -1091,11 +1103,13 @@ adds no history or queued turn, and leaves active work and goals unchanged.
 Queue editing and confirmation prompts retain their own blank-answer behavior.
 For nonempty text, submit while idle.  In rollout during model generation,
 interrupt the response and steer from its delivered prefix.  A running command is handed back alive;
-it is not killed.  In chat, send to the selected room.  A model-nick mention
+it is not killed. In operator chat, send to the selected room or private peer.
+Agent queries are read-only. A model-nick mention
 steers at the next safe response/tool boundary without truncating generation.
 .TP
 .B Tab
-With an empty draft, switch chat and rollout views, including offline.
+With an empty draft, cycle rollout, connected rooms and opened private queries,
+including offline.
 Otherwise, completion requires one of these prefixes and cursor positions:
 .RS
 .IP \(bu 2
@@ -1119,7 +1133,8 @@ the cursor after it.  Multiple matches expand their common prefix; a second
 consecutive Tab lists choices while preserving the draft and cursor.  No match
 leaves the draft unchanged.  Completion never submits, sends or queues text.
 .IP
-Outside a completion, Tab queues a later local turn while active, or inserts
+Outside a completion, chat Tab cycles with its draft intact once private query
+tabs exist. Otherwise, Tab queues a later local turn while active, or inserts
 spaces while idle.  Thus Tab at the end of a finished ordinary message queues
 it; Tab at the end of /sta or @bu still completes that word first.
 Queueing remains local even in chat.  Use Enter to send to the room or run a
@@ -1129,6 +1144,10 @@ action saves the replacement instead of adding a new item; completion still
 applies and empty text is rejected.  Enter on a slash command runs that command
 and retains the original queue item.  Use // for a literal leading slash or
 /ro QUERY to replace the item with a read-only query.
+.TP
+.B Shift-Tab
+Cycle backwards through rollout, connected rooms and opened private queries,
+preserving the draft. This also works with nonempty rollout input.
 .TP
 .B Ctrl-J
 Insert a newline without submitting.
@@ -1230,6 +1249,14 @@ transcript; Enter rejects unsendable input and restores the draft, without
 starting a private turn. Hidden-view output is buffered for display on return.
 Both views append to terminal scrollback;
 neither is a full-screen TUI.
+.PP
+Private queries join the Tab cycle after the connected rooms. Shift-Tab moves
+backwards and preserves a nonempty draft. In chat, Tab with a nonempty draft
+also cycles once private query tabs exist; command and nickname completion
+still take precedence. The prompt names the query peer and operator/agent
+identity. A DM unread count reports hidden incoming messages and clears for a
+query when it is selected. Tab selection never sends or queues its draft.
+Rollout, each channel destination and each query keep separate process-local drafts.
 .PP
 All default prompts share an activity slot, a goal slot, a space, the local
 HH:MM:SS timestamp, and another space, in that order.

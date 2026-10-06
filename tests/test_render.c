@@ -1114,6 +1114,31 @@ test_dictation_editor(void)
 }
 
 static void
+test_query_tab_keeps_modal_queue_action(void)
+{
+    for (unsigned int modal = 0u; modal < 2u; ++modal) {
+        struct snag_term term;
+        snag_term_init(&term);
+        term.active = term.chat = term.query_tabs = true;
+        term.blank_local = !modal;
+        assert(snag_term_restore_draft(&term, "saved draft") == 0);
+        term.input[0] = '\t';
+        term.input_len = 1u;
+        enum snag_term_action action;
+        char *text = NULL;
+        assert(snag_term_poll(&term, 0, -1, &action, &text) == 1);
+        if (modal) {
+            assert(action == SNAG_TERM_QUEUE && text && !strcmp(text, "saved draft"));
+            assert(!term.draft.len);
+        } else {
+            assert(action == SNAG_TERM_VIEW && !text && term.draft.len == 11u);
+        }
+        free(text);
+        snag_term_close(&term);
+    }
+}
+
+static void
 test_destination_editor(void)
 {
     static const struct {
@@ -1948,6 +1973,9 @@ test_query_markdown_isolation(void)
     snag_render_init(&render, 1u);
     render.stderr_terminal = true;
     snag_render_set_color(&render, SNAG_COLOR_NEVER);
+    struct snag_irc_query_target target = {.identity = SNAG_IRC_OPERATOR, .peer = "peer",
+        .conversation = "22222222222222222222222222222222"};
+    assert(snag_render_set_chat_query(&render, event.endpoint, &target, false) == 0);
     assert(snag_render_set_view(&render, SNAG_RENDER_CHAT) == 0);
     assert(snag_render_irc_event(&render, &event) == 0);
     event.route.identity = SNAG_IRC_AGENT;
@@ -1958,6 +1986,9 @@ test_query_markdown_isolation(void)
     strcpy(event.route.conversation, "22222222222222222222222222222222");
     strcpy(event.text, "**code**");
     assert(snag_render_irc_event(&render, &event) == 0);
+    target.identity = SNAG_IRC_AGENT;
+    strcpy(target.conversation, "33333333333333333333333333333333");
+    assert(snag_render_set_chat_query(&render, event.endpoint, &target, true) == 0);
     snag_render_free(&render);
     (void)capture_close(&capture, output, sizeof(output), 0u);
     assert(strstr(output, "[server:6667/peer operator query]") &&
@@ -1966,6 +1997,37 @@ test_query_markdown_isolation(void)
         fprintf(stderr, "query Markdown output: %s\n", output);
     assert(strstr(output, "other conversation") && !strstr(output, "**other conversation**") &&
         strstr(output, "**code**"));
+}
+
+static void
+test_query_send_receipts(void)
+{
+    struct snag_render render;
+    struct snag_irc_event event = {.routed = true, .kind = SNAG_IRC_MESSAGE,
+        .timestamp_ms = 1000u, .endpoint = "server:6667", .nick = "operator",
+        .text = "one-private-body", .route = {.identity = SNAG_IRC_OPERATOR,
+            .kind = SNAG_IRC_QUERY, .direction = SNAG_IRC_OUTGOING,
+            .connection = "11111111111111111111111111111111",
+            .conversation = "22222222222222222222222222222222", .peer = "peer",
+            .send = "33333333333333333333333333333333"}};
+    struct snag_irc_query_target target = {.identity = SNAG_IRC_OPERATOR, .peer = "peer",
+        .conversation = "22222222222222222222222222222222"};
+    char output[8192];
+    struct output_capture capture = capture_open(false, true);
+    snag_render_init(&render, 1u);
+    snag_render_set_color(&render, SNAG_COLOR_NEVER);
+    assert(snag_render_set_chat_query(&render, event.endpoint, &target, false) == 0);
+    assert(snag_render_set_view(&render, SNAG_RENDER_CHAT) == 0);
+    for (unsigned int state = SNAG_IRC_PENDING; state <= SNAG_IRC_ACKNOWLEDGED; ++state) {
+        event.route.delivery = (enum snag_irc_delivery)state;
+        assert(snag_render_irc_event(&render, &event) == 0);
+    }
+    snag_render_free(&render);
+    (void)capture_close(&capture, output, sizeof(output), 0u);
+    assert(count_text(output, "one-private-body") == 1u);
+    assert(strstr(output, "send 33333333 pending"));
+    assert(strstr(output, "send 33333333 written"));
+    assert(strstr(output, "send 33333333 acknowledged"));
 }
 
 static void
@@ -3379,6 +3441,7 @@ main(void)
     test_completion_choices();
     test_dictation_editor();
     test_destination_editor();
+    test_query_tab_keeps_modal_queue_action();
     test_markdown_streaming();
     test_markdown_fences();
     test_banner_word_layout();
@@ -3394,6 +3457,7 @@ main(void)
     test_live_downgrade();
     for (unsigned int verbosity = 0u; verbosity <= 6u; ++verbosity) test_append_only_views(verbosity);
     test_chat_room_views();
+    test_query_send_receipts();
     test_async_render_backfill();
 
     assert(capture_lifecycle(0u, SNAG_COLOR_NEVER, output, sizeof(output)) > 0u);

@@ -130,6 +130,9 @@ struct snag_render {
     void *chat_rooms;
     char chat_endpoint[SNAG_CONFIG_IRC_ENDPOINT_MAX + 1u];
     char chat_room[SNAG_CONFIG_IRC_ROOM_MAX + 2u];
+    char chat_conversation[SNAG_ID_HEX_LEN + 1u];
+    char chat_peer[SNAG_CONFIG_IRC_NICK_MAX + 1u];
+    enum snag_irc_identity chat_identity;
     void *backfill;
     struct snag_buf wrap_pending;
     struct snag_buf wrap_styles;
@@ -158,7 +161,9 @@ int snag_render_rebind(struct snag_render *render);
 enum snag_render_view snag_render_view(const struct snag_render *render);
 int snag_render_set_view(struct snag_render *render, enum snag_render_view view);
 int snag_render_set_chat_room(struct snag_render *render, const char *endpoint, const char *room,
-                              bool announce);
+                          bool announce);
+int snag_render_set_chat_query(struct snag_render *, const char *,
+    const struct snag_irc_query_target *, bool);
 bool snag_render_view_pending(const struct snag_render *render);
 bool snag_render_view_runnable(const struct snag_render *render);
 int snag_render_flush_pending(struct snag_render *render, size_t records);

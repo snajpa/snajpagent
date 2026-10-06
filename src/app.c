@@ -481,9 +481,14 @@ commit_event_with_request(struct app_state *app, const char *type, json_t *data,
         json_decref(data);
         return -1;
     }
-    if (snag_string_in(type,
+    const json_t *routing = json_object_get(data, "routing");
+    const char *conversation = snag_json_string(routing, "conversation_kind");
+    const char *kind = snag_json_string(data, "kind");
+    bool private_chat = !strcmp(type, "irc_event_v2") && conversation &&
+        !strcmp(conversation, "query") && kind && snag_string_in(kind, "message notice");
+    if ((private_chat || snag_string_in(type,
             "goal_started control_requested future_turn_queued input_received "
-            "irc_admitted voice_event") &&
+            "irc_admitted voice_event")) &&
         persist_session(app, error, error_size) < 0) {
         ++app->session.write_failures;
         json_decref(data);
@@ -2829,12 +2834,51 @@ network_command(struct app_state *app, const char *line, bool *handled)
 }
 
 static int
+send_operator_query(struct app_state *app, const char *line, const char *text,
+                    enum snag_irc_event_kind kind)
+{
+    const struct snag_irc_query_target *target = &app->ui.input_query;
+    char error[256] = {0};
+    struct snag_buf report = {.max = SNAG_MAX_IRC_SNAPSHOT};
+    int rc;
+    if (target->identity != SNAG_IRC_OPERATOR) {
+        rc = snag_fail(error, sizeof(error), EACCES,
+            "agent query is read-only; open an operator query to reply");
+    } else if (kind != SNAG_IRC_MESSAGE && kind != SNAG_IRC_NOTICE) {
+        rc = snag_fail(error, sizeof(error), EINVAL, "this command requires a channel");
+    } else {
+        rc = snag_irc_query_send(app->irc, target, kind, text, false,
+            &report, error, sizeof(error));
+    }
+    bool accepted = report.len != 0u;
+    if (rc < 0) {
+        if (snag_buf_printf(&report, "%s", error[0] ? error : "private send failed") < 0 ||
+            snag_buf_terminate(&report) < 0 ||
+            app_error(app, (const char *)report.data) < 0) goto fail;
+        if (!accepted && snag_ui_send(&app->ui, (struct snag_ui_command){
+            .kind = SNAG_UI_DRAFT, .text = line}) < 0) goto fail;
+    }
+    snag_buf_free(&report);
+    return 0;
+fail:
+    snag_buf_free(&report);
+    return -1;
+}
+
+static int
 send_operator_routed(struct app_state *app, const char *line, const char *text,
     enum snag_irc_event_kind kind)
 {
     char error[256] = {0};
     int rc;
     bool show = app->ui.input_route.count > 1u;
+    uint32_t destination;
+    size_t body;
+    enum snag_irc_target_command command = snag_irc_target_parse(line, strlen(line),
+        &destination, &body);
+    if (app->ui.input_view == SNAG_RENDER_CHAT && app->ui.input_query.conversation[0] &&
+        kind != SNAG_IRC_NICK && command == SNAG_IRC_TARGET_NONE)
+        return send_operator_query(app, line, text, kind);
 
     struct snag_buf report = {.max = 8192u};
     rc = snag_irc_send_route(app->irc, &app->ui.input_route, false, kind,

@@ -96,6 +96,9 @@ struct snag_term {
     char *search_original;
     struct snag_irc_destinations *destinations;
     struct snag_irc_target destination;
+    struct snag_irc_query_target query;
+    uint64_t query_unread;
+    bool query_tabs, view_reverse;
     const struct snag_term_command *commands;
     size_t cursor;
     size_t command_count;
@@ -200,6 +203,7 @@ int snag_term_poll(struct snag_term *term, int timeout_ms, snag_wake_fd wake_fd,
                   enum snag_term_action *action, char **text);
 int snag_term_history_set(struct snag_term *term, struct snag_history_snapshot *snapshot, bool refresh);
 int snag_term_restore_draft(struct snag_term *term, const char *text);
+int snag_term_swap_draft(struct snag_term *, struct snag_buf *, size_t *);
 int snag_term_insert_draft(struct snag_term *, const char *);
 int snag_term_audio(struct snag_term *, const char *, bool);
 int snag_term_caption(struct snag_term *, unsigned int speaker, const char *);

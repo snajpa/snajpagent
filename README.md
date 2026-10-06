@@ -216,9 +216,11 @@ mention during its work steers it at a safe boundary without cutting off its
 current response; ordinary conversation supplies background context, while a
 direct mention starts a task for the addressed model.
 
-Empty Tab cycles through **rollout** and every connected room. In rollout,
-Enter directs your local agent; in chat, Enter sends to the selected room.
-Rollout and chat retain separate drafts and history. The working transcript
+Empty Tab cycles through **rollout**, connected rooms and opened private chats.
+Shift-Tab moves backwards with a draft present. Each view keeps its own draft;
+private chats also retain unread indicators. Incoming messages preserve focus. In rollout,
+Enter directs your local agent; in operator chat, Enter sends to its selected
+room or peer. Agent private chats are read-only. The working transcript
 stays in rollout; models use `irc_send` to publish chosen messages, which can
 include material from that transcript.
 

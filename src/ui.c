@@ -26,6 +26,7 @@ struct ui_snapshot {
     char label[SNAG_TERM_LABEL_BYTES];
     uint64_t turn_generation;
     struct snag_irc_target selection;
+    struct snag_irc_query_target query;
 };
 
 struct ui_message {
@@ -100,9 +101,28 @@ struct snag_ui_runtime {
     _Atomic uint64_t session_releasing, session_failures;
 };
 
+struct ui_query_tab {
+    struct ui_query_tab *next;
+    struct snag_irc_query_target target;
+    char endpoint[SNAG_CONFIG_IRC_ENDPOINT_MAX + 1u];
+    struct snag_buf draft;
+    size_t cursor;
+    uint64_t unread;
+};
+
+struct ui_channel_draft {
+    struct ui_channel_draft *next;
+    uint32_t destination;
+    struct snag_buf text;
+    size_t cursor;
+};
+
 struct snag_ui_display {
     struct snag_render render;
     struct snag_term term;
+    struct ui_query_tab *queries, *query;
+    struct ui_channel_draft rollout_draft;
+    struct ui_channel_draft *channel_drafts, *main_draft;
     struct snag_ui_prompt prompt;
     struct snag_update *update;
     struct snag_ui_runtime *runtime;
@@ -479,6 +499,7 @@ take_snapshot(struct snag_ui_display *display, struct ui_snapshot *snapshot)
     snapshot->profile = display->profile;
     snapshot->turn_generation = display->turn_generation;
     snapshot->selection = display->term.destination;
+    snapshot->query = display->term.query;
     memcpy(snapshot->label, display->term.label, sizeof(snapshot->label));
 }
 
@@ -567,6 +588,88 @@ selected_destination(const struct snag_term *term)
     return NULL;
 }
 
+static struct ui_channel_draft *
+display_channel_draft(struct snag_ui_display *display, uint32_t destination)
+{
+    struct ui_channel_draft **slot = &display->channel_drafts;
+    while (*slot && (*slot)->destination != destination) slot = &(*slot)->next;
+    if (!*slot) {
+        *slot = calloc(1u, sizeof(**slot));
+        if (!*slot) return NULL;
+        (*slot)->destination = destination;
+        snag_buf_init(&(*slot)->text, SNAG_MAX_DIRECT_PROMPT + 1u);
+    }
+    return *slot;
+}
+
+static int
+display_select_draft(struct snag_ui_display *display, struct ui_query_tab *next,
+                     struct ui_channel_draft *main)
+{
+    if (!next && !main) return -1;
+    if (display->query == next && (next || display->main_draft == main)) return 0;
+    struct snag_term *term = &display->term;
+    struct ui_query_tab *old = display->query;
+    term->defer_redraw = true;
+    if (snag_term_swap_draft(term, old ? &old->draft : &display->main_draft->text,
+        old ? &old->cursor : &display->main_draft->cursor) < 0 ||
+        snag_term_swap_draft(term, next ? &next->draft : &main->text,
+        next ? &next->cursor : &main->cursor) < 0) return -1;
+    display->query = next;
+    if (!next) display->main_draft = main;
+    term->query = next ? next->target : (struct snag_irc_query_target){0};
+    if (next) {
+        term->query_unread -= next->unread;
+        next->unread = 0u;
+        for (size_t i = 0u; term->destinations && i < term->destinations->count; ++i)
+            if (term->destinations->items[i].target.id == next->target.destination)
+                term->destination = term->destinations->items[i].target;
+    }
+    return 0;
+}
+
+static int
+display_query_event(struct snag_ui_display *display, const struct snag_irc_event *event,
+                    bool unread)
+{
+    if (!event->routed || event->route.kind != SNAG_IRC_QUERY) return 0;
+    struct snag_term *term = &display->term;
+    struct ui_query_tab **slot = &display->queries;
+    while (*slot && strcmp((*slot)->target.conversation, event->route.conversation))
+        slot = &(*slot)->next;
+    if (!*slot) {
+        *slot = calloc(1u, sizeof(**slot));
+        if (!*slot) return -1;
+        snag_buf_init(&(*slot)->draft, SNAG_MAX_DIRECT_PROMPT + 1u);
+        memcpy((*slot)->target.conversation, event->route.conversation,
+            sizeof((*slot)->target.conversation));
+        memcpy((*slot)->endpoint, event->endpoint, sizeof((*slot)->endpoint));
+        term->query_tabs = true;
+    }
+    struct ui_query_tab *tab = *slot;
+    bool focused = display->query == tab && display->render.view == SNAG_RENDER_CHAT;
+    /* A draft keeps its recipient until explicitly discarded/reopened. */
+    if (!(focused ? term->draft.len : tab->draft.len)) {
+        tab->target.identity = event->route.identity;
+        tab->target.generation = event->route.generation;
+        memcpy(tab->target.connection, event->route.connection, sizeof(tab->target.connection));
+        memcpy(tab->target.peer, event->route.peer, sizeof(tab->target.peer));
+        for (size_t i = 0u; term->destinations && i < term->destinations->count; ++i) {
+            const struct snag_irc_destination *destination = &term->destinations->items[i];
+            if (!strcmp(destination->connection, event->route.connection))
+                tab->target.destination = destination->target.id;
+        }
+        if (focused) term->query = tab->target;
+    }
+    if (unread && !focused && event->route.direction == SNAG_IRC_INCOMING &&
+        (event->kind == SNAG_IRC_MESSAGE || event->kind == SNAG_IRC_NOTICE) &&
+        tab->unread < UINT64_MAX && term->query_unread < UINT64_MAX) {
+        ++tab->unread;
+        ++term->query_unread;
+    }
+    return display->prompt.source && !display->view_repainting ? apply_prompt(display) : 0;
+}
+
 static int
 display_set_chat_room(struct snag_ui_display *display,
                       const struct snag_irc_destination *destination, bool announce)
@@ -574,10 +677,14 @@ display_set_chat_room(struct snag_ui_display *display,
     const char *endpoint = destination ? destination->endpoint : "";
     const char *room = destination ? destination->room : "";
 
+    bool leaving_query = display->query != NULL;
+    if (display_select_draft(display, NULL,
+        display_channel_draft(display, destination ? destination->target.id : 0u)) < 0) return -1;
     if (snag_render_set_chat_room(&display->render, endpoint, room, announce) < 0) return -1;
     display->view_repainting = display->render.view == SNAG_RENDER_CHAT &&
         snag_render_view_pending(&display->render);
     if (display->view_repainting) display->term.defer_redraw = true;
+    else if (leaving_query && !display->native_barrier) display->term.defer_redraw = false;
     return 0;
 }
 
@@ -589,8 +696,16 @@ display_set_view(struct snag_ui_display *display, enum snag_render_view view, bo
     bool changed = display->render.view != view;
 
     if (view != SNAG_RENDER_CHAT && view != SNAG_RENDER_ROLLOUT) return snag_errno(EINVAL);
+    term->defer_redraw = true;
     if (announce && changed && snag_render_host(&display->render,
             view == SNAG_RENDER_CHAT ? "switching to chat" : "switching to rollout") < 0) return -1;
+    if (view == SNAG_RENDER_ROLLOUT && display->query) {
+        if (display_set_chat_room(display, selected_destination(term), false) < 0) return -1;
+    }
+    if (view == SNAG_RENDER_ROLLOUT) {
+        if (display_select_draft(display, NULL, &display->rollout_draft) < 0) return -1;
+    } else if (!display->query && display_select_draft(display, NULL,
+        display_channel_draft(display, term->destination.id)) < 0) return -1;
     term->defer_redraw = true;
     term->chat = view == SNAG_RENDER_CHAT;
     if (snag_render_set_view(&display->render, view) < 0) return -1;
@@ -612,30 +727,36 @@ static int
 display_cycle_view(struct snag_ui_display *display)
 {
     struct snag_term *term = &display->term;
-    size_t current = SIZE_MAX;
-
-    if (display->render.view == SNAG_RENDER_ROLLOUT) {
-        if (term->destinations && term->destinations->count) {
-            const struct snag_irc_destination *first = &term->destinations->items[0];
-            if (snag_term_select_destination(term, first->target.id) < 0 ||
-                display_set_chat_room(display, first, false) < 0) return -1;
-        } else if (display_set_chat_room(display, NULL, false) < 0) return -1;
-        return display_set_view(display, SNAG_RENDER_CHAT, true, true);
+    size_t channels = term->destinations && term->destinations->count ?
+        term->destinations->count : 1u;
+    size_t count = channels + 1u;
+    size_t current = 0u;
+    for (struct ui_query_tab *tab = display->queries; tab; tab = tab->next) {
+        if (tab == display->query) current = count;
+        ++count;
     }
-    if (term->destinations)
-        for (size_t i = 0u; i < term->destinations->count; ++i)
-            if (term->destinations->items[i].target.id == term->destination.id) {
-                current = i;
-                break;
-            }
-    if (current != SIZE_MAX && current + 1u < term->destinations->count) {
-        const struct snag_irc_destination *next = &term->destinations->items[current + 1u];
-        if (snag_term_select_destination(term, next->target.id) < 0 ||
-            display_set_chat_room(display, next, true) < 0) return -1;
-        if (display->prompt.source && !display->view_repainting) return apply_prompt(display);
-        return 0;
+    if (display->render.view == SNAG_RENDER_CHAT && !display->query) {
+        current = 1u;
+        for (size_t i = 0u; term->destinations && i < term->destinations->count; ++i)
+            if (term->destinations->items[i].target.id == term->destination.id) current = i + 1u;
     }
-    return display_set_view(display, SNAG_RENDER_ROLLOUT, true, true);
+    size_t next = term->view_reverse ? (current ? current - 1u : count - 1u) :
+        (current + 1u) % count;
+    if (!next) return display_set_view(display, SNAG_RENDER_ROLLOUT, true, true);
+    if (next <= channels) {
+        const struct snag_irc_destination *destination = term->destinations &&
+            term->destinations->count ? &term->destinations->items[next - 1u] : NULL;
+        if (destination && snag_term_select_destination(term, destination->target.id) < 0)
+            return -1;
+        if (display_set_chat_room(display, destination, true) < 0) return -1;
+    } else {
+        struct ui_query_tab *tab = display->queries;
+        for (size_t i = channels + 1u; i < next; ++i) tab = tab->next;
+        if (display_select_draft(display, tab, NULL) < 0 ||
+            snag_render_set_chat_query(&display->render, tab->endpoint, &term->query, true) < 0)
+            return -1;
+    }
+    return display_set_view(display, SNAG_RENDER_CHAT, true, true);
 }
 
 #if SNAJPAGENT_VM
@@ -1012,7 +1133,7 @@ apply_message(struct snag_ui_display *display, struct snag_ui_command *command,
         return 0;
     case SNAG_UI_DESTINATIONS:
         if (snag_term_set_destinations(term, command->data.destinations) < 0) return -1;
-        if (render->view == SNAG_RENDER_CHAT) {
+        if (render->view == SNAG_RENDER_CHAT && !display->query) {
             const struct snag_irc_destination *destination = selected_destination(term);
             if (destination && display_set_chat_room(display, destination, false) < 0) return -1;
         }
@@ -1024,6 +1145,7 @@ apply_message(struct snag_ui_display *display, struct snag_ui_command *command,
         return display->prompt.source && !display->view_repainting ? apply_prompt(display) : 0;
     case SNAG_UI_ROUTE: snag_term_destination_route(term, command->text, command->data.route);
         return 0;
+    case SNAG_UI_QUERY: return display_query_event(display, command->data.irc, false);
     case SNAG_UI_COMMANDS: snag_term_set_commands(term, command->data.commands.items,
                              command->data.commands.count);
         return 0;
@@ -1136,6 +1258,9 @@ apply_message(struct snag_ui_display *display, struct snag_ui_command *command,
     case SNAG_UI_CAPTION: return snag_term_caption(term,command->data.value,command->text);
     case SNAG_UI_VIEW:
         if (!term->opened) {
+            struct ui_channel_draft *draft = command->data.value == SNAG_RENDER_CHAT ?
+                display_channel_draft(display, term->destination.id) : &display->rollout_draft;
+            if (display_select_draft(display, NULL, draft) < 0) return -1;
             render->view = (enum snag_render_view)command->data.value;
             term->chat = render->view == SNAG_RENDER_CHAT;
             atomic_store(&display->runtime->view, command->data.value);
@@ -1152,7 +1277,9 @@ apply_message(struct snag_ui_display *display, struct snag_ui_command *command,
                     command->data.orientation.resumed, command->data.orientation.queue_armed);
     case SNAG_UI_HISTORY: return snag_render_history(render, command->data.replay.turn,
             command->data.replay.shown, command->data.replay.completed, command->data.replay.total);
-    case SNAG_UI_IRC: return snag_render_irc_event(render, command->data.irc);
+    case SNAG_UI_IRC:
+        if (display_query_event(display, command->data.irc, true) < 0) return -1;
+        return snag_render_irc_event(render, command->data.irc);
     case SNAG_UI_VOICE_EVENT: return snag_render_voice_event(render, command->data.voice, 0u, 0u);
     case SNAG_UI_DURABLE: return snag_render_durable(render, command->data.durable.fd,
             command->data.durable.source, command->text,
@@ -1559,6 +1686,8 @@ presentation_main(void *opaque)
     struct snag_ui_display display = {.runtime = runtime};
 
     snag_term_init(&display.term);
+    snag_buf_init(&display.rollout_draft.text, SNAG_MAX_DIRECT_PROMPT + 1u);
+    display.main_draft = &display.rollout_draft;
     display.term.input_checkpoint = output_input_checkpoint;
     display.term.input_opaque = &display;
     snag_render_init(&display.render, 0u);
@@ -1656,6 +1785,19 @@ presentation_main(void *opaque)
         snag_session_relay_close(&display.relay);
         snag_session_process_close(&display.native_process);
     }
+    while (display.queries) {
+        struct ui_query_tab *tab = display.queries;
+        display.queries = tab->next;
+        snag_buf_free(&tab->draft);
+        free(tab);
+    }
+    while (display.channel_drafts) {
+        struct ui_channel_draft *draft = display.channel_drafts;
+        display.channel_drafts = draft->next;
+        snag_buf_free(&draft->text);
+        free(draft);
+    }
+    snag_buf_free(&display.rollout_draft.text);
     prompt_free(&display.prompt);
     return NULL;
 }
@@ -1974,7 +2116,9 @@ int
 snag_ui_capture_route(struct snag_ui *ui, const char *text)
 {
     struct ui_message message = {.command = {.kind = SNAG_UI_ROUTE, .data.route = &ui->input_route}};
-    return send_message(ui, &message, text);
+    int rc = send_message(ui, &message, text);
+    if (!rc) ui->input_query = message.snapshot.query;
+    return rc;
 }
 
 uint32_t
@@ -2218,6 +2362,7 @@ snag_ui_poll(struct snag_ui *ui, int timeout_ms, enum snag_term_action *action, 
     ui->input_view = item->snapshot.view;
     ui->input_active = item->snapshot.active;
     ui->input_route = item->route;
+    ui->input_query = item->snapshot.query;
     ui->input_echoed = item->submission_echoed;
     ui->input_view_applied = item->view_applied;
     ui->selection = item->snapshot.selection;
