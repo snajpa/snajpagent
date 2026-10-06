@@ -23,7 +23,9 @@ struct snag_vm_read_request {
     bool trusted_tail, refresh, reverse;
     bool project, if_changed, tail_only;
     unsigned int verbosity, columns;
-    struct snag_journal_cursor tail, cursor;
+    /* tail is the owner's bound when trusted; previous is the already
+     * displayed bound, independently used by if_changed and tail_only. */
+    struct snag_journal_cursor tail, previous, cursor;
     uint64_t before_seq;
 };
 

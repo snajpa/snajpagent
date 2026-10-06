@@ -104,6 +104,15 @@ the session editor and keep separate composer viewports. Register and undo state
 are memory-only; draft text remains in workspace snapshots. Native owner status
 supplies provider/model/effort and working/idle fields. Mac/Linux PTY regressions
 cover editing, Unicode, counts, undo boundaries and owner reconciliation.
+Live history now opens a read-only semantic observer and uses validated committed
+positions without reserving control. Reader mode changes retain the pinned source
+descriptor. A newer snapshot survives a lagging owner notification and remains
+labelled snapshot until certification catches up. The previous displayed tail is
+separate from the requested committed bound, preserving coalesced updates.
+State parsing rejects malformed/unsupported or regressing owner boundaries.
+Canceling a page preserves its verified source; canceling an unfinished initial
+open discards that unverified descriptor. Same-content replacement is tested
+across canceled checkpoint reads and both certification-mode transitions.
 Classic attachment fallback, new/stopped-owner launch, command/report adapters, cross-page tool
 dependencies, search/selection/clipboard and IRC conversations still need integration.
 This development frontend has

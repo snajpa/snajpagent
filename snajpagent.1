@@ -1684,9 +1684,16 @@ j/k, arrows and half-page movement cross source-page boundaries. Opening history
 or pressing G enables FOLLOW at a fresh tail. Moving away from the tail enters
 HOLD: incoming output updates the newer-output indicator while the viewport stays
 in place. R refreshes the current range while retaining the selected source
-anchor and FOLLOW/HOLD state. Best-effort history snapshots poll once per second;
-an unchanged complete tail needs only file-identity checks and emits no frame.
-Open buffers retain verified descriptors across focus changes. A replaced,
+anchor and FOLLOW/HOLD state. Live workspace-capable owners supply committed
+journal positions to read-only observers; browsing leaves their attachment
+status and controller unchanged. The status line labels these views committed.
+Older or stopped owners use the last complete snapshot, labelled snapshot.
+Both modes check for updates once per second. An unchanged committed position
+needs only file-identity checks, including while the owner is writing an
+unfinished record. An unchanged complete snapshot also emits no frame.
+If an owner notification temporarily trails an already displayed snapshot,
+that snapshot remains visible until the owner catches up.
+Open buffers retain verified descriptors across focus, attach and detach changes. A replaced,
 truncated or invalid journal stops automatic observation with a visible error;
 G or R explicitly retries after the source is repaired. A snapshot uses the last complete record and shows a partial-tail label
 when an unfinished record follows it. The journal stays unchanged.

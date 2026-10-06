@@ -13,7 +13,7 @@
 
 struct source_view {
     struct snag_session session;
-    bool best_effort, incomplete;
+    bool best_effort, incomplete, verified;
     struct source_view *next;
 };
 
@@ -107,10 +107,6 @@ view_open(struct snag_vm_reader *reader, const struct snag_vm_read_request *requ
     struct source_view *source = reader->views;
     while (source && strcmp(source->session.id, request->session_id)) source = source->next;
     reader->current = source;
-    if (source && source->best_effort == request->trusted_tail) {
-        view_close(reader);
-        source = NULL;
-    }
     if (!source) {
         source = calloc(1u, sizeof(*source));
         if (!source) return -1;
@@ -122,19 +118,39 @@ view_open(struct snag_vm_reader *reader, const struct snag_vm_read_request *requ
     }
     struct snag_session *view = &source->session;
     if (view->log_fd >= 0) {
-        if (!request->trusted_tail && request->refresh)
-            return snag_session_history_observe(view, &source->incomplete, error, size);
+        int rc;
+        if (!request->trusted_tail && (request->refresh || !source->best_effort)) {
+            rc = snag_session_history_observe(view, &source->incomplete, error, size);
+            if (!rc) source->best_effort = true;
+            return rc;
+        }
         struct snag_journal_cursor tail = request->trusted_tail ? request->tail : view_tail(view);
-        return snag_session_history_refresh(view, &tail, error, size);
+        /* A snapshot can lead a queued owner notification. Keep its verified
+         * prefix and current certification until the owner catches up. */
+        if (request->trusted_tail && tail.offset < view->log_end &&
+            tail.next_seq < view->next_seq) {
+            tail = view_tail(view);
+            return snag_session_history_refresh(view, &tail, error, size);
+        }
+        rc = snag_session_history_refresh(view, &tail, error, size);
+        if (!rc) {
+            source->best_effort = !request->trusted_tail;
+            if (request->trusted_tail) source->incomplete = false;
+        }
+        return rc;
     }
     source->best_effort = !request->trusted_tail;
     source->incomplete = false;
+    int rc;
     if (request->trusted_tail) {
-        return snag_session_history_open(reader->store, view, request->session_id,
+        rc = snag_session_history_open(reader->store, view, request->session_id,
             &request->tail, error, size);
+    } else {
+        rc = snag_session_history_snapshot(reader->store, view, request->session_id,
+            &source->incomplete, error, size);
     }
-    return snag_session_history_snapshot(reader->store, view, request->session_id,
-        &source->incomplete, error, size);
+    source->verified = rc == 0;
+    return rc;
 }
 
 struct read_page {
@@ -204,9 +220,9 @@ read_page(struct snag_vm_reader *reader, struct snag_vm_read_result *result)
     result->tail = view_tail(view);
     result->best_effort = reader->current->best_effort;
     result->incomplete = reader->current->incomplete;
-    result->unchanged = request->tail.offset == result->tail.offset &&
-        request->tail.next_seq == result->tail.next_seq &&
-        !strcmp(request->tail.prev_sha256, result->tail.prev_sha256);
+    result->unchanged = request->previous.offset == result->tail.offset &&
+        request->previous.next_seq == result->tail.next_seq &&
+        !strcmp(request->previous.prev_sha256, result->tail.prev_sha256);
     if (request->tail_only || (request->if_changed && result->unchanged)) return;
     result->events = json_array();
     if (!result->events) goto failed;
@@ -257,7 +273,10 @@ failed:
     }
     json_decref(result->events);
     result->events = NULL;
-    view_close(reader);
+    /* Superseding a page keeps its previously verified source pinned. An
+     * interrupted initial open has no verified bound and must be discarded. */
+    if (result->error_number != ECANCELED || !reader->current || !reader->current->verified)
+        view_close(reader);
 }
 
 static void *
@@ -385,6 +404,14 @@ snag_vm_reader_request(struct snag_vm_reader *reader, const struct snag_vm_read_
         return 0u;
     }
     if (request->retained_sessions && !json_is_array(request->retained_sessions)) {
+        errno = EINVAL;
+        return 0u;
+    }
+    if (request->trusted_tail && (request->tail.offset < 0 || !request->tail.next_seq ||
+        !snag_hex_is_lower(request->tail.prev_sha256, SNAG_SHA256_HEX_LEN) ||
+        ((request->tail.offset == 0) != (request->tail.next_seq == 1u)) ||
+        (!request->tail.offset &&
+         strspn(request->tail.prev_sha256, "0") != SNAG_SHA256_HEX_LEN))) {
         errno = EINVAL;
         return 0u;
     }

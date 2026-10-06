@@ -371,6 +371,29 @@ draft_sync(struct snag_vm_connection *connection)
 }
 
 static int
+state_tail(const json_t *state, struct snag_journal_cursor *tail)
+{
+    uint64_t seq, end, schema;
+    const char *hash = snag_json_bounded_string(json_object_get(state, "sha256"),
+        SNAG_SHA256_HEX_LEN);
+    if (snag_json_integer_u64(state, "seq", &seq) < 0 ||
+        snag_json_integer_u64(state, "end", &end) < 0 || end > INT64_MAX ||
+        snag_json_integer_u64(state, "schema", &schema) < 0 || schema < 2u || schema > 4u ||
+        !hash || !snag_hex_is_lower(hash, SNAG_SHA256_HEX_LEN) ||
+        ((end == 0u) != (seq == 0u)) || (!end && strspn(hash, "0") != SNAG_SHA256_HEX_LEN))
+        return snag_errno(EPROTO);
+    *tail = (struct snag_journal_cursor){.offset = (int64_t)end, .next_seq = seq + 1u};
+    memcpy(tail->prev_sha256, hash, sizeof(tail->prev_sha256));
+    return 0;
+}
+
+bool
+snag_vm_connection_tail(const struct snag_vm_connection *connection, struct snag_journal_cursor *tail)
+{
+    return connection && connection->state && state_tail(connection->state, tail) == 0;
+}
+
+static int
 receive(struct snag_vm_connection *connection, const json_t *value)
 {
     const char *type = snag_json_string(value, "type");
@@ -444,7 +467,19 @@ receive(struct snag_vm_connection *connection, const json_t *value)
         ++connection->revision;
     } else if (!strcmp(type, "state")) {
         json_t *state = json_object_get(value, "state");
-        if (!json_is_object(state)) return snag_errno(EPROTO);
+        struct snag_journal_cursor next, previous;
+        if (state_tail(state, &next) < 0 ||
+            !json_is_boolean(json_object_get(state, "active")) ||
+            !json_is_string(json_object_get(state, "provider")) ||
+            !json_is_string(json_object_get(state, "model")) ||
+            !json_is_string(json_object_get(state, "effort"))) return snag_errno(EPROTO);
+        if (snag_vm_connection_tail(connection, &previous) &&
+            (next.offset < previous.offset || next.next_seq < previous.next_seq ||
+             ((next.offset == previous.offset) != (next.next_seq == previous.next_seq)) ||
+             (next.offset == previous.offset && strcmp(next.prev_sha256, previous.prev_sha256)) ||
+             json_integer_value(json_object_get(state, "schema")) <
+             json_integer_value(json_object_get(connection->state, "schema"))))
+            return snag_errno(EPROTO);
         json_decref(connection->state);
         connection->state = json_incref(state);
         ++connection->revision;

@@ -74,6 +74,31 @@ class ControlTests(unittest.TestCase):
         self.owner.status('detached')
         return draft
 
+    def test_history_observer_uses_committed_tail_without_control(self):
+        child = self.start('-N', 'observed', columns=200)
+        child.command('history ' + self.owner.sid)
+        child.repaint_until(b'FOLLOW committed')
+        self.owner.status('detached')
+        peer = self.owner.view()
+        peer.bind()
+        request = peer.submit('observer-watermark-marker')
+        self.assertEqual(peer.result(request)['status'], 'committed')
+        child.repaint_until(b'observer-watermark-marker')
+        child.repaint_until(b'FOLLOW committed')
+        child.write(b'gg')
+        child.repaint_until(b'HOLD committed')
+        peer.send(type='detach', generation=peer.generation)
+        peer.until('detached')
+        peer.close()
+        child.command('detach')
+        child.repaint_until(b'HOLD snapshot')
+        child.command('attach')
+        child.repaint_until(b'ATTACHED')
+        child.repaint_until(b'HOLD committed')
+        self.assertEqual(self.owner.identity(), self.owner.owner_identity)
+        child.finish('close')
+        self.owner.status('detached')
+
     def test_owner_draft_adoption_and_final_edit_flushed_on_close(self):
         self.owner_draft('retained 👩‍💻')
         child = self.start('-N', 'owner-draft')

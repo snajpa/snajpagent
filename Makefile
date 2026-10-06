@@ -272,6 +272,7 @@ src/unicode.o: src/unicode_tables.inc
 tests/test_vm_reader: $(PLATFORM_SRC) src/json.c src/wire.c src/secret_source.c src/instructions.c src/media.c src/turn.c src/store.c src/store_record.c src/store_checkpoint.c src/irc_event.c src/store_lookup.c src/store_lifecycle.c src/history_view.c src/vm_reader.c src/vm_public.c tests/test_vm_reader.c $(HEADERS)
 
 tests/test_vm_reader tests/test_vm_transcript: src/history.c src/term.c src/render.c src/render_prepare.c src/vm_transcript.c src/vm_document.c src/vm_text.c src/unicode.c
+tests/test_vm_reader: src/vm_connection.c src/vm_editor.c src/session_view.c
 
 tests/test_vm_transcript: $(PLATFORM_SRC) src/json.c src/wire.c src/secret_source.c src/instructions.c src/media.c src/turn.c src/store.c src/store_record.c src/store_checkpoint.c src/irc_event.c src/store_lookup.c src/store_lifecycle.c src/history_view.c src/vm_public.c tests/test_vm_transcript.c $(HEADERS)
 

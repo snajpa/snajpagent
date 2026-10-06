@@ -61,6 +61,13 @@ snapshot selection run on the same presentation thread as state publication.
 Pending state is coalesced; a slow observer reads the complete intervening
 range from the journal. Observation never reserves a controller or changes
 the classic session list's attachment status.
+The frontend accepts session schemas 2, 3 and 4 and validates offset/sequence correspondence
+and the digest before using a state boundary. Within one live owner connection,
+offsets and sequences advance together; an unchanged boundary retains its digest.
+Malformed or regressing state closes that connection and preserves local drafts.
+Read-only history opens an observer and shares it between split views. Committed
+bounds and previously displayed bounds are separate, so a coalesced state update
+still causes the history reader to return its new page.
 
 | Request | Response and effect |
 | --- | --- |

@@ -3,6 +3,7 @@
 #include "fs.h"
 #include "history_view.h"
 #include "json.h"
+#include "vm_connection.h"
 
 #include <assert.h>
 #include <errno.h>
@@ -12,6 +13,8 @@
 #include <unistd.h>
 
 #ifndef _WIN32
+#include <fcntl.h>
+#include <sys/socket.h>
 #include <sys/wait.h>
 #endif
 
@@ -67,10 +70,179 @@ projection_test(void)
     json_decref(data);
 }
 
+static void
+mode_identity_test(struct snag_store *store, const char *root)
+{
+    struct snag_session source;
+    char error[256];
+    snag_session_init(&source);
+    assert(snag_session_create(store, &source, root, "default", "mode-test", "high",
+        error, sizeof(error)) == 0);
+    source.on_checkpoint = large_context;
+    assert(snag_session_checkpoint(&source, error, sizeof(error)) == 0);
+    source.on_checkpoint = NULL;
+    struct snag_vm_read_request request = {.refresh = true};
+    memcpy(request.session_id, source.id, sizeof(request.session_id));
+    request.tail.offset = source.log_end;
+    request.tail.next_seq = source.next_seq;
+    memcpy(request.tail.prev_sha256, source.prev_sha256, sizeof(request.tail.prev_sha256));
+    char *bytes = malloc((size_t)source.log_end);
+    assert(bytes);
+    int fd = snag_open_read_at(source.dir_fd, "events.jsonl", false);
+    assert(fd >= 0);
+    size_t used = 0u;
+    while (used < (size_t)source.log_end) {
+        ssize_t count = read(fd, bytes + used, (size_t)source.log_end - used);
+        assert(count > 0);
+        used += (size_t)count;
+    }
+    assert(close(fd) == 0);
+    for (unsigned int trusted = 0u; trusted < 2u; ++trusted) {
+        struct snag_vm_reader *reader = snag_vm_reader_open(store, NULL, error, sizeof(error));
+        assert(reader);
+        request.trusted_tail = trusted != 0u;
+        struct snag_vm_read_result *result = await_page(reader,
+            snag_vm_reader_request(reader, &request));
+        assert(!result->error_number);
+        snag_vm_read_result_free(result);
+        /* Supersede a checkpoint read before changing modes. Its validated
+         * cached source must survive whether cancellation catches queued,
+         * running or already completed work. */
+        request.reverse = true;
+        assert(snag_vm_reader_request(reader, &request));
+        assert(snag_sleep_ms(10u) == 0);
+        snag_vm_reader_cancel(reader);
+        assert(snag_rename_at(source.dir_fd, "events.jsonl", source.dir_fd, "events.before") == 0);
+        fd = snag_create_private_at(source.dir_fd, "events.jsonl", true);
+        assert(fd >= 0 && snag_write_full(fd, bytes, used) == 0 && close(fd) == 0);
+        request.trusted_tail = !request.trusted_tail;
+        result = await_page(reader, snag_vm_reader_request(reader, &request));
+        assert(result->error_number == ESTALE && !result->events);
+        snag_vm_read_result_free(result);
+        snag_vm_reader_close(reader);
+        assert(snag_unlink_at(source.dir_fd, "events.jsonl", false) == 0);
+        assert(snag_rename_at(source.dir_fd, "events.before", source.dir_fd, "events.jsonl") == 0);
+    }
+    free(bytes);
+    /* A queued owner watermark may lag a complete snapshot. Preserve the
+     * already displayed prefix until certification catches up. */
+    struct snag_vm_reader *reader = snag_vm_reader_open(store, NULL, error, sizeof(error));
+    assert(reader);
+    assert(snag_session_commit(&source, "effort_changed", json_pack("{s:s,s:s}",
+        "old_effort", "high", "new_effort", "low"), NULL, error, sizeof(error)) == 0);
+    request.trusted_tail = false;
+    request.tail_only = true;
+    struct snag_vm_read_result *result = await_page(reader,
+        snag_vm_reader_request(reader, &request));
+    assert(!result->error_number && result->best_effort && result->tail.offset == source.log_end);
+    request.previous = result->tail;
+    snag_vm_read_result_free(result);
+    request.trusted_tail = true;
+    result = await_page(reader, snag_vm_reader_request(reader, &request));
+    assert(!result->error_number && result->best_effort && result->unchanged);
+    snag_vm_read_result_free(result);
+    request.tail = request.previous;
+    result = await_page(reader, snag_vm_reader_request(reader, &request));
+    assert(!result->error_number && !result->best_effort && result->unchanged);
+    snag_vm_read_result_free(result);
+    /* A new committed bound must be compared with the displayed bound, not
+     * with itself; otherwise if_changed would drop every owner update. */
+    assert(snag_session_commit(&source, "effort_changed", json_pack("{s:s,s:s}",
+        "old_effort", "low", "new_effort", "high"), NULL, error, sizeof(error)) == 0);
+    request.tail.offset = source.log_end;
+    request.tail.next_seq = source.next_seq;
+    memcpy(request.tail.prev_sha256, source.prev_sha256, sizeof(request.tail.prev_sha256));
+    request.tail_only = false;
+    request.if_changed = true;
+    request.reverse = false;
+    request.cursor = request.previous;
+    assert(write(source.log_fd, "{unfinished", 11u) == 11);
+    result = await_page(reader, snag_vm_reader_request(reader, &request));
+    assert(!result->error_number && !result->unchanged && !result->best_effort &&
+        !result->incomplete && json_array_size(result->events) == 1u);
+    snag_vm_read_result_free(result);
+    request.trusted_tail = false;
+    result = await_page(reader, snag_vm_reader_request(reader, &request));
+    assert(!result->error_number && result->best_effort && result->incomplete);
+    snag_vm_read_result_free(result);
+    assert(snag_truncate(source.log_fd, source.log_end) == 0);
+    snag_vm_reader_close(reader);
+    snag_session_close(&source);
+}
+
+static void
+owner_state_test(void)
+{
+#ifndef _WIN32
+    for (unsigned int variant = 0u; variant < 9u; ++variant) {
+        int sockets[2];
+        assert(socketpair(AF_UNIX, SOCK_STREAM, 0, sockets) == 0);
+        for (unsigned int i = 0u; i < 2u; ++i)
+            assert(fcntl(sockets[i], F_SETFL, O_NONBLOCK) == 0);
+        struct snag_vm_connection *connection =
+            snag_vm_connection_new("0123456789abcdef0123456789abcdef");
+        assert(connection);
+        assert(snag_vm_draft_replace(connection, 0u, 0u, "retained draft", 14u) == 0);
+        snag_view_channel_init(&connection->channel, sockets[0]);
+        connection->hello = true;
+        char hash[SNAG_SHA256_HEX_LEN + 1u];
+        memset(hash, 'a', sizeof(hash) - 1u);
+        hash[sizeof(hash) - 1u] = 0;
+        connection->state = json_pack("{s:i,s:i,s:s,s:i,s:b,s:s,s:s,s:s}",
+            "seq", 10, "end", 1000, "sha256", hash, "schema", 4,
+            "active", 0, "provider", "provider", "model", "model", "effort", "high");
+        json_t *state = json_deep_copy(connection->state);
+        assert(state);
+        if (variant == 1u) {
+            assert(json_object_set_new(state, "seq", json_integer(11)) == 0);
+            assert(json_object_set_new(state, "end", json_integer(1100)) == 0);
+        } else if (variant == 2u)
+            assert(json_object_set_new(state, "sha256", json_string("bad")) == 0);
+        else if (variant == 3u)
+            assert(json_object_set_new(state, "end", json_integer(1100)) == 0);
+        else if (variant == 4u) {
+            assert(json_object_set_new(state, "seq", json_integer(9)) == 0);
+            assert(json_object_set_new(state, "end", json_integer(900)) == 0);
+        } else if (variant == 5u) {
+            hash[0] = 'b';
+            assert(json_object_set_new(state, "sha256", json_string(hash)) == 0);
+        } else if (variant == 6u)
+            assert(json_object_set_new(state, "schema", json_integer(5)) == 0);
+        else if (variant == 7u)
+            assert(json_object_set_new(state, "active", json_integer(1)) == 0);
+        else if (variant == 8u)
+            assert(json_object_set_new(state, "seq", json_integer(-1)) == 0);
+        struct snag_view_channel peer;
+        snag_view_channel_init(&peer, sockets[1]);
+        json_t *message = json_pack("{s:s,s:O}", "type", "state", "state", state);
+        assert(message && snag_view_channel_send(&peer, message) == 0);
+        json_decref(message);
+        uint64_t deadline = snag_monotonic_ms() + 5000u;
+        uint64_t revision = connection->revision;
+        while (connection->revision == revision && connection->channel.fd >= 0) {
+            assert(snag_monotonic_ms() < deadline);
+            if (peer.output) assert(snag_view_channel_write(&peer) >= 0);
+            snag_vm_connection_step(connection);
+        }
+        struct snag_journal_cursor tail;
+        if (variant < 2u) {
+            assert(connection->channel.fd >= 0 && snag_vm_connection_tail(connection, &tail));
+            assert(json_equal(connection->state, state) && tail.next_seq == 11u + variant);
+        } else assert(connection->channel.fd < 0 && !snag_vm_connection_tail(connection, &tail));
+        assert(connection->draft.len == 14u &&
+            !memcmp(connection->draft.data, "retained draft", 14u));
+        json_decref(state);
+        snag_view_channel_close(&peer);
+        snag_vm_connections_free(connection);
+    }
+#endif /* _WIN32 */
+}
+
 int
 main(void)
 {
     projection_test();
+    owner_state_test();
     char *root = snag_path_join(getenv("TMPDIR") ? getenv("TMPDIR") : "/tmp",
         "snajpagent-vm-reader-XXXXXX");
     char error[256];
@@ -163,15 +335,15 @@ main(void)
     /* Metadata polling leaves the existing projection untouched when idle. */
     struct snag_vm_read_request poll = request;
     poll.refresh = poll.if_changed = poll.project = true;
-    poll.tail.offset = source.log_end;
-    poll.tail.next_seq = source.next_seq;
-    memcpy(poll.tail.prev_sha256, source.prev_sha256, sizeof(poll.tail.prev_sha256));
+    poll.previous.offset = source.log_end;
+    poll.previous.next_seq = source.next_seq;
+    memcpy(poll.previous.prev_sha256, source.prev_sha256, sizeof(poll.previous.prev_sha256));
     generation = snag_vm_reader_request(reader, &poll);
     result = await_page(reader, generation);
     assert(!result->error_number && result->unchanged && !result->document && !result->events);
     snag_vm_read_result_free(result);
     poll.tail_only = true;
-    --poll.tail.next_seq;
+    --poll.previous.next_seq;
     generation = snag_vm_reader_request(reader, &poll);
     result = await_page(reader, generation);
     assert(!result->error_number && !result->unchanged && !result->document && !result->events);
@@ -265,6 +437,7 @@ main(void)
     assert(snag_vm_reader_request(reader, &catalog) > generation);
     snag_vm_reader_close(reader);
     snag_session_close(&source);
+    mode_identity_test(&store, root);
     snag_store_close(&store);
     free(root);
     puts("test_vm_reader: ok");

@@ -29,6 +29,7 @@ void snag_vm_connections_free(struct snag_vm_connection *);
 void snag_vm_connection_close(struct snag_vm_connection *);
 int snag_vm_connection_open(struct snag_vm_connection *, struct snag_store *, bool control);
 void snag_vm_connection_step(struct snag_vm_connection *);
+bool snag_vm_connection_tail(const struct snag_vm_connection *, struct snag_journal_cursor *);
 int snag_vm_connection_wait(const struct snag_vm_connection *, uint64_t now, int timeout);
 int snag_vm_connection_control(struct snag_vm_connection *, const char *intent);
 /* Prepare has no wire effects. Save the workspace before calling send. */

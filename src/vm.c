@@ -66,7 +66,7 @@ struct vm_window {
     char session_id[SNAG_ID_HEX_LEN + 1u], anchor_key[160];
     uint64_t anchor_seq;
     size_t anchor_byte;
-    bool anchor_heading, incomplete, follow, source_failed;
+    bool anchor_heading, incomplete, best_effort, follow, source_failed;
     uint64_t follow_at;
     unsigned int verbosity;
     enum history_load load;
@@ -555,6 +555,9 @@ open_history(struct vm *vm, const char *selector)
         memcpy(window->session_id, location.id, sizeof(window->session_id));
         window->verbosity = 1u;
         window->follow = true;
+        window->best_effort = true;
+        struct snag_vm_connection *c = connection_for(vm, location.id, true);
+        if (c && c->channel.fd < 0) (void)snag_vm_connection_open(c, &vm->store, false);
         queue_history(vm, window, LOAD_LAST);
         notice(vm, "Read-only retained history  gg/G: oldest/newest  :verbosity 0..6");
     }
@@ -639,13 +642,15 @@ load_history(struct vm *vm)
         struct snag_vm_read_request request = {.kind = SNAG_VM_READ_HISTORY, .project = true,
             .verbosity = window->verbosity, .columns = window->rectangle.columns};
         memcpy(request.session_id, window->session_id, sizeof(request.session_id));
+        request.previous = window->tail;
+        request.trusted_tail = snag_vm_connection_tail(
+            connection_for(vm, window->session_id, false), &request.tail);
         enum history_load load = window->load;
         if (load == LOAD_FIRST || load == LOAD_LAST || load == LOAD_REFRESH || load == LOAD_POLL)
             request.refresh = true;
         if (load == LOAD_POLL) {
             request.if_changed = true;
             request.tail_only = !window->follow;
-            request.tail = window->tail;
         }
         if (load == LOAD_LAST || load == LOAD_PREVIOUS || load == LOAD_ANCHOR ||
             load == LOAD_POLL) {
@@ -1374,7 +1379,7 @@ draw_window(void *opaque, const struct snag_vm_rectangle *rectangle)
         window->filter && *window->filter ? " /" : "", window->filter ? window->filter : "");
     if (window->kind == VIEW_TRANSCRIPT) {
         char owner[192] = "";
-        if (c && c->bound && c->state) {
+        if (c && c->state) {
             const char *provider = snag_json_string(c->state, "provider");
             const char *model = snag_json_string(c->state, "model");
             const char *effort = snag_json_string(c->state, "effort");
@@ -1382,11 +1387,12 @@ draw_window(void *opaque, const struct snag_vm_rectangle *rectangle)
                 model ? model : "?", effort ? effort : "?",
                 json_is_true(json_object_get(c->state, "active")) ? "working" : "idle");
         }
-        (void)snprintf(status, sizeof(status), "%s%s%s%.8s%s history v%u %s  seq %llu%s%s%s%s%s",
+        (void)snprintf(status, sizeof(status), "%s%s%s%.8s%s history v%u %s %s  seq %llu%s%s%s%s%s",
             editing ? vm->insert ? "INSERT " : "NORMAL draft " : "",
             c && c->bound ? "ATTACHED " : "read-only ",
             c && c->draft_conflict ? "[draft conflict] " : "", window->session_id, owner,
             window->verbosity, window->follow ? "FOLLOW" : "HOLD",
+            window->document ? window->best_effort ? "snapshot" : "committed" : "",
             (unsigned long long)window->anchor_seq,
             window->begin.offset ? "  ↑ older" : "  [start]",
             window->end.offset < window->tail.offset ? "  ↓ newer" : "  [tail]",
@@ -1461,10 +1467,12 @@ collect(struct vm *vm)
             window->follow_at = snag_monotonic_ms() + 1000u;
             if (load == LOAD_POLL &&
                 (result->unchanged || result->request.tail_only || !window->follow)) {
-                if (!result->unchanged || window->incomplete != result->incomplete)
+                if (!result->unchanged || window->incomplete != result->incomplete ||
+                    window->best_effort != result->best_effort)
                     vm->dirty = true;
                 window->tail = result->tail;
                 window->incomplete = result->incomplete;
+                window->best_effort = result->best_effort;
                 continue;
             }
             struct snag_journal_cursor end = result->request.before_seq ?
@@ -1484,6 +1492,7 @@ collect(struct vm *vm)
             }
             window->tail = result->tail;
             window->incomplete = result->incomplete;
+            window->best_effort = result->best_effort;
             snag_vm_document_free(window->document);
             window->document = result->document;
             result->document = NULL;

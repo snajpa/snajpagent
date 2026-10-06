@@ -35,6 +35,11 @@
 - Bound history-reader memory when browsing across large context checkpoints.
   Preserve complete event verification and retained session history.
 
+- Observe live workspace history through the owner's committed journal position
+  without taking control. Preserve the pinned journal across attach/detach and canceled reads,
+  distinguish committed history from snapshots, and retain a newer snapshot
+  while an older owner notification catches up.
+
 - Recover interrupted provider streams containing only private reasoning, and
   preserve validated completed responses when the connection loses its HTTP
   terminator. Keep partial text and tool activity outside transport replay.
