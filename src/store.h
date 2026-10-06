@@ -396,6 +396,15 @@ int snag_session_each_event_forward(struct snag_session *, struct snag_journal_c
  * still apply their public projection/secret filter. */
 int snag_session_history_open(struct snag_store *, struct snag_session *, const char *id,
     const struct snag_journal_cursor *tail, char *error, size_t error_size);
+/* Capture the last complete record without a writer lock or suffix repair.
+ * A live old owner cannot certify this boundary; label it as a best-effort view.
+ * incomplete reports an ignored unfinished final record. Scans verify the chain. */
+int snag_session_history_snapshot(struct snag_store *, struct snag_session *, const char *id,
+    bool *incomplete, char *error, size_t error_size);
+/* Verify identity and the new chain before extending a read-only view. Failure
+ * retains its previous bound; replacement/truncation requires cache invalidation. */
+int snag_session_history_refresh(struct snag_session *, const struct snag_journal_cursor *tail,
+    char *error, size_t error_size);
 
 int snag_session_media(struct snag_session *session, const char *path, const char *mime,
                        int (*pump)(void *, unsigned int), void *opaque,

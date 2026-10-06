@@ -11,7 +11,9 @@ Implementation checkpoint: asynchronous pager ownership and retained rendering
 are implemented in this branch. Held-pager regressions cover IRC delivery and
 provider completion; interaction tests cover failures, tools and queued downloads.
 History cursor reads now validate checkpoint bodies through a streaming parser
-and return display metadata. The optional workspace module, semantic attachment
+and return display metadata. Read-only snapshots preserve unfinished tails, and
+refresh validates file identity and each appended record before extending a view.
+The optional workspace module, semantic attachment
 and IRC conversation work below remain to be implemented.
 
 ## 1. Outcome and decisions
@@ -669,6 +671,16 @@ integer bounds, tiny read chunks and hash boundaries. The storage test traverses
 a 17 MiB checkpoint forward and backward with only 12 MiB of additional address space
 available on Linux. Worker scheduling and measured cancellation latency remain
 part of the workspace reader integration below.
+
+The store exposes a read-only snapshot for stored sessions and old owners. It
+captures the last complete record, reports an ignored unfinished suffix and
+never acquires the writer lock or repairs journal bytes. A live old owner cannot
+certify its committed boundary; label that view best effort. New owners provide
+the committed cursor through semantic attachment. A refresh validates the old
+boundary and appended hash chain before extending a view. Directory/journal
+replacement or truncation invalidates cached pages; failure preserves the prior
+bound. Tests keep the native writer active, preserve partial tails and reject a
+byte-identical journal replacement as a different source.
 
 Maintain sparse offsets for visited pages. They are a disposable acceleration,
 not a new required on-disk index. `gg` seeks the earliest displayable event and

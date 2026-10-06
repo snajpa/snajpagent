@@ -593,6 +593,80 @@ test_history_prefix(struct snag_store *store, const char *cwd)
 }
 
 static void
+test_history_snapshot_refresh(struct snag_store *store, const char *cwd)
+{
+    struct snag_session source, view;
+    char error[256];
+    bool incomplete = true;
+    snag_session_init(&source);
+    snag_session_init(&view);
+    assert(snag_session_create(store, &source, cwd, "default", "model", "high",
+        error, sizeof(error)) == 0);
+    assert(snag_session_history_snapshot(store, &source, source.id, &incomplete,
+        error, sizeof(error)) < 0);
+    assert_session_lock_retained(&source, "after refusing owned snapshot");
+    assert(snag_session_history_snapshot(store, &view, source.id, &incomplete,
+        error, sizeof(error)) == 0 && !incomplete);
+    assert(view.log_end == source.log_end && view.next_seq == source.next_seq);
+    assert(view.lock_fd < 0 && !view.strings && !view.pending_log);
+    struct snag_journal_cursor original = {.offset = view.log_end, .next_seq = view.next_seq};
+    memcpy(original.prev_sha256, view.prev_sha256, sizeof(original.prev_sha256));
+    commit_event(&source, "effort_changed",
+        change_data("old_effort", "high", "new_effort", "low"));
+    struct snag_journal_cursor tail = {.offset = source.log_end, .next_seq = source.next_seq};
+    memcpy(tail.prev_sha256, source.prev_sha256, sizeof(tail.prev_sha256));
+    assert(snag_session_history_refresh(&source, &tail, error, sizeof(error)) < 0);
+    assert_session_lock_retained(&source, "after refusing owned refresh");
+    struct snag_journal_cursor bad = tail;
+    bad.prev_sha256[0] = bad.prev_sha256[0] == '0' ? '1' : '0';
+    assert(snag_session_history_refresh(&view, &bad, error, sizeof(error)) < 0);
+    assert(view.log_end == original.offset && view.next_seq == original.next_seq &&
+        !strcmp(view.prev_sha256, original.prev_sha256));
+    assert(snag_session_history_refresh(&view, &tail, error, sizeof(error)) == 0);
+    assert(view.log_end == tail.offset && view.next_seq == tail.next_seq &&
+        !strcmp(view.prev_sha256, tail.prev_sha256));
+    assert(snag_session_history_refresh(&view, &tail, error, sizeof(error)) == 0);
+    assert(snag_session_history_refresh(&view, &original, error, sizeof(error)) < 0 &&
+        errno == ESTALE);
+    struct snag_journal_cursor cursor = original;
+    struct forward_scan scan = {.next = original.next_seq};
+    assert(snag_session_each_event_forward(&view, &cursor, SIZE_MAX, forward_event,
+        &scan, error, sizeof(error)) == 0 && scan.next == tail.next_seq);
+    snag_session_close(&view);
+    assert(write(source.log_fd, "{unfinished", 11u) == 11);
+    assert(snag_session_history_snapshot(store, &view, source.id, &incomplete,
+        error, sizeof(error)) == 0 && incomplete);
+    assert(view.log_end == tail.offset && view.next_seq == tail.next_seq);
+    assert(snag_seek(source.log_fd, 0, SEEK_END) == tail.offset + 11);
+    assert(snag_truncate(source.log_fd, tail.offset) == 0);
+    assert(snag_session_history_refresh(&view, &tail, error, sizeof(error)) == 0);
+    /* Replacement with even an identical prefix invalidates cached page identity. */
+    assert(renameat(source.dir_fd, "events.jsonl", source.dir_fd, "original-events") == 0);
+    int replacement = openat(source.dir_fd, "events.jsonl", O_WRONLY | O_CREAT | O_EXCL, 0600);
+    char *bytes = malloc((size_t)tail.offset);
+    assert(replacement >= 0 && bytes);
+    assert(pread(source.log_fd, bytes, (size_t)tail.offset, 0) == tail.offset);
+    assert(write(replacement, bytes, (size_t)tail.offset) == tail.offset);
+    assert(close(replacement) == 0);
+    free(bytes);
+    assert(snag_session_history_refresh(&view, &tail, error, sizeof(error)) < 0 && errno == ESTALE);
+    assert(unlinkat(source.dir_fd, "events.jsonl", 0) == 0);
+    assert(renameat(source.dir_fd, "original-events", source.dir_fd, "events.jsonl") == 0);
+    assert(snag_session_history_refresh(&view, &tail, error, sizeof(error)) == 0);
+    /* Snapshot mode leaves an incomplete first record byte-for-byte intact. */
+    assert(snag_truncate(source.log_fd, 0) == 0);
+    assert(snag_session_history_refresh(&view, &tail, error, sizeof(error)) < 0 && errno == ESTALE);
+    snag_session_close(&view);
+    assert(write(source.log_fd, "{unfinished", 11u) == 11);
+    assert(snag_session_history_snapshot(store, &view, source.id, &incomplete,
+        error, sizeof(error)) == 0 && incomplete && !view.log_end && view.next_seq == 1u);
+    assert(snag_seek(source.log_fd, 0, SEEK_END) == 11);
+    snag_session_close(&view);
+    assert_session_lock_retained(&source, "after snapshot and refresh");
+    snag_session_close(&source);
+}
+
+static void
 test_reverse_history(struct snag_store *store, const char *cwd)
 {
     struct snag_session session;
@@ -2054,6 +2128,7 @@ main(void)
     test_reverse_history(&store, cwd);
     test_forward_history(&store, cwd);
     test_history_prefix(&store, cwd);
+    test_history_snapshot_refresh(&store, cwd);
     test_upload_staging_lifecycle(&store, cwd);
     test_service_tier(&store, cwd);
     test_checkpoint_optional_download_queue(&store, cwd);
