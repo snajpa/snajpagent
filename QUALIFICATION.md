@@ -37,12 +37,14 @@ priority /fast, an actual local HTTP request, retained later typing, resume,
 startup failure, workspace loss and joined cancellation during a held request.
 Three full workspace cases exercise hiding a live engine, shared split drafts,
 explicit quit, single-engine restrictions, explicit session resume and startup
-failure recovery. The Windows workspace-storage C suite and console-key cases
+failure recovery, plus history-search wakeups with a live engine and before
+explicit engine startup after workspace resume. The Windows workspace-storage C suite and console-key cases
 also pass. Regression witnesses cover held-directory reopening and Escape events
 with no translated character. The runner maps private fixture directories to a
 drive and owns/restores its Unix PTY raw mode. Wine inserts line breaks within
-ANSI output, so these results establish lifecycle/input behavior, not native
-Windows desktop rendering. Broader Windows/base-suite qualification remains open;
+ANSI output; shutdown checks remove those bridge line breaks to check complete
+escape-sequence emission. These results establish lifecycle/input behavior, not
+native Windows desktop rendering. Broader Windows/base-suite qualification remains open;
 the Wine base run stops in an unrelated command-quoting assertion.
 
 Actual SSH/Mosh × Screen/tmux reconnect cases preserve the same workspace/owner,
@@ -71,7 +73,8 @@ fifteen native-owner and nineteen controller cases on FreeBSD 14.5-RELEASE-p1.
 All sixteen frontend cases pass across the suite and a corrected legacy-snapshot
 case. The launcher covers exec failure and explicit retry, independent process
 groups, signal-mask restoration, temporary PTY modes and owner lifetime.
-Legacy FreeBSD 5.1, both NetBSD and all three OpenBSD production profiles compile.
+Legacy FreeBSD 5.1, both NetBSD, all three OpenBSD, Windows ARM64 and Linux AArch64
+production profiles compile.
 The remaining production compile profiles are still being qualified. These
 development checks do not constitute a release-matrix receipt or establish
 runtime behavior on the older BSD kernels.

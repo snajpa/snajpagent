@@ -2,9 +2,9 @@
 
 # Pager retention and the Vim workspace
 
-Status: implementation in progress, October 6, 2026. The original inspection
-was against `7a70d81d336ef6f14d91ef944b1226c8efa65636`. The checkpoint below
-distinguishes implemented components from the complete intended behavior.
+Status: implemented in development builds, October 6, 2026.
+[QUALIFICATION.md](../QUALIFICATION.md) records runtime coverage and platform
+limits. This design documents the supported workflow and ownership boundaries.
 
 History scheduling checkpoint: separate visible-page and scan workers keep other
 panes following live output during search, copy and distant cursor motion.

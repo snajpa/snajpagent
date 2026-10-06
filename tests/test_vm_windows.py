@@ -57,6 +57,16 @@ class WindowsTests(unittest.TestCase):
     def state(self):
         return next(iter(self.snapshots().values()))['state']
 
+    def finish(self, child, command='qa'):
+        if child.process.poll() is None:
+            child.command(command)
+        child.wait_exit()
+        self.assertEqual(child.process.poll(), 0, bytes(child.output[-3000:]))
+        self.assertEqual(frontend.normalized_modes(child.state()['modes']), child.original)
+        # Wine's Unix conhost inserts CRLF inside VT sequences too. Check their
+        # complete emission; this bridge does not qualify native desktop rendering.
+        self.assertIn(b'\x1b[?1049l', child.output.replace(b'\r\n', b''))
+
     def live(self, child):
         child.repaint_until(b'ATTACHED')
         self.wait_snapshot(lambda rows: rows and self.state().get('buffers'))
@@ -122,7 +132,7 @@ class WindowsTests(unittest.TestCase):
         child.command('qa')
         child.repaint_until(b'Unsent draft or unresolved submission')
         self.assertIsNone(child.process.poll())
-        child.finish('qa!')
+        self.finish(child, 'qa!')
         self.assertEqual(frontend.rollout(self.state()['buffers'][0])['draft'], '')
         self.assertEqual(len(self.requests), 1)
         self.assertEqual(self.provider.latest_user(self.requests[0]), 'windows-prompt ž')
@@ -134,7 +144,7 @@ class WindowsTests(unittest.TestCase):
         child = self.start('-N', 'windows-resume')
         child.command('new saved-agent')
         session = self.live(child)
-        child.finish('qa')
+        self.finish(child)
         resumed = self.start('--resume', 'windows-resume', expect=b'history')
         resumed.write(b'/session\r')
         resumed.repaint_until(b'Match')
@@ -147,7 +157,7 @@ class WindowsTests(unittest.TestCase):
         self.complete(resumed, session)
         resumed.repaint_until(b'windows-direct-answer')
         self.escape(resumed)
-        resumed.finish('qa')
+        self.finish(resumed)
         self.assertEqual(len(self.requests), 1)
         self.assertEqual(self.provider.latest_user(self.requests[0]), 'resumed-windows-prompt')
 
@@ -160,7 +170,7 @@ class WindowsTests(unittest.TestCase):
         self.config.write_text(valid)
         child.command('new recovered-agent')
         self.live(child)
-        child.finish('qa')
+        self.finish(child)
         self.assertEqual(self.requests, [])
 
 
