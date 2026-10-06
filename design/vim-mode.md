@@ -175,8 +175,15 @@ original anchor until explicit navigation. Version1..6 snapshots remain readable
 with earlier display-byte positions converted when the document is loaded. Public
 stream fragments mask partial protected values at both loaded-page boundaries,
 including unconfirmed output after a failed response.
-Public-response dependencies across pages, search/selection/clipboard and IRC
-conversations still need integration.
+Response pages resolve matching terminal public snapshots on the worker. Each
+streamed range uses its canonical slice; terminal records contribute the remaining
+tail after earlier streamed prefixes. Revised UTF-8 boundaries align consistently,
+and omitted terminal items remain unconfirmed. Each pinned source caches the last
+response crossing a page edge; adjacent pages reuse its verified snapshot, and an
+unfinished-response scan resumes from the previously inspected position. A verified
+sequence-to-cursor seek preserves the visible page cursor. Both scan directions
+cover all bytes once, including bodies larger than the4MiB scheduling quantum.
+Search/selection/clipboard and IRC conversations still need integration.
 This development frontend has
 not been installed on the operator's machines or merged into the release line.
 

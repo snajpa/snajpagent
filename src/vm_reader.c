@@ -10,12 +10,16 @@
 #include <errno.h>
 #include <pthread.h>
 #include <stdatomic.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 struct source_view {
     struct snag_session session;
     bool best_effort, incomplete, verified;
+    char public_id[SNAG_ID_HEX_LEN + 1u];
+    json_t *public_snapshot;
+    struct snag_journal_cursor public_scanned;
     struct source_view *next;
 };
 
@@ -65,6 +69,7 @@ view_close(struct snag_vm_reader *reader)
         struct source_view *old = *link;
         *link = old->next;
         snag_session_close(&old->session);
+        json_decref(old->public_snapshot);
         free(old);
     }
     reader->current = NULL;
@@ -191,6 +196,183 @@ read_event(void *opaque, const struct snag_session *state, uint64_t seq,
     }
     if (!event || json_array_append_new(page->events, event) < 0) return -1;
     return 0;
+}
+
+struct public_dependencies {
+    struct snag_vm_reader *reader;
+    json_t *responses, *pending;
+};
+
+static json_t *
+public_snapshot(const char *state, uint64_t seq, const json_t *data)
+{
+    const json_t *items = json_object_get(data, !strcmp(state, "complete") ?
+        "items" : "partial_public");
+    if (!json_is_array(items)) { errno = EINVAL; return NULL; }
+    json_t *public = json_array();
+    if (!public) return NULL;
+    for (size_t i = 0u; i < json_array_size(items); ++i) {
+        json_t *item = json_array_get(items, i);
+        if (!snag_string_in(snag_json_string(item, "kind"), "assistant refusal")) continue;
+        if (json_array_append(public, item) < 0) { json_decref(public); return NULL; }
+    }
+    return json_pack("{s:s,s:I,s:o}", "state", state, "seq", (json_int_t)seq, "items", public);
+}
+
+static int
+resolve_public(void *opaque, const struct snag_session *session, uint64_t seq,
+    const char *type, const json_t *data, char *error, size_t size)
+{
+    struct public_dependencies *public = opaque;
+    (void)session;
+    (void)error;
+    (void)size;
+    if (read_canceled(public->reader)) return snag_errno(ECANCELED);
+    const char *id = snag_json_string(data, "response_id");
+    json_t *response = id ? json_object_get(public->pending, id) : NULL;
+    const char *state = snag_vm_public_state(type);
+    if (response && state) {
+        json_t *snapshot = public_snapshot(state, seq, data);
+        if (!snapshot || json_object_set_new(response, "snapshot", snapshot) < 0) return -1;
+        (void)json_object_del(public->pending, id);
+    }
+    return json_object_size(public->pending) ? 0 : SNAG_JOURNAL_STOP_AFTER;
+}
+
+static int
+prior_public(void *opaque, const struct snag_session *session, uint64_t seq,
+    const char *type, const json_t *data, char *error, size_t size)
+{
+    struct public_dependencies *public = opaque;
+    (void)session;
+    (void)seq;
+    (void)error;
+    (void)size;
+    if (read_canceled(public->reader)) return snag_errno(ECANCELED);
+    const char *id = snag_json_string(data, "response_id");
+    json_t *response = id ? json_object_get(public->pending, id) : NULL;
+    if (response && !strcmp(type, "response_started")) {
+        (void)json_object_del(public->pending, id);
+    } else if (response && !strcmp(type, "response_output")) {
+        uint64_t ordinal, offset;
+        const char *text = snag_json_string(json_object_get(data, "item"), "text");
+        if (!text || snag_json_integer_u64(data, "index", &ordinal) < 0 ||
+            snag_json_integer_u64(data, "offset", &offset) < 0 ||
+            offset > INT64_MAX - strlen(text)) return snag_errno(EINVAL);
+        char index[24];
+        (void)snprintf(index, sizeof(index), "%llu", (unsigned long long)ordinal);
+        json_t *before = json_object_get(response, "before");
+        if (!json_object_get(before, index) && json_object_set_new(before, index,
+            json_integer((json_int_t)(offset + strlen(text)))) < 0) return -1;
+    }
+    return json_object_size(public->pending) ? 0 : SNAG_JOURNAL_STOP_AFTER;
+}
+
+static int
+load_public(struct snag_vm_reader *reader, json_t *events, char *error, size_t size)
+{
+    struct public_dependencies public = {.reader = reader,
+        .responses = json_object(), .pending = json_object()};
+    struct snag_session *view = &reader->current->session;
+    struct snag_journal_cursor position = view->history_cursor;
+    int rc = -1;
+    if (!public.responses || !public.pending) goto out;
+    size_t count = json_array_size(events);
+    for (size_t i = 0u; i < count; ++i) {
+        if (read_canceled(reader)) { errno = ECANCELED; goto out; }
+        const json_t *event = json_array_get(events, i);
+        const char *type = snag_json_string(event, "type");
+        const char *state = snag_vm_public_state(type);
+        if (!state && strcmp(type, "response_output")) continue;
+        const json_t *data = json_object_get(event, "data");
+        const char *id = snag_json_string(data, "response_id");
+        if (!id || !snag_hex_is_lower(id, SNAG_ID_HEX_LEN)) { errno = EINVAL; goto out; }
+        json_t *response = json_object_get(public.responses, id);
+        if (!response) {
+            if (json_object_set_new(public.responses, id, json_pack("{s:{}}", "before")) < 0)
+                goto out;
+            response = json_object_get(public.responses, id);
+        }
+        if (state) {
+            uint64_t seq = (uint64_t)json_integer_value(json_object_get(event, "seq"));
+            json_t *snapshot = public_snapshot(state, seq, data);
+            if (!snapshot || json_object_set_new(response, "snapshot", snapshot) < 0 ||
+                json_object_set(public.pending, id, response) < 0) goto out;
+        }
+    }
+    /* A response beginning inside this page has no earlier streamed prefix. */
+    for (size_t i = 0u; i < count; ++i) {
+        if (read_canceled(reader)) { errno = ECANCELED; goto out; }
+        const json_t *event = json_array_get(events, i);
+        if (strcmp(snag_json_string(event, "type"), "response_started")) continue;
+        const char *id = snag_json_string(json_object_get(event, "data"), "response_id");
+        if (id) (void)json_object_del(public.pending, id);
+    }
+    uint64_t before = (uint64_t)json_integer_value(
+        json_object_get(json_array_get(events, 0u), "seq"));
+    while (before > 1u && json_object_size(public.pending)) {
+        if (snag_session_each_event_reverse(view, before, SNAG_JOURNAL_PAGE_BYTES,
+            prior_public, &public, &before, error, size) < 0) goto out;
+    }
+    (void)json_object_clear(public.pending);
+    const char *id;
+    json_t *response;
+    json_object_foreach(public.responses, id, response) {
+        if (!json_object_get(response, "snapshot") &&
+            json_object_set(public.pending, id, response) < 0) goto out;
+    }
+    struct source_view *source = reader->current;
+    response = json_object_get(public.pending, source->public_id);
+    if (response && source->public_snapshot) {
+        if (json_object_set(response, "snapshot", source->public_snapshot) < 0) goto out;
+        (void)json_object_del(public.pending, source->public_id);
+    }
+    if (count && json_object_size(public.pending)) {
+        struct snag_journal_cursor after;
+        uint64_t last = (uint64_t)json_integer_value(
+            json_object_get(json_array_get(events, count - 1u), "seq"));
+        if (snag_session_history_cursor_before(view, last + 1u, &after, error, size) < 0) goto out;
+        /* Native responses are sequential. Keep the last response crossing a
+         * page edge so neighboring pages and growing tails reuse its scan. */
+        const char *cache = json_object_size(public.pending) == 1u ?
+            json_object_iter_key(json_object_iter(public.pending)) : NULL;
+        char cache_id[SNAG_ID_HEX_LEN + 1u] = "";
+        if (cache) {
+            memcpy(cache_id, cache, sizeof(cache_id));
+            if (!strcmp(cache_id, source->public_id) &&
+                source->public_scanned.next_seq > after.next_seq) after = source->public_scanned;
+        }
+        while (after.offset < view->log_end && json_object_size(public.pending)) {
+            if (snag_session_each_event_forward(view, &after, SNAG_JOURNAL_PAGE_BYTES,
+                resolve_public, &public, error, size) < 0) goto out;
+        }
+        if (*cache_id) {
+            response = json_object_get(public.responses, cache_id);
+            json_t *snapshot = json_incref(json_object_get(response, "snapshot"));
+            json_decref(source->public_snapshot);
+            source->public_snapshot = snapshot;
+            source->public_scanned = after;
+            memcpy(source->public_id, cache_id, sizeof(cache_id));
+        }
+    }
+    for (size_t i = 0u; i < count; ++i) {
+        if (read_canceled(reader)) { errno = ECANCELED; goto out; }
+        json_t *event = json_array_get(events, i);
+        const char *owner = snag_json_string(json_object_get(event, "data"), "response_id");
+        response = owner ? json_object_get(public.responses, owner) : NULL;
+        if (!response) continue;
+        json_t *snapshot = json_object_get(response, "snapshot");
+        if (snapshot && json_object_set(event, "public_snapshot", snapshot) < 0) goto out;
+        if (snag_vm_public_state(snag_json_string(event, "type")) &&
+            json_object_set(event, "public_before", json_object_get(response, "before")) < 0)
+            goto out;
+    }
+    rc = 0;
+out:
+    view->history_cursor = position;
+    json_decref(public.responses);
+    json_decref(public.pending);
+    return rc;
 }
 
 struct call_dependencies {
@@ -466,6 +648,8 @@ read_page(struct snag_vm_reader *reader, struct snag_vm_read_result *result)
                 if (rc < 0) goto failed;
             }
         }
+        if (load_public(reader, result->events, result->error, sizeof(result->error)) < 0)
+            goto failed;
         if (request->verbosity && load_calls(reader, result->events,
             result->error, sizeof(result->error)) < 0) goto failed;
         for (size_t i = 0u; request->verbosity == 2u && i < json_array_size(result->events); ++i) {

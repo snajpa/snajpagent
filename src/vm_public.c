@@ -12,7 +12,7 @@
 struct public_item {
     struct snag_buf text;
     char key[SNAG_ID_HEX_LEN + 24u];
-    const char *response, *kind, *phase, *state;
+    const char *response, *kind, *phase, *state, *resolved_state;
     uint64_t ordinal, seq, last_seq, begin, end;
     bool source_exact;
 };
@@ -97,6 +97,56 @@ record_item(struct projection *projection, const char *response, uint64_t ordina
     return 0;
 }
 
+const char *
+snag_vm_public_state(const char *type)
+{
+    return !strcmp(type, "response_completed") ? "complete" :
+        !strcmp(type, "response_interrupted") ? "interrupted" :
+        !strcmp(type, "response_failed") ? "failed" :
+        !strcmp(type, "response_output_correction") ? "corrected" : NULL;
+}
+
+static size_t
+slice_boundary(const char *text, size_t length, uint64_t offset)
+{
+    size_t at = offset < length ? (size_t)offset : length;
+    while (at && at < length && ((unsigned char)text[at] & 0xc0u) == 0x80u) --at;
+    return at;
+}
+
+static int
+resolved_output(struct projection *projection, const char *response, uint64_t ordinal,
+    uint64_t seq, const json_t *value, uint64_t offset, const json_t *snapshot)
+{
+    const json_t *canonical = json_array_get(json_object_get(snapshot, "items"), (size_t)ordinal);
+    const char *text = snag_json_string(canonical, "text");
+    const char *original = snag_json_string(value, "text");
+    if (!original || offset > SNAG_MAX_PUBLIC_ITEM ||
+        strlen(original) > SNAG_MAX_PUBLIC_ITEM - offset) return snag_errno(EINVAL);
+    const char *state = text ? snag_json_string(snapshot, "state") : "unconfirmed";
+    if (!state) return snag_errno(EINVAL);
+    size_t begin = (size_t)offset, length = strlen(original);
+    json_t *part = json_copy((json_t *)(text ? canonical : value));
+    if (!part) return -1;
+    int rc = -1;
+    if (text) {
+        size_t end = slice_boundary(text, strlen(text), offset + length);
+        begin = slice_boundary(text, strlen(text), offset);
+        length = end - begin;
+        if (json_object_set_new(part, "text", json_stringn(text + begin, length)) < 0) goto out;
+    }
+    if (!length) { rc = 0; goto out; }
+    rc = record_item(projection, response, ordinal, seq, part, begin, length, "streaming");
+    if (!rc) {
+        struct public_item *item = find_item(projection, response, ordinal, seq);
+        item->resolved_state = state;
+        item->last_seq = (uint64_t)json_integer_value(json_object_get(snapshot, "seq"));
+    }
+out:
+    json_decref(part);
+    return rc;
+}
+
 static int
 project_event(struct projection *projection, const json_t *event, uint64_t seq)
 {
@@ -110,15 +160,15 @@ project_event(struct projection *projection, const json_t *event, uint64_t seq)
         const char *text = snag_json_string(item, "text");
         if (!text || snag_json_integer_u64(data, "index", &ordinal) < 0 ||
             snag_json_integer_u64(data, "offset", &offset) < 0) return snag_errno(EINVAL);
+        const json_t *snapshot = json_object_get(event, "public_snapshot");
+        if (snapshot) return resolved_output(projection, response, ordinal, seq, item,
+            offset, snapshot);
         length = strlen(text);
         if (json_object_get(event, "source_text_bytes") &&
             snag_json_integer_u64(event, "source_text_bytes", &length) < 0) return -1;
         return record_item(projection, response, ordinal, seq, item, offset, length, "streaming");
     }
-    const char *state = !strcmp(type, "response_completed") ? "complete" :
-        !strcmp(type, "response_interrupted") ? "interrupted" :
-        !strcmp(type, "response_failed") ? "failed" :
-        !strcmp(type, "response_output_correction") ? "corrected" : NULL;
+    const char *state = snag_vm_public_state(type);
     if (!state) return 0;
     const json_t *items = json_object_get(data, !strcmp(state, "complete") ? "items" : "partial_public");
     const json_t *lengths = json_object_get(event, "source_public_bytes");
@@ -142,7 +192,26 @@ project_event(struct projection *projection, const json_t *event, uint64_t seq)
             if (!json_is_integer(value) || json_integer_value(value) < 0) return snag_errno(EINVAL);
             length = (uint64_t)json_integer_value(value);
         }
-        if (record_item(projection, response, ordinal++, seq, item, 0u, length, state) < 0) return -1;
+        size_t begin = 0u;
+        const json_t *prior = json_object_get(event, "public_before");
+        if (prior) {
+            char key[SNAG_ID_HEX_LEN + 24u], index[24];
+            (void)snprintf(key, sizeof(key), "%s/%llu", response, (unsigned long long)ordinal);
+            (void)snprintf(index, sizeof(index), "%llu", (unsigned long long)ordinal);
+            const json_t *found = json_object_get(projection->by_key, key);
+            uint64_t covered = found ? projection->items[json_integer_value(found)].begin :
+                (uint64_t)json_integer_value(json_object_get(prior, index));
+            begin = slice_boundary(text, strlen(text), covered);
+            length = strlen(text) - begin;
+        }
+        json_t *part = json_copy((json_t *)item);
+        int rc = part ? 0 : -1;
+        if (!rc && begin) rc = json_object_set_new(part, "text", json_string(text + begin));
+        if (!rc && (length || !prior)) rc = record_item(projection, response, ordinal, seq, part,
+            begin, length, state);
+        json_decref(part);
+        if (rc < 0) return -1;
+        ++ordinal;
     }
     if (lengths && ordinal != json_array_size(lengths)) return snag_errno(EINVAL);
     return 0;
@@ -250,7 +319,8 @@ snag_vm_public_blocks(const json_t *events, const struct snag_wire_secrets *secr
     }
     result = json_array();
     for (size_t i = 0u; result && i < projection.count; ++i) {
-        const struct public_item *item = &projection.items[i];
+        struct public_item *item = &projection.items[i];
+        if (item->resolved_state) item->state = item->resolved_state;
         json_t *map = json_array();
         json_t *text = map ? redact_text(item, secrets, map) : NULL;
         json_t *block = text ? json_pack("{s:s,s:s,s:I,s:I,s:I,s:I,s:I,s:s,s:s,s:s,s:o,s:O}",

@@ -4,6 +4,11 @@
 
 ## Unreleased
 
+- Reconcile completed/corrected response text across Vim history pages. Preserve
+  each page's source ranges, add only the unstreamed terminal tail, retain
+  unconfirmed fragments after failure, and update unfinished responses when the
+  committed history grows. Reuse resolved responses while paging through them.
+
 - Preserve Vim transcript/report positions through redaction, binary escaping,
   page-prefix changes and reflow. Restore temporarily hidden anchors when detail
   returns; accept earlier saved workspace positions. Mask protected-value fragments

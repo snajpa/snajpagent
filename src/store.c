@@ -3336,6 +3336,18 @@ invalid:
 }
 
 int
+snag_session_history_cursor_before(struct snag_session *session, uint64_t before,
+    struct snag_journal_cursor *cursor, char *error, size_t size)
+{
+    if (!session || !cursor || before > session->next_seq)
+        return snag_fail(error, size, EINVAL, "invalid history sequence");
+    struct snag_journal_cursor found;
+    if (history_cursor_before(session, before, &found, error, size) < 0) return -1;
+    *cursor = found;
+    return 0;
+}
+
+int
 snag_session_history_cursor_at(struct snag_session *session, int64_t offset,
     struct snag_journal_cursor *cursor, char *error, size_t error_size)
 {

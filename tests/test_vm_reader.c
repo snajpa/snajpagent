@@ -140,6 +140,202 @@ dependency_test(struct snag_store *store, const char *root)
     }
 }
 
+static struct snag_journal_cursor
+public_cursor(const struct snag_session *source)
+{
+    struct snag_journal_cursor cursor = {.offset = source->log_end, .next_seq = source->next_seq};
+    memcpy(cursor.prev_sha256, source->prev_sha256, sizeof(cursor.prev_sha256));
+    return cursor;
+}
+
+static json_t *
+response_item(const char *text)
+{
+    return json_pack("{s:s,s:s,s:s}", "kind", "assistant", "phase", "commentary", "text", text);
+}
+
+static const json_t *
+response_block(const struct snag_vm_read_result *page)
+{
+    const json_t *found = NULL;
+    for (size_t i = 0u; i < json_array_size(page->blocks); ++i) {
+        const json_t *block = json_array_get(page->blocks, i);
+        if (strcmp(snag_json_string(block, "kind"), "assistant")) continue;
+        assert(!found);
+        found = block;
+    }
+    return found;
+}
+
+static void
+public_dependency_test(struct snag_store *store, const char *root)
+{
+    static const char id[] = "0123456789abcdef0123456789abcdef";
+    static const char *const terminal[] = {"response_completed", "response_failed",
+        "response_interrupted", "response_output_correction", "response_failed",
+        "response_completed"};
+    static const char *const states[] = {"complete", "failed", "interrupted", "corrected",
+        "unconfirmed", "streaming"};
+    for (size_t variant = 0u; variant < 6u; ++variant) {
+        struct snag_session source;
+        snag_session_init(&source);
+        char error[256] = "";
+        assert(snag_session_create(store, &source, root, "default", "public-pages", "high",
+            error, sizeof(error)) == 0);
+        projection_record(&source, "response_started", json_pack("{s:s}", "response_id", id));
+        projection_record(&source, "response_output", json_pack("{s:s,s:i,s:i,s:o}",
+            "response_id", id, "index", 0, "offset", 0, "item", response_item("old-a")));
+        struct snag_journal_cursor first = public_cursor(&source);
+        projection_record(&source, "response_output", json_pack("{s:s,s:i,s:i,s:o}",
+            "response_id", id, "index", 0, "offset", 5, "item", response_item("bcdef")));
+        struct snag_journal_cursor second = public_cursor(&source);
+        json_t *items = json_array();
+        assert(items);
+        if (variant != 4u) assert(json_array_append_new(items, response_item("new-界-rest")) == 0);
+        projection_record(&source, terminal[variant], json_pack("{s:s,s:o,s:s}",
+            "response_id", id, !strcmp(terminal[variant], "response_completed") ?
+                "items" : "partial_public", items, "continuation", "private-provider-payload"));
+        struct snag_vm_read_request request = {.trusted_tail = true, .project = true,
+            .columns = 80u, .reverse = true, .before_seq = first.next_seq};
+        request.tail = variant == 5u ? second : public_cursor(&source);
+        memcpy(request.session_id, source.id, sizeof(source.id));
+        struct snag_vm_reader *reader = snag_vm_reader_open(store, NULL, error, sizeof(error));
+        assert(reader);
+        struct snag_vm_read_result *page = await_page(reader,
+            snag_vm_reader_request(reader, &request));
+        assert(!page->error_number);
+        const json_t *block = response_block(page);
+        assert(block && !strcmp(snag_json_string(block, "text"), variant < 4u ? "new-" : "old-a"));
+        assert(!strcmp(snag_json_string(block, "state"), states[variant]));
+        assert(page->cursor.next_seq == 1u);
+        snag_vm_read_result_free(page);
+        request.reverse = false;
+        request.before_seq = 0u;
+        request.cursor = first;
+        page = await_page(reader, snag_vm_reader_request(reader, &request));
+        assert(!page->error_number && page->cursor.offset == request.tail.offset);
+        block = response_block(page);
+        assert(block && !strcmp(snag_json_string(block, "text"),
+            variant < 4u ? "界-rest" : "bcdef"));
+        assert(json_integer_value(json_object_get(block, "source_begin")) ==
+            (variant < 4u ? 4 : 5));
+        assert(!strcmp(snag_json_string(block, "state"), states[variant]));
+        char *dump = json_dumps(page->blocks, JSON_COMPACT);
+        assert(dump && !strstr(dump, "private-provider-payload"));
+        free(dump);
+        snag_vm_read_result_free(page);
+        request.cursor = second;
+        page = await_page(reader, snag_vm_reader_request(reader, &request));
+        assert(!page->error_number && page->cursor.offset == request.tail.offset);
+        block = response_block(page);
+        if (variant < 4u) {
+            assert(block && !strcmp(snag_json_string(block, "text"), "st"));
+            assert(json_integer_value(json_object_get(block, "source_begin")) == 10);
+        } else assert(!block);
+        snag_vm_read_result_free(page);
+        if (variant == 5u) {
+            request.tail = public_cursor(&source);
+            request.reverse = true;
+            request.before_seq = first.next_seq;
+            page = await_page(reader, snag_vm_reader_request(reader, &request));
+            assert(!page->error_number);
+            block = response_block(page);
+            assert(block && !strcmp(snag_json_string(block, "text"), "new-") &&
+                !strcmp(snag_json_string(block, "state"), "complete"));
+            snag_vm_read_result_free(page);
+        }
+        snag_vm_reader_close(reader);
+        char prefix[9];
+        memcpy(prefix, source.id, 8u);
+        prefix[8] = '\0';
+        assert(snag_session_delete(store, &source, prefix, NULL, error, sizeof(error)) == 0);
+        snag_session_close(&source);
+    }
+}
+
+static void
+public_full_pages_test(struct snag_store *store, const char *root)
+{
+    static const char id[] = "0123456789abcdef0123456789abcdef";
+    const char *values[] = {"test-secret-value"};
+    struct snag_wire_secrets secrets = {.values = values, .count = 1u};
+    size_t length = 1152u * 1024u;
+    char *text = malloc(length + 1u);
+    char *expected = malloc(4u * length);
+    assert(text && expected && strlen(values[0]) == 17u);
+    text[length] = '\0';
+    struct snag_session source;
+    snag_session_init(&source);
+    char error[256] = "";
+    assert(snag_session_create(store, &source, root, "default", "full-public-pages", "high",
+        error, sizeof(error)) == 0);
+    projection_record(&source, "response_started", json_pack("{s:s}", "response_id", id));
+    json_t *items = json_array();
+    assert(items);
+    for (size_t i = 0u; i < 4u; ++i) {
+        memset(text, 'a' + (int)i, length);
+        memcpy(text + 100u, values[0], 17u);
+        projection_record(&source, "response_output", json_pack("{s:s,s:I,s:i,s:o}",
+            "response_id", id, "index", (json_int_t)i, "offset", 0, "item", response_item(text)));
+        memset(text, 'A' + (int)i, length);
+        memcpy(text + 100u, values[0], 17u);
+        assert(json_array_append_new(items, response_item(text)) == 0);
+        memcpy(expected + i * length, text, length);
+        memcpy(expected + i * length + 100u, "<redacted:secret>", 17u);
+    }
+    projection_record(&source, "response_completed", json_pack("{s:s,s:o}",
+        "response_id", id, "items", items));
+    free(text);
+    struct snag_vm_read_request request = {.trusted_tail = true, .project = true, .columns = 80u};
+    request.tail = public_cursor(&source);
+    memcpy(request.session_id, source.id, sizeof(source.id));
+    struct snag_vm_reader *reader = snag_vm_reader_open(store, &secrets, error, sizeof(error));
+    assert(reader);
+    for (unsigned int direction = 0u; direction < 2u; ++direction) {
+        request.reverse = direction != 0u;
+        request.cursor = (struct snag_journal_cursor){0};
+        uint64_t covered[4] = {0};
+        if (direction) for (size_t i = 0u; i < 4u; ++i) covered[i] = length;
+        size_t pages = 0u;
+        for (;;) {
+            struct snag_vm_read_result *page = await_page(reader,
+                snag_vm_reader_request(reader, &request));
+            assert(!page->error_number);
+            size_t count = json_array_size(page->blocks);
+            for (size_t n = 0u; n < count; ++n) {
+                const json_t *block = json_array_get(page->blocks, direction ? count - n - 1u : n);
+                if (strcmp(snag_json_string(block, "kind"), "assistant")) continue;
+                size_t ordinal = (size_t)json_integer_value(json_object_get(block, "ordinal"));
+                uint64_t begin = (uint64_t)json_integer_value(
+                    json_object_get(block, "source_begin"));
+                uint64_t end = (uint64_t)json_integer_value(json_object_get(block, "source_end"));
+                assert(ordinal < 4u && end <= length && begin < end);
+                assert(covered[ordinal] == (direction ? end : begin));
+                covered[ordinal] = direction ? begin : end;
+                const char *body = snag_json_string(block, "text");
+                assert(strlen(body) == end - begin &&
+                    !memcmp(body, expected + ordinal * length + begin, end - begin));
+                assert(!strcmp(snag_json_string(block, "state"), "complete"));
+            }
+            ++pages;
+            bool more = page->more;
+            request.cursor = page->cursor;
+            request.before_seq = direction && more ? page->cursor.next_seq : 0u;
+            snag_vm_read_result_free(page);
+            if (!more) break;
+        }
+        assert(pages >= 2u);
+        for (size_t i = 0u; i < 4u; ++i) assert(covered[i] == (direction ? 0u : length));
+    }
+    snag_vm_reader_close(reader);
+    free(expected);
+    char prefix[9];
+    memcpy(prefix, source.id, 8u);
+    prefix[8] = '\0';
+    assert(snag_session_delete(store, &source, prefix, NULL, error, sizeof(error)) == 0);
+    snag_session_close(&source);
+}
+
 static bool
 grow_snapshot_source(void *opaque)
 {
@@ -593,6 +789,8 @@ main(void)
     snag_session_init(&source);
     assert(snag_store_open(&store, root, error, sizeof(error)) == 0);
     dependency_test(&store, root);
+    public_dependency_test(&store, root);
+    public_full_pages_test(&store, root);
     assert(snag_session_create(&store, &source, root, "default", "test-secret-value", "high",
         error, sizeof(error)) == 0);
     source.on_checkpoint = large_context;

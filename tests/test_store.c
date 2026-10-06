@@ -493,6 +493,11 @@ test_history_prefix(struct snag_store *store, const char *cwd)
         assert(snag_session_history_cursor_at(&view, cursor.offset, &located,
             error, sizeof(error)) == 0);
         assert(located.offset == cursor.offset && located.next_seq == scan.next);
+        struct snag_journal_cursor by_sequence;
+        assert(snag_session_history_cursor_before(&view, scan.next, &by_sequence,
+            error, sizeof(error)) == 0);
+        assert(by_sequence.offset == located.offset && by_sequence.next_seq == located.next_seq &&
+            !strcmp(by_sequence.prev_sha256, located.prev_sha256));
         if (cursor.next_seq) assert(!strcmp(located.prev_sha256, cursor.prev_sha256));
         assert(snag_session_each_event_forward(&view, &cursor, 1u, forward_event,
             &scan, error, sizeof(error)) == 0);
@@ -502,6 +507,11 @@ test_history_prefix(struct snag_store *store, const char *cwd)
     assert(snag_session_history_cursor_at(&view, tail.offset, &located,
         error, sizeof(error)) == 0 && located.next_seq == tail.next_seq &&
         !strcmp(located.prev_sha256, tail.prev_sha256));
+    assert(snag_session_history_cursor_before(&view, 0u, &located, error, sizeof(error)) == 0 &&
+        located.offset == tail.offset && located.next_seq == tail.next_seq);
+    assert(snag_session_history_cursor_before(&view, tail.next_seq + 1u, &located,
+        error, sizeof(error)) < 0 && located.offset == tail.offset &&
+        located.next_seq == tail.next_seq);
     const int64_t invalid_offsets[] = {-1, 1, tail.offset + 1};
     for (size_t i = 0u; i < sizeof(invalid_offsets) / sizeof(invalid_offsets[0]); ++i) {
         assert(snag_session_history_cursor_at(&view, invalid_offsets[i], &located,

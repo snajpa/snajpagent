@@ -1724,6 +1724,12 @@ responses when needed, and level 2 reads referenced output even when it precedes
 the current page. These cancellable background reads preserve the page and its
 source anchor. A call without matching retained metadata keeps its call ID.
 Use level 3 and history navigation to read output beyond a result preview.
+Completed and corrected response text is reconciled across source pages: each
+streamed range shows its part of the final text, and the terminal record adds any
+remaining text. Failed or interrupted responses retain their recorded public
+text and state; text absent from their terminal snapshot is labelled unconfirmed.
+The current history snapshot determines these labels and contents. R refreshes
+held output when the response later completes.
 .PP
 .B :sessions
 opens the agent picker;

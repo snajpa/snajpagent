@@ -10,11 +10,27 @@ import test_vm_frontend as frontend
 
 
 class AnchorTests(unittest.TestCase):
-    setUp = frontend.WorkspaceTests.setUp
-    start = frontend.WorkspaceTests.start
     snapshots = frontend.WorkspaceTests.snapshots
-    wait_snapshot = frontend.WorkspaceTests.wait_snapshot
     seed_session = frontend.WorkspaceTests.seed_session
+
+    def setUp(self):
+        frontend.WorkspaceTests.setUp(self)
+        self.terminals = []
+
+    def start(self, *args, **kwargs):
+        child = frontend.WorkspaceTests.start(self, *args, **kwargs)
+        self.terminals.append(child)
+        return child
+
+    def wait_snapshot(self, predicate):
+        # Keep consuming split redraws while waiting for asynchronous reads
+        # and autosave, including on small Darwin PTY output queues.
+        def ready(rows):
+            for child in self.terminals:
+                while child.read(0):
+                    pass
+            return predicate(rows)
+        return frontend.WorkspaceTests.wait_snapshot(self, ready)
 
     def save(self, child):
         before = next(iter(self.snapshots().values()))['activity_ms']
