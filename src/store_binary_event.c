@@ -906,6 +906,13 @@ session_name_valid(struct snag_binary_text text)
 }
 
 static bool
+retry_auto_valid(struct snag_binary_text text)
+{
+    return text.data && ((text.size == 2u && !memcmp(text.data, "on", 2u)) ||
+        (text.size == 3u && !memcmp(text.data, "off", 3u)));
+}
+
+static bool
 service_tier_valid(struct snag_binary_text text)
 {
     return text.data && ((text.size == 8u && !memcmp(text.data, "priority", 8u)) ||
@@ -963,6 +970,9 @@ encode_metadata(struct snag_buf *out, const struct snag_binary_event *event)
     case SNAG_BINARY_SERVICE_TIER_CHANGED:
         if (!service_tier_valid(event->data.service_tier)) return invalid();
         return write_text(out, event->data.service_tier, 7u, 8u);
+    case SNAG_BINARY_RETRY_AUTO_CHANGED:
+        if (!retry_auto_valid(event->data.retry_auto)) return invalid();
+        return write_text(out, event->data.retry_auto, 2u, 3u);
     case SNAG_BINARY_SESSION_OPTIONS: {
         struct snag_binary_options view;
         if (snag_binary_options_decode(event->data.options.data,
@@ -1025,6 +1035,9 @@ decode_metadata(struct fields *fields, struct snag_binary_event *event)
     case SNAG_BINARY_SERVICE_TIER_CHANGED:
         return read_text(fields, &event->data.service_tier, 7u, 8u) &&
             service_tier_valid(event->data.service_tier);
+    case SNAG_BINARY_RETRY_AUTO_CHANGED:
+        return read_text(fields, &event->data.retry_auto, 2u, 3u) &&
+            retry_auto_valid(event->data.retry_auto);
     case SNAG_BINARY_SESSION_OPTIONS:
         return read_options(fields, &event->data.options);
     default:
@@ -3617,6 +3630,7 @@ static const struct archive_schema archive_schemas[] = {
     ARCHIVE_SCHEMA(SNAG_BINARY_SESSION_NAMED, "name"),
     ARCHIVE_SCHEMA(SNAG_BINARY_SESSION_OPTIONS, "args"),
     ARCHIVE_SCHEMA(SNAG_BINARY_SERVICE_TIER_CHANGED, "value"),
+    ARCHIVE_SCHEMA(SNAG_BINARY_RETRY_AUTO_CHANGED, "value"),
     ARCHIVE_SCHEMA(SNAG_BINARY_CONTROL_REQUESTED, "control", "origin", "source_seq"),
     ARCHIVE_SCHEMA(SNAG_BINARY_CONTROL_STARTED, "control"),
     ARCHIVE_SCHEMA(SNAG_BINARY_CONTROL_FINISHED, "control"),
@@ -4469,8 +4483,11 @@ encode_fields(struct snag_buf *out, const struct snag_binary_event *event)
     if (turn_outcome_kind(event->kind)) return encode_turn_outcome(out, event);
     if (event->kind >= SNAG_BINARY_INPUT_RECEIVED &&
         event->kind <= SNAG_BINARY_FUTURE_TURN_EDITED) return encode_input(out, event);
-    if (event->kind >= SNAG_BINARY_SESSION_CREATED &&
-        event->kind <= SNAG_BINARY_SERVICE_TIER_CHANGED) return encode_metadata(out, event);
+    if ((event->kind >= SNAG_BINARY_SESSION_CREATED &&
+            event->kind <= SNAG_BINARY_SERVICE_TIER_CHANGED) ||
+        event->kind == SNAG_BINARY_RETRY_AUTO_CHANGED) {
+        return encode_metadata(out, event);
+    }
     if (timer_kind(event->kind)) {
         if (snag_buf_append(out, event->data.timer.id, 16u) < 0) return -1;
         if (event->kind != SNAG_BINARY_TIMER_SCHEDULED) return 0;
@@ -4536,6 +4553,7 @@ static const struct {
     {SNAG_BINARY_SESSION_NAMED, "session_named"},
     {SNAG_BINARY_SESSION_OPTIONS, "session_options"},
     {SNAG_BINARY_SERVICE_TIER_CHANGED, "service_tier_changed"},
+    {SNAG_BINARY_RETRY_AUTO_CHANGED, "retry_auto_changed"},
     {SNAG_BINARY_CONTROL_REQUESTED, "control_requested"},
     {SNAG_BINARY_CONTROL_STARTED, "control_started"},
     {SNAG_BINARY_CONTROL_FINISHED, "control_finished"},
@@ -4644,6 +4662,7 @@ snag_binary_event_version(enum snag_binary_kind kind)
     if (kind == SNAG_BINARY_VOICE_TRANSFER_ADOPTED ||
         (kind >= SNAG_BINARY_INPUT_RECEIVED && kind <= SNAG_BINARY_FUTURE_TURN_EDITED)) return 2u;
     if ((kind >= SNAG_BINARY_SESSION_CREATED && kind <= SNAG_BINARY_SERVICE_TIER_CHANGED) ||
+        kind == SNAG_BINARY_RETRY_AUTO_CHANGED ||
         timer_kind(kind) || goal_kind(kind) || hosted_search_kind(kind) ||
         kind == SNAG_BINARY_TURN_STARTED ||
         turn_outcome_kind(kind) || kind == SNAG_BINARY_RESPONSE_STARTED ||
@@ -4779,8 +4798,11 @@ decode_fields(struct fields *fields, struct snag_binary_event *event)
     if (turn_outcome_kind(event->kind)) return decode_turn_outcome(fields, event);
     if (event->kind >= SNAG_BINARY_INPUT_RECEIVED &&
         event->kind <= SNAG_BINARY_FUTURE_TURN_EDITED) return decode_input(fields, event);
-    if (event->kind >= SNAG_BINARY_SESSION_CREATED &&
-        event->kind <= SNAG_BINARY_SERVICE_TIER_CHANGED) return decode_metadata(fields, event);
+    if ((event->kind >= SNAG_BINARY_SESSION_CREATED &&
+            event->kind <= SNAG_BINARY_SERVICE_TIER_CHANGED) ||
+        event->kind == SNAG_BINARY_RETRY_AUTO_CHANGED) {
+        return decode_metadata(fields, event);
+    }
     if (timer_kind(event->kind)) {
         if (!read_id(fields, event->data.timer.id)) return false;
         if (event->kind != SNAG_BINARY_TIMER_SCHEDULED) return true;
@@ -5003,6 +5025,9 @@ find_control_text(const struct snag_binary_batch *batch, uint64_t sequence,
         break;
     case SNAG_BINARY_SERVICE_TIER_CHANGED:
         source.text = source.event.data.service_tier;
+        break;
+    case SNAG_BINARY_RETRY_AUTO_CHANGED:
+        source.text = source.event.data.retry_auto;
         break;
     case SNAG_BINARY_IRC_COMPACT_CONFIGURED:
         source.text = source.event.data.irc_compact_configured.instruction;

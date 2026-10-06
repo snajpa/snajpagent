@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Preserve explicit automatic-retry overrides in typed native session records and
+  checkpoints. Older checkpoints inherit configuration when no override was saved.
+
 - Allow checkpoint access plans to prove missing seed locations through the
   derived cache beneath an independently verified frontier. Checkpoint publication
   uses its matching cache frontier for old and suffix source locations, preserving

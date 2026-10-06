@@ -1200,6 +1200,31 @@ test_native_checkpoint_origins(void)
     native_checkpoint_commit(&session, "irc_sleep_set",
         json_pack("{s:I,s:I}", "until_ms", (json_int_t)0, "messages", (json_int_t)0));
     assert(!session.irc_sleep_until_ms && !session.irc_sleep_messages);
+    assert(!session.retry_auto);
+    const char *retry_values[] = {"on", "off"};
+    for (size_t i = 0u; i < sizeof(retry_values) / sizeof(retry_values[0]); ++i) {
+        native_checkpoint_commit(&session, "retry_auto_changed",
+            json_pack("{s:s}", "value", retry_values[i]));
+        assert(!strcmp(session.retry_auto, retry_values[i]));
+        assert(!snag_session_binary_checkpoint_capture(&session, &boundary, &tree,
+            &captured, error, sizeof(error)));
+        assert(captured.texts.slots[SNAG_BINARY_TEXT_RETRY_AUTO].declaration ==
+            session.next_seq - 1u);
+        struct snag_buf retry_wire = {.max = SIZE_MAX};
+        assert(!snag_binary_checkpoint_texts_encode(&retry_wire, &captured.texts));
+        assert(retry_wire.len == 360u && retry_wire.data[0] == 4u);
+        struct snag_binary_checkpoint_texts decoded = {0};
+        assert(!snag_binary_checkpoint_texts_decode(retry_wire.data, retry_wire.len, &decoded));
+        assert(!memcmp(&decoded, &captured.texts, sizeof(decoded)));
+        struct snag_binary_checkpoint_texts retained = decoded;
+        assert(snag_binary_checkpoint_texts_decode(retry_wire.data, 335u, &decoded) < 0 &&
+            !memcmp(&decoded, &retained, sizeof(decoded)));
+        retry_wire.data[0] = 3u;
+        assert(!snag_binary_checkpoint_texts_decode(retry_wire.data, 335u, &decoded));
+        assert(!decoded.slots[SNAG_BINARY_TEXT_RETRY_AUTO].declaration);
+        snag_buf_free(&retry_wire);
+        snag_binary_checkpoint_sources_free(&captured);
+    }
     snag_session_close(&session);
     memset(&boundary, 0xa5, sizeof(boundary));
     memset(&tree, 0x5a, sizeof(tree));

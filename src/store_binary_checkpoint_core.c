@@ -265,7 +265,7 @@ static const struct text_slot {
 #define SLOT(f) {#f, offsetof(struct snag_session, f)}
     SLOT(cwd), SLOT(first_user), SLOT(last_user), SLOT(active_prompt), SLOT(goal_prompt),
     SLOT(goal_blocker), SLOT(timer_text), SLOT(banner_text), SLOT(steering_override), SLOT(name),
-    SLOT(service_tier)
+    SLOT(service_tier), SLOT(retry_auto)
 #undef SLOT
 };
 

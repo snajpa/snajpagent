@@ -42,6 +42,7 @@ enum snag_binary_kind {
     SNAG_BINARY_GOAL_RESUMED = 71,
     SNAG_BINARY_GOAL_CANCELLED = 72,
     SNAG_BINARY_GOAL_BLOCKED_WAIT_FOR = 73,
+    SNAG_BINARY_RETRY_AUTO_CHANGED = 74,
     SNAG_BINARY_INPUT_RECEIVED = 96,
     SNAG_BINARY_INPUT_CANCELLED = 97,
     SNAG_BINARY_STEERING_ADDED = 98,
@@ -889,7 +890,7 @@ struct snag_binary_event {
         struct {
             unsigned char confirmed_prefix[4], session[16], nonce[16];
         } deletion;
-        struct snag_binary_text banner, shell, name, service_tier;
+        struct snag_binary_text banner, shell, name, service_tier, retry_auto;
         struct snag_binary_options options;
         enum snag_binary_steering steering;
         struct { struct snag_binary_selection before, after; } model;

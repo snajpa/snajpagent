@@ -593,6 +593,26 @@ test_metadata(void)
     };
     events[11].data.shell = text("/bin/sh");
     for (size_t i = 0; i < 12u; ++i) roundtrip(&events[i]);
+    struct snag_binary_event retry = {.kind = SNAG_BINARY_RETRY_AUTO_CHANGED};
+    const char *retry_values[] = {"on", "off"};
+    for (size_t i = 0u; i < sizeof(retry_values) / sizeof(retry_values[0]); ++i) {
+        retry.data.retry_auto = text(retry_values[i]);
+        roundtrip(&retry);
+    }
+    struct snag_buf retry_wire = {.max = SIZE_MAX};
+    assert(!snag_binary_event_encode(&retry_wire, &retry));
+    assert(retry_wire.len == 7u && !memcmp(retry_wire.data, "\x03\0\0\0off", 7u));
+    struct snag_binary_record retry_record = {.kind = SNAG_BINARY_RETRY_AUTO_CHANGED,
+        .version = 1u, .payload = retry_wire.data, .size = retry_wire.len};
+    retry_wire.data[retry_wire.len - 1u] = 'x';
+    assert_rejected(retry_record);
+    const char *invalid_retry[] = {"", "ON", "no", "auto", "inherit"};
+    for (size_t i = 0u; i < sizeof(invalid_retry) / sizeof(invalid_retry[0]); ++i) {
+        retry.data.retry_auto = text(invalid_retry[i]);
+        assert(snag_binary_event_encode(&retry_wire, &retry) < 0 && errno == EINVAL &&
+            retry_wire.len == 7u);
+    }
+    snag_buf_free(&retry_wire);
     struct snag_buf payload = {.max = SNAG_MAX_EVENT_LINE};
     assert(!snag_binary_event_encode(&payload, &events[0]));
     static const unsigned char created_bytes[] =
@@ -6052,7 +6072,7 @@ test_event_names(void)
         {64u, "goal_started"}, {65u, "goal_replaced"}, {66u, "goal_reworded"},
         {67u, "goal_lock_changed"}, {68u, "goal_paused"}, {69u, "goal_blocked"},
         {70u, "goal_completed"}, {71u, "goal_resumed"}, {72u, "goal_cancelled"},
-        {73u, "goal_blocked_wait_for"},
+        {73u, "goal_blocked_wait_for"}, {74u, "retry_auto_changed"},
         {96u, "input_received"}, {97u, "input_cancelled"}, {98u, "steering_added"},
         {99u, "irc_reply_reminder"}, {100u, "steering_deferred"}, {101u, "input_admitted"},
         {102u, "future_queue_state"}, {103u, "future_turn_cancelled"},

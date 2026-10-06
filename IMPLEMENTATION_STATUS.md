@@ -169,6 +169,8 @@ cache frontier to prove old and suffix locations against the captured root,
 then checks canonical tuples. Stale derived frontiers retain source lookup;
 missing old membership or corrupt selected cache rows stop access preparation
 before image creation.
+Typed native metadata and checkpoint text retain the persisted automatic-retry
+override. An absent override inherits configuration; explicit on/off stays distinct.
 Session creation still uses the legacy log while native creation and conversion
 are being integrated.
 

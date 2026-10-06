@@ -5655,6 +5655,8 @@ layouts leave these counts unavailable until new routed activity establishes a
 recorded range.
 Blocked-goal recovery retains the declared wait channel through the canonical
 blocking event. Older blockers without a channel retain an unspecified wait.
+Automatic-retry overrides retain the recorded on/off choice. An unset override
+inherits the owner's current configuration.
 Keep them with the journal when backing up a native session.
 .TP
 .I $HOME/.snajpagent/sessions/SESSION/history.idx

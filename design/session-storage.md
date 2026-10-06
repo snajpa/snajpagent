@@ -2991,6 +2991,17 @@ retain the independent older golden encodings and reject partial or trailing
 bytes before adoption. The existing owner/replay and provider-context seams
 consume the saved state; decoding a checkpoint does not launch a worker.
 
+Kind74, `retry_auto_changed`, retains the live reducer's exact `{value: on/off}`
+domain as one validated text field in version1. Its declaration supplies the
+fourteenth fixed text slot, `retry_auto`. An explicit override selects text
+version4/360 bytes. Earlier text versions preserve their exact shapes and decode
+the absent override as NULL, which inherits the owner's current configuration.
+The independently versioned text block leaves the outer core layouts unchanged.
+Core materialization proves the declared control text through its canonical
+record; it does not infer retry policy from provider errors or copy an unrecorded
+configuration default. Invalid values and partial/trailing text blocks fail
+before adoption.
+
 The commit owner also stages current checkpoint origins. Strict replay and live
 commits share one source-step implementation for fixed text declarations, resume
 options, pending input, queue creation versus replacement text, downloads,

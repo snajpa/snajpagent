@@ -4124,7 +4124,7 @@ static void
 test_prepared_native_seed(const char *cwd)
 {
     char error[512];
-    for (unsigned int variant = 0u; variant < 16u; ++variant) {
+    for (unsigned int variant = 0u; variant < 18u; ++variant) {
         struct snag_session prepared;
         struct snag_session target;
         snag_session_init(&prepared);
@@ -4194,6 +4194,10 @@ test_prepared_native_seed(const char *cwd)
                 "actor", "model", "goal_id", goal, "reason", "Waiting for an event",
                 "wait_for", "operator"));
         }
+        if (variant == 16u || variant == 17u) {
+            commit_data(&prepared, "retry_auto_changed", json_pack("{s:s}", "value",
+                variant == 16u ? "on" : "off"));
+        }
         target.log_fd = temporary_fd();
         target.lock_fd = temporary_fd();
         int log_fd = target.log_fd;
@@ -4219,7 +4223,8 @@ test_prepared_native_seed(const char *cwd)
         if (variant == 14u) assert(!snag_buf_append(&index, "keep", 4u));
         if (variant == 15u) index.max = SNAG_BINARY_INDEX_HEADER_SIZE;
         int rc = snag_store_seed_binary_session(&prepared, &target, &index, error, sizeof(error));
-        if (variant < 2u || variant == 6u || variant == 11u || variant == 12u) {
+        if (variant < 2u || variant == 6u || variant == 11u || variant == 12u ||
+            variant == 16u || variant == 17u) {
             if (rc < 0) fprintf(stderr, "prepared native seed: %s (%d)\n", error, errno);
             assert(!rc && target.binary && target.log_fd == log_fd && target.lock_fd == lock_fd);
             same_core_state(&prepared, &target);
@@ -4235,6 +4240,10 @@ test_prepared_native_seed(const char *cwd)
             assert(boundary.next_seq == sequence && tree.count == sequence - 1u);
             seed_index_checks(&target, &index, &boundary, &tree, &sources);
             assert(sources.input == (variant == 1u || variant == 6u ? sequence - 1u : 0u));
+            if (variant == 16u || variant == 17u) {
+                assert(!strcmp(target.retry_auto, variant == 16u ? "on" : "off"));
+                test_store_binary_core_state(target.log_fd, &boundary, &sources, &target);
+            } else assert(!target.retry_auto);
             if (variant == 11u) {
                 assert(target.irc_activity && json_object_size(
                     json_object_get(target.irc_activity, "items")) == 2u);
@@ -4250,6 +4259,17 @@ test_prepared_native_seed(const char *cwd)
                 "old_model", "selected", "new_model", "after seed",
                 "old_effort", "low", "new_effort", "high"));
             assert(target.next_seq == sequence + 1u && !strcmp(target.default_model, "after seed"));
+            if (variant == 16u || variant == 17u) {
+                const char *next_retry = variant == 16u ? "off" : "on";
+                commit_data(&target, "retry_auto_changed", json_pack("{s:s}",
+                    "value", next_retry));
+                assert(!strcmp(target.retry_auto, next_retry));
+                assert(!strcmp(prepared.retry_auto, variant == 16u ? "on" : "off"));
+                assert(!snag_session_binary_checkpoint_capture(&target, &boundary, &tree,
+                    &sources, error, sizeof(error)));
+                test_store_binary_core_state(target.log_fd, &boundary, &sources, &target);
+                snag_binary_checkpoint_sources_free(&sources);
+            }
             if (variant == 12u) {
                 commit_data(&target, "goal_replaced", json_pack("{s:s,s:s,s:s,s:s}",
                     "actor", "user", "goal_id", target.goal_id,

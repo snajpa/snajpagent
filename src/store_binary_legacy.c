@@ -99,7 +99,8 @@ rule_voice_kind(enum snag_binary_kind kind)
 static bool
 metadata_kind(enum snag_binary_kind kind)
 {
-    return kind >= SNAG_BINARY_SESSION_CREATED && kind <= SNAG_BINARY_SERVICE_TIER_CHANGED;
+    return (kind >= SNAG_BINARY_SESSION_CREATED && kind <= SNAG_BINARY_SERVICE_TIER_CHANGED) ||
+        kind == SNAG_BINARY_RETRY_AUTO_CHANGED;
 }
 
 static bool
@@ -406,6 +407,9 @@ read_metadata(const json_t *data, struct snag_binary_event *event, struct snag_b
     case SNAG_BINARY_SERVICE_TIER_CHANGED:
         if (!snag_json_exact_keys(data, "value")) return invalid();
         return read_text(data, "value", &event->data.service_tier);
+    case SNAG_BINARY_RETRY_AUTO_CHANGED:
+        if (!snag_json_exact_keys(data, "value")) return invalid();
+        return read_text(data, "value", &event->data.retry_auto);
     case SNAG_BINARY_SESSION_OPTIONS:
         if (!snag_json_exact_keys(data, "args")) return invalid();
         if (snag_binary_options_encode(scratch, json_object_get(data, "args")) < 0) return -1;
@@ -2281,6 +2285,8 @@ put_metadata(json_t *data, const struct snag_binary_event *event)
         return put_text(data, "name", event->data.name);
     case SNAG_BINARY_SERVICE_TIER_CHANGED:
         return put_text(data, "value", event->data.service_tier);
+    case SNAG_BINARY_RETRY_AUTO_CHANGED:
+        return put_text(data, "value", event->data.retry_auto);
     case SNAG_BINARY_SESSION_OPTIONS: {
         json_t *args = json_array();
         if (!args) return -1;
