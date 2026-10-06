@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Return Vim terminal commands /config, /send and /cat to the workspace after
+  their editor, transfer or pager finishes. Retain deferred configuration output
+  in the command report and preserve a replacement terminal attachment.
+
 - Hand terminal-required workspace commands to a bound native attachment using
   their saved request and owner identity. Preserve classic and workspace drafts,
   gate following input on admission, and deduplicate command references.

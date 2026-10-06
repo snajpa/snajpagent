@@ -407,7 +407,8 @@ survive workspace resume; `:q` closes a report while preserving its owner.
 Conflicting saved/owner drafts offer `:draft local` and `:draft owner`.
 `:classic [SESSION_ID]` opens an owner's full terminal, including owners started
 before workspace support. Commands needing terminal interaction open it automatically
-with supporting owners, preserving both drafts. `/s d` returns to the saved workspace.
+with supporting owners, preserving both drafts. `/config`, `/send` and `/cat`
+return when their operation finishes; `/s d` returns from other terminal commands.
 See the manual's Vim workspace
 section for available controls and `design/vim-mode.md` for implementation status.
 `make WITH_VM=0` omits the optional interface; the default includes it.

@@ -775,8 +775,8 @@ session_service(struct snag_ui_display *display, int timeout_ms)
 }
 
 static int
-session_control(struct snag_ui_display *display, enum snag_session_message type,
-                 const void *data, size_t length)
+session_control_generation(struct snag_ui_display *display, enum snag_session_message type,
+    const void *data, size_t length, uint64_t generation)
 {
     if (!display->native) return snag_errno(ENOTSUP);
     if (type == SNAG_SESSION_EXIT && length == 1u)
@@ -784,6 +784,8 @@ session_control(struct snag_ui_display *display, enum snag_session_message type,
     uint64_t deadline = snag_monotonic_ms() + 5000u;
     for (;;) {
         if (session_service(display, 0) < 0) return -1;
+        if (generation && (display->relay.generation != generation ||
+            display->relay.phase != SNAG_SESSION_ATTACHED || display->relay.peer < 0)) return 0;
         if (snag_session_relay_control(&display->relay, type, data, length) == 0) break;
         if (type == SNAG_SESSION_EXIT && errno == ENOTCONN) break;
         if (errno != EAGAIN) return -1;
@@ -802,6 +804,13 @@ session_control(struct snag_ui_display *display, enum snag_session_message type,
         if (session_service(display, 1) < 0) return -1;
     }
     return 0;
+}
+
+static int
+session_control(struct snag_ui_display *display, enum snag_session_message type,
+    const void *data, size_t length)
+{
+    return session_control_generation(display, type, data, length, 0u);
 }
 
 static int
@@ -956,8 +965,17 @@ apply_message(struct snag_ui_display *display, struct snag_ui_command *command,
     case SNAG_UI_VIEW_STATE:
         snag_view_server_state(display->view, command->data.voice);
         return 0;
-    case SNAG_UI_COMMAND_RESULT:
-        return snag_view_server_command_result(display->view, command->data.voice);
+    case SNAG_UI_COMMAND_RESULT: {
+        const json_t *result = command->data.voice;
+        uint64_t generation = 0u;
+        if (json_is_true(json_object_get(result, "return_terminal")) &&
+            snag_view_server_terminal_generation(display->view,
+                snag_json_string(result, "id"), &generation) < 0) return -1;
+        int rc = snag_view_server_command_result(display->view, result);
+        if (!rc && generation) rc = session_control_generation(display,
+            SNAG_SESSION_DETACH, NULL, 0u, generation);
+        return rc;
+    }
     case SNAG_UI_VIEW_RESULT: {
         const json_t *r = command->data.voice;
         uint64_t seq;

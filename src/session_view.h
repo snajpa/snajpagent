@@ -57,8 +57,19 @@ int snag_view_server_command_result(struct snag_view_server *, const json_t *);
 bool snag_view_server_attached(const struct snag_view_server *);
 /* Called only for the bound terminal peer, after its repaint barrier. */
 int snag_view_server_terminal(struct snag_view_server *, const unsigned char *reference);
+int snag_view_server_terminal_generation(struct snag_view_server *, const char *, uint64_t *);
 
 #else
+static inline int
+snag_view_server_terminal_generation(struct snag_view_server *server, const char *id,
+    uint64_t *generation)
+{
+    (void)server;
+    (void)id;
+    *generation = 0u;
+    return 0;
+}
+
 static inline int
 snag_view_server_terminal(struct snag_view_server *server, const unsigned char *reference)
 {

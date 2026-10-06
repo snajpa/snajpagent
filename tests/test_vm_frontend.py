@@ -62,7 +62,7 @@ def normalized_modes(modes):
 
 
 class Terminal:
-    def __init__(self, root, args=(), rows=12, columns=100):
+    def __init__(self, root, args=(), rows=12, columns=100, transport=()):
         self.master, self.slave = pty.openpty()
         self.original = normalized_modes(termios.tcgetattr(self.slave))
         self.receipt = root / ('terminal-' + uuid.uuid4().hex + '.json')
@@ -76,7 +76,8 @@ class Terminal:
             fcntl.ioctl(self.slave, termios.TIOCSCTTY, 0)
 
         self.process = subprocess.Popen([sys.executable, '-c', KEEPER, str(self.receipt),
-                                         str(BINARY), 'vm', '--dotdir', str(root / 'state'), *args],
+                                         *transport, str(BINARY), 'vm', '--dotdir',
+                                         str(root / 'state'), *args],
                                         stdin=self.slave, stdout=self.slave, stderr=self.slave,
                                         cwd=root, env=env, preexec_fn=controlling_terminal)
         self.output = bytearray()

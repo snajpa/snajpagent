@@ -6,6 +6,7 @@ import os
 import select
 import signal
 import struct
+import subprocess
 import tempfile
 import time
 import unittest
@@ -81,8 +82,26 @@ input()
 (root / 'editor-finished').write_text('finished')
 ''')
         editor.chmod(0o700)
+        self.editor = editor
+        write_config = control.owners.harness.write_irc_config
+
+        def configuration(*args, **kwargs):
+            return write_config(*args, **dict(kwargs, pager=str(editor)))
+
         with mock.patch.dict(os.environ, EDITOR=str(editor), VISUAL=str(editor)):
-            control.ControlTests.setUp(self)
+            with mock.patch.object(control.owners.harness, 'write_irc_config', configuration):
+                control.ControlTests.setUp(self)
+        self.addCleanup(self.stop_editor)
+
+    def stop_editor(self):
+        rows = subprocess.check_output(['ps', '-axo', 'pid=,ppid=,command='], text=True)
+        for row in rows.splitlines():
+            fields = row.split(None, 2)
+            if len(fields) == 3 and fields[1] == str(self.owner.owner) and str(self.editor) in fields[2]:
+                try:
+                    os.kill(int(fields[0]), signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
 
     def attached(self, name):
         child = self.start('-N', name)
@@ -91,8 +110,6 @@ input()
         return child
 
     def return_to_workspace(self, child):
-        child.output.clear()
-        child.write(b'/s d\r')
         child.until(b'\x1b[?1049h')
         self.assertEqual(self.owner.identity(), self.owner.owner_identity)
 
@@ -118,6 +135,8 @@ input()
         native.until(b'terminal-editor-ready')
         self.assertEqual(native.command(reference), 1)
         native.send(4, b'done\r')
+        while native.receive()[0] != 7:
+            pass
         observer = self.owner.view()
         observer.send(type='receipt', id=request)
         self.assertEqual(observer.result(request)['status'], 'completed')
@@ -150,6 +169,11 @@ input()
         child.write(b'i/config\r')
         child.until(b'\x1b[?1049l')
         child.until(b'terminal-editor-ready', 10)
+        observer = self.owner.view()
+        pending = next(iter(self.snapshots().values()))['state']['buffers'][0]['pending']
+        observer.send(type='receipt', id=pending['id'])
+        self.assertEqual(observer.until('result')['status'], 'pending')
+        child.output.clear()
         child.write(b'done\r')
         self.owner.wait_event('control_finished')
         self.return_to_workspace(child)
@@ -162,10 +186,71 @@ input()
         saved = next(iter(self.snapshots().values()))['state']['buffers'][0]
         self.assertIsNone(saved['pending'])
         self.assertEqual(saved['reports'][0]['command'], '/config')
+        report = self.owner.directory / ('.view-report-' + saved['reports'][0]['id'])
+        self.assertIn(b'configuration unchanged:', report.read_bytes())
         resumed = self.start('--resume', 'config', expect=b'history')
         resumed.finish('close')
         self.assertEqual((self.root / 'editor-runs').read_text(), 'started\n')
         self.owner.status('detached')
+
+    def test_async_pager_returns_only_after_completion(self):
+        path = self.root / 'shown.txt'
+        path.write_text('operator file\n')
+        child = self.attached('pager-return')
+        child.write(('i/cat ' + str(path) + '\r').encode())
+        child.until(b'terminal-editor-ready', 10)
+        observer = self.owner.view()
+        pending = next(iter(self.snapshots().values()))['state']['buffers'][0]['pending']
+        observer.send(type='receipt', id=pending['id'])
+        self.assertEqual(observer.until('result')['status'], 'pending')
+        child.output.clear()
+        child.write(b'done\r')
+        self.return_to_workspace(child)
+        child.repaint_until(b'REPORT')
+        child.finish('close')
+        self.assertEqual(self.inputs(), [])
+        self.owner.status('detached')
+
+    def test_send_through_remote_waits_for_final_receipt(self):
+        path = self.root / 'transfer.bin'
+        path.write_bytes(bytes(range(256)) * 1024)
+        child = self.start('-N', 'transfer',
+                           transport=[str(control.frontend.BINARY), 'remote'])
+        child.command('attach ' + self.owner.sid)
+        child.repaint_until(b'ATTACHED')
+        child.write(('i/send ' + str(path) + '\r').encode())
+        child.until(b'\x1b[?1049l')
+        del child.output[:child.output.index(b'\x1b[?1049l') + len(b'\x1b[?1049l')]
+        child.until(b'Client acknowledged the file digest and final EXIT.', 15)
+        self.return_to_workspace(child)
+        child.repaint_until(b'REPORT')
+        self.assertEqual((self.root / 'Downloads' / path.name).read_bytes(), path.read_bytes())
+        for protocol in (b'#DATA:', b'#CFG:', b'::TRZSZ:TRANSFER:'):
+            self.assertNotIn(protocol, child.output)
+        child.finish('close')
+        self.assertEqual(self.inputs(), [])
+        self.owner.status('detached')
+
+    def test_old_completion_preserves_replacement_terminal(self):
+        child = self.attached('replacement')
+        child.write(b'i/config\r')
+        child.until(b'terminal-editor-ready', 10)
+        child.signal(signal.SIGTERM)
+        child.wait_exit()
+        self.owner.status('detached')
+        replacement = self.owner.start(['--resume', self.owner.sid])
+        replacement.until(b'session is running; attaching')
+        self.owner.status('attached')
+        os.write(replacement.master, b'done\r')
+        self.owner.wait_event('control_finished')
+        replacement.until(b'configuration unchanged:')
+        self.assertIsNone(replacement.process.poll())
+        self.owner.status('attached')
+        self.owner.finish(replacement, b'/s d')
+        restored = self.start('--resume', 'replacement', expect=b'history')
+        restored.repaint_until(b'REPORT')
+        restored.finish('close')
+        self.assertEqual((self.root / 'editor-runs').read_text(), 'started\n')
 
     def test_classic_draft_and_newer_workspace_typing_survive(self):
         classic = self.owner.start(['--resume', self.owner.sid])
@@ -185,12 +270,12 @@ input()
         child = self.attached('both-drafts')
         child.write(b'i/config\rnewer workspace draft')
         child.until(b'terminal-editor-ready', 10)
+        child.output.clear()
         child.write(b'done\r')
         self.owner.wait_event('control_finished')
-        child.until(b'original classic draft')
-        # A transport detach preserves the classic draft; /s d would replace it.
-        child.signal(signal.SIGTERM)
-        child.wait_exit()
+        self.return_to_workspace(child)
+        child.repaint_until(b'newer workspace draft')
+        child.finish('close')
         self.owner.status('detached')
         resumed = self.start('--resume', 'both-drafts', expect=b'history')
         resumed.repaint_until(b'newer workspace draft')
@@ -225,6 +310,7 @@ input()
         self.assertFalse((self.root / 'editor-runs').exists())
         resumed.command('classic')
         resumed.until(b'terminal-editor-ready', 10)
+        resumed.output.clear()
         resumed.write(b'done\r')
         self.owner.wait_event('control_finished')
         self.return_to_workspace(resumed)

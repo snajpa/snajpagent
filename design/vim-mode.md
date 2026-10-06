@@ -86,8 +86,10 @@ The terminal-command adapter now releases semantic controllers, binds the owner'
 classic terminal and sends a saved command reference, preserving both drafts.
 It checks owner identity, deduplicates dispatch and gates later keyboard input on
 admission. Saved workspace requests require explicit recovery or :classic.
-/s d returns after the command; automatic return after deferred effects and
-retained completion notifications remain work.
+/config, /send and /cat return automatically after their finite external operation;
+their receipt stays pending and includes deferred configuration output. Completion
+can detach only its original terminal generation. /s d returns from other terminal
+commands. Semantic deferred-control notifications remain work.
 The frontend connection manager now shares one draft and owner lease per session
 across split windows. Workspace state v3 adds drafts and pending request identities,
 accepts v1/v2 layouts, and saves before transmitting a submission. Reconnect queries

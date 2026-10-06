@@ -20,9 +20,9 @@ The workspace reconciles owner and saved drafts using their last shared text
 digest and owner identity; conflicts retain both copies for an explicit choice.
 The backend also accepts typed commands and retains immutable command reports.
 The frontend retains report buffers and hands terminal-required commands to a
-bound classic attachment. Deferred-control notifications, automatic return after
-asynchronous terminal effects and IRC routes remain integration work; clients use
-only advertised capabilities. A classic owner without this endpoint
+bound classic attachment. Finite editor, transfer and pager commands return after
+completion. Semantic deferred-control notifications and IRC routes remain
+integration work; clients use only advertised capabilities. A classic owner without this endpoint
 continues to offer its existing terminal attachment and best-effort history.
 
 ## Framing and service
@@ -168,9 +168,12 @@ reference and appends0 (refused, no new effect) or1 (admitted/already admitted).
 Following keyboard input waits for this acknowledgement. Admission queues the
 same engine command while preserving the classic editor's independent draft.
 The receipt changes to `pending`, then `completed` or `rejected`; duplicate
-references never enqueue another execution. A completed receipt can still mean
-accepted deferred work, as for ordinary commands. The terminal remains attached
-until /s d, ensuring an editor or transfer can complete before returning.
+references never enqueue another execution. Terminal /config, /send and /cat keep
+their receipt pending through the editor, transfer or asynchronous pager. Their
+final report includes deferred configuration output. The owner publishes the result
+before detaching that command's original terminal generation. Every service step
+rechecks the generation, so a lost/replaced attachment cannot be detached by an
+older completion. Other terminal commands remain attached until /s d.
 
 VM automatically hands off only a newly submitted terminal-required command.
 Saved pending requests and failed/uncertain handoffs require explicit :classic

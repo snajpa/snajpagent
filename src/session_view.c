@@ -138,7 +138,7 @@ struct view_receipt {
     json_t *result;
     char *command_text;
     bool pending, command, terminal_dispatched;
-    uint64_t draft_revision;
+    uint64_t draft_revision, terminal_generation;
     struct view_receipt *next;
 };
 
@@ -321,6 +321,17 @@ snag_view_server_command_result(struct snag_view_server *server, const json_t *r
 }
 
 int
+snag_view_server_terminal_generation(struct snag_view_server *server, const char *id,
+    uint64_t *generation)
+{
+    *generation = 0u;
+    struct view_receipt *receipt = server && id ? find_receipt(server, id) : NULL;
+    if (!receipt) return snag_errno(ENOENT);
+    *generation = receipt->terminal_generation;
+    return 0;
+}
+
+int
 snag_view_server_terminal(struct snag_view_server *server, const unsigned char *reference)
 {
     if (!server || server->stopping || !reference ||
@@ -342,6 +353,7 @@ snag_view_server_terminal(struct snag_view_server *server, const unsigned char *
         server->relay->generation, true);
     if (rc < 0) { json_decref(pending); return -1; }
     receipt->terminal_dispatched = receipt->pending = true;
+    receipt->terminal_generation = server->relay->generation;
     receipt->draft_revision = 0u;
     server->pending = receipt;
     json_decref(receipt->result);

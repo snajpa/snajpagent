@@ -1880,14 +1880,17 @@ Each report is a private immutable session file. Background loading verifies
 its length and digest, redacts known secrets and renders terminal controls inert.
 Changed or missing files display an error; a previously loaded view remains readable.
 R retries the source. Explicit session deletion removes its reports.
-Reports stay outside model context. Deferred controls initially report acceptance;
-their later result notifications remain under development.
+Reports stay outside model context. Semantic deferred controls such as /configure
+initially report acceptance; their later result notifications remain under development.
 .PP
 /fast confirms ON or OFF in its report; an attached transcript also shows FAST
 when the owner selects priority service. With a supporting owner, commands needing
 terminal interaction automatically open its whole terminal and execute there.
 Both the workspace draft and the classic prompt's existing draft remain intact.
-Use /s d to return after the editor, transfer or other command finishes.
+/config, /send and /cat return automatically after their editor, transfer or pager
+finishes. Their receipt remains pending until completion; /config's report includes
+the deferred configuration result. A replacement terminal attachment remains open
+when an earlier command finishes. Other terminal commands use /s d to return.
 New typing in the workspace before the handoff remains saved in its draft.
 .PP
 The handoff references the already submitted command and live owner instance;

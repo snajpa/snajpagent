@@ -39,6 +39,7 @@ struct app_voice;
 struct app_voice_import;
 struct app_voice_switch;
 struct app_irc_summary;
+struct app_view_terminal;
 struct snag_wire_secrets;
 struct snag_output_cache {
     char handle[SNAG_ID_HEX_LEN + 1u];
@@ -50,6 +51,7 @@ struct snag_output_cache {
 struct app_state {
     /* Informational output from one command is shown in one pager invocation. */
     struct snag_buf *command_report;
+    struct app_view_terminal *view_terminal;
     struct snag_pager *pager;
     char *pager_report;
     /* A user-requested view switch is "in flight" while its target view has not become current;
