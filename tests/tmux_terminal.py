@@ -5340,8 +5340,17 @@ def run_ctrl_d_cases(binary, root, provider, environment):
                 terminal.wait("exit stream prefix")
             terminal.send_key("C-d")
             terminal.wait_dead(timeout=1.5)
-            assert terminal.run("display-message", "-p", "-t", terminal.target,
-                                "#{pane_dead_status}").strip() == "0"
+            # tmux can defer reaping the pane until another child exits. Wake
+            # that path before requiring its recorded application exit status.
+            terminal.run("run-shell", "true")
+            deadline = time.monotonic() + 1.5
+            while True:
+                status = terminal.run("display-message", "-p", "-t", terminal.target,
+                                      "#{pane_dead_status}").strip()
+                if status or time.monotonic() >= deadline:
+                    break
+                time.sleep(0.02)
+            assert status == "0", repr(status)
             screen = terminal.capture(join_wrapped=True)
             assert "You can resume this session" in screen, screen
             _, events = read_events(terminal.dotdir)
@@ -9184,9 +9193,9 @@ def run_post_exit_drain_cases(binary, root, provider, environment):
         workspace = case / "workspace"
         workspace.mkdir(mode=0o700, parents=True)
         listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        # Stay beneath the lane root so long isolated worktree names still fit
-        # within the platform's AF_UNIX path limit.
-        path = str(root / ("post-exit-" + mode + ".sock"))
+        # The checkout and lane names can exceed the AF_UNIX path budget.
+        sockets = tempfile.TemporaryDirectory(prefix="snag-drain-")
+        path = str(Path(sockets.name) / "fd.sock")
         listener.bind(path)
         listener.listen(1)
         listener.settimeout(5.0)
@@ -9314,6 +9323,7 @@ def run_post_exit_drain_cases(binary, root, provider, environment):
             for fd in held:
                 os.close(fd)
             listener.close()
+            sockets.cleanup()
             terminal.close()
             provider.runtime_handler = None
         print("post-exit drain:", mode, "ok", flush=True)
