@@ -4,6 +4,8 @@
 
 #include "json.h"
 
+#include <sys/types.h>
+
 typedef ssize_t (*snag_record_read_fn)(void *, void *, size_t, int64_t);
 
 /* Consume one canonical checkpoint without materializing its state/context.
