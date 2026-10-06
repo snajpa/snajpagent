@@ -22,6 +22,7 @@ class ChannelServer:
         self.links = {}
         self.lines = []
         self.defer_operator_join = False
+        self.chantypes = '#&+!'
         self.failure = None
         self.stopping = threading.Event()
         self.workers = []
@@ -62,14 +63,28 @@ class ChannelServer:
                         self.links[nick] = link
                     elif line.startswith('USER '):
                         self.send(nick, f':fake 001 {nick} :welcome\r\n'
-                            f':fake 005 {nick} SAJROOM=#lab CASEMAPPING=rfc1459 :supported\r\n'
+                            f':fake 005 {nick} SAJROOM=#lab CASEMAPPING=rfc1459 CHANTYPES={self.chantypes} :supported\r\n'
                             f':fake 376 {nick} :end\r\n')
-                    elif line == 'JOIN #lab':
-                        if nick == 'queryop' and self.defer_operator_join:
+                    elif line.startswith('JOIN '):
+                        room = line[5:]
+                        if room == '#lab' and nick == 'queryop' and self.defer_operator_join:
                             continue
                         # Server-forced joins also exercise non-default rooms.
-                        self.send(nick, f':{nick}!u@fake JOIN #lab\r\n'
-                            f':{nick}!u@fake JOIN #side\r\n')
+                        self.send(nick, f':{nick}!u@fake JOIN {room}\r\n')
+                        if room == '#lab':
+                            self.send(nick, f':{nick}!u@fake JOIN #side\r\n')
+                    elif line.startswith('PART '):
+                        self.send(nick, f':{nick}!u@fake {line}\r\n')
+                    elif line.startswith('NAMES '):
+                        room = line[6:]
+                        self.send(nick, f':fake 353 {nick} = {room} :@{nick} channel-peer\r\n'
+                            f':fake 366 {nick} {room} :end\r\n')
+                    elif line.startswith('TOPIC '):
+                        room = line[6:].split(' ', 1)[0]
+                        if ' :' in line:
+                            self.send(nick, f':{nick}!u@fake {line}\r\n')
+                        else:
+                            self.send(nick, f':fake 332 {nick} {room} :fixture topic\r\n')
         except (OSError, UnicodeError) as exc:
             if not self.stopping.is_set():
                 self.failure = repr(exc)
@@ -89,7 +104,7 @@ class ChannelServer:
         assert not any(worker.is_alive() for worker in self.workers)
 
 
-class ChannelTests(QueryFixture):
+class ChannelFixture(QueryFixture):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix='snag-channel-')
         self.addCleanup(self.temporary.cleanup)
@@ -102,6 +117,7 @@ class ChannelTests(QueryFixture):
             'idle_timeout_ms = 3000', 'idle_timeout_ms = 15000').replace(
             'request_timeout_ms = 5000', 'request_timeout_ms = 20000'))
         self.server = ChannelServer()
+        self.server.chantypes = getattr(self, 'chantypes', '#&+!')
         self.addCleanup(self.server.close)
         self.seen = []
         self.calls = []
@@ -170,6 +186,118 @@ class ChannelTests(QueryFixture):
         self.wait_idle()
         return [e for e in self.events() if e['data'].get('text') == text and
                 e['type'] in ('irc_event', 'irc_event_v2')]
+
+    def command(self, text, expected=None):
+        self.term.output.clear()
+        self.term.write(b'\x15' + text.encode() + b'\r')
+        if expected:
+            self.term.until(expected.encode())
+
+    def operator_wire(self, line):
+        self.wait(lambda: ('queryop', line) in self.server.lines)
+        self.assertEqual([nick for nick, body in self.server.lines if body == line], ['queryop'])
+
+
+class ChannelTests(ChannelFixture):
+    def test_agent_only_channel_tab_is_visible_and_read_only(self):
+        self.server.send('querybot', ':querybot!u@fake JOIN #agentonly\r\n'
+                         ':peer!u@fake NOTICE #agentonly :agent-channel-visible\r\n')
+        self.wait(lambda: ('agent', '#agentonly') in self.channels())
+        self.command('/rollout', 'host-model/medium')
+        self.term.write(b'\x1b[Z')
+        self.term.repaint_until(b'channel #agentonly agent read-only')
+        self.term.write(b'agent-channel-impersonation\r')
+        self.term.until(b'agent conversation is read-only')
+        self.assert_no_wire('agent-channel-impersonation')
+
+    def test_operator_channel_addresses_actions_and_scope(self):
+        self.command('/msg channel-session/1/#SIDE operator-channel-body')
+        self.operator_wire('PRIVMSG #side :operator-channel-body')
+        self.command('/notice ' + self.selector(identity='operator') + ' channel-notice')
+        self.operator_wire('NOTICE #side :channel-notice')
+        self.command('/chat 1/#SIDE', 'channel #side operator')
+        self.command('/me channel-action')
+        self.operator_wire('PRIVMSG #side :\x01ACTION channel-action\x01')
+        self.command('/topic selected-channel-topic')
+        self.operator_wire('TOPIC #side :selected-channel-topic')
+        self.command('/names', 'NAMES refresh requested')
+        self.operator_wire('NAMES #side')
+        self.assertIn(b'members[', self.term.output)
+        self.command('/query 1/private-peer', 'query private-peer operator')
+        before = len(self.server.lines)
+        self.command('/topic private-topic-forbidden', 'requires a channel')
+        self.command('/names', 'requires a channel')
+        self.assertFalse(any('TOPIC ' in line or 'NAMES ' in line
+                             for _, line in self.server.lines[before:]))
+        self.command('/msg ' + self.selector() + ' impersonation-forbidden', 'unavailable')
+        self.command('/msg 1/#missing implicit-join-forbidden', 'unavailable')
+        self.assert_no_wire('impersonation-forbidden')
+        self.assert_no_wire('implicit-join-forbidden')
+        self.assertFalse(any(line == 'JOIN #missing' for _, line in self.server.lines))
+
+    def test_operator_join_part_and_explicit_reopen(self):
+        self.command('/join 1/#extra', 'channel #extra operator')
+        self.wait(lambda: self.channels().get(('operator', '#extra'), {})
+                  .get('routing', {}).get('joined'))
+        self.operator_wire('JOIN #extra')
+        self.term.write(b'extra-channel-body\r')
+        self.operator_wire('PRIVMSG #extra :extra-channel-body')
+        self.command('/part 1/#extra done')
+        self.operator_wire('PART #extra :done')
+        self.wait(lambda: not self.channels()[('operator', '#extra')]['routing']['joined'])
+        self.term.write(b'parted-channel-draft\r')
+        self.term.until(b'membership changed')
+        self.term.repaint_until(b'parted-channel-draft')
+        self.assert_no_wire('parted-channel-draft')
+        self.command('/join 1/#extra', 'channel #extra operator')
+        self.wait(lambda: self.channels()[('operator', '#extra')]['routing']['joined'])
+        self.term.write(b'explicitly-reopened-body\r')
+        self.operator_wire('PRIVMSG #extra :explicitly-reopened-body')
+
+    def test_channels_query_and_rollout_cycle_preserves_four_drafts(self):
+        self.command('/query 1/private-peer', 'query private-peer operator')
+        self.term.write(b'private-draft\t')
+        self.term.repaint_until(b'host-model/medium')
+        self.term.write(b'rollout-draft\x1b[Z')
+        self.term.repaint_until(b'private-draft')
+        self.term.write(b'\x1b[Z')
+        self.term.repaint_until(b'channel #side operator')
+        self.term.write(b'side-draft\x1b[Z')
+        self.term.repaint_until(b'channel #lab operator')
+        self.term.write(b'lab-draft\x1b[Z')
+        self.term.repaint_until(b'rollout-draft')
+        self.term.write(b'\x1b[Z')
+        self.term.repaint_until(b'private-draft')
+        self.term.write(b'\r')
+        self.operator_wire('PRIVMSG private-peer :private-draft')
+        self.term.write(b'\x1b[Z')
+        self.term.repaint_until(b'side-draft')
+        self.term.write(b'\r')
+        self.operator_wire('PRIVMSG #side :side-draft')
+        self.term.write(b'\x1b[Z')
+        self.term.repaint_until(b'lab-draft')
+        self.term.write(b'\r')
+        self.operator_wire('PRIVMSG #lab :lab-draft')
+        self.term.write(b'\x1b[Z')
+        self.term.repaint_until(b'rollout-draft')
+        self.assert_no_wire('rollout-draft')
+        self.assertFalse(any(self.provider.latest_user(r) == 'rollout-draft' for r in self.seen))
+
+    def test_channel_draft_stays_stale_after_kick_rejoin(self):
+        self.command('/chat 1/#side', 'channel #side operator')
+        self.term.write(b'frozen-channel-draft')
+        self.term.repaint_until(b'frozen-channel-draft')
+        previous = self.channels()[('operator', '#side')]['routing']['membership']
+        self.server.send('queryop', ':peer!u@fake KICK #side queryop :kicked\r\n'
+                         ':queryop!u@fake JOIN #side\r\n')
+        self.wait(lambda: self.channels()[('operator', '#side')]['routing']['membership'] != previous)
+        self.term.write(b'\r')
+        self.term.until(b'membership changed')
+        self.term.repaint_until(b'frozen-channel-draft')
+        self.assert_no_wire('frozen-channel-draft')
+        self.command('/chat 1/#side', 'channel #side operator')
+        self.term.write(b'fresh-channel-draft\r')
+        self.operator_wire('PRIVMSG #side :fresh-channel-draft')
 
     def test_shared_incoming_channel_has_one_typed_copy(self):
         events = self.channel_message('#SIDE', 'querybot: shared-channel-input')
@@ -347,6 +475,19 @@ class ChannelTests(QueryFixture):
 
     def test_channel_is_stale_after_reconnect(self):
         self.stale_send(self.selector(), reconnect=True)
+
+
+class ChannelPrefixTests(ChannelFixture):
+    chantypes = '#$'
+
+    def test_advertised_prefix_classifies_operator_commands(self):
+        self.command('/query 1/$side', 'select a nick')
+        self.command('/join 1/$side', 'channel $side operator')
+        self.wait(lambda: self.channels().get(('operator', '$side'), {})
+                  .get('routing', {}).get('joined'))
+        self.operator_wire('JOIN $side')
+        self.command('/msg 1/$SIDE custom-channel-body')
+        self.operator_wire('PRIVMSG $side :custom-channel-body')
 
 
 if __name__ == '__main__':

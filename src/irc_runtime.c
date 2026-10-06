@@ -211,7 +211,7 @@ execute(struct irc_owner *owner, struct irc_request *request)
             request->text, request->action, request->report, error, size);
     if (request->channel_target)
         return snag_irc_core_channel_action(core, request->channel_target, request->channel_action,
-            request->text, error, size);
+            request->text, request->report, error, size);
     if (request->query_open && request->query_send)
         return snag_irc_core_query_open_frozen(core, request->query_send, request->text,
             request->query_open, error, size);
@@ -725,6 +725,7 @@ snag_irc_destinations(const struct snag_irc *irc, struct snag_irc_destinations *
         memcpy(item->connection, owner->view.connection, sizeof(item->connection));
         item->generation = owner->view.generation;
         memcpy(item->casemapping, owner->view.casemapping, sizeof(item->casemapping));
+        memcpy(item->chantypes, owner->view.chantypes, sizeof(item->chantypes));
         item->joined = owner->view.joined;
         (void)snag_strcpy(item->endpoint, sizeof(item->endpoint), owner->endpoint);
         (void)snag_strcpy(item->room, sizeof(item->room), owner->routing_room);
@@ -1031,7 +1032,7 @@ snag_irc_channel_open(struct snag_irc *irc, const struct snag_irc_query_target *
 int
 snag_irc_channel_action(struct snag_irc *irc, const struct snag_irc_channel_target *target,
                        enum snag_irc_channel_action action, const char *text,
-                       char *error, size_t error_size)
+                       struct snag_buf *report, char *error, size_t error_size)
 {
     if (!irc || !target) return snag_errno(EINVAL);
     struct snag_irc_channel_target frozen = *target;
@@ -1040,7 +1041,7 @@ snag_irc_channel_action(struct snag_irc *irc, const struct snag_irc_channel_targ
         struct irc_owner *owner = irc->owners[i];
         if (owner->target.id != frozen.destination) continue;
         struct irc_request request = {.channel_target = &frozen,
-            .channel_action = action, .text = text};
+            .channel_action = action, .text = text, .report = report};
         int rc = request_owner(owner, &request);
         if (rc != 0) (void)snag_strcpy(error, error_size, request.error);
         return rc;

@@ -197,11 +197,13 @@ direct mention starts a task for the addressed model.
 
 Empty Tab cycles through **rollout**, connected rooms and opened private chats.
 Shift-Tab moves backwards with a draft present. Each view keeps its own draft;
-private chats also retain unread indicators. Incoming messages preserve focus. In rollout,
+conversations also retain unread indicators. Incoming messages preserve focus. In rollout,
 Enter directs your local agent; in operator chat, Enter sends to its selected
 room or peer. Open a private tab with `/query nick`; `/msg nick text` and
 `/notice nick text` send without changing focus. `/me text` sends an action in
-the selected operator query. Use `endpoint/nick` when choosing among connections.
+the selected operator conversation. Use `endpoint/nick` or `endpoint/#channel`
+when choosing among connections. `/join endpoint/#channel` joins an external
+channel as the operator; `/chat endpoint/#channel` opens its history and composer.
 Agent private chats are read-only. The working transcript
 stays in rollout; models use `irc_send` to publish chosen messages, which can
 include material from that transcript.
@@ -210,7 +212,7 @@ Models can use `irc_sleep` to hold updates until a timeout, mention or message
 threshold, and `irc_compact` to summarize IRC context asynchronously. Your
 transcript stays complete. See the manual's model IRC controls.
 
-In chat, Tab first completes `@nickname` words. With private tabs open it then
+In chat, Tab first completes `@nickname` words. With conversation tabs open it then
 cycles views; otherwise Tab at the end queues a local follow-up during work.
 Enter sends to the selected conversation.
 
@@ -367,12 +369,13 @@ tracked `config.mk`; `make WITH_*=…` stays an explicit override.
 The development `snajpagent vm` frontend provides named workspaces, splits,
 retained transcripts, retrospective verbosity, search, mouse controls and Vim
 editing. `:new [NAME]` creates an agent; `:session ID` resumes one. `:close`
-detaches; `:q` shuts down an attached rollout owner or closes a query pane.
+detaches; `:q` shuts down an attached rollout owner or closes a conversation pane.
 Restoring a workspace leaves stopped owners stopped.
 
-`/query NICK` opens a private conversation. `:buffers` lists conversations;
+`/query NICK` opens a private conversation; `/chat #CHANNEL` opens a known channel.
+`:buffers` lists conversations;
 `:vsp ADDRESS` opens one in a split. Each conversation keeps its draft and undo
-history; agent queries are read-only.
+history; agent conversations are read-only.
 
 `:reports` lists command output; `:history` returns to rollout. Search with
 `/TEXT`, `?TEXT` and `n`/`N`; select with `v`, `V` or Ctrl-V and yank with `y`.

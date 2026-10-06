@@ -182,9 +182,27 @@ struct read_page {
 };
 
 static bool
-query_event(const json_t *route, const char *type, const json_t *data)
+conversation_event(const json_t *route, const char *type, const json_t *data)
 {
     if (!route) return true;
+    if (json_object_get(route, "room")) {
+        if (strcmp(type, "irc_event") && strcmp(type, "irc_event_v2")) return false;
+        enum snag_irc_casemapping mapping = (enum snag_irc_casemapping)
+            json_integer_value(json_object_get(route, "casemapping"));
+        const char *room = snag_json_string(data, "room");
+        if (!room || !snag_irc_name_equal(mapping, snag_json_string(route, "room"), room))
+            return false;
+        /* Public channel history is shared by the two local identities.
+         * Legacy room records predate durable connection IDs. */
+        if (!strcmp(type, "irc_event"))
+            return json_equal(json_object_get(route, "endpoint"),
+                json_object_get(data, "endpoint"));
+        const json_t *routing = json_object_get(data, "routing");
+        const char *kind = snag_json_string(routing, "conversation_kind");
+        return kind && !strcmp(kind, "channel") &&
+            json_equal(json_object_get(route, "connection"),
+                json_object_get(routing, "connection_id"));
+    }
     if (strcmp(type, "irc_event_v2")) return false;
     const json_t *routing = json_object_get(data, "routing");
     static const char *const fields[] = {"connection", "conversation", "identity"};
@@ -204,7 +222,7 @@ read_event(void *opaque, const struct snag_session *state, uint64_t seq,
     if (read_canceled(page->reader)) {
         return snag_fail(error, size, ECANCELED, "history read canceled");
     }
-    if (!query_event(page->route, type, data)) return 0;
+    if (!conversation_event(page->route, type, data)) return 0;
     if (page->project) {
         json_t *event = json_pack("{s:I,s:s,s:O}", "seq", (json_int_t)seq,
             "type", type, "data", data);
@@ -1051,10 +1069,10 @@ snag_vm_reader_cancel(struct snag_vm_reader *reader)
 uint64_t
 snag_vm_reader_request(struct snag_vm_reader *reader, const struct snag_vm_read_request *request)
 {
-    struct snag_irc_query_target target;
+    struct snag_irc_conversation_target target;
     if (!reader || !request ||
         (request->route && (request->kind != SNAG_VM_READ_HISTORY ||
-         snag_view_query_read(request->route, &target) < 0)) ||
+         snag_view_conversation_read(request->route, &target) < 0)) ||
         (request->kind != SNAG_VM_READ_HISTORY && request->kind != SNAG_VM_READ_SESSIONS &&
          request->kind != SNAG_VM_READ_REPORT && request->kind != SNAG_VM_READ_REPORTS) ||
         request->verbosity > SNAG_VERBOSITY_MAX ||

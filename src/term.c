@@ -279,15 +279,19 @@ snag_term_destination_prefix(const struct snag_term *term, char *out, size_t siz
 
     if (!size) return;
     out[0] = '\0';
-    if (term->query_unread) {
-        (void)snprintf(out, size, "[DM %llu unread] ", (unsigned long long)term->query_unread);
+    if (term->conversation_unread) {
+        (void)snprintf(out, size, "[chat %llu unread] ",
+            (unsigned long long)term->conversation_unread);
         size_t used = strlen(out);
         out += used;
         size -= used;
     }
-    if (term->chat && term->query.conversation[0]) {
-        (void)snprintf(out, size, "[%u query %s %s] ", term->query.destination, term->query.peer,
-            term->query.identity == SNAG_IRC_OPERATOR ? "operator" : "agent read-only");
+    if (term->chat && term->conversation.conversation[0]) {
+        (void)snprintf(out, size, "[%u %s %s %s] ", term->conversation.destination,
+            term->conversation.kind == SNAG_IRC_CHANNEL ? "channel" : "query",
+            term->conversation.kind == SNAG_IRC_CHANNEL ?
+                term->conversation.room : term->conversation.peer,
+            term->conversation.identity == SNAG_IRC_OPERATOR ? "operator" : "agent read-only");
         return;
     }
     if (!term->chat || !term->destinations) return;
@@ -2497,7 +2501,7 @@ feed_byte(struct snag_term *term, unsigned char byte, enum snag_term_action *act
             rc = complete_mention(term, &handled);
             if (rc < 0 || handled) return rc;
         }
-        if (term->chat && term->query_tabs && term->blank_local) {
+        if (term->chat && term->conversation_tabs && term->blank_local) {
             if (term->input_backlog) return snag_term_write(STDERR_FILENO, "\a", 1u);
             term->view_reverse = false;
             *action = SNAG_TERM_VIEW;

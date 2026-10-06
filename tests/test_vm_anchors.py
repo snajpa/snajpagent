@@ -88,11 +88,11 @@ class AnchorTests(unittest.TestCase):
         # Split documents load independently; the first frame can precede
         # conversion of the other window's older coordinate.
         values = self.wait_snapshot(lambda rows:
-            next(iter(rows.values()))['state']['v'] == 8 and
+            next(iter(rows.values()))['state']['v'] == 9 and
             all(window['history']['source'] for window in
                 next(iter(rows.values()))['state']['windows']))
         upgraded = next(iter(values.values()))['state']
-        self.assertEqual(upgraded['v'], 8)
+        self.assertEqual(upgraded['v'], 9)
         for window in upgraded['windows']:
             self.assertTrue(window['history']['source'])
             self.assertEqual(window['history']['byte'], len(prefix.encode()))

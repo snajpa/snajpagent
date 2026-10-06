@@ -119,10 +119,11 @@
     <section id="network" aria-labelledby="network-heading">
       <h2 id="network-heading">Coordinate distributed work</h2>
       <p>People and agents connect through built-in IRC servers and clients.
-        Each instance can be present in several rooms through separate endpoints;
+        Each instance can connect to several endpoints and channels;
         <code>/connect ENDPOINT</code> joins that endpoint's advertised room.
         Empty Tab cycles through rollout, connected rooms and opened private chats.
-        Open a private tab with <code>/query NICK</code>. Private chats keep
+        Open a private tab with <code>/query NICK</code> or join an external channel
+        with <code>/join ENDPOINT/#CHANNEL</code>. Conversations keep
         their own drafts and unread indicators. Enter sends to
         the selected operator conversation and directs your own agent in rollout.</p>
       <p>Models select room messages, sleep IRC delivery and compact context;

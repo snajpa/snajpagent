@@ -3364,10 +3364,13 @@ snag_render_set_chat_room(struct snag_render *render, const char *endpoint, cons
 }
 
 int
-snag_render_set_chat_query(struct snag_render *render, const char *endpoint,
-                          const struct snag_irc_query_target *query, bool announce)
+snag_render_set_chat_conversation(struct snag_render *render, const char *endpoint,
+                          const struct snag_irc_conversation_target *query, bool announce)
 {
     if (!render || !endpoint || !query || !query->conversation[0]) return snag_errno(EINVAL);
+    if (query->kind == SNAG_IRC_CHANNEL)
+        return snag_render_set_chat_room(render, endpoint, query->room, announce);
+    if (query->kind != SNAG_IRC_QUERY) return snag_errno(EINVAL);
     bool changed = strcmp(render->chat_conversation, query->conversation) != 0;
     if (changed && render->view == SNAG_RENDER_CHAT && pause_rollout(render) < 0) return -1;
     if (changed && select_room_queue(render, endpoint, "", query->conversation) < 0) return -1;

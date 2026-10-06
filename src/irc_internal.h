@@ -14,6 +14,7 @@ struct snag_irc_view {
     char connection[SNAG_ID_HEX_LEN + 1u];
     uint64_t generation;
     enum snag_irc_casemapping casemapping[2u];
+    char chantypes[2u][128u];
     char text[32768u];
     char nicks[4096u]; /* Newline-separated current members, without op prefixes. */
     bool joined;
@@ -45,7 +46,8 @@ int snag_irc_core_query_send(struct snag_irc_core *, const struct snag_irc_query
 int snag_irc_core_channel_open(struct snag_irc_core *, const struct snag_irc_query_target *,
                               const char *, bool, struct snag_irc_channel_target *, char *, size_t);
 int snag_irc_core_channel_action(struct snag_irc_core *, const struct snag_irc_channel_target *,
-                                enum snag_irc_channel_action, const char *, char *, size_t);
+                                enum snag_irc_channel_action, const char *, struct snag_buf *,
+                            char *, size_t);
 int snag_irc_core_channel_send(struct snag_irc_core *, const struct snag_irc_channel_target *,
                               enum snag_irc_event_kind, const char *, bool, struct snag_buf *,
                               char *, size_t);

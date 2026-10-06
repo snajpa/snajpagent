@@ -1133,7 +1133,7 @@ test_query_tab_keeps_modal_queue_action(void)
     for (unsigned int modal = 0u; modal < 2u; ++modal) {
         struct snag_term term;
         snag_term_init(&term);
-        term.active = term.chat = term.query_tabs = true;
+        term.active = term.chat = term.conversation_tabs = true;
         term.blank_local = !modal;
         assert(snag_term_restore_draft(&term, "saved draft") == 0);
         term.input[0] = '\t';
@@ -1987,9 +1987,10 @@ test_query_markdown_isolation(void)
     snag_render_init(&render, 1u);
     render.stderr_terminal = true;
     snag_render_set_color(&render, SNAG_COLOR_NEVER);
-    struct snag_irc_query_target target = {.identity = SNAG_IRC_OPERATOR, .peer = "peer",
+    struct snag_irc_conversation_target target = {.kind = SNAG_IRC_QUERY,
+        .identity = SNAG_IRC_OPERATOR, .peer = "peer",
         .conversation = "22222222222222222222222222222222"};
-    assert(snag_render_set_chat_query(&render, event.endpoint, &target, false) == 0);
+    assert(snag_render_set_chat_conversation(&render, event.endpoint, &target, false) == 0);
     assert(snag_render_set_view(&render, SNAG_RENDER_CHAT) == 0);
     assert(snag_render_irc_event(&render, &event) == 0);
     event.route.identity = SNAG_IRC_AGENT;
@@ -2002,7 +2003,7 @@ test_query_markdown_isolation(void)
     assert(snag_render_irc_event(&render, &event) == 0);
     target.identity = SNAG_IRC_AGENT;
     strcpy(target.conversation, "33333333333333333333333333333333");
-    assert(snag_render_set_chat_query(&render, event.endpoint, &target, true) == 0);
+    assert(snag_render_set_chat_conversation(&render, event.endpoint, &target, true) == 0);
     snag_render_free(&render);
     (void)capture_close(&capture, output, sizeof(output), 0u);
     assert(strstr(output, "[server:6667/peer operator query]") &&
@@ -2024,13 +2025,14 @@ test_query_send_receipts(void)
             .connection = "11111111111111111111111111111111",
             .conversation = "22222222222222222222222222222222", .peer = "peer",
             .send = "33333333333333333333333333333333"}};
-    struct snag_irc_query_target target = {.identity = SNAG_IRC_OPERATOR, .peer = "peer",
+    struct snag_irc_conversation_target target = {.kind = SNAG_IRC_QUERY,
+        .identity = SNAG_IRC_OPERATOR, .peer = "peer",
         .conversation = "22222222222222222222222222222222"};
     char output[8192];
     struct output_capture capture = capture_open(false, true);
     snag_render_init(&render, 1u);
     snag_render_set_color(&render, SNAG_COLOR_NEVER);
-    assert(snag_render_set_chat_query(&render, event.endpoint, &target, false) == 0);
+    assert(snag_render_set_chat_conversation(&render, event.endpoint, &target, false) == 0);
     assert(snag_render_set_view(&render, SNAG_RENDER_CHAT) == 0);
     for (unsigned int state = SNAG_IRC_PENDING; state <= SNAG_IRC_ACKNOWLEDGED; ++state) {
         event.route.delivery = (enum snag_irc_delivery)state;

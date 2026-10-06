@@ -1705,7 +1705,7 @@ test_channel_routes(void)
     struct snag_irc_channel_target wrong_role = lab;
     wrong_role.identity = SNAG_IRC_AGENT;
     assert(snag_irc_channel_action(client, &wrong_role, SNAG_IRC_CHANNEL_NAMES,
-        NULL, error, sizeof(error)) < 0);
+        NULL, NULL, error, sizeof(error)) < 0);
     assert(snag_irc_channel_open(client, &scope, "#missing", false,
         &side, error, sizeof(error)) < 0);
     assert(snag_irc_channel_open(client, &scope, "#side\nJOIN #wrong", true,
@@ -1714,7 +1714,7 @@ test_channel_routes(void)
         &side, error, sizeof(error)) == 0);
     wait_wire(client, peers[SNAG_IRC_OPERATOR], wire, sizeof(wire), "JOIN #side\r\n");
     assert(snag_irc_channel_action(client, &side, SNAG_IRC_CHANNEL_NAMES,
-        NULL, error, sizeof(error)) < 0);
+        NULL, NULL, error, sizeof(error)) < 0);
     send_text(peers[SNAG_IRC_OPERATOR], ":operator!u@fake JOIN #side\r\n");
     tick(client, 5u);
     struct snag_buf report = {.max = 8192u};
@@ -1762,20 +1762,20 @@ test_channel_routes(void)
     assert(snag_irc_channel_send(client, &side, SNAG_IRC_MESSAGE,
         "\n\r\n", false, NULL, error, sizeof(error)) < 0);
     assert(snag_irc_channel_action(client, &side, SNAG_IRC_CHANNEL_TOPIC,
-        "é界 channel topic", error, sizeof(error)) == 0);
+        "é界 channel topic", NULL, error, sizeof(error)) == 0);
     wait_wire(client, peers[SNAG_IRC_OPERATOR], wire, sizeof(wire),
         "TOPIC #side :é界 channel topic\r\n");
     assert(snag_irc_channel_action(client, &side, SNAG_IRC_CHANNEL_TOPIC,
-        "bad\r\nPRIVMSG #lab :wrong", error, sizeof(error)) < 0);
+        "bad\r\nPRIVMSG #lab :wrong", NULL, error, sizeof(error)) < 0);
     char large[513u];
     memset(large, 'x', sizeof(large) - 1u);
     large[sizeof(large) - 1u] = '\0';
     assert(snag_irc_channel_action(client, &side, SNAG_IRC_CHANNEL_TOPIC,
-        large, error, sizeof(error)) < 0);
+        large, NULL, error, sizeof(error)) < 0);
     assert(snag_irc_channel_action(client, &side, SNAG_IRC_CHANNEL_PART,
-        "leaving", error, sizeof(error)) == 0);
+        "leaving", NULL, error, sizeof(error)) == 0);
     assert(snag_irc_channel_action(client, &side, SNAG_IRC_CHANNEL_NAMES,
-        NULL, error, sizeof(error)) < 0);
+        NULL, NULL, error, sizeof(error)) < 0);
     assert(snag_irc_channel_send(client, &side, SNAG_IRC_MESSAGE,
         "stale channel send", false, NULL, error, sizeof(error)) < 0);
     assert(snag_irc_channel_open(client, &scope, "#side", true,
@@ -1791,17 +1791,17 @@ test_channel_routes(void)
     send_text(peers[SNAG_IRC_OPERATOR], ":operator!u@fake JOIN #side\r\n");
     tick(client, 5u);
     assert(snag_irc_channel_action(client, &side, SNAG_IRC_CHANNEL_NAMES,
-        NULL, error, sizeof(error)) < 0);
+        NULL, NULL, error, sizeof(error)) < 0);
     assert(snag_irc_channel_action(client, &lab, SNAG_IRC_CHANNEL_NAMES,
-        NULL, error, sizeof(error)) == 0);
+        NULL, NULL, error, sizeof(error)) == 0);
     wait_wire(client, peers[SNAG_IRC_OPERATOR], wire, sizeof(wire), "NAMES #lab\r\n");
     assert(snag_irc_channel_action(client, &current, SNAG_IRC_CHANNEL_NAMES,
-        NULL, error, sizeof(error)) == 0);
+        NULL, NULL, error, sizeof(error)) == 0);
     wait_wire(client, peers[SNAG_IRC_OPERATOR], wire, sizeof(wire), "NAMES #side\r\n");
     send_text(peers[SNAG_IRC_OPERATOR], ":peer!u@fake KICK #side operator :kicked\r\n");
     tick(client, 5u);
     assert(snag_irc_channel_action(client, &current, SNAG_IRC_CHANNEL_NAMES,
-        NULL, error, sizeof(error)) < 0);
+        NULL, NULL, error, sizeof(error)) < 0);
     assert(snag_irc_channel_open(client, &scope, "#side", true,
         &side, error, sizeof(error)) == 0);
     assert(!strcmp(side.conversation, current.conversation));
@@ -1847,9 +1847,9 @@ test_channel_routes(void)
     assert(strcmp(side.membership, current.membership));
     assert(current.generation > side.generation);
     assert(snag_irc_channel_action(client, &side, SNAG_IRC_CHANNEL_NAMES,
-        NULL, error, sizeof(error)) < 0);
+        NULL, NULL, error, sizeof(error)) < 0);
     assert(snag_irc_channel_action(client, &current, SNAG_IRC_CHANNEL_NAMES,
-        NULL, error, sizeof(error)) == 0);
+        NULL, NULL, error, sizeof(error)) == 0);
     wait_wire(client, peers[SNAG_IRC_OPERATOR], wire, sizeof(wire), "NAMES #side\r\n");
     assert(snag_irc_conversations_valid(capture.conversations, capture.sequence + 1u));
     snag_irc_close(client);
@@ -2297,6 +2297,8 @@ static void __attribute__((noinline)) test_client_events(void)
     }
     wait_pair_event(NULL, client, &capture, SNAG_IRC_HISTORY_READY, 1u);
     assert(operator_fd != SNAG_SOCKET_INVALID);
+    /* Agent history completion does not establish the operator's NAMES boundary. */
+    drain_ready(client, operator_fd, wire, sizeof(wire));
     {
         struct snag_irc_destinations first, next;
 

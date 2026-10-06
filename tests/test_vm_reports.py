@@ -100,7 +100,7 @@ class ReportTests(unittest.TestCase):
             resumed.repaint_until(report['id'][:8].encode())
             resumed.command('workspace save')
             rows = self.wait_snapshot(lambda rows:
-                next(iter(rows.values()))['state']['v'] == 8 and
+                next(iter(rows.values()))['state']['v'] == 9 and
                 next(iter(rows.values()))['state']['windows'][0].get('source'))
             window = next(iter(rows.values()))['state']['windows'][0]
             self.assertEqual(window['byte'], saved['windows'][0]['byte'])

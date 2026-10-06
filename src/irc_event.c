@@ -19,6 +19,7 @@ snag_irc_capture_scopes(const struct snag_irc_destinations *destinations,
         memcpy(scope->endpoint, item->endpoint, sizeof(scope->endpoint));
         memcpy(scope->room, item->room, sizeof(scope->room));
         memcpy(scope->casemapping, item->casemapping, sizeof(scope->casemapping));
+        memcpy(scope->chantypes, item->chantypes, sizeof(scope->chantypes));
     }
 }
 

@@ -721,9 +721,10 @@ snag_app_irc_restore(struct app_state *app, char *error, size_t error_size)
             struct snag_irc_event event;
             if (snag_irc_event_record_read("irc_event_v2", json_object_get(item, "data"),
                 &event) < 0) { rc = -1; break; }
-            if (event.route.kind == SNAG_IRC_QUERY) {
+            if (event.route.kind == SNAG_IRC_QUERY ||
+                (event.route.kind == SNAG_IRC_CHANNEL && event.route.membership[0])) {
                 rc = snag_ui_send(&app->ui, (struct snag_ui_command){
-                    .kind = SNAG_UI_QUERY, .data.irc = &event});
+                    .kind = SNAG_UI_CONVERSATION, .data.irc = &event});
             }
         }
     }

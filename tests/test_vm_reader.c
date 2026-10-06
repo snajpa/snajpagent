@@ -7,6 +7,7 @@
 #include "history_view.h"
 #include "irc.h"
 #include "json.h"
+#include "session_view.h"
 #include "vm_connection.h"
 #include "vm_report.h"
 #include "vm_source.h"
@@ -1061,6 +1062,91 @@ query_history_test(struct snag_store *store, const char *root)
 }
 
 static void
+channel_history_test(struct snag_store *store, const char *root)
+{
+    struct snag_session source;
+    snag_session_init(&source);
+    char error[256] = "";
+    assert(snag_session_create(store, &source, root, "default", "channel-history", "high",
+        error, sizeof(error)) == 0);
+    struct snag_irc_event event = {.routed = true, .kind = SNAG_IRC_MESSAGE,
+        .timestamp_ms = 1u, .endpoint = "test:6667", .room = "#Side", .nick = "peer",
+        .text = "operator public", .route = {
+            .connection = "11111111111111111111111111111111",
+            .conversation = "22222222222222222222222222222222",
+            .membership = "33333333333333333333333333333333",
+            .generation = 1u, .identity = SNAG_IRC_OPERATOR, .kind = SNAG_IRC_CHANNEL,
+            .joined = true}};
+    struct snag_irc_conversation_target target = {.kind = SNAG_IRC_CHANNEL,
+        .connection = "11111111111111111111111111111111",
+        .conversation = "22222222222222222222222222222222",
+        .membership = "33333333333333333333333333333333",
+        .generation = 1u, .identity = SNAG_IRC_OPERATOR, .room = "#side",
+        .endpoint = "test:6667", .casemapping = SNAG_IRC_RFC1459};
+    json_t *route = snag_view_conversation_route(&target);
+    assert(route);
+    struct snag_irc_conversation_target decoded;
+    assert(snag_view_conversation_read(route, &decoded) == 0);
+    assert(decoded.kind == SNAG_IRC_CHANNEL && !strcmp(decoded.room, target.room));
+    projection_record(&source, "irc_event_v2", snag_irc_event_data(&event));
+    event.route.identity = SNAG_IRC_AGENT;
+    event.route.generation = 2u;
+    strcpy(event.route.conversation, "44444444444444444444444444444444");
+    strcpy(event.route.membership, "55555555555555555555555555555555");
+    strcpy(event.text, "agent public later membership");
+    projection_record(&source, "irc_event_v2", snag_irc_event_data(&event));
+    event.routed = false;
+    strcpy(event.text, "legacy public");
+    projection_record(&source, "irc_event", snag_irc_event_data(&event));
+    strcpy(event.endpoint, "other:6667");
+    strcpy(event.text, "foreign legacy");
+    projection_record(&source, "irc_event", snag_irc_event_data(&event));
+    event.routed = true;
+    strcpy(event.route.connection, "66666666666666666666666666666666");
+    strcpy(event.text, "foreign connection");
+    projection_record(&source, "irc_event_v2", snag_irc_event_data(&event));
+    strcpy(event.route.connection, target.connection);
+    strcpy(event.endpoint, target.endpoint);
+    strcpy(event.room, "#other");
+    strcpy(event.text, "foreign room");
+    projection_record(&source, "irc_event_v2", snag_irc_event_data(&event));
+    event.room[0] = 0;
+    event.route.kind = SNAG_IRC_QUERY;
+    event.route.membership[0] = 0;
+    event.route.joined = false;
+    strcpy(event.route.peer, "peer");
+    strcpy(event.route.target, "agent");
+    strcpy(event.text, "foreign private");
+    projection_record(&source, "irc_event_v2", snag_irc_event_data(&event));
+    struct snag_vm_reader *reader = snag_vm_reader_open(store, NULL, error, sizeof(error));
+    assert(reader);
+    struct snag_vm_read_request request = {.project = true, .columns = 80u,
+        .verbosity = 1u, .trusted_tail = true, .route = route};
+    memcpy(request.session_id, source.id, sizeof(request.session_id));
+    request.tail = public_cursor(&source);
+    struct snag_vm_read_result *page = await_page(reader, snag_vm_reader_request(reader, &request));
+    assert(!page->error_number && json_array_size(page->blocks) == 3u);
+    snag_vm_read_result_free(page);
+    request.query = "foreign";
+    page = await_page(reader, snag_vm_reader_request(reader, &request));
+    assert(!page->error_number && !page->found);
+    snag_vm_read_result_free(page);
+    request.query = "legacy public";
+    page = await_page(reader, snag_vm_reader_request(reader, &request));
+    assert(!page->error_number && page->found);
+    snag_vm_read_result_free(page);
+    snag_vm_reader_close(reader);
+    assert(json_object_del(route, "membership") == 0);
+    assert(snag_view_conversation_read(route, &decoded) < 0);
+    json_decref(route);
+    char prefix[9];
+    memcpy(prefix, source.id, 8u);
+    prefix[8] = 0;
+    assert(snag_session_delete(store, &source, prefix, NULL, error, sizeof(error)) == 0);
+    snag_session_close(&source);
+}
+
+static void
 conversation_snapshot_test(void)
 {
     struct snag_vm_connection *owner =
@@ -1083,6 +1169,20 @@ conversation_snapshot_test(void)
     assert(snag_vm_buffer_prepare(agent, 1u) < 0 && errno == EACCES);
     assert(!owner->rollout->draft.len && snag_vm_connection_unsaved(owner));
 
+    struct snag_irc_conversation_target channel = {.kind = SNAG_IRC_CHANNEL,
+        .connection = "11111111111111111111111111111111",
+        .conversation = "33333333333333333333333333333333",
+        .membership = "44444444444444444444444444444444",
+        .generation = 1u, .identity = SNAG_IRC_OPERATOR, .room = "#room",
+        .endpoint = "test:6667", .casemapping = SNAG_IRC_ASCII};
+    json_t *channel_route = snag_view_conversation_route(&channel);
+    struct snag_vm_buffer *room = snag_vm_buffer_get(owner, channel_route, true);
+    assert(room && snag_vm_buffer_writable(room) && !snag_vm_buffer_supported(room));
+    owner->irc_queries = true;
+    assert(snag_vm_buffer_supported(first) && !snag_vm_buffer_supported(room));
+    owner->irc_channels = true;
+    assert(snag_vm_buffer_supported(room));
+    assert(snag_vm_draft_replace(room, 0u, 0u, "channel draft", 13u) == 0);
     json_t *saved = snag_vm_connections_json(owner);
     struct snag_vm_connection *restored = NULL;
     assert(saved && snag_vm_connections_load(saved, &restored) == 0);
@@ -1095,6 +1195,10 @@ conversation_snapshot_test(void)
         !memcmp(copy->draft.data, first->draft.data, first->draft.len));
     assert(snag_vm_buffer_get(restored, later->route, false));
     assert(!snag_vm_buffer_writable(snag_vm_buffer_get(restored, agent->route, false)));
+    struct snag_vm_buffer *restored_room = snag_vm_buffer_get(restored, channel_route, false);
+    assert(restored_room && restored_room->draft.len == 13u &&
+        !memcmp(restored_room->draft.data, "channel draft", 13u));
+    json_decref(channel_route);
     snag_vm_connections_free(restored);
     restored = NULL;
     json_t *buffers = json_object_get(json_array_get(saved, 0u), "buffers");
@@ -1140,6 +1244,7 @@ main(void)
     search_blocks_test();
     search_history_test(&store, root);
     query_history_test(&store, root);
+    channel_history_test(&store, root);
     assert(snag_session_create(&store, &source, root, "default", "test-secret-value", "high",
         error, sizeof(error)) == 0);
     source.on_checkpoint = large_context;

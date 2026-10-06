@@ -4,6 +4,12 @@
 
 ## Unreleased
 
+- Add operator channel conversations to classic tabs and Vim panes. /join, /part,
+  /chat, /names, /topic, /msg, /notice and /me preserve exact operator membership.
+  Channel and DM drafts remain separate through Tab/Shift-Tab and workspace resume.
+  Public channel history spans local identities; private history stays isolated.
+  Qualified buffer addresses accept saved session names and select operator buffers.
+
 - Preserve exact channel reply targets through admission, checkpoint and resume.
   Requests list outstanding replies with their original connection and membership;
   unrelated rooms, notices, failed sends and replacement memberships leave them
@@ -31,7 +37,7 @@
   in model context. Pending, failed, uncertain and agent sends stay outside input;
   NOTICE receipts add context without starting a reply. External writes without
   receipts remain explicitly unconfirmed; native catch-up supplies its public
-  event. Channel frontend integration remains in progress.
+  event. Hosted channel frontend integration remains in progress.
 
 - Correlate IRC query and channel sends through negotiated labeled responses,
   including nested/interleaved batches, ACKs, errors, NOTICE and actions. Keep

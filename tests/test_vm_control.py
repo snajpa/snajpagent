@@ -112,7 +112,7 @@ class ControlTests(unittest.TestCase):
         self.owner.status('detached')
         self.assertEqual(self.owner_draft()['text'], 'retained 👩‍💻-final')
         saved = next(iter(self.snapshots().values()))['state']
-        self.assertEqual(saved['v'], 8)
+        self.assertEqual(saved['v'], 9)
         self.assertEqual(rollout(saved['buffers'][0])['draft'], 'retained 👩‍💻-final')
         self.assertTrue(saved['buffers'][0]['control'])
         self.assertEqual(self.inputs(), [])

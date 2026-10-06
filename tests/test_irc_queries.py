@@ -454,12 +454,12 @@ class QueryTests(QueryFixture):
 
     def test_agent_tab_is_read_only_and_incoming_does_not_steal_focus(self):
         self.direct('querybot', 'read-only-private-tab', notice=True)
-        self.term.repaint_until(b'DM 1 unread')
+        self.term.repaint_until(b'chat 1 unread')
         self.assertNotIn(b'query query-peer agent', self.term.output)
         self.term.write(b'\x1b[Z')
         self.term.until(b'read-only-private-tab')
         self.term.write(b'operator-must-not-impersonate-agent\r')
-        self.term.until(b'agent query is read-only')
+        self.term.until(b'agent conversation is read-only')
         self.term.repaint_until(b'operator-must-not-impersonate-agent')
         self.peer.drain(.1)
         self.assertNotIn(b'operator-must-not-impersonate-agent', self.peer.buf)

@@ -506,7 +506,7 @@ irc_tool_channel_send(struct app_state *app, const char *selector, const char *t
     if (!rc) {
         if (topic) {
             rc = snag_irc_channel_action(app->irc, &target, SNAG_IRC_CHANNEL_TOPIC,
-                text, error, error_size);
+                text, NULL, error, error_size);
             if (!rc) rc = snag_buf_printf(&report, "Topic command queued to %s.\n", target.room);
         } else {
             rc = snag_irc_channel_send(app->irc, &target,

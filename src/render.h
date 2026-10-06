@@ -162,8 +162,8 @@ enum snag_render_view snag_render_view(const struct snag_render *render);
 int snag_render_set_view(struct snag_render *render, enum snag_render_view view);
 int snag_render_set_chat_room(struct snag_render *render, const char *endpoint, const char *room,
                           bool announce);
-int snag_render_set_chat_query(struct snag_render *, const char *,
-    const struct snag_irc_query_target *, bool);
+int snag_render_set_chat_conversation(struct snag_render *, const char *,
+    const struct snag_irc_conversation_target *, bool);
 bool snag_render_view_pending(const struct snag_render *render);
 bool snag_render_view_runnable(const struct snag_render *render);
 int snag_render_flush_pending(struct snag_render *render, size_t records);

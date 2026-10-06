@@ -204,6 +204,8 @@ static int private_flush(struct irc_conn *);
 static int private_discard(struct irc_conn *, bool record);
 static bool private_ready(const struct irc_conn *);
 static void channels_free(struct irc_conn *);
+static int snapshot_channel(const struct irc_conn *, const struct irc_channel *,
+                            struct snag_buf *, struct snag_buf *);
 static int
 sanitize_text(char *dst, size_t size, const char *src)
 {
@@ -1363,7 +1365,7 @@ int
 snag_irc_core_channel_action(struct snag_irc_core *irc,
                             const struct snag_irc_channel_target *target,
                             enum snag_irc_channel_action action, const char *text,
-                            char *error, size_t error_size)
+                            struct snag_buf *report, char *error, size_t error_size)
 {
     if (!irc || !target || (unsigned int)target->identity > SNAG_IRC_AGENT ||
         (unsigned int)action > SNAG_IRC_CHANNEL_TOPIC) return snag_errno(EINVAL);
@@ -1378,6 +1380,7 @@ snag_irc_core_channel_action(struct snag_irc_core *irc,
     if (text && (strchr(text, '\r') || strchr(text, '\n') ||
         !snag_utf8_valid((const unsigned char *)text, strlen(text), true)))
         return snag_fail(error, error_size, EINVAL, "invalid IRC channel text");
+    if (report && snapshot_channel(link, channel, report, NULL) < 0) return -1;
     char clean[SNAG_IRC_LINE_MAX];
     if (text && sanitize_text(clean, sizeof(clean), text) < 0) return -1;
     const char *command = action == SNAG_IRC_CHANNEL_PART ? "PART" :
@@ -3853,6 +3856,12 @@ snag_irc_core_view(const struct snag_irc_core *irc, struct snag_irc_view *view)
     view->generation = irc->generation;
     view->casemapping[SNAG_IRC_OPERATOR] = irc->conns[LINK_OPERATOR].casemapping;
     view->casemapping[SNAG_IRC_AGENT] = irc->conns[LINK_AGENT].casemapping;
+    for (size_t role = 0u; role < 2u; ++role) {
+        const struct irc_conn *link = &irc->conns[role == SNAG_IRC_AGENT ?
+            LINK_AGENT : LINK_OPERATOR];
+        (void)snag_strcpy(view->chantypes[role], sizeof(view->chantypes[role]),
+            irc->hosting ? "#" : link->chantypes);
+    }
     (void)snag_strcpy(view->model, sizeof(view->model), snag_irc_core_model_nick(irc));
     (void)snag_strcpy(view->operator, sizeof(view->operator), snag_irc_core_operator_nick(irc));
     view->joined = irc->hosting || irc->conns[LINK_AGENT].joined;

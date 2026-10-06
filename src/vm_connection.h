@@ -36,13 +36,14 @@ struct snag_vm_connection {
     char message[256];
     uint64_t generation, deadline, revision, draft_edit, draft_deadline;
     bool control, bound, hello, quitting, exited;
-    bool commands, drafts, terminal_commands, irc_queries;
+    bool commands, drafts, terminal_commands, irc_queries, irc_channels;
     bool reports_supported, reports_subscribed, detaching, detach_sent;
 };
 
 /* NULL selects the rollout. Returned buffers live until their session closes. */
 struct snag_vm_buffer *snag_vm_buffer_get(struct snag_vm_connection *, const json_t *, bool);
 bool snag_vm_buffer_writable(const struct snag_vm_buffer *);
+bool snag_vm_buffer_supported(const struct snag_vm_buffer *);
 bool snag_vm_connection_unsaved(const struct snag_vm_connection *);
 void snag_vm_connection_discard(struct snag_vm_connection *);
 

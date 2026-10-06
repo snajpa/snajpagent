@@ -39,6 +39,7 @@ struct snag_irc_destination {
     char model[SNAG_CONFIG_IRC_NICK_MAX + 1u];
     char operator[SNAG_CONFIG_IRC_NICK_MAX + 1u];
     enum snag_irc_casemapping casemapping[2u];
+    char chantypes[2u][128u];
     char nicks[4096u];
     bool joined;
 };
@@ -82,6 +83,7 @@ struct snag_irc_scope {
     char endpoint[SNAG_CONFIG_IRC_ENDPOINT_MAX + 1u];
     char room[SNAG_CONFIG_IRC_ROOM_MAX + 2u];
     enum snag_irc_casemapping casemapping[2u];
+    char chantypes[2u][128u];
 };
 
 struct snag_irc_scopes {
@@ -96,6 +98,22 @@ const struct snag_irc_scope *snag_irc_scope_resolve(const struct snag_irc_scopes
     uint32_t, const char *, char *, size_t);
 
 enum snag_irc_conversation_kind { SNAG_IRC_CONNECTION_EVENTS, SNAG_IRC_CHANNEL, SNAG_IRC_QUERY };
+/* Presentation selectors share draft/focus handling. Runtime sends still use
+ * their kind-specific targets and validate the captured lifetime. */
+struct snag_irc_conversation_target {
+    uint32_t destination;
+    char connection[SNAG_ID_HEX_LEN + 1u];
+    char conversation[SNAG_ID_HEX_LEN + 1u];
+    uint64_t generation;
+    enum snag_irc_identity identity;
+    enum snag_irc_conversation_kind kind;
+    enum snag_irc_casemapping casemapping;
+    char peer[SNAG_CONFIG_IRC_NICK_MAX + 1u];
+    char room[SNAG_CONFIG_IRC_ROOM_MAX + 2u];
+    char membership[SNAG_ID_HEX_LEN + 1u];
+    char endpoint[SNAG_CONFIG_IRC_ENDPOINT_MAX + 1u];
+};
+
 enum snag_irc_direction { SNAG_IRC_INCOMING, SNAG_IRC_OUTGOING };
 enum snag_irc_delivery {
     SNAG_IRC_DELIVERY_NONE, SNAG_IRC_PENDING, SNAG_IRC_WRITTEN,
@@ -194,7 +212,8 @@ int snag_irc_channel_open(struct snag_irc *, const struct snag_irc_query_target 
                           const char *room, bool join, struct snag_irc_channel_target *,
                           char *, size_t);
 int snag_irc_channel_action(struct snag_irc *, const struct snag_irc_channel_target *,
-                            enum snag_irc_channel_action, const char *, char *, size_t);
+                            enum snag_irc_channel_action, const char *, struct snag_buf *,
+                            char *, size_t);
 int snag_irc_channel_send(struct snag_irc *, const struct snag_irc_channel_target *,
                           enum snag_irc_event_kind, const char *, bool, struct snag_buf *,
                           char *, size_t);

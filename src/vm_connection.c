@@ -22,8 +22,8 @@ valid_route(const json_t *route)
     if (json_is_string(route)) {
         return json_string_length(route) == 7u && !strcmp(json_string_value(route), "rollout");
     }
-    struct snag_irc_query_target target;
-    return snag_view_query_read(route, &target) == 0;
+    struct snag_irc_conversation_target target;
+    return snag_view_conversation_read(route, &target) == 0;
 }
 
 bool
@@ -31,6 +31,14 @@ snag_vm_buffer_writable(const struct snag_vm_buffer *buffer)
 {
     return buffer && (!json_is_object(buffer->route) ||
         !strcmp(snag_json_string(buffer->route, "identity"), "operator"));
+}
+
+bool
+snag_vm_buffer_supported(const struct snag_vm_buffer *buffer)
+{
+    return buffer && (!json_is_object(buffer->route) ||
+        (json_object_get(buffer->route, "room") ? buffer->connection->irc_channels :
+            buffer->connection->irc_queries));
 }
 
 static void
@@ -109,6 +117,7 @@ snag_vm_connection_close(struct snag_vm_connection *connection)
     connection->bound = connection->hello = false;
     connection->generation = connection->deadline = connection->draft_deadline = 0u;
     connection->commands = connection->terminal_commands = connection->irc_queries = false;
+    connection->irc_channels = false;
     connection->reports_supported = connection->reports_subscribed = false;
     connection->drafts = connection->detaching = connection->detach_sent = false;
     connection->draft_wait = connection->inflight = NULL;
@@ -342,7 +351,7 @@ snag_vm_buffer_prepare(struct snag_vm_buffer *buffer, uint64_t window)
 {
     struct snag_vm_connection *connection = buffer->connection;
     if (!snag_vm_buffer_writable(buffer)) return snag_errno(EACCES);
-    if (json_is_object(buffer->route) && !connection->irc_queries) return snag_errno(ENOTSUP);
+    if (!snag_vm_buffer_supported(buffer)) return snag_errno(ENOTSUP);
     if (!connection->bound || buffer->pending || !buffer->draft.len ||
         connection->quitting || connection->detaching || buffer->draft_conflict)
         return snag_errno(EBUSY);
@@ -416,8 +425,7 @@ static int
 draft_sync(struct snag_vm_buffer *buffer)
 {
     struct snag_vm_connection *connection = buffer->connection;
-    if (!snag_vm_buffer_writable(buffer) ||
-        (json_is_object(buffer->route) && !connection->irc_queries)) return 0;
+    if (!snag_vm_buffer_writable(buffer) || !snag_vm_buffer_supported(buffer)) return 0;
     if (!connection->bound || connection->channel.output || connection->draft_sent ||
         connection->quitting || connection->detach_sent || connection->draft_deadline) return 0;
     if (connection->drafts && buffer->draft_get && !buffer->reconcile_pending) {
@@ -631,6 +639,7 @@ receive(struct snag_vm_connection *connection, const json_t *value)
             const char *feature = json_string_value(json_array_get(features, j));
             if (feature && !strcmp(feature, "drafts")) connection->drafts = true;
             if (feature && !strcmp(feature, "irc_queries")) connection->irc_queries = true;
+            if (feature && !strcmp(feature, "irc_channels")) connection->irc_channels = true;
             if (feature && !strcmp(feature, "commands")) connection->commands = true;
             if (feature && !strcmp(feature, "terminal_commands"))
                 connection->terminal_commands = true;
@@ -703,18 +712,23 @@ receive(struct snag_vm_connection *connection, const json_t *value)
              json_integer_value(json_object_get(state, "schema")) <
              json_integer_value(json_object_get(connection->state, "schema"))))
             return snag_errno(EPROTO);
-        const json_t *queries = json_object_get(state, "queries");
-        if (queries && !json_is_array(queries)) return snag_errno(EPROTO);
-        bool changed = !json_equal(queries, json_object_get(connection->state, "queries"));
-        for (size_t i = 0u; changed && i < json_array_size(queries); ++i) {
-            const json_t *query = json_array_get(queries, i);
-            const char *endpoint = snag_json_bounded_string(json_object_get(query, "endpoint"),
-                SNAG_CONFIG_IRC_ENDPOINT_MAX);
-            const json_t *route = json_object_get(query, "route");
-            if (!endpoint || !json_is_object(route)) return snag_errno(EPROTO);
-            struct snag_vm_buffer *b = snag_vm_buffer_get(connection, route, true);
-            if (!b) return -1;
-            (void)snag_strcpy(b->endpoint, sizeof(b->endpoint), endpoint);
+        const char *catalogs[] = {"queries", "channels"};
+        for (size_t kind = 0u; kind < 2u; ++kind) {
+            const json_t *rows = json_object_get(state, catalogs[kind]);
+            if (rows && !json_is_array(rows)) return snag_errno(EPROTO);
+            bool changed = !json_equal(rows, json_object_get(connection->state, catalogs[kind]));
+            for (size_t i = 0u; changed && i < json_array_size(rows); ++i) {
+                const json_t *row = json_array_get(rows, i);
+                const char *endpoint = snag_json_bounded_string(json_object_get(row, "endpoint"),
+                    SNAG_CONFIG_IRC_ENDPOINT_MAX);
+                const json_t *route = json_object_get(row, "route");
+                if (!endpoint || !json_is_object(route) ||
+                    (json_object_get(route, "room") != NULL) != (kind == 1u))
+                    return snag_errno(EPROTO);
+                struct snag_vm_buffer *b = snag_vm_buffer_get(connection, route, true);
+                if (!b) return -1;
+                (void)snag_strcpy(b->endpoint, sizeof(b->endpoint), endpoint);
+            }
         }
         json_decref(connection->state);
         connection->state = json_incref(state);
@@ -811,7 +825,7 @@ receive(struct snag_vm_connection *connection, const json_t *value)
                 buffer_message(buffer, error && *error ? error :
                     "Command completed; :reports reopens output");
             } else buffer_message(buffer, json_is_object(buffer->route) ?
-                "Private message admitted" : "Prompt committed");
+                "Conversation message admitted" : "Prompt committed");
         } else if (!strcmp(status, "unknown") || !strcmp(status, "rejected")) {
             buffer->submitting = false;
             buffer->query = false;
@@ -912,8 +926,7 @@ snag_vm_connection_step(struct snag_vm_connection *connection)
     if (connection->bound && connection->detaching && !connection->detach_sent &&
         !connection->channel.output && !connection->draft_wait) {
         for (struct snag_vm_buffer *b = connection->buffers; b; b = b->next) {
-            if (!snag_vm_buffer_writable(b) ||
-                (json_is_object(b->route) && !connection->irc_queries)) continue;
+            if (!snag_vm_buffer_writable(b) || !snag_vm_buffer_supported(b)) continue;
             if (connection->drafts && !b->reconcile_pending && !b->draft_conflict &&
                 (b->draft_get || !b->draft_ready || b->draft_dirty)) return;
         }

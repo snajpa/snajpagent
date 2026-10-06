@@ -96,9 +96,9 @@ struct snag_term {
     char *search_original;
     struct snag_irc_destinations *destinations;
     struct snag_irc_target destination;
-    struct snag_irc_query_target query;
-    uint64_t query_unread;
-    bool query_tabs, view_reverse;
+    struct snag_irc_conversation_target conversation;
+    uint64_t conversation_unread;
+    bool conversation_tabs, view_reverse;
     const struct snag_term_command *commands;
     size_t cursor;
     size_t command_count;

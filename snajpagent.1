@@ -475,9 +475,9 @@ At the end of a finished message, outside a command or nickname being completed,
 Tab queues a local follow-up while your model is active.  In chat this still
 does not send to the room; Enter does that.  While idle, Tab inserts spaces
 instead. With an empty draft, Tab cycles through rollout, connected rooms and
-opened private queries. Once query tabs exist, chat Tab also cycles with a draft
+opened private queries. Once conversation tabs exist, chat Tab also cycles with a draft
 present, after command/nickname completion. Shift-Tab cycles backwards from any
-view with its draft intact. Each private query retains its own draft.
+view with its draft intact. Each conversation retains its own draft.
 .PP
 Completion itself never submits, sends or queues.  Multiple matches expand
 their common beginning; another consecutive Tab lists the choices.  No match
@@ -666,7 +666,7 @@ Empty Tab cycles through rollout, each room and opened private queries without s
 Returning displays output
 that arrived while the view was hidden.  To complete a nickname, type @bu and
 Tab, then finish your message after the added space.  Enter sends it to the
-selected conversation. With query tabs open, chat Tab switches tabs; otherwise
+selected conversation. With conversation tabs open, chat Tab switches tabs; otherwise
 Tab at the end queues it locally while your own model is active.
 .B /chat
 and
@@ -1164,7 +1164,7 @@ the cursor after it.  Multiple matches expand their common prefix; a second
 consecutive Tab lists choices while preserving the draft and cursor.  No match
 leaves the draft unchanged.  Completion never submits, sends or queues text.
 .IP
-Outside a completion, chat Tab cycles with its draft intact once private query
+Outside a completion, chat Tab cycles with its draft intact once conversation
 tabs exist. Otherwise, Tab queues a later local turn while active, or inserts
 spaces while idle. In rollout, Tab at the end of a finished ordinary message
 queues it; Tab at the end of /statu or @bu still completes that word first.
@@ -1281,13 +1281,14 @@ starting a private turn. Hidden-view output is buffered for display on return.
 Both views append to terminal scrollback;
 neither is a full-screen TUI.
 .PP
-Private queries join the Tab cycle after the connected rooms. Shift-Tab moves
+Additional operator channels and private queries join the Tab cycle after the
+endpoint default rooms. Shift-Tab moves
 backwards and preserves a nonempty draft. In chat, Tab with a nonempty draft
-also cycles once private query tabs exist; command and nickname completion
-still take precedence. The prompt names the query peer and operator/agent
-identity. A DM unread count reports hidden incoming messages and clears for a
-query when it is selected. Tab selection never sends or queues its draft.
-Rollout, each channel destination and each query keep separate process-local drafts.
+also cycles once conversation tabs exist; command and nickname completion
+still take precedence. The prompt names the channel or query peer and operator/agent
+identity. A chat unread count reports hidden incoming messages and clears for a
+conversation when it is selected. Tab selection never sends or queues its draft.
+Rollout, each channel and each query keep separate process-local drafts.
 .PP
 All default prompts share an activity slot, a goal slot, a space, the local
 HH:MM:SS timestamp, and another space, in that order.
@@ -2078,20 +2079,25 @@ with an empty draft to recover its text if needed. A refused submission also
 remains recoverable. Each conversation retains its own pending submission and
 frozen recipient. A nick or connection change preserves the old draft and rejects
 sending it to a different recipient. File attachments remain under development.
-.SS "Private conversation windows"
+.SS "Channel and private conversation windows"
 Enter /query NICK or /query ENDPOINT/NICK in an attached composer to open an
 operator private conversation in that window. A successful command changes the
 requesting window while it is still focused, displaying that composer, and its
 next draft is empty. Otherwise the conversation remains available in :buffers.
 Private replies go to the captured peer without adding model input.
+Use /chat ENDPOINT/#CHANNEL for a known channel or /join ENDPOINT/#CHANNEL
+to join an external channel as the operator. Each pane keeps its exact channel
+membership; PART, KICK and reconnect reject stale sends. Use /chat or /join
+explicitly to select the current membership before composing a new send.
 .PP
 .B :buffers
-lists the workspace's rollout and private conversation buffers, including
+lists the workspace's rollout, channel and private conversation buffers, including
 operator and read-only agent conversations. The list shows buffer IDs, qualified
 addresses, identity, drafts and pending submissions. Use / to filter, then Enter
 to open the selected buffer in the current window.
 .B :buffer ADDRESS
-or :b ADDRESS opens a known buffer by session/endpoint/nick address; session names
+or :b ADDRESS opens a known operator buffer by session/endpoint/nick or
+session/endpoint/#channel address; session names
 and ID prefixes are accepted. :buffer ID accepts a unique ID prefix from :buffers,
 which also distinguishes retained routes after a nick or connection change.
 An ambiguous address leaves the selected buffer unchanged.
@@ -2103,7 +2109,7 @@ for its destination cycle.
 .B :vsp [ADDRESS_OR_ID]
 and :sp [ADDRESS_OR_ID] create vertical or horizontal splits and select a known
 buffer there. Without an argument they display another view of the current
-buffer. Enter /query in a split's composer to open a new conversation there.
+buffer. Enter /query or /chat in a split's composer to open a conversation there.
 A failed buffer lookup leaves the new split displaying its previous buffer.
 .PP
 Query history, gg/G, search, visual selection and copy read only that connection,
@@ -2111,9 +2117,12 @@ conversation and local identity across retained connection generations.
 A search announces its match after the viewport is loaded; following navigation
 and selection keys wait for that read. Beginning a new composer edit interrupts
 a pending viewport move and preserves the draft.
-The operator can inspect agent private conversations; their composers are
-read-only. Query windows and their drafts survive named-workspace resume.
-:q closes a query window and preserves its owner; :qa retains its explicit
+Channel history includes public events from both local identities and compatible
+legacy room records. Case comparison follows the captured server rules. Other
+rooms, endpoints and private messages stay outside that channel view.
+The operator can inspect agent conversations; their composers are read-only.
+Conversation windows and their drafts survive named-workspace resume.
+:q closes a conversation window and preserves its owner; :qa retains its explicit
 shutdown meaning for all controlled owners. :history returns to the rollout.
 .PP
 Successful /msg, /notice and private /me commands preserve the conversation
@@ -2231,7 +2240,7 @@ admits that saved reference before accepting following keyboard input. The curre
 handoff returns automatically after finite /config or /send operations;
 other commands return on /s d.
 .PP
-The backend offers revisioned rollout and operator-query drafts. Bound controllers can read,
+The backend offers revisioned rollout and operator-conversation drafts. Bound controllers can read,
 replace and subscribe to a draft, using its expected revision to reject stale edits.
 Revision-aware admission clears only the submitted revision; newer drafts survive.
 These drafts stay in owner memory and do not enter model history until submitted.
@@ -2248,9 +2257,14 @@ stay outside model input, including during an active turn. Their receipts
 acknowledge durable local admission; delivery status remains in IRC events.
 Messages consisting only of empty or stripped lines are rejected with their drafts retained.
 .PP
-/query returns a selection route to the requesting frontend without changing
-the classic tab. /msg and /notice send explicitly; /me uses the supplied query.
-These owner capabilities support the Vim conversation windows under development.
+The irc_channels capability adds channel catalogs and routes with room,
+membership, endpoint and case mapping. Public history spans local identities;
+sends validate the captured operator membership. Older owners retain their
+advertised capabilities and report unsupported channel control.
+.PP
+/query, /chat and /join return a selection route to the requesting frontend
+without changing the classic tab. /msg and /notice send explicitly; /me uses
+the supplied conversation.
 Commands requiring a whole terminal must originate from the rollout.
 Existing owners retain their advertised capabilities. Builds using
 .B WITH_VM=0
@@ -3140,8 +3154,11 @@ do not transfer them to another endpoint.  Already accepted model input remains
 eligible after final disconnection.  Old model sends are not redirected into
 replacement rooms; they receive normal not-performed tool results.
 .TP
-.B /chat
-Select the public chat transcript, including when offline.
+.BR /chat " [" address "]"
+Select the current/default channel, including its retained history while offline.
+An address selects a known operator channel without joining it. Use #channel,
+endpoint/#channel, session/endpoint/#channel or channel:ID. A bare channel uses
+the focused conversation's endpoint, or the sole endpoint from rollout.
 .TP
 .B /rollout
 Select local model activity.
@@ -3160,27 +3177,43 @@ advertised case mapping. A query:ID selects that retained conversation;
 a stale conversation remains readable and rejects sends.
 .TP
 .BR /msg " " address " " text
-Send a private message as the operator, preserving the focused tab. Use the same
-nick addresses or query:ID selectors as /query. Text after the address is kept
+Send a message as the operator, preserving the focused tab. Use the same
+nick addresses or query:ID selectors as /query, or channel addresses and
+channel:ID selectors for a joined operator channel. Sending never joins a channel. Text after the address is kept
 literally, including #, slashes and quotes. Missing text sends nothing.
 .TP
 .BR /notice " " address " " text
-Send a private NOTICE as the operator, preserving focus. Uses /msg addressing.
+Send a NOTICE as the operator, preserving focus. Uses /msg addressing.
 .TP
 .BR /me " " text
-Send a CTCP action to the selected operator query. Agent queries are read-only.
-The current development commands support private nick targets; channel
-addressing and channel actions remain under development. Enter in channel chat
-and /N or /all continue to send ordinary channel messages.
+Send a CTCP action to the selected operator channel or query. Agent conversations
+are read-only. /N and /all send ordinary messages to endpoint default rooms.
+.TP
+.BR /join " " address
+Join an external channel as the operator and select its conversation. Uses /chat
+addressing. The server must confirm membership before messages can be sent.
+The agent keeps its own memberships. Hosted channel actions remain under development.
+.TP
+.BR /part " [" address " [" reason "]]"
+Leave the selected or addressed operator channel. Queuing PART immediately
+invalidates the old membership; a rejected stale send retains its draft. Rejoin
+explicitly with /join after the server confirms PART. Closing a tab or pane
+never leaves a channel.
 .TP
 .BR /topic " [" text "]"
-Show the IRC snapshot, or change the topic in the selected room. Live room
+In an external channel conversation, request its current topic or queue a topic
+change using the captured membership. A private query reports the channel scope
+requirement. From rollout or legacy hosted chat, show the IRC snapshot or change
+the endpoint default room topic. Live room
 policy decides authorization: mode +t requires the local operator to have op
-status; without +t any joined member may change it. Text is at most 280 bytes,
-without newlines.
+status; without +t any joined member may change it. Hosted topics accept at most
+280 bytes. External topics must fit the server's line budget. Newlines are rejected.
 .TP
 .B /names
-Show numbered destinations, selection, endpoints, members, and channel-operator flags.
+In an external channel conversation, show its cached topic/member state and
+request a NAMES refresh. Repeating /names displays the refreshed cache. Private
+queries report the channel scope requirement. From rollout or legacy hosted
+chat, show numbered destinations, selection, endpoints, members and operator flags.
 .TP
 .BR /N " [" text "]"
 Select numbered destination N.  With text, send there once without changing

@@ -308,12 +308,14 @@ static const struct snag_term_command commands[] = {
     {"/voice mute", "stop microphone forwarding; /voice unmute resumes fresh audio"},
     {"/voice devices", "list exact capture and playback device names"},
     {"/play asset:ID", "play the first 60s of an accepted audio asset; /play stop interrupts"},
-    {"/chat", "show IRC room activity"},
+    {"/chat [ADDRESS]", "show the selected or addressed channel"},
     {"/rollout", "show local model activity"},
     {"/query [ADDRESS [TEXT]]", "open a private chat; no address lists opened queries"},
-    {"/msg ADDRESS TEXT", "send a private message without changing tabs"},
-    {"/notice ADDRESS TEXT", "send a private notice without changing tabs"},
-    {"/me TEXT", "send an action to the selected operator query"},
+    {"/msg ADDRESS TEXT", "send to a nick or channel without changing tabs"},
+    {"/notice ADDRESS TEXT", "send a notice to a nick or channel"},
+    {"/me TEXT", "send an action to the selected operator conversation"},
+    {"/join ADDRESS", "join a channel as the operator and open its conversation"},
+    {"/part [ADDRESS [REASON]]", "leave the selected or addressed operator channel"},
     {"/topic [TEXT]", "show/set selected room topic"},
     {"/nick [NICK]", "show nicks/set your operator nick (shared via IRC)"},
     {"/steering [mentions|all|clear]", "show/set steering admission for next turn"},
@@ -2840,11 +2842,12 @@ network_command(struct app_state *app, const char *line, bool *handled)
 }
 
 int
-snag_app_irc_select_query(struct app_state *app, const struct snag_irc_query_target *target)
+snag_app_irc_select_conversation(struct app_state *app,
+    const struct snag_irc_conversation_target *target)
 {
 #if SNAJPAGENT_VM
     if (app->view_command) {
-        json_t *route = snag_view_query_route(target);
+        json_t *route = snag_view_conversation_route(target);
         if (!route) return -1;
         json_decref(app->view_command->selection);
         app->view_command->selection = route;
@@ -2852,15 +2855,15 @@ snag_app_irc_select_query(struct app_state *app, const struct snag_irc_query_tar
     }
 #endif
     return snag_ui_send(&app->ui, (struct snag_ui_command){
-        .kind = SNAG_UI_QUERY_SELECT, .data.query = target});
+        .kind = SNAG_UI_CONVERSATION_SELECT, .data.conversation = target});
 }
 
 static int
-send_operator_query(struct app_state *app, const char *line, const char *text,
+send_operator_conversation(struct app_state *app, const char *line, const char *text,
                     enum snag_irc_event_kind kind)
 {
-    struct snag_irc_query_target frozen = app->ui.input_query;
-    const struct snag_irc_query_target *target = &frozen;
+    struct snag_irc_conversation_target frozen = app->ui.input_conversation;
+    const struct snag_irc_conversation_target *target = &frozen;
     char id[SNAG_ID_HEX_LEN + 1u] = {0};
     if (app->ui.input_interface && app->ui.view_request[0]) {
         memcpy(id, app->ui.view_request, sizeof(id));
@@ -2871,11 +2874,11 @@ send_operator_query(struct app_state *app, const char *line, const char *text,
     int rc;
     if (target->identity != SNAG_IRC_OPERATOR) {
         rc = snag_fail(error, sizeof(error), EACCES,
-            "agent query is read-only; open an operator query to reply");
+            "agent conversation is read-only; open an operator conversation to reply");
     } else if (kind != SNAG_IRC_MESSAGE && kind != SNAG_IRC_NOTICE) {
         rc = snag_fail(error, sizeof(error), EINVAL, "this command requires a channel");
     } else {
-        rc = snag_irc_query_send(app->irc, target, kind, text, false,
+        rc = snag_app_irc_conversation_send(app, target, kind, text, false,
             &report, error, sizeof(error));
     }
     bool accepted = report.len != 0u;
@@ -2887,7 +2890,7 @@ send_operator_query(struct app_state *app, const char *line, const char *text,
         return result;
     }
     if (rc < 0) {
-        if (snag_buf_printf(&report, "%s", error[0] ? error : "private send failed") < 0 ||
+        if (snag_buf_printf(&report, "%s", error[0] ? error : "conversation send failed") < 0 ||
             snag_buf_terminate(&report) < 0 ||
             app_error(app, (const char *)report.data) < 0) goto fail;
         if (!accepted && snag_ui_send(&app->ui, (struct snag_ui_command){
@@ -2911,9 +2914,9 @@ send_operator_routed(struct app_state *app, const char *line, const char *text,
     size_t body;
     enum snag_irc_target_command command = snag_irc_target_parse(line, strlen(line),
         &destination, &body);
-    if (app->ui.input_view == SNAG_RENDER_CHAT && app->ui.input_query.conversation[0] &&
+    if (app->ui.input_view == SNAG_RENDER_CHAT && app->ui.input_conversation.conversation[0] &&
         kind != SNAG_IRC_NICK && command == SNAG_IRC_TARGET_NONE)
-        return send_operator_query(app, line, text, kind);
+        return send_operator_conversation(app, line, text, kind);
 
     struct snag_buf report = {.max = 8192u};
     rc = snag_irc_send_route(app->irc, &app->ui.input_route, false, kind,
@@ -3623,7 +3626,7 @@ view_command_native(const char *line)
     verb[length] = '\0';
     if (snag_string_in(verb, "/help /? /status /history /model /fast /effort /context "
         "/state /goal /steering /banner /configure /compact /yield /verbose /cat "
-        "/query /msg /notice /me")) return true;
+        "/query /msg /notice /me /chat /join /part /names /topic")) return true;
     if (strcmp(verb, "/session") && strcmp(verb, "/s")) return false;
     const char *argument = line + length;
     while (isspace((unsigned char)*argument)) ++argument;
@@ -3723,7 +3726,7 @@ view_input_command(struct app_state *app, const char *line, bool active,
     *prompt_ready = false;
     bool terminal = app->ui.input_terminal_command;
     if (!terminal && !view_command_native(line)) {
-        if (app->ui.input_query.conversation[0])
+        if (app->ui.input_conversation.conversation[0])
             return snag_ui_view_result(&app->ui, id, "rejected", 0u,
                 "open the rollout to use this command's whole-terminal interface");
         json_t *result = json_pack("{s:s,s:s,s:I,s:s}", "id", id, "status", "terminal",
@@ -3800,12 +3803,12 @@ snag_app_input_command(struct app_state *app, const char *line, bool active,
 {
 #if SNAJPAGENT_VM
     if (app->ui.input_interface && app->ui.view_request[0] &&
-        app->ui.input_view == SNAG_RENDER_CHAT && app->ui.input_query.conversation[0] &&
+        app->ui.input_view == SNAG_RENDER_CHAT && app->ui.input_conversation.conversation[0] &&
         !snag_prompt_command(line)) {
         *handled = true;
         *prompt_ready = false;
         const char *text = line[0] == '/' && line[1] == '/' ? line + 1 : line;
-        return send_operator_query(app, line, text, SNAG_IRC_MESSAGE);
+        return send_operator_conversation(app, line, text, SNAG_IRC_MESSAGE);
     }
     if ((app->ui.input_interface || app->ui.input_terminal_command) &&
         app->ui.view_request[0] && snag_prompt_command(line))

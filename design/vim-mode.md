@@ -20,8 +20,8 @@ memberships. Pending PART invalidates the old route and blocks rejoin until its
 server acknowledgement. Durable local channel state retains rejoin intent and
 conversation IDs across session resume, with fresh generation/membership tokens.
 These lifecycle records stay outside model admission and channel replay. Legacy
-channel records remain readable. The public CLI/VM channel frontend and hosted
-room actions are still being integrated.
+channel records remain readable. External operator channels now use the common CLI and VM frontend described below.
+Hosted room actions remain in progress.
 
 Model channel checkpoint: irc_state lists agent channel IDs and joined status;
 irc_send/irc_topic accept exact IDs and session/endpoint/#room addresses.
@@ -52,7 +52,7 @@ unwritten frames and marks started sends uncertain. Public unlabeled echo order
 remains insufficient to confirm a channel send. These outgoing records remain
 outside public replay. A successful operator receipt admits its final message
 once; failed, uncertain and agent receipts stay outside model input.
-Channel frontend and hosted sends remain in progress.
+Hosted channel sends remain in progress.
 
 Receipt bodies retain the server's final text/action and optional source ID.
 The optional v2 routing flag revised marks a correction to the local pending body;
@@ -62,19 +62,31 @@ same states. A send to the local nick suppresses its separate delivered self-cop
 when echo-message supplies the receipt. Operator queries remain private in both
 interfaces, including builds with WITH_VM=0.
 
-Conversation frontend checkpoint: version8 workspace snapshots retain exact
-query routes per window and separate draft/editor/pending state per conversation,
+Conversation frontend checkpoint: version9 workspace snapshots retain exact
+query and channel routes per window and separate draft/editor/pending state per conversation,
 with one owner connection per session. Earlier flat rollout snapshots remain
-readable. Owner query metadata populates :buffers without changing focus; agent
-queries are read-only. /query selects its originating focused window only while
+readable. Owner conversation metadata populates :buffers without changing focus; agent
+conversations are read-only. /query, /chat and /join select its originating focused window only while
 its composer remains current and empty. :buffer accepts known qualified addresses
 or picker IDs; :sp/:vsp can open them in a new window, and :bn/:bp cycle buffers.
 Successful private sends retain the current pane while retaining command reports.
 Query projection, search, navigation and copy filter stable connection/conversation
 IDs and local identity across retained epochs. Empty filtered journal pages advance
 until matching events or the pinned boundary; every read remains cancellable.
-Channel panes, activity badges, protocol/recovery and complete remote qualification
+Activity badges, protocol/recovery and complete remote qualification
 remain in the delivery plan below.
+
+Operator channel checkpoint: a shared presentation selector and tab/draft path
+serves queries and channels; runtime sends keep kind-specific validators. Channel
+selectors capture room/membership and server case mapping alongside the connection,
+conversation, generation and identity. The irc_channels capability is separate
+from irc_queries. /join controls only operator membership; /chat opens retained
+history without joining. /part immediately invalidates queued sends. /names shows
+cached state and requests refresh; /topic, /msg, /notice and /me use captured scope.
+Classic tabs keep drafts through both cycle directions. VM channel history includes
+both local roles and compatible legacy room records while excluding private queries.
+Version9 reads earlier snapshots; exact five-key query routes remain compatible.
+Qualified buffer addresses resolve saved session names and select operator buffers.
 
 Selection checkpoint: character, line and rectangular transcript/report selection
 now uses original source endpoints and a pinned history boundary. The background
