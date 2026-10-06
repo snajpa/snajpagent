@@ -62,12 +62,22 @@ def normalized_modes(modes):
 
 
 class Terminal:
-    def __init__(self, root, args=(), rows=12, columns=100, transport=()):
+    def __init__(self, root, args=(), rows=12, columns=100, transport=(), extra_env=None):
+        # Ordinary UI fixtures keep all yanks inside their register. Clipboard
+        # fixtures opt in with their own isolated policy and destination.
+        config = root / 'state' / 'config.ini'
+        config.parent.mkdir(mode=0o700, exist_ok=True)
+        settings = config.read_text() if config.exists() else ''
+        if '[terminal]' not in settings:
+            config.write_text(settings + '\n[terminal]\nclipboard=off\n')
         self.master, self.slave = pty.openpty()
         self.original = normalized_modes(termios.tcgetattr(self.slave))
         self.receipt = root / ('terminal-' + uuid.uuid4().hex + '.json')
         self.resize(rows, columns)
         env = dict(os.environ, HOME=str(root), TERM='xterm-256color')
+        if extra_env:
+            env.update(extra_env)
+            env = {key: value for key, value in env.items() if value is not None}
         for key in ('TMUX', 'TMUX_PANE', 'STY', 'SNAJPAGENT_DOTDIR', 'OPENAI_API_KEY'):
             env.pop(key, None)
 

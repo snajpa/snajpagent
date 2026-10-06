@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "clipboard.h"
+#include "base64.h"
 #include "fs.h"
 #include "process_host.h"
 
@@ -384,4 +385,47 @@ snag_clipboard_close(struct snag_clipboard *copy)
     if (copy->fd >= 0) (void)close(copy->fd);
     free(copy->text);
     free(copy);
+}
+
+struct osc_output {
+    char *bytes;
+    size_t length, capacity;
+};
+
+static int
+osc_append(void *opaque, const unsigned char *bytes, size_t length)
+{
+    struct osc_output *output = opaque;
+    if (length > output->capacity - output->length) return snag_errno(EOVERFLOW);
+    memcpy(output->bytes + output->length, bytes, length);
+    output->length += length;
+    return 0;
+}
+
+int
+snag_clipboard_osc_next(struct snag_clipboard_osc *osc, char *out, size_t capacity)
+{
+    if (!osc || !osc->source || !out || capacity < 16u) return snag_errno(EINVAL);
+    if (osc->done) return 0;
+    struct snag_clipboard_result result;
+    snag_clipboard_result(osc->source, &result);
+    if (result.state != SNAG_CLIPBOARD_READY || osc->offset > result.length)
+        return snag_errno(EINVAL);
+    struct osc_output output = {.bytes = out, .capacity = capacity};
+    if (!osc->begun && osc_append(&output, (const unsigned char *)"\033]52;c;", 7u) < 0)
+        return -1;
+    unsigned char bytes[4095];
+    size_t size = ((capacity - output.length - 1u) / 4u) * 3u;
+    if (size > sizeof(bytes)) size = sizeof(bytes);
+    if (size > result.length - osc->offset) size = (size_t)(result.length - osc->offset);
+    if (snag_clipboard_read(osc->source, osc->offset, bytes, size) < 0) return -1;
+    struct snag_base64_stream encoder = {0};
+    if (snag_base64_write(&encoder, bytes, size, osc_append, &output) < 0 ||
+        snag_base64_finish(&encoder, osc_append, &output) < 0) return -1;
+    bool done = osc->offset + size == result.length;
+    if (done && osc_append(&output, (const unsigned char *)"\a", 1u) < 0) return -1;
+    osc->offset += size;
+    osc->begun = true;
+    osc->done = done;
+    return (int)output.length;
 }

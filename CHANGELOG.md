@@ -4,11 +4,12 @@
 
 ## Unreleased
 
-- Add the native clipboard worker for workspace/remote integration, with
-  asynchronous UTF-8 validation, SHA256, cancellation before publication and
-  distinct write/failure outcomes. Use literal plain-text native publication
-  on macOS and fixed-argument Wayland/X11 helpers. Frontend copy actions and the
-  remote protocol remain under development.
+- Copy explicit Vim yanks to the workstation clipboard, with asynchronous
+  validation/publication, checked remote chunks, retries and retained result
+  receipts. Preserve the register on external failure and serialize newer yanks.
+  Use plain-text native macOS publication or fixed-argument Wayland/X11 helpers;
+  select native, explicit unconfirmed OSC 52 or off through [terminal] clipboard.
+  Keep protocol replies out of commands and publish only at the outer wrapper.
 
 - Place Vim workspace cursors at the clicked grapheme, select transcript/report
   text by dragging, scroll the hovered window without taking keyboard focus,

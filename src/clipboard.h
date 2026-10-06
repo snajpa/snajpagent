@@ -5,6 +5,8 @@
 #include "base.h"
 #include "wake.h"
 
+enum snag_clipboard_policy { SNAG_CLIP_NATIVE, SNAG_CLIP_OSC52, SNAG_CLIP_OFF };
+
 enum snag_clipboard_backend_kind {
     SNAG_CLIPBOARD_NONE, SNAG_CLIPBOARD_MAC, SNAG_CLIPBOARD_WAYLAND, SNAG_CLIPBOARD_X11
 };
@@ -45,5 +47,14 @@ int snag_clipboard_publish(struct snag_clipboard *);
  * report the actual result; cancellation cannot promise to restore a clipboard. */
 bool snag_clipboard_cancel(struct snag_clipboard *);
 void snag_clipboard_close(struct snag_clipboard *);
+
+/* The terminal owner serializes these chunks with its display output. Source
+ * must remain READY and immutable. Emission has no terminal write receipt. */
+struct snag_clipboard_osc {
+    struct snag_clipboard *source;
+    uint64_t offset;
+    bool begun, done;
+};
+int snag_clipboard_osc_next(struct snag_clipboard_osc *, char *out, size_t capacity);
 
 #endif

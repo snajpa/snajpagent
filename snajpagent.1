@@ -1474,9 +1474,19 @@ workstation, for example:
 .nf
     [terminal]
     download_dir = ~/Incoming files
+    clipboard = native
 .fi
 .PP
-Use an absolute destination or a path beginning with ~/. The client creates
+Clipboard policy is native (the default), osc52 or off. Native publication uses
+macOS plain-text pasteboard access, wl-copy in a Wayland session or xclip in an
+X11 session. osc52 explicitly sends a terminal clipboard sequence and reports
+its acceptance as unconfirmed. off disables clipboard requests at this wrapper.
+Only the outer wrapper publishes when remote wrappers are nested; its policy
+is authoritative. Each clipboard operation requires an explicit Vim yank.
+The remote host remains trusted to originate these requests; the protocol
+has no clipboard-read operation.
+.PP
+The download directory accepts an absolute path or one beginning with ~/. The client creates
 the final directory if its parent exists, resolves it before receiving, and
 preserves existing files through collision-safe names. Actual landed paths
 appear in download receipts in the remote conversation, with the prompt and
@@ -1785,8 +1795,37 @@ Copy runs in the background with source-byte/event progress. Ctrl-C cancels it
 before interrupting an owner. An empty motion, canceled copy or failed copy
 preserves the previous register. Large registers use private temporary files; copying has no history-size
 quota. Pasting retains the composer's existing input-size limit. Registers belong
-to the current frontend and are shared by its session composers. Workstation
-clipboard publication is still pending in this development interface.
+to the current frontend and are shared by its session composers.
+.PP
+An explicit yank also attempts a workstation clipboard copy according to
+[terminal] clipboard. Deletes and changes affect only the workspace register.
+Preparation, transfer and publication run alongside editing and owner activity.
+A newer yank cancels an earlier uncommitted copy and queues the new selection.
+Ctrl-C cancels clipboard work before interrupting the model. Cancellation accepted
+before publication leaves the previous clipboard intact; publication already
+underway reports its actual result or an uncertain outcome. External failure
+preserves the new workspace register.
+.PP
+Run remote workspaces through the workstation wrapper, for example:
+.PP
+.nf
+    snajpagent remote ssh -t host snajpagent vm
+    snajpagent remote mosh host snajpagent vm
+.fi
+.PP
+The wrapper stages sequenced UTF-8 chunks privately and verifies length and SHA256
+before publishing. Retries recover the existing result without copying twice.
+Transfer byte progress remains visible, including on the slower Mosh title-state
+path. Clipboard protocol input is kept out of commands and drafts.
+With no responding wrapper, a local workspace uses its native backend; an SSH or
+Mosh environment requires the wrapper for native workstation access. Explicit
+osc52 policy permits direct terminal output, whose size and acceptance depend on
+the terminal. Its status says "Clipboard sequence sent; terminal acceptance
+unconfirmed". Confirmed native writes say "Clipboard written" or "Workstation
+clipboard written". Short capability waits precede local fallback.
+During a direct terminal sequence, repainting waits for its complete emission;
+input, owner activity and retained output continue. Quit, suspend and classic
+handoff settle or cancel a pending copy before transferring terminal ownership.
 .PP
 .B :sessions
 opens the agent picker;

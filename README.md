@@ -408,8 +408,11 @@ Search the current transcript or report with `/TEXT`, `?TEXT` and `n`/`N`.
 `/search TEXT` invokes the same local search from the composer; Ctrl-C cancels it.
 Select transcript/report text with `v`, `V` or Ctrl-V, yank with `y`, then use
 `p`/`P` to put it in the session composer. Copies preserve logical lines and
-Unicode characters; large yanks use a private file-backed register. Numbered
-`gg`/`G` and counted motions reach old pages; rectangular paste inserts columns
+Unicode characters; large yanks use a private file-backed register. Explicit
+yanks also copy to the workstation clipboard, including through `snajpagent remote`.
+Choose `native`, `osc52` or `off` with `[terminal] clipboard`; OSC 52 reports
+unconfirmed terminal acceptance. Numbered `gg`/`G` and counted motions reach old
+pages; rectangular paste inserts columns
 into draft lines as one undoable edit.
 Click to place a cursor, drag transcript/report text to select it, and scroll
 the hovered window with the wheel. Drag separators to resize splits;

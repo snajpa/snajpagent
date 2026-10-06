@@ -29,7 +29,8 @@ struct snag_vm_motion snag_vm_editor_motion(struct snag_vm_editor *, const char 
 
 enum snag_vm_edit_result {
     SNAG_VM_EDIT_ERROR = -1, SNAG_VM_EDIT_UNUSED, SNAG_VM_EDIT_DONE,
-    SNAG_VM_EDIT_INSERT, SNAG_VM_EDIT_NORMAL, SNAG_VM_EDIT_SUBMIT, SNAG_VM_EDIT_CENTER
+    SNAG_VM_EDIT_INSERT, SNAG_VM_EDIT_NORMAL, SNAG_VM_EDIT_SUBMIT, SNAG_VM_EDIT_CENTER,
+    SNAG_VM_EDIT_YANK
 };
 
 void snag_vm_editor_reset(struct snag_vm_editor *);

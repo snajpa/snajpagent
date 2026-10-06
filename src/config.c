@@ -689,6 +689,18 @@ snag_config_model_limit_exact(const struct snag_config *config,
 }
 
 static int
+parse_clipboard(const char *value, enum snag_clipboard_policy *policy)
+{
+    static const char *const names[] = {"native", "osc52", "off"};
+    char name[16];
+    if (copy_value(name, sizeof(name), value) < 0) return -1;
+    for (size_t i = 0u; i < sizeof(names) / sizeof(names[0]); ++i) {
+        if (!strcmp(name, names[i])) { *policy = (enum snag_clipboard_policy)i; return 0; }
+    }
+    return snag_errno(EINVAL);
+}
+
+static int
 parse_setting(struct parse_state *state, const char *key, const char *value)
 {
     if(state->section==SECTION_AUDIO)return parse_audio(state,key,value);
@@ -696,6 +708,11 @@ parse_setting(struct parse_state *state, const char *key, const char *value)
     struct snag_provider_config *provider = &config->providers[state->provider_index];
     struct snag_model_limit_config *limit = &config->model_limits[state->model_limit_index];
     struct snag_irc_config *irc = &config->irc;
+    if (state->section == SECTION_TERMINAL && !strcmp(key, "clipboard")) {
+        if (claim_key(state, key) < 0 || parse_clipboard(value, &config->terminal_clipboard) < 0)
+            goto invalid;
+        return 0;
+    }
     if (state->section == SECTION_MODEL_LIMIT) {
         const struct {
             const char *key;
@@ -1123,19 +1140,21 @@ out:
 
 int
 snag_config_terminal(const char *explicit_path, const char *dotdir, char *downloads,
-                      size_t capacity, char *error, size_t error_size)
+                      size_t capacity, enum snag_clipboard_policy *clipboard,
+                      char *error, size_t error_size)
 {
     char *path = snag_config_path(explicit_path, dotdir, error, error_size);
     if (!path) return -1;
     struct snag_buf text;
     snag_buf_init(&text, SNAG_CONFIG_FILE_MAX + 1u);
     int rc = -1;
+    *clipboard = SNAG_CLIP_NATIVE;
     if (!snag_strcpy(downloads, capacity, "~/Downloads")) goto done;
     int loaded = read_config(path, explicit_path != NULL, &text, NULL, NULL, NULL,
                              error, error_size);
     if (loaded < 0) goto done;
     if (loaded == 1) { rc = 0; goto done; }
-    bool terminal = false, seen_section = false, seen_dir = false;
+    bool terminal = false, seen_section = false, seen_dir = false, seen_clipboard = false;
     char *line = (char *)text.data;
     for (unsigned int number = 1u; line; ++number) {
         char *next = strchr(line, '\n');
@@ -1149,9 +1168,14 @@ snag_config_terminal(const char *explicit_path, const char *dotdir, char *downlo
             char *equal = strchr(clean, '=');
             if (!equal) goto invalid;
             *equal = '\0';
-            if (strcmp(trim(clean), "download_dir") || seen_dir ||
-                copy_value(downloads, capacity, trim(equal + 1u)) < 0) goto invalid;
-            seen_dir = true;
+            const char *key = trim(clean), *value = trim(equal + 1u);
+            if (!strcmp(key, "clipboard")) {
+                if (seen_clipboard || parse_clipboard(value, clipboard) < 0) goto invalid;
+                seen_clipboard = true;
+            } else if (!strcmp(key, "download_dir")) {
+                if (seen_dir || copy_value(downloads, capacity, value) < 0) goto invalid;
+                seen_dir = true;
+            } else goto invalid;
         }
         line = next;
         continue;

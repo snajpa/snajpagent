@@ -47,6 +47,44 @@ expect_invalid(const char *path)
 }
 
 static void
+test_clipboard_setting(const char *path)
+{
+    const char *names[] = {"native", "osc52", "off"};
+    for (size_t i = 0u; i < 3u; ++i) {
+        char text[128], directory[128], error[256] = "";
+        int n = snprintf(text, sizeof(text), "[terminal]\nclipboard = %s\n", names[i]);
+        assert(n > 0 && (size_t)n < sizeof(text));
+        write_bytes(path, text, (size_t)n);
+        struct snag_config config;
+        load_config(&config, path, NULL);
+        assert(config.terminal_clipboard == (enum snag_clipboard_policy)i);
+        snag_config_free(&config);
+        enum snag_clipboard_policy policy;
+        assert(snag_config_terminal(path, NULL, directory, sizeof(directory), &policy,
+            error, sizeof(error)) == 0);
+        assert(policy == (enum snag_clipboard_policy)i && !strcmp(directory, "~/Downloads"));
+    }
+    const char *invalid[] = {"[terminal]\nclipboard=auto\n",
+        "[terminal]\nclipboard=off\nclipboard=native\n"};
+    for (size_t i = 0u; i < sizeof(invalid) / sizeof(invalid[0]); ++i) {
+        write_bytes(path, invalid[i], strlen(invalid[i]));
+        expect_invalid(path);
+        char directory[128], error[256] = "";
+        enum snag_clipboard_policy policy;
+        assert(snag_config_terminal(path, NULL, directory, sizeof(directory), &policy,
+            error, sizeof(error)) < 0 && *error);
+    }
+    const char *isolated = "[provider incomplete]\nnot an agent setting\n"
+        "[terminal]\ndownload_dir=~/Incoming\n";
+    write_bytes(path, isolated, strlen(isolated));
+    char directory[128], error[256] = "";
+    enum snag_clipboard_policy policy;
+    assert(snag_config_terminal(path, NULL, directory, sizeof(directory), &policy,
+        error, sizeof(error)) == 0);
+    assert(policy == SNAG_CLIP_NATIVE && !strcmp(directory, "~/Incoming"));
+}
+
+static void
 test_model_change_setting(const char *path)
 {
     struct snag_config config;
@@ -1264,6 +1302,7 @@ main(void)
     test_many_config_secrets(path);
     test_many_model_aliases(path);
     test_spinner_frames(path);
+    test_clipboard_setting(path);
     test_many_providers_and_limits(path);
     test_context_configuration_save(path);
     assert(unlink(path) == 0);

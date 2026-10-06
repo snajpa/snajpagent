@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "vm.h"
 #include "app.h"
+#include "clipboard_transfer.h"
 #include "config.h"
 #include "irc_address.h"
 #include "json.h"
@@ -8,6 +9,7 @@
 #include "session_client.h"
 #include "snajpagent.h"
 #include "term_host.h"
+#include "tmux.h"
 #include "unicode.h"
 #include "vm_connection.h"
 #include "vm_editor.h"
@@ -22,6 +24,7 @@
 
 #include <ctype.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <limits.h>
 #include <signal.h>
 #include <stdio.h>
@@ -121,6 +124,20 @@ struct vm_motion_origin {
     bool follow, incomplete, best_effort;
 };
 
+struct vm_clipboard {
+    struct snag_clipboard *source;
+    struct snag_clipboard_send *send;
+    struct snag_clipboard_osc osc;
+    struct snag_terminal_profile profile;
+    char client[SNAG_TERMINAL_NAME_BYTES];
+    int output, pending_fd;
+    struct snag_buf pending_text;
+    uint64_t pending_length, shown_bytes;
+    unsigned char packet[SNAG_SCREEN_TITLE_MAX + 4u * ((SNAG_SCREEN_TITLE_MAX + 127u) / 128u)];
+    size_t packet_at, packet_length;
+    bool pending, local, canceling, settling;
+};
+
 struct vm {
     struct snag_store store;
     struct snag_config config;
@@ -143,6 +160,7 @@ struct vm {
     struct snag_vm_input input;
     struct snag_buf command, paste;
     struct snag_vm_register reg;
+    struct vm_clipboard clipboard;
     struct snag_session_typeahead classic;
     size_t command_cursor;
     char mode, prefix;
@@ -167,6 +185,8 @@ struct vm {
 static volatile sig_atomic_t stopped, resized;
 
 static json_t *selected_row(struct vm *, const struct vm_window *);
+static int clipboard_step(struct vm *);
+static void clipboard_settle(struct vm *);
 
 static void
 stop_signal(int number)
@@ -1592,6 +1612,52 @@ submit_draft(struct vm *vm)
     else notice(vm, c->message);
 }
 
+static void
+clipboard_pending_clear(struct vm_clipboard *copy)
+{
+    if (copy->pending_fd >= 0) (void)close(copy->pending_fd);
+    copy->pending_fd = -1;
+    snag_buf_free(&copy->pending_text);
+    copy->pending = false;
+}
+
+static bool
+clipboard_cancel(struct vm *vm)
+{
+    struct vm_clipboard *copy = &vm->clipboard;
+    bool active = copy->source || copy->pending;
+    clipboard_pending_clear(copy);
+    if (!copy->source) return active;
+    if (copy->send) {
+        if (!copy->canceling) snag_clipboard_send_cancel(copy->send, snag_monotonic_ms());
+    } else if (!copy->osc.source) (void)snag_clipboard_cancel(copy->source);
+    copy->canceling = true;
+    return active;
+}
+
+static void
+clipboard_yank(struct vm *vm)
+{
+    struct vm_clipboard *copy = &vm->clipboard;
+    if (!vm->reg.length || vm->config.terminal_clipboard == SNAG_CLIP_OFF) return;
+    (void)clipboard_cancel(vm);
+    if (vm->reg.file) {
+        if (fflush(vm->reg.file) != 0) goto failed;
+        copy->pending_fd = dup(fileno(vm->reg.file));
+        if (copy->pending_fd < 0 || snag_fd_cloexec(copy->pending_fd) < 0) goto failed;
+    } else {
+        copy->pending_text.max = SIZE_MAX;
+        if (snag_buf_append(&copy->pending_text, vm->reg.text.data, vm->reg.text.len) < 0)
+            goto failed;
+    }
+    copy->pending_length = vm->reg.length;
+    copy->pending = true;
+    return;
+failed:
+    clipboard_pending_clear(copy);
+    notice(vm, "Yank retained; cannot prepare clipboard copy");
+}
+
 static bool
 composer_key(struct vm *vm, const struct snag_vm_input_event *event)
 {
@@ -1602,7 +1668,8 @@ composer_key(struct vm *vm, const struct snag_vm_input_event *event)
         vm->insert, r->columns, (r->rows > 1u ? r->rows - 1u : 0u) / 3u + 1u,
         vm->windows[vm->focus].composer_top);
     if (result == SNAG_VM_EDIT_UNUSED) return false;
-    if (result == SNAG_VM_EDIT_ERROR) {
+    if (result == SNAG_VM_EDIT_YANK) clipboard_yank(vm);
+    else if (result == SNAG_VM_EDIT_ERROR) {
         notice(vm, errno == ENOTSUP ? "Unsupported composer command" :
             "Cannot edit draft: invalid text, count or input limit reached");
     } else if (result == SNAG_VM_EDIT_INSERT) {
@@ -2243,8 +2310,18 @@ static int
 input_event(void *opaque, const struct snag_vm_input_event *event)
 {
     struct vm *vm = opaque;
-    if (vm->detach_exit || vm->detach_suspend || vm->switch_workspace ||
-        vm->classic_pending) return 0;
+    if (event->kind == SNAG_VM_TERMINAL_REPLY) {
+        (void)snag_clipboard_send_input(vm->clipboard.send, event->text, event->length,
+            snag_monotonic_ms());
+        return 0;
+    }
+    if (vm->clipboard.settling || vm->quit || vm->detach_exit || vm->detach_suspend ||
+        vm->switch_workspace || vm->classic_pending) return 0;
+    if (event->kind == SNAG_VM_KEY && event->key == 'c' &&
+        (event->modifiers & SNAG_VM_CTRL) && clipboard_cancel(vm)) {
+        notice(vm, "Canceling clipboard copy; register retained");
+        return 0;
+    }
     if (event->kind == SNAG_VM_FOCUS && !event->focused) vm->mouse_down = false;
     if (event->kind == SNAG_VM_MOUSE) return mouse_event(vm, event);
     if (event->kind != SNAG_VM_FOCUS) vm->mouse_down = false;
@@ -2489,10 +2566,17 @@ drain_input(struct vm *vm)
 static int
 input_ready(struct vm *vm, int timeout)
 {
+    bool buffered = vm->clipboard.packet_at < vm->clipboard.packet_length;
+    int copy_wait = buffered ? -1 :
+        snag_clipboard_send_wait(vm->clipboard.send, snag_monotonic_ms());
+    if (copy_wait >= 0 && (timeout < 0 || timeout > copy_wait)) timeout = copy_wait;
+    if (!buffered && ((vm->clipboard.pending && !vm->clipboard.source) ||
+        vm->clipboard.osc.source)) timeout = 0;
 #ifdef _WIN32
+    if (vm->clipboard.source && (timeout < 0 || timeout > 20)) timeout = 20;
     int ready = snag_term_input_wait(&vm->terminal, snag_vm_reader_fd(vm->reader), timeout);
 #else
-    size_t count = 2u;
+    size_t count = 4u;
     uint64_t now = snag_monotonic_ms();
     for (struct snag_vm_connection *c = vm->connections; c; c = c->next) {
         if (c->channel.fd >= 0) ++count;
@@ -2507,7 +2591,9 @@ input_ready(struct vm *vm, int timeout)
     fds[0] = (struct pollfd){.fd = STDIN_FILENO,
         .events = vm->classic_pending ? 0 : POLLIN};
     fds[1] = (struct pollfd){.fd = snag_vm_reader_fd(vm->reader), .events = POLLIN};
-    size_t at = 2u;
+    fds[2] = (struct pollfd){.fd = snag_clipboard_fd(vm->clipboard.source), .events = POLLIN};
+    fds[3] = (struct pollfd){.fd = buffered ? vm->clipboard.output : -1, .events = POLLOUT};
+    size_t at = 4u;
     for (struct snag_vm_connection *c = vm->connections; c; c = c->next) {
         if (c->channel.fd < 0) continue;
         fds[at++] = (struct pollfd){.fd = c->channel.fd,
@@ -2967,6 +3053,7 @@ collect(struct vm *vm)
             (void)snprintf(vm->message, sizeof(vm->message), "Yanked %llu bytes%s",
                 (unsigned long long)vm->reg.length, vm->reg.file ? " (file-backed register)" : "");
             vm->dirty = true;
+            clipboard_yank(vm);
         }
         for (size_t i = 0u; !result->error_number && i < vm->count; ++i) {
             if (vm->windows[i].id == target)
@@ -3190,6 +3277,177 @@ enter_screen(struct vm *vm, bool flush_input)
     return rc;
 }
 
+static void
+clipboard_finish(struct vm *vm, const char *message)
+{
+    struct vm_clipboard *copy = &vm->clipboard;
+    if (message) notice(vm, message);
+    snag_clipboard_send_close(copy->send);
+    copy->send = NULL;
+    snag_clipboard_close(copy->source);
+    copy->source = NULL;
+    copy->osc = (struct snag_clipboard_osc){0};
+    if (copy->output >= 0) {
+        (void)close(copy->output);
+        copy->output = -1;
+        if (copy->client[0]) snag_tmux_refresh(&copy->profile, copy->client);
+    }
+    copy->client[0] = 0;
+    copy->local = copy->canceling = false;
+    copy->packet_at = copy->packet_length = 0u;
+    copy->shown_bytes = 0u;
+}
+
+#ifdef _WIN32
+static int
+clipboard_checkpoint(void *opaque)
+{
+    struct vm *vm = opaque;
+    return stopped || vm->quit ? snag_errno(ECANCELED) : input_ready(vm, 0);
+}
+#endif
+
+static int
+clipboard_flush(struct vm *vm)
+{
+    struct vm_clipboard *copy = &vm->clipboard;
+    if (copy->packet_at == copy->packet_length) return 1;
+#ifdef _WIN32
+    if (snag_term_output_write(&vm->terminal, vm->output,
+        copy->packet + copy->packet_at, copy->packet_length - copy->packet_at,
+        true, clipboard_checkpoint, vm) < 0) return -1;
+    copy->packet_at = copy->packet_length;
+#else
+    ssize_t size = write(copy->output, copy->packet + copy->packet_at,
+        copy->packet_length - copy->packet_at);
+    if (size > 0) copy->packet_at += (size_t)size;
+    else if (size < 0 && errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) return -1;
+#endif
+    return copy->packet_at == copy->packet_length ? 1 : 0;
+}
+
+static int
+clipboard_write(struct vm *vm, const char *bytes, size_t length)
+{
+    struct vm_clipboard *copy = &vm->clipboard;
+    if (length > SNAG_SCREEN_TITLE_MAX) return snag_errno(EOVERFLOW);
+    copy->packet_at = copy->packet_length = 0u;
+    bool screen = copy->profile.sty[0] && !copy->profile.tmux[0];
+    while (length) {
+        size_t size = length < 128u ? length : 128u;
+        unsigned char *out = copy->packet + copy->packet_length;
+        if (screen) { memcpy(out, "\033P", 2u); out += 2u; }
+        memcpy(out, bytes, size);
+        if (screen) memcpy(out + size, "\033\\", 2u);
+        copy->packet_length += size + (screen ? 4u : 0u);
+        bytes += size;
+        length -= size;
+    }
+    return clipboard_flush(vm) < 0 ? -1 : 0;
+}
+
+static int
+clipboard_step(struct vm *vm)
+{
+    struct vm_clipboard *copy = &vm->clipboard;
+    int flushed = clipboard_flush(vm);
+    if (flushed <= 0) return flushed;
+    if (!copy->source && copy->pending) {
+        struct snag_clipboard_backend none = {0};
+        bool native = vm->config.terminal_clipboard == SNAG_CLIP_NATIVE &&
+            !getenv("SSH_CONNECTION") && !getenv("SSH_TTY") && !getenv("MOSH_IP");
+        copy->source = snag_clipboard_open(copy->pending_fd, copy->pending_text.data,
+            copy->pending_length, native ? NULL : &none);
+        clipboard_pending_clear(copy);
+        if (!copy->source) { notice(vm, "Yank retained; clipboard preparation failed"); return 0; }
+        char message[128];
+        (void)snprintf(message, sizeof(message), "Yanked %llu bytes; preparing clipboard",
+            (unsigned long long)copy->pending_length);
+        notice(vm, message);
+    }
+    if (!copy->source) return 0;
+    struct snag_clipboard_result prepared;
+    snag_clipboard_result(copy->source, &prepared);
+    if (prepared.state >= SNAG_CLIPBOARD_WRITTEN) {
+        static const char *const messages[] = {
+            "Clipboard written", "Clipboard copy canceled; register retained",
+            "Clipboard unavailable; register retained", "Clipboard copy failed; register retained",
+            "Clipboard result uncertain; register retained"
+        };
+        clipboard_finish(vm, messages[prepared.state - SNAG_CLIPBOARD_WRITTEN]);
+        return 0;
+    }
+    if (prepared.state != SNAG_CLIPBOARD_READY ||
+        (copy->canceling && !copy->send && !copy->osc.source)) return 0;
+    if (!copy->send && !copy->local) {
+        if (snag_terminal_profile_capture(&copy->profile) < 0) goto unavailable;
+#ifndef _WIN32
+        copy->output = copy->profile.tmux[0] ?
+            snag_tmux_output_open(&copy->profile, copy->client) :
+            snag_term_reopen(STDOUT_FILENO, O_WRONLY);
+        if (copy->output < 0) goto unavailable;
+#endif
+        copy->send = snag_clipboard_send_open(copy->source, snag_monotonic_ms());
+        if (!copy->send) goto unavailable;
+    }
+    if (copy->send) {
+        char title[SNAG_SCREEN_TITLE_MAX];
+        int size = snag_clipboard_send_output(copy->send, snag_monotonic_ms(),
+            title, sizeof(title));
+        if (size < 0) {
+            clipboard_finish(vm, "Clipboard transfer failed; register retained");
+            return 0;
+        }
+        if (size && clipboard_write(vm, title, (size_t)size) < 0) return -1;
+        struct snag_copy_result result;
+        snag_clipboard_send_result(copy->send, &result);
+        if (result.state < SNAG_COPY_WRITTEN) {
+            if (result.bytes != copy->shown_bytes && !copy->canceling) {
+                char message[128];
+                (void)snprintf(message, sizeof(message),
+                    "Yanked %llu bytes; workstation copy %llu/%llu",
+                    (unsigned long long)result.length, (unsigned long long)result.bytes,
+                    (unsigned long long)result.length);
+                notice(vm, message);
+                copy->shown_bytes = result.bytes;
+            }
+            return 0;
+        }
+        if (result.state == SNAG_COPY_UNAVAILABLE && !result.remote && !copy->canceling) {
+            snag_clipboard_send_close(copy->send);
+            copy->send = NULL;
+            copy->local = true;
+            if (vm->config.terminal_clipboard == SNAG_CLIP_OSC52)
+                copy->osc = (struct snag_clipboard_osc){.source = copy->source};
+            else if (snag_clipboard_publish(copy->source) < 0) goto unavailable;
+        } else {
+            static const char *const messages[] = {
+                "Workstation clipboard written",
+                "Clipboard sequence sent; terminal acceptance unconfirmed",
+                "Clipboard copy canceled; register retained",
+                "Workstation clipboard unavailable; register retained",
+                "Clipboard transfer failed; register retained",
+                "Clipboard result uncertain; register retained"
+            };
+            clipboard_finish(vm, messages[result.state - SNAG_COPY_WRITTEN]);
+            return 0;
+        }
+    }
+    if (copy->osc.source) {
+        if (copy->osc.done) {
+            clipboard_finish(vm, "Clipboard sequence sent; terminal acceptance unconfirmed");
+            return 0;
+        }
+        char bytes[6144];
+        int size = snag_clipboard_osc_next(&copy->osc, bytes, sizeof(bytes));
+        if (size < 0 || (size && clipboard_write(vm, bytes, (size_t)size) < 0)) return -1;
+    }
+    return 0;
+unavailable:
+    clipboard_finish(vm, "Clipboard unavailable; register retained");
+    return 0;
+}
+
 static int
 restore_checkpoint(void *opaque)
 {
@@ -3198,10 +3456,35 @@ restore_checkpoint(void *opaque)
 }
 
 static void
+clipboard_settle(struct vm *vm)
+{
+    struct vm_clipboard *copy = &vm->clipboard;
+    (void)clipboard_cancel(vm);
+    copy->settling = true;
+    /* Drain cancellation/result replies before another client owns stdin. */
+    uint64_t deadline = snag_monotonic_ms() + 20000u;
+    while (copy->source && !stopped && snag_monotonic_ms() < deadline) {
+        if (clipboard_step(vm) < 0 || input_ready(vm, 50) < 0) break;
+    }
+    if ((copy->osc.begun && !copy->osc.done) || copy->packet_at < copy->packet_length) {
+        int fd = copy->output >= 0 ? copy->output : vm->output;
+        const char *cancel = copy->profile.sty[0] && !copy->profile.tmux[0] ?
+            "\030\033P\030\033\\" : "\030";
+        /* A full tty queue must not drop cancellation ahead of mode restore. */
+        uint64_t abort_deadline = snag_monotonic_ms() + 250u;
+        (void)snag_term_output_write(&vm->terminal, fd, cancel, strlen(cancel),
+            false, restore_checkpoint, &abort_deadline);
+    }
+    clipboard_finish(vm, NULL);
+    copy->settling = false;
+}
+
+static void
 leave_screen(struct vm *vm, bool restore_input)
 {
     static const char modes[] = "\033[0m\033[?25h\033[?1004l\033[?1006l"
         "\033[?1002l\033[?1000l\033[?2004l\033[?1049l";
+    clipboard_settle(vm);
     vm->mouse_reported = vm->mouse_down = false;
     uint64_t deadline = snag_monotonic_ms() + 250u;
     (void)snag_term_output_write(&vm->terminal, vm->output, modes, sizeof(modes) - 1u,
@@ -3279,6 +3562,7 @@ interactive(struct vm *vm)
         if (vm->classic_ready && classic_run(vm) < 0) goto out;
         if (stopped) break;
         collect(vm);
+        if (clipboard_step(vm) < 0) goto out;
         /* Queued commands can schedule owner writes, detach or workspace
          * changes. Run those state transitions before waiting for new input. */
         if (vm->input_drained) {
@@ -3314,7 +3598,9 @@ interactive(struct vm *vm)
                 vm->reading_window != window->id && window->follow_at <= now)
                 window->load = LOAD_POLL;
         }
-        if (vm->dirty && draw(vm) < 0) {
+        bool clipboard_output = vm->clipboard.osc.source ||
+            vm->clipboard.packet_at < vm->clipboard.packet_length;
+        if (vm->dirty && !clipboard_output && draw(vm) < 0) {
             if (vm->quit || stopped) break;
             goto out;
         }
@@ -3335,7 +3621,7 @@ interactive(struct vm *vm)
                 if (timeout < 0 || timeout > remaining) timeout = remaining;
             }
         }
-        if (vm->dirty || vm->suspend) timeout = 0;
+        if ((vm->dirty && !clipboard_output) || vm->suspend) timeout = 0;
         if (input_ready(vm, timeout) < 0) goto out;
     }
     rc = save(vm, NULL) < 0 ? 1 : 0;
@@ -3390,7 +3676,8 @@ snag_vm_main(int argc, char **argv, const char *program)
 {
     const char *dotdir_option = NULL, *name = NULL, *resume = NULL;
     bool list = false, last = false;
-    struct vm vm = {.output = -1, .stored_limit = 10u, .next_window = 2u, .mouse = true};
+    struct vm vm = {.output = -1, .stored_limit = 10u, .next_window = 2u, .mouse = true,
+        .clipboard = {.output = -1, .pending_fd = -1}};
     char error[256] = "invalid workspace arguments";
     int rc = 2;
     snag_store_init(&vm.store);

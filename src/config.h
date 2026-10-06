@@ -2,12 +2,14 @@
 #ifndef SNAJPAGENT_CONFIG_H
 #define SNAJPAGENT_CONFIG_H
 
+#include "clipboard.h"
+#include "secret_source.h"
+#include "snag_jansson.h"
+
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
-#include "secret_source.h"
-#include "snag_jansson.h"
 
 #define SNAG_CONFIG_MODEL_MAX 256u
 #define SNAG_CONFIG_EFFORT_MAX 64u
@@ -202,13 +204,15 @@ struct snag_config {
     struct snag_secret_source *secrets;
     size_t secret_count, secret_capacity;
     char terminal_download_dir[SNAG_CONFIG_PATH_MAX + 1u];
+    enum snag_clipboard_policy terminal_clipboard;
     char source_path[SNAG_CONFIG_PATH_MAX + 1u];
 };
 
 void snag_config_init(struct snag_config *config);
 /* Read only [terminal] settings, without provider/agent initialization. */
 int snag_config_terminal(const char *explicit_path, const char *dotdir, char *downloads,
-                          size_t capacity, char *error, size_t error_size);
+                          size_t capacity, enum snag_clipboard_policy *clipboard,
+                          char *error, size_t error_size);
 /* Growable protected-value list; parses and retains one additional source. */
 int snag_config_add_secret(struct snag_config *config, const char *value, const char *source_path,
                            char *error, size_t error_size);

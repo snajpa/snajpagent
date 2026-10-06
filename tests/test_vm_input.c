@@ -73,9 +73,37 @@ key(const struct capture *capture, size_t at, unsigned int code, unsigned int mo
         capture->items[at].event.modifiers == modifiers);
 }
 
+static void
+clipboard_replies(void)
+{
+    static const char reply[] = "\033[>9003;4294967295;4294967295;4294967295;4294967295;"
+        "4294967295;11;4294967295;4294967295c";
+    for (size_t split = 0u; split < sizeof(reply); ++split) {
+        struct snag_vm_input input = {0};
+        struct capture captured = {0};
+        assert(snag_vm_input_feed(&input, reply, split, 10u, collect, &captured) == 0);
+        assert(snag_vm_input_feed(&input, reply + split, sizeof(reply) - 1u - split,
+            11u, collect, &captured) == 0);
+        assert(captured.count == 1u);
+        bytes(&captured, 0u, SNAG_VM_TERMINAL_REPLY, reply);
+        clear(&captured);
+    }
+    struct snag_vm_input input = {0};
+    struct capture captured = {0};
+    assert(snag_vm_input_feed(&input, "\033[>123456789S", 13u, 10u, collect, &captured) == 0);
+    bytes(&captured, 0u, SNAG_VM_TERMINAL_REPLY, "\033[>123456789S");
+    assert(snag_vm_input_feed(&input, "\033[200~", 6u, 11u, collect, &captured) == 0);
+    assert(snag_vm_input_feed(&input, reply, sizeof(reply) - 1u, 12u, collect, &captured) == 0);
+    assert(snag_vm_input_feed(&input, "\033[201~", 6u, 13u, collect, &captured) == 0);
+    assert(captured.count == 4u);
+    bytes(&captured, 2u, SNAG_VM_PASTE_TEXT, reply);
+    clear(&captured);
+}
+
 int
 main(void)
 {
+    clipboard_replies();
     struct snag_vm_input input = {0};
     struct capture full = {0}, fragmented = {0};
     static const char script[] = "é界👩‍💻\r\n\t\177\033[A\033[1;5D\033OF\033[Z"

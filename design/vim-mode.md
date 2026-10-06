@@ -221,7 +221,9 @@ source-codepoint boundaries and no normalization. Search memory scales with the
 query; it does not retain the scanned journal in RAM. Cold scans inspect the
 whole active buffer in chronological order, choosing the nearest directional
 match or wrap candidate. Reports stay scoped to their immutable snapshot.
-Visual selection/clipboard and IRC conversations still need integration.
+Visual selection and clipboard publication are connected to explicit transcript,
+report and composer yanks. Clipboard protocol and PTY qualification are recorded
+in section 10. IRC conversations and the full real-transport matrix remain open.
 This development frontend has
 not been installed on the operator's machines or merged into the release line.
 
@@ -1193,14 +1195,32 @@ helper that stops accepting data or completing for ten seconds is interrupted;
 publication already begun then has an uncertain outcome. Confirmed native writes,
 unavailable backends, preparation failures, cancellation and uncertain writes
 have distinct results. Private-pasteboard tests verify literal Unicode and text
-resembling rich formats without touching the general clipboard. UI actions and
-remote publication are the next integration step.
+resembling rich formats without touching the general clipboard. The frontend now
+queues explicit yanks, retains a snapshot when another operation is still
+finishing, and consumes private replies before ordinary input routing. Deletes
+and changes keep their register semantics without requesting publication.
+POSIX output retains partial writes and polls readiness alongside input and
+owner sockets. Repainting waits while an OSC sequence is open; owner/history
+work continues. Handoffs cancel or settle a pending operation before releasing
+input ownership. Interrupted escape sequences use the bounded terminal-restore
+writer so a full output queue cannot silently drop their cancellation byte.
+Configuration is `[terminal] clipboard = native|osc52|off`,
+with native as the default. The lightweight wrapper parser reads this policy
+without initializing an agent/provider. Native local fallback is disabled in
+an SSH/Mosh environment; an outer wrapper supplies workstation access.
 
 ### 10.2 Remote copy
 
-Negotiate a `clipboard-write` capability with `snajpagent remote`. Introduce an
-explicit operation in the existing checked transfer envelope, separate from
-file upload/download and the durable file outbox. Only the outer workstation
+The implemented `CLIP:` operation uses the existing checked title envelope,
+separate from file upload/download and the durable file outbox. The existing
+9001 probe chooses stream frames when its reply traverses the connection;
+otherwise acknowledged retained titles carry 120-byte decoded frames.
+BEGIN negotiates native publication, explicit OSC or unavailability. DATA binds
+every frame to a 128-bit operation ID and 64-bit source offset plus sequence/CRC.
+COMMIT supplies SHA256, and STATUS/CANCEL recover the outcome. Private 9003 CSI
+replies bind the full operation and nonce. The frontend consumes complete replies
+before command parsing; bracketed paste stays literal. Completed receipts and
+pre-BEGIN cancellation tombstones last for the wrapper's lifetime. Only the outer workstation
 wrapper publishes the clipboard; inner wrappers relay the operation.
 
 A transfer carries an attachment-bound nonce, operation ID, UTF-8 encoding,
@@ -1210,8 +1230,10 @@ chunks are acknowledged without duplication. A completed operation ID returns
 its receipt on retry instead of repeating clipboard publication. Receipts
 distinguish native success, OSC emission, cancellation and failure.
 
-Before publication, cancellation, an expired attachment, a replaced controller,
-truncated input or a digest failure leaves the old workstation clipboard untouched.
+Before publication, accepted cancellation, a disconnected wrapper, incomplete
+staging or a digest failure leaves the old workstation clipboard untouched.
+An idle staging operation expires after the file transport's existing20-second
+liveness interval, which resets on progress; selection length has no quota.
 After publication begins, cancellation returns its actual result or an uncertain
 outcome. A successful clipboard
 write followed by a lost receipt is reported as uncertain until its receipt can
@@ -1280,9 +1302,10 @@ clear:
 | `vm_stub` | Helpful unsupported-feature result for a `WITH_VM=0` binary. |
 
 Use `WITH_VM ?= 1` in the existing build configuration and include it in build
-input fingerprints. A disabled build links no VM renderer/history workspace or
-clipboard implementation, retains the shared pager correction and keeps normal
-remote file transfer working. `vm --help` clearly reports the omitted feature.
+input fingerprints. A disabled build omits the VM renderer, history workspace,
+editor and register support. The shared pager and client-side remote file/clipboard
+transport remain available, so a lean workstation wrapper can serve a VM on
+another host. `vm --help` clearly reports the omitted feature.
 Feature discovery prevents one side of a mixed installation from sending an
 unsupported clipboard or semantic command. All release target recipes include
 the module; custom lean builds can explicitly exclude it.

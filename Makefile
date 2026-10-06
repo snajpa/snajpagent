@@ -92,7 +92,7 @@ PLATFORM_SRC = src/base64.c src/base.c src/platform.c src/term_host.c src/tmux.c
 COMMON_SRC = $(PLATFORM_SRC) src/config.c src/rules.c src/secret_source.c src/credential.c src/auth.c src/auth_http.c src/login.c src/secret.c src/instructions.c src/json.c src/wire.c src/context.c src/provider_retry.c src/http.c src/update.c src/provider.c src/model_cache.c src/tools.c src/tools_read.c src/irc.c src/irc_runtime.c src/sse.c src/responses.c src/turn.c src/store.c src/store_record.c src/store_checkpoint.c src/irc_event.c src/store_lookup.c src/store_lifecycle.c src/tools_patch.c src/tools_write.c src/history.c src/history_view.c src/term.c src/render.c src/render_prepare.c src/cli.c src/ui.c src/app_events.c src/app_irc_attention.c src/app_stream.c src/app_lifecycle.c src/app_compact.c src/app_provider.c src/app.c
 COMMON_SRC += src/convert.c src/tools_media.c src/media.c src/tools_document.c src/tools_audio.c src/app_media.c src/app_upload.c src/app_audio.c src/av.c src/pcm.c src/audio_device.c src/office.c src/office_package.c src/office_confine.c src/office_sheet.c src/voice.c src/voice_rtc.c src/app_voice.c
 COMMON_SRC += src/upload_wire.c src/upload_md5.c src/screen_wire.c src/upload.c src/remote.c
-COMMON_SRC += src/clipboard.c
+COMMON_SRC += src/clipboard.c src/clipboard_transfer.c
 COMMON_SRC += src/app_resume.c
 COMMON_SRC += src/irc_address.c
 COMMON_SRC += src/vm.c
@@ -117,7 +117,7 @@ HEADERS += src/vm_editor.h src/vm_selection.h src/vm_navigation.h
 HEADERS += src/vm_source.h
 HEADERS += src/vm_search.h
 HEADERS += src/upload_wire.h src/upload_md5.h src/upload.h src/screen_wire.h src/remote.h
-HEADERS += src/clipboard.h
+HEADERS += src/clipboard.h src/clipboard_transfer.h
 HEADERS += src/vm_workspace.h
 HEADERS += src/vm_layout.h
 HEADERS += src/vm_input.h
@@ -127,7 +127,7 @@ HEADERS += src/vm.h
 HEADERS += src/vm_transcript.h src/vm_document.h
 HEADERS += src/irc_address.h
 FIXTURE_BIN = tests/$(NAME)-fixture
-TEST_BIN = tests/snajpagent-transport tests/test_base tests/test_config tests/test_irc tests/test_instructions tests/test_credential tests/test_sse tests/test_json tests/test_store_record $(VM_TEST_BIN) tests/test_rules tests/test_wire tests/test_responses tests/test_provider_retry tests/test_provider_transport tests/test_context tests/test_model_cache tests/test_render tests/test_turn tests/test_tools tests/test_store tests/test_write tests/test_upload_wire tests/test_clipboard $(FIXTURE_BIN)
+TEST_BIN = tests/snajpagent-transport tests/test_base tests/test_config tests/test_irc tests/test_instructions tests/test_credential tests/test_sse tests/test_json tests/test_store_record $(VM_TEST_BIN) tests/test_rules tests/test_wire tests/test_responses tests/test_provider_retry tests/test_provider_transport tests/test_context tests/test_model_cache tests/test_render tests/test_turn tests/test_tools tests/test_store tests/test_write tests/test_upload_wire tests/test_clipboard tests/test_clipboard_transfer $(FIXTURE_BIN)
 BUILD_INPUTS = build/.build-inputs
 TEST_BIN += tests/test_irc_address
 
@@ -231,6 +231,11 @@ tests/test_rules: $(PLATFORM_SRC) src/json.c src/rules.c tests/test_rules.c src/
 tests/test_wire: $(PLATFORM_SRC) src/json.c src/wire.c tests/test_wire.c src/base.h src/fs.h src/term_host.h src/wake.h src/net.h src/json.h src/snag_jansson.h src/snag_jansson_abi.h src/wire.h
 
 tests/test_upload_wire: $(PLATFORM_SRC) src/json.c src/upload_wire.c src/upload_md5.c src/screen_wire.c src/upload.c tests/test_upload_wire.c src/upload_wire.h src/upload_md5.h src/screen_wire.h src/upload.h src/base64.h
+
+tests/test_clipboard_transfer: $(PLATFORM_SRC) src/json.c src/clipboard.c \
+		src/clipboard_transfer.c src/screen_wire.c tests/test_clipboard_transfer.c $(HEADERS)
+	$(CC) $(CPPFLAGS) $(JANSSON_CFLAGS) $(CFLAGS) $(LDFLAGS) -Isrc \
+		-o $@ $(filter %.c,$^) $(LDLIBS)
 
 tests/test_clipboard: $(PLATFORM_SRC) src/json.c src/clipboard.c tests/test_clipboard.c $(HEADERS)
 
@@ -354,6 +359,7 @@ ifeq ($(WITH_VM),1)
 	python3 tests/test_vm_selection.py ./$(BIN)
 	python3 tests/test_vm_navigation.py ./$(BIN)
 	python3 tests/test_vm_mouse.py ./$(BIN)
+	python3 tests/test_vm_clipboard.py ./$(BIN)
 	python3 tests/test_vm_classic.py ./$(BIN)
 	python3 tests/test_vm_terminal_commands.py ./$(BIN)
 	python3 tests/test_vm_launch.py ./$(BIN)
@@ -367,6 +373,7 @@ endif
 	./tests/test_wire
 	./tests/test_upload_wire
 	./tests/test_clipboard
+	./tests/test_clipboard_transfer
 	python3 tests/test_upload_client.py
 	python3 tests/test_download_client.py
 	python3 tests/test_remote_terminal.py

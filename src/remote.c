@@ -1,11 +1,13 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "remote.h"
 #include "base.h"
+#include "clipboard_transfer.h"
 #include "config.h"
 #include "fs.h"
 #include "process_host.h"
 #include "screen_wire.h"
 #include "term_host.h"
+#include "tmux.h"
 #include "upload.h"
 #include "upload_wire.h"
 
@@ -105,6 +107,12 @@ remote_child_write(struct snag_child *child, const void *bytes, size_t length)
 struct remote_transfer {
     struct snag_child *child;
     const char *downloads;
+    struct snag_clipboard_receive *clipboard;
+    struct snag_clipboard_osc clipboard_osc;
+    int clipboard_output;
+    bool clipboard_screen;
+    unsigned char clipboard_bytes[8192];
+    size_t clipboard_at, clipboard_length;
     bool relay;
     bool screen;
     bool relay_transfer;
@@ -484,6 +492,81 @@ remote_passthrough(struct remote_transfer *client, const unsigned char *data, si
     return 0;
 }
 
+static int
+remote_clipboard_step(struct remote_transfer *client)
+{
+    snag_clipboard_receive_poll(client->clipboard, snag_monotonic_ms());
+    if (!client->clipboard_osc.source) {
+        struct snag_clipboard *source = snag_clipboard_receive_osc(client->clipboard);
+        if (!source) return 0;
+        struct snag_terminal_profile profile;
+        if (snag_terminal_profile_capture(&profile) < 0) {
+            snag_clipboard_receive_osc_done(client->clipboard, false);
+            return 0;
+        }
+        client->clipboard_output = profile.tmux[0] ? snag_tmux_output_open(&profile, NULL) :
+            snag_term_reopen(STDOUT_FILENO, O_WRONLY);
+        if (client->clipboard_output < 0) {
+            snag_clipboard_receive_osc_done(client->clipboard, false);
+            return 0;
+        }
+        client->clipboard_screen = !profile.tmux[0] && profile.sty[0];
+        client->clipboard_osc = (struct snag_clipboard_osc){.source = source};
+        client->clipboard_at = client->clipboard_length = 0u;
+    }
+    if (client->clipboard_at == client->clipboard_length) {
+        if (client->clipboard_osc.done) {
+            (void)close(client->clipboard_output);
+            client->clipboard_output = -1;
+            client->clipboard_osc = (struct snag_clipboard_osc){0};
+            snag_clipboard_receive_osc_done(client->clipboard, true);
+            return 0;
+        }
+        char bytes[6144];
+        int n = snag_clipboard_osc_next(&client->clipboard_osc, bytes, sizeof(bytes));
+        if (n < 0) return -1;
+        client->clipboard_at = client->clipboard_length = 0u;
+        for (size_t at = 0u; at < (size_t)n;) {
+            size_t size = (size_t)n - at < 128u ? (size_t)n - at : 128u;
+            unsigned char *out = client->clipboard_bytes + client->clipboard_length;
+            if (client->clipboard_screen) {
+                memcpy(out, "\033P", 2u);
+                out += 2u;
+            }
+            memcpy(out, bytes + at, size);
+            if (client->clipboard_screen) memcpy(out + size, "\033\\", 2u);
+            client->clipboard_length += size + (client->clipboard_screen ? 4u : 0u);
+            at += size;
+        }
+    }
+    ssize_t n = write(client->clipboard_output, client->clipboard_bytes + client->clipboard_at,
+        client->clipboard_length - client->clipboard_at);
+    if (n > 0) client->clipboard_at += (size_t)n;
+    else if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) return -1;
+    return 0;
+}
+
+static int
+clipboard_abort_deadline(void *opaque)
+{
+    return snag_monotonic_ms() >= *(uint64_t *)opaque ? snag_errno(ETIMEDOUT) : 0;
+}
+
+static void
+remote_clipboard_close(struct remote_transfer *client)
+{
+    if (client->clipboard_output >= 0) {
+        /* Cancel an interrupted OSC before restoring ordinary display output. */
+        const char *cancel = client->clipboard_screen ? "\030\033P\030\033\\" : "\030";
+        uint64_t deadline = snag_monotonic_ms() + 250u;
+        (void)snag_term_output_write(NULL, client->clipboard_output, cancel, strlen(cancel),
+            false, clipboard_abort_deadline, &deadline);
+        (void)close(client->clipboard_output);
+    }
+    snag_clipboard_receive_close(client->clipboard);
+    client->clipboard = NULL;
+}
+
 static size_t
 remote_title_body(const unsigned char *data, size_t length)
 {
@@ -516,6 +599,14 @@ remote_title(struct remote_transfer *client, const unsigned char *data, size_t l
     size_t at = remote_title_body(data, length);
     const unsigned char *body = data + at;
     size_t size = end - at;
+    if (size >= sizeof(prefix) - 1u + 5u &&
+        !memcmp(body + sizeof(prefix) - 1u, "CLIP:", 5u)) {
+        char reply[128];
+        int n = snag_clipboard_receive_title(client->clipboard, body + sizeof(prefix) - 1u,
+            size - (sizeof(prefix) - 1u), snag_monotonic_ms(), reply, sizeof(reply));
+        if (n < 0 || (n && remote_child_write(client->child, reply, (size_t)n) < 0)) return -1;
+        return 1;
+    }
     if (client->title_active && size == sizeof(prefix) - 1u + sizeof("END:") - 1u + 8u &&
         !memcmp(body, prefix, sizeof(prefix) - 1u) &&
         !memcmp(body + sizeof(prefix) - 1u, "END:", sizeof("END:") - 1u) &&
@@ -765,7 +856,7 @@ remote_upstream(struct remote_transfer *client)
 
 static int
 remote_proxy(const char *executable, const char *const *command, const char *downloads,
-             char *error, size_t error_size)
+             enum snag_clipboard_policy clipboard, char *error, size_t error_size)
 {
     struct termios original, raw;
     struct snag_child child;
@@ -796,10 +887,15 @@ remote_proxy(const char *executable, const char *const *command, const char *dow
         if (sigaction(signals[installed], &action, &saved[installed]) < 0) break;
     }
     int rc = installed == sizeof(signals) / sizeof(signals[0]) ? 0 : -1;
-    struct remote_transfer client = {.child = &child, .downloads = downloads, .drop_fd = -1};
+    struct remote_transfer client = {.child = &child, .downloads = downloads,
+        .drop_fd = -1, .clipboard_output = -1};
     /* A fully escaped maximum-size path plus bracketed-paste framing. */
     snag_buf_init(&client.input, 2u * SNAG_PATH_MAX_BYTES + 12u);
     if (rc == 0) rc = remote_upstream(&client);
+    if (rc == 0 && !client.relay) {
+        client.clipboard = snag_clipboard_receive_open(clipboard, NULL);
+        if (!client.clipboard) rc = -1;
+    }
     const char *sty = getenv("STY");
     client.screen = sty && *sty;
     static const char *const backend_names[] = {"STY", "TMUX", "TMUX_PANE"};
@@ -835,6 +931,7 @@ remote_proxy(const char *executable, const char *const *command, const char *dow
     }
     bool ended = false;
     while (rc == 0 && !ended && !remote_signal) {
+        if (remote_clipboard_step(&client) < 0) { rc = -1; break; }
         if (remote_resize) {
             remote_resize = 0;
             snag_child_resize(&child);
@@ -851,13 +948,15 @@ remote_proxy(const char *executable, const char *const *command, const char *dow
                 remote_child_write(&child, client.keys, client.key_len) < 0) { rc = -1; break; }
             client.key_len = 0;
         }
-        struct pollfd ready[] = {{child.fd[0], POLLIN, 0},
-            {STDIN_FILENO, client.drop_fd < 0 ? POLLIN : 0, 0}};
-        int count = poll(ready, 2u, client.input.len ? 20 : 100);
+        struct pollfd ready[] = {{child.fd[0], client.clipboard_osc.source ? 0 : POLLIN, 0},
+            {STDIN_FILENO, client.drop_fd < 0 ? POLLIN : 0, 0},
+            {snag_clipboard_receive_fd(client.clipboard), POLLIN, 0},
+            {client.clipboard_output, POLLOUT, 0}};
+        int count = poll(ready, 4u, client.input.len ? 20 : 100);
         if (count < 0 && errno == EINTR) continue;
         if (count < 0) { rc = -1; break; }
         unsigned char bytes[8192];
-        if (ready[0].revents & (POLLIN | POLLHUP | POLLERR)) {
+        if (!client.clipboard_osc.source && (ready[0].revents & (POLLIN | POLLHUP | POLLERR))) {
             ssize_t n = snag_child_read(&child, 0u, bytes, sizeof(bytes));
             if (n < 0 && (errno == EAGAIN || errno == EINTR)) continue;
             if (n < 0) { rc = -1; break; }
@@ -881,6 +980,7 @@ remote_proxy(const char *executable, const char *const *command, const char *dow
         client.marker[0] == 0x1bu && client.marker[1] == ']'))
         (void)remote_write(STDOUT_FILENO, client.marker, client.marker_len);
     if (client.drop_fd >= 0) (void)close(client.drop_fd);
+    remote_clipboard_close(&client);
     snag_buf_free(&client.input);
     int reason = remote_signal;
     if (child.pid > 0 && (reason || rc < 0 || !ended)) {
@@ -968,8 +1068,9 @@ snag_remote_main(int argc, char **argv)
         return 2;
     }
     char downloads[SNAG_CONFIG_PATH_MAX + 1u];
+    enum snag_clipboard_policy clipboard;
     if (snag_config_terminal(config_path, dotdir ? dotdir : (char *)default_dotdir.data,
-                             downloads, sizeof(downloads), error, sizeof(error)) < 0) {
+                             downloads, sizeof(downloads), &clipboard, error, sizeof(error)) < 0) {
         (void)fprintf(stderr, "snajpagent remote: %s\n", error);
         free(home);
         snag_buf_free(&default_dotdir);
@@ -994,7 +1095,7 @@ snag_remote_main(int argc, char **argv)
         return 1;
     }
     int rc = remote_proxy(executable, (const char *const *)command, downloads,
-                          error, sizeof(error));
+                          clipboard, error, sizeof(error));
     if (command != arguments) free(command);
     free(executable);
     if (rc < 0) { (void)fprintf(stderr, "snajpagent remote: %s\n", error); return 1; }

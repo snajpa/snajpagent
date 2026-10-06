@@ -6,7 +6,7 @@
 
 enum snag_vm_input_kind {
     SNAG_VM_KEY, SNAG_VM_TEXT, SNAG_VM_PASTE_BEGIN, SNAG_VM_PASTE_TEXT,
-    SNAG_VM_PASTE_END, SNAG_VM_MOUSE, SNAG_VM_FOCUS
+    SNAG_VM_PASTE_END, SNAG_VM_MOUSE, SNAG_VM_FOCUS, SNAG_VM_TERMINAL_REPLY
 };
 
 enum snag_vm_key {
@@ -29,7 +29,8 @@ struct snag_vm_input_event {
 };
 
 struct snag_vm_input {
-    unsigned char sequence[64], utf8[4];
+    /* Private clipboard replies contain eight uint32 fields plus framing. */
+    unsigned char sequence[128], utf8[4];
     size_t sequence_length, utf8_length, utf8_expected, paste_match;
     unsigned int utf8_modifiers;
     uint64_t sequence_since;

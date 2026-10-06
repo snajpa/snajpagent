@@ -123,6 +123,10 @@ sequence(struct snag_vm_input *input, snag_vm_input_emit emit, void *opaque)
         input->discard = false;
         return key(emit, opaque, SNAG_VM_KEY_UNKNOWN, 0u);
     }
+    if (bytes[1] == '[' && length >= 5u && bytes[2] == '>' &&
+        ((final == 'S' && length <= 16u) ||
+            (final == 'c' && length >= 10u && !memcmp(bytes + 3u, "9003;", 5u))))
+        return text(emit, opaque, SNAG_VM_TERMINAL_REPLY, bytes, length, 0u);
     if (bytes[1] == 'O') return key(emit, opaque, final_key(final), 0u);
     if (length == 3u && (final == 'I' || final == 'O')) {
         struct snag_vm_input_event event = {.kind = SNAG_VM_FOCUS, .focused = final == 'I'};

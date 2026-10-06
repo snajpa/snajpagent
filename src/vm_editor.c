@@ -393,7 +393,7 @@ operate(struct snag_vm_connection *connection, struct snag_vm_register *reg,
         return SNAG_VM_EDIT_ERROR;
     if (operator == 'y') {
         if (motion.at < cursor) snag_vm_draft_cursor(connection, motion.at);
-        return SNAG_VM_EDIT_DONE;
+        return end > begin ? SNAG_VM_EDIT_YANK : SNAG_VM_EDIT_DONE;
     }
     const char *replacement = "";
     size_t replacement_size = 0u;
