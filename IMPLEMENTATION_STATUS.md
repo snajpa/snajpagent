@@ -161,7 +161,8 @@ references. Older blockers without a channel retain an unspecified wait.
 
 Prepared-session native seeding verifies the provisional in-memory journal and
 its native semantic projection before adopting provider capture and writer
-provenance into a separate owner. The original prepared session stays intact.
+provenance into a separate owner. It returns derived index-cache bytes at the
+verified frontier. The original prepared session stays intact.
 Session creation still uses the legacy log while native creation and conversion
 are being integrated.
 

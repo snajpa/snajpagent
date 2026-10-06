@@ -47,9 +47,11 @@ int snag_store_import_binary_journal(struct snag_session *source, int destinatio
  * or callback owner yet. Only success adopts native state, provider capture and
  * writer provenance into target, retaining its descriptor/path ownership.
  * Failure leaves target ownership unchanged and may leave unpublished journal
- * bytes for the caller to discard. No JSONL file, checkpoint or index is created;
- * the caller establishes publication and directory durability separately. */
+ * bytes for the caller to discard. index is an empty output buffer; success
+ * returns the derived cache bytes for the independently verified seed frontier.
+ * Failure preserves index. No JSONL file or checkpoint is created; the caller
+ * establishes index-file and directory durability and publication separately. */
 int snag_store_seed_binary_session(struct snag_session *prepared, struct snag_session *target,
-    char *error, size_t error_size);
+    struct snag_buf *index, char *error, size_t error_size);
 
 #endif

@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Emit derived index-cache bytes while seeding a prepared native session. The
+  returned cache is tied to the independently verified frontier; failed seeding
+  preserves the original session and the caller's output buffer.
+
 - Preserve explicit blocked-goal wait channels in native records and checkpoint
   references. Older blockers without a channel keep their unspecified wait;
   earlier checkpoint layouts remain readable for the state they can represent.

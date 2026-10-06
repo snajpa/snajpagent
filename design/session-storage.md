@@ -3149,14 +3149,18 @@ empty private journal under its caller-held exclusive lock. It creates no JSONL
 file. Original event times and semantic payloads survive the existing typed
 producer's reference construction; provisional voice/process presentation cursors
 resolve against the same verified memory source. The stage computes the native
-index frontier as it writes, syncs the journal, and independently compares native
+index frontier and its derived cache bytes as it writes, syncs the journal, and
+independently compares native
 semantic digests and core state with the prepared owner before binding.
 
 The resulting owner has committed provider capture, payload origins, producer
 provenance and an I/O writer at the same acknowledged boundary. The original
 prepared state, callbacks and bytes remain unchanged. Failure leaves target
 descriptor/path ownership unchanged; partial journal bytes remain unpublished
-for the caller to discard. Checkpoint-slot setup, index attachment and directory
+for the caller to discard. Success returns an owning index-cache encoding at the
+verified frontier; failure preserves the empty output buffer. Cache membership
+is checked against the independently established frontier, never trusted from
+its own bytes. Checkpoint-slot setup, index attachment and directory
 publication belong to the factory. The stage remains test-linked while ordinary
 creation continues through the JSONL factory.
 

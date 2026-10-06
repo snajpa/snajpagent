@@ -22,6 +22,7 @@ struct import_writer {
     struct snag_binary_producer producer;
     struct snag_sha256 semantic;
     struct snag_buf *prepared_log;
+    struct snag_buf index;
     struct snag_binary_identity identity;
     struct snag_binary_index_tree tree;
     uint64_t source_end, turns;
@@ -84,7 +85,7 @@ flush_batch(struct import_writer *writer)
     int rc = snag_binary_batch_encode(&bytes, &writer->anchor, writer->records,
         (uint32_t)writer->count, writer->turns, &next);
     if (rc == 0 && writer->prepared_log)
-        rc = snag_binary_index_tree_append_batch(NULL, &writer->tree, &writer->identity,
+        rc = snag_binary_index_tree_append_batch(&writer->index, &writer->tree, &writer->identity,
             &writer->anchor, &next, bytes.data, bytes.len);
     struct snag_buf wire = {.max = SNAG_BINARY_WIRE_BATCH_MAX};
     if (rc == 0) rc = snag_binary_wire_encode(&wire, bytes.data, bytes.len);
@@ -212,6 +213,11 @@ import_event(void *opaque, const struct snag_session *state, uint64_t sequence,
             goto fail;
         }
         writer->identity = identity;
+        if (writer->prepared_log) {
+            unsigned char index_header[SNAG_BINARY_INDEX_HEADER_SIZE];
+            snag_binary_index_header_encode(index_header, &identity);
+            if (snag_buf_append(&writer->index, index_header, sizeof(index_header)) < 0) goto fail;
+        }
     }
     snag_buf_reset(&writer->producer.field);
     struct snag_binary_record record = {.version = 1u, .timestamp_ms = state->last_time_ms};
@@ -377,9 +383,10 @@ out:
 
 int
 snag_store_seed_binary_session(struct snag_session *prepared, struct snag_session *target,
-    char *error, size_t error_size)
+    struct snag_buf *index, char *error, size_t error_size)
 {
-    if (!prepared || !target || prepared == target || !prepared->pending_log ||
+    if (!prepared || !target || !index || index->len || prepared == target ||
+        !prepared->pending_log ||
         prepared->binary || prepared->snapshot_read_only || prepared->dir_fd >= 0 ||
         prepared->log_fd >= 0 ||
         prepared->lock_fd >= 0 || !snag_hex_is_lower(prepared->id, SNAG_ID_HEX_LEN) ||
@@ -402,6 +409,7 @@ snag_store_seed_binary_session(struct snag_session *prepared, struct snag_sessio
         return snag_fail(error, error_size, errno, "cannot position native seed journal");
     struct import_writer writer = {.fd = target->log_fd, .source_fd = -1,
         .prepared_log = prepared->pending_log, .payload = {.max = SNAG_MAX_EVENT_LINE},
+        .index = {.max = index->max},
         .producer.field = {.max = SNAG_MAX_EVENT_LINE}};
     snag_sha256_init(&writer.semantic);
     struct snag_session source;
@@ -452,6 +460,9 @@ snag_store_seed_binary_session(struct snag_session *prepared, struct snag_sessio
     candidate.dir_path = target->dir_path;
     *target = candidate;
     snag_session_init(&candidate);
+    snag_buf_free(index);
+    *index = writer.index;
+    writer.index = (struct snag_buf){0};
 done:
     {
         int saved = errno;
@@ -462,6 +473,7 @@ done:
         snag_binary_producer_free(&writer.producer);
         free(writer.records);
         snag_buf_free(&writer.payload);
+        snag_buf_free(&writer.index);
         errno = saved;
     }
     return rc;

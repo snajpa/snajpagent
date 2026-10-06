@@ -4043,10 +4043,40 @@ test_voice_adoption(struct snag_store *store, const char *cwd, unsigned int bad)
 }
 
 static void
+seed_index_checks(struct snag_session *target, const struct snag_buf *index,
+    const struct snag_binary_anchor *boundary, const struct snag_binary_index_tree *tree)
+{
+    unsigned char header[SNAG_BINARY_HEADER_SIZE], root[32];
+    struct snag_binary_identity identity;
+    struct snag_binary_anchor initial;
+    assert(snag_pread(target->log_fd, header, sizeof(header), 0) == sizeof(header));
+    assert(!snag_binary_header_decode(header, sizeof(header), &identity, &initial));
+    int fd = temporary_fd();
+    assert(!snag_write_full(fd, index->data, index->len));
+    assert(!snag_binary_index_header_read(fd, &identity));
+    assert(!snag_binary_index_tree_root(tree, root));
+    int64_t end;
+    assert(!snag_binary_index_end(tree->count, &end) && (uint64_t)end == index->len);
+    struct snag_binary_index_tree loaded;
+    assert(!snag_binary_index_tree_load(fd, &identity, tree->count, root, &loaded));
+    assert(!memcmp(tree, &loaded, sizeof(loaded)));
+    struct snag_buf scratch = {.max = SNAG_BINARY_BATCH_MAX};
+    for (uint64_t sequence = 1u; sequence < boundary->next_seq; ++sequence) {
+        struct snag_binary_index_entry entry;
+        struct snag_binary_record record;
+        assert(!snag_binary_index_read_verified(fd, &identity, tree->count, root,
+            sequence, &entry));
+        assert(!snag_binary_index_load_record(target->log_fd, boundary, &entry, &scratch, &record));
+    }
+    snag_buf_free(&scratch);
+    close(fd);
+}
+
+static void
 test_prepared_native_seed(const char *cwd)
 {
     char error[512];
-    for (unsigned int variant = 0u; variant < 13u; ++variant) {
+    for (unsigned int variant = 0u; variant < 16u; ++variant) {
         struct snag_session prepared;
         struct snag_session target;
         snag_session_init(&prepared);
@@ -4136,7 +4166,11 @@ test_prepared_native_seed(const char *cwd)
         if (variant == 8u) assert(!snag_write_full(target.log_fd, "x", 1u));
         if (variant == 9u) prepared.snapshot_read_only = true;
         if (variant == 10u) target.snapshot_read_only = true;
-        int rc = snag_store_seed_binary_session(&prepared, &target, error, sizeof(error));
+        struct snag_buf index = {.max = SIZE_MAX};
+        if (variant == 13u) index.max = 0u;
+        if (variant == 14u) assert(!snag_buf_append(&index, "keep", 4u));
+        if (variant == 15u) index.max = SNAG_BINARY_INDEX_HEADER_SIZE;
+        int rc = snag_store_seed_binary_session(&prepared, &target, &index, error, sizeof(error));
         if (variant < 2u || variant == 6u || variant == 11u || variant == 12u) {
             if (rc < 0) fprintf(stderr, "prepared native seed: %s (%d)\n", error, errno);
             assert(!rc && target.binary && target.log_fd == log_fd && target.lock_fd == lock_fd);
@@ -4151,6 +4185,7 @@ test_prepared_native_seed(const char *cwd)
             assert(!snag_session_binary_checkpoint_capture(&target, &boundary, &tree, &sources,
                 error, sizeof(error)));
             assert(boundary.next_seq == sequence && tree.count == sequence - 1u);
+            seed_index_checks(&target, &index, &boundary, &tree);
             assert(sources.input == (variant == 1u || variant == 6u ? sequence - 1u : 0u));
             if (variant == 11u) {
                 assert(target.irc_activity && json_object_size(
@@ -4194,6 +4229,8 @@ test_prepared_native_seed(const char *cwd)
             }
         } else {
             assert(rc < 0 && !target.binary && !target.id[0] && target.next_seq == 1u);
+            assert(index.len == (variant == 14u ? 4u : 0u));
+            if (variant == 14u) assert(!memcmp(index.data, "keep", 4u));
             assert(target.log_fd == log_fd && target.lock_fd == (variant == 4u ? log_fd : lock_fd));
             assert(fcntl(log_fd, F_GETFD) >= 0 && fcntl(lock_fd, F_GETFD) >= 0);
         }
@@ -4214,6 +4251,7 @@ test_prepared_native_seed(const char *cwd)
         json_decref(before);
         json_decref(after);
         snag_buf_free(&pending);
+        snag_buf_free(&index);
         snag_session_close(&target);
         snag_session_close(&prepared);
     }
