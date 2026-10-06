@@ -834,13 +834,16 @@ read_page(struct snag_vm_reader *reader, struct snag_vm_read_result *result)
         return;
     }
     if (request->kind == SNAG_VM_READ_SESSIONS) {
-        struct snag_session owned = {.lock_fd = -1};
+        struct snag_session *owned = NULL;
         if (request->owned_session_id[0]) {
-            memcpy(owned.id, request->owned_session_id, sizeof(owned.id));
-            owned.lock_fd = 0;
+            /* This identity-only placeholder owns no descriptors or state. */
+            owned = calloc(1u, sizeof(*owned));
+            if (!owned) goto failed;
+            memcpy(owned->id, request->owned_session_id, sizeof(owned->id));
         }
-        json_t *catalog = snag_store_catalog(reader->store, &owned, request->stored_limit,
+        json_t *catalog = snag_store_catalog(reader->store, owned, request->stored_limit,
             read_canceled, reader, result->error, sizeof(result->error));
+        free(owned);
         char *encoded = catalog ? json_dumps(catalog, JSON_COMPACT) : NULL;
         json_decref(catalog);
         if (!encoded) goto failed;

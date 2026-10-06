@@ -1,4 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
 #include "vm_reader.h"
 #include "fs.h"
 #include "history_view.h"
@@ -10,6 +13,7 @@
 
 #include <assert.h>
 #include <errno.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1106,6 +1110,14 @@ conversation_snapshot_test(void)
 int
 main(void)
 {
+#if defined(__GLIBC__)
+    /* Exercise the worker with the static musl build's default stack size. */
+    pthread_attr_t attributes;
+    assert(pthread_attr_init(&attributes) == 0);
+    assert(pthread_attr_setstacksize(&attributes, 128u * 1024u) == 0);
+    assert(pthread_setattr_default_np(&attributes) == 0);
+    assert(pthread_attr_destroy(&attributes) == 0);
+#endif
     projection_test();
     owner_state_test();
     conversation_snapshot_test();

@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Keep session-list snapshots off the history worker stack so the Vim workspace
+  opens and attaches sessions in static Linux builds.
+
 - Allow redirected output to /dev/null on macOS, where poll reports that valid
   device as unavailable. Keep failures for closed and read-only descriptors.
   Restore object iteration for builds using the local Jansson ABI declarations;

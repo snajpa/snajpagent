@@ -756,31 +756,33 @@ list_sessions(struct snag_store *store, const struct snag_session *owned,
     struct snag_directory *dir = open_sessions_dir(store, error, error_size);
     const char *entry;
     struct session_list_row *rows = NULL;
+    struct snag_session *snapshot = NULL;
     size_t count = 0u, capacity = 0u;
     int rc = -1;
 
     if (!dir) goto out;
+    snapshot = malloc(sizeof(*snapshot));
+    if (!snapshot) goto out;
     while ((entry = snag_directory_next(dir)) != NULL) {
         if (cancel && cancel(cancel_opaque)) goto canceled;
-        struct snag_session snapshot;
-        if (matching_snapshot(store, &snapshot, entry, cancel, cancel_opaque) < 0) {
+        if (matching_snapshot(store, snapshot, entry, cancel, cancel_opaque) < 0) {
             if (cancel && cancel(cancel_opaque)) goto canceled;
             continue;
         }
         /* Closing a second descriptor of our lock drops the owner's POSIX lock. */
         bool live = owned && owned->lock_fd >= 0 && !strcmp(owned->id, entry);
-        if (!live) live = snag_session_is_live(&snapshot);
+        if (!live) live = snag_session_is_live(snapshot);
         if (!stored_limit && !live) {
-            snag_session_close(&snapshot);
+            snag_session_close(snapshot);
             continue;
         }
         int attachment = live ?
-            snag_session_endpoint_status(snapshot.dir_fd, snapshot.dir_path) : -1;
+            snag_session_endpoint_status(snapshot->dir_fd, snapshot->dir_path) : -1;
         unsigned int status = !live ? 3u : attachment > 0 ? 0u : attachment == 0 ? 1u : 2u;
         static const char *const states[] = {"attached", "detached", "running", "stored"};
-        uint64_t time_ms = snapshot.last_time_ms;
-        json_t *cells = list_cells(store, &snapshot, states[status], columns);
-        snag_session_close(&snapshot);
+        uint64_t time_ms = snapshot->last_time_ms;
+        json_t *cells = list_cells(store, snapshot, states[status], columns);
+        snag_session_close(snapshot);
         if (cancel && cancel(cancel_opaque)) {
             json_decref(cells);
             goto canceled;
@@ -838,6 +840,7 @@ out:
     if (dir) (void)snag_directory_close(dir);
     for (size_t row = 0u; row < count; ++row) json_decref(rows[row].cells);
     free(rows);
+    free(snapshot);
     if (rc < 0 && error_size && !error[0])
         (void)snag_errorf(error, error_size, "cannot write session list");
     return rc;
