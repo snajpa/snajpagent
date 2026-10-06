@@ -8,8 +8,9 @@
 #include "store_binary_producer.h"
 #include "store_binary_checkpoint.h"
 
-/* Attach the live commit path to an independently verified native state and
- * exact EOF boundary under its exclusive lock. The caller proves identity,
+/* Attach an independently verified native state at its exact committed boundary.
+ * A read-only snapshot has no I/O worker; a writer owns its exclusive lock/EOF.
+ * The caller proves identity,
  * frontier membership, native process scan cursors and complete working provenance.
  * Clone producer metadata and checkpoint origins
  * on success; caller retains all input owners. No file conversion or creation. */
@@ -34,6 +35,10 @@ int snag_session_binary_checkpoint_setup(struct snag_session *, int directory,
  * identity/frontier, once while idle. Caller keeps the fd alive through session
  * close. CPU-only setup; cache claims confer no journal or semantic authority. */
 int snag_session_binary_index_setup(struct snag_session *, int fd, char *, size_t);
+/* Transfer derived-index descriptor ownership only on successful attachment. */
+int snag_session_binary_index_adopt(struct snag_session *, int fd, char *, size_t);
+/* Drain and close native I/O/index ownership before deleting its journal. */
+void snag_session_unbind_binary(struct snag_session *);
 /* Last completed cache-write status, independent of semantic commit success.
  * ENOTSUP means unattached; zero means no observed failure, not verified lookup
  * completeness. Point readers still verify membership and canonical bytes. */
@@ -106,7 +111,10 @@ int snag_checkpoint_state_decode(const json_t *data, struct snag_session *state)
 
 bool snag_store_trash_id(const char *name, char id[SNAG_ID_HEX_LEN + 1u]);
 int snag_store_verify_private_fd(int fd, bool directory, const char *name, char *error, size_t error_size);
-int snag_store_open_session_files(struct snag_session *session, bool create, char *error, size_t error_size);
+/* Existing opens return 1 for native, 0 for legacy; only absence permits fallback.
+ * New creation remains legacy until native provisional persistence is integrated. */
+int snag_store_open_session_files(struct snag_session *, bool create, char *, size_t);
+int snag_store_load_binary_session(struct snag_session *, enum snag_tail_policy, char *, size_t);
 int snag_store_remove_upload_staging(int session_fd, char *error, size_t error_size);
 int snag_store_scan_log(struct snag_session *session, enum snag_tail_policy tail_policy,
                        char *error, size_t error_size);

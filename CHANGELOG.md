@@ -4,6 +4,13 @@
 
 ## Unreleased
 
+- Open existing native sessions through bounded checkpoint admission, retaining
+  provider capture, working provenance and verified index frontier. Native
+  journals take precedence over legacy sidecars; malformed native storage stops
+  recovery. Read-only lookup retains no writer worker and detects source races.
+  Reopening restores the canonical checkpoint receipt clock; building native
+  provider context preserves the acknowledged journal sequence.
+
 - Retain owning native checkpoint access, authenticated slot order and the
   verified current Merkle frontier during bounded admission, supporting writer
   provenance reconstruction without a lifetime replay.

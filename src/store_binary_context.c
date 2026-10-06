@@ -5,11 +5,14 @@
 #include "fs.h"
 #include "irc.h"
 #include "store_binary_legacy.h"
+#include "store_binary_wire.h"
+#include "store_internal.h"
 
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 struct source_walk {
     int fd;
@@ -283,7 +286,8 @@ snag_store_materialize_binary_context_checkpoint(struct snag_session *source,
     char *error, size_t error_size)
 {
     if (!source || !restored || source == restored || !frame || !receipt ||
-        source->log_fd < 0 || source->lock_fd < 0 || source->pending_log ||
+        source->log_fd < 0 || (source->lock_fd < 0 && !source->snapshot_read_only) ||
+        source->pending_log ||
         !snag_hex_is_lower(source->id, SNAG_ID_HEX_LEN) ||
         restored->dir_fd >= 0 || restored->log_fd >= 0 || restored->lock_fd >= 0 ||
         restored->pending_log) {
@@ -384,7 +388,8 @@ resume_pinned(struct snag_session *source, struct snag_session *restored,
     char *error, size_t error_size)
 {
     if (!source || !restored || source == restored || !frame || !receipt || !stop ||
-        source->log_fd < 0 || source->lock_fd < 0 || source->pending_log ||
+        source->log_fd < 0 || (source->lock_fd < 0 && !source->snapshot_read_only) ||
+        source->pending_log ||
         restored->dir_fd >= 0 || restored->log_fd >= 0 || restored->lock_fd >= 0 ||
         restored->pending_log) {
         return snag_fail(error, error_size, EINVAL, "invalid pinned native resume target");
@@ -525,7 +530,8 @@ snag_store_admit_binary_context_checkpoint(struct snag_session *source,
     const struct snag_context_control *control, char *error, size_t error_size)
 {
     if (!source || !restored || source == restored || !images || !recovery ||
-        images[0] < -1 || images[1] < -1 || source->log_fd < 0 || source->lock_fd < 0 ||
+        images[0] < -1 || images[1] < -1 || source->log_fd < 0 ||
+        (source->lock_fd < 0 && !source->snapshot_read_only) ||
         source->pending_log ||
         restored->dir_fd >= 0 || restored->log_fd >= 0 || restored->lock_fd >= 0 ||
         restored->pending_log || floor < SNAG_BINARY_HEADER_SIZE) {
@@ -616,6 +622,149 @@ done:
     snag_binary_context_admission_free(&staged);
     snag_buf_free(&scratch);
     snag_buf_free(&image);
+    return rc;
+}
+
+/* Slot sequences were joined to canonical receipts during admission. Derive
+ * their physical checkpoint clock from that same independently bounded suffix,
+ * never from an image's claimed location or a legacy checkpoint seek pointer. */
+static int
+restore_checkpoint_clock(int fd, const struct snag_binary_context_admission *admission,
+    const struct snag_binary_anchor *stop, struct snag_session *state)
+{
+    uint64_t sequence = admission->sequences[0] > admission->sequences[1] ?
+        admission->sequences[0] : admission->sequences[1];
+    struct snag_binary_anchor cursor = admission->available.boundary;
+    struct snag_buf scratch = {.max = SNAG_BINARY_BATCH_MAX};
+    int rc = -1;
+    while (cursor.end < stop->end) {
+        struct snag_binary_batch batch;
+        struct snag_binary_anchor after;
+        int read = snag_binary_batch_read(fd, stop->end, &cursor, &scratch, &batch, &after);
+        if (read < 0) goto done;
+        if (read || after.end > stop->end) {
+            snag_errno(EINVAL);
+            goto done;
+        }
+        if (sequence >= cursor.next_seq && sequence < after.next_seq) {
+            state->checkpoint_seq = sequence;
+            state->checkpoint_offset = (int64_t)cursor.end;
+            rc = 0;
+            goto done;
+        }
+        cursor = after;
+    }
+    snag_errno(EINVAL);
+done:
+    snag_buf_free(&scratch);
+    return rc;
+}
+
+int
+snag_store_load_binary_session(struct snag_session *session, enum snag_tail_policy policy,
+    char *error, size_t error_size)
+{
+    if (!session || session->dir_fd < 0 || session->log_fd < 0 || session->binary ||
+        session->pending_log || (session->lock_fd < 0 && !session->snapshot_read_only) ||
+        (policy != SNAG_TAIL_REJECT && policy != SNAG_TAIL_TRUNCATE &&
+            policy != SNAG_TAIL_IGNORE) ||
+        (session->snapshot_read_only && policy != SNAG_TAIL_IGNORE)) {
+        return snag_fail(error, error_size, EINVAL, "invalid native session open");
+    }
+    if (error_size) error[0] = '\0';
+    snag_file_info before;
+    if (snag_fstat(session->log_fd, &before) < 0 || !S_ISREG(before.st_mode) ||
+        before.st_size < SNAG_BINARY_HEADER_SIZE) {
+        return snag_fail(error, error_size, EINVAL, "invalid native journal size");
+    }
+    uint64_t window = (uint64_t)SNAG_BINARY_SUFFIX_TARGET + SNAG_BINARY_WIRE_BATCH_MAX;
+    uint64_t floor = (uint64_t)before.st_size > window ?
+        (uint64_t)before.st_size - window : SNAG_BINARY_HEADER_SIZE;
+    if (floor < SNAG_BINARY_HEADER_SIZE) floor = SNAG_BINARY_HEADER_SIZE;
+    int images[2] = {-1, -1};
+    const char *names[2] = {"checkpoint.0", "checkpoint.1"};
+    struct snag_session candidate;
+    snag_session_init(&candidate);
+    struct snag_binary_context_admission admission = {0};
+    struct snag_binary_checkpoint_sources sources = {0};
+    struct snag_binary_producer producer = {0};
+    struct snag_binary_recovery recovery = {0};
+    struct snag_binary_identity identity;
+    struct snag_binary_anchor initial;
+    int rc = -1;
+    int saved = 0;
+    for (size_t i = 0u; i < 2u; ++i) {
+        images[i] = snag_open_read_security_at(session->dir_fd, names[i], false);
+        if (images[i] < 0) {
+            if (errno == ENOENT) continue;
+            goto done;
+        }
+        if (snag_store_verify_private_fd(images[i], false, "native checkpoint",
+                error, error_size) < 0) goto done;
+    }
+    if (source_header(session->log_fd, &identity, &initial) < 0 ||
+        snag_store_admit_binary_context_checkpoint(session, &candidate, images, floor, NULL,
+            &recovery, &sources, &admission, NULL, error, error_size) < 0 ||
+        restore_checkpoint_clock(session->log_fd, &admission, &recovery.verified, &candidate) < 0 ||
+        snag_binary_producer_restore(&producer, session->log_fd, &recovery.verified,
+            &admission.available, &sources, &candidate, NULL, NULL) < 0) goto done;
+    snag_file_info after;
+    if (snag_fstat(session->log_fd, &after) < 0) goto done;
+    if (!snag_file_unchanged(&before, &after)) {
+        snag_fail(error, error_size, EAGAIN, "native source changed during session open");
+        goto done;
+    }
+    if (recovery.incomplete_tail_bytes) {
+        if (policy == SNAG_TAIL_REJECT) {
+            snag_fail(error, error_size, EINVAL, "native journal has an incomplete tail");
+            goto done;
+        }
+        if (policy == SNAG_TAIL_TRUNCATE &&
+            (snag_truncate(session->log_fd, (int64_t)recovery.verified.end) < 0 ||
+                snag_sync_file(session->log_fd) < 0)) goto done;
+    }
+    /* Borrow descriptors while staging the owner. Only complete setup transfers
+     * the opener's resource custody; cleanup must leave borrowed fds alive. */
+    candidate.dir_fd = session->dir_fd;
+    candidate.log_fd = session->log_fd;
+    candidate.lock_fd = session->lock_fd;
+    candidate.snapshot_read_only = session->snapshot_read_only;
+    if (snag_session_bind_binary(&candidate, &identity, &recovery.verified, &admission.tree,
+            &producer, &sources, NULL, error, error_size) < 0 ||
+        snag_session_binary_checkpoint_setup(&candidate, candidate.dir_fd,
+            admission.generations, admission.sequences, &admission.available,
+            error, error_size) < 0) goto done;
+    if (!candidate.snapshot_read_only) {
+        int index = snag_open_private_append_at(candidate.dir_fd, "history.idx", false);
+        if (index < 0 && errno == ENOENT)
+            index = snag_open_private_append_at(candidate.dir_fd, "history.idx", true);
+        if (index >= 0) {
+            char index_error[128];
+            if (snag_store_verify_private_fd(index, false, "native index", index_error,
+                    sizeof(index_error)) < 0 ||
+                snag_session_binary_index_adopt(&candidate, index,
+                    index_error, sizeof(index_error)) < 0) (void)close(index);
+        }
+    }
+    candidate.dir_path = session->dir_path;
+    session->dir_path = NULL;
+    session->dir_fd = session->log_fd = session->lock_fd = -1;
+    snag_session_close(session);
+    *session = candidate;
+    snag_session_init(&candidate);
+    rc = 0;
+done:
+    saved = errno;
+    if (rc < 0 && error_size && !error[0])
+        snag_errorf(error, error_size, "cannot open native session: %s", strerror(errno));
+    candidate.dir_fd = candidate.log_fd = candidate.lock_fd = -1;
+    snag_session_close(&candidate);
+    for (size_t i = 0u; i < 2u; ++i)
+        if (images[i] >= 0) (void)close(images[i]);
+    snag_binary_producer_free(&producer);
+    snag_binary_checkpoint_sources_free(&sources);
+    snag_binary_context_admission_free(&admission);
+    errno = saved;
     return rc;
 }
 

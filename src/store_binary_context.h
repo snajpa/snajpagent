@@ -29,7 +29,8 @@ int snag_store_reconcile_binary_context_prefix(struct snag_session *source,
 /* Joint state-only core/provider materialization from a frame already decoded
  * and pinned against this independently authenticated canonical receipt.
  * The caller establishes latest membership, capture ancestry, complete producer
- * closure and immutable frame/source ownership under the exclusive writer lock.
+ * closure and immutable frame/source ownership under the exclusive writer lock,
+ * or through a read-only source snapshot checked for mutation before adoption.
  * Compare common frame/receipt/index/section boundaries, resolve all required
  * sources through pinned access and recheck source stamps before joint adoption.
  * Work uses the working-set table and canonical batches; no prefix replay or
@@ -82,7 +83,8 @@ void snag_binary_context_admission_free(struct snag_binary_context_admission *);
  * through the discovered tail. A damaged/unsupported selected image fails; no
  * implicit lifetime scan, older-state adoption, rewrite or truncation follows.
  * Optional available[slot] supplements that capture under the independent proof
- * contract above. Caller owns immutable source/images and exclusive writer lock.
+ * contract above. Caller owns immutable source/images and the exclusive writer
+ * lock, or marks a read-only snapshot that fails if the source stamp changes.
  * Success atomically installs state-only core/origins/provider; recovery counts
  * only suffix batches and reports physical open-tail bytes without repair authority.
  * Optional admission retains selected access and reconstructs only the bounded

@@ -210,6 +210,9 @@ struct snag_session {
     int dir_fd;
     int log_fd;
     int lock_fd;
+    /* Filesystem snapshots read native custody without writer ownership.
+     * Source rechecks detect races; commits and checkpoint writes fail EROFS. */
+    bool snapshot_read_only;
     struct snag_buf *pending_log; /* New sessions stay in memory until input. */
     int64_t log_end;
     /* Exact range of the last successful commit call, excluding automatic

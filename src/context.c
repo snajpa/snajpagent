@@ -3613,7 +3613,8 @@ projection_error: snag_errorf(error, error_size, "response request projection ex
     projection->input_tokens_bound = 0u; /* Unknown until counted by the provider. */
     /* Reconstructed state-only views have no journal writer. A live legacy
      * owner may still persist its first materialized provider checkpoint. */
-    if (session->log_fd >= 0 && session->lock_fd >= 0 && session->checkpoint_seq &&
+    if (!session->binary && session->log_fd >= 0 && session->lock_fd >= 0 &&
+        session->checkpoint_seq &&
         !session->checkpoint_has_context && session->on_checkpoint &&
         snag_session_checkpoint(session, error, error_size) < 0) goto out;
     rc = 0;

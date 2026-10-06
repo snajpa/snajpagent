@@ -3071,9 +3071,40 @@ working-set closure and bounded suffix; it never consults this derived index.
 
 Close drains owned publication or journal work before descriptor/lock teardown
 while releasing no abandoned candidate effects. It preserves provisional files
-and already-canonical receipts for recovery. Ordinary native creation/open/resume
-and general reader integration remain unfinished; explicitly bound checkpoint
-operation does not switch existing JSONL sessions onto the native backend.
+and already-canonical receipts for recovery. Existing native sessions now open
+through bounded joint admission; provisional native creation, stopped conversion
+and native checkpoint-suffix dispatch remain unfinished. New session creation
+continues to use JSONL until those factory steps are integrated.
+
+### Existing native session opening
+
+The ordinary exclusive opener prefers `journal.bin`; only ENOENT selects legacy
+`events.jsonl`. Native corruption, unsupported sections and unavailable checkpoint
+custody stay errors. A fresh source-size measurement establishes the receipt
+window independently of image claims: 32 MiB plus one permitted physical batch,
+clipped to the journal header. The loader opens private images, authenticates
+their canonical receipt order, restores joint state and retains owning access,
+then reconstructs producer provenance and the current logical frontier. It
+restores the checkpoint receipt clock from canonical suffix batches. Native
+provider projection preserves that clock and the acknowledged boundary. A final
+source-stamp check precedes resource binding. No history index is read during
+admission, and no missing source invokes lifetime replay.
+
+The exclusive opener may synchronize removal of a verified incomplete physical
+tail after successful state/provenance admission. Complete corrupt batches and
+lost final delimiters fail before this phase. Trash recovery rejects incomplete
+tails. Read-only name/list snapshots ignore a verified open tail, detect source
+changes and bind metadata without an I/O worker. Their commit, checkpoint and
+index-writer operations fail EROFS. They never acquire/close another owner's lock
+or alter the journal, images or derived index.
+
+The live opener installs authenticated slot generations/ordinals and owns its
+attached derived-index descriptor. Failure to attach the cache leaves canonical
+state available with index lookup unavailable. Native close drains I/O before
+closing an adopted index and the opener's journal/lock/directory. Confirmed
+deletion closes that owner before unlinking the exact native files. Once the
+canonical journal is removed, the private trash name retains deletion intent;
+recovery accepts only the exact remaining private checkpoint/index/lock metadata.
 
 ### Native forward history queries
 
@@ -3096,8 +3127,8 @@ acceptance keeps the current cut, stop-after consumes that record, and a later
 read or callback failure retains the last accepted prefix. This publication is
 separate from the low-level reader's provisional, failure-atomic cursor. Paging
 charges decoded record bytes and leaves both descriptors' positions unchanged.
-The JSONL reader remains unchanged. Ordinary native factory/resume and full
-semantic readers still require their remaining integration and qualification.
+The JSONL reader remains unchanged. Native creation and checkpoint-suffix semantic
+dispatch still require their remaining integration and qualification.
 
 ### Native reverse history queries
 

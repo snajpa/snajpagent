@@ -94,7 +94,9 @@ int snag_store_reduce_binary_suffix(struct snag_session *source, struct snag_ses
  * committed stop. A partial batch or any mismatched stop member fails; bytes
  * after stop remain UNINSPECTED and success supplies no tail-repair authority.
  * Required older locations use a pinned table at start, never a lifetime scan.
- * The caller proves its identity/membership, start ancestry, immutable ownership
+ * A read-only snapshot source may replace the exclusive lock; the final source
+ * stamp must still match. The caller proves identity/membership, start ancestry,
+ * immutable ownership
  * and byte-work budget. Actual suffix references can require additional old
  * locations beyond the checkpoint's current closure; those must be supplied
  * with independent membership proof, or reduction fails unavailable.

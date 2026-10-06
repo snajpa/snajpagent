@@ -285,7 +285,13 @@ int
 snag_store_open_session_files(struct snag_session *session, bool create, char *error, size_t error_size)
 {
     if (lock_session(session->dir_fd, &session->lock_fd, error, error_size) < 0) return -1;
-    session->log_fd = snag_open_private_append_at(session->dir_fd, "events.jsonl", create);
+    bool native = !create;
+    session->log_fd = snag_open_private_append_at(session->dir_fd,
+        native ? "journal.bin" : "events.jsonl", create);
+    if (native && session->log_fd < 0 && errno == ENOENT) {
+        native = false;
+        session->log_fd = snag_open_private_append_at(session->dir_fd, "events.jsonl", false);
+    }
     if (session->log_fd < 0)
         return snag_errorf(error, error_size, "cannot open event log: %s", strerror(errno));
     if (snag_fd_cloexec(session->log_fd) < 0 ||
@@ -293,7 +299,7 @@ snag_store_open_session_files(struct snag_session *session, bool create, char *e
     session->log_end = snag_seek(session->log_fd, 0, SEEK_END);
     if (session->log_end < 0)
         return snag_errorf(error, error_size, "cannot seek event log: %s", strerror(errno));
-    return 0;
+    return native ? 1 : 0;
 }
 static bool
 session_closure_event(const char *type)
@@ -4000,7 +4006,7 @@ struct snag_binary_session {
     json_t *data;
     bool io_pending, retryable, retried, faulted, checkpoint_configured;
     bool checkpoint_pending, checkpoint_failed, checkpoint_published, receipt_candidate;
-    bool index_configured;
+    bool index_configured, index_owned;
     int index_error, index_fd;
 };
 
@@ -4136,6 +4142,7 @@ close_binary_session(struct snag_session *session)
             (void)snag_sleep_ms(1u);
     }
     (void)snag_binary_io_close(binary->io);
+    if (binary->index_owned) (void)close(binary->index_fd);
     binary_discard_candidate(binary);
     snag_binary_producer_free(&binary->producer);
     snag_binary_checkpoint_sources_free(&binary->sources);
@@ -4143,6 +4150,12 @@ close_binary_session(struct snag_session *session)
     snag_buf_free(&binary->checkpoint_access);
     free(binary);
     session->binary = NULL;
+}
+
+void
+snag_session_unbind_binary(struct snag_session *session)
+{
+    if (session) close_binary_session(session);
 }
 
 int
@@ -4153,7 +4166,8 @@ snag_session_bind_binary(struct snag_session *session, const struct snag_binary_
     char *error, size_t error_size)
 {
     if (!session || !identity || !boundary || !tree || !producer || !sources || session->binary ||
-        session->pending_log || session->log_fd < 0 || session->lock_fd < 0 ||
+        session->pending_log || session->log_fd < 0 ||
+        (session->lock_fd < 0 && !session->snapshot_read_only) ||
         session->log_end < 0 || boundary->end != (uint64_t)session->log_end ||
         boundary->next_seq != session->next_seq || boundary->turns != session->turn_count ||
         !boundary->next_seq || tree->count != boundary->next_seq - 1u ||
@@ -4176,7 +4190,8 @@ snag_session_bind_binary(struct snag_session *session, const struct snag_binary_
     binary_hex(digest, boundary->digest, sizeof(boundary->digest));
     if (strcmp(id, session->id) || strcmp(digest, session->prev_sha256) ||
         snag_fstat(session->log_fd, &info) < 0 || !S_ISREG(info.st_mode) || info.st_size < 0 ||
-        (uint64_t)info.st_size != boundary->end ||
+        (uint64_t)info.st_size < boundary->end ||
+        (!session->snapshot_read_only && (uint64_t)info.st_size != boundary->end) ||
         snag_pread(session->log_fd, bytes, sizeof(bytes), 0) != (ssize_t)sizeof(bytes) ||
         snag_binary_header_decode(bytes, sizeof(bytes), &found, &initial) < 0 ||
         found.created_ms != identity->created_ms ||
@@ -4195,7 +4210,8 @@ snag_session_bind_binary(struct snag_session *session, const struct snag_binary_
     binary->tree = *tree;
     if (snag_binary_producer_clone(&binary->producer, producer) < 0 ||
         snag_binary_checkpoint_sources_clone(&binary->sources, sources) < 0 ||
-        !(binary->io = snag_binary_io_start(session->log_fd, boundary, ops))) {
+        (!session->snapshot_read_only &&
+            !(binary->io = snag_binary_io_start(session->log_fd, boundary, ops)))) {
         int code = errno;
         snag_binary_producer_free(&binary->producer);
         snag_binary_checkpoint_sources_free(&binary->sources);
@@ -4212,6 +4228,8 @@ snag_session_binary_index_setup(struct snag_session *session, int fd,
 {
     if (!session || fd < 0)
         return snag_fail(error, error_size, EINVAL, "invalid native index attachment");
+    if (session->snapshot_read_only)
+        return snag_fail(error, error_size, EROFS, "snapshot has no native index writer");
     struct snag_binary_session *binary = session->binary;
     if (!binary) return snag_fail(error, error_size, ENOTSUP, "session has no native owner");
     if (binary->faulted)
@@ -4223,6 +4241,15 @@ snag_session_binary_index_setup(struct snag_session *session, int fd,
     binary->index_configured = true;
     binary->index_fd = fd;
     return 0;
+}
+
+int
+snag_session_binary_index_adopt(struct snag_session *session, int fd,
+    char *error, size_t error_size)
+{
+    int rc = snag_session_binary_index_setup(session, fd, error, error_size);
+    if (!rc) session->binary->index_owned = true;
+    return rc;
 }
 
 int
@@ -4607,7 +4634,8 @@ snag_session_binary_checkpoint_setup(struct snag_session *session, int directory
     if (!rc) rc = snag_binary_index_tree_root(&available->tree, root);
     if (!rc) rc = snag_binary_checkpoint_index_decode(staged.data, staged.len,
         &binary->identity, &available->boundary, root, &pinned);
-    if (!rc) rc = snag_binary_io_checkpoint_setup(binary->io, directory, generations, sequences);
+    if (!rc && !session->snapshot_read_only)
+        rc = snag_binary_io_checkpoint_setup(binary->io, directory, generations, sequences);
     if (rc < 0) {
         int code = errno;
         snag_buf_free(&staged);
@@ -5022,6 +5050,8 @@ checkpoint_binary_session(struct snag_session *session, char *error, size_t erro
 int
 snag_session_checkpoint(struct snag_session *session, char *error, size_t error_size)
 {
+    if (session && session->snapshot_read_only)
+        return snag_fail(error, error_size, EROFS, "cannot checkpoint a read-only snapshot");
     if (session && session->binary)
         return checkpoint_binary_session(session, error, error_size);
     if (!session || session->pending_log || session->log_fd < 0 || session->lock_fd < 0)
@@ -5046,6 +5076,10 @@ int
 snag_session_commit(struct snag_session *session, const char *type, json_t *data,
                    uint64_t *written_seq, char *error, size_t error_size)
 {
+    if (session->snapshot_read_only) {
+        json_decref(data);
+        return snag_fail(error, error_size, EROFS, "cannot commit to a read-only snapshot");
+    }
     if (session->binary) {
         struct snag_binary_session *binary = session->binary;
         bool maintenance = type && data && binary->checkpoint_configured &&

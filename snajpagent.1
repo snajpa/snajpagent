@@ -5636,7 +5636,24 @@ Do not run older builds against these files: versions that bounded global histor
 can truncate the archive. Back up history before manually editing or removing it.
 .TP
 .I $HOME/.snajpagent/sessions/SESSION/events.jsonl
-Append-only durable session log.
+Append-only legacy session log. New sessions currently use this format.
+.TP
+.I $HOME/.snajpagent/sessions/SESSION/journal.bin
+Append-only native journal. An existing native journal takes precedence over
+the legacy log. Resume validates its checkpoint receipts and bounded suffix;
+damaged native storage or unavailable required checkpoint data stops recovery.
+Legacy fallback applies only when this file is absent.
+.TP
+.I $HOME/.snajpagent/sessions/SESSION/checkpoint.0
+.TQ
+.I $HOME/.snajpagent/sessions/SESSION/checkpoint.1
+Alternating native state and provider checkpoints, pinned by journal receipts.
+Keep them with the journal when backing up a native session.
+.TP
+.I $HOME/.snajpagent/sessions/SESSION/history.idx
+Derived native history index. Checkpoint admission uses the journal and images.
+Point queries that require unavailable old source membership remain unavailable;
+explicit sequential history inspection reads canonical journal records.
 .TP
 .I $HOME/.snajpagent/sessions/SESSION/lock
 Live session lock.

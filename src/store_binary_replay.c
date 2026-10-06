@@ -981,7 +981,8 @@ reduce_binary_suffix(struct snag_session *source, struct snag_session *state,
     struct snag_binary_checkpoint_sources *sources, char *error, size_t error_size)
 {
     if (!source || !state || source == state || !start || !recovery || !sources ||
-        source->log_fd < 0 || source->lock_fd < 0 || source->pending_log ||
+        source->log_fd < 0 || (source->lock_fd < 0 && !source->snapshot_read_only) ||
+        source->pending_log ||
         state->dir_fd >= 0 || state->log_fd >= 0 || state->lock_fd >= 0 || state->pending_log ||
         state->on_commit || state->on_commit_free || state->on_commit_opaque ||
         state->on_checkpoint || state->checkpoint_context || state->checkpoint_state ||

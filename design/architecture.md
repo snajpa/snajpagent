@@ -5,9 +5,10 @@
 The common context requirements and transition rules are maintained in
 [Context lifecycle](context-lifecycle.md). Component details below must agree
 with that contract across live operation, checkpoint restore and history tools.
-The next-format [binary storage design](session-storage.md) defines replacement
-checkpoints and indexed history. The storage implementation described here is
-the current JSONL format.
+The [binary storage design](session-storage.md) defines replacement checkpoints
+and indexed history. Existing native sessions use that bounded admission path;
+new session creation and legacy recovery still use the JSONL format described
+below while native provisional persistence and conversion are integrated.
 
 The proposed [Vim workspace and pager-retention design](vim-mode.md) adds an
 explicit full-screen frontend over semantic session history. Its windowed
@@ -26,7 +27,13 @@ a stopped target follows ordinary recovery. The writer lock still prevents a
 second owner if ownership changes during selection. SSH network loss requires
 server-side liveness detection to close a half-open transport and its frontend.
 The append-only rollout for a session is
-`$DOTDIR/sessions/<session-id>/events.jsonl`. Format-4 records carry the byte
+`$DOTDIR/sessions/<session-id>/events.jsonl` for legacy sessions. An existing
+`journal.bin` selects native storage, including read-only name/list lookup.
+Checkpoint admission restores core, provider capture, working provenance and
+the logical frontier before the exclusive opener starts an I/O owner. Source
+stamps reject concurrent changes. A read-only snapshot owns no writer worker;
+an unavailable image or required old source stops native recovery. Only absence
+of the native journal permits legacy fallback. Format-4 JSONL records carry the byte
 offset of the last embedded checkpoint, which combines session state and the
 materialized provider view. Resume reads the final complete record, seeks to
 that checkpoint and verifies its hash and bounded suffix. Format-2/3 journals

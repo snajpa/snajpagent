@@ -1955,6 +1955,166 @@ native_checkpoint_sync_file(void *opaque, int fd)
 }
 
 static void
+factory_copy(int fd, int directory, const char *name)
+{
+    int output = snag_create_private_at(directory, name, true);
+    snag_file_info info;
+    assert(output >= 0 && !snag_fstat(fd, &info) && info.st_size >= 0);
+    unsigned char bytes[8192];
+    int64_t offset = 0;
+    while (offset < info.st_size) {
+        ssize_t got = snag_pread(fd, bytes, sizeof(bytes), offset);
+        assert(got > 0 && !snag_write_full(output, bytes, (size_t)got));
+        offset += got;
+    }
+    assert(!snag_sync_file(output) && !close(output));
+}
+
+static void
+native_factory_open(struct snag_session *expected, int images_directory)
+{
+    char *path = snag_path_join(getenv("TMPDIR") ? getenv("TMPDIR") : "/tmp",
+        "snag-native-factory-XXXXXX");
+    assert(path && mkdtemp(path));
+    struct snag_store store;
+    snag_store_init(&store);
+    char error[256];
+    assert(!snag_store_open(&store, path, error, sizeof(error)));
+    assert(!snag_mkdir_private_at(store.sessions_fd, expected->id));
+    int directory = snag_open_read_at(store.sessions_fd, expected->id, true);
+    assert(directory >= 0);
+    factory_copy(expected->log_fd, directory, "journal.bin");
+    const char *images[2] = {"checkpoint.0", "checkpoint.1"};
+    for (size_t i = 0u; i < 2u; ++i) {
+        int image = snag_open_read_at(images_directory, images[i], false);
+        assert(image >= 0);
+        factory_copy(image, directory, images[i]);
+        assert(!close(image));
+    }
+    int legacy = snag_create_private_at(directory, "events.jsonl", true);
+    assert(legacy >= 0 && !snag_write_full(legacy, "do not read\n", 12u) && !close(legacy));
+    struct snag_session opened;
+    snag_session_init(&opened);
+    int rc = snag_session_open(&store, &opened, expected->id, error, sizeof(error));
+    if (rc < 0) fprintf(stderr, "native factory open: %s\n", error);
+    assert(!rc && opened.binary && opened.log_end == expected->log_end &&
+        opened.next_seq == expected->next_seq && !strcmp(opened.id, expected->id));
+    /* Resume restores a cold recipe and retained source custody. Request
+     * equality tests its semantics without equating warm scratch/cursors. */
+    json_t *empty = json_array();
+    struct snag_context_projection left = {0};
+    struct snag_context_projection right = {0};
+    uint64_t expected_next = expected->next_seq;
+    uint64_t opened_next = opened.next_seq;
+    assert(empty && !snag_context_build(expected, SNAJPAGENT_MODEL, "medium", 1u, empty,
+        0u, false, NULL, NULL, NULL, NULL, &left, error, sizeof(error), NULL));
+    rc = snag_context_build(&opened, SNAJPAGENT_MODEL, "medium", 1u, empty,
+        0u, false, NULL, NULL, NULL, NULL, &right, error, sizeof(error), NULL);
+    if (rc < 0) fprintf(stderr, "native factory projection: %s\n", error);
+    assert(!rc && json_equal(left.create_request.value, right.create_request.value));
+    assert(expected->next_seq == expected_next && opened.next_seq == opened_next);
+    json_t *expected_facts = checkpoint_facts(expected);
+    json_t *opened_facts = checkpoint_facts(&opened);
+    if (expected_facts && opened_facts && !json_equal(expected_facts, opened_facts)) {
+        const char *key;
+        json_t *value;
+        json_object_foreach(expected_facts, key, value) {
+            if (json_equal(value, json_object_get(opened_facts, key))) continue;
+            char *wanted = json_dumps(value, JSON_ENCODE_ANY);
+            char *got = json_dumps(json_object_get(opened_facts, key), JSON_ENCODE_ANY);
+            fprintf(stderr, "native factory core %s differs: wanted=%s got=%s\n",
+                key, wanted ? wanted : "<absent>", got ? got : "<absent>");
+            free(wanted);
+            free(got);
+        }
+    }
+    assert(expected_facts && opened_facts && json_equal(expected_facts, opened_facts));
+    json_decref(expected_facts);
+    json_decref(opened_facts);
+    snag_context_projection_free(&left);
+    snag_context_projection_free(&right);
+    json_decref(empty);
+    char last[SNAG_ID_HEX_LEN + 1u];
+    assert(!snag_store_find_last(&store, last, error, sizeof(error)) &&
+        !strcmp(last, expected->id));
+    snag_session_close(&opened);
+    int journal = snag_create_private_at(directory, "journal.bin", false);
+    assert(journal >= 0);
+    int64_t committed = snag_seek(journal, 0, SEEK_END);
+    assert(committed == expected->log_end && !snag_write_full(journal, "x", 1u));
+    snag_file_info before;
+    assert(!snag_fstat(journal, &before));
+    struct snag_session view;
+    snag_session_init(&view);
+    assert(!snag_session_locate(&store, &view, expected->id, NULL, NULL, error, sizeof(error)));
+    view.log_fd = snag_open_read_security_at(view.dir_fd, "journal.bin", false);
+    view.snapshot_read_only = true;
+    assert(view.log_fd >= 0 && !snag_store_load_binary_session(&view, SNAG_TAIL_IGNORE,
+        error, sizeof(error)) && view.binary && view.lock_fd < 0 &&
+        view.snapshot_read_only && view.log_end == committed &&
+        view.next_seq == expected->next_seq);
+    uint64_t sequence = 123u;
+    assert(snag_session_commit(&view, "banner_updated", json_pack("{s:s}", "text", "forbidden"),
+        &sequence, error, sizeof(error)) < 0 && errno == EROFS && sequence == 123u);
+    assert(snag_session_checkpoint(&view, error, sizeof(error)) < 0 && errno == EROFS);
+    assert(snag_session_binary_index_setup(&view, journal, error, sizeof(error)) < 0 &&
+        errno == EROFS);
+    snag_session_close(&view);
+    snag_file_info after;
+    assert(!snag_fstat(journal, &after) && snag_file_unchanged(&before, &after));
+    snag_session_init(&opened);
+    assert(!snag_session_locate(&store, &opened, expected->id, NULL, NULL, error, sizeof(error)) &&
+        snag_store_open_session_files(&opened, false, error, sizeof(error)) == 1);
+    int log_fd = opened.log_fd;
+    int lock_fd = opened.lock_fd;
+    assert(snag_store_load_binary_session(&opened, SNAG_TAIL_REJECT, error, sizeof(error)) < 0 &&
+        errno == EINVAL && !opened.binary && opened.next_seq == 1u &&
+        opened.log_fd == log_fd && opened.lock_fd == lock_fd &&
+        fcntl(log_fd, F_GETFD) >= 0 && fcntl(lock_fd, F_GETFD) >= 0);
+    snag_session_close(&opened);
+    assert(!snag_fstat(journal, &after) && snag_file_unchanged(&before, &after));
+    assert(!snag_session_open(&store, &opened, expected->id, error, sizeof(error)) &&
+        opened.binary && opened.log_end == committed && opened.next_seq == expected->next_seq);
+    assert(!snag_fstat(journal, &after) && after.st_size == committed);
+    uint64_t next = opened.next_seq;
+    assert(!snag_session_commit(&opened, "banner_updated", json_pack("{s:s}", "text", "reopened"),
+        &sequence, error, sizeof(error)) && sequence == next && opened.next_seq == next + 1u);
+    assert(!snag_session_checkpoint(&opened, error, sizeof(error)));
+    next = opened.next_seq;
+    int64_t end = opened.log_end;
+    snag_session_close(&opened);
+    assert(!snag_session_open(&store, &opened, expected->id, error, sizeof(error)) &&
+        opened.binary && opened.next_seq == next && opened.log_end == end);
+    snag_session_close(&opened);
+    unsigned char header;
+    assert(snag_pread(journal, &header, 1u, 0) == 1);
+    unsigned char bad = header ^ 1u;
+    assert(pwrite(journal, &bad, 1u, 0) == 1);
+    assert(snag_session_open(&store, &opened, expected->id, error, sizeof(error)) < 0 &&
+        !opened.binary && opened.next_seq == 1u && strstr(error, "native"));
+    snag_session_close(&opened);
+    assert(pwrite(journal, &header, 1u, 0) == 1 && !close(journal));
+    assert(!snag_session_open(&store, &opened, expected->id, error, sizeof(error)));
+    char confirmed[9];
+    assert(snprintf(confirmed, sizeof(confirmed), "%.8s", expected->id) == 8);
+    assert(!snag_session_delete(&store, &opened, confirmed, &sequence,
+        error, sizeof(error)) && !opened.binary && opened.log_fd < 0 && opened.lock_fd < 0);
+    snag_session_close(&opened);
+    snag_file_info removed;
+    assert(snag_lstat_at(store.sessions_fd, expected->id, &removed) < 0 && errno == ENOENT);
+    const char *files[] = {"journal.bin", "events.jsonl", "checkpoint.0", "checkpoint.1",
+        "history.idx", "lock"};
+    for (size_t i = 0u; i < sizeof(files) / sizeof(files[0]); ++i)
+        assert(snag_lstat_at(directory, files[i], &removed) < 0 && errno == ENOENT);
+    assert(!close(directory));
+    assert(!unlinkat(store.root_fd, "sessions", AT_REMOVEDIR) &&
+        !unlinkat(store.root_fd, "trash", AT_REMOVEDIR));
+    snag_store_close(&store);
+    assert(!rmdir(path));
+    free(path);
+}
+
+static void
 live_snapshot_capture(void)
 {
     static bool checked;
@@ -2259,6 +2419,7 @@ live_snapshot_capture(void)
         assert(copies == 1u && projection.irc_seq >= shifted + 1u);
         snag_context_projection_free(&projection);
     }
+    native_factory_open(&state, directory);
     json_decref(empty);
     assert(!snag_binary_checkpoint_index_decode(selection->available.data,
         selection->available.len, &identity, &selection->available_boundary,
