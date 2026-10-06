@@ -52,13 +52,12 @@
   owner API. Validate channel membership on every write, preserve UTF-8 line
   boundaries and record pending/written/failed/uncertain chunk outcomes. Cancel
   unwritten messages only in the departed channel; close a partially written
-  frame's connection without replay. Channel commands/panes remain in progress.
+  frame's connection without replay.
 
 - Restore external channel join intent and conversation identity across session
   resume. Keep local membership metadata outside model input and channel replay.
   Add owner-validated channel selection/JOIN and PART/NAMES/TOPIC actions with
-  membership tokens, rejecting old routes after PART, KICK or reconnect. Public
-  channel commands, chat delivery states and Vim channel panes remain in progress.
+  membership tokens, rejecting old routes after PART, KICK or reconnect.
 
 - Track external IRC channel membership, topics and names separately on each
   connection. Keep other channels connected after PART, KICK or a channel error;

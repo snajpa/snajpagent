@@ -896,17 +896,18 @@ The common operator `/query`, `/msg`, `/notice` and private `/me` paths now shar
 query resolution with model tools. UI admission captures connection scopes and
 known peer handles before queued commands can observe later NICK/QUIT events.
 `/query` without operands lists existing operator-query selectors. Explicit
-addresses stay within the current session owner. Channel address commands,
-channel actions, a richer ambiguity picker and VM connection/channel buffers
-remain next. The semantic owner now accepts frozen operator-query
+addresses stay within the current session owner. Channel address commands and
+panes are implemented as described in the current checkpoint; connection buffers
+and a richer ambiguity picker remain next. The semantic owner accepts frozen conversation
 routes, independent revisioned drafts and scoped commands. Request IDs bind
 route and text; private admission clears only its exact draft revision. Query
 selection returns to the requesting frontend while preserving classic focus.
 The compact query catalogue excludes bodies, and incoming metadata stays current
 while the semantic controller is attached. Vim now provides per-conversation
 composers, reader filters and origin-window selection. External receive state
-tracks multiple joined channels; operator channel routes, hosted actions and
-agent-only channel receive admission remain unfinished. The nickname mapping helper follows the
+tracks multiple joined channels. Operator channel routes and agent-only channel
+admission are implemented; hosted actions remain unfinished. The nickname mapping
+helper follows the
 [IRC CASEMAPPING definitions](https://modern.ircdocs.horse/#casemapping-parameter).
 
 This expands the original UI-only storage scope. Implement compatible readers,
