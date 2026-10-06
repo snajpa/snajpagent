@@ -1841,6 +1841,17 @@ native_grouped_forward_event(void *opaque, const struct snag_session *state, uin
     return 0;
 }
 
+static int
+native_grouped_reverse_event(void *opaque, const struct snag_session *state, uint64_t sequence,
+    const char *type, const json_t *data, char *error, size_t size)
+{
+    (void)error;
+    (void)size;
+    uint64_t *next = opaque;
+    assert(!state && sequence == (*next)-- && type && json_is_object(data));
+    return 0;
+}
+
 static void
 test_native_voice_grouped(void)
 {
@@ -1940,6 +1951,15 @@ test_native_voice_grouped(void)
         if (sequence < 6u) assert(forward.offset == SNAG_BINARY_HEADER_SIZE);
     }
     assert(forward.offset == session.log_end && !strcmp(forward.prev_sha256, session.prev_sha256));
+    uint64_t next_before = UINT64_MAX, reverse_next = 5u;
+    assert(!snag_session_each_event_reverse(&session, 0u, 1u,
+        native_grouped_reverse_event, &reverse_next, &next_before, error, sizeof(error)) &&
+        next_before == 6u && reverse_next == 5u); /* Optional metadata consumes bytes/cut only. */
+    for (uint64_t sequence = 5u; sequence; --sequence) {
+        assert(!snag_session_each_event_reverse(&session, next_before, 1u,
+            native_grouped_reverse_event, &reverse_next, &next_before, error, sizeof(error)) &&
+            next_before == (sequence > 1u ? sequence : 0u) && reverse_next == sequence - 1u);
+    }
     json_t *context = NULL;
     assert(!snag_session_voice_context(&session, &context, error, sizeof(error)));
     assert(json_is_true(json_object_get(context, "history_complete")) &&
@@ -2042,6 +2062,59 @@ native_forward_point(struct snag_session *session)
     }
 }
 
+struct native_reverse_probe {
+    uint64_t next;
+    unsigned int calls;
+    int result;
+    struct snag_session *append;
+};
+
+static int
+native_reverse_event(void *opaque, const struct snag_session *state, uint64_t sequence,
+    const char *type, const json_t *data, char *error, size_t size)
+{
+    struct native_reverse_probe *probe = opaque;
+    assert(!state && sequence == probe->next && type && data);
+    --probe->next;
+    ++probe->calls;
+    if (probe->append) {
+        struct snag_session *session = probe->append;
+        probe->append = NULL;
+        assert(!snag_session_commit(session, "voice_event", native_voice_data("user",
+            "Appended during pinned reverse callback"), NULL, error, size));
+    }
+    return probe->result < 0 ? snag_fail(error, size, EIO, "reverse callback failed") :
+        probe->result;
+}
+
+static void
+native_reverse_point(struct snag_session *session)
+{
+    char error[256];
+    uint64_t before = UINT64_MAX;
+    struct native_reverse_probe probe = {.next = 2u};
+    int rc = snag_session_each_event_reverse(session, 0u, 1u,
+        native_reverse_event, &probe, &before, error, sizeof(error));
+    if (rc < 0) fprintf(stderr, "native reverse history: %s\n", error);
+    assert(!rc && before == 2u && probe.calls == 1u);
+    assert(!snag_session_each_event_reverse(session, before, 1u,
+        native_reverse_event, &probe, &before, error, sizeof(error)) && !before &&
+        probe.calls == 2u && !probe.next);
+    for (int stop = 1; stop <= 2; ++stop) {
+        probe = (struct native_reverse_probe){.next = 2u, .result = stop};
+        assert(!snag_session_each_event_reverse(session, UINT64_MAX, SIZE_MAX,
+            native_reverse_event, &probe, &before, error, sizeof(error)) &&
+            before == (stop == SNAG_JOURNAL_STOP_AFTER ? 2u : 3u) && probe.calls == 1u);
+    }
+    probe = (struct native_reverse_probe){.next = 2u, .result = -1};
+    assert(snag_session_each_event_reverse(session, 0u, SIZE_MAX,
+        native_reverse_event, &probe, &before, error, sizeof(error)) < 0 &&
+        errno == EIO && !before && probe.calls == 1u);
+    probe = (struct native_reverse_probe){.next = 2u};
+    assert(!snag_session_each_event_reverse(session, 1u, SIZE_MAX,
+        native_reverse_event, &probe, &before, error, sizeof(error)) && !before && !probe.calls);
+}
+
 static void
 test_native_historical_point(void)
 {
@@ -2069,6 +2142,7 @@ test_native_historical_point(void)
     assert(snag_seek(session.log_fd, 0, SEEK_CUR) == 13 && snag_seek(index, 0, SEEK_CUR) == 31);
     assert(session.next_seq == 3u && atomic_load(&probe.effects) == 2u);
     native_forward_point(&session);
+    native_reverse_point(&session);
     json_t *context = NULL;
     rc = snag_session_voice_context(&session, &context, error, sizeof(error));
     if (rc < 0) fprintf(stderr, "historical native voice range: %s\n", error);
@@ -2124,6 +2198,15 @@ test_native_historical_point(void)
         assert(snag_session_each_event_forward(&session, &cursor, SIZE_MAX,
             native_forward_event, &forward, error, sizeof(error)) < 0 &&
             !forward.calls && !memcmp(&cursor, &saved_cursor, sizeof(cursor)));
+        struct native_reverse_probe reverse = {.next = 2u};
+        uint64_t before = UINT64_MAX;
+        assert(snag_session_each_event_reverse(&session, 0u, SIZE_MAX,
+            native_reverse_event, &reverse, &before, error, sizeof(error)) < 0 &&
+            errno == (fault == 1u ? ENOENT : EINVAL) && !before && !reverse.calls);
+        reverse = (struct native_reverse_probe){.next = 1u};
+        assert(!snag_session_each_event_reverse(&session, 2u, SIZE_MAX,
+            native_reverse_event, &reverse, &before, error, sizeof(error)) &&
+            !before && reverse.calls == 1u);
         /* A warm owning observation cache is independent of a later derived
          * index fault. Fresh hydration must still prove its missing old rows. */
         struct snag_voice_projection *warm = session.voice_projection;
@@ -2163,6 +2246,12 @@ test_native_historical_point(void)
     assert(cursor.next_seq == 4u && cursor.offset == session.log_end && forward.calls == 1u &&
         snag_seek(session.log_fd, 0, SEEK_CUR) == log_position &&
         snag_seek(index, 0, SEEK_CUR) == index_position && atomic_load(&probe.effects) == 3u);
+    struct native_reverse_probe reverse = {.next = 3u, .append = &session};
+    uint64_t before = UINT64_MAX;
+    assert(!snag_session_each_event_reverse(&session, 0u, SIZE_MAX,
+        native_reverse_event, &reverse, &before, error, sizeof(error)) &&
+        !before && !reverse.next && reverse.calls == 3u && session.next_seq == 5u &&
+        atomic_load(&probe.effects) == 4u);
     snag_session_close(&session);
     assert(!close(index) && !close(directory) && !rmdir(path));
     free(path);

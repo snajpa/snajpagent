@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Dispatch native reverse history through pinned acknowledged queries, preserving
+  sequence bounds, byte paging, optional metadata and callback stop behavior
+  without JSONL boundary assumptions.
+
 - Traverse native forward history at exact batch cuts, preserving accepted-prefix
   cursor progress and callback stop behavior while proving unavailable old rows
   against the independent acknowledged frontier.

@@ -3565,14 +3565,21 @@ snag_session_history_cursor_at(struct snag_session *session, int64_t offset,
         "cannot locate verified history offset") : 0;
 }
 
+static int native_history_reverse(struct snag_session *, uint64_t, size_t,
+    snag_session_event_fn, void *, uint64_t *, char *, size_t);
+
 int
 snag_session_each_event_reverse(struct snag_session *session, uint64_t before, size_t scan_bytes,
     snag_session_event_fn fn, void *opaque, uint64_t *next_before, char *error, size_t error_size)
 {
     struct snag_journal_cursor cursor;
-    if (!scan_bytes || !fn || !next_before)
+    if (!session || !scan_bytes || !fn || !next_before)
         return snag_fail(error, error_size, EINVAL, "invalid reverse history scan");
     *next_before = 0u;
+    if (session->binary) {
+        return native_history_reverse(session, before, scan_bytes,
+            fn, opaque, next_before, error, error_size);
+    }
     if (history_cursor_before(session, before, &cursor, error, error_size) < 0) return -1;
     while (cursor.offset > 0 && scan_bytes) {
         int64_t split = previous_newline(session, cursor.offset - 1);
@@ -4266,7 +4273,7 @@ struct native_history {
     struct snag_binary_checkpoint_index available, query;
     struct snag_buf access, query_bytes;
     unsigned char root[32];
-    bool has_query, callback_failed;
+    bool has_query, callback_failed, stopped;
     struct snag_journal_cursor *cursor;
     size_t remaining;
     snag_session_event_fn visit;
@@ -4300,8 +4307,8 @@ native_history_capture(struct native_history *history, uint64_t first,
 {
     const struct snag_journal_cursor *public = history->cursor;
     static const char zero[] = "0000000000000000000000000000000000000000000000000000000000000000";
-    /* An admitted native semantic root supplies a sequence, not a serialized
-     * physical cut. Its predecessor is resolved canonically like any query. */
+    /* A sequence-based source query supplies no serialized physical cut.
+     * Resolve its predecessor canonically, including admitted semantic roots. */
     bool begin = first || (!public->next_seq && !public->offset && !public->prev_sha256[0]) ||
         (public->next_seq == 1u && !public->offset &&
             !memcmp(public->prev_sha256, zero, sizeof(zero)));
@@ -4383,6 +4390,7 @@ native_history_visit(void *opaque, const struct snag_binary_record *record, uint
         history->callback_failed = true;
         return -1;
     }
+    history->stopped = result > 0;
     if (result && result != SNAG_JOURNAL_STOP_AFTER) return 1;
     /* The public reader preserves accepted-prefix progress even on a later
      * error. The low-level cursor remains a separate provisional traversal. */
@@ -4395,36 +4403,60 @@ native_history_visit(void *opaque, const struct snag_binary_record *record, uint
 }
 
 static int
-native_history_forward(struct snag_session *session, struct snag_journal_cursor *cursor,
-    uint64_t first, size_t scan_bytes, snag_session_event_fn visit, void *opaque,
-    char *error, size_t error_size)
+native_history_pin(struct snag_session *session, struct native_history *history)
 {
     const struct snag_binary_session *binary = session->binary;
     if (binary->faulted) {
-        return snag_fail(error, error_size, ESTALE, "native writer is faulted");
+        return snag_fail(history->error, history->error_size, ESTALE, "native writer is faulted");
     }
     if (!binary->checkpoint_configured) {
-        return snag_fail(error, error_size, ENOTSUP, "native source custody is not installed");
+        return snag_fail(history->error, history->error_size, ENOTSUP,
+            "native source custody is not installed");
     }
     if (binary->boundary.end > INT64_MAX) return snag_errno(EOVERFLOW);
-    struct native_history history = {.fd = session->log_fd,
-        .index_fd = binary->index_configured ? binary->index_fd : -1,
-        .through = binary->boundary, .frontier = binary->tree,
-        .access = {.max = SIZE_MAX}, .query_bytes = {.max = SIZE_MAX},
-        .cursor = cursor, .remaining = scan_bytes, .visit = visit, .opaque = opaque,
-        .error = error, .error_size = error_size};
+    history->fd = session->log_fd;
+    history->index_fd = binary->index_configured ? binary->index_fd : -1;
+    history->through = binary->boundary;
+    history->frontier = binary->tree;
+    history->access.max = SIZE_MAX;
+    history->query_bytes.max = SIZE_MAX;
     unsigned char installed_root[32];
-    int rc = snag_binary_index_tree_root(&history.frontier, history.root);
+    int rc = snag_binary_index_tree_root(&history->frontier, history->root);
     if (!rc) {
         rc = snag_binary_index_tree_root(&binary->available.tree, installed_root);
     }
     if (!rc) {
-        rc = snag_binary_checkpoint_index_copy(&history.access, &binary->available);
+        rc = snag_binary_checkpoint_index_copy(&history->access, &binary->available);
     }
     if (!rc) {
-        rc = snag_binary_checkpoint_index_decode(history.access.data, history.access.len,
-            &binary->identity, &binary->available.boundary, installed_root, &history.available);
+        rc = snag_binary_checkpoint_index_decode(history->access.data, history->access.len,
+            &binary->identity, &binary->available.boundary, installed_root, &history->available);
     }
+    return rc;
+}
+
+static int
+native_history_done(struct native_history *history, int rc)
+{
+    int saved = errno;
+    snag_buf_free(&history->query_bytes);
+    snag_buf_free(&history->access);
+    errno = saved;
+    if (rc < 0 && !history->callback_failed) {
+        return snag_errorf(history->error, history->error_size,
+            "cannot read native history: %s", strerror(errno));
+    }
+    return rc < 0 ? -1 : 0;
+}
+
+static int
+native_history_forward(struct snag_session *session, struct snag_journal_cursor *cursor,
+    uint64_t first, size_t scan_bytes, snag_session_event_fn visit, void *opaque,
+    char *error, size_t error_size)
+{
+    struct native_history history = {.cursor = cursor, .remaining = scan_bytes,
+        .visit = visit, .opaque = opaque, .error = error, .error_size = error_size};
+    int rc = native_history_pin(session, &history);
     struct snag_binary_cursor work;
     if (!rc) rc = native_history_capture(&history, first, &work);
     if (!rc) {
@@ -4432,14 +4464,35 @@ native_history_forward(struct snag_session *session, struct snag_journal_cursor 
             &history.through, &history.available, &history.frontier, history.through.next_seq,
             &work, native_history_visit, NULL, &history);
     }
-    int saved = errno;
-    snag_buf_free(&history.query_bytes);
-    snag_buf_free(&history.access);
-    errno = saved;
-    if (rc < 0 && !history.callback_failed) {
-        return snag_errorf(error, error_size, "cannot read native history: %s", strerror(errno));
+    return native_history_done(&history, rc);
+}
+
+static int
+native_history_reverse(struct snag_session *session, uint64_t before, size_t scan_bytes,
+    snag_session_event_fn visit, void *opaque, uint64_t *next_before,
+    char *error, size_t error_size)
+{
+    struct native_history history = {.remaining = scan_bytes,
+        .visit = visit, .opaque = opaque, .error = error, .error_size = error_size};
+    int rc = native_history_pin(session, &history);
+    if (!before || before > history.through.next_seq) before = history.through.next_seq;
+    while (!rc && before > 1u && history.remaining && !history.stopped) {
+        uint64_t sequence = before - 1u;
+        struct snag_journal_cursor cursor = {0};
+        struct snag_binary_cursor work;
+        history.cursor = &cursor;
+        rc = native_history_capture(&history, sequence, &work);
+        if (!rc) {
+            rc = snag_binary_checkpoint_query_cursor_read(history.fd, history.index_fd,
+                &history.through, &history.available, &history.frontier, before,
+                &work, native_history_visit, NULL, &history);
+        }
+        if (rc < 0 || cursor.next_seq != before) break;
+        before = sequence;
+        rc = 0;
     }
-    return rc < 0 ? -1 : 0;
+    if (rc >= 0) *next_before = before > 1u ? before : 0u;
+    return native_history_done(&history, rc);
 }
 
 int

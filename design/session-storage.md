@@ -3074,5 +3074,25 @@ acceptance keeps the current cut, stop-after consumes that record, and a later
 read or callback failure retains the last accepted prefix. This publication is
 separate from the low-level reader's provisional, failure-atomic cursor. Paging
 charges decoded record bytes and leaves both descriptors' positions unchanged.
-The JSONL reader remains unchanged. Ordinary native factory/resume, reverse and
-full semantic readers still require their remaining integration and qualification.
+The JSONL reader remains unchanged. Ordinary native factory/resume and full
+semantic readers still require their remaining integration and qualification.
+
+### Native reverse history queries
+
+The existing reverse API dispatches native sessions through the same pinned
+access, acknowledged frontier, exact cuts and borrowed source hydrator. Zero or
+a future before-sequence selects the pinned end; before one is already complete.
+Each descending sequence is a verified one-record canonical range. Old rows and
+causal dependencies require their own acknowledged membership when not installed;
+an unavailable cache cannot invent them, nor invalidate installed old membership.
+No old-prefix scan or synthetic JSONL byte boundary is used to locate a row.
+
+The existing caller byte budget measures decoded native record/header bytes.
+Unknown optional metadata consumes bytes and advances the reverse sequence cut
+without invoking the public callback. A positive stop-before leaves that row
+unconsumed; stop-after consumes it. Failed callbacks retain their own errno, and
+reverse failures leave the published next-before output zero as before. The
+legacy physical history-cursor hint is not used for native sequence queries.
+Callbacks can append without extending the pinned frontier. Reads preserve
+journal/index descriptor positions and do not change semantic state or execution
+ownership; a callback's explicit write remains its own operation.
