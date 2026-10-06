@@ -114,6 +114,48 @@ test_partial_close(void)
     snag_view_channel_close(&pair[1]);
 }
 
+struct duplex {
+    struct snag_view_channel *channel;
+    json_t *send, *expected;
+};
+
+static void *
+exchange_large(void *opaque)
+{
+    struct duplex *side = opaque;
+    /* The server and VM client both finish a write before dispatching input. */
+    send_value(side->channel, side->send);
+    json_t *received = receive(side->channel);
+    assert(json_equal(received, side->expected));
+    json_decref(received);
+    return NULL;
+}
+
+static void
+test_duplex(void)
+{
+    struct snag_view_channel pair[2];
+    assert(snag_view_channel_pair(pair) == 0);
+    size_t length = 3u * SNAG_SESSION_FRAME_MAX;
+    char *text = malloc(length + 1u);
+    assert(text);
+    memset(text, 'd', length);
+    text[length] = '\0';
+    json_t *first = json_pack("{s:s,s:i}", "text", text, "side", 0);
+    json_t *second = json_pack("{s:s,s:i}", "text", text, "side", 1);
+    assert(first && second);
+    free(text);
+    struct duplex sides[] = {{&pair[0], first, second}, {&pair[1], second, first}};
+    pthread_t thread;
+    assert(pthread_create(&thread, NULL, exchange_large, &sides[0]) == 0);
+    exchange_large(&sides[1]);
+    assert(pthread_join(thread, NULL) == 0);
+    snag_view_channel_close(&pair[0]);
+    snag_view_channel_close(&pair[1]);
+    json_decref(first);
+    json_decref(second);
+}
+
 struct engine {
     uint64_t generation;
     unsigned int submissions, cancels, quits;
@@ -297,6 +339,7 @@ main(void)
 {
     test_pair();
     test_partial_close();
+    test_duplex();
     test_server();
     test_lost_workspace();
     (void)puts("direct session transport and protocol: ok");

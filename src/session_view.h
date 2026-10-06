@@ -19,6 +19,7 @@ struct snag_view_channel {
     uint64_t total, read_deadline, write_deadline;
     char *output;
     size_t output_len, output_offset;
+    json_t *received;
 };
 
 void snag_view_channel_init(struct snag_view_channel *, int fd);
@@ -31,7 +32,8 @@ bool snag_view_channel_opened(const struct snag_view_channel *);
 /* Queue one JSON message; borrows the value. EAGAIN preserves pending output. */
 int snag_view_channel_send(struct snag_view_channel *, const json_t *);
 /* One transport slice per call. 1 complete, 0 partial/would-block, -1 failure.
- * A received JSON object transfers ownership to the caller. */
+ * A blocked private write buffers incoming fragments so simultaneous writes can
+ * progress; read transfers the completed JSON object to the caller. */
 int snag_view_channel_write(struct snag_view_channel *);
 int snag_view_channel_read(struct snag_view_channel *, json_t **);
 

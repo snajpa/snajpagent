@@ -18,6 +18,9 @@ newer draft retention, resume, startup failure and cancellation during a held
 provider request. Windows workspace wiring owns one engine, retains it when hidden
 and requires explicit quit before workspace exit or switching. Windows runtime
 qualification remains pending; no platform execution result is claimed here.
+Blocked private writes assemble at most one incoming message before dispatch,
+allowing simultaneous fragmented sends to make progress. A permanent threaded
+regression reproduces the original write/write stall and verifies both messages.
 
 IRC recovery checkpoint: selection-only /query, /chat, /join and /connections
 use the current connection scope when entered from an obsolete Vim pane.

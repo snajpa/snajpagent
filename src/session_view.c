@@ -124,6 +124,7 @@ snag_view_channel_close(struct snag_view_channel *channel)
     snag_buf_free(&channel->input);
     if (channel->output) memset(channel->output, 0, channel->output_len);
     free(channel->output);
+    json_decref(channel->received);
     snag_view_channel_init(channel, -1);
 }
 
@@ -164,6 +165,10 @@ snag_view_channel_write(struct snag_view_channel *channel)
         snag_session_packet_write(channel->fd, &channel->outgoing);
     if (channel->outgoing.offset != before)
         channel->write_deadline = snag_monotonic_ms() + VIEW_STALL_MS;
+    /* Both semantic endpoints finish writing before dispatching input. Drain
+     * one incoming message while backpressured to avoid a duplex deadlock. */
+    if (!rc && channel->local && !channel->received &&
+        snag_view_channel_read(channel, &channel->received) < 0) return -1;
     if (rc <= 0) return rc;
     channel->output_offset += snag_session_packet_length(&channel->outgoing) - 16u;
     channel->outgoing = (struct snag_session_packet){0};
@@ -179,6 +184,11 @@ snag_view_channel_write(struct snag_view_channel *channel)
 int
 snag_view_channel_read(struct snag_view_channel *channel, json_t **value)
 {
+    if (channel->received) {
+        *value = channel->received;
+        channel->received = NULL;
+        return 1;
+    }
     *value = NULL;
     if (!channel->verified) {
         int verified = snag_session_peer_verify(channel->fd);
