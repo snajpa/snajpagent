@@ -1757,6 +1757,28 @@ invokes this local search and displays the entered command with its result.
 without text opens search entry. These commands also work while reading a stored
 session. Search text stays outside model prompts and session history.
 .PP
+Transcripts and reports support h/l, w/b/e, 0/^/$ and counted movement inside
+text, j/k for logical lines and gj/gk for wrapped rows. H/M/L move within the
+visible window, zz centers the cursor, and Ctrl-B/F move by a full window.
+Use v for character selection, V for line selection or Ctrl-V for a rectangle.
+y copies the selection into the workspace register; yy copies the current line,
+and y followed by a motion copies that range. p/P inserts the copied text into
+the session composer. The operator can edit the draft before submitting it.
+.PP
+Yanks preserve logical line breaks and whole Unicode graphemes. Soft wrapping
+adds no copied newlines. Rectangles use display columns, expand selected tabs
+and pad short lines. Protected values stay redacted and terminal controls stay
+visible text. Selection pins the displayed history boundary and survives resize;
+new output cannot extend its range. Changing verbosity ends selection and retains
+the previous register. Escape leaves visual mode.
+.PP
+Copy runs in the background with source-byte/event progress. Ctrl-C cancels it
+before interrupting an owner. A canceled or failed copy preserves the previous
+register. Large registers use private temporary files; copying has no history-size
+quota. Pasting retains the composer's existing input-size limit. Registers belong
+to the current frontend and are shared by its session composers. Workstation
+clipboard publication is still pending in this development interface.
+.PP
 .B :sessions
 opens the agent picker;
 .B :workspaces

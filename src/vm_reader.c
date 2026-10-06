@@ -51,6 +51,7 @@ snag_vm_read_result_free(struct snag_vm_read_result *result)
     json_decref(result->catalog);
     json_decref(result->blocks);
     snag_vm_document_free(result->document);
+    snag_vm_register_free(&result->copied);
     free(result);
 }
 
@@ -118,6 +119,11 @@ view_open(struct snag_vm_reader *reader, const struct snag_vm_read_request *requ
     struct source_view *source = reader->views;
     while (source && strcmp(source->session.id, request->session_id)) source = source->next;
     reader->current = source;
+    if (source && request->pin_tail && request->trusted_tail &&
+        source->session.log_fd >= 0 && source->session.log_end > request->tail.offset) {
+        view_close(reader);
+        return view_open(reader, request, error, size);
+    }
     if (!source) {
         source = calloc(1u, sizeof(*source));
         if (!source) return -1;
@@ -591,12 +597,16 @@ static int
 search_page(struct snag_vm_reader *reader, struct snag_vm_read_result *result)
 {
     const struct snag_vm_read_request *request = &result->request;
-    struct snag_vm_search *search = snag_vm_search_open(request->query, request->ignorecase,
-        request->search_reverse, &request->search_start);
-    if (!search) return -1;
+    bool copying = request->selection.kind != SNAG_VM_SELECT_NONE;
+    struct snag_vm_search *search = copying ? NULL : snag_vm_search_open(request->query,
+        request->ignorecase, request->search_reverse, &request->search_start);
+    struct snag_vm_copy *copy = copying ? snag_vm_copy_open(&request->selection,
+        reader->store->root_fd) : NULL;
+    if (copying ? !copy : !search) return -1;
     int rc = -1;
     struct snag_vm_read_result page = {.request = *request};
     page.request.query = NULL;
+    page.request.selection.kind = SNAG_VM_SELECT_NONE;
     page.request.blocks_only = page.request.project = true;
     page.request.reverse = page.request.tail_only = page.request.if_changed = false;
     page.request.before_seq = 0u;
@@ -604,8 +614,8 @@ search_page(struct snag_vm_reader *reader, struct snag_vm_read_result *result)
     for (;;) {
         read_page(reader, &page);
         if (page.error_number) {
-            (void)snprintf(result->error, sizeof(result->error), "Search incomplete: %.230s",
-                page.error);
+            (void)snprintf(result->error, sizeof(result->error), "%s incomplete: %.230s",
+                copying ? "Copy" : "Search", page.error);
             errno = page.error_number;
             goto out;
         }
@@ -618,24 +628,33 @@ search_page(struct snag_vm_reader *reader, struct snag_vm_read_result *result)
         }
         page.request.tail = page.tail;
         page.request.trusted_tail = request->kind == SNAG_VM_READ_HISTORY;
+        page.request.pin_tail = page.request.trusted_tail;
         page.request.refresh = false;
+        bool done = false;
         for (size_t i = 0u;; ++i) {
             const json_t *block = page.document ? snag_vm_document_block(page.document, i) :
                 json_array_get(page.blocks, i);
             if (!block) break;
-            if (snag_vm_search_block(search, block, read_canceled, reader) < 0) goto out;
+            int step = copying ? snag_vm_copy_block(copy, block, read_canceled, reader) :
+                snag_vm_search_block(search, block, read_canceled, reader);
+            if (step < 0) goto out;
+            if (step > 0) { done = true; break; }
         }
         search_progress(reader, (uint64_t)page.cursor.offset,
             page.cursor.next_seq ? page.cursor.next_seq - 1u : 0u, (uint64_t)page.tail.offset);
-        if (!page.more) break;
+        if (!page.more || done) break;
         page.request.cursor = page.cursor;
         json_decref(page.blocks);
         page.blocks = NULL;
     }
-    result->found = snag_vm_search_result(search, &result->match, &result->wrapped);
+    if (copying) {
+        if (read_canceled(reader)) { errno = ECANCELED; goto out; }
+        if (snag_vm_copy_finish(copy, &result->copied, read_canceled, reader) < 0) goto out;
+    } else result->found = snag_vm_search_result(search, &result->match, &result->wrapped);
     rc = 0;
 out:
     snag_vm_search_close(search);
+    snag_vm_copy_close(copy);
     json_decref(page.events);
     json_decref(page.blocks);
     snag_vm_document_free(page.document);
@@ -647,7 +666,7 @@ read_page(struct snag_vm_reader *reader, struct snag_vm_read_result *result)
 {
     const struct snag_vm_read_request *request = &result->request;
     retain_views(reader, request);
-    if (request->query) {
+    if (request->query || request->selection.kind) {
         if (search_page(reader, result) < 0) goto failed;
         return;
     }

@@ -61,6 +61,18 @@ official_boundaries(void)
         if (boundary_count) {
             ++count;
             assert(boundaries[0] == 0u && boundaries[boundary_count - 1u] == text.len);
+            struct snag_grapheme_state state = {0};
+            size_t boundary = 0u;
+            for (size_t at = 0u; at < text.len;) {
+                uint32_t cp;
+                size_t bytes = snag_utf8_decode(text.data + at, text.len - at, &cp);
+                assert(bytes);
+                bool start = snag_grapheme_feed(&state, cp);
+                if (start) assert(at == boundaries[boundary++]);
+                else assert(at != boundaries[boundary]);
+                at += bytes;
+            }
+            assert(boundary + 1u == boundary_count);
             size_t position = 0u;
             for (size_t i = 1u; i < boundary_count; ++i) {
                 size_t bytes = snag_grapheme_next(text.data + position, text.len - position);

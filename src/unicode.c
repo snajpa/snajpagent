@@ -84,13 +84,8 @@ snag_unicode_word_class(uint32_t cp)
     return cp == '_' || (value & PROPERTY_WORD) ? 1u : 2u;
 }
 
-struct boundary_state {
-    unsigned int previous;
-    bool regional_odd, pictographic_extend, pictographic_zwj, consonant, linker;
-};
-
 static void
-advance(struct boundary_state *state, unsigned int value)
+advance(struct snag_grapheme_state *state, unsigned int value)
 {
     unsigned int current = value & PROPERTY_GCB, indic = (value >> 4u) & 3u;
     state->regional_odd = current == G_RI && !state->regional_odd;
@@ -109,7 +104,7 @@ advance(struct boundary_state *state, unsigned int value)
 }
 
 static bool
-joined(const struct boundary_state *state, unsigned int value)
+joined(const struct snag_grapheme_state *state, unsigned int value)
 {
     unsigned int a = state->previous, b = value & PROPERTY_GCB;
     if (a == G_CR && b == G_LF) return true; /* GB3 */
@@ -123,6 +118,17 @@ joined(const struct boundary_state *state, unsigned int value)
     return a == G_RI && b == G_RI && state->regional_odd; /* GB12, GB13 */
 }
 
+bool
+snag_grapheme_feed(struct snag_grapheme_state *state, uint32_t cp)
+{
+    unsigned int value = properties(cp);
+    bool boundary = !state->started || !joined(state, value);
+    if (boundary) *state = (struct snag_grapheme_state){0};
+    advance(state, value);
+    state->started = true;
+    return boundary;
+}
+
 size_t
 snag_grapheme_next(const unsigned char *text, size_t length)
 {
@@ -130,7 +136,7 @@ snag_grapheme_next(const unsigned char *text, size_t length)
     if (!length) return 0u;
     size_t position = snag_utf8_decode(text, length, &cp);
     if (!position) { errno = EILSEQ; return 0u; }
-    struct boundary_state state = {0};
+    struct snag_grapheme_state state = {0};
     advance(&state, properties(cp));
     while (position < length) {
         size_t bytes = snag_utf8_decode(text + position, length - position, &cp);
@@ -144,36 +150,49 @@ snag_grapheme_next(const unsigned char *text, size_t length)
 }
 
 int
+snag_grapheme_cells_feed(struct snag_grapheme_cells *state, uint32_t cp, bool ambiguous)
+{
+    unsigned int value = properties(cp), gcb = value & PROPERTY_GCB;
+    if (control(gcb)) { state->invalid = true; return snag_errno(EINVAL); }
+    if (!state->started) state->keycap_base = cp == '#' || cp == '*' || (cp >= '0' && cp <= '9');
+    state->started = true;
+    if (cp == 0x20e3u) state->keycap = true;
+    if (cp == 0xfe0eu) state->text_style = true;
+    if (cp == 0xfe0fu) state->emoji_style = true;
+    state->emoji = state->emoji || (value & PROPERTY_EMOJI);
+    state->pictographic = state->pictographic || (value & PROPERTY_EP);
+    state->regional = state->regional || gcb == G_RI;
+    state->zwj = state->zwj || gcb == G_ZWJ;
+    if (!(value & PROPERTY_ZERO) && gcb != G_EXTEND && gcb != G_ZWJ &&
+        gcb != G_V && gcb != G_T) {
+        int cells = (value & PROPERTY_WIDE) ||
+            (ambiguous && (value & PROPERTY_AMBIGUOUS)) ? 2 : 1;
+        if (state->width > INT_MAX - cells) return snag_errno(EOVERFLOW);
+        state->width += cells;
+    }
+    return 0;
+}
+
+int
+snag_grapheme_cells_width(const struct snag_grapheme_cells *state)
+{
+    if (state->invalid) return snag_errno(EINVAL);
+    if (state->regional || (state->keycap_base && state->keycap) ||
+        (!state->text_style && (state->emoji ||
+         (state->pictographic && (state->emoji_style || state->zwj))))) return 2;
+    return state->width;
+}
+
+int
 snag_grapheme_width(const unsigned char *text, size_t length, bool ambiguous_wide)
 {
-    size_t position = 0u;
-    int width = 0;
-    bool emoji = false, pictographic = false, zwj = false, text_style = false, emoji_style = false;
-    bool keycap_base = false, keycap = false, regional = false;
-    while (position < length) {
+    struct snag_grapheme_cells state = {0};
+    for (size_t at = 0u; at < length;) {
         uint32_t cp;
-        size_t bytes = snag_utf8_decode(text + position, length - position, &cp);
+        size_t bytes = snag_utf8_decode(text + at, length - at, &cp);
         if (!bytes) return snag_errno(EILSEQ);
-        unsigned int value = properties(cp), gcb = value & PROPERTY_GCB;
-        if (control(gcb)) return snag_errno(EINVAL);
-        if (!position) keycap_base = cp == '#' || cp == '*' || (cp >= '0' && cp <= '9');
-        if (cp == 0x20e3u) keycap = true;
-        if (cp == 0xfe0eu) text_style = true;
-        if (cp == 0xfe0fu) emoji_style = true;
-        emoji = emoji || (value & PROPERTY_EMOJI);
-        pictographic = pictographic || (value & PROPERTY_EP);
-        regional = regional || gcb == G_RI;
-        zwj = zwj || gcb == G_ZWJ;
-        if (!(value & PROPERTY_ZERO) && gcb != G_EXTEND && gcb != G_ZWJ &&
-            gcb != G_V && gcb != G_T) {
-            int cells = (value & PROPERTY_WIDE) ||
-                (ambiguous_wide && (value & PROPERTY_AMBIGUOUS)) ? 2 : 1;
-            if (width > INT_MAX - cells) return snag_errno(EOVERFLOW);
-            width += cells;
-        }
-        position += bytes;
+        if (snag_grapheme_cells_feed(&state, cp, ambiguous_wide) < 0) return -1;
+        at += bytes;
     }
-    if (regional || (keycap_base && keycap) ||
-        (!text_style && (emoji || (pictographic && (emoji_style || zwj))))) return 2;
-    return width;
+    return snag_grapheme_cells_width(&state);
 }

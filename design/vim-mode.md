@@ -6,6 +6,20 @@ Status: implementation in progress, October 6, 2026. The original inspection
 was against `7a70d81d336ef6f14d91ef944b1226c8efa65636`. The checkpoint below
 distinguishes implemented components from the complete intended behavior.
 
+Selection checkpoint: character, line and rectangular transcript/report selection
+now uses original source endpoints and a pinned history boundary. The background
+reader streams projected pages into the shared register; failed/canceled work
+preserves its previous contents. Registers spill after a64KiB memory quantum and
+carry character/line/block type without imposing a history quota. Character and
+line copies retain logical bytes, rectangles pad short lines, and controls remain
+inert. Constant-size Unicode boundary/width state joins graphemes across source
+fragments, including combining marks and emoji sequences. Visual endpoints
+survive resize; verbosity changes end selection. Local text motions, wrapped-row
+motion, yanks and composer paste are connected to the frontend. Clipboard
+publication, rectangular insertion into an existing composer, global numbered-line
+jumps and exact counted logical motions across cold-page boundaries remain to be
+completed with the remaining workspace/IRC/mouse/remote delivery.
+
 Implementation checkpoint: asynchronous pager ownership and retained rendering
 are implemented in this branch. Held-pager regressions cover IRC delivery and
 provider completion; interaction tests cover failures, tools and queued downloads.
@@ -125,7 +139,7 @@ and per-session undo/redo. Undo records changed ranges, with one temporary
 pre-edit snapshot while grouping typing; bracketed paste has independent boundaries.
 Submission/recovery and adopted owner text clear local undo state. Splits share
 the session editor and keep separate composer viewports. Register and undo state
-are memory-only; draft text remains in workspace snapshots. Native owner status
+are frontend-local; large transcript registers spill to private temporary files; draft text remains in workspace snapshots. Native owner status
 supplies provider/model/effort and working/idle fields. Mac/Linux PTY regressions
 cover editing, Unicode, counts, undo boundaries and owner reconciliation.
 Live history now opens a read-only semantic observer and uses validated committed

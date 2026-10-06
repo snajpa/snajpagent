@@ -6,6 +6,21 @@
 #include <stddef.h>
 #include <stdint.h>
 
+/* Streaming variants retain constant-size state across storage fragments.
+ * feed returns true before the first scalar of each extended grapheme. */
+struct snag_grapheme_state {
+    unsigned int previous;
+    bool started, regional_odd, pictographic_extend, pictographic_zwj, consonant, linker;
+};
+bool snag_grapheme_feed(struct snag_grapheme_state *, uint32_t);
+struct snag_grapheme_cells {
+    int width;
+    bool started, invalid, emoji, pictographic, zwj, text_style, emoji_style;
+    bool keycap_base, keycap, regional;
+};
+int snag_grapheme_cells_feed(struct snag_grapheme_cells *, uint32_t, bool ambiguous_wide);
+int snag_grapheme_cells_width(const struct snag_grapheme_cells *);
+
 /* Unicode 17 extended grapheme boundaries (UAX #29). Returns the first cluster's
  * byte length, or zero for empty input/invalid initial UTF-8. A later malformed
  * byte starts a new invalid span, preserving the preceding valid cluster. */

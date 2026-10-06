@@ -406,6 +406,9 @@ register and draft-local undo/redo. Slash-command output opens retained reports;
 survive workspace resume; `:q` closes a report while preserving its owner.
 Search the current transcript or report with `/TEXT`, `?TEXT` and `n`/`N`.
 `/search TEXT` invokes the same local search from the composer; Ctrl-C cancels it.
+Select transcript/report text with `v`, `V` or Ctrl-V, yank with `y`, then use
+`p`/`P` to put it in the session composer. Copies preserve logical lines and
+Unicode characters; large yanks use a private file-backed register.
 Deferred controls add completion reports, available through `:reports` after reconnect.
 The report catalogue also recovers output after owner restart. `/cat PATH` opens
 a retained file snapshot; repeating it reads a fresh copy into another report.

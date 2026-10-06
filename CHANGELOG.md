@@ -4,6 +4,12 @@
 
 ## Unreleased
 
+- Select Vim transcript/report text by character, line or rectangle and yank into
+  the shared workspace register. Keep logical line breaks, Unicode graphemes and
+  redaction across stored fragments. Pin the selected history boundary, stream
+  large copies into private files, and preserve the old register on cancellation
+  or failure. Paste into the local composer for editing before submission.
+
 - Search complete Vim transcripts and reports with /, ?, n/N and local /search.
   Keep source positions across pages and reflow, report progress and wraparound,
   cancel without interrupting the model, and offer explicit Unicode case folding.

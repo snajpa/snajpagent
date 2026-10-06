@@ -5,6 +5,7 @@
 #include "store.h"
 #include "vm_document.h"
 #include "vm_search.h"
+#include "vm_selection.h"
 #include "wake.h"
 #include "wire.h"
 
@@ -23,7 +24,7 @@ struct snag_vm_read_request {
      * The caller preserves ownership through this request's completion. */
     char owned_session_id[SNAG_ID_HEX_LEN + 1u];
     char session_id[SNAG_ID_HEX_LEN + 1u];
-    bool trusted_tail, refresh, reverse;
+    bool trusted_tail, pin_tail, refresh, reverse;
     bool project, if_changed, tail_only;
     bool blocks_only;
     unsigned int verbosity, columns;
@@ -31,6 +32,7 @@ struct snag_vm_read_request {
     const char *query;
     bool ignorecase, search_reverse;
     struct snag_vm_anchor search_start;
+    struct snag_vm_selection selection;
     /* tail is the owner's bound when trusted; previous is the already
      * displayed bound, independently used by if_changed and tail_only. */
     struct snag_journal_cursor tail, previous, cursor;
@@ -51,6 +53,7 @@ struct snag_vm_read_result {
     json_t *blocks;
     struct snag_vm_document *document;
     struct snag_vm_anchor match;
+    struct snag_vm_register copied;
     bool found, wrapped;
     bool best_effort, incomplete, more, unchanged;
     int error_number;

@@ -46,7 +46,9 @@ static const char *const help_rows[] = {
     ":set ignorecase/noignorecase    Ctrl-C: cancel search    R: refresh",
     ":sessions    :workspaces    :help    o: open selected history",
     ":history SESSION_ID    :verbosity 0..6    R: refresh current history",
-    "History: gg/G oldest/newest, j/k and Ctrl-D/U cross retained source pages",
+    "History: h/l w/b/e 0/^/$, j/k logical lines, gj/gk wrapped rows; gg/G oldest/newest",
+    "v/V/Ctrl-V: character/line/block selection    y: yank    p/P: paste into composer",
+    "yy or y + motion: copy    Esc: cancel selection    Ctrl-C: cancel copy",
     ":split or :sp    :vsplit or :vsp    :close    :q    :qa",
     "Ctrl-W s/v: split    Ctrl-W w/h/j/k/l: focus    Ctrl-W =: equalize",
     "Ctrl-W +/-: height    Ctrl-W >/<: width    Ctrl-W q: close",
@@ -71,6 +73,11 @@ struct vm_window {
     enum view_kind kind;
     size_t selected, top, composer_top;
     bool center_composer;
+    struct snag_vm_selection visual;
+    struct snag_journal_cursor visual_tail;
+    struct snag_vm_editor navigation;
+    size_t visual_column, visual_width;
+    bool yank_motion, yank_after_load;
     char selected_id[SNAG_ID_HEX_LEN + 1u];
     char *filter;
     struct snag_vm_rectangle rectangle;
@@ -122,7 +129,7 @@ struct vm {
     size_t command_cursor;
     char mode, prefix;
     char *search_query;
-    bool searching, search_reverse, search_command, ignorecase;
+    bool searching, copying, search_reverse, search_command, ignorecase;
     char message[512];
     int output;
     bool dirty, save_dirty, meaningful, quit, suspend, entering, paste_failed;
@@ -251,11 +258,11 @@ keeps_anchor(enum history_load load)
 static void
 cancel_search(struct vm *vm)
 {
-    if (!vm->searching) return;
+    if (!vm->searching && !vm->copying) return;
     snag_vm_reader_cancel(vm->reader);
     vm->generation = vm->reading_window = 0u;
-    vm->searching = false;
-    notice(vm, "Search canceled");
+    notice(vm, vm->copying ? "Copy canceled; register preserved" : "Search canceled");
+    vm->searching = vm->copying = false;
 }
 
 static void
@@ -520,7 +527,7 @@ save(struct vm *vm, const char *name)
 static uint64_t
 reader_request(struct vm *vm, struct snag_vm_read_request *request)
 {
-    vm->searching = false;
+    vm->searching = vm->copying = false;
     json_t *sources = json_array();
     if (!sources) return 0u;
     for (size_t i = 0u; i < vm->count; ++i) {
@@ -571,6 +578,11 @@ search(struct vm *vm, const char *query, bool reverse, bool command_input)
     if (!window->anchor_key[0]) remember_anchor(window);
     memcpy(request.session_id, window->session_id, sizeof(request.session_id));
     request.trusted_tail = snag_vm_connection_tail(focused_connection(vm), &request.tail);
+    if (window->visual.kind && window->visual_tail.next_seq) {
+        request.tail = window->visual_tail;
+        request.trusted_tail = request.pin_tail = true;
+        request.refresh = false;
+    }
     (void)snprintf(request.search_start.key, sizeof(request.search_start.key), "%s",
         window->anchor_key);
     request.search_start.seq = window->anchor_seq;
@@ -743,6 +755,8 @@ view(struct vm *vm, enum view_kind kind)
     window->report_catalog = window->report_open_pending = false;
     window->report_selector[0] = '\0';
     window->load = LOAD_NONE;
+    window->visual.kind = SNAG_VM_SELECT_NONE;
+    window->yank_motion = window->yank_after_load = false;
     window->follow = window->source_failed = false;
     window->follow_at = 0u;
     window->session_id[0] = window->anchor_key[0] = 0;
@@ -1096,7 +1110,7 @@ quit_sessions(struct vm *vm, bool all, bool force)
 static void
 load_history(struct vm *vm)
 {
-    if (vm->searching) return;
+    if (vm->searching || vm->copying) return;
     for (size_t i = 0u; i < vm->count; ++i) {
         struct vm_window *window = &vm->windows[(vm->focus + i) % vm->count];
         if (window->report_catalog && window->rectangle.visible) {
@@ -1124,9 +1138,17 @@ load_history(struct vm *vm)
         request.previous = window->tail;
         request.trusted_tail = snag_vm_connection_tail(
             connection_for(vm, window->session_id, false), &request.tail);
+        if (window->visual.kind && window->visual_tail.next_seq) {
+            request.tail = window->visual_tail;
+            request.trusted_tail = request.pin_tail = true;
+        }
         enum history_load load = window->load;
         if (load == LOAD_FIRST || load == LOAD_LAST || load == LOAD_REFRESH || load == LOAD_POLL)
             request.refresh = true;
+        if (load == LOAD_POLL && window->visual.kind) {
+            window->load = LOAD_NONE;
+            continue;
+        }
         if (load == LOAD_POLL) {
             request.if_changed = true;
             request.tail_only = !window->follow;
@@ -1238,6 +1260,9 @@ command(struct vm *vm, const char *text)
         if (window->kind != VIEW_TRANSCRIPT || snag_parse_count(rest, &level) < 0 ||
             level > SNAG_VERBOSITY_MAX) notice(vm, "Use :verbosity 0..6 in a transcript");
         else {
+            if (window->visual.kind) notice(vm, "Visual selection ended; register preserved");
+            window->visual.kind = SNAG_VM_SELECT_NONE;
+            window->yank_motion = window->yank_after_load = false;
             window->verbosity = (unsigned int)level;
             queue_history(vm, window, LOAD_KEEP);
             changed(vm);
@@ -1505,6 +1530,299 @@ composer_key(struct vm *vm, const struct snag_vm_input_event *event)
     return true;
 }
 
+static struct snag_vm_anchor
+history_anchor(const struct vm_window *window)
+{
+    struct snag_vm_anchor anchor = {.seq = window->anchor_seq, .byte = window->anchor_byte,
+        .heading = window->anchor_heading};
+    memcpy(anchor.key, window->anchor_key, sizeof(anchor.key));
+    struct snag_vm_document_row row;
+    if (snag_vm_document_row(window->document, window->selected, &row) == 0)
+        anchor.order = snag_vm_search_order(snag_vm_document_block(window->document, row.block));
+    return anchor;
+}
+
+static const char *
+history_field(const struct vm_window *window, struct snag_vm_document_row *row,
+    size_t *length, size_t *at)
+{
+    if (snag_vm_document_row(window->document, window->selected, row) < 0) return NULL;
+    const json_t *block = snag_vm_document_block(window->document, row->block);
+    const char *text = snag_vm_document_text(window->document, row);
+    *length = strlen(text);
+    if (row->heading && *length && text[*length - 1u] == '\n') --*length;
+    uint64_t byte = row->heading || !window->anchor_source ? window->anchor_byte :
+        snag_vm_source_position(block, window->anchor_byte, false);
+    *at = byte <= *length ? (size_t)byte : row->begin;
+    return text;
+}
+
+static void
+history_cursor(struct vm *vm, const struct snag_vm_document_row *row, size_t at)
+{
+    struct vm_window *window = &vm->windows[vm->focus];
+    const json_t *block = snag_vm_document_block(window->document, row->block);
+    (void)snprintf(window->anchor_key, sizeof(window->anchor_key), "%s",
+        snag_json_string(block, "key"));
+    window->anchor_seq = (uint64_t)json_integer_value(json_object_get(block, "seq"));
+    window->anchor_heading = row->heading;
+    window->anchor_source = true;
+    window->anchor_byte = snag_vm_document_source(window->document, row, at);
+    window->selected = locate_anchor(window);
+    window->follow = false;
+    changed(vm);
+}
+
+static size_t
+history_column(const struct vm_window *window, size_t *width)
+{
+    struct snag_vm_document_row row;
+    size_t length, at;
+    const char *text = history_field(window, &row, &length, &at);
+    if (!text) { *width = 1u; return 0u; }
+    size_t column = row.column;
+    for (size_t byte = row.begin; byte < at;) {
+        struct snag_vm_glyph unit = snag_vm_glyph(text + byte, length - byte, column, false);
+        if (unit.bytes > at - byte) break;
+        column += unit.columns;
+        byte += unit.bytes;
+    }
+    struct snag_vm_glyph glyph = snag_vm_glyph(text + at, length - at, column, false);
+    *width = glyph.columns ? glyph.columns : 1u;
+    if (window->visual.kind == SNAG_VM_SELECT_BLOCK && window->navigation.column_valid &&
+        !window->navigation.column_display && window->navigation.column != SIZE_MAX &&
+        window->navigation.column > column) {
+        column = window->navigation.column;
+        *width = 1u;
+    }
+    return column;
+}
+
+static void
+visual_begin(struct vm *vm, enum snag_vm_selection_kind kind)
+{
+    cancel_search(vm);
+    struct vm_window *window = &vm->windows[vm->focus];
+    if (vm->reading_window == window->id) {
+        snag_vm_reader_cancel(vm->reader);
+        vm->generation = vm->reading_window = 0u;
+    }
+    window->load = LOAD_NONE;
+    window->follow = false;
+    window->visual_tail = window->tail;
+    window->visual.first = history_anchor(window);
+    window->visual.kind = kind;
+    size_t width;
+    window->visual_column = history_column(window, &width);
+    window->visual_width = width;
+    notice(vm, kind == SNAG_VM_SELECT_LINE ? "VISUAL LINE" :
+        kind == SNAG_VM_SELECT_BLOCK ? "VISUAL BLOCK" : "VISUAL");
+    changed(vm);
+}
+
+static void
+yank(struct vm *vm)
+{
+    struct vm_window *window = &vm->windows[vm->focus];
+    window->visual.last = history_anchor(window);
+    size_t width, column = history_column(window, &width);
+    window->visual.left = column < window->visual_column ? column : window->visual_column;
+    window->visual.right = column > window->visual_column ? column + width :
+        window->visual_column + window->visual_width;
+    struct snag_vm_read_request request = {
+        .kind = window->kind == VIEW_REPORT ? SNAG_VM_READ_REPORT : SNAG_VM_READ_HISTORY,
+        .report = window->report, .selection = window->visual,
+        .columns = window->rectangle.columns, .verbosity = window->verbosity,
+        .tail = window->visual_tail,
+        .trusted_tail = window->visual_tail.next_seq != 0u,
+        .pin_tail = window->visual_tail.next_seq != 0u};
+    memcpy(request.session_id, window->session_id, sizeof(request.session_id));
+    vm->generation = reader_request(vm, &request);
+    if (!vm->generation) { notice(vm, "Cannot start copy; register preserved"); return; }
+    vm->copying = true;
+    vm->reading_window = window->id;
+    vm->reading_load = LOAD_NONE;
+    window->load = LOAD_NONE;
+    window->yank_motion = window->yank_after_load = false;
+    window->navigation.count = window->navigation.operator_count = 0u;
+    notice(vm, "Copying selection; Ctrl-C cancels");
+}
+
+static bool
+history_key(struct vm *vm, const struct snag_vm_input_event *event,
+    unsigned int key, bool control)
+{
+    struct vm_window *window = &vm->windows[vm->focus];
+    if (!document_view(window) || !window->document || vm->composer || vm->prefix == 'w')
+        return false;
+    if (key == SNAG_VM_KEY_ESCAPE || (control && key == 'c' && window->visual.kind)) {
+        cancel_search(vm);
+        window->visual.kind = SNAG_VM_SELECT_NONE;
+        window->yank_motion = window->yank_after_load = false;
+        window->navigation.count = 0u;
+        vm->prefix = 0;
+        notice(vm, "NORMAL");
+        return true;
+    }
+    if ((!control && (key == 'v' || key == 'V')) || (control && key == 'v')) {
+        enum snag_vm_selection_kind kind = control ? SNAG_VM_SELECT_BLOCK :
+            key == 'V' ? SNAG_VM_SELECT_LINE : SNAG_VM_SELECT_CHAR;
+        if (window->visual.kind == kind) {
+            window->visual.kind = SNAG_VM_SELECT_NONE;
+            notice(vm, "NORMAL");
+        } else if (window->visual.kind) {
+            window->visual.kind = kind;
+            notice(vm, kind == SNAG_VM_SELECT_LINE ? "VISUAL LINE" :
+                kind == SNAG_VM_SELECT_BLOCK ? "VISUAL BLOCK" : "VISUAL");
+        } else visual_begin(vm, kind);
+        return true;
+    }
+    if (!control && (key == 'p' || key == 'P')) {
+        if (!vm->reg.length) { notice(vm, "Register is empty"); return true; }
+        (void)connection_for(vm, window->session_id, true);
+        if (window->kind == VIEW_REPORT) {
+            char id[SNAG_ID_HEX_LEN + 1u];
+            memcpy(id, window->session_id, sizeof(id));
+            (void)open_history(vm, id);
+        }
+        vm->composer = true;
+        window->visual.kind = SNAG_VM_SELECT_NONE;
+        (void)composer_key(vm, event);
+        return true;
+    }
+    if (!control && key >= '0' && key <= '9' && (key != '0' || window->navigation.count)) {
+        size_t digit = key - '0';
+        if (window->navigation.count > (SIZE_MAX - digit) / 10u)
+            notice(vm, "Motion count is too large");
+        else window->navigation.count = window->navigation.count * 10u + digit;
+        return true;
+    }
+    size_t count = window->navigation.count ? window->navigation.count : 1u;
+    bool counted = window->navigation.count != 0u;
+    if (window->yank_motion && window->navigation.operator_count) {
+        if (count > SIZE_MAX / window->navigation.operator_count) {
+            notice(vm, "Motion count is too large");
+            return true;
+        }
+        count *= window->navigation.operator_count;
+    }
+    if (!control && key == 'y') {
+        if (window->visual.kind) {
+            if (window->yank_motion) {
+                window->visual.kind = SNAG_VM_SELECT_LINE;
+                if (count > 1u) {
+                    struct snag_vm_document_row row;
+                    size_t length, at;
+                    const char *text = history_field(window, &row, &length, &at);
+                    if (text) {
+                        struct snag_vm_motion motion = snag_vm_editor_motion(&window->navigation,
+                            text, length, at, 'j', count - 1u, true, false, false,
+                            window->rectangle.columns, window->rectangle.rows, window->top);
+                        history_cursor(vm, &row, motion.at);
+                    }
+                }
+            }
+            yank(vm);
+        } else {
+            visual_begin(vm, SNAG_VM_SELECT_CHAR);
+            window->yank_motion = true;
+            window->navigation.operator_count = count;
+            window->navigation.count = 0u;
+            notice(vm, "y: choose a motion or y for the current line");
+        }
+        return true;
+    }
+    if (key == 'g' && vm->prefix != 'g') return false;
+    if (!control && key == 'z') {
+        if (vm->prefix == 'z') {
+            size_t half = window->rectangle.rows / 2u;
+            window->top = window->selected > half ? window->selected - half : 0u;
+            vm->prefix = 0;
+            changed(vm);
+        } else vm->prefix = 'z';
+        return true;
+    }
+    if (control && (key == 'u' || key == 'd' || key == 'b' || key == 'f')) {
+        size_t rows = key == 'u' || key == 'd' ? window->rectangle.rows / 2u :
+            window->rectangle.rows;
+        move(vm, key == 'd' || key == 'f', count <= SIZE_MAX / (rows ? rows : 1u) ?
+            count * rows : SIZE_MAX);
+        window->navigation.count = 0u;
+        return true;
+    }
+    /* gg/G continue to address the retained source, including cold pages. */
+    if (!control && (key == 'G' || (key == 'g' && vm->prefix == 'g'))) {
+        window->navigation.count = 0u;
+        if (window->yank_motion) {
+            window->visual.kind = SNAG_VM_SELECT_LINE;
+            if (window->kind == VIEW_REPORT) {
+                selection(vm, key == 'G' ? SIZE_MAX : 0u);
+                yank(vm);
+                vm->prefix = 0;
+                return true;
+            }
+            window->yank_after_load = true;
+        }
+        return false;
+    }
+    if (control) return false;
+    if (key == 'H' || key == 'M' || key == 'L') {
+        size_t rows = window->rectangle.rows > 1u ? window->rectangle.rows - 1u : 1u;
+        selection(vm, window->top + (key == 'H' ? count - 1u :
+            key == 'M' ? rows / 2u : count < rows ? rows - count : 0u));
+        window->navigation.count = 0u;
+        if (window->yank_motion) {
+            window->visual.kind = SNAG_VM_SELECT_LINE;
+            yank(vm);
+        }
+        return true;
+    }
+    struct snag_vm_document_row row;
+    size_t length, at;
+    const char *text = history_field(window, &row, &length, &at);
+    if (!text) return false;
+    bool wrapped = vm->prefix == 'g';
+    if (wrapped && (key == 'j' || key == 'k')) {
+        move(vm, key == 'j', count);
+        vm->prefix = 0;
+        window->navigation.count = 0u;
+        return true;
+    }
+    window->navigation.operator = window->yank_motion ? 'y' : 0u;
+    struct snag_vm_motion motion = snag_vm_editor_motion(&window->navigation, text,
+        length, at, key, count, counted, false, false, window->rectangle.columns,
+        window->rectangle.rows, window->top);
+    window->navigation.operator = 0u;
+    if (!motion.valid) return false;
+    cancel_search(vm);
+    if (motion.at == at && (key == 'j' || key == 'k' ||
+        key == SNAG_VM_KEY_UP || key == SNAG_VM_KEY_DOWN)) {
+        bool down = key == 'j' || key == SNAG_VM_KEY_DOWN;
+        size_t next = window->selected;
+        struct snag_vm_document_row adjacent;
+        while (down ? next + 1u < snag_vm_document_rows(window->document) : next > 0u) {
+            next = down ? next + 1u : next - 1u;
+            if (snag_vm_document_row(window->document, next, &adjacent) < 0) break;
+            if (adjacent.block != row.block || adjacent.heading != row.heading) break;
+        }
+        if (next != window->selected) selection(vm, next);
+        else move(vm, down, 1u);
+    } else history_cursor(vm, &row, motion.at);
+    window->navigation.count = 0u;
+    vm->prefix = 0;
+    if (window->yank_motion) {
+        if (motion.lines) window->visual.kind = SNAG_VM_SELECT_LINE;
+        else if (!motion.inclusive && motion.at > at) {
+            history_cursor(vm, &row, snag_vm_text_previous(text, length, motion.at));
+        } else if (!motion.inclusive && motion.at < at) {
+            window->visual.first.byte = snag_vm_document_source(window->document, &row,
+                snag_vm_text_previous(text, length, at));
+        }
+        yank(vm);
+    }
+    return true;
+}
+
 static int
 input_event(void *opaque, const struct snag_vm_input_event *event)
 {
@@ -1622,11 +1940,12 @@ input_event(void *opaque, const struct snag_vm_input_event *event)
         vm->dirty = true;
         return 0;
     }
-    if (control && key == 'c' && vm->searching) {
+    if (control && key == 'c' && (vm->searching || vm->copying)) {
         cancel_search(vm);
         return 0;
     }
     if (vm->prefix != 'w' && composer_key(vm, event)) return 0;
+    if (history_key(vm, event, key, control)) return 0;
     if (key == SNAG_VM_KEY_ESCAPE) vm->prefix = 0;
     else if (control && key == 'z') {
         cancel_search(vm);
@@ -1705,7 +2024,7 @@ input_event(void *opaque, const struct snag_vm_input_event *event)
         } else if (key == 'G') {
             if (window->kind == VIEW_TRANSCRIPT ||
                 (window->kind == VIEW_REPORT && !window->document)) {
-                window->follow = window->kind == VIEW_TRANSCRIPT;
+                window->follow = window->kind == VIEW_TRANSCRIPT && !window->visual.kind;
                 queue_history(vm, window, LOAD_LAST);
             } else selection(vm, SIZE_MAX);
         }
@@ -1813,7 +2132,8 @@ connections_step(struct vm *vm)
             changed(vm);
         }
         if (c->report_open && focused_connection(vm) == c &&
-            vm->windows[vm->focus].kind == VIEW_TRANSCRIPT && !c->draft.len && !vm->mode &&
+            vm->windows[vm->focus].kind == VIEW_TRANSCRIPT &&
+            !vm->windows[vm->focus].visual.kind && !vm->copying && !c->draft.len && !vm->mode &&
             !vm->classic_pending && !vm->detach_exit && !vm->switch_workspace &&
             !vm->detach_suspend && !vm->quit_all && !vm->quit_window)
             open_report(vm, c, c->report_open);
@@ -1904,6 +2224,63 @@ draft_row(void *opaque, const struct snag_vm_text_row *row)
     return 0;
 }
 
+static void
+highlight_selection(struct vm *vm, const struct vm_window *window,
+    const struct snag_vm_document_row *row, size_t screen_row)
+{
+    if (!window->visual.kind) return;
+    struct snag_vm_anchor first = window->visual.first, last = history_anchor(window);
+    if (snag_vm_anchor_compare(&first, &last) > 0) {
+        struct snag_vm_anchor swap = first;
+        first = last;
+        last = swap;
+    }
+    const json_t *block = snag_vm_document_block(window->document, row->block);
+    const char *text = snag_vm_document_text(window->document, row);
+    size_t length = strlen(text);
+    size_t current_width, current_column = history_column(window, &current_width);
+    size_t left = current_column < window->visual_column ? current_column : window->visual_column;
+    size_t right = current_column > window->visual_column ? current_column + current_width :
+        window->visual_column + window->visual_width;
+    if (window->visual.kind != SNAG_VM_SELECT_CHAR) {
+        struct snag_vm_anchor *ends[] = {&first, &last};
+        for (size_t i = 0u; i < 2u; ++i) {
+            struct snag_vm_anchor *anchor = ends[i];
+            if (anchor->heading != row->heading ||
+                strcmp(anchor->key, snag_json_string(block, "key"))) continue;
+            uint64_t byte = row->heading ? anchor->byte :
+                snag_vm_source_position(block, anchor->byte, false);
+            if (byte > length) continue;
+            size_t at = i ? snag_vm_text_line_end(text, length, (size_t)byte) :
+                snag_vm_text_line_start(text, length, (size_t)byte);
+            anchor->byte = snag_vm_document_source(window->document, row, at);
+        }
+    }
+    size_t column = row->column;
+    for (size_t at = row->begin; at < row->end;) {
+        struct snag_vm_glyph glyph = snag_vm_glyph(text + at, row->end - at, column, false);
+        struct snag_vm_anchor point = {.seq =
+            (uint64_t)json_integer_value(json_object_get(block, "seq")),
+            .byte = snag_vm_document_source(window->document, row, at),
+            .heading = row->heading, .order = snag_vm_search_order(block)};
+        (void)snprintf(point.key, sizeof(point.key), "%s", snag_json_string(block, "key"));
+        bool selected = snag_vm_anchor_compare(&point, &first) >= 0 &&
+            snag_vm_anchor_compare(&point, &last) <= 0;
+        if (window->visual.kind == SNAG_VM_SELECT_BLOCK)
+            selected = selected && column < right && column + glyph.columns > left;
+        if (selected) {
+            size_t x = window->rectangle.column + column - row->column;
+            size_t end = x + glyph.columns;
+            size_t limit = window->rectangle.column + window->rectangle.columns;
+            if (end > limit) end = limit;
+            for (; x < end; ++x)
+                vm->grid.back.cells[screen_row * vm->grid.columns + x].style |= SNAG_VM_REVERSE;
+        }
+        column += glyph.columns;
+        at += glyph.bytes;
+    }
+}
+
 static int
 draw_window(void *opaque, const struct snag_vm_rectangle *rectangle)
 {
@@ -1957,10 +2334,11 @@ draw_window(void *opaque, const struct snag_vm_rectangle *rectangle)
             if (snag_vm_document_row(window->document, i, &row) < 0) return -1;
             const char *text = snag_vm_document_text(window->document, &row);
             unsigned int style = row.heading ? SNAG_VM_BOLD : 0u;
-            if (i == window->selected) style |= SNAG_VM_REVERSE;
+            if (i == window->selected && !window->visual.kind) style |= SNAG_VM_REVERSE;
             if (snag_vm_grid_text_column(&vm->grid, rectangle->row + i - window->top,
                 rectangle->column, rectangle->columns, text + row.begin, row.end - row.begin,
                 style, row.column) < 0) return -1;
+            highlight_selection(vm, window, &row, rectangle->row + i - window->top);
             if (i == window->selected && index == vm->focus && !editing) {
                 const json_t *block = snag_vm_document_block(window->document, row.block);
                 size_t byte = row.begin;
@@ -2040,7 +2418,10 @@ draw_window(void *opaque, const struct snag_vm_rectangle *rectangle)
                 tier && !strcmp(tier, "priority") ? " FAST" : "");
         }
         (void)snprintf(status, sizeof(status), "%s%s%s%.8s%s history v%u %s %s  seq %llu%s%s%s%s%s",
-            editing ? vm->insert ? "INSERT " : "NORMAL draft " : "",
+            editing ? vm->insert ? "INSERT " : "NORMAL draft " :
+                window->visual.kind == SNAG_VM_SELECT_LINE ? "VISUAL LINE " :
+                window->visual.kind == SNAG_VM_SELECT_BLOCK ? "VISUAL BLOCK " :
+                window->visual.kind ? "VISUAL " : "",
             c && c->bound ? "ATTACHED " : "read-only ",
             c && c->draft_conflict ? "[draft conflict] " : "", window->session_id, owner,
             window->verbosity, window->follow ? "FOLLOW" : "HOLD",
@@ -2114,20 +2495,39 @@ collect(struct vm *vm)
     struct snag_vm_read_result *result = snag_vm_reader_take(vm->reader);
     if (!result) {
         uint64_t bytes, events, total;
-        if (vm->searching && snag_vm_reader_progress(vm->reader, vm->generation,
+        if ((vm->searching || vm->copying) && snag_vm_reader_progress(vm->reader, vm->generation,
             &bytes, &events, &total)) {
             char progress[160];
             (void)snprintf(progress, sizeof(progress),
-                "Searching %llu/%llu bytes, %llu events; Ctrl-C cancels",
-                (unsigned long long)bytes, (unsigned long long)total, (unsigned long long)events);
-            search_notice(vm, progress);
+                "%s %llu/%llu bytes, %llu events; Ctrl-C cancels",
+                vm->copying ? "Copying" : "Searching", (unsigned long long)bytes,
+                (unsigned long long)total, (unsigned long long)events);
+            if (vm->copying) notice(vm, progress);
+            else search_notice(vm, progress);
         }
         return;
     }
     uint64_t target = vm->reading_window;
     enum history_load load = vm->reading_load;
     vm->generation = vm->reading_window = 0u;
-    vm->searching = false;
+    vm->searching = vm->copying = false;
+    if (result->request.selection.kind) {
+        if (result->error_number) notice(vm, result->error);
+        else {
+            snag_vm_register_free(&vm->reg);
+            vm->reg = result->copied;
+            memset(&result->copied, 0, sizeof(result->copied));
+            (void)snprintf(vm->message, sizeof(vm->message), "Yanked %llu bytes%s",
+                (unsigned long long)vm->reg.length, vm->reg.file ? " (file-backed register)" : "");
+            for (size_t i = 0u; i < vm->count; ++i) {
+                if (vm->windows[i].id == target)
+                    vm->windows[i].visual.kind = SNAG_VM_SELECT_NONE;
+            }
+            vm->dirty = true;
+        }
+        snag_vm_read_result_free(result);
+        return;
+    }
     if (result->request.query) {
         if (result->error_number) search_notice(vm, result->error);
         else {
@@ -2219,7 +2619,7 @@ collect(struct vm *vm)
                 if (!result->unchanged || window->incomplete != result->incomplete ||
                     window->best_effort != result->best_effort)
                     vm->dirty = true;
-                window->tail = result->tail;
+                if (!window->visual.kind) window->tail = result->tail;
                 window->incomplete = result->incomplete;
                 window->best_effort = result->best_effort;
                 continue;
@@ -2283,6 +2683,11 @@ collect(struct vm *vm)
         vm->dirty = true;
     }
     snag_vm_read_result_free(result);
+    struct vm_window *window = &vm->windows[vm->focus];
+    if (window->yank_after_load && window->id == target && !window->load) {
+        window->yank_after_load = false;
+        yank(vm);
+    }
 }
 
 static int
@@ -2411,7 +2816,8 @@ interactive(struct vm *vm)
         for (size_t i = 0u; i < vm->count; ++i) {
             struct vm_window *window = &vm->windows[i];
             if (window->kind == VIEW_TRANSCRIPT && window->document && window->rectangle.visible &&
-                !window->load && vm->reading_window != window->id && window->follow_at <= now)
+                !window->visual.kind && !window->load &&
+                vm->reading_window != window->id && window->follow_at <= now)
                 window->load = LOAD_POLL;
         }
         if (vm->dirty && draw(vm) < 0) {
@@ -2594,7 +3000,7 @@ out:
     snag_vm_grid_free(&vm.grid);
     snag_buf_free(&vm.command);
     snag_buf_free(&vm.paste);
-    snag_buf_free(&vm.reg.text);
+    snag_vm_register_free(&vm.reg);
     snag_buf_free(&vm.classic.bytes);
     json_decref(vm.sessions);
     json_decref(vm.workspaces);

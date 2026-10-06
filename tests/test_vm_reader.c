@@ -440,6 +440,28 @@ search_history_test(struct snag_store *store, const char *root)
         if (i == 1u) { ++request.search_start.byte; request.search_reverse = true; }
         snag_vm_read_result_free(result);
     }
+    struct snag_vm_read_request copy_request = request;
+    copy_request.query = NULL;
+    copy_request.pin_tail = true;
+    copy_request.selection.kind = SNAG_VM_SELECT_CHAR;
+    copy_request.selection.first = request.search_start;
+    copy_request.selection.first.byte = length - 3u;
+    copy_request.selection.last = copy_request.selection.first;
+    copy_request.selection.last.byte = length + 2u;
+    struct snag_vm_read_result *copied = await_page(reader,
+        snag_vm_reader_request(reader, &copy_request));
+    char selected[6];
+    assert(!copied->error_number && copied->copied.length == sizeof(selected));
+    assert(snag_vm_register_read(&copied->copied, 0u, selected, sizeof(selected)) == 0 &&
+        !memcmp(selected, "needle", sizeof(selected)));
+    snag_vm_read_result_free(copied);
+    copy_request.selection.kind = SNAG_VM_SELECT_LINE;
+    copied = await_page(reader, snag_vm_reader_request(reader, &copy_request));
+    assert(!copied->error_number && copied->copied.file && !copied->copied.text.len);
+    char suffix[sizeof("dle <redacted:secret>\n") - 1u];
+    assert(snag_vm_register_read(&copied->copied, copied->copied.length - sizeof(suffix),
+        suffix, sizeof(suffix)) == 0 && !memcmp(suffix, "dle <redacted:secret>\n", sizeof(suffix)));
+    snag_vm_read_result_free(copied);
     request.query = "test-secret-value";
     struct snag_vm_read_result *result = await_page(reader,
         snag_vm_reader_request(reader, &request));
@@ -455,7 +477,17 @@ search_history_test(struct snag_store *store, const char *root)
     request.tail = public_cursor(&source);
     result = await_page(reader, snag_vm_reader_request(reader, &request));
     assert(!result->error_number && result->found);
+    struct snag_vm_anchor new_match = result->match;
     snag_vm_read_result_free(result);
+    /* Another window observed the new tail. The selection still names its
+     * original boundary and must not inherit that larger cached source. */
+    struct snag_vm_read_request pinned = copy_request;
+    pinned.selection.first = pinned.selection.last = new_match;
+    pinned.selection.last.byte += 2u;
+    struct snag_vm_read_result *old = await_page(reader,
+        snag_vm_reader_request(reader, &pinned));
+    assert(old->error_number == ESTALE && !old->copied.length);
+    snag_vm_read_result_free(old);
     request.trusted_tail = false;
     request.refresh = true;
     result = await_page(reader, snag_vm_reader_request(reader, &request));

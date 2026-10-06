@@ -288,19 +288,12 @@ display_move(struct snag_vm_editor *editor, const char *text, size_t length, siz
     return motion.result;
 }
 
-struct motion {
-    size_t at;
-    bool valid, inclusive, lines;
-};
-
-static struct motion
-move(struct snag_vm_connection *connection, unsigned int key, size_t count,
-    bool counted, bool prefixed, bool insert, size_t columns, size_t rows, size_t top)
+struct snag_vm_motion
+snag_vm_editor_motion(struct snag_vm_editor *editor, const char *text, size_t length,
+    size_t at, unsigned int key, size_t count, bool counted, bool prefixed,
+    bool insert, size_t columns, size_t rows, size_t top)
 {
-    struct snag_vm_editor *editor = &connection->editor;
-    const char *text = connection->draft.len ? (const char *)connection->draft.data : "";
-    size_t length = connection->draft.len, at = connection->cursor;
-    struct motion motion = {.at = at, .valid = true};
+    struct snag_vm_motion motion = {.at = at, .valid = true};
     if (key == 'h' || key == SNAG_VM_KEY_LEFT) {
         motion.at = insert ? snag_vm_text_previous(text, length, at) :
             left(text, length, at, count);
@@ -375,15 +368,16 @@ register_text(struct snag_vm_register *reg, const char *text, size_t length, boo
         snag_buf_free(&next);
         return -1;
     }
-    snag_buf_free(&reg->text);
+    snag_vm_register_free(reg);
     reg->text = next;
+    reg->length = next.len;
     reg->lines = lines;
     return 0;
 }
 
 static enum snag_vm_edit_result
 operate(struct snag_vm_connection *connection, struct snag_vm_register *reg,
-    struct motion motion, unsigned int operator)
+    struct snag_vm_motion motion, unsigned int operator)
 {
     const char *text = connection->draft.len ? (const char *)connection->draft.data : "";
     size_t length = connection->draft.len, cursor = connection->cursor;
@@ -424,10 +418,10 @@ operate(struct snag_vm_connection *connection, struct snag_vm_register *reg,
 }
 
 static enum snag_vm_edit_result
-put(struct snag_vm_connection *connection, const struct snag_vm_register *reg,
+put(struct snag_vm_connection *connection, struct snag_vm_register *reg,
     bool after, size_t count)
 {
-    if (!reg->text.len) return SNAG_VM_EDIT_DONE;
+    if (!reg->length) return SNAG_VM_EDIT_DONE;
     const char *text = connection->draft.len ? (const char *)connection->draft.data : "";
     size_t at = connection->cursor;
     bool leading_newline = false;
@@ -441,12 +435,19 @@ put(struct snag_vm_connection *connection, const struct snag_vm_register *reg,
     } else if (after && at < connection->draft.len && text[at] != '\n')
         at = snag_vm_text_next(text, connection->draft.len, at);
     size_t available = SNAG_MAX_DIRECT_PROMPT - connection->draft.len;
-    if (count > available / reg->text.len) return snag_errno(EOVERFLOW);
+    if (count > available / reg->length) return snag_errno(EOVERFLOW);
     struct snag_buf insertion = {.max = SNAG_MAX_DIRECT_PROMPT};
     int rc = leading_newline ? snag_buf_putc(&insertion, '\n') : 0;
     for (size_t i = 0u; !rc && i < count; ++i) {
-        size_t length = reg->text.len - (leading_newline && i + 1u == count ? 1u : 0u);
-        rc = snag_buf_append(&insertion, reg->text.data, length);
+        size_t length = (size_t)reg->length -
+            (leading_newline && i + 1u == count ? 1u : 0u);
+        unsigned char bytes[65536];
+        for (size_t at = 0u; !rc && at < length;) {
+            size_t size = length - at < sizeof(bytes) ? length - at : sizeof(bytes);
+            rc = snag_vm_register_read(reg, at, bytes, size);
+            if (!rc) rc = snag_buf_append(&insertion, bytes, size);
+            at += size;
+        }
     }
     if (!rc) rc = snag_vm_editor_replace(connection, at, at, insertion.data, insertion.len);
     if (!rc) {
@@ -497,7 +498,8 @@ snag_vm_editor_key(struct snag_vm_connection *connection, struct snag_vm_registe
                 snag_vm_text_next(text, length, at), NULL, 0u) < 0 ?
                 SNAG_VM_EDIT_ERROR : SNAG_VM_EDIT_DONE;
         if (snag_vm_editor_end(connection) < 0) return SNAG_VM_EDIT_ERROR;
-        struct motion motion = move(connection, key, 1u, false, false, true, columns, rows, top);
+        struct snag_vm_motion motion = snag_vm_editor_motion(editor, text, length, at,
+            key, 1u, false, false, true, columns, rows, top);
         if (motion.valid && !control) {
             snag_vm_draft_cursor(connection, motion.at);
             return SNAG_VM_EDIT_DONE;
@@ -528,8 +530,8 @@ snag_vm_editor_key(struct snag_vm_connection *connection, struct snag_vm_registe
     }
     if (!control && editor->prefix == 'z' && key == 'z') {
         if (counted) {
-            struct motion motion = move(connection, 'G', count, true, false,
-                false, columns, rows, top);
+            struct snag_vm_motion motion = snag_vm_editor_motion(editor, text, length, at,
+                'G', count, true, false, false, columns, rows, top);
             snag_vm_draft_cursor(connection, motion.at);
         }
         snag_vm_editor_normal(connection, false);
@@ -574,7 +576,7 @@ snag_vm_editor_key(struct snag_vm_connection *connection, struct snag_vm_registe
         size_t target = at;
         while (count-- && target < end) target = snag_vm_text_next(text, length, target);
         result = target == at ? SNAG_VM_EDIT_DONE : operate(connection, reg,
-            (struct motion){.at = target, .valid = true}, 'd');
+            (struct snag_vm_motion){.at = target, .valid = true}, 'd');
     } else {
         if (control && (key == 'u' || key == 'd' || key == 'b' || key == 'f')) {
             size_t page = key == 'u' || key == 'd' ? (rows / 2u ? rows / 2u : 1u) : rows;
@@ -582,14 +584,14 @@ snag_vm_editor_key(struct snag_vm_connection *connection, struct snag_vm_registe
             key = key == 'u' || key == 'b' ? 'k' : 'j';
             control = false;
         }
-        struct motion motion = {0};
+        struct snag_vm_motion motion = {0};
         if (!control && operator && key == operator) {
             size_t line = line_number(text, at);
             size_t target = count - 1u > SIZE_MAX - line ? SIZE_MAX : line + count - 1u;
-            motion = (struct motion){.at = line_at(text, length, target),
+            motion = (struct snag_vm_motion){.at = line_at(text, length, target),
                 .valid = true, .lines = true};
-        } else if (!control) motion = move(connection, key, count, counted, prefixed,
-            false, columns, rows, top);
+        } else if (!control) motion = snag_vm_editor_motion(editor, text, length, at,
+            key, count, counted, prefixed, false, columns, rows, top);
         if (motion.valid) {
             if (operator) result = operate(connection, reg, motion, operator);
             else {

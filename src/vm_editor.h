@@ -3,6 +3,7 @@
 #define SNAJPAGENT_VM_EDITOR_H
 
 #include "vm_input.h"
+#include "vm_selection.h"
 
 struct snag_vm_connection;
 struct snag_vm_undo;
@@ -17,10 +18,14 @@ struct snag_vm_editor {
     bool grouping, column_valid, column_display;
 };
 
-struct snag_vm_register {
-    struct snag_buf text;
-    bool lines;
+struct snag_vm_motion {
+    size_t at;
+    bool valid, inclusive, lines;
 };
+/* Shared pure movement for a composer or one projected logical text field. */
+struct snag_vm_motion snag_vm_editor_motion(struct snag_vm_editor *, const char *,
+    size_t length, size_t at, unsigned int key, size_t count, bool counted,
+    bool prefixed, bool insert, size_t columns, size_t rows, size_t top);
 
 enum snag_vm_edit_result {
     SNAG_VM_EDIT_ERROR = -1, SNAG_VM_EDIT_UNUSED, SNAG_VM_EDIT_DONE,
