@@ -4,6 +4,7 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 
 /* Unicode 17 extended grapheme boundaries (UAX #29). Returns the first cluster's
  * byte length, or zero for empty input/invalid initial UTF-8. A later malformed
@@ -13,5 +14,7 @@ size_t snag_grapheme_next(const unsigned char *, size_t);
  * cells; combining marks have no independent width. Ambiguous East Asian width
  * is explicit. Controls/invalid input return -1; isolated marks return zero. */
 int snag_grapheme_width(const unsigned char *, size_t, bool ambiguous_wide);
+/* Editor words: blank, Unicode letter/number/underscore, other nonblank. */
+unsigned int snag_unicode_word_class(uint32_t);
 
 #endif

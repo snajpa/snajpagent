@@ -67,8 +67,13 @@ def main():
                 bits = {'Extended_Pictographic': 0x40, 'Emoji_Presentation': 0x80}.get(props[0], 0)
             elif name == 'EastAsianWidth.txt':
                 bits = {'W': 0x100, 'F': 0x100, 'A': 0x200}.get(props[0], 0)
-            elif name == 'DerivedGeneralCategory.txt' and props[0] in ('Mn', 'Mc', 'Me', 'Cf'):
-                bits = 0x400
+            elif name == 'DerivedGeneralCategory.txt':
+                if props[0] in ('Mn', 'Mc', 'Me', 'Cf'):
+                    bits |= 0x400
+                if props[0][0] in ('L', 'N'):
+                    bits |= 0x800
+                if props[0][0] == 'Z':
+                    bits |= 0x1000
             if bits:
                 for cp in range(low, high + 1):
                     values[cp] |= bits

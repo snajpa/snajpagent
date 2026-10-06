@@ -15,6 +15,12 @@
   receipts without resending prompts. Drafts survive detach and workspace resume.
   `:close` preserves owners; `:q`/`:qa` request normal shutdown with draft guards.
 
+- Add counted Vim composer motions, logical and wrapped-line navigation,
+  delete/change/yank operators, line opening, a workspace paste register and
+  per-draft undo/redo. Literal paste is one edit. Submission and adopted owner
+  text start a new undo history. Show the attached owner's model, effort and
+  working/idle state in the window status.
+
 - Add the optional native semantic owner endpoint with shared classic/workspace
   controller arbitration, committed-tail observation, plain-input admission,
   reconnect receipts, cancellation and distinct detach/quit controls. Durable

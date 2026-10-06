@@ -4,6 +4,7 @@
 
 #include "session_view.h"
 #include "store.h"
+#include "vm_editor.h"
 
 /* One buffer/lease per session, shared by every split displaying it. Drafts
  * and unresolved submissions outlive their windows and transport connections. */
@@ -12,6 +13,7 @@ struct snag_vm_connection {
     struct snag_view_channel channel;
     char session[SNAG_ID_HEX_LEN + 1u], instance[SNAG_ID_HEX_LEN + 1u];
     struct snag_buf draft;
+    struct snag_vm_editor editor;
     size_t cursor;
     json_t *pending, *state, *draft_base, *owner_draft, *draft_sent, *conflict_draft;
     char message[256];

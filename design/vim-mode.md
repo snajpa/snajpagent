@@ -95,8 +95,16 @@ Revision-aware submission waits for its captured text to be acknowledged, and
 the admission receipt's exact clear revision advances the baseline before a
 fresh snapshot is reconciled. Terminal loss retains any unacknowledged suffix
 in the private workspace snapshot. Classic editor draft bridging remains separate.
-The rest of the editor subset, classic attachment
-fallback, new/stopped-owner launch, command/report adapters, cross-page tool
+The composer now supports multiplied counts, Unicode word/grapheme and logical/
+display motions, line opening, delete/change/yank operators, a workspace register
+and per-session undo/redo. Undo records changed ranges, with one temporary
+pre-edit snapshot while grouping typing; bracketed paste has independent boundaries.
+Submission/recovery and adopted owner text clear local undo state. Splits share
+the session editor and keep separate composer viewports. Register and undo state
+are memory-only; draft text remains in workspace snapshots. Native owner status
+supplies provider/model/effort and working/idle fields. Mac/Linux PTY regressions
+cover editing, Unicode, counts, undo boundaries and owner reconciliation.
+Classic attachment fallback, new/stopped-owner launch, command/report adapters, cross-page tool
 dependencies, search/selection/clipboard and IRC conversations still need integration.
 This development frontend has
 not been installed on the operator's machines or merged into the release line.
@@ -861,8 +869,14 @@ commands report briefly and leave the buffer unchanged.
 | `Ctrl-L` | Force a complete redraw from the current semantic state. |
 
 In composer NORMAL, support the same applicable motions plus `i a I A o O`,
-`x`, `d`/`c` with supported motions, `dd`, `cc`, `p`/`P`, `u` and `Ctrl-R`.
-Undo is draft-local. Transcript delete/change commands report “read-only”.
+`x`, `d`/`c`/`y` with supported motions, `dd`, `cc`, `yy`, `p`/`P`, `u` and `Ctrl-R`.
+Words group Unicode letters, numbers and underscore, or runs of other nonblank
+graphemes; Unicode separators and whitespace end words. Operator and motion
+counts multiply. Undo is draft-local and shared across splits; changed-range
+records group typing/change-plus-insert until movement or leaving INSERT, with
+each bracketed paste independent. Submission, explicit recovery and adoption of
+an owner draft reset undo. The unnamed register is shared within the workspace;
+register/undo state is memory-only. Transcript delete/change commands report “read-only”.
 Macros, mappings, arbitrary Ex commands and Vim scripting are outside this subset.
 
 INSERT retains the existing composer behavior: Enter submits through normal

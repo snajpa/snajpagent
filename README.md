@@ -398,6 +398,8 @@ The development `snajpagent vm` frontend provides named workspaces, saved
 Vim-style splits, paged transcripts with retrospective verbosity, and prompt
 editing through live owner attachment. Enter attaches from the session picker;
 `:close` saves the owner draft and detaches; `:q` requests owner shutdown.
+The composer supports counted Vim motions, delete/change/yank, a shared paste
+register and draft-local undo/redo.
 Conflicting saved/owner drafts offer `:draft local` and `:draft owner`.
 See the manual's Vim workspace
 section for available controls and `design/vim-mode.md` for implementation status.

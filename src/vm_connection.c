@@ -46,6 +46,7 @@ snag_vm_connections_free(struct snag_vm_connection *connection)
     while (connection) {
         struct snag_vm_connection *next = connection->next;
         snag_vm_connection_close(connection);
+        snag_vm_editor_reset(&connection->editor);
         if (connection->draft.data) memset(connection->draft.data, 0, connection->draft.len);
         snag_buf_free(&connection->draft);
         json_decref(connection->pending);
@@ -187,6 +188,7 @@ snag_vm_draft_choose(struct snag_vm_connection *connection, bool local)
             return -1;
         connection->cursor = (size_t)json_integer_value(
             json_object_get(connection->conflict_draft, "cursor"));
+        snag_vm_editor_reset(&connection->editor);
     }
     if (connection->draft_ready) {
         if (draft_baseline(connection, connection->owner_draft) < 0) return -1;
@@ -226,6 +228,7 @@ snag_vm_connection_prepare(struct snag_vm_connection *connection)
     if (!pending) return -1;
     connection->pending = pending;
     connection->reconcile_pending = true;
+    snag_vm_editor_reset(&connection->editor);
     /* The pending copy is persisted before transmission; new typing belongs
      * to the next draft and can never be erased by this request's receipt. */
     snag_buf_reset(&connection->draft);
@@ -251,6 +254,7 @@ snag_vm_connection_recover(struct snag_vm_connection *connection)
         return snag_errno(EBUSY);
     const char *text = snag_json_string(connection->pending, "text");
     if (snag_vm_draft_replace(connection, 0u, 0u, text, strlen(text)) < 0) return -1;
+    snag_vm_editor_reset(&connection->editor);
     json_decref(connection->pending);
     connection->pending = NULL;
     connection->query = false;
@@ -324,6 +328,7 @@ draft_sync(struct snag_vm_connection *connection)
                 return -1;
             connection->cursor = (size_t)json_integer_value(
                 json_object_get(connection->owner_draft, "cursor"));
+            snag_vm_editor_reset(&connection->editor);
             connection->draft_dirty = connection->draft_conflict = false;
             message(connection, "Owner draft restored");
         } else {

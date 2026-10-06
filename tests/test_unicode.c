@@ -88,6 +88,10 @@ int
 main(void)
 {
     official_boundaries();
+    assert(snag_unicode_word_class('A') == 1u && snag_unicode_word_class('_') == 1u);
+    assert(snag_unicode_word_class(0x03b2u) == 1u && snag_unicode_word_class(0x4e2du) == 1u);
+    assert(snag_unicode_word_class('!') == 2u && snag_unicode_word_class(0x1f469u) == 2u);
+    assert(snag_unicode_word_class('\t') == 0u && snag_unicode_word_class(0x2003u) == 0u);
     assert(width("é", false) == 1);
     assert(width("́", false) == 0);
     assert(width("界", false) == 2);

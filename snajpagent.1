@@ -1750,16 +1750,49 @@ handled shutdown signals restore cooked input, cursor, mouse and screen modes.
 opens and controls an existing workspace-capable owner. With no operand,
 :attach reconnects the current transcript. Splits of that session share one
 draft and one controller. :detach releases it for all those views and preserves
-the running owner. Ctrl-C requests the owner's ordinary turn interruption.
+the running owner. In NORMAL, Ctrl-C requests the owner's ordinary turn interruption.
+Attached window status shows the provider, model, effort and working/idle state
+reported by the owner.
 .PP
 Press i, a or A in a transcript to enter the prompt editor. INSERT accepts
-text, literal bracketed paste, arrows, Home/End, Backspace/Delete and Ctrl-U.
-Enter submits; Ctrl-J inserts a newline. Escape leaves INSERT and preserves the
-draft. In NORMAL, Tab switches transcript/composer focus; h/j/k/l, 0 and $ move
-inside the draft, i/a/I/A enter INSERT and x deletes a whole grapheme.
+text, literal bracketed paste, arrows, Home/End and Backspace/Delete.
+Ctrl-U deletes to the logical line start; Ctrl-W deletes the preceding word.
+Enter submits; Ctrl-J inserts a newline. Escape, Ctrl-[ and Ctrl-C leave INSERT,
+preserve the draft and place the cursor on the preceding grapheme within the line.
+In NORMAL, Tab switches transcript/composer focus.
 Escape followed immediately by text leaves INSERT or command input before
 interpreting that text in NORMAL, including a fast Escape-colon.
 Drafts wrap within the window and survive split changes, detach and workspace resume.
+.PP
+Composer NORMAL controls:
+.TP
+.B h j k l, w b e, 0 ^ $, gg G
+Move by grapheme, logical line or word, to line boundaries or to the first/last
+line. [count]G selects a one-based line. Counts apply to motions and operators;
+2d3w deletes six words. Words group Unicode letters, numbers and underscore,
+or runs of other nonblank graphemes. Unicode separators and whitespace end words.
+.TP
+.B gj gk, H M L, zz
+Move by wrapped row, to the top/middle/bottom visible composer row, or center
+the cursor. Ctrl-U/D move half a composer page; Ctrl-B/F and PageUp/Down move
+a full page. Logical vertical movement preserves the desired column.
+.TP
+.B i a I A o O, x, d c y, dd cc yy, p P
+Insert before/after the cursor, at the first nonblank/end of line, or on a new
+line below/above. x deletes whole graphemes. d/c/y delete/change/yank a supported
+motion; doubled operators use whole lines. p/P put the workspace register
+after/before the cursor, or below/above the line for a whole-line register.
+The register is shared by session composers and splits within this workspace.
+.TP
+.B u, Ctrl-R
+Undo/redo within the current draft. Typing, or a change followed by typing,
+forms one edit until movement or leaving INSERT. Each bracketed paste forms
+its own edit. Submission, recovery and adopted owner text reset undo history.
+Undo history and the register remain in memory until the workspace exits;
+saved draft text remains available through workspace resume.
+.PP
+Unsupported composer commands report a message and leave text unchanged.
+Mouse focus changes cancel pending counts and operators.
 .PP
 Owners advertising draft support retain an acknowledged copy while detached.
 On attachment, the workspace compares both copies with their last shared text.

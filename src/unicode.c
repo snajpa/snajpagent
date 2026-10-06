@@ -19,6 +19,8 @@ enum indic_property {I_NONE, I_CONSONANT, I_EXTEND, I_LINKER};
 #define PROPERTY_WIDE 0x100u
 #define PROPERTY_AMBIGUOUS 0x200u
 #define PROPERTY_ZERO 0x400u
+#define PROPERTY_WORD 0x800u
+#define PROPERTY_SPACE 0x1000u
 
 struct unicode_range {
     uint32_t first, last;
@@ -49,6 +51,14 @@ static bool
 control(unsigned int value)
 {
     return value == G_CR || value == G_LF || value == G_CONTROL;
+}
+
+unsigned int
+snag_unicode_word_class(uint32_t cp)
+{
+    unsigned int value = properties(cp);
+    if ((value & PROPERTY_SPACE) || (cp >= 9u && cp <= 13u) || cp == 0x85u) return 0u;
+    return cp == '_' || (value & PROPERTY_WORD) ? 1u : 2u;
 }
 
 struct boundary_state {

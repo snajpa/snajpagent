@@ -8,6 +8,7 @@
 #include "snajpagent.h"
 #include "term_host.h"
 #include "vm_connection.h"
+#include "vm_editor.h"
 #include "vm_grid.h"
 #include "vm_input.h"
 #include "vm_layout.h"
@@ -45,6 +46,9 @@ static const char *const help_rows[] = {
     "Workspace names accept quoted text. :q in these pickers closes the window.",
     "Enter/:attach SESSION: control owner    o/:history SESSION: read-only",
     "i/a/A: edit prompt    Esc: NORMAL    Enter: submit    Ctrl-J: newline",
+    "Composer: h/j/k/l w/b/e 0/^/$ gg/G; counts multiply (2d3w deletes six words).",
+    "gj/gk: wrapped rows    H/M/L: visible rows    zz: center    Ctrl-U/D/B/F: pages",
+    "i/a/I/A/o/O: INSERT    d/c/y + motion, dd/cc/yy, x, p/P    u/Ctrl-R: undo/redo",
     ":detach: preserve owner    :q/:qa: quit controlled owners    :recover: recover submission",
     "Draft conflict: :draft local keeps this copy; :draft owner uses the owner's copy.",
     "Workspace selection restores its layout. Bracketed paste never runs commands."
@@ -53,7 +57,8 @@ static const char *const help_rows[] = {
 struct vm_window {
     uint64_t id;
     enum view_kind kind;
-    size_t selected, top;
+    size_t selected, top, composer_top;
+    bool center_composer;
     char selected_id[SNAG_ID_HEX_LEN + 1u];
     char *filter;
     struct snag_vm_rectangle rectangle;
@@ -85,6 +90,7 @@ struct vm {
     struct snag_vm_grid grid;
     struct snag_vm_input input;
     struct snag_buf command, paste;
+    struct snag_vm_register reg;
     size_t command_cursor;
     char mode, prefix;
     char message[512];
@@ -596,6 +602,7 @@ quit_sessions(struct vm *vm, bool all, bool force)
     for (struct snag_vm_connection *c = vm->connections; c; c = c->next) {
         if (!c->bound || (!all && c != focused)) continue;
         if (force) {
+            snag_vm_editor_reset(&c->editor);
             snag_buf_reset(&c->draft);
             c->cursor = 0u;
             json_decref(c->pending);
@@ -878,7 +885,7 @@ edit_draft(struct vm *vm, size_t begin, size_t end, const void *text, size_t siz
 {
     struct snag_vm_connection *c = focused_connection(vm);
     if (!c) return 0;
-    if (snag_vm_draft_replace(c, begin, end, text, size) < 0)
+    if (snag_vm_editor_replace(c, begin, end, text, size) < 0)
         notice(vm, "Cannot edit draft: invalid text or input limit reached");
     else changed(vm);
     return 0;
@@ -902,71 +909,26 @@ submit_draft(struct vm *vm)
 }
 
 static bool
-composer_key(struct vm *vm, const struct snag_vm_input_event *event,
-    unsigned int key, bool control)
+composer_key(struct vm *vm, const struct snag_vm_input_event *event)
 {
     struct snag_vm_connection *c = focused_connection(vm);
     if (!vm->composer || !c) return false;
-    const char *text = c->draft.len ? (const char *)c->draft.data : "";
-    size_t at = c->cursor;
-    size_t end = at;
-    if (vm->insert && event->kind == SNAG_VM_TEXT) {
-        (void)edit_draft(vm, at, at, event->text, event->length);
-        return true;
-    }
-    if (vm->insert && key == SNAG_VM_KEY_ESCAPE) {
-        vm->insert = false;
-        notice(vm, "NORMAL composer  Tab: transcript  i: insert");
-        return true;
-    }
-    if (vm->insert && key == SNAG_VM_KEY_ENTER) {
-        submit_draft(vm);
-        return true;
-    }
-    if (vm->insert && control && key == 'j') {
-        (void)edit_draft(vm, at, at, "\n", 1u);
-        return true;
-    }
-    if (vm->insert && key == SNAG_VM_KEY_TAB) {
-        (void)edit_draft(vm, at, at, "\t", 1u);
-        return true;
-    }
-    if (key == SNAG_VM_KEY_LEFT || (!vm->insert && !control && key == 'h'))
-        at = snag_vm_text_previous(text, c->draft.len, at);
-    else if (key == SNAG_VM_KEY_RIGHT || (!vm->insert && !control && key == 'l'))
-        at = snag_vm_text_next(text, c->draft.len, at);
-    else if (key == SNAG_VM_KEY_HOME || (!vm->insert && !control && key == '0'))
-        at = snag_vm_text_line_start(text, c->draft.len, at);
-    else if (key == SNAG_VM_KEY_END || (!vm->insert && !control && key == '$'))
-        at = snag_vm_text_line_end(text, c->draft.len, at);
-    else if (key == SNAG_VM_KEY_UP || key == SNAG_VM_KEY_DOWN ||
-        (!vm->insert && !control && (key == 'j' || key == 'k'))) {
-        bool down = key == SNAG_VM_KEY_DOWN || key == 'j';
-        size_t column = snag_vm_text_column(text, c->draft.len, at, false);
-        size_t line = snag_vm_text_line_start(text, c->draft.len, at);
-        if (down) {
-            line = snag_vm_text_line_end(text, c->draft.len, at);
-            if (line < c->draft.len) ++line;
-        } else if (line) line = snag_vm_text_line_start(text, c->draft.len, line - 1u);
-        at = snag_vm_text_at_column(text, c->draft.len, line, column, false);
-    } else if ((vm->insert && key == SNAG_VM_KEY_BACKSPACE) ||
-        (vm->insert && control && key == 'u')) {
-        at = control ? snag_vm_text_line_start(text, c->draft.len, at) :
-            snag_vm_text_previous(text, c->draft.len, at);
-        (void)edit_draft(vm, at, end, NULL, 0u);
-        return true;
-    } else if (key == SNAG_VM_KEY_DELETE || (!vm->insert && !control && key == 'x')) {
-        end = snag_vm_text_next(text, c->draft.len, at);
-        (void)edit_draft(vm, at, end, NULL, 0u);
-        return true;
-    } else if (!vm->insert && !control && (key == 'i' || key == 'a' || key == 'I' || key == 'A')) {
-        if (key == 'a') at = snag_vm_text_next(text, c->draft.len, at);
-        if (key == 'I') at = snag_vm_text_line_start(text, c->draft.len, at);
-        if (key == 'A') at = snag_vm_text_line_end(text, c->draft.len, at);
+    const struct snag_vm_rectangle *r = &vm->windows[vm->focus].rectangle;
+    enum snag_vm_edit_result result = snag_vm_editor_key(c, &vm->reg, event,
+        vm->insert, r->columns, (r->rows > 1u ? r->rows - 1u : 0u) / 3u + 1u,
+        vm->windows[vm->focus].composer_top);
+    if (result == SNAG_VM_EDIT_UNUSED) return false;
+    if (result == SNAG_VM_EDIT_ERROR) {
+        notice(vm, errno == ENOTSUP ? "Unsupported composer command" :
+            "Cannot edit draft: invalid text, count or input limit reached");
+    } else if (result == SNAG_VM_EDIT_INSERT) {
         vm->insert = true;
         notice(vm, "INSERT  Enter: submit  Ctrl-J: newline  Esc: NORMAL");
-    } else return vm->insert && !control;
-    snag_vm_draft_cursor(c, at);
+    } else if (result == SNAG_VM_EDIT_NORMAL) {
+        vm->insert = false;
+        notice(vm, "NORMAL composer  Tab: transcript  i: insert");
+    } else if (result == SNAG_VM_EDIT_SUBMIT) submit_draft(vm);
+    else if (result == SNAG_VM_EDIT_CENTER) vm->windows[vm->focus].center_composer = true;
     changed(vm);
     return true;
 }
@@ -995,13 +957,21 @@ input_event(void *opaque, const struct snag_vm_input_event *event)
         if (vm->mode && snag_utf8_valid(vm->paste.data, vm->paste.len, true))
             return insert_command(vm, vm->paste.data, vm->paste.len);
         struct snag_vm_connection *c = focused_connection(vm);
-        if (vm->composer && vm->insert && c)
-            return edit_draft(vm, c->cursor, c->cursor, vm->paste.data, vm->paste.len);
+        if (vm->composer && vm->insert && c) {
+            if (snag_vm_editor_end(c) < 0) return -1;
+            (void)edit_draft(vm, c->cursor, c->cursor, vm->paste.data, vm->paste.len);
+            return snag_vm_editor_end(c);
+        }
         notice(vm, "Enter INSERT, command or filter input before pasting text");
         return 0;
     }
     if (event->kind == SNAG_VM_MOUSE) {
         if (event->release) return 0;
+        struct snag_vm_connection *c = focused_connection(vm);
+        if (vm->insert && c) {
+            snag_vm_editor_normal(c, true);
+            if (snag_vm_editor_end(c) < 0) return -1;
+        } else if (c) snag_vm_editor_normal(c, false);
         for (size_t i = 0u; i < vm->count; ++i) {
             const struct snag_vm_rectangle *r = &vm->windows[i].rectangle;
             if (!r->visible || event->row < r->row || event->row - r->row >= r->rows ||
@@ -1023,6 +993,11 @@ input_event(void *opaque, const struct snag_vm_input_event *event)
      * editing subset uses that sequence to leave INSERT/command input first,
      * so a fast Escape-colon cannot become literal prompt text. */
     if (event->kind == SNAG_VM_TEXT && (event->modifiers & SNAG_VM_ALT)) {
+        struct snag_vm_connection *c = focused_connection(vm);
+        if (vm->insert && c) {
+            snag_vm_editor_normal(c, true);
+            if (snag_vm_editor_end(c) < 0) return -1;
+        }
         vm->mode = 0;
         vm->insert = false;
         vm->prefix = 0;
@@ -1073,7 +1048,7 @@ input_event(void *opaque, const struct snag_vm_input_event *event)
         vm->dirty = true;
         return 0;
     }
-    if (vm->prefix != 'w' && composer_key(vm, event, key, control)) return 0;
+    if (vm->prefix != 'w' && composer_key(vm, event)) return 0;
     if (key == SNAG_VM_KEY_ESCAPE) vm->prefix = 0;
     else if (control && key == 'z') {
         vm->detach_suspend = true;
@@ -1136,10 +1111,8 @@ input_event(void *opaque, const struct snag_vm_input_event *event)
         } else if ((key == 'i' || key == 'a' || key == 'A') && window->kind == VIEW_TRANSCRIPT) {
             struct snag_vm_connection *c = connection_for(vm, window->session_id, true);
             if (c) {
-                vm->composer = vm->insert = true;
-                if (key == 'A') snag_vm_draft_cursor(c, c->draft.len);
-                notice(vm, "INSERT  Enter: submit  Ctrl-J: newline  Esc: NORMAL");
-                changed(vm);
+                vm->composer = true;
+                (void)composer_key(vm, event);
             }
         } else if (key == 'G') {
             if (window->kind == VIEW_TRANSCRIPT) {
@@ -1327,7 +1300,17 @@ draw_window(void *opaque, const struct snag_vm_rectangle *rectangle)
         draft.height = height / 3u + 1u;
         if (draft.height > draft.count) draft.height = draft.count;
         if (draft.height >= height) draft.height = height - 1u;
-        draft.top = draft.cursor_row >= draft.height ? draft.cursor_row - draft.height + 1u : 0u;
+        draft.top = window->composer_top;
+        if (window->center_composer) {
+            draft.top = draft.cursor_row > draft.height / 2u ?
+                draft.cursor_row - draft.height / 2u : 0u;
+            window->center_composer = false;
+        }
+        if (draft.top > draft.count - draft.height) draft.top = draft.count - draft.height;
+        if (draft.top > draft.cursor_row) draft.top = draft.cursor_row;
+        if (draft.cursor_row - draft.top >= draft.height)
+            draft.top = draft.cursor_row - draft.height + 1u;
+        window->composer_top = draft.top;
         height -= draft.height;
         draft.first_row = rectangle->row + height;
         draft.count = 0u;
@@ -1390,10 +1373,19 @@ draw_window(void *opaque, const struct snag_vm_rectangle *rectangle)
         count ? window->selected + 1u : 0u, count,
         window->filter && *window->filter ? " /" : "", window->filter ? window->filter : "");
     if (window->kind == VIEW_TRANSCRIPT) {
-        (void)snprintf(status, sizeof(status), "%s%s%s%.8s history v%u %s  seq %llu%s%s%s%s%s",
+        char owner[192] = "";
+        if (c && c->bound && c->state) {
+            const char *provider = snag_json_string(c->state, "provider");
+            const char *model = snag_json_string(c->state, "model");
+            const char *effort = snag_json_string(c->state, "effort");
+            (void)snprintf(owner, sizeof(owner), " %s/%s/%s %s", provider ? provider : "?",
+                model ? model : "?", effort ? effort : "?",
+                json_is_true(json_object_get(c->state, "active")) ? "working" : "idle");
+        }
+        (void)snprintf(status, sizeof(status), "%s%s%s%.8s%s history v%u %s  seq %llu%s%s%s%s%s",
             editing ? vm->insert ? "INSERT " : "NORMAL draft " : "",
             c && c->bound ? "ATTACHED " : "read-only ",
-            c && c->draft_conflict ? "[draft conflict] " : "", window->session_id,
+            c && c->draft_conflict ? "[draft conflict] " : "", window->session_id, owner,
             window->verbosity, window->follow ? "FOLLOW" : "HOLD",
             (unsigned long long)window->anchor_seq,
             window->begin.offset ? "  ↑ older" : "  [start]",
@@ -1780,6 +1772,7 @@ out:
     snag_vm_grid_free(&vm.grid);
     snag_buf_free(&vm.command);
     snag_buf_free(&vm.paste);
+    snag_buf_free(&vm.reg.text);
     json_decref(vm.sessions);
     json_decref(vm.workspaces);
     snag_secret_set_free(&vm.secrets);

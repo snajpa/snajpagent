@@ -369,6 +369,36 @@ class ControlTests(unittest.TestCase):
         resumed.repaint_until(b'durable-unsent')
         resumed.finish('close')
 
+    def test_undo_stops_at_submitted_and_adopted_draft_boundaries(self):
+        child = self.start('-N', 'undo-boundaries')
+        child.command('attach ' + self.owner.sid)
+        child.until(b'ATTACHED')
+        child.write(b'iadmitted text\rnext draft')
+        self.owner.wait_event('input_received')
+        self.wait_snapshot(lambda rows:
+            next(iter(rows.values()))['state']['buffers'][0]['pending'] is None and
+            next(iter(rows.values()))['state']['buffers'][0]['draft'] == 'next draft')
+        self.escape(child)
+        child.write(b'uu')
+        child.command('workspace name after-undo')
+        rows = self.wait_snapshot(lambda rows: next(iter(rows.values()))['name'] == 'after-undo')
+        self.assertEqual(next(iter(rows.values()))['state']['buffers'][0]['draft'], '')
+        child.write(b'ilocal draft')
+        self.escape(child)
+        child.command('detach')
+        child.repaint_until(b'Detached; owner continues')
+        self.owner_draft('remote replacement')
+        child.command('attach')
+        child.repaint_until(b'Owner draft restored')
+        child.write(b'\tu')
+        child.command('workspace name after-adoption')
+        rows = self.wait_snapshot(lambda rows:
+                                  next(iter(rows.values()))['name'] == 'after-adoption')
+        self.assertEqual(next(iter(rows.values()))['state']['buffers'][0]['draft'],
+                         'remote replacement')
+        self.assertEqual(len(self.inputs()), 1)
+        child.finish('close')
+
     def test_receipt_after_frontend_loss_does_not_repeat_prompt(self):
         child = self.start('-N', 'lost-receipt')
         child.command('attach ' + self.owner.sid)
@@ -408,12 +438,13 @@ class ControlTests(unittest.TestCase):
         child = self.start('-N', 'clusters')
         child.command('history ' + self.owner.sid)
         child.write('i👩💻'.encode() + b'\x1b[D' + '\u200d'.encode())
-        self.wait_snapshot(lambda rows:
-                           next(iter(rows.values()))['state']['buffers'][0]['draft'] == '👩‍💻')
+        rows = self.wait_snapshot(lambda rows:
+                                  next(iter(rows.values()))['state']['buffers'][0]['draft'] == '👩‍💻')
+        self.assertEqual(next(iter(rows.values()))['state']['buffers'][0]['cursor'], len('👩‍💻'.encode()))
         self.escape(child)
         child.finish('close')
         resumed = self.start('--resume', 'clusters', expect=b'history')
-        resumed.write(b'i\x7f')
+        resumed.write(b'A\x7f')
         self.wait_snapshot(lambda rows:
                            next(iter(rows.values()))['state']['buffers'][0]['draft'] == '')
         self.escape(resumed)
