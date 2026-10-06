@@ -5648,6 +5648,9 @@ Legacy fallback applies only when this file is absent.
 .TQ
 .I $HOME/.snajpagent/sessions/SESSION/checkpoint.1
 Alternating native state and provider checkpoints, pinned by journal receipts.
+An unused slot may be an empty private file until the next checkpoint.
+Recovery treats an empty slot as unavailable; nonempty malformed images
+cause recovery errors.
 IRC directory recovery retains connection generations, conversation identities,
 membership and captured reply targets through canonical event references.
 Current checkpoints also retain derived conversation activity. Older checkpoint

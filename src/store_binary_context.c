@@ -565,6 +565,10 @@ snag_store_admit_binary_context_checkpoint(struct snag_session *source,
     for (size_t i = 0u; i < 2u; ++i) {
         if (checkpoint_cancelled(control, error, error_size) < 0) goto done;
         if (images[i] < 0) continue;
+        /* A fresh four-file bundle reserves the unused slot as an empty file. */
+        snag_file_info image_stat;
+        if (snag_fstat(images[i], &image_stat) < 0) goto done;
+        if (S_ISREG(image_stat.st_mode) && !image_stat.st_size) continue;
         if (snag_binary_checkpoint_image_probe(images[i], hashes[i]) < 0) goto done;
         keys[i] = hashes[i];
     }

@@ -4,6 +4,11 @@
 
 ## Unreleased
 
+- Add a provisional four-file native creation backend with verified checkpoint
+  closure, receipt-ordered publication and ownership-preserving failure handling.
+  Recognize empty reserved checkpoint slots during bounded recovery. Default
+  creation remains JSONL while cutover and conversion are being integrated.
+
 - Preserve explicit automatic-retry overrides in typed native session records and
   checkpoints. Older checkpoints inherit configuration when no override was saved.
 

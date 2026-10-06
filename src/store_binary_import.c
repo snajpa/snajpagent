@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "store_binary_import.h"
+#include "context.h"
 #include "fs.h"
 #include "store_binary_legacy.h"
 #include "store_binary_wire.h"
@@ -8,9 +9,207 @@
 #include "store_binary_index.h"
 
 #include <errno.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+
+static int
+bootstrap_native_checkpoint(struct snag_session *session, int index_fd,
+    char *error, size_t error_size)
+{
+    struct snag_binary_anchor boundary;
+    struct snag_binary_index_tree tree;
+    struct snag_binary_checkpoint_sources sources = {0};
+    struct snag_binary_checkpoint_access_plan plan = {0};
+    struct snag_buf empty = {.max = SIZE_MAX};
+    struct snag_buf provider = {.max = SIZE_MAX};
+    struct snag_buf selected = {.max = SIZE_MAX};
+    unsigned char header[SNAG_BINARY_HEADER_SIZE];
+    unsigned char root[32];
+    struct snag_binary_identity identity;
+    struct snag_binary_anchor initial;
+    int rc = -1;
+    if (snag_session_binary_checkpoint_capture(session, &boundary, &tree, &sources,
+        error, error_size) < 0) goto out;
+    ssize_t got = snag_pread(session->log_fd, header, sizeof(header), 0);
+    if (got != sizeof(header)) {
+        if (got >= 0) errno = EIO;
+        goto out;
+    }
+    struct snag_binary_checkpoint_index available;
+    if (snag_binary_header_decode(header, sizeof(header), &identity, &initial) < 0 ||
+        snag_binary_index_tree_root(&tree, root) < 0 ||
+        snag_binary_checkpoint_index_encode(&empty, &identity, &boundary, &tree, NULL, 0u) < 0 ||
+        snag_binary_checkpoint_index_decode(empty.data, empty.len, &identity,
+            &boundary, root, &available) < 0) goto out;
+    const json_t *recent = NULL;
+    const json_t *history = NULL;
+    if (snag_context_capture_seam(session, &recent, &history) < 0 ||
+        snag_binary_checkpoint_provider_encode(&provider, session, recent, history) < 0 ||
+        snag_binary_checkpoint_access_plan_build(&plan, &boundary, &sources, session,
+            provider.data, provider.len, NULL, NULL) < 0 ||
+        snag_binary_checkpoint_access_plan_read(session->log_fd, index_fd, &plan, &available,
+            &tree, NULL, NULL, &selected) < 0) goto out;
+    struct snag_binary_checkpoint_index captured;
+    uint64_t generations[2] = {0u, 0u};
+    uint64_t sequences[2] = {0u, 0u};
+    if (snag_binary_checkpoint_index_decode(selected.data, selected.len, &identity,
+            &boundary, root, &captured) < 0 ||
+        snag_session_binary_checkpoint_setup(session, session->dir_fd, generations, sequences,
+            &captured, error, error_size) < 0 ||
+        snag_session_checkpoint(session, error, error_size) < 0 ||
+        snag_session_binary_index_status(session, error, error_size) < 0 ||
+        snag_session_binary_checkpoint_capture(session, &boundary, &tree, &sources,
+            error, error_size) < 0 ||
+        snag_binary_index_header_read(index_fd, &identity) < 0 ||
+        snag_binary_index_tree_root(&tree, root) < 0) goto out;
+    /* Cache health alone is not lookup proof. Check the newly acknowledged root. */
+    struct snag_binary_index_tree loaded;
+    if (snag_binary_index_tree_load(index_fd, &identity, tree.count, root, &loaded) < 0) goto out;
+    if (memcmp(&tree, &loaded, sizeof(tree))) {
+        (void)snag_fail(error, error_size, EBADMSG, "native creation cache frontier mismatch");
+        goto out;
+    }
+    rc = 0;
+out:
+    if (rc < 0 && error && error_size && !error[0])
+        (void)snag_errorf(error, error_size, "cannot bootstrap native checkpoint: %s",
+            strerror(errno ? errno : EIO));
+    int saved = errno;
+    snag_binary_checkpoint_access_plan_free(&plan);
+    snag_binary_checkpoint_sources_free(&sources);
+    snag_buf_free(&empty);
+    snag_buf_free(&provider);
+    snag_buf_free(&selected);
+    errno = saved;
+    return rc;
+}
+
+static int
+native_name_available(struct snag_store *store, const char *id, char *error, size_t error_size)
+{
+    snag_file_info st;
+    if (!snag_lstat_at(store->sessions_fd, id, &st))
+        return snag_fail(error, error_size, EEXIST, "session name already exists: %s", id);
+    if (errno != ENOENT)
+        return snag_errorf(error, error_size, "cannot inspect session name: %s", strerror(errno));
+    return 0;
+}
+
+int
+snag_store_persist_binary_session(struct snag_store *store, struct snag_session *prepared,
+    char *error, size_t error_size)
+{
+    if (!store || store->sessions_fd < 0 || !store->root_path || !prepared ||
+        !prepared->pending_log || prepared->binary || prepared->snapshot_read_only ||
+        prepared->log_end < 0 || (uint64_t)prepared->log_end != prepared->pending_log->len ||
+        prepared->dir_fd >= 0 || prepared->log_fd >= 0 || prepared->lock_fd >= 0 ||
+        !snag_hex_is_lower(prepared->id, SNAG_ID_HEX_LEN))
+        return snag_fail(error, error_size, EINVAL, "invalid native creation owners");
+    if (error && error_size) error[0] = '\0';
+    struct snag_directory_lock names = {.fd = -1};
+    struct snag_session candidate;
+    snag_session_init(&candidate);
+    struct snag_buf index = {.max = SIZE_MAX};
+    char nonce[SNAG_ID_HEX_LEN + 1u];
+    char stage[2u * SNAG_ID_HEX_LEN + sizeof(".creating--")];
+    char *parent = NULL;
+    char *final_path = NULL;
+    bool created = false;
+    bool published = false;
+    int index_fd = -1;
+    int rc = -1;
+    int final_error = 0;
+    if (snag_directory_lock_acquire(store->sessions_fd, &names) < 0) {
+        (void)snag_errorf(error, error_size, "cannot lock session names: %s", strerror(errno));
+        goto out;
+    }
+    if (native_name_available(store, prepared->id, error, error_size) < 0) goto out;
+    if (snag_directory_lock_release(&names) < 0) goto out;
+    if (snag_random_id(nonce) < 0) goto out;
+    (void)snprintf(stage, sizeof(stage), ".creating-%s-%s", prepared->id, nonce);
+    parent = snag_path_join(store->root_path, "sessions");
+    if (!parent) goto out;
+    final_path = snag_path_join(parent, prepared->id);
+    candidate.dir_path = snag_path_join(parent, stage);
+    if (!final_path || !candidate.dir_path) goto out;
+    if (snag_mkdir_private_at(store->sessions_fd, stage) < 0) goto out;
+    created = true;
+    candidate.dir_fd = snag_open_read_security_at(store->sessions_fd, stage, true);
+    if (candidate.dir_fd < 0 || snag_store_verify_private_fd(candidate.dir_fd, true,
+            "provisional native session directory", error, error_size) < 0) goto out;
+    candidate.lock_fd = snag_create_private_at(candidate.dir_fd, "lock", true);
+    if (candidate.lock_fd < 0 || snag_lock_file(candidate.lock_fd, false) < 0 ||
+        snag_sync_file(candidate.lock_fd) < 0) goto out;
+    candidate.log_fd = snag_create_private_at(candidate.dir_fd, "journal.bin", true);
+    if (candidate.log_fd < 0 ||
+        snag_store_seed_binary_session(prepared, &candidate, &index, error, error_size) < 0)
+        goto out;
+    index_fd = snag_create_private_at(candidate.dir_fd, "history.idx", true);
+    if (index_fd < 0 || snag_write_full(index_fd, index.data, index.len) < 0 ||
+        snag_sync_file(index_fd) < 0) goto out;
+    const char *slots[2] = {"checkpoint.0", "checkpoint.1"};
+    for (size_t i = 0u; i < 2u; ++i) {
+        int fd = snag_create_private_at(candidate.dir_fd, slots[i], true);
+        if (fd < 0) goto out;
+        int synced = snag_sync_file(fd);
+        int saved = errno;
+        (void)close(fd);
+        errno = saved;
+        if (synced < 0) goto out;
+    }
+    int query_fd = index_fd;
+    if (snag_session_binary_index_adopt(&candidate, index_fd, error, error_size) < 0) goto out;
+    index_fd = -1;
+    if (bootstrap_native_checkpoint(&candidate, query_fd, error, error_size) < 0 ||
+        snag_sync_file(query_fd) < 0) goto out;
+    if (snag_directory_lock_acquire(store->sessions_fd, &names) < 0 ||
+        native_name_available(store, prepared->id, error, error_size) < 0 ||
+        snag_rename_at(store->sessions_fd, stage, store->sessions_fd, prepared->id) < 0)
+        goto out;
+    published = true;
+    int unlock_error = snag_directory_lock_release(&names) < 0 ? errno : 0;
+    free(candidate.dir_path);
+    candidate.dir_path = final_path;
+    final_path = NULL;
+    struct snag_session old = *prepared;
+    *prepared = candidate;
+    snag_session_init(&candidate);
+    snag_session_close(&old);
+    /* The public name now belongs to the native owner even if durability fails. */
+    int synced = snag_sync_dir(store->sessions_fd);
+    if (synced || unlock_error) {
+        int why = synced < 0 ? errno : synced > 0 ? ENOTSUP : unlock_error;
+        (void)snag_fail(error, error_size, why,
+            "session %s published; parent directory durability uncertain: %s",
+            prepared->id, strerror(why));
+        goto out;
+    }
+    rc = 0;
+out:
+    final_error = errno ? errno : EIO;
+    if (rc < 0 && error && error_size && !error[0])
+        (void)snag_errorf(error, error_size, "native session creation failed: %s",
+            strerror(final_error));
+    if (names.fd >= 0) (void)snag_directory_lock_release(&names);
+    if (rc < 0 && created && !published) {
+        const char *message = error && error_size && error[0] ? error : strerror(final_error);
+        char *reason = strdup(message);
+        if (reason) {
+            (void)snag_errorf(error, error_size, "%s; provisional native session: %s",
+                reason, candidate.dir_path);
+            free(reason);
+        }
+    }
+    if (index_fd >= 0) (void)close(index_fd);
+    snag_session_close(&candidate);
+    snag_buf_free(&index);
+    free(parent);
+    free(final_path);
+    errno = final_error;
+    return rc;
+}
 
 struct import_writer {
     int fd;

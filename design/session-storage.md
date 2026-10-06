@@ -3298,3 +3298,30 @@ The native scan pins its acknowledged boundary before callbacks, so explicit
 callback appends do not widen the source range. Partial-batch cuts, unavailable
 old rows and their causal dependencies use the same independent membership
 rules as native forward history; no legacy offset scan or guessed cut is used.
+
+## Prepared native directory publication
+
+The native creation backend consumes a prepared in-memory journal into a separate
+private sibling directory. It creates journal.bin, checkpoint.0, checkpoint.1 and
+history.idx with the existing exclusive lock file. Seeding verifies canonical
+semantics and provider capture; the complete core/provider access plan then proves
+each required location through the derived cache beneath the independently known
+seed frontier. The first checkpoint uses the existing directory-sync and canonical
+receipt barrier. The unused checkpoint slot is an empty private regular file;
+bounded admission treats that exact state as unavailable while retaining strict
+validation of nonempty images.
+
+The acknowledged cache frontier is independently checked before final publication.
+The parent-directory namespace lock coordinates name inspection and the final
+rename; callers exclude uncoordinated changes to that namespace. Existing file,
+directory and symlink names are collisions. The prepared session and its callback
+owners remain unchanged until publication; the accepted native owner then replaces
+them and releases their old custody. A final parent-directory synchronization
+failure reports uncertain durability with the native owner installed, preventing
+a retry from reusing the old prepared state after the public name already exists.
+
+Pre-publication failures retain the original prepared owner and identify the
+private .creating-ID-NONCE directory for recovery. Provisional bytes confer no
+public session or checkpoint authority. All allocations needed for accepted
+resource handoff precede publication. Default creation still uses the legacy path
+while this backend and stopped, locked conversion are integrated.

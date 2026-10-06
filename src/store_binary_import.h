@@ -54,4 +54,13 @@ int snag_store_import_binary_journal(struct snag_session *source, int destinatio
 int snag_store_seed_binary_session(struct snag_session *prepared, struct snag_session *target,
     struct snag_buf *index, char *error, size_t error_size);
 
+/* Prepare all four native files in a private sibling, then publish its name under
+ * the store's parent-directory namespace lock. Pre-publication failures preserve
+ * prepared and retain identifiable provisional bytes for recovery. Publication
+ * adopts the native owner; a later parent-sync failure reports uncertainty and
+ * leaves that owner installed. Pending bytes must exactly cover the accepted
+ * prepared extent. The caller excludes uncoordinated name changes. */
+int snag_store_persist_binary_session(struct snag_store *, struct snag_session *,
+    char *error, size_t error_size);
+
 #endif

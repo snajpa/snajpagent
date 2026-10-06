@@ -4042,6 +4042,177 @@ test_voice_adoption(struct snag_store *store, const char *cwd, unsigned int bad)
     snag_session_close(&original);
 }
 
+struct factory_observer {
+    struct snag_store *store;
+    struct snag_session *owner;
+    unsigned int freed;
+    bool published;
+    bool drop_parent;
+};
+
+static void
+factory_observer_free(void *opaque)
+{
+    struct factory_observer *observer = opaque;
+    ++observer->freed;
+    if (!observer->published) return;
+    struct snag_session *owner = observer->owner;
+    assert(owner->binary && !owner->pending_log && owner->on_checkpoint);
+    int fd = snag_open_read_security_at(observer->store->sessions_fd, owner->id, true);
+    snag_file_info expected;
+    snag_file_info actual;
+    assert(fd >= 0 && !snag_fstat(owner->dir_fd, &expected) && !snag_fstat(fd, &actual));
+    assert(expected.st_dev == actual.st_dev && expected.st_ino == actual.st_ino);
+    assert(!close(fd));
+    if (observer->drop_parent) {
+        assert(!close(observer->store->sessions_fd));
+        observer->store->sessions_fd = -1;
+    }
+}
+
+static void
+test_native_factory(const char *cwd)
+{
+    enum {FRESH, EMPTY_COLLISION, FULL_COLLISION, FILE_COLLISION,
+        BAD_PREFIX, PARENT_BUSY, PARENT_SYNC, SYMLINK_COLLISION, PENDING_TAIL, CASE_COUNT};
+    for (unsigned int variant = 0u; variant < CASE_COUNT; ++variant) {
+#ifdef _WIN32
+        if (variant == PARENT_BUSY || variant == SYMLINK_COLLISION) continue;
+#endif
+        const char *tmp = getenv("TMPDIR");
+        if (!tmp || !*tmp) tmp = "/tmp";
+        char *path = snag_path_join(tmp, "snag-native-factory-XXXXXX");
+        assert(path && mkdtemp(path));
+        struct snag_store store;
+        snag_store_init(&store);
+        char error[512];
+        assert(!snag_store_open(&store, path, error, sizeof(error)));
+        struct snag_session prepared;
+        snag_session_init(&prepared);
+        assert(!snag_session_prepare(&prepared, cwd, "openai", "factory", "medium",
+            error, sizeof(error)));
+        json_t *retry = json_pack("{s:s}", "value", "on");
+        assert(retry);
+        (void)commit_data(&prepared, "retry_auto_changed", retry);
+        struct factory_observer observer = {.store = &store, .owner = &prepared,
+            .published = variant == FRESH || variant == PARENT_SYNC,
+            .drop_parent = variant == PARENT_SYNC};
+        prepared.on_commit_free = factory_observer_free;
+        prepared.on_commit_opaque = &observer;
+        char id[SNAG_ID_HEX_LEN + 1u];
+        memcpy(id, prepared.id, sizeof(id));
+        snag_file_info before_name = {0};
+        int other = -1;
+        struct snag_directory_lock held = {.fd = -1};
+        if (variant == EMPTY_COLLISION || variant == FULL_COLLISION) {
+            assert(!snag_mkdir_private_at(store.sessions_fd, id));
+            if (variant == FULL_COLLISION) {
+                int dir = snag_open_read_security_at(store.sessions_fd, id, true);
+                assert(dir >= 0);
+                int file = snag_create_private_at(dir, "foreign", true);
+                assert(file >= 0 && !snag_write_full(file, "keep", 4u));
+                assert(!close(file) && !close(dir));
+            }
+            assert(!snag_lstat_at(store.sessions_fd, id, &before_name));
+        } else if (variant == FILE_COLLISION) {
+            int file = snag_create_private_at(store.sessions_fd, id, true);
+            assert(file >= 0 && !snag_write_full(file, "keep", 4u) && !close(file));
+            assert(!snag_lstat_at(store.sessions_fd, id, &before_name));
+        } else if (variant == BAD_PREFIX) {
+            prepared.pending_log->data[0] ^= 1u;
+        } else if (variant == PENDING_TAIL) {
+            assert(!snag_buf_append(prepared.pending_log, "not-json\n", 9u));
+#ifndef _WIN32
+        } else if (variant == PARENT_BUSY) {
+            char *parent = snag_path_join(path, "sessions");
+            assert(parent);
+            other = snag_open_read_security_at(AT_FDCWD, parent, true);
+            free(parent);
+            assert(other >= 0 && !snag_directory_lock_acquire(other, &held));
+        } else if (variant == SYMLINK_COLLISION) {
+            char *parent = snag_path_join(path, "sessions");
+            char *name = parent ? snag_path_join(parent, id) : NULL;
+            assert(name && !symlink("foreign-target", name));
+            free(parent);
+            free(name);
+            assert(!snag_lstat_at(store.sessions_fd, id, &before_name));
+#endif
+        }
+        struct snag_session original = prepared;
+        struct snag_buf pending = {.max = SIZE_MAX};
+        assert(!snag_buf_append(&pending, prepared.pending_log->data, prepared.pending_log->len));
+        int persisted = snag_store_persist_binary_session(&store, &prepared, error, sizeof(error));
+        if (observer.published) {
+            if (variant == FRESH && persisted < 0) fprintf(stderr, "native factory: %s\n", error);
+            assert(variant == FRESH ? !persisted : persisted < 0);
+            if (variant == PARENT_SYNC) {
+                assert(errno == EBADF && strstr(error, "published") && strstr(error, "uncertain"));
+            }
+            assert(prepared.binary && !prepared.pending_log && !strcmp(prepared.id, id));
+            assert(observer.freed == 1u && prepared.on_commit && prepared.on_checkpoint);
+            assert(!strcmp(prepared.retry_auto, "on"));
+            const char *files[] = {"journal.bin", "checkpoint.0", "checkpoint.1",
+                "history.idx", "lock"};
+            const char *unused = NULL;
+            for (size_t i = 0u; i < sizeof(files) / sizeof(files[0]); ++i) {
+                snag_file_info st;
+                assert(!snag_lstat_at(prepared.dir_fd, files[i], &st) && S_ISREG(st.st_mode));
+                if ((i == 1u || i == 2u) && !st.st_size) unused = files[i];
+            }
+            assert(unused);
+            snag_file_info st;
+            assert(snag_lstat_at(prepared.dir_fd, "events.jsonl", &st) < 0 && errno == ENOENT);
+            if (variant == FRESH) {
+                int slot = snag_open_private_append_at(prepared.dir_fd, unused, false);
+                assert(slot >= 0 && !snag_write_full(slot, "x", 1u));
+                snag_session_close(&prepared);
+                snag_session_init(&prepared);
+                assert(snag_session_open(&store, &prepared, id, error, sizeof(error)) < 0);
+                assert(!snag_fstat(slot, &st) && st.st_size == 1);
+                assert(!snag_truncate(slot, 0) && !close(slot));
+                int opened = snag_session_open(&store, &prepared, id, error, sizeof(error));
+                if (opened < 0) fprintf(stderr, "native factory recovery: %s\n", error);
+                assert(!opened && prepared.binary && !strcmp(prepared.default_model, "factory"));
+                assert(!strcmp(prepared.retry_auto, "on"));
+            }
+            retry = json_pack("{s:s}", "value", "off");
+            assert(retry);
+            (void)commit_data(&prepared, "retry_auto_changed", retry);
+            assert(!snag_session_checkpoint(&prepared, error, sizeof(error)));
+            assert(!snag_session_binary_index_status(&prepared, error, sizeof(error)));
+            assert(!strcmp(prepared.retry_auto, "off") && observer.freed == 1u);
+        } else {
+            assert(persisted < 0 && !observer.freed);
+            assert(!memcmp(&prepared, &original, sizeof(prepared)));
+            assert(prepared.pending_log->len == pending.len &&
+                !memcmp(prepared.pending_log->data, pending.data, pending.len));
+            if (before_name.st_ino) {
+                snag_file_info after;
+                assert(!snag_lstat_at(store.sessions_fd, id, &after));
+                assert(before_name.st_dev == after.st_dev && before_name.st_ino == after.st_ino &&
+                    before_name.st_mode == after.st_mode && before_name.st_size == after.st_size);
+            } else {
+                snag_file_info absent;
+                assert(snag_lstat_at(store.sessions_fd, id, &absent) < 0 && errno == ENOENT);
+            }
+            if (variant == BAD_PREFIX) assert(strstr(error, "provisional native session"));
+        }
+        if (held.fd >= 0) assert(!snag_directory_lock_release(&held));
+        if (other >= 0) assert(!close(other));
+        snag_session_close(&prepared);
+        assert(observer.freed == 1u);
+        if (variant == FRESH) {
+            snag_session_init(&prepared);
+            assert(!snag_session_open(&store, &prepared, id, error, sizeof(error)));
+            assert(prepared.binary && !strcmp(prepared.retry_auto, "off"));
+            snag_session_close(&prepared);
+        }
+        snag_store_close(&store);
+        snag_buf_free(&pending);
+        free(path);
+    }
+}
+
 static bool
 seed_access_cancel(void *opaque)
 {
@@ -4329,6 +4500,7 @@ void
 test_store_binary_replay(struct snag_store *store, const char *cwd)
 {
     test_prepared_native_seed(cwd);
+    test_native_factory(cwd);
     test_producer_candidate_ownership();
     for (unsigned int variant = 0u; variant < 13u; ++variant) {
         test_live_result_coordinates(SNAG_BINARY_TOOL_FINISHED, variant);

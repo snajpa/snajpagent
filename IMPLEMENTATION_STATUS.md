@@ -171,7 +171,13 @@ missing old membership or corrupt selected cache rows stop access preparation
 before image creation.
 Typed native metadata and checkpoint text retain the persisted automatic-retry
 override. An absent override inherits configuration; explicit on/off stays distinct.
-Session creation still uses the legacy log while native creation and conversion
+The native creation backend stages all four files in a private sibling, verifies
+complete core/provider access and the acknowledged cache frontier, then publishes
+the directory under the existing parent-name lock. Prepared state and callbacks
+stay intact until publication. Later parent-sync failures retain the adopted
+native owner and report uncertain durability. Empty reserved checkpoint slots
+remain unavailable; nonempty malformed images cause recovery errors. Default
+session creation still uses the legacy log while factory cutover and conversion
 are being integrated.
 
 snajpagent is a pre-1.0 terminal coding agent. One interactive session supports

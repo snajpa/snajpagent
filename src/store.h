@@ -392,7 +392,7 @@ int snag_session_each_event_from_checkpoint(struct snag_session *, const json_t 
 /* Consumes data on success and failure. */
 int snag_session_commit(struct snag_session *session, const char *type, json_t *data, uint64_t *written_seq,
                        char *error, size_t error_size);
-/* One indexed checkpoint record in events.jsonl; never a second session file. */
+/* Receipt-pinned native image, or one indexed checkpoint record in the legacy log. */
 int snag_session_checkpoint(struct snag_session *, char *error, size_t error_size);
 /* Capture the existing voice import operation's current durable destination
  * cursor. Native admission retains its identity/count proof until adoption or
