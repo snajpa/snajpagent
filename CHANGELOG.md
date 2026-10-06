@@ -6,7 +6,9 @@
 
 - Add the recipient-aware IRC event codec for direct-message integration,
   with strict legacy separation, delivery states and operator-query exclusion
-  from model projection. Live direct-message routing remains under development.
+  from model projection and model-facing history reads. Retain conversation
+  identities in revision-3 checkpoints and show recipient/identity labels in
+  history views. Live direct-message routing remains under development.
 
 - Copy explicit Vim yanks to the workstation clipboard, with asynchronous
   validation/publication, checked remote chunks, retries and retained result

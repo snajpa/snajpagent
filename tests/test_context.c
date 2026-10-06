@@ -1787,6 +1787,57 @@ test_leading_instructions_boundary(struct snag_store *store, const char *temp)
 }
 
 static void
+test_query_context_privacy(struct snag_store *store, const char *path)
+{
+    for (unsigned int checkpoint = 0u; checkpoint < 2u; ++checkpoint) {
+        struct snag_session session;
+        char error[256], id[SNAG_ID_HEX_LEN + 1u];
+        struct snag_irc_event event = {.routed = true, .kind = SNAG_IRC_MESSAGE,
+            .timestamp_ms = 1u, .endpoint = "fixture:1234", .nick = "peer",
+            .text = "operator-private-sentinel", .route = {
+                .connection = "11111111111111111111111111111111",
+                .conversation = "22222222222222222222222222222222",
+                .generation = 1u, .identity = SNAG_IRC_OPERATOR, .kind = SNAG_IRC_QUERY,
+                .peer = "peer", .target = "operator"}};
+        create_session(store, &session, path, "medium");
+        memcpy(id, session.id, sizeof(id));
+        commit_event(&session, "irc_event_v2", snag_irc_event_data(&event));
+        assert(!session.irc_received_seq);
+        event.input = true;
+        event.route.identity = SNAG_IRC_AGENT;
+        strcpy(event.route.conversation, "33333333333333333333333333333333");
+        strcpy(event.route.target, "agent");
+        strcpy(event.text, "agent-private-sentinel");
+        commit_event(&session, "irc_event_v2", snag_irc_event_data(&event));
+        uint64_t received = session.irc_received_seq;
+        if (checkpoint) assert(snag_session_checkpoint(&session, error, sizeof(error)) == 0);
+        commit_event(&session, "irc_admitted", json_pack("{s:[I]}",
+            "sequences", (json_int_t)received));
+        commit_event(&session, "turn_started", turn_started(
+            "44444444444444444444444444444444", 1u, "read incoming messages", path, json_array()));
+        for (unsigned int reopened = 0u; reopened < 2u; ++reopened) {
+            struct snag_context_projection projection = {0};
+            json_t *empty = json_array();
+            build_context(&session, 1u, empty, NULL, &projection);
+            char *text = json_dumps(projection.create_request.value, JSON_COMPACT);
+            assert(text && !strstr(text, "operator-private-sentinel") &&
+                strstr(text, "agent-private-sentinel") && strstr(text, "identity=agent") &&
+                strstr(text, "kind=query") && strstr(text, "target=agent"));
+            assert(projection.irc_seq == received);
+            free(text);
+            json_decref(empty);
+            snag_context_projection_free(&projection);
+            if (!reopened && checkpoint)
+                assert(snag_session_checkpoint(&session, error, sizeof(error)) == 0);
+            snag_session_close(&session);
+            snag_session_init(&session);
+            if (!reopened)
+                assert(snag_session_open(store, &session, id, error, sizeof(error)) == 0);
+        }
+    }
+}
+
+static void
 test_plain_irc_admission_projection(struct snag_store *store, const char *path)
 {
     const char *turn = "22222222222222222222222222222222";
@@ -5070,6 +5121,7 @@ main(int argc, char **argv)
     test_provider_model_projection(&store, cwd);
     test_leading_instructions_boundary(&store, cwd);
     test_reasoning_continuation(&store, cwd);
+    test_query_context_privacy(&store, cwd);
     test_plain_irc_admission_projection(&store, cwd);
     test_durable_irc_input_watermark(&store, cwd);
     test_rebased_irc_admission_overlap(&store, cwd);

@@ -3172,6 +3172,16 @@ for old history still read those older records.  The session lock, metadata and
 retained media are not alternate checkpoint files.
 Cache recovery uses the same checkpoint and recent suffix whenever a provider
 view has been saved.
+.PP
+Development IRC records named
+.B irc_event_v2
+carry connection, conversation and local-identity metadata. Their sessions use
+checkpoint snapshot revision 3. Earlier binaries reject these records and
+checkpoints; retain a matching reader for such journals. Existing sessions keep
+their current checkpoint revision until a new-format IRC event is recorded.
+Installing a binary or opening a Vim workspace leaves existing journals in
+their current format. Live direct-message routing remains under development.
+.PP
 Repeated request preparation and reopening preserve one copy of the compaction
 or recovery prefix. Retry notices continue from the saved attempt count;
 older cached views rebuild from their retained events.
@@ -3540,6 +3550,10 @@ empty with
 continue with its cursor rather than treating it as the end of history.
 Checkpoint records show coverage metadata instead of saved transcripts;
 provider continuations and encrypted compaction payloads are omitted.
+Operator IRC queries and connection notices are excluded from model history
+pages, including explicit event-type filters. They remain available in operator
+history views. Sharing a private operator message with a model uses ordinary
+operator input.
 History records are filtered with configured secrets and the request's credential
 before their details are shortened. Stored records remain unchanged.
 History and goal listing report an output-budget failure, not a false empty/end

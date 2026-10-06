@@ -103,7 +103,11 @@ context_cache_unconsumed_irc(const json_t *entry, uint64_t consumed)
     const char *type = snag_json_string(entry, "type");
     const json_t *data = json_object_get(entry, "data");
     if (!type || snag_json_integer_u64(entry, "seq", &seq) < 0 || seq <= consumed) return false;
-    if (!strcmp(type, "irc_event")) return json_is_true(json_object_get(data, "input"));
+    if (snag_string_in(type, "irc_event irc_event_v2")) {
+        struct snag_irc_event event;
+        return snag_irc_event_record_read(type, data, &event) == 0 && event.input &&
+            snag_irc_event_model_visible(&event);
+    }
     if (!strcmp(type, "irc_admitted")) {
         const json_t *items = json_object_get(data, "sequences");
         for (size_t i = 0u; i < json_array_size(items); ++i)
@@ -1500,12 +1504,12 @@ recovery_room_event(void *opaque, const struct snag_session *state, uint64_t seq
 
     (void)state;
     (void)seq;
-    if (strcmp(type, "irc_event")) return 0;
+    if (!snag_string_in(type, "irc_event irc_event_v2")) return 0;
     if (input->builder->control && input->builder->control->cancelled &&
         input->builder->control->cancelled(input->builder->control->opaque))
         return snag_fail(error, error_size, ECANCELED, "room recovery cancelled");
-    if (snag_irc_event_read(data, &event) < 0) return -1;
-    if (!event.input) return 0;
+    if (snag_irc_event_record_read(type, data, &event) < 0) return -1;
+    if (!event.input || !snag_irc_event_model_visible(&event)) return 0;
     (void)snprintf(reference, sizeof(reference), "[IRC update id=%s:%llu ",
         event.stream, (unsigned long long)event.sequence);
     if (!strstr(input->builder->session->active_prompt, reference)) return 0;
@@ -1583,12 +1587,13 @@ defer_room_event(struct context_builder *builder, const json_t *data, bool has_p
 {
     struct snag_irc_event event;
     struct snag_buf text;
-    if (snag_irc_event_read(data, &event) < 0) return -1;
+    if (snag_irc_event_payload_read(data, &event) < 0) return -1;
+    if (!event.input || !snag_irc_event_model_visible(&event)) return 0;
     /* Plain IRC admission carries the complete payload in its input/steer.
      * Stream references and metadata-only admissions still need expansion. */
     if (has_prompt && !event.stream[0] && !event.historical &&
         (event.kind == SNAG_IRC_MESSAGE || event.kind == SNAG_IRC_NOTICE)) return 0;
-    snag_buf_init(&text, SNAG_IRC_TEXT_MAX + 2048u);
+    snag_buf_init(&text, sizeof(event) + 1024u);
     int rc = snag_irc_event_projection(&text, &event);
     if (rc == 0) rc = snag_buf_terminate(&text);
     if (rc == 0) rc = defer_input(builder, (const char *)text.data, NULL, 0u, NULL);
@@ -1608,16 +1613,17 @@ static bool
 irc_source_prompt_matches(const char *prompt, const struct snag_irc_event *event)
 {
     if (!prompt || !event->stream[0] || !event->sequence) return false;
-    char marker[SNAG_CONFIG_IRC_ENDPOINT_MAX + SNAG_CONFIG_IRC_ROOM_MAX +
-        SNAG_CONFIG_IRC_NICK_MAX + 128u];
-    int n = snprintf(marker, sizeof(marker),
-        "[IRC update id=%s:%llu endpoint=%s room=%s event=%s sender=%s]\n",
-        event->stream, (unsigned long long)event->sequence, event->endpoint, event->room,
-        snag_irc_kind_name(event->kind), event->nick[0] ? event->nick : "server");
-    if (n < 0 || (size_t)n >= sizeof(marker)) return false;
-    const char *match = strstr(prompt, marker);
-    return match && (match == prompt || match[-1] == '\n') &&
-        !strstr(match + (size_t)n, marker);
+    struct snag_buf marker = {.max = sizeof(*event) + 1024u};
+    bool matches = false;
+    if (snag_irc_event_reference(&marker, event) == 0 && marker.len &&
+        snag_buf_terminate(&marker) == 0) {
+        const char *text = (const char *)marker.data;
+        const char *match = strstr(prompt, text);
+        matches = match && (match == prompt || match[-1] == '\n') &&
+            !strstr(match + marker.len, text);
+    }
+    snag_buf_free(&marker);
+    return matches;
 }
 
 static int
@@ -1644,8 +1650,9 @@ recover_irc_source(void *opaque, const struct snag_session *state, uint64_t seq,
         irc_source_prompt_matches(lookup->prompt, &event)) {
         data = lookup->following;
         ++seq;
-    } else if (strcmp(type, "irc_event") ||
-        snag_irc_event_read(data, &event) < 0 || !event.input) {
+    } else if (!snag_string_in(type, "irc_event irc_event_v2") ||
+        snag_irc_event_record_read(type, data, &event) < 0 || !event.input ||
+        !snag_irc_event_model_visible(&event)) {
         return SNAG_JOURNAL_STOP_AFTER;
     }
     json_t *source = json_pack("{s:I,s:I,s:O}", "seq", (json_int_t)lookup->wanted,
@@ -1697,10 +1704,10 @@ context_event(void *opaque, const struct snag_session *state,
     }
     if (!strcmp(type, "response_completed") || !strcmp(type, "tool_finished")) builder->recovery_count = 0u;
 
-    if (strcmp(type, "irc_event") == 0) {
+    if (snag_string_in(type, "irc_event irc_event_v2")) {
         struct snag_irc_event event;
-        if (snag_irc_event_read(data, &event) < 0) return -1;
-        if (!event.input) return 0;
+        if (snag_irc_event_record_read(type, data, &event) < 0) return -1;
+        if (!event.input || !snag_irc_event_model_visible(&event)) return 0;
         if (!builder->deferred_irc) builder->deferred_irc = json_array();
         if (!builder->deferred_irc || json_array_append_new(builder->deferred_irc,
             json_pack("{s:I,s:O}", "seq", (json_int_t)seq, "event", (json_t *)data)) < 0) return -1;
@@ -1974,8 +1981,8 @@ snag_context_read_tool_schema(const char *name)
         return tool_schema("read_session_history", "",
             "Read a bounded newest-first page of this session's verified durable event history. "
             "Use next_before_seq to walk older history, including empty filtered pages "
-            "with scan_complete=false. Counts cover the scanned range, not the entire journal; "
-            "provider-only payloads are omitted.",
+            "with scan_complete=false. Counts cover the scanned range, not the entire journal. "
+            "Provider-only payloads, operator IRC queries and connection notices are omitted.",
             json_pack("{s:{s:[s,s],s:i,s:s},s:{s:[s,s],s:i,s:i,s:s},"
                 "s:{s:[s,s],s:i,s:i,s:s},s:{s:[s,s],s:i,s:{s:s},s:s}}",
                 "before_seq", "type", "integer", "null", "minimum", 1,

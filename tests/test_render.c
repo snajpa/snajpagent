@@ -1935,6 +1935,40 @@ capture_static_markdown(unsigned int verbosity, char *out, size_t out_size)
 }
 
 static void
+test_query_markdown_isolation(void)
+{
+    struct snag_render render;
+    struct snag_irc_event event = {.routed = true, .kind = SNAG_IRC_MESSAGE,
+        .timestamp_ms = 1000u, .endpoint = "server:6667", .nick = "peer",
+        .text = "```", .route = {.identity = SNAG_IRC_OPERATOR, .kind = SNAG_IRC_QUERY,
+            .connection = "11111111111111111111111111111111",
+            .conversation = "22222222222222222222222222222222", .peer = "peer"}};
+    char output[8192];
+    struct output_capture capture = capture_open(false, true);
+    snag_render_init(&render, 1u);
+    render.stderr_terminal = true;
+    snag_render_set_color(&render, SNAG_COLOR_NEVER);
+    assert(snag_render_set_view(&render, SNAG_RENDER_CHAT) == 0);
+    assert(snag_render_irc_event(&render, &event) == 0);
+    event.route.identity = SNAG_IRC_AGENT;
+    strcpy(event.route.conversation, "33333333333333333333333333333333");
+    strcpy(event.text, "**other conversation**");
+    assert(snag_render_irc_event(&render, &event) == 0);
+    event.route.identity = SNAG_IRC_OPERATOR;
+    strcpy(event.route.conversation, "22222222222222222222222222222222");
+    strcpy(event.text, "**code**");
+    assert(snag_render_irc_event(&render, &event) == 0);
+    snag_render_free(&render);
+    (void)capture_close(&capture, output, sizeof(output), 0u);
+    assert(strstr(output, "[server:6667/peer operator query]") &&
+        strstr(output, "[server:6667/peer agent query]"));
+    if (!strstr(output, "**code**") || strstr(output, "**other conversation**"))
+        fprintf(stderr, "query Markdown output: %s\n", output);
+    assert(strstr(output, "other conversation") && !strstr(output, "**other conversation**") &&
+        strstr(output, "**code**"));
+}
+
+static void
 test_history_failure(void)
 {
     struct snag_render render;
@@ -3223,6 +3257,7 @@ test_hosted_search_rows(void)
 int
 main(void)
 {
+    test_query_markdown_isolation();
     static const char markdown[] = "# **Live** _Markdown_\n"
         "- item with `code` and [docs](https://example.test)\n"
         "> ~~old~~ new\n" "````c\nint main(void) { return 0; }\n````\n"

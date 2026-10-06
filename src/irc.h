@@ -93,12 +93,18 @@ const char *snag_irc_kind_name(enum snag_irc_event_kind kind);
 json_t *snag_irc_event_data(const struct snag_irc_event *event);
 /* Durable field validation only; live/replay membership rules remain separate. */
 int snag_irc_event_projection(struct snag_buf *out, const struct snag_irc_event *event);
+int snag_irc_event_reference(struct snag_buf *, const struct snag_irc_event *);
 int snag_irc_event_read(const json_t *data, struct snag_irc_event *event);
 /* Record type and payload revision must agree. The legacy decoder above stays
  * strict so new routing fields cannot be hidden inside an old event type. */
 int snag_irc_event_record_read(const char *, const json_t *, struct snag_irc_event *);
 const char *snag_irc_event_record_type(const struct snag_irc_event *);
 bool snag_irc_event_model_visible(const struct snag_irc_event *);
+/* Only for payloads retained after typed record validation. */
+int snag_irc_event_payload_read(const json_t *, struct snag_irc_event *);
+/* Immutable conversation directory; update returns a new owned reference. */
+json_t *snag_irc_conversations_update(const json_t *, const json_t *, uint64_t);
+bool snag_irc_conversations_valid(const json_t *, uint64_t);
 
 typedef int (*snag_irc_event_fn)(void *opaque, const struct snag_irc_event *event);
 typedef int (*snag_irc_trace_fn)(void *opaque, unsigned int level, char direction, const char *endpoint,

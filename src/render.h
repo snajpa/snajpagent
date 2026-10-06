@@ -75,6 +75,9 @@ struct snag_markdown_state {
 struct snag_irc_markdown_state {
     char endpoint[SNAG_CONFIG_IRC_ENDPOINT_MAX + 1u];
     char nick[SNAG_CONFIG_IRC_NICK_MAX + 1u];
+    char connection[SNAG_ID_HEX_LEN + 1u];
+    char conversation[SNAG_ID_HEX_LEN + 1u];
+    enum snag_irc_identity identity;
     char fence;
     unsigned int fence_len;
 };

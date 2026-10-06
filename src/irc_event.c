@@ -224,6 +224,157 @@ snag_irc_event_record_read(const char *type, const json_t *data, struct snag_irc
 }
 
 int
+snag_irc_event_payload_read(const json_t *data, struct snag_irc_event *event)
+{
+    return event_read(data, event, json_object_get(data, "routing") != NULL);
+}
+
+static bool
+conversation_entry(const json_t *entry, uint64_t *seq, struct snag_irc_event *event)
+{
+    return snag_json_exact_keys(entry, "seq data") &&
+        snag_json_integer_u64(entry, "seq", seq) == 0 && *seq &&
+        snag_irc_event_record_read("irc_event_v2", json_object_get(entry, "data"), event) == 0;
+}
+
+bool
+snag_irc_conversations_valid(const json_t *state, uint64_t next_seq)
+{
+    if (!json_is_object(state) || !json_object_size(state)) return false;
+    json_t *seen = json_object();
+    const char *connection_id;
+    const json_t *connection;
+    bool valid = false;
+    if (!seen) return false;
+    json_object_foreach((json_t *)state, connection_id, connection) {
+        uint64_t generation;
+        char endpoint[SNAG_CONFIG_IRC_ENDPOINT_MAX + 1u];
+        const json_t *status = json_object_get(connection, "connected");
+        const json_t *items = json_object_get(connection, "conversations");
+        if (!snag_hex_is_lower(connection_id, SNAG_ID_HEX_LEN) ||
+            !snag_json_exact_keys(connection, "endpoint generation connected conversations") ||
+            !event_field(connection, "endpoint", endpoint, sizeof(endpoint)) || !endpoint[0] ||
+            snag_json_integer_u64(connection, "generation", &generation) < 0 || !generation ||
+            !snag_json_exact_keys(status, "operator agent") ||
+            !json_is_object(items) || !json_object_size(items)) goto out;
+        for (size_t i = 0u; i < 2u; ++i) {
+            const json_t *value = json_object_get(status, identities[i]);
+            if (!json_is_null(value) && !json_is_boolean(value)) goto out;
+        }
+        const char *id;
+        const json_t *entry;
+        json_object_foreach((json_t *)items, id, entry) {
+            struct snag_irc_event event;
+            uint64_t seq;
+            if (!conversation_entry(entry, &seq, &event) || seq >= next_seq ||
+                strcmp(id, event.route.conversation) ||
+                strcmp(connection_id, event.route.connection) ||
+                strcmp(endpoint, event.endpoint) || event.route.generation > generation ||
+                json_object_get(seen, id) || json_object_set_new(seen, id, json_true()) < 0)
+                goto out;
+        }
+    }
+    valid = true;
+out:
+    json_decref(seen);
+    return valid;
+}
+
+json_t *
+snag_irc_conversations_update(const json_t *state, const json_t *data, uint64_t seq)
+{
+    struct snag_irc_event event;
+    if (!seq || seq > INT64_MAX || (state && !json_is_object(state)) ||
+        snag_irc_event_record_read("irc_event_v2", data, &event) < 0) {
+        errno = EINVAL;
+        return NULL;
+    }
+    const struct snag_irc_event_route *route = &event.route;
+    const json_t *old = json_object_get(state, route->connection);
+    const json_t *items = json_object_get(old, "conversations");
+    const json_t *previous = json_object_get(items, route->conversation);
+    uint64_t generation = 0u;
+    const char *key;
+    const json_t *value;
+    /* A stable conversation belongs to exactly one connection and local role. */
+    json_object_foreach((json_t *)state, key, value) {
+        if (strcmp(key, route->connection) &&
+            json_object_get(json_object_get(value, "conversations"), route->conversation))
+            goto invalid;
+    }
+    if (old && (snag_json_integer_u64(old, "generation", &generation) < 0 ||
+        route->generation < generation ||
+        !snag_json_string(old, "endpoint") ||
+        strcmp(event.endpoint, snag_json_string(old, "endpoint")))) goto invalid;
+    if (previous) {
+        struct snag_irc_event prior;
+        uint64_t prior_seq;
+        if (!conversation_entry(previous, &prior_seq, &prior) || seq <= prior_seq ||
+            route->identity != prior.route.identity || route->kind != prior.route.kind ||
+            strcmp(event.room, prior.room)) goto invalid;
+        if (strcmp(route->peer, prior.route.peer) &&
+            (event.kind != SNAG_IRC_NICK || route->generation != prior.route.generation ||
+                route->direction != SNAG_IRC_INCOMING ||
+                strcmp(event.nick, prior.route.peer) || strcmp(event.text, route->peer)))
+            goto invalid;
+    }
+
+    json_t *result = state ? json_copy((json_t *)state) : json_object();
+    json_t *connection = old ? json_copy((json_t *)old) : json_object();
+    json_t *conversations = items ? json_copy((json_t *)items) : json_object();
+    json_t *status = old && generation == route->generation ?
+        json_copy(json_object_get(old, "connected")) : json_pack("{s:n,s:n}", "operator", "agent");
+    json_t *entry = json_pack("{s:I,s:O}", "seq", (json_int_t)seq, "data", data);
+    bool connected_event = route->kind == SNAG_IRC_CONNECTION_EVENTS &&
+        (event.kind == SNAG_IRC_CONNECTED || event.kind == SNAG_IRC_DISCONNECTED);
+    if (!result || !connection || !conversations || !status || !entry ||
+        (connected_event && json_object_set_new(status, identities[route->identity],
+            json_boolean(event.kind == SNAG_IRC_CONNECTED)) < 0) ||
+        json_object_set_new(connection, "endpoint", json_string(event.endpoint)) < 0 ||
+        json_object_set_new(connection, "generation", json_integer(route->generation)) < 0 ||
+        json_object_set(connection, "connected", status) < 0 ||
+        json_object_set(conversations, route->conversation, entry) < 0 ||
+        json_object_set(connection, "conversations", conversations) < 0 ||
+        json_object_set(result, route->connection, connection) < 0) {
+        json_decref(result);
+        result = NULL;
+        errno = ENOMEM;
+    }
+    json_decref(entry);
+    json_decref(status);
+    json_decref(conversations);
+    json_decref(connection);
+    return result;
+invalid:
+    errno = EINVAL;
+    return NULL;
+}
+
+int
+snag_irc_event_reference(struct snag_buf *out, const struct snag_irc_event *event)
+{
+    if (!snag_irc_event_model_visible(event)) return 0;
+    if (!event->routed) {
+        return snag_buf_printf(out,
+            "[IRC update id=%s:%llu endpoint=%s room=%s event=%s sender=%s]\n",
+            event->stream, (unsigned long long)event->sequence, event->endpoint, event->room,
+            snag_irc_kind_name(event->kind), event->nick[0] ? event->nick : "server");
+    }
+    const struct snag_irc_event_route *route = &event->route;
+    if ((unsigned int)route->identity > SNAG_IRC_AGENT ||
+        (unsigned int)route->kind > SNAG_IRC_QUERY ||
+        (unsigned int)route->direction > SNAG_IRC_OUTGOING) return snag_errno(EINVAL);
+    return snag_buf_printf(out, "[IRC update id=%s:%llu endpoint=%s connection=%s "
+        "generation=%llu identity=%s conversation=%s kind=%s peer=%s target=%s "
+        "direction=%s event=%s sender=%s action=%s]\n",
+        event->stream, (unsigned long long)event->sequence, event->endpoint, route->connection,
+        (unsigned long long)route->generation, identities[route->identity], route->conversation,
+        conversations[route->kind], route->peer, route->target, directions[route->direction],
+        snag_irc_kind_name(event->kind), event->nick[0] ? event->nick : "server",
+        route->action ? "true" : "false");
+}
+
+int
 snag_irc_event_projection(struct snag_buf *out, const struct snag_irc_event *event)
 {
     if (!snag_irc_event_model_visible(event)) return 0;

@@ -344,24 +344,32 @@ event_block(struct transcript *view, uint64_t seq, const char *type,
         field = "prompt";
         text = snag_json_string(data, "prompt");
     }
-    else if (!strcmp(type, "irc_event")) {
+    else if (snag_string_in(type, "irc_event irc_event_v2")) {
         const char *endpoint = snag_json_string(data, "endpoint");
         const char *room = snag_json_string(data, "room");
         const char *nick = snag_json_string(data, "nick");
         const char *kind = snag_json_string(data, "kind");
         if (!endpoint || !room || !nick || !kind || !text) return snag_errno(EINVAL);
+        const json_t *routing = json_object_get(data, "routing");
+        const char *identity = snag_json_string(routing, "identity");
+        const char *conversation = snag_json_string(routing, "conversation_kind");
+        const char *target = conversation && !strcmp(conversation, "query") ?
+            snag_json_string(routing, "peer") : room;
+        if (routing && (!identity || !conversation || !target)) return snag_errno(EINVAL);
         /* Redaction can expand labels beyond the native routing-field width.
          * These owned strings are display data, never network addresses. */
         struct snag_buf heading = {.max = SNAG_MAX_EVENT_LINE};
         int rc = snag_buf_printf(&heading, "%s/%s <%s> %s", endpoint,
-            room, *nick ? nick : "server", !strcmp(kind, "message") ? "" : kind);
+            target, *nick ? nick : "server", !strcmp(kind, "message") ? "" : kind);
+        if (!rc && routing) rc = snag_buf_printf(&heading, " [%s %s]", identity, conversation);
         if (!rc) rc = snag_buf_terminate(&heading);
         json_t *block = NULL;
         if (!rc) rc = text_block(view, seq, "irc", (const char *)heading.data,
             text, snag_json_string(source, "text"), &block);
         if (rc < 0) block = NULL;
         if (block && (json_object_set_new(block, "endpoint", json_string(endpoint)) < 0 ||
-            json_object_set_new(block, "target", json_string(room)) < 0)) block = NULL;
+            json_object_set_new(block, "target", json_string(target)) < 0 ||
+            (routing && json_object_set(block, "routing", (json_t *)routing) < 0))) block = NULL;
         snag_buf_free(&heading);
         return block ? 0 : -1;
     } else if (!strcmp(type, "response_failed") || !strcmp(type, "turn_failed")) {

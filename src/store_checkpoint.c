@@ -2,6 +2,7 @@
 #include "store_internal.h"
 #include "base.h"
 #include "fs.h"
+#include "irc.h"
 #include "json.h"
 #include "snajpagent.h"
 #include <errno.h>
@@ -371,6 +372,7 @@ encode_state(const struct snag_session *s)
 #define JSON_FIELD(f) PUT(#f, s->f ? json_incref(s->f) : json_null())
     JSON_FIELD(strings); JSON_FIELD(compact_output); JSON_FIELD(pending_input);
     JSON_FIELD(active_instructions); JSON_FIELD(response_public); JSON_FIELD(download_queue);
+    if (s->irc_conversations) JSON_FIELD(irc_conversations);
 #undef JSON_FIELD
 #define TEXT_FIELD(f) PUT("has_" #f, json_boolean(s->f != NULL))
     TEXT_FIELD(cwd); TEXT_FIELD(first_user); TEXT_FIELD(last_user);
@@ -463,6 +465,11 @@ decode_state(const json_t *data, struct snag_session *s)
     JSON_FIELD(active_instructions); JSON_FIELD(response_public);
 #undef JSON_FIELD
     if (s->strings && !json_is_object(s->strings)) return -1;
+    json_t *conversations = json_object_get(data, "irc_conversations");
+    if (conversations) {
+        if (!snag_irc_conversations_valid(conversations, s->next_seq)) return -1;
+        s->irc_conversations = json_incref(conversations);
+    }
     const json_t *options = json_object_get(s->strings, "resume_options");
     if (options && !snag_session_options_valid(options)) return -1;
     /* Snapshot v1 predates the download outbox. Copy its mutable container

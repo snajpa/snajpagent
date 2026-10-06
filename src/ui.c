@@ -2314,13 +2314,12 @@ struct history_irc_payload {
 };
 
 static int
-history_note_irc_event(struct history_replay *history, const json_t *data)
+history_note_irc_event(struct history_replay *history, const char *type, const json_t *data)
 {
     struct snag_irc_event event;
     struct snag_buf rendered;
-    snag_buf_init(&rendered, SNAG_IRC_TEXT_MAX + SNAG_CONFIG_IRC_ENDPOINT_MAX +
-        SNAG_CONFIG_IRC_ROOM_MAX + SNAG_CONFIG_IRC_NICK_MAX + 256u);
-    if (snag_irc_event_read(data, &event) < 0) return 0;
+    snag_buf_init(&rendered, sizeof(event) + 1024u);
+    if (snag_irc_event_record_read(type, data, &event) < 0) return 0;
     if (!event.stream[0] || snag_irc_event_projection(&rendered, &event) < 0 ||
         !rendered.len || !rendered.data) {
         snag_buf_free(&rendered);
@@ -2476,7 +2475,8 @@ history_event(void *opaque, const struct snag_session *state, uint64_t seq,
     bool completed = snag_string_in(type, "turn_completed turn_completed_silent");
     (void)state; (void)seq; (void)error; (void)error_size;
     if (history->ui && snag_ui_leaving(history->ui)) return snag_errno(ECANCELED);
-    if (history->ui && !strcmp(type, "irc_event") && history_note_irc_event(history, data) < 0)
+    if (history->ui && snag_string_in(type, "irc_event irc_event_v2") &&
+        history_note_irc_event(history, type, data) < 0)
         return -1;
     if (!strcmp(type, "voice_event")) {
         if (history_flush(history, false) < 0) return -1;
@@ -2539,7 +2539,7 @@ history_collect(void *opaque, const struct snag_session *state, uint64_t seq,
     struct history_window *window = opaque;
     (void)state; (void)seq; (void)error; (void)error_size;
     if (snag_ui_leaving(window->ui)) return snag_errno(ECANCELED);
-    bool irc = !strcmp(type, "irc_event");
+    bool irc = snag_string_in(type, "irc_event irc_event_v2");
     if (!strcmp(type, "irc_admitted") && !json_object_get(data, "steering")) return 0;
     if (!window->remaining) {
         if (!window->wants_irc || window->prefix_irc == HISTORY_IRC_PAYLOADS) return 1;
@@ -2579,7 +2579,7 @@ history_show(struct snag_ui *ui, struct snag_session *session, uint64_t count,
         for (size_t i = json_array_size(window.events); !rc && i; --i) {
             const json_t *entry = json_array_get(window.events, i - 1u);
             const char *type = snag_json_string(entry, "type");
-            if (first && strcmp(type, "irc_event") && strcmp(type, "voice_event")) {
+            if (first && !snag_string_in(type, "irc_event irc_event_v2 voice_event")) {
                 history.turn.partial = before && strcmp(type, "turn_started");
                 history.turn.status = "unfinished";
                 first = false;

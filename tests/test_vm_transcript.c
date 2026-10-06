@@ -55,6 +55,40 @@ find(const json_t *blocks, const char *kind, size_t nth)
 }
 
 static void
+query_conversations(void)
+{
+    json_t *events = json_array();
+    struct snag_irc_event irc = {.routed = true, .kind = SNAG_IRC_MESSAGE,
+        .timestamp_ms = 1u, .endpoint = "test:6667", .nick = "top-secret",
+        .text = "operator query top-secret", .route = {
+            .connection = "11111111111111111111111111111111",
+            .conversation = "22222222222222222222222222222222",
+            .generation = 1u, .identity = SNAG_IRC_OPERATOR, .kind = SNAG_IRC_QUERY,
+            .peer = "top-secret", .target = "operator"}};
+    event(events, "irc_event_v2", snag_irc_event_data(&irc));
+    irc.route.identity = SNAG_IRC_AGENT;
+    strcpy(irc.route.conversation, "33333333333333333333333333333333");
+    strcpy(irc.route.target, "agent");
+    strcpy(irc.text, "agent query top-secret");
+    event(events, "irc_event_v2", snag_irc_event_data(&irc));
+    for (unsigned int level = 0u; level <= 6u; ++level) {
+        json_t *blocks = project(events, level);
+        json_t *operator = find(blocks, "irc", 0u);
+        json_t *agent = find(blocks, "irc", 1u);
+        assert(operator && agent && strstr(snag_json_string(operator, "label"), "operator query") &&
+            strstr(snag_json_string(agent, "label"), "agent query"));
+        assert(!strcmp(snag_json_string(operator, "target"), "<redacted:secret>"));
+        assert(strstr(snag_json_string(operator, "text"), "operator query <redacted:secret>") &&
+            strstr(snag_json_string(agent, "text"), "agent query <redacted:secret>"));
+        char *encoded = json_dumps(blocks, JSON_COMPACT);
+        assert(encoded && !strstr(encoded, "top-secret"));
+        free(encoded);
+        json_decref(blocks);
+    }
+    json_decref(events);
+}
+
+static void
 conversation_and_tools(void)
 {
     json_t *events = json_array();
@@ -331,6 +365,7 @@ failure_paths(void)
 int
 main(void)
 {
+    query_conversations();
     conversation_and_tools();
     encoded_interleaving();
     redaction_expansion();

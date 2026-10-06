@@ -719,9 +719,18 @@ The event codec now has a strict v2 reader and a nested `routing` object:
 `peer` identifies the query counterpart; `target` retains the actual wire
 recipient, including the local accepted nick on incoming DMs. The decoder rejects
 operator-query model admission, invalid send states and mismatched record versions.
-The model projection omits operator queries and connection notices. Legacy
-decoding remains separate. Durable-reader integration and live v2 writing are
-the next implementation step; this codec alone does not enable DM traffic.
+The model projection and model-facing history tool omit operator queries and
+connection notices, including explicitly filtered history calls. Typed store,
+context and presentation readers accept both revisions. A copy-on-write
+conversation directory retains the latest event and its source sequence per
+conversation, grouped by stable connection ID. Connection entries retain their
+endpoint, generation and separate operator/agent connection status. The complete
+conversation remains in the journal. Suffix replay and failed commits preserve
+the saved checkpoint. Conversation IDs bind the connection, local role and kind;
+peer renames require a matching NICK event within the same generation.
+The first routed event activates checkpoint revision 3; unaffected sessions
+retain revisions 1/2. Live runtime restoration, v2 writing and direct-message
+routing remain the next implementation step.
 
 This expands the original UI-only storage scope. Implement compatible readers,
 checkpoint projection and context filters first. Direct-message-capable writers

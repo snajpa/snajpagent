@@ -200,6 +200,7 @@ struct snag_session {
      * once on resume. Live checkpoint encoding is supplied by context.c. */
     json_t *checkpoint_context, *checkpoint_state;
     json_t *download_queue; /* Pending workstation downloads, durable in the journal. */
+    json_t *irc_conversations; /* Immutable connection/conversation directory, snapshot v3. */
     size_t response_public_bytes;
     int dir_fd;
     int log_fd;

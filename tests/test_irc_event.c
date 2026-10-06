@@ -157,12 +157,96 @@ invalid_fields(void)
     json_decref(original);
 }
 
+static void
+directory_update_test(void)
+{
+    struct snag_irc_event event = query();
+    json_t *data = snag_irc_event_data(&event);
+    json_t *first = snag_irc_conversations_update(NULL, data, 2u);
+    json_decref(data);
+    assert(first && snag_irc_conversations_valid(first, 3u));
+    assert(!snag_irc_conversations_valid(first, 2u));
+    json_t *saved = json_deep_copy(first);
+    strcpy(event.route.peer, "renamed");
+    data = snag_irc_event_data(&event);
+    assert(!snag_irc_conversations_update(first, data, 3u));
+    json_decref(data);
+    event.kind = SNAG_IRC_NICK;
+    strcpy(event.text, "renamed");
+    data = snag_irc_event_data(&event);
+    json_t *renamed = snag_irc_conversations_update(first, data, 3u);
+    assert(renamed && json_equal(first, saved));
+    assert(!snag_irc_conversations_update(first, data, 2u));
+    json_decref(data);
+
+    event = query();
+    event.route.identity = SNAG_IRC_AGENT;
+    data = snag_irc_event_data(&event);
+    assert(!snag_irc_conversations_update(first, data, 3u));
+    json_decref(data);
+    event = query();
+    strcpy(event.endpoint, "another:6667");
+    data = snag_irc_event_data(&event);
+    assert(!snag_irc_conversations_update(first, data, 3u));
+    json_decref(data);
+    strcpy(event.route.connection, "55555555555555555555555555555555");
+    data = snag_irc_event_data(&event);
+    assert(!snag_irc_conversations_update(first, data, 3u));
+    json_decref(data);
+
+    event = query();
+    event.kind = SNAG_IRC_CONNECTED;
+    event.route.kind = SNAG_IRC_CONNECTION_EVENTS;
+    event.route.peer[0] = event.route.target[0] = 0;
+    strcpy(event.route.conversation, "66666666666666666666666666666666");
+    data = snag_irc_event_data(&event);
+    json_t *connected = snag_irc_conversations_update(first, data, 4u);
+    assert(connected && snag_irc_conversations_valid(connected, 5u));
+    const json_t *status = json_object_get(json_object_get(connected, event.route.connection),
+        "connected");
+    assert(json_is_true(json_object_get(status, "operator")) &&
+        json_is_null(json_object_get(status, "agent")));
+    json_decref(data);
+    event.route.identity = SNAG_IRC_AGENT;
+    strcpy(event.route.conversation, "77777777777777777777777777777777");
+    data = snag_irc_event_data(&event);
+    json_t *both = snag_irc_conversations_update(connected, data, 5u);
+    json_decref(data);
+    event.kind = SNAG_IRC_DISCONNECTED;
+    data = snag_irc_event_data(&event);
+    json_t *disconnected = snag_irc_conversations_update(both, data, 6u);
+    json_decref(data);
+    assert(disconnected && snag_irc_conversations_valid(disconnected, 7u));
+    status = json_object_get(json_object_get(disconnected, event.route.connection), "connected");
+    assert(json_is_true(json_object_get(status, "operator")) &&
+        json_is_false(json_object_get(status, "agent")));
+    event.kind = SNAG_IRC_CONNECTED;
+    event.route.generation = 2u;
+    data = snag_irc_event_data(&event);
+    json_t *reconnected = snag_irc_conversations_update(disconnected, data, 7u);
+    json_decref(data);
+    assert(reconnected && snag_irc_conversations_valid(reconnected, 8u));
+    event.route.generation = 1u;
+    data = snag_irc_event_data(&event);
+    assert(!snag_irc_conversations_update(reconnected, data, 8u));
+    json_decref(data);
+    assert(json_equal(first, saved));
+    json_decref(reconnected);
+    json_decref(disconnected);
+    json_decref(both);
+    json_decref(connected);
+    json_decref(renamed);
+    json_decref(saved);
+    json_decref(first);
+}
+
 int
 main(void)
 {
     privacy_and_provenance();
     delivery_states();
     invalid_fields();
+    directory_update_test();
     puts("test_irc_event: ok");
     return 0;
 }

@@ -3008,7 +3008,9 @@ irc_markdown_state(struct snag_render *render, const struct snag_irc_event *even
             if (!empty) empty = state;
             continue;
         }
-        if (strcmp(state->endpoint, event->endpoint) == 0 && strcmp(state->nick, event->nick) == 0)
+        if (strcmp(state->endpoint, event->endpoint) == 0 &&
+            strcmp(state->nick, event->nick) == 0 &&
+            !strcmp(state->conversation, event->routed ? event->route.conversation : ""))
             return state;
     }
     return allocate ? empty : NULL;
@@ -3025,6 +3027,8 @@ irc_markdown_lifecycle(struct snag_render *render, const struct snag_irc_event *
     for (size_t i = 0u; i < SNAG_RENDER_IRC_MARKDOWN_STATES; ++i) {
         struct snag_irc_markdown_state *state = &render->irc_markdown[i];
         if (state->fence && strcmp(state->endpoint, event->endpoint) == 0 &&
+            (!event->routed || (!strcmp(state->connection, event->route.connection) &&
+                state->identity == event->route.identity)) &&
             (endpoint_reset || strcmp(state->nick, event->nick) == 0)) memset(state, 0, sizeof(*state));
     }
 }
@@ -3058,6 +3062,11 @@ render_irc_markdown(struct snag_render *render, const struct snag_irc_event *eve
         if (saved) {
             (void)snprintf(saved->endpoint, sizeof(saved->endpoint), "%s", event->endpoint);
             (void)snprintf(saved->nick, sizeof(saved->nick), "%s", event->nick);
+            (void)snag_strcpy(saved->connection, sizeof(saved->connection),
+                event->routed ? event->route.connection : "");
+            (void)snag_strcpy(saved->conversation, sizeof(saved->conversation),
+                event->routed ? event->route.conversation : "");
+            saved->identity = event->routed ? event->route.identity : SNAG_IRC_OPERATOR;
             saved->fence = body.markdown_state.fence;
             saved->fence_len = body.markdown_state.fence_len;
         }
@@ -3078,7 +3087,8 @@ render_irc_event_now(struct snag_render *render, const struct snag_irc_event *ev
 {
     char when[16u];
     char prefix[768u];
-    char source[SNAG_CONFIG_IRC_ENDPOINT_MAX + SNAG_CONFIG_IRC_ROOM_MAX + 32u] = {0};
+    char source[SNAG_CONFIG_IRC_ENDPOINT_MAX + SNAG_CONFIG_IRC_ROOM_MAX +
+        SNAG_CONFIG_IRC_NICK_MAX + 64u] = {0};
     time_t seconds;
     struct tm tm;
     const char *nick_color;
@@ -3093,7 +3103,12 @@ render_irc_event_now(struct snag_render *render, const struct snag_irc_event *ev
             !strncmp(event->text, "history gap", 11u) ? "── history gap; available history replayed ──\n" :
             "── history replayed ──\n");
     irc_markdown_lifecycle(render, event);
-    if (render->term && render->term->destinations) {
+    if (event->routed) {
+        (void)snprintf(source, sizeof(source), "[%s/%s %s%s] ", event->endpoint,
+            event->route.kind == SNAG_IRC_QUERY ? event->route.peer : event->room,
+            event->route.identity == SNAG_IRC_AGENT ? "agent" : "operator",
+            event->route.kind == SNAG_IRC_QUERY ? " query" : "");
+    } else if (render->term && render->term->destinations) {
         const struct snag_irc_destinations *destinations = render->term->destinations;
         const struct snag_irc_destination *origin = NULL;
         for (size_t i = 0u; i < destinations->count; ++i)
@@ -3135,7 +3150,7 @@ render_irc_event_now(struct snag_render *render, const struct snag_irc_event *ev
         markdown_body = event->kind == SNAG_IRC_MESSAGE && render->markdown &&
                         render->stderr_terminal && !event->op;
         if (markdown_body) {
-            char visible[1024u];
+            char visible[sizeof(source) + sizeof(prefix) + 32u];
             size_t column;
 
             n = snprintf(visible, sizeof(visible), "%s%s %s%s%s %s ", source, when,
@@ -3212,7 +3227,8 @@ render_irc_record(struct snag_render *render, const struct snag_render_record *r
     json_t *data = json_object_get(event, "data");
     struct snag_irc_event irc;
     int rc = -1;
-    if (!event || snag_irc_event_read(data, &irc) < 0) goto out;
+    if (!event || snag_irc_event_record_read(snag_json_string(event, "type"), data, &irc) < 0)
+        goto out;
     rc = render_irc_event_now(render, &irc);
 out: json_decref(event);
     return rc;
@@ -3743,7 +3759,7 @@ snag_render_durable(struct snag_render *render, int fd, struct snag_render_sourc
         queue_record(render, SNAG_RENDER_ROLLOUT, voice);
         return 0;
     }
-    if (strcmp(type, "irc_event") == 0) {
+    if (snag_string_in(type, "irc_event irc_event_v2")) {
         render->irc_source = source;
         return 0;
     }

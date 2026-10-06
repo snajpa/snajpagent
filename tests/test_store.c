@@ -1013,6 +1013,92 @@ test_service_tier(struct snag_store *store, const char *cwd)
     snag_session_close(&session);
 }
 
+static int
+irc_checkpoint_revision(void *opaque, const struct snag_session *state, uint64_t seq,
+    const char *type, const json_t *data, char *error, size_t error_size)
+{
+    (void)opaque;
+    (void)state;
+    (void)seq;
+    (void)error;
+    (void)error_size;
+    if (!strcmp(type, "session_checkpoint"))
+        assert(json_integer_value(json_object_get(data, "snapshot_v")) == 3);
+    return 0;
+}
+
+static void
+test_irc_conversation_checkpoint(struct snag_store *store, const char *cwd)
+{
+    struct snag_session session;
+    char error[256], id[SNAG_ID_HEX_LEN + 1u];
+    struct snag_irc_event event = {.routed = true, .kind = SNAG_IRC_MESSAGE,
+        .timestamp_ms = 1u, .endpoint = "localhost:6667", .nick = "peer",
+        .text = "operator private message", .route = {
+            .connection = "11111111111111111111111111111111",
+            .conversation = "22222222222222222222222222222222",
+            .generation = 1u, .identity = SNAG_IRC_OPERATOR, .kind = SNAG_IRC_QUERY,
+            .peer = "peer", .target = "operator"}};
+
+    snag_session_init(&session);
+    assert(snag_session_create(store, &session, cwd, "default", "model", "default",
+        error, sizeof(error)) == 0);
+    memcpy(id, session.id, sizeof(id));
+    commit_event(&session, "irc_event_v2", snag_irc_event_data(&event));
+    assert(!session.irc_received_seq && !session.irc_message_count);
+    assert(snag_session_checkpoint(&session, error, sizeof(error)) == 0);
+    json_t *before = snag_checkpoint_state_encode(&session);
+    assert(before && json_is_object(json_object_get(before, "irc_conversations")));
+    assert(snag_session_each_event(&session, irc_checkpoint_revision, NULL,
+        error, sizeof(error)) == 0);
+    assert(snag_session_commit(&session, "session_checkpoint", json_pack(
+        "{s:O,s:n,s:i,s:i}", "state", before, "context", "snapshot_v", 1, "format", 4),
+        NULL, error, sizeof(error)) < 0);
+    json_t *damaged = json_deep_copy(before);
+    assert(damaged && json_object_del(damaged, "irc_conversations") == 0);
+    assert(snag_session_commit(&session, "session_checkpoint", json_pack(
+        "{s:o,s:n,s:i,s:i}", "state", damaged, "context", "snapshot_v", 3, "format", 4),
+        NULL, error, sizeof(error)) < 0);
+
+    /* The staged directory must roll back with a failed durable append. */
+    struct rlimit saved, limited;
+    int64_t end = session.log_end;
+    assert(getrlimit(RLIMIT_FSIZE, &saved) == 0);
+    limited = saved;
+    limited.rlim_cur = (rlim_t)end + 16u;
+    void (*old)(int) = signal(SIGXFSZ, SIG_IGN);
+    assert(old != SIG_ERR && setrlimit(RLIMIT_FSIZE, &limited) == 0);
+    strcpy(event.text, "failed append");
+    int failed = snag_session_commit(&session, "irc_event_v2", snag_irc_event_data(&event),
+        NULL, error, sizeof(error));
+    assert(setrlimit(RLIMIT_FSIZE, &saved) == 0 && signal(SIGXFSZ, old) != SIG_ERR);
+    assert(failed < 0 && session.log_end == end &&
+        json_equal(session.irc_conversations, json_object_get(before, "irc_conversations")));
+    strcpy(event.text, "after checkpoint");
+    commit_event(&session, "irc_event_v2", snag_irc_event_data(&event));
+    json_t *after = snag_checkpoint_state_encode(&session);
+    assert(after && !json_equal(json_object_get(before, "irc_conversations"),
+        json_object_get(after, "irc_conversations")));
+
+    /* A conversation cannot silently acquire another local identity. */
+    event.route.identity = SNAG_IRC_AGENT;
+    uint64_t next = session.next_seq;
+    assert(snag_session_commit(&session, "irc_event_v2", snag_irc_event_data(&event),
+        NULL, error, sizeof(error)) < 0 && session.next_seq == next);
+    snag_session_close(&session);
+    snag_session_init(&session);
+    assert(snag_session_open(store, &session, id, error, sizeof(error)) == 0);
+    json_t *restored = snag_checkpoint_state_encode(&session);
+    assert(restored && json_equal(json_object_get(after, "irc_conversations"),
+        json_object_get(restored, "irc_conversations")));
+    assert(json_equal(json_object_get(before, "irc_conversations"),
+        json_object_get(session.checkpoint_state, "irc_conversations")));
+    json_decref(restored);
+    json_decref(after);
+    json_decref(before);
+    snag_session_close(&session);
+}
+
 static void
 test_checkpoint_optional_download_queue(struct snag_store *store, const char *cwd)
 {
@@ -2277,6 +2363,7 @@ main(void)
     test_history_snapshot_refresh(&store, cwd);
     test_upload_staging_lifecycle(&store, cwd);
     test_service_tier(&store, cwd);
+    test_irc_conversation_checkpoint(&store, cwd);
     test_checkpoint_optional_download_queue(&store, cwd);
     test_one_file_checkpoint(&store, cwd);
     test_legacy_reconciliation(&store, cwd);

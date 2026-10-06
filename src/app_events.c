@@ -99,6 +99,7 @@ snag_app_irc_prompt(const char *text)
 static int
 append_irc_projection(struct snag_buf *pending, const struct snag_irc_event *event)
 {
+    if (!snag_irc_event_model_visible(event)) return 0;
     struct snag_buf line;
     char when[32u];
     time_t seconds = (time_t)(event->timestamp_ms / 1000u);
@@ -107,19 +108,21 @@ append_irc_projection(struct snag_buf *pending, const struct snag_irc_event *eve
 
     if (!snag_gmtime(&seconds, &tm) || strftime(when, sizeof(when), "%Y-%m-%dT%H:%M:%SZ", &tm) == 0)
         memcpy(when, "1970-01-01T00:00:00Z", 21u);
-    snag_buf_init(&line, SNAG_IRC_TEXT_MAX + SNAG_CONFIG_IRC_ENDPOINT_MAX +
-                         SNAG_CONFIG_IRC_ROOM_MAX + SNAG_CONFIG_IRC_NICK_MAX + 256u);
+    snag_buf_init(&line, sizeof(*event) + 1024u);
     if (event->stream[0] || event->historical) {
         /* This batch text becomes the turn prompt: the operator reads it during
          * replay and the model receives it as the turn's user message. It has
          * to stand on its own, so name the update instead of pointing at a room
          * event the reader may not have; the durable id still ties it back. */
-        rc = snag_buf_printf(&line, "[IRC update id=%s:%llu endpoint=%s room=%s event=%s sender=%s]\n",
-            event->stream, (unsigned long long)event->sequence, event->endpoint, event->room,
-            snag_irc_kind_name(event->kind), event->nick[0] ? event->nick : "server");
+        rc = snag_irc_event_reference(&line, event);
         if (rc == 0) rc = append_pending(pending, (const char *)line.data, line.len);
         snag_buf_free(&line);
         return rc;
+    }
+    if (event->routed) {
+        rc = snag_irc_event_projection(&line, event);
+        if (!rc) rc = append_pending(pending, (const char *)line.data, line.len);
+        goto out;
     }
     if (snag_buf_printf(&line, "[IRC endpoint=%s room=%s time=%s event=%s sender=%s operator=%s]\n%s\n",
             event->endpoint, event->room, when, snag_irc_kind_name(event->kind),
@@ -938,6 +941,11 @@ history_event(void *opaque, const struct snag_session *state, uint64_t seq,
     if (scan->count == scan->limit) return 1;
     if (!scan->scanned++) scan->first_seq = seq;
     scan->last_seq = seq;
+    if (snag_string_in(type, "irc_event irc_event_v2")) {
+        struct snag_irc_event event;
+        if (snag_irc_event_record_read(type, data, &event) < 0) return -1;
+        if (!snag_irc_event_model_visible(&event)) return 0;
+    }
     if (scan->filter && !json_object_get(scan->filter, type)) return 0;
     ++scan->matched;
     char *encoded = snag_history_event_data(seq, type, data, scan->secrets, error, error_size);

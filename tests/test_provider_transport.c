@@ -4952,6 +4952,59 @@ history_checkpoint_document(void *opaque, const struct snag_session *session)
 }
 
 static void
+test_query_history_privacy(void)
+{
+    char path[4096], error[256] = {0};
+    const char *tmp = getenv("TMPDIR");
+    struct app_state app = {0};
+    struct snag_response_item call = {.kind = SNAG_ITEM_TOOL_CALL,
+        .name = "read_session_history"};
+    struct snag_irc_event event = {.routed = true, .kind = SNAG_IRC_MESSAGE,
+        .timestamp_ms = 1u, .endpoint = "fixture:1234", .nick = "peer",
+        .text = "operator-private-sentinel", .route = {
+            .connection = "11111111111111111111111111111111",
+            .conversation = "22222222222222222222222222222222",
+            .generation = 1u, .identity = SNAG_IRC_OPERATOR, .kind = SNAG_IRC_QUERY,
+            .peer = "peer", .target = "operator"}};
+    assert(snprintf(path, sizeof(path), "%s/snajpagent-query-history-XXXXXX",
+        tmp ? tmp : "/tmp") > 0 && mkdtemp(path));
+    snag_store_init(&app.store);
+    snag_session_init(&app.session);
+    assert(snag_store_open(&app.store, path, error, sizeof(error)) == 0);
+    assert(snag_session_create(&app.store, &app.session, path, "default", "fixture", "medium",
+        error, sizeof(error)) == 0);
+    app.session.tool_output_bytes = 8192u;
+    json_t *data = snag_irc_event_data(&event);
+    char *operator_view = snag_history_event_data(app.session.next_seq, "irc_event_v2",
+        data, NULL, error, sizeof(error));
+    assert(operator_view && strstr(operator_view, event.text));
+    free(operator_view);
+    assert(snag_session_commit(&app.session, "irc_event_v2", data,
+        NULL, error, sizeof(error)) == 0);
+    event.route.identity = SNAG_IRC_AGENT;
+    strcpy(event.route.conversation, "33333333333333333333333333333333");
+    strcpy(event.route.target, "agent");
+    strcpy(event.text, "agent-private-sentinel");
+    assert(snag_session_commit(&app.session, "irc_event_v2", snag_irc_event_data(&event),
+        NULL, error, sizeof(error)) == 0);
+    assert(snag_session_checkpoint(&app.session, error, sizeof(error)) == 0);
+    for (unsigned int filtered = 0u; filtered < 2u; ++filtered) {
+        call.arguments = json_pack("{s:i,s:i}", "limit", 50, "detail_bytes", 2048);
+        if (filtered) assert(json_object_set_new(call.arguments, "event_types",
+            json_pack("[s]", "irc_event_v2")) == 0);
+        json_t *result = NULL;
+        assert(snag_app_tool_run(&app, &call, NULL, &result, error, sizeof(error)) == 0);
+        const char *text = snag_json_string(result, "model_text");
+        assert(text && !strstr(text, "operator-private-sentinel") &&
+            !strstr(text, "irc_conversations") && strstr(text, "agent-private-sentinel"));
+        json_decref(result);
+        json_decref(call.arguments);
+    }
+    snag_session_close(&app.session);
+    snag_store_close(&app.store);
+}
+
+static void
 test_history_and_goal_list_tools(void)
 {
     char path[4096], error[256] = {0};
@@ -9693,6 +9746,7 @@ test_native_ui(void)
 int
 main(void)
 {
+    test_query_history_privacy();
     test_history_and_goal_list_tools();
     test_native_voice_caption_mirrors();
     test_native_voice_transcript_events();

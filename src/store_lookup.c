@@ -549,16 +549,19 @@ list_irc_event(void *opaque, const struct snag_session *state, uint64_t seq,
         const char *text = snag_json_string(data, "text");
         if (text && list_irc_topology(irc, text) < 0) return -1;
     }
-    if ((!irc->prompt_found || !irc->topology_found) && !strcmp(type, "irc_event")) {
+    if ((!irc->prompt_found || !irc->topology_found) &&
+        snag_string_in(type, "irc_event irc_event_v2")) {
         struct snag_irc_event event;
-        if (snag_irc_event_read(data, &event) < 0) return -1;
+        if (snag_irc_event_record_read(type, data, &event) < 0) return -1;
         if (!irc->topology_found && event.kind == SNAG_IRC_NICK && !event.historical &&
+            (!event.routed || (event.route.kind == SNAG_IRC_CONNECTION_EVENTS && event.local)) &&
             event.text[0] && strlen(event.text) <= SNAG_CONFIG_IRC_NICK_MAX &&
             json_array_append(irc->renames, (json_t *)data) < 0) return -1;
         char reference[96];
         (void)snprintf(reference, sizeof(reference), "[IRC update id=%s:%llu ",
             event.stream, (unsigned long long)event.sequence);
-        if (!irc->prompt_found && event.stream[0] && strstr(irc->prompt, reference) &&
+        if (!irc->prompt_found && snag_irc_event_model_visible(&event) && event.stream[0] &&
+            strstr(irc->prompt, reference) &&
             (!irc->wants_message || event.kind == SNAG_IRC_MESSAGE ||
              event.kind == SNAG_IRC_NOTICE)) {
             irc->preview.len = 0u;

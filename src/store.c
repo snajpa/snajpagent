@@ -228,6 +228,7 @@ free_session_state(struct snag_session *session)
     json_decref(session->checkpoint_context);
     json_decref(session->checkpoint_state);
     json_decref(session->download_queue);
+    json_decref(session->irc_conversations);
 }
 
 void
@@ -1042,9 +1043,16 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             snag_json_digest_bounded(event, SNAG_MAX_EVENT_LINE, digest, &bytes) < 0) goto invalid;
         /* Transcript/status provenance only. Coding work enters through the
          * existing queued-input event, never through a voice notice. */
-    } else if (strcmp(type, "irc_event") == 0) {
+    } else if (snag_string_in(type, "irc_event irc_event_v2")) {
         struct snag_irc_event event;
-        if (snag_irc_event_read(data, &event) < 0) goto invalid;
+        if (snag_irc_event_record_read(type, data, &event) < 0) goto invalid;
+        if (event.routed) {
+            json_t *directory = snag_irc_conversations_update(
+                session->irc_conversations, data, seq);
+            if (!directory) goto invalid;
+            json_decref(session->irc_conversations);
+            session->irc_conversations = directory;
+        }
         if (event.input) session->irc_received_seq = seq;
         if (event.input && !event.historical &&
             (event.kind == SNAG_IRC_MESSAGE || event.kind == SNAG_IRC_NOTICE))
@@ -2664,8 +2672,12 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             !json_is_object(state) || !context ||
             (!json_is_object(context) && !json_is_null(context)) ||
             snag_json_integer_u64(data, "snapshot_v", &revision) < 0 ||
-            (revision != 1u && revision != 2u) ||
-            (revision == 2u && !json_is_object(json_object_get(state, "voice_history"))) ||
+            (revision < 1u || revision > 3u) ||
+            (revision >= 2u && !json_is_object(json_object_get(state, "voice_history"))) ||
+            (session->irc_conversations && revision != 3u) ||
+            ((revision == 3u) != (json_object_get(state, "irc_conversations") != NULL)) ||
+            (revision == 3u &&
+                !snag_irc_conversations_valid(json_object_get(state, "irc_conversations"), seq)) ||
             snag_json_integer_u64(data, "format", &n) < 0 || n != 4u ||
             strcmp(snag_json_string(state, "id") ? snag_json_string(state, "id") : "", session->id))
             goto invalid;
@@ -3710,6 +3722,7 @@ clone_session_state(const struct snag_session *source, struct snag_session *stag
     staged->checkpoint_context = json_incref(source->checkpoint_context);
     staged->checkpoint_state = json_incref(source->checkpoint_state);
     staged->download_queue = json_deep_copy(source->download_queue);
+    staged->irc_conversations = json_incref(source->irc_conversations);
     if (source->pending_call_count) {
         staged->pending_calls = malloc(source->pending_call_capacity * sizeof(*staged->pending_calls));
         if (!staged->pending_calls) return -1;
@@ -3767,6 +3780,7 @@ snag_session_checkpoint(struct snag_session *session, char *error, size_t error_
     }
     json_t *data = json_pack("{s:o,s:o,s:i,s:i}", "state", state,
                              "context", context, "snapshot_v",
+                             session->irc_conversations ? 3 :
                              session->voice_history.adopted_seq ? 2 : 1, "format", 4);
     if (!data) return snag_fail(error, error_size, ENOMEM, "cannot encode session checkpoint");
     return snag_session_commit(session, "session_checkpoint", data, NULL, error, error_size);
