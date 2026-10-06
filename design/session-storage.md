@@ -3164,6 +3164,21 @@ its own bytes. Checkpoint-slot setup, index attachment and directory
 publication belong to the factory. The stage remains test-linked while ordinary
 creation continues through the JSONL factory.
 
+The existing checkpoint access-plan reader can select the complete core/provider
+closure from this seed cache using proofs beneath that independently established
+frontier. Its index descriptor is a source resource, not an alternative source of
+the root. An empty old working-set table at the seed boundary is not an absence
+proof: missing locations require cache membership and canonical tuple checks.
+Absent or truncated cache data and cancellation preserve the output and read
+positions. Image publication borrows the I/O owner's index descriptor when its
+successfully advanced cache frontier matches the captured producer boundary.
+Both old and suffix rows receive independent membership proofs beneath that
+captured root and canonical tuple checks, avoiding repeated backward batch walks
+for suffix locations. A failed derived append leaves an older frontier, so that
+publication uses installed membership and canonical source lookup. Missing old
+membership and corrupt selected cache rows fail during access preparation before
+creating an image. The existing publication and receipt ordering remain intact.
+
 ### Existing native session opening
 
 The ordinary exclusive opener prefers `journal.bin`; only ENOENT selects legacy

@@ -931,11 +931,14 @@ test_invalid(void)
 }
 
 static void
-selected_sources(bool missing)
+selected_sources(bool missing, bool indexed, bool corrupt, bool stale)
 {
     struct fixture fixture;
     fixture_init(&fixture);
-    struct probe probe = {.gate = missing ? GATE_NONE : GATE_FILE_SYNC};
+    assert(!corrupt || indexed);
+    assert(!stale || (indexed && !corrupt));
+    bool accepted = !corrupt && (!missing || (indexed && !stale));
+    struct probe probe = {.gate = accepted ? GATE_FILE_SYNC : GATE_NONE};
     struct snag_binary_io *io = start_owner(&fixture, &probe);
     struct snag_binary_io_snapshot capture = snapshot(&fixture, &fixture.before, 21u);
     snag_buf_free(&capture.access);
@@ -959,6 +962,48 @@ selected_sources(bool missing)
         &root, &wire, &batch, &after));
     assert(!snag_binary_index_tree_append_batch(NULL, &selection->frontier, &fixture.identity,
         &root, &after, wire.data, wire.len));
+    int index = -1;
+    if (indexed) {
+        index = snag_create_private_at(fixture.directory, "index.bin", true);
+        assert(index >= 0);
+        unsigned char cache_header[SNAG_BINARY_INDEX_HEADER_SIZE];
+        snag_binary_index_header_encode(cache_header, &fixture.identity);
+        struct snag_buf entries = {.max = SNAG_BINARY_INDEX_TREE_BATCH_MAX};
+        struct snag_binary_index_tree tree = {0};
+        assert(!snag_binary_index_tree_append_batch(&entries, &tree, &fixture.identity,
+            &root, &after, wire.data, wire.len));
+        assert(!memcmp(&tree, &selection->frontier, sizeof(tree)));
+        assert(!snag_write_full(index, cache_header, sizeof(cache_header)));
+        assert(!snag_write_full(index, entries.data, entries.len));
+        snag_buf_free(&entries);
+        assert(!snag_binary_io_index_setup(io, index, &fixture.identity, &tree));
+        if (corrupt) {
+            assert(snag_seek(index, 0, SEEK_SET) == 0);
+            assert(!snag_write_full(index, "\0", 1u));
+        }
+        if (stale) {
+            /* Canonical append succeeds while a partial derived write leaves
+             * the acknowledged cache frontier behind the captured boundary. */
+            size_t position = SNAG_BINARY_BATCH_HEADER_SIZE;
+            struct snag_binary_record record;
+            uint64_t written;
+            assert(!snag_binary_record_next(&batch, &position, &record, &written));
+            probe.fault = FAULT_PARTIAL;
+            probe.failures = 1u;
+            assert(!snag_binary_io_submit(io, &record, 1u, fixture.before.turns));
+            assert(snag_wakeup_wait(snag_binary_io_wake(io), 10000) == 1);
+            struct snag_binary_io_result appended;
+            struct snag_buf delta = {.max = SNAG_BINARY_BATCH_MAX};
+            assert(!snag_binary_io_take_batch(io, &appended, &delta));
+            assert(!appended.error && appended.index_error == EIO);
+            assert(!snag_binary_index_tree_append_batch(NULL, &selection->frontier,
+                &fixture.identity, &fixture.before, &appended.durable, delta.data, delta.len));
+            fixture.before = appended.durable;
+            capture.boundary = selection->plan.boundary = fixture.before;
+            snag_buf_free(&delta);
+        }
+        assert(snag_seek(index, 7, SEEK_SET) == 7);
+    }
     snag_buf_free(&wire);
     struct snag_binary_index_tree old = missing ? selection->frontier :
         (struct snag_binary_index_tree){0};
@@ -967,7 +1012,7 @@ selected_sources(bool missing)
     assert(!snag_binary_checkpoint_index_encode(&selection->available, &fixture.identity,
         &selection->available_boundary, &old, NULL, 0u));
     struct snag_buf expected = {.max = SIZE_MAX}, expected_access = {.max = SIZE_MAX};
-    if (!missing) {
+    if (accepted) {
         struct snag_binary_checkpoint_index available;
         assert(!snag_binary_checkpoint_index_decode(selection->available.data,
             selection->available.len, &fixture.identity, &selection->available_boundary,
@@ -976,7 +1021,8 @@ selected_sources(bool missing)
         oracle.selection = NULL;
         oracle.access_version = 1u;
         oracle.access = (struct snag_buf){.max = SIZE_MAX};
-        assert(!snag_binary_checkpoint_access_plan_read(fixture.journal, &selection->plan,
+        assert(!snag_binary_checkpoint_access_plan_read(fixture.journal, missing ? index : -1,
+            &selection->plan,
             &available, &selection->frontier, NULL, NULL, &oracle.access));
         expected = image(&oracle, 9u);
         expected_access = oracle.access;
@@ -992,7 +1038,7 @@ selected_sources(bool missing)
     struct snag_binary_publication_result result;
     struct snag_buf access = {.max = SIZE_MAX};
     assert(!snag_buf_append(&access, "keep", 4u));
-    if (!missing) {
+    if (accepted) {
         wait_flag(&probe.entered);
         assert(snag_binary_io_checkpoint_take_access(io, &result, &access) == 1);
         assert(access.len == 4u && !memcmp(access.data, "keep", 4u));
@@ -1000,7 +1046,8 @@ selected_sources(bool missing)
     }
     assert(snag_wakeup_wait(snag_binary_io_wake(io), 10000) == 1);
     int rc = snag_binary_io_checkpoint_take_access(io, &result, &access);
-    if (missing) {
+    if (index >= 0) assert(snag_seek(index, 0, SEEK_CUR) == 7);
+    if (!accepted) {
         assert(rc < 0 && result.error && !result.published && !result.renamed);
         assert(!result.temporary[0] && !probe.creates && !probe.file_syncs);
         assert(!probe.renames && !probe.dir_syncs);
@@ -1022,7 +1069,8 @@ selected_sources(bool missing)
         assert(pinned.durable.next_seq == fixture.before.next_seq + 1u);
     }
     assert(!snag_binary_io_close(io));
-    if (!missing) {
+    if (index >= 0) assert(!close(index));
+    if (accepted) {
         assert(access.len == expected_access.len &&
             !memcmp(access.data, expected_access.data, access.len));
     }
@@ -1035,8 +1083,14 @@ selected_sources(bool missing)
 void
 test_store_binary_publish(void)
 {
-    selected_sources(false);
-    selected_sources(true);
+    selected_sources(false, false, false, false);
+    selected_sources(true, false, false, false);
+    selected_sources(false, true, false, false);
+    selected_sources(true, true, false, false);
+    selected_sources(false, true, true, false);
+    selected_sources(true, true, true, false);
+    selected_sources(false, true, false, true);
+    selected_sources(true, true, false, true);
     test_invalid();
     test_empty_slots();
     test_unreceipted_close();

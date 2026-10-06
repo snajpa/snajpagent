@@ -195,7 +195,9 @@ int snag_binary_checkpoint_access_plan_build(struct snag_binary_checkpoint_acces
     const struct snag_binary_anchor *, const struct snag_binary_checkpoint_sources *,
     const struct snag_session *, const void *provider, size_t provider_size,
     bool (*cancelled)(void *), void *opaque);
-int snag_binary_checkpoint_access_plan_read(int fd,
+/* An index fd may fill missing old locations by proofs beneath frontier's
+ * independently established root. -1 retains working-set-only capture. */
+int snag_binary_checkpoint_access_plan_read(int fd, int index_fd,
     const struct snag_binary_checkpoint_access_plan *,
     const struct snag_binary_checkpoint_index *available,
     const struct snag_binary_index_tree *frontier, bool (*cancelled)(void *), void *opaque,

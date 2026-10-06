@@ -4,6 +4,12 @@
 
 ## Unreleased
 
+- Allow checkpoint access plans to prove missing seed locations through the
+  derived cache beneath an independently verified frontier. Checkpoint publication
+  uses its matching cache frontier for old and suffix source locations, preserving
+  canonical checks while avoiding repeated batch walks for large command output.
+  Unavailable old membership and corrupt selected cache rows fail explicitly.
+
 - Emit derived index-cache bytes while seeding a prepared native session. The
   returned cache is tied to the independently verified frontier; failed seeding
   preserves the original session and the caller's output buffer.

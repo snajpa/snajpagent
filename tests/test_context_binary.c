@@ -196,7 +196,7 @@ provider_source_checks(int fd, const struct snag_binary_anchor *through,
         copy.data, copy.len, NULL, NULL));
     assert(lseek(fd, 0, SEEK_CUR) == plan_position);
     snag_buf_free(&copy);
-    assert(!snag_binary_checkpoint_access_plan_read(fd, &plan, &access, &access.tree,
+    assert(!snag_binary_checkpoint_access_plan_read(fd, -1, &plan, &access, &access.tree,
         NULL, NULL, &split));
     assert(split.len == selected.len && !memcmp(split.data, selected.data, split.len));
     assert(lseek(fd, 0, SEEK_CUR) == plan_position);
@@ -2583,7 +2583,7 @@ live_snapshot_capture(void)
         selection->available_root, &frozen));
     struct snag_buf selected = {.max = SIZE_MAX};
     off_t read_position = lseek(state.log_fd, 0, SEEK_CUR);
-    assert(!snag_binary_checkpoint_access_plan_read(state.log_fd, &selection->plan, &frozen,
+    assert(!snag_binary_checkpoint_access_plan_read(state.log_fd, -1, &selection->plan, &frozen,
         &selection->frontier, NULL, NULL, &selected));
     assert(selected.len && lseek(state.log_fd, 0, SEEK_CUR) == read_position);
     snag_buf_free(&selected);

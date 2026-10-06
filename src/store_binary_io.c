@@ -543,8 +543,11 @@ snag_binary_io_checkpoint_submit(struct snag_binary_io *io,
         return snag_errno(error);
     }
     unsigned int slot = io->sequences[0] <= io->sequences[1] ? 0u : 1u;
+    /* A failed derived append leaves an older frontier. Keep that cache out of
+     * this snapshot; matching frontiers still undergo canonical row proofs. */
+    int index_fd = io->index_tree.count == snapshot->boundary.next_seq - 1u ? io->index_fd : -1;
     struct snag_binary_publication *publication = snag_binary_publication_new(io->fd,
-        io->directory, io->generations, slot, snapshot);
+        io->directory, index_fd, io->generations, slot, snapshot);
     if (!publication) {
         pthread_mutex_unlock(&io->mutex);
         return -1;

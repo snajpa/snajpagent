@@ -163,6 +163,12 @@ Prepared-session native seeding verifies the provisional in-memory journal and
 its native semantic projection before adopting provider capture and writer
 provenance into a separate owner. It returns derived index-cache bytes at the
 verified frontier. The original prepared session stays intact.
+The checkpoint access-plan reader can prove a complete seed closure through that
+cache without a prefix replay. Publication borrows the I/O owner's matching
+cache frontier to prove old and suffix locations against the captured root,
+then checks canonical tuples. Stale derived frontiers retain source lookup;
+missing old membership or corrupt selected cache rows stop access preparation
+before image creation.
 Session creation still uses the legacy log while native creation and conversion
 are being integrated.
 

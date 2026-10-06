@@ -399,11 +399,11 @@ closure_core_checks(int fd, const struct snag_binary_anchor *through,
         assert(snag_binary_checkpoint_access_plan_build(&plan, through, sources, state,
             provider.data, provider.len, cancel_closure, &plan_cancel) < 0 && errno == ECANCELED &&
             !memcmp(&plan, &saved, sizeof(saved)));
-        assert(snag_binary_checkpoint_access_plan_read(-1, &plan, available, &available->tree,
+        assert(snag_binary_checkpoint_access_plan_read(-1, -1, &plan, available, &available->tree,
             NULL, NULL, &output) < 0 && errno == EINVAL);
         uint64_t invalid_range[3] = {1u, through->next_seq, UINT64_MAX};
         assert(!snag_buf_append(&plan.ranges, invalid_range, sizeof(invalid_range)));
-        assert(snag_binary_checkpoint_access_plan_read(fd, &plan, available, &available->tree,
+        assert(snag_binary_checkpoint_access_plan_read(fd, -1, &plan, available, &available->tree,
             NULL, NULL, &output) < 0 && errno == EINVAL);
         assert(output.len == 4u && !memcmp(output.data, "keep", 4u));
         assert(snag_seek(fd, 0, SEEK_CUR) == position);

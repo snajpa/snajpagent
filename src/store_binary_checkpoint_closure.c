@@ -84,14 +84,19 @@ load(struct closure_capture *capture, uint64_t sequence,
     bool old = sequence < capture->available->boundary.next_seq;
     struct snag_binary_index_entry listed;
     if (old && old_member(capture, sequence, &listed) < 0) return -1;
+    if (!old && capture->index_fd >= 0) {
+        int rc = snag_binary_index_read_verified(capture->index_fd, &capture->available->identity,
+            capture->frontier->count, capture->index_root, sequence, &listed);
+        if (rc) return rc < 0 ? -1 : snag_errno(ENOENT);
+    }
     if (!capture->batch.count || sequence < capture->before.next_seq ||
         sequence >= capture->after.next_seq) {
         struct snag_binary_checkpoint_index verified;
         unsigned char encoded[SNAG_BINARY_INDEX_ENTRY_SIZE];
         const struct snag_binary_checkpoint_index *access = capture->available;
-        if (old && capture->index_fd >= 0) {
-            /* This row has independent membership, not merely a matching
-             * frontier stored beside self-supplied source locations. */
+        if (capture->index_fd >= 0) {
+            /* Old and suffix rows have independent captured-root membership;
+             * neither source location is supplied by an unproved cache row. */
             if (snag_binary_index_entry_encode(encoded, &access->identity, &listed) < 0) return -1;
             verified = (struct snag_binary_checkpoint_index){.identity = access->identity,
                 .boundary = *capture->through, .tree = *capture->frontier,
@@ -114,7 +119,7 @@ load(struct closure_capture *capture, uint64_t sequence,
     if (snag_binary_index_entry_decode(capture->flat.data + offset,
             SNAG_BINARY_INDEX_ENTRY_SIZE, &capture->available->identity, sequence,
             &canonical) < 0) return -1;
-    if (old) {
+    if (old || capture->index_fd >= 0) {
         if (listed.batch_offset != canonical.batch_offset || listed.turn != canonical.turn ||
             listed.record_offset != canonical.record_offset || listed.kind != canonical.kind ||
             memcmp(listed.batch_digest, canonical.batch_digest, sizeof(listed.batch_digest)))
@@ -518,13 +523,14 @@ done:
 }
 
 int
-snag_binary_checkpoint_access_plan_read(int fd,
+snag_binary_checkpoint_access_plan_read(int fd, int index_fd,
     const struct snag_binary_checkpoint_access_plan *plan,
     const struct snag_binary_checkpoint_index *available,
     const struct snag_binary_index_tree *frontier, bool (*cancelled)(void *), void *opaque,
     struct snag_buf *out)
 {
-    return access_read(fd, -1, plan, available, frontier, cancelled, opaque, out);
+    if (index_fd < -1) return snag_errno(EINVAL);
+    return access_read(fd, index_fd, plan, available, frontier, cancelled, opaque, out);
 }
 
 int
@@ -573,7 +579,7 @@ snag_binary_checkpoint_access_capture(int fd, const struct snag_binary_anchor *t
     struct snag_binary_checkpoint_access_plan plan = {0};
     if (snag_binary_checkpoint_access_plan_build(&plan, through, sources, state,
             provider_bytes, provider_size, cancelled, opaque) < 0) return -1;
-    int rc = snag_binary_checkpoint_access_plan_read(fd, &plan, available, frontier,
+    int rc = snag_binary_checkpoint_access_plan_read(fd, -1, &plan, available, frontier,
         cancelled, opaque, out);
     int saved = errno;
     snag_binary_checkpoint_access_plan_free(&plan);

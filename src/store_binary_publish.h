@@ -59,11 +59,14 @@ struct snag_binary_publication_result {
  * one framing/write quantum or publication stage (1 more, 0 published, -1 error).
  * A failed step retains its phase and exact bytes for an explicitly paced retry.
  * Close preserves any provisional file and closes only its own descriptor.
- * Free releases memory after close or successful publication, with no file I/O. */
+ * Free releases memory after close or successful publication, with no file I/O.
+ * index_fd is borrowed from this I/O owner, or -1 when its derived frontier is
+ * unavailable. Access preparation proves membership against the captured root. */
 struct snag_binary_publication;
 struct snag_binary_io_ops;
 struct snag_binary_publication *snag_binary_publication_new(int journal, int directory,
-    const uint64_t generations[2], unsigned int slot, struct snag_binary_io_snapshot *snapshot);
+    int index_fd, const uint64_t generations[2], unsigned int slot,
+    struct snag_binary_io_snapshot *snapshot);
 int snag_binary_publication_step(struct snag_binary_publication *,
     const struct snag_binary_io_ops *);
 void snag_binary_publication_result(const struct snag_binary_publication *,

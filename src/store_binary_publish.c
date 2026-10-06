@@ -18,6 +18,7 @@ enum publication_phase {
 
 struct snag_binary_publication {
     int journal;
+    int index_fd;
     int directory;
     int file;
     enum publication_phase phase;
@@ -59,10 +60,10 @@ snapshot_valid(const struct snag_binary_io_snapshot *snapshot)
 }
 
 struct snag_binary_publication *
-snag_binary_publication_new(int journal, int directory, const uint64_t generations[2],
-    unsigned int slot, struct snag_binary_io_snapshot *snapshot)
+snag_binary_publication_new(int journal, int directory, int index_fd,
+    const uint64_t generations[2], unsigned int slot, struct snag_binary_io_snapshot *snapshot)
 {
-    if (journal < 0 || directory < 0 || !generations || slot > 1u || !snapshot ||
+    if (journal < 0 || directory < 0 || index_fd < -1 || !generations || slot > 1u || !snapshot ||
         !snapshot_valid(snapshot)) {
         errno = EINVAL;
         return NULL;
@@ -75,6 +76,7 @@ snag_binary_publication_new(int journal, int directory, const uint64_t generatio
     struct snag_binary_publication *publication = calloc(1u, sizeof(*publication));
     if (!publication) return NULL;
     publication->journal = journal;
+    publication->index_fd = index_fd;
     publication->directory = directory;
     publication->file = -1;
     publication->result.boundary = snapshot->boundary;
@@ -108,7 +110,8 @@ prepare_access(struct snag_binary_publication *publication)
             selection->available.len, &snapshot->identity, &selection->available_boundary,
             selection->available_root, &available) < 0) return -1;
     int rc = snag_binary_checkpoint_access_plan_read(publication->journal,
-        &selection->plan, &available, &selection->frontier, NULL, NULL, &access);
+        publication->index_fd, &selection->plan, &available, &selection->frontier,
+        NULL, NULL, &access);
     if (!rc) {
         struct snag_binary_checkpoint_frame frame = {
             .identity = snapshot->identity, .boundary = snapshot->boundary,

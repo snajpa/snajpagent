@@ -4042,9 +4042,17 @@ test_voice_adoption(struct snag_store *store, const char *cwd, unsigned int bad)
     snag_session_close(&original);
 }
 
+static bool
+seed_access_cancel(void *opaque)
+{
+    (void)opaque;
+    return true;
+}
+
 static void
 seed_index_checks(struct snag_session *target, const struct snag_buf *index,
-    const struct snag_binary_anchor *boundary, const struct snag_binary_index_tree *tree)
+    const struct snag_binary_anchor *boundary, const struct snag_binary_index_tree *tree,
+    const struct snag_binary_checkpoint_sources *sources)
 {
     unsigned char header[SNAG_BINARY_HEADER_SIZE], root[32];
     struct snag_binary_identity identity;
@@ -4068,6 +4076,46 @@ seed_index_checks(struct snag_session *target, const struct snag_buf *index,
             sequence, &entry));
         assert(!snag_binary_index_load_record(target->log_fd, boundary, &entry, &scratch, &record));
     }
+    struct snag_buf empty = {.max = SIZE_MAX}, provider = {.max = SIZE_MAX};
+    struct snag_buf selected = {.max = SIZE_MAX};
+    struct snag_binary_checkpoint_index available;
+    assert(!snag_binary_checkpoint_index_encode(&empty, &identity, boundary, tree, NULL, 0u));
+    assert(!snag_binary_checkpoint_index_decode(empty.data, empty.len, &identity,
+        boundary, root, &available));
+    const json_t *recent = NULL, *history = NULL;
+    assert(!snag_context_capture_seam(target, &recent, &history));
+    assert(!snag_binary_checkpoint_provider_encode(&provider, target, recent, history));
+    struct snag_binary_checkpoint_access_plan plan = {0};
+    assert(!snag_binary_checkpoint_access_plan_build(&plan, boundary, sources, target,
+        provider.data, provider.len, NULL, NULL));
+    assert(!snag_binary_checkpoint_access_plan_read(target->log_fd, fd, &plan, &available,
+        tree, NULL, NULL, &selected));
+    struct snag_binary_checkpoint_index captured;
+    assert(!snag_binary_checkpoint_index_decode(selected.data, selected.len, &identity,
+        boundary, root, &captured));
+    assert(captured.entry_count);
+    struct snag_buf retained = {.max = SIZE_MAX};
+    assert(!snag_buf_append(&retained, selected.data, selected.len));
+    off_t journal_position = lseek(target->log_fd, 0, SEEK_CUR);
+    off_t index_position = lseek(fd, 0, SEEK_CUR);
+    assert(journal_position >= 0 && index_position >= 0);
+    assert(snag_binary_checkpoint_access_plan_read(target->log_fd, -1, &plan, &available,
+        tree, NULL, NULL, &selected) < 0);
+    assert(snag_binary_checkpoint_access_plan_read(target->log_fd, -2, &plan, &available,
+        tree, NULL, NULL, &selected) < 0 && errno == EINVAL);
+    assert(snag_binary_checkpoint_access_plan_read(target->log_fd, fd, &plan, &available,
+        tree, seed_access_cancel, NULL, &selected) < 0 && errno == ECANCELED);
+    assert(!snag_truncate(fd, SNAG_BINARY_INDEX_HEADER_SIZE));
+    assert(snag_binary_checkpoint_access_plan_read(target->log_fd, fd, &plan, &available,
+        tree, NULL, NULL, &selected) < 0);
+    assert(selected.len == retained.len && !memcmp(selected.data, retained.data, retained.len));
+    assert(lseek(target->log_fd, 0, SEEK_CUR) == journal_position);
+    assert(lseek(fd, 0, SEEK_CUR) == index_position);
+    snag_buf_free(&retained);
+    snag_binary_checkpoint_access_plan_free(&plan);
+    snag_buf_free(&empty);
+    snag_buf_free(&provider);
+    snag_buf_free(&selected);
     snag_buf_free(&scratch);
     close(fd);
 }
@@ -4185,7 +4233,7 @@ test_prepared_native_seed(const char *cwd)
             assert(!snag_session_binary_checkpoint_capture(&target, &boundary, &tree, &sources,
                 error, sizeof(error)));
             assert(boundary.next_seq == sequence && tree.count == sequence - 1u);
-            seed_index_checks(&target, &index, &boundary, &tree);
+            seed_index_checks(&target, &index, &boundary, &tree, &sources);
             assert(sources.input == (variant == 1u || variant == 6u ? sequence - 1u : 0u));
             if (variant == 11u) {
                 assert(target.irc_activity && json_object_size(
