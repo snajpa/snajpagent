@@ -1534,10 +1534,11 @@ native_voice_access(struct snag_session *session, int *directory, char **path, b
         struct snag_binary_batch batch;
         assert(!snag_binary_batch_read(session->log_fd, root.end, &first,
             &scratch, &batch, &after));
-        assert(batch.count == 1u && first.next_seq == 1u);
+        assert(batch.count && first.next_seq == 1u);
         assert(!snag_binary_index_append_batch(&flat, &identity, &first,
             &after, batch.data, batch.size));
-        assert(!snag_binary_index_entry_decode(flat.data, flat.len, &identity, 1u, &entry));
+        assert(!snag_binary_index_entry_decode(flat.data,
+            SNAG_BINARY_INDEX_ENTRY_SIZE, &identity, 1u, &entry));
         count = 1u; /* Core creation retained; old voice observations are not. */
         snag_buf_free(&flat);
         snag_buf_free(&scratch);
@@ -1547,8 +1548,8 @@ native_voice_access(struct snag_session *session, int *directory, char **path, b
     assert(!snag_binary_index_tree_root(&tree, hash));
     assert(!snag_binary_checkpoint_index_decode(bytes.data, bytes.len,
         &identity, &root, hash, &access));
-    /* Independently decoded empty custody plus this explicitly bounded small
-     * fixture suffix, not production admission of an arbitrary old prefix. */
+    /* Independently decoded sparse/empty custody from this small fixture,
+     * not production admission of an arbitrary old prefix. */
     uint64_t generations[2] = {0}, sequences[2] = {0};
     char error[256];
     assert(!snag_session_binary_checkpoint_setup(session, *directory,
@@ -1919,7 +1920,9 @@ test_native_voice_grouped(void)
     session.on_commit_opaque = &probe;
     int directory;
     char *path;
-    native_voice_access(&session, &directory, &path, false);
+    native_voice_access(&session, &directory, &path, true);
+    int index = native_query_index(&session);
+    assert(!snag_session_binary_index_setup(&session, index, error, sizeof(error)));
     assert(snag_seek(session.log_fd, 13, SEEK_SET) == 13);
     const char *name = "canary";
     json_t *canary = json_object(), *output = canary;
@@ -1962,7 +1965,7 @@ test_native_voice_grouped(void)
     assert(!session.goal_id[0] && !session.active_turn && !session.pending_queue_count);
     snag_session_close(&session);
     snag_session_close(&source);
-    assert(!close(directory) && !rmdir(path));
+    assert(!close(index) && !close(directory) && !rmdir(path));
     free(path);
     snag_binary_checkpoint_sources_free(&sources);
     snag_buf_free(&raw);
@@ -2066,6 +2069,16 @@ test_native_historical_point(void)
     assert(snag_seek(session.log_fd, 0, SEEK_CUR) == 13 && snag_seek(index, 0, SEEK_CUR) == 31);
     assert(session.next_seq == 3u && atomic_load(&probe.effects) == 2u);
     native_forward_point(&session);
+    json_t *context = NULL;
+    rc = snag_session_voice_context(&session, &context, error, sizeof(error));
+    if (rc < 0) fprintf(stderr, "historical native voice range: %s\n", error);
+    assert(!rc && context && json_is_true(json_object_get(context, "history_complete")) &&
+        json_integer_value(json_object_get(context, "history_as_of_seq")) == 2 &&
+        !strcmp(snag_json_string(context, "recent_asr"),
+            "Historical observation outside current core closure") &&
+        !strcmp(snag_json_string(context, "recent_asr_origin_session_id"), session.id) &&
+        json_integer_value(json_object_get(context, "recent_asr_origin_seq")) == 2);
+    json_decref(context);
     int64_t extent, offset;
     assert(!snag_binary_index_end(2u, &extent) && !snag_binary_index_offset(2u, &offset));
     struct snag_buf saved = {.max = SNAG_BINARY_INDEX_TREE_BATCH_MAX};
@@ -2111,6 +2124,18 @@ test_native_historical_point(void)
         assert(snag_session_each_event_forward(&session, &cursor, SIZE_MAX,
             native_forward_event, &forward, error, sizeof(error)) < 0 &&
             !forward.calls && !memcmp(&cursor, &saved_cursor, sizeof(cursor)));
+        /* A warm owning observation cache is independent of a later derived
+         * index fault. Fresh hydration must still prove its missing old rows. */
+        struct snag_voice_projection *warm = session.voice_projection;
+        session.voice_projection = NULL;
+        context = NULL;
+        assert(snag_session_voice_context(&session, &context, error, sizeof(error)) < 0 &&
+            errno == (fault == 1u ? ENOENT : EINVAL) && !context && !session.voice_projection);
+        session.voice_projection = warm;
+        assert(!snag_session_voice_context(&session, &context, error, sizeof(error)) &&
+            !strcmp(snag_json_string(context, "recent_asr"),
+                "Historical observation outside current core closure"));
+        json_decref(context);
         /* Installed canonical working-set membership is independent of cache
          * health. A cache failure never makes valid old custody unavailable. */
         assert(!snag_session_binary_projection_read(&session, 1u, &type, &data,

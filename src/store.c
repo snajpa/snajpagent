@@ -3612,8 +3612,8 @@ snag_session_each_event_reverse(struct snag_session *session, uint64_t before, s
     return 0;
 }
 
-static int native_history_forward(struct snag_session *, struct snag_journal_cursor *, size_t,
-    snag_session_event_fn, void *, char *, size_t);
+static int native_history_forward(struct snag_session *, struct snag_journal_cursor *, uint64_t,
+    size_t, snag_session_event_fn, void *, char *, size_t);
 
 int
 snag_session_each_event_forward(struct snag_session *session, struct snag_journal_cursor *cursor,
@@ -3622,7 +3622,8 @@ snag_session_each_event_forward(struct snag_session *session, struct snag_journa
     if (!session || !cursor || !scan_bytes || !fn || session->log_end < 0)
         return snag_fail(error, error_size, EINVAL, "invalid forward history scan");
     if (session->binary) {
-        return native_history_forward(session, cursor, scan_bytes, fn, opaque, error, error_size);
+        return native_history_forward(session, cursor, 0u, scan_bytes,
+            fn, opaque, error, error_size);
     }
     if (!cursor->next_seq) {
         if (cursor->offset || cursor->prev_sha256[0])
@@ -4294,14 +4295,17 @@ native_history_query(struct native_history *history, uint64_t sequence)
 }
 
 static int
-native_history_capture(struct native_history *history, struct snag_binary_cursor *out)
+native_history_capture(struct native_history *history, uint64_t first,
+    struct snag_binary_cursor *out)
 {
     const struct snag_journal_cursor *public = history->cursor;
     static const char zero[] = "0000000000000000000000000000000000000000000000000000000000000000";
-    bool begin = (!public->next_seq && !public->offset && !public->prev_sha256[0]) ||
+    /* An admitted native semantic root supplies a sequence, not a serialized
+     * physical cut. Its predecessor is resolved canonically like any query. */
+    bool begin = first || (!public->next_seq && !public->offset && !public->prev_sha256[0]) ||
         (public->next_seq == 1u && !public->offset &&
             !memcmp(public->prev_sha256, zero, sizeof(zero)));
-    uint64_t sequence = begin ? 1u : public->next_seq;
+    uint64_t sequence = first ? first : begin ? 1u : public->next_seq;
     if (!sequence || sequence > history->through.next_seq || (!begin &&
         (public->offset < 0 || (uint64_t)public->offset > history->through.end ||
             public->prev_sha256[SNAG_SHA256_HEX_LEN] ||
@@ -4392,7 +4396,8 @@ native_history_visit(void *opaque, const struct snag_binary_record *record, uint
 
 static int
 native_history_forward(struct snag_session *session, struct snag_journal_cursor *cursor,
-    size_t scan_bytes, snag_session_event_fn visit, void *opaque, char *error, size_t error_size)
+    uint64_t first, size_t scan_bytes, snag_session_event_fn visit, void *opaque,
+    char *error, size_t error_size)
 {
     const struct snag_binary_session *binary = session->binary;
     if (binary->faulted) {
@@ -4421,7 +4426,7 @@ native_history_forward(struct snag_session *session, struct snag_journal_cursor 
             &binary->identity, &binary->available.boundary, installed_root, &history.available);
     }
     struct snag_binary_cursor work;
-    if (!rc) rc = native_history_capture(&history, &work);
+    if (!rc) rc = native_history_capture(&history, first, &work);
     if (!rc) {
         rc = snag_binary_checkpoint_query_cursor_read(history.fd, history.index_fd,
             &history.through, &history.available, &history.frontier, history.through.next_seq,
@@ -5165,7 +5170,6 @@ snag_session_voice_status(struct snag_session *session, const char *queue, json_
 
 struct snag_voice_projection {
     struct snag_journal_cursor cursor;
-    struct snag_binary_cursor native_cursor;
     struct snag_voice_history_root root;
     char session_id[SNAG_ID_HEX_LEN + 1u];
     char *transcript[2];
@@ -5247,69 +5251,17 @@ voice_context_event(void *opaque, const struct snag_session *state, uint64_t seq
     return s->queue[0] ? voice_status_event(&s->handoff, state, seq, type, data, error, size) : 0;
 }
 
-struct native_voice_visit {
-    struct snag_session *session;
-    struct snag_voice_projection *projection;
-    size_t remaining;
-    char *error;
-    size_t error_size;
-};
-
-static int
-native_voice_visit(void *opaque, const struct snag_binary_record *record, uint64_t sequence,
-    const struct snag_binary_cursor *after)
-{
-    (void)after;
-    struct native_voice_visit *visit = opaque;
-    struct snag_binary_session *binary = visit->session->binary;
-    const char *type;
-    json_t *data = NULL;
-    int rc = snag_binary_checkpoint_record_project(visit->session->log_fd,
-        &binary->boundary, &binary->available, record, sequence, &type, &data);
-    if (rc < 0) return -1;
-    if (!rc) rc = voice_context_event(visit->projection, NULL, sequence,
-        type, data, visit->error, visit->error_size);
-    else rc = 0; /* Unknown optional metadata advances the native cut only. */
-    json_decref(data);
-    if (rc < 0) return -1;
-    size_t bytes = SNAG_BINARY_RECORD_HEADER_SIZE + record->size;
-    visit->remaining = bytes >= visit->remaining ? 0u : visit->remaining - bytes;
-    return visit->remaining ? 0 : 1;
-}
-
 static int
 native_voice_context(struct snag_session *session, struct snag_voice_projection *projection,
     char *error, size_t size)
 {
-    struct snag_binary_session *binary = session->binary;
-    if (binary->faulted)
-        return snag_fail(error, size, ESTALE, "native writer is faulted");
-    if (!binary->checkpoint_configured)
-        return snag_fail(error, size, ENOTSUP, "native voice source custody is not installed");
-    struct snag_binary_cursor cursor = projection->native_cursor;
-    if (!cursor.next_seq) {
-        uint64_t first = projection->root.adopted_seq ? projection->root.begin.next_seq : 1u;
-        struct snag_buf scratch = {.max = SNAG_BINARY_BATCH_MAX};
-        struct snag_binary_batch batch, checked;
-        struct snag_binary_anchor before, after;
-        int rc = snag_binary_checkpoint_batch_find(session->log_fd, &binary->boundary,
-            &binary->available, first, &scratch, &batch, &before);
-        if (!rc) rc = snag_binary_batch_decode(batch.data, batch.size, &before, &checked, &after);
-        if (!rc) rc = snag_binary_cursor_capture(&before, &after, &checked, first, &cursor);
-        int saved = errno;
-        snag_buf_free(&scratch);
-        errno = saved;
-        if (rc < 0)
-            return snag_errorf(error, size, "cannot capture native voice cut: %s", strerror(errno));
+    uint64_t first = 0u;
+    if (!projection->cursor.next_seq) {
+        first = projection->root.adopted_seq ? projection->root.begin.next_seq : 1u;
+        if (!first) return snag_fail(error, size, EINVAL, "invalid native voice history root");
     }
-    struct native_voice_visit visit = {.session = session, .projection = projection,
-        .remaining = SNAG_JOURNAL_PAGE_BYTES, .error = error, .error_size = size};
-    int rc = snag_binary_checkpoint_cursor_read(session->log_fd, &binary->boundary,
-        &binary->available, binary->boundary.next_seq, &cursor, native_voice_visit, NULL, &visit);
-    if (rc < 0)
-        return snag_errorf(error, size, "cannot read native voice sources: %s", strerror(errno));
-    projection->native_cursor = cursor;
-    return 0;
+    return native_history_forward(session, &projection->cursor, first,
+        SNAG_JOURNAL_PAGE_BYTES, voice_context_event, projection, error, size);
 }
 
 int
@@ -5350,7 +5302,7 @@ snag_session_voice_context(struct snag_session *session, json_t **result, char *
         free(text);
     }
     if (!rc) {
-        uint64_t next = session->binary ? s->native_cursor.next_seq : s->cursor.next_seq;
+        uint64_t next = s->cursor.next_seq;
         *result = json_pack("{s:s,s:s,s:s,s:i,s:s,s:s,s:O,s:I,s:I,s:b,s:I,s:I,s:s,s:I,s:s,s:I}",
             "kind", "session_context", "session_id", session->id,
             "active_turn_id", session->active_turn ? session->active_turn_id : "",

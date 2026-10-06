@@ -12,9 +12,10 @@
   canonical membership proofs under the acknowledged frontier, without treating
   derived-cache data as authority or replaying the old prefix.
 
-- Read incremental native voice snapshots at exact batch cuts with pinned old
-  source custody, preserving imported/live observation provenance and honest
-  unavailable-history failures without JSONL cursor assumptions.
+- Read incremental native voice snapshots through verified forward history,
+  resolving adopted begin sequences to exact batch cuts and proving missing old
+  sources against the independent acknowledged frontier. Preserve imported/live
+  provenance, honest unavailable failures and already owning observation caches.
 
 - Resume native record traversal at exact decoded batch cuts, without fabricated
   per-record hashes or JSONL offsets, through the existing bounded suffix reader.

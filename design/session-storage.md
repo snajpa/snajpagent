@@ -2247,19 +2247,25 @@ old working-set selection remains separate and grants no arbitrary-history acces
 ### Native voice snapshot cursor
 
 Native voice snapshots retain an exact native cut in their private incremental
-projection, independently of the legacy cursor-shaped semantic root. Adoption
-still persists only its native begin sequence. A begin inside a multi-record
-batch is captured at its decoded record boundary; the reducer-compatibility
-predecessor offset/digest is never sent to a JSONL history reader or treated as
-a per-record hash. The existing JSONL snapshot path is unchanged.
+projection through the shared verified forward reader, independently of the
+legacy cursor-shaped semantic root. Adoption still persists only its native
+begin sequence. Initial hydration resolves that admitted sequence into a real
+canonical cut; subsequent pages validate their saved physical cut like public
+forward queries. A begin inside a multi-record batch is captured at its decoded
+record boundary; the reducer-compatibility predecessor offset/digest is never
+sent to a JSONL history reader or treated as a per-record hash. The existing
+JSONL snapshot path is unchanged.
 
-Guarded cursor traversal requires installed, independently admitted working-set
-custody. Every visited old record must match an exact entry, kind, turn, decoded
-offset and containing canonical batch digest. Missing old observations return
-unavailable even when the semantic core's own closure is complete; a sparse
-working set is not arbitrary-history permission. The newer suffix remains
-explicitly bounded by the live engine's acknowledged anchor. There is no NULL
-access fallback or prefix scan to repair missing custody.
+Guarded traversal pins installed, independently admitted working-set custody
+and the acknowledged tree before visiting observations. Every visited old record
+must match an exact entry, kind, turn, decoded offset and containing canonical
+batch digest. Missing old rows can be retrieved through individual verified
+index membership beneath that independent acknowledged root, including their
+causal source dependencies. A missing or corrupt cache cannot invent custody;
+fresh hydration then publishes no snapshot. An already owning verified
+observation cache can remain usable without rereading missing historical rows.
+The newer suffix remains explicitly bounded by the live engine's acknowledged
+anchor. There is no NULL access fallback or prefix scan to repair missing custody.
 
 Borrowed typed records project directly through the existing source hydrator,
 without rereading their containing record or reinterpreting it against final
