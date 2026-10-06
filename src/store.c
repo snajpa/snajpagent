@@ -4408,32 +4408,10 @@ fail:
 }
 
 static int
-commit_binary_session(struct snag_session *session, const char *type, json_t *data,
-    uint64_t *written_seq, char *error, size_t error_size)
+binary_ack_candidate(struct snag_session *session, uint64_t *written_seq,
+    char *error, size_t error_size)
 {
     struct snag_binary_session *binary = session->binary;
-    if (!type || !data || !strcmp(type, "session_checkpoint")) {
-        return snag_fail(error, error_size, ENOTSUP,
-            "native event requires its canonical producer");
-    }
-    if (binary->faulted) {
-        return snag_fail(error, error_size, ESTALE, "native session requires fresh recovery");
-    }
-    if (binary->candidate) {
-        if (strcmp(type, binary->type) || !json_equal(data, binary->data)) {
-            return snag_fail(error, error_size, EBUSY,
-                "native transaction still awaits durability");
-        }
-        if (!binary->io_pending) {
-            if (!binary->retryable || snag_binary_io_retry(binary->io) < 0) {
-                return snag_fail(error, error_size, EIO, "native write requires fresh recovery");
-            }
-            binary->io_pending = true;
-            binary->retried = true;
-        }
-    } else if (binary_prepare_candidate(session, type, data, error, error_size) < 0) {
-        return -1;
-    }
     struct snag_binary_io_result result = {0};
     struct snag_buf batch = {0};
     if (binary_take(binary, &result, &batch) < 0) {
@@ -4489,6 +4467,36 @@ commit_binary_session(struct snag_session *session, const char *type, json_t *da
     free(committed_type);
     json_decref(committed_data);
     return 0;
+}
+
+static int
+commit_binary_session(struct snag_session *session, const char *type, json_t *data,
+    uint64_t *written_seq, char *error, size_t error_size)
+{
+    struct snag_binary_session *binary = session->binary;
+    if (!type || !data || !strcmp(type, "session_checkpoint")) {
+        return snag_fail(error, error_size, ENOTSUP,
+            "native event requires its canonical producer");
+    }
+    if (binary->faulted) {
+        return snag_fail(error, error_size, ESTALE, "native session requires fresh recovery");
+    }
+    if (binary->candidate) {
+        if (strcmp(type, binary->type) || !json_equal(data, binary->data)) {
+            return snag_fail(error, error_size, EBUSY,
+                "native transaction still awaits durability");
+        }
+        if (!binary->io_pending) {
+            if (!binary->retryable || snag_binary_io_retry(binary->io) < 0) {
+                return snag_fail(error, error_size, EIO, "native write requires fresh recovery");
+            }
+            binary->io_pending = true;
+            binary->retried = true;
+        }
+    } else if (binary_prepare_candidate(session, type, data, error, error_size) < 0) {
+        return -1;
+    }
+    return binary_ack_candidate(session, written_seq, error, error_size);
 }
 
 int
