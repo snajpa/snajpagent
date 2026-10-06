@@ -149,6 +149,13 @@ on replay of affected sessions. Interactive resume applies current startup
 network roles and identity overrides before work starts. Existing journals retain
 their original events and completed tool outcomes.
 
+Development source opens existing native journals through verified checkpoints
+and a bounded suffix. Routed IRC records retain connection/conversation identity,
+generation, membership, actions, delivery receipts and captured replies. Native
+checkpoints retain the IRC directory through canonical event references. New
+session creation still uses the legacy log while native creation and conversion
+are being integrated.
+
 snajpagent is a pre-1.0 terminal coding agent. One interactive session supports
 local rollout and native IRC chat. One-shot mode runs tasks from scripts.
 

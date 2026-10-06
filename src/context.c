@@ -450,16 +450,17 @@ capture_source(void *opaque, const struct snag_session *state, uint64_t seq,
         sources->control->cancelled(sources->control->opaque)) {
         return snag_fail(error, error_size, ECANCELED, "context source lookup cancelled");
     }
-    if (strcmp(type, "irc_event") && strcmp(type, "session_checkpoint")) return 0;
+    if (!snag_string_in(type, "irc_event irc_event_v2 session_checkpoint")) return 0;
     bool needed = source_wanted(sources->wanted, seq) ||
         (seq && source_wanted(sources->wanted, seq - 1u));
-    if (sources->prompt && !strcmp(type, "irc_event")) {
+    if (sources->prompt && snag_string_in(type, "irc_event irc_event_v2")) {
         struct snag_irc_event event;
-        if (snag_irc_event_read(data, &event) < 0) return -1;
+        if (snag_irc_event_record_read(type, data, &event) < 0) return -1;
         char reference[SNAG_ID_HEX_LEN + 48u];
         (void)snprintf(reference, sizeof(reference), "[IRC update id=%s:%llu ",
             event.stream, (unsigned long long)event.sequence);
-        needed |= event.input && strstr(sources->prompt, reference) != NULL;
+        needed |= event.input && event.stream[0] && event.sequence &&
+            strstr(sources->prompt, reference) != NULL;
     }
     if (!needed) return 0;
     if (seq > INT64_MAX) return snag_errno(EOVERFLOW);
@@ -1853,6 +1854,7 @@ defer_room_event(struct context_builder *builder, const json_t *data, bool has_p
 struct irc_source_lookup {
     json_t *sources;
     json_t *following;
+    bool following_routed;
     uint64_t wanted;
     const char *prompt;
     const struct snag_context_control *control;
@@ -1886,7 +1888,10 @@ recover_irc_source(void *opaque, const struct snag_session *state, uint64_t seq,
         return snag_fail(error, error_size, ECANCELED, "context preparation cancelled");
     }
     if (seq == lookup->wanted + 1u) {
-        if (!strcmp(type, "irc_event")) lookup->following = json_incref((json_t *)data);
+        if (snag_string_in(type, "irc_event irc_event_v2")) {
+            lookup->following = json_incref((json_t *)data);
+            lookup->following_routed = !strcmp(type, "irc_event_v2");
+        }
         return 0;
     }
     if (seq != lookup->wanted) return SNAG_JOURNAL_STOP_AFTER;
@@ -1895,7 +1900,8 @@ recover_irc_source(void *opaque, const struct snag_session *state, uint64_t seq,
      * Repair only that adjacent shift with an exact durable input identity;
      * a missing source or unrelated neighboring event remains an error. */
     if (!strcmp(type, "session_checkpoint") && lookup->following &&
-        snag_irc_event_read(lookup->following, &event) == 0 && event.input &&
+        snag_irc_event_record_read(lookup->following_routed ? "irc_event_v2" : "irc_event",
+            lookup->following, &event) == 0 && event.input &&
         irc_source_prompt_matches(lookup->prompt, &event)) {
         data = lookup->following;
         ++seq;

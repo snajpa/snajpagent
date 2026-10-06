@@ -356,6 +356,22 @@ collect_roots(struct closure_capture *capture,
     for (size_t i = 0u; i < sources->download_count; ++i) {
         if (need(capture, &capture->roots, sources->downloads[i].receipt) < 0) return -1;
     }
+    if (state->irc_conversations &&
+        !snag_irc_conversations_valid(state->irc_conversations, state->next_seq))
+        return snag_errno(EINVAL);
+    const char *connection_id;
+    const json_t *connection;
+    json_object_foreach(state->irc_conversations, connection_id, connection) {
+        (void)connection_id;
+        const char *conversation_id;
+        const json_t *entry;
+        json_object_foreach(json_object_get(connection, "conversations"), conversation_id, entry) {
+            (void)conversation_id;
+            uint64_t sequence;
+            if (snag_json_integer_u64(entry, "seq", &sequence) < 0 ||
+                need(capture, &capture->roots, sequence) < 0) return -1;
+        }
+    }
     uint64_t fixed[] = {sources->input, sources->compact_start, sources->compact_end,
         sources->active_compact, sources->response_start, sources->response_end,
         sources->resume_options, state->voice_history.adopted_seq};

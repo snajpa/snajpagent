@@ -4,6 +4,12 @@
 
 ## Unreleased
 
+- Encode routed IRC observations in a typed native record, preserving connection
+  generation, conversation identity, actions, delivery state, membership and
+  captured reply targets. Historical source projection accepts both IRC event
+  schemas. Native checkpoints retain the connection/conversation directory
+  through canonical event references, including private observations.
+
 - Open existing native sessions through bounded checkpoint admission, retaining
   provider capture, working provenance and verified index frontier. Native
   journals take precedence over legacy sidecars; malformed native storage stops

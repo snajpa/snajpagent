@@ -176,7 +176,7 @@ legacy_kind(enum snag_binary_kind kind)
         response_end_kind(kind) || kind == SNAG_BINARY_RESPONSE_COMPLETED ||
         kind == SNAG_BINARY_TOOL_STARTED || kind == SNAG_BINARY_PROCESS_OUTPUT ||
         kind == SNAG_BINARY_TOOL_FINISHED || kind == SNAG_BINARY_PROCESS_CLOSED ||
-        (kind >= SNAG_BINARY_IRC_EVENT && kind <= SNAG_BINARY_IRC_COMPACTED) ||
+        (kind >= SNAG_BINARY_IRC_EVENT && kind <= SNAG_BINARY_IRC_EVENT_V2) ||
         (kind >= SNAG_BINARY_VOICE_TRANSFER_RECORD && kind <= SNAG_BINARY_VOICE_TRANSFER_ADOPTED) ||
         (kind >= SNAG_BINARY_COMPACTION_STARTED && kind <= SNAG_BINARY_COMPACTION_COMPLETED) ||
         (kind >= SNAG_BINARY_TURN_STARTED && kind <= SNAG_BINARY_TURN_FAILED) ||
@@ -1375,10 +1375,11 @@ read_transfer_metadata(const json_t *data, struct snag_binary_event *event)
 }
 
 static int
-read_irc_event(const json_t *data, struct snag_binary_irc_event *event)
+read_irc_event(const json_t *data, struct snag_binary_irc_event *event, bool routed)
 {
     struct snag_irc_event source;
-    if (snag_irc_event_read(data, &source) < 0) return -1;
+    if (snag_irc_event_record_read(routed ? "irc_event_v2" : "irc_event", data,
+        &source) < 0) return -1;
     int kind = read_name(data, "kind", irc_kinds, 12u);
     if (kind < 0 || read_text(data, "endpoint", &event->endpoint) < 0 ||
         read_text(data, "room", &event->room) < 0 || read_text(data, "nick", &event->nick) < 0 ||
@@ -1397,7 +1398,34 @@ read_irc_event(const json_t *data, struct snag_binary_irc_event *event)
     event->classified = source.classified;
     event->urgent = source.urgent;
     event->reply = source.reply;
-    return event->has_stream ? read_id(data, "stream", event->stream) : 0;
+    if (event->has_stream && read_id(data, "stream", event->stream) < 0) return -1;
+    if (!routed) return 0;
+    const json_t *routing = json_object_get(data, "routing");
+    struct snag_binary_irc_route *route = &event->route;
+    route->generation = source.route.generation;
+    route->identity = source.route.identity;
+    route->kind = source.route.kind;
+    route->direction = source.route.direction;
+    route->delivery = source.route.delivery;
+    route->action = source.route.action;
+    route->revised = source.route.revised;
+    route->joined = source.route.joined;
+    route->rejoin = source.route.rejoin;
+    route->has_membership = source.route.membership[0] != '\0';
+    route->has_send = source.route.send[0] != '\0';
+    route->reply_captured = source.reply_captured;
+    route->has_reply = source.reply_conversation[0] != '\0';
+    const json_t *reply = json_object_get(data, "reply_to");
+    if (read_id(routing, "connection_id", route->connection) < 0 ||
+        read_id(routing, "conversation_id", route->conversation) < 0 ||
+        read_text(routing, "peer", &route->peer) < 0 ||
+        read_text(routing, "target", &route->target) < 0 ||
+        read_text(routing, "source_message_id", &route->source) < 0 ||
+        (route->has_send && read_id(routing, "send_id", route->send) < 0) ||
+        (route->has_membership && read_id(routing, "membership", route->membership) < 0) ||
+        (route->has_reply && (read_id(reply, "conversation_id", route->reply_conversation) < 0 ||
+            read_id(reply, "membership", route->reply_membership) < 0))) return -1;
+    return 0;
 }
 
 static int
@@ -1436,8 +1464,9 @@ read_irc(const json_t *data, struct snag_binary_event *event, struct snag_buf *s
             read_text(data, "summary", &event->data.irc_compacted.summary) < 0) return invalid();
         return 0;
     }
-    if (event->kind == SNAG_BINARY_IRC_EVENT) {
-        return read_irc_event(data, &event->data.irc_event);
+    if (event->kind == SNAG_BINARY_IRC_EVENT || event->kind == SNAG_BINARY_IRC_EVENT_V2) {
+        return read_irc_event(data, &event->data.irc_event,
+            event->kind == SNAG_BINARY_IRC_EVENT_V2);
     }
     if (event->kind == SNAG_BINARY_IRC_SNAPSHOT) {
         if (!snag_json_exact_keys(data, "reason text timestamp_ms")) {
@@ -2088,7 +2117,7 @@ snag_binary_legacy_encode(struct snag_buf *out, const char *type, const json_t *
     } else if (event.kind == SNAG_BINARY_TOOL_FINISHED ||
                event.kind == SNAG_BINARY_PROCESS_CLOSED) {
         rc = read_result_event(data, &event, &scratch);
-    } else if (event.kind >= SNAG_BINARY_IRC_EVENT && event.kind <= SNAG_BINARY_IRC_COMPACTED) {
+    } else if (event.kind >= SNAG_BINARY_IRC_EVENT && event.kind <= SNAG_BINARY_IRC_EVENT_V2) {
         rc = read_irc(data, &event, &scratch);
     } else if (event.kind == SNAG_BINARY_VOICE_TRANSFER_RECORD) {
         rc = read_transfer_archive(data, &event.data.voice_transfer_record, &scratch);
@@ -2933,7 +2962,56 @@ put_transfer_metadata(json_t *data, const struct snag_binary_event *event)
 }
 
 static int
-put_irc_event(json_t *data, const struct snag_binary_irc_event *event)
+put_irc_route(json_t *data, const struct snag_binary_irc_route *route)
+{
+    static const char *const identities[] = {"operator", "agent"};
+    static const char *const conversations[] = {"connection", "channel", "query"};
+    static const char *const directions[] = {"incoming", "outgoing"};
+    static const char *const deliveries[] = {
+        "none", "pending", "written", "acknowledged", "failed", "uncertain"
+    };
+    _Static_assert(SNAG_IRC_AGENT == 1 && SNAG_IRC_QUERY == 2 && SNAG_IRC_OUTGOING == 1 &&
+        SNAG_IRC_UNCERTAIN == 5, "IRC route positions must match the native schema");
+    json_t *routing = json_object();
+    if (!routing) return -1;
+    int rc = -1;
+    if (put_id(routing, "connection_id", route->connection) < 0 ||
+        put_id(routing, "conversation_id", route->conversation) < 0 ||
+        snag_json_set_new(routing, "generation", json_integer((json_int_t)route->generation)) < 0 ||
+        snag_json_set_new(routing, "identity", json_string(identities[route->identity])) < 0 ||
+        snag_json_set_new(routing, "conversation_kind",
+            json_string(conversations[route->kind])) < 0 ||
+        snag_json_set_new(routing, "direction", json_string(directions[route->direction])) < 0 ||
+        snag_json_set_new(routing, "state", json_string(deliveries[route->delivery])) < 0 ||
+        snag_json_set_new(routing, "action", json_boolean(route->action)) < 0 ||
+        put_text(routing, "peer", route->peer) < 0 ||
+        put_text(routing, "target", route->target) < 0 ||
+        put_text(routing, "source_message_id", route->source) < 0 ||
+        (route->has_send ? put_id(routing, "send_id", route->send) :
+            snag_json_set_new(routing, "send_id", json_string(""))) < 0 ||
+        (route->revised && snag_json_set_new(routing, "revised", json_true()) < 0) ||
+        (route->has_membership && (put_id(routing, "membership", route->membership) < 0 ||
+            snag_json_set_new(routing, "joined", json_boolean(route->joined)) < 0 ||
+            snag_json_set_new(routing, "rejoin", json_boolean(route->rejoin)) < 0))) goto done;
+    if (json_object_set(data, "routing", routing) < 0) goto done;
+    if (route->reply_captured) {
+        json_t *reply = route->has_reply ? json_object() : json_null();
+        if (!reply) goto done;
+        if (route->has_reply && (put_id(reply, "conversation_id", route->reply_conversation) < 0 ||
+            put_id(reply, "membership", route->reply_membership) < 0)) {
+            json_decref(reply);
+            goto done;
+        }
+        if (snag_json_set_new(data, "reply_to", reply) < 0) goto done;
+    }
+    rc = 0;
+done:
+    json_decref(routing);
+    return rc;
+}
+
+static int
+put_irc_event(json_t *data, const struct snag_binary_irc_event *event, bool routed)
 {
     if (snag_json_set_new(data, "kind", json_string(irc_kinds[event->kind])) < 0 ||
         snag_json_set_new(data, "timestamp_ms",
@@ -2959,8 +3037,9 @@ put_irc_event(json_t *data, const struct snag_binary_irc_event *event)
         snag_json_set_new(data, "reply", json_boolean(event->reply)) < 0)) {
         return -1;
     }
+    if (routed && put_irc_route(data, &event->route) < 0) return -1;
     struct snag_irc_event checked;
-    return snag_irc_event_read(data, &checked);
+    return snag_irc_event_record_read(routed ? "irc_event_v2" : "irc_event", data, &checked);
 }
 
 static int
@@ -2989,8 +3068,9 @@ put_irc(json_t *data, const struct snag_binary_event *event)
             json_integer((json_int_t)event->data.irc_compacted.count)) < 0) return -1;
         return put_text(data, "summary", event->data.irc_compacted.summary);
     }
-    if (event->kind == SNAG_BINARY_IRC_EVENT) {
-        return put_irc_event(data, &event->data.irc_event);
+    if (event->kind == SNAG_BINARY_IRC_EVENT || event->kind == SNAG_BINARY_IRC_EVENT_V2) {
+        return put_irc_event(data, &event->data.irc_event,
+            event->kind == SNAG_BINARY_IRC_EVENT_V2);
     }
     if (event->kind == SNAG_BINARY_IRC_SNAPSHOT) {
         const struct snag_binary_irc_snapshot *snapshot = &event->data.irc_snapshot;
@@ -3509,7 +3589,7 @@ snag_binary_legacy_decode(const struct snag_binary_record *record, const char **
     } else if (event.kind == SNAG_BINARY_TOOL_FINISHED ||
                event.kind == SNAG_BINARY_PROCESS_CLOSED) {
         rc = put_result_event(result, &event);
-    } else if (event.kind >= SNAG_BINARY_IRC_EVENT && event.kind <= SNAG_BINARY_IRC_COMPACTED) {
+    } else if (event.kind >= SNAG_BINARY_IRC_EVENT && event.kind <= SNAG_BINARY_IRC_EVENT_V2) {
         rc = put_irc(result, &event);
     } else if (event.kind == SNAG_BINARY_VOICE_TRANSFER_RECORD) {
         rc = put_transfer_archive(result, &event.data.voice_transfer_record);

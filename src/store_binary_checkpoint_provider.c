@@ -153,7 +153,7 @@ source_entry(const json_t *source, size_t *cursor, uint64_t wanted, bool histori
         if (!type || json_string_length(json_object_get(entry, "type")) != strlen(type) ||
             !json_is_object(json_object_get(entry, "data"))) break;
         if (historical) {
-            if (strcmp(type, "irc_event") && strcmp(type, "session_checkpoint")) break;
+            if (!snag_string_in(type, "irc_event irc_event_v2 session_checkpoint")) break;
             if (!strcmp(type, "session_checkpoint") &&
                 json_object_size(json_object_get(entry, "data"))) break;
         } else if (snag_binary_event_kind(type, &kind) < 0) {
@@ -236,7 +236,7 @@ read_source_rows(int fd, const struct snag_binary_anchor *through,
         json_t *data = NULL;
         if (snag_binary_checkpoint_projection_read(fd, through, access, sequence,
                 &type, &data) < 0) return -1;
-        if (historical && strcmp(type, "irc_event") && strcmp(type, "session_checkpoint")) {
+        if (historical && !snag_string_in(type, "irc_event irc_event_v2 session_checkpoint")) {
             json_decref(data);
             return snag_errno(EINVAL);
         }

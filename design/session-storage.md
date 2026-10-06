@@ -1421,6 +1421,27 @@ These are durable field checks; live membership, authority and delivery remain
 separate. No relationship between historical, operator, input or urgency flags
 is inferred by the codec.
 
+Draft kind 215/version 1 (`irc_event_v2`) keeps the complete kind208/version1
+prefix and appends typed routing. Kind208 retains its original wire contract.
+The routing suffix is flags1, generation8, identity1, conversation-kind1,
+direction1, delivery1, connection UUID16, conversation UUID16, then the
+length-delimited peer, target and source-message ID. Optional fields follow in
+this order: send UUID16, membership UUID16, reply conversation UUID16 and reply
+membership UUID16. Routing flags are action=1, revised=2, membership present=4,
+joined=8, rejoin=16, send present=32, reply captured=64 and reply available=128.
+A captured reply without an available pair projects to explicit null; an
+uncaptured reply omits the field.
+
+Identity values 0/1 are operator/agent. Conversation values 0/1/2 are
+connection/channel/query. Direction values 0/1 are incoming/outgoing. Delivery
+values 0..5 are none, pending, written, acknowledged, failed and uncertain.
+Generation is positive signed-64-bit. Peer, target and source-message bounds
+are the existing live IRC field bounds. Intrarecord validation preserves the
+live visibility, action, membership, outgoing delivery, admitted input and
+reply-capture rules. Native source collection and selected-record projection
+recognize both IRC event kinds and use their typed live projection. Connection
+and conversation directory restoration uses the core checkpoint IRC block.
+
 Draft kind 209/version 1 (`irc_snapshot`) carries reason 1, timestamp 8 and
 length-delimited text. Reasons 1..4 are join, nick, topology and compaction.
 Timestamp is positive signed-64-bit; snapshot text is 1..8 MiB of NUL-free UTF-8.
@@ -1752,13 +1773,28 @@ the enclosing complete snapshot consumer owns membership, lifecycle, immutable
 journal identity and atomic core/provider adoption. Provider-view snapshots and
 native process collection cursors remain separate dependencies.
 
-The version2 core candidate in `store_binary_checkpoint_core.c` joins these
-seven components in fixed order: controls, accounting, fixed texts, pending
-calls, processes, pending inputs and dynamic payloads. Its84-byte header contains
-LEu16 version2, LEu16 component count7, LEu64 active-compaction accepting sequence,
+The version3 core in `store_binary_checkpoint_core.c` joins eight components in
+fixed order: controls, accounting, fixed texts, pending calls, processes, pending
+inputs, dynamic payloads and the IRC directory. Its92-byte header contains
+LEu16 version3, LEu16 component count8, LEu64 active-compaction accepting sequence,
 LEu64 retained-response accepting sequence, LEu64 voice-adoption sequence (zero
-when absent), then seven LEu64 component sizes. Earlier draft core versions fail
-explicitly; the application has not published native checkpoints.
+when absent), then eight LEu64 component sizes. Version2's84-byte, seven-component
+header remains readable with an absent IRC directory. Earlier draft versions
+fail explicitly; the application has not published native checkpoints.
+
+The IRC block starts with presence1 and connection-count8. An absent directory
+has zero count and no rows. Each connection stores UUID16, generation8,
+connected-state flags1 and conversation-count8, followed by one LEu64 canonical
+accepting sequence per retained conversation. Each role uses two connected-state
+bits: 0=null, 1=false, 2=true; 3 is invalid. Operator occupies the low pair, agent
+the next pair; all higher bits are zero. Counts are bounded by the remaining
+wire bytes. Each referenced record must be a routed IRC event from the same
+connection and endpoint, with generation at most the connection's generation.
+Its conversation UUID supplies the directory key. Duplicate connection or
+conversation keys, zero/future references and malformed source records fail.
+The working-set closure includes every directory source, including private
+operator queries excluded from provider text. Message and endpoint payloads
+remain in the canonical event records.
 Every component retains its own version and exact-length validation. The active
 compaction attempt is separate from the last completed compaction; a retained
 response epoch also survives when no public stream has been emitted. Neither
@@ -1780,7 +1816,8 @@ native-reference form, target identity and earlier logical start, then derives
 the cursor and transfer identity. Partial or malformed roots fail encoding.
 Latest-membership/lifecycle validation, provider decoding, native process scan
 cursors and atomic joint adoption remain the enclosing consumer's work. This
-assembly layer remains test-linked; runtime storage continues to use JSONL.
+assembly participates in existing-native admission; new session creation still
+uses JSONL.
 
 A full checkpoint captures all current semantic state:
 

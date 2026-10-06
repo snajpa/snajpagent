@@ -14,7 +14,7 @@
 #include <unistd.h>
 
 #define COUNT(a) (sizeof(a) / sizeof((a)[0]))
-#define CORE_HEADER 84u
+#define CORE_HEADER 92u
 
 static const struct slot { const char *key; size_t offset; } slots[] = {
 #define SLOT(f) {#f, offsetof(struct snag_session, f)}
@@ -185,7 +185,7 @@ golden_header(const struct snag_binary_checkpoint_sources *original,
     const struct snag_session *snapshot)
 {
     /* Structural prefix only: these epochs do not claim a valid journal state. */
-    const unsigned char golden[] = {2u, 0u, 7u, 0u, 8u, 7u, 6u, 5u, 4u, 3u, 2u, 1u,
+    const unsigned char golden[] = {3u, 0u, 8u, 0u, 8u, 7u, 6u, 5u, 4u, 3u, 2u, 1u,
         0x18u, 0x17u, 0x16u, 0x15u, 0x14u, 0x13u, 0x12u, 0x11u};
     struct snag_binary_checkpoint_sources sources = *original;
     sources.active_compact = 0x0102030405060708ULL;
@@ -229,7 +229,7 @@ bad_wire(int fd, struct snag_binary_checkpoint_frame frame)
     }
     put_number(copy + 20u, voice);
     size_t offset = CORE_HEADER;
-    for (size_t i = 0u; i < 7u; ++i) {
+    for (size_t i = 0u; i < 8u; ++i) {
         unsigned char saved[8];
         memcpy(saved, copy + 28u + i * 8u, sizeof(saved));
         memset(copy + 28u + i * 8u, 0xff, sizeof(saved));
@@ -440,6 +440,34 @@ closure_core_checks(int fd, const struct snag_binary_anchor *through,
     json_decref(history);
 }
 
+static void
+old_core_compatibility(int fd, struct snag_binary_checkpoint_frame frame,
+    const struct snag_session *expected)
+{
+    if (expected->irc_conversations) return;
+    const unsigned char *bytes = frame.core.data;
+    size_t irc = CORE_HEADER;
+    for (size_t i = 0u; i < 7u; ++i) irc += (size_t)number(bytes + 28u + i * 8u);
+    assert(irc + 9u == frame.core.size && !bytes[irc] && !number(bytes + irc + 1u));
+    struct snag_buf old = {.max = SIZE_MAX};
+    assert(!snag_buf_append(&old, bytes, 84u));
+    old.data[0] = 2u;
+    old.data[2] = 7u;
+    assert(!snag_buf_append(&old, bytes + CORE_HEADER, irc - CORE_HEADER));
+    frame.core = (struct snag_binary_checkpoint_section){.version = 2u,
+        .data = (const unsigned char *)old.data, .size = old.len};
+    struct snag_session restored;
+    snag_session_init(&restored);
+    struct snag_binary_checkpoint_sources sources = {0};
+    int64_t position = snag_seek(fd, 0, SEEK_CUR);
+    assert(!snag_binary_checkpoint_core_read(fd, &frame, NULL, &restored, &sources));
+    assert(position == snag_seek(fd, 0, SEEK_CUR) && !restored.irc_conversations);
+    same(expected, &restored);
+    snag_session_close(&restored);
+    snag_binary_checkpoint_sources_free(&sources);
+    snag_buf_free(&old);
+}
+
 void
 test_store_binary_core_state(int fd, const struct snag_binary_anchor *anchor,
     const struct snag_binary_checkpoint_sources *sources, const struct snag_session *state)
@@ -496,6 +524,7 @@ test_store_binary_core_state(int fd, const struct snag_binary_anchor *anchor,
     assert(core.len == again.len && !memcmp(core.data, again.data, core.len));
     snag_binary_checkpoint_sources_free(&recovered);
     snag_session_close(&restored);
+    old_core_compatibility(fd, frame, state);
     encode_checks(&core, sources, state);
     bad_totals(fd, frame, sources, state);
     static bool checked_wire;

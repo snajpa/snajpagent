@@ -2,6 +2,7 @@
 #ifndef SNAJPAGENT_STORE_BINARY_EVENT_H
 #define SNAJPAGENT_STORE_BINARY_EVENT_H
 
+#include "irc.h"
 #include "store_binary.h"
 #include "turn.h"
 
@@ -78,6 +79,7 @@ enum snag_binary_kind {
     SNAG_BINARY_IRC_SLEEP_WOKE = 212,
     SNAG_BINARY_IRC_COMPACT_CONFIGURED = 213,
     SNAG_BINARY_IRC_COMPACTED = 214,
+    SNAG_BINARY_IRC_EVENT_V2 = 215,
     SNAG_BINARY_COMPACTION_STARTED = 224,
     SNAG_BINARY_COMPACTION_INTERRUPTED = 225,
     SNAG_BINARY_COMPACTION_COMPLETED = 226,
@@ -820,6 +822,19 @@ enum snag_binary_irc_kind {
     SNAG_BINARY_IRC_TOPIC = 9, SNAG_BINARY_IRC_MODE = 10, SNAG_BINARY_IRC_HISTORY_READY = 11
 };
 
+struct snag_binary_irc_route {
+    unsigned char connection[16], conversation[16], send[16], membership[16];
+    unsigned char reply_conversation[16], reply_membership[16];
+    struct snag_binary_text peer, target, source;
+    uint64_t generation;
+    enum snag_irc_identity identity;
+    enum snag_irc_conversation_kind kind;
+    enum snag_irc_direction direction;
+    enum snag_irc_delivery delivery;
+    bool action, revised, has_send, has_membership, joined, rejoin;
+    bool reply_captured, has_reply;
+};
+
 struct snag_binary_irc_event {
     enum snag_binary_irc_kind kind;
     uint64_t timestamp_ms;
@@ -829,6 +844,7 @@ struct snag_binary_irc_event {
     bool historical, is_local, op;
     bool has_watermark, has_stream, input;
     bool classified, urgent, reply;
+    struct snag_binary_irc_route route; /* Record215 only. */
 };
 
 enum snag_binary_irc_snapshot_reason {

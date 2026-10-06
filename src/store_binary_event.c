@@ -2866,6 +2866,113 @@ decode_irc_event(struct fields *fields, struct snag_binary_irc_event *event)
         read_text(fields, &event->text, 0u, SNAG_IRC_TEXT_MAX) && irc_event_valid(event);
 }
 
+static bool
+irc_route_valid(const struct snag_binary_irc_event *event)
+{
+    const struct snag_binary_irc_route *route = &event->route;
+    bool chat = event->kind == SNAG_BINARY_IRC_MESSAGE || event->kind == SNAG_BINARY_IRC_NOTICE;
+    bool sent_input = chat && event->is_local && !event->historical && event->input &&
+        route->kind == SNAG_IRC_CHANNEL && route->identity == SNAG_IRC_OPERATOR &&
+        route->direction == SNAG_IRC_OUTGOING &&
+        (route->delivery == SNAG_IRC_WRITTEN || route->delivery == SNAG_IRC_ACKNOWLEDGED);
+    bool visible = route->kind == SNAG_IRC_CHANNEL ||
+        (route->kind == SNAG_IRC_QUERY && route->identity == SNAG_IRC_AGENT);
+    if (route->has_membership && (event->kind == SNAG_BINARY_IRC_CONNECTED ||
+        event->kind == SNAG_BINARY_IRC_DISCONNECTED)) visible = false;
+    return irc_event_valid(event) && event->has_watermark && route->generation &&
+        route->generation <= INT64_MAX && (unsigned)route->identity <= SNAG_IRC_AGENT &&
+        (unsigned)route->kind <= SNAG_IRC_QUERY &&
+        (unsigned)route->direction <= SNAG_IRC_OUTGOING &&
+        (unsigned)route->delivery <= SNAG_IRC_UNCERTAIN &&
+        irc_text_valid(route->peer, 0u, SNAG_CONFIG_IRC_NICK_MAX) &&
+        irc_text_valid(route->target, 0u, SNAG_CONFIG_IRC_ROOM_MAX + 1u) &&
+        irc_text_valid(route->source, 0u, SNAG_IRC_LINE_MAX) &&
+        (route->has_membership || (!route->joined && !route->rejoin)) &&
+        (!route->has_membership || (route->kind == SNAG_IRC_CHANNEL &&
+            ((event->kind != SNAG_BINARY_IRC_CONNECTED &&
+                event->kind != SNAG_BINARY_IRC_DISCONNECTED) ||
+             (event->is_local && !event->historical &&
+                ((event->kind == SNAG_BINARY_IRC_CONNECTED) == route->joined))))) &&
+        (!route->revised || (route->direction == SNAG_IRC_OUTGOING &&
+            route->delivery >= SNAG_IRC_ACKNOWLEDGED)) &&
+        (route->kind == SNAG_IRC_QUERY ? route->peer.size && !event->room.size :
+            !route->peer.size) &&
+        (route->kind != SNAG_IRC_CHANNEL || (event->room.size &&
+            event->room.size == route->target.size &&
+            !memcmp(event->room.data, route->target.data, event->room.size))) &&
+        (route->kind != SNAG_IRC_CONNECTION_EVENTS || (!event->room.size && !chat)) &&
+        (!chat || route->target.size) && (!route->action ||
+            event->kind == SNAG_BINARY_IRC_MESSAGE) &&
+        (route->direction == SNAG_IRC_INCOMING ?
+            route->delivery == SNAG_IRC_DELIVERY_NONE && !route->has_send :
+            route->delivery != SNAG_IRC_DELIVERY_NONE && route->has_send &&
+                (!event->input || sent_input)) &&
+        (visible || (!event->input && !event->urgent && !event->reply)) &&
+        ((!event->historical && event->kind == SNAG_BINARY_IRC_MESSAGE &&
+            (route->direction == SNAG_IRC_INCOMING || sent_input)) ||
+            (!event->urgent && !event->reply)) && (!event->reply || event->urgent) &&
+        (route->reply_captured || !route->has_reply) &&
+        (!route->reply_captured || (event->classified && event->reply &&
+            route->kind == SNAG_IRC_CHANNEL));
+}
+
+static int
+encode_irc_route(struct snag_buf *out, const struct snag_binary_irc_event *event)
+{
+    if (!irc_route_valid(event)) return invalid();
+    const struct snag_binary_irc_route *route = &event->route;
+    unsigned int flags = (route->action ? 1u : 0u) | (route->revised ? 2u : 0u) |
+        (route->has_membership ? 4u : 0u) | (route->joined ? 8u : 0u) |
+        (route->rejoin ? 16u : 0u) | (route->has_send ? 32u : 0u) |
+        (route->reply_captured ? 64u : 0u) | (route->has_reply ? 128u : 0u);
+    if (encode_irc_event(out, event) < 0 || write_uint(out, flags, 1u) < 0 ||
+        write_uint(out, route->generation, 8u) < 0 ||
+        write_uint(out, route->identity, 1u) < 0 || write_uint(out, route->kind, 1u) < 0 ||
+        write_uint(out, route->direction, 1u) < 0 || write_uint(out, route->delivery, 1u) < 0 ||
+        snag_buf_append(out, route->connection, 16u) < 0 ||
+        snag_buf_append(out, route->conversation, 16u) < 0 ||
+        write_text(out, route->peer, 0u, SNAG_CONFIG_IRC_NICK_MAX) < 0 ||
+        write_text(out, route->target, 0u, SNAG_CONFIG_IRC_ROOM_MAX + 1u) < 0 ||
+        write_text(out, route->source, 0u, SNAG_IRC_LINE_MAX) < 0 ||
+        (route->has_send && snag_buf_append(out, route->send, 16u) < 0) ||
+        (route->has_membership && snag_buf_append(out, route->membership, 16u) < 0) ||
+        (route->has_reply && (snag_buf_append(out, route->reply_conversation, 16u) < 0 ||
+            snag_buf_append(out, route->reply_membership, 16u) < 0))) return -1;
+    return 0;
+}
+
+static bool
+decode_irc_route(struct fields *fields, struct snag_binary_irc_event *event)
+{
+    struct snag_binary_irc_route *route = &event->route;
+    uint64_t flags, value;
+    if (!decode_irc_event(fields, event) || !read_uint(fields, 1u, &flags) ||
+        !read_uint(fields, 8u, &route->generation) || !read_uint(fields, 1u, &value)) return false;
+    route->identity = (enum snag_irc_identity)value;
+    if (!read_uint(fields, 1u, &value)) return false;
+    route->kind = (enum snag_irc_conversation_kind)value;
+    if (!read_uint(fields, 1u, &value)) return false;
+    route->direction = (enum snag_irc_direction)value;
+    if (!read_uint(fields, 1u, &value)) return false;
+    route->delivery = (enum snag_irc_delivery)value;
+    route->action = (flags & 1u) != 0u;
+    route->revised = (flags & 2u) != 0u;
+    route->has_membership = (flags & 4u) != 0u;
+    route->joined = (flags & 8u) != 0u;
+    route->rejoin = (flags & 16u) != 0u;
+    route->has_send = (flags & 32u) != 0u;
+    route->reply_captured = (flags & 64u) != 0u;
+    route->has_reply = (flags & 128u) != 0u;
+    return read_id(fields, route->connection) && read_id(fields, route->conversation) &&
+        read_text(fields, &route->peer, 0u, SNAG_CONFIG_IRC_NICK_MAX) &&
+        read_text(fields, &route->target, 0u, SNAG_CONFIG_IRC_ROOM_MAX + 1u) &&
+        read_text(fields, &route->source, 0u, SNAG_IRC_LINE_MAX) &&
+        (!route->has_send || read_id(fields, route->send)) &&
+        (!route->has_membership || read_id(fields, route->membership)) &&
+        (!route->has_reply || (read_id(fields, route->reply_conversation) &&
+            read_id(fields, route->reply_membership))) && irc_route_valid(event);
+}
+
 static int
 encode_irc_settings(struct snag_buf *out, const struct snag_binary_event *event)
 {
@@ -4330,6 +4437,9 @@ encode_fields(struct snag_buf *out, const struct snag_binary_event *event)
     if (event->kind == SNAG_BINARY_IRC_EVENT) {
         return encode_irc_event(out, &event->data.irc_event);
     }
+    if (event->kind == SNAG_BINARY_IRC_EVENT_V2) {
+        return encode_irc_route(out, &event->data.irc_event);
+    }
     if (event->kind == SNAG_BINARY_IRC_SNAPSHOT) {
         return encode_irc_snapshot(out, &event->data.irc_snapshot);
     }
@@ -4450,6 +4560,7 @@ static const struct {
     {SNAG_BINARY_PROCESS_OUTPUT, "process_output"},
     {SNAG_BINARY_PROCESS_CLOSED, "process_closed"},
     {SNAG_BINARY_IRC_EVENT, "irc_event"},
+    {SNAG_BINARY_IRC_EVENT_V2, "irc_event_v2"},
     {SNAG_BINARY_IRC_SNAPSHOT, "irc_snapshot"},
     {SNAG_BINARY_IRC_ADMITTED, "irc_admitted"},
     {SNAG_BINARY_IRC_SLEEP_SET, "irc_sleep_set"},
@@ -4516,6 +4627,7 @@ snag_binary_event_version(enum snag_binary_kind kind)
         kind == SNAG_BINARY_RESPONSE_FAILED || kind == SNAG_BINARY_RESPONSE_OUTPUT_CORRECTION ||
         kind == SNAG_BINARY_RESPONSE_COMPLETED || kind == SNAG_BINARY_TOOL_STARTED ||
         kind == SNAG_BINARY_PROCESS_OUTPUT || kind == SNAG_BINARY_IRC_EVENT ||
+        kind == SNAG_BINARY_IRC_EVENT_V2 ||
         kind == SNAG_BINARY_IRC_SNAPSHOT ||
         (kind >= SNAG_BINARY_IRC_ADMITTED && kind <= SNAG_BINARY_IRC_COMPACTED)) {
         return 1u;
@@ -4625,6 +4737,9 @@ decode_fields(struct fields *fields, struct snag_binary_event *event)
     }
     if (event->kind == SNAG_BINARY_IRC_EVENT) {
         return decode_irc_event(fields, &event->data.irc_event);
+    }
+    if (event->kind == SNAG_BINARY_IRC_EVENT_V2) {
+        return decode_irc_route(fields, &event->data.irc_event);
     }
     if (event->kind == SNAG_BINARY_IRC_SNAPSHOT) {
         return decode_irc_snapshot(fields, &event->data.irc_snapshot);

@@ -216,6 +216,18 @@ provider_source_checks(int fd, const struct snag_binary_anchor *through,
         int rc = snag_binary_checkpoint_provider_read(fd, through, chosen,
             provider->data, provider->len, NULL, NULL, &events, &sources);
         if (rc < 0) fprintf(stderr, "provider source mode %u: %d\n", mode, errno);
+        if (!rc && (!json_equal(events, recent) || !json_equal(sources, history))) {
+            char *wanted = json_dumps(recent, JSON_COMPACT);
+            char *actual = json_dumps(events, JSON_COMPACT);
+            fprintf(stderr, "provider expected recent %s\nrestored recent %s\n", wanted, actual);
+            free(wanted);
+            free(actual);
+            wanted = json_dumps(history, JSON_COMPACT);
+            actual = json_dumps(sources, JSON_COMPACT);
+            fprintf(stderr, "provider expected history %s\nrestored history %s\n", wanted, actual);
+            free(wanted);
+            free(actual);
+        }
         assert(!rc && json_equal(events, recent) && json_equal(sources, history));
         assert(events != recent && sources != history);
         json_decref(events);
@@ -819,6 +831,77 @@ admission_matches(struct snag_session *source, const struct snag_session *prefix
 }
 
 static void
+reject_irc_checkpoint(struct snag_session *source,
+    const struct snag_binary_checkpoint_frame *frame,
+    const struct snag_binary_checkpoint_index *access, int expected_errno)
+{
+    struct snag_session state, saved;
+    struct snag_binary_checkpoint_sources origins, old;
+    memset(&state, 0xa5, sizeof(state));
+    saved = state;
+    memset(&origins, 0x5a, sizeof(origins));
+    old = origins;
+    int64_t position = snag_seek(source->log_fd, 0, SEEK_CUR);
+    assert(snag_binary_checkpoint_core_read(source->log_fd, frame, access, &state, &origins) < 0);
+    assert(errno == expected_errno && !memcmp(&saved, &state, sizeof(state)) &&
+        !memcmp(&old, &origins, sizeof(origins)));
+    assert(position == snag_seek(source->log_fd, 0, SEEK_CUR));
+}
+
+static void
+irc_checkpoint_checks(struct snag_session *source, const struct snag_session *expected,
+    const struct snag_binary_checkpoint_frame *frame,
+    const struct snag_binary_checkpoint_index *access)
+{
+    static bool checked;
+    if (checked || !expected->irc_conversations) return;
+    checked = true;
+    const unsigned char *bytes = frame->core.data;
+    assert(frame->core.version == 3u && bytes[0] == 3u && bytes[2] == 8u);
+    size_t offset = 92u;
+    for (size_t i = 0u; i < 7u; ++i) {
+        uint64_t size = 0u;
+        for (size_t j = 0u; j < 8u; ++j)
+            size |= (uint64_t)bytes[28u + i * 8u + j] << (j * 8u);
+        assert(size <= frame->core.size - offset);
+        offset += (size_t)size;
+    }
+    assert(frame->core.size - offset >= 50u && bytes[offset] == 1u);
+    uint64_t reference = 0u;
+    for (size_t i = 0u; i < 8u; ++i)
+        reference |= (uint64_t)bytes[offset + 42u + i] << (i * 8u);
+    struct snag_binary_index_entry entry;
+    assert(!snag_binary_checkpoint_index_find(access, reference, &entry));
+    assert(entry.kind == SNAG_BINARY_IRC_EVENT_V2);
+    struct snag_buf copy = {.max = SIZE_MAX};
+    for (unsigned int failure = 0u; failure < 9u; ++failure) {
+        snag_buf_reset(&copy);
+        assert(!snag_buf_append(&copy, bytes, frame->core.size));
+        unsigned char *irc = (unsigned char *)copy.data + offset;
+        switch (failure) {
+        case 0u: irc[0] = 2u; break;
+        case 1u: provider_number(irc + 1u, UINT64_MAX); break;
+        case 2u: irc[9u] ^= 42u; break;
+        case 3u: provider_number(irc + 25u, 0u); break;
+        case 4u: irc[33u] = 3u; break;
+        case 5u: provider_number(irc + 34u, 0u); break;
+        case 6u: provider_number(irc + 42u, 0u); break;
+        case 7u: provider_number(irc + 42u, frame->boundary.next_seq); break;
+        default: provider_number(irc + 42u, 1u); break;
+        }
+        struct snag_binary_checkpoint_frame bad = *frame;
+        bad.core.data = (const unsigned char *)copy.data;
+        reject_irc_checkpoint(source, &bad, access, EINVAL);
+    }
+    snag_buf_free(&copy);
+    struct snag_buf omitted = {.max = SIZE_MAX};
+    struct snag_binary_checkpoint_index missing;
+    binary_fixture_access_omit(access, reference, &omitted, &missing);
+    reject_irc_checkpoint(source, frame, &missing, ENOENT);
+    snag_buf_free(&omitted);
+}
+
+static void
 joint_materialization_checks(struct snag_session *source, struct snag_session *expected,
     const struct snag_binary_checkpoint_sources *origins,
     const struct snag_binary_checkpoint_frame *base)
@@ -859,6 +942,21 @@ joint_materialization_checks(struct snag_session *source, struct snag_session *e
     same_cache(expected, &restored, false);
     json_t *left = checkpoint_facts(expected);
     json_t *right = checkpoint_facts(&restored);
+    if (left && right && !json_equal(left, right)) {
+        const char *key;
+        const json_t *value;
+        json_object_foreach(left, key, value) {
+            if (!json_equal(value, json_object_get(right, key))) {
+                fprintf(stderr, "joint checkpoint mismatch: %s\n", key);
+                char *wanted = json_dumps(value, JSON_ENCODE_ANY | JSON_COMPACT);
+                char *actual = json_dumps(json_object_get(right, key),
+                    JSON_ENCODE_ANY | JSON_COMPACT);
+                fprintf(stderr, "expected %s; restored %s\n", wanted, actual);
+                free(wanted);
+                free(actual);
+            }
+        }
+    }
     assert(left && right && json_equal(left, right));
     json_decref(left);
     json_decref(right);
@@ -881,6 +979,7 @@ joint_materialization_checks(struct snag_session *source, struct snag_session *e
     ++sparse_resume_compared;
     admission_matches(source, expected, &frame, &receipt, &bytes);
     uninspected_materialization(source, expected, &frame, &receipt, &available, &access);
+    irc_checkpoint_checks(source, expected, &frame, &access);
     static bool negatives[2];
     struct snag_binary_checkpoint_provider provider;
     assert(!snag_binary_checkpoint_provider_decode(frame.provider.data, frame.provider.size,
@@ -1081,7 +1180,7 @@ checkpoint_matches(struct snag_session *source, struct snag_session *expected,
             case 6u: memcpy(changed.data + 48u + 36u, changed.data + 48u, 8u); break;
             case 7u: wrong.identity.id[0u] ^= 1u; break;
             case 8u: wrong.boundary.digest[0u] ^= 1u; break;
-            case 9u: wrong.core.version = 3u; break;
+            case 9u: wrong.core.version = SNAG_BINARY_CORE_VERSION + 1u; break;
             case 10u: wrong.provider.version = 2u; break;
             case 11u: wrong.core.size -= 1u; break;
             case 12u:

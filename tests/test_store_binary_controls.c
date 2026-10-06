@@ -87,6 +87,7 @@ static const char *outside[] = {
 static bool
 outside_field(const char *name)
 {
+    if (!strcmp(name, "irc_conversations")) return true;
     for (size_t i = 0u; i < COUNT(outside); ++i)
         if (!strcmp(name, outside[i])) return true;
     return false;
@@ -101,6 +102,9 @@ same_controls(const struct snag_session *a, const struct snag_session *b)
         assert(!json_object_del(left, outside[i]));
         assert(!json_object_del(right, outside[i]));
     }
+    /* The optional IRC directory belongs to a separate core block. */
+    json_object_del(left, "irc_conversations");
+    json_object_del(right, "irc_conversations");
     assert(json_object_size(left) == 92u && json_equal(left, right));
     json_decref(left);
     json_decref(right);
@@ -463,6 +467,13 @@ test_store_binary_controls(void)
             if (i != 112u) assert(wire.data[i] == 0u);
         snag_session_close(&minimal);
     }
+    struct snag_session with_directory;
+    snag_session_init(&with_directory);
+    with_directory.format_version = 4u;
+    with_directory.irc_conversations = json_object();
+    assert(with_directory.irc_conversations);
+    test_store_binary_controls_state(&with_directory);
+    snag_session_close(&with_directory);
     for (size_t i = 0u; i < COUNT(texts); ++i) {
         struct snag_session changed = value;
         char *text = (char *)&changed + texts[i].offset;

@@ -51,13 +51,14 @@ select_source(struct source_selection *selection, uint64_t sequence,
     char key[32];
     (void)snprintf(key, sizeof(key), "%llu", (unsigned long long)sequence);
     if (json_object_get(selection->seen, key)) return 0;
-    if (selection->prompt && !strcmp(type, "irc_event")) {
+    if (selection->prompt && snag_string_in(type, "irc_event irc_event_v2")) {
         struct snag_irc_event event;
-        if (snag_irc_event_read(data, &event) < 0) return -1;
+        if (snag_irc_event_record_read(type, data, &event) < 0) return -1;
         char reference[SNAG_ID_HEX_LEN + 48u];
         (void)snprintf(reference, sizeof(reference), "[IRC update id=%s:%llu ",
             event.stream, (unsigned long long)event.sequence);
-        selection->matched += event.input && strstr(selection->prompt, reference) != NULL;
+        selection->matched += event.input && event.stream[0] && event.sequence &&
+            strstr(selection->prompt, reference) != NULL;
     }
     if (sequence > INT64_MAX) return snag_errno(EOVERFLOW);
     json_t *row = json_pack("{s:I,s:s,s:o}", "seq", (json_int_t)sequence,
@@ -79,7 +80,7 @@ source_point(struct source_selection *selection, uint64_t sequence, bool adjacen
     if (snag_binary_checkpoint_projection_read(source->fd, source->verified,
             source->access, sequence, &type, &data) < 0) return -1;
     bool marker = !strcmp(type, "session_checkpoint");
-    int rc = (!strcmp(type, "irc_event") || (adjacent && marker)) ?
+    int rc = (snag_string_in(type, "irc_event irc_event_v2") || (adjacent && marker)) ?
         select_source(selection, sequence, type, data) : snag_errno(EINVAL);
     json_decref(data);
     if (!rc && marker) rc = source_point(selection, sequence + 1u, false);
@@ -98,10 +99,13 @@ static int
 source_record(void *opaque, const struct snag_binary_record *record, uint64_t sequence)
 {
     struct source_selection *selection = opaque;
-    if (record->kind != SNAG_BINARY_IRC_EVENT) return 0;
+    if (record->kind != SNAG_BINARY_IRC_EVENT && record->kind != SNAG_BINARY_IRC_EVENT_V2 &&
+        record->kind != SNAG_BINARY_LEGACY_CHECKPOINT &&
+        record->kind != SNAG_BINARY_CHECKPOINT_RECEIPT) return 0;
     const char *type = NULL;
     json_t *data = NULL;
-    int rc = snag_binary_legacy_decode(record, &type, &data);
+    int rc = snag_binary_checkpoint_record_project(selection->source->fd,
+        selection->source->verified, selection->source->access, record, sequence, &type, &data);
     if (!rc) rc = select_source(selection, sequence, type, data);
     json_decref(data);
     return rc;
@@ -144,7 +148,10 @@ walk_selected_sources(const struct source_walk *source, const json_t *wanted,
             int found = snag_binary_checkpoint_index_find(source->access, next, &adjacent);
             if (found < 0) goto done;
             if (found) { snag_errno(ENOENT); goto done; }
-            if (adjacent.kind != SNAG_BINARY_IRC_EVENT) continue;
+            if (adjacent.kind != SNAG_BINARY_IRC_EVENT &&
+                adjacent.kind != SNAG_BINARY_IRC_EVENT_V2 &&
+                adjacent.kind != SNAG_BINARY_LEGACY_CHECKPOINT &&
+                adjacent.kind != SNAG_BINARY_CHECKPOINT_RECEIPT) continue;
         }
         /* Match the legacy collector's canonical next-row seam exactly, including
          * non-input IRC metadata. A stream counter never supplies this ordinal. */
@@ -234,15 +241,11 @@ walk_sources(void *opaque, const json_t *wanted, const char *prompt,
             if (snag_binary_record_next(&batch, &cursor, &record, &seq) != 0) goto done;
             const char *type = NULL;
             json_t *data = NULL;
-            if (record.kind == SNAG_BINARY_IRC_EVENT) {
-                if (snag_binary_legacy_decode(&record, &type, &data) < 0) goto done;
-            } else if (record.kind == SNAG_BINARY_LEGACY_CHECKPOINT) {
-                type = "session_checkpoint";
-                data = json_object();
-                if (!data) { errno = ENOMEM; goto done; }
-            } else {
-                continue;
-            }
+            if (record.kind != SNAG_BINARY_IRC_EVENT && record.kind != SNAG_BINARY_IRC_EVENT_V2 &&
+                record.kind != SNAG_BINARY_LEGACY_CHECKPOINT &&
+                record.kind != SNAG_BINARY_CHECKPOINT_RECEIPT) continue;
+            if (snag_binary_checkpoint_record_project(source->fd, source->verified,
+                source->access, &record, seq, &type, &data) < 0) goto done;
             int called = fn(argument, NULL, seq, type, data, error, error_size);
             json_decref(data);
             if (called < 0) goto done;

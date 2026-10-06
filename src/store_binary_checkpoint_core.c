@@ -10,7 +10,7 @@
 
 /* Each component keeps its own version. Sizes delimit the fixed-order blocks;
  * the two extra epochs and adoption reference survive without copied payloads. */
-enum core_block { CONTROLS, ACCOUNTING, TEXTS, CALLS, PROCESSES, INPUTS, PAYLOADS, BLOCKS };
+enum core_block { CONTROLS, ACCOUNTING, TEXTS, CALLS, PROCESSES, INPUTS, PAYLOADS, IRC, BLOCKS };
 #define CORE_HEADER (28u + BLOCKS * 8u)
 
 static void
@@ -36,6 +36,137 @@ bytes_hex(char *out, const unsigned char *bytes, size_t size)
         out[i * 2u + 1u] = hex[bytes[i] & 15u];
     }
     out[size * 2u] = '\0';
+}
+
+static unsigned int
+irc_status(const json_t *value)
+{
+    return json_is_true(value) ? 2u : json_is_false(value) ? 1u : 0u;
+}
+
+static int
+irc_encode(struct snag_buf *out, const struct snag_session *state)
+{
+    const json_t *directory = state->irc_conversations;
+    if (directory && !snag_irc_conversations_valid(directory, state->next_seq))
+        return snag_errno(EINVAL);
+    unsigned char header[9] = {directory ? 1u : 0u};
+    put_number(header + 1u, json_object_size(directory));
+    if (snag_buf_append(out, header, sizeof(header)) < 0) return -1;
+    const char *id;
+    const json_t *connection;
+    json_object_foreach((json_t *)directory, id, connection) {
+        unsigned char row[33];
+        uint64_t generation;
+        const json_t *status = json_object_get(connection, "connected");
+        const json_t *items = json_object_get(connection, "conversations");
+        for (size_t i = 0u; i < 16u; ++i) {
+            unsigned int hi = id[i * 2u] <= '9' ? (unsigned)(id[i * 2u] - '0') :
+                (unsigned)(id[i * 2u] - 'a') + 10u;
+            unsigned int lo = id[i * 2u + 1u] <= '9' ? (unsigned)(id[i * 2u + 1u] - '0') :
+                (unsigned)(id[i * 2u + 1u] - 'a') + 10u;
+            row[i] = (unsigned char)(hi << 4u | lo);
+        }
+        if (snag_json_integer_u64(connection, "generation", &generation) < 0)
+            return snag_errno(EINVAL);
+        put_number(row + 16u, generation);
+        row[24] = (unsigned char)(irc_status(json_object_get(status, "operator")) |
+            irc_status(json_object_get(status, "agent")) << 2u);
+        put_number(row + 25u, json_object_size(items));
+        if (snag_buf_append(out, row, sizeof(row)) < 0) return -1;
+        const char *conversation;
+        const json_t *entry;
+        json_object_foreach((json_t *)items, conversation, entry) {
+            (void)conversation;
+            uint64_t sequence;
+            unsigned char bytes[8];
+            if (snag_json_integer_u64(entry, "seq", &sequence) < 0)
+                return snag_errno(EINVAL);
+            put_number(bytes, sequence);
+            if (snag_buf_append(out, bytes, sizeof(bytes)) < 0) return -1;
+        }
+    }
+    return 0;
+}
+
+static json_t *
+irc_status_value(unsigned int value)
+{
+    return value == 2u ? json_true() : value == 1u ? json_false() : json_null();
+}
+
+static int
+irc_read(int fd, const struct snag_binary_anchor *through,
+    const struct snag_binary_checkpoint_index *access,
+    const struct snag_binary_checkpoint_section *block, json_t **out)
+{
+    if (block->size < 9u || !block->data) return snag_errno(EINVAL);
+    const unsigned char *bytes = block->data;
+    uint64_t count = get_number(bytes + 1u);
+    if (bytes[0] > 1u || (!!bytes[0] != !!count) || count > (block->size - 9u) / 41u)
+        return snag_errno(EINVAL);
+    if (!count) {
+        if (block->size != 9u) return snag_errno(EINVAL);
+        *out = NULL;
+        return 0;
+    }
+    json_t *directory = json_object();
+    if (!directory) return snag_errno(ENOMEM);
+    size_t position = 9u;
+    for (uint64_t i = 0u; i < count; ++i) {
+        if (block->size - position < 33u) goto invalid;
+        const unsigned char *row = bytes + position;
+        position += 33u;
+        char id[SNAG_ID_HEX_LEN + 1u];
+        bytes_hex(id, row, 16u);
+        uint64_t generation = get_number(row + 16u), entries = get_number(row + 25u);
+        unsigned int flags = row[24];
+        if (!generation || generation > INT64_MAX || (flags & ~15u) ||
+            (flags & 3u) == 3u || (flags >> 2u) == 3u ||
+            !entries || entries > (block->size - position) / 8u ||
+            json_object_get(directory, id)) goto invalid;
+        json_t *connection = json_pack("{s:I,s:{s:O,s:O},s:{}}",
+            "generation", (json_int_t)generation, "connected",
+            "operator", irc_status_value(flags & 3u), "agent", irc_status_value(flags >> 2u),
+            "conversations");
+        if (!connection || snag_json_set_new(directory, id, connection) < 0) goto fail;
+        json_t *items = json_object_get(connection, "conversations");
+        for (uint64_t j = 0u; j < entries; ++j) {
+            uint64_t sequence = get_number(bytes + position);
+            position += 8u;
+            if (!sequence || sequence >= through->next_seq) goto invalid;
+            const char *type = NULL;
+            json_t *data = NULL;
+            if (snag_binary_checkpoint_projection_read(fd, through, access,
+                sequence, &type, &data) < 0) goto fail;
+            struct snag_irc_event event;
+            bool valid = type && !strcmp(type, "irc_event_v2") &&
+                !snag_irc_event_record_read(type, data, &event) &&
+                !strcmp(event.route.connection, id) && event.route.generation <= generation &&
+                !json_object_get(items, event.route.conversation);
+            if (valid && j) {
+                const char *endpoint = snag_json_string(connection, "endpoint");
+                valid = endpoint && !strcmp(endpoint, event.endpoint);
+            }
+            if (!valid) { json_decref(data); goto invalid; }
+            if (!j && snag_json_set_new(connection, "endpoint", json_string(event.endpoint)) < 0) {
+                json_decref(data);
+                goto fail;
+            }
+            json_t *entry = json_pack("{s:I,s:O}", "seq", (json_int_t)sequence, "data", data);
+            json_decref(data);
+            if (!entry || snag_json_set_new(items, event.route.conversation, entry) < 0) goto fail;
+        }
+    }
+    if (position != block->size || !snag_irc_conversations_valid(directory, through->next_seq))
+        goto invalid;
+    *out = directory;
+    return 0;
+invalid:
+    snag_errno(EINVAL);
+fail:
+    json_decref(directory);
+    return -1;
 }
 
 static const struct text_slot {
@@ -77,7 +208,8 @@ snag_binary_checkpoint_core_encode(struct snag_buf *out,
         snag_binary_checkpoint_calls_encode(&blocks[CALLS], &sources->calls, state) < 0 ||
         snag_binary_checkpoint_processes_encode(&blocks[PROCESSES], sources, state) < 0 ||
         snag_binary_checkpoint_inputs_encode(&blocks[INPUTS], sources, state) < 0 ||
-        snag_binary_checkpoint_payloads_encode(&blocks[PAYLOADS], sources, state) < 0) goto done;
+        snag_binary_checkpoint_payloads_encode(&blocks[PAYLOADS], sources, state) < 0 ||
+        irc_encode(&blocks[IRC], state) < 0) goto done;
     unsigned char header[CORE_HEADER] = {SNAG_BINARY_CORE_VERSION, 0u, BLOCKS, 0u};
     put_number(header + 4u, sources->active_compact);
     put_number(header + 12u, sources->response_start);
@@ -99,16 +231,18 @@ split(const struct snag_binary_checkpoint_section *core,
     struct snag_binary_checkpoint_section blocks[BLOCKS],
     struct snag_binary_checkpoint_sources *sources, uint64_t *voice)
 {
-    if (core->version != SNAG_BINARY_CORE_VERSION || !core->data || core->size < CORE_HEADER)
-        return snag_errno(EINVAL);
+    size_t count = core->version == 2u ? IRC : BLOCKS;
+    size_t header = 28u + count * 8u;
+    if ((core->version != 2u && core->version != SNAG_BINARY_CORE_VERSION) ||
+        !core->data || core->size < header) return snag_errno(EINVAL);
     const unsigned char *bytes = core->data;
-    if (bytes[0] != SNAG_BINARY_CORE_VERSION || bytes[1] || bytes[2] != BLOCKS || bytes[3])
+    if (bytes[0] != core->version || bytes[1] || bytes[2] != count || bytes[3])
         return snag_errno(EINVAL);
     sources->active_compact = get_number(bytes + 4u);
     sources->response_start = get_number(bytes + 12u);
     *voice = get_number(bytes + 20u);
-    size_t position = CORE_HEADER;
-    for (size_t i = 0u; i < BLOCKS; ++i) {
+    size_t position = header;
+    for (size_t i = 0u; i < count; ++i) {
         uint64_t size = get_number(bytes + 28u + i * 8u);
         if (!size || size > core->size - position) return snag_errno(EINVAL);
         blocks[i] = (struct snag_binary_checkpoint_section){.data = bytes + position,
@@ -282,7 +416,9 @@ snag_binary_checkpoint_core_read(int fd, const struct snag_binary_checkpoint_fra
     state.response_public = payload_state.response_public;
     state.download_queue = payload_state.downloads;
     payload_state = (struct snag_binary_checkpoint_payloads_state){0};
-    if (copy_sources(&sources, &processes, &inputs, &payloads, &state) < 0 ||
+    if ((blocks[IRC].size &&
+        irc_read(fd, anchor, access, &blocks[IRC], &state.irc_conversations) < 0) ||
+        copy_sources(&sources, &processes, &inputs, &payloads, &state) < 0 ||
         check_sources(&sources, &payloads, &state) < 0 ||
         snag_binary_checkpoint_epochs_check(fd, anchor, access, &sources, &state) < 0) goto done;
     *out = state;

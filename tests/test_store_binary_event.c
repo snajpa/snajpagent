@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "fixture_store_binary.h"
 #include "store_binary_event.h"
+#include "store_binary_legacy.h"
 #include "fs.h"
 #include "instructions.h"
 #include "irc.h"
@@ -3992,6 +3993,121 @@ test_irc_event(void)
 }
 
 static void
+routed_irc_roundtrip(const struct snag_irc_event *source, struct snag_buf *payload)
+{
+    json_t *data = snag_irc_event_data(source);
+    struct snag_irc_event checked;
+    assert(data && !snag_irc_event_record_read("irc_event_v2", data, &checked));
+    snag_buf_reset(payload);
+    enum snag_binary_kind kind = SNAG_BINARY_SESSION_CREATED;
+    assert(!snag_binary_legacy_encode(payload, "irc_event_v2", data, &kind));
+    struct snag_binary_record record = {.kind = kind,
+        .version = snag_binary_event_version(kind),
+        .payload = payload->data, .size = payload->len};
+    const char *type = NULL;
+    json_t *restored = NULL;
+    assert(!snag_binary_legacy_decode(&record, &type, &restored));
+    assert(!strcmp(type, "irc_event_v2") && json_equal(data, restored));
+    assert(!snag_irc_event_record_read(type, restored, &checked));
+    json_decref(restored);
+    json_decref(data);
+}
+
+static void
+test_routed_irc_event(void)
+{
+    struct snag_irc_event source = {.kind = SNAG_IRC_MESSAGE, .timestamp_ms = 123u,
+        .sequence = 1u, .input = true, .classified = true, .urgent = true, .reply = true,
+        .routed = true};
+    assert(snag_strcpy(source.stream, sizeof(source.stream), "11111111111111111111111111111111"));
+    assert(snag_strcpy(source.endpoint, sizeof(source.endpoint), "127.0.0.1:6667"));
+    assert(snag_strcpy(source.room, sizeof(source.room), "#room"));
+    assert(snag_strcpy(source.nick, sizeof(source.nick), "peer"));
+    assert(snag_strcpy(source.text, sizeof(source.text), "original channel action"));
+    struct snag_irc_event_route *route = &source.route;
+    assert(snag_strcpy(route->connection, sizeof(route->connection),
+        "22222222222222222222222222222222"));
+    assert(snag_strcpy(route->conversation, sizeof(route->conversation),
+        "33333333333333333333333333333333"));
+    assert(snag_strcpy(route->target, sizeof(route->target), source.room));
+    assert(snag_strcpy(route->source, sizeof(route->source), "server-message-17"));
+    route->generation = 7u;
+    route->kind = SNAG_IRC_CHANNEL;
+    struct snag_buf payload = {.max = SNAG_MAX_EVENT_LINE};
+    size_t comparisons = 0u;
+    for (unsigned int capture = 0u; capture < 3u; ++capture) {
+        source.reply_captured = capture != 0u;
+        source.reply_conversation[0] = source.reply_membership[0] = '\0';
+        if (capture == 2u) {
+            assert(snag_strcpy(source.reply_conversation, sizeof(source.reply_conversation),
+                "44444444444444444444444444444444"));
+            assert(snag_strcpy(source.reply_membership, sizeof(source.reply_membership),
+                "55555555555555555555555555555555"));
+        }
+        for (unsigned int flags = 0u; flags < 8u; ++flags) {
+            route->identity = flags & 1u ? SNAG_IRC_AGENT : SNAG_IRC_OPERATOR;
+            route->action = (flags & 2u) != 0u;
+            route->membership[0] = '\0';
+            route->joined = route->rejoin = (flags & 4u) != 0u;
+            if (flags & 4u) {
+                assert(snag_strcpy(route->membership, sizeof(route->membership),
+                    "66666666666666666666666666666666"));
+                route->joined = true;
+                route->rejoin = true;
+            }
+            routed_irc_roundtrip(&source, &payload);
+            ++comparisons;
+        }
+    }
+    assert(comparisons == 24u);
+    struct snag_binary_record record = {.kind = SNAG_BINARY_IRC_EVENT_V2, .version = 1u,
+        .payload = payload.data, .size = payload.len};
+    for (size_t i = 0u; i < payload.len; ++i) {
+        record.size = i;
+        assert_rejected(record);
+    }
+    record.size = payload.len;
+    record.version = 2u;
+    assert_rejected(record);
+    record.version = 1u;
+    struct snag_binary_event decoded;
+    assert(!snag_binary_event_decode(&record, &decoded));
+    struct snag_buf base = {.max = SNAG_MAX_EVENT_LINE};
+    decoded.kind = SNAG_BINARY_IRC_EVENT;
+    assert(!snag_binary_event_encode(&base, &decoded));
+    assert(base.len + 13u <= payload.len);
+    unsigned char saved[8];
+    memcpy(saved, payload.data + base.len + 1u, sizeof(saved));
+    memset(payload.data + base.len + 1u, 0, sizeof(saved));
+    assert_rejected(record);
+    memcpy(payload.data + base.len + 1u, saved, sizeof(saved));
+    unsigned char identity = payload.data[base.len + 9u];
+    payload.data[base.len + 9u] = 255u;
+    assert_rejected(record);
+    payload.data[base.len + 9u] = identity;
+    assert(!snag_binary_event_decode(&record, &decoded));
+    source.input = source.urgent = source.reply = source.reply_captured = false;
+    route->direction = SNAG_IRC_OUTGOING;
+    assert(snag_strcpy(route->send, sizeof(route->send), "77777777777777777777777777777777"));
+    for (unsigned int delivery = SNAG_IRC_PENDING; delivery <= SNAG_IRC_UNCERTAIN; ++delivery) {
+        route->delivery = (enum snag_irc_delivery)delivery;
+        route->revised = delivery >= SNAG_IRC_ACKNOWLEDGED;
+        routed_irc_roundtrip(&source, &payload);
+    }
+    source.room[0] = route->membership[0] = '\0';
+    route->joined = route->rejoin = false;
+    route->kind = SNAG_IRC_QUERY;
+    assert(snag_strcpy(route->peer, sizeof(route->peer), "private-peer"));
+    assert(snag_strcpy(route->target, sizeof(route->target), "private-peer"));
+    for (unsigned int identity = SNAG_IRC_OPERATOR; identity <= SNAG_IRC_AGENT; ++identity) {
+        route->identity = (enum snag_irc_identity)identity;
+        routed_irc_roundtrip(&source, &payload);
+    }
+    snag_buf_free(&base);
+    snag_buf_free(&payload);
+}
+
+static void
 test_irc_snapshot(void)
 {
     struct snag_binary_event event = {.kind = SNAG_BINARY_IRC_SNAPSHOT};
@@ -5888,7 +6004,7 @@ test_event_names(void)
         {192u, "process_output"}, {193u, "process_closed"}, {208u, "irc_event"},
         {209u, "irc_snapshot"}, {210u, "irc_admitted"}, {224u, "compaction_started"},
         {211u, "irc_sleep_set"}, {212u, "irc_sleep_woke"},
-        {213u, "irc_compact_configured"}, {214u, "irc_compacted"},
+        {213u, "irc_compact_configured"}, {214u, "irc_compacted"}, {215u, "irc_event_v2"},
         {225u, "compaction_interrupted"}, {226u, "compaction_completed"}, {227u, "context_rebased"},
         {240u, "download_queued"}, {241u, "download_removed"}, {242u, "downloads_cleared"},
         {248u, "rule_log"}, {249u, "rule_transform"}, {256u, "audio_usage"}, {257u, "voice_event"},
@@ -7149,6 +7265,7 @@ test_store_binary_event(void)
     test_context_rebase();
     test_capacity_rejection();
     test_irc_event();
+    test_routed_irc_event();
     test_irc_snapshot();
     test_sequences();
     test_irc_admission();
