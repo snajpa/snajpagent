@@ -155,6 +155,29 @@ class RemoteStartupTests(unittest.TestCase):
             finally:
                 child.close()
 
+    def test_upload_picker_exits_when_transport_exits(self):
+        with tempfile.TemporaryDirectory(prefix="snag-picker-exit-") as tmp:
+            root = Path(tmp)
+            release = root / "release"
+            peer = textwrap.dedent(r'''
+                import sys, time
+                from pathlib import Path
+
+                print("::TRZSZ:TRANSFER:R:1.0.0:0000000000000:0\r", flush=True)
+                deadline = time.monotonic() + 10
+                while not Path(sys.argv[1]).exists():
+                    assert time.monotonic() < deadline
+                    time.sleep(.02)
+                sys.exit(7)
+            ''')
+            child = RemoteProcess(root, [sys.executable, "-u", "-c", peer, str(release)])
+            try:
+                child.until(b"Select local file")
+                release.touch()
+                child.wait(7)
+            finally:
+                child.close()
+
     def test_screen_state_download_retries_without_protocol_scrollback(self):
         with tempfile.TemporaryDirectory(prefix="snag-screen-download-") as tmp:
             root = Path(tmp).resolve()

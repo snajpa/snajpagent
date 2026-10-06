@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Close the workstation upload picker when its transport exits and restore the
+  terminal without another keypress. Vim resume preserves the newer draft and
+  previously retained attachments without repeating the interrupted command.
+
 - Reopen Vim IRC queries and channel selections on the current connection after
   reconnect. Message-bearing commands keep their original route. Retained bodies
   can be copied into an explicitly reopened conversation for manual retry.

@@ -334,6 +334,7 @@ remote_upload_choice(struct remote_transfer *client, char *path, size_t capacity
         if (remote_resize) { remote_resize = 0; snag_child_resize(client->child); }
         if (count < 0 && errno == EINTR) continue;
         if (count < 0) return -1;
+        if (snag_child_exited(client->child) == 1) return snag_errno(EPIPE);
         if (!count) continue;
         unsigned char byte;
         if (read(STDIN_FILENO, &byte, 1u) != 1) return -1;

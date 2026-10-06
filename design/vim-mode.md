@@ -19,6 +19,11 @@ transaction and return on completion or cancellation. /attachments and /detach
 run as native reports. The owner retains files for its next private submission;
 IRC conversation submissions leave them pending. Workspace splits and retained
 output return after the exclusive transaction.
+The workstation picker checks transport lifetime while waiting for a filename;
+transport exit returns local terminal ownership without requiring input. A resumed
+workspace reconciles the existing command receipt and retains its newer draft and
+previous attachments. Resize continues through the terminal transaction and back
+to the split layout.
 
 Cross-session command checkpoint: qualified /query, /msg, /notice, /chat, /join,
 /part and /connections resolve a saved session name or unique ID prefix in the

@@ -18,7 +18,7 @@ from unittest import mock
 
 import test_vm_control as control
 import test_vm_clipboard as clipboard
-from test_vm_frontend import rollout
+from test_vm_frontend import normalized_modes, rollout
 
 
 class Native:
@@ -267,7 +267,7 @@ input()
         transport.extend(multiplexer)
         return self.start('-N', name, columns=200, transport=transport, extra_env=env)
 
-    def receive_and_send(self, background=False, **transport):
+    def receive_and_send(self, background=False, resize=False, **transport):
         path = self.root / 'notes file.txt'
         body = 'résumé workspace upload\n' * 300
         path.write_text(body)
@@ -297,6 +297,17 @@ input()
             child.repaint_until(b'Workspace saved')
         child.write(b'i/receive\r')
         child.until(b'Select local file', 10)
+        if resize:
+            child.resize(8, 47)
+            deadline = time.monotonic() + 5
+            while True:
+                size = subprocess.check_output(
+                    ['tmux', '-S', str(self.root / 'transfer-tmux.sock'), 'display-message',
+                     '-p', '-t', 'transfer', '#{pane_height} #{pane_width}'], text=True).strip()
+                if size == '7 47':
+                    break
+                self.assertLess(time.monotonic(), deadline, size)
+                child.read(.05)
         if background:
             release.set()
             self.assertTrue(answered.wait(5))
@@ -306,6 +317,9 @@ input()
         self.assertEqual(len(self.inputs()), int(background))
         self.assertEqual(len(requests), int(background))
         child.repaint_until(b'REPORT')
+        if resize:
+            child.resize(14, 200)
+            child.repaint_until(b'REPORT')
         self.assertEqual(self.owner.identity(), self.owner.owner_identity)
         child.repaint_until(b'1 unsent attachment(s)')
         child.command('history')
@@ -358,6 +372,11 @@ input()
     def test_transfers_with_workspace_in_mosh_tmux(self):
         self.receive_and_send(mosh=True, mux='tmux')
 
+    @unittest.skipUnless(shutil.which('mosh') and shutil.which('mosh-server') and
+                         shutil.which('tmux'), 'Mosh/tmux unavailable')
+    def test_resize_during_mosh_tmux_upload_restores_both_panes(self):
+        self.receive_and_send(background=True, resize=True, mosh=True, mux='tmux')
+
     @unittest.skipUnless(shutil.which('sshd') and shutil.which('ssh-keygen') and
                          shutil.which('screen') and os.getuid() == 0 and
                          Path('/run/sshd').is_dir(), 'isolated OpenSSH/Screen requires root')
@@ -387,6 +406,60 @@ input()
         child.repaint_until(b'0 unsent attachment(s)')
         child.finish('close')
         self.assertEqual(self.inputs(), [])
+        self.owner.status('detached')
+
+    @unittest.skipUnless(shutil.which('sshd') and shutil.which('ssh-keygen') and
+                         hasattr(os, 'pidfd_open') and os.getuid() == 0 and
+                         Path('/run/sshd').is_dir(), 'isolated OpenSSH requires Linux root')
+    def test_ssh_loss_at_upload_picker_restores_terminal_and_workspace(self):
+        child = self.transfer_terminal('lost-upload', ssh=True)
+        child.command('attach ' + self.owner.sid)
+        child.repaint_until(b'ATTACHED')
+        path = self.root / 'retained.txt'
+        body = b'previously retained attachment\n'
+        path.write_bytes(body)
+        child.write(('i/attach ' + str(path) + '\r').encode())
+        child.repaint_until(b'1 unsent attachment(s)')
+        child.repaint_until(b'REPORT')
+        child.command('history')
+        child.write(b'i/receive\rnewer workspace draft')
+        child.until(b'Select local file', 10)
+        self.wait_snapshot(lambda rows:
+            rollout(next(iter(rows.values()))['state']['buffers'][0])['draft'] ==
+            'newer workspace draft')
+
+        # Only terminate the private transport, leaving the wrapper's local
+        # input open and the independently owned engine alive.
+        wrapper = child.state()['pid']
+        children = clipboard.FixtureChildren(wrapper, parent=child.process.pid)
+        self.addCleanup(children.close)
+        matches = []
+        for pid, fd in children.handles.items():
+            argv = Path(f'/proc/{pid}/cmdline').read_bytes().split(b'\0')
+            if argv[0] == b'ssh' and str(self.root / 'client-key').encode() in argv:
+                matches.append(fd)
+        transport, = matches
+        signal.pidfd_send_signal(transport, signal.SIGTERM)
+        child.wait_exit()
+        self.assertNotEqual(child.process.returncode, 0)
+        self.assertEqual(normalized_modes(child.state()['modes']), child.original)
+        self.owner.status('detached')
+        self.assertEqual(self.owner.identity(), self.owner.owner_identity)
+
+        resumed = self.start('--resume', 'lost-upload', expect=b'history')
+        resumed.repaint_until(b'newer workspace draft')
+        self.wait_snapshot(lambda rows:
+            rollout(next(iter(rows.values()))['state']['buffers'][0])['pending'] is None)
+        resumed.command('history')
+        resumed.write(b'i')
+        control.ControlTests.escape(self, resumed)
+        resumed.write(b'0d$i/attachments\r')
+        resumed.repaint_until(b'1 unsent attachment(s)')
+        self.assertEqual([p.read_bytes() for p in (self.owner.directory / 'media').iterdir()],
+                         [body])
+        self.assertEqual(self.inputs(), [])
+        self.assertFalse(list(self.owner.directory.glob('upload-*')))
+        resumed.finish('close')
         self.owner.status('detached')
 
     def test_attach_list_remove_and_failure_return_to_workspace(self):

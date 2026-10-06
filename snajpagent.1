@@ -1664,6 +1664,10 @@ work are preserved. Ordinary text, missing paths and input to other programs
 pass through unchanged. Update both endpoints for native drops; use /receive
 with older receivers. Drop files one at a time.
 .PP
+If the transport process exits while the native file picker is open, the wrapper
+closes the picker and restores the local terminal. Reconnect the tunnel to continue
+using the remote session. Existing unsent attachments remain with their owner.
+.PP
 With trzsz-go, select files or drop regular files
 into the composer. A stock Go-client drag sends Ctrl-C followed by trz;
 that Ctrl-C can cancel a typed draft or interrupt active work. Save needed draft
@@ -2249,6 +2253,11 @@ report; /detach N|all removes them. Files remain with that session's rollout
 until its next private prompt, queue or steer is admitted. IRC messages and
 transfer commands do not submit them to the model. Older owners may require
 /s d after file preparation to return to the workspace.
+.PP
+Terminal resizing during file selection carries through to the workspace on
+return. After a disconnected frontend exits, resume the named workspace to
+recover its saved draft and reconcile the interrupted command's receipt. Resume
+does not repeat the upload; use /attachments to inspect retained files.
 .PP
 The handoff references the already submitted command and live owner instance;
 repeated references cannot execute it twice. A command recovered from a saved
