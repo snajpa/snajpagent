@@ -23,6 +23,7 @@ class ChannelServer:
         self.lines = []
         self.defer_operator_join = False
         self.chantypes = '#&+!'
+        self.capabilities = ''
         self.rejected_nick = None
         self.failure = None
         self.stopping = threading.Event()
@@ -59,7 +60,11 @@ class ChannelServer:
                     raw, pending = pending.split(b'\r\n', 1)
                     line = raw.decode()
                     self.lines.append((nick, line))
-                    if line.startswith('NICK '):
+                    if line.startswith('CAP LS') and self.capabilities:
+                        link.sendall((':fake CAP * LS :' + self.capabilities + '\r\n').encode())
+                    elif line.startswith('CAP REQ :') and self.capabilities:
+                        self.send(nick, f':fake CAP {nick} ACK :{line[9:]}\r\n')
+                    elif line.startswith('NICK '):
                         if nick and line[5:] == self.rejected_nick:
                             self.send(nick, f':fake 433 {nick} {line[5:]} :Nick is in use\r\n')
                             continue
@@ -68,7 +73,8 @@ class ChannelServer:
                             del self.links[nick]
                         nick = line[5:]
                         self.links[nick] = link
-                    elif line.startswith('USER '):
+                    elif ((line.startswith('USER ') and not self.capabilities) or
+                          (line == 'CAP END' and self.capabilities)):
                         self.send(nick, f':fake 001 {nick} :welcome\r\n'
                             f':fake 005 {nick} SAJROOM=#lab CASEMAPPING=rfc1459 CHANTYPES={self.chantypes} :supported\r\n'
                             f':fake 376 {nick} :end\r\n')
@@ -125,6 +131,7 @@ class ChannelFixture(QueryFixture):
             'request_timeout_ms = 5000', 'request_timeout_ms = 20000'))
         self.server = ChannelServer()
         self.server.chantypes = getattr(self, 'chantypes', '#&+!')
+        self.server.capabilities = getattr(self, 'capabilities', '')
         self.addCleanup(self.server.close)
         self.seen = []
         self.calls = []

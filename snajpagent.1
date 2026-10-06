@@ -2106,11 +2106,22 @@ operator private conversation in that window. A successful command changes the
 requesting window while it is still focused, displaying that composer, and its
 next draft is empty. Otherwise the conversation remains available in :buffers.
 Private replies go to the captured peer without adding model input.
+After a connection loss, enter /query ENDPOINT/NICK without message text to
+select a query on the current connection. A command that includes message text
+retains the original connection and refuses a stale send.
 Use /chat ENDPOINT/#CHANNEL for a known channel or /join ENDPOINT/#CHANNEL
 to join a channel as the operator. The built-in server offers its configured
 room. Each pane keeps its exact channel
 membership; PART, KICK and reconnect reject stale sends. Use /chat or /join
 explicitly to select the current membership before composing a new send.
+.PP
+To retry an uncertain IRC message, inspect its retained send results first;
+the peer may already have received it. Select the body in the old conversation
+with v or V and copy it with y. Reopen the intended peer with /query ENDPOINT/NICK,
+return to NORMAL and use P to put the copied text in its composer. Review the
+recipient and text, then enter INSERT and press Enter to send. Copying, reconnecting
+and restoring a workspace never resubmit these chunks. A later nickname change
+rejects the recovered draft and leaves it available through :recover.
 .PP
 Use /query SESSION/ENDPOINT/NICK to address another session by its saved name
 or unique ID prefix. First attach that session in another split with :attach ID.

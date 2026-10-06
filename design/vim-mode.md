@@ -6,6 +6,14 @@ Status: implementation in progress, October 6, 2026. The original inspection
 was against `7a70d81d336ef6f14d91ef944b1226c8efa65636`. The checkpoint below
 distinguishes implemented components from the complete intended behavior.
 
+IRC recovery checkpoint: selection-only /query, /chat, /join and /connections
+use the current connection scope when entered from an obsolete Vim pane.
+Message-bearing commands and drafts retain the pane's captured generation.
+An uncertain body can be selected in retained history, yanked, pasted into an
+explicitly reopened query and submitted after review. Resume, copy and reselect
+never replay a chunk; a subsequent nickname change rejects the recovered draft.
+Owner admission recovery remains the existing :recover operation.
+
 File-transfer checkpoint: /receive and /attach use the existing whole-terminal
 transaction and return on completion or cancellation. /attachments and /detach
 run as native reports. The owner retains files for its next private submission;
@@ -50,7 +58,7 @@ events and excludes public/private messages. Server notices and otherwise
 unhandled numeric replies stay outside model context. /whois and conversation
 /nick validate the captured operator generation, and ordinary connection text
 keeps its draft. Version11 snapshots retain connection routes and read versions1–10.
-Explicit uncertain-send recovery and complete remote acceptance remain open.
+Complete remote acceptance remains open.
 The presentation thread owns heap-allocated display state, allocated before
 thread creation and freed after its workers and terminal close. Queued private
 message rendering therefore retains stack space for its input checkpoint on musl.
@@ -141,8 +149,7 @@ Successful private sends retain the current pane while retaining command reports
 Query projection, search, navigation and copy filter stable connection/conversation
 IDs and local identity across retained epochs. Empty filtered journal pages advance
 until matching events or the pinned boundary; every read remains cancellable.
-Explicit uncertain-send recovery and complete remote qualification remain in the
-delivery plan below.
+Complete remote qualification remains in the delivery plan below.
 
 Operator channel checkpoint: a shared presentation selector and tab/draft path
 serves queries and channels; runtime sends keep kind-specific validators. Channel
@@ -864,7 +871,9 @@ Use a stable local send ID and explicit states: pending locally, written to the
 connection, server-acknowledged where supported, failed or uncertain. Split long
 messages on UTF-8 boundaries within the actual negotiated line budget and retain
 per-chunk outcomes. Disconnection never automatically replays an uncertain chunk.
-Allow an explicit retry using the original buffer/target after revalidation.
+Explicit retry uses a visual copy from the original buffer, a fresh selection
+of the intended peer, and paste/submit after review. Keep the copied body separate
+from delivery-state rows and require a new submission after revalidation.
 
 Negotiate `echo-message` and applicable correlation capabilities where supported.
 A server echo acknowledges the server's handling, not the human recipient reading

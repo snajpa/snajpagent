@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Reopen Vim IRC queries and channel selections on the current connection after
+  reconnect. Message-bearing commands keep their original route. Retained bodies
+  can be copied into an explicitly reopened conversation for manual retry.
+
 - Return to the Vim workspace after upload selection, file preparation or
   cancellation. /attachments and /detach show retained reports in the workspace;
   received files stay with their session until the next private submission.

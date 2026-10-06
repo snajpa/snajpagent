@@ -917,6 +917,28 @@ view_bound(void *opaque, uint64_t generation)
     snag_wakeup_send(runtime->actions.wake[1]);
 }
 
+static bool
+view_selects_conversation(const char *text)
+{
+    size_t length = strcspn(text, " \t\r\n");
+    char verb[16];
+    if (length >= sizeof(verb)) return false;
+    memcpy(verb, text, length);
+    verb[length] = '\0';
+    if (!snag_string_in(verb, "/query /chat /join /connections")) return false;
+    const char *argument = text + length;
+    while (isspace((unsigned char)*argument)) ++argument;
+    if (!*argument) return true;
+    char *operand = NULL;
+    const char *rest;
+    char error[128];
+    if (snag_irc_address_operand(argument, &operand, &rest, error, sizeof(error)) < 0) {
+        return false;
+    }
+    free(operand);
+    return !*rest;
+}
+
 static int
 view_submit(void *opaque, const char *id, const char *text, const json_t *route,
     uint64_t generation, bool terminal)
@@ -970,7 +992,9 @@ view_submit(void *opaque, const char *id, const char *text, const json_t *route,
             }
         if (!scope) goto stale;
         target.destination = scope->target.destination;
-        scope->target.generation = target.generation;
+        /* Explicit selection can reopen a disconnected pane. Message-bearing
+         * commands and drafts retain the pane's original connection epoch. */
+        if (!view_selects_conversation(text)) scope->target.generation = target.generation;
         item->snapshot.selection.id = target.destination;
         item->snapshot.view = SNAG_RENDER_CHAT;
         item->snapshot.conversation = target;
