@@ -242,8 +242,8 @@ tests/test_context: $(PLATFORM_SRC) src/config.c src/rules.c src/secret_source.c
 
 tests/test_model_cache: $(PLATFORM_SRC) src/config.c src/rules.c src/secret_source.c src/json.c src/instructions.c src/media.c src/turn.c src/store.c src/store_record.c src/store_checkpoint.c src/irc_event.c src/store_lookup.c src/store_lifecycle.c src/model_cache.c tests/test_model_cache.c $(HEADERS)
 
-tests/test_render: $(PLATFORM_SRC) src/json.c src/history.c src/history_view.c src/term.c src/render.c src/irc_event.c src/render_prepare.c tests/test_render.c \
-		src/base.h src/fs.h src/term_host.h src/wake.h src/net.h src/json.h src/term.h src/term_host.h src/render.h src/snajpagent.h
+tests/test_render: $(PLATFORM_SRC) src/json.c src/wire.c src/secret_source.c src/history.c src/history_view.c src/term.c src/render.c src/irc_event.c src/render_prepare.c tests/test_render.c \
+		src/base.h src/fs.h src/term_host.h src/wake.h src/net.h src/json.h src/wire.h src/secret_source.h src/term.h src/term_host.h src/render.h src/snajpagent.h
 
 tests/test_turn: $(PLATFORM_SRC) src/json.c src/media.c src/turn.c src/tools_read.c tests/test_turn.c $(HEADERS)
 
@@ -326,6 +326,7 @@ ifeq ($(WITH_VM),1)
 	./tests/test_session_draft
 	python3 tests/test_vm_frontend.py ./$(BIN)
 	python3 tests/test_vm_control.py ./$(BIN)
+	python3 tests/test_vm_classic.py ./$(BIN)
 	python3 tests/test_vm_editor.py ./$(BIN)
 	python3 tests/test_session_view.py ./$(BIN)
 else

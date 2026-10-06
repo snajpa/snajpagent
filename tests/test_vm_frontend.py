@@ -449,10 +449,11 @@ class WorkspaceTests(unittest.TestCase):
         value = json.loads(path.read_text())
         value['state']['v'] = 1
         value['state'].pop('buffers')
+        value['state'].pop('classic')
         path.write_text(json.dumps(value))
         child = self.start('--resume', 'legacy-picker')
         child.command('workspace save')
-        self.wait_snapshot(lambda values: next(iter(values.values()))['state']['v'] == 4)
+        self.wait_snapshot(lambda values: next(iter(values.values()))['state']['v'] == 5)
         child.finish()
 
     def test_unknown_state_is_preserved_and_terminal_not_entered(self):

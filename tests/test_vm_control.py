@@ -111,7 +111,7 @@ class ControlTests(unittest.TestCase):
         self.owner.status('detached')
         self.assertEqual(self.owner_draft()['text'], 'retained 👩‍💻-final')
         saved = next(iter(self.snapshots().values()))['state']
-        self.assertEqual(saved['v'], 4)
+        self.assertEqual(saved['v'], 5)
         self.assertEqual(saved['buffers'][0]['draft'], 'retained 👩‍💻-final')
         self.assertTrue(saved['buffers'][0]['control'])
         self.assertEqual(self.inputs(), [])
@@ -179,6 +179,7 @@ class ControlTests(unittest.TestCase):
         resumed.finish('close')
         saved = json.loads(path.read_text())
         saved['state']['v'] = 3
+        saved['state'].pop('classic')
         buffer = saved['state']['buffers'][0]
         del buffer['base'], buffer['conflict']
         buffer['draft'], buffer['cursor'] = '', 0

@@ -81,7 +81,8 @@ snag_vm_connection_open(struct snag_vm_connection *connection, struct snag_store
         error, sizeof(error)) == 0) {
         fd = snag_session_view_connect(location.dir_fd, location.dir_path);
         if (fd < 0) (void)snprintf(error, sizeof(error),
-            "Owner attachment unavailable: %s; retained history is readable", strerror(errno));
+            "Owner attachment unavailable: %s; use :classic for its terminal or read history",
+            strerror(errno));
     }
     snag_session_close(&location);
     if (fd < 0) {

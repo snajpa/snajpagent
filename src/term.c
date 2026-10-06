@@ -477,7 +477,7 @@ update_size(struct snag_term *term)
 static int
 set_raw(struct snag_term *term)
 {
-    if (snag_term_input_raw(&term->host) < 0) return -1;
+    if (snag_term_input_raw(&term->host, true) < 0) return -1;
     term->raw = true;
     return 0;
 }
@@ -2138,9 +2138,11 @@ feed_text_byte(struct snag_term *term, unsigned char byte)
         term->utf8_pending_len = 0u;
         return snag_errno(EILSEQ);
     }
+    /* Insertion can paint through an input checkpoint. The completed scalar
+     * must be consumed before reentrant input sees this decoder again. */
+    term->utf8_pending_len = 0u;
     if ((term->searching ? search_insert(term, term->utf8_pending, expected) :
                            insert_bytes(term, term->utf8_pending, expected)) < 0) return -1;
-    term->utf8_pending_len = 0u;
     return 0;
 }
 

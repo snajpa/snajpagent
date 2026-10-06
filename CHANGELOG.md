@@ -15,6 +15,16 @@
   receipts without resending prompts. Drafts survive detach and workspace resume.
   `:close` preserves owners; `:q`/`:qa` request normal shutdown with draft guards.
 
+- Add `:classic [SESSION_ID]` for full-terminal attachment from a workspace,
+  including existing owners without semantic support. Flush workspace drafts
+  before attachment; `/s d` returns and reconnects the saved views. Preserve
+  queued input through failed attachment and retain uncertain saved input for
+  explicit recovery as an unsent draft.
+  Keep input raw across terminal handoffs so long incoming pastes remain intact.
+
+- Preserve characters following multibyte text when classic prompt redraws
+  process another input batch. Complete UTF-8 decoding before entering redraw.
+
 - Add counted Vim composer motions, logical and wrapped-line navigation,
   delete/change/yank operators, line opening, a workspace paste register and
   per-draft undo/redo. Literal paste is one edit. Submission and adopted owner

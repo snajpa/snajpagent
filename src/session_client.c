@@ -462,7 +462,7 @@ terminal_geometry(struct snag_session_client *client)
 int
 snag_session_client_terminal(int peer, bool attached, uint64_t child,
                              snag_session_connect_fn connect, void *opaque,
-                             char *error, size_t error_size)
+    struct snag_session_typeahead *typeahead, char *error, size_t error_size)
 {
     struct snag_session_client client = {.terminal = -1, .peer = -1, .target = -1};
     struct snag_shutdown shutdown;
@@ -470,9 +470,18 @@ snag_session_client_terminal(int peer, bool attached, uint64_t child,
     struct termios original, raw;
     bool signals = false, controls = false, raw_active = false;
     char notice[256] = {0};
+    char destination[SNAG_ID_HEX_LEN + 1u] = "";
+    struct snag_buf *prefix = typeahead ? &typeahead->bytes : NULL;
+    const volatile sig_atomic_t *cancelled = typeahead ? typeahead->cancelled : NULL;
     int terminal = -1, result = -1, notice_peer = -1;
+    size_t queued = 0u;
     terminal_signal = terminal_resize = 0;
+    if (typeahead) typeahead->signal = 0;
     if (error_size) error[0] = '\0';
+    if (cancelled && *cancelled) {
+        result = 128 + *cancelled;
+        goto out;
+    }
     if (!isatty(STDIN_FILENO) || !isatty(STDOUT_FILENO)) {
         errno = ENOTTY;
         goto out;
@@ -507,7 +516,7 @@ snag_session_client_terminal(int peer, bool attached, uint64_t child,
     raw.c_cc[VTIME] = 0;
     if (tcsetattr(client.terminal, TCSANOW, &raw) < 0) goto out;
     raw_active = true;
-    while (!terminal_signal) {
+    while (!terminal_signal && !(cancelled && *cancelled)) {
         /* A diagnostic belongs to its source, never to a later session. */
         if (notice[0] && notice_peer != client.peer) notice[0] = '\0';
         if (terminal_resize) {
@@ -522,8 +531,21 @@ snag_session_client_terminal(int peer, bool attached, uint64_t child,
             if (snag_session_client_error(&client, notice) == 0) notice[0] = '\0';
             else if (errno != EAGAIN) goto out;
         }
+        if (prefix && prefix->len && !queued && client.peer >= 0 &&
+            client.target < 0 && !client.input.used &&
+            !client.ack_pending && !client.resize_pending) {
+            queued = prefix->len < SNAG_SESSION_FRAME_MAX ?
+                prefix->len : SNAG_SESSION_FRAME_MAX;
+            if (snag_session_packet_set(&client.input, SNAG_SESSION_INPUT,
+                prefix->data, queued) < 0) goto out;
+        }
         enum snag_session_message event;
         int rc = snag_session_client_step(&client, 50, &event);
+        if (queued && !client.input.used) {
+            memmove(prefix->data, prefix->data + queued, prefix->len - queued);
+            prefix->len -= queued;
+            queued = 0u;
+        }
         if (rc) {
             if (rc > 0 && client.quitting && client.peer_ended) result = 0;
             else if (rc > 0)
@@ -535,19 +557,25 @@ snag_session_client_terminal(int peer, bool attached, uint64_t child,
             goto out;
         }
         if (event == SNAG_SESSION_ERROR) {
+            destination[0] = 0;
             notice_peer = client.peer;
             (void)snprintf(notice, sizeof(notice), "%s", client.event_data);
+        } else if (event == SNAG_SESSION_READY && destination[0]) {
+            if (typeahead) memcpy(typeahead->session, destination, sizeof(destination));
+            destination[0] = 0;
         } else if (event == SNAG_SESSION_SWITCH) {
             notice_peer = client.peer;
             notice[0] = '\0';
+            destination[0] = 0;
             int target = connect ? connect(opaque, (const char *)client.event_data,
-                                           notice, sizeof(notice)) : snag_errno(ENOTSUP);
+                destination, notice, sizeof(notice)) : snag_errno(ENOTSUP);
             if (target >= 0) {
                 if (snag_session_client_attach(&client, target) < 0) {
                     int saved = errno;
                     (void)close(target);
                     (void)snprintf(notice, sizeof(notice), "cannot switch session: %s",
                         strerror(saved));
+                    destination[0] = 0;
                 }
             } else if (!notice[0]) {
                 (void)snprintf(notice, sizeof(notice), "cannot connect session: %s",
@@ -567,7 +595,9 @@ snag_session_client_terminal(int peer, bool attached, uint64_t child,
                     goto out;
                 }
             }
-            if (tcsetattr(client.terminal, TCSANOW, &original) < 0) goto out;
+            if (typeahead && typeahead->suspend_terminal) {
+                if (snag_term_input_restore(typeahead->suspend_terminal, false) < 0) goto out;
+            } else if (tcsetattr(client.terminal, TCSANOW, &original) < 0) goto out;
             raw_active = false;
             if (snag_term_suspend() < 0) goto out;
             pid_t foreground;
@@ -584,9 +614,11 @@ snag_session_client_terminal(int peer, bool attached, uint64_t child,
                 goto out;
         }
     }
-    result = 128 + terminal_signal;
+    result = 128 + (terminal_signal ? terminal_signal : cancelled ? *cancelled : 0);
 out: {
         int saved = errno;
+        if (typeahead) typeahead->signal = terminal_signal ? terminal_signal :
+            cancelled ? *cancelled : 0;
         if (raw_active) {
             static const char reset[] = "\033[?2004l\033[0m\r\n";
             /* Plain/narrow owners may never have enabled ANSI terminal state. */
@@ -613,13 +645,14 @@ out: {
 int
 snag_session_client_terminal(int peer, bool attached, uint64_t child,
                              snag_session_connect_fn connect, void *opaque,
-                             char *error, size_t error_size)
+    struct snag_session_typeahead *typeahead, char *error, size_t error_size)
 {
     (void)peer;
     (void)attached;
     (void)child;
     (void)connect;
     (void)opaque;
+    (void)typeahead;
     return snag_fail(error, error_size, ENOTSUP,
         "native terminal clients are unavailable on this host");
 }

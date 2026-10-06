@@ -5,8 +5,10 @@
 #include "irc_address.h"
 #include "json.h"
 #include "secret.h"
+#include "session_client.h"
 #include "snajpagent.h"
 #include "term_host.h"
+#include "unicode.h"
 #include "vm_connection.h"
 #include "vm_editor.h"
 #include "vm_grid.h"
@@ -45,6 +47,7 @@ static const char *const help_rows[] = {
     ":workspace    :workspace name NAME    :workspace save",
     "Workspace names accept quoted text. :q in these pickers closes the window.",
     "Enter/:attach SESSION: control owner    o/:history SESSION: read-only",
+    ":classic [SESSION]: use its full terminal; /s d returns to this workspace",
     "i/a/A: edit prompt    Esc: NORMAL    Enter: submit    Ctrl-J: newline",
     "Composer: h/j/k/l w/b/e 0/^/$ gg/G; counts multiply (2d3w deletes six words).",
     "gj/gk: wrapped rows    H/M/L: visible rows    zz: center    Ctrl-U/D/B/F: pages",
@@ -91,17 +94,21 @@ struct vm {
     struct snag_vm_input input;
     struct snag_buf command, paste;
     struct snag_vm_register reg;
+    struct snag_session_typeahead classic;
     size_t command_cursor;
     char mode, prefix;
     char message[512];
     int output;
     bool dirty, save_dirty, meaningful, quit, suspend, entering, paste_failed;
     bool composer, insert, quit_all, detach_exit, detach_suspend;
+    bool classic_pending, classic_ready, classic_uncertain;
     uint64_t quit_window;
     size_t cursor_row, cursor_column;
 };
 
 static volatile sig_atomic_t stopped, resized;
+
+static json_t *selected_row(struct vm *, const struct vm_window *);
 
 static void
 stop_signal(int number)
@@ -243,9 +250,22 @@ state_snapshot(const struct vm *vm)
         json_decref(windows);
         return NULL;
     }
-    return json_pack("{s:i,s:I,s:o,s:o,s:o}", "v", 4,
+    json_t *result = json_pack("{s:i,s:I,s:o,s:o,s:o}", "v", 5,
         "focus", (json_int_t)vm->windows[vm->focus].id, "layout", layout,
         "windows", windows, "buffers", buffers);
+    json_t *classic = json_null();
+    if (result && vm->classic.bytes.len) {
+        struct snag_buf encoded = {.max = SNAG_MAX_DIRECT_PROMPT * 2u};
+        classic = snag_base64_append(&encoded, vm->classic.bytes.data, vm->classic.bytes.len) < 0 ?
+            NULL : json_pack("{s:s,s:o}", "session", vm->classic.session,
+                "input", json_stringn((const char *)encoded.data, encoded.len));
+        snag_buf_free(&encoded);
+    }
+    if (!classic || json_object_set_new(result, "classic", classic) < 0) {
+        json_decref(result);
+        return NULL;
+    }
+    return result;
 }
 
 static int
@@ -254,17 +274,30 @@ state_restore(struct vm *vm, const json_t *state, char *error, size_t size)
     struct snag_vm_layout *layout = NULL;
     struct vm_window *windows = NULL;
     struct snag_vm_connection *connections = NULL;
+    struct snag_session_typeahead classic = {.bytes.max = SNAG_MAX_DIRECT_PROMPT};
     uint64_t focus_id = 0u, next = 0u;
     json_int_t version = json_integer_value(json_object_get(state, "v"));
     size_t count = json_array_size(json_object_get(state, "windows")), focus = SIZE_MAX;
-    if (!snag_json_exact_keys(state, version >= 3 ? "v focus layout windows buffers" :
-        "v focus layout windows") || (version < 1 || version > 4) || !count ||
+    if (!snag_json_exact_keys(state, version == 5 ? "v focus layout windows buffers classic" :
+        version >= 3 ? "v focus layout windows buffers" :
+        "v focus layout windows") || (version < 1 || version > 5) || !count ||
         (version >= 3 &&
          snag_vm_connections_load(json_object_get(state, "buffers"), &connections) < 0) ||
         snag_json_integer_u64(state, "focus", &focus_id) < 0 ||
         !(layout = snag_vm_layout_load(json_object_get(state, "layout"), error, size)) ||
         snag_vm_layout_count(layout) != count || count > SIZE_MAX / sizeof(*windows) ||
         !(windows = calloc(count, sizeof(*windows)))) goto invalid;
+    const json_t *saved_classic = json_object_get(state, "classic");
+    if (version == 5 && !json_is_null(saved_classic)) {
+        const char *session = snag_json_bounded_string(json_object_get(saved_classic, "session"),
+            SNAG_ID_HEX_LEN);
+        const char *input = snag_json_bounded_string(json_object_get(saved_classic, "input"),
+            SNAG_MAX_DIRECT_PROMPT * 2u);
+        if (!snag_json_exact_keys(saved_classic, "session input") ||
+            !session || !snag_hex_is_lower(session, SNAG_ID_HEX_LEN) || !input ||
+            snag_base64_decode(&classic.bytes, input) < 0 || !classic.bytes.len) goto invalid;
+        memcpy(classic.session, session, sizeof(classic.session));
+    }
     for (size_t i = 0u; i < count; ++i) {
         json_t *row = json_array_get(json_object_get(state, "windows"), i);
         const char *kind = snag_json_string(row, "kind");
@@ -329,6 +362,10 @@ state_restore(struct vm *vm, const json_t *state, char *error, size_t size)
     if (focus == SIZE_MAX || next == INT64_MAX) goto invalid;
     snag_vm_connections_free(vm->connections);
     vm->connections = connections;
+    snag_buf_free(&vm->classic.bytes);
+    vm->classic = classic;
+    vm->classic_uncertain = classic.bytes.len != 0u;
+    vm->classic_pending = vm->classic_ready = false;
     windows_free(vm->windows, vm->count);
     snag_vm_layout_free(vm->layout);
     vm->windows = windows;
@@ -342,6 +379,7 @@ state_restore(struct vm *vm, const json_t *state, char *error, size_t size)
     vm->dirty = true;
     return 0;
 invalid:
+    snag_buf_free(&classic.bytes);
     snag_vm_connections_free(connections);
     windows_free(windows, windows ? count : 0u);
     snag_vm_layout_free(layout);
@@ -428,7 +466,9 @@ install_workspace(struct vm *vm, struct snag_vm_workspace *next)
     vm->workspace = next;
     vm->meaningful = true;
     vm->save_dirty = false;
-    notice(vm, "Workspace restored");
+    notice(vm, vm->classic_uncertain ?
+        "Saved classic input has an uncertain outcome; inspect history, then :recover" :
+        "Workspace restored");
     for (struct snag_vm_connection *c = vm->connections; c; c = c->next)
         if (connection_visible(vm, c)) (void)snag_vm_connection_open(c, &vm->store, c->control);
     refresh(vm);
@@ -447,6 +487,7 @@ restore_workspace(struct vm *vm, const char *selector)
     if (!rc) rc = state_restore(&checked, json_object_get(next->snapshot, "state"),
         error, sizeof(error));
     snag_vm_connections_free(checked.connections);
+    snag_buf_free(&checked.classic.bytes);
     windows_free(checked.windows, checked.count);
     snag_vm_layout_free(checked.layout);
     if (rc < 0) {
@@ -582,11 +623,123 @@ attach(struct vm *vm, const char *selector)
     changed(vm);
 }
 
+static int
+classic_connect(void *opaque, const char *selector, char *selected, char *error, size_t size)
+{
+    struct vm *vm = opaque;
+    struct snag_session location;
+    snag_session_init(&location);
+    int peer = -1;
+    if (snag_session_locate(&vm->store, &location, selector, NULL, NULL, error, size) == 0) {
+        peer = snag_session_endpoint_connect(location.dir_fd, location.dir_path);
+        if (peer >= 0 && selected) memcpy(selected, location.id, sizeof(location.id));
+        if (peer < 0) (void)snag_errorf(error, size,
+            "No reachable native owner for %.8s: %s", location.id, strerror(errno));
+    }
+    snag_session_close(&location);
+    return peer;
+}
+
+static void
+classic_request(struct vm *vm, const char *selector)
+{
+    char id[SNAG_ID_HEX_LEN + 1u], error[256];
+    if (!snag_session_host_supported()) {
+        notice(vm, "Classic attachment is unavailable on this host");
+        return;
+    }
+    if (vm->classic_uncertain && vm->classic.bytes.len) {
+        notice(vm, "Saved classic input has an uncertain outcome; inspect history, then :recover");
+        return;
+    }
+    const struct vm_window *window = &vm->windows[vm->focus];
+    if (!*selector) selector = vm->classic.bytes.len ? vm->classic.session :
+        window->kind == VIEW_TRANSCRIPT ? window->session_id :
+        window->kind == VIEW_SESSIONS ? snag_json_string(selected_row(vm, window), "id") : "";
+    if (!*selector) {
+        notice(vm, "Use :classic SESSION_ID or select a session");
+        return;
+    }
+    struct snag_session location;
+    snag_session_init(&location);
+    int found = snag_session_locate(&vm->store, &location, selector, NULL, NULL,
+        error, sizeof(error));
+    if (!found) memcpy(id, location.id, sizeof(id));
+    snag_session_close(&location);
+    if (found < 0) {
+        notice(vm, error);
+        return;
+    }
+    if (vm->classic.bytes.len && strcmp(id, vm->classic.session)) {
+        notice(vm, "Queued classic input belongs to another session; :recover it first");
+        return;
+    }
+    memcpy(vm->classic.session, id, sizeof(id));
+    vm->classic_pending = true;
+    vm->classic_ready = false;
+    for (struct snag_vm_connection *c = vm->connections; c; c = c->next)
+        snag_vm_connection_detach(c);
+    notice(vm, "Saving owner drafts before classic attachment; /s d returns here");
+    changed(vm);
+}
+
+static bool
+classic_recover(struct vm *vm)
+{
+    if (!vm->classic.bytes.len) return false;
+    struct snag_buf text = {.max = SNAG_MAX_DIRECT_PROMPT};
+    for (size_t i = 0u; i < vm->classic.bytes.len;) {
+        const unsigned char *bytes = vm->classic.bytes.data + i;
+        uint32_t cp;
+        size_t count = snag_utf8_decode(bytes, vm->classic.bytes.len - i, &cp);
+        int rc;
+        if (*bytes == '\r') {
+            count = 1u;
+            rc = snag_buf_putc(&text, '\n');
+        } else if (!count || (*bytes < 32u && *bytes != '\n' && *bytes != '\t') || *bytes == 127u) {
+            count = 1u;
+            rc = snag_buf_printf(&text, "\\x%02x", *bytes);
+        } else rc = snag_buf_append(&text, bytes, count);
+        if (rc < 0) {
+            notice(vm, "Recovered input exceeds the draft limit; classic input remains saved");
+            snag_buf_free(&text);
+            return true;
+        }
+        i += count;
+    }
+    if (open_history(vm, vm->classic.session)) {
+        struct snag_vm_connection *c = focused_connection(vm);
+        if (c && snag_vm_editor_end(c) == 0 && snag_vm_editor_replace(c,
+            c->draft.len, c->draft.len, text.data, text.len) == 0) {
+            (void)snag_vm_editor_end(c);
+            snag_buf_reset(&vm->classic.bytes);
+            vm->classic.session[0] = 0;
+            vm->classic_uncertain = false;
+            vm->composer = vm->insert = true;
+            changed(vm);
+            notice(vm, "Classic input recovered as unsent draft; review it before submitting");
+            (void)save(vm, NULL);
+        } else notice(vm, "Cannot recover into this draft; classic input remains saved");
+    }
+    snag_buf_free(&text);
+    return true;
+}
+
 static void
 quit_sessions(struct vm *vm, bool all, bool force)
 {
     struct snag_vm_connection *focused = focused_connection(vm);
     bool any = false;
+    if (vm->classic.bytes.len && (all || vm->count == 1u || (focused &&
+        !strcmp(focused->session, vm->classic.session)))) {
+        if (!force) {
+            notice(vm, "Unsent classic input; :recover it, :close preserves it, "
+                "or :q! discards it");
+            return;
+        }
+        snag_buf_reset(&vm->classic.bytes);
+        vm->classic_uncertain = false;
+    }
     for (struct snag_vm_connection *c = vm->connections; c; c = c->next) {
         if (!c->bound || (!all && c != focused)) continue;
         if (!force && (c->draft.len || c->pending || c->draft_conflict)) {
@@ -721,7 +874,8 @@ command(struct vm *vm, const char *text)
             queue_history(vm, window, LOAD_KEEP);
             changed(vm);
         }
-    } else if (*rest) notice(vm, "Unexpected command argument");
+    } else if (!strcmp(word, "classic")) classic_request(vm, rest);
+    else if (*rest) notice(vm, "Unexpected command argument");
     else if (!strcmp(word, "close")) close_window(vm);
     else if (!strcmp(word, "q") || !strcmp(word, "q!")) quit_sessions(vm, false, word[1] == '!');
     else if (!strcmp(word, "qa") || !strcmp(word, "qa!"))
@@ -737,6 +891,8 @@ command(struct vm *vm, const char *text)
                 "Detached; owner continues running");
             changed(vm);
         }
+    } else if (!strcmp(word, "recover") && classic_recover(vm)) {
+        /* The original destination owns recovered input. */
     } else if (!strcmp(word, "recover")) {
         struct snag_vm_connection *c = focused_connection(vm);
         if (!c || snag_vm_connection_recover(c) < 0)
@@ -942,7 +1098,8 @@ static int
 input_event(void *opaque, const struct snag_vm_input_event *event)
 {
     struct vm *vm = opaque;
-    if (vm->detach_exit || vm->detach_suspend || vm->switch_workspace) return 0;
+    if (vm->detach_exit || vm->detach_suspend || vm->switch_workspace ||
+        vm->classic_pending) return 0;
     struct vm_window *window = &vm->windows[vm->focus];
     if (event->kind == SNAG_VM_PASTE_BEGIN) {
         snag_buf_reset(&vm->paste);
@@ -1164,7 +1321,8 @@ input_ready(struct vm *vm, int timeout)
     }
     struct pollfd *fds = calloc(count, sizeof(*fds));
     if (!fds) return -1;
-    fds[0] = (struct pollfd){.fd = STDIN_FILENO, .events = POLLIN};
+    fds[0] = (struct pollfd){.fd = STDIN_FILENO,
+        .events = vm->classic_pending ? 0 : POLLIN};
     fds[1] = (struct pollfd){.fd = snag_vm_reader_fd(vm->reader), .events = POLLIN};
     size_t at = 2u;
     for (struct snag_vm_connection *c = vm->connections; c; c = c->next) {
@@ -1186,9 +1344,21 @@ input_ready(struct vm *vm, int timeout)
         unsigned char bytes[8192];
         ssize_t count = snag_term_input_read(&vm->terminal, bytes, sizeof(bytes));
         if (count < 0 && errno != EAGAIN && errno != EINTR) return -1;
-        if (count > 0 && snag_vm_input_feed(&vm->input, bytes, (size_t)count,
-            snag_monotonic_ms(), input_event, vm) < 0) return -1;
+        uint64_t now = snag_monotonic_ms();
+        for (ssize_t i = 0; i < count; ++i) {
+            if (snag_vm_input_feed(&vm->input, bytes + i, 1u, now, input_event, vm) < 0)
+                return -1;
+            if (vm->classic_pending) {
+                /* The decoder has consumed the command's Enter. The remainder
+                 * belongs to the terminal owner, including escape/paste bytes. */
+                if (snag_buf_append(&vm->classic.bytes, bytes + i + 1,
+                    (size_t)(count - i - 1)) < 0) return -1;
+                changed(vm);
+                break;
+            }
+        }
     }
+    if (vm->classic_pending) return 0;
     return snag_vm_input_expire(&vm->input, snag_monotonic_ms(), input_event, vm);
 }
 
@@ -1222,6 +1392,7 @@ connections_step(struct vm *vm)
         vm->detach_suspend = false;
         vm->suspend = true;
     }
+    if (vm->classic_pending && !connected) vm->classic_ready = true;
     if (waiting) return;
     if (vm->quit_all) {
         vm->quit_all = false;
@@ -1534,11 +1705,11 @@ collect(struct vm *vm)
 }
 
 static int
-enter_screen(struct vm *vm)
+enter_screen(struct vm *vm, bool flush_input)
 {
     static const char modes[] = "\033[?1049h\033[?2004h\033[?1000h\033[?1006h\033[?1004h\033[?25l";
     vm->entering = true;
-    int rc = snag_term_input_raw(&vm->terminal);
+    int rc = snag_term_input_raw(&vm->terminal, flush_input);
     if (!rc) rc = snag_term_output_mode(&vm->terminal, true);
     if (!rc) rc = emit(vm, modes, sizeof(modes) - 1u);
     vm->entering = false;
@@ -1555,7 +1726,7 @@ restore_checkpoint(void *opaque)
 }
 
 static void
-leave_screen(struct vm *vm)
+leave_screen(struct vm *vm, bool restore_input)
 {
     static const char modes[] = "\033[0m\033[?25h\033[?1004l\033[?1006l"
         "\033[?1000l\033[?2004l\033[?1049l";
@@ -1563,7 +1734,46 @@ leave_screen(struct vm *vm)
     (void)snag_term_output_write(&vm->terminal, vm->output, modes, sizeof(modes) - 1u,
         false, restore_checkpoint, &deadline);
     (void)snag_term_output_mode(&vm->terminal, false);
-    (void)snag_term_input_restore(&vm->terminal, false);
+    if (restore_input) (void)snag_term_input_restore(&vm->terminal, false);
+}
+
+static int
+classic_run(struct vm *vm)
+{
+    char error[256] = "";
+    int rc = -1;
+    if (save(vm, NULL) == 0) {
+        snag_vm_reader_cancel(vm->reader);
+        vm->generation = vm->reading_window = 0u;
+        /* Cooked input between clients can translate or discard incoming paste. */
+        leave_screen(vm, false);
+        vm->classic.cancelled = &stopped;
+        vm->classic.suspend_terminal = &vm->terminal;
+        int peer = classic_connect(vm, vm->classic.session, NULL, error, sizeof(error));
+        if (peer >= 0) rc = snag_session_client_terminal(peer, false, 0u,
+            classic_connect, vm, &vm->classic, error, sizeof(error));
+        if (vm->classic.signal) stopped = vm->classic.signal;
+        if (rc > 0 && !stopped) (void)snprintf(error, sizeof(error),
+            "Classic owner exited with status %d", rc);
+        if (!stopped && enter_screen(vm, false) < 0) return -1;
+        memset(&vm->input, 0, sizeof(vm->input));
+        vm->prefix = vm->mode = 0;
+        vm->composer = vm->insert = false;
+        changed(vm);
+        if (save(vm, NULL) < 0) return -1;
+        if (!stopped) notice(vm, error[0] ? error : "Returned from classic attachment");
+    }
+    vm->classic_pending = vm->classic_ready = false;
+    if (stopped) return 0;
+    for (struct snag_vm_connection *c = vm->connections; c; c = c->next)
+        if (connection_visible(vm, c)) (void)snag_vm_connection_open(c, &vm->store, c->control);
+    for (size_t i = 0u; i < vm->count; ++i) {
+        struct vm_window *window = &vm->windows[i];
+        if (window->kind == VIEW_TRANSCRIPT)
+            queue_history(vm, window, window->follow ? LOAD_LAST : LOAD_KEEP);
+    }
+    refresh(vm);
+    return 0;
 }
 
 static int
@@ -1584,11 +1794,13 @@ interactive(struct vm *vm)
         snag_term_controls_install(&vm->terminal, stop_signal, resize_signal) < 0) goto out;
     controls = true;
     entered = true;
-    if (enter_screen(vm) < 0) goto out;
+    if (enter_screen(vm, true) < 0) goto out;
     refresh(vm);
     while (!vm->quit && !stopped) {
         connections_step(vm);
-        if (vm->quit) break;
+        if (vm->quit || stopped) break;
+        if (vm->classic_ready && classic_run(vm) < 0) goto out;
+        if (stopped) break;
         collect(vm);
         if (resized || snag_term_input_resized(&vm->terminal)) {
             resized = 0;
@@ -1600,9 +1812,9 @@ interactive(struct vm *vm)
             if (snag_term_can_suspend() && save(vm, NULL) == 0) {
                 for (struct snag_vm_connection *c = vm->connections; c; c = c->next)
                     snag_vm_connection_close(c);
-                leave_screen(vm);
+                leave_screen(vm, true);
                 (void)snag_term_suspend();
-                if (enter_screen(vm) < 0) goto out;
+                if (enter_screen(vm, false) < 0) goto out;
                 for (struct snag_vm_connection *c = vm->connections; c; c = c->next)
                     if (connection_visible(vm, c))
                         (void)snag_vm_connection_open(c, &vm->store, c->control);
@@ -1644,7 +1856,7 @@ interactive(struct vm *vm)
     rc = save(vm, NULL) < 0 ? 1 : 0;
 out:
     snag_shutdown_detach(&shutdown);
-    if (entered) leave_screen(vm);
+    if (entered) leave_screen(vm, true);
     else if (captured) (void)snag_term_input_restore(&vm->terminal, false);
     if (controls) snag_term_controls_restore(&vm->terminal);
     snag_shutdown_finish(&shutdown);
@@ -1702,6 +1914,7 @@ snag_vm_main(int argc, char **argv)
     snag_vm_workspace_init(vm.workspace);
     snag_buf_init(&vm.command, SNAG_MAX_DIRECT_PROMPT + 1u);
     snag_buf_init(&vm.paste, SNAG_MAX_DIRECT_PROMPT);
+    snag_buf_init(&vm.classic.bytes, SNAG_MAX_DIRECT_PROMPT);
     for (int i = 0; i < argc; ++i) {
         const char *arg = argv[i];
         if (!strcmp(arg, "--help") || !strcmp(arg, "-h")) {
@@ -1782,6 +1995,7 @@ out:
     snag_buf_free(&vm.command);
     snag_buf_free(&vm.paste);
     snag_buf_free(&vm.reg.text);
+    snag_buf_free(&vm.classic.bytes);
     json_decref(vm.sessions);
     json_decref(vm.workspaces);
     snag_secret_set_free(&vm.secrets);

@@ -113,7 +113,21 @@ State parsing rejects malformed/unsupported or regressing owner boundaries.
 Canceling a page preserves its verified source; canceling an unfinished initial
 open discards that unverified descriptor. Same-content replacement is tested
 across canceled checkpoint reads and both certification-mode transitions.
-Classic attachment fallback, new/stopped-owner launch, command/report adapters, cross-page tool
+The explicit :classic command now saves and asynchronously flushes semantic
+connections, then leases the whole terminal to the existing native client.
+It retains terminal profile negotiation, transfer/switch framing and suspend
+behavior. `/s d` returns to the saved layout and restores visible connections'
+control intent. Same-read keys after Enter remain raw until BOUND and precede
+new terminal input. Complete transmitted frames consume that prefix; failed
+attachment retains it with its exact destination. Workspace state v5 persists
+the prefix while accepting v1..v4; restored input requires explicit literal
+draft recovery because delivery may have preceded a lost snapshot update.
+Classic and semantic drafts remain separate. Input stays raw across both
+handoff directions, with cooked modes restored for suspension and final exit.
+Signal exit restores the outer workspace handlers without reopening controllers.
+The classic editor also consumes a completed UTF-8 scalar before redraw can
+reenter input, preserving following bytes during long Unicode pastes.
+New/stopped-owner launch, command/report adapters, cross-page tool
 dependencies, search/selection/clipboard and IRC conversations still need integration.
 This development frontend has
 not been installed on the operator's machines or merged into the release line.

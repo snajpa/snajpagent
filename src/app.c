@@ -6209,7 +6209,7 @@ attachment_candidate(void *opaque, const char *text, size_t length)
 }
 
 static int
-connect_session(void *opaque, const char *prefix, char *error, size_t error_size)
+connect_session(void *opaque, const char *prefix, char *selected, char *error, size_t error_size)
 {
     const struct snag_cli *cli = opaque;
     struct snag_store store;
@@ -6222,6 +6222,7 @@ connect_session(void *opaque, const char *prefix, char *error, size_t error_size
         snag_session_locate(&store, &target, prefix, attachment_candidate, NULL,
                             error, error_size) == 0) {
         peer = snag_session_endpoint_connect(target.dir_fd, target.dir_path);
+        if (peer >= 0 && selected) memcpy(selected, target.id, sizeof(target.id));
         if (peer < 0) (void)snag_errorf(error, error_size,
             "session %s has no reachable native owner (%s); use --resume after it stops",
             target.id, strerror(errno));
@@ -6292,11 +6293,11 @@ attach_session(const struct snag_cli *cli, char *error, size_t error_size)
         return snag_errorf(error, error_size,
             "attachment requires terminal stdin, stdout and stderr");
     if (select_startup_session(cli, &selected, NULL, error, error_size) < 0) return -1;
-    peer = connect_session((void *)cli, selected, error, error_size);
+    peer = connect_session((void *)cli, selected, NULL, error, error_size);
     free(selected);
     if (peer < 0) return -1;
     return snag_session_client_terminal(peer, false, 0u, connect_session,
-                                        (void *)cli, error, error_size);
+                                        (void *)cli, NULL, error, error_size);
 }
 
 static int
@@ -6322,7 +6323,7 @@ run_session(const struct snag_cli *cli, const char *program)
             return rc;
         } else {
             rc = snag_session_client_terminal(process.peer, true, process.child,
-                connect_session, (void *)cli, error, sizeof(error));
+                connect_session, (void *)cli, NULL, error, sizeof(error));
             process.peer = -1;
             snag_session_process_close(&process);
         }

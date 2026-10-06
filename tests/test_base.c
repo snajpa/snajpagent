@@ -76,10 +76,10 @@ test_term_modes_pending_output(void)
             assert(dup2(slave, STDIN_FILENO) == STDIN_FILENO);
             struct snag_term_host host = {0};
             assert(snag_term_input_capture(&host) == 0);
-            if (!operation) assert(snag_term_input_raw(&host) == 0);
+            if (!operation) assert(snag_term_input_raw(&host, true) == 0);
             assert(write(slave, "retained-output", 15u) == 15);
             if (!operation) assert(snag_term_input_restore(&host, true) == 0);
-            else if (operation == 1u) assert(snag_term_input_raw(&host) == 0);
+            else if (operation == 1u) assert(snag_term_input_raw(&host, true) == 0);
             else assert(snag_term_input_hidden(&host) == 0);
             assert(snag_term_input_restore(&host, false) == 0);
             struct termios restored;
@@ -2179,7 +2179,7 @@ test_raw_pty_empty_read(void)
     int slave = open(name, O_RDWR | O_NOCTTY);
     assert(slave >= 0 && dup2(slave, STDIN_FILENO) == STDIN_FILENO);
     struct snag_term_host host = {0};
-    assert(snag_term_input_capture(&host) == 0 && snag_term_input_raw(&host) == 0);
+    assert(snag_term_input_capture(&host) == 0 && snag_term_input_raw(&host, true) == 0);
     char received[8];
     assert(write(master, "x", 1u) == 1);
     assert(snag_term_input_native_wait(&host, SNAG_WAKE_INVALID, 1000) & SNAG_TERM_WAIT_INPUT);
@@ -2303,7 +2303,7 @@ test_input_mode(void)
     UINT codepage = GetConsoleCP();
 #endif
     assert(snag_term_input_capture(&host) == 0);
-    assert(snag_term_input_raw(&host) == 0);
+    assert(snag_term_input_raw(&host, true) == 0);
 #ifdef _WIN32
     DWORD mode;
     assert(GetConsoleMode((HANDLE)_get_osfhandle(0), &mode));
@@ -2427,7 +2427,7 @@ test_input_mode(void)
     assert(((restored.c_lflag ^ host.input_mode.c_lflag) & ~transient) == 0 &&
            restored.c_iflag == host.input_mode.c_iflag);
 #endif
-    assert(snag_term_input_raw(&host) == 0 && snag_term_input_restore(&host, true) == 0);
+    assert(snag_term_input_raw(&host, true) == 0 && snag_term_input_restore(&host, true) == 0);
     if (snag_isatty(2)) assert(snag_term_host_columns() > 0u);
     else assert(snag_term_host_columns() == 0u);
 }
@@ -3197,8 +3197,21 @@ test_session_terminal(void)
             assert(close(slave) == 0);
             char error[256];
             assert(setenv("TERM", "xterm", 1) == 0);
+            struct snag_session_typeahead typeahead = {.bytes.max = 1024u};
+            if (trial == 1u) assert(snag_buf_append(&typeahead.bytes, "prefix", 6u) == 0);
             int rc = snag_session_client_terminal(pair[1], trial == 0u, 0u,
-                                                  NULL, NULL, error, sizeof(error));
+                NULL, NULL, &typeahead, error, sizeof(error));
+            assert(!typeahead.bytes.len);
+            assert(typeahead.signal == (trial == 1u ? SIGTERM : 0));
+            if (trial == 1u) {
+                volatile sig_atomic_t cancelled = SIGTERM;
+                typeahead.cancelled = &cancelled;
+                assert(snag_buf_append(&typeahead.bytes, "unsent", 6u) == 0);
+                assert(snag_session_client_terminal(-1, false, 0u, NULL, NULL,
+                    &typeahead, error, sizeof(error)) == 128 + SIGTERM);
+                assert(typeahead.signal == SIGTERM && typeahead.bytes.len == 6u);
+            }
+            snag_buf_free(&typeahead.bytes);
             int expected = trial == 0u ? 7 : trial == 1u ? 128 + SIGTERM : trial == 2u ? 0 : -1;
             _exit(rc == expected ? 0 : 1);
         }
@@ -3210,6 +3223,11 @@ test_session_terminal(void)
             terminal_expect(child, pair[0], SNAG_SESSION_COMMIT, &packet);
             relay_send_frame(pair[0], SNAG_SESSION_READY, NULL, 0u);
             terminal_expect(child, pair[0], SNAG_SESSION_BOUND, &packet);
+            if (trial == 1u) {
+                terminal_expect(child, pair[0], SNAG_SESSION_INPUT, &packet);
+                assert(snag_session_packet_length(&packet) == 6u);
+                assert(!memcmp(packet.bytes + SNAG_SESSION_HEADER, "prefix", 6u));
+            }
         } else terminal_expect(child, pair[0], SNAG_SESSION_RESIZE, &packet);
         assert(tcgetattr(slave, &current) == 0 && !(current.c_lflag & (ICANON | ISIG | ECHO)));
         assert(fcntl(slave, F_GETFL) == flags);

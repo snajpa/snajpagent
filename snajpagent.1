@@ -1744,6 +1744,7 @@ Leaving an untouched initial picker creates no saved workspace.
 Snapshots are private files under $DOTDIR/workspaces/WORKSPACE_ID/workspace.json.
 They retain the layout, focus, selection, filters, transcript source anchors,
 verbosity, FOLLOW/HOLD, per-session drafts and unresolved submissions.
+Unsent classic-attachment input retains its destination session too.
 Restoring a controlled view attempts to reattach its existing owner; a busy or
 unavailable owner leaves the draft intact. Other transcript views read history
 without taking control; FOLLOW restores at the current tail.
@@ -1829,6 +1830,36 @@ Inspect history, then use
 with an empty draft to recover its text if needed. A refused submission also
 remains recoverable. Plain rollout text is supported; slash commands, IRC routes
 and attachments remain under development.
+.SS "Use an owner's full terminal"
+.B :classic [SESSION_ID]
+opens an existing native owner's terminal, including owners started before
+workspace support. With no operand, it uses the current transcript or selected
+session. It saves the workspace and flushes attached drafts before releasing
+all workspace controllers. The classic terminal occupies the whole screen;
+its commands, pager, transfers and Ctrl-Z suspension behave as in --attach.
+Use
+.B /s d
+to detach and return. An owner exit also returns to the workspace. The saved
+layout and drafts remain, and visible views reconnect with their previous
+control or observation choice. A stopped or busy owner reports the failure;
+this command never starts another owner.
+.PP
+The classic prompt and workspace composer currently keep separate drafts.
+Keys already read after the :classic command's Enter reach that owner after
+attachment completes, before later terminal input.
+Input remains raw during both directions of the terminal handoff.
+If attachment fails,
+unsent keys remain associated with that session. :classic retries that
+destination; :close saves them, and :q/:qa require recovery or explicit ! discard.
+.PP
+After workspace resume, saved classic input has an uncertain delivery outcome
+and is never replayed automatically. Inspect the session history, then use
+.B :recover
+to append it to that session's unsent workspace draft. Return becomes a newline;
+other control bytes and invalid UTF-8 are shown as literal \[rs]xHH text.
+Review the recovered draft before attaching and submitting it. Pending classic
+input takes precedence over ordinary submission recovery. Recovery exceeding
+the draft limit leaves the original queued input saved.
 .SS "Native semantic endpoint"
 With workspace support compiled in, new POSIX native owners publish
 .B view.sock

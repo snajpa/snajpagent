@@ -401,6 +401,8 @@ editing through live owner attachment. Enter attaches from the session picker;
 The composer supports counted Vim motions, delete/change/yank, a shared paste
 register and draft-local undo/redo.
 Conflicting saved/owner drafts offer `:draft local` and `:draft owner`.
+`:classic [SESSION_ID]` opens an owner's full terminal, including owners started
+before workspace support. `/s d` returns to the saved workspace.
 See the manual's Vim workspace
 section for available controls and `design/vim-mode.md` for implementation status.
 `make WITH_VM=0` omits the optional interface; the default includes it.

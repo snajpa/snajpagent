@@ -863,9 +863,10 @@ snag_term_input_capture(struct snag_term_host *host)
 }
 
 int
-snag_term_input_raw(struct snag_term_host *host)
+snag_term_input_raw(struct snag_term_host *host, bool flush)
 {
     DWORD mode = host->input_mode;
+    (void)flush;
     if (host->raw_input) return 0;
     mode &= ~(ENABLE_ECHO_INPUT | ENABLE_LINE_INPUT | ENABLE_PROCESSED_INPUT |
               ENABLE_QUICK_EDIT_MODE | ENABLE_VIRTUAL_TERMINAL_INPUT);
@@ -1380,14 +1381,14 @@ input_mode_apply(const struct termios *mode, bool flush)
 }
 
 int
-snag_term_input_raw(struct snag_term_host *host)
+snag_term_input_raw(struct snag_term_host *host, bool flush)
 {
     struct termios raw = host->input_mode;
     raw.c_iflag &= (tcflag_t)~(BRKINT | ICRNL | INPCK | ISTRIP | IXON);
     raw.c_lflag &= (tcflag_t)~(ECHO | ICANON | IEXTEN | ISIG);
     raw.c_cc[VMIN] = 0;
     raw.c_cc[VTIME] = 0;
-    return input_mode_apply(&raw, true);
+    return input_mode_apply(&raw, flush);
 }
 
 int

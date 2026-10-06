@@ -4,6 +4,8 @@
 
 #include "session_host.h"
 
+#include <signal.h>
+
 enum snag_session_client_phase {
     SNAG_CLIENT_RESERVING, SNAG_CLIENT_OFFERING, SNAG_CLIENT_COMMITTING, SNAG_CLIENT_READY
 };
@@ -34,13 +36,26 @@ void snag_session_client_close(struct snag_session_client *);
  * profile, and retains the source until commit acknowledgement and source drain. */
 int snag_session_client_attach(struct snag_session_client *, int target);
 int snag_session_client_resize(struct snag_session_client *, unsigned int rows, unsigned int cols);
-typedef int (*snag_session_connect_fn)(void *, const char *, char *, size_t);
+typedef int (*snag_session_connect_fn)(void *, const char *, char *selected, char *, size_t);
+struct snag_term_host;
+struct snag_session_typeahead {
+    struct snag_buf bytes;
+    char session[SNAG_ID_HEX_LEN + 1u];
+    int signal;
+    const volatile sig_atomic_t *cancelled;
+    struct snag_term_host *suspend_terminal;
+};
 /* On supported hosts, own the real terminal and consume peer on every outcome. An initial owner
  * socket is already attached; other peers perform reserve/commit first.
  * child is the optional owner PID created by this frontend, never a signal
- * target. Returns the explicit session exit status, or -1 with a diagnostic. */
+ * target. Optional typeahead precedes new terminal input after BOUND; complete
+ * frames consume its prefix, leaving unsent bytes on return. Its session follows
+ * successful switches; signal reports a caught signal separately from an owner
+ * exit code. An optional outer cancellation flag spans handler installation.
+ * suspend_terminal supplies cooked modes when the caller hands over raw input.
+ * Returns the explicit session exit status, or -1 with a diagnostic. */
 int snag_session_client_terminal(int peer, bool attached, uint64_t child,
-                                 snag_session_connect_fn, void *, char *, size_t);
+    snag_session_connect_fn, void *, struct snag_session_typeahead *, char *, size_t);
 /* Continue an existing SUSPEND reservation through a fresh repaint barrier.
  * First finish pending frames with step; the same reserved peer accepts its
  * in-flight keyboard input, but no newly reserved peer has that permission. */
