@@ -89,7 +89,11 @@ admission. Saved workspace requests require explicit recovery or :classic.
 /config, /send and /cat return automatically after their finite external operation;
 their receipt stays pending and includes deferred configuration output. Completion
 can detach only its original terminal generation. /s d returns from other terminal
-commands. Semantic deferred-control notifications remain work.
+commands. Semantic deferred controls now publish separate completion reports.
+The frontend subscribes to live-owner report replay and deduplicates IDs across
+reconnect without changing focus or newer drafts. Coalesced requests share one
+completion result. A persistent catalogue for discovering missed references
+after owner restart remains work alongside immutable file snapshots.
 The frontend connection manager now shares one draft and owner lease per session
 across split windows. Workspace state v3 adds drafts and pending request identities,
 accepts v1/v2 layouts, and saves before transmitting a submission. Reconnect queries

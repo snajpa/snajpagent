@@ -1624,7 +1624,6 @@ connections_step(struct vm *vm)
     bool waiting = false, connected = false;
     for (struct snag_vm_connection *c = vm->connections; c; c = c->next) {
         uint64_t revision = c->revision;
-        size_t reports = json_array_size(c->reports);
         char previous[sizeof(c->message)];
         memcpy(previous, c->message, sizeof(previous));
         snag_vm_connection_step(c);
@@ -1633,11 +1632,13 @@ connections_step(struct vm *vm)
                 notice(vm, c->message);
             changed(vm);
         }
-        if (json_array_size(c->reports) > reports && focused_connection(vm) == c &&
+        if (c->report_open && focused_connection(vm) == c &&
             vm->windows[vm->focus].kind == VIEW_TRANSCRIPT && !c->draft.len && !vm->mode &&
             !vm->classic_pending && !vm->detach_exit && !vm->switch_workspace &&
             !vm->detach_suspend && !vm->quit_all && !vm->quit_window)
-            open_report(vm, c, json_array_get(c->reports, json_array_size(c->reports) - 1u));
+            open_report(vm, c, c->report_open);
+        json_decref(c->report_open);
+        c->report_open = NULL;
         if (c->terminal_result && c->terminal_auto && focused_connection(vm) == c &&
             !vm->classic_pending && !vm->mode && !vm->detach_exit && !vm->switch_workspace &&
             !vm->detach_suspend && !vm->quit_all && !vm->quit_window) {

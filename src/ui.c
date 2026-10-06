@@ -965,6 +965,8 @@ apply_message(struct snag_ui_display *display, struct snag_ui_command *command,
     case SNAG_UI_VIEW_STATE:
         snag_view_server_state(display->view, command->data.voice);
         return 0;
+    case SNAG_UI_COMMAND_REPORT:
+        return snag_view_server_report(display->view, command->data.voice, command->text);
     case SNAG_UI_COMMAND_RESULT: {
         const json_t *result = command->data.voice;
         uint64_t generation = 0u;
@@ -1785,6 +1787,14 @@ snag_ui_command_result(struct snag_ui *ui, const json_t *result)
     if (!ui->view_listening) return 0;
     return snag_ui_send(ui, (struct snag_ui_command){
         .kind = SNAG_UI_COMMAND_RESULT, .data.voice = result});
+}
+
+int
+snag_ui_command_report(struct snag_ui *ui, const json_t *report, const char *error)
+{
+    if (!ui->view_listening) return 0;
+    return snag_ui_send(ui, (struct snag_ui_command){
+        .kind = SNAG_UI_COMMAND_REPORT, .data.voice = report, .text = error});
 }
 
 int

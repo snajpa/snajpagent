@@ -55,7 +55,7 @@ All message names below are the JSON `type` value. A new client sends
 `{"type":"hello","version":1}`. `capabilities` supplies `version`, the full
 `session` ID, a random live-owner `instance` ID and `features`.
 The implemented features are `observe`, `control`, `submit`, `cancel`, `quit`,
-`detach`, `receipts`, `drafts`, `commands` and `terminal_commands`.
+`detach`, `receipts`, `drafts`, `commands`, `terminal_commands` and `reports`.
 
 After hello, `state` messages contain a `state` object with committed `seq`,
 byte `end`, `sha256`, journal `schema`, `active`, and the next-turn `provider`,
@@ -135,6 +135,23 @@ until explicit session deletion. Deletion recognizes only exact report basenames
 and private regular files, including in builds with the workspace omitted.
 Reports add no session event or provider context. A changed owner instance still
 returns an unknown receipt; surviving report bytes do not authorize replay.
+
+Clients opt into report notifications by sending `{"type":"reports"}` after
+hello. This works for observers as well as controllers. The owner replays its
+ordered retained `{"type":"report","report":{id,bytes,sha256,command},"error":""}`
+messages, sends `{"type":"reports_ready"}` after catch-up, and publishes new
+reports on that subscription. A retention failure uses `report:null` and a
+nonempty `error`. Unsubscribed clients receive no notifications. Repeating the
+subscription restarts replay; clients deduplicate report IDs and reject changed
+metadata for an existing ID.
+
+Deferred semantic controls retain their actual completion output separately from
+the immediate admission receipt. Coalesced requests share one completion report.
+Notifications add report references without changing frontend focus or drafts;
+only the response to its own submitted command can auto-open a report. The
+notification catalogue currently lives for the owner instance. Saved workspace
+references survive owner restart; discovering missed reports across an owner
+restart still requires the persistent catalogue work.
 
 Draft snapshots contain `route`, `revision`, `text` and byte `cursor`.
 Draft refusals echo a valid `edit` token, independently of submission IDs.

@@ -404,6 +404,7 @@ The composer supports counted Vim motions, delete/change/yank, a shared paste
 register and draft-local undo/redo. Slash-command output opens retained reports;
 `:reports` lists them, and `:history` returns to the session. Report positions
 survive workspace resume; `:q` closes a report while preserving its owner.
+Deferred controls add completion reports, available through `:reports` after reconnect.
 Conflicting saved/owner drafts offer `:draft local` and `:draft owner`.
 `:classic [SESSION_ID]` opens an owner's full terminal, including owners started
 before workspace support. Commands needing terminal interaction open it automatically

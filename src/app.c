@@ -48,6 +48,12 @@ struct app_view_terminal {
 };
 static int view_terminal_finish(struct app_state *);
 static void view_terminal_free(struct app_state *);
+static int view_control_publish(struct app_state *, unsigned int, bool);
+static const char *const view_control_names[] = {
+    "/config (completion)", "/model cache (completion)", "/compact (completion)",
+    "/archive (completion)", "/delete (completion)", "/retry (completion)",
+    "/configure (completion)"
+};
 #endif /* SNAJPAGENT_VM */
 
 static atomic_int pending_shutdown_signal;
@@ -537,23 +543,30 @@ snag_app_queue_arm(struct app_state *app, bool armed)
     return 0;
 }
 
+static void
+view_control_requested(struct app_state *app, unsigned int control)
+{
+#if SNAJPAGENT_VM
+    if (app->view_terminal && app->view_terminal->dispatching)
+        app->view_terminal->controls |= control;
+    if (app->view_command_capture) app->view_controls |= control;
+#else
+    (void)app;
+    (void)control;
+#endif
+}
+
 static int
 request_control(struct app_state *app, unsigned int control, const char *name)
 {
     char error[256] = {0};
     if (app->session.pending_controls & control) {
-#if SNAJPAGENT_VM
-        if (app->view_terminal && app->view_terminal->dispatching)
-            app->view_terminal->controls |= control;
-#endif
+        view_control_requested(app, control);
         return app_textf(app, SNAG_UI_HOST, "%s already pending or applying", name);
     }
     if (commit_event(app, "control_requested", json_pack("{s:i}", "control", (int)control),
                      error, sizeof(error)) < 0) return app_error(app, error), -1;
-#if SNAJPAGENT_VM
-    if (app->view_terminal && app->view_terminal->dispatching)
-        app->view_terminal->controls |= control;
-#endif
+    view_control_requested(app, control);
     if (!app->applying_controls) app->control_requested = true;
     return app_textf(app, SNAG_UI_HOST, "%s accepted; applying at the next safe request boundary", name);
 }
@@ -2984,10 +2997,11 @@ apply_controls(struct app_state *app)
         if (app->input_closed || snag_ui_leaving(&app->ui)) break;
         unsigned int pending = app->session.pending_controls & ~deferred;
         unsigned int bit = 0u;
+        unsigned int index = 0u;
         uint64_t first = UINT64_MAX;
         for (unsigned int i = 0u; i < 7u; ++i)
             if ((pending & (1u << i)) && app->session.control_seq[i] < first) {
-                first = app->session.control_seq[i]; bit = 1u << i;
+                first = app->session.control_seq[i]; bit = 1u << i; index = i;
             }
         if (!bit) { result = -1; break; }
         uint64_t failures = app->session.write_failures;
@@ -3001,14 +3015,27 @@ apply_controls(struct app_state *app)
         bool exit_now = false, handled = false;
 #if SNAJPAGENT_VM
         bool terminal = app->view_terminal && (app->view_terminal->controls & bit);
+        bool notification = !terminal && (app->view_controls & bit);
+        struct snag_buf *previous_app_report = app->command_report;
         struct snag_buf *previous_report = app->ui.command_report;
         bool previous_passthrough = app->ui.command_report_passthrough;
         bool previous_error = app->ui.command_error;
-        if (terminal) {
-            app->ui.command_report = &app->view_terminal->report;
-            app->ui.command_report_passthrough = true;
+        if (notification) {
+            struct snag_buf *report = &app->view_control_reports[index];
+            report->max = SIZE_MAX;
+            if (!report->len && snag_buf_printf(report, "%s\n", view_control_names[index]) < 0) {
+                result = -1;
+                break;
+            }
+            app->command_report = report;
+        }
+        if (terminal || notification) {
+            app->ui.command_report = terminal ? &app->view_terminal->report : app->command_report;
+            app->ui.command_report_passthrough = terminal;
             app->ui.command_error = false;
         }
+#else
+        (void)index;
 #endif /* SNAJPAGENT_VM */
         if (bit == SNAG_CONTROL_RELOAD) {
             rc = reload_config(app, error, sizeof(error));
@@ -3035,8 +3062,11 @@ apply_controls(struct app_state *app)
         /* Retired archive controls finish without an effect when old sessions resume. */
         if (error[0] && app_error(app, error) < 0) result = -1;
 #if SNAJPAGENT_VM
-        if (terminal) {
-            app->view_terminal->failed |= rc < 0 || app->ui.command_error || result < 0;
+        if (terminal || notification) {
+            bool failed = rc < 0 || app->ui.command_error || result < 0;
+            if (terminal) app->view_terminal->failed |= failed;
+            if (notification && failed) app->view_control_errors |= bit;
+            app->command_report = previous_app_report;
             app->ui.command_report = previous_report;
             app->ui.command_report_passthrough = previous_passthrough;
             app->ui.command_error = previous_error;
@@ -3057,6 +3087,10 @@ apply_controls(struct app_state *app)
         if (terminal) {
             app->view_terminal->controls &= ~bit;
             if (view_terminal_finish(app) < 0) { result = -1; break; }
+        }
+        if (notification && view_control_publish(app, index, rc > 0) < 0) {
+            result = -1;
+            break;
         }
 #endif
         if (exit_now) { app->input_closed = true; break; }
@@ -3511,6 +3545,26 @@ view_command_report(struct app_state *app, const char *command, const struct sna
 }
 
 static int
+view_control_publish(struct app_state *app, unsigned int index, bool interrupted)
+{
+    struct snag_buf *text = &app->view_control_reports[index];
+    int captured = snag_buf_printf(text, "Result: %s\n",
+        app->view_control_errors & (1u << index) ? "error" :
+        interrupted ? "interrupted" : "completed");
+    json_t *report = captured < 0 ? NULL :
+        view_command_report(app, view_control_names[index], text);
+    char error[256] = "";
+    if (!report) (void)snprintf(error, sizeof(error), "cannot retain completion report: %s",
+        strerror(errno));
+    int rc = snag_ui_command_report(&app->ui, report, error);
+    json_decref(report);
+    snag_buf_free(text);
+    app->view_controls &= ~(1u << index);
+    app->view_control_errors &= ~(1u << index);
+    return rc;
+}
+
+static int
 view_command_complete(struct app_state *app, const char *id, const char *line,
     const struct snag_buf *report, bool failed, bool terminal)
 {
@@ -3601,15 +3655,24 @@ view_input_command(struct app_state *app, const char *line, bool active,
         memcpy(app->view_terminal->id, id, sizeof(id));
         app->view_terminal->dispatching = true;
     }
+    struct snag_buf *previous_app_report = app->command_report;
+    struct snag_buf *previous_report = app->ui.command_report;
+    bool previous_passthrough = app->ui.command_report_passthrough;
+    bool previous_error = app->ui.command_error;
     app->command_report = terminal ? NULL : &report;
     app->ui.command_report = &report;
     app->ui.command_report_passthrough = terminal;
     app->ui.command_error = false;
+    bool previous_capture = app->view_command_capture;
+    app->view_command_capture = !terminal;
     rc = input_command(app, line, active, handled, prompt_ready);
+    app->view_command_capture = previous_capture;
     if (!rc && !*handled) rc = app_error(app, "unknown slash command");
     bool failed = rc < 0 || app->ui.command_error;
-    app->command_report = app->ui.command_report = NULL;
-    app->ui.command_report_passthrough = false;
+    app->command_report = previous_app_report;
+    app->ui.command_report = previous_report;
+    app->ui.command_report_passthrough = previous_passthrough;
+    app->ui.command_error = previous_error;
     *handled = true;
     if (finite) {
         app->view_terminal->report = report;
@@ -3634,7 +3697,30 @@ snag_app_input_command(struct app_state *app, const char *line, bool active,
         app->ui.view_request[0] && snag_prompt_command(line))
         return view_input_command(app, line, active, handled, prompt_ready);
 #endif
-    if (app->command_report || !app->ui.opened || app->ui.input_interface ||
+    if (app->command_report || app->ui.command_report) {
+        /* A deferred operation can pump a replacement classic terminal.
+         * Its commands own their output while the outer report is suspended. */
+        struct snag_buf *previous_app_report = app->command_report;
+        struct snag_buf *previous_report = app->ui.command_report;
+        bool previous_passthrough = app->ui.command_report_passthrough;
+        bool previous_error = app->ui.command_error;
+#if SNAJPAGENT_VM
+        bool previous_capture = app->view_command_capture;
+        app->view_command_capture = false;
+#endif
+        app->command_report = app->ui.command_report = NULL;
+        app->ui.command_report_passthrough = app->ui.command_error = false;
+        int rc = input_command(app, line, active, handled, prompt_ready);
+        app->command_report = previous_app_report;
+        app->ui.command_report = previous_report;
+        app->ui.command_report_passthrough = previous_passthrough;
+        app->ui.command_error = previous_error;
+#if SNAJPAGENT_VM
+        app->view_command_capture = previous_capture;
+#endif
+        return rc;
+    }
+    if (!app->ui.opened || app->ui.input_interface ||
         app->execute || !pager_command(app) ||
         snag_isatty(STDIN_FILENO) != 1 || snag_isatty(STDERR_FILENO) != 1) {
         return input_command(app, line, active, handled, prompt_ready);
@@ -6448,6 +6534,8 @@ out:
     snag_ui_free(&app.ui);
 #if SNAJPAGENT_VM
     view_terminal_free(&app);
+    for (size_t i = 0u; i < sizeof(view_control_names) / sizeof(view_control_names[0]); ++i)
+        snag_buf_free(&app.view_control_reports[i]);
 #endif
     (void)snag_app_shutdown(&app);
     snag_buf_free(&app.irc_urgent);

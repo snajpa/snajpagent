@@ -1880,8 +1880,12 @@ Each report is a private immutable session file. Background loading verifies
 its length and digest, redacts known secrets and renders terminal controls inert.
 Changed or missing files display an error; a previously loaded view remains readable.
 R retries the source. Explicit session deletion removes its reports.
-Reports stay outside model context. Semantic deferred controls such as /configure
-initially report acceptance; their later result notifications remain under development.
+Reports stay outside model context. Deferred controls such as /configure,
+/model cache and /compact initially report acceptance, then add a separate
+completion report. A notification makes it available through :reports while
+preserving the selected window and newer typing. Reconnect to the same owner
+recovers reports created while the workspace was disconnected. Coalesced
+requests produce one completion report for the operation they share.
 .PP
 /fast confirms ON or OFF in its report; an attached transcript also shows FAST
 when the owner selects priority service. With a supporting owner, commands needing
@@ -1949,11 +1953,13 @@ immediate output. Reports stay outside model context, survive owner restarts,
 and are removed by explicit session deletion. Deferred controls acknowledge
 scheduling before their later completion. Commands needing a terminal transaction
 return that requirement before execution. The workspace retains report references
-and opens their contents on its background reader. Deferred result notifications
-remain under development. A terminal-required command can transfer to a bound
+and opens their contents on its background reader. The reports capability adds
+ordered report notifications and replay on reconnect to the live owner. A
+terminal-required command can transfer to a bound
 classic attachment using its advertised terminal_commands capability. The owner
 admits that saved reference before accepting following keyboard input. The current
-handoff returns on /s d; deferred controls remain on the terminal through completion.
+handoff returns automatically after finite /config, /send or /cat operations;
+other commands return on /s d.
 .PP
 The backend also offers revisioned rollout drafts. Bound controllers can read,
 replace and subscribe to a draft, using its expected revision to reject stale edits.

@@ -51,7 +51,7 @@ enum snag_ui_operation {
     SNAG_UI_SESSION_REFUSE, SNAG_UI_SESSION_RELEASED, SNAG_UI_SESSION_BOUND,
     SNAG_UI_SESSION_READY,
     SNAG_UI_INPUT, SNAG_UI_VOICE_EVENT, SNAG_UI_VIEW_STATE, SNAG_UI_VIEW_RESULT,
-    SNAG_UI_COMMAND_RESULT, SNAG_UI_STOP
+    SNAG_UI_COMMAND_RESULT, SNAG_UI_COMMAND_REPORT, SNAG_UI_STOP
 };
 
 struct snag_ui_prompt {
@@ -104,6 +104,7 @@ int snag_ui_view_state(struct snag_ui *, const struct snag_session *);
 int snag_ui_view_result(struct snag_ui *, const char *id, const char *status,
                         uint64_t seq, const char *event);
 int snag_ui_command_result(struct snag_ui *, const json_t *);
+int snag_ui_command_report(struct snag_ui *, const json_t *, const char *error);
 int snag_ui_session_control(struct snag_ui *, enum snag_session_message, const void *, size_t);
 uint64_t snag_ui_session_pending(const struct snag_ui *);
 /* Current frontend-bound native attachment identity; zero until source drain

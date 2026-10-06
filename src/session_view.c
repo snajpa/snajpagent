@@ -145,7 +145,8 @@ struct view_receipt {
 struct view_peer {
     struct snag_view_channel channel;
     uint64_t generation, deadline, revision, draft_revision;
-    bool hello, bound, closing, drafts;
+    bool hello, bound, closing, drafts, reports, reports_ready;
+    size_t report_cursor;
     struct view_receipt *waiting;
     struct view_peer *next;
 };
@@ -155,7 +156,7 @@ struct snag_view_server {
     struct snag_session_relay *relay;
     struct snag_view_callbacks callbacks;
     char session[SNAG_ID_HEX_LEN + 1u], instance[SNAG_ID_HEX_LEN + 1u];
-    json_t *state;
+    json_t *state, *reports;
     json_t *draft, *empty_draft;
     uint64_t revision, draft_revision;
     size_t draft_cursor;
@@ -185,9 +186,11 @@ snag_view_server_open(int dir_fd, const char *path, int lock_fd, const char *ses
     server->relay = relay;
     server->callbacks = callbacks;
     server->empty_draft = json_string("");
+    server->reports = json_array();
     server->draft = json_incref(server->empty_draft);
     server->draft_revision = 1u;
-    if (!server->draft || !callbacks.bound || !callbacks.submit || !callbacks.control ||
+    if (!server->draft || !server->reports ||
+        !callbacks.bound || !callbacks.submit || !callbacks.control ||
         !snag_strcpy(server->session, sizeof(server->session), session) ||
         snag_random_id(server->instance) < 0 ||
         snag_session_view_listen(&server->listener, dir_fd, path, lock_fd) < 0) {
@@ -217,6 +220,7 @@ snag_view_server_close(struct snag_view_server *server)
         free(receipt);
     }
     json_decref(server->state);
+    json_decref(server->reports);
     json_decref(server->draft);
     json_decref(server->empty_draft);
     free(server);
@@ -311,13 +315,34 @@ snag_view_server_result(struct snag_view_server *server, const char *id,
 }
 
 int
+snag_view_server_report(struct snag_view_server *server, const json_t *report, const char *error)
+{
+    if (!server) return 0;
+    const char *id = snag_json_string(report, "id");
+    for (size_t i = 0u; id && i < json_array_size(server->reports); ++i) {
+        const json_t *existing = json_object_get(json_array_get(server->reports, i), "report");
+        const char *previous = snag_json_string(existing, "id");
+        if (previous && !strcmp(previous, id))
+            return json_equal(existing, report) ? 0 : snag_errno(ESTALE);
+    }
+    json_t *entry = json_pack("{s:s,s:O,s:s}", "type", "report",
+        "report", report ? report : json_null(), "error", error ? error : "");
+    if (!entry) return -1;
+    return json_array_append_new(server->reports, entry);
+}
+
+int
 snag_view_server_command_result(struct snag_view_server *server, const json_t *result)
 {
     if (!server) return 0;
     const char *id = snag_json_string(result, "id");
     struct view_receipt *receipt = id ? find_receipt(server, id) : NULL;
     if (!receipt || !receipt->command) return snag_errno(ENOENT);
-    return finish_receipt(server, receipt, json_deep_copy(result), true);
+    int rc = finish_receipt(server, receipt, json_deep_copy(result), true);
+    if (!rc && !strcmp(snag_json_string(result, "status"), "completed"))
+        rc = snag_view_server_report(server, json_object_get(result, "report"),
+            snag_json_string(result, "report_error"));
+    return rc;
 }
 
 int
@@ -500,7 +525,8 @@ dispatch(struct snag_view_server *server, struct view_peer *peer, const json_t *
     const char *type = snag_json_string(message, "type");
     if (!type) return snag_errno(EPROTO);
     const char *fields = !strcmp(type, "hello") ? "type version" :
-        !strcmp(type, "reserve") ? "type" : !strcmp(type, "receipt") ? "type id" :
+        (!strcmp(type, "reserve") || !strcmp(type, "reports")) ? "type" :
+        !strcmp(type, "receipt") ? "type id" :
         !strcmp(type, "draft_get") ? "type generation route" :
         !strcmp(type, "draft") ? "type generation route revision edit text cursor" :
         !strcmp(type, "command") ? json_object_get(message, "draft_revision") ?
@@ -519,11 +545,17 @@ dispatch(struct snag_view_server *server, struct view_peer *peer, const json_t *
             version != 1u) return snag_errno(EPROTO);
         peer->hello = true;
         peer->deadline = 0u;
-        return reply(peer, json_pack("{s:s,s:i,s:s,s:s,s:[s,s,s,s,s,s,s,s,s,s]}",
+        return reply(peer, json_pack("{s:s,s:i,s:s,s:s,s:[s,s,s,s,s,s,s,s,s,s,s]}",
             "type", "capabilities", "version", 1, "session", server->session,
             "instance", server->instance, "features",
             "observe", "control", "submit", "cancel", "quit", "detach", "receipts", "drafts",
-            "commands", "terminal_commands"));
+            "commands", "terminal_commands", "reports"));
+    }
+    if (!strcmp(type, "reports")) {
+        peer->reports = true;
+        peer->reports_ready = false;
+        peer->report_cursor = 0u;
+        return 0;
     }
     if (!strcmp(type, "receipt")) {
         const char *id = snag_json_string(message, "id");
@@ -611,6 +643,12 @@ step_peer(struct snag_view_server *server, struct view_peer *peer)
     }
     if (peer->bound && peer->drafts && peer->draft_revision != server->draft_revision)
         return draft_snapshot(server, peer, 0u, "snapshot");
+    if (peer->reports && peer->report_cursor < json_array_size(server->reports))
+        return reply(peer, json_incref(json_array_get(server->reports, peer->report_cursor++)));
+    if (peer->reports && !peer->reports_ready) {
+        peer->reports_ready = true;
+        return reply(peer, json_pack("{s:s}", "type", "reports_ready"));
+    }
     return 0;
 }
 

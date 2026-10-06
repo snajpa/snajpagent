@@ -4,6 +4,13 @@
 
 ## Unreleased
 
+- Retain deferred Vim command completion reports separately from admission.
+  Reconnect replays reports from the live owner, preserving newer drafts and
+  the selected window. Report IDs prevent duplicates; output stays outside
+  model context.
+- Preserve classic command output when attaching during a deferred workspace
+  operation, and restore that operation's report after nested commands finish.
+
 - Return Vim terminal commands /config, /send and /cat to the workspace after
   their editor, transfer or pager finishes. Retain deferred configuration output
   in the command report and preserve a replacement terminal attachment.

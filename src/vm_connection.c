@@ -36,6 +36,9 @@ snag_vm_connection_close(struct snag_vm_connection *connection)
     connection->generation = connection->deadline = connection->receipt_at = 0u;
     connection->commands = connection->terminal_commands = false;
     connection->terminal_result = connection->terminal_auto = false;
+    connection->reports_supported = connection->reports_subscribed = false;
+    json_decref(connection->report_open);
+    connection->report_open = NULL;
     connection->drafts = connection->draft_ready = connection->draft_get = false;
     connection->send_pending = connection->detaching = connection->detach_sent = false;
     connection->draft_deadline = 0u;
@@ -430,6 +433,28 @@ snag_vm_connection_tail(const struct snag_vm_connection *connection, struct snag
 }
 
 static int
+retain_report(struct snag_vm_connection *connection, const json_t *report, bool replay)
+{
+    if (!snag_vm_report_valid(report)) return snag_errno(EPROTO);
+    for (size_t i = 0u; i < json_array_size(connection->reports); ++i) {
+        const json_t *existing = json_array_get(connection->reports, i);
+        if (strcmp(snag_json_string(existing, "id"), snag_json_string(report, "id"))) continue;
+        if (!json_equal(existing, report)) return snag_errno(EPROTO);
+        /* Replayed owner reports arrive in creation order. Move their existing
+         * references to the tail without losing older-owner/legacy reports. */
+        if (replay && i + 1u < json_array_size(connection->reports)) {
+            if (json_array_append(connection->reports, (json_t *)report) < 0) return -1;
+            (void)json_array_remove(connection->reports, i);
+            ++connection->revision;
+        }
+        return 0;
+    }
+    if (json_array_append(connection->reports, (json_t *)report) < 0) return -1;
+    ++connection->revision;
+    return 1;
+}
+
+static int
 receive(struct snag_vm_connection *connection, const json_t *value)
 {
     const char *type = snag_json_string(value, "type");
@@ -460,6 +485,7 @@ receive(struct snag_vm_connection *connection, const json_t *value)
             if (feature && !strcmp(feature, "commands")) connection->commands = true;
             if (feature && !strcmp(feature, "terminal_commands"))
                 connection->terminal_commands = true;
+            if (feature && !strcmp(feature, "reports")) connection->reports_supported = true;
         }
         memcpy(connection->instance, instance, sizeof(connection->instance));
         connection->hello = true;
@@ -522,6 +548,24 @@ receive(struct snag_vm_connection *connection, const json_t *value)
         json_decref(connection->state);
         connection->state = json_incref(state);
         ++connection->revision;
+    } else if (!strcmp(type, "report")) {
+        const json_t *report = json_object_get(value, "report");
+        const json_t *error_value = json_object_get(value, "error");
+        const char *error = json_string_value(error_value);
+        if (!connection->reports_subscribed || !error || strlen(error) > 256u ||
+            strlen(error) != json_string_length(error_value) ||
+            !snag_json_exact_keys(value, "type report error")) return snag_errno(EPROTO);
+        if (json_is_null(report)) {
+            if (!*error) return snag_errno(EPROTO);
+            message(connection, error);
+        } else {
+            int retained = retain_report(connection, report, true);
+            if (retained < 0) return -1;
+            if (retained) message(connection, "Command output retained; :reports opens it");
+        }
+    } else if (!strcmp(type, "reports_ready")) {
+        if (!connection->reports_subscribed || !snag_json_exact_keys(value, "type"))
+            return snag_errno(EPROTO);
     } else if (!strcmp(type, "result")) {
         const char *id = snag_json_string(value, "id");
         const char *status = snag_json_string(value, "status");
@@ -562,15 +606,9 @@ receive(struct snag_vm_connection *connection, const json_t *value)
             if (receipt_draft(connection, value) < 0) return -1;
             if (command && !json_is_null(json_object_get(value, "report"))) {
                 json_t *report = json_object_get(value, "report");
-                bool found = false;
-                for (size_t i = 0u; i < json_array_size(connection->reports); ++i) {
-                    json_t *existing = json_array_get(connection->reports, i);
-                    if (strcmp(snag_json_string(existing, "id"), snag_json_string(report, "id")))
-                        continue;
-                    if (!json_equal(existing, report)) return snag_errno(EPROTO);
-                    found = true;
-                }
-                if (!found && json_array_append(connection->reports, report) < 0) return -1;
+                if (retain_report(connection, report, false) < 0) return -1;
+                json_decref(connection->report_open);
+                connection->report_open = json_incref(report);
             }
             json_decref(connection->pending);
             connection->pending = NULL;
@@ -653,6 +691,11 @@ snag_vm_connection_step(struct snag_vm_connection *connection)
     if (rc > 0) rc = receive(connection, value);
     json_decref(value);
     if (rc < 0) goto failed;
+    if (connection->hello && connection->reports_supported && !connection->reports_subscribed &&
+        !connection->channel.output) {
+        if (send_message(connection, json_pack("{s:s}", "type", "reports")) < 0) goto failed;
+        connection->reports_subscribed = true;
+    }
     if (connection->bound && connection->pending && connection->query &&
         now >= connection->receipt_at && !connection->channel.output) {
         connection->query = false;

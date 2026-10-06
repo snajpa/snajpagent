@@ -52,6 +52,11 @@ struct app_state {
     /* Informational output from one command is shown in one pager invocation. */
     struct snag_buf *command_report;
     struct app_view_terminal *view_terminal;
+#if SNAJPAGENT_VM
+    struct snag_buf view_control_reports[7];
+    unsigned int view_controls, view_control_errors;
+    bool view_command_capture;
+#endif
     struct snag_pager *pager;
     char *pager_report;
     /* A user-requested view switch is "in flight" while its target view has not become current;
