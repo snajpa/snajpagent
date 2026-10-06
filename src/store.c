@@ -3112,7 +3112,8 @@ history_boundary_valid(struct snag_session *session, char *error, size_t error_s
         session->next_seq - 1u, digest, error, error_size) : -1;
     if (!rc && strcmp(session->prev_sha256, snag_json_string(record, "event_sha256"))) rc = -1;
     json_decref(record);
-    return rc < 0 ? history_error(session, error, error_size, "invalid source history boundary") : 0;
+    if (rc < 0) return history_error(session, error, error_size, "invalid source history boundary");
+    return 0;
 }
 
 int
