@@ -4,6 +4,7 @@
 
 #include "store.h"
 #include "vm_document.h"
+#include "vm_navigation.h"
 #include "vm_search.h"
 #include "vm_selection.h"
 #include "wake.h"
@@ -33,6 +34,7 @@ struct snag_vm_read_request {
     bool ignorecase, search_reverse;
     struct snag_vm_anchor search_start;
     struct snag_vm_selection selection;
+    struct snag_vm_navigation_request navigation;
     /* tail is the owner's bound when trusted; previous is the already
      * displayed bound, independently used by if_changed and tail_only. */
     struct snag_journal_cursor tail, previous, cursor;

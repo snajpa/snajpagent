@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0-only
 """Visual yanks copy logical text into local drafts without changing the owner."""
 
+import time
 import unittest
 
 import test_vm_search as search
@@ -56,7 +57,44 @@ class SelectionTests(unittest.TestCase):
         journal, child = self.open_text(text)
         self.search(child, '/界\r'.encode())
         self.copied(child, b'\x16l2jy')
-        self.assert_draft(child, '界é\n   \n   \n')
+        self.assert_draft(child, '界é\n   \n   ')
+        child.finish()
+
+    def test_rectangular_put_preserves_draft_tabs_and_one_undo_group(self):
+        text = 'XY\nUV\nQR\n' + 'padding\n' * 15 + 'tail-marker'
+        journal, child = self.open_text(text)
+        self.search(child, b'/XY\r')
+        child.write(b'\x16l2jy')
+        child.repaint_until(b'Yanked')
+        child.write(b'i\x1b[200~ab\n\tz\nq\x1b[201~\x1b')
+        time.sleep(.06)
+        child.repaint_until(b'NORMAL composer')
+        child.write(b'gglP')
+        self.assert_draft(child, 'aXYb\n UV   z\nqQR')
+        child.write(b'u')
+        self.assert_draft(child, 'ab\n\tz\nq')
+        child.write(b'3P')
+        self.assert_draft(child, 'aXYXYXYb\n UVUVUV   z\nqQRQRQR')
+        child.write(b'up')
+        self.assert_draft(child, 'abXY\n  UV  z\nq QR')
+        child.write(b'u999999999P')
+        child.repaint_until(b'input limit reached')
+        self.assert_draft(child, 'ab\n\tz\nq')
+        child.finish()
+
+    def test_rectangular_put_extends_beyond_final_line(self):
+        text = 'XY\nUV\nQR\n' + 'padding\n' * 15 + 'tail-marker'
+        journal, child = self.open_text(text)
+        self.search(child, b'/XY\r')
+        child.write(b'\x16l2jy')
+        child.repaint_until(b'Yanked')
+        child.write(b'ia\x1b')
+        time.sleep(.06)
+        child.repaint_until(b'NORMAL composer')
+        child.write(b'P')
+        self.assert_draft(child, 'XYa\nUV\nQR')
+        child.write(b'u')
+        self.assert_draft(child, 'a')
         child.finish()
 
     def test_yy_and_word_yank(self):

@@ -8,17 +8,24 @@ distinguishes implemented components from the complete intended behavior.
 
 Selection checkpoint: character, line and rectangular transcript/report selection
 now uses original source endpoints and a pinned history boundary. The background
-reader streams projected pages into the shared register; failed/canceled work
-preserves its previous contents. Registers spill after a64KiB memory quantum and
+reader streams projected pages into the shared register; empty motions and
+failed/canceled work preserve its previous contents. Registers spill after a64KiB memory quantum and
 carry character/line/block type without imposing a history quota. Character and
 line copies retain logical bytes, rectangles pad short lines, and controls remain
 inert. Constant-size Unicode boundary/width state joins graphemes across source
 fragments, including combining marks and emoji sequences. Visual endpoints
-survive resize; verbosity changes end selection. Local text motions, wrapped-row
-motion, yanks and composer paste are connected to the frontend. Clipboard
-publication, rectangular insertion into an existing composer, global numbered-line
-jumps and exact counted logical motions across cold-page boundaries remain to be
-completed with the remaining workspace/IRC/mouse/remote delivery.
+survive resize; verbosity changes end selection. Numbered gg/G, counted logical
+motions and wrapped-row/page movement cross cold pages through cancellable reader
+work. Logical motions join contiguous source fragments. Nearby motions use loaded
+text; distant backward movement can rescan a pinned prefix with constant-sized
+navigation state. Wrapped-row movement preserves its display column. An interrupted
+move restores the original cursor and viewport. Redaction placeholders count as one
+source-addressable unit. Input received during a move or yank is queued in order,
+including decoded bracketed-paste events; Ctrl-C or Escape cancels that operation.
+The queue shares the direct-input size bound. Rectangular registers insert columns
+into existing draft lines, expand intersected tabs, pad short lines, extend the
+draft and form one undo group. Clipboard publication and the remaining
+workspace/IRC/mouse/remote delivery are still pending.
 
 Implementation checkpoint: asynchronous pager ownership and retained rendering
 are implemented in this branch. Held-pager regressions cover IRC delivery and

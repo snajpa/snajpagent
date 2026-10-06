@@ -88,6 +88,25 @@ main(void)
     snag_vm_register_free(&reg);
     json_decref(a);
 
+    for (unsigned int cross_field = 0u; cross_field < 2u; ++cross_field) {
+        a = block("first/0", 1u, 0u, "one", "");
+        b = block("last/0", 2u, 0u, "two", "");
+        selection = (struct snag_vm_selection){.kind = SNAG_VM_SELECT_CHAR,
+            .first = anchor("first/0", 0u),
+            .last = anchor(cross_field ? "last/0" : "first/0", cross_field ? 0u : 3u),
+            .exclusive = true};
+        selection.last.seq = cross_field ? 2u : 1u;
+        copy = snag_vm_copy_open(&selection, dir);
+        assert(copy && snag_vm_copy_block(copy, a, NULL, NULL) == 0);
+        assert(snag_vm_copy_block(copy, b, NULL, NULL) >= 0);
+        assert(snag_vm_copy_finish(copy, &reg, NULL, NULL) == 0);
+        expect(&reg, cross_field ? "one\n" : "one");
+        snag_vm_copy_close(copy);
+        snag_vm_register_free(&reg);
+        json_decref(a);
+        json_decref(b);
+    }
+
     const char *pieces[] = {"e", "́👩", "‍", "💻x\n"};
     for (unsigned int rectangle = 0u; rectangle < 2u; ++rectangle) {
         selection = (struct snag_vm_selection){.kind = rectangle ? SNAG_VM_SELECT_BLOCK :

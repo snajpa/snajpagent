@@ -4,6 +4,13 @@
 
 ## Unreleased
 
+- Extend counted Vim history motions and numbered gg/G across retained pages,
+  preserving columns for wrapped-row movement. Cancel a distant move without
+  losing its original viewport; keep fast key sequences ordered through navigation
+  and yanks. Treat redaction placeholders as single cursor units and finish anchor
+  reloads without repeatedly reading the same page. Paste rectangular registers
+  into draft columns with tab expansion, short-line padding and one undo group.
+
 - Select Vim transcript/report text by character, line or rectangle and yank into
   the shared workspace register. Keep logical line breaks, Unicode graphemes and
   redaction across stored fragments. Pin the selected history boundary, stream

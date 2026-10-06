@@ -113,6 +113,7 @@ struct snag_vm_copy {
     struct snag_grapheme_state boundary;
     struct snag_grapheme_cells cells;
     uint64_t cluster_start;
+    struct snag_vm_anchor field_end;
     unsigned int cluster_columns;
     bool last_cluster, cluster_tab;
     int directory;
@@ -277,10 +278,12 @@ copy_field(struct snag_vm_copy *copy, const json_t *block, bool heading,
             copy->first = true;
             copy->first_byte = copy->cluster_start;
         }
-        if (endpoint(&copy->selection.last, block, heading, begin, end)) {
-            copy->last = copy->last_cluster = true;
-            copy->last_newline = glyph.newline;
-            copy->last_byte = copy->line.length;
+        if ((!copy->last || !copy->selection.exclusive) &&
+            endpoint(&copy->selection.last, block, heading, begin, end)) {
+            copy->last = true;
+            copy->last_cluster = !copy->selection.exclusive;
+            copy->last_newline = glyph.newline && !copy->selection.exclusive;
+            copy->last_byte = copy->selection.exclusive ? copy->cluster_start : copy->line.length;
         }
         copy->pending = true;
         if (glyph.newline) {
@@ -295,7 +298,25 @@ copy_field(struct snag_vm_copy *copy, const json_t *block, bool heading,
         }
         at += bytes;
     }
+    (void)snprintf(copy->field_end.key, sizeof(copy->field_end.key), "%s",
+        snag_json_string(block, "key"));
+    copy->field_end.heading = heading;
+    copy->field_end.byte = heading ? length : snag_vm_source_position(block, length, true);
     return 0;
+}
+
+static int
+finish_field(struct snag_vm_copy *copy, bool newline, bool (*cancel)(void *), void *opaque)
+{
+    if (copy->selection.exclusive &&
+        copy->selection.last.heading == copy->field_end.heading &&
+        !strcmp(copy->selection.last.key, copy->field_end.key) &&
+        copy->selection.last.byte == copy->field_end.byte) {
+        if (finish_cluster(copy, cancel, opaque) < 0) return -1;
+        copy->last = true;
+        copy->last_byte = copy->line.length;
+    }
+    return copy->pending || copy->last ? finish_line(copy, newline, cancel, opaque) : 0;
 }
 
 int
@@ -314,12 +335,12 @@ snag_vm_copy_block(struct snag_vm_copy *copy, const json_t *block,
         (handle ? !strcmp(handle, copy->handle) && stream == copy->stream :
          !strcmp(key, copy->key));
     if (!contiguous) {
-        if (copy->pending && finish_line(copy, true, cancel, opaque) < 0) return -1;
+        if (finish_field(copy, true, cancel, opaque) < 0) return -1;
         if (copy->done) return 1;
         const char *label = snag_json_string(block, "label");
         if (label && *label) {
             if (copy_field(copy, block, true, cancel, opaque) < 0 ||
-                finish_line(copy, true, cancel, opaque) < 0) return -1;
+                finish_field(copy, true, cancel, opaque) < 0) return -1;
         }
     }
     if (!copy->done && copy_field(copy, block, false, cancel, opaque) < 0) return -1;
@@ -335,7 +356,7 @@ int
 snag_vm_copy_finish(struct snag_vm_copy *copy, struct snag_vm_register *out,
     bool (*cancel)(void *), void *opaque)
 {
-    if (!copy->done && copy->pending && finish_line(copy, false, cancel, opaque) < 0) return -1;
+    if (!copy->done && finish_field(copy, false, cancel, opaque) < 0) return -1;
     if (!copy->done) return snag_errno(ESTALE);
     if (copy->result.file && fflush(copy->result.file) < 0) return -1;
     snag_vm_register_free(out);

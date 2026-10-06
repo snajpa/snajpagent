@@ -171,10 +171,14 @@ class WorkspaceTests(unittest.TestCase):
                                                dir='/private/tmp' if sys.platform == 'darwin' else None)
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name).resolve()
+        self._terminals = []
 
     def start(self, *args, expect=b'sessions', **kwargs):
         child = Terminal(self.root, args, **kwargs)
         self.addCleanup(child.close)
+        if not hasattr(self, '_terminals'):
+            self._terminals = []
+        self._terminals.append(child)
         child.until(b'\x1b[?1049h')
         child.until(expect)
         return child
@@ -187,6 +191,9 @@ class WorkspaceTests(unittest.TestCase):
         deadline = time.monotonic() + 5
         values = {}
         while time.monotonic() < deadline:
+            for child in getattr(self, '_terminals', []):
+                while child.read(0):
+                    pass
             values = self.snapshots()
             if predicate(values):
                 return values
@@ -329,6 +336,7 @@ class WorkspaceTests(unittest.TestCase):
         child.resize(8, 1)
         child.write(b'GggG')
         child.resize(12, 100)
+        child.write(b'\x03')
         child.command('sessions')
         child.until(b'sessions')
         child.finish()

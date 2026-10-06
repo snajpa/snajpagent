@@ -21,7 +21,8 @@ void snag_vm_register_free(struct snag_vm_register *);
 int snag_vm_register_append(struct snag_vm_register *, int directory, const void *, size_t);
 int snag_vm_register_read(struct snag_vm_register *, uint64_t offset, void *, size_t);
 
-/* Endpoints name whole graphemes, inclusively. Rectangles use logical display
+/* Visual endpoints are inclusive; character operators can exclude the final
+ * endpoint. Endpoints name whole graphemes. Rectangles use logical display
  * columns [left,right); soft wraps never introduce line breaks in a register. */
 enum snag_vm_selection_kind { SNAG_VM_SELECT_NONE, SNAG_VM_SELECT_CHAR,
     SNAG_VM_SELECT_LINE, SNAG_VM_SELECT_BLOCK };
@@ -29,6 +30,7 @@ struct snag_vm_selection {
     enum snag_vm_selection_kind kind;
     struct snag_vm_anchor first, last;
     size_t left, right;
+    bool exclusive;
 };
 struct snag_vm_copy;
 int snag_vm_anchor_compare(const struct snag_vm_anchor *, const struct snag_vm_anchor *);

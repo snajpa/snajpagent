@@ -32,6 +32,7 @@
 /tests/test_vm_input
 /tests/test_vm_text
 /tests/test_vm_selection
+/tests/test_vm_navigation
 /tests/test_vm_public
 /tests/test_vm_transcript
 /tests/test_session_draft

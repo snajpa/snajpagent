@@ -5,6 +5,7 @@
 #include "render.h"
 #include "vm_public.h"
 #include "vm_report.h"
+#include "vm_text.h"
 #include "vm_transcript.h"
 
 #include <errno.h>
@@ -582,7 +583,7 @@ static void
 read_page(struct snag_vm_reader *, struct snag_vm_read_result *);
 
 static void
-search_progress(struct snag_vm_reader *reader, uint64_t bytes, uint64_t events, uint64_t total)
+scan_progress(struct snag_vm_reader *reader, uint64_t bytes, uint64_t events, uint64_t total)
 {
     (void)pthread_mutex_lock(&reader->lock);
     reader->progress_generation = reader->working_generation;
@@ -594,33 +595,127 @@ search_progress(struct snag_vm_reader *reader, uint64_t bytes, uint64_t events, 
 }
 
 static int
-search_page(struct snag_vm_reader *reader, struct snag_vm_read_result *result)
+scan_rows(struct snag_vm_reader *reader, struct snag_vm_read_result *result)
+{
+    const struct snag_vm_navigation_request *motion = &result->request.navigation;
+    bool down = motion->kind == SNAG_VM_NAV_ROW_DOWN;
+    struct snag_vm_read_result page = {.request = result->request};
+    page.request.navigation.kind = SNAG_VM_NAV_NONE;
+    page.request.project = true;
+    uint64_t remaining = motion->count;
+    bool started = false;
+    int rc = -1;
+    for (;;) {
+        read_page(reader, &page);
+        if (page.error_number) {
+            memcpy(result->error, page.error, sizeof(result->error));
+            errno = page.error_number;
+            break;
+        }
+        if (!started) {
+            result->best_effort = page.best_effort;
+            result->incomplete = page.incomplete;
+        }
+        result->tail = page.tail;
+        page.request.tail = page.tail;
+        page.request.trusted_tail = page.request.pin_tail = true;
+        size_t rows = snag_vm_document_rows(page.document);
+        size_t at = down ? 0u : rows ? rows - 1u : 0u;
+        if (!started) {
+            at = snag_vm_document_locate_source(page.document, motion->start.key,
+                motion->start.seq, motion->start.byte, motion->start.heading);
+            struct snag_vm_document_row row;
+            if (snag_vm_document_row(page.document, at, &row) < 0 ||
+                strcmp(snag_json_string(snag_vm_document_block(page.document, row.block),
+                    "key"), motion->start.key) || row.heading != motion->start.heading ||
+                motion->start.byte < snag_vm_document_source(page.document, &row, row.begin) ||
+                motion->start.byte > snag_vm_document_source(page.document, &row, row.end)) {
+                errno = ESTALE;
+                break;
+            }
+            started = true;
+        }
+        if (rows) {
+            size_t available = down ? rows - at - 1u : at;
+            size_t step = remaining < available ? (size_t)remaining : available;
+            at = down ? at + step : at - step;
+            remaining -= step;
+            struct snag_vm_document_row row;
+            if (snag_vm_document_row(page.document, at, &row) < 0) break;
+            const json_t *block = snag_vm_document_block(page.document, row.block);
+            const char *text = snag_vm_document_text(page.document, &row);
+            size_t column = motion->column > SIZE_MAX - row.column ? SIZE_MAX :
+                row.column + motion->column;
+            size_t byte = snag_vm_text_at_column(text, strlen(text), row.begin, column, false);
+            if (byte >= row.end) byte = row.end > row.begin ?
+                snag_vm_text_previous(text, strlen(text), row.end) : row.begin;
+            result->match = (struct snag_vm_anchor){
+                .seq = (uint64_t)json_integer_value(json_object_get(block, "seq")),
+                .byte = snag_vm_document_source(page.document, &row, byte),
+                .order = snag_vm_search_order(block), .heading = row.heading};
+            (void)snprintf(result->match.key, sizeof(result->match.key), "%s",
+                snag_json_string(block, "key"));
+        }
+        scan_progress(reader, (uint64_t)page.cursor.offset, page.cursor.next_seq,
+            (uint64_t)page.tail.offset);
+        struct snag_journal_cursor begin = page.request.reverse ? page.cursor : page.request.cursor;
+        if ((!remaining && rows) || (down ? !page.more : !begin.offset)) { rc = 0; break; }
+        if (rows) --remaining;
+        page.request.reverse = !down;
+        page.request.cursor = page.cursor;
+        page.request.before_seq = down ? 0u : begin.next_seq;
+        snag_vm_document_free(page.document);
+        page.document = NULL;
+        json_decref(page.blocks);
+        page.blocks = NULL;
+    }
+    result->found = rc == 0;
+    snag_vm_document_free(page.document);
+    json_decref(page.blocks);
+    json_decref(page.events);
+    return rc;
+}
+
+static int
+scan_text(struct snag_vm_reader *reader, struct snag_vm_read_result *result)
 {
     const struct snag_vm_read_request *request = &result->request;
     bool copying = request->selection.kind != SNAG_VM_SELECT_NONE;
-    struct snag_vm_search *search = copying ? NULL : snag_vm_search_open(request->query,
-        request->ignorecase, request->search_reverse, &request->search_start);
+    bool navigating = request->navigation.kind != SNAG_VM_NAV_NONE;
+    struct snag_vm_search *search = copying || navigating ? NULL :
+        snag_vm_search_open(request->query, request->ignorecase, request->search_reverse,
+            &request->search_start);
     struct snag_vm_copy *copy = copying ? snag_vm_copy_open(&request->selection,
         reader->store->root_fd) : NULL;
-    if (copying ? !copy : !search) return -1;
+    struct snag_vm_navigation *navigation = navigating ?
+        snag_vm_navigation_open(&request->navigation) : NULL;
+    if (copying ? !copy : navigating ? !navigation : !search) return -1;
     int rc = -1;
     struct snag_vm_read_result page = {.request = *request};
     page.request.query = NULL;
     page.request.selection.kind = SNAG_VM_SELECT_NONE;
+    page.request.navigation.kind = SNAG_VM_NAV_NONE;
     page.request.blocks_only = page.request.project = true;
     page.request.reverse = page.request.tail_only = page.request.if_changed = false;
     page.request.before_seq = 0u;
-    page.request.cursor = (struct snag_journal_cursor){0};
+    struct snag_journal_cursor begin = navigating ? request->cursor :
+        (struct snag_journal_cursor){0};
+    page.request.cursor = begin;
+    char first_key[160] = "";
+    bool certified = false;
+    unsigned int pass = 0u;
+again:
     for (;;) {
         read_page(reader, &page);
         if (page.error_number) {
             (void)snprintf(result->error, sizeof(result->error), "%s incomplete: %.230s",
-                copying ? "Copy" : "Search", page.error);
+                copying ? "Copy" : navigating ? "Navigation" : "Search", page.error);
             errno = page.error_number;
             goto out;
         }
         result->tail = page.tail;
-        if (!page.request.cursor.offset) {
+        if (!certified) {
+            certified = true;
             /* Later pages pin this observed bound using the cursor API. Keep
              * its original certification, including an old owner's suffix. */
             result->best_effort = page.best_effort;
@@ -635,12 +730,15 @@ search_page(struct snag_vm_reader *reader, struct snag_vm_read_result *result)
             const json_t *block = page.document ? snag_vm_document_block(page.document, i) :
                 json_array_get(page.blocks, i);
             if (!block) break;
+            if (navigating && !first_key[0])
+                (void)snprintf(first_key, sizeof(first_key), "%s", snag_json_string(block, "key"));
             int step = copying ? snag_vm_copy_block(copy, block, read_canceled, reader) :
+                navigating ? snag_vm_navigation_block(navigation, block, read_canceled, reader) :
                 snag_vm_search_block(search, block, read_canceled, reader);
             if (step < 0) goto out;
             if (step > 0) { done = true; break; }
         }
-        search_progress(reader, (uint64_t)page.cursor.offset,
+        scan_progress(reader, (uint64_t)page.cursor.offset,
             page.cursor.next_seq ? page.cursor.next_seq - 1u : 0u, (uint64_t)page.tail.offset);
         if (!page.more || done) break;
         page.request.cursor = page.cursor;
@@ -650,11 +748,39 @@ search_page(struct snag_vm_reader *reader, struct snag_vm_read_result *result)
     if (copying) {
         if (read_canceled(reader)) { errno = ECANCELED; goto out; }
         if (snag_vm_copy_finish(copy, &result->copied, read_canceled, reader) < 0) goto out;
+    } else if (navigating) {
+        int status = snag_vm_navigation_finish(navigation, &result->match);
+        bool restart = false;
+        /* The first visible field may start mid-line or mid-word. A result
+         * there needs the retained prefix to distinguish a clamp from a hit. */
+        if (begin.offset && ((status < 0 && errno == ESTALE) ||
+            (!status && !strcmp(first_key, result->match.key)))) {
+            snag_vm_navigation_close(navigation);
+            navigation = snag_vm_navigation_open(&request->navigation);
+            if (!navigation) goto out;
+            begin = (struct snag_journal_cursor){0};
+            first_key[0] = 0;
+            pass = 0u;
+            restart = true;
+            status = 1;
+        }
+        if (status < 0) goto out;
+        if (status) {
+            if (!restart && pass++) { errno = ELOOP; goto out; }
+            json_decref(page.blocks);
+            page.blocks = NULL;
+            snag_vm_document_free(page.document);
+            page.document = NULL;
+            page.request.cursor = begin;
+            goto again;
+        }
+        result->found = true;
     } else result->found = snag_vm_search_result(search, &result->match, &result->wrapped);
     rc = 0;
 out:
     snag_vm_search_close(search);
     snag_vm_copy_close(copy);
+    snag_vm_navigation_close(navigation);
     json_decref(page.events);
     json_decref(page.blocks);
     snag_vm_document_free(page.document);
@@ -666,8 +792,13 @@ read_page(struct snag_vm_reader *reader, struct snag_vm_read_result *result)
 {
     const struct snag_vm_read_request *request = &result->request;
     retain_views(reader, request);
-    if (request->query || request->selection.kind) {
-        if (search_page(reader, result) < 0) goto failed;
+    if (request->navigation.kind == SNAG_VM_NAV_ROW_UP ||
+        request->navigation.kind == SNAG_VM_NAV_ROW_DOWN) {
+        if (scan_rows(reader, result) < 0) goto failed;
+        return;
+    }
+    if (request->query || request->selection.kind || request->navigation.kind) {
+        if (scan_text(reader, result) < 0) goto failed;
         return;
     }
     if (request->kind == SNAG_VM_READ_REPORTS) {
@@ -912,6 +1043,13 @@ snag_vm_reader_request(struct snag_vm_reader *reader, const struct snag_vm_read_
          (request->kind != SNAG_VM_READ_HISTORY && request->kind != SNAG_VM_READ_REPORT))) ||
         (request->retained_sessions && !json_is_array(request->retained_sessions)) ||
         (request->kind == SNAG_VM_READ_REPORTS && !json_is_array(request->known_reports))) {
+        errno = EINVAL;
+        return 0u;
+    }
+    if (request->navigation.kind && (request->navigation.kind > SNAG_VM_NAV_ROW_DOWN ||
+        request->navigation.kind < SNAG_VM_NAV_NONE || !request->navigation.count ||
+        request->query || request->selection.kind ||
+        (request->kind != SNAG_VM_READ_HISTORY && request->kind != SNAG_VM_READ_REPORT))) {
         errno = EINVAL;
         return 0u;
     }

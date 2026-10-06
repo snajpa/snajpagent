@@ -462,6 +462,18 @@ search_history_test(struct snag_store *store, const char *root)
     assert(snag_vm_register_read(&copied->copied, copied->copied.length - sizeof(suffix),
         suffix, sizeof(suffix)) == 0 && !memcmp(suffix, "dle <redacted:secret>\n", sizeof(suffix)));
     snag_vm_read_result_free(copied);
+    struct snag_vm_read_request movement = copy_request;
+    movement.selection.kind = SNAG_VM_SELECT_NONE;
+    movement.navigation = (struct snag_vm_navigation_request){.kind = SNAG_VM_NAV_RIGHT,
+        .start = copy_request.selection.first, .count = 5u};
+    copied = await_page(reader, snag_vm_reader_request(reader, &movement));
+    assert(!copied->error_number && copied->found && copied->match.byte == length + 2u);
+    movement.navigation.start = copied->match;
+    snag_vm_read_result_free(copied);
+    movement.navigation.kind = SNAG_VM_NAV_LEFT;
+    copied = await_page(reader, snag_vm_reader_request(reader, &movement));
+    assert(!copied->error_number && copied->found && copied->match.byte == length - 3u);
+    snag_vm_read_result_free(copied);
     request.query = "test-secret-value";
     struct snag_vm_read_result *result = await_page(reader,
         snag_vm_reader_request(reader, &request));

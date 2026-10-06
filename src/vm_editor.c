@@ -417,11 +417,97 @@ operate(struct snag_vm_connection *connection, struct snag_vm_register *reg,
     return snag_vm_editor_end(connection) < 0 ? SNAG_VM_EDIT_ERROR : SNAG_VM_EDIT_DONE;
 }
 
+static int
+put_padding(struct snag_buf *text, size_t count)
+{
+    static const char spaces[] = "                                ";
+    if (count > text->max - text->len) return snag_errno(EOVERFLOW);
+    while (count) {
+        size_t size = count < sizeof(spaces) - 1u ? count : sizeof(spaces) - 1u;
+        if (snag_buf_append(text, spaces, size) < 0) return -1;
+        count -= size;
+    }
+    return 0;
+}
+
+static int
+put_block_row(struct snag_buf *out, const char *draft, size_t length,
+    size_t *line, size_t column, const struct snag_buf *row, size_t count,
+    bool more, size_t *cursor)
+{
+    bool extending = *line > length;
+    size_t start = extending ? length : *line;
+    size_t end = extending ? length : snag_vm_text_line_end(draft, length, start);
+    size_t at = extending ? length : snag_vm_text_at_column(draft, length, start, column, false);
+    size_t actual = extending ? 0u : snag_vm_text_column(draft, length, at, false);
+    struct snag_vm_glyph glyph = snag_vm_glyph(draft + at, end - at, actual, false);
+    bool split_tab = glyph.tab && column > actual;
+    if (snag_buf_append(out, draft + start, at - start) < 0) return -1;
+    if ((at == end || split_tab) && column > actual &&
+        put_padding(out, column - actual) < 0) return -1;
+    if (*cursor == SIZE_MAX) *cursor = out->len;
+    if (row->len && count > (out->max - out->len) / row->len) return snag_errno(EOVERFLOW);
+    for (size_t i = 0u; row->len && i < count; ++i)
+        if (snag_buf_append(out, row->data, row->len) < 0) return -1;
+    if (split_tab) {
+        if (put_padding(out, glyph.columns - (column - actual)) < 0) return -1;
+        at += glyph.bytes;
+    }
+    if (snag_buf_append(out, draft + at, end - at) < 0) return -1;
+    if ((end < length || more) && snag_buf_putc(out, '\n') < 0) return -1;
+    *line = end < length ? end + 1u : length + 1u;
+    return 0;
+}
+
+static enum snag_vm_edit_result
+put_block(struct snag_vm_connection *connection, struct snag_vm_register *reg,
+    bool after, size_t count)
+{
+    const char *draft = connection->draft.len ? (const char *)connection->draft.data : "";
+    size_t length = connection->draft.len, at = connection->cursor;
+    if (after && at < length && draft[at] != '\n') at = snag_vm_text_next(draft, length, at);
+    size_t column = snag_vm_text_column(draft, length, at, false);
+    size_t line = snag_vm_text_line_start(draft, length, at), cursor = SIZE_MAX;
+    struct snag_buf out = {.max = SNAG_MAX_DIRECT_PROMPT};
+    struct snag_buf row = {.max = SNAG_MAX_DIRECT_PROMPT};
+    int rc = snag_buf_append(&out, draft, line);
+    unsigned char bytes[65536];
+    for (uint64_t offset = 0u; !rc && offset < reg->length;) {
+        size_t size = reg->length - offset < sizeof(bytes) ?
+            (size_t)(reg->length - offset) : sizeof(bytes);
+        rc = snag_vm_register_read(reg, offset, bytes, size);
+        for (size_t begin = 0u; !rc && begin < size;) {
+            unsigned char *newline = memchr(bytes + begin, '\n', size - begin);
+            size_t end = newline ? (size_t)(newline - bytes) : size;
+            rc = snag_buf_append(&row, bytes + begin, end - begin);
+            if (!rc && newline) {
+                rc = put_block_row(&out, draft, length, &line, column, &row, count,
+                    offset + end + 1u < reg->length, &cursor);
+                snag_buf_reset(&row);
+            }
+            begin = newline ? end + 1u : end;
+        }
+        offset += size;
+    }
+    if (!rc && row.len) rc = put_block_row(&out, draft, length, &line, column,
+        &row, count, false, &cursor);
+    if (!rc && line < length) rc = snag_buf_append(&out, draft + line, length - line);
+    if (!rc) rc = snag_vm_editor_replace(connection, 0u, length, out.data, out.len);
+    if (!rc) {
+        snag_vm_draft_cursor(connection, cursor == SIZE_MAX ? 0u : cursor);
+        rc = snag_vm_editor_end(connection);
+    }
+    snag_buf_free(&row);
+    snag_buf_free(&out);
+    return rc < 0 ? SNAG_VM_EDIT_ERROR : SNAG_VM_EDIT_DONE;
+}
+
 static enum snag_vm_edit_result
 put(struct snag_vm_connection *connection, struct snag_vm_register *reg,
     bool after, size_t count)
 {
     if (!reg->length) return SNAG_VM_EDIT_DONE;
+    if (reg->block) return put_block(connection, reg, after, count);
     const char *text = connection->draft.len ? (const char *)connection->draft.data : "";
     size_t at = connection->cursor;
     bool leading_newline = false;
