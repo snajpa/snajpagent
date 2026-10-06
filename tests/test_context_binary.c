@@ -1871,6 +1871,33 @@ legacy_sources(void *source, const json_t *wanted, const char *prompt,
     return rc;
 }
 
+struct native_checkpoint_probe {
+    int journal;
+    unsigned int directory_failures, journal_failures;
+};
+
+static int
+native_checkpoint_sync_directory(void *opaque, int fd)
+{
+    struct native_checkpoint_probe *probe = opaque;
+    if (probe->directory_failures) {
+        --probe->directory_failures;
+        return snag_errno(EIO);
+    }
+    return snag_sync_dir(fd);
+}
+
+static int
+native_checkpoint_sync_file(void *opaque, int fd)
+{
+    struct native_checkpoint_probe *probe = opaque;
+    if (fd == probe->journal && probe->journal_failures) {
+        --probe->journal_failures;
+        return snag_errno(EIO);
+    }
+    return snag_sync_file(fd);
+}
+
 static void
 live_snapshot_capture(void)
 {
@@ -1924,8 +1951,11 @@ live_snapshot_capture(void)
     state.log_fd = dup(fileno(file));
     state.lock_fd = dup(fileno(file));
     assert(state.log_fd >= 0 && state.lock_fd >= 0);
+    struct native_checkpoint_probe probe = {.journal = state.log_fd};
+    struct snag_binary_io_ops ops = {.opaque = &probe,
+        .sync_file = native_checkpoint_sync_file, .sync_dir = native_checkpoint_sync_directory};
     assert(!snag_session_bind_binary(&state, &identity, &boundary, &tree, &producer,
-        &origins, NULL, error, sizeof(error)));
+        &origins, &ops, error, sizeof(error)));
     struct snag_binary_index_tree initial = {0};
     struct snag_buf old_access = {.max = SIZE_MAX};
     unsigned char old_root[32];
@@ -1938,7 +1968,10 @@ live_snapshot_capture(void)
     off_t position = lseek(state.log_fd, 0, SEEK_CUR);
     assert(snag_session_binary_snapshot_capture(&state, NULL, &snapshot, &tree, &captured,
         error, sizeof(error)) < 0 && errno == ENOTSUP && !snapshot.selection);
-    int directory = open(".", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    char *directory_path = snag_path_join(getenv("TMPDIR") ? getenv("TMPDIR") : "/tmp",
+        "snag-native-checkpoint-XXXXXX");
+    assert(directory_path && mkdtemp(directory_path));
+    int directory = snag_open_read(directory_path, true);
     assert(directory >= 0);
     const uint64_t generations[2] = {0}, sequences[2] = {0}, invalid_sequences[2] = {1u, 0u};
     struct snag_binary_checkpoint_index invalid = available;
@@ -1995,6 +2028,43 @@ live_snapshot_capture(void)
         error, sizeof(error)));
     assert(snapshot.boundary.next_seq == state.next_seq &&
         captured.texts.slots[SNAG_BINARY_TEXT_BANNER].declaration == state.next_seq - 1u);
+    for (unsigned int generation = 1u; generation <= 2u; ++generation) {
+        uint64_t before_sequence = state.next_seq;
+        int64_t before_end = state.log_end;
+        int64_t before_start = state.committed_start;
+        if (generation == 1u) {
+            probe.directory_failures = 1u;
+            probe.journal_failures = 1u;
+            for (unsigned int failure = 0u; failure < 2u; ++failure) {
+                assert(snag_session_checkpoint(&state, error, sizeof(error)) < 0 && errno == EIO);
+                assert(state.next_seq == before_sequence && state.log_end == before_end &&
+                    state.committed_start == before_start && state.committed_end == before_end);
+                struct snag_binary_io_snapshot provisional = {0};
+                struct snag_binary_checkpoint_sources provisional_sources = {0};
+                struct snag_binary_index_tree provisional_tree;
+                assert(!snag_session_binary_snapshot_capture(&state, NULL, &provisional,
+                    &provisional_tree, &provisional_sources, error, sizeof(error)));
+                assert(provisional.selection->available_boundary.next_seq == root.next_seq);
+                snag_binary_io_snapshot_free(&provisional);
+                snag_binary_checkpoint_sources_free(&provisional_sources);
+            }
+            assert(snag_session_commit(&state, "banner_updated", json_pack("{s:s}",
+                "text", "blocked receipt"), NULL, error, sizeof(error)) < 0 && errno == EBUSY);
+            assert(state.next_seq == before_sequence);
+        }
+        assert(!snag_session_checkpoint(&state, error, sizeof(error)));
+        assert(state.next_seq == before_sequence + 1u && state.checkpoint_seq == before_sequence);
+        assert(state.committed_start == before_end && state.committed_end == state.log_end);
+        struct snag_binary_io_snapshot after = {0};
+        struct snag_binary_checkpoint_sources after_sources = {0};
+        struct snag_binary_index_tree after_tree;
+        assert(!snag_session_binary_snapshot_capture(&state, NULL, &after, &after_tree,
+            &after_sources, error, sizeof(error)));
+        assert(after.selection->available_boundary.next_seq == before_sequence &&
+            after.boundary.next_seq == state.next_seq);
+        snag_binary_io_snapshot_free(&after);
+        snag_binary_checkpoint_sources_free(&after_sources);
+    }
     struct snag_binary_checkpoint_index frozen;
     const struct snag_binary_io_access *selection = snapshot.selection;
     assert(!snag_binary_checkpoint_index_decode(selection->available.data,
@@ -2013,6 +2083,11 @@ live_snapshot_capture(void)
     snag_binary_checkpoint_sources_free(&origins);
     snag_session_close(&state);
     assert(fcntl(directory, F_GETFD) >= 0 && !close(directory));
+    int cleanup = snag_open_read(directory_path, true);
+    assert(cleanup >= 0 && !unlinkat(cleanup, "checkpoint.0", 0) &&
+        !unlinkat(cleanup, "checkpoint.1", 0) && !close(cleanup));
+    assert(!rmdir(directory_path));
+    free(directory_path);
     source.log_fd = -1;
     snag_session_close(&source);
     snag_buf_free(&payload);

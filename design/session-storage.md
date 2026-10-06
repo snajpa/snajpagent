@@ -2899,5 +2899,25 @@ custody remains unavailable rather than becoming an implicit empty table.
 Setup leaves the reducer and acknowledged journal frontier unchanged, creates
 no files, and does not grant a new usable receipt. Session close releases only
 its owned table storage, not the caller's descriptor.
-The ordinary native creation/open/resume lifecycle and receipt publication remain
-unfinished integration, not enabled by this internal capture seam.
+Explicitly bound native sessions use the existing checkpoint entrypoint to
+publish that captured request and append its canonical optional receipt through
+the same I/O owner. Publication failures retain the original request for paced
+retry; the engine continues to expose its old frontier and access custody.
+Prepared access is structurally checked against the captured identity/boundary/
+tree before receipt staging. Reducer, producer and source copies plus the exact
+receipt boundary/tree are staged before canonical journal admission.
+
+Receipt write/sync failure retains that exact metadata candidate and blocks a
+different semantic commit. Retry reuses the owner's original request and captured
+timestamp. Durable ACK must identify the receipt and match its staged boundary.
+The shared ACK path advances the reducer time/sequence, logical frontier, sources
+and transient committed byte range, then moves prepared access into usable old
+custody without allocation or I/O. Optional receipt metadata has no semantic
+provider/observer callback. Checkpoint cadence markers remain transient session
+bookkeeping rather than new native core fields.
+
+Close drains owned publication or journal work before descriptor/lock teardown
+while releasing no abandoned candidate effects. It preserves provisional files
+and already-canonical receipts for recovery. Ordinary native creation/open/resume
+and general reader integration remain unfinished; explicitly bound checkpoint
+operation does not switch existing JSONL sessions onto the native backend.

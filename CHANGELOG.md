@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Publish checkpoints for explicitly bound native sessions through their existing
+  I/O owner, staging canonical receipt adoption and moving usable access custody
+  only after durable ACK while retaining exact publication/receipt retries.
+
 - Install owning accepted working-set custody on native sessions for subsequent
   checkpoint capture, preserving caller directory ownership and failure-atomic
   setup without advancing the acknowledged journal frontier.

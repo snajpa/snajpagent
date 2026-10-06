@@ -3965,10 +3965,16 @@ struct snag_binary_session {
     struct snag_binary_io *io;
     struct snag_buf access;
     struct snag_binary_checkpoint_index available;
+    struct snag_buf checkpoint_access;
+    struct snag_binary_checkpoint_index checkpoint_available;
+    struct snag_binary_index_tree checkpoint_tree;
+    struct snag_binary_publication_result checkpoint_result;
+    uint64_t checkpoint_timestamp;
     struct snag_session *candidate;
     char *type;
     json_t *data;
     bool io_pending, retryable, retried, faulted, checkpoint_configured;
+    bool checkpoint_pending, checkpoint_failed, checkpoint_published, receipt_candidate;
 };
 
 static void
@@ -4046,6 +4052,7 @@ binary_discard_candidate(struct snag_binary_session *binary)
     binary->type = NULL;
     json_decref(binary->data);
     binary->data = NULL;
+    binary->receipt_candidate = false;
 }
 
 static int
@@ -4061,6 +4068,21 @@ binary_take(struct snag_binary_session *binary, struct snag_binary_io_result *re
         if (snag_wakeup_wait(snag_binary_io_wake(binary->io), -1) < 0 && errno != EINTR) {
             return -1;
         }
+    }
+}
+
+static int
+binary_take_checkpoint(struct snag_binary_session *binary)
+{
+    for (;;) {
+        int rc = snag_binary_io_checkpoint_take_access(binary->io,
+            &binary->checkpoint_result, &binary->checkpoint_access);
+        if (rc != 1) {
+            binary->checkpoint_pending = false;
+            return rc;
+        }
+        if (snag_wakeup_wait(snag_binary_io_wake(binary->io), -1) < 0 && errno != EINTR)
+            return -1;
     }
 }
 
@@ -4081,11 +4103,16 @@ close_binary_session(struct snag_session *session)
         }
         snag_buf_free(&batch);
     }
+    while (binary->checkpoint_pending) {
+        if (binary_take_checkpoint(binary) < 0 && binary->checkpoint_pending)
+            (void)snag_sleep_ms(1u);
+    }
     (void)snag_binary_io_close(binary->io);
     binary_discard_candidate(binary);
     snag_binary_producer_free(&binary->producer);
     snag_binary_checkpoint_sources_free(&binary->sources);
     snag_buf_free(&binary->access);
+    snag_buf_free(&binary->checkpoint_access);
     free(binary);
     session->binary = NULL;
 }
@@ -4412,6 +4439,7 @@ binary_ack_candidate(struct snag_session *session, uint64_t *written_seq,
     char *error, size_t error_size)
 {
     struct snag_binary_session *binary = session->binary;
+    bool receipt = binary->receipt_candidate;
     struct snag_binary_io_result result = {0};
     struct snag_buf batch = {0};
     if (binary_take(binary, &result, &batch) < 0) {
@@ -4426,7 +4454,8 @@ binary_ack_candidate(struct snag_session *session, uint64_t *written_seq,
         return snag_fail(error, error_size, code, "native write not durably acknowledged");
     }
     struct snag_binary_index_tree next = binary->tree;
-    if (!binary_anchor_equal(&result.durable, &binary->proposed_boundary) ||
+    if (result.checkpoint_receipt != receipt ||
+        !binary_anchor_equal(&result.durable, &binary->proposed_boundary) ||
         snag_binary_index_tree_append_batch(NULL, &next, &binary->identity,
             &binary->boundary, &result.durable, batch.data, batch.len) < 0) {
         binary->faulted = true;
@@ -4456,13 +4485,14 @@ binary_ack_candidate(struct snag_session *session, uint64_t *written_seq,
     *session = *candidate;
     free(candidate);
     binary->candidate = NULL;
+    binary->receipt_candidate = false;
     binary->retryable = binary->retried = false;
     if (written_seq) *written_seq = sequence;
     char *committed_type = binary->type;
     json_t *committed_data = binary->data;
     binary->type = NULL;
     binary->data = NULL;
-    if (session->on_commit) session->on_commit(session->on_commit_opaque,
+    if (!receipt && session->on_commit) session->on_commit(session->on_commit_opaque,
         session, sequence, committed_type, committed_data);
     free(committed_type);
     json_decref(committed_data);
@@ -4474,6 +4504,8 @@ commit_binary_session(struct snag_session *session, const char *type, json_t *da
     uint64_t *written_seq, char *error, size_t error_size)
 {
     struct snag_binary_session *binary = session->binary;
+    if (binary->receipt_candidate)
+        return snag_fail(error, error_size, EBUSY, "native receipt still awaits durability");
     if (!type || !data || !strcmp(type, "session_checkpoint")) {
         return snag_fail(error, error_size, ENOTSUP,
             "native event requires its canonical producer");
@@ -4499,13 +4531,124 @@ commit_binary_session(struct snag_session *session, const char *type, json_t *da
     return binary_ack_candidate(session, written_seq, error, error_size);
 }
 
+static int
+binary_prepare_checkpoint_receipt(struct snag_session *session, char *error, size_t error_size)
+{
+    struct snag_binary_session *binary = session->binary;
+    const struct snag_binary_publication_result *published = &binary->checkpoint_result;
+    struct snag_binary_checkpoint_receipt receipt = {.generation = published->generation,
+        .image_size = published->image_size, .boundary = published->boundary};
+    memcpy(receipt.image_digest, published->image_digest, sizeof(receipt.image_digest));
+    struct snag_buf payload = {.max = SIZE_MAX}, decoded = {.max = SIZE_MAX};
+    binary->candidate = calloc(1u, sizeof(*binary->candidate));
+    if (!binary->candidate || clone_session_state(session, binary->candidate) < 0 ||
+        snag_binary_producer_clone(&binary->proposed, &binary->producer) < 0 ||
+        snag_binary_checkpoint_sources_clone(&binary->proposed_sources, &binary->sources) < 0 ||
+        snag_binary_index_tree_root(&binary->checkpoint_tree, receipt.index_root) < 0 ||
+        snag_binary_checkpoint_receipt_encode(&payload, &receipt) < 0) goto fail;
+    struct snag_binary_record record = {.kind = SNAG_BINARY_CHECKPOINT_RECEIPT,
+        .version = SNAG_BINARY_CHECKPOINT_RECEIPT_VERSION, .flags = SNAG_BINARY_RECORD_OPTIONAL,
+        .timestamp_ms = binary->checkpoint_timestamp, .payload = payload.data, .size = payload.len};
+    if (snag_binary_batch_encode(&decoded, &binary->boundary, &record, 1u,
+        session->turn_count, &binary->proposed_boundary) < 0) goto fail;
+    binary->proposed_tree = binary->tree;
+    if (snag_binary_index_tree_append_batch(NULL, &binary->proposed_tree, &binary->identity,
+        &binary->boundary, &binary->proposed_boundary, decoded.data, decoded.len) < 0) goto fail;
+    binary->candidate->last_time_ms = record.timestamp_ms;
+    binary->candidate->checkpoint_seq = session->next_seq;
+    binary->candidate->checkpoint_offset = (int64_t)binary->boundary.end;
+    binary->proposed_sources.texts.through = binary->proposed_boundary.next_seq - 1u;
+    binary->proposed_voice_import = binary->voice_import;
+    if (snag_binary_io_checkpoint_receipt_submit(binary->io, receipt.index_root,
+        record.timestamp_ms) < 0) goto fail;
+    binary->receipt_candidate = true;
+    binary->io_pending = true;
+    snag_buf_free(&payload);
+    snag_buf_free(&decoded);
+    return 0;
+fail:
+    {
+        int code = errno;
+        snag_buf_free(&payload);
+        snag_buf_free(&decoded);
+        binary_discard_candidate(binary);
+        return snag_fail(error, error_size, code, "cannot stage native checkpoint receipt");
+    }
+}
+
+static int
+checkpoint_binary_session(struct snag_session *session, char *error, size_t error_size)
+{
+    struct snag_binary_session *binary = session->binary;
+    if (binary->faulted)
+        return snag_fail(error, error_size, ESTALE, "native session requires fresh recovery");
+    if (!binary->checkpoint_configured)
+        return snag_fail(error, error_size, ENOTSUP, "native checkpoint custody is not installed");
+    if (binary->candidate && !binary->receipt_candidate)
+        return snag_fail(error, error_size, EBUSY, "native transaction still awaits durability");
+    if (!binary->checkpoint_published) {
+        if (binary->checkpoint_failed) {
+            if (snag_binary_io_checkpoint_retry(binary->io) < 0)
+                return snag_fail(error, error_size, errno, "native publication retry unavailable");
+            binary->checkpoint_pending = true;
+        } else if (!binary->checkpoint_pending) {
+            struct snag_binary_io_snapshot snapshot = {0};
+            struct snag_binary_index_tree tree;
+            struct snag_binary_checkpoint_sources sources = {0};
+            int rc = snag_session_binary_snapshot_capture(session, NULL, &snapshot,
+                &tree, &sources, error, error_size);
+            if (!rc) {
+                rc = snag_binary_io_checkpoint_submit(binary->io, &snapshot);
+                if (rc < 0)
+                    snag_fail(error, error_size, errno, "cannot submit native checkpoint");
+            }
+            snag_binary_io_snapshot_free(&snapshot);
+            snag_binary_checkpoint_sources_free(&sources);
+            if (rc < 0) return -1;
+            binary->checkpoint_tree = tree;
+            binary->checkpoint_pending = true;
+        }
+        if (binary_take_checkpoint(binary) < 0) {
+            binary->checkpoint_failed = !binary->checkpoint_pending;
+            return snag_fail(error, error_size, errno, "native checkpoint not published");
+        }
+        binary->checkpoint_failed = false;
+        binary->checkpoint_published = true;
+        binary->checkpoint_timestamp = snag_time_ms();
+        unsigned char root[32];
+        if (snag_binary_index_tree_root(&binary->checkpoint_tree, root) < 0 ||
+            snag_binary_checkpoint_index_decode(binary->checkpoint_access.data,
+                binary->checkpoint_access.len, &binary->identity,
+                &binary->checkpoint_result.boundary, root, &binary->checkpoint_available) < 0) {
+            binary->faulted = true;
+            return snag_fail(error, error_size, ESTALE, "native prepared access violates snapshot");
+        }
+    }
+    if (!binary->candidate) {
+        if (binary_prepare_checkpoint_receipt(session, error, error_size) < 0) return -1;
+    } else if (!binary->io_pending) {
+        if (!binary->retryable || snag_binary_io_retry(binary->io) < 0)
+            return snag_fail(error, error_size, EIO, "native receipt requires fresh recovery");
+        binary->io_pending = true;
+        binary->retried = true;
+    }
+    if (binary_ack_candidate(session, NULL, error, error_size) < 0) return -1;
+    /* Prepared bytes and decoded pointers are already owned and checked. This
+     * custody move follows the receipt ACK and cannot allocate or perform I/O. */
+    snag_buf_free(&binary->access);
+    binary->access = binary->checkpoint_access;
+    binary->checkpoint_access = (struct snag_buf){0};
+    binary->available = binary->checkpoint_available;
+    binary->checkpoint_available = (struct snag_binary_checkpoint_index){0};
+    binary->checkpoint_published = false;
+    return 0;
+}
+
 int
 snag_session_checkpoint(struct snag_session *session, char *error, size_t error_size)
 {
-    if (session && session->binary) {
-        return snag_fail(error, error_size, ENOTSUP,
-            "native checkpoint publisher is not installed");
-    }
+    if (session && session->binary)
+        return checkpoint_binary_session(session, error, error_size);
     if (!session || session->pending_log || session->log_fd < 0 || session->lock_fd < 0)
         return snag_fail(error, error_size, EINVAL, "session has no durable checkpoint boundary");
     json_t *state = snag_checkpoint_state_encode(session);
