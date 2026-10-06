@@ -367,14 +367,14 @@ candidate_message(struct snag_session_relay *relay)
     enum snag_session_message type = snag_session_packet_type(&relay->rejection);
     if (snag_session_packet_length(&relay->rejection)) return snag_errno(EPROTO);
     if (type == SNAG_SESSION_STATUS) {
-        unsigned char attached = relay->peer >= 0 &&
+        unsigned char attached = relay->view_attached || (relay->peer >= 0 &&
             (relay->phase == SNAG_SESSION_ATTACHED ||
-             (relay->phase == SNAG_SESSION_RESERVED && !relay->handshake_deadline));
+             (relay->phase == SNAG_SESSION_RESERVED && !relay->handshake_deadline)));
         relay->reject_reply = true;
         return snag_session_packet_set(&relay->rejection, SNAG_SESSION_STATUS, &attached, 1u);
     }
     if (type != SNAG_SESSION_RESERVE) return snag_errno(EPROTO);
-    if (relay->peer >= 0) {
+    if (relay->peer >= 0 || relay->view_reserved) {
         static const char busy[] = "session already has a terminal or attachment reservation";
         relay->reject_reply = true;
         return snag_session_packet_set(&relay->rejection, SNAG_SESSION_ERROR,
@@ -525,3 +525,29 @@ snag_session_relay_control(struct snag_session_relay *relay, enum snag_session_m
     return snag_errno(ENOTSUP);
 }
 #endif /* !_WIN32 */
+
+int
+snag_session_relay_view_reserve(struct snag_session_relay *relay, uint64_t *generation)
+{
+    if (relay->master < 0) return snag_errno(ENOTSUP);
+    if (relay->peer >= 0 || relay->view_reserved) return snag_errno(EBUSY);
+    relay->view_reserved = true;
+    relay->view_attached = false;
+    *generation = ++relay->generation;
+    return 0;
+}
+
+int
+snag_session_relay_view_bind(struct snag_session_relay *relay, uint64_t generation)
+{
+    if (!relay->view_reserved || relay->generation != generation) return snag_errno(ESTALE);
+    relay->view_attached = true;
+    return 0;
+}
+
+void
+snag_session_relay_view_release(struct snag_session_relay *relay, uint64_t generation)
+{
+    if (!relay->view_reserved || relay->generation != generation) return;
+    relay->view_reserved = relay->view_attached = false;
+}

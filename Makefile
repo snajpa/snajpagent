@@ -95,6 +95,7 @@ COMMON_SRC += src/app_resume.c
 COMMON_SRC += src/irc_address.c
 COMMON_SRC += src/vm.c
 ifeq ($(WITH_VM),1)
+COMMON_SRC += src/session_view.c
 COMMON_SRC += src/vm_reader.c src/vm_grid.c src/unicode.c src/vm_workspace.c src/vm_layout.c
 COMMON_SRC += src/vm_input.c src/vm_text.c
 COMMON_SRC += src/vm_public.c
@@ -107,6 +108,7 @@ endif
 COMMON_OBJ = $(COMMON_SRC:.c=.o) $(PDF_OBJ) $(AUDIO_DEVICE_OBJ)
 HEADERS = src/tmux.h src/session_host.h src/session_relay.h src/session_client.h src/snajpagent.h src/base.h src/fs.h src/term_host.h src/wake.h src/net.h src/config.h src/secret_source.h src/credential.h src/auth.h src/login.h src/secret.h src/instructions.h src/json.h src/snag_jansson.h src/snag_jansson_abi.h src/wire.h src/context.h src/provider_retry.h src/http.h src/update.h src/provider.h src/model_cache.h src/tools.h src/process_host.h src/tools_patch.h src/irc.h src/irc_internal.h src/sse.h src/responses.h src/turn.h src/store.h src/store_internal.h src/store_record.h src/term.h src/render.h src/cli.h src/app.h src/app_internal.h src/ui.h src/history.h src/history_view.h src/vm_reader.h src/vm_grid.h src/unicode.h src/unicode_tables.inc src/base64.h src/convert.h src/media.h src/rules.h src/tools_write.h src/tools_file.h
 DEPFLAGS = -MMD -MP
+HEADERS += src/session_view.h
 HEADERS += src/upload_wire.h src/upload_md5.h src/upload.h src/screen_wire.h src/remote.h
 HEADERS += src/vm_workspace.h
 HEADERS += src/vm_layout.h
@@ -316,6 +318,9 @@ ifeq ($(WITH_VM),1)
 	./tests/test_vm_public
 	./tests/test_vm_transcript
 	python3 tests/test_vm_frontend.py ./$(BIN)
+	python3 tests/test_session_view.py ./$(BIN)
+else
+	python3 tests/test_session_view.py ./$(BIN) --without-vm
 endif
 	./tests/test_rules
 	./tests/test_wire

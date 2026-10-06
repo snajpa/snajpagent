@@ -12,6 +12,7 @@
 #define SNAG_SESSION_FRAME_MAX 16384u
 #define SNAG_SESSION_HEADER 8u
 #define SNAG_SESSION_ENDPOINT "terminal.sock"
+#define SNAG_SESSION_VIEW_ENDPOINT "view.sock"
 #define SNAG_SESSION_COMMIT_BYTES (4u + 4u * SNAG_TERMINAL_NAME_BYTES)
 /* Transfer/source UUIDs, two offset/sequence/SHA-256 cursors, source sequence,
  * record count, and requested mode. Integers use explicit little-endian bytes. */
@@ -41,6 +42,7 @@ struct snag_session_packet {
 struct snag_session_listener {
     int fd, dir_fd;
     uint64_t device, inode;
+    bool view;
 };
 
 struct snag_session_process {
@@ -65,6 +67,12 @@ int snag_session_process_redraw(const struct snag_session_process *);
  * duplicate/open/close that lock here: POSIX record locks belong to a process. */
 int snag_session_listener_open(struct snag_session_listener *, int dir_fd,
                                const char *dir_path, int lock_fd);
+int snag_session_view_listen(struct snag_session_listener *, int dir_fd,
+                              const char *dir_path, int lock_fd);
+int snag_session_view_connect(int dir_fd, const char *dir_path);
+/* Independently versioned SV/1 frames; terminal SA/5 remains unchanged. */
+int snag_session_view_packet_read(int fd, struct snag_session_packet *);
+int snag_session_view_packet_set(struct snag_session_packet *, const void *, size_t);
 void snag_session_listener_close(struct snag_session_listener *);
 /* Checked private endpoints return nonblocking, close-on-exec streams. On
  * message-credential hosts, callers must finish peer_verify before admitting

@@ -12,6 +12,12 @@
   Live session controls remain in the
   ordinary interface while semantic attachment is under development.
 
+- Add the optional native semantic owner endpoint with shared classic/workspace
+  controller arbitration, committed-tail observation, plain-input admission,
+  reconnect receipts, cancellation and distinct detach/quit controls. Durable
+  receipts reference the existing journal format. The workspace composer is
+  still being integrated.
+
 - Bound history-reader memory when browsing across large context checkpoints.
   Preserve complete event verification and retained session history.
 

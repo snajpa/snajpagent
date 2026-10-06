@@ -1,0 +1,459 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-only
+"""Real owners: semantic framing, controller arbitration and durable admission."""
+
+import hashlib
+import json
+import os
+import select
+import signal
+import socket
+import struct
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+import unittest
+import uuid
+from pathlib import Path
+
+import tmux_terminal as harness
+from test_remote_terminal import RemoteProcess
+
+
+BINARY = (Path(sys.argv.pop(1)).resolve()
+          if len(sys.argv) > 1 and not sys.argv[1].startswith('-')
+          else Path(__file__).resolve().parents[1] / 'snajpagent')
+OMITTED = '--without-vm' in sys.argv
+if OMITTED:
+    sys.argv.remove('--without-vm')
+
+
+def connect(directory, name):
+    peer = socket.socket(socket.AF_UNIX)
+    peer.settimeout(5)
+    previous = Path.cwd()
+    try:
+        os.chdir(directory)
+        peer.connect(name)
+    finally:
+        os.chdir(previous)
+    return peer
+
+
+def exact(peer, count):
+    data = bytearray()
+    while len(data) < count:
+        part = peer.recv(count - len(data))
+        if not part:
+            raise EOFError('owner closed the connection')
+        data.extend(part)
+    return bytes(data)
+
+
+class View:
+    def __init__(self, directory):
+        self.peer = connect(directory, 'view.sock')
+        self.generation = 0
+        self.states = []
+        self.send(type='hello', version=1)
+        self.capabilities = self.until('capabilities')
+
+    def send(self, fragment=0, **message):
+        data = json.dumps(message, ensure_ascii=True, separators=(',', ':')).encode()
+        for offset in range(0, len(data), 16368):
+            part = struct.pack('<QQ', offset, len(data)) + data[offset:offset + 16368]
+            frame = b'SV\x01\x01' + struct.pack('<I', len(part)) + part
+            if fragment:
+                for begin in range(0, len(frame), fragment):
+                    self.peer.sendall(frame[begin:begin + fragment])
+            else:
+                self.peer.sendall(frame)
+
+    def receive(self):
+        data = bytearray()
+        while True:
+            header = exact(self.peer, 8)
+            assert header[:4] == b'SV\x01\x01', header
+            size, = struct.unpack('<I', header[4:])
+            assert 16 < size <= 16384, size
+            frame = exact(self.peer, size)
+            offset, total = struct.unpack('<QQ', frame[:16])
+            assert offset == len(data) and 0 < total <= 6 * 1024 * 1024 + 16384
+            data.extend(frame[16:])
+            assert len(data) <= total
+            if len(data) == total:
+                message = json.loads(data)
+                if message['type'] == 'state':
+                    self.states.append(message['state'])
+                return message
+
+    def until(self, kind, predicate=lambda message: True):
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            message = self.receive()
+            if message['type'] == kind and predicate(message):
+                return message
+        raise AssertionError(f'missing {kind}')
+
+    def reserve(self):
+        self.send(type='reserve')
+        self.generation = self.until('reserved')['generation']
+
+    def bind(self):
+        self.reserve()
+        self.send(type='commit', generation=self.generation)
+        return self.until('bound')
+
+    def submit(self, text, request=None, **options):
+        request = request or uuid.uuid4().hex
+        self.send(type='submit', generation=self.generation, id=request, text=text, **options)
+        return request
+
+    def result(self, request):
+        return self.until('result', lambda message: message['id'] == request and
+                          message['status'] != 'pending')
+
+    def close(self):
+        self.peer.close()
+
+
+class SessionViewTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix='snag-view-')
+        self.root = Path(self.tmp.name).resolve()
+        self.provider = harness.FakeResponses()
+        self.provider.runtime_handler = lambda handler, request, sequence: self.provider.reply(
+            handler, self.provider.response_body(sequence, 'semantic-answer').encode(),
+            close_header=True)
+        self.config = self.root / 'config.ini'
+        harness.write_irc_config(self.config, self.provider.port, 'host-model')
+        self.prefix = [str(BINARY), '--config', str(self.config), '--dotdir',
+                       str(self.root / 'state')]
+        self.env = {'SNAJPAGENT_IRC_UI_KEY': 'irc-ui-secret'}
+        self.children = []
+        self.views = []
+        self.owner = None
+        self.release = threading.Event()
+        child = self.start([])
+        child.until('›'.encode(), 15)
+        self.journal, = (self.root / 'state' / 'sessions').glob('*/events.jsonl')
+        self.directory = self.journal.parent
+        self.sid = self.directory.name
+        for row in subprocess.check_output(['ps', '-axo', 'pid=,ppid=,command='],
+                                           text=True).splitlines():
+            fields = row.split(None, 2)
+            if len(fields) == 3 and fields[1] == str(child.process.pid) and str(self.config) in row:
+                self.owner = int(fields[0])
+        self.assertIsNotNone(self.owner)
+        self.owner_identity = self.identity()
+        self.initial = child
+
+    def identity(self):
+        return subprocess.run(['ps', '-p', str(self.owner), '-o', 'lstart=,command='],
+                              text=True, capture_output=True).stdout.strip()
+
+    def start(self, args):
+        child = RemoteProcess(self.root, self.prefix + args, wrapped=None, extra_env=self.env)
+        self.children.append(child)
+        return child
+
+    def finish(self, child, command):
+        os.write(child.master, command + b'\r')
+        deadline = time.monotonic() + 10
+        while child.process.poll() is None and time.monotonic() < deadline:
+            if select.select([child.master], [], [], .05)[0]:
+                try:
+                    child.output.extend(os.read(child.master, 65536))
+                except OSError:
+                    pass
+        self.assertEqual(child.process.poll(), 0, bytes(child.output))
+
+    def detach(self):
+        self.finish(self.initial, b'/s d')
+        self.status('detached')
+
+    def view(self, bind=False):
+        peer = View(self.directory)
+        self.views.append(peer)
+        self.assertEqual(peer.capabilities['session'], self.sid)
+        if bind:
+            peer.bind()
+        return peer
+
+    def status(self, wanted):
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            result = subprocess.run(self.prefix + ['-l'], cwd=self.root,
+                                    env={**os.environ, **self.env}, text=True,
+                                    capture_output=True, timeout=5)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            rows = [line.split('\t') for line in result.stdout.splitlines()[1:]]
+            actual = next(row[4] for row in rows if self.sid.startswith(row[0]))
+            if actual == wanted:
+                return
+            time.sleep(.02)
+        self.fail((wanted, actual))
+
+    def events(self):
+        return [json.loads(line) for line in self.journal.read_bytes().splitlines()]
+
+    def wait_event(self, kind):
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            events = [event for event in self.events() if event['type'] == kind]
+            if events:
+                return events[-1]
+            time.sleep(.02)
+        self.fail(f'missing {kind}')
+
+    def tearDown(self):
+        self.release.set()
+        for peer in self.views:
+            peer.close()
+        if self.owner and self.identity() == self.owner_identity:
+            os.kill(self.owner, signal.SIGTERM)
+        for child in self.children:
+            child.close()
+        self.provider.close()
+        self.tmp.cleanup()
+
+    def test_binary_feature_boundary(self):
+        result = subprocess.run([str(BINARY), 'vm', '--help'], capture_output=True, text=True)
+        if OMITTED:
+            self.assertEqual(result.returncode, 2)
+            self.assertIn('WITH_VM=0', result.stderr)
+            self.assertFalse((self.directory / 'view.sock').exists())
+        else:
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue((self.directory / 'view.sock').exists())
+        self.finish(self.initial, b'/exit')
+        self.status('stored')
+
+    def test_observer_is_read_only_and_snapshot_is_a_committed_prefix(self):
+        peer = self.view()
+        snapshot = peer.until('state')['state']
+        data = self.journal.read_bytes()
+        prefix = data[:snapshot['end']]
+        self.assertTrue(prefix.endswith(b'\n'))
+        last = json.loads(prefix.splitlines()[-1])
+        self.assertEqual(last['seq'], snapshot['seq'])
+        self.assertEqual(last['event_sha256'], snapshot['sha256'])
+        self.status('attached')
+        peer.send(type='reserve')
+        self.assertIn('controller', peer.until('error')['message'])
+        self.detach()
+        saved = self.journal.read_bytes()
+        other = self.view()
+        other.until('state')
+        self.status('detached')
+        self.assertEqual(self.journal.read_bytes(), saved)
+        self.assertEqual(self.identity(), self.owner_identity)
+        self.assertEqual((self.directory / 'view.sock').stat().st_mode & 0o777, 0o600)
+
+    def test_controller_exclusion_generation_disconnect_and_classic_return(self):
+        self.detach()
+        peer = self.view()
+        peer.reserve()
+        self.status('detached')
+        other = self.view()
+        other.send(type='reserve')
+        other.until('error')
+        with connect(self.directory, 'terminal.sock') as classic:
+            classic.sendall(b'SA\x05\x01' + b'\0' * 4)
+            header = exact(classic, 8)
+            self.assertEqual(header[:4], b'SA\x05\x0a')
+            self.assertIn(b'reservation', exact(classic, struct.unpack('<I', header[4:])[0]))
+        peer.send(type='commit', generation=peer.generation + 1)
+        peer.until('error')
+        peer.send(type='commit', generation=peer.generation)
+        peer.until('bound')
+        self.status('attached')
+        peer.close()
+        self.status('detached')
+        self.assertEqual(self.identity(), self.owner_identity)
+        child = self.start(['--resume', self.sid])
+        child.until(b'Attached session', 10)
+        self.finish(child, b'/exit')
+        self.status('stored')
+
+    def test_durable_submission_duplicate_and_reconnect_receipt(self):
+        self.detach()
+        peer = self.view(bind=True)
+        request = peer.submit('semantic prompt', fragment=1)
+        result = peer.result(request)
+        self.assertEqual(result['status'], 'committed', result)
+        event = next(event for event in self.events() if event['seq'] == result['seq'])
+        self.assertEqual(event['type'], 'input_received')
+        self.assertEqual(result['id'], request)
+        self.assertEqual(event['data']['text'], 'semantic prompt')
+        self.wait_event('turn_completed')
+        peer.submit('semantic prompt', request)
+        self.assertEqual(peer.result(request), result)
+        peer.submit('different prompt', request)
+        peer.until('error')
+        peer.close()
+        self.status('detached')
+        other = self.view()
+        self.assertEqual(other.capabilities['instance'], peer.capabilities['instance'])
+        other.send(type='receipt', id=request)
+        self.assertEqual(other.result(request), result)
+        inputs = [event for event in self.events() if event['type'] == 'input_received']
+        self.assertEqual(len(inputs), 1)
+        self.assertEqual(self.identity(), self.owner_identity)
+
+    def test_multiframe_unicode_prompt_and_stale_submission(self):
+        self.detach()
+        peer = self.view(bind=True)
+        saved = hashlib.sha256(self.journal.read_bytes()).digest()
+        peer.send(type='submit', generation=peer.generation, id=uuid.uuid4().hex,
+                  text='must not route implicitly', route='other/endpoint/nick')
+        self.assertIn('fields', peer.until('error')['message'])
+        peer.send(type='submit', generation=peer.generation + 1, id=uuid.uuid4().hex, text='stale')
+        peer.until('error')
+        self.assertEqual(hashlib.sha256(self.journal.read_bytes()).digest(), saved)
+        text = 'žluťoučký 🐈\n' * 17000
+        request = peer.submit(text)
+        self.assertEqual(peer.result(request)['status'], 'committed')
+        event = self.wait_event('input_received')
+        self.assertEqual(event['data']['text'], text)
+        self.wait_event('turn_completed')
+
+    def test_malformed_frame_cannot_reserve_or_stop_owner(self):
+        self.detach()
+        for prefix, offset, total in ((b'SV\x02\x01', 0, 2),
+                                      (b'SA\x05\x01', 0, 2),
+                                      (b'SV\x01\x01', 1, 2),
+                                      (b'SV\x01\x01', 0, 2**63)):
+            with connect(self.directory, 'view.sock') as peer:
+                payload = struct.pack('<QQ', offset, total) + b'{}'
+                peer.sendall(prefix + struct.pack('<I', len(payload)) + payload)
+                try:
+                    self.assertEqual(peer.recv(1), b'')
+                except ConnectionResetError:
+                    pass
+        self.status('detached')
+        self.assertEqual(self.identity(), self.owner_identity)
+        self.view(bind=True)
+        self.status('attached')
+
+    def test_lost_acknowledgement_is_queried_without_resubmission(self):
+        self.detach()
+        peer = self.view(bind=True)
+        request = peer.submit('one uncertain submission')
+        peer.close()
+        self.status('detached')
+        other = self.view()
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            other.send(type='receipt', id=request)
+            result = other.until('result', lambda message: message['id'] == request)
+            if result['status'] != 'pending':
+                break
+            time.sleep(.02)
+        self.assertIn(result['status'], ('committed', 'rejected', 'unknown'))
+        if result['status'] == 'committed':
+            self.wait_event('turn_completed')
+        inputs = [event for event in self.events() if event['type'] == 'input_received']
+        self.assertEqual(len(inputs), int(result['status'] == 'committed'))
+        self.assertEqual(self.identity(), self.owner_identity)
+
+    def test_cancel_during_provider_wait_and_active_steering(self):
+        started = threading.Event()
+
+        def held(handler, request, sequence):
+            started.set()
+            self.release.wait(10)
+            try:
+                self.provider.reply(handler, self.provider.response_body(
+                    sequence, 'completed after hold').encode(), close_header=True)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+
+        self.provider.runtime_handler = held
+        self.detach()
+        peer = self.view(bind=True)
+        request = peer.submit('start held turn')
+        self.assertEqual(peer.result(request)['status'], 'committed')
+        self.assertTrue(started.wait(5))
+        steering = peer.submit('change the pending task')
+        receipt = peer.result(steering)
+        self.assertEqual(receipt['status'], 'committed', receipt)
+        self.assertEqual(receipt['event'], 'steering_added')
+        peer.send(type='cancel', generation=peer.generation)
+        peer.until('control')
+        self.release.set()
+        self.wait_event('turn_cancel_requested')
+        self.wait_event('turn_interrupted')
+        self.status('attached')
+        self.assertEqual(self.identity(), self.owner_identity)
+
+    def test_rejected_input_preserves_owner_and_receipt(self):
+        self.detach()
+        peer = self.view(bind=True)
+        peer.submit('/status')
+        self.assertIn('capability', peer.until('error')['message'])
+        request = peer.submit('   ')
+        self.assertEqual(peer.result(request)['status'], 'rejected')
+        peer.send(type='receipt', id=request)
+        self.assertEqual(peer.result(request)['status'], 'rejected')
+        self.assertFalse(any(event['type'] == 'input_received' for event in self.events()))
+        self.assertEqual(self.identity(), self.owner_identity)
+
+    def test_listener_cleanup_preserves_replaced_endpoint(self):
+        self.detach()
+        peer = self.view(bind=True)
+        endpoint = self.directory / 'view.sock'
+        endpoint.rename(self.directory / 'old-view.sock')
+        endpoint.write_text('replacement owned by the fixture')
+        peer.send(type='quit', generation=peer.generation)
+        peer.until('control')
+        self.status('stored')
+        self.assertEqual(endpoint.read_text(), 'replacement owned by the fixture')
+
+    def test_idle_observer_has_no_frames_and_partial_request_expires(self):
+        self.detach()
+        peer = self.view()
+        peer.until('state')
+        self.assertFalse(select.select([peer.peer], [], [], .2)[0])
+        peer.peer.sendall(b'SV')
+        peer.peer.settimeout(7)
+        self.assertEqual(peer.peer.recv(1), b'')
+        self.status('detached')
+        self.assertEqual(self.identity(), self.owner_identity)
+        bound = self.view(bind=True)
+        if not bound.states:
+            bound.until('state')
+
+        def cpu_time():
+            value = subprocess.check_output(['ps', '-p', str(self.owner), '-o', 'time='],
+                                            text=True).strip()
+            total = 0.0
+            for field in value.split(':'):
+                total = total * 60 + float(field)
+            return total
+
+        before = cpu_time()
+        self.assertFalse(select.select([bound.peer], [], [], .5)[0])
+        self.assertLess(cpu_time() - before, .3, 'idle semantic controller spins its owner')
+
+    def test_detach_and_quit_have_distinct_owner_lifetimes(self):
+        self.detach()
+        peer = self.view(bind=True)
+        peer.send(type='detach', generation=peer.generation)
+        peer.until('detached')
+        self.status('detached')
+        self.assertEqual(self.identity(), self.owner_identity)
+        other = self.view(bind=True)
+        other.send(type='quit', generation=other.generation)
+        self.assertEqual(other.until('control')['intent'], 'quit')
+        self.assertEqual(other.until('exit')['status'], 0)
+        self.assertEqual(other.peer.recv(1), b'')
+        self.status('stored')
+        self.assertFalse((self.directory / 'view.sock').exists())
+        self.assertFalse((self.directory / 'terminal.sock').exists())
+
+
+if __name__ == '__main__':
+    unittest.main(defaultTest='SessionViewTests.test_binary_feature_boundary' if OMITTED else None)

@@ -324,7 +324,7 @@ snag_session_peer_verify(int fd)
 }
 
 static int
-endpoint_address(int dir_fd, const char *dir_path, struct sockaddr_un *address)
+endpoint_address(int dir_fd, const char *dir_path, bool view, struct sockaddr_un *address)
 {
     if (private_directory(dir_fd) < 0) return -1;
     memset(address, 0, sizeof(*address));
@@ -334,7 +334,7 @@ endpoint_address(int dir_fd, const char *dir_path, struct sockaddr_un *address)
 #endif
     (void)dir_path;
     int count = snprintf(address->sun_path, sizeof(address->sun_path),
-                          "%s", SNAG_SESSION_ENDPOINT);
+                          "%s", view ? SNAG_SESSION_VIEW_ENDPOINT : SNAG_SESSION_ENDPOINT);
     if (count < 0 || (size_t)count >= sizeof(address->sun_path)) return snag_errno(ENAMETOOLONG);
     return 0;
 }
@@ -367,22 +367,23 @@ endpoint_link(int fd, int dir_fd, const struct sockaddr_un *address, bool create
 }
 
 static int
-endpoint_stat(int dir_fd, struct stat *st)
+endpoint_stat(int dir_fd, bool view, struct stat *st)
 {
-    if (snag_lstat_at(dir_fd, SNAG_SESSION_ENDPOINT, st) < 0) return -1;
+    const char *name = view ? SNAG_SESSION_VIEW_ENDPOINT : SNAG_SESSION_ENDPOINT;
+    if (snag_lstat_at(dir_fd, name, st) < 0) return -1;
     if (!S_ISSOCK(st->st_mode) || st->st_uid != geteuid() || (st->st_mode & 0077u))
         return snag_errno(EACCES);
     return 0;
 }
 
-int
-snag_session_endpoint_connect(int dir_fd, const char *dir_path)
+static int
+endpoint_connect(int dir_fd, const char *dir_path, bool view)
 {
     struct sockaddr_un address;
     struct stat st;
     int fd, saved;
-    if (endpoint_address(dir_fd, dir_path, &address) < 0 || endpoint_stat(dir_fd, &st) < 0)
-        return -1;
+    if (endpoint_address(dir_fd, dir_path, view, &address) < 0 ||
+        endpoint_stat(dir_fd, view, &st) < 0) return -1;
     fd = stream_socket();
     if (fd < 0) return -1;
     /* A private local endpoint connects immediately. A full listen backlog is
@@ -395,37 +396,37 @@ snag_session_endpoint_connect(int dir_fd, const char *dir_path)
 }
 
 static int
-remove_stale_endpoint(int dir_fd, const char *dir_path)
+remove_stale_endpoint(int dir_fd, const char *dir_path, bool view)
 {
     struct stat before, after;
     int probe;
-    if (endpoint_stat(dir_fd, &before) < 0) return errno == ENOENT ? 0 : -1;
-    probe = snag_session_endpoint_connect(dir_fd, dir_path);
+    if (endpoint_stat(dir_fd, view, &before) < 0) return errno == ENOENT ? 0 : -1;
+    probe = endpoint_connect(dir_fd, dir_path, view);
     if (probe >= 0) {
         (void)close(probe);
         return snag_errno(EADDRINUSE);
     }
     if (errno != ECONNREFUSED) return -1;
-    if (endpoint_stat(dir_fd, &after) < 0) return -1;
+    if (endpoint_stat(dir_fd, view, &after) < 0) return -1;
     if (before.st_dev != after.st_dev || before.st_ino != after.st_ino) return snag_errno(ESTALE);
-    return snag_unlink_at(dir_fd, SNAG_SESSION_ENDPOINT, false);
+    return snag_unlink_at(dir_fd, view ? SNAG_SESSION_VIEW_ENDPOINT : SNAG_SESSION_ENDPOINT, false);
 }
 
-int
-snag_session_listener_open(struct snag_session_listener *listener, int dir_fd,
-                           const char *dir_path, int lock_fd)
+static int
+listener_open(struct snag_session_listener *listener, int dir_fd,
+              const char *dir_path, int lock_fd, bool view)
 {
     struct sockaddr_un address;
     struct stat st;
     int fd, saved;
-    *listener = (struct snag_session_listener){.fd = -1, .dir_fd = -1};
+    *listener = (struct snag_session_listener){.fd = -1, .dir_fd = -1, .view = view};
     /* The writer lock is borrowed, never duplicated or closed. Its ownership
      * is established by the session store before entering this host boundary. */
     if (lock_fd < 0 || fstat(lock_fd, &st) < 0) return snag_errno(EBADF);
     if (!S_ISREG(st.st_mode) || st.st_uid != geteuid() || (st.st_mode & 0077u))
         return snag_errno(EACCES);
-    if (endpoint_address(dir_fd, dir_path, &address) < 0 ||
-        remove_stale_endpoint(dir_fd, dir_path) < 0) return -1;
+    if (endpoint_address(dir_fd, dir_path, view, &address) < 0 ||
+        remove_stale_endpoint(dir_fd, dir_path, view) < 0) return -1;
     listener->dir_fd = snag_dup_read(dir_fd);
     if (listener->dir_fd < 0) return -1;
     if (snag_fd_cloexec(listener->dir_fd) < 0) goto fail;
@@ -433,7 +434,7 @@ snag_session_listener_open(struct snag_session_listener *listener, int dir_fd,
     if (fd < 0) goto fail;
     listener->fd = fd;
     if (endpoint_link(fd, dir_fd, &address, true) < 0) goto fail;
-    if (endpoint_stat(dir_fd, &st) < 0) goto fail;
+    if (endpoint_stat(dir_fd, view, &st) < 0) goto fail;
     listener->device = (uint64_t)st.st_dev;
     listener->inode = (uint64_t)st.st_ino;
     if (listen(fd, 8) < 0) goto fail;
@@ -448,13 +449,40 @@ void
 snag_session_listener_close(struct snag_session_listener *listener)
 {
     struct stat st;
+    const char *name = listener->view ? SNAG_SESSION_VIEW_ENDPOINT : SNAG_SESSION_ENDPOINT;
     if (listener->dir_fd >= 0 &&
-        snag_lstat_at(listener->dir_fd, SNAG_SESSION_ENDPOINT, &st) == 0 &&
+        snag_lstat_at(listener->dir_fd, name, &st) == 0 &&
         (uint64_t)st.st_dev == listener->device && (uint64_t)st.st_ino == listener->inode)
-        (void)snag_unlink_at(listener->dir_fd, SNAG_SESSION_ENDPOINT, false);
+        (void)snag_unlink_at(listener->dir_fd, name, false);
     if (listener->fd >= 0) (void)close(listener->fd);
     if (listener->dir_fd >= 0) (void)close(listener->dir_fd);
     *listener = (struct snag_session_listener){.fd = -1, .dir_fd = -1};
+}
+
+int
+snag_session_listener_open(struct snag_session_listener *listener, int dir_fd,
+                           const char *dir_path, int lock_fd)
+{
+    return listener_open(listener, dir_fd, dir_path, lock_fd, false);
+}
+
+int
+snag_session_view_listen(struct snag_session_listener *listener, int dir_fd,
+                         const char *dir_path, int lock_fd)
+{
+    return listener_open(listener, dir_fd, dir_path, lock_fd, true);
+}
+
+int
+snag_session_endpoint_connect(int dir_fd, const char *dir_path)
+{
+    return endpoint_connect(dir_fd, dir_path, false);
+}
+
+int
+snag_session_view_connect(int dir_fd, const char *dir_path)
+{
+    return endpoint_connect(dir_fd, dir_path, true);
 }
 
 int
@@ -488,12 +516,13 @@ snag_session_stream_pair(int fds[2])
 
 static int
 packet_read_version(int fd, struct snag_session_packet *packet,
-    unsigned char version, unsigned char last_type)
+    unsigned char family, unsigned char version, unsigned char last_type)
 {
     size_t target = SNAG_SESSION_HEADER;
     for (;;) {
         if (packet->used >= SNAG_SESSION_HEADER) {
-            if (packet->bytes[0] != 'S' || packet->bytes[1] != 'A' || packet->bytes[2] != version ||
+            if (packet->bytes[0] != 'S' || packet->bytes[1] != family ||
+                packet->bytes[2] != version ||
                 packet->bytes[3] < SNAG_SESSION_RESERVE ||
                 packet->bytes[3] > last_type ||
                 snag_session_packet_length(packet) > SNAG_SESSION_FRAME_MAX)
@@ -514,7 +543,13 @@ packet_read_version(int fd, struct snag_session_packet *packet,
 int
 snag_session_packet_read(int fd, struct snag_session_packet *packet)
 {
-    return packet_read_version(fd, packet, 5u, SNAG_SESSION_STATUS);
+    return packet_read_version(fd, packet, 'A', 5u, SNAG_SESSION_STATUS);
+}
+
+int
+snag_session_view_packet_read(int fd, struct snag_session_packet *packet)
+{
+    return packet_read_version(fd, packet, 'V', 1u, 1u);
 }
 
 int
@@ -626,6 +661,24 @@ snag_session_packet_write(int fd, struct snag_session_packet *packet)
     (void)packet;
     return snag_errno(ENOTSUP);
 }
+int
+snag_session_view_listen(struct snag_session_listener *listener, int dir_fd,
+                         const char *dir_path, int lock_fd)
+{
+    return snag_session_listener_open(listener, dir_fd, dir_path, lock_fd);
+}
+
+int
+snag_session_view_connect(int dir_fd, const char *dir_path)
+{
+    return snag_session_endpoint_connect(dir_fd, dir_path);
+}
+
+int
+snag_session_view_packet_read(int fd, struct snag_session_packet *packet)
+{
+    return snag_session_packet_read(fd, packet);
+}
 #endif /* SNAG_SESSION_NATIVE */
 
 #ifdef SNAG_SESSION_NATIVE
@@ -649,7 +702,7 @@ endpoint_status_version(int dir_fd, const char *dir_path, unsigned char version,
             if (rc < 0) break;
             if (rc == 1) {
                 verified = true;
-                rc = packet_read_version(fd, &reply, version, status_type);
+                rc = packet_read_version(fd, &reply, 'A', version, status_type);
                 if (rc < 0) break;
                 if (rc == 1) {
                     size_t length = snag_session_packet_length(&reply);
@@ -697,4 +750,15 @@ snag_session_endpoint_status(int dir_fd, const char *dir_path)
     (void)dir_path;
     return snag_errno(ENOTSUP);
 #endif
+}
+
+int
+snag_session_view_packet_set(struct snag_session_packet *packet, const void *data, size_t len)
+{
+    int rc = snag_session_packet_set(packet, SNAG_SESSION_RESERVE, data, len);
+    if (!rc) {
+        packet->bytes[1] = 'V';
+        packet->bytes[2] = 1u;
+    }
+    return rc;
 }

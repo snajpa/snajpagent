@@ -1735,6 +1735,24 @@ state is reported and preserved. Bracketed paste inserts literal text in command
 or filter input; it cannot execute a command by itself. Escape returns to normal
 mode, Ctrl-L redraws and Ctrl-Z suspends on supported platforms. Clean exit and
 handled shutdown signals restore cooked input, cursor, mouse and screen modes.
+.SS "Native semantic endpoint"
+With workspace support compiled in, new POSIX native owners publish
+.B view.sock
+beside their private terminal endpoint. Same-user peers can observe committed
+history boundaries and reserve the single controller shared with classic
+terminal attachment. Observation leaves session attachment status unchanged;
+a bound workspace controller counts as attached. Connection loss releases
+control and leaves the owner running.
+.PP
+The current backend supports plain rollout submissions, durable admission
+receipts, cancellation, detach and normal owner shutdown. Reconnect can query
+a receipt without repeating a prompt. A changed owner instance with an unknown
+receipt requires explicit reconciliation against history. The interactive
+workspace composer and command/report adapters remain under development;
+the current workspace frontend retains the read-only controls above.
+Existing owners retain their advertised capabilities. Builds using
+.B WITH_VM=0
+omit this endpoint; Windows currently lacks the native-owner backend.
 .SH "Commands"
 Commands normally occupy a single submitted line.
 Each entered command stays visible with its original prompt before its feedback,

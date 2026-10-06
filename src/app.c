@@ -177,6 +177,7 @@ app_reportf(struct app_state *app, const char *format, ...)
 static int
 service_attachment(struct app_state *app, bool external)
 {
+    if (snag_ui_view_state(&app->ui, &app->session) < 0) return -1;
     if (snag_app_voice_attachment_service(app) < 0) return -1;
     uint64_t generation = snag_ui_session_pending(&app->ui);
     if (generation) {
@@ -442,8 +443,9 @@ prepare_turn_settings(struct app_state *app, char *error, size_t error_size)
 static unsigned int prompt_spinner_states(const struct app_state *app);
 static int set_input_prompt(struct app_state *app, bool active);
 
-int
-snag_app_commit_event(struct app_state *app, const char *type, json_t *data, char *error, size_t error_size)
+static int
+commit_event_with_request(struct app_state *app, const char *type, json_t *data,
+    const char *request, char *error, size_t error_size)
 {
     uint64_t seq;
     enum snag_goal_status previous_goal_status = app->session.goal_status;
@@ -461,11 +463,18 @@ snag_app_commit_event(struct app_state *app, const char *type, json_t *data, cha
         json_decref(data);
         return -1;
     }
+    char view_request[SNAG_ID_HEX_LEN + 1u] = {0};
+    if (request) (void)snag_strcpy(view_request, sizeof(view_request), request);
     json_t *voice_event=app->voice?json_incref(data):NULL;
     int committed=snag_session_commit(&app->session,type,data,&seq,error,error_size);
     if(!committed && voice_event)snag_app_voice_event(app,type,voice_event);
     json_decref(voice_event);
     if(committed<0)return -1;
+    if (view_request[0]) {
+        /* Receipt publication follows fsync/reducer admission. A disconnected
+         * frontend never changes a successfully committed input into failure. */
+        (void)snag_ui_view_result(&app->ui, view_request, "committed", seq, type);
+    }
     /* Present committed goal state before any notice can redraw the composer. */
     if (previous_goal_status != app->session.goal_status && app->ui.opened &&
         snag_ui_send(&app->ui, (struct snag_ui_command){
@@ -493,6 +502,12 @@ snag_app_commit_event(struct app_state *app, const char *type, json_t *data, cha
     if (strcmp(type, "turn_failed") == 0 && app->session.goal_status != SNAG_GOAL_ACTIVE)
         return app_warning(app, "turn failed; try /retry to continue");
     return 0;
+}
+int
+snag_app_commit_event(struct app_state *app, const char *type, json_t *data,
+    char *error, size_t error_size)
+{
+    return commit_event_with_request(app, type, data, NULL, error, error_size);
 }
 #define commit_event snag_app_commit_event
 
@@ -541,8 +556,11 @@ commit_input(struct app_state *app, const char *type, json_t *data,
     if (content && snag_json_set_new(data, "content", json_incref((json_t *)content)) < 0) {
         json_decref(data); json_decref(remaining); return -1;
     }
+    const char *request = snag_string_in(type,
+        "input_received steering_added future_turn_queued future_turn_edited") ?
+        app->ui.view_request : NULL;
     uint64_t before = app->session.next_seq;
-    int rc = commit_event(app, type, data, error, error_size);
+    int rc = commit_event_with_request(app, type, data, request, error, error_size);
     if (app->session.next_seq != before) {
         json_decref(app->draft_content);
         app->draft_content = remaining; remaining = NULL;

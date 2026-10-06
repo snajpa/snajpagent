@@ -27,6 +27,7 @@ struct snag_session_relay {
     size_t event_length;
     bool input_pending, closing, peer_verified, reject_verified, reject_reply;
     bool voice_offered;
+    bool view_reserved, view_attached;
 };
 
 /* On success takes ownership of a private PTY master and optional initial
@@ -54,5 +55,11 @@ int snag_session_relay_activate(struct snag_session_relay *, uint64_t generation
  * EAGAIN means an earlier frame is still pending; retry through the owner. */
 int snag_session_relay_control(struct snag_session_relay *, enum snag_session_message,
                                const void *, size_t);
+
+/* Called only by the presentation owner. Both transports share one lease and
+ * generation. A reservation is not yet an attached controller. */
+int snag_session_relay_view_reserve(struct snag_session_relay *, uint64_t *generation);
+int snag_session_relay_view_bind(struct snag_session_relay *, uint64_t generation);
+void snag_session_relay_view_release(struct snag_session_relay *, uint64_t generation);
 
 #endif

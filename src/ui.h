@@ -18,6 +18,9 @@ struct snag_ui {
     bool active, input_active, input_echoed, input_view_applied;
     bool input_error;
     bool input_interface;
+    bool view_listening;
+    char view_request[SNAG_ID_HEX_LEN + 1u];
+    uint64_t view_state_seq;
     /* Engine-only semantic output acknowledgement. Borrowed text, no terminal frames. */
     void (*observe)(void *, const char *, const char *, const char *);
     void *observe_opaque;
@@ -44,7 +47,7 @@ enum snag_ui_operation {
     SNAG_UI_SESSION_REBIND, SNAG_UI_SESSION_OFFER, SNAG_UI_SESSION_PROGRESS,
     SNAG_UI_SESSION_REFUSE, SNAG_UI_SESSION_RELEASED, SNAG_UI_SESSION_BOUND,
     SNAG_UI_SESSION_READY,
-    SNAG_UI_INPUT, SNAG_UI_VOICE_EVENT, SNAG_UI_STOP
+    SNAG_UI_INPUT, SNAG_UI_VOICE_EVENT, SNAG_UI_VIEW_STATE, SNAG_UI_VIEW_RESULT, SNAG_UI_STOP
 };
 
 struct snag_ui_prompt {
@@ -93,6 +96,9 @@ int snag_ui_init(struct snag_ui *ui);
 /* Transfer owner descriptors to the presentation thread before opening input. */
 int snag_ui_session_start(struct snag_ui *, struct snag_session_process *);
 int snag_ui_session_listen(struct snag_ui *, const struct snag_session *);
+int snag_ui_view_state(struct snag_ui *, const struct snag_session *);
+int snag_ui_view_result(struct snag_ui *, const char *id, const char *status,
+                        uint64_t seq, const char *event);
 int snag_ui_session_control(struct snag_ui *, enum snag_session_message, const void *, size_t);
 uint64_t snag_ui_session_pending(const struct snag_ui *);
 /* Current frontend-bound native attachment identity; zero until source drain

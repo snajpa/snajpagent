@@ -66,8 +66,15 @@ checkpoint or reprojecting an idle page. Verified descriptors remain cached for
 open buffers; HOLD retains its viewport and reports newer output. Source identity
 failure stops polling until explicit retry. Version2 workspace state accepts the
 optional follow flag, defaulting older transcript snapshots to HOLD.
-Cross-page tool dependencies, composition, semantic attachment, search/selection/
-clipboard and IRC conversations below still need integration. This development frontend has
+The native semantic owner backend now exposes a private, independently framed
+view endpoint. It shares the classic controller lease, publishes committed-tail
+snapshots, and admits plain rollout input through the existing engine queue.
+Receipts identify the existing durable event and survive reconnect to that owner;
+the journal schema stays unchanged. Tests cover active steering, cancellation,
+classic return and malformed/stalled peers. See [SV/1](session-view.md) for the
+implemented capability and framing contract. WITH_VM=0 omits this endpoint.
+Cross-page tool dependencies, composition, the frontend connection manager,
+search/selection/clipboard and IRC conversations below still need integration. This development frontend has
 not been installed on the operator's machines or merged into the release line.
 
 ## 1. Outcome and decisions
