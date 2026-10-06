@@ -98,7 +98,8 @@ collect_output(struct transcript *view, const json_t *event)
     struct snag_buf decoded = {.max = 16384u};
     int rc = -1;
     if (snag_process_output_decode(data, &decoded) < 0 || !decoded.len ||
-        offset > INT64_MAX - decoded.len || decoded.len > SNAG_MEMORY_LIMIT / 2u - view->bytes)
+        offset > (uint64_t)INT64_MAX - decoded.len ||
+        decoded.len > SNAG_MEMORY_LIMIT / 2u - view->bytes)
         goto out;
     size_t count = view->fragment_count;
     if (count >= SIZE_MAX / sizeof(*view->fragments)) {

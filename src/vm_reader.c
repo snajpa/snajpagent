@@ -310,7 +310,7 @@ prior_public(void *opaque, const struct snag_session *session, uint64_t seq,
         const char *text = snag_json_string(json_object_get(data, "item"), "text");
         if (!text || snag_json_integer_u64(data, "index", &ordinal) < 0 ||
             snag_json_integer_u64(data, "offset", &offset) < 0 ||
-            offset > INT64_MAX - strlen(text)) return snag_errno(EINVAL);
+            offset > (uint64_t)INT64_MAX - strlen(text)) return snag_errno(EINVAL);
         char index[24];
         (void)snprintf(index, sizeof(index), "%llu", (unsigned long long)ordinal);
         json_t *before = json_object_get(response, "before");

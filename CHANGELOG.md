@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Fix 32-bit compilation of Vim history offset bounds while preserving 64-bit
+  source coordinates.
+
 - Keep other Vim panes refreshing during a long history search, copy or cursor
   motion. Canceling the scan preserves live-pane reads and their output.
 

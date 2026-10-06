@@ -28,6 +28,10 @@ Pager fixtures cover continued provider work and exactly-once catch-up after a
 nonzero pager exit, as well as missing executables, interruption and resize.
 Native terminal fixtures cover suspend/reattach with the external job retained.
 
+History offset fixtures cover coordinates above 4 GiB, the signed 64-bit limit
+and overflow rejection. The ARMv6 compiler reproduces the two original signedness
+errors and accepts the corrected reader and transcript translation units.
+
 The optional workspace and classic conversation tabs are development features.
 Native macOS/Linux fixtures cover session creation/resume and controller ownership,
 saved workspace layouts, independent drafts, command reports, IRC channel/query

@@ -174,6 +174,40 @@ response_block(const struct snag_vm_read_result *page)
 }
 
 static void
+public_offset_bounds_test(struct snag_store *store, const char *root)
+{
+    static const char id[] = "0123456789abcdef0123456789abcdef";
+    static const uint64_t offsets[] = {(uint64_t)UINT32_MAX + 10u,
+        (uint64_t)INT64_MAX - 3u, (uint64_t)INT64_MAX - 2u};
+    for (size_t i = 0u; i < sizeof(offsets) / sizeof(offsets[0]); ++i) {
+        struct snag_session source;
+        snag_session_init(&source);
+        char error[256] = "";
+        assert(snag_session_create(store, &source, root, "default", "public-offsets", "high",
+            error, sizeof(error)) == 0);
+        projection_record(&source, "response_started", json_pack("{s:s}", "response_id", id));
+        projection_record(&source, "response_output", json_pack("{s:s,s:i,s:I,s:o}",
+            "response_id", id, "index", 0, "offset", (json_int_t)offsets[i],
+            "item", response_item("end")));
+        struct snag_vm_read_request request = {.trusted_tail = true, .project = true,
+            .columns = 80u, .cursor = public_cursor(&source)};
+        projection_record(&source, "response_completed", json_pack("{s:s,s:[]}",
+            "response_id", id, "items"));
+        request.tail = public_cursor(&source);
+        memcpy(request.session_id, source.id, sizeof(source.id));
+        struct snag_vm_reader *reader = snag_vm_reader_open(store, NULL, error, sizeof(error));
+        assert(reader);
+        struct snag_vm_read_result *page = await_page(reader,
+            snag_vm_reader_request(reader, &request));
+        assert(page->error_number == (i == 2u ? EINVAL : 0));
+        if (i != 2u) assert(page->blocks && page->cursor.offset == request.tail.offset);
+        snag_vm_read_result_free(page);
+        snag_vm_reader_close(reader);
+        snag_session_close(&source);
+    }
+}
+
+static void
 public_dependency_test(struct snag_store *store, const char *root)
 {
     static const char id[] = "0123456789abcdef0123456789abcdef";
@@ -1369,6 +1403,7 @@ main(void)
     snag_session_init(&source);
     assert(snag_store_open(&store, root, error, sizeof(error)) == 0);
     dependency_test(&store, root);
+    public_offset_bounds_test(&store, root);
     public_dependency_test(&store, root);
     public_full_pages_test(&store, root);
     search_blocks_test();

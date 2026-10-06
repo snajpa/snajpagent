@@ -190,7 +190,7 @@ encoded_bytes(void *opaque, const unsigned char *bytes, size_t length)
 }
 
 static void
-output(json_t *events, unsigned int stream, size_t offset, const void *bytes, size_t length)
+output(json_t *events, unsigned int stream, uint64_t offset, const void *bytes, size_t length)
 {
     struct snag_buf encoded = {.max = 65536u};
     struct snag_base64_stream encoder = {0};
@@ -201,6 +201,34 @@ output(json_t *events, unsigned int stream, size_t offset, const void *bytes, si
         "handle", handle, "stream", stream, "offset", (json_int_t)offset,
         "encoding", "base64", "data", (const char *)encoded.data));
     snag_buf_free(&encoded);
+}
+
+static void
+output_offset_bounds(void)
+{
+    static const uint64_t offsets[] = {(uint64_t)UINT32_MAX + 10u,
+        (uint64_t)INT64_MAX - 3u, (uint64_t)INT64_MAX - 2u};
+    for (size_t i = 0u; i < sizeof(offsets) / sizeof(offsets[0]); ++i) {
+        char error[256];
+        json_t *events = json_array();
+        output(events, 0u, offsets[i], "end", 3u);
+        errno = 0;
+        json_t *blocks = snag_vm_transcript_blocks(events, 3u, 80u, NULL, NULL, NULL,
+            error, sizeof(error));
+        if (i == 2u) {
+            assert(!blocks && errno == EINVAL);
+        } else {
+            assert(blocks && json_array_size(blocks) == 1u);
+            json_t *block = json_array_get(blocks, 0u);
+            assert(!strcmp(snag_json_string(block, "text"), "end"));
+            assert(json_integer_value(json_object_get(block, "source_begin")) ==
+                (json_int_t)offsets[i]);
+            assert(json_integer_value(json_object_get(block, "source_end")) ==
+                (json_int_t)(offsets[i] + 3u));
+        }
+        json_decref(blocks);
+        json_decref(events);
+    }
 }
 
 static void
@@ -419,6 +447,7 @@ goal_wait_channels(void)
 int
 main(void)
 {
+    output_offset_bounds();
     goal_wait_channels();
     query_conversations();
     outgoing_receipts();
