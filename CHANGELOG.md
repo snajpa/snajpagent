@@ -4,28 +4,36 @@
 
 ## Unreleased
 
+- Add shared operator query commands: `/query` opens or selects a private tab,
+  `/msg` and `/notice` send without changing focus, and `/me` sends a private
+  action. Support quoted endpoint/nick and same-session qualified addresses,
+  exact conversation selectors and endpoint case mapping. Capture known peers
+  and connection generations at submission; reject stale recipients and restore
+  unsent commands. Bare query addresses require an unambiguous endpoint.
+  Channel addressing/actions and Vim conversation windows remain in progress.
+
 - Keep opened private chats in the classic Tab cycle, with separate drafts,
   unread indicators and conversation-scoped buffered output. Shift-Tab cycles
   backwards with a draft present. Incoming traffic preserves focus; operator
   replies keep their captured recipient and agent query composers are read-only.
   Show private message bodies once, with separate send-state receipts.
   Resume restores query tabs, and retained history remains available through
-  `/history`. Common query commands and Vim conversation windows are in progress.
+  `/history`. Vim conversation windows are in progress.
 
 - Enable session-bound operator and agent IRC queries. Agent DMs enter model
   context with exact reply provenance; operator DMs remain outside provider
   input and model history. Private NOTICE, history and nickname changes add
   context without demanding a reply. Resume restores pending reply obligations.
   Extend `irc_send` with explicit query IDs and endpoint/nick addresses, private
-  actions and request-time recipient validation. Operator query commands and
-  Vim conversation buffers remain in progress.
+  actions and request-time recipient validation. Vim conversation buffers remain
+  in progress.
 
 - Add owner-validated private IRC send handles and separate frame queues, with
   durable chunk IDs and pending/written/acknowledged/failed/uncertain outcomes.
   Respect external line budgets and UTF-8 boundaries; cancel stale recipients
   and retain uncertainty across disconnection without replaying private sends.
   Native server echoes correlate in wire order. External unlabeled writes remain
-  unconfirmed. Application query commands remain in progress.
+  unconfirmed.
 
 - Relay private messages between registered IRC peers, with negotiated sender
   echoes, silent NOTICE failures and private-body exclusion from channel replay

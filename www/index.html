@@ -81,13 +81,11 @@
         Resume retains saved settings unless overridden. Terminal file transfers
         and local audio stop on disconnect; queued downloads keep their saved state.
         Restart microphone capture explicitly after reconnecting.</p>
-      <p>Set a goal when you want work to continue beyond the next reply. Exit to
-        stop the program and resume the saved session later. An active goal
-        continues on resume; pause it before exiting if you want it to stay paused.
-        <code>/goal resume</code> continues it; <code>/goal clear</code> stops
-        automatic goal continuation and retains its history.
-        Resume shows retained public history and continues unfinished work from saved
-        inputs and tool results, without automatically repeating uncertain commands.</p>
+      <p>Set a goal to continue beyond the next reply. Active goals continue on
+        resume; pause before exiting to keep one paused. <code>/goal resume</code>
+        continues work; <code>/goal clear</code> ends continuation and retains
+        history. Resume preserves inputs and tool results; uncertain commands
+        require inspection.</p>
       <p>For longer work, have the model keep findings, decisions and corrections
         in project files, with pointers in <code>AGENTS.md</code>. Keep the notes
         current so later tasks can use what was learned and pick up unfinished work.</p>
@@ -109,19 +107,14 @@
         then <code>trzsz --dragfile ssh target</code>). See the manual's
         Terminal file transfers section.</p>
       <p><code>/dictate</code> inserts speech into your draft. <code>/voice on</code>
-        starts a voice conversation; <code>/voice mute</code> pauses the microphone
-        and <code>/voice off</code> stops voice. Use your selected Codex subscription,
-        codex-lb, or compatible BYOK provider.
-        Continue speaking and submit another request while coding work runs;
-        inspect work status or files, steer the active turn, or queue a separate task.
-        The model handles file changes and can send speech into the open conversation
-        with <code>voice_output</code>. Rollout labels microphone transcripts and
-        voice-model replies separately.
-        Spoken UI commands use the keyboard's command path and preserve the typed draft.
-        A codex-lb gateway must use its <code>/backend-api/codex</code> base for voice;
-        a bare <code>/v1</code> base does not select native voice.
-        Voice follows the configured HTTP/HTTPS route; use HTTPS or a secure tunnel
-        outside a trusted network. See the <a href="manual.html">manual</a> for settings and controls.</p>
+        starts conversation audio, <code>/voice mute</code> pauses the microphone
+        and <code>/voice off</code> stops it. Speech can inspect status, steer or
+        queue coding work while preserving your typed draft. The model can reply
+        with <code>voice_output</code>.</p>
+      <p>Voice uses your selected provider's credentials. A codex-lb gateway needs
+        its <code>/backend-api/codex</code> base. Use HTTPS or a secure tunnel
+        outside trusted networks. The <a href="manual.html">manual</a> covers
+        supported providers, data destinations and capture controls.</p>
     </section>
     <section id="network" aria-labelledby="network-heading">
       <h2 id="network-heading">Coordinate distributed work</h2>
@@ -129,7 +122,8 @@
         Each instance can be present in several rooms through separate endpoints;
         <code>/connect ENDPOINT</code> joins that endpoint's advertised room.
         Empty Tab cycles through rollout, connected rooms and opened private chats.
-        Private chats keep their own drafts and unread indicators. Enter sends to
+        Open a private tab with <code>/query NICK</code>. Private chats keep
+        their own drafts and unread indicators. Enter sends to
         the selected operator conversation and directs your own agent in rollout.</p>
       <p>Models select room messages, sleep IRC delivery and compact context;
         your transcript stays complete.</p>

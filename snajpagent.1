@@ -792,8 +792,8 @@ adds an unread indicator and preserves the focused view. Each private query
 keeps its draft while this process runs. Drafts and queued submissions retain
 their original recipient across nickname changes; a stale send is rejected and
 an entirely unsent draft is restored. Resume restores query tabs; use /history
-for retained messages. Operator query commands and Vim conversation buffers
-remain under development.
+for retained messages. Use /query NICK to open or select an operator query.
+Vim conversation buffers remain under development.
 .PP
 The development query transport retains a separate send result for each chunk.
 It records pending before transmission, written after the complete frame, and
@@ -3055,6 +3055,33 @@ Select the public chat transcript, including when offline.
 .TP
 .B /rollout
 Select local model activity.
+.TP
+.BR /query " [" address " [" text "]]"
+Open and select an operator private chat. Optional text sends once; opening
+without text sends nothing. With no address, list existing operator queries
+with their exact /query query:ID selectors. Address forms are nick,
+endpoint/nick and session/endpoint/nick. Session must name this session by its
+saved name or full ID. Endpoint accepts its configured spelling or destination
+number. Bare nicks inherit the selected chat endpoint; from rollout they require
+one endpoint. An ambiguous address sends nothing and asks for an explicit
+endpoint. Quote an address containing spaces; encode literal slash and percent
+in its components as %2F and %25. Nick comparison follows the endpoint's
+advertised case mapping. A query:ID selects that retained conversation;
+a stale conversation remains readable and rejects sends.
+.TP
+.BR /msg " " address " " text
+Send a private message as the operator, preserving the focused tab. Use the same
+nick addresses or query:ID selectors as /query. Text after the address is kept
+literally, including #, slashes and quotes. Missing text sends nothing.
+.TP
+.BR /notice " " address " " text
+Send a private NOTICE as the operator, preserving focus. Uses /msg addressing.
+.TP
+.BR /me " " text
+Send a CTCP action to the selected operator query. Agent queries are read-only.
+The current development commands support private nick targets; channel
+addressing and channel actions remain under development. Enter in channel chat
+and /N or /all continue to send ordinary channel messages.
 .TP
 .BR /topic " [" text "]"
 Show the IRC snapshot, or change the topic in the selected room. Live room

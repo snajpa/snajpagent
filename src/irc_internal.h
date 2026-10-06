@@ -13,6 +13,7 @@ struct snag_irc_view {
     uint64_t revision;
     char connection[SNAG_ID_HEX_LEN + 1u];
     uint64_t generation;
+    enum snag_irc_casemapping casemapping[2u];
     char text[32768u];
     char nicks[4096u]; /* Newline-separated current members, without op prefixes. */
     bool joined;

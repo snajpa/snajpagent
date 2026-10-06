@@ -1,7 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "app_internal.h"
 #include "context.h"
-#include "irc_address.h"
 #include "json.h"
 #include "media.h"
 #include "provider.h"
@@ -447,66 +446,10 @@ static int
 irc_tool_query_target(struct app_state *app, const char *selector,
                       struct snag_irc_query_target *target, char *error, size_t error_size)
 {
-    const char *query_id = !strncmp(selector, "query:", 6u) ? selector + 6u : NULL;
-    struct snag_irc_address address = {0};
-    if (query_id) {
-        if (!snag_hex_is_lower(query_id, SNAG_ID_HEX_LEN))
-            return snag_fail(error, error_size, EINVAL, "invalid query conversation ID");
-    } else if (snag_irc_address_parse(&address, selector, SNAG_IRC_MESSAGE_ADDRESS,
-        error, error_size) < 0) return -1;
-    if (address.session[0] && strcmp(address.session, app->session.id) &&
-        (!app->session.name || strcmp(address.session, app->session.name)))
-        return snag_fail(error, error_size, EACCES, "IRC tools use this session's identities");
-
-    const struct snag_irc_destination *selected = NULL;
-    for (size_t i = 0u; i < app->irc_request_destinations.count; ++i) {
-        const struct snag_irc_destination *item = &app->irc_request_destinations.items[i];
-        const json_t *connection = json_object_get(app->irc_request_conversations,
-            item->connection);
-        const json_t *conversations = json_object_get(connection, "conversations");
-        if (query_id) {
-            const json_t *data = json_object_get(json_object_get(conversations, query_id), "data");
-            if (!agent_query(data)) continue;
-            struct snag_irc_event event;
-            if (snag_irc_event_record_read("irc_event_v2", data, &event) < 0) return -1;
-            if (!snag_irc_event_query_target(app->irc, &event, target))
-                return snag_fail(error, error_size, ESTALE, "query endpoint is unavailable");
-            target->destination = item->target.id;
-            return 0;
-        }
-        char number[16u];
-        snprintf(number, sizeof(number), "%u", item->target.id);
-        if (address.endpoint[0] && strcmp(address.endpoint, number) &&
-            !snag_irc_endpoint_equal(address.endpoint, item->endpoint)) continue;
-        if (selected)
-            return snag_fail(error, error_size, EINVAL, "select an explicit endpoint/nick");
-        selected = item;
-    }
-    if (!selected || !selected->connection[0]) {
-        return snag_fail(error, error_size, ENOENT,
-            "query destination is unavailable; use irc_state");
-    }
-    const json_t *connection = json_object_get(app->irc_request_conversations,
-        selected->connection);
-    const char *key;
-    json_t *item;
-    json_object_foreach(json_object_get(connection, "conversations"), key, item) {
-        (void)key;
-        const json_t *data = json_object_get(item, "data");
-        if (!agent_query(data) || strcmp(address.target,
-            snag_json_string(json_object_get(data, "routing"), "peer"))) continue;
-        struct snag_irc_event event;
-        if (snag_irc_event_record_read("irc_event_v2", data, &event) < 0) return -1;
-        if (event.route.generation != selected->generation || event.kind == SNAG_IRC_QUIT) continue;
-        if (!snag_irc_event_query_target(app->irc, &event, target))
-            return snag_fail(error, error_size, ESTALE, "query endpoint is unavailable");
-        target->destination = selected->target.id;
-        return 0;
-    }
-    struct snag_irc_query_target scope = {.destination = selected->target.id,
-        .generation = selected->generation, .identity = SNAG_IRC_AGENT};
-    memcpy(scope.connection, selected->connection, sizeof(scope.connection));
-    return snag_irc_query_open_frozen(app->irc, &scope, address.target, target, error, error_size);
+    struct snag_irc_scopes scopes;
+    snag_irc_capture_scopes(&app->irc_request_destinations, &scopes);
+    return snag_app_irc_query_target(app, &scopes, app->irc_request_conversations,
+        SNAG_IRC_AGENT, 0u, selector, NULL, target, error, error_size);
 }
 
 static int

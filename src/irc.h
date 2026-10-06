@@ -26,6 +26,10 @@ struct snag_irc_route {
     size_t count;
 };
 
+enum snag_irc_casemapping {
+    SNAG_IRC_RFC1459, SNAG_IRC_ASCII, SNAG_IRC_RFC1459_STRICT, SNAG_IRC_CASE_UNKNOWN
+};
+
 struct snag_irc_destination {
     struct snag_irc_target target;
     char connection[SNAG_ID_HEX_LEN + 1u];
@@ -34,6 +38,7 @@ struct snag_irc_destination {
     char room[SNAG_CONFIG_IRC_ROOM_MAX + 2u];
     char model[SNAG_CONFIG_IRC_NICK_MAX + 1u];
     char operator[SNAG_CONFIG_IRC_NICK_MAX + 1u];
+    enum snag_irc_casemapping casemapping[2u];
     char nicks[4096u];
     bool joined;
 };
@@ -58,6 +63,24 @@ struct snag_irc_query_target {
     uint64_t generation;
     enum snag_irc_identity identity;
 };
+/* Address resolution captures connection identity without copying member lists. */
+struct snag_irc_scope {
+    struct snag_irc_query_target target;
+    char endpoint[SNAG_CONFIG_IRC_ENDPOINT_MAX + 1u];
+    char room[SNAG_CONFIG_IRC_ROOM_MAX + 2u];
+    enum snag_irc_casemapping casemapping[2u];
+};
+
+struct snag_irc_scopes {
+    struct snag_irc_scope items[SNAG_IRC_DESTINATIONS_MAX];
+    size_t count;
+};
+
+void snag_irc_capture_scopes(const struct snag_irc_destinations *, struct snag_irc_scopes *);
+bool snag_irc_name_equal(enum snag_irc_casemapping, const char *, const char *);
+const struct snag_irc_scope *snag_irc_scope_resolve(const struct snag_irc_scopes *,
+    uint32_t, const char *, char *, size_t);
+
 enum snag_irc_conversation_kind { SNAG_IRC_CONNECTION_EVENTS, SNAG_IRC_CHANNEL, SNAG_IRC_QUERY };
 enum snag_irc_direction { SNAG_IRC_INCOMING, SNAG_IRC_OUTGOING };
 enum snag_irc_delivery {

@@ -94,7 +94,7 @@ COMMON_SRC += src/convert.c src/tools_media.c src/media.c src/tools_document.c s
 COMMON_SRC += src/upload_wire.c src/upload_md5.c src/screen_wire.c src/upload.c src/remote.c
 COMMON_SRC += src/clipboard.c src/clipboard_transfer.c
 COMMON_SRC += src/app_resume.c
-COMMON_SRC += src/irc_address.c
+COMMON_SRC += src/irc_address.c src/app_irc.c
 COMMON_SRC += src/vm.c
 ifeq ($(WITH_VM),1)
 COMMON_SRC += src/session_view.c src/vm_connection.c src/vm_report.c

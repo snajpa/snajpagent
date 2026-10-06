@@ -5,6 +5,45 @@
 #include <errno.h>
 #include <string.h>
 
+void
+snag_irc_capture_scopes(const struct snag_irc_destinations *destinations,
+                        struct snag_irc_scopes *out)
+{
+    memset(out, 0, sizeof(*out));
+    for (size_t i = 0u; destinations && i < destinations->count; ++i) {
+        const struct snag_irc_destination *item = &destinations->items[i];
+        struct snag_irc_scope *scope = &out->items[out->count++];
+        scope->target.destination = item->target.id;
+        scope->target.generation = item->generation;
+        memcpy(scope->target.connection, item->connection, sizeof(scope->target.connection));
+        memcpy(scope->endpoint, item->endpoint, sizeof(scope->endpoint));
+        memcpy(scope->room, item->room, sizeof(scope->room));
+        memcpy(scope->casemapping, item->casemapping, sizeof(scope->casemapping));
+    }
+}
+
+bool
+snag_irc_name_equal(enum snag_irc_casemapping mapping, const char *a, const char *b)
+{
+    if (mapping == SNAG_IRC_CASE_UNKNOWN) return !strcmp(a, b);
+    for (;; ++a, ++b) {
+        unsigned char ac = (unsigned char)*a;
+        unsigned char bc = (unsigned char)*b;
+        if (ac >= 'A' && ac <= 'Z') ac += 'a' - 'A';
+        if (bc >= 'A' && bc <= 'Z') bc += 'a' - 'A';
+        if (mapping != SNAG_IRC_ASCII) {
+            if (ac >= '[' && ac <= ']') ac += '{' - '[';
+            if (bc >= '[' && bc <= ']') bc += '{' - '[';
+            if (mapping == SNAG_IRC_RFC1459) {
+                if (ac == '^') ac = '~';
+                if (bc == '^') bc = '~';
+            }
+        }
+        if (ac != bc) return false;
+        if (!ac) return true;
+    }
+}
+
 const char *
 snag_irc_kind_name(enum snag_irc_event_kind kind)
 {

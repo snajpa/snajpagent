@@ -41,8 +41,6 @@ Scroll back normally. Tool details start hidden: `/verbose 1` shows activity,
 
 [![A local session reports fixing whitespace handling and passing four checks](www/screenshots/ordinary.png)](www/screenshots/ordinary.png)
 
-Model output with tool details hidden.
-
 ### Correct this task or queue the next one
 
 A **turn** runs from your request through the final answer in **rollout**. Type
@@ -65,10 +63,9 @@ counts. Up/Ctrl-R navigate prompt history. `/cat PATH` opens a file in `$PAGER`
 without adding it to the conversation.
 
 `/ro QUERY` queues inspection without commands, edits, goal changes or IRC sends.
-`/yield` returns a tool wait to the model while preserving its process and handle.
-Command output remains pageable after resume without rerunning commands.
-`/compact` summarizes context while retaining the full local log; failed
-compaction preserves previous context.
+`/yield` returns a tool wait to the model while preserving its process.
+Command output remains pageable after resume. `/compact` summarizes context
+while retaining the full log; failure preserves previous context.
 
 ### Keep working, or leave and come back
 
@@ -109,18 +106,14 @@ snajpagent -l 25
 snajpagent --resume --last
 ```
 
-Current-source `-l` lists attached sessions, detached sessions, sessions whose
-attachment status is unavailable (`running`), then the 10 most recent stored
-sessions. `-l N` changes the stored count; `-l 0` shows running sessions only. Each group puts the latest saved activity first.
-Tables show `STATUS`, prompts and IRC `nick@endpoint` (`s/` server, `c/` client). Name sessions with
-`snajpagent -N lead`, or `/session name lead`.
-`snajpagent --attach -N lead` reconnects while it runs;
-`snajpagent --resume -N lead` attaches if running or reopens it if stored.
-Duplicates require IDs.
+`-l` groups attached, detached and other running sessions, then the ten most
+recent stored sessions. Each group sorts by latest saved activity. `-l N`
+changes the stored count; `-l 0` shows running sessions only.
 
-**Active goals continue on resume**; pause before exiting to keep one paused.
-Armed queues run before goal work; paused queues need `/next`. Resume retains
-public history and completed results. Keep requirements in project files.
+Name sessions with `-N lead` or `/session name lead`. Use `--attach -N lead`
+while running; `--resume -N lead` also reopens stored sessions. Duplicates
+require IDs. **Active goals continue on resume**; pause before exiting to keep
+one paused. Armed queues run first; paused queues need `/next`.
 
 ### Transfer files through the terminal
 
@@ -134,54 +127,40 @@ snajpagent remote ssh -t target snajpagent --attach SESSION_ID
 snajpagent remote mosh target snajpagent --attach SESSION_ID
 ```
 
-Use `/session detach` to leave work running; omit `SESSION_ID` to choose a session.
-`remote` passes child arguments literally through a PTY without starting a local
-agent. Put Mosh options before the hostname; the wrapper separates them from
-remote application options. Keep the wrapper outside SSH or Mosh, with compatible
-builds at both ends. Capability handshakes select the fast SSH stream or a slower,
-checked stock-Mosh channel within the same terminal connection, without SCP or SFTP.
-For remote tmux, use `snajpagent remote ssh -t target tmux attach` or
-`snajpagent remote mosh target tmux attach`. Keep the agent pane focused with
-one writable client viewing it during file transfers; tmux options stay unchanged.
+Use `/session detach` to leave work running; omit `SESSION_ID` to choose one.
+Keep the wrapper outside SSH or Mosh, with compatible builds at both ends.
+`remote` passes arguments literally through a PTY. Put Mosh options before the
+hostname; the wrapper separates remote application options. Transfers use the
+same terminal connection: a fast SSH stream or a slower checked Mosh channel.
+For tmux, replace the final command with `tmux attach`. During transfers, keep
+the agent pane focused with one writable client viewing it.
 
-Drop one regular file into the POSIX composer, or use `/receive` and enter its
-path. Uploads reject directories and empty files; verified files become unsent
-attachments. Review `/attachments` before submitting. Use `/send PATH` or model
-`send_file` for downloads, including empty files and accepted `asset:ID` references.
-The conversation stays visible, with compact progress and actual saved-path
-receipts; transfers restore the prompt and draft. Downloads default to
-`~/Downloads`; change `[terminal] download_dir` in the workstation config.
+Drop one regular file into the POSIX composer, or use `/receive`. Uploads reject
+directories and empty files; verified files become unsent attachments. Review
+`/attachments` before submitting. `/send PATH` and model `send_file` download
+files, including empty files and `asset:ID` references. Transfers show progress
+and saved-path receipts, then restore the draft. Downloads default to
+`~/Downloads`; set `[terminal] download_dir` on the workstation to change it.
 
-Detached model sends queue durable exports. Fast-stream reattachment delivers
-them at idle; after Mosh reattachment, use `/send PATH` and remove the old queue
-ID once delivered. Changed or uncertain exports stay pending. Model
-`download_queue` lists, removes or clears intent while preserving source/local files.
-
-For explicit transfers, trzsz-go remains an alternative: install it with Homebrew
-on macOS and use `trzsz --dragfile ssh target`. Its `~/.trzsz.conf`
-`DefaultDownloadPath` selects saving. Go-client drag sends Ctrl-C first and can
-cancel a draft or work.
-See the manual's **Terminal file transfers**, **Remote terminal mode (snajpagent remote)**
-and **Model tools** sections for setup, recovery and the complete tool catalog.
-Native wrapper, downloads and the durable outbox are included in 0.99.8c.
+Detached sends queue durable exports. Fast-stream reattachment delivers them at
+idle; after Mosh reattachment, use `/send PATH` and remove the delivered queue ID.
+Changed or uncertain exports stay pending. Model `download_queue` manages this
+intent while preserving source files. The manual's terminal-transfer sections
+cover setup, recovery and the alternative trzsz-go client. Native transfers and
+the durable outbox are included in 0.99.8c.
 
 ### Attach files and use voice
 
-Stage files with `/attach PATH`, review `/attachments`, then submit your prompt.
-The agent can inspect PDF, Office or text documents, sample video and transcribe
-audio; originals and prepared results stay with the session.
+Stage files with `/attach PATH`, review `/attachments`, then submit. The agent
+can inspect documents, sample video and transcribe audio; originals and results
+stay with the session.
 
-`/dictate` inserts speech into your draft. `/voice on` starts a conversation,
-`/voice mute` pauses the microphone, and `/voice off` stops voice. During coding
-work, use speech to inspect status, steer or queue tasks. Spoken UI commands
-preserve the typed draft. The model can speak using `voice_output`; rollout labels
-microphone transcripts and voice replies separately.
-
-Voice uses your selected provider's credentials: Codex subscription, codex-lb,
-or compatible BYOK. A codex-lb gateway needs its `/backend-api/codex` base for
-voice; `/v1` does not select native voice. Use a headset for duplex voice and
-HTTPS or a secure tunnel outside trusted networks. `/play asset:ID` plays saved
-audio. The [manual](https://agent.snajpa.net/manual.html) covers setup,
+`/dictate` inserts speech into your draft. `/voice on`, `/voice mute` and
+`/voice off` control conversation audio; `/play asset:ID` plays saved audio.
+Speech can inspect, steer or queue coding work while preserving typed drafts.
+Voice uses your selected provider's credentials. A codex-lb gateway needs its
+`/backend-api/codex` base. Use a headset and HTTPS or a secure tunnel outside
+trusted networks. The [manual](https://agent.snajpa.net/manual.html) covers setup,
 data destinations and capture controls.
 
 ### Keep useful findings in files
@@ -197,7 +176,7 @@ Run agents where their repositories, tools and services are available, and use
 IRC rooms to assign work, exchange findings and coordinate handoffs. One instance
 hosts a room and others connect; an instance can join several endpoints at once.
 
-Start two instances in separate terminals:
+In two terminals:
 
 ```sh
 snajpagent -s -n builder -o alice -r work
@@ -220,7 +199,10 @@ Empty Tab cycles through **rollout**, connected rooms and opened private chats.
 Shift-Tab moves backwards with a draft present. Each view keeps its own draft;
 private chats also retain unread indicators. Incoming messages preserve focus. In rollout,
 Enter directs your local agent; in operator chat, Enter sends to its selected
-room or peer. Agent private chats are read-only. The working transcript
+room or peer. Open a private tab with `/query nick`; `/msg nick text` and
+`/notice nick text` send without changing focus. `/me text` sends an action in
+the selected operator query. Use `endpoint/nick` when choosing among connections.
+Agent private chats are read-only. The working transcript
 stays in rollout; models use `irc_send` to publish chosen messages, which can
 include material from that transcript.
 
@@ -228,8 +210,9 @@ Models can use `irc_sleep` to hold updates until a timeout, mention or message
 threshold, and `irc_compact` to summarize IRC context asynchronously. Your
 transcript stays complete. See the manual's model IRC controls.
 
-In chat, Tab completes `@nickname` words. At the end of a finished message,
-Enter sends to the room; Tab queues a local follow-up while your model works.
+In chat, Tab first completes `@nickname` words. With private tabs open it then
+cycles views; otherwise Tab at the end queues a local follow-up during work.
+Enter sends to the selected conversation.
 
 ### Coordinate work
 
@@ -264,20 +247,16 @@ results and running commands, compacting smaller contexts when needed.
 `/fast` toggles priority service with ON/OFF feedback while preserving that
 selection. Its setting persists across resume; provider support and pricing apply.
 
-`/context default` uses the configured or advertised normal window, `max` the
-maximum, and a number an explicit token count for the session. Append `s` or
-`save` to a number to save that provider/model's config default. Larger windows
-may change provider pricing.
-The prompt's percentage shows measured input against the resolved budget;
-`?%` means unknown. `/status` explains accounting, and `/compact` summarizes
-older context while preserving the transcript on disk. The manual covers
-model-limit rules, effort choices and context changes during active work.
+`/context default` uses the normal window, `max` the advertised maximum, and a
+number sets the session's token budget. Append `save` to persist a provider/model
+default. Larger windows may change pricing. The prompt shows measured input as
+a percentage of this budget; `?%` means unknown. `/status` explains accounting;
+`/compact` summarizes older context while preserving the transcript.
 
 ### Restrict what the model may do
 
-Configuration can filter model tool calls before they run. Add `[rule NAME]`
-sections; they are validated at load, so a typo fails startup instead of
-becoming silent policy.
+Configuration filters model tool calls through `[rule NAME]` sections,
+validated at load:
 
 ```ini
 [rule deny-recursive-delete]
@@ -286,22 +265,17 @@ action  = deny
 message = "Recursive force-delete is disabled; delete explicit paths."
 ```
 
-A rejected call is reported to the model as not run, never quietly dropped.
-The first matching rule decides; a trailing match-all `allow` audits the whole
-session without changing any verdict. **This is filtering, not a sandbox**:
-a regular expression over a command is not confinement, so use read-only turns
-and separate accounts for real isolation. `design/io-rules.md` has the full
-syntax, worked examples and the 0.99.7 migration table; ready-made policies
-live in `examples/io-rules/`.
+The first matching rule decides; rejected calls are reported as not run.
+Rules filter calls without providing OS confinement. Use separate accounts for
+isolation. [Rule syntax](design/io-rules.md) and [example policies](examples/io-rules/)
+cover configuration and migration.
 
 ## Install and choose a provider
 
 [Choose an executable](https://agent.snajpa.net/downloads.html) for your OS,
-architecture and listed ABI, and rename it to `snajpagent` (`snajpagent.exe` on
-Windows). Compare its SHA-256 with the download row or `SHA256SUMS` **before
-running it**; for an archive, verify the archive before extraction, as its
-hash covers the archive, not the executable inside. Keep the program in a
-user-owned directory; debug builds and production symbols are separate.
+architecture and ABI. Rename it to `snajpagent` (`snajpagent.exe` on Windows)
+and verify its SHA-256 against the download row or `SHA256SUMS` before running.
+Verify archives before extraction. Keep the executable in a user-owned directory.
 
 ### Install on Linux
 
@@ -337,10 +311,8 @@ Get-FileHash .\snajpagent.exe -Algorithm SHA256
 .\snajpagent.exe
 ```
 
-In Command Prompt, use `certutil -hashfile .\snajpagent.exe SHA256` where
-available, then `.\snajpagent.exe`. Keep the `.exe` extension. Add its folder to
-your user PATH or invoke the full path from your project directory; PowerShell
-uses `& "C:\path\snajpagent.exe"` for a quoted path.
+In Command Prompt, verify with `certutil -hashfile .\snajpagent.exe SHA256`.
+Keep the `.exe` extension; add its directory to PATH or invoke its full path.
 
 ### Install on FreeBSD
 
@@ -384,52 +356,31 @@ project directory; the [manual](https://agent.snajpa.net/manual.html#Getting_sta
 has complete user-local installation, ABI requirements and startup troubleshooting.
 Android remains experimental source work without a production download target.
 
-Official stable binaries check and install updates in the background on launch
-while the current process keeps running; one banner links to the release log and
-asks you to restart when convenient, and `[agent] auto_update = false` opts out.
-Development binaries are debug builds that default to updates off, following
-`latest-dev` when set to `true`. Ordinary source builds remain updater-free; the
-manual covers publisher URLs, permissions and recovery.
-An approved letter-suffixed stable release such as `0.99.8b` follows its
-numeric base in updater ordering and stays on the stable `latest` channel.
+Official stable binaries update in the background and show a restart banner;
+`[agent] auto_update = false` opts out. Development debug binaries default to
+updates off and follow `latest-dev` when enabled. Ordinary source builds remain
+updater-free. The manual covers channels, publisher URLs and recovery.
 
 `./configure` probes the toolchain and the four optional modalities and tunes the
 tracked `config.mk`; `make WITH_*=…` stays an explicit override.
 
-The development `snajpagent vm` frontend provides named workspaces, saved
-Vim-style splits, paged transcripts with retrospective verbosity, and prompt
-editing through live owner attachment. `:new [NAME]` creates an agent; picker
-Enter, `:session ID` and `vm --session ID` resume one. Startup runs in the
-background, and saved-workspace restoration leaves stopped owners stopped.
-`:close` saves the owner draft and detaches; `:q` requests owner shutdown.
-The composer supports counted Vim motions, delete/change/yank, a shared paste
-register and draft-local undo/redo. Slash-command output opens retained reports;
-`:reports` lists them, and `:history` returns to the session. Report positions
-survive workspace resume; `:q` closes a report while preserving its owner.
-Search the current transcript or report with `/TEXT`, `?TEXT` and `n`/`N`.
-`/search TEXT` invokes the same local search from the composer; Ctrl-C cancels it.
-Select transcript/report text with `v`, `V` or Ctrl-V, yank with `y`, then use
-`p`/`P` to put it in the session composer. Copies preserve logical lines and
-Unicode characters; large yanks use a private file-backed register. Explicit
-yanks also copy to the workstation clipboard, including through `snajpagent remote`.
-Choose `native`, `osc52` or `off` with `[terminal] clipboard`; OSC 52 reports
-unconfirmed terminal acceptance. Numbered `gg`/`G` and counted motions reach old
-pages; rectangular paste inserts columns
-into draft lines as one undoable edit.
-Click to place a cursor, drag transcript/report text to select it, and scroll
-the hovered window with the wheel. Drag separators to resize splits;
-`:set nomouse` returns selection to the terminal.
-Deferred controls add completion reports, available through `:reports` after reconnect.
-The report catalogue also recovers output after owner restart. `/cat PATH` opens
-a retained file snapshot; repeating it reads a fresh copy into another report.
-Conflicting saved/owner drafts offer `:draft local` and `:draft owner`.
-`:classic [SESSION_ID]` opens an owner's full terminal, including owners started
-before workspace support. Commands needing terminal interaction open it automatically
-with supporting owners, preserving both drafts. `/config` and `/send` return
-when their operation finishes; `/s d` returns from other terminal commands.
-See the manual's Vim workspace
-section for available controls and `design/vim-mode.md` for implementation status.
-`make WITH_VM=0` omits the optional interface; the default includes it.
+The development `snajpagent vm` frontend provides named workspaces, saved Vim
+splits, retained transcripts, retrospective verbosity, search, mouse controls and
+Vim composer editing. `:new [NAME]` creates an agent; `:session ID` resumes one.
+`:close` saves its draft and detaches; `:q` requests shutdown. Restoring a workspace
+leaves stopped owners stopped.
+
+Slash commands open retained reports. `:reports` lists them; `:history` returns
+to the session. Search with `/TEXT`, `?TEXT` and `n`/`N`; select with `v`, `V` or
+Ctrl-V and yank with `y`. Explicit yanks copy to the workstation clipboard,
+including through `snajpagent remote`; `[terminal] clipboard` selects `native`,
+`osc52` or `off`. OSC 52 acceptance is unconfirmed.
+
+`:classic [SESSION_ID]` opens an owner's terminal. Interactive commands use it
+automatically and return afterward; `/s d` returns from a general attachment.
+See the manual's Vim workspace section for editing, reports, draft conflicts
+and connection controls, and [the design](design/vim-mode.md) for implementation
+status. `make WITH_VM=0` omits this optional frontend; builds include it by default.
 
 The POSIX build needs C11 with pthreads, GNU make, pkg-config and
 libcurl/Jansson development files. On the BSDs, install GNU make and use `gmake`
@@ -443,16 +394,12 @@ make
 make PREFIX="$HOME/.local" install
 ```
 
-This installs the binary and manual under `$HOME/.local`; the default prefix is
-`/usr/local`, which usually needs administrator rights. Production needs
-`strip` and `objcopy` on ELF systems, or `strip` and `dsymutil` on macOS.
-`make DEBUG=1` builds for debugging; `make help` lists build options, and
-[dependency notes](DEPENDENCIES.md) cover platform scope.
-
-`make prod-matrix` builds standalone targets into `build/matrix/` using bounded
-parallelism, without installation or VMs. Plain `make` builds the host platform.
-The [platform notes](DEPENDENCIES.md) describe target recipes, bundled libraries,
-legacy kernel and pthread ABI requirements, entropy, TLS and unsupported experiments.
+This installs the binary and manual under `$HOME/.local`; the default prefix
+is `/usr/local`. Production builds need `strip` and ELF `objcopy` or macOS
+`dsymutil`. `make DEBUG=1` enables debugging.
+`make prod-matrix` builds standalone targets into `build/matrix/` without
+installation. [Dependency notes](DEPENDENCIES.md) cover recipes, ABI requirements
+and experimental platforms.
 
 Without configuration or credentials, the first interactive launch offers
 ChatGPT/Codex or Meta subscription, OpenRouter, OpenAI or custom-provider setup;
@@ -494,13 +441,11 @@ in saved model selections. Each running owner keeps its settings and credentials
 Use `/configure` to reload saved settings, credentials and the local model cache;
 `/config` opens `$EDITOR` first. Invalid changes leave the previous state active.
 
-On Windows, setup uses `HOME/.snajpagent`, falling back to
-`USERPROFILE/.snajpagent`, and `--dotdir DIR` overrides it; the same `config.ini`
-works there. For credentials, PowerShell uses
-`$env:OPENAI_API_KEY = 'your-key'` and Command Prompt
-`set "OPENAI_API_KEY=your-key"`; masked-key entry during setup avoids shell
-history. The default Windows tool shell is `cmd.exe`, independently of the
-launching shell, and POSIX examples need a POSIX shell or adaptation.
+Windows uses `HOME/.snajpagent`, falling back to `USERPROFILE/.snajpagent`;
+`--dotdir DIR` overrides it. The same configuration works there. Set credentials
+with PowerShell's `$env:OPENAI_API_KEY = 'your-key'` or Command Prompt's
+`set "OPENAI_API_KEY=your-key"`; masked setup entry avoids shell history.
+Windows tools use `cmd.exe`; POSIX command examples need adaptation.
 
 ## Use it in scripts
 

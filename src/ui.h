@@ -33,7 +33,9 @@ struct snag_ui {
     char submitted_label[SNAG_TERM_LABEL_BYTES];
     enum snag_render_view input_view;
     struct snag_irc_route input_route;
-    struct snag_irc_query_target input_query;
+    struct snag_irc_query_target input_query, input_address_query;
+    struct snag_irc_scopes input_scopes;
+    uint32_t input_destination;
     struct snag_irc_target selection;
 };
 
@@ -41,7 +43,8 @@ enum snag_ui_operation {
     SNAG_UI_HOST, SNAG_UI_HELP, SNAG_UI_RUNTIME, SNAG_UI_ERROR, SNAG_UI_WARNING,
     SNAG_UI_ROLLOUT_END, SNAG_UI_ROLLOUT_ABORT, SNAG_UI_CLOSE,
     SNAG_UI_LEVEL, SNAG_UI_COLOR, SNAG_UI_MARKDOWN, SNAG_UI_DESTINATIONS,
-    SNAG_UI_SELECT, SNAG_UI_ROUTE, SNAG_UI_QUERY, SNAG_UI_COMMANDS, SNAG_UI_PAUSE,
+    SNAG_UI_SELECT, SNAG_UI_ROUTE, SNAG_UI_QUERY, SNAG_UI_QUERY_SELECT,
+    SNAG_UI_COMMANDS, SNAG_UI_PAUSE,
     SNAG_UI_OPEN, SNAG_UI_EXTERNAL, SNAG_UI_PROMPT, SNAG_UI_HOLD, SNAG_UI_SPINNERS,
     SNAG_UI_DRAFT, SNAG_UI_INSERT, SNAG_UI_AUDIO, SNAG_UI_CAPTION,
     SNAG_UI_VIEW, SNAG_UI_SUBMITTED, SNAG_UI_PUBLIC_BEGIN, SNAG_UI_PUBLIC, SNAG_UI_VALIDATE,
@@ -83,6 +86,7 @@ struct snag_ui_command {
         struct { uint64_t turns; size_t queued; bool resumed, queue_armed; } orientation;
         struct { const struct snag_history_turn *turn; uint64_t shown, completed, total; } replay;
         const struct snag_irc_event *irc;
+        const struct snag_irc_query_target *query;
         const json_t *voice;
         struct { int fd; struct snag_render_source source;
                  uint32_t timeout_ms, max_output_bytes; } durable;

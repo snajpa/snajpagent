@@ -309,6 +309,10 @@ static const struct snag_term_command commands[] = {
     {"/play asset:ID", "play the first 60s of an accepted audio asset; /play stop interrupts"},
     {"/chat", "show IRC room activity"},
     {"/rollout", "show local model activity"},
+    {"/query [ADDRESS [TEXT]]", "open a private chat; no address lists opened queries"},
+    {"/msg ADDRESS TEXT", "send a private message without changing tabs"},
+    {"/notice ADDRESS TEXT", "send a private notice without changing tabs"},
+    {"/me TEXT", "send an action to the selected operator query"},
     {"/topic [TEXT]", "show/set selected room topic"},
     {"/nick [NICK]", "show nicks/set your operator nick (shared via IRC)"},
     {"/steering [mentions|all|clear]", "show/set steering admission for next turn"},
@@ -3392,6 +3396,9 @@ handle_common_command(struct app_state *app, const char *line, bool active, bool
         json_decref(result);
         return rc;
     }
+    int irc_rc = snag_app_irc_command(app, line, handled);
+    if (*handled || irc_rc < 0) return irc_rc;
+    *handled = true;
     if (strcmp(line, "/chat") == 0) {
         int rc = app->ui.input_view_applied ? set_input_prompt(app, active) :
                                              user_switch_view(app, SNAG_RENDER_CHAT, active);

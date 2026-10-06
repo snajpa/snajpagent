@@ -782,8 +782,15 @@ Tab includes opened queries; Shift-Tab cycles backwards with drafts. Agent
 queries reject operator sends. Incoming events preserve focus, and restored
 conversation metadata recreates tabs without counting old history as unread.
 Drafts remain process-local; history stays in the journal and /history.
-Next: common operator commands and VM connection/channel/query buffers.
-External multi-channel state and labeled responses remain unfinished.
+The common operator `/query`, `/msg`, `/notice` and private `/me` paths now share
+query resolution with model tools. UI admission captures connection scopes and
+known peer handles before queued commands can observe later NICK/QUIT events.
+`/query` without operands lists existing operator-query selectors. Explicit
+addresses stay within the current session owner. Channel address commands,
+channel actions, a richer ambiguity picker and VM connection/channel/query
+buffers remain next. External multi-channel state and labeled responses are
+unfinished. The nickname mapping helper follows the
+[IRC CASEMAPPING definitions](https://modern.ircdocs.horse/#casemapping-parameter).
 
 This expands the original UI-only storage scope. Implement compatible readers,
 checkpoint projection and context filters first. Direct-message-capable writers

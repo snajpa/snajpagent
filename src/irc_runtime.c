@@ -6,6 +6,7 @@
 
 #include <errno.h>
 #include <pthread.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -707,6 +708,7 @@ snag_irc_destinations(const struct snag_irc *irc, struct snag_irc_destinations *
         item->target = owner->target;
         memcpy(item->connection, owner->view.connection, sizeof(item->connection));
         item->generation = owner->view.generation;
+        memcpy(item->casemapping, owner->view.casemapping, sizeof(item->casemapping));
         item->joined = owner->view.joined;
         (void)snag_strcpy(item->endpoint, sizeof(item->endpoint), owner->endpoint);
         (void)snag_strcpy(item->room, sizeof(item->room), owner->routing_room);
@@ -715,6 +717,31 @@ snag_irc_destinations(const struct snag_irc *irc, struct snag_irc_destinations *
         (void)snag_strcpy(item->nicks, sizeof(item->nicks), owner->view.nicks);
     }
     qsort(out->items, out->count, sizeof(out->items[0]), destination_order);
+}
+
+const struct snag_irc_scope *
+snag_irc_scope_resolve(const struct snag_irc_scopes *scopes, uint32_t preferred,
+                       const char *endpoint, char *error, size_t error_size)
+{
+    const struct snag_irc_scope *selected = NULL;
+    for (size_t i = 0u; i < scopes->count; ++i) {
+        const struct snag_irc_scope *scope = &scopes->items[i];
+        char number[16u];
+        (void)snprintf(number, sizeof(number), "%u", scope->target.destination);
+        if (*endpoint ? (strcmp(endpoint, number) &&
+            !snag_irc_endpoint_equal(endpoint, scope->endpoint)) :
+            (preferred && preferred != scope->target.destination)) continue;
+        if (selected) {
+            (void)snag_fail(error, error_size, EINVAL, "select an explicit endpoint/nick");
+            return NULL;
+        }
+        selected = scope;
+    }
+    if (!selected || !selected->target.connection[0]) {
+        (void)snag_fail(error, error_size, ENOENT, "IRC endpoint is unavailable");
+        return NULL;
+    }
+    return selected;
 }
 
 void

@@ -6,6 +6,18 @@
 #include <stdio.h>
 #include <string.h>
 
+static void
+nickname_mappings(void)
+{
+    assert(snag_irc_name_equal(SNAG_IRC_ASCII, "Peer", "peer"));
+    assert(!snag_irc_name_equal(SNAG_IRC_ASCII, "peer[", "peer{"));
+    assert(snag_irc_name_equal(SNAG_IRC_RFC1459, "Peer[\\]^", "peer{|}~"));
+    assert(snag_irc_name_equal(SNAG_IRC_RFC1459_STRICT, "Peer[\\]", "peer{|}"));
+    assert(!snag_irc_name_equal(SNAG_IRC_RFC1459_STRICT, "Peer^", "peer~"));
+    assert(!snag_irc_name_equal(SNAG_IRC_CASE_UNKNOWN, "Peer", "peer"));
+    assert(snag_irc_name_equal(SNAG_IRC_CASE_UNKNOWN, "Peer", "Peer"));
+}
+
 static struct snag_irc_event
 query(void)
 {
@@ -243,6 +255,7 @@ directory_update_test(void)
 int
 main(void)
 {
+    nickname_mappings();
     privacy_and_provenance();
     delivery_states();
     invalid_fields();

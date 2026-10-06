@@ -2,7 +2,10 @@
 """Private IRC admission and exact reply routing through real PTYs and HTTP."""
 
 import json
+import os
 import re
+import signal
+import subprocess
 import tempfile
 import threading
 import time
@@ -51,9 +54,54 @@ class QueryTests(unittest.TestCase):
                         extra_env={'SNAJPAGENT_IRC_UI_KEY': 'irc-ui-secret', 'PAGER': ''})
         children = FixtureChildren(term.process.pid)
         self.addCleanup(children.close)
-        self.addCleanup(term.close)
+        owners = {}
+        self.addCleanup(self.close_terminal, term, owners)
+        owners.update(self.fixture_owners(term))
         self.terminals.append((term, children))
         return term
+
+    @staticmethod
+    def process_identity(pid):
+        return subprocess.run(['ps', '-p', str(pid), '-o', 'lstart=,command='],
+                              capture_output=True, text=True, check=False).stdout.strip()
+
+    def fixture_owners(self, term):
+        # Pin portable identities while the native owners are still verified
+        # descendants of this fixture. Linux also retains kernel pidfds.
+        term.until(b'queryop@')
+        rows = []
+        for row in subprocess.check_output(['ps', '-axo', 'pid=,ppid=,command='],
+                                           text=True).splitlines():
+            fields = row.split(None, 2)
+            if len(fields) == 3:
+                rows.append((int(fields[0]), int(fields[1]), fields[2]))
+        family = {term.process.pid}
+        owners = {}
+        while True:
+            added = {pid for pid, parent, _ in rows if parent in family} - family
+            if not added:
+                return owners
+            family.update(added)
+            for pid, _, command in rows:
+                if pid in added and str(self.root / 'state') in command:
+                    owners[pid] = self.process_identity(pid)
+
+    def close_terminal(self, term, owners):
+        try:
+            for pid, identity in owners.items():
+                if identity and self.process_identity(pid) == identity:
+                    try:
+                        os.kill(pid, signal.SIGTERM)
+                    except ProcessLookupError:
+                        pass
+        finally:
+            term.close()
+        for pid, identity in owners.items():
+            if identity and self.process_identity(pid) == identity:
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
 
     def connect(self, nick):
         peer = IRCClient(self.port, nick)
@@ -138,6 +186,12 @@ class QueryTests(unittest.TestCase):
             self.provider.reply(handler, self.provider.response_body(
                 sequence, f'query fixture done {sequence}').encode(), close_header=True)
         handler.close_connection = True
+
+    def wait_wire(self, peer, marker):
+        def received():
+            peer.drain(.001)
+            return marker in peer.buf
+        self.wait(received)
 
     def assert_private(self, marker):
         self.observer.drain(.1)
@@ -257,6 +311,112 @@ class QueryTests(unittest.TestCase):
         self.submit('read-resumed-notice')
         self.assertIn('notice-before-admission', json.dumps(self.seen))
         self.assertFalse(any(e['type'] == 'irc_reply_reminder' for e in self.events()))
+
+    def test_rejected_send_restores_originating_tab_after_fast_switch(self):
+        self.direct('queryop', 'switch-rejected-query')
+        self.term.write(b'preserved-rollout-draft\x1b[Z')
+        self.term.until(b'switch-rejected-query')
+        self.term.write(b'rejected-query-draft')
+        self.term.repaint_until(b'rejected-query-draft')
+        self.peer.sock.sendall(b'NICK changed-switch-peer\r\n')
+        self.wait(lambda: any(e['type'] == 'irc_event_v2' and e['data']['kind'] == 'nick'
+                  for e in self.events()))
+        self.term.write(b'\r\t')
+        self.term.until(b'query changed')
+        self.term.repaint_until(b'preserved-rollout-draft')
+        self.term.write(b'\x1b[Z')
+        self.term.repaint_until(b'rejected-query-draft')
+        self.peer.drain(.1)
+        self.assertNotIn(b'rejected-query-draft', self.peer.buf)
+
+    def test_explicit_command_keeps_known_peer_when_nick_is_reused(self):
+        self.direct('queryop', 'command-stale-start')
+        self.term.write(b'/query query-peer\r')
+        self.term.until(b'query query-peer operator')
+        self.term.write(b'/msg query-peer frozen-command-recipient')
+        self.term.repaint_until(b'frozen-command-recipient')
+        self.peer.sock.sendall(b'NICK changed-command-peer\r\n')
+        self.wait(lambda: any(e['type'] == 'irc_event_v2' and e['data']['kind'] == 'nick'
+                  for e in self.events()))
+        replacement = self.connect('query-peer')
+        self.term.write(b'\r')
+        self.term.until(b'query changed')
+        self.term.repaint_until(b'frozen-command-recipient')
+        self.assertIn(b'/msg query-peer ', self.term.output)
+        self.peer.drain(.1)
+        replacement.drain(.1)
+        self.assertNotIn(b'frozen-command-recipient', self.peer.buf)
+        self.assertNotIn(b'frozen-command-recipient', replacement.buf)
+
+    def test_empty_message_has_no_query_side_effect(self):
+        self.term.write(b'/msg new-peer-without-text\r')
+        self.term.until(b'message text is required')
+        self.assertFalse(any(e['type'] == 'irc_event_v2' and
+                         e['data']['routing'].get('peer') == 'new-peer-without-text'
+                         for e in self.events()))
+
+    def test_query_command_opens_sends_and_lists_operator_tab(self):
+        self.term.write(b'/query query-peer\r')
+        self.term.until(b'query query-peer operator')
+        self.peer.drain(.1)
+        self.assertNotIn(b'PRIVMSG query-peer :', self.peer.buf)
+        self.term.write(b'opened-query-reply\r')
+        self.wait_wire(self.peer, b'PRIVMSG query-peer :opened-query-reply\r\n')
+        self.term.write(b'/me waves privately\r')
+        self.wait_wire(self.peer, b'PRIVMSG query-peer :\x01ACTION waves privately\x01\r\n')
+        self.term.write(b'/query\r')
+        self.term.until(b'/query query:')
+        self.assert_private('opened-query-reply')
+        self.assert_private('waves privately')
+        self.assertNotIn('opened-query-reply', json.dumps(self.seen))
+
+    def test_msg_and_notice_preserve_focus_and_choose_operator_identity(self):
+        self.term.write(b'/query query-peer\r')
+        self.term.until(b'query query-peer operator')
+        sid = read_events(self.root / 'state')[0].parent.name
+        self.term.write((f'/msg "{sid}/127.0.0.1:{self.port}/observer" '
+                         'message-with #literal and /slashes\r').encode())
+        self.wait_wire(self.observer, b'PRIVMSG observer :message-with #literal and /slashes\r\n')
+        self.assertIn(b':queryop!', self.observer.buf)
+        self.term.write(b'/notice observer private-notice-command\r')
+        self.wait_wire(self.observer, b'NOTICE observer :private-notice-command\r\n')
+        self.term.write(b'focus-still-query-peer\r')
+        self.wait_wire(self.peer, b'PRIVMSG query-peer :focus-still-query-peer\r\n')
+        self.observer.drain(.1)
+        self.assertNotIn(b'focus-still-query-peer', self.observer.buf)
+        self.peer.drain(.1)
+        self.assertNotIn(b'private-notice-command', self.peer.buf)
+        self.assertNotIn('private-notice-command', json.dumps(self.seen))
+
+    def test_explicit_query_text_casefold_and_restricted_targets(self):
+        self.direct('queryop', 'casefold-command-query')
+        self.term.write(b'/query QUERY-PEER casefold-private-message\r')
+        self.wait_wire(self.peer, b'PRIVMSG query-peer :casefold-private-message\r\n')
+        self.direct('querybot', 'agent-command-query', notice=True)
+        event = next(e for e in self.events() if e['data'].get('text') == 'agent-command-query')
+        query_id = event['data']['routing']['conversation_id']
+        self.term.write(f'/msg query:{query_id} wrong-role-command\r'.encode())
+        self.term.until(b'query is unavailable for this identity')
+        self.term.write(b'\x15/msg wrong-session/1/query-peer wrong-session-command\r')
+        self.term.until(b'select the addressed session before sending')
+        self.term.write(b'\x15/query #lab private-channel-forbidden\r')
+        self.term.until(b'select a nick for a private query')
+        self.peer.drain(.1)
+        for marker in (b'wrong-role-command', b'wrong-session-command', b'private-channel-forbidden'):
+            self.assertNotIn(marker, self.peer.buf)
+
+    def test_bare_query_ambiguity_sends_nothing_and_explicit_endpoint_works(self):
+        port = free_loopback_port()
+        self.term.write(f'/connect 127.0.0.1:{port}\r'.encode())
+        self.term.until(b'outgoing connection added')
+        self.term.write(b'/query query-peer ambiguous-private-message\r')
+        self.term.until(b'select an explicit endpoint/nick')
+        self.peer.drain(.1)
+        self.assertNotIn(b'ambiguous-private-message', self.peer.buf)
+        self.term.write(f'\x15/query 127.0.0.1:{self.port}/query-peer explicit-private-message\r'.encode())
+        self.wait_wire(self.peer, b'PRIVMSG query-peer :explicit-private-message\r\n')
+        self.term.write(b'/msg query-peer inherited-private-message\r')
+        self.wait_wire(self.peer, b'PRIVMSG query-peer :inherited-private-message\r\n')
 
     def test_classic_query_tabs_keep_drafts_and_recipients(self):
         self.direct('queryop', 'first-private-tab')

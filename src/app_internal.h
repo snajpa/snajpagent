@@ -375,6 +375,10 @@ int snag_app_provider_activity(struct app_state *app, bool active);
 int snag_app_irc_event(void *opaque, const struct snag_irc_event *event);
 int snag_app_irc_trace(void *opaque, unsigned int level, char direction,
                       const char *endpoint, const char *text, size_t len);
+int snag_app_irc_command(struct app_state *, const char *, bool *);
+int snag_app_irc_query_target(struct app_state *, const struct snag_irc_scopes *, const json_t *,
+    enum snag_irc_identity, uint32_t, const char *, const struct snag_irc_query_target *,
+    struct snag_irc_query_target *, char *, size_t);
 int snag_app_irc_restore(struct app_state *app, char *error, size_t error_size);
 int snag_app_save_resume_options(struct app_state *, char *, size_t);
 int snag_app_restore_resume_options(struct snag_cli *, struct snag_cli *,

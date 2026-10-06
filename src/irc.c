@@ -29,8 +29,6 @@
 enum link_role {
     LINK_AGENT, LINK_OPERATOR };
 
-enum irc_casemapping { IRC_RFC1459, IRC_ASCII, IRC_RFC1459_STRICT, IRC_CASE_UNKNOWN };
-
 struct irc_query {
     struct irc_query *next;
     enum link_role role;
@@ -96,7 +94,7 @@ struct irc_conn {
     size_t nick_suffix;
     uint64_t retry_at_ms;
     enum link_role role;
-    enum irc_casemapping casemapping;
+    enum snag_irc_casemapping casemapping;
     bool used;
     bool outgoing;
     bool connecting;
@@ -241,23 +239,7 @@ irc_casecmp(const char *a, const char *b)
 static bool
 link_name_equal(const struct irc_conn *link, const char *a, const char *b)
 {
-    if (link->casemapping == IRC_CASE_UNKNOWN) return !strcmp(a, b);
-    for (;; ++a, ++b) {
-        unsigned char ac = (unsigned char)*a;
-        unsigned char bc = (unsigned char)*b;
-        if (ac >= 'A' && ac <= 'Z') ac += 'a' - 'A';
-        if (bc >= 'A' && bc <= 'Z') bc += 'a' - 'A';
-        if (link->casemapping != IRC_ASCII) {
-            if (ac >= '[' && ac <= ']') ac += '{' - '[';
-            if (bc >= '[' && bc <= ']') bc += '{' - '[';
-            if (link->casemapping == IRC_RFC1459) {
-                if (ac == '^') ac = '~';
-                if (bc == '^') bc = '~';
-            }
-        }
-        if (ac != bc) return false;
-        if (!ac) return true;
-    }
+    return snag_irc_name_equal(link->casemapping, a, b);
 }
 
 static bool
@@ -1986,7 +1968,7 @@ client_handshake(struct snag_irc_core *irc, struct irc_conn *link)
     link->cap_echo = false;
     link->cap_offered = 0u;
     link->line_limit = 512u;
-    link->casemapping = IRC_RFC1459;
+    link->casemapping = SNAG_IRC_RFC1459;
     link->batch[0] = '\0';
     link->member_count = 0u;
     link->op = false;
@@ -2297,9 +2279,10 @@ client_dispatch(struct snag_irc_core *irc, struct irc_conn *link, char *line)
         for (size_t i = 1u; i < message.param_count; ++i) {
             if (!strncmp(message.params[i], "CASEMAPPING=", 12u)) {
                 const char *mapping = message.params[i] + 12u;
-                enum irc_casemapping next = !strcmp(mapping, "ascii") ? IRC_ASCII :
-                    !strcmp(mapping, "rfc1459") ? IRC_RFC1459 :
-                    !strcmp(mapping, "rfc1459-strict") ? IRC_RFC1459_STRICT : IRC_CASE_UNKNOWN;
+                enum snag_irc_casemapping next = !strcmp(mapping, "ascii") ? SNAG_IRC_ASCII :
+                    !strcmp(mapping, "rfc1459") ? SNAG_IRC_RFC1459 :
+                    !strcmp(mapping, "rfc1459-strict") ? SNAG_IRC_RFC1459_STRICT :
+                    SNAG_IRC_CASE_UNKNOWN;
                 if (next != link->casemapping && irc->connection[0] &&
                     query_epoch_end(irc, "server casemapping changed") < 0) return -1;
                 link->casemapping = next;
@@ -3191,6 +3174,8 @@ snag_irc_core_view(const struct snag_irc_core *irc, struct snag_irc_view *view)
     view->revision = irc->route_revision + 1u;
     memcpy(view->connection, irc->connection, sizeof(view->connection));
     view->generation = irc->generation;
+    view->casemapping[SNAG_IRC_OPERATOR] = irc->conns[LINK_OPERATOR].casemapping;
+    view->casemapping[SNAG_IRC_AGENT] = irc->conns[LINK_AGENT].casemapping;
     (void)snag_strcpy(view->model, sizeof(view->model), snag_irc_core_model_nick(irc));
     (void)snag_strcpy(view->operator, sizeof(view->operator), snag_irc_core_operator_nick(irc));
     view->joined = irc->hosting || irc->conns[LINK_AGENT].joined;

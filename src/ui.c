@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "ui.h"
 #include "irc.h"
+#include "irc_address.h"
 #include "session_relay.h"
 #include "session_view.h"
 #include "turn.h"
@@ -26,7 +27,8 @@ struct ui_snapshot {
     char label[SNAG_TERM_LABEL_BYTES];
     uint64_t turn_generation;
     struct snag_irc_target selection;
-    struct snag_irc_query_target query;
+    struct snag_irc_query_target query, address_query;
+    struct snag_irc_scopes scopes;
 };
 
 struct ui_message {
@@ -489,7 +491,47 @@ input_stop(struct snag_ui_display *display)
 }
 
 static void
-take_snapshot(struct snag_ui_display *display, struct ui_snapshot *snapshot)
+display_capture_query(struct snag_ui_display *display, const char *text,
+                      struct ui_snapshot *snapshot)
+{
+    memset(&snapshot->address_query, 0, sizeof(snapshot->address_query));
+    if (!text) return;
+    size_t verb = strcspn(text, " \t\r\n");
+    if (!((verb == 6u && !strncmp(text, "/query", verb)) ||
+        (verb == 4u && !strncmp(text, "/msg", verb)) ||
+        (verb == 7u && !strncmp(text, "/notice", verb)))) return;
+    char *operand = NULL;
+    const char *rest;
+    char error[128u];
+    if (snag_irc_address_operand(text + verb, &operand, &rest, error, sizeof(error)) < 0) return;
+    (void)rest;
+    const char *id = !strncmp(operand, "query:", 6u) ? operand + 6u : NULL;
+    const struct snag_irc_scope *scope = NULL;
+    struct snag_irc_address address;
+    if (!id) {
+        if (snag_irc_address_parse(&address, operand, SNAG_IRC_MESSAGE_ADDRESS,
+            error, sizeof(error)) < 0) goto done;
+        scope = snag_irc_scope_resolve(&snapshot->scopes,
+            snapshot->view == SNAG_RENDER_CHAT ? snapshot->selection.id : 0u,
+            address.endpoint, error, sizeof(error));
+        if (!scope) goto done;
+    }
+    for (struct ui_query_tab *tab = display->queries; tab; tab = tab->next) {
+        if (tab->target.identity != SNAG_IRC_OPERATOR) continue;
+        if (id ? strcmp(id, tab->target.conversation) :
+            (strcmp(scope->target.connection, tab->target.connection) ||
+            scope->target.generation != tab->target.generation ||
+            !snag_irc_name_equal(scope->casemapping[SNAG_IRC_OPERATOR],
+                address.target, tab->target.peer))) continue;
+        snapshot->address_query = tab->target;
+        break;
+    }
+done:
+    free(operand);
+}
+
+static void
+take_snapshot(struct snag_ui_display *display, struct ui_snapshot *snapshot, const char *text)
 {
     snapshot->view = snag_render_view(&display->render);
     snapshot->opened = display->term.opened;
@@ -500,7 +542,9 @@ take_snapshot(struct snag_ui_display *display, struct ui_snapshot *snapshot)
     snapshot->turn_generation = display->turn_generation;
     snapshot->selection = display->term.destination;
     snapshot->query = display->term.query;
+    snag_irc_capture_scopes(display->term.destinations, &snapshot->scopes);
     memcpy(snapshot->label, display->term.label, sizeof(snapshot->label));
+    display_capture_query(display, text, snapshot);
 }
 
 static void
@@ -808,7 +852,7 @@ view_submit(void *opaque, const char *id, const char *text, uint64_t generation,
         display->term.prompt_wanted = false;
         snag_term_destination_route(&display->term, text, &item->route);
     }
-    take_snapshot(display, &item->snapshot);
+    take_snapshot(display, &item->snapshot, item->text);
     item->snapshot.view = SNAG_RENDER_ROLLOUT;
     item->steering = item->snapshot.active && !snag_prompt_command(text);
     if (item->steering) atomic_fetch_add(&runtime->steering_pending, 1u);
@@ -1146,6 +1190,15 @@ apply_message(struct snag_ui_display *display, struct snag_ui_command *command,
     case SNAG_UI_ROUTE: snag_term_destination_route(term, command->text, command->data.route);
         return 0;
     case SNAG_UI_QUERY: return display_query_event(display, command->data.irc, false);
+    case SNAG_UI_QUERY_SELECT:
+        for (struct ui_query_tab *tab = display->queries; tab; tab = tab->next) {
+            if (strcmp(tab->target.conversation, command->data.query->conversation)) continue;
+            if (display_select_draft(display, tab, NULL) < 0 ||
+                snag_render_set_chat_query(render, tab->endpoint, &term->query, true) < 0)
+                return -1;
+            return display_set_view(display, SNAG_RENDER_CHAT, true, true);
+        }
+        return snag_errno(ENOENT);
     case SNAG_UI_COMMANDS: snag_term_set_commands(term, command->data.commands.items,
                              command->data.commands.count);
         return 0;
@@ -1315,7 +1368,7 @@ finish_input(struct snag_ui_display *display, struct ui_action *item, int rc)
         if (display_cycle_view(display) < 0) goto fail;
         item->action = SNAG_TERM_NONE;
     }
-    take_snapshot(display, &item->snapshot);
+    take_snapshot(display, &item->snapshot, item->text);
     /* The presentation owner retains commands before engine work can stall.
      * Their later acknowledgements use this flag to avoid a second echo. */
     if (rc > 0 && item->action == SNAG_TERM_SUBMIT && !term->input_only &&
@@ -1374,7 +1427,7 @@ finish_input(struct snag_ui_display *display, struct ui_action *item, int rc)
                                "destination %u is unavailable; use /names", id);
             if (!term->input_only && display->prompt.source && !display->view_repainting &&
                 apply_prompt(display) < 0) goto fail;
-            take_snapshot(display, &item->snapshot);
+            take_snapshot(display, &item->snapshot, item->text);
             item->local = true;
         } else if (!strcmp(item->text, "/chat") || !strcmp(item->text, "/rollout")) {
             enum snag_render_view view = !strcmp(item->text, "/chat") ?
@@ -1393,7 +1446,7 @@ finish_input(struct snag_ui_display *display, struct ui_action *item, int rc)
              * SNAG_UI_VIEW plus a fresh prompt. */
             if (display_set_view(display, view, true, false) < 0) goto fail;
             item->view_applied = true;
-            take_snapshot(display, &item->snapshot);
+            take_snapshot(display, &item->snapshot, item->text);
         } else if (snag_verbosity_command(item->text, strlen(item->text))) {
             const char *value = item->text + 8u;
             while (isspace((unsigned char)*value)) ++value;
@@ -1735,7 +1788,7 @@ presentation_main(void *opaque)
                 atomic_store(&runtime->fatal, error);
                 if (!input_condition(error)) display.input_closed = true;
             }
-            take_snapshot(&display, &message->snapshot);
+            take_snapshot(&display, &message->snapshot, message->command.text);
             atomic_store(&runtime->view, (unsigned int)display.render.view);
             {
                 bool stop = message->command.kind == SNAG_UI_STOP;
@@ -2117,7 +2170,12 @@ snag_ui_capture_route(struct snag_ui *ui, const char *text)
 {
     struct ui_message message = {.command = {.kind = SNAG_UI_ROUTE, .data.route = &ui->input_route}};
     int rc = send_message(ui, &message, text);
-    if (!rc) ui->input_query = message.snapshot.query;
+    if (!rc) {
+        ui->input_query = message.snapshot.query;
+        ui->input_address_query = message.snapshot.address_query;
+        ui->input_scopes = message.snapshot.scopes;
+        ui->input_destination = message.snapshot.selection.id;
+    }
     return rc;
 }
 
@@ -2363,6 +2421,9 @@ snag_ui_poll(struct snag_ui *ui, int timeout_ms, enum snag_term_action *action, 
     ui->input_active = item->snapshot.active;
     ui->input_route = item->route;
     ui->input_query = item->snapshot.query;
+    ui->input_address_query = item->snapshot.address_query;
+    ui->input_scopes = item->snapshot.scopes;
+    ui->input_destination = item->snapshot.selection.id;
     ui->input_echoed = item->submission_echoed;
     ui->input_view_applied = item->view_applied;
     ui->selection = item->snapshot.selection;
