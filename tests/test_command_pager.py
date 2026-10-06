@@ -232,7 +232,7 @@ class CommandPagerTests(unittest.TestCase):
         events = [json.loads(line) for line in records]
         self.assertTrue(any(event["type"] == "session_checkpoint" for event in events))
         retained = [event["data"]["text"] for event in events
-                    if event["type"] == "irc_event" and
+                    if event["type"] in ("irc_event", "irc_event_v2") and
                     event["data"]["text"] in messages]
         self.assertEqual(retained, messages)
         held_output += self.available_output(child)

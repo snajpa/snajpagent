@@ -468,11 +468,12 @@ file. The first implementation has one session-host connection domain per
 workspace. A remote workspace runs on its session host through the existing
 `remote` wrapper.
 
-## 2. Current implementation and the pager failure mechanism
+## 2. Pre-implementation baseline and pager failure mechanism
 
-The current source already provides most of the durable foundation:
+The initial inspection found this durable foundation and the gaps addressed by
+the implementation. The checkpoints above describe the current behavior.
 
-| Area | Verified behavior at the source revision |
+| Area | Behavior before this work |
 | --- | --- |
 | Session execution | `session_host.c`, `session_relay.c` and `session_client.c` separate a surviving POSIX owner with a private PTY from its terminal frontend. Windows currently lacks this native-owner backend. |
 | Local attachment | `terminal.sock` uses version-5 framing, one controlling terminal, reservation generations and physical-write acknowledgements. STATUS probes do not attach. |
@@ -500,10 +501,10 @@ Consequently, a record can be printed and consumed while the pager owns the
 screen. The pager can overwrite those bytes, and closing it does not replay the
 consumed record.
 
-This establishes a defect in display ownership. It does not identify the exact
-bytes lost in the reported incident: that incident has not been reproduced or
-captured during this design work. The existing active-turn pager test closes the
-pager promptly; it does not hold it through sustained background output.
+This identified a defect in display ownership. The original incident had no
+capture identifying its lost bytes. Permanent held-pager fixtures now reproduce
+the display failure and verify continued provider/tool progress, retained IRC
+events and catch-up after return; the qualification ledger records their scope.
 
 There is also a scheduling constraint: the current pager call blocks the app
 controller and runs a limited service callback. That callback does not run the
@@ -1027,8 +1028,9 @@ known peer handles before queued commands can observe later NICK/QUIT events.
 `/query` without operands lists existing operator-query selectors. Explicit
 addresses stay within the current session owner. Channel address commands and
 panes, connection buffers and the grouped activity directory are implemented as
-described in the current checkpoints. Cross-session command selection remains
-in the delivery audit. The semantic owner accepts frozen conversation
+described in the current checkpoints. Cross-session command selection uses the
+addressed owner already controlled by the workspace and preserves origin receipts
+and drafts. The semantic owner accepts frozen conversation
 routes, independent revisioned drafts and scoped commands. Request IDs bind
 route and text; private admission clears only its exact draft revision. Query
 selection returns to the requesting frontend while preserving classic focus.
@@ -1235,8 +1237,9 @@ Results own their public event payloads and verified cursors. Pages use the
 existing 4 MiB read quantum, allowing one larger valid record; large checkpoints
 still produce only small metadata. The worker sleeps on a condition variable
 between requests and wakes the frontend through the existing portable wakeup
-channel. Refresh and source failure invalidate its cached view. Search and
-viewport caches will build on this reader.
+channel. Refresh and source failure invalidate its cached view. The independent
+scan reader supplies search, copy and distant motion while the page reader keeps
+visible panes current.
 
 Tool metadata resolution walks the page backwards, then reads older verified
 records only for unresolved calls. It matches original turn/call identities and
@@ -1478,7 +1481,8 @@ narrow or wide profile. This width policy is separate from normative grapheme
 boundaries. The grid clips whole clusters, handles overlapping wide cells and
 renders raw controls visibly. A failed output callback retains the prior front
 frame and forces a full repaint; unchanged frames and cursors produce no output.
-Frontend event-loop backpressure and real terminal qualification remain ahead.
+Frontend fixtures exercise backpressure, interrupted painting and terminal-mode
+restoration; transport fixtures cover the qualified SSH/Mosh and mux layouts.
 
 Decode escape/key sequences incrementally. Use the existing terminal parser where
 possible, extending it for mouse and VM commands. Lone Escape disambiguation must
