@@ -9,14 +9,16 @@
   mouse input, paged retained transcripts, retrospective verbosity and terminal
   restoration. Transcript anchors and FOLLOW/HOLD state survive workspace resume.
   Idle live-history observation avoids rereading unchanged checkpoints or repainting.
-  Live session controls remain in the
-  ordinary interface while semantic attachment is under development.
+  Attach from the picker or with `:attach`, edit and submit plain rollout prompts,
+  and share each session's draft/controller across splits. Saved submissions
+  retain their request IDs until durable receipts arrive; reconnect queries
+  receipts without resending prompts. Drafts survive detach and workspace resume.
+  `:close` preserves owners; `:q`/`:qa` request normal shutdown with draft guards.
 
 - Add the optional native semantic owner endpoint with shared classic/workspace
   controller arbitration, committed-tail observation, plain-input admission,
   reconnect receipts, cancellation and distinct detach/quit controls. Durable
-  receipts reference the existing journal format. The workspace composer is
-  still being integrated.
+  receipts reference the existing journal format.
 
 - Bound history-reader memory when browsing across large context checkpoints.
   Preserve complete event verification and retained session history.

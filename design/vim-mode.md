@@ -73,8 +73,17 @@ Receipts identify the existing durable event and survive reconnect to that owner
 the journal schema stays unchanged. Tests cover active steering, cancellation,
 classic return and malformed/stalled peers. See [SV/1](session-view.md) for the
 implemented capability and framing contract. WITH_VM=0 omits this endpoint.
-Cross-page tool dependencies, composition, the frontend connection manager,
-search/selection/clipboard and IRC conversations below still need integration. This development frontend has
+The frontend connection manager now shares one draft and owner lease per session
+across split windows. Workspace state v3 adds drafts and pending request identities,
+accepts v1/v2 layouts, and saves before transmitting a submission. Reconnect queries
+receipts; unknown outcomes retain text for explicit recovery. Newer drafts survive
+older receipts. The composer supports grapheme edits, multiline literal paste and
+basic NORMAL/INSERT motions. Poll includes owner sockets and progress deadlines;
+idle connections do not trigger redraws. Quit/detach use the normal owner lifecycle.
+Canonical owner draft revisions, the rest of the editor subset, classic attachment
+fallback, new/stopped-owner launch, command/report adapters, cross-page tool
+dependencies, search/selection/clipboard and IRC conversations still need integration.
+This development frontend has
 not been installed on the operator's machines or merged into the release line.
 
 ## 1. Outcome and decisions

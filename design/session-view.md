@@ -11,8 +11,11 @@ endpoint. The terminal protocol remains SA/5.
 
 The current backend provides observation, exclusive control, plain rollout
 submission, receipts, cancellation, detach and normal owner shutdown. The
-workspace frontend remains a read-only history browser until its composer and
-connection manager are connected. Draft synchronization, commands/reports,
+workspace frontend uses these capabilities for live attachment and prompt editing.
+Local drafts and pending request identities are saved in private workspace snapshots
+before submission; reconnect queries receipts without resending text. Pending
+receipt queries repeat until resolved, and unknown outcomes require explicit recovery.
+Owner draft synchronization, commands/reports,
 external-terminal transactions and IRC routes are subsequent protocol features;
 clients use only advertised capabilities. A classic owner without this endpoint
 continues to offer its existing terminal attachment and best-effort history.
@@ -84,6 +87,9 @@ never automatically resubmit it as a new request. An owner restart changes
 `instance`; an unknown receipt remains uncertain until explicitly reconciled
 against retained history. Queue entries from a detached generation are rejected
 before admission and receive a rejected receipt.
+Submission refusals include the request ID when it is valid. A control error
+does not resolve a pending submission; clients query that submission's receipt
+before offering recovery.
 
 ## Presentation boundary
 

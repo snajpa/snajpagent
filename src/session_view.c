@@ -297,23 +297,34 @@ request_id(const char *id)
 }
 
 static int
+refuse_submission(struct view_peer *peer, const json_t *message, const char *error)
+{
+    const char *id = snag_json_string(message, "id");
+    if (!request_id(id)) return refuse(peer, error);
+    return reply(peer, json_pack("{s:s,s:s,s:s}", "type", "error", "id", id, "message", error));
+}
+
+static int
 submit(struct snag_view_server *server, struct view_peer *peer, const json_t *message)
 {
     const char *id = snag_json_string(message, "id");
     const char *text = snag_json_bounded_string(json_object_get(message, "text"),
         SNAG_MAX_DIRECT_PROMPT);
-    if (!request_id(id) || !text) return refuse(peer, "invalid submission");
+    if (!request_id(id) || !text) return refuse_submission(peer, message, "invalid submission");
     /* Command/report and IRC routing are separate advertised capabilities.
      * Plain submissions always address the rollout, including multiline text. */
-    if (snag_prompt_command(text)) return refuse(peer, "command capability unavailable");
+    if (snag_prompt_command(text))
+        return refuse_submission(peer, message, "command capability unavailable");
     char digest[SNAG_SHA256_HEX_LEN + 1u];
     snag_sha256_hex(text, strlen(text), digest);
     struct view_receipt *receipt = find_receipt(server, id);
     if (receipt) {
-        if (strcmp(receipt->sha256, digest)) return refuse(peer, "request ID already used");
+        if (strcmp(receipt->sha256, digest))
+            return refuse_submission(peer, message, "request ID already used");
         return reply(peer, json_incref(receipt->result));
     }
-    if (server->pending) return refuse(peer, "submission awaiting owner admission");
+    if (server->pending)
+        return refuse_submission(peer, message, "submission awaiting owner admission");
     receipt = calloc(1u, sizeof(*receipt));
     if (!receipt) return -1;
     memcpy(receipt->id, id, sizeof(receipt->id));
@@ -343,8 +354,12 @@ dispatch(struct snag_view_server *server, struct view_peer *peer, const json_t *
     const char *fields = !strcmp(type, "hello") ? "type version" :
         !strcmp(type, "reserve") ? "type" : !strcmp(type, "receipt") ? "type id" :
         !strcmp(type, "submit") ? "type generation id text" : "type generation";
-    if (!snag_json_exact_keys(message, fields))
-        return peer->hello ? refuse(peer, "unsupported message fields") : snag_errno(EPROTO);
+    if (!snag_json_exact_keys(message, fields)) {
+        if (!peer->hello) return snag_errno(EPROTO);
+        return !strcmp(type, "submit") ?
+            refuse_submission(peer, message, "unsupported message fields") :
+            refuse(peer, "unsupported message fields");
+    }
     if (!peer->hello) {
         uint64_t version;
         if (strcmp(type, "hello") || snag_json_integer_u64(message, "version", &version) < 0 ||
@@ -374,7 +389,9 @@ dispatch(struct snag_view_server *server, struct view_peer *peer, const json_t *
     uint64_t generation;
     if (snag_json_integer_u64(message, "generation", &generation) < 0 ||
         !generation || generation != peer->generation)
-        return refuse(peer, "stale controller generation");
+        return !strcmp(type, "submit") ?
+            refuse_submission(peer, message, "stale controller generation") :
+            refuse(peer, "stale controller generation");
     if (!strcmp(type, "commit")) {
         if (peer->bound || snag_session_relay_view_bind(server->relay, generation) < 0)
             return refuse(peer, "controller cannot bind");
@@ -389,7 +406,9 @@ dispatch(struct snag_view_server *server, struct view_peer *peer, const json_t *
         peer->closing = true;
         return reply(peer, json_pack("{s:s}", "type", "detached"));
     }
-    if (!peer->bound) return refuse(peer, "controller is not bound");
+    if (!peer->bound) return !strcmp(type, "submit") ?
+        refuse_submission(peer, message, "controller is not bound") :
+        refuse(peer, "controller is not bound");
     if (!strcmp(type, "submit")) return submit(server, peer, message);
     if (!strcmp(type, "cancel") || !strcmp(type, "quit")) {
         if (server->callbacks.control(server->callbacks.opaque, !strcmp(type, "quit")) < 0)

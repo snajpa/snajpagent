@@ -1645,10 +1645,9 @@ its export for wrapped attachment. Read-only model turns reject send_file.
 .SH "Vim workspace"
 The development workspace opens with
 .BR "snajpagent vm" .
-It provides session/workspace pickers, retained transcript browsing, help,
-filters and persistent split layouts. Agent execution still uses the ordinary
-.B snajpagent --resume SESSION_ID
-command. Workspace browsing does not start model turns or IRC connections.
+It provides session/workspace pickers, retained transcript browsing, prompt
+editing, live owner attachment and persistent split layouts.
+Workspace browsing does not start model turns or IRC connections.
 Runtime activation is explicit; ordinary startup retains its terminal interface.
 .PP
 .B vm -N NAME
@@ -1671,6 +1670,9 @@ Use j/k or arrows to select, gg/G for the first/last row, Ctrl-D/U to move half
 a window and / to filter picker metadata. R refreshes the lists; selection
 follows the same full ID when activity reorders agent rows. The session picker
 uses the classic list's attached/detached/running/stored ordering and data.
+Enter in the session picker attaches to an existing owner with workspace support.
+An older or stopped owner leaves readable history and an attachment diagnostic;
+start or attach to it with the ordinary snajpagent --resume command.
 In the workspace picker, Enter restores the selected workspace. A failed open
 or invalid snapshot keeps the current workspace usable.
 .PP
@@ -1713,28 +1715,61 @@ neighbor. Ctrl-W = equalizes proportions, +/- changes height and >/< changes wid
 Terminal shrink temporarily hides windows while preserving their layout.
 Mouse clicks focus/select; the wheel moves the selection.
 .PP
-In these read-only transcript, picker and help views,
+In a read-only transcript, picker or help view,
 .B :q
 or :close closes the window; the last window exits the workspace.
-.B :qa
-exits the workspace.
+In an attached transcript, :q requests normal owner shutdown and waits for its
+acknowledgement; :qa requests shutdown of every owner controlled by this workspace,
+then exits. Unsent drafts or unresolved submissions block these commands.
+:q! and :qa! discard the affected drafts and request the same normal shutdown.
+.B :close
+closes only the window; the last view of a session releases control and preserves
+its owner. Terminal loss also releases control and preserves owners.
+Detaching after a quit request leaves the wait; the requested shutdown may finish.
 .B :workspace
 shows its name, ID and save status;
 .B :workspace name NAME
 renames it and :workspace save writes immediately. Quote names containing spaces.
-Layout and filter changes save after a one-second editing pause; clean exit,
+Layout, filter and draft changes save at one-second intervals; clean exit,
 switch and suspend also save. A save failure stays visible and can be retried.
 Leaving an untouched initial picker creates no saved workspace.
 .PP
 Snapshots are private files under $DOTDIR/workspaces/WORKSPACE_ID/workspace.json.
-They retain the layout, focus, selection, filters, transcript source anchors and
-verbosity and FOLLOW/HOLD state. Restoring a transcript reads history without
-resuming its agent; FOLLOW restores at the current tail.
+They retain the layout, focus, selection, filters, transcript source anchors,
+verbosity, FOLLOW/HOLD, per-session drafts and unresolved submissions.
+Restoring a controlled view attempts to reattach its existing owner; a busy or
+unavailable owner leaves the draft intact. Other transcript views read history
+without taking control; FOLLOW restores at the current tail.
 Corrupt or newer unsupported
 state is reported and preserved. Bracketed paste inserts literal text in command
 or filter input; it cannot execute a command by itself. Escape returns to normal
 mode, Ctrl-L redraws and Ctrl-Z suspends on supported platforms. Clean exit and
 handled shutdown signals restore cooked input, cursor, mouse and screen modes.
+.SS "Attach and compose"
+.B :attach SESSION_ID
+opens and controls an existing workspace-capable owner. With no operand,
+:attach reconnects the current transcript. Splits of that session share one
+draft and one controller. :detach releases it for all those views and preserves
+the running owner. Ctrl-C requests the owner's ordinary turn interruption.
+.PP
+Press i, a or A in a transcript to enter the prompt editor. INSERT accepts
+text, literal bracketed paste, arrows, Home/End, Backspace/Delete and Ctrl-U.
+Enter submits; Ctrl-J inserts a newline. Escape leaves INSERT and preserves the
+draft. In NORMAL, Tab switches transcript/composer focus; h/j/k/l, 0 and $ move
+inside the draft, i/a/I/A enter INSERT and x deletes a whole grapheme.
+Escape followed immediately by text leaves INSERT or command input before
+interpreting that text in NORMAL, including a fast Escape-colon.
+Drafts wrap within the window and survive split changes, detach and workspace resume.
+.PP
+Before transmitting, the workspace saves the request ID, text and owner identity.
+The composer then accepts the next draft. A durable admission receipt clears
+only that submitted copy. Reconnecting queries its receipt; an unknown result
+or changed owner leaves the submission retained without automatic retransmission.
+Inspect history, then use
+.B :recover
+with an empty draft to recover its text if needed. A refused submission also
+remains recoverable. Plain rollout text is supported; slash commands, IRC routes,
+attachments and owner-side draft reconciliation remain under development.
 .SS "Native semantic endpoint"
 With workspace support compiled in, new POSIX native owners publish
 .B view.sock
@@ -1747,9 +1782,8 @@ control and leaves the owner running.
 The current backend supports plain rollout submissions, durable admission
 receipts, cancellation, detach and normal owner shutdown. Reconnect can query
 a receipt without repeating a prompt. A changed owner instance with an unknown
-receipt requires explicit reconciliation against history. The interactive
-workspace composer and command/report adapters remain under development;
-the current workspace frontend retains the read-only controls above.
+receipt requires explicit reconciliation against history. Command/report adapters
+remain under development.
 Existing owners retain their advertised capabilities. Builds using
 .B WITH_VM=0
 omit this endpoint; Windows currently lacks the native-owner backend.

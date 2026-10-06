@@ -392,8 +392,10 @@ class SessionViewTests(unittest.TestCase):
     def test_rejected_input_preserves_owner_and_receipt(self):
         self.detach()
         peer = self.view(bind=True)
-        peer.submit('/status')
-        self.assertIn('capability', peer.until('error')['message'])
+        refused = peer.submit('/status')
+        error = peer.until('error')
+        self.assertIn('capability', error['message'])
+        self.assertEqual(error['id'], refused)
         request = peer.submit('   ')
         self.assertEqual(peer.result(request)['status'], 'rejected')
         peer.send(type='receipt', id=request)
