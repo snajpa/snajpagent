@@ -397,7 +397,9 @@ tracked `config.mk`; `make WITH_*=…` stays an explicit override.
 The development `snajpagent vm` frontend provides named workspaces, saved
 Vim-style splits, paged transcripts with retrospective verbosity, and prompt
 editing through live owner attachment. Enter attaches from the session picker;
-`:close` detaches and `:q` requests owner shutdown. See the manual's Vim workspace
+`:close` saves the owner draft and detaches; `:q` requests owner shutdown.
+Conflicting saved/owner drafts offer `:draft local` and `:draft owner`.
+See the manual's Vim workspace
 section for available controls and `design/vim-mode.md` for implementation status.
 `make WITH_VM=0` omits the optional interface; the default includes it.
 

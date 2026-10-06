@@ -1761,15 +1761,34 @@ Escape followed immediately by text leaves INSERT or command input before
 interpreting that text in NORMAL, including a fast Escape-colon.
 Drafts wrap within the window and survive split changes, detach and workspace resume.
 .PP
+Owners advertising draft support retain an acknowledged copy while detached.
+On attachment, the workspace compares both copies with their last shared text.
+A change on one side is retained automatically. If both texts changed, the
+workspace keeps both and shows a draft conflict. Choose
+.B :draft local
+to keep the workspace copy or
+.B :draft owner
+to use the retained owner copy. Both conflicting texts stay saved across reconnect,
+even if another controller changes the owner draft again.
+The choice also works while detached; the next attachment checks the live owner again.
+Recover any retained submission before resolving its
+draft conflict. Owners without this capability use the workspace's saved copy.
+Clean detach, last-window close, workspace switch and suspend flush the final
+edit before releasing control. A connection failure leaves unacknowledged text
+in the workspace snapshot; unresolved conflicts remain saved there too.
+Draft synchronization does not submit text or add it to model history.
+.PP
 Before transmitting, the workspace saves the request ID, text and owner identity.
+With draft support, it waits for that text's revision acknowledgement before
+submitting. New typing belongs to the next draft and survives older acknowledgements.
 The composer then accepts the next draft. A durable admission receipt clears
 only that submitted copy. Reconnecting queries its receipt; an unknown result
 or changed owner leaves the submission retained without automatic retransmission.
 Inspect history, then use
 .B :recover
 with an empty draft to recover its text if needed. A refused submission also
-remains recoverable. Plain rollout text is supported; slash commands, IRC routes,
-attachments and owner-side draft reconciliation remain under development.
+remains recoverable. Plain rollout text is supported; slash commands, IRC routes
+and attachments remain under development.
 .SS "Native semantic endpoint"
 With workspace support compiled in, new POSIX native owners publish
 .B view.sock
@@ -1789,8 +1808,8 @@ The backend also offers revisioned rollout drafts. Bound controllers can read,
 replace and subscribe to a draft, using its expected revision to reject stale edits.
 Revision-aware admission clears only the submitted revision; newer drafts survive.
 These drafts stay in owner memory and do not enter model history until submitted.
-The current workspace composer retains its local snapshots while owner-draft
-reconciliation is being integrated.
+The workspace composer reconciles these drafts with its saved local snapshots.
+Classic terminal editor drafts remain separate from this semantic rollout draft.
 Existing owners retain their advertised capabilities. Builds using
 .B WITH_VM=0
 omit this endpoint; Windows currently lacks the native-owner backend.

@@ -22,8 +22,9 @@
 
 - Retain revisioned rollout drafts in the native owner across controller changes.
   Draft edits leave session/model history unchanged. Revision-aware submission
-  clears only its admitted draft; newer edits survive. Workspace reconciliation
-  with these owner drafts remains under development.
+  clears only its admitted draft; newer edits survive. Workspaces reconcile saved
+  and owner copies, retain conflicts for `:draft local` / `:draft owner`, and
+  acknowledge the final edit before clean detach, switch or suspend.
 
 - Bound history-reader memory when browsing across large context checkpoints.
   Preserve complete event verification and retained session history.

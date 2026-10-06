@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0-only
 """Real workspace -> native owner -> durable journal/provider integration."""
 
+import hashlib
 import json
 import os
 import signal
@@ -54,6 +55,209 @@ class ControlTests(unittest.TestCase):
         child.write(b'\x1b')
         time.sleep(.06)
         child.repaint_until(b'NORMAL composer')
+
+    def wait_synced(self, text):
+        digest = hashlib.sha256(text.encode()).hexdigest()
+        return self.wait_snapshot(lambda rows:
+            (next(iter(rows.values()))['state']['buffers'][0].get('base') or {}).get('sha256')
+            == digest)
+
+    def owner_draft(self, text=None):
+        peer = self.owner.view()
+        peer.bind()
+        draft = peer.draft()
+        if text is not None:
+            draft = peer.replace_draft(draft['revision'], text)['draft']
+        peer.send(type='detach', generation=peer.generation)
+        peer.until('detached')
+        peer.close()
+        self.owner.status('detached')
+        return draft
+
+    def test_owner_draft_adoption_and_final_edit_flushed_on_close(self):
+        self.owner_draft('retained 👩‍💻')
+        child = self.start('-N', 'owner-draft')
+        child.command('attach ' + self.owner.sid)
+        self.wait_synced('retained 👩‍💻')
+        child.repaint_until('retained 👩‍💻'.encode())
+        # No autosave pause between the last edit and clean detach.
+        child.write(b'A-final\x1b:close\r')
+        child.wait_exit()
+        self.owner.status('detached')
+        self.assertEqual(self.owner_draft()['text'], 'retained 👩‍💻-final')
+        saved = next(iter(self.snapshots().values()))['state']
+        self.assertEqual(saved['v'], 4)
+        self.assertEqual(saved['buffers'][0]['draft'], 'retained 👩‍💻-final')
+        self.assertTrue(saved['buffers'][0]['control'])
+        self.assertEqual(self.inputs(), [])
+
+    def test_conflicting_workspace_and_owner_edits_preserve_both_choices(self):
+        child = self.start('-N', 'conflict')
+        child.command('attach ' + self.owner.sid)
+        child.until(b'ATTACHED')
+        child.write(b'ibase draft')
+        self.wait_synced('base draft')
+        self.escape(child)
+        child.finish('close')
+        path, = (self.root / 'state' / 'workspaces').glob('*/workspace.json')
+        for choice in ('owner', 'local'):
+            saved = json.loads(path.read_text())
+            saved['state']['buffers'][0]['draft'] = 'local ' + choice
+            saved['state']['buffers'][0]['cursor'] = len('local ' + choice)
+            path.write_text(json.dumps(saved))
+            self.owner_draft('owner ' + choice)
+            resumed = self.start('--resume', 'conflict', expect=b'history')
+            resumed.repaint_until(b'Draft conflict')
+            rows = self.wait_snapshot(lambda rows:
+                next(iter(rows.values()))['state']['buffers'][0].get('conflict') is not None)
+            buffer = next(iter(rows.values()))['state']['buffers'][0]
+            self.assertEqual(buffer['draft'], 'local ' + choice)
+            self.assertEqual(buffer['conflict']['text'], 'owner ' + choice)
+            resumed.finish('close')
+            self.owner.status('detached')
+            self.owner_draft('later owner edit')
+            previous = json.loads(path.read_text())['activity_ms']
+            resumed = self.start('--resume', 'conflict', expect=b'history')
+            resumed.repaint_until(b'Draft conflict')
+            resumed.command('workspace save')
+            self.wait_snapshot(lambda rows: next(iter(rows.values()))['activity_ms'] > previous)
+            self.assertEqual(json.loads(path.read_text())['state']['buffers'][0]['conflict']['text'],
+                             'owner ' + choice)
+            resumed.command('draft ' + choice)
+            expected = choice + ' ' + choice
+            self.wait_synced(expected)
+            resumed.finish('close')
+            self.owner.status('detached')
+            self.assertEqual(self.owner_draft()['text'], expected)
+        self.assertEqual(self.inputs(), [])
+
+    def test_one_sided_offline_edit_and_old_workspace_snapshot(self):
+        child = self.start('-N', 'offline')
+        child.command('attach ' + self.owner.sid)
+        child.until(b'ATTACHED')
+        child.write(b'ione side')
+        self.wait_synced('one side')
+        self.escape(child)
+        child.finish('close')
+        path, = (self.root / 'state' / 'workspaces').glob('*/workspace.json')
+        saved = json.loads(path.read_text())
+        saved['state']['buffers'][0]['draft'] = 'local offline edit'
+        saved['state']['buffers'][0]['cursor'] = len('local offline edit')
+        path.write_text(json.dumps(saved))
+        resumed = self.start('--resume', 'offline', expect=b'history')
+        self.wait_synced('local offline edit')
+        resumed.finish('close')
+        self.assertEqual(self.owner_draft()['text'], 'local offline edit')
+        self.owner_draft('owner changed')
+        resumed = self.start('--resume', 'offline', expect=b'history')
+        self.wait_synced('owner changed')
+        resumed.finish('close')
+        saved = json.loads(path.read_text())
+        saved['state']['v'] = 3
+        buffer = saved['state']['buffers'][0]
+        del buffer['base'], buffer['conflict']
+        buffer['draft'], buffer['cursor'] = '', 0
+        path.write_text(json.dumps(saved))
+        resumed = self.start('--resume', 'offline', expect=b'history')
+        self.wait_synced('owner changed')
+        resumed.finish('close')
+        self.assertEqual(self.inputs(), [])
+
+    def test_force_quit_discards_both_conflicting_drafts(self):
+        self.owner_draft('owner copy')
+        child = self.start('-N', 'discard-conflict')
+        child.command('history ' + self.owner.sid)
+        child.write(b'ilocal copy\x1b:attach\r')
+        child.repaint_until(b'Draft conflict')
+        child.finish('q!')
+        self.owner.status('stored')
+        buffer = next(iter(self.snapshots().values()))['state']['buffers'][0]
+        self.assertEqual(buffer['draft'], '')
+        self.assertIsNone(buffer['conflict'])
+        self.assertEqual(self.inputs(), [])
+
+    def test_detached_conflict_can_restore_retained_owner_copy(self):
+        self.owner_draft('retained owner copy')
+        child = self.start('-N', 'offline-choice')
+        child.command('history ' + self.owner.sid)
+        child.write(b'ilocal copy\x1b:attach\r')
+        child.repaint_until(b'Draft conflict')
+        child.command('detach')
+        child.repaint_until(b'Detached; unresolved draft retained')
+        self.owner.status('detached')
+        child.command('draft owner')
+        self.wait_snapshot(lambda rows:
+            next(iter(rows.values()))['state']['buffers'][0]['draft'] == 'retained owner copy' and
+            next(iter(rows.values()))['state']['buffers'][0]['conflict'] is None)
+        child.finish('close')
+        self.assertEqual(self.owner_draft()['text'], 'retained owner copy')
+        self.assertEqual(self.inputs(), [])
+
+    def test_unacknowledged_edit_survives_frontend_loss(self):
+        child = self.start('-N', 'unacknowledged')
+        child.command('attach ' + self.owner.sid)
+        child.until(b'ATTACHED')
+        child.write(b'iacknowledged')
+        self.wait_synced('acknowledged')
+        os.kill(self.owner.owner, signal.SIGSTOP)
+        try:
+            child.write(b'-suffix')
+            self.wait_snapshot(lambda rows:
+                next(iter(rows.values()))['state']['buffers'][0]['draft'] == 'acknowledged-suffix')
+            child.signal(signal.SIGTERM)
+            child.wait_exit()
+        finally:
+            os.kill(self.owner.owner, signal.SIGCONT)
+        self.owner.status('detached')
+        resumed = self.start('--resume', 'unacknowledged', expect=b'history')
+        self.wait_synced('acknowledged-suffix')
+        resumed.finish('close')
+        self.owner.status('detached')
+        self.assertEqual(self.owner_draft()['text'], 'acknowledged-suffix')
+        self.assertEqual(self.inputs(), [])
+
+    def test_suspend_flushes_owner_draft_and_reconnects(self):
+        child = self.start('-N', 'suspended-draft')
+        child.command('attach ' + self.owner.sid)
+        child.until(b'ATTACHED')
+        child.write(b'isuspend draft')
+        self.escape(child)
+        child.write(b'\x1a')
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and child.state().get('state') != 'stopped':
+            child.read()
+        self.assertEqual(child.state().get('state'), 'stopped')
+        self.owner.status('detached')
+        self.assertEqual(self.owner_draft()['text'], 'suspend draft')
+        # A different controller may edit while the workspace is suspended.
+        self.owner_draft('edited during suspend')
+        child.signal(signal.SIGCONT)
+        self.wait_synced('edited during suspend')
+        child.repaint_until(b'edited during suspend')
+        child.finish('close')
+        self.assertEqual(self.inputs(), [])
+
+    def test_workspace_switch_flushes_shared_owner_and_preserves_source(self):
+        target = self.start('-N', 'destination')
+        target.finish()
+        child = self.start('-N', 'source')
+        child.command('attach ' + self.owner.sid)
+        child.until(b'ATTACHED')
+        child.write(b'ifinal source draft\x1b:vsp\r:workspaces\rG\r')
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            child.read()
+            rows = frontend.WorkspaceTests.cli(self, '-l').stdout
+            if b'\tdestination\topen\t' in rows:
+                break
+        self.assertIn(b'\tdestination\topen\t', rows)
+        self.owner.status('detached')
+        self.assertEqual(self.owner_draft()['text'], 'final source draft')
+        source = next(x for x in self.snapshots().values() if x['name'] == 'source')
+        self.assertEqual(source['state']['buffers'][0]['draft'], 'final source draft')
+        self.assertTrue(source['state']['buffers'][0]['control'])
+        child.finish()
+        self.assertEqual(self.inputs(), [])
 
     def test_picker_attach_unicode_paste_submit_and_newer_draft(self):
         child = self.start('-N', 'composing')
@@ -169,9 +373,11 @@ class ControlTests(unittest.TestCase):
         child = self.start('-N', 'lost-receipt')
         child.command('attach ' + self.owner.sid)
         child.until(b'ATTACHED')
+        child.write(b'iexactly-once-after-reconnect')
+        self.wait_synced('exactly-once-after-reconnect')
         os.kill(self.owner.owner, signal.SIGSTOP)
         try:
-            child.write(b'iexactly-once-after-reconnect\rnewer-text')
+            child.write(b'\rnewer-text')
             self.wait_snapshot(lambda rows:
                                next(iter(rows.values()))['state']['buffers'][0]['pending'] and
                                next(iter(rows.values()))['state']['buffers'][0]['draft']

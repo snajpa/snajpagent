@@ -84,7 +84,18 @@ The owner now stores revisioned rollout drafts, rejects stale replacements, and
 accepts submissions tied to an exact draft revision. Successful admission clears
 only that revision; newer drafts survive, including edits from a new controller.
 Draft notifications require an explicit bound-controller subscription.
-Frontend reconciliation with these drafts, the rest of the editor subset, classic attachment
+The frontend now reconciles saved and owner drafts against a shared text digest
+and owner instance. Workspace state v4 retains that baseline and conflicting
+owner text while accepting v1/v2/v3. One in-flight revision check coalesces newer
+edits. Acknowledgements never replace newer local typing; conflicts offer
+`:draft local` and `:draft owner`. Clean detach, window close, workspace switch
+and suspend flush the final edit asynchronously before releasing the lease.
+An unknown submission receipt blocks automatic draft replacement until recovery.
+Revision-aware submission waits for its captured text to be acknowledged, and
+the admission receipt's exact clear revision advances the baseline before a
+fresh snapshot is reconciled. Terminal loss retains any unacknowledged suffix
+in the private workspace snapshot. Classic editor draft bridging remains separate.
+The rest of the editor subset, classic attachment
 fallback, new/stopped-owner launch, command/report adapters, cross-page tool
 dependencies, search/selection/clipboard and IRC conversations still need integration.
 This development frontend has

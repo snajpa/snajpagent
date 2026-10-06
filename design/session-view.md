@@ -16,8 +16,9 @@ Local drafts and pending request identities are saved in private workspace snaps
 before submission; reconnect queries receipts without resending text. Pending
 receipt queries repeat until resolved, and unknown outcomes require explicit recovery.
 The owner also retains revisioned rollout drafts through controller changes.
-Frontend draft reconciliation, commands/reports, external-terminal transactions
-and IRC routes remain subsequent integration work;
+The workspace reconciles owner and saved drafts using their last shared text
+digest and owner identity; conflicts retain both copies for an explicit choice.
+Commands/reports, external-terminal transactions and IRC routes remain integration work;
 clients use only advertised capabilities. A classic owner without this endpoint
 continues to offer its existing terminal attachment and best-effort history.
 
@@ -42,6 +43,8 @@ Unfinished reads and stalled writes have independent five-second progress
 deadlines. Handshakes and uncommitted reservations expire after fifteen seconds.
 An idle, complete connection has no deadline. A malformed, stalled or lost
 connection is removed without failing the owner. Its controller lease is released.
+The workspace waits up to five seconds for a draft acknowledgement after the
+request finishes sending, retaining its local copy on connection loss.
 
 ## Messages
 
