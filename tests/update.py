@@ -89,7 +89,10 @@ with tempfile.TemporaryDirectory(prefix="update-", dir=os.environ.get("TMPDIR"))
     exe = reset("success")
     # A new downloaded inode must not inherit old executable xattrs.
     attribute = "user.snajpagent-update-fixture"
-    os.setxattr(exe, attribute, b"old-file-metadata")
+    if sys.platform == "darwin":
+        subprocess.run(["/usr/bin/xattr", "-w", attribute, "old-file-metadata", exe], check=True)
+    else:
+        os.setxattr(exe, attribute, b"old-file-metadata")
     server.delay = 0.4
     p = subprocess.Popen([exe, url, "10000"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     before = time.monotonic()
@@ -99,7 +102,9 @@ with tempfile.TemporaryDirectory(prefix="update-", dir=os.environ.get("TMPDIR"))
     assert p.returncode == 0 and "old process still running 0.99.2-aaaaaaa" in out
     assert err.count("=== snajpagent updated ===") == 1 and "#changelog" in err
     assert exe.read_bytes() == new.read_bytes() and exe.stat().st_mode & 0o777 == 0o750
-    assert attribute not in os.listxattr(exe)
+    attributes = (subprocess.check_output(["/usr/bin/xattr", exe], text=True).splitlines()
+                  if sys.platform == "darwin" else os.listxattr(exe))
+    assert attribute not in attributes
     assert subprocess.check_output([exe, "-V"], text=True).strip() == "0.99.2-bbbbbbb"
     result = run(exe)
     assert not result.stderr and server.paths.count(url.split(str(server.server_port), 1)[1]) == 1

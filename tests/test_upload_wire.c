@@ -35,7 +35,8 @@ receive_adapter(const char *stage, const char *receipt)
     raw.c_cc[VMIN] = 0;
     raw.c_cc[VTIME] = 0;
     if (tcsetattr(fd, TCSANOW, &raw) < 0) return 2;
-    (void)write(fd, "ADAPTER_READY\r\n", sizeof("ADAPTER_READY\r\n") - 1u);
+    ssize_t ignored = write(fd, "ADAPTER_READY\r\n", sizeof("ADAPTER_READY\r\n") - 1u);
+    (void)ignored;
 
     char line[8] = {0};
     size_t used = 0;

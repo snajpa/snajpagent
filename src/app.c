@@ -1441,7 +1441,8 @@ snag_app_help_text(struct snag_buf *text, const char *command)
         "Queue TEXT may begin /ro for read-only work; //TEXT escapes a leading slash.\n";
     static const char keys[] = "\nKeyboard\n"
         "Keys: blank Enter new prompt; Enter submit/steer (chat: send).\n"
-        "Empty Tab switch view; Tab complete/indent/queue (chat: @nick).\n"
+        "Empty Tab switch view/channel/query; Shift-Tab reverse.\n"
+        "Tab complete/indent/queue (chat: @nick); query tabs: chat Tab switches.\n"
         "Ctrl-C cancel draft or interrupt; empty Ctrl-D exit, otherwise delete.\n"
         "Ctrl-J newline; Up/Down history; Ctrl-R search; Ctrl-L redraw.\n"
         "Verbosity: 0 conversation; 1 tool rows; 2 previews; 3 retained tools;\n"

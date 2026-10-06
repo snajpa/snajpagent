@@ -23,7 +23,7 @@ def main():
         (root / "work").mkdir()
         dotdir = root / "state"
         environment = dict(os.environ, HOME=str(root / "home"),
-                           LC_ALL="C.utf8", NO_COLOR="1")
+                           LC_ALL="C.UTF-8", NO_COLOR="1")
         environment.pop("OPENAI_API_KEY", None)
         run = subprocess.run([BINARY, "--dotdir", str(dotdir), "-e", "--", PROMPT],
                              cwd=root / "work", env=environment,

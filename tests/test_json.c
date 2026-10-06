@@ -7,6 +7,42 @@
 #include <string.h>
 
 static void
+test_object_iteration(void)
+{
+    json_t *object = json_pack("{s:{s:i,s:i},s:{s:i}}",
+        "a", "x", 1, "skip", 2, "b", "y", 3);
+    assert(object);
+    const char *key;
+    json_t *value;
+    unsigned int count = 0u;
+    json_int_t sum = 0;
+    json_object_foreach(object, key, value) {
+        assert(!strcmp(key, "a") || !strcmp(key, "b"));
+        const char *field;
+        json_t *number;
+        json_object_foreach(value, field, number) {
+            ++count;
+            if (!strcmp(field, "skip")) continue;
+            sum += json_integer_value(number);
+        }
+    }
+    assert(count == 3u && sum == 4);
+    count = 0u;
+    json_object_foreach(object, key, value) {
+        ++count;
+        break;
+    }
+    assert(count == 1u);
+    json_decref(object);
+    object = json_object();
+    assert(object);
+    json_object_foreach(object, key, value) { ++count; }
+    json_object_foreach(NULL, key, value) { ++count; }
+    assert(count == 1u);
+    json_decref(object);
+}
+
+static void
 test_strict_accepts_wire_json(void)
 {
     static const unsigned char input[] = " \n {\"b\":1.5,\"a\":[true,null]} \t";
@@ -254,6 +290,7 @@ main(void)
     assert(json_integer_value(json_object_get(value, "a")) == 12);
     json_decref(value);
     snag_json_document_free(&document);
+    test_object_iteration();
     test_strict_accepts_wire_json();
     test_arguments_resolve_duplicate_keys_last_wins();
     test_arguments_reject_decoded_nul();

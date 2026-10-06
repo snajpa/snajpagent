@@ -20,6 +20,20 @@ struct output_capture {
     int saved[2];
 };
 
+static void
+test_null_output(void)
+{
+    int fd = open("/dev/null", O_WRONLY);
+    assert(fd >= 0);
+    assert(snag_term_write(fd, "discarded", 9u) == 0);
+    assert(close(fd) == 0);
+    assert(snag_term_write(fd, "closed", 6u) < 0);
+    fd = open("/dev/null", O_RDONLY);
+    assert(fd >= 0);
+    assert(snag_term_write(fd, "readonly", 8u) < 0);
+    assert(close(fd) == 0);
+}
+
 static struct output_capture
 capture_open(bool stdout_enabled, bool stderr_enabled)
 {
@@ -3324,6 +3338,7 @@ test_hosted_search_rows(void)
 int
 main(void)
 {
+    test_null_output();
     test_query_markdown_isolation();
     static const char markdown[] = "# **Live** _Markdown_\n"
         "- item with `code` and [docs](https://example.test)\n"

@@ -1216,6 +1216,16 @@ snag_term_output_write(struct snag_term_host *host, int fd, const void *text, si
     (void)host;
     while (len) {
         int rc = poll(fds, 2u, 0);
+#if defined(__APPLE__)
+        /* Darwin reports POLLNVAL for /dev/null although writes succeed. */
+        if (rc > 0 && (fds[0].revents & POLLNVAL)) {
+            struct stat output;
+            struct stat sink;
+            if (fstat(fd, &output) == 0 && S_ISCHR(output.st_mode) &&
+                stat("/dev/null", &sink) == 0 && output.st_rdev == sink.st_rdev)
+                fds[0].revents = POLLOUT;
+        }
+#endif
         if (rc >= 0 && !(fds[0].revents & POLLOUT) && checkpoint && checkpoint(opaque) < 0) return -1;
         if (rc >= 0 && !(fds[0].revents & POLLOUT)) rc = poll(fds, 2u, checkpoint ? 16 : -1);
         if (rc < 0 && errno == EINTR) continue;

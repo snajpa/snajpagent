@@ -471,11 +471,31 @@ class RemoteStartupTests(unittest.TestCase):
             local_file = home / "local.bin"
             local_file.write_bytes(bytes(reversed(range(128))))
             dotdir = root / "agent"
+
+            def native_owners():
+                # Mosh daemonizes outside the wrapper's descendant tree.
+                # Match only this fixture's exact executable and private root.
+                expected = " ".join([str(PRODUCT), "--dotdir", str(dotdir)])
+                owners = {}
+                for row in subprocess.check_output(
+                        ["ps", "-axo", "pid=,command="], text=True).splitlines():
+                    fields = row.split(None, 1)
+                    if len(fields) != 2 or fields[1] != expected:
+                        continue
+                    pid = int(fields[0])
+                    identity = subprocess.run(
+                        ["ps", "-p", str(pid), "-o", "lstart=,command="],
+                        capture_output=True, text=True, check=False).stdout.strip()
+                    if identity:
+                        owners[pid] = identity
+                return owners
+
             child = RemoteProcess(home, ["mosh", "--local", "--no-init",
                                    "--predict=never", "127.0.0.1", str(PRODUCT),
                                    "--dotdir", str(dotdir)], winsize=(24, 80))
             try:
                 child.until("›".encode(), 20)
+                self.assertTrue(native_owners(), "stock-Mosh fixture owner was not identified")
                 mode = termios.tcgetattr(child.slave)
                 os.write(child.master, f"/send {remote_file}\r".encode())
                 target = home / "Downloads" / remote_file.name
@@ -499,6 +519,21 @@ class RemoteStartupTests(unittest.TestCase):
                 self.assertIn(self.wait_exited(child), (0, 128 + signal.SIGTERM))
             finally:
                 child.close()
+                # Disconnect intentionally preserves production owners. Stop
+                # only the fixture's retained owners before removing its root.
+                for pid, identity in native_owners().items():
+                    current = subprocess.run(
+                        ["ps", "-p", str(pid), "-o", "lstart=,command="],
+                        capture_output=True, text=True, check=False).stdout.strip()
+                    if current == identity:
+                        try:
+                            os.kill(pid, signal.SIGTERM)
+                        except ProcessLookupError:
+                            pass
+                deadline = time.monotonic() + 5
+                while native_owners() and time.monotonic() < deadline:
+                    time.sleep(.05)
+                self.assertFalse(native_owners(), "stock-Mosh fixture left a native owner")
 
     def test_screen_title_handshake_is_hidden_from_terminal(self):
         with tempfile.TemporaryDirectory(prefix="snag-title-handshake-") as tmp:

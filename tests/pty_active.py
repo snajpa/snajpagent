@@ -81,6 +81,7 @@ class Child:
 
     def __init__(self, args, ready=None, *, term=None, cols=None, env=None):
         self.owner_fd = None
+        self.owner_identity = None
         self.native_owner = False
         self.sessions_before = session_ids()
         self.pid, self.fd = pty.fork()
@@ -112,6 +113,7 @@ class Child:
     def from_command(cls, command, *, env=None):
         child = cls.__new__(cls)
         child.owner_fd = None
+        child.owner_identity = None
         child.native_owner = False
         child.sessions_before = session_ids()
         child.pid, child.fd = pty.fork()
@@ -316,10 +318,31 @@ class Child:
             )
         return None
 
+    def mac_owner_identity(self, pid):
+        found = subprocess.run(["ps", "-p", str(pid), "-o", "pid=,ppid=,lstart=,command="],
+                               capture_output=True, text=True)
+        return found.stdout.strip() if found.returncode == 0 else None
+
     def remember_owner(self):
         # Native owners survive the frontend. Pin only a verified direct child
         # of this fixture's fork, never a PID obtained from an arbitrary session.
-        if self.owner_fd is not None or self.pid is None or not hasattr(os, "pidfd_open"):
+        if self.native_owner or self.pid is None:
+            return
+        if sys.platform == "darwin":
+            rows = subprocess.check_output(["ps", "-axo", "pid=,ppid=,lstart=,command="], text=True)
+            for row in rows.splitlines():
+                fields = row.split(None, 7)
+                if len(fields) != 8 or int(fields[1]) != self.pid:
+                    continue
+                argv = shlex.split(fields[7])
+                if argv[:3] == [BINARY, "--dotdir", DOTDIR]:
+                    identity = row.strip()
+                    if self.mac_owner_identity(int(fields[0])) == identity:
+                        self.owner_identity = identity
+                        self.native_owner = True
+                        return
+            return
+        if not hasattr(os, "pidfd_open"):
             return
         try:
             children = Path(f"/proc/{self.pid}/task/{self.pid}/children").read_text().split()
@@ -339,6 +362,10 @@ class Child:
 
     def engine_pid(self):
         self.remember_owner()
+        if self.owner_identity is not None:
+            pid = int(self.owner_identity.split()[0])
+            assert self.mac_owner_identity(pid) == self.owner_identity, "fixture engine has exited"
+            return pid
         if self.owner_fd is None:
             return self.pid
         info = Path(f"/proc/self/fdinfo/{self.owner_fd}").read_text()
@@ -351,7 +378,7 @@ class Child:
         if self.owner_fd is not None:
             signal.pidfd_send_signal(self.owner_fd, signum)
         else:
-            os.kill(self.pid, signum)
+            os.kill(self.engine_pid(), signum)
 
     def kill(self):
         atexit.unregister(self.kill)
@@ -363,6 +390,14 @@ class Child:
                 pass
             os.close(self.owner_fd)
             self.owner_fd = None
+        if self.owner_identity is not None:
+            pid = int(self.owner_identity.split()[0])
+            if self.mac_owner_identity(pid) == self.owner_identity:
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            self.owner_identity = None
         if self.pid is not None:
             os.kill(self.pid, signal.SIGKILL)
             os.waitpid(self.pid, 0)
@@ -2229,7 +2264,7 @@ def test_history_large_archive():
             child.send_wait(b"\x1b", b"history-large-oldest-995", start=len(child.buf))
             child.send_wait(b"\x03", b"^C\r\n", start=len(child.buf))
             child.send(b"\x04")
-            child.finish(expect_resume=child.owner_fd is not None)
+            child.finish(expect_resume=child.native_owner)
         assert history.stat().st_size == size
         assert hashlib.sha256(history.read_bytes()).digest() == digest
     finally:
@@ -2254,7 +2289,7 @@ def test_history_sparse_archive_cancellation():
             child.send_wait(b"\x07draft-still-live-995", b"draft-still-live-995", start=start, timeout=0.5)
             child.send_wait(b"\x03", b"^C\r\n", start=len(child.buf))
             child.send(b"\x04")
-            child.finish(expect_resume=child.owner_fd is not None)
+            child.finish(expect_resume=child.native_owner)
         assert history.stat().st_size == size
     finally:
         history.write_bytes(saved)
@@ -3628,7 +3663,8 @@ def test_command_name_completion():
         (b"/go", b"/goal"),
         (b"/ve", b"/verbose"),
         (b"/voi", b"/voice"),
-        (b"/q", b"/queue"),
+        (b"/queu", b"/queue"),
+        (b"/quer", b"/query"),
         (b"/ne", b"/next"),
         (b"/com", b"/compact"),
         (b"/configu", b"/configure"),
@@ -3641,6 +3677,7 @@ def test_command_name_completion():
         clear_draft_incrementally(child)
 
     for prefix, choices in ((b"/sta", (b"/state", b"/status")),
+                            (b"/que", (b"/queue", b"/query")),
                             (b"/h", (b"/help", b"/history")),
                             (b"/c", (b"/compact", b"/config", b"/configure")),
                             (b"/v", (b"/verbose", b"/voice")),
@@ -5004,7 +5041,7 @@ def test_empty_session_lifecycle():
                    signal.SIGHUP, signal.SIGTERM):
         before = session_ids()
         with Child(["--no-color", "--no-listen", "--no-client"], DEFAULT_IDLE_PROMPT) as child:
-            native = child.owner_fd is not None
+            native = child.native_owner
             sid = child.session_id() if native else None
             saved = before | {sid} if native else before
             assert session_ids() == saved
@@ -5027,7 +5064,7 @@ def test_empty_session_lifecycle():
     before = session_ids()
     with Child(["--no-color", "--no-listen", "--no-client"], DEFAULT_IDLE_PROMPT) as child:
         child.send_wait(b"unsent draft", b"unsent draft")
-        native = child.owner_fd is not None
+        native = child.native_owner
         sid = child.session_id() if native else None
         child.send(b"\x15\x04")
         child.finish(expect_resume=native)
@@ -5036,7 +5073,7 @@ def test_empty_session_lifecycle():
     before = session_ids()
     with Child(["--no-color", "--no-listen", "--no-client"], DEFAULT_IDLE_PROMPT) as child:
         child.send_wait(b"/model selected-before-prompt / high\r", b"selected-before-prompt/high   0%")
-        assert session_ids() == (before | {child.session_id()} if child.owner_fd is not None else before)
+        assert session_ids() == (before | {child.session_id()} if child.native_owner else before)
         child.send_wait(b"ping\r", b"pong")
         sid = new_session(before)
         command = child.exit_now()
@@ -5075,7 +5112,7 @@ def test_empty_network_session():
             peer.message("background before input")
             child.wait(b"background before input")
             child.drain(0.2)  # Cross the ordinary background admission delay.
-            native = child.owner_fd is not None
+            native = child.native_owner
             sid = child.session_id() if native else None
             saved = before | {sid} if native else before
             assert session_ids() == saved
@@ -6350,7 +6387,7 @@ def test_ctrl_d_exit():
                 child.send_wait(b"\t", b"queued (/next or /q c) " + PROMPT + b"ping", start=start)
             else:
                 child.send(b"\x7f" * 4)
-            if prompt == b"slow" and child.owner_fd is None:
+            if prompt == b"slow" and not child.native_owner:
                 # Canonical Ctrl-D is read(0) on direct cooked terminals.
                 attrs = termios.tcgetattr(child.fd)
                 attrs[3] |= termios.ICANON
@@ -6360,13 +6397,13 @@ def test_ctrl_d_exit():
                        else 1.0)
             terminal = os.dup(child.fd)
             try:
-                command = child.finish(expect_resume=bool(prompt) or child.owner_fd is not None)
+                command = child.finish(expect_resume=bool(prompt) or child.native_owner)
                 flags = termios.tcgetattr(terminal)[3]
                 assert flags & termios.ICANON and flags & termios.ECHO
             finally:
                 os.close(terminal)
             if not prompt:
-                assert session_ids() == (before | {child.session_id()} if child.owner_fd is not None else before)
+                assert session_ids() == (before | {child.session_id()} if child.native_owner else before)
                 continue
             log = events(new_session(before))
             if prompt:
@@ -6418,7 +6455,7 @@ def test_goal_orderly_quit_resume():
             if mode == "eof":
                 # Native terminal EOF detaches; raw Ctrl-D is the engine's
                 # explicit quit. Direct hosts still exercise kernel EOF.
-                if child.owner_fd is None:
+                if not child.native_owner:
                     attrs = termios.tcgetattr(child.fd)
                     attrs[3] |= termios.ICANON
                     termios.tcsetattr(child.fd, termios.TCSANOW, attrs)
@@ -6503,10 +6540,13 @@ def test_five_ctrl_c_exit():
         assert status == 0, (prompt, status)
         assert time.monotonic() - started < 1.5
         if not prompt:
-            assert session_ids() == (before | {child.session_id()} if child.owner_fd is not None else before)
+            assert session_ids() == (before | {child.session_id()} if child.native_owner else before)
 
 
 def test_five_ctrl_c_exit_during_stalled_output(prompt=b"render_flood"):
+    if not sys.platform.startswith("linux"):
+        print("stalled output exit: skipped (requires Linux procfs)")
+        return
     child = Child(["-vvvvvv", "--no-markdown"])
     slave = None
     reaped = False
@@ -6571,8 +6611,8 @@ def test_ctrl_c_sequence_reset():
         child.drain(0.05)
         assert os.waitpid(child.pid, os.WNOHANG) == (0, 0)
         child.send_wait(b"\x03", b"\x1b[?2004l")
-        child.finish(expect_resume=child.owner_fd is not None)
-        assert session_ids() == (before | {child.session_id()} if child.owner_fd is not None else before)
+        child.finish(expect_resume=child.native_owner)
+        assert session_ids() == (before | {child.session_id()} if child.native_owner else before)
 
 
 def test_blank_enter_during_engine_stall():
@@ -6645,8 +6685,8 @@ def test_history_lock_keeps_editing_live():
             fcntl.lockf(history, fcntl.LOCK_UN)
         child.send(b"\x03")
         child.drain(0.1)
-        child.exit_now(expect_resume=child.owner_fd is not None)
-        assert session_ids() == (before | {child.session_id()} if child.owner_fd is not None else before)
+        child.exit_now(expect_resume=child.native_owner)
+        assert session_ids() == (before | {child.session_id()} if child.native_owner else before)
 
 
 def test_editor_during_render_flood():
@@ -6794,6 +6834,9 @@ def test_pending_interrupt_during_blocked_engine():
 
 
 def test_stalled_output_consumes_input():
+    if not sys.platform.startswith("linux"):
+        print("stalled output fd flags: skipped (requires Linux procfs)")
+        return
     for level in range(7):
         child = Child(["-v"] * level + ["--no-markdown"])
         slave = None

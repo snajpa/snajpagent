@@ -4,6 +4,11 @@
 
 ## Unreleased
 
+- Allow redirected output to /dev/null on macOS, where poll reports that valid
+  device as unavailable. Keep failures for closed and read-only descriptors.
+  Restore object iteration for builds using the local Jansson ABI declarations;
+  exercise those declarations against the system runtime during make check.
+
 - Admit a confirmed operator channel send once, using the server's final text.
   Retain receipt input through checkpoint/resume and include its delivery state
   in model context. Pending, failed, uncertain and agent sends stay outside input;

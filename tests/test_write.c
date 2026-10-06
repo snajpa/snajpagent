@@ -73,6 +73,9 @@ static void
 expect_status(json_t *result, const char *status)
 {
     const char *actual = snag_json_string(result, "status");
+    if (!actual || strcmp(actual, status))
+        fprintf(stderr, "expected %s, got %s: %s\n", status, actual ? actual : "missing",
+            snag_json_string(result, "model_text"));
     assert(actual && strcmp(actual, status) == 0);
     assert(snag_json_string(result, "model_text"));
     json_decref(result);
@@ -121,7 +124,9 @@ test_write_rejects_unsafe_paths(void)
     char linked[8192];
 
     assert(mkdtemp(outside));
-    (void)snprintf(absolute, sizeof(absolute), "%s/absolute.txt", outside);
+    char *canonical = snag_realpath(outside);
+    assert(canonical);
+    (void)snprintf(absolute, sizeof(absolute), "%s/absolute.txt", canonical);
     result = invoke("write_file", json_pack("{s:s,s:s}", "path", absolute, "content", "outside\n"));
     expect_status(result, "succeeded");
     result = invoke("edit_file", json_pack("{s:s,s:s,s:s}", "path", absolute,
@@ -134,7 +139,8 @@ test_write_rejects_unsafe_paths(void)
     expect_status(result, "succeeded");
     assert(strcmp(read_file_bytes("explicit.txt"), "cwd\n") == 0);
     (void)snprintf(linked, sizeof(linked), "%s/linked", workspace);
-    assert(symlink(outside, linked) == 0);
+    assert(symlink(canonical, linked) == 0);
+    free(canonical);
     result = invoke("write_file", json_pack("{s:s,s:s}", "path", "./linked/no.txt",
                                           "content", "x"));
     expect_status(result, "failed");
@@ -184,7 +190,11 @@ main(void)
     char template[] = "/tmp/snajpagent-test-write-XXXXXX";
     char *dir = mkdtemp(template);
     assert(dir);
-    (void)snprintf(workspace, sizeof(workspace), "%s", dir);
+    /* macOS /tmp is a symlink; writes require a canonical workspace root. */
+    char *canonical = snag_realpath(dir);
+    assert(canonical && strlen(canonical) < sizeof(workspace));
+    (void)snprintf(workspace, sizeof(workspace), "%s", canonical);
+    free(canonical);
     test_write_creates_and_replaces();
     test_write_preserves_mode();
     test_write_rejects_unsafe_paths();

@@ -55,7 +55,8 @@ with tempfile.TemporaryDirectory(prefix="portable-stale-", dir=root / "build") a
         header.write_text("#include <errno.h>\n" + ("#undef ESTALE\n" if missing else "") +
                           "#ifdef ESTALE\nenum { expected_stale = ESTALE };\n"
                           "#else\nenum { expected_stale = EAGAIN };\n#endif\n")
-        flags = ["cc", "-std=c11", "-D_GNU_SOURCE", "-Werror", "-include", str(header)]
+        flags = ["cc", "-std=c11", "-D_GNU_SOURCE", "-DSNAJPAGENT_VM=1",
+                 "-Werror", "-include", str(header)]
         subprocess.run(flags + ["-fsyntax-only", str(root / "src/ui.c")], check=True)
         for include in ("base.h", "fs.h"):
             probe.write_text(f'#include "{include}"\n'
@@ -148,9 +149,12 @@ with tempfile.TemporaryDirectory(prefix="release-", dir=root / "build") as tmp:
     # planner/recipe without starting or relabelling a production target.
     trace = tmp / "matrix-args"
     flags = tmp / "matrix-flags"
+    recorder = tmp / "matrix-record.mk"
+    recorder.write_text("record:\n\t@printf '%s\\n' 'BUILD_VERSION=$(BUILD_VERSION)' "
+                        "'UPDATE_BASE_URL=$(UPDATE_BASE_URL)' > " + shlex.quote(str(flags)) + "\n")
     stub = tmp / "matrix-make"
     stub.write_text("#!/bin/sh\nprintf '%s\\n' \"$@\" > " + shlex.quote(str(trace)) +
-                    "\nprintf '%s\\n' \"$MAKEFLAGS\" > " + shlex.quote(str(flags)) +
+                    "\nmake --no-print-directory -s -f " + shlex.quote(str(recorder)) + " record" +
                     "\nexit \"${MATRIX_TEST_RC:-0}\"\n")
     stub.chmod(0o700)
     smoke = subprocess.run(["make", "-s", f"MAKE={stub}", "BUILD_VERSION=0.99.8-test",
@@ -300,6 +304,8 @@ with tempfile.TemporaryDirectory(prefix="release-tag-", dir=root / "build") as t
     for name in ("Makefile", "config.mk", "META", "COPYING", "COPYING.UNICODE", "LICENSE_SCOPE", "snajpagent.1",
                  "RELEASE.md", "RELEASE-NOTES.md", "DEPENDENCIES.md"):
         shutil.copyfile(root / name, tmp / name)
+    (tmp / "version-test.mk").write_text(
+        "include Makefile\nversion-test:;@printf '%s\\n' '$(BUILD_VERSION)'\n")
     def git(*args):
         return subprocess.check_output(["git", "-C", str(tmp), *args], text=True).strip()
     git("init", "-q", "--initial-branch=master")
@@ -308,8 +314,7 @@ with tempfile.TemporaryDirectory(prefix="release-tag-", dir=root / "build") as t
     git("add", ".")
     git("commit", "-qm", "release source")
     git("tag", "-a", "0.99.3", "-m", "approved fixture release")
-    probe = "version-test:;@printf '%s\\n' '$(BUILD_VERSION)'"
-    command = ["make", "--no-print-directory", "-s", "--eval", probe, "version-test"]
+    command = ["make", "--no-print-directory", "-s", "-f", "version-test.mk", "version-test"]
     version_env = {key: value for key, value in os.environ.items()
                    if key not in ("MAKEFLAGS", "MFLAGS", "MAKEOVERRIDES", "BUILD_VERSION")}
     assert subprocess.check_output(command, cwd=tmp, env=version_env, text=True).strip() == "0.99.3"

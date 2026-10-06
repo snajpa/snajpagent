@@ -348,9 +348,12 @@ in order, when rollout is entered; they never become IRC messages.
 
 `/chat` and `/rollout` select a view from either an idle or active composer and
 are not sent to IRC or admitted to the model. Selecting the current view is
-idempotent. Empty Tab toggles the two views; a nonempty draft never switches
-views and keeps ordinary completion, indentation, or active-turn queueing
-semantics.
+idempotent. Empty Tab cycles through rollout, connected rooms and open private
+queries. Shift-Tab cycles backwards, including with a nonempty draft. Once
+private query tabs exist, chat Tab also cycles with a draft after command or
+nickname completion has taken precedence. Each destination keeps its own draft;
+switching never submits it. Outside these switching cases, Tab retains ordinary
+completion, indentation and active-turn queueing semantics.
 
 The selected view also selects the destination for ordinary composer input.
 Chat input is sent from the local operator identity to the room and admitted
@@ -766,7 +769,8 @@ pass and focused local smoke checks demonstrate all of the following:
    model output, useful agent/tool detail before lower-priority IRC debugging,
    safe terminal rendering, and `auto`/`always`/`never` color behavior in
    networked and non-networked modes;
-4. `/chat`, `/rollout`, and empty-Tab switching in idle and active composers,
+4. `/chat`, `/rollout`, and Tab/Shift-Tab switching in idle and active composers,
+   including channel/query drafts, private unread counts and completion precedence;
    exact U+203A/U+00BB prompts, and ordered exact-once catch-up for both views,
    including a switch during streamed output; atomic catch-up without an
    interposed prompt; visible exact-once local rollout submissions; and absence

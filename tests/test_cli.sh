@@ -56,7 +56,7 @@ expect_exit() {
 
 LC_ALL=C expect_exit 2 $bin -l >"$root/locale.out" 2>"$root/locale.err"
 grep -q 'UTF-8 locale is required' "$root/locale.err"
-export LC_ALL=C.utf8
+export LC_ALL=C.UTF-8
 
 for args in '--attach --resume' '-A --last' '--attach -e' '--attach -l' \
             '--attach -m ignored' '--attach -- ignored'; do
@@ -77,6 +77,8 @@ work = Path(sys.argv[2]) / "version-git"
 work.mkdir()
 for name in ("Makefile", "config.mk", "META"):
     shutil.copy2(repo / name, work / name)
+(work / "version-test.mk").write_text(
+    "include Makefile\nversion-test:;@printf '%s\\n' '$(BUILD_VERSION)'\n")
 def git(*args):
     return subprocess.check_output(["git", "-C", str(work), *args], text=True).strip()
 git("init", "-q", "--initial-branch=master")
@@ -84,11 +86,10 @@ git("config", "user.name", "Version Test")
 git("config", "user.email", "version@example.test")
 git("add", ".")
 git("commit", "-qm", "baseline")
-recipe = "version-test:;@printf '%s\\n' '$(BUILD_VERSION)'"
 version_env = {key: value for key, value in os.environ.items()
                if key not in ("MAKEFLAGS", "MFLAGS", "MAKEOVERRIDES", "BUILD_VERSION")}
 def version():
-    return subprocess.run(["make", "--no-print-directory", "-s", "--eval", recipe,
+    return subprocess.run(["make", "--no-print-directory", "-s", "-f", "version-test.mk",
                            "version-test"], cwd=work, env=version_env,
                           text=True, capture_output=True)
 assert version().returncode != 0  # No guessed version without a tag.
@@ -287,7 +288,7 @@ grep -q "^'$bin' --resume '[0-9a-f]\\{32\\}'$" \
     "$root/err"
 [ -d "$dotdir/sessions" ]
 [ -d "$dotdir/trash" ]
-id=$(find "$dotdir/sessions" -mindepth 1 -maxdepth 1 -type d -printf '%f\n')
+id=$(find "$dotdir/sessions" -mindepth 1 -maxdepth 1 -type d -exec basename {} \;)
 [ ${#id} -eq 32 ]
 [ "$(grep -Evc '"type":"(response_output|session_options)"' \
     "$dotdir/sessions/$id/events.jsonl")" -eq 7 ]
@@ -362,7 +363,7 @@ grep -q "^$(printf %.8s "$id").*2" "$root/list"
 live_state="$root/live-state"
 mkdir -m 700 "$live_state"
 $bin --dotdir "$live_state" -e -- ping >/dev/null 2>"$root/live-seed.err"
-live_id=$(find "$live_state/sessions" -mindepth 1 -maxdepth 1 -type d -printf '%f\n')
+live_id=$(find "$live_state/sessions" -mindepth 1 -maxdepth 1 -type d -exec basename {} \;)
 $bin --dotdir "$live_state" -e --resume "$live_id" -- one_shot_signal_wait \
     >"$root/live-hold.out" 2>"$root/live-hold.err" &
 live_pid=$!
@@ -867,7 +868,7 @@ PYINDEX
 override_state="$root/override-state"
 mkdir -m 700 "$override_state"
 $bin --dotdir "$override_state" -e -- ping >/dev/null 2>"$root/override.err"
-override_id=$(find "$override_state/sessions" -mindepth 1 -maxdepth 1 -type d -printf '%f\n')
+override_id=$(find "$override_state/sessions" -mindepth 1 -maxdepth 1 -type d -exec basename {} \;)
 $bin --dotdir "$override_state" -e --effort low --resume "$override_id" -- ping >/dev/null 2>"$root/override.err"
 $bin --dotdir "$override_state" -e --resume "$override_id" -- ping >/dev/null 2>"$root/override.err"
 python3 - "$override_state/sessions/$override_id/events.jsonl" <<'PY'
@@ -884,7 +885,7 @@ PY
 resume_opt_state="$root/resume-opt-state"
 mkdir -m 700 "$resume_opt_state"
 $bin --dotdir "$resume_opt_state" -e -- ping >/dev/null 2>"$root/resume-opt-seed.err"
-resume_opt_id=$(find "$resume_opt_state/sessions" -mindepth 1 -maxdepth 1 -type d -printf '%f\n')
+resume_opt_id=$(find "$resume_opt_state/sessions" -mindepth 1 -maxdepth 1 -type d -exec basename {} \;)
 out=$($bin --dotdir "$resume_opt_state" -e --resume "$resume_opt_id" --effort low -- ping 2>"$root/resume-opt.err")
 [ "$out" = pong ]
 expect_exit 2 $bin --dotdir "$resume_opt_state" -e --resume "$resume_opt_id" ping >"$root/resume-opt-bare.out" 2>"$root/resume-opt-bare.err"
@@ -904,7 +905,7 @@ $bin --dotdir "$auto_state" --config "$root/auto-compact.ini" -e -- ping >"$root
 [ "$(cat "$root/auto-compact.out")" = pong ]
 grep -Fx '• Compacted' "$root/auto-compact.err"
 ! grep -q 'event ›' "$root/auto-compact.err"
-auto_id=$(find "$auto_state/sessions" -mindepth 1 -maxdepth 1 -type d -printf '%f\n')
+auto_id=$(find "$auto_state/sessions" -mindepth 1 -maxdepth 1 -type d -exec basename {} \;)
 python3 - "$auto_state/sessions/$auto_id/events.jsonl" <<'PY'
 import json
 import sys
@@ -936,7 +937,7 @@ native_compaction = false
 EOF
 $bin --dotdir "$responses_compact_state" --config "$root/responses-compact.ini" -e -vvvv -- ping >"$root/responses-compact.out" 2>"$root/responses-compact.err"
 [ "$(cat "$root/responses-compact.out")" = pong ]
-responses_compact_id=$(find "$responses_compact_state/sessions" -mindepth 1 -maxdepth 1 -type d -printf '%f\n')
+responses_compact_id=$(find "$responses_compact_state/sessions" -mindepth 1 -maxdepth 1 -type d -exec basename {} \;)
 python3 - "$responses_compact_state/sessions/$responses_compact_id/events.jsonl" <<'PY'
 import json
 import sys
@@ -961,7 +962,7 @@ EOF
 $bin --dotdir "$fallback_state" --config "$root/codex-compact-fallback.ini" \
     -e -- native_compact_unavailable >"$root/fallback.out" 2>"$root/fallback.err"
 grep -q 'native compaction unavailable; compacting through Responses' "$root/fallback.err"
-fallback_id=$(find "$fallback_state/sessions" -mindepth 1 -maxdepth 1 -type d -printf '%f\n')
+fallback_id=$(find "$fallback_state/sessions" -mindepth 1 -maxdepth 1 -type d -exec basename {} \;)
 python3 - "$fallback_state/sessions/$fallback_id/events.jsonl" <<'PY'
 import json
 import sys
@@ -986,7 +987,7 @@ pre_state="$root/pre-response-compact-state"
 mkdir -m 700 "$pre_state"
 $bin --dotdir "$pre_state" -e -- ping >"$root/pre-first.out" 2>"$root/pre-first.err"
 [ "$(cat "$root/pre-first.out")" = pong ]
-pre_id=$(find "$pre_state/sessions" -mindepth 1 -maxdepth 1 -type d -printf '%f\n')
+pre_id=$(find "$pre_state/sessions" -mindepth 1 -maxdepth 1 -type d -exec basename {} \;)
 $bin --dotdir "$pre_state" --config "$root/auto-compact.ini" -e --resume "$pre_id" -- ping >"$root/pre-second.out" 2>"$root/pre-second.err"
 [ "$(cat "$root/pre-second.out")" = pong ]
 python3 - "$pre_state/sessions/$pre_id/events.jsonl" <<'PY'
@@ -1021,7 +1022,7 @@ for compact_case in default auto larger fixed below off fallback; do
     mkdir -m 700 "$budget_state"
     $bin --dotdir "$budget_state" -e -- ping >"$root/budget-seed.out" \
         2>"$root/budget-seed.err"
-    budget_id=$(find "$budget_state/sessions" -mindepth 1 -maxdepth 1 -type d -printf '%f\n')
+    budget_id=$(find "$budget_state/sessions" -mindepth 1 -maxdepth 1 -type d -exec basename {} \;)
     # The fixture counter reports 90,000 tokens, exactly 90% of the small
     # budget. Exercise both pre-response and post-turn/recount boundaries.
     {
@@ -1084,7 +1085,7 @@ EOF
 $bin --dotdir "$statistical_state" --config "$root/statistical-budget.ini" \
     -e -- ping >"$root/statistical-budget.out" 2>"$root/statistical-budget.err"
 [ "$(cat "$root/statistical-budget.out")" = pong ]
-statistical_id=$(find "$statistical_state/sessions" -mindepth 1 -maxdepth 1 -type d -printf '%f\n')
+statistical_id=$(find "$statistical_state/sessions" -mindepth 1 -maxdepth 1 -type d -exec basename {} \;)
 python3 - "$statistical_state/sessions/$statistical_id/events.jsonl" <<'PY'
 import json
 import sys
@@ -1109,7 +1110,7 @@ exact_token_count = true
 max_input_tokens = 1
 EOF
 expect_exit 4 $bin --dotdir "$hard_state" --config "$root/hard-budget.ini" -e -- ping >"$root/hard-budget.out" 2>"$root/hard-budget.err"
-hard_id=$(find "$hard_state/sessions" -mindepth 1 -maxdepth 1 -type d -printf '%f\n')
+hard_id=$(find "$hard_state/sessions" -mindepth 1 -maxdepth 1 -type d -exec basename {} \;)
 python3 - "$hard_state/sessions/$hard_id/events.jsonl" <<'PY'
 import json
 import sys
@@ -1142,7 +1143,7 @@ $bin --dotdir "$anchor_state" --config "$root/context-anchor.ini" \
     -e -- context_anchor_chain >"$root/context-anchor.out" \
     2>"$root/context-anchor.err"
 [ "$(cat "$root/context-anchor.out")" = "context anchor complete" ]
-anchor_id=$(find "$anchor_state/sessions" -mindepth 1 -maxdepth 1 -type d -printf '%f\n')
+anchor_id=$(find "$anchor_state/sessions" -mindepth 1 -maxdepth 1 -type d -exec basename {} \;)
 python3 - "$anchor_state/sessions/$anchor_id/events.jsonl" <<'PY'
 import json
 import sys
@@ -1165,7 +1166,7 @@ PY
 recovery_state="$root/capacity-recovery-state"
 mkdir -m 700 "$recovery_state"
 $bin --dotdir "$recovery_state" -e -- ping >/dev/null 2>"$root/recovery-first.err"
-recovery_id=$(find "$recovery_state/sessions" -mindepth 1 -maxdepth 1 -type d -printf '%f\n')
+recovery_id=$(find "$recovery_state/sessions" -mindepth 1 -maxdepth 1 -type d -exec basename {} \;)
 $bin --dotdir "$recovery_state" -e --resume "$recovery_id" -- capacity_recovery >"$root/recovery.out" 2>"$root/recovery.err"
 [ "$(cat "$root/recovery.out")" = "fixture answer" ]
 python3 - "$recovery_state/sessions/$recovery_id/events.jsonl" <<'PY'
@@ -1196,7 +1197,7 @@ mkdir -m 700 "$second_state"
 printf '[agent]\nmax_turn_retries=0\n[provider openai]\n' > "$second_state/config.ini"
 chmod 600 "$second_state/config.ini"
 $bin --dotdir "$second_state" -e -- ping >/dev/null 2>"$root/second-first.err"
-second_id=$(find "$second_state/sessions" -mindepth 1 -maxdepth 1 -type d -printf '%f\n')
+second_id=$(find "$second_state/sessions" -mindepth 1 -maxdepth 1 -type d -exec basename {} \;)
 expect_exit 4 $bin --dotdir "$second_state" -e --resume "$second_id" -- capacity_recovery_twice >"$root/second.out" 2>"$root/second.err"
 python3 - "$second_state/sessions/$second_id/events.jsonl" <<'PY'
 import json

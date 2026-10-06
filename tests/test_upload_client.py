@@ -7,6 +7,7 @@ case. The synthetic sender remains part of the ordinary fixture suite.
 
 import atexit
 import base64
+import errno
 import fcntl
 import hashlib
 import json
@@ -20,6 +21,7 @@ import struct
 import subprocess
 import tempfile
 import termios
+import threading
 import time
 import unittest
 import zlib
@@ -55,8 +57,11 @@ class FixtureChildren:
             return
         try:
             fd = os.pidfd_open(pid)
-        except ProcessLookupError:
-            return
+        except OSError as error:
+            # A task can cease to be a process leader while we enumerate it.
+            if error.errno in (errno.ESRCH, errno.EINVAL):
+                return
+            raise
         try:
             status = Path(f"/proc/{pid}/status").read_text()
             parents = [fd] if parent_fd is None else [fd, parent_fd]
@@ -264,6 +269,21 @@ class ProductSession(Session):
 
 
 class UploadClientTests(unittest.TestCase):
+    @unittest.skipUnless(hasattr(os, "pidfd_open"), "Linux pidfds")
+    def test_cleanup_ignores_nonleader_task(self):
+        stop = threading.Event()
+        worker = threading.Thread(target=stop.wait)
+        worker.start()
+        children = FixtureChildren.__new__(FixtureChildren)
+        children.handles = {}
+        try:
+            children.pin(worker.native_id, os.getpid())
+            self.assertFalse(children.handles)
+        finally:
+            stop.set()
+            worker.join()
+            children.close()
+
     def start_synthetic(self, session):
         session.write(b"\x03trz\r")
         session.read_until(b"::TRZSZ:TRANSFER:R:1.0.0:")

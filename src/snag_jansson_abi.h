@@ -87,6 +87,12 @@ const char *json_object_iter_key(void *iter);
 size_t json_object_iter_key_len(void *iter);
 json_t *json_object_iter_value(void *iter);
 
+#define json_object_foreach(object, key, value) \
+    for (void *snag_abi_iter = json_object_iter((object)); \
+        ((key) = json_object_iter_key(snag_abi_iter)) != NULL && \
+        ((value) = json_object_iter_value(snag_abi_iter)) != NULL; \
+        snag_abi_iter = json_object_iter_next((object), snag_abi_iter))
+
 static inline int json_object_set(json_t *object, const char *key, json_t *value)
 {
     return json_object_set_new(object, key, json_incref(value));

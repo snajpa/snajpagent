@@ -20,6 +20,7 @@
 /tests/test_irc_send
 /tests/test_irc_send_core.o
 /tests/test_json
+/tests/test_json_abi
 /tests/test_model_cache
 /tests/test_provider_retry
 /tests/test_provider_transport

@@ -128,6 +128,7 @@ HEADERS += src/vm_transcript.h src/vm_document.h
 HEADERS += src/irc_address.h
 FIXTURE_BIN = tests/$(NAME)-fixture
 TEST_BIN = tests/snajpagent-transport tests/test_base tests/test_config tests/test_irc tests/test_instructions tests/test_credential tests/test_sse tests/test_json tests/test_store_record $(VM_TEST_BIN) tests/test_rules tests/test_wire tests/test_responses tests/test_provider_retry tests/test_provider_transport tests/test_context tests/test_model_cache tests/test_render tests/test_turn tests/test_tools tests/test_store tests/test_write tests/test_upload_wire tests/test_clipboard tests/test_clipboard_transfer $(FIXTURE_BIN)
+TEST_BIN += tests/test_json_abi
 BUILD_INPUTS = build/.build-inputs
 TEST_BIN += tests/test_irc_address
 TEST_BIN += tests/test_irc_event
@@ -231,6 +232,10 @@ tests/test_instructions: $(PLATFORM_SRC) src/json.c src/instructions.c tests/tes
 tests/test_sse: $(PLATFORM_SRC) src/sse.c tests/test_sse.c src/base.h src/fs.h src/term_host.h src/wake.h src/net.h src/sse.h
 
 tests/test_json: $(PLATFORM_SRC) src/json.c tests/test_json.c src/base.h src/fs.h src/term_host.h src/wake.h src/net.h src/json.h
+
+tests/test_json_abi: $(PLATFORM_SRC) src/json.c tests/test_json.c $(HEADERS)
+	$(CC) $(CPPFLAGS) $(JANSSON_CFLAGS) $(CFLAGS) $(LDFLAGS) -Isrc \
+		-DSNAJPAGENT_FORCE_LOCAL_JANSSON_ABI=1 -o $@ $(filter %.c,$^) $(LDLIBS)
 
 tests/test_store_record: $(PLATFORM_SRC) src/json.c src/store_record.c tests/test_store_record.c $(HEADERS) src/store_record.h
 
@@ -352,6 +357,7 @@ check: $(BIN) $(TEST_BIN)
 	./tests/test_credential
 	./tests/test_sse
 	./tests/test_json
+	./tests/test_json_abi
 	./tests/test_store_record
 ifeq ($(WITH_VM),1)
 	./tests/test_vm_reader

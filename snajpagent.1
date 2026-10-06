@@ -1140,7 +1140,7 @@ A draft beginning with
 (not
 .BR // ),
 with the cursor in or at the end of its first word: complete a command name or
-numeric room destination.  For example, /sta becomes /status followed by a space.
+numeric room destination.  For example, /statu becomes /status followed by a space.
 .IP \(bu 2
 In chat, a nickname word beginning with
 .B @
@@ -1157,8 +1157,8 @@ leaves the draft unchanged.  Completion never submits, sends or queues text.
 .IP
 Outside a completion, chat Tab cycles with its draft intact once private query
 tabs exist. Otherwise, Tab queues a later local turn while active, or inserts
-spaces while idle.  Thus Tab at the end of a finished ordinary message queues
-it; Tab at the end of /sta or @bu still completes that word first.
+spaces while idle. In rollout, Tab at the end of a finished ordinary message
+queues it; Tab at the end of /statu or @bu still completes that word first.
 Queueing remains local even in chat.  Use Enter to send to the room or run a
 slash command.  Commands are not generally queueable: /ro QUERY is a read-only
 future turn and /verbose applies immediately.  In the queue editor, a queue
@@ -4363,6 +4363,7 @@ preserves internal newlines and removes one final LF or CRLF.
 Standard output carries one-shot model text.  Diagnostics and the resume hint
 use standard error.  Redirected model text remains byte-exact and contains no
 terminal color or Markdown presentation.
+Use > /dev/null to discard model text while keeping diagnostics on standard error.
 .PP
 The normal coding-tool surface is
 .BR exec_command ,
@@ -5533,13 +5534,14 @@ window.  The percentage is rounded up against the effective input budget,
 which can be smaller than the configured total after safety/output reserves.
 .TP
 .B Tab did not queue my text.
-Tab queues during an active turn; while idle it inserts spaces.  Use
+In rollout, Tab queues during an active turn; while idle it inserts spaces. Use
 .B /queue TEXT
 for an idle, initially paused addition.  An empty
-draft switches views.  A leading /command word or a chat @nickname at the
+draft switches views. In chat with private tabs open, Tab also switches views
+with a draft present. A leading /command word or a chat @nickname at the
 cursor invokes completion instead, even when the cursor is at the word's end.
 A unique match adds a space.  Continue writing, then press Tab at the end of
-the finished message to queue it locally.  If there is no match, correct the
+the finished rollout message to queue it locally. If there is no match, correct the
 name or move past the word; it is not silently queued.
 Use Enter for slash controls and room messages.  During active work,
 .B /queue TEXT
