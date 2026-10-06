@@ -3,6 +3,7 @@
 #define SNAJPAGENT_VM_READER_H
 
 #include "store.h"
+#include "vm_document.h"
 #include "wake.h"
 #include "wire.h"
 
@@ -17,6 +18,8 @@ struct snag_vm_read_request {
     char owned_session_id[SNAG_ID_HEX_LEN + 1u];
     char session_id[SNAG_ID_HEX_LEN + 1u];
     bool trusted_tail, refresh, reverse;
+    bool project;
+    unsigned int verbosity, columns;
     struct snag_journal_cursor tail, cursor;
     uint64_t before_seq;
 };
@@ -30,6 +33,10 @@ struct snag_vm_read_result {
      * Private provider payloads and the reader's secret snapshot are filtered. */
     json_t *events;
     json_t *catalog;
+    /* Projected history owns chronological display blocks instead of events.
+     * Raw encoded output and provider payloads remain private to the worker. */
+    json_t *blocks;
+    struct snag_vm_document *document;
     bool best_effort, incomplete, more;
     int error_number;
     char error[256];

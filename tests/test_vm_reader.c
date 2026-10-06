@@ -179,6 +179,33 @@ main(void)
     result = await_page(reader, generation);
     assert(!result->error_number && result->events && !result->catalog);
     snag_vm_read_result_free(result);
+    /* Display projection stays on the worker; no raw source payload reaches
+     * the frontend, in either scan direction or through checkpoint pages. */
+    struct snag_vm_read_request projected = request;
+    projected.project = true;
+    projected.verbosity = 4u;
+    projected.columns = 80u;
+    projected.cursor = (struct snag_journal_cursor){0};
+    generation = snag_vm_reader_request(reader, &projected);
+    result = await_page(reader, generation);
+    assert(!result->error_number && result->blocks && !result->events && !result->catalog);
+    dump = json_dumps(result->blocks, JSON_COMPACT);
+    assert(dump && !strstr(dump, "test-secret-value") &&
+        !strstr(dump, "private_checkpoint_payload"));
+    free(dump);
+    snag_vm_read_result_free(result);
+    projected.reverse = true;
+    generation = snag_vm_reader_request(reader, &projected);
+    result = await_page(reader, generation);
+    assert(!result->error_number && result->blocks && !result->events);
+    json_int_t sequence = 0;
+    for (size_t i = 0u; i < json_array_size(result->blocks); ++i) {
+        const json_t *block = json_array_get(result->blocks, i);
+        json_int_t current = json_integer_value(json_object_get(block, "seq"));
+        assert(current >= sequence);
+        sequence = current;
+    }
+    snag_vm_read_result_free(result);
 #ifndef _WIN32
     pid_t probe = fork();
     assert(probe >= 0);

@@ -198,9 +198,10 @@ struct snag_render_block {
     bool truncated;
 };
 
-/* Pure formatting of UI-owned values; no terminal writes. */
+/* Pure formatting of UI-owned values; no terminal writes. UINT64_MAX marks an
+ * unrecorded default timeout when formatting historical tool metadata. */
 int snag_render_prepare_tool_start(struct snag_render_block *block, const struct snag_response_item *call,
-                          const char *workdir, uint32_t default_timeout_ms,
+                          const char *workdir, uint64_t default_timeout_ms,
                           unsigned int level, unsigned int columns);
 int snag_render_prepare_tool_finish(struct snag_render_block *block, const char *name,
                            const char *call_id, const json_t *result,

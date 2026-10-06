@@ -3,6 +3,7 @@
 #include "history_view.h"
 #include "json.h"
 #include "vm_public.h"
+#include "vm_transcript.h"
 
 #include <errno.h>
 #include <pthread.h>
@@ -32,6 +33,8 @@ snag_vm_read_result_free(struct snag_vm_read_result *result)
     if (!result) return;
     json_decref(result->events);
     json_decref(result->catalog);
+    json_decref(result->blocks);
+    snag_vm_document_free(result->document);
     free(result);
 }
 
@@ -84,6 +87,7 @@ view_open(struct snag_vm_reader *reader, const struct snag_vm_read_request *requ
 struct read_page {
     struct snag_vm_reader *reader;
     json_t *events;
+    bool project;
 };
 
 static int
@@ -94,6 +98,11 @@ read_event(void *opaque, const struct snag_session *state, uint64_t seq,
     (void)state;
     if (read_canceled(page->reader)) {
         return snag_fail(error, size, ECANCELED, "history read canceled");
+    }
+    if (page->project) {
+        json_t *event = json_pack("{s:I,s:s,s:O}", "seq", (json_int_t)seq,
+            "type", type, "data", data);
+        return event ? json_array_append_new(page->events, event) : -1;
     }
     char *text = snag_history_event_data(seq, type, data, &page->reader->secrets, error, size);
     if (!text) return -1;
@@ -142,7 +151,8 @@ read_page(struct snag_vm_reader *reader, struct snag_vm_read_result *result)
     result->incomplete = reader->incomplete;
     result->events = json_array();
     if (!result->events) goto failed;
-    struct read_page page = {.reader = reader, .events = result->events};
+    struct read_page page = {.reader = reader, .events = result->events,
+        .project = request->project};
     if (request->reverse) {
         uint64_t before;
         if (snag_session_each_event_reverse(&reader->view, request->before_seq,
@@ -156,6 +166,28 @@ read_page(struct snag_vm_reader *reader, struct snag_vm_read_result *result)
             SNAG_JOURNAL_PAGE_BYTES, read_event, &page,
             result->error, sizeof(result->error)) < 0) goto failed;
         result->more = result->cursor.offset < result->tail.offset;
+    }
+    if (request->project) {
+        if (request->reverse) {
+            size_t count = json_array_size(result->events);
+            for (size_t i = 0u; i < count / 2u; ++i) {
+                json_t *first = json_incref(json_array_get(result->events, i));
+                int rc = json_array_set(result->events, i,
+                    json_array_get(result->events, count - i - 1u));
+                if (!rc) rc = json_array_set(result->events, count - i - 1u, first);
+                json_decref(first);
+                if (rc < 0) goto failed;
+            }
+        }
+        result->blocks = snag_vm_transcript_blocks(result->events, request->verbosity,
+            request->columns, &reader->secrets, read_canceled, reader,
+            result->error, sizeof(result->error));
+        json_decref(result->events);
+        result->events = NULL;
+        if (!result->blocks) goto failed;
+        result->document = snag_vm_document_open(result->blocks,
+            request->columns ? request->columns : 80u, read_canceled, reader);
+        if (!result->document) goto failed;
     }
     return;
 failed:
@@ -285,6 +317,7 @@ snag_vm_reader_request(struct snag_vm_reader *reader, const struct snag_vm_read_
 {
     if (!reader || !request ||
         (request->kind != SNAG_VM_READ_HISTORY && request->kind != SNAG_VM_READ_SESSIONS) ||
+        request->verbosity > SNAG_VERBOSITY_MAX ||
         (request->kind == SNAG_VM_READ_HISTORY &&
          !snag_hex_is_lower(request->session_id, SNAG_ID_HEX_LEN)) ||
         (request->owned_session_id[0] &&

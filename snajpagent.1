@@ -1645,8 +1645,8 @@ its export for wrapped attachment. Read-only model turns reject send_file.
 .SH "Vim workspace"
 The development workspace opens with
 .BR "snajpagent vm" .
-It currently provides agent-session and workspace pickers, help, filters and
-persistent split layouts. Agent execution still uses the ordinary
+It provides session/workspace pickers, retained transcript browsing, help,
+filters and persistent split layouts. Agent execution still uses the ordinary
 .B snajpagent --resume SESSION_ID
 command. Workspace browsing does not start model turns or IRC connections.
 Runtime activation is explicit; ordinary startup retains its terminal interface.
@@ -1674,6 +1674,26 @@ uses the classic list's attached/detached/running/stored ordering and data.
 In the workspace picker, Enter restores the selected workspace. A failed open
 or invalid snapshot keeps the current workspace usable.
 .PP
+Press o in the agent picker, or use
+.B :history SESSION_ID
+with a full ID or unique prefix, to browse retained history without taking the
+session's writer lock. gg and G load the oldest and newest source ranges;
+j/k, arrows and half-page movement cross source-page boundaries. G captures a
+fresh tail. R refreshes the current range while retaining the selected source
+anchor. A snapshot uses the last complete record and shows a partial-tail label
+when an unfinished record follows it. The journal stays unchanged.
+.PP
+.B :verbosity 0..6
+re-renders the current historical range. Source anchors retain the position
+through verbosity and width changes; when a block becomes hidden, selection
+moves to the next visible event. Level 0 shows conversation, level 1 adds tool
+headings, level 2 adds arguments/results, and level 3 adds retained process bytes.
+Higher levels also show event markers. Binary output uses visible byte escapes;
+terminal controls remain text. Provider continuation and private compaction
+payloads are omitted. A tool whose call metadata precedes the loaded range shows
+its call ID until that dependency is available. Output referenced outside the
+loaded range requires further history navigation.
+.PP
 .B :sessions
 opens the agent picker;
 .B :workspaces
@@ -1687,7 +1707,7 @@ neighbor. Ctrl-W = equalizes proportions, +/- changes height and >/< changes wid
 Terminal shrink temporarily hides windows while preserving their layout.
 Mouse clicks focus/select; the wheel moves the selection.
 .PP
-In these pickers and help views,
+In these read-only transcript, picker and help views,
 .B :q
 or :close closes the window; the last window exits the workspace.
 .B :qa
@@ -1701,7 +1721,9 @@ switch and suspend also save. A save failure stays visible and can be retried.
 Leaving an untouched initial picker creates no saved workspace.
 .PP
 Snapshots are private files under $DOTDIR/workspaces/WORKSPACE_ID/workspace.json.
-They retain the layout, focus, selection and filters. Corrupt or newer unsupported
+They retain the layout, focus, selection, filters, transcript source anchors and
+verbosity. Restoring a transcript reads history without resuming its agent.
+Corrupt or newer unsupported
 state is reported and preserved. Bracketed paste inserts literal text in command
 or filter input; it cannot execute a command by itself. Escape returns to normal
 mode, Ctrl-L redraws and Ctrl-Z suspends on supported platforms. Clean exit and

@@ -121,7 +121,7 @@ summary(struct snag_render_block *block, const struct snag_buf *row, unsigned in
 
 int
 snag_render_prepare_tool_start(struct snag_render_block *block, const struct snag_response_item *call,
-                              const char *workdir, uint32_t default_timeout_ms,
+                              const char *workdir, uint64_t default_timeout_ms,
                               unsigned int level, unsigned int columns)
 {
     struct snag_buf args;
@@ -152,7 +152,8 @@ snag_render_prepare_tool_start(struct snag_render_block *block, const struct sna
         if (explicit_workdir) workdir = explicit_workdir;
         (void)snag_json_integer_u64(call->arguments, "timeout_ms", &timeout);
         if (snag_buf_printf(&block->context, "  workdir: %s\n  timeout: ", workdir) < 0 ||
-            (timeout ? snag_buf_printf(&block->context, "%llums\n", (unsigned long long)timeout) :
+            (timeout == UINT64_MAX ? snag_buf_append(&block->context, "unrecorded\n", 11u) :
+             timeout ? snag_buf_printf(&block->context, "%llums\n", (unsigned long long)timeout) :
                        snag_buf_append(&block->context, "none\n", 5u)) < 0) goto out;
     }
     rc = 0;

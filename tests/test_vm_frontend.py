@@ -17,6 +17,8 @@ import unittest
 import uuid
 from pathlib import Path
 
+import tmux_terminal as harness
+
 
 BINARY = Path(sys.argv.pop(1)).resolve() if len(sys.argv) > 1 and not sys.argv[1].startswith('-') else (
     Path(__file__).resolve().parents[1] / 'snajpagent')
@@ -28,6 +30,7 @@ BINARY = Path(sys.argv.pop(1)).resolve() if len(sys.argv) > 1 and not sys.argv[1
 KEEPER = r"""
 import json, os, subprocess, sys, termios
 from pathlib import Path
+
 path = Path(sys.argv[1])
 p = subprocess.Popen(sys.argv[2:])
 def record(state, **fields):
@@ -157,11 +160,11 @@ class WorkspaceTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name).resolve()
 
-    def start(self, *args, **kwargs):
+    def start(self, *args, expect=b'sessions', **kwargs):
         child = Terminal(self.root, args, **kwargs)
         self.addCleanup(child.close)
         child.until(b'\x1b[?1049h')
-        child.until(b'sessions')
+        child.until(expect)
         return child
 
     def snapshots(self):
@@ -182,6 +185,77 @@ class WorkspaceTests(unittest.TestCase):
         return subprocess.run([str(BINARY), 'vm', '--dotdir', str(self.root / 'state'), *args],
                               env={**os.environ, 'HOME': str(self.root)},
                               capture_output=True, timeout=5)
+
+    def seed_session(self, response='retained-answer-marker'):
+        provider = harness.FakeResponses()
+        self.addCleanup(provider.close)
+
+        chunks = [response[i:i + 500000] for i in range(0, len(response), 500000)]
+        replies = iter(chunks)
+
+        def respond(handler, request, sequence):
+            provider.reply(handler, provider.response_body(sequence, next(replies)).encode())
+
+        provider.runtime_handler = respond
+        config = self.root / 'config.ini'
+        harness.write_irc_config(config, provider.port, 'host-model')
+        journal = None
+        for _ in chunks:
+            resume = ['--resume', journal.parent.name] if journal else []
+            result = subprocess.run([str(BINARY), '--config', str(config), '--dotdir',
+                                     str(self.root / 'state'), *resume, '-e', '--',
+                                     'retained-question-marker'],
+                                    cwd=self.root, env={**os.environ, 'HOME': str(self.root),
+                                                       'SNAJPAGENT_IRC_UI_KEY': 'irc-ui-secret'},
+                                    capture_output=True, timeout=30)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            journal, = (self.root / 'state' / 'sessions').glob('*/events.jsonl')
+        return journal
+
+    def test_history_navigation_verbosity_split_and_resume_preserve_source(self):
+        journal = self.seed_session()
+        original = journal.read_bytes()
+        child = self.start('-N', 'reading')
+        child.until(journal.parent.name[:8].encode())
+        child.write(b'o')
+        child.until(b'retained-answer-marker')
+        child.write(b'gg')
+        child.until(b'retained-question-marker')
+        child.command('verbosity 4')
+        child.until(b'input_received')
+        child.command('vsp')
+        child.resize(10, 27)
+        child.command('workspace save')
+        values = self.wait_snapshot(lambda values: len(next(iter(values.values()))['state']['windows']) == 2)
+        windows = next(iter(values.values()))['state']['windows']
+        self.assertTrue(all(x['kind'] == 'transcript' for x in windows))
+        self.assertTrue(all(x['history']['session'] == journal.parent.name for x in windows))
+        child.finish()
+        resumed = self.start('--resume', 'reading', expect=b'history')
+        resumed.until(b'history v4')
+        resumed.command('sessions')
+        resumed.command('history ' + journal.parent.name[:8])
+        resumed.until(b'retained-answer-marker')
+        resumed.finish()
+        self.assertEqual(journal.read_bytes(), original)
+
+    def test_large_history_oldest_newest_and_canceled_load(self):
+        response = 'first-output-marker\n' + ('retained line\n' * 220000) + 'last-output-marker'
+        journal = self.seed_session(response)
+        original = journal.stat().st_size
+        self.assertGreater(original, 4 * 1024 * 1024)
+        child = self.start('-N', 'large-history')
+        child.command('history ' + journal.parent.name)
+        child.until(b'last-output-marker', timeout=15)
+        child.write(b'gg')
+        child.until(b'first-output-marker', timeout=15)
+        child.resize(8, 1)
+        child.write(b'GggG')
+        child.resize(12, 100)
+        child.command('sessions')
+        child.until(b'sessions')
+        child.finish()
+        self.assertEqual(journal.stat().st_size, original)
 
     def test_help_list_and_nonterminal_do_not_start_agents(self):
         result = self.cli('--help')
@@ -290,6 +364,18 @@ class WorkspaceTests(unittest.TestCase):
         while child.output.count(b'\x1b[?1049h') == before and time.monotonic() < deadline:
             child.read()
         self.assertGreater(child.output.count(b'\x1b[?1049h'), before)
+        child.finish()
+
+    def test_version_one_picker_snapshot_remains_resumable(self):
+        child = self.start('-N', 'legacy-picker')
+        child.finish()
+        path = next((self.root / 'state' / 'workspaces').glob('*/workspace.json'))
+        value = json.loads(path.read_text())
+        value['state']['v'] = 1
+        path.write_text(json.dumps(value))
+        child = self.start('--resume', 'legacy-picker')
+        child.command('workspace save')
+        self.wait_snapshot(lambda values: next(iter(values.values()))['state']['v'] == 2)
         child.finish()
 
     def test_unknown_state_is_preserved_and_terminal_not_entered(self):

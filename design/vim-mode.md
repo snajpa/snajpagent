@@ -55,8 +55,14 @@ under its own exclusive lock before switching; a failure preserves the current
 workspace. Real PTY tests cover normal/signal exit, blocked output, suspend,
 small-terminal restoration, exclusive ownership, failed switches and literal
 paste on Mac and Linux. The frontend also builds out to a diagnostic stub.
-Agent transcript projection/navigation, composition, semantic attachment and
-IRC conversations below still need integration. This development frontend has
+Typed transcript projection now joins decoded process streams before redaction,
+merges public response fragments, and formats tool/input/IRC events. A sparse
+wrapped-row index is built on the reader thread and preserves source anchors
+through width and verbosity changes. The frontend opens read-only retained
+history from the picker or :history, with bounded pages and oldest/newest jumps.
+Workspace state v2 retains transcript anchors while accepting v1 picker layouts.
+Live follow, cross-page tool dependencies, composition, semantic attachment,
+search/selection/clipboard and IRC conversations below still need integration. This development frontend has
 not been installed on the operator's machines or merged into the release line.
 
 ## 1. Outcome and decisions
