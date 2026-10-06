@@ -566,6 +566,11 @@ reject_admission(struct snag_session *source, const int images[2], uint64_t floo
     struct snag_binary_recovery previous;
     memset(&recovery, 0x5a, sizeof(recovery));
     memcpy(&previous, &recovery, sizeof(previous));
+    struct snag_binary_context_admission admission = {.access = {.max = SIZE_MAX},
+        .generations = {9u, 19u}, .sequences = {4u, 8u}};
+    assert(!snag_buf_append(&admission.access, "keep", 5u));
+    struct snag_binary_context_admission old_admission;
+    memcpy(&old_admission, &admission, sizeof(admission));
     int64_t position = snag_seek(source->log_fd, 0, SEEK_CUR);
     int64_t image_positions[2] = {-1, -1};
     for (size_t i = 0u; i < 2u; ++i)
@@ -573,7 +578,7 @@ reject_admission(struct snag_session *source, const int images[2], uint64_t floo
     char error[128] = {0};
     errno = 0;
     int rc = snag_store_admit_binary_context_checkpoint(source, &target, images, floor,
-        NULL, &recovery, &origins, control, error, sizeof(error));
+        NULL, &recovery, &origins, &admission, control, error, sizeof(error));
     if (rc >= 0 || errno != expected_errno)
         fprintf(stderr, "admission rejection: rc=%d errno=%d expected=%d %s\n",
             rc, errno, expected_errno, error);
@@ -581,10 +586,13 @@ reject_admission(struct snag_session *source, const int images[2], uint64_t floo
     assert(!memcmp(&target, &saved, sizeof(target)) &&
         !memcmp(&origins, &old_origins, sizeof(origins)) &&
         !memcmp(&recovery, &previous, sizeof(recovery)));
+    assert(!memcmp(&admission, &old_admission, sizeof(admission)) &&
+        !memcmp(admission.access.data, "keep", 5u));
     assert(!strcmp(snag_json_string(target.strings, "keep"), "old owner"));
     assert(snag_seek(source->log_fd, 0, SEEK_CUR) == position);
     for (size_t i = 0u; i < 2u; ++i)
         if (images[i] >= 0) assert(snag_seek(images[i], 0, SEEK_CUR) == image_positions[i]);
+    snag_binary_context_admission_free(&admission);
     snag_session_close(&target);
     ++admitted_rejected;
 }
@@ -605,9 +613,17 @@ admission_result(struct snag_session *source, struct snag_session *expected,
     int64_t image_positions[2] = {-1, -1};
     for (size_t i = 0u; i < 2u; ++i)
         if (images[i] >= 0) image_positions[i] = snag_seek(images[i], 0, SEEK_CUR);
+    struct snag_binary_context_admission admission = {.access = {.max = SIZE_MAX}};
+    assert(!snag_buf_append(&admission.access, "old owner", 10u));
     int rc = snag_store_admit_binary_context_checkpoint(source, &restored, images, floor,
-        NULL, &recovered, &got, control, error, sizeof(error));
+        NULL, &recovered, &got, &admission, control, error, sizeof(error));
     if (rc < 0) fprintf(stderr, "native checkpoint admission: %s (%d)\n", error, errno);
+    assert(admission.access.len && admission.available.boundary.end >= floor &&
+        admission.tree.count == recovered.verified.next_seq - 1u);
+    for (size_t i = 0u; i < 2u; ++i) {
+        assert(!!admission.generations[i] == !!admission.sequences[i]);
+        if (images[i] < 0) assert(!admission.sequences[i]);
+    }
     assert(!rc && recovered.verified.end == (uint64_t)expected->log_end &&
         recovered.verified.next_seq == expected->next_seq && recovered.batches == batches &&
         recovered.incomplete_tail_bytes == incomplete &&
@@ -630,6 +646,21 @@ admission_result(struct snag_session *source, struct snag_session *expected,
     assert(!snag_binary_checkpoint_core_encode(&left, wanted, expected));
     assert(!snag_binary_checkpoint_core_encode(&right, &got, &restored));
     assert(left.len == right.len && !memcmp(left.data, right.data, left.len));
+    /* The independent full-prefix fixture oracle never supplies runtime custody. */
+    struct snag_buf dense_bytes = {.max = SIZE_MAX};
+    struct snag_binary_checkpoint_index dense;
+    binary_fixture_access(source->log_fd, &recovered.verified, &dense_bytes, &dense);
+    unsigned char actual_root[32];
+    unsigned char expected_root[32];
+    assert(!snag_binary_index_tree_root(&admission.tree, actual_root) &&
+        !snag_binary_index_tree_root(&dense.tree, expected_root) &&
+        !memcmp(actual_root, expected_root, sizeof(actual_root)));
+    snag_buf_free(&dense_bytes);
+    struct snag_binary_producer producer = {0};
+    assert(!snag_binary_producer_restore(&producer, source->log_fd, &recovered.verified,
+        &admission.available, &got, &restored, NULL, NULL));
+    snag_binary_producer_free(&producer);
+    snag_binary_context_admission_free(&admission);
     snag_session_close(&restored);
     snag_binary_checkpoint_sources_free(&got);
     snag_buf_free(&left);

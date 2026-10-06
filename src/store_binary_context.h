@@ -62,6 +62,18 @@ int snag_store_resume_pinned_binary_context_checkpoint(struct snag_session *sour
     struct snag_binary_checkpoint_sources *sources, const struct snag_context_control *control,
     char *error, size_t error_size);
 
+/* Owning access custody at the selected capture and the current logical forest.
+ * Slot generations/sequences come from authenticated canonical receipts. The
+ * available view borrows access bytes; initialize before use and free together. */
+struct snag_binary_context_admission {
+    struct snag_buf access;
+    struct snag_binary_checkpoint_index available;
+    struct snag_binary_index_tree tree;
+    uint64_t generations[2], sequences[2];
+};
+
+void snag_binary_context_admission_free(struct snag_binary_context_admission *);
+
 /* Read-only admission from the actual physical tail and two caller-owned image
  * descriptors (-1 absent). floor is the independently set oldest eligible capture
  * offset, not cache-supplied; receipt/ancestry work stays in that window plus one
@@ -73,11 +85,14 @@ int snag_store_resume_pinned_binary_context_checkpoint(struct snag_session *sour
  * contract above. Caller owns immutable source/images and exclusive writer lock.
  * Success atomically installs state-only core/origins/provider; recovery counts
  * only suffix batches and reports physical open-tail bytes without repair authority.
- * Missing image/pin is ENOENT. Failure preserves all initialized output owners. */
+ * Optional admission retains selected access and reconstructs only the bounded
+ * suffix's logical frontier for later writer binding. It installs no writer or
+ * descriptor. Missing image/pin is ENOENT. Failure preserves all output owners. */
 int snag_store_admit_binary_context_checkpoint(struct snag_session *source,
     struct snag_session *restored, const int images[2], uint64_t floor,
     const struct snag_binary_checkpoint_index *const available[2],
     struct snag_binary_recovery *recovery, struct snag_binary_checkpoint_sources *sources,
+    struct snag_binary_context_admission *admission,
     const struct snag_context_control *control, char *error, size_t error_size);
 
 /* Slow independent checkpoint verifier. Strict replay establishes prefix authority;

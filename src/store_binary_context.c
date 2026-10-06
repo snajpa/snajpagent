@@ -465,11 +465,63 @@ snag_store_resume_pinned_binary_context_checkpoint(struct snag_session *source,
         sources, control, error, error_size);
 }
 
+void
+snag_binary_context_admission_free(struct snag_binary_context_admission *admission)
+{
+    if (!admission) return;
+    snag_buf_free(&admission->access);
+    *admission = (struct snag_binary_context_admission){0};
+}
+
+static int
+admission_frontier(int fd, const struct snag_binary_checkpoint_frame *frame,
+    const struct snag_binary_checkpoint_receipt *receipt,
+    const struct snag_binary_checkpoint_index *supplement,
+    const struct snag_binary_anchor *stop, struct snag_buf *scratch,
+    struct snag_binary_context_admission *admission,
+    const struct snag_context_control *control, char *error, size_t error_size)
+{
+    struct snag_binary_checkpoint_index embedded;
+    if (!supplement) {
+        if (snag_binary_checkpoint_index_decode(frame->access.data, frame->access.size,
+                &frame->identity, &frame->boundary, receipt->index_root, &embedded) < 0) {
+            return -1;
+        }
+        supplement = &embedded;
+    }
+    admission->access.max = SIZE_MAX;
+    if (snag_binary_checkpoint_index_copy(&admission->access, supplement) < 0 ||
+        snag_binary_checkpoint_index_decode(admission->access.data, admission->access.len,
+            &frame->identity, &frame->boundary, receipt->index_root,
+            &admission->available) < 0) {
+        return -1;
+    }
+    admission->tree = supplement->tree;
+    struct snag_binary_anchor cursor = frame->boundary;
+    while (cursor.end < stop->end) {
+        if (checkpoint_cancelled(control, error, error_size) < 0) return -1;
+        struct snag_binary_batch batch;
+        struct snag_binary_anchor after;
+        int rc = snag_binary_batch_read(fd, stop->end, &cursor, scratch, &batch, &after);
+        if (rc < 0) return -1;
+        if (rc || after.end > stop->end) return snag_errno(EINVAL);
+        if (snag_binary_index_tree_append_batch(NULL, &admission->tree, &frame->identity,
+                &cursor, &after, batch.data, batch.size) < 0) {
+            return -1;
+        }
+        cursor = after;
+    }
+    if (!same_anchor(&cursor, stop) || admission->tree.count != stop->next_seq - 1u)
+        return snag_errno(EINVAL);
+    return checkpoint_cancelled(control, error, error_size);
+}
+
 int
 snag_store_admit_binary_context_checkpoint(struct snag_session *source,
     struct snag_session *restored, const int images[2], uint64_t floor,
     const struct snag_binary_checkpoint_index *const available[2],
     struct snag_binary_recovery *recovery, struct snag_binary_checkpoint_sources *sources,
+    struct snag_binary_context_admission *admission,
     const struct snag_context_control *control, char *error, size_t error_size)
 {
     if (!source || !restored || source == restored || !images || !recovery ||
@@ -488,6 +540,7 @@ snag_store_admit_binary_context_checkpoint(struct snag_session *source,
     struct snag_session candidate;
     snag_session_init(&candidate);
     struct snag_binary_checkpoint_sources origins = {0};
+    struct snag_binary_context_admission staged = {0};
     int rc = -1;
     if (checkpoint_cancelled(control, error, error_size) < 0 ||
         snag_binary_journal_tail(source->log_fd, before.st_size, &scratch,
@@ -525,6 +578,16 @@ snag_store_admit_binary_context_checkpoint(struct snag_session *source,
             available ? available[slot] : NULL, &suffix, &origins,
             control, error, error_size) < 0 ||
         checkpoint_cancelled(control, error, error_size) < 0) goto done;
+    if (admission) {
+        if (admission_frontier(source->log_fd, &frame, &receipts[slot],
+                available ? available[slot] : NULL, &found.verified, &scratch,
+                &staged, control, error, error_size) < 0) goto done;
+        for (size_t i = 0u; i < 2u; ++i) {
+            if (!(pinned & (1 << i))) continue;
+            staged.generations[i] = receipts[i].generation;
+            staged.sequences[i] = sequences[i];
+        }
+    }
     snag_file_info after;
     if (snag_fstat(source->log_fd, &after) < 0) goto done;
     if (!snag_file_unchanged(&before, &after)) {
@@ -541,10 +604,16 @@ snag_store_admit_binary_context_checkpoint(struct snag_session *source,
         origins = (struct snag_binary_checkpoint_sources){0};
     }
     *recovery = found;
+    if (admission) {
+        snag_binary_context_admission_free(admission);
+        *admission = staged;
+        staged = (struct snag_binary_context_admission){0};
+    }
     rc = 0;
 done:
     snag_session_close(&candidate);
     snag_binary_checkpoint_sources_free(&origins);
+    snag_binary_context_admission_free(&staged);
     snag_buf_free(&scratch);
     snag_buf_free(&image);
     return rc;

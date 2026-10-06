@@ -2152,6 +2152,15 @@ probes the two borrowed image descriptors for lookup keys, authenticates their
 matching receipts and capture ancestry, and selects the later canonical receipt
 ordinal. It reads only that receipt-bounded image, materializes core/provider state,
 reduces the exact suffix and reconstructs current historical lookup before adoption.
+An optional owning admission result retains the effective selected access table,
+authenticated slot generations and receipt ordinals. It starts from that capture's
+accepted Merkle frontier and appends the independently bounded canonical suffix,
+without reading an index or the lifetime prefix. The result provides current
+frontier and access custody for subsequent working-producer restoration and live
+writer binding. When independent supplemental access was supplied, the owning
+copy preserves that table instead of enlarging its old-source authority. Core,
+origins, provider capture, recovery and admission metadata change together after
+the final source-stamp check. Failure retains every prior output owner.
 A caller-set oldest eligible capture offset bounds receipt and ancestry work;
 cache fields never choose that window. Selected image corruption or unsupported
 sections fail without substituting the older slot or scanning lifetime history.

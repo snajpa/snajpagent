@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Retain owning native checkpoint access, authenticated slot order and the
+  verified current Merkle frontier during bounded admission, supporting writer
+  provenance reconstruction without a lifetime replay.
+
 - Restore native process scan cursors during bounded checkpoint admission and
   suffix resume from verified start/collection sources, preserving imported
   write_stdin process identity and leaving execution ownership with the live host.
