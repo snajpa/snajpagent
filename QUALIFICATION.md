@@ -55,8 +55,21 @@ actual pasteboard, alongside isolated protocol/receipt/cancellation fixtures.
 A 2 GiB synthetic journal on Linux opened/navigated in approximately 0.8–1.4 s
 with approximately 13 MiB RSS. A full cold search took 358 s and cancelled in
 7 ms; navigation cost and whole-journal search cost have different scope.
-BSD runtime and the remaining production compile profiles are still being
-qualified. These development checks do not constitute a release-matrix receipt.
+A permanent 128 MiB PTY regression checks live output in another pane during an
+active history search, cancellation, tiny-terminal resize and an unchanged
+stored source. It reproduces stale output with the shared reader and passes with
+separate page/scan readers on macOS. Existing search, navigation, selection,
+anchor, controller and frontend cases also pass; the report suite passes across
+four cases and its corrected legacy-snapshot consumer.
+A full FreeBSD executable built against the 8.4 SDK passes twelve launch,
+fifteen native-owner and nineteen controller cases on FreeBSD 14.5-RELEASE-p1.
+All sixteen frontend cases pass across the suite and a corrected legacy-snapshot
+case. The launcher covers exec failure and explicit retry, independent process
+groups, signal-mask restoration, temporary PTY modes and owner lifetime.
+Legacy FreeBSD 5.1, both NetBSD and all three OpenBSD production profiles compile.
+The remaining production compile profiles are still being qualified. These
+development checks do not constitute a release-matrix receipt or establish
+runtime behavior on the older BSD kernels.
 
 ## tmux transfers and paste display
 

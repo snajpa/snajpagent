@@ -686,17 +686,25 @@ flowchart LR
     W <--> S2["Session B owner\nengine, tools, IRC, sole journal writer"]
     S1 --> J1["A: committed journal"]
     S2 --> J2["B: committed journal"]
-    J1 --> H["Workspace history worker"]
+    J1 --> H["Visible-page worker"]
     J2 --> H
     H --> W
+    J1 --> C["Search, copy and navigation worker"]
+    J2 --> C
+    C --> W
 ```
 
 The workspace has one event loop owning terminal reads/writes, window layout,
-mode transitions, selection and control connections. A background history worker
-performs cancellable journal reads, projection and search. Begin with one worker
-and prioritize visible-page requests ahead of speculative prefetch and search.
-Add concurrency only if measurements show a concrete need. Worker results carry
-buffer and layout generations so obsolete results cannot move a newer viewport.
+mode transitions, selection and control connections. Two fixed background workers
+separate visible-page reads/projection from one active search, copy or distant
+cursor motion. A measured full-history scan starved live-pane refresh with the
+original shared worker. Each reader owns its source views, immutable redaction
+snapshot, request generations and cancellation; both join before store teardown.
+Starting a scan cancels an older page request for its own window. Other visible
+panes continue following committed output. Canceling a scan preserves their reads.
+Results stay associated with their request and window so obsolete results cannot
+move a newer viewport. POSIX polls both wake descriptors; the Windows console
+wait checks scan progress at 20ms intervals only while that worker is active.
 
 Each agent session has one backend connection/controller shared by all its
 buffers. Each writable conversation buffer owns a distinct draft and submission
@@ -711,7 +719,7 @@ replay tools, trigger model requests or enqueue IRC messages. Existing synchrono
 not be retained in a new asynchronous queue. New notifications own their small
 payloads or refer to immutable committed ranges.
 
-When used remotely, the workspace and history worker run on the session host.
+When used remotely, the workspace and history workers run on the session host.
 The tunnel carries terminal state and input; multi-gigabyte history remains on
 the host and is read there. The workstation wrapper handles workstation effects
 such as clipboard publication. Multiple host domains can use separate workspaces

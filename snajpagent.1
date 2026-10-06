@@ -1853,7 +1853,9 @@ Search covers the active view at its current verbosity, including headings and
 unloaded retained pages. Adjacent chunks of one response or output stream retain
 their overlap. A report searches only that report. The background scan shows
 source-byte/event progress and checks a fixed history boundary; n can include
-new output on its next scan. Wraparound is reported. Ctrl-C cancels a running
+new output on its next scan. Other visible panes continue to show live output
+while a search, copy or distant cursor motion scans retained history.
+Wraparound is reported. Ctrl-C cancels a running
 search before requesting a model interruption. Navigation or a verbosity/view
 change cancels obsolete work and retains the query. Corruption reports an
 incomplete search. Search moves only the focused window and shows its cursor at

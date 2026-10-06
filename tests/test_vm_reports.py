@@ -88,9 +88,9 @@ class ReportTests(unittest.TestCase):
             snapshot = json.loads(json.dumps(original))
             snapshot['state']['v'] = version
             owner = snapshot['state']['buffers'][0]
-            old = dict(rollout(owner))
-            for key in ('route', 'window', 'endpoint'):
-                old.pop(key)
+            # Historical snapshots predate conversation routes and unread state.
+            old = {key: rollout(owner)[key] for key in
+                   ('draft', 'cursor', 'pending', 'base', 'conflict')}
             old.update(session=owner['session'], control=owner['control'], reports=owner['reports'])
             snapshot['state']['buffers'][0] = old
             if version == 6:
@@ -100,7 +100,7 @@ class ReportTests(unittest.TestCase):
             resumed.repaint_until(report['id'][:8].encode())
             resumed.command('workspace save')
             rows = self.wait_snapshot(lambda rows:
-                next(iter(rows.values()))['state']['v'] == 10 and
+                next(iter(rows.values()))['state']['v'] == 12 and
                 next(iter(rows.values()))['state']['windows'][0].get('source'))
             window = next(iter(rows.values()))['state']['windows'][0]
             self.assertEqual(window['byte'], saved['windows'][0]['byte'])

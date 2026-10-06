@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Keep other Vim panes refreshing during a long history search, copy or cursor
+  motion. Canceling the scan preserves live-pane reads and their output.
+
 - Require an explicit wait channel when a model blocks a goal. Preserve it in
   goal notices, status, history and restored context; name the operator only for
   an explicit operator wait and show timer scheduling separately.

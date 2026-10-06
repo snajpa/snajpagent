@@ -146,12 +146,18 @@ struct vm_clipboard {
     bool pending, local, canceling, settling;
 };
 
+struct vm_read {
+    struct snag_vm_reader *reader;
+    uint64_t generation, window;
+    enum history_load load;
+};
+
 struct vm {
     struct snag_store store;
     struct snag_config config;
     struct snag_secret_set secrets;
     struct snag_vm_workspace *workspace, *switch_workspace;
-    struct snag_vm_reader *reader;
+    struct vm_read page, scan;
     struct snag_vm_connection *connections;
     struct vm_launch *launches;
     char *program;
@@ -160,8 +166,7 @@ struct vm {
     struct snag_vm_layout *layout;
     struct vm_window *windows;
     size_t count, focus;
-    uint64_t next_window, generation, stored_limit, save_at, reading_window;
-    enum history_load reading_load;
+    uint64_t next_window, stored_limit, save_at;
     json_t *sessions, *workspaces, *buffers;
     struct snag_term_host terminal;
     struct snag_vm_grid grid;
@@ -398,11 +403,20 @@ restore_motion(struct vm *vm, bool restore)
 }
 
 static void
+cancel_read(struct vm_read *read)
+{
+    snag_vm_reader_cancel(read->reader);
+    read->generation = read->window = 0u;
+    read->load = LOAD_NONE;
+}
+
+static void
 cancel_search(struct vm *vm)
 {
     if (!vm->searching && !vm->copying && !vm->navigating && !vm->motion_loading) return;
-    snag_vm_reader_cancel(vm->reader);
-    vm->generation = vm->reading_window = 0u;
+    cancel_read(&vm->scan);
+    if (vm->motion_loading && vm->page.window == vm->motion_origin.window)
+        cancel_read(&vm->page);
     notice(vm, vm->copying ? "Copy canceled; register preserved" :
         vm->navigating || vm->motion_loading ? "Navigation canceled" : "Search canceled");
     restore_motion(vm, true);
@@ -688,9 +702,13 @@ save(struct vm *vm, const char *name)
 }
 
 static uint64_t
-reader_request(struct vm *vm, struct snag_vm_read_request *request)
+reader_request(struct vm *vm, struct vm_read *read, struct snag_vm_read_request *request)
 {
-    vm->searching = vm->copying = vm->navigating = false;
+    if (read == &vm->scan) {
+        if (vm->page.window == vm->windows[vm->focus].id) cancel_read(&vm->page);
+        cancel_read(read);
+        vm->searching = vm->copying = vm->navigating = false;
+    }
     json_t *sources = json_array();
     if (!sources) return 0u;
     for (size_t i = 0u; i < vm->count; ++i) {
@@ -701,7 +719,7 @@ reader_request(struct vm *vm, struct snag_vm_read_request *request)
         }
     }
     request->retained_sessions = sources;
-    uint64_t generation = snag_vm_reader_request(vm->reader, request);
+    uint64_t generation = snag_vm_reader_request(read->reader, request);
     json_decref(sources);
     request->retained_sessions = NULL;
     return generation;
@@ -756,12 +774,12 @@ search(struct vm *vm, const char *query, bool reverse, bool command_input)
     if (snag_vm_document_row(window->document, window->selected, &row) == 0)
         request.search_start.order = snag_vm_search_order(
             snag_vm_document_block(window->document, row.block));
-    vm->generation = reader_request(vm, &request);
-    if (!vm->generation) { notice(vm, "Cannot start search"); return; }
+    vm->scan.generation = reader_request(vm, &vm->scan, &request);
+    if (!vm->scan.generation) { notice(vm, "Cannot start search"); return; }
     vm->searching = true;
     vm->search_command = command_input;
-    vm->reading_window = window->id;
-    vm->reading_load = LOAD_NONE;
+    vm->scan.window = window->id;
+    vm->scan.load = LOAD_NONE;
     window->load = LOAD_NONE;
     window->follow = false;
     vm->composer = vm->insert = false;
@@ -780,18 +798,20 @@ refresh(struct vm *vm)
     } else notice(vm, error);
     struct snag_vm_read_request request = {.kind = SNAG_VM_READ_SESSIONS,
         .stored_limit = vm->stored_limit};
-    vm->generation = reader_request(vm, &request);
-    vm->reading_window = 0u;
-    if (!vm->generation) notice(vm, "Cannot start session list loading");
+    vm->page.generation = reader_request(vm, &vm->page, &request);
+    vm->page.window = 0u;
+    if (!vm->page.generation) notice(vm, "Cannot start session list loading");
     vm->dirty = true;
 }
 
 static int
 install_workspace(struct vm *vm, struct snag_vm_workspace *next)
 {
+    cancel_search(vm);
     char error[256];
     int rc = save(vm, NULL);
     if (!rc) {
+        cancel_read(&vm->page);
         rc = state_restore(vm, json_object_get(next->snapshot, "state"), error, sizeof(error));
         if (rc < 0) notice(vm, error);
     }
@@ -921,10 +941,7 @@ view(struct vm *vm, enum view_kind kind)
 {
     cancel_search(vm);
     struct vm_window *window = &vm->windows[vm->focus];
-    if (vm->reading_window == window->id) {
-        snag_vm_reader_cancel(vm->reader);
-        vm->generation = vm->reading_window = 0u;
-    }
+    if (vm->page.window == window->id) cancel_read(&vm->page);
     snag_vm_document_free(window->document);
     window->document = NULL;
     json_decref(window->report);
@@ -1641,26 +1658,26 @@ quit_sessions(struct vm *vm, bool all, bool force)
 static void
 load_history(struct vm *vm)
 {
-    if (vm->searching || vm->copying || vm->navigating) return;
     for (size_t i = 0u; i < vm->count; ++i) {
         struct vm_window *window = &vm->windows[(vm->focus + i) % vm->count];
+        if (vm->scan.window == window->id) continue;
         if (window->report_catalog && window->rectangle.visible) {
-            if (vm->generation && (i || !vm->reading_window)) return;
+            if (vm->page.generation && (i || !vm->page.window)) return;
             struct snag_vm_connection *c = connection_for(vm, window->session_id, false);
             struct snag_vm_read_request request = {.kind = SNAG_VM_READ_REPORTS,
                 .known_reports = c ? c->reports : NULL};
             memcpy(request.session_id, window->session_id, sizeof(request.session_id));
-            vm->generation = reader_request(vm, &request);
-            if (!vm->generation) notice(vm, "Cannot start report catalogue read");
-            vm->reading_window = vm->generation ? window->id : 0u;
-            vm->reading_load = LOAD_NONE;
+            vm->page.generation = reader_request(vm, &vm->page, &request);
+            if (!vm->page.generation) notice(vm, "Cannot start report catalogue read");
+            vm->page.window = vm->page.generation ? window->id : 0u;
+            vm->page.load = LOAD_NONE;
             window->report_catalog = false;
             window->load = LOAD_NONE;
             return;
         }
         if (!document_view(window) || !window->load || !window->rectangle.visible)
             continue;
-        if (vm->generation && (i || !vm->reading_window || window->load == LOAD_POLL)) return;
+        if (vm->page.generation && (i || !vm->page.window || window->load == LOAD_POLL)) return;
         struct snag_vm_read_request request = {
             .kind = window->kind == VIEW_REPORT ? SNAG_VM_READ_REPORT : SNAG_VM_READ_HISTORY,
             .report = window->report, .route = window->route, .project = true,
@@ -1704,13 +1721,13 @@ load_history(struct vm *vm)
             if (load == LOAD_ANCHOR) request.before_seq = window->anchor_seq + 1u;
         } else if (load == LOAD_NEXT || load == LOAD_KEEP_NEXT) request.cursor = window->end;
         else if (load == LOAD_KEEP || load == LOAD_REFRESH) request.cursor = window->begin;
-        vm->generation = reader_request(vm, &request);
-        if (!vm->generation) {
-            cancel_search(vm);
+        vm->page.generation = reader_request(vm, &vm->page, &request);
+        if (!vm->page.generation) {
+            if (vm->motion_loading && vm->motion_origin.window == window->id) cancel_search(vm);
             notice(vm, "Cannot start history read");
         }
-        vm->reading_window = window->id;
-        vm->reading_load = load;
+        vm->page.window = vm->page.generation ? window->id : 0u;
+        vm->page.load = load;
         window->load = LOAD_NONE;
         window->follow_at = snag_monotonic_ms() + 1000u;
         return;
@@ -2346,10 +2363,7 @@ visual_begin(struct vm *vm, enum snag_vm_selection_kind kind)
 {
     cancel_search(vm);
     struct vm_window *window = &vm->windows[vm->focus];
-    if (vm->reading_window == window->id) {
-        snag_vm_reader_cancel(vm->reader);
-        vm->generation = vm->reading_window = 0u;
-    }
+    if (vm->page.window == window->id) cancel_read(&vm->page);
     window->load = LOAD_NONE;
     window->follow = false;
     window->visual_tail = window->tail;
@@ -2394,15 +2408,15 @@ history_navigate(struct vm *vm, enum snag_vm_navigation_kind kind, size_t count)
     if (kind != SNAG_VM_NAV_LINE && kind != SNAG_VM_NAV_LAST)
         request.cursor = window->begin;
     memcpy(request.session_id, window->session_id, sizeof(request.session_id));
-    vm->generation = reader_request(vm, &request);
-    if (!vm->generation) {
+    vm->scan.generation = reader_request(vm, &vm->scan, &request);
+    if (!vm->scan.generation) {
         restore_motion(vm, true);
         notice(vm, "Cannot start navigation; cursor preserved");
         return;
     }
     vm->navigating = true;
-    vm->reading_window = window->id;
-    vm->reading_load = LOAD_NONE;
+    vm->scan.window = window->id;
+    vm->scan.load = LOAD_NONE;
     window->load = LOAD_NONE;
     window->yank_after_load = window->yank_motion;
     notice(vm, "Moving through retained history; Ctrl-C cancels");
@@ -2477,11 +2491,11 @@ yank(struct vm *vm)
         .trusted_tail = window->visual_tail.next_seq != 0u,
         .pin_tail = window->visual_tail.next_seq != 0u};
     memcpy(request.session_id, window->session_id, sizeof(request.session_id));
-    vm->generation = reader_request(vm, &request);
-    if (!vm->generation) { notice(vm, "Cannot start copy; register preserved"); return; }
+    vm->scan.generation = reader_request(vm, &vm->scan, &request);
+    if (!vm->scan.generation) { notice(vm, "Cannot start copy; register preserved"); return; }
     vm->copying = true;
-    vm->reading_window = window->id;
-    vm->reading_load = LOAD_NONE;
+    vm->scan.window = window->id;
+    vm->scan.load = LOAD_NONE;
     window->load = LOAD_NONE;
     window->yank_motion = window->yank_after_load = false;
     window->navigation.count = window->navigation.operator_count = 0u;
@@ -3183,10 +3197,13 @@ input_ready(struct vm *vm, int timeout)
     if (!buffered && ((vm->clipboard.pending && !vm->clipboard.source) ||
         vm->clipboard.osc.source)) timeout = 0;
 #ifdef _WIN32
-    if (vm->clipboard.source && (timeout < 0 || timeout > 20)) timeout = 20;
-    int ready = snag_term_input_wait(&vm->terminal, snag_vm_reader_fd(vm->reader), timeout);
+    /* The console wait accepts one worker fd; poll only while the other worker
+     * has a scan in flight. Idle workspaces keep their normal blocking wait. */
+    if ((vm->clipboard.source || vm->scan.generation) && (timeout < 0 || timeout > 20))
+        timeout = 20;
+    int ready = snag_term_input_wait(&vm->terminal, snag_vm_reader_fd(vm->page.reader), timeout);
 #else
-    size_t count = 4u;
+    size_t count = 5u;
     for (struct snag_vm_connection *c = vm->connections; c; c = c->next) {
         if (c->channel.fd >= 0) ++count;
     }
@@ -3198,10 +3215,11 @@ input_ready(struct vm *vm, int timeout)
     if (!fds) return -1;
     fds[0] = (struct pollfd){.fd = STDIN_FILENO,
         .events = vm->classic_pending ? 0 : POLLIN};
-    fds[1] = (struct pollfd){.fd = snag_vm_reader_fd(vm->reader), .events = POLLIN};
+    fds[1] = (struct pollfd){.fd = snag_vm_reader_fd(vm->page.reader), .events = POLLIN};
     fds[2] = (struct pollfd){.fd = snag_clipboard_fd(vm->clipboard.source), .events = POLLIN};
     fds[3] = (struct pollfd){.fd = buffered ? vm->clipboard.output : -1, .events = POLLOUT};
-    size_t at = 4u;
+    fds[4] = (struct pollfd){.fd = snag_vm_reader_fd(vm->scan.reader), .events = POLLIN};
+    size_t at = 5u;
     for (struct snag_vm_connection *c = vm->connections; c; c = c->next) {
         if (c->channel.fd < 0) continue;
         fds[at++] = (struct pollfd){.fd = c->channel.fd,
@@ -3536,7 +3554,8 @@ draw_window(void *opaque, const struct snag_vm_rectangle *rectangle)
         window->top = window->selected - height + 1u;
     if (document_view(window)) {
         if (window->document && snag_vm_document_columns(window->document) != rectangle->columns &&
-            !window->load && vm->reading_window != window->id) queue_history(vm, window, LOAD_KEEP);
+            !window->load && vm->page.window != window->id && vm->scan.window != window->id)
+            queue_history(vm, window, LOAD_KEEP);
         for (size_t i = window->top; i < count && i - window->top < height; ++i) {
             struct snag_vm_document_row row;
             if (snag_vm_document_row(window->document, i, &row) < 0) return -1;
@@ -3650,14 +3669,16 @@ draw_window(void *opaque, const struct snag_vm_rectangle *rectangle)
             window->source_failed ? "  source error; R" :
                 window->incomplete ? "  partial tail" : "",
             (window->load && window->load != LOAD_POLL) ||
-            (vm->reading_window == window->id && vm->reading_load != LOAD_POLL) ? "  loading" : "",
+            ((vm->page.window == window->id && vm->page.load != LOAD_POLL) ||
+                vm->scan.window == window->id) ? "  loading" : "",
             b && b->pending ? "  [submission retained]" : "");
     }
     if (window->kind == VIEW_REPORT) {
         (void)snprintf(status, sizeof(status), "REPORT %.8s %.8s  %zu/%zu%s%s",
             window->session_id, snag_json_string(window->report, "id"),
             count ? window->selected + 1u : 0u, count,
-            window->load || vm->reading_window == window->id ? "  loading" : "",
+            window->load || vm->page.window == window->id || vm->scan.window == window->id ?
+                "  loading" : "",
             window->source_failed ? "  source error; R" : "");
     }
     return snag_vm_grid_text(&vm->grid, rectangle->row + rectangle->rows - 1u,
@@ -3672,7 +3693,7 @@ painted_read(struct vm *vm)
     struct vm_window *window = &vm->windows[vm->focus];
     if (window->kind != VIEW_TRANSCRIPT || !window->rectangle.visible || !window->follow ||
         !window->document || window->incomplete || window->source_failed ||
-        window->load || vm->reading_window == window->id ||
+        window->load || vm->page.window == window->id || vm->scan.window == window->id ||
         window->end.offset != window->tail.offset || !window->end.next_seq) return 0;
     size_t count = row_count(vm, window);
     if (!count || count - 1u < window->top ||
@@ -3731,13 +3752,13 @@ draw(struct vm *vm)
 }
 
 static void
-collect(struct vm *vm)
+collect(struct vm *vm, struct vm_read *read)
 {
-    struct snag_vm_read_result *result = snag_vm_reader_take(vm->reader);
+    struct snag_vm_read_result *result = snag_vm_reader_take(read->reader);
     if (!result) {
         uint64_t bytes, events, total;
-        if ((vm->searching || vm->copying || vm->navigating) &&
-            snag_vm_reader_progress(vm->reader, vm->generation, &bytes, &events, &total)) {
+        if (read == &vm->scan && (vm->searching || vm->copying || vm->navigating) &&
+            snag_vm_reader_progress(read->reader, read->generation, &bytes, &events, &total)) {
             char progress[160];
             (void)snprintf(progress, sizeof(progress),
                 "%s %llu/%llu bytes, %llu events; Ctrl-C cancels",
@@ -3749,10 +3770,10 @@ collect(struct vm *vm)
         }
         return;
     }
-    uint64_t target = vm->reading_window;
-    enum history_load load = vm->reading_load;
-    vm->generation = vm->reading_window = 0u;
-    vm->searching = vm->copying = vm->navigating = false;
+    uint64_t target = read->window;
+    enum history_load load = read->load;
+    read->generation = read->window = 0u;
+    if (read == &vm->scan) vm->searching = vm->copying = vm->navigating = false;
     if (result->request.selection.kind) {
         if (result->error_number) notice(vm, result->error);
         else if (!result->copied.length) notice(vm, "Empty motion; register preserved");
@@ -3825,7 +3846,7 @@ collect(struct vm *vm)
         return;
     }
     if (result->error_number) {
-        if (vm->motion_loading) restore_motion(vm, true);
+        if (vm->motion_loading && vm->motion_origin.window == target) restore_motion(vm, true);
         notice(vm, result->error);
         for (size_t i = 0u; i < vm->count; ++i) {
             if (vm->windows[i].id != target) continue;
@@ -3972,7 +3993,8 @@ collect(struct vm *vm)
     }
     snag_vm_read_result_free(result);
     struct vm_window *window = &vm->windows[vm->focus];
-    if (vm->motion_loading && window->id == target && !window->load) {
+    if (vm->motion_loading && vm->motion_origin.window == target &&
+        window->id == target && !window->load) {
         const char *status = vm->search_finish;
         restore_motion(vm, false);
         if (status) search_notice(vm, status);
@@ -4221,9 +4243,8 @@ classic_run(struct vm *vm)
     char error[256] = "";
     int rc = -1;
     if (save(vm, NULL) == 0) {
-        vm->searching = false;
-        snag_vm_reader_cancel(vm->reader);
-        vm->generation = vm->reading_window = 0u;
+        cancel_search(vm);
+        cancel_read(&vm->page);
         /* Cooked input between clients can translate or discard incoming paste. */
         leave_screen(vm, false);
         vm->classic.cancelled = &stopped;
@@ -4283,7 +4304,8 @@ interactive(struct vm *vm)
         if (vm->quit || stopped) break;
         if (vm->classic_ready && classic_run(vm) < 0) goto out;
         if (stopped) break;
-        collect(vm);
+        collect(vm, &vm->page);
+        collect(vm, &vm->scan);
         if (clipboard_step(vm) < 0) goto out;
         /* Queued commands can schedule owner writes, detach or workspace
          * changes. Run those state transitions before waiting for new input. */
@@ -4317,7 +4339,8 @@ interactive(struct vm *vm)
             struct vm_window *window = &vm->windows[i];
             if (window->kind == VIEW_TRANSCRIPT && window->document && window->rectangle.visible &&
                 !window->visual.kind && !window->load &&
-                vm->reading_window != window->id && window->follow_at <= now)
+                vm->page.window != window->id && vm->scan.window != window->id &&
+                window->follow_at <= now)
                 window->load = LOAD_POLL;
         }
         bool clipboard_output = vm->clipboard.osc.source ||
@@ -4333,12 +4356,13 @@ interactive(struct vm *vm)
             int remaining = vm->save_at > now ? (int)(vm->save_at - now) : 0;
             if (timeout < 0 || timeout > remaining) timeout = remaining;
         }
-        if (!vm->generation) {
+        if (!vm->page.generation) {
             uint64_t now = snag_monotonic_ms();
             for (size_t i = 0u; i < vm->count; ++i) {
                 struct vm_window *window = &vm->windows[i];
                 if (window->kind != VIEW_TRANSCRIPT || !window->document ||
-                    !window->rectangle.visible || window->source_failed) continue;
+                    !window->rectangle.visible || window->source_failed ||
+                    window->visual.kind || vm->scan.window == window->id) continue;
                 int remaining = window->follow_at > now ? (int)(window->follow_at - now) : 0;
                 if (timeout < 0 || timeout > remaining) timeout = remaining;
             }
@@ -4460,8 +4484,10 @@ snag_vm_main(int argc, char **argv, const char *program)
     vm.windows[0].id = 1u;
     if (snag_config_load(&vm.config, NULL, vm.store.root_path, error, sizeof(error)) < 0 ||
         snag_secret_set_build(&vm.secrets, &vm.config, NULL, error, sizeof(error)) < 0) goto failed;
-    vm.reader = snag_vm_reader_open(&vm.store, &vm.secrets.wire, error, sizeof(error));
-    if (!vm.reader) goto failed;
+    vm.page.reader = snag_vm_reader_open(&vm.store, &vm.secrets.wire, error, sizeof(error));
+    if (!vm.page.reader) goto failed;
+    vm.scan.reader = snag_vm_reader_open(&vm.store, &vm.secrets.wire, error, sizeof(error));
+    if (!vm.scan.reader) goto failed;
     notice(&vm, "NORMAL  :help for controls  / filter  R refresh");
     if (resume || last) {
         if (restore_workspace(&vm, resume) < 0) {
@@ -4492,7 +4518,8 @@ out:
     }
     free(vm.program);
     free(vm.search_query);
-    snag_vm_reader_close(vm.reader);
+    snag_vm_reader_close(vm.page.reader);
+    snag_vm_reader_close(vm.scan.reader);
     snag_vm_connections_free(vm.connections);
     if (vm.switch_workspace) {
         snag_vm_workspace_close(vm.switch_workspace);

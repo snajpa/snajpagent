@@ -4,14 +4,17 @@
 import hashlib
 import json
 import os
+import shutil
 import signal
 import sys
+import threading
 import time
 import unittest
 import uuid
 
 import test_vm_frontend as frontend
 from test_vm_frontend import rollout
+from test_session_listing import canonical
 
 # Each standalone fixture consumes a binary argument at import time. The
 # frontend has already consumed ours; preserve unittest's optional selectors.
@@ -99,6 +102,89 @@ class ControlTests(unittest.TestCase):
         self.assertEqual(self.owner.identity(), self.owner.owner_identity)
         child.finish('close')
         self.owner.status('detached')
+
+    def test_history_scan_keeps_other_live_pane_refreshing(self):
+        # Build a bounded projection fixture with a valid hash chain. Only the
+        # separate native owner submits real turns; this stored source is read-only.
+        stored = frontend.WorkspaceTests()
+        stored.setUp()
+        self.addCleanup(stored.doCleanups)
+        journal = stored.seed_session('scan-start-marker')
+        last = json.loads(journal.read_bytes().splitlines()[-1])
+        filler = canonical({'items': [{'kind': 'assistant', 'phase': 'final',
+            'text': 'history row with Unicode é界\n' * 6000}],
+            'response_id': 'response-placeholder'}).encode()
+
+        def append(stream, packed):
+            nonlocal last
+            response = f'{last["seq"]:032x}'.encode()
+            packed = packed.replace(b'response-placeholder', response)
+            started = canonical({'response_id': response.decode()}).encode()
+            for kind, data in [('response_started', started), ('response_completed', packed)]:
+                event = dict(data='data-placeholder', prev_sha256=last['event_sha256'],
+                    seq=last['seq'] + 1, session_id=last['session_id'],
+                    time_ms=last['time_ms'] + 1, type=kind, v=2,
+                    checkpoint_offset=last['checkpoint_offset'])
+                unsigned = canonical(event).encode().replace(b'"data-placeholder"', data, 1)
+                event['event_sha256'] = hashlib.sha256(unsigned).hexdigest()
+                stream.write(canonical(event).encode().replace(b'"data-placeholder"', data, 1)
+                             + b'\n')
+                last = event
+
+        with journal.open('ab') as stream:
+            while stream.tell() < 128 * 1024 * 1024:
+                append(stream, filler)
+            append(stream, canonical({'items': [{'kind': 'assistant', 'phase': 'final',
+                'text': 'scan-tail-marker'}], 'response_id': 'response-placeholder'}).encode())
+        destination = self.root / 'state/sessions' / journal.parent.name
+        shutil.copytree(journal.parent, destination)
+        journal = destination / journal.name
+        before = journal.stat()
+        started = threading.Event()
+        requests = []
+
+        def respond(handler, request, sequence):
+            requests.append(request)
+            started.set()
+            if not self.owner.release.wait(30):
+                return
+            text = 'live output row\n' * 20000 + 'live-scan-complete'
+            self.owner.provider.reply(handler,
+                self.owner.provider.response_body(sequence, text).encode(), close_header=True)
+
+        self.owner.provider.runtime_handler = respond
+        self.addCleanup(self.owner.release.set)
+        child = self.start('-N', 'scan-live', rows=24, columns=160)
+        child.command('attach ' + self.owner.sid)
+        child.repaint_until(b'ATTACHED')
+        child.write(b'ilive-scan-request\r')
+        deadline = time.monotonic() + 5
+        while not started.is_set():
+            child.read(.01)
+            self.assertLess(time.monotonic(), deadline)
+        self.escape(child)
+        child.command('sp')
+        child.command('history ' + journal.parent.name)
+        child.repaint_until(b'scan-tail-marker')
+        child.write(b'?no-such-scan-marker\r')
+        child.repaint_until(b'events; Ctrl-C cancels')
+        self.owner.release.set()
+        child.repaint_until(b'live-scan-complete', timeout=5)
+        self.owner.wait_event('turn_completed')
+        self.assertIn(b'Searching', child.output)
+        self.assertNotIn(b'No matches', child.output)
+        self.assertEqual(len(requests), 1)
+        self.assertEqual(len(self.inputs()), 1)
+        child.write(b'\x03')
+        child.repaint_until(b'Search canceled')
+        child.resize(3, 18)
+        child.read(.1)
+        child.resize(24, 160)
+        child.repaint_until(b'live-scan-complete')
+        child.repaint_until(b'scan-tail-marker')
+        child.finish('qa!')
+        after = journal.stat()
+        self.assertEqual((after.st_size, after.st_mtime_ns), (before.st_size, before.st_mtime_ns))
 
     def test_owner_draft_adoption_and_final_edit_flushed_on_close(self):
         self.owner_draft('retained 👩‍💻')
