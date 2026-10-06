@@ -2662,6 +2662,13 @@ engine's snapshot capture supplies those owning query/source inputs. Runtime
 submission, reader integration and working-set custody remain unfinished; these
 APIs do not enable the native backend by themselves.
 
+Successful owner completion can transfer the prepared access bytes into an
+initialized owning engine buffer. Pending or failed completion preserves that
+buffer, including paced retries. The move allocates nothing and reads no files;
+returned bytes survive publisher and owner destruction. This is provisional
+memory custody only. The engine retains its current usable working set until the
+canonical receipt commits and its acknowledged boundary is adopted.
+
 The access capture helper selects locations for a verified producer snapshot from
 an independently pinned available working set plus a caller-bounded newer suffix.
 It takes the complete index frontier at the new capture boundary; this helper

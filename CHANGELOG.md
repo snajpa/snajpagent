@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Return owning prepared checkpoint access bytes with successful publication,
+  preserving caller buffers across pending work and failed retries while keeping
+  usable checkpoint custody behind canonical receipt acknowledgement.
+
 - Freeze native checkpoint queries and pinned old-access storage with the same
   acknowledged core/provider boundary, preserving request inputs independently
   of the producer and provider cache.

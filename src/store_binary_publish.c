@@ -319,6 +319,15 @@ snag_binary_publication_result(const struct snag_binary_publication *publication
 }
 
 void
+snag_binary_publication_access_move(struct snag_binary_publication *publication,
+    struct snag_buf *out)
+{
+    snag_buf_free(out);
+    *out = publication->snapshot.access;
+    publication->snapshot.access = (struct snag_buf){0};
+}
+
+void
 snag_binary_publication_close(struct snag_binary_publication *publication)
 {
     if (publication && publication->file >= 0) {

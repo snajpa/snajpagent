@@ -68,6 +68,9 @@ int snag_binary_publication_step(struct snag_binary_publication *,
     const struct snag_binary_io_ops *);
 void snag_binary_publication_result(const struct snag_binary_publication *,
     struct snag_binary_publication_result *);
+/* Called only after successful publication in the owner's completion path. Move
+ * access bytes into an initialized owning buffer, without allocating or I/O. */
+void snag_binary_publication_access_move(struct snag_binary_publication *, struct snag_buf *);
 void snag_binary_publication_close(struct snag_binary_publication *);
 void snag_binary_publication_free(struct snag_binary_publication *);
 

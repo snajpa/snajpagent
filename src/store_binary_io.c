@@ -480,9 +480,9 @@ snag_binary_io_checkpoint_submit(struct snag_binary_io *io,
     return 0;
 }
 
-int
-snag_binary_io_checkpoint_take(struct snag_binary_io *io,
-    struct snag_binary_publication_result *out)
+static int
+take_checkpoint_result(struct snag_binary_io *io,
+    struct snag_binary_publication_result *out, struct snag_buf *access)
 {
     if (!io || !out) return snag_errno(EINVAL);
     pthread_mutex_lock(&io->mutex);
@@ -497,6 +497,7 @@ snag_binary_io_checkpoint_take(struct snag_binary_io *io,
     } else {
         io->published = *out;
         io->awaiting_receipt = true;
+        if (access) snag_binary_publication_access_move(io->checkpoint, access);
         snag_binary_publication_free(io->checkpoint);
         io->checkpoint = NULL;
         io->checkpoint_phase = IO_IDLE;
@@ -504,6 +505,21 @@ snag_binary_io_checkpoint_take(struct snag_binary_io *io,
     refresh_wake(io);
     pthread_mutex_unlock(&io->mutex);
     return out->error ? snag_errno(out->error) : 0;
+}
+
+int
+snag_binary_io_checkpoint_take(struct snag_binary_io *io,
+    struct snag_binary_publication_result *out)
+{
+    return take_checkpoint_result(io, out, NULL);
+}
+
+int
+snag_binary_io_checkpoint_take_access(struct snag_binary_io *io,
+    struct snag_binary_publication_result *out, struct snag_buf *access)
+{
+    if (!access) return snag_errno(EINVAL);
+    return take_checkpoint_result(io, out, access);
 }
 
 int

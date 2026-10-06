@@ -87,6 +87,11 @@ int snag_binary_io_checkpoint_submit(struct snag_binary_io *, struct snag_binary
  * journal acknowledgements. The caller enforces the recovery-suffix budget. */
 int snag_binary_io_checkpoint_take(struct snag_binary_io *,
     struct snag_binary_publication_result *);
+/* Same result stream, additionally transferring owning access bytes on success.
+ * Pending/failed calls preserve access. Publication does not establish usable
+ * checkpoint custody: retain these provisionally until canonical receipt ACK. */
+int snag_binary_io_checkpoint_take_access(struct snag_binary_io *,
+    struct snag_binary_publication_result *, struct snag_buf *access);
 int snag_binary_io_checkpoint_retry(struct snag_binary_io *);
 /* After consuming successful file publication, queue its exact canonical receipt
  * through the ordinary journal owner. index_root belongs to that captured snapshot,

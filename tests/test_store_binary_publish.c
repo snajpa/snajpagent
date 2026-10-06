@@ -935,7 +935,7 @@ selected_sources(bool missing)
 {
     struct fixture fixture;
     fixture_init(&fixture);
-    struct probe probe = {0};
+    struct probe probe = {.gate = missing ? GATE_NONE : GATE_FILE_SYNC};
     struct snag_binary_io *io = start_owner(&fixture, &probe);
     struct snag_binary_io_snapshot capture = snapshot(&fixture, &fixture.before, 21u);
     snag_buf_free(&capture.access);
@@ -966,7 +966,7 @@ selected_sources(bool missing)
     assert(!snag_binary_index_tree_root(&old, selection->available_root));
     assert(!snag_binary_checkpoint_index_encode(&selection->available, &fixture.identity,
         &selection->available_boundary, &old, NULL, 0u));
-    struct snag_buf expected = {.max = SIZE_MAX};
+    struct snag_buf expected = {.max = SIZE_MAX}, expected_access = {.max = SIZE_MAX};
     if (!missing) {
         struct snag_binary_checkpoint_index available;
         assert(!snag_binary_checkpoint_index_decode(selection->available.data,
@@ -979,7 +979,7 @@ selected_sources(bool missing)
         assert(!snag_binary_checkpoint_access_plan_read(fixture.journal, &selection->plan,
             &available, &selection->frontier, NULL, NULL, &oracle.access));
         expected = image(&oracle, 9u);
-        snag_buf_free(&oracle.access);
+        expected_access = oracle.access;
     }
     struct snag_binary_io_snapshot saved = capture;
     ++selection->plan.boundary.next_seq;
@@ -990,13 +990,26 @@ selected_sources(bool missing)
     assert(!snag_binary_index_tree_root(&selection->frontier, captured_root));
     assert(!snag_binary_io_checkpoint_submit(io, &capture) && !capture.selection);
     struct snag_binary_publication_result result;
-    int rc = await_checkpoint(io, &result);
+    struct snag_buf access = {.max = SIZE_MAX};
+    assert(!snag_buf_append(&access, "keep", 4u));
+    if (!missing) {
+        wait_flag(&probe.entered);
+        assert(snag_binary_io_checkpoint_take_access(io, &result, &access) == 1);
+        assert(access.len == 4u && !memcmp(access.data, "keep", 4u));
+        atomic_store(&probe.released, true);
+    }
+    assert(snag_wakeup_wait(snag_binary_io_wake(io), 10000) == 1);
+    int rc = snag_binary_io_checkpoint_take_access(io, &result, &access);
     if (missing) {
         assert(rc < 0 && result.error && !result.published && !result.renamed);
         assert(!result.temporary[0] && !probe.creates && !probe.file_syncs);
         assert(!probe.renames && !probe.dir_syncs);
+        assert(access.len == 4u && !memcmp(access.data, "keep", 4u));
         assert(!snag_binary_io_checkpoint_retry(io));
-        assert(await_checkpoint(io, &result) < 0 && result.error && !probe.creates);
+        assert(snag_wakeup_wait(snag_binary_io_wake(io), 10000) == 1);
+        assert(snag_binary_io_checkpoint_take_access(io, &result, &access) < 0 &&
+            result.error && !probe.creates);
+        assert(access.len == 4u && !memcmp(access.data, "keep", 4u));
         check_file(&fixture, "checkpoint.0", &fixture.slots[0]);
     } else {
         assert(!rc && !result.error && result.published && result.generation == 9u);
@@ -1009,6 +1022,12 @@ selected_sources(bool missing)
         assert(pinned.durable.next_seq == fixture.before.next_seq + 1u);
     }
     assert(!snag_binary_io_close(io));
+    if (!missing) {
+        assert(access.len == expected_access.len &&
+            !memcmp(access.data, expected_access.data, access.len));
+    }
+    snag_buf_free(&access);
+    snag_buf_free(&expected_access);
     snag_buf_free(&expected);
     fixture_free(&fixture);
 }
