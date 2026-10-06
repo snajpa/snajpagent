@@ -23,9 +23,17 @@ int snag_session_bind_binary(struct snag_session *, const struct snag_binary_ide
 int snag_session_binary_checkpoint_capture(const struct snag_session *, struct snag_binary_anchor *,
     struct snag_binary_index_tree *, struct snag_binary_checkpoint_sources *, char *, size_t);
 
+/* Install independently accepted old working-set custody and receipt-ordered
+ * slots. Copies access bytes on success; caller retains its inputs and owns the
+ * directory descriptor until session close. No file I/O or new usable receipt. */
+int snag_session_binary_checkpoint_setup(struct snag_session *, int directory,
+    const uint64_t generations[2], const uint64_t sequences[2],
+    const struct snag_binary_checkpoint_index *, char *, size_t);
+
 /* Freeze ACK-visible sections, query and old working-set access for the I/O owner.
  * Callback is the matching committed cache owner. Caller establishes immutable
  * old access custody/ancestry/completeness and bounded suffix before capture.
+ * NULL access uses previously installed custody; no implicit empty table.
  * Outputs are initialized/owning and change together on success; no I/O. */
 int snag_session_binary_snapshot_capture(const struct snag_session *,
     const struct snag_binary_checkpoint_index *,

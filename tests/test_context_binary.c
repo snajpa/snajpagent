@@ -11,6 +11,7 @@
 
 #include <assert.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1935,6 +1936,26 @@ live_snapshot_capture(void)
         &identity, &root, old_root, &available));
     struct snag_binary_io_snapshot snapshot = {0};
     off_t position = lseek(state.log_fd, 0, SEEK_CUR);
+    assert(snag_session_binary_snapshot_capture(&state, NULL, &snapshot, &tree, &captured,
+        error, sizeof(error)) < 0 && errno == ENOTSUP && !snapshot.selection);
+    int directory = open(".", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    assert(directory >= 0);
+    const uint64_t generations[2] = {0}, sequences[2] = {0}, invalid_sequences[2] = {1u, 0u};
+    struct snag_binary_checkpoint_index invalid = available;
+    ++invalid.identity.id[0];
+    assert(snag_session_binary_checkpoint_setup(&state, directory, generations, sequences,
+        &invalid, error, sizeof(error)) < 0 && errno == EINVAL);
+    invalid = available;
+    invalid.entry_count = 1u;
+    invalid.entries = NULL;
+    assert(snag_session_binary_checkpoint_setup(&state, directory, generations, sequences,
+        &invalid, error, sizeof(error)) < 0 && errno == EINVAL);
+    assert(snag_session_binary_checkpoint_setup(&state, directory, generations, invalid_sequences,
+        &available, error, sizeof(error)) < 0 && errno == EINVAL);
+    assert(!snag_session_binary_checkpoint_setup(&state, directory, generations, sequences,
+        &available, error, sizeof(error)));
+    assert(snag_session_binary_checkpoint_setup(&state, directory, generations, sequences,
+        &available, error, sizeof(error)) < 0 && errno == EBUSY);
     assert(!snag_session_binary_snapshot_capture(&state, &available, &snapshot, &tree, &captured,
         error, sizeof(error)));
     assert(snapshot.boundary.next_seq == state.next_seq && snapshot.core.len &&
@@ -1942,6 +1963,7 @@ live_snapshot_capture(void)
     assert(snapshot.selection && snapshot.selection->plan.boundary.next_seq == state.next_seq);
     assert(snapshot.selection->available.len == old_access.len &&
         !memcmp(snapshot.selection->available.data, old_access.data, old_access.len));
+    snag_buf_free(&old_access);
     assert(lseek(state.log_fd, 0, SEEK_CUR) == position);
     const json_t *recent, *history;
     assert(!snag_context_capture_seam(&state, &recent, &history));
@@ -1955,12 +1977,13 @@ live_snapshot_capture(void)
     struct snag_binary_io_snapshot saved = snapshot;
     json_t *(*callback)(void *, const struct snag_session *) = state.on_checkpoint;
     struct snag_binary_checkpoint_index wrong = available;
+    wrong.entries = NULL;
     ++wrong.identity.id[0];
     assert(snag_session_binary_snapshot_capture(&state, &wrong, &snapshot, &tree, &captured,
         error, sizeof(error)) < 0 && errno == EINVAL &&
         !memcmp(&saved, &snapshot, sizeof(saved)));
     state.on_checkpoint = NULL;
-    assert(snag_session_binary_snapshot_capture(&state, &available, &snapshot, &tree, &captured,
+    assert(snag_session_binary_snapshot_capture(&state, NULL, &snapshot, &tree, &captured,
         error, sizeof(error)) < 0 && errno == ENOTSUP &&
         !memcmp(&saved, &snapshot, sizeof(saved)));
     state.on_checkpoint = callback;
@@ -1968,11 +1991,10 @@ live_snapshot_capture(void)
         NULL, error, sizeof(error)));
     assert(saved.boundary.next_seq + 1u == state.next_seq &&
         !memcmp(expected_provider.data, saved.provider.data, expected_provider.len));
-    assert(!snag_session_binary_snapshot_capture(&state, &available, &snapshot, &tree, &captured,
+    assert(!snag_session_binary_snapshot_capture(&state, NULL, &snapshot, &tree, &captured,
         error, sizeof(error)));
     assert(snapshot.boundary.next_seq == state.next_seq &&
         captured.texts.slots[SNAG_BINARY_TEXT_BANNER].declaration == state.next_seq - 1u);
-    snag_buf_free(&old_access);
     struct snag_binary_checkpoint_index frozen;
     const struct snag_binary_io_access *selection = snapshot.selection;
     assert(!snag_binary_checkpoint_index_decode(selection->available.data,
@@ -1990,6 +2012,7 @@ live_snapshot_capture(void)
     snag_binary_checkpoint_sources_free(&captured);
     snag_binary_checkpoint_sources_free(&origins);
     snag_session_close(&state);
+    assert(fcntl(directory, F_GETFD) >= 0 && !close(directory));
     source.log_fd = -1;
     snag_session_close(&source);
     snag_buf_free(&payload);

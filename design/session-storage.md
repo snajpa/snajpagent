@@ -2888,5 +2888,16 @@ The finalized access section remains unset until the worker resolves that query.
 The query, encoded old table, expected old boundary/root and captured frontier
 outlive the producer and provider callback objects. Empty section bytes before
 preparation do not prove closure or authorize a historical-prefix scan.
+
+The native session can install that independently accepted old access and the
+existing owner's receipt-ordered slot metadata once, while no transaction is
+pending. Setup stages owning bytes and structural decoding before configuring
+the existing owner, so rejected identity, malformed access or slot ordering
+leaves custody uninstalled. Its directory descriptor stays caller-owned until
+session close. Subsequent capture can use the installed immutable view; missing
+custody remains unavailable rather than becoming an implicit empty table.
+Setup leaves the reducer and acknowledged journal frontier unchanged, creates
+no files, and does not grant a new usable receipt. Session close releases only
+its owned table storage, not the caller's descriptor.
 The ordinary native creation/open/resume lifecycle and receipt publication remain
 unfinished integration, not enabled by this internal capture seam.

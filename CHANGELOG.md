@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Install owning accepted working-set custody on native sessions for subsequent
+  checkpoint capture, preserving caller directory ownership and failure-atomic
+  setup without advancing the acknowledged journal frontier.
+
 - Return owning prepared checkpoint access bytes with successful publication,
   preserving caller buffers across pending work and failed retries while keeping
   usable checkpoint custody behind canonical receipt acknowledgement.
