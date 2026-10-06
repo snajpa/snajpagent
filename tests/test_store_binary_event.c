@@ -4740,6 +4740,55 @@ assert_event_encode_rejected(const struct snag_binary_event *event)
 }
 
 static void
+test_goal_wait_channel(void)
+{
+    static const char *waiting[] = {"operator", "timer", "irc: 127.0.0.1:6667/#seeded",
+        "process: 01234567", "external: published artifact"};
+    for (size_t i = 0u; i < sizeof(waiting) / sizeof(waiting[0]); ++i) {
+        assert(snag_goal_wait_valid(waiting[i]));
+        json_t *data = json_pack("{s:s,s:s,s:s,s:s}", "actor", "model",
+            "goal_id", "11111111111111111111111111111111", "reason", "Waiting for an event",
+            "wait_for", waiting[i]);
+        assert(data);
+        struct snag_buf payload = {.max = SNAG_MAX_EVENT_LINE};
+        enum snag_binary_kind kind = SNAG_BINARY_SESSION_CREATED;
+        assert(!snag_binary_legacy_encode(&payload, "goal_blocked", data, &kind));
+        assert(kind != SNAG_BINARY_GOAL_BLOCKED);
+        struct snag_binary_record record = {.kind = kind,
+            .version = snag_binary_event_version(kind),
+            .payload = payload.data, .size = payload.len};
+        const char *type = NULL;
+        json_t *restored = NULL;
+        assert(!snag_binary_legacy_decode(&record, &type, &restored));
+        assert(!strcmp(type, "goal_blocked") && json_equal(data, restored));
+        json_decref(restored);
+        struct snag_binary_event event;
+        assert(!snag_binary_event_decode(&record, &event));
+        assert(event.kind == SNAG_BINARY_GOAL_BLOCKED_WAIT_FOR);
+        roundtrip(&event);
+        static const char *bad[] = {"", "unknown", "irc: missing", "process: ",
+            "external: trailing ", "operator\n"};
+        for (size_t j = 0u; j < sizeof(bad) / sizeof(bad[0]); ++j) {
+            event.data.goal.wait_for = text(bad[j]);
+            assert_event_encode_rejected(&event);
+        }
+        event.data.goal.wait_for = text(waiting[i]);
+        event.data.goal.actor = SNAG_BINARY_USER;
+        assert_event_encode_rejected(&event);
+        event.data.goal.actor = SNAG_BINARY_MODEL;
+        event.kind = SNAG_BINARY_GOAL_BLOCKED;
+        assert_event_encode_rejected(&event);
+        assert(!json_object_del(data, "wait_for"));
+        snag_buf_reset(&payload);
+        assert(!snag_binary_legacy_encode(&payload, "goal_blocked", data, &kind));
+        assert(kind == SNAG_BINARY_GOAL_BLOCKED && payload.len == 17u + 4u +
+            strlen("Waiting for an event"));
+        json_decref(data);
+        snag_buf_free(&payload);
+    }
+}
+
+static void
 test_turn_config_values(void)
 {
     struct snag_binary_event event = turn_start_event();
@@ -6003,6 +6052,7 @@ test_event_names(void)
         {64u, "goal_started"}, {65u, "goal_replaced"}, {66u, "goal_reworded"},
         {67u, "goal_lock_changed"}, {68u, "goal_paused"}, {69u, "goal_blocked"},
         {70u, "goal_completed"}, {71u, "goal_resumed"}, {72u, "goal_cancelled"},
+        {73u, "goal_blocked_wait_for"},
         {96u, "input_received"}, {97u, "input_cancelled"}, {98u, "steering_added"},
         {99u, "irc_reply_reminder"}, {100u, "steering_deferred"}, {101u, "input_admitted"},
         {102u, "future_queue_state"}, {103u, "future_turn_cancelled"},
@@ -7279,6 +7329,7 @@ test_store_binary_event(void)
     test_capacity_rejection();
     test_irc_event();
     test_routed_irc_event();
+    test_goal_wait_channel();
     test_irc_snapshot();
     test_sequences();
     test_irc_admission();

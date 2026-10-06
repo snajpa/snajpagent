@@ -857,8 +857,8 @@ irc_checkpoint_checks(struct snag_session *source, const struct snag_session *ex
     if (checked || !expected->irc_conversations) return;
     checked = true;
     const unsigned char *bytes = frame->core.data;
-    assert(frame->core.version == 4u && bytes[0] == 4u && bytes[2] == 9u);
-    size_t offset = 100u;
+    assert(frame->core.version == 5u && bytes[0] == 5u && bytes[2] == 10u);
+    size_t offset = 108u;
     for (size_t i = 0u; i < 7u; ++i) {
         uint64_t size = 0u;
         for (size_t j = 0u; j < 8u; ++j)
@@ -906,8 +906,9 @@ old_core_materialization_checks(struct snag_session *source, struct snag_session
     const struct snag_binary_checkpoint_sources *origins,
     const struct snag_binary_checkpoint_frame *current, const unsigned char root[32])
 {
-    static bool checked[2];
-    for (uint16_t version = 2u; version <= 3u; ++version) {
+    static bool checked[3];
+    if (json_object_get(expected->strings, "goal_wait_for")) return;
+    for (uint16_t version = 2u; version <= 4u; ++version) {
         size_t slot = version - 2u;
         if (checked[slot] || (version == 2u &&
             (expected->irc_conversations || expected->irc_activity)) ||
@@ -929,10 +930,10 @@ old_core_materialization_checks(struct snag_session *source, struct snag_session
         int rc = snag_store_materialize_binary_context_checkpoint(source, &restored, &frame,
             &receipt, &adopted, NULL, error, sizeof(error));
         if (rc < 0) fprintf(stderr, "old core materialization: %s (%d)\n", error, errno);
-        assert(!rc && !restored.irc_activity &&
+        assert(!rc && (version == 4u || !restored.irc_activity) &&
             snag_seek(source->log_fd, 0, SEEK_CUR) == position);
         struct snag_session unknown = *expected;
-        unknown.irc_activity = NULL;
+        if (version != 4u) unknown.irc_activity = NULL;
         same_cache(&unknown, &restored, false);
         json_t *left = checkpoint_facts(&unknown);
         json_t *right = checkpoint_facts(&restored);
@@ -946,7 +947,7 @@ old_core_materialization_checks(struct snag_session *source, struct snag_session
         rc = snag_store_verify_binary_context_checkpoint(source, &restored, &frame.boundary,
             bytes.data, bytes.len, &recovery, &adopted, NULL, error, sizeof(error));
         if (rc < 0) fprintf(stderr, "old core prefix oracle: %s (%d)\n", error, errno);
-        assert(!rc && !restored.irc_activity &&
+        assert(!rc && (version == 4u || !restored.irc_activity) &&
             snag_seek(source->log_fd, 0, SEEK_CUR) == position);
         same_cache(&unknown, &restored, false);
         snag_session_close(&restored);

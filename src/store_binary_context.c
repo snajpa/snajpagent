@@ -296,7 +296,7 @@ snag_store_materialize_binary_context_checkpoint(struct snag_session *source,
         restored->pending_log) {
         return snag_fail(error, error_size, EINVAL, "invalid native checkpoint target");
     }
-    if ((frame->core.version != 2u && frame->core.version != 3u &&
+    if ((frame->core.version != 2u && frame->core.version != 3u && frame->core.version != 4u &&
         frame->core.version != SNAG_BINARY_CORE_VERSION) || frame->provider.version != 1u ||
         frame->access.version != 1u || !frame->access.size) {
         return snag_fail(error, error_size, ENOTSUP, "native checkpoint sections unavailable");
@@ -786,7 +786,7 @@ verify_checkpoint(int fd, const struct snag_binary_anchor *boundary,
     struct snag_binary_checkpoint_frame frame;
     if (source_header(fd, &identity, &root) < 0) return -1;
     if (snag_binary_checkpoint_frame_decode(bytes, size, &identity, boundary, &frame) != 0 ||
-        (frame.core.version != 2u && frame.core.version != 3u &&
+        (frame.core.version != 2u && frame.core.version != 3u && frame.core.version != 4u &&
             frame.core.version != SNAG_BINARY_CORE_VERSION) || frame.provider.version != 1u) {
         return snag_fail(error, error_size, EINVAL, "invalid native checkpoint frame");
     }

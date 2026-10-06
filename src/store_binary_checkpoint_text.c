@@ -99,7 +99,8 @@ record_source(const struct snag_binary_record *record, uint64_t sequence,
     case SNAG_BINARY_GOAL_STARTED:
     case SNAG_BINARY_GOAL_REPLACED:
     case SNAG_BINARY_GOAL_REWORDED:
-    case SNAG_BINARY_GOAL_BLOCKED: text = event->data.goal.text; break;
+    case SNAG_BINARY_GOAL_BLOCKED:
+    case SNAG_BINARY_GOAL_BLOCKED_WAIT_FOR: text = event->data.goal.text; break;
     case SNAG_BINARY_STEERING_UPDATED:
         *out = source;
         return 0;
@@ -142,7 +143,8 @@ changed_slot(enum snag_binary_kind kind)
     case SNAG_BINARY_GOAL_STARTED:
     case SNAG_BINARY_GOAL_REPLACED:
     case SNAG_BINARY_GOAL_REWORDED: return SNAG_BINARY_TEXT_GOAL_PROMPT;
-    case SNAG_BINARY_GOAL_BLOCKED: return SNAG_BINARY_TEXT_GOAL_BLOCKER;
+    case SNAG_BINARY_GOAL_BLOCKED:
+    case SNAG_BINARY_GOAL_BLOCKED_WAIT_FOR: return SNAG_BINARY_TEXT_GOAL_BLOCKER;
     case SNAG_BINARY_TURN_STARTED: return SNAG_BINARY_TEXT_ACTIVE_PROMPT;
     default: return COUNT(text_slots);
     }
@@ -298,7 +300,8 @@ slot_accepts(size_t slot, const struct snag_binary_event *event)
             event->kind == SNAG_BINARY_GOAL_REPLACED ||
             event->kind == SNAG_BINARY_GOAL_REWORDED;
     case SNAG_BINARY_TEXT_GOAL_BLOCKER:
-        return event->kind == SNAG_BINARY_GOAL_BLOCKED &&
+        return (event->kind == SNAG_BINARY_GOAL_BLOCKED ||
+            event->kind == SNAG_BINARY_GOAL_BLOCKED_WAIT_FOR) &&
             event->data.goal.actor == SNAG_BINARY_MODEL;
     case SNAG_BINARY_TEXT_TIMER: return event->kind == SNAG_BINARY_TIMER_SCHEDULED;
     case SNAG_BINARY_TEXT_BANNER: return event->kind == SNAG_BINARY_BANNER_UPDATED;

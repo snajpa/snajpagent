@@ -9,9 +9,11 @@
 #include <string.h>
 
 /* Sizes delimit the fixed-order blocks; the core version identifies the typed
- * directory/activity layouts. Epochs and adoption survive without copied payloads. */
+ * directory/activity and goal-wait layouts. Epochs and adoption survive without
+ * copied payloads. */
 enum core_block {
-    CONTROLS, ACCOUNTING, TEXTS, CALLS, PROCESSES, INPUTS, PAYLOADS, IRC, ACTIVITY, BLOCKS
+    CONTROLS, ACCOUNTING, TEXTS, CALLS, PROCESSES, INPUTS, PAYLOADS, IRC,
+    ACTIVITY, GOAL_WAIT, BLOCKS
 };
 #define CORE_HEADER (28u + BLOCKS * 8u)
 
@@ -19,7 +21,7 @@ static size_t
 core_blocks(uint16_t version)
 {
     return version == 2u ? IRC : version == 3u ? ACTIVITY :
-        version == SNAG_BINARY_CORE_VERSION ? BLOCKS : 0u;
+        version == 4u ? GOAL_WAIT : version == SNAG_BINARY_CORE_VERSION ? BLOCKS : 0u;
 }
 
 static void
@@ -267,6 +269,55 @@ static const struct text_slot {
 #undef SLOT
 };
 
+static int
+goal_wait_encode(struct snag_buf *out, const struct snag_binary_checkpoint_sources *sources,
+    const struct snag_session *state)
+{
+    const json_t *value = json_object_get(state->strings, "goal_wait_for");
+    uint64_t sequence = 0u;
+    if (value) {
+        sequence = sources->texts.slots[SNAG_BINARY_TEXT_GOAL_BLOCKER].declaration;
+        if (state->goal_status != SNAG_GOAL_BLOCKED || !sequence ||
+            !snag_goal_wait_valid(json_string_value(value))) return snag_errno(EINVAL);
+    }
+    unsigned char bytes[8];
+    put_number(bytes, sequence);
+    return snag_buf_append(out, bytes, sizeof(bytes));
+}
+
+static int
+goal_wait_read(int fd, const struct snag_binary_anchor *through,
+    const struct snag_binary_checkpoint_index *access,
+    const struct snag_binary_checkpoint_section *block,
+    const struct snag_binary_checkpoint_sources *sources, struct snag_session *state)
+{
+    if (block->size && (!block->data || block->size != 8u)) return snag_errno(EINVAL);
+    uint64_t reference = block->size ? get_number(block->data) : 0u;
+    uint64_t sequence = sources->texts.slots[SNAG_BINARY_TEXT_GOAL_BLOCKER].declaration;
+    if (state->goal_status != SNAG_GOAL_BLOCKED || !sequence) {
+        return reference ? snag_errno(EINVAL) : 0;
+    }
+    if (reference && reference != sequence) return snag_errno(EINVAL);
+    const char *type = NULL;
+    json_t *data = NULL;
+    if (snag_binary_checkpoint_projection_read(fd, through, access, sequence, &type, &data) < 0) {
+        return -1;
+    }
+    json_t *value = json_object_get(data, "wait_for");
+    const char *id = snag_json_string(data, "goal_id");
+    const char *actor = snag_json_string(data, "actor");
+    /* Operator replacement keeps the blocked state, reason and wait channel;
+     * the retained blocker declaration can belong to an earlier goal ID. */
+    bool valid = type && !strcmp(type, "goal_blocked") && id &&
+        snag_hex_is_lower(id, SNAG_ID_HEX_LEN) &&
+        actor && !strcmp(actor, "model") &&
+        (value ? reference && snag_goal_wait_valid(json_string_value(value)) : !reference);
+    int rc = valid ? 0 : snag_errno(EINVAL);
+    if (!rc && value) rc = json_object_set(state->strings, "goal_wait_for", value);
+    json_decref(data);
+    return rc;
+}
+
 int
 snag_binary_checkpoint_core_encode_version(struct snag_buf *out,
     const struct snag_binary_checkpoint_sources *sources, const struct snag_session *state,
@@ -274,7 +325,8 @@ snag_binary_checkpoint_core_encode_version(struct snag_buf *out,
 {
     if (!out || !sources || !state || out->len > out->max) return snag_errno(EINVAL);
     size_t count = core_blocks(version);
-    if (!count || (version == 2u && (state->irc_conversations || state->irc_activity))) {
+    if (!count || (version == 2u && (state->irc_conversations || state->irc_activity)) ||
+        (count <= GOAL_WAIT && json_object_get(state->strings, "goal_wait_for"))) {
         return snag_errno(EINVAL);
     }
     const struct snag_voice_history_root *voice = &state->voice_history;
@@ -302,7 +354,8 @@ snag_binary_checkpoint_core_encode_version(struct snag_buf *out,
         snag_binary_checkpoint_inputs_encode(&blocks[INPUTS], sources, state) < 0 ||
         snag_binary_checkpoint_payloads_encode(&blocks[PAYLOADS], sources, state) < 0 ||
         (count > IRC && irc_encode(&blocks[IRC], state) < 0) ||
-        (count > ACTIVITY && activity_encode(&blocks[ACTIVITY], state) < 0)) goto done;
+        (count > ACTIVITY && activity_encode(&blocks[ACTIVITY], state) < 0) ||
+        (count > GOAL_WAIT && goal_wait_encode(&blocks[GOAL_WAIT], sources, state) < 0)) goto done;
     unsigned char header[CORE_HEADER] = {(unsigned char)version, 0u, (unsigned char)count, 0u};
     put_number(header + 4u, sources->active_compact);
     put_number(header + 12u, sources->response_start);
@@ -520,6 +573,7 @@ snag_binary_checkpoint_core_read(int fd, const struct snag_binary_checkpoint_fra
     if ((blocks[IRC].size &&
         irc_read(fd, anchor, access, &blocks[IRC], &state.irc_conversations) < 0) ||
         (blocks[ACTIVITY].size && activity_read(&blocks[ACTIVITY], &state) < 0) ||
+        goal_wait_read(fd, anchor, access, &blocks[GOAL_WAIT], &sources, &state) < 0 ||
         copy_sources(&sources, &processes, &inputs, &payloads, &state) < 0 ||
         check_sources(&sources, &payloads, &state) < 0 ||
         snag_binary_checkpoint_epochs_check(fd, anchor, access, &sources, &state) < 0) goto done;

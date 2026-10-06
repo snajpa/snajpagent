@@ -153,9 +153,11 @@ Development source opens existing native journals through verified checkpoints
 and a bounded suffix. Routed IRC records retain connection/conversation identity,
 generation, membership, actions, delivery receipts and captured replies. Native
 checkpoints retain the IRC directory through canonical event references and
-typed activity metadata. Core versions2 and3 remain readable; missing activity
+typed activity metadata. Core versions2,3 and4 remain readable; missing activity
 stays unavailable until routed observations establish a new recorded range.
 Connection-scoped notices use the same routing rules as live observations.
+Explicit blocked-goal wait channels use typed records and canonical checkpoint
+references. Older blockers without a channel retain an unspecified wait.
 
 Prepared-session native seeding verifies the provisional in-memory journal and
 its native semantic projection before adopting provider capture and writer

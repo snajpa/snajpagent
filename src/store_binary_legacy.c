@@ -86,7 +86,7 @@ unsupported(void)
 static bool
 goal_kind(enum snag_binary_kind kind)
 {
-    return kind >= SNAG_BINARY_GOAL_STARTED && kind <= SNAG_BINARY_GOAL_CANCELLED;
+    return kind >= SNAG_BINARY_GOAL_STARTED && kind <= SNAG_BINARY_GOAL_BLOCKED_WAIT_FOR;
 }
 
 static bool
@@ -434,6 +434,9 @@ read_timer(const json_t *data, struct snag_binary_event *event)
 static int
 read_goal(const json_t *data, struct snag_binary_event *event)
 {
+    if (event->kind == SNAG_BINARY_GOAL_BLOCKED && json_object_get(data, "wait_for")) {
+        event->kind = SNAG_BINARY_GOAL_BLOCKED_WAIT_FOR;
+    }
     const char *keys;
     switch (event->kind) {
     case SNAG_BINARY_GOAL_STARTED: keys = "goal_id prompt"; break;
@@ -442,6 +445,7 @@ read_goal(const json_t *data, struct snag_binary_event *event)
     case SNAG_BINARY_GOAL_LOCK_CHANGED: keys = "goal_id locked"; break;
     case SNAG_BINARY_GOAL_PAUSED: keys = "goal_id reason"; break;
     case SNAG_BINARY_GOAL_BLOCKED: keys = "actor goal_id reason"; break;
+    case SNAG_BINARY_GOAL_BLOCKED_WAIT_FOR: keys = "actor goal_id reason wait_for"; break;
     case SNAG_BINARY_GOAL_COMPLETED: keys = "actor goal_id"; break;
     case SNAG_BINARY_GOAL_RESUMED:
     case SNAG_BINARY_GOAL_CANCELLED: keys = "goal_id"; break;
@@ -454,7 +458,9 @@ read_goal(const json_t *data, struct snag_binary_event *event)
         return -1;
     }
     if (event->kind == SNAG_BINARY_GOAL_REPLACED || event->kind == SNAG_BINARY_GOAL_REWORDED ||
-        event->kind == SNAG_BINARY_GOAL_BLOCKED || event->kind == SNAG_BINARY_GOAL_COMPLETED) {
+        event->kind == SNAG_BINARY_GOAL_BLOCKED ||
+        event->kind == SNAG_BINARY_GOAL_BLOCKED_WAIT_FOR ||
+        event->kind == SNAG_BINARY_GOAL_COMPLETED) {
         int actor = read_name(data, "actor", actors, sizeof(actors) / sizeof(actors[0]));
         if (actor < 0) return -1;
         event->data.goal.actor = (enum snag_binary_actor)actor;
@@ -465,6 +471,9 @@ read_goal(const json_t *data, struct snag_binary_event *event)
     case SNAG_BINARY_GOAL_REWORDED:
         return read_text(data, "prompt", &event->data.goal.text);
     case SNAG_BINARY_GOAL_BLOCKED:
+        return read_text(data, "reason", &event->data.goal.text);
+    case SNAG_BINARY_GOAL_BLOCKED_WAIT_FOR:
+        if (read_text(data, "wait_for", &event->data.goal.wait_for) < 0) return -1;
         return read_text(data, "reason", &event->data.goal.text);
     case SNAG_BINARY_GOAL_LOCK_CHANGED: {
         const json_t *value = json_object_get(data, "locked");
@@ -2317,7 +2326,9 @@ put_goal(json_t *data, const struct snag_binary_event *event)
         return -1;
     }
     if (event->kind == SNAG_BINARY_GOAL_REPLACED || event->kind == SNAG_BINARY_GOAL_REWORDED ||
-        event->kind == SNAG_BINARY_GOAL_BLOCKED || event->kind == SNAG_BINARY_GOAL_COMPLETED) {
+        event->kind == SNAG_BINARY_GOAL_BLOCKED ||
+        event->kind == SNAG_BINARY_GOAL_BLOCKED_WAIT_FOR ||
+        event->kind == SNAG_BINARY_GOAL_COMPLETED) {
         if (snag_json_set_new(data, "actor", json_string(actors[event->data.goal.actor])) < 0) {
             return -1;
         }
@@ -2327,6 +2338,9 @@ put_goal(json_t *data, const struct snag_binary_event *event)
     case SNAG_BINARY_GOAL_REPLACED:
     case SNAG_BINARY_GOAL_REWORDED: return put_text(data, "prompt", event->data.goal.text);
     case SNAG_BINARY_GOAL_BLOCKED: return put_text(data, "reason", event->data.goal.text);
+    case SNAG_BINARY_GOAL_BLOCKED_WAIT_FOR:
+        if (put_text(data, "wait_for", event->data.goal.wait_for) < 0) return -1;
+        return put_text(data, "reason", event->data.goal.text);
     case SNAG_BINARY_GOAL_LOCK_CHANGED:
         return snag_json_set_new(data, "locked", json_boolean(event->data.goal.locked));
     case SNAG_BINARY_GOAL_PAUSED:
@@ -3614,7 +3628,8 @@ snag_binary_legacy_decode(const struct snag_binary_record *record, const char **
         json_decref(result);
         return -1;
     }
-    *type = snag_binary_event_name(event.kind);
+    *type = event.kind == SNAG_BINARY_GOAL_BLOCKED_WAIT_FOR ? "goal_blocked" :
+        snag_binary_event_name(event.kind);
     *data = result;
     return 0;
 }

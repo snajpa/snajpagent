@@ -41,6 +41,7 @@ enum snag_binary_kind {
     SNAG_BINARY_GOAL_COMPLETED = 70,
     SNAG_BINARY_GOAL_RESUMED = 71,
     SNAG_BINARY_GOAL_CANCELLED = 72,
+    SNAG_BINARY_GOAL_BLOCKED_WAIT_FOR = 73,
     SNAG_BINARY_INPUT_RECEIVED = 96,
     SNAG_BINARY_INPUT_CANCELLED = 97,
     SNAG_BINARY_STEERING_ADDED = 98,
@@ -1011,6 +1012,7 @@ struct snag_binary_event {
             enum snag_binary_pause pause;
             bool locked;
             struct snag_binary_text text; /* Prompt or blocker, selected by kind. */
+            struct snag_binary_text wait_for; /* Required only by the wait-bearing variant. */
         } goal;
     } data;
 };

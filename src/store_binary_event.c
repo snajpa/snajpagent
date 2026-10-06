@@ -78,6 +78,19 @@ write_text(struct snag_buf *out, struct snag_binary_text text, size_t minimum, s
 }
 
 static bool
+goal_wait_valid(struct snag_binary_text text)
+{
+    if (!text_valid(text, 1u, SNAG_MAX_GOAL_BLOCKER)) return false;
+    char *copy = malloc(text.size + 1u);
+    if (!copy) return false;
+    memcpy(copy, text.data, text.size);
+    copy[text.size] = '\0';
+    bool valid = snag_goal_wait_valid(copy);
+    free(copy);
+    return valid;
+}
+
+static bool
 read_text(struct fields *fields, struct snag_binary_text *text, size_t minimum, size_t maximum)
 {
     uint64_t length;
@@ -1971,7 +1984,7 @@ timer_kind(enum snag_binary_kind kind)
 static bool
 goal_kind(enum snag_binary_kind kind)
 {
-    return kind >= SNAG_BINARY_GOAL_STARTED && kind <= SNAG_BINARY_GOAL_CANCELLED;
+    return kind >= SNAG_BINARY_GOAL_STARTED && kind <= SNAG_BINARY_GOAL_BLOCKED_WAIT_FOR;
 }
 
 /* Count each field's historical owners against the canonical journal depth. */
@@ -3616,6 +3629,7 @@ static const struct archive_schema archive_schemas[] = {
     ARCHIVE_SCHEMA(SNAG_BINARY_GOAL_LOCK_CHANGED, "goal_id", "locked"),
     ARCHIVE_SCHEMA(SNAG_BINARY_GOAL_PAUSED, "goal_id", "reason"),
     ARCHIVE_SCHEMA(SNAG_BINARY_GOAL_BLOCKED, "actor", "goal_id", "reason"),
+    ARCHIVE_SCHEMA(SNAG_BINARY_GOAL_BLOCKED_WAIT_FOR, "actor", "goal_id", "reason", "wait_for"),
     ARCHIVE_SCHEMA(SNAG_BINARY_GOAL_COMPLETED, "actor", "goal_id"),
     ARCHIVE_SCHEMA(SNAG_BINARY_GOAL_RESUMED, "goal_id"),
     ARCHIVE_SCHEMA(SNAG_BINARY_GOAL_CANCELLED, "goal_id"),
@@ -4479,9 +4493,17 @@ encode_fields(struct snag_buf *out, const struct snag_binary_event *event)
     case SNAG_BINARY_GOAL_STARTED:
         return write_text(out, event->data.goal.text, 1u, SNAG_MAX_GOAL_PROMPT);
     case SNAG_BINARY_GOAL_BLOCKED:
+    case SNAG_BINARY_GOAL_BLOCKED_WAIT_FOR:
         if (event->data.goal.actor != SNAG_BINARY_MODEL) return invalid();
+        if (event->kind == SNAG_BINARY_GOAL_BLOCKED && event->data.goal.wait_for.size) {
+            return invalid();
+        }
+        if (event->kind == SNAG_BINARY_GOAL_BLOCKED_WAIT_FOR &&
+            !goal_wait_valid(event->data.goal.wait_for)) return invalid();
         if (write_uint(out, event->data.goal.actor, 1u) < 0) return -1;
-        return write_text(out, event->data.goal.text, 1u, SNAG_MAX_GOAL_BLOCKER);
+        if (write_text(out, event->data.goal.text, 1u, SNAG_MAX_GOAL_BLOCKER) < 0) return -1;
+        return event->kind == SNAG_BINARY_GOAL_BLOCKED ? 0 :
+            write_text(out, event->data.goal.wait_for, 1u, SNAG_MAX_GOAL_BLOCKER);
     case SNAG_BINARY_GOAL_LOCK_CHANGED:
         return write_uint(out, event->data.goal.locked ? 1u : 0u, 1u);
     case SNAG_BINARY_GOAL_PAUSED:
@@ -4529,6 +4551,7 @@ static const struct {
     {SNAG_BINARY_GOAL_COMPLETED, "goal_completed"},
     {SNAG_BINARY_GOAL_RESUMED, "goal_resumed"},
     {SNAG_BINARY_GOAL_CANCELLED, "goal_cancelled"},
+    {SNAG_BINARY_GOAL_BLOCKED_WAIT_FOR, "goal_blocked_wait_for"},
     {SNAG_BINARY_INPUT_RECEIVED, "input_received"},
     {SNAG_BINARY_INPUT_CANCELLED, "input_cancelled"},
     {SNAG_BINARY_STEERING_ADDED, "steering_added"},
@@ -4779,9 +4802,13 @@ decode_fields(struct fields *fields, struct snag_binary_event *event)
     case SNAG_BINARY_GOAL_STARTED:
         return read_text(fields, &event->data.goal.text, 1u, SNAG_MAX_GOAL_PROMPT);
     case SNAG_BINARY_GOAL_BLOCKED:
+    case SNAG_BINARY_GOAL_BLOCKED_WAIT_FOR:
         if (!read_uint(fields, 1u, &value) || value != SNAG_BINARY_MODEL) return false;
         event->data.goal.actor = (enum snag_binary_actor)value;
-        return read_text(fields, &event->data.goal.text, 1u, SNAG_MAX_GOAL_BLOCKER);
+        if (!read_text(fields, &event->data.goal.text, 1u, SNAG_MAX_GOAL_BLOCKER)) return false;
+        return event->kind == SNAG_BINARY_GOAL_BLOCKED ||
+            (read_text(fields, &event->data.goal.wait_for, 1u, SNAG_MAX_GOAL_BLOCKER) &&
+                goal_wait_valid(event->data.goal.wait_for));
     case SNAG_BINARY_GOAL_LOCK_CHANGED:
         if (!read_uint(fields, 1u, &value) || value > 1u) return false;
         event->data.goal.locked = value != 0u;
@@ -4987,6 +5014,7 @@ find_control_text(const struct snag_binary_batch *batch, uint64_t sequence,
     case SNAG_BINARY_GOAL_REPLACED:
     case SNAG_BINARY_GOAL_REWORDED:
     case SNAG_BINARY_GOAL_BLOCKED:
+    case SNAG_BINARY_GOAL_BLOCKED_WAIT_FOR:
         source.text = source.event.data.goal.text;
         break;
     default:

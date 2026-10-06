@@ -4046,7 +4046,7 @@ static void
 test_prepared_native_seed(const char *cwd)
 {
     char error[512];
-    for (unsigned int variant = 0u; variant < 12u; ++variant) {
+    for (unsigned int variant = 0u; variant < 13u; ++variant) {
         struct snag_session prepared;
         struct snag_session target;
         snag_session_init(&prepared);
@@ -4108,6 +4108,14 @@ test_prepared_native_seed(const char *cwd)
             assert(snag_strcpy(route->target, sizeof(route->target), "accepted-nick"));
             commit_data(&prepared, "irc_event_v2", snag_irc_event_data(&event));
         }
+        if (variant == 12u) {
+            const char *goal = "55555555555555555555555555555555";
+            commit_data(&prepared, "goal_started", json_pack("{s:s,s:s}",
+                "goal_id", goal, "prompt", "Finish the recorded objective"));
+            commit_data(&prepared, "goal_blocked", json_pack("{s:s,s:s,s:s,s:s}",
+                "actor", "model", "goal_id", goal, "reason", "Waiting for an event",
+                "wait_for", "operator"));
+        }
         target.log_fd = temporary_fd();
         target.lock_fd = temporary_fd();
         int log_fd = target.log_fd;
@@ -4129,7 +4137,7 @@ test_prepared_native_seed(const char *cwd)
         if (variant == 9u) prepared.snapshot_read_only = true;
         if (variant == 10u) target.snapshot_read_only = true;
         int rc = snag_store_seed_binary_session(&prepared, &target, error, sizeof(error));
-        if (variant < 2u || variant == 6u || variant == 11u) {
+        if (variant < 2u || variant == 6u || variant == 11u || variant == 12u) {
             if (rc < 0) fprintf(stderr, "prepared native seed: %s (%d)\n", error, errno);
             assert(!rc && target.binary && target.log_fd == log_fd && target.lock_fd == lock_fd);
             same_core_state(&prepared, &target);
@@ -4149,12 +4157,41 @@ test_prepared_native_seed(const char *cwd)
                     json_object_get(target.irc_activity, "items")) == 2u);
                 test_store_binary_core_state(target.log_fd, &boundary, &sources, &target);
             }
+            if (variant == 12u) {
+                assert(!strcmp(snag_goal_wait_for(&target), "operator"));
+                test_store_binary_core_state(target.log_fd, &boundary, &sources, &target);
+            }
             snag_binary_checkpoint_sources_free(&sources);
             commit_data(&target, "model_selection_changed", json_pack("{s:s,s:s,s:s,s:s,s:s,s:s}",
                 "old_provider", "default", "new_provider", "default",
                 "old_model", "selected", "new_model", "after seed",
                 "old_effort", "low", "new_effort", "high"));
             assert(target.next_seq == sequence + 1u && !strcmp(target.default_model, "after seed"));
+            if (variant == 12u) {
+                commit_data(&target, "goal_replaced", json_pack("{s:s,s:s,s:s,s:s}",
+                    "actor", "user", "goal_id", target.goal_id,
+                    "new_goal_id", "66666666666666666666666666666666",
+                    "prompt", "Replacement keeps the blocker"));
+                assert(!strcmp(snag_goal_wait_for(&target), "operator"));
+                assert(!snag_session_binary_checkpoint_capture(&target, &boundary, &tree,
+                    &sources, error, sizeof(error)));
+                test_store_binary_core_state(target.log_fd, &boundary, &sources, &target);
+                snag_binary_checkpoint_sources_free(&sources);
+                commit_data(&target, "goal_resumed", json_pack("{s:s}",
+                    "goal_id", target.goal_id));
+                assert(!json_object_get(target.strings, "goal_wait_for"));
+                assert(!snag_session_binary_checkpoint_capture(&target, &boundary, &tree,
+                    &sources, error, sizeof(error)));
+                test_store_binary_core_state(target.log_fd, &boundary, &sources, &target);
+                snag_binary_checkpoint_sources_free(&sources);
+                commit_data(&target, "goal_blocked", json_pack("{s:s,s:s,s:s}",
+                    "goal_id", target.goal_id, "actor", "model", "reason", "Older blocker"));
+                assert(!json_object_get(target.strings, "goal_wait_for"));
+                assert(!snag_session_binary_checkpoint_capture(&target, &boundary, &tree,
+                    &sources, error, sizeof(error)));
+                test_store_binary_core_state(target.log_fd, &boundary, &sources, &target);
+                snag_binary_checkpoint_sources_free(&sources);
+            }
         } else {
             assert(rc < 0 && !target.binary && !target.id[0] && target.next_seq == 1u);
             assert(target.log_fd == log_fd && target.lock_fd == (variant == 4u ? log_fd : lock_fd));

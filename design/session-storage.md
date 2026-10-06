@@ -1773,12 +1773,14 @@ the enclosing complete snapshot consumer owns membership, lifecycle, immutable
 journal identity and atomic core/provider adoption. Provider-view snapshots and
 native process collection cursors remain separate dependencies.
 
-The version4 core in `store_binary_checkpoint_core.c` joins nine components in
+The version5 core in `store_binary_checkpoint_core.c` joins ten components in
 fixed order: controls, accounting, fixed texts, pending calls, processes, pending
-inputs, dynamic payloads, the IRC directory and derived IRC activity. Its100-byte
+inputs, dynamic payloads, the IRC directory, derived IRC activity and a blocked
+goal's wait-channel reference. Its108-byte
 header contains LEu16 version4, LEu16 component count9, LEu64 active-compaction accepting sequence,
 LEu64 retained-response accepting sequence, LEu64 voice-adoption sequence (zero
-when absent), then nine LEu64 component sizes. Version3's92-byte, eight-component
+when absent), then ten LEu64 component sizes. Version4's100-byte, nine-component
+layout omits the goal-wait reference. Version3's92-byte, eight-component
 header remains readable with an absent activity field; version2's84-byte,
 seven-component header additionally lacks the directory. Earlier draft versions
 fail explicitly; the application has not published native checkpoints.
@@ -1794,7 +1796,19 @@ canonical routed records. Missing activity in older cores remains NULL rather
 than synthesizing lifetime counts. Subsequent live reduction uses its ordinary
 missing-activity watermark rule. The prefix oracle encodes the captured state
 in the frame's declared supported layout before comparing canonical bytes;
-normal publication always uses version4.
+normal publication always uses version5.
+
+The goal-wait block is one LEu64 accepting sequence, zero when no explicit
+channel is retained. A nonzero reference must equal the existing goal-blocker
+declaration and resolve to its canonical model-owned blocking event. Operator
+replacement retains the blocker and channel across goal IDs. The blocking
+record supplies the channel under the live wait-channel validator;
+the checkpoint stores no copy of its text. Kind73, `goal_blocked_wait_for`,
+version1 retains the kind69 goal UUID, model actor and reason layout, then adds
+the length-delimited wait channel. Legacy projection uses `goal_blocked` for both.
+Kind69's bytes remain unchanged. Older blockers without a channel retain the
+unspecified wait. A wait-bearing source requires the reference, so omitting the
+new block or selecting an earlier core layout cannot silently discard the wait.
 
 The IRC block starts with presence1 and connection-count8. An absent directory
 has zero count and no rows. Each connection stores UUID16, generation8,

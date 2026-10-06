@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Preserve explicit blocked-goal wait channels in native records and checkpoint
+  references. Older blockers without a channel keep their unspecified wait;
+  earlier checkpoint layouts remain readable for the state they can represent.
+
 - Preserve derived IRC activity in typed native checkpoint metadata. Older core
   layouts retain an explicit missing-activity state. Native routed records accept
   connection-scoped notices under the live validator's rules.

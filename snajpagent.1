@@ -5653,6 +5653,8 @@ membership and captured reply targets through canonical event references.
 Current checkpoints also retain derived conversation activity. Older checkpoint
 layouts leave these counts unavailable until new routed activity establishes a
 recorded range.
+Blocked-goal recovery retains the declared wait channel through the canonical
+blocking event. Older blockers without a channel retain an unspecified wait.
 Keep them with the journal when backing up a native session.
 .TP
 .I $HOME/.snajpagent/sessions/SESSION/history.idx
