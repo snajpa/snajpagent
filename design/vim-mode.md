@@ -34,6 +34,10 @@ and focus reports across fragmented reads. Bracketed paste is a literal stream
 with explicit edit boundaries; lone Escape resolves through a timer without
 waiting for another key. Oversized or unsupported control sequences are consumed
 as unsupported input, and malformed ordinary UTF-8 is visibly replaced.
+Rendering, wrapping and byte/cell navigation now share one source-unit policy,
+including whole graphemes, inert controls, tab stops and ambiguous widths.
+Wrapped rows retain logical tab columns and complete source anchors, including
+units clipped by a one-cell viewport.
 The workspace interface, semantic attachment
 and IRC conversation work below remain to be implemented.
 

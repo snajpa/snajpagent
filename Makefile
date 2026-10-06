@@ -94,9 +94,9 @@ COMMON_SRC += src/upload_wire.c src/upload_md5.c src/screen_wire.c src/upload.c 
 COMMON_SRC += src/app_resume.c
 ifeq ($(WITH_VM),1)
 COMMON_SRC += src/vm_reader.c src/vm_grid.c src/unicode.c src/vm_workspace.c src/vm_layout.c
-COMMON_SRC += src/vm_input.c
+COMMON_SRC += src/vm_input.c src/vm_text.c
 VM_TEST_BIN = tests/test_vm_reader tests/test_vm_grid tests/test_unicode tests/test_vm_workspace tests/test_vm_layout
-VM_TEST_BIN += tests/test_vm_input
+VM_TEST_BIN += tests/test_vm_input tests/test_vm_text
 endif
 COMMON_OBJ = $(COMMON_SRC:.c=.o) $(PDF_OBJ) $(AUDIO_DEVICE_OBJ)
 HEADERS = src/tmux.h src/session_host.h src/session_relay.h src/session_client.h src/snajpagent.h src/base.h src/fs.h src/term_host.h src/wake.h src/net.h src/config.h src/secret_source.h src/credential.h src/auth.h src/login.h src/secret.h src/instructions.h src/json.h src/snag_jansson.h src/snag_jansson_abi.h src/wire.h src/context.h src/provider_retry.h src/http.h src/update.h src/provider.h src/model_cache.h src/tools.h src/process_host.h src/tools_patch.h src/irc.h src/irc_internal.h src/sse.h src/responses.h src/turn.h src/store.h src/store_internal.h src/store_record.h src/term.h src/render.h src/cli.h src/app.h src/app_internal.h src/ui.h src/history.h src/history_view.h src/vm_reader.h src/vm_grid.h src/unicode.h src/unicode_tables.inc src/base64.h src/convert.h src/media.h src/rules.h src/tools_write.h src/tools_file.h
@@ -105,6 +105,7 @@ HEADERS += src/upload_wire.h src/upload_md5.h src/upload.h src/screen_wire.h src
 HEADERS += src/vm_workspace.h
 HEADERS += src/vm_layout.h
 HEADERS += src/vm_input.h
+HEADERS += src/vm_text.h
 FIXTURE_BIN = tests/$(NAME)-fixture
 TEST_BIN = tests/snajpagent-transport tests/test_base tests/test_config tests/test_irc tests/test_instructions tests/test_credential tests/test_sse tests/test_json tests/test_store_record $(VM_TEST_BIN) tests/test_rules tests/test_wire tests/test_responses tests/test_provider_retry tests/test_provider_transport tests/test_context tests/test_model_cache tests/test_render tests/test_turn tests/test_tools tests/test_store tests/test_write tests/test_upload_wire $(FIXTURE_BIN)
 BUILD_INPUTS = build/.build-inputs
@@ -234,7 +235,9 @@ tests/test_tools: $(PLATFORM_SRC) src/json.c src/wire.c src/credential.c src/sec
 
 tests/test_store: $(PLATFORM_SRC) src/json.c src/instructions.c src/media.c src/turn.c src/store.c src/store_record.c src/store_checkpoint.c src/irc_event.c src/store_lookup.c src/store_lifecycle.c src/store_binary.c src/store_binary_event.c tests/test_store.c tests/test_store_binary.c tests/test_store_binary_event.c src/store_binary.h src/store_binary_event.h $(HEADERS)
 
-tests/test_vm_grid: $(PLATFORM_SRC) src/json.c src/vm_grid.c src/unicode.c tests/test_vm_grid.c $(HEADERS)
+tests/test_vm_grid: $(PLATFORM_SRC) src/json.c src/vm_grid.c src/vm_text.c src/unicode.c tests/test_vm_grid.c $(HEADERS)
+
+tests/test_vm_text: $(PLATFORM_SRC) src/json.c src/vm_grid.c src/vm_text.c src/unicode.c tests/test_vm_text.c $(HEADERS)
 
 tests/test_vm_layout: $(PLATFORM_SRC) src/json.c src/vm_layout.c tests/test_vm_layout.c $(HEADERS)
 
@@ -285,6 +288,7 @@ ifeq ($(WITH_VM),1)
 	./tests/test_vm_workspace
 	./tests/test_vm_layout
 	./tests/test_vm_input
+	./tests/test_vm_text
 endif
 	./tests/test_rules
 	./tests/test_wire

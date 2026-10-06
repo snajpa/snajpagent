@@ -35,6 +35,9 @@ void snag_vm_grid_begin(struct snag_vm_grid *);
  * Tabs use four-cell stops. Combining marks stay with their base cell. */
 int snag_vm_grid_text(struct snag_vm_grid *, size_t row, size_t column, size_t width,
     const char *, size_t length, unsigned int style);
+/* Keep the logical tab column when drawing a wrapped continuation. */
+int snag_vm_grid_text_column(struct snag_vm_grid *, size_t row, size_t column, size_t width,
+    const char *, size_t length, unsigned int style, size_t logical_column);
 /* A failed emit invalidates the physical frame; the next flush repaints fully.
  * An unchanged frame and cursor emit nothing. Cursor coordinates are zero-based. */
 int snag_vm_grid_flush(struct snag_vm_grid *, size_t cursor_row, size_t cursor_column,

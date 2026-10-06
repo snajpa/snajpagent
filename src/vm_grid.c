@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "vm_grid.h"
-#include "unicode.h"
+#include "vm_text.h"
 
 #include <errno.h>
 #include <stdio.h>
@@ -77,71 +77,62 @@ put_cell(struct snag_vm_grid *grid, size_t row, size_t column, const char *text,
     return 0;
 }
 
-static bool
-unsafe_format(uint32_t cp)
+int
+snag_vm_grid_text_column(struct snag_vm_grid *grid, size_t row, size_t column, size_t width,
+    const char *text, size_t length, unsigned int style, size_t logical_column)
 {
-    return cp == 0x00adu || cp == 0x061cu || cp == 0x200bu || cp == 0x200eu || cp == 0x200fu ||
-        (cp >= 0x202au && cp <= 0x202eu) || cp == 0x2060u ||
-        (cp >= 0x2066u && cp <= 0x206fu) || cp == 0xfeffu || (cp >= 0xfff9u && cp <= 0xfffbu);
+    if (!grid->back.cells || (!text && length) || style & ~15u) return snag_errno(EINVAL);
+    if (row >= grid->rows || column >= grid->columns) return 0;
+    if (width > grid->columns - column) width = grid->columns - column;
+    size_t end = column + width, position = 0u;
+    while (position < length && column < end) {
+        struct snag_vm_glyph glyph = snag_vm_glyph(text + position, length - position,
+            logical_column, grid->ambiguous_wide);
+        if (glyph.newline) break;
+        if (logical_column > SIZE_MAX - glyph.columns) return snag_errno(EOVERFLOW);
+        logical_column += glyph.columns;
+        if (glyph.tab) {
+            size_t spaces = glyph.columns;
+            while (spaces-- && column < end) {
+                if (put_cell(grid, row, column++, " ", 1u, 1u, style) < 0) return -1;
+            }
+            position += glyph.bytes;
+            continue;
+        }
+        if (glyph.escaped[0]) {
+            for (unsigned int i = 0u; i < glyph.columns && column < end; ++i) {
+                if (put_cell(grid, row, column++, glyph.escaped + i, 1u, 1u, style) < 0) return -1;
+            }
+            position += glyph.bytes;
+            continue;
+        }
+        if (glyph.base) {
+            /* A standalone combining mark needs a visible base at this boundary. */
+            struct snag_buf marked = {.max = SIZE_MAX};
+            int rc = snag_buf_putc(&marked, ' ');
+            if (!rc) rc = snag_buf_append(&marked, text + position, glyph.bytes);
+            if (!rc) rc = put_cell(grid, row, column++, (char *)marked.data,
+                marked.len, 1u, style);
+            snag_buf_free(&marked);
+            if (rc < 0) return -1;
+            position += glyph.bytes;
+            continue;
+        }
+        if (glyph.columns > end - column) break;
+        if (put_cell(grid, row, column, text + position, glyph.bytes, glyph.columns, style) < 0) {
+            return -1;
+        }
+        position += glyph.bytes;
+        column += glyph.columns;
+    }
+    return 0;
 }
 
 int
 snag_vm_grid_text(struct snag_vm_grid *grid, size_t row, size_t column, size_t width,
     const char *text, size_t length, unsigned int style)
 {
-    if (!grid->back.cells || (!text && length) || style & ~15u) return snag_errno(EINVAL);
-    if (row >= grid->rows || column >= grid->columns) return 0;
-    if (width > grid->columns - column) width = grid->columns - column;
-    size_t end = column + width, position = 0u, start = column;
-    while (position < length && column < end) {
-        uint32_t cp;
-        size_t bytes = snag_utf8_decode((const unsigned char *)text + position,
-            length - position, &cp);
-        if (!bytes) cp = (unsigned char)text[position];
-        if (cp == '\n') break;
-        if (cp == '\t') {
-            size_t spaces = 4u - ((column - start) % 4u);
-            while (spaces-- && column < end) {
-                if (put_cell(grid, row, column++, " ", 1u, 1u, style) < 0) return -1;
-            }
-            ++position;
-            continue;
-        }
-        size_t cluster = bytes ? snag_grapheme_next((const unsigned char *)text + position,
-            length - position) : 0u;
-        int cells = cluster ? snag_grapheme_width((const unsigned char *)text + position,
-            cluster, grid->ambiguous_wide) : -1;
-        if (!bytes || cp < 0x20u || (cp >= 0x7fu && cp <= 0x9fu) ||
-            unsafe_format(cp) || cells < 0) {
-            char escaped[16];
-            int count = snprintf(escaped, sizeof(escaped), cp <= 0xffu ? "\\x%02X" : "\\u{%X}",
-                (unsigned int)cp);
-            for (int i = 0; i < count && column < end; ++i) {
-                if (put_cell(grid, row, column++, escaped + i, 1u, 1u, style) < 0) return -1;
-            }
-            position += bytes ? bytes : 1u;
-            continue;
-        }
-        if (!cells) {
-            /* A standalone combining mark needs a visible base at this boundary. */
-            struct snag_buf marked = {.max = SIZE_MAX};
-            int rc = snag_buf_putc(&marked, ' ');
-            if (!rc) rc = snag_buf_append(&marked, text + position, cluster);
-            if (!rc) rc = put_cell(grid, row, column++, (char *)marked.data,
-                marked.len, 1u, style);
-            snag_buf_free(&marked);
-            if (rc < 0) return -1;
-            position += cluster;
-            continue;
-        }
-        if ((size_t)cells > end - column) break;
-        if (put_cell(grid, row, column, text + position, cluster, (unsigned int)cells, style) < 0) {
-            return -1;
-        }
-        position += cluster;
-        column += (size_t)cells;
-    }
-    return 0;
+    return snag_vm_grid_text_column(grid, row, column, width, text, length, style, 0u);
 }
 
 static bool
