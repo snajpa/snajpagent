@@ -4672,7 +4672,25 @@ snag_session_commit(struct snag_session *session, const char *type, json_t *data
                    uint64_t *written_seq, char *error, size_t error_size)
 {
     if (session->binary) {
+        struct snag_binary_session *binary = session->binary;
+        bool maintenance = type && data && binary->checkpoint_configured &&
+            strcmp(type, "session_checkpoint") && !session_closure_event(type);
+        if (maintenance && (!binary->candidate || binary->receipt_candidate) &&
+            session->next_seq - 1u - session->checkpoint_seq >= 128u &&
+            snag_session_checkpoint(session, error, error_size) < 0) {
+            json_decref(data);
+            return -1;
+        }
         int rc = commit_binary_session(session, type, data, written_seq, error, error_size);
+        if (!rc && maintenance &&
+            session->next_seq - 1u - session->checkpoint_seq >= 128u) {
+            int64_t start = session->committed_start;
+            int64_t end = session->committed_end;
+            char ignored[128];
+            (void)snag_session_checkpoint(session, ignored, sizeof(ignored));
+            session->committed_start = start;
+            session->committed_end = end;
+        }
         json_decref(data);
         return rc;
     }

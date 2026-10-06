@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Apply the established automatic checkpoint cadence to configured native
+  sessions while preserving closure-event exclusions and retained transaction
+  retry ordering.
+
 - Publish checkpoints for explicitly bound native sessions through their existing
   I/O owner, staging canonical receipt adoption and moving usable access custody
   only after durable ACK while retaining exact publication/receipt retries.

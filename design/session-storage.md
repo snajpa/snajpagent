@@ -2916,6 +2916,14 @@ custody without allocation or I/O. Optional receipt metadata has no semantic
 provider/observer callback. Checkpoint cadence markers remain transient session
 bookkeeping rather than new native core fields.
 
+Configured native commits attempt checkpoint maintenance after the established
+128-record interval and before further admission when maintenance failed. A
+successful semantic ACK retains its success and committed byte range across the
+maintenance attempt. Closure events retain the existing exclusion. Retained
+semantic transactions reach their original ACK/retry path; retained checkpoint
+receipts finish through checkpoint retry before ordinary admission. Fixture
+bindings acquire checkpoint custody explicitly through the existing setup API.
+
 Close drains owned publication or journal work before descriptor/lock teardown
 while releasing no abandoned candidate effects. It preserves provisional files
 and already-canonical receipts for recovery. Ordinary native creation/open/resume

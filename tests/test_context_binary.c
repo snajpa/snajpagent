@@ -2067,6 +2067,47 @@ live_snapshot_capture(void)
     }
     struct snag_binary_checkpoint_index frozen;
     const struct snag_binary_io_access *selection = snapshot.selection;
+    uint64_t cadence = state.checkpoint_seq;
+    for (unsigned int i = 0u; i < 127u; ++i) {
+        uint64_t before_sequence = state.next_seq;
+        assert(!snag_session_commit(&state, "banner_updated", json_pack("{s:s}",
+            "text", "cadence"), NULL, error, sizeof(error)));
+        assert(state.next_seq == before_sequence + 1u && state.checkpoint_seq == cadence);
+    }
+    uint64_t before_maintenance = state.next_seq;
+    int64_t before_maintenance_end = state.log_end;
+    assert(!snag_session_commit(&state, "banner_updated", json_pack("{s:s}",
+        "text", "after cadence"), NULL, error, sizeof(error)));
+    assert(state.next_seq == before_maintenance + 2u &&
+        state.checkpoint_seq == before_maintenance + 1u &&
+        state.committed_start == before_maintenance_end && state.committed_end < state.log_end);
+    cadence = state.checkpoint_seq;
+    for (unsigned int i = 0u; i < 127u; ++i) {
+        assert(!snag_session_commit(&state, "banner_updated", json_pack("{s:s}",
+            "text", "failure cadence"), NULL, error, sizeof(error)));
+        assert(state.checkpoint_seq == cadence);
+    }
+    probe.directory_failures = 1u;
+    before_maintenance = state.next_seq;
+    before_maintenance_end = state.log_end;
+    uint64_t written = 0u;
+    assert(!snag_session_commit(&state, "banner_updated", json_pack("{s:s}",
+        "text", "committed despite maintenance failure"), &written, error, sizeof(error)));
+    assert(written == before_maintenance && state.next_seq == before_maintenance + 1u &&
+        state.checkpoint_seq == cadence && state.committed_start == before_maintenance_end &&
+        state.committed_end == state.log_end);
+    int64_t committed_end = state.committed_end;
+    before_maintenance = state.next_seq;
+    probe.journal_failures = 1u;
+    assert(snag_session_commit(&state, "banner_updated", json_pack("{s:s}",
+        "text", "wait for receipt"), NULL, error, sizeof(error)) < 0 && errno == EIO);
+    assert(state.next_seq == before_maintenance && state.checkpoint_seq == cadence &&
+        state.committed_start == before_maintenance_end && state.committed_end == committed_end);
+    assert(!snag_session_commit(&state, "banner_updated", json_pack("{s:s}",
+        "text", "after retried receipt"), &written, error, sizeof(error)));
+    assert(written == before_maintenance + 1u && state.next_seq == before_maintenance + 2u &&
+        state.checkpoint_seq == before_maintenance && state.committed_start > committed_end &&
+        state.committed_end == state.log_end);
     assert(!snag_binary_checkpoint_index_decode(selection->available.data,
         selection->available.len, &identity, &selection->available_boundary,
         selection->available_root, &frozen));
