@@ -2526,6 +2526,18 @@ test_replay_checkpoint(void)
     for (unsigned int i = 0u; i < 2u; ++i) {
         ++event.sequence;
         strcpy(event.text, i ? "second" : "first");
+        if (i) {
+            event.routed = true;
+            event.route.kind = SNAG_IRC_CHANNEL;
+            event.route.identity = SNAG_IRC_AGENT;
+            event.route.generation = 1u;
+            strcpy(event.route.connection, "11111111111111111111111111111111");
+            strcpy(event.route.conversation, "22222222222222222222222222222222");
+            strcpy(event.route.membership, "33333333333333333333333333333333");
+            strcpy(event.route.target, "#lab");
+            event.route.joined = event.route.rejoin = true;
+            event.route.action = true;
+        }
         assert(snag_irc_core_restore_event(source, &event) == 0);
     }
 

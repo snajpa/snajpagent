@@ -202,8 +202,9 @@ Enter directs your local agent; in operator chat, Enter sends to its selected
 room or peer. Open a private tab with `/query nick`; `/msg nick text` and
 `/notice nick text` send without changing focus. `/me text` sends an action in
 the selected operator conversation. Use `endpoint/nick` or `endpoint/#channel`
-when choosing among connections. `/join endpoint/#channel` joins an external
-channel as the operator; `/chat endpoint/#channel` opens its history and composer.
+when choosing among connections. `/join endpoint/#channel` joins a channel as
+the operator; `/chat endpoint/#channel` opens its history and composer. The
+built-in server offers its configured room through the same commands.
 Agent private chats are read-only. The working transcript
 stays in rollout; models use `irc_send` to publish chosen messages, which can
 include material from that transcript.

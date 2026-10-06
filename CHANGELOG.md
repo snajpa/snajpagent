@@ -4,6 +4,11 @@
 
 ## Unreleased
 
+- Expose the built-in IRC room through channel tabs, Vim panes and scoped
+  operator/model commands. Preserve drafts, private isolation and exact
+  membership across PART/rejoin; resume retains join intent. Keep hosted public
+  actions in history and read both routed and legacy IRC checkpoint entries.
+
 - Add operator channel conversations to classic tabs and Vim panes. /join, /part,
   /chat, /names, /topic, /msg, /notice and /me preserve exact operator membership.
   Channel and DM drafts remain separate through Tab/Shift-Tab and workspace resume.
@@ -37,7 +42,7 @@
   in model context. Pending, failed, uncertain and agent sends stay outside input;
   NOTICE receipts add context without starting a reply. External writes without
   receipts remain explicitly unconfirmed; native catch-up supplies its public
-  event. Hosted channel frontend integration remains in progress.
+  event. Hosted channel sends use their canonical public event for admission.
 
 - Correlate IRC query and channel sends through negotiated labeled responses,
   including nested/interleaved batches, ACKs, errors, NOTICE and actions. Keep

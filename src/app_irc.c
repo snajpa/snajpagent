@@ -397,11 +397,13 @@ snag_app_irc_command(struct app_state *app, const char *line, bool *handled)
         memcpy(channel.conversation, target.conversation, sizeof(channel.conversation));
         memcpy(channel.membership, target.membership, sizeof(channel.membership));
         memcpy(channel.room, target.room, sizeof(channel.room));
+        bool inspect = names || (topic && !*text);
         if (snag_irc_channel_action(app->irc, &channel, part ? SNAG_IRC_CHANNEL_PART :
             names ? SNAG_IRC_CHANNEL_NAMES : SNAG_IRC_CHANNEL_TOPIC,
-            *text ? text : NULL, names ? &report : NULL, error, sizeof(error)) < 0) goto rejected;
-        if (names) {
-            if (snag_buf_printf(&report, "Cached state; NAMES refresh requested.\n") < 0 ||
+            *text ? text : NULL, inspect ? &report : NULL, error, sizeof(error)) < 0) goto rejected;
+        if (inspect) {
+            if (snag_buf_printf(&report, "Cached state; %s refresh requested.\n",
+                names ? "NAMES" : "TOPIC") < 0 ||
                 snag_buf_terminate(&report) < 0) {
                 rc = -1;
                 goto done;

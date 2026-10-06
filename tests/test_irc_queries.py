@@ -45,7 +45,7 @@ class QueryFixture(unittest.TestCase):
         self.submit('prime')
         self.peer = self.connect('query-peer')
         self.observer = self.connect('observer')
-        self.wait(lambda: any(e['type'] == 'irc_event' and
+        self.wait(lambda: any(e['type'] in ('irc_event', 'irc_event_v2') and
                   e['data'].get('nick') == 'observer' for e in self.events()))
         self.wait_idle()
 
@@ -196,7 +196,8 @@ class QueryFixture(unittest.TestCase):
     def assert_private(self, marker):
         self.observer.drain(.1)
         self.assertNotIn(marker.encode(), self.observer.buf)
-        public = [e for e in self.events() if e['type'] == 'irc_event']
+        public = [e for e in self.events() if e['type'] == 'irc_event' or
+                  e['data'].get('routing', {}).get('conversation_kind') == 'channel']
         self.assertNotIn(marker, json.dumps(public))
 
     def resume_at(self, sequence):

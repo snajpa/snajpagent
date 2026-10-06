@@ -2086,7 +2086,8 @@ requesting window while it is still focused, displaying that composer, and its
 next draft is empty. Otherwise the conversation remains available in :buffers.
 Private replies go to the captured peer without adding model input.
 Use /chat ENDPOINT/#CHANNEL for a known channel or /join ENDPOINT/#CHANNEL
-to join an external channel as the operator. Each pane keeps its exact channel
+to join a channel as the operator. The built-in server offers its configured
+room. Each pane keeps its exact channel
 membership; PART, KICK and reconnect reject stale sends. Use /chat or /join
 explicitly to select the current membership before composing a new send.
 .PP
@@ -3190,30 +3191,35 @@ Send a CTCP action to the selected operator channel or query. Agent conversation
 are read-only. /N and /all send ordinary messages to endpoint default rooms.
 .TP
 .BR /join " " address
-Join an external channel as the operator and select its conversation. Uses /chat
+Join a channel as the operator and select its conversation. Uses /chat
 addressing. The server must confirm membership before messages can be sent.
-The agent keeps its own memberships. Hosted channel actions remain under development.
+The built-in server accepts only its configured room and confirms local joins
+immediately. The agent keeps its own memberships.
 .TP
 .BR /part " [" address " [" reason "]]"
 Leave the selected or addressed operator channel. Queuing PART immediately
 invalidates the old membership; a rejected stale send retains its draft. Rejoin
-explicitly with /join after the server confirms PART. Closing a tab or pane
-never leaves a channel.
+explicitly with /join after the server confirms PART. The built-in server
+confirms local PART immediately and keeps its listener and agent running.
+A resumed session preserves the operator's choice to leave. Closing a tab or
+pane never leaves a channel.
 .TP
 .BR /topic " [" text "]"
-In an external channel conversation, request its current topic or queue a topic
-change using the captured membership. A private query reports the channel scope
-requirement. From rollout or legacy hosted chat, show the IRC snapshot or change
+In a channel conversation, show its cached topic and request a refresh, or
+change the topic using the captured membership. The built-in server returns
+its current state immediately. A private query reports the channel scope
+requirement. From rollout, show the IRC snapshot or change
 the endpoint default room topic. Live room
 policy decides authorization: mode +t requires the local operator to have op
 status; without +t any joined member may change it. Hosted topics accept at most
 280 bytes. External topics must fit the server's line budget. Newlines are rejected.
 .TP
 .B /names
-In an external channel conversation, show its cached topic/member state and
-request a NAMES refresh. Repeating /names displays the refreshed cache. Private
-queries report the channel scope requirement. From rollout or legacy hosted
-chat, show numbered destinations, selection, endpoints, members and operator flags.
+In a channel conversation, show its cached topic/member state and request a
+NAMES refresh. Repeating /names displays the refreshed cache. The built-in
+server returns its current members immediately. Private queries report the
+channel scope requirement. From rollout, show numbered destinations, selection,
+endpoints, members and operator flags.
 .TP
 .BR /N " [" text "]"
 Select numbered destination N.  With text, send there once without changing

@@ -2,6 +2,7 @@
 """Conversation panes share one owner and preserve private drafts and history."""
 
 import json
+import re
 import time
 import unittest
 
@@ -41,7 +42,8 @@ class QueryWorkspaceTests(QueryFixture):
 
     def buffers(self):
         return {b['route']['peer'] if isinstance(b['route'], dict) else 'rollout': b
-                for owner in self.state()['buffers'] for b in owner['buffers']}
+                for owner in self.state()['buffers'] for b in owner['buffers']
+                if not isinstance(b['route'], dict) or 'peer' in b['route']}
 
     def query(self, peer):
         self.child.write(b'i/query ' + peer.encode() + b'\r')
@@ -90,8 +92,10 @@ class QueryWorkspaceTests(QueryFixture):
         self.direct('querybot', 'agent chat body', notice=True)
         child = self.child
         child.command('buffers')
-        child.repaint_until(b'[agent]')
-        child.write(b'/agent\r\r')
+        child.repaint_until(b'/query-peer [agent]')
+        agent_id = re.search(rb'([0-9a-f]{8}) [^\x1b\r\n]*query-peer \[agent\]',
+                             child.output)[1]
+        child.write(b'/' + agent_id + b'\r\r')
         child.repaint_until(b'[agent read-only]')
         child.repaint_until(b'agent chat body')
         self.assertNotIn(b'operator chat body', child.output)
@@ -99,7 +103,7 @@ class QueryWorkspaceTests(QueryFixture):
         self.normal()
         child.command('workspace save')
         self.wait_snapshot(lambda rows: rows and self.state()['buffers'] and
-                           len(self.state()['buffers'][0]['buffers']) == 3)
+                           len(self.state()['buffers'][0]['buffers']) == 5)
         self.assertTrue(all(not b['draft'] and not b['pending']
                             for b in self.state()['buffers'][0]['buffers']))
         child.command('bn')
@@ -126,7 +130,7 @@ class QueryWorkspaceTests(QueryFixture):
         child.command('workspace save')
         self.wait_snapshot(lambda rows: rows and self.state()['buffers'] and
                            self.buffers().get('query-peer', {}).get('draft') == 'shared text')
-        self.assertEqual(len(self.state()['buffers'][0]['buffers']), 2)
+        self.assertEqual(len(self.state()['buffers'][0]['buffers']), 4)
         child.command('close')
         child.finish('close')
 

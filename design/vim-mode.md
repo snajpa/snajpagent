@@ -21,7 +21,9 @@ server acknowledgement. Durable local channel state retains rejoin intent and
 conversation IDs across session resume, with fresh generation/membership tokens.
 These lifecycle records stay outside model admission and channel replay. Legacy
 channel records remain readable. External operator channels now use the common CLI and VM frontend described below.
-Hosted room actions remain in progress.
+The built-in server exposes its configured room through the same selectors.
+Local PART/rejoin rotates membership and preserves the other identity; resume
+retains each role's join intent. Other channel names are rejected.
 
 Model channel checkpoint: irc_state lists agent channel IDs and joined status;
 irc_send/irc_topic accept exact IDs and session/endpoint/#room addresses.
@@ -52,7 +54,10 @@ unwritten frames and marks started sends uncertain. Public unlabeled echo order
 remains insufficient to confirm a channel send. These outgoing records remain
 outside public replay. A successful operator receipt admits its final message
 once; failed, uncertain and agent receipts stay outside model input.
-Hosted channel sends remain in progress.
+Hosted sends publish one canonical public event after durable acceptance and
+record a separate outgoing receipt. The canonical copy supplies model input; the
+receipt does not add it twice. Hosted public history carries channel routes and
+actions, and checkpoint readers accept both legacy and routed public entries.
 
 Receipt bodies retain the server's final text/action and optional source ID.
 The optional v2 routing flag revised marks a correction to the local pending body;
@@ -906,7 +911,7 @@ The compact query catalogue excludes bodies, and incoming metadata stays current
 while the semantic controller is attached. Vim now provides per-conversation
 composers, reader filters and origin-window selection. External receive state
 tracks multiple joined channels. Operator channel routes and agent-only channel
-admission are implemented; hosted actions remain unfinished. The nickname mapping
+admission and hosted-room actions are implemented. The nickname mapping
 helper follows the
 [IRC CASEMAPPING definitions](https://modern.ircdocs.horse/#casemapping-parameter).
 
