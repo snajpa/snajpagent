@@ -19,6 +19,10 @@ The grid composes UTF-8 graphemes into a back frame and publishes differences
 only after successful output. Unicode 17 tables supply shared cluster boundaries
 and width policy; all 766 official grapheme-boundary cases pass locally.
 The build switch `WITH_VM=0` omits these optional workspace objects.
+Private workspace storage now supports atomic snapshots, unique names and ID
+prefixes, exclusive ownership and open-first activity ordering. Probes preserve
+existing locks; a lost frontend leaves a resumable snapshot. The frontend still
+needs to define and validate its layout/draft payload and expose the commands.
 The workspace interface, semantic attachment
 and IRC conversation work below remain to be implemented.
 
