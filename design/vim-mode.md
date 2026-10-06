@@ -589,8 +589,15 @@ the operator identity. Operator input never impersonates the agent nick.
 
 These IRC commands belong to the common application/IRC layer and work in the
 classic interface too. VM supplies the per-window buffer and draft. The classic
-interface supplies a single selected conversation. A compile-out build retains
-functional direct messaging without VM.
+interface includes opened queries in its Tab destination cycle, alongside the
+rollout and channel destinations. Each conversation keeps its own draft and
+unread count. Incoming activity marks its tab without changing focus. A
+compile-out build retains functional direct messaging and query tabs without VM.
+
+In VM, conversations are buffers displayed in windows (split panes). A window
+keeps its selected conversation when another window opens or changes a query.
+The buffer picker includes open queries and their unread counts; each window's
+composer remains pinned to its displayed conversation.
 
 | Command | Behavior |
 | --- | --- |
@@ -742,14 +749,26 @@ unknown mappings use exact spelling. Query history, actions and source message
 IDs retain their provenance. Private records bypass channel replay/cursors, and
 hosted local-participant echoes wait for the engine's durable callback.
 
+The runtime now opens queries without sending and validates frozen send handles
+against connection ID, generation, identity, conversation and peer. Private frame
+queues retain per-chunk send IDs and delivery outcomes under the existing pending
+memory budget. A chunk's pending record is admitted before its bytes can leave.
+Hosted local delivery and native ordered PRIVMSG echoes yield acknowledgements;
+external unlabeled writes remain unconfirmed. Standard labeled-response support
+is still pending. A nickname discontinuity or disconnect cancels unsent chunks,
+retains uncertainty for started writes and never replays the private queue.
+Endpoint removal finishes those outcomes before stopping its owner. UTF-8 chunks
+respect the negotiated line budget, including action and recipient overhead.
+
 Wire fixtures cover both local identities, third-party privacy, failed admission,
 resume generations, nickname reuse, UTF-8 chunks, external registration without
-a room, multiline capability negotiation and capability rejection. Application
-startup still leaves this session binding uninitialized. Next: frozen query
-send routes/receipts, typed application writing/restoration and private reply
-provenance, then common commands/tools and VM connection/channel/query buffers.
-Outgoing private replay/correlation and external multi-channel state remain
-unfinished; the receiver checkpoint does not enable application direct messaging.
+a room, multiline capability negotiation, native receipts and explicit removal.
+Deterministic partial-write fixtures exercise interleaved protocol replies,
+unsent cancellation and socket closure when a recipient changes mid-frame.
+Application startup still leaves this session binding uninitialized. Next:
+typed application writing/restoration and private reply provenance, then common
+commands/tools, classic query tabs and VM connection/channel/query buffers.
+External multi-channel state also remains unfinished.
 
 This expands the original UI-only storage scope. Implement compatible readers,
 checkpoint projection and context filters first. Direct-message-capable writers

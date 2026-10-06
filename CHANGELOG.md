@@ -4,6 +4,13 @@
 
 ## Unreleased
 
+- Add owner-validated private IRC send handles and separate frame queues, with
+  durable chunk IDs and pending/written/acknowledged/failed/uncertain outcomes.
+  Respect external line budgets and UTF-8 boundaries; cancel stale recipients
+  and retain uncertainty across disconnection without replaying private sends.
+  Native server echoes correlate in wire order. External unlabeled writes remain
+  unconfirmed. Application query commands and conversation tabs are in progress.
+
 - Relay private messages between registered IRC peers, with negotiated sender
   echoes, silent NOTICE failures and private-body exclusion from channel replay
   and raw traces. Add session-bound operator/agent query receive paths, verified

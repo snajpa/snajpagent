@@ -19,6 +19,11 @@ struct irc_request {
     uint64_t revision;
     const char *text;
     const struct snag_irc_event *event;
+    struct snag_irc_query_target *query_open;
+    const struct snag_irc_query_target *query_send;
+    struct snag_buf *report;
+    bool action;
+    bool retire;
     int result, saved_errno;
     char error[256u];
     bool done;
@@ -190,6 +195,12 @@ execute(struct irc_owner *owner, struct irc_request *request)
     if (request->revision && request->revision != owner->sent.revision)
         return snag_fail(error, size, ESTALE, "destination room changed; not performed");
     if (request->event) return snag_irc_core_restore_event(core, request->event);
+    if (request->retire) return snag_irc_core_retire(core);
+    if (request->query_open) return snag_irc_core_query_open(core,
+        request->model ? SNAG_IRC_AGENT : SNAG_IRC_OPERATOR, request->text,
+        request->query_open, error, size);
+    if (request->query_send) return snag_irc_core_query_send(core, request->query_send,
+        request->kind, request->text, request->action, request->report, error, size);
     return snag_irc_core_send(core, request->model, request->kind, request->text, error, size);
 }
 
@@ -226,6 +237,7 @@ run_owner(void *opaque)
             request->saved_errno = errno;
             rc = refresh_view(owner);
             pthread_mutex_lock(&irc->mutex);
+            if (request->retire) owner->stopping = true;
             request->done = true;
             request->through = irc->published;
             snag_wakeup_send(irc->wake[1]);
@@ -520,6 +532,11 @@ snag_irc_remove(struct snag_irc *irc, bool hosting, const char *endpoint, char *
             break;
         }
     if (!owner) return 0;
+    if (irc->conversations_bound) {
+        struct irc_request request = {.retire = true};
+        if (start_owners(irc) < 0 || request_owner(owner, &request) < 0)
+            return snag_errorf(error, error_size, "cannot finish private sends before removal");
+    }
     pthread_mutex_lock(&irc->mutex);
     owner->stopping = true;
     pthread_cond_broadcast(&irc->changed);
@@ -857,6 +874,49 @@ snag_irc_send_route(struct snag_irc *irc, const struct snag_irc_route *route,
         if (irc && irc->failure) return -1;
     }
     return failed ? (accepted ? 2 : 1) : 0;
+}
+
+int
+snag_irc_query_open(struct snag_irc *irc, uint32_t destination, enum snag_irc_identity identity,
+                    const char *peer, struct snag_irc_query_target *target,
+                    char *error, size_t error_size)
+{
+    if (!irc || !target || !peer || (unsigned int)identity > SNAG_IRC_AGENT)
+        return snag_errno(EINVAL);
+    if (!irc->conversations_bound)
+        return snag_fail(error, error_size, ENOTSUP, "session query support is unavailable");
+    if (start_owners(irc) < 0) return -1;
+    for (size_t i = 0u; i < irc->owner_count; ++i) {
+        struct irc_owner *owner = irc->owners[i];
+        if (owner->target.id != destination) continue;
+        struct irc_request request = {.query_open = target, .text = peer,
+            .model = identity == SNAG_IRC_AGENT};
+        int rc = request_owner(owner, &request);
+        if (rc == 0) target->destination = destination;
+        else (void)snag_strcpy(error, error_size, request.error);
+        return rc;
+    }
+    return snag_fail(error, error_size, ESTALE, "IRC destination is unavailable");
+}
+
+int
+snag_irc_query_send(struct snag_irc *irc, const struct snag_irc_query_target *target,
+                    enum snag_irc_event_kind kind, const char *text, bool action,
+                    struct snag_buf *report, char *error, size_t error_size)
+{
+    if (!irc || !target || !text) return snag_errno(EINVAL);
+    struct snag_irc_query_target frozen = *target;
+    if (start_owners(irc) < 0) return -1;
+    for (size_t i = 0u; i < irc->owner_count; ++i) {
+        struct irc_owner *owner = irc->owners[i];
+        if (owner->target.id != frozen.destination) continue;
+        struct irc_request request = {.query_send = &frozen, .kind = kind,
+            .text = text, .action = action, .report = report};
+        int rc = request_owner(owner, &request);
+        if (rc != 0) (void)snag_strcpy(error, error_size, request.error);
+        return rc;
+    }
+    return snag_fail(error, error_size, ESTALE, "IRC query destination is unavailable; not sent");
 }
 
 int

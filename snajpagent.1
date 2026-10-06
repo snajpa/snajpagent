@@ -780,6 +780,14 @@ failures produce no automatic reply. Direct messages to the host session's own
 nicknames currently return a cannot-send error; application query commands and
 buffers remain under development.
 .PP
+The development query transport retains a separate send result for each chunk.
+It records pending before transmission, written after the complete frame, and
+acknowledged after local delivery or an ordered native-server echo. An external
+unlabeled write remains unconfirmed. Nick changes, disconnection and endpoint
+removal cancel unwritten chunks and mark started, unconfirmed sends uncertain.
+Private queues are never replayed on reconnect. These transport APIs are being
+integrated with application query commands and conversation views.
+.PP
 The built-in IRC subset has no TLS or authentication.  A non-loopback listener
 is suitable only for a trusted network or a separately secured tunnel.
 .SH "Options"

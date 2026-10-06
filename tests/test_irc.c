@@ -49,6 +49,8 @@ struct capture {
     uint64_t sequence;
     struct snag_irc_event query[2u];
     unsigned int query_count[2u];
+    unsigned int delivery[2u][SNAG_IRC_UNCERTAIN + 1u];
+    struct snag_irc_event outgoing[2u];
 };
 
 static pthread_t engine_thread;
@@ -76,6 +78,10 @@ capture_event(void *opaque, const struct snag_irc_event *event)
         if (event->route.kind == SNAG_IRC_QUERY) {
             capture->query[event->route.identity] = *event;
             ++capture->query_count[event->route.identity];
+            if (event->route.direction == SNAG_IRC_OUTGOING) {
+                ++capture->delivery[event->route.identity][event->route.delivery];
+                capture->outgoing[event->route.identity] = *event;
+            }
         }
     }
     if (event->kind == SNAG_IRC_MESSAGE) {
@@ -1572,6 +1578,36 @@ test_private_client_identities(void)
     drain_ready(client, peers[SNAG_IRC_OPERATOR], wire, sizeof(wire));
     assert(!strcmp(snag_irc_operator_nick(client), "operator["));
     assert(!strcmp(capture.query[SNAG_IRC_OPERATOR].text, "private-body still-local"));
+    /* External endpoints use their line budget even without a joined room. */
+    struct snag_irc_destinations destinations;
+    snag_irc_destinations(client, &destinations);
+    struct snag_irc_query_target target;
+    assert(snag_irc_query_open(client, destinations.items[0].target.id, SNAG_IRC_AGENT, "peer",
+        &target, error, sizeof(error)) == 0);
+    char outgoing[1801u];
+    for (size_t i = 0u; i < sizeof(outgoing) - 1u; i += 3u) memcpy(outgoing + i, "界", 3u);
+    outgoing[sizeof(outgoing) - 1u] = '\0';
+    assert(snag_irc_query_send(client, &target, SNAG_IRC_MESSAGE, outgoing,
+        true, NULL, error, sizeof(error)) == 0);
+    drain_ready(client, peers[SNAG_IRC_AGENT], wire, sizeof(wire));
+    size_t chunks = 0u;
+    for (char *p = wire; *p;) {
+        char *end = strstr(p, "\r\n");
+        assert(end && (size_t)(end + 2u - p) <= 512u);
+        assert(snag_utf8_valid((unsigned char *)p, (size_t)(end - p), true));
+        if (!strncmp(p, "PRIVMSG peer :\001ACTION ", 22u)) ++chunks;
+        p = end + 2u;
+    }
+    assert(chunks == 4u);
+    assert(capture.delivery[SNAG_IRC_AGENT][SNAG_IRC_WRITTEN] == chunks);
+    assert(capture.delivery[SNAG_IRC_AGENT][SNAG_IRC_ACKNOWLEDGED] == 0u);
+    send_text(peers[SNAG_IRC_AGENT], ":fake 005 agent LINELEN=1024 :supported\r\n");
+    drain_ready(client, peers[SNAG_IRC_AGENT], wire, sizeof(wire));
+    assert(snag_irc_query_send(client, &target, SNAG_IRC_MESSAGE, outgoing,
+        false, NULL, error, sizeof(error)) == 0);
+    drain_ready(client, peers[SNAG_IRC_AGENT], wire, sizeof(wire));
+    assert(strstr(wire, "\r\n") - wire > 512);
+    assert(strstr(wire, "\r\n") - wire <= 1022);
     assert(!capture.private_trace);
     assert(snag_irc_conversations_valid(capture.conversations, capture.sequence + 1u));
     uint64_t generation = first.route.generation;
@@ -1587,6 +1623,164 @@ test_private_client_identities(void)
     snag_irc_close(client);
     snag_config_free(&config);
     json_decref(capture.conversations);
+}
+
+static uint32_t
+private_destination(struct snag_irc *irc)
+{
+    struct snag_irc_destinations destinations;
+    snag_irc_destinations(irc, &destinations);
+    assert(destinations.count == 1u);
+    return destinations.items[0].target.id;
+}
+
+static void
+test_private_sends(void)
+{
+    struct snag_config config;
+    struct capture capture = {.retain_conversations = true};
+    unsigned short port = free_port();
+    char wire[32768u];
+    char error[256u] = {0};
+    init_server_config(&config, port);
+    struct snag_irc *server = open_server(&config, &capture);
+    assert(snag_irc_bind_conversations(server, NULL) == 0);
+    snag_socket peer = connect_local(port, false);
+    register_peer(server, peer, "peer", false, wire, sizeof(wire));
+    snag_socket observer = connect_local(port, false);
+    register_peer(server, observer, "observer", false, wire, sizeof(wire));
+    send_text(peer, "PART #lab\r\n");
+    drain_ready(server, peer, wire, sizeof(wire));
+    struct snag_irc_query_target target;
+    uint32_t destination = private_destination(server);
+    assert(snag_irc_query_open(server, destination, SNAG_IRC_OPERATOR, "peer",
+        &target, error, sizeof(error)) == 0);
+    assert(capture.query[SNAG_IRC_OPERATOR].kind == SNAG_IRC_CONNECTED);
+    drain_ready(server, peer, wire, sizeof(wire));
+    assert(!strstr(wire, "PRIVMSG") && !strstr(wire, "NOTICE"));
+    struct snag_buf report = {.max = 32768u};
+    assert(snag_irc_query_send(server, &target, SNAG_IRC_MESSAGE, "private-body one\nsecond",
+        true, &report, error, sizeof(error)) == 0);
+    wait_wire(server, peer, wire, sizeof(wire), " :\001ACTION second\001\r\n");
+    assert(strstr(wire, ":operator!operator@"));
+    assert(strstr(wire, " PRIVMSG peer :\001ACTION private-body one"));
+    assert(capture.delivery[SNAG_IRC_OPERATOR][SNAG_IRC_PENDING] == 2u);
+    assert(capture.delivery[SNAG_IRC_OPERATOR][SNAG_IRC_WRITTEN] == 2u);
+    assert(capture.delivery[SNAG_IRC_OPERATOR][SNAG_IRC_ACKNOWLEDGED] == 2u);
+    assert(snag_buf_terminate(&report) == 0);
+    assert(strstr((char *)report.data, capture.outgoing[SNAG_IRC_OPERATOR].route.send));
+    drain_ready(server, observer, wire, sizeof(wire));
+    assert(!strstr(wire, "private-body") && !strstr(wire, "second"));
+
+    struct snag_irc_query_target same;
+    assert(snag_irc_query_open(server, destination, SNAG_IRC_OPERATOR, "PEER",
+        &same, error, sizeof(error)) == 0);
+    assert(!strcmp(same.conversation, target.conversation));
+    send_text(peer, "NICK renamed\r\n");
+    drain_ready(server, peer, wire, sizeof(wire));
+    assert(snag_irc_query_send(server, &target, SNAG_IRC_MESSAGE, "private-body stale",
+        false, NULL, error, sizeof(error)) < 0 && errno == ESTALE);
+    assert(snag_irc_query_open(server, destination, SNAG_IRC_OPERATOR, "renamed",
+        &same, error, sizeof(error)) == 0);
+    assert(!strcmp(same.conversation, target.conversation));
+    assert(snag_irc_query_send(server, &same, SNAG_IRC_NOTICE, "private-body notice",
+        false, NULL, error, sizeof(error)) == 0);
+    wait_wire(server, peer, wire, sizeof(wire), " NOTICE renamed :private-body notice\r\n");
+    assert(!strstr(wire, "stale"));
+
+    /* The hosted operator and model keep distinct incoming/outgoing records. */
+    assert(snag_irc_query_open(server, destination, SNAG_IRC_OPERATOR, "agent",
+        &target, error, sizeof(error)) == 0);
+    assert(snag_irc_query_send(server, &target, SNAG_IRC_MESSAGE, "private-body local",
+        false, NULL, error, sizeof(error)) == 0);
+    assert(capture.query[SNAG_IRC_AGENT].route.direction == SNAG_IRC_INCOMING);
+    assert(!strcmp(capture.query[SNAG_IRC_AGENT].nick, "operator"));
+    assert(capture.outgoing[SNAG_IRC_OPERATOR].route.delivery == SNAG_IRC_ACKNOWLEDGED);
+    assert(strcmp(capture.query[SNAG_IRC_AGENT].route.conversation, target.conversation));
+    assert(snag_irc_query_open(server, destination, SNAG_IRC_AGENT, "agent",
+        &target, error, sizeof(error)) == 0);
+    unsigned int before = capture.query_count[SNAG_IRC_AGENT];
+    assert(snag_irc_query_send(server, &target, SNAG_IRC_MESSAGE, "private-body self",
+        false, NULL, error, sizeof(error)) == 0);
+    assert(capture.query_count[SNAG_IRC_AGENT] == before + 2u);
+    assert(capture.query[SNAG_IRC_AGENT].local);
+    assert(!capture.private_trace);
+    assert(snag_irc_conversations_valid(capture.conversations, capture.sequence + 1u));
+    snag_buf_free(&report);
+    snag_socket_close(observer);
+    snag_socket_close(peer);
+    snag_irc_close(server);
+    snag_config_free(&config);
+    json_decref(capture.conversations);
+}
+
+static void
+test_private_native_receipts(void)
+{
+    struct snag_config server_config, client_config;
+    struct capture server_capture = {.retain_conversations = true};
+    struct capture client_capture = {.retain_conversations = true};
+    unsigned short port = free_port();
+    char address[64u];
+    char error[256u] = {0};
+    endpoint(address, port);
+    init_server_config(&server_config, port);
+    struct snag_irc *server = open_server(&server_config, &server_capture);
+    assert(snag_irc_bind_conversations(server, NULL) == 0);
+    init_client_config(&client_config, address, "remoteagent", "remoteop");
+    struct snag_irc *client;
+    assert(snag_irc_open(&client, &client_config, "/client", capture_event,
+        capture_trace, &client_capture, error, sizeof(error)) == 0);
+    assert(snag_irc_bind_conversations(client, NULL) == 0);
+    wait_pair_event(server, client, &client_capture, SNAG_IRC_HISTORY_READY, 1u);
+    uint32_t destination = private_destination(client);
+    struct snag_irc_query_target target;
+    assert(snag_irc_query_open(client, destination, SNAG_IRC_AGENT, "operator",
+        &target, error, sizeof(error)) == 0);
+    assert(snag_irc_query_send(client, &target, SNAG_IRC_MESSAGE,
+        "private-body same\nprivate-body same", false, NULL, error, sizeof(error)) == 0);
+    uint64_t until = snag_monotonic_ms() + 1000u;
+    while (client_capture.delivery[SNAG_IRC_AGENT][SNAG_IRC_ACKNOWLEDGED] < 2u) {
+        assert(snag_monotonic_ms() < until);
+        tick(server, 1u);
+        tick(client, 1u);
+    }
+    assert(server_capture.query_count[SNAG_IRC_OPERATOR] == 2u);
+    assert(client_capture.delivery[SNAG_IRC_AGENT][SNAG_IRC_PENDING] == 2u);
+    assert(client_capture.delivery[SNAG_IRC_AGENT][SNAG_IRC_WRITTEN] == 2u);
+    assert(snag_irc_query_open(client, destination, SNAG_IRC_AGENT, "missing",
+        &target, error, sizeof(error)) == 0);
+    assert(snag_irc_query_send(client, &target, SNAG_IRC_MESSAGE, "private-body nonexistent",
+        false, NULL, error, sizeof(error)) == 0);
+    until = snag_monotonic_ms() + 1000u;
+    while (!client_capture.delivery[SNAG_IRC_AGENT][SNAG_IRC_FAILED]) {
+        assert(snag_monotonic_ms() < until);
+        tick(server, 1u);
+        tick(client, 1u);
+    }
+    assert(!strcmp(client_capture.outgoing[SNAG_IRC_AGENT].route.peer, "missing"));
+    assert(!server_capture.private_trace && !client_capture.private_trace);
+    assert(snag_irc_query_open(client, destination, SNAG_IRC_AGENT, "operator",
+        &target, error, sizeof(error)) == 0);
+    /* Hold engine admission at the receiver: a complete write without its
+     * receipt becomes uncertain when the endpoint is explicitly removed. */
+    assert(snag_irc_query_send(client, &target, SNAG_IRC_MESSAGE, "private-body unconfirmed",
+        false, NULL, error, sizeof(error)) == 0);
+    until = snag_monotonic_ms() + 1000u;
+    while (client_capture.delivery[SNAG_IRC_AGENT][SNAG_IRC_WRITTEN] < 4u) {
+        assert(snag_monotonic_ms() < until);
+        tick(client, 1u);
+    }
+    assert(snag_irc_remove(client, false, address, error, sizeof(error)) == 0);
+    assert(client_capture.delivery[SNAG_IRC_AGENT][SNAG_IRC_UNCERTAIN] == 1u);
+    assert(snag_irc_query_send(client, &target, SNAG_IRC_MESSAGE, "private-body removed",
+        false, NULL, error, sizeof(error)) < 0 && errno == ESTALE);
+    snag_irc_close(client);
+    snag_irc_close(server);
+    snag_config_free(&client_config);
+    snag_config_free(&server_config);
+    json_decref(client_capture.conversations);
+    json_decref(server_capture.conversations);
 }
 
 static void
@@ -2021,6 +2215,8 @@ main(int argc, char **argv)
     test_private_relay();
     test_private_hosted_identities();
     test_private_client_identities();
+    test_private_sends();
+    test_private_native_receipts();
     test_private_commit_failure();
     test_server();
     test_nick_rename();

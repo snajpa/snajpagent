@@ -131,6 +131,7 @@ TEST_BIN = tests/snajpagent-transport tests/test_base tests/test_config tests/te
 BUILD_INPUTS = build/.build-inputs
 TEST_BIN += tests/test_irc_address
 TEST_BIN += tests/test_irc_event
+TEST_BIN += tests/test_irc_send
 
 all: $(BIN)
 
@@ -214,6 +215,14 @@ tests/test_base: src/pcm.c src/pcm.h $(PLATFORM_SRC) src/convert.c src/office_co
 tests/test_config: $(PLATFORM_SRC) src/config.c src/secret_source.c src/json.c src/rules.c tests/test_config.c src/base.h src/fs.h src/term_host.h src/wake.h src/net.h src/config.h src/secret_source.h src/rules.h
 
 tests/test_irc: $(PLATFORM_SRC) src/json.c src/rules.c src/irc_event.c src/config.c src/secret_source.c src/irc.c src/irc_runtime.c tests/test_irc.c src/base.h src/fs.h src/term_host.h src/wake.h src/net.h src/config.h src/secret_source.h src/cli.h src/irc.h src/irc_internal.h src/snajpagent.h
+
+tests/test_irc_send_core.o: src/irc.c $(HEADERS) $(BUILD_INPUTS)
+	$(CC) $(CPPFLAGS) $(JANSSON_CFLAGS) $(CFLAGS) -Isrc \
+		-Dsnag_socket_send=snag_test_irc_socket_send -c src/irc.c -o $@
+
+tests/test_irc_send: $(PLATFORM_SRC) src/json.c src/rules.c src/irc_event.c src/config.c src/secret_source.c tests/test_irc_send.c tests/test_irc_send_core.o $(HEADERS)
+	$(CC) $(CPPFLAGS) $(JANSSON_CFLAGS) $(CFLAGS) $(LDFLAGS) -Isrc \
+		-o $@ $(filter %.c %.o,$^) $(LDLIBS)
 
 tests/test_credential: $(PLATFORM_SRC) src/credential.c src/secret_source.c tests/test_credential.c src/base.h src/fs.h src/term_host.h src/wake.h src/net.h src/credential.h src/secret_source.h
 
@@ -337,6 +346,7 @@ check: $(BIN) $(TEST_BIN)
 	./tests/test_irc
 	./tests/test_irc_address
 	./tests/test_irc_event
+	./tests/test_irc_send
 	./tests/test_instructions
 	./tests/test_credential
 	./tests/test_sse
@@ -560,6 +570,7 @@ sizecheck:
 	printf 'largest production C/header file: %s lines %s\n' "$$largest_lines" "$$largest_file"
 
 clean:
+	rm -f tests/test_irc_send_core.o
 	rm -f $(BIN) src/*.o src/*.d $(TEST_BIN) tests/update-old tests/update-new tests/update-local tests/update-stable tests/update-aside
 	rm -rf tests/.fixture-obj build debug-$(BIN) $(BIN).debug $(BIN).dSYM
 

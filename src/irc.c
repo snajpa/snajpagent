@@ -38,6 +38,14 @@ struct irc_query {
     char peer[SNAG_CONFIG_IRC_NICK_MAX + 1u];
 };
 
+struct irc_private_send {
+    struct irc_private_send *next;
+    struct snag_irc_event event;
+    size_t length, offset;
+    bool await_receipt;
+    char wire[];
+};
+
 struct snag_irc_core;
 
 struct irc_member {
@@ -67,6 +75,11 @@ struct irc_conn {
     struct snag_buf pending;
     size_t output_offset;
     size_t pending_inflight;
+    struct irc_private_send *private_sends;
+    struct irc_private_send *private_active;
+    size_t private_bytes;
+    size_t line_limit;
+    bool private_broken;
     unsigned char input[SNAG_IRC_LINE_MAX];
     size_t input_len;
     char endpoint[SNAG_CONFIG_IRC_ENDPOINT_MAX + 1u];
@@ -168,6 +181,9 @@ static size_t utf8_chunk(const char *text, size_t len, size_t max);
 static void format_time(uint64_t timestamp_ms, char out[32u]);
 static size_t chat_chunk(const char *text, size_t len);
 static int trace_wire(struct irc_conn *, char, const char *, size_t);
+static int private_flush(struct irc_conn *);
+static int private_discard(struct irc_conn *, bool record);
+static bool private_ready(const struct irc_conn *);
 static int
 sanitize_text(char *dst, size_t size, const char *src)
 {
@@ -559,6 +575,7 @@ conn_init(struct irc_conn *conn, struct snag_irc_core *owner)
     memset(conn, 0, sizeof(*conn));
     conn->owner = owner;
     conn->fd = SNAG_SOCKET_INVALID;
+    conn->line_limit = 512u;
     snag_buf_init(&conn->output, IRC_OUTPUT_MAX);
     snag_buf_init(&conn->pending, IRC_PENDING_MAX);
 }
@@ -566,6 +583,7 @@ conn_init(struct irc_conn *conn, struct snag_irc_core *owner)
 static void
 conn_release(struct irc_conn *conn)
 {
+    (void)private_discard(conn, false);
     if (conn->fd != SNAG_SOCKET_INVALID) (void)snag_socket_close(conn->fd);
     snag_buf_free(&conn->output);
     snag_buf_free(&conn->pending);
@@ -600,6 +618,10 @@ queue_line(struct irc_conn *conn, const char *fmt, ...)
 static int
 flush_conn(struct irc_conn *conn)
 {
+    if (conn->private_active) {
+        if (private_flush(conn) < 0) return -1;
+        if (conn->private_active) return 0;
+    }
     while (conn->output_offset < conn->output.len) {
         ssize_t written = snag_socket_send(conn->fd, conn->output.data + conn->output_offset,
             conn->output.len - conn->output_offset);
@@ -621,7 +643,7 @@ flush_conn(struct irc_conn *conn)
     }
     snag_buf_reset(&conn->output);
     conn->output_offset = 0u;
-    return 0;
+    return private_flush(conn);
 }
 
 static bool
@@ -773,6 +795,128 @@ queries_free(struct snag_irc_core *irc)
     }
 }
 
+static struct irc_query *
+query_by_id(struct snag_irc_core *irc, const char *id)
+{
+    for (struct irc_query *query = irc->queries; query; query = query->next)
+        if (!strcmp(query->id, id)) return query;
+    return NULL;
+}
+
+static int
+private_state(struct irc_conn *conn, struct irc_private_send *send, enum snag_irc_delivery state)
+{
+    send->event.route.delivery = state;
+    send->event.timestamp_ms = snag_time_ms();
+    struct irc_query *query = query_by_id(conn->owner, send->event.route.conversation);
+    if (query)
+        (void)snag_strcpy(send->event.route.peer, sizeof(send->event.route.peer), query->peer);
+    return emit_event(conn->owner, &send->event, false);
+}
+
+static void
+private_remove(struct irc_conn *conn, struct irc_private_send **previous)
+{
+    struct irc_private_send *send = *previous;
+    *previous = send->next;
+    if (conn->private_active == send) conn->private_active = NULL;
+    conn->private_bytes -= sizeof(*send) + send->length + 1u;
+    free(send);
+}
+
+static int
+private_discard(struct irc_conn *conn, bool record)
+{
+    int rc = 0;
+    while (conn->private_sends) {
+        struct irc_private_send *send = conn->private_sends;
+        if (send->offset && send->offset < send->length) conn->private_broken = true;
+        if (record && private_state(conn, send,
+            send->offset ? SNAG_IRC_UNCERTAIN : SNAG_IRC_FAILED) < 0) rc = -1;
+        private_remove(conn, &conn->private_sends);
+    }
+    return rc;
+}
+
+static bool
+private_ready(const struct irc_conn *conn)
+{
+    for (const struct irc_private_send *send = conn->private_sends; send; send = send->next)
+        if (send->offset < send->length) return true;
+    return false;
+}
+
+static bool
+private_current(struct irc_conn *conn, const struct snag_irc_event *event)
+{
+    struct snag_irc_core *irc = conn->owner;
+    struct irc_query *query = query_by_id(irc, event->route.conversation);
+    enum link_role role = event->route.identity == SNAG_IRC_AGENT ? LINK_AGENT : LINK_OPERATOR;
+    struct irc_conn *identity = &irc->conns[role];
+    return conn->registered && query && query->role == role &&
+        event->route.generation == irc->generation &&
+        link_name_equal(identity, query->peer, event->route.target) &&
+        link_name_equal(identity, identity->accepted_nick, event->nick) &&
+        link_name_equal(identity, identity->nick, identity->accepted_nick) &&
+        (!irc->hosting || link_name_equal(conn, conn->nick, event->route.target));
+}
+
+static int
+private_flush(struct irc_conn *conn)
+{
+    struct irc_private_send **previous = &conn->private_sends;
+    while (*previous) {
+        struct irc_private_send *send = *previous;
+        if (send->offset == send->length) {
+            previous = &send->next;
+            continue;
+        }
+        if (!private_current(conn, &send->event) ||
+            (!conn->owner->hosting && send->length > conn->line_limit)) {
+            bool partial = send->offset != 0u;
+            int rc = private_state(conn, send, partial ? SNAG_IRC_UNCERTAIN : SNAG_IRC_FAILED);
+            private_remove(conn, previous);
+            if (rc < 0 || partial) return snag_errno(ESTALE);
+            continue;
+        }
+        conn->private_active = send;
+        ssize_t written = snag_socket_send(conn->fd, send->wire + send->offset,
+            send->length - send->offset);
+        if (written < 0 && errno == EINTR) continue;
+        if (written < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) return 0;
+        if (written <= 0) return -1;
+        send->offset += (size_t)written;
+        if (send->offset < send->length) continue;
+        conn->private_active = NULL;
+        if (private_state(conn, send, SNAG_IRC_WRITTEN) < 0) return -1;
+        if (conn->owner->hosting && private_state(conn, send, SNAG_IRC_ACKNOWLEDGED) < 0) return -1;
+        if (!send->await_receipt) private_remove(conn, previous);
+        else previous = &send->next;
+    }
+    return 0;
+}
+
+static int
+query_cancel_sends(struct snag_irc_core *irc, const char *id)
+{
+    for (size_t i = 0u; i < irc->conn_count; ++i) {
+        struct irc_conn *conn = &irc->conns[i];
+        struct irc_private_send **previous = &conn->private_sends;
+        while (*previous) {
+            struct irc_private_send *send = *previous;
+            if (strcmp(send->event.route.conversation, id)) {
+                previous = &send->next;
+                continue;
+            }
+            if (send->offset && send->offset < send->length) conn->private_broken = true;
+            if (private_state(conn, send, send->offset ? SNAG_IRC_UNCERTAIN : SNAG_IRC_FAILED) < 0)
+                return -1;
+            private_remove(conn, previous);
+        }
+    }
+    return 0;
+}
+
 static int
 connection_event(struct snag_irc_core *irc, struct irc_conn *link, const char *reason)
 {
@@ -783,6 +927,19 @@ connection_event(struct snag_irc_core *irc, struct irc_conn *link, const char *r
     route_init(irc, &event, link->role, SNAG_IRC_CONNECTION_EVENTS,
         irc->connection_events[link->role]);
     return emit_event(irc, &event, false);
+}
+
+static int
+query_epoch_end(struct snag_irc_core *irc, const char *reason)
+{
+    for (size_t i = 0u; i < irc->conn_count; ++i)
+        if (private_discard(&irc->conns[i], true) < 0) return -1;
+    if (irc->generation == INT64_MAX) return snag_errno(EOVERFLOW);
+    ++irc->generation;
+    queries_free(irc);
+    for (size_t role = 0u; role < 2u; ++role)
+        if (connection_event(irc, &irc->conns[role], reason) < 0) return -1;
+    return 0;
 }
 
 static int
@@ -803,7 +960,8 @@ query_receive(struct snag_irc_core *irc, struct irc_conn *link, enum snag_irc_ev
         chunk[take] = '\0';
         struct snag_irc_event event;
         event_init(irc, &event, kind, irc->hosting ? irc->listen : link->endpoint,
-            NULL, sender, chunk, false, historical, false);
+            NULL, sender, chunk, false, historical,
+            !historical && link_name_equal(link, sender, link->accepted_nick));
         if (timestamp_ms) event.timestamp_ms = timestamp_ms;
         route_init(irc, &event, link->role, SNAG_IRC_QUERY, query->id);
         (void)snag_strcpy(event.route.peer, sizeof(event.route.peer), query->peer);
@@ -822,6 +980,8 @@ query_lifecycle(struct snag_irc_core *irc, struct irc_conn *link, enum snag_irc_
 {
     struct irc_query *query = query_find(irc, link->role, sender, false);
     if (!query) return 0;
+    int cancelled = query_cancel_sends(irc, query->id);
+    if (cancelled < 0) return -1;
     struct snag_irc_event event;
     /* Persist the canonical previous spelling so the durable alias transition
      * can be checked independently of the endpoint's live CASEMAPPING. */
@@ -840,7 +1000,7 @@ query_lifecycle(struct snag_irc_core *irc, struct irc_conn *link, enum snag_irc_
         *previous = query->next;
         free(query);
     }
-    return 0;
+    return cancelled;
 }
 
 static int
@@ -1328,6 +1488,158 @@ server_private_line(struct snag_irc_core *irc, struct irc_conn *recipient,
         action ? "\001ACTION " : "", text, action ? "\001" : "");
 }
 
+int
+snag_irc_core_query_open(struct snag_irc_core *irc, enum snag_irc_identity identity,
+                        const char *peer, struct snag_irc_query_target *target,
+                        char *error, size_t error_size)
+{
+    if (!irc || !irc->connection[0] || !target || (unsigned int)identity > SNAG_IRC_AGENT ||
+        !peer || !nick_valid(peer))
+        return snag_fail(error, error_size, EINVAL, "invalid IRC query target");
+    enum link_role role = identity == SNAG_IRC_AGENT ? LINK_AGENT : LINK_OPERATOR;
+    struct irc_query *query = query_find(irc, role, peer, false);
+    if (!query) {
+        query = query_find(irc, role, peer, true);
+        if (!query) return -1;
+        struct snag_irc_event event;
+        struct irc_conn *link = &irc->conns[role];
+        event_init(irc, &event, link->registered ? SNAG_IRC_CONNECTED : SNAG_IRC_DISCONNECTED,
+            irc->connection_endpoint, NULL, link->accepted_nick, "query opened",
+            false, false, true);
+        route_init(irc, &event, role, SNAG_IRC_QUERY, query->id);
+        (void)snag_strcpy(event.route.peer, sizeof(event.route.peer), query->peer);
+        if (emit_event(irc, &event, false) < 0) return -1;
+    }
+    memset(target, 0, sizeof(*target));
+    memcpy(target->connection, irc->connection, sizeof(target->connection));
+    memcpy(target->conversation, query->id, sizeof(target->conversation));
+    memcpy(target->peer, query->peer, sizeof(target->peer));
+    target->identity = identity;
+    target->generation = irc->generation;
+    return 0;
+}
+
+static int
+query_send_chunk(struct snag_irc_core *irc, struct irc_conn *sender, struct irc_conn *recipient,
+                 struct irc_query *query, enum snag_irc_event_kind kind,
+                 const char *text, size_t length, bool action, struct snag_buf *report)
+{
+    char raw[SNAG_IRC_TEXT_MAX + 1u];
+    char clean[sizeof(raw)];
+    memcpy(raw, text, length);
+    raw[length] = '\0';
+    if (sanitize_text(clean, sizeof(clean), raw) < 0) return -1;
+    if (!clean[0]) return 0;
+    char wire[SNAG_IRC_LINE_MAX + 1u];
+    char prefix[3u * SNAG_CONFIG_IRC_NICK_MAX + 8u] = {0};
+    if (irc->hosting) {
+        int n = snprintf(prefix, sizeof(prefix), ":%s!%s@%s ", sender->accepted_nick,
+            sender->user, irc->server_name);
+        if (n < 0 || (size_t)n >= sizeof(prefix)) return snag_errno(EOVERFLOW);
+    }
+    int n = snprintf(wire, sizeof(wire), "%s%s %s :%s%s%s\r\n", prefix,
+        kind == SNAG_IRC_MESSAGE ? "PRIVMSG" : "NOTICE", query->peer,
+        action ? "\001ACTION " : "", clean, action ? "\001" : "");
+    if (n < 0 || (size_t)n >= sizeof(wire)) return snag_errno(EMSGSIZE);
+    size_t bytes = sizeof(struct irc_private_send) + (size_t)n + 1u;
+    if (bytes > IRC_PENDING_MAX - recipient->pending.len - recipient->private_bytes)
+        return snag_errno(EOVERFLOW);
+    struct irc_private_send *send = calloc(1u, bytes);
+    if (!send) return -1;
+    send->length = (size_t)n;
+    memcpy(send->wire, wire, send->length + 1u);
+    send->await_receipt = !irc->hosting && sender->cap_catchup && sender->cap_echo &&
+        kind == SNAG_IRC_MESSAGE;
+    event_init(irc, &send->event, kind, irc->connection_endpoint, NULL, sender->accepted_nick,
+        clean, false, false, true);
+    route_init(irc, &send->event, sender->role, SNAG_IRC_QUERY, query->id);
+    memcpy(send->event.route.peer, query->peer, sizeof(send->event.route.peer));
+    (void)snag_strcpy(send->event.route.target, sizeof(send->event.route.target), query->peer);
+    send->event.route.direction = SNAG_IRC_OUTGOING;
+    send->event.route.action = action;
+    if (snag_random_id(send->event.route.send) < 0) {
+        free(send);
+        return -1;
+    }
+    /* Reserve the report before committing a send so an allocation failure
+     * cannot conceal an accepted chunk from the caller. */
+    size_t before = report ? report->len : 0u;
+    if (report && snag_buf_printf(report, "%s: queued to %s\n",
+        send->event.route.send, query->peer) < 0) {
+        free(send);
+        return -1;
+    }
+    if (private_state(recipient, send, SNAG_IRC_PENDING) < 0) {
+        if (report) report->len = before;
+        free(send);
+        return -1;
+    }
+    if (irc->hosting && recipient->fd == SNAG_SOCKET_INVALID) {
+        int rc = 0;
+        if (recipient != sender)
+            rc = query_receive(irc, recipient, kind, sender->accepted_nick, recipient->nick,
+                clean, false, 0u, NULL, action);
+        if (rc == 0) rc = private_state(recipient, send, SNAG_IRC_ACKNOWLEDGED);
+        free(send);
+        return rc;
+    }
+    struct irc_private_send **tail = &recipient->private_sends;
+    while (*tail) tail = &(*tail)->next;
+    *tail = send;
+    recipient->private_bytes += bytes;
+    return 0;
+}
+
+int
+snag_irc_core_query_send(struct snag_irc_core *irc, const struct snag_irc_query_target *target,
+                        enum snag_irc_event_kind kind, const char *text, bool action,
+                        struct snag_buf *report, char *error, size_t error_size)
+{
+    if (!irc || !target || (unsigned int)target->identity > SNAG_IRC_AGENT ||
+        (kind != SNAG_IRC_MESSAGE && kind != SNAG_IRC_NOTICE) ||
+        (action && kind != SNAG_IRC_MESSAGE) || !text || !*text ||
+        !snag_utf8_valid((const unsigned char *)text, strlen(text), true))
+        return snag_fail(error, error_size, EINVAL, "IRC query requires nonempty UTF-8 chat");
+    enum link_role role = target->identity == SNAG_IRC_AGENT ? LINK_AGENT : LINK_OPERATOR;
+    struct irc_conn *sender = &irc->conns[role];
+    struct irc_query *query = query_by_id(irc, target->conversation);
+    if (!query || query->role != role || target->generation != irc->generation ||
+        strcmp(target->connection, irc->connection) ||
+        strcmp(target->peer, query->peer))
+        return snag_fail(error, error_size, ESTALE, "IRC query changed; reopen before sending");
+    if (!sender->registered || !link_name_equal(sender, sender->nick, sender->accepted_nick))
+        return snag_fail(error, error_size, ENOTCONN, "IRC identity is disconnected or renaming");
+    struct irc_conn *recipient = irc->hosting ? server_peer_by_nick(irc, query->peer) : sender;
+    if (!recipient || !recipient->registered || recipient->private_broken)
+        return snag_fail(error, error_size, ENOENT, "IRC peer is unavailable; not sent");
+
+    size_t budget = irc->hosting ? SNAG_IRC_LINE_MAX : sender->line_limit;
+    size_t overhead = strlen(kind == SNAG_IRC_MESSAGE ? "PRIVMSG" : "NOTICE") +
+        strlen(query->peer) + 5u + (action ? 9u : 0u);
+    if (irc->hosting) overhead += strlen(sender->accepted_nick) + strlen(sender->user) +
+        strlen(irc->server_name) + 4u;
+    if (budget <= overhead) return snag_fail(error, error_size, EMSGSIZE, "IRC line is too short");
+    budget -= overhead;
+    if (budget > SNAG_IRC_TEXT_MAX) budget = SNAG_IRC_TEXT_MAX;
+    const char *cursor = text;
+    while (*cursor) {
+        const char *newline = strchr(cursor, '\n');
+        size_t remaining = newline ? (size_t)(newline - cursor) : strlen(cursor);
+        while (remaining) {
+            size_t take = utf8_chunk(cursor, remaining, budget);
+            if (!take || query_send_chunk(irc, sender, recipient, query, kind,
+                cursor, take, action, report) < 0) {
+                return snag_errorf(error, error_size,
+                    "cannot queue IRC query: %s", strerror(errno));
+            }
+            cursor += take;
+            remaining -= take;
+        }
+        if (newline) ++cursor;
+    }
+    return 0;
+}
+
 static int
 server_private(struct snag_irc_core *irc, struct irc_conn *peer,
                enum snag_irc_event_kind kind, const char *target, const char *text)
@@ -1635,6 +1947,7 @@ server_drop_peer(struct snag_irc_core *irc, struct irc_conn *peer, const char *r
 
     (void)snprintf(nick, sizeof(nick), "%s", peer->nick);
     (void)snprintf(user, sizeof(user), "%s", peer->user);
+    if (private_discard(peer, true) < 0) irc->callback_failed = true;
     if (peer->registered)
         for (size_t role = 0u; role < 2u; ++role)
             if (query_lifecycle(irc, &irc->conns[role], SNAG_IRC_QUIT,
@@ -1656,7 +1969,9 @@ client_handshake(struct snag_irc_core *irc, struct irc_conn *link)
     link->cap_end = false;
     link->cap_batch = false;
     link->cap_server_time = false;
+    link->cap_echo = false;
     link->cap_offered = 0u;
+    link->line_limit = 512u;
     link->casemapping = IRC_RFC1459;
     link->batch[0] = '\0';
     link->member_count = 0u;
@@ -1733,6 +2048,9 @@ link_queue_pending(struct irc_conn *link, enum snag_irc_event_kind kind, const c
 {
     unsigned char marker = kind == SNAG_IRC_NOTICE ? 'N' : 'M';
     size_t before = link->pending.len;
+
+    if (strlen(text) + 2u > IRC_PENDING_MAX - before - link->private_bytes)
+        return snag_errno(EOVERFLOW);
 
     if (snag_buf_putc(&link->pending, marker) < 0 ||
         snag_buf_append(&link->pending, text, strlen(text)) < 0 ||
@@ -1818,7 +2136,7 @@ static int
 client_cap(struct irc_conn *link, struct irc_message *message)
 {
     static const char *const wanted[] = {"batch", "server-time", "draft/chathistory",
-        "message-tags", SNAJPAGENT_NAME "/catchup", SNAJPAGENT_NAME "/agent"};
+        "message-tags", SNAJPAGENT_NAME "/catchup", SNAJPAGENT_NAME "/agent", "echo-message"};
     const char *sub = message->params[1];
     char *caps = message->params[message->param_count - 1u];
     char *save = NULL;
@@ -1848,6 +2166,7 @@ client_cap(struct irc_conn *link, struct irc_message *message)
             if (*cap == '-') ++cap;
             if (!strcmp(cap, "batch")) link->cap_batch = enabled;
             if (!strcmp(cap, "server-time")) link->cap_server_time = enabled;
+            if (!strcmp(cap, "echo-message")) link->cap_echo = enabled;
             if (!strcmp(cap, SNAJPAGENT_NAME "/catchup")) link->cap_catchup = enabled;
         }
         if (!strcmp(sub, "DEL")) return 0;
@@ -1882,6 +2201,37 @@ private_source(const char *tags, char source[SNAG_IRC_LINE_MAX + 1u])
 }
 
 static int
+private_receipt(struct irc_conn *link, const struct irc_message *message, bool *handled)
+{
+    *handled = false;
+    if (!link->cap_catchup || !link->cap_echo || link->historical) return 0;
+    bool failed = snag_string_in(message->command, "401 404 407 411 412 531");
+    char nick[SNAG_CONFIG_IRC_NICK_MAX + 1u];
+    const char *sender = prefix_nick(message->prefix, nick);
+    bool echo = !strcmp(message->command, "PRIVMSG") && sender &&
+        link_name_equal(link, sender, link->accepted_nick);
+    if ((!failed && !echo) || message->param_count < (failed ? 3u : 2u)) return 0;
+    const char *target = message->params[failed ? 1u : 0u];
+    struct irc_private_send **previous = &link->private_sends;
+    while (*previous) {
+        struct irc_private_send *send = *previous;
+        if (!send->await_receipt || send->offset != send->length ||
+            !link_name_equal(link, send->event.route.target, target)) {
+            previous = &send->next;
+            continue;
+        }
+        /* The built-in server handles this link's PRIVMSGs in wire order.
+         * Text equality cannot identify repeated identical messages. External
+         * unlabeled echoes remain unconfirmed writes. */
+        int rc = private_state(link, send, failed ? SNAG_IRC_FAILED : SNAG_IRC_ACKNOWLEDGED);
+        private_remove(link, previous);
+        *handled = true;
+        return rc;
+    }
+    return 0;
+}
+
+static int
 client_dispatch(struct snag_irc_core *irc, struct irc_conn *link, char *line)
 {
     struct irc_message message;
@@ -1913,6 +2263,9 @@ client_dispatch(struct snag_irc_core *irc, struct irc_conn *link, char *line)
         link->batch[0] && !strcmp(batch, link->batch)) link->historical = true;
     timestamp_ms = server_time_tag(message.tags);
     if (trace_message(irc, link->endpoint, &message) < 0) return -1;
+    bool receipt = false;
+    if (private_receipt(link, &message, &receipt) < 0) return -1;
+    if (receipt) return 0;
     if (!strcmp(message.command, "CAP") && message.param_count >= 3u)
         return client_cap(link, &message);
     if (strcmp(message.command, "PING") == 0) return queue_line(link, "PONG :%s",
@@ -1933,9 +2286,18 @@ client_dispatch(struct snag_irc_core *irc, struct irc_conn *link, char *line)
                 enum irc_casemapping next = !strcmp(mapping, "ascii") ? IRC_ASCII :
                     !strcmp(mapping, "rfc1459") ? IRC_RFC1459 :
                     !strcmp(mapping, "rfc1459-strict") ? IRC_RFC1459_STRICT : IRC_CASE_UNKNOWN;
-                if (next != link->casemapping) queries_free(irc);
+                if (next != link->casemapping && irc->connection[0] &&
+                    query_epoch_end(irc, "server casemapping changed") < 0) return -1;
                 link->casemapping = next;
             }
+            if (!strncmp(message.params[i], "LINELEN=", 8u)) {
+                char *end;
+                errno = 0;
+                unsigned long limit = strtoul(message.params[i] + 8u, &end, 10);
+                if (!errno && !*end && limit >= 512u)
+                    link->line_limit = limit > SNAG_IRC_LINE_MAX ? SNAG_IRC_LINE_MAX : limit;
+            }
+            if (!strcmp(message.params[i], "-LINELEN")) link->line_limit = 512u;
             if (strncmp(message.params[i], "SAJROOM=", 8u) == 0 && room_valid(message.params[i] + 8u)) {
                 (void)normalize_room(link->room, sizeof(link->room), message.params[i] + 8u);
                 if (link->previous_room[0] && strcmp(link->previous_room, link->room)) {
@@ -2170,18 +2532,12 @@ link_disconnect(struct snag_irc_core *irc, struct irc_conn *link, const char *re
     snag_buf_reset(&link->output);
     link->output_offset = 0u;
     link->pending_inflight = 0u;
+    link->private_broken = false;
     link->retry_at_ms = snag_monotonic_ms() + IRC_RETRY_MS;
     if (irc->connection[0]) {
         if (was_registered) {
-            if (irc->generation == INT64_MAX) {
-                irc->callback_failed = true;
-                return;
-            }
-            ++irc->generation;
-            queries_free(irc);
-            for (size_t role = 0u; role < 2u; ++role)
-                if (connection_event(irc, &irc->conns[role], reason) < 0)
-                    irc->callback_failed = true;
+            if (query_epoch_end(irc, reason) < 0) irc->callback_failed = true;
+            link->private_broken = false;
         }
         return;
     }
@@ -2426,6 +2782,14 @@ snag_irc_core_close(struct snag_irc_core *irc)
 }
 
 int
+snag_irc_core_retire(struct snag_irc_core *irc)
+{
+    if (!irc->connection[0]) return 0;
+    for (size_t role = 0u; role < 2u; ++role) irc->conns[role].registered = false;
+    return query_epoch_end(irc, "endpoint removed");
+}
+
+int
 snag_irc_core_bind(struct snag_irc_core *irc, const char *connection,
                    const char *endpoint, uint64_t generation)
 {
@@ -2447,8 +2811,12 @@ snag_irc_core_pending(const struct snag_irc_core *irc)
 {
     size_t bytes = 0u;
 
-    for (size_t i = 0u; i < irc->conn_count; ++i)
-        bytes += irc->conns[i].pending.len + irc->conns[i].output.len - irc->conns[i].output_offset;
+    for (size_t i = 0u; i < irc->conn_count; ++i) {
+        const struct irc_conn *conn = &irc->conns[i];
+        bytes += conn->pending.len + conn->output.len - conn->output_offset;
+        for (const struct irc_private_send *send = conn->private_sends; send; send = send->next)
+            bytes += send->length - send->offset;
+    }
     return bytes;
 }
 
@@ -2523,6 +2891,13 @@ snag_irc_core_tick(struct snag_irc_core *irc, int timeout_ms, snag_wake_fd wake_
     for (size_t i = 0; i < irc->conn_count; ++i) {
         struct irc_conn *link = &irc->conns[i];
         if (link->fd == SNAG_SOCKET_INVALID) continue;
+        if (link->private_broken) {
+            if (link->outgoing)
+                link_disconnect(irc, link, "private recipient changed; reconnecting");
+            else server_drop_peer(irc, link, "private recipient changed");
+            if (irc->callback_failed) goto fail;
+            continue;
+        }
         if (link->outgoing && link->joined && !link->output.len && link->pending.len &&
             link_flush_pending(link) < 0) {
             link_disconnect(irc, link, "outbound queue failed; retrying");
@@ -2530,8 +2905,8 @@ snag_irc_core_tick(struct snag_irc_core *irc, int timeout_ms, snag_wake_fd wake_
             continue;
         }
         fds[count].fd = link->fd;
-        fds[count].events = SNAG_NET_READ | (link->connecting || link->output_offset < link->output.len ?
-             SNAG_NET_WRITE : 0);
+        fds[count].events = SNAG_NET_READ | (link->connecting ||
+            link->output_offset < link->output.len || private_ready(link) ? SNAG_NET_WRITE : 0);
         fds[count].revents = 0;
         owners[count++] = link;
     }
@@ -2565,12 +2940,14 @@ snag_irc_core_tick(struct snag_irc_core *irc, int timeout_ms, snag_wake_fd wake_
             if (irc->callback_failed) goto fail;
             continue;
         }
-        if (rc > 0 || (fds[i].revents & (SNAG_NET_ERROR | SNAG_NET_HUP | SNAG_NET_INVALID))) {
+        if (rc > 0 || conn->private_broken ||
+            (fds[i].revents & (SNAG_NET_ERROR | SNAG_NET_HUP | SNAG_NET_INVALID))) {
             if (conn->outgoing) link_disconnect(irc, conn, "connection closed; retrying");
             else server_drop_peer(irc, conn, "connection closed");
             continue;
         }
-        if (conn->fd != SNAG_SOCKET_INVALID && conn->output_offset < conn->output.len &&
+        if (conn->fd != SNAG_SOCKET_INVALID &&
+            (conn->output_offset < conn->output.len || private_ready(conn)) &&
             flush_conn(conn) < 0) {
             if (conn->outgoing) link_disconnect(irc, conn, "write failed; retrying");
             else server_drop_peer(irc, conn, "write failed");
@@ -2732,7 +3109,7 @@ set_nick_as(struct snag_irc_core *irc, const char *nick, enum link_role role,
         goto fail;
     identity->nick_implicit = false;
     identity->nick_suffix = 0u;
-    if (!identity->joined) return 0;
+    if (!identity->registered) return 0;
     if (queue_line(identity, "NICK %s", clean) < 0) goto fail;
     return 0;
 fail: return snag_errorf(error, error_size, "cannot change IRC nick");

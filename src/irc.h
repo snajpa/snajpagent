@@ -47,6 +47,15 @@ enum snag_irc_event_kind {
     SNAG_IRC_TOPIC, SNAG_IRC_MODE, SNAG_IRC_HISTORY_READY };
 
 enum snag_irc_identity { SNAG_IRC_OPERATOR, SNAG_IRC_AGENT };
+
+struct snag_irc_query_target {
+    uint32_t destination;
+    char connection[SNAG_ID_HEX_LEN + 1u];
+    char conversation[SNAG_ID_HEX_LEN + 1u];
+    char peer[SNAG_CONFIG_IRC_NICK_MAX + 1u];
+    uint64_t generation;
+    enum snag_irc_identity identity;
+};
 enum snag_irc_conversation_kind { SNAG_IRC_CONNECTION_EVENTS, SNAG_IRC_CHANNEL, SNAG_IRC_QUERY };
 enum snag_irc_direction { SNAG_IRC_INCOMING, SNAG_IRC_OUTGOING };
 enum snag_irc_delivery {
@@ -121,6 +130,11 @@ bool snag_irc_local_identity(const struct snag_irc *irc, const struct snag_irc_e
 int snag_irc_send_route(struct snag_irc *irc, const struct snag_irc_route *route,
                          bool model, enum snag_irc_event_kind kind, const char *text,
                          struct snag_buf *report, char *error, size_t error_size);
+int snag_irc_query_open(struct snag_irc *, uint32_t destination, enum snag_irc_identity,
+                        const char *peer, struct snag_irc_query_target *, char *, size_t);
+int snag_irc_query_send(struct snag_irc *, const struct snag_irc_query_target *,
+                        enum snag_irc_event_kind, const char *text, bool action,
+                        struct snag_buf *report, char *, size_t);
 int snag_irc_apply_cli(struct snag_config *config, const struct snag_cli *cli,
                       char *error, size_t error_size);
 int snag_irc_normalize(struct snag_config *config, char *error, size_t error_size);
