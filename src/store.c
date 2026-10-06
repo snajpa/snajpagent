@@ -6,6 +6,7 @@
 #include "irc.h"
 #include "snajpagent.h"
 #include "store_binary_legacy.h"
+#include "store_binary_replay.h"
 #include "store_record.h"
 #include <errno.h>
 #include <limits.h>
@@ -3833,6 +3834,11 @@ snag_store_scan_log(struct snag_session *session, enum snag_tail_policy tail_pol
     return 0;
 }
 
+static int native_history_each(struct snag_session *, snag_session_event_fn,
+    void *, char *, size_t);
+static int native_history_since(struct snag_session *, const struct snag_process_state *,
+    snag_session_event_fn, void *, char *, size_t);
+
 int
 snag_session_each_event(struct snag_session *session, snag_session_event_fn fn,
                        void *opaque, char *error, size_t error_size)
@@ -3843,6 +3849,7 @@ snag_session_each_event(struct snag_session *session, snag_session_event_fn fn,
         !snag_hex_is_lower(session->id, SNAG_ID_HEX_LEN)) {
         return snag_fail(error, error_size, EINVAL, "invalid session event iterator");
     }
+    if (session->binary) return native_history_each(session, fn, opaque, error, error_size);
     snag_session_init(&verifier);
     memcpy(verifier.id, session->id, sizeof(verifier.id));
     int rc = read_event_log(session, &verifier, session->log_end,
@@ -3857,10 +3864,14 @@ snag_session_each_event_since(struct snag_session *session, const struct snag_pr
                               snag_session_event_fn fn, void *opaque, char *error, size_t error_size)
 {
     struct snag_session verifier;
+    if (!session || !fn)
+        return snag_fail(error, error_size, EINVAL, "invalid process output iterator");
     if (!cursor || !cursor->log_seq) return snag_session_each_event(session, fn, opaque, error, error_size);
     if (session->log_end < 0 || cursor->log_offset > (uint64_t)session->log_end ||
         !snag_hex_is_lower(cursor->log_hash, SNAG_SHA256_HEX_LEN))
         return snag_fail(error, error_size, EINVAL, "invalid process output cursor");
+    if (session->binary)
+        return native_history_since(session, cursor, fn, opaque, error, error_size);
     snag_session_init(&verifier);
     memcpy(verifier.id, session->id, sizeof(verifier.id));
     memcpy(verifier.prev_sha256, cursor->log_hash, sizeof(verifier.prev_sha256));
@@ -4465,6 +4476,53 @@ native_history_forward(struct snag_session *session, struct snag_journal_cursor 
             &work, native_history_visit, NULL, &history);
     }
     return native_history_done(&history, rc);
+}
+
+struct native_suffix_callback {
+    snag_session_event_fn visit;
+    void *opaque;
+};
+
+static int
+native_suffix_visit(void *opaque, const struct snag_session *state, uint64_t sequence,
+    const char *type, const json_t *data, char *error, size_t error_size)
+{
+    struct native_suffix_callback *callback = opaque;
+    /* This full suffix API ignores positive results, unlike paged history. */
+    return callback->visit(callback->opaque, state, sequence, type, data,
+        error, error_size) < 0 ? -1 : 0;
+}
+
+static int
+native_history_since(struct snag_session *session, const struct snag_process_state *process,
+    snag_session_event_fn visit, void *opaque, char *error, size_t error_size)
+{
+    struct snag_journal_cursor cursor = {.offset = (int64_t)process->log_offset,
+        .next_seq = process->log_seq};
+    memcpy(cursor.prev_sha256, process->log_hash, sizeof(cursor.prev_sha256));
+    struct native_suffix_callback callback = {.visit = visit, .opaque = opaque};
+    return native_history_forward(session, &cursor, 0u, SIZE_MAX, native_suffix_visit,
+        &callback, error, error_size);
+}
+
+static int
+native_history_each(struct snag_session *session, snag_session_event_fn visit, void *opaque,
+    char *error, size_t error_size)
+{
+    if (session->binary->faulted)
+        return snag_fail(error, error_size, ESTALE, "native writer is faulted");
+    /* Exhaustive semantic history explicitly reconstructs from creation. It is
+     * not checkpoint admission or a fallback for missing point/range custody. */
+    struct snag_binary_anchor through = session->binary->boundary;
+    struct snag_binary_recovery recovery;
+    struct snag_session verifier;
+    snag_session_init(&verifier);
+    int rc = snag_store_reconcile_binary_prefix(session, &verifier, &through,
+        visit, opaque, &recovery, NULL, error, error_size);
+    int saved = errno;
+    snag_session_close(&verifier);
+    errno = saved;
+    return rc;
 }
 
 static int

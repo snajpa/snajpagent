@@ -3096,3 +3096,38 @@ legacy physical history-cursor hint is not used for native sequence queries.
 Callbacks can append without extending the pinned frontier. Reads preserve
 journal/index descriptor positions and do not change semantic state or execution
 ownership; a callback's explicit write remains its own operation.
+
+### Native exhaustive semantic history
+
+The existing full event iterator explicitly reconstructs native history from
+creation through a captured acknowledged batch anchor. The strict native replay
+adapter projects borrowed typed data and applies the shared reducer before each
+semantic callback. Callback core state is genuinely at that record's logical
+sequence, not a borrowed copy of final live state. Native batch positions and
+hashes do not become synthetic per-record JSONL coordinates. Optional metadata
+and legacy checkpoint markers have no semantic callback.
+
+Like the existing full iterator, only negative callback results abort traversal;
+positive results do not turn this API into the paged stop-before/stop-after API.
+Callback effects are provisional until complete source rechecking succeeds.
+A source change, including an explicit callback append, returns EAGAIN rather
+than adopting reconstructed state or claiming a frozen complete result. The
+live owner, effects and descriptor positions are otherwise unchanged; the
+callback's own write remains its own acknowledged operation.
+
+This exhaustive operation uses canonical verification from byte zero. It does
+not require or repair an index, and is not used as checkpoint admission, ordinary
+factory resume, or a fallback for unavailable point/range custody. Bounded native
+checkpoint/suffix iteration and the remaining reader/factory integration retain
+their separate contracts and qualification.
+
+The existing process/output suffix iterator uses the verified native forward
+reader with the process's exact logical sequence and batch-predecessor
+position/digest. Caller cursor storage stays unchanged. The callback receives
+resolved source data with NULL core state, as on the legacy suffix path;
+positive results are ignored and negative callback errno is preserved. Zero or
+missing process cursors retain the existing full semantic iterator behavior.
+The native scan pins its acknowledged boundary before callbacks, so explicit
+callback appends do not widen the source range. Partial-batch cuts, unavailable
+old rows and their causal dependencies use the same independent membership
+rules as native forward history; no legacy offset scan or guessed cut is used.

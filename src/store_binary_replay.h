@@ -60,7 +60,8 @@ struct snag_binary_recovery {
  * must use the logical range, process/stream identity and byte window instead.
  * Voice starts use native sequence references. Other payload refs remain ENOTSUP.
  * Provider-view reconstruction, checkpoints, indexes and cutover remain separate.
- * Linked only by tests while native backend integration is unfinished. */
+ * Explicit native full-history iteration uses prefix replay at its captured ACK;
+ * ordinary factory/checkpoint admission still has its separate bounded contract. */
 int snag_store_reconcile_binary(struct snag_session *source, struct snag_session *restored,
     snag_session_event_fn fn, void *opaque, struct snag_binary_recovery *recovery,
     struct snag_binary_checkpoint_sources *, char *error, size_t error_size);

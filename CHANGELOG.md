@@ -4,6 +4,13 @@
 
 ## Unreleased
 
+- Read explicit full native semantic history through strict replay at the
+  acknowledged frontier, providing genuine post-event core state and preserving
+  provisional callback failures without JSONL parsing or live-state replacement.
+- Read native process/output suffixes through verified exact batch cuts, keeping
+  NULL-state callbacks, full-suffix positive-return behavior and unavailable
+  historical-source failures consistent with their existing contract.
+
 - Dispatch native reverse history through pinned acknowledged queries, preserving
   sequence bounds, byte paging, optional metadata and callback stop behavior
   without JSONL boundary assumptions.

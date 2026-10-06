@@ -527,6 +527,71 @@ native_fixture(struct snag_session *session, struct probe *probe)
     assert(atomic_load(&probe->effects) == 1u);
 }
 
+struct native_semantic_probe {
+    struct snag_session *live;
+    uint64_t next;
+    unsigned int calls;
+    uint64_t fail;
+    bool append;
+};
+
+static int
+native_semantic_event(void *opaque, const struct snag_session *state, uint64_t sequence,
+    const char *type, const json_t *data, char *error, size_t size)
+{
+    struct native_semantic_probe *probe = opaque;
+    assert(state && state != probe->live && sequence == probe->next++ &&
+        state->next_seq == sequence + 1u && !strcmp(state->id, probe->live->id) &&
+        state->format_version == 4u && json_is_object(data));
+    if (sequence == 1u) {
+        assert(!strcmp(type, "session_created") && !state->banner_text);
+    } else {
+        const char *text = sequence == 2u ? "first" : "second";
+        assert(!strcmp(type, "banner_updated") && state->banner_text &&
+            !strcmp(state->banner_text, text) && !strcmp(snag_json_string(data, "text"), text));
+    }
+    ++probe->calls;
+    if (sequence == probe->fail) return snag_fail(error, size, EIO, "semantic callback failed");
+    if (probe->append) {
+        probe->append = false;
+        assert(!snag_session_commit(probe->live, "banner_updated",
+            json_pack("{s:s}", "text", "third"), NULL, error, size));
+    }
+    return 1; /* The full iterator only treats negative callbacks as failures. */
+}
+
+static void
+test_native_semantic_history(void)
+{
+    struct snag_session session;
+    struct probe effects = {0};
+    native_fixture(&session, &effects);
+    char error[256];
+    assert(!snag_session_commit(&session, "banner_updated", json_pack("{s:s}", "text", "first"),
+        NULL, error, sizeof(error)));
+    assert(!snag_session_commit(&session, "banner_updated", json_pack("{s:s}", "text", "second"),
+        NULL, error, sizeof(error)));
+    assert(session.next_seq == 4u && !strcmp(session.banner_text, "second"));
+    assert(snag_seek(session.log_fd, 13, SEEK_SET) == 13);
+    struct native_semantic_probe probe = {.live = &session, .next = 1u};
+    int rc = snag_session_each_event(&session, native_semantic_event, &probe, error, sizeof(error));
+    if (rc < 0) fprintf(stderr, "native semantic history: %s\n", error);
+    assert(!rc && probe.calls == 3u && probe.next == 4u &&
+        snag_seek(session.log_fd, 0, SEEK_CUR) == 13 && session.next_seq == 4u &&
+        !strcmp(session.banner_text, "second") && atomic_load(&effects.effects) == 3u);
+    probe = (struct native_semantic_probe){.live = &session, .next = 1u, .fail = 2u};
+    assert(snag_session_each_event(&session, native_semantic_event, &probe,
+        error, sizeof(error)) < 0 && errno == EIO && probe.calls == 2u &&
+        session.next_seq == 4u && !strcmp(session.banner_text, "second") &&
+        atomic_load(&effects.effects) == 3u);
+    probe = (struct native_semantic_probe){.live = &session, .next = 1u, .append = true};
+    assert(snag_session_each_event(&session, native_semantic_event, &probe,
+        error, sizeof(error)) < 0 && errno == EAGAIN && probe.calls == 3u &&
+        session.next_seq == 5u && !strcmp(session.banner_text, "third") &&
+        atomic_load(&effects.effects) == 4u);
+    snag_session_close(&session);
+}
+
 static void
 producer_access(struct snag_session *session, const struct snag_binary_anchor *boundary,
     const struct snag_binary_index_tree *tree, struct snag_binary_checkpoint_index *access,
@@ -1948,6 +2013,15 @@ test_native_voice_grouped(void)
             native_grouped_forward_event, &visited, error, sizeof(error)));
         assert(forward.next_seq == sequence + 1u &&
             visited == (sequence < 6u ? sequence + 1u : 6u));
+        if (sequence == 1u) {
+            struct snag_process_state suffix = {.log_seq = forward.next_seq,
+                .log_offset = (uint64_t)forward.offset};
+            memcpy(suffix.log_hash, forward.prev_sha256, sizeof(suffix.log_hash));
+            uint64_t suffix_next = 2u;
+            assert(!snag_session_each_event_since(&session, &suffix,
+                native_grouped_forward_event, &suffix_next, error, sizeof(error)) &&
+                suffix_next == 6u); /* Optional metadata has no callback. */
+        }
         if (sequence < 6u) assert(forward.offset == SNAG_BINARY_HEADER_SIZE);
     }
     assert(forward.offset == session.log_end && !strcmp(forward.prev_sha256, session.prev_sha256));
@@ -2038,6 +2112,40 @@ native_forward_point(struct snag_session *session)
         !strcmp(cursor.prev_sha256, session->prev_sha256) && probe.calls == 2u);
     assert(!snag_session_each_event_forward(session, &cursor, SIZE_MAX,
         native_forward_event, &probe, error, sizeof(error)) && probe.calls == 2u);
+    struct snag_process_state suffix = {.log_seq = first.next_seq,
+        .log_offset = (uint64_t)first.offset};
+    memcpy(suffix.log_hash, first.prev_sha256, sizeof(suffix.log_hash));
+    struct snag_process_state saved_suffix = suffix;
+    probe = (struct native_forward_probe){.next = 2u};
+    rc = snag_session_each_event_since(session, &suffix, native_forward_event, &probe,
+        error, sizeof(error));
+    if (rc < 0) fprintf(stderr, "native output suffix: %s\n", error);
+    assert(!rc && probe.calls == 1u && probe.next == 3u &&
+        !memcmp(&suffix, &saved_suffix, sizeof(suffix)));
+    unsigned char header[SNAG_BINARY_HEADER_SIZE];
+    struct snag_binary_identity identity;
+    struct snag_binary_anchor beginning;
+    assert(snag_pread(session->log_fd, header, sizeof(header), 0) == (ssize_t)sizeof(header) &&
+        !snag_binary_header_decode(header, sizeof(header), &identity, &beginning));
+    suffix.log_seq = beginning.next_seq;
+    suffix.log_offset = beginning.end;
+    for (size_t i = 0u; i < sizeof(beginning.digest); ++i)
+        (void)snprintf(suffix.log_hash + i * 2u, 3u, "%02x", beginning.digest[i]);
+    const int suffix_results[] = {1, SNAG_JOURNAL_STOP_AFTER, -1};
+    for (size_t i = 0u; i < sizeof(suffix_results) / sizeof(suffix_results[0]); ++i) {
+        probe = (struct native_forward_probe){.next = 1u, .result = suffix_results[i]};
+        rc = snag_session_each_event_since(session, &suffix, native_forward_event, &probe,
+            error, sizeof(error));
+        assert(rc == (suffix_results[i] < 0 ? -1 : 0) &&
+            probe.calls == (suffix_results[i] < 0 ? 1u : 2u));
+        if (suffix_results[i] < 0) assert(errno == EIO);
+    }
+    suffix = (struct snag_process_state){.log_seq = cursor.next_seq,
+        .log_offset = (uint64_t)cursor.offset};
+    memcpy(suffix.log_hash, cursor.prev_sha256, sizeof(suffix.log_hash));
+    probe = (struct native_forward_probe){.next = 3u};
+    assert(!snag_session_each_event_since(session, &suffix, native_forward_event, &probe,
+        error, sizeof(error)) && !probe.calls);
     const int results[] = {1, SNAG_JOURNAL_STOP_AFTER, -1};
     for (size_t i = 0u; i < sizeof(results) / sizeof(results[0]); ++i) {
         cursor = first;
@@ -2059,6 +2167,11 @@ native_forward_point(struct snag_session *session)
         assert(snag_session_each_event_forward(session, &cursor, SIZE_MAX,
             native_forward_event, &probe, error, sizeof(error)) < 0);
         assert(!probe.calls && !memcmp(&cursor, &saved, sizeof(cursor)));
+        suffix = (struct snag_process_state){.log_seq = cursor.next_seq,
+            .log_offset = (uint64_t)cursor.offset};
+        memcpy(suffix.log_hash, cursor.prev_sha256, sizeof(suffix.log_hash));
+        assert(snag_session_each_event_since(session, &suffix, native_forward_event, &probe,
+            error, sizeof(error)) < 0 && !probe.calls);
     }
 }
 
@@ -2193,6 +2306,13 @@ test_native_historical_point(void)
             native_forward_event, &forward, error, sizeof(error)) < 0 &&
             errno == (fault == 1u ? ENOENT : EINVAL));
         assert(cursor.next_seq == 2u && forward.calls == 1u);
+        struct snag_process_state suffix = {.log_seq = cursor.next_seq,
+            .log_offset = (uint64_t)cursor.offset};
+        memcpy(suffix.log_hash, cursor.prev_sha256, sizeof(suffix.log_hash));
+        forward = (struct native_forward_probe){.next = 2u};
+        assert(snag_session_each_event_since(&session, &suffix,
+            native_forward_event, &forward, error, sizeof(error)) < 0 &&
+            !forward.calls && errno == (fault == 1u ? ENOENT : EINVAL));
         struct snag_journal_cursor saved_cursor = cursor;
         forward = (struct native_forward_probe){.next = 2u};
         assert(snag_session_each_event_forward(&session, &cursor, SIZE_MAX,
@@ -2488,6 +2608,7 @@ test_store_binary_io(void)
     test_native_checkpoint_origins();
     test_native_producer_resume(false);
     test_native_producer_resume(true);
+    test_native_semantic_history();
     test_native_session_ack();
     test_native_session_retry(true, 1u);
     test_native_session_retry(false, 1u);
