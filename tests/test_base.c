@@ -3555,6 +3555,7 @@ test_session_client(void)
         assert(snag_session_stream_pair(source) == 0);
         assert(snag_session_stream_pair(target) == 0);
         assert(snag_session_client_init(&client, terminal[0], source[0]) == 0);
+        client.profile = (struct snag_terminal_profile){.term = "xterm"};
         assert(snag_session_client_attach(&client, target[0]) == 0);
         client_receive_frame(&client, target[1], SNAG_SESSION_RESERVE, &packet);
         relay_send_frame(target[1], SNAG_SESSION_READY, NULL, 0u);
@@ -3601,6 +3602,7 @@ test_session_client(void)
         assert(snag_session_stream_pair(source) == 0);
         assert(snag_session_stream_pair(target) == 0);
         assert(snag_session_client_init(&client, terminal[0], source[0]) == 0);
+        client.profile = (struct snag_terminal_profile){.term = "xterm"};
         assert(snag_session_client_attach(&client, target[0]) == 0);
         client_receive_frame(&client, target[1], SNAG_SESSION_RESERVE, &packet);
         relay_send_frame(target[1], SNAG_SESSION_READY, NULL, 0u);
@@ -4214,6 +4216,56 @@ test_session_relay(void)
     assert(close(lock) == 0 && unlinkat(dir, "lock", 0) == 0);
     assert(close(dir) == 0 && rmdir(root) == 0);
     free(root);
+}
+
+static void
+test_session_relay_final_output(void)
+{
+    const enum snag_session_message controls[] = {SNAG_SESSION_DETACH, SNAG_SESSION_EXIT};
+    for (size_t trial = 0u; trial < sizeof(controls) / sizeof(controls[0]); ++trial) {
+        int master = posix_openpt(O_RDWR | O_NOCTTY | O_CLOEXEC);
+        assert(master >= 0 && grantpt(master) == 0 && unlockpt(master) == 0);
+        int slave = open(ptsname(master), O_RDWR | O_NOCTTY | O_CLOEXEC);
+        assert(slave >= 0);
+        int pair[2];
+        assert(snag_session_stream_pair(pair) == 0);
+        struct snag_session_relay relay;
+        assert(snag_session_relay_init(&relay, master, pair[0]) == 0);
+        assert(write(slave, "first", 5u) == 5);
+        struct snag_session_packet packet = {0};
+        uint64_t deadline = snag_monotonic_ms() + 1000u;
+        int received;
+        do {
+            enum snag_session_message event;
+            assert(snag_monotonic_ms() < deadline);
+            assert(snag_session_relay_step(&relay, NULL, 1, &event) == 0 && !event);
+            received = snag_session_packet_read(pair[1], &packet);
+            assert(received >= 0);
+        } while (!received);
+        assert(snag_session_packet_type(&packet) == SNAG_SESSION_OUTPUT);
+        assert(snag_session_packet_length(&packet) == 5u);
+
+        /* The next bytes arrive while the first frame still awaits credit.
+         * Its ACK poll cannot read the master: POLLIN was disabled on entry. */
+        assert(write(slave, "tail", 4u) == 4);
+        struct pollfd pending = {.fd = master, .events = POLLIN};
+        assert(poll(&pending, 1u, 1000) == 1 && pending.revents & POLLIN);
+        relay_ack_output(&relay, pair[1], 5u);
+        unsigned char status = 0u;
+        size_t length = controls[trial] == SNAG_SESSION_EXIT ? 1u : 0u;
+        assert(snag_session_relay_control(&relay, controls[trial], &status, length) < 0);
+        assert(errno == EAGAIN && !relay.closing);
+        relay_receive_frame(&relay, NULL, pair[1], SNAG_SESSION_OUTPUT, &packet);
+        assert(snag_session_packet_length(&packet) == 4u);
+        assert(!memcmp(packet.bytes + SNAG_SESSION_HEADER, "tail", 4u));
+        assert(snag_session_relay_control(&relay, controls[trial], &status, length) == 0);
+        relay_wait_event(&relay, NULL, SNAG_SESSION_DETACH);
+        packet = (struct snag_session_packet){0};
+        assert(snag_session_packet_read(pair[1], &packet) == 1);
+        assert(snag_session_packet_type(&packet) == controls[trial]);
+        assert(close(pair[1]) == 0 && close(slave) == 0);
+        snag_session_relay_close(&relay);
+    }
 }
 #endif /* __linux__ && !_WIN32 */
 
@@ -4858,6 +4910,7 @@ run_base(int argc, char **argv)
     test_session_transport();
 #if defined(__linux__) && !defined(_WIN32)
     test_session_relay();
+    test_session_relay_final_output();
     test_session_client();
     test_session_voice_client();
     test_session_process();

@@ -515,6 +515,7 @@ including when an SSH connection drops. Open a new SSH connection and attach to 
 Use
 .B /s d
 to return to the shell while requests, commands, IRC and goals continue.
+Graceful exit and detach deliver pending terminal output before returning to the shell.
 Reconnect with
 .BR "snajpagent --attach SESSION_ID" ;
 .B \-A

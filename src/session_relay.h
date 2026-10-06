@@ -52,9 +52,10 @@ int snag_session_relay_step(struct snag_session_relay *, const struct snag_sessi
  * own the slave's foreground terminal, or block SIGTTOU during this call.
  * A stale/disconnected peer cannot activate a later attachment. */
 int snag_session_relay_activate(struct snag_session_relay *, uint64_t generation, int slave);
-/* Queue a terminal control frame. DETACH/EXIT close only the client after
- * delivery. SUSPEND retains its reservation and drains output until the same
- * client commits on continue. SWITCH keeps source until the client explicitly
+/* Queue a terminal control frame. DETACH/EXIT drain pending PTY output and its
+ * acknowledgements before closing the client. SUSPEND retains its reservation
+ * and drains output until the same client commits on continue.
+ * SWITCH keeps source until the client explicitly
  * detaches after the destination acknowledges attachment; failure keeps source.
  * EAGAIN means an earlier frame is still pending; retry through the owner. */
 int snag_session_relay_control(struct snag_session_relay *, enum snag_session_message,

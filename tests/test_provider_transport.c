@@ -9221,6 +9221,8 @@ handover_spawn(const char *path, const char *target, unsigned int mode)
 static void
 test_voice_handover(void)
 {
+    char *saved_term = snag_environment("TERM");
+    assert(setenv("TERM", "xterm", 1) == 0);
     for (unsigned int mode = 0u; mode < HANDOVER_CASES; ++mode) {
         char path[4096], directory[4096], retired[4096];
         assert(snprintf(path, sizeof(path), "%s/snajpagent-voice-handover-XXXXXX",
@@ -9334,6 +9336,12 @@ test_voice_handover(void)
         assert(WIFEXITED(status) && !WEXITSTATUS(status));
         assert(close(terminal[1]) == 0 && close(source.report) == 0 && close(source.control) == 0);
         assert(close(target.report) == 0 && close(target.control) == 0);
+    }
+    if (saved_term) {
+        assert(setenv("TERM", saved_term, 1) == 0);
+        free(saved_term);
+    } else {
+        assert(unsetenv("TERM") == 0);
     }
 }
 

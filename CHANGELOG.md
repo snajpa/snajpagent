@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Preserve final terminal output on graceful exit and detach when a previous
+  frame's acknowledgement arrives while more output is waiting in the private PTY.
+
 - Select exact joined agent channels with channel:ID or endpoint/#room in
   irc_send and irc_topic; irc_state lists those IDs. Pin sends to the provider
   request's membership, reject routes replaced during a request, and support

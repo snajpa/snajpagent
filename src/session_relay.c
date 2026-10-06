@@ -94,6 +94,24 @@ queue_output(struct snag_session_relay *relay, enum snag_session_message type,
     return 0;
 }
 
+static int
+master_read(struct snag_session_relay *relay, bool discard)
+{
+    unsigned char bytes[SNAG_SESSION_FRAME_MAX];
+    ssize_t n = read(relay->master, bytes, sizeof(bytes));
+
+    if (n > 0) {
+        if (discard) return 0;
+        if (queue_output(relay, SNAG_SESSION_OUTPUT, bytes, (size_t)n) < 0) return -1;
+        relay->output_length = (size_t)n;
+        relay->output_acknowledged = 0u;
+        return 0;
+    }
+    if (!n || errno == EIO) return 1;
+    if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) return 0;
+    return -1;
+}
+
 int
 snag_session_relay_control(struct snag_session_relay *relay, enum snag_session_message type,
                            const void *data, size_t length)
@@ -116,10 +134,16 @@ snag_session_relay_control(struct snag_session_relay *relay, enum snag_session_m
         return snag_errno(EINVAL);
     if (type == SNAG_SESSION_SWITCH && (length < 8u || length > SNAG_ID_HEX_LEN) &&
         length != SNAG_ID_HEX_LEN + SNAG_SESSION_VOICE_BYTES) return snag_errno(EINVAL);
-    /* Graceful closure follows the physical output acknowledgement. Hard
-     * escape is a separate notice and may precede a stalled display writer. */
-    if ((type == SNAG_SESSION_DETACH || type == SNAG_SESSION_EXIT) && relay->output_length)
-        return snag_errno(EAGAIN);
+    /* An ACK can clear the last frame in a poll that did not watch the master.
+     * Drain already-written PTY output before closing, then await its physical
+     * acknowledgement. Hard escape can still precede a stalled writer. */
+    if (type == SNAG_SESSION_DETACH || type == SNAG_SESSION_EXIT) {
+        if (relay->output.used || relay->output_length) return snag_errno(EAGAIN);
+        if (relay->phase == SNAG_SESSION_ATTACHED || relay->phase == SNAG_SESSION_ACCEPTED) {
+            if (master_read(relay, false) < 0) return -1;
+            if (relay->output.used) return snag_errno(EAGAIN);
+        }
+    }
     if (queue_output(relay, type, data, length) < 0) return -1;
     relay->closing = type == SNAG_SESSION_DETACH || type == SNAG_SESSION_EXIT ||
         type == SNAG_SESSION_ERROR || type == SNAG_SESSION_RELEASED;
@@ -140,24 +164,6 @@ snag_session_relay_control(struct snag_session_relay *relay, enum snag_session_m
         ++relay->generation;
     }
     return 0;
-}
-
-static int
-master_read(struct snag_session_relay *relay, bool discard)
-{
-    unsigned char bytes[SNAG_SESSION_FRAME_MAX];
-    ssize_t n = read(relay->master, bytes, sizeof(bytes));
-
-    if (n > 0) {
-        if (discard) return 0;
-        if (queue_output(relay, SNAG_SESSION_OUTPUT, bytes, (size_t)n) < 0) return -1;
-        relay->output_length = (size_t)n;
-        relay->output_acknowledged = 0u;
-        return 0;
-    }
-    if (!n || errno == EIO) return 1;
-    if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) return 0;
-    return -1;
 }
 
 int
