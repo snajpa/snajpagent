@@ -184,6 +184,27 @@ test_admission_edit_order(void)
     assert_draft(server, &peer, generation, revision + 1u, "");
     assert(engine.submissions == 3u);
 
+    const char *command = "44444444444444444444444444444444";
+    revision = edit(server, &peer, generation, revision + 1u, "/fast");
+    json_t *reply = exchange(server, &peer,
+        json_pack("{s:s,s:I,s:s,s:I,s:s,s:s}", "type", "command",
+            "generation", (json_int_t)generation, "route", "rollout",
+            "draft_revision", (json_int_t)revision, "id", command, "text", "/fast"), "result");
+    assert(!strcmp(snag_json_string(reply, "status"), "pending"));
+    json_decref(reply);
+    revision = edit(server, &peer, generation, revision, "typed while command works");
+    json_t *result = json_pack("{s:s,s:s,s:i,s:s}", "id", command,
+        "status", "completed", "seq", 5, "outcome", "ok");
+    assert(result && snag_view_server_command_result(server, result) == 0);
+    json_decref(result);
+    reply = exchange(server, &peer, json_pack("{s:s,s:s}", "type", "receipt",
+        "id", command), "result");
+    assert(!strcmp(snag_json_string(reply, "status"), "completed"));
+    assert(json_integer_value(json_object_get(reply, "draft_cleared")) == 0);
+    json_decref(reply);
+    assert_draft(server, &peer, generation, revision, "typed while command works");
+    assert(engine.submissions == 4u);
+
     snag_view_channel_close(&peer);
     snag_view_server_close(server);
     snag_session_relay_close(&relay);

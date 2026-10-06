@@ -52,9 +52,18 @@ void snag_view_server_step(struct snag_view_server *);
 void snag_view_server_state(struct snag_view_server *, const json_t *);
 int snag_view_server_result(struct snag_view_server *, const char *id,
     const char *status, uint64_t seq, const char *event);
+int snag_view_server_command_result(struct snag_view_server *, const json_t *);
 bool snag_view_server_attached(const struct snag_view_server *);
 
 #else
+static inline int
+snag_view_server_command_result(struct snag_view_server *server, const json_t *result)
+{
+    (void)server;
+    (void)result;
+    return 0;
+}
+
 static inline void
 snag_view_server_stop(struct snag_view_server *server)
 {

@@ -73,6 +73,11 @@ Receipts identify the existing durable event and survive reconnect to that owner
 the journal schema stays unchanged. Tests cover active steering, cancellation,
 classic return and malformed/stalled peers. See [SV/1](session-view.md) for the
 implemented capability and framing contract. WITH_VM=0 omits this endpoint.
+The backend now accepts typed rollout commands through that mailbox and retains
+command echoes/results as immutable private presentation files. Completed command
+receipts survive live-owner reconnect; commands needing terminal/IRC adapters
+return a terminal requirement before effects. Report buffers, deferred-result
+notifications and automated terminal transactions remain frontend integration work.
 The frontend connection manager now shares one draft and owner lease per session
 across split windows. Workspace state v3 adds drafts and pending request identities,
 accepts v1/v2 layouts, and saves before transmitting a submission. Reconnect queries
@@ -837,9 +842,9 @@ line count is unavailable. Do not invent a scroll percentage from loaded pages.
 the actual journal still existing. Cache eviction, model context limits, pager
 lifetime and terminal height do not truncate that range. Pre-upgrade output
 never recorded in the journal cannot be reconstructed. Command report snapshots
-and presentation-only diagnostics remain available for their owning process's
-lifetime; they are labelled separately from durable session history. Arbitrary
-external programs' private screens are outside the transcript.
+remain in private session files across process restarts. Other presentation-only
+diagnostics need their own retention decision; neither is durable model history.
+Arbitrary external programs' private screens are outside the transcript.
 
 Keep report snapshots in private spill files while referenced, including a
 command-result entry from which the buffer can be reopened. Do not silently
@@ -848,7 +853,10 @@ add no journal event type. The newly requested durable direct messages do requir
 a typed IRC schema extension, covered in section 5.1. Current reducers reject
 unknown types, so that extension needs an explicit reader/writer compatibility
 transition; it cannot inherit the original UI-only rollback promise. Persisting
-presentation-only reports across restarts remains a separate storage decision.
+presentation-only reports across restarts uses private immutable session files:
+`.view-report-ID`, with random ID, exact length and digest in the command receipt.
+They remain until explicit session deletion. Workspace references and the reader
+validate identity and digest before display; no report bytes enter model events.
 
 ### 7.3 Verbosity, following and selection stability
 

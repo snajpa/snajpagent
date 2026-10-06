@@ -15,6 +15,12 @@
   receipts without resending prompts. Drafts survive detach and workspace resume.
   `:close` preserves owners; `:q`/`:qa` request normal shutdown with draft guards.
 
+- Add semantic command receipts and private immutable reports in the owner
+  backend, including exactly-once `/fast` dispatch across reconnects. Command
+  echoes and immediate results stay outside model context. Preserve reports
+  across owner restart and remove them with explicit session deletion.
+  Commands needing terminal input return a typed handoff requirement.
+
 - Add asynchronous agent creation with `:new [NAME]` and explicit resume through
   picker Enter, `:session [ID]` and `vm --session ID`. Reuse live owners and retain
   normal saved-session recovery. Startup reports failures in the workspace,

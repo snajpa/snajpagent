@@ -18,8 +18,9 @@ receipt queries repeat until resolved, and unknown outcomes require explicit rec
 The owner also retains revisioned rollout drafts through controller changes.
 The workspace reconciles owner and saved drafts using their last shared text
 digest and owner identity; conflicts retain both copies for an explicit choice.
-Commands/reports, external-terminal transactions and IRC routes remain integration work;
-clients use only advertised capabilities. A classic owner without this endpoint
+The backend also accepts typed commands and retains immutable command reports.
+Frontend report buffers, terminal handoff for command results, deferred-control
+notifications and IRC routes remain integration work; clients use only advertised capabilities. A classic owner without this endpoint
 continues to offer its existing terminal attachment and best-effort history.
 
 ## Framing and service
@@ -52,11 +53,11 @@ All message names below are the JSON `type` value. A new client sends
 `{"type":"hello","version":1}`. `capabilities` supplies `version`, the full
 `session` ID, a random live-owner `instance` ID and `features`.
 The implemented features are `observe`, `control`, `submit`, `cancel`, `quit`,
-`detach`, `receipts` and `drafts`.
+`detach`, `receipts`, `drafts` and `commands`.
 
 After hello, `state` messages contain a `state` object with committed `seq`,
 byte `end`, `sha256`, journal `schema`, `active`, and the next-turn `provider`,
-`model` and `effort`. Publication follows owner admission. Registration and
+`model`, `effort` and `service_tier` (empty for the provider default). Publication follows owner admission. Registration and
 snapshot selection run on the same presentation thread as state publication.
 Pending state is coalesced; a slow observer reads the complete intervening
 range from the journal. Observation never reserves a controller or changes
@@ -73,7 +74,8 @@ still causes the history reader to return its new page.
 | --- | --- |
 | `reserve` | `reserved` with a `generation`, or `error`. Uses the same exclusive reservation as the classic terminal. |
 | `commit` with `generation` | `bound` with that generation. The client may then submit input. Classic STATUS now reports attached. |
-| `submit` with `generation`, 32-character lowercase hexadecimal `id`, and `text` | `result` with that ID and `pending`, followed by `committed` or `rejected`. Plain input addresses the rollout, including when the previous terminal showed IRC. Active work uses existing steering/queue admission. Slash commands require a future command capability; `/ro` retains the ordinary read-only prompt syntax. |
+| `submit` with `generation`, 32-character lowercase hexadecimal `id`, and `text` | `result` with that ID and `pending`, followed by `committed` or `rejected`. Plain input addresses the rollout, including when the previous terminal showed IRC. Active work uses existing steering/queue admission. Slash commands use the separate `command` exchange; `/ro` retains the ordinary read-only prompt syntax. |
+| `command` with `generation`, `id`, `text`, `route: rollout`, and optional `draft_revision` | `pending`, then `completed` with an immutable report or `terminal` before executing any effect. Uses the same mailbox, receipt and draft-revision rules as submission. |
 | `receipt` with `id` | Current `result`, or `unknown`. Requires hello but no controller lease. |
 | `draft_get` with `generation` and `route: rollout` | Current `draft` snapshot and subscription to later owner changes. Requires a bound controller. |
 | `draft` with `generation`, `route: rollout`, expected `revision`, positive `edit`, `text` and byte `cursor` | A `draft` response echoes `edit`, with `status: accepted` or `conflict` and the current snapshot. The cursor must lie on a grapheme boundary. Unsupported routes and invalid text/cursors leave the draft unchanged. |
@@ -103,6 +105,34 @@ before admission and receive a rejected receipt.
 Submission refusals include the request ID when it is valid. A control error
 does not resolve a pending submission; clients query that submission's receipt
 before offering recovery.
+
+Command `completed` means dispatch finished. Its `seq` is the resulting committed
+journal watermark, and `outcome` is `ok` or `error`; it does not invent an input
+admission event. A deferred operation such as `/configure` reports that it was
+scheduled. Later completion is separate from this receipt. Native adapters cover
+help/status/history, model/effort/context/fast settings, verbosity, goal/state,
+steering/banner, configure/compact/yield and session list/name. Commands needing
+terminal input or IRC scope return `terminal` before dispatch. The client must
+use its own retained command text for an explicit whole-terminal transaction;
+this result never contains a shell command supplied by the owner.
+
+A completed receipt includes `report: {id, bytes, sha256, command}` and an empty
+`report_error`, or `report: null` plus a retention error. Failure to retain output
+does not undo side effects or permit automatic re-execution. Reports contain the
+command echo and immediate report/host/error output. The private session file
+`.view-report-ID` is exclusive-created, written and synced before publication.
+The random 32-character lowercase hexadecimal ID is a basename component, never
+an arbitrary path. Report readers must validate the private regular file, exact
+byte length and SHA256, then apply presentation redaction and inert-control
+rendering. The frontend reader adapter remains to be implemented.
+
+The report content is outside the transport message buffer and has no report-size
+quota. Existing commands retain their own output policies, including `/history`'s
+scan window. Files are immutable, survive owner and workspace restarts, and remain
+until explicit session deletion. Deletion recognizes only exact report basenames
+and private regular files, including in builds with the workspace omitted.
+Reports add no session event or provider context. A changed owner instance still
+returns an unknown receipt; surviving report bytes do not authorize replay.
 
 Draft snapshots contain `route`, `revision`, `text` and byte `cursor`.
 Draft refusals echo a valid `edit` token, independently of submission IDs.

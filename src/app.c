@@ -3064,6 +3064,13 @@ handle_common_command(struct app_state *app, const char *line, bool active, bool
     if (snag_verbosity_command(line, strlen(line))) {
         const char *value = line + 8u;
         while (isspace((unsigned char)*value)) ++value;
+        if (*value && app->ui.input_interface) {
+            uint64_t level;
+            if (snag_parse_count(value, &level) < 0 || level > 6u)
+                return app_error(app, "usage: /verbose [0..6]");
+            if (snag_ui_set_verbosity(&app->ui, (unsigned int)level) < 0) return -1;
+            value = "";
+        }
         if (!*value) {
             unsigned int level = snag_ui_verbosity(&app->ui);
             return app_reportf(app, "verbosity: %u (%s)%s", level,
@@ -3384,10 +3391,112 @@ input_command(struct app_state *app, const char *line, bool active,
     return rc;
 }
 
+#if SNAJPAGENT_VM
+/* Commands requiring terminal-bound input or IRC scope hand off before any
+ * effect. This list grows only when that command has a semantic adapter. */
+static bool
+view_command_native(const char *line)
+{
+    size_t length = strcspn(line, " \t\r\n");
+    char verb[32];
+    if (length >= sizeof(verb)) return false;
+    memcpy(verb, line, length);
+    verb[length] = '\0';
+    if (snag_string_in(verb, "/help /? /status /history /model /fast /effort /context "
+        "/state /goal /steering /banner /configure /compact /yield /verbose")) return true;
+    if (strcmp(verb, "/session") && strcmp(verb, "/s")) return false;
+    const char *argument = line + length;
+    while (isspace((unsigned char)*argument)) ++argument;
+    return !*argument || !strcmp(argument, "l") || !strcmp(argument, "list") ||
+        (!strncmp(argument, "name", 4u) && (!argument[4] || isspace((unsigned char)argument[4])));
+}
+
+/* Published files are immutable presentation, never events or provider input.
+ * A receipt exposes a random basename only after all bytes and the directory
+ * entry are durable. Session deletion also removes its retained reports. */
+static json_t *
+view_command_report(struct app_state *app, const char *command, const struct snag_buf *text)
+{
+    char id[SNAG_ID_HEX_LEN + 1u], hash[SNAG_SHA256_HEX_LEN + 1u], name[64];
+    if (text->len > INT64_MAX || snag_random_id(id) < 0) return NULL;
+    snag_sha256_hex(text->data, text->len, hash);
+    json_t *report = json_pack("{s:s,s:I,s:s,s:s}", "id", id,
+        "bytes", (json_int_t)text->len, "sha256", hash, "command", command);
+    if (!report) return NULL;
+    (void)snprintf(name, sizeof(name), ".view-report-%s", id);
+    int fd = snag_create_private_at(app->session.dir_fd, name, true);
+    if (fd < 0) { json_decref(report); return NULL; }
+    int rc = snag_write_full(fd, text->data, text->len);
+    if (!rc) rc = snag_sync_file(fd);
+    int saved = errno;
+    if (close(fd) < 0 && !rc) { rc = -1; saved = errno; }
+    if (!rc && snag_sync_dir(app->session.dir_fd) < 0) { rc = -1; saved = errno; }
+    if (rc < 0) {
+        (void)snag_unlink_at(app->session.dir_fd, name, false);
+        json_decref(report);
+        report = NULL;
+    }
+    errno = saved;
+    return report;
+}
+
+static int
+view_input_command(struct app_state *app, const char *line, bool active,
+    bool *handled, bool *prompt_ready)
+{
+    char id[SNAG_ID_HEX_LEN + 1u];
+    memcpy(id, app->ui.view_request, sizeof(id));
+    /* A command may pump input while working. Its owner receipt stays pending,
+     * but it must not be mistaken for a rejected prompt by the next poll. */
+    app->ui.view_request[0] = '\0';
+    *handled = true;
+    *prompt_ready = false;
+    if (!view_command_native(line)) {
+        json_t *result = json_pack("{s:s,s:s,s:I,s:s}", "id", id, "status", "terminal",
+            "seq", (json_int_t)(app->session.next_seq - 1u),
+            "reason", "command requires the session's whole-terminal interface");
+        int rc = result ? snag_ui_command_result(&app->ui, result) : -1;
+        json_decref(result);
+        return rc;
+    }
+    struct snag_buf report = {.max = SIZE_MAX};
+    int rc = snag_term_append_safe(&report, line, strlen(line));
+    if (!rc) rc = snag_buf_putc(&report, '\n');
+    if (rc < 0) {
+        snag_buf_free(&report);
+        return snag_ui_view_result(&app->ui, id, "rejected", 0u, "cannot retain command");
+    }
+    app->command_report = app->ui.command_report = &report;
+    app->ui.command_error = false;
+    rc = input_command(app, line, active, handled, prompt_ready);
+    if (!rc && !*handled) rc = app_error(app, "unknown slash command");
+    bool failed = rc < 0 || app->ui.command_error;
+    app->command_report = app->ui.command_report = NULL;
+    *handled = true;
+    json_t *saved = view_command_report(app, line, &report);
+    char error[256] = "";
+    if (!saved) (void)snprintf(error, sizeof(error), "cannot retain command report: %s",
+        strerror(errno));
+    json_t *result = json_pack("{s:s,s:s,s:I,s:s,s:O,s:s}", "id", id,
+        "status", "completed", "seq", (json_int_t)(app->session.next_seq - 1u),
+        "outcome", failed ? "error" : "ok", "report", saved ? saved : json_null(),
+        "report_error", error);
+    json_decref(saved);
+    int published = result ? snag_ui_command_result(&app->ui, result) : -1;
+    json_decref(result);
+    snag_buf_free(&report);
+    return rc < 0 ? rc : published;
+}
+#endif
+
 int
 snag_app_input_command(struct app_state *app, const char *line, bool active,
     bool *handled, bool *prompt_ready)
 {
+#if SNAJPAGENT_VM
+    if (app->ui.input_interface && app->ui.view_request[0] && snag_prompt_command(line))
+        return view_input_command(app, line, active, handled, prompt_ready);
+#endif
     if (app->command_report || !app->ui.opened || app->ui.input_interface ||
         app->execute || !pager_command(app) ||
         snag_isatty(STDIN_FILENO) != 1 || snag_isatty(STDERR_FILENO) != 1) {

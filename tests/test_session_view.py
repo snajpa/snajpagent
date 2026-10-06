@@ -111,6 +111,12 @@ class View:
         self.send(type='submit', generation=self.generation, id=request, text=text, **options)
         return request
 
+    def command(self, text, request=None, **options):
+        request = request or uuid.uuid4().hex
+        self.send(type='command', generation=self.generation, id=request, text=text,
+                  route='rollout', **options)
+        return request
+
     def result(self, request):
         return self.until('result', lambda message: message['id'] == request and
                           message['status'] != 'pending')

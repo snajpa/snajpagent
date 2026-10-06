@@ -1898,8 +1898,17 @@ control and leaves the owner running.
 The current backend supports plain rollout submissions, durable admission
 receipts, cancellation, detach and normal owner shutdown. Reconnect can query
 a receipt without repeating a prompt. A changed owner instance with an unknown
-receipt requires explicit reconciliation against history. Command/report adapters
-remain under development.
+receipt requires explicit reconciliation against history.
+.PP
+Typed command requests use the same serialized owner queue and reconnect receipts.
+Completed dispatch returns an immutable report containing the command and its
+immediate output. Reports stay outside model context, survive owner restarts,
+and are removed by explicit session deletion. Deferred controls acknowledge
+scheduling before their later completion. Commands needing a terminal transaction
+return that requirement before execution. Workspace report buffers and automatic
+command handoff remain under development; use
+.B :classic
+for slash commands in the current workspace frontend.
 .PP
 The backend also offers revisioned rollout drafts. Bound controllers can read,
 replace and subscribe to a draft, using its expected revision to reject stale edits.

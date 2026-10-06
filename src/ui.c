@@ -678,7 +678,7 @@ view_submit(void *opaque, const char *id, const char *text, uint64_t generation)
     item->interface_input = true;
     take_snapshot(display, &item->snapshot);
     item->snapshot.view = SNAG_RENDER_ROLLOUT;
-    item->steering = item->snapshot.active;
+    item->steering = item->snapshot.active && !snag_prompt_command(text);
     if (item->steering) atomic_fetch_add(&runtime->steering_pending, 1u);
     if (queue_push(&runtime->actions, item)) return 0;
     if (item->steering) atomic_fetch_sub(&runtime->steering_pending, 1u);
@@ -942,6 +942,8 @@ apply_message(struct snag_ui_display *display, struct snag_ui_command *command,
     case SNAG_UI_VIEW_STATE:
         snag_view_server_state(display->view, command->data.voice);
         return 0;
+    case SNAG_UI_COMMAND_RESULT:
+        return snag_view_server_command_result(display->view, command->data.voice);
     case SNAG_UI_VIEW_RESULT: {
         const json_t *r = command->data.voice;
         uint64_t seq;
@@ -1716,11 +1718,12 @@ int
 snag_ui_view_state(struct snag_ui *ui, const struct snag_session *session)
 {
     if (!ui->view_listening || ui->view_state_seq == session->next_seq) return 0;
-    json_t *state = json_pack("{s:I,s:I,s:s,s:i,s:b,s:s,s:s,s:s}",
+    json_t *state = json_pack("{s:I,s:I,s:s,s:i,s:b,s:s,s:s,s:s,s:s}",
         "seq", (json_int_t)(session->next_seq - 1u), "end", (json_int_t)session->log_end,
         "sha256", session->prev_sha256, "schema", (int)session->format_version,
         "active", session->active_turn, "provider", session->default_provider,
-        "model", session->default_model, "effort", session->default_effort);
+        "model", session->default_model, "effort", session->default_effort,
+        "service_tier", session->service_tier ? session->service_tier : "");
     if (!state) return -1;
     int rc = snag_ui_send(ui, (struct snag_ui_command){
         .kind = SNAG_UI_VIEW_STATE, .data.voice = state});
@@ -1742,6 +1745,14 @@ snag_ui_view_result(struct snag_ui *ui, const char *id, const char *status,
     json_decref(result);
     if (!strcmp(ui->view_request, id)) ui->view_request[0] = '\0';
     return rc;
+}
+
+int
+snag_ui_command_result(struct snag_ui *ui, const json_t *result)
+{
+    if (!ui->view_listening) return 0;
+    return snag_ui_send(ui, (struct snag_ui_command){
+        .kind = SNAG_UI_COMMAND_RESULT, .data.voice = result});
 }
 
 int
@@ -1875,6 +1886,18 @@ snag_ui_update(struct snag_ui *ui, const char *program, const char *url)
 int
 snag_ui_text(struct snag_ui *ui, enum snag_ui_operation op, const char *text)
 {
+    if (ui->command_report && (op == SNAG_UI_HOST || op == SNAG_UI_HELP ||
+        op == SNAG_UI_ERROR || op == SNAG_UI_WARNING || op == SNAG_UI_RUNTIME)) {
+        if (op == SNAG_UI_ERROR) ui->command_error = true;
+        size_t length = strlen(text);
+        if (snag_term_append_safe(ui->command_report, text, length) < 0) return -1;
+        int rc = length && text[length - 1u] == '\n' ? 0 : snag_buf_putc(ui->command_report, '\n');
+        if (!rc && ui->observe && op != SNAG_UI_RUNTIME)
+            ui->observe(ui->observe_opaque, op == SNAG_UI_ERROR ? "error" :
+                op == SNAG_UI_WARNING ? "warning" : op == SNAG_UI_HELP ? "help" : "host",
+                text, NULL);
+        return rc;
+    }
     struct ui_message message = {.command = {.kind = op}};
     return send_message(ui, &message, text);
 }

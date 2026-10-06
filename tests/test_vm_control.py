@@ -340,7 +340,7 @@ class ControlTests(unittest.TestCase):
         child.command('attach ' + self.owner.sid)
         child.until(b'ATTACHED')
         child.write(b'i/status\r')
-        child.repaint_until(b'command capability unavailable')
+        child.repaint_until(b'command capability')
         self.assertEqual(self.inputs(), [])
         self.escape(child)
         child.command('recover')

@@ -154,6 +154,37 @@ unlink_expected_file(int dir_fd, const char *name, bool optional, char *error, s
 }
 
 static int
+remove_view_reports(int dir_fd, char *error, size_t error_size)
+{
+    int fd = snag_open_read_security_at(dir_fd, ".", true);
+    if (fd < 0) return -1;
+    struct snag_directory *dir = snag_directory_open(fd);
+    if (!dir) { (void)close(fd); return -1; }
+    int rc = 0;
+    for (;;) {
+        errno = 0;
+        const char *name = snag_directory_next(dir);
+        if (!name) { if (errno) rc = -1; break; }
+        if (strncmp(name, ".view-report-", 13u) || strlen(name + 13u) != SNAG_ID_HEX_LEN ||
+            !snag_hex_is_lower(name + 13u, SNAG_ID_HEX_LEN)) continue;
+        int file = snag_open_read_security_at(dir_fd, name, false);
+        if (file < 0) { rc = -1; break; }
+        rc = snag_store_verify_private_fd(file, false, "command report", error, error_size);
+        int saved = errno;
+        if (close(file) < 0 && !rc) { rc = -1; saved = errno; }
+        errno = saved;
+        if (rc < 0 || (rc = snag_unlink_at(dir_fd, name, false)) < 0) break;
+    }
+    int saved = errno;
+    if (snag_directory_close(dir) < 0 && !rc) { rc = -1; saved = errno; }
+    errno = saved;
+    if (!rc) rc = snag_sync_dir(dir_fd);
+    if (rc < 0 && error_size && !*error)
+        (void)snag_errorf(error, error_size, "cannot remove command reports: %s", strerror(errno));
+    return rc;
+}
+
+static int
 remove_deleted_session(struct snag_store *store, struct snag_session *session, char *error, size_t error_size)
 {
     if (close_fd_slot(&session->log_fd) < 0)
@@ -162,6 +193,7 @@ remove_deleted_session(struct snag_store *store, struct snag_session *session, c
     if (snag_media_work_remove(session->dir_fd,error,error_size)!=0)return -1;
     if (snag_store_remove_upload_staging(session->dir_fd, error, error_size) < 0) return -1;
     if (snag_media_remove(session->dir_fd,error,error_size)<0)return -1;
+    if (remove_view_reports(session->dir_fd, error, error_size) < 0) return -1;
     /* Keep the durable delete intent until other content is gone. The private
      * trash name remains the deletion marker after the final log unlink. */
     if (unlink_expected_file(session->dir_fd, "prompt_history", true, error, error_size) < 0 ||

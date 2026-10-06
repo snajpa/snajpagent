@@ -2558,6 +2558,12 @@ main(void)
     json_decref(catalog);
     assert_session_lock_retained(&session, "after structured catalog");
     assert(unlinkat(store.sessions_fd, collision, AT_REMOVEDIR) == 0);
+    /* Presentation files survive ordinary resume, but explicit session
+     * deletion must remove them even in a build with WITH_VM=0. */
+    int report_fd = snag_create_private_at(session.dir_fd,
+        ".view-report-0123456789abcdef0123456789abcdef", true);
+    assert(report_fd >= 0 && snag_write_full(report_fd, "/status\nretained report\n", 24u) == 0);
+    assert(close(report_fd) == 0);
     assert(snag_session_delete(&store, &session, id_prefix, NULL, error, sizeof(error)) == 0);
     snag_session_close(&session);
     snag_session_init(&session);

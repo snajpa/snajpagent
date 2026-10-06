@@ -136,7 +136,7 @@ snag_view_channel_read(struct snag_view_channel *channel, json_t **value)
 struct view_receipt {
     char id[SNAG_ID_HEX_LEN + 1u], sha256[SNAG_SHA256_HEX_LEN + 1u];
     json_t *result;
-    bool pending;
+    bool pending, command;
     uint64_t draft_revision;
     struct view_receipt *next;
 };
@@ -267,19 +267,18 @@ find_receipt(struct snag_view_server *server, const char *id)
     return NULL;
 }
 
-int
-snag_view_server_result(struct snag_view_server *server, const char *id,
-    const char *status, uint64_t seq, const char *event)
+static int
+finish_receipt(struct snag_view_server *server, struct view_receipt *receipt,
+    json_t *result, bool accepted)
 {
-    if (!server) return 0;
-    struct view_receipt *receipt = find_receipt(server, id);
-    if (!receipt) return snag_errno(ENOENT);
-    bool clear = !strcmp(status, "committed") && receipt->draft_revision &&
+    bool clear = accepted && receipt->draft_revision &&
         receipt->draft_revision == server->draft_revision && server->draft_revision < INT64_MAX;
-    json_t *result = json_pack("{s:s,s:s,s:s,s:I,s:s,s:I}", "type", "result", "id", id,
-        "status", status, "seq", (json_int_t)seq, "event", event ? event : "",
-        "draft_cleared", (json_int_t)(clear ? server->draft_revision + 1u : 0u));
-    if (!result) return -1;
+    if (!result || json_object_set_new(result, "type", json_string("result")) < 0 ||
+        json_object_set_new(result, "draft_cleared", json_integer(
+            (json_int_t)(clear ? server->draft_revision + 1u : 0u))) < 0) {
+        json_decref(result);
+        return -1;
+    }
     if (clear) {
         json_decref(server->draft);
         server->draft = json_incref(server->empty_draft);
@@ -291,6 +290,28 @@ snag_view_server_result(struct snag_view_server *server, const char *id,
     receipt->pending = false;
     if (server->pending == receipt) server->pending = NULL;
     return 0;
+}
+
+int
+snag_view_server_result(struct snag_view_server *server, const char *id,
+    const char *status, uint64_t seq, const char *event)
+{
+    if (!server) return 0;
+    struct view_receipt *receipt = find_receipt(server, id);
+    if (!receipt) return snag_errno(ENOENT);
+    json_t *result = json_pack("{s:s,s:s,s:I,s:s}", "id", id,
+        "status", status, "seq", (json_int_t)seq, "event", event ? event : "");
+    return finish_receipt(server, receipt, result, !strcmp(status, "committed"));
+}
+
+int
+snag_view_server_command_result(struct snag_view_server *server, const json_t *result)
+{
+    if (!server) return 0;
+    const char *id = snag_json_string(result, "id");
+    struct view_receipt *receipt = id ? find_receipt(server, id) : NULL;
+    if (!receipt || !receipt->command) return snag_errno(ENOENT);
+    return finish_receipt(server, receipt, json_deep_copy(result), true);
 }
 
 static int
@@ -319,7 +340,7 @@ refuse_request(struct view_peer *peer, const json_t *message, const char *error)
 {
     const char *type = snag_json_string(message, "type");
     const char *id = snag_json_string(message, "id");
-    if (type && !strcmp(type, "submit") && request_id(id))
+    if (type && (!strcmp(type, "submit") || !strcmp(type, "command")) && request_id(id))
         return reply(peer, json_pack("{s:s,s:s,s:s}", "type", "error", "id", id, "message", error));
     uint64_t edit;
     if (type && !strcmp(type, "draft") &&
@@ -375,15 +396,17 @@ submit(struct snag_view_server *server, struct view_peer *peer, const json_t *me
     const char *text = snag_json_bounded_string(json_object_get(message, "text"),
         SNAG_MAX_DIRECT_PROMPT);
     if (!request_id(id) || !text) return refuse_request(peer, message, "invalid submission");
-    /* Command/report and IRC routing are separate advertised capabilities.
-     * Plain submissions always address the rollout, including multiline text. */
-    if (snag_prompt_command(text))
-        return refuse_request(peer, message, "command capability unavailable");
+    bool command = !strcmp(snag_json_string(message, "type"), "command");
+    if (command != snag_prompt_command(text))
+        return refuse_request(peer, message, "use the command capability for slash commands");
+    const char *route = snag_json_string(message, "route");
+    if (command && (!route || strcmp(route, "rollout")))
+        return refuse_request(peer, message, "unsupported command route");
     char digest[SNAG_SHA256_HEX_LEN + 1u];
     snag_sha256_hex(text, strlen(text), digest);
     struct view_receipt *receipt = find_receipt(server, id);
     if (receipt) {
-        if (strcmp(receipt->sha256, digest))
+        if (receipt->command != command || strcmp(receipt->sha256, digest))
             return refuse_request(peer, message, "request ID already used");
         return reply(peer, json_incref(receipt->result));
     }
@@ -409,6 +432,7 @@ submit(struct snag_view_server *server, struct view_peer *peer, const json_t *me
         return -1;
     }
     receipt->pending = true;
+    receipt->command = command;
     receipt->draft_revision = draft_revision;
     receipt->next = server->receipts;
     server->receipts = server->pending = receipt;
@@ -429,6 +453,8 @@ dispatch(struct snag_view_server *server, struct view_peer *peer, const json_t *
         !strcmp(type, "reserve") ? "type" : !strcmp(type, "receipt") ? "type id" :
         !strcmp(type, "draft_get") ? "type generation route" :
         !strcmp(type, "draft") ? "type generation route revision edit text cursor" :
+        !strcmp(type, "command") ? json_object_get(message, "draft_revision") ?
+            "type generation id text route draft_revision" : "type generation id text route" :
         !strcmp(type, "submit") ?
             json_object_get(message, "draft_revision") || json_object_get(message, "route") ?
             "type generation id text route draft_revision" : "type generation id text" :
@@ -443,10 +469,11 @@ dispatch(struct snag_view_server *server, struct view_peer *peer, const json_t *
             version != 1u) return snag_errno(EPROTO);
         peer->hello = true;
         peer->deadline = 0u;
-        return reply(peer, json_pack("{s:s,s:i,s:s,s:s,s:[s,s,s,s,s,s,s,s]}",
+        return reply(peer, json_pack("{s:s,s:i,s:s,s:s,s:[s,s,s,s,s,s,s,s,s]}",
             "type", "capabilities", "version", 1, "session", server->session,
             "instance", server->instance, "features",
-            "observe", "control", "submit", "cancel", "quit", "detach", "receipts", "drafts"));
+            "observe", "control", "submit", "cancel", "quit", "detach", "receipts", "drafts",
+            "commands"));
     }
     if (!strcmp(type, "receipt")) {
         const char *id = snag_json_string(message, "id");
@@ -489,7 +516,8 @@ dispatch(struct snag_view_server *server, struct view_peer *peer, const json_t *
         return draft_snapshot(server, peer, 0u, "snapshot");
     }
     if (!strcmp(type, "draft")) return replace_draft(server, peer, message);
-    if (!strcmp(type, "submit")) return submit(server, peer, message);
+    if (!strcmp(type, "submit") || !strcmp(type, "command"))
+        return submit(server, peer, message);
     if (!strcmp(type, "cancel") || !strcmp(type, "quit")) {
         if (server->callbacks.control(server->callbacks.opaque, !strcmp(type, "quit")) < 0)
             return refuse(peer, "control unavailable");
