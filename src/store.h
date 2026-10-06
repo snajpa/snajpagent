@@ -19,8 +19,8 @@
 #define SNAG_MAX_IRC_SNAPSHOT (8u * 1024u * 1024u)
 #define SNAG_MAX_TIMER_TEXT (256u * 1024u)
 #define SNAG_IRC_REPLY_REMINDER_TEXT \
-    "Use irc_send to reply to the local operator in the IRC room before " \
-    "ending this turn."
+    "Use irc_send to reply to the originating conversation before ending this turn. " \
+    "For a private query select query:CONVERSATION_ID; keep private replies in that query."
 #define SNAG_MAX_GOAL_PROMPT (1024u * 1024u)
 #define SNAG_BANNER_MAX (4u * 1024u)
 #define SNAG_MAX_GOAL_BLOCKER (64u * 1024u)

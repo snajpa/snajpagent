@@ -28,6 +28,8 @@ struct snag_irc_route {
 
 struct snag_irc_destination {
     struct snag_irc_target target;
+    char connection[SNAG_ID_HEX_LEN + 1u];
+    uint64_t generation;
     char endpoint[SNAG_CONFIG_IRC_ENDPOINT_MAX + 1u];
     char room[SNAG_CONFIG_IRC_ROOM_MAX + 2u];
     char model[SNAG_CONFIG_IRC_NICK_MAX + 1u];
@@ -132,6 +134,11 @@ int snag_irc_send_route(struct snag_irc *irc, const struct snag_irc_route *route
                          struct snag_buf *report, char *error, size_t error_size);
 int snag_irc_query_open(struct snag_irc *, uint32_t destination, enum snag_irc_identity,
                         const char *peer, struct snag_irc_query_target *, char *, size_t);
+/* Open within a request's captured connection generation. */
+int snag_irc_query_open_frozen(struct snag_irc *, const struct snag_irc_query_target *,
+                               const char *, struct snag_irc_query_target *, char *, size_t);
+bool snag_irc_event_query_target(const struct snag_irc *, const struct snag_irc_event *,
+                                 struct snag_irc_query_target *);
 int snag_irc_query_send(struct snag_irc *, const struct snag_irc_query_target *,
                         enum snag_irc_event_kind, const char *text, bool action,
                         struct snag_buf *report, char *, size_t);

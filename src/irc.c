@@ -1519,6 +1519,20 @@ snag_irc_core_query_open(struct snag_irc_core *irc, enum snag_irc_identity ident
     return 0;
 }
 
+int
+snag_irc_core_query_open_frozen(struct snag_irc_core *irc,
+                              const struct snag_irc_query_target *scope,
+                              const char *peer, struct snag_irc_query_target *target,
+                              char *error, size_t error_size)
+{
+    if (!irc || !scope || strcmp(scope->connection, irc->connection) ||
+        scope->generation != irc->generation) {
+        return snag_fail(error, error_size, ESTALE,
+            "IRC connection changed; refresh before opening");
+    }
+    return snag_irc_core_query_open(irc, scope->identity, peer, target, error, error_size);
+}
+
 static int
 query_send_chunk(struct snag_irc_core *irc, struct irc_conn *sender, struct irc_conn *recipient,
                  struct irc_query *query, enum snag_irc_event_kind kind,
@@ -3175,6 +3189,8 @@ snag_irc_core_view(const struct snag_irc_core *irc, struct snag_irc_view *view)
 
     memset(view, 0, sizeof(*view));
     view->revision = irc->route_revision + 1u;
+    memcpy(view->connection, irc->connection, sizeof(view->connection));
+    view->generation = irc->generation;
     (void)snag_strcpy(view->model, sizeof(view->model), snag_irc_core_model_nick(irc));
     (void)snag_strcpy(view->operator, sizeof(view->operator), snag_irc_core_operator_nick(irc));
     view->joined = irc->hosting || irc->conns[LINK_AGENT].joined;

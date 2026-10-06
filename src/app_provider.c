@@ -1,13 +1,14 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "app_internal.h"
+#include "context.h"
+#include "irc_address.h"
+#include "json.h"
 #include "media.h"
 #include "provider.h"
-#include "context.h"
-#include "json.h"
+#include "secret.h"
 #include "tools.h"
 #include "tools_write.h"
 #include "wire.h"
-#include "secret.h"
 
 #include <errno.h>
 #include <stddef.h>
@@ -411,6 +412,123 @@ irc_tool_route(const struct app_state *app, const json_t *destination, struct sn
     return false;
 }
 
+static bool
+agent_query(const json_t *data)
+{
+    const json_t *route = json_object_get(data, "routing");
+    const char *identity = snag_json_string(route, "identity");
+    const char *kind = snag_json_string(route, "conversation_kind");
+    return identity && kind && !strcmp(identity, "agent") && !strcmp(kind, "query");
+}
+
+static int
+query_listing(struct snag_buf *out, const json_t *directory)
+{
+    const char *connection, *conversation;
+    json_t *entry, *item;
+    int found = 0;
+    json_object_foreach((json_t *)directory, connection, entry) {
+        (void)connection;
+        json_object_foreach(json_object_get(entry, "conversations"), conversation, item) {
+            const json_t *data = json_object_get(item, "data");
+            if (!agent_query(data)) continue;
+            found = 1;
+            if (out && snag_buf_printf(out, "query:%s endpoint=%s peer=%s generation=%lld\n",
+                conversation, snag_json_string(entry, "endpoint"),
+                snag_json_string(json_object_get(data, "routing"), "peer"),
+                (long long)json_integer_value(json_object_get(json_object_get(data, "routing"),
+                    "generation"))) < 0) return -1;
+        }
+    }
+    return found;
+}
+
+static int
+irc_tool_query_target(struct app_state *app, const char *selector,
+                      struct snag_irc_query_target *target, char *error, size_t error_size)
+{
+    const char *query_id = !strncmp(selector, "query:", 6u) ? selector + 6u : NULL;
+    struct snag_irc_address address = {0};
+    if (query_id) {
+        if (!snag_hex_is_lower(query_id, SNAG_ID_HEX_LEN))
+            return snag_fail(error, error_size, EINVAL, "invalid query conversation ID");
+    } else if (snag_irc_address_parse(&address, selector, SNAG_IRC_MESSAGE_ADDRESS,
+        error, error_size) < 0) return -1;
+    if (address.session[0] && strcmp(address.session, app->session.id) &&
+        (!app->session.name || strcmp(address.session, app->session.name)))
+        return snag_fail(error, error_size, EACCES, "IRC tools use this session's identities");
+
+    const struct snag_irc_destination *selected = NULL;
+    for (size_t i = 0u; i < app->irc_request_destinations.count; ++i) {
+        const struct snag_irc_destination *item = &app->irc_request_destinations.items[i];
+        const json_t *connection = json_object_get(app->irc_request_conversations,
+            item->connection);
+        const json_t *conversations = json_object_get(connection, "conversations");
+        if (query_id) {
+            const json_t *data = json_object_get(json_object_get(conversations, query_id), "data");
+            if (!agent_query(data)) continue;
+            struct snag_irc_event event;
+            if (snag_irc_event_record_read("irc_event_v2", data, &event) < 0) return -1;
+            if (!snag_irc_event_query_target(app->irc, &event, target))
+                return snag_fail(error, error_size, ESTALE, "query endpoint is unavailable");
+            target->destination = item->target.id;
+            return 0;
+        }
+        char number[16u];
+        snprintf(number, sizeof(number), "%u", item->target.id);
+        if (address.endpoint[0] && strcmp(address.endpoint, number) &&
+            !snag_irc_endpoint_equal(address.endpoint, item->endpoint)) continue;
+        if (selected)
+            return snag_fail(error, error_size, EINVAL, "select an explicit endpoint/nick");
+        selected = item;
+    }
+    if (!selected || !selected->connection[0]) {
+        return snag_fail(error, error_size, ENOENT,
+            "query destination is unavailable; use irc_state");
+    }
+    const json_t *connection = json_object_get(app->irc_request_conversations,
+        selected->connection);
+    const char *key;
+    json_t *item;
+    json_object_foreach(json_object_get(connection, "conversations"), key, item) {
+        (void)key;
+        const json_t *data = json_object_get(item, "data");
+        if (!agent_query(data) || strcmp(address.target,
+            snag_json_string(json_object_get(data, "routing"), "peer"))) continue;
+        struct snag_irc_event event;
+        if (snag_irc_event_record_read("irc_event_v2", data, &event) < 0) return -1;
+        if (event.route.generation != selected->generation || event.kind == SNAG_IRC_QUIT) continue;
+        if (!snag_irc_event_query_target(app->irc, &event, target))
+            return snag_fail(error, error_size, ESTALE, "query endpoint is unavailable");
+        target->destination = selected->target.id;
+        return 0;
+    }
+    struct snag_irc_query_target scope = {.destination = selected->target.id,
+        .generation = selected->generation, .identity = SNAG_IRC_AGENT};
+    memcpy(scope.connection, selected->connection, sizeof(scope.connection));
+    return snag_irc_query_open_frozen(app->irc, &scope, address.target, target, error, error_size);
+}
+
+static int
+irc_tool_query_send(struct app_state *app, const char *selector, const char *text,
+                    bool notice, bool action, json_t **result, char *error, size_t error_size)
+{
+    struct snag_irc_query_target target;
+    struct snag_buf report = {.max = SNAG_MAX_IRC_SNAPSHOT};
+    int rc = irc_tool_query_target(app, selector, &target, error, error_size);
+    if (!rc) rc = snag_irc_query_send(app->irc, &target,
+        notice ? SNAG_IRC_NOTICE : SNAG_IRC_MESSAGE, text, action, &report, error, error_size);
+    if (rc && snag_buf_printf(&report, "%s\n", error[0] ? error : "private send failed") < 0)
+        goto fail;
+    if (snag_buf_terminate(&report) < 0) goto fail;
+    *result = snag_tool_result_terminal(rc == 0, (const char *)report.data);
+    snag_buf_free(&report);
+    return *result ? 0 : -1;
+fail:
+    snag_buf_free(&report);
+    return -1;
+}
+
 static int
 video_transcribe(void *opaque, const json_t *source, uint64_t start, uint64_t end, json_t **result)
 {
@@ -727,6 +845,7 @@ snag_app_tool_run(struct app_state *app, const struct snag_response_item *call,
         struct snag_buf state = {.max = SNAG_MAX_IRC_SNAPSHOT};
         rc = app->irc ? snag_irc_state(app->irc, &state, error, error_size) :
             snag_buf_printf(&state, "no active endpoints\n");
+        if (!rc && query_listing(&state, app->session.irc_conversations) < 0) rc = -1;
         if (!rc) rc = snag_buf_printf(&state,
             "IRC model delivery: %s; sleep_until_ms=%llu; wake_after_messages=%llu\n"
             "IRC context compaction: after_updates=%llu; background_request=%s; through_seq=%llu\n",
@@ -751,18 +870,40 @@ snag_app_tool_run(struct app_state *app, const struct snag_response_item *call,
 
         *result = NULL;
         bool notice = false;
+        bool action = false;
         if (!snag_json_arg_keys(call->arguments,
-                                 field, topic || nick ? "destination" : "destination notice", error, error_size) ||
+                                 field, topic || nick ? "destination" : "destination notice action",
+                                 error, error_size) ||
             !snag_json_arg_text(call->arguments, field, topic ? 0u : 1u,
                                 nick ? SNAG_CONFIG_IRC_NICK_MAX : SNAG_MAX_PUBLIC_ITEM,
                                 false, &text, error, error_size) ||
-            (!topic && !nick && !snag_json_arg_bool(call->arguments, "notice", false, &notice, error, error_size))) {
+            (!topic && !nick && (!snag_json_arg_bool(call->arguments, "notice", false,
+                &notice, error, error_size) || !snag_json_arg_bool(call->arguments, "action", false,
+                &action, error, error_size)))) {
             *result = snag_tool_result_terminal(false, error);
             return *result ? 0 : -1;
         }
         if (!app->irc) {
             *result = snag_tool_result_terminal(false,
                 "IRC runtime is not connected or hosted; use irc_connect or irc_host first.");
+            return *result ? 0 : -1;
+        }
+        const json_t *destination = json_object_get(call->arguments, "destination");
+        const char *selector = json_is_string(destination) ? json_string_value(destination) : NULL;
+        if (!topic && !nick && selector && strcmp(selector, "all") &&
+            (!*selector || strspn(selector, "0123456789") != strlen(selector))) {
+            return irc_tool_query_send(app, selector, text, notice, action,
+                result, error, error_size);
+        }
+        if (!topic && !nick && !selector && query_listing(NULL, app->irc_request_conversations)) {
+            *result = snag_tool_result_terminal(false,
+                "Select query:CONVERSATION_ID or endpoint/nick for a private message; "
+                "select an explicit destination number for channel chat. No message was sent.");
+            return *result ? 0 : -1;
+        }
+        if (action) {
+            *result = snag_tool_result_terminal(false,
+                "IRC actions currently require a query target.");
             return *result ? 0 : -1;
         }
         if (!irc_tool_route(app, json_object_get(call->arguments, "destination"), &route)) {

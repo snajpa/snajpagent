@@ -4,6 +4,14 @@
 
 ## Unreleased
 
+- Enable session-bound operator and agent IRC queries. Agent DMs enter model
+  context with exact reply provenance; operator DMs remain outside provider
+  input and model history. Private NOTICE, history and nickname changes add
+  context without demanding a reply. Resume restores pending reply obligations.
+  Extend `irc_send` with explicit query IDs and endpoint/nick addresses, private
+  actions and request-time recipient validation. Classic query tabs, operator
+  commands and Vim conversation buffers remain in progress.
+
 - Add owner-validated private IRC send handles and separate frame queues, with
   durable chunk IDs and pending/written/acknowledged/failed/uncertain outcomes.
   Respect external line budgets and UTF-8 boundaries; cancel stale recipients
@@ -14,8 +22,7 @@
 - Relay private messages between registered IRC peers, with negotiated sender
   echoes, silent NOTICE failures and private-body exclusion from channel replay
   and raw traces. Add session-bound operator/agent query receive paths, verified
-  nickname continuity and resumed connection generations. Application commands,
-  model reply routing and query buffers remain under development.
+  nickname continuity and resumed connection generations.
   Negotiate the capabilities an endpoint advertises before ending registration;
   preserve earlier capabilities across subsequent requests.
 
@@ -23,7 +30,7 @@
   with strict legacy separation, delivery states and operator-query exclusion
   from model projection and model-facing history reads. Retain conversation
   identities in revision-3 checkpoints and show recipient/identity labels in
-  history views. Live direct-message routing remains under development.
+  history views.
 
 - Copy explicit Vim yanks to the workstation clipboard, with asynchronous
   validation/publication, checked remote chunks, retries and retained result

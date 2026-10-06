@@ -11,6 +11,8 @@ struct snag_irc_view {
     char operator[SNAG_CONFIG_IRC_NICK_MAX + 1u];
     char room[SNAG_CONFIG_IRC_ROOM_MAX + 2u];
     uint64_t revision;
+    char connection[SNAG_ID_HEX_LEN + 1u];
+    uint64_t generation;
     char text[32768u];
     char nicks[4096u]; /* Newline-separated current members, without op prefixes. */
     bool joined;
@@ -33,6 +35,8 @@ int snag_irc_core_send(struct snag_irc_core *irc, bool model, enum snag_irc_even
                        char *error, size_t error_size);
 int snag_irc_core_query_open(struct snag_irc_core *, enum snag_irc_identity, const char *,
                              struct snag_irc_query_target *, char *, size_t);
+int snag_irc_core_query_open_frozen(struct snag_irc_core *, const struct snag_irc_query_target *,
+                                    const char *, struct snag_irc_query_target *, char *, size_t);
 int snag_irc_core_query_send(struct snag_irc_core *, const struct snag_irc_query_target *,
                              enum snag_irc_event_kind, const char *, bool, struct snag_buf *,
                              char *, size_t);

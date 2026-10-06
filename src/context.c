@@ -2258,10 +2258,18 @@ tool_schemas(bool goal_active,
     if (json_array_append_new(tools, write_schema("write_file")) < 0 ||
         json_array_append_new(tools, write_schema("edit_file")) < 0) goto fail;
     if (json_array_append_new(tools, tool_schema("irc_send", "text",
-            "Send bounded room chat as the agent identity. This is the only way model text reaches the room; assistant response text remains local. Use irc_state for a destination; if no endpoint is connected, execution returns a factual unavailable result.",
-            json_pack("{s:{s:[s,s],s:s},s:{s:[s,s],s:s},s:{s:s,s:s}}",
-                "destination", "type", "string", "null", "description", "Number string returned by irc_state; all broadcasts; null selects a sole available destination.",
+            "Send channel chat or a private query as this session's agent identity. "
+            "Assistant response text remains local. Use irc_state for targets. "
+            "Private sends retain their exact conversation and never fall back to a channel.",
+            json_pack("{s:{s:[s,s],s:s},s:{s:[s,s],s:s},s:{s:[s,s],s:s},s:{s:s,s:s}}",
+                "destination", "type", "string", "null", "description",
+                "query:CONVERSATION_ID replies privately; endpoint/nick or session/endpoint/nick "
+                "opens/sends a private query. A number string selects a channel destination; "
+                "all broadcasts only to channels. "
+                "Null requires a sole channel and no private query context.",
                 "notice", "type", "boolean", "null", "description", "True sends NOTICE; false/null sends PRIVMSG.",
+                "action", "type", "boolean", "null", "description",
+                "True sends a private CTCP action. Incompatible with notice=true.",
                 "text", "type", "string", "description", "Nonempty UTF-8 message for the selected recipients; maximum 2097152 bytes."))) < 0 ||
         json_array_append_new(tools, tool_schema("irc_state", "",
             "Read the already-maintained room, topic, endpoint, membership, and operator state without polling or changing connections.", json_object())) < 0 ||
@@ -2985,16 +2993,23 @@ snag_context_build(struct snag_session *session, const char *model, const char *
             "messages, and membership/topic notifications "
             "are conversational context and may be left unanswered. Assistant "
             "speech remains in the local rollout; irc_send is the only way "
-            "you address a room. Select its numbered destination from the "
+            "you address a room or query. Select its numbered destination from the "
             "snapshot; reply to the originating room, not another room. "
             "All is an explicit broadcast, never an automatic default. "
+            "Agent-identity private query entries name their conversation ID, peer and endpoint. "
+            "Reply using destination=query:CONVERSATION_ID; keep private content in that query. "
+            "Use endpoint/nick to initiate a query explicitly. Operator-identity DMs are private "
+            "to the operator and are excluded from your context. NOTICE and historical replay "
+            "are context only and require no reply. A live private PRIVMSG addresses you directly "
+            "and requires a reply in its originating query. An unavailable or changed query "
+            "requires a fresh explicit target; never substitute a channel. "
             "A queued send is not proof of remote receipt. "
             "The runtime owns sockets, joining, history, and "
             "reconnect: do not poll or babysit them. Use irc_state for cached state, irc_nick "
             "to change your live alias, and irc_topic when the room's current mode permits it. A local "
             "operator mention in a writable turn "
             "requires one successful irc_send message; a notice does not count "
-            "as a reply, and peer/background traffic requires no response.";
+            "as a reply, and unmentioned channel/background traffic requires no response.";
     struct context_builder builder;
     size_t controller_start;
     int rc = -1;

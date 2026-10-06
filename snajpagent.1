@@ -776,17 +776,25 @@ other through the built-in server, including after leaving its room. Delivery
 goes to the named recipient and, when echo-message is negotiated, the sender.
 Private bodies are excluded from the host session's room history and raw
 transport traces. A missing recipient produces an error for PRIVMSG; NOTICE
-failures produce no automatic reply. Direct messages to the host session's own
-nicknames currently return a cannot-send error; application query commands and
-buffers remain under development.
+failures produce no automatic reply. Direct messages to the session's operator
+and agent nicknames form separate queries. Operator queries remain in operator
+history and are excluded from provider input, IRC compaction and model-facing
+history reads. Agent queries enter model context with their recipient and
+conversation ID. A live private message requires a reply in that query; NOTICE,
+historical messages and nickname changes add context without requiring a reply.
+Pending reply obligations survive resume. Classic query tabs, operator query
+commands and Vim conversation buffers remain under development.
 .PP
 The development query transport retains a separate send result for each chunk.
 It records pending before transmission, written after the complete frame, and
 acknowledged after local delivery or an ordered native-server echo. An external
 unlabeled write remains unconfirmed. Nick changes, disconnection and endpoint
 removal cancel unwritten chunks and mark started, unconfirmed sends uncertain.
-Private queues are never replayed on reconnect. These transport APIs are being
-integrated with application query commands and conversation views.
+Private queues are never replayed on reconnect. Model sends use the exact query
+captured when their request started. A changed nickname or connection generation
+rejects that send, with no channel fallback; inspect irc_state before choosing
+a fresh target. Direct-message records use the new session/checkpoint format;
+older binaries refuse to resume a session containing them.
 .PP
 The built-in IRC subset has no TLS or authentication.  A non-loopback listener
 is suitable only for a trusted network or a separately secured tunnel.
@@ -5063,11 +5071,19 @@ true removes the hosted endpoint. Each call reports the requested local endpoint
 transition. Use irc_state to inspect the current endpoint and room state after it.
 .PP
 .B irc_state
-accepts an empty object and reports the actual current destinations and room
-state; it does not open connections.
+accepts an empty object and reports the actual current destinations, room state
+and retained agent query IDs with their endpoint, peer and generation.
+Operator queries are excluded. This tool does not open connections.
 .B irc_send
-accepts destination, notice and text. Null/false notice sends a normal message;
-true sends an informational notice, which does not satisfy a required reply.
+accepts destination, notice, action and text. Null/false notice sends a normal
+message; true sends an informational notice, which does not satisfy a required
+reply. A private destination can be query:CONVERSATION_ID, endpoint/nick or
+session/endpoint/nick. A bare nick requires a unique endpoint; the session
+component must name the current session. Queries always use the agent identity.
+Use a query ID to reply to that exact conversation. Addressing a nick can open a
+new query on an existing endpoint. action true sends a private CTCP action and
+cannot be combined with notice true. Each accepted chunk reports its send ID;
+partial acceptance reports the accepted chunks alongside the failure.
 .B irc_nick
 accepts destination and nick and changes the agent identity on one endpoint or
 all explicitly selected endpoints. Successful changes update later state and
@@ -5077,9 +5093,11 @@ accepts destination and topic. Runtime authorization follows the room's live
 policy: mode +t requires channel-operator status; without +t any joined member
 may change the topic.
 .PP
-Destination is a numeric string from irc_state, all for an explicit broadcast,
-or null only when exactly one destination exists. The model never implicitly
-follows the operator's selected room. Text and topic are bounded UTF-8;
+For channel operations, destination is a numeric string from irc_state, all for
+an explicit channel-only broadcast, or null only when exactly one destination
+exists. irc_send also requires an explicit destination once private query
+context exists. The model never implicitly follows the operator's selected
+conversation. Text and topic are bounded UTF-8;
 topic is at most 280 bytes with no newline. Successful send acceptance is not
 proof that every remote participant received it. The runtime owns joining,
 history, reconnecting and room traffic after an endpoint transition. A

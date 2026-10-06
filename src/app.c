@@ -5358,7 +5358,7 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
             app->recovery_delay_ms = 0u;
         }
         if (app->networked && !app->session.active_read_only &&
-            app->irc_turn_replies.count && !app->session.irc_reply_reminded &&
+            snag_app_irc_replies_pending(app) && !app->session.irc_reply_reminded &&
             (decision.outcome == SNAG_GRAPH_NONPRODUCTIVE || decision.outcome == SNAG_GRAPH_FINAL ||
              decision.outcome == SNAG_GRAPH_REFUSAL)) {
             char steering_id[SNAG_ID_HEX_LEN + 1u];
@@ -5373,7 +5373,7 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
         }
         if (app->request_networked && decision.outcome == SNAG_GRAPH_NONPRODUCTIVE) {
             if (commit_event(app, "turn_completed_silent",
-                    json_pack("{s:s,s:s,s:s}", "reason", app->irc_turn_replies.count ?
+                    json_pack("{s:s,s:s,s:s}", "reason", snag_app_irc_replies_pending(app) ?
                         "reply_reminder_exhausted" : "room_update_quiet",
                         "response_id", response_id, "turn_id", turn_id), error, sizeof(error)) < 0) {
                 report_message = error[0] ? error : "quiet IRC turn could not be completed";
@@ -5689,6 +5689,8 @@ run_tracked_turn(struct app_state *app, const char *prompt,
     app->ui.input_received_ms = 0u;
     json_decref(retained_content);
     app->irc_turn_replies.count = 0u;
+    json_decref(app->irc_turn_queries);
+    app->irc_turn_queries = NULL;
     free(retained);
     /* Goal pause and retained-turn cleanup must precede the next idle prompt. */
     if (!app->execute && rc != 6 && set_input_prompt(app, false) < 0) rc = 6;
@@ -6463,6 +6465,7 @@ run_owner(const struct snag_cli *cli, const char *program, struct snag_session_p
     if (!cli->execute) {
         if (snag_irc_open(&app.irc, &config, app.session.cwd,
                          snag_app_irc_event, snag_app_irc_trace, &app, error, sizeof(error)) < 0 ||
+            snag_irc_bind_conversations(app.irc, app.session.irc_conversations) < 0 ||
             snag_app_irc_restore(&app, error, sizeof(error)) < 0 || ((cli->resume || config.irc.listen_explicit) &&
              snag_app_irc_snapshot(&app, "join", error, sizeof(error)) < 0)) {
             (void)snag_ui_text(&app.ui, SNAG_UI_ERROR, error[0] ? error : "IRC startup failed");
@@ -6557,6 +6560,9 @@ out:
     snag_buf_free(&app.irc_urgent_refs);
     snag_buf_free(&app.irc_background_refs);
     snag_buf_free(&app.irc_background);
+    json_decref(app.irc_urgent_queries);
+    json_decref(app.irc_turn_queries);
+    json_decref(app.irc_request_conversations);
     snag_buf_free(&app.output_cache.data);
     snag_app_clear_partial_public(&app);
     free(app.partial);

@@ -1656,6 +1656,13 @@ test_private_sends(void)
     assert(snag_irc_query_open(server, destination, SNAG_IRC_OPERATOR, "peer",
         &target, error, sizeof(error)) == 0);
     assert(capture.query[SNAG_IRC_OPERATOR].kind == SNAG_IRC_CONNECTED);
+    struct snag_irc_query_target scope = target;
+    struct snag_irc_query_target rejected;
+    ++scope.generation;
+    unsigned int opened = capture.query_count[SNAG_IRC_OPERATOR];
+    assert(snag_irc_query_open_frozen(server, &scope, "other-peer", &rejected,
+        error, sizeof(error)) < 0 && errno == ESTALE);
+    assert(capture.query_count[SNAG_IRC_OPERATOR] == opened);
     drain_ready(server, peer, wire, sizeof(wire));
     assert(!strstr(wire, "PRIVMSG") && !strstr(wire, "NOTICE"));
     struct snag_buf report = {.max = 32768u};

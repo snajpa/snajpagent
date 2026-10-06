@@ -133,6 +133,39 @@ out: snag_buf_free(&line);
     return rc;
 }
 
+static int
+query_pending(json_t **pending, const struct snag_irc_event *event, size_t offset)
+{
+    if (!*pending) *pending = json_array();
+    json_t *entry = json_pack("{s:o,s:I,s:b}", "event", snag_irc_event_data(event),
+        "offset", (json_int_t)offset, "replied", false);
+    return entry ? json_array_append_new(*pending, entry) : -1;
+}
+
+static int
+query_replied(json_t *queries, const struct snag_irc_event *event)
+{
+    if (!event->routed || event->route.kind != SNAG_IRC_QUERY ||
+        event->route.identity != SNAG_IRC_AGENT || event->route.direction != SNAG_IRC_OUTGOING ||
+        event->kind != SNAG_IRC_MESSAGE || (event->route.delivery != SNAG_IRC_WRITTEN &&
+        event->route.delivery != SNAG_IRC_ACKNOWLEDGED)) return 0;
+    json_t *entry = json_object_get(queries, event->route.conversation);
+    return entry ? json_object_set_new(entry, "replied", json_true()) : 0;
+}
+
+bool
+snag_app_irc_replies_pending(const struct app_state *app)
+{
+    if (app->irc_turn_replies.count) return true;
+    const char *key;
+    json_t *entry;
+    json_object_foreach(app->irc_turn_queries, key, entry) {
+        (void)key;
+        if (!json_is_true(json_object_get(entry, "replied"))) return true;
+    }
+    return false;
+}
+
 static void
 reply_target(struct snag_irc_route *route, struct snag_irc_target target, bool add)
 {
@@ -232,20 +265,38 @@ snag_app_irc_event(void *opaque, const struct snag_irc_event *event)
     accepted.input = !snag_irc_local_identity(app->irc, event, true) &&
         event->kind != SNAG_IRC_HISTORY_READY && (event->stream[0] || event->historical || chat);
     accepted.classified = true;
-    accepted.urgent = chat && !event->historical &&
+    accepted.urgent = event->kind == SNAG_IRC_MESSAGE && !event->historical &&
         snag_irc_mentions_agent(app->irc, event->endpoint, event->text);
     accepted.reply = accepted.urgent && snag_irc_local_identity(app->irc, event, false);
-    if (snag_app_commit_event(app, "irc_event", snag_irc_event_data(&accepted), error, sizeof(error)) < 0)
+    bool private = event->routed && event->route.kind != SNAG_IRC_CHANNEL;
+    if (private) {
+        accepted.input = event->route.kind == SNAG_IRC_QUERY &&
+            event->route.identity == SNAG_IRC_AGENT &&
+            event->route.direction == SNAG_IRC_INCOMING && !event->local &&
+            (chat || event->kind == SNAG_IRC_NICK || event->kind == SNAG_IRC_QUIT);
+        accepted.urgent = accepted.input && event->kind == SNAG_IRC_MESSAGE && !event->historical;
+        accepted.reply = accepted.urgent;
+    }
+    if (snag_app_commit_event(app, event->routed ? "irc_event_v2" : "irc_event",
+        snag_irc_event_data(&accepted), error, sizeof(error)) < 0)
         return -1;
     /* Commit may insert a checkpoint before the IRC event. The reducer keeps
      * the actual durable sequence, including any checkpoint on either side. */
     uint64_t accepted_seq = app->session.irc_received_seq;
     if (snag_ui_send(&app->ui, (struct snag_ui_command){
         .kind = SNAG_UI_IRC, .data.irc = event}) < 0) return -1;
+    if (private && !accepted.input) return query_replied(app->irc_turn_queries, event);
+    /* Private NOTICE and replay add context at the next natural request. They
+     * never create an input intent or an automatic reply obligation. */
+    if (private && (event->historical || event->kind != SNAG_IRC_MESSAGE) &&
+        !app->session.irc_sleep_until_ms) {
+        return snag_app_commit_event(app, "irc_admitted",
+            json_pack("{s:[I]}", "sequences", (json_int_t)accepted_seq), error, sizeof(error));
+    }
     if (event->kind == SNAG_IRC_DISCONNECTED &&
         strstr(event->text, "endpoint removed; discarded ") == event->text &&
         snag_ui_text(&app->ui, SNAG_UI_WARNING, event->text) < 0) return -1;
-    own_agent = snag_irc_local_identity(app->irc, event, true);
+    own_agent = !private && snag_irc_local_identity(app->irc, event, true);
     local_operator = snag_irc_local_identity(app->irc, event, false);
     if (own_agent) {
         if (app->session.active_turn && event->kind == SNAG_IRC_MESSAGE &&
@@ -259,7 +310,7 @@ snag_app_irc_event(void *opaque, const struct snag_irc_event *event)
 
     if (chat && (!app->session.irc_sleep_until_ms || accepted.urgent))
         ++app->input_generation;
-    urgent = chat && !event->historical && snag_irc_mentions_agent(app->irc, event->endpoint, event->text);
+    urgent = accepted.urgent;
     reply_offset = app->irc_urgent.len;
     if (append_irc_projection(urgent ? &app->irc_urgent : &app->irc_background, event) < 0) return -1;
     if (accepted.input && event->historical && !app->session.irc_sleep_until_ms) {
@@ -272,12 +323,15 @@ snag_app_irc_event(void *opaque, const struct snag_irc_event *event)
         if (snag_buf_append(urgent ? &app->irc_urgent_refs : &app->irc_background_refs,
                            &ref, sizeof(ref)) < 0) return -1;
     }
-    if (urgent && local_operator && snag_irc_event_target(app->irc, event, &target)) {
+    if (private && accepted.reply) {
+        if (query_pending(&app->irc_urgent_queries, &accepted, reply_offset) < 0) return -1;
+    } else if (urgent && local_operator && snag_irc_event_target(app->irc, event, &target)) {
         size_t before = app->irc_urgent_replies.count;
         reply_target(&app->irc_urgent_replies, target, true);
         if (app->irc_urgent_replies.count > before) app->irc_urgent_reply_offsets[before] = reply_offset;
     }
-    if (!urgent && !app->irc_background_since_ms) app->irc_background_since_ms = snag_time_ms();
+    if (!urgent && !private && !app->irc_background_since_ms)
+        app->irc_background_since_ms = snag_time_ms();
     return 0;
 }
 
@@ -322,7 +376,7 @@ out: snag_buf_free(&safe);
     return rc;
 }
 
-static void
+static int
 admit_replies(struct app_state *app, size_t used)
 {
     size_t kept = 0u;
@@ -335,6 +389,22 @@ admit_replies(struct app_state *app, size_t used)
         }
     }
     app->irc_urgent_replies.count = kept;
+    for (size_t i = 0u; i < json_array_size(app->irc_urgent_queries);) {
+        json_t *entry = json_array_get(app->irc_urgent_queries, i);
+        size_t offset = (size_t)json_integer_value(json_object_get(entry, "offset"));
+        if (offset < used) {
+            const char *id = snag_json_string(json_object_get(json_object_get(entry, "event"),
+                "routing"), "conversation_id");
+            if (!app->irc_turn_queries) app->irc_turn_queries = json_object();
+            if (json_object_set(app->irc_turn_queries, id, entry) < 0 ||
+                json_array_remove(app->irc_urgent_queries, i) < 0) return -1;
+        } else {
+            if (json_object_set_new(entry, "offset", json_integer((json_int_t)(offset - used))) < 0)
+                return -1;
+            ++i;
+        }
+    }
+    return 0;
 }
 
 int
@@ -366,7 +436,7 @@ snag_app_irc_flush_urgent(struct app_state *app, char *error, size_t error_size)
         free(text);
         if (rc < 0) return -1;
         consume_pending(&app->irc_urgent, used);
-        admit_replies(app, used);
+        if (admit_replies(app, used) < 0) return -1;
     }
     if (admit_all && app->irc_background.len) {
         if (snag_random_id(steering_id) < 0 ||
@@ -404,7 +474,8 @@ snag_app_irc_take_pending(struct app_state *app, bool *local_operator, bool forc
     if (!app || app->session.active_turn || app->session.pending_input) return NULL;
     if (app->irc_urgent.len) {
         source = &app->irc_urgent;
-        if (local_operator) *local_operator = app->irc_urgent_replies.count != 0u;
+        if (local_operator) *local_operator = app->irc_urgent_replies.count != 0u ||
+            json_array_size(app->irc_urgent_queries) != 0u;
     /* A paused or blocked persistent goal is an explicit idle boundary. Keep
      * ordinary room traffic pending until the operator resumes or submits new
      * work; direct mentions remain urgent and may still start a turn. */
@@ -413,7 +484,8 @@ snag_app_irc_take_pending(struct app_state *app, bool *local_operator, bool forc
         return NULL;
     /* Startup/history alone must not turn an unused session into saved work. */
     } else if (app->session.log_fd >= 0 && app->irc_background.len && (force_background ||
-                snag_time_ms() - app->irc_background_since_ms >= 100u)) {
+                (app->irc_background_since_ms &&
+                    snag_time_ms() - app->irc_background_since_ms >= 100u))) {
         source = &app->irc_background;
     } else {
         return NULL;
@@ -431,9 +503,15 @@ snag_app_irc_take_pending(struct app_state *app, bool *local_operator, bool forc
     }
     consume_pending(source, used);
     app->irc_turn_replies.count = 0u;
+    json_decref(app->irc_turn_queries);
+    app->irc_turn_queries = NULL;
     if (source == &app->irc_urgent) {
-        admit_replies(app, used);
-        if (local_operator) *local_operator = app->irc_turn_replies.count != 0u;
+        if (admit_replies(app, used) < 0) {
+            free(copy);
+            app->input_closed = true;
+            return NULL;
+        }
+        if (local_operator) *local_operator = snag_app_irc_replies_pending(app);
     } else if (!source->len) {
         app->irc_sleep_released = false;
         app->irc_background_since_ms = 0u;
@@ -445,7 +523,24 @@ struct irc_restore {
     struct app_state *app;
     json_t *pending;
     struct snag_irc_route pending_replies, turn_replies;
+    json_t *pending_queries, *turn_queries;
 };
+
+static int
+restore_query_reply(json_t **queries, const struct snag_irc_event *event)
+{
+    if (!*queries) *queries = json_object();
+    return json_object_set_new(*queries, event->route.conversation,
+        json_pack("{s:o,s:I,s:b}", "event", snag_irc_event_data(event),
+            "offset", (json_int_t)0, "replied", false));
+}
+
+static int
+pending_event(const json_t *entry, struct snag_irc_event *event)
+{
+    return snag_irc_event_record_read(snag_json_string(entry, "type"),
+        json_object_get(entry, "data"), event);
+}
 
 static int
 restore_irc_event(void *opaque, const struct snag_session *state,
@@ -454,31 +549,52 @@ restore_irc_event(void *opaque, const struct snag_session *state,
     struct irc_restore *restore = opaque;
     struct app_state *app = restore->app;
     struct snag_irc_event event;
-    if (!strcmp(type, "turn_started")) restore->turn_replies = restore->pending_replies;
-    if (!state->pending_input) restore->pending_replies.count = 0u;
-    if (!state->active_turn) restore->turn_replies.count = 0u;
+    if (!strcmp(type, "turn_started")) {
+        restore->turn_replies = restore->pending_replies;
+        json_decref(restore->turn_queries);
+        restore->turn_queries = restore->pending_queries ?
+            json_deep_copy(restore->pending_queries) : NULL;
+        if (restore->pending_queries && !restore->turn_queries) return -1;
+    }
+    if (!state->pending_input) {
+        restore->pending_replies.count = 0u;
+        json_decref(restore->pending_queries);
+        restore->pending_queries = NULL;
+    }
+    if (!state->active_turn) {
+        restore->turn_replies.count = 0u;
+        json_decref(restore->turn_queries);
+        restore->turn_queries = NULL;
+    }
     if (!strcmp(type, "irc_admitted")) {
         const json_t *seqs = json_object_get(data, "sequences");
         struct snag_irc_route *replies = json_is_object(json_object_get(data, "input")) ?
             &restore->pending_replies : json_is_object(json_object_get(data, "steering")) ?
             &restore->turn_replies : NULL;
+        json_t **queries = json_is_object(json_object_get(data, "input")) ?
+            &restore->pending_queries : json_is_object(json_object_get(data, "steering")) ?
+            &restore->turn_queries : NULL;
         for (size_t j = 0u; j < json_array_size(seqs); ++j) {
             for (size_t i = 0u; i < json_array_size(restore->pending); ++i) {
                 const json_t *entry = json_array_get(restore->pending, i);
                 if (json_integer_value(json_object_get(entry, "seq")) !=
                     json_integer_value(json_array_get(seqs, j))) continue;
-                if (snag_irc_event_read(json_object_get(entry, "data"), &event) < 0) return -1;
+                if (pending_event(entry, &event) < 0) return -1;
                 struct snag_irc_target target;
-                if (replies && event.reply && snag_irc_event_target(app->irc, &event, &target))
+                if (queries && event.reply && event.routed && event.route.kind == SNAG_IRC_QUERY) {
+                    if (restore_query_reply(queries, &event) < 0) return -1;
+                } else if (replies && event.reply &&
+                    snag_irc_event_target(app->irc, &event, &target)) {
                     reply_target(replies, target, true);
+                }
                 if (json_array_remove(restore->pending, i) < 0) return -1;
                 break;
             }
         }
         return 0;
     }
-    if (strcmp(type, "irc_event")) return 0;
-    if (snag_irc_event_read(data, &event) < 0) {
+    if (strcmp(type, "irc_event") && strcmp(type, "irc_event_v2")) return 0;
+    if (snag_irc_event_record_read(type, data, &event) < 0) {
         return snag_fail(error, error_size, errno,
             "cannot decode IRC event at journal sequence %llu", (unsigned long long)seq);
     }
@@ -488,8 +604,9 @@ restore_irc_event(void *opaque, const struct snag_session *state,
             snag_irc_kind_name(event.kind), (unsigned long long)seq, strerror(errno));
     }
     if (event.input && json_array_append_new(restore->pending,
-            json_pack("{s:I,s:O}", "seq", (json_int_t)seq, "data", (json_t *)data)) < 0) return -1;
-    return 0;
+            json_pack("{s:I,s:O,s:s}", "seq", (json_int_t)seq,
+                "data", (json_t *)data, "type", type)) < 0) return -1;
+    return query_replied(restore->turn_queries, &event);
 }
 
 int
@@ -502,25 +619,42 @@ snag_app_irc_restore(struct app_state *app, char *error, size_t error_size)
     for (size_t i = 0u; !rc && i < json_array_size(restore.pending); ++i) {
         const json_t *entry = json_array_get(restore.pending, i);
         struct snag_irc_event event;
-        if (snag_irc_event_read(json_object_get(entry, "data"), &event) < 0) { rc = -1; break; }
+        if (pending_event(entry, &event) < 0) { rc = -1; break; }
+        if (event.routed && event.route.kind == SNAG_IRC_QUERY &&
+            (event.historical || event.kind != SNAG_IRC_MESSAGE) &&
+            !app->session.irc_sleep_until_ms) {
+            rc = snag_app_commit_event(app, "irc_admitted", json_pack("{s:[O]}", "sequences",
+                json_object_get(entry, "seq")), error, error_size);
+            continue;
+        }
         bool urgent = event.classified ? event.urgent : !event.historical &&
             snag_irc_mentions_agent(app->irc, event.endpoint, event.text);
         struct snag_buf *buffer = urgent ? &app->irc_urgent : &app->irc_background;
+        if (!urgent && (!event.routed || event.route.kind == SNAG_IRC_CHANNEL))
+            app->irc_background_since_ms = snag_time_ms();
         size_t offset = buffer->len;
         rc = append_irc_projection(buffer, &event);
         struct irc_input_ref ref = {(uint64_t)json_integer_value(json_object_get(entry, "seq")), buffer->len};
         if (!rc) rc = snag_buf_append(urgent ? &app->irc_urgent_refs : &app->irc_background_refs, &ref, sizeof(ref));
         struct snag_irc_target target;
-        if (urgent && event.reply && snag_irc_event_target(app->irc, &event, &target)) {
+        if (urgent && event.reply && event.routed && event.route.kind == SNAG_IRC_QUERY) {
+            if (query_pending(&app->irc_urgent_queries, &event, offset) < 0) rc = -1;
+        } else if (urgent && event.reply && snag_irc_event_target(app->irc, &event, &target)) {
             size_t before = app->irc_urgent_replies.count;
             reply_target(&app->irc_urgent_replies, target, true);
             if (before != app->irc_urgent_replies.count) app->irc_urgent_reply_offsets[before] = offset;
         }
     }
-    if (app->irc_background.len) app->irc_background_since_ms = snag_time_ms();
-    if (!rc) app->irc_turn_replies = app->session.pending_input ?
-        restore.pending_replies : restore.turn_replies;
+    if (!rc) {
+        app->irc_turn_replies = app->session.pending_input ?
+            restore.pending_replies : restore.turn_replies;
+        json_decref(app->irc_turn_queries);
+        app->irc_turn_queries = json_incref(app->session.pending_input ?
+            restore.pending_queries : restore.turn_queries);
+    }
     json_decref(restore.pending);
+    json_decref(restore.pending_queries);
+    json_decref(restore.turn_queries);
     return rc;
 }
 
@@ -613,6 +747,9 @@ snag_app_request_build(struct app_state *app, const json_t *steering, unsigned i
 
     app->request_networked = app->networked && !app->session.active_read_only;
     snag_irc_capture_route(app->irc, &app->irc_request_route);
+    snag_irc_destinations(app->irc, &app->irc_request_destinations);
+    json_decref(app->irc_request_conversations);
+    app->irc_request_conversations = json_incref(app->session.irc_conversations);
     char visibility[2048];
     if (operator_visibility(app, visibility, sizeof(visibility)) < 0)
         return snag_errorf(error, error_size, "cannot describe operator visibility");

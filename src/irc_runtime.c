@@ -196,6 +196,9 @@ execute(struct irc_owner *owner, struct irc_request *request)
         return snag_fail(error, size, ESTALE, "destination room changed; not performed");
     if (request->event) return snag_irc_core_restore_event(core, request->event);
     if (request->retire) return snag_irc_core_retire(core);
+    if (request->query_open && request->query_send)
+        return snag_irc_core_query_open_frozen(core, request->query_send, request->text,
+            request->query_open, error, size);
     if (request->query_open) return snag_irc_core_query_open(core,
         request->model ? SNAG_IRC_AGENT : SNAG_IRC_OPERATOR, request->text,
         request->query_open, error, size);
@@ -702,6 +705,8 @@ snag_irc_destinations(const struct snag_irc *irc, struct snag_irc_destinations *
         const struct irc_owner *owner = irc->owners[i];
         struct snag_irc_destination *item = &out->items[out->count++];
         item->target = owner->target;
+        memcpy(item->connection, owner->view.connection, sizeof(item->connection));
+        item->generation = owner->view.generation;
         item->joined = owner->view.joined;
         (void)snag_strcpy(item->endpoint, sizeof(item->endpoint), owner->endpoint);
         (void)snag_strcpy(item->room, sizeof(item->room), owner->routing_room);
@@ -876,10 +881,10 @@ snag_irc_send_route(struct snag_irc *irc, const struct snag_irc_route *route,
     return failed ? (accepted ? 2 : 1) : 0;
 }
 
-int
-snag_irc_query_open(struct snag_irc *irc, uint32_t destination, enum snag_irc_identity identity,
-                    const char *peer, struct snag_irc_query_target *target,
-                    char *error, size_t error_size)
+static int
+query_open(struct snag_irc *irc, uint32_t destination, enum snag_irc_identity identity,
+           const struct snag_irc_query_target *scope, const char *peer,
+           struct snag_irc_query_target *target, char *error, size_t error_size)
 {
     if (!irc || !target || !peer || (unsigned int)identity > SNAG_IRC_AGENT)
         return snag_errno(EINVAL);
@@ -890,13 +895,49 @@ snag_irc_query_open(struct snag_irc *irc, uint32_t destination, enum snag_irc_id
         struct irc_owner *owner = irc->owners[i];
         if (owner->target.id != destination) continue;
         struct irc_request request = {.query_open = target, .text = peer,
-            .model = identity == SNAG_IRC_AGENT};
+            .model = identity == SNAG_IRC_AGENT, .query_send = scope};
         int rc = request_owner(owner, &request);
         if (rc == 0) target->destination = destination;
         else (void)snag_strcpy(error, error_size, request.error);
         return rc;
     }
     return snag_fail(error, error_size, ESTALE, "IRC destination is unavailable");
+}
+
+int
+snag_irc_query_open(struct snag_irc *irc, uint32_t destination, enum snag_irc_identity identity,
+                    const char *peer, struct snag_irc_query_target *target,
+                    char *error, size_t error_size)
+{
+    return query_open(irc, destination, identity, NULL, peer, target, error, error_size);
+}
+
+int
+snag_irc_query_open_frozen(struct snag_irc *irc, const struct snag_irc_query_target *scope,
+                         const char *peer, struct snag_irc_query_target *target,
+                         char *error, size_t error_size)
+{
+    if (!scope) return snag_errno(EINVAL);
+    struct snag_irc_query_target frozen = *scope;
+    return query_open(irc, frozen.destination, frozen.identity, &frozen,
+        peer, target, error, error_size);
+}
+
+bool
+snag_irc_event_query_target(const struct snag_irc *irc, const struct snag_irc_event *event,
+                           struct snag_irc_query_target *target)
+{
+    if (!irc || !event || !event->routed || event->route.kind != SNAG_IRC_QUERY) return false;
+    for (size_t i = 0u; i < irc->owner_count; ++i) {
+        if (!snag_irc_endpoint_equal(irc->owners[i]->endpoint, event->endpoint)) continue;
+        *target = (struct snag_irc_query_target){.destination = irc->owners[i]->target.id,
+            .identity = event->route.identity, .generation = event->route.generation};
+        memcpy(target->connection, event->route.connection, sizeof(target->connection));
+        memcpy(target->conversation, event->route.conversation, sizeof(target->conversation));
+        memcpy(target->peer, event->route.peer, sizeof(target->peer));
+        return true;
+    }
+    return false;
 }
 
 int

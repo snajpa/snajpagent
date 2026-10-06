@@ -62,7 +62,8 @@ def normalized_modes(modes):
 
 
 class Terminal:
-    def __init__(self, root, args=(), rows=12, columns=100, transport=(), extra_env=None):
+    def __init__(self, root, args=(), rows=12, columns=100, transport=(), extra_env=None,
+                 subcommand='vm'):
         # Ordinary UI fixtures keep all yanks inside their register. Clipboard
         # fixtures opt in with their own isolated policy and destination.
         config = root / 'state' / 'config.ini'
@@ -86,7 +87,8 @@ class Terminal:
             fcntl.ioctl(self.slave, termios.TIOCSCTTY, 0)
 
         self.process = subprocess.Popen([sys.executable, '-c', KEEPER, str(self.receipt),
-                                         *transport, str(BINARY), 'vm', '--dotdir',
+                                         *transport, str(BINARY),
+                                         *([subcommand] if subcommand else []), '--dotdir',
                                          str(root / 'state'), *args],
                                         stdin=self.slave, stdout=self.slave, stderr=self.slave,
                                         cwd=root, env=env, preexec_fn=controlling_terminal)

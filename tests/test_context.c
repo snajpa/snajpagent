@@ -5764,7 +5764,13 @@ main(int argc, char **argv)
         assert(strstr(snag_json_string(harness, "content"),
                       "requires one successful irc_send message") != NULL);
         assert(strstr(snag_json_string(item_by_field(tools, "name", "irc_send"), "description"),
-                      "only way model text reaches the room") != NULL);
+                      "Assistant response text remains local") != NULL);
+        assert(strstr(snag_json_string(harness, "content"), "query:CONVERSATION_ID") != NULL);
+        const json_t *send_properties = json_object_get(json_object_get(
+            item_by_field(tools, "name", "irc_send"), "parameters"), "properties");
+        assert(strstr(snag_json_string(json_object_get(send_properties, "destination"),
+            "description"), "endpoint/nick") != NULL);
+        assert(json_is_object(json_object_get(send_properties, "action")));
         snag_config_free(&network_config);
     }
 

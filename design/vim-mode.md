@@ -675,10 +675,11 @@ conversation boundaries and never project private text into a public reply route
 This is an admission/projection rule within the existing same-user process/store
 boundary, not a new filesystem access-control boundary.
 
-Extend the existing `irc_send` tool with an explicit optional `target` (nick or
-channel) on an exact `destination`. Omitting target preserves the existing channel
-behavior. A nick target rejects destination `all` and ambiguous/null endpoint
-selection. `irc_state` reports the agent's available conversations and targets;
+The existing `irc_send` destination accepts `query:CONVERSATION_ID` for an exact
+reply, or `endpoint/nick` and `session/endpoint/nick` to open/send a query.
+A bare nick requires a unique endpoint. Numeric destinations retain channel
+behavior and `all` broadcasts only to channels. An implicit channel send is
+rejected when private query context exists. `irc_state` reports agent queries;
 model sends always use its agent identity. Freeze reply provenance through a turn;
 concurrent channel and DM inputs never turn a private reply into a public send.
 Tool schemas, context labels, summaries and tests must include the recipient and
@@ -765,10 +766,17 @@ resume generations, nickname reuse, UTF-8 chunks, external registration without
 a room, multiline capability negotiation, native receipts and explicit removal.
 Deterministic partial-write fixtures exercise interleaved protocol replies,
 unsent cancellation and socket closure when a recipient changes mid-frame.
-Application startup still leaves this session binding uninitialized. Next:
-typed application writing/restoration and private reply provenance, then common
-commands/tools, classic query tabs and VM connection/channel/query buffers.
-External multi-channel state also remains unfinished.
+Application startup now binds this directory before restoring IRC history.
+Typed admission/replay preserves pending and active private reply obligations.
+Operator queries stay out of provider input; agent NOTICE/history and proven
+nick changes add context at the next natural request without waking a turn.
+Request-time directory and connection snapshots pin model query sends, including
+new peer lookup. Live query messages carry a private reply obligation and wake
+IRC sleep. Model actions and explicit query/address sends use the frozen API.
+Real PTY/fake-provider fixtures cover identity isolation, private replies,
+implicit destination rejection, nickname changes during requests and resume.
+Next: common operator commands, classic query tabs and VM connection/channel/
+query buffers. External multi-channel state and labeled responses remain unfinished.
 
 This expands the original UI-only storage scope. Implement compatible readers,
 checkpoint projection and context filters first. Direct-message-capable writers

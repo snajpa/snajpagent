@@ -92,10 +92,12 @@ struct app_state {
     bool remote_verified;
     struct snag_irc *irc;
     struct snag_irc_destinations irc_destinations;
+    struct snag_irc_destinations irc_request_destinations;
     struct snag_irc_route irc_request_route;
     struct snag_irc_route irc_urgent_replies;
     size_t irc_urgent_reply_offsets[SNAG_IRC_DESTINATIONS_MAX];
     struct snag_irc_route irc_turn_replies;
+    json_t *irc_urgent_queries, *irc_turn_queries, *irc_request_conversations;
     bool irc_destinations_ready;
     uint64_t irc_destinations_generation;
     struct snag_buf irc_urgent;
@@ -381,6 +383,7 @@ int snag_app_irc_flush_urgent(struct app_state *app, char *error, size_t error_s
 char *snag_app_irc_take_pending(struct app_state *app, bool *local_operator, bool force_background);
 bool snag_app_irc_prompt(const char *text);
 int snag_app_irc_snapshot(struct app_state *app, const char *reason, char *error, size_t error_size);
+bool snag_app_irc_replies_pending(const struct app_state *);
 int snag_app_irc_sleeping(struct app_state *, char *, size_t);
 int snag_app_irc_attention_tool(struct app_state *, const struct snag_response_item *,
                               json_t **, char *, size_t);
