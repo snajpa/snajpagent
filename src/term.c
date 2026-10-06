@@ -2682,6 +2682,8 @@ snag_term_poll(struct snag_term *term, int timeout_ms, snag_wake_fd wake_fd,
             (void)atomic_fetch_sub_explicit(&sigint_pending, 1u, memory_order_relaxed);
             return feed_byte(term, 0x03u, action, text);
         }
+        /* Resize painting can admit input through an output checkpoint. */
+        if (count > 0) term->input_len = (size_t)count;
         if (sigwinch_pending) {
             if (consume_resize(term) < 0) return -1;
             if (count < 0 && errno == EINTR) return 0;
@@ -2692,12 +2694,12 @@ snag_term_poll(struct snag_term *term, int timeout_ms, snag_wake_fd wake_fd,
             *action = SNAG_TERM_EXIT;
             return 1;
         }
-        term->input_len = (size_t)count;
     }
     while (term->input_pos < term->input_len) {
         /* Output checkpoints can receive native resize controls while a
          * buffered typing burst is still being painted. */
         if (consume_resize(term) < 0) return -1;
+        if (term->input_pos == term->input_len) break;
         rc = feed_byte(term, term->input[term->input_pos++], action, text);
         if (rc < 0) return -1;
         if (rc > 0) return 1;

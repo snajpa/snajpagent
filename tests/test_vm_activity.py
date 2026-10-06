@@ -192,7 +192,7 @@ class ActivityWorkspaceTests(ChannelFixture):
         self.child.repaint_until(b'/peer [operator] [? unread]')
         self.query('peer')
         self.child.repaint_until(b'checkpoint-message-139')
-        self.child.finish('qa')
+        self.child.finish('close')
 
 
 if __name__ == '__main__':

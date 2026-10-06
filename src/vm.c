@@ -3290,7 +3290,7 @@ buffer_row(struct snag_buf *text, const json_t *row)
         time_t seconds = (time_t)(timestamp / 1000);
         struct tm local;
         char time[32];
-        if (localtime_r(&seconds, &local) &&
+        if (snag_localtime(&seconds, &local) &&
             strftime(time, sizeof(time), "%m-%d %H:%M:%S", &local) &&
             snag_buf_printf(text, "  %s", time) < 0) return -1;
     }

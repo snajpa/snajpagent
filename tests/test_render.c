@@ -810,6 +810,90 @@ test_native_input_yield(void)
     (void)capture_close(&capture, output, sizeof(output), 0u);
 }
 
+struct resize_input {
+    struct snag_term *term;
+    int output;
+    unsigned int reads;
+    unsigned int checkpoints;
+    char *submitted;
+};
+
+static int
+resize_input_status(void *opaque)
+{
+    struct resize_input *input = opaque;
+    return input->reads < 2u ? SNAG_TERM_WAIT_INPUT : 0;
+}
+
+static ssize_t
+resize_input_read(void *opaque, void *buffer, size_t size)
+{
+    struct resize_input *input = opaque;
+    const char *bytes = input->reads ? "nections 1\r" : "\025/con";
+    size_t length = strlen(bytes);
+    assert(input->reads < 2u && size >= length);
+    memcpy(buffer, bytes, length);
+    if (!input->reads++) snag_term_notify_resize();
+    return (ssize_t)length;
+}
+
+static int
+resize_input_checkpoint(void *opaque)
+{
+    struct resize_input *input = opaque;
+    char bytes[4096];
+    while (read(input->output, bytes, sizeof(bytes)) > 0) {}
+    assert(errno == EAGAIN);
+    ++input->checkpoints;
+    enum snag_term_action action;
+    char *text = NULL;
+    int rc = snag_term_poll(input->term, 0, -1, &action, &text);
+    assert(rc >= 0);
+    if (rc > 0) {
+        assert(action == SNAG_TERM_SUBMIT && !input->submitted);
+        input->submitted = text;
+    } else assert(!text);
+    return 0;
+}
+
+static void
+test_resize_checkpoint_preserves_newly_read_input(void)
+{
+    struct output_capture capture = capture_open(false, true);
+    struct snag_term term;
+    snag_term_init(&term);
+    term.opened = term.capable = term.prompt_visible = term.prompt_wanted = true;
+    term.columns = 80u;
+    term.rendered_rows = 1u;
+    struct resize_input input = {.term = &term, .output = capture.fd};
+    snag_term_input_redirect(&term.host, resize_input_status, resize_input_read, &input);
+    term.input_checkpoint = resize_input_checkpoint;
+    term.input_opaque = &input;
+    snag_term_output_bind(&term);
+    assert(fcntl(capture.fd, F_SETFL, O_NONBLOCK) == 0);
+    assert(fcntl(STDERR_FILENO, F_SETFL, O_NONBLOCK) == 0);
+    char output[4096] = {0};
+    while (write(STDERR_FILENO, output, sizeof(output)) > 0) {}
+    assert(errno == EAGAIN);
+    for (unsigned int attempt = 0u; !input.submitted && attempt < 3u; ++attempt) {
+        enum snag_term_action action;
+        char *text = NULL;
+        int rc = snag_term_poll(&term, 0, -1, &action, &text);
+        assert(rc >= 0);
+        if (rc > 0) {
+            assert(action == SNAG_TERM_SUBMIT && !input.submitted);
+            input.submitted = text;
+        } else assert(!text);
+    }
+    term.input_checkpoint = NULL;
+    term.opened = false;
+    snag_term_close(&term);
+    (void)capture_close(&capture, output, sizeof(output), 0u);
+    assert(input.checkpoints && input.submitted);
+    assert(!strcmp(input.submitted, "/connections 1"));
+    free(input.submitted);
+}
+
 static void
 test_retained_prompt(void)
 {
@@ -948,7 +1032,7 @@ test_mention_completion(void)
     } cases[] = {
         {"agent\n", "@ag", "@agent ", 3u, 7u}, {"Agent\nagent\n", "hey @AG", "hey @Agent ", 7u, 11u},
         {"agent1\nagent2\n", "@ag", "@agent", 3u, 6u}, {"agent1\nagent2\n", "@agent", "@agent", 6u, 6u},
-        {"agent\n", "@missing", "@missing", 8u, 8u}, {"", "@", "@", 1u, 1u},
+        {"agent\n", "@missing", NULL, 8u, 8u}, {"", "@", NULL, 1u, 1u},
         {"agent\n", "hi @agxxx, bye", "hi @agent , bye", 6u, 10u},
         {"agent\n", "hey\n@ag tail", "hey\n@agent tail", 7u, 11u}, {"agent\n", "@agent", "@agent ", 6u, 7u},
         {"[bot]\n", "@{bo", "@[bot] ", 4u, 7u}, {"čenda\n", "@če", "@čenda ", 4u, 8u},
@@ -960,7 +1044,7 @@ test_mention_completion(void)
             struct snag_irc_destinations destinations = {.count = 1u};
 
             snag_term_init(&term);
-            term.chat = true;
+            term.chat = term.conversation_tabs = term.blank_local = true;
             term.active = active != 0u;
             destinations.items[0].target = (struct snag_irc_target){1u, 1u};
             destinations.items[0].joined = true;
@@ -968,9 +1052,16 @@ test_mention_completion(void)
             assert(snag_term_set_destinations(&term, &destinations) == 0);
             assert(snag_buf_append(&term.draft, cases[i].draft, strlen(cases[i].draft)) == 0);
             term.cursor = cases[i].cursor;
-            editor_input(&term, "\t");
-            assert(term.draft.len == strlen(cases[i].expected));
-            assert(memcmp(term.draft.data, cases[i].expected, term.draft.len) == 0);
+            enum snag_term_action action;
+            char *text = NULL;
+            term.input[0] = '\t';
+            term.input_len = 1u;
+            bool view = !cases[i].expected;
+            assert(snag_term_poll(&term, 0, -1, &action, &text) == (view ? 1 : 0));
+            assert(action == (view ? SNAG_TERM_VIEW : SNAG_TERM_NONE) && !text);
+            const char *expected = view ? cases[i].draft : cases[i].expected;
+            assert(term.draft.len == strlen(expected));
+            assert(memcmp(term.draft.data, expected, term.draft.len) == 0);
             assert(term.cursor == cases[i].result_cursor);
             snag_term_close(&term);
         }
@@ -1161,7 +1252,7 @@ test_destination_editor(void)
     } cases[] = {
         {"@ag", "@agent2 ", true}, {"/17 @ag", "/17 @agent17 ", true},
         {"/17 @ag", "/17 @agent17 ", false}, {"/all @ag", "/all @agent", true},
-        {"/9 @ag", "/9 @ag", true}, {"/2oops @ag", "/2oops @ag", true}, {"/1", "/17 ", true}
+        {"/9 @ag", NULL, true}, {"/2oops @ag", NULL, true}, {"/1", "/17 ", true}
     };
     struct snag_irc_destinations destinations = {0};
     struct snag_irc_route route, frozen;
@@ -1178,13 +1269,21 @@ test_destination_editor(void)
     for (size_t i = 0u; i < sizeof(cases) / sizeof(cases[0]); ++i) {
         snag_term_init(&term);
         term.chat = cases[i].chat;
+        term.conversation_tabs = term.blank_local = true;
         term.active = true;
         assert(snag_term_set_destinations(&term, &destinations) == 0);
         assert(term.destination.id == 2u);
         assert(snag_term_restore_draft(&term, cases[i].draft) == 0);
-        editor_input(&term, "\t");
-        assert(term.draft.len == strlen(cases[i].expected));
-        assert(memcmp(term.draft.data, cases[i].expected, term.draft.len) == 0);
+        enum snag_term_action action;
+        char *text = NULL;
+        term.input[0] = '\t';
+        term.input_len = 1u;
+        bool view = !cases[i].expected;
+        assert(snag_term_poll(&term, 0, -1, &action, &text) == (view ? 1 : 0));
+        assert(action == (view ? SNAG_TERM_VIEW : SNAG_TERM_NONE) && !text);
+        const char *expected = view ? cases[i].draft : cases[i].expected;
+        assert(term.draft.len == strlen(expected));
+        assert(memcmp(term.draft.data, expected, term.draft.len) == 0);
         assert(term.destination.id == 2u);
         snag_term_close(&term);
     }
@@ -3454,6 +3553,7 @@ main(void)
     test_prompt_clock();
     test_prompt_spinners();
     test_native_input_yield();
+    test_resize_checkpoint_preserves_newly_read_input();
     test_retained_prompt();
     test_native_rebind();
     test_history_refresh_cursor();

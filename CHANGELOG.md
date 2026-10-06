@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Preserve newly read command prefixes when terminal resizing redraws a prompt
+  while output is blocked.
+
 - Group the Vim conversation directory by session and endpoint, with unread
   counts, connection state and last message time. Read markers advance after
   the focused FOLLOW pane paints its tail; HOLD, background panes and terminal
