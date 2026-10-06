@@ -414,6 +414,11 @@ int snag_session_history_snapshot(struct snag_store *, struct snag_session *, co
 int snag_session_history_refresh(struct snag_session *, const struct snag_journal_cursor *tail,
     char *error, size_t error_size);
 
+/* Discover and verify newly complete records on an existing snapshot. An
+ * unchanged complete tail performs identity checks only, including when its
+ * final checkpoint is large. No suffix repair or writer ownership. */
+int snag_session_history_observe(struct snag_session *, bool *incomplete, char *, size_t);
+
 int snag_session_media(struct snag_session *session, const char *path, const char *mime,
                        int (*pump)(void *, unsigned int), void *opaque,
                        json_t **asset, char **retained_path, char *error, size_t error_size);

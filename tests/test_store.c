@@ -622,7 +622,9 @@ test_history_snapshot_refresh(struct snag_store *store, const char *cwd)
     assert(snag_session_history_refresh(&view, &bad, error, sizeof(error)) < 0);
     assert(view.log_end == original.offset && view.next_seq == original.next_seq &&
         !strcmp(view.prev_sha256, original.prev_sha256));
-    assert(snag_session_history_refresh(&view, &tail, error, sizeof(error)) == 0);
+    assert(snag_session_history_observe(&source, &incomplete, error, sizeof(error)) < 0);
+    assert(snag_session_history_observe(&view, &incomplete, error, sizeof(error)) == 0 &&
+        !incomplete);
     assert(view.log_end == tail.offset && view.next_seq == tail.next_seq &&
         !strcmp(view.prev_sha256, tail.prev_sha256));
     assert(snag_session_history_refresh(&view, &tail, error, sizeof(error)) == 0);
@@ -638,7 +640,12 @@ test_history_snapshot_refresh(struct snag_store *store, const char *cwd)
         error, sizeof(error)) == 0 && incomplete);
     assert(view.log_end == tail.offset && view.next_seq == tail.next_seq);
     assert(snag_seek(source.log_fd, 0, SEEK_END) == tail.offset + 11);
+    assert(snag_session_history_observe(&view, &incomplete, error, sizeof(error)) == 0 &&
+        incomplete);
+    assert(snag_seek(source.log_fd, 0, SEEK_END) == tail.offset + 11);
     assert(snag_truncate(source.log_fd, tail.offset) == 0);
+    assert(snag_session_history_observe(&view, &incomplete, error, sizeof(error)) == 0 &&
+        !incomplete);
     assert(snag_session_history_refresh(&view, &tail, error, sizeof(error)) == 0);
     /* Replacement with even an identical prefix invalidates cached page identity. */
     assert(renameat(source.dir_fd, "events.jsonl", source.dir_fd, "original-events") == 0);
@@ -650,6 +657,8 @@ test_history_snapshot_refresh(struct snag_store *store, const char *cwd)
     assert(close(replacement) == 0);
     free(bytes);
     assert(snag_session_history_refresh(&view, &tail, error, sizeof(error)) < 0 && errno == ESTALE);
+    assert(snag_session_history_observe(&view, &incomplete, error, sizeof(error)) < 0 &&
+        errno == ESTALE);
     assert(unlinkat(source.dir_fd, "events.jsonl", 0) == 0);
     assert(renameat(source.dir_fd, "original-events", source.dir_fd, "events.jsonl") == 0);
     assert(snag_session_history_refresh(&view, &tail, error, sizeof(error)) == 0);
@@ -1196,6 +1205,9 @@ test_checkpoint_cancellation(struct snag_store *store, struct snag_session *sour
     remaining = 64u;
     view.history_cancel = cancel_history_read;
     view.history_cancel_opaque = &remaining;
+    /* The unchanged large checkpoint must not be parsed during idle polling. */
+    assert(snag_session_history_observe(&view, &incomplete, error, sizeof(error)) == 0 &&
+        !incomplete && remaining == 64u);
     struct snag_journal_cursor cursor = {0};
     struct forward_scan scan = {.next = 1u};
     assert(snag_session_each_event_forward(&view, &cursor, SIZE_MAX, forward_event,

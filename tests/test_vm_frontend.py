@@ -114,6 +114,17 @@ class Terminal:
         if marker not in self.output:
             raise AssertionError((marker, self.process.poll(), bytes(self.output[-5000:])))
 
+    def repaint_until(self, marker, timeout=5):
+        # A forced frame provides complete visible text. Normal grid diffs can
+        # reuse a prefix already on screen and emit only the changed suffix.
+        self.output.clear()
+        deadline = time.monotonic() + timeout
+        while marker not in self.output and time.monotonic() < deadline:
+            self.write(b'\x0c')
+            self.read(.1)
+        if marker not in self.output:
+            raise AssertionError((marker, bytes(self.output[-5000:])))
+
     def write(self, text):
         os.write(self.master, text)
 
@@ -198,6 +209,8 @@ class WorkspaceTests(unittest.TestCase):
 
         provider.runtime_handler = respond
         config = self.root / 'config.ini'
+        self.fixture_provider = provider
+        self.fixture_config = config
         harness.write_irc_config(config, provider.port, 'host-model')
         journal = None
         for _ in chunks:
@@ -211,6 +224,69 @@ class WorkspaceTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             journal, = (self.root / 'state' / 'sessions').glob('*/events.jsonl')
         return journal
+
+    def append_turn(self, journal, answer):
+        provider = self.fixture_provider
+
+        def respond(handler, request, sequence):
+            provider.reply(handler, provider.response_body(sequence, answer).encode())
+
+        provider.runtime_handler = respond
+        result = subprocess.run([str(BINARY), '--config', str(self.fixture_config), '--dotdir',
+                                 str(self.root / 'state'), '--resume', journal.parent.name,
+                                 '-e', '--', 'next-question-marker'],
+                                cwd=self.root, env={**os.environ, 'HOME': str(self.root),
+                                                   'SNAJPAGENT_IRC_UI_KEY': 'irc-ui-secret'},
+                                capture_output=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_follow_hold_and_idle_polling(self):
+        journal = self.seed_session()
+        child = self.start('-N', 'following')
+        child.command('history ' + journal.parent.name)
+        child.until(b'retained-answer-marker')
+        while child.read(.1):
+            pass
+        # Idle observation must not repaint or reload the transcript.
+        self.assertEqual(child.read(1.2), b'')
+        self.append_turn(journal, 'live-append-one')
+        child.until(b'live-append-one')
+        child.write(b'gg')
+        values = self.wait_snapshot(lambda values:
+            not next(iter(values.values()))['state']['windows'][0]['history']['follow'] and
+            next(iter(values.values()))['state']['windows'][0]['history']['seq'] == 1)
+        anchor = next(iter(values.values()))['state']['windows'][0]['history']
+        self.append_turn(journal, 'live-append-two')
+        child.until(b'newer')
+        child.command('workspace save')
+        self.assertEqual(next(iter(self.snapshots().values()))['state']['windows'][0]['history'], anchor)
+        child.write(b'G')
+        self.wait_snapshot(lambda values:
+            next(iter(values.values()))['state']['windows'][0]['history']['follow'] and
+            next(iter(values.values()))['state']['windows'][0]['history']['seq'] > anchor['seq'])
+        child.write(b'\x0c')
+        child.until(b'live-append-two')
+        child.finish()
+
+    def test_replaced_history_stops_follow_until_explicit_retry(self):
+        journal = self.seed_session()
+        child = self.start('-N', 'source-change')
+        child.command('history ' + journal.parent.name)
+        child.until(b'retained-answer-marker')
+        original = journal.with_name('original-events')
+        journal.rename(original)
+        journal.write_bytes(original.read_bytes())
+        journal.chmod(0o600)
+        child.repaint_until(b'history was replaced or truncated')
+        while child.read(.1):
+            pass
+        self.assertEqual(child.read(1.2), b'')
+        journal.unlink()
+        original.rename(journal)
+        child.write(b'G')
+        self.append_turn(journal, 'recovered-history-marker')
+        child.repaint_until(b'recovered-history-marker')
+        child.finish()
 
     def test_history_navigation_verbosity_split_and_resume_preserve_source(self):
         journal = self.seed_session()

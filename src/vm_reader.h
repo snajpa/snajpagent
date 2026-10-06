@@ -13,12 +13,15 @@ enum snag_vm_read_kind { SNAG_VM_READ_HISTORY, SNAG_VM_READ_SESSIONS };
 struct snag_vm_read_request {
     enum snag_vm_read_kind kind;
     uint64_t stored_limit;
+    /* Immutable full IDs of other open buffers whose verified descriptors stay
+     * cached. Request copies the array. Omit to retain only this request's view. */
+    json_t *retained_sessions;
     /* Required if this process holds a writer: never probe/close its lock.
      * The caller preserves ownership through this request's completion. */
     char owned_session_id[SNAG_ID_HEX_LEN + 1u];
     char session_id[SNAG_ID_HEX_LEN + 1u];
     bool trusted_tail, refresh, reverse;
-    bool project;
+    bool project, if_changed, tail_only;
     unsigned int verbosity, columns;
     struct snag_journal_cursor tail, cursor;
     uint64_t before_seq;
@@ -37,7 +40,7 @@ struct snag_vm_read_result {
      * Raw encoded output and provider payloads remain private to the worker. */
     json_t *blocks;
     struct snag_vm_document *document;
-    bool best_effort, incomplete, more;
+    bool best_effort, incomplete, more, unchanged;
     int error_number;
     char error[256];
 };

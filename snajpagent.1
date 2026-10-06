@@ -1678,9 +1678,15 @@ Press o in the agent picker, or use
 .B :history SESSION_ID
 with a full ID or unique prefix, to browse retained history without taking the
 session's writer lock. gg and G load the oldest and newest source ranges;
-j/k, arrows and half-page movement cross source-page boundaries. G captures a
-fresh tail. R refreshes the current range while retaining the selected source
-anchor. A snapshot uses the last complete record and shows a partial-tail label
+j/k, arrows and half-page movement cross source-page boundaries. Opening history
+or pressing G enables FOLLOW at a fresh tail. Moving away from the tail enters
+HOLD: incoming output updates the newer-output indicator while the viewport stays
+in place. R refreshes the current range while retaining the selected source
+anchor and FOLLOW/HOLD state. Best-effort history snapshots poll once per second;
+an unchanged complete tail needs only file-identity checks and emits no frame.
+Open buffers retain verified descriptors across focus changes. A replaced,
+truncated or invalid journal stops automatic observation with a visible error;
+G or R explicitly retries after the source is repaired. A snapshot uses the last complete record and shows a partial-tail label
 when an unfinished record follows it. The journal stays unchanged.
 .PP
 .B :verbosity 0..6
@@ -1722,7 +1728,8 @@ Leaving an untouched initial picker creates no saved workspace.
 .PP
 Snapshots are private files under $DOTDIR/workspaces/WORKSPACE_ID/workspace.json.
 They retain the layout, focus, selection, filters, transcript source anchors and
-verbosity. Restoring a transcript reads history without resuming its agent.
+verbosity and FOLLOW/HOLD state. Restoring a transcript reads history without
+resuming its agent; FOLLOW restores at the current tail.
 Corrupt or newer unsupported
 state is reported and preserved. Bracketed paste inserts literal text in command
 or filter input; it cannot execute a command by itself. Escape returns to normal

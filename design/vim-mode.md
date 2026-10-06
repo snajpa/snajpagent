@@ -61,8 +61,13 @@ wrapped-row index is built on the reader thread and preserves source anchors
 through width and verbosity changes. The frontend opens read-only retained
 history from the picker or :history, with bounded pages and oldest/newest jumps.
 Workspace state v2 retains transcript anchors while accepting v1 picker layouts.
-Live follow, cross-page tool dependencies, composition, semantic attachment,
-search/selection/clipboard and IRC conversations below still need integration. This development frontend has
+FOLLOW now observes appended records without rereading an unchanged complete
+checkpoint or reprojecting an idle page. Verified descriptors remain cached for
+open buffers; HOLD retains its viewport and reports newer output. Source identity
+failure stops polling until explicit retry. Version2 workspace state accepts the
+optional follow flag, defaulting older transcript snapshots to HOLD.
+Cross-page tool dependencies, composition, semantic attachment, search/selection/
+clipboard and IRC conversations below still need integration. This development frontend has
 not been installed on the operator's machines or merged into the release line.
 
 ## 1. Outcome and decisions

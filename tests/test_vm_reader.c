@@ -160,6 +160,22 @@ main(void)
     result = await_page(reader, generation);
     assert(!result->error_number && !result->more && result->cursor.next_seq == source.next_seq);
     snag_vm_read_result_free(result);
+    /* Metadata polling leaves the existing projection untouched when idle. */
+    struct snag_vm_read_request poll = request;
+    poll.refresh = poll.if_changed = poll.project = true;
+    poll.tail.offset = source.log_end;
+    poll.tail.next_seq = source.next_seq;
+    memcpy(poll.tail.prev_sha256, source.prev_sha256, sizeof(poll.tail.prev_sha256));
+    generation = snag_vm_reader_request(reader, &poll);
+    result = await_page(reader, generation);
+    assert(!result->error_number && result->unchanged && !result->document && !result->events);
+    snag_vm_read_result_free(result);
+    poll.tail_only = true;
+    --poll.tail.next_seq;
+    generation = snag_vm_reader_request(reader, &poll);
+    result = await_page(reader, generation);
+    assert(!result->error_number && !result->unchanged && !result->document && !result->events);
+    snag_vm_read_result_free(result);
     /* Catalogue reads use the same cancellable worker and immutable secrets.
      * Identifying an in-process writer avoids dropping its POSIX lock. */
     struct snag_vm_read_request catalog = {.kind = SNAG_VM_READ_SESSIONS, .stored_limit = 10u};
@@ -215,6 +231,23 @@ main(void)
     int status;
     assert(waitpid(probe, &status, 0) == probe && WIFEXITED(status) && WEXITSTATUS(status) == 0);
 #endif
+    /* Switching buffers retains the original descriptor and its verified tail.
+     * Otherwise returning after source replacement would silently open a new file. */
+    struct snag_session second;
+    snag_session_init(&second);
+    assert(snag_session_create(&store, &second, root, "default", "second", "high",
+        error, sizeof(error)) == 0);
+    struct snag_vm_read_request other = {.refresh = true};
+    memcpy(other.session_id, second.id, sizeof(other.session_id));
+    other.retained_sessions = json_pack("[s]", source.id);
+    generation = snag_vm_reader_request(reader, &other);
+    assert(json_array_set_new(other.retained_sessions, 0u, json_string("mutated")) == 0);
+    json_decref(other.retained_sessions);
+    other.retained_sessions = NULL;
+    result = await_page(reader, generation);
+    assert(!result->error_number && result->events);
+    snag_vm_read_result_free(result);
+    snag_session_close(&second);
     /* Replacement invalidates the old descriptor even with identical contents. */
     assert(snag_rename_at(source.dir_fd, "events.jsonl", source.dir_fd, "events.before") == 0);
     int replacement = snag_create_private_at(source.dir_fd, "events.jsonl", true);

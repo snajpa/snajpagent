@@ -11,6 +11,12 @@
 #include <stdlib.h>
 #include <string.h>
 
+struct source_view {
+    struct snag_session session;
+    bool best_effort, incomplete;
+    struct source_view *next;
+};
+
 struct snag_vm_reader {
     struct snag_store *store;
     struct snag_wire_secrets secrets;
@@ -23,14 +29,14 @@ struct snag_vm_reader {
     atomic_bool stop;
     uint64_t working_generation;
     struct snag_vm_read_result *pending, *completed;
-    struct snag_session view;
-    bool best_effort, incomplete;
+    struct source_view *views, *current;
 };
 
 void
 snag_vm_read_result_free(struct snag_vm_read_result *result)
 {
     if (!result) return;
+    json_decref(result->request.retained_sessions);
     json_decref(result->events);
     json_decref(result->catalog);
     json_decref(result->blocks);
@@ -49,9 +55,41 @@ read_canceled(void *opaque)
 static void
 view_close(struct snag_vm_reader *reader)
 {
-    snag_session_close(&reader->view);
-    reader->view.history_cancel = read_canceled;
-    reader->view.history_cancel_opaque = reader;
+    struct source_view **link = &reader->views;
+    while (*link && *link != reader->current) link = &(*link)->next;
+    if (*link) {
+        struct source_view *old = *link;
+        *link = old->next;
+        snag_session_close(&old->session);
+        free(old);
+    }
+    reader->current = NULL;
+}
+
+static bool
+source_retained(const struct snag_vm_read_request *request, const char *id)
+{
+    if (request->kind == SNAG_VM_READ_HISTORY && !strcmp(id, request->session_id)) return true;
+    for (size_t i = 0u; i < json_array_size(request->retained_sessions); ++i) {
+        const char *retained = json_string_value(json_array_get(request->retained_sessions, i));
+        if (!strcmp(id, retained)) return true;
+    }
+    return false;
+}
+
+static void
+retain_views(struct snag_vm_reader *reader, const struct snag_vm_read_request *request)
+{
+    struct source_view *view = reader->views;
+    while (view) {
+        struct source_view *next = view->next;
+        if (!source_retained(request, view->session.id)) {
+            reader->current = view;
+            view_close(reader);
+        }
+        view = next;
+    }
+    reader->current = NULL;
 }
 
 static struct snag_journal_cursor
@@ -66,22 +104,37 @@ static int
 view_open(struct snag_vm_reader *reader, const struct snag_vm_read_request *request,
     char *error, size_t size)
 {
-    struct snag_session *view = &reader->view;
-    if (strcmp(view->id, request->session_id) ||
-        (!request->trusted_tail && request->refresh) ||
-        reader->best_effort == request->trusted_tail) view_close(reader);
+    struct source_view *source = reader->views;
+    while (source && strcmp(source->session.id, request->session_id)) source = source->next;
+    reader->current = source;
+    if (source && source->best_effort == request->trusted_tail) {
+        view_close(reader);
+        source = NULL;
+    }
+    if (!source) {
+        source = calloc(1u, sizeof(*source));
+        if (!source) return -1;
+        snag_session_init(&source->session);
+        source->session.history_cancel = read_canceled;
+        source->session.history_cancel_opaque = reader;
+        source->next = reader->views;
+        reader->views = reader->current = source;
+    }
+    struct snag_session *view = &source->session;
     if (view->log_fd >= 0) {
+        if (!request->trusted_tail && request->refresh)
+            return snag_session_history_observe(view, &source->incomplete, error, size);
         struct snag_journal_cursor tail = request->trusted_tail ? request->tail : view_tail(view);
         return snag_session_history_refresh(view, &tail, error, size);
     }
-    reader->best_effort = !request->trusted_tail;
-    reader->incomplete = false;
+    source->best_effort = !request->trusted_tail;
+    source->incomplete = false;
     if (request->trusted_tail) {
         return snag_session_history_open(reader->store, view, request->session_id,
             &request->tail, error, size);
     }
     return snag_session_history_snapshot(reader->store, view, request->session_id,
-        &reader->incomplete, error, size);
+        &source->incomplete, error, size);
 }
 
 struct read_page {
@@ -124,6 +177,7 @@ static void
 read_page(struct snag_vm_reader *reader, struct snag_vm_read_result *result)
 {
     const struct snag_vm_read_request *request = &result->request;
+    retain_views(reader, request);
     if (request->kind == SNAG_VM_READ_SESSIONS) {
         struct snag_session owned = {.lock_fd = -1};
         if (request->owned_session_id[0]) {
@@ -146,23 +200,28 @@ read_page(struct snag_vm_reader *reader, struct snag_vm_read_result *result)
         return;
     }
     if (view_open(reader, request, result->error, sizeof(result->error)) < 0) goto failed;
-    result->tail = view_tail(&reader->view);
-    result->best_effort = reader->best_effort;
-    result->incomplete = reader->incomplete;
+    struct snag_session *view = &reader->current->session;
+    result->tail = view_tail(view);
+    result->best_effort = reader->current->best_effort;
+    result->incomplete = reader->current->incomplete;
+    result->unchanged = request->tail.offset == result->tail.offset &&
+        request->tail.next_seq == result->tail.next_seq &&
+        !strcmp(request->tail.prev_sha256, result->tail.prev_sha256);
+    if (request->tail_only || (request->if_changed && result->unchanged)) return;
     result->events = json_array();
     if (!result->events) goto failed;
     struct read_page page = {.reader = reader, .events = result->events,
         .project = request->project};
     if (request->reverse) {
         uint64_t before;
-        if (snag_session_each_event_reverse(&reader->view, request->before_seq,
+        if (snag_session_each_event_reverse(view, request->before_seq,
             SNAG_JOURNAL_PAGE_BYTES, read_event, &page, &before,
             result->error, sizeof(result->error)) < 0) goto failed;
-        result->cursor = reader->view.history_cursor;
+        result->cursor = view->history_cursor;
         result->more = before != 0u;
     } else {
         result->cursor = request->cursor;
-        if (snag_session_each_event_forward(&reader->view, &result->cursor,
+        if (snag_session_each_event_forward(view, &result->cursor,
             SNAG_JOURNAL_PAGE_BYTES, read_event, &page,
             result->error, sizeof(result->error)) < 0) goto failed;
         result->more = result->cursor.offset < result->tail.offset;
@@ -229,7 +288,10 @@ reader_main(void *opaque)
         (void)pthread_mutex_unlock(&reader->lock);
         snag_vm_read_result_free(result);
     }
-    view_close(reader);
+    while (reader->views) {
+        reader->current = reader->views;
+        view_close(reader);
+    }
     return NULL;
 }
 
@@ -259,9 +321,6 @@ snag_vm_reader_open(struct snag_store *store, const struct snag_wire_secrets *se
     if (!reader) return NULL;
     reader->store = store;
     reader->wake[0] = reader->wake[1] = SNAG_WAKE_INVALID;
-    snag_session_init(&reader->view);
-    reader->view.history_cancel = read_canceled;
-    reader->view.history_cancel_opaque = reader;
     atomic_init(&reader->generation, 0u);
     atomic_init(&reader->stop, false);
     if (secrets && secrets->count) {
@@ -325,11 +384,29 @@ snag_vm_reader_request(struct snag_vm_reader *reader, const struct snag_vm_read_
         errno = EINVAL;
         return 0u;
     }
+    if (request->retained_sessions && !json_is_array(request->retained_sessions)) {
+        errno = EINVAL;
+        return 0u;
+    }
+    for (size_t i = 0u; i < json_array_size(request->retained_sessions); ++i) {
+        const json_t *id = json_array_get(request->retained_sessions, i);
+        if (json_string_length(id) != SNAG_ID_HEX_LEN ||
+            !snag_hex_is_lower(json_string_value(id), SNAG_ID_HEX_LEN)) {
+            errno = EINVAL;
+            return 0u;
+        }
+    }
     struct snag_vm_read_result *result = calloc(1u, sizeof(*result));
     if (!result) return 0u;
+    result->request = *request;
+    result->request.retained_sessions = request->retained_sessions ?
+        json_deep_copy(request->retained_sessions) : NULL;
+    if (request->retained_sessions && !result->request.retained_sessions) {
+        free(result);
+        return 0u;
+    }
     (void)pthread_mutex_lock(&reader->lock);
     uint64_t generation = atomic_fetch_add(&reader->generation, 1u) + 1u;
-    result->request = *request;
     result->generation = generation;
     struct snag_vm_read_result *pending = reader->pending, *completed = reader->completed;
     reader->pending = result;

@@ -3150,15 +3150,17 @@ history_identity_valid(struct snag_session *session, int64_t end, char *error, s
         error, error_size);
 }
 
-int
-snag_session_history_snapshot(struct snag_store *store, struct snag_session *session,
-    const char *id, bool *incomplete, char *error, size_t error_size)
+static int
+history_snapshot_tail(struct snag_session *session, int64_t size,
+    struct snag_journal_cursor *tail, bool *incomplete, char *error, size_t error_size)
 {
-    int64_t size;
-    if (!incomplete) return snag_fail(error, error_size, EINVAL, "missing history suffix result");
+    *tail = (struct snag_journal_cursor){.offset = session->log_end,
+        .next_seq = session->next_seq};
+    memcpy(tail->prev_sha256, session->prev_sha256, sizeof(tail->prev_sha256));
     *incomplete = false;
-    if (history_source_open(store, session, id, &size, error, error_size) < 0) return -1;
-    if (!size) return history_identity_valid(session, 0, error, error_size);
+    if (size == session->log_end) return 0;
+    if (size < session->log_end)
+        return snag_fail(error, error_size, ESTALE, "history was truncated");
     unsigned char last;
     ssize_t got;
     do { got = session_read_at(session, &last, 1u, size - 1); } while (got < 0 && errno == EINTR);
@@ -3169,25 +3171,46 @@ snag_session_history_snapshot(struct snag_store *store, struct snag_session *ses
         size = newline + 1;
         *incomplete = true;
     }
-    session->log_end = size;
-    if (!size) return history_identity_valid(session, 0, error, error_size);
+    if (size == session->log_end) return 0;
+    if (size < session->log_end) goto invalid;
     int64_t split = previous_newline(session, size - 1), end = size;
     if (split < -1) goto invalid;
     char digest[SNAG_SHA256_HEX_LEN + 1u];
+    int64_t previous_end = session->log_end;
+    session->log_end = size;
     json_t *record = history_record_read(session, split + 1, &end, digest);
     uint64_t seq;
     int rc = end == size && snag_json_integer_u64(record, "seq", &seq) == 0 &&
         seq < UINT64_MAX ? history_record_valid(session, record, split + 1, end, seq,
             digest, error, error_size) : -1;
+    session->log_end = previous_end;
     if (!rc) {
-        session->next_seq = seq + 1u;
-        memcpy(session->prev_sha256, snag_json_string(record, "event_sha256"),
-            sizeof(session->prev_sha256));
+        tail->offset = size;
+        tail->next_seq = seq + 1u;
+        memcpy(tail->prev_sha256, snag_json_string(record, "event_sha256"),
+            sizeof(tail->prev_sha256));
     }
     json_decref(record);
-    if (!rc) return history_identity_valid(session, size, error, error_size);
+    if (!rc) return 0;
 invalid:
     return history_error(session, error, error_size, "invalid complete history snapshot");
+}
+
+int
+snag_session_history_snapshot(struct snag_store *store, struct snag_session *session,
+    const char *id, bool *incomplete, char *error, size_t error_size)
+{
+    int64_t size;
+    if (!incomplete) return snag_fail(error, error_size, EINVAL, "missing history suffix result");
+    *incomplete = false;
+    if (history_source_open(store, session, id, &size, error, error_size) < 0) return -1;
+    struct snag_journal_cursor tail;
+    if (history_snapshot_tail(session, size, &tail, incomplete, error, error_size) < 0) return -1;
+    if (history_identity_valid(session, tail.offset, error, error_size) < 0) return -1;
+    session->log_end = tail.offset;
+    session->next_seq = tail.next_seq;
+    memcpy(session->prev_sha256, tail.prev_sha256, sizeof(session->prev_sha256));
+    return 0;
 }
 
 static int
@@ -3240,6 +3263,25 @@ snag_session_history_refresh(struct snag_session *session, const struct snag_jou
         memcpy(session->prev_sha256, previous.prev_sha256, sizeof(session->prev_sha256));
     }
     return rc;
+}
+
+int
+snag_session_history_observe(struct snag_session *session, bool *incomplete,
+    char *error, size_t error_size)
+{
+    if (!session || !incomplete || session->log_fd < 0 || session->dir_fd < 0 ||
+        session->lock_fd >= 0 || session->pending_log || !session->dir_path)
+        return snag_fail(error, error_size, EINVAL, "invalid history observation");
+    if (history_identity_valid(session, session->log_end, error, error_size) < 0) return -1;
+    snag_file_info info;
+    if (snag_fstat(session->log_fd, &info) < 0)
+        return snag_errorf(error, error_size, "cannot inspect source history: %s", strerror(errno));
+    struct snag_journal_cursor tail;
+    bool partial;
+    if (history_snapshot_tail(session, info.st_size, &tail, &partial, error, error_size) < 0 ||
+        snag_session_history_refresh(session, &tail, error, error_size) < 0) return -1;
+    *incomplete = partial;
+    return 0;
 }
 
 static int
