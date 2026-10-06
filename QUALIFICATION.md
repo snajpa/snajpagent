@@ -9,6 +9,42 @@ runs each cover different behavior. Report the actual scope of each result.
 The [2026-10-01 regression audit](design/regression-audit-20261001.md) maps the
 32 audited development commits to their permanent tests and records coverage additions.
 
+## Development Vim workspace
+
+The optional workspace and classic conversation tabs are development features.
+Native macOS/Linux fixtures cover session creation/resume and controller ownership,
+saved workspace layouts, independent drafts, command reports, IRC channel/query
+privacy, stale-route recovery, history navigation/search, mouse selection and
+clipboard publication. WITH_VM=0 builds retain classic conversations and the
+remote wrapper. Restored drafts and uncertain IRC submissions require explicit
+user action; the fixtures assert provider requests and recipient deliveries.
+
+The Windows x64 executable passes five real direct-engine cases through Wine 10:
+priority /fast, an actual local HTTP request, retained later typing, resume,
+startup failure, workspace loss and joined cancellation during a held request.
+Three full workspace cases exercise hiding a live engine, shared split drafts,
+explicit quit, single-engine restrictions, explicit session resume and startup
+failure recovery. The Windows workspace-storage C suite and console-key cases
+also pass. Regression witnesses cover held-directory reopening and Escape events
+with no translated character. The runner maps private fixture directories to a
+drive and owns/restores its Unix PTY raw mode. Wine inserts line breaks within
+ANSI output, so these results establish lifecycle/input behavior, not native
+Windows desktop rendering. Broader Windows/base-suite qualification remains open;
+the Wine base run stops in an unrelated command-quoting assertion.
+
+Actual SSH/Mosh × Screen/tmux reconnect cases preserve the same workspace/owner,
+two panes and a newer draft after transport loss. An explicit upload retry
+retains exact UTF-8 file bytes and submits one prompt with its attachment.
+Separate transfer tests cover resize, provider output during a picker and picker
+exit when the transport dies. Native macOS clipboard integration verifies the
+actual pasteboard, alongside isolated protocol/receipt/cancellation fixtures.
+
+A 2 GiB synthetic journal on Linux opened/navigated in approximately 0.8–1.4 s
+with approximately 13 MiB RSS. A full cold search took 358 s and cancelled in
+7 ms; navigation cost and whole-journal search cost have different scope.
+BSD runtime and the remaining production compile profiles are still being
+qualified. These development checks do not constitute a release-matrix receipt.
+
 ## tmux transfers and paste display
 
 Permanent real-tmux fixtures place the multiplexer between the workstation

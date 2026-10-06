@@ -32,12 +32,21 @@ and goals, and `/history` reuses the existing event selection and renderer with
 a thread-local report destination. Automatic resume history keeps its normal
 display. Report capture excludes ordinary engine notifications and model output.
 Verbosity queries use the engine report path; setting verbosity stays a local UI
-control. Unset/disabled paging and startup failures retain direct output.
+control. Disabled/unavailable paging and startup failures retain direct output.
 Pagers run asynchronously while provider turns, managed processes and IRC keep
 progressing. Rendering retains incoming output until terminal ownership returns;
 durable IRC records use exact journal event ranges across automatic checkpoints.
-Model downloads stay queued during pager ownership. The optional Vim workspace
-remains described in [its implementation design](design/vim-mode.md).
+Model downloads stay queued during pager ownership.
+
+The optional development Vim workspace provides named persistent workspaces,
+session/conversation buffers, split panes, retained-history navigation/search,
+retrospective verbosity, visual selection, mouse controls and clipboard copy.
+POSIX workspaces control existing native owners; Windows runs one workspace-owned
+engine and keeps it alive when its panes close. Explicit quit ends that engine.
+Classic Tab/Shift-Tab cycles opened channels, direct queries and connection views
+with independent drafts. Vim Tab changes pane focus; :bn/:bp changes buffers.
+Runtime activation remains explicit and WITH_VM=0 omits the module. See the
+[design](design/vim-mode.md) and [qualification scope](QUALIFICATION.md).
 
 `snajpagent remote mosh HOST COMMAND...` separates Mosh options from the remote
 command automatically, including commands with --resume or --attach. Leading

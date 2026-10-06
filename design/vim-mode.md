@@ -16,8 +16,11 @@ restrictions. The engine/UI and VM client now use this channel without console
 I/O from the presenter. Native integration tests cover /fast, a real HTTP request,
 newer draft retention, resume, startup failure and cancellation during a held
 provider request. Windows workspace wiring owns one engine, retains it when hidden
-and requires explicit quit before workspace exit or switching. Windows runtime
-qualification remains pending; no platform execution result is claimed here.
+and requires explicit quit before workspace exit or switching. The actual Windows
+x64 executable passes all five engine cases and all three workspace lifecycle
+cases through Wine 10, plus workspace storage and console-key tests. Wine's Unix
+console does not qualify desktop rendering; native Windows desktop and other
+platform execution scope are tracked in [QUALIFICATION.md](../QUALIFICATION.md).
 Blocked private writes assemble at most one incoming message before dispatch,
 allowing simultaneous fragmented sends to make progress. A permanent threaded
 regression reproduces the original write/write stall and verifies both messages.
@@ -212,7 +215,8 @@ its hovered window while retaining keyboard focus. Separator drags use the same
 geometry as layout placement and save proportional sizes; stale drags cannot
 retain pointers to edited trees. SGR button-motion reporting is runtime-toggleable
 with :set mouse/nomouse and is restored through terminal handoffs.
-Clipboard publication is implemented below; complete workspace/IRC/remote delivery remains active.
+Clipboard publication and IRC/remote integration are implemented below;
+platform qualification remains active.
 
 Implementation checkpoint: asynchronous pager ownership and retained rendering
 are implemented in this branch. Held-pager regressions cover IRC delivery and
@@ -405,9 +409,9 @@ whole active buffer in chronological order, choosing the nearest directional
 match or wrap candidate. Reports stay scoped to their immutable snapshot.
 Visual selection and clipboard publication are connected to explicit transcript,
 report and composer yanks. Clipboard protocol and PTY qualification are recorded
-in section 10. IRC conversations and the full real-transport matrix remain open.
-This development frontend has
-not been installed on the operator's machines or merged into the release line.
+in section 10. Development builds include IRC conversations and file transfer
+through SSH/Mosh with Screen/tmux, including retained workspace recovery after
+outer-transport loss. Platform coverage is recorded in QUALIFICATION.md.
 
 ## 1. Outcome and decisions
 
