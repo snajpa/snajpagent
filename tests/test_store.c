@@ -1162,6 +1162,64 @@ checkpoint_metadata_view(struct snag_store *store, struct snag_session *session)
     snag_session_close(&view);
 }
 
+static bool
+cancel_history_read(void *opaque)
+{
+    size_t *remaining = opaque;
+    if (*remaining) --*remaining;
+    return !*remaining;
+}
+
+static void
+test_checkpoint_cancellation(struct snag_store *store, struct snag_session *source)
+{
+    struct snag_session view;
+    struct snag_journal_cursor tail = {.offset = source->log_end, .next_seq = source->next_seq};
+    char error[256];
+    memcpy(tail.prev_sha256, source->prev_sha256, sizeof(tail.prev_sha256));
+    size_t remaining = 64u;
+    snag_session_init(&view);
+    view.history_cancel = cancel_history_read;
+    view.history_cancel_opaque = &remaining;
+    assert(snag_session_history_open(store, &view, source->id, &tail,
+        error, sizeof(error)) < 0 && errno == ECANCELED && !remaining);
+    snag_session_close(&view);
+    remaining = 64u;
+    view.history_cancel = cancel_history_read;
+    view.history_cancel_opaque = &remaining;
+    bool incomplete;
+    assert(snag_session_history_snapshot(store, &view, source->id, &incomplete,
+        error, sizeof(error)) < 0 && errno == ECANCELED && !remaining);
+    snag_session_close(&view);
+    assert(snag_session_history_open(store, &view, source->id, &tail,
+        error, sizeof(error)) == 0);
+    remaining = 64u;
+    view.history_cancel = cancel_history_read;
+    view.history_cancel_opaque = &remaining;
+    struct snag_journal_cursor cursor = {0};
+    struct forward_scan scan = {.next = 1u};
+    assert(snag_session_each_event_forward(&view, &cursor, SIZE_MAX, forward_event,
+        &scan, error, sizeof(error)) < 0 && errno == ECANCELED);
+    assert(cursor.next_seq == 2u && scan.next == 2u);
+    view.history_cancel = NULL;
+    assert(snag_session_each_event_forward(&view, &cursor, SIZE_MAX, forward_event,
+        &scan, error, sizeof(error)) == 0 && cursor.next_seq == tail.next_seq);
+    remaining = 64u;
+    view.history_cancel = cancel_history_read;
+    struct reverse_scan reverse = {.next = tail.next_seq, .limit = SIZE_MAX};
+    uint64_t before;
+    assert(snag_session_each_event_reverse(&view, 0u, SIZE_MAX, reverse_event,
+        &reverse, &before, error, sizeof(error)) < 0 && errno == ECANCELED && !reverse.count);
+    remaining = 64u;
+    assert(snag_session_history_refresh(&view, &tail, error, sizeof(error)) < 0 &&
+        errno == ECANCELED && view.log_end == tail.offset && view.next_seq == tail.next_seq);
+    view.history_cancel = NULL;
+    assert(snag_session_each_event_reverse(&view, 0u, SIZE_MAX, reverse_event,
+        &reverse, &before, error, sizeof(error)) == 0 && !before && reverse.count == 2u);
+    snag_session_close(&view);
+    assert_session_lock_retained(source, "after canceled checkpoint reads");
+}
+
 static void
 test_large_embedded_checkpoint(struct snag_store *store, const char *cwd)
 {
@@ -1196,6 +1254,7 @@ test_large_embedded_checkpoint(struct snag_store *store, const char *cwd)
 #else
     checkpoint_metadata_view(store, &session);
 #endif /* __linux__ && !__SANITIZE_ADDRESS__ */
+    test_checkpoint_cancellation(store, &session);
     /* A changed byte in the skipped provider payload still invalidates its hash. */
     int64_t changed = session.checkpoint_offset + 8u * 1024u * 1024u;
     int writer = openat(session.dir_fd, "events.jsonl", O_WRONLY | O_CLOEXEC);

@@ -2710,6 +2710,9 @@ invalid:
 static ssize_t
 session_read_at(struct snag_session *session, void *buffer, size_t size, int64_t offset)
 {
+    if (session->history_cancel && session->history_cancel(session->history_cancel_opaque)) {
+        return snag_errno(ECANCELED);
+    }
     if (!session->pending_log) return snag_pread(session->log_fd, buffer, size, offset);
     if (offset < 0 || (uint64_t)offset > session->pending_log->len) return snag_errno(EIO);
     size_t available = session->pending_log->len - (size_t)offset;
@@ -3052,6 +3055,16 @@ invalid:
     return snag_fail(error, error_size, EINVAL, "invalid history record boundary");
 }
 
+static int
+history_error(struct snag_session *session, char *error, size_t error_size, const char *detail)
+{
+    if (session && session->history_cancel &&
+        session->history_cancel(session->history_cancel_opaque)) {
+        return snag_fail(error, error_size, ECANCELED, "history read canceled");
+    }
+    return snag_fail(error, error_size, EINVAL, "%s", detail);
+}
+
 static bool
 history_tail_valid(const struct snag_journal_cursor *tail)
 {
@@ -3091,7 +3104,7 @@ history_boundary_valid(struct snag_session *session, char *error, size_t error_s
     if (!session->log_end) return 0;
     int64_t split = previous_newline(session, session->log_end - 1), end = session->log_end;
     if (split < -1) {
-        return snag_fail(error, error_size, EINVAL, "cannot locate source history boundary");
+        return history_error(session, error, error_size, "cannot locate source history boundary");
     }
     char digest[SNAG_SHA256_HEX_LEN + 1u];
     json_t *record = history_record_read(session, split + 1, &end, digest);
@@ -3099,7 +3112,7 @@ history_boundary_valid(struct snag_session *session, char *error, size_t error_s
         session->next_seq - 1u, digest, error, error_size) : -1;
     if (!rc && strcmp(session->prev_sha256, snag_json_string(record, "event_sha256"))) rc = -1;
     json_decref(record);
-    return rc < 0 ? snag_fail(error, error_size, EINVAL, "invalid source history boundary") : 0;
+    return rc < 0 ? history_error(session, error, error_size, "invalid source history boundary") : 0;
 }
 
 int
@@ -3173,7 +3186,7 @@ snag_session_history_snapshot(struct snag_store *store, struct snag_session *ses
     json_decref(record);
     if (!rc) return history_identity_valid(session, size, error, error_size);
 invalid:
-    return snag_fail(error, error_size, EINVAL, "invalid complete history snapshot");
+    return history_error(session, error, error_size, "invalid complete history snapshot");
 }
 
 static int
@@ -3275,7 +3288,7 @@ history_cursor_before(struct snag_session *session, uint64_t before,
         else high = start;
     }
 invalid:
-    return snag_fail(error, error_size, EINVAL, "cannot locate verified history boundary");
+    return history_error(session, error, error_size, "cannot locate verified history boundary");
 }
 
 int
@@ -3290,7 +3303,7 @@ snag_session_each_event_reverse(struct snag_session *session, uint64_t before, s
     while (cursor.offset > 0 && scan_bytes) {
         int64_t split = previous_newline(session, cursor.offset - 1);
         if (split < -1 || cursor.next_seq <= 1u)
-            return snag_fail(error, error_size, EINVAL, "invalid reverse history position");
+            return history_error(session, error, error_size, "invalid reverse history position");
         int64_t start = split + 1, end = cursor.offset;
         char digest[SNAG_SHA256_HEX_LEN + 1u];
         json_t *record = history_record_read(session, start, &end, digest);
@@ -3298,7 +3311,7 @@ snag_session_each_event_reverse(struct snag_session *session, uint64_t before, s
         if (end != cursor.offset ||
             history_record_valid(session, record, start, end, seq, digest, error, error_size) < 0) {
             json_decref(record);
-            return snag_fail(error, error_size, EINVAL, "invalid reverse history record");
+            return history_error(session, error, error_size, "invalid reverse history record");
         }
         if (strcmp(cursor.prev_sha256, snag_json_string(record, "event_sha256"))) {
             json_decref(record);
@@ -3354,7 +3367,7 @@ snag_session_each_event_forward(struct snag_session *session, struct snag_journa
             history_record_valid(session, record, cursor->offset, end, seq,
                 digest, error, error_size) < 0) {
             json_decref(record);
-            return snag_fail(error, error_size, EINVAL, "invalid forward history record");
+            return history_error(session, error, error_size, "invalid forward history record");
         }
         if (strcmp(cursor->prev_sha256, snag_json_string(record, "prev_sha256"))) {
             json_decref(record);

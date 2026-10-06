@@ -215,6 +215,10 @@ struct snag_session {
     bool checkpoint_has_context;
     /* Derived paging position only; never encoded into a checkpoint. */
     struct snag_journal_cursor history_cursor;
+    /* Read-only history worker hook, borrowed and never serialized. Cancellation
+     * stays true until that operation returns; change it only between reads. */
+    bool (*history_cancel)(void *);
+    void *history_cancel_opaque;
     /* Owner-local derived view; borrowed by staged commits, freed only on close.
      * Its verified cursor and bounded excerpts never enter durable state. */
     struct snag_voice_projection *voice_projection;

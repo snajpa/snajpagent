@@ -669,8 +669,12 @@ existing record-size contract.
 Canonical equivalence tests cover both record versions, UTF-8/escaped keys,
 integer bounds, tiny read chunks and hash boundaries. The storage test traverses
 a 17 MiB checkpoint forward and backward with only 12 MiB of additional address space
-available on Linux. Worker scheduling and measured cancellation latency remain
-part of the workspace reader integration below.
+available on Linux. Read-only readers check a caller-owned cancellation hook at
+each filesystem read, including checkpoint parsing. Cancellation returns
+ECANCELED, preserves verified cursors and never changes native writer ownership.
+Tests interrupt open, snapshot, forward/reverse paging and refresh within a large
+checkpoint, then continue the same verified view. Worker scheduling and measured
+cancellation latency remain part of the workspace integration below.
 
 The store exposes a read-only snapshot for stored sessions and old owners. It
 captures the last complete record, reports an ignored unfinished suffix and
