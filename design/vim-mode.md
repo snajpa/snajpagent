@@ -713,6 +713,16 @@ for replay. Normalize legacy `irc_event` records as channel events; never preten
 a nick is a channel in the old `room` field. Persist conversation/connection
 identity and alias changes needed to recover the same buffers after resume.
 
+The event codec now has a strict v2 reader and a nested `routing` object:
+`connection_id`, `conversation_id`, `generation`, `identity`, `conversation_kind`,
+`peer`, `target`, `direction`, `send_id`, `state`, `source_message_id` and `action`.
+`peer` identifies the query counterpart; `target` retains the actual wire
+recipient, including the local accepted nick on incoming DMs. The decoder rejects
+operator-query model admission, invalid send states and mismatched record versions.
+The model projection omits operator queries and connection notices. Legacy
+decoding remains separate. Durable-reader integration and live v2 writing are
+the next implementation step; this codec alone does not enable DM traffic.
+
 This expands the original UI-only storage scope. Implement compatible readers,
 checkpoint projection and context filters first. Direct-message-capable writers
 use a new checkpoint snapshot revision when this schema becomes active; existing

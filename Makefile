@@ -130,6 +130,7 @@ FIXTURE_BIN = tests/$(NAME)-fixture
 TEST_BIN = tests/snajpagent-transport tests/test_base tests/test_config tests/test_irc tests/test_instructions tests/test_credential tests/test_sse tests/test_json tests/test_store_record $(VM_TEST_BIN) tests/test_rules tests/test_wire tests/test_responses tests/test_provider_retry tests/test_provider_transport tests/test_context tests/test_model_cache tests/test_render tests/test_turn tests/test_tools tests/test_store tests/test_write tests/test_upload_wire tests/test_clipboard tests/test_clipboard_transfer $(FIXTURE_BIN)
 BUILD_INPUTS = build/.build-inputs
 TEST_BIN += tests/test_irc_address
+TEST_BIN += tests/test_irc_event
 
 all: $(BIN)
 
@@ -285,6 +286,12 @@ tests/test_irc_address:
 	$(CC) $(CPPFLAGS) $(JANSSON_CFLAGS) $(CFLAGS) $(LDFLAGS) -Isrc \
 		-o $@ $(filter %.c,$^) $(LDLIBS)
 
+tests/test_irc_event: $(PLATFORM_SRC) src/json.c src/irc_event.c tests/test_irc_event.c $(HEADERS)
+
+tests/test_irc_event:
+	$(CC) $(CPPFLAGS) $(JANSSON_CFLAGS) $(CFLAGS) $(LDFLAGS) -Isrc \
+		-o $@ $(filter %.c,$^) $(LDLIBS)
+
 tests/test_unicode: $(PLATFORM_SRC) src/json.c src/unicode.c tests/test_unicode.c $(HEADERS)
 
 src/unicode.o: src/unicode_tables.inc
@@ -329,6 +336,7 @@ check: $(BIN) $(TEST_BIN)
 	./tests/test_config
 	./tests/test_irc
 	./tests/test_irc_address
+	./tests/test_irc_event
 	./tests/test_instructions
 	./tests/test_credential
 	./tests/test_sse

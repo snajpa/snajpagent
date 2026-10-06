@@ -46,6 +46,31 @@ enum snag_irc_event_kind {
     SNAG_IRC_QUIT, SNAG_IRC_NICK, SNAG_IRC_MESSAGE, SNAG_IRC_NOTICE,
     SNAG_IRC_TOPIC, SNAG_IRC_MODE, SNAG_IRC_HISTORY_READY };
 
+enum snag_irc_identity { SNAG_IRC_OPERATOR, SNAG_IRC_AGENT };
+enum snag_irc_conversation_kind { SNAG_IRC_CONNECTION_EVENTS, SNAG_IRC_CHANNEL, SNAG_IRC_QUERY };
+enum snag_irc_direction { SNAG_IRC_INCOMING, SNAG_IRC_OUTGOING };
+enum snag_irc_delivery {
+    SNAG_IRC_DELIVERY_NONE, SNAG_IRC_PENDING, SNAG_IRC_WRITTEN,
+    SNAG_IRC_ACKNOWLEDGED, SNAG_IRC_FAILED, SNAG_IRC_UNCERTAIN
+};
+
+/* Durable conversation identity is independent of a socket, list position or
+ * current nickname. Target is the actual wire recipient; peer names the query
+ * counterpart even when an incoming message targets our own accepted nick. */
+struct snag_irc_event_route {
+    char connection[SNAG_ID_HEX_LEN + 1u], conversation[SNAG_ID_HEX_LEN + 1u];
+    char peer[SNAG_CONFIG_IRC_NICK_MAX + 1u];
+    char target[SNAG_CONFIG_IRC_ROOM_MAX + 2u];
+    char send[SNAG_ID_HEX_LEN + 1u];
+    char source[SNAG_IRC_LINE_MAX + 1u];
+    uint64_t generation;
+    enum snag_irc_identity identity;
+    enum snag_irc_conversation_kind kind;
+    enum snag_irc_direction direction;
+    enum snag_irc_delivery delivery;
+    bool action;
+};
+
 struct snag_irc_event {
     enum snag_irc_event_kind kind;
     uint64_t timestamp_ms;
@@ -60,6 +85,8 @@ struct snag_irc_event {
     bool op;
     bool historical;
     bool local;
+    bool routed;
+    struct snag_irc_event_route route;
 };
 
 const char *snag_irc_kind_name(enum snag_irc_event_kind kind);
@@ -67,6 +94,11 @@ json_t *snag_irc_event_data(const struct snag_irc_event *event);
 /* Durable field validation only; live/replay membership rules remain separate. */
 int snag_irc_event_projection(struct snag_buf *out, const struct snag_irc_event *event);
 int snag_irc_event_read(const json_t *data, struct snag_irc_event *event);
+/* Record type and payload revision must agree. The legacy decoder above stays
+ * strict so new routing fields cannot be hidden inside an old event type. */
+int snag_irc_event_record_read(const char *, const json_t *, struct snag_irc_event *);
+const char *snag_irc_event_record_type(const struct snag_irc_event *);
+bool snag_irc_event_model_visible(const struct snag_irc_event *);
 
 typedef int (*snag_irc_event_fn)(void *opaque, const struct snag_irc_event *event);
 typedef int (*snag_irc_trace_fn)(void *opaque, unsigned int level, char direction, const char *endpoint,

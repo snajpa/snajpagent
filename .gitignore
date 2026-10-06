@@ -16,6 +16,7 @@
 /tests/test_instructions
 /tests/test_irc
 /tests/test_irc_address
+/tests/test_irc_event
 /tests/test_json
 /tests/test_model_cache
 /tests/test_provider_retry

@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Add the recipient-aware IRC event codec for direct-message integration,
+  with strict legacy separation, delivery states and operator-query exclusion
+  from model projection. Live direct-message routing remains under development.
+
 - Copy explicit Vim yanks to the workstation clipboard, with asynchronous
   validation/publication, checked remote chunks, retries and retained result
   receipts. Preserve the register on external failure and serialize newer yanks.
