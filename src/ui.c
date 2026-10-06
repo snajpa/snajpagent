@@ -139,6 +139,7 @@ struct snag_ui_display {
     unsigned char voice_bound_offer[SNAG_SESSION_VOICE_BYTES];
     struct snag_session_listener listener;
     struct snag_view_server *view;
+    json_t *view_state;
     char native_notice[256];
     char feedback[192];
     struct ui_action *local;
@@ -1238,6 +1239,23 @@ session_command(enum snag_ui_operation kind)
 static int admit_input(struct snag_ui_display *, const char *, uint64_t);
 
 static int
+view_state(struct snag_ui_display *display, const json_t *state)
+{
+    if (!state) return 0;
+    json_t *copy = json_deep_copy(state);
+    if (!copy) return -1;
+    if (display->term.irc_names &&
+        json_object_set(copy, "irc_names", display->term.irc_names) < 0) {
+        json_decref(copy);
+        return -1;
+    }
+    snag_view_server_state(display->view, copy);
+    json_decref(display->view_state);
+    display->view_state = copy;
+    return 0;
+}
+
+static int
 apply_message(struct snag_ui_display *display, struct snag_ui_command *command,
               char *error, size_t error_size)
 {
@@ -1262,8 +1280,7 @@ apply_message(struct snag_ui_display *display, struct snag_ui_command *command,
                 break;
             }
         }
-        snag_view_server_state(display->view, command->data.voice);
-        return 0;
+        return view_state(display, command->data.voice);
     }
     case SNAG_UI_COMMAND_REPORT:
         return snag_view_server_report(display->view, command->data.voice, command->text);
@@ -1310,6 +1327,12 @@ apply_message(struct snag_ui_display *display, struct snag_ui_command *command,
     }
     case SNAG_UI_MARKDOWN: snag_render_set_markdown(render, command->data.value != 0u);
         return 0;
+    case SNAG_UI_IRC_NAMES:
+        if (json_equal(term->irc_names, command->data.voice)) return 0;
+        json_decref(term->irc_names);
+        term->irc_names = json_incref((json_t *)command->data.voice);
+        term->completion_armed = false;
+        return view_state(display, display->view_state);
     case SNAG_UI_DESTINATIONS:
         if (snag_term_set_destinations(term, command->data.destinations) < 0) return -1;
         if (render->view == SNAG_RENDER_CHAT && !display->conversation) {
@@ -1992,6 +2015,7 @@ presentation_main(void *opaque)
         free(draft);
     }
     snag_buf_free(&display.rollout_draft.text);
+    json_decref(display.view_state);
     prompt_free(&display.prompt);
     return NULL;
 }

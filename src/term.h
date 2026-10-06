@@ -95,6 +95,7 @@ struct snag_term {
     char *history_draft;
     char *search_original;
     struct snag_irc_destinations *destinations;
+    json_t *irc_names;
     struct snag_irc_target destination;
     struct snag_irc_conversation_target conversation;
     uint64_t conversation_unread;

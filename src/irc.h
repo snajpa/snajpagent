@@ -34,6 +34,7 @@ struct snag_irc_destination {
     struct snag_irc_target target;
     char connection[SNAG_ID_HEX_LEN + 1u];
     uint64_t generation;
+    uint64_t names_revision;
     char endpoint[SNAG_CONFIG_IRC_ENDPOINT_MAX + 1u];
     char room[SNAG_CONFIG_IRC_ROOM_MAX + 2u];
     char model[SNAG_CONFIG_IRC_NICK_MAX + 1u];
@@ -91,7 +92,10 @@ struct snag_irc_scopes {
     size_t count;
 };
 
+struct snag_irc;
 void snag_irc_capture_scopes(const struct snag_irc_destinations *, struct snag_irc_scopes *);
+json_t *snag_irc_names(const struct snag_irc *);
+unsigned char snag_irc_name_fold(enum snag_irc_casemapping, unsigned char);
 bool snag_irc_name_equal(enum snag_irc_casemapping, const char *, const char *);
 bool snag_irc_name_mentioned(enum snag_irc_casemapping, const char *, const char *);
 const struct snag_irc_scope *snag_irc_scope_resolve(const struct snag_irc_scopes *,
@@ -113,6 +117,9 @@ struct snag_irc_conversation_target {
     char membership[SNAG_ID_HEX_LEN + 1u];
     char endpoint[SNAG_CONFIG_IRC_ENDPOINT_MAX + 1u];
 };
+/* Returns an owned array, empty when the captured destination is stale. */
+json_t *snag_irc_completion_names(const json_t *, const struct snag_irc_conversation_target *,
+    enum snag_irc_casemapping *);
 
 enum snag_irc_direction { SNAG_IRC_INCOMING, SNAG_IRC_OUTGOING };
 enum snag_irc_delivery {

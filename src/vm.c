@@ -66,6 +66,7 @@ static const char *const help_rows[] = {
     ":attach [ID]: control a running owner    o/:history SESSION: read-only",
     ":classic [SESSION]: use its full terminal; /s d returns to this workspace",
     "i/a/A: edit prompt    Esc: NORMAL    Enter: submit    Ctrl-J: newline",
+    "INSERT Ctrl-N/Ctrl-P: complete @nicknames from the current conversation",
     "Composer: h/j/k/l w/b/e 0/^/$ gg/G; counts multiply (2d3w deletes six words).",
     "gj/gk: wrapped rows    H/M/L: visible rows    zz: center    Ctrl-U/D/B/F: pages",
     "i/a/I/A/o/O: INSERT    d/c/y + motion, dd/cc/yy, x, p/P    u/Ctrl-R: undo/redo",
@@ -1874,10 +1875,81 @@ failed:
 }
 
 static bool
+mention_byte(unsigned char c)
+{
+    return c >= 0x80u || snag_irc_nick_char(c);
+}
+
+static bool
+complete_mention(struct vm *vm, struct snag_vm_buffer *buffer, bool previous)
+{
+    struct snag_irc_conversation_target target;
+    if (!json_is_object(buffer->route) ||
+        snag_view_conversation_read(buffer->route, &target) < 0) return false;
+    struct snag_vm_editor *editor = &buffer->editor;
+    const unsigned char *text = buffer->draft.data;
+    size_t begin = buffer->cursor, end = buffer->cursor;
+    while (begin && mention_byte(text[begin - 1u])) --begin;
+    if (!begin || text[begin - 1u] != '@' ||
+        (begin > 1u && mention_byte(text[begin - 2u]))) return false;
+    while (end < buffer->draft.len && mention_byte(text[end])) ++end;
+    bool cycling = editor->completing && editor->completion_begin == begin &&
+        editor->completion_end == end && buffer->cursor == end;
+    size_t prefix = cycling ? editor->completion_prefix : buffer->cursor - begin;
+    enum snag_irc_casemapping mapping;
+    json_t *names = snag_irc_completion_names(
+        json_object_get(buffer->connection->state, "irc_names"), &target, &mapping);
+    json_t *matches = json_array();
+    if (!names || !matches) goto failed;
+    for (size_t i = 0u; i < json_array_size(names); ++i) {
+        const char *name = snag_json_bounded_string(json_array_get(names, i),
+            SNAG_CONFIG_IRC_NICK_MAX);
+        if (!name) continue;
+        size_t j = 0u;
+        while (j < prefix && name[j] &&
+            snag_irc_name_fold(mapping, (unsigned char)name[j]) ==
+            snag_irc_name_fold(mapping, text[begin + j])) ++j;
+        if (j == prefix && json_array_append(matches, json_array_get(names, i)) < 0) goto failed;
+    }
+    size_t count = json_array_size(matches);
+    if (!count) {
+        editor->completing = false;
+        notice(vm, "No nickname matches in this conversation");
+        goto done;
+    }
+    size_t selected = previous ? count - 1u : 0u;
+    for (size_t i = 0u; cycling && i < count; ++i) {
+        const char *name = json_string_value(json_array_get(matches, i));
+        if (strlen(name) == end - begin && !memcmp(text + begin, name, end - begin)) {
+            selected = previous ? (i ? i - 1u : count - 1u) : (i + 1u) % count;
+            break;
+        }
+    }
+    const char *name = json_string_value(json_array_get(matches, selected));
+    if (snag_vm_editor_replace(buffer, begin, end, name, strlen(name)) < 0) goto failed;
+    editor->completing = true;
+    editor->completion_begin = begin;
+    editor->completion_prefix = prefix;
+    editor->completion_end = buffer->cursor;
+    notice(vm, "Nickname completed; Ctrl-N/Ctrl-P cycles matches");
+    goto done;
+failed:
+    notice(vm, "Cannot complete nickname; draft retained");
+done:
+    json_decref(names);
+    json_decref(matches);
+    changed(vm);
+    return true;
+}
+
+static bool
 composer_key(struct vm *vm, const struct snag_vm_input_event *event)
 {
     struct snag_vm_buffer *c = focused_buffer(vm);
     if (!vm->composer || !snag_vm_buffer_writable(c)) return false;
+    if (vm->insert && event->kind == SNAG_VM_KEY && (event->modifiers & SNAG_VM_CTRL) &&
+        (event->key == 'n' || event->key == 'p') && complete_mention(vm, c, event->key == 'p'))
+        return true;
     const struct snag_vm_rectangle *r = &vm->windows[vm->focus].rectangle;
     enum snag_vm_edit_result result = snag_vm_editor_key(c, &vm->reg, event,
         vm->insert, r->columns, (r->rows > 1u ? r->rows - 1u : 0u) / 3u + 1u,

@@ -6,6 +6,14 @@ Status: implementation in progress, October 6, 2026. The original inspection
 was against `7a70d81d336ef6f14d91ef944b1226c8efa65636`. The checkpoint below
 distinguishes implemented components from the complete intended behavior.
 
+Completion checkpoint: runtime owners publish immutable channel rosters when
+membership, names, aliases or case rules change. The UI receives independent
+snapshots, scoped by connection, generation and membership, outside the model
+journal and workspace snapshots. Classic Tab uses the selected room's members
+or a query's peer/local identity; an unmatched mention can cycle conversations.
+Vim INSERT Ctrl-N/Ctrl-P cycles matching mentions in its current composer.
+Roster changes beyond abbreviated status text still reach completion.
+
 External channel-state checkpoint: each client identity keeps separate channel
 membership, names and topics. JOIN/PART/KICK are channel-scoped; NICK/QUIT update
 all common channels. Advertised CHANTYPES and CASEMAPPING govern names, and agent
@@ -869,8 +877,8 @@ receipts cannot become input. Ordinary external writes without exact receipts
 use their written record, explicitly labelled with that unconfirmed state;
 native catch-up instead supplies its public source event. The typed input and
 its delivery label survive checkpoint/resume. NOTICE receipts add context at
-the next natural request, without starting an automatic reply. Channel frontend
-integration remains in progress.
+the next natural request, without starting an automatic reply. Channel tabs and
+panes, including hosted rooms, are implemented; connection views remain in progress.
 A nickname discontinuity or disconnect cancels unsent chunks,
 retains uncertainty for started writes and never replays the private queue.
 Endpoint removal finishes those outcomes before stopping its owner. UTF-8 chunks

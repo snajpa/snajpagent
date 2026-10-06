@@ -30,6 +30,30 @@ class ChannelWorkspaceTests(ChannelFixture):
         self.child.write(b'i/chat 1/' + room.encode() + b'\r')
         self.child.repaint_until(b'channel/' + room.encode())
 
+    def test_mention_completion_uses_pane_roster_and_cycles(self):
+        self.server.send('queryop', ':fake 353 queryop = #lab :@queryop team-lab\r\n'
+                         ':fake 366 queryop #lab :end\r\n'
+                         ':fake 353 queryop = #side :@queryop team-a team-b\r\n'
+                         ':fake 366 queryop #side :end\r\n'
+                         ':peer!u@fake NOTICE #side :roster-ready\r\n')
+        self.channel('#side')
+        self.child.repaint_until(b'roster-ready')
+        self.child.write(b'i@team-\x0e')
+        self.child.repaint_until(b'@team-a')
+        self.child.write(b'\x0e')
+        self.child.repaint_until(b'@team-b')
+        self.child.write(b'\x10')
+        self.child.repaint_until(b'@team-a')
+        self.child.write(b' hello\r')
+        self.operator_wire('PRIVMSG #side :@team-a hello')
+        self.normal()
+        self.child.write(b'i/query 1/private-peer\r')
+        self.child.repaint_until(b'query/private-peer')
+        self.child.write(b'i@priv\x0e hello\r')
+        self.operator_wire('PRIVMSG private-peer :@private-peer hello')
+        self.normal()
+        self.child.finish('close')
+
     def test_channel_splits_drafts_wire_and_workspace_resume(self):
         child = self.child
         self.channel('#lab')

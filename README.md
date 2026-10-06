@@ -213,8 +213,9 @@ Models can use `irc_sleep` to hold updates until a timeout, mention or message
 threshold, and `irc_compact` to summarize IRC context asynchronously. Your
 transcript stays complete. See the manual's model IRC controls.
 
-In chat, Tab first completes `@nickname` words. With conversation tabs open it then
-cycles views; otherwise Tab at the end queues a local follow-up during work.
+In chat, Tab first completes `@nickname` words from the selected conversation.
+With conversation tabs open it then cycles views; otherwise Tab at the end queues
+a local follow-up during work.
 Enter sends to the selected conversation.
 
 ### Coordinate work

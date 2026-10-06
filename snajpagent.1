@@ -470,6 +470,11 @@ becomes
 followed by a space.  The nickname need not start the whole message:
 "please ask @bu" also completes.  A unique completion adds or reuses a space
 and leaves the cursor after it, ready for you to finish writing.
+Channel completion uses that conversation's current members. A private query
+offers its peer and your local identity. Matching follows the endpoint's case
+rules. Departed members disappear; a stale membership supplies no candidates.
+With conversation tabs open, an unmatched nickname lets Tab cycle views while
+retaining the draft.
 .PP
 At the end of a finished message, outside a command or nickname being completed,
 Tab queues a local follow-up while your model is active.  In chat this still
@@ -2080,6 +2085,12 @@ remains recoverable. Each conversation retains its own pending submission and
 frozen recipient. A nick or connection change preserves the old draft and rejects
 sending it to a different recipient. File attachments remain under development.
 .SS "Channel and private conversation windows"
+In an INSERT-mode conversation composer, Ctrl-N and Ctrl-P complete and cycle
+matching @nickname words forward and backward. Candidates come from that
+channel or private query. Completion preserves surrounding text and stays in
+the current window; it adds no trailing space or submission. Owners that do
+not provide a current roster report no matches.
+.PP
 Enter /query NICK or /query ENDPOINT/NICK in an attached composer to open an
 operator private conversation in that window. A successful command changes the
 requesting window while it is still focused, displaying that composer, and its

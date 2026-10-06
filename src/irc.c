@@ -162,6 +162,7 @@ struct pending_publication {
 };
 
 struct snag_irc_core {
+    uint64_t names_revision;
     char connection[SNAG_ID_HEX_LEN + 1u];
     char connection_endpoint[SNAG_CONFIG_IRC_ENDPOINT_MAX + 1u];
     char connection_events[2u][SNAG_ID_HEX_LEN + 1u];
@@ -1253,6 +1254,7 @@ channel_open(struct irc_conn *link, const char *room)
     (void)snag_strcpy(channel->room, sizeof(channel->room), room);
     channel->next = link->channels;
     link->channels = channel;
+    ++link->owner->names_revision;
     return channel;
 }
 
@@ -1268,8 +1270,9 @@ channels_free(struct irc_conn *link)
 }
 
 static void
-channel_clear(struct irc_channel *channel)
+channel_clear(struct irc_conn *link, struct irc_channel *channel)
 {
+    ++link->owner->names_revision;
     free(channel->members);
     channel->members = NULL;
     channel->member_count = channel->member_capacity = 0u;
@@ -1281,7 +1284,7 @@ static void
 channels_reset(struct irc_conn *link)
 {
     for (struct irc_channel *channel = link->channels; channel; channel = channel->next)
-        channel_clear(channel);
+        channel_clear(link, channel);
     link->joined = link->op = false;
 }
 
@@ -1298,6 +1301,7 @@ static int
 channel_state(struct irc_conn *link, struct irc_channel *channel, const char *reason)
 {
     struct snag_irc_core *irc = link->owner;
+    ++irc->names_revision;
     if (!irc->connection[0]) return 0;
     struct snag_irc_event event;
     bool joined = channel->joined && !channel->parting;
@@ -1319,7 +1323,7 @@ channel_leave(struct irc_conn *link, struct irc_channel *channel, const char *re
 {
     if (query_cancel_sends(link->owner, channel->id) < 0) return -1;
     channel->wanted = false;
-    channel_clear(channel);
+    channel_clear(link, channel);
     channel_default_status(link);
     if (snag_random_id(channel->membership) < 0) return -1;
     return channel_state(link, channel, reason);
@@ -1467,6 +1471,7 @@ member_add(const struct irc_conn *link, struct irc_channel *channel, const char 
         channel->member_capacity = capacity;
     }
     member = &channel->members[channel->member_count++];
+    ++link->owner->names_revision;
     memset(member, 0, sizeof(*member));
     (void)snag_strcpy(member->nick, sizeof(member->nick), nick);
     member->op = op;
@@ -1481,6 +1486,7 @@ member_remove(const struct irc_conn *link, struct irc_channel *channel, const ch
         memmove(&channel->members[i], &channel->members[i + 1u],
                 (channel->member_count - i - 1u) * sizeof(channel->members[0]));
         --channel->member_count;
+        ++link->owner->names_revision;
         return;
     }
 }
@@ -1554,6 +1560,8 @@ server_publish_chat(struct snag_irc_core *irc, enum snag_irc_event_kind kind,
 {
     struct snag_irc_event event;
 
+    if (kind == SNAG_IRC_JOIN || kind == SNAG_IRC_PART || kind == SNAG_IRC_QUIT ||
+        kind == SNAG_IRC_NICK) ++irc->names_revision;
     event_init(irc, &event, kind, irc->listen, irc->room, nick, text, op, false, local);
     const struct irc_conn *agent = &irc->conns[LINK_AGENT];
     const struct irc_channel *channel = channel_find(agent, irc->room);
@@ -2319,6 +2327,7 @@ server_dispatch(struct snag_irc_core *irc, struct irc_conn *peer, char *line)
             if (server_publish(irc, SNAG_IRC_PART, peer->nick, peer->user, clean, peer->op, false) < 0)
                 return -1;
             peer->joined = false;
+            ++irc->names_revision;
         }
         return 0;
     }
@@ -2973,6 +2982,7 @@ client_dispatch(struct snag_irc_core *irc, struct irc_conn *link, char *line)
         if (!channel || (!channel->joined && !(link->cap_catchup && channel->wanted))) return 0;
         if (!channel->names_active) {
             channel->member_count = 0u;
+            ++irc->names_revision;
             channel->names_active = true;
         }
         char *save = NULL;
@@ -3133,6 +3143,7 @@ client_dispatch(struct snag_irc_core *irc, struct irc_conn *link, char *line)
             if (!member) continue;
             bool op = member->op;
             (void)snag_strcpy(member->nick, sizeof(member->nick), message.params[0]);
+            ++irc->names_revision;
             if (link_emit(irc, link, SNAG_IRC_NICK, channel->room,
                 sender, message.params[0], op, timestamp_ms) < 0) return -1;
         }
@@ -3951,6 +3962,44 @@ snapshot_network(const struct snag_irc_core *irc, struct snag_buf *out, struct s
 fail: return -1;
 }
 
+json_t *
+snag_irc_core_names(const struct snag_irc_core *irc)
+{
+    const struct irc_conn *operator = &irc->conns[LINK_OPERATOR];
+    const struct irc_conn *agent = &irc->conns[LINK_AGENT];
+    json_t *out = json_pack("{s:I,s:s,s:s,s:[i,i],s:{}}",
+        "generation", (json_int_t)irc->generation,
+        "operator", operator->registered ? operator->accepted_nick : "",
+        "agent", agent->registered ? agent->accepted_nick : "",
+        "casemapping", (int)operator->casemapping, (int)agent->casemapping, "channels");
+    if (!out) return NULL;
+    for (size_t role = 0u; role < 2u; ++role) {
+        const struct irc_conn *link = &irc->conns[role];
+        for (const struct irc_channel *c = link->channels; link->registered && c; c = c->next) {
+            if (!c->joined || c->parting) continue;
+            json_t *entry = json_pack("{s:s,s:[]}", "membership", c->membership, "names");
+            if (!entry || json_object_set_new(json_object_get(out, "channels"), c->id, entry) < 0)
+                goto failed;
+            json_t *names = json_object_get(entry, "names");
+            if (irc->hosting) {
+                for (size_t i = 0u; i < irc->conn_count; ++i) {
+                    const struct irc_conn *peer = &irc->conns[i];
+                    if (peer->used && peer->joined &&
+                        json_array_append_new(names, json_string(peer->nick)) < 0) goto failed;
+                }
+            } else {
+                for (size_t i = 0u; i < c->member_count; ++i)
+                    if (json_array_append_new(names, json_string(c->members[i].nick)) < 0)
+                        goto failed;
+            }
+        }
+    }
+    return out;
+failed:
+    json_decref(out);
+    return NULL;
+}
+
 int
 snag_irc_core_view(const struct snag_irc_core *irc, struct snag_irc_view *view)
 {
@@ -3960,6 +4009,7 @@ snag_irc_core_view(const struct snag_irc_core *irc, struct snag_irc_view *view)
     view->revision = irc->route_revision + 1u;
     memcpy(view->connection, irc->connection, sizeof(view->connection));
     view->generation = irc->generation;
+    view->names_revision = irc->names_revision;
     view->casemapping[SNAG_IRC_OPERATOR] = irc->conns[LINK_OPERATOR].casemapping;
     view->casemapping[SNAG_IRC_AGENT] = irc->conns[LINK_AGENT].casemapping;
     for (size_t role = 0u; role < 2u; ++role) {

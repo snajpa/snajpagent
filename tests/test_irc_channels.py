@@ -199,6 +199,69 @@ class ChannelFixture(QueryFixture):
 
 
 class ChannelTests(ChannelFixture):
+    def test_completion_uses_case_rules_and_removes_departed_nicks(self):
+        self.server.send('queryop', ':fake 005 queryop CASEMAPPING=ascii :supported\r\n'
+                         ':fake 353 queryop = #side :@queryop member[one\r\n'
+                         ':fake 366 queryop #side :end\r\n'
+                         ':peer!u@fake NOTICE #side :ascii-roster-ready\r\n')
+        self.wait(lambda: any(e['data'].get('text') == 'ascii-roster-ready' for e in self.events()))
+        self.command('/chat 1/#side', 'channel #side operator')
+        self.term.write(b'@member{\t')
+        self.term.repaint_until(b'host-model/medium')
+        self.term.write(b'\x1b[Z')
+        self.term.repaint_until(b'@member{')
+        self.term.write(b'\x15@member[\t')
+        self.term.repaint_until(b'@member[one ')
+        self.server.send('queryop', ':member[one!u@fake PART #side :gone\r\n')
+        self.wait(lambda: any(e['data'].get('nick') == 'member[one' and
+                  e['data'].get('kind') == 'part' for e in self.events()))
+        self.term.write(b'\x15@member[\t')
+        self.term.repaint_until(b'host-model/medium')
+
+    def test_completion_roster_survives_abbreviated_status(self):
+        names = [f'member-{i:04d}-abcdefghijklmnop' for i in range(1200)]
+        names.append('deep-roster-final')
+        for i in range(0, len(names), 150):
+            self.server.send('queryop', ':fake 353 queryop = #side :' +
+                             ' '.join(names[i:i + 150]) + '\r\n')
+        self.server.send('queryop', ':fake 366 queryop #side :end\r\n'
+                         ':peer!u@fake NOTICE #side :large-roster-ready\r\n')
+        self.wait(lambda: any(e['data'].get('text') == 'large-roster-ready' for e in self.events()))
+        self.command('/chat 1/#side', 'channel #side operator')
+        self.term.write(b'@deep-\t')
+        self.term.repaint_until(b'@deep-roster-final ')
+        self.server.send('queryop', ':deep-roster-final!u@fake NICK new-tail-name\r\n')
+        self.wait(lambda: any(e['data'].get('text') == 'new-tail-name' for e in self.events()))
+        self.term.write(b'\x15@new-tail\t')
+        self.term.repaint_until(b'@new-tail-name ')
+
+    def test_mentions_use_selected_channel_and_query(self):
+        self.server.send('queryop', ':fake 353 queryop = #lab :@queryop team-lab\r\n'
+                         ':fake 366 queryop #lab :end\r\n'
+                         ':fake 353 queryop = #side :@queryop team-side\r\n'
+                         ':fake 366 queryop #side :end\r\n'
+                         ':peer!u@fake NOTICE #side :roster-ready\r\n')
+        self.wait(lambda: any(e['data'].get('text') == 'roster-ready' for e in self.events()))
+        self.command('/chat 1/#side', 'channel #side operator')
+        self.term.write(b'@team-\t')
+        self.term.repaint_until(b'@team-side ')
+        self.term.write(b'hello\r')
+        self.operator_wire('PRIVMSG #side :@team-side hello')
+        self.server.send('queryop', ':team-side!u@fake NICK side-renamed\r\n')
+        self.wait(lambda: any(e['data'].get('text') == 'side-renamed' for e in self.events()))
+        self.term.write(b'@side-\t')
+        self.term.repaint_until(b'@side-renamed ')
+        self.command('/query 1/private-peer', 'query private-peer operator')
+        self.term.write(b'@priv\t')
+        self.term.repaint_until(b'@private-peer ')
+        self.term.write(b'hello\r')
+        self.operator_wire('PRIVMSG private-peer :@private-peer hello')
+        self.term.write(b'@team-\t')
+        self.term.repaint_until(b'host-model/medium')
+        self.term.write(b'\x1b[Z')
+        self.term.repaint_until(b'@team-')
+        self.assertNotIn(b'@team-lab ', self.term.output)
+
     def test_agent_only_channel_tab_is_visible_and_read_only(self):
         self.server.send('querybot', ':querybot!u@fake JOIN #agentonly\r\n'
                          ':peer!u@fake NOTICE #agentonly :agent-channel-visible\r\n')

@@ -41,6 +41,7 @@ struct irc_record {
     struct irc_owner *source;
     struct snag_irc_view view;
     struct snag_irc_event event;
+    json_t *names;
     unsigned int level;
     char direction;
     char trace[SNAG_IRC_LINE_MAX];
@@ -51,6 +52,8 @@ struct irc_owner {
     struct snag_irc_core *core; /* Only this owner accesses it after startup. */
     struct snag_irc_view sent;  /* Owner-private last published view. */
     struct snag_irc_view view;  /* Engine-private admitted view. */
+    json_t *names; /* Engine-owned; records transfer exclusive snapshots. */
+    bool sent_names;
     char endpoint[SNAG_CONFIG_IRC_ENDPOINT_MAX + 1u];
     struct snag_irc_config settings; /* Immutable creation preferences. */
     char routing_room[SNAG_CONFIG_IRC_ROOM_MAX + 2u];
@@ -87,6 +90,13 @@ struct snag_irc {
     int failure;
 };
 
+static void
+record_free(struct irc_record *record)
+{
+    json_decref(record->names);
+    free(record);
+}
+
 static int
 publish(struct irc_owner *owner, struct irc_record *record, uint64_t *through)
 {
@@ -98,7 +108,7 @@ publish(struct irc_owner *owner, struct irc_record *record, uint64_t *through)
     while (owner->queued == IRC_MAILBOX && !irc->stopping && !irc->failure)
         pthread_cond_wait(&irc->changed, &irc->mutex);
     if (irc->stopping || irc->failure) {
-        free(record);
+        record_free(record);
         rc = -1;
     } else {
         ++owner->queued;
@@ -112,11 +122,26 @@ publish(struct irc_owner *owner, struct irc_record *record, uint64_t *through)
 }
 
 static int
-capture_view(struct irc_owner *owner, struct irc_record *record)
+capture_names(struct irc_owner *owner, struct irc_record *record)
 {
-    if (snag_irc_core_view(owner->core, &record->view) < 0) return -1;
+    const struct snag_irc_view *old = &owner->sent;
+    const struct snag_irc_view *view = &record->view;
+    if (!owner->sent_names || old->names_revision != view->names_revision ||
+        old->generation != view->generation || strcmp(old->connection, view->connection) ||
+        strcmp(old->model, view->model) || strcmp(old->operator, view->operator) ||
+        memcmp(old->casemapping, view->casemapping, sizeof(view->casemapping))) {
+        record->names = snag_irc_core_names(owner->core);
+        if (!record->names) return -1;
+        owner->sent_names = true;
+    }
     owner->sent = record->view;
     return 0;
+}
+
+static int
+capture_view(struct irc_owner *owner, struct irc_record *record)
+{
+    return snag_irc_core_view(owner->core, &record->view) < 0 ? -1 : capture_names(owner, record);
 }
 
 static int
@@ -183,11 +208,14 @@ refresh_view(struct irc_owner *owner)
         free(record);
         return -1;
     }
-    if (memcmp(&owner->sent, &record->view, sizeof(record->view)) == 0) {
+    if (owner->sent_names && memcmp(&owner->sent, &record->view, sizeof(record->view)) == 0) {
         free(record);
         return 0;
     }
-    owner->sent = record->view;
+    if (capture_names(owner, record) < 0) {
+        record_free(record);
+        return -1;
+    }
     record->kind = IRC_VIEW;
     return publish(owner, record, NULL);
 }
@@ -352,6 +380,11 @@ drain(struct snag_irc *irc, int timeout_ms)
                 memcpy(owner->routing_room, record->view.room, sizeof(owner->routing_room));
             }
             owner->view = record->view;
+            if (record->names) {
+                json_decref(owner->names);
+                owner->names = record->names;
+                record->names = NULL;
+            }
             owner->target.revision = record->view.revision;
             ++irc->destinations_generation;
         }
@@ -380,7 +413,7 @@ drain(struct snag_irc *irc, int timeout_ms)
             rc = irc->trace_fn(irc->opaque, record->level, record->direction,
                               record->event.endpoint, record->trace, strlen(record->trace));
         }
-        free(record);
+        record_free(record);
         pthread_mutex_lock(&irc->mutex);
         ++irc->admitted;
         pthread_cond_broadcast(&irc->changed);
@@ -430,6 +463,7 @@ static void
 free_owner(struct irc_owner *owner)
 {
     snag_irc_core_close(owner->core);
+    json_decref(owner->names);
     snag_wakeup_close(owner->wake);
     free(owner);
 }
@@ -724,6 +758,7 @@ snag_irc_destinations(const struct snag_irc *irc, struct snag_irc_destinations *
         item->target = owner->target;
         memcpy(item->connection, owner->view.connection, sizeof(item->connection));
         item->generation = owner->view.generation;
+        item->names_revision = owner->view.names_revision;
         memcpy(item->casemapping, owner->view.casemapping, sizeof(item->casemapping));
         memcpy(item->chantypes, owner->view.chantypes, sizeof(item->chantypes));
         item->joined = owner->view.joined;
@@ -734,6 +769,23 @@ snag_irc_destinations(const struct snag_irc *irc, struct snag_irc_destinations *
         (void)snag_strcpy(item->nicks, sizeof(item->nicks), owner->view.nicks);
     }
     qsort(out->items, out->count, sizeof(out->items[0]), destination_order);
+}
+
+json_t *
+snag_irc_names(const struct snag_irc *irc)
+{
+    json_t *out = json_object();
+    if (!out) return NULL;
+    for (size_t i = 0u; irc && i < irc->owner_count; ++i) {
+        const struct irc_owner *owner = irc->owners[i];
+        if (!owner->view.connection[0] || !owner->names) continue;
+        /* The UI can retain this snapshot after the engine replaces its own. */
+        if (json_object_set_new(out, owner->view.connection, json_deep_copy(owner->names)) < 0) {
+            json_decref(out);
+            return NULL;
+        }
+    }
+    return out;
 }
 
 const struct snag_irc_scope *
@@ -851,7 +903,7 @@ snag_irc_close(struct snag_irc *irc)
     stop_owners(irc);
     for (size_t i = 0u; i < irc->owner_count; ++i) free_owner(irc->owners[i]);
     while (irc->count) {
-        free(irc->records[irc->head]);
+        record_free(irc->records[irc->head]);
         irc->head = (irc->head + 1u) % IRC_RECORDS;
         --irc->count;
     }

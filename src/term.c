@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "term.h"
 #include "fs.h"
+#include "json.h"
 #include "tmux.h"
 
 #include <errno.h>
@@ -1900,12 +1901,14 @@ struct completion {
     struct snag_buf names;
     size_t count, common;
     bool fold;
+    enum snag_irc_casemapping mapping;
 };
 
 static bool
-completion_byte_equal(unsigned char a, unsigned char b, bool fold)
+completion_byte_equal(unsigned char a, unsigned char b, const struct completion *matches)
 {
-    return fold ? snag_irc_fold(a) == snag_irc_fold(b) : a == b;
+    return matches->fold ? snag_irc_name_fold(matches->mapping, a) ==
+        snag_irc_name_fold(matches->mapping, b) : a == b;
 }
 
 static int
@@ -1915,20 +1918,20 @@ completion_add(struct completion *matches, const char *name, size_t len,
     size_t i = 0u;
 
     while (i < prefix_len && i < len &&
-           completion_byte_equal((unsigned char)name[i], prefix[i], matches->fold)) ++i;
+           completion_byte_equal((unsigned char)name[i], prefix[i], matches)) ++i;
     if (i != prefix_len || !len) return 0;
     for (size_t pos = 0u; pos < matches->names.len;) {
         const char *previous = (const char *)matches->names.data + pos;
         size_t previous_len = strlen(previous), same = 0u;
         while (same < len && same < previous_len && completion_byte_equal((unsigned char)name[same],
-                                     (unsigned char)previous[same], matches->fold)) ++same;
+                                     (unsigned char)previous[same], matches)) ++same;
         if (same == len && same == previous_len) return 0;
         pos += previous_len + 1u;
     }
     if (!matches->count) matches->common = len;
     else {
         while (i < matches->common && i < len &&
-               completion_byte_equal((unsigned char)name[i], matches->names.data[i], matches->fold)) ++i;
+               completion_byte_equal((unsigned char)name[i], matches->names.data[i], matches)) ++i;
         matches->common = i;
     }
     ++matches->count;
@@ -2055,11 +2058,30 @@ complete_mention(struct snag_term *term, bool *handled)
     while (end < term->draft.len && nick_byte(term->draft.data[end])) ++end;
     size_t prefix = term->cursor - start;
     snag_buf_init(&matches.names, SNAG_MAX_DIRECT_PROMPT);
+    if (command == SNAG_IRC_TARGET_NONE && term->conversation.conversation[0] && term->irc_names) {
+        json_t *names = snag_irc_completion_names(term->irc_names, &term->conversation,
+            &matches.mapping);
+        if (!names) goto out;
+        for (size_t i = 0u; i < json_array_size(names); ++i) {
+            const char *name = snag_json_bounded_string(json_array_get(names, i),
+                SNAG_CONFIG_IRC_NICK_MAX);
+            if (name && completion_add(&matches, name, strlen(name), term->draft.data + start,
+                prefix) < 0) {
+                json_decref(names);
+                goto out;
+            }
+        }
+        json_decref(names);
+        *handled = matches.count != 0u;
+        rc = finish_completion(term, &matches, start, end);
+        goto out;
+    }
     size_t destinations = term->destinations ? term->destinations->count : 0u;
     for (size_t destination = 0u; destination < destinations; ++destination) {
         const struct snag_irc_destination *item = &term->destinations->items[destination];
         if (command == SNAG_IRC_TARGET_INVALID || (command != SNAG_IRC_TARGET_ALL && item->target.id !=
              (command == SNAG_IRC_TARGET_SEND ? id : term->destination.id))) continue;
+        matches.mapping = item->casemapping[SNAG_IRC_OPERATOR];
       for (const char *nick = item->nicks; nick && *nick;) {
         const char *line = strchr(nick, '\n');
         size_t len = line ? (size_t)(line - nick) : strlen(nick);
@@ -2068,6 +2090,7 @@ complete_mention(struct snag_term *term, bool *handled)
         nick = line ? line + 1u : NULL;
       }
     }
+    *handled = matches.count != 0u;
     rc = finish_completion(term, &matches, start, end);
 out: snag_buf_free(&matches.names);
     return rc;
@@ -2713,6 +2736,7 @@ snag_term_close(struct snag_term *term)
     snag_history_snapshot_free(&term->history);
     free(term->search_original);
     free(term->destinations);
+    json_decref(term->irc_names);
     snag_buf_free(&term->search_label);
     snag_buf_free(&term->search_query);
     snag_buf_free(&term->draft);

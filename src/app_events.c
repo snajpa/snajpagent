@@ -246,6 +246,12 @@ snag_app_sync_destinations(struct app_state *app)
     }
     if (snag_ui_send(&app->ui, (struct snag_ui_command){
         .kind = SNAG_UI_DESTINATIONS, .data.destinations = &current}) < 0) return -1;
+    json_t *names = snag_irc_names(app->irc);
+    if (!names) return -1;
+    int rc = snag_ui_send(&app->ui, (struct snag_ui_command){
+        .kind = SNAG_UI_IRC_NAMES, .data.voice = names});
+    json_decref(names);
+    if (rc < 0) return -1;
     prune_replies(&app->irc_urgent_replies, &current, app->irc_urgent_reply_offsets);
     prune_replies(&app->irc_turn_replies, &current, NULL);
     app->irc_destinations = current;

@@ -14,8 +14,10 @@ struct snag_vm_editor {
     struct snag_vm_undo *undo, *redo;
     struct snag_buf original;
     size_t original_cursor, count, operator_count, column;
+    size_t completion_begin, completion_prefix, completion_end;
     unsigned int operator, prefix;
     bool grouping, column_valid, column_display;
+    bool completing;
 };
 
 struct snag_vm_motion {

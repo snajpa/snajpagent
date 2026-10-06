@@ -223,6 +223,7 @@ snag_vm_draft_replace(struct snag_vm_buffer *buffer, size_t begin, size_t end,
         buffer->cursor = snag_vm_text_next((const char *)draft->data, total, boundary);
     ++connection->revision;
     buffer->draft_dirty = true;
+    buffer->editor.completing = false;
     return 0;
 }
 
@@ -232,6 +233,7 @@ snag_vm_draft_cursor(struct snag_vm_buffer *buffer, size_t cursor)
     struct snag_vm_connection *connection = buffer->connection;
     if (buffer->cursor == cursor) return;
     buffer->cursor = cursor;
+    buffer->editor.completing = false;
     buffer->draft_dirty = true;
     ++connection->revision;
 }

@@ -23,8 +23,8 @@ snag_irc_capture_scopes(const struct snag_irc_destinations *destinations,
     }
 }
 
-static unsigned char
-name_fold(enum snag_irc_casemapping mapping, unsigned char c)
+unsigned char
+snag_irc_name_fold(enum snag_irc_casemapping mapping, unsigned char c)
 {
     if (mapping == SNAG_IRC_CASE_UNKNOWN) return c;
     if (c >= 'A' && c <= 'Z') c += 'a' - 'A';
@@ -39,8 +39,8 @@ bool
 snag_irc_name_equal(enum snag_irc_casemapping mapping, const char *a, const char *b)
 {
     for (;; ++a, ++b) {
-        unsigned char ac = name_fold(mapping, (unsigned char)*a);
-        unsigned char bc = name_fold(mapping, (unsigned char)*b);
+        unsigned char ac = snag_irc_name_fold(mapping, (unsigned char)*a);
+        unsigned char bc = snag_irc_name_fold(mapping, (unsigned char)*b);
         if (ac != bc) return false;
         if (!ac) return true;
     }
@@ -56,12 +56,43 @@ snag_irc_name_mentioned(enum snag_irc_casemapping mapping, const char *text, con
             snag_irc_nick_char((unsigned char)text[i - 1u]))) continue;
         size_t j = 0u;
         while (j < len && text[i + j] &&
-            name_fold(mapping, (unsigned char)text[i + j]) ==
-            name_fold(mapping, (unsigned char)nick[j])) ++j;
+            snag_irc_name_fold(mapping, (unsigned char)text[i + j]) ==
+            snag_irc_name_fold(mapping, (unsigned char)nick[j])) ++j;
         if (j == len && (unsigned char)text[i + len] < 0x80u &&
             !snag_irc_nick_char((unsigned char)text[i + len])) return true;
     }
     return false;
+}
+
+json_t *
+snag_irc_completion_names(const json_t *catalog, const struct snag_irc_conversation_target *target,
+                          enum snag_irc_casemapping *mapping)
+{
+    *mapping = SNAG_IRC_CASE_UNKNOWN;
+    const json_t *connection = json_object_get(catalog, target->connection);
+    uint64_t generation;
+    if ((unsigned int)target->identity > SNAG_IRC_AGENT ||
+        snag_json_integer_u64(connection, "generation", &generation) < 0 ||
+        generation != target->generation) return json_array();
+    const json_t *value = json_array_get(json_object_get(connection, "casemapping"),
+        target->identity);
+    if (json_is_integer(value) && json_integer_value(value) >= SNAG_IRC_RFC1459 &&
+        json_integer_value(value) <= SNAG_IRC_CASE_UNKNOWN)
+        *mapping = (enum snag_irc_casemapping)json_integer_value(value);
+    if (target->kind == SNAG_IRC_QUERY) {
+        const char *nick = snag_json_bounded_string(json_object_get(connection,
+            target->identity == SNAG_IRC_AGENT ? "agent" : "operator"), SNAG_CONFIG_IRC_NICK_MAX);
+        if (!nick || !*nick) return json_array();
+        return snag_irc_name_equal(*mapping, target->peer, nick) ?
+            json_pack("[s]", target->peer) : json_pack("[s,s]", target->peer, nick);
+    }
+    const json_t *channel = json_object_get(json_object_get(connection, "channels"),
+        target->conversation);
+    const char *membership = snag_json_string(channel, "membership");
+    json_t *names = json_object_get(channel, "names");
+    return target->kind == SNAG_IRC_CHANNEL && membership &&
+        !strcmp(membership, target->membership) && json_is_array(names) ?
+        json_incref(names) : json_array();
 }
 
 const char *

@@ -4,6 +4,11 @@
 
 ## Unreleased
 
+- Complete nicknames from the selected channel or private query, following the
+  server's case rules and current membership. Keep full completion rosters when
+  status output is abbreviated. Unmatched mentions let classic Tab cycle views;
+  Vim INSERT Ctrl-N/Ctrl-P cycles matching mentions in the current composer.
+
 - Expose the built-in IRC room through channel tabs, Vim panes and scoped
   operator/model commands. Preserve drafts, private isolation and exact
   membership across PART/rejoin; resume retains join intent. Keep hosted public
