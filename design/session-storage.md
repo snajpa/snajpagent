@@ -2227,6 +2227,21 @@ turn-start hint over a caller-bounded prefix. Missing or torn index bytes mean
 unavailable indexing; a negative search never proves that canonical history is
 absent. The positive result still requires canonical resolution.
 
+### Native writer provenance restoration
+
+Writer working provenance has an atomic bounded restore path for independently
+admitted checkpoint state and origins. Input and queued-text/content references
+retain exact canonical declaration offsets, including embedded IRC inputs and
+queue edits. Only the retained open response is reduced into private response
+state to rebuild ordered fragment spans; its final public graph and byte counts
+must equal the admitted state. Closed scopes retain no producer entries.
+
+Restore requires pinned old access plus the caller's bounded suffix. Missing old
+declarations remain unavailable; cancellation and validation failure preserve the
+old owning producer and descriptor position. This constructor installs no writer,
+resource or semantic authority. Native lifecycle admission and resume remain the
+enclosing runtime integration's responsibility.
+
 ### Native I/O owner index appends
 
 The native owner accepts a borrowed private index descriptor together with the

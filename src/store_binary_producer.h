@@ -35,6 +35,20 @@ int snag_binary_producer_clone(struct snag_binary_producer *destination,
     const struct snag_binary_producer *source);
 void snag_binary_producer_free(struct snag_binary_producer *producer);
 
+struct snag_binary_checkpoint_sources;
+struct snag_binary_checkpoint_index;
+/* Rebuild working writer provenance at an independently admitted state/clock.
+ * Caller pins same-journal ancestry, immutable bytes and complete old closure
+ * plus bounded suffix in non-NULL access. Exact input/queue declarations and
+ * open-response fragments supply canonical offsets; no lifetime replay, writer
+ * binding or semantic adoption occurs. out is initialized/owning and changes
+ * only on complete success, including cancellation. Descriptor position and
+ * state/origins stay unchanged; zero provenance belongs to closed scopes. */
+int snag_binary_producer_restore(struct snag_binary_producer *out, int fd,
+    const struct snag_binary_anchor *, const struct snag_binary_checkpoint_index *,
+    const struct snag_binary_checkpoint_sources *, const struct snag_session *,
+    bool (*cancelled)(void *), void *opaque);
+
 /* The caller supplies native, engine-owned process and durable-boundary cursors.
  * Legacy/import presentation offsets alone cannot establish these sequences.
  * Literal field bytes are prepared in producer.field. On error discard the

@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Reconstruct native writer input, queue and open-response provenance from pinned
+  checkpoint sources, preserving declaration offsets and fragment spans with
+  atomic cancellation and unavailable-source handling.
+
 - Attach derived history-index custody through live native sessions using their
   acknowledged frontier, preserving successful semantic commits and effects when
   cache writes fail and retaining independent cache failure status.

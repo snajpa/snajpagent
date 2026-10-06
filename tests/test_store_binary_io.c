@@ -4,6 +4,7 @@
 #include "store_binary_wire.h"
 #include "fs.h"
 #include "irc.h"
+#include "snajpagent.h"
 #include "store_internal.h"
 #include "store_binary_replay.h"
 #include "store_binary_legacy.h"
@@ -524,6 +525,158 @@ native_fixture(struct snag_session *session, struct probe *probe)
     assert(atomic_load(&probe->effects) == 1u);
 }
 
+static void
+producer_access(struct snag_session *session, const struct snag_binary_anchor *boundary,
+    const struct snag_binary_index_tree *tree, struct snag_binary_checkpoint_index *access,
+    struct snag_buf *entries)
+{
+    struct snag_binary_identity identity = {.created_ms = 42u};
+    identity.id[0] = 17u;
+    assert(tree->count <= SIZE_MAX / SNAG_BINARY_INDEX_ENTRY_SIZE);
+    size_t size = (size_t)tree->count * SNAG_BINARY_INDEX_ENTRY_SIZE;
+    assert(!snag_buf_reserve(entries, size));
+    entries->len = size;
+    struct snag_binary_anchor cursor = *boundary;
+    struct snag_buf scratch = {.max = SNAG_BINARY_BATCH_MAX};
+    struct snag_buf batch_entries = {.max = SNAG_BINARY_INDEX_BATCH_MAX};
+    while (cursor.end > SNAG_BINARY_HEADER_SIZE) {
+        struct snag_binary_batch batch;
+        struct snag_binary_anchor before;
+        assert(!snag_binary_batch_previous(session->log_fd, &cursor, &scratch, &batch, &before));
+        snag_buf_reset(&batch_entries);
+        assert(!snag_binary_index_append_batch(&batch_entries, &identity, &before,
+            &cursor, batch.data, batch.size));
+        assert(batch_entries.len == (cursor.next_seq - before.next_seq) *
+            SNAG_BINARY_INDEX_ENTRY_SIZE);
+        memcpy(entries->data + (before.next_seq - 1u) * SNAG_BINARY_INDEX_ENTRY_SIZE,
+            batch_entries.data, batch_entries.len);
+        cursor = before;
+    }
+    *access = (struct snag_binary_checkpoint_index){.identity = identity,
+        .boundary = *boundary, .tree = *tree, .entries = entries->data,
+        .entry_count = (size_t)tree->count};
+    snag_buf_free(&scratch);
+    snag_buf_free(&batch_entries);
+}
+
+struct producer_cancel {
+    size_t calls, at;
+};
+
+static bool
+producer_cancelled(void *opaque)
+{
+    struct producer_cancel *cancel = opaque;
+    return ++cancel->calls == cancel->at;
+}
+
+static void
+producer_matches(struct snag_session *session, const struct snag_binary_anchor *boundary,
+    const struct snag_binary_index_tree *tree, const struct snag_buf *core)
+{
+    struct snag_binary_checkpoint_index access;
+    struct snag_buf entries = {.max = SIZE_MAX};
+    producer_access(session, boundary, tree, &access, &entries);
+    struct snag_binary_checkpoint_frame frame = {.identity = access.identity,
+        .boundary = *boundary, .core = {.version = SNAG_BINARY_CORE_VERSION,
+            .data = core->data, .size = core->len}};
+    struct snag_session state;
+    struct snag_binary_checkpoint_sources sources = {0};
+    assert(!snag_binary_checkpoint_core_read(session->log_fd, &frame, &access, &state, &sources));
+    struct snag_binary_producer producer = {0};
+    struct producer_cancel cancel = {0};
+    int64_t position = snag_seek(session->log_fd, 0, SEEK_CUR);
+    int rc = snag_binary_producer_restore(&producer, session->log_fd, boundary, &access,
+        &sources, &state, producer_cancelled, &cancel);
+    if (rc < 0) fprintf(stderr, "producer restore at %llu: %s\n",
+        (unsigned long long)boundary->next_seq, strerror(errno));
+    assert(!rc && snag_seek(session->log_fd, 0, SEEK_CUR) == position);
+    assert(producer.input.creation == sources.input && producer.queue_count == sources.queue_count);
+    for (size_t i = 0u; i < producer.queue_count; ++i) {
+        assert(producer.queue[i].creation == sources.queue[i].creation);
+        assert(producer.queue[i].text.target.sequence == sources.queue[i].text);
+        assert(!producer.queue[i].paths);
+        assert(producer.queue[i].content.target.sequence ==
+            (state.pending_queue[i].content ? sources.queue[i].creation : 0u));
+    }
+    if (state.response_open) {
+        assert(producer.output_count == json_array_size(state.response_public));
+        assert((!producer.public && !state.response_public) ||
+            json_equal(producer.public, state.response_public));
+        for (size_t i = 0u; i < producer.output_count; ++i) {
+            const struct snag_binary_output_source *source = &producer.outputs[i];
+            assert(source->index == i &&
+                source->value.source.first.sequence > sources.response_start);
+            assert(source->value.source.last_sequence <= sources.response_end);
+            assert(!source->value.item.text.data && !source->value.item.provider_id.data);
+            const char *text = snag_json_string(json_array_get(state.response_public, i), "text");
+            assert(text && source->value.source.bytes == strlen(text));
+        }
+    } else {
+        assert(!producer.output_count && !producer.public);
+    }
+    unsigned char saved[sizeof(producer)];
+    memcpy(saved, &producer, sizeof(producer));
+    assert(snag_binary_producer_restore(&producer, session->log_fd, boundary, NULL,
+        &sources, &state, NULL, NULL) < 0 && errno == EINVAL);
+    assert(!memcmp(saved, &producer, sizeof(producer)));
+    struct snag_binary_anchor bad_clock = *boundary;
+    bad_clock.next_seq = 0u;
+    assert(snag_binary_producer_restore(&producer, session->log_fd, &bad_clock, &access,
+        &sources, &state, NULL, NULL) < 0 && errno == EINVAL);
+    if (sources.input) {
+        struct snag_binary_checkpoint_sources wrong = sources;
+        wrong.input = 1u; /* A canonical creation record is not an input declaration. */
+        assert(snag_binary_producer_restore(&producer, session->log_fd, boundary, &access,
+            &wrong, &state, NULL, NULL) < 0 && errno == EINVAL);
+    }
+    if (state.response_open) {
+        struct snag_session wrong = state;
+        wrong.active_cycle ^= 1u;
+        assert(snag_binary_producer_restore(&producer, session->log_fd, boundary, &access,
+            &sources, &wrong, NULL, NULL) < 0 && errno == EINVAL);
+        wrong = state;
+        wrong.response_public_bytes ^= 1u;
+        assert(snag_binary_producer_restore(&producer, session->log_fd, boundary, &access,
+            &sources, &wrong, NULL, NULL) < 0 && errno == EINVAL);
+        if (producer.output_count > 1u) {
+            struct snag_binary_checkpoint_sources early = sources;
+            early.response_end = producer.outputs[0].value.source.last_sequence;
+            assert(snag_binary_producer_restore(&producer, session->log_fd, boundary, &access,
+                &early, &state, NULL, NULL) < 0 && errno == EINVAL);
+        }
+    }
+    assert(!memcmp(saved, &producer, sizeof(producer)));
+    size_t calls = cancel.calls;
+    for (size_t at = 1u; at <= calls; ++at) {
+        cancel = (struct producer_cancel){.at = at};
+        assert(snag_binary_producer_restore(&producer, session->log_fd, boundary, &access,
+            &sources, &state, producer_cancelled, &cancel) < 0 && errno == ECANCELED);
+        assert(!memcmp(saved, &producer, sizeof(producer)));
+    }
+    uint64_t missing = sources.input ? sources.input : sources.queue_count ?
+        sources.queue[0].creation : state.response_open ? sources.response_start : 0u;
+    if (missing) {
+        struct snag_buf sparse = {.max = SIZE_MAX};
+        size_t offset = (size_t)(missing - 1u) * SNAG_BINARY_INDEX_ENTRY_SIZE;
+        assert(!snag_buf_append(&sparse, entries.data, offset));
+        assert(!snag_buf_append(&sparse, entries.data + offset + SNAG_BINARY_INDEX_ENTRY_SIZE,
+            entries.len - offset - SNAG_BINARY_INDEX_ENTRY_SIZE));
+        struct snag_binary_checkpoint_index incomplete = access;
+        incomplete.entries = sparse.data;
+        --incomplete.entry_count;
+        assert(snag_binary_producer_restore(&producer, session->log_fd, boundary, &incomplete,
+            &sources, &state, NULL, NULL) < 0 && errno == ENOENT);
+        assert(!memcmp(saved, &producer, sizeof(producer)));
+        snag_buf_free(&sparse);
+    }
+    assert(snag_seek(session->log_fd, 0, SEEK_CUR) == position);
+    snag_binary_producer_free(&producer);
+    snag_binary_checkpoint_sources_free(&sources);
+    snag_session_close(&state);
+    snag_buf_free(&entries);
+}
+
 /* Compare the ACK snapshot with independent prefix replay, not the provisional
  * producer's own staged state. This also works beside a failed physical suffix. */
 static void
@@ -546,6 +699,7 @@ native_checkpoint_matches(struct snag_session *session)
     assert(!snag_binary_checkpoint_core_encode(&live, &captured, session));
     assert(!snag_binary_checkpoint_core_encode(&replay, &replayed, &restored));
     assert(live.len == replay.len && !memcmp(live.data, replay.data, live.len));
+    producer_matches(session, &boundary, &tree, &live);
     json_t *left = snag_checkpoint_state_encode(session);
     json_t *right = snag_checkpoint_state_encode(&restored);
     assert(left && right && json_equal(left, right));
@@ -567,6 +721,202 @@ native_checkpoint_commit(struct snag_session *session, const char *type, json_t 
     if (rc < 0) fprintf(stderr, "native checkpoint fixture %s: %s\n", type, error);
     assert(!rc);
     native_checkpoint_matches(session);
+}
+
+static void
+producer_resume_owner(struct snag_session *session, struct probe *probe)
+{
+    struct snag_binary_anchor boundary;
+    struct snag_binary_index_tree tree;
+    struct snag_binary_checkpoint_sources captured = {0}, sources = {0};
+    char error[256];
+    assert(!snag_session_binary_checkpoint_capture(session, &boundary, &tree,
+        &captured, error, sizeof(error)));
+    struct snag_buf core = {.max = SIZE_MAX}, entries = {.max = SIZE_MAX};
+    assert(!snag_binary_checkpoint_core_encode(&core, &captured, session));
+    struct snag_binary_checkpoint_index access;
+    producer_access(session, &boundary, &tree, &access, &entries);
+    struct snag_binary_checkpoint_frame frame = {.identity = access.identity,
+        .boundary = boundary, .core = {.version = SNAG_BINARY_CORE_VERSION,
+            .data = core.data, .size = core.len}};
+    struct snag_session restored;
+    assert(!snag_binary_checkpoint_core_read(session->log_fd, &frame, &access,
+        &restored, &sources));
+    struct snag_binary_producer producer = {0};
+    unsigned char header[SNAG_BINARY_HEADER_SIZE];
+    struct snag_binary_checkpoint_index suffix = {0};
+    assert(snag_pread(session->log_fd, header, sizeof(header), 0) == (ssize_t)sizeof(header));
+    assert(!snag_binary_header_decode(header, sizeof(header), &suffix.identity, &suffix.boundary));
+    /* The entire small fixture prefix is this caller-bounded suffix. No NULL
+     * access or unbounded repair/oracle fallback is passed to restore. */
+    assert(!snag_binary_producer_restore(&producer, session->log_fd, &boundary,
+        &suffix, &sources, &restored, NULL, NULL));
+    int fd = dup(session->log_fd);
+    assert(fd >= 0);
+    snag_session_close(session); /* Join the former owner before replacing it. */
+    *session = restored;
+    session->log_fd = fd;
+    session->lock_fd = dup(fd);
+    assert(session->lock_fd >= 0 && !snag_lock_file(session->lock_fd, true));
+    probe->owner_seen = false;
+    struct snag_binary_io_ops ops = {.write_full = probe_write, .sync_file = probe_sync,
+        .opaque = probe};
+    assert(!snag_session_bind_binary(session, &access.identity, &boundary, &tree,
+        &producer, &sources, &ops, error, sizeof(error)));
+    session->on_commit = native_effect;
+    session->on_commit_opaque = probe;
+    snag_binary_producer_free(&producer);
+    snag_binary_checkpoint_sources_free(&sources);
+    snag_binary_checkpoint_sources_free(&captured);
+    snag_buf_free(&core);
+    snag_buf_free(&entries);
+}
+
+static void
+producer_last_event(struct snag_session *session, struct snag_binary_event *event,
+    struct snag_buf *scratch)
+{
+    struct snag_binary_anchor boundary, before;
+    struct snag_binary_index_tree tree;
+    struct snag_binary_checkpoint_sources sources = {0};
+    char error[256];
+    assert(!snag_session_binary_checkpoint_capture(session, &boundary, &tree,
+        &sources, error, sizeof(error)));
+    struct snag_binary_batch batch;
+    assert(!snag_binary_batch_previous(session->log_fd, &boundary, scratch, &batch, &before));
+    assert(batch.count == 1u);
+    size_t position = SNAG_BINARY_BATCH_HEADER_SIZE;
+    uint64_t sequence;
+    struct snag_binary_record record;
+    assert(!snag_binary_record_next(&batch, &position, &record, &sequence));
+    assert(sequence + 1u == boundary.next_seq && !snag_binary_event_decode(&record, event));
+    snag_binary_checkpoint_sources_free(&sources);
+}
+
+static void
+producer_output(struct snag_session *session, unsigned int index, unsigned int offset,
+    const char *text)
+{
+    struct snag_binary_event event = {.kind = SNAG_BINARY_RESPONSE_OUTPUT};
+    struct snag_binary_response_output *output = &event.data.response_output;
+    memset(output->turn, 0x11, sizeof(output->turn));
+    memset(output->response, 0x33, sizeof(output->response));
+    memset(output->item.id, index ? 0x55 : 0x44, sizeof(output->item.id));
+    output->cycle = 1u;
+    output->index = index;
+    output->offset = offset;
+    output->item.kind = SNAG_BINARY_ITEM_ASSISTANT;
+    output->item.phase = SNAG_BINARY_PHASE_COMMENTARY;
+    output->item.provider_id = (struct snag_binary_text){(const unsigned char *)"p", 1u};
+    output->item.text = (struct snag_binary_text){(const unsigned char *)text, strlen(text)};
+    struct snag_buf payload = {.max = SNAG_MAX_EVENT_LINE};
+    assert(!snag_binary_event_encode(&payload, &event));
+    struct snag_binary_record record = {.kind = (uint16_t)event.kind,
+        .version = snag_binary_event_version(event.kind), .payload = payload.data,
+        .size = payload.len};
+    const char *type;
+    json_t *data = NULL;
+    assert(!snag_binary_legacy_decode(&record, &type, &data));
+    native_checkpoint_commit(session, type, data);
+    snag_buf_free(&payload);
+}
+
+static void
+test_native_producer_resume(bool queued)
+{
+    struct snag_session session;
+    struct probe probe = {0};
+    native_fixture(&session, &probe);
+    uint64_t creation = session.next_seq;
+    if (queued) {
+        native_checkpoint_commit(&session, "future_turn_queued", json_pack(
+            "{s:s,s:s,s:b,s:s,s:[{s:s,s:s}]}", "queue_id",
+            "22222222222222222222222222222222", "text", "before edit", "read_only", 0,
+            "while_turn_id", "", "content", "type", "input_text", "text", "original content"));
+        native_checkpoint_commit(&session, "future_turn_edited", json_pack(
+            "{s:s,s:s,s:b,s:[{s:s,s:s}]}", "queue_id", "22222222222222222222222222222222",
+            "text", "native reference", "read_only", 0, "content", "type", "input_text",
+            "text", "inert edited content"));
+    } else {
+        native_checkpoint_commit(&session, "input_received", json_pack(
+            "{s:s,s:s,s:s,s:s,s:[],s:b,s:i,s:[{s:s,s:s}]}", "provider", "openai",
+            "model", "gpt-5", "effort", "medium", "text", "native reference",
+            "instructions", "read_only", 0, "received_at_ms", 0,
+            "content", "type", "input_text", "text", "original content"));
+    }
+    uint64_t text_sequence = session.next_seq - 1u;
+    producer_resume_owner(&session, &probe);
+    json_t *turn = json_pack("{s:s,s:i,s:s,s:n,s:n,s:s,s:s,s:[],s:{s:s,s:s,s:s},s:O}",
+        "turn_id", "11111111111111111111111111111111", "turn_number", 1,
+        "input_kind", queued ? "queued" : "direct", "queue_id", "queue_seq", "cwd", "/",
+        "text", "native reference", "instructions", "config", "provider", "openai",
+        "model", "gpt-5", "effort", "medium", "content", queued ?
+            session.pending_queue[0].content : json_object_get(session.pending_input, "content"));
+    assert(turn);
+    assert(!json_object_set_new(turn, "read_only", json_false()));
+    assert(!json_object_set_new(turn, "received_at_ms", json_integer(queued ?
+        (json_int_t)session.pending_queue[0].received_ms : 0)));
+    json_t *config = json_object_get(turn, "config");
+    assert(!json_object_set_new(config, "max_parallel_commands", json_integer(4)));
+    assert(!json_object_set_new(config, "parallel_tool_calls", json_true()));
+    if (queued) {
+        assert(!json_object_set_new(turn, "queue_id",
+            json_string("22222222222222222222222222222222")));
+        assert(!json_object_set_new(turn, "queue_seq", json_integer((json_int_t)creation)));
+    }
+    native_checkpoint_commit(&session, "turn_started", turn);
+    struct snag_buf scratch = {.max = SNAG_BINARY_BATCH_MAX};
+    struct snag_binary_event event;
+    producer_last_event(&session, &event, &scratch);
+    assert(event.kind == SNAG_BINARY_TURN_STARTED &&
+        event.data.started.text_ref.target.sequence == text_sequence &&
+        event.data.started.content_ref.target.sequence == creation);
+    assert(queued ? !event.data.started.instructions_ref.field :
+        event.data.started.instructions_ref.target.sequence == creation);
+    static const char hash[] =
+        "0000000000000000000000000000000000000000000000000000000000000000";
+    native_checkpoint_commit(&session, "response_started", json_pack(
+        "{s:i,s:n,s:s,s:n,s:s,s:s,s:s,s:i,s:s,s:n,s:i,s:s,s:i,s:s,s:i,s:i,s:s,"
+        "s:s,s:s,s:s,s:s,s:n,s:s,s:b,s:[],s:s}",
+        "irc_seq", 0, "baseline_sha256", "capability_version", SNAJPAGENT_CAPABILITY_VERSION,
+        "compact_id", "count_method", "exact", "capacity_source", "unknown",
+        "count_request_sha256", hash, "cycle", 1, "effort", "medium", "hard_input_tokens",
+        "input_tokens_bound", 1000, "model", "gpt-5", "model_input_bytes", 4000,
+        "model_input_sha256", hash, "request_input_bytes", 3000, "request_input_count", 1,
+        "request_input_sha256", hash, "profile_id", SNAJPAGENT_PROFILE_ID,
+        "provider", "openai", "provider_source_sha256", hash,
+        "request_sha256", hash, "requested_output_tokens", "response_id",
+        "33333333333333333333333333333333", "source_bound", 0, "steering_ids",
+        "turn_id", "11111111111111111111111111111111"));
+    producer_resume_owner(&session, &probe); /* Empty open response has zero spans. */
+    uint64_t first = session.next_seq;
+    producer_output(&session, 0u, 0u, "hel");
+    native_checkpoint_commit(&session, "banner_updated", json_pack("{s:s}", "text", "between"));
+    producer_output(&session, 0u, 3u, "lo");
+    uint64_t second = session.next_seq;
+    producer_output(&session, 1u, 0u, "sec");
+    producer_resume_owner(&session, &probe);
+    uint64_t last = session.next_seq;
+    producer_output(&session, 1u, 3u, "ond");
+    native_checkpoint_commit(&session, "response_interrupted", json_pack(
+        "{s:s,s:s,s:i,s:s,s:s,s:O}", "turn_id", "11111111111111111111111111111111",
+        "response_id", "33333333333333333333333333333333", "cycle", 1,
+        "origin", "user", "reason", "cancelled", "partial_public", session.response_public));
+    producer_last_event(&session, &event, &scratch);
+    assert(event.kind == SNAG_BINARY_RESPONSE_INTERRUPTED);
+    struct snag_binary_public_value value;
+    size_t position = 0u;
+    assert(!snag_binary_public_items_next(&event.data.response_interrupted.partial,
+        &position, &value));
+    assert(value.source.first.sequence == first && value.source.bytes == 5u);
+    assert(!snag_binary_public_items_next(&event.data.response_interrupted.partial,
+        &position, &value));
+    assert(value.source.first.sequence == second && value.source.last_sequence == last &&
+        value.source.bytes == 6u);
+    producer_resume_owner(&session, &probe); /* Closed response never resurrects spans. */
+    native_checkpoint_commit(&session, "banner_updated", json_pack("{s:s}", "text", "after"));
+    snag_buf_free(&scratch);
+    snag_session_close(&session);
 }
 
 static void
@@ -1381,6 +1731,8 @@ test_store_binary_io(void)
         test_native_index_attachment(variant);
     for (unsigned int variant = 0u; variant < 7u; ++variant) test_index_cache(variant);
     test_native_checkpoint_origins();
+    test_native_producer_resume(false);
+    test_native_producer_resume(true);
     test_native_session_ack();
     test_native_session_retry(true, 1u);
     test_native_session_retry(false, 1u);
