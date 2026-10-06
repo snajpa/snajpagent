@@ -9,6 +9,7 @@ import shutil
 import signal
 import struct
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -463,6 +464,138 @@ input()
         self.assertFalse(list(self.owner.directory.glob('upload-*')))
         resumed.finish('close')
         self.owner.status('detached')
+
+    def reconnect_upload(self, protocol, mux):
+        binary = control.frontend.BINARY
+        child = self.transfer_terminal('mux-loss', ssh=protocol == 'ssh',
+                                       mosh=protocol == 'mosh', mux=mux)
+        child.command('attach ' + self.owner.sid)
+        child.repaint_until(b'ATTACHED')
+        child.command('vsp')
+        child.write(b'i/receive\rretained workspace draft')
+        child.until(b'Select local file', 10)
+        self.wait_snapshot(lambda rows:
+            rollout(next(iter(rows.values()))['state']['buffers'][0])['draft'] ==
+            'retained workspace draft')
+        tmux = ['tmux', '-S', str(self.root / 'transfer-tmux.sock')]
+        pids = []
+        for path in Path('/proc').glob('[0-9]*/cmdline'):
+            try:
+                argv = path.read_bytes().split(b'\0')
+            except (FileNotFoundError, ProcessLookupError):
+                continue
+            if argv[:2] == [str(binary).encode(), b'vm'] and (
+                    str(self.root / 'state').encode() in argv):
+                pids.append(path.parent.name)
+        pid, = pids
+
+        def identity():
+            return Path('/proc/' + pid + '/stat').read_text().rsplit(')', 1)[1].split()[19]
+
+        original = identity()
+        wrapper = child.state()['pid']
+        children = clipboard.FixtureChildren(wrapper, parent=child.process.pid)
+        self.addCleanup(children.close)
+        matches = []
+        for process, fd in children.handles.items():
+            argv = Path(f'/proc/{process}/cmdline').read_bytes().split(b'\0')
+            if (protocol == 'ssh' and argv[0] == b'ssh' and
+                str(self.root / 'client-key').encode() in argv) or (
+                protocol == 'mosh' and Path(os.fsdecode(argv[0])).name == 'mosh-client'):
+                matches.append(fd)
+        transport, = matches
+        signal.pidfd_send_signal(transport, signal.SIGTERM)
+        child.wait_exit()
+        self.assertEqual(normalized_modes(child.state()['modes']), child.original)
+        self.assertEqual(identity(), original)
+        self.assertEqual(self.owner.identity(), self.owner.owner_identity)
+
+        script = self.root / 'reattach.py'
+        attach = [*tmux, 'attach-session', '-d', '-t', 'transfer'] if mux == 'tmux' else (
+            ['screen', '-U', '-c', str(self.root / 'screenrc'), '-d', '-r', 'transfer'])
+        script.write_text('import os\n' +
+                          f'os.execvp({attach[0]!r}, {attach!r})\n')
+        tunnel = [sys.executable, str(self.root / 'ssh-transport.py')] if protocol == 'ssh' else (
+            ['mosh', '--local', '--predict=never', '127.0.0.1'])
+        resumed = control.frontend.Terminal(self.root, columns=200,
+            transport=[str(binary), 'remote', *tunnel, sys.executable, str(script)],
+            extra_env={'SCREENDIR': str(self.root / 'screens')})
+        self.addCleanup(resumed.close)
+        self.terminals.append(resumed)
+        self._terminals.append(resumed)
+        resumed.until(b'host-model', 10)
+        resumed.write(b'\x03')
+        self.wait_snapshot(lambda rows:
+            rollout(next(iter(rows.values()))['state']['buffers'][0])['pending'] is None)
+        resumed.repaint_until(b'ATTACHED')
+        self.assertEqual(identity(), original)
+        self.assertEqual(self.inputs(), [])
+        saved = next(iter(self.snapshots().values()))['state']['buffers'][0]
+        self.assertEqual([r['command'] for r in saved['reports']], ['/receive'])
+        resumed.command('history')
+        resumed.repaint_until(b'retained workspace draft')
+        resumed.write(b'\t')
+        resumed.repaint_until(b'NORMAL draft')
+        resumed.write(b'0d$i/receive\r')
+        resumed.until(b'Select local file', 10)
+        source = self.root / 'resumed.txt'
+        payload = 'reconnected file é界\n' * 50
+        source.write_text(payload)
+        resumed.output.clear()
+        resumed.write((str(source) + '\r').encode())
+        resumed.until(b'1 unsent attachment(s)', 15)
+        resumed.repaint_until(b'REPORT')
+        resumed.command('history')
+        requests = []
+        previous = self.owner.provider.runtime_handler
+
+        def record(handler, request, sequence):
+            requests.append(request)
+            return previous(handler, request, sequence)
+
+        self.owner.provider.runtime_handler = record
+        resumed.write(b'iinspect resumed file\r')
+        deadline = time.monotonic() + 10
+        while not self.inputs() or not requests:
+            self.assertLess(time.monotonic(), deadline)
+            resumed.read(.05)
+        event, = self.inputs()
+        part, = event['data']['content']
+        self.assertEqual(part['asset']['sha256'], hashlib.sha256(payload.encode()).hexdigest())
+        self.assertEqual((self.owner.directory / 'media' / part['asset']['id']).read_bytes(),
+                         payload.encode())
+        request, = requests
+        self.assertIn('asset:' + part['asset']['id'], json.dumps(request))
+        self.assertIn('inspect resumed file', json.dumps(request))
+        resumed.write(b'\x1b:close\r')
+        resumed.finish('close')
+        self.owner.status('detached')
+
+    @unittest.skipUnless(shutil.which('tmux') and hasattr(os, 'pidfd_open') and
+                         shutil.which('sshd') and shutil.which('ssh-keygen') and
+                         os.getuid() == 0 and Path('/run/sshd').is_dir(),
+                         'isolated ssh/tmux reconnect needs Linux fixtures')
+    def test_upload_reconnect_in_ssh_tmux(self):
+        self.reconnect_upload('ssh', 'tmux')
+
+    @unittest.skipUnless(shutil.which('screen') and hasattr(os, 'pidfd_open') and
+                         shutil.which('sshd') and shutil.which('ssh-keygen') and
+                         os.getuid() == 0 and Path('/run/sshd').is_dir(),
+                         'isolated ssh/screen reconnect needs Linux fixtures')
+    def test_upload_reconnect_in_ssh_screen(self):
+        self.reconnect_upload('ssh', 'screen')
+
+    @unittest.skipUnless(shutil.which('tmux') and hasattr(os, 'pidfd_open') and
+                         shutil.which('mosh') and shutil.which('mosh-server'),
+                         'isolated mosh/tmux reconnect needs Linux fixtures')
+    def test_upload_reconnect_in_mosh_tmux(self):
+        self.reconnect_upload('mosh', 'tmux')
+
+    @unittest.skipUnless(shutil.which('screen') and hasattr(os, 'pidfd_open') and
+                         shutil.which('mosh') and shutil.which('mosh-server'),
+                         'isolated mosh/screen reconnect needs Linux fixtures')
+    def test_upload_reconnect_in_mosh_screen(self):
+        self.reconnect_upload('mosh', 'screen')
 
     def test_attach_list_remove_and_failure_return_to_workspace(self):
         path = self.root / 'local notes.txt'

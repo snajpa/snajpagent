@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Document Vim file-transfer recovery after reconnecting to Screen or tmux,
+  with permanent SSH/Mosh tests for retained drafts and an explicit upload retry.
+
 - Close the workstation upload picker when its transport exits and restore the
   terminal without another keypress. Vim resume preserves the newer draft and
   previously retained attachments without repeating the interrupted command.

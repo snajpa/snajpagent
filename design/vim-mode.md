@@ -24,6 +24,10 @@ transport exit returns local terminal ownership without requiring input. A resum
 workspace reconciles the existing command receipt and retains its newer draft and
 previous attachments. Resize continues through the terminal transaction and back
 to the split layout.
+When Screen or tmux retains the VM after tunnel loss, a new native wrapper can
+reattach to that same workspace. Ctrl-C ends the previous terminal transaction;
+its receipt resolves before an explicit new /receive. Both splits and the newer
+draft survive; the successful retry retains its file until private submission.
 
 Cross-session command checkpoint: qualified /query, /msg, /notice, /chat, /join,
 /part and /connections resolve a saved session name or unique ID prefix in the

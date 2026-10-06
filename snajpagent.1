@@ -2259,6 +2259,11 @@ return. After a disconnected frontend exits, resume the named workspace to
 recover its saved draft and reconcile the interrupted command's receipt. Resume
 does not repeat the upload; use /attachments to inspect retained files.
 .PP
+When the workspace stays running inside Screen or tmux, reconnect to that
+multiplexer. Press Ctrl-C to end an interrupted file dialog and return to the
+workspace. Its draft stays saved; inspect /attachments before explicitly retrying
+/receive. Reattaching and cancelling the old dialog do not submit a model prompt.
+.PP
 The handoff references the already submitted command and live owner instance;
 repeated references cannot execute it twice. A command recovered from a saved
 workspace waits for an explicit :classic or :recover. Uncertain attachment outcomes
