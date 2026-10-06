@@ -15,6 +15,13 @@ login during a failed turn and after session resume, plus explicit credential
 reload. Each case asserts one completed original turn, the selected provider's
 actual request and credential, and no duplicate prompt or credential in the journal.
 
+Blocked-goal fixtures exercise real model tool calls and terminal output against
+a local provider: required wait destinations, operator/IRC/timer/process/external
+labels, resume/context restoration, goal listings and independent timer scheduling.
+Store checks cover checkpoint preservation, invalid destinations and old records
+without a wait channel. Vim transcript projection retains the destination and
+redacts the blocker text through its ordinary source mapping.
+
 ## Development Vim workspace
 
 The optional workspace and classic conversation tabs are development features.

@@ -678,6 +678,33 @@ snag_goal_unfinished(enum snag_goal_status status)
     return status == SNAG_GOAL_ACTIVE || status == SNAG_GOAL_PAUSED || status == SNAG_GOAL_BLOCKED;
 }
 
+bool
+snag_goal_wait_valid(const char *wait_for)
+{
+    if (!snag_text_valid(wait_for, 1u, SNAG_MAX_GOAL_BLOCKER)) return false;
+    for (const unsigned char *p = (const unsigned char *)wait_for; *p; ++p)
+        if (*p < 32u || *p == 127u) return false;
+    if (!strcmp(wait_for, "operator") || !strcmp(wait_for, "timer")) return true;
+    const char *target;
+    if (!strncmp(wait_for, "irc: ", 5u)) {
+        target = wait_for + 5u;
+        const char *slash = strrchr(target, '/');
+        return slash && slash > target && slash[1] && !strchr(target, ' ');
+    }
+    if (!strncmp(wait_for, "process: ", 9u)) target = wait_for + 9u;
+    else if (!strncmp(wait_for, "external: ", 10u)) target = wait_for + 10u;
+    else return false;
+    return *target && !snag_text_blank(target) && *target != ' ' &&
+        target[strlen(target) - 1u] != ' ';
+}
+
+const char *
+snag_goal_wait_for(const struct snag_session *session)
+{
+    const char *wait_for = snag_json_string(session->strings, "goal_wait_for");
+    return wait_for ? wait_for : "unspecified (older goal record)";
+}
+
 /* Sent host snapshots contain data, never instruction or tool items. */
 static bool
 host_context_valid(const json_t *snapshot)
@@ -1190,6 +1217,7 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             return -1;
         json_object_del(session->strings, "goal_blocker");
         session->goal_blocker = NULL;
+        json_object_del(session->strings, "goal_wait_for");
         memcpy(session->goal_id, goal_id, sizeof(session->goal_id));
         session->goal_parent_id[0] = '\0';
         session->goal_status = SNAG_GOAL_ACTIVE;
@@ -1255,10 +1283,20 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
                 !snag_string_in(reason, reasons)) goto invalid;
             status = SNAG_GOAL_PAUSED;
         } else if (strcmp(action, "blocked") == 0) {
-            if (!snag_json_exact_keys(data, "actor goal_id reason") || status != SNAG_GOAL_ACTIVE || !model ||
+            const char *wait_for = snag_json_string(data, "wait_for");
+            bool has_wait = json_object_get(data, "wait_for") != NULL;
+            if (!snag_json_exact_keys(data, has_wait ? "actor goal_id reason wait_for" :
+                    "actor goal_id reason") || status != SNAG_GOAL_ACTIVE || !model ||
+                (has_wait && !snag_goal_wait_valid(wait_for)) ||
                 !snag_text_valid(reason, 1u, SNAG_MAX_GOAL_BLOCKER) || snag_text_blank(reason) ||
                 replace_text(session, &session->goal_blocker, "goal_blocker", reason,
                              SNAG_MAX_GOAL_BLOCKER) < 0) goto invalid;
+            if (has_wait) {
+                if (snag_json_set_new(session->strings, "goal_wait_for",
+                        json_string(wait_for)) < 0) return -1;
+            } else {
+                json_object_del(session->strings, "goal_wait_for");
+            }
             status = SNAG_GOAL_BLOCKED;
         } else if (strcmp(action, "completed") == 0) {
             if (!snag_json_exact_keys(data, "actor goal_id") ||
@@ -1276,6 +1314,7 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         if (status != session->goal_status && (status == SNAG_GOAL_ACTIVE || !snag_goal_unfinished(status))) {
             json_object_del(session->strings, "goal_blocker");
             session->goal_blocker = NULL;
+            json_object_del(session->strings, "goal_wait_for");
         }
         session->goal_status = status;
         if (!strcmp(action, "resumed") && session->pending_queue_count) session->queue_armed = true;

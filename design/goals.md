@@ -27,8 +27,8 @@ The interactive commands are:
 ```
 
 Bare `/goal` and `/goal status` show the current goal identifier, state,
-wording-lock state, model-turn count, byte limit, wording, and blocker when
-present. `/goal help` prints the grammar and the reserved first words.
+wording-lock state, model-turn count, byte limit, wording, blocker and wait
+channel when present. `/goal help` prints the grammar and the reserved first words.
 
 `/goal TEXT` starts a new goal when no unfinished goal exists. When a goal is
 active, paused, or blocked, it changes that goal's wording without changing
@@ -48,8 +48,8 @@ takes effect at that turn's terminal boundary; Ctrl-C remains the immediate
 turn interruption. `/goal resume` resumes a paused or blocked goal and begins
 the next turn immediately. `/goal lock` prevents the model from changing the
 wording; `/goal unlock` restores that ability. Locking never prevents the user
-from changing wording and never prevents the model from completing or blocking
-the goal. `/goal complete` is the user's explicit successful terminal state.
+from changing wording. The model may complete a locked goal, but cannot reword
+or block it. `/goal complete` is the user's explicit successful terminal state.
 `/goal clear` (also `/goal cancel`) is the user's terminal stop without a
 completion claim. It leaves the current turn running and prevents subsequent
 automatic goal turns. Controls accept whitespace around the command word; real
@@ -75,7 +75,7 @@ a durable session, but any subsequent replacement must fit the current limit.
 
 ## Model Control
 
-When no unfinished goal exists, the provider receives a strict `create_goal`
+When no unfinished goal exists, the provider receives a `create_goal`
 function tool with one required string argument:
 
 ```json
@@ -95,25 +95,41 @@ direct turn still reaches its normal final answer; that final is the first
 checkpoint, after which queued user turns run before the first synthetic goal
 turn.
 
-While a goal is active, the provider receives a strict `update_goal` function
-tool with required action and action-dependent text:
+While a goal is active, the provider receives an `update_goal` function
+tool with required action and action-dependent text and wait_for:
 
 ```json
 {"action":"rewrite","text":"new wording"}
 {"action":"complete"}
-{"action":"block","text":"specific blocking condition"}
+{"action":"block","text":"waiting for a reply","wait_for":"irc: team/secretary"}
+{"action":"resume","text":null}
 ```
 
 `rewrite` changes the durable wording when it is unlocked and within the
 configured byte limit. A locked rewrite returns a failed factual tool result
 and leaves the goal unchanged. `complete` records successful completion.
-`block` records why no dependency-ready action remains and stops automatic
-continuation. A blocked goal can later be changed, unlocked, or resumed by the
-user.
+`block` records why no dependency-ready action remains and requires an explicit
+single-line `wait_for`: `operator`, `timer`, `irc: endpoint/nick`, `process: handle`,
+or `external: concrete dependency`. Each block text field uses the existing64KiB
+blocker bound. `operator` means input from the operator is actually required.
+The label describes the dependency and never arms a wakeup. Actual timer scheduling
+remains independently visible. Missing, blank or malformed destinations fail
+before a block event is committed. Non-block actions omit the field or use null.
+
+The block event stores `wait_for` beside its separate `reason`; the session's
+`goal_wait_for` string carries it through checkpoint replay. Historical block
+events without it remain readable and report an unspecified wait, never an
+inferred operator dependency. New annotated events require a reader supporting
+that field; older binaries may refuse them. Existing running owners retain their
+loaded behavior and do not receive journal rewrites. Resume, completion and
+cancellation clear the destination with the blocker. Status, durable notices,
+Vim history, goal listings and model context use the retained value.
+A blocked goal stops automatic continuation and can later be resumed explicitly.
 
 `create_goal` and `update_goal` are mutually exclusive. An active goal exposes
-only `update_goal`; a paused or blocked unfinished goal exposes neither; a
-completed, cancelled, or never-created goal exposes only `create_goal`.
+only `update_goal`; paused and blocked unfinished goals retain that tool for
+valid transitions including resume. A completed, cancelled, or never-created
+goal exposes only `create_goal`.
 Neither lifecycle tool is exposed while an unresolved managed process
 restricts the coding-tool surface to the exact final `write_stdin`
 continuation. In networked mode IRC tools may precede that continuation so
@@ -137,8 +153,9 @@ When a model turn ends:
 
 1. `completed`, `blocked`, `paused`, and `cancelled` goals stop and return to
    the idle prompt after the current turn has closed.
-   A blocked goal with a scheduled timer remains blocked; the idle notice names
-   that timer rather than saying it awaits the operator. When the timer fires,
+   A blocked goal names its recorded wait channel. An armed timer is shown
+   separately, even when the declared dependency is an IRC reply. Paused goals
+   report only that state. When the timer fires,
    its prompt is identified as host-originated in the transcript and model
    context, not as an operator submission.
 2. A normal final answer while the goal is still active is a checkpoint, not a
@@ -190,7 +207,7 @@ The final developer-level response boundary and compatible reasoning remain
 intact. Pause, read-only, queued work and frozen-turn rules remain unchanged.
 
 Restoration is separate from continuation. Reopening a session automatically
-displays its saved goal, wording, status, revision, lock and blocker, even when
+displays its saved goal, wording, status, revision, lock, blocker and wait channel, even when
 resume history is disabled. Ordinary model requests retain the current wording
 and status of paused/blocked unfinished goals after replay and compaction;
 their saved state is context, not an instruction to resume. No goal is recreated

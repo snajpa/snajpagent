@@ -1336,6 +1336,7 @@ struct app_goal_record {
     char replaced_by[SNAG_ID_HEX_LEN + 1u];
     char status[16];
     char *prompt;
+    char *wait_for;
     bool locked;
 };
 
@@ -1356,13 +1357,15 @@ goal_record_find(struct app_goal_scan *scan, const char *id)
 
 static int
 goal_record_add(struct app_goal_scan *scan, uint64_t seq, const char *id,
-                const char *parent, const char *prompt, const char *status, bool locked)
+                const char *parent, const char *prompt, const char *status, bool locked,
+                const char *wait_for)
 {
     char *copy = history_excerpt(prompt, 512u);
     if (!copy) return -1;
     ++scan->total;
     if (scan->count == scan->limit) {
         free(scan->records[0].prompt);
+        free(scan->records[0].wait_for);
         memmove(scan->records, scan->records + 1u,
                 (scan->limit - 1u) * sizeof(scan->records[0]));
         --scan->count;
@@ -1379,6 +1382,11 @@ goal_record_add(struct app_goal_scan *scan, uint64_t seq, const char *id,
         return -1;
     }
     record->prompt = copy;
+    if (wait_for && !(record->wait_for = history_excerpt(wait_for, 512u))) {
+        free(record->prompt);
+        --scan->count;
+        return -1;
+    }
     return 0;
 }
 
@@ -1395,7 +1403,7 @@ goal_list_event(void *opaque, const struct snag_session *state, uint64_t seq,
     if (!strcmp(type, "goal_started")) {
         if (!scan->before_seq || seq < scan->before_seq)
             return goal_record_add(scan, seq, id, NULL, snag_json_string(data, "prompt"),
-                                   "active", false);
+                                   "active", false, NULL);
         return 0;
     }
     if (!strcmp(type, "goal_replaced")) {
@@ -1408,7 +1416,8 @@ goal_list_event(void *opaque, const struct snag_session *state, uint64_t seq,
         }
         if (!scan->before_seq || seq < scan->before_seq)
             return goal_record_add(scan, seq, new_id, id, snag_json_string(data, "prompt"),
-                                   snag_goal_status_name(state->goal_status), state->goal_locked);
+                snag_goal_status_name(state->goal_status), state->goal_locked,
+                state->goal_status == SNAG_GOAL_BLOCKED ? snag_goal_wait_for(state) : NULL);
         return 0;
     }
     if (strncmp(type, "goal_", 5u) || !(record = goal_record_find(scan, id))) return 0;
@@ -1424,6 +1433,9 @@ goal_list_event(void *opaque, const struct snag_session *state, uint64_t seq,
         (void)snag_strcpy(record->status, sizeof(record->status), "paused");
     } else if (!strcmp(type, "goal_blocked")) {
         (void)snag_strcpy(record->status, sizeof(record->status), "blocked");
+        free(record->wait_for);
+        record->wait_for = history_excerpt(snag_goal_wait_for(state), 512u);
+        if (!record->wait_for) return -1;
     } else if (!strcmp(type, "goal_resumed")) {
         (void)snag_strcpy(record->status, sizeof(record->status), "active");
     } else if (!strcmp(type, "goal_completed")) {
@@ -1458,7 +1470,8 @@ snag_app_goal_list(struct app_state *app, const struct snag_response_item *call,
     uint64_t oldest_returned = 0u;
     for (size_t i = scan.count; i > 0u; --i) {
         struct app_goal_record *record = &scan.records[i - 1u];
-        struct snag_buf entry = {.max = (record->prompt ? strlen(record->prompt) : 0u) + 384u};
+        struct snag_buf entry = {.max = (record->prompt ? strlen(record->prompt) : 0u) +
+            (record->wait_for ? strlen(record->wait_for) : 0u) + 416u};
         int entry_rc = snag_buf_printf(&entry,
             "created=%llu last=%llu id=%s status=%s locked=%s%s%s%s%s\nprompt: %s\n",
             (unsigned long long)record->created_seq, (unsigned long long)record->last_seq,
@@ -1466,6 +1479,9 @@ snag_app_goal_list(struct app_state *app, const struct snag_response_item *call,
             record->parent[0] ? " parent=" : "", record->parent,
             record->replaced_by[0] ? " replaced_by=" : "", record->replaced_by,
             record->prompt ? record->prompt : "");
+        if (entry_rc == 0 && !strcmp(record->status, "blocked"))
+            entry_rc = snag_buf_printf(&entry, "wait channel: %s\n",
+                record->wait_for ? record->wait_for : "unspecified (older goal record)");
         if (entry_rc < 0) {
             snag_buf_free(&entry);
             goto out;
@@ -1504,7 +1520,10 @@ invalid:
     *result = snag_tool_result_terminal(false, error[0] ? error : "Invalid list_goals arguments.");
     rc = *result ? 0 : -1;
 out:
-    for (size_t i = 0u; i < scan.count; ++i) free(scan.records[i].prompt);
+    for (size_t i = 0u; i < scan.count; ++i) {
+        free(scan.records[i].prompt);
+        free(scan.records[i].wait_for);
+    }
     snag_buf_free(&body);
     snag_buf_free(&text);
     return rc;

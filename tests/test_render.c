@@ -1858,7 +1858,7 @@ test_spacing_classes(void)
 {
     const char *frames[SNAG_TERM_SPINNER_COUNT] = {" ", " ", " "};
     const char *events[] = {"goal_started", "goal_reworded", "goal_replaced",
-        "goal_resumed", "goal_blocked", "goal_completed", "goal_cancelled", "compaction_completed"};
+        "goal_resumed", "goal_completed", "goal_cancelled", "compaction_completed"};
     char output[8192];
     struct snag_render render;
     struct snag_term term;
@@ -1906,7 +1906,7 @@ test_spacing_classes(void)
     snag_render_free(&render);
     (void)capture_close(&capture, output, sizeof(output), 0u);
     assert(strcmp(output, "input › one\ninput › two\n\n" "• Goal set\n• Goal updated\n"
-        "• Goal updated\n• Goal resumed\n• Goal blocked by model\n• Goal cleared\n• Goal cleared\n"
+        "• Goal updated\n• Goal resumed\n• Goal cleared\n• Goal cleared\n"
         "• Compacted\n\nheading\n\ninput › three\n") == 0);
 
     /* A provider wait notice must not consume the literal model paragraph's gap. */

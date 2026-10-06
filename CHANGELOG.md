@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Require an explicit wait channel when a model blocks a goal. Preserve it in
+  goal notices, status, history and restored context; name the operator only for
+  an explicit operator wait and show timer scheduling separately.
+
 - Apply a pending provider/model switch before checking credentials when
   continuing a failed or resumed turn. A broken login for the previous provider
   no longer prevents recovery through another configured provider.

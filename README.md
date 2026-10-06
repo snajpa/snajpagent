@@ -81,6 +81,9 @@ A normal final answer ends the turn; set a goal to continue work beyond it:
 Goals continue until complete or blocked; queued prompts come first. `/goal pause`
 pauses at a turn boundary, `/goal resume` continues paused or blocked work, and
 `/goal clear` cancels while retaining history.
+Blocked goals name their wait channel, such as `irc: endpoint/nick`, a timer or
+an external dependency. `operator` means operator input is required; `/goal`
+shows the recorded destination and blocker.
 
 Ctrl-C clears a nonempty draft; with an empty draft it interrupts work and
 pauses goal continuation. Empty Enter leaves the goal paused; use `/goal resume`.

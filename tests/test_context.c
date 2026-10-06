@@ -1527,9 +1527,9 @@ assert_context_tool_schemas(json_t *tools, const char *active_handle, uint32_t m
         assert_properties(tool, json_pack("{s:{s:s}}", "objective", "type", "string"));
     }
     tool = item_by_field(tools, "name", "update_goal");
-    if (tool) assert_properties(tool, json_pack("{s:{s:s,s:[s,s,s,s]},s:{s:[s,s]}}",
+    if (tool) assert_properties(tool, json_pack("{s:{s:s,s:[s,s,s,s]},s:{s:[s,s]},s:{s:[s,s]}}",
             "action", "type", "string", "enum", "rewrite", "complete", "block", "resume",
-            "text", "type", "string", "null"));
+            "text", "type", "string", "null", "wait_for", "type", "string", "null"));
 }
 
 static void
@@ -5864,8 +5864,9 @@ main(int argc, char **argv)
     commit_event(&session, "goal_resumed", json_pack("{s:s}", "goal_id", goal));
     /* The lock freezes the goal against model transitions, so the operator unlock above is
      * what keeps this model-attributed block legal on an otherwise locked goal. */
-    commit_event(&session, "goal_blocked", json_pack("{s:s,s:s,s:s}",
-                     "goal_id", goal, "actor", "model", "reason", "retained dependency"));
+    commit_event(&session, "goal_blocked", json_pack("{s:s,s:s,s:s,s:s}",
+        "goal_id", goal, "actor", "model", "reason", "retained dependency",
+        "wait_for", "irc: team/secretary"));
     snag_session_close(&session);
     snag_session_init(&session);
     assert(snag_session_open(&store, &session, resumed_id, error, sizeof(error)) == 0);
@@ -5873,6 +5874,7 @@ main(int argc, char **argv)
     json_t *restored = message_matching(json_object_get(projection.model_input.value, "items"), "Persistent goal ");
     assert(restored && strstr(snag_json_string(restored, "content"), "is blocked"));
     assert(strstr(snag_json_string(restored, "content"), "Recorded blocker:\nretained dependency"));
+    assert(strstr(snag_json_string(restored, "content"), "Wait channel: irc: team/secretary"));
     assert(item_by_field(json_object_get(projection.create_request.value, "tools"), "name", "update_goal"));
 
     json_decref(empty_steering);

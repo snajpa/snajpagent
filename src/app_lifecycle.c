@@ -290,7 +290,7 @@ render_goal(struct app_state *app)
 
     if (app->session.goal_status == SNAG_GOAL_NONE)
         return snag_app_report(app, SNAG_UI_WARNING, "no goal has been set");
-    struct snag_buf text = {.max = SNAG_MAX_GOAL_PROMPT + SNAG_MAX_GOAL_BLOCKER + 512u};
+    struct snag_buf text = {.max = SNAG_MAX_GOAL_PROMPT + 2u * SNAG_MAX_GOAL_BLOCKER + 512u};
     rc = snag_buf_printf(&text, "goal %s: %s%s\n"
         "turns: %llu · revision: %llu · prompt: %zu/%u bytes\n" "%s",
         app->session.goal_id, snag_goal_status_name(app->session.goal_status),
@@ -302,6 +302,8 @@ render_goal(struct app_state *app)
         rc = snag_buf_printf(&text, "\nparent goal: %s", app->session.goal_parent_id);
     if (rc == 0 && app->session.goal_blocker)
         rc = snag_buf_printf(&text, "\nblocker: %s", app->session.goal_blocker);
+    if (rc == 0 && app->session.goal_status == SNAG_GOAL_BLOCKED)
+        rc = snag_buf_printf(&text, "\nwait channel: %s", snag_goal_wait_for(&app->session));
     if (rc == 0 && snag_buf_terminate(&text) < 0) rc = -1;
     if (rc == 0) rc = snag_app_report(app, SNAG_UI_HOST, (const char *)text.data);
     snag_buf_free(&text);
@@ -535,10 +537,13 @@ snag_app_goal_tool(struct app_state *app, const struct snag_response_item *call,
     }
     if (!call || strcmp(call->name, "update_goal") != 0)
         return tool_result(false, "Expected update_goal with action and text fields.", result);
-    if (!snag_json_arg_keys(call->arguments, "action", "text", error, error_size) ||
+    if (!snag_json_arg_keys(call->arguments, "action", "text wait_for", error, error_size) ||
         !snag_json_arg_text(call->arguments, "action", 1u, 8u, false, &action, error, error_size))
         return tool_result(false, error, result);
     text_value = json_object_get(call->arguments, "text");
+    json_t *wait_value = json_object_get(call->arguments, "wait_for");
+    if (strcmp(action, "block") && wait_value && !json_is_null(wait_value))
+        return tool_result(false, "wait_for is only valid for action=block", result);
     /* An operator lock freezes the objective: the model may not reword or block a
      * locked goal. Finishing it stays allowed, so a locked goal can still be brought
      * to a successful end rather than staying active forever; the store enforces the
@@ -572,17 +577,27 @@ snag_app_goal_tool(struct app_state *app, const struct snag_response_item *call,
         return tool_result(true, "goal marked complete", result);
     }
     if (strcmp(action, "block") == 0) {
+        const char *wait_for = json_string_value(wait_value);
+        if (!snag_goal_wait_valid(wait_for)) return tool_result(false,
+            "block requires wait_for: operator, timer, irc: endpoint/nick, "
+            "process: handle, or external: concrete dependency (one line)", result);
         if (!snag_json_arg_text(call->arguments, "text", 1u, SNAG_MAX_GOAL_BLOCKER,
                                 false, &text, error, error_size)) return tool_result(false, error, result);
         if (!goal_text_valid(text, SNAG_MAX_GOAL_BLOCKER)) return tool_result(false,
                                "block requires a bounded nonblank reason", result);
-        data = json_pack("{s:s,s:s,s:s}", "goal_id", app->session.goal_id, "actor", "model", "reason", text);
+        data = json_pack("{s:s,s:s,s:s,s:s}", "goal_id", app->session.goal_id,
+            "actor", "model", "reason", text, "wait_for", wait_for);
         if (!data) {
             return snag_errorf(error, error_size, "cannot allocate goal block event");
         }
         if (commit_goal_event(app, "goal_blocked", data, error, error_size) < 0) return -1;
         app->goal_armed = false;
-        return tool_result(true, "goal marked blocked", result);
+        struct snag_buf message = {.max = SNAG_MAX_GOAL_BLOCKER + 64u};
+        int rc = snag_buf_printf(&message, "goal marked blocked; waiting for %s", wait_for);
+        if (rc == 0) rc = snag_buf_terminate(&message);
+        if (rc == 0) rc = tool_result(true, (const char *)message.data, result);
+        snag_buf_free(&message);
+        return rc;
     }
     if (strcmp(action, "resume") == 0) {
         if (app->session.goal_status != SNAG_GOAL_PAUSED && app->session.goal_status != SNAG_GOAL_BLOCKED)

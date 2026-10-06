@@ -494,6 +494,9 @@ decode_state(const json_t *data, struct snag_session *s)
         s->strings = copy;
     }
     s->name = snag_json_string(s->strings, "name");
+    if (json_object_get(s->strings, "goal_wait_for") &&
+        (s->goal_status != SNAG_GOAL_BLOCKED ||
+         !snag_goal_wait_valid(snag_json_string(s->strings, "goal_wait_for")))) return -1;
     const char *irc_instruction = snag_json_string(s->strings, "irc_compact_instruction");
     if ((json_object_get(s->strings, "irc_compact_instruction") &&
             !snag_text_valid(irc_instruction, 0, SNAG_MAX_STEERING_TEXT)) ||

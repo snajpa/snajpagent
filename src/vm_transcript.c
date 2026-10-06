@@ -343,6 +343,18 @@ event_block(struct transcript *view, uint64_t seq, const char *type,
         label = "goal";
         field = "prompt";
         text = snag_json_string(data, "prompt");
+    } else if (!strcmp(type, "goal_blocked")) {
+        const char *wait_for = snag_json_string(data, "wait_for");
+        const char *reason = snag_json_string(data, "reason");
+        if (!reason) return snag_errno(EINVAL);
+        struct snag_buf heading = {.max = SNAG_MAX_EVENT_LINE};
+        int rc = snag_buf_printf(&heading, "goal blocked; waiting for %s",
+            wait_for ? wait_for : "unspecified (older goal record)");
+        if (!rc) rc = snag_buf_terminate(&heading);
+        if (!rc) rc = text_block(view, seq, "goal", (const char *)heading.data,
+            reason, snag_json_string(source, "reason"), NULL);
+        snag_buf_free(&heading);
+        return rc;
     }
     else if (snag_string_in(type, "irc_event irc_event_v2")) {
         const char *endpoint = snag_json_string(data, "endpoint");

@@ -29,14 +29,15 @@ def main():
         set_end = child.send_wait(b"/goal slow goal\r", b"Goal set")
         child.wait(b"working on goal", start=set_end)
         run_turn(child, b"/goal pause", b"Goal paused")
-        run_turn(child, b"ping", b"idle: goal paused, awaiting operator")
+        run_turn(child, b"ping", b"idle: goal paused")
+        assert b"idle: goal paused, awaiting operator" not in child.buf
     with H.Child([], ready=H.DEFAULT_IDLE_PROMPT, term="xterm") as child:
         child.send(b"/goal timer slow blocked goal\r")
         child.wait(b"Goal blocked by model")
         child.wait(b"timer scheduled")
-        child.wait(b"idle: goal blocked, timer scheduled")
+        child.wait(b"idle: goal blocked, waiting for timer; timer scheduled")
         child.wait_idle_prompt()
-        assert b"idle: goal blocked, timer scheduled" in child.buf
+        assert b"idle: goal blocked, waiting for timer; timer scheduled" in child.buf
         assert b"idle: goal blocked, awaiting operator" not in child.buf
     print("idle notice: ok")
 

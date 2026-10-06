@@ -398,9 +398,28 @@ failure_paths(void)
     json_decref(events);
 }
 
+static void
+goal_wait_channels(void)
+{
+    json_t *events = json_array();
+    event(events, "goal_blocked", json_pack("{s:s,s:s}",
+        "wait_for", "irc: team/secretary", "reason", "reply about top-secret"));
+    event(events, "goal_blocked", json_pack("{s:s}", "reason", "legacy blocker"));
+    json_t *blocks = project(events, 0u);
+    json_t *goal = find(blocks, "goal", 0u);
+    assert(goal && strstr(snag_json_string(goal, "label"), "irc: team/secretary"));
+    assert(!strstr(snag_json_string(goal, "text"), "top-secret"));
+    goal = find(blocks, "goal", 1u);
+    assert(goal && strstr(snag_json_string(goal, "label"), "unspecified"));
+    assert(!strstr(snag_json_string(goal, "label"), "operator"));
+    json_decref(blocks);
+    json_decref(events);
+}
+
 int
 main(void)
 {
+    goal_wait_channels();
     query_conversations();
     outgoing_receipts();
     conversation_and_tools();

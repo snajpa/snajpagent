@@ -972,6 +972,52 @@ test_upload_staging_lifecycle(struct snag_store *store, const char *cwd)
 }
 
 static void
+test_goal_wait_channel(struct snag_store *store, const char *cwd)
+{
+    struct snag_session session, restored;
+    char error[256], id[SNAG_ID_HEX_LEN + 1u];
+    const char *goal = "12121212121212121212121212121212";
+    snag_session_init(&session);
+    assert(!snag_session_create(store, &session, cwd, "default", "model", "high",
+        error, sizeof(error)));
+    memcpy(id, session.id, sizeof(id));
+    commit_event(&session, "goal_started", goal_started_data(goal, "wait for the reply"));
+    int64_t end = session.log_end;
+    assert(snag_session_commit(&session, "goal_blocked", json_pack("{s:s,s:s,s:s,s:s}",
+        "goal_id", goal, "actor", "model", "reason", "reply missing",
+        "wait_for", "irc: missing-peer"), NULL, error, sizeof(error)) < 0);
+    assert(session.log_end == end && session.goal_status == SNAG_GOAL_ACTIVE);
+    commit_event(&session, "goal_blocked", json_pack("{s:s,s:s,s:s,s:s}",
+        "goal_id", goal, "actor", "model", "reason", "reply missing",
+        "wait_for", "irc: team/secretary"));
+    assert(!strcmp(snag_goal_wait_for(&session), "irc: team/secretary"));
+    json_t *state = snag_checkpoint_state_encode(&session);
+    assert(state && !snag_checkpoint_state_decode(state, &restored));
+    assert(!strcmp(snag_goal_wait_for(&restored), "irc: team/secretary"));
+    snag_session_close(&restored);
+    json_decref(state);
+    assert(!snag_session_checkpoint(&session, error, sizeof(error)));
+    snag_session_close(&session);
+    assert(!snag_session_open(store, &session, id, error, sizeof(error)));
+    assert(session.checkpoint_seq && !strcmp(snag_goal_wait_for(&session), "irc: team/secretary"));
+    commit_event(&session, "goal_resumed", json_pack("{s:s}", "goal_id", goal));
+    assert(!json_object_get(session.strings, "goal_wait_for"));
+    commit_event(&session, "goal_blocked",
+        goal_reason_data(goal, "model", "reason", "old blocker"));
+    assert(strstr(snag_goal_wait_for(&session), "unspecified"));
+    state = snag_checkpoint_state_encode(&session);
+    assert(state && !snag_checkpoint_state_decode(state, &restored));
+    assert(strstr(snag_goal_wait_for(&restored), "unspecified"));
+    snag_session_close(&restored);
+    json_t *strings = json_object_get(state, "strings");
+    assert(!json_object_set_new(strings, "goal_wait_for", json_string("bogus")));
+    assert(snag_checkpoint_state_decode(state, &restored) < 0);
+    snag_session_close(&restored);
+    json_decref(state);
+    snag_session_close(&session);
+}
+
+static void
 test_service_tier(struct snag_store *store, const char *cwd)
 {
     struct snag_session session, restored;
@@ -2436,6 +2482,7 @@ main(void)
     test_history_snapshot_refresh(&store, cwd);
     test_upload_staging_lifecycle(&store, cwd);
     test_service_tier(&store, cwd);
+    test_goal_wait_channel(&store, cwd);
     test_irc_conversation_checkpoint(&store, cwd);
     test_checkpoint_optional_download_queue(cwd);
     test_one_file_checkpoint(&store, cwd);

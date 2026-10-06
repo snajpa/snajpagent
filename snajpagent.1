@@ -574,9 +574,11 @@ shows session state including the goal and its actions;
 is an alias for
 .BR /state " goal" .
 When a turn leaves a paused or blocked goal with nothing pending, the
-terminal prints an idle line naming the state, so paused no longer reads
-as stuck. A blocked goal with an armed timer says the timer is scheduled;
-it does not claim to be awaiting the operator.
+terminal prints an idle line naming the state. Blocked goals name their recorded
+wait channel: operator, IRC endpoint/nick, timer, process handle, or external
+dependency. Only an explicit operator wait names the operator. An armed timer
+is reported separately; a wait label alone does not schedule one. Older blocked
+records without a wait channel show it as unspecified.
 Armed waiting prompts continue after recovered active work.  Paused prompts
 need
 .B /next
@@ -3176,7 +3178,8 @@ control is rejected; use quotes or
 to start goal text with a command word.
 .TP
 .BR /state " goal, " /state " goal status"
-Show the durable goal with its actions.  Queued prompts run before automatic
+Show the durable goal, blocker and recorded wait channel with its actions.
+Queued prompts run before automatic
 goal continuation,
 without fresh goal reminders throughout those turns.  A retained unarmed queue
 cannot be bypassed: use
@@ -4703,10 +4706,28 @@ selection.  Results distinguish queue acceptance from failures, not remote recei
 .PP
 Explicit goal requests expose
 .B create_goal
-when no unfinished goal exists.  An active goal exposes
+when no unfinished goal exists. An unfinished goal exposes
 .B update_goal
-for rewriting, completion, or blocking.  A paused or blocked goal exposes
-neither.  A locked goal refuses the model's rewording, blocking and cancelling;
+for rewriting, completion, blocking or resuming under the current state's rules.
+Blocking requires both a nonblank reason in
+.B text
+and an explicit single-line
+.B wait_for
+value: operator, timer, irc: endpoint/nick, process: handle, or
+external: concrete dependency. Each text field permits up to 64 KiB for blocking.
+Use operator only when operator input is actually needed. For example:
+.PP
+.nf
+{"action":"block","text":"Waiting for the build result",
+ "wait_for":"irc: team.example:6697/secretary"}
+.fi
+.PP
+The label records the dependency; existing IRC and timer admission determine
+when another ordinary turn runs. Managed command handles must still be collected
+before ending a turn. Other actions omit wait_for or set it to null.
+The durable notice, idle line, goal status, goal list and retained model context
+preserve this destination. Resume, completion and cancellation clear the wait.
+A locked goal refuses the model's rewording, blocking and cancelling;
 completion and resume stay available, so a locked goal can still finish.
 .PP
 IRC is the network integration.  The event log is durable internal state, not
@@ -5483,7 +5504,7 @@ provider-policy stop pauses an active goal and waits for operator clarification;
 reopening or resuming the goal alone does not clear that stop. Other sessions
 gain no goal pause or resume transition merely from reopening.
 Resume automatically displays the saved goal and wording,
-including its status, revision, lock and blocker, even with history disabled.
+including its status, revision, lock, blocker and wait channel, even with history disabled.
 Paused and blocked goal wording remains in ordinary model context after resume
 and compaction; it need not be re-entered.  Inactive goals do not restart work.
 Queued turns retain their saved arming state.  Armed queues continue after

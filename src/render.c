@@ -502,7 +502,7 @@ static int
 render_bullet(struct snag_render *render, const char *notice)
 {
     struct snag_buf line;
-    snag_buf_init(&line, 1024u);
+    snag_buf_init(&line, strlen(notice) + sizeof("• \n"));
     int rc = snag_buf_printf(&line, "• %s\n", notice);
     if (rc == 0) rc = view_block(render, BOUNDARY_BULLET, SNAG_RENDER_ROLLOUT, STDERR_FILENO,
                         COLOR_LIFECYCLE, (char *)line.data, line.len, line.len,
@@ -3780,10 +3780,21 @@ snag_render_durable(struct snag_render *render, int fd, struct snag_render_sourc
         render->history_fd = snag_dup_read(fd);
         if (render->history_fd < 0) return -1;
     }
-    if (strcmp(type, "goal_lock_changed") == 0 || strcmp(type, "goal_paused") == 0) {
+    if (snag_string_in(type, "goal_lock_changed goal_paused goal_blocked")) {
         json_t *event = source_event(render, source);
         if (!event) return -1;
         json_t *data = json_object_get(event, "data");
+        if (!strcmp(type, "goal_blocked")) {
+            const char *wait_for = snag_json_string(data, "wait_for");
+            struct snag_buf line = {.max = SNAG_MAX_GOAL_BLOCKER + 80u};
+            int rc = snag_buf_printf(&line, "Goal blocked by model; waiting for %s",
+                wait_for ? wait_for : "unspecified (older goal record)");
+            if (rc == 0) rc = snag_buf_terminate(&line);
+            if (rc == 0) rc = render_bullet(render, (const char *)line.data);
+            snag_buf_free(&line);
+            json_decref(event);
+            return rc;
+        }
         const char *notice;
         if (strcmp(type, "goal_paused") == 0) {
             const char *reason = json_string_value(json_object_get(data, "reason"));
@@ -3877,7 +3888,6 @@ snag_render_event(struct snag_render *render, uint64_t seq, const char *type)
     else if (strcmp(type, "goal_started") == 0) notice = "Goal set";
     else if (snag_string_in(type, "goal_reworded goal_replaced")) notice = "Goal updated";
     else if (strcmp(type, "goal_resumed") == 0) notice = "Goal resumed";
-    else if (strcmp(type, "goal_blocked") == 0) notice = "Goal blocked by model";
     else if (snag_string_in(type, "goal_completed goal_cancelled")) notice = "Goal cleared";
     bool debug = snag_render_enabled(render, SNAG_PRESENT_DEBUG);
     if (!notice && !debug) return 0;

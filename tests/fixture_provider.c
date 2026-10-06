@@ -235,6 +235,12 @@ add_goal_call(struct snag_response_graph *graph, unsigned int cycle,
     char item_id[128], call_id[128];
     json_t *args = create ? json_pack("{s:s}", "objective", text) :
                            json_pack("{s:s,s:s?}", "action", action, "text", text);
+    if (args && !create && !strcmp(action, "block") &&
+        json_object_set_new(args, "wait_for", json_string(!strcmp(text, "waiting for timer") ?
+            "timer" : "external: fixture dependency")) < 0) {
+        json_decref(args);
+        return -1;
+    }
 
     if (!args || snprintf(item_id, sizeof(item_id), "item_fixture_%s_%u", suffix, cycle) < 0 ||
         snprintf(call_id, sizeof(call_id), "call_fixture_%s_%u", suffix, cycle) < 0) {

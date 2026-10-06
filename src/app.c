@@ -5515,10 +5515,12 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
                 (app->session.goal_status == SNAG_GOAL_PAUSED ||
                  app->session.goal_status == SNAG_GOAL_BLOCKED) &&
                 app->session.pending_queue_count == 0u && !app->session.pending_steering_count &&
-                app_textf(app, SNAG_UI_WARNING, "idle: goal %s",
-                    app->session.goal_status == SNAG_GOAL_PAUSED ? "paused, awaiting operator" :
-                    app->session.timer_id[0] ? "blocked, timer scheduled" :
-                    "blocked, awaiting operator") < 0) {
+                app_textf(app, SNAG_UI_WARNING, "idle: goal %s%s%s",
+                    app->session.goal_status == SNAG_GOAL_PAUSED ? "paused" :
+                        "blocked, waiting for ",
+                    app->session.goal_status == SNAG_GOAL_BLOCKED ?
+                        snag_goal_wait_for(&app->session) : "",
+                    app->session.timer_id[0] ? "; timer scheduled" : "") < 0) {
                 report_message = "idle-state notice could not be rendered";
                 goto output_fail;
             }

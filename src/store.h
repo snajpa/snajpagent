@@ -296,6 +296,8 @@ struct snag_session {
 
 const char *snag_goal_status_name(enum snag_goal_status status);
 bool snag_goal_unfinished(enum snag_goal_status status);
+bool snag_goal_wait_valid(const char *wait_for);
+const char *snag_goal_wait_for(const struct snag_session *session);
 
 void snag_store_init(struct snag_store *store);
 void snag_store_close(struct snag_store *store);

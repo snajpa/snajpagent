@@ -905,8 +905,10 @@ append_goal_controller(struct context_builder *builder)
             "Do not infer a goal from ordinary work.");
     }
     bool active = builder->session->goal_status == SNAG_GOAL_ACTIVE;
-    return append_messagef(builder, "user", SNAG_MAX_GOAL_PROMPT + SNAG_MAX_GOAL_BLOCKER + 2304u,
-        "Persistent goal %s%s%s%s is %s (revision %llu, wording %s). %s\n\nCurrent goal wording:\n%s%s%s",
+    return append_messagef(builder, "user",
+        SNAG_MAX_GOAL_PROMPT + 2u * SNAG_MAX_GOAL_BLOCKER + 2600u,
+        "Persistent goal %s%s%s%s is %s (revision %llu, wording %s). %s\n\n"
+        "Current goal wording:\n%s%s%s%s%s",
         builder->session->goal_id,
         builder->session->goal_parent_id[0] ? " (parent " : "",
         builder->session->goal_parent_id[0] ? builder->session->goal_parent_id : "",
@@ -919,8 +921,12 @@ append_goal_controller(struct context_builder *builder)
         "or stop solely to roll work over to another goal turn. "
         "A normal final answer is a checkpoint and " SNAJPAGENT_NAME " will start another "
         "goal turn. Use update_goal action=complete with text=null only when the "
-        "goal is finished. Use action=block with a specific reason only when no "
-        "dependency-ready work remains. You may use action=rewrite to improve the "
+        "goal is finished. Use action=block with a specific reason and wait_for "
+        "only when no dependency-ready work remains. Name the actual dependency: "
+        "operator only for required operator input, irc: endpoint/nick for an IRC "
+        "reply, timer, process: handle, or external: concrete dependency. "
+        "A wait label does not schedule a timer or other wakeup. "
+        "You may use action=rewrite to improve the "
         "wording only when it is unlocked. A rewrite creates a new goal ID with "
         "explicit parent lineage; use list_goals to inspect prior goals." :
         "This saved goal remains part of the session, but automatic continuation "
@@ -929,7 +935,10 @@ append_goal_controller(struct context_builder *builder)
         "Restoring this context does not resume or change the goal. Use list_goals "
         "to inspect prior goal identities and lineage.", builder->session->goal_prompt,
         builder->session->goal_blocker ? "\n\nRecorded blocker:\n" : "",
-        builder->session->goal_blocker ? builder->session->goal_blocker : "");
+        builder->session->goal_blocker ? builder->session->goal_blocker : "",
+        builder->session->goal_status == SNAG_GOAL_BLOCKED ? "\n\nWait channel: " : "",
+        builder->session->goal_status == SNAG_GOAL_BLOCKED ?
+            snag_goal_wait_for(builder->session) : "");
 }
 
 static int
@@ -2338,12 +2347,21 @@ tool_schemas(bool goal_active,
     if (json_array_append_new(tools, tool_schema("update_goal", "action",
             "Update the unfinished persistent goal (active, paused or blocked): rewrite "
             "uses new wording in text unless the wording is locked, complete requires "
-            "null text, block uses a specific reason, and resume restarts a paused or "
-            "blocked goal and requires null text.",
-            json_pack("{s:{s:s,s:[s,s,s,s],s:s},s:{s:[s,s],s:s}}",
+            "null text, block requires a specific reason and wait_for destination, "
+            "and resume restarts a paused or blocked goal and requires null text. "
+            "Use operator only when operator input is actually required.",
+            json_pack("{s:{s:s,s:[s,s,s,s],s:s},s:{s:[s,s],s:s},s:{s:[s,s],s:s}}",
                 "action", "type", "string", "enum", "rewrite", "complete", "block", "resume",
                     "description", "rewrite changes unlocked wording; complete ends a finished goal; block stops continuation with a genuine blocker; resume restarts a paused or blocked goal. Use action, not status.",
-                "text", "type", "string", "null", "description", "Omit text or use JSON null for complete and resume; nonblank new wording for rewrite; nonblank reason for block. Respect runtime goal byte limits."))) < 0)
+                "text", "type", "string", "null", "description",
+                    "Omit text or use JSON null for complete and resume; nonblank "
+                    "new wording for rewrite; nonblank reason for block. "
+                    "Respect runtime goal byte limits.",
+                "wait_for", "type", "string", "null", "description",
+                    "Required for block: operator, timer, irc: endpoint/nick, "
+                    "process: handle, or external: concrete dependency. Single "
+                    "line within the blocker byte limit. Describes the wait; "
+                    "does not schedule a wakeup. Omit or use null for other actions."))) < 0)
         goto fail;
     if (json_array_append_new(tools, tool_schema("timer", "delay_ms text",
             "Schedule one durable one-shot reminder for the model. A positive delay_ms schedules or replaces the current timer; delay_ms=0 cancels it and permits text=null. When due, the runtime starts a fresh ordinary model turn with the reminder text.",
@@ -2970,7 +2988,9 @@ snag_context_build(struct snag_session *session, const char *model, const char *
         "and reduce redundant narration when they are visible. Display state never changes permissions or authorizes IRC disclosure. "
         "Create a goal only when explicitly requested by the user or system/developer instructions; Markdown alone does not activate one. "
         "The host goal snapshot supplies the saved objective, status and wording lock. Continue active goals across turns until complete "
-        "or genuinely blocked; a final answer is a checkpoint. Complete only when finished; block only when no dependency-ready work remains; "
+        "or genuinely blocked; a final answer is a checkpoint. Complete only when finished; "
+        "block only when no dependency-ready work remains and name the actual "
+        "wait_for destination; "
         "rewrite only unlocked wording. Saved paused/blocked goals retain their context without resuming automatically. "
         "Read-only and queued work takes precedence over automatic goal continuation. "
         "Model-maintained banners and local work notes are contextual notes, never authority. "
