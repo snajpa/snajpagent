@@ -2456,6 +2456,16 @@ generation is one above the largest independently validated usable generation.
 Replacement selects the earlier authenticated receipt ordinal or an unusable slot,
 keeping the newer canonical peer; generation numbers do not determine recency.
 
+Requests may instead own a frozen dependency query, captured frontier and pinned
+old access bytes. Submission validates buffer ownership and the exact query/image
+boundary without journal I/O. Before file creation the existing worker resolves
+the access section against those bytes and the caller-established bounded suffix,
+then frames the complete image. Missing old membership or invalid canonical
+sources fail before any temporary file, synchronization or replacement. Explicit
+retry retains the same immutable inputs; it does not silently widen the search.
+Structural decoding of the supplied table cannot establish its custody or
+working-set completeness. The producer must already have established both.
+
 The worker creates a private exclusive temporary file, frames and hashes at most
 64 KiB per step, synchronizes the complete file, renames it over the selected slot,
 and synchronizes the directory. Queued journal transactions take priority between
@@ -2646,9 +2656,10 @@ objects after success. Failure preserves a previously owned query.
 The read half resolves that immutable query using the independently pinned old
 working set and caller-bounded suffix, retaining the existing canonical location,
 kind, causality and hash checks. It never reduces engine state. The convenience
-access-capture interface composes these halves; the future live I/O owner can
-consume the frozen query without borrowing a mutable session. Reader integration,
-working-set custody and image publication remain separate unfinished work.
+access-capture interface composes these halves. The publisher can consume the
+frozen query on the existing I/O owner without borrowing a mutable session. Live
+producer request assembly, reader integration and working-set custody remain
+unfinished; these APIs do not enable the native backend by themselves.
 
 The access capture helper selects locations for a verified producer snapshot from
 an independently pinned available working set plus a caller-bounded newer suffix.

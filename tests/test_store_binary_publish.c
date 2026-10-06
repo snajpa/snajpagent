@@ -232,9 +232,7 @@ image(const struct snag_binary_io_snapshot *snapshot, uint64_t generation)
 static void
 free_snapshot(struct snag_binary_io_snapshot *snapshot)
 {
-    snag_buf_free(&snapshot->core);
-    snag_buf_free(&snapshot->provider);
-    snag_buf_free(&snapshot->access);
+    snag_binary_io_snapshot_free(snapshot);
 }
 
 static void
@@ -932,9 +930,94 @@ test_invalid(void)
     fixture_free(&fixture);
 }
 
+static void
+selected_sources(bool missing)
+{
+    struct fixture fixture;
+    fixture_init(&fixture);
+    struct probe probe = {0};
+    struct snag_binary_io *io = start_owner(&fixture, &probe);
+    struct snag_binary_io_snapshot capture = snapshot(&fixture, &fixture.before, 21u);
+    snag_buf_free(&capture.access);
+    capture.access_version = 0u;
+    capture.selection = calloc(1u, sizeof(*capture.selection));
+    assert(capture.selection);
+    struct snag_binary_io_access *selection = capture.selection;
+    selection->plan.boundary = fixture.before;
+    selection->plan.needed.max = SIZE_MAX;
+    uint64_t sequence = 1u;
+    assert(!snag_buf_append(&selection->plan.needed, &sequence, sizeof(sequence)));
+    selection->available.max = SIZE_MAX;
+    unsigned char header[SNAG_BINARY_HEADER_SIZE];
+    snag_binary_header_encode(header, &fixture.identity);
+    struct snag_binary_identity identity;
+    struct snag_binary_anchor root, after;
+    assert(!snag_binary_header_decode(header, sizeof(header), &identity, &root));
+    struct snag_buf wire = {.max = SNAG_BINARY_BATCH_MAX};
+    struct snag_binary_batch batch;
+    assert(!snag_binary_batch_read(fixture.journal, fixture.before.end,
+        &root, &wire, &batch, &after));
+    assert(!snag_binary_index_tree_append_batch(NULL, &selection->frontier, &fixture.identity,
+        &root, &after, wire.data, wire.len));
+    snag_buf_free(&wire);
+    struct snag_binary_index_tree old = missing ? selection->frontier :
+        (struct snag_binary_index_tree){0};
+    selection->available_boundary = missing ? fixture.before : root;
+    assert(!snag_binary_index_tree_root(&old, selection->available_root));
+    assert(!snag_binary_checkpoint_index_encode(&selection->available, &fixture.identity,
+        &selection->available_boundary, &old, NULL, 0u));
+    struct snag_buf expected = {.max = SIZE_MAX};
+    if (!missing) {
+        struct snag_binary_checkpoint_index available;
+        assert(!snag_binary_checkpoint_index_decode(selection->available.data,
+            selection->available.len, &fixture.identity, &selection->available_boundary,
+            selection->available_root, &available));
+        struct snag_binary_io_snapshot oracle = capture;
+        oracle.selection = NULL;
+        oracle.access_version = 1u;
+        oracle.access = (struct snag_buf){.max = SIZE_MAX};
+        assert(!snag_binary_checkpoint_access_plan_read(fixture.journal, &selection->plan,
+            &available, &selection->frontier, NULL, NULL, &oracle.access));
+        expected = image(&oracle, 9u);
+        snag_buf_free(&oracle.access);
+    }
+    struct snag_binary_io_snapshot saved = capture;
+    ++selection->plan.boundary.next_seq;
+    assert(snag_binary_io_checkpoint_submit(io, &capture) < 0 && errno == EINVAL);
+    assert(!memcmp(&saved, &capture, sizeof(saved)));
+    --selection->plan.boundary.next_seq;
+    unsigned char captured_root[32];
+    assert(!snag_binary_index_tree_root(&selection->frontier, captured_root));
+    assert(!snag_binary_io_checkpoint_submit(io, &capture) && !capture.selection);
+    struct snag_binary_publication_result result;
+    int rc = await_checkpoint(io, &result);
+    if (missing) {
+        assert(rc < 0 && result.error && !result.published && !result.renamed);
+        assert(!result.temporary[0] && !probe.creates && !probe.file_syncs);
+        assert(!probe.renames && !probe.dir_syncs);
+        assert(!snag_binary_io_checkpoint_retry(io));
+        assert(await_checkpoint(io, &result) < 0 && result.error && !probe.creates);
+        check_file(&fixture, "checkpoint.0", &fixture.slots[0]);
+    } else {
+        assert(!rc && !result.error && result.published && result.generation == 9u);
+        assert(probe.owner_seen && probe.creates == 1u);
+        check_file(&fixture, "checkpoint.0", &expected);
+        assert(!snag_binary_io_checkpoint_receipt_submit(io, captured_root, 101u));
+        assert(snag_wakeup_wait(snag_binary_io_wake(io), 10000) == 1);
+        struct snag_binary_io_result pinned;
+        assert(!snag_binary_io_take(io, &pinned) && pinned.checkpoint_receipt);
+        assert(pinned.durable.next_seq == fixture.before.next_seq + 1u);
+    }
+    assert(!snag_binary_io_close(io));
+    snag_buf_free(&expected);
+    fixture_free(&fixture);
+}
+
 void
 test_store_binary_publish(void)
 {
+    selected_sources(false);
+    selected_sources(true);
     test_invalid();
     test_empty_slots();
     test_unreceipted_close();

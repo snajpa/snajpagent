@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Prepare frozen native checkpoint access sections on the existing I/O owner
+  before creating images, keeping source failures pre-publication and explicit
+  retries pinned to the captured inputs.
+
 - Separate native checkpoint dependency-query capture from canonical source I/O,
   preserving the pinned working-set and bounded-suffix closure rules.
 

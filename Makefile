@@ -117,7 +117,7 @@ BINARY_RUNTIME_SRC = src/store_binary.c src/store_binary_wire.c src/store_binary
     src/store_binary_checkpoint_calls.c src/store_binary_checkpoint_processes.c \
     src/store_binary_checkpoint_inputs.c src/store_binary_checkpoint_payloads.c \
     src/store_binary_checkpoint_core.c src/store_binary_checkpoint_provider.c \
-    src/store_binary_replay.c
+    src/store_binary_replay.c src/store_binary_checkpoint_closure.c
 COMMON_SRC += $(BINARY_RUNTIME_SRC)
 COMMON_OBJ = $(COMMON_SRC:.c=.o) $(PDF_OBJ) $(AUDIO_DEVICE_OBJ)
 HEADERS = src/tmux.h src/session_host.h src/session_relay.h src/session_client.h src/snajpagent.h src/base.h src/fs.h src/term_host.h src/wake.h src/net.h src/config.h src/secret_source.h src/credential.h src/auth.h src/login.h src/secret.h src/instructions.h src/json.h src/snag_jansson.h src/snag_jansson_abi.h src/wire.h src/context.h src/provider_retry.h src/http.h src/update.h src/provider.h src/model_cache.h src/tools.h src/process_host.h src/tools_patch.h src/irc.h src/irc_internal.h src/sse.h src/responses.h src/turn.h src/store.h src/store_internal.h src/store_record.h src/term.h src/render.h src/cli.h src/app.h src/app_internal.h src/ui.h src/history.h src/history_view.h src/vm_reader.h src/vm_grid.h src/unicode.h src/unicode_tables.inc src/base64.h src/convert.h src/media.h src/rules.h src/tools_write.h src/tools_file.h

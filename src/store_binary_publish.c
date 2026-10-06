@@ -12,7 +12,9 @@
 /* A maintenance yield quantum, independent of total snapshot size. */
 #define CHECKPOINT_CHUNK 65536u
 
-enum publication_phase { CP_CREATE, CP_WRITE, CP_FILE_SYNC, CP_RENAME, CP_DIR_SYNC, CP_COMPLETE };
+enum publication_phase {
+    CP_PREPARE, CP_CREATE, CP_WRITE, CP_FILE_SYNC, CP_RENAME, CP_DIR_SYNC, CP_COMPLETE
+};
 
 struct snag_binary_publication {
     int journal;
@@ -24,19 +26,44 @@ struct snag_binary_publication {
     struct snag_binary_publication_result result;
 };
 
+static bool
+snapshot_valid(const struct snag_binary_io_snapshot *snapshot)
+{
+    if (snapshot->core.data == snapshot->provider.data) return false;
+    const struct snag_binary_io_access *selection = snapshot->selection;
+    const struct snag_buf *buffers[] = {
+        &snapshot->core, &snapshot->provider, &snapshot->access,
+        selection ? &selection->available : NULL,
+        selection ? &selection->plan.roots : NULL,
+        selection ? &selection->plan.needed : NULL,
+        selection ? &selection->plan.ranges : NULL
+    };
+    for (size_t i = 0u; i < sizeof(buffers) / sizeof(buffers[0]); ++i) {
+        const struct snag_buf *buffer = buffers[i];
+        if (!buffer) continue;
+        if (buffer->len > buffer->max || buffer->len > buffer->cap ||
+            (buffer->len && !buffer->data)) return false;
+        for (size_t j = 0u; j < i; ++j) {
+            if (buffers[j] && buffer->data && buffer->data == buffers[j]->data) return false;
+        }
+    }
+    if (!selection) return true;
+    const struct snag_binary_anchor *left = &selection->plan.boundary;
+    const struct snag_binary_anchor *right = &snapshot->boundary;
+    return !snapshot->access_version && !snapshot->access.len &&
+        right->next_seq && left->next_seq == right->next_seq &&
+        left->end == right->end && left->turns == right->turns &&
+        left->previous == right->previous &&
+        !memcmp(left->digest, right->digest, sizeof(left->digest)) &&
+        selection->frontier.count == right->next_seq - 1u;
+}
+
 struct snag_binary_publication *
 snag_binary_publication_new(int journal, int directory, const uint64_t generations[2],
     unsigned int slot, struct snag_binary_io_snapshot *snapshot)
 {
     if (journal < 0 || directory < 0 || !generations || slot > 1u || !snapshot ||
-        snapshot->core.data == snapshot->provider.data ||
-        (snapshot->access.data && (snapshot->access.data == snapshot->core.data ||
-            snapshot->access.data == snapshot->provider.data)) ||
-        snapshot->core.len > snapshot->core.max || snapshot->core.len > snapshot->core.cap ||
-        snapshot->provider.len > snapshot->provider.max ||
-        snapshot->provider.len > snapshot->provider.cap ||
-        snapshot->access.len > snapshot->access.max ||
-        snapshot->access.len > snapshot->access.cap) {
+        !snapshot_valid(snapshot)) {
         errno = EINVAL;
         return NULL;
     }
@@ -53,6 +80,7 @@ snag_binary_publication_new(int journal, int directory, const uint64_t generatio
     publication->result.boundary = snapshot->boundary;
     publication->result.generation = latest + 1u;
     publication->result.slot = slot;
+    publication->phase = snapshot->selection ? CP_PREPARE : CP_CREATE;
     struct snag_binary_checkpoint_frame frame = {
         .identity = snapshot->identity, .boundary = snapshot->boundary,
         .generation = publication->result.generation,
@@ -67,6 +95,42 @@ snag_binary_publication_new(int journal, int directory, const uint64_t generatio
     publication->snapshot = *snapshot;
     memset(snapshot, 0, sizeof(*snapshot));
     return publication;
+}
+
+static int
+prepare_access(struct snag_binary_publication *publication)
+{
+    struct snag_binary_io_snapshot *snapshot = &publication->snapshot;
+    const struct snag_binary_io_access *selection = snapshot->selection;
+    struct snag_binary_checkpoint_index available;
+    struct snag_buf access = {.max = SIZE_MAX};
+    if (snag_binary_checkpoint_index_decode(selection->available.data,
+            selection->available.len, &snapshot->identity, &selection->available_boundary,
+            selection->available_root, &available) < 0) return -1;
+    int rc = snag_binary_checkpoint_access_plan_read(publication->journal,
+        &selection->plan, &available, &selection->frontier, NULL, NULL, &access);
+    if (!rc) {
+        struct snag_binary_checkpoint_frame frame = {
+            .identity = snapshot->identity, .boundary = snapshot->boundary,
+            .generation = publication->result.generation,
+            .core = {snapshot->core_version, snapshot->core.data, snapshot->core.len},
+            .provider = {snapshot->provider_version,
+                snapshot->provider.data, snapshot->provider.len},
+            .access = {1u, access.data, access.len}
+        };
+        rc = snag_binary_checkpoint_encoder_init(&publication->encoder, &frame);
+    }
+    if (!rc) {
+        snag_buf_free(&snapshot->access);
+        snapshot->access = access;
+        snapshot->access_version = 1u;
+        access = (struct snag_buf){0};
+        publication->phase = CP_CREATE;
+    }
+    int saved = errno;
+    snag_buf_free(&access);
+    errno = saved;
+    return rc < 0 ? -1 : 1;
 }
 
 static int
@@ -205,6 +269,9 @@ snag_binary_publication_step(struct snag_binary_publication *publication,
 {
     int rc;
     switch (publication->phase) {
+    case CP_PREPARE:
+        rc = prepare_access(publication);
+        break;
     case CP_CREATE:
         rc = create_temporary(publication, ops);
         break;
@@ -264,8 +331,21 @@ void
 snag_binary_publication_free(struct snag_binary_publication *publication)
 {
     if (!publication) return;
-    snag_buf_free(&publication->snapshot.core);
-    snag_buf_free(&publication->snapshot.provider);
-    snag_buf_free(&publication->snapshot.access);
+    snag_binary_io_snapshot_free(&publication->snapshot);
     free(publication);
+}
+
+void
+snag_binary_io_snapshot_free(struct snag_binary_io_snapshot *snapshot)
+{
+    if (!snapshot) return;
+    snag_buf_free(&snapshot->core);
+    snag_buf_free(&snapshot->provider);
+    snag_buf_free(&snapshot->access);
+    if (snapshot->selection) {
+        snag_binary_checkpoint_access_plan_free(&snapshot->selection->plan);
+        snag_buf_free(&snapshot->selection->available);
+        free(snapshot->selection);
+    }
+    *snapshot = (struct snag_binary_io_snapshot){0};
 }

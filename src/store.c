@@ -4203,9 +4203,7 @@ snag_session_binary_snapshot_capture(const struct snag_session *session,
         snag_fail(error, error_size, errno, "cannot freeze native checkpoint sections");
         goto done;
     }
-    snag_buf_free(&snapshot->core);
-    snag_buf_free(&snapshot->provider);
-    snag_buf_free(&snapshot->access);
+    snag_binary_io_snapshot_free(snapshot);
     *snapshot = staged;
     staged = (struct snag_binary_io_snapshot){0};
     snag_binary_checkpoint_sources_free(sources);

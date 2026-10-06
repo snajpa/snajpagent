@@ -2,9 +2,20 @@
 #ifndef SNAJPAGENT_STORE_BINARY_PUBLISH_H
 #define SNAJPAGENT_STORE_BINARY_PUBLISH_H
 
-#include "store_binary.h"
+#include "store_binary_checkpoint.h"
 
 #define SNAG_BINARY_CP_TEMP_SIZE (SNAG_ID_HEX_LEN + sizeof(".checkpoint..tmp"))
+
+/* Owned source-selection input for the I/O owner. The engine establishes the
+ * old access table's custody/completeness and the newer suffix bound before
+ * submission; decoding these bytes alone does not confer that authority. */
+struct snag_binary_io_access {
+    struct snag_binary_checkpoint_access_plan plan;
+    struct snag_buf available;
+    struct snag_binary_anchor available_boundary;
+    unsigned char available_root[32];
+    struct snag_binary_index_tree frontier;
+};
 
 /* Owned immutable section buffers captured at one already durable boundary.
  * Their semantic validity is established by the engine before submission.
@@ -19,7 +30,12 @@ struct snag_binary_io_snapshot {
     uint16_t core_version;
     uint16_t provider_version;
     uint16_t access_version;
+    /* Non-NULL replaces an absent finalized access section on the I/O owner.
+     * No producer, provider JSON or mutable session object is borrowed. */
+    struct snag_binary_io_access *selection;
 };
+
+void snag_binary_io_snapshot_free(struct snag_binary_io_snapshot *);
 
 /* Renamed means confirmed replacement; false does not exclude an ambiguous
  * rename. The temporary name identifies this request's created file and may
