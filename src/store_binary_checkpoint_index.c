@@ -289,6 +289,136 @@ advance_turn(const struct snag_binary_record *record, uint64_t *turn)
     return 0;
 }
 
+int
+snag_binary_cursor_capture(const struct snag_binary_anchor *before,
+    const struct snag_binary_anchor *after, const struct snag_binary_batch *batch,
+    uint64_t next_seq, struct snag_binary_cursor *out)
+{
+    if (!boundary_valid(before) || !boundary_valid(after) || !batch || !batch->data || !out ||
+        next_seq < before->next_seq || next_seq > after->next_seq) return snag_errno(EINVAL);
+    struct snag_binary_batch checked;
+    struct snag_binary_anchor found;
+    int rc = snag_binary_batch_decode(batch->data, batch->size, before, &checked, &found);
+    if (rc != 0) return rc < 0 ? rc : snag_errno(EINVAL);
+    if (checked.size != batch->size || checked.count != batch->count ||
+        checked.first_seq != batch->first_seq || !batch_within(&found, after) ||
+        found.end != after->end) return snag_errno(EINVAL);
+    size_t offset = SNAG_BINARY_BATCH_HEADER_SIZE;
+    uint64_t sequence, turn = before->turns;
+    struct snag_binary_record record;
+    struct snag_binary_cursor captured = {.before = *after, .next_seq = after->next_seq,
+        .record_offset = SNAG_BINARY_BATCH_HEADER_SIZE};
+    for (;;) {
+        size_t start = offset;
+        rc = snag_binary_record_next(&checked, &offset, &record, &sequence);
+        if (rc != 0) break;
+        if (advance_turn(&record, &turn) < 0) return -1;
+        if (sequence == next_seq) captured = (struct snag_binary_cursor){.before = *before,
+            .next_seq = next_seq, .record_offset = (uint32_t)start};
+    }
+    if (rc < 0) return -1;
+    if (turn != after->turns) return snag_errno(EINVAL);
+    *out = captured;
+    return 0;
+}
+
+int
+snag_binary_cursor_read(int fd, const struct snag_binary_anchor *through, uint64_t end,
+    struct snag_binary_cursor *cursor,
+    int (*visit)(void *, const struct snag_binary_record *, uint64_t,
+        const struct snag_binary_cursor *), bool (*cancelled)(void *), void *opaque)
+{
+    if (fd < 0 || !boundary_valid(through) || !cursor || !boundary_valid(&cursor->before) ||
+        !batch_within(&cursor->before, through) || !visit ||
+        cursor->next_seq < cursor->before.next_seq || cursor->next_seq > end ||
+        end > through->next_seq || cursor->record_offset < SNAG_BINARY_BATCH_HEADER_SIZE ||
+        cursor->record_offset > SNAG_BINARY_BATCH_MAX - SNAG_BINARY_BATCH_FOOTER_SIZE ||
+        (cursor->next_seq == cursor->before.next_seq &&
+            cursor->record_offset != SNAG_BINARY_BATCH_HEADER_SIZE)) return snag_errno(EINVAL);
+    if (cancelled_read(cancelled, opaque)) return -1;
+    struct snag_binary_cursor staged = *cursor;
+    struct snag_buf scratch = {.max = SNAG_BINARY_BATCH_MAX};
+    struct snag_binary_batch batch;
+    struct snag_binary_anchor after;
+    int rc = -1;
+    while (staged.next_seq < end || staged.next_seq != staged.before.next_seq) {
+        if (cancelled_read(cancelled, opaque)) goto done;
+        int read_rc = snag_binary_batch_read(fd, through->end, &staged.before,
+            &scratch, &batch, &after);
+        if (read_rc != 0) {
+            if (read_rc > 0) errno = EIO;
+            goto done;
+        }
+        if (!batch_within(&after, through) || staged.next_seq >= after.next_seq) {
+            errno = EINVAL;
+            goto done;
+        }
+        struct snag_binary_anchor before = staged.before;
+        uint64_t first = staged.next_seq, turn = before.turns;
+        uint32_t wanted_offset = staged.record_offset;
+        bool matched = false;
+        size_t offset = SNAG_BINARY_BATCH_HEADER_SIZE;
+        struct snag_binary_record record;
+        uint64_t sequence;
+        int next;
+        for (;;) {
+            size_t start = offset;
+            next = snag_binary_record_next(&batch, &offset, &record, &sequence);
+            if (next != 0) break;
+            if (sequence == first) {
+                if (start != wanted_offset) { errno = EINVAL; goto done; }
+                matched = true;
+            }
+            if (cancelled_read(cancelled, opaque) || advance_turn(&record, &turn) < 0) goto done;
+            if (sequence < first || sequence >= end) continue;
+            struct snag_binary_cursor cut = {.before = before, .next_seq = sequence + 1u,
+                .record_offset = (uint32_t)offset};
+            if (cut.next_seq == after.next_seq) cut = (struct snag_binary_cursor){.before = after,
+                .next_seq = after.next_seq, .record_offset = SNAG_BINARY_BATCH_HEADER_SIZE};
+            int result = visit(opaque, &record, sequence, &cut);
+            if (result < 0) goto done;
+            if (result > 1) { errno = EINVAL; goto done; }
+            staged = cut;
+            if (result == 1) { rc = 1; goto adopt; }
+        }
+        if (next < 0) goto done;
+        if (!matched || turn != after.turns) { errno = EINVAL; goto done; }
+        if (staged.next_seq == end) break;
+        if (staged.before.end != after.end) { errno = EINVAL; goto done; }
+    }
+    rc = 0;
+adopt:
+    if (cancelled_read(cancelled, opaque)) { rc = -1; goto done; }
+    *cursor = staged;
+done:
+    snag_buf_free(&scratch);
+    return rc;
+}
+
+struct contiguous_visit {
+    int (*visit)(void *, const struct snag_binary_record *, uint64_t);
+    bool (*cancelled)(void *);
+    void *opaque;
+    uint64_t first;
+};
+
+static int
+contiguous_visit(void *opaque, const struct snag_binary_record *record, uint64_t sequence,
+    const struct snag_binary_cursor *after)
+{
+    (void)after;
+    struct contiguous_visit *state = opaque;
+    if (sequence < state->first) return 0;
+    return visit_record(state->visit, state->opaque, record, sequence);
+}
+
+static bool
+contiguous_cancelled(void *opaque)
+{
+    struct contiguous_visit *state = opaque;
+    return state->cancelled && state->cancelled(state->opaque);
+}
+
 static int
 contiguous_records(int fd, const struct snag_binary_anchor *through,
     uint64_t first, uint64_t end,
@@ -298,38 +428,17 @@ contiguous_records(int fd, const struct snag_binary_anchor *through,
     if (first == end) return 0;
     struct snag_buf scratch = {.max = SNAG_BINARY_BATCH_MAX};
     struct snag_binary_batch batch;
-    struct snag_binary_anchor cursor, after;
+    struct snag_binary_anchor before;
+    struct snag_binary_cursor cursor;
     int rc = -1;
     if (cancelled_read(cancelled, opaque) ||
-        snag_binary_batch_find(fd, through, first, &scratch, &batch, &cursor) < 0) goto done;
-    while (cursor.next_seq < end) {
-        if (cancelled_read(cancelled, opaque)) goto done;
-        int read_rc = snag_binary_batch_read(fd, through->end, &cursor, &scratch, &batch, &after);
-        if (read_rc != 0) {
-            if (read_rc > 0) errno = EIO;
-            goto done;
-        }
-        if (!batch_within(&after, through)) {
-            errno = EINVAL;
-            goto done;
-        }
-        size_t offset = SNAG_BINARY_BATCH_HEADER_SIZE;
-        struct snag_binary_record record;
-        uint64_t sequence, turn = cursor.turns;
-        int next;
-        while ((next = snag_binary_record_next(&batch, &offset, &record, &sequence)) == 0) {
-            if (cancelled_read(cancelled, opaque) || advance_turn(&record, &turn) < 0) goto done;
-            if (sequence < first || sequence >= end) continue;
-            if (visit_record(visit, opaque, &record, sequence) < 0) goto done;
-        }
-        if (next < 0) goto done;
-        if (turn != after.turns) {
-            errno = EINVAL;
-            goto done;
-        }
-        cursor = after;
-    }
-    rc = 0;
+        snag_binary_batch_find(fd, through, first, &scratch, &batch, &before) < 0) goto done;
+    cursor = (struct snag_binary_cursor){.before = before, .next_seq = before.next_seq,
+        .record_offset = SNAG_BINARY_BATCH_HEADER_SIZE};
+    struct contiguous_visit state = {.visit = visit, .cancelled = cancelled, .opaque = opaque,
+        .first = first};
+    rc = snag_binary_cursor_read(fd, through, end, &cursor,
+        contiguous_visit, contiguous_cancelled, &state);
 done:
     snag_buf_free(&scratch);
     return rc;

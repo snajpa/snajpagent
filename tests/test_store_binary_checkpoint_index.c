@@ -510,6 +510,129 @@ range_turn(struct snag_buf *out, uint64_t number)
     assert(!snag_binary_event_encode(out, &event));
 }
 
+struct cursor_visit {
+    struct snag_binary_cursor cuts[10];
+    uint64_t first;
+    size_t count, calls, cancel_at, stop_at;
+    int result;
+};
+
+static bool
+cursor_cancelled(void *opaque)
+{
+    struct cursor_visit *visit = opaque;
+    return ++visit->calls == visit->cancel_at;
+}
+
+static int
+collect_cursor(void *opaque, const struct snag_binary_record *record, uint64_t sequence,
+    const struct snag_binary_cursor *after)
+{
+    struct cursor_visit *visit = opaque;
+    assert(record && sequence == visit->first + visit->count && after->next_seq == sequence + 1u);
+    assert(visit->count < sizeof(visit->cuts) / sizeof(*visit->cuts));
+    visit->cuts[visit->count++] = *after;
+    if (visit->count == visit->stop_at) {
+        if (visit->result < 0) errno = EIO;
+        return visit->result;
+    }
+    return 0;
+}
+
+static bool
+same_cursor(const struct snag_binary_cursor *a, const struct snag_binary_cursor *b)
+{
+    return a->next_seq == b->next_seq && a->record_offset == b->record_offset &&
+        a->before.end == b->before.end && a->before.next_seq == b->before.next_seq &&
+        a->before.turns == b->before.turns && a->before.previous == b->before.previous &&
+        !memcmp(a->before.digest, b->before.digest, sizeof(a->before.digest));
+}
+
+static void
+check_cursors(int fd, const struct snag_binary_anchor anchors[4])
+{
+    struct snag_binary_cursor initial = {.before = anchors[0], .next_seq = 1u,
+        .record_offset = SNAG_BINARY_BATCH_HEADER_SIZE}, cursor = initial;
+    struct cursor_visit visit = {.first = 1u};
+    assert(!snag_binary_cursor_read(fd, &anchors[3], anchors[3].next_seq,
+        &cursor, collect_cursor, cursor_cancelled, &visit));
+    assert(visit.count == 9u && cursor.next_seq == anchors[3].next_seq &&
+        cursor.before.end == anchors[3].end &&
+        cursor.record_offset == SNAG_BINARY_BATCH_HEADER_SIZE);
+    size_t calls = visit.calls;
+    struct snag_binary_cursor cuts[10] = {initial};
+    memcpy(cuts + 1u, visit.cuts, visit.count * sizeof(*visit.cuts));
+    struct snag_buf scratch = {.max = SNAG_BINARY_BATCH_MAX};
+    for (unsigned group = 0u; group < 3u; ++group) {
+        struct snag_binary_batch batch;
+        struct snag_binary_anchor after;
+        assert(!snag_binary_batch_read(fd, anchors[3].end, &anchors[group],
+            &scratch, &batch, &after));
+        for (uint64_t seq = anchors[group].next_seq; seq <= after.next_seq; ++seq) {
+            struct snag_binary_cursor captured;
+            assert(!snag_binary_cursor_capture(&anchors[group], &after, &batch, seq, &captured));
+            assert(same_cursor(&captured, &cuts[seq - 1u]));
+        }
+        unsigned char saved[sizeof(cursor)];
+        memcpy(saved, &cursor, sizeof(cursor));
+        struct snag_binary_anchor bad = after;
+        bad.digest[0] ^= 1u;
+        assert(snag_binary_cursor_capture(&anchors[group], &bad, &batch,
+            anchors[group].next_seq, &cursor) < 0 && errno == EINVAL);
+        assert(!memcmp(saved, &cursor, sizeof(cursor)));
+    }
+    /* Every real cut, including a partial batch, supports exact empty/range
+     * reads and pausing after one accepted record. Later bytes remain bounded. */
+    for (uint64_t first = 1u; first <= anchors[3].next_seq; ++first) {
+        for (uint64_t end = first; end <= anchors[3].next_seq; ++end) {
+            cursor = cuts[first - 1u];
+            visit = (struct cursor_visit){.first = first};
+            assert(!snag_binary_cursor_read(fd, &anchors[3], end, &cursor,
+                collect_cursor, NULL, &visit));
+            assert(visit.count == end - first && same_cursor(&cursor, &cuts[end - 1u]));
+        }
+        cursor = cuts[first - 1u];
+        visit = (struct cursor_visit){.first = first, .stop_at = 1u, .result = 1};
+        int expected = first < anchors[3].next_seq ? 1 : 0;
+        assert(snag_binary_cursor_read(fd, &anchors[3], anchors[3].next_seq,
+            &cursor, collect_cursor, NULL, &visit) == expected);
+        assert(same_cursor(&cursor, &cuts[first - 1u + (unsigned)expected]));
+    }
+    /* Cancellation at every observed check, even final adoption, is atomic. */
+    for (size_t at = 1u; at <= calls; ++at) {
+        cursor = initial;
+        visit = (struct cursor_visit){.first = 1u, .cancel_at = at};
+        assert(snag_binary_cursor_read(fd, &anchors[3], anchors[3].next_seq,
+            &cursor, collect_cursor, cursor_cancelled, &visit) < 0 && errno == ECANCELED);
+        assert(same_cursor(&cursor, &initial));
+    }
+    for (unsigned fault = 0u; fault < 7u; ++fault) {
+        cursor = cuts[1];
+        if (fault == 0u) ++cursor.record_offset;
+        if (fault == 1u) ++cursor.next_seq;
+        if (fault == 2u) cursor.before.digest[0] ^= 1u;
+        if (fault == 3u) cursor.record_offset = SNAG_BINARY_BATCH_HEADER_SIZE - 1u;
+        if (fault == 4u) cursor.next_seq = cursor.before.next_seq;
+        if (fault == 5u) cursor.before.end = anchors[3].end;
+        unsigned char saved[sizeof(cursor)];
+        memcpy(saved, &cursor, sizeof(cursor));
+        visit = (struct cursor_visit){.first = cursor.next_seq};
+        uint64_t end = anchors[3].next_seq + (fault == 6u);
+        assert(snag_binary_cursor_read(fd, &anchors[3], end,
+            &cursor, collect_cursor, NULL, &visit) < 0);
+        assert(!memcmp(saved, &cursor, sizeof(cursor)) && !visit.count);
+    }
+    for (int result = -1; result <= 2; result += 3) {
+        cursor = initial;
+        visit = (struct cursor_visit){.first = 1u, .stop_at = 2u, .result = result};
+        assert(snag_binary_cursor_read(fd, &anchors[3], anchors[3].next_seq,
+            &cursor, collect_cursor, NULL, &visit) < 0 && errno == (result < 0 ? EIO : EINVAL));
+        assert(visit.count == 2u && same_cursor(&cursor, &initial));
+    }
+    assert(snag_seek(fd, 0, SEEK_CUR) == 13);
+    snag_buf_free(&scratch);
+}
+
 static void
 test_grouped_ranges(void)
 {
@@ -578,6 +701,7 @@ test_grouped_ranges(void)
     assert(!snag_binary_checkpoint_index_decode(metadata.data, metadata.len,
         &identity, &anchors[2], root, &decoded));
     assert(snag_seek(fd, 13, SEEK_SET) == 13);
+    check_cursors(fd, anchors);
     check_ranges(fd, &anchors[3], &decoded, true);
     /* Well-formed, checksummed table replacements still need canonical checks. */
     for (unsigned fault = 0u; fault < 5u; ++fault) {

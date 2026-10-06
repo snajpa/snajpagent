@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Resume native record traversal at exact decoded batch cuts, without fabricated
+  per-record hashes or JSONL offsets, through the existing bounded suffix reader.
+
 - Reconstruct native writer input, queue and open-response provenance from pinned
   checkpoint sources, preserving declaration offsets and fragment spans with
   atomic cancellation and unavailable-source handling.

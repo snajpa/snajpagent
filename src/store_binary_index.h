@@ -78,6 +78,35 @@ int snag_binary_checkpoint_batch_find(int fd, const struct snag_binary_anchor *t
     const struct snag_binary_checkpoint_index *access, uint64_t sequence,
     struct snag_buf *scratch, struct snag_binary_batch *batch, struct snag_binary_anchor *before);
 
+/* Native next-record cut. before is the independently authenticated anchor
+ * before its containing batch; record_offset addresses the decoded image, never
+ * the descriptor. Batch boundaries normalize to HEADER_SIZE/anchor.next_seq. */
+struct snag_binary_cursor {
+    struct snag_binary_anchor before;
+    uint64_t next_seq;
+    uint32_t record_offset;
+};
+
+/* CPU-only capture at [before.next_seq,after.next_seq], from an authenticated
+ * immutable decoded batch and its full anchors. Exact record boundary/turn
+ * ordinal checks precede atomic replacement; no source authority is granted. */
+int snag_binary_cursor_capture(const struct snag_binary_anchor *before,
+    const struct snag_binary_anchor *after, const struct snag_binary_batch *, uint64_t next_seq,
+    struct snag_binary_cursor *out);
+
+/* Read [cursor.next_seq,end) beneath independently admitted immutable through.
+ * Caller establishes common identity/ancestry and cursor membership separately.
+ * Visit borrows record and its exact after-record cut: 0 continues,1 accepts and
+ * pauses,-1 fails; other values fail EINVAL. Return0 complete,1 paused,-1 error.
+ * Cursor changes only on0/1; callbacks must stage effects until then. Batches are
+ * read once per traversal, including validation of a partial starting cut.
+ * Cancellation before reads/visits/adoption; pread only, no index or tail repair. */
+int snag_binary_cursor_read(int fd, const struct snag_binary_anchor *through, uint64_t end,
+    struct snag_binary_cursor *,
+    int (*visit)(void *, const struct snag_binary_record *, uint64_t,
+        const struct snag_binary_cursor *after),
+    bool (*cancelled)(void *), void *opaque);
+
 /* Enumerate [first,end) in sequence order. Pinned access selects only listed
  * old working-set records, grouping physical batches; the newer suffix remains
  * contiguous. NULL access enumerates the contiguous independent oracle prefix.

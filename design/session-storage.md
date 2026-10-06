@@ -2227,6 +2227,23 @@ turn-start hint over a caller-bounded prefix. Missing or torn index bytes mean
 unavailable indexing; a negative search never proves that canonical history is
 absent. The positive result still requires canonical resolution.
 
+### Native record cursor traversal
+
+Canonical forward traversal now exposes a native next-record cursor: a full
+authenticated before-batch anchor, next sequence and decoded record offset. The
+offset is never a descriptor position. Batch-end cuts normalize to the next full
+anchor, preserving the physical byte-envelope geometry separately from decoded
+record geometry. Capture validates exact boundaries and turn ordinals in one
+immutable authenticated batch. Forward traversal reads each containing batch
+once, including validation of a partial starting cut, and can pause after an
+accepted record without fabricating a per-record hash.
+
+Errors and cancellation preserve the starting cursor and descriptor position;
+callbacks stage effects until complete or explicitly paused success. The caller
+still establishes source identity, prefix membership, ancestry and immutability.
+The existing contiguous checkpoint-suffix reader uses this same traversal; sparse
+old working-set selection remains separate and grants no arbitrary-history access.
+
 ### Native writer provenance restoration
 
 Writer working provenance has an atomic bounded restore path for independently
