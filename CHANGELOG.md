@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Reduce CPU use when preparing IRC context from long session histories. Seek
+  past unrelated checkpoint bodies while verifying selected records and their
+  hash chain.
+
 - Fix 32-bit compilation of Vim history offset bounds while preserving 64-bit
   source coordinates.
 

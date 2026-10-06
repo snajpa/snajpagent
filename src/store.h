@@ -396,7 +396,8 @@ int snag_session_checkpoint_read(struct snag_session *, json_t **state, json_t *
  * preserves the caller's cursor; the committed end is a valid empty boundary. */
 int snag_session_history_cursor_at(struct snag_session *, int64_t offset,
     struct snag_journal_cursor *, char *, size_t);
-/* Seek by sequence in the pinned prefix; zero selects its committed end. */
+/* Seek by sequence in the pinned prefix; zero selects its committed end.
+ * Checkpoint footer hints guide the search; the selected boundary is verified. */
 int snag_session_history_cursor_before(struct snag_session *, uint64_t before_seq,
     struct snag_journal_cursor *, char *, size_t);
 int snag_session_each_event_reverse(struct snag_session *, uint64_t before_seq, size_t scan_bytes,

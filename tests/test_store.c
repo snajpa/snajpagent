@@ -1560,6 +1560,11 @@ test_large_embedded_checkpoint(struct snag_store *store, const char *cwd)
     assert(snag_session_history_open(store, &view, session.id, &tail,
         error, sizeof(error)) < 0);
     snag_session_close(&view);
+    /* A seek hint for the requested checkpoint cannot authenticate its body. */
+    struct snag_journal_cursor boundary = {.offset = 123, .next_seq = 456u};
+    assert(snag_session_history_cursor_before(&session, session.checkpoint_seq,
+        &boundary, error, sizeof(error)) < 0);
+    assert(boundary.offset == 123 && boundary.next_seq == 456u);
     assert(pwrite(writer, &original, 1u, changed) == 1 && close(writer) == 0);
     assert_session_lock_retained(&session, "after large checkpoint history view");
     snag_session_close(&session);

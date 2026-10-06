@@ -3039,29 +3039,32 @@ history_read(void *opaque, void *buffer, size_t length, int64_t offset)
     return session_read_at(opaque, buffer, length, offset);
 }
 
+static int64_t
+history_record_end(struct snag_session *session, int64_t start)
+{
+    int64_t position = start;
+    while (position < session->log_end) {
+        unsigned char bytes[8192];
+        int64_t left = session->log_end - position;
+        size_t want = left < (int64_t)sizeof(bytes) ? (size_t)left : sizeof(bytes);
+        ssize_t got = session_read_at(session, bytes, want, position);
+        if (got < 0 && errno == EINTR) continue;
+        if (got <= 0 || (size_t)got > want) return -1;
+        unsigned char *newline = memchr(bytes, '\n', (size_t)got);
+        if (newline) return position + (int64_t)(newline - bytes) + 1;
+        position += got;
+        if ((uint64_t)(position - start) > SNAG_CHECKPOINT_EVENT_MAX + 1u) return -1;
+    }
+    return -1;
+}
+
 static json_t *
 history_record_read(struct snag_session *session, int64_t start, int64_t *end,
     char digest[SNAG_SHA256_HEX_LEN + 1u])
 {
     digest[0] = '\0';
     if (start < 0 || start >= session->log_end) return NULL;
-    if (*end <= start) {
-        /* Locate a record without growing a buffer for checkpoint state. */
-        int64_t position = start;
-        while (position < session->log_end && *end <= start) {
-            unsigned char bytes[8192];
-            int64_t left = session->log_end - position;
-            size_t want = left < (int64_t)sizeof(bytes) ? (size_t)left : sizeof(bytes);
-            ssize_t got = session_read_at(session, bytes, want, position);
-            if (got < 0 && errno == EINTR) continue;
-            if (got <= 0 || (size_t)got > want) return NULL;
-            unsigned char *newline = memchr(bytes, '\n', (size_t)got);
-            if (newline) *end = position + (int64_t)(newline - bytes) + 1;
-            position += got;
-            if ((uint64_t)(position - start) > SNAG_CHECKPOINT_EVENT_MAX + 1u &&
-                *end <= start) return NULL;
-        }
-    }
+    if (*end <= start) *end = history_record_end(session, start);
     if (*end <= start || *end > session->log_end ||
         (uint64_t)(*end - start - 1) > SNAG_CHECKPOINT_EVENT_MAX) return NULL;
     static const char tail[] = ",\"type\":\"session_checkpoint\",\"v\":1}\n";
@@ -3345,6 +3348,41 @@ snag_session_history_observe(struct snag_session *session, bool *incomplete,
 }
 
 static int
+history_checkpoint_hint(struct snag_session *session, int64_t start, int64_t end,
+    uint64_t *seq)
+{
+    /* The canonical checkpoint footer fits here in both journal versions.
+     * It directs a byte search only; the selected boundary is still verified. */
+    char bytes[512];
+    size_t length = end - start < (int64_t)sizeof(bytes) ?
+        (size_t)(end - start) : sizeof(bytes) - 1u;
+    ssize_t got;
+    do {
+        got = session_read_at(session, bytes, length, end - (int64_t)length);
+    } while (got < 0 && errno == EINTR);
+    if (got != (ssize_t)length || !length || bytes[length - 1u] != '\n') return -1;
+    bytes[length - 1u] = '\0';
+    static const char tail[] = ",\"type\":\"session_checkpoint\",\"v\":1}";
+    if (length < sizeof(tail)) return 0;
+    char *suffix = bytes + length - sizeof(tail);
+    if (suffix[sizeof(tail) - 3u] == '2') suffix[sizeof(tail) - 3u] = '1';
+    if (strcmp(suffix, tail)) return 0;
+    char *marker = NULL;
+    for (char *p = bytes; (p = strstr(p, ",\"seq\":")); ++p) marker = p;
+    if (!marker) return -1;
+    *marker = '{';
+    char error[128];
+    json_t *footer = snag_json_load_canonical_bounded((unsigned char *)marker,
+        strlen(marker), sizeof(bytes), error, sizeof(error));
+    const char *id = snag_json_string(footer, "session_id");
+    int rc = snag_json_exact_keys(footer, "seq session_id time_ms type v") &&
+        id && !strcmp(id, session->id) &&
+        snag_json_integer_u64(footer, "seq", seq) == 0 && *seq ? 1 : -1;
+    json_decref(footer);
+    return rc;
+}
+
+static int
 history_cursor_before(struct snag_session *session, uint64_t before,
     struct snag_journal_cursor *cursor, char *error, size_t error_size)
 {
@@ -3369,10 +3407,20 @@ history_cursor_before(struct snag_session *session, uint64_t before,
     while (low < high) {
         int64_t split = previous_newline(session, low + (high - low) / 2);
         if (split < -1) goto invalid;
-        int64_t start = split + 1, end = -1;
+        int64_t start = split + 1;
+        int64_t end = history_record_end(session, start);
+        if (start < low || end <= start || end > high ||
+            (uint64_t)(end - start - 1) > SNAG_CHECKPOINT_EVENT_MAX) goto invalid;
+        uint64_t seq;
+        int hint = history_checkpoint_hint(session, start, end, &seq);
+        if (hint < 0) goto invalid;
+        if (hint && seq != before) {
+            if (seq < before) low = end;
+            else high = start;
+            continue;
+        }
         char digest[SNAG_SHA256_HEX_LEN + 1u];
         json_t *record = history_record_read(session, start, &end, digest);
-        uint64_t seq;
         if (start < low || end > high ||
             snag_json_integer_u64(record, "seq", &seq) < 0 ||
             history_record_valid(session, record, start, end, seq, digest, error, error_size) < 0) {

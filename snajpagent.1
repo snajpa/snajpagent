@@ -3527,6 +3527,9 @@ for old history still read those older records.  The session lock, metadata and
 retained media are not alternate checkpoint files.
 Cache recovery uses the same checkpoint and recent suffix whenever a provider
 view has been saved.
+Targeted IRC source and history lookups seek past unrelated checkpoint bodies.
+The selected boundary and returned records retain full hash verification;
+seeking is not a whole-journal integrity scan.
 .PP
 Development IRC records named
 .B irc_event_v2

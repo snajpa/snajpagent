@@ -2275,6 +2275,72 @@ test_irc_source_lookup_bounds(struct snag_store *store, const char *cwd)
     }
 }
 
+static json_t *
+large_irc_checkpoint(void *opaque, const struct snag_session *session)
+{
+    (void)opaque;
+    (void)session;
+    size_t length = 8u * 1024u * 1024u;
+    char *padding = malloc(length);
+    assert(padding);
+    memset(padding, 'x', length);
+    json_t *context = json_pack("{s:o}", "padding", json_stringn(padding, length));
+    free(padding);
+    assert(context);
+    return context;
+}
+
+static void
+test_irc_lookup_skips_unrelated_checkpoint(struct snag_store *store, const char *cwd)
+{
+    struct snag_session session;
+    struct snag_context_projection projection = {0};
+    char error[512] = {0};
+    const char *prompt = "[IRC update id=11111111111111111111111111111111:44 "
+        "endpoint=fixture:1234 room=#work event=message sender=peer]\n";
+    struct snag_irc_event event = {.kind = SNAG_IRC_MESSAGE, .timestamp_ms = 1u,
+        .endpoint = "fixture:1234", .room = "#work", .nick = "peer",
+        .text = "source beyond a large checkpoint", .classified = true, .input = true,
+        .stream = "11111111111111111111111111111111", .sequence = 44u};
+    create_session(store, &session, cwd, "medium");
+    snag_context_start_new(&session);
+
+    /* Large checkpoint bodies dominate byte probes in real session journals. */
+    json_t *(*saved_checkpoint)(void *, const struct snag_session *) = session.on_checkpoint;
+    session.on_checkpoint = large_irc_checkpoint;
+    int64_t unrelated = session.log_end;
+    assert(snag_session_checkpoint(&session, error, sizeof(error)) == 0);
+    session.on_checkpoint = saved_checkpoint;
+
+    /* Exercise the legacy adjacent-checkpoint repair through context_build. */
+    uint64_t source = session.next_seq;
+    assert(snag_session_checkpoint(&session, error, sizeof(error)) == 0);
+    commit_event(&session, "irc_event", snag_irc_event_data(&event));
+    commit_event(&session, "irc_admitted", json_pack("{s:[I],s:o}",
+        "sequences", (json_int_t)source, "input", input_received_data(prompt)));
+    commit_event(&session, "turn_started", turn_started(
+        "edededededededededededededededed", 1u, prompt, cwd, json_array()));
+
+    /* The live cache owns the prefix. A seek must not revalidate unrelated
+     * checkpoint payloads merely because its byte probe lands inside one. */
+    int writer = openat(session.dir_fd, "events.jsonl", O_WRONLY | O_CLOEXEC);
+    int64_t changed = unrelated + 4u * 1024u * 1024u;
+    char original;
+    assert(writer >= 0 && pread(session.log_fd, &original, 1u, changed) == 1);
+    assert(original == 'x' && pwrite(writer, "y", 1u, changed) == 1);
+    json_t *empty = json_array();
+    int rc = snag_context_build(&session, SNAJPAGENT_MODEL, "medium", 1u, empty,
+        0u, false, NULL, NULL, NULL, NULL, &projection, error, sizeof(error), NULL);
+    if (rc < 0) fprintf(stderr, "IRC lookup through large history: %s\n", error);
+    assert(rc == 0);
+    assert(message_matching(json_object_get(projection.create_request.value,
+        "input"), event.text));
+    assert(pwrite(writer, &original, 1u, changed) == 1 && close(writer) == 0);
+    json_decref(empty);
+    snag_context_projection_free(&projection);
+    snag_session_close(&session);
+}
+
 static void
 test_admitted_room_event_stays_out_of_tool_exchange(struct snag_store *store, const char *cwd)
 {
@@ -5176,6 +5242,7 @@ main(int argc, char **argv)
     test_pending_irc_source_across_rebase(&store, cwd);
     test_irc_source_shifted_by_checkpoint(&store, cwd);
     test_irc_source_lookup_bounds(&store, cwd);
+    test_irc_lookup_skips_unrelated_checkpoint(&store, cwd);
     test_irc_context_summary(&store, cwd);
     test_admitted_room_event_stays_out_of_tool_exchange(&store, cwd);
     test_compact_groups(&store, cwd);
