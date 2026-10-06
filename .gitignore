@@ -43,6 +43,7 @@
 /tests/test_write
 /tests/test_wire
 /tests/test_upload_wire
+/tests/test_clipboard
 /tests/update-old
 /tests/update-new
 /tests/update-local

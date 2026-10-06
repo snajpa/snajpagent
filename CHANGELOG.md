@@ -4,6 +4,12 @@
 
 ## Unreleased
 
+- Add the native clipboard worker for workspace/remote integration, with
+  asynchronous UTF-8 validation, SHA256, cancellation before publication and
+  distinct write/failure outcomes. Use literal plain-text native publication
+  on macOS and fixed-argument Wayland/X11 helpers. Frontend copy actions and the
+  remote protocol remain under development.
+
 - Place Vim workspace cursors at the clicked grapheme, select transcript/report
   text by dragging, scroll the hovered window without taking keyboard focus,
   and resize splits by dragging separators. Preserve split proportions on resume.

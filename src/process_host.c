@@ -838,7 +838,8 @@ broker_spawn(struct snag_child_windows *native, HANDLE ends[3],
 
 static int
 child_spawn(struct snag_child *child, const char *shell, const char *command,
-            const char *const *argv, const char *directory, char **environment, bool pty, bool isolated)
+            const char *const *argv, const char *directory, char **environment,
+            bool pty, bool isolated, bool bounded)
 {
     struct snag_child_windows *native = calloc(1, sizeof(*native));
     HANDLE ends[3] = {0};
@@ -930,15 +931,15 @@ child_spawn(struct snag_child *child, const char *shell, const char *command,
     if (!native->job) goto native_error;
     JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits = {0};
     limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-    if (argv) {
+    if (bounded) {
         limits.BasicLimitInformation.LimitFlags |= JOB_OBJECT_LIMIT_JOB_MEMORY | JOB_OBJECT_LIMIT_JOB_TIME;
         limits.JobMemoryLimit = (SIZE_T)2u << 30;
         limits.BasicLimitInformation.PerJobUserTimeLimit.QuadPart = 60ll * 10000000ll;
     }
     /* The isolated broker explicitly terminates this job on parent death. */
     if(isolated)limits.BasicLimitInformation.LimitFlags &= ~JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-    if ((!isolated || argv) && !SetInformationJobObject(native->job, JobObjectExtendedLimitInformation,
-                                               &limits, sizeof(limits)))
+    if ((!isolated || bounded) && !SetInformationJobObject(native->job,
+        JobObjectExtendedLimitInformation, &limits, sizeof(limits)))
         goto native_error;
     if (isolated) {
         if (pty && !native->legacy_console) {
@@ -1024,7 +1025,7 @@ int
 snag_child_spawn(struct snag_child *child, const char *shell, const char *command,
                  const char *directory, char **environment, bool pty)
 {
-    return child_spawn(child, shell, command, NULL, directory, environment, pty, false);
+    return child_spawn(child, shell, command, NULL, directory, environment, pty, false, false);
 }
 
 int
@@ -1038,17 +1039,18 @@ snag_child_spawn_terminal(struct snag_child *child, const char *executable,
 }
 
 int
-snag_child_spawn_argv(struct snag_child *child,const char *const *argv,const char *directory,char **environment)
+snag_child_spawn_argv(struct snag_child *child, const char *const *argv,
+                      const char *directory, char **environment)
 {
-    if(!argv || !argv[0])return snag_errno(EINVAL);
-    return child_spawn(child,argv[0],NULL,argv,directory,environment,false,true);
+    if (!argv || !argv[0] || !snag_path_root_len(argv[0])) return snag_errno(EINVAL);
+    return child_spawn(child, argv[0], NULL, argv, directory, environment, false, true, true);
 }
 
 int
 snag_child_spawn_isolated(struct snag_child *child, const char *shell, const char *command,
                           const char *directory, char **environment)
 {
-    return child_spawn(child, shell, command, NULL, directory, environment, false, true);
+    return child_spawn(child, shell, command, NULL, directory, environment, false, true, false);
 }
 
 #ifdef SNAG_LEGACY_PTY
@@ -1056,7 +1058,7 @@ int
 snag_child_spawn_legacy_pty(struct snag_child *child, const char *shell, const char *command,
                             const char *directory, char **environment)
 {
-    return child_spawn(child, shell, command, NULL, directory, environment, true, true);
+    return child_spawn(child, shell, command, NULL, directory, environment, true, true, false);
 }
 #endif
 
@@ -1338,9 +1340,9 @@ kill_child_group(pid_t pid, int signo)
 
 static void
 exec_child(const char *shell, const char *command, const char *const *argv, const char *workdir,
-           int stdin_rd, int stdout_wr, int stderr_wr, char **env)
+           int stdin_rd, int stdout_wr, int stderr_wr, char **env, bool bounded)
 {
-    if (argv) {
+    if (bounded) {
         struct rlimit cpu = {60u, 60u}, memory = {2ull << 30, 2ull << 30};
         struct rlimit files = {32u << 20, 32u << 20}, core = {0u, 0u};
         if (setrlimit(RLIMIT_CPU, &cpu) ||
@@ -1435,7 +1437,7 @@ exec_pty_child(const char *shell, const char *command, const char *const *argv,
 {
     if (setsid() < 0) _exit(125);
     (void)ioctl(slave_fd, TIOCSCTTY, 0);
-    exec_child(shell, command, argv, workdir, slave_fd, slave_fd, slave_fd, env);
+    exec_child(shell, command, argv, workdir, slave_fd, slave_fd, slave_fd, env, false);
 }
 #else
 static void
@@ -1467,7 +1469,8 @@ snag_child_init(struct snag_child *child)
 
 static int
 child_spawn(struct snag_child *child, const char *shell, const char *command,
-            const char *const *argv, const char *directory, char **environment, bool pty)
+            const char *const *argv, const char *directory, char **environment,
+            bool pty, bool bounded)
 {
     int pipes[3][2] = {{-1, -1}, {-1, -1}, {-1, -1}};
     int master = -1, slave = -1;
@@ -1506,7 +1509,8 @@ child_spawn(struct snag_child *child, const char *shell, const char *command,
             close_if_open(&pipes[1][0]);
             close_if_open(&pipes[2][1]);
             (void)setpgid(0, 0);
-            exec_child(shell, command, argv, directory, pipes[2][0], pipes[0][1], pipes[1][1], environment);
+            exec_child(shell, command, argv, directory, pipes[2][0], pipes[0][1],
+                pipes[1][1], environment, bounded);
         }
     }
     if (pty) {
@@ -1751,7 +1755,7 @@ int
 snag_child_spawn(struct snag_child *child, const char *shell, const char *command,
                  const char *directory, char **environment, bool pty)
 {
-    return child_spawn(child, shell, command, NULL, directory, environment, pty);
+    return child_spawn(child, shell, command, NULL, directory, environment, pty, false);
 }
 
 int
@@ -1759,7 +1763,7 @@ snag_child_spawn_argv(struct snag_child *child, const char *const *argv,
                       const char *directory, char **environment)
 {
     if (!argv || !argv[0] || !snag_path_root_len(argv[0])) { errno = EINVAL; return -1; }
-    return child_spawn(child, argv[0], NULL, argv, directory, environment, false);
+    return child_spawn(child, argv[0], NULL, argv, directory, environment, false, true);
 }
 
 int
@@ -1767,6 +1771,27 @@ snag_child_spawn_terminal(struct snag_child *child, const char *executable,
                            const char *const *argv)
 {
     if (!argv || !argv[0] || !snag_path_root_len(executable)) return snag_errno(EINVAL);
-    return child_spawn(child, executable, NULL, argv, NULL, NULL, true);
+    return child_spawn(child, executable, NULL, argv, NULL, NULL, true, false);
 }
 #endif
+
+int
+snag_child_spawn_host(struct snag_child *child, const char *const *argv)
+{
+    if (!argv || !argv[0] || !snag_path_root_len(argv[0])) return snag_errno(EINVAL);
+    char *directory = snag_realpath(".");
+    char **environment = snag_environment_entries();
+    int rc = -1;
+    if (directory && environment) {
+#ifdef _WIN32
+        rc = child_spawn(child, argv[0], NULL, argv, directory, environment, false, true, false);
+#else
+        rc = child_spawn(child, argv[0], NULL, argv, directory, environment, false, false);
+#endif
+    }
+    int error = errno;
+    free(directory);
+    snag_environment_entries_free(environment);
+    errno = error;
+    return rc;
+}

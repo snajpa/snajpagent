@@ -1162,8 +1162,8 @@ their own active transactions before dispatching ordinary key bindings.
 ### 10.1 Local copy
 
 Always commit a yank to the internal register first. Prefer a workstation-native
-clipboard backend: platform API or a discovered fixed-argv helper such as
-`pbcopy`, `wl-copy` or `xclip`, with data on stdin. Never interpolate selected
+clipboard backend: a native plain-text API or a discovered fixed-argv helper
+such as `wl-copy` or `xclip`, with data on stdin. Never interpolate selected
 text into shell code. Detect an available graphical session and report helper
 exit/failure; a helper name alone does not establish clipboard availability.
 
@@ -1174,6 +1174,27 @@ Do not probe by reading the clipboard. Ordinary OSC 52 emission has no reliable
 end-to-end write receipt; report “clipboard sequence sent”, distinct from a
 confirmed native write. Respect the backend's size support and preserve the
 internal register when external copy fails.
+
+The clipboard worker is implemented as a separate preparation/publication state
+machine. It clones a memory selection or retains its immutable file descriptor,
+validates UTF-8 and computes SHA256 asynchronously, then waits at a READY barrier.
+Cancellation accepted before publication preserves the existing clipboard.
+Publication uses a host-utility runner with inherited desktop cwd, environment
+and resource limits. Bounded document-converter launch remains separate.
+
+On macOS a fixed JavaScript for Automation program runs through the system
+`osascript` executable. It reads only stdin and writes those bytes to the native
+pasteboard's `public.utf8-plain-text` flavor. GUI frameworks stay in that helper
+process; linking them into the terminal process can make Darwin reject a forked
+converter's existing data-segment limit before exec. Wayland uses `wl-copy --type
+text/plain;charset=utf-8`; X11 uses `xclip -selection clipboard -in -target
+UTF8_STRING`. Helper diagnostics are drained without exposing copied data. A
+helper that stops accepting data or completing for ten seconds is interrupted;
+publication already begun then has an uncertain outcome. Confirmed native writes,
+unavailable backends, preparation failures, cancellation and uncertain writes
+have distinct results. Private-pasteboard tests verify literal Unicode and text
+resembling rich formats without touching the general clipboard. UI actions and
+remote publication are the next integration step.
 
 ### 10.2 Remote copy
 
@@ -1189,8 +1210,10 @@ chunks are acknowledged without duplication. A completed operation ID returns
 its receipt on retry instead of repeating clipboard publication. Receipts
 distinguish native success, OSC emission, cancellation and failure.
 
-Cancellation, expired attachment, replaced controller, truncated input or digest
-failure leaves the old workstation clipboard untouched. A successful clipboard
+Before publication, cancellation, an expired attachment, a replaced controller,
+truncated input or a digest failure leaves the old workstation clipboard untouched.
+After publication begins, cancellation returns its actual result or an uncertain
+outcome. A successful clipboard
 write followed by a lost receipt is reported as uncertain until its receipt can
 be recovered. New yanks serialize behind or explicitly cancel the previous
 operation; late ACKs cannot finish a different selection. After capability
