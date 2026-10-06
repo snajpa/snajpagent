@@ -5,10 +5,10 @@
 #include "vm_input.h"
 #include "vm_selection.h"
 
-struct snag_vm_connection;
+struct snag_vm_buffer;
 struct snag_vm_undo;
 
-/* History belongs to a session draft; the unnamed register belongs to the
+/* History belongs to a conversation draft; the unnamed register belongs to the
  * workspace and can be pasted into any composer. Neither enters model context. */
 struct snag_vm_editor {
     struct snag_vm_undo *undo, *redo;
@@ -34,13 +34,13 @@ enum snag_vm_edit_result {
 };
 
 void snag_vm_editor_reset(struct snag_vm_editor *);
-int snag_vm_editor_begin(struct snag_vm_connection *);
-int snag_vm_editor_end(struct snag_vm_connection *);
-int snag_vm_editor_replace(struct snag_vm_connection *, size_t begin, size_t end,
+int snag_vm_editor_begin(struct snag_vm_buffer *);
+int snag_vm_editor_end(struct snag_vm_buffer *);
+int snag_vm_editor_replace(struct snag_vm_buffer *, size_t begin, size_t end,
     const void *text, size_t length);
-int snag_vm_editor_undo(struct snag_vm_connection *, bool redo, size_t count);
-void snag_vm_editor_normal(struct snag_vm_connection *, bool from_insert);
-enum snag_vm_edit_result snag_vm_editor_key(struct snag_vm_connection *,
+int snag_vm_editor_undo(struct snag_vm_buffer *, bool redo, size_t count);
+void snag_vm_editor_normal(struct snag_vm_buffer *, bool from_insert);
+enum snag_vm_edit_result snag_vm_editor_key(struct snag_vm_buffer *,
     struct snag_vm_register *, const struct snag_vm_input_event *, bool insert,
     size_t columns, size_t rows, size_t top);
 

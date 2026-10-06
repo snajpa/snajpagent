@@ -18,6 +18,9 @@ struct snag_vm_read_request {
     enum snag_vm_read_kind kind;
     uint64_t stored_limit;
     json_t *report, *known_reports;
+    /* A query route selects its stable conversation and local identity across
+     * all retained generations. Sending still uses the exact captured route. */
+    json_t *route;
     /* Immutable full IDs of other open buffers whose verified descriptors stay
      * cached. Request copies the array. Omit to retain only this request's view. */
     json_t *retained_sessions;

@@ -1913,7 +1913,7 @@ to the workspace reapplies the current setting.
 In a read-only transcript, picker or help view,
 .B :q
 or :close closes the window; the last window exits the workspace.
-In an attached transcript, :q requests normal owner shutdown and waits for its
+In an attached rollout transcript, :q requests normal owner shutdown and waits for its
 acknowledgement; :qa requests shutdown of every owner controlled by this workspace,
 then exits. Unsent drafts or unresolved submissions block these commands.
 :q! and :qa! discard the affected drafts and request the same normal shutdown.
@@ -1931,7 +1931,7 @@ Leaving an untouched initial picker creates no saved workspace.
 .PP
 Snapshots are private files under $DOTDIR/workspaces/WORKSPACE_ID/workspace.json.
 They retain the layout, focus, selection, filters, transcript source anchors,
-verbosity, FOLLOW/HOLD, per-session drafts and unresolved submissions.
+verbosity, FOLLOW/HOLD, per-conversation drafts and unresolved submissions.
 Unsent classic-attachment input retains its destination session too.
 Restoring a controlled view attempts to reattach its existing owner; a busy or
 unavailable owner leaves the draft intact. Other transcript views read history
@@ -1970,8 +1970,10 @@ Native owner launch requires a supported POSIX host.
 .SS "Attach and compose"
 .B :attach SESSION_ID
 opens and controls an existing workspace-capable owner. With no operand,
-:attach reconnects the current transcript. Splits of that session share one
-draft and one controller. :detach releases it for all those views and preserves
+:attach reconnects the current transcript or query. All buffers of a session
+share one controller; splits displaying the same conversation share its draft
+and undo history. Different conversations keep separate drafts.
+:detach releases control for all those views and preserves
 the running owner. In NORMAL, Ctrl-C requests the owner's ordinary turn interruption.
 Attached window status shows the provider, model, effort and working/idle state
 reported by the owner.
@@ -2042,8 +2044,49 @@ or changed owner leaves the submission retained without automatic retransmission
 Inspect history, then use
 .B :recover
 with an empty draft to recover its text if needed. A refused submission also
-remains recoverable. Rollout text and the commands listed below are supported.
-IRC routes and attachments remain under development.
+remains recoverable. Each conversation retains its own pending submission and
+frozen recipient. A nick or connection change preserves the old draft and rejects
+sending it to a different recipient. File attachments remain under development.
+.SS "Private conversation windows"
+Enter /query NICK or /query ENDPOINT/NICK in an attached composer to open an
+operator private conversation in that window. A successful command changes the
+requesting window while it is still focused, displaying that composer, and its
+next draft is empty. Otherwise the conversation remains available in :buffers.
+Private replies go to the captured peer without adding model input.
+.PP
+.B :buffers
+lists the workspace's rollout and private conversation buffers, including
+operator and read-only agent conversations. The list shows buffer IDs, qualified
+addresses, identity, drafts and pending submissions. Use / to filter, then Enter
+to open the selected buffer in the current window.
+.B :buffer ADDRESS
+or :b ADDRESS opens a known buffer by session/endpoint/nick address; session names
+and ID prefixes are accepted. :buffer ID accepts a unique ID prefix from :buffers,
+which also distinguishes retained routes after a nick or connection change.
+An ambiguous address leaves the selected buffer unchanged.
+.B :bnext
+(:bn) and :bprevious (:bp) cycle the current session's buffers.
+Tab retains the history/composer focus control; classic mode uses Tab/Shift-Tab
+for its destination cycle.
+.PP
+.B :vsp [ADDRESS_OR_ID]
+and :sp [ADDRESS_OR_ID] create vertical or horizontal splits and select a known
+buffer there. Without an argument they display another view of the current
+buffer. Enter /query in a split's composer to open a new conversation there.
+A failed buffer lookup leaves the new split displaying its previous buffer.
+.PP
+Query history, gg/G, search, visual selection and copy read only that connection,
+conversation and local identity across retained connection generations.
+A search announces its match after the viewport is loaded; following navigation
+and selection keys wait for that read. Beginning a new composer edit interrupts
+a pending viewport move and preserves the draft.
+The operator can inspect agent private conversations; their composers are
+read-only. Query windows and their drafts survive named-workspace resume.
+:q closes a query window and preserves its owner; :qa retains its explicit
+shutdown meaning for all controlled owners. :history returns to the rollout.
+.PP
+Successful /msg, /notice and private /me commands preserve the conversation
+window. Their command reports remain available through :reports.
 .SS "Read command output"
 Submit a slash command from the transcript composer. Supported commands include
 /help, /status, /history, /model, /fast, /effort, /context, /state, /goal,

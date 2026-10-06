@@ -11,6 +11,7 @@ import unittest
 import uuid
 
 import test_vm_frontend as frontend
+from test_vm_frontend import rollout
 
 # Each standalone fixture consumes a binary argument at import time. The
 # frontend has already consumed ours; preserve unittest's optional selectors.
@@ -59,7 +60,7 @@ class ControlTests(unittest.TestCase):
     def wait_synced(self, text):
         digest = hashlib.sha256(text.encode()).hexdigest()
         return self.wait_snapshot(lambda rows:
-            (next(iter(rows.values()))['state']['buffers'][0].get('base') or {}).get('sha256')
+            (rollout(next(iter(rows.values()))['state']['buffers'][0]).get('base') or {}).get('sha256')
             == digest)
 
     def owner_draft(self, text=None):
@@ -111,8 +112,8 @@ class ControlTests(unittest.TestCase):
         self.owner.status('detached')
         self.assertEqual(self.owner_draft()['text'], 'retained 👩‍💻-final')
         saved = next(iter(self.snapshots().values()))['state']
-        self.assertEqual(saved['v'], 7)
-        self.assertEqual(saved['buffers'][0]['draft'], 'retained 👩‍💻-final')
+        self.assertEqual(saved['v'], 8)
+        self.assertEqual(rollout(saved['buffers'][0])['draft'], 'retained 👩‍💻-final')
         self.assertTrue(saved['buffers'][0]['control'])
         self.assertEqual(self.inputs(), [])
 
@@ -127,15 +128,15 @@ class ControlTests(unittest.TestCase):
         path, = (self.root / 'state' / 'workspaces').glob('*/workspace.json')
         for choice in ('owner', 'local'):
             saved = json.loads(path.read_text())
-            saved['state']['buffers'][0]['draft'] = 'local ' + choice
-            saved['state']['buffers'][0]['cursor'] = len('local ' + choice)
+            rollout(saved['state']['buffers'][0])['draft'] = 'local ' + choice
+            rollout(saved['state']['buffers'][0])['cursor'] = len('local ' + choice)
             path.write_text(json.dumps(saved))
             self.owner_draft('owner ' + choice)
             resumed = self.start('--resume', 'conflict', expect=b'history')
             resumed.repaint_until(b'Draft conflict')
             rows = self.wait_snapshot(lambda rows:
-                next(iter(rows.values()))['state']['buffers'][0].get('conflict') is not None)
-            buffer = next(iter(rows.values()))['state']['buffers'][0]
+                rollout(next(iter(rows.values()))['state']['buffers'][0]).get('conflict') is not None)
+            buffer = rollout(next(iter(rows.values()))['state']['buffers'][0])
             self.assertEqual(buffer['draft'], 'local ' + choice)
             self.assertEqual(buffer['conflict']['text'], 'owner ' + choice)
             resumed.finish('close')
@@ -146,7 +147,7 @@ class ControlTests(unittest.TestCase):
             resumed.repaint_until(b'Draft conflict')
             resumed.command('workspace save')
             self.wait_snapshot(lambda rows: next(iter(rows.values()))['activity_ms'] > previous)
-            self.assertEqual(json.loads(path.read_text())['state']['buffers'][0]['conflict']['text'],
+            self.assertEqual(rollout(json.loads(path.read_text())['state']['buffers'][0])['conflict']['text'],
                              'owner ' + choice)
             resumed.command('draft ' + choice)
             expected = choice + ' ' + choice
@@ -166,8 +167,8 @@ class ControlTests(unittest.TestCase):
         child.finish('close')
         path, = (self.root / 'state' / 'workspaces').glob('*/workspace.json')
         saved = json.loads(path.read_text())
-        saved['state']['buffers'][0]['draft'] = 'local offline edit'
-        saved['state']['buffers'][0]['cursor'] = len('local offline edit')
+        rollout(saved['state']['buffers'][0])['draft'] = 'local offline edit'
+        rollout(saved['state']['buffers'][0])['cursor'] = len('local offline edit')
         path.write_text(json.dumps(saved))
         resumed = self.start('--resume', 'offline', expect=b'history')
         self.wait_synced('local offline edit')
@@ -182,8 +183,13 @@ class ControlTests(unittest.TestCase):
         saved['state'].pop('classic')
         for window in saved['state']['windows']:
             window.get('history', {}).pop('source', None)
+            window.get('history', {}).pop('route', None)
+        buffer = rollout(saved['state']['buffers'][0])
+        owner = saved['state']['buffers'][0]
+        saved['state']['buffers'][0] = {
+            'session': owner['session'], 'control': owner['control'],
+            'draft': buffer['draft'], 'cursor': buffer['cursor'], 'pending': buffer['pending']}
         buffer = saved['state']['buffers'][0]
-        del buffer['base'], buffer['conflict'], buffer['reports']
         buffer['draft'], buffer['cursor'] = '', 0
         path.write_text(json.dumps(saved))
         resumed = self.start('--resume', 'offline', expect=b'history')
@@ -199,7 +205,7 @@ class ControlTests(unittest.TestCase):
         child.repaint_until(b'Draft conflict')
         child.finish('q!')
         self.owner.status('stored')
-        buffer = next(iter(self.snapshots().values()))['state']['buffers'][0]
+        buffer = rollout(next(iter(self.snapshots().values()))['state']['buffers'][0])
         self.assertEqual(buffer['draft'], '')
         self.assertIsNone(buffer['conflict'])
         self.assertEqual(self.inputs(), [])
@@ -215,8 +221,8 @@ class ControlTests(unittest.TestCase):
         self.owner.status('detached')
         child.command('draft owner')
         self.wait_snapshot(lambda rows:
-            next(iter(rows.values()))['state']['buffers'][0]['draft'] == 'retained owner copy' and
-            next(iter(rows.values()))['state']['buffers'][0]['conflict'] is None)
+            rollout(next(iter(rows.values()))['state']['buffers'][0])['draft'] == 'retained owner copy' and
+            rollout(next(iter(rows.values()))['state']['buffers'][0])['conflict'] is None)
         child.finish('close')
         self.assertEqual(self.owner_draft()['text'], 'retained owner copy')
         self.assertEqual(self.inputs(), [])
@@ -231,7 +237,7 @@ class ControlTests(unittest.TestCase):
         try:
             child.write(b'-suffix')
             self.wait_snapshot(lambda rows:
-                next(iter(rows.values()))['state']['buffers'][0]['draft'] == 'acknowledged-suffix')
+                rollout(next(iter(rows.values()))['state']['buffers'][0])['draft'] == 'acknowledged-suffix')
             child.signal(signal.SIGTERM)
             child.wait_exit()
         finally:
@@ -282,7 +288,7 @@ class ControlTests(unittest.TestCase):
         self.owner.status('detached')
         self.assertEqual(self.owner_draft()['text'], 'final source draft')
         source = next(x for x in self.snapshots().values() if x['name'] == 'source')
-        self.assertEqual(source['state']['buffers'][0]['draft'], 'final source draft')
+        self.assertEqual(rollout(source['state']['buffers'][0])['draft'], 'final source draft')
         self.assertTrue(source['state']['buffers'][0]['control'])
         child.finish()
         self.assertEqual(self.inputs(), [])
@@ -295,14 +301,14 @@ class ControlTests(unittest.TestCase):
         self.owner.status('attached')
         child.write('iAe\u0301'.encode() + b'\x7f')
         child.write(b'\x1b[200~' + '👩‍💻\n:qa\nliteral'.encode() + b'\x1b[201~')
-        self.wait_snapshot(lambda rows: next(iter(rows.values()))['state']['buffers'][0]['draft']
+        self.wait_snapshot(lambda rows: rollout(next(iter(rows.values()))['state']['buffers'][0])['draft']
                            == 'A👩‍💻\n:qa\nliteral')
         child.write(b'\rnext-draft')
         event = self.owner.wait_event('input_received')
         self.assertEqual(event['data']['text'], 'A👩‍💻\n:qa\nliteral')
         self.wait_snapshot(lambda rows:
-                           next(iter(rows.values()))['state']['buffers'][0]['pending'] is None and
-                           next(iter(rows.values()))['state']['buffers'][0]['draft'] == 'next-draft')
+                           rollout(next(iter(rows.values()))['state']['buffers'][0])['pending'] is None and
+                           rollout(next(iter(rows.values()))['state']['buffers'][0])['draft'] == 'next-draft')
         self.assertEqual(len(self.inputs()), 1)
         self.escape(child)
         child.command('q')
@@ -345,15 +351,15 @@ class ControlTests(unittest.TestCase):
         # explicit recovery takes precedence over automatic terminal handoff.
         child.write(b'i/config\r\x1b:')
         self.wait_snapshot(lambda rows:
-            (next(iter(rows.values()))['state']['buffers'][0].get('base') or {}).get(
+            (rollout(next(iter(rows.values()))['state']['buffers'][0]).get('base') or {}).get(
                 'revision', 0) >= 3)
         self.assertEqual(self.inputs(), [])
         child.write(b'recover\r')
         child.repaint_until(b'Submission recovered')
         rows = self.wait_snapshot(lambda rows:
-                                  next(iter(rows.values()))['state']['buffers'][0]['draft']
+                                  rollout(next(iter(rows.values()))['state']['buffers'][0])['draft']
                                   == '/config')
-        self.assertIsNone(next(iter(rows.values()))['state']['buffers'][0]['pending'])
+        self.assertIsNone(rollout(next(iter(rows.values()))['state']['buffers'][0])['pending'])
         child.finish('close')
         self.owner.status('detached')
 
@@ -366,7 +372,7 @@ class ControlTests(unittest.TestCase):
         child.finish('close')
         path, = (self.root / 'state' / 'workspaces').glob('*/workspace.json')
         saved = json.loads(path.read_text())
-        saved['state']['buffers'][0]['pending'] = {
+        rollout(saved['state']['buffers'][0])['pending'] = {
             'id': uuid.uuid4().hex, 'instance': instance, 'text': 'possibly-admitted-text'}
         path.write_text(json.dumps(saved))
         resumed = self.start('--resume', 'uncertain', expect=b'history')
@@ -387,7 +393,7 @@ class ControlTests(unittest.TestCase):
         child.until(b'ATTACHED')
         child.write(b'idurable-unsent')
         self.wait_snapshot(lambda rows:
-                           next(iter(rows.values()))['state']['buffers'][0]['draft']
+                           rollout(next(iter(rows.values()))['state']['buffers'][0])['draft']
                            == 'durable-unsent')
         while child.read(.1):
             pass
@@ -407,13 +413,13 @@ class ControlTests(unittest.TestCase):
         child.write(b'iadmitted text\rnext draft')
         self.owner.wait_event('input_received')
         self.wait_snapshot(lambda rows:
-            next(iter(rows.values()))['state']['buffers'][0]['pending'] is None and
-            next(iter(rows.values()))['state']['buffers'][0]['draft'] == 'next draft')
+            rollout(next(iter(rows.values()))['state']['buffers'][0])['pending'] is None and
+            rollout(next(iter(rows.values()))['state']['buffers'][0])['draft'] == 'next draft')
         self.escape(child)
         child.write(b'uu')
         child.command('workspace name after-undo')
         rows = self.wait_snapshot(lambda rows: next(iter(rows.values()))['name'] == 'after-undo')
-        self.assertEqual(next(iter(rows.values()))['state']['buffers'][0]['draft'], '')
+        self.assertEqual(rollout(next(iter(rows.values()))['state']['buffers'][0])['draft'], '')
         child.write(b'ilocal draft')
         self.escape(child)
         child.command('detach')
@@ -425,7 +431,7 @@ class ControlTests(unittest.TestCase):
         child.command('workspace name after-adoption')
         rows = self.wait_snapshot(lambda rows:
                                   next(iter(rows.values()))['name'] == 'after-adoption')
-        self.assertEqual(next(iter(rows.values()))['state']['buffers'][0]['draft'],
+        self.assertEqual(rollout(next(iter(rows.values()))['state']['buffers'][0])['draft'],
                          'remote replacement')
         self.assertEqual(len(self.inputs()), 1)
         child.finish('close')
@@ -440,8 +446,8 @@ class ControlTests(unittest.TestCase):
         try:
             child.write(b'\rnewer-text')
             self.wait_snapshot(lambda rows:
-                               next(iter(rows.values()))['state']['buffers'][0]['pending'] and
-                               next(iter(rows.values()))['state']['buffers'][0]['draft']
+                               rollout(next(iter(rows.values()))['state']['buffers'][0])['pending'] and
+                               rollout(next(iter(rows.values()))['state']['buffers'][0])['draft']
                                == 'newer-text')
             # Drain the test terminal, let the queued wire request leave, then
             # hold only this disposable frontend before allowing owner admission.
@@ -459,8 +465,8 @@ class ControlTests(unittest.TestCase):
         resumed = self.start('--resume', 'lost-receipt', expect=b'history')
         resumed.repaint_until(b'Prompt committed')
         self.wait_snapshot(lambda rows:
-                           next(iter(rows.values()))['state']['buffers'][0]['pending'] is None)
-        self.assertEqual(next(iter(self.snapshots().values()))['state']['buffers'][0]['draft'],
+                           rollout(next(iter(rows.values()))['state']['buffers'][0])['pending'] is None)
+        self.assertEqual(rollout(next(iter(self.snapshots().values()))['state']['buffers'][0])['draft'],
                          'newer-text')
         self.assertEqual(len(self.inputs()), 1)
         resumed.finish('close')
@@ -470,14 +476,14 @@ class ControlTests(unittest.TestCase):
         child.command('history ' + self.owner.sid)
         child.write('i👩💻'.encode() + b'\x1b[D' + '\u200d'.encode())
         rows = self.wait_snapshot(lambda rows:
-                                  next(iter(rows.values()))['state']['buffers'][0]['draft'] == '👩‍💻')
-        self.assertEqual(next(iter(rows.values()))['state']['buffers'][0]['cursor'], len('👩‍💻'.encode()))
+                                  rollout(next(iter(rows.values()))['state']['buffers'][0])['draft'] == '👩‍💻')
+        self.assertEqual(rollout(next(iter(rows.values()))['state']['buffers'][0])['cursor'], len('👩‍💻'.encode()))
         self.escape(child)
         child.finish('close')
         resumed = self.start('--resume', 'clusters', expect=b'history')
         resumed.write(b'A\x7f')
         self.wait_snapshot(lambda rows:
-                           next(iter(rows.values()))['state']['buffers'][0]['draft'] == '')
+                           rollout(next(iter(rows.values()))['state']['buffers'][0])['draft'] == '')
         self.escape(resumed)
         resumed.finish()
 
@@ -487,7 +493,7 @@ class ControlTests(unittest.TestCase):
         child.until(b'ATTACHED')
         child.write(b'ipreserve this\x1b:workspace save\r')
         self.wait_snapshot(lambda rows:
-                           next(iter(rows.values()))['state']['buffers'][0]['draft']
+                           rollout(next(iter(rows.values()))['state']['buffers'][0])['draft']
                            == 'preserve this')
         self.assertEqual(self.inputs(), [])
         child.finish('close')

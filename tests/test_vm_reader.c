@@ -2,6 +2,7 @@
 #include "vm_reader.h"
 #include "fs.h"
 #include "history_view.h"
+#include "irc.h"
 #include "json.h"
 #include "vm_connection.h"
 #include "vm_report.h"
@@ -918,7 +919,7 @@ owner_state_test(void)
         struct snag_vm_connection *connection =
             snag_vm_connection_new("0123456789abcdef0123456789abcdef");
         assert(connection);
-        assert(snag_vm_draft_replace(connection, 0u, 0u, "retained draft", 14u) == 0);
+        assert(snag_vm_draft_replace(connection->rollout, 0u, 0u, "retained draft", 14u) == 0);
         snag_view_channel_init(&connection->channel, sockets[0]);
         connection->hello = true;
         char hash[SNAG_SHA256_HEX_LEN + 1u];
@@ -965,8 +966,8 @@ owner_state_test(void)
             assert(connection->channel.fd >= 0 && snag_vm_connection_tail(connection, &tail));
             assert(json_equal(connection->state, state) && tail.next_seq == 11u + variant);
         } else assert(connection->channel.fd < 0 && !snag_vm_connection_tail(connection, &tail));
-        assert(connection->draft.len == 14u &&
-            !memcmp(connection->draft.data, "retained draft", 14u));
+        assert(connection->rollout->draft.len == 14u &&
+            !memcmp(connection->rollout->draft.data, "retained draft", 14u));
         json_decref(state);
         snag_view_channel_close(&peer);
         snag_vm_connections_free(connection);
@@ -974,11 +975,140 @@ owner_state_test(void)
 #endif /* _WIN32 */
 }
 
+static void
+query_history_test(struct snag_store *store, const char *root)
+{
+    struct snag_session source;
+    snag_session_init(&source);
+    char error[256] = "";
+    assert(snag_session_create(store, &source, root, "default", "query-pages", "high",
+        error, sizeof(error)) == 0);
+    struct snag_irc_event irc = {.routed = true, .kind = SNAG_IRC_MESSAGE,
+        .timestamp_ms = 1u, .endpoint = "test:6667", .nick = "first",
+        .text = "old epoch marker", .route = {
+            .connection = "11111111111111111111111111111111",
+            .conversation = "22222222222222222222222222222222",
+            .generation = 1u, .identity = SNAG_IRC_OPERATOR, .kind = SNAG_IRC_QUERY,
+            .peer = "first", .target = "operator"}};
+    uint64_t first = source.next_seq;
+    projection_record(&source, "irc_event_v2", snag_irc_event_data(&irc));
+    json_t *route = json_pack("{s:s,s:s,s:i,s:s,s:s}",
+        "connection", irc.route.connection, "conversation", irc.route.conversation,
+        "generation", 1, "identity", "operator", "peer", "first");
+    assert(route);
+    char *padding = malloc(1024u * 1024u + 1u);
+    assert(padding);
+    memset(padding, 'x', 1024u * 1024u);
+    padding[1024u * 1024u] = 0;
+    for (unsigned int part = 0u; part < 2u; ++part) {
+        for (unsigned int i = 0u; i < 5u; ++i)
+            projection_record(&source, "response_output", json_pack("{s:s,s:i,s:i,s:o}",
+                "response_id", "33333333333333333333333333333333", "index", (int)i,
+                "offset", 0, "item", response_item(padding)));
+        if (!part) {
+            irc.route.generation = 2u;
+            strcpy(irc.route.peer, "renamed");
+            strcpy(irc.text, "new epoch marker");
+            projection_record(&source, "irc_event_v2", snag_irc_event_data(&irc));
+        }
+    }
+    free(padding);
+    strcpy(irc.route.conversation, "44444444444444444444444444444444");
+    strcpy(irc.text, "foreign query marker");
+    projection_record(&source, "irc_event_v2", snag_irc_event_data(&irc));
+    struct snag_vm_reader *reader = snag_vm_reader_open(store, NULL, error, sizeof(error));
+    assert(reader);
+    struct snag_vm_read_request request = {.project = true, .columns = 80u,
+        .verbosity = 1u, .trusted_tail = true, .route = route};
+    memcpy(request.session_id, source.id, sizeof(request.session_id));
+    request.tail = public_cursor(&source);
+    struct snag_vm_read_result *page = await_page(reader, snag_vm_reader_request(reader, &request));
+    assert(!page->error_number && json_array_size(page->blocks) == 1u);
+    assert(!strcmp(snag_json_string(json_array_get(page->blocks, 0u), "text"), "old epoch marker"));
+    snag_vm_read_result_free(page);
+    request.reverse = true;
+    page = await_page(reader, snag_vm_reader_request(reader, &request));
+    assert(!page->error_number && json_array_size(page->blocks) == 1u);
+    assert(!strcmp(snag_json_string(json_array_get(page->blocks, 0u), "text"), "new epoch marker"));
+    request.before_seq = page->cursor.next_seq;
+    snag_vm_read_result_free(page);
+    page = await_page(reader, snag_vm_reader_request(reader, &request));
+    assert(!page->error_number && json_array_size(page->blocks) == 1u);
+    assert(json_integer_value(json_object_get(json_array_get(page->blocks, 0u), "seq")) ==
+        (json_int_t)first);
+    snag_vm_read_result_free(page);
+    request.reverse = false;
+    request.before_seq = 0u;
+    request.query = "foreign query marker";
+    page = await_page(reader, snag_vm_reader_request(reader, &request));
+    assert(!page->error_number && !page->found);
+    snag_vm_read_result_free(page);
+    request.query = "new epoch marker";
+    page = await_page(reader, snag_vm_reader_request(reader, &request));
+    assert(!page->error_number && page->found && page->match.seq > first);
+    snag_vm_read_result_free(page);
+    snag_vm_reader_close(reader);
+    json_decref(route);
+    char prefix[9];
+    memcpy(prefix, source.id, 8u);
+    prefix[8] = 0;
+    assert(snag_session_delete(store, &source, prefix, NULL, error, sizeof(error)) == 0);
+    snag_session_close(&source);
+}
+
+static void
+conversation_snapshot_test(void)
+{
+    struct snag_vm_connection *owner =
+        snag_vm_connection_new("0123456789abcdef0123456789abcdef");
+    json_t *route = json_pack("{s:s,s:s,s:i,s:s,s:s}",
+        "connection", "11111111111111111111111111111111",
+        "conversation", "22222222222222222222222222222222",
+        "generation", 1, "identity", "operator", "peer", "first");
+    assert(owner && route);
+    struct snag_vm_buffer *first = snag_vm_buffer_get(owner, route, true);
+    assert(first && first == snag_vm_buffer_get(owner, route, true));
+    assert(snag_vm_buffer_writable(first));
+    assert(snag_vm_draft_replace(first, 0u, 0u, "private draft", 13u) == 0);
+    assert(json_object_set_new(route, "generation", json_integer(2)) == 0);
+    struct snag_vm_buffer *later = snag_vm_buffer_get(owner, route, true);
+    assert(later && later != first && !later->draft.len);
+    assert(json_object_set_new(route, "identity", json_string("agent")) == 0);
+    struct snag_vm_buffer *agent = snag_vm_buffer_get(owner, route, true);
+    assert(agent && !snag_vm_buffer_writable(agent));
+    assert(snag_vm_buffer_prepare(agent, 1u) < 0 && errno == EACCES);
+    assert(!owner->rollout->draft.len && snag_vm_connection_unsaved(owner));
+
+    json_t *saved = snag_vm_connections_json(owner);
+    struct snag_vm_connection *restored = NULL;
+    assert(saved && snag_vm_connections_load(saved, &restored) == 0);
+    assert(restored && !restored->rollout->draft.len);
+    json_t *roundtrip = snag_vm_connections_json(restored);
+    assert(roundtrip && json_equal(saved, roundtrip));
+    json_decref(roundtrip);
+    struct snag_vm_buffer *copy = snag_vm_buffer_get(restored, first->route, false);
+    assert(copy && copy->draft.len == first->draft.len &&
+        !memcmp(copy->draft.data, first->draft.data, first->draft.len));
+    assert(snag_vm_buffer_get(restored, later->route, false));
+    assert(!snag_vm_buffer_writable(snag_vm_buffer_get(restored, agent->route, false)));
+    snag_vm_connections_free(restored);
+    restored = NULL;
+    json_t *buffers = json_object_get(json_array_get(saved, 0u), "buffers");
+    assert(json_array_append(buffers, json_array_get(buffers, 0u)) == 0);
+    assert(snag_vm_connections_load(saved, &restored) < 0 && !restored);
+    snag_vm_connection_discard(owner);
+    assert(!snag_vm_connection_unsaved(owner));
+    json_decref(saved);
+    json_decref(route);
+    snag_vm_connections_free(owner);
+}
+
 int
 main(void)
 {
     projection_test();
     owner_state_test();
+    conversation_snapshot_test();
     char *root = snag_path_join(getenv("TMPDIR") ? getenv("TMPDIR") : "/tmp",
         "snajpagent-vm-reader-XXXXXX");
     char error[256];
@@ -997,6 +1127,7 @@ main(void)
     public_full_pages_test(&store, root);
     search_blocks_test();
     search_history_test(&store, root);
+    query_history_test(&store, root);
     assert(snag_session_create(&store, &source, root, "default", "test-secret-value", "high",
         error, sizeof(error)) == 0);
     source.on_checkpoint = large_context;

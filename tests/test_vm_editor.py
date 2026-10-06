@@ -7,6 +7,7 @@ import time
 import unittest
 
 import test_vm_frontend as frontend
+from test_vm_frontend import rollout
 
 
 class EditorTests(unittest.TestCase):
@@ -33,7 +34,7 @@ class EditorTests(unittest.TestCase):
             return rows and next(iter(rows.values()))['name'] == name
 
         rows = frontend.WorkspaceTests.wait_snapshot(self, ready)
-        buffer = next(iter(rows.values()))['state']['buffers'][0]
+        buffer = rollout(next(iter(rows.values()))['state']['buffers'][0])
         self.assertEqual(buffer['draft'], text)
         if cursor is not None:
             self.assertEqual(buffer['cursor'], cursor)
@@ -189,7 +190,7 @@ class EditorTests(unittest.TestCase):
         self.child.write(b'p')
         self.check('first ')
         buffers = next(iter(self.snapshots().values()))['state']['buffers']
-        self.assertEqual(next(x['draft'] for x in buffers if x['session'] == self.journal.parent.name),
+        self.assertEqual(next(rollout(x)['draft'] for x in buffers if x['session'] == self.journal.parent.name),
                          'first second')
 
     def test_large_count_stops_at_text_boundary(self):

@@ -6,6 +6,7 @@ import unittest
 
 import test_vm_search as search
 import test_vm_reports as reports
+from test_vm_frontend import rollout
 
 
 class SelectionTests(unittest.TestCase):
@@ -20,7 +21,7 @@ class SelectionTests(unittest.TestCase):
 
     def assert_draft(self, child, expected):
         state = self.save(child)
-        self.assertEqual(state['buffers'][0]['draft'], expected)
+        self.assertEqual(rollout(state['buffers'][0])['draft'], expected)
 
     def copied(self, child, keys):
         child.output.clear()
@@ -169,7 +170,7 @@ class ReportSelectionTests(unittest.TestCase):
         rows = self.wait_snapshot(lambda rows: rows and
             next(iter(rows.values()))['name'] == 'copied-report')
         state = next(iter(rows.values()))['state']
-        self.assertEqual(state['buffers'][0]['draft'], '/status\n')
+        self.assertEqual(rollout(state['buffers'][0])['draft'], '/status\n')
         self.assertEqual(self.inputs(), [])
         self.assertEqual(self.owner.journal.read_bytes(), before)
         child.finish('q!')

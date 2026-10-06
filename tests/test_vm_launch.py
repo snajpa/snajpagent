@@ -13,6 +13,7 @@ import unittest
 import test_vm_frontend as frontend
 
 BINARY = frontend.BINARY
+from test_vm_frontend import rollout
 
 
 class LaunchTests(unittest.TestCase):
@@ -85,7 +86,7 @@ class LaunchTests(unittest.TestCase):
         child.command('workspace save')
         rows = self.wait_snapshot(lambda rows: rows and
             any(row['state'].get('buffers') and
-                all(buffer.get('base') for buffer in row['state']['buffers'])
+                all(rollout(buffer).get('base') for buffer in row['state']['buffers'])
                 for row in rows.values()))
         state = next(row['state'] for row in rows.values() if row['state'].get('buffers'))
         sid = next(window['history']['session'] for window in state['windows']
@@ -339,7 +340,7 @@ os.execv({str(BINARY)!r}, [{str(BINARY)!r}] + sys.argv[1:])
         self.assertEqual(len(self.owner_pids()), 2)
         child.command('workspace save')
         self.wait_snapshot(lambda rows: len(next(iter(rows.values()))['state']['buffers']) == 2 and
-            all(buffer.get('base') for buffer in next(iter(rows.values()))['state']['buffers']))
+            all(rollout(buffer).get('base') for buffer in next(iter(rows.values()))['state']['buffers']))
         child.finish('qa!')
         for journal in self.journals():
             self.status(journal.parent.name, 'stored')

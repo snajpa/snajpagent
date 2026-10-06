@@ -4,6 +4,14 @@
 
 ## Unreleased
 
+- Add Vim private conversation buffers with separate drafts, undo histories and
+  pending submissions while sharing one owner controller. `/query` opens the
+  originating window; `:buffers`, `:buffer`, `:bn`/`:bp` and addressed splits
+  select known conversations. Agent queries are read-only. Query history,
+  search and visual copy stay within the selected conversation. Version8
+  workspaces retain these routes and accept earlier rollout snapshots. Preserve
+  immediate selection after search while its matched viewport loads.
+
 - Extend the semantic owner with private-query routes, separate revisioned
   drafts and route-bound receipts. Reject stale recipients after nick or
   connection changes. Admit private input during provider work without model
@@ -11,7 +19,7 @@
   returns a window selection, and `/msg`, `/notice`, `/me` use captured routes.
   Classic focus and drafts remain independent. Reject messages consisting only
   of empty or stripped lines without clearing their drafts or claiming admission.
-  Vim conversation panes are in progress.
+  Channel panes remain in progress.
 
 - Add shared operator query commands: `/query` opens or selects a private tab,
   `/msg` and `/notice` send without changing focus, and `/me` sends a private
@@ -19,7 +27,7 @@
   exact conversation selectors and endpoint case mapping. Capture known peers
   and connection generations at submission; reject stale recipients and restore
   unsent commands. Bare query addresses require an unambiguous endpoint.
-  Channel addressing/actions and Vim conversation windows remain in progress.
+  Channel addressing/actions remain in progress.
 
 - Keep opened private chats in the classic Tab cycle, with separate drafts,
   unread indicators and conversation-scoped buffered output. Shift-Tab cycles

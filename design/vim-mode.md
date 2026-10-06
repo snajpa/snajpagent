@@ -6,6 +6,20 @@ Status: implementation in progress, October 6, 2026. The original inspection
 was against `7a70d81d336ef6f14d91ef944b1226c8efa65636`. The checkpoint below
 distinguishes implemented components from the complete intended behavior.
 
+Conversation frontend checkpoint: version8 workspace snapshots retain exact
+query routes per window and separate draft/editor/pending state per conversation,
+with one owner connection per session. Earlier flat rollout snapshots remain
+readable. Owner query metadata populates :buffers without changing focus; agent
+queries are read-only. /query selects its originating focused window only while
+its composer remains current and empty. :buffer accepts known qualified addresses
+or picker IDs; :sp/:vsp can open them in a new window, and :bn/:bp cycle buffers.
+Successful private sends retain the current pane while retaining command reports.
+Query projection, search, navigation and copy filter stable connection/conversation
+IDs and local identity across retained epochs. Empty filtered journal pages advance
+until matching events or the pinned boundary; every read remains cancellable.
+Channel panes, activity badges, protocol/recovery and complete remote qualification
+remain in the delivery plan below.
+
 Selection checkpoint: character, line and rectangular transcript/report selection
 now uses original source endpoints and a pinned history boundary. The background
 reader streams projected pages into the shared register; empty motions and
@@ -124,8 +138,9 @@ after owner restart through background :reports/:report reads. Complete rows are
 validated; a partial final append remains distinguishable from committed entries.
 Native /cat copies an open regular file into a retained snapshot in cancellable
 chunks. New captures preserve older report bytes; classic /cat keeps its pager.
-The frontend connection manager now shares one draft and owner lease per session
-across split windows. Workspace state v3 adds drafts and pending request identities,
+The frontend connection manager shares one owner lease per session across split
+windows. The original rollout composer now lives beside separate query composers;
+windows displaying the same exact route share its editor and undo history. Workspace state v3 adds drafts and pending request identities,
 accepts v1/v2 layouts, and saves before transmitting a submission. Reconnect queries
 receipts; unknown outcomes retain text for explicit recovery. Newer drafts survive
 older receipts. The composer supports grapheme edits, multiline literal paste and
@@ -148,7 +163,7 @@ fresh snapshot is reconciled. Terminal loss retains any unacknowledged suffix
 in the private workspace snapshot. Classic editor draft bridging remains separate.
 The composer now supports multiplied counts, Unicode word/grapheme and logical/
 display motions, line opening, delete/change/yank operators, a workspace register
-and per-session undo/redo. Undo records changed ranges, with one temporary
+and per-conversation undo/redo. Undo records changed ranges, with one temporary
 pre-edit snapshot while grouping typing; bracketed paste has independent boundaries.
 Submission/recovery and adopted owner text clear local undo state. Splits share
 the session editor and keep separate composer viewports. Register and undo state

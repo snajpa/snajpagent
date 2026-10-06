@@ -14,6 +14,7 @@ from pathlib import Path
 from unittest import mock
 
 import test_vm_control as control
+from test_vm_frontend import rollout
 
 
 class Native:
@@ -170,7 +171,7 @@ input()
         child.until(b'\x1b[?1049l')
         child.until(b'terminal-editor-ready', 10)
         observer = self.owner.view()
-        pending = next(iter(self.snapshots().values()))['state']['buffers'][0]['pending']
+        pending = rollout(next(iter(self.snapshots().values()))['state']['buffers'][0])['pending']
         observer.send(type='receipt', id=pending['id'])
         self.assertEqual(observer.until('result')['status'], 'pending')
         child.output.clear()
@@ -184,7 +185,7 @@ input()
         self.assertEqual((self.root / 'editor-runs').read_text(), 'started\n')
         self.assertEqual(self.inputs(), [])
         saved = next(iter(self.snapshots().values()))['state']['buffers'][0]
-        self.assertIsNone(saved['pending'])
+        self.assertIsNone(rollout(saved)['pending'])
         self.assertEqual(saved['reports'][0]['command'], '/config')
         report = self.owner.directory / ('.view-report-' + saved['reports'][0]['id'])
         self.assertIn(b'configuration unchanged:', report.read_bytes())
@@ -284,8 +285,8 @@ input()
         resumed = self.start('--resume', 'both-drafts', expect=b'history')
         resumed.repaint_until(b'newer workspace draft')
         rows = self.wait_snapshot(lambda rows:
-            next(iter(rows.values()))['state']['buffers'][0]['pending'] is None)
-        self.assertEqual(next(iter(rows.values()))['state']['buffers'][0]['draft'],
+            rollout(next(iter(rows.values()))['state']['buffers'][0])['pending'] is None)
+        self.assertEqual(rollout(next(iter(rows.values()))['state']['buffers'][0])['draft'],
                          'newer workspace draft')
         resumed.finish('close')
         classic = self.owner.start(['--resume', self.owner.sid])
@@ -306,7 +307,7 @@ input()
         peer.close()
         path, = (self.root / 'state' / 'workspaces').glob('*/workspace.json')
         saved = json.loads(path.read_text())
-        saved['state']['buffers'][0]['pending'] = {
+        rollout(saved['state']['buffers'][0])['pending'] = {
             'id': request, 'instance': peer.capabilities['instance'], 'text': '/config'}
         path.write_text(json.dumps(saved))
         resumed = self.start('--resume', 'manual', expect=b'history')

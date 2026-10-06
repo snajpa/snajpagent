@@ -364,23 +364,24 @@ updater-free. The manual covers channels, publisher URLs and recovery.
 `./configure` probes the toolchain and the four optional modalities and tunes the
 tracked `config.mk`; `make WITH_*=…` stays an explicit override.
 
-The development `snajpagent vm` frontend provides named workspaces, saved Vim
-splits, retained transcripts, retrospective verbosity, search, mouse controls and
-Vim composer editing. `:new [NAME]` creates an agent; `:session ID` resumes one.
-`:close` saves its draft and detaches; `:q` requests shutdown. Restoring a workspace
-leaves stopped owners stopped.
+The development `snajpagent vm` frontend provides named workspaces, splits,
+retained transcripts, retrospective verbosity, search, mouse controls and Vim
+editing. `:new [NAME]` creates an agent; `:session ID` resumes one. `:close`
+detaches; `:q` shuts down an attached rollout owner or closes a query pane.
+Restoring a workspace leaves stopped owners stopped.
 
-Slash commands open retained reports. `:reports` lists them; `:history` returns
-to the session. Search with `/TEXT`, `?TEXT` and `n`/`N`; select with `v`, `V` or
-Ctrl-V and yank with `y`. Explicit yanks copy to the workstation clipboard,
-including through `snajpagent remote`; `[terminal] clipboard` selects `native`,
-`osc52` or `off`. OSC 52 acceptance is unconfirmed.
+`/query NICK` opens a private conversation. `:buffers` lists conversations;
+`:vsp ADDRESS` opens one in a split. Each conversation keeps its draft and undo
+history; agent queries are read-only.
 
-`:classic [SESSION_ID]` opens an owner's terminal. Interactive commands use it
-automatically and return afterward; `/s d` returns from a general attachment.
-See the manual's Vim workspace section for editing, reports, draft conflicts
-and connection controls, and [the design](design/vim-mode.md) for implementation
-status. `make WITH_VM=0` omits this optional frontend; builds include it by default.
+`:reports` lists command output; `:history` returns to rollout. Search with
+`/TEXT`, `?TEXT` and `n`/`N`; select with `v`, `V` or Ctrl-V and yank with `y`.
+Yanks copy to the workstation clipboard, including through `snajpagent remote`.
+`[terminal] clipboard` selects `native`, `osc52` or `off`; OSC 52 is unconfirmed.
+
+`:classic [SESSION_ID]` opens an owner's terminal; `/s d` returns. Interactive
+commands use it automatically. See the manual for controls and [the design](design/vim-mode.md)
+for implementation status. `WITH_VM=0` omits this frontend.
 
 The POSIX build needs C11 with pthreads, GNU make, pkg-config and
 libcurl/Jansson development files. On the BSDs, install GNU make and use `gmake`

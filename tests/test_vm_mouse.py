@@ -49,6 +49,7 @@ def position(child, marker, occurrence=0, minimum=1):
             return found[occurrence]
         child.read(.05)
     raise AssertionError((marker, found))
+from test_vm_frontend import rollout
 
 
 class MouseTests(unittest.TestCase):
@@ -97,7 +98,7 @@ class MouseTests(unittest.TestCase):
         # A delayed/repeated button release must not cancel an asynchronous yank.
         mouse(child, last[0], last[1] + 5, release=True)
         child.write(b'P')
-        self.assertEqual(self.save(child)['buffers'][0]['draft'], selected)
+        self.assertEqual(rollout(self.save(child)['buffers'][0])['draft'], selected)
         self.assertEqual(journal.read_bytes(), before)
         child.finish()
 
@@ -183,7 +184,7 @@ class MouseTests(unittest.TestCase):
         time.sleep(.06)
         child.repaint_until(b'NORMAL composer')
         state = self.save(child)
-        self.assertEqual(state['buffers'][0]['draft'], 'draft-X界é\nsecond-line')
+        self.assertEqual(rollout(state['buffers'][0])['draft'], 'draft-X界é\nsecond-line')
         self.assertEqual(journal.read_bytes(), before)
         child.finish()
 
@@ -227,7 +228,7 @@ class MouseTests(unittest.TestCase):
         for byte in sequence:
             child.write(bytes([byte]))
         child.write(b'yP')
-        self.assertEqual(self.save(child)['buffers'][0]['draft'], 'remote-copy')
+        self.assertEqual(rollout(self.save(child)['buffers'][0])['draft'], 'remote-copy')
         child.finish()
 
     @unittest.skipUnless(shutil.which('tmux'), 'tmux is unavailable')
@@ -259,7 +260,7 @@ class MouseTests(unittest.TestCase):
         mouse(child, *where)
         mouse(child, *where, release=True)
         child.write(b'ywP')
-        self.assertEqual(self.save(child)['buffers'][0]['draft'], 'marker ')
+        self.assertEqual(rollout(self.save(child)['buffers'][0])['draft'], 'marker ')
         self.assertEqual(journal.read_bytes(), before)
         child.finish()
 
@@ -284,7 +285,7 @@ class ReportMouseTests(unittest.TestCase):
         mouse(child, row, column + 6, button=32)
         mouse(child, row, column + 6, release=True)
         child.write(b'yP')
-        self.assertEqual(self.save(child)['buffers'][0]['draft'], 'status')
+        self.assertEqual(rollout(self.save(child)['buffers'][0])['draft'], 'status')
         self.assertEqual(self.inputs(), [])
         self.assertEqual(self.owner.journal.read_bytes(), before)
         child.finish('q!')

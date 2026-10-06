@@ -16,6 +16,7 @@ frontend, owners = control.frontend, control.owners
 OLD_OWNER = os.environ.get('SNAJPAGENT_VM_CLASSIC_OWNER_BINARY')
 if OLD_OWNER:
     owners.BINARY = Path(OLD_OWNER).resolve()
+from test_vm_frontend import rollout
 
 
 class ClassicTests(unittest.TestCase):
@@ -96,7 +97,7 @@ class ClassicTests(unittest.TestCase):
         child.repaint_until(b'unsent semantic draft')
         child.command('workspace save')
         self.wait_snapshot(lambda rows: len(next(iter(rows.values()))['state']['windows']) == 2)
-        self.assertEqual(self.saved()['buffers'][0]['draft'], 'unsent semantic draft')
+        self.assertEqual(rollout(self.saved()['buffers'][0])['draft'], 'unsent semantic draft')
         child.command('close')
         child.finish('close')
         self.owner.status('detached')
@@ -122,7 +123,7 @@ class ClassicTests(unittest.TestCase):
         child.repaint_until(b'INSERT')
         child.write(b'\x1b:workspace save\r')
         self.wait_snapshot(lambda rows: next(iter(rows.values()))['state']['classic'] is None)
-        self.assertEqual(self.saved()['buffers'][0]['draft'], 'kept\n\\x1b[A')
+        self.assertEqual(rollout(self.saved()['buffers'][0])['draft'], 'kept\n\\x1b[A')
         child.finish('close')
         self.assertEqual(self.inputs(), [])
         self.owner.status('stored')
@@ -146,7 +147,7 @@ class ClassicTests(unittest.TestCase):
         child.write(b'\x1b:workspace save\r')
         self.wait_snapshot(lambda rows: next(iter(rows.values()))['state']['classic'] is None)
         self.assertEqual(self.saved()['buffers'][0]['session'], self.owner.sid)
-        self.assertEqual(self.saved()['buffers'][0]['draft'], 'unknown\n\\x00\\xff')
+        self.assertEqual(rollout(self.saved()['buffers'][0])['draft'], 'unknown\n\\x00\\xff')
         child.finish('close')
         self.assertEqual(self.inputs(), [])
 

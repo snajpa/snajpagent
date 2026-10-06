@@ -5,6 +5,7 @@ import json
 import unittest
 
 import test_vm_control as control
+from test_vm_frontend import rollout
 
 
 class ReportTests(unittest.TestCase):
@@ -86,6 +87,12 @@ class ReportTests(unittest.TestCase):
         for version in (6, 7):
             snapshot = json.loads(json.dumps(original))
             snapshot['state']['v'] = version
+            owner = snapshot['state']['buffers'][0]
+            old = dict(rollout(owner))
+            for key in ('route', 'window', 'endpoint'):
+                old.pop(key)
+            old.update(session=owner['session'], control=owner['control'], reports=owner['reports'])
+            snapshot['state']['buffers'][0] = old
             if version == 6:
                 del snapshot['state']['windows'][0]['source']
             path.write_text(json.dumps(snapshot))
@@ -93,7 +100,7 @@ class ReportTests(unittest.TestCase):
             resumed.repaint_until(report['id'][:8].encode())
             resumed.command('workspace save')
             rows = self.wait_snapshot(lambda rows:
-                next(iter(rows.values()))['state']['v'] == 7 and
+                next(iter(rows.values()))['state']['v'] == 8 and
                 next(iter(rows.values()))['state']['windows'][0].get('source'))
             window = next(iter(rows.values()))['state']['windows'][0]
             self.assertEqual(window['byte'], saved['windows'][0]['byte'])
@@ -138,7 +145,7 @@ class ReportTests(unittest.TestCase):
         self.owner.status('detached')
         path, = (self.root / 'state' / 'workspaces').glob('*/workspace.json')
         saved = json.loads(path.read_text())
-        saved['state']['buffers'][0]['pending'] = {
+        rollout(saved['state']['buffers'][0])['pending'] = {
             'id': request, 'instance': instance, 'text': '/fast'}
         path.write_text(json.dumps(saved))
         resumed = self.start('--resume', 'lost-receipt', expect=b'history')

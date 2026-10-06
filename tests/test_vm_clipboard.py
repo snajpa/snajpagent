@@ -16,6 +16,7 @@ from pathlib import Path
 
 import test_vm_frontend as frontend
 from test_upload_client import FixtureChildren
+from test_vm_frontend import rollout
 
 
 class ClipboardTests(unittest.TestCase):
@@ -136,7 +137,7 @@ class ClipboardTests(unittest.TestCase):
         child.write(b'P')
         child.command('workspace name copied')
         rows = self.wait_snapshot(lambda rows: rows and next(iter(rows.values()))['name'] == 'copied')
-        draft = next(iter(rows.values()))['state']['buffers'][0]['draft']
+        draft = rollout(next(iter(rows.values()))['state']['buffers'][0])['draft']
         self.assertEqual(draft, 'copy é界 {\\rtf1 literal}')
         self.assertEqual(journal.read_bytes(), before)
         child.finish()
@@ -159,7 +160,7 @@ class ClipboardTests(unittest.TestCase):
         child.write(b'P')
         child.command('workspace name retained')
         rows = self.wait_snapshot(lambda rows: rows and next(iter(rows.values()))['name'] == 'retained')
-        self.assertEqual(next(iter(rows.values()))['state']['buffers'][0]['draft'],
+        self.assertEqual(rollout(next(iter(rows.values()))['state']['buffers'][0])['draft'],
                          'copy é界 literal\n')
         child.finish()
 
@@ -187,7 +188,7 @@ class ClipboardTests(unittest.TestCase):
         child.write(b'P')
         child.command('workspace name canceled')
         rows = self.wait_snapshot(lambda rows: rows and next(iter(rows.values()))['name'] == 'canceled')
-        self.assertEqual(next(iter(rows.values()))['state']['buffers'][0]['draft'],
+        self.assertEqual(rollout(next(iter(rows.values()))['state']['buffers'][0])['draft'],
                          'copy é界 literal\n')
         child.finish()
 
@@ -371,7 +372,7 @@ class ClipboardTests(unittest.TestCase):
         time.sleep(.06)
         child.command('workspace name replies')
         rows = self.wait_snapshot(lambda rows: rows and next(iter(rows.values()))['name'] == 'replies')
-        self.assertEqual(next(iter(rows.values()))['state']['buffers'][0]['draft'], 'plain')
+        self.assertEqual(rollout(next(iter(rows.values()))['state']['buffers'][0])['draft'], 'plain')
         self.assertNotIn(b'\x1b]52;', child.output)
         child.finish()
 

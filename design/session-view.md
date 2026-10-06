@@ -23,8 +23,13 @@ The frontend retains report buffers and hands terminal-required commands to a
 bound classic attachment. Finite editor and transfer commands return after
 completion; native /cat retains a report snapshot. Deferred-control reports
 replay across reconnect, and their catalogue survives owner restart. The owner
-accepts frozen private-query routes; Vim conversation windows remain integration
-work. Clients use only advertised capabilities. An owner without this endpoint
+accepts frozen private-query routes. Vim windows select separate rollout/query
+buffers while sharing one transport and controller per session. Draft replies
+are dispatched by exact route and receipts by request ID. Each buffer retains
+its own editor, pending submission, conflict and originating-window identity.
+Query history filters on stable connection/conversation IDs and local identity;
+its send route remains pinned to the captured generation and nick.
+Clients use only advertised capabilities. An owner without this endpoint
 continues to offer its existing terminal attachment and best-effort history.
 
 ## Framing and service

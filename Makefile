@@ -368,6 +368,7 @@ ifeq ($(WITH_VM),1)
 	./tests/test_session_draft
 	python3 tests/test_vm_frontend.py ./$(BIN)
 	python3 tests/test_vm_control.py ./$(BIN)
+	python3 tests/test_vm_queries.py ./$(BIN)
 	python3 tests/test_vm_reports.py ./$(BIN)
 	python3 tests/test_vm_notifications.py ./$(BIN)
 	python3 tests/test_vm_catalog.py ./$(BIN)

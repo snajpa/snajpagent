@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "vm_connection.h"
+#include "irc.h"
 #include "vm_report.h"
 #include "vm_text.h"
 
@@ -15,6 +16,76 @@ message(struct snag_vm_connection *connection, const char *text)
     ++connection->revision;
 }
 
+static bool
+valid_route(const json_t *route)
+{
+    if (json_is_string(route)) {
+        return json_string_length(route) == 7u && !strcmp(json_string_value(route), "rollout");
+    }
+    struct snag_irc_query_target target;
+    return snag_view_query_read(route, &target) == 0;
+}
+
+bool
+snag_vm_buffer_writable(const struct snag_vm_buffer *buffer)
+{
+    return buffer && (!json_is_object(buffer->route) ||
+        !strcmp(snag_json_string(buffer->route, "identity"), "operator"));
+}
+
+static void
+buffer_message(struct snag_vm_buffer *buffer, const char *text)
+{
+    (void)snprintf(buffer->message, sizeof(buffer->message), "%s", text);
+    ++buffer->connection->revision;
+}
+
+struct snag_vm_buffer *
+snag_vm_buffer_get(struct snag_vm_connection *connection, const json_t *route, bool create)
+{
+    if (!connection) return NULL;
+    if (!route && connection->rollout) return connection->rollout;
+    if (route && !valid_route(route)) { errno = EINVAL; return NULL; }
+    for (struct snag_vm_buffer *b = connection->buffers; route && b; b = b->next)
+        if (json_equal(b->route, route)) return b;
+    if (!create) return NULL;
+    struct snag_vm_buffer *buffer = calloc(1u, sizeof(*buffer));
+    if (!buffer) return NULL;
+    buffer->route = route ? json_deep_copy(route) : json_string("rollout");
+    if (!buffer->route) { free(buffer); return NULL; }
+    buffer->connection = connection;
+    snag_buf_init(&buffer->draft, SNAG_MAX_DIRECT_PROMPT + 1u);
+    buffer->draft_get = connection->drafts;
+    buffer->next = connection->buffers;
+    connection->buffers = buffer;
+    if (json_is_string(buffer->route)) connection->rollout = buffer;
+    return buffer;
+}
+
+bool
+snag_vm_connection_unsaved(const struct snag_vm_connection *connection)
+{
+    for (const struct snag_vm_buffer *b = connection->buffers; b; b = b->next)
+        if (b->draft.len || b->pending || b->draft_conflict) return true;
+    return false;
+}
+
+void
+snag_vm_connection_discard(struct snag_vm_connection *connection)
+{
+    for (struct snag_vm_buffer *b = connection->buffers; b; b = b->next) {
+        snag_vm_editor_reset(&b->editor);
+        snag_buf_reset(&b->draft);
+        b->cursor = 0u;
+        json_decref(b->pending);
+        b->pending = NULL;
+        json_decref(b->conflict_draft);
+        b->conflict_draft = NULL;
+        b->draft_conflict = b->send_pending = b->reconcile_pending = b->draft_dirty = false;
+    }
+    connection->inflight = NULL;
+}
+
 struct snag_vm_connection *
 snag_vm_connection_new(const char *session)
 {
@@ -23,7 +94,10 @@ snag_vm_connection_new(const char *session)
     connection->reports = json_array();
     if (!connection->reports) { free(connection); return NULL; }
     snag_view_channel_init(&connection->channel, -1);
-    snag_buf_init(&connection->draft, SNAG_MAX_DIRECT_PROMPT + 1u);
+    if (!snag_vm_buffer_get(connection, NULL, true)) {
+        snag_vm_connections_free(connection);
+        return NULL;
+    }
     (void)snprintf(connection->session, sizeof(connection->session), "%s", session);
     return connection;
 }
@@ -32,20 +106,25 @@ void
 snag_vm_connection_close(struct snag_vm_connection *connection)
 {
     snag_view_channel_close(&connection->channel);
-    connection->bound = connection->hello = connection->submitting = false;
-    connection->generation = connection->deadline = connection->receipt_at = 0u;
-    connection->commands = connection->terminal_commands = false;
-    connection->terminal_result = connection->terminal_auto = false;
+    connection->bound = connection->hello = false;
+    connection->generation = connection->deadline = connection->draft_deadline = 0u;
+    connection->commands = connection->terminal_commands = connection->irc_queries = false;
     connection->reports_supported = connection->reports_subscribed = false;
-    json_decref(connection->report_open);
-    connection->report_open = NULL;
-    connection->drafts = connection->draft_ready = connection->draft_get = false;
-    connection->send_pending = connection->detaching = connection->detach_sent = false;
-    connection->draft_deadline = 0u;
+    connection->drafts = connection->detaching = connection->detach_sent = false;
+    connection->draft_wait = connection->inflight = NULL;
     json_decref(connection->draft_sent);
     connection->draft_sent = NULL;
     json_decref(connection->state);
     connection->state = NULL;
+    for (struct snag_vm_buffer *b = connection->buffers; b; b = b->next) {
+        b->submitting = b->send_pending = b->draft_ready = b->draft_get = false;
+        b->terminal_result = b->terminal_auto = false;
+        b->receipt_at = 0u;
+        json_decref(b->report_open);
+        b->report_open = NULL;
+        json_decref(b->selection);
+        b->selection = NULL;
+    }
 }
 
 void
@@ -54,19 +133,24 @@ snag_vm_connections_free(struct snag_vm_connection *connection)
     while (connection) {
         struct snag_vm_connection *next = connection->next;
         snag_vm_connection_close(connection);
-        snag_vm_editor_reset(&connection->editor);
-        if (connection->draft.data) memset(connection->draft.data, 0, connection->draft.len);
-        snag_buf_free(&connection->draft);
-        json_decref(connection->pending);
+        while (connection->buffers) {
+            struct snag_vm_buffer *b = connection->buffers;
+            connection->buffers = b->next;
+            snag_vm_editor_reset(&b->editor);
+            if (b->draft.data) memset(b->draft.data, 0, b->draft.len);
+            snag_buf_free(&b->draft);
+            json_decref(b->route);
+            json_decref(b->pending);
+            json_decref(b->draft_base);
+            json_decref(b->owner_draft);
+            json_decref(b->conflict_draft);
+            free(b);
+        }
         json_decref(connection->reports);
-        json_decref(connection->draft_base);
-        json_decref(connection->owner_draft);
-        json_decref(connection->conflict_draft);
         free(connection);
         connection = next;
     }
 }
-
 static int
 send_message(struct snag_vm_connection *connection, json_t *value)
 {
@@ -100,17 +184,20 @@ snag_vm_connection_open(struct snag_vm_connection *connection, struct snag_store
     }
     snag_view_channel_init(&connection->channel, fd);
     connection->deadline = snag_monotonic_ms() + 15000u;
-    connection->query = connection->pending != NULL;
-    connection->reconcile_pending = connection->query;
+    for (struct snag_vm_buffer *b = connection->buffers; b; b = b->next) {
+        b->query = b->pending != NULL;
+        b->reconcile_pending = b->query;
+    }
     message(connection, control ? "Attaching to owner" : "Observing owner");
     return send_message(connection, json_pack("{s:s,s:i}", "type", "hello", "version", 1));
 }
 
 int
-snag_vm_draft_replace(struct snag_vm_connection *connection, size_t begin, size_t end,
+snag_vm_draft_replace(struct snag_vm_buffer *buffer, size_t begin, size_t end,
     const void *text, size_t length)
 {
-    struct snag_buf *draft = &connection->draft;
+    struct snag_vm_connection *connection = buffer->connection;
+    struct snag_buf *draft = &buffer->draft;
     if (begin > end || end > draft->len || length > SNAG_MAX_DIRECT_PROMPT ||
         draft->len - (end - begin) > SNAG_MAX_DIRECT_PROMPT - length ||
         !snag_utf8_valid(text, length, true)) return snag_errno(EINVAL);
@@ -121,39 +208,40 @@ snag_vm_draft_replace(struct snag_vm_connection *connection, size_t begin, size_
     if (length) memcpy(draft->data + begin, text, length);
     draft->len = total;
     draft->data[total] = 0;
-    connection->cursor = begin + length;
-    size_t boundary = snag_vm_text_floor((const char *)draft->data, total, connection->cursor);
-    if (boundary != connection->cursor)
-        connection->cursor = snag_vm_text_next((const char *)draft->data, total, boundary);
+    buffer->cursor = begin + length;
+    size_t boundary = snag_vm_text_floor((const char *)draft->data, total, buffer->cursor);
+    if (boundary != buffer->cursor)
+        buffer->cursor = snag_vm_text_next((const char *)draft->data, total, boundary);
     ++connection->revision;
-    connection->draft_dirty = true;
+    buffer->draft_dirty = true;
     return 0;
 }
 
 void
-snag_vm_draft_cursor(struct snag_vm_connection *connection, size_t cursor)
+snag_vm_draft_cursor(struct snag_vm_buffer *buffer, size_t cursor)
 {
-    if (connection->cursor == cursor) return;
-    connection->cursor = cursor;
-    connection->draft_dirty = true;
+    struct snag_vm_connection *connection = buffer->connection;
+    if (buffer->cursor == cursor) return;
+    buffer->cursor = cursor;
+    buffer->draft_dirty = true;
     ++connection->revision;
 }
 
 static const char *
-draft_text(const struct snag_vm_connection *connection)
+draft_text(const struct snag_vm_buffer *buffer)
 {
-    if (connection->send_pending) return snag_json_string(connection->pending, "text");
-    return connection->draft.len ? (const char *)connection->draft.data : "";
+    if (buffer->send_pending) return snag_json_string(buffer->pending, "text");
+    return buffer->draft.len ? (const char *)buffer->draft.data : "";
 }
 
 static bool
 valid_draft(const json_t *draft)
 {
     const char *text = snag_json_string(draft, "text");
-    const char *route = snag_json_string(draft, "route");
+    const json_t *route = json_object_get(draft, "route");
     uint64_t revision, cursor;
     return snag_json_exact_keys(draft, "route revision text cursor") &&
-        route && !strcmp(route, "rollout") && text &&
+        valid_route(route) && text &&
         strlen(text) == json_string_length(json_object_get(draft, "text")) &&
         strlen(text) <= SNAG_MAX_DIRECT_PROMPT &&
         snag_json_integer_u64(draft, "revision", &revision) == 0 && revision &&
@@ -162,16 +250,17 @@ valid_draft(const json_t *draft)
 }
 
 static int
-draft_baseline(struct snag_vm_connection *connection, const json_t *draft)
+draft_baseline(struct snag_vm_buffer *buffer, const json_t *draft)
 {
+    struct snag_vm_connection *connection = buffer->connection;
     char digest[SNAG_SHA256_HEX_LEN + 1u];
     const char *text = snag_json_string(draft, "text");
     snag_sha256_hex(text, strlen(text), digest);
     json_t *base = json_pack("{s:s,s:O,s:s}", "instance", connection->instance,
         "revision", json_object_get(draft, "revision"), "sha256", digest);
     if (!base) return -1;
-    json_decref(connection->draft_base);
-    connection->draft_base = base;
+    json_decref(buffer->draft_base);
+    buffer->draft_base = base;
     ++connection->revision;
     return 0;
 }
@@ -179,17 +268,18 @@ draft_baseline(struct snag_vm_connection *connection, const json_t *draft)
 /* Completed commands and terminal requirements both acknowledge consumption
  * of the submitted owner draft. Recovery must compare against that new base. */
 static int
-receipt_draft(struct snag_vm_connection *connection, const json_t *value)
+receipt_draft(struct snag_vm_buffer *buffer, const json_t *value)
 {
+    struct snag_vm_connection *connection = buffer->connection;
     uint64_t cleared = 0u;
     if (connection->drafts &&
         snag_json_integer_u64(value, "draft_cleared", &cleared) < 0)
         return snag_errno(EPROTO);
-    if (cleared && (!connection->draft_base || cleared > (uint64_t)json_integer_value(
-        json_object_get(connection->draft_base, "revision")))) {
+    if (cleared && (!buffer->draft_base || cleared > (uint64_t)json_integer_value(
+        json_object_get(buffer->draft_base, "revision")))) {
         json_t *empty = json_pack("{s:I,s:s}", "revision", (json_int_t)cleared,
             "text", "");
-        int rc = empty ? draft_baseline(connection, empty) : -1;
+        int rc = empty ? draft_baseline(buffer, empty) : -1;
         json_decref(empty);
         if (rc < 0) return -1;
     }
@@ -197,40 +287,42 @@ receipt_draft(struct snag_vm_connection *connection, const json_t *value)
 }
 
 static bool
-at_baseline(const struct snag_vm_connection *connection, const char *text)
+at_baseline(const struct snag_vm_buffer *buffer, const char *text)
 {
-    if (!connection->draft_base || strcmp(connection->instance,
-        snag_json_string(connection->draft_base, "instance"))) return false;
+    struct snag_vm_connection *connection = buffer->connection;
+    if (!buffer->draft_base || strcmp(connection->instance,
+        snag_json_string(buffer->draft_base, "instance"))) return false;
     char digest[SNAG_SHA256_HEX_LEN + 1u];
     snag_sha256_hex(text, strlen(text), digest);
-    return !strcmp(digest, snag_json_string(connection->draft_base, "sha256"));
+    return !strcmp(digest, snag_json_string(buffer->draft_base, "sha256"));
 }
 
 int
-snag_vm_draft_choose(struct snag_vm_connection *connection, bool local)
+snag_vm_draft_choose(struct snag_vm_buffer *buffer, bool local)
 {
-    if (!connection->draft_conflict || connection->pending ||
-        (connection->bound && connection->drafts && !connection->draft_ready))
+    struct snag_vm_connection *connection = buffer->connection;
+    if (!buffer->draft_conflict || buffer->pending ||
+        (connection->bound && connection->drafts && !buffer->draft_ready))
         return snag_errno(EBUSY);
     if (!local) {
-        const char *text = snag_json_string(connection->conflict_draft, "text");
-        if (snag_vm_draft_replace(connection, 0u, connection->draft.len, text, strlen(text)) < 0)
+        const char *text = snag_json_string(buffer->conflict_draft, "text");
+        if (snag_vm_draft_replace(buffer, 0u, buffer->draft.len, text, strlen(text)) < 0)
             return -1;
-        connection->cursor = (size_t)json_integer_value(
-            json_object_get(connection->conflict_draft, "cursor"));
-        snag_vm_editor_reset(&connection->editor);
+        buffer->cursor = (size_t)json_integer_value(
+            json_object_get(buffer->conflict_draft, "cursor"));
+        snag_vm_editor_reset(&buffer->editor);
     }
-    if (connection->draft_ready) {
-        if (draft_baseline(connection, connection->owner_draft) < 0) return -1;
+    if (buffer->draft_ready) {
+        if (draft_baseline(buffer, buffer->owner_draft) < 0) return -1;
     } else {
-        json_decref(connection->draft_base);
-        connection->draft_base = NULL;
+        json_decref(buffer->draft_base);
+        buffer->draft_base = NULL;
     }
-    connection->draft_conflict = false;
-    json_decref(connection->conflict_draft);
-    connection->conflict_draft = NULL;
-    connection->draft_dirty = true;
-    message(connection, local ? "Using workspace draft" : "Using owner draft");
+    buffer->draft_conflict = false;
+    json_decref(buffer->conflict_draft);
+    buffer->conflict_draft = NULL;
+    buffer->draft_dirty = true;
+    buffer_message(buffer, local ? "Using workspace draft" : "Using owner draft");
     return 0;
 }
 
@@ -246,56 +338,62 @@ snag_vm_connection_detach(struct snag_vm_connection *connection)
 }
 
 int
-snag_vm_connection_prepare(struct snag_vm_connection *connection)
+snag_vm_buffer_prepare(struct snag_vm_buffer *buffer, uint64_t window)
 {
-    if (!connection->bound || connection->pending || !connection->draft.len ||
-        connection->quitting || connection->detaching || connection->draft_conflict)
+    struct snag_vm_connection *connection = buffer->connection;
+    if (!snag_vm_buffer_writable(buffer)) return snag_errno(EACCES);
+    if (json_is_object(buffer->route) && !connection->irc_queries) return snag_errno(ENOTSUP);
+    if (!connection->bound || buffer->pending || !buffer->draft.len ||
+        connection->quitting || connection->detaching || buffer->draft_conflict)
         return snag_errno(EBUSY);
-    if (snag_prompt_command((const char *)connection->draft.data) && !connection->commands)
+    if (snag_prompt_command((const char *)buffer->draft.data) && !connection->commands)
         return snag_errno(ENOTSUP);
     char id[SNAG_ID_HEX_LEN + 1u];
     if (snag_random_id(id) < 0) return -1;
     json_t *pending = json_pack("{s:s,s:s,s:s}", "id", id, "instance", connection->instance,
-        "text", (const char *)connection->draft.data);
+        "text", (const char *)buffer->draft.data);
     if (!pending) return -1;
-    connection->pending = pending;
-    connection->terminal_auto = connection->terminal_commands;
-    connection->reconcile_pending = true;
-    snag_vm_editor_reset(&connection->editor);
+    buffer->pending = pending;
+    buffer->request_window = window;
+    buffer->terminal_auto = connection->terminal_commands;
+    buffer->reconcile_pending = true;
+    snag_vm_editor_reset(&buffer->editor);
     /* The pending copy is persisted before transmission; new typing belongs
      * to the next draft and can never be erased by this request's receipt. */
-    snag_buf_reset(&connection->draft);
-    connection->cursor = 0u;
-    message(connection, "Submission saved; awaiting durable receipt");
+    snag_buf_reset(&buffer->draft);
+    buffer->cursor = 0u;
+    buffer_message(buffer, "Submission saved; awaiting durable receipt");
     return 0;
 }
 
 int
-snag_vm_connection_send(struct snag_vm_connection *connection)
+snag_vm_buffer_send(struct snag_vm_buffer *buffer)
 {
-    if (!connection->bound || !connection->pending || connection->detaching)
+    struct snag_vm_connection *connection = buffer->connection;
+    if (!connection->bound || !buffer->pending || connection->detaching)
         return snag_errno(EBUSY);
-    connection->send_pending = connection->draft_dirty = true;
-    connection->reconcile_pending = false;
+    buffer->send_pending = buffer->draft_dirty = true;
+    buffer->reconcile_pending = false;
     return 0;
 }
 
 int
-snag_vm_connection_recover(struct snag_vm_connection *connection)
+snag_vm_buffer_recover(struct snag_vm_buffer *buffer)
 {
-    if (!connection->pending || connection->draft.len || connection->submitting)
+    struct snag_vm_connection *connection = buffer->connection;
+    if (!buffer->pending || buffer->draft.len || buffer->submitting)
         return snag_errno(EBUSY);
-    const char *text = snag_json_string(connection->pending, "text");
-    if (snag_vm_draft_replace(connection, 0u, 0u, text, strlen(text)) < 0) return -1;
-    snag_vm_editor_reset(&connection->editor);
-    json_decref(connection->pending);
-    connection->pending = NULL;
-    connection->terminal_result = connection->terminal_auto = false;
-    connection->query = false;
-    connection->send_pending = connection->reconcile_pending = false;
-    connection->draft_get = connection->drafts;
-    connection->receipt_at = 0u;
-    message(connection, "Submission recovered into draft; verify history before sending again");
+    const char *text = snag_json_string(buffer->pending, "text");
+    if (snag_vm_draft_replace(buffer, 0u, 0u, text, strlen(text)) < 0) return -1;
+    snag_vm_editor_reset(&buffer->editor);
+    json_decref(buffer->pending);
+    buffer->pending = NULL;
+    buffer->terminal_result = buffer->terminal_auto = false;
+    buffer->query = false;
+    buffer->send_pending = buffer->reconcile_pending = false;
+    buffer->draft_get = connection->drafts;
+    buffer->receipt_at = 0u;
+    buffer_message(buffer, "Submission recovered into draft; verify history before sending again");
     return 0;
 }
 
@@ -315,96 +413,98 @@ snag_vm_connection_control(struct snag_vm_connection *connection, const char *in
 /* Reconcile only on edits or owner replies. Idle polling never hashes a draft.
  * One outstanding revision check coalesces typing while preserving newer text. */
 static int
-draft_sync(struct snag_vm_connection *connection)
+draft_sync(struct snag_vm_buffer *buffer)
 {
+    struct snag_vm_connection *connection = buffer->connection;
+    if (!snag_vm_buffer_writable(buffer) ||
+        (json_is_object(buffer->route) && !connection->irc_queries)) return 0;
     if (!connection->bound || connection->channel.output || connection->draft_sent ||
         connection->quitting || connection->detach_sent || connection->draft_deadline) return 0;
-    if (connection->drafts && connection->draft_get && !connection->reconcile_pending) {
-        connection->draft_get = false;
-        connection->draft_ready = false;
+    if (connection->drafts && buffer->draft_get && !buffer->reconcile_pending) {
+        connection->draft_wait = buffer;
+        buffer->draft_get = false;
+        buffer->draft_ready = false;
         connection->draft_deadline = snag_monotonic_ms() + 5000u;
-        return send_message(connection, json_pack("{s:s,s:I,s:s}", "type", "draft_get",
-            "generation", (json_int_t)connection->generation, "route", "rollout"));
+        return send_message(connection, json_pack("{s:s,s:I,s:O}", "type", "draft_get",
+            "generation", (json_int_t)connection->generation, "route", buffer->route));
     }
-    if (connection->drafts && !connection->reconcile_pending && connection->draft_ready &&
-        connection->draft_dirty && !connection->draft_conflict) {
-        const char *text = draft_text(connection);
-        const char *owner = snag_json_string(connection->owner_draft, "text");
-        size_t cursor = connection->send_pending ? strlen(text) : connection->cursor;
+    if (connection->drafts && !buffer->reconcile_pending && buffer->draft_ready &&
+        buffer->draft_dirty && !buffer->draft_conflict) {
+        const char *text = draft_text(buffer);
+        const char *owner = snag_json_string(buffer->owner_draft, "text");
+        size_t cursor = buffer->send_pending ? strlen(text) : buffer->cursor;
         bool same = !strcmp(text, owner);
-        bool owner_unchanged = at_baseline(connection, owner);
-        bool local_unchanged = at_baseline(connection, text);
-        bool base = connection->draft_base && !strcmp(connection->instance,
-            snag_json_string(connection->draft_base, "instance"));
+        bool owner_unchanged = at_baseline(buffer, owner);
+        bool local_unchanged = at_baseline(buffer, text);
+        bool base = buffer->draft_base && !strcmp(connection->instance,
+            snag_json_string(buffer->draft_base, "instance"));
         if (same || owner_unchanged || (!base && !*owner)) {
-            connection->draft_conflict = false;
-            if (same && draft_baseline(connection, connection->owner_draft) < 0) return -1;
+            buffer->draft_conflict = false;
+            if (same && draft_baseline(buffer, buffer->owner_draft) < 0) return -1;
             if (same && cursor == (size_t)json_integer_value(
-                json_object_get(connection->owner_draft, "cursor"))) {
-                connection->draft_dirty = false;
+                json_object_get(buffer->owner_draft, "cursor"))) {
+                buffer->draft_dirty = false;
             } else {
                 if (connection->draft_edit == INT64_MAX) return snag_errno(EOVERFLOW);
-                json_t *edit = json_pack("{s:s,s:I,s:s,s:O,s:I,s:s,s:I}",
+                json_t *edit = json_pack("{s:s,s:I,s:O,s:O,s:I,s:s,s:I}",
                     "type", "draft", "generation", (json_int_t)connection->generation,
-                    "route", "rollout", "revision",
-                    json_object_get(connection->owner_draft, "revision"),
+                    "route", buffer->route, "revision",
+                    json_object_get(buffer->owner_draft, "revision"),
                     "edit", (json_int_t)++connection->draft_edit, "text", text,
                     "cursor", (json_int_t)cursor);
                 if (!edit) return -1;
+                connection->draft_wait = buffer;
                 connection->draft_sent = json_incref(edit);
                 connection->draft_deadline = snag_monotonic_ms() + 5000u;
                 return send_message(connection, edit);
             }
-        } else if (!connection->send_pending && (local_unchanged || (!base && !*text))) {
-            if (snag_vm_draft_replace(connection, 0u, connection->draft.len,
+        } else if (!buffer->send_pending && (local_unchanged || (!base && !*text))) {
+            if (snag_vm_draft_replace(buffer, 0u, buffer->draft.len,
                 owner, strlen(owner)) < 0 ||
-                draft_baseline(connection, connection->owner_draft) < 0)
+                draft_baseline(buffer, buffer->owner_draft) < 0)
                 return -1;
-            connection->cursor = (size_t)json_integer_value(
-                json_object_get(connection->owner_draft, "cursor"));
-            snag_vm_editor_reset(&connection->editor);
-            connection->draft_dirty = connection->draft_conflict = false;
-            message(connection, "Owner draft restored");
+            buffer->cursor = (size_t)json_integer_value(
+                json_object_get(buffer->owner_draft, "cursor"));
+            snag_vm_editor_reset(&buffer->editor);
+            buffer->draft_dirty = buffer->draft_conflict = false;
+            buffer_message(buffer, "Owner draft restored");
         } else {
-            connection->draft_dirty = false;
-            connection->draft_conflict = true;
-            json_decref(connection->conflict_draft);
-            connection->conflict_draft = json_incref(connection->owner_draft);
-            connection->send_pending = false;
-            message(connection, connection->pending ?
+            buffer->draft_dirty = false;
+            buffer->draft_conflict = true;
+            json_decref(buffer->conflict_draft);
+            buffer->conflict_draft = json_incref(buffer->owner_draft);
+            buffer->send_pending = false;
+            buffer_message(buffer, buffer->pending ?
                 "Draft conflict; :recover the unsent prompt, then :draft local or :draft owner" :
                 "Draft conflict; both copies retained; :draft local or :draft owner");
         }
     }
-    if (connection->send_pending && (!connection->drafts ||
-        (connection->draft_ready && !connection->draft_dirty && !connection->draft_conflict))) {
-        bool command = snag_prompt_command(snag_json_string(connection->pending, "text"));
+    if (!connection->inflight && buffer->send_pending && (!connection->drafts ||
+        (buffer->draft_ready && !buffer->draft_dirty && !buffer->draft_conflict))) {
+        bool command = snag_prompt_command(snag_json_string(buffer->pending, "text"));
         json_t *request = json_pack("{s:s,s:I,s:s,s:s}", "type", command ? "command" : "submit",
             "generation", (json_int_t)connection->generation,
-            "id", snag_json_string(connection->pending, "id"),
-            "text", snag_json_string(connection->pending, "text"));
+            "id", snag_json_string(buffer->pending, "id"),
+            "text", snag_json_string(buffer->pending, "text"));
         if (!request) return -1;
-        if (command && json_object_set_new(request, "route", json_string("rollout")) < 0) {
+        if ((command || json_is_object(buffer->route)) &&
+            json_object_set(request, "route", buffer->route) < 0) {
             json_decref(request);
             return -1;
         }
         if (connection->drafts &&
-            (json_object_set_new(request, "route", json_string("rollout")) < 0 ||
+            (json_object_set(request, "route", buffer->route) < 0 ||
              json_object_set(request, "draft_revision",
-                json_object_get(connection->owner_draft, "revision")) < 0)) {
+                json_object_get(buffer->owner_draft, "revision")) < 0)) {
             json_decref(request);
             return -1;
         }
         if (send_message(connection, request) < 0) return -1;
-        connection->send_pending = false;
-        connection->submitting = true;
-        connection->draft_dirty = connection->draft.len != 0u;
+        buffer->send_pending = false;
+        buffer->submitting = true;
+        connection->inflight = buffer;
+        buffer->draft_dirty = buffer->draft.len != 0u;
         return 0;
-    }
-    if (connection->detaching && !connection->detach_sent) {
-        connection->detach_sent = true;
-        connection->deadline = snag_monotonic_ms() + 5000u;
-        return snag_vm_connection_control(connection, "detach");
     }
     return 0;
 }
@@ -530,6 +630,7 @@ receive(struct snag_vm_connection *connection, const json_t *value)
         for (size_t j = 0u; j < json_array_size(features); ++j) {
             const char *feature = json_string_value(json_array_get(features, j));
             if (feature && !strcmp(feature, "drafts")) connection->drafts = true;
+            if (feature && !strcmp(feature, "irc_queries")) connection->irc_queries = true;
             if (feature && !strcmp(feature, "commands")) connection->commands = true;
             if (feature && !strcmp(feature, "terminal_commands"))
                 connection->terminal_commands = true;
@@ -554,29 +655,38 @@ receive(struct snag_vm_connection *connection, const json_t *value)
             !generation || generation != connection->generation) return snag_errno(EPROTO);
         connection->bound = true;
         connection->deadline = 0u;
-        connection->draft_get = connection->drafts;
+        for (struct snag_vm_buffer *b = connection->buffers; b; b = b->next)
+            b->draft_get = connection->drafts;
         message(connection, "Attached  i: edit prompt  :detach: keep owner running");
     } else if (!strcmp(type, "draft")) {
         json_t *draft = json_object_get(value, "draft");
+        struct snag_vm_buffer *buffer = snag_vm_buffer_get(connection,
+            json_object_get(draft, "route"), false);
+        if (!buffer) return snag_errno(EPROTO);
         const char *status = snag_json_string(value, "status");
         uint64_t edit;
         if (!connection->drafts || !connection->bound || !valid_draft(draft) ||
             !snag_json_exact_keys(value, "type edit status draft") || !status ||
             snag_json_integer_u64(value, "edit", &edit) < 0 ||
-            (edit ? (!connection->draft_sent || edit != connection->draft_edit ||
+            (edit ? (!connection->draft_sent || connection->draft_wait != buffer ||
+                     edit != connection->draft_edit ||
                      (strcmp(status, "accepted") && strcmp(status, "conflict"))) :
                     strcmp(status, "snapshot"))) return snag_errno(EPROTO);
         if (edit) {
-            if (!strcmp(status, "accepted") && draft_baseline(connection, draft) < 0) return -1;
+            if (!strcmp(status, "accepted") && draft_baseline(buffer, draft) < 0) return -1;
             json_decref(connection->draft_sent);
             connection->draft_sent = NULL;
             connection->draft_deadline = 0u;
-        } else if (!connection->draft_sent) connection->draft_deadline = 0u;
-        json_decref(connection->owner_draft);
-        connection->owner_draft = json_incref(draft);
-        connection->draft_ready = connection->draft_dirty = true;
-        if (connection->draft_conflict)
-            message(connection, "Draft conflict retained; :draft local or :draft owner");
+            connection->draft_wait = NULL;
+        } else if (!connection->draft_sent && connection->draft_wait == buffer) {
+            connection->draft_deadline = 0u;
+            connection->draft_wait = NULL;
+        }
+        json_decref(buffer->owner_draft);
+        buffer->owner_draft = json_incref(draft);
+        buffer->draft_ready = buffer->draft_dirty = true;
+        if (buffer->draft_conflict)
+            buffer_message(buffer, "Draft conflict retained; :draft local or :draft owner");
         ++connection->revision;
     } else if (!strcmp(type, "state")) {
         json_t *state = json_object_get(value, "state");
@@ -593,6 +703,19 @@ receive(struct snag_vm_connection *connection, const json_t *value)
              json_integer_value(json_object_get(state, "schema")) <
              json_integer_value(json_object_get(connection->state, "schema"))))
             return snag_errno(EPROTO);
+        const json_t *queries = json_object_get(state, "queries");
+        if (queries && !json_is_array(queries)) return snag_errno(EPROTO);
+        bool changed = !json_equal(queries, json_object_get(connection->state, "queries"));
+        for (size_t i = 0u; changed && i < json_array_size(queries); ++i) {
+            const json_t *query = json_array_get(queries, i);
+            const char *endpoint = snag_json_bounded_string(json_object_get(query, "endpoint"),
+                SNAG_CONFIG_IRC_ENDPOINT_MAX);
+            const json_t *route = json_object_get(query, "route");
+            if (!endpoint || !json_is_object(route)) return snag_errno(EPROTO);
+            struct snag_vm_buffer *b = snag_vm_buffer_get(connection, route, true);
+            if (!b) return -1;
+            (void)snag_strcpy(b->endpoint, sizeof(b->endpoint), endpoint);
+        }
         json_decref(connection->state);
         connection->state = json_incref(state);
         ++connection->revision;
@@ -618,65 +741,83 @@ receive(struct snag_vm_connection *connection, const json_t *value)
         const char *id = snag_json_string(value, "id");
         const char *status = snag_json_string(value, "status");
         if (!id || !status) return snag_errno(EPROTO);
-        if (!connection->pending || strcmp(id, snag_json_string(connection->pending, "id")))
-            return 0;
+        struct snag_vm_buffer *buffer;
+        for (buffer = connection->buffers; buffer; buffer = buffer->next)
+            if (buffer->pending && !strcmp(id, snag_json_string(buffer->pending, "id"))) break;
+        if (!buffer) return 0;
+        if (strcmp(status, "pending") && connection->inflight == buffer)
+            connection->inflight = NULL;
         if (!strcmp(status, "pending")) {
-            connection->submitting = true;
+            buffer->submitting = true;
+            connection->inflight = buffer;
             /* A queried pending receipt is not subscribed to the original
              * submitter's completion. Recheck until it reaches a final state. */
-            connection->query = true;
-            connection->receipt_at = snag_monotonic_ms() + 250u;
+            buffer->query = true;
+            buffer->receipt_at = snag_monotonic_ms() + 250u;
         } else if (!strcmp(status, "terminal")) {
-            if (!snag_prompt_command(snag_json_string(connection->pending, "text")))
+            if (!snag_prompt_command(snag_json_string(buffer->pending, "text")))
                 return snag_errno(EPROTO);
-            if (strcmp(connection->instance, snag_json_string(connection->pending, "instance")))
+            if (strcmp(connection->instance, snag_json_string(buffer->pending, "instance")))
                 return snag_errno(EPROTO);
-            if (receipt_draft(connection, value) < 0) return -1;
-            connection->submitting = connection->query = false;
-            connection->receipt_at = 0u;
-            connection->reconcile_pending = connection->terminal_result = true;
-            message(connection, "Command needs :classic; not executed; :recover restores its text");
+            if (receipt_draft(buffer, value) < 0) return -1;
+            buffer->submitting = buffer->query = false;
+            buffer->receipt_at = 0u;
+            buffer->reconcile_pending = buffer->terminal_result = true;
+            buffer_message(buffer,
+                "Command needs :classic; not executed; :recover restores its text");
         } else if (!strcmp(status, "committed") || !strcmp(status, "completed")) {
             uint64_t seq;
             if (snag_json_integer_u64(value, "seq", &seq) < 0 || !seq ||
-                strcmp(connection->instance, snag_json_string(connection->pending, "instance")))
+                strcmp(connection->instance, snag_json_string(buffer->pending, "instance")))
                 return snag_errno(EPROTO);
             bool command = !strcmp(status, "completed");
             if (command) {
                 json_t *report = json_object_get(value, "report");
                 const char *outcome = snag_json_string(value, "outcome");
-                if (!snag_prompt_command(snag_json_string(connection->pending, "text")) ||
+                if (!snag_prompt_command(snag_json_string(buffer->pending, "text")) ||
                     !outcome || (strcmp(outcome, "ok") && strcmp(outcome, "error")) ||
                     (!json_is_null(report) && (!snag_vm_report_valid(report) ||
                      strcmp(snag_json_string(report, "command"),
-                        snag_json_string(connection->pending, "text"))))) return snag_errno(EPROTO);
+                        snag_json_string(buffer->pending, "text"))))) return snag_errno(EPROTO);
             }
-            if (receipt_draft(connection, value) < 0) return -1;
+            if (receipt_draft(buffer, value) < 0) return -1;
             if (command && !json_is_null(json_object_get(value, "report"))) {
                 json_t *report = json_object_get(value, "report");
                 if (retain_report(connection, report, false) < 0) return -1;
-                json_decref(connection->report_open);
-                connection->report_open = json_incref(report);
+                json_decref(buffer->report_open);
+                const char *text = snag_json_string(buffer->pending, "text");
+                size_t verb = strcspn(text, " \t\r\n");
+                bool private_send = (verb == 4u && !strncmp(text, "/msg", verb)) ||
+                    (verb == 7u && !strncmp(text, "/notice", verb)) ||
+                    (verb == 3u && !strncmp(text, "/me", verb));
+                bool ok = !strcmp(snag_json_string(value, "outcome"), "ok");
+                buffer->report_open = private_send && ok ? NULL : json_incref(report);
             }
-            json_decref(connection->pending);
-            connection->pending = NULL;
-            connection->terminal_result = connection->terminal_auto = false;
-            connection->submitting = false;
-            connection->query = false;
-            connection->receipt_at = 0u;
-            connection->reconcile_pending = false;
-            connection->draft_get = connection->drafts;
+            json_t *selection = json_object_get(value, "selection");
+            if (selection && (!command || !json_is_object(selection) || !valid_route(selection)))
+                return snag_errno(EPROTO);
+            json_decref(buffer->selection);
+            buffer->selection = json_incref(selection);
+            json_decref(buffer->pending);
+            buffer->pending = NULL;
+            buffer->terminal_result = buffer->terminal_auto = false;
+            buffer->submitting = false;
+            buffer->query = false;
+            buffer->receipt_at = 0u;
+            buffer->reconcile_pending = false;
+            buffer->draft_get = connection->drafts;
             if (command) {
                 const char *error = snag_json_string(value, "report_error");
-                message(connection, error && *error ? error :
+                buffer_message(buffer, error && *error ? error :
                     "Command completed; :reports reopens output");
-            } else message(connection, "Prompt committed");
+            } else buffer_message(buffer, json_is_object(buffer->route) ?
+                "Private message admitted" : "Prompt committed");
         } else if (!strcmp(status, "unknown") || !strcmp(status, "rejected")) {
-            connection->submitting = false;
-            connection->query = false;
-            connection->receipt_at = 0u;
-            connection->reconcile_pending = true;
-            message(connection, !strcmp(status, "unknown") ?
+            buffer->submitting = false;
+            buffer->query = false;
+            buffer->receipt_at = 0u;
+            buffer->reconcile_pending = true;
+            buffer_message(buffer, !strcmp(status, "unknown") ?
                 "Submission outcome unknown; inspect history, then :recover if needed" :
                 "Submission rejected; :recover restores its text");
         } else return snag_errno(EPROTO);
@@ -691,15 +832,18 @@ receive(struct snag_vm_connection *connection, const json_t *value)
              * edit. A fresh attachment re-reads the owner before retrying. */
             return snag_errno(EPROTO);
         }
-        if (connection->pending && id && !strcmp(id, snag_json_string(connection->pending, "id"))) {
-            connection->submitting = connection->query = false;
-            connection->reconcile_pending = true;
-            connection->receipt_at = 0u;
-        } else if (connection->pending) {
-            /* A control/uncorrelated error does not reject the in-flight
-             * submission. Query its own receipt before allowing recovery. */
-            connection->query = true;
-            connection->receipt_at = snag_monotonic_ms();
+        for (struct snag_vm_buffer *buffer = connection->buffers; buffer; buffer = buffer->next) {
+            if (!buffer->pending) continue;
+            if (id && !strcmp(id, snag_json_string(buffer->pending, "id"))) {
+                buffer->submitting = buffer->query = false;
+                buffer->reconcile_pending = true;
+                buffer->receipt_at = 0u;
+                if (connection->inflight == buffer) connection->inflight = NULL;
+            } else if (!id) {
+                /* Control errors do not resolve a submission's outcome. */
+                buffer->query = true;
+                buffer->receipt_at = snag_monotonic_ms();
+            }
         }
         if (!connection->detaching) connection->deadline = 0u;
         const char *error = snag_json_string(value, "message");
@@ -710,7 +854,9 @@ receive(struct snag_vm_connection *connection, const json_t *value)
         snag_vm_connection_close(connection);
         message(connection, "Session stopped");
     } else if (!strcmp(type, "detached")) {
-        bool conflict = connection->draft_conflict || connection->reconcile_pending;
+        bool conflict = false;
+        for (struct snag_vm_buffer *b = connection->buffers; b; b = b->next)
+            conflict |= b->draft_conflict || b->reconcile_pending;
         snag_vm_connection_close(connection);
         message(connection, conflict ? "Detached; unresolved draft retained in workspace" :
             "Detached; owner continues running");
@@ -744,29 +890,53 @@ snag_vm_connection_step(struct snag_vm_connection *connection)
         if (send_message(connection, json_pack("{s:s}", "type", "reports")) < 0) goto failed;
         connection->reports_subscribed = true;
     }
-    if (connection->bound && connection->pending && connection->query &&
-        now >= connection->receipt_at && !connection->channel.output) {
-        connection->query = false;
-        connection->receipt_at = 0u;
-        if (strcmp(connection->instance, snag_json_string(connection->pending, "instance"))) {
-            message(connection, "Owner changed; submission outcome unknown; inspect history");
+    for (struct snag_vm_buffer *b = connection->buffers; b; b = b->next) {
+        if (!connection->bound || !b->pending || !b->query ||
+            now < b->receipt_at || connection->channel.output) continue;
+        b->query = false;
+        b->receipt_at = 0u;
+        if (strcmp(connection->instance, snag_json_string(b->pending, "instance"))) {
+            buffer_message(b, "Owner changed; submission outcome unknown; inspect history");
         } else if (send_message(connection, json_pack("{s:s,s:s}", "type", "receipt",
-            "id", snag_json_string(connection->pending, "id"))) < 0) goto failed;
+            "id", snag_json_string(b->pending, "id"))) < 0) goto failed;
     }
-    if (draft_sync(connection) < 0) goto failed;
+    struct snag_vm_buffer *start = connection->sync_next ?
+        connection->sync_next : connection->buffers;
+    struct snag_vm_buffer *buffer = start;
+    do {
+        connection->sync_next = buffer->next ? buffer->next : connection->buffers;
+        if (draft_sync(buffer) < 0) goto failed;
+        if (connection->channel.output) break;
+        buffer = connection->sync_next;
+    } while (buffer != start);
+    if (connection->bound && connection->detaching && !connection->detach_sent &&
+        !connection->channel.output && !connection->draft_wait) {
+        for (struct snag_vm_buffer *b = connection->buffers; b; b = b->next) {
+            if (!snag_vm_buffer_writable(b) ||
+                (json_is_object(b->route) && !connection->irc_queries)) continue;
+            if (connection->drafts && !b->reconcile_pending && !b->draft_conflict &&
+                (b->draft_get || !b->draft_ready || b->draft_dirty)) return;
+        }
+        connection->detach_sent = true;
+        connection->deadline = snag_monotonic_ms() + 5000u;
+        if (snag_vm_connection_control(connection, "detach") < 0) goto failed;
+    }
     return;
 failed:
     snag_vm_connection_close(connection);
-    message(connection, connection->pending ?
-        "Owner connection lost; submission retained; :attach reconnects and checks its receipt" :
-        "Owner connection lost; draft retained; :attach reconnects");
+    message(connection, "Owner connection lost; drafts/submissions retained; :attach reconnects");
 }
 
 int
 snag_vm_connection_wait(const struct snag_vm_connection *connection, uint64_t now, int timeout)
 {
+    uint64_t receipt_at = 0u;
+    for (const struct snag_vm_buffer *b = connection->buffers; b; b = b->next) {
+        if (b->receipt_at && (!receipt_at || b->receipt_at < receipt_at))
+            receipt_at = b->receipt_at;
+    }
     uint64_t deadlines[] = {connection->deadline, connection->channel.read_deadline,
-        connection->channel.write_deadline, connection->receipt_at, connection->draft_deadline};
+        connection->channel.write_deadline, receipt_at, connection->draft_deadline};
     for (size_t i = 0u; i < sizeof(deadlines) / sizeof(deadlines[0]); ++i) {
         if (!deadlines[i]) continue;
         int remaining = deadlines[i] > now ? (int)(deadlines[i] - now) : 0;
@@ -775,25 +945,99 @@ snag_vm_connection_wait(const struct snag_vm_connection *connection, uint64_t no
     return timeout;
 }
 
+static json_t *
+buffer_json(const struct snag_vm_buffer *buffer)
+{
+    return json_pack("{s:O,s:s,s:I,s:O,s:O,s:O,s:I,s:s}", "route", buffer->route,
+        "draft", buffer->draft.len ? (const char *)buffer->draft.data : "",
+        "cursor", (json_int_t)buffer->cursor,
+        "pending", buffer->pending ? buffer->pending : json_null(),
+        "base", buffer->draft_base ? buffer->draft_base : json_null(),
+        "conflict", buffer->conflict_draft ? buffer->conflict_draft : json_null(),
+        "window", (json_int_t)buffer->request_window, "endpoint", buffer->endpoint);
+}
+
 json_t *
 snag_vm_connections_json(const struct snag_vm_connection *connection)
 {
     json_t *rows = json_array();
     if (!rows) return NULL;
     for (; connection; connection = connection->next) {
-        json_t *row = json_pack("{s:s,s:s,s:I,s:b,s:O,s:O,s:O,s:O}", "session", connection->session,
-            "draft", connection->draft.len ? (const char *)connection->draft.data : "",
-            "cursor", (json_int_t)connection->cursor, "control", connection->control,
-            "pending", connection->pending ? connection->pending : json_null(),
-            "base", connection->draft_base ? connection->draft_base : json_null(),
-            "conflict", connection->conflict_draft ? connection->conflict_draft : json_null(),
-            "reports", connection->reports);
-        if (!row || json_array_append_new(rows, row) < 0) {
-            json_decref(rows);
-            return NULL;
+        json_t *buffers = json_array();
+        if (!buffers) goto failed;
+        for (const struct snag_vm_buffer *b = connection->buffers; b; b = b->next) {
+            json_t *saved = buffer_json(b);
+            if (!saved || json_array_append_new(buffers, saved) < 0) {
+                json_decref(buffers);
+                goto failed;
+            }
         }
+        json_t *row = json_pack("{s:s,s:b,s:O,s:o}", "session", connection->session,
+            "control", connection->control, "reports", connection->reports, "buffers", buffers);
+        if (!row || json_array_append_new(rows, row) < 0) goto failed;
     }
     return rows;
+failed:
+    json_decref(rows);
+    return NULL;
+}
+
+static int
+load_buffer(struct snag_vm_connection *connection, const json_t *row, bool legacy)
+{
+    const json_t *route = legacy ? NULL : json_object_get(row, "route");
+    const char *draft = snag_json_string(row, "draft");
+    uint64_t cursor, window = 0u;
+    const char *endpoint = legacy ? "" : snag_json_string(row, "endpoint");
+    if (!endpoint || strlen(endpoint) > SNAG_CONFIG_IRC_ENDPOINT_MAX ||
+        (!legacy && strlen(endpoint) != json_string_length(json_object_get(row, "endpoint"))) ||
+        (!legacy && (!snag_json_exact_keys(row,
+            "route draft cursor pending base conflict window endpoint") ||
+            !valid_route(route) || snag_json_integer_u64(row, "window", &window) < 0)) ||
+        !draft || strlen(draft) > SNAG_MAX_DIRECT_PROMPT ||
+        strlen(draft) != json_string_length(json_object_get(row, "draft")) ||
+        snag_json_integer_u64(row, "cursor", &cursor) < 0 || cursor > strlen(draft) ||
+        snag_vm_text_floor(draft, strlen(draft), (size_t)cursor) != cursor) return -1;
+    struct snag_vm_buffer *buffer = snag_vm_buffer_get(connection, route, true);
+    if (!buffer || snag_vm_draft_replace(buffer, 0u, 0u, draft, strlen(draft)) < 0) return -1;
+    buffer->cursor = (size_t)cursor;
+    buffer->request_window = window;
+    (void)snag_strcpy(buffer->endpoint, sizeof(buffer->endpoint), endpoint);
+    json_t *base = json_object_get(row, "base");
+    json_t *conflict = json_object_get(row, "conflict");
+    if (base && !json_is_null(base)) {
+        const char *instance = snag_json_bounded_string(json_object_get(base, "instance"),
+            SNAG_ID_HEX_LEN);
+        const char *digest = snag_json_bounded_string(json_object_get(base, "sha256"),
+            SNAG_SHA256_HEX_LEN);
+        uint64_t revision;
+        if (!snag_json_exact_keys(base, "instance revision sha256") || !instance ||
+            !snag_hex_is_lower(instance, SNAG_ID_HEX_LEN) || !digest ||
+            !snag_hex_is_lower(digest, SNAG_SHA256_HEX_LEN) ||
+            snag_json_integer_u64(base, "revision", &revision) < 0 || !revision) return -1;
+        buffer->draft_base = json_incref(base);
+    }
+    if (conflict && !json_is_null(conflict)) {
+        if (!valid_draft(conflict) ||
+            !json_equal(json_object_get(conflict, "route"), buffer->route)) return -1;
+        buffer->conflict_draft = json_incref(conflict);
+        buffer->draft_conflict = true;
+    }
+    json_t *pending = json_object_get(row, "pending");
+    if (json_is_null(pending)) return 0;
+    const char *id = snag_json_bounded_string(json_object_get(pending, "id"), SNAG_ID_HEX_LEN);
+    const char *instance = snag_json_bounded_string(json_object_get(pending, "instance"),
+        SNAG_ID_HEX_LEN);
+    const char *text = snag_json_bounded_string(json_object_get(pending, "text"),
+        SNAG_MAX_DIRECT_PROMPT);
+    if (!snag_json_exact_keys(pending, "id instance text") || !id || !instance || !text ||
+        !snag_hex_is_lower(id, SNAG_ID_HEX_LEN) ||
+        !snag_hex_is_lower(instance, SNAG_ID_HEX_LEN)) return -1;
+    for (struct snag_vm_buffer *b = connection->buffers; b; b = b->next)
+        if (b->pending && !strcmp(id, snag_json_string(b->pending, "id"))) return -1;
+    buffer->pending = json_incref(pending);
+    buffer_message(buffer, "Saved submission awaiting receipt reconciliation");
+    return 0;
 }
 
 int
@@ -801,58 +1045,37 @@ snag_vm_connections_load(const json_t *rows, struct snag_vm_connection **out)
 {
     struct snag_vm_connection *head = NULL;
     if (!json_is_array(rows)) return snag_errno(EINVAL);
-    for (size_t i = 0u; i < json_array_size(rows); ++i) {
-        const json_t *row = json_array_get(rows, i);
+    for (size_t i = json_array_size(rows); i > 0u; --i) {
+        const json_t *row = json_array_get(rows, i - 1u);
         const char *session = snag_json_bounded_string(json_object_get(row, "session"),
             SNAG_ID_HEX_LEN);
-        const char *draft = snag_json_string(row, "draft");
-        uint64_t cursor;
+        const json_t *buffers = json_object_get(row, "buffers");
         bool revised = json_object_get(row, "base") != NULL;
         bool reports = json_object_get(row, "reports") != NULL;
-        if (!snag_json_exact_keys(row, reports ?
+        const char *keys = buffers ? "session control reports buffers" : reports ?
             "session draft cursor control pending base conflict reports" : revised ?
             "session draft cursor control pending base conflict" :
-            "session draft cursor control pending") ||
-            !session || strlen(session) != SNAG_ID_HEX_LEN ||
-            !snag_hex_is_lower(session, SNAG_ID_HEX_LEN) || !draft ||
-            strlen(draft) != json_string_length(json_object_get(row, "draft")) ||
-            strlen(draft) > SNAG_MAX_DIRECT_PROMPT ||
-            snag_json_integer_u64(row, "cursor", &cursor) < 0 || cursor > strlen(draft) ||
-            !json_is_boolean(json_object_get(row, "control")) ||
-            snag_vm_text_floor(draft, strlen(draft), (size_t)cursor) != cursor) goto failed;
+            "session draft cursor control pending";
+        if (!snag_json_exact_keys(row, keys) || !session ||
+            !snag_hex_is_lower(session, SNAG_ID_HEX_LEN) ||
+            !json_is_boolean(json_object_get(row, "control"))) goto failed;
         for (struct snag_vm_connection *c = head; c; c = c->next)
             if (!strcmp(c->session, session)) goto failed;
         struct snag_vm_connection *connection = snag_vm_connection_new(session);
         if (!connection) goto failed;
         connection->next = head;
         head = connection;
-        if (snag_vm_draft_replace(connection, 0u, 0u, draft, strlen(draft)) < 0) goto failed;
-        connection->cursor = (size_t)cursor;
         connection->control = json_is_true(json_object_get(row, "control"));
-        if (revised) {
-            json_t *base = json_object_get(row, "base");
-            json_t *conflict = json_object_get(row, "conflict");
-            if (!json_is_null(base)) {
-                const char *instance = snag_json_bounded_string(json_object_get(base, "instance"),
-                    SNAG_ID_HEX_LEN);
-                const char *digest = snag_json_bounded_string(json_object_get(base, "sha256"),
-                    SNAG_SHA256_HEX_LEN);
-                uint64_t revision;
-                if (!snag_json_exact_keys(base, "instance revision sha256") || !instance ||
-                    strlen(instance) != SNAG_ID_HEX_LEN ||
-                    !snag_hex_is_lower(instance, SNAG_ID_HEX_LEN) || !digest ||
-                    strlen(digest) != SNAG_SHA256_HEX_LEN ||
-                    !snag_hex_is_lower(digest, SNAG_SHA256_HEX_LEN) ||
-                    snag_json_integer_u64(base, "revision", &revision) < 0 || !revision)
-                    goto failed;
-                connection->draft_base = json_incref(base);
+        if (buffers) {
+            if (!json_is_array(buffers)) goto failed;
+            for (size_t j = json_array_size(buffers); j > 0u; --j) {
+                const json_t *saved = json_array_get(buffers, j - 1u);
+                for (size_t k = 0u; k + 1u < j; ++k)
+                    if (json_equal(json_object_get(saved, "route"),
+                        json_object_get(json_array_get(buffers, k), "route"))) goto failed;
+                if (load_buffer(connection, saved, false) < 0) goto failed;
             }
-            if (!json_is_null(conflict)) {
-                if (!valid_draft(conflict)) goto failed;
-                connection->conflict_draft = json_incref(conflict);
-                connection->draft_conflict = true;
-            }
-        }
+        } else if (load_buffer(connection, row, true) < 0) goto failed;
         if (reports) {
             json_t *saved = json_object_get(row, "reports");
             if (!json_is_array(saved)) goto failed;
@@ -866,19 +1089,6 @@ snag_vm_connections_load(const json_t *rows, struct snag_vm_connection **out)
             json_decref(connection->reports);
             connection->reports = json_incref(saved);
         }
-        json_t *pending = json_object_get(row, "pending");
-        if (json_is_null(pending)) continue;
-        const char *id = snag_json_bounded_string(json_object_get(pending, "id"), SNAG_ID_HEX_LEN);
-        const char *instance = snag_json_bounded_string(json_object_get(pending, "instance"),
-            SNAG_ID_HEX_LEN);
-        const char *text = snag_json_bounded_string(json_object_get(pending, "text"),
-            SNAG_MAX_DIRECT_PROMPT);
-        if (!snag_json_exact_keys(pending, "id instance text") || !id || !instance || !text ||
-            strlen(id) != SNAG_ID_HEX_LEN || !snag_hex_is_lower(id, SNAG_ID_HEX_LEN) ||
-            strlen(instance) != SNAG_ID_HEX_LEN || !snag_hex_is_lower(instance, SNAG_ID_HEX_LEN))
-            goto failed;
-        connection->pending = json_incref(pending);
-        message(connection, "Saved submission awaiting receipt reconciliation");
     }
     *out = head;
     return 0;

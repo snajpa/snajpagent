@@ -61,6 +61,13 @@ def normalized_modes(modes):
     return modes
 
 
+def rollout(owner):
+    """Return the composer in current or pre-conversation workspace snapshots."""
+    if 'buffers' not in owner:
+        return owner
+    return next(buffer for buffer in owner['buffers'] if buffer['route'] == 'rollout')
+
+
 class Terminal:
     def __init__(self, root, args=(), rows=12, columns=100, transport=(), extra_env=None,
                  subcommand='vm'):
@@ -479,7 +486,7 @@ class WorkspaceTests(unittest.TestCase):
         path.write_text(json.dumps(value))
         child = self.start('--resume', 'legacy-picker')
         child.command('workspace save')
-        self.wait_snapshot(lambda values: next(iter(values.values()))['state']['v'] == 7)
+        self.wait_snapshot(lambda values: next(iter(values.values()))['state']['v'] == 8)
         child.finish()
 
     def test_unknown_state_is_preserved_and_terminal_not_entered(self):

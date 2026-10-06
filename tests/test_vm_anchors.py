@@ -81,18 +81,18 @@ class AnchorTests(unittest.TestCase):
         display_byte = len(('<redacted:secret>\n' * 40).encode())
         for window in saved['state']['windows']:
             window['history']['byte'] = display_byte
-            del window['history']['source']
+            del window['history']['source'], window['history']['route']
         path.write_text(json.dumps(saved))
         child = self.start('--resume', 'source', columns=100, expect=b'history')
         child.repaint_until(b'anchor-marker-')
         # Split documents load independently; the first frame can precede
         # conversion of the other window's older coordinate.
         values = self.wait_snapshot(lambda rows:
-            next(iter(rows.values()))['state']['v'] == 7 and
+            next(iter(rows.values()))['state']['v'] == 8 and
             all(window['history']['source'] for window in
                 next(iter(rows.values()))['state']['windows']))
         upgraded = next(iter(values.values()))['state']
-        self.assertEqual(upgraded['v'], 7)
+        self.assertEqual(upgraded['v'], 8)
         for window in upgraded['windows']:
             self.assertTrue(window['history']['source'])
             self.assertEqual(window['history']['byte'], len(prefix.encode()))
