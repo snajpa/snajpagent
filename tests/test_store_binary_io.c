@@ -1827,6 +1827,19 @@ native_voice_fixture_record(struct snag_buf *payload, const char *type, json_t *
         .payload = payload->data, .size = payload->len};
 }
 
+static int
+native_grouped_forward_event(void *opaque, const struct snag_session *state, uint64_t sequence,
+    const char *type, const json_t *data, char *error, size_t size)
+{
+    (void)error;
+    (void)size;
+    uint64_t *next = opaque;
+    assert(!state && sequence == (*next)++ && type && json_is_object(data));
+    if (sequence == 2u) assert(!strcmp(snag_json_string(json_object_get(data, "event"), "text"),
+        "Destination observation before adoption"));
+    return 0;
+}
+
 static void
 test_native_voice_grouped(void)
 {
@@ -1914,6 +1927,16 @@ test_native_voice_grouped(void)
     assert(snag_binary_checkpoint_record_project(session.log_fd, &after, NULL,
         &records[5], 6u, &name, &output) == 1 && output == canary && !strcmp(name, "canary"));
     json_decref(canary);
+    struct snag_journal_cursor forward = {0};
+    uint64_t visited = 1u;
+    for (uint64_t sequence = 1u; sequence <= 6u; ++sequence) {
+        assert(!snag_session_each_event_forward(&session, &forward, 1u,
+            native_grouped_forward_event, &visited, error, sizeof(error)));
+        assert(forward.next_seq == sequence + 1u &&
+            visited == (sequence < 6u ? sequence + 1u : 6u));
+        if (sequence < 6u) assert(forward.offset == SNAG_BINARY_HEADER_SIZE);
+    }
+    assert(forward.offset == session.log_end && !strcmp(forward.prev_sha256, session.prev_sha256));
     json_t *context = NULL;
     assert(!snag_session_voice_context(&session, &context, error, sizeof(error)));
     assert(json_is_true(json_object_get(context, "history_complete")) &&
@@ -1946,6 +1969,76 @@ test_native_voice_grouped(void)
     for (unsigned i = 0u; i < 5u; ++i) snag_buf_free(&payload[i]);
 }
 
+struct native_forward_probe {
+    uint64_t next;
+    unsigned int calls;
+    int result;
+    struct snag_session *append;
+};
+
+static int
+native_forward_event(void *opaque, const struct snag_session *state, uint64_t sequence,
+    const char *type, const json_t *data, char *error, size_t size)
+{
+    (void)error;
+    (void)size;
+    struct native_forward_probe *probe = opaque;
+    assert(!state && sequence == probe->next++);
+    assert(!strcmp(type, sequence == 1u ? "session_created" : "voice_event"));
+    if (sequence == 2u) assert(!strcmp(snag_json_string(json_object_get(data, "event"), "text"),
+        "Historical observation outside current core closure"));
+    ++probe->calls;
+    if (probe->append && sequence == 1u) {
+        struct snag_session *session = probe->append;
+        probe->append = NULL;
+        assert(!snag_session_commit(session, "voice_event", native_voice_data("user",
+            "Appended during pinned history read"), NULL, error, size));
+    }
+    if (probe->result < 0) errno = EIO;
+    return probe->result;
+}
+
+static void
+native_forward_point(struct snag_session *session)
+{
+    char error[256];
+    struct snag_journal_cursor cursor = {0};
+    struct native_forward_probe probe = {.next = 1u};
+    int rc = snag_session_each_event_forward(session, &cursor, 1u,
+        native_forward_event, &probe, error, sizeof(error));
+    if (rc < 0) fprintf(stderr, "native forward history: %s\n", error);
+    assert(!rc && cursor.next_seq == 2u && probe.calls == 1u);
+    struct snag_journal_cursor first = cursor;
+    assert(!snag_session_each_event_forward(session, &cursor, SIZE_MAX,
+        native_forward_event, &probe, error, sizeof(error)));
+    assert(cursor.next_seq == 3u && cursor.offset == session->log_end &&
+        !strcmp(cursor.prev_sha256, session->prev_sha256) && probe.calls == 2u);
+    assert(!snag_session_each_event_forward(session, &cursor, SIZE_MAX,
+        native_forward_event, &probe, error, sizeof(error)) && probe.calls == 2u);
+    const int results[] = {1, SNAG_JOURNAL_STOP_AFTER, -1};
+    for (size_t i = 0u; i < sizeof(results) / sizeof(results[0]); ++i) {
+        cursor = first;
+        probe = (struct native_forward_probe){.next = 2u, .result = results[i]};
+        rc = snag_session_each_event_forward(session, &cursor, SIZE_MAX,
+            native_forward_event, &probe, error, sizeof(error));
+        assert(probe.calls == 1u && rc == (results[i] < 0 ? -1 : 0));
+        if (results[i] == SNAG_JOURNAL_STOP_AFTER) assert(cursor.next_seq == 3u);
+        else assert(!memcmp(&cursor, &first, sizeof(cursor)));
+        if (results[i] < 0) assert(errno == EIO);
+    }
+    for (unsigned int fault = 0u; fault < 3u; ++fault) {
+        cursor = first;
+        if (!fault) ++cursor.offset;
+        else if (fault == 1u) cursor.prev_sha256[0] ^= 1;
+        else cursor.next_seq = 4u;
+        struct snag_journal_cursor saved = cursor;
+        probe = (struct native_forward_probe){.next = 2u};
+        assert(snag_session_each_event_forward(session, &cursor, SIZE_MAX,
+            native_forward_event, &probe, error, sizeof(error)) < 0);
+        assert(!probe.calls && !memcmp(&cursor, &saved, sizeof(cursor)));
+    }
+}
+
 static void
 test_native_historical_point(void)
 {
@@ -1972,6 +2065,7 @@ test_native_historical_point(void)
     json_decref(data);
     assert(snag_seek(session.log_fd, 0, SEEK_CUR) == 13 && snag_seek(index, 0, SEEK_CUR) == 31);
     assert(session.next_seq == 3u && atomic_load(&probe.effects) == 2u);
+    native_forward_point(&session);
     int64_t extent, offset;
     assert(!snag_binary_index_end(2u, &extent) && !snag_binary_index_offset(2u, &offset));
     struct snag_buf saved = {.max = SNAG_BINARY_INDEX_TREE_BATCH_MAX};
@@ -2006,6 +2100,17 @@ test_native_historical_point(void)
             json_integer_value(json_object_get(data, "canary")) == 17);
         json_decref(data);
         data = NULL;
+        struct snag_journal_cursor cursor = {0};
+        struct native_forward_probe forward = {.next = 1u};
+        assert(snag_session_each_event_forward(&session, &cursor, SIZE_MAX,
+            native_forward_event, &forward, error, sizeof(error)) < 0 &&
+            errno == (fault == 1u ? ENOENT : EINVAL));
+        assert(cursor.next_seq == 2u && forward.calls == 1u);
+        struct snag_journal_cursor saved_cursor = cursor;
+        forward = (struct native_forward_probe){.next = 2u};
+        assert(snag_session_each_event_forward(&session, &cursor, SIZE_MAX,
+            native_forward_event, &forward, error, sizeof(error)) < 0 &&
+            !forward.calls && !memcmp(&cursor, &saved_cursor, sizeof(cursor)));
         /* Installed canonical working-set membership is independent of cache
          * health. A cache failure never makes valid old custody unavailable. */
         assert(!snag_session_binary_projection_read(&session, 1u, &type, &data,
@@ -2019,6 +2124,20 @@ test_native_historical_point(void)
             snag_seek(index, 31, SEEK_SET) == 31);
     }
     snag_buf_free(&saved);
+    struct snag_journal_cursor cursor = {0};
+    struct native_forward_probe forward = {.next = 1u, .append = &session};
+    assert(!snag_session_each_event_forward(&session, &cursor, SIZE_MAX,
+        native_forward_event, &forward, error, sizeof(error)));
+    assert(session.next_seq == 4u && cursor.next_seq == 3u && forward.calls == 2u &&
+        cursor.offset < session.log_end && atomic_load(&probe.effects) == 3u);
+    int64_t log_position = snag_seek(session.log_fd, 0, SEEK_CUR);
+    int64_t index_position = snag_seek(index, 0, SEEK_CUR);
+    forward = (struct native_forward_probe){.next = 3u};
+    assert(!snag_session_each_event_forward(&session, &cursor, SIZE_MAX,
+        native_forward_event, &forward, error, sizeof(error)));
+    assert(cursor.next_seq == 4u && cursor.offset == session.log_end && forward.calls == 1u &&
+        snag_seek(session.log_fd, 0, SEEK_CUR) == log_position &&
+        snag_seek(index, 0, SEEK_CUR) == index_position && atomic_load(&probe.effects) == 3u);
     snag_session_close(&session);
     assert(!close(index) && !close(directory) && !rmdir(path));
     free(path);

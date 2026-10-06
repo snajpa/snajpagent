@@ -3612,12 +3612,18 @@ snag_session_each_event_reverse(struct snag_session *session, uint64_t before, s
     return 0;
 }
 
+static int native_history_forward(struct snag_session *, struct snag_journal_cursor *, size_t,
+    snag_session_event_fn, void *, char *, size_t);
+
 int
 snag_session_each_event_forward(struct snag_session *session, struct snag_journal_cursor *cursor,
     size_t scan_bytes, snag_session_event_fn fn, void *opaque, char *error, size_t error_size)
 {
     if (!session || !cursor || !scan_bytes || !fn || session->log_end < 0)
         return snag_fail(error, error_size, EINVAL, "invalid forward history scan");
+    if (session->binary) {
+        return native_history_forward(session, cursor, scan_bytes, fn, opaque, error, error_size);
+    }
     if (!cursor->next_seq) {
         if (cursor->offset || cursor->prev_sha256[0])
             return snag_fail(error, error_size, EINVAL, "incomplete forward history cursor");
@@ -4250,6 +4256,185 @@ snag_session_binary_projection_read(const struct snag_session *session, uint64_t
     if (rc < 0)
         return snag_errorf(error, error_size, "cannot read native source: %s", strerror(errno));
     return 0;
+}
+
+struct native_history {
+    int fd, index_fd;
+    struct snag_binary_anchor through;
+    struct snag_binary_index_tree frontier;
+    struct snag_binary_checkpoint_index available, query;
+    struct snag_buf access, query_bytes;
+    unsigned char root[32];
+    bool has_query, callback_failed;
+    struct snag_journal_cursor *cursor;
+    size_t remaining;
+    snag_session_event_fn visit;
+    void *opaque;
+    char *error;
+    size_t error_size;
+};
+
+static int
+native_history_query(struct native_history *history, uint64_t sequence)
+{
+    history->has_query = false;
+    history->query_bytes.len = 0u;
+    if (history->index_fd < 0) return snag_errno(ENOENT);
+    if (snag_binary_checkpoint_query_read(history->fd, history->index_fd, &history->through,
+        &history->available, &history->frontier, &sequence, 1u, NULL, NULL,
+        &history->query_bytes) < 0) {
+        return -1;
+    }
+    if (snag_binary_checkpoint_index_decode(history->query_bytes.data, history->query_bytes.len,
+        &history->available.identity, &history->through, history->root, &history->query) < 0) {
+        return -1;
+    }
+    history->has_query = true;
+    return 0;
+}
+
+static int
+native_history_capture(struct native_history *history, struct snag_binary_cursor *out)
+{
+    const struct snag_journal_cursor *public = history->cursor;
+    static const char zero[] = "0000000000000000000000000000000000000000000000000000000000000000";
+    bool begin = (!public->next_seq && !public->offset && !public->prev_sha256[0]) ||
+        (public->next_seq == 1u && !public->offset &&
+            !memcmp(public->prev_sha256, zero, sizeof(zero)));
+    uint64_t sequence = begin ? 1u : public->next_seq;
+    if (!sequence || sequence > history->through.next_seq || (!begin &&
+        (public->offset < 0 || (uint64_t)public->offset > history->through.end ||
+            public->prev_sha256[SNAG_SHA256_HEX_LEN] ||
+            !snag_hex_is_lower(public->prev_sha256, SNAG_SHA256_HEX_LEN)))) {
+        return snag_errno(EINVAL);
+    }
+    struct snag_binary_cursor captured;
+    if (sequence == history->through.next_seq) {
+        captured = (struct snag_binary_cursor){.before = history->through,
+            .next_seq = sequence, .record_offset = SNAG_BINARY_BATCH_HEADER_SIZE};
+    } else {
+        struct snag_buf scratch = {.max = SNAG_BINARY_BATCH_MAX};
+        struct snag_binary_batch batch, checked;
+        struct snag_binary_anchor before, after;
+        int rc = snag_binary_checkpoint_batch_find(history->fd, &history->through,
+            &history->available, sequence, &scratch, &batch, &before);
+        if (rc < 0 && errno == ENOENT && history->index_fd >= 0) {
+            rc = native_history_query(history, sequence);
+            if (!rc) {
+                rc = snag_binary_checkpoint_batch_find(history->fd, &history->through,
+                    &history->query, sequence, &scratch, &batch, &before);
+            }
+        }
+        if (!rc) {
+            rc = snag_binary_batch_decode(batch.data, batch.size, &before, &checked, &after);
+        }
+        if (!rc) {
+            rc = snag_binary_cursor_capture(&before, &after, &checked, sequence, &captured);
+        }
+        int saved = errno;
+        snag_buf_free(&scratch);
+        errno = saved;
+        if (rc < 0) return -1;
+    }
+    char digest[SNAG_SHA256_HEX_LEN + 1u];
+    binary_hex(digest, captured.before.digest, sizeof(captured.before.digest));
+    if (!begin && ((uint64_t)public->offset != captured.before.end ||
+        strcmp(public->prev_sha256, digest))) {
+        return snag_errno(EINVAL);
+    }
+    *out = captured;
+    return 0;
+}
+
+static int
+native_history_visit(void *opaque, const struct snag_binary_record *record, uint64_t sequence,
+    const struct snag_binary_cursor *after)
+{
+    struct native_history *history = opaque;
+    const char *type = NULL;
+    json_t *data = NULL;
+    int rc = snag_binary_checkpoint_record_project(history->fd, &history->through,
+        &history->available, record, sequence, &type, &data);
+    if (rc < 0 && errno == ENOENT && history->index_fd >= 0) {
+        if (history->has_query) {
+            rc = snag_binary_checkpoint_record_project(history->fd,
+                &history->through, &history->query, record, sequence, &type, &data);
+        }
+        if (rc < 0 && errno == ENOENT) {
+            rc = native_history_query(history, sequence);
+            if (!rc) {
+                rc = snag_binary_checkpoint_record_project(history->fd, &history->through,
+                    &history->query, record, sequence, &type, &data);
+            }
+        }
+    }
+    if (rc < 0) return -1;
+    int result = 0;
+    if (!rc) {
+        result = history->visit(history->opaque, NULL, sequence, type, data,
+            history->error, history->error_size);
+    }
+    json_decref(data);
+    if (result < 0) {
+        history->callback_failed = true;
+        return -1;
+    }
+    if (result && result != SNAG_JOURNAL_STOP_AFTER) return 1;
+    /* The public reader preserves accepted-prefix progress even on a later
+     * error. The low-level cursor remains a separate provisional traversal. */
+    history->cursor->offset = (int64_t)after->before.end;
+    history->cursor->next_seq = after->next_seq;
+    binary_hex(history->cursor->prev_sha256, after->before.digest, sizeof(after->before.digest));
+    size_t visited = record->size + SNAG_BINARY_RECORD_HEADER_SIZE;
+    history->remaining = visited >= history->remaining ? 0u : history->remaining - visited;
+    return result == SNAG_JOURNAL_STOP_AFTER || !history->remaining ? 1 : 0;
+}
+
+static int
+native_history_forward(struct snag_session *session, struct snag_journal_cursor *cursor,
+    size_t scan_bytes, snag_session_event_fn visit, void *opaque, char *error, size_t error_size)
+{
+    const struct snag_binary_session *binary = session->binary;
+    if (binary->faulted) {
+        return snag_fail(error, error_size, ESTALE, "native writer is faulted");
+    }
+    if (!binary->checkpoint_configured) {
+        return snag_fail(error, error_size, ENOTSUP, "native source custody is not installed");
+    }
+    if (binary->boundary.end > INT64_MAX) return snag_errno(EOVERFLOW);
+    struct native_history history = {.fd = session->log_fd,
+        .index_fd = binary->index_configured ? binary->index_fd : -1,
+        .through = binary->boundary, .frontier = binary->tree,
+        .access = {.max = SIZE_MAX}, .query_bytes = {.max = SIZE_MAX},
+        .cursor = cursor, .remaining = scan_bytes, .visit = visit, .opaque = opaque,
+        .error = error, .error_size = error_size};
+    unsigned char installed_root[32];
+    int rc = snag_binary_index_tree_root(&history.frontier, history.root);
+    if (!rc) {
+        rc = snag_binary_index_tree_root(&binary->available.tree, installed_root);
+    }
+    if (!rc) {
+        rc = snag_binary_checkpoint_index_copy(&history.access, &binary->available);
+    }
+    if (!rc) {
+        rc = snag_binary_checkpoint_index_decode(history.access.data, history.access.len,
+            &binary->identity, &binary->available.boundary, installed_root, &history.available);
+    }
+    struct snag_binary_cursor work;
+    if (!rc) rc = native_history_capture(&history, &work);
+    if (!rc) {
+        rc = snag_binary_checkpoint_query_cursor_read(history.fd, history.index_fd,
+            &history.through, &history.available, &history.frontier, history.through.next_seq,
+            &work, native_history_visit, NULL, &history);
+    }
+    int saved = errno;
+    snag_buf_free(&history.query_bytes);
+    snag_buf_free(&history.access);
+    errno = saved;
+    if (rc < 0 && !history.callback_failed) {
+        return snag_errorf(error, error_size, "cannot read native history: %s", strerror(errno));
+    }
+    return rc < 0 ? -1 : 0;
 }
 
 int

@@ -118,6 +118,19 @@ int snag_binary_checkpoint_cursor_read(int fd, const struct snag_binary_anchor *
         const struct snag_binary_cursor *after),
     bool (*cancelled)(void *), void *opaque);
 
+/* Same guarded traversal for explicitly requested history. Missing old rows
+ * require individual verified cache membership under the independently admitted
+ * exact through frontier, never a root obtained from the cache. index_fd=-1
+ * leaves them unavailable; installed custody works independently of cache health.
+ * Every visited old tuple is checked against the canonical containing batch.
+ * Identity/ancestry/immutability and query work remain caller obligations. */
+int snag_binary_checkpoint_query_cursor_read(int fd, int index_fd,
+    const struct snag_binary_anchor *through, const struct snag_binary_checkpoint_index *,
+    const struct snag_binary_index_tree *, uint64_t end, struct snag_binary_cursor *,
+    int (*visit)(void *, const struct snag_binary_record *, uint64_t,
+        const struct snag_binary_cursor *after),
+    bool (*cancelled)(void *), void *opaque);
+
 /* Enumerate [first,end) in sequence order. Pinned access selects only listed
  * old working-set records, grouping physical batches; the newer suffix remains
  * contiguous. NULL access enumerates the contiguous independent oracle prefix.

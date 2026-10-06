@@ -3046,3 +3046,27 @@ while releasing no abandoned candidate effects. It preserves provisional files
 and already-canonical receipts for recovery. Ordinary native creation/open/resume
 and general reader integration remain unfinished; explicitly bound checkpoint
 operation does not switch existing JSONL sessions onto the native backend.
+
+### Native forward history queries
+
+The existing forward history API dispatches native sessions to guarded canonical
+record traversal. Its cursor-shaped interface carries the containing batch's real
+predecessor offset and digest plus the exact next record sequence. A partial cut
+is reconstructed and checked against the decoded record boundary before visiting
+anything. Zero begins history; no JSONL byte position or per-record hash is invented.
+
+Each call pins owning installed access, the ACK boundary and its independent
+frontier before callbacks run. Old records missing from installed custody require
+individual verified derived-index membership under that frontier, followed by
+exact canonical batch/turn/record-offset/kind/digest checks. Borrowed record
+hydration resolves only causal dependencies through temporary query custody when
+needed. The cache supplies neither state nor its own authority root; a broken
+cache does not invalidate installed canonical access. Missing data stays unavailable.
+
+The public reader retains its existing callback contract: a positive stop before
+acceptance keeps the current cut, stop-after consumes that record, and a later
+read or callback failure retains the last accepted prefix. This publication is
+separate from the low-level reader's provisional, failure-atomic cursor. Paging
+charges decoded record bytes and leaves both descriptors' positions unchanged.
+The JSONL reader remains unchanged. Ordinary native factory/resume, reverse and
+full semantic readers still require their remaining integration and qualification.

@@ -121,6 +121,9 @@ struct snag_usage_totals {
 };
 
 struct snag_journal_cursor {
+    /* JSONL: byte cut and preceding event hash. Native: containing-batch
+     * predecessor offset/digest and exact next record sequence; never a
+     * fabricated JSONL position or per-record native hash. Zero begins history. */
     int64_t offset;
     uint64_t next_seq;
     char prev_sha256[SNAG_SHA256_HEX_LEN + 1u];

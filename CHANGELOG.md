@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Traverse native forward history at exact batch cuts, preserving accepted-prefix
+  cursor progress and callback stop behavior while proving unavailable old rows
+  against the independent acknowledged frontier.
+
 - Resolve unavailable historical native point sources through query-specific
   canonical membership proofs under the acknowledged frontier, without treating
   derived-cache data as authority or replaying the old prefix.

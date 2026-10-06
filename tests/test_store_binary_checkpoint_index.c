@@ -712,6 +712,78 @@ check_guarded_cursors(int fd, const struct snag_binary_anchor anchors[4],
     assert(!snag_binary_checkpoint_cursor_read(fd, &anchors[3], sparse, 10u,
         &cursor, collect_cursor, NULL, &visit));
     assert(visit.count == 3u && same_cursor(&cursor, &cuts[9]));
+    /* Independent small fixture forest; the cache never supplies its expected
+     * root. Empty old custody forces every old row to retain its own proof. */
+    char *path = snag_path_join(getenv("TMPDIR") ? getenv("TMPDIR") : "/tmp",
+        "snag-cursor-query-XXXXXX");
+    assert(path);
+    int index_fd = mkstemp(path);
+    assert(index_fd >= 0 && !unlink(path));
+    free(path);
+    unsigned char header[SNAG_BINARY_INDEX_HEADER_SIZE];
+    snag_binary_index_header_encode(header, identity);
+    assert(!snag_write_full(index_fd, header, sizeof(header)));
+    struct snag_binary_index_tree frontier = {0};
+    struct snag_buf cache = {.max = SNAG_BINARY_INDEX_TREE_BATCH_MAX};
+    for (unsigned group = 0u; group < 3u; ++group) {
+        struct snag_binary_batch batch;
+        struct snag_binary_anchor after;
+        assert(!snag_binary_batch_read(fd, anchors[3].end, &anchors[group],
+            &scratch, &batch, &after));
+        snag_buf_reset(&cache);
+        assert(!snag_binary_index_tree_append_batch(&cache, &frontier, identity,
+            &anchors[group], &after, batch.data, batch.size));
+        assert(!snag_write_full(index_fd, cache.data, cache.len));
+    }
+    assert(frontier.count == anchors[3].next_seq - 1u);
+    struct snag_buf query = {.max = SIZE_MAX};
+    assert(!snag_binary_checkpoint_index_encode(&query, identity, &anchors[2],
+        &sparse->tree, NULL, 0u));
+    struct snag_binary_checkpoint_index empty;
+    assert(!snag_binary_checkpoint_index_decode(query.data, query.len, identity,
+        &anchors[2], hash, &empty));
+    assert(snag_seek(index_fd, 31, SEEK_SET) == 31);
+    for (uint64_t first = 1u; first <= 10u; ++first) {
+        for (uint64_t end = first; end <= 10u; ++end) {
+            cursor = cuts[first - 1u];
+            visit = (struct cursor_visit){.first = first};
+            assert(!snag_binary_checkpoint_query_cursor_read(fd, index_fd, &anchors[3],
+                &empty, &frontier, end, &cursor, collect_cursor, cursor_cancelled, &visit));
+            assert(visit.count == end - first && same_cursor(&cursor, &cuts[end - 1u]));
+        }
+    }
+    cursor = initial;
+    visit = (struct cursor_visit){.first = 1u};
+    assert(!snag_binary_checkpoint_query_cursor_read(fd, index_fd, &anchors[3], &empty,
+        &frontier, 10u, &cursor, collect_cursor, cursor_cancelled, &visit));
+    calls = visit.calls;
+    for (size_t cancelled = 1u; cancelled <= calls; ++cancelled) {
+        cursor = initial;
+        visit = (struct cursor_visit){.first = 1u, .cancel_at = cancelled};
+        assert(snag_binary_checkpoint_query_cursor_read(fd, index_fd, &anchors[3], &empty,
+            &frontier, 10u, &cursor, collect_cursor, cursor_cancelled, &visit) < 0 &&
+            errno == ECANCELED && !memcmp(&cursor, &initial, sizeof(cursor)));
+    }
+    cursor = initial;
+    visit = (struct cursor_visit){.first = 1u};
+    assert(snag_binary_checkpoint_query_cursor_read(fd, -1, &anchors[3], &empty, &frontier,
+        10u, &cursor, collect_cursor, NULL, &visit) < 0 && errno == ENOENT && !visit.count);
+    assert(snag_binary_checkpoint_query_cursor_read(fd, index_fd, &anchors[3], &empty, NULL,
+        10u, &cursor, collect_cursor, NULL, &visit) < 0 && errno == EINVAL && !visit.count);
+    struct snag_binary_index_tree wrong = frontier;
+    --wrong.count;
+    assert(snag_binary_checkpoint_query_cursor_read(fd, index_fd, &anchors[3], &empty, &wrong,
+        10u, &cursor, collect_cursor, NULL, &visit) < 0 && errno == EINVAL && !visit.count);
+    assert(!snag_truncate(index_fd, SNAG_BINARY_INDEX_HEADER_SIZE));
+    assert(snag_binary_checkpoint_query_cursor_read(fd, index_fd, &anchors[3], &empty, &frontier,
+        10u, &cursor, collect_cursor, NULL, &visit) < 0 && errno == ENOENT && !visit.count);
+    assert(!memcmp(&cursor, &initial, sizeof(cursor)));
+    assert(!snag_binary_checkpoint_query_cursor_read(fd, index_fd, &anchors[3], &full, &frontier,
+        10u, &cursor, collect_cursor, NULL, &visit) && visit.count == 9u);
+    assert(snag_seek(index_fd, 0, SEEK_CUR) == 31);
+    snag_buf_free(&query);
+    snag_buf_free(&cache);
+    assert(!close(index_fd));
     assert(snag_seek(fd, 0, SEEK_CUR) == 13);
     snag_buf_free(&bytes);
     snag_buf_free(&flat);

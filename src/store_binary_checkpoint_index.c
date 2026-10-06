@@ -323,7 +323,21 @@ snag_binary_cursor_capture(const struct snag_binary_anchor *before,
 }
 
 static int
-cursor_read(int fd, const struct snag_binary_anchor *through,
+cursor_member(const struct snag_binary_checkpoint_index *access, int index_fd,
+    const unsigned char *root, uint64_t count, uint64_t sequence,
+    struct snag_binary_index_entry *out)
+{
+    int found = snag_binary_checkpoint_index_find(access, sequence, out);
+    if (found <= 0) return found;
+    if (index_fd < 0) return snag_errno(ENOENT);
+    found = snag_binary_index_read_verified(index_fd, &access->identity,
+        count, root, sequence, out);
+    return found > 0 ? snag_errno(ENOENT) : found;
+}
+
+static int
+cursor_read(int fd, int index_fd, const unsigned char *root,
+    const struct snag_binary_anchor *through,
     const struct snag_binary_checkpoint_index *access, uint64_t end,
     struct snag_binary_cursor *cursor,
     int (*visit)(void *, const struct snag_binary_record *, uint64_t,
@@ -348,9 +362,8 @@ cursor_read(int fd, const struct snag_binary_anchor *through,
         if (cancelled_read(cancelled, opaque)) goto done;
         if (access && staged.next_seq < access->boundary.next_seq) {
             struct snag_binary_index_entry entry;
-            int found = snag_binary_checkpoint_index_find(access, staged.next_seq, &entry);
-            if (found != 0) {
-                if (found > 0) errno = ENOENT;
+            if (cursor_member(access, index_fd, root, through->next_seq - 1u,
+                staged.next_seq, &entry) < 0) {
                 goto done;
             }
             if (entry.batch_offset != staged.before.end) { errno = EINVAL; goto done; }
@@ -385,9 +398,8 @@ cursor_read(int fd, const struct snag_binary_anchor *through,
             if (sequence < first || sequence >= end) continue;
             if (access && sequence < access->boundary.next_seq) {
                 struct snag_binary_index_entry entry;
-                int found = snag_binary_checkpoint_index_find(access, sequence, &entry);
-                if (found != 0) {
-                    if (found > 0) errno = ENOENT;
+                if (cursor_member(access, index_fd, root, through->next_seq - 1u,
+                    sequence, &entry) < 0) {
                     goto done;
                 }
                 if (entry.batch_offset != before.end || entry.record_offset != start ||
@@ -427,7 +439,7 @@ snag_binary_cursor_read(int fd, const struct snag_binary_anchor *through, uint64
     int (*visit)(void *, const struct snag_binary_record *, uint64_t,
         const struct snag_binary_cursor *), bool (*cancelled)(void *), void *opaque)
 {
-    return cursor_read(fd, through, NULL, end, cursor, visit, cancelled, opaque);
+    return cursor_read(fd, -1, NULL, through, NULL, end, cursor, visit, cancelled, opaque);
 }
 
 int
@@ -438,7 +450,24 @@ snag_binary_checkpoint_cursor_read(int fd, const struct snag_binary_anchor *thro
         const struct snag_binary_cursor *), bool (*cancelled)(void *), void *opaque)
 {
     if (!access) return snag_errno(EINVAL);
-    return cursor_read(fd, through, access, end, cursor, visit, cancelled, opaque);
+    return cursor_read(fd, -1, NULL, through, access, end, cursor, visit, cancelled, opaque);
+}
+
+int
+snag_binary_checkpoint_query_cursor_read(int fd, int index_fd,
+    const struct snag_binary_anchor *through, const struct snag_binary_checkpoint_index *access,
+    const struct snag_binary_index_tree *frontier, uint64_t end, struct snag_binary_cursor *cursor,
+    int (*visit)(void *, const struct snag_binary_record *, uint64_t,
+        const struct snag_binary_cursor *), bool (*cancelled)(void *), void *opaque)
+{
+    if (index_fd < -1 || !boundary_valid(through) || !access || !frontier ||
+        frontier->count != through->next_seq - 1u) {
+        return snag_errno(EINVAL);
+    }
+    unsigned char root[32];
+    if (snag_binary_index_tree_root(frontier, root) < 0) return -1;
+    return cursor_read(fd, index_fd, root, through, access, end, cursor,
+        visit, cancelled, opaque);
 }
 
 struct contiguous_visit {
