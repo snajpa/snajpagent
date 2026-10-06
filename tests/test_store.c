@@ -2483,6 +2483,30 @@ main(void)
         assert(strstr(list_buf, "\tSTATUS\t") != NULL);
     }
     assert_session_lock_retained(&session, "after listing");
+    json_t *catalog = snag_store_catalog(&store, &session, UINT64_MAX, error, sizeof(error));
+    assert(catalog && json_array_size(catalog));
+    bool catalog_found = false;
+    struct snag_buf catalog_text = {.max = sizeof(list_buf)};
+    for (size_t i = 0u; i < json_array_size(catalog); ++i) {
+        const json_t *row = json_array_get(catalog, i);
+        const char *full_id = snag_json_string(row, "id");
+        assert(full_id && strlen(full_id) == SNAG_ID_HEX_LEN);
+        if (!strcmp(full_id, session.id)) catalog_found = true;
+        const json_t *cells = json_object_get(row, "cells");
+        assert(json_array_size(cells) == 7u);
+        for (size_t cell = 0u; cell < 7u; ++cell) {
+            const char *value = json_string_value(json_array_get(cells, cell));
+            assert(value);
+            assert(snag_buf_printf(&catalog_text, "%s%s", cell ? "\t" : "", value) == 0);
+        }
+        assert(snag_buf_putc(&catalog_text, '\n') == 0);
+    }
+    assert(snag_buf_terminate(&catalog_text) == 0 && catalog_found);
+    assert(strchr(list_buf, '\n') && !strcmp(strchr(list_buf, '\n') + 1,
+        (const char *)catalog_text.data));
+    snag_buf_free(&catalog_text);
+    json_decref(catalog);
+    assert_session_lock_retained(&session, "after structured catalog");
     assert(unlinkat(store.sessions_fd, collision, AT_REMOVEDIR) == 0);
     assert(snag_session_delete(&store, &session, id_prefix, NULL, error, sizeof(error)) == 0);
     snag_session_close(&session);

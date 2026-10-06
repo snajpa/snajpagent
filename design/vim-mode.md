@@ -23,6 +23,8 @@ Private workspace storage now supports atomic snapshots, unique names and ID
 prefixes, exclusive ownership and open-first activity ordering. Probes preserve
 existing locks; a lost frontend leaves a resumable snapshot. The frontend still
 needs to define and validate its layout/draft payload and expose the commands.
+The typed agent-session catalogue shares the classic list's collection, live
+status probes, ordering and stored-row selection, and retains full session IDs.
 The workspace interface, semantic attachment
 and IRC conversation work below remain to be implemented.
 

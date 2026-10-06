@@ -673,6 +673,7 @@ struct session_list_row {
     json_t *cells;
     uint64_t time_ms;
     unsigned int status;
+    char id[SNAG_ID_HEX_LEN + 1u];
 };
 
 static int
@@ -741,10 +742,10 @@ out:
     return rc;
 }
 
-int
-snag_store_list(struct snag_store *store, const struct snag_session *owned,
+static int
+list_sessions(struct snag_store *store, const struct snag_session *owned,
     uint64_t stored_limit, unsigned int columns, snag_store_emit_fn emit,
-    void *opaque, char *error, size_t error_size)
+    void *opaque, json_t *catalog, char *error, size_t error_size)
 {
     struct snag_directory *dir = open_sessions_dir(store, error, error_size);
     const char *entry;
@@ -783,13 +784,16 @@ snag_store_list(struct snag_store *store, const struct snag_session *owned,
             rows = grown;
             capacity = next;
         }
-        rows[count++] = (struct session_list_row){cells, time_ms, status};
+        rows[count] = (struct session_list_row){.cells = cells, .time_ms = time_ms,
+            .status = status};
+        memcpy(rows[count].id, entry, sizeof(rows[count].id));
+        ++count;
     }
     rc = finish_directory(dir, error, error_size);
     dir = NULL;
     if (rc < 0) goto out;
     if (!count) {
-        (void)snag_errorf(error, error_size, "no matching sessions");
+        if (!catalog) (void)snag_errorf(error, error_size, "no matching sessions");
     } else {
         qsort(rows, count, sizeof(*rows), compare_list_rows);
         size_t visible = 0u;
@@ -798,7 +802,19 @@ snag_store_list(struct snag_store *store, const struct snag_session *owned,
             if (rows[visible].status == 3u && stored++ >= stored_limit) break;
             ++visible;
         }
-        rc = emit_list(rows, visible, columns, emit, opaque);
+        if (catalog) {
+            for (size_t i = 0u; i < visible; ++i) {
+                json_t *row = json_pack("{s:s,s:I,s:i,s:O}", "id", rows[i].id,
+                    "activity_ms", (json_int_t)rows[i].time_ms,
+                    "status_rank", (int)rows[i].status, "cells", rows[i].cells);
+                if (!row || json_array_append_new(catalog, row) < 0) {
+                    rc = -1;
+                    break;
+                }
+            }
+        } else {
+            rc = emit_list(rows, visible, columns, emit, opaque);
+        }
     }
 out:
     if (dir) (void)snag_directory_close(dir);
@@ -807,4 +823,26 @@ out:
     if (rc < 0 && error_size && !error[0])
         (void)snag_errorf(error, error_size, "cannot write session list");
     return rc;
+}
+
+int
+snag_store_list(struct snag_store *store, const struct snag_session *owned,
+    uint64_t stored_limit, unsigned int columns, snag_store_emit_fn emit,
+    void *opaque, char *error, size_t error_size)
+{
+    return list_sessions(store, owned, stored_limit, columns, emit, opaque, NULL,
+        error, error_size);
+}
+
+json_t *
+snag_store_catalog(struct snag_store *store, const struct snag_session *owned,
+    uint64_t stored_limit, char *error, size_t error_size)
+{
+    json_t *rows = json_array();
+    if (rows && list_sessions(store, owned, stored_limit, 0u, NULL, NULL, rows,
+        error, error_size) < 0) {
+        json_decref(rows);
+        rows = NULL;
+    }
+    return rows;
 }
