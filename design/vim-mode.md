@@ -29,6 +29,11 @@ The split tree now supports horizontal/vertical division, proportional resize,
 equalization, collapse on close and strict round-trip snapshots. Terminal shrink
 hides unfocused branches temporarily while preserving the tree for expansion.
 Its depth stays within the shared JSON parser's nesting budget.
+The independent input decoder recognizes UTF-8, cursor keys, modifiers, SGR mouse
+and focus reports across fragmented reads. Bracketed paste is a literal stream
+with explicit edit boundaries; lone Escape resolves through a timer without
+waiting for another key. Oversized or unsupported control sequences are consumed
+as unsupported input, and malformed ordinary UTF-8 is visibly replaced.
 The workspace interface, semantic attachment
 and IRC conversation work below remain to be implemented.
 

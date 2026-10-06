@@ -28,6 +28,7 @@
 /tests/test_vm_reader
 /tests/test_vm_workspace
 /tests/test_vm_layout
+/tests/test_vm_input
 /tests/test_vm_grid
 /tests/test_unicode
 /tests/test_tools
