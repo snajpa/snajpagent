@@ -109,7 +109,6 @@ struct ui_conversation_tab {
     char endpoint[SNAG_CONFIG_IRC_ENDPOINT_MAX + 1u];
     struct snag_buf draft;
     size_t cursor;
-    uint64_t unread;
     bool opened;
 };
 
@@ -624,10 +623,56 @@ configure_prompt(struct snag_ui_display *display, const struct snag_ui_prompt *p
     return snag_term_set_prompt_template(term, prompt->active, text, frames, prompt->rate, prompt->states);
 }
 
+static bool
+same_conversation_view(const struct ui_conversation_tab *a, const struct ui_conversation_tab *b)
+{
+    if (!a || !b) return false;
+    if (a == b) return true;
+    if (a->target.kind == SNAG_IRC_CONNECTION_EVENTS &&
+        b->target.kind == SNAG_IRC_CONNECTION_EVENTS)
+        return !strcmp(a->target.connection, b->target.connection);
+    return a->target.kind == SNAG_IRC_CHANNEL && b->target.kind == SNAG_IRC_CHANNEL &&
+        !strcmp(a->target.connection, b->target.connection) &&
+        snag_irc_name_equal(a->target.casemapping, a->target.room, b->target.room);
+}
+
+static bool
+extra_tab(const struct snag_ui_display *display, const struct ui_conversation_tab *tab)
+{
+    if (tab->target.kind == SNAG_IRC_CONNECTION_EVENTS)
+        return tab->opened && tab->target.identity == SNAG_IRC_OPERATOR;
+    if (tab->target.kind != SNAG_IRC_CHANNEL) return true;
+    if (tab->target.identity == SNAG_IRC_AGENT) {
+        for (const struct ui_conversation_tab *other = display->conversations; other;
+            other = other->next) {
+            if (other->target.identity == SNAG_IRC_OPERATOR && same_conversation_view(tab, other))
+                return false;
+        }
+        return true;
+    }
+    const struct snag_term *term = &display->term;
+    for (size_t i = 0u; term->destinations && i < term->destinations->count; ++i) {
+        const struct snag_irc_destination *destination = &term->destinations->items[i];
+        if (!strcmp(destination->connection, tab->target.connection) &&
+            snag_irc_name_equal(destination->casemapping[SNAG_IRC_OPERATOR],
+                destination->room, tab->target.room)) return false;
+    }
+    return true;
+}
+
 static int
 apply_prompt(struct snag_ui_display *display)
 {
-    display->term.blank_local = display->prompt.values[0] != NULL;
+    struct snag_term *term = &display->term;
+
+    term->conversation_labels = term->destinations && term->destinations->count > 1u;
+    for (const struct ui_conversation_tab *tab = display->conversations;
+        tab && !term->conversation_labels; tab = tab->next) {
+        if (tab->target.kind != SNAG_IRC_CONNECTION_EVENTS && extra_tab(display, tab)) {
+            term->conversation_labels = true;
+        }
+    }
+    term->blank_local = display->prompt.values[0] != NULL;
     return configure_prompt(display, &display->prompt, &display->term);
 }
 
@@ -655,19 +700,6 @@ display_channel_draft(struct snag_ui_display *display, uint32_t destination)
     return *slot;
 }
 
-static bool
-same_conversation_view(const struct ui_conversation_tab *a, const struct ui_conversation_tab *b)
-{
-    if (!a || !b) return false;
-    if (a == b) return true;
-    if (a->target.kind == SNAG_IRC_CONNECTION_EVENTS &&
-        b->target.kind == SNAG_IRC_CONNECTION_EVENTS)
-        return !strcmp(a->target.connection, b->target.connection);
-    return a->target.kind == SNAG_IRC_CHANNEL && b->target.kind == SNAG_IRC_CHANNEL &&
-        !strcmp(a->target.connection, b->target.connection) &&
-        snag_irc_name_equal(a->target.casemapping, a->target.room, b->target.room);
-}
-
 static int
 display_select_draft(struct snag_ui_display *display, struct ui_conversation_tab *next,
                      struct ui_channel_draft *main)
@@ -686,11 +718,6 @@ display_select_draft(struct snag_ui_display *display, struct ui_conversation_tab
     term->conversation = next ? next->target : (struct snag_irc_conversation_target){0};
     if (next) {
         next->opened = true;
-        for (struct ui_conversation_tab *tab = display->conversations; tab; tab = tab->next) {
-            if (!same_conversation_view(next, tab)) continue;
-            term->conversation_unread -= tab->unread;
-            tab->unread = 0u;
-        }
         for (size_t i = 0u; term->destinations && i < term->destinations->count; ++i)
             if (term->destinations->items[i].target.id == next->target.destination)
                 term->destination = term->destinations->items[i].target;
@@ -699,8 +726,7 @@ display_select_draft(struct snag_ui_display *display, struct ui_conversation_tab
 }
 
 static int
-display_conversation_event(struct snag_ui_display *display, const struct snag_irc_event *event,
-                    bool unread)
+display_conversation_event(struct snag_ui_display *display, const struct snag_irc_event *event)
 {
     if (!event->routed ||
         (event->route.kind == SNAG_IRC_CHANNEL && !event->route.membership[0])) return 0;
@@ -763,15 +789,6 @@ display_conversation_event(struct snag_ui_display *display, const struct snag_ir
             break;
         }
     }
-    bool visible = display->render.view == SNAG_RENDER_CHAT &&
-        same_conversation_view(display->conversation, tab);
-    if (unread && !visible && event->route.direction == SNAG_IRC_INCOMING &&
-        (tab->target.kind != SNAG_IRC_CONNECTION_EVENTS || tab->opened) &&
-        (event->kind == SNAG_IRC_MESSAGE || event->kind == SNAG_IRC_NOTICE) &&
-        tab->unread < UINT64_MAX && term->conversation_unread < UINT64_MAX) {
-        ++tab->unread;
-        ++term->conversation_unread;
-    }
     return display->prompt.source && !display->view_repainting ? apply_prompt(display) : 0;
 }
 
@@ -833,30 +850,6 @@ display_set_view(struct snag_ui_display *display, enum snag_render_view view, bo
     }
     atomic_store(&display->runtime->view, (unsigned int)view);
     return 0;
-}
-
-static bool
-extra_tab(const struct snag_ui_display *display, const struct ui_conversation_tab *tab)
-{
-    if (tab->target.kind == SNAG_IRC_CONNECTION_EVENTS)
-        return tab->opened && tab->target.identity == SNAG_IRC_OPERATOR;
-    if (tab->target.kind != SNAG_IRC_CHANNEL) return true;
-    if (tab->target.identity == SNAG_IRC_AGENT) {
-        for (const struct ui_conversation_tab *other = display->conversations; other;
-            other = other->next) {
-            if (other->target.identity == SNAG_IRC_OPERATOR && same_conversation_view(tab, other))
-                return false;
-        }
-        return true;
-    }
-    const struct snag_term *term = &display->term;
-    for (size_t i = 0u; term->destinations && i < term->destinations->count; ++i) {
-        const struct snag_irc_destination *destination = &term->destinations->items[i];
-        if (!strcmp(destination->connection, tab->target.connection) &&
-            snag_irc_name_equal(destination->casemapping[SNAG_IRC_OPERATOR],
-                destination->room, tab->target.room)) return false;
-    }
-    return true;
 }
 
 static int
@@ -1410,7 +1403,7 @@ apply_message(struct snag_ui_display *display, struct snag_ui_command *command,
     case SNAG_UI_ROUTE: snag_term_destination_route(term, command->text, command->data.route);
         return 0;
     case SNAG_UI_CONVERSATION:
-        return display_conversation_event(display, command->data.irc, false);
+        return display_conversation_event(display, command->data.irc);
     case SNAG_UI_CONVERSATION_SELECT:
         for (struct ui_conversation_tab *tab = display->conversations; tab; tab = tab->next) {
             if (strcmp(tab->target.conversation, command->data.conversation->conversation))
@@ -1560,7 +1553,7 @@ apply_message(struct snag_ui_display *display, struct snag_ui_command *command,
     case SNAG_UI_HISTORY: return snag_render_history(render, command->data.replay.turn,
             command->data.replay.shown, command->data.replay.completed, command->data.replay.total);
     case SNAG_UI_IRC:
-        if (display_conversation_event(display, command->data.irc, true) < 0) return -1;
+        if (display_conversation_event(display, command->data.irc) < 0) return -1;
         return snag_render_irc_event(render, command->data.irc);
     case SNAG_UI_VOICE_EVENT: return snag_render_voice_event(render, command->data.voice, 0u, 0u);
     case SNAG_UI_DURABLE: return snag_render_durable(render, command->data.durable.fd,
@@ -1914,7 +1907,7 @@ apply_display(struct snag_ui_display *display, struct ui_message *message)
             display->term.submit_awaiting_activity = false;
             return apply_prompt(display);
         case SNAG_UI_IRC:
-            return display_conversation_event(display, message->command.data.irc, true);
+            return display_conversation_event(display, message->command.data.irc);
         case SNAG_UI_HOST: case SNAG_UI_HELP: case SNAG_UI_RUNTIME:
         case SNAG_UI_ERROR: case SNAG_UI_WARNING: case SNAG_UI_ROLLOUT_END:
         case SNAG_UI_ROLLOUT_ABORT: case SNAG_UI_SUBMITTED: case SNAG_UI_PUBLIC_BEGIN:

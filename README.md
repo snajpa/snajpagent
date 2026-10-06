@@ -203,8 +203,9 @@ current response; ordinary conversation supplies background context, while a
 direct mention starts a task for the addressed model.
 
 Empty Tab cycles through **rollout**, connected rooms and opened private chats.
-Shift-Tab moves backwards with a draft present. Each view keeps its own draft;
-conversations also retain unread indicators. Incoming messages preserve focus. In rollout,
+Shift-Tab moves backwards with a draft present. Each view keeps its own draft.
+Incoming messages preserve focus. The chat prompt names the destination when
+multiple channels or queries are present. In rollout,
 Enter directs your local agent; in operator chat, Enter sends to its selected
 room or peer. Open a private tab with `/query nick`; `/msg nick text` and
 `/notice nick text` send without changing focus. `/me text` sends an action in

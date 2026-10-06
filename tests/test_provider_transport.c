@@ -5358,11 +5358,29 @@ test_output_cache_failure(void)
     assert(app.output_cache.valid && !strcmp(app.output_cache.handle, b));
     assert(app.output_cache.data.len == strlen(text) &&
         !memcmp(app.output_cache.data.data, text, strlen(text)));
-    /* Collection advances this cursor: older bytes must not be declared absent. */
+    /* Older bytes use verified reverse history, without replaying the prefix. */
+    memcpy(app.session.prev_sha256, hash, sizeof(hash));
     process->collected_bytes[0] = 1u;
     assert(snag_app_output_page(&app, &call, &result, error, sizeof(error)) == 0);
+    assert(!strcmp(snag_json_string(result, "status"), "succeeded"));
+    assert(strstr(snag_json_string(result, "model_text"), text));
+    json_decref(result);
+    /* A completed process has no live cursor and takes the same bounded path. */
+    app.session.process_count = 0u;
+    app.output_cache.valid = false;
+    assert(snag_app_output_page(&app, &call, &result, error, sizeof(error)) == 0);
+    assert(!strcmp(snag_json_string(result, "status"), "succeeded"));
+    assert(strstr(snag_json_string(result, "model_text"), text));
+    json_decref(result);
+    /* Damage to the requested record must still fail and preserve cached bytes. */
+    unsigned char *payload = (unsigned char *)strstr((char *)journal.data, text);
+    assert(payload);
+    *payload = 'X';
+    app.output_cache.valid = false;
+    assert(snag_app_output_page(&app, &call, &result, error, sizeof(error)) == 0);
     assert(!strcmp(snag_json_string(result, "status"), "failed"));
-    assert(strstr(snag_json_string(result, "model_text"), "corrupt event 1"));
+    assert(app.output_cache.data.len == strlen(text) &&
+        !memcmp(app.output_cache.data.data, text, strlen(text)));
     json_decref(result);
     json_decref(call.arguments);
     app.session.pending_log = NULL;
@@ -5370,6 +5388,96 @@ test_output_cache_failure(void)
     snag_buf_free(&app.output_cache.data);
     snag_buf_free(&journal);
     snag_buf_free(&line);
+}
+
+static void
+output_history_record(struct snag_session *session, const char *type, json_t *data)
+{
+    struct snag_buf line = {.max = 65536u};
+    char hash[65];
+    json_t *record = json_pack("{s:o,s:s,s:I,s:s,s:i,s:s,s:i}", "data", data,
+        "prev_sha256", session->prev_sha256, "seq", (json_int_t)session->next_seq,
+        "session_id", session->id, "time_ms", 1, "type", type, "v", 1);
+    assert(record && snag_json_digest(record, hash) == 0);
+    assert(json_object_set_new(record, "event_sha256", json_string(hash)) == 0);
+    assert(snag_json_canonical(record, &line) == 0);
+    assert(snag_buf_append(session->pending_log, line.data, line.len) == 0);
+    assert(snag_buf_putc(session->pending_log, '\n') == 0);
+    memcpy(session->prev_sha256, hash, sizeof(hash));
+    ++session->next_seq;
+    session->log_end = (int64_t)session->pending_log->len;
+    json_decref(record);
+    snag_buf_free(&line);
+}
+
+static void
+test_output_reverse_window(void)
+{
+    struct app_state app = {0};
+    struct snag_buf journal = {.max = 65536u};
+    struct snag_response_item call = {.kind = SNAG_ITEM_TOOL_CALL, .name = "read_tool_output"};
+    const char *handle = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    char error[256] = {0};
+    const char *text = "first second third";
+    json_t *result = NULL;
+    snag_session_init(&app.session);
+    strcpy(app.session.id, "cccccccccccccccccccccccccccccccc");
+    memset(app.session.prev_sha256, 'e', 64u);
+    app.session.prev_sha256[64] = '\0';
+    app.session.next_seq = 100u;
+    app.session.tool_output_bytes = 1024u;
+    app.session.output_cache_bytes = 0u;
+    app.session.pending_log = &journal;
+    assert(snag_buf_printf(&journal, "unrelated earlier history\n") == 0);
+    for (size_t i = 0u; i < 3u; ++i) {
+        output_history_record(&app.session, "process_output",
+            json_pack("{s:s,s:s,s:i,s:I,s:s,s:s#}", "turn_id", app.session.id,
+                "handle", handle, "stream", 0, "offset", (json_int_t)(i * 6u),
+                "encoding", "utf8", "data", text + i * 6u, 6));
+    }
+    output_history_record(&app.session, "process_closed",
+        json_pack("{s:s,s:{s:{s:s,s:i,s:i}}}", "handle", handle,
+            "result", "output_ref", "handle", handle, "stdout_end", 18, "stderr_end", 0));
+    for (unsigned int i = 0u; i < 3u; ++i) {
+        uint64_t offset = i == 0u ? 0u : i == 1u ? 4u : 18u;
+        call.arguments = json_pack("{s:s,s:s,s:I}", "handle", handle,
+            "stream", "stdout", "offset", (json_int_t)offset);
+        assert(snag_app_output_page(&app, &call, &result, error, sizeof(error)) == 0);
+        assert(!strcmp(snag_json_string(result, "status"), "succeeded"));
+        const char *page = snag_json_string(result, "model_text");
+        assert(strstr(page, "next_offset=18 total_bytes=18 eof=true"));
+        assert(!strcmp(strchr(page, '\n') + 1u, text + offset));
+        json_decref(result);
+        json_decref(call.arguments);
+    }
+    call.arguments = json_pack("{s:s,s:s}", "handle", handle, "stream", "stderr");
+    assert(snag_app_output_page(&app, &call, &result, error, sizeof(error)) == 0);
+    assert(!strcmp(snag_json_string(result, "status"), "succeeded"));
+    assert(strstr(snag_json_string(result, "model_text"), "total_bytes=0 eof=true"));
+    json_decref(result);
+    assert(json_object_set_new(call.arguments, "stream", json_string("stdout")) == 0);
+    assert(json_object_set_new(call.arguments, "offset", json_integer(19)) == 0);
+    assert(snag_app_output_page(&app, &call, &result, error, sizeof(error)) == 0);
+    assert(!strcmp(snag_json_string(result, "status"), "failed"));
+    json_decref(result);
+    json_decref(call.arguments);
+    /* Independently valid records still must cover every requested byte. */
+    const char *hole = "dddddddddddddddddddddddddddddddd";
+    for (unsigned int i = 0u; i < 2u; ++i) {
+        output_history_record(&app.session, "process_output",
+            json_pack("{s:s,s:s,s:i,s:i,s:s,s:s}", "turn_id", app.session.id,
+                "handle", hole, "stream", 0, "offset", i ? 12 : 0,
+                "encoding", "utf8", "data", "abcdef"));
+    }
+    call.arguments = json_pack("{s:s,s:s}", "handle", hole, "stream", "stdout");
+    assert(snag_app_output_page(&app, &call, &result, error, sizeof(error)) == 0);
+    assert(!strcmp(snag_json_string(result, "status"), "failed"));
+    assert(strstr(snag_json_string(result, "model_text"), "not contiguous"));
+    json_decref(result);
+    json_decref(call.arguments);
+    app.session.pending_log = NULL;
+    snag_session_close(&app.session);
+    snag_buf_free(&journal);
 }
 
 static void
@@ -10045,6 +10153,7 @@ main(void)
     test_ui_output_order_and_failure();
     test_ui_bounded_history();
     test_output_cache_failure();
+    test_output_reverse_window();
     test_read_only_dispatch();
     test_goal_tool_manipulates_unfinished_goals();
     test_local_provider_transport();

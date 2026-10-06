@@ -817,7 +817,7 @@ historical messages and nickname changes add context without requiring a reply.
 Pending reply obligations survive resume. Opened queries appear in the classic
 Tab cycle, including queries addressed to the agent. Enter replies as the
 operator in operator queries; agent queries are read-only. Incoming traffic
-adds an unread indicator and preserves the focused view. Each private query
+preserves the focused view. Each private query
 keeps its draft while this process runs. Drafts and queued submissions retain
 their original recipient across nickname changes; a stale send is rejected and
 an entirely unsent draft is restored. Resume restores query tabs; use /history
@@ -1294,9 +1294,10 @@ Additional operator channels and private queries join the Tab cycle after the
 endpoint default rooms. Shift-Tab moves
 backwards and preserves a nonempty draft. In chat, Tab with a nonempty draft
 also cycles once conversation tabs exist; command and nickname completion
-still take precedence. The prompt names the channel or query peer and operator/agent
-identity. A chat unread count reports hidden incoming messages and clears for a
-conversation when it is selected. Tab selection never sends or queues its draft.
+still take precedence. With one operator channel and no query, the chat prompt
+uses the plain operator name. Multiple channels or queries add a destination
+label; agent conversations always show their read-only identity. Classic prompts
+omit unread counts. Tab selection never sends or queues its draft.
 Rollout, each channel and each query keep separate process-local drafts.
 .PP
 All default prompts share an activity slot, a goal slot, a space, the local
@@ -4405,7 +4406,9 @@ Maximum command-output bytes kept in the in-memory paging cache, 0 through
 redacted stdout and stderr remain in the durable session journal independently;
 cache misses reload bounded ranges for
 .BR read_tool_output
-without rerunning the command.
+without rerunning the command. Completed-command reads walk verified journal
+records backwards and stop when the requested range is complete. Active commands
+use their retained collection cursor when it covers the requested bytes.
 .TP
 .B max_output_bytes
 Maximum result bytes displayed per tool call, 0 through 4294967295.  Zero

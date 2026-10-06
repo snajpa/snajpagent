@@ -280,14 +280,17 @@ snag_term_destination_prefix(const struct snag_term *term, char *out, size_t siz
 
     if (!size) return;
     out[0] = '\0';
-    if (term->conversation_unread) {
-        (void)snprintf(out, size, "[chat %llu unread] ",
-            (unsigned long long)term->conversation_unread);
-        size_t used = strlen(out);
-        out += used;
-        size -= used;
+    if (!term->chat) return;
+    for (size_t i = 0u; term->destinations && i < term->destinations->count; ++i) {
+        if (term->destinations->items[i].target.id == term->destination.id &&
+            term->destinations->items[i].target.revision == term->destination.revision) {
+            selected = &term->destinations->items[i];
+        }
     }
-    if (term->chat && term->conversation.conversation[0]) {
+    if (term->conversation.conversation[0]) {
+        if (term->conversation.kind == SNAG_IRC_CHANNEL &&
+            term->conversation.identity == SNAG_IRC_OPERATOR &&
+            !term->conversation_labels && selected && selected->joined) return;
         (void)snprintf(out, size, "[%u %s %s %s] ", term->conversation.destination,
             term->conversation.kind == SNAG_IRC_CHANNEL ? "channel" :
                 term->conversation.kind == SNAG_IRC_QUERY ? "query" : "connection",
@@ -297,11 +300,7 @@ snag_term_destination_prefix(const struct snag_term *term, char *out, size_t siz
             term->conversation.identity == SNAG_IRC_OPERATOR ? "operator" : "agent read-only");
         return;
     }
-    if (!term->chat || !term->destinations) return;
-    for (size_t i = 0u; i < term->destinations->count; ++i)
-        if (term->destinations->items[i].target.id == term->destination.id &&
-            term->destinations->items[i].target.revision == term->destination.revision)
-            selected = &term->destinations->items[i];
+    if (!term->destinations) return;
     if (!selected && term->destination.id)
         (void)snprintf(out, size, "[%u unavailable] ", term->destination.id);
     else if (!selected && term->destinations->count) (void)snprintf(out, size, "[choose destination] ");

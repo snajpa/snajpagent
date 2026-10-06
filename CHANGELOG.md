@@ -4,6 +4,13 @@
 
 ## Unreleased
 
+- Read retained tool output through verified recent journal records, stopping
+  when the requested window is complete instead of replaying the whole session.
+
+- Classic prompts omit unread counts and hide the destination label for a single
+  operator channel without queries. Multiple destinations and agent read-only
+  conversations keep their labels.
+
 - Add default-on automatic retry control through `[agent] retry_auto` and saved
   `/retry auto` toggles or `/retry auto on|off`. Disabling stops transport and
   turn retries at the next retry boundary; healthy responses finish. Status

@@ -1139,7 +1139,7 @@ struct process_output_scan {
     const char *handle;
     unsigned int stream;
     uint64_t from, retain, total;
-    bool known;
+    bool known, reverse;
     struct snag_buf *out;
 };
 
@@ -1166,6 +1166,7 @@ scan_process_output(void *opaque, const struct snag_session *state, uint64_t seq
         if (snag_json_integer_u64(ref, scan->stream ? "stderr_end" : "stdout_end", &end) < 0)
             return -1;
         if (end > scan->total) scan->total = end;
+        if (scan->reverse && scan->from >= scan->total) return SNAG_JOURNAL_STOP_AFTER;
     }
     if (strcmp(type, "process_output") || !(handle = snag_json_string(data, "handle")) ||
         strcmp(handle, scan->handle)) return 0;
@@ -1178,17 +1179,40 @@ scan_process_output(void *opaque, const struct snag_session *state, uint64_t seq
     uint64_t end = offset + bytes.len;
     scan->known = true;
     if (end > scan->total) scan->total = end;
+    if (scan->reverse && scan->from >= scan->total) {
+        rc = SNAG_JOURNAL_STOP_AFTER;
+        goto out;
+    }
     uint64_t window_end = scan->retain > UINT64_MAX - scan->from ?
         UINT64_MAX : scan->from + scan->retain;
+    if (window_end > scan->total) window_end = scan->total;
     if (scan->retain && scan->from < end && offset < window_end) {
         uint64_t from = offset > scan->from ? offset : scan->from;
         uint64_t to = end < window_end ? end : window_end;
-        if (from != scan->from + scan->out->len) {
-            (void)snag_fail(error, error_size, EINVAL, "retained output range is not contiguous");
-            goto out;
+        if (scan->reverse) {
+            if (to != window_end - scan->out->len) {
+                (void)snag_fail(error, error_size, EINVAL,
+                    "retained output range is not contiguous");
+                goto out;
+            }
+            size_t wanted = (size_t)(window_end - scan->from);
+            if (snag_buf_reserve(scan->out, wanted - scan->out->len) < 0) goto out;
+            memcpy(scan->out->data + (size_t)(from - scan->from),
+                bytes.data + (size_t)(from - offset), (size_t)(to - from));
+            scan->out->len += (size_t)(to - from);
+            if (scan->out->len == wanted) {
+                rc = SNAG_JOURNAL_STOP_AFTER;
+                goto out;
+            }
+        } else {
+            if (from != scan->from + scan->out->len) {
+                (void)snag_fail(error, error_size, EINVAL,
+                    "retained output range is not contiguous");
+                goto out;
+            }
+            if (snag_buf_append(scan->out, bytes.data + (size_t)(from - offset),
+                (size_t)(to - from)) < 0) goto out;
         }
-        if (from < to && snag_buf_append(scan->out, bytes.data + (size_t)(from - offset),
-                                         (size_t)(to - from)) < 0) goto out;
     }
     rc = 0;
 out:
@@ -1549,14 +1573,22 @@ load_output_window(struct app_state *app, const char *handle, unsigned int strea
         return snag_fail(error, error_size, ECANCELED, "retained output scan cancelled");
     /* Collection advances the process cursor; it cannot locate older bytes. */
     bool indexed = process && process->log_seq && offset >= process->collected_bytes[stream];
-    if (indexed) {
+    if (process) {
         scan.total = process->output_bytes[stream];
         scan.known = true;
     }
-    int rc = indexed ? snag_session_each_event_since(&app->session, process,
-        scan_process_output, &scan, error, error_size) :
-        snag_session_each_event(&app->session, scan_process_output, &scan, error, error_size);
-    if (rc < 0) return -1;
+    if (indexed) {
+        if (snag_session_each_event_since(&app->session, process,
+            scan_process_output, &scan, error, error_size) < 0) return -1;
+    } else {
+        scan.reverse = true;
+        uint64_t before = 0u;
+        do {
+            if (snag_session_each_event_reverse(&app->session, before, SNAG_JOURNAL_PAGE_BYTES,
+                scan_process_output, &scan, &before, error, error_size) < 0) return -1;
+        } while (before && (!scan.known ||
+            (offset < scan.total && out->len < scan.total - offset && out->len < retain)));
+    }
     if (!scan.known || offset > scan.total)
         return snag_fail(error, error_size, ENOENT,
             "No durable %s output exists for handle %s at offset %llu in this session.",

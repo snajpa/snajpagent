@@ -98,8 +98,7 @@ struct snag_term {
     json_t *irc_names;
     struct snag_irc_target destination;
     struct snag_irc_conversation_target conversation;
-    uint64_t conversation_unread;
-    bool conversation_tabs, view_reverse;
+    bool conversation_tabs, conversation_labels, view_reverse;
     const struct snag_term_command *commands;
     size_t cursor;
     size_t command_count;

@@ -794,8 +794,9 @@ the operator identity. Operator input never impersonates the agent nick.
 These IRC commands belong to the common application/IRC layer and work in the
 classic interface too. VM supplies the per-window buffer and draft. The classic
 interface includes opened queries in its Tab destination cycle, alongside the
-rollout and channel destinations. Each conversation keeps its own draft and
-unread count. Incoming activity marks its tab without changing focus. A
+rollout and channel destinations. Each conversation keeps its own draft.
+Incoming activity preserves focus. Classic prompts omit unread counts and hide
+the channel label for a single operator channel without queries. A
 compile-out build retains functional direct messaging and query tabs without VM.
 
 In VM, conversations are buffers displayed in windows (split panes). A window
@@ -1014,11 +1015,11 @@ IRC sleep. Model actions and explicit query/address sends use the frozen API.
 Real PTY/fake-provider fixtures cover identity isolation, private replies,
 implicit destination rejection, nickname changes during requests and resume.
 Classic query tabs now use separate render queues keyed by conversation UUID,
-independent drafts/cursors, hidden-message unread counts and frozen input routes.
+independent drafts/cursors and frozen input routes.
 Rollout and each channel destination also retain their own draft/cursor.
 Tab includes opened queries; Shift-Tab cycles backwards with drafts. Agent
 queries reject operator sends. Incoming events preserve focus, and restored
-conversation metadata recreates tabs without counting old history as unread.
+conversation metadata recreates tabs.
 Drafts remain process-local; history stays in the journal and /history.
 The common operator `/query`, `/msg`, `/notice` and private `/me` paths now share
 query resolution with model tools. UI admission captures connection scopes and

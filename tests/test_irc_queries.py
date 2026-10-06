@@ -453,9 +453,25 @@ class QueryTests(QueryFixture):
         self.assertNotIn('first-private-tab', json.dumps(self.seen))
         self.assertNotIn('second-private-tab', json.dumps(self.seen))
 
+    def test_single_channel_prompt_and_hidden_query_do_not_show_unread(self):
+        self.term.write(b'/chat\r')
+        self.term.repaint_until(b'queryop@')
+        self.assertNotIn(b'channel #lab operator', self.term.output)
+
+        self.direct('queryop', 'quiet-private-message', notice=True)
+        self.term.repaint_until(b'channel #lab operator')
+        self.assertNotIn(b'unread', self.term.output)
+        self.term.write(b'/rollout\r')
+        self.term.repaint_until(b'host-model/medium')
+        self.assertNotIn(b'unread', self.term.output)
+        self.term.write(b'/query query-peer\r')
+        self.term.repaint_until(b'query query-peer operator')
+        self.assertNotIn(b'unread', self.term.output)
+
     def test_agent_tab_is_read_only_and_incoming_does_not_steal_focus(self):
         self.direct('querybot', 'read-only-private-tab', notice=True)
-        self.term.repaint_until(b'chat 1 unread')
+        self.term.repaint_until(b'host-model/medium')
+        self.assertNotIn(b'unread', self.term.output)
         self.assertNotIn(b'query query-peer agent', self.term.output)
         self.term.write(b'\x1b[Z')
         self.term.until(b'read-only-private-tab')
