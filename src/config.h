@@ -172,6 +172,7 @@ struct snag_config {
     char reasoning_effort[SNAG_CONFIG_EFFORT_MAX];
     uint32_t max_goal_prompt_bytes;
     uint32_t max_turn_retries;
+    bool retry_auto;
     bool read_agents_md;
     bool allow_model_change;
     bool auto_update;

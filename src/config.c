@@ -116,6 +116,7 @@ snag_config_init(struct snag_config *config)
     config->provider_count = 1u;
     config->max_goal_prompt_bytes = 256u * 1024u;
     config->max_turn_retries = 5u;
+    config->retry_auto = true;
     config->read_agents_md = true;
 #ifdef SNAJPAGENT_UPDATE_URL
     config->auto_update = strchr(SNAJPAGENT_VERSION, '-') == NULL;
@@ -759,6 +760,7 @@ parse_setting(struct parse_state *state, const char *key, const char *value)
         {SECTION_AGENT, "read_agents_md", SET_BOOL, &config->read_agents_md, 0, 0},
         {SECTION_AGENT, "allow_model_change", SET_BOOL, &config->allow_model_change, 0, 0},
         {SECTION_AGENT, "max_turn_retries", SET_U32, &config->max_turn_retries, 0, UINT32_MAX},
+        {SECTION_AGENT, "retry_auto", SET_BOOL, &config->retry_auto, 0, 0},
         {SECTION_PROVIDER, "parallel_tool_calls", SET_BOOL, &provider->parallel_tool_calls, 0, 0},
         {SECTION_PROVIDER, "connect_timeout_ms", SET_U32, &provider->connect_timeout_ms, 1000, 120000},
         {SECTION_PROVIDER, "idle_timeout_ms", SET_U32, &provider->idle_timeout_ms, 1000, 600000},

@@ -4,6 +4,12 @@
 
 ## Unreleased
 
+- Add default-on automatic retry control through `[agent] retry_auto` and saved
+  `/retry auto` toggles or `/retry auto on|off`. Disabling stops transport and
+  turn retries at the next retry boundary; healthy responses finish. Status
+  identifies the effective value and whether it comes from configuration or
+  the session. Explicit `/retry` remains available.
+
 - Keep provider recovery running when ordinary IRC chat arrives during a turn
   with a paused or blocked goal. Buffered chat remains pending; direct mentions
   and queued work retain their normal handoff.

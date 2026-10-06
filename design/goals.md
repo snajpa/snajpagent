@@ -278,12 +278,21 @@ delays. User text/roles are unchanged, and older unavailable times stay absent.
 
 ## Ordinary-turn retry budget
 
-`[agent] max_turn_retries` defaults to three additional attempts; zero disables
-ordinary automatic recovery. Reuse the retained-turn recovery path and capture
-one budget at logical turn start. A successful intermediate response or tool
-never refills it; a new prompt or manual `/retry` does. Emit `turn_failed` and
-its manual hint only after exhaustion. An active goal always bypasses this
-limit, even when configured to zero. User interruption and goal-state changes
-remain authoritative; an existing paused/blocked goal is never resumed by retry.
-Fresh queued/background input reported at request failure retains the existing
-next-turn handoff instead of waiting for ordinary retries to exhaust.
+`[agent] retry_auto` defaults to true. A durable `retry_auto_changed` string
+override takes precedence until changed by `/retry auto [on|off]`. Missing saved
+state inherits the owner's retained configuration; `/configure` refreshes that
+default. The foreground provider consults the live owner at each retry boundary;
+the IRC summary owner receives atomic policy changes without sharing config.
+Disabling retry lets healthy responses finish and stops transport/turn backoff.
+A failed active goal keeps its status and requires explicit `/retry` or new work;
+view commands and enabling retry alone do not restart its failed turn.
+
+`[agent] max_turn_retries` defaults to five additional attempts; zero disables
+ordinary turn recovery while preserving short transport retries. Capture the
+limit at logical turn start. A successful actionable response resets consecutive
+failure attempts; a new prompt or manual `/retry` starts a fresh budget. Emit
+`turn_failed` and its hint after exhaustion or disabling. When retry is enabled,
+an active goal bypasses this limit. User interruption and goal-state changes
+remain authoritative; a paused/blocked goal is never resumed by retry. Eligible
+queued/background input retains its next-turn handoff. Ordinary chat held behind
+a paused/blocked goal cannot veto recovery.

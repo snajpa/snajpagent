@@ -51,6 +51,17 @@ class CommandTests(unittest.TestCase):
         self.assertEqual(self.owner.journal.read_bytes(), original)
         self.assertEqual(self.owner.identity(), self.owner.owner_identity)
 
+    def test_retry_auto_uses_owner_policy_and_keeps_receipts(self):
+        result = self.command('/retry auto off')
+        self.assertIn(b'Automatic retry: OFF', self.report(result))
+        self.assertEqual(result['outcome'], 'ok')
+        self.assertIn(b'automatic retry: OFF (session override)',
+                      self.report(self.command('/status')))
+        values = [e['data']['value'] for e in self.owner.events()
+                  if e['type'] == 'retry_auto_changed']
+        self.assertEqual(values, ['off'])
+        self.assertIn(b'Automatic retry: ON', self.report(self.command('/retry auto')))
+
     def test_fast_duplicate_reconnect_and_changed_id_text(self):
         request = self.peer.command('/fast')
         result = self.peer.result(request)

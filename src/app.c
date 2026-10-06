@@ -114,10 +114,20 @@ struct turn_retry {
     char last_failure_message[256];
 };
 
+bool
+snag_app_retry_allowed(const void *opaque)
+{
+    const struct app_state *app = opaque;
+
+    return app->session.retry_auto ? !strcmp(app->session.retry_auto, "on") :
+        app->config->retry_auto;
+}
+
 static bool
 turn_retry_available(const struct app_state *app, const struct turn_retry *retry)
 {
-    return !retry->compaction_bounded && !app->turn_policy_stopped && !app->interrupt_requested &&
+    return snag_app_retry_allowed(app) && !retry->compaction_bounded &&
+        !app->turn_policy_stopped && !app->interrupt_requested &&
         !app->input_closed &&
         (app->session.goal_status == SNAG_GOAL_ACTIVE || (app->session.goal_status == retry->goal_status &&
           retry->attempts < retry->limit));
@@ -300,6 +310,7 @@ static const struct snag_term_command commands[] = {
     {"/queue Nd|Ne", "short forms of N delete / N edit"},
     {"/next", "run oldest paused turn; arm queue if active"},
     {"/retry", "retry failed turn; if active, restart at a safe boundary"},
+    {"/retry auto [on|off]", "toggle automatic retries or set the saved session preference"},
     {"/yield", "return tool wait to model; keep running processes"},
     {"/session", "current session ID and running sessions"},
     {"/session list|l", "all saved sessions and their attachment state"},
@@ -1309,7 +1320,8 @@ render_status(struct app_state *app)
         advertised = snag_model_metadata(&app->model_cache, provider, app->session.default_model);
     struct snag_buf text = {.max = 64u * 1024u};
     if (snag_buf_printf(&text, "session: %s\n" "name: %s\n" "state: %s\n" "tools: %s\n"
-        "provider: %s\n" "model: %s\n" "effort: %s\n" "fast: %s\n" "cwd: %s\n"
+        "provider: %s\n" "model: %s\n" "effort: %s\n" "fast: %s\n"
+        "automatic retry: %s (%s)\n" "cwd: %s\n"
         "turns: %llu\n" "queue: %zu%s\n" "verbosity: %u\n" "context: source=%s",
         id, app->session.name ? app->session.name : "-",
         app->session.active_turn ? "active" : "idle",
@@ -1318,6 +1330,8 @@ render_status(struct app_state *app)
         app->session.default_effort,
         snag_string_in(app->session.service_tier, "priority") ? "ON (priority requested)" :
             app->session.service_tier ? "OFF (standard requested)" : "OFF (provider default)",
+        snag_app_retry_allowed(app) ? "ON" : "OFF",
+        app->session.retry_auto ? "session override" : "configuration",
         app->session.cwd,
         (unsigned long long)app->session.turn_count, app->session.pending_queue_count,
         app->session.pending_queue_count && !app->session.queue_armed ? " paused" : "",
@@ -1940,6 +1954,25 @@ trim_selector_part(char *part)
     *end = '\0';
     return part;
 }
+static int
+change_retry_auto(struct app_state *app, const char *argument)
+{
+    bool enabled = snag_app_retry_allowed(app);
+
+    if (*argument && strcmp(argument, "on") && strcmp(argument, "off"))
+        return app_error(app, "usage: /retry auto [on|off]");
+    enabled = *argument ? !strcmp(argument, "on") : !enabled;
+    const char *value = enabled ? "on" : "off";
+    if (!app->session.retry_auto || strcmp(app->session.retry_auto, value)) {
+        char error[256] = {0};
+        if (commit_event(app, "retry_auto_changed", json_pack("{s:s}", "value", value),
+                error, sizeof(error)) < 0) return app_error(app, error), -1;
+    }
+    snag_app_irc_summary_retry_policy(app);
+    return app_textf(app, SNAG_UI_HOST, "Automatic retry: %s (session override)",
+        enabled ? "ON" : "OFF");
+}
+
 static int
 change_fast(struct app_state *app, const char *argument)
 {
@@ -3332,6 +3365,16 @@ handle_common_command(struct app_state *app, const char *line, bool active, bool
         app->yield_requested = app->tool_waiting;
         return request_control(app, SNAG_CONTROL_RETRY, "/retry");
     }
+    if (!strncmp(line, "/retry", 6u) && isspace((unsigned char)line[6])) {
+        const char *argument = line + 6u;
+        while (isspace((unsigned char)*argument)) ++argument;
+        if (strncmp(argument, "auto", 4u) ||
+            (argument[4] && !isspace((unsigned char)argument[4])))
+            return app_error(app, "usage: /retry auto [on|off]");
+        argument += 4u;
+        while (isspace((unsigned char)*argument)) ++argument;
+        return change_retry_auto(app, argument);
+    }
     if (active && strcmp(line, "/exit") == 0) {
         app->input_closed = true;
         app->interrupt_requested = true;
@@ -3640,6 +3683,7 @@ view_command_native(const char *line)
     if (length >= sizeof(verb)) return false;
     memcpy(verb, line, length);
     verb[length] = '\0';
+    if (!strcmp(verb, "/retry") && isspace((unsigned char)line[length])) return true;
     if (snag_string_in(verb, "/help /? /status /history /model /fast /effort /context "
         "/state /goal /steering /banner /configure /compact /yield /verbose /cat "
         "/attachments /detach "
@@ -4708,7 +4752,8 @@ turn_recovery_wait(struct app_state *app, struct turn_retry *retry)
                 (unsigned long long)retry->attempts, retry->limit, delay / 1000.0);
         app->recovery_status_ms = snag_monotonic_ms();
     }
-    while (!app->input_closed && (goal ? (app->session.goal_status == SNAG_GOAL_ACTIVE ||
+    while (!app->input_closed && (policy || snag_app_retry_allowed(app)) &&
+           (goal ? (app->session.goal_status == SNAG_GOAL_ACTIVE ||
                     (app->session.goal_status == SNAG_GOAL_PAUSED && app->session.process_count)) :
                    app->session.goal_status == initial_goal_status) &&
            (policy || snag_monotonic_ms() < deadline ||
@@ -4732,6 +4777,7 @@ turn_recovery_wait(struct app_state *app, struct turn_retry *retry)
     }
     app->recovery_wait = false;
     if (app->interrupt_requested || app->input_closed) return 2;
+    if (!policy && !snag_app_retry_allowed(app)) return 3;
     if (policy && app->steering_requested) {
         app->turn_policy_stopped = SNAG_POLICY_STOP_NONE;
         app->steering_requested = false;
@@ -5738,13 +5784,21 @@ run_tracked_turn(struct app_state *app, const char *prompt,
             if (wait_rc < 0) { rc = 3; break; }
             if (wait_rc == 0 && !app->turn_policy_stopped) continue;
         }
-        bool goal = app->session.goal_status == SNAG_GOAL_ACTIVE;
+        bool goal = app->session.goal_status == SNAG_GOAL_ACTIVE && snag_app_retry_allowed(app);
         if (app->turn_policy_stopped || (!goal && !retry.pending) || app->input_closed ||
             app->interrupt_requested || rc == 0 || (rc == SNAG_APP_INPUT_READY && !app->session.active_turn))
             break;
         if (!goal) ++retry.attempts;
         int wait_rc = turn_recovery_wait(app, &retry);
         if (wait_rc < 0) { rc = 3; break; }
+        if (wait_rc == 3) {
+            char error[256] = {0};
+            rc = fail_turn(app, &retry, app->session.active_turn_id, "retry_disabled",
+                "internal", "Automatic retry disabled; use /retry to continue.",
+                error, sizeof(error)) < 0 ? 3 : 4;
+            if (rc == 3) (void)app_error(app, error);
+            break;
+        }
         if (wait_rc) {
             if (app->session.active_turn) {
                 char error[256] = {0};
@@ -5786,7 +5840,10 @@ run_tracked_turn(struct app_state *app, const char *prompt,
                 if (wait_rc < 0) { rc = 3; break; }
                 if (wait_rc) break;
             }
-            if (repair && (!goal || rc == 3)) { rc = 3; break; }
+            if (repair && (!goal || rc == 3 || !snag_app_retry_allowed(app))) {
+                rc = 3;
+                break;
+            }
             if (app->interrupt_requested || app->input_closed ||
                 (goal && app->session.goal_status != SNAG_GOAL_ACTIVE)) { rc = 1; break; }
         }
@@ -6088,7 +6145,8 @@ run_ready_chains(struct app_state *app)
             if (turn_rc != 0 && turn_rc != SNAG_APP_INPUT_READY) return turn_rc;
             continue;
         }
-        if (app->goal_armed && app->session.pending_queue_count == 0u &&
+        if (app->goal_armed && !app->session.last_turn_failed &&
+            app->session.pending_queue_count == 0u &&
             app->session.goal_status == SNAG_GOAL_ACTIVE) {
             turn_rc = run_tracked_turn(app, SNAG_GOAL_CONTINUATION_TEXT,
                                       NULL, true, false, NULL, false);

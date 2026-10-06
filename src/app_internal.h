@@ -371,6 +371,7 @@ json_t *snag_app_input_received_data(struct app_state *, const char *, bool, boo
 bool snag_app_context_cancelled(void *opaque);
 int snag_app_active_input_pump(void *opaque, unsigned int timeout_ms);
 int snag_app_provider_input_pump(void *opaque, unsigned int timeout_ms);
+bool snag_app_retry_allowed(const void *opaque);
 int snag_app_provider_activity(struct app_state *app, bool active);
 int snag_app_irc_event(void *opaque, const struct snag_irc_event *event);
 int snag_app_irc_trace(void *opaque, unsigned int level, char direction,
@@ -401,6 +402,7 @@ int snag_app_irc_attention_tool(struct app_state *, const struct snag_response_i
 void snag_app_irc_summary_start(struct app_state *, const struct snag_context_projection *,
                               const struct snag_credential *);
 int snag_app_irc_summary_take(struct app_state *, char *, size_t);
+void snag_app_irc_summary_retry_policy(struct app_state *);
 void snag_app_irc_summary_close(struct app_state *);
 bool snag_app_exact_count_enabled(enum snag_token_count_mode mode, enum snag_count_capability capability);
 int snag_app_provider_count(struct app_state *app, const json_t *count_request,

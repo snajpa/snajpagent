@@ -14,7 +14,7 @@
 
 struct app_irc_summary {
     pthread_t thread;
-    atomic_bool stop, done;
+    atomic_bool stop, done, retry_auto;
     bool started;
     struct snag_provider_config provider;
     struct snag_credential credential;
@@ -106,6 +106,22 @@ summary_pump(void *opaque, unsigned int timeout_ms)
     return atomic_load_explicit(&job->stop, memory_order_acquire) ? 2 : 0;
 }
 
+static bool
+summary_retry_allowed(const void *opaque)
+{
+    const struct app_irc_summary *job = opaque;
+    return atomic_load_explicit(&job->retry_auto, memory_order_acquire);
+}
+
+void
+snag_app_irc_summary_retry_policy(struct app_state *app)
+{
+    if (app->irc_summary) {
+        atomic_store_explicit(&app->irc_summary->retry_auto,
+            snag_app_retry_allowed(app), memory_order_release);
+    }
+}
+
 static void *
 summary_owner(void *opaque)
 {
@@ -117,7 +133,7 @@ summary_owner(void *opaque)
 
     job->outcome = snag_provider_responses_create((struct snag_provider_connection){
         .config = &config, .provider = &job->provider, .credential = &job->credential,
-        .pump = summary_pump, .pump_opaque = job,
+        .pump = summary_pump, .pump_opaque = job, .retry_allowed = summary_retry_allowed,
         .session_id = job->session_id,
         .low_speed_override_ms = job->provider.request_timeout_ms},
         job->request, NULL, NULL, NULL, NULL, NULL, NULL, &job->graph, &failure,
@@ -169,6 +185,7 @@ snag_app_irc_summary_start(struct app_state *app, const struct snag_context_proj
     atomic_init(&job->stop, false);
     atomic_init(&job->done, false);
     job->provider = *app->turn_provider;
+    atomic_init(&job->retry_auto, snag_app_retry_allowed(app));
     job->provider.models = NULL;
     job->provider.model_count = 0;
     job->credential = *credential;

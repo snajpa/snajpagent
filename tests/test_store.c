@@ -1018,7 +1018,7 @@ test_goal_wait_channel(struct snag_store *store, const char *cwd)
 }
 
 static void
-test_service_tier(struct snag_store *store, const char *cwd)
+test_retry_and_service_tier(struct snag_store *store, const char *cwd)
 {
     struct snag_session session, restored;
     char error[256], id[SNAG_ID_HEX_LEN + 1u];
@@ -1028,16 +1028,21 @@ test_service_tier(struct snag_store *store, const char *cwd)
     memcpy(id, session.id, sizeof(id));
     json_t *state = snag_checkpoint_state_encode(&session);
     assert(state && snag_checkpoint_state_decode(state, &restored) == 0);
-    assert(!restored.service_tier);
+    assert(!restored.service_tier && !restored.retry_auto);
     snag_session_close(&restored);
     json_decref(state);
+    commit_event(&session, "retry_auto_changed", json_pack("{s:s}", "value", "off"));
     commit_event(&session, "service_tier_changed", json_pack("{s:s}", "value", "priority"));
     assert(snag_session_checkpoint(&session, error, sizeof(error)) == 0);
     snag_session_close(&session);
     snag_session_init(&session);
     assert(snag_session_open(store, &session, id, error, sizeof(error)) == 0);
     assert(session.checkpoint_seq && !strcmp(session.service_tier, "priority"));
+    assert(!strcmp(session.retry_auto, "off"));
     int64_t end = session.log_end;
+    assert(snag_session_commit(&session, "retry_auto_changed",
+        json_pack("{s:s}", "value", "unknown"), NULL, error, sizeof(error)) < 0);
+    assert(session.log_end == end && !strcmp(session.retry_auto, "off"));
     assert(snag_session_commit(&session, "service_tier_changed",
         json_pack("{s:s}", "value", "unknown"), NULL, error, sizeof(error)) < 0);
     assert(session.log_end == end && !strcmp(session.service_tier, "priority"));
@@ -1048,12 +1053,19 @@ test_service_tier(struct snag_store *store, const char *cwd)
         "service_tier", json_true()) == 0);
     assert(snag_checkpoint_state_decode(state, &restored) < 0);
     snag_session_close(&restored);
+    assert(json_object_set_new(json_object_get(state, "strings"),
+        "service_tier", json_string("priority")) == 0);
+    assert(json_object_set_new(json_object_get(state, "strings"), "retry_auto", json_true()) == 0);
+    assert(snag_checkpoint_state_decode(state, &restored) < 0);
+    snag_session_close(&restored);
     json_decref(state);
+    commit_event(&session, "retry_auto_changed", json_pack("{s:s}", "value", "on"));
     commit_event(&session, "service_tier_changed", json_pack("{s:s}", "value", "default"));
     snag_session_close(&session);
     snag_session_init(&session);
     assert(snag_session_open(store, &session, id, error, sizeof(error)) == 0);
     assert(!strcmp(session.service_tier, "default"));
+    assert(!strcmp(session.retry_auto, "on"));
     id[8] = '\0';
     assert(snag_session_delete(store, &session, id, NULL, error, sizeof(error)) == 0);
     snag_session_close(&session);
@@ -2486,7 +2498,7 @@ main(void)
     test_history_prefix(&store, cwd);
     test_history_snapshot_refresh(&store, cwd);
     test_upload_staging_lifecycle(&store, cwd);
-    test_service_tier(&store, cwd);
+    test_retry_and_service_tier(&store, cwd);
     test_goal_wait_channel(&store, cwd);
     test_irc_conversation_checkpoint(&store, cwd);
     test_checkpoint_optional_download_queue(cwd);

@@ -43,6 +43,8 @@ struct snag_provider_connection {
      * summary) is bounded by the provider request timeout, not the idle timeout.
      * Zero keeps the idle timeout. */
     uint32_t low_speed_override_ms;
+    /* Consulted at retry boundaries with pump_opaque; NULL uses config. */
+    bool (*retry_allowed)(const void *opaque);
 };
 
 enum snag_audio_operation { SNAG_AUDIO_LISTEN, SNAG_AUDIO_TRANSCRIBE, SNAG_AUDIO_SPEAK };

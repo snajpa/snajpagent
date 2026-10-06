@@ -93,7 +93,8 @@ fail: json_decref(out);
     if (snag_auth_read(app->store.root_fd, provider, false, NULL, &credential,
                       snag_app_active_input_pump, app, error, error_size) < 0) return -1;
     rc = snag_provider_models_list((struct snag_provider_connection){
-        app->config, provider, &credential, &app->ui, snag_app_provider_input_pump, app, app->session.id, 0},
+        app->config, provider, &credential, &app->ui, snag_app_provider_input_pump, app,
+        app->session.id, 0, snag_app_retry_allowed},
         models, error, error_size);
     snag_credential_clear(&credential);
     return rc;
@@ -228,7 +229,8 @@ snag_app_provider_count(struct app_state *app, const json_t *count_request,
         return SNAG_APP_COUNT_SKIPPED;
     }
     rc = snag_provider_responses_count((struct snag_provider_connection){
-        app->config, app->turn_provider, credential, &app->ui, snag_app_provider_input_pump, app, app->session.id, 0},
+        app->config, app->turn_provider, credential, &app->ui, snag_app_provider_input_pump,
+        app, app->session.id, 0, snag_app_retry_allowed},
         count_request, &exact_tokens, &endpoint_unsupported, error, error_size, NULL);
     if (rc == 0) {
         *input_tokens = exact_tokens;
@@ -291,7 +293,8 @@ snag_app_provider_compact(struct app_state *app, const json_t *compact_request,
     return rc;
 #else
     return snag_provider_responses_compact((struct snag_provider_connection){
-        app->config, app->turn_provider, credential, &app->ui, snag_app_provider_input_pump, app, app->session.id, 0},
+        app->config, app->turn_provider, credential, &app->ui, snag_app_provider_input_pump,
+        app, app->session.id, 0, snag_app_retry_allowed},
         compact_request, output, error, error_size, NULL);
 #endif
 }
@@ -369,7 +372,7 @@ snag_app_provider_run(struct app_state *app, const char *prompt, const json_t *s
     return snag_provider_responses_create((struct snag_provider_connection){
         .config = app->config, .provider = app->turn_provider, .credential = credential,
         .render = &app->ui, .pump = snag_app_provider_input_pump, .pump_opaque = app,
-        .session_id = app->session.id},
+        .session_id = app->session.id, .retry_allowed = snag_app_retry_allowed},
         create_request, snag_app_stream_public, app, hosted_search_activity, app,
         snag_app_request_ready, app,
         graph, failure, NULL, error, error_size, retry_count);

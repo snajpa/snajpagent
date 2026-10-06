@@ -178,6 +178,7 @@ struct snag_session {
     char command_shell[SNAG_CONFIG_PATH_MAX + 1u];
     const char *cwd;
     const char *service_tier; /* NULL preserves the provider's default. */
+    const char *retry_auto; /* NULL inherits the owner's configuration. */
     char trash_name[SNAG_ID_HEX_LEN + 1u + SNAG_ID_HEX_LEN + 1u];
     char *dir_path;
     const char *name;

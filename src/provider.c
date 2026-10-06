@@ -42,6 +42,7 @@ struct provider_ctx {
     const char *session_id;
     struct snag_ui *render;
     snag_provider_pump_fn pump;
+    bool (*retry_allowed)(const void *opaque);
     void *pump_opaque;
     snag_provider_ready_fn ready;
     void *ready_opaque;
@@ -552,6 +553,15 @@ curl_code_retryable(CURLcode code)
     }
 }
 
+static bool
+retry_allowed(struct provider_ctx *ctx)
+{
+    return ctx->retry_allowed ? ctx->retry_allowed(ctx->pump_opaque) :
+        !ctx->config || ctx->config->retry_auto;
+}
+
+enum { RETRY_DISABLED = 4 };
+
 static int
 retry_wait(struct provider_ctx *ctx, unsigned int retries_done,
            const char *reason, char *error, size_t error_size)
@@ -562,6 +572,7 @@ retry_wait(struct provider_ctx *ctx, unsigned int retries_done,
 
     if (process_controls(ctx, 0u)) return ctx->cancel_code == 3 ? -1 : ctx->cancel_code;
     if (ctx->new_input) return SNAG_PROVIDER_NEW_INPUT;
+    if (!retry_allowed(ctx)) return RETRY_DISABLED;
     if (ctx->render) {
         char line[160];
         (void)snprintf(line, sizeof(line), "provider retry %u/%u after %s in %llums",
@@ -576,6 +587,7 @@ retry_wait(struct provider_ctx *ctx, unsigned int retries_done,
         uint32_t slice = remaining > 25u ? 25u : (uint32_t)remaining;
         if (process_controls(ctx, 0u)) return ctx->cancel_code == 3 ? -1 : ctx->cancel_code;
         if (ctx->new_input) return SNAG_PROVIDER_NEW_INPUT;
+        if (!retry_allowed(ctx)) return RETRY_DISABLED;
         if (!remaining) break;
         if (snag_wakeup_wait(snag_ui_wake_fd(ctx->render), (int)slice) < 0 && errno != EINTR)
             return snag_errorf(error, error_size, "provider retry wait failed");
@@ -658,13 +670,15 @@ perform_with_retry(CURL *curl, struct provider_ctx *ctx, char *error, size_t err
         if (code == CURLE_ABORTED_BY_CALLBACK && (ctx->cancel_code == 1 || ctx->cancel_code == 2)) {
             break;
         }
-        if (!retryable_attempt(ctx, code) || retries >= SNAG_PROVIDER_MAX_RETRIES) break;
+        if (!retry_allowed(ctx) || !retryable_attempt(ctx, code) ||
+            retries >= SNAG_PROVIDER_MAX_RETRIES) break;
         {
             char reason[96];
             int wait_rc;
             if (retry_reason(ctx, code, reason, sizeof(reason)) < 0)
                 snprintf(reason, sizeof(reason), "retryable provider failure");
             wait_rc = retry_wait(ctx, retries, reason, error, error_size);
+            if (wait_rc == RETRY_DISABLED) break;
             if (wait_rc == SNAG_PROVIDER_NEW_INPUT) {
                 if (ctx->render) (void)snag_ui_text(ctx->render, SNAG_UI_WARNING,
                                       "provider retry stopped: new input arrived");
@@ -1114,6 +1128,7 @@ provider_ctx_init(struct provider_ctx *ctx, struct snag_provider_connection conn
     ctx->session_id = connection.session_id;
     ctx->render = connection.render;
     ctx->pump = connection.pump;
+    ctx->retry_allowed = connection.retry_allowed;
     ctx->pump_opaque = connection.pump_opaque;
     ctx->low_speed_ms = connection.low_speed_override_ms;
     ctx->credential = *connection.credential;
@@ -1645,7 +1660,8 @@ snag_provider_audio(enum snag_audio_operation operation, const json_t *request,
     if (snag_provider_native_audio(provider) && operation != SNAG_AUDIO_TRANSCRIBE)
         return snag_fail(error, error_size, ENOTSUP,
             "Selected provider supports dictation and live voice, not this audio API operation");
-    provider_ctx_init(&ctx, (struct snag_provider_connection){config,provider,credential,NULL,pump,opaque,NULL, 0},
+    provider_ctx_init(&ctx, (struct snag_provider_connection){
+        config, provider, credential, NULL, pump, opaque, NULL, 0, NULL},
                        20u * 1024u * 1024u, 65536u);
     ctx.audio_output = output;
     ctx.multipart = operation == SNAG_AUDIO_TRANSCRIBE;
@@ -1728,7 +1744,7 @@ snag_provider_voice_call(const struct snag_config *config,
     if (!snag_provider_native_audio(provider) || !sdp || !json_is_object(session))return -1;
     provider_ctx_init(&ctx,
         (struct snag_provider_connection){config,provider,credential,NULL,
-            pump,opaque,NULL, 0},
+            pump,opaque,NULL, 0, NULL},
         65536u,65536u);
     /* The caller resolves credentials before starting voice. Keep that same
      * snapshot for the call and WebSocket attachment. The session owner protects

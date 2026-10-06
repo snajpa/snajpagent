@@ -69,8 +69,11 @@ while retaining the full log; failure preserves previous context.
 
 ### Keep working, or leave and come back
 
-Failed turns retry five times by default; `[agent] max_turn_retries` changes
-this. Goals retry ordinary errors without a limit, while policy stops pause them.
+Automatic retry is on by default. `/retry auto` toggles it for the session;
+`/retry auto on|off` sets it explicitly. `[agent] retry_auto` sets the default.
+Failed turns retry five times; `max_turn_retries` changes that budget. With
+automatic retry enabled, active goals retry ordinary errors without a limit,
+while policy stops pause them.
 
 A normal final answer ends the turn; set a goal to continue work beyond it:
 

@@ -249,6 +249,7 @@ choosing a model supported by your provider:
 .nf
 [agent]
 provider = openai
+retry_auto = true
 model = gpt-5.5
 
 [provider openai]
@@ -3139,14 +3140,24 @@ For an unfinished active turn, request continuation at the next safe boundary.
 Pending input that failed preparation can also be retried.  Explicitly cancelled
 turns stay cancelled; retained completed or uncertain tool calls are never
 blindly executed again.  Paused queues and goals remain paused.
-Ordinary turns retry failures automatically up to
+With automatic retry enabled, ordinary turns retry failures up to
 .B max_turn_retries
 additional times (default five), then display the manual retry hint. A repeated identical definitive provider rejection fails at once instead of replaying.
 Automatic retry counts and their original limit survive restart.  A successful
 actionable response or manual retry after terminal failure starts a fresh budget.
-Active goals recover ordinary failures without an attempt limit.  Same-process
+With automatic retry enabled, active goals recover ordinary failures without an attempt limit.  Same-process
 recovery retains live command handles; after restart their outcomes are settled
 without reusing old handles.  Policy stops survive restart and require clarification.
+.TP
+.B /retry auto [on|off]
+Toggle automatic transport and turn retries, or set them explicitly. The command
+prints ON or OFF and saves a session override that survives restart. The default
+comes from [agent] retry_auto=true. /status shows the value and its source.
+An explicit /configure reload changes the default when no session override exists.
+Disabling during backoff stops the next attempt. Healthy responses finish.
+A failed goal keeps its objective and status; view commands and enabling retry
+alone do not restart it. Use /retry or submit new work to continue.
+Queued work, steering, cancellation and policy stops retain their admission rules.
 .SS Input timestamps
 New prompts and steers carry separate host-generated timing metadata in model
 context.  The original user text and its authority remain unchanged.
@@ -3693,13 +3704,18 @@ and
 .B max_goal_prompt_bytes
 Goal wording limit, 1 through 1048576.  Default: 262144.
 .TP
+.B retry_auto
+Enable automatic transport and failed-turn retries. Default: true.
+The saved /retry auto session override takes precedence. Disabling also stops
+active-goal recovery after failure; explicit /retry remains available.
+.TP
 .B max_turn_retries
 Additional automatic retries per consecutive failure sequence, 0 through
 4294967295. Default: 5 (six attempts including the first). Zero disables
 ordinary automatic retries. A successful actionable response resets the count.
 The configured limit is captured at turn start, including an explicit
 .BR /retry .
-Active goals ignore this limit and retain unlimited recovery. Paused and blocked
+With automatic retry enabled, active goals ignore this limit and retain unlimited recovery. Paused and blocked
 goals keep their state while ordinary prompts retry.
 .TP
 .B allow_model_change
@@ -5930,6 +5946,10 @@ still have to validate; a partial trailing event remains an error.
 Ordinary failures that otherwise offer
 .B /retry
 receive up to five automatic retries per consecutive failure sequence by default.
+.B /retry auto off
+disables automatic transport and turn recovery;
+.B /retry auto on
+enables it for the session.
 A successful actionable response renews the budget for later failures. Configure
 .B max_turn_retries
 in the
@@ -5944,7 +5964,8 @@ The retry hint appears once when the ordinary budget is exhausted or disabled.
 An oversized SSE line reports its recognized event type when present, without
 echoing provider content. The existing 1 MiB line bound still applies.
 .PP
-An active goal retries failed work indefinitely with paced, interruptible waits.
+With automatic retry enabled, an active goal retries failed work indefinitely
+with paced, interruptible waits.
 This includes compaction failures and exhausted preparation-attempt budgets.
 Provider capacity exhaustion, protocol errors, context recovery failures and
 local prerequisites do not pause or block the goal.  Recovery preserves
@@ -5965,7 +5986,8 @@ notices are rate-limited.  A provider refusal does not authorize bypassing its
 policy or changing the request's purpose.
 .PP
 Transient transport, HTTP rate-limit/server, and structured Responses stream
-failures receive at most two retries of the same request, with bounded backoff
+failures receive at most two retries of the same request when automatic retry is
+enabled, with bounded backoff
 and cancellation available during the wait.  Earlier turn/tool work is not
 replayed. Additional eligible live chat, steering or queued input prevents further
 retries, including during backoff. Ordinary chat buffered behind a paused or

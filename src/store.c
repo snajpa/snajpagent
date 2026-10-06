@@ -1551,6 +1551,12 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             !snag_text_valid(new_effort, 1u, sizeof(session->default_effort) - 1u) ||
             strcmp(old_effort, session->default_effort) != 0 || strcmp(old_effort, new_effort) == 0 ||
             !snag_strcpy(session->default_effort, sizeof(session->default_effort), new_effort)) goto invalid;
+    } else if (strcmp(type, "retry_auto_changed") == 0) {
+        const char *value = snag_json_string(data, "value");
+        if (!snag_json_exact_keys(data, "value") ||
+            !snag_string_in(value, "on off")) goto invalid;
+        if (replace_text(session, &session->retry_auto, "retry_auto", value, 3u) < 0)
+            return -1;
     } else if (strcmp(type, "service_tier_changed") == 0) {
         const char *value = snag_json_string(data, "value");
         if (!snag_json_exact_keys(data, "value") ||
