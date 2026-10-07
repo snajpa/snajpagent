@@ -158,7 +158,7 @@ viewport_test(struct snag_store *store, const char *root)
     assert(padding);
     memset(padding, 'x', 256u * 1024u);
     padding[256u * 1024u] = '\0';
-    for (unsigned int i = 0u; i < 40u; ++i) {
+    for (unsigned int i = 0u; i < 80u; ++i) {
         char text[40];
         (void)snprintf(text, sizeof(text), "viewport-row-%02u", i);
         projection_record(&source, "input_received", json_pack("{s:s}", "text", text));
@@ -1166,7 +1166,7 @@ channel_history_test(struct snag_store *store, const char *root)
             .conversation = "22222222222222222222222222222222",
             .membership = "33333333333333333333333333333333",
             .generation = 1u, .identity = SNAG_IRC_OPERATOR, .kind = SNAG_IRC_CHANNEL,
-            .joined = true}};
+            .joined = true, .target = "#Side"}};
     struct snag_irc_conversation_target target = {.kind = SNAG_IRC_CHANNEL,
         .connection = "11111111111111111111111111111111",
         .conversation = "22222222222222222222222222222222",

@@ -5,6 +5,14 @@
 #include <limits.h>
 #include <string.h>
 
+const char *
+snag_vm_block_text(const json_t *block, bool heading)
+{
+    const char *display = snag_json_string(block, "display");
+    return display ? heading ? "" : display :
+        snag_json_string(block, heading ? "label" : "text");
+}
+
 int
 snag_vm_source_replace(json_t *runs, uint64_t display, uint64_t source,
     uint64_t display_bytes, uint64_t source_bytes)
@@ -30,8 +38,8 @@ snag_vm_source_replace(json_t *runs, uint64_t display, uint64_t source,
         (json_int_t)source, (json_int_t)display_bytes, (json_int_t)source_bytes, 1));
 }
 
-uint64_t
-snag_vm_source_position(const json_t *block, uint64_t byte, bool display_to_source)
+static uint64_t
+source_position(const json_t *block, uint64_t byte, bool display_to_source)
 {
     const json_t *runs = json_object_get(block, "source_map");
     if (!json_is_array(runs)) return byte;
@@ -92,4 +100,75 @@ snag_vm_source_redactions(const char *source, const char *display,
 failed:
     json_decref(runs);
     return NULL;
+}
+
+static size_t
+format_after(const json_t *map, uint64_t byte)
+{
+    size_t low = 0u, high = json_array_size(map);
+    while (low < high) {
+        size_t middle = low + (high - low) / 2u;
+        const json_t *run = json_array_get(map, middle);
+        if ((uint64_t)json_integer_value(json_array_get(run, 0u)) <= byte) low = middle + 1u;
+        else high = middle;
+    }
+    return low;
+}
+
+bool
+snag_vm_source_mapped(const json_t *block, uint64_t byte)
+{
+    const json_t *map = json_object_get(block, "format_map");
+    if (!json_is_array(map)) return true;
+    size_t after = format_after(map, byte);
+    const json_t *run = after ? json_array_get(map, after - 1u) : NULL;
+    return run && byte < (uint64_t)json_integer_value(json_array_get(run, 1u));
+}
+
+/* A table can place later source bytes before earlier ones on its next visual
+ * row. Display runs are ordered; reverse lookup therefore searches source spans. */
+static uint64_t
+format_position(const json_t *block, uint64_t byte, bool forward)
+{
+    const json_t *map = json_object_get(block, "format_map");
+    if (!json_is_array(map)) return byte;
+    size_t first = 0u, last = json_array_size(map);
+    if (forward) {
+        size_t low = format_after(map, byte);
+        first = low ? low - 1u : 0u;
+        if (low < last) last = low + 1u;
+    }
+    uint64_t nearest = 0u, distance = UINT64_MAX;
+    for (size_t i = first; i < last; ++i) {
+        const json_t *run = json_array_get(map, i);
+        uint64_t display = (uint64_t)json_integer_value(json_array_get(run, 0u));
+        uint64_t end = (uint64_t)json_integer_value(json_array_get(run, 1u));
+        uint64_t source = (uint64_t)json_integer_value(json_array_get(run, 2u));
+        uint64_t length = (uint64_t)json_integer_value(json_array_get(run, 3u));
+        uint64_t begin = forward ? display : source;
+        uint64_t width = forward ? end - display : length;
+        uint64_t target = forward ? source : display;
+        uint64_t target_width = forward ? length : end - display;
+        if (byte >= begin && byte < begin + width)
+            return target + (width == target_width ? byte - begin : 0u);
+        uint64_t gap = byte < begin ? begin - byte : byte - begin - width;
+        if (gap < distance) {
+            distance = gap;
+            nearest = target + (byte < begin ? 0u : target_width);
+        }
+    }
+    return nearest;
+}
+
+uint64_t
+snag_vm_source_position(const json_t *block, uint64_t byte, bool display_to_source)
+{
+    return display_to_source ? source_position(block, format_position(block, byte, true), true) :
+        format_position(block, source_position(block, byte, false), false);
+}
+
+uint64_t
+snag_vm_source_unformatted(const json_t *block, uint64_t byte)
+{
+    return source_position(block, byte, true);
 }

@@ -100,6 +100,123 @@ count_text(const char *haystack, const char *needle)
     return count;
 }
 
+struct styled_output {
+    struct snag_buf text, styles;
+};
+
+static int
+collect_styled(void *opaque, const char *text, size_t length, unsigned int style,
+    uint64_t source, size_t source_length)
+{
+    struct styled_output *out = opaque;
+    (void)source;
+    (void)source_length;
+    if (snag_buf_append(&out->text, text, length) < 0) return -1;
+    for (size_t i = 0u; i < length; ++i)
+        if (snag_buf_append(&out->styles, &style, sizeof(style)) < 0) return -1;
+    return 0;
+}
+
+static void
+styled_terminal(struct styled_output *out, const char *text)
+{
+    unsigned int style = 0u;
+    while (*text) {
+        if (text[0] == '\033' && text[1] == '[') {
+            text += 2u;
+            do {
+                char *end;
+                unsigned long value = strtoul(text, &end, 10);
+                assert(end != text);
+                text = end;
+                if (value == 0u) style = 0u;
+                else if (value == 1u) style |= 1u;
+                else if (value == 2u) style |= 2u;
+                else if (value == 3u) style |= 256u;
+                else if (value == 4u) style |= 4u;
+                else if (value == 7u) style |= 8u;
+                else if (value >= 30u && value <= 37u)
+                    style = (style & ~240u) | ((unsigned int)(value - 29u) << 4u);
+                else if (value >= 40u && value <= 47u)
+                    style = (style & ~7680u) | ((unsigned int)(value - 39u) << 9u);
+                else assert(false);
+            } while (*text == ';' && *++text);
+            assert(*text++ == 'm');
+        } else {
+            assert(collect_styled(out, text++, 1u, style, UINT64_MAX, 0u) == 0);
+        }
+    }
+}
+
+static void
+render_sink_fixture(struct snag_render *render)
+{
+    const char *text = "## Heading\n\nA **bold** and *italic* word with `code`.\n\n"
+        "| Key | Value |\n| --- | --- |\n| alpha | some long wrapped value |\n\n"
+        "```c\nprintf(\"hello\");\n```\n\nSafe \033[31m text.\n";
+    assert(snag_render_input_submitted(render, "READY> ", "tab\tinput") == 0);
+    assert(snag_render_public_begin(render, STDOUT_FILENO, NULL) == 0);
+    assert(snag_render_public(render, text, strlen(text), NULL) == 0);
+    assert(snag_render_public_end(render) == 0);
+    struct snag_response_item call = {.name = "read_file", .call_id = "fixture-call",
+        .arguments = json_pack("{s:s}", "path", "file.txt")};
+    struct snag_render_block tool = {0};
+    assert(snag_render_prepare_tool_start(&tool, &call, "/fixture", 0u,
+        render->verbosity, render->sink.columns ? render->sink.columns :
+            render->term->columns) == 0);
+    assert(snag_render_tool_block(render, &tool) == 0);
+    snag_render_block_free(&tool);
+    json_decref(call.arguments);
+    struct snag_irc_event irc = {.kind = SNAG_IRC_MESSAGE, .timestamp_ms = 1000u,
+        .endpoint = "local:16667", .room = "#lab", .nick = "peer",
+        .text = "Chat **bold** with a long line which can wrap across the pane."};
+    render->view = SNAG_RENDER_CHAT;
+    strcpy(render->chat_endpoint, irc.endpoint);
+    strcpy(render->chat_room, irc.room);
+    assert(snag_render_irc_event(render, &irc) == 0);
+}
+
+static void
+test_styled_sink_matches_terminal(void)
+{
+    const unsigned int widths[] = {20u, 41u, 120u};
+    for (size_t w = 0u; w < sizeof(widths) / sizeof(widths[0]); ++w) {
+        for (unsigned int level = 0u; level <= 3u; ++level) {
+            struct snag_render terminal, pane;
+            struct snag_term term;
+            struct output_capture capture = capture_terminal(&terminal, &term,
+                widths[w], true, true);
+            terminal.verbosity = level;
+            terminal.color_stdout = terminal.color_stderr = true;
+            render_sink_fixture(&terminal);
+            char wire[16384];
+            (void)capture_close(&capture, wire, sizeof(wire), 0u);
+            struct styled_output expected = {.text = {.max = 65536u},
+                .styles = {.max = 262144u}};
+            struct styled_output actual = {.text = {.max = 65536u},
+                .styles = {.max = 262144u}};
+            styled_terminal(&expected, wire);
+            snag_render_init(&pane, level);
+            pane.stdout_terminal = pane.stderr_terminal = true;
+            pane.color_stdout = pane.color_stderr = true;
+            pane.sink = (struct snag_render_sink){.text = collect_styled,
+                .opaque = &actual, .columns = widths[w]};
+            render_sink_fixture(&pane);
+            assert(expected.text.len == actual.text.len);
+            assert(!memcmp(expected.text.data, actual.text.data, actual.text.len));
+            assert(expected.styles.len == actual.styles.len);
+            assert(!memcmp(expected.styles.data, actual.styles.data, actual.styles.len));
+            snag_buf_free(&expected.text);
+            snag_buf_free(&expected.styles);
+            snag_buf_free(&actual.text);
+            snag_buf_free(&actual.styles);
+            snag_render_free(&terminal);
+            snag_render_free(&pane);
+            snag_term_close(&term);
+        }
+    }
+}
+
 static void
 test_native_rebind(void)
 {
@@ -3555,6 +3672,7 @@ main(void)
     test_native_input_yield();
     test_resize_checkpoint_preserves_newly_read_input();
     test_retained_prompt();
+    test_styled_sink_matches_terminal();
     test_native_rebind();
     test_history_refresh_cursor();
     test_tool_ref_rows();

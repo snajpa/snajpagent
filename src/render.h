@@ -32,6 +32,29 @@ const char *snag_verbosity_name(unsigned int level);
 
 struct snag_render_record;
 
+/* The terminal and workspace sinks share these presentation attributes. */
+enum snag_render_style {
+    SNAG_RENDER_BOLD = 1u, SNAG_RENDER_DIM = 2u, SNAG_RENDER_UNDERLINE = 4u,
+    SNAG_RENDER_REVERSE = 8u, SNAG_RENDER_ITALIC = 256u
+};
+
+struct snag_render_origin {
+    const unsigned char *text;
+    size_t len;
+    uint64_t byte; /* UINT64_MAX marks generated decoration. */
+    const uint64_t *map;
+};
+
+struct snag_render_sink {
+    /* Inert text, style, original byte and original length. ANSI foreground
+     * 1..8 occupies bits4..7, background1..8 bits9..12; zero means default. */
+    int (*text)(void *, const char *, size_t, unsigned int, uint64_t, size_t);
+    struct snag_render_origin source;
+    void *opaque;
+    unsigned int columns, style[2];
+    bool logical;
+};
+
 struct snag_render_source {
     int64_t offset;
     size_t len;
@@ -41,6 +64,7 @@ struct snag_markdown_state {
     char prefix[16];
     char fence_info[64];
     struct snag_buf table;
+    uint64_t prefix_source, fence_source, table_source;
     size_t prefix_len;
     size_t fence_info_len;
     size_t delimiter_len;
@@ -88,10 +112,13 @@ struct snag_irc_markdown_state {
 
 struct snag_cite_state {
     struct snag_buf pending;
+    uint64_t source;
     bool active;
 };
 
 struct snag_render {
+    struct snag_render_sink sink;
+    struct snag_render_origin origin;
     int (*checkpoint)(void *);
     void *checkpoint_opaque;
     unsigned int verbosity;
@@ -136,6 +163,7 @@ struct snag_render {
     void *backfill;
     struct snag_buf wrap_pending;
     struct snag_buf wrap_styles;
+    struct snag_buf wrap_origins;
     size_t wrap_width;
     size_t public_column;
     char public_style[64u];
@@ -193,6 +221,8 @@ int snag_render_host(struct snag_render *render, const char *text);
 int snag_render_voice_event(struct snag_render *, const json_t *, uint32_t, uint32_t);
 int snag_render_runtime(struct snag_render *render, const char *text);
 int snag_render_irc_event(struct snag_render *render, const struct snag_irc_event *event);
+/* A retained event keeps validated routing separate from redacted display strings. */
+int snag_render_irc_snapshot(struct snag_render *, const json_t *, const json_t *);
 enum snag_render_role {
     SNAG_ROLE_ACTIVITY, SNAG_ROLE_SUCCESS, SNAG_ROLE_WARNING, SNAG_ROLE_ERROR };
 

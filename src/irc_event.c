@@ -193,6 +193,16 @@ named_value(const json_t *data, const char *key, const char *const *names, size_
 }
 
 bool
+snag_irc_prompt(const char *text)
+{
+    /* The admission batch is the prompt of an IRC-triggered turn: runtime
+     * plumbing rather than text the operator submitted. Callers must not echo
+     * it as a submission, and it carries no conversation-level formatting. */
+    return text && (!strncmp(text, "[IRC update id=", 15u) ||
+                    !strncmp(text, "[IRC endpoint=", 14u));
+}
+
+bool
 snag_irc_event_model_visible(const struct snag_irc_event *event)
 {
     if (event->routed && event->route.kind == SNAG_IRC_CHANNEL &&

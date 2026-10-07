@@ -14,7 +14,7 @@
  * Missing metadata remains identified by needs_call. Annotation text passes
  * through the same display redaction as in-page data. */
 json_t *snag_vm_transcript_blocks(const json_t *events, unsigned int verbosity,
-    unsigned int columns, const struct snag_wire_secrets *, bool (*cancel)(void *),
-    void *cancel_opaque, char *, size_t);
+    unsigned int columns, bool plain, bool no_color, bool logical, const struct snag_wire_secrets *,
+    bool (*cancel)(void *), void *cancel_opaque, char *, size_t);
 
 #endif

@@ -37,8 +37,8 @@ static json_t *
 project(const json_t *events, unsigned int level)
 {
     char error[256];
-    json_t *blocks = snag_vm_transcript_blocks(events, level, 80u, &secrets, NULL, NULL,
-        error, sizeof(error));
+    json_t *blocks = snag_vm_transcript_blocks(events, level, 80u, false, false, false, &secrets,
+        NULL, NULL, error, sizeof(error));
     if (!blocks) (void)fprintf(stderr, "%s\n", error);
     assert(blocks);
     return blocks;
@@ -125,6 +125,35 @@ outgoing_receipts(void)
 }
 
 static void
+irc_redaction_expansion(void)
+{
+    const char *values[] = {"xx"};
+    const struct snag_wire_secrets one = {.values = values, .count = 1u};
+    struct snag_irc_event irc = {.routed = true, .kind = SNAG_IRC_MESSAGE,
+        .timestamp_ms = 1u, .endpoint = "test:6667", .text = "xxxx", .route = {
+            .connection = "11111111111111111111111111111111",
+            .conversation = "22222222222222222222222222222222",
+            .generation = 1u, .identity = SNAG_IRC_OPERATOR, .kind = SNAG_IRC_QUERY,
+            .target = "operator"}};
+    memset(irc.nick, 'x', sizeof(irc.nick) - 1u);
+    strcpy(irc.route.peer, irc.nick);
+    json_t *events = json_array();
+    event(events, "irc_event_v2", snag_irc_event_data(&irc));
+    char error[256];
+    json_t *blocks = snag_vm_transcript_blocks(events, 0u, 80u, false, false, false,
+        &one, NULL, NULL, error, sizeof(error));
+    assert(blocks && json_array_size(blocks) == 1u);
+    const char *display = snag_json_string(json_array_get(blocks, 0u), "display");
+    assert(display && strlen(display) > sizeof(irc.nick) * 2u);
+    assert(strstr(display, "<redacted:secret><redacted:secret>"));
+    char *dump = json_dumps(blocks, JSON_COMPACT);
+    assert(dump && !strstr(dump, "xx") && !strstr(dump, "irc_event"));
+    free(dump);
+    json_decref(blocks);
+    json_decref(events);
+}
+
+static void
 conversation_and_tools(void)
 {
     json_t *events = json_array();
@@ -147,6 +176,8 @@ conversation_and_tools(void)
     strcpy(irc.text, "one message top-secret");
     event(events, "irc_event", snag_irc_event_data(&irc));
     event(events, "irc_admitted", json_pack("{s:{s:s}}", "input", "text", "duplicate admission"));
+    event(events, "input_received", json_pack("{s:s}", "text",
+        "[IRC update id=fixture]\ninternal admission plumbing"));
     event(events, "compaction_completed", json_pack("{s:[{s:s,s:s}]}", "output",
         "text", "private model context", "encrypted_content", "private-ciphertext"));
     char *before = json_dumps(events, JSON_COMPACT);
@@ -154,6 +185,7 @@ conversation_and_tools(void)
     assert(json_array_size(plain) == 4u && find(plain, "assistant", 0u) &&
         !find(plain, "assistant", 1u) && find(plain, "irc", 0u));
     assert(!find(plain, "tool_started", 0u) && !find(plain, "irc_admitted", 0u));
+    assert(!find(plain, "input_received", 1u));
     json_t *details = project(events, 2u);
     json_t *start = find(details, "tool_started", 0u), *finish = find(details, "tool_finished", 0u);
     assert(start && finish && strstr(snag_json_string(start, "label"), "exec_command"));
@@ -213,7 +245,8 @@ output_offset_bounds(void)
         json_t *events = json_array();
         output(events, 0u, offsets[i], "end", 3u);
         errno = 0;
-        json_t *blocks = snag_vm_transcript_blocks(events, 3u, 80u, NULL, NULL, NULL,
+        json_t *blocks = snag_vm_transcript_blocks(events, 3u, 80u, false, false, false,
+            NULL, NULL, NULL,
             error, sizeof(error));
         if (i == 2u) {
             assert(!blocks && errno == EINVAL);
@@ -278,7 +311,8 @@ redaction_expansion(void)
     memset(bytes, 'a', sizeof(bytes));
     json_t *events = json_array();
     output(events, 0u, 0u, bytes, sizeof(bytes));
-    json_t *blocks = snag_vm_transcript_blocks(events, 3u, 80u, &one, NULL, NULL,
+    json_t *blocks = snag_vm_transcript_blocks(events, 3u, 80u, false, false, false,
+        &one, NULL, NULL,
         error, sizeof(error));
     assert(blocks && json_array_size(blocks) == 1u);
     json_t *block = json_array_get(blocks, 0u);
@@ -372,9 +406,13 @@ source_coordinates(void)
     json_t *input = find(blocks, "input_received", 0u);
     json_t *answer = find(blocks, "assistant", 0u);
     json_t *process = find(blocks, "output", 0u);
-    assert(snag_vm_source_position(input, 18u, true) == 11u);
-    assert(snag_vm_source_position(answer, 25u, true) == 68u);
-    assert(snag_vm_source_position(answer, 68u, false) == 25u);
+    const char *input_text = snag_vm_block_text(input, false);
+    const char *answer_text = snag_vm_block_text(answer, false);
+    uint64_t input_marker = (uint64_t)(strstr(input_text, "marker") - input_text);
+    uint64_t answer_marker = (uint64_t)(strstr(answer_text, "marker") - answer_text);
+    assert(snag_vm_source_position(input, input_marker, true) == 11u);
+    assert(snag_vm_source_position(answer, answer_marker, true) == 68u);
+    assert(snag_vm_source_position(answer, 68u, false) == answer_marker);
     assert(snag_vm_source_position(process, 0u, true) == 90u);
     assert(snag_vm_source_position(process, 4u, true) == 91u);
     assert(snag_vm_source_position(process, 8u, true) == 92u);
@@ -386,8 +424,10 @@ source_coordinates(void)
         size_t at = snag_vm_document_locate_source(doc, key, 2u, 68u, false);
         struct snag_vm_document_row row;
         assert(snag_vm_document_row(doc, at, &row) == 0 && !row.heading);
-        assert(!strncmp(snag_vm_document_text(doc, &row) + row.begin, "mark", 4u));
-        assert(snag_vm_document_source(doc, &row, row.begin) == 68u);
+        const char *line = snag_vm_document_text(doc, &row);
+        assert(answer_marker >= row.begin && answer_marker < row.end);
+        assert(!strncmp(line + answer_marker, "mark", 4u));
+        assert(snag_vm_document_source(doc, &row, answer_marker) == 68u);
         snag_vm_document_free(doc);
     }
     json_decref(blocks);
@@ -399,8 +439,10 @@ source_coordinates(void)
         json_string("earlierprefix top-secret\nmarker 界")) == 0);
     blocks = project(events, 3u);
     answer = find(blocks, "assistant", 0u);
-    assert(snag_vm_source_position(answer, 68u, false) == 32u);
-    assert(!strncmp(snag_json_string(answer, "text") + 32u, "marker", 6u));
+    answer_text = snag_vm_block_text(answer, false);
+    answer_marker = (uint64_t)(strstr(answer_text, "marker") - answer_text);
+    assert(snag_vm_source_position(answer, 68u, false) == answer_marker);
+    assert(snag_vm_source_position(answer, answer_marker, true) == 68u);
     json_decref(blocks);
     json_decref(events);
 }
@@ -417,11 +459,12 @@ failure_paths(void)
     json_decref(blocks);
     output(events, 0u, 0u, "abc", 3u);
     output(events, 0u, 7u, "gap", 3u);
-    assert(!snag_vm_transcript_blocks(events, 3u, 80u, &secrets, NULL, NULL,
-        error, sizeof(error)) && errno == EINVAL);
+    assert(!snag_vm_transcript_blocks(events, 3u, 80u, false, false, false, &secrets,
+        NULL, NULL, error, sizeof(error)) && errno == EINVAL);
     assert(json_array_remove(events, 2u) == 0);
     unsigned int remaining = 3u;
-    assert(!snag_vm_transcript_blocks(events, 3u, 80u, &secrets, cancel, &remaining,
+    assert(!snag_vm_transcript_blocks(events, 3u, 80u, false, false, false,
+        &secrets, cancel, &remaining,
         error, sizeof(error)) && errno == ECANCELED);
     json_decref(events);
 }
@@ -454,6 +497,7 @@ main(void)
     conversation_and_tools();
     encoded_interleaving();
     redaction_expansion();
+    irc_redaction_expansion();
     source_coordinates();
     sparse_document();
     resolved_call_metadata();

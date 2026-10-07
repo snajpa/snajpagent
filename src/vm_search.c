@@ -115,11 +115,14 @@ search_text(struct snag_vm_search *search, const json_t *block, const char *text
     uint64_t seq = (uint64_t)json_integer_value(json_object_get(block, "seq"));
     size_t length = text ? strlen(text) : 0u;
     if (search->heading && length && text[length - 1u] == '\n') --length;
+    const char *kind = snag_json_string(block, "kind");
+    bool prose = !search->heading && kind && snag_string_in(kind, "assistant refusal");
     for (size_t at = 0u; at < length;) {
         if (cancel && cancel(opaque)) return snag_errno(ECANCELED);
         uint32_t cp, folded[3];
         size_t bytes = snag_utf8_decode((const unsigned char *)text + at, length - at, &cp);
         if (!bytes) return snag_errno(EILSEQ);
+        if (prose && !snag_vm_source_mapped(block, at)) { at += bytes; continue; }
         folded[0] = cp;
         unsigned int count = search->ignorecase ? snag_unicode_casefold(cp, folded) : 1u;
         uint64_t source = search->heading ? at : snag_vm_source_position(block, at, true);
@@ -144,7 +147,7 @@ int
 snag_vm_search_block(struct snag_vm_search *search, const json_t *block,
     bool (*cancel)(void *), void *opaque)
 {
-    const char *text = snag_json_string(block, "text");
+    const char *text = snag_vm_block_text(block, false);
     const char *key = snag_json_string(block, "key");
     const char *handle = snag_json_string(block, "handle");
     uint64_t seq, begin, end;
@@ -164,7 +167,7 @@ snag_vm_search_block(struct snag_vm_search *search, const json_t *block,
     if (!contiguous) {
         search->matched = 0u;
         search->heading = true;
-        if (search_text(search, block, snag_json_string(block, "label"), cancel, opaque) < 0)
+        if (search_text(search, block, snag_vm_block_text(block, true), cancel, opaque) < 0)
             return -1;
         search->matched = 0u;
     }

@@ -239,7 +239,8 @@ operator_conversation(struct app_state *app, const char *operand,
             address.endpoint, error, error_size);
         if (!scope) return -1;
     }
-    bool channel = channel_id || (scope &&
+    /* Retained channel views can open before reconnect learns CHANTYPES. */
+    bool channel = channel_id || resolution == OP_CHANNEL_VIEW || (scope &&
         strchr(scope->chantypes[SNAG_IRC_OPERATOR], address.target[0]));
     if (resolution >= OP_CHANNEL_VIEW && !channel)
         return snag_fail(error, error_size, EINVAL, "select a channel for this command");

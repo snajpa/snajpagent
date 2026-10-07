@@ -140,13 +140,13 @@ class QueryWorkspaceTests(QueryFixture):
         child = self.child
         child.write(b'/copy this private line\r')
         child.repaint_until(b'Match')
-        child.write(b'Vy')
+        child.write(b'v$y')
         child.repaint_until(b'Yanked')
         child.write(b'P')
         self.normal()
         child.command('workspace save')
         self.wait_snapshot(lambda rows: rows and self.state()['buffers'] and
-                           self.buffers().get('query-peer', {}).get('draft') == 'copy this private line\n')
+                           self.buffers().get('query-peer', {}).get('draft') == 'copy this private line')
         route = self.buffers()['query-peer']
         address = self.sid[:8] + '/' + route['endpoint'] + '/query-peer'
         child.command('vsp ' + address)

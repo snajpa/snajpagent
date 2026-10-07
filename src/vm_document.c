@@ -25,7 +25,9 @@ static const char *
 field(const struct snag_vm_document *doc, const struct position *at, size_t *length)
 {
     const json_t *block = json_array_get(doc->blocks, at->block);
-    const json_t *value = json_object_get(block, at->heading ? "label" : "text");
+    const json_t *value = json_object_get(block, "display");
+    if (value && at->heading) { *length = 0u; return ""; }
+    if (!value) value = json_object_get(block, at->heading ? "label" : "text");
     const char *text = json_string_value(value);
     *length = json_string_length(value);
     /* Native summary labels end with a line break; the next field already
@@ -159,8 +161,7 @@ snag_vm_document_block(const struct snag_vm_document *doc, size_t index)
 const char *
 snag_vm_document_text(const struct snag_vm_document *doc, const struct snag_vm_document_row *row)
 {
-    return snag_json_string(snag_vm_document_block(doc, row->block),
-        row->heading ? "label" : "text");
+    return snag_vm_block_text(snag_vm_document_block(doc, row->block), row->heading);
 }
 
 static bool

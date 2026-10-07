@@ -259,27 +259,55 @@ static int
 copy_field(struct snag_vm_copy *copy, const json_t *block, bool heading,
     bool (*cancel)(void *), void *opaque)
 {
-    const char *text = snag_json_string(block, heading ? "label" : "text");
+    const char *text = snag_vm_block_text(block, heading);
     if (!text) return 0;
     size_t length = strlen(text);
     if (heading && length && text[length - 1u] == '\n') --length;
+    const char *kind = snag_json_string(block, "kind");
+    bool prose = !heading && kind && snag_string_in(kind, "assistant refusal");
+    const json_t *map = json_object_get(block, "format_map");
+    size_t mapped_begin = (size_t)json_integer_value(json_array_get(json_array_get(map, 0u), 0u));
+    size_t mapped_end = json_array_size(map) ? (size_t)json_integer_value(json_array_get(
+        json_array_get(map, json_array_size(map) - 1u), 1u)) : length;
+    struct snag_vm_anchor first = copy->selection.first, last = copy->selection.last;
+    if (!heading) {
+        uint64_t begin = (uint64_t)json_integer_value(json_object_get(block, "source_begin"));
+        uint64_t end = (uint64_t)json_integer_value(json_object_get(block, "source_end"));
+        first.byte = first.byte < begin || first.byte > end ? UINT64_MAX :
+            snag_vm_source_position(block, first.byte, false);
+        last.byte = last.byte < begin || last.byte > end ? UINT64_MAX :
+            snag_vm_source_position(block, last.byte, false);
+        if (!copy->selection.exclusive && last.byte < length) {
+            size_t next = (size_t)last.byte;
+            while (next < length && snag_vm_source_mapped(block, next) &&
+                snag_vm_source_position(block, next, true) == copy->selection.last.byte) {
+                last.byte = next;
+                size_t bytes = snag_utf8_size((unsigned char)text[next]);
+                next += bytes ? bytes : 1u;
+            }
+        }
+    }
     for (size_t at = 0u; at < length && !copy->done;) {
         if (cancel && cancel(opaque)) return snag_errno(ECANCELED);
         uint32_t cp;
         size_t bytes = snag_utf8_decode((const unsigned char *)text + at, length - at, &cp);
         if (!bytes) return snag_errno(EILSEQ);
+        if (prose && !snag_vm_source_mapped(block, at) &&
+            (copy->selection.kind == SNAG_VM_SELECT_CHAR || at >= mapped_end ||
+             (json_integer_value(json_object_get(block, "source_begin")) && at < mapped_begin))) {
+            at += bytes;
+            continue;
+        }
         if (snag_grapheme_feed(&copy->boundary, cp) && finish_cluster(copy, cancel, opaque) < 0)
             return -1;
         struct snag_vm_glyph glyph = snag_vm_glyph(text + at, bytes, copy->column, false);
-        uint64_t begin = heading ? at : snag_vm_source_position(block, at, true);
-        uint64_t end = heading ? at + bytes : snag_vm_source_position(block, at + bytes, true);
         if (!copy->first && !copy->active &&
-            endpoint(&copy->selection.first, block, heading, begin, end)) {
+            endpoint(&first, block, heading, at, at + bytes)) {
             copy->first = true;
             copy->first_byte = copy->cluster_start;
         }
         if ((!copy->last || !copy->selection.exclusive) &&
-            endpoint(&copy->selection.last, block, heading, begin, end)) {
+            endpoint(&last, block, heading, at, at + bytes)) {
             copy->last = true;
             copy->last_cluster = !copy->selection.exclusive;
             copy->last_newline = glyph.newline && !copy->selection.exclusive;
@@ -337,7 +365,7 @@ snag_vm_copy_block(struct snag_vm_copy *copy, const json_t *block,
     if (!contiguous) {
         if (finish_field(copy, true, cancel, opaque) < 0) return -1;
         if (copy->done) return 1;
-        const char *label = snag_json_string(block, "label");
+        const char *label = snag_vm_block_text(block, true);
         if (label && *label) {
             if (copy_field(copy, block, true, cancel, opaque) < 0 ||
                 finish_field(copy, true, cancel, opaque) < 0) return -1;

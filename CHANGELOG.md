@@ -7,6 +7,16 @@
 - Restore IRC membership across saved connection and channel boundaries so a
   peer can reuse a nickname after reconnecting without blocking session resume.
 
+- Render workspace transcripts with the standalone Markdown and tool formatter,
+  including wrapping, tables, colors and verbosity. New views default to level0.
+  Keep IRC traffic in its channel/query views. Saved scroll positions, search
+  and visual selections follow the original text through formatting changes.
+
+- Restore transcript workspaces without scanning unrelated session journals.
+  Show session names first in pane status bars to identify narrow splits.
+  Open retained channel views during reconnect before the server resends its
+  channel-prefix settings.
+
 - Keep background pane history and report loads pending when resize, focus, or
   catalogue refresh gives another request priority. Every pane finishes loading.
 

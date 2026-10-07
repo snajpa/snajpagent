@@ -1774,13 +1774,19 @@ editing, owner creation/resumption and persistent split layouts.
 Workspace browsing does not start model turns or IRC connections.
 Runtime activation is explicit; ordinary startup retains its terminal interface.
 .PP
-Workspace colors follow [ui] color and NO_COLOR. Operator and assistant headings,
-tool activity/results and errors have distinct colors. Split separators and
+Transcript panes use the standalone Markdown and tool formatter at the pane's
+width: prose bullets, emphasis, code, tables and tool detail follow the same
+presentation settings. New transcript and conversation views start at verbosity0;
+saved views retain their selected level. Use :verbosity to change it.
+IRC traffic appears in its channel or query view, separately from the rollout.
+Workspace colors follow [ui] color and NO_COLOR. Split separators and
 full-width status bars identify pane boundaries and the focused window.
 Resizing reflows text to the available width. FOLLOW fills the available height
 with recent history, reading across journal pages as needed; HOLD preserves the
 selected source position.
 Pending history loads in other panes continue after resize or catalogue refresh.
+Transcript-only restore reads the displayed sessions; opening :sessions loads the
+session catalogue. Pane status begins with the session name when available.
 .PP
 .B vm -N NAME
 creates a named workspace.
@@ -1910,7 +1916,9 @@ and y followed by a motion copies that range. p/P inserts the copied text into
 the session composer. The operator can edit the draft before submitting it.
 .PP
 Yanks preserve logical line breaks and whole Unicode graphemes. Soft wrapping
-adds no copied newlines. Rectangles use display columns, expand selected tabs
+adds no copied newlines. Line selections include displayed bullets and indentation;
+character selections copy their text across wrapped rows.
+Rectangles use display columns, expand selected tabs
 and pad short lines. Pasting a rectangle inserts each row at the draft's display
 column, expands an intersected tab, pads short lines and adds missing lines.
 A count repeats the rectangle horizontally; undo reverses the whole insertion.
@@ -3324,6 +3332,8 @@ Select the current/default channel, including its retained history while offline
 An address selects a known operator channel without joining it. Use #channel,
 endpoint/#channel, session/endpoint/#channel or channel:ID. A bare channel uses
 the focused conversation's endpoint, or the sole endpoint from rollout.
+Retained channels remain selectable during reconnect, including server-specific
+channel prefixes.
 .TP
 .B /rollout
 Select local model activity.

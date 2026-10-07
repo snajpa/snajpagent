@@ -29,21 +29,21 @@ class NavigationTests(unittest.TestCase):
             next(iter(rows.values()))['name'] == name, timeout=15)
         return next(iter(rows.values()))['state']
 
-    def test_numbered_lines_and_queued_motions_include_headings(self):
+    def test_numbered_lines_and_queued_motions_follow_rendered_text(self):
         text = 'first line\n  second\nthird\n' + 'padding\n' * 15 + 'tail-marker'
         journal, child = self.open_text(text)
         before = journal.read_bytes()
-        child.write(b'6ggjjk')
+        child.write(b'3ggjjk')
         found = self.save(child)['windows'][0]['history']
         self.assertEqual(found['byte'], len('first line\n'))
-        child.write(b'7G^')
+        child.write(b'4G^')
         found = self.save(child)['windows'][0]['history']
         self.assertEqual(found['byte'], len('first line\n  '))
-        child.write(b'6gg999H')
+        child.write(b'3gg999H')
         far = self.save(child)['windows'][0]['history']
-        child.write(b'6gg10H')
+        child.write(b'3gg10H')
         self.assertEqual(self.save(child)['windows'][0]['history'], far)
-        child.write(b'5GjywP')
+        child.write(b'3GywP')
         self.assert_draft(child, 'first ')
         self.assertEqual(journal.read_bytes(), before)
         child.finish()
@@ -51,9 +51,9 @@ class NavigationTests(unittest.TestCase):
     def test_fast_copy_paste_and_queued_bracketed_paste(self):
         journal, child = self.open_text('first line\n' + 'padding\n' * 15 + 'tail-marker')
         before = journal.read_bytes()
-        child.write(b'6ggvlyP')
+        child.write(b'3ggvlyP')
         self.assert_draft(child, 'fi')
-        child.write(b'u\t6ggi\x1b[200~:qa\nnot a command\x1b[201~\x1b')
+        child.write(b'u\t3ggi\x1b[200~:qa\nnot a command\x1b[201~\x1b')
         time.sleep(.06)
         child.repaint_until(b'NORMAL composer')
         self.assert_draft(child, ':qa\nnot a command')
@@ -62,7 +62,7 @@ class NavigationTests(unittest.TestCase):
 
     def test_cancel_restores_cursor_and_previous_register(self):
         _, child = self.open_text('first line\n' + 'padding\n' * 15 + 'tail-marker')
-        child.write(b'6ggvlyP')
+        child.write(b'3ggvlyP')
         self.assert_draft(child, 'fi')
         child.write(b'u\t')
         before = self.save(child)['windows'][0]['history']
@@ -75,7 +75,7 @@ class NavigationTests(unittest.TestCase):
 
     def test_empty_motion_preserves_previous_register(self):
         _, child = self.open_text('first line\n' + 'padding\n' * 15 + 'tail-marker')
-        child.write(b'6ggvlyP')
+        child.write(b'3ggvlyP')
         self.assert_draft(child, 'fi')
         child.write(b'u\t0yhP')
         self.assert_draft(child, 'fi')
@@ -89,8 +89,8 @@ class NavigationTests(unittest.TestCase):
         before = journal.stat().st_size
         child.write(b'999G0')
         found = self.save(child)['windows'][0]['history']
-        self.assertEqual(found['byte'], len('first-marker\n') + 992 * len('line body\n'))
-        child.write(b'6gg3wybP')
+        self.assertEqual(found['byte'], len('first-marker\n') + 995 * len('line body\n'))
+        child.write(b'3gg3wybP')
         self.assert_draft(child, 'marker\n')
         self.assertEqual(journal.stat().st_size, before)
         child.finish()
@@ -98,18 +98,18 @@ class NavigationTests(unittest.TestCase):
     def test_wrapped_rows_keep_column_and_count_across_cold_pages(self):
         text = 'first-marker\n' + 'line body\n' * 560000 + 'tail-marker'
         journal, child = self.open_text(text)
-        child.write(b'6gg999999gj')
+        child.write(b'3gg999999gj')
         state = self.save(child)
         end = state['windows'][0]['history']
         child.write(b'999999gk')
         first = self.save(child)['windows'][0]['history']
-        self.assertTrue(first['heading'], (first, bytes(child.output[-2500:])))
+        self.assertFalse(first['heading'], (first, bytes(child.output[-2500:])))
         self.assertEqual(first['byte'], 0)
         child.write(b'999999gj')
         self.assertEqual(self.save(child)['windows'][0]['history'], end)
         child.resize(10, 25)
         child.repaint_until(b'tail-marker')
-        child.write(b'6ggl3gj')
+        child.write(b'3ggl3gj')
         found = self.save(child)['windows'][0]['history']
         self.assertEqual(found['byte'], len('first-marker\nline body\nline body\n') + 1)
         child.finish()
@@ -123,7 +123,7 @@ class NavigationTests(unittest.TestCase):
         child = self.start('-N', 'redacted-navigation', columns=120)
         child.command('history ' + journal.parent.name)
         child.repaint_until(b'tail-marker')
-        child.write(b'6ggl')
+        child.write(b'3ggl')
         self.assertEqual(self.save(child)['windows'][0]['history']['byte'], len('irc-ui-secret'))
         child.write(b'h')
         self.assertEqual(self.save(child)['windows'][0]['history']['byte'], 0)

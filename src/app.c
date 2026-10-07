@@ -5748,7 +5748,7 @@ run_tracked_turn(struct app_state *app, const char *prompt,
             json_object_get(app->session.pending_input, "received_at_ms"));
         /* Room traffic admitted as a turn prompt is not a submission: the
          * durable trail and the chat view already show it. */
-        if (!app->execute && !snag_app_irc_prompt(prompt) &&
+        if (!app->execute && !snag_irc_prompt(prompt) &&
             snag_ui_submitted(&app->ui, timer_turn ? "timer › " : app->ui.label,
                               prompt, !timer_turn) < 0) return 6;
         if (snag_ui_leaving(&app->ui)) return 0;

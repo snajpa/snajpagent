@@ -317,7 +317,7 @@ class WorkspaceTests(unittest.TestCase):
         child.write(b'gg')
         values = self.wait_snapshot(lambda values:
             not next(iter(values.values()))['state']['windows'][0]['history']['follow'] and
-            next(iter(values.values()))['state']['windows'][0]['history']['seq'] == 1)
+            next(iter(values.values()))['state']['windows'][0]['history']['seq'] == 3)
         anchor = next(iter(values.values()))['state']['windows'][0]['history']
         self.append_turn(journal, 'live-append-two')
         child.until(b'newer')
@@ -332,20 +332,68 @@ class WorkspaceTests(unittest.TestCase):
         child.repaint_until(b'live-append-two')
         child.finish()
 
+    def test_transcript_restore_does_not_scan_unrelated_sessions(self):
+        journal = self.seed_session()
+        child = self.start('-N', 'only-transcript')
+        child.command('history ' + journal.parent.name)
+        child.repaint_until(b'retained-answer-marker')
+        child.finish('session d')
+        other = WorkspaceTests()
+        other.setUp()
+        self.addCleanup(other.doCleanups)
+        original = other.seed_session('unrelated history')
+        directory = self.root / 'state' / 'sessions' / original.parent.name
+        shutil.copytree(original.parent, directory)
+        unrelated = directory / 'events.jsonl'
+        stamp = 1_000_000_000_000_000_000
+        mtime = unrelated.stat().st_mtime_ns
+        os.utime(unrelated, ns=(stamp, mtime))
+        # Verify that this filesystem records reads before using access time as
+        # a probe; a noatime mount cannot demonstrate this invariant.
+        with unrelated.open('rb') as source:
+            source.read(1)
+        if unrelated.stat().st_atime_ns == stamp:
+            self.skipTest('filesystem does not record journal access')
+        os.utime(unrelated, ns=(stamp, mtime))
+        child = self.start('--resume', 'only-transcript', expect=b'history')
+        child.repaint_until(b'retained-answer-marker')
+        child.finish('session d')
+        self.assertEqual(unrelated.stat().st_atime_ns, stamp,
+                         'transcript restore read an unrelated session journal')
+
     def test_follow_fills_height_after_large_resize(self):
         journal = self.seed_session('\n'.join(f'viewport-line-{i:03}' for i in range(100)))
         child = self.start('-N', 'large-display', rows=12, columns=255)
         child.command('history ' + journal.parent.name)
         child.repaint_until(b'viewport-line-099')
         child.resize(62, 255)
-        child.repaint_until(b'viewport-line-040')
+        child.repaint_until(b'viewport-line-041')
         child.until(b'viewport-line-099')
         self.assertIn(b'viewport-line-099', child.output)
         child.resize(90, 320)
-        child.repaint_until(b'viewport-line-012')
+        child.repaint_until(b'viewport-line-013')
         child.resize(12, 100)
         child.repaint_until(b'viewport-line-099')
         child.finish()
+
+    def test_history_renders_standalone_markdown(self):
+        journal = self.seed_session('## Shared heading\n\nA **bold** word and `code`.\n\n'
+                                    '- First item\n- Second item\n')
+        child = self.start('-N', 'presentation', rows=30, columns=80,
+                           extra_env={'NO_COLOR': None})
+        child.command('history ' + journal.parent.name)
+        child.repaint_until('• A '.encode())
+        self.assertIn(b'history v0', child.output)
+        # The provider's Markdown is interpreted by the same formatter as the
+        # standalone terminal. Internal response-phase headings stay hidden.
+        child.write(b'\x0c')
+        child.until(b'Second item')
+        screen = child.output.rsplit(b'\x1b[2J', 1)[-1]
+        self.assertNotIn(b'**bold**', screen)
+        self.assertNotIn(b'`code`', screen)
+        self.assertNotIn(b'assistant final_answer', screen)
+        self.assertIn(b'\x1b[0;1m', screen)
+        child.finish('session d')
 
     def test_resize_keeps_background_history_pending(self):
         foreground = self.seed_session('foreground-history-marker')
@@ -398,8 +446,8 @@ class WorkspaceTests(unittest.TestCase):
                                          bytes(child.output))
                 self.assertEqual(bool(foregrounds), expected)
                 if expected:
-                    self.assertIn(b'\x1b[0;1;35moperator', child.output)
-                    self.assertIn(b'\x1b[0;1;36massistant', child.output)
+                    self.assertIn(b'\x1b[0;1;36m' + '› '.encode(), child.output)
+                    self.assertNotIn(b'assistant final_answer', child.output)
                 child.finish()
 
     def test_replaced_history_stops_follow_until_explicit_retry(self):

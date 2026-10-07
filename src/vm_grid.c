@@ -81,7 +81,8 @@ int
 snag_vm_grid_text_column(struct snag_vm_grid *grid, size_t row, size_t column, size_t width,
     const char *text, size_t length, unsigned int style, size_t logical_column)
 {
-    if (!grid->back.cells || (!text && length) || style & ~255u || (style >> 4u) > 8u)
+    if (!grid->back.cells || (!text && length) || style & ~8191u ||
+        ((style >> 4u) & 15u) > 8u || ((style >> 9u) & 15u) > 8u)
         return snag_errno(EINVAL);
     if (row >= grid->rows || column >= grid->columns) return 0;
     if (width > grid->columns - column) width = grid->columns - column;
@@ -151,9 +152,12 @@ set_style(struct snag_buf *out, unsigned int style, bool color)
     if (snag_buf_append(out, "\033[0", 3u) < 0) return -1;
     if ((style & SNAG_VM_BOLD) && snag_buf_append(out, ";1", 2u) < 0) return -1;
     if ((style & SNAG_VM_DIM) && snag_buf_append(out, ";2", 2u) < 0) return -1;
+    if ((style & SNAG_VM_ITALIC) && snag_buf_append(out, ";3", 2u) < 0) return -1;
     if ((style & SNAG_VM_UNDERLINE) && snag_buf_append(out, ";4", 2u) < 0) return -1;
     if ((style & SNAG_VM_REVERSE) && snag_buf_append(out, ";7", 2u) < 0) return -1;
-    if (color && (style >> 4u) && snag_buf_printf(out, ";%u", 29u + (style >> 4u)) < 0)
+    if (color && (style & 240u) && snag_buf_printf(out, ";%u", 29u + ((style >> 4u) & 15u)) < 0)
+        return -1;
+    if (color && (style & 7680u) && snag_buf_printf(out, ";%u", 39u + ((style >> 9u) & 15u)) < 0)
         return -1;
     return snag_buf_putc(out, 'm');
 }

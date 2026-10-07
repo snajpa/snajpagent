@@ -92,6 +92,12 @@ class ChannelWorkspaceTests(ChannelFixture):
                          ':peer!u@fake PRIVMSG #side :side-public-body\r\n'
                          ':peer!u@fake PRIVMSG queryop :private-hidden-body\r\n')
         self.wait(lambda: any(e['data'].get('text') == 'private-hidden-body' for e in self.events()))
+        self.child.write(b'irollout-after-chat-marker\r')
+        self.child.repaint_until(b'rollout-after-chat-marker')
+        self.assertNotIn(b'lab-public-body', self.child.output)
+        self.assertNotIn(b'side-public-body', self.child.output)
+        self.assertNotIn(b'private-hidden-body', self.child.output)
+        self.normal()
         self.channel('#side')
         self.child.repaint_until(b'side-public-body')
         self.assertNotIn(b'lab-public-body', self.child.output)

@@ -157,7 +157,8 @@ class SearchTests(unittest.TestCase):
         self.assertIn('/output', found['key'])
         child.command('verbosity 1')
         found = self.search(child, b'/exec_command\r')
-        self.assertTrue(found['heading'])
+        self.assertFalse(found['heading'])
+        self.assertIn('/tool_', found['key'])
         self.assertEqual(journal.read_bytes(), before)
         child.finish()
 

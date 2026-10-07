@@ -2,6 +2,17 @@
 
 # Pager retention and the Vim workspace
 
+Presentation checkpoint: transcript projection sends typed journal content through
+`render.c`, which supplies the standalone text, wrapping and styles to a typed
+workspace sink. The grid consumes inert text and style runs; provider escape
+sequences remain text. Display-to-source maps compose Markdown/citation/tab
+formatting with redaction maps so anchors, search and selection survive reflow.
+New views start at verbosity0; saved explicit levels persist. Channel/query
+history stays in its routed view. Transcript-only restore skips the global session
+catalogue until a picker is opened. Names lead pane status for narrow splits.
+Older journals retain their stored content; prompt clock/template snapshots and
+transient terminal-only notices were never recorded and cannot be recovered.
+
 Display checkpoint: the grid uses semantic ANSI colors under the existing color
 policy, with visible split separators and status bars spanning each pane. Growing
 a FOLLOW viewport moves its top to retain a full tail; background reads continue

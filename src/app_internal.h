@@ -394,7 +394,6 @@ int snag_app_restore_resume_options(struct snag_cli *, struct snag_cli *,
     const struct snag_session *, json_t **, char *, size_t);
 int snag_app_irc_flush_urgent(struct app_state *app, char *error, size_t error_size);
 char *snag_app_irc_take_pending(struct app_state *app, bool *local_operator, bool force_background);
-bool snag_app_irc_prompt(const char *text);
 int snag_app_irc_snapshot(struct app_state *app, const char *reason, char *error, size_t error_size);
 bool snag_app_irc_replies_pending(const struct app_state *);
 int snag_app_irc_sleeping(struct app_state *, char *, size_t);

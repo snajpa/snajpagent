@@ -45,7 +45,7 @@ struct markdown_table_cell {
 };
 
 struct markdown_table_output {
-    struct snag_buf text, styles;
+    struct snag_buf text, styles, origins;
     size_t width, offset;
 };
 
@@ -117,7 +117,8 @@ struct render_room_queue {
     char conversation[SNAG_ID_HEX_LEN + 1u];
 };
 
-static int render_irc_event_now(struct snag_render *render, const struct snag_irc_event *event);
+static int render_irc_event_now(struct snag_render *, const struct snag_irc_event *,
+    const json_t *);
 static int flush_view(struct snag_render *render, enum snag_render_view view, size_t records);
 static int close_public_output(struct snag_render *render);
 static int markdown_gap(struct snag_render *render);
@@ -177,10 +178,114 @@ text_slice(const char *text, size_t len)
     return amount ? amount : len < 4u ? len : 4u;
 }
 
-static int
-write_literal(int fd, const char *s)
+static unsigned int
+render_columns(const struct snag_render *render)
 {
-    return snag_term_write(fd, s, strlen(s));
+    return render->sink.columns ? render->sink.columns : snag_term_columns(render->term);
+}
+
+/* Copied parser buffers retain their input offsets. Generated decoration has
+ * no input byte; consumers anchor it to the nearest actual source span. */
+static uint64_t
+render_origin(const struct snag_render *render, const void *text)
+{
+    const struct snag_markdown_state *md = &render->markdown_state;
+    struct snag_render_origin regions[] = {render->origin,
+        {(const unsigned char *)md->prefix, sizeof(md->prefix), md->prefix_source, NULL},
+        {(const unsigned char *)md->fence_info, sizeof(md->fence_info), md->fence_source, NULL},
+        {md->table.data, md->table.len, md->table_source, NULL}, render->sink.source};
+    uintptr_t at = (uintptr_t)text;
+    for (size_t i = 0u; i < sizeof(regions) / sizeof(regions[0]); ++i) {
+        const struct snag_render_origin *r = &regions[i];
+        uintptr_t begin = (uintptr_t)r->text;
+        if (!r->text || at < begin || at - begin >= r->len) continue;
+        size_t offset = (size_t)(at - begin);
+        return r->map ? r->map[offset] : r->byte == UINT64_MAX ? UINT64_MAX : r->byte + offset;
+    }
+    return UINT64_MAX;
+}
+
+static int
+render_origins_append(struct snag_render *render, const unsigned char *text, size_t length)
+{
+    if (!render->sink.text) return 0;
+    for (size_t i = 0u; i < length; ++i) {
+        uint64_t source = render_origin(render, text + i);
+        if (snag_buf_append(&render->wrap_origins, &source, sizeof(source)) < 0) return -1;
+    }
+    return 0;
+}
+
+static int
+render_sink_write(struct snag_render *render, int fd, const char *text, size_t len)
+{
+    for (size_t at = 0u; at < len;) {
+        uint64_t source = render_origin(render, text + at);
+        size_t n = 1u;
+        while (at + n < len) {
+            uint64_t next = render_origin(render, text + at + n);
+            if (next != (source == UINT64_MAX ? UINT64_MAX : source + n)) break;
+            ++n;
+        }
+        if (render->sink.text(render->sink.opaque, text + at, n,
+            render->sink.style[fd == STDERR_FILENO], source, n) < 0) return -1;
+        at += n;
+    }
+    return 0;
+}
+
+static int
+render_write(struct snag_render *render, int fd, const char *text, size_t len, bool safe)
+{
+    if (!render->sink.text)
+        return safe ? snag_term_write_safe(fd, text, len) : snag_term_write(fd, text, len);
+    if (!safe) return render_sink_write(render, fd, text, len);
+    struct snag_buf clean = {.max = SNAG_MEMORY_LIMIT / 2u};
+    int rc = snag_term_append_safe(&clean, text, len);
+    if (!rc && clean.len == len && !memcmp(clean.data, text, len)) {
+        rc = render_sink_write(render, fd, text, len);
+    } else if (!rc) {
+        size_t column = 0u;
+        for (size_t at = 0u; !rc && at < len;) {
+            size_t n = snag_utf8_size((unsigned char)text[at]);
+            if (!n || n > len - at) n = 1u;
+            snag_buf_reset(&clean);
+            rc = snag_term_append_safe_column(&clean, text + at, n, column);
+            if (!rc) rc = render->sink.text(render->sink.opaque,
+                (const char *)clean.data, clean.len, render->sink.style[fd == STDERR_FILENO],
+                render_origin(render, text + at), n);
+            if (text[at] == '\n') column = 0u;
+            else column += snag_term_text_width((const char *)clean.data, clean.len);
+            at += n;
+        }
+    }
+    snag_buf_free(&clean);
+    return rc;
+}
+
+static int
+write_literal(struct snag_render *render, int fd, const char *s)
+{
+    if (!render->sink.text || strncmp(s, "\033[", 2u))
+        return render_write(render, fd, s, strlen(s), false);
+    /* Only renderer-owned style sequences enter here. Model text always goes
+     * through render_write's inert-text path; the sink receives no escapes. */
+    unsigned int *style = &render->sink.style[fd == STDERR_FILENO];
+    const char *at = s + 2u;
+    do {
+        unsigned int value = 0u;
+        while (*at >= '0' && *at <= '9') value = value * 10u + (unsigned int)(*at++ - '0');
+        if (!value) *style = 0u;
+        else if (value == 1u) *style |= SNAG_RENDER_BOLD;
+        else if (value == 2u) *style |= SNAG_RENDER_DIM;
+        else if (value == 3u) *style |= SNAG_RENDER_ITALIC;
+        else if (value == 4u) *style |= SNAG_RENDER_UNDERLINE;
+        else if (value == 7u) *style |= SNAG_RENDER_REVERSE;
+        else if (value >= 30u && value <= 37u) *style = (*style & ~240u) | ((value - 29u) << 4u);
+        else if (value >= 40u && value <= 47u) *style = (*style & ~7680u) | ((value - 39u) << 9u);
+        else return snag_errno(EINVAL);
+    } while (*at == ';' && *++at);
+    return *at == 'm' && !at[1] ? 0 : snag_errno(EINVAL);
 }
 
 static int
@@ -225,7 +330,7 @@ boundary_before(struct snag_render *render, int fd, unsigned int kind, const cha
                (!render->boundary && kind == BOUNDARY_BULLET);
     if (gap && render->trailing_newlines + i < 2u) {
         size_t count = 2u - render->trailing_newlines - i;
-        if (snag_term_write(fd, "\n\n", count) < 0 ||
+        if (render_write(render, fd, "\n\n", count, false) < 0 ||
             (render->term && snag_term_note_output(render->term, "\n\n", count, "") < 0)) return -1;
         render->trailing_newlines += (unsigned int)count;
         if (render->public_item_open) render->public_column = 0u;
@@ -246,13 +351,11 @@ write_role_chunk(struct snag_render *render, unsigned int boundary, int fd, cons
     if (!len) return 0;
     if (output_begin(render) < 0) return -1;
     if (boundary_before(render, fd, boundary, text, len) < 0) goto out;
-    if (colored && write_literal(fd, color) < 0) goto out;
-    if (colored_len && (terminal_safe ? snag_term_write_safe(fd, text, colored_len) :
-                         snag_term_write(fd, text, colored_len)) < 0) goto out;
-    if (colored && write_literal(fd, COLOR_RESET) < 0) goto out;
-    if (len > colored_len && (terminal_safe ? snag_term_write_safe(fd, text + colored_len,
-                                              len - colored_len) : snag_term_write(fd, text + colored_len,
-                                        len - colored_len)) < 0) goto out;
+    if (colored && write_literal(render, fd, color) < 0) goto out;
+    if (colored_len && render_write(render, fd, text, colored_len, terminal_safe) < 0) goto out;
+    if (colored && write_literal(render, fd, COLOR_RESET) < 0) goto out;
+    if (len > colored_len && render_write(render, fd, text + colored_len,
+            len - colored_len, terminal_safe) < 0) goto out;
     if (render->term && ((fd == STDOUT_FILENO && render->stdout_terminal) ||
          (fd == STDERR_FILENO && render->stderr_terminal)) && snag_term_note_output(render->term, text, len,
                              colored && colored_len == len ? color : "") < 0) goto out;
@@ -261,7 +364,7 @@ write_role_chunk(struct snag_render *render, unsigned int boundary, int fd, cons
     rc = 0;
 out:
     if (rc < 0) saved_errno = errno;
-    if (colored && rc < 0) (void)write_literal(fd, COLOR_RESET);
+    if (colored && rc < 0) (void)write_literal(render, fd, COLOR_RESET);
     if (output_end(render) < 0 && rc == 0) rc = -1;
     if (rc == 0 && persistent) render->previous_public_item = false;
     if (saved_errno) errno = saved_errno;
@@ -353,7 +456,7 @@ write_optional_block(struct snag_render *render, enum snag_presentation kind,
     while (len) {
         if (render_checkpoint(render) < 0) goto out;
         if (!snag_render_enabled(render, kind)) {
-            if (!ended_lf && write_literal(STDERR_FILENO, "\n") < 0) goto out;
+            if (!ended_lf && write_literal(render, STDERR_FILENO, "\n") < 0) goto out;
             /* Mark a mid-block downgrade only when something was shown. */
             rc = wrote ? write_omitted(render) : 0;
             goto out;
@@ -779,7 +882,7 @@ write_banner(struct snag_render *render, unsigned int boundary, const char *colo
     if (!render->stderr_terminal) return write_role_block(render, boundary, STDERR_FILENO, color, text, len,
                                 colored_len, false, true);
     struct snag_buf out = {.max = len <= (SIZE_MAX - 64u) / 16u ? len * 16u + 64u : SIZE_MAX};
-    unsigned int columns = snag_term_columns(render->term);
+    unsigned int columns = render_columns(render);
     int rc = snag_term_append_wrapped(&out, text, colored_len, columns);
     size_t colored = out.len;
     if (rc == 0) rc = snag_term_append_wrapped(&out, text + colored_len, len - colored_len, columns);
@@ -923,8 +1026,12 @@ snag_render_submitted(struct snag_render *render, const char *label, const char 
         if (rc == 0) rc = snag_buf_putc(&line, '\n');
         if (rc == 0 && output_begin(render) < 0) rc = -1;
         else if (rc == 0) {
+            struct snag_render_origin previous = render->origin;
+            render->origin = (struct snag_render_origin){line.data + strlen(label), len,
+                render_origin(render, text), NULL};
             rc = write_role_block(render, BOUNDARY_PROMPT, STDERR_FILENO, COLOR_AGENT,
                                   (char *)line.data, line.len, line.len - len - 1u, terminal, true);
+            render->origin = previous;
             if (terminal && render->term) render->term->output_gap = 1u;
             if (output_end(render) < 0) rc = -1;
         }
@@ -992,7 +1099,7 @@ markdown_clear_style(struct snag_render *render)
 {
     if (!render->public_style[0]) return 0;
     render->public_style[0] = '\0';
-    return write_literal(render->public_fd, COLOR_RESET);
+    return write_literal(render, render->public_fd, COLOR_RESET);
 }
 
 static int
@@ -1021,7 +1128,7 @@ markdown_paint_style(struct snag_render *render, unsigned char style)
     sequence[len] = '\0';
     if (strcmp(render->public_style, sequence) == 0) return 0;
     memcpy(render->public_style, sequence, len + 1u);
-    return snag_term_write(render->public_fd, sequence, len);
+    return write_literal(render, render->public_fd, sequence);
 }
 
 int
@@ -1044,10 +1151,12 @@ snag_render_public_begin(struct snag_render *render, int fd, const char *label)
     }
     render->previous_public_item = false;
     if (fd == STDOUT_FILENO && render->stdout_item_seen &&
-        !render->stdout_item_ended_lf && !render->stdout_terminal && write_literal(STDOUT_FILENO, "\n") < 0)
+        !render->stdout_item_ended_lf && !render->stdout_terminal &&
+        write_literal(render, STDOUT_FILENO, "\n") < 0)
         return -1;
     snag_buf_init(&render->wrap_pending, SNAG_MAX_PUBLIC_ITEM);
     snag_buf_init(&render->wrap_styles, SNAG_MAX_PUBLIC_ITEM);
+    snag_buf_init(&render->wrap_origins, SNAG_MAX_PUBLIC_ITEM * sizeof(uint64_t));
     render->public_fd = fd;
     render->public_item_open = true;
     render->public_item_bytes = label_len != 0u;
@@ -1065,10 +1174,10 @@ snag_render_public_begin(struct snag_render *render, int fd, const char *label)
         if (colored) {
             if (output_begin(render) < 0) goto fail;
             render->public_output_open = true;
-            if (write_literal(fd, color) < 0) goto fail;
+            if (write_literal(render, fd, color) < 0) goto fail;
         }
         if (public_write(render, label, label_len, 0u) < 0) goto fail;
-        if (colored && write_literal(fd, COLOR_RESET) < 0) goto fail;
+        if (colored && write_literal(render, fd, COLOR_RESET) < 0) goto fail;
         if (close_public_output(render) < 0) goto fail;
     }
     render->markdown_rendering = render->markdown && public_terminal(render);
@@ -1077,7 +1186,7 @@ snag_render_public_begin(struct snag_render *render, int fd, const char *label)
 fail:
     {
         int saved_errno = errno;
-        if (color_enabled(render, fd)) (void)write_literal(fd, COLOR_RESET);
+        if (color_enabled(render, fd)) (void)write_literal(render, fd, COLOR_RESET);
         if (render->public_output_open) (void)output_end(render);
         render->public_output_open = false;
         render->public_item_open = false;
@@ -1088,6 +1197,7 @@ fail:
         snag_buf_free(&render->markdown_state.table);
         snag_buf_free(&render->wrap_pending);
         snag_buf_free(&render->wrap_styles);
+        snag_buf_free(&render->wrap_origins);
         errno = saved_errno;
         return -1;
     }
@@ -1113,8 +1223,7 @@ public_write(struct snag_render *render, const char *text, size_t len, unsigned 
     }
     if (markdown_paint_style(render, style) < 0) return -1;
     if (boundary_before(render, render->public_fd, BOUNDARY_CONTENT, text, len) < 0) return -1;
-    if ((terminal ? snag_term_write_safe(render->public_fd, text, len) :
-                    snag_term_write(render->public_fd, text, len)) < 0) return -1;
+    if (render_write(render, render->public_fd, text, len, terminal) < 0) return -1;
     if (terminal && render->term && snag_term_note_output(render->term, text, len, render->public_style) < 0)
         return -1;
     render->public_item_bytes = true;
@@ -1162,7 +1271,12 @@ static int
 write_wrap_span(struct snag_render *render, const char *text, size_t len)
 {
     size_t offset = (size_t)(text - (const char *)render->wrap_pending.data);
-    return write_styled_span(render, text, render->wrap_styles.data + offset, len);
+    struct snag_render_origin previous = render->origin;
+    render->origin = (struct snag_render_origin){render->wrap_pending.data,
+        render->wrap_pending.len, 0u, (const uint64_t *)render->wrap_origins.data};
+    int rc = write_styled_span(render, text, render->wrap_styles.data + offset, len);
+    render->origin = previous;
+    return rc;
 }
 
 static int
@@ -1179,11 +1293,13 @@ flush_wrap_pending(struct snag_render *render)
     if (!len) return 0;
     while (leading < len && (text[leading] == ' ' || text[leading] == '\t')) ++leading;
     width = snag_term_text_width(text, len);
-    columns = render->markdown_measuring ? UINT_MAX : snag_term_columns(render->term);
+    columns = render->markdown_measuring || render->sink.logical ?
+        UINT_MAX : render_columns(render);
     if (width == SIZE_MAX) return -1;
     if (columns >= 20u && render->public_column == columns && leading == len) {
         snag_buf_reset(&render->wrap_pending);
         snag_buf_reset(&render->wrap_styles);
+        snag_buf_reset(&render->wrap_origins);
         render->wrap_width = 0u;
         render->wrap_has_word = false;
         render->wrap_continuation = false;
@@ -1240,6 +1356,7 @@ flush_wrap_pending(struct snag_render *render)
     }
     snag_buf_reset(&render->wrap_pending);
     snag_buf_reset(&render->wrap_styles);
+    snag_buf_reset(&render->wrap_origins);
     render->wrap_width = 0u;
     render->wrap_has_word = false;
     render->wrap_continuation = false;
@@ -1249,7 +1366,7 @@ flush_wrap_pending(struct snag_render *render)
 static int
 write_wrapped(struct snag_render *render, const unsigned char *text, size_t len)
 {
-    unsigned int columns = snag_term_columns(render->term);
+    unsigned int columns = render->sink.logical ? UINT_MAX : render_columns(render);
     size_t indent = render->markdown_rendering && render->markdown_state.prose &&
                     render->markdown_prose_bullets ? 2u : 0u;
     size_t limit = columns >= 20u ? columns - indent : 1024u;
@@ -1257,7 +1374,8 @@ write_wrapped(struct snag_render *render, const unsigned char *text, size_t len)
 
     if (render->markdown_measuring) {
         size_t width = snag_term_text_width((const char *)text, len);
-        if (width == SIZE_MAX || snag_buf_append(&render->wrap_pending, text, len) < 0 ||
+        if (width == SIZE_MAX || render_origins_append(render, text, len) < 0 ||
+            snag_buf_append(&render->wrap_pending, text, len) < 0 ||
             snag_buf_reserve(&render->wrap_styles, len) < 0 ||
             !snag_size_add(render->public_column, width, &render->public_column)) return -1;
         if (len) memset(render->wrap_styles.data + render->wrap_styles.len, style, len);
@@ -1270,7 +1388,8 @@ write_wrapped(struct snag_render *render, const unsigned char *text, size_t len)
 
         if (!n || n > len - i) return snag_errno(EILSEQ);
         if (text[i] == '\n') {
-            if (flush_wrap_pending(render) < 0 || public_write(render, "\n", 1u, 0u) < 0) return -1;
+            if (flush_wrap_pending(render) < 0 ||
+                public_write(render, (const char *)text + i, 1u, 0u) < 0) return -1;
             render->public_column = 0u;
             render->wrap_continuation = false;
         } else {
@@ -1280,6 +1399,7 @@ write_wrapped(struct snag_render *render, const unsigned char *text, size_t len)
             }
             if (snag_buf_reserve(&render->wrap_pending, n) < 0 ||
                 snag_buf_reserve(&render->wrap_styles, n) < 0) return -1;
+            if (render_origins_append(render, text + i, n) < 0) return -1;
             memcpy(render->wrap_pending.data + render->wrap_pending.len, text + i, n);
             memset(render->wrap_styles.data + render->wrap_styles.len, style, n);
             render->wrap_pending.len += n;
@@ -1613,6 +1733,7 @@ markdown_table_output_free(struct markdown_table_output *cell)
 {
     snag_buf_free(&cell->text);
     snag_buf_free(&cell->styles);
+    snag_buf_free(&cell->origins);
 }
 
 static int
@@ -1624,6 +1745,9 @@ markdown_table_prepare(struct snag_render *render, const struct markdown_table_c
     if (render_checkpoint(render) < 0) return -1;
     memset(&probe, 0, sizeof(probe));
     probe.public_fd = render->public_fd;
+    probe.sink = render->sink;
+    probe.origin = (struct snag_render_origin){render->markdown_state.table.data,
+        render->markdown_state.table.len, render->markdown_state.table_source, NULL};
     /* Capture semantic styles; the real output applies the current color mode. */
     probe.color_stdout = probe.color_stderr = true;
     probe.markdown_rendering = probe.markdown_measuring = true;
@@ -1632,6 +1756,7 @@ markdown_table_prepare(struct snag_render *render, const struct markdown_table_c
     /* Visible link delimiters can expand the bounded source. */
     snag_buf_init(&probe.wrap_pending, 2u * SNAG_MAX_PUBLIC_ITEM);
     snag_buf_init(&probe.wrap_styles, 2u * SNAG_MAX_PUBLIC_ITEM);
+    snag_buf_init(&probe.wrap_origins, 2u * SNAG_MAX_PUBLIC_ITEM * sizeof(uint64_t));
     int rc = 0;
     if (label && (markdown_table_cell(&probe, label, true) < 0 ||
                   markdown_text(&probe, ": ", 2u) < 0)) rc = -1;
@@ -1639,10 +1764,12 @@ markdown_table_prepare(struct snag_render *render, const struct markdown_table_c
     if (rc < 0) {
         snag_buf_free(&probe.wrap_pending);
         snag_buf_free(&probe.wrap_styles);
+        snag_buf_free(&probe.wrap_origins);
         return -1;
     }
     out->text = probe.wrap_pending;
     out->styles = probe.wrap_styles;
+    out->origins = probe.wrap_origins;
     out->width = probe.public_column;
     out->offset = 0u;
     return 0;
@@ -1727,9 +1854,14 @@ static int
 markdown_table_emit(struct snag_render *render, const struct markdown_table_output *cell,
                     size_t start, size_t length, size_t width)
 {
-    if (flush_wrap_pending(render) < 0 ||
-        (length && write_styled_span(render, (const char *)cell->text.data + start,
-                                    cell->styles.data + start, length) < 0)) return -1;
+    if (flush_wrap_pending(render) < 0) return -1;
+    struct snag_render_origin previous = render->origin;
+    render->origin = (struct snag_render_origin){cell->text.data, cell->text.len,
+        0u, (const uint64_t *)cell->origins.data};
+    int rc = length ? write_styled_span(render, (const char *)cell->text.data + start,
+        cell->styles.data + start, length) : 0;
+    render->origin = previous;
+    if (rc < 0) return -1;
     render->public_column += width;
     return 0;
 }
@@ -1845,7 +1977,7 @@ markdown_table_render(struct snag_render *render)
     size_t offset = 0u;
     size_t body_offset;
     size_t total;
-    unsigned int terminal_columns = snag_term_columns(render->term);
+    unsigned int terminal_columns = render_columns(render);
     bool ended_lf = md->table.len && text[md->table.len - 1u] == '\n';
     bool grid, wrapped;
 
@@ -1879,7 +2011,7 @@ markdown_table_render(struct snag_render *render)
         if (widths[i] > SIZE_MAX - total - 3u) return snag_errno(EOVERFLOW);
         total += widths[i] + 3u;
     }
-    terminal_columns = snag_term_columns(render->term);
+    terminal_columns = render_columns(render);
     size_t minimum_total = 1u + 3u * header_count;
     for (size_t i = 0u; i < header_count; ++i) minimum_total += minimum[i];
     grid = terminal_columns >= 10u && minimum_total < terminal_columns;
@@ -1963,7 +2095,10 @@ markdown_table_replay(struct snag_render *render)
     md->table_active = false;
     md->line_start = true;
     md->table_disabled = true;
+    struct snag_render_origin previous = render->origin;
+    render->origin = (struct snag_render_origin){saved.data, saved.len, md->table_source, NULL};
     rc = markdown_write(render, saved.data, saved.len);
+    render->origin = previous;
     md->table_disabled = false;
     snag_buf_free(&saved);
     return rc;
@@ -2060,6 +2195,7 @@ markdown_table_start_line(struct snag_render *render)
 {
     struct snag_markdown_state *md = &render->markdown_state;
 
+    if (!md->table.len) md->table_source = md->prefix_source;
     md->table_line_start = md->table.len;
     if (snag_buf_append(&md->table, md->prefix, md->prefix_len) < 0) return -1;
     md->prefix_len = 0u;
@@ -2160,6 +2296,7 @@ markdown_line_prefix(struct snag_render *render, const unsigned char *text, size
                    markdown_text(render, text, len);
         return markdown_prefix_literal(render) < 0 ? -1 : markdown_inline(render, text, len);
     }
+    if (!md->prefix_len) md->prefix_source = render_origin(render, text);
     md->prefix[md->prefix_len++] = (char)text[0];
     spaces = markdown_prefix_spaces(md);
     body = md->prefix + spaces;
@@ -2244,7 +2381,7 @@ ordinary: return markdown_prefix_literal(render);
 }
 
 static int
-markdown_newline(struct snag_render *render)
+markdown_newline(struct snag_render *render, const char *newline)
 {
     struct snag_markdown_state *md = &render->markdown_state;
     bool blank = md->line_start && !md->fence && markdown_prefix_spaces(md) == md->prefix_len;
@@ -2253,12 +2390,12 @@ markdown_newline(struct snag_render *render)
         if (markdown_table_finish(render) < 0) return -1;
         md->line_start = true;
         md->prefix_len = 0u;
-        return markdown_text(render, "\n", 1u);
+        return markdown_text(render, newline, 1u);
     }
     if (blank && render->markdown_prose_bullets) {
         if (markdown_paragraph(render, false) < 0) return -1;
         md->prefix_len = 0u;
-        return render->trailing_newlines < 2u ? markdown_text(render, "\n", 1u) : 0;
+        return render->trailing_newlines < 2u ? markdown_text(render, newline, 1u) : 0;
     }
     if (blank) md->prose = false;
 
@@ -2275,7 +2412,7 @@ markdown_newline(struct snag_render *render)
             return -1;
     }
     if (markdown_inline_tail(render) < 0) return -1;
-    if (markdown_text(render, "\n", 1u) < 0) return -1;
+    if (markdown_text(render, newline, 1u) < 0) return -1;
     md->line_continuation = render->markdown_prose_bullets && md->prose &&
                             !md->fence && !md->heading && !md->quote;
     md->heading = false;
@@ -2303,7 +2440,7 @@ markdown_write(struct snag_render *render, const unsigned char *text, size_t len
         if (text[i] == '\n') {
             if (md->table_line) {
                 if (snag_buf_putc(&md->table, '\n') < 0 || markdown_table_line_end(render) < 0) return -1;
-            } else if (markdown_newline(render) < 0) {
+            } else if (markdown_newline(render, (const char *)text + i) < 0) {
                 return -1;
             }
         } else if (md->table_line) {
@@ -2318,6 +2455,7 @@ markdown_write(struct snag_render *render, const unsigned char *text, size_t len
             if (md->fence_info_len < sizeof(md->fence_info)) {
                 size_t room = sizeof(md->fence_info) - md->fence_info_len;
                 size_t amount = n < room ? n : room;
+                if (!md->fence_info_len) md->fence_source = render_origin(render, text + i);
                 memcpy(md->fence_info + md->fence_info_len, text + i, amount);
                 md->fence_info_len += amount;
             }
@@ -2478,9 +2616,22 @@ cite_rewrite(const char *block, size_t len, struct snag_buf *out)
     return snag_buf_append(out, "]", 1u) < 0 ? -1 : 1;
 }
 
+static int
+cite_append(struct snag_buf *out, struct snag_buf *map, const void *text, size_t len,
+    uint64_t source, bool literal)
+{
+    if (snag_buf_append(out, text, len) < 0) return -1;
+    for (size_t i = 0u; map && i < len; ++i) {
+        uint64_t byte = source == UINT64_MAX || !literal ? source : source + i;
+        if (snag_buf_append(map, &byte, sizeof(byte)) < 0) return -1;
+    }
+    return 0;
+}
+
 /* Rewrite complete blocks and hold a trailing partial one for the next feed. */
 static int
-cite_feed(struct snag_cite_state *state, const char *text, size_t len, struct snag_buf *out)
+cite_feed(struct snag_cite_state *state, const char *text, size_t len, struct snag_buf *out,
+    struct snag_buf *map, uint64_t source)
 {
     size_t pos = 0u;
 
@@ -2491,11 +2642,14 @@ cite_feed(struct snag_cite_state *state, const char *text, size_t len, struct sn
             scan = pos;
             while (scan + 3u <= len && memcmp(text + scan, SNAG_CITE_OPEN, 3u)) ++scan;
             if (scan + 3u > len) {
-                if (snag_buf_append(out, text + pos, len - pos) < 0) return -1;
+                if (cite_append(out, map, text + pos, len - pos,
+                    source == UINT64_MAX ? source : source + pos, true) < 0) return -1;
                 return 0;
             }
-            if (scan > pos && snag_buf_append(out, text + pos, scan - pos) < 0) return -1;
+            if (scan > pos && cite_append(out, map, text + pos, scan - pos,
+                source == UINT64_MAX ? source : source + pos, true) < 0) return -1;
             snag_buf_reset(&state->pending);
+            state->source = source == UINT64_MAX ? source : source + scan;
             state->active = true;
             pos = scan;
         }
@@ -2505,8 +2659,10 @@ cite_feed(struct snag_cite_state *state, const char *text, size_t len, struct sn
             if (state->pending.len + (len - pos) <= SNAG_CITE_BLOCK_MAX) {
                 if (snag_buf_append(&state->pending, text + pos, len - pos) < 0) return -1;
             } else {
-                if (snag_buf_append(out, state->pending.data, state->pending.len) < 0 ||
-                    snag_buf_append(out, text + pos, len - pos) < 0) return -1;
+                if (cite_append(out, map, state->pending.data, state->pending.len,
+                    state->source, true) < 0 ||
+                    cite_append(out, map, text + pos, len - pos,
+                    source == UINT64_MAX ? source : source + pos, true) < 0) return -1;
                 snag_buf_reset(&state->pending);
                 state->active = false;
             }
@@ -2514,8 +2670,10 @@ cite_feed(struct snag_cite_state *state, const char *text, size_t len, struct sn
         }
         block_len = scan + 3u - pos;
         if (state->pending.len + block_len > SNAG_CITE_BLOCK_MAX) {
-            if (snag_buf_append(out, state->pending.data, state->pending.len) < 0 ||
-                snag_buf_append(out, text + pos, block_len) < 0) return -1;
+            if (cite_append(out, map, state->pending.data, state->pending.len,
+                    state->source, true) < 0 ||
+                cite_append(out, map, text + pos, block_len,
+                    source == UINT64_MAX ? source : source + pos, true) < 0) return -1;
             snag_buf_reset(&state->pending);
             state->active = false;
         } else {
@@ -2526,8 +2684,17 @@ cite_feed(struct snag_cite_state *state, const char *text, size_t len, struct sn
             if (snag_buf_append(&state->pending, text + pos, block_len) < 0) return -1;
             block = state->pending.data;
             block_size = state->pending.len;
+            size_t begin = out->len;
             rc = cite_rewrite((const char *)block, block_size, out);
-            if (rc == 0 && snag_buf_append(out, block, block_size) < 0) rc = -1;
+            if (rc == 0 && cite_append(out, map, block, block_size, state->source, true) < 0)
+                rc = -1;
+            else if (rc > 0 && map) {
+                for (size_t i = begin; i < out->len; ++i)
+                    if (snag_buf_append(map, &state->source, sizeof(state->source)) < 0) {
+                        rc = -1;
+                        break;
+                    }
+            }
             snag_buf_reset(&state->pending);
             state->active = false;
             if (rc < 0) return -1;
@@ -2597,19 +2764,31 @@ render_public_chunk(struct snag_render *render, const char *text, size_t len, st
         return snag_errno(EOVERFLOW);
     }
     struct snag_buf complete = {.max = complete_max};
+    struct snag_buf origins = {.max = filtered_max * sizeof(uint64_t)};
+    uint64_t source = render_origin(render, text);
+    if (source != UINT64_MAX && source >= render->utf8_pending_len)
+        source -= render->utf8_pending_len;
     /* A terminator can release a citation retained by earlier chunks. */
     struct snag_buf filtered = {.max = filtered_max};
     if (complete_utf8(render->utf8_pending, &render->utf8_pending_len, text, len, &complete) < 0) goto out;
     cite_prepare(&render->cite);
-    if (complete.len && (cite_feed(&render->cite, (const char *)complete.data, complete.len,
-                   &filtered) < 0 || public_emit(render, filtered.data, filtered.len, delivered) < 0))
-        goto out;
+    if (complete.len) {
+        if (cite_feed(&render->cite, (const char *)complete.data, complete.len,
+            &filtered, render->sink.text ? &origins : NULL, source) < 0) goto out;
+        struct snag_render_origin previous = render->origin;
+        render->origin = (struct snag_render_origin){filtered.data, filtered.len,
+            0u, (const uint64_t *)origins.data};
+        int emitted = public_emit(render, filtered.data, filtered.len, delivered);
+        render->origin = previous;
+        if (emitted < 0) goto out;
+    }
     rc = 0;
 out:
     if (rc < 0) saved_errno = errno;
     if (close_public_output(render) < 0 && rc == 0) rc = -1;
     snag_buf_free(&filtered);
     snag_buf_free(&complete);
+    snag_buf_free(&origins);
     if (saved_errno) errno = saved_errno;
     return rc;
 }
@@ -2650,11 +2829,16 @@ close_public_item(struct snag_render *render, bool discard_incomplete)
     }
     if (render->cite.active) {
         struct snag_buf tail = {.max = SNAG_CITE_BLOCK_MAX + 8u};
-        if (cite_flush(&render->cite, &tail) < 0 || (!discard_incomplete &&
+        struct snag_render_origin previous = render->origin;
+        int flushed = cite_flush(&render->cite, &tail);
+        render->origin = (struct snag_render_origin){tail.data, tail.len,
+            render->cite.source, NULL};
+        if (flushed < 0 || (!discard_incomplete &&
              public_emit(render, tail.data, tail.len, NULL) < 0)) {
             rc = -1;
             saved_errno = errno;
         }
+        render->origin = previous;
         snag_buf_free(&tail);
     }
     if (render->markdown_rendering && (discard_incomplete ? markdown_abort(render) :
@@ -2692,6 +2876,7 @@ close_public_item(struct snag_render *render, bool discard_incomplete)
     snag_buf_free(&render->markdown_state.table);
     snag_buf_free(&render->wrap_pending);
     snag_buf_free(&render->wrap_styles);
+    snag_buf_free(&render->wrap_origins);
     if (fd == STDOUT_FILENO && had_bytes) {
         render->stdout_item_seen = true;
         render->stdout_item_ended_lf = ended_lf;
@@ -2808,7 +2993,7 @@ snag_render_rollout(struct snag_render *render, const char *text, size_t len, st
     if (complete_utf8(record->utf8_pending, &record->utf8_pending_len, text, len, &complete) < 0) goto out;
     cite_prepare(&record->cite);
     if (complete.len && cite_feed(&record->cite, (const char *)complete.data, complete.len,
-                  &filtered) < 0) goto out;
+                  &filtered, NULL, UINT64_MAX) < 0) goto out;
     if (filtered.len) {
         if (snag_buf_reserve(&record->text, filtered.len) < 0 ||
             (delivered && snag_buf_reserve(delivered, filtered.len) < 0) ||
@@ -2999,8 +3184,9 @@ irc_piece(struct snag_render *render, const char *text, bool safe)
 {
     size_t len = strlen(text);
 
-    if ((safe ? snag_term_write_safe(STDERR_FILENO, text, len) :
-                snag_term_write(STDERR_FILENO, text, len)) < 0) return -1;
+    if ((!safe && len && text[0] == '\033' ?
+        write_literal(render, STDERR_FILENO, text) :
+        render_write(render, STDERR_FILENO, text, len, safe)) < 0) return -1;
     if (len && text[0] == '\033') (void)snag_strcpy(render->public_style, sizeof(render->public_style), text);
     else if (render->term) return snag_term_note_output(render->term, text, len, render->public_style);
     return 0;
@@ -3043,13 +3229,15 @@ irc_markdown_lifecycle(struct snag_render *render, const struct snag_irc_event *
 }
 
 static int
-render_irc_markdown(struct snag_render *render, const struct snag_irc_event *event, size_t column)
+render_irc_markdown(struct snag_render *render, const struct snag_irc_event *event,
+    const char *text, size_t column)
 {
     struct snag_irc_markdown_state *saved = irc_markdown_state(render, event, false);
     struct snag_render body;
     int rc = -1;
 
     snag_render_init(&body, render->verbosity);
+    body.sink = render->sink;
     body.stderr_terminal = render->stderr_terminal;
     body.color_stderr = render->color_stderr;
     body.markdown = true;
@@ -3064,7 +3252,7 @@ render_irc_markdown(struct snag_render *render, const struct snag_irc_event *eve
         body.markdown_state.fence = saved->fence;
         body.markdown_state.fence_len = saved->fence_len;
     }
-    if (snag_render_public(&body, event->text, strlen(event->text), NULL) < 0 || markdown_finish(&body) < 0)
+    if (snag_render_public(&body, text, strlen(text), NULL) < 0 || markdown_finish(&body) < 0)
         goto out;
     if (body.markdown_state.fence) {
         if (!saved) saved = irc_markdown_state(render, event, true);
@@ -3092,12 +3280,21 @@ out: body.markdown_rendering = false;
 }
 
 static int
-render_irc_event_now(struct snag_render *render, const struct snag_irc_event *event)
+render_irc_event_now(struct snag_render *render, const struct snag_irc_event *event,
+    const json_t *display)
 {
+    if (!render || !event) return snag_errno(EINVAL);
     char when[16u];
-    char prefix[768u];
-    char source[SNAG_CONFIG_IRC_ENDPOINT_MAX + SNAG_CONFIG_IRC_ROOM_MAX +
-        SNAG_CONFIG_IRC_NICK_MAX + 64u] = {0};
+    const char *endpoint = display ? snag_json_string(display, "endpoint") : event->endpoint;
+    const char *room = display ? snag_json_string(display, "room") : event->room;
+    const char *nick = display ? snag_json_string(display, "nick") : event->nick;
+    const char *text = display ? snag_json_string(display, "text") : event->text;
+    const char *peer = display && event->routed ?
+        snag_json_string(json_object_get(display, "routing"), "peer") : event->route.peer;
+    if (!endpoint || !room || !nick || !text || !peer) return snag_errno(EINVAL);
+    size_t prefix_size = strlen(nick) + 128u;
+    size_t source_size = strlen(endpoint) + strlen(room) + strlen(peer) + 128u;
+    char *prefix = NULL, *source = NULL, *visible = NULL;
     time_t seconds;
     struct tm tm;
     const char *nick_color;
@@ -3107,98 +3304,103 @@ render_irc_event_now(struct snag_render *render, const struct snag_irc_event *ev
     int n;
     int rc = -1;
 
-    if (!render || !event) return snag_errno(EINVAL);
-    if (event->kind == SNAG_IRC_HISTORY_READY) return !event->text[0] ? 0 : render_banner(render,
-            !strncmp(event->text, "history gap", 11u) ? "── history gap; available history replayed ──\n" :
+    if (event->kind == SNAG_IRC_HISTORY_READY) return !text[0] ? 0 : render_banner(render,
+            !strncmp(text, "history gap", 11u) ? "── history gap; available history replayed ──\n" :
             "── history replayed ──\n");
+    prefix = malloc(prefix_size);
+    source = calloc(source_size, 1u);
+    if (!prefix || !source) goto cleanup;
     irc_markdown_lifecycle(render, event);
     if (event->routed) {
-        (void)snprintf(source, sizeof(source), "[%s/%s %s%s] ", event->endpoint,
-            event->route.kind == SNAG_IRC_QUERY ? event->route.peer : event->room,
+        (void)snprintf(source, source_size, "[%s/%s %s%s] ", endpoint,
+            event->route.kind == SNAG_IRC_QUERY ? peer : room,
             event->route.identity == SNAG_IRC_AGENT ? "agent" : "operator",
             event->route.kind == SNAG_IRC_QUERY ? " query" : "");
         if (event->route.direction == SNAG_IRC_OUTGOING &&
             event->route.delivery == SNAG_IRC_PENDING) {
             size_t used = strlen(source);
-            (void)snprintf(source + used, sizeof(source) - used,
+            (void)snprintf(source + used, source_size - used,
                 "[send %.8s pending] ", event->route.send);
         }
     } else if (render->term && render->term->destinations) {
         const struct snag_irc_destinations *destinations = render->term->destinations;
         const struct snag_irc_destination *origin = NULL;
         for (size_t i = 0u; i < destinations->count; ++i)
-            if (strcmp(destinations->items[i].endpoint, event->endpoint) == 0 &&
-                (!event->room[0] || strcmp(destinations->items[i].room, event->room) == 0))
+            if (strcmp(destinations->items[i].endpoint, endpoint) == 0 &&
+                (!room[0] || strcmp(destinations->items[i].room, room) == 0))
                 origin = &destinations->items[i];
         highlight = origin && (event->kind == SNAG_IRC_MESSAGE || event->kind == SNAG_IRC_NOTICE) &&
-            ((!snag_irc_nick_mentioned(event->nick, origin->operator) &&
-              snag_irc_nick_mentioned(event->text, origin->operator)) ||
-             (!snag_irc_nick_mentioned(event->nick, origin->model) &&
-              snag_irc_nick_mentioned(event->text, origin->model)));
+            ((!snag_irc_nick_mentioned(nick, origin->operator) &&
+              snag_irc_nick_mentioned(text, origin->operator)) ||
+             (!snag_irc_nick_mentioned(nick, origin->model) &&
+              snag_irc_nick_mentioned(text, origin->model)));
         if (origin && destinations->count > 1u)
-            (void)snprintf(source, sizeof(source), "[%u] ", origin->target.id);
-        else if (!origin && strcmp(event->endpoint, "local") != 0)
-            (void)snprintf(source, sizeof(source), "[%s %s] ", event->endpoint, event->room);
+            (void)snprintf(source, source_size, "[%u] ", origin->target.id);
+        else if (!origin && strcmp(endpoint, "local") != 0)
+            (void)snprintf(source, source_size, "[%s %s] ", endpoint, room);
     }
     seconds = (time_t)(event->timestamp_ms / 1000u);
     if (!snag_localtime(&seconds, &tm) || strftime(when, sizeof(when), "%H:%M:%S", &tm) == 0)
         memcpy(when, "--:--:--", 9u);
     colored = render->color_stderr;
     nick_color = highlight ? COLOR_OPERATOR : event->op ? COLOR_CHAT_OPERATOR : COLOR_CHAT_AGENT;
-    if (output_begin(render) < 0) return -1;
-    if (boundary_before(render, STDERR_FILENO, BOUNDARY_CONTENT, event->nick, strlen(event->nick)) < 0)
+    if (output_begin(render) < 0) goto cleanup;
+    if (boundary_before(render, STDERR_FILENO, BOUNDARY_CONTENT, nick, strlen(nick)) < 0)
         goto out;
     if (source[0] && ((colored && irc_piece(render, COLOR_META, false) < 0) ||
          irc_piece(render, source, true) < 0)) goto out;
     if (colored && irc_piece(render, highlight ? COLOR_OPERATOR : COLOR_META, false) < 0) goto out;
-    n = snprintf(prefix, sizeof(prefix), "%s ", when);
-    if (n < 0 || (size_t)n >= sizeof(prefix) || irc_piece(render, prefix, true) < 0) goto out;
+    n = snprintf(prefix, prefix_size, "%s ", when);
+    if (n < 0 || (size_t)n >= prefix_size || irc_piece(render, prefix, true) < 0) goto out;
     if (colored && (irc_piece(render, COLOR_RESET, false) < 0 || irc_piece(render, nick_color, false) < 0))
         goto out;
     bool outgoing = event->routed && event->route.direction == SNAG_IRC_OUTGOING;
     if (outgoing && event->route.delivery >= SNAG_IRC_WRITTEN &&
         event->route.delivery <= SNAG_IRC_UNCERTAIN) {
         static const char *const outcomes[] = {"written", "acknowledged", "failed", "uncertain"};
-        n = snprintf(prefix, sizeof(prefix), "· send %.8s %s", event->route.send,
+        n = snprintf(prefix, prefix_size, "· send %.8s %s", event->route.send,
             outcomes[event->route.delivery - SNAG_IRC_WRITTEN]);
-        if (n < 0 || (size_t)n >= sizeof(prefix) || irc_piece(render, prefix, true) < 0) goto out;
+        if (n < 0 || (size_t)n >= prefix_size || irc_piece(render, prefix, true) < 0) goto out;
         if (event->route.revised && (irc_piece(render, " · server text: ", true) < 0 ||
             (event->route.action && irc_piece(render, "* ", true) < 0) ||
-            irc_piece(render, event->text, true) < 0)) goto out;
+            irc_piece(render, text, true) < 0)) goto out;
     } else if (event->kind == SNAG_IRC_MESSAGE || event->kind == SNAG_IRC_NOTICE) {
-        n = snprintf(prefix, sizeof(prefix), "%s%s%s ", event->kind == SNAG_IRC_NOTICE ? "-" : "",
-            event->op ? "@" : "", event->nick[0] ? event->nick : "server");
-        if (n < 0 || (size_t)n >= sizeof(prefix) || irc_piece(render, prefix, true) < 0) goto out;
+        n = snprintf(prefix, prefix_size, "%s%s%s ", event->kind == SNAG_IRC_NOTICE ? "-" : "",
+            event->op ? "@" : "", nick[0] ? nick : "server");
+        if (n < 0 || (size_t)n >= prefix_size || irc_piece(render, prefix, true) < 0) goto out;
         if (colored && !highlight && irc_piece(render, COLOR_RESET, false) < 0) goto out;
         if (irc_piece(render, event->kind == SNAG_IRC_NOTICE ? "- " : "› ", true) < 0) goto out;
         if (colored && irc_piece(render, COLOR_RESET, false) < 0) goto out;
         markdown_body = event->kind == SNAG_IRC_MESSAGE && render->markdown &&
                         render->stderr_terminal && !event->op;
         if (markdown_body) {
-            char visible[sizeof(source) + sizeof(prefix) + 32u];
+            size_t visible_size = source_size + prefix_size + 32u;
+            visible = malloc(visible_size);
+            if (!visible) goto out;
             size_t column;
 
-            n = snprintf(visible, sizeof(visible), "%s%s %s%s%s %s ", source, when,
-                         event->kind == SNAG_IRC_NOTICE ? "-" : "", event->op ? "@" : "", event->nick,
+            n = snprintf(visible, visible_size, "%s%s %s%s%s %s ", source, when,
+                         event->kind == SNAG_IRC_NOTICE ? "-" : "", event->op ? "@" : "", nick,
                          event->kind == SNAG_IRC_NOTICE ? "-" : "›");
-            if (n < 0 || (size_t)n >= sizeof(visible)) goto out;
+            if (n < 0 || (size_t)n >= visible_size) goto out;
             column = snag_term_text_width(visible, (size_t)n);
             if (column == SIZE_MAX) goto out;
-            if (render_irc_markdown(render, event, column % snag_term_columns(render->term)) < 0) goto out;
+            if (render_irc_markdown(render, event, text, column % render_columns(render)) < 0)
+                goto out;
             rc = 0;
             goto out;
         }
-        if (irc_piece(render, event->text, true) < 0) goto out;
+        if (irc_piece(render, text, true) < 0) goto out;
     } else {
-        const char *word = event->kind == SNAG_IRC_TOPIC && !event->nick[0] ?
+        const char *word = event->kind == SNAG_IRC_TOPIC && !nick[0] ?
                            "topic" : irc_event_word(event->kind);
 
-        n = snprintf(prefix, sizeof(prefix), "· %s%s%s%s", event->op ? "@" : "", event->nick,
-                     event->nick[0] ? " " : "", word);
-        if (n < 0 || (size_t)n >= sizeof(prefix) || irc_piece(render, prefix, true) < 0) goto out;
+        n = snprintf(prefix, prefix_size, "· %s%s%s%s", event->op ? "@" : "", nick,
+                     nick[0] ? " " : "", word);
+        if (n < 0 || (size_t)n >= prefix_size || irc_piece(render, prefix, true) < 0) goto out;
         if (colored && irc_piece(render, COLOR_RESET, false) < 0) goto out;
-        if (event->text[0] && (irc_piece(render, " · ", true) < 0 ||
-             irc_piece(render, event->text, true) < 0)) goto out;
+        if (text[0] && (irc_piece(render, " · ", true) < 0 ||
+             irc_piece(render, text, true) < 0)) goto out;
     }
     if (colored && irc_piece(render, COLOR_RESET, false) < 0) goto out;
     if (irc_piece(render, "\n", false) < 0) goto out;
@@ -3208,7 +3410,19 @@ render_irc_event_now(struct snag_render *render, const struct snag_irc_event *ev
 out:
     if (colored) (void)irc_piece(render, COLOR_RESET, false);
     if (output_end(render) < 0 && rc == 0) rc = -1;
+cleanup:
+    free(visible);
+    free(source);
+    free(prefix);
     return rc;
+}
+
+int
+snag_render_irc_snapshot(struct snag_render *render, const json_t *data, const json_t *display)
+{
+    struct snag_irc_event event;
+    if (snag_irc_event_payload_read(data, &event) < 0) return -1;
+    return render_irc_event_now(render, &event, display);
 }
 
 int
@@ -3228,7 +3442,7 @@ snag_render_irc_event(struct snag_render *render, const struct snag_irc_event *e
          !strcmp(render->chat_room, event->room)));
     if (!render->suspended && selected && render->view == SNAG_RENDER_CHAT &&
         !render->view_head[SNAG_RENDER_CHAT])
-        return render_irc_event_now(render, event);
+        return render_irc_event_now(render, event, NULL);
     record = calloc(1u, sizeof(*record));
     if (!record) return -1;
     record->kind = SNAG_RENDER_RECORD_IRC;
@@ -3251,14 +3465,14 @@ snag_render_irc_event(struct snag_render *render, const struct snag_irc_event *e
 static int
 render_irc_record(struct snag_render *render, const struct snag_render_record *record)
 {
-    if (record->irc) return render_irc_event_now(render, record->irc);
+    if (record->irc) return render_irc_event_now(render, record->irc, NULL);
     json_t *event = source_event(render, record->source);
     json_t *data = json_object_get(event, "data");
     struct snag_irc_event irc;
     int rc = -1;
     if (!event || snag_irc_event_record_read(snag_json_string(event, "type"), data, &irc) < 0)
         goto out;
-    rc = render_irc_event_now(render, &irc);
+    rc = render_irc_event_now(render, &irc, NULL);
 out: json_decref(event);
     return rc;
 }
@@ -3458,7 +3672,8 @@ tool_body(struct snag_render *render, const struct snag_render_block *block)
         count += characters;
         if (render_checkpoint(render) < 0) return -1;
     }
-    if (offset && block->body.data[offset - 1u] != '\n' && write_literal(STDERR_FILENO, "\n") < 0) return -1;
+    if (offset && block->body.data[offset - 1u] != '\n' &&
+        write_literal(render, STDERR_FILENO, "\n") < 0) return -1;
     return truncated ? write_omitted(render) : 0;
 }
 

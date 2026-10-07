@@ -185,7 +185,7 @@ struct read_page {
 static bool
 conversation_event(const json_t *route, const char *type, const json_t *data)
 {
-    if (!route) return true;
+    if (!route) return strcmp(type, "irc_event") && strcmp(type, "irc_event_v2");
     if (json_object_get(route, "room")) {
         if (strcmp(type, "irc_event") && strcmp(type, "irc_event_v2")) return false;
         enum snag_irc_casemapping mapping = (enum snag_irc_casemapping)
@@ -594,8 +594,8 @@ load_preview(struct snag_vm_reader *reader, json_t *event, const json_t *ref,
             preview_event, &preview, error, size) < 0) goto out;
     }
     if (!preview_ready(&preview) || cursor.offset > (int64_t)end) { errno = EINVAL; goto out; }
-    blocks = snag_vm_transcript_blocks(preview.events, 3u, columns, &reader->secrets,
-        read_canceled, reader, error, size);
+    blocks = snag_vm_transcript_blocks(preview.events, 3u, columns, false, true, true,
+        &reader->secrets, read_canceled, reader, error, size);
     if (!blocks) goto out;
     size_t characters = 0u;
     bool truncated = preview.covered[0] < preview.end[0] || preview.covered[1] < preview.end[1];
@@ -858,7 +858,8 @@ project_history(struct snag_vm_reader *reader, struct snag_vm_read_result *resul
     }
     json_decref(result->blocks);
     result->blocks = snag_vm_transcript_blocks(events, request->verbosity,
-        request->columns, &reader->secrets, read_canceled, reader,
+        request->columns, request->plain, request->no_color, request->blocks_only, &reader->secrets,
+        read_canceled, reader,
         result->error, sizeof(result->error));
     if (!result->blocks) goto out;
     if (!request->blocks_only) {

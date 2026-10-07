@@ -205,6 +205,13 @@ snag_term_append_safe(struct snag_buf *out, const char *text, size_t len)
 }
 
 int
+snag_term_append_safe_column(struct snag_buf *out, const char *text, size_t len, size_t column)
+{
+    return append_safe(out, (const unsigned char *)text, len, false, column, 0u,
+        len + 1u, NULL, false);
+}
+
+int
 snag_term_append_wrapped(struct snag_buf *out, const char *text, size_t len, unsigned int columns)
 {
     return append_safe(out, (const unsigned char *)text, len, false, 0u, columns, len + 1u, NULL, false);

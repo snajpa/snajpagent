@@ -30,7 +30,7 @@ struct snag_vm_read_request {
     char session_id[SNAG_ID_HEX_LEN + 1u];
     bool trusted_tail, pin_tail, refresh, reverse;
     bool project, if_changed, tail_only;
-    bool blocks_only;
+    bool blocks_only, plain, no_color;
     unsigned int verbosity, columns;
     /* A projected viewport continues across byte pages until rows fit or its
      * source boundary is reached. Zero preserves single-page scan semantics. */

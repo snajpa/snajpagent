@@ -269,6 +269,7 @@ const char *snag_irc_operator_nick(const struct snag_irc *irc);
 /* Consumes an admitted primary-identity change, including during command waits. */
 bool snag_irc_identity_changed(struct snag_irc *irc);
 /* Endpoint "local" broadcasts, so any joined endpoint's model alias matches. */
+bool snag_irc_prompt(const char *text);
 bool snag_irc_mentions_agent(const struct snag_irc *irc, const char *endpoint, const char *text);
 
 #endif

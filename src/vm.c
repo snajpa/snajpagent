@@ -349,8 +349,18 @@ remember_anchor(struct vm_window *window)
 }
 
 static size_t
-locate_anchor(const struct vm_window *window)
+locate_anchor(struct vm_window *window)
 {
+    if (!window->anchor_source && !window->anchor_heading) {
+        for (size_t i = 0u;; ++i) {
+            const json_t *block = snag_vm_document_block(window->document, i);
+            if (!block) break;
+            if (strcmp(snag_json_string(block, "key"), window->anchor_key)) continue;
+            window->anchor_byte = snag_vm_source_unformatted(block, window->anchor_byte);
+            window->anchor_source = true;
+            break;
+        }
+    }
     return (window->anchor_source ? snag_vm_document_locate_source :
         snag_vm_document_locate)(window->document, window->anchor_key,
             window->anchor_seq, window->anchor_byte, window->anchor_heading);
@@ -733,6 +743,8 @@ reader_request(struct vm *vm, struct vm_read *read, struct snag_vm_read_request 
             return 0u;
         }
     }
+    request->plain = !vm->config.markdown;
+    request->no_color = !vm->grid.color;
     request->retained_sessions = sources;
     uint64_t generation = snag_vm_reader_request(read->reader, request);
     json_decref(sources);
@@ -811,6 +823,10 @@ refresh(struct vm *vm)
         json_decref(vm->workspaces);
         vm->workspaces = rows;
     } else notice(vm, error);
+    bool sessions = false;
+    for (size_t i = 0u; i < vm->count; ++i)
+        if (vm->windows[i].kind == VIEW_SESSIONS) sessions = true;
+    if (!sessions) { vm->dirty = true; return; }
     struct snag_vm_read_request request = {.kind = SNAG_VM_READ_SESSIONS,
         .stored_limit = vm->stored_limit};
     vm->page.generation = reader_request(vm, &vm->page, &request);
@@ -1010,7 +1026,7 @@ open_history(struct vm *vm, const char *selector)
         view(vm, VIEW_TRANSCRIPT);
         struct vm_window *window = &vm->windows[vm->focus];
         memcpy(window->session_id, location.id, sizeof(window->session_id));
-        window->verbosity = 1u;
+        window->verbosity = 0u;
         window->follow = true;
         window->best_effort = true;
         struct snag_vm_connection *c = connection_for(vm, location.id, true);
@@ -1033,7 +1049,7 @@ open_conversation(struct vm *vm, struct snag_vm_buffer *buffer)
     struct vm_window *window = &vm->windows[vm->focus];
     memcpy(window->session_id, buffer->connection->session, sizeof(window->session_id));
     window->route = route;
-    window->verbosity = 1u;
+    window->verbosity = 0u;
     window->follow = true;
     window->best_effort = true;
     queue_history(vm, window, LOAD_LAST);
@@ -1912,7 +1928,10 @@ command(struct vm *vm, const char *text)
         if (buffer_catalog(vm) == 0) view(vm, VIEW_BUFFERS);
     } else if (!strcmp(word, "bnext") || !strcmp(word, "bn")) buffer_cycle(vm, false);
     else if (!strcmp(word, "bprevious") || !strcmp(word, "bp")) buffer_cycle(vm, true);
-    else if (!strcmp(word, "sessions")) view(vm, VIEW_SESSIONS);
+    else if (!strcmp(word, "sessions")) {
+        view(vm, VIEW_SESSIONS);
+        refresh(vm);
+    }
     else if (!strcmp(word, "workspaces")) {
         refresh(vm);
         view(vm, VIEW_WORKSPACES);
@@ -2523,6 +2542,11 @@ local_motion(const struct vm_window *window, const struct snag_vm_document_row *
 {
     const json_t *block = snag_vm_document_block(window->document, row->block);
     bool prefix = !row->heading && json_integer_value(json_object_get(block, "source_begin"));
+    /* Logical motions use the unwrapped projection on the scan worker. */
+    if (!row->heading && json_object_get(block, "format_map") &&
+        (kind == SNAG_VM_NAV_DOWN || kind == SNAG_VM_NAV_UP ||
+         kind == SNAG_VM_NAV_LINE_END || kind == SNAG_VM_NAV_LINE_START ||
+         kind == SNAG_VM_NAV_LINE_FIRST)) return false;
     if (!row->heading && json_array_size(json_object_get(block, "source_map")) &&
         kind >= SNAG_VM_NAV_LEFT && kind <= SNAG_VM_NAV_WORD_END) return false;
     if (kind == SNAG_VM_NAV_DOWN || kind == SNAG_VM_NAV_UP || kind == SNAG_VM_NAV_LINE_END) {
@@ -3028,7 +3052,7 @@ input_event(void *opaque, const struct snag_vm_input_event *event)
             vm->dirty = true;
             return 0;
         } else return queue_input(vm, event);
-        if (control && event->key == 'c') return 0;
+        if (control && event->key == 'c' && !vm->windows[vm->focus].visual.kind) return 0;
     }
     struct vm_window *window = &vm->windows[vm->focus];
     if (event->kind == SNAG_VM_PASTE_BEGIN) {
@@ -3614,6 +3638,34 @@ document_style(const json_t *block, bool heading)
     return SNAG_VM_BOLD | color;
 }
 
+static void
+row_styles(struct vm *vm, const struct snag_vm_rectangle *rectangle, size_t screen_row,
+    const json_t *block, const struct snag_vm_document_row *row, const char *text)
+{
+    const json_t *styles = json_object_get(block, "styles");
+    if (!styles || row->heading) return;
+    size_t at = row->begin, column = 0u, span = 0u;
+    while (span < json_array_size(styles) &&
+        (size_t)json_integer_value(json_array_get(json_array_get(styles, span), 1u)) <= at) {
+        ++span;
+    }
+    while (at < row->end && column < rectangle->columns) {
+        while (span < json_array_size(styles) &&
+            (size_t)json_integer_value(json_array_get(json_array_get(styles, span), 1u)) <= at) {
+            ++span;
+        }
+        const json_t *run = json_array_get(styles, span);
+        unsigned int style = (unsigned int)json_integer_value(json_array_get(run, 2u));
+        struct snag_vm_glyph glyph = snag_vm_glyph(text + at, row->end - at,
+            row->column + column, false);
+        for (size_t n = 0u; n < glyph.columns && column < rectangle->columns; ++n, ++column) {
+            vm->grid.back.cells[screen_row * vm->grid.columns +
+                rectangle->column + column].style = style;
+        }
+        at += glyph.bytes;
+    }
+}
+
 static int
 draw_window(void *opaque, const struct snag_vm_rectangle *rectangle)
 {
@@ -3689,10 +3741,11 @@ draw_window(void *opaque, const struct snag_vm_rectangle *rectangle)
             const char *text = snag_vm_document_text(window->document, &row);
             unsigned int style = document_style(
                 snag_vm_document_block(window->document, row.block), row.heading);
-            if (i == window->selected && !window->visual.kind) style |= SNAG_VM_REVERSE;
             if (snag_vm_grid_text_column(&vm->grid, rectangle->row + i - window->top,
                 rectangle->column, rectangle->columns, text + row.begin, row.end - row.begin,
                 style, row.column) < 0) return -1;
+            row_styles(vm, rectangle, rectangle->row + i - window->top,
+                snag_vm_document_block(window->document, row.block), &row, text);
             highlight_selection(vm, window, &row, rectangle->row + i - window->top);
             if (i == window->selected && index == vm->focus && !editing) {
                 const json_t *block = snag_vm_document_block(window->document, row.block);
@@ -3782,13 +3835,17 @@ draw_window(void *opaque, const struct snag_vm_rectangle *rectangle)
                 snag_view_conversation_name(window->route), identity,
                 snag_vm_buffer_writable(b) ? "" : " read-only");
         }
-        (void)snprintf(status, sizeof(status), "%s%s%s%.8s%s history v%u %s %s  seq %llu%s%s%s%s%s",
+        const char *name = c ? snag_json_string(c->state, "name") : NULL;
+        const char *attachment = c && c->bound ? "ATTACHED" : "read-only";
+        char identity[256];
+        if (name && *name) (void)snprintf(identity, sizeof(identity), "%s %s", name, attachment);
+        else (void)snprintf(identity, sizeof(identity), "%s %.8s", attachment, window->session_id);
+        (void)snprintf(status, sizeof(status), "%s%s%s%s history v%u %s %s  seq %llu%s%s%s%s%s",
             editing ? vm->insert ? "INSERT " : "NORMAL draft " :
                 window->visual.kind == SNAG_VM_SELECT_LINE ? "VISUAL LINE " :
                 window->visual.kind == SNAG_VM_SELECT_BLOCK ? "VISUAL BLOCK " :
                 window->visual.kind ? "VISUAL " : "",
-            c && c->bound ? "ATTACHED " : "read-only ",
-            b && b->draft_conflict ? "[draft conflict] " : "", window->session_id, owner,
+            b && b->draft_conflict ? "[draft conflict] " : "", identity, owner,
             window->verbosity, window->follow ? "FOLLOW" : "HOLD",
             window->document ? window->best_effort ? "snapshot" : "committed" : "",
             (unsigned long long)window->anchor_seq,
@@ -4555,6 +4612,7 @@ usage(void)
 int
 snag_vm_main(int argc, char **argv, const char *program)
 {
+    if (!snag_text_locale_init()) return 1;
     const char *dotdir_option = NULL, *name = NULL, *resume = NULL;
     bool list = false, last = false;
     struct vm vm = {.output = -1, .stored_limit = 10u, .next_window = 2u, .mouse = true,

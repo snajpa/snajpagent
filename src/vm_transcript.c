@@ -12,6 +12,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 struct output_fragment {
     uint64_t seq, begin, end;
@@ -304,6 +305,25 @@ tool_block(struct transcript *view, uint64_t seq, const char *type, const json_t
     json_t *block = append_block(view, seq, type, (const char *)formatted.text.data,
         body.data, body.len, 0u, body.len);
     rc = block ? json_object_set_new(block, "role", json_integer(formatted.role)) : -1;
+    if (block && !rc) {
+        json_t *parts = json_pack("{s:s#,s:s#,s:I,s:i,s:b}",
+            "context", formatted.context.data ? (const char *)formatted.context.data : "",
+            formatted.context.len,
+            "body", formatted.body.data ? (const char *)formatted.body.data : "",
+            formatted.body.len,
+            "colored", (json_int_t)formatted.colored_len,
+            "kind", formatted.body_kind, "truncated", formatted.truncated);
+        if (parts && view->level == 2u && preview) {
+            bool truncated = json_is_true(json_object_get(data, "preview_truncated"));
+            if (json_object_set_new(parts, "preview", json_string(preview)) < 0 ||
+                json_object_set_new(parts, "preview_truncated",
+                    json_boolean(truncated)) < 0) {
+                json_decref(parts);
+                parts = NULL;
+            }
+        }
+        rc = parts ? json_object_set_new(block, "tool", parts) : -1;
+    }
     if (block && !name) rc = json_object_set_new(block, "needs_call", json_string(id));
 out:
     snag_buf_free(&body);
@@ -336,7 +356,10 @@ event_block(struct transcript *view, uint64_t seq, const char *type,
     const char *text = snag_json_string(data, "text");
     const char *field = "text";
     const char *label = NULL;
-    if (!strcmp(type, "input_received")) label = "operator";
+    if (!strcmp(type, "input_received")) {
+        if (snag_irc_prompt(text)) return 0;
+        label = "operator";
+    }
     else if (!strcmp(type, "steering_added")) label = "operator / steering";
     else if (!strcmp(type, "future_turn_queued")) label = "operator / queued";
     else if (!strcmp(type, "future_turn_edited")) label = "operator / edited queue";
@@ -392,6 +415,8 @@ event_block(struct transcript *view, uint64_t seq, const char *type,
         if (!rc) rc = text_block(view, seq, "irc", (const char *)heading.data,
             text, source_text, &block);
         if (rc < 0) block = NULL;
+        if (block && (json_object_set(block, "irc_event", (json_t *)source) < 0 ||
+            json_object_set(block, "irc_display", (json_t *)data) < 0)) block = NULL;
         if (block && (json_object_set_new(block, "endpoint", json_string(endpoint)) < 0 ||
             json_object_set_new(block, "target", json_string(target)) < 0 ||
             (routing && json_object_set(block, "routing", (json_t *)routing) < 0))) block = NULL;
@@ -418,6 +443,165 @@ event_block(struct transcript *view, uint64_t seq, const char *type,
     if (!text) text = "";
     return text_block(view, seq, type, label, text,
         field ? snag_json_string(source, field) : NULL, NULL);
+}
+
+struct formatted_text {
+    struct snag_buf text;
+    json_t *styles, *origins;
+};
+
+static int
+formatted_span(void *opaque, const char *text, size_t length, unsigned int style,
+    uint64_t source, size_t source_length)
+{
+    struct formatted_text *out = opaque;
+    if (!length) return 0;
+    size_t begin = out->text.len;
+    if (snag_buf_append(&out->text, text, length) < 0) return -1;
+    if (source != UINT64_MAX) {
+        size_t count = json_array_size(out->origins);
+        json_t *last = count ? json_array_get(out->origins, count - 1u) : NULL;
+        uint64_t previous = last ? (uint64_t)json_integer_value(json_array_get(last, 2u)) : 0u;
+        size_t bytes = last ? (size_t)json_integer_value(json_array_get(last, 3u)) : 0u;
+        size_t end = last ? (size_t)json_integer_value(json_array_get(last, 1u)) : 0u;
+        size_t start = last ? (size_t)json_integer_value(json_array_get(last, 0u)) : 0u;
+        if (last && end == begin && previous + bytes == source &&
+            end - start == bytes && length == source_length) {
+            if (json_array_set_new(last, 1u, json_integer(out->text.len)) < 0 ||
+                json_array_set_new(last, 3u, json_integer(bytes + length)) < 0) return -1;
+        } else if (json_array_append_new(out->origins, json_pack("[I,I,I,I]",
+            (json_int_t)begin, (json_int_t)out->text.len, (json_int_t)source,
+            (json_int_t)source_length)) < 0) return -1;
+    }
+    size_t count = json_array_size(out->styles);
+    json_t *last = count ? json_array_get(out->styles, count - 1u) : NULL;
+    if (last && (unsigned int)json_integer_value(json_array_get(last, 2u)) == style)
+        return json_array_set_new(last, 1u, json_integer(out->text.len));
+    return json_array_append_new(out->styles,
+        json_pack("[I,I,i]", (json_int_t)begin, (json_int_t)out->text.len, style));
+}
+
+static int
+format_block(struct snag_render *render, json_t *block)
+{
+    const char *kind = snag_json_string(block, "kind");
+    const char *text = snag_json_string(block, "text");
+    const char *label = snag_json_string(block, "label");
+    render->sink.source = (struct snag_render_origin){(const unsigned char *)text,
+        strlen(text), 0u, NULL};
+    if (!strcmp(kind, "assistant") || !strcmp(kind, "refusal")) {
+        if (snag_render_public_begin(render, STDOUT_FILENO, NULL) < 0 ||
+            snag_render_public(render, text, strlen(text), NULL) < 0) return -1;
+        const char *state = snag_json_string(block, "state");
+        return state && strcmp(state, "complete") ? snag_render_public_abort(render) :
+            snag_render_public_end(render);
+    }
+    if (!strcmp(kind, "reasoning") || !strcmp(kind, "session_created")) return 0;
+    if (!strcmp(kind, "input_received")) return snag_render_input_submitted(render, "› ", text);
+    if (snag_string_in(kind, "steering_added future_turn_queued future_turn_edited"))
+        return snag_render_input_submitted(render, "» ", text);
+    if (!strcmp(kind, "tool_started") || !strcmp(kind, "tool_finished")) {
+        const json_t *parts = json_object_get(block, "tool");
+        const char *context = snag_json_string(parts, "context");
+        const char *body = snag_json_string(parts, "body");
+        struct snag_render_block tool = {
+            .text = {.data = (unsigned char *)label, .len = strlen(label)},
+            .context = {.data = (unsigned char *)context, .len = context ? strlen(context) : 0u},
+            .body = {.data = (unsigned char *)body, .len = body ? strlen(body) : 0u},
+            .colored_len = (size_t)json_integer_value(json_object_get(parts, "colored")),
+            .role = (enum snag_render_role)json_integer_value(json_object_get(block, "role")),
+            .body_kind = (enum snag_presentation)json_integer_value(json_object_get(parts, "kind")),
+            .truncated = json_is_true(json_object_get(parts, "truncated"))};
+        render->origin = (struct snag_render_origin){(const unsigned char *)context,
+            tool.context.len, 0u, NULL};
+        render->sink.source = (struct snag_render_origin){(const unsigned char *)body,
+            tool.body.len, tool.context.len, NULL};
+        int rc = snag_render_tool_block(render, &tool);
+        render->origin = (struct snag_render_origin){0};
+        const char *preview = snag_json_string(parts, "preview");
+        if (!rc && preview) {
+            struct snag_render_block output = {.body_kind = SNAG_PRESENT_OUTPUT,
+                .body = {.data = (unsigned char *)preview, .len = strlen(preview)},
+                .truncated = json_is_true(json_object_get(parts, "preview_truncated"))};
+            render->sink.source = (struct snag_render_origin){(const unsigned char *)preview,
+                strlen(preview), tool.context.len + tool.body.len, NULL};
+            rc = snag_render_tool_block(render, &output);
+        }
+        return rc;
+    }
+    if (!strcmp(kind, "irc")) {
+        const json_t *display = json_object_get(block, "irc_display");
+        const char *body = snag_json_string(display, "text");
+        render->sink.source = (struct snag_render_origin){(const unsigned char *)body,
+            strlen(body), 0u, NULL};
+        return snag_render_irc_snapshot(render, json_object_get(block, "irc_event"), display);
+    }
+    if (snag_string_in(kind, "turn_failed response_failed"))
+        return snag_render_error_ctx(render, text);
+    if (!strcmp(kind, "event")) return snag_render_event(render,
+        (uint64_t)json_integer_value(json_object_get(block, "seq")), label);
+    if (!strcmp(kind, "output"))
+        return formatted_span(render->sink.opaque, text, strlen(text), 0u, 0u, strlen(text));
+    if (snag_string_in(kind, "response_interrupted turn_interrupted"))
+        return snag_render_warning_ctx(render, "turn interrupted");
+    if (!strcmp(kind, "goal") || !strcmp(kind, "goal_started")) {
+        struct snag_buf message = {.max = SNAG_MAX_EVENT_LINE};
+        int rc = snag_buf_printf(&message, "%s: %s", label, text);
+        if (!rc) rc = snag_buf_terminate(&message);
+        if (!rc) rc = snag_render_warning_ctx(render, (const char *)message.data);
+        snag_buf_free(&message);
+        return rc;
+    }
+    if (snag_string_in(kind, "compaction_completed irc_compaction_completed"))
+        return snag_render_warning_ctx(render, label);
+    return 0;
+}
+
+static int
+format_checkpoint(void *opaque)
+{
+    return canceled(opaque) ? -1 : 0;
+}
+
+static int
+format_blocks(struct transcript *view, json_t *blocks, bool plain, bool no_color, bool logical)
+{
+    struct formatted_text out = {.text = {.max = SNAG_MEMORY_LIMIT / 2u}};
+    struct snag_render render;
+    snag_render_init(&render, view->level);
+    render.checkpoint = format_checkpoint;
+    render.checkpoint_opaque = view;
+    render.stdout_terminal = render.stderr_terminal = true;
+    render.color_stdout = render.color_stderr = !no_color;
+    render.markdown = !plain;
+    render.sink = (struct snag_render_sink){.text = formatted_span, .opaque = &out,
+        .columns = view->columns, .logical = logical};
+    int rc = -1;
+    for (size_t i = 0u; i < json_array_size(blocks); ++i) {
+        json_t *block = json_array_get(blocks, i);
+        snag_buf_reset(&out.text);
+        out.styles = json_array();
+        out.origins = json_array();
+        if (!out.styles || !out.origins || format_block(&render, block) < 0) goto done;
+        if (json_object_set_new(block, "display", json_stringn(
+                out.text.data ? (const char *)out.text.data : "", out.text.len)) < 0 ||
+            json_object_set(block, "styles", out.styles) < 0 ||
+            json_object_set(block, "format_map", out.origins) < 0) goto done;
+        json_decref(out.styles);
+        out.styles = NULL;
+        json_decref(out.origins);
+        out.origins = NULL;
+        (void)json_object_del(block, "tool");
+        (void)json_object_del(block, "irc_event");
+        (void)json_object_del(block, "irc_display");
+    }
+    rc = 0;
+done:
+    snag_render_free(&render);
+    snag_buf_free(&out.text);
+    json_decref(out.styles);
+    json_decref(out.origins);
+    return rc;
 }
 
 static int
@@ -454,6 +638,7 @@ sort_blocks(struct transcript *view)
 
 json_t *
 snag_vm_transcript_blocks(const json_t *events, unsigned int verbosity, unsigned int columns,
+    bool plain, bool no_color, bool logical,
     const struct snag_wire_secrets *secrets, bool (*cancel)(void *), void *opaque,
     char *error, size_t size)
 {
@@ -503,6 +688,10 @@ snag_vm_transcript_blocks(const json_t *events, unsigned int verbosity, unsigned
         if (rc < 0) goto out;
     }
     result = sort_blocks(&view);
+    if (result && format_blocks(&view, result, plain, no_color, logical) < 0) {
+        json_decref(result);
+        result = NULL;
+    }
 out:
     if (!result) (void)snag_fail(error, size, errno ? errno : EINVAL,
         "cannot project transcript source range");

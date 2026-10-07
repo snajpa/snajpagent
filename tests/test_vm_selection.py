@@ -47,7 +47,7 @@ class SelectionTests(unittest.TestCase):
         before = journal.read_bytes()
         self.search(child, b'/first line\r')
         self.copied(child, b'Vjy')
-        self.assert_draft(child, 'first line\nsecond line\n')
+        self.assert_draft(child, '• first line\n  second line\n')
         child.write(b'uyyP')
         self.assert_draft(child, '\n')
         self.assertEqual(journal.read_bytes(), before)
@@ -106,7 +106,7 @@ class SelectionTests(unittest.TestCase):
         self.assert_draft(child, 'two ')
         child.write(b'u\t')
         self.copied(child, b'yy')
-        self.assert_draft(child, 'one two three\n')
+        self.assert_draft(child, '• one two three\n')
         child.finish()
 
     def test_backward_and_counted_yank_motions(self):
@@ -122,7 +122,7 @@ class SelectionTests(unittest.TestCase):
         child.write(b'u\t')
         self.search(child, b'/second\r')
         self.copied(child, b'2yy')
-        self.assert_draft(child, 'second\nthird\n')
+        self.assert_draft(child, '  second\n  third\n')
         child.finish()
 
     def test_large_yank_uses_private_file_and_pastes_exactly(self):

@@ -22,7 +22,9 @@ def positions(child, marker):
     # The frontend's forced frame supplies CUP-addressed runs. Locate a marker
     # in those real runs rather than assuming where wrapping put its source.
     output = bytes(child.output).decode('utf-8', 'replace')
-    output = output[output.rfind('\x1b[2J') + 4:]
+    frame = output.rfind('\x1b[2J')
+    if frame >= 0:
+        output = output[frame + 4:]
     row = column = 0
     found = []
     for part in re.split(r'(\x1b\[[0-9;?]*[A-Za-z])', output):
@@ -129,7 +131,7 @@ class MouseTests(unittest.TestCase):
         self.search(child, b'/line-030\r')
         child.command('vsp')
         where = position(child, 'line-030', minimum=2)
-        self.assertEqual(where[1], 0)
+        self.assertEqual(where[1], 2)
         before = self.save(child)
         mouse(child, *where, button=64)
         after = self.save(child)
