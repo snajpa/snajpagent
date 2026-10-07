@@ -4,6 +4,7 @@
 import json
 import os
 import subprocess
+import time
 import unittest
 
 import test_vm_frontend as frontend
@@ -41,20 +42,50 @@ class AnchorTests(unittest.TestCase):
         return next(iter(values.values()))['state']
 
     def test_redacted_source_anchor_survives_resize_resume_and_legacy_upgrade(self):
+        self.redacted_source_anchor(False)
+
+    def test_legacy_journal_anchor_survives_resize_resume_and_snapshot_upgrade(self):
+        self.redacted_source_anchor(True)
+
+    def redacted_source_anchor(self, legacy):
         prefix = 'irc-ui-secret\n' * 40
         text = prefix + 'anchor-marker-' + '界' * 40 + '\nlast'
-        journal = self.seed_session(text)
+        journal = self.seed_session(text, legacy=legacy)
         config = self.root / 'state' / 'config.ini'
         config.write_text(self.fixture_config.read_text().replace(
             '${SNAJPAGENT_IRC_UI_KEY}', '"irc-ui-secret"'))
         config.chmod(0o600)
+        previous = max(event['seq'] for event in read_events(journal))
+        provider = self.fixture_provider
+
+        def respond(handler, request, sequence):
+            provider.reply(handler, provider.response_body(sequence, text).encode())
+
+        provider.runtime_handler = respond
+        terminal = frontend.Terminal(self.root, ['--config', str(config), '--resume',
+            journal.parent.name], subcommand=None)
+        self.addCleanup(terminal.close)
+        terminal.until(b'session id')
+        terminal.write(b'new retained response\r')
+        deadline = time.monotonic() + 5
+        while not any(event['seq'] > previous and event['type'] == 'turn_completed'
+                      for event in read_events(journal)):
+            if time.monotonic() >= deadline:
+                self.fail('interactive fixture turn did not complete')
+            terminal.read(.05)
+        terminal.write(b'/exit\r')
+        terminal.wait_exit()
+        self.assertEqual(terminal.state()['returncode'], 0)
+        self.assertTrue((journal.parent / '.view-presentation.snb').is_file())
+        # A streamed item is anchored to its first fragment, as saved by the UI.
         event = next(event for event in read_events(journal)
-                     if event['type'] == 'response_completed')
+                     if event['seq'] > previous and
+                     event['type'] in ('response_output', 'response_completed'))
         key = event['data']['response_id'] + '/0'
         byte = len((prefix + 'anchor-marker-' + '界' * 3).encode())
         child = self.start('-N', 'source', columns=27)
         child.command('history ' + journal.parent.name)
-        child.repaint_until(b'last')
+        child.repaint_until(b'--resume')
         child.finish('qa')
         path, = (self.root / 'state' / 'workspaces').glob('*/workspace.json')
         saved = json.loads(path.read_text())
@@ -84,7 +115,7 @@ class AnchorTests(unittest.TestCase):
             window['history']['byte'] = display_byte
             del window['history']['source'], window['history']['route']
         path.write_text(json.dumps(saved))
-        child = self.start('--resume', 'source', columns=100, expect=b'history')
+        child = self.start('--resume', 'source', columns=100, expect=b'Workspace restored')
         child.repaint_until(b'anchor-marker-')
         # Split documents load independently; the first frame can precede
         # conversion of the other window's older coordinate.
@@ -97,6 +128,25 @@ class AnchorTests(unittest.TestCase):
         for window in upgraded['windows']:
             self.assertTrue(window['history']['source'])
             self.assertEqual(window['history']['byte'], len(prefix.encode()))
+        child.output.clear()
+        child.write(b'/anchor-marker-\r')
+        child.repaint_until(b'Match')
+        matched = self.save(child)['windows'][0]['history']
+        self.assertEqual(matched['key'], key)
+        self.assertEqual(matched['byte'], len(prefix.encode()))
+        child.output.clear()
+        child.write(b'v13ly')
+        child.repaint_until(b'Yanked')
+        child.write(b'P')
+        self.assertEqual(frontend.rollout(self.save(child)['buffers'][0])['draft'],
+                         'anchor-marker-')
+        child.write(b'u\tG')
+        values = self.wait_snapshot(lambda rows: any(
+            window['history']['follow'] and
+            window['history']['key'].startswith('presentation:')
+            for window in next(iter(rows.values()))['state']['windows']))
+        self.assertTrue(values)
+        self.assertNotIn(b'irc-ui-secret', child.output)
         child.finish('qa')
 
     def test_hidden_tool_anchor_returns_after_verbosity_change(self):
@@ -108,7 +158,7 @@ class AnchorTests(unittest.TestCase):
     def hidden_tool_anchor(self, large):
         command = ("python3 -c \"import sys; sys.stdout.write("
                    "'selected-tool-marker\\n' * 500000)\"") if large else (
-                       "printf 'before\\nselected-tool-marker\\nafter\\n'")
+                       "printf 'before\\nselected-tool-marker\\nafter-after-after-after\\n'")
         provider = frontend.harness.FakeResponses()
         self.addCleanup(provider.close)
         first = True
@@ -154,11 +204,10 @@ class AnchorTests(unittest.TestCase):
             byte=event['data']['offset'] + (0 if large else 7), heading=False,
             follow=False, source=True, verbosity=3)
         path.write_text(json.dumps(saved))
-        child = self.start('--resume', 'hidden', expect=b'history')
+        child = self.start('--resume', 'hidden', expect=b'Workspace restored')
         child.repaint_until(b'selected-tool-marker')
         before = self.save(child)['windows'][0]['history']
         child.command('verbosity 0')
-        child.repaint_until(b'history v0')
         child.repaint_until(b'final-answer')
         hidden = self.save(child)['windows'][0]['history']
         self.assertEqual(hidden, dict(before, verbosity=0))

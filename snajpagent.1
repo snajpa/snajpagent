@@ -1907,6 +1907,9 @@ moves to the next visible event. Restoring detail returns to the original anchor
 until a navigation command selects another position. Redaction and binary escapes
 retain offsets into the original text, including when a source page starts midway
 through output. Older workspace positions are converted when loaded.
+Positions saved before retained display history keep their original journal
+coordinates while held, including search and copying. G returns to the current
+display history and enables FOLLOW.
 Level 0 shows conversation, level 1 adds tool
 headings, level 2 adds arguments and result previews of up to 512 characters,
 and level 3 adds retained process bytes.

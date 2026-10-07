@@ -793,6 +793,15 @@ history_tail(const struct snag_vm_connection *connection, struct snag_vm_cursor 
     return true;
 }
 
+static bool
+canonical_history(const struct vm_window *window)
+{
+    /* A restored key predating presentation records has journal coordinates.
+     * A canonical prefix in an already loaded mixed page keeps its output tail. */
+    return window->kind == VIEW_TRANSCRIPT && !window->follow && !window->tail.origin &&
+        window->anchor_key[0] && strncmp(window->anchor_key, "presentation:", 13u);
+}
+
 static void
 search(struct vm *vm, const char *query, bool reverse, bool command_input)
 {
@@ -809,6 +818,7 @@ search(struct vm *vm, const char *query, bool reverse, bool command_input)
     struct snag_vm_read_request request = {
         .kind = window->kind == VIEW_REPORT ? SNAG_VM_READ_REPORT : SNAG_VM_READ_HISTORY,
         .report = window->report, .route = window->route, .query = vm->search_query,
+        .canonical = canonical_history(window),
         .search_reverse = reverse,
         .ignorecase = vm->ignorecase, .verbosity = window->verbosity,
         .columns = window->rectangle.columns, .refresh = true};
@@ -1767,6 +1777,7 @@ load_history(struct vm *vm)
         struct snag_vm_read_request request = {
             .kind = window->kind == VIEW_REPORT ? SNAG_VM_READ_REPORT : SNAG_VM_READ_HISTORY,
             .report = window->report, .route = window->route, .project = true,
+            .canonical = canonical_history(window),
             .verbosity = window->verbosity, .columns = window->rectangle.columns};
         memcpy(request.session_id, window->session_id, sizeof(request.session_id));
         request.previous = window->tail;
@@ -1776,7 +1787,7 @@ load_history(struct vm *vm)
             request.tail = window->visual_tail;
             request.trusted_tail = request.pin_tail = true;
         }
-        if (vm->motion_loading && vm->motion_origin.window == window->id &&
+        if (vm->motion_loading && !window->follow && vm->motion_origin.window == window->id &&
             vm->motion_origin.tail.next_seq) {
             request.tail = vm->motion_origin.tail;
             request.trusted_tail = request.pin_tail = true;
@@ -2532,6 +2543,7 @@ history_navigate(struct vm *vm, enum snag_vm_navigation_kind kind, size_t count)
     struct snag_vm_read_request request = {
         .kind = window->kind == VIEW_REPORT ? SNAG_VM_READ_REPORT : SNAG_VM_READ_HISTORY,
         .report = window->report, .route = window->route, .verbosity = window->verbosity,
+        .canonical = canonical_history(window),
         .columns = window->rectangle.columns,
         .tail = window->visual.kind ? window->visual_tail : window->tail,
         .navigation = {.kind = kind, .start = history_anchor(window), .count = count,
@@ -2623,6 +2635,7 @@ yank(struct vm *vm)
     struct snag_vm_read_request request = {
         .kind = window->kind == VIEW_REPORT ? SNAG_VM_READ_REPORT : SNAG_VM_READ_HISTORY,
         .report = window->report, .route = window->route, .selection = window->visual,
+        .canonical = canonical_history(window),
         .columns = window->rectangle.columns, .verbosity = window->verbosity,
         .tail = window->visual_tail,
         .trusted_tail = window->visual_tail.next_seq != 0u,
@@ -4193,8 +4206,10 @@ painted_read(struct vm *vm)
     if (!count || count - 1u < window->top ||
         count - 1u - window->top >= window->history_rows) return 0;
     struct snag_vm_buffer *buffer = window_buffer(vm, window);
+    struct snag_journal_cursor shown = snag_vm_cursor_canonical(window->end);
     if (!buffer || !json_is_object(buffer->route) ||
-        !snag_vm_buffer_read(buffer, window->end.next_seq - 1u)) return 0;
+        json_object_get(buffer->connection->state, "presentation_error") ||
+        !shown.next_seq || !snag_vm_buffer_read(buffer, shown.next_seq - 1u)) return 0;
     changed(vm);
     for (size_t i = 0u; i < vm->count; ++i)
         if (vm->windows[i].kind == VIEW_BUFFERS) return buffer_catalog(vm);
@@ -4416,9 +4431,12 @@ collect(struct vm *vm, struct vm_read *read)
                 strcmp(window->session_id, result->request.session_id)) continue;
             window->follow_at = snag_monotonic_ms() + 1000u;
             struct snag_vm_cursor latest;
-            if (history_tail(connection_for(vm, window->session_id, false), &latest) &&
-                (latest.origin != result->tail.origin || latest.next_seq > result->tail.next_seq))
-                window->follow_at = 0u;
+            if (history_tail(connection_for(vm, window->session_id, false), &latest)) {
+                if (result->request.canonical)
+                    latest = snag_vm_cursor_journal(snag_vm_cursor_canonical(latest));
+                if (latest.origin != result->tail.origin || latest.next_seq > result->tail.next_seq)
+                    window->follow_at = 0u;
+            }
             if (load == LOAD_POLL &&
                 (result->unchanged || result->request.tail_only || !window->follow)) {
                 if (!result->unchanged || window->incomplete != result->incomplete ||

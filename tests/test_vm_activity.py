@@ -40,11 +40,12 @@ class ActivityWorkspaceTests(ChannelFixture):
 
     def directory(self, peer, count, identity='operator'):
         self.child.command('buffers')
-        self.child.repaint_until(f'/{peer} [{identity}] [{count} unread]'.encode())
+        label = 'your chat' if identity == 'operator' else "model's chat"
+        self.child.repaint_until(f'/{peer} [{label}] [{count} unread]'.encode())
 
     def query(self, peer):
         self.child.command('buffer channel-session/' + self.server.endpoint + '/' + peer)
-        self.child.repaint_until(b'query/' + peer.encode())
+        self.child.repaint_until(b'[' + peer.encode() + b']')
 
     def saved_read(self, peer, predicate):
         self.child.command('workspace save')
@@ -52,6 +53,10 @@ class ActivityWorkspaceTests(ChannelFixture):
             isinstance(b['route'], dict) and b['route'].get('peer') == peer
             and b['route']['identity'] == 'operator' and predicate(b.get('read', {}))
             for owner in self.state()['buffers'] for b in owner['buffers']))
+        through = max(e['seq'] for e in self.events())
+        for owner in self.state()['buffers']:
+            for buffer in owner['buffers']:
+                self.assertLessEqual(buffer.get('read', {}).get('seq', 0), through)
 
     def test_count_survives_nick_and_resume_and_keeps_roles_separate(self):
         self.incoming('peer', 'first-operator-private')
@@ -60,14 +65,14 @@ class ActivityWorkspaceTests(ChannelFixture):
         self.server.send('queryop', ':peer!u@fake NICK renamed\r\n')
         self.wait(lambda: any(e['data'].get('text') == 'renamed' for e in self.events()))
         self.directory('renamed', 2)
-        self.child.repaint_until(b'/renamed [operator] [2 unread] [connected]')
+        self.child.repaint_until(b'/renamed [your chat] [2 unread] [connected]')
         self.child.repaint_until(b'[agent connected]')
-        self.child.repaint_until(b'/peer [agent] [1 unread]')
+        self.child.repaint_until(b"/peer [model's chat] [1 unread]")
         screen = re.sub(rb'\x1b\[[0-9;?]*[a-zA-Z]', b'', bytes(self.child.output))
         self.assertLess(screen.index(b'channel-session [rollout]'),
-                        screen.index(self.server.endpoint.encode() + b'/ [operator]'))
-        self.assertLess(screen.index(self.server.endpoint.encode() + b'/ [operator]'),
-                        screen.index(b'/renamed [operator]'))
+                        screen.index(self.server.endpoint.encode() + b'/ [your chat]'))
+        self.assertLess(screen.index(self.server.endpoint.encode() + b'/ [your chat]'),
+                        screen.index(b'/renamed [your chat]'))
         self.assertRegex(screen, rb'\d\d-\d\d \d\d:\d\d:\d\d')
         self.saved_read('renamed', lambda read: read.get('seq') == 0)
         self.query('renamed')
@@ -75,11 +80,11 @@ class ActivityWorkspaceTests(ChannelFixture):
         self.saved_read('renamed', lambda read: read.get('seq', 0) >= last
                         and read.get('received') == 2)
         self.directory('renamed', 0)
-        self.child.repaint_until(b'/peer [agent] [1 unread]')
+        self.child.repaint_until(b"/peer [model's chat] [1 unread]")
         self.child.finish('close')
         self.incoming('renamed', 'while-workspace-closed')
         self.child = self.workspace_start('--resume', 'activity-panes')
-        self.child.repaint_until(b'/renamed [operator] [1 unread]')
+        self.child.repaint_until(b'/renamed [your chat] [1 unread]')
         self.query('renamed')
         self.child.repaint_until(b'while-workspace-closed')
         self.saved_read('renamed', lambda read: read.get('received') == 3)
@@ -126,15 +131,15 @@ class ActivityWorkspaceTests(ChannelFixture):
         self.wait_snapshot(lambda rows: rows and self.state()['windows'][0]['selected'])
         selected = self.state()['windows'][0]['selected']
         self.incoming('ahead', 'inserted-conversation-body')
-        self.child.repaint_until(b'/ahead [operator] [1 unread]')
+        self.child.repaint_until(b'/ahead [your chat] [1 unread]')
         self.child.command('workspace save')
         self.wait_snapshot(lambda rows: self.state()['windows'][0]['selected'] == selected)
         self.server.send('queryop', ':chosen!u@fake NICK renamed\r\n')
-        self.child.repaint_until(b'/chosen [operator] [1 unread] [old route]')
+        self.child.repaint_until(b'/chosen [your chat] [1 unread] [old route]')
         self.child.command('workspace save')
         self.wait_snapshot(lambda rows: self.state()['windows'][0]['selected'] == selected)
         self.child.write(b'\r')
-        self.child.repaint_until(b'query/chosen')
+        self.child.repaint_until(b'[chosen]')
         self.child.repaint_until(b'selected-conversation-body')
         self.assertNotIn(b'inserted-conversation-body', self.child.output)
         self.child.finish('close')
@@ -152,8 +157,8 @@ class ActivityWorkspaceTests(ChannelFixture):
         self.wait(lambda: not self.channels()[('operator', '#side')]['routing']['joined'])
         self.incoming('channel-peer', 'agent-channel-body', local='querybot', target='#side')
         self.directory('peer', 1)
-        self.child.repaint_until(b'/#side [operator] [2 unread]')
-        self.child.repaint_until(b'/#side [agent] [2 unread]')
+        self.child.repaint_until(b'/#side [your chat] [2 unread]')
+        self.child.repaint_until(b"/#side [model's chat] [2 unread]")
         self.child.command('buffer channel-session/' + self.server.endpoint + '/#side')
         self.child.repaint_until(b'agent-channel-body')
         self.wait_snapshot(lambda rows: rows and all(
@@ -161,8 +166,8 @@ class ActivityWorkspaceTests(ChannelFixture):
             for owner in self.state()['buffers'] for b in owner['buffers']
             if isinstance(b['route'], dict) and b['route'].get('room') == '#side'))
         self.directory('#side', 0)
-        self.child.repaint_until(b'/#side [agent] [0 unread]')
-        self.child.repaint_until(b'/peer [operator] [1 unread]')
+        self.child.repaint_until(b"/#side [model's chat] [0 unread]")
+        self.child.repaint_until(b'/peer [your chat] [1 unread]')
         self.child.command('close')
         self.child.repaint_until(b'unread-in-background-pane')
         self.saved_read('peer', lambda read: read.get('received') == 2)
@@ -189,7 +194,7 @@ class ActivityWorkspaceTests(ChannelFixture):
         self.term.write(b'/s d\r')
         self.term.wait_exit()
         self.child = self.workspace_start('--resume', 'activity-panes')
-        self.child.repaint_until(b'/peer [operator] [? unread]')
+        self.child.repaint_until(b'/peer [your chat] [? unread]')
         self.query('peer')
         self.child.repaint_until(b'checkpoint-message-139')
         self.child.finish('close')

@@ -26,6 +26,7 @@ struct snag_vm_cursor {
 };
 
 struct snag_vm_cursor snag_vm_cursor_journal(struct snag_journal_cursor);
+struct snag_journal_cursor snag_vm_cursor_canonical(struct snag_vm_cursor);
 int snag_vm_cursor_output(struct snag_vm_cursor *, const json_t *);
 enum snag_vm_read_kind { SNAG_VM_READ_HISTORY, SNAG_VM_READ_SESSIONS,
     SNAG_VM_READ_REPORT, SNAG_VM_READ_REPORTS };
@@ -46,6 +47,8 @@ struct snag_vm_read_request {
     char session_id[SNAG_ID_HEX_LEN + 1u];
     bool trusted_tail, pin_tail, refresh, reverse;
     bool project, if_changed, tail_only;
+    /* A saved canonical anchor keeps journal coordinates until FOLLOW resumes. */
+    bool canonical;
     bool blocks_only, plain, no_color;
     unsigned int verbosity, columns;
     /* A projected viewport continues across byte pages until rows fit or its

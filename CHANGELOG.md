@@ -27,6 +27,11 @@
   Preserve cancelled drafts with their prompt and literal `^C` in scrollback.
   Route completion choices and cancelled drafts to their originating conversation,
   including private queries, and keep them available after workspace resume.
+- Restore older workspace history positions in their original journal coordinates,
+  including search, copying, resizing and verbosity changes. G returns to the
+  current retained display history.
+- Keep conversation read positions in journal coordinates so background, held
+  and detached views retain their unread counts.
 - Refresh live panes on owner output notifications. Anchored history loads include
   following output so `gg` fills the pane. A retention write failure reports its
   cause while preserving the last valid output boundary and session input.

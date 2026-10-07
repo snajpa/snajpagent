@@ -1399,6 +1399,14 @@ the nearest stable source anchor; if its block becomes hidden, anchor to its
 containing visible heading or nearest visible neighbor and show that adjustment.
 Keep the original source anchor so restoring detail can recover the position.
 
+An older saved canonical anchor retains journal coordinates while held. Its
+page reads, search, motions and selections use the same canonical projection;
+resizing and verbosity changes preserve the original byte. G enables FOLLOW
+and selects the current presentation tail. A loaded mixed-history page retains
+its presentation tail when navigating through the canonical prefix. Canonical
+journal bounds remain separate from presentation ordinals, including owner
+notifications and read receipts.
+
 The existing `/verbose [0..6]` command reads or changes the focused window's
 verbosity in VM. `/chat` selects a channel buffer and `/rollout` the associated
 agent transcript in that window. These are frontend presentation settings; other

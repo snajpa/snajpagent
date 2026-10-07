@@ -123,7 +123,7 @@ class ReportTests(unittest.TestCase):
         self.reports(2)
         self.escape(child)
         child.command('history')
-        child.repaint_until(b'FAST')
+        child.repaint_until(b'Fast mode: ON')
         child.command('reports')
         child.repaint_until(b'/status')
         child.repaint_until(b'/fast')
@@ -217,7 +217,7 @@ class ReportTests(unittest.TestCase):
         rollout(saved['state']['buffers'][0])['pending'] = {
             'id': request, 'instance': instance, 'text': '/fast'}
         path.write_text(json.dumps(saved))
-        resumed = self.start('--resume', 'lost-receipt', expect=b'history')
+        resumed = self.start('--resume', 'lost-receipt', expect=b'Workspace restored')
         resumed.repaint_until(b'ON')
         reports = self.reports(1)
         self.assertEqual(reports, [result['report']])
