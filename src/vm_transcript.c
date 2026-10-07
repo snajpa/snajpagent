@@ -303,7 +303,7 @@ tool_block(struct transcript *view, uint64_t seq, const char *type, const json_t
           snag_buf_append(&body, "…\n", 4u) < 0))) goto out;
     json_t *block = append_block(view, seq, type, (const char *)formatted.text.data,
         body.data, body.len, 0u, body.len);
-    rc = block ? 0 : -1;
+    rc = block ? json_object_set_new(block, "role", json_integer(formatted.role)) : -1;
     if (block && !name) rc = json_object_set_new(block, "needs_call", json_string(id));
 out:
     snag_buf_free(&body);

@@ -5,7 +5,9 @@
 #include "base.h"
 
 enum snag_vm_style {
-    SNAG_VM_BOLD = 1u, SNAG_VM_DIM = 2u, SNAG_VM_UNDERLINE = 4u, SNAG_VM_REVERSE = 8u
+    SNAG_VM_BOLD = 1u, SNAG_VM_DIM = 2u, SNAG_VM_UNDERLINE = 4u, SNAG_VM_REVERSE = 8u,
+    SNAG_VM_RED = 32u, SNAG_VM_GREEN = 48u, SNAG_VM_YELLOW = 64u,
+    SNAG_VM_BLUE = 80u, SNAG_VM_MAGENTA = 96u, SNAG_VM_CYAN = 112u
 };
 
 struct snag_vm_cell {
@@ -23,7 +25,7 @@ struct snag_vm_grid {
     size_t rows, columns;
     struct snag_vm_frame front, back;
     size_t cursor_row, cursor_column;
-    bool valid, cursor_visible, ambiguous_wide;
+    bool valid, cursor_visible, ambiguous_wide, color;
 };
 
 /* Zero-initialize. Resize failure preserves the old grid. Begin clears only the

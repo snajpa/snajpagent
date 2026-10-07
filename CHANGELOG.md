@@ -4,6 +4,14 @@
 
 ## Unreleased
 
+- Add `:session detach` and `:session d` to save and leave a native workspace
+  while all agents continue. Wait for saved drafts and detach acknowledgements,
+  then print the resume command. Tab/Shift-Tab complete colon commands and options.
+
+- Fill Vim history panes after enlarging the terminal and across journal page
+  boundaries. Add semantic colors, visible split separators and full-width
+  status bars, respecting `[ui] color` and `NO_COLOR`.
+
 - Print a copyable return command when detaching a native session or leaving a
   saved workspace. Use the current full ID and shell-quote custom state paths.
   Workspace `:detach` shows `:attach SESSION_ID` after the owner releases control.

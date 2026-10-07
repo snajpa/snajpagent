@@ -492,6 +492,36 @@ class ControlTests(unittest.TestCase):
         resumed.repaint_until(b'durable-unsent')
         resumed.finish('close')
 
+    def test_workspace_detach_waits_for_owner_and_preserves_splits(self):
+        child = self.start('-N', 'detach-workspace', columns=180)
+        child.command('attach ' + self.owner.sid)
+        child.until(b'ATTACHED')
+        child.command('vsp')
+        child.command('sp')
+        os.kill(self.owner.owner, signal.SIGSTOP)
+        try:
+            child.write(b'ipreserve workspace draft')
+            self.escape(child)
+            child.write(b':session d\t\r')
+            child.read(.25)
+            self.assertIsNone(child.process.poll())
+            self.assertNotIn(b'You can resume this workspace', child.output)
+        finally:
+            os.kill(self.owner.owner, signal.SIGCONT)
+        child.wait_exit()
+        self.assertEqual(child.process.returncode, 0)
+        self.owner.status('detached')
+        self.assertEqual(self.owner_draft()['text'], 'preserve workspace draft')
+        rows = self.snapshots()
+        sid, = rows
+        frontend.WorkspaceTests.resume_hint(self, child, sid)
+        self.assertEqual(len(rows[sid]['state']['windows']), 3)
+        resumed = self.start('--resume', sid, expect=b'history')
+        resumed.repaint_until(b'ATTACHED')
+        resumed.repaint_until(b'preserve workspace draft')
+        self.assertEqual(self.owner.identity(), self.owner.owner_identity)
+        resumed.finish('session detach')
+
     def test_detach_notice_waits_for_owner_acknowledgement(self):
         child = self.start('-N', 'detach-ack', columns=160)
         child.command('attach ' + self.owner.sid)

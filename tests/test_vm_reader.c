@@ -146,6 +146,48 @@ dependency_test(struct snag_store *store, const char *root)
     }
 }
 
+static void
+viewport_test(struct snag_store *store, const char *root)
+{
+    struct snag_session source;
+    snag_session_init(&source);
+    char error[256] = "";
+    assert(snag_session_create(store, &source, root, "default", "viewport", "high",
+        error, sizeof(error)) == 0);
+    char *padding = malloc(256u * 1024u + 1u);
+    assert(padding);
+    memset(padding, 'x', 256u * 1024u);
+    padding[256u * 1024u] = '\0';
+    for (unsigned int i = 0u; i < 40u; ++i) {
+        char text[40];
+        (void)snprintf(text, sizeof(text), "viewport-row-%02u", i);
+        projection_record(&source, "input_received", json_pack("{s:s}", "text", text));
+        projection_record(&source, "provider_request", json_pack("{s:s}", "payload", padding));
+    }
+    free(padding);
+    struct snag_vm_read_request request = {.trusted_tail = true, .project = true,
+        .reverse = true, .columns = 255u, .rows = 60u};
+    memcpy(request.session_id, source.id, sizeof(request.session_id));
+    request.tail.offset = source.log_end;
+    request.tail.next_seq = source.next_seq;
+    memcpy(request.tail.prev_sha256, source.prev_sha256, sizeof(request.tail.prev_sha256));
+    struct snag_vm_reader *reader = snag_vm_reader_open(store, NULL, error, sizeof(error));
+    assert(reader);
+    struct snag_vm_read_result *result = await_page(reader,
+        snag_vm_reader_request(reader, &request));
+    assert(!result->error_number);
+    assert(snag_vm_document_rows(result->document) >= 60u);
+    assert(result->cursor.offset > 0 && result->cursor.offset < source.log_end);
+    request.before_seq = result->cursor.next_seq;
+    snag_vm_read_result_free(result);
+    result = await_page(reader, snag_vm_reader_request(reader, &request));
+    assert(!result->error_number && !result->more && result->cursor.offset == 0);
+    assert(snag_vm_document_rows(result->document) > 0u);
+    snag_vm_read_result_free(result);
+    snag_vm_reader_close(reader);
+    snag_session_close(&source);
+}
+
 static struct snag_journal_cursor
 public_cursor(const struct snag_session *source)
 {
@@ -1403,6 +1445,7 @@ main(void)
     snag_session_init(&source);
     assert(snag_store_open(&store, root, error, sizeof(error)) == 0);
     dependency_test(&store, root);
+    viewport_test(&store, root);
     public_offset_bounds_test(&store, root);
     public_dependency_test(&store, root);
     public_full_pages_test(&store, root);

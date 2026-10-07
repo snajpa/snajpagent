@@ -32,7 +32,7 @@ class HostedChannelTests(QueryFixture):
         self.wait_idle()
 
     def test_channel_commands_and_private_isolation(self):
-        self.command('/chat 1/#LAB', 'channel #lab operator')
+        self.command('/chat 1/#LAB', f'chat 127.0.0.1:{self.port} #lab')
         self.command('hosted-plain')
         self.wire('PRIVMSG #lab :hosted-plain')
         copies = [e['data'] for e in self.events() if e['data'].get('text') == 'hosted-plain']
@@ -53,13 +53,13 @@ class HostedChannelTests(QueryFixture):
         self.assertNotIn(b'hosted-private', self.observer.buf)
 
     def test_part_rejoin_rotates_membership_and_keeps_agent(self):
-        self.command('/chat 1/#lab', 'channel #lab operator')
+        self.command('/chat 1/#lab', f'chat 127.0.0.1:{self.port} #lab')
         before = self.channels()['operator']['routing']
         self.command('/part', 'part')
         self.wait(lambda: not self.channels()['operator']['routing']['joined'])
         self.assertTrue(self.channels()['agent']['routing']['joined'])
         self.command('parted-forbidden', 'membership changed')
-        self.command('/join 1/#lab', 'channel #lab operator')
+        self.command('/join 1/#lab')
         self.wait(lambda: self.channels()['operator']['routing']['joined'])
         after = self.channels()['operator']['routing']
         self.assertEqual(before['conversation_id'], after['conversation_id'])
@@ -70,7 +70,7 @@ class HostedChannelTests(QueryFixture):
         self.assertNotIn(b'parted-forbidden', self.peer.buf)
 
     def test_tab_preserves_channel_query_and_rollout_drafts(self):
-        self.command('/chat 1/#lab', 'channel #lab operator')
+        self.command('/chat 1/#lab', f'chat 127.0.0.1:{self.port} #lab')
         self.command('/query 1/query-peer', 'query query-peer')
         self.term.write(b'query-draft\t')
         self.term.repaint_until(b'host-model/medium')
@@ -108,7 +108,7 @@ class HostedChannelTests(QueryFixture):
         self.assertNotIn('tool_error', json.dumps(self.seen))
 
     def test_resume_keeps_room_history_and_part_intent(self):
-        self.command('/chat 1/#lab', 'channel #lab operator')
+        self.command('/chat 1/#lab', f'chat 127.0.0.1:{self.port} #lab')
         self.command('/me retained-hosted-action')
         self.wire('PRIVMSG #lab :\x01ACTION retained-hosted-action\x01')
         self.command('/part', 'part')
@@ -132,7 +132,8 @@ class HostedChannelTests(QueryFixture):
         self.peer.wait(b' BATCH -', timeout=5)
         self.peer.drain(.1)
         self.assertEqual(self.peer.buf.count(b'retained-hosted-action'), 1)
-        self.command('/join 1/#lab', 'channel #lab operator')
+        self.command('/join 1/#lab')
+        self.wait(lambda: self.channels()['operator']['routing']['joined'])
         self.command('after-hosted-resume')
         self.wire('PRIVMSG #lab :after-hosted-resume')
 

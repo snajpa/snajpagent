@@ -1772,6 +1772,13 @@ editing, owner creation/resumption and persistent split layouts.
 Workspace browsing does not start model turns or IRC connections.
 Runtime activation is explicit; ordinary startup retains its terminal interface.
 .PP
+Workspace colors follow [ui] color and NO_COLOR. Operator and assistant headings,
+tool activity/results and errors have distinct colors. Split separators and
+full-width status bars identify pane boundaries and the focused window.
+Resizing reflows text to the available width. FOLLOW fills the available height
+with recent history, reading across journal pages as needed; HOLD preserves the
+selected source position.
+.PP
 .B vm -N NAME
 creates a named workspace.
 .B vm --resume WORKSPACE
@@ -1781,6 +1788,19 @@ restores the most recently active workspace.
 An open workspace remains exclusively owned by its frontend. A second resume
 reports that ownership without stealing or stopping it.
 Workspace names and IDs are separate from agent-session names and IDs.
+.PP
+On supported POSIX hosts,
+.B :session detach
+or
+.B :session d
+saves the workspace layout and drafts, releases all agent controllers and
+returns to the shell. Running agents continue. Exit waits for owner draft and
+detach acknowledgements; the shell displays a copyable workspace resume command.
+.PP
+In the colon command line, Tab completes command names and fixed options;
+repeated Tab cycles matches and Shift-Tab cycles backwards. Enter executes the
+completed command. For example, type :session d and press Tab to complete
+:session detach. Ctrl-L redraws the command line and workspace.
 .PP
 .B vm -l [N]
 lists all open workspaces and up to N stored workspaces, newest activity first.

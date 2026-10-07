@@ -5,6 +5,7 @@ import fcntl
 import json
 import os
 import pty
+import re
 import select
 import shlex
 import signal
@@ -278,6 +279,28 @@ class WorkspaceTests(unittest.TestCase):
                                 capture_output=True, timeout=30)
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_ex_completion_cycles_and_preserves_editing(self):
+        child = self.start('-N', 'completion')
+        child.write(b':sess\t')
+        child.repaint_until(b'\x1b[0msession')
+        child.write(b'\t')
+        child.repaint_until(b'\x1b[0msessions')
+        child.write(b'\x1b[Z')
+        child.repaint_until(b'\x1b[0msession\x1b')
+        child.write(b' d\t')
+        child.repaint_until(b'\x1b[0msession detach')
+        self.assertIsNone(child.process.poll(), 'completion executed the command')
+        # Editing resets the completion prefix, including after cancellation.
+        child.write(b'\x15worksp\t name completed\r')
+        self.wait_snapshot(lambda rows: any(r['name'] == 'completed' for r in rows.values()))
+        child.write(b':set no\t')
+        child.repaint_until(b'\x1b[0mset noignorecase')
+        child.write(b'\t')
+        child.repaint_until(b'\x1b[0mset nomouse')
+        child.write(b'\x1b')
+        time.sleep(.06)
+        child.finish('session d')
+
     def test_follow_hold_and_idle_polling(self):
         journal = self.seed_session()
         child = self.start('-N', 'following')
@@ -306,6 +329,41 @@ class WorkspaceTests(unittest.TestCase):
         # grid diff may reuse "live-append-" already visible on another row.
         child.repaint_until(b'live-append-two')
         child.finish()
+
+    def test_follow_fills_height_after_large_resize(self):
+        journal = self.seed_session('\n'.join(f'viewport-line-{i:03}' for i in range(100)))
+        child = self.start('-N', 'large-display', rows=12, columns=255)
+        child.command('history ' + journal.parent.name)
+        child.repaint_until(b'viewport-line-099')
+        child.resize(62, 255)
+        child.repaint_until(b'viewport-line-040')
+        child.until(b'viewport-line-099')
+        self.assertIn(b'viewport-line-099', child.output)
+        child.resize(90, 320)
+        child.repaint_until(b'viewport-line-012')
+        child.resize(12, 100)
+        child.repaint_until(b'viewport-line-099')
+        child.finish()
+
+    def test_workspace_colors_follow_config_and_environment(self):
+        journal = self.seed_session()
+        config = self.root / 'state' / 'config.ini'
+        config.write_text('[ui]\ncolor=auto\n')
+        config.chmod(0o600)
+        for mode, no_color, expected in [('auto', None, True), ('auto', '1', False),
+                                         ('never', None, False), ('always', '1', True)]:
+            with self.subTest(mode=mode, no_color=no_color):
+                config.write_text(f'[ui]\ncolor={mode}\n')
+                child = self.start(extra_env={'NO_COLOR': no_color})
+                child.command('history ' + journal.parent.name)
+                child.repaint_until(b'retained-answer-marker')
+                foregrounds = re.findall(rb'\x1b\[[0-9;]*(?:3[0-7])(?:;[0-9]+)*m',
+                                         bytes(child.output))
+                self.assertEqual(bool(foregrounds), expected)
+                if expected:
+                    self.assertIn(b'\x1b[0;1;35moperator', child.output)
+                    self.assertIn(b'\x1b[0;1;36massistant', child.output)
+                child.finish()
 
     def test_replaced_history_stops_follow_until_explicit_retry(self):
         journal = self.seed_session()

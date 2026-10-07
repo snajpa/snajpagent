@@ -126,11 +126,12 @@ class CommandTests(unittest.TestCase):
         self.assertEqual(empty['text'], '')
         self.assertEqual(empty['revision'], result['draft_cleared'])
         before = self.owner.journal.read_bytes()
-        for command in ('/config', '/delete', '/send some-file', '/s d', '/chat', '/1 hello'):
+        for command in ('/config', '/delete', '/send some-file', '/s d', '/1 hello'):
             result = self.command(command)
             self.assertEqual(result['status'], 'terminal', result)
             self.assertNotIn('report', result)
             self.owner.status('attached')
+        self.report(self.command('/chat'))
         self.assertEqual(self.owner.journal.read_bytes(), before)
         for route in ('irc', None, {'bad': True}):
             request = uuid.uuid4().hex

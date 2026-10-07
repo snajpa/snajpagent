@@ -6,6 +6,7 @@
 #include "irc.h"
 #include "irc_address.h"
 #include "json.h"
+#include "render.h"
 #include "secret.h"
 #include "session_client.h"
 #include "snajpagent.h"
@@ -64,6 +65,8 @@ static const char *const help_rows[] = {
     ":workspace    :workspace name NAME    :workspace save",
     "Workspace names accept quoted text. :q in these pickers closes the window.",
     "Enter/:session [ID]: resume owner    :new [NAME]: create owner",
+    ":session detach (or :session d): save and detach the workspace; owners continue",
+    "Command line: Tab/Shift-Tab complete commands and options; Enter executes",
     ":attach [ID]: control a running owner    o/:history SESSION: read-only",
     ":classic [SESSION]: use its full terminal; /s d returns to this workspace",
     "i/a/A: edit prompt    Esc: NORMAL    Enter: submit    Ctrl-J: newline",
@@ -176,6 +179,8 @@ struct vm {
     struct vm_clipboard clipboard;
     struct snag_session_typeahead classic;
     size_t command_cursor;
+    char *completion_prefix;
+    size_t completion_index;
     char mode, prefix;
     char *search_query;
     const char *search_finish;
@@ -907,6 +912,21 @@ split(struct vm *vm, enum snag_vm_split axis)
 static void view(struct vm *vm, enum view_kind kind);
 
 static void
+detach_workspace(struct vm *vm)
+{
+    if (direct_session(vm)) {
+        notice(vm, "This host runs the session inside the workspace; keep it open to preserve it");
+        return;
+    }
+    cancel_search(vm);
+    if (save(vm, NULL) < 0) return;
+    vm->detach_exit = true;
+    for (struct snag_vm_connection *c = vm->connections; c; c = c->next)
+        snag_vm_connection_detach(c);
+    notice(vm, "Saving drafts and detaching workspace; owners continue");
+}
+
+static void
 close_window(struct vm *vm)
 {
     cancel_search(vm);
@@ -916,11 +936,7 @@ close_window(struct vm *vm)
             notice(vm, "Live session hidden; :buffers reopens it, :qa quits it and the workspace");
             return;
         }
-        if (save(vm, NULL) == 0) {
-            vm->detach_exit = true;
-            for (struct snag_vm_connection *c = vm->connections; c; c = c->next)
-                snag_vm_connection_detach(c);
-        }
+        detach_workspace(vm);
         return;
     }
     if (snag_vm_layout_close(vm->layout, vm->windows[vm->focus].id) < 0) return;
@@ -1721,6 +1737,7 @@ load_history(struct vm *vm)
             if (load == LOAD_ANCHOR) request.before_seq = window->anchor_seq + 1u;
         } else if (load == LOAD_NEXT || load == LOAD_KEEP_NEXT) request.cursor = window->end;
         else if (load == LOAD_KEEP || load == LOAD_REFRESH) request.cursor = window->begin;
+        request.rows = window->document ? window->rectangle.rows : 0u;
         vm->page.generation = reader_request(vm, &vm->page, &request);
         if (!vm->page.generation) {
             if (vm->motion_loading && vm->motion_origin.window == window->id) cancel_search(vm);
@@ -1800,7 +1817,10 @@ command(struct vm *vm, const char *text)
         else notice(vm, "Use :history SESSION_ID");
     }
     else if (!strcmp(word, "attach")) attach(vm, rest);
-    else if (!strcmp(word, "session")) session_request(vm, rest);
+    else if (!strcmp(word, "session")) {
+        if (!strcmp(rest, "d") || !strcmp(rest, "detach")) detach_workspace(vm);
+        else session_request(vm, rest);
+    }
     else if (!strcmp(word, "new")) {
         char *name = NULL;
         const char *tail = "";
@@ -2016,6 +2036,8 @@ focus_direction(struct vm *vm, unsigned int key)
 static int
 insert_command(struct vm *vm, const void *text, size_t size)
 {
+    free(vm->completion_prefix);
+    vm->completion_prefix = NULL;
     if (snag_buf_reserve(&vm->command, size) < 0) {
         notice(vm, "Command is too long");
         return 0;
@@ -2026,6 +2048,50 @@ insert_command(struct vm *vm, const void *text, size_t size)
     vm->command.len += size;
     vm->command_cursor += size;
     vm->dirty = true;
+    return 0;
+}
+
+static int
+complete_command(struct vm *vm, bool previous)
+{
+    static const char *const choices[] = {
+        "attach", "b", "bn", "bnext", "bp", "bprevious", "buffer", "buffers",
+        "classic", "close", "detach", "draft", "help", "history", "new",
+        "q", "q!", "qa", "qa!", "recover", "report", "reports", "session",
+        "sessions", "set", "sp", "split", "verbosity", "vsp", "vsplit",
+        "workspace", "workspaces", "draft local", "draft owner", "session detach",
+        "set ignorecase", "set mouse", "set noignorecase", "set nomouse",
+        "verbosity 0", "verbosity 1", "verbosity 2", "verbosity 3", "verbosity 4",
+        "verbosity 5", "verbosity 6", "workspace name", "workspace save"
+    };
+    size_t count = sizeof(choices) / sizeof(*choices);
+    bool first = !vm->completion_prefix;
+    if (first) {
+        vm->completion_prefix = malloc(vm->command_cursor + 1u);
+        if (!vm->completion_prefix) return -1;
+        if (vm->command_cursor)
+            memcpy(vm->completion_prefix, vm->command.data, vm->command_cursor);
+        vm->completion_prefix[vm->command_cursor] = '\0';
+    }
+    size_t length = strlen(vm->completion_prefix);
+    bool argument = strchr(vm->completion_prefix, ' ') != NULL;
+    size_t index = first ? (previous ? 0u : count - 1u) : vm->completion_index;
+    for (size_t i = 0u; i < count; ++i) {
+        index = previous ? (index ? index - 1u : count - 1u) : (index + 1u) % count;
+        const char *choice = choices[index];
+        if (argument != (strchr(choice, ' ') != NULL) ||
+            strncmp(choice, vm->completion_prefix, length)) continue;
+        size_t size = strlen(choice), at = vm->command_cursor;
+        if (size > at && snag_buf_reserve(&vm->command, size - at) < 0) return -1;
+        memmove(vm->command.data + size, vm->command.data + at, vm->command.len - at);
+        memcpy(vm->command.data, choice, size);
+        vm->command.len = vm->command.len - at + size;
+        vm->command_cursor = size;
+        vm->completion_index = index;
+        vm->dirty = true;
+        return 0;
+    }
+    notice(vm, "No command completion matches");
     return 0;
 }
 
@@ -2999,6 +3065,15 @@ input_event(void *opaque, const struct snag_vm_input_event *event)
         vm->dirty = true;
     }
     if (vm->mode) {
+        if (control && key == 'l') {
+            resized = 1;
+            vm->dirty = true;
+            return 0;
+        }
+        if (vm->mode == ':' && key == SNAG_VM_KEY_TAB)
+            return complete_command(vm, (event->modifiers & SNAG_VM_SHIFT) != 0u);
+        free(vm->completion_prefix);
+        vm->completion_prefix = NULL;
         const char *bytes = (const char *)vm->command.data;
         size_t at = vm->command_cursor, end = at;
         if (event->kind == SNAG_VM_TEXT) return insert_command(vm, event->text, event->length);
@@ -3098,6 +3173,8 @@ input_event(void *opaque, const struct snag_vm_input_event *event)
     } else if (key == ':' || key == '/' || (key == '?' && document_view(window))) {
         cancel_search(vm);
         vm->mode = (char)key;
+        free(vm->completion_prefix);
+        vm->completion_prefix = NULL;
         vm->search_command = false;
         vm->prefix = 0;
         snag_buf_reset(&vm->command);
@@ -3502,6 +3579,31 @@ buffer_row(struct snag_buf *text, const json_t *row)
     return 0;
 }
 
+static unsigned int
+document_style(const json_t *block, bool heading)
+{
+    const char *kind = snag_json_string(block, "kind");
+    if (!kind) return heading ? SNAG_VM_BOLD : 0u;
+    if (!strcmp(kind, "reasoning")) return SNAG_VM_DIM;
+    if (!heading) return 0u;
+    unsigned int color = 0u;
+    if (!strcmp(kind, "assistant")) color = SNAG_VM_CYAN;
+    else if (snag_string_in(kind,
+        "input_received steering_added future_turn_queued future_turn_edited"))
+        color = SNAG_VM_MAGENTA;
+    else if (!strcmp(kind, "irc")) color = SNAG_VM_BLUE;
+    else if (!strcmp(kind, "goal")) color = SNAG_VM_YELLOW;
+    else if (snag_string_in(kind, "response_failed turn_failed")) color = SNAG_VM_RED;
+    else if (snag_string_in(kind, "response_interrupted turn_interrupted")) color = SNAG_VM_YELLOW;
+    else if (snag_string_in(kind, "tool_started tool_finished")) {
+        static const unsigned int colors[] = {
+            SNAG_VM_YELLOW, SNAG_VM_GREEN, SNAG_VM_YELLOW, SNAG_VM_RED};
+        json_int_t role = json_integer_value(json_object_get(block, "role"));
+        if (role >= SNAG_ROLE_ACTIVITY && role <= SNAG_ROLE_ERROR) color = colors[role];
+    }
+    return SNAG_VM_BOLD | color;
+}
+
 static int
 draw_window(void *opaque, const struct snag_vm_rectangle *rectangle)
 {
@@ -3510,9 +3612,21 @@ draw_window(void *opaque, const struct snag_vm_rectangle *rectangle)
     while (index < vm->count && vm->windows[index].id != rectangle->window) ++index;
     if (index == vm->count) return -1;
     struct vm_window *window = &vm->windows[index];
+    bool taller = rectangle->rows > window->rectangle.rows;
     window->rectangle = *rectangle;
     window->history_rows = window->composer_rows = 0u;
     if (!rectangle->visible) return 0;
+    if (rectangle->column) {
+        for (size_t row = rectangle->row; row < rectangle->row + rectangle->rows; ++row)
+            if (snag_vm_grid_text(&vm->grid, row, rectangle->column - 1u, 1u,
+                "│", strlen("│"), SNAG_VM_DIM | SNAG_VM_CYAN) < 0) return -1;
+    }
+    if (rectangle->row) {
+        for (size_t column = rectangle->column;
+            column < rectangle->column + rectangle->columns; ++column)
+            if (snag_vm_grid_text(&vm->grid, rectangle->row - 1u, column, 1u,
+                "─", strlen("─"), SNAG_VM_DIM | SNAG_VM_CYAN) < 0) return -1;
+    }
     size_t height = rectangle->rows > 1u ? rectangle->rows - 1u : 0u;
     struct snag_vm_connection *c = connection_for(vm, window->session_id, false);
     struct snag_vm_buffer *b = window_buffer(vm, window);
@@ -3548,19 +3662,23 @@ draw_window(void *opaque, const struct snag_vm_rectangle *rectangle)
     }
     window->history_rows = height;
     size_t count = row_count(vm, window);
+    if (document_view(window) && window->follow)
+        window->top = count > height ? count - height : 0u;
     if (window->selected >= count) window->selected = count ? count - 1u : 0u;
     if (window->top > window->selected) window->top = window->selected;
     if (height && window->selected - window->top >= height)
         window->top = window->selected - height + 1u;
     if (document_view(window)) {
-        if (window->document && snag_vm_document_columns(window->document) != rectangle->columns &&
+        if (window->document && (taller ||
+            snag_vm_document_columns(window->document) != rectangle->columns) &&
             !window->load && vm->page.window != window->id && vm->scan.window != window->id)
-            queue_history(vm, window, LOAD_KEEP);
+            queue_history(vm, window, window->follow ? LOAD_LAST : LOAD_KEEP);
         for (size_t i = window->top; i < count && i - window->top < height; ++i) {
             struct snag_vm_document_row row;
             if (snag_vm_document_row(window->document, i, &row) < 0) return -1;
             const char *text = snag_vm_document_text(window->document, &row);
-            unsigned int style = row.heading ? SNAG_VM_BOLD : 0u;
+            unsigned int style = document_style(
+                snag_vm_document_block(window->document, row.block), row.heading);
             if (i == window->selected && !window->visual.kind) style |= SNAG_VM_REVERSE;
             if (snag_vm_grid_text_column(&vm->grid, rectangle->row + i - window->top,
                 rectangle->column, rectangle->columns, text + row.begin, row.end - row.begin,
@@ -3681,9 +3799,14 @@ draw_window(void *opaque, const struct snag_vm_rectangle *rectangle)
                 "  loading" : "",
             window->source_failed ? "  source error; R" : "");
     }
-    return snag_vm_grid_text(&vm->grid, rectangle->row + rectangle->rows - 1u,
-        rectangle->column, rectangle->columns, status, strlen(status),
-        index == vm->focus ? SNAG_VM_BOLD | SNAG_VM_REVERSE : SNAG_VM_REVERSE);
+    size_t status_row = rectangle->row + rectangle->rows - 1u;
+    unsigned int style = index == vm->focus ?
+        SNAG_VM_BOLD | SNAG_VM_REVERSE | SNAG_VM_CYAN : SNAG_VM_REVERSE;
+    for (size_t column = rectangle->column;
+        column < rectangle->column + rectangle->columns; ++column)
+        vm->grid.back.cells[status_row * vm->grid.columns + column].style = style;
+    return snag_vm_grid_text(&vm->grid, status_row, rectangle->column,
+        rectangle->columns, status, strlen(status), style);
 }
 
 static int
@@ -3955,6 +4078,8 @@ collect(struct vm *vm, struct vm_read *read)
             size_t height = window->rectangle.rows > 1u ? window->rectangle.rows - 1u : 1u;
             window->top = window->selected >= height ? window->selected - height + 1u : 0u;
             if (count) {
+                if (!result->request.rows && window->follow && window->begin.offset &&
+                    count < height) queue_history(vm, window, LOAD_LAST);
                 if (!keeps_anchor(load) || !window->anchor_source) remember_anchor(window);
                 /* Forward and reverse page boundaries differ when a large
                  * record crosses the byte budget. Finish reaching the anchor
@@ -4484,6 +4609,8 @@ snag_vm_main(int argc, char **argv, const char *program)
     vm.windows[0].id = 1u;
     if (snag_config_load(&vm.config, NULL, vm.store.root_path, error, sizeof(error)) < 0 ||
         snag_secret_set_build(&vm.secrets, &vm.config, NULL, error, sizeof(error)) < 0) goto failed;
+    vm.grid.color = vm.config.color == SNAG_COLOR_ALWAYS ||
+        (vm.config.color == SNAG_COLOR_AUTO && !getenv("NO_COLOR"));
     vm.page.reader = snag_vm_reader_open(&vm.store, &vm.secrets.wire, error, sizeof(error));
     if (!vm.page.reader) goto failed;
     vm.scan.reader = snag_vm_reader_open(&vm.store, &vm.secrets.wire, error, sizeof(error));
@@ -4527,6 +4654,7 @@ out:
     }
     free(vm.program);
     free(vm.search_query);
+    free(vm.completion_prefix);
     snag_vm_reader_close(vm.page.reader);
     snag_vm_reader_close(vm.scan.reader);
     snag_vm_connections_free(vm.connections);

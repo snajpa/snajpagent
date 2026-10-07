@@ -156,6 +156,40 @@ os.execv({str(BINARY)!r}, [{str(BINARY)!r}] + sys.argv[1:])
         self.assertTrue(path.exists(), path)
         return json.loads(path.read_text())
 
+    def test_workspace_detach_preserves_all_owners_and_drafts(self):
+        child = self.start('-N', 'multi-detach', columns=180)
+        child.command('new alpha')
+        first = self.ready(child)
+        child.write(b'ialpha draft\x1b')
+        time.sleep(.06)
+        child.command('vsp')
+        child.command('new beta')
+        self.wait_snapshot(lambda rows: any(len(r['state'].get('buffers', [])) == 2
+                                           for r in rows.values()))
+        self.ready(child, 2)
+        second, = [j for j in self.journals() if j != first]
+        child.write(b'ibeta draft\x1b')
+        time.sleep(.06)
+        pids = self.owner_pids()
+        self.assertEqual(len(pids), 2)
+        child.finish('session d')
+        for journal in (first, second):
+            self.status(journal.parent.name, 'detached')
+        self.assertEqual(self.owner_pids(), pids)
+        state = next(iter(self.snapshots().values()))['state']
+        self.assertEqual({rollout(b)['draft'] for b in state['buffers']},
+                         {'alpha draft', 'beta draft'})
+        resumed = self.start('--resume', 'multi-detach', expect=b'history')
+        for journal in (first, second):
+            self.status(journal.parent.name, 'attached')
+        resumed.repaint_until(b'alpha draft')
+        resumed.repaint_until(b'beta draft')
+        self.assertEqual(self.owner_pids(), pids)
+        self.assertEqual(len(next(iter(self.snapshots().values()))['state']['windows']), 2)
+        resumed.finish('qa!')
+        for journal in (first, second):
+            self.status(journal.parent.name, 'stored')
+
     def test_new_named_owner_submits_and_survives_workspace_close(self):
         child = self.start('-N', 'layout')
         name = 'agent $(touch sentinel) ; α'

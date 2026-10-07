@@ -79,6 +79,26 @@ main(void)
     text(&grid, 0u, 0u, 1u, "́");
     assert(grid.back.cells[0].width == 1u && grid.back.cells[0].length == 3u);
     assert(snag_vm_grid_flush(&grid, 0u, 0u, false, emit, &output) == 0);
+    grid.color = true;
+    assert(snag_vm_grid_resize(&grid, 62u, 320u) == 0 && grid.color);
+    snag_vm_grid_begin(&grid);
+    assert(snag_vm_grid_text(&grid, 30u, 160u, 160u, "status", 6u,
+        SNAG_VM_BOLD | SNAG_VM_REVERSE | SNAG_VM_CYAN) == 0);
+    output.bytes.len = 0u;
+    assert(snag_vm_grid_flush(&grid, 61u, 319u, false, emit, &output) == 0);
+    assert(snag_buf_terminate(&output.bytes) == 0);
+    assert(strstr((char *)output.bytes.data, "\033[31;161H\033[0;1;7;36mstatus"));
+    assert(strstr((char *)output.bytes.data, "\033[62;320H"));
+    grid.color = false;
+    grid.valid = false;
+    snag_vm_grid_begin(&grid);
+    assert(snag_vm_grid_text(&grid, 30u, 160u, 160u, "status", 6u,
+        SNAG_VM_BOLD | SNAG_VM_REVERSE | SNAG_VM_CYAN) == 0);
+    output.bytes.len = 0u;
+    assert(snag_vm_grid_flush(&grid, 0u, 0u, false, emit, &output) == 0);
+    assert(snag_buf_terminate(&output.bytes) == 0);
+    assert(strstr((char *)output.bytes.data, "\033[0;1;7mstatus"));
+    assert(!strstr((char *)output.bytes.data, ";36m"));
     snag_vm_grid_free(&grid);
     snag_buf_free(&output.bytes);
     puts("test_vm_grid: ok");

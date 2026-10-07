@@ -2,6 +2,13 @@
 
 # Pager retention and the Vim workspace
 
+Display checkpoint: the grid uses semantic ANSI colors under the existing color
+policy, with visible split separators and status bars spanning each pane. Growing
+a FOLLOW viewport moves its top to retain a full tail; background reads continue
+across byte pages until they contain the requested rendered rows or reach the
+source boundary. Raw process output is omitted below verbosity3, where bounded
+result previews own its display. HOLD keeps its source anchor through reflow.
+
 Status: implemented in development builds, October 6, 2026.
 [QUALIFICATION.md](../QUALIFICATION.md) records runtime coverage and platform
 limits. This design documents the supported workflow and ownership boundaries.
@@ -624,6 +631,13 @@ creates an agent session, `:session [ID]` explicitly resumes the current or sele
 agent, `:buffer ADDRESS` selects a buffer and `:help` shows the
 supported controls. Session names, endpoint names and peer nicks in examples are
 ordinary user-selected identifiers, never special roles.
+
+On native POSIX backends, `:session detach` (or `:session d`) saves the complete
+workspace and releases all controllers after their draft/detach acknowledgements.
+The owners continue, including owners shared by several splits. Direct in-process
+backends keep their existing lifetime restriction and explain why the workspace
+must stay open. Tab/Shift-Tab cycle matching colon commands and fixed options;
+editing resets the completion prefix and only Enter executes the result.
 
 Normal workspace exit prints a shell-quoted `vm --resume` command after
 terminal restoration, using the active workspace's full ID and any nondefault
@@ -1428,6 +1442,7 @@ Session quit deliberately follows the session lifecycle requested for this UI:
 | `:q` in an IRC buffer, read-only session or report | Close this window, preserving its draft/history. No IRC PART/QUIT, endpoint removal or agent shutdown occurs. |
 | `:q` in the picker with no active view | Exit the workspace, releasing any remaining leases through detach. |
 | `:close` | Close this window. If it was the last view of a controlled session, detach and preserve the owner and its draft. |
+| `:session detach` / `:session d` | Save layout and drafts, detach all native owners, and leave the workspace after acknowledgements. |
 | `:detach` | Release the associated agent-session controller for all its buffers, leave its engine/connections running and show read-only history or the picker. |
 | `:qa` | Explicitly quit the sessions controlled by this workspace, then exit after their normal shutdown acknowledgements. Unrelated and observed owners remain running. |
 

@@ -249,7 +249,8 @@ def check_hosted_rename_resume(binary):
                     child.wait(0)
                     before = journal.read_bytes()
                     renames = [e["data"] for e in map(json.loads, before.splitlines())
-                               if e["type"] == "irc_event" and e["data"]["kind"] == "nick"]
+                               if e["type"] in ("irc_event", "irc_event_v2") and
+                               e["data"]["kind"] == "nick"]
                     assert any(e["local"] and e["nick"] == "before" and e["text"] == "after"
                                for e in renames), renames
                     assert any(e["local"] and e["nick"] == "renameop" and
@@ -257,12 +258,12 @@ def check_hosted_rename_resume(binary):
                 finally:
                     child.close()
             # A correctly hashed envelope still needs IRC shape validation.
-            invalid = dict(renames[-1], text="invalid nick", stream="", sequence=0, input=False)
+            invalid = dict(renames[-1], text="invalid nick")
             seq = json.loads(before.splitlines()[-1])["seq"] + 1
-            append_event(journal, "irc_event", invalid)
+            append_event(journal, "irc_event_v2", invalid)
             child = RemoteProcess(root, [*base, "--resume", sid], wrapped=None, extra_env=env)
             try:
-                child.until(f"cannot restore IRC nick event at journal sequence {seq}:".encode(), 10)
+                child.until(f"invalid irc_event_v2 transition at sequence {seq}".encode(), 10)
                 child.until(b"--resume", 10)
                 child.wait(3)
             finally:

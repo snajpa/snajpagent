@@ -381,8 +381,10 @@ tracked `config.mk`; `make WITH_*=…` stays an explicit override.
 
 The development `snajpagent vm` frontend provides named workspaces, splits,
 retained transcripts, retrospective verbosity, search, mouse controls and Vim
-editing. `:new [NAME]` creates an agent; `:session ID` resumes one. On POSIX, `:close`
-detaches; `:q` shuts down an attached rollout owner or closes a conversation pane.
+editing. `:new [NAME]` creates an agent; `:session ID` resumes one. On POSIX,
+`:session detach` (or `:session d`) saves and detaches the whole workspace while
+agents continue. Tab/Shift-Tab complete commands and their options.
+`:close` closes a pane; `:q` shuts down an attached rollout owner or closes a conversation pane.
 Leaving a saved workspace prints its `snajpagent vm --resume WORKSPACE_ID` command
 after restoring the shell screen. `:detach` shows `:attach SESSION_ID` inside the workspace.
 Restoring a workspace leaves stopped owners stopped.

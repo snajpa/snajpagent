@@ -178,6 +178,7 @@ struct read_page {
     struct snag_vm_reader *reader;
     json_t *events;
     const json_t *route;
+    unsigned int verbosity;
     bool project;
 };
 
@@ -230,6 +231,8 @@ read_event(void *opaque, const struct snag_session *state, uint64_t seq,
     }
     if (!conversation_event(page->route, type, data)) return 0;
     if (page->project) {
+        /* Lower levels load bounded previews from tool result references. */
+        if (page->verbosity < 3u && !strcmp(type, "process_output")) return 0;
         json_t *event = json_pack("{s:I,s:s,s:O}", "seq", (json_int_t)seq,
             "type", type, "data", data);
         return event ? json_array_append_new(page->events, event) : -1;
@@ -475,7 +478,8 @@ load_calls(struct snag_vm_reader *reader, json_t *events, char *error, size_t si
         json_t *event = json_array_get(events, n - 1u);
         const char *type = snag_json_string(event, "type");
         if (snag_string_in(type, "tool_started tool_finished")) {
-            if (json_array_append(calls.pending, event) < 0) goto out;
+            if (!json_object_get(event, "call") && json_array_append(calls.pending, event) < 0)
+                goto out;
         } else if (resolve_calls(&calls, NULL, 0u, type,
             json_object_get(event, "data"), error, size) < 0) goto out;
     }
@@ -830,6 +834,45 @@ out:
     return rc;
 }
 
+static int
+project_history(struct snag_vm_reader *reader, struct snag_vm_read_result *result)
+{
+    const struct snag_vm_read_request *request = &result->request;
+    json_t *events = json_array();
+    if (!events) return -1;
+    int rc = -1;
+    size_t count = json_array_size(result->events);
+    for (size_t i = 0u; i < count; ++i)
+        if (json_array_append(events, json_array_get(result->events,
+            request->reverse ? count - i - 1u : i)) < 0) goto out;
+    if (load_public(reader, events, result->error, sizeof(result->error)) < 0 ||
+        (request->verbosity && load_calls(reader, events,
+            result->error, sizeof(result->error)) < 0)) goto out;
+    for (size_t i = 0u; request->verbosity == 2u && i < count; ++i) {
+        json_t *event = json_array_get(events, i);
+        if (strcmp(snag_json_string(event, "type"), "tool_finished")) continue;
+        const json_t *ref = json_object_get(json_object_get(
+            json_object_get(event, "data"), "result"), "output_ref");
+        if (ref && load_preview(reader, event, ref, request->columns,
+            result->error, sizeof(result->error)) < 0) goto out;
+    }
+    json_decref(result->blocks);
+    result->blocks = snag_vm_transcript_blocks(events, request->verbosity,
+        request->columns, &reader->secrets, read_canceled, reader,
+        result->error, sizeof(result->error));
+    if (!result->blocks) goto out;
+    if (!request->blocks_only) {
+        snag_vm_document_free(result->document);
+        result->document = snag_vm_document_open(result->blocks,
+            request->columns ? request->columns : 80u, read_canceled, reader);
+        if (!result->document) goto out;
+    }
+    rc = 0;
+out:
+    json_decref(events);
+    return rc;
+}
+
 static void
 read_page(struct snag_vm_reader *reader, struct snag_vm_read_result *result)
 {
@@ -893,7 +936,7 @@ read_page(struct snag_vm_reader *reader, struct snag_vm_read_result *result)
     result->events = json_array();
     if (!result->events) goto failed;
     struct read_page page = {.reader = reader, .events = result->events,
-        .route = request->route, .project = request->project};
+        .route = request->route, .project = request->project, .verbosity = request->verbosity};
     uint64_t before = request->before_seq;
     result->cursor = request->cursor;
     do {
@@ -909,42 +952,13 @@ read_page(struct snag_vm_reader *reader, struct snag_vm_read_result *result)
                 result->error, sizeof(result->error)) < 0) goto failed;
             result->more = result->cursor.offset < result->tail.offset;
         }
-    } while (request->route && result->more && !json_array_size(result->events));
+        if (request->project && project_history(reader, result) < 0) goto failed;
+    } while (result->more && ((request->route && !json_array_size(result->events)) ||
+        (request->project && !request->blocks_only && request->rows &&
+         snag_vm_document_rows(result->document) < request->rows)));
     if (request->project) {
-        if (request->reverse) {
-            size_t count = json_array_size(result->events);
-            for (size_t i = 0u; i < count / 2u; ++i) {
-                json_t *first = json_incref(json_array_get(result->events, i));
-                int rc = json_array_set(result->events, i,
-                    json_array_get(result->events, count - i - 1u));
-                if (!rc) rc = json_array_set(result->events, count - i - 1u, first);
-                json_decref(first);
-                if (rc < 0) goto failed;
-            }
-        }
-        if (load_public(reader, result->events, result->error, sizeof(result->error)) < 0)
-            goto failed;
-        if (request->verbosity && load_calls(reader, result->events,
-            result->error, sizeof(result->error)) < 0) goto failed;
-        for (size_t i = 0u; request->verbosity == 2u && i < json_array_size(result->events); ++i) {
-            json_t *event = json_array_get(result->events, i);
-            if (strcmp(snag_json_string(event, "type"), "tool_finished")) continue;
-            const json_t *ref = json_object_get(json_object_get(
-                json_object_get(event, "data"), "result"), "output_ref");
-            if (ref && load_preview(reader, event, ref, request->columns,
-                result->error, sizeof(result->error)) < 0) goto failed;
-        }
-        result->blocks = snag_vm_transcript_blocks(result->events, request->verbosity,
-            request->columns, &reader->secrets, read_canceled, reader,
-            result->error, sizeof(result->error));
         json_decref(result->events);
         result->events = NULL;
-        if (!result->blocks) goto failed;
-        if (!request->blocks_only) {
-            result->document = snag_vm_document_open(result->blocks,
-                request->columns ? request->columns : 80u, read_canceled, reader);
-            if (!result->document) goto failed;
-        }
     }
     return;
 failed:

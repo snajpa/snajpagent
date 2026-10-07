@@ -32,7 +32,7 @@ snag_vm_grid_resize(struct snag_vm_grid *grid, size_t rows, size_t columns)
     }
     if (grid->rows == rows && grid->columns == columns) return 0;
     struct snag_vm_grid next = {.rows = rows, .columns = columns,
-        .ambiguous_wide = grid->ambiguous_wide};
+        .ambiguous_wide = grid->ambiguous_wide, .color = grid->color};
     next.front.cells = calloc(rows * columns, sizeof(struct snag_vm_cell));
     next.back.cells = calloc(rows * columns, sizeof(struct snag_vm_cell));
     next.front.text.max = next.back.text.max = SIZE_MAX;
@@ -81,7 +81,8 @@ int
 snag_vm_grid_text_column(struct snag_vm_grid *grid, size_t row, size_t column, size_t width,
     const char *text, size_t length, unsigned int style, size_t logical_column)
 {
-    if (!grid->back.cells || (!text && length) || style & ~15u) return snag_errno(EINVAL);
+    if (!grid->back.cells || (!text && length) || style & ~255u || (style >> 4u) > 8u)
+        return snag_errno(EINVAL);
     if (row >= grid->rows || column >= grid->columns) return 0;
     if (width > grid->columns - column) width = grid->columns - column;
     size_t end = column + width, position = 0u;
@@ -145,13 +146,15 @@ cell_equal(const struct snag_vm_frame *a, const struct snag_vm_frame *b, size_t 
 }
 
 static int
-set_style(struct snag_buf *out, unsigned int style)
+set_style(struct snag_buf *out, unsigned int style, bool color)
 {
     if (snag_buf_append(out, "\033[0", 3u) < 0) return -1;
     if ((style & SNAG_VM_BOLD) && snag_buf_append(out, ";1", 2u) < 0) return -1;
     if ((style & SNAG_VM_DIM) && snag_buf_append(out, ";2", 2u) < 0) return -1;
     if ((style & SNAG_VM_UNDERLINE) && snag_buf_append(out, ";4", 2u) < 0) return -1;
     if ((style & SNAG_VM_REVERSE) && snag_buf_append(out, ";7", 2u) < 0) return -1;
+    if (color && (style >> 4u) && snag_buf_printf(out, ";%u", 29u + (style >> 4u)) < 0)
+        return -1;
     return snag_buf_putc(out, 'm');
 }
 
@@ -181,7 +184,7 @@ snag_vm_grid_flush(struct snag_vm_grid *grid, size_t cursor_row, size_t cursor_c
             if (row_at != row || column_at != column) {
                 if (snag_buf_printf(&out, "\033[%zu;%zuH", row + 1u, column + 1u) < 0) goto out;
             }
-            if (style_at != cell->style && set_style(&out, cell->style) < 0) goto out;
+            if (style_at != cell->style && set_style(&out, cell->style, grid->color) < 0) goto out;
             style_at = cell->style;
             if (snag_buf_append(&out, cell->length ? grid->back.text.data + cell->offset :
                 (const unsigned char *)" ", cell->length ? cell->length : 1u) < 0) goto out;

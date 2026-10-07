@@ -32,6 +32,9 @@ struct snag_vm_read_request {
     bool project, if_changed, tail_only;
     bool blocks_only;
     unsigned int verbosity, columns;
+    /* A projected viewport continues across byte pages until rows fit or its
+     * source boundary is reached. Zero preserves single-page scan semantics. */
+    unsigned int rows;
     /* A nonempty query scans the complete pinned history/report on the worker. */
     const char *query;
     bool ignorecase, search_reverse;
