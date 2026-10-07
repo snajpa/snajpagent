@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Fix native checkpoint failures after the last tool in a streamed response
+  finishes. Completed commentary and tool results remain available on resume.
+
 - Isolate piped command tools from the session's controlling terminal so child
   programs cannot leave terminal input assigned to an exited process group.
 

@@ -2609,9 +2609,7 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         }
         call->finished = true;
         if (all_pending_finished(session) && session->response_outcome == SNAG_GRAPH_CALLS) {
-            session->response_complete = false;
-            session->pending_call_count = 0;
-            session->active_response_id[0] = '\0';
+            clear_response_state(session);
         }
     } else if (snag_string_in(type, "hosted_search_started hosted_search_finished")) {
         /* Provider-executed search evidence: display-only and never a local

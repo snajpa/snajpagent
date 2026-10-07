@@ -3495,6 +3495,71 @@ start_process_call(struct snag_session *session, size_t index)
 }
 
 static void
+test_checkpoint_after_streamed_tools(struct snag_store *store, const char *cwd, bool legacy)
+{
+    struct snag_session state;
+    snag_session_init(&state);
+    char error[512] = "";
+    int rc = legacy ? legacy_fixture_create(store, &state, cwd,
+        "default", "fixture", "default", error, sizeof(error)) :
+        snag_session_create(store, &state, cwd, "default", "fixture", "default",
+            error, sizeof(error));
+    assert(!rc);
+    json_t *paths = checked_json(json_array());
+    commit_data(&state, "turn_started",
+        direct_turn_data(cwd, "Checkpoint completed tools.", GOAL_ID, 1u, false, paths));
+    json_decref(paths);
+    commit_data(&state, "response_started", response_data());
+
+    struct snag_response_graph graph = {0};
+    assert(!snag_response_graph_add_public(&graph, SNAG_ITEM_ASSISTANT,
+        SNAG_PHASE_COMMENTARY, "commentary", "Before the tools."));
+    commit_data(&state, "response_output", json_pack(
+        "{s:s,s:s,s:i,s:i,s:i,s:O}", "turn_id", GOAL_ID, "response_id", OTHER_ID,
+        "cycle", 1, "index", 0, "offset", 0, "item", json_array_get(graph.items, 0u)));
+    for (size_t i = 0u; i < 2u; ++i) {
+        const char *id = i ? "second" : "first";
+        assert(!snag_response_graph_add_call(&graph, id, id, "read_file",
+            json_pack("{s:s}", "path", "fixture.txt")));
+    }
+    commit_data(&state, "response_completed", json_pack(
+        "{s:s,s:s,s:i,s:s,s:s,s:O,s:{s:i,s:i,s:i,s:i}}", "turn_id", GOAL_ID,
+        "response_id", OTHER_ID, "cycle", 1, "status", "completed",
+        "provider_response_id", "fixture", "items", graph.items, "usage",
+        "input_tokens", 17, "output_tokens", 7, "reasoning_tokens", 3, "total_tokens", 24));
+    for (size_t i = 0u; i < 2u; ++i) {
+        start_process_call(&state, i);
+        commit_data(&state, "tool_finished", json_pack("{s:s,s:s,s:o}",
+            "turn_id", GOAL_ID, "call_id", state.pending_calls[i].call_id,
+            "result", snag_tool_result_terminal(true, "tool result")));
+        rc = snag_session_checkpoint(&state, error, sizeof(error));
+        if (rc < 0) fprintf(stderr, "checkpoint after tool %zu: %s\n", i + 1u, error);
+        assert(!rc);
+        assert(state.active_turn);
+        if (!i) {
+            assert(state.pending_call_count == 2u && state.response_complete &&
+                state.active_response_id[0] && state.response_public);
+        } else {
+            assert(!state.pending_call_count && !state.response_complete &&
+                !state.active_response_id[0] && !state.response_public &&
+                !state.response_public_bytes);
+        }
+    }
+    char id[sizeof(state.id)];
+    memcpy(id, state.id, sizeof(id));
+    uint64_t next = state.next_seq;
+    snag_session_close(&state);
+    snag_session_init(&state);
+    assert(!snag_session_open(store, &state, id, error, sizeof(error)));
+    assert(state.next_seq == next && state.active_turn && !state.pending_call_count &&
+        !state.active_response_id[0] && !state.response_public);
+    assert(!snag_session_checkpoint(&state, error, sizeof(error)));
+    if (legacy) check_import(&state, &state);
+    snag_session_close(&state);
+    snag_response_graph_free(&graph);
+}
+
+static void
 finish_process_call(struct snag_session *session, size_t index, bool started)
 {
     commit_data(session, "tool_finished", json_pack("{s:s,s:s,s:o}", "turn_id", GOAL_ID,
@@ -4667,6 +4732,8 @@ test_prepared_native_seed(const char *cwd)
 void
 test_store_binary_replay(struct snag_store *store, const char *cwd)
 {
+    test_checkpoint_after_streamed_tools(store, cwd, false);
+    test_checkpoint_after_streamed_tools(store, cwd, true);
     test_prepared_native_seed(cwd);
     test_native_factory(cwd);
     test_producer_candidate_ownership();

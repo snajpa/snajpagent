@@ -5684,6 +5684,8 @@ mention of the model or a submitted operator chat message starts saved work.
 Every accepted transition is appended and synced before it is treated as
 durable.  Resume reconstructs turns, tool state, queue, goals, provider/model
 selection, and admitted IRC state.
+Completed tool results and streamed commentary remain in session history across
+checkpoints and resume.
 .PP
 Normal exit prints a two-line resume hint for every resumable session.  It
 includes the exact session and a nondefault dotdir. Saved configuration paths,
