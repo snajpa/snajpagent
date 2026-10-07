@@ -5316,8 +5316,10 @@ def test_operator_nick():
                 child.send_wait(b"/chat\r", chat_prompt(new))
                 child.send_wait(b"/nick 9bad nick\r", b"IRC nick is invalid")
                 child.send(b"\x15")
-                refused = (b"-server - Nickname is already in use" if child is client
-                           else b"already in use")
+                if child is client:
+                    child.send_wait(f"/connections {endpoint}\r".encode(),
+                                    f"connection {endpoint}".encode())
+                refused = b"Nickname is already in use" if child is client else b"already in use"
                 child.send_wait(f"/nick {model}\r".encode(), refused)
                 child.send(b"\x15")
                 queried = child.send_wait(b"/rollout\r/nick\r", f"model nick: {model}".encode())
