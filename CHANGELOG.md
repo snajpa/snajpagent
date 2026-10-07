@@ -4,6 +4,14 @@
 
 ## Unreleased
 
+- Use logical record boundaries for workspace history paging across legacy and
+  native journals, including empty panes and inline command output. Resolve
+  converted tool previews through canonical native record ranges.
+- Restore provider source rows by verified batch during native checkpoint reads,
+  avoiding repeated hashing of shared batches; honor reader cancellation. Reverse
+  history paging also authenticates each shared batch once while preserving
+  individual record membership checks.
+
 - Preserve Escape mode changes when a tunnel or multiplexer batches Escape
   with the following control key.
 
@@ -59,6 +67,241 @@
 - Fill Vim history panes after enlarging the terminal and across journal page
   boundaries. Add semantic colors, visible split separators and full-width
   status bars, respecting `[ui] color` and `NO_COLOR`.
+
+- Convert stopped legacy session collections in bounded parallel workers with
+  `snajpagent convert`. Retain original journals, rebuild derived snapshots from
+  canonical history, skip locked writers, continue independent failures and
+  publish native selection last. Interrupted retention can be repaired by rerunning
+  the command; native already-current checks preserve canonical bytes.
+
+- Present committed native responses and deferred view repaint through typed
+  sources pinned to their commit boundary, including voice observations and
+  collected command stdout/stderr.
+
+- Account for expanded single-copy text in native history page budgets, retaining
+  complete large events and exact cursors for search and viewport loading.
+
+- Read exhaustive native history through captured read-only prefixes during later
+  appends, while keeping full stopped-journal reconstruction exclusively locked
+  and source-stable.
+
+- Keep native checkpoint restoration scratch owners off small worker stacks during
+  catalog reads, preserving cancellation and atomic adoption.
+
+- Recover a lost native provider cache from its canonical checkpoint and bounded
+  suffix, preserving committed state when required data is unavailable or repair
+  is cancelled.
+
+- Name the session's actual journal in model history hints and command-output
+  references. Native history hints direct inspection through read_session_history
+  and read_tool_output.
+
+- Create new persisted sessions through the verified native four-file factory,
+  including a receipt-pinned first checkpoint. Existing legacy sessions retain
+  their format on resume.
+
+- Add a provisional four-file native creation backend with verified checkpoint
+  closure, receipt-ordered publication and ownership-preserving failure handling.
+  Recognize empty reserved checkpoint slots during bounded recovery.
+
+- Preserve explicit automatic-retry overrides in typed native session records and
+  checkpoints. Older checkpoints inherit configuration when no override was saved.
+
+- Allow checkpoint access plans to prove missing seed locations through the
+  derived cache beneath an independently verified frontier. Checkpoint publication
+  uses its matching cache frontier for old and suffix source locations, preserving
+  canonical checks while avoiding repeated batch walks for large command output.
+  Unavailable old membership and corrupt selected cache rows fail explicitly.
+
+- Emit derived index-cache bytes while seeding a prepared native session. The
+  returned cache is tied to the independently verified frontier; failed seeding
+  preserves the original session and the caller's output buffer.
+
+- Preserve explicit blocked-goal wait channels in native records and checkpoint
+  references. Older blockers without a channel keep their unspecified wait;
+  earlier checkpoint layouts remain readable for the state they can represent.
+
+- Preserve derived IRC activity in typed native checkpoint metadata. Older core
+  layouts retain an explicit missing-activity state. Native routed records accept
+  connection-scoped notices under the live validator's rules.
+
+- Add prepared-session native seeding with verified semantic state, committed
+  provider capture and writer provenance. Seeding reads provisional bytes in
+  memory and preserves their original owner; default creation remains JSONL.
+
+- Encode routed IRC observations in a typed native record, preserving connection
+  generation, conversation identity, actions, delivery state, membership and
+  captured reply targets. Historical source projection accepts both IRC event
+  schemas. Native checkpoints retain the connection/conversation directory
+  through canonical event references, including private observations.
+
+- Open existing native sessions through bounded checkpoint admission, retaining
+  provider capture, working provenance and verified index frontier. Native
+  journals take precedence over legacy sidecars; malformed native storage stops
+  recovery. Read-only lookup retains no writer worker and detects source races.
+  Reopening restores the canonical checkpoint receipt clock; building native
+  provider context preserves the acknowledged journal sequence.
+
+- Retain owning native checkpoint access, authenticated slot order and the
+  verified current Merkle frontier during bounded admission, supporting writer
+  provenance reconstruction without a lifetime replay.
+
+- Restore native process scan cursors during bounded checkpoint admission and
+  suffix resume from verified start/collection sources, preserving imported
+  write_stdin process identity and leaving execution ownership with the live host.
+
+- Read explicit full native semantic history through strict replay at the
+  acknowledged frontier, providing genuine post-event core state and preserving
+  provisional callback failures without JSONL parsing or live-state replacement.
+- Read native process/output suffixes through verified exact batch cuts, keeping
+  NULL-state callbacks, full-suffix positive-return behavior and unavailable
+  historical-source failures consistent with their existing contract.
+
+- Dispatch native reverse history through pinned acknowledged queries, preserving
+  sequence bounds, byte paging, optional metadata and callback stop behavior
+  without JSONL boundary assumptions.
+
+- Traverse native forward history at exact batch cuts, preserving accepted-prefix
+  cursor progress and callback stop behavior while proving unavailable old rows
+  against the independent acknowledged frontier.
+
+- Resolve unavailable historical native point sources through query-specific
+  canonical membership proofs under the acknowledged frontier, without treating
+  derived-cache data as authority or replaying the old prefix.
+
+- Read incremental native voice snapshots through verified forward history,
+  resolving adopted begin sequences to exact batch cuts and proving missing old
+  sources against the independent acknowledged frontier. Preserve imported/live
+  provenance, honest unavailable failures and already owning observation caches.
+
+- Resume native record traversal at exact decoded batch cuts, without fabricated
+  per-record hashes or JSONL offsets, through the existing bounded suffix reader.
+
+- Reconstruct native writer input, queue and open-response provenance from pinned
+  checkpoint sources, preserving declaration offsets and fragment spans with
+  atomic cancellation and unavailable-source handling.
+
+- Attach derived history-index custody through live native sessions using their
+  acknowledged frontier, preserving successful semantic commits and effects when
+  cache writes fail and retaining independent cache failure status.
+
+- Append derived native history-index entries through the journal I/O owner after
+  durable commits, checking the independently established forest frontier and
+  reporting cache failures separately from canonical acknowledgements.
+
+- Read native IRC context sources through acknowledged checkpoint custody and
+  bounded canonical point projection, including typed checkpoint lookup markers.
+
+- Apply the established automatic checkpoint cadence to configured native
+  sessions while preserving closure-event exclusions and retained transaction
+  retry ordering.
+
+- Publish checkpoints for explicitly bound native sessions through their existing
+  I/O owner, staging canonical receipt adoption and moving usable access custody
+  only after durable ACK while retaining exact publication/receipt retries.
+
+- Install owning accepted working-set custody on native sessions for subsequent
+  checkpoint capture, preserving caller directory ownership and failure-atomic
+  setup without advancing the acknowledged journal frontier.
+
+- Return owning prepared checkpoint access bytes with successful publication,
+  preserving caller buffers across pending work and failed retries while keeping
+  usable checkpoint custody behind canonical receipt acknowledgement.
+
+- Freeze native checkpoint queries and pinned old-access storage with the same
+  acknowledged core/provider boundary, preserving request inputs independently
+  of the producer and provider cache.
+
+- Prepare frozen native checkpoint access sections on the existing I/O owner
+  before creating images, keeping source failures pre-publication and explicit
+  retries pinned to the captured inputs.
+
+- Separate native checkpoint dependency-query capture from canonical source I/O,
+  preserving the pinned working-set and bounded-suffix closure rules.
+
+- Freeze native core and provider checkpoint sections at the same acknowledged
+  frontier, retaining owned origins and index state. An absent provider cache
+  fails capture rather than emitting a partial image; access closure and image
+  publication remain separate integration work.
+
+- Retain IRC sleep, wake and context-summary settings and boundaries in native
+  history and checkpoints, including older blocks without the added IRC state.
+
+- Retain explicit service-tier changes in native metadata and checkpoints,
+  including older eleven-slot text dictionaries without a saved override.
+
+- Stage native checkpoint origins with each live transaction. Replay and the
+  commit owner share declaration, queue-edit, call-time directory and unsettled
+  process rules; only durable ACK exposes the new origins and frontier.
+
+- Preserve explicit credential-reload controls in native event payloads and
+  checkpoint metadata, with six-slot checkpoint compatibility for older drafts.
+- Capture native voice-import starts from the acknowledged destination cursor.
+  Adoption verifies the import identity, source boundary, original cursor and
+  durability-acknowledged copy count; abandoned archive records remain inert.
+- Produce native tool/process result ranges from captured process and durable
+  session cursors while preserving presentation offsets. Stale or conflicting
+  coordinates fail before I/O; result adoption remains durability-gated.
+- Connect native session commits to the single I/O owner with private reducer,
+  producer and frontier staging. Durable ACK alone adopts state and invokes the
+  commit observer; failed writes retain frozen admission data for exact retry.
+  Native backend selection and creation/recovery activation remain pending.
+- Preserve owning process storage when session-state cloning fails before its
+  process vector allocation.
+
+- Extract native input, queue and public-output reference production from the
+  verified importer for reuse by staged engine transactions. Cloned working provenance
+  owns independent metadata and retains only pending-input, queue and open-response
+  sources. Application backend activation remains pending.
+
+- Advance native logical batch frontiers without a temporary heap table when
+  derived-cache output is absent. Preserve canonical and turn validation,
+  atomic tree replacement and separate optional cache geometry checks. Runtime
+  integration remains pending.
+
+- Transfer optional ownership of the exact decoded native batch with its
+  durable acknowledgement, including internally constructed receipts. Pending
+  and failed acknowledgements preserve the caller's buffer; successful transfer
+  survives later submissions and close. Engine frontier integration remains
+  pending.
+- Bind native checkpoint file publication to a canonical receipt committed by
+  the same I/O owner. Advance usable slots only after journal durability ACK,
+  choose replacement by verified receipt order, and retain exact failed requests
+  for paced retry. Engine/backend integration remains pending.
+- Admit native checkpoints from the discovered physical tail, canonical receipt
+  order and receipt-bounded images through joint state-only suffix restoration.
+  Preserve output owners on failure and report open-tail bytes without repair.
+  Application backend integration and live closure maintenance remain pending.
+- Expose verified canonical receipt ordinals for native checkpoint-slot selection;
+  cross-slot recency follows journal order rather than image generation claims.
+- Retain canonical IRC admission sources and their next-row lookup discriminators
+  in native snapshot access closure, including original non-input metadata.
+- Reconstruct native checkpoint core/provider state from pinned sources, then
+  reduce an exact bounded suffix and retain current historical IRC lookup before
+  joint adoption. Runtime backend wiring and live closure maintenance remain pending.
+- Select native checkpoint access locations from current core/provider roots and
+  required original fields, voice starts, response spans and graph transforms.
+  Capture deduplicates canonical locations with bounded batch scratch and atomic
+  output ownership. Live closure maintenance and runtime admission remain pending.
+- Read native provider-recipe events directly from canonical checkpoint sources,
+  including original input/voice fields and selected response-fragment spans.
+  Preserve scope, item, first-field and offset checks while assembling fresh
+  provider arrays atomically, with cancellation between source rows. Complete
+  closure capture and runtime admission remain pending.
+- Native core snapshot assembly propagates pinned access through graph, process,
+  voice, epoch and payload readers. Graph transforms and retained response
+  fragments use selected old batches and the newer contiguous suffix; mandatory
+  old point sources fail without lifetime fallback. Runtime integration remains
+  pending.
+- A cancellable native checkpoint range iterator reads listed old working-set
+  records by physical batch and newer suffix records contiguously. It checks
+  exact canonical positions, kinds and typed turn counts; callers stage visited
+  state until successful closure validation. Runtime integration remains pending.
+- Native checkpoint input, queue and steering readers use pinned working-set
+  locations for accepting receipts and their original literal fields, including
+  queued voice ASR/request provenance. Missing
+  old locations fail without a lifetime-history fallback; the independent
+  prefix oracle retains its unindexed path. Runtime integration remains pending.
 
 - Print a copyable return command when detaching a native session or leaving a
   saved workspace. Use the current full ID and shell-quote custom state paths.
@@ -499,6 +742,51 @@
 - Resume hosted IRC sessions after local nickname changes, including when
   networking is disabled on resume. Report the journal sequence when an IRC
   event cannot be restored.
+
+- Add typed native-storage replay, canonical field references and paired
+  core/provider checkpoint building blocks with legacy-data conversion tests.
+  Preserve IRC display metadata, session names, ordered saved launch options and
+  current session-list behavior when loading these checkpoints. Runtime storage
+  remains JSONL while the native writer,
+  migration and application integration are completed. Preserve provider-hosted
+  search observations through native replay and paired checkpoints. Add stopped
+  checkpoint-plus-suffix reconstruction with atomic core/context adoption.
+  Relocate adopted voice-history starts and process-output ranges through canonical
+  native references, preserving historical tool-result presentation metadata.
+  Add fixed-width history-index codecs and canonical-batch hint verification.
+  Add the journal I/O worker with grouped durable acknowledgements and retained
+  batch reconciliation after write or sync failures. Support incremental
+  checkpoint framing with bounded per-call hashing and unchanged snapshot bytes.
+  Publish alternating checkpoint generations on that same worker, yielding to
+  journal commits between chunks and retaining failed publication work for retry.
+  Add append-only index hash proofs and bounded frontier restoration, with
+  independently supplied roots and preserved earlier-prefix lookups.
+  Resolve authenticated index entries with bounded canonical batch reads.
+  Add optional checkpoint receipt encoding and exact snapshot-image binding,
+  and return the completed image digest and byte length with durable publication.
+  Pin the image length in receipt version 2 for independently bounded cache loading.
+  Probe cache digests without reading bodies and load receipt-bounded images with
+  cancellation, exact framing checks and atomic output ownership.
+  Find paired receipts through a bounded, cancellable canonical-chain walk and
+  verify their exact earlier capture anchors before exposing checkpoint pins.
+  Add a bounded reversible batch-envelope codec that separates physical commit
+  delimiters from payload bytes. Adopt it in draft journal format 0.2 for the
+  importer, I/O owner and forward/backward/indexed readers; retain decoded
+  record positions separately from physical commit anchors.
+  Return prepared commit anchors from the batch encoder, avoiding a second full
+  batch hash in the journal writer and importer.
+  Discover the committed physical end from captured EOF with bounded delimiter
+  scans and canonical batch checks, rejecting corrupt closed frames and tails.
+  Advance the logical history-index frontier independently of optional cache output
+  and its file-offset range.
+  Add field-shaped checkpoint access metadata for the frontier and working-set
+  canonical locations, with sorted lookup and whole-image trust requirements.
+  Carry access metadata through draft checkpoint framing 0.2 and durable publication,
+  with bounded streaming and ownership transfer alongside core/provider sections.
+  Resolve checkpoint text declarations and original fields through pinned locations;
+  missing old entries fail instead of triggering an unbounded fallback.
+
+- Fix a memory leak when combining compaction summaries.
 
 ## 0.99.8c — October 2, 2026
 

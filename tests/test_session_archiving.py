@@ -10,14 +10,18 @@ import tempfile
 from pathlib import Path
 
 import tmux_terminal as harness
+from store_history import create_legacy
 
 
-def append_legacy_events(path, kinds):
-    """Append obsolete ASCII records to a stopped, disposable fixture journal."""
+def append_legacy_events(path, kinds, name=None):
+    """Append ASCII records to a stopped, disposable legacy fixture journal."""
     previous = json.loads(path.read_bytes().splitlines()[-1])
     with path.open("ab") as out:
         for kind in kinds:
-            data = {"control": 8} if kind.startswith("control_") else {"origin": "user"}
+            if kind == "session_named":
+                data = {"name": name}
+            else:
+                data = {"control": 8} if kind.startswith("control_") else {"origin": "user"}
             event = dict(data=data, prev_sha256=previous["event_sha256"],
                          seq=previous["seq"] + 1, session_id=previous["session_id"],
                          time_ms=previous["time_ms"] + 1, type=kind, v=previous["v"])
@@ -57,13 +61,11 @@ def check_legacy_sessions(binary):
             effect = started + ["session_archived"]
             cases = [["session_archived"], ["session_archived", "session_unarchived"],
                      request, started, effect, effect + ["control_finished"]]
-            seen = set()
             for index, kinds in enumerate(cases):
                 name = f"legacy-{index}"
-                run("-N", name, "-e", "--", "ping")
-                journals = set((state / "sessions").glob("*/events.jsonl"))
-                path, = journals - seen
-                seen = journals
+                path = create_legacy(state, root, "fake", "host-model")
+                append_legacy_events(path, ["session_named"], name)
+                run("--resume", "-N", name, "-e", "--", "ping")
                 append_legacy_events(path, kinds)
                 original = path.read_bytes()
                 listed = run("-l").stdout.decode().splitlines()

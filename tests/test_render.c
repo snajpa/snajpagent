@@ -1,7 +1,9 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "render.h"
-#include "store.h"
+#include "fs.h"
 #include "snajpagent.h"
+#include "store.h"
+#include "store_internal.h"
 
 #include <assert.h>
 #include <errno.h>
@@ -2820,11 +2822,69 @@ test_tool_previews(void)
 static struct snag_render_source
 append_event(FILE *file, const char *text)
 {
-    struct snag_render_source source = {ftello(file), strlen(text)};
+    struct snag_render_source source = {.offset = ftello(file), .len = strlen(text)};
     assert(source.offset >= 0);
     assert(fwrite(text, 1u, source.len, file) == source.len);
     assert(fflush(file) == 0);
     return source;
+}
+
+static void
+test_native_durable_source(void)
+{
+    char cwd[4096];
+    char root[4096];
+    char error[256];
+    assert(getcwd(cwd, sizeof(cwd)));
+    int written = snprintf(root, sizeof(root), "%s/build/native-render-XXXXXX", cwd);
+    assert(written > 0 && (size_t)written < sizeof(root) && mkdtemp(root));
+    struct snag_store store;
+    struct snag_session session;
+    snag_store_init(&store);
+    snag_session_init(&session);
+    assert(!snag_store_open(&store, root, error, sizeof(error)));
+    assert(!snag_session_create(&store, &session, cwd, "default", "fixture", "high",
+        error, sizeof(error)) && session.binary);
+    json_t *data = json_pack("{s:s,s:s,s:s,s:{s:s,s:s,s:s}}",
+        "connection_id", "0123456789abcdef0123456789abcdef", "provider", "default",
+        "model", "fixture", "event", "type", "voice_transcript", "speaker", "user",
+        "text", "native-pinned-caption");
+    assert(data);
+    json_t *transcript = json_incref(json_object_get(data, "event"));
+    uint64_t sequence;
+    assert(data && !snag_session_commit(&session, "voice_event", data, &sequence,
+        error, sizeof(error)));
+    struct snag_render_source source = {.offset = session.committed_start,
+        .len = (size_t)(session.committed_end - session.committed_start),
+        .native_sequence = sequence};
+    assert(!snag_session_binary_checkpoint_capture(&session, &source.native_boundary,
+        NULL, NULL, error, sizeof(error)));
+    struct output_capture capture = capture_open(false, true);
+    struct snag_render render;
+    snag_render_init(&render, 6u);
+    snag_render_set_color(&render, SNAG_COLOR_NEVER);
+    assert(!snag_render_set_view(&render, SNAG_RENDER_ROLLOUT));
+    /* Live ASR dispatch is immediate; its durable observation does not repeat it. */
+    assert(!snag_render_voice_event(&render, transcript, 0u, 0u));
+    json_decref(transcript);
+    assert(!snag_render_durable(&render, session.log_fd, source, "voice_event", 0u, 0u));
+    assert(!snag_session_commit(&session, "retry_auto_changed", json_pack("{s:s}",
+        "value", "on"), NULL, error, sizeof(error)));
+    int64_t position = snag_seek(session.log_fd, 13, SEEK_SET);
+    assert(position == 13);
+    while (snag_render_view_pending(&render))
+        assert(!snag_render_flush_pending(&render, 8u));
+    assert(snag_seek(session.log_fd, 0, SEEK_CUR) == position);
+    struct snag_render_source invalid = source;
+    invalid.native_sequence = invalid.native_boundary.next_seq;
+    assert(snag_render_durable(&render, session.log_fd, invalid, "goal_lock_changed",
+        0u, 0u) < 0 && errno == EINVAL);
+    snag_render_free(&render);
+    char output[4096];
+    assert(capture_close(&capture, output, sizeof(output), 0u));
+    assert(count_text(output, "native-pinned-caption") == 1u);
+    snag_session_close(&session);
+    snag_store_close(&store);
 }
 
 static void
@@ -3693,6 +3753,7 @@ main(void)
     test_tool_previews();
     test_hosted_search_rows();
     test_semantic_history();
+    test_native_durable_source();
     test_voice_tool_history();
     test_live_downgrade();
     for (unsigned int verbosity = 0u; verbosity <= 6u; ++verbosity) test_append_only_views(verbosity);

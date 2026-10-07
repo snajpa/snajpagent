@@ -14,6 +14,7 @@ import tempfile
 from pathlib import Path
 
 import tmux_terminal as harness
+from store_history import create_legacy, journal_paths, read_events
 from test_remote_terminal import RemoteProcess
 from test_session_listing import append_event
 
@@ -45,22 +46,25 @@ def check(binary):
                 command = shlex.split(result.stderr.splitlines()[-1])
                 expected = [str(binary)] + ([] if default else ["--dotdir", str(state)])
                 assert command == expected + ["--resume", sid], command
-                journal = state / "sessions" / sid / "events.jsonl"
+                journal, = journal_paths(state)
                 before = journal.read_bytes()
                 assert b"irc-ui-secret" not in before
                 result = subprocess.run([*command, "-e", "--", "again"], cwd=home, env=env,
                                         capture_output=True, text=True, timeout=20)
                 assert result.returncode == 0, result.stderr
                 assert shlex.split(result.stderr.splitlines()[-1]) == command
-                turns = [e["data"] for e in map(json.loads, journal.read_text().splitlines())
+                turns = [e["data"] for e in read_events(journal)
                          if e["type"] == "turn_started"]
                 assert len(turns) == 2, turns
                 assert str(docs / "AGENTS.md") in turns[-1]["instructions"], turns[-1]
                 assert journal.read_bytes().startswith(before)
                 if not default:
                     for _ in range(20):
-                        records = list(map(json.loads, journal.read_text().splitlines()))
-                        if any(e["type"] == "session_checkpoint" for e in records):
+                        records = read_events(journal)
+                        checkpoint = ((journal.parent / "checkpoint.1").stat().st_size > 0
+                                      if journal.name == "journal.bin" else
+                                      any(e["type"] == "session_checkpoint" for e in records))
+                        if checkpoint:
                             break
                         result = subprocess.run([*command, "-e", "--", "checkpoint"], cwd=home,
                                                 env=env, capture_output=True, text=True, timeout=20)
@@ -70,7 +74,7 @@ def check(binary):
                     result = subprocess.run([*command, "-e", "--", "after checkpoint"], cwd=home,
                                             env=env, capture_output=True, text=True, timeout=20)
                     assert result.returncode == 0, result.stderr
-                    records = list(map(json.loads, journal.read_text().splitlines()))
+                    records = read_events(journal)
                     turn = [e["data"] for e in records if e["type"] == "turn_started"][-1]
                     assert str(docs / "AGENTS.md") in turn["instructions"], turn
             replacement = root / "replacement docs"
@@ -81,7 +85,7 @@ def check(binary):
                 result = subprocess.run([*command, *options, "-e", "--", "replaced docs"],
                                         cwd=home, env=env, capture_output=True, text=True, timeout=20)
                 assert result.returncode == 0, result.stderr
-                records = list(map(json.loads, journal.read_text().splitlines()))
+                records = read_events(journal)
                 turn = [e["data"] for e in records if e["type"] == "turn_started"][-1]
                 assert str(replacement / "AGENTS.md") in turn["instructions"], turn
                 assert str(docs / "AGENTS.md") not in turn["instructions"], turn
@@ -220,17 +224,19 @@ def check_hosted_rename_resume(binary):
                 hosted = f"127.0.0.1:{sock.getsockname()[1]}"
             base = [str(binary), "--dotdir", str(state)]
             env = {"SNAJPAGENT_IRC_UI_KEY": "irc-ui-secret"}
-            sid = None
+            # The invalid-nickname case appends a correctly hashed JSONL envelope.
+            journal = create_legacy(state, root, "fake", "host-model")
+            sid = journal.parent.name
             before = b""
             for options in (None, [], ["--no-listen", "--no-client"]):
-                args = (["--config", str(config), "-s", hosted, "--no-client",
+                args = (["--resume", sid, "--config", str(config), "-s", hosted, "--no-client",
                          "-n", "before", "-o", "renameop", "-r", "lab", "--no-color"]
                         if options is None else ["--resume", sid, *options])
                 child = RemoteProcess(root, [*base, *args], wrapped=None, extra_env=env)
                 try:
                     child.until(b"READY>", 10)
                     sid = next((state / "sessions").iterdir()).name
-                    journal = state / "sessions" / sid / "events.jsonl"
+                    journal, = journal_paths(state)
                     assert journal.read_bytes().startswith(before)
                     if options is None:
                         os.write(child.master, b"/nick operatorafter\r/nick\r")
@@ -248,7 +254,7 @@ def check_hosted_rename_resume(binary):
                     child.until(b"--resume", 10)
                     child.wait(0)
                     before = journal.read_bytes()
-                    renames = [e["data"] for e in map(json.loads, before.splitlines())
+                    renames = [e["data"] for e in read_events(journal)
                                if e["type"] in ("irc_event", "irc_event_v2") and
                                e["data"]["kind"] == "nick"]
                     assert any(e["local"] and e["nick"] == "before" and e["text"] == "after"
@@ -259,7 +265,7 @@ def check_hosted_rename_resume(binary):
                     child.close()
             # A correctly hashed envelope still needs IRC shape validation.
             invalid = dict(renames[-1], text="invalid nick")
-            seq = json.loads(before.splitlines()[-1])["seq"] + 1
+            seq = read_events(journal)[-1]["seq"] + 1
             append_event(journal, "irc_event_v2", invalid)
             child = RemoteProcess(root, [*base, "--resume", sid], wrapped=None, extra_env=env)
             try:

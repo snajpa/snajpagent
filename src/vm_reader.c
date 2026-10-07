@@ -505,7 +505,7 @@ out:
 struct output_preview {
     struct snag_vm_reader *reader;
     const char *handle;
-    uint64_t from[2], end[2], needed[2], covered[2];
+    uint64_t from[2], end[2], needed[2], covered[2], end_seq;
     json_t *events;
 };
 
@@ -525,6 +525,7 @@ preview_event(void *opaque, const struct snag_session *state, uint64_t seq,
     (void)error;
     (void)size;
     if (read_canceled(preview->reader)) return snag_errno(ECANCELED);
+    if (seq >= preview->end_seq) return snag_errno(EINVAL);
     const char *handle = snag_json_string(data, "handle");
     if (strcmp(type, "process_output") || !handle || strcmp(handle, preview->handle)) return 0;
     uint64_t stream, offset;
@@ -552,10 +553,7 @@ load_preview(struct snag_vm_reader *reader, json_t *event, const json_t *ref,
     unsigned int columns, char *error, size_t size)
 {
     struct output_preview preview = {.reader = reader, .handle = snag_json_string(ref, "handle")};
-    uint64_t begin, end;
-    if (!preview.handle || snag_json_integer_u64(ref, "log_start", &begin) < 0 ||
-        snag_json_integer_u64(ref, "log_end", &end) < 0 || begin > end ||
-        end > (uint64_t)reader->current->session.log_end) return snag_errno(EINVAL);
+    if (!preview.handle) return snag_errno(EINVAL);
     size_t limit = snag_presentation_limit(SNAG_PRESENT_OUTPUT, 2u), secret = 0u;
     for (size_t i = 0u; i < reader->secrets.count; ++i) {
         size_t length = strlen(reader->secrets.values[i]);
@@ -579,22 +577,23 @@ load_preview(struct snag_vm_reader *reader, json_t *event, const json_t *ref,
     if (preview_ready(&preview)) return 0;
     struct snag_session *view = &reader->current->session;
     struct snag_journal_cursor cursor, tail;
-    if (snag_session_history_cursor_at(view, (int64_t)begin, &cursor, error, size) < 0 ||
-        snag_session_history_cursor_at(view, (int64_t)end, &tail, error, size) < 0) return -1;
-    if (tail.next_seq > (uint64_t)json_integer_value(json_object_get(event, "seq")))
-        return snag_errno(EINVAL);
+    uint64_t sequence = (uint64_t)json_integer_value(json_object_get(event, "seq"));
+    if (snag_session_history_output_range(view, sequence, ref,
+        &cursor, &tail, error, size) < 0) return -1;
+    preview.end_seq = tail.next_seq;
     int rc = -1;
     json_t *blocks = NULL;
     struct snag_buf text = {.max = SNAG_MEMORY_LIMIT / 2u};
     preview.events = json_array();
     if (!preview.events) goto out;
-    while (cursor.offset < (int64_t)end && !preview_ready(&preview)) {
-        uint64_t left = end - (uint64_t)cursor.offset;
-        size_t bytes = left < SNAG_JOURNAL_PAGE_BYTES ? (size_t)left : SNAG_JOURNAL_PAGE_BYTES;
-        if (snag_session_each_event_forward(view, &cursor, bytes,
+    while (cursor.next_seq < tail.next_seq && !preview_ready(&preview)) {
+        if (snag_session_each_event_forward(view, &cursor, SNAG_JOURNAL_PAGE_BYTES,
             preview_event, &preview, error, size) < 0) goto out;
     }
-    if (!preview_ready(&preview) || cursor.offset > (int64_t)end) { errno = EINVAL; goto out; }
+    if (!preview_ready(&preview) || cursor.next_seq > tail.next_seq) {
+        errno = EINVAL;
+        goto out;
+    }
     blocks = snag_vm_transcript_blocks(preview.events, 3u, columns, false, true, true,
         &reader->secrets, read_canceled, reader, error, size);
     if (!blocks) goto out;
@@ -707,7 +706,7 @@ scan_rows(struct snag_vm_reader *reader, struct snag_vm_read_result *result)
         scan_progress(reader, (uint64_t)page.cursor.offset, page.cursor.next_seq,
             (uint64_t)page.tail.offset);
         struct snag_journal_cursor begin = page.request.reverse ? page.cursor : page.request.cursor;
-        if ((!remaining && rows) || (down ? !page.more : !begin.offset)) { rc = 0; break; }
+        if ((!remaining && rows) || (down ? !page.more : begin.next_seq <= 1u)) { rc = 0; break; }
         if (rows) --remaining;
         page.request.reverse = !down;
         page.request.cursor = page.cursor;
@@ -801,7 +800,7 @@ again:
         bool restart = false;
         /* The first visible field may start mid-line or mid-word. A result
          * there needs the retained prefix to distinguish a clamp from a hit. */
-        if (begin.offset && ((status < 0 && errno == ESTALE) ||
+        if (begin.next_seq > 1u && ((status < 0 && errno == ESTALE) ||
             (!status && !strcmp(first_key, result->match.key)))) {
             snag_vm_navigation_close(navigation);
             navigation = snag_vm_navigation_open(&request->navigation);
@@ -987,7 +986,7 @@ read_page(struct snag_vm_reader *reader, struct snag_vm_read_result *result)
             if (snag_session_each_event_forward(view, &result->cursor,
                 SNAG_JOURNAL_PAGE_BYTES, read_event, &page,
                 result->error, sizeof(result->error)) < 0) goto failed;
-            result->more = result->cursor.offset < result->tail.offset;
+            result->more = result->cursor.next_seq < result->tail.next_seq;
         }
         if (request->project && project_history(reader, result) < 0) goto failed;
     } while (result->more && ((request->route && !json_array_size(result->events)) ||

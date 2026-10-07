@@ -246,8 +246,8 @@ snag_response_graph_set_provider_id(struct snag_response_graph *graph, const cha
     return 0;
 }
 
-static bool
-tool_name_valid(const char *name)
+bool
+snag_tool_name_valid(const char *name)
 {
     return snag_read_only_tool(name) || snag_string_in(name,
         "exec_command write_stdin speak_text apply_patch write_file edit_file cd "
@@ -278,7 +278,7 @@ item_valid(const json_t *value)
     if (!strcmp(kind, "tool_call")) return snag_json_exact_keys(value,
             "arguments call_id kind name provider_call_id provider_item_id") &&
             snag_provider_id_valid(snag_json_string(value, "provider_call_id")) &&
-            tool_name_valid(snag_json_string(value, "name")) &&
+            snag_tool_name_valid(snag_json_string(value, "name")) &&
             arguments_bounded(json_object_get(value, "arguments"));
     return snag_string_in(kind, "assistant refusal") &&
         snag_json_exact_keys(value, "kind local_item_id phase provider_item_id text") &&
@@ -339,7 +339,7 @@ snag_response_graph_add_call(struct snag_response_graph *graph,
     char id[SNAG_ID_HEX_LEN + 1u];
     json_t *value;
     if (!snag_provider_id_valid(provider_item_id) || !snag_provider_id_valid(provider_call_id) ||
-        !tool_name_valid(name) || !arguments_bounded(arguments)) {
+        !snag_tool_name_valid(name) || !arguments_bounded(arguments)) {
         json_decref(arguments);
         return snag_errno(EINVAL);
     }

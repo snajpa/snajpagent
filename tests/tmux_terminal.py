@@ -20,6 +20,7 @@ import time
 from contextlib import contextmanager
 from pathlib import Path
 
+from store_history import create_legacy, journal_paths, read_events as journal_events
 from test_upload_client import FixtureChildren
 
 # Waits for expected output tolerate a loaded host. Short literals in the
@@ -79,20 +80,14 @@ NATIVE_FUNCTION_NAMES = {
 
 
 def read_events(dotdir):
-    paths = sorted((dotdir / "sessions").glob("*/events.jsonl"))
+    paths = sorted(journal_paths(dotdir))
     if len(paths) != 1:
         raise AssertionError(f"expected one session log, got {paths!r}")
-    events = []
-    # A live writer can expose part of its final JSON/UTF-8 record. Frame
-    # complete records before decoding, and still reject malformed full lines.
-    for line in paths[0].read_bytes().split(b"\n")[:-1]:
-        if line.strip():
-            events.append(json.loads(line))
-    return paths[0], events
+    return paths[0], journal_events(paths[0])
 
 
 def maybe_events(dotdir):
-    paths = sorted((dotdir / "sessions").glob("*/events.jsonl"))
+    paths = sorted(journal_paths(dotdir))
     if len(paths) != 1:
         return None, []
     try:
@@ -444,12 +439,7 @@ class FakeResponses:
         calls = [item for item in request["input"] if item.get("type") == "function_call"]
         outputs = {item["call_id"]: item["output"] for item in request["input"]
                    if item.get("type") == "function_call_output"}
-        jobs = []
-        for item in current_host_context(request):
-            text = item.get("content", "")
-            if isinstance(text, str) and "The preceding JSON describes unsettled commands" in text:
-                text = text.removeprefix("[snajpagent host continuation — not a new user message]\n")
-                jobs = json.loads(text.split("\n", 1)[0])
+        jobs = unsettled_commands(request)
         if not calls:
             # A cannot finish until B launches: this detects actual overlap,
             # not merely several call items or a fast serial timing result.
@@ -2972,7 +2962,7 @@ def run_blank_enter_case(binary, root, active=False, chat=False, width=100):
         marker = "chat>" if chat else "busy>" if active else "idle>"
         before = terminal.capture().count(marker)
         before_log = maybe_events(state)[1]
-        before_sessions = set((state / "sessions").glob("*/events.jsonl"))
+        before_sessions = set(journal_paths(state))
         history = state / "prompt_history"
         before_history = history.read_bytes() if history.exists() else b""
         for index in range(3):
@@ -2988,7 +2978,7 @@ def run_blank_enter_case(binary, root, active=False, chat=False, width=100):
         log = maybe_events(state)[1]
         for kind in ("turn_started", "input_received", "steering_added", "future_turn_queued", "turn_cancel_requested"):
             assert len(event_list(log, kind)) == len(event_list(before_log, kind)), (kind, log)
-        assert set((state / "sessions").glob("*/events.jsonl")) == before_sessions
+        assert set(journal_paths(state)) == before_sessions
         assert (history.read_bytes() if history.exists() else b"") == before_history
         terminal.run("send-keys", "-t", terminal.target, *(["Enter"] * 40))
         terminal.wait_until(lambda text: text.count(marker) == before + 44,
@@ -3037,11 +3027,11 @@ def run_blank_enter_stream_case(binary, root, help_commands=False):
                 args=("--no-listen", "--no-client"),
                 environment={"SNAJPAGENT_IRC_UI_KEY": "irc-ui-secret"}) as terminal:
             terminal.wait("idle>")
-            before_sessions = set((state / "sessions").glob("*/events.jsonl"))
+            before_sessions = set(journal_paths(state))
             terminal.run("send-keys", "-t", terminal.target, "Enter", "Enter")
             terminal.wait_until(lambda text: text.count("idle>") == 3, "idle blank lines")
             assert not requests
-            assert set((state / "sessions").glob("*/events.jsonl")) == before_sessions
+            assert set(journal_paths(state)) == before_sessions
             assert not event_list(maybe_events(state)[1], "turn_started")
             terminal.submit("stream-check")
             assert ready.wait(SUPPLY_TIMEOUT)
@@ -3144,10 +3134,10 @@ def run_history_length_case(binary, root, active=False, chat=False, width=100, v
         terminal = TmuxTerminal(case / "terminal", binary, workspace, state, config, width, 32,
             args=("--no-listen", "--no-client") + ("-v",) * verbosity, environment=env)
         terminal.wait("host-model/medium", join_wrapped=True)
-        before_sessions = set((state / "sessions").glob("*/events.jsonl"))
+        before_sessions = set(journal_paths(state))
         terminal.submit("/history")
         wait_normalized(terminal, "history: 0 shown · 0 completed among shown · 0 total", timeout=10)
-        assert set((state / "sessions").glob("*/events.jsonl")) == before_sessions
+        assert set(journal_paths(state)) == before_sessions
         assert not event_list(maybe_events(state)[1], "turn_started")
         terminal.submit("seed history check")
         wait_event_count(state, "turn_completed", 1)
@@ -3208,12 +3198,13 @@ def run_resume_history_case(binary, root):
         result = subprocess.run(command + ["--", prompt], cwd=workspace,
                                 capture_output=True, text=True)
         assert result.returncode == 0, result.stderr
-        session = next((state / "sessions").iterdir()).name
-    log = state / "sessions" / session / "events.jsonl"
+        session = journal_paths(state)[0].parent.name
+    log, initial = read_events(state)
+    before_sequence = initial[-1]["seq"]
     def assert_history_preserved():
         current = log.read_bytes()
         assert current.startswith(before), "resume rewrote saved history"
-        updates = [json.loads(line) for line in current[len(before):].splitlines()]
+        updates = [event for event in journal_events(log) if event["seq"] > before_sequence]
         assert all(e["type"] == "irc_snapshot" for e in updates), updates
 
     before = log.read_bytes()
@@ -4557,6 +4548,10 @@ def run_reasoning_boundary_cases(binary, root, provider, environment,
         provider.runtime_handler = respond
         try:
             command = [str(binary), "--dotdir", str(state), "--config", str(config)]
+            if mode != "followup":
+                # This private crash fixture cuts original hash-chain envelopes.
+                legacy = create_legacy(state, case, "fake", "host-model")
+                command.extend(["--resume", legacy.parent.name])
             seed = subprocess.run([*command, "-e", "--", "/ro inspect marker" if readonly else "Execute one harmless marker command"],
                                   cwd=case, env={**environment, "HOME": str(case)},
                                   capture_output=True, text=True, timeout=20)
@@ -5979,8 +5974,12 @@ def run_provider_retry_input_cases(binary, root, provider, environment):
             handler.close_connection = True
 
         provider.runtime_handler = respond
+        resume = []
+        if mode == "queue":
+            legacy = create_legacy(case / "state", workspace, "fake", "host-model")
+            resume = ["--resume", legacy.parent.name]
         terminal = TmuxTerminal(case / "term", binary, workspace, case / "state", config,
-            140, 28, args=["-s", endpoint, "-n", "retrybot", "-o", "retryop", "-r", "lab"],
+            140, 28, args=[*resume, "-s", endpoint, "-n", "retrybot", "-o", "retryop", "-r", "lab"],
             environment=environment)
         peer = None
         try:
@@ -6382,8 +6381,12 @@ def run_policy_partial_goal_cases(binary, root, provider, environment,
             handler.close_connection = True
 
         provider.runtime_handler = respond
+        resume = []
+        if mode == "exhausted":
+            legacy = create_legacy(state, case, "fake", "host-model")
+            resume = ["--resume", legacy.parent.name]
         terminal = TmuxTerminal(case / "term", binary, case, state, config, 140, 28,
-                                environment=environment)
+                                args=resume, environment=environment)
         try:
             terminal.wait("host-model/medium")
             if mode == "resume":
@@ -6759,6 +6762,15 @@ def current_host_context(request):
             stop = next(i for i in range(index + 1, len(items)) if items[i].get("content") == end)
             return items[index + 1:stop]
     return items
+
+
+def unsettled_commands(request):
+    for item in current_host_context(request):
+        text = item.get("content", "")
+        if isinstance(text, str) and "The preceding JSON describes unsettled commands" in text:
+            text = text.removeprefix("[snajpagent host continuation — not a new user message]\n")
+            return json.loads(text.split("\n", 1)[0])
+    return []
 
 
 def run_host_cache_prefix_case(binary, root):
@@ -7628,8 +7640,12 @@ def run_compacted_goal_cases(binary, root, modes=("resume", "recover", "manual",
         provider.runtime_handler = respond
         try:
             # Establish genuine historical user input; then summarize it away.
+            resume = []
+            if mode == "legacy":
+                legacy = create_legacy(state, workspace, "fake", "host-model")
+                resume = ["--resume", legacy.parent.name]
             result = subprocess.run([str(binary), "--dotdir", str(state), "--config", str(config),
-                                     "-e", "--", "seed-user-café"],
+                                     *resume, "-e", "--", "seed-user-café"],
                                     env={**environment, "HOME": str(workspace)},
                                     capture_output=True, text=True, timeout=10)
             assert result.returncode == 0, result.stderr
@@ -9006,8 +9022,12 @@ def run_capacity_handoff_cases(binary, root, modes=("queue", "chat", "cancel")):
 
         provider.runtime_handler = respond
         try:
+            resume = []
+            if mode == "queue":
+                legacy = create_legacy(state, case, "fake", "host-model")
+                resume = ["--resume", legacy.parent.name]
             terminal = TmuxTerminal(case / "t", binary, case, state, config, 130, 28,
-                args=("-s", endpoint, "-n", "recoverybot", "-o", "recoveryop", "-r", "lab"),
+                args=(*resume, "-s", endpoint, "-n", "recoverybot", "-o", "recoveryop", "-r", "lab"),
                 environment=environment)
             terminal.wait(f"recoveryop@{MACHINE_HOSTNAME} :")
             terminal.submit("seed history")
@@ -9156,7 +9176,7 @@ def run_tool_yield_cases(binary, root, provider, environment):
             if operator:
                 deadline = time.monotonic() + 5.0
                 while True:
-                    logs = list((terminal.dotdir / "sessions").glob("*/events.jsonl"))
+                    logs = journal_paths(terminal.dotdir)
                     log = read_events(terminal.dotdir)[1] if logs else []
                     if len(event_list(log, "tool_started")) >= (2 if closing else 1) and (workspace / "command.pid").exists():
                         break

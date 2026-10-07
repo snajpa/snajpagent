@@ -5,6 +5,9 @@
 #include "instructions.h"
 #include "irc.h"
 #include "snajpagent.h"
+#include "store_binary_import.h"
+#include "store_binary_legacy.h"
+#include "store_binary_replay.h"
 #include "store_record.h"
 #include <errno.h>
 #include <limits.h>
@@ -20,6 +23,7 @@
  * event. Its maximum covers the active provider request and pending state. */
 #define SNAG_CHECKPOINT_EVENT_MAX (128u * 1024u * 1024u)
 static void voice_projection_free(struct snag_voice_projection *);
+static void close_binary_session(struct snag_session *);
 static int
 open_dir_path(const char *path)
 {
@@ -184,17 +188,26 @@ snag_session_pending_steering_unadmitted(const struct snag_session *session)
         if (session->pending_steering[i].first_context_ms) return false;
     return true;
 }
+int
+snag_session_option_arity(const char *name)
+{
+    if (snag_string_in(name, "--no-listen --no-client --markdown --no-markdown -v")) return 0;
+    if (snag_string_in(name,
+        "--config -d --color --listen --client --model-nick --operator-nick --room-name")) {
+        return 1;
+    }
+    return -1;
+}
+
 bool
 snag_session_options_valid(const json_t *args)
 {
     if (!json_is_array(args)) return false;
     for (size_t i = 0u; i < json_array_size(args); ++i) {
         const char *name = json_string_value(json_array_get(args, i));
-        if (snag_string_in(name, "--no-listen --no-client --markdown --no-markdown -v"))
-            continue;
-        if (!snag_string_in(name,
-                "--config -d --color --listen --client --model-nick --operator-nick --room-name") ||
-            !snag_text_valid(json_string_value(json_array_get(args, ++i)),
+        int arity = snag_session_option_arity(name);
+        if (arity == 0) continue;
+        if (arity < 0 || !snag_text_valid(json_string_value(json_array_get(args, ++i)),
                 1u, SNAG_PATH_MAX_BYTES)) return false;
     }
     return true;
@@ -235,6 +248,7 @@ free_session_state(struct snag_session *session)
 void
 snag_session_close(struct snag_session *session)
 {
+    close_binary_session(session);
     if (session->on_commit_free) session->on_commit_free(session->on_commit_opaque);
     voice_projection_free(session->voice_projection);
     if (session->log_fd >= 0) (void)close(session->log_fd);
@@ -272,7 +286,13 @@ int
 snag_store_open_session_files(struct snag_session *session, bool create, char *error, size_t error_size)
 {
     if (lock_session(session->dir_fd, &session->lock_fd, error, error_size) < 0) return -1;
-    session->log_fd = snag_open_private_append_at(session->dir_fd, "events.jsonl", create);
+    bool native = !create;
+    session->log_fd = snag_open_private_append_at(session->dir_fd,
+        native ? "journal.bin" : "events.jsonl", create);
+    if (native && session->log_fd < 0 && errno == ENOENT) {
+        native = false;
+        session->log_fd = snag_open_private_append_at(session->dir_fd, "events.jsonl", false);
+    }
     if (session->log_fd < 0)
         return snag_errorf(error, error_size, "cannot open event log: %s", strerror(errno));
     if (snag_fd_cloexec(session->log_fd) < 0 ||
@@ -280,7 +300,7 @@ snag_store_open_session_files(struct snag_session *session, bool create, char *e
     session->log_end = snag_seek(session->log_fd, 0, SEEK_END);
     if (session->log_end < 0)
         return snag_errorf(error, error_size, "cannot seek event log: %s", strerror(errno));
-    return 0;
+    return native ? 1 : 0;
 }
 static bool
 session_closure_event(const char *type)
@@ -539,6 +559,32 @@ process_label(char out[257], const char *text)
     while (n && !snag_utf8_valid((const unsigned char *)text, n, true)) --n;
     if (n) memcpy(out, text, n);
     out[n] = '\0';
+}
+
+int
+snag_pending_call_from_item(const struct snag_response_item *item, const char *cwd,
+    struct snag_pending_call *out)
+{
+    if (!item || !cwd || !out || item->kind != SNAG_ITEM_TOOL_CALL || !item->name ||
+        !json_is_object(item->arguments) || !snag_hex_is_lower(item->call_id, SNAG_ID_HEX_LEN))
+        return snag_errno(EINVAL);
+    struct snag_pending_call value = {0};
+    memcpy(value.call_id, item->call_id, sizeof(value.call_id));
+    if (!snag_strcpy(value.tool_name, sizeof(value.tool_name), item->name))
+        return snag_errno(EINVAL);
+    if (!strcmp(item->name, "write_stdin")) {
+        const char *handle = snag_json_string(item->arguments, "handle");
+        if (handle && snag_hex_is_lower(handle, SNAG_ID_HEX_LEN))
+            memcpy(value.process_handle, handle, sizeof(value.process_handle));
+    }
+    if (!strcmp(item->name, "exec_command")) {
+        memcpy(value.process_handle, item->call_id, sizeof(value.process_handle));
+        process_label(value.command, snag_json_string(item->arguments, "command"));
+        process_label(value.workdir, snag_json_string(item->arguments, "workdir"));
+    }
+    if (snag_tool_action_digest(item, cwd, value.action_sha256) < 0) return -1;
+    *out = value;
+    return 0;
 }
 
 int
@@ -2426,24 +2472,12 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
                     session->pending_call_capacity = capacity;
                 }
                 pending = &session->pending_calls[session->pending_call_count++];
-                memset(pending, 0, sizeof(*pending));
-                memcpy(pending->call_id, item->call_id, sizeof(pending->call_id));
-                if (!snag_strcpy(pending->tool_name, sizeof(pending->tool_name), item->name)) {
+                if (strlen(item->name) >= sizeof(pending->tool_name)) {
                     clause = "tool-name";
                     diag_call = item->call_id;
                     goto invalid;
                 }
-                if (strcmp(item->name, "write_stdin") == 0) {
-                    const char *handle = snag_json_string(item->arguments, "handle");
-                    if (handle && snag_hex_is_lower(handle, SNAG_ID_HEX_LEN))
-                        memcpy(pending->process_handle, handle, sizeof(pending->process_handle));
-                }
-                if (strcmp(item->name, "exec_command") == 0) {
-                    memcpy(pending->process_handle, item->call_id, sizeof(pending->process_handle));
-                    process_label(pending->command, snag_json_string(item->arguments, "command"));
-                    process_label(pending->workdir, snag_json_string(item->arguments, "workdir"));
-                }
-                if (snag_tool_action_digest(item, session->cwd, pending->action_sha256) < 0) {
+                if (snag_pending_call_from_item(item, session->cwd, pending) < 0) {
                     return -1;
                 }
             }
@@ -2775,6 +2809,15 @@ invalid:
     }
 }
 
+int
+snag_store_reduce_event(struct snag_session *state, const char *type, const json_t *data,
+    uint64_t sequence, char *error, size_t error_size)
+{
+    if (!state || !type || !json_is_object(data) || !sequence)
+        return snag_fail(error, error_size, EINVAL, "invalid verified state transition");
+    return apply_event(state, type, data, sequence, false, true, error, error_size);
+}
+
 static ssize_t
 session_read_at(struct snag_session *session, void *buffer, size_t size, int64_t offset)
 {
@@ -2968,8 +3011,7 @@ snag_store_reconcile_legacy(struct snag_session *source, struct snag_session *re
     int rc = read_event_log(source, &verifier, before.st_size, SNAG_TAIL_IGNORE,
         fn, opaque, NULL, false, recovery, &complete_end, &next_seq, error, error_size);
     if (rc == 0 && (snag_fstat(source->log_fd, &after) < 0 ||
-        before.st_dev != after.st_dev || before.st_ino != after.st_ino ||
-        before.st_size != after.st_size || before.st_mtime != after.st_mtime)) {
+        !snag_file_unchanged(&before, &after))) {
         recovery->problem_seq = 1u;
         recovery->problem_start = 0;
         recovery->problem_end = before.st_size;
@@ -3126,6 +3168,47 @@ invalid:
     return snag_fail(error, error_size, EINVAL, "invalid history record boundary");
 }
 
+int
+snag_store_legacy_cursor_at(struct snag_session *session, int64_t offset,
+    struct snag_journal_cursor *out, char *error, size_t error_size)
+{
+    if (!session || !out || (!session->pending_log && session->log_fd < 0) ||
+        offset < 0 || offset > session->log_end || !session->next_seq)
+        return snag_fail(error, error_size, EINVAL, "invalid legacy cursor boundary");
+    struct snag_journal_cursor cursor = {.offset = offset};
+    if (offset == session->log_end) {
+        cursor.next_seq = session->next_seq;
+        memcpy(cursor.prev_sha256, session->prev_sha256, sizeof(cursor.prev_sha256));
+    } else {
+        unsigned char delimiter;
+        ssize_t got;
+        if (offset) {
+            do { got = session_read_at(session, &delimiter, 1u, offset - 1); }
+            while (got < 0 && errno == EINTR);
+            if (got < 0) return -1;
+            if (got != 1 || delimiter != '\n')
+                return snag_fail(error, error_size, EINVAL, "legacy cursor is not a line boundary");
+        }
+        int64_t end = 0;
+        errno = 0;
+        json_t *record = read_record_at(session, offset, &end);
+        if (!record) return snag_fail(error, error_size, errno ? errno : EINVAL,
+            "cannot read legacy cursor record");
+        /* The caller already verified this envelope and chain. Its derived
+         * checkpoint pointer may have been discarded; it is not cursor authority. */
+        const char *prev = snag_json_string(record, "prev_sha256");
+        int rc = snag_json_integer_u64(record, "seq", &cursor.next_seq);
+        if (!rc && (!cursor.next_seq || cursor.next_seq >= session->next_seq ||
+            (offset == 0) != (cursor.next_seq == 1u) || end <= offset || end > session->log_end ||
+            !prev || !snag_hex_is_lower(prev, SNAG_SHA256_HEX_LEN))) rc = snag_errno(EINVAL);
+        if (!rc) memcpy(cursor.prev_sha256, prev, sizeof(cursor.prev_sha256));
+        json_decref(record);
+        if (rc < 0) return -1;
+    }
+    *out = cursor;
+    return 0;
+}
+
 static int
 history_error(struct snag_session *session, char *error, size_t error_size, const char *detail)
 {
@@ -3135,6 +3218,13 @@ history_error(struct snag_session *session, char *error, size_t error_size, cons
     }
     return snag_fail(error, error_size, EINVAL, "%s", detail);
 }
+
+/* Explicit history readers authenticate their requested prefix, separately from
+ * bounded checkpoint admission. Native observation extends only that prefix. */
+static int native_history_stage(struct snag_session *, uint64_t,
+    const struct snag_journal_cursor *, bool *, char *, size_t);
+static int native_history_cursor(struct snag_session *, uint64_t, bool,
+    struct snag_journal_cursor *, char *, size_t);
 
 static bool
 history_tail_valid(const struct snag_journal_cursor *tail)
@@ -3147,7 +3237,7 @@ history_tail_valid(const struct snag_journal_cursor *tail)
 
 static int
 history_source_open(struct snag_store *store, struct snag_session *session, const char *id,
-    int64_t *size, char *error, size_t error_size)
+    int64_t *size, bool *native, char *error, size_t error_size)
 {
     if (!store || !session || session->id[0] || session->pending_log ||
         session->log_fd >= 0 || session->lock_fd >= 0 || session->dir_fd >= 0 ||
@@ -3155,7 +3245,12 @@ history_source_open(struct snag_store *store, struct snag_session *session, cons
         return snag_fail(error, error_size, EINVAL, "invalid source history reader");
     }
     if (snag_session_locate(store, session, id, NULL, NULL, error, error_size) < 0) return -1;
-    session->log_fd = snag_open_read_security_at(session->dir_fd, "events.jsonl", false);
+    *native = true;
+    session->log_fd = snag_open_read_security_at(session->dir_fd, "journal.bin", false);
+    if (session->log_fd < 0 && errno == ENOENT) {
+        *native = false;
+        session->log_fd = snag_open_read_security_at(session->dir_fd, "events.jsonl", false);
+    }
     if (session->log_fd < 0) {
         return snag_errorf(error, error_size, "cannot open source history: %s", strerror(errno));
     }
@@ -3195,10 +3290,13 @@ snag_session_history_open(struct snag_store *store, struct snag_session *session
         return snag_fail(error, error_size, EINVAL, "invalid committed history prefix");
     }
     int64_t size;
-    if (history_source_open(store, session, id, &size, error, error_size) < 0) return -1;
+    bool native;
+    if (history_source_open(store, session, id, &size, &native, error, error_size) < 0) return -1;
     if (size < tail->offset) {
         return snag_fail(error, error_size, EINVAL, "source history ends before committed prefix");
     }
+    if (native) return native_history_stage(session, (uint64_t)tail->offset, tail,
+        NULL, error, error_size);
     session->log_end = tail->offset;
     session->next_seq = tail->next_seq;
     memcpy(session->prev_sha256, tail->prev_sha256, sizeof(session->prev_sha256));
@@ -3206,14 +3304,16 @@ snag_session_history_open(struct snag_store *store, struct snag_session *session
 }
 
 static int
-history_identity_valid(struct snag_session *session, int64_t end, char *error, size_t error_size)
+history_identity_valid(struct snag_session *session, int64_t end, bool native,
+    char *error, size_t error_size)
 {
     snag_file_info directory, path, journal;
     if (snag_fstat(session->dir_fd, &directory) < 0 ||
         snag_lstat(session->dir_path, &path) < 0 || !S_ISDIR(path.st_mode) ||
         directory.st_dev != path.st_dev || directory.st_ino != path.st_ino ||
         snag_fstat(session->log_fd, &journal) < 0 || journal.st_size < end ||
-        snag_lstat_at(session->dir_fd, "events.jsonl", &path) < 0 || !S_ISREG(path.st_mode) ||
+        snag_lstat_at(session->dir_fd, native ? "journal.bin" : "events.jsonl", &path) < 0 ||
+        !S_ISREG(path.st_mode) ||
         journal.st_dev != path.st_dev || journal.st_ino != path.st_ino) {
         return snag_fail(error, error_size, ESTALE, "history was replaced or truncated");
     }
@@ -3274,10 +3374,13 @@ snag_session_history_snapshot(struct snag_store *store, struct snag_session *ses
     int64_t size;
     if (!incomplete) return snag_fail(error, error_size, EINVAL, "missing history suffix result");
     *incomplete = false;
-    if (history_source_open(store, session, id, &size, error, error_size) < 0) return -1;
+    bool native;
+    if (history_source_open(store, session, id, &size, &native, error, error_size) < 0) return -1;
+    if (native) return native_history_stage(session, (uint64_t)size, NULL, incomplete,
+        error, error_size);
     struct snag_journal_cursor tail;
     if (history_snapshot_tail(session, size, &tail, incomplete, error, error_size) < 0) return -1;
-    if (history_identity_valid(session, tail.offset, error, error_size) < 0) return -1;
+    if (history_identity_valid(session, tail.offset, false, error, error_size) < 0) return -1;
     session->log_end = tail.offset;
     session->next_seq = tail.next_seq;
     memcpy(session->prev_sha256, tail.prev_sha256, sizeof(session->prev_sha256));
@@ -3312,8 +3415,11 @@ snag_session_history_refresh(struct snag_session *session, const struct snag_jou
         (tail->offset == session->log_end && strcmp(tail->prev_sha256, session->prev_sha256))) {
         return snag_fail(error, error_size, ESTALE, "history prefix changed");
     }
-    if (history_identity_valid(session, tail->offset, error, error_size) < 0) return -1;
+    if (history_identity_valid(session, tail->offset, session->binary != NULL,
+        error, error_size) < 0) return -1;
     if (tail->offset == session->log_end) return 0;
+    if (session->binary) return native_history_stage(session, (uint64_t)tail->offset,
+        tail, NULL, error, error_size);
     if (history_boundary_valid(session, error, error_size) < 0) return -1;
     struct snag_journal_cursor previous = {.offset = session->log_end,
         .next_seq = session->next_seq};
@@ -3327,7 +3433,8 @@ snag_session_history_refresh(struct snag_session *session, const struct snag_jou
         rc = snag_session_each_event_forward(session, &cursor, SIZE_MAX,
             history_verify_event, NULL, error, error_size);
     }
-    if (!rc) rc = history_identity_valid(session, tail->offset, error, error_size);
+    if (!rc) rc = history_identity_valid(session, tail->offset, session->binary != NULL,
+        error, error_size);
     if (rc < 0) {
         session->log_end = previous.offset;
         session->next_seq = previous.next_seq;
@@ -3343,10 +3450,13 @@ snag_session_history_observe(struct snag_session *session, bool *incomplete,
     if (!session || !incomplete || session->log_fd < 0 || session->dir_fd < 0 ||
         session->lock_fd >= 0 || session->pending_log || !session->dir_path)
         return snag_fail(error, error_size, EINVAL, "invalid history observation");
-    if (history_identity_valid(session, session->log_end, error, error_size) < 0) return -1;
+    if (history_identity_valid(session, session->log_end, session->binary != NULL,
+        error, error_size) < 0) return -1;
     snag_file_info info;
     if (snag_fstat(session->log_fd, &info) < 0)
         return snag_errorf(error, error_size, "cannot inspect source history: %s", strerror(errno));
+    if (session->binary) return native_history_stage(session, (uint64_t)info.st_size,
+        NULL, incomplete, error, error_size);
     struct snag_journal_cursor tail;
     bool partial;
     if (history_snapshot_tail(session, info.st_size, &tail, &partial, error, error_size) < 0 ||
@@ -3457,6 +3567,8 @@ snag_session_history_cursor_before(struct snag_session *session, uint64_t before
 {
     if (!session || !cursor || before > session->next_seq)
         return snag_fail(error, size, EINVAL, "invalid history sequence");
+    if (session->binary) return native_history_cursor(session, before, false,
+        cursor, error, size);
     struct snag_journal_cursor found;
     if (history_cursor_before(session, before, &found, error, size) < 0) return -1;
     *cursor = found;
@@ -3469,6 +3581,8 @@ snag_session_history_cursor_at(struct snag_session *session, int64_t offset,
 {
     if (!session || !cursor || offset < 0 || offset > session->log_end)
         return snag_fail(error, error_size, EINVAL, "invalid history offset");
+    if (session->binary) return native_history_cursor(session, (uint64_t)offset, true,
+        cursor, error, error_size);
     if (offset == session->log_end) {
         *cursor = (struct snag_journal_cursor){.offset = offset, .next_seq = session->next_seq};
         memcpy(cursor->prev_sha256, session->prev_sha256, sizeof(cursor->prev_sha256));
@@ -3490,14 +3604,21 @@ snag_session_history_cursor_at(struct snag_session *session, int64_t offset,
         "cannot locate verified history offset") : 0;
 }
 
+static int native_history_reverse(struct snag_session *, uint64_t, size_t,
+    snag_session_event_fn, void *, uint64_t *, char *, size_t);
+
 int
 snag_session_each_event_reverse(struct snag_session *session, uint64_t before, size_t scan_bytes,
     snag_session_event_fn fn, void *opaque, uint64_t *next_before, char *error, size_t error_size)
 {
     struct snag_journal_cursor cursor;
-    if (!scan_bytes || !fn || !next_before)
+    if (!session || !scan_bytes || !fn || !next_before)
         return snag_fail(error, error_size, EINVAL, "invalid reverse history scan");
     *next_before = 0u;
+    if (session->binary) {
+        return native_history_reverse(session, before, scan_bytes,
+            fn, opaque, next_before, error, error_size);
+    }
     if (history_cursor_before(session, before, &cursor, error, error_size) < 0) return -1;
     while (cursor.offset > 0 && scan_bytes) {
         int64_t split = previous_newline(session, cursor.offset - 1);
@@ -3537,12 +3658,19 @@ snag_session_each_event_reverse(struct snag_session *session, uint64_t before, s
     return 0;
 }
 
+static int native_history_forward(struct snag_session *, struct snag_journal_cursor *, uint64_t,
+    size_t, snag_session_event_fn, void *, char *, size_t);
+
 int
 snag_session_each_event_forward(struct snag_session *session, struct snag_journal_cursor *cursor,
     size_t scan_bytes, snag_session_event_fn fn, void *opaque, char *error, size_t error_size)
 {
     if (!session || !cursor || !scan_bytes || !fn || session->log_end < 0)
         return snag_fail(error, error_size, EINVAL, "invalid forward history scan");
+    if (session->binary) {
+        return native_history_forward(session, cursor, 0u, scan_bytes,
+            fn, opaque, error, error_size);
+    }
     if (!cursor->next_seq) {
         if (cursor->offset || cursor->prev_sha256[0])
             return snag_fail(error, error_size, EINVAL, "incomplete forward history cursor");
@@ -3744,6 +3872,11 @@ snag_store_scan_log(struct snag_session *session, enum snag_tail_policy tail_pol
     return 0;
 }
 
+static int native_history_each(struct snag_session *, snag_session_event_fn,
+    void *, char *, size_t);
+static int native_history_since(struct snag_session *, const struct snag_process_state *,
+    snag_session_event_fn, void *, char *, size_t);
+
 int
 snag_session_each_event(struct snag_session *session, snag_session_event_fn fn,
                        void *opaque, char *error, size_t error_size)
@@ -3754,6 +3887,7 @@ snag_session_each_event(struct snag_session *session, snag_session_event_fn fn,
         !snag_hex_is_lower(session->id, SNAG_ID_HEX_LEN)) {
         return snag_fail(error, error_size, EINVAL, "invalid session event iterator");
     }
+    if (session->binary) return native_history_each(session, fn, opaque, error, error_size);
     snag_session_init(&verifier);
     memcpy(verifier.id, session->id, sizeof(verifier.id));
     int rc = read_event_log(session, &verifier, session->log_end,
@@ -3768,10 +3902,14 @@ snag_session_each_event_since(struct snag_session *session, const struct snag_pr
                               snag_session_event_fn fn, void *opaque, char *error, size_t error_size)
 {
     struct snag_session verifier;
+    if (!session || !fn)
+        return snag_fail(error, error_size, EINVAL, "invalid process output iterator");
     if (!cursor || !cursor->log_seq) return snag_session_each_event(session, fn, opaque, error, error_size);
     if (session->log_end < 0 || cursor->log_offset > (uint64_t)session->log_end ||
         !snag_hex_is_lower(cursor->log_hash, SNAG_SHA256_HEX_LEN))
         return snag_fail(error, error_size, EINVAL, "invalid process output cursor");
+    if (session->binary)
+        return native_history_since(session, cursor, fn, opaque, error, error_size);
     snag_session_init(&verifier);
     memcpy(verifier.id, session->id, sizeof(verifier.id));
     memcpy(verifier.prev_sha256, cursor->log_hash, sizeof(verifier.prev_sha256));
@@ -3811,6 +3949,9 @@ clone_session_state(const struct snag_session *source, struct snag_session *stag
 {
     *staged = *source;
     staged->pending_calls = NULL;
+    staged->processes = NULL;
+    staged->process_count = 0u;
+    staged->process_capacity = 0u;
     staged->pending_call_capacity = 0u;
     staged->pending_steering = NULL;
     staged->pending_steering_count = 0u;
@@ -3855,9 +3996,6 @@ clone_session_state(const struct snag_session *source, struct snag_session *stag
         for(size_t i=0;i<staged->pending_queue_count;++i)
             staged->pending_queue[i].content=json_incref(source->pending_queue[i].content);
     }
-    staged->processes = NULL;
-    staged->process_count = 0u;
-    staged->process_capacity = 0u;
     if (source->process_capacity) {
         staged->processes = malloc(source->process_capacity * sizeof(*staged->processes));
         if (!staged->processes) return -1;
@@ -3870,9 +4008,1390 @@ clone_session_state(const struct snag_session *source, struct snag_session *stag
            (source->download_queue && !staged->download_queue) ? -1 : 0;
 }
 
+/* Ephemeral proof for the existing single app voice-import operation. Partial
+ * archive bytes outlive this proof and remain inert after abandonment/recovery. */
+struct binary_voice_import {
+    char id[SNAG_ID_HEX_LEN + 1u], source[SNAG_ID_HEX_LEN + 1u];
+    struct snag_journal_cursor begin;
+    uint64_t source_as_of, count, copied;
+};
+
+/* One engine-owned native transaction. The worker owns immutable write bytes;
+ * this object owns mutable frontier/provenance and the provisional reducer. */
+struct snag_binary_session {
+    struct snag_binary_identity identity;
+    struct snag_binary_anchor boundary, proposed_boundary;
+    struct snag_binary_index_tree tree, proposed_tree;
+    struct snag_binary_producer producer, proposed;
+    struct snag_binary_checkpoint_sources sources, proposed_sources;
+    struct binary_voice_import voice_import, proposed_voice_import;
+    struct snag_binary_io *io;
+    struct snag_buf access;
+    struct snag_binary_checkpoint_index available;
+    struct snag_buf checkpoint_access;
+    struct snag_binary_checkpoint_index checkpoint_available;
+    struct snag_binary_index_tree checkpoint_tree;
+    struct snag_binary_publication_result checkpoint_result;
+    uint64_t checkpoint_timestamp;
+    struct snag_session *candidate;
+    char *type;
+    json_t *data;
+    bool io_pending, retryable, retried, faulted, checkpoint_configured;
+    bool checkpoint_pending, checkpoint_failed, checkpoint_published, receipt_candidate;
+    bool index_configured, index_owned;
+    int index_error, index_fd;
+};
+
+static void
+binary_hex(char *out, const unsigned char *bytes, size_t size)
+{
+    static const char digits[] = "0123456789abcdef";
+    for (size_t i = 0u; i < size; ++i) {
+        out[i * 2u] = digits[bytes[i] >> 4u];
+        out[i * 2u + 1u] = digits[bytes[i] & 15u];
+    }
+    out[size * 2u] = '\0';
+}
+
+int
+snag_session_voice_import_cursor(struct snag_session *session, const char *transfer_id,
+    const char *source_id, uint64_t source_as_of, uint64_t count,
+    struct snag_journal_cursor *out, char *error, size_t error_size)
+{
+    if (!session || !out || !snag_hex_is_lower(transfer_id, SNAG_ID_HEX_LEN) ||
+        !snag_hex_is_lower(source_id, SNAG_ID_HEX_LEN) || !strcmp(source_id, session->id) ||
+        !count || count > source_as_of || session->log_end <= 0 || session->next_seq < 2u ||
+        !snag_hex_is_lower(session->prev_sha256, SNAG_SHA256_HEX_LEN))
+        return snag_fail(error, error_size, EINVAL, "invalid voice import capture");
+    struct snag_journal_cursor cursor = {.offset = session->log_end,
+        .next_seq = session->next_seq};
+    strcpy(cursor.prev_sha256, session->prev_sha256);
+    struct snag_binary_session *binary = session->binary;
+    if (binary) {
+        if (binary->candidate || binary->faulted || binary->voice_import.id[0])
+            return snag_fail(error, error_size, EBUSY, "native voice import capture is busy");
+        cursor.offset = (int64_t)binary->boundary.end;
+        cursor.next_seq = binary->boundary.next_seq;
+        binary_hex(cursor.prev_sha256, binary->boundary.digest, sizeof(binary->boundary.digest));
+        struct binary_voice_import proof = {.begin = cursor,
+            .source_as_of = source_as_of, .count = count};
+        strcpy(proof.id, transfer_id);
+        strcpy(proof.source, source_id);
+        binary->voice_import = proof;
+    }
+    *out = cursor;
+    return 0;
+}
+
+void
+snag_session_voice_import_abandon(struct snag_session *session, const char *transfer_id)
+{
+    if (!session || !session->binary || !transfer_id) return;
+    struct snag_binary_session *binary = session->binary;
+    if (!strcmp(binary->voice_import.id, transfer_id))
+        binary->voice_import = (struct binary_voice_import){0};
+    /* A retained immutable archive batch is still canonical work, but its ACK
+     * cannot resurrect an abandoned ephemeral import proof. */
+    if (!strcmp(binary->proposed_voice_import.id, transfer_id))
+        binary->proposed_voice_import = (struct binary_voice_import){0};
+}
+
+static bool
+binary_anchor_equal(const struct snag_binary_anchor *a, const struct snag_binary_anchor *b)
+{
+    return a->end == b->end && a->next_seq == b->next_seq && a->turns == b->turns &&
+        a->previous == b->previous && !memcmp(a->digest, b->digest, sizeof(a->digest));
+}
+
+static void
+binary_discard_candidate(struct snag_binary_session *binary)
+{
+    if (binary->candidate) {
+        free_session_state(binary->candidate);
+        free(binary->candidate);
+        binary->candidate = NULL;
+    }
+    snag_binary_producer_free(&binary->proposed);
+    snag_binary_checkpoint_sources_free(&binary->proposed_sources);
+    free(binary->type);
+    binary->type = NULL;
+    json_decref(binary->data);
+    binary->data = NULL;
+    binary->receipt_candidate = false;
+}
+
+static int
+binary_take(struct snag_binary_session *binary, struct snag_binary_io_result *result,
+    struct snag_buf *batch)
+{
+    for (;;) {
+        int rc = snag_binary_io_take_batch(binary->io, result, batch);
+        if (rc != 1) {
+            binary->io_pending = false;
+            binary->index_error = result->index_error;
+            return rc;
+        }
+        if (snag_wakeup_wait(snag_binary_io_wake(binary->io), -1) < 0 && errno != EINTR) {
+            return -1;
+        }
+    }
+}
+
+static int
+binary_take_checkpoint(struct snag_binary_session *binary)
+{
+    for (;;) {
+        int rc = snag_binary_io_checkpoint_take_access(binary->io,
+            &binary->checkpoint_result, &binary->checkpoint_access);
+        if (rc != 1) {
+            binary->checkpoint_pending = false;
+            return rc;
+        }
+        if (snag_wakeup_wait(snag_binary_io_wake(binary->io), -1) < 0 && errno != EINTR)
+            return -1;
+    }
+}
+
+static void
+close_binary_session(struct snag_session *session)
+{
+    struct snag_binary_session *binary = session->binary;
+    if (!binary) return;
+    /* Drain before descriptor/lock teardown. Closing never releases effects for
+     * an otherwise unacknowledged transaction; recovery observes its real bytes. */
+    if (binary->io_pending) {
+        struct snag_binary_io_result result;
+        struct snag_buf batch = {0};
+        while (binary->io_pending) {
+            if (binary_take(binary, &result, &batch) < 0 && binary->io_pending) {
+                (void)snag_sleep_ms(1u);
+            }
+        }
+        snag_buf_free(&batch);
+    }
+    while (binary->checkpoint_pending) {
+        if (binary_take_checkpoint(binary) < 0 && binary->checkpoint_pending)
+            (void)snag_sleep_ms(1u);
+    }
+    (void)snag_binary_io_close(binary->io);
+    if (binary->index_owned) (void)close(binary->index_fd);
+    binary_discard_candidate(binary);
+    snag_binary_producer_free(&binary->producer);
+    snag_binary_checkpoint_sources_free(&binary->sources);
+    snag_buf_free(&binary->access);
+    snag_buf_free(&binary->checkpoint_access);
+    free(binary);
+    session->binary = NULL;
+}
+
+static int
+native_history_stage(struct snag_session *session, uint64_t end,
+    const struct snag_journal_cursor *tail, bool *incomplete, char *error, size_t error_size)
+{
+    bool empty = tail && !tail->offset && tail->next_seq == 1u;
+    if (empty) end = SNAG_BINARY_HEADER_SIZE;
+    struct snag_binary_session *next = calloc(1u, sizeof(*next));
+    if (!next) return -1;
+    next->index_fd = -1;
+    next->access.max = SIZE_MAX;
+    struct snag_buf scratch = {.max = SNAG_BINARY_BATCH_MAX};
+    bool partial = false;
+    int rc = -1;
+    if (session->binary) {
+        next->identity = session->binary->identity;
+        next->boundary = session->binary->boundary;
+        next->tree = session->binary->tree;
+    } else {
+        unsigned char bytes[SNAG_BINARY_HEADER_SIZE];
+        char id[SNAG_ID_HEX_LEN + 1u];
+        if (snag_pread(session->log_fd, bytes, sizeof(bytes), 0) != (ssize_t)sizeof(bytes) ||
+            snag_binary_header_decode(bytes, sizeof(bytes), &next->identity, &next->boundary) < 0)
+            goto done;
+        binary_hex(id, next->identity.id, sizeof(next->identity.id));
+        if (strcmp(id, session->id)) { errno = EBADMSG; goto done; }
+    }
+    if (next->boundary.end > end) { errno = ESTALE; goto done; }
+    while (next->boundary.end < end) {
+        if (session->history_cancel && session->history_cancel(session->history_cancel_opaque)) {
+            errno = ECANCELED;
+            goto done;
+        }
+        struct snag_binary_batch batch;
+        struct snag_binary_anchor after;
+        int read = snag_binary_batch_read(session->log_fd, end, &next->boundary,
+            &scratch, &batch, &after);
+        if (read < 0) goto done;
+        if (read == 1) {
+            if (tail) { errno = EBADMSG; goto done; }
+            partial = true;
+            break;
+        }
+        if (snag_binary_index_tree_append_batch(NULL, &next->tree, &next->identity,
+            &next->boundary, &after, batch.data, batch.size) < 0) goto done;
+        next->boundary = after;
+    }
+    char digest[SNAG_SHA256_HEX_LEN + 1u];
+    binary_hex(digest, next->boundary.digest, sizeof(next->boundary.digest));
+    if (tail && !empty && (next->boundary.end != (uint64_t)tail->offset ||
+        next->boundary.next_seq != tail->next_seq || strcmp(digest, tail->prev_sha256))) {
+        errno = EBADMSG;
+        goto done;
+    }
+    unsigned char root[32];
+    if (next->boundary.end > INT64_MAX ||
+        snag_binary_index_tree_root(&next->tree, root) < 0 ||
+        snag_binary_checkpoint_index_encode(&next->access, &next->identity, &next->boundary,
+            &next->tree, NULL, 0u) < 0 ||
+        snag_binary_checkpoint_index_decode(next->access.data, next->access.len,
+            &next->identity, &next->boundary, root, &next->available) < 0) goto done;
+    next->index_fd = snag_open_read_security_at(session->dir_fd, "history.idx", false);
+    if (next->index_fd < 0 && errno != ENOENT) goto done;
+    if (next->index_fd >= 0) {
+        if (snag_store_verify_private_fd(next->index_fd, false, "history index",
+            error, error_size) < 0) goto done;
+        next->index_owned = true;
+        next->index_configured = true;
+    }
+    if (history_identity_valid(session, (int64_t)next->boundary.end, true,
+        error, error_size) < 0) goto done;
+    next->checkpoint_configured = true; /* Read-only source custody, no publisher. */
+    close_binary_session(session);
+    session->binary = next;
+    session->snapshot_read_only = true;
+    session->log_end = (int64_t)next->boundary.end;
+    session->next_seq = next->boundary.next_seq;
+    session->turn_count = next->boundary.turns;
+    memcpy(session->prev_sha256, digest, sizeof(session->prev_sha256));
+    if (incomplete) *incomplete = partial;
+    next = NULL;
+    rc = 0;
+done:;
+    int saved = errno;
+    if (next) {
+        if (next->index_fd >= 0) (void)close(next->index_fd);
+        snag_buf_free(&next->access);
+        free(next);
+    }
+    snag_buf_free(&scratch);
+    errno = saved;
+    if (rc < 0) return snag_errorf(error, error_size, "cannot snapshot native history: %s",
+        strerror(errno));
+    return 0;
+}
+
+void
+snag_session_unbind_binary(struct snag_session *session)
+{
+    if (session) close_binary_session(session);
+}
+
+int
+snag_session_bind_binary(struct snag_session *session, const struct snag_binary_identity *identity,
+    const struct snag_binary_anchor *boundary, const struct snag_binary_index_tree *tree,
+    const struct snag_binary_producer *producer,
+    const struct snag_binary_checkpoint_sources *sources, const struct snag_binary_io_ops *ops,
+    char *error, size_t error_size)
+{
+    if (!session || !identity || !boundary || !tree || !producer || !sources || session->binary ||
+        session->pending_log || session->log_fd < 0 ||
+        (session->lock_fd < 0 && !session->snapshot_read_only) ||
+        session->log_end < 0 || boundary->end != (uint64_t)session->log_end ||
+        boundary->next_seq != session->next_seq || boundary->turns != session->turn_count ||
+        !boundary->next_seq || tree->count != boundary->next_seq - 1u ||
+        producer->queue_count != session->pending_queue_count ||
+        sources->queue_count != session->pending_queue_count ||
+        sources->process_count != session->process_count ||
+        sources->download_count != json_array_size(session->download_queue) ||
+        (!!sources->input != !!session->pending_input) ||
+        (!!sources->texts.through != (boundary->next_seq != 1u)) ||
+        sources->texts.through >= boundary->next_seq ||
+        (!!producer->input.creation != !!session->pending_input)) {
+        return snag_fail(error, error_size, EINVAL, "invalid native session binding");
+    }
+    unsigned char bytes[SNAG_BINARY_HEADER_SIZE];
+    struct snag_binary_identity found;
+    struct snag_binary_anchor initial;
+    snag_file_info info;
+    char id[SNAG_ID_HEX_LEN + 1u], digest[SNAG_SHA256_HEX_LEN + 1u];
+    binary_hex(id, identity->id, sizeof(identity->id));
+    binary_hex(digest, boundary->digest, sizeof(boundary->digest));
+    if (strcmp(id, session->id) || strcmp(digest, session->prev_sha256) ||
+        snag_fstat(session->log_fd, &info) < 0 || !S_ISREG(info.st_mode) || info.st_size < 0 ||
+        (uint64_t)info.st_size < boundary->end ||
+        (!session->snapshot_read_only && (uint64_t)info.st_size != boundary->end) ||
+        snag_pread(session->log_fd, bytes, sizeof(bytes), 0) != (ssize_t)sizeof(bytes) ||
+        snag_binary_header_decode(bytes, sizeof(bytes), &found, &initial) < 0 ||
+        found.created_ms != identity->created_ms ||
+        memcmp(found.id, identity->id, sizeof(found.id))) {
+        return snag_fail(error, error_size, EINVAL,
+            "native session boundary does not match journal");
+    }
+    if (boundary->next_seq == 1u && !binary_anchor_equal(boundary, &initial)) {
+        return snag_fail(error, error_size, EINVAL,
+            "native initial boundary does not match header");
+    }
+    struct snag_binary_session *binary = calloc(1u, sizeof(*binary));
+    if (!binary) return snag_fail(error, error_size, ENOMEM, "cannot stage native session owner");
+    binary->identity = *identity;
+    binary->boundary = *boundary;
+    binary->tree = *tree;
+    if (snag_binary_producer_clone(&binary->producer, producer) < 0 ||
+        snag_binary_checkpoint_sources_clone(&binary->sources, sources) < 0 ||
+        (!session->snapshot_read_only &&
+            !(binary->io = snag_binary_io_start(session->log_fd, boundary, ops)))) {
+        int code = errno;
+        snag_binary_producer_free(&binary->producer);
+        snag_binary_checkpoint_sources_free(&binary->sources);
+        free(binary);
+        return snag_fail(error, error_size, code, "cannot start native session owner");
+    }
+    session->binary = binary;
+    return 0;
+}
+
+int
+snag_session_binary_index_setup(struct snag_session *session, int fd,
+    char *error, size_t error_size)
+{
+    if (!session || fd < 0)
+        return snag_fail(error, error_size, EINVAL, "invalid native index attachment");
+    if (session->snapshot_read_only)
+        return snag_fail(error, error_size, EROFS, "snapshot has no native index writer");
+    struct snag_binary_session *binary = session->binary;
+    if (!binary) return snag_fail(error, error_size, ENOTSUP, "session has no native owner");
+    if (binary->faulted)
+        return snag_fail(error, error_size, ESTALE, "native session needs fresh recovery");
+    if (binary->candidate)
+        return snag_fail(error, error_size, EBUSY, "native commit is pending");
+    if (snag_binary_io_index_setup(binary->io, fd, &binary->identity, &binary->tree) < 0)
+        return snag_errorf(error, error_size, "cannot attach native index: %s", strerror(errno));
+    binary->index_configured = true;
+    binary->index_fd = fd;
+    return 0;
+}
+
+int
+snag_session_binary_index_adopt(struct snag_session *session, int fd,
+    char *error, size_t error_size)
+{
+    int rc = snag_session_binary_index_setup(session, fd, error, error_size);
+    if (!rc) session->binary->index_owned = true;
+    return rc;
+}
+
+int
+snag_session_binary_index_status(const struct snag_session *session,
+    char *error, size_t error_size)
+{
+    if (!session) return snag_fail(error, error_size, EINVAL, "invalid native index status");
+    const struct snag_binary_session *binary = session->binary;
+    if (!binary || !binary->index_configured)
+        return snag_fail(error, error_size, ENOTSUP, "native index is not attached");
+    if (binary->faulted)
+        return snag_fail(error, error_size, ESTALE, "native session needs fresh recovery");
+    if (binary->index_error)
+        return snag_fail(error, error_size, binary->index_error,
+            "native index unavailable: %s", strerror(binary->index_error));
+    return 0;
+}
+
+int
+snag_session_binary_projection_read(const struct snag_session *session, uint64_t sequence,
+    const char **type, json_t **out, char *error, size_t error_size)
+{
+    if (!session || !type || !out)
+        return snag_fail(error, error_size, EINVAL, "invalid native source lookup");
+    const struct snag_binary_session *binary = session->binary;
+    if (!binary) return snag_fail(error, error_size, ENOTSUP, "session is not native");
+    if (binary->faulted) return snag_fail(error, error_size, ESTALE, "native writer is faulted");
+    if (!binary->checkpoint_configured)
+        return snag_fail(error, error_size, ENOTSUP, "native source custody is not installed");
+    int rc = snag_binary_checkpoint_projection_read(session->log_fd, &binary->boundary,
+        &binary->available, sequence, type, out);
+    if (rc < 0 && errno == ENOENT && binary->index_configured) {
+        struct snag_buf bytes = {.max = SIZE_MAX};
+        rc = snag_binary_checkpoint_query_read(session->log_fd, binary->index_fd,
+            &binary->boundary, &binary->available, &binary->tree, &sequence, 1u,
+            NULL, NULL, &bytes);
+        if (!rc) {
+            unsigned char root[32];
+            struct snag_binary_checkpoint_index query;
+            rc = snag_binary_index_tree_root(&binary->tree, root);
+            if (!rc) rc = snag_binary_checkpoint_index_decode(bytes.data, bytes.len,
+                &binary->identity, &binary->boundary, root, &query);
+            if (!rc) rc = snag_binary_checkpoint_projection_read(session->log_fd,
+                &binary->boundary, &query, sequence, type, out);
+        }
+        int saved = errno;
+        snag_buf_free(&bytes);
+        errno = saved;
+    }
+    if (rc < 0)
+        return snag_errorf(error, error_size, "cannot read native source: %s", strerror(errno));
+    return 0;
+}
+
+struct native_history {
+    int fd, index_fd;
+    struct snag_binary_anchor through;
+    struct snag_binary_index_tree frontier;
+    struct snag_binary_checkpoint_index available, query;
+    struct snag_buf access, query_bytes;
+    unsigned char root[32];
+    bool has_query, callback_failed, stopped;
+    struct snag_journal_cursor *cursor;
+    size_t remaining;
+    snag_session_event_fn visit;
+    void *opaque;
+    bool (*cancelled)(void *);
+    void *cancel_opaque;
+    char *error;
+    size_t error_size;
+};
+
+static bool
+native_history_cancelled(void *opaque)
+{
+    struct native_history *history = opaque;
+    return history->cancelled && history->cancelled(history->cancel_opaque);
+}
+
+static int
+native_history_query(struct native_history *history, uint64_t sequence)
+{
+    history->has_query = false;
+    history->query_bytes.len = 0u;
+    if (history->index_fd < 0) return snag_errno(ENOENT);
+    if (snag_binary_checkpoint_query_read(history->fd, history->index_fd, &history->through,
+        &history->available, &history->frontier, &sequence, 1u, native_history_cancelled,
+        history, &history->query_bytes) < 0) {
+        return -1;
+    }
+    if (snag_binary_checkpoint_index_decode(history->query_bytes.data, history->query_bytes.len,
+        &history->available.identity, &history->through, history->root, &history->query) < 0) {
+        return -1;
+    }
+    history->has_query = true;
+    return 0;
+}
+
+static int
+native_history_capture(struct native_history *history, uint64_t first,
+    struct snag_binary_cursor *out)
+{
+    const struct snag_journal_cursor *public = history->cursor;
+    static const char zero[] = "0000000000000000000000000000000000000000000000000000000000000000";
+    /* A sequence-based source query supplies no serialized physical cut.
+     * Resolve its predecessor canonically, including admitted semantic roots. */
+    bool begin = first || (!public->next_seq && !public->offset && !public->prev_sha256[0]) ||
+        (public->next_seq == 1u && !public->offset &&
+            !memcmp(public->prev_sha256, zero, sizeof(zero)));
+    uint64_t sequence = first ? first : begin ? 1u : public->next_seq;
+    if (!sequence || sequence > history->through.next_seq || (!begin &&
+        (public->offset < 0 || (uint64_t)public->offset > history->through.end ||
+            public->prev_sha256[SNAG_SHA256_HEX_LEN] ||
+            !snag_hex_is_lower(public->prev_sha256, SNAG_SHA256_HEX_LEN)))) {
+        return snag_errno(EINVAL);
+    }
+    struct snag_binary_cursor captured;
+    if (sequence == history->through.next_seq) {
+        captured = (struct snag_binary_cursor){.before = history->through,
+            .next_seq = sequence, .record_offset = SNAG_BINARY_BATCH_HEADER_SIZE};
+    } else {
+        struct snag_buf scratch = {.max = SNAG_BINARY_BATCH_MAX};
+        struct snag_binary_batch batch, checked;
+        struct snag_binary_anchor before, after;
+        int rc = snag_binary_checkpoint_batch_find(history->fd, &history->through,
+            &history->available, sequence, &scratch, &batch, &before);
+        if (rc < 0 && errno == ENOENT && history->index_fd >= 0) {
+            rc = native_history_query(history, sequence);
+            if (!rc) {
+                rc = snag_binary_checkpoint_batch_find(history->fd, &history->through,
+                    &history->query, sequence, &scratch, &batch, &before);
+            }
+        }
+        if (!rc) {
+            rc = snag_binary_batch_decode(batch.data, batch.size, &before, &checked, &after);
+        }
+        if (!rc) {
+            rc = snag_binary_cursor_capture(&before, &after, &checked, sequence, &captured);
+        }
+        int saved = errno;
+        snag_buf_free(&scratch);
+        errno = saved;
+        if (rc < 0) return -1;
+    }
+    char digest[SNAG_SHA256_HEX_LEN + 1u];
+    binary_hex(digest, captured.before.digest, sizeof(captured.before.digest));
+    if (!begin && ((uint64_t)public->offset != captured.before.end ||
+        strcmp(public->prev_sha256, digest))) {
+        return snag_errno(EINVAL);
+    }
+    *out = captured;
+    return 0;
+}
+
+static int
+native_history_visit(void *opaque, const struct snag_binary_record *record, uint64_t sequence,
+    const struct snag_binary_cursor *after)
+{
+    struct native_history *history = opaque;
+    const char *type = NULL;
+    json_t *data = NULL;
+    int rc = snag_binary_checkpoint_record_project(history->fd, &history->through,
+        &history->available, record, sequence, &type, &data);
+    if (rc < 0 && errno == ENOENT && history->index_fd >= 0) {
+        if (history->has_query) {
+            rc = snag_binary_checkpoint_record_project(history->fd,
+                &history->through, &history->query, record, sequence, &type, &data);
+        }
+        if (rc < 0 && errno == ENOENT) {
+            rc = native_history_query(history, sequence);
+            if (!rc) {
+                rc = snag_binary_checkpoint_record_project(history->fd, &history->through,
+                    &history->query, record, sequence, &type, &data);
+            }
+        }
+    }
+    if (rc < 0) return -1;
+    size_t visited = record->size + SNAG_BINARY_RECORD_HEADER_SIZE;
+    if (!rc && history->remaining != SIZE_MAX) {
+        /* Single-copy references can expand far beyond their wire descriptor.
+         * Charge the existing page budget for the projected view too, keeping
+         * one complete oversized event and its exact continuation cursor. */
+        struct snag_buf projected = {.max = history->remaining};
+        int measured = snag_json_diagnostic(data, &projected);
+        int saved = errno;
+        size_t bytes = measured < 0 ? history->remaining : projected.len;
+        snag_buf_free(&projected);
+        if (measured < 0 && saved != EOVERFLOW) {
+            json_decref(data);
+            return snag_errno(saved);
+        }
+        if (bytes > visited) visited = bytes;
+    }
+    int result = 0;
+    if (!rc) {
+        result = history->visit(history->opaque, NULL, sequence, type, data,
+            history->error, history->error_size);
+    }
+    json_decref(data);
+    if (result < 0) {
+        history->callback_failed = true;
+        return -1;
+    }
+    history->stopped = result > 0;
+    if (result && result != SNAG_JOURNAL_STOP_AFTER) return 1;
+    /* The public reader preserves accepted-prefix progress even on a later
+     * error. The low-level cursor remains a separate provisional traversal. */
+    history->cursor->offset = (int64_t)after->before.end;
+    history->cursor->next_seq = after->next_seq;
+    binary_hex(history->cursor->prev_sha256, after->before.digest, sizeof(after->before.digest));
+    history->remaining = visited >= history->remaining ? 0u : history->remaining - visited;
+    return result == SNAG_JOURNAL_STOP_AFTER || !history->remaining ? 1 : 0;
+}
+
+static int
+native_history_pin(struct snag_session *session, struct native_history *history)
+{
+    history->cancelled = session->history_cancel;
+    history->cancel_opaque = session->history_cancel_opaque;
+    if (native_history_cancelled(history)) return snag_errno(ECANCELED);
+    const struct snag_binary_session *binary = session->binary;
+    if (binary->faulted) {
+        return snag_fail(history->error, history->error_size, ESTALE, "native writer is faulted");
+    }
+    if (!binary->checkpoint_configured) {
+        return snag_fail(history->error, history->error_size, ENOTSUP,
+            "native source custody is not installed");
+    }
+    if (binary->boundary.end > INT64_MAX) return snag_errno(EOVERFLOW);
+    history->fd = session->log_fd;
+    history->index_fd = binary->index_configured ? binary->index_fd : -1;
+    history->through = binary->boundary;
+    history->frontier = binary->tree;
+    history->access.max = SIZE_MAX;
+    history->query_bytes.max = SIZE_MAX;
+    unsigned char installed_root[32];
+    int rc = snag_binary_index_tree_root(&history->frontier, history->root);
+    if (!rc) {
+        rc = snag_binary_index_tree_root(&binary->available.tree, installed_root);
+    }
+    if (!rc) {
+        rc = snag_binary_checkpoint_index_copy(&history->access, &binary->available);
+    }
+    if (!rc) {
+        rc = snag_binary_checkpoint_index_decode(history->access.data, history->access.len,
+            &binary->identity, &binary->available.boundary, installed_root, &history->available);
+    }
+    return rc;
+}
+
+static int
+native_history_done(struct native_history *history, int rc)
+{
+    int saved = errno;
+    snag_buf_free(&history->query_bytes);
+    snag_buf_free(&history->access);
+    errno = saved;
+    if (rc < 0 && !history->callback_failed) {
+        return snag_errorf(history->error, history->error_size,
+            "cannot read native history: %s", strerror(errno));
+    }
+    return rc < 0 ? -1 : 0;
+}
+
+static int
+native_history_cursor(struct snag_session *session, uint64_t position, bool by_offset,
+    struct snag_journal_cursor *out, char *error, size_t error_size)
+{
+    struct native_history history = {.error = error, .error_size = error_size};
+    struct snag_buf scratch = {.max = SNAG_BINARY_BATCH_MAX};
+    int rc = native_history_pin(session, &history);
+    struct snag_binary_anchor before = history.through, after;
+    struct snag_binary_batch batch, checked;
+    uint64_t sequence = position;
+    if (!rc && ((by_offset && position == history.through.end) ||
+        (!by_offset && (!position || position == history.through.next_seq)))) {
+        sequence = history.through.next_seq;
+    } else if (!rc && by_offset) {
+        if (!position) position = SNAG_BINARY_HEADER_SIZE;
+        while (before.end > position && !rc) {
+            if (native_history_cancelled(&history)) {
+                rc = snag_errno(ECANCELED);
+                break;
+            }
+            after = before;
+            rc = snag_binary_batch_previous(history.fd, &after, &scratch, &batch, &before);
+            if (rc == 1) rc = snag_errno(EINVAL);
+        }
+        if (!rc && before.end != position) rc = snag_errno(EINVAL);
+        sequence = before.next_seq;
+    } else if (!rc) {
+        rc = snag_binary_checkpoint_batch_find(history.fd, &history.through,
+            &history.available, sequence, &scratch, &batch, &before);
+        if (rc < 0 && errno == ENOENT && history.index_fd >= 0) {
+            rc = native_history_query(&history, sequence);
+            if (!rc) rc = snag_binary_checkpoint_batch_find(history.fd, &history.through,
+                &history.query, sequence, &scratch, &batch, &before);
+        }
+        if (!rc) rc = snag_binary_batch_decode(batch.data, batch.size, &before, &checked, &after);
+    }
+    if (!rc) {
+        struct snag_journal_cursor found = {.offset = (int64_t)before.end,
+            .next_seq = sequence};
+        binary_hex(found.prev_sha256, before.digest, sizeof(before.digest));
+        if (sequence == 1u) found.offset = 0;
+        *out = found;
+    }
+    snag_buf_free(&scratch);
+    return native_history_done(&history, rc);
+}
+
+static int
+native_history_output(void *opaque, const struct snag_binary_record *record,
+    uint64_t sequence, const struct snag_binary_cursor *after)
+{
+    struct native_history *history = opaque;
+    struct snag_binary_tool_output_ref *ref = history->opaque;
+    struct snag_binary_event event;
+    (void)sequence;
+    (void)after;
+    if (record->flags || record->kind != SNAG_BINARY_TOOL_FINISHED ||
+        snag_binary_event_decode(record, &event) < 0 ||
+        !event.data.tool_finished.result.has_output_ref ||
+        !event.data.tool_finished.result.output_ref.native) return snag_errno(EINVAL);
+    *ref = event.data.tool_finished.result.output_ref;
+    return 0;
+}
+
+int
+snag_session_history_output_range(struct snag_session *session, uint64_t sequence,
+    const json_t *reference, struct snag_journal_cursor *begin,
+    struct snag_journal_cursor *end, char *error, size_t error_size)
+{
+    uint64_t first, last;
+    if (!sequence || sequence >= session->next_seq ||
+        snag_json_integer_u64(reference, "log_start", &first) < 0 ||
+        snag_json_integer_u64(reference, "log_end", &last) < 0 || first > last ||
+        last > INT64_MAX) return snag_errno(EINVAL);
+    struct snag_journal_cursor from, to;
+    if (session->binary) {
+        struct snag_binary_tool_output_ref ref = {0};
+        struct native_history history = {.opaque = &ref, .error = error,
+            .error_size = error_size};
+        struct snag_binary_cursor cursor;
+        int rc = native_history_pin(session, &history);
+        if (!rc) rc = native_history_capture(&history, sequence, &cursor);
+        if (!rc) {
+            rc = snag_binary_checkpoint_query_cursor_read(history.fd, history.index_fd,
+                &history.through, &history.available, &history.frontier, sequence + 1u,
+                &cursor, native_history_output, native_history_cancelled, &history);
+        }
+        if (native_history_done(&history, rc) < 0) return -1;
+        if (!ref.first_sequence || ref.first_sequence > ref.end_sequence ||
+            ref.end_sequence > sequence || ref.log_start != first || ref.log_end != last)
+            return snag_errno(EINVAL);
+        if (snag_session_history_cursor_before(session, ref.first_sequence,
+                &from, error, error_size) < 0 ||
+            snag_session_history_cursor_before(session, ref.end_sequence,
+                &to, error, error_size) < 0) return -1;
+    } else {
+        if (snag_session_history_cursor_at(session, (int64_t)first,
+                &from, error, error_size) < 0 ||
+            snag_session_history_cursor_at(session, (int64_t)last,
+                &to, error, error_size) < 0) return -1;
+    }
+    if (to.next_seq > sequence) return snag_errno(EINVAL);
+    *begin = from;
+    *end = to;
+    return 0;
+}
+
+static int
+native_history_forward(struct snag_session *session, struct snag_journal_cursor *cursor,
+    uint64_t first, size_t scan_bytes, snag_session_event_fn visit, void *opaque,
+    char *error, size_t error_size)
+{
+    struct native_history history = {.cursor = cursor, .remaining = scan_bytes,
+        .visit = visit, .opaque = opaque, .error = error, .error_size = error_size};
+    int rc = native_history_pin(session, &history);
+    struct snag_binary_cursor work;
+    if (!rc) rc = native_history_capture(&history, first, &work);
+    if (!rc) {
+        rc = snag_binary_checkpoint_query_cursor_read(history.fd, history.index_fd,
+            &history.through, &history.available, &history.frontier, history.through.next_seq,
+            &work, native_history_visit, native_history_cancelled, &history);
+    }
+    return native_history_done(&history, rc);
+}
+
+struct native_suffix_callback {
+    snag_session_event_fn visit;
+    void *opaque;
+};
+
+static int
+native_suffix_visit(void *opaque, const struct snag_session *state, uint64_t sequence,
+    const char *type, const json_t *data, char *error, size_t error_size)
+{
+    struct native_suffix_callback *callback = opaque;
+    /* This full suffix API ignores positive results, unlike paged history. */
+    return callback->visit(callback->opaque, state, sequence, type, data,
+        error, error_size) < 0 ? -1 : 0;
+}
+
+static int
+native_history_since(struct snag_session *session, const struct snag_process_state *process,
+    snag_session_event_fn visit, void *opaque, char *error, size_t error_size)
+{
+    struct snag_journal_cursor cursor = {.offset = (int64_t)process->log_offset,
+        .next_seq = process->log_seq};
+    memcpy(cursor.prev_sha256, process->log_hash, sizeof(cursor.prev_sha256));
+    struct native_suffix_callback callback = {.visit = visit, .opaque = opaque};
+    return native_history_forward(session, &cursor, 0u, SIZE_MAX, native_suffix_visit,
+        &callback, error, error_size);
+}
+
+static int
+native_history_each(struct snag_session *session, snag_session_event_fn visit, void *opaque,
+    char *error, size_t error_size)
+{
+    if (session->binary->faulted)
+        return snag_fail(error, error_size, ESTALE, "native writer is faulted");
+    /* Exhaustive semantic history explicitly reconstructs from creation. It is
+     * not checkpoint admission or a fallback for missing point/range custody. */
+    struct snag_binary_anchor through = session->binary->boundary;
+    struct snag_binary_recovery recovery;
+    struct snag_session verifier;
+    snag_session_init(&verifier);
+    int rc = snag_store_reconcile_binary_prefix(session, &verifier, &through,
+        visit, opaque, &recovery, NULL, error, error_size);
+    int saved = errno;
+    snag_session_close(&verifier);
+    errno = saved;
+    return rc;
+}
+
+static int
+native_history_reverse(struct snag_session *session, uint64_t before, size_t scan_bytes,
+    snag_session_event_fn visit, void *opaque, uint64_t *next_before,
+    char *error, size_t error_size)
+{
+    struct native_history history = {.remaining = scan_bytes,
+        .visit = visit, .opaque = opaque, .error = error, .error_size = error_size};
+    int rc = native_history_pin(session, &history);
+    if (!before || before > history.through.next_seq) before = history.through.next_seq;
+    struct snag_journal_cursor published = session->history_cursor;
+    if (!rc && before == history.through.next_seq) {
+        published.offset = (int64_t)history.through.end;
+        published.next_seq = before;
+        binary_hex(published.prev_sha256, history.through.digest, sizeof(history.through.digest));
+    }
+    struct snag_buf bytes = {.max = SNAG_BINARY_BATCH_MAX};
+    struct snag_buf rows = {.max = SIZE_MAX};
+    struct reverse_row { uint32_t offset; uint64_t turn; };
+    while (!rc && before > 1u && history.remaining && !history.stopped) {
+        struct snag_journal_cursor cursor = {0};
+        struct snag_binary_cursor work = {0};
+        history.cursor = &cursor;
+        rc = native_history_capture(&history, before - 1u, &work);
+        if (rc < 0) break;
+        struct snag_binary_batch batch;
+        struct snag_binary_anchor after;
+        rc = snag_binary_batch_read(history.fd, history.through.end, &work.before,
+            &bytes, &batch, &after);
+        if (rc != 0 || after.end > history.through.end ||
+            after.next_seq > history.through.next_seq || after.turns > history.through.turns ||
+            ((after.end == history.through.end || after.next_seq == history.through.next_seq) &&
+                !binary_anchor_equal(&after, &history.through))) {
+            rc = snag_errno(EINVAL);
+            break;
+        }
+        /* One authenticated batch supplies every reverse row. Preserve each
+         * row's individual membership proof and exact logical continuation. */
+        rows.len = 0u;
+        size_t offset = SNAG_BINARY_BATCH_HEADER_SIZE;
+        uint64_t turn = work.before.turns, sequence;
+        struct snag_binary_record record;
+        int next;
+        for (;;) {
+            struct reverse_row row = {.offset = (uint32_t)offset};
+            next = snag_binary_record_next(&batch, &offset, &record, &sequence);
+            if (next != 0) break;
+            if (native_history_cancelled(&history)) { next = snag_errno(ECANCELED); break; }
+            if (record.kind == SNAG_BINARY_TURN_STARTED) {
+                struct snag_binary_event event;
+                if (turn == UINT64_MAX || snag_binary_event_decode(&record, &event) < 0 ||
+                    event.data.started.number != ++turn) { next = snag_errno(EINVAL); break; }
+            }
+            row.turn = turn;
+            if (snag_buf_append(&rows, &row, sizeof(row)) < 0) { next = -1; break; }
+        }
+        if (next < 0 || turn != after.turns) { rc = next < 0 ? -1 : snag_errno(EINVAL); break; }
+        while (before > work.before.next_seq && history.remaining && !history.stopped) {
+            if (native_history_cancelled(&history)) { rc = snag_errno(ECANCELED); break; }
+            uint64_t wanted = before - 1u;
+            struct reverse_row row;
+            size_t index = (size_t)(wanted - work.before.next_seq);
+            if (index >= rows.len / sizeof(row)) { rc = snag_errno(EINVAL); break; }
+            memcpy(&row, rows.data + index * sizeof(row), sizeof(row));
+            offset = row.offset;
+            if (snag_binary_record_next(&batch, &offset, &record, &sequence) != 0 ||
+                sequence != wanted) { rc = snag_errno(EINVAL); break; }
+            if (sequence < history.available.boundary.next_seq) {
+                struct snag_binary_index_entry entry;
+                rc = snag_binary_checkpoint_index_find(&history.available, sequence, &entry);
+                if (rc > 0 && history.index_fd >= 0)
+                    rc = snag_binary_index_read_verified(history.index_fd,
+                        &history.available.identity, history.through.next_seq - 1u,
+                        history.root, sequence, &entry);
+                if (rc != 0) { if (rc > 0) rc = snag_errno(ENOENT); break; }
+                if (entry.batch_offset != work.before.end || entry.record_offset != row.offset ||
+                    entry.kind != record.kind || entry.turn != row.turn ||
+                    memcmp(entry.batch_digest, after.digest, sizeof(after.digest))) {
+                    rc = snag_errno(EINVAL);
+                    break;
+                }
+            }
+            struct snag_binary_cursor cut = {.before = work.before,
+                .next_seq = sequence + 1u, .record_offset = (uint32_t)offset};
+            if (cut.next_seq == after.next_seq) cut = (struct snag_binary_cursor){
+                .before = after, .next_seq = after.next_seq,
+                .record_offset = SNAG_BINARY_BATCH_HEADER_SIZE};
+            cursor.next_seq = 0u;
+            rc = native_history_visit(&history, &record, sequence, &cut);
+            if (rc < 0 || cursor.next_seq != before) break;
+            before = sequence;
+            published.offset = (int64_t)work.before.end;
+            published.next_seq = sequence;
+            binary_hex(published.prev_sha256, work.before.digest, sizeof(work.before.digest));
+            rc = 0;
+        }
+    }
+    snag_buf_free(&rows);
+    snag_buf_free(&bytes);
+    if (rc >= 0) {
+        session->history_cursor = published;
+        *next_before = before > 1u ? before : 0u;
+    }
+    return native_history_done(&history, rc);
+}
+
+int
+snag_session_binary_checkpoint_capture(const struct snag_session *session,
+    struct snag_binary_anchor *boundary, struct snag_binary_index_tree *tree,
+    struct snag_binary_checkpoint_sources *sources, char *error, size_t error_size)
+{
+    if (!session || !boundary)
+        return snag_fail(error, error_size, EINVAL, "invalid native checkpoint capture");
+    const struct snag_binary_session *binary = session->binary;
+    if (!binary) return snag_fail(error, error_size, ENOTSUP, "session is not native");
+    if (binary->faulted)
+        return snag_fail(error, error_size, ESTALE, "native session requires fresh recovery");
+    if (sources && snag_binary_checkpoint_sources_clone(sources, &binary->sources) < 0)
+        return snag_fail(error, error_size, errno, "cannot capture native checkpoint origins");
+    *boundary = binary->boundary;
+    if (tree) *tree = binary->tree;
+    return 0;
+}
+
+static bool
+binary_access_within(const struct snag_binary_session *binary,
+    const struct snag_binary_checkpoint_index *available)
+{
+    return available->identity.created_ms == binary->identity.created_ms &&
+        !memcmp(available->identity.id, binary->identity.id, sizeof(binary->identity.id)) &&
+        available->boundary.next_seq <= binary->boundary.next_seq &&
+        available->boundary.end <= binary->boundary.end &&
+        (available->boundary.next_seq != binary->boundary.next_seq ||
+            (binary_anchor_equal(&available->boundary, &binary->boundary) &&
+                !memcmp(&available->tree, &binary->tree, sizeof(binary->tree))));
+}
+
+int
+snag_session_binary_checkpoint_setup(struct snag_session *session, int directory,
+    const uint64_t generations[2], const uint64_t sequences[2],
+    const struct snag_binary_checkpoint_index *available, char *error, size_t error_size)
+{
+    if (!session || directory < 0 || !generations || !sequences || !available)
+        return snag_fail(error, error_size, EINVAL, "invalid native checkpoint setup");
+    struct snag_binary_session *binary = session->binary;
+    if (!binary) return snag_fail(error, error_size, ENOTSUP, "session is not native");
+    if (binary->faulted)
+        return snag_fail(error, error_size, ESTALE, "native session requires fresh recovery");
+    if (binary->checkpoint_configured || binary->candidate)
+        return snag_fail(error, error_size, EBUSY, "native checkpoint setup is not idle");
+    if (!binary_access_within(binary, available))
+        return snag_fail(error, error_size, EINVAL,
+            "native access does not match captured history");
+    struct snag_buf staged = {.max = SIZE_MAX};
+    struct snag_binary_checkpoint_index pinned;
+    unsigned char root[32];
+    int rc = snag_binary_checkpoint_index_copy(&staged, available);
+    if (!rc) rc = snag_binary_index_tree_root(&available->tree, root);
+    if (!rc) rc = snag_binary_checkpoint_index_decode(staged.data, staged.len,
+        &binary->identity, &available->boundary, root, &pinned);
+    if (!rc && !session->snapshot_read_only)
+        rc = snag_binary_io_checkpoint_setup(binary->io, directory, generations, sequences);
+    if (rc < 0) {
+        int code = errno;
+        snag_buf_free(&staged);
+        return snag_fail(error, error_size, code, "cannot install native checkpoint custody");
+    }
+    binary->access = staged;
+    binary->available = pinned;
+    binary->checkpoint_configured = true;
+    return 0;
+}
+
+int
+snag_session_binary_snapshot_capture(const struct snag_session *session,
+    const struct snag_binary_checkpoint_index *available,
+    struct snag_binary_io_snapshot *snapshot, struct snag_binary_index_tree *tree,
+    struct snag_binary_checkpoint_sources *sources, char *error, size_t error_size)
+{
+    if (!session || !snapshot || !tree || !sources)
+        return snag_fail(error, error_size, EINVAL, "invalid native snapshot capture");
+    const struct snag_binary_session *binary = session->binary;
+    if (!binary) return snag_fail(error, error_size, ENOTSUP, "session is not native");
+    if (binary->faulted)
+        return snag_fail(error, error_size, ESTALE, "native session requires fresh recovery");
+    if (!session->on_checkpoint)
+        return snag_fail(error, error_size, ENOTSUP, "native provider cache is not captured");
+    if (!available) {
+        if (!binary->checkpoint_configured)
+            return snag_fail(error, error_size, ENOTSUP,
+                "native checkpoint custody is not installed");
+        available = &binary->available;
+    }
+    if (!binary_access_within(binary, available)) {
+        return snag_fail(error, error_size, EINVAL,
+            "native access does not match captured history");
+    }
+    json_t *context = session->on_checkpoint(session->on_commit_opaque, session);
+    if (!context)
+        return snag_fail(error, error_size, ENOMEM, "cannot capture native provider cache");
+    const json_t *recent = json_object_get(context, "recent");
+    const json_t *history = json_object_get(context, "history_sources");
+    struct snag_binary_io_snapshot staged = {.identity = binary->identity,
+        .boundary = binary->boundary, .core = {.max = SIZE_MAX}, .provider = {.max = SIZE_MAX},
+        .access = {.max = SIZE_MAX}, .core_version = SNAG_BINARY_CORE_VERSION,
+        .provider_version = 1u};
+    struct snag_binary_checkpoint_sources origins = {0};
+    int rc = -1;
+    if (!json_is_array(recent) || !json_is_array(history) ||
+        session->next_seq != binary->boundary.next_seq) {
+        snag_fail(error, error_size, EINVAL,
+            "native provider seam is not available at the frontier");
+        goto done;
+    }
+    if (snag_binary_checkpoint_sources_clone(&origins, &binary->sources) < 0 ||
+        snag_binary_checkpoint_core_encode(&staged.core, &origins, session) < 0 ||
+        snag_binary_checkpoint_provider_encode(&staged.provider,
+            session, recent, history) < 0) {
+        snag_fail(error, error_size, errno, "cannot freeze native checkpoint sections");
+        goto done;
+    }
+    staged.selection = calloc(1u, sizeof(*staged.selection));
+    if (!staged.selection) {
+        snag_fail(error, error_size, errno, "cannot allocate native checkpoint selection");
+        goto done;
+    }
+    staged.selection->available.max = SIZE_MAX;
+    staged.selection->available_boundary = available->boundary;
+    staged.selection->frontier = binary->tree;
+    if (snag_binary_checkpoint_index_copy(&staged.selection->available, available) < 0 ||
+        snag_binary_index_tree_root(&available->tree, staged.selection->available_root) < 0 ||
+        snag_binary_checkpoint_access_plan_build(&staged.selection->plan, &binary->boundary,
+            &origins, session, staged.provider.data, staged.provider.len, NULL, NULL) < 0) {
+        snag_fail(error, error_size, errno, "cannot freeze native checkpoint selection");
+        goto done;
+    }
+    snag_binary_io_snapshot_free(snapshot);
+    *snapshot = staged;
+    staged = (struct snag_binary_io_snapshot){0};
+    snag_binary_checkpoint_sources_free(sources);
+    *sources = origins;
+    origins = (struct snag_binary_checkpoint_sources){0};
+    *tree = binary->tree;
+    rc = 0;
+done:
+    json_decref(context);
+    snag_binary_io_snapshot_free(&staged);
+    snag_binary_checkpoint_sources_free(&origins);
+    return rc;
+}
+
+static int
+binary_voice_reference(struct snag_binary_session *binary, struct snag_binary_record *record)
+{
+    if (record->kind != SNAG_BINARY_VOICE_TRANSFER_RECORD &&
+        record->kind != SNAG_BINARY_VOICE_TRANSFER_ADOPTED) return 0;
+    struct snag_binary_event event;
+    if (snag_binary_event_decode(record, &event) < 0) return -1;
+    struct binary_voice_import *proof = &binary->proposed_voice_import;
+    char id[SNAG_ID_HEX_LEN + 1u], target[SNAG_ID_HEX_LEN + 1u];
+    char session_id[SNAG_ID_HEX_LEN + 1u];
+    binary_hex(session_id, binary->identity.id, sizeof(binary->identity.id));
+    if (event.kind == SNAG_BINARY_VOICE_TRANSFER_RECORD) {
+        const struct snag_binary_voice_archive *archive = &event.data.voice_transfer_record;
+        binary_hex(id, archive->id, sizeof(archive->id));
+        binary_hex(target, archive->target, sizeof(archive->target));
+        if (proof->id[0] && !strcmp(id, proof->id) && !strcmp(target, session_id)) {
+            if (proof->copied >= proof->count) return snag_errno(EINVAL);
+            ++proof->copied;
+        }
+        /* Other archive copies are still inert source data, with no import
+         * authority and no effect on this operation's accepted record count. */
+        return 0;
+    }
+    struct snag_binary_voice_adopted *value = &event.data.voice_transfer_adopted;
+    char source[SNAG_ID_HEX_LEN + 1u], hash[SNAG_SHA256_HEX_LEN + 1u];
+    binary_hex(id, value->transfer.id, sizeof(value->transfer.id));
+    binary_hex(target, value->transfer.target, sizeof(value->transfer.target));
+    binary_hex(source, value->transfer.source, sizeof(value->transfer.source));
+    binary_hex(hash, value->begin_sha256, sizeof(value->begin_sha256));
+    if (value->native || !proof->id[0] || strcmp(id, proof->id) ||
+        strcmp(target, session_id) || strcmp(source, proof->source) ||
+        value->transfer.source_as_of != proof->source_as_of ||
+        value->transfer.count != proof->count || proof->copied != proof->count ||
+        value->begin_seq != proof->begin.next_seq ||
+        value->begin_offset != (uint64_t)proof->begin.offset ||
+        strcmp(hash, proof->begin.prev_sha256)) return snag_errno(EINVAL);
+    value->native = true;
+    value->begin_offset = 0u;
+    memset(value->begin_sha256, 0, sizeof(value->begin_sha256));
+    struct snag_buf field = {.max = SNAG_MAX_EVENT_LINE};
+    if (snag_binary_event_encode(&field, &event) < 0) {
+        snag_buf_free(&field);
+        return -1;
+    }
+    snag_buf_free(&binary->proposed.field);
+    binary->proposed.field = field;
+    record->payload = field.data;
+    record->size = field.len;
+    *proof = (struct binary_voice_import){0};
+    return 0;
+}
+
+static int
+binary_prepare_candidate(struct snag_session *session, const char *type, json_t *data,
+    char *error, size_t error_size)
+{
+    struct snag_binary_session *binary = session->binary;
+    struct snag_buf decoded = {.max = SNAG_BINARY_BATCH_MAX};
+    const char *stage = "clone";
+    binary->candidate = calloc(1u, sizeof(*binary->candidate));
+    binary->type = strdup(type);
+    binary->data = json_deep_copy(data);
+    binary->proposed_voice_import = binary->voice_import;
+    if (!binary->candidate || !binary->type || !binary->data ||
+        clone_session_state(session, binary->candidate) < 0 ||
+        snag_binary_producer_clone(&binary->proposed, &binary->producer) < 0 ||
+        snag_binary_checkpoint_sources_clone(&binary->proposed_sources, &binary->sources) < 0)
+        goto fail;
+    data = binary->data;
+    struct snag_session *candidate = binary->candidate;
+    candidate->last_time_ms = session->next_seq == 1u ?
+        binary->identity.created_ms : snag_time_ms();
+    stage = "reducer";
+    if (apply_event(candidate, type, data, session->next_seq, true, false,
+        error, error_size) < 0) goto fail;
+    enum snag_binary_kind kind;
+    stage = "literal fields";
+    if (snag_binary_legacy_encode(&binary->proposed.field, type, data, &kind) < 0) goto fail;
+    struct snag_binary_record record = {.kind = (uint16_t)kind,
+        .version = snag_binary_event_version(kind), .timestamp_ms = candidate->last_time_ms,
+        .payload = binary->proposed.field.data, .size = binary->proposed.field.len};
+    stage = "voice import boundary";
+    if (binary_voice_reference(binary, &record) < 0) goto fail;
+    stage = "result range";
+    if (snag_binary_producer_live_result(&binary->proposed, session, &record) < 0) goto fail;
+    stage = "working references";
+    if (snag_binary_producer_reference(&binary->proposed, candidate, session->next_seq,
+        &record, data) < 0) goto fail;
+    stage = "checkpoint origins";
+    if (snag_binary_checkpoint_sources_step(&binary->proposed_sources, candidate,
+        &record, session->next_seq, data) < 0) goto fail;
+    stage = "batch";
+    if (snag_binary_batch_encode(&decoded, &binary->boundary, &record, 1u,
+        candidate->turn_count, &binary->proposed_boundary) < 0) goto fail;
+    binary->proposed_tree = binary->tree;
+    stage = "frontier";
+    if (snag_binary_index_tree_append_batch(NULL, &binary->proposed_tree, &binary->identity,
+        &binary->boundary, &binary->proposed_boundary, decoded.data, decoded.len) < 0) goto fail;
+    stage = "I/O admission";
+    if (snag_binary_io_submit(binary->io, &record, 1u, candidate->turn_count) < 0) goto fail;
+    binary->io_pending = true;
+    snag_buf_free(&decoded);
+    return 0;
+fail:
+    {
+        int code = errno;
+        snag_buf_free(&decoded);
+        binary_discard_candidate(binary);
+        return snag_fail(error, error_size, code, "cannot stage native %s event (%s)", type, stage);
+    }
+}
+
+static int
+binary_ack_candidate(struct snag_session *session, uint64_t *written_seq,
+    char *error, size_t error_size)
+{
+    struct snag_binary_session *binary = session->binary;
+    bool receipt = binary->receipt_candidate;
+    struct snag_binary_io_result result = {0};
+    struct snag_buf batch = {0};
+    if (binary_take(binary, &result, &batch) < 0) {
+        int code = errno;
+        binary->retryable = result.retryable;
+        ++session->write_failures;
+        if (!binary->io_pending && !binary->retryable && !binary->retried) {
+            /* The owner's pre-I/O encoding failure consumed no canonical work
+             * and returned to idle. Keep that corrected-admission contract. */
+            binary_discard_candidate(binary);
+        }
+        return snag_fail(error, error_size, code, "native write not durably acknowledged");
+    }
+    struct snag_binary_index_tree next = binary->tree;
+    if (result.checkpoint_receipt != receipt ||
+        !binary_anchor_equal(&result.durable, &binary->proposed_boundary) ||
+        snag_binary_index_tree_append_batch(NULL, &next, &binary->identity,
+            &binary->boundary, &result.durable, batch.data, batch.len) < 0) {
+        binary->faulted = true;
+        snag_buf_free(&batch);
+        return snag_fail(error, error_size, ESTALE,
+            "native durability ACK violates staged boundary");
+    }
+    snag_buf_free(&batch);
+    uint64_t sequence = session->next_seq;
+    struct snag_session *candidate = binary->candidate;
+    candidate->committed_start = (int64_t)binary->boundary.end;
+    candidate->committed_end = (int64_t)result.durable.end;
+    candidate->log_end = (int64_t)result.durable.end;
+    candidate->next_seq = result.durable.next_seq;
+    binary_hex(candidate->prev_sha256, result.durable.digest, sizeof(result.durable.digest));
+    candidate->write_failures = session->write_failures;
+    binary->boundary = result.durable;
+    binary->tree = next;
+    snag_binary_producer_free(&binary->producer);
+    binary->producer = binary->proposed;
+    snag_binary_checkpoint_sources_free(&binary->sources);
+    binary->sources = binary->proposed_sources;
+    binary->proposed_sources = (struct snag_binary_checkpoint_sources){0};
+    binary->voice_import = binary->proposed_voice_import;
+    binary->proposed = (struct snag_binary_producer){0};
+    free_session_state(session);
+    *session = *candidate;
+    free(candidate);
+    binary->candidate = NULL;
+    binary->receipt_candidate = false;
+    binary->retryable = binary->retried = false;
+    if (written_seq) *written_seq = sequence;
+    char *committed_type = binary->type;
+    json_t *committed_data = binary->data;
+    binary->type = NULL;
+    binary->data = NULL;
+    if (!receipt && session->on_commit) session->on_commit(session->on_commit_opaque,
+        session, sequence, committed_type, committed_data);
+    free(committed_type);
+    json_decref(committed_data);
+    return 0;
+}
+
+static int
+commit_binary_session(struct snag_session *session, const char *type, json_t *data,
+    uint64_t *written_seq, char *error, size_t error_size)
+{
+    struct snag_binary_session *binary = session->binary;
+    if (binary->receipt_candidate)
+        return snag_fail(error, error_size, EBUSY, "native receipt still awaits durability");
+    if (!type || !data || !strcmp(type, "session_checkpoint")) {
+        return snag_fail(error, error_size, ENOTSUP,
+            "native event requires its canonical producer");
+    }
+    if (binary->faulted) {
+        return snag_fail(error, error_size, ESTALE, "native session requires fresh recovery");
+    }
+    if (binary->candidate) {
+        if (strcmp(type, binary->type) || !json_equal(data, binary->data)) {
+            return snag_fail(error, error_size, EBUSY,
+                "native transaction still awaits durability");
+        }
+        if (!binary->io_pending) {
+            if (!binary->retryable || snag_binary_io_retry(binary->io) < 0) {
+                return snag_fail(error, error_size, EIO, "native write requires fresh recovery");
+            }
+            binary->io_pending = true;
+            binary->retried = true;
+        }
+    } else if (binary_prepare_candidate(session, type, data, error, error_size) < 0) {
+        return -1;
+    }
+    return binary_ack_candidate(session, written_seq, error, error_size);
+}
+
+static int
+binary_prepare_checkpoint_receipt(struct snag_session *session, char *error, size_t error_size)
+{
+    struct snag_binary_session *binary = session->binary;
+    const struct snag_binary_publication_result *published = &binary->checkpoint_result;
+    struct snag_binary_checkpoint_receipt receipt = {.generation = published->generation,
+        .image_size = published->image_size, .boundary = published->boundary};
+    memcpy(receipt.image_digest, published->image_digest, sizeof(receipt.image_digest));
+    struct snag_buf payload = {.max = SIZE_MAX}, decoded = {.max = SIZE_MAX};
+    binary->candidate = calloc(1u, sizeof(*binary->candidate));
+    if (!binary->candidate || clone_session_state(session, binary->candidate) < 0 ||
+        snag_binary_producer_clone(&binary->proposed, &binary->producer) < 0 ||
+        snag_binary_checkpoint_sources_clone(&binary->proposed_sources, &binary->sources) < 0 ||
+        snag_binary_index_tree_root(&binary->checkpoint_tree, receipt.index_root) < 0 ||
+        snag_binary_checkpoint_receipt_encode(&payload, &receipt) < 0) goto fail;
+    struct snag_binary_record record = {.kind = SNAG_BINARY_CHECKPOINT_RECEIPT,
+        .version = SNAG_BINARY_CHECKPOINT_RECEIPT_VERSION, .flags = SNAG_BINARY_RECORD_OPTIONAL,
+        .timestamp_ms = binary->checkpoint_timestamp, .payload = payload.data, .size = payload.len};
+    if (snag_binary_batch_encode(&decoded, &binary->boundary, &record, 1u,
+        session->turn_count, &binary->proposed_boundary) < 0) goto fail;
+    binary->proposed_tree = binary->tree;
+    if (snag_binary_index_tree_append_batch(NULL, &binary->proposed_tree, &binary->identity,
+        &binary->boundary, &binary->proposed_boundary, decoded.data, decoded.len) < 0) goto fail;
+    binary->candidate->last_time_ms = record.timestamp_ms;
+    binary->candidate->checkpoint_seq = session->next_seq;
+    binary->candidate->checkpoint_offset = (int64_t)binary->boundary.end;
+    binary->proposed_sources.texts.through = binary->proposed_boundary.next_seq - 1u;
+    binary->proposed_voice_import = binary->voice_import;
+    if (snag_binary_io_checkpoint_receipt_submit(binary->io, receipt.index_root,
+        record.timestamp_ms) < 0) goto fail;
+    binary->receipt_candidate = true;
+    binary->io_pending = true;
+    snag_buf_free(&payload);
+    snag_buf_free(&decoded);
+    return 0;
+fail:
+    {
+        int code = errno;
+        snag_buf_free(&payload);
+        snag_buf_free(&decoded);
+        binary_discard_candidate(binary);
+        return snag_fail(error, error_size, code, "cannot stage native checkpoint receipt");
+    }
+}
+
+static int
+checkpoint_binary_session(struct snag_session *session, char *error, size_t error_size)
+{
+    struct snag_binary_session *binary = session->binary;
+    if (binary->faulted)
+        return snag_fail(error, error_size, ESTALE, "native session requires fresh recovery");
+    if (!binary->checkpoint_configured)
+        return snag_fail(error, error_size, ENOTSUP, "native checkpoint custody is not installed");
+    if (binary->candidate && !binary->receipt_candidate)
+        return snag_fail(error, error_size, EBUSY, "native transaction still awaits durability");
+    if (!binary->checkpoint_published) {
+        if (binary->checkpoint_failed) {
+            if (snag_binary_io_checkpoint_retry(binary->io) < 0)
+                return snag_fail(error, error_size, errno, "native publication retry unavailable");
+            binary->checkpoint_pending = true;
+        } else if (!binary->checkpoint_pending) {
+            struct snag_binary_io_snapshot snapshot = {0};
+            struct snag_binary_index_tree tree;
+            struct snag_binary_checkpoint_sources sources = {0};
+            int rc = snag_session_binary_snapshot_capture(session, NULL, &snapshot,
+                &tree, &sources, error, error_size);
+            if (!rc) {
+                rc = snag_binary_io_checkpoint_submit(binary->io, &snapshot);
+                if (rc < 0)
+                    snag_fail(error, error_size, errno, "cannot submit native checkpoint");
+            }
+            snag_binary_io_snapshot_free(&snapshot);
+            snag_binary_checkpoint_sources_free(&sources);
+            if (rc < 0) return -1;
+            binary->checkpoint_tree = tree;
+            binary->checkpoint_pending = true;
+        }
+        if (binary_take_checkpoint(binary) < 0) {
+            binary->checkpoint_failed = !binary->checkpoint_pending;
+            return snag_fail(error, error_size, errno, "native checkpoint not published");
+        }
+        binary->checkpoint_failed = false;
+        binary->checkpoint_published = true;
+        binary->checkpoint_timestamp = snag_time_ms();
+        unsigned char root[32];
+        if (snag_binary_index_tree_root(&binary->checkpoint_tree, root) < 0 ||
+            snag_binary_checkpoint_index_decode(binary->checkpoint_access.data,
+                binary->checkpoint_access.len, &binary->identity,
+                &binary->checkpoint_result.boundary, root, &binary->checkpoint_available) < 0) {
+            binary->faulted = true;
+            return snag_fail(error, error_size, ESTALE, "native prepared access violates snapshot");
+        }
+    }
+    if (!binary->candidate) {
+        if (binary_prepare_checkpoint_receipt(session, error, error_size) < 0) return -1;
+    } else if (!binary->io_pending) {
+        if (!binary->retryable || snag_binary_io_retry(binary->io) < 0)
+            return snag_fail(error, error_size, EIO, "native receipt requires fresh recovery");
+        binary->io_pending = true;
+        binary->retried = true;
+    }
+    if (binary_ack_candidate(session, NULL, error, error_size) < 0) return -1;
+    /* Prepared bytes and decoded pointers are already owned and checked. This
+     * custody move follows the receipt ACK and cannot allocate or perform I/O. */
+    snag_buf_free(&binary->access);
+    binary->access = binary->checkpoint_access;
+    binary->checkpoint_access = (struct snag_buf){0};
+    binary->available = binary->checkpoint_available;
+    binary->checkpoint_available = (struct snag_binary_checkpoint_index){0};
+    binary->checkpoint_published = false;
+    return 0;
+}
+
 int
 snag_session_checkpoint(struct snag_session *session, char *error, size_t error_size)
 {
+    if (session && session->snapshot_read_only)
+        return snag_fail(error, error_size, EROFS, "cannot checkpoint a read-only snapshot");
+    if (session && session->binary)
+        return checkpoint_binary_session(session, error, error_size);
     if (!session || session->pending_log || session->log_fd < 0 || session->lock_fd < 0)
         return snag_fail(error, error_size, EINVAL, "session has no durable checkpoint boundary");
     json_t *state = snag_checkpoint_state_encode(session);
@@ -3895,6 +5414,33 @@ int
 snag_session_commit(struct snag_session *session, const char *type, json_t *data,
                    uint64_t *written_seq, char *error, size_t error_size)
 {
+    if (session->snapshot_read_only) {
+        json_decref(data);
+        return snag_fail(error, error_size, EROFS, "cannot commit to a read-only snapshot");
+    }
+    if (session->binary) {
+        struct snag_binary_session *binary = session->binary;
+        bool maintenance = type && data && binary->checkpoint_configured &&
+            strcmp(type, "session_checkpoint") && !session_closure_event(type);
+        if (maintenance && (!binary->candidate || binary->receipt_candidate) &&
+            session->next_seq - 1u - session->checkpoint_seq >= 128u &&
+            snag_session_checkpoint(session, error, error_size) < 0) {
+            json_decref(data);
+            return -1;
+        }
+        int rc = commit_binary_session(session, type, data, written_seq, error, error_size);
+        if (!rc && maintenance &&
+            session->next_seq - 1u - session->checkpoint_seq >= 128u) {
+            int64_t start = session->committed_start;
+            int64_t end = session->committed_end;
+            char ignored[128];
+            (void)snag_session_checkpoint(session, ignored, sizeof(ignored));
+            session->committed_start = start;
+            session->committed_end = end;
+        }
+        json_decref(data);
+        return rc;
+    }
     struct snag_session staged = {0};
     int rc = -1;
     bool append_attempted = false;
@@ -4188,6 +5734,19 @@ voice_context_event(void *opaque, const struct snag_session *state, uint64_t seq
     return s->queue[0] ? voice_status_event(&s->handoff, state, seq, type, data, error, size) : 0;
 }
 
+static int
+native_voice_context(struct snag_session *session, struct snag_voice_projection *projection,
+    char *error, size_t size)
+{
+    uint64_t first = 0u;
+    if (!projection->cursor.next_seq) {
+        first = projection->root.adopted_seq ? projection->root.begin.next_seq : 1u;
+        if (!first) return snag_fail(error, size, EINVAL, "invalid native voice history root");
+    }
+    return native_history_forward(session, &projection->cursor, first,
+        SNAG_JOURNAL_PAGE_BYTES, voice_context_event, projection, error, size);
+}
+
 int
 snag_session_voice_context(struct snag_session *session, json_t **result, char *error, size_t size)
 {
@@ -4203,9 +5762,13 @@ snag_session_voice_context(struct snag_session *session, json_t **result, char *
     struct snag_voice_projection *s = session->voice_projection;
     memcpy(s->session_id, session->id, sizeof(s->session_id));
     s->root = session->voice_history;
-    if (s->cursor.next_seq < s->root.begin.next_seq) s->cursor = s->root.begin;
-    int rc = snag_session_each_event_forward(session, &s->cursor, SNAG_JOURNAL_PAGE_BYTES,
-        voice_context_event, s, error, size);
+    int rc;
+    if (session->binary) rc = native_voice_context(session, s, error, size);
+    else {
+        if (s->cursor.next_seq < s->root.begin.next_seq) s->cursor = s->root.begin;
+        rc = snag_session_each_event_forward(session, &s->cursor, SNAG_JOURNAL_PAGE_BYTES,
+            voice_context_event, s, error, size);
+    }
     if (rc < 0) {
         /* A failed callback may have partially updated the current record's view.
          * Rebuild on retry; never publish it or alter the authoritative session. */
@@ -4222,6 +5785,7 @@ snag_session_voice_context(struct snag_session *session, json_t **result, char *
         free(text);
     }
     if (!rc) {
+        uint64_t next = s->cursor.next_seq;
         *result = json_pack("{s:s,s:s,s:s,s:i,s:s,s:s,s:O,s:I,s:I,s:b,s:I,s:I,s:s,s:I,s:s,s:I}",
             "kind", "session_context", "session_id", session->id,
             "active_turn_id", session->active_turn ? session->active_turn_id : "",
@@ -4230,8 +5794,8 @@ snag_session_voice_context(struct snag_session *session, json_t **result, char *
             "recent_generated_reply", s->transcript[1] ? s->transcript[1] : "",
             "latest_voice_handoff", handoff ? handoff : json_null(),
             "state_as_of_seq", (json_int_t)(session->next_seq - 1u),
-            "history_as_of_seq", (json_int_t)(s->cursor.next_seq - 1u),
-            "history_complete", s->cursor.next_seq == session->next_seq,
+            "history_as_of_seq", (json_int_t)(next - 1u),
+            "history_complete", next == session->next_seq,
             "recent_asr_seq", (json_int_t)s->transcript_seq[0],
             "recent_generated_reply_seq", (json_int_t)s->transcript_seq[1],
             "recent_asr_origin_session_id", s->transcript_origin[0],
@@ -4322,50 +5886,11 @@ out: free(resolved);
 }
 
 int
-snag_session_persist(struct snag_store *store, struct snag_session *session, char *error, size_t error_size)
+snag_session_persist(struct snag_store *store, struct snag_session *session,
+    char *error, size_t error_size)
 {
-    struct snag_session disk = *session;
-    char *parent;
-    int rc = -1;
-
     if (!session->pending_log) return 0;
-    if (snag_mkdir_private_at(store->sessions_fd, session->id) < 0) {
-        snag_errorf(error, error_size, "cannot create session directory: %s", strerror(errno));
-        return -1;
-    }
-    parent = snag_path_join(store->root_path, "sessions");
-    disk.dir_path = parent ? snag_path_join(parent, session->id) : NULL;
-    free(parent);
-    if (!disk.dir_path) goto out;
-    disk.dir_fd = snag_open_read_security_at(store->sessions_fd, session->id, true);
-    if (disk.dir_fd < 0 || snag_store_verify_private_fd(disk.dir_fd, true, "session directory",
-                                    error, error_size) < 0 ||
-        snag_store_open_session_files(&disk, true, error, error_size) < 0) goto out;
-    if (snag_write_full(disk.log_fd, session->pending_log->data, session->pending_log->len) < 0 ||
-        snag_sync_file(disk.log_fd) < 0 || snag_sync_dir(disk.dir_fd) < 0 ||
-        snag_sync_dir(store->sessions_fd) < 0) {
-        snag_errorf(error, error_size, "cannot persist new session: %s", strerror(errno));
-        goto out;
-    }
-    session->dir_path = disk.dir_path;
-    session->dir_fd = disk.dir_fd;
-    session->log_fd = disk.log_fd;
-    session->lock_fd = disk.lock_fd;
-    snag_buf_free(session->pending_log);
-    free(session->pending_log);
-    session->pending_log = NULL;
-    return 0;
-out:
-    if (disk.log_fd >= 0) (void)close(disk.log_fd);
-    if (disk.lock_fd >= 0) (void)close(disk.lock_fd);
-    if (disk.dir_fd >= 0) {
-        (void)snag_unlink_at(disk.dir_fd, "events.jsonl", false);
-        (void)snag_unlink_at(disk.dir_fd, "lock", false);
-        (void)close(disk.dir_fd);
-    }
-    free(disk.dir_path);
-    (void)snag_unlink_at(store->sessions_fd, session->id, true);
-    return rc;
+    return snag_store_persist_binary_session(store, session, error, error_size);
 }
 
 int

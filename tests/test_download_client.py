@@ -13,6 +13,7 @@ import time
 import unittest
 from pathlib import Path
 
+from store_history import journal_paths, read_events
 from test_upload_client import CLIENT, PRODUCT, Session, frame
 
 
@@ -56,8 +57,8 @@ class DownloadSession(Session):
         return output.read_bytes()
 
     def events(self):
-        journals = list((self.dotdir / "sessions").glob("*/events.jsonl"))
-        return [json.loads(line) for line in journals[0].read_text().splitlines()]
+        journals = journal_paths(self.dotdir)
+        return read_events(journals[0])
 
     def download(self, name, data, request=None, expected_name=None):
         (self.home / name).write_bytes(data)
@@ -123,7 +124,7 @@ class DownloadTests(unittest.TestCase):
                 source = original.home / "report.bin"
                 source.write_bytes(data)
                 try:
-                    sid = next((original.dotdir / "sessions").glob("*/events.jsonl")).parent.name
+                    sid = journal_paths(original.dotdir)[0].parent.name
                     original.write(b"download_tool ./report.bin\r" if tool else b"/send ./report.bin\r")
                     if tool:
                         original.read_until(b"\x1b[?9001;")
@@ -168,7 +169,7 @@ class DownloadTests(unittest.TestCase):
                     session.read_until(b"pong", 8)
                 self.assertFalse(any(e["type"] == "attachment_added" for e in session.events()))
                 self.assertNotIn(b"#DATA:", b"".join(
-                    p.read_bytes() for p in (session.dotdir / "sessions").glob("*/events.jsonl")))
+                    p.read_bytes() for p in journal_paths(session.dotdir)))
                 session.exit()
             finally:
                 session.close()
@@ -229,8 +230,8 @@ class DownloadTests(unittest.TestCase):
                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
             self.assertEqual(first.returncode, 0, first.stderr)
             self.assertNotIn(b"::TRZSZ:TRANSFER:", first.stdout + first.stderr)
-            journal = next((dotdir / "sessions").glob("*/events.jsonl"))
-            events = [json.loads(line) for line in journal.read_text().splitlines()]
+            journal = journal_paths(dotdir)[0]
+            events = read_events(journal)
             queued = [e["data"] for e in events if e["type"] == "download_queued"]
             self.assertEqual(len(queued), 1)
             self.assertEqual((queued[0]["name"], queued[0]["bytes"]), ("report.bin", 13))
@@ -239,12 +240,12 @@ class DownloadTests(unittest.TestCase):
             results = [e["data"]["result"] for e in events if e["type"] == "tool_finished"]
             self.assertEqual(results[-1]["status"], "succeeded")
             self.assertIn("not delivered yet", results[-1]["model_text"])
-            sid = json.loads(journal.read_text().splitlines()[0])["session_id"]
+            sid = journal.parent.name
             resumed = subprocess.run([str(PRODUCT), "--dotdir", str(dotdir), "--resume", sid,
                                       "-e", "--", "download_queue_list"], cwd=home, env=env,
                                      stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
             self.assertEqual(resumed.returncode, 0, resumed.stderr)
-            events = [json.loads(line) for line in journal.read_text().splitlines()]
+            events = read_events(journal)
             model_text = [e["data"]["result"]["model_text"] for e in events
                           if e["type"] == "tool_finished"][-1]
             self.assertIn("1 pending workstation download(s)", model_text)
@@ -264,13 +265,13 @@ class DownloadTests(unittest.TestCase):
                                     "download_tool ./one.bin"], cwd=home, env=env,
                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
             self.assertEqual(first.returncode, 0, first.stderr)
-            journal = next((dotdir / "sessions").glob("*/events.jsonl"))
-            sid = json.loads(journal.read_text().splitlines()[0])["session_id"]
+            journal = journal_paths(dotdir)[0]
+            sid = journal.parent.name
             second = subprocess.run([str(PRODUCT), "--dotdir", str(dotdir), "--resume", sid,
                                      "-e", "--", "download_tool ./two.bin"], cwd=home, env=env,
                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
             self.assertEqual(second.returncode, 0, second.stderr)
-            events = [json.loads(line) for line in journal.read_text().splitlines()]
+            events = read_events(journal)
             queued = [e["data"] for e in events if e["type"] == "download_queued"]
             self.assertEqual(len(queued), 2)
             for prompt in (f"download_queue_remove {queued[0]['id']}", "download_queue_list",
@@ -280,7 +281,7 @@ class DownloadTests(unittest.TestCase):
                                       "-e", "--", prompt], cwd=home, env=env,
                                      stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
                 self.assertEqual(run.returncode, 0, run.stderr)
-            events = [json.loads(line) for line in journal.read_text().splitlines()]
+            events = read_events(journal)
             results = [e["data"]["result"] for e in events if e["type"] == "tool_finished"]
             texts = [r["model_text"] for r in results]
             self.assertTrue(any("Removed one pending download" in text for text in texts))

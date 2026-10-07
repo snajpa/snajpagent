@@ -11,6 +11,7 @@ import threading
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
+from store_history import journal_paths
 from test_provider_https import response
 
 TOKEN = "at-fixture-private-token"
@@ -160,8 +161,8 @@ def check(binary):
                 assert len(server.requests) == 1 and server.requests[0][:2] == ("POST", "/responses")
                 if status == 200:
                     assert result.stdout.strip() == "HTTPS answer once"
-            for path in (state / "sessions").glob("*/events.jsonl"):
-                assert TOKEN not in path.read_text(), "credential leaked into session"
+            for path in journal_paths(state):
+                assert TOKEN.encode() not in path.read_bytes(), "credential leaked into session"
             run("logout", "codex")
             assert not auth.exists()
             print("Enterprise access token: login, rejection, rotation, Codex routing, redaction: ok")

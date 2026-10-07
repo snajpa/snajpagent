@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0-only
-import json
 from pty_active import Child, DEFAULT_IDLE_PROMPT, STATE_ROOT
+from store_history import journal_paths, read_events
 
 
 def run_case(term, cols, expect_ansi, expected_text):
@@ -24,8 +24,9 @@ def run_case(term, cols, expect_ansi, expected_text):
     if not expect_ansi and has_ansi:
         raise AssertionError(f"{term}/{cols}: unexpected ANSI/control output; got {bytes(buf)!r}")
 
-    with (STATE_ROOT / child.session_id() / "events.jsonl").open(encoding="utf-8") as source:
-        turns = [event for event in map(json.loads, source) if event["type"] == "turn_started"]
+    journal = next(path for path in journal_paths(STATE_ROOT.parent)
+                   if path.parent.name == child.session_id())
+    turns = [event for event in read_events(journal) if event["type"] == "turn_started"]
     if len(turns) != 1 or turns[0]["data"]["text"] != expected_text:
         raise AssertionError(f"{term}/{cols}: submitted draft mismatch: {turns!r}")
 

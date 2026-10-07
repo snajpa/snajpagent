@@ -22,6 +22,22 @@ Store checks cover checkpoint preservation, invalid destinations and old records
 without a wait channel. Vim transcript projection retains the destination and
 redacts the blocker text through its ordinary source mapping.
 
+## Native-storage workspace integration
+
+The converted-tool PTY regression preserves original JSONL bytes, opens the native
+history, changes verbosity, searches across a 5 MiB output page and verifies secret
+redaction. It reproduced missing converted previews and slow initial loading.
+An isolated Mac fixture opened in 39.874 seconds before batching, 30.091 seconds
+after provider-row batching alone, and 0.299 seconds after reverse history batching.
+These are local fixture timings, not live-session or network latency measurements.
+
+Empty native panes reach their logical start; inline commands remain visible and
+survive workspace resume. Store and reader coverage retains exact pagination,
+callback pause/cancellation, corrupt/missing source and sparse-membership checks.
+Native context oracles compare canonical reconstruction with checkpoint admission,
+including unavailable old dependencies and atomic rejection. Conversion CLI tests
+cover locks, interrupted publication, corrupt tails and retained originals.
+
 ## Development Vim workspace
 
 Pager fixtures cover continued provider work and exactly-once catch-up after a
@@ -105,6 +121,12 @@ a 10x48 terminal with another writing pane, cancellation of 2 MiB files, ambiguo
 clients, client detach/reattach, local wrapper placement, dropped files, model
 send_file and stock Mosh. Loopback OpenSSH includes remote tmux. Foreground tmux
 servers and Linux pidfd tracking constrain teardown to fixture-owned processes.
+Private server homes and disabled paging keep operator configuration and pagers
+out of transfer and subsequent-input checks, matching the raw-PTY fixtures.
+Loopback SSH likewise supplies each agent its private home and disables paging,
+including inside the remote tmux pane.
+Small panes wait for the attached-state prompt and verify retained bytes, rather
+than requiring the entire listing banner to fit in their viewport.
 Mac native tmux execution and arbitrary nested tmux/remote-wrapper chains remain
 unqualified. These fixtures do not test desktop drag gestures or live providers.
 

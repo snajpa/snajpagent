@@ -4,6 +4,8 @@
 
 import json
 from pathlib import Path
+
+from store_history import journal_paths, read_events
 import sys
 import tempfile
 import unittest
@@ -27,8 +29,8 @@ class RecoveryTests(unittest.TestCase):
         self.fixture.key('other', 'replacement-fixture-key', self.fixture.base + '/other')
 
     def events(self):
-        journal, = (self.fixture.state / 'sessions').glob('*/events.jsonl')
-        return journal, [json.loads(line) for line in journal.read_bytes().splitlines()]
+        journal, = journal_paths(self.fixture.state)
+        return journal, read_events(journal)
 
     def failed_turn(self):
         child = self.fixture.start()
@@ -52,7 +54,7 @@ class RecoveryTests(unittest.TestCase):
         finished, = (e for e in events if e['type'] == 'turn_completed')
         self.assertEqual(started['data']['turn_id'], finished['data']['turn_id'])
         self.assertEqual(sum(e['type'] == 'input_received' for e in events), 1)
-        self.assertNotIn(token, journal.read_text())
+        self.assertNotIn(token.encode(), journal.read_bytes())
 
     def switch(self, child):
         self.fixture.send(child, '/model other/gpt-recovered/low',

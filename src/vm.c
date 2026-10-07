@@ -2011,7 +2011,7 @@ selection(struct vm *vm, size_t at)
     size_t count = row_count(vm, window);
     window->selected = !count ? 0u : at < count ? at : count - 1u;
     if (document_view(window)) {
-        if (window->selected + 1u < count || window->end.offset < window->tail.offset)
+        if (window->selected + 1u < count || window->end.next_seq < window->tail.next_seq)
             window->follow = false;
         remember_anchor(window);
         changed(vm);
@@ -2030,12 +2030,12 @@ move(struct vm *vm, bool down, size_t amount)
     struct vm_window *window = &vm->windows[vm->focus];
     size_t at = window->selected, count = row_count(vm, window);
     if (window->kind == VIEW_TRANSCRIPT) {
-        if (!down && !at && window->begin.offset) {
+        if (!down && !at && window->begin.next_seq > 1u) {
             window->follow = false;
             queue_history(vm, window, LOAD_PREVIOUS);
             return;
         }
-        if (down && (!count || at + 1u >= count) && window->end.offset < window->tail.offset) {
+        if (down && (!count || at + 1u >= count) && window->end.next_seq < window->tail.next_seq) {
             queue_history(vm, window, LOAD_NEXT);
             return;
         }
@@ -4082,8 +4082,8 @@ draw_window(void *opaque, const struct snag_vm_rectangle *rectangle)
             window->verbosity, window->follow ? "FOLLOW" : "HOLD",
             window->document ? window->best_effort ? "snapshot" : "committed" : "",
             (unsigned long long)window->anchor_seq,
-            window->begin.offset ? "  ↑ older" : "  [start]",
-            window->end.offset < window->tail.offset ? "  ↓ newer" : "  [tail]",
+            window->begin.next_seq > 1u ? "  ↑ older" : "  [start]",
+            window->end.next_seq < window->tail.next_seq ? "  ↓ newer" : "  [tail]",
             window->source_failed ? "  source error; R" :
                 window->incomplete ? "  partial tail" : "",
             (window->load && window->load != LOAD_POLL) ||
@@ -4125,7 +4125,7 @@ painted_read(struct vm *vm)
     if (window->kind != VIEW_TRANSCRIPT || !window->rectangle.visible || !window->follow ||
         !window->document || window->incomplete || window->source_failed ||
         window->load || vm->page.window == window->id || vm->scan.window == window->id ||
-        window->end.offset != window->tail.offset || !window->end.next_seq) return 0;
+        window->end.next_seq != window->tail.next_seq || !window->end.next_seq) return 0;
     size_t count = row_count(vm, window);
     if (!count || count - 1u < window->top ||
         count - 1u - window->top >= window->history_rows) return 0;
@@ -4401,7 +4401,7 @@ collect(struct vm *vm, struct vm_read *read)
             size_t height = window->rectangle.rows > 1u ? window->rectangle.rows - 1u : 1u;
             window->top = window->selected >= height ? window->selected - height + 1u : 0u;
             if (count) {
-                if (!result->request.rows && window->follow && window->begin.offset &&
+                if (!result->request.rows && window->follow && window->begin.next_seq > 1u &&
                     count < height) queue_history(vm, window, LOAD_LAST);
                 if (!keeps_anchor(load) || !window->anchor_source) remember_anchor(window);
                 /* Forward and reverse page boundaries differ when a large
@@ -4409,13 +4409,14 @@ collect(struct vm *vm, struct vm_read *read)
                  * before accepting the replacement viewport. */
                 if (keeps_anchor(load) && load != LOAD_ANCHOR &&
                     window->anchor_seq >= window->end.next_seq &&
-                    window->end.offset < window->tail.offset)
+                    window->end.next_seq < window->tail.next_seq)
                     queue_history(vm, window, LOAD_KEEP_NEXT);
             } else if (load != LOAD_ANCHOR) {
-                if (result->request.reverse && window->begin.offset) {
+                if (result->request.reverse && window->begin.next_seq > 1u) {
                     queue_history(vm, window,
                         keeps_anchor(load) ? LOAD_KEEP_PREVIOUS : LOAD_PREVIOUS);
-                } else if (!result->request.reverse && window->end.offset < window->tail.offset) {
+                } else if (!result->request.reverse &&
+                    window->end.next_seq < window->tail.next_seq) {
                     queue_history(vm, window, keeps_anchor(load) ? LOAD_KEEP_NEXT : LOAD_NEXT);
                 }
             }

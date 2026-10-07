@@ -149,6 +149,62 @@ on replay of affected sessions. Interactive resume applies current startup
 network roles and identity overrides before work starts. Existing journals retain
 their original events and completed tool outcomes.
 
+Development source opens existing native journals through verified checkpoints
+and a bounded suffix. Routed IRC records retain connection/conversation identity,
+generation, membership, actions, delivery receipts and captured replies. Native
+checkpoints retain the IRC directory through canonical event references and
+typed activity metadata. Core versions2,3 and4 remain readable; missing activity
+stays unavailable until routed observations establish a new recorded range.
+Connection-scoped notices use the same routing rules as live observations.
+Explicit blocked-goal wait channels use typed records and canonical checkpoint
+references. Older blockers without a channel retain an unspecified wait.
+
+Prepared-session native seeding verifies the provisional in-memory journal and
+its native semantic projection before adopting provider capture and writer
+provenance into a separate owner. It returns derived index-cache bytes at the
+verified frontier. The original prepared session stays intact.
+The stopped legacy stage now constructs a separate native writer and streams its
+index with batch-sized scratch. Semantic/core/provider verification and source
+stability precede adoption; existing context control supports cancellation.
+Stopped directory cutover retains the original journal, keeps the writer lock
+and publishes native selection last. Partial-retention repair stages from the
+preserved source. `convert` streams session IDs through bounded parallel workers,
+skips locked writers, continues independent failures and reports individual and
+summary outcomes. Already-current validation preserves native bytes and rejects
+unverified tails. Collection acceptance and full release qualification remain.
+The checkpoint access-plan reader can prove a complete seed closure through that
+cache without a prefix replay. Publication borrows the I/O owner's matching
+cache frontier to prove old and suffix locations against the captured root,
+then checks canonical tuples. Stale derived frontiers retain source lookup;
+missing old membership or corrupt selected cache rows stop access preparation
+before image creation.
+Typed native metadata and checkpoint text retain the persisted automatic-retry
+override. An absent override inherits configuration; explicit on/off stays distinct.
+The native creation backend stages all four files in a private sibling, verifies
+complete core/provider access and the acknowledged cache frontier, then publishes
+the directory under the existing parent-name lock. Prepared state and callbacks
+stay intact until publication. Later parent-sync failures retain the adopted
+native owner and report uncertain durability. Empty reserved checkpoint slots
+remain unavailable; nonempty malformed images cause recovery errors. Default
+session creation uses this production-linked native factory. Existing legacy
+sessions retain their format until explicit stopped conversion with `snajpagent convert`.
+The converter retains originals and publishes native selection after verified staging.
+Explicit native history snapshots authenticate their requested canonical prefix
+and extend through complete appended batches. Exhaustive replay preserves its
+captured frontier during concurrent appends; locked replay retains its strict
+source-stability check. Finite pages count expanded reference views toward their
+existing byte budget and expose authenticated reverse cursors for forward paging.
+Live rendering and asynchronous backfill use copied canonical sequences and
+commit boundaries for typed observation without replaying state. Collected native
+command output reads its typed half-open sequence range beneath that frontier;
+legacy output retains its byte reader, sharing formatting and truncation. Read-only
+custody supports proved historical queries
+without application reconstruction or checkpoint publication.
+Cancelled, corrupt or replaced-source reads preserve the prior accepted view;
+missing cache access stays unavailable. Lost provider caches use canonical native
+checkpoint admission and the bounded suffix at the writer's acknowledged frontier.
+Failure preserves the cache owner and committed core state.
+
 snajpagent is a pre-1.0 terminal coding agent. One interactive session supports
 local rollout and native IRC chat. One-shot mode runs tasks from scripts.
 

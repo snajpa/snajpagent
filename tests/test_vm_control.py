@@ -80,6 +80,17 @@ class ControlTests(unittest.TestCase):
         self.owner.status('detached')
         return draft
 
+    def test_empty_native_history_reaches_its_logical_start(self):
+        self.assertEqual(self.owner.journal.name, 'journal.bin')
+        child = self.start('-N', 'native-start', columns=140)
+        child.command('attach ' + self.owner.sid)
+        child.repaint_until(b'[start]  [tail]')
+        child.write(b'iempty-pane-draft')
+        self.wait_synced('empty-pane-draft')
+        self.escape(child)
+        child.finish('session detach')
+        self.assertEqual(self.inputs(), [])
+
     def test_click_empty_pane_focuses_without_an_extra_key(self):
         from test_vm_mouse import mouse
 
@@ -452,7 +463,7 @@ class ControlTests(unittest.TestCase):
         stored = frontend.WorkspaceTests()
         stored.setUp()
         self.addCleanup(stored.doCleanups)
-        journal = stored.seed_session('scan-start-marker')
+        journal = stored.seed_session('scan-start-marker', legacy=True)
         last = json.loads(journal.read_bytes().splitlines()[-1])
         filler = canonical({'items': [{'kind': 'assistant', 'phase': 'final',
             'text': 'history row with Unicode é界\n' * 6000}],

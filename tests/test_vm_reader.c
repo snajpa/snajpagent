@@ -3,6 +3,7 @@
 #define _GNU_SOURCE
 #endif
 #include "vm_reader.h"
+#include "fixture_store_legacy.h"
 #include "fs.h"
 #include "history_view.h"
 #include "irc.h"
@@ -51,6 +52,7 @@ cancel_report(void *opaque)
 static void
 projection_record(struct snag_session *source, const char *type, json_t *data)
 {
+    assert(!source->binary);
     json_t *event = json_pack("{s:o,s:s,s:I,s:s,s:I,s:s,s:i,s:I}", "data", data,
         "prev_sha256", source->prev_sha256, "seq", (json_int_t)source->next_seq,
         "session_id", source->id, "time_ms", (json_int_t)source->last_time_ms,
@@ -69,6 +71,48 @@ projection_record(struct snag_session *source, const char *type, json_t *data)
 }
 
 static void
+native_page_test(struct snag_store *store, const char *root)
+{
+    struct snag_session source;
+    snag_session_init(&source);
+    char error[256] = "";
+    assert(!snag_session_create(store, &source, root, "default", "native-pages", "high",
+        error, sizeof(error)) && source.binary);
+    json_t *data = json_pack("{s:s,s:s}", "goal_id", "80000000000000000000000000000000",
+        "prompt", "native page input");
+    assert(data && !snag_session_commit(&source, "goal_started", data, NULL, error, sizeof(error)));
+    struct snag_vm_read_request request = {.trusted_tail = true};
+    memcpy(request.session_id, source.id, sizeof(request.session_id));
+    request.tail.offset = source.log_end;
+    request.tail.next_seq = source.next_seq;
+    memcpy(request.tail.prev_sha256, source.prev_sha256, sizeof(source.prev_sha256));
+    struct snag_vm_reader *reader = snag_vm_reader_open(store, NULL, error, sizeof(error));
+    assert(reader);
+    struct snag_vm_read_result *result = await_page(reader,
+        snag_vm_reader_request(reader, &request));
+    if (result->error_number) fprintf(stderr, "native page: %s\n", result->error);
+    assert(!result->error_number && json_is_array(result->events));
+    bool found = false;
+    for (size_t i = 0u; i < json_array_size(result->events); ++i) {
+        const json_t *event = json_array_get(result->events, i);
+        const char *type = snag_json_string(event, "type");
+        if (type && !strcmp(type, "goal_started")) {
+            assert(!strcmp(snag_json_string(json_object_get(event, "data"), "prompt"),
+                "native page input"));
+            found = true;
+        }
+    }
+    assert(found);
+    snag_vm_read_result_free(result);
+    snag_vm_reader_close(reader);
+    char prefix[9];
+    memcpy(prefix, source.id, 8u);
+    prefix[8] = '\0';
+    assert(!snag_session_delete(store, &source, prefix, NULL, error, sizeof(error)));
+    snag_session_close(&source);
+}
+
+static void
 dependency_test(struct snag_store *store, const char *root)
 {
     const char *turn = "0123456789abcdef0123456789abcdef";
@@ -79,7 +123,7 @@ dependency_test(struct snag_store *store, const char *root)
         struct snag_session source;
         snag_session_init(&source);
         char error[256] = "";
-        assert(snag_session_create(store, &source, root, "default", "dependencies", "high",
+        assert(legacy_fixture_create(store, &source, root, "default", "dependencies", "high",
             error, sizeof(error)) == 0);
         projection_record(&source, "response_completed", json_pack("{s:s,s:[{s:s,s:s,s:s,s:{}}]}",
             "turn_id", turn, "items", "kind", "tool_call", "call_id", "reused-call",
@@ -152,7 +196,7 @@ viewport_test(struct snag_store *store, const char *root)
     struct snag_session source;
     snag_session_init(&source);
     char error[256] = "";
-    assert(snag_session_create(store, &source, root, "default", "viewport", "high",
+    assert(legacy_fixture_create(store, &source, root, "default", "viewport", "high",
         error, sizeof(error)) == 0);
     char *padding = malloc(256u * 1024u + 1u);
     assert(padding);
@@ -225,7 +269,7 @@ public_offset_bounds_test(struct snag_store *store, const char *root)
         struct snag_session source;
         snag_session_init(&source);
         char error[256] = "";
-        assert(snag_session_create(store, &source, root, "default", "public-offsets", "high",
+        assert(legacy_fixture_create(store, &source, root, "default", "public-offsets", "high",
             error, sizeof(error)) == 0);
         projection_record(&source, "response_started", json_pack("{s:s}", "response_id", id));
         projection_record(&source, "response_output", json_pack("{s:s,s:i,s:I,s:o}",
@@ -262,7 +306,7 @@ public_dependency_test(struct snag_store *store, const char *root)
         struct snag_session source;
         snag_session_init(&source);
         char error[256] = "";
-        assert(snag_session_create(store, &source, root, "default", "public-pages", "high",
+        assert(legacy_fixture_create(store, &source, root, "default", "public-pages", "high",
             error, sizeof(error)) == 0);
         projection_record(&source, "response_started", json_pack("{s:s}", "response_id", id));
         projection_record(&source, "response_output", json_pack("{s:s,s:i,s:i,s:o}",
@@ -349,7 +393,7 @@ public_full_pages_test(struct snag_store *store, const char *root)
     struct snag_session source;
     snag_session_init(&source);
     char error[256] = "";
-    assert(snag_session_create(store, &source, root, "default", "full-public-pages", "high",
+    assert(legacy_fixture_create(store, &source, root, "default", "full-public-pages", "high",
         error, sizeof(error)) == 0);
     projection_record(&source, "response_started", json_pack("{s:s}", "response_id", id));
     json_t *items = json_array();
@@ -463,7 +507,7 @@ search_history_test(struct snag_store *store, const char *root)
     struct snag_session source;
     snag_session_init(&source);
     char error[256] = "";
-    assert(snag_session_create(store, &source, root, "default", "search-pages", "high",
+    assert(legacy_fixture_create(store, &source, root, "default", "search-pages", "high",
         error, sizeof(error)) == 0);
     projection_record(&source, "response_started", json_pack("{s:s}", "response_id", id));
     json_t *items = json_array();
@@ -894,7 +938,7 @@ mode_identity_test(struct snag_store *store, const char *root)
     struct snag_session source;
     char error[256];
     snag_session_init(&source);
-    assert(snag_session_create(store, &source, root, "default", "mode-test", "high",
+    assert(legacy_fixture_create(store, &source, root, "default", "mode-test", "high",
         error, sizeof(error)) == 0);
     source.on_checkpoint = large_context;
     assert(snag_session_checkpoint(&source, error, sizeof(error)) == 0);
@@ -930,16 +974,17 @@ mode_identity_test(struct snag_store *store, const char *root)
         assert(snag_vm_reader_request(reader, &request));
         assert(snag_sleep_ms(10u) == 0);
         snag_vm_reader_cancel(reader);
-        assert(snag_rename_at(source.dir_fd, "events.jsonl", source.dir_fd, "events.before") == 0);
-        fd = snag_create_private_at(source.dir_fd, "events.jsonl", true);
+        const char *journal = source.binary ? "journal.bin" : "events.jsonl";
+    assert(snag_rename_at(source.dir_fd, journal, source.dir_fd, "events.before") == 0);
+        fd = snag_create_private_at(source.dir_fd, journal, true);
         assert(fd >= 0 && snag_write_full(fd, bytes, used) == 0 && close(fd) == 0);
         request.trusted_tail = !request.trusted_tail;
         result = await_page(reader, snag_vm_reader_request(reader, &request));
         assert(result->error_number == ESTALE && !result->events);
         snag_vm_read_result_free(result);
         snag_vm_reader_close(reader);
-        assert(snag_unlink_at(source.dir_fd, "events.jsonl", false) == 0);
-        assert(snag_rename_at(source.dir_fd, "events.before", source.dir_fd, "events.jsonl") == 0);
+        assert(snag_unlink_at(source.dir_fd, journal, false) == 0);
+        assert(snag_rename_at(source.dir_fd, "events.before", source.dir_fd, journal) == 0);
     }
     free(bytes);
     /* A queued owner watermark may lag a complete snapshot. Preserve the
@@ -1076,7 +1121,7 @@ query_history_test(struct snag_store *store, const char *root)
     struct snag_session source;
     snag_session_init(&source);
     char error[256] = "";
-    assert(snag_session_create(store, &source, root, "default", "query-pages", "high",
+    assert(legacy_fixture_create(store, &source, root, "default", "query-pages", "high",
         error, sizeof(error)) == 0);
     struct snag_irc_event irc = {.routed = true, .kind = SNAG_IRC_MESSAGE,
         .timestamp_ms = 1u, .endpoint = "test:6667", .nick = "first",
@@ -1157,7 +1202,7 @@ channel_history_test(struct snag_store *store, const char *root)
     struct snag_session source;
     snag_session_init(&source);
     char error[256] = "";
-    assert(snag_session_create(store, &source, root, "default", "channel-history", "high",
+    assert(legacy_fixture_create(store, &source, root, "default", "channel-history", "high",
         error, sizeof(error)) == 0);
     struct snag_irc_event event = {.routed = true, .kind = SNAG_IRC_MESSAGE,
         .timestamp_ms = 1u, .endpoint = "test:6667", .room = "#Side", .nick = "peer",
@@ -1444,6 +1489,7 @@ main(void)
     snag_store_init(&store);
     snag_session_init(&source);
     assert(snag_store_open(&store, root, error, sizeof(error)) == 0);
+    native_page_test(&store, root);
     dependency_test(&store, root);
     viewport_test(&store, root);
     public_offset_bounds_test(&store, root);
@@ -1453,7 +1499,7 @@ main(void)
     search_history_test(&store, root);
     query_history_test(&store, root);
     channel_history_test(&store, root);
-    assert(snag_session_create(&store, &source, root, "default", "test-secret-value", "high",
+    assert(legacy_fixture_create(&store, &source, root, "default", "test-secret-value", "high",
         error, sizeof(error)) == 0);
     source.on_checkpoint = large_context;
     assert(snag_session_checkpoint(&source, error, sizeof(error)) == 0);

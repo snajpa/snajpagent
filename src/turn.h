@@ -12,6 +12,7 @@
 const char *snag_prompt_parse(const char *text, bool *read_only);
 bool snag_prompt_command(const char *text);
 bool snag_read_only_tool(const char *name);
+bool snag_tool_name_valid(const char *name);
 /* Provider item/call identity: UTF-8 text without control or C1 bytes. */
 bool snag_provider_id_valid(const char *s);
 /* Durable identity/output counters plus engine-owned observations, never PIDs. */

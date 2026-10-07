@@ -14,6 +14,7 @@ from pathlib import Path
 
 from irc_client import IRCClient
 from test_upload_client import FixtureChildren
+from store_history import create_legacy, journal_paths
 from test_vm_frontend import Terminal
 from tmux_terminal import FakeResponses, free_loopback_port, irc_workspace, read_events
 
@@ -39,7 +40,15 @@ class QueryFixture(unittest.TestCase):
         self.provider.runtime_handler = self.respond
         self.terminals = []
         self.peers = []
-        self.term = self.start('-s', f'127.0.0.1:{self.port}', '-n', 'querybot',
+        resume = ()
+        # These cases deliberately recreate raw released-format append boundaries.
+        if self._testMethodName in (
+                'test_active_query_reply_survives_resume',
+                'test_pending_query_reply_survives_resume',
+                'test_notice_received_before_admission_survives_resume_without_reply'):
+            journal = create_legacy(self.root / 'state', self.root, 'fake', 'host-model')
+            resume = ('--resume', journal.parent.name)
+        self.term = self.start(*resume, '-s', f'127.0.0.1:{self.port}', '-n', 'querybot',
                                '-o', 'queryop', '-r', 'lab')
         self.term.until(b'queryop@')
         self.submit('prime')
@@ -204,6 +213,7 @@ class QueryFixture(unittest.TestCase):
         # Recreate an interrupted append boundary using the original journal
         # bytes, including hashes and checkpoint pointers, after its owner exits.
         path, _ = read_events(self.root / 'state')
+        self.assertEqual(path.name, 'events.jsonl')
         self.term.write(b'/exit\r')
         self.term.wait_exit()
         self.assertEqual(self.term.process.returncode, 0)
@@ -280,9 +290,12 @@ class QueryTests(QueryFixture):
 
     def resume_reply_at(self, boundary):
         self.direct('querybot', 'resume-needs-reply')
-        self.wait_idle()
         source = next(e for e in self.events() if e['type'] == 'irc_event_v2' and
                       e['data'].get('text') == 'resume-needs-reply')
+        # Raw input persistence precedes admission and the following turn.
+        self.wait(lambda: any(e['seq'] > source['seq'] and e['type'] == boundary
+                              for e in self.events()))
+        self.wait_idle()
         event = next(e for e in self.events() if e['seq'] > source['seq'] and
                      e['type'] == boundary)
         if boundary == 'irc_admitted':
@@ -539,7 +552,7 @@ class QueryTests(QueryFixture):
         self.term.until(b'queryop@')
         peer = self.connect('fresh-peer')
         peer.sock.sendall(b'PRIVMSG queryop :first-durable-private-message\r\n')
-        self.wait(lambda: bool(list((self.root / 'state' / 'sessions').glob('*/events.jsonl'))))
+        self.wait(lambda: bool(journal_paths(self.root / 'state')))
         self.wait(lambda: any(e['data'].get('text') == 'first-durable-private-message'
                   for e in self.events()))
         self.assertFalse(any(e['type'] == 'turn_started' for e in self.events()))

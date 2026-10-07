@@ -5,12 +5,25 @@
 ## Status and purpose
 
 Engineering design, September 27, 2026, with framing implementation begun
-September 28. Installed builds keep the existing JSONL format. The draft header,
-commit-batch codec, bounded positional reader and typed session/configuration,
-goal, timer and initial input/steering payloads are exercised by the store tests.
-Remaining event families, checkpoint replacement, indexed runtime storage, grouped durability
-and conversion remain under implementation. The application does not yet read
-or write binary sessions.
+September 28. Current source creates native sessions and opens them through
+bounded checkpoint admission. Released 0.99.8c and existing legacy sessions use
+JSONL until explicitly converted with `snajpagent convert`. Its bounded worker
+pool streams session IDs, skips locked writers, preserves originals and reports
+independent results. The draft header,
+commit-batch codec and bounded positional reader are exercised by the store tests.
+Typed payloads and data adapters cover all 77 assigned semantic kinds. Archive
+profiles also preserve public checkpoint views and explicitly unassigned source
+names as inert observations.
+Public snapshots preserve literal or span-backed text. Canonical input, output,
+graph-item, continuation and process-byte references resolve exact originals;
+fixed-size output spans assemble contiguous item text across verified batches.
+Native readers resolve input and public-snapshot references before projection
+through the strict core-state reducer. Legacy journal staging builds matching
+receipt-backed turn fields and streamed-output spans, then verifies semantic
+events and core state. Runtime storage includes same-boundary core/provider
+checkpoints, bounded indexed admission, grouped durable acknowledgement and
+reference relocation. Explicit stopped-session conversion publishes a separately
+verified native store and preserves its original journal.
 
 The storage contract preserves canonical history, exact input authority,
 completed tool results, context lineage and single-writer ownership. Active
@@ -21,6 +34,13 @@ limits. There is no session byte, event or turn quota.
 The measured failure makes the first optimization clear: 422 embedded full
 checkpoints accounted for 2,050,400,577 of 2,113,498,737 journal bytes. Changing
 serialization alone would leave that repeated-state growth intact.
+
+The current integration retains IRC display metadata, session names and saved
+resume options in native replay and paired checkpoints. Names refer to their
+canonical text; options retain the accepting declaration and preserve argument
+order, duplicates and the distinction between absent options and an empty list.
+Hosted-search start/finish observations retain their typed provider evidence
+through replay and paired checkpoints without creating local calls or processes.
 
 ## Format evolution and compatibility
 
@@ -81,7 +101,7 @@ That machinery has no current product benefit.
 
 This decision supersedes the earlier design prohibition on separate checkpoint
 files and durable indexes for the new format. The existing JSONL implementation
-and its one-file tests remain valid until replaced. There is still one checkpoint
+and its one-file tests serve retained legacy sessions. There is still one checkpoint
 concept: reducer state and provider-view state at exactly the same boundary.
 
 ## Binary representation
@@ -115,10 +135,53 @@ verify the complete bounded batch before adopting any record in it. Footer
 links support backward navigation; byte offsets support direct seek. Headers
 and footers provide framing, not a promise of hardware-atomic sector writes.
 
-### Draft 0.1 framing
+### Zero-free physical batch envelope
+
+A bounded recovery root needs a physical commit boundary distinguishable from
+arbitrary payload bytes. An embedded, self-consistent batch must not become a
+commit merely because a derived pointer or a torn file happens to end there.
+Draft journal format 0.2 uses a reversible, zero-free envelope in the test-linked
+I/O owner, importer and positional readers. Ordinary native creation and admission use this envelope. Earlier draft 0.1 files are
+rejected; regenerate development fixtures from their retained originals.
+
+Split a decoded batch into blocks of at most 254 bytes. Within each block,
+replace each zero-separated run with a one-byte value equal to its nonzero length
+plus one, followed by that run. Include the empty final run when the block ends
+with a zero. Decode each block independently. Every full decoded block produces
+255 nonzero bytes; a final shorter block produces its length plus one. Append a
+single zero after the entire encoded batch. For `n` decoded bytes, the physical
+size is exactly `n + ceil(n/254) + 1`, with one final delimiter and no zero inside
+the envelope. The block width follows the one-byte run code's range.
+
+The envelope adds metadata without another stored copy of the payload. A reader
+can reconstruct the 112-byte batch header from its first 113 encoded bytes,
+then validate the existing header checksum and length before any length-driven
+allocation or tail classification. An expected terminator replaced by a nonzero
+byte must be corruption, not a shorter committed prefix. A delimiter before the
+checked length likewise cannot become a valid shorter batch. Whole-envelope
+decoding rejects interior zeroes, overlong runs and noncanonical empty blocks;
+the existing batch checksum and semantic codecs remain necessary afterward.
+
+The first journal header remains outside this envelope. Batch anchors and
+predecessor links are physical file offsets. Batch sizes, record positions and
+payload slices address decoded images; their bytes remain unchanged by the wire
+codec. The pure batch encoder/decoder computes physical end anchors using the
+envelope geometry. Writers envelope each complete decoded image exactly once.
+Recovery diagnostics identify the physical containing batch and the failing
+record sequence, without treating a decoded record offset as a file position.
+
+Forward reads check every available byte of an incomplete candidate for an early
+delimiter, using a fixed read buffer. Missing bytes beneath a supplied immutable
+boundary are read errors. Full reads decode the envelope, then verify the batch
+hash and fields. These checks also apply to backward and indexed reads. The bounded physical end-discovery primitive supplies a starting anchor; fast
+checkpoint admission and application integration remain pending.
+
+### Draft 0.2 decoded framing
 
 The framing codec uses the following fixed widths. All integer fields are
-little-endian. Checksums are SHA-256 bytes; lengths include their framing.
+little-endian. Checksums are SHA-256 bytes; batch lengths include their decoded
+framing and exclude the physical envelope overhead. The file header carries
+major 0, minor 2; its own size remains 96 bytes.
 
 | Structure | Layout in bytes |
 |---|---|
@@ -137,25 +200,535 @@ The framing layer returns verified byte views; typed event decoders must enforce
 kind/version compatibility before adopting any state. Framing verification alone
 cannot establish semantic compatibility or prove a tool effect occurred.
 
-The positional reader operates beneath an immutable boundary supplied by its
-caller. It preserves the descriptor offset, allocates at most one permitted
-batch and distinguishes incomplete tails from corruption and unexpected EOF
+The forward positional reader operates beneath an immutable boundary supplied by its
+caller. It preserves the descriptor offset, uses bounded wire/decode scratch
+for one permitted batch and distinguishes incomplete tails from corruption and unexpected EOF
 beneath that boundary. Source identity, exclusive writer ownership and any tail
 truncation remain the session backend's responsibility. Failed verification
 leaves the committed anchor unchanged. No framing API modifies a file.
 
+`snag_binary_journal_tail` discovers a physical committed end from the captured
+file EOF. It scans at most one maximum wire batch to find the last delimiter and
+at most another to find that batch's start, excluding the immutable header. It
+verifies that entire batch and its immediate predecessor, then validates any
+remaining open tail. A corrupt closed frame or a missing expected delimiter is
+an error; recovery cannot skip it to select an older checkpoint. The caller owns
+source identity, prefix immutability and the exclusive writer lock. An arbitrary
+cache-supplied offset cannot stand in for captured EOF. The result authenticates
+this bounded physical suffix; earlier-prefix integrity, session creation, receipt
+ancestry and checkpoint semantics still need their corresponding readers. A
+header-only file returns its framing root for the new-writer path.
+
+`snag_binary_batch_previous` reads backward from an already trusted committed
+anchor. It authenticates the current batch against that anchor, then authenticates
+the predecessor against the link in the current batch. The second bounded batch
+read is necessary because the predecessor's turn count occurs only in its own
+footer; comparing a footer's digest field alone cannot authenticate its other
+fields. The returned predecessor anchor works in either reading direction. At
+the root, the reader verifies the immutable file header before returning the
+beginning-of-history result. Missing bytes beneath a committed boundary are read
+errors, never torn-tail indications. Caller outputs stay unchanged on error;
+scratch views expire on each call, and descriptor position and file bytes stay
+unchanged.
+
+`snag_binary_batch_find` uses those authenticated links to locate an existing
+sequence beneath a trusted snapshot anchor. It never scans for batch magic or
+promotes a derived index offset into authority. Lookup retains at most the current and predecessor decoded
+images plus bounded temporary wire/decode buffers, with work proportional to
+distance from the supplied anchor; this
+is not the durable index or a constant-time arbitrary-history lookup. Callers
+still own journal identity, immutable-prefix lifetime, causal ordering, field
+role and semantic owner checks. These test-linked primitives leave reference-field authority and normal
+resume admission to their callers.
+
+The batch encoder optionally returns the complete next anchor from the same
+serialization and batch digest it just produced. Bytes and anchor advance only
+after the whole buffer append succeeds; the output anchor may replace the input
+anchor. The I/O owner and importer use this result without decoding and hashing
+their own new batch again. Journal readers still verify framing and hashes;
+encoding an anchor supplies no durability acknowledgement.
+
+`snag_binary_batch_at` reads a containing batch from an independently authenticated
+physical offset and digest. It checks header geometry before length-driven reads,
+then verifies the entire batch and its immediate predecessor. Both returned
+anchors are complete; the reader performs no lifetime walk and ignores bytes
+beyond the supplied committed boundary. Missing committed bytes are errors, while
+failure preserves output structures and the descriptor position. Its scratch
+views expire on every call. A digest copied from the target file or an unverified
+index entry cannot establish the required canonical membership.
+
+### Core-state replay integration
+
+`snag_store_reconcile_binary` reads a stopped native journal from its immutable
+header through complete commit batches. Callers hold the source writer lock and
+supply an initialized, state-only destination. Replay verifies session identity,
+the creation timestamp, framing and chain, semantic transitions, and each footer's
+turn count. Record timestamps and sequences come from the verified framing;
+the resulting log boundary and digest identify the last fully interpreted batch.
+The destination is replaced only after successful replay and a source identity,
+size and modification-time recheck. Source bytes and descriptor position remain
+unchanged. Incomplete uncommitted tails are reported after that recheck; corruption,
+unsupported records and semantic/allocation/read failures return errors without
+authorizing truncation. Diagnostics identify the last interpreted batch and the
+failing record or batch range.
+
+An optional semantic-event callback receives resolved data and post-event core
+state after strict reduction. Its borrowed data and accumulated effects remain
+provisional until the entire replay succeeds, including the final source recheck.
+A callback failure aborts replay without adopting the destination. Unknown optional
+metadata has no semantic callback. Sequence and timestamp describe the callback's
+logical event; native offsets and digests describe batch boundaries and cannot
+serve as a per-event checkpoint. This exposes historical fields that core snapshots
+do not retain, including voice transcript, request and source metadata.
+
+The current implementation projects typed data into temporary owned JSON objects
+for the shared strict reducer. Native disk payloads remain field-shaped.
+Unknown optional metadata retains sequence and timestamp positions without a
+state transition; known semantic kinds cannot masquerade as optional metadata.
+Public voice archives remain inert observations. Queued turn-start text and content
+references resolve against authenticated journal batches and the current first
+pending queue item. Creation identity/sequence remains the ordering identity;
+edits replace text but retain original content and creation sequence. Replay keeps
+the latest text receipt separately for each pending item, updates it only after
+successful reduction, and follows queue cancellation/consumption without keeping
+completed history. Equal bytes from another queue, an obsolete edit or a future
+record do not establish the required provenance. The matching queue receipt
+determines each field's canonical source, either its own literal or an explicitly
+declared older original. The turn must reuse that exact field reference.
+
+Direct and timer turn-start text/content/instruction references bind to the currently pending
+input receipt. Replay tracks its enclosing journal sequence, including input
+embedded in an IRC admission, and clears it on cancellation or turn consumption.
+An admission without input leaves that identity unchanged. Embedded field offsets
+remain relative to the outer admission payload. The shared reducer retains its
+existing model/effort/provider, read-only, content and timer-origin checks. Literal
+direct turns without a pending receipt retain their existing semantics; references
+require a recorded pending receipt. Equal text from cancelled or future inputs
+cannot substitute for it.
+
+Direct receipts, queue creation/edits, steering and reply reminders can explicitly
+reuse earlier canonical fields. This includes input and steering embedded in IRC
+admissions. A receipt retains its own sequence,
+identity and metadata; only the selected field values are hydrated. Model selection,
+read-only state, timer origin, queue identity and other authority come from the
+new receipt and the existing reducer, never from the referenced record. A cancelled
+receipt can supply literal data only when a new accepted receipt explicitly names
+it; cancellation still removes the old receipt's pending authority.
+
+Queued voice transcript and request fields can each name an earlier whole literal,
+using the declared original text role. The new queue retains its own connection,
+input, response and call IDs, provider/model, prompt and active-turn scope. Queue
+identity is still checked against that receipt's connection/input pair. Only field
+values are reused; the reference supplies no speaker authentication or approval.
+Subsequent references reuse the original tuple directly, including when transcript
+and request contain equal bytes with distinct roles.
+
+Steering and reminder references preserve the new steering ID, turn, receipt time
+and event kind. The shared reducer checks the active turn, duplicate IDs, response
+state and pending-steering capacity. Hydrated text obeys the existing steering
+size bound; reminders require their exact prompt and eligible response state.
+Ordinary steering with the same bytes retains ordinary steering semantics.
+Output-correction prompt text remains a literal canonical source for input-text
+references. Its public-snapshot references belong to the output-span family.
+
+Canonical targets must be whole literal fields of the declared role in an earlier
+authenticated record of the same journal. Text references retain the original text
+role, including compatible voice text leaves. References into another reference
+are rejected; subsequent receipts and turns reuse the original tuple directly.
+For receipt-backed turns, replay first authenticates the current receipt and its
+declaration, then resolves the original field. It does not infer declarations
+from equal bytes. Embedded originals retain outer admission-relative offsets
+even when a later plain receipt uses them. Replay publishes current direct-input
+and ordered queue receipt origins with the checkpoint source set. The pending-input
+block below preserves those origins; complete checkpoint adoption and suffix replay
+remain separate consumers.
+
+Direct/timer instruction references select the receipt's exact whole list,
+including an empty list. Literal turn instructions remain independently validated
+and can differ from the receipt, for example after instruction discovery. Reusing
+a receipt list requires an explicit reference; replay does not infer equality or
+replace a different literal turn list. Queued receipts contain no instruction
+list. The queued turn declares its instruction reference directly, using an
+earlier whole literal list. Replay still checks the current queue head's identity
+and creation sequence. Text and content references retain their receipt bindings.
+The shared reducer
+validates the resolved instruction list independently, without borrowing the source
+record's model, read-only state, queue or other authority.
+
+Goal turns have no input receipt. Their own record declares canonical text and
+instruction fields; current goal state supplies authority. Replay requires an
+active goal and no pending direct input before resolving these references. The
+shared reducer retains its fixed continuation-prompt, read-only, no-content and
+turn-transition checks. Reusing a cancelled input or an older goal turn's literal
+field does not select that source's goal, wording, lock or lifecycle state. The
+current goal identity and replacement lineage remain unchanged. Paused, blocked,
+finished, cancelled or absent goals cannot be activated by field references.
+
+Resolved fields are temporarily re-encoded and projected through the existing
+literal validator before the shared reducer checks the complete turn transition.
+Those temporary bytes are never persisted.
+
+Interruption, failure and output-correction snapshots resolve public-item spans
+from the current open response. A private response-start sequence bounds their
+sources, including when turn/response IDs and cycle numbers are reused. Sources
+must follow that start and precede the consuming snapshot. Authenticated lookup
+locates the preceding batch anchor; the span resolver checks exact first-field
+coordinates, turn/response/cycle, public metadata, the original partial-public
+index and contiguous byte offsets through the declared last fragment. Optional
+metadata and other non-output records may intervene. Each span supplies the
+item's text through its declared last sequence, which may precede later output.
+Literal entries remain unchanged; the existing reducer validates snapshots
+independently of the streamed cache. Resolved bytes are preflighted against the
+existing literal-record bound before per-item assembly, then re-encoded for
+ordinary literal projection and canonical-JSON graph validation. This adds no
+persistent checkpoint provenance or session quota.
+
+Completed-response graphs use the same current-response span bindings. Their
+public-item texts are resolved while tool calls, graph order, provider identity,
+usage and continuation placement remain unchanged. A public item's graph position
+can differ from its original stream index because calls may be interspersed or
+the recorded graph may reorder public items. Existing graph classification and
+strict reduction preserve final, refusal, call and conflict outcomes. Public text
+and tool-argument bytes share the literal-record materialization preflight; full
+encoding and canonical-JSON validation apply afterward.
+
+Graph-item, result, continuation and compaction sources feed the checkpoint
+consumers described below. Conversion relocates result ranges and voice-adoption
+cursors while preserving original presentation coordinates. The reference fixture
+builder uses empty optional checkpoint markers; journal staging uses the assigned
+import marker. Native readers, checkpoints, indexed navigation, the runtime writer
+and explicit stopped conversion are linked into the application.
+
+### Exact committed-prefix reconstruction
+
+`snag_store_reconcile_binary_prefix` uses the same byte-zero strict replay to
+reconstruct an explicitly selected committed batch boundary. The final end,
+next sequence, predecessor, turn count and digest must all match the requested
+anchor. A boundary inside a batch fails; it cannot adopt an earlier prefix as
+if the missing bytes were an incomplete tail. Source identity, size and mtime
+are rechecked against the entire stopped file. Input anchors may borrow the
+previous recovery output because the reader copies them before replacing it.
+
+Later bytes remain uninspected, whether they contain valid batches, corruption
+or an incomplete append. Success reports zero incomplete-tail bytes and grants
+no suffix-repair authority. The context-prefix variant captures semantic events
+and historical IRC dependencies at that same boundary before joint in-memory
+adoption. This supplies a checkpoint-validation primitive; it still reads from
+the journal header rather than loading a checkpoint and replaying only a suffix.
+
+### Provider capture during full replay
+
+`snag_store_reconcile_binary_context` feeds resolved semantic events and their
+post-reduction core state into the existing provider cache. The capture retains
+its ordinary uncompressed event seam, including time, turn and unfinished-work
+metadata, with the existing compaction/rebase and unconsumed-IRC retention rules.
+It remains provisional through the complete strict replay and source identity
+recheck. Only success replaces the state-only destination, its provider consumer
+and optional owned core origins together. Cancellation, corruption and allocation
+or read errors discard the candidate and preserve the previous destination.
+
+The shared provider cache stores only the event-derived suffix. Rebased input,
+compaction output and its rollout-location hint are installed once as the request
+prefix, outside that suffix. Copying between a full request and the suffix
+translates the retry-notice index as well as input-timing message bindings.
+Embedded legacy provider checkpoints retain the retry count and suffix-relative
+notice index. Absence of both fields identifies older views, which can include
+the separately installed prefix; those views rebuild from their retained seam.
+Partial or malformed cursor fields fail restoration. A view already marked for
+rebuild may hold an out-of-array cursor from interrupted preparation; its event
+seam, rather than that partial materialization, supplies the next request.
+
+The shared `snag_context_capture` interface also accepts strict legacy replay.
+Binding requires the matching verified core state and transfers ownership without
+opening descriptors, dispatching work or contacting a provider. Its first request
+uses the existing renderer over the captured seam; later requests use the ordinary
+incremental cache. The in-memory JSON representation retains its signed64 sequence
+and timestamp domain; larger native values fail explicitly before conversion.
+Retained media lookup and the existing rollout-directory hint remain caller-owned
+host bindings, supplied after reconstruction. State-only preparation does not try
+to append a legacy provider checkpoint; that write requires journal/lock resources.
+
+Historical IRC admission/recovery can refer outside the retained seam, including
+old consumed-watermark errors and an adjacent checkpoint-insertion shift. Before
+binding, capture resolves a source table for retained admission positions, their
+adjacent repair candidates and references in the current active prompt. The native
+lookup walks the verified prefix with bounded batch scratch when those dependencies
+exist, decodes only IRC sources and import-marker positions, then confirms the
+final anchor and source identity/size/mtime. Marker entries carry empty data and
+serve only the existing exact-identity repair rule; they never enter semantic
+replay. The owned table survives the source descriptor closing. It is also retained
+by the existing in-memory/legacy provider snapshot interface as an optional
+`history_sources` array. This is not a native checkpoint section or an indexed
+lookup, and no constant-time or native-resume claim follows from it.
+
+The provider checkpoint section below records the retained seam as canonical
+sequence references. Its validation path reconstructs provider state from a full
+journal. Runtime resume uses bounded receipt admission and suffix replay,
+described below. No opaque provider-cache JSON is persisted in a native checkpoint.
+
+### Legacy journal staging
+
+`snag_store_import_binary_journal` streams a stopped, exclusively locked JSONL
+source into a caller-owned empty private file. Strict legacy replay validates
+the source from byte zero. Typed adapters produce native records, grouped
+under the existing 1MiB batch target; a larger record occupies its own batch up
+to the existing record bound. Payload buffers and record tables cover only the
+current batch. This stage keeps original sequence numbers, timestamps and all
+semantic event data. It leaves source bytes and descriptor position unchanged.
+
+For the current response, staging retains one span descriptor per streamed public
+item and a reference to the strict reducer's current public array. Matching
+snapshot items reuse the complete stream, or its first complete fragment, after
+checking item identity, provider identity, kind, phase and exact text. Reordered
+snapshots and interspersed tool calls keep their recorded order. Other text stays
+literal, including independently recorded snapshots and prefixes whose ending
+fragment is not in the retained descriptor. Descriptors are discarded when the
+response closes; equal IDs or bytes in a later response never reuse the old scope.
+This construction adds neither a per-fragment table nor a session-wide cache.
+
+Receipt-backed turn fields reuse the current direct/timer/IRC receipt, or the
+current queue head's original content and most recently edited text. Staging
+retains field coordinates only while that input is pending. Strict legacy replay
+has already checked the turn's text and content against its authoritative receipt;
+cancellation and consumption remove the corresponding sources. Direct instructions
+reuse the receipt's complete list only when identical, using an owned reference to
+that pending instruction list for comparison. Queue text and content need no
+additional payload cache.
+Independently discovered lists, queued instructions, goal turns and receipt-free
+direct turns stay literal. Selection, timing, read-only state, queue identity and
+all other turn metadata remain on the consuming record. Native replay verifies
+the receipt binding independently before resolving the declared originals.
+
+Derived legacy checkpoints become optional metadata kind `0x8000`, version1,
+with a48-byte payload: original JSONL start8, end8 and chain hash32. Offsets are
+little-endian, half-open, positive and bounded by signed64; the end must exceed
+the start. The original event envelope supplies sequence and time. Native replay
+validates this known marker's shape, then advances past it without a semantic
+callback. These source coordinates are diagnostic metadata, never native seek
+authority. Checkpoint state and provider-view bodies are rebuilt separately.
+
+After writing, native replay verifies the entire staged journal. A streaming
+SHA-256 digest compares every semantic event's sequence, timestamp, exact type
+and canonical data digest against legacy replay. Final core snapshots must also
+match, excluding only the chain hash, physical log end and two checkpoint
+coordinates. Source identity, size and modification time are rechecked after
+native verification. Restored state is adopted only after all checks succeed.
+An incomplete source tail is reported and retained; the output contains only the
+verified prefix. Any failure leaves provisional output for the caller to discard.
+
+The stopped staging API verifies through the legacy projection domain.
+Canonical-field deduplication and source-coordinate relocation preserve accepting
+field roles; unresolved log coordinates and voice-adoption cursors fail
+verification. The constructive stopped-session stage also streams derived-index
+bytes a batch at a time, verifies the native frontier, reconstructs provider
+state and installs a separate writer only after source stability checks. Its
+source bytes, descriptor position and state stay unchanged; failure leaves the
+target state intact and provisional output unavailable for publication. Existing
+context control cancels legacy visits, native semantic verification and provider
+reconstruction. Stopped directory cutover builds all four native files in a
+private `.converting-*` child and retains every original journal byte at
+`.legacy-source/events.jsonl`. It keeps the original writer-lock inode. Derived
+index and checkpoint names move first; the original journal moves into retention
+and both directories synchronize before `journal.bin` publishes native format
+selection. The legacy pathname stays absent to exclude older writers. An
+interrupted cutover can stage again from the retained source; an ambiguous
+existing retention copy stops conversion. Provisional files remain available for
+diagnosis. A sync failure after native selection reports uncertain durability
+and keeps that selection. `snajpagent convert [--dotdir DIR] [--jobs N]` streams
+resolved IDs through a mutex-protected directory iterator. The default worker
+count is the online CPU count bounded by discovered session names; an explicit
+positive jobs count sets the concurrency. State capture stays worker-owned and
+index scratch stays batch-sized. A failed or locked session leaves other work
+ready. Already-current validation uses immutable native admission and requires
+its verified physical extent to cover the whole journal, retaining rejected tails.
+Native creation and existing native admission use the production backend below.
+
+### Legacy event names
+
+The native-kind/legacy-name mapping identifies all assigned semantic families
+for conversion and projection. Names retain the source grammar exactly, including
+`model_selection_changed` for native kind8 and the distinct `goal_*` events.
+Unknown names or kinds are rejected; optional metadata has no invented semantic
+name. Resolving a type name validates neither its payload nor its eligibility
+to change session state.
+
+### Legacy data adapters
+
+`store_binary_legacy` converts session metadata1..12, goal and timer data objects
+to native field-shaped payloads and reconstructs owned JSON objects for comparison
+and projection. Creation retains semantic revision2/3/4 and its exact historical
+`workspace`/`cwd` key. Session settings preserve before/after selections, empty
+banner/steering overrides and context modes/counts. Deletion confirmation stores
+the packed prefix and both identifiers from the historical trash name; actual
+session identity and deletion eligibility are reducer checks. Path strings keep
+the source platform's spelling without probing the current host.
+
+Packed identifiers, actor/reason enums, booleans, integer deadlines and bounded
+UTF-8 text have explicit fields; closed schemas reject unknown properties. Rule log
+fields, rule transformations, dictation billing and voice observations also have
+adapters. Rule values and voice fields retain their historically unconstrained
+canonical types, absent/null distinctions and unknown voice extensions. Scratch
+views are bound after buffer growth and survive through payload serialization.
+Action-digest transitions remain reducer checks; observations initiate no work.
+Controls retain one-bit integer values and the paired image-boundary origin/source
+sequence for compact requests. Download adapters preserve packed identifiers and
+hashes, nonnegative counters, source path/name spelling and removal/clear reasons.
+Pending-control transitions, causal source sequences, queue membership and source
+platform/filesystem admission remain reducer/importer responsibilities. Context
+rebases preserve their recovery reason and turn identity. Capacity rejections
+retain response/cycle/hash bindings, the fixed error code, message and three
+nullable limits; numeric zero is rejected in legacy data instead of silently
+becoming null. Recorded ceilings are preserved without recomputation by an adapter.
+Compaction adapters retain required nullable predecessor identity, optional scope
+and compactor model, reason/method enums and signed64-compatible counts. Completion
+preserves the canonical provider array and verifies its recorded digest, including
+unknown provider extensions. Anchored counting is accepted only at start; unknown
+counts retain zero. Source-prefix, scope, model/profile and predecessor bindings
+remain reducer/importer checks. Turn outcome adapters preserve completion graph
+identities, silent-completion reasons, interruption origin/reason and failure
+class/message. Recovery keeps arbitrary class text and optional retry counts,
+including the existing `UINT32_MAX + 1` terminal-attempt value; absent retry counts
+remain absent. These records do not execute cancellation or recovery actions.
+Input controls preserve empty input cancellation data, deferred-turn identity,
+positive admission time and ordered IDs, queue armed state and user queue
+cancellation. Their unchanged layouts project from input payload versions1/2;
+encoders use version2. Membership, uniqueness and pending-state checks remain
+reducer work. Admission times beyond signed64 cannot project into legacy JSON.
+Input receipts, steering and IRC reply reminders also project their inline text,
+optional media and receipt times. Receipts preserve model selection, read-only
+state, timer origin and ordered, duplicate-free instruction paths. Rootedness is
+checked against the source platform by the importer. Typed media retains text,
+file and image parts, source assets and notes, with the legacy MIME, byte and
+aggregate image limits. IRC reminders retain their exact required text. Scratch
+views bind after all list growth. Native references return `ENOTSUP` from this
+pure data API until resolved against their original journal roles; no literal is
+fabricated. Version1/2 inline layouts both project. Active-turn, pending-state,
+identity and asset-file bindings remain reducer/importer work.
+Queued/edited input adapters preserve read-only state and optional arming, receipt
+time and content, including content in edits even though legacy replay only
+assigns it on addition. Plain queued input uses an empty string for no active
+turn; voice uses null. Voice is exclusive to queued input without read-only state
+or content. Its eight provenance fields remain typed, and queue identity retains
+the first32 hex characters of the legacy canonical SHA256 over connection/input
+IDs. Speaker authentication and authority are unchanged. Pending membership,
+active-turn matching, no-op edit rejection and queue effects remain reducer work.
+Turn starts preserve cwd/workspace spelling, optional read-only/time fields,
+queue identity, all four origins, typed media and open configuration snapshots.
+Execution defaults and numeric relationships match legacy validation without
+inserting absent settings. Instruction metadata may mix objects and paths when
+its first item is an object; a path-first list stays path-only. Source format,
+pending/goal admission, cwd equality and turn sequencing remain importer/reducer
+checks. Workspace spelling alone does not establish the session's source format.
+Unresolved turn text/content/instruction references likewise return `ENOTSUP`.
+Response starts preserve the legacy identity-only and full-accounting shapes,
+ordered steering IDs, optional IRC watermark and nullable baseline/compaction IDs.
+Full accounting retains capacity source, source-bound state, hashes, positive byte
+counts, nonnegative counts and hard-input limit, and nullable positive output limit.
+Only anchored counting carries a baseline; unknown counting retains zero, while
+other methods also permit zero. Full-only host snapshots use typed text parts and
+project exact user-role objects with the original required boundary messages.
+Steering views rebind after snapshot growth. Wider native unsigned counters cannot
+project as legacy integers. Source-format eligibility, current provider/profile,
+anchor, steering, watermark and response-cycle bindings remain importer/reducer checks.
+Streamed output preserves item kind/phase, both item identities, literal text,
+index and byte offset. Interruptions retain origin/reason constraints; failures
+retain class, message, retry count and historical optional-field prefixes, including
+policy detail and handoff state. Corrections preserve their exact host text and
+the assistant-only restriction for cyber clarification. Partial-public arrays
+use typed items and retain ordering. The existing source validator checks unique
+public IDs and canonical graph-size limits in both directions; repeated provider
+IDs remain allowed. Unresolved native output spans return `ENOTSUP` before public
+projection. These adapters do not append live output, enqueue correction steering
+or trigger retry/handoff actions. Fragment continuity and active-response, pending
+steering, correction-use and source ownership checks remain importer/reducer work.
+Completed responses retain mixed public/tool-call graphs, provider response identity
+and nullable usage, including absent versus explicitly null cache counts. Existing
+graph classification validates the original ID namespaces, tool catalog and encoded
+budget; conflicting graphs remain recorded conflicts rather than conversion errors.
+Arguments and reasoning objects retain canonical provider-boundary JSON, while graph
+items and continuation wrappers have typed fields. Continuation absence, null and
+ordered items remain distinct; present continuation always retains its required scope.
+Temporary provider-field buffers bind after growth, and graph views rebind after
+continuation serialization. Projection validates both aggregate source budgets and
+preserves provider extensions. Proposed calls and continuation never execute here.
+Tool starts retain the turn/call/action digest and source workdir spelling. Process
+output retains handle, stream, byte offset, raw bytes and original UTF-8/base64 tag.
+The source decoder rejects noncanonical base64 padding bits, so re-encoding the
+decoded bytes reproduces every accepted base64 value. Existing nonempty16KiB chunk
+and signed64 end-offset bounds apply. Ownership, active-turn/call/permission checks
+and contiguous stream admission remain reducer work; conversion starts no process
+and emits no terminal output.
+Tool results and process closure retain status/reason/cause enums, optional limit,
+handle, content and output-reference presence. Ignored exit/signal fields preserve
+all historical canonical value types. Source result validation checks dependency
+order and signed64 stream/stdin accounting; native value views bind after media
+serialization. Excerpts keep their original strings: historical base64 admission
+checks length alone, unlike the strict process-chunk decoder. Retained UTF-8 may
+exceed the original byte count. Existing image aggregate bounds apply; model text
+uses the event budget rather than an invented smaller cap. Closure retains the
+seven terminal statuses and six causes. Historical log coordinates are literal
+metadata here; the importer must relocate them before binary-history navigation.
+Call/process ownership, collection ranges and lifecycle transitions remain reducer
+checks. Conversion neither executes a call nor settles a live process.
+IRC observations preserve the old watermark-free shape, explicit empty stream,
+stream/sequence/input presence and paired urgency/reply classification. Original
+kind names, booleans, text bounds, C0/DEL exclusions and signed64 counters remain
+source-validated. Snapshots retain their four reasons and bounded text. Admissions
+carry strictly increasing positive sequence lists and an optional typed receipt or
+steering record, preserving the mutually exclusive keys. Sequence and child views
+bind after the last buffer growth. Embedded v1/v2 literal input payloads project;
+unresolved input references return `ENOTSUP`. Admission sequence causality, room
+membership, classification authority and embedded reducer transitions remain
+journal-aware checks. Conversion does not connect to IRC or admit live input.
+Voice-transfer sealing and adoption retain all three identities, positive source
+sequence/count fields and adoption's original begin offset, sequence and digest.
+Own-session identity, causal sequence/count bounds, live-log range and transfer
+acceptance remain importer/reducer checks. Begin coordinates still require journal
+relocation; projecting metadata does not adopt history or change attachment state.
+Archive264 preserves public projections through its enclosed public field profile,
+including the smaller checkpoint view and explicitly unassigned source names.
+All77 assigned semantic kinds have data adapters. Unresolved native references
+return `ENOTSUP`; known records never use a generic whole-record fallback.
+The module is linked into the store and context test targets.
+
+Canonical validation checks data at its original envelope nesting level before
+conversion. The complete source envelope, sequence/hash chain, source-platform
+path admission and reducer transitions remain importer responsibilities. Native
+deadlines beyond signed64 cannot be projected into legacy JSON. Failed conversion
+preserves caller outputs, including append prefixes. These adapters do not load,
+repair, publish or resume a session; journal-aware reference resolution, replay
+integration and the four-file backend remain implementation work.
+
+### Hosted-search observations
+
+Payload version 1 assigns 167 to `hosted_search_started` and 168 to
+`hosted_search_finished`. Both begin with the turn UUID and provider item-ID text.
+Finish adds status text before the one-byte optional-detail presence flag. Start
+may carry an action object; finish may carry an array of source strings. Their
+native field-value encodings preserve provider members, source order, duplicates
+and explicit empty objects/arrays. The body has fixed field positions; only the
+provider-owned action has an open object schema.
+
+The adapters retain the existing provider-ID grammar, 64-byte nonempty status,
+16KiB canonical action-object bound and 2048-byte nonempty source-string bound.
+Source strings are retained as supplied, without URL normalization or a source
+count quota. Action on finish and sources on start remain invalid. The strict
+reducer requires the current turn and an open response. These display-only
+observations create no pending-call/result contract or process state, and their
+conversion performs no search or other network operation.
+
 ### Typed control payloads
 
-Payload version1 assigns session/configuration IDs1..12, timer
+Payload version1 assigns session/configuration IDs1..14, timer
 schedule/fire/cancel IDs32..34, goal
 start/replace/reword/lock/pause/block/complete/resume/cancel IDs64..72 and initial
-input/steering IDs96..105. IDs13..31
-remain reserved for session metadata. Required semantic kinds occupy the low
+input/steering IDs96..105. Session control request/start/finish use IDs16..18;
+ID15 and IDs19..31 remain reserved for session metadata. Required semantic kinds occupy the low
 half of the 16-bit namespace. The high half permits explicitly optional metadata;
 unknown required records, unsupported semantic payload versions and optional
 flags on semantic kinds are errors before state adoption.
 
-Each control payload starts with its 16-byte timer or goal ID. Scheduling adds
+Each timer or goal payload starts with its 16-byte ID. Scheduling adds
 an 8-byte due time and text. Goal start adds its prompt; replacement adds the new
 16-byte ID, actor and prompt; reword adds actor and prompt. Lock/pause add one
 byte for the boolean/reason enum. Block adds actor and blocker text; completion
@@ -164,6 +737,14 @@ followed by exact UTF-8 bytes, with existing field-size limits and embedded NUL
 rejection. Actor values1/2 are user/model; pause reason values1..6 retain the
 legacy order input-closed, provider-policy, refusal, session-resumed, turn-stopped,
 user. These are compatibility representations, not new automatic transitions.
+
+Names use the existing nonblank, C0/DEL-free name grammar. Saved options share
+the current launch-option arity validator with the JSON reducer. The argument
+list uses bounded NUL-terminated strings, like instruction paths: it remains
+smaller than its legacy JSON source, including near the event-size boundary,
+and readers validate option names in place. Every argument has the existing
+path/text bound. This representation preserves spelling, repeated options and
+option-like argument values; it does not normalize or apply configuration.
 
 The codec returns typed C values and borrowed text slices. It performs no JSON
 serialization and preserves caller output on malformed input. Current-state,
@@ -186,6 +767,17 @@ Session/configuration records use fixed field order:
 | 10 | effort changed | previous effort text, new effort text |
 | 11 | context selection changed | previous mode1/tokens8, new mode1/tokens8 |
 | 12 | command shell changed | shell path text |
+| 13 | session named | validated name text |
+| 14 | saved resume options | LEu32 count, ordered NUL-terminated UTF-8 arguments |
+| 16 | control requested | control bit1, image-boundary origin presence1, optional source sequence8 |
+| 17/18 | control started/finished | control bit1 |
+
+Control bits retain the existing values: config1, cache2, compact4, archive8,
+delete16 and retry32. Exactly one bit is required. The optional request origin
+is `image_boundary`, permitted only for compact; its source sequence must be
+positive and signed-64 representable. Absent origin means absent source sequence.
+Only presence values0/1 are valid. Pending/started state, source precedence and
+admission authority remain reducer checks.
 
 The creation record retains source semantic revision2/3/4 for the legacy reducer,
 separately from binary file/payload versions. Protocol1 means Responses. Context
@@ -228,9 +820,14 @@ text and requested-action text. These remain provenance, not speaker identity
 or additional authority; the existing reducer still checks queue identity and
 active-turn matching. No flags or absent timestamps/arming values are inferred.
 
-Instruction lists use count4, then per entry a metadata-present boolean1 and
-path text. Workspace-era entries additionally retain byte count8 and SHA25632,
-not instruction file contents. Direct input receipts accept plain paths only,
+Instruction lists use count4, then per entry a metadata-present boolean1 and a
+bounded NUL-terminated UTF-8 path. Unlike the usual length-prefixed text, this
+uses two overhead bytes per plain path instead of five. A near-limit legacy path
+array therefore fits the existing native record budget; no larger limit or path
+truncation is needed. Embedded NUL remains invalid. This refines the unshipped
+draft encoding. Workspace-era entries also
+retain byte count8 and SHA25632, not instruction file contents. Direct input
+receipts accept plain paths only,
 as their existing schema requires. Media content lists use nonzero count4 and
 typed entries: text1 plus text, file2 plus asset, or image3 plus asset followed
 by a source-present boolean1 and, when present, source asset and note text.
@@ -239,8 +836,8 @@ field shape/size, UTF-8 and flags; path/MIME policy, aggregate image limits and
 actual asset verification remain the existing domain validators' responsibility.
 Borrowed list iterators avoid allocating a second array proportional to event
 size. Counts are checked against remaining bytes before iteration. These are
-typed field encodings, not embedded JSON. Full turn-start records remain to be
-added.
+typed field encodings, not embedded JSON. Turn-start records and their canonical
+input references are specified below.
 
 The ordinary event-size bound remains a resource contract. Start with a 1 MiB
 batch target, admitting one larger permitted event alone. A batch never becomes
@@ -268,19 +865,633 @@ read-only presence/value, bit2 receipt timestamp presence, bit3 content presence
 and bit4 the legacy `workspace` key instead of `cwd`. Unknown bits are invalid.
 
 Config contains provider/model/effort selection and an optional-field mask2.
-Bits0..10 select eight-byte numbers in this order: prompt schema, replay schema,
-tool schema, maximum parallel commands, default yield, maximum wait, default
-timeout, maximum timeout, tool output bytes, output cache bytes and maximum
-turn retries. Bits11/12 select capability-version/profile-ID text. Bit13 selects
-maximum output tokens (tag0 null; tag1 followed by an eight-byte value), and
-bit14 selects the parallel-tool-calls boolean. Missing, zero, false and null
-remain distinct. Legacy defaults and current execution-policy bounds remain
-with the existing reducer; the codec preserves the recorded values.
+Bits0..7 select eight-byte numbers in this order: maximum parallel commands,
+default yield, maximum wait, default timeout, maximum timeout, tool output bytes,
+output cache bytes and maximum turn retries. Bits8..13 select six native field
+values: prompt schema, replay schema, tool schema, capability version, profile ID
+and maximum output tokens. Bit14 selects the parallel-tool-calls boolean; bit15
+is reserved. A native extension object follows, including an empty object when
+there are no unknown keys. Its top-level keys exclude all eighteen named settings.
+
+Legacy configuration validation left the six individual fields and unknown keys
+unconstrained. Their native values preserve null, booleans, signed integers,
+strings, arrays and objects, including absence versus null. Named fields use
+depth45 through `data/config/field`; the extension object uses depth46. This
+refines the native layout while preserving legacy JSONL decoding. Execution
+settings remain explicit typed slots; there is no whole-config or whole-record
+fallback. Legacy defaults and execution-policy bounds remain reducer/importer
+checks. In particular, the old positive signed64 maximum-parallel literal is
+retained even where old replay subsequently narrows it to uint32.
 
 Turn instructions may contain legacy path/size/hash metadata. They describe the
 actual turn's discovered and explicit files, which can differ from the receipt
 list. References are used only for known identical payloads. Inline turn leaves
 also supply canonical originals for older turns without receipt events.
+
+### Turn control, recovery and completion payloads
+
+Draft kinds 129/130 are `turn_yield_requested` and `turn_cancel_requested`; each
+contains only the 16-byte turn ID. Kind 131 is `turn_recovery`: turn ID, a one-byte
+retry-count presence flag, the optional eight-byte retry count, then class and
+message as length-prefixed UTF-8. Absence and zero remain distinct. The existing
+reducer permits counts through `UINT32_MAX + 1`, so four bytes would lose a valid
+record. Recovery class is historically open text, including empty text; preserve
+it rather than restricting it to the terminal-failure classes. Its size remains
+subject to the event-size bound. Diagnostic messages retain the existing 8192-byte
+bound and may be empty.
+
+Kind 132, `turn_completed`, carries turn, final-response and final-item IDs, each
+16 bytes. Kind 133, `turn_completed_silent`, carries turn and response IDs followed
+by a one-byte reason: 1 `room_update_quiet`, 2 `reply_reminder_exhausted`. These are
+host graph identities, not provider identifier strings or copies of reply text.
+
+Kind 134, `turn_interrupted`, carries the turn ID, one-byte origin (1 user,
+2 recovery, 3 output), and one-byte reason (1 cancelled, 2 process_lost,
+3 output_lost, 4 session_recovered). Kind 135, `turn_failed`, carries the turn ID,
+one-byte class (1 context, 2 provider, 3 protocol, 4 tool, 5 persistence, 6 resource,
+7 output, 8 internal) and a length-prefixed diagnostic message. All seven kinds
+use payload version 1. Unknown tags, unsupported versions, optional-semantic flags
+and trailing bytes fail without publishing a decoded event.
+
+These codecs preserve facts without applying state transitions. The reducer must
+still check the current turn, response graph and final-item identity, unfinished
+tools/processes and steering, retry state, and queue authority. Recovery retains
+an unfinished turn; it is not completion, cancellation or a goal transition.
+The codecs remain test-only until the complete storage backend is integrated.
+
+### Voice observations
+
+Draft kind 257 version 1 contains connection ID16, length-prefixed provider/model
+names, and the inner observation profile. The inner kind byte assigns1..9 to
+started, stopped, transcript, usage, ASR failure, interruption, response, result
+and muted. A64-bit presence mask selects46 named fields, in the fixed alphabetical
+order of `snag_binary_voice_fields`; present values follow in that order. Reserved
+mask bits are invalid. This is a fixed versioned field set, not a session quota.
+
+Legacy admission constrained the type name and outer metadata but left individual
+inner values unconstrained. Each named value therefore uses the native field-value
+representation at depth3 (`data/event/field`), preserving absent versus null and
+unexpected historical types. An additional native object retains unknown fields
+at their original depth. Its top-level keys exclude `type` and every named field;
+known fields cannot be hidden in that extension object. Empty extension objects
+are valid. The native profile has no opaque JSON event-body fallback.
+
+The inner JSON adapters reconstruct canonical historical values for conversion
+and projection. Full original-envelope depth/size checks remain import duties.
+Observation codecs do not start microphones, dispatch interface actions, update
+billing counters or execute imported source work. Transcript/source ownership and
+current connection acceptance remain application/reducer invariants.
+
+### Typed voice-archive snapshots
+
+Draft kind 264 version 1 contains transfer/target/source IDs16 each, original
+source sequence8, enclosed kind2/version2, payload size4 and the typed enclosed
+payload. Source sequence is positive signed-64. The selected enclosed profile must
+accept the entire payload before exposing a borrowed view. Archive records and
+seals cannot themselves be enclosed; adopted-root metadata can be retained as an
+inert source observation. Unknown required kinds, unsupported versions, malformed
+payloads and recursive archive records fail closed.
+
+This codec validates structure without applying source transitions. Reference
+relocation, original-source versus target-journal identity, archive closure and
+causal/role checks remain converter/reducer work. Merely enclosing a source
+reference does not make it a valid target-journal reference. Original source
+timestamps were absent from the JSONL transfer-data wrapper and are not invented
+in the enclosed payload header.
+
+Public history has its own enclosed version, `0x8001`, within this wrapper.
+Ordinary source payload versions remain supported for literal typed snapshots.
+The public version cannot be decoded as an ordinary executable event. Its need is
+concrete: the history producer strips provider-only payloads, emits smaller public
+checkpoint and adoption views, and redacts strings. The old archive validator also
+admits arbitrary object fields. Missing or redacted ordinary fields in these inert
+observations must not be guessed, restored or rejected as executable-event damage.
+
+The public profile fixes a named field list for each supported source kind. A
+presence mask uses the minimum whole bytes for that list; present named values
+follow in declared order, then one native extension object. Each individual field
+retains its historical canonical value domain and absence/null distinction.
+Extensions cannot shadow any declared name. This uses the existing native field
+value representation, not an opaque whole-known-record document or a fallback
+selected after ordinary schema failure. Every imported public snapshot uses this
+profile regardless of whether it happens to satisfy an ordinary schema.
+
+Archive-only source discriminator `0x7fff` denotes the public checkpoint, with
+`covers_through_seq`, `provider_view` and `snapshot_v` named fields. It is not a new
+journal event kind. Discriminator zero denotes an unassigned source type: its
+nonempty UTF-8 type name precedes the native extension fields. Names assigned by
+this frozen profile, and the forbidden archive/seal names, cannot masquerade as
+unassigned types. There is no host schema to apply to genuinely unassigned names;
+they remain explicitly unassigned inert observations. Neither discriminator grants
+source-session access or target-session execution authority.
+
+The version fixes the source-kind field lists and their mask positions. New lists
+or changed positions require another public profile version. Named values start
+at their original depth through envelope/data/archive-data/field; extensions use
+the corresponding object depth. Native payload bounds and complete legacy envelope
+bounds remain distinct. Conversion must retain the original journal and refuse
+publication when it cannot preserve the source data faithfully. Archive references,
+coordinate relocation and actual history adoption remain separate integration work.
+
+### Auxiliary audio billing and voice-transfer anchors
+
+Draft kind 256 version 1 contains length-prefixed provider, model and report
+text for the fixed operation `dictation`. Provider/model use their existing
+name bounds; report text is 1..262143 UTF-8 bytes. The report remains auxiliary
+billing information, separate from coding-token accounting and execution state.
+
+Kind265 version1 retains sealed voice-transfer metadata: transfer/target/source
+IDs (16 bytes each), source-as-of sequence8 and record count8. Both numbers are
+positive signed-64 values. The sealed record leaves the history root unchanged.
+Kind266 version1 appends literal JSONL begin-offset8, begin-sequence8 and
+begin-hash32. Its offset is positive and its sequence is at least2; both retain
+signed-64 bounds.
+
+Kind266 version2 starts with a one-byte coordinate tag, then the same64-byte
+transfer metadata. Tag0 appends the version1 literal coordinates. Tag1 appends
+only the8-byte logical begin sequence; its113-byte and73-byte forms are exact.
+Unknown tags, missing fields and trailing bytes fail. The standalone legacy
+adapter preserves literal coordinates and returns ENOTSUP for an unresolved
+native start. Native replay requires tag1 and checks identities, earlier sequence
+and count versus the adopted range before replacing the history root.
+
+The stopped importer validates a JSONL cursor against its already verified
+prefix: the offset must be a line boundary and the next record must match the
+exact sequence and predecessor hash. It then writes a native sequence reference.
+Native resolution locates that sequence through authenticated batches. A cursor
+contains the containing batch's start and predecessor digest, plus the logical
+start sequence, which can be inside that batch. Native iteration must verify the
+batch and skip its earlier records. No legacy offset becomes a native address.
+Semantic conversion comparisons retain identities, source coverage, counts and
+logical starts; each side independently validates its physical coordinates.
+Archive observations retain their original fields and remain inert.
+
+### Filter-rule records
+
+Draft kinds248/249 use payload version1. Rule logging contains exactly three
+native field values in chain/message/rule order, using the tagged representation
+described for historical result slots below. The old validator restricted their
+keys, not their value types; null, booleans, signed integers, strings, arrays and
+objects therefore retain their original types. These are three specified fields
+in a typed envelope. Known host records have no opaque-JSON or generic-value
+fallback. Rule fields permit relative depth46 through `data/field`; result fields
+retain depth45 through `data/result/field`. The shared implementation counts each
+domain's fixed starting depth against the existing canonical depth48. Complete
+envelope canonical-size validation remains with import/projection.
+
+Rule transformation contains call ID16, original/effective action hashes32 each,
+and a length-prefixed UTF-8 rule name, including empty text and subject to the
+event-size bound. Replay verifies the pending unfinished call and original hash
+before adopting its effective digest. A log record remains observational; neither
+codec evaluates a rule or dispatches a transformed action.
+
+### Download queue records
+
+Draft kinds240/241/242 use payload version1. A queued download carries ID16,
+SHA25632, bytes/mtime/queued-time counts8 each, then length-prefixed path and name.
+Counts are nonnegative signed-64 values, including zero. Both texts are nonempty
+NUL-free UTF-8. Path retains the existing16KiB bound; the native name field uses
+the event-size bound because the legacy name limit is source-platform dependent
+(`NAME_MAX` on Unix,1020 UTF-8 bytes on Windows). Source-platform root syntax and
+name admission remain source-validation obligations, separately from filesystem
+use; history decoding preserves foreign path spelling and name bytes. Queue
+uniqueness, removal membership, file availability and transfer permission are
+state/operation checks.
+
+Removal carries ID16 and a length-prefixed reason; clear carries only the reason.
+Reasons retain the existing0..1024-byte UTF-8 domain, including empty text. Encoding
+these observations neither opens a file nor starts a transfer.
+
+### Compaction records
+
+Draft kinds224/225/226 use payload version1 for compaction start, interruption
+and completion. All retain a16-byte compaction ID. Start then carries flags1
+(bit0 predecessor present, bit1 continuation scope present, bit2 compaction model
+present), reason1, count method1, source sequence8, input-token bound8, source/
+request/count-request hashes32 each, and model/capability/profile texts. Optional
+fields follow in flag order: predecessor ID16, scope32, compaction-model text.
+All texts are length-prefixed. Model retains its existing name bound; capability,
+profile and optional compaction model have only the event-size bound. Each is
+nonempty. Absent predecessor represents the required legacy null; the other two
+flags preserve field absence.
+
+Start reasons are manual1, proactive2, hard_budget3, provider_rejection4,
+model_switch5, image_boundary6 and reduce7. Its count method uses the existing
+six-value enum. Unknown requires zero tokens; every other method requires a
+positive signed-64 count. Source sequence is positive and signed-64 representable.
+Interruption carries only ID16 and reason1: steering1, user2,
+endpoint_unavailable3, context_rejected4 or error5.
+
+Completion carries ID16, scope-presence1 (0/1), input/output count methods1 each,
+input/output token bounds8 each, output-count-request/source/output hashes32 each,
+optional scope32, then length-prefixed provider output. Completion excludes the
+anchored method for both counts, retaining the same unknown/zero and signed-64
+rules. Provider output is a canonical JSON array of1..128 objects, each with a
+string `type`, up to the existing12MiB bound. Empty or unknown type strings and
+unknown provider extensions remain intact. Its canonical bytes must match the
+recorded output hash. This provider-boundary value is the only opaque JSON field;
+the host envelope and all accounting, identity and presence fields are typed.
+
+Reducer checks retain active-prefix/pending-work eligibility, profile and model
+qualification, compaction/predecessor identity, source precedence and reduce
+exceptions, scope continuity and active source hash. Import also validates the
+complete original envelope's canonical depth and size. A valid standalone codec
+record does not establish these state relationships or adopt compacted history.
+
+Canonical compaction-output references select the complete original provider
+array, excluding its length prefix, only from kind226. The full source record
+and output hash are validated before returning borrowed completion fields.
+Metadata, nested provider objects, partial arrays and equal bytes in another
+event family cannot supply this role. The caller retains journal, causal and
+compaction-state authority; the reference neither reads files nor adopts history.
+
+### Context recovery and capacity rejection
+
+Draft kind227, `context_rebased`, carries a turn ID16 and reason1:
+goal_recovery1 or turn_recovery2. Kind166, `response_capacity_rejected`, carries
+turn/response IDs16 each, cycle4, provider-source hash32, request hash32,
+context-limit/requested-input/observed-input counts8 each, then a length-prefixed
+UTF-8 diagnostic (0..255 bytes). Its code is the fixed
+`context_length_exceeded`. Cycle is positive. Zero count represents the required
+JSON null; nonnull counts are positive and at most4000000000. Historical integer
+zero is invalid and must not be imported as null. Both kinds use payload version1.
+
+The reducer verifies current turn/response identity, cycle and request hash,
+finished work before rebasing, and the capacity ceiling calculated from the
+recorded inputs plus the active requested-output count. Provider/model/source
+binding and replacement of the accounting/usage anchor remain state operations.
+The codecs preserve only field values; they neither apply a rebase nor adopt a
+new capacity limit.
+
+### Response-start accounting payload
+
+Draft kind 160, payload version 1, preserves both the legacy identity/accounting
+shape and the full accounting shape. It begins with a two-byte flag mask:
+bit 0 full accounting, bit 1 IRC watermark present, bit 2 host snapshot present,
+bit 3 baseline hash nonnull, bit 4 compaction ID nonnull, bit 5 source-bound capacity,
+bit 6 hard-input limit nonnull, bit 7 requested-output limit nonnull. Higher bits
+are reserved. Bits 2/5/6/7 require the full shape. Missing legacy accounting fields
+stay absent; the codec never fills them from current settings. For the full
+shape, an unset limit bit means a recorded null, not an omitted field.
+
+Fixed widths below are in bytes; text uses length-prefixed UTF-8. Common fields
+follow in order: turn/response IDs 16 each, cycle 4, count method 1,
+input-token bound 8, request/count-request/model-input hashes 32 each, model,
+capability-version and profile-ID texts. Then come the optional baseline hash 32,
+optional compaction ID 16, and the existing counted list of steering IDs.
+Count methods are 1 exact, 2 media_upper_bound, 3 unknown, 4 anchored_upper_bound,
+5 statistical_upper_estimate and 6 qualified_upper_bound. Unknown counts carry
+zero; only an anchored count carries a baseline hash. Cycle is positive.
+
+Full accounting adds provider and effort texts, capacity source 1, provider-source
+and request-input hashes 32 each, model-input bytes 8, request-input bytes 8 and
+request-input count 8, then each nonnull limit 8. Capacity sources are 1 unknown,
+2 advertised, 3 configured, 4 observed and 5 stale-catalog-ignored. The two byte
+counts are positive. The hard-input field preserves zero as allowed by the
+existing reducer; a nonnull output limit is positive and retains the existing
+configuration bound. An optional IRC watermark 8 follows either shape.
+
+The optional host snapshot is last. It reuses the typed content-list encoding
+but permits only nonempty text parts and at least two entries; each entry is a
+user-role data message. Literal snapshot text is preserved, not parsed as control
+or a general JSON object. The reducer checks the actual boundary texts, current
+turn/response cycle, provider/profile identity, admitted steering, watermark and
+compaction/accounting relationships before adoption. This codec remains test-only.
+
+### Streamed public output and canonical fragments
+
+Draft kind 161, payload version 1, carries turn/response IDs (16 bytes each),
+cycle (4), partial-public index (8), byte offset (8), and one public item. The
+item carries kind (1 assistant, 2 refusal; one byte), phase (1 commentary,
+2 final_answer; one byte), host item ID (16), provider item ID and original text
+as length-prefixed UTF-8. Refusal permits only final_answer. Tool-call kind 3 is
+reserved for complete graphs and is rejected in this public profile.
+
+Provider IDs retain the existing 512-byte, control-free validation. Text is
+nonempty and retains the existing 2 MiB public-item bound, including the fragment's
+offset. The reducer still checks the current turn/response/cycle, actual append offset,
+stable item identity, partial-public index and aggregate graph limits.
+
+Output references select the entire original text field of a verified output
+record. They cannot select equal bytes from provider metadata, arbitrary slices,
+other event families or another reference. Resolution returns the response and
+item identities, phase, partial-public index and original byte offset with the
+borrowed text. Before composing a final graph, callers must bind fragments to
+the same journal, earlier sequence, actual response/item identity and consecutive
+byte offsets. A complete graph may also contain tool calls, so its semantic item
+index is not the partial-public index. This foundation does not yet integrate
+final-graph composition or runtime binary storage.
+
+A complete item's streamed text can use a 28-byte source span: the first
+canonical text reference (16), last source sequence (8), and assembled byte count
+(4). Both endpoints are output records for that item. Intervening non-output
+records are skipped. Every output record in the interval must keep the same
+turn/response/cycle, item metadata and partial-public index, and its byte offset
+must equal the assembled length. The first fragment starts at offset zero.
+The resolver checks the exact first text field and requires the last fragment
+to reach the declared byte count before appending any result.
+
+The span stays fixed-size even for one-byte fragments. An explicit
+16-byte reference per one-byte fragment would expand a valid 2 MiB item beyond
+the event-size bound. Spans refer directly to original output records, with no
+reference chains or history quota. Resolution uses the existing positional batch
+reader beneath a verified immutable boundary, one bounded batch buffer and one
+public-item buffer. Journal identity, causal ordering and validation of the other
+event families remain the caller's responsibility. A derived index can locate
+the verified anchor for the first source record. This foundation scans the selected
+source interval. Interruption/failure/correction snapshots and completed-response
+graphs use it in the test-only native reader. Indexed state recovery remains pending.
+
+### Public snapshots and response interruption
+
+A public snapshot is a four-byte count followed by typed public items. Each item
+carries the kind/phase, host item ID and provider item ID used by streamed output.
+Its text is either a nonempty length-prefixed literal or the length marker
+`0xffffffff` followed by a 28-byte original-output span. Empty snapshots contain
+only the zero count. Literal and span values are mutually exclusive. The list
+decoder preserves borrowed literal views and unresolved spans; callers resolve
+spans before checking unique item IDs, aggregate graph size and reducer state.
+The existing aggregate graph bound measures canonical JSON representation, so a
+sum of raw text byte counts alone does not establish graph admission.
+
+Draft kind162/version1 (`response_interrupted`) carries turn/response IDs
+(16 bytes each), cycle (4), origin/reason tags (1 each), and the public snapshot.
+Origins reuse user1, recovery2 and output3, with steering4 added. Reasons reuse
+cancelled1, process_lost2 and output_lost3, with steered5 and control6 added;
+session_recovered4 remains specific to turn interruption. Steering origin and
+steered reason must occur together. Existing turn-interruption profiles retain
+their previous subsets. Current response identity and pending steering remain
+reducer checks in both live commits and native replay.
+
+### Response failure and optional policy fields
+
+Draft kind 163/version 1 (`response_failed`) carries turn/response IDs (16 bytes
+each), cycle (4), failure class (1), response retry count (1), optional-field mask
+(1), message (length-prefixed UTF-8, up to 8192 bytes), and a public snapshot.
+The response profile admits context (1), provider (2), protocol (3), resource (6),
+output (7) and internal (8). Retry count retains its existing range 0 through 2.
+
+Optional fields follow the snapshot in mask order: policy_stopped (mask 1,
+one-byte boolean), turn_retry_attempts (mask 2, eight bytes), new_input (mask 4,
+one-byte boolean), then policy (mask 8). Policy contains three length-prefixed
+strings: code and type (each 0 through 63 bytes), then clarification_skipped
+(1 through 127 bytes). Turn retry attempts retain the existing maximum 2^32.
+The valid masks 0, 1, 3, 7, 15 preserve the historical field prefixes. Absent values
+remain distinct from explicitly stored false or zero; an optional policy object
+requires all preceding fields. Current-response admission and resolved snapshot
+semantics remain reducer checks.
+
+### Output correction
+
+Draft kind 164/version 1 (`response_output_correction`) carries turn/response IDs
+(16 bytes each), cycle (4), correction ID (16), exact length-prefixed correction
+text, and a public snapshot. Text admits the existing empty-output, oversized-
+output and cyber-policy clarification prompts. Policy clarification admits only
+assistant items in its snapshot; the other corrections also admit refusals.
+Reference-backed items retain this metadata check and require source validation
+when resolved. Prompt bytes remain in the record for exact history preservation.
+
+The correction text is a canonical input-text leaf for pending host steering.
+References select its exact field, never an equal public-snapshot text or a
+substring. Correction records provide no content, instructions or voice leaves.
+Current response, correction-ID uniqueness, correction-use state and aggregate
+pending-steering capacity remain reducer checks.
+
+### Completed responses, calls and provider continuation
+
+Draft kind 165/version 1 (`response_completed`) carries turn/response IDs
+(16 bytes each), cycle (4), provider response ID, typed graph, usage, and
+continuation form. The kind supplies the fixed `completed` status.
+
+A graph starts with a four-byte item count. Public items retain the snapshot
+encoding, including original-output spans. Tool-call kind 3 is followed by its
+host call ID (16), provider item ID, provider call ID, tool name and arguments.
+The four text fields are length-prefixed. The existing tool-name validator and
+provider-ID rules apply. Arguments retain the provider-supplied canonical JSON
+object with the existing 2MiB bound; the surrounding host item remains typed.
+Graph identity, ordering, outcome and resolved 8MiB canonical-JSON aggregate
+admission remain reducer checks.
+
+Usage starts with a byte mask. Values 1, 2, 4, 8 and 16 mark known input, output,
+reasoning, total and cached-input counters, stored as eight-byte integers in that
+order. Value 32 preserves the cached field's presence, including explicit null;
+a known cache value requires this bit. Other unknown values reconstruct as null.
+Known counters retain the signed-64-bit range of the existing JSON admission
+profile. Existing reasoning/output and total/input/output consistency checks
+apply. Reported cache values above input remain represented; the reducer decides
+whether to include them in trusted cache accounting.
+
+Continuation form 0 omits the historical pair. Forms 1 (null) and 2 (list) carry
+the 32-byte scope; form 2 then carries a four-byte count of entries. Each entry
+has an eight-byte `before` index and a length-prefixed canonical provider reasoning
+object. Indexes are nondecreasing and bounded by the decoded graph count. Provider
+objects retain bounded extensions and pass the existing reasoning-item validator;
+the host `before`/`item` wrapper stays binary. Aggregate continuation admission
+uses the existing 8MiB canonical-JSON bound in the reducer. Semantic decoding,
+including provider-object validation, can fail without granting truncation
+authority; framing repair is a separate operation.
+
+Completed-response graph references cover one whole typed item, retaining its
+identity and argument/output fields. They require the expected assistant,
+refusal or tool-call kind and reject a public value backed by a span; that value
+reuses its original span directly. Continuation references cover the whole typed
+list, including placement indexes and an empty list's count. An absent or null
+continuation supplies no list reference. Resolution validates the whole record
+and returns turn/response/cycle plus graph index or continuation scope. Equal
+metadata bytes, field substrings, cross-kind slices and reference chains cannot
+substitute for these originals. Journal identity, causal ordering and state
+admission remain caller obligations.
+
+### Historical tool-result field values
+
+The legacy result validator leaves `exit_code` and `signal` types unconstrained
+for several non-exit statuses. Their binary field representation preserves every
+value admitted by the canonical journal: null, booleans, signed integers,
+NUL-free UTF-8 strings, arrays and objects. Known result envelopes retain explicit
+fields; this representation is limited to those historically polymorphic slots.
+
+Tags 0/1/2 are null/false/true, 3 is a signed integer, 4 a string, 5 an array and
+6 an object. Tags 128..255 encode integers 0..127 directly. Other integers use
+tag 3 followed by canonical unsigned base-128 encoding of `2*n` for nonnegative
+values or `2*(-n-1)+1` for negative values. The unsigned representation supports
+all 64 bits; redundant groups and tag-3 encodings of small nonnegative integers
+are invalid. Strings end with NUL; arrays and objects end with tag 7. Object
+entries contain a tagged string key and a value, sorted by UTF-8 bytes with
+duplicates refused. Tags 8..127 and tag 7 outside a container ending are invalid.
+
+Terminated strings and containers keep the native representation no larger than
+canonical JSON, including arrays of long strings near the existing record bound.
+The decoder validates without allocating and measures canonical JSON size,
+including escaped characters, against the existing 16 MiB event bound. The full
+envelope must also fit its aggregate limit. Relative field depth is at most 45:
+the journal's existing depth-48 rule includes `data`, `result` and the field.
+Floating-point values, malformed UTF-8 and embedded NUL remain invalid. A separate
+adapter reconstructs an owned legacy value when needed; normal validation returns
+an immutable borrowed view.
+
+### Tool results and process closure
+
+Draft kind 177/version 2 (`tool_finished`) stores turn/call IDs (16 bytes each)
+and a typed result. Kind 193/version 2 (`process_closed`) stores turn/process IDs,
+a one-byte cause and the same result fields. Causes 1..6 mean user interrupt,
+provider failure, protocol failure, tool failure, output failure and internal
+failure. Closure admits succeeded, failed, signaled, timed-out, cancelled,
+outcome-unknown and I/O-failed results. The reducer retains lifecycle, active
+owner, call state and stream-collection checks.
+
+The result starts with status, reason and presence flags (one byte each), then
+duration (8), native exit/signal field values, the running handle (16, only for
+running status), length-prefixed model text, stdout excerpt and stderr excerpt.
+Status/reason numbers are the explicit enums in `store_binary_event.h`; reason
+zero represents null. The existing status-specific reason and exit/signal type
+rules apply. Presence masks1/2/4 select a token limit (8), output reference and
+typed content, in that order. A reference requires the token-limit field.
+Version2 adds mask8 for a native log range; it requires an output reference.
+The limit remains1..4000000000. Unknown flags are invalid. Version1 literal
+results remain decodable, including archived values.
+
+Each excerpt stores encoding (one byte: 1 UTF-8, 2 base64), discarded/original/
+retained byte counters (8 each) and the length-prefixed original retained string.
+UTF-8 retained count equals its string size. Historical base64 admission only
+requires a string byte length divisible by four; the codec preserves the string
+without decoding or normalizing it. Original count must cover discarded count;
+retained count need not fit original count. Nonnegative counters retain their
+signed-64-bit domain. Strings remain NUL-free UTF-8. Model text and excerpts
+share the record's existing 16 MiB wire bound; no separate 2 MiB text cap is added.
+Typed content keeps the existing 12 MiB aggregate image-byte bound.
+
+The output reference carries process ID (16), stdout start/end then stderr
+start/end (8 each), stdin accepted/written/pending (8 each), stdin-open (one
+boolean byte) and log start/end (8 each). Ranges, stream original-byte counts and
+stdin accounting retain the legacy validator's relationships. The saved log
+coordinates remain original presentation data: the provider renderer includes
+them in tool-result text, so conversion preserves their exact values.
+
+Mask8 appends LEu64 first/end sequences immediately after those coordinates and
+before optional content. The native reference is105 bytes, compared with89 for
+a literal reference. A positive half-open range names canonical records in this
+journal; its exclusive end may equal the owning result's sequence. It cannot
+include the result itself or later records. Equal positive endpoints retain a
+recorded empty interval. Both zero mean the original result had no log hint;
+this requires both presentation coordinates to be zero. A single zero endpoint,
+reversed range, oversized sequence or disagreement about interval emptiness is
+invalid. Native replay requires mask8 for every output reference. Literal-only
+records remain available to the compatibility/display adapter.
+
+Import resolves each legacy line boundary inside the already verified, locked
+prefix. It reads at most one record per endpoint, preserves the source descriptor
+position, and checks the range ends before the current result. Discarded derived
+checkpoint pointers are independent of these canonical line boundaries. The
+same bounded cursor helper validates adopted voice-history starts. No lifetime
+offset table or additional prefix scan is needed.
+
+The display adapter returns the original metadata without resolving native I/O.
+Native history readers must authenticate containing batches and select records
+by logical sequence, process/stream identity and stream-byte window. Presentation
+coordinates never locate native bytes. The full import verifier still compares
+every public result field exactly; provider requests and warm checkpoint views
+retain the same values. Runtime output reading and new native-result emission
+remain part of application integration.
+
+Canonical result references select the complete result after its owner prefix,
+including all optional fields. Creation and resolution require the expected
+tool-finished or process-closed kind and validate the whole record. Resolution
+returns the source kind, turn, call/process owner, closure cause when applicable
+and borrowed result fields. Metadata, nested leaves, partial results and other
+payload roles supply no result reference. Journal identity, causal ordering,
+owner state and historical-coordinate mapping remain caller responsibilities.
+
+### Tool starts and process output
+
+Draft kind 176/version 1 (`tool_started`) carries turn and call IDs (16 bytes each),
+action SHA-256 (32) and length-prefixed resolved working directory. It retains
+the existing path bound. Pending-call identity, action digest, cwd, read-only
+permission and process-ownership checks remain reducer obligations.
+
+Kind 192/version 1 (`process_output`) carries turn and process IDs (16 each),
+byte offset (8), stream (1: stdout=0 or stderr=1), original JSON encoding tag
+(1: UTF-8=1 or base64=2), raw byte count (4) and bytes. The encoding tag preserves
+the original representation while the binary record stores decoded bytes once.
+UTF-8-tagged bytes retain the existing UTF-8/NUL rules; base64-tagged bytes may
+contain arbitrary octets. The existing replay limit is 1–16,384 bytes per chunk,
+with offset plus size at most INT64_MAX. Process existence, source-turn ownership
+and contiguous stream offsets remain state checks.
+
+Canonical process-output references select the complete raw byte field and
+return its turn/process/stream/offset/encoding metadata. They validate the whole
+source record, reject metadata and partial slices, and preserve arbitrary bytes.
+Input, assistant-output, graph and continuation reference roles remain separate.
+Journal identity, causal sequence and process-range admission stay with callers.
+
+### IRC observations and snapshots
+
+Draft kind 208/version 1 (`irc_event`) carries the room-event kind 1, flags 2,
+timestamp 8, an optional stream UUID16 and sequence8, then length-delimited
+endpoint, room, nick and text. Room-event kinds 1..11 are connected, disconnected,
+join, part, quit, nick, message, notice, topic, mode and history-ready.
+Flag bits are historical=1, local=2, operator=4, watermark fields present=8,
+nonempty stream=16, input=32, classification present=64, urgent=128 and reply=256.
+Legacy absence of stream/sequence/input remains distinct from explicit empty
+stream and zero sequence. Classification presence retains both urgent and reply.
+
+Timestamps are positive signed-64-bit values. A nonempty stream requires a
+positive signed-64-bit sequence and watermark presence; input also requires
+watermark presence. Urgent/reply require classification presence. The existing
+IRC admission bounds apply: endpoint 1..255 bytes, room 0..51, nick 0..30 and
+text 0..4096, with valid NUL-free UTF-8 and no ASCII control bytes or DEL.
+These are durable field checks; live membership, authority and delivery remain
+separate. No relationship between historical, operator, input or urgency flags
+is inferred by the codec.
+
+Draft kind 215/version 1 (`irc_event_v2`) keeps the complete kind208/version1
+prefix and appends typed routing. Kind208 retains its original wire contract.
+The routing suffix is flags1, generation8, identity1, conversation-kind1,
+direction1, delivery1, connection UUID16, conversation UUID16, then the
+length-delimited peer, target and source-message ID. Optional fields follow in
+this order: send UUID16, membership UUID16, reply conversation UUID16 and reply
+membership UUID16. Routing flags are action=1, revised=2, membership present=4,
+joined=8, rejoin=16, send present=32, reply captured=64 and reply available=128.
+A captured reply without an available pair projects to explicit null; an
+uncaptured reply omits the field.
+
+Identity values 0/1 are operator/agent. Conversation values 0/1/2 are
+connection/channel/query. Direction values 0/1 are incoming/outgoing. Delivery
+values 0..5 are none, pending, written, acknowledged, failed and uncertain.
+Generation is positive signed-64-bit. Peer, target and source-message bounds
+are the existing live IRC field bounds. Intrarecord validation preserves the
+live visibility, action, membership, outgoing delivery, admitted input and
+reply-capture rules. Native source collection and selected-record projection
+recognize both IRC event kinds and use their typed live projection. Connection
+and conversation directory restoration uses the core checkpoint IRC block.
+
+Draft kind 209/version 1 (`irc_snapshot`) carries reason 1, timestamp 8 and
+length-delimited text. Reasons 1..4 are join, nick, topology and compaction.
+Timestamp is positive signed-64-bit; snapshot text is 1..8 MiB of NUL-free UTF-8.
+Snapshot text preserves line breaks.
+
+Draft kind 210/version 1 (`irc_admitted`) starts with a nonempty sequence list:
+count4 followed by strictly increasing positive signed-64-bit values. Each value
+uses canonical unsigned base-128 groups, low seven bits first, with the high bit
+set on every byte except the last. Overlong values and more than nine bytes are
+invalid. This avoids widening historically admitted short decimal sequence
+lists beyond the record bound: 2,100,000 ascending sequences take 15,688,897 JSON
+bytes, 16,800,004 bytes with fixed64 entries, and 6,286,343 bytes in this encoding.
+Count is constrained by the containing record's available bytes, without a
+separate lifetime or admission-count quota.
+
+The list is followed by enclosed kind2: zero for no input, 96 for input received,
+or 98 for steering added. A nonzero kind is followed by enclosed version2,
+payload length4 and the complete typed payload for that input kind. Existing
+versions 1 and 2 retain their literal/reference rules; other nested kinds,
+optional semantics, unsupported versions, malformed fields and trailing bytes
+are rejected. Canonical input references can select original text, content or
+instructions inside this wrapper, using offsets in the outer record payload.
+An enclosed reference does not become another original.
+
+The reducer checks that admitted sequences precede this record, identify the
+intended original observations and obey admission/state/authority rules. It
+applies the enclosed input once at the admission record's sequence. Indexed
+observation lookup and projection composition remain implementation work.
 
 ## Payload ownership and checkpoint contents
 
@@ -328,6 +1539,335 @@ Only inline fields supply canonical leaves: metadata-only edits copy the
 original reference instead of creating reference chains. Runtime integration
 and import construction remain pending; codecs are test-only.
 
+Control-text reference helpers select the created directory(1), changed directory's
+`after` field(2), banner(6), scheduled timer text(32), goal prompt(64..66), or blocker(69).
+They pin the caller's exact source kind, validate the entire record and require the
+whole field's original coordinates. Identical text in provider metadata or the
+directory's `before` field cannot substitute for the selected leaf. A zero-length
+banner is a present clearing field; timer fire/cancel, goal status/lock and steering
+mode records supply no text leaf. Resolution returns the decoded source event and
+borrowed text, preserving goal/replacement IDs, actor, timer ID/deadline and other
+payload metadata for the caller's owner, lifecycle and causal checks. These
+test-linked selectors prepare canonical checkpoint references; they do not validate
+current checkpoint state, grant source authority, or change any event wire form.
+
+The test-linked accounting block in `store_binary_checkpoint.c` encodes four
+independent observations in this order: active request, completed usage anchor,
+context meter and capacity rejection; session usage totals follow. Version 1
+starts with a little-endian u16 version. Each observation has one flags byte:
+bit 0 is validity, bits 1..5 mark the presence of the compaction ID and four
+source/input/request digests. Bits 6..7 are reserved zero. Provider, model and
+effort are u16-byte-length UTF-8 fields within their existing C storage widths.
+The optional ID/digests use 16/32 binary bytes: compaction ID, provider-source
+hash, model-input hash, request-input hash and request hash. Five u64
+values follow: model-input bytes, request-input bytes, request-input count,
+input tokens and requested-output tokens. Totals use seven u64 values (responses,
+input, cached input, uncached input, output, reasoning and total tokens), then a
+boolean cached-seen byte. All integers are little-endian; counters retain their
+full unsigned range. Invalid observations retain their fields, and absent IDs
+remain distinct from present all-zero IDs. The decoder consumes exactly one
+block, rejects unknown versions/flags, malformed text and non-boolean flags,
+and preserves the destination on failure. This block carries metadata only;
+complete core/provider bodies, reference authority and snapshot adoption remain
+separate work.
+
+The control-metadata block has its own u16 version (currently2), followed by a
+u32 bitmap for21 booleans; higher bits are reserved zero. The draft omits the
+retired session-archive flag, matching the current runtime state. Its24 fixed metadata
+fields follow `control_texts` order in `store_binary_checkpoint.c`: optional
+IDs/digests have a boolean presence byte and16/32 binary bytes, while other
+metadata uses u16-length UTF-8. Absent IDs remain distinct from present zero
+IDs. The37 numeric fields follow `control_numbers` order, with explicit u32/u64
+wire widths independent of C member layout. Current enum and control-mask values
+are checked; the retained source semantic format is2,3 or4. Size-dependent C
+counters use u64 on disk and fail with overflow if a reader cannot represent them.
+Seven u64 control-event sequences finish version2, including explicit saved-setting
+reload at control bit64. The masks admit bits1..64. Version1 retains its six
+sequences and bits1..32; decoding it clears the absent reload sequence to zero.
+Each version consumes its exact layout and reserved control bits fail validation.
+`control_flags` defines the
+boolean bit order. The existing bounded text/hex primitives are shared with the
+accounting block without changing its wire layout.
+
+Control decoding stages all fields before updating the caller's provisional
+state. It preserves every unlisted byte, including descriptors, callbacks,
+payload ownership, arrays, accounting and voice-history state. Session identity,
+journal digest/end/next sequence/turn count and legacy checkpoint coordinates
+are excluded; the complete loader must bind the common frame and determine its
+own checkpoint positions. Last-event time and other scalar state are retained,
+not inferred from a frame checksum. Exact framing, field ranges and text validity
+are structural checks; lifecycle coherence, causal bounds and reference authority
+remain the complete snapshot consumer's responsibility. Both metadata blocks
+remain test-linked building blocks rather than complete core/provider decoders.
+
+The fixed-text origin block in `store_binary_checkpoint_text.c` records cwd,
+first/last user text, active prompt, goal prompt/blocker, timer text, banner and
+steering mode, then the latest IRC display snapshot and session name. It is285
+bytes: LEu16 version1, LEu64 last observed semantic sequence, then eleven25-byte
+entries. An entry contains the accepting
+LEu64 declaration sequence, a u8 field selector and the16-byte original-field
+reference. Absent entries are entirely zero. Selector0 identifies control text
+in the declaration itself; input selectors1/4/5 identify original text, voice
+transcript or voice request bytes. These references name literal fields directly,
+not another reference. Steering retains its declaration but no byte slice: its
+text is the label of the stored enum. The initial empty IRC display snapshot
+names only its creation declaration at sequence1, with no byte slice. A later
+IRC snapshot names its own exact text field and declaration; it supplies display
+metadata, never execution authority or a restored network connection. This block
+stores no payload bytes.
+
+The allocation-free producer hook runs after strict native reduction and keeps
+original byte provenance separate from the accepting declaration. It starts at
+creation, advances monotonically through semantic events, and drops slots only
+when the reducer clears them. Optional metadata may follow its last observed
+sequence. Model goal replacements/rewords do not replace last-user text; user
+changes do. A blocker can survive user replacements while the goal stays blocked,
+even across multiple parent IDs; its source must not be falsely rebound to the
+newest goal. Equal text never substitutes for these transitions. Native replay
+returns this table only after whole-prefix validation and source recheck; staging
+exposes it only after its complete equivalence/source checks succeed.
+
+The text reader checks each declaration's field role and exact original tuple,
+then resolves the whole canonical literal using verified backward lookup. It
+returns a fresh owning dictionary of these fixed slots without changing an
+existing session or file position; failures preserve the output pointer. Buffer
+encode/decode is atomic and exact-length. The dictionary's JSON representation is
+an in-memory adapter, not checkpoint payload storage. Scratch uses the existing
+batch bound; lookup cost depends on source distance, not an index or constant-time
+promise. This component does not establish that a decoded table is the current
+snapshot: the complete consumer still owns snapshot authority, owner/lifetime
+coherence, remaining core/provider reconstruction and atomic adoption.
+
+The pending-call block in `store_binary_checkpoint_calls.c` stores one completed
+graph sequence and its graph-time cwd origin, followed by call lifecycle bits in
+graph call order. Its version1 header is42 bytes: LEu16 version, LEu64 graph
+sequence, LEu64 cwd declaration, the16-byte canonical cwd reference and LEu64
+call count. Each call adds one byte (bit0 started, bit1 finished; higher bits
+zero). An empty list has zero origins/count. A nonempty list requires a positive
+cwd declaration before the graph and a same-declaration canonical control-text
+reference. Count must account for the input exactly, without a new session quota.
+
+Native replay keeps graph-time cwd independent of subsequent directory changes;
+it drops the graph origin when the reducer clears pending calls. Replay and import
+return fixed-text and pending-call origins together, only after their existing
+complete-prefix/source checks. Encoding reads status bits from the same provisional
+core state and stages one atomic append. Decode borrows the status bytes; the
+encoded block must remain alive and unchanged while that view is used.
+
+The reader checks the completed graph's turn, response and cycle against the
+provisional snapshot and requires its exact call count/order. It reconstructs
+metadata from original arguments and the canonical created/changed cwd leaf.
+The reducer and reader share the pending-call derivation routine, including
+UTF-8-safe command/workdir previews and the graph-time action digest. No command
+or tool is executed. Status bits preserve independently started/finished values;
+source checks alone do not establish their current lifecycle authority. Success
+returns a new owned array; failure preserves the caller's output pointer. Like
+fixed text, lookup uses an independently trusted same-journal immutable prefix
+and bounded batch scratch, with cost proportional to source distance. Process
+ownership, whole-snapshot coherence and atomic session adoption remain separate.
+
+Process checkpoint entries retain each accepting tool-start sequence and its
+original graph/cwd origins independently of the current response. The
+version1 block has an LEu16 version and LEu64 count, then97 bytes per process:
+start sequence8, graph sequence8, cwd declaration8, cwd reference16, seven u64
+counters (stdout/stderr output, stdout/stderr collected, stdin accepted/written/
+pending), and one flags byte (ready bit0, draining bit1). Higher flag bits are
+zero. Handles and command/workdir previews are derived from the original call,
+not copied into this block. The source reader binds the tool start's call, turn
+and action digest to the original graph. A legacy write_stdin-created process
+retains its historical empty previews and referenced handle.
+
+Version2 retains that layout and appends one LEu64 scan-source sequence to each
+entry, for105 bytes per process. Current producer provenance starts the scan
+source at the accepting start and advances it to matching collection results
+while the process remains in the working set. Checkpoint access custody retains
+that source with the original start/graph origins. The version1 reader derives
+its scan source from the start; byte/hash scan caches remain excluded in both
+versions. Decode rejects sources preceding the start and sequence overflow.
+
+Action digests can change through accepted `rule_transform` records after a graph
+completes. Pending-call readers apply each matching original/effective digest pair
+in sequence through the trusted checkpoint boundary; process readers stop before
+the accepting tool start. A new response or turn boundary cannot be crossed. This
+uses bounded batch scratch, not another payload copy or a session-wide provenance
+table. Lookup plus transformation scanning is proportional to the source window;
+it is not constant-time restore. Labels remain the original graph's previews,
+as in the reducer, even when a transformation changes the dispatched payload.
+
+Process source sets returned by replay/import now own an array; callers release
+it with `snag_binary_checkpoint_sources_free` before reuse. Only complete success
+transfers new ownership. The wire table has strictly increasing start sequences;
+read rejects duplicate derived handles. Metadata counters retain their full u64
+domain; cross-field coherence and lifecycle authority are complete-consumer work.
+Decode borrows its immutable input; encode stages an atomic append, and read
+returns a newly owned array or preserves the old output pointer on failure.
+
+The JSONL app updates process log_offset/log_seq/log_hash caches after starts and
+collections. Native checkpoint materialization and pinned suffix resume instead
+construct each process's exact after-source cut from its verified canonical
+batch, including an inside-batch logical ordinal. The original graph binds a
+start to its process handle; imported write_stdin call IDs can differ from that
+handle. Collection sources must identify the same process. Missing old source
+custody fails with ENOENT; cancellation and validation failures discard the
+provisional candidate. Descriptor position, live state and byte-collection facts
+remain unchanged. The enclosing source-stamp checks precede atomic adoption.
+Saved ready/draining flags describe snapshot observations and
+do not recreate a live process or prove its current OS ownership. Complete
+snapshot/lifecycle authority and live execution binding remain separate.
+
+The pending-input block in `store_binary_checkpoint_inputs.c` references accepted
+direct input, queued work and steering without copying their payloads. Version1
+has a 26-byte header: LEu16 version, then LEu64 direct-receipt sequence (zero when
+absent), queue count and steering count. Queue entries are 24 bytes: creation
+sequence, latest text/edit receipt and first-context timestamp. Steering entries
+are 16 bytes: receipt sequence and first-context timestamp. Both lists retain
+strict receipt order; queue edits may occur in any order. Timestamps use unsigned
+64-bit fields. Exact length/count validation and checked size arithmetic precede
+allocation; the block adds no history quota. Decode borrows its input; encode
+stages an atomic append even when its source arrays alias the output buffer.
+
+The reader authenticates each receipt against an independently trusted immutable
+journal anchor. Direct and embedded IRC input use the same reference hydration as
+replay, preserving selection, read-only, timer origin, instructions and content.
+Queue creation supplies identity, order and content; the latest matching receipt
+supplies text, read-only and received time. An edit's content remains ignored by
+queue state, as in the reducer. Steering accepts plain, embedded IRC, reminder
+and output-correction receipts, checks the provisional active turn, and restores
+first-context times separately from receipt times. Corrections supply their ID
+and prompt with absent content; their partial-public snapshots remain separate
+history. Historical missing receipt times use the journal timestamp. Returned
+arrays retain text through their owned dictionary and own their content references. Existing pending-text limits and duplicate-ID checks
+apply. Failure leaves the old output unchanged; success returns new ownership,
+released with `snag_binary_checkpoint_inputs_free`.
+
+These source and shape checks do not prove that a receipt remains pending at the
+snapshot boundary, that a selected edit is the latest accepted edit, or that a
+timestamp is a valid admission. The full consumer must bind snapshot membership,
+ID-reuse epochs and lifecycle authority, merge the string dictionary, and adopt
+all core/provider fields together. This component performs no reduction, dispatch
+or live input admission. Active-turn instructions and provider-view state remain
+outside this pending-input block.
+
+The test-linked dynamic-core payload block stores version1 in a 59-byte header:
+LEu16 version, then six LEu64 values (accepting turn, compaction start, compaction
+completion, response start, last streamed output, download count), followed by a
+one-byte download-presence flag and the LEu64 saved-options declaration. Ordered
+eight-byte download receipt sequences follow. Zero declarations mean absent
+payloads; compaction and response pairs
+must be complete and ordered. A response range starts after its accepting turn.
+The flag distinguishes an absent download queue from a present empty queue.
+A saved-options declaration selects the exact validated argument list in that
+session-options record. An empty list retains its declaration; absence uses zero.
+There are no copied instruction lists, compaction arrays, stream strings or
+file metadata or saved argument lists in the checkpoint. Decode borrows receipt
+bytes; encode stages an atomic append, including when source storage aliases its destination.
+
+Full replay retains the streamed response's start origin and last output,
+the most recent completed compaction's start/completion pair, and only pending
+download origins. Download removals compact that list without changing order;
+reusing a removed ID creates a new receipt. An interrupted/new compaction leaves
+the previous accepted compaction output intact. Instruction ownership uses the
+existing active-prompt accepting-turn declaration, not text equality.
+
+The reader checks the active turn ID and number before restoring its instruction
+list, resolving a declared earlier canonical list with the existing field-role
+and coordinate checks. Path-only and original snapshot metadata entries retain
+their individual forms, including empty lists. Compaction restoration validates
+the start/completion IDs, source sequence/hash, scope and canonical output hash
+against the provisional core metadata. It preserves the complete provider output
+array. Stream restoration checks the current response owner/cycle, reads the
+authenticated response range, rejects crossed response/turn endings or restarts,
+and feeds only streamed fragments into the strict reducer in private state.
+Original item metadata, indexes, offsets and aggregate byte counts are checked
+there; non-output events may intervene. A closed response can retain its streamed
+prefix until explicit response clearing or restart. This retained-stream origin
+has a different lifetime from the existing open-response reference guard; closure
+still clears that guard. Completion/partial-public snapshot data does not replace
+the retained stream. Work is proportional to the selected response range and
+backward source distance; this is not indexed constant-time resume. Downloads use the same strict reducer for original receipt data and
+uniqueness, with no file opening, file transfer or command dispatch.
+
+Read returns new owned JSON payloads only on success, preserving the caller's
+previous output and file position on failure. JSON exists only as the existing
+in-memory core representation. Source checks alone do not prove that a checkpoint
+contains the latest accepted payloads or precisely the still-pending downloads;
+the enclosing complete snapshot consumer owns membership, lifecycle, immutable
+journal identity and atomic core/provider adoption. Provider-view snapshots and
+native process collection cursors remain separate dependencies.
+
+The version5 core in `store_binary_checkpoint_core.c` joins ten components in
+fixed order: controls, accounting, fixed texts, pending calls, processes, pending
+inputs, dynamic payloads, the IRC directory, derived IRC activity and a blocked
+goal's wait-channel reference. Its108-byte
+header contains LEu16 version4, LEu16 component count9, LEu64 active-compaction accepting sequence,
+LEu64 retained-response accepting sequence, LEu64 voice-adoption sequence (zero
+when absent), then ten LEu64 component sizes. Version4's100-byte, nine-component
+layout omits the goal-wait reference. Version3's92-byte, eight-component
+header remains readable with an absent activity field; version2's84-byte,
+seven-component header additionally lacks the directory. Earlier draft versions
+fail explicitly; the application has not published native checkpoints.
+
+The activity block stores presence1, an LEu64 observed-after watermark and an
+LEu64 item count. Each item has conversation UUID16 and four LEu64 values:
+accepting sequence, timestamp, received count and last incoming sequence.
+An absent block has zero watermark/count and no rows. Count is bounded by the
+remaining bytes; rows must be unique, belong to the retained directory and pass
+the live activity validator, including aggregate count/sequence bounds. It
+stores derived scalars and references; endpoint and message bytes stay in the
+canonical routed records. Missing activity in older cores remains NULL rather
+than synthesizing lifetime counts. Subsequent live reduction uses its ordinary
+missing-activity watermark rule. The prefix oracle encodes the captured state
+in the frame's declared supported layout before comparing canonical bytes;
+normal publication always uses version5.
+
+The goal-wait block is one LEu64 accepting sequence, zero when no explicit
+channel is retained. A nonzero reference must equal the existing goal-blocker
+declaration and resolve to its canonical model-owned blocking event. Operator
+replacement retains the blocker and channel across goal IDs. The blocking
+record supplies the channel under the live wait-channel validator;
+the checkpoint stores no copy of its text. Kind73, `goal_blocked_wait_for`,
+version1 retains the kind69 goal UUID, model actor and reason layout, then adds
+the length-delimited wait channel. Legacy projection uses `goal_blocked` for both.
+Kind69's bytes remain unchanged. Older blockers without a channel retain the
+unspecified wait. A wait-bearing source requires the reference, so omitting the
+new block or selecting an earlier core layout cannot silently discard the wait.
+
+The IRC block starts with presence1 and connection-count8. An absent directory
+has zero count and no rows. Each connection stores UUID16, generation8,
+connected-state flags1 and conversation-count8, followed by one LEu64 canonical
+accepting sequence per retained conversation. Each role uses two connected-state
+bits: 0=null, 1=false, 2=true; 3 is invalid. Operator occupies the low pair, agent
+the next pair; all higher bits are zero. Counts are bounded by the remaining
+wire bytes. Each referenced record must be a routed IRC event from the same
+connection and endpoint, with generation at most the connection's generation.
+Its conversation UUID supplies the directory key. Duplicate connection or
+conversation keys, zero/future references and malformed source records fail.
+The working-set closure includes every directory source, including private
+operator queries excluded from provider text. Message and endpoint payloads
+remain in the canonical event records.
+Every component retains its own version and exact-length validation. The active
+compaction attempt is separate from the last completed compaction; a retained
+response epoch also survives when no public stream has been emitted. Neither
+field copies payloads or replaces the strict replay response-open guard.
+
+Encoding stages the whole append. Reading requires an already verified frame
+bound to the same immutable journal and returns a provisional state-only session
+and owning origin table together. It restores identity and batch coordinates
+from that common frame, merges the fixed and pending-input string owners, and
+checks reconstructed queue/steering/stream byte totals. Source positions must
+fit the saved semantic boundary. Response and active-compaction declarations
+must match their control metadata and accepting boundaries. Re-encoding uses
+the returned origins without copying journal payloads into the core body.
+
+Only reachable string owners are retained. Process scan caches, callbacks,
+resources and derived provider/history views start empty. Voice history stores
+its adoption sequence once. Loading verifies the canonical adoption's kind,
+native-reference form, target identity and earlier logical start, then derives
+the cursor and transfer identity. Partial or malformed roots fail encoding.
+Latest-membership/lifecycle validation, provider decoding, native process scan
+cursors and atomic joint adoption remain the enclosing consumer's work. This
+assembly participates in existing-native admission and native creation.
+
 A full checkpoint captures all current semantic state:
 
 - Journal boundary, sequence, chain digest, session identity and turn count.
@@ -350,6 +1890,165 @@ that are merely repeated prefixes, temporary serialization buffers and previous
 snapshots can be discarded. Unique inputs, output, tool outcomes and authority
 changes cannot be discarded merely because a summary or checkpoint covers them.
 Text correction and replacement retain explicit provenance.
+
+## Provider checkpoint recipe
+
+The test-linked version1 provider section declares a rebuild disposition. A first
+request rebuilds through the shared renderer using the retained event seam and
+current caller configuration; later requests reuse the ordinary incremental cache.
+Retry notices, input timing and host snapshots derive from those canonical events.
+Materialized request arrays, serialized provider scope and opaque cache JSON stay
+outside the section. Canonical prompts, output, media and IRC payloads remain in
+the journal, referenced by sequence under the frame's identity and exact boundary.
+
+The48-byte little-endian header contains version1 (u16), disposition1 (u16),
+zero reserved bits (u32), then five u64 values: next sequence, compaction sequence,
+rebase sequence, recent-row count and historical-source count. Each36-byte recent
+row contains sequence and post-reduction time (two u64), four flag bits in a u32
+(active turn, unfinished calls, processes, turn-ID presence), and a16-byte turn ID.
+Absent IDs have all-zero bytes; present all-zero IDs remain distinguishable. Each
+8-byte historical row names one canonical IRC source or import-marker position.
+Both lists have strictly increasing positive sequences below the recorded next
+sequence. The recent list is nonempty. Counts consume exactly the section; unknown
+versions/dispositions, reserved bits, impossible active/ID combinations, overflow
+and trailing bytes fail without changing the decoded output. Encoding stages its
+bytes before append. No per-event size limit is imposed on this active-state section.
+
+Structural decoding produces borrowed row views. Source membership, source role,
+post-event metadata, retention completeness and current lifecycle authority require
+semantic verification. `snag_store_verify_binary_context_checkpoint` establishes
+the requested boundary by strict header-to-prefix replay, decodes the complete
+frame against that identity/boundary, and compares both sections with the canonical
+core and provider encodings reconstructed there. A valid checksum cannot substitute
+for this common-boundary check. An omitted seam entry or stale core field fails
+even when each section is structurally valid.
+
+After that comparison, the core reader loads the candidate's field-shaped sections.
+The provider materializer reconstructs fresh event metadata from recipe rows and
+shares immutable payload values from the replay-verified canonical source pool.
+That pool has already resolved native references with the ordinary response-epoch,
+receipt and source-role checks. Missing
+sources, wrong source classes and values outside the existing JSON projection
+domain fail without replacing either output array. The seeded capture owns separate
+recent and pending arrays; both initially cover the recipe because its first
+projection explicitly rebuilds. That incremental cursor has no effect while rebuild
+is required. A final cancellation/source identity/size/time check precedes joint
+adoption of the loaded core, capture and optional origins.
+
+This verified materialization still reads the whole requested prefix to establish
+authority and its canonical payload pool. Direct selected-record loading, index
+authority and a runtime selector remain open. The I/O owner now supplies the
+alternating publication primitive described below.
+
+The stopped checkpoint-plus-suffix consumer first verifies and materializes that
+checkpoint, then reduces later committed batches into its provisional core and
+provider capture. The shared strict batch loop retains the loaded accepting
+response epoch and initializes provenance-array capacities from their restored
+counts. The provider capture temporarily transfers out of the provisional session
+for event delivery and rebuilding its complete current IRC lookup closure. Only
+final cancellation/source checks allow joint destination/origin adoption. A bad
+suffix or capture failure discards the candidate; only complete success reports
+an incomplete tail, and the reader never truncates it. This operation still
+verifies the checkpoint prefix from byte zero and is not application resume.
+Replaced origin arrays are released only at successful adoption; initialized
+output owners and their existing core/capture remain intact on failure. Source
+rechecks compare identity, size, mode and available full-precision write/change
+timestamps while ignoring access time. They supplement the required writer lock
+and content validation; writes with identical filesystem stamps cannot be
+distinguished by metadata alone. Immutable source ownership remains required.
+Windows file information retains the existing write
+stamp's subsecond component.
+
+The context fixtures split commit framing without changing record sequences or
+payloads, then compare midpoint-checkpoint-plus-suffix results with independent
+full replay. They exercise restored open response epochs, active processes and
+growing/shrinking input/download tables; corruption, incomplete tails, final
+cancellation, source append and same-size overwrite retain separate assertions.
+Voice roots use the same canonical adoption-reference reader as full replay.
+The fixtures replace an adopted root during suffix replay and separately reject
+omitted or stale root references in otherwise valid, checksummed checkpoints.
+Cross-format provider comparisons normalize only the two physical adoption
+coordinates after independent validation; native-to-native comparisons and the
+final rendered provider requests remain exact.
+Generation selection and durable publication remain writer responsibilities.
+
+Live render sources retain their canonical sequence and a copied acknowledged
+boundary. Immediate presentation and asynchronous backfill project typed records
+beneath that frontier; later appends leave the queued source unchanged. The
+projection produces transient display data without adopting reducer state or
+receipt authority. Native tool completion obtains its output reference from the
+same canonical record and reads only its half-open sequence range before that
+completion. Original presentation coordinates remain metadata rather than byte
+scan hints. Native and legacy chunk display share existing stream labels,
+character/byte limits and omission behavior. Legacy render sources retain their
+original byte ranges.
+
+## Checkpoint file framing
+
+The test-linked frame codec binds separately versioned core and provider sections
+to one generation, journal identity and committed boundary. Its draft0.2 envelope
+uses a160-byte header, core bytes, provider bytes, optional access bytes, and a48-byte
+footer. Draft0.1 images require regeneration.
+All integer fields are little-endian. Header offsets are:
+
+| Offset | Bytes | Field |
+| --- | --- | --- |
+| 0 | 8 | Magic `SNAGCHK` followed by NUL |
+| 8 | 2+2 | Frame major0, minor2 |
+| 12 | 4 | Header size160 |
+| 16 | 8 | Complete file size, including footer |
+| 24 | 8 | Nonzero checkpoint generation |
+| 32 | 16 | Journal session UUID |
+| 48 | 8 | Journal creation time in milliseconds |
+| 56 | 8 | Committed journal end |
+| 64 | 8 | Next canonical sequence |
+| 72 | 8 | Committed turn count |
+| 80 | 8 | Start of the last committed batch, or zero at the journal header |
+| 88 | 32 | Committed boundary digest |
+| 120 | 2+2 | Core and provider schema versions, each nonzero |
+| 124 | 2+2 | Access schema version and reserved zero |
+| 128 | 8+8 | Core and provider section sizes, each nonzero |
+| 144 | 8 | Access section size |
+| 152 | 8 | Reserved, zero |
+
+Access version and size are either both zero (absent) or both nonzero. Bounded
+resume requires the supported access codec and its validated working-set closure.
+The independent full-prefix verifier reconstructs from the journal and grants no
+authority to these lookup hints; it can verify core/provider-only images. Access
+bytes have their own streaming stage and are covered by the complete frame digest.
+
+The footer contains `SNAGCPE` followed by NUL, the repeated complete file size,
+and SHA-256 of every preceding byte, including the footer magic and size. The
+declared lengths must account for the file exactly; trailing bytes are invalid.
+Checked lengths fit the host address space and signed64 file coordinates. The
+frame has no per-event size cap; its caller supplies the buffer resource budget.
+
+Decode requires an independently authenticated identity and boundary from the
+same immutable journal, and matches every member before returning borrowed
+section views and the verified footer digest. The digest remains in decoded
+metadata for receipt joins; encoders compute it from the immutable sections. A short header or an otherwise valid incomplete frame returns the
+incomplete result without changing the output. Malformed complete headers,
+overflow, mismatched boundaries,
+unsupported frame versions/features and checksum failures are errors. Encode
+appends atomically and permits source sections to borrow its destination buffer.
+
+Incremental framing retains only fixed header/footer storage and SHA state. Each
+call emits and hashes at most the caller's positive byte quantum, borrowing its
+immutable core/provider sections without a snapshot-sized allocation. This lets
+maintenance yield between chunks; the quantum imposes no total snapshot limit.
+The complete-buffer encoder uses the same wire representation and retains atomic
+append and aliased-section behavior. Neither encoder publishes files or supplies
+semantic checkpoint authority.
+
+Each section's own version is retained for its required field-shaped semantic
+decoder. Those decoders must validate complete core/provider state, common-boundary
+consistency and canonical reference provenance before adoption; an unknown required
+section version fails state loading. Frame decoding alone supplies no state or
+resume authority. Frame tests include synthetic section bytes and snapshots larger
+than one event. Typed core/provider bodies and verified checkpoint-plus-suffix
+materialization have separate semantic tests. Alternating publication uses the
+sole I/O owner described below. Runtime admission selects canonical receipts
+from its bounded window.
 
 ## Checkpoint cadence and publication
 
@@ -384,6 +2083,201 @@ A damaged canonical batch is an error, not permission to skip it. If both
 snapshots are unusable, repair is an explicit, interruptible operation; normal
 resume does not silently scan an arbitrarily long lifetime prefix.
 
+### Pinned working-set range reads
+
+The checkpoint range iterator enumerates a half-open sequence interval. With
+pinned access, its older part contains only listed working-set records. It loads
+each selected physical batch once, verifies its predecessor/framing and checks
+selected positions, kinds, digest and turn labels against the canonical records.
+Typed turn starts must have the next turn number and match the batch's final
+turn count. The newer part reads the contiguous caller-bounded suffix. NULL
+access preserves the independent contiguous prefix/oracle path. Empty selections
+are valid; range enumeration does not infer closure completeness from gaps.
+
+The producer and adopting consumer establish complete required-reference closure,
+common identity/ancestry, immutable bytes and suffix budget. The iterator uses
+bounded batch scratch and pread; it reads no derived index file. Cancellation is
+checked before reads and record visits. Callbacks borrow each record until they
+return and stage any resulting state until complete success. A failure can follow
+earlier visits, so this API provides no callback-output rollback or adoption.
+Call transformations, retained response streams and provider span hydration
+use this iterator. Snapshot closure selection is available; live producer
+maintenance and runtime admission remain pending.
+
+### Bounded semantic suffix reduction
+
+The exact-prefix suffix reducer takes trusted start and stop commit anchors and
+pinned old locations at start. It strictly reduces each intervening batch into
+disposable core/origin state, with cancellation before reads and record visits.
+Every stop member must match the resulting canonical anchor; a partial batch is
+an error rather than a shorter accepted prefix. Bytes beyond stop stay
+uninspected, and success supplies no tail-repair authority. Source stamps are
+checked after the final cancellation callback. A failed candidate and provisional
+callbacks are discarded by their enclosing adoption transaction; origin storage
+remains owned on every return.
+
+The caller establishes identity, old membership, start ancestry and the suffix
+byte-work budget. New suffix records can reference older sources beyond the
+checkpoint's current working set, such as earlier output from an unsettled
+process. Those locations require independently proved membership before use;
+missing locations fail instead of triggering a lifetime scan. The existing
+full-suffix adapter retains table-free lookup for explicit repair/oracles.
+Current historical lookup is available in the joint state-only consumer; application
+admission and live closure maintenance remain pending.
+
+### Indexed pending-input materialization
+
+Pending input, queued-turn creation/latest-text and steering receipt readers take
+an already pinned access table. They use its checked old-record locations for
+both accepting declarations and referenced original literal text, content,
+instructions and queued voice ASR/request fields. The replay resolver keeps original field-role and exact-slice
+checks; embedded IRC receipts, reply reminders and correction prompts retain
+their existing projections. Missing old locations return ENOENT instead of
+scanning the lifetime journal. Newer receipts/references use the caller-bounded
+suffix. Passing NULL retains the independent full-prefix oracle's lookup path.
+
+The table's image/session identity, ancestry, closure completeness and suffix
+bound remain the enclosing consumer's responsibilities. Successful reads return
+fresh ownership; failed reads retain prior outputs and descriptor position. This
+component does not establish pending membership, adopt core/provider state or
+change the application's JSONL backend.
+
+### Joint checkpoint materialization
+
+The state-only materializer takes an immutable decoded image already matched to
+its canonical journal receipt. It checks the image digest, generation, dimensions,
+full captured boundary, source-header identity and the embedded access frontier.
+Core and provider sections share next sequence, compaction and rebase boundaries.
+Required canonical fields, graphs, input receipts, voice roots and provider spans
+resolve through the pinned working-set table. It reads neither a lifetime prefix
+nor a derived index file. An absent required old location is an error; absent or
+unsupported access is unavailable rather than permission to scan history.
+
+Core state, origin arrays and the provider capture remain private until complete
+success. Phase and provider-row cancellation, followed by the final source-stamp
+check, precede joint adoption. Initialized destination owners and descriptor
+positions survive failure. Cancellation does not yet interrupt an individual core
+phase or nested provider span. The adopted state owns its decoded values and
+capture, without installing file descriptors, provider configuration, running
+processes or voice-device ownership. Bytes after capture remain uninspected.
+
+The enclosing loader establishes current receipt membership, captured-anchor
+ancestry and the producer's complete semantic closure under the exclusive writer
+lock. A digest or sparse range alone proves none of those conditions. Immutable
+frame and source ownership remain required; source stamps cannot detect a write
+with identical filesystem metadata. This test-linked component supplies neither
+bounded suffix lookup nor tail-repair authority. Live producer maintenance and
+application admission use the receipt-pinned frontier described below.
+
+### Canonical checkpoint receipt codec
+
+Optional metadata kind `0x8001`, payload version 2, identifies an immutable
+checkpoint image and the index tree at its captured journal boundary. Its
+152-byte payload has explicit little-endian fields:
+
+| Offset | Field |
+|---|---|
+| 0 | generation, u64 |
+| 8 | captured end, next sequence, turn count and previous batch offset, four u64s |
+| 40 | captured batch digest, 32 bytes |
+| 72 | complete checkpoint frame digest, 32 bytes |
+| 104 | captured index tree root, 32 bytes |
+| 136 | index major 0 and minor 2, two u16s |
+| 140 | reserved zero, u32 |
+| 144 | complete checkpoint image byte length, u64 |
+
+The frame digest is the existing final 32 bytes of the fully verified checkpoint
+frame. The publisher exposes the digest and exact image byte length only with
+successful durable publication; failed results leave both fields zero. The length
+must fit the signed file-offset range and hold the frame header/footer plus its
+two required nonempty sections. It provides an independent bound for cache
+allocation and reading; the loader must compare the actual file extent against
+this canonical value before reading the body. The receipt codec validates length,
+generation, boundary geometry and reserved fields before returning a value. Unsupported optional
+payload/index versions return an unavailable result without replacing the caller's
+output. Earlier draft version1 receipts lack the image length and are unavailable
+for bounded admission. Invalid supported fields remain errors. Receipt metadata carries no
+reducer or provider payload and changes no execution ownership.
+
+The image-binding decoder compares session identity, generation, every captured
+boundary field, image byte length and the exact frame digest against an independently authenticated
+receipt. A self-consistent replacement frame with different section bytes fails
+that comparison even if all its own checksums were recomputed. Both section
+codecs, reference materialization and the index frontier still require their own
+validation. The receipt must itself be established as a canonical record with a
+capture boundary preceding its containing batch; neither an index hint nor a
+cache-supplied anchor establishes this prerequisite.
+
+The file probe reads only the final digest from a regular cache file and rechecks
+its available file metadata. This yields an untrusted search key without allocating
+or reading a cache-supplied body size. The image reader requires a separately
+pinned receipt, rejects nonregular files and mismatched extents before allocation,
+and reads/hashes exactly the canonical image size in64KiB chunks, without a
+second whole-image checksum pass. It validates framing,
+session identity, receipt binding and unchanged file metadata before replacing the
+caller's owned image and borrowed section views together. Failures retain both
+previous outputs and the descriptor cursor. Cancellation is checked before
+allocation, between read/hash chunks and after image validation. A final file
+metadata recheck follows the last cancellation callback before exposure. Section semantics and
+normal-resume integration remain separate obligations; neither helper adopts state
+or falls back to a history scan.
+
+The paired receipt search takes two image digests as lookup keys and walks backward
+from an independently established immutable journal tail. It selects the latest
+matching canonical record for each slot, including the last match within a batch.
+Optional result ordinals identify those exact canonical records for cross-slot
+recency. Their output ownership follows the receipt pair, including cancellation,
+missing slots and corruption; image generation claims never decide journal order.
+Each selected capture must precede the receipt's containing batch and match every
+field of an ancestor reached on that same chain. A matching digest alone grants
+no authority. Unsupported optional versions are skipped; malformed supported
+receipts, contradictory boundaries and damaged traversed batches fail atomically.
+
+The caller supplies the oldest eligible physical boundary. Search and ancestry
+work stay within that suffix plus one immediate predecessor batch; captures
+outside the window remain unavailable. One pass serves both slots, cancellation
+is checked between batches, and missing/unpinned slots preserve caller outputs.
+Neither an error nor cancellation publishes a partially verified pair. The search
+reads no index, changes no descriptor position and writes no bytes. It can leave
+unrelated older prefix damage uninspected; image/section/frontier decoding and
+canonical reference materialization remain separate admission obligations.
+
+### Read-only bounded checkpoint admission
+
+The internal admission transaction discovers the actual committed physical tail,
+probes the two borrowed image descriptors for lookup keys, authenticates their
+matching receipts and capture ancestry, and selects the later canonical receipt
+ordinal. It reads only that receipt-bounded image, materializes core/provider state,
+reduces the exact suffix and reconstructs current historical lookup before adoption.
+An optional owning admission result retains the effective selected access table,
+authenticated slot generations and receipt ordinals. It starts from that capture's
+accepted Merkle frontier and appends the independently bounded canonical suffix,
+without reading an index or the lifetime prefix. The result provides current
+frontier and access custody for subsequent working-producer restoration and live
+writer binding. When independent supplemental access was supplied, the owning
+copy preserves that table instead of enlarging its old-source authority. Core,
+origins, provider capture, recovery and admission metadata change together after
+the final source-stamp check. Failure retains every prior output owner.
+A caller-set oldest eligible capture offset bounds receipt and ancestry work;
+cache fields never choose that window. Selected image corruption or unsupported
+sections fail without substituting the older slot or scanning lifetime history.
+Missing images or eligible pins return ENOENT. Probe/read errors remain errors.
+
+Source locking, immutable image/source ownership, complete producer closure and
+independently proved supplementary old locations remain caller prerequisites.
+The recovery result counts only reduced suffix batches and reports incomplete
+physical-tail bytes. This state-only consumer never truncates or rewrites them.
+Core state, origin arrays, provider capture and recovery are adopted together after
+final cancellation and source-stamp validation; failed outputs retain their owners.
+Required old locations outside the supplied closure remain unavailable. Separate
+explicit repair still owns full-prefix interpretation and any tail correction.
+
+These codecs, admission and publication digest results are test-linked.
+The I/O owner now commits a published image's receipt through its ordinary journal
+ACK; normal application receipt submission and checkpoint admission remain pending.
+File/directory ACK alone proves durable replacement, not a usable canonical slot.
+Missing index bytes remain independent of this protocol's durability barriers.
+
 ## Index and bounded navigation
 
 Use a fixed-width entry per canonical sequence in `history.idx`, containing the
@@ -405,6 +2299,251 @@ changing session meaning. Rebuild missing ranges in bounded work units; explicit
 history tools report incomplete indexing and resumable progress. New work and
 normal checkpoint-based resume do not require a full index rebuild. Index writes
 need no independent durability barrier because the journal can reproduce them.
+
+### Test-linked fixed-width index building blocks
+
+The current index codec uses a 112-byte header: magic `SNAGIDX\0`, u16 major 0,
+u16 minor 2, u32 header size, u32 entry size 96, u32 parent-hash size 32, UUID 16,
+created-ms u64, initial journal-anchor digest 32 and header checksum 32. The
+checksum covers its first 80 bytes. Header comparison uses the independently
+supplied canonical journal identity. In the current journal draft, the header
+is 96 bytes; its last 32 bytes hash the first 64. Batch headers/footers are 112/80
+bytes and the ordinary batch target is 1 MiB.
+
+Each 96-byte entry contains the following little-endian fields:
+
+| Offset | Field |
+|---|---|
+| 0 | Canonical sequence, u64 |
+| 8 | Containing batch offset, u64 |
+| 16 | Actual record-header offset within the batch, u32 |
+| 20 | Record kind, u16; reserved zero, u16 |
+| 24 | Surrounding session turn ordinal, u64 |
+| 32 | Committed containing-batch digest, 32 bytes |
+| 64 | Entry checksum, 32 bytes |
+
+The entry checksum hashes the initial journal-anchor digest followed by the
+entry's first 64 bytes. It detects corruption and binds the sequence slot and
+journal namespace. Draft 0.2 interleaves each fixed-width entry with the 32-byte
+parent hashes completed by that leaf. A prefix containing `n` entries ends at
+`112 + 128*n - 32*popcount(n)`; entry `n+1` starts there. Offset checks reserve the
+complete next prefix, including its parents, inside signed file positions. An
+unrepresentable offset is an index error, not a quota on canonical session data.
+The earlier unpublished flat draft is rejected by its version/header fields.
+
+The batch builder and resolver require independently authenticated before/after
+anchors. They validate framing, walk real record boundaries, check turn-start
+numbers and surrounding ordinals, and compare the canonical containing-batch
+digest. A checksummed entry pointing inside another record, naming another kind
+or claiming another turn supplies no record view. An old process's originating
+turn ID remains separate from the current surrounding ordinal.
+
+One builder call appends a batch's entries atomically using at most 3 MiB of
+intermediate index data, derived from the 1 MiB batch target and 32-byte minimum
+record header. It retains no lifetime table. Positional sequence reads preserve
+caller outputs and descriptor positions on failure. Binary search returns a
+turn-start hint over a caller-bounded prefix. Missing or torn index bytes mean
+unavailable indexing; a negative search never proves that canonical history is
+absent. The positive result still requires canonical resolution.
+
+### Native record cursor traversal
+
+Canonical forward traversal now exposes a native next-record cursor: a full
+authenticated before-batch anchor, next sequence and decoded record offset. The
+offset is never a descriptor position. Batch-end cuts normalize to the next full
+anchor, preserving the physical byte-envelope geometry separately from decoded
+record geometry. Capture validates exact boundaries and turn ordinals in one
+immutable authenticated batch. Forward traversal reads each containing batch
+once, including validation of a partial starting cut, and can pause after an
+accepted record without fabricating a per-record hash.
+
+Errors and cancellation preserve the starting cursor and descriptor position;
+callbacks stage effects until complete or explicitly paused success. The caller
+still establishes source identity, prefix membership, ancestry and immutability.
+The existing contiguous checkpoint-suffix reader uses this same traversal; sparse
+old working-set selection remains separate and grants no arbitrary-history access.
+
+### Native voice snapshot cursor
+
+Native voice snapshots retain an exact native cut in their private incremental
+projection through the shared verified forward reader, independently of the
+legacy cursor-shaped semantic root. Adoption still persists only its native
+begin sequence. Initial hydration resolves that admitted sequence into a real
+canonical cut; subsequent pages validate their saved physical cut like public
+forward queries. A begin inside a multi-record batch is captured at its decoded
+record boundary; the reducer-compatibility predecessor offset/digest is never
+sent to a JSONL history reader or treated as a per-record hash. The existing
+JSONL snapshot path is unchanged.
+
+Guarded traversal pins installed, independently admitted working-set custody
+and the acknowledged tree before visiting observations. Every visited old record
+must match an exact entry, kind, turn, decoded offset and containing canonical
+batch digest. Missing old rows can be retrieved through individual verified
+index membership beneath that independent acknowledged root, including their
+causal source dependencies. A missing or corrupt cache cannot invent custody;
+fresh hydration then publishes no snapshot. An already owning verified
+observation cache can remain usable without rereading missing historical rows.
+The newer suffix remains explicitly bounded by the live engine's acknowledged
+anchor. There is no NULL access fallback or prefix scan to repair missing custody.
+
+Borrowed typed records project directly through the existing source hydrator,
+without rereading their containing record or reinterpreting it against final
+core state. Unknown optional metadata advances the cut without observations.
+The existing byte-paged snapshot budget now measures decoded native record
+bytes. Accepted pauses can publish an honest incomplete snapshot; read/projection
+failure discards the private cache and publishes nothing. Neither path changes
+authoritative session state or gives archived observations request authority.
+Imported original ASR and generated replies retain their independent originating
+session/sequence; newer live observations update only their own speaker's slot.
+
+Permanent tests reproduce the old native-to-JSONL dispatch failure, exercise
+incremental paging and unavailable old observations, and resume an adopted root
+inside one six-record batch including unknown optional metadata. Guarded cursor
+tests cover all grouped exact cuts/ranges, observed cancellation points, sparse
+old gaps and the independently bounded newer suffix. These are local native
+fixture receipts, not default four-file lifecycle or live voice acceptance.
+
+### Native writer provenance restoration
+
+Writer working provenance has an atomic bounded restore path for independently
+admitted checkpoint state and origins. Input and queued-text/content references
+retain exact canonical declaration offsets, including embedded IRC inputs and
+queue edits. Only the retained open response is reduced into private response
+state to rebuild ordered fragment spans; its final public graph and byte counts
+must equal the admitted state. Closed scopes retain no producer entries.
+
+Restore requires pinned old access plus the caller's bounded suffix. Missing old
+declarations remain unavailable; cancellation and validation failure preserve the
+old owning producer and descriptor position. This constructor installs no writer,
+resource or semantic authority. Native lifecycle admission and resume remain the
+enclosing runtime integration's responsibility.
+
+### Native I/O owner index appends
+
+The native owner accepts a borrowed private index descriptor together with the
+canonical journal identity and independently established logical frontier. Setup
+copies fixed-size custody while both request streams are idle. Before appending,
+the owner checks the cache's exact extent, identity and logarithmic forest root
+against that frontier. Each append derives entries from the exact decoded batch
+after successful journal synchronization. Grouped transactions and checkpoint
+receipts use this same path; index writes require no separate durability barrier.
+
+Cache errors remain separate from the canonical result. The completion retains
+its successful journal acknowledgement and reports a sticky `index_error`, then
+disables further cache writes for that owner. A partial cache write, wrong identity,
+stale extent or corrupt forest therefore leaves semantic admission and the journal
+retry contract intact. A journal sync failure writes no cache entries; its exact
+retry appends them only after successful synchronization. Missing derived bytes
+remain unavailable lookup acceleration.
+
+Live native sessions attach that borrowed descriptor using their ACK-owned identity
+and frontier. Completed owner results retain cache failure status independently of
+semantic commit/effect success. The CPU-only status accessor reports attachment or
+observed failure; a zero status supplies no lookup membership or completeness proof.
+Normal four-file lifecycle creation/open, cursor dispatch and resumable cache
+rebuilding remain separate runtime integration.
+
+### Checkpoint access metadata
+
+The version-1 access block stores a fixed frontier and sorted canonical locations
+for the caller's active working set. It contains no event payloads and requires
+no lifetime location table or addressable `history.idx` prefix. The field-shaped
+codec, framing/publication and core/provider source materializers are test-linked;
+snapshot closure selection is available; live working-set maintenance and runtime
+admission remain pending.
+
+| Offset | Field |
+|---|---|
+| 0 | access version 1, index major 0, index minor 2, reserved zero: four u16s |
+| 8 | frontier record count, u64 |
+| 16 | location count, u64 |
+| 24 | 64 frontier peaks, 32 bytes each; unoccupied slots are zero |
+| 2072 | strictly increasing 96-byte index entries for the working set |
+
+The frontier count equals captured next-sequence minus one. Decode checks its
+root against the independently established receipt root, exact input consumption,
+entry identity/checksums, sequence order and captured sequence/turn/physical bounds.
+These are structural checks. The complete enclosing image must match its canonical
+receipt before its location table can establish membership: recomputing an entry's
+checksum while retaining the same frontier does not prove that replacement entry
+belongs to the journal. This distinction is covered by a whole-image binding test.
+
+Successful decode borrows immutable entry bytes. Binary search returns one location
+or an unavailable result without scanning history. A required absent location means
+an incomplete checkpoint. The canonical direct reader still checks the containing
+batch, predecessor, record boundary, kind and turn before exposing payload bytes;
+field roles, ownership and the complete required-reference closure remain semantic
+admission work. Encoding is atomic with aliased inputs; failed decode/lookup preserves
+caller outputs. The access block supports logical frontiers beyond derived-file
+offset limits and imposes no session-wide entry quota.
+
+The checkpoint batch locator uses this pinned table for records older than its
+capture. It validates the canonical containing batch, predecessor, record position,
+kind and turn; a missing old entry fails without falling back to a lifetime scan.
+Newer records use backward lookup in the caller-bounded suffix. Independent
+full-prefix repair/oracles retain explicit table-free backward lookup. Common
+journal identity/ancestry and the suffix budget are established by the consumer.
+
+The fixed-text materializer now accepts this access metadata for declarations and
+original literal fields, preserving its source-role, slice and atomic-output
+checks. Tests build sparse tables from an independent canonical-prefix walk and
+compare indexed and unindexed strings, reject omitted required entries, and run
+malformed text candidates through both paths. The other core/provider readers
+use the same pinned lookup rules; snapshot closure selection is available.
+Live closure maintenance and bounded application admission use these same source rules.
+
+### Append-only index proofs
+
+The index uses the SHA-256 tree-hash construction from RFC 9162 section 2.1.1.
+Leaf hashes cover a zero byte followed by the complete 96-byte encoded entry;
+parent hashes cover a one byte followed by the left and right hashes. Empty
+history uses SHA-256 of empty input. An append combines the occupied low-order
+frontier slots and writes the newly completed parent hashes after its entry.
+Old nodes remain at their original positions, preserving proofs beneath older
+checkpoint roots. The logical frontier has one 32-byte hash per sequence-width
+bit; its count identifies occupied slots. This is fixed metadata, not a lifetime
+record table or a new session capacity.
+
+The frontier root folds occupied slots from right to left using the same parent
+hash. A positional membership query reads its target entry, the sibling roots
+on that path and the remaining frontier. A complete sibling subtree requires
+one stored root read. Recursion depth and proof storage follow the sequence width;
+lookup never scans the session's entries. Turn lookup combines this check with
+the ordinal's binary search. Frontier restoration reads only occupied peaks and
+compares their combined root before adopting the frontier. Atomic single-entry
+and batch builders preserve both caller bytes and frontier on failure. A batch
+needs at most 4 MiB plus 2 KiB of staged tree bytes, derived from its record count
+and a possible carry through existing peaks, in addition to the flat-entry builder.
+
+Logical frontier calculation is independent of the derived file's address range.
+The same single-entry and batch builders accept a null byte output to advance
+only the frontier, retaining entry/anchor validation and atomic failure behavior.
+With byte output requested they also enforce the persisted index geometry. An
+unavailable or unrepresentable cache can therefore stop cache output without
+stopping canonical journaling; positional cache readers always retain their file
+bounds. Logical-only batch advancement walks entries directly into a fixed-sized
+staged frontier, without allocating a flat-entry or parent-byte image.
+
+A verifier requires an independently established root for the exact journal
+prefix. Taking a root from the index itself would discard the membership guarantee.
+A successful proof validates the location, kind, ordinal and batch digest recorded
+in that prefix; the reader still verifies the referenced canonical batch and its
+record boundaries before using content. Missing cache bytes remain unavailable
+indexing, and corruption preserves caller outputs and descriptor positions.
+Queries check the nodes they depend on rather than scanning unrelated index data.
+
+The direct record loader accepts an already authenticated index entry, loads its
+containing batch and immediate predecessor, then checks the exact sequence,
+record boundary, kind and surrounding turn against the decoded records. The
+containing batch must lie within the trusted prefix and agree with its anchor
+when it reaches that boundary. This separates cache membership from canonical
+content validation while keeping both reads bounded.
+
+The implementation is test-linked. Runtime index maintenance, canonical root
+binding, bounded history-page integration and efficient checkpoint admission
+remain unfinished. The current ordinary batch finder still
+walks the backward chain; the proof interface alone does not change resume behavior
+or give a checkpoint semantic authority.
 
 ## One I/O owner and sparse durability barriers
 
@@ -454,6 +2593,122 @@ Five minutes controls recovery snapshots. It is not the durability interval for
 acknowledged input, completed tool work or committed history. The design adds no
 silent five-minute loss mode. A timed lossy mode would be a separate product
 contract and is not selected here.
+
+### Canonical receipt acknowledgement ownership
+
+The test-linked I/O owner's checkpoint protocol couples file publication to
+canonical receipt commitment. Initial usable slots carry independently authenticated receipt ordinals
+and generations. Replacement chooses the earlier ordinal; generation numbering
+uses the largest usable generation only to identify the new image. File/directory
+publication returns exact image bytes and retains a pending receipt, without
+advancing the usable slot. Further checkpoint replacement waits for that receipt.
+
+The engine supplies the captured index root and record timestamp to a dedicated
+receipt submission on the same journal owner. This queues one optional canonical
+record at the current durable anchor through the ordinary journal request path.
+Only its successful journal synchronization advances the usable slot and reports
+receipt commitment in the consumed journal ACK. Failed write/sync and paced retry
+retain the exact request; new journal work stays subject to its existing failure
+rules. Ordinary journal commits may proceed between image publication and receipt
+submission, without changing the image's captured boundary. Engine state and
+external effects still wait for the journal ACK. Closing an idle owner with an
+unreceipted image preserves that image and the older canonical peer for recovery.
+
+### Test-linked journal I/O owner
+
+The journal owner accepts one explicitly staged batch of immutable record copies.
+The engine keeps its staged state until a durable acknowledgement. Another batch
+can branch from the resulting anchor after that acknowledgement is consumed.
+This admission rule follows the engine's single pending state transition; the
+existing framing limits bound the copied record array and payload bytes.
+
+The worker uses the existing pthread and wake facilities. It encodes and hashes
+records, checks the expected file end, appends, and calls the platform file-sync
+primitive. A queued submission and a complete write both remain unacknowledged
+until sync succeeds. Completion preserves separate written and durable anchors.
+The engine can consume a durable acknowledgement with ownership of the exact
+decoded batch. Transfer replaces an initialized caller buffer without allocation
+or re-encoding after sync. Pending and failed calls preserve that buffer, while
+retry retains the same encoded and decoded bytes. Transferred storage survives
+later submissions and owner close. This includes internally constructed receipts,
+so every canonical record can advance the engine's existing logical frontier;
+derived-cache absence or geometry cannot become a canonical durability condition.
+The I/O worker supplies bytes, not semantic adoption or mutable frontier ownership.
+Logical-only batch frontier advancement walks canonical entries directly into a
+fixed-sized staged tree, with no heap allocation after ACK. Its shared row parser
+checks record boundaries and turn declarations; failure leaves the caller tree
+unchanged. Optional forest serialization remains buffered and atomic, and still
+has its separate derived-file geometry checks.
+
+Pending calls and unconsumed completions prevent replacement or close; an idle
+close joins the worker and leaves the caller's journal descriptor and lock intact.
+
+An I/O failure retains the serialized batch and rejects new admissions. One
+explicit reconciliation attempt compares the existing tail with that exact
+batch, appends only a matching missing suffix, and synchronizes again. Conflicting
+bytes or an unexpected file end fail without truncation. The attempt reuses the
+original sequence range and digest. A second failure leaves the journal for
+fresh recovery; neither failure grants permission to release a dependent effect.
+Framing failures detected before I/O preserve the durable boundary and leave the
+owner available for a corrected submission.
+
+The file and its lock are supplied after independent recovery. The owner requires
+exclusive file access throughout its lifetime. It provides no semantic reducer,
+source recovery or checkpoint trust. The callback seam for file write/sync permits
+deterministic partial-write and ambiguous-sync fixtures; production uses the
+platform functions. Fixtures also exercise real file-size-limit write failure,
+maximum permitted batch sizes, immutable input copies, pending responsiveness,
+one sync for grouped records, and retries without duplicate appends. These checks
+exercise the journal primitive. Application transaction batching, index maintenance
+and power-loss qualification remain separate integration work.
+
+### Test-linked checkpoint publisher
+
+The same worker accepts an owned pair of immutable core/provider section buffers
+captured at its current durable journal boundary. Submission moves those buffers
+only on success. The engine establishes their semantic validity before submission;
+the publisher checks framing, source identity and the durable boundary. Checkpoint
+generation is one above the largest independently validated usable generation.
+Replacement selects the earlier authenticated receipt ordinal or an unusable slot,
+keeping the newer canonical peer; generation numbers do not determine recency.
+
+Requests may instead own a frozen dependency query, captured frontier and pinned
+old access bytes. Submission validates buffer ownership and the exact query/image
+boundary without journal I/O. Before file creation the existing worker resolves
+the access section against those bytes and the caller-established bounded suffix,
+then frames the complete image. Missing old membership or invalid canonical
+sources fail before any temporary file, synchronization or replacement. Explicit
+retry retains the same immutable inputs; it does not silently widen the search.
+Structural decoding of the supplied table cannot establish its custody or
+working-set completeness. The producer must already have established both.
+
+The worker creates a private exclusive temporary file, frames and hashes at most
+64 KiB per step, synchronizes the complete file, renames it over the selected slot,
+and synchronizes the directory. Queued journal transactions take priority between
+steps. New journal commits may follow the captured boundary while publication is
+in progress. Snapshot size has no additional cap. Separate completion streams
+share a level-triggered wakeup, so consuming either completion preserves readiness
+for the other.
+
+File publication is acknowledged only after the directory barrier succeeds. A
+platform report that directory synchronization is unsupported remains an explicit
+error. Usable slot metadata advances only after its canonical receipt is committed
+and synchronized by the same journal owner. Until that ACK, another checkpoint
+replacement returns EBUSY while ordinary journal work may continue. A failed operation retains the immutable image, generation, selected
+slot and progress for a caller-paced retry. Partial writes are compared against the
+same chunk and only its matching missing suffix is appended. A retry reconciles an
+ambiguous rename by comparing the held file identity with the destination before
+attempting another rename. The other slot remains untouched throughout failure and
+retry; journal acknowledgements remain independent of maintenance errors.
+
+Closing after a consumed publication failure closes the worker's descriptor and
+retains any provisional file for recovery. The completion includes its generated
+temporary name; after an ambiguous rename that name may already have disappeared.
+The `renamed` flag records confirmed replacement, and a false value alone cannot
+exclude an ambiguous replacement. Runtime integration supplies dirty-state cadence,
+recovery-suffix backpressure, retry pacing and provisional-file recovery. These
+components currently exercise file publication with framing fixtures; canonical
+core/provider checkpoint semantics are covered by the separate reconstruction tests.
 
 ## Compatibility and implementation order
 
@@ -550,3 +2805,632 @@ Checked September 27, 2026:
 These sources support the persistence primitives and failure model. The file
 layout and scheduling policy above are this project's engineering decisions;
 the references do not validate an implementation that has not been built.
+
+## Core access materialization
+
+The read-only core assembler carries one optional pinned access view through
+texts, pending inputs, calls, processes, voice adoption, epoch declarations and
+retained payloads. Canonical accepting records and original literal fields use
+point lookup; graph transformations and response output use the half-open range
+iterator. Graph order, turn/response/cycle ownership, graph-time cwd, transformation
+digest chains, exact literals and native voice-source checks retain their source
+validation. The retained response requires its final output record to be visited
+and its byte total to match the snapshot.
+
+The enclosing consumer supplies complete working-set and causal-range closure,
+common identity/ancestry, immutable bytes and a bounded newer suffix. A missing
+old point fails `ENOENT`. Sparse ranges require complete producer closure: an
+unlisted mutation or boundary cannot be inferred from absence. The independent
+prefix oracle passes NULL access explicitly. Core outputs remain provisional,
+privately owned and unchanged on failure; joint provider/core admission and runtime
+resource/ownership adoption remain separate integration work.
+
+Fixture access views are built from canonical prefix bytes, independently of
+live closure selection. Indexed and unindexed readers compare to the original
+semantic state, exercise malformed metadata in both paths and remove mandatory
+point entries to check atomic failure and preservation of the read descriptor's
+position. Runtime resume uses bounded native admission.
+
+### Direct provider source hydration
+
+The provider materializer reads only the recipe's named recent and historical
+sources and their original-field/span dependencies. Canonical point lookup uses
+pinned access; NULL retains the independent backward lookup path. Original input,
+queued voice, native adoption and completed/partial response payloads use the same
+typed projection helpers as strict replay. Source-only hydration checks declared
+roles, exact literal tuples, scope and causality under independently trusted
+immutable membership. Producer lifecycle and accepting-receipt authority remain
+joint admission requirements; hydration performs no semantic state reduction.
+Strict replay continues to check those obligations against its actual reducer
+state and current original sources.
+
+Referenced response spans use the range iterator. Every consumed fragment must
+match turn/response/cycle, public item identity/metadata and index, starting at
+zero with contiguous byte offsets. First-field offset/size, consumption of both
+endpoints and the final byte total are checked before any append reaches the
+caller. The caller supplies every fragment in the complete old closure; the newer
+suffix remains contiguous. The original explicit-boundary span resolver remains
+available for independent fixture comparison.
+
+Both provider arrays replace outputs together after every named source and row
+has succeeded. The reader preserves descriptor position and cancellation is
+checked before each source row and before final materialization. Historical rows
+are restricted to canonical IRC metadata or validated legacy-checkpoint markers.
+Source decoding and array allocation do not confer current membership, epoch,
+configuration or resume authority. Normal bounded admission and live capture of
+complete producer closure remain integration work; the runtime backend is JSONL.
+
+### Snapshot closure selection
+
+Producer query capture is separate from source I/O. It freezes the common
+boundary, current materializer roots, literal/metadata dependencies and filtered
+causal intervals into owning in-memory buffers. This is not another file format
+or a membership certificate. The producer establishes the same core/provider
+semantics as before; capture needs no descriptor and borrows no provider/state
+objects after success. Failure preserves a previously owned query.
+
+The read half resolves that immutable query using the independently pinned old
+working set and caller-bounded suffix, retaining the existing canonical location,
+kind, causality and hash checks. It never reduces engine state. The convenience
+access-capture interface composes these halves. The publisher can consume the
+frozen query on the existing I/O owner without borrowing a mutable session. The
+engine's snapshot capture supplies those owning query/source inputs. Runtime
+submission, reader integration and working-set custody remain unfinished; these
+APIs do not enable the native backend by themselves.
+
+Successful owner completion can transfer the prepared access bytes into an
+initialized owning engine buffer. Pending or failed completion preserves that
+buffer, including paced retries. The move allocates nothing and reads no files;
+returned bytes survive publisher and owner destruction. This is provisional
+memory custody only. The engine retains its current usable working set until the
+canonical receipt commits and its acknowledged boundary is adopted.
+
+The access capture helper selects locations for a verified producer snapshot from
+an independently pinned available working set plus a caller-bounded newer suffix.
+It takes the complete index frontier at the new capture boundary; this helper
+performs no lifetime index-file scan, frontier rebuild or prefix replay. Available
+old membership must already include every needed field, span and transform. Sparse
+absence cannot prove that an intermediate fragment or mutation never occurred.
+
+Roots include fixed text declarations/originals, current accepting input and queue
+receipts, pending steering, unsettled process origins, call-time directories,
+retained response/compaction and launch-option sources, queued downloads, adopted
+voice history and the provider recipe's recent/historical rows. Typed projection
+roots add their older literal fields, native voice starts and public span fragments.
+Current native IRC admissions add their named canonical source locations and the
+exact next-row discriminator used by historical lookup. That neighbor retains its
+original input classification; it may be non-IRC metadata proving that no adjacent
+IRC row belongs to the lookup. Stream counters supply no canonical ordinal.
+Call/process labels retain graph metadata, graph-time cwd and accepted
+transformations in their causal interval. Public span dependencies enter through
+actual retained provider graphs or response roots. Reference
+causality is checked and all selected locations are compared to canonical batch
+positions, kinds, turn ordinals and hashes before sorted/deduplicated encoding.
+
+Scratch retains one permitted batch and its per-record location table. Root and
+selected-location storage scales with the producer working set. Capture uses
+read-only positional I/O, checks cancellation during root collection, interval
+visits and batch loads, and appends the encoded access section only after complete
+success. Previously owned output bytes remain unchanged on failure. The enclosing
+producer establishes snapshot semantics and complete membership; selecting source
+locations does not independently replay lifecycle authority or publish a checkpoint.
+Lazy historical tool-output ranges remain history-navigation work; source hydration
+of a retained result uses its encoded excerpt and presentation metadata.
+
+Fixtures restore core state from captured sparse metadata and recapture from that
+same sparse table to compare exact bytes. Actual paired provider recipe captures
+are restored against the same canonical oracle as dense/unindexed reads. Live
+producer table maintenance and receipt-bound joint admission are integrated
+with native ownership. Stopped-session conversion remains separate work.
+
+### Joint pinned checkpoint and bounded suffix restoration
+
+The state-only restore consumer composes receipt-pinned core/provider hydration,
+strict suffix reduction through an independently established complete stop, and
+current historical source capture in a private candidate. It adopts core state,
+origins and provider capture together after final cancellation and source-stamp
+checks. Failed stages retain both initialized output owners. It installs no file,
+configuration, network, process or audio resource ownership. Bytes after the stop
+are outside this read-only operation, including any incomplete tail.
+
+Historical queries name canonical admission sequences separately from IRC stream
+IDs/counters in structured current-input labels. Canonical point lookup retains
+legacy checkpoint adjacency and the collector's next-row IRC metadata, including
+non-input rows with their original classification. Structured label lookup visits
+only the pinned old working set and bounded newer suffix. Plain labels in older
+admitted input retain their independent canonical source lookup and original text.
+Rows are staged, deduplicated and emitted in canonical order; missing required old
+locations or structured label sources return unavailable data with no lifetime
+fallback. An absent old next-row discriminator cannot prove that it was non-IRC.
+
+The caller establishes latest receipt membership, capture ancestry, immutable
+image/source bytes, producer semantics, complete source closure, exclusive writer
+ownership and total byte-work bounds. An optional supplemental old table must have
+independently proved membership at the same capture/frontier; matching its root
+metadata alone authenticates no extra location. The embedded image table is used
+when no supplemental table is supplied. Actual suffix references and current
+historical queries may require old locations outside the original checkpoint's
+working set; those locations must be retained/proved before this consumer runs.
+
+Fixtures compare joint core/origin/provider output against the independent full
+prefix oracle, including legacy plain labels and non-input IRC neighbors, then
+free image/access bytes before another provider comparison. Failure coverage
+checks cancellation across observed restore/lookup stages, receipt/frontier/stop
+mismatch, late source mutation and missing historical closure. Runtime receipt
+selection, live closure/frontier maintenance and sole I/O ownership use these
+restoration paths. Stopped-session conversion remains separate work.
+
+### Shared native reference production
+
+`store_binary_producer.c` owns the pending-input, queued-input and open-response
+reference mapping formerly private to the verified importer. The importer and
+bound native engine transactions share this implementation. A strictly reduced
+candidate supplies literal typed fields,
+then the producer substitutes exact input/public-output references and prunes
+closed working sources. Queue edits retain original content and replace text
+provenance; public snapshots retain stream indices while matching output identity.
+Legacy file-offset conversion remains in the importer.
+
+Engine integration must stage a clone of this working provenance with its
+private reducer candidate. Cloning copies metadata vectors, retains immutable reducer JSON owners
+and leaves prepared field scratch empty. Discarding a failed candidate leaves the
+committed producer intact. Successful journal durability ACK is the engine's
+adoption boundary. Application transaction/backend wiring remains to be completed.
+The existing importer parity and closure fixtures exercise this shared mapping;
+ownership regressions cover aborted candidates and source-owner teardown.
+
+### Native session commit boundary
+
+The live `snag_session_commit` API dispatches bound native sessions through an
+engine-owned transaction: clone reducer/working provenance, freeze admission data,
+encode typed fields and preflight the logical frontier, then submit immutable
+records to the sole I/O worker. The API retains its synchronous durability result;
+file writes and synchronization run on the worker. Successful ACK transfers exact
+decoded batch ownership to the engine. Allocation-free frontier advancement uses
+those bytes before reducer/provenance adoption and the existing commit observer.
+Derived index availability never determines canonical durability.
+
+A failed write keeps its candidate, timestamp, canonical sequence and immutable
+admission. Another event or mutated admission returns EBUSY. An exact caller-paced
+reattempt reconciles the retained batch once; a second failure requires fresh
+recovery. Close drains outstanding I/O before descriptor/lock teardown, preserving
+real journal bytes and releasing no dependent effect for an unadopted transaction.
+
+Explicit service-tier changes use a typed metadata record with the supported
+`priority` or `default` value. Its checkpoint origin is a twelfth fixed text slot,
+restored through the same declaration/field scope as other saved text. A text
+block with that slot uses version2; snapshots without an override retain the
+original eleven-slot version1 representation. Version1 decode initializes the
+absent slot to zero. Invalid values, unsupported versions, wrong lengths and
+extra bytes fail without partial output adoption.
+
+IRC sleep/wake and summary configuration/adoption use typed records211–214:
+`irc_sleep_set`, `irc_sleep_woke`, `irc_compact_configured`, and `irc_compacted`.
+They retain the reducer's exact payload fields, supported wake reasons, integer
+ranges and text bounds. The reducer checks a summary's monotone admission
+sequence/count against the current state. Summary text remains provider context
+data; a nested event spelling does not execute an event or change its authority.
+
+Controls block version3 appends nine LEu64 IRC counters, sleep settings and
+summary cursors after the existing seven control sequences. The encoder emits
+version3 when any added scalar is nonzero; all-zero state keeps version2.
+Version1/2 decode initializes those fields to zero without changing other
+checkpoint members. The fixed text table adds `irc_compact_instruction` as a
+thirteenth declaration/field slot, including a retained empty instruction.
+That slot selects version3/335 bytes; its absence preserves version2/310 bytes
+or version1/285 bytes. Older text blocks clear the absent slots. These shapes
+retain the independent older golden encodings and reject partial or trailing
+bytes before adoption. The existing owner/replay and provider-context seams
+consume the saved state; decoding a checkpoint does not launch a worker.
+
+Kind74, `retry_auto_changed`, retains the live reducer's exact `{value: on/off}`
+domain as one validated text field in version1. Its declaration supplies the
+fourteenth fixed text slot, `retry_auto`. An explicit override selects text
+version4/360 bytes. Earlier text versions preserve their exact shapes and decode
+the absent override as NULL, which inherits the owner's current configuration.
+The independently versioned text block leaves the outer core layouts unchanged.
+Core materialization proves the declared control text through its canonical
+record; it does not infer retry policy from provider errors or copy an unrecorded
+configuration default. Invalid values and partial/trailing text blocks fail
+before adoption.
+
+The commit owner also stages current checkpoint origins. Strict replay and live
+commits share one source-step implementation for fixed text declarations, resume
+options, pending input, queue creation versus replacement text, downloads,
+response/compaction epochs, call-time directories and unsettled process starts.
+The step consumes the final canonical record after literal/reference production;
+it never guesses origins from equal bytes. Dynamic entries describe the current
+working set rather than completed lifetime history.
+
+Origins are cloned before admission and adopted alongside the reducer and
+frontier only after canonical durability ACK. A retained failed transaction keeps
+its provisional origins separate; capture still returns only the last ACK-visible
+state. Capture copies the owning source vectors and frontier without journal I/O,
+so callers cannot mutate live provenance through returned storage. Clone failure
+preserves both owners. Capacities are memory bookkeeping, not checkpoint fields.
+The binder accepts independently established origins with the semantic state and
+producer. This capture seam does not publish an image or enable default native
+creation/open/resume. The runtime factory and admission paths below compose it
+with provider capture and bounded dependency-closure maintenance.
+
+The internal binding requires independently verified identity, EOF boundary,
+frontier membership and complete working provenance under an exclusive lock. The
+constructor checks represented state/cursor geometry and the journal header/EOF;
+these checks do not supply the caller's semantic or membership proof. Existing
+JSONL sessions keep their original commit path. Default creation/open/resume
+selection and native checkpoint publication use the integrated factory and
+admission paths described below. Referenced tool
+and process results use the committed process scan cursor for their first native
+sequence and the current acknowledged boundary for their exclusive end. The
+literal saved offsets must match those captured cursors; stale endpoints fail
+before I/O. The typed range excludes its owning result and leaves the original
+presentation fields unchanged. A result with no recorded log hint keeps both
+native endpoints zero. The backend binder's caller must supply native process
+scan cursors established by its engine or recovery, rather than legacy offsets
+with guessed ordinals. Converter-only legacy coordinate lookup stays separate.
+
+The existing voice-import operation captures its destination start through the
+session owner after source-history open and destination persistence. A bound
+native owner supplies its acknowledged batch boundary, preserving the exact
+logical sequence, physical offset and predecessor digest for admission. Its
+ephemeral proof retains the transfer identity, offered source session/as-of
+sequence and expected record count. The producer stages the count of matching
+destination archive records with each transaction; only durability ACK adopts
+that count. Intervening ordinary metadata leaves the captured start unchanged.
+Copied observations may themselves originate in older source sessions.
+
+Voice adoption must match the entire captured tuple and offered identity/count,
+with all expected archive records acknowledged. The writer then emits the native
+sequence reference; recovery derives its physical cursor from the authenticated
+containing batch. Adoption and its observer remain durability-gated. Abandonment
+clears the operation's ephemeral proof, including any retained archive candidate's
+copy proof, so a later ACK cannot recreate import authority. Existing canonical
+archive bytes remain inert observations. Recovery does not implicitly resume an
+unfinished import; a fresh operation captures the current destination boundary.
+The app's source-history walker and normal session lifecycle select native
+readers for native sessions and retain the legacy paths for JSONL sessions.
+
+### Live acknowledged core/provider capture
+
+The engine's internal snapshot capture freezes the acknowledged identity and
+frontier, core section, provider recipe, working origins and index tree together.
+It invokes the existing committed provider cache's checkpoint callback and uses
+its canonical recent/history seam; no second cache or callback is introduced.
+The callback must belong to that session's matching committed consumer. Missing
+or malformed seams reject rather than supplying an empty provider view.
+
+Capture does no journal I/O and does not submit or publish an image. Encoding and
+owning source copies are staged before replacing any caller output. A failure
+preserves the old snapshot, origins and tree. Subsequent commits cannot change
+the returned section bytes. A retained unacknowledged transaction remains separate
+from the captured ACK-visible reducer/cache, as with origin-only capture.
+
+Capture also freezes the dependency query and an owning encoding of the caller's
+accepted old working-set view. Its identity and ordering must match captured
+history; an equal boundary must match the engine's acknowledged frontier exactly.
+Copying rechecks the existing access format without reading files or borrowing
+its original table storage. Old custody, ancestry and completeness, plus the
+newer suffix bound, remain independently established caller preconditions.
+
+The finalized access section remains unset until the worker resolves that query.
+The query, encoded old table, expected old boundary/root and captured frontier
+outlive the producer and provider callback objects. Empty section bytes before
+preparation do not prove closure or authorize a historical-prefix scan.
+
+The native session can install that independently accepted old access and the
+existing owner's receipt-ordered slot metadata once, while no transaction is
+pending. Setup stages owning bytes and structural decoding before configuring
+the existing owner, so rejected identity, malformed access or slot ordering
+leaves custody uninstalled. Its directory descriptor stays caller-owned until
+session close. Subsequent capture can use the installed immutable view; missing
+custody remains unavailable rather than becoming an implicit empty table.
+Setup leaves the reducer and acknowledged journal frontier unchanged, creates
+no files, and does not grant a new usable receipt. Session close releases only
+its owned table storage, not the caller's descriptor.
+Explicitly bound native sessions use the existing checkpoint entrypoint to
+publish that captured request and append its canonical optional receipt through
+the same I/O owner. Publication failures retain the original request for paced
+retry; the engine continues to expose its old frontier and access custody.
+Prepared access is structurally checked against the captured identity/boundary/
+tree before receipt staging. Reducer, producer and source copies plus the exact
+receipt boundary/tree are staged before canonical journal admission.
+
+Receipt write/sync failure retains that exact metadata candidate and blocks a
+different semantic commit. Retry reuses the owner's original request and captured
+timestamp. Durable ACK must identify the receipt and match its staged boundary.
+The shared ACK path advances the reducer time/sequence, logical frontier, sources
+and transient committed byte range, then moves prepared access into usable old
+custody without allocation or I/O. Optional receipt metadata has no semantic
+provider/observer callback. Checkpoint cadence markers remain transient session
+bookkeeping rather than new native core fields.
+
+Configured native commits attempt checkpoint maintenance after the established
+128-record interval and before further admission when maintenance failed. A
+successful semantic ACK retains its success and committed byte range across the
+maintenance attempt. Closure events retain the existing exclusion. Retained
+semantic transactions reach their original ACK/retry path; retained checkpoint
+receipts finish through checkpoint retry before ordinary admission. Fixture
+bindings acquire checkpoint custody explicitly through the existing setup API.
+
+Live native source projection reads against the acknowledged boundary and installed
+working-set table. Later candidate bytes stay outside that view, missing older
+locations require independent proof, and point reads preserve descriptor position. IRC
+context source lookup dispatches there before the legacy reverse walker. Typed
+checkpoint receipts hydrate as lookup-only checkpoint markers; the existing exact
+adjacent IRC identity repair remains separate from reducer/provider admission.
+
+Point hydration may resolve an unavailable old source through the attached,
+borrowed derived-index descriptor. The independently acknowledged frontier supplies
+the expected root; neither the cache header nor the requested location table does.
+The query captures only explicit root records and their causal field/span/transform
+dependencies. Every requested old row, including one borrowed from an already
+decoded neighboring batch, retains its own installed membership or a verified
+index proof and exact canonical tuple check. Referenced intervals prove each row
+before classification, so an unselected old gap is never an absence proof. Span
+I/O uses separate bounded scratch while the owning graph still borrows its batch.
+
+The encoded query view is temporary source custody, not a checkpoint image, reducer
+state, provider admission or execution permission. Query capture is cancellable and
+failure-atomic through its final encoded adoption; journal/index positions do not
+change. Only unavailable-source failures try this path. Corrupt installed locations
+or unsupported semantic data are not retried against the cache. Bad or missing cache
+data stays unavailable, while already-installed source membership remains usable.
+Current checkpoint core/provider selection still requires complete admitted old
+working-set closure and bounded suffix; it never consults this derived index.
+
+Close drains owned publication or journal work before descriptor/lock teardown
+while releasing no abandoned candidate effects. It preserves provisional files
+and already-canonical receipts for recovery. Existing native sessions open
+through bounded joint admission. New session creation uses the native factory;
+checkpoint-suffix dispatch preserves semantic history. Stopped-session conversion
+uses the publication sequence described below.
+
+### Prepared native seed
+
+The internal `snag_store_seed_binary_session` stage reads a prepared session's
+verified in-memory event journal and writes typed native batches to a separate
+empty private journal under its caller-held exclusive lock. It creates no JSONL
+file. Original event times and semantic payloads survive the existing typed
+producer's reference construction; provisional voice/process presentation cursors
+resolve against the same verified memory source. The stage computes the native
+index frontier and its derived cache bytes as it writes, syncs the journal, and
+independently compares native
+semantic digests and core state with the prepared owner before binding.
+
+The resulting owner has committed provider capture, payload origins, producer
+provenance and an I/O writer at the same acknowledged boundary. The original
+prepared state, callbacks and bytes remain unchanged. Failure leaves target
+descriptor/path ownership unchanged; partial journal bytes remain unpublished
+for the caller to discard. Success returns an owning index-cache encoding at the
+verified frontier; failure preserves the empty output buffer. Cache membership
+is checked against the independently established frontier, never trusted from
+its own bytes. Checkpoint-slot setup, index attachment and directory
+publication belong to the factory. Production and unit targets link this stage
+and ordinary creation uses the native factory. Existing legacy sessions keep
+their format; released-format byte fixtures use an explicit test-only constructor.
+
+The existing checkpoint access-plan reader can select the complete core/provider
+closure from this seed cache using proofs beneath that independently established
+frontier. Its index descriptor is a source resource, not an alternative source of
+the root. An empty old working-set table at the seed boundary is not an absence
+proof: missing locations require cache membership and canonical tuple checks.
+Absent or truncated cache data and cancellation preserve the output and read
+positions. Image publication borrows the I/O owner's index descriptor when its
+successfully advanced cache frontier matches the captured producer boundary.
+Both old and suffix rows receive independent membership proofs beneath that
+captured root and canonical tuple checks, avoiding repeated backward batch walks
+for suffix locations. A failed derived append leaves an older frontier, so that
+publication uses installed membership and canonical source lookup. Missing old
+membership and corrupt selected cache rows fail during access preparation before
+creating an image. The existing publication and receipt ordering remain intact.
+
+### Existing native session opening
+
+The ordinary exclusive opener prefers `journal.bin`; only ENOENT selects legacy
+`events.jsonl`. Native corruption, unsupported sections and unavailable checkpoint
+custody stay errors. A fresh source-size measurement establishes the receipt
+window independently of image claims: 32 MiB plus one permitted physical batch,
+clipped to the journal header. The loader opens private images, authenticates
+their canonical receipt order, restores joint state and retains owning access,
+then reconstructs producer provenance and the current logical frontier. It
+restores the checkpoint receipt clock from canonical suffix batches. Native
+provider projection preserves that clock and the acknowledged boundary. A final
+source-stamp check precedes resource binding. No history index is read during
+admission, and no missing source invokes lifetime replay.
+
+The exclusive opener may synchronize removal of a verified incomplete physical
+tail after successful state/provenance admission. Complete corrupt batches and
+lost final delimiters fail before this phase. Trash recovery rejects incomplete
+tails. Read-only name/list snapshots ignore a verified open tail, detect source
+changes and bind metadata without an I/O worker. Their commit, checkpoint and
+index-writer operations fail EROFS. They never acquire/close another owner's lock
+or alter the journal, images or derived index.
+
+The live opener installs authenticated slot generations/ordinals and owns its
+attached derived-index descriptor. Failure to attach the cache leaves canonical
+state available with index lookup unavailable. Native close drains I/O before
+closing an adopted index and the opener's journal/lock/directory. Confirmed
+deletion closes that owner before unlinking the exact native files. Once the
+canonical journal is removed, the private trash name retains deletion intent;
+recovery accepts only the exact remaining private checkpoint/index/lock metadata.
+
+### Native forward history queries
+
+The existing forward history API dispatches native sessions to guarded canonical
+record traversal. Its cursor-shaped interface carries the containing batch's real
+predecessor offset and digest plus the exact next record sequence. A partial cut
+is reconstructed and checked against the decoded record boundary before visiting
+anything. Zero begins history; no JSONL byte position or per-record hash is invented.
+
+Each call pins owning installed access, the ACK boundary and its independent
+frontier before callbacks run. Old records missing from installed custody require
+individual verified derived-index membership under that frontier, followed by
+exact canonical batch/turn/record-offset/kind/digest checks. Borrowed record
+hydration resolves only causal dependencies through temporary query custody when
+needed. The cache supplies neither state nor its own authority root; a broken
+cache does not invalidate installed canonical access. Missing data stays unavailable.
+
+The public reader retains its existing callback contract: a positive stop before
+acceptance keeps the current cut, stop-after consumes that record, and a later
+read or callback failure retains the last accepted prefix. This publication is
+separate from the low-level reader's provisional, failure-atomic cursor. Paging
+charges decoded record bytes and leaves both descriptors' positions unchanged.
+The JSONL reader remains unchanged. Native creation and checkpoint-suffix semantic
+dispatch are integrated with the ordinary session lifecycle.
+
+### Native reverse history queries
+
+The existing reverse API dispatches native sessions through the same pinned
+access, acknowledged frontier, exact cuts and borrowed source hydrator. Zero or
+a future before-sequence selects the pinned end; before one is already complete.
+Each descending sequence is a verified one-record canonical range. Old rows and
+causal dependencies require their own acknowledged membership when not installed;
+an unavailable cache cannot invent them, nor invalidate installed old membership.
+No old-prefix scan or synthetic JSONL byte boundary is used to locate a row.
+
+The existing caller byte budget measures decoded native record/header bytes.
+Unknown optional metadata consumes bytes and advances the reverse sequence cut
+without invoking the public callback. A positive stop-before leaves that row
+unconsumed; stop-after consumes it. Failed callbacks retain their own errno, and
+reverse failures leave the published next-before output zero as before. The
+legacy physical history-cursor hint is not used for native sequence queries.
+Callbacks can append without extending the pinned frontier. Reads preserve
+journal/index descriptor positions and do not change semantic state or execution
+ownership; a callback's explicit write remains its own operation.
+
+### Native exhaustive semantic history
+
+The existing full event iterator explicitly reconstructs native history from
+creation through a captured acknowledged batch anchor. The strict native replay
+adapter projects borrowed typed data and applies the shared reducer before each
+semantic callback. Callback core state is genuinely at that record's logical
+sequence, not a borrowed copy of final live state. Native batch positions and
+hashes do not become synthetic per-record JSONL coordinates. Optional metadata
+and legacy checkpoint markers have no semantic callback.
+
+Like the existing full iterator, only negative callback results abort traversal;
+positive results do not turn this API into the paged stop-before/stop-after API.
+Callback effects are provisional until complete source rechecking succeeds.
+Locked reconstruction rejects a source change, including an explicit callback
+append, with EAGAIN before adopting reconstructed state. An authenticated read-only
+prefix tolerates later appends on the same source without extending its result. The
+live owner, effects and descriptor positions are otherwise unchanged; the
+callback's own write remains its own acknowledged operation.
+
+This exhaustive operation uses canonical verification from byte zero. It does
+not require or repair an index, and is not used as checkpoint admission, ordinary
+factory resume, or a fallback for unavailable point/range custody. Bounded native
+checkpoint/suffix iteration and the remaining reader/factory integration retain
+their separate contracts and qualification.
+
+The existing process/output suffix iterator uses the verified native forward
+reader with the process's exact logical sequence and batch-predecessor
+position/digest. Caller cursor storage stays unchanged. The callback receives
+resolved source data with NULL core state, as on the legacy suffix path;
+positive results are ignored and negative callback errno is preserved. Zero or
+missing process cursors retain the existing full semantic iterator behavior.
+The native scan pins its acknowledged boundary before callbacks, so explicit
+callback appends do not widen the source range. Partial-batch cuts, unavailable
+old rows and their causal dependencies use the same independent membership
+rules as native forward history; no legacy offset scan or guessed cut is used.
+
+## Prepared native directory publication
+
+The native creation backend consumes a prepared in-memory journal into a separate
+private sibling directory. It creates journal.bin, checkpoint.0, checkpoint.1 and
+history.idx with the existing exclusive lock file. Seeding verifies canonical
+semantics and provider capture; the complete core/provider access plan then proves
+each required location through the derived cache beneath the independently known
+seed frontier. The first checkpoint uses the existing directory-sync and canonical
+receipt barrier. The unused checkpoint slot is an empty private regular file;
+bounded admission treats that exact state as unavailable while retaining strict
+validation of nonempty images.
+
+The acknowledged cache frontier is independently checked before final publication.
+The parent-directory namespace lock coordinates name inspection and the final
+rename; callers exclude uncoordinated changes to that namespace. Existing file,
+directory and symlink names are collisions. The prepared session and its callback
+owners remain unchanged until publication; the accepted native owner then replaces
+them and releases their old custody. A final parent-directory synchronization
+failure reports uncertain durability with the native owner installed, preventing
+a retry from reusing the old prepared state after the public name already exists.
+
+Pre-publication failures retain the original prepared owner and identify the
+private .creating-ID-NONCE directory for recovery. Provisional bytes confer no
+public session or checkpoint authority. All allocations needed for accepted
+resource handoff precede publication. Default creation uses this production-linked
+backend. Existing legacy sessions retain their format until explicit stopped,
+locked conversion with `snajpagent convert`.
+
+Finite native history pages charge their existing byte budget for the expanded
+semantic projection as well as the canonical descriptor. A single-copy text
+reference cannot make a page reconstruct many cumulative large snapshots for the
+price of small references. One complete oversized event remains readable, and its
+exact authenticated cursor resumes the next page. Reverse traversal publishes
+that before-record cursor for subsequent forward paging and anchor restoration.
+Exhaustive iteration has no page budget.
+
+### Native explicit-history snapshots
+
+Fixed-prefix history open, snapshot and observation select an existing native
+journal before the legacy path. They hold read-only descriptors and install
+minimal history custody, with no core/provider reconstruction, writer, checkpoint
+publisher or device/process effects. Explicit history initialization authenticates
+the requested canonical prefix and derives its logical frontier; observation
+extends only the already accepted prefix through newly verified complete batches.
+Exhaustive replay of an authenticated read-only prefix tolerates concurrent growth
+of that same journal and returns only the captured frontier. Locked reconstruction
+continues to require the complete source stamp to remain unchanged during replay.
+An open later frame is reported without adoption or repair. Corrupt closed frames,
+changed prefix claims and replaced/truncated source names fail without advancing
+the prior view. Existing native files never authorize a JSONL fallback.
+
+Historical record queries prove derived-cache membership beneath that independently
+established frontier and check canonical tuples. Missing cache access remains
+unavailable; it grants no absence proof. Physical-offset lookup identifies a
+batch boundary. Sequence lookup selects an exact logical record, since several
+records can share a containing-batch predecessor. Semantic enumeration omits
+structural field/receipt records, so its event sequences can have gaps. This
+explicit history traversal is separate from bounded checkpoint admission and
+supplies no application-resume fallback.
+
+Loss of a live native provider cache reuses canonical checkpoint admission and
+its bounded suffix through the writer's acknowledged boundary. A provisional
+core/provider restore must match that boundary and logical frontier before its
+provider capture replaces the invalid cache. Current core state, writer ownership,
+file position and effect ownership stay unchanged. Missing images or source
+membership remain unavailable; cancellation leaves the previous cache owner in
+place. This repair has no lifetime replay fallback.
+
+Nested native checkpoint admission, suffix restore and joint materialization use
+heap-owned provisional sessions. Each owner is released on failure or cleared
+after successful transfer. This keeps the fixed worker stack independent of the
+number of restoration stages; the same canonical validation and atomic adoption
+contracts apply.
+
+### Stopped legacy conversion publication
+
+The converter holds the existing exclusive session lock, reconciles canonical
+legacy history and creates a private provisional native journal, index and paired
+checkpoint slots. It verifies the destination and rechecks the source identity
+and bytes before cutover. Cancellation before cutover preserves the legacy
+selection and leaves provisional work available for diagnosis.
+
+Cutover installs derived files, retains `events.jsonl` under `.legacy-source`,
+syncs the containing directories and publishes `journal.bin` last. A rerun can
+finish an interrupted retention step. Once native selection exists, readers use
+its authenticated boundary; errors do not authorize a legacy fallback. A failure
+after native publication reports uncertain directory durability explicitly.
+
+Workspace paging uses logical record sequence boundaries for both formats.
+Physical offsets identify authenticated cuts and byte progress; a native header
+or several records sharing a batch does not imply additional visible history.
+
+Native reverse history reads authenticate each containing batch once, then check
+individual old-record membership and exact canonical tuples while traversing its
+rows backwards. Callback pauses and byte budgets retain exact logical cursors.
+Provider restoration filters admitted locations to the selected source rows and
+groups their batch reads; omitted old sources remain unavailable. Native session
+loading propagates the caller's cancellation through admission and reconstruction.
+Converted tool previews resolve their canonical native sequence ranges; retained
+legacy byte offsets serve presentation compatibility.

@@ -59,6 +59,53 @@ struct snag_context_projection {
     uint64_t source_seq; /* Selected complete group for compaction. */
 };
 
+/* Staged provider capture shares the live cache's event seam and renderer.
+ * Feed every resolved semantic event and its post-reduction state, in order.
+ * Effects remain provisional: bind only after complete replay/source verification
+ * against the matching core state. The state-only target must have no consumer or
+ * embedded checkpoint. Binding transfers ownership and clears *capture on success;
+ * failure changes neither target nor ownership. Event capture/binding do no I/O.
+ * The borrowed control lives until bind/free. This is an in-memory reconstruction
+ * interface, not a serialized provider checkpoint or a journal format selector. */
+struct snag_context_capture;
+struct snag_context_capture *snag_context_capture_new(const struct snag_context_control *control);
+int snag_context_capture_event(void *opaque, const struct snag_session *state, uint64_t seq,
+    const char *type, const json_t *data, char *error, size_t error_size);
+int snag_context_capture_bind(struct snag_context_capture **capture, struct snag_session *session,
+    char *error, size_t error_size);
+void snag_context_capture_free(struct snag_context_capture *capture);
+/* Populate only historical IRC sources referenced by the captured seam/current
+ * input. wanted maps canonical sequence strings to true; prompt may name IRC
+ * stream tuples, which are not canonical ordinals. The ordered read-only walker
+ * establishes the complete requested closure under immutable source ownership;
+ * it may emit just irc_event and checkpoint metadata (type session_checkpoint).
+ * Those metadata rows are lookup-only, never reducer/provider event admission.
+ * Resolve before bind. Failure preserves the capture's previous source table. */
+typedef int (*snag_context_source_walk_fn)(void *source, const json_t *wanted,
+    const char *prompt, snag_session_event_fn fn, void *opaque, char *error, size_t error_size);
+int snag_context_capture_sources(struct snag_context_capture *capture,
+    const struct snag_session *state, snag_context_source_walk_fn walk, void *source,
+    char *error, size_t error_size);
+
+/* Temporarily transfer a disposable state-only session's capture back to its
+ * caller for further verified replay. Requires an empty output; failure is
+ * atomic. The supplied control is borrowed until free or rebind. Core reduction
+ * then has no live callbacks; explicit capture_event reports cancellation/OOM. */
+int snag_context_capture_take(struct snag_session *session,
+    const struct snag_context_control *control, struct snag_context_capture **capture,
+    char *error, size_t error_size);
+/* Borrow the retained event seam and its historical IRC closure from a bound
+ * capture. They remain owned by the session and may change on the next commit.
+ * The materialized request cache is not exposed. Canonical event data remains
+ * internal, including any provider-private fields retained by those events. */
+int snag_context_capture_seam(const struct snag_session *session,
+    const json_t **recent, const json_t **history);
+/* Seed an empty rebuild capture from validated, matching checkpoint entries.
+ * Shallow copies own the arrays; immutable entries/payloads are shared. Pending
+ * initially covers the entire seam because the first projection rebuilds it. */
+int snag_context_capture_seed(struct snag_context_capture *capture,
+    const json_t *recent, const json_t *history);
+
 void snag_context_projection_free(struct snag_context_projection *projection);
 /* Start the live view after creating a new session; resumed sessions derive it
  * from the journal once on their first projection. */

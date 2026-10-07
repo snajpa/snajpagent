@@ -128,8 +128,8 @@ resolve_prefix(struct snag_store *store, const char *prefix,
     return 0;
 }
 
-static int
-open_session_dir(struct snag_store *store, struct snag_session *session,
+int
+snag_store_open_session_directory(struct snag_store *store, struct snag_session *session,
                   const char *id, char *error, size_t error_size)
 {
     char *sessions = NULL;
@@ -162,18 +162,20 @@ snag_session_locate(struct snag_store *store, struct snag_session *session,
                        error, error_size) < 0) return -1;
     /* Attachment only needs the verified directory. Opening a writer or replaying
      * the journal here would turn a lookup into a second session runner. */
-    return open_session_dir(store, session, target.id, error, error_size);
+    return snag_store_open_session_directory(store, session, target.id, error, error_size);
 }
 
 static int
 open_full_id(struct snag_store *store, struct snag_session *session,
              const char *id, char *error, size_t error_size)
 {
-    if (open_session_dir(store, session, id, error, error_size) < 0) return -1;
-    if (snag_store_open_session_files(session, false, error, error_size) < 0 ||
-        snag_store_scan_log(session, SNAG_TAIL_TRUNCATE,
-                           error, error_size) < 0)
-        return -1;
+    if (snag_store_open_session_directory(store, session, id, error, error_size) < 0) return -1;
+    int format = snag_store_open_session_files(session, false, error, error_size);
+    if (format < 0) return -1;
+    int rc = format ?
+        snag_store_load_binary_session(session, SNAG_TAIL_TRUNCATE, error, error_size) :
+        snag_store_scan_log(session, SNAG_TAIL_TRUNCATE, error, error_size);
+    if (rc < 0) return -1;
     if (snag_media_work_remove(session->dir_fd,error,error_size)<0)return -1;
     if (snag_store_remove_upload_staging(session->dir_fd, error, error_size) < 0) return -1;
     if (session->delete_requested) {
@@ -204,13 +206,22 @@ static int
 open_snapshot(struct snag_store *store, struct snag_session *session,
               const char *id, char *error, size_t error_size)
 {
-    if (open_session_dir(store, session, id, error, error_size) < 0) return -1;
-    session->log_fd = snag_open_read_security_at(session->dir_fd, "events.jsonl", false);
+    if (snag_store_open_session_directory(store, session, id, error, error_size) < 0) return -1;
+    bool native = true;
+    session->log_fd = snag_open_read_security_at(session->dir_fd, "journal.bin", false);
+    if (session->log_fd < 0 && errno == ENOENT) {
+        native = false;
+        session->log_fd = snag_open_read_security_at(session->dir_fd, "events.jsonl", false);
+    }
     if (session->log_fd < 0) return -1;
     if (snag_store_verify_private_fd(session->log_fd, false, "event log", error, error_size) < 0) return -1;
+    session->snapshot_read_only = true;
+    if (native) return snag_store_load_binary_session(session, SNAG_TAIL_IGNORE, error, error_size);
     session->log_end = snag_seek(session->log_fd, 0, SEEK_END);
     if (session->log_end < 0) return -1;
-    return snag_store_scan_log(session, SNAG_TAIL_IGNORE, error, error_size);
+    int rc = snag_store_scan_log(session, SNAG_TAIL_IGNORE, error, error_size);
+    session->snapshot_read_only = true;
+    return rc;
 }
 
 /* On success the caller owns the snapshot; no selected-field copies. */

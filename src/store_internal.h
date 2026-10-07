@@ -3,6 +3,63 @@
 #define SNAJPAGENT_STORE_INTERNAL_H
 
 #include "store.h"
+#include "store_binary_io.h"
+#include "store_binary_index.h"
+#include "store_binary_producer.h"
+#include "store_binary_checkpoint.h"
+
+/* Attach an independently verified native state at its exact committed boundary.
+ * A read-only snapshot has no I/O worker; a writer owns its exclusive lock/EOF.
+ * The caller proves identity,
+ * frontier membership, native process scan cursors and complete working provenance.
+ * Clone producer metadata and checkpoint origins
+ * on success; caller retains all input owners. No file conversion or creation. */
+int snag_session_bind_binary(struct snag_session *, const struct snag_binary_identity *,
+    const struct snag_binary_anchor *, const struct snag_binary_index_tree *,
+    const struct snag_binary_producer *, const struct snag_binary_checkpoint_sources *,
+    const struct snag_binary_io_ops *, char *, size_t);
+
+/* Capture only acknowledged engine-owned origins/frontier. Boundary is required;
+ * tree and initialized owning sources are optional. Outputs change only on success.
+ * No derived file publication or I/O. */
+int snag_session_binary_checkpoint_capture(const struct snag_session *, struct snag_binary_anchor *,
+    struct snag_binary_index_tree *, struct snag_binary_checkpoint_sources *, char *, size_t);
+
+/* Install independently accepted old working-set custody and receipt-ordered
+ * slots. Copies access bytes on success; caller retains its inputs and owns the
+ * directory descriptor until session close. No file I/O or new usable receipt. */
+int snag_session_binary_checkpoint_setup(struct snag_session *, int directory,
+    const uint64_t generations[2], const uint64_t sequences[2],
+    const struct snag_binary_checkpoint_index *, char *, size_t);
+
+/* Attach borrowed private derived-index custody using this session's ACK-owned
+ * identity/frontier, once while idle. Caller keeps the fd alive through session
+ * close. CPU-only setup; cache claims confer no journal or semantic authority. */
+int snag_session_binary_index_setup(struct snag_session *, int fd, char *, size_t);
+/* Transfer derived-index descriptor ownership only on successful attachment. */
+int snag_session_binary_index_adopt(struct snag_session *, int fd, char *, size_t);
+/* Drain and close native I/O/index ownership before deleting its journal. */
+void snag_session_unbind_binary(struct snag_session *);
+/* Last completed cache-write status, independent of semantic commit success.
+ * ENOTSUP means unattached; zero means no observed failure, not verified lookup
+ * completeness. Point readers still verify membership and canonical bytes. */
+int snag_session_binary_index_status(const struct snag_session *, char *, size_t);
+
+/* Hydrate one source against ACK-visible native custody and its bounded suffix.
+ * Pread only; outputs change on success. Missing old access remains unavailable;
+ * no prefix replay, reducer adoption or pending-candidate visibility. */
+int snag_session_binary_projection_read(const struct snag_session *, uint64_t sequence,
+    const char **type, json_t **out, char *, size_t);
+
+/* Freeze ACK-visible sections, query and old working-set access for the I/O owner.
+ * Callback is the matching committed cache owner. Caller establishes immutable
+ * old access custody/ancestry/completeness and bounded suffix before capture.
+ * NULL access uses previously installed custody; no implicit empty table.
+ * Outputs are initialized/owning and change together on success; no I/O. */
+int snag_session_binary_snapshot_capture(const struct snag_session *,
+    const struct snag_binary_checkpoint_index *,
+    struct snag_binary_io_snapshot *, struct snag_binary_index_tree *,
+    struct snag_binary_checkpoint_sources *, char *, size_t);
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -21,6 +78,11 @@ struct snag_legacy_recovery {
     int64_t problem_start, problem_end;
 };
 
+/* Resolve one line boundary inside an independently verified, immutable legacy
+ * prefix. No prefix scan or file-position change; failure preserves out. */
+int snag_store_legacy_cursor_at(struct snag_session *session, int64_t offset,
+    struct snag_journal_cursor *out, char *error, size_t error_size);
+
 /* Explicit offline import only. Caller holds the original source writer lock
  * throughout replay/publication. No source/cwd writes or descriptor seeks.
  * Replays canonical records from byte zero, ignoring derived checkpoint bodies
@@ -34,12 +96,29 @@ int snag_store_reconcile_legacy(struct snag_session *source, struct snag_session
     snag_session_event_fn fn, void *opaque, struct snag_legacy_recovery *recovery,
     char *error, size_t error_size);
 
+/* Shared strict state transition for verified history. The caller supplies a
+ * provisional state/clock and validated record identity and discards it on error.
+ * No live filesystem checks or legacy invalid-transition downgrade. */
+int snag_store_reduce_event(struct snag_session *state, const char *type, const json_t *data,
+    uint64_t sequence, char *error, size_t error_size);
+
+/* Derive pending-call metadata from a validated graph item and its graph-time
+ * directory. Failure preserves out; lifecycle flags start cleared. */
+int snag_pending_call_from_item(const struct snag_response_item *, const char *cwd,
+    struct snag_pending_call *out);
+
 json_t *snag_checkpoint_state_encode(const struct snag_session *session);
 int snag_checkpoint_state_decode(const json_t *data, struct snag_session *state);
 
 bool snag_store_trash_id(const char *name, char id[SNAG_ID_HEX_LEN + 1u]);
 int snag_store_verify_private_fd(int fd, bool directory, const char *name, char *error, size_t error_size);
-int snag_store_open_session_files(struct snag_session *session, bool create, char *error, size_t error_size);
+/* Full resolved ID; open only the private directory, without replay or a writer. */
+int snag_store_open_session_directory(struct snag_store *store, struct snag_session *session,
+    const char *id, char *error, size_t error_size);
+/* Existing opens return 1 for native, 0 for legacy; only absence permits fallback.
+ * New creation remains legacy until native provisional persistence is integrated. */
+int snag_store_open_session_files(struct snag_session *, bool create, char *, size_t);
+int snag_store_load_binary_session(struct snag_session *, enum snag_tail_policy, char *, size_t);
 int snag_store_remove_upload_staging(int session_fd, char *error, size_t error_size);
 int snag_store_scan_log(struct snag_session *session, enum snag_tail_policy tail_policy,
                        char *error, size_t error_size);

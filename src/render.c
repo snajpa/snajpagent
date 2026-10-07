@@ -4,6 +4,8 @@
 #include "fs.h"
 #include "wake.h"
 #include "snajpagent.h"
+#include "store_binary_checkpoint.h"
+#include "store_binary_legacy.h"
 
 #include <errno.h>
 #include <limits.h>
@@ -629,11 +631,35 @@ write_block(struct snag_render *render, int fd, const char *text, size_t len,
     return write_role_block(render, BOUNDARY_CONTENT, fd, "", text, len, 0u, terminal_safe, persistent);
 }
 
+static json_t *
+native_source_event(int fd, struct snag_render_source source)
+{
+    const char *type = NULL;
+    json_t *data = NULL;
+    if (!source.native_sequence || source.native_sequence >= source.native_boundary.next_seq) {
+        errno = EINVAL;
+        return NULL;
+    }
+    if (snag_binary_checkpoint_projection_read(fd, &source.native_boundary, NULL,
+        source.native_sequence, &type, &data) < 0) return NULL;
+    json_t *event = json_pack("{s:s,s:O}", "type", type, "data", data);
+    json_decref(data);
+    return event;
+}
+
 static int
 backfill_load(struct render_backfill *backfill, struct render_backfill_job *job)
 {
     struct snag_render *render = backfill->render;
 
+    if (job->source.native_sequence) {
+        json_t *event = native_source_event(render->history_fd, job->source);
+        if (!event) return -1;
+        snag_buf_init(&job->data, SIZE_MAX);
+        int rc = snag_json_diagnostic(event, &job->data);
+        json_decref(event);
+        return rc;
+    }
     if (render->history_fd < 0 || job->source.offset < 0 || !job->source.len ||
         job->source.len > SNAG_MAX_EVENT_LINE) return snag_errno(EINVAL);
     snag_buf_init(&job->data, job->source.len);
@@ -3706,6 +3732,7 @@ source_event(struct snag_render *render, struct snag_render_source source)
     json_t *event = NULL;
     char error[128];
 
+    if (source.native_sequence) return native_source_event(render->history_fd, source);
     if (source.offset < 0 || !source.len || source.len > SNAG_MAX_EVENT_LINE) {
         errno = EINVAL;
         return NULL;
@@ -3759,24 +3786,125 @@ record_event(struct snag_render *render, struct snag_render_record *record, bool
     return source_event(render, source);
 }
 
+struct render_process_chunks {
+    struct snag_render *render;
+    const char *handle;
+    uint64_t from[2], to[2];
+    uint32_t limit;
+    size_t displayed, characters;
+    bool truncated;
+};
+
+static int
+render_process_chunk(struct render_process_chunks *chunks, const json_t *data)
+{
+    const char *id = snag_json_string(data, "handle");
+    const char *text = snag_json_string(data, "data");
+    const char *encoding = snag_json_string(data, "encoding");
+    uint64_t stream, offset;
+
+    if (chunks->truncated || !snag_render_enabled(chunks->render, SNAG_PRESENT_OUTPUT) ||
+        !id || strcmp(id, chunks->handle) || !text || !encoding ||
+        snag_json_integer_u64(data, "stream", &stream) < 0 || stream > 1u ||
+        snag_json_integer_u64(data, "offset", &offset) < 0 ||
+        offset < chunks->from[stream] || offset >= chunks->to[stream]) return 0;
+    size_t len = strlen(text), shown = 0u, count = 0u;
+    size_t limit = snag_presentation_limit(SNAG_PRESENT_OUTPUT, chunks->render->verbosity);
+    while (shown < len && chunks->characters + count < limit &&
+        (!chunks->limit || chunks->displayed + shown < chunks->limit)) {
+        size_t width = snag_utf8_size((unsigned char)text[shown]);
+        if (!width || width > len - shown ||
+            (chunks->limit && width > chunks->limit - chunks->displayed - shown)) break;
+        shown += width;
+        ++count;
+    }
+    struct snag_render_block block = {.body_kind = SNAG_PRESENT_OUTPUT};
+    snag_buf_init(&block.body, shown + 128u);
+    int rc = snag_buf_printf(&block.body, "[%.8s %s%s]\n", chunks->handle,
+        stream ? "stderr" : "stdout", !strcmp(encoding, "base64") ? " base64" : "");
+    if (!rc) rc = snag_buf_append(&block.body, text, shown);
+    if (!rc && shown) rc = tool_body(chunks->render, &block);
+    snag_buf_free(&block.body);
+    chunks->displayed += shown;
+    chunks->characters += count;
+    chunks->truncated = shown < len;
+    return rc;
+}
+
+static int
+native_output_reference(void *opaque, const struct snag_binary_record *record, uint64_t sequence)
+{
+    struct snag_binary_tool_output_ref *ref = opaque;
+    struct snag_binary_event event;
+    (void)sequence;
+    if (record->flags || record->kind != SNAG_BINARY_TOOL_FINISHED ||
+        snag_binary_event_decode(record, &event) < 0 ||
+        !event.data.tool_finished.result.has_output_ref ||
+        !event.data.tool_finished.result.output_ref.native) return snag_errno(EINVAL);
+    *ref = event.data.tool_finished.result.output_ref;
+    return 0;
+}
+
+static int
+native_process_chunk(void *opaque, const struct snag_binary_record *record, uint64_t sequence)
+{
+    struct render_process_chunks *chunks = opaque;
+    (void)sequence;
+    if (record->kind != SNAG_BINARY_PROCESS_OUTPUT || chunks->truncated) return 0;
+    const char *type;
+    json_t *data = NULL;
+    if (record->flags) return snag_errno(EINVAL);
+    if (snag_binary_legacy_decode(record, &type, &data) < 0) return -1;
+    int rc = render_process_chunk(chunks, data);
+    json_decref(data);
+    return rc;
+}
+
+static bool
+native_process_cancelled(void *opaque)
+{
+    struct render_process_chunks *chunks = opaque;
+    return render_checkpoint(chunks->render) < 0;
+}
+
 static int
 render_process_chunks(struct snag_render *render, const json_t *ref,
-                       uint32_t max_output_bytes, int64_t result_offset)
+    uint32_t max_output_bytes, struct snag_render_source source)
 {
-    const char *handle = snag_json_string(ref, "handle");
-    uint64_t start, end, from[2], to[2];
-    size_t displayed = 0u, characters = 0u;
-    bool truncated = false;
+    struct render_process_chunks chunks = {.render = render,
+        .handle = snag_json_string(ref, "handle"), .limit = max_output_bytes};
+    uint64_t start, end;
     int rc = -1;
-    if (!handle || snag_json_integer_u64(ref, "log_start", &start) < 0 ||
-        snag_json_integer_u64(ref, "log_end", &end) < 0 || start > end || end > (uint64_t)result_offset ||
-        snag_json_integer_u64(ref, "stdout_start", &from[0]) < 0 ||
-        snag_json_integer_u64(ref, "stdout_end", &to[0]) < 0 ||
-        snag_json_integer_u64(ref, "stderr_start", &from[1]) < 0 ||
-        snag_json_integer_u64(ref, "stderr_end", &to[1]) < 0) return -1;
+    if (!chunks.handle || source.offset < 0 ||
+        snag_json_integer_u64(ref, "log_start", &start) < 0 ||
+        snag_json_integer_u64(ref, "log_end", &end) < 0 || start > end ||
+        end > (uint64_t)source.offset ||
+        snag_json_integer_u64(ref, "stdout_start", &chunks.from[0]) < 0 ||
+        snag_json_integer_u64(ref, "stdout_end", &chunks.to[0]) < 0 ||
+        snag_json_integer_u64(ref, "stderr_start", &chunks.from[1]) < 0 ||
+        snag_json_integer_u64(ref, "stderr_end", &chunks.to[1]) < 0) return -1;
     struct snag_buf line = {.max = SNAG_MAX_EVENT_LINE};
     /* One streamed-output burst parks and repaints the composer once. */
     if (output_begin(render) < 0) return -1;
+    if (source.native_sequence) {
+        struct snag_binary_tool_output_ref native = {0};
+        rc = snag_binary_checkpoint_records_read(render->history_fd, &source.native_boundary,
+            NULL, source.native_sequence, source.native_sequence + 1u,
+            native_output_reference, NULL, &native);
+        if (rc < 0) goto out;
+        if (!native.log_end) goto out;
+        if (!native.first_sequence || native.first_sequence > native.end_sequence ||
+            native.end_sequence > source.native_sequence ||
+            native.log_start != start || native.log_end != end) {
+            rc = snag_errno(EINVAL);
+            goto out;
+        }
+        rc = snag_binary_checkpoint_records_read(render->history_fd, &source.native_boundary,
+            NULL, native.first_sequence, native.end_sequence, native_process_chunk,
+            native_process_cancelled, &chunks);
+        if (!rc && chunks.truncated) rc = write_omitted(render);
+        goto out;
+    }
     while (start < end && snag_render_enabled(render, SNAG_PRESENT_OUTPUT)) {
         unsigned char input[8192];
         size_t want = end - start > sizeof(input) ? sizeof(input) : (size_t)(end - start);
@@ -3792,55 +3920,22 @@ render_process_chunks(struct snag_render *render, const json_t *ref,
             char error[128];
             json_t *event = snag_json_load_strict(line.data, line.len, line.max, error, sizeof(error));
             if (!event) goto out;
-            const json_t *data = json_object_get(event, "data");
             const char *type = snag_json_string(event, "type");
-            const char *id = snag_json_string(data, "handle");
-            if (type && !strcmp(type, "process_output") && id && !strcmp(id, handle)) {
-                uint64_t stream, offset;
-                const char *text = snag_json_string(data, "data");
-                const char *encoding = snag_json_string(data, "encoding");
-                if (!text || !encoding || snag_json_integer_u64(data, "stream", &stream) < 0 || stream > 1u ||
-                    snag_json_integer_u64(data, "offset", &offset) < 0) {
-                    json_decref(event);
-                    goto out;
-                }
-                if (offset >= from[stream] && offset < to[stream]) {
-                    size_t shown = 0u, len = strlen(text), count = 0u;
-                    size_t limit = snag_presentation_limit(SNAG_PRESENT_OUTPUT, render->verbosity);
-                    while (shown < len && characters + count < limit &&
-                           (!max_output_bytes || displayed + shown < max_output_bytes)) {
-                        size_t width = snag_utf8_size((unsigned char)text[shown]);
-                        if (!width || width > len - shown ||
-                            (max_output_bytes && width > max_output_bytes - displayed - shown)) break;
-                        shown += width;
-                        ++count;
-                    }
-                    struct snag_render_block block = {.body_kind = SNAG_PRESENT_OUTPUT};
-                    snag_buf_init(&block.body, shown + 128u);
-                    int pr = snag_buf_printf(&block.body, "[%.8s %s%s]\n", handle,
-                        stream ? "stderr" : "stdout", !strcmp(encoding, "base64") ? " base64" : "");
-                    if (pr == 0) pr = snag_buf_append(&block.body, text, shown);
-                    if (pr == 0 && shown) pr = tool_body(render, &block);
-                    snag_buf_free(&block.body);
-                    displayed += shown;
-                    characters += count;
-                    truncated = shown < len;
-                    if (pr < 0) {
-                        json_decref(event);
-                        goto out;
-                    }
-                }
-            }
+            int painted = 0;
+            if (type && !strcmp(type, "process_output"))
+                painted = render_process_chunk(&chunks, json_object_get(event, "data"));
             json_decref(event);
             snag_buf_reset(&line);
-            if (truncated) {
+            if (painted < 0) goto out;
+            if (chunks.truncated) {
                 rc = write_omitted(render);
                 goto out;
             }
         }
     }
     rc = 0;
-out: snag_buf_free(&line);
+out:
+    snag_buf_free(&line);
     if (output_end(render) < 0) rc = -1;
     return rc;
 }
@@ -3880,7 +3975,7 @@ render_tool_record(struct snag_render *render, const struct snag_render_record *
             snag_render_block_free(&block);
             json_t *ref = json_object_get(json_object_get(data, "result"), "output_ref");
             if (rc == 0 && ref && !record->tool_start)
-                rc = render_process_chunks(render, ref, record->max_output_bytes, record->source.offset);
+                rc = render_process_chunks(render, ref, record->max_output_bytes, record->source);
         }
         goto out;
     }

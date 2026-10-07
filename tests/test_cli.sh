@@ -1,6 +1,25 @@
 #!/bin/sh
 # SPDX-License-Identifier: GPL-2.0-only
 set -eu
+test_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
+export PYTHONPATH="$test_dir${PYTHONPATH:+:$PYTHONPATH}"
+
+journal_rows() {
+    session_dir=${1%/*}
+    "$test_dir/test_store" --read-history "${session_dir%/sessions/*}" "${session_dir##*/}"
+}
+
+find_session() {
+    python3 - "$1" "$2" <<'PYFIND'
+import json
+import sys
+from store_history import journal_paths, read_events
+for path in journal_paths(sys.argv[1]):
+    if any(sys.argv[2] in json.dumps(event, ensure_ascii=False, separators=(",", ":"))
+           for event in read_events(path)):
+        print(path.parent.name)
+PYFIND
+}
 bin=$1
 : "${SNAJPAGENT_TEST_NAME:?missing product name}"
 : "${SNAJPAGENT_TEST_VERSION:?missing product version}"
@@ -229,12 +248,14 @@ out=$(printf 'ping\n' | $bin --dotdir "$stdin_dotdir" -e \
 [ "$out" = pong ]
 strip_resume "$root/stdin.err"
 only_resume "$root/stdin.err"
-stdin_log=$(find "$stdin_dotdir/sessions" -name events.jsonl -print)
+stdin_log=$(find "$stdin_dotdir/sessions" -name journal.bin -print)
 python3 - "$stdin_log" <<'PY'
+from pathlib import Path
+from store_history import journal_paths, read_events
 import json
 import sys
 
-events = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8")]
+events = read_events(Path(sys.argv[1]))
 started = [event for event in events if event["type"] == "turn_started"]
 assert len(started) == 1
 assert started[0]["data"]["text"] == "ping"
@@ -245,12 +266,14 @@ out=$(printf '/ro ping\n' | $bin --dotdir "$ro_dotdir" -e 2>"$root/ro.err")
 [ "$out" = pong ]
 out=$($bin --dotdir "$root/ro-argument" -e -- '/ro ping' 2>"$root/ro-argument.err")
 [ "$out" = pong ]
-ro_log=$(find "$ro_dotdir/sessions" -name events.jsonl -print)
+ro_log=$(find "$ro_dotdir/sessions" -name journal.bin -print)
 python3 - "$ro_log" <<'PY'
+from pathlib import Path
+from store_history import journal_paths, read_events
 import json
 import sys
 
-events = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8")]
+events = read_events(Path(sys.argv[1]))
 turn = next(event["data"] for event in events if event["type"] == "turn_started")
 assert turn["text"] == "ping" and turn["read_only"] is True
 PY
@@ -260,12 +283,14 @@ goal_dotdir="$root/model-goal-state"
 out=$($bin --dotdir "$goal_dotdir" -e -- \
     'please create a persistent goal' 2>"$root/model-goal.err")
 [ "$out" = 'model-created checkpointgoal done' ]
-goal_log=$(find "$goal_dotdir/sessions" -name events.jsonl -print)
+goal_log=$(find "$goal_dotdir/sessions" -name journal.bin -print)
 python3 - "$goal_log" <<'PY'
+from pathlib import Path
+from store_history import journal_paths, read_events
 import json
 import sys
 
-events = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8")]
+events = read_events(Path(sys.argv[1]))
 started = [event for event in events if event["type"] == "goal_started"]
 turns = [event for event in events if event["type"] == "turn_started"]
 completed = [event for event in events if event["type"] == "goal_completed"]
@@ -290,9 +315,8 @@ grep -q "^'$bin' --resume '[0-9a-f]\\{32\\}'$" \
 [ -d "$dotdir/trash" ]
 id=$(find "$dotdir/sessions" -mindepth 1 -maxdepth 1 -type d -exec basename {} \;)
 [ ${#id} -eq 32 ]
-[ "$(grep -Evc '"type":"(response_output|session_options)"' \
-    "$dotdir/sessions/$id/events.jsonl")" -eq 7 ]
-[ "$(grep -c '"type":"input_admitted"' "$dotdir/sessions/$id/events.jsonl")" -eq 1 ]
+[ "$(journal_rows "$dotdir/sessions/$id/journal.bin" | grep -Evc '"type":"(response_output|session_options)"' )" -eq 7 ]
+[ "$(journal_rows "$dotdir/sessions/$id/journal.bin" | grep -c '"type":"input_admitted"')" -eq 1 ]
 
 # The writer owns the exact two-line header and framing; the builder owns only
 # the command, which starts at column zero. Dynamic arguments are POSIX-shell
@@ -354,8 +378,8 @@ out=$($bin -e --resume "$id" -- ping 2>"$root/err")
 [ "$out" = pong ]
 strip_resume "$root/err"
 only_resume "$root/err"
-[ "$(grep -vc '"type":"response_output"' "$dotdir/sessions/$id/events.jsonl")" -eq 14 ]
-[ "$(grep -c '"type":"input_admitted"' "$dotdir/sessions/$id/events.jsonl")" -eq 2 ]
+[ "$(journal_rows "$dotdir/sessions/$id/journal.bin" | grep -vc '"type":"response_output"')" -eq 14 ]
+[ "$(journal_rows "$dotdir/sessions/$id/journal.bin" | grep -c '"type":"input_admitted"')" -eq 2 ]
 $bin -l >"$root/list" 2>"$root/err"
 grep -q "^$(printf %.8s "$id").*2" "$root/list"
 
@@ -401,27 +425,27 @@ only_resume "$root/utf8.err"
 
 expect_exit 99 $bin -e -- crash >"$root/crash.out" 2>"$root/crash.err"
 [ ! -s "$root/crash.out" ]
-crash_id=$(grep -rl '"text":"crash"' "$dotdir/sessions" | sed 's|/events.jsonl$||;s|.*/||')
+crash_id=$(find_session "$dotdir" '"text":"crash"')
 $bin -e --resume "$crash_id" </dev/null >"$root/crash-recovered.out" 2>"$root/crash-recovered.err"
 [ "$(cat "$root/crash-recovered.out")" = 'fixture answer' ]
-[ "$(grep -c '"type":"turn_started"' "$dotdir/sessions/$crash_id/events.jsonl")" -eq 1 ]
-[ "$(grep -c '"type":"input_received"' "$dotdir/sessions/$crash_id/events.jsonl")" -eq 1 ]
+[ "$(journal_rows "$dotdir/sessions/$crash_id/journal.bin" | grep -c '"type":"turn_started"')" -eq 1 ]
+[ "$(journal_rows "$dotdir/sessions/$crash_id/journal.bin" | grep -c '"type":"input_received"')" -eq 1 ]
 grep -q 'recovered unfinished turn' "$root/crash-recovered.err"
 # Empty resume of completed work stays idle; explicit piped input is still admitted.
 $bin -e --resume "$crash_id" </dev/null >"$root/crash-idle.out" 2>"$root/crash-idle.err"
 [ ! -s "$root/crash-idle.out" ]
-[ "$(grep -c '"type":"turn_started"' "$dotdir/sessions/$crash_id/events.jsonl")" -eq 1 ]
+[ "$(journal_rows "$dotdir/sessions/$crash_id/journal.bin" | grep -c '"type":"turn_started"')" -eq 1 ]
 printf ping | $bin -e --resume "$crash_id" >"$root/crash-piped.out" 2>"$root/crash-piped.err"
 [ "$(cat "$root/crash-piped.out")" = 'pong' ]
-[ "$(grep -c '"type":"input_received"' "$dotdir/sessions/$crash_id/events.jsonl")" -eq 2 ]
+[ "$(journal_rows "$dotdir/sessions/$crash_id/journal.bin" | grep -c '"type":"input_received"')" -eq 2 ]
 
 $bin -e -- provider_fail >"$root/fail.out" 2>"$root/fail.err"
 [ -s "$root/fail.out" ]
 grep -q 'fixture provider failed' "$root/fail.err"
 [ "$(resume_count "$root/fail.err")" -eq 1 ]
-fail_id=$(grep -rl 'fixture provider failed' "$dotdir/sessions" | sed 's|/events.jsonl$||;s|.*/||')
-[ "$(grep -c '"type":"turn_recovery"' "$dotdir/sessions/$fail_id/events.jsonl")" -eq 1 ]
-! grep -q '"type":"turn_failed"' "$dotdir/sessions/$fail_id/events.jsonl"
+fail_id=$(find_session "$dotdir" 'fixture provider failed')
+[ "$(journal_rows "$dotdir/sessions/$fail_id/journal.bin" | grep -c '"type":"turn_recovery"')" -eq 1 ]
+! journal_rows "$dotdir/sessions/$fail_id/journal.bin" | grep -q '"type":"turn_failed"'
 $bin -e --resume "$fail_id" -- ping >"$root/recovered.out" 2>"$root/recovered.err"
 [ "$(cat "$root/recovered.out")" = pong ]
 strip_resume "$root/recovered.err"
@@ -432,10 +456,12 @@ out=$($bin -e --resume "$id" -- ping 2>"$root/resume-home.err")
 [ "$out" = pong ]
 strip_resume "$root/resume-home.err"
 only_resume "$root/resume-home.err"
-python3 - "$dotdir/sessions/$id/events.jsonl" "$HOME" <<'PY'
+python3 - "$dotdir/sessions/$id/journal.bin" "$HOME" <<'PY'
+from pathlib import Path
+from store_history import journal_paths, read_events
 import json
 import sys
-events = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8")]
+events = read_events(Path(sys.argv[1]))
 assert not any(event["type"] == "workspace_changed" for event in events)
 turns = [event for event in events if event["type"] == "turn_started"]
 assert turns[-1]["data"]["cwd"] == sys.argv[2]
@@ -454,8 +480,7 @@ out=$($bin -e -- many_cycles 2>"$root/many-cycles.err")
 [ "$out" = "130th cycle complete" ]
 strip_resume "$root/many-cycles.err"
 only_resume "$root/many-cycles.err"
-many_cycles_id=$(grep -rl '"text":"many_cycles"' "$dotdir/sessions" |
-    sed 's|/events.jsonl$||;s|.*/||')
+many_cycles_id=$(find_session "$dotdir" '"text":"many_cycles"')
 out=$($bin -e --resume "$many_cycles_id" -- ping 2>"$root/many-cycles-resume.err")
 [ "$out" = pong ]
 strip_resume "$root/many-cycles-resume.err"
@@ -466,14 +491,15 @@ for prompt in managed_wrong_handle managed_malformed managed_wrong_tool_violatio
     [ "$out" = "managed process recovered" ]
     strip_resume "$root/$prompt.err"
     only_resume "$root/$prompt.err"
-    managed_id=$(grep -rl "\"text\":\"$prompt\"" \
-        "$dotdir/sessions" | sed 's|/events.jsonl$||;s|.*/||')
-    python3 - "$dotdir/sessions/$managed_id/events.jsonl" \
+    managed_id=$(find_session "$dotdir" "\"text\":\"$prompt\"")
+    python3 - "$dotdir/sessions/$managed_id/journal.bin" \
         "$prompt" <<'PY'
+from pathlib import Path
+from store_history import journal_paths, read_events
 import json
 import sys
 
-events = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8")]
+events = read_events(Path(sys.argv[1]))
 prompt = sys.argv[2]
 assert not any(event["type"] in {"process_closed", "turn_failed"}
                for event in events)
@@ -510,13 +536,14 @@ for prompt in managed_final_violation; do
     [ "$(cat "$root/$prompt.out")" = "managed process recovered" ]
     grep -q 'Unsettled commands remain' \
         "$root/$prompt.err"
-    managed_id=$(grep -rl "\"text\":\"$prompt\"" \
-        "$dotdir/sessions" | sed 's|/events.jsonl$||;s|.*/||')
-    python3 - "$dotdir/sessions/$managed_id/events.jsonl" <<'PY'
+    managed_id=$(find_session "$dotdir" "\"text\":\"$prompt\"")
+    python3 - "$dotdir/sessions/$managed_id/journal.bin" <<'PY'
+from pathlib import Path
+from store_history import journal_paths, read_events
 import json
 import sys
 
-events = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8")]
+events = read_events(Path(sys.argv[1]))
 closed = [event for event in events if event["type"] == "process_closed"]
 failed = [event for event in events if event["type"] == "turn_failed"]
 assert not closed
@@ -550,13 +577,15 @@ grep -q '^fixture $' "$root/tool-output-cap.err"
 grep -Fq '[…]' "$root/tool-output-cap.err"
 ! grep -q '^fixture command succeeded$' "$root/tool-output-cap.err"
 python3 - "$cap_state" <<'PY'
+from pathlib import Path
+from store_history import journal_paths, read_events
 import json
 import pathlib
 import sys
 
-logs = list((pathlib.Path(sys.argv[1]) / "sessions").glob("*/events.jsonl"))
+logs = journal_paths(pathlib.Path(sys.argv[1]))
 assert len(logs) == 1
-events = [json.loads(line) for line in logs[0].read_text().splitlines()]
+events = read_events(logs[0])
 finished = [event for event in events if event["type"] == "tool_finished"]
 assert len(finished) == 1
 assert finished[0]["data"]["result"]["model_text"] == "fixture command succeeded"
@@ -592,20 +621,21 @@ fi
 expect_exit 4 $bin -e -- final_plus_call >"$root/conflict.out" 2>"$root/conflict.err"
 [ ! -s "$root/conflict.out" ]
 grep -q 'terminal answer with tool calls' "$root/conflict.err"
-conflict_log=$(grep -rl 'protocol_conflict' "$dotdir/sessions" | head -n 1)
-grep -q '"status":"not_run"' "$conflict_log"
-! grep -q '"type":"tool_started"' "$conflict_log"
-[ "$(grep -c '"type":"turn_recovery"' "$conflict_log")" -eq 5 ]
-[ "$(grep -c '"type":"turn_failed"' "$conflict_log")" -eq 1 ]
+conflict_id=$(find_session "$dotdir" protocol_conflict | head -n 1)
+conflict_log="$dotdir/sessions/$conflict_id/journal.bin"
+journal_rows "$conflict_log" | grep -q '"status":"not_run"'
+! journal_rows "$conflict_log" | grep -q '"type":"tool_started"'
+[ "$(journal_rows "$conflict_log" | grep -c '"type":"turn_recovery"')" -eq 5 ]
+[ "$(journal_rows "$conflict_log" | grep -c '"type":"turn_failed"')" -eq 1 ]
 
 expect_exit 98 $bin -e -- tool_crash >"$root/tool-crash.out" 2>"$root/tool-crash.err"
-tool_crash_id=$(grep -rl '"text":"tool_crash"' "$dotdir/sessions" | sed 's|/events.jsonl$||;s|.*/||')
+tool_crash_id=$(find_session "$dotdir" '"text":"tool_crash"')
 out=$($bin -e --resume "$tool_crash_id" </dev/null 2>"$root/tool-recovery.err")
 [ "$out" = 'unexpected continuation' ]
-[ "$(grep -c '"type":"turn_started"' "$dotdir/sessions/$tool_crash_id/events.jsonl")" -eq 1 ]
-[ "$(grep -c '"type":"tool_started"' "$dotdir/sessions/$tool_crash_id/events.jsonl")" -eq 1 ]
+[ "$(journal_rows "$dotdir/sessions/$tool_crash_id/journal.bin" | grep -c '"type":"turn_started"')" -eq 1 ]
+[ "$(journal_rows "$dotdir/sessions/$tool_crash_id/journal.bin" | grep -c '"type":"tool_started"')" -eq 1 ]
 grep -q 'recovered unfinished turn' "$root/tool-recovery.err"
-grep -q '"status":"outcome_unknown"' "$dotdir/sessions/$tool_crash_id/events.jsonl"
+journal_rows "$dotdir/sessions/$tool_crash_id/journal.bin" | grep -q '"status":"outcome_unknown"'
 
 
 # Configuration is strict and applied before any state mutation.
@@ -754,6 +784,8 @@ done
 
 # Selector defaults, cache-before-selection ordering, and persistent resume selection.
 python3 - "$bin" "$root" <<'PYSELECTOR'
+from pathlib import Path
+from store_history import journal_paths, read_events
 import json, os, subprocess, sys
 from pathlib import Path
 binary, root = sys.argv[1], Path(sys.argv[2])
@@ -775,9 +807,8 @@ def run(*args, ok=True, env=None):
     return result
 
 def turns():
-    return [e["data"] for p in (state / "sessions").glob("*/events.jsonl")
-            for line in p.read_text().splitlines()
-            if (e := json.loads(line))["type"] == "turn_started"]
+    return [e["data"] for p in journal_paths(state) for e in read_events(p)
+            if e["type"] == "turn_started"]
 
 # Refresh works without a turn and regardless of the -m position.
 run("--update-model-cache", "-l")
@@ -822,6 +853,8 @@ PYSELECTOR
 
 # -m accepts a catalogue row index (#N form too); out-of-range is a clean error.
 python3 - "$bin" "$root" <<'PYINDEX'
+from pathlib import Path
+from store_history import journal_paths, read_events
 import json, subprocess, sys
 from pathlib import Path
 binary, root = sys.argv[1], Path(sys.argv[2])
@@ -837,17 +870,15 @@ def run(*args, ok=True):
     return result
 def new_triples(before):
     out = []
-    for p in (state / "sessions").glob("*/events.jsonl"):
-        for line in p.read_text().splitlines():
-            e = json.loads(line)
+    for p in journal_paths(state):
+        for e in read_events(p):
             if e["type"] == "turn_started" and e["data"]["turn_id"] not in before:
                 out.append(tuple(e["data"]["config"][k] for k in ("provider", "model", "effort")))
     return out
 def known_turns():
     ids = set()
-    for p in (state / "sessions").glob("*/events.jsonl"):
-        for line in p.read_text().splitlines():
-            e = json.loads(line)
+    for p in journal_paths(state):
+        for e in read_events(p):
             if e["type"] == "turn_started":
                 ids.add(e["data"]["turn_id"])
     return ids
@@ -871,10 +902,12 @@ $bin --dotdir "$override_state" -e -- ping >/dev/null 2>"$root/override.err"
 override_id=$(find "$override_state/sessions" -mindepth 1 -maxdepth 1 -type d -exec basename {} \;)
 $bin --dotdir "$override_state" -e --effort low --resume "$override_id" -- ping >/dev/null 2>"$root/override.err"
 $bin --dotdir "$override_state" -e --resume "$override_id" -- ping >/dev/null 2>"$root/override.err"
-python3 - "$override_state/sessions/$override_id/events.jsonl" <<'PY'
+python3 - "$override_state/sessions/$override_id/journal.bin" <<'PY'
+from pathlib import Path
+from store_history import journal_paths, read_events
 import json
 import sys
-events = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8")]
+events = read_events(Path(sys.argv[1]))
 turns = [event["data"]["config"] for event in events
          if event["type"] == "turn_started"]
 assert [turn["effort"] for turn in turns] == ["medium", "low", "low"]
@@ -906,10 +939,12 @@ $bin --dotdir "$auto_state" --config "$root/auto-compact.ini" -e -- ping >"$root
 grep -Fx '• Compacted' "$root/auto-compact.err"
 ! grep -q 'event ›' "$root/auto-compact.err"
 auto_id=$(find "$auto_state/sessions" -mindepth 1 -maxdepth 1 -type d -exec basename {} \;)
-python3 - "$auto_state/sessions/$auto_id/events.jsonl" <<'PY'
+python3 - "$auto_state/sessions/$auto_id/journal.bin" <<'PY'
+from pathlib import Path
+from store_history import journal_paths, read_events
 import json
 import sys
-events = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8")]
+events = read_events(Path(sys.argv[1]))
 started = [event for event in events if event["type"] == "compaction_started"]
 completed = [event for event in events if event["type"] == "compaction_completed"]
 assert len(started) == 1 and len(completed) == 1
@@ -938,10 +973,12 @@ EOF
 $bin --dotdir "$responses_compact_state" --config "$root/responses-compact.ini" -e -vvvv -- ping >"$root/responses-compact.out" 2>"$root/responses-compact.err"
 [ "$(cat "$root/responses-compact.out")" = pong ]
 responses_compact_id=$(find "$responses_compact_state/sessions" -mindepth 1 -maxdepth 1 -type d -exec basename {} \;)
-python3 - "$responses_compact_state/sessions/$responses_compact_id/events.jsonl" <<'PY'
+python3 - "$responses_compact_state/sessions/$responses_compact_id/journal.bin" <<'PY'
+from pathlib import Path
+from store_history import journal_paths, read_events
 import json
 import sys
-events = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8")]
+events = read_events(Path(sys.argv[1]))
 started = [event for event in events if event["type"] == "compaction_started"]
 completed = [event for event in events if event["type"] == "compaction_completed"]
 assert len(started) == 1 and len(completed) == 1
@@ -963,10 +1000,12 @@ $bin --dotdir "$fallback_state" --config "$root/codex-compact-fallback.ini" \
     -e -- native_compact_unavailable >"$root/fallback.out" 2>"$root/fallback.err"
 grep -q 'native compaction unavailable; compacting through Responses' "$root/fallback.err"
 fallback_id=$(find "$fallback_state/sessions" -mindepth 1 -maxdepth 1 -type d -exec basename {} \;)
-python3 - "$fallback_state/sessions/$fallback_id/events.jsonl" <<'PY'
+python3 - "$fallback_state/sessions/$fallback_id/journal.bin" <<'PY'
+from pathlib import Path
+from store_history import journal_paths, read_events
 import json
 import sys
-events = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8")]
+events = read_events(Path(sys.argv[1]))
 starts = [e for e in events if e["type"] == "compaction_started"]
 interrupted = [e for e in events if e["type"] == "compaction_interrupted"]
 completed = [e for e in events if e["type"] == "compaction_completed"]
@@ -990,10 +1029,12 @@ $bin --dotdir "$pre_state" -e -- ping >"$root/pre-first.out" 2>"$root/pre-first.
 pre_id=$(find "$pre_state/sessions" -mindepth 1 -maxdepth 1 -type d -exec basename {} \;)
 $bin --dotdir "$pre_state" --config "$root/auto-compact.ini" -e --resume "$pre_id" -- ping >"$root/pre-second.out" 2>"$root/pre-second.err"
 [ "$(cat "$root/pre-second.out")" = pong ]
-python3 - "$pre_state/sessions/$pre_id/events.jsonl" <<'PY'
+python3 - "$pre_state/sessions/$pre_id/journal.bin" <<'PY'
+from pathlib import Path
+from store_history import journal_paths, read_events
 import json
 import sys
-events = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8")]
+events = read_events(Path(sys.argv[1]))
 turns = [event for event in events if event["type"] == "turn_started"]
 assert len(turns) == 2
 turn2 = turns[1]
@@ -1048,10 +1089,12 @@ for compact_case in default auto larger fixed below off fallback; do
     $bin --dotdir "$budget_state" --config "$budget_config" -e \
         --resume "$budget_id" -- compact_budget >"$root/budget.out" \
         2>"$root/budget.err"
-    python3 - "$budget_state/sessions/$budget_id/events.jsonl" "$compact_case" <<'PY'
+    python3 - "$budget_state/sessions/$budget_id/journal.bin" "$compact_case" <<'PY'
+from pathlib import Path
+from store_history import journal_paths, read_events
 import json
 import sys
-events = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8")]
+events = read_events(Path(sys.argv[1]))
 turn = [e for e in events if e["type"] == "turn_started"][-1]
 response = [e for e in events if e["type"] == "response_started"
             and e["data"]["turn_id"] == turn["data"]["turn_id"]]
@@ -1086,10 +1129,12 @@ $bin --dotdir "$statistical_state" --config "$root/statistical-budget.ini" \
     -e -- ping >"$root/statistical-budget.out" 2>"$root/statistical-budget.err"
 [ "$(cat "$root/statistical-budget.out")" = pong ]
 statistical_id=$(find "$statistical_state/sessions" -mindepth 1 -maxdepth 1 -type d -exec basename {} \;)
-python3 - "$statistical_state/sessions/$statistical_id/events.jsonl" <<'PY'
+python3 - "$statistical_state/sessions/$statistical_id/journal.bin" <<'PY'
+from pathlib import Path
+from store_history import journal_paths, read_events
 import json
 import sys
-events = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8")]
+events = read_events(Path(sys.argv[1]))
 started = [event for event in events if event["type"] == "response_started"]
 assert len(started) == 1
 assert started[0]["data"]["count_method"] == "unknown"
@@ -1111,10 +1156,12 @@ max_input_tokens = 1
 EOF
 expect_exit 4 $bin --dotdir "$hard_state" --config "$root/hard-budget.ini" -e -- ping >"$root/hard-budget.out" 2>"$root/hard-budget.err"
 hard_id=$(find "$hard_state/sessions" -mindepth 1 -maxdepth 1 -type d -exec basename {} \;)
-python3 - "$hard_state/sessions/$hard_id/events.jsonl" <<'PY'
+python3 - "$hard_state/sessions/$hard_id/journal.bin" <<'PY'
+from pathlib import Path
+from store_history import journal_paths, read_events
 import json
 import sys
-events = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8")]
+events = read_events(Path(sys.argv[1]))
 assert not any(event["type"] == "response_started" for event in events)
 failed = [event for event in events if event["type"] == "turn_failed"]
 assert len(failed) == 1
@@ -1144,10 +1191,12 @@ $bin --dotdir "$anchor_state" --config "$root/context-anchor.ini" \
     2>"$root/context-anchor.err"
 [ "$(cat "$root/context-anchor.out")" = "context anchor complete" ]
 anchor_id=$(find "$anchor_state/sessions" -mindepth 1 -maxdepth 1 -type d -exec basename {} \;)
-python3 - "$anchor_state/sessions/$anchor_id/events.jsonl" <<'PY'
+python3 - "$anchor_state/sessions/$anchor_id/journal.bin" <<'PY'
+from pathlib import Path
+from store_history import journal_paths, read_events
 import json
 import sys
-events = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8")]
+events = read_events(Path(sys.argv[1]))
 starts = [event for event in events if event["type"] == "response_started"]
 assert len(starts) == 5
 assert all(event["data"]["count_method"] == "unknown" and
@@ -1169,10 +1218,12 @@ $bin --dotdir "$recovery_state" -e -- ping >/dev/null 2>"$root/recovery-first.er
 recovery_id=$(find "$recovery_state/sessions" -mindepth 1 -maxdepth 1 -type d -exec basename {} \;)
 $bin --dotdir "$recovery_state" -e --resume "$recovery_id" -- capacity_recovery >"$root/recovery.out" 2>"$root/recovery.err"
 [ "$(cat "$root/recovery.out")" = "fixture answer" ]
-python3 - "$recovery_state/sessions/$recovery_id/events.jsonl" <<'PY'
+python3 - "$recovery_state/sessions/$recovery_id/journal.bin" <<'PY'
+from pathlib import Path
+from store_history import journal_paths, read_events
 import json
 import sys
-events = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8")]
+events = read_events(Path(sys.argv[1]))
 turn = [event for event in events if event["type"] == "turn_started"][-1]
 starts = [event for event in events if event["type"] == "response_started"
           and event["data"]["turn_id"] == turn["data"]["turn_id"]]
@@ -1199,10 +1250,12 @@ chmod 600 "$second_state/config.ini"
 $bin --dotdir "$second_state" -e -- ping >/dev/null 2>"$root/second-first.err"
 second_id=$(find "$second_state/sessions" -mindepth 1 -maxdepth 1 -type d -exec basename {} \;)
 expect_exit 4 $bin --dotdir "$second_state" -e --resume "$second_id" -- capacity_recovery_twice >"$root/second.out" 2>"$root/second.err"
-python3 - "$second_state/sessions/$second_id/events.jsonl" <<'PY'
+python3 - "$second_state/sessions/$second_id/journal.bin" <<'PY'
+from pathlib import Path
+from store_history import journal_paths, read_events
 import json
 import sys
-events = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8")]
+events = read_events(Path(sys.argv[1]))
 turn = [event for event in events if event["type"] == "turn_started"][-1]
 starts = [event for event in events if event["type"] == "response_started"
           and event["data"]["turn_id"] == turn["data"]["turn_id"]]
@@ -1220,6 +1273,8 @@ PY
 
 # Document roots: CLI validation, quoting, launch-relative paths and resume hints.
 python3 - "$bin" "$root" <<'PY'
+from pathlib import Path
+from store_history import journal_paths, read_events
 import json
 import os
 import pathlib
@@ -1249,7 +1304,7 @@ result = subprocess.run([*common, *options, "-e", "--", "ping"],
 assert result.returncode == 0, result.stderr
 session = next((state / "sessions").iterdir())
 def turns():
-    return [e["data"] for e in map(json.loads, (session / "events.jsonl").read_text().splitlines())
+    return [e["data"] for e in read_events(session / "journal.bin")
             if e["type"] == "turn_started"]
 expected = [str(agents), *[str(d / "AGENTS.md") for d in dirs]]
 assert turns()[-1]["instructions"][-3:] == expected
@@ -1280,7 +1335,7 @@ result = subprocess.run([*common, *args, "-e", "--", "ping"],
                         text=True, capture_output=True, timeout=15)
 assert result.returncode == 0, result.stderr
 limit_session = max((state / "sessions").iterdir(), key=lambda p: p.stat().st_mtime)
-limit_turns = [e["data"] for e in map(json.loads, (limit_session / "events.jsonl").read_text().splitlines())
+limit_turns = [e["data"] for e in read_events(limit_session / "journal.bin")
                if e["type"] == "turn_started"]
 assert limit_turns and limit_turns[-1]["instructions"][-20:] == limit_docs, limit_turns[-1]["instructions"]
 print("working-docs CLI: ok")

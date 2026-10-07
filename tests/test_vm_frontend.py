@@ -22,6 +22,7 @@ import uuid
 from pathlib import Path
 
 import tmux_terminal as harness
+from store_history import create_legacy, journal_paths
 
 
 BINARY = Path(sys.argv.pop(1)).resolve() if len(sys.argv) > 1 and not sys.argv[1].startswith('-') else (
@@ -238,7 +239,7 @@ class WorkspaceTests(unittest.TestCase):
                         str(self.root / 'state'), '--resume', sid])
         return shlex.split(command)
 
-    def seed_session(self, response='retained-answer-marker'):
+    def seed_session(self, response='retained-answer-marker', legacy=False):
         provider = harness.FakeResponses()
         self.addCleanup(provider.close)
 
@@ -253,7 +254,7 @@ class WorkspaceTests(unittest.TestCase):
         self.fixture_provider = provider
         self.fixture_config = config
         harness.write_irc_config(config, provider.port, 'host-model')
-        journal = None
+        journal = create_legacy(self.root / 'state', self.root, 'fake', 'host-model') if legacy else None
         for _ in chunks:
             resume = ['--resume', journal.parent.name] if journal else []
             result = subprocess.run([str(BINARY), '--config', str(config), '--dotdir',
@@ -263,7 +264,7 @@ class WorkspaceTests(unittest.TestCase):
                                                        'SNAJPAGENT_IRC_UI_KEY': 'irc-ui-secret'},
                                     capture_output=True, timeout=30)
             self.assertEqual(result.returncode, 0, result.stderr)
-            journal, = (self.root / 'state' / 'sessions').glob('*/events.jsonl')
+            journal, = journal_paths(self.root / 'state')
         return journal
 
     def append_turn(self, journal, answer):

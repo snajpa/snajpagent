@@ -188,6 +188,7 @@ remove_view_reports(int dir_fd, char *error, size_t error_size)
 static int
 remove_deleted_session(struct snag_store *store, struct snag_session *session, char *error, size_t error_size)
 {
+    snag_session_unbind_binary(session);
     if (close_fd_slot(&session->log_fd) < 0)
         return snag_errorf(error, error_size, "cannot close deleted-session files: %s",
                   strerror(errno));
@@ -200,6 +201,10 @@ remove_deleted_session(struct snag_store *store, struct snag_session *session, c
     if (unlink_expected_file(session->dir_fd, "prompt_history", true, error, error_size) < 0 ||
         unlink_expected_file(session->dir_fd, "meta.json", true, error, error_size) < 0 ||
         unlink_expected_file(session->dir_fd, "events.jsonl", true, error, error_size) < 0 ||
+        unlink_expected_file(session->dir_fd, "journal.bin", true, error, error_size) < 0 ||
+        unlink_expected_file(session->dir_fd, "checkpoint.0", true, error, error_size) < 0 ||
+        unlink_expected_file(session->dir_fd, "checkpoint.1", true, error, error_size) < 0 ||
+        unlink_expected_file(session->dir_fd, "history.idx", true, error, error_size) < 0 ||
         snag_sync_dir(session->dir_fd) < 0 || close_fd_slot(&session->lock_fd) < 0 ||
         unlink_expected_file(session->dir_fd, "lock", true, error, error_size) < 0) return -1;
     if (close_fd_slot(&session->dir_fd) < 0)
@@ -224,8 +229,8 @@ snag_session_complete_delete(struct snag_store *store, struct snag_session *sess
     return remove_deleted_session(store, session, error, error_size);
 }
 
-/* A crash may leave only the reserved trash directory and lock/metadata after
- * events.jsonl was removed. Never recursively remove unexpected content. */
+/* The reserved trash name retains deletion intent after the canonical journal
+ * unlink. Accept only the exact remaining private metadata, never recursion. */
 static int
 verify_delete_remnants(int dir_fd, char *error, size_t error_size)
 {
@@ -237,7 +242,9 @@ verify_delete_remnants(int dir_fd, char *error, size_t error_size)
     int rc = 0;
     while ((name = snag_directory_next(dir)) != NULL) {
         if (!strcmp(name, ".") || !strcmp(name, "..")) continue;
-        if (strcmp(name, "lock") && strcmp(name, "meta.json")) {
+        if (strcmp(name, "lock") && strcmp(name, "meta.json") &&
+            strcmp(name, "checkpoint.0") && strcmp(name, "checkpoint.1") &&
+            strcmp(name, "history.idx")) {
             rc = snag_fail(error, error_size, EINVAL, "unexpected content in deleted-session trash");
             break;
         }
@@ -272,7 +279,8 @@ snag_store_complete_trash_delete(struct snag_store *store, const char *trash_nam
     session.dir_fd = dir_fd;
     if (snag_store_verify_private_fd(session.dir_fd, true,
                                     "deleted-session directory", error, error_size) < 0) goto out;
-    if (snag_store_open_session_files(&session, false, error, error_size) < 0) {
+    int format = snag_store_open_session_files(&session, false, error, error_size);
+    if (format < 0) {
         if (errno != ENOENT || session.lock_fd < 0 ||
             verify_delete_remnants(session.dir_fd, error, error_size) < 0) goto out;
         (void)snag_strcpy(session.trash_name, sizeof(session.trash_name), trash_name);
@@ -280,7 +288,10 @@ snag_store_complete_trash_delete(struct snag_store *store, const char *trash_nam
         rc = remove_deleted_session(store, &session, error, error_size);
         goto out;
     }
-    if (snag_store_scan_log(&session, SNAG_TAIL_REJECT, error, error_size) < 0) goto out;
+    int loaded = format ?
+        snag_store_load_binary_session(&session, SNAG_TAIL_REJECT, error, error_size) :
+        snag_store_scan_log(&session, SNAG_TAIL_REJECT, error, error_size);
+    if (loaded < 0) goto out;
     if (!session.delete_requested || strcmp(session.trash_name, trash_name) != 0) {
         (void)snag_fail(error, error_size, EINVAL, "deleted-session trash intent mismatch");
         goto out;

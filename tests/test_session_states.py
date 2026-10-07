@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: GPL-2.0-only
 """Production PTYs: attachment states and the displayed/short session selectors."""
 import hashlib
-import json
 import os
 import select
 import signal
@@ -13,6 +12,7 @@ import time
 from pathlib import Path
 
 import tmux_terminal as harness
+from store_history import journal_paths, read_events
 from test_remote_terminal import RemoteProcess
 
 
@@ -61,7 +61,7 @@ def check(binary, previous=None):
                 assert child.process.poll() == 0, bytes(child.output)
 
             def journals():
-                return list((root / "state" / "sessions").glob("*/events.jsonl"))
+                return journal_paths(root / "state")
 
             def state(sid, expected):
                 saved = {p: hashlib.sha256(p.read_bytes()).digest() for p in journals()}
@@ -109,8 +109,7 @@ def check(binary, previous=None):
             result = subprocess.run(prefix + ["--resume", sid[:4], "-e", "--", "ping"],
                                     cwd=root, env={**os.environ, **env}, capture_output=True, timeout=20)
             assert result.returncode == 0, result.stderr
-            records = list(map(json.loads, next(p for p in journals() if p.parent.name == sid)
-                               .read_text().splitlines()))
+            records = read_events(next(p for p in journals() if p.parent.name == sid))
             assert [e["data"]["text"] for e in records if e["type"] == "turn_started"] == ["ping"]
 
             # Interleave live states, then create newer stored sessions. Running
@@ -139,8 +138,7 @@ def check(binary, previous=None):
                                     capture_output=True, timeout=20)
             assert result.returncode == 0, result.stderr
             saved = {p: p.read_bytes() for p in journals()}
-            times = {p.parent.name: json.loads(data.splitlines()[-1])["time_ms"]
-                     for p, data in saved.items()}
+            times = {p.parent.name: read_events(p)[-1]["time_ms"] for p in saved}
             ordered = {status: sorted((key for key in statuses if statuses[key] == status),
                                      key=lambda key: (times[key], key), reverse=True)
                        for status in ("attached", "detached", "stored")}

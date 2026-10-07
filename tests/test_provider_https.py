@@ -13,6 +13,8 @@ import tempfile
 import threading
 from pathlib import Path
 
+from store_history import journal_paths, read_events
+
 
 def event(kind, **data):
     return ("data: " + json.dumps({"type": kind, **data}) + "\n\n").encode()
@@ -196,16 +198,16 @@ def check(binary):
                     assert result.returncode == 0, (result.stderr, server.protocols, server.resets)
                     assert result.stdout.strip() == "HTTPS answer once", result.stdout
                     assert len(requests) == (2 if name == "reasoning" else 1), requests
-                    path, = (state / "sessions").glob("*/events.jsonl")
-                    events = [json.loads(line) for line in path.read_text().splitlines()]
+                    path, = journal_paths(state)
+                    events = read_events(path)
                     assert sum(e["type"] == "response_completed" for e in events) == 1
                     assert not any(e["type"] == "response_failed" for e in events)
                 elif name == "partial":
                     assert result.returncode != 0, result
                     assert "provider transport failed" in result.stderr, result.stderr
                     assert len(requests) == 1, requests
-                    path, = (state / "sessions").glob("*/events.jsonl")
-                    events = [json.loads(line) for line in path.read_text().splitlines()]
+                    path, = journal_paths(state)
+                    events = read_events(path)
                     failure, = [e["data"] for e in events if e["type"] == "response_failed"]
                     assert failure["retry_count"] == 0, failure
                     partial, = failure["partial_public"]

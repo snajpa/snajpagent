@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "checked_json.h"
 #include "context.h"
+#include "fixture_store_legacy.h"
 #include "credential.h"
 #include "media.h"
 #include "convert.h"
@@ -84,8 +85,13 @@ cancel_preparation(void *opaque)
     return --*remaining == 0u;
 }
 
+void test_context_binary_report(void);
+void test_context_binary_projection(struct snag_session *source, unsigned int cycle,
+    const json_t *steering, const struct snag_instruction_set *instructions,
+    const struct snag_context_projection *expected);
+
 static void
-build_context(struct snag_session *session, unsigned int cycle, const json_t *steering,
+build_context_cached(struct snag_session *session, unsigned int cycle, const json_t *steering,
               const struct snag_instruction_set *instructions, struct snag_context_projection *projection)
 {
     char error[512] = {0};
@@ -103,6 +109,15 @@ build_context(struct snag_session *session, unsigned int cycle, const json_t *st
 }
 
 static void
+build_context(struct snag_session *session, unsigned int cycle, const json_t *steering,
+              const struct snag_instruction_set *instructions,
+              struct snag_context_projection *projection)
+{
+    build_context_cached(session, cycle, steering, instructions, projection);
+    test_context_binary_projection(session, cycle, steering, instructions, projection);
+}
+
+static void
 create_session(struct snag_store *store, struct snag_session *session,
                const char *cwd, const char *effort)
 {
@@ -112,6 +127,18 @@ create_session(struct snag_store *store, struct snag_session *session,
                                  SNAJPAGENT_MODEL, effort, error, sizeof(error));
     if (rc != 0) fprintf(stderr, "session: %s\n", error);
     assert(rc == 0);
+}
+
+static void
+create_legacy_session(struct snag_store *store, struct snag_session *session,
+    const char *cwd, const char *effort)
+{
+    char error[512] = {0};
+    snag_session_init(session);
+    int rc = legacy_fixture_create(store, session, cwd, "default", SNAJPAGENT_MODEL,
+        effort, error, sizeof(error));
+    if (rc < 0) fprintf(stderr, "legacy fixture: %s\n", error);
+    assert(!rc);
 }
 
 static void
@@ -487,6 +514,7 @@ test_worknote_moments(struct snag_store *store, const char *cwd)
             assert(reduce_rc == 0);
             json_t *reduce_input = json_object_get(reduce.value, "input");
             assert(json_is_array(reduce_input) && json_array_size(reduce_input) == 1);
+            assert(reduce_input->refcount == 1u); /* The request is its only owner. */
             json_t *reduce_item = json_array_get(reduce_input, 0);
             assert_string(reduce_item, "role", "user");
             const char *reduce_text = json_string_value(json_object_get(reduce_item, "content"));
@@ -1053,14 +1081,15 @@ test_repeated_compaction_active_seam(struct snag_store *store, const char *cwd)
     const char *handle = "a6000000000000000000000000000000";
     const char *steer = "a7000000000000000000000000000000";
 
-    for (unsigned int reopen = 0u; reopen < 2u; ++reopen) {
+    for (unsigned int reopen = 0u; reopen < 3u; ++reopen) {
         struct snag_session session;
         struct snag_context_projection projection = {0};
         struct snag_instruction_set instructions = {0};
         json_t *empty = json_array(), *output = compact_output_fixture();
         char error[512] = {0}, session_id[SNAG_ID_HEX_LEN + 1u];
 
-        create_session(store, &session, cwd, "medium");
+        if (reopen == 1u) create_legacy_session(store, &session, cwd, "medium");
+        else create_session(store, &session, cwd, "medium");
         memcpy(session_id, session.id, sizeof(session_id));
         commit_event(&session, "turn_started",
                      turn_started(turn, 1u, "continue the long turn", cwd, NULL));
@@ -1134,11 +1163,13 @@ test_repeated_compaction_active_seam(struct snag_store *store, const char *cwd)
                 assert(snag_session_checkpoint(&session, error, sizeof(error)) == 0);
                 snag_session_close(&session);
                 assert(snag_session_open(store, &session, session_id, error, sizeof(error)) == 0);
-                /* Older views retained the summary prefix and lacked retry cursors. */
-                assert(json_object_del(session.checkpoint_context, "recovery_count") == 0);
-                assert(json_object_del(session.checkpoint_context, "recovery_index") == 0);
-                json_t *legacy = json_object_get(session.checkpoint_context, "request_input");
-                assert(json_array_insert(legacy, 0u, json_array_get(output, 0u)) == 0);
+                if (!session.binary) {
+                    /* Older views retained the summary prefix and lacked retry cursors. */
+                    assert(json_object_del(session.checkpoint_context, "recovery_count") == 0);
+                    assert(json_object_del(session.checkpoint_context, "recovery_index") == 0);
+                    json_t *legacy = json_object_get(session.checkpoint_context, "request_input");
+                    assert(json_array_insert(legacy, 0u, json_array_get(output, 0u)) == 0);
+                }
                 build_context(&session, cycle + 1u, empty, &instructions, &projection);
                 json_t *input = json_object_get(projection.create_request.value, "input");
                 size_t summaries = 0u;
@@ -1173,6 +1204,36 @@ turn_interrupted_data(const char *turn_id)
         "origin", "recovery", "reason", "session_recovered", "turn_id", turn_id));
 }
 
+static json_t *
+collected_unknown_result(const char *handle, int64_t log_start, int64_t log_end,
+    uint64_t from, uint64_t to)
+{
+    json_t *result = snag_tool_result_outcome_unknown("owner_lost");
+    assert(result);
+    assert(!snag_json_set_new(result, "max_output_tokens", json_integer(16000)));
+    assert(!snag_json_set_new(result, "stdout", json_pack("{s:s,s:s,s:i,s:I,s:I}",
+        "encoding", "utf8", "retained", "", "retained_bytes", 0,
+        "original_bytes", (json_int_t)(to - from), "discarded_bytes", (json_int_t)(to - from))));
+    assert(!snag_json_set_new(result, "output_ref", json_pack(
+        "{s:s,s:I,s:I,s:i,s:i,s:i,s:i,s:i,s:b,s:I,s:I}", "handle", handle,
+        "stdout_start", (json_int_t)from, "stdout_end", (json_int_t)to,
+        "stderr_start", 0, "stderr_end", 0, "stdin_accepted", 0, "stdin_written", 0,
+        "stdin_pending", 0, "stdin_open", false,
+        "log_start", (json_int_t)log_start, "log_end", (json_int_t)log_end)));
+    return result;
+}
+
+/* The engine captures an output cursor after a start or collection. */
+static void
+capture_process_cursor(struct snag_session *session, const char *handle)
+{
+    struct snag_process_state *process = snag_session_process(session, handle);
+    assert(process);
+    process->log_offset = (uint64_t)session->log_end;
+    process->log_seq = session->next_seq;
+    memcpy(process->log_hash, session->prev_sha256, sizeof(process->log_hash));
+}
+
 static void
 test_parallel_journal_recovery(struct snag_store *store, const char *cwd)
 {
@@ -1192,10 +1253,13 @@ test_parallel_journal_recovery(struct snag_store *store, const char *cwd)
     assert(json_object_set_new(second, "provider_item_id", json_string("item_second")) == 0);
     assert(json_array_append_new(json_object_get(data, "items"), second) == 0);
     commit_event(&session, "response_completed", data);
-    for (size_t i = 0u; i < 2u; ++i) commit_event(&session, "tool_started",
-                     tool_started_data(turn, i ? b : a,
-                         session.pending_calls[i].action_sha256, cwd));
+    for (size_t i = 0u; i < 2u; ++i) {
+        commit_event(&session, "tool_started", tool_started_data(turn, i ? b : a,
+            session.pending_calls[i].action_sha256, cwd));
+        capture_process_cursor(&session, i ? b : a);
+    }
     assert(session.process_count == 2u);
+    int64_t output_begin = (int64_t)snag_session_process(&session, b)->log_offset;
     data = checked_json(json_pack("{s:s,s:s,s:i,s:i,s:s,s:s}",
         "turn_id", turn, "handle", b, "stream", 0, "offset", 0, "encoding", "utf8", "data", "B\n"));
     commit_event(&session, "process_output", json_deep_copy(data));
@@ -1204,10 +1268,29 @@ test_parallel_journal_recovery(struct snag_store *store, const char *cwd)
     assert(session.log_end == end && snag_session_process(&session, b)->output_bytes[0] == 2u);
     /* Resolve B first without claiming its lost owner completed successfully. */
     commit_event(&session, "tool_finished", tool_finished_data(turn, b,
-                     snag_tool_result_outcome_unknown("owner_lost")));
+        collected_unknown_result(b, output_begin, session.log_end, 0u, 2u)));
+    capture_process_cursor(&session, b);
     commit_event(&session, "tool_finished", tool_finished_data(turn, a,
                      running_result_limit(a, "alive", NULL, 6000)));
     assert(!session.pending_call_count && session.process_count == 2u);
+    {
+        struct snag_context_projection collected = {0};
+        struct snag_instruction_set none = {0};
+        json_t *empty = checked_json(json_array());
+        build_context(&session, 2u, empty, &none, &collected);
+        json_t *input = json_object_get(collected.create_request.value, "input");
+        bool found_reference = false;
+        for (size_t i = 0u; i < json_array_size(input); ++i) {
+            const char *text = snag_json_string(json_array_get(input, i), "output");
+            if (text && strstr(text, "output_ref=")) {
+                assert(strstr(text, session.binary ? "/journal.bin" : "/events.jsonl"));
+                found_reference = true;
+            }
+        }
+        assert(found_reference);
+        snag_context_projection_free(&collected);
+        json_decref(empty);
+    }
     snag_session_close(&session);
     assert(snag_session_open(store, &session, id, error, sizeof(error)) == 0);
     assert(session.process_count == 2u && !session.pending_call_count);
@@ -1275,14 +1358,17 @@ test_parallel_journal_recovery(struct snag_store *store, const char *cwd)
         "content");
     assert(strstr(summary, a) && strstr(summary, b));
     snag_context_projection_free(&projection);
+    commit_event(&session, "process_closed", process_closed_data(turn, b,
+        collected_unknown_result(b, (int64_t)snag_session_process(&session, b)->log_offset,
+            session.log_end, 2u, 2u)));
+    commit_event(&session, "process_closed", process_closed_data(turn, a,
+                     snag_tool_result_outcome_unknown("owner_lost")));
+    build_context(&session, 2u, snapshot, &instructions, &projection);
+    snag_context_projection_free(&projection);
     snag_instructions_free(&instructions);
     json_decref(snapshot);
     snag_context_projection_free(&prefix);
     json_decref(output);
-    commit_event(&session, "process_closed", process_closed_data(turn, b,
-                     snag_tool_result_outcome_unknown("owner_lost")));
-    commit_event(&session, "process_closed", process_closed_data(turn, a,
-                     snag_tool_result_outcome_unknown("owner_lost")));
     commit_event(&session, "turn_interrupted", turn_interrupted_data(turn));
     snag_session_close(&session);
 }
@@ -1727,6 +1813,7 @@ test_leading_instructions_boundary(struct snag_store *store, const char *temp)
     struct snag_context_projection projection = {0};
 
     snag_config_init(&config);
+    snag_secret_source_free(&config.providers[0].api_key);
     snag_config_provider_init(&config.providers[0], "default");
     /* llama.cpp-style endpoint: instruction roles must lead, so the trailing
      * host boundary moves to the labelled user transport slot. */
@@ -2181,7 +2268,7 @@ test_irc_source_shifted_by_checkpoint(struct snag_store *store, const char *cwd)
         char error[512] = {0};
         char id[SNAG_ID_HEX_LEN + 1u];
         json_t *empty = json_array();
-        create_session(store, &session, cwd, "medium");
+        create_legacy_session(store, &session, cwd, "medium");
         memcpy(id, session.id, sizeof(id));
         uint64_t checkpoint = session.next_seq;
         assert(snag_session_checkpoint(&session, error, sizeof(error)) == 0);
@@ -2234,7 +2321,7 @@ test_irc_source_lookup_bounds(struct snag_store *store, const char *cwd)
             .stream = "11111111111111111111111111111111", .sequence = 44u};
         char error[512] = {0};
         json_t *empty = json_array();
-        create_session(store, &session, cwd, "medium");
+        create_legacy_session(store, &session, cwd, "medium");
         snag_context_start_new(&session);
         for (unsigned int i = 0u; i < 128u; ++i) {
             commit_event(&session, "effort_changed", json_pack("{s:s,s:s}",
@@ -2302,7 +2389,7 @@ test_irc_lookup_skips_unrelated_checkpoint(struct snag_store *store, const char 
         .endpoint = "fixture:1234", .room = "#work", .nick = "peer",
         .text = "source beyond a large checkpoint", .classified = true, .input = true,
         .stream = "11111111111111111111111111111111", .sequence = 44u};
-    create_session(store, &session, cwd, "medium");
+    create_legacy_session(store, &session, cwd, "medium");
     snag_context_start_new(&session);
 
     /* Large checkpoint bodies dominate byte probes in real session journals. */
@@ -2494,12 +2581,24 @@ test_input_time_and_recovery(struct snag_store *store, const char *cwd)
     assert(snag_session_checkpoint(&session, error, sizeof(error)) == 0);
     snag_session_close(&session);
     assert(snag_session_open(store, &session, session_id, error, sizeof(error)) == 0);
-    assert(json_integer_value(json_object_get(session.checkpoint_context,
-        "recovery_count")) == 1000);
-    json_int_t notice = json_integer_value(json_object_get(session.checkpoint_context,
+    assert(session.recovery_count == 1000u);
+    if (session.binary) {
+        /* Native admission owns a recipe; first projection materializes its
+         * request image before inspecting the provider's diagnostic snapshot. */
+        build_context(&session, 1u, snapshot, &instructions, &replay);
+        assert(json_equal(projection.create_request.value, replay.create_request.value));
+        snag_context_projection_free(&replay);
+    }
+    json_t *checkpoint = session.binary ?
+        session.on_checkpoint(session.on_commit_opaque, &session) :
+        json_incref(session.checkpoint_context);
+    assert(checkpoint);
+    assert(json_integer_value(json_object_get(checkpoint, "recovery_count")) == 1000);
+    json_int_t notice = json_integer_value(json_object_get(checkpoint,
         "recovery_index"));
     assert(notice >= 0 && (uint64_t)notice < json_array_size(json_object_get(
-        session.checkpoint_context, "request_input")));
+        checkpoint, "request_input")));
+    json_decref(checkpoint);
     assert(session.pending_steering[0].received_ms == steer_received);
     assert(session.input_received_ms == 1788739200000ULL);
     assert(session.input_first_context_ms == 1788739290000ULL);
@@ -4227,6 +4326,7 @@ test_cache_accounting(struct snag_store *store, const char *cwd)
     json_decref(snapshot);
     json_decref(five);
     json_decref(four);
+    snag_session_close(&session);
 }
 
 static void
@@ -4270,6 +4370,8 @@ test_prompt_cache_key(struct snag_store *store, const char *cwd)
     snag_context_projection_free(&again);
     snag_context_projection_free(&alien);
     json_decref(empty);
+    snag_session_close(&session);
+    snag_session_close(&other);
 }
 
 /* A provider reuses a cached prefix only while the earlier part of the request stays
@@ -4362,6 +4464,8 @@ test_request_prefix_stability(struct snag_store *store, const char *cwd)
     snag_context_projection_free(&first);
     snag_context_projection_free(&second);
     json_decref(empty);
+    snag_session_close(&session);
+    snag_config_free(&config);
 }
 
 static void
@@ -4460,7 +4564,8 @@ test_lost_cache_source_recovers(struct snag_store *store, const char *cwd)
         char error[256] = "";
         json_t *steering = json_array();
         assert(steering);
-        create_session(store, &session, cwd, "medium");
+        if (checkpoint) create_legacy_session(store, &session, cwd, "medium");
+        else create_session(store, &session, cwd, "medium");
         commit_event(&session, "turn_started",
             turn_started(turn, 1u, "lost-cache-input", cwd, NULL));
         build_context(&session, 1u, steering, &instructions, &projection);
@@ -4486,6 +4591,31 @@ test_lost_cache_source_recovers(struct snag_store *store, const char *cwd)
         commit_event(&session, "response_completed",
             response_completed(turn, response, "lost-cache-answer"));
         uint64_t next_seq = session.next_seq;
+        if (session.binary) {
+            void *old_cache = session.on_commit_opaque;
+            off_t position = lseek(session.log_fd, 0, SEEK_CUR);
+            snag_file_info images[2];
+            assert(!snag_lstat_at(session.dir_fd, "checkpoint.0", &images[0]));
+            assert(!snag_lstat_at(session.dir_fd, "checkpoint.1", &images[1]));
+            assert((images[0].st_size > 0) != (images[1].st_size > 0));
+            const char *selected = images[0].st_size > 0 ? "checkpoint.0" : "checkpoint.1";
+            assert(!snag_rename_at(session.dir_fd, selected, session.dir_fd, "checkpoint.hidden"));
+            assert(snag_context_build(&session, SNAJPAGENT_MODEL, "medium", 1u, steering,
+                0u, false, NULL, NULL, &instructions, NULL, &projection,
+                error, sizeof(error), NULL) < 0);
+            assert(session.next_seq == next_seq && session.on_commit_opaque == old_cache &&
+                !projection.create_request.value && lseek(session.log_fd, 0, SEEK_CUR) == position);
+            assert(!snag_rename_at(session.dir_fd, "checkpoint.hidden", session.dir_fd, selected));
+            unsigned int remaining = 4u;
+            struct snag_context_control control = {
+                .cancelled = cancel_preparation, .opaque = &remaining
+            };
+            assert(snag_context_build(&session, SNAJPAGENT_MODEL, "medium", 1u, steering,
+                0u, false, NULL, NULL, &instructions, NULL, &projection,
+                error, sizeof(error), &control) < 0 && errno == ECANCELED);
+            assert(session.next_seq == next_seq && session.on_commit_opaque == old_cache &&
+                !projection.create_request.value && lseek(session.log_fd, 0, SEEK_CUR) == position);
+        }
 
         int writer = -1;
         unsigned char original = 0u;
@@ -4519,7 +4649,9 @@ test_lost_cache_source_recovers(struct snag_store *store, const char *cwd)
             assert(snag_session_open(store, &session, id, error, sizeof(error)) == 0);
         }
         for (unsigned int again = 0u; again < 2u; ++again) {
-            build_context(&session, 1u, steering, &instructions, &projection);
+            /* This fixture deliberately corrupts the pre-checkpoint prefix.
+             * Full-journal equivalence is checked after restoring that byte. */
+            build_context_cached(&session, 1u, steering, &instructions, &projection);
             json_t *input = json_object_get(projection.create_request.value, "input");
             const char *needles[] = {"lost-cache-input", "lost-cache-answer"};
             for (size_t n = 0u; n < 2u; ++n) {
@@ -4536,6 +4668,7 @@ test_lost_cache_source_recovers(struct snag_store *store, const char *cwd)
         if (checkpoint) {
             assert(pwrite(writer, &original, 1u, 0) == 1 && close(writer) == 0);
         }
+        test_context_binary_projection(&session, 1u, steering, &instructions, NULL);
         json_decref(steering);
         snag_session_close(&session);
     }
@@ -4552,7 +4685,7 @@ test_cancelled_checkpoint_restore_recovers(struct snag_store *store, const char 
     char error[256] = "", id[SNAG_ID_HEX_LEN + 1u];
     json_t *steering = json_array();
     assert(steering);
-    create_session(store, &session, cwd, "medium");
+    create_legacy_session(store, &session, cwd, "medium");
     commit_event(&session, "turn_started", turn_started(turn, 1u, "restore-input", cwd, NULL));
     build_context(&session, 1u, steering, &instructions, &projection);
     snag_context_projection_free(&projection);
@@ -4648,6 +4781,8 @@ test_hosted_search_many_sources(struct snag_store *store, const char *cwd)
     create_session(store, &session, cwd, "medium");
     commit_event(&session, "turn_started", turn_started(turn, 1, "hosted sources", cwd, NULL));
     commit_event(&session, "response_started", response_started(turn, response, NULL));
+    commit_event(&session, "hosted_search_started", json_pack("{s:s,s:s,s:{s:s,s:s}}",
+        "turn_id", turn, "item_id", "ws_many", "action", "type", "search", "query", "fixture"));
     json_t *event = json_object();
     assert(event);
     assert(json_object_set_new(event, "item_id", json_string("ws_many")) == 0);
@@ -4655,6 +4790,18 @@ test_hosted_search_many_sources(struct snag_store *store, const char *cwd)
     assert(json_object_set_new(event, "status", json_string("completed")) == 0);
     assert(json_object_set_new(event, "turn_id", json_string(turn)) == 0);
     commit_event(&session, "hosted_search_finished", event);
+    assert(!session.pending_call_count && !session.process_count);
+    commit_event(&session, "response_completed", response_completed(turn, response, "evidence"));
+    commit_event(&session, "turn_completed", turn_completed(turn, response));
+    commit_event(&session, "turn_started", turn_started("e3000000000000000000000000000000",
+        2u, "next request", cwd, NULL));
+    struct snag_context_projection projection = {0};
+    struct snag_instruction_set instructions = {0};
+    json_t *steering = json_array();
+    assert(steering);
+    build_context(&session, 1u, steering, &instructions, &projection);
+    snag_context_projection_free(&projection);
+    json_decref(steering);
     snag_session_close(&session);
 }
 
@@ -4710,7 +4857,7 @@ test_host_snapshot_replay(struct snag_store *store, const char *cwd)
     for (size_t i = 0u; i + 1u < json_array_size(a); ++i)
         assert(json_equal(json_array_get(a, i), json_array_get(b, i)));
     assert(snag_session_checkpoint(&session, error, sizeof(error)) == 0);
-    assert(session.checkpoint_has_context);
+    assert(session.binary ? session.checkpoint_seq != 0u : session.checkpoint_has_context);
     snag_session_close(&session);
     assert(snag_session_open(store, &session, id, error, sizeof(error)) == 0);
     build_context(&session, 1u, empty, NULL, &replay);
@@ -4792,44 +4939,49 @@ test_live_projection_without_journal_read(struct snag_store *store, const char *
 static void
 test_embedded_provider_checkpoint(struct snag_store *store, const char *cwd)
 {
-    struct snag_session session;
-    struct snag_context_projection first = {0}, live = {0}, resumed = {0};
-    json_t *steering = json_array();
-    char id[SNAG_ID_HEX_LEN + 1u], error[512] = {0};
-    const char *turn = "c2000000000000000000000000000001";
-    const char *response = "c2000000000000000000000000000002";
-    create_session(store, &session, cwd, "medium");
-    snag_context_start_new(&session);
-    memcpy(id, session.id, sizeof(id));
-    commit_event(&session, "turn_started", turn_started(turn, 1u, "resume checkpoint", cwd, NULL));
-    build_context(&session, 1u, steering, NULL, &first);
-    assert(snag_session_checkpoint(&session, error, sizeof(error)) == 0);
-    assert(session.checkpoint_has_context && session.checkpoint_offset > 0);
-    commit_event(&session, "response_started", response_started(turn, response, NULL));
-    commit_event(&session, "response_completed", response_completed(turn, response, "done"));
-    build_context(&session, 2u, steering, NULL, &live);
-    snag_session_close(&session);
-    snag_session_init(&session);
-    assert(snag_session_open(store, &session, id, error, sizeof(error)) == 0);
-    assert(session.checkpoint_has_context && session.checkpoint_context);
-    build_context(&session, 2u, steering, NULL, &resumed);
-    assert(json_equal(live.model_input.value, resumed.model_input.value));
-    assert(json_equal(live.create_request.value, resumed.create_request.value));
-    assert(snag_session_checkpoint(&session, error, sizeof(error)) == 0);
-    snag_context_projection_free(&resumed);
-    snag_session_close(&session);
-    snag_session_init(&session);
-    assert(snag_session_open(store, &session, id, error, sizeof(error)) == 0);
-    build_context(&session, 2u, steering, NULL, &resumed);
-    assert(json_equal(live.model_input.value, resumed.model_input.value));
-    assert(json_equal(live.create_request.value, resumed.create_request.value));
-    snag_context_projection_free(&first);
-    snag_context_projection_free(&live);
-    snag_context_projection_free(&resumed);
-    json_decref(steering);
-    snag_session_close(&session);
+    for (unsigned int variant = 0u; variant < 2u; ++variant) {
+        struct snag_session session;
+        struct snag_context_projection first = {0}, live = {0}, resumed = {0};
+        json_t *steering = json_array();
+        char id[SNAG_ID_HEX_LEN + 1u], error[512] = {0};
+        const char *turn = "c2000000000000000000000000000001";
+        const char *response = "c2000000000000000000000000000002";
+        if (variant) create_session(store, &session, cwd, "medium");
+        else create_legacy_session(store, &session, cwd, "medium");
+        snag_context_start_new(&session);
+        memcpy(id, session.id, sizeof(id));
+        commit_event(&session, "turn_started",
+            turn_started(turn, 1u, "resume checkpoint", cwd, NULL));
+        build_context(&session, 1u, steering, NULL, &first);
+        assert(snag_session_checkpoint(&session, error, sizeof(error)) == 0);
+        assert(session.binary ? session.checkpoint_seq != 0u :
+            session.checkpoint_has_context && session.checkpoint_offset > 0);
+        commit_event(&session, "response_started", response_started(turn, response, NULL));
+        commit_event(&session, "response_completed", response_completed(turn, response, "done"));
+        build_context(&session, 2u, steering, NULL, &live);
+        snag_session_close(&session);
+        snag_session_init(&session);
+        assert(snag_session_open(store, &session, id, error, sizeof(error)) == 0);
+        assert(session.binary ? !session.checkpoint_context && session.checkpoint_seq != 0u :
+            session.checkpoint_has_context && session.checkpoint_context);
+        build_context(&session, 2u, steering, NULL, &resumed);
+        assert(json_equal(live.model_input.value, resumed.model_input.value));
+        assert(json_equal(live.create_request.value, resumed.create_request.value));
+        assert(snag_session_checkpoint(&session, error, sizeof(error)) == 0);
+        snag_context_projection_free(&resumed);
+        snag_session_close(&session);
+        snag_session_init(&session);
+        assert(snag_session_open(store, &session, id, error, sizeof(error)) == 0);
+        build_context(&session, 2u, steering, NULL, &resumed);
+        assert(json_equal(live.model_input.value, resumed.model_input.value));
+        assert(json_equal(live.create_request.value, resumed.create_request.value));
+        snag_context_projection_free(&first);
+        snag_context_projection_free(&live);
+        snag_context_projection_free(&resumed);
+        json_decref(steering);
+        snag_session_close(&session);
+    }
 }
-
 static void
 test_provider_suffix_checkpoint(struct snag_store *store, const char *cwd)
 {
@@ -4843,7 +4995,7 @@ test_provider_suffix_checkpoint(struct snag_store *store, const char *cwd)
             json_t *empty = json_array();
             char id[SNAG_ID_HEX_LEN + 1u], error[512] = {0};
             assert(empty);
-            create_session(store, &session, cwd, "medium");
+            create_legacy_session(store, &session, cwd, "medium");
             memcpy(id, session.id, sizeof(id));
             commit_event(&session, "turn_started",
                 turn_started(turn, 1u, "keep the context prefix once", cwd, NULL));
@@ -5068,6 +5220,87 @@ test_count_request_schema(void)
     json_decref(expected);
 }
 
+static void
+adopt_native_history_fixture(struct snag_session *session, const char *transfer)
+{
+    assert(!session->binary);
+    struct snag_journal_cursor begin = {.offset = session->log_end, .next_seq = session->next_seq};
+    memcpy(begin.prev_sha256, session->prev_sha256, sizeof(begin.prev_sha256));
+    commit_event(session, "voice_transfer_record", json_pack("{s:s,s:s,s:s,s:i,s:s,s:{s:s,s:s}}",
+        "transfer_id", transfer, "target_session_id", session->id, "source_session_id", transfer,
+        "source_seq", 1, "source_type", "goal_started", "data", "goal_id", transfer,
+        "prompt", "inert source goal"));
+    commit_event(session, "voice_transfer_adopted", json_pack("{s:s,s:s,s:s,s:i,s:I,s:I,s:s,s:i}",
+        "transfer_id", transfer, "target_session_id", session->id, "source_session_id", transfer,
+        "source_as_of_seq", 1, "begin_offset", (json_int_t)begin.offset,
+        "begin_seq", (json_int_t)begin.next_seq, "begin_sha256", begin.prev_sha256, "count", 1));
+}
+
+static void
+test_pending_native_sources(struct snag_store *store, const char *cwd)
+{
+    struct snag_session session;
+    const char *turn = "70000000000000000000000000000000";
+    create_legacy_session(store, &session, cwd, "medium");
+    adopt_native_history_fixture(&session, "80000000000000000000000000000000");
+    commit_event(&session, "turn_started", turn_started(turn, 1u, "pending sources", cwd, NULL));
+    for (unsigned int i = 1u; i <= 3u; ++i) {
+        char queue[33], download[33];
+        snprintf(queue, sizeof(queue), "%032x", i);
+        snprintf(download, sizeof(download), "%032x", i + 100u);
+        commit_event(&session, "future_turn_queued", json_pack("{s:s,s:b,s:s,s:s}",
+            "queue_id", queue, "read_only", false, "text", "later", "while_turn_id", turn));
+        commit_event(&session, "download_queued", json_pack("{s:s,s:s,s:s,s:I,s:I,s:s,s:I}",
+            "id", download, "path", "/tmp/native-checkpoint-download", "name", "download",
+            "bytes", (json_int_t)i, "mtime", (json_int_t)0, "sha256",
+            "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "queued_ms", (json_int_t)17));
+    }
+    adopt_native_history_fixture(&session, "90000000000000000000000000000000");
+    for (unsigned int i = 1u; i <= 2u; ++i) {
+        char queue[33], download[33];
+        snprintf(queue, sizeof(queue), "%032x", i);
+        snprintf(download, sizeof(download), "%032x", i + 100u);
+        commit_event(&session, "future_turn_cancelled", json_pack("{s:s,s:[s]}",
+            "reason", "user", "queue_ids", queue));
+        commit_event(&session, "download_removed", json_pack("{s:s,s:s}",
+            "id", download, "reason", "fixture"));
+    }
+    assert(session.pending_queue_count == 1u && json_array_size(session.download_queue) == 1u);
+    struct snag_context_projection projection = {0};
+    json_t *steering = json_array();
+    assert(steering);
+    build_context(&session, 1u, steering, NULL, &projection);
+    snag_context_projection_free(&projection);
+    json_decref(steering);
+    snag_session_close(&session);
+}
+
+static void
+test_saved_metadata(struct snag_store *store, const char *cwd)
+{
+    struct snag_session session;
+    struct snag_instruction_set instructions = {0};
+    json_t *steering = json_array();
+    assert(steering);
+    create_session(store, &session, cwd, "medium");
+    commit_event(&session, "turn_started", turn_started("12345678123456781234567812345678",
+        1u, "Preserve saved session metadata across paired checkpoints.", cwd, NULL));
+    for (unsigned int phase = 0u; phase < 3u; ++phase) {
+        if (phase) {
+            commit_event(&session, "session_named", json_pack("{s:s}", "name", "named é"));
+            commit_event(&session, "session_options", phase == 1u ?
+                json_pack("{s:[s,s,s]}", "args", "--config", "./config", "-v") :
+                json_pack("{s:[]}", "args"));
+        }
+        struct snag_context_projection projection = {0};
+        build_context(&session, 1u, steering, &instructions, &projection);
+        snag_context_projection_free(&projection);
+    }
+    json_decref(steering);
+    snag_session_close(&session);
+}
+
 int
 main(int argc, char **argv)
 {
@@ -5227,6 +5460,8 @@ main(int argc, char **argv)
     test_cache_accounting(&store, cwd);
     test_prompt_cache_key(&store, cwd);
     test_history_orientation(&store, cwd);
+    test_saved_metadata(&store, cwd);
+    test_pending_native_sources(&store, cwd);
     test_worknote(&store, cwd);
     test_worknote_moments(&store, cwd);
     test_request_prefix_stability(&store, cwd);
@@ -5398,7 +5633,8 @@ main(int argc, char **argv)
         assert_string(json_array_get(input, 1), "type", "compaction");
         assert_string(json_array_get(input, 2), "role", "system");
         assert(strstr(snag_json_string(json_array_get(input, 2), "content"), active.dir_path) != NULL);
-        assert(strstr(snag_json_string(json_array_get(input, 2), "content"), "/events.jsonl") != NULL);
+        assert(strstr(snag_json_string(json_array_get(input, 2), "content"),
+            session.binary ? "/journal.bin" : "/events.jsonl") != NULL);
         assert_string(json_array_get(input, 3), "content", "new");
         json_t *controller = message_matching(input, "create_goal");
         assert(controller);
@@ -5639,7 +5875,13 @@ main(int argc, char **argv)
     assert(session.dir_path[0] == '/');
     assert_string(json_array_get(request_input, 3), "role", "system");
     assert(strstr(snag_json_string(json_array_get(request_input, 3), "content"), session.dir_path) != NULL);
-    assert(strstr(snag_json_string(json_array_get(request_input, 3), "content"), "/events.jsonl") != NULL);
+    assert(strstr(snag_json_string(json_array_get(request_input, 3), "content"),
+        session.binary ? "/journal.bin" : "/events.jsonl") != NULL);
+    if (session.binary) {
+        const char *history_hint = snag_json_string(json_array_get(request_input, 3), "content");
+        assert(strstr(history_hint, "read_session_history"));
+        assert(strstr(history_hint, "read_tool_output"));
+    }
     request_input = json_object_get(projection.count_request.value, "input");
     assert(json_is_array(request_input));
     assert(json_array_size(request_input) == 6u + json_array_size(projection.host_context));
@@ -5952,6 +6194,7 @@ main(int argc, char **argv)
     snag_session_close(&session);
     snag_store_close(&store);
     free(temp);
+    test_context_binary_report();
     puts("test_context: ok");
     return 0;
 }

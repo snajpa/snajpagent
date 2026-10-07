@@ -68,10 +68,11 @@ class TmuxTransfers(unittest.TestCase):
             config = root / "tmux.conf"
             config.write_text("set -g status off\nset -g history-limit 10000\n")
             sock = root / "socket"
-            env = {key: value for key, value in os.environ.items() if key != "TMUX"}
-            # Pane commands inherit the server environment. Keep transfer reports
-            # inline just as RemoteProcess does for the workstation wrapper.
-            env["PAGER"] = ""
+            # The server, not its later client, supplies the pane environment.
+            env = dict(os.environ, HOME=str(client), TERM="xterm-256color",
+                       SHELL="/bin/sh", PAGER="")
+            for key in ("STY", "TMUX", "TMUX_PANE", "OPENAI_API_KEY"):
+                env.pop(key, None)
             server = subprocess.Popen(["tmux", "-D", "-S", str(sock), "-f", str(config)],
                                       env=env, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
             children = FixtureChildren(server.pid)
@@ -161,7 +162,8 @@ class TmuxTransfers(unittest.TestCase):
                     os.write(child.master, b"\x1b[200~" + str(upload).encode() + b"\x1b[201~")
                 else:
                     os.write(child.master, f"{upload}\r".encode())
-                child.until(b"1 unsent attachment(s)", 40)
+                # The small pane can clip the listing's leading banner.
+                child.until(b"[1 attached]", 40)
                 media = next((root / "agent/sessions").glob("*/media"))
                 self.assertTrue(any(path.read_bytes() == upload.read_bytes() for path in media.iterdir()))
                 print(f"upload: {time.monotonic() - started:.3f}s", flush=True)

@@ -1,5 +1,5 @@
 .\" SPDX-License-Identifier: GPL-2.0-only
-.TH SNAJPAGENT 1 "September 2026" "snajpagent" "User Commands"
+.TH SNAJPAGENT 1 "October 2026" "snajpagent" "User Commands"
 .SH NAME
 snajpagent \- terminal coding agent with built-in IRC
 .SH SYNOPSIS
@@ -50,6 +50,10 @@ snajpagent \- terminal coding agent with built-in IRC
 .B snajpagent vm
 .RI [ --dotdir " PATH]"
 .RI [ -N " NAME | --resume WORKSPACE | --last | -l [N]]"
+.br
+.B snajpagent convert
+.RI [ --dotdir " PATH]"
+.RI [ --jobs " N]"
 .SH DESCRIPTION
 .B snajpagent
 is a coding agent for the terminal, with a built-in IRC server and client.
@@ -409,7 +413,8 @@ or /history 0 for the total turn count without reading the journal. Replay ends
 with shown turns, completions among those shown, and the total session turn count.
 Unfinished, failed and interrupted work is included. Automatic resume uses the
 same replay and defaults to one turn. The scan covers at most 4 MiB plus one
-atomic journal record. A partial oldest turn is explicitly marked; omitted input
+complete event, counting text expanded from native references toward that budget.
+A partial oldest turn is explicitly marked; omitted input
 is not rendered as user text. When the scan ends early, its continuation sequence
 locates older records through the model's read_session_history tool. IRC references
 outside the window may remain unresolved.
@@ -1892,6 +1897,15 @@ remaining text. Failed or interrupted responses retain their recorded public
 text and state; text absent from their terminal snapshot is labelled unconfirmed.
 The current history snapshot determines these labels and contents. R refreshes
 held output when the response later completes.
+.PP
+Native history readers verify a fixed journal prefix. Refresh adopts newly
+completed batches and leaves an unfinished tail in place. Corruption or a replaced
+source leaves the previous view unchanged. Missing history-index access reports
+unavailable source data; the reader preserves the journal and checkpoints.
+Live display, collected command stdout/stderr and later repaint read committed
+native events with the same detail levels and output limits as stored history.
+The model's read_session_history and read_tool_output tools decode native
+records for history and command-output inspection.
 .PP
 In a transcript or report, /TEXT searches forward and ?TEXT searches backward;
 n repeats the previous direction and N reverses it. Empty search input reuses the
@@ -5589,6 +5603,61 @@ destination number keeps naming the same endpoint across reconnects: a send
 with a stale revision follows the number to its current revision, while a
 claimed future revision still fails.
 .SH "Sessions and files"
+.SS Convert stored sessions
+.B snajpagent convert
+migrates stopped saved sessions in the application directory to native storage.
+Use
+.B \-\-dotdir DIR
+to select another application directory. Conversion needs no provider request
+or interactive terminal.
+.PP
+The worker pool defaults to the online processor count, bounded by the number
+of discovered sessions.
+.B \-\-jobs N
+sets a positive maximum worker count. Each worker streams journal and derived
+index batches; reconstructed session state also consumes memory. Reduce the
+worker count when memory or available disk space constrains conversion.
+.nf
+snajpagent convert --jobs 4
+snajpagent convert --dotdir /path/to/.snajpagent --jobs 2
+.fi
+.PP
+Each session's existing writer lock guards verification and cutover. Locked
+sessions are skipped. Other failures remain visible while independent conversions
+continue. Progress identifies each session; the final counts show converted,
+already-current, skipped and failed sessions. Already-current native journals
+are checked through an immutable reader; an unverified native tail is a failure
+and remains intact.
+.PP
+Legacy conversion replays canonical records with existing compatibility defaults,
+rebuilds derived checkpoint state and verifies native semantic, core and provider
+state before publication. An invalid derived snapshot can be reconstructed from
+its canonical history. Unsealed legacy tail bytes remain in the retained original
+and are reported; only the verified prefix enters the native journal.
+.PP
+The original journal is retained at
+.I .legacy-source/events.jsonl
+inside the same session directory. Media and other session files keep their paths;
+the original lock inode stays in use. The native journal publishes last. The
+legacy pathname stays absent after cutover, excluding older legacy writers.
+The retained journal represents the pre-conversion state; later work appends to
+.IR journal.bin .
+.PP
+Rerun the same command after interruption. When retention completed before native
+selection, conversion rebuilds from the preserved original. Ambiguous retention
+copies stop that session's conversion. Private
+.I .converting-*
+directories preserve provisional files for diagnosis. A sync error after native
+selection reports uncertain durability and keeps the selected native journal;
+rerunning checks its state. Keep all native files and the retained source when
+backing up a converted session.
+.PP
+Exit status is 0 when processing finishes without failures, including locked
+skips; 1 for session, enumeration or worker-start failures; 2 for command syntax;
+3 for application-directory setup errors; and 130 for a handled interruption.
+Interruption stops new worker assignments and cancels in-flight legacy record
+visits and provider reconstruction. Already published sessions stay native.
+
 .SS Session durability
 Resume continues unfinished model/tool turns from their durable state, without
 requiring a fresh prompt. Already completed calls stay completed. The next model
@@ -5720,7 +5789,48 @@ Do not run older builds against these files: versions that bounded global histor
 can truncate the archive. Back up history before manually editing or removing it.
 .TP
 .I $HOME/.snajpagent/sessions/SESSION/events.jsonl
-Append-only durable session log.
+Append-only log for existing legacy sessions. Resume preserves their format;
+.B snajpagent convert
+migrates stopped sessions explicitly.
+.TP
+.I $HOME/.snajpagent/sessions/SESSION/.legacy-source/events.jsonl
+Retained pre-conversion journal, including any unsealed tail bytes. Preserve it
+with the native session files for inspection and recovery.
+.TP
+.I $HOME/.snajpagent/sessions/SESSION/journal.bin
+Append-only native journal, created for new persisted sessions together with
+the two checkpoint slots and history index. The directory becomes visible
+after the first checkpoint receipt and cache frontier are verified.
+An existing native journal takes precedence over
+the legacy log. Resume validates its checkpoint receipts and bounded suffix;
+damaged native storage or unavailable required checkpoint data stops recovery.
+Legacy fallback applies only when this file is absent.
+A lost model-context cache is rebuilt from the verified native checkpoint and
+bounded suffix. Unavailable required checkpoint data stops this reconstruction
+and leaves committed session state unchanged.
+.TP
+.I $HOME/.snajpagent/sessions/SESSION/checkpoint.0
+.TQ
+.I $HOME/.snajpagent/sessions/SESSION/checkpoint.1
+Alternating native state and provider checkpoints, pinned by journal receipts.
+An unused slot may be an empty private file until the next checkpoint.
+Recovery treats an empty slot as unavailable; nonempty malformed images
+cause recovery errors.
+IRC directory recovery retains connection generations, conversation identities,
+membership and captured reply targets through canonical event references.
+Current checkpoints also retain derived conversation activity. Older checkpoint
+layouts leave these counts unavailable until new routed activity establishes a
+recorded range.
+Blocked-goal recovery retains the declared wait channel through the canonical
+blocking event. Older blockers without a channel retain an unspecified wait.
+Automatic-retry overrides retain the recorded on/off choice. An unset override
+inherits the owner's current configuration.
+Keep them with the journal when backing up a native session.
+.TP
+.I $HOME/.snajpagent/sessions/SESSION/history.idx
+Derived native history index. Checkpoint admission uses the journal and images.
+Point queries that require unavailable old source membership remain unavailable;
+explicit sequential history inspection reads canonical journal records.
 .TP
 .I $HOME/.snajpagent/sessions/SESSION/lock
 Live session lock.

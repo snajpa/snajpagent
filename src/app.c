@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "app_internal.h"
+#include "store_internal.h"
 #include "http.h"
 #include "media.h"
 #include "fs.h"
@@ -549,8 +550,13 @@ commit_event_with_request(struct app_state *app, const char *type, json_t *data,
     if (snag_string_in(type, "steering_added future_turn_queued future_turn_edited")) ++app->input_generation;
     /* Chunk durability must not insert debug notices inside the public text. */
     if (!strcmp(type, "response_output")) return 0;
-    struct snag_render_source source = {app->session.committed_start,
-        (size_t)(app->session.committed_end - app->session.committed_start)};
+    struct snag_render_source source = {.offset = app->session.committed_start,
+        .len = (size_t)(app->session.committed_end - app->session.committed_start)};
+    if (app->session.binary) {
+        source.native_sequence = seq;
+        if (snag_session_binary_checkpoint_capture(&app->session, &source.native_boundary,
+            NULL, NULL, error, error_size) < 0) return -1;
+    }
     if ((!app->session.pending_log && snag_ui_send(&app->ui, (struct snag_ui_command){
              .kind = SNAG_UI_DURABLE, .text = type, .data.durable = {app->session.log_fd, source,
                  app->config->default_timeout_ms, app->config->max_output_bytes}}) < 0) ||

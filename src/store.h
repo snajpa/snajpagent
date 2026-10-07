@@ -121,6 +121,9 @@ struct snag_usage_totals {
 };
 
 struct snag_journal_cursor {
+    /* JSONL: byte cut and preceding event hash. Native: containing-batch
+     * predecessor offset/digest and exact next record sequence; never a
+     * fabricated JSONL position or per-record native hash. Zero begins history. */
     int64_t offset;
     uint64_t next_seq;
     char prev_sha256[SNAG_SHA256_HEX_LEN + 1u];
@@ -207,6 +210,9 @@ struct snag_session {
     int dir_fd;
     int log_fd;
     int lock_fd;
+    /* Filesystem snapshots read native custody without writer ownership.
+     * Source rechecks detect races; commits and checkpoint writes fail EROFS. */
+    bool snapshot_read_only;
     struct snag_buf *pending_log; /* New sessions stay in memory until input. */
     int64_t log_end;
     /* Exact range of the last successful commit call, excluding automatic
@@ -225,6 +231,9 @@ struct snag_session {
     /* Owner-local derived view; borrowed by staged commits, freed only on close.
      * Its verified cursor and bounded excerpts never enter durable state. */
     struct snag_voice_projection *voice_projection;
+    /* Native engine owner; borrowed by staged reducer states, closed only by
+     * the live session. Existing JSONL sessions leave this null. */
+    struct snag_binary_session *binary;
     unsigned int format_version;
     /* An optional in-process consumer of newly committed events. The durable
      * state remains authoritative; a failed consumer must invalidate itself,
@@ -326,6 +335,8 @@ int snag_store_find_last(struct snag_store *, char id[SNAG_ID_HEX_LEN + 1u],
 bool snag_session_is_live(const struct snag_session *);
 typedef int (*snag_store_emit_fn)(void *, const char *, size_t);
 bool snag_session_name_valid(const char *name);
+/* Stored launch-option grammar shared by the JSON and native readers. */
+int snag_session_option_arity(const char *name);
 bool snag_session_options_valid(const json_t *args);
 int snag_store_find_name(struct snag_store *, const char *name, char id[SNAG_ID_HEX_LEN + 1u],
                          snag_store_emit_fn matches_emit, void *, char *error, size_t error_size);
@@ -378,10 +389,18 @@ int snag_session_each_event_since(struct snag_session *, const struct snag_proce
 int snag_session_each_event_from_checkpoint(struct snag_session *, const json_t *,
                                             snag_session_event_fn, void *, char *, size_t);
 
+/* Consumes data on success and failure. */
 int snag_session_commit(struct snag_session *session, const char *type, json_t *data, uint64_t *written_seq,
                        char *error, size_t error_size);
-/* One indexed checkpoint record in events.jsonl; never a second session file. */
+/* Receipt-pinned native image, or one indexed checkpoint record in the legacy log. */
 int snag_session_checkpoint(struct snag_session *, char *error, size_t error_size);
+/* Capture the existing voice import operation's current durable destination
+ * cursor. Native admission retains its identity/count proof until adoption or
+ * explicit abandonment; copied source-data records remain inert. */
+int snag_session_voice_import_cursor(struct snag_session *session, const char *transfer_id,
+    const char *source_id, uint64_t source_as_of, uint64_t count,
+    struct snag_journal_cursor *out, char *error, size_t error_size);
+void snag_session_voice_import_abandon(struct snag_session *session, const char *transfer_id);
 /* Read owned snapshot documents without replacing current live state.
  * No established checkpoint returns NULL documents; a damaged one fails. */
 int snag_session_checkpoint_read(struct snag_session *, json_t **state, json_t **context,
@@ -401,6 +420,12 @@ int snag_session_history_cursor_at(struct snag_session *, int64_t offset,
  * Checkpoint footer hints guide the search; the selected boundary is verified. */
 int snag_session_history_cursor_before(struct snag_session *, uint64_t before_seq,
     struct snag_journal_cursor *, char *, size_t);
+/* Resolve a tool completion's collected output inside the pinned history.
+ * Converted native records retain legacy display offsets; their canonical
+ * sequence ranges select the actual source. Outputs change only on success. */
+int snag_session_history_output_range(struct snag_session *, uint64_t sequence,
+    const json_t *reference, struct snag_journal_cursor *begin,
+    struct snag_journal_cursor *end, char *, size_t);
 int snag_session_each_event_reverse(struct snag_session *, uint64_t before_seq, size_t scan_bytes,
     snag_session_event_fn, void *opaque, uint64_t *next_before, char *error, size_t error_size);
 /* Forward envelope/hash-verified records; zero cursor starts at the beginning.

@@ -6,6 +6,7 @@ import subprocess
 import unittest
 
 import test_vm_anchors as anchors
+from store_history import journal_paths
 import test_vm_reports as reports
 
 
@@ -145,7 +146,7 @@ class SearchTests(unittest.TestCase):
                                                    'SNAJPAGENT_IRC_UI_KEY': 'irc-ui-secret'},
                                 capture_output=True, timeout=30)
         self.assertEqual(result.returncode, 0, result.stderr)
-        journal, = (self.root / 'state' / 'sessions').glob('*/events.jsonl')
+        journal, = journal_paths(self.root / 'state')
         before = journal.read_bytes()
         child = self.start('-N', 'tools', columns=120)
         child.command('history ' + journal.parent.name)
