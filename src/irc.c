@@ -3307,19 +3307,43 @@ client_dispatch(struct snag_irc_core *irc, struct irc_conn *link, char *line)
     struct irc_channel *channel =
         message.param_count ? channel_find(link, message.params[0]) : NULL;
     if (strcmp(message.command, "MODE") == 0 && sender && message.param_count >= 3u && channel &&
-        channel->joined && nick_valid(message.params[2]) &&
-        (strcmp(message.params[1], "+o") == 0 || strcmp(message.params[1], "-o") == 0)) {
-        struct irc_member *target = member_add(link, channel, message.params[2], false);
-        if (!target) return -1;
-        struct irc_member *actor = member_find(link, channel, sender);
-        char mode_text[SNAG_CONFIG_IRC_NICK_MAX + 4u];
-        if (target) target->op = message.params[1][0] == '+';
-        if (link_name_equal(link, message.params[2], link->accepted_nick))
-            channel->op = message.params[1][0] == '+';
-        channel_default_status(link);
-        (void)snprintf(mode_text, sizeof(mode_text), "%s %s", message.params[1], message.params[2]);
-        return link_emit(irc, link, SNAG_IRC_MODE, channel->room, sender, mode_text,
-            actor && actor->op, timestamp_ms);
+        channel->joined) {
+        const char *modes = message.params[1];
+        size_t targets = 0u;
+        if (*modes != '+' && *modes != '-') return 0;
+        for (const char *m = modes; *m; ++m) {
+            if (*m == 'o')
+                ++targets;
+            else if (*m != '+' && *m != '-')
+                return 0;
+        }
+        if (targets > message.param_count - 2u) return 0;
+        for (size_t i = 0u; i < targets; ++i) {
+            if (!nick_valid(message.params[i + 2u])) return 0;
+        }
+
+        bool add = false;
+        size_t next = 2u;
+        for (const char *m = modes; *m; ++m) {
+            if (*m == '+' || *m == '-') {
+                add = *m == '+';
+                continue;
+            }
+            const char *name = message.params[next++];
+            struct irc_member *target = member_add(link, channel, name, false);
+            if (!target) return -1;
+            target->op = add;
+            if (link_name_equal(link, name, link->accepted_nick)) channel->op = add;
+            channel_default_status(link);
+            struct irc_member *actor = member_find(link, channel, sender);
+            char mode_text[SNAG_CONFIG_IRC_NICK_MAX + 4u];
+            (void)snprintf(mode_text, sizeof(mode_text), "%co %s", add ? '+' : '-', name);
+            if (link_emit(irc, link, SNAG_IRC_MODE, channel->room, sender, mode_text,
+                    actor && actor->op, timestamp_ms) < 0) {
+                return -1;
+            }
+        }
+        return 0;
     }
     if (strcmp(message.command, "TOPIC") == 0 && sender && message.param_count >= 2u && channel &&
         channel->joined) {
@@ -4150,6 +4174,49 @@ snapshot_member(struct snag_buf *out, struct snag_buf *nicks, const char *nick, 
 }
 
 static int
+snapshot_members(const struct snag_irc_core *irc, const struct irc_channel *channel,
+    struct snag_buf *out, struct snag_buf *nicks)
+{
+    size_t counts[2] = {0u, 0u};
+    bool omitted = false;
+    const size_t original_max = out->max;
+
+    /* Reserve the footer even when the cached member list is abbreviated. */
+    const size_t footer_space = 128u;
+    if (out->len > out->max || footer_space > out->max - out->len) {
+        return snag_errno(EOVERFLOW);
+    }
+    out->max -= footer_space;
+    for (unsigned int group = 0u; group < 2u; ++group) {
+        bool op = group == 0u;
+        size_t count = irc->hosting ? irc->conn_count : channel->member_count;
+        for (size_t i = 0u; i < count; ++i) {
+            const char *nick;
+            if (irc->hosting) {
+                const struct irc_conn *peer = &irc->conns[i];
+                if (!peer->used || !peer->joined || peer->op != op) continue;
+                nick = peer->nick;
+            } else {
+                if (channel->members[i].op != op) continue;
+                nick = channel->members[i].nick;
+            }
+            ++counts[group];
+            if (!omitted && snapshot_member(out, nicks, nick, op) < 0) {
+                if (errno != EOVERFLOW) {
+                    out->max = original_max;
+                    return -1;
+                }
+                omitted = true;
+            }
+        }
+    }
+    out->max = original_max;
+    return snag_buf_printf(out, "%s\nroom totals: %zu %s, %zu %s\n",
+        omitted ? " [remaining members omitted]" : "", counts[0], counts[0] == 1u ? "op" : "ops",
+        counts[1], counts[1] == 1u ? "non-op" : "non-ops");
+}
+
+static int
 snapshot_channel(const struct irc_conn *link, const struct irc_channel *channel,
     struct snag_buf *out, struct snag_buf *nicks)
 {
@@ -4161,18 +4228,7 @@ snapshot_channel(const struct irc_conn *link, const struct irc_channel *channel,
             link->endpoint, channel->room, irc->hosting ? irc->topic : channel->topic,
             link->endpoint, channel->room) < 0)
         return -1;
-    if (irc->hosting) {
-        for (size_t i = 0u; i < irc->conn_count; ++i) {
-            const struct irc_conn *peer = &irc->conns[i];
-            if (peer->used && peer->joined && snapshot_member(out, nicks, peer->nick, peer->op) < 0)
-                return -1;
-        }
-    } else {
-        for (size_t j = 0u; j < channel->member_count; ++j)
-            if (snapshot_member(out, nicks, channel->members[j].nick, channel->members[j].op) < 0)
-                return -1;
-    }
-    return snag_buf_putc(out, '\n');
+    return snapshot_members(irc, channel, out, nicks);
 }
 
 static int
@@ -4181,12 +4237,7 @@ snapshot_network(const struct snag_irc_core *irc, struct snag_buf *out, struct s
     if (irc->hosting) {
         if (snag_buf_printf(out, "room: %s\ntopic: %s\n", irc->room, irc->topic) < 0) goto fail;
         if (snag_buf_printf(out, "members[%s]:", irc->listen) < 0) goto fail;
-        for (size_t i = 0; i < irc->conn_count; ++i) {
-            const struct irc_conn *peer = &irc->conns[i];
-            if (peer->used && peer->joined && snapshot_member(out, nicks, peer->nick, peer->op) < 0)
-                goto fail;
-        }
-        if (snag_buf_append(out, "\n", 1u) < 0) goto fail;
+        if (snapshot_members(irc, NULL, out, nicks) < 0) goto fail;
     }
     if (irc->conns[LINK_OPERATOR].outgoing) {
         const struct irc_conn *link = &irc->conns[LINK_OPERATOR];

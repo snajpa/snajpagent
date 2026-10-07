@@ -9,6 +9,13 @@
   covered history across binding changes and refuse incomplete plaintext reduction.
   Preserve API compact endpoints and report the provider error on a fallback.
 
+- Let turns with deferred steering finish while retaining queued input for the
+  next turn, including when an IRC reply remains outstanding.
+
+- Keep context settings together in /status. List IRC channel ops first and show
+  room op/non-op totals, including members omitted from an abbreviated list.
+  Track compound op changes such as +oo and -o+o.
+
 - Preserve command output across journal-write failures and acknowledge saved
   chunks even when terminal presentation fails. Report the underlying journal
   error and stop retrying a failed terminal until the session is resumed.
