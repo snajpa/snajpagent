@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Preserve counted row navigation across cold history pages when a saved cursor
+  lies beyond the first forward page.
+
 - Reduce source-position lookup work during whole-history searches while
   preserving formatted-text anchors and Unicode matching. Reuse the verified
   page boundary when opening a match, avoiding a second read and render.

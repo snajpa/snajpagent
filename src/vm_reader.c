@@ -677,6 +677,13 @@ scan_rows(struct snag_vm_reader *reader, struct snag_vm_read_result *result)
                     "key"), motion->start.key) || row.heading != motion->start.heading ||
                 motion->start.byte < snag_vm_document_source(page.document, &row, row.begin) ||
                 motion->start.byte > snag_vm_document_source(page.document, &row, row.end)) {
+                /* Forward and reverse byte pages can end at different records.
+                 * Reach the saved start before counting the requested rows. */
+                if (!page.request.reverse && page.more &&
+                    motion->start.seq >= page.cursor.next_seq) {
+                    page.request.cursor = page.cursor;
+                    goto next_page;
+                }
                 errno = ESTALE;
                 break;
             }
@@ -711,6 +718,7 @@ scan_rows(struct snag_vm_reader *reader, struct snag_vm_read_result *result)
         page.request.reverse = !down;
         page.request.cursor = page.cursor;
         page.request.before_seq = down ? 0u : begin.next_seq;
+next_page:
         snag_vm_document_free(page.document);
         page.document = NULL;
         json_decref(page.blocks);

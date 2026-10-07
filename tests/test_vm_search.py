@@ -25,12 +25,12 @@ class SearchTests(unittest.TestCase):
         child.repaint_until(b'tail-marker')
         return journal, child
 
-    def search(self, child, keys, expected=b'Match'):
+    def search(self, child, keys, expected=b'Match', timeout=5):
         child.command('workspace')
         child.repaint_until(next(iter(self.snapshots())).encode())
         child.output.clear()
         child.write(keys)
-        child.repaint_until(expected)
+        child.repaint_until(expected, timeout=timeout)
         return self.save(child)['windows'][0]['history']
 
     def test_directions_wrap_same_row_and_reflow(self):
@@ -93,18 +93,20 @@ class SearchTests(unittest.TestCase):
         text = 'first-page-marker\n' + 'padding\n' * 700000 + 'tail-marker'
         journal, child = self.open_text(text)
         before = journal.stat().st_size
-        found = self.search(child, b'/first-page-marker\r')
+        # Cold multi-page scans share the counted-navigation completion budget.
+        # Forced frames remain responsive while the reader works.
+        found = self.search(child, b'/first-page-marker\r', timeout=15)
         self.assertEqual(found['byte'], 0)
         child.output.clear()
         child.write(b'/no-such-pattern\r\x03')
         child.repaint_until(b'Search canceled')
         child.command('verbosity 3')
-        self.search(child, b'?tail-marker\r')
+        self.search(child, b'?tail-marker\r', timeout=15)
         child.command('vsp')
         child.repaint_until(b'tail-marker')
         windows = self.save(child)['windows']
         other = windows[0]['history']
-        self.search(child, b'/first-page-marker\r')
+        self.search(child, b'/first-page-marker\r', timeout=15)
         self.assertEqual(self.save(child)['windows'][0]['history'], other)
         self.assertEqual(journal.stat().st_size, before)
         child.finish()

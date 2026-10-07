@@ -105,6 +105,7 @@ class NavigationTests(unittest.TestCase):
         first = self.save(child)['windows'][0]['history']
         self.assertFalse(first['heading'], (first, bytes(child.output[-2500:])))
         self.assertEqual(first['byte'], 0)
+        child.repaint_until(b'retained-question-marker')
         child.write(b'999999gj')
         self.assertEqual(self.save(child)['windows'][0]['history'], end)
         child.resize(10, 25)

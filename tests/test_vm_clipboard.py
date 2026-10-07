@@ -129,7 +129,7 @@ class ClipboardTests(unittest.TestCase):
         self.fail(f'clipboard sequences {len(results)}/{count}: {bytes(child.output[-3000:])!r}')
 
     def test_local_visual_yank_and_register_are_literal(self):
-        journal, child = self.open_text('copy é界 {\\rtf1 literal}')
+        journal, child = self.open_text('copy é界 `{\\rtf1 literal}`')
         before = journal.read_bytes()
         child.write(b'v$y')
         self.assertEqual(self.copies(child), ['copy é界 {\\rtf1 literal}'.encode()])
@@ -146,7 +146,7 @@ class ClipboardTests(unittest.TestCase):
         journal, child = self.open_text(wrappers=2)
         before = journal.read_bytes()
         child.write(b'yy')
-        self.assertEqual(self.copies(child), ['copy é界 literal\n'.encode()])
+        self.assertEqual(self.copies(child), ['• copy é界 literal\n'.encode()])
         child.repaint_until(b'acceptance unconfirmed')
         self.assertNotIn(b'SNAJPAGENT-SCREEN/1', child.output)
         self.assertEqual(journal.read_bytes(), before)
@@ -161,7 +161,7 @@ class ClipboardTests(unittest.TestCase):
         child.command('workspace name retained')
         rows = self.wait_snapshot(lambda rows: rows and next(iter(rows.values()))['name'] == 'retained')
         self.assertEqual(rollout(next(iter(rows.values()))['state']['buffers'][0])['draft'],
-                         'copy é界 literal\n')
+                         '• copy é界 literal\n')
         child.finish()
 
     def test_composer_delete_is_internal_and_explicit_yank_copies(self):
@@ -189,7 +189,7 @@ class ClipboardTests(unittest.TestCase):
         child.command('workspace name canceled')
         rows = self.wait_snapshot(lambda rows: rows and next(iter(rows.values()))['name'] == 'canceled')
         self.assertEqual(rollout(next(iter(rows.values()))['state']['buffers'][0])['draft'],
-                         'copy é界 literal\n')
+                         '• copy é界 literal\n')
         child.finish()
 
     def test_large_file_register_streams_through_wrapper(self):
@@ -263,7 +263,7 @@ class ClipboardTests(unittest.TestCase):
         child.write(b'/second\r')
         child.repaint_until(b'Match')
         child.write(b'yy')
-        self.assertEqual(self.copies(child), [b'second selection\n'])
+        self.assertEqual(self.copies(child), [b'  second selection\n'])
         child.finish()
 
     @unittest.skipIf(sys.platform == 'darwin', 'Mac native API uses a private board in the C test')
@@ -282,7 +282,7 @@ class ClipboardTests(unittest.TestCase):
                                             'WAYLAND_DISPLAY': 'fixture'})
         child.write(b'yy')
         child.repaint_until(b'Workstation clipboard written', timeout=10)
-        self.assertEqual(target.read_bytes(), 'copy é界 literal\n'.encode())
+        self.assertEqual(target.read_bytes(), '• copy é界 literal\n'.encode())
         self.assertEqual(count.read_bytes(), b'1')
         self.assertNotIn(b'\x1b]52;', child.output)
         child.finish()
@@ -291,28 +291,28 @@ class ClipboardTests(unittest.TestCase):
     def test_workspace_inside_tmux_routes_to_outer_wrapper(self):
         _, child = self.open_text(wrappers=1, mux='tmux')
         child.write(b'yy')
-        self.assertEqual(self.copies(child), ['copy é界 literal\n'.encode()])
+        self.assertEqual(self.copies(child), ['• copy é界 literal\n'.encode()])
         child.finish()
 
     @unittest.skipUnless(shutil.which('screen'), 'GNU Screen unavailable')
     def test_workspace_inside_screen_routes_to_outer_wrapper(self):
         _, child = self.open_text(wrappers=1, mux='screen')
         child.write(b'yy')
-        self.assertEqual(self.copies(child), ['copy é界 literal\n'.encode()])
+        self.assertEqual(self.copies(child), ['• copy é界 literal\n'.encode()])
         child.finish()
 
     @unittest.skipUnless(shutil.which('screen'), 'GNU Screen unavailable')
     def test_wrapper_inside_screen_publishes_to_workstation_terminal(self):
         _, child = self.open_text(wrappers=1, mux='screen', outer_mux=True)
         child.write(b'yy')
-        self.assertEqual(self.copies(child), ['copy é界 literal\n'.encode()])
+        self.assertEqual(self.copies(child), ['• copy é界 literal\n'.encode()])
         child.finish()
 
     @unittest.skipUnless(shutil.which('mosh') and shutil.which('mosh-server'), 'Mosh unavailable')
     def test_stock_mosh_carries_checked_clipboard_titles(self):
         _, child = self.open_text(wrappers=1, mosh=True)
         child.write(b'yy')
-        self.assertEqual(self.copies(child), ['copy é界 literal\n'.encode()])
+        self.assertEqual(self.copies(child), ['• copy é界 literal\n'.encode()])
         self.assertNotIn(b'SNAJPAGENT-SCREEN/1', child.output)
         child.finish()
 
@@ -321,7 +321,7 @@ class ClipboardTests(unittest.TestCase):
     def test_stock_mosh_with_remote_screen(self):
         _, child = self.open_text(wrappers=1, mosh=True, mux='screen')
         child.write(b'yy')
-        self.assertEqual(self.copies(child), ['copy é界 literal\n'.encode()])
+        self.assertEqual(self.copies(child), ['• copy é界 literal\n'.encode()])
         child.finish()
 
     @unittest.skipUnless(shutil.which('mosh') and shutil.which('mosh-server') and
@@ -329,7 +329,7 @@ class ClipboardTests(unittest.TestCase):
     def test_stock_mosh_with_remote_tmux(self):
         _, child = self.open_text(wrappers=1, mosh=True, mux='tmux')
         child.write(b'yy')
-        self.assertEqual(self.copies(child), ['copy é界 literal\n'.encode()])
+        self.assertEqual(self.copies(child), ['• copy é界 literal\n'.encode()])
         child.finish()
 
     @unittest.skipUnless(shutil.which('sshd') and shutil.which('ssh-keygen') and
@@ -338,7 +338,7 @@ class ClipboardTests(unittest.TestCase):
     def test_ssh_clipboard_uses_workstation_wrapper(self):
         _, child = self.open_text(wrappers=1, ssh=True)
         child.write(b'yy')
-        self.assertEqual(self.copies(child), ['copy é界 literal\n'.encode()])
+        self.assertEqual(self.copies(child), ['• copy é界 literal\n'.encode()])
         child.finish()
 
     @unittest.skipUnless(shutil.which('sshd') and shutil.which('ssh-keygen') and
@@ -347,7 +347,7 @@ class ClipboardTests(unittest.TestCase):
     def test_ssh_with_remote_screen(self):
         _, child = self.open_text(wrappers=1, ssh=True, mux='screen')
         child.write(b'yy')
-        self.assertEqual(self.copies(child), ['copy é界 literal\n'.encode()])
+        self.assertEqual(self.copies(child), ['• copy é界 literal\n'.encode()])
         child.finish()
 
     @unittest.skipUnless(shutil.which('sshd') and shutil.which('ssh-keygen') and
@@ -356,7 +356,7 @@ class ClipboardTests(unittest.TestCase):
     def test_ssh_with_remote_tmux(self):
         _, child = self.open_text(wrappers=1, ssh=True, mux='tmux')
         child.write(b'yy')
-        self.assertEqual(self.copies(child), ['copy é界 literal\n'.encode()])
+        self.assertEqual(self.copies(child), ['• copy é界 literal\n'.encode()])
         child.finish()
 
     def test_quit_settles_prepublication_copy_and_restores_modes(self):

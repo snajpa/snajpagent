@@ -1447,6 +1447,11 @@ is active; otherwise it performs the current session interrupt. The status bar
 names the cancelled operation. Existing hard-escape behavior remains a separate
 explicit sequence and must be tested through the new input decoder.
 
+Counted transcript row motions locate their saved source position across forward
+pages before counting movement. Forward and reverse byte budgets may place page
+boundaries at different records; paging preserves the source cursor in either
+direction.
+
 ### 8.2 Search
 
 `/pattern` searches forward and `?pattern` backward in NORMAL; `n` repeats and
