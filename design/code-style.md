@@ -2,13 +2,11 @@
 
 # Code style
 
-Approved 2026-09-15. Adoption is hybrid: this guide binds new and changed lines from the
-approval revision onward, and the existing tree is not reflowed. Untouched code converts when it
-is next edited, or in a dedicated style-only change. A style-only change is reviewed for token,
-string, comment and preprocessor preservation, then run through the relevant existing tests;
+Approved 2026-09-15. The current style applies throughout the tree, including existing code.
+Keep mechanical conversion separate from behavior changes. Review style-only changes for token,
+string, comment and preprocessor preservation, then run the relevant existing tests;
 `git diff -w` supports that review without proving it, because it hides a whitespace change
 inside a string literal. Approved reflow revisions are listed in `.git-blame-ignore-revs`.
-Whole-tree conversion is a separate, later change.
 
 The base is the OpenZFS/illumos style adapted to this tree; the structural deviation is the
 indent character: four spaces, with tabs banned.
@@ -23,7 +21,7 @@ deliberately mechanical: it reports objective drift and does not replace review.
 ### Anchor
 
 - Four spaces per indentation level; tabs are banned.
-- 80 columns preferred, 100 hard. The hard limit is what the changed-lines check enforces. A line
+- 80 columns preferred, 100 hard. The hard limit is what the checker enforces. A line
   over the limit is fixed by extraction or splitting.
 - A line whose overrun is one unbreakable token - a URL or string literal longer than the limit -
   is allowed when the rest of the line fits the limit.
@@ -114,13 +112,14 @@ These rules are review obligations, deliberately not a gate.
 
 - the established checks: SPDX line, no carriage returns, no tabs, no trailing whitespace, no
   repeated blank lines, a final newline; the shell SPDX tag; the prompt-cache contract;
+- the 100-column hard limit and keyword spacing (`if(`, `for(`, `while(`, `switch(`);
 - no `//` comments, with string, character-literal and block-comment awareness;
 - no blank line directly after a `{`-ending line and none directly before a `}`-only line.
 
-`tools/check_style.sh --changed <base>` adds the changed-lines rules over lines added since the
-explicit base: the 100-column hard limit and keyword spacing (`if(`, `for(`, `while(`, `switch(`).
-It is opt-in; the base is required and a missing or unresolved base is a usage error, so plain
-`make check` stays archive-safe.
+`tools/check_style.sh --changed <base>` narrows the current rules to lines added since the
+explicit base. It grants no compatibility exemption: the full-tree gate applies the same rules.
+The selector requires a resolvable base; plain `make check` and `make stylecheck` need no Git
+history and work from a source archive.
 
 Outside the checker: brace placement, general operator spacing, declaration placement, naming,
 comments, function shape and grouping are review obligations. Each enforced rule ships with its

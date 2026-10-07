@@ -1,14 +1,9 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0-only
-"""Style checks for C and header files.
+"""Apply the current mechanical C style rules to every source file.
 
-Default mode reports // comments under src, tests and tools; the scan tracks string, character
-literal and block comment state, so a // sequence inside text or inside a block comment is not a
-finding. `--changed <base>` adds the changed-lines rules: lines over the hard limit and missing
-keyword spaces, measured on code text, over lines added since <base>.
-
-Both modes exit non-zero when they report. `--changed` requires an explicit base revision and
-fails clearly without one.
+An optional --changed <base> selector checks added lines with the same rules.
+The default needs no Git history and grants no exemption to existing code.
 """
 
 import pathlib
@@ -94,16 +89,6 @@ def c_files():
                 yield path
 
 
-def check_comments():
-    bad = False
-    for path in c_files():
-        for number, _line, _segments, comment in scan_file(path):
-            if comment is not None:
-                print("%s:%d: // comment" % (path, number), file=sys.stderr)
-                bad = True
-    return bad
-
-
 def added_lines(base):
     """Return {path: {line_number: text}} for the added C/H lines since base."""
     try:
@@ -148,28 +133,22 @@ def longest_token(line):
     return max((len(token) for token in line.split()), default=0)
 
 
-def check_changed(base):
+def check_style(added=None):
     bad = False
-    for path, lines in sorted(added_lines(base).items()):
-        if pathlib.Path(path).suffix not in SUFFIXES:
-            continue
-        file_path = pathlib.Path(path)
-        if not file_path.is_file():
-            continue
-        current = {number: (segments, comment) for number, _text, segments, comment
-                   in scan_file(file_path)}
-        for number in sorted(lines):
-            text = lines[number]
+    for path in c_files():
+        selected = None if added is None else added.get(str(path), {})
+        for number, text, segments, comment in scan_file(path):
+            if selected is not None and number not in selected:
+                continue
+            if comment is not None:
+                print("%s:%d: // comment" % (path, number), file=sys.stderr)
+                bad = True
             if len(text) > LIMIT:
                 token = longest_token(text)
                 if not (token > LIMIT and len(text) - token <= LIMIT):
                     print("%s:%d: line is %d columns (hard limit %d)"
                           % (path, number, len(text), LIMIT), file=sys.stderr)
                     bad = True
-            entry = current.get(number)
-            if entry is None:
-                continue
-            segments, _comment = entry
             for start, end in segments:
                 match = KEYWORD.search(text[start:end])
                 if match:
@@ -182,7 +161,7 @@ def check_changed(base):
 def main():
     args = sys.argv[1:]
     if not args:
-        return 1 if check_comments() else 0
+        return 1 if check_style() else 0
     if args[0] == "--changed":
         if len(args) != 2 or not args[1]:
             print("check_style.py: --changed requires an explicit base revision", file=sys.stderr)
@@ -193,7 +172,7 @@ def main():
         if probe.returncode != 0:
             print("check_style.py: cannot resolve base '%s'" % base, file=sys.stderr)
             return 2
-        return 1 if check_changed(base) else 0
+        return 1 if check_style(added_lines(base)) else 0
     print("usage: check_style.py [--changed <base>]", file=sys.stderr)
     return 2
 

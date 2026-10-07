@@ -80,10 +80,10 @@ find src tests tools -type f \( -name '*.c' -o -name '*.h' -o -name '*.sh' \) -p
     exit "$bad"
 } || fail=1
 
-python3 "$dir/check_style.py" || fail=1
-
 if [ "$changed" = true ]; then
     python3 "$dir/check_style.py" --changed "$base" || fail=$?
+else
+    python3 "$dir/check_style.py" || fail=$?
 fi
 
 if [ "$fail" -ne 0 ]; then

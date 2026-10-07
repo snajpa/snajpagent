@@ -160,7 +160,7 @@ correct status fields and current rendering, never synthesized or recolored.
 
 ## Code style
 
-New and changed code follows [design/code-style.md](design/code-style.md); the existing tree is
-hybrid and converts opportunistically, without a whole-tree reflow inside a behavior change.
-`make stylecheck` enforces the policy's mechanical subset, and
-`tools/check_style.sh --changed <base>` checks lines added since an explicit base revision.
+All code follows [design/code-style.md](design/code-style.md). `make stylecheck`
+enforces its mechanical subset across the complete tree, including existing code.
+`tools/check_style.sh --changed <base>` narrows the scan to added lines using the
+same rules. Keep mechanical reformatting in a separate change from behavior fixes.

@@ -521,6 +521,7 @@ endif
 	$(MAKE) sizecheck
 
 stylecheck:
+	python3 ./tests/test_style.py
 	./tools/check_style.sh
 
 rulescheck: $(BIN)
