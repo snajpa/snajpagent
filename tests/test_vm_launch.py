@@ -180,7 +180,7 @@ os.execv({str(BINARY)!r}, [{str(BINARY)!r}] + sys.argv[1:])
         state = next(iter(self.snapshots().values()))['state']
         self.assertEqual({rollout(b)['draft'] for b in state['buffers']},
                          {'alpha draft', 'beta draft'})
-        resumed = self.start('--resume', 'multi-detach', expect=b'history')
+        resumed = self.start('--resume', 'multi-detach', columns=180, expect=b'history')
         for journal in (first, second):
             self.status(journal.parent.name, 'attached')
         resumed.repaint_until(b'alpha draft')

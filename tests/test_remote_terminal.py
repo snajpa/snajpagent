@@ -1335,7 +1335,7 @@ class RemoteStartupTests(unittest.TestCase):
         events = read_events(journal)
         queued = [e["data"] for e in events if e["type"] == "download_queued"]
         self.assertEqual(len(queued), 1)
-        return client_home, remote_home, dotdir, journal, events[0]["session_id"], source, env
+        return client_home, remote_home, dotdir, journal, journal.parent.name, source, env
 
     def test_wrapped_resume_delivers_queued_download_and_clears_item(self):
         with tempfile.TemporaryDirectory(prefix="snag-remote-reconnect-") as tmp:

@@ -1,6 +1,5 @@
 # SPDX-License-Identifier: GPL-2.0-only
 """File bytes cross a real tmux server between the wrapper and agent."""
-import json
 import os
 import random
 import re
@@ -16,6 +15,7 @@ from pathlib import Path
 
 from test_remote_terminal import PRODUCT, RemoteProcess
 from test_upload_client import FixtureChildren
+from store_history import journal_paths, read_events
 
 
 @unittest.skipUnless(shutil.which("tmux"), "requires tmux")
@@ -181,19 +181,17 @@ class TmuxTransfers(unittest.TestCase):
                     tool.write_bytes(random.Random(3).randbytes(1024))
                     os.write(child.master, f"download_tool {tool}\r".encode())
                     child.until(str(client / "Downloads/tool.bin").encode(), 20)
-                    journal = next((root / "agent/sessions").glob("*/events.jsonl"))
+                    journal = next(iter(journal_paths(root / "agent")))
                     deadline = time.monotonic() + 10
-                    while not any(json.loads(line)["type"] == "turn_completed"
-                                  for line in journal.read_text().splitlines(keepends=True)
-                                  if line.endswith("\n")):
+                    while not any(event["type"] == "turn_completed"
+                                  for event in read_events(journal)):
                         self.assertLess(time.monotonic(), deadline)
                         child.remember_children()
                         if select.select([child.master], [], [], .05)[0]:
                             child.output.extend(os.read(child.master, 65536))
                     self.assertTrue((client / "Downloads/tool.bin").exists(), bytes(child.output))
                     self.assertEqual((client / "Downloads/tool.bin").read_bytes(), tool.read_bytes())
-                    events = [json.loads(line) for line in
-                              next((root / "agent/sessions").glob("*/events.jsonl")).read_text().splitlines()]
+                    events = read_events(journal)
                     self.assertEqual(sum(e["type"] == "download_queued" for e in events), 1)
                     self.assertEqual(sum(e["type"] == "download_removed" for e in events), 1)
                 if cancel:

@@ -462,11 +462,13 @@ test_batch_without_heap(void)
         limit.rlim_cur = 0u;
         assert(!setrlimit(RLIMIT_AS, &limit));
         /* Existing allocator arenas remain mapped. Exhaust those too without
-         * touching the parent or retaining anything after this child exits. */
+         * touching the parent or retaining anything after this child exits.
+         * Indirection keeps the compiler from eliding unused allocations. */
+        void *(*volatile allocate)(size_t) = malloc;
         for (size_t size = 65536u; size; size >>= 4u) {
-            while (malloc(size)) {}
+            while (allocate(size)) {}
         }
-        assert(!malloc(1u));
+        assert(!allocate(1u));
         struct snag_binary_index_tree tree = {0};
         int rc = snag_binary_index_tree_append_batch(NULL, &tree, &identity,
             &before, &after, batch.data, batch.len);

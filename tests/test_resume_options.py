@@ -17,6 +17,7 @@ import tmux_terminal as harness
 from store_history import create_legacy, journal_paths, read_events
 from test_remote_terminal import RemoteProcess
 from test_session_listing import append_event
+from test_session_view import View
 
 
 def check(binary):
@@ -238,15 +239,24 @@ def check_hosted_rename_resume(binary):
                     sid = next((state / "sessions").iterdir()).name
                     journal, = journal_paths(state)
                     assert journal.read_bytes().startswith(before)
+                    if options != ["--no-listen", "--no-client"]:
+                        view = View(journal.parent)
+                        try:
+                            view.until('state', lambda message: any(
+                                connection['connected'].get('agent') and
+                                connection['connected'].get('operator')
+                                for connection in message['state']['connections']))
+                        finally:
+                            view.close()
                     if options is None:
-                        os.write(child.master, b"/nick operatorafter\r/nick\r")
+                        os.write(child.master, b"/rollout\r/nick operatorafter\r/nick\r")
                         child.until(b"operator nick: operatorafter", 10)
-                        assert b"model nick: before" in child.output
+                        child.until(b"model nick: before", 10)
                         child.output.clear()
                         os.write(child.master, b"/rollout\rrename model\r")
                         child.until(b"observed", 10)
                     child.output.clear()
-                    os.write(child.master, b"/nick\r")
+                    os.write(child.master, b"/rollout\r/nick\r")
                     child.until(b"model nick: after", 10)
                     child.until(b"operator nick: operatorafter", 10)
                     child.output.clear()

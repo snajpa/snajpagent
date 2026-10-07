@@ -2528,7 +2528,7 @@ def test_network_input_recovery_boundaries():
         path = STATE_ROOT / sid / "events.jsonl"
         lines = path.read_bytes().splitlines(keepends=True)
         log = [json.loads(line) for line in lines]
-        received = next(e for e in log if e["type"] == "irc_event" and
+        received = next(e for e in log if e["type"] in ("irc_event", "irc_event_v2") and
                         "recoveryagent: network_zero" in e["data"]["text"])
         admitted = next(e for e in log if e["type"] == "irc_admitted" and
                         received["seq"] in e["data"]["sequences"])
@@ -3827,7 +3827,7 @@ def test_retry_budget_survives_response_boundary():
 
 def test_resume_and_session_persistence():
     before = session_ids()
-    child = Child([], DEFAULT_IDLE_PROMPT)
+    child = legacy_child([], DEFAULT_IDLE_PROMPT)
     end = child.send_wait(b"ping\r", b"pong")
     session_id = child.session_id()
     child.exit_cleanly(end)
@@ -4146,17 +4146,17 @@ def test_provider_login_and_first_run():
                 child.finish(expected=2, expect_resume=False)
                 assert not (fresh / "config.ini").exists()
                 assert not (fresh / "auth").exists()
-                assert not list((fresh / "sessions").glob("*/events.jsonl"))
+                assert not journal_paths(fresh)
             else:
                 child.send_wait(b"n\n", b"Model number or exact model ID: ", start=end)
                 end = child.send_wait(b"vendor/model\n", b"Default model: openrouter / vendor/model")
                 child.wait(PROMPT.rstrip(), start=end)
                 child.exit_now(expect_resume=child.native_owner)
-                journals = list((fresh / "sessions").glob("*/events.jsonl"))
+                journals = journal_paths(fresh)
                 assert len(journals) == int(child.native_owner), journals
                 for journal in journals:
-                    assert not any(json.loads(line)["type"] == "turn_started"
-                                   for line in journal.read_bytes().splitlines())
+                    assert not any(event["type"] == "turn_started"
+                                   for event in read_events(journal))
                 assert (fresh / "auth" / "openrouter.json").exists()
                 assert b"hidden-first-run-key" not in child.buf
 
@@ -5100,6 +5100,7 @@ def test_empty_session_lifecycle():
         assert len([e for e in log if e["type"] == "session_created"]) == 1
         assert one(log, "turn_started")["data"]["config"]["model"] == "selected-before-prompt"
     saved = session_journal(sid).read_bytes()
+    saved_seq = events(sid)[-1]["seq"]
     with Child(["--no-color", "--no-listen", "--no-client", "--resume", sid],
                b"selected-before-prompt/high   ?%") as resumed:
         command = resumed.exit_now()
@@ -5108,7 +5109,7 @@ def test_empty_session_lifecycle():
         # inventing a user turn, even when the process is now offline.
         resumed_log = session_journal(sid).read_bytes()
         assert resumed_log.startswith(saved)
-        updates = [json.loads(line) for line in resumed_log[len(saved):].splitlines()]
+        updates = [event for event in events(sid) if event["seq"] > saved_seq]
         assert updates
         assert all(e["type"] in ("irc_snapshot", "session_options") for e in updates), updates
         snapshots = [e for e in updates if e["type"] == "irc_snapshot"]
@@ -5251,7 +5252,8 @@ def test_live_nick_listing():
             identity = new_session(before, client)
             deadline = time.monotonic() + MIN_WAIT_S
             while time.monotonic() < deadline:
-                if any(e["type"] == "irc_event" and e["data"]["kind"] == "history_ready"
+                if any(e["type"] in ("irc_event", "irc_event_v2") and
+                    e["data"]["kind"] == "history_ready"
                        for e in events(identity)):
                     break
                 client.read_once(0.02)
@@ -5265,7 +5267,8 @@ def test_live_nick_listing():
                 client.send_wait(b"/chat\r", chat_prompt("clientop"))
                 deadline = time.monotonic() + MIN_WAIT_S
                 while time.monotonic() < deadline:
-                    if any(e["type"] == "irc_event" and e["data"]["kind"] == "nick" and
+                    if any(e["type"] in ("irc_event", "irc_event_v2") and
+                        e["data"]["kind"] == "nick" and
                            e["data"]["nick"] == old and e["data"]["text"] == nick
                            for e in events(identity)):
                         break
@@ -5299,7 +5302,8 @@ def test_operator_nick():
                 deadline = time.monotonic() + MIN_WAIT_S
                 while time.monotonic() < deadline:
                     changes = [e["data"] for e in events(identity)
-                               if e["type"] == "irc_event" and e["data"]["kind"] == "nick"
+                               if e["type"] in ("irc_event", "irc_event_v2") and
+                                   e["data"]["kind"] == "nick"
                                and e["data"]["text"] == new]
                     if changes:
                         assert changes[-1]["nick"] == old, changes
@@ -5321,7 +5325,7 @@ def test_operator_nick():
             sent = len(server.buf)
             client.send(b"operator rename message\r")
             server.wait(b"operator rename message", start=sent)
-            assert any(e["type"] == "irc_event" and e["data"]["kind"] == "message"
+            assert any(e["type"] in ("irc_event", "irc_event_v2") and e["data"]["kind"] == "message"
                        and e["data"]["nick"] == "peerhuman"
                        and e["data"]["text"] == "operator rename message"
                        for e in events(server.session_id()))
@@ -6359,7 +6363,7 @@ def test_network_chat_and_managed_mention():
     admitted = [e for e in log if e["type"] == "irc_admitted" and
                 e["data"].get("steering", {}).get("turn_id") == turn_id]
     assert len(admitted) == 1 and admitted[0]["data"]["sequences"]
-    source = next(e for e in log if e["type"] == "irc_event" and
+    source = next(e for e in log if e["type"] in ("irc_event", "irc_event_v2") and
                   e["seq"] in admitted[0]["data"]["sequences"] and
                   "network managed mention" in e["data"]["text"])
     assert source["data"]["urgent"]
@@ -6782,10 +6786,11 @@ def test_editor_during_blocked_engine(key=b"\r", pager=False):
         tasks = Path(f"/proc/{engine}/task")
         if tasks.exists():
             # The engine/main thread is joined by presentation, input, and
-            # durable-backfill workers. GCC TSan adds one instrumentation
-            # worker, not another application owner.
+            # durable-backfill workers, plus native journal I/O when present.
+            # GCC TSan adds one instrumentation worker.
             tsan = "libtsan" in Path(f"/proc/{engine}/maps").read_text()
-            assert len(list(tasks.iterdir())) == 4 + int(tsan)
+            native_io = session_journal(child.session_id()).name == "journal.bin"
+            assert len(list(tasks.iterdir())) == 4 + int(native_io) + int(tsan)
         child.drain(0.4)
         child.wait(DEFAULT_ACTIVE_PROMPT, start=after)
         assert len(set(re.findall("[◴◷◶◵]", child.buf[after:].decode()))) > 1

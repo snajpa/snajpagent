@@ -4,6 +4,7 @@
 #include "app_internal.h"
 #include "config.h"
 #include "credential.h"
+#include "fixture_store_legacy.h"
 #include "history_view.h"
 #include "http.h"
 #include "json.h"
@@ -3959,11 +3960,16 @@ test_voice_observation_cursor(void)
     assert(complete_turn);
     missing += voice_fixture_model_changes(&app, true);
     assert(missing == 0u);
-    int journal_fd = app.session.log_fd;
+    int journal_fd = dup(app.session.log_fd);
+    int read_only = open("/dev/null", O_RDONLY | O_CLOEXEC);
+    assert(journal_fd >= 0 && read_only >= 0);
     uint64_t failure_seq = app.session.next_seq;
-    app.session.log_fd = -1;
+    /* Fail writes through the descriptor also borrowed by native journal I/O. */
+    assert(dup2(read_only, app.session.log_fd) == app.session.log_fd);
+    close(read_only);
     assert(snag_ui_text(&app.ui, SNAG_UI_HOST, "Output remains visible on retention failure") == 0);
-    app.session.log_fd = journal_fd;
+    assert(dup2(journal_fd, app.session.log_fd) == app.session.log_fd);
+    close(journal_fd);
     assert(app.session.next_seq == failure_seq);
     assert(snag_app_voice_service(&app) == 0 && !app.voice);
     assert(app.session.active_turn && !strcmp(app.session.active_prompt,
@@ -5023,7 +5029,7 @@ test_history_and_goal_list_tools(void)
     snag_store_init(&app.store);
     snag_session_init(&app.session);
     assert(snag_store_open(&app.store, path, error, sizeof(error)) == 0);
-    assert(snag_session_create(&app.store, &app.session, path, "default", "fixture", "medium",
+    assert(legacy_fixture_create(&app.store, &app.session, path, "default", "fixture", "medium",
                                error, sizeof(error)) == 0);
     app.session.tool_output_bytes = 2048u;
 
@@ -5502,7 +5508,7 @@ test_ui_bounded_history(void)
     snag_store_init(&store);
     snag_session_init(&session);
     assert(snag_store_open(&store, path, error, sizeof(error)) == 0);
-    assert(snag_session_create(&store, &session, path, "default", "fixture", "medium",
+    assert(legacy_fixture_create(&store, &session, path, "default", "fixture", "medium",
         error, sizeof(error)) == 0);
     assert(snprintf(output_path, sizeof(output_path), "%s/capture", path) > 0);
     int fd = open(output_path, O_CREAT | O_EXCL | O_RDWR, 0600), saved = dup(STDERR_FILENO);
@@ -8754,12 +8760,7 @@ test_voice_archive(struct app_state *source, struct app_state *destination,
     struct snag_voice_history_root root = destination->session.voice_history;
     assert(root.adopted_seq && !strcmp(root.transfer_id, archive.transfer_id));
     assert(snag_session_checkpoint(&destination->session, error, sizeof(error)) == 0);
-    json_t *state = NULL, *context = NULL;
-    assert(snag_session_checkpoint_read(&destination->session, &state, &context,
-        error, sizeof(error)) == 0);
-    assert(json_is_object(json_object_get(state, "voice_history")));
-    json_decref(state);
-    json_decref(context);
+    /* Reopen checks the persisted adopted cursor in either storage format. */
     char id[SNAG_ID_HEX_LEN + 1u];
     strcpy(id, destination->session.id);
     snag_session_close(&destination->session);
@@ -9731,7 +9732,8 @@ test_native_ui(void)
         snag_store_init(store);
         snag_session_init(session);
         assert(snag_store_open(store, path, error, sizeof(error)) == 0);
-        assert(snag_session_create(store, session, path, "default", "fixture", "medium",
+        /* Transfer corruption cases below mutate JSONL and opaque checkpoints. */
+        assert(legacy_fixture_create(store, session, path, "default", "fixture", "medium",
                                     error, sizeof(error)) == 0);
         assert(snag_ui_init(ui) == 0 && snag_ui_session_start(ui, &process) == 0);
         assert(snag_ui_session_attachment(ui) == 1u);

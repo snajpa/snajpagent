@@ -2905,7 +2905,8 @@ def run_help_case(binary, root, active=False, chat=False, width=80):
         for syntax in ("/help", "/?", "/status", "/history [N]", "/config", "/effort [LEVEL]",
                 "/ro QUERY", "/verbose [0..6]", "/queue [TEXT]", "/queue clear|c", "/queue pop|p",
                 "/next", "/retry", "/yield", "/compact", "/delete", "/exit",
-                "/chat", "/rollout", "/topic [TEXT]", "/names", "/server [start [ENDPOINT]|stop]",
+                "/chat [ADDRESS]", "/query [ADDRESS [TEXT]]", "/rollout", "/topic [TEXT]",
+                "/names", "/server [start [ENDPOINT]|stop]",
                 "/connect [ENDPOINT]", "/disconnect [ENDPOINT]", "/N [TEXT]", "/all TEXT"):
             assert syntax + " — " in text, (syntax, screen)
         assert "alias /q" in text and "save (s)" in text
@@ -3340,6 +3341,7 @@ def run_resume_history_case(binary, root):
                                 cwd=workspace, capture_output=True)
         assert result.returncode == 0, result.stderr
     before = log.read_bytes()
+    before_sequence = journal_events(log)[-1]["seq"]
     for setting, count in ((None, 1), (101, 101)):
         config.write_text("[provider openai]\n[ui]\n" + (
             f"resume_history_turns = {setting}\n" if setting is not None else ""))
@@ -6827,7 +6829,10 @@ def run_host_cache_prefix_case(binary, root):
                      and isinstance(i.get("content"), str)] for request in requests]
         changed = [i for i, policy in enumerate(policies) if policy != policies[0]]
         assert not changed, f"volatile facts changed the hoisted policy prefix in requests {changed}"
-        assert any("No final answer or goal completion until every handle is settled." in text for text in policies[0])
+        assert any("Collect all handles before claiming completion or ending one-shot work."
+                   in text for text in policies[0])
+        assert any("In interactive mode, a reply with live commands waits for input or completion."
+                   in text for text in policies[0])
         assert len({r["prompt_cache_key"] for r in requests}) == 1
         previous = []
         previous_wire = []
