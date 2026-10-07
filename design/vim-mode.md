@@ -1466,6 +1466,8 @@ Cold whole-history search is linear in the inspected history; a UI label must
 not imply completion while only loaded pages have been searched.
 Source-map lookup is needed only for characters that can begin or continue a
 match. Skipped prose still checks cancellation and Unicode codepoint boundaries.
+Reverse pages include their verified exclusive end, so displaying an interior
+match retains correct paging boundaries without a second forward projection.
 
 Search results contain source anchors and excerpts. Opening a result does not
 move other windows. Changing view/verbosity cancels an obsolete scan and keeps

@@ -94,6 +94,8 @@ native_page_test(struct snag_store *store, const char *root)
     char error[256] = "";
     assert(!snag_session_create(store, &source, root, "default", "native-pages", "high",
         error, sizeof(error)) && source.binary);
+    struct snag_journal_cursor boundary = {.offset = source.log_end, .next_seq = source.next_seq};
+    memcpy(boundary.prev_sha256, source.prev_sha256, sizeof(boundary.prev_sha256));
     json_t *data = json_pack("{s:s,s:s}", "goal_id", "80000000000000000000000000000000",
         "prompt", "native page input");
     assert(data && !snag_session_commit(&source, "goal_started", data, NULL, error, sizeof(error)));
@@ -131,6 +133,13 @@ native_page_test(struct snag_store *store, const char *root)
         }
     }
     assert(found);
+    snag_vm_read_result_free(result);
+    request.reverse = true;
+    request.before_seq = boundary.next_seq;
+    result = await_page(reader, snag_vm_reader_request(reader, &request));
+    assert(!result->error_number && result->end.offset == boundary.offset &&
+        result->end.next_seq == boundary.next_seq &&
+        !strcmp(result->end.prev_sha256, boundary.prev_sha256));
     snag_vm_read_result_free(result);
     snag_vm_reader_close(reader);
     char prefix[9];
@@ -250,10 +259,15 @@ viewport_test(struct snag_store *store, const char *root)
     assert(!result->error_number);
     assert(snag_vm_document_rows(result->document) >= 60u);
     assert(result->cursor.offset > 0 && result->cursor.offset < source.log_end);
+    assert(result->end.offset == source.log_end && result->end.next_seq == source.next_seq &&
+        !strcmp(result->end.prev_sha256, source.prev_sha256));
+    struct snag_journal_cursor boundary = result->cursor;
     request.before_seq = result->cursor.next_seq;
     snag_vm_read_result_free(result);
     result = await_page(reader, snag_vm_reader_request(reader, &request));
     assert(!result->error_number && !result->more && result->cursor.offset == 0);
+    assert(result->end.offset == boundary.offset && result->end.next_seq == boundary.next_seq &&
+        !strcmp(result->end.prev_sha256, boundary.prev_sha256));
     assert(snag_vm_document_rows(result->document) > 0u);
     snag_vm_read_result_free(result);
     snag_vm_reader_close(reader);

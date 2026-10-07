@@ -51,6 +51,8 @@ struct snag_vm_read_result {
     uint64_t generation;
     struct snag_vm_read_request request;
     struct snag_journal_cursor tail, cursor;
+    /* Exact exclusive end of a reverse page, including an interior anchor. */
+    struct snag_journal_cursor end;
     /* In scan order; entries have seq, type, data and original public-text byte
      * counts for offsets through redaction. Checkpoints are metadata.
      * Private provider payloads and the reader's secret snapshot are filtered. */

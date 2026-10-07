@@ -258,13 +258,14 @@ class MouseTests(unittest.TestCase):
             frame = subprocess.run([*tmux, 'capture-pane', '-p', '-t', 'mouse:0.0'],
                                    capture_output=True, text=True, check=True, timeout=5).stdout
             for row, line in enumerate(frame.splitlines()):
-                if line.startswith('tmux-marker'):
+                if 'tmux-marker tail' in line:
                     where = row, line.index('tmux-marker') + 5
         self.assertIsNotNone(where)
         mouse(child, *where)
         mouse(child, *where, release=True)
         child.write(b'ywP')
-        self.assertEqual(rollout(self.save(child)['buffers'][0])['draft'], 'marker ')
+        self.assertEqual(rollout(self.save(child)['buffers'][0])['draft'], 'marker ',
+                         (where, frame))
         self.assertEqual(journal.read_bytes(), before)
         child.finish()
 

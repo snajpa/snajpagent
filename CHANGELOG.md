@@ -5,7 +5,8 @@
 ## Unreleased
 
 - Reduce source-position lookup work during whole-history searches while
-  preserving formatted-text anchors and Unicode matching.
+  preserving formatted-text anchors and Unicode matching. Reuse the verified
+  page boundary when opening a match, avoiding a second read and render.
 
 - Preserve live FOLLOW when clicking into an attached pane to type. Text dragging
   and scrolling still hold history for navigation and selection.

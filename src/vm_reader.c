@@ -975,6 +975,9 @@ read_page(struct snag_vm_reader *reader, struct snag_vm_read_result *result)
         .route = request->route, .project = request->project, .verbosity = request->verbosity};
     uint64_t before = request->before_seq;
     result->cursor = request->cursor;
+    result->end = result->tail;
+    if (request->reverse && before && snag_session_history_cursor_before(view, before,
+        &result->end, result->error, sizeof(result->error)) < 0) goto failed;
     do {
         if (request->reverse) {
             if (snag_session_each_event_reverse(view, before,

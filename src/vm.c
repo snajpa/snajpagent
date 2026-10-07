@@ -4373,17 +4373,9 @@ collect(struct vm *vm, struct vm_read *read)
                 changed(vm);
                 continue;
             }
-            struct snag_journal_cursor end = result->request.before_seq && load != LOAD_ANCHOR ?
-                window->begin : result->tail;
-            if (load == LOAD_ANCHOR) {
-                /* The next forward read may start at the page's first boundary;
-                 * recover its exact end before continuing past this anchor. */
-                window->begin = result->cursor;
-                window->load = LOAD_KEEP;
-            }
             if (result->request.reverse) {
                 window->begin = result->cursor;
-                window->end = end;
+                window->end = result->end;
             } else {
                 window->begin = result->request.cursor;
                 window->end = result->cursor;
