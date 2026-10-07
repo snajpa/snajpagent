@@ -22,7 +22,7 @@ import uuid
 from pathlib import Path
 
 import tmux_terminal as harness
-from store_history import create_legacy, journal_paths
+from store_history import create_legacy, journal_paths, read_events
 
 
 BINARY = Path(sys.argv.pop(1)).resolve() if len(sys.argv) > 1 and not sys.argv[1].startswith('-') else (
@@ -306,6 +306,7 @@ class WorkspaceTests(unittest.TestCase):
 
     def test_follow_hold_and_idle_polling(self):
         journal = self.seed_session()
+        first_input = next(e['seq'] for e in read_events(journal) if e['type'] == 'input_received')
         child = self.start('-N', 'following')
         child.command('history ' + journal.parent.name)
         child.until(b'retained-answer-marker')
@@ -318,7 +319,7 @@ class WorkspaceTests(unittest.TestCase):
         child.write(b'gg')
         values = self.wait_snapshot(lambda values:
             not next(iter(values.values()))['state']['windows'][0]['history']['follow'] and
-            next(iter(values.values()))['state']['windows'][0]['history']['seq'] == 3)
+            next(iter(values.values()))['state']['windows'][0]['history']['seq'] == first_input)
         anchor = next(iter(values.values()))['state']['windows'][0]['history']
         self.append_turn(journal, 'live-append-two')
         child.until(b'newer')
@@ -345,7 +346,7 @@ class WorkspaceTests(unittest.TestCase):
         original = other.seed_session('unrelated history')
         directory = self.root / 'state' / 'sessions' / original.parent.name
         shutil.copytree(original.parent, directory)
-        unrelated = directory / 'events.jsonl'
+        unrelated = directory / original.name
         stamp = 1_000_000_000_000_000_000
         mtime = unrelated.stat().st_mtime_ns
         os.utime(unrelated, ns=(stamp, mtime))
@@ -383,7 +384,7 @@ class WorkspaceTests(unittest.TestCase):
         from test_session_listing import canonical, append_event
 
         journal = self.seed_session('first-visible-marker\n' + 'retained-line\n' * 35 +
-                                    'last-visible-marker')
+                                    'last-visible-marker', legacy=True)
         events = [json.loads(line) for line in journal.read_bytes().splitlines()]
         # Keep source references intact while placing non-rendered metadata
         # before the first visible event, beyond the reader's byte-page size.
@@ -456,7 +457,7 @@ class WorkspaceTests(unittest.TestCase):
         other = WorkspaceTests()
         other.setUp()
         self.addCleanup(other.doCleanups)
-        background = other.seed_session('background-history-marker')
+        background = other.seed_session('background-history-marker', legacy=True)
         last = json.loads(background.read_bytes().splitlines()[-1])
         with background.open('ab') as stream:
             for _ in range(128):

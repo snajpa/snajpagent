@@ -110,8 +110,11 @@ snag_store_persist_binary_session(struct snag_store *store, struct snag_session 
         return snag_fail(error, error_size, EINVAL, "invalid native creation owners");
     if (error && error_size) error[0] = '\0';
     struct snag_directory_lock names = {.fd = -1};
-    struct snag_session candidate;
-    snag_session_init(&candidate);
+    struct snag_session *sessions = malloc(2u * sizeof(*sessions));
+    if (!sessions) return snag_errno(ENOMEM);
+    struct snag_session *candidate = &sessions[0];
+    struct snag_session *old = &sessions[1];
+    snag_session_init(candidate);
     struct snag_buf index = {.max = SIZE_MAX};
     char nonce[SNAG_ID_HEX_LEN + 1u];
     char stage[2u * SNAG_ID_HEX_LEN + sizeof(".creating--")];
@@ -133,26 +136,26 @@ snag_store_persist_binary_session(struct snag_store *store, struct snag_session 
     parent = snag_path_join(store->root_path, "sessions");
     if (!parent) goto out;
     final_path = snag_path_join(parent, prepared->id);
-    candidate.dir_path = snag_path_join(parent, stage);
-    if (!final_path || !candidate.dir_path) goto out;
+    candidate->dir_path = snag_path_join(parent, stage);
+    if (!final_path || !candidate->dir_path) goto out;
     if (snag_mkdir_private_at(store->sessions_fd, stage) < 0) goto out;
     created = true;
-    candidate.dir_fd = snag_open_read_security_at(store->sessions_fd, stage, true);
-    if (candidate.dir_fd < 0 || snag_store_verify_private_fd(candidate.dir_fd, true,
+    candidate->dir_fd = snag_open_read_security_at(store->sessions_fd, stage, true);
+    if (candidate->dir_fd < 0 || snag_store_verify_private_fd(candidate->dir_fd, true,
             "provisional native session directory", error, error_size) < 0) goto out;
-    candidate.lock_fd = snag_create_private_at(candidate.dir_fd, "lock", true);
-    if (candidate.lock_fd < 0 || snag_lock_file(candidate.lock_fd, false) < 0 ||
-        snag_sync_file(candidate.lock_fd) < 0) goto out;
-    candidate.log_fd = snag_create_private_at(candidate.dir_fd, "journal.bin", true);
-    if (candidate.log_fd < 0 ||
-        snag_store_seed_binary_session(prepared, &candidate, &index, error, error_size) < 0)
+    candidate->lock_fd = snag_create_private_at(candidate->dir_fd, "lock", true);
+    if (candidate->lock_fd < 0 || snag_lock_file(candidate->lock_fd, false) < 0 ||
+        snag_sync_file(candidate->lock_fd) < 0) goto out;
+    candidate->log_fd = snag_create_private_at(candidate->dir_fd, "journal.bin", true);
+    if (candidate->log_fd < 0 ||
+        snag_store_seed_binary_session(prepared, candidate, &index, error, error_size) < 0)
         goto out;
-    index_fd = snag_create_private_at(candidate.dir_fd, "history.idx", true);
+    index_fd = snag_create_private_at(candidate->dir_fd, "history.idx", true);
     if (index_fd < 0 || snag_write_full(index_fd, index.data, index.len) < 0 ||
         snag_sync_file(index_fd) < 0) goto out;
     const char *slots[2] = {"checkpoint.0", "checkpoint.1"};
     for (size_t i = 0u; i < 2u; ++i) {
-        int fd = snag_create_private_at(candidate.dir_fd, slots[i], true);
+        int fd = snag_create_private_at(candidate->dir_fd, slots[i], true);
         if (fd < 0) goto out;
         int synced = snag_sync_file(fd);
         int saved = errno;
@@ -161,9 +164,9 @@ snag_store_persist_binary_session(struct snag_store *store, struct snag_session 
         if (synced < 0) goto out;
     }
     int query_fd = index_fd;
-    if (snag_session_binary_index_adopt(&candidate, index_fd, error, error_size) < 0) goto out;
+    if (snag_session_binary_index_adopt(candidate, index_fd, error, error_size) < 0) goto out;
     index_fd = -1;
-    if (bootstrap_native_checkpoint(&candidate, query_fd, NULL, error, error_size) < 0 ||
+    if (bootstrap_native_checkpoint(candidate, query_fd, NULL, error, error_size) < 0 ||
         snag_sync_file(query_fd) < 0) goto out;
     if (snag_directory_lock_acquire(store->sessions_fd, &names) < 0 ||
         native_name_available(store, prepared->id, error, error_size) < 0 ||
@@ -171,13 +174,13 @@ snag_store_persist_binary_session(struct snag_store *store, struct snag_session 
         goto out;
     published = true;
     int unlock_error = snag_directory_lock_release(&names) < 0 ? errno : 0;
-    free(candidate.dir_path);
-    candidate.dir_path = final_path;
+    free(candidate->dir_path);
+    candidate->dir_path = final_path;
     final_path = NULL;
-    struct snag_session old = *prepared;
-    *prepared = candidate;
-    snag_session_init(&candidate);
-    snag_session_close(&old);
+    *old = *prepared;
+    *prepared = *candidate;
+    snag_session_init(candidate);
+    snag_session_close(old);
     /* The public name now belongs to the native owner even if durability fails. */
     int synced = snag_sync_dir(store->sessions_fd);
     if (synced || unlock_error) {
@@ -199,12 +202,13 @@ out:
         char *reason = strdup(message);
         if (reason) {
             (void)snag_errorf(error, error_size, "%s; provisional native session: %s",
-                reason, candidate.dir_path);
+                reason, candidate->dir_path);
             free(reason);
         }
     }
     if (index_fd >= 0) (void)close(index_fd);
-    snag_session_close(&candidate);
+    snag_session_close(candidate);
+    free(sessions);
     snag_buf_free(&index);
     free(parent);
     free(final_path);
@@ -547,19 +551,23 @@ snag_store_import_binary_journal(struct snag_session *source, int destination,
         return snag_fail(error, error_size, errno, "cannot position journal staging file");
     }
     struct snag_binary_checkpoint_sources sources = {0};
-    struct snag_session legacy, native, staged;
-    snag_session_init(&legacy);
-    snag_session_init(&native);
-    snag_session_init(&staged);
-    memcpy(staged.id, source->id, sizeof(staged.id));
+    struct snag_session *sessions = malloc(3u * sizeof(*sessions));
+    if (!sessions) return snag_errno(ENOMEM);
+    struct snag_session *legacy = &sessions[0];
+    struct snag_session *native = &sessions[1];
+    struct snag_session *staged = &sessions[2];
+    snag_session_init(legacy);
+    snag_session_init(native);
+    snag_session_init(staged);
+    memcpy(staged->id, source->id, sizeof(staged->id));
     /* Borrow descriptors only for the read-only verifier; never close them. */
-    staged.log_fd = destination;
-    staged.lock_fd = source->lock_fd;
+    staged->log_fd = destination;
+    staged->lock_fd = source->lock_fd;
     struct import_writer writer = {.fd = destination, .source_fd = source->log_fd,
         .payload = {.max = SNAG_MAX_EVENT_LINE},
         .producer.field = {.max = SNAG_MAX_EVENT_LINE}};
     snag_sha256_init(&writer.semantic);
-    int rc = snag_store_reconcile_legacy(source, &legacy, import_event, &writer,
+    int rc = snag_store_reconcile_legacy(source, legacy, import_event, &writer,
         &result->legacy, error, error_size);
     if (rc < 0) goto out;
     if (flush_batch(&writer) < 0) {
@@ -567,10 +575,10 @@ snag_store_import_binary_journal(struct snag_session *source, int destination,
         goto out;
     }
     snag_sha256_final(&writer.semantic, result->semantic_digest);
-    memcpy(result->source_sha256, legacy.prev_sha256, sizeof(result->source_sha256));
+    memcpy(result->source_sha256, legacy->prev_sha256, sizeof(result->source_sha256));
     struct snag_sha256 semantic;
     snag_sha256_init(&semantic);
-    rc = snag_store_reconcile_binary(&staged, &native, semantic_event, &semantic,
+    rc = snag_store_reconcile_binary(staged, native, semantic_event, &semantic,
         &result->native, &sources, error, error_size);
     if (rc < 0) goto out;
     unsigned char digest[32];
@@ -581,7 +589,7 @@ snag_store_import_binary_journal(struct snag_session *source, int destination,
             "staged native journal differs from legacy source");
         goto out;
     }
-    if (compare_core(&legacy, &native) < 0) {
+    if (compare_core(legacy, native) < 0) {
         rc = snag_fail(error, error_size, errno, "cannot verify staged native core state");
         goto out;
     }
@@ -591,17 +599,18 @@ snag_store_import_binary_journal(struct snag_session *source, int destination,
         goto out;
     }
     snag_session_close(restored);
-    *restored = native;
+    *restored = *native;
     result->sources = sources;
     sources = (struct snag_binary_checkpoint_sources){0};
-    snag_session_init(&native);
+    snag_session_init(native);
 out:
     {
         int code = errno;
         snag_binary_checkpoint_sources_free(&sources);
         snag_binary_producer_free(&writer.producer);
-        snag_session_close(&native);
-        snag_session_close(&legacy);
+        snag_session_close(native);
+        snag_session_close(legacy);
+        free(sessions);
         free(writer.records);
         snag_buf_free(&writer.payload);
         errno = code;
@@ -648,14 +657,19 @@ snag_store_stage_binary_session(struct snag_session *source, struct snag_session
         snag_seek(target->log_fd, 0, SEEK_SET) < 0 || snag_seek(index_fd, 0, SEEK_SET) < 0) {
         return -1;
     }
-    struct snag_session legacy, verified, candidate, view;
-    snag_session_init(&legacy);
-    snag_session_init(&verified);
-    snag_session_init(&candidate);
-    snag_session_init(&view);
-    memcpy(view.id, source->id, sizeof(view.id));
-    view.log_fd = target->log_fd;
-    view.lock_fd = target->lock_fd;
+    struct snag_session *sessions = malloc(4u * sizeof(*sessions));
+    if (!sessions) return snag_errno(ENOMEM);
+    struct snag_session *legacy = &sessions[0];
+    struct snag_session *verified = &sessions[1];
+    struct snag_session *candidate = &sessions[2];
+    struct snag_session *view = &sessions[3];
+    snag_session_init(legacy);
+    snag_session_init(verified);
+    snag_session_init(candidate);
+    snag_session_init(view);
+    memcpy(view->id, source->id, sizeof(view->id));
+    view->log_fd = target->log_fd;
+    view->lock_fd = target->lock_fd;
     struct snag_binary_checkpoint_sources sources = {0};
     struct import_writer writer = {.fd = target->log_fd, .source_fd = source->log_fd,
         .indexed = true, .stream_index = true, .index_fd = index_fd, .control = control,
@@ -663,7 +677,7 @@ snag_store_stage_binary_session(struct snag_session *source, struct snag_session
         .payload = {.max = SNAG_MAX_EVENT_LINE},
         .producer.field = {.max = SNAG_MAX_EVENT_LINE}};
     snag_sha256_init(&writer.semantic);
-    int rc = snag_store_reconcile_legacy(source, &legacy, import_event, &writer,
+    int rc = snag_store_reconcile_legacy(source, legacy, import_event, &writer,
         &result->legacy, error, error_size);
     if (rc < 0) goto done;
     if (flush_batch(&writer) < 0 || snag_sync_file(target->log_fd) < 0 ||
@@ -672,25 +686,25 @@ snag_store_stage_binary_session(struct snag_session *source, struct snag_session
         goto done;
     }
     snag_sha256_final(&writer.semantic, result->semantic_digest);
-    memcpy(result->source_sha256, legacy.prev_sha256, sizeof(result->source_sha256));
+    memcpy(result->source_sha256, legacy->prev_sha256, sizeof(result->source_sha256));
     struct stopped_semantic semantic = {.control = control};
     snag_sha256_init(&semantic.hash);
-    rc = snag_store_reconcile_binary(&view, &verified, stopped_semantic_event, &semantic,
+    rc = snag_store_reconcile_binary(view, verified, stopped_semantic_event, &semantic,
         &result->native, &sources, error, error_size);
     if (rc < 0) goto done;
     unsigned char actual[32];
     snag_sha256_final(&semantic.hash, actual);
     if (result->native.incomplete_tail_bytes ||
         memcmp(actual, result->semantic_digest, sizeof(actual)) ||
-        compare_core(&legacy, &verified) < 0) {
+        compare_core(legacy, verified) < 0) {
         rc = snag_fail(error, error_size, EINVAL,
             "stopped native stage differs from legacy source");
         goto done;
     }
-    rc = snag_store_reconcile_binary_context(&view, &candidate, &result->native,
+    rc = snag_store_reconcile_binary_context(view, candidate, &result->native,
         &sources, control, error, error_size);
     if (rc < 0) goto done;
-    if (compare_core(&legacy, &candidate) < 0 || snag_fstat(source->log_fd, &after) < 0 ||
+    if (compare_core(legacy, candidate) < 0 || snag_fstat(source->log_fd, &after) < 0 ||
         !snag_file_unchanged(&before, &after)) {
         rc = snag_fail(error, error_size, EAGAIN, "legacy source changed during native staging");
         goto done;
@@ -703,24 +717,25 @@ snag_store_stage_binary_session(struct snag_session *source, struct snag_session
         rc = snag_fail(error, error_size, EBADMSG, "stopped native index frontier mismatch");
         goto done;
     }
-    candidate.log_fd = target->log_fd;
-    candidate.lock_fd = target->lock_fd;
-    rc = snag_session_bind_binary(&candidate, &writer.identity, &result->native.verified,
+    candidate->log_fd = target->log_fd;
+    candidate->lock_fd = target->lock_fd;
+    rc = snag_session_bind_binary(candidate, &writer.identity, &result->native.verified,
         &writer.tree, &writer.producer, &sources, NULL, error, error_size);
     if (rc < 0) goto done;
-    candidate.dir_fd = target->dir_fd;
-    candidate.dir_path = target->dir_path;
-    *target = candidate;
-    snag_session_init(&candidate);
+    candidate->dir_fd = target->dir_fd;
+    candidate->dir_path = target->dir_path;
+    *target = *candidate;
+    snag_session_init(candidate);
     result->sources = sources;
     sources = (struct snag_binary_checkpoint_sources){0};
 done:
     {
         int saved = errno;
-        candidate.log_fd = candidate.lock_fd = -1;
-        snag_session_close(&candidate);
-        snag_session_close(&verified);
-        snag_session_close(&legacy);
+        candidate->log_fd = candidate->lock_fd = -1;
+        snag_session_close(candidate);
+        snag_session_close(verified);
+        snag_session_close(legacy);
+        free(sessions);
         snag_binary_checkpoint_sources_free(&sources);
         snag_binary_producer_free(&writer.producer);
         free(writer.records);
@@ -755,29 +770,30 @@ snag_store_convert_binary_directory(struct snag_session *source,
     int index = -1;
     bool created = false;
     bool published = false;
-    struct snag_session candidate;
-    snag_session_init(&candidate);
+    struct snag_session *candidate = malloc(sizeof(*candidate));
+    if (!candidate) return snag_errno(ENOMEM);
+    snag_session_init(candidate);
     char nonce[SNAG_ID_HEX_LEN + 1u];
     char stage[SNAG_ID_HEX_LEN + sizeof(".converting-")];
     int rc = -1;
     if (snag_random_id(nonce) < 0) goto done;
     (void)snprintf(stage, sizeof(stage), ".converting-%s", nonce);
-    candidate.dir_path = snag_path_join(source->dir_path, stage);
-    if (!candidate.dir_path || snag_mkdir_private_at(source->dir_fd, stage) < 0) goto done;
+    candidate->dir_path = snag_path_join(source->dir_path, stage);
+    if (!candidate->dir_path || snag_mkdir_private_at(source->dir_fd, stage) < 0) goto done;
     created = true;
-    candidate.dir_fd = snag_open_read_security_at(source->dir_fd, stage, true);
-    if (candidate.dir_fd < 0 || snag_store_verify_private_fd(candidate.dir_fd, true,
+    candidate->dir_fd = snag_open_read_security_at(source->dir_fd, stage, true);
+    if (candidate->dir_fd < 0 || snag_store_verify_private_fd(candidate->dir_fd, true,
             "provisional conversion directory", error, error_size) < 0) goto done;
-    candidate.lock_fd = snag_create_private_at(candidate.dir_fd, "lock", true);
-    candidate.log_fd = snag_create_private_at(candidate.dir_fd, "journal.bin", true);
-    index = snag_create_private_at(candidate.dir_fd, "history.idx", true);
-    if (candidate.lock_fd < 0 || candidate.log_fd < 0 || index < 0 ||
-        snag_lock_file(candidate.lock_fd, false) < 0 ||
-        snag_store_stage_binary_session(source, &candidate, index, result,
+    candidate->lock_fd = snag_create_private_at(candidate->dir_fd, "lock", true);
+    candidate->log_fd = snag_create_private_at(candidate->dir_fd, "journal.bin", true);
+    index = snag_create_private_at(candidate->dir_fd, "history.idx", true);
+    if (candidate->lock_fd < 0 || candidate->log_fd < 0 || index < 0 ||
+        snag_lock_file(candidate->lock_fd, false) < 0 ||
+        snag_store_stage_binary_session(source, candidate, index, result,
             control, error, error_size) < 0) goto done;
     const char *slots[2] = {"checkpoint.0", "checkpoint.1"};
     for (size_t i = 0u; i < 2u; ++i) {
-        int fd = snag_create_private_at(candidate.dir_fd, slots[i], true);
+        int fd = snag_create_private_at(candidate->dir_fd, slots[i], true);
         if (fd < 0) goto done;
         int synced = snag_sync_file(fd);
         int saved = errno;
@@ -786,10 +802,10 @@ snag_store_convert_binary_directory(struct snag_session *source,
         if (synced < 0) goto done;
     }
     int query = index;
-    if (snag_session_binary_index_adopt(&candidate, index, error, error_size) < 0) goto done;
+    if (snag_session_binary_index_adopt(candidate, index, error, error_size) < 0) goto done;
     index = -1;
-    if (bootstrap_native_checkpoint(&candidate, query, control, error, error_size) < 0 ||
-        snag_sync_file(query) < 0 || snag_sync_dir(candidate.dir_fd) < 0 ||
+    if (bootstrap_native_checkpoint(candidate, query, control, error, error_size) < 0 ||
+        snag_sync_file(query) < 0 || snag_sync_dir(candidate->dir_fd) < 0 ||
         snag_sync_dir(source->dir_fd) < 0) goto done;
     if (control && control->cancelled && control->cancelled(control->opaque)) {
         rc = snag_fail(error, error_size, ECANCELED, "stopped conversion cancelled before cutover");
@@ -828,27 +844,28 @@ snag_store_convert_binary_directory(struct snag_session *source,
         goto done;
     }
     /* Stop the provisional publisher before moving its directory-bound slots. */
-    snag_session_unbind_binary(&candidate);
+    snag_session_unbind_binary(candidate);
     const char *derived[3] = {"history.idx", "checkpoint.0", "checkpoint.1"};
     for (size_t i = 0u; i < 3u; ++i) {
-        if (snag_rename_at(candidate.dir_fd, derived[i], source->dir_fd, derived[i]) < 0)
+        if (snag_rename_at(candidate->dir_fd, derived[i], source->dir_fd, derived[i]) < 0)
             goto done;
     }
     if (!retained && snag_rename_at(source->dir_fd, "events.jsonl", rollback,
             "events.jsonl") < 0) goto done;
-    if (snag_sync_dir(rollback) < 0 || snag_sync_dir(candidate.dir_fd) < 0 ||
+    if (snag_sync_dir(rollback) < 0 || snag_sync_dir(candidate->dir_fd) < 0 ||
         snag_sync_dir(source->dir_fd) < 0 ||
-        snag_rename_at(candidate.dir_fd, "journal.bin", source->dir_fd, "journal.bin") < 0)
+        snag_rename_at(candidate->dir_fd, "journal.bin", source->dir_fd, "journal.bin") < 0)
         goto done;
     published = true;
-    if (snag_sync_dir(candidate.dir_fd) < 0 || snag_sync_dir(source->dir_fd) < 0) goto done;
+    if (snag_sync_dir(candidate->dir_fd) < 0 || snag_sync_dir(source->dir_fd) < 0) goto done;
     rc = 0;
 done:
     {
         int saved = errno;
         if (index >= 0) (void)close(index);
         if (rollback >= 0) (void)close(rollback);
-        snag_session_close(&candidate);
+        snag_session_close(candidate);
+        free(candidate);
         if (rc < 0) {
             if (published) {
                 (void)snag_fail(error, error_size, saved,
@@ -896,15 +913,17 @@ snag_store_seed_binary_session(struct snag_session *prepared, struct snag_sessio
         .index = {.max = index->max}, .indexed = true,
         .producer.field = {.max = SNAG_MAX_EVENT_LINE}};
     snag_sha256_init(&writer.semantic);
-    struct snag_session source;
-    struct snag_session candidate;
-    struct snag_session verified;
-    snag_session_init(&source);
-    snag_session_init(&candidate);
-    snag_session_init(&verified);
-    memcpy(source.id, prepared->id, sizeof(source.id));
-    source.log_fd = target->log_fd;
-    source.lock_fd = target->lock_fd;
+    struct snag_session *sessions = malloc(3u * sizeof(*sessions));
+    if (!sessions) return snag_errno(ENOMEM);
+    struct snag_session *source = &sessions[0];
+    struct snag_session *candidate = &sessions[1];
+    struct snag_session *verified = &sessions[2];
+    snag_session_init(source);
+    snag_session_init(candidate);
+    snag_session_init(verified);
+    memcpy(source->id, prepared->id, sizeof(source->id));
+    source->log_fd = target->log_fd;
+    source->lock_fd = target->lock_fd;
     struct snag_binary_recovery recovery;
     struct snag_binary_checkpoint_sources sources = {0};
     int rc = snag_session_each_event(prepared, import_event, &writer, error, error_size);
@@ -920,7 +939,7 @@ snag_store_seed_binary_session(struct snag_session *prepared, struct snag_sessio
     }
     struct snag_sha256 semantic;
     snag_sha256_init(&semantic);
-    rc = snag_store_reconcile_binary(&source, &verified, semantic_event, &semantic,
+    rc = snag_store_reconcile_binary(source, verified, semantic_event, &semantic,
         &recovery, NULL, error, error_size);
     if (rc < 0) goto done;
     unsigned char expected[32];
@@ -928,31 +947,32 @@ snag_store_seed_binary_session(struct snag_session *prepared, struct snag_sessio
     snag_sha256_final(&writer.semantic, expected);
     snag_sha256_final(&semantic, actual);
     if (recovery.incomplete_tail_bytes || memcmp(expected, actual, sizeof(actual)) ||
-        compare_core(prepared, &verified) < 0) {
+        compare_core(prepared, verified) < 0) {
         rc = snag_fail(error, error_size, EINVAL, "native seed differs from its prepared source");
         goto done;
     }
-    rc = snag_store_reconcile_binary_context(&source, &candidate, &recovery, &sources,
+    rc = snag_store_reconcile_binary_context(source, candidate, &recovery, &sources,
         NULL, error, error_size);
     if (rc < 0) goto done;
-    candidate.log_fd = target->log_fd;
-    candidate.lock_fd = target->lock_fd;
-    rc = snag_session_bind_binary(&candidate, &writer.identity, &recovery.verified,
+    candidate->log_fd = target->log_fd;
+    candidate->lock_fd = target->lock_fd;
+    rc = snag_session_bind_binary(candidate, &writer.identity, &recovery.verified,
         &writer.tree, &writer.producer, &sources, NULL, error, error_size);
     if (rc < 0) goto done;
-    candidate.dir_fd = target->dir_fd;
-    candidate.dir_path = target->dir_path;
-    *target = candidate;
-    snag_session_init(&candidate);
+    candidate->dir_fd = target->dir_fd;
+    candidate->dir_path = target->dir_path;
+    *target = *candidate;
+    snag_session_init(candidate);
     snag_buf_free(index);
     *index = writer.index;
     writer.index = (struct snag_buf){0};
 done:
     {
         int saved = errno;
-        candidate.log_fd = candidate.lock_fd = -1;
-        snag_session_close(&candidate);
-        snag_session_close(&verified);
+        candidate->log_fd = candidate->lock_fd = -1;
+        snag_session_close(candidate);
+        snag_session_close(verified);
+        free(sessions);
         snag_binary_checkpoint_sources_free(&sources);
         snag_binary_producer_free(&writer.producer);
         free(writer.records);

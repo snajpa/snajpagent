@@ -10,8 +10,9 @@
 - Restore rejected input to its original conversation tab when the selected tab
   changes during dispatch, preserving the newly selected tab's draft.
 
-- Keep native session admission and journal-tail scratch off small worker stacks,
-  including session-list loading in statically linked Linux workspaces.
+- Keep native session admission, conversion, recovery and journal-tail scratch
+  off small worker stacks, including parallel conversion and session-list loading
+  in statically linked Linux builds.
 
 - Use logical record boundaries for workspace history paging across legacy and
   native journals, including empty panes and inline command output. Resolve

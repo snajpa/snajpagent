@@ -32,6 +32,10 @@ continue to reject altered steering text.
 Full Linux PTY report tests exposed stack exhaustion during native catalog opening
 on musl worker threads. Admission state and journal-tail scan buffers use owned
 heap storage; the reader fixture also exercises catalog opening on a 128 KiB stack.
+The parallel CLI conversion cases also reproduce small-stack exhaustion in the
+full Linux build. Provisional creation, conversion and replay states now have
+heap lifetimes; the same tests cover independent lock/failure outcomes, retained
+originals and read-only inspection of already converted sessions.
 
 The conversation-tab regression reproduces a rejected send arriving after a tab
 switch. Input restoration uses the captured originating tab and preserves the

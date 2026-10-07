@@ -916,12 +916,13 @@ reconcile_binary(struct snag_session *source, struct snag_session *restored,
     if (strcmp(id, source->id))
         return snag_fail(error, error_size, EINVAL, "native journal session identity mismatch");
     recovery->verified = anchor;
-    struct snag_session state;
-    snag_session_init(&state);
-    memcpy(state.id, id, sizeof(state.id));
+    struct snag_session *state = malloc(sizeof(*state));
+    if (!state) return snag_errno(ENOMEM);
+    snag_session_init(state);
+    memcpy(state->id, id, sizeof(state->id));
     struct replay_context context = {.fd = source->log_fd, .fn = fn, .opaque = opaque};
     int rc = -1;
-    if (replay_batches(&context, &state, &identity, &anchor, boundary, recovery,
+    if (replay_batches(&context, state, &identity, &anchor, boundary, recovery,
         error, error_size) < 0) goto done;
     if (prefix && (anchor.end != expected.end || anchor.next_seq != expected.next_seq ||
         anchor.previous != expected.previous || anchor.turns != expected.turns ||
@@ -946,7 +947,7 @@ reconcile_binary(struct snag_session *source, struct snag_session *restored,
     recovery->problem_seq = 0u;
     recovery->problem_start = recovery->problem_end = 0u;
     snag_session_close(restored);
-    *restored = state;
+    *restored = *state;
     normalize_sources(&context.sources);
     if (sources) {
         snag_binary_checkpoint_sources_free(sources);
@@ -955,7 +956,8 @@ reconcile_binary(struct snag_session *source, struct snag_session *restored,
     }
     rc = 0;
  done:
-    if (rc < 0) snag_session_close(&state);
+    if (rc < 0) snag_session_close(state);
+    free(state);
     snag_binary_checkpoint_sources_free(&context.sources);
     return rc;
 }

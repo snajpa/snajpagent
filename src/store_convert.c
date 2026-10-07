@@ -135,37 +135,41 @@ conversion_next(struct conversion_pool *pool, char id[SNAG_ID_HEX_LEN + 1u])
 static enum conversion_outcome
 conversion_session(struct snag_store *store, const char *id, char *error, size_t size)
 {
-    struct snag_session source;
-    snag_session_init(&source);
+    struct snag_session *source = malloc(sizeof(*source));
+    if (!source) {
+        (void)snag_errorf(error, size, "cannot allocate conversion state");
+        return FAILED;
+    }
+    snag_session_init(source);
     struct snag_binary_import_result result = {0};
     struct snag_context_control control = {.cancelled = conversion_cancelled};
     enum conversion_outcome outcome = FAILED;
-    if (snag_store_open_session_directory(store, &source, id, error, size) < 0) goto done;
-    int format = snag_store_open_session_files(&source, false, error, size);
+    if (snag_store_open_session_directory(store, source, id, error, size) < 0) goto done;
+    int format = snag_store_open_session_files(source, false, error, size);
     if (format < 0) {
         if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EBUSY) {
             outcome = SKIPPED;
             (void)snag_errorf(error, size, "locked");
             goto done;
         }
-        if (errno != ENOENT || source.lock_fd < 0 || source.log_fd >= 0) goto done;
+        if (errno != ENOENT || source->lock_fd < 0 || source->log_fd >= 0) goto done;
         /* The original lock still guards an interrupted publication gap. */
-        int retained = snag_open_read_security_at(source.dir_fd, ".legacy-source", true);
+        int retained = snag_open_read_security_at(source->dir_fd, ".legacy-source", true);
         if (retained < 0) goto done;
         if (snag_store_verify_private_fd(retained, true, "retained legacy directory",
                 error, size) < 0) {
             (void)close(retained);
             goto done;
         }
-        source.log_fd = snag_open_read_security_at(retained, "events.jsonl", false);
+        source->log_fd = snag_open_read_security_at(retained, "events.jsonl", false);
         int saved = errno;
         (void)close(retained);
         errno = saved;
-        if (source.log_fd < 0 || snag_store_verify_private_fd(source.log_fd, false,
+        if (source->log_fd < 0 || snag_store_verify_private_fd(source->log_fd, false,
                 "retained legacy journal", error, size) < 0) goto done;
         snag_file_info info;
-        if (snag_fstat(source.log_fd, &info) < 0) goto done;
-        source.log_end = info.st_size;
+        if (snag_fstat(source->log_fd, &info) < 0) goto done;
+        source->log_end = info.st_size;
         format = 0;
     }
     if (conversion_cancelled(NULL)) {
@@ -175,17 +179,17 @@ conversion_session(struct snag_store *store, const char *id, char *error, size_t
     }
     if (format) {
         snag_file_info info;
-        if (snag_fstat(source.log_fd, &info) < 0) goto done;
+        if (snag_fstat(source->log_fd, &info) < 0) goto done;
         /* Immutable admission keeps tail bytes; extent equality below rejects
          * incomplete native journals without truncation or cache writes. */
-        source.snapshot_read_only = true;
-        if (snag_store_load_binary_session(&source, SNAG_TAIL_IGNORE, error, size) < 0) goto done;
-        if (source.log_end != info.st_size) {
+        source->snapshot_read_only = true;
+        if (snag_store_load_binary_session(source, SNAG_TAIL_IGNORE, error, size) < 0) goto done;
+        if (source->log_end != info.st_size) {
             (void)snag_fail(error, size, EBADMSG, "native journal has an unverified tail");
             goto done;
         }
         outcome = CURRENT;
-    } else if (!snag_store_convert_binary_directory(&source, &result, &control, error, size)) {
+    } else if (!snag_store_convert_binary_directory(source, &result, &control, error, size)) {
         outcome = CONVERTED;
         if (result.legacy.incomplete_tail_bytes) {
             (void)snag_errorf(error, size, "unsealed source tail retained");
@@ -199,7 +203,8 @@ done:
         (void)snag_errorf(error, size, "%s", strerror(errno ? errno : EIO));
     }
     snag_binary_checkpoint_sources_free(&result.sources);
-    snag_session_close(&source);
+    snag_session_close(source);
+    free(source);
     return outcome;
 }
 

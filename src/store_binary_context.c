@@ -708,8 +708,9 @@ snag_store_recover_binary_context(struct snag_session *session,
     }
     if (error_size) error[0] = '\0';
     if (checkpoint_cancelled(control, error, error_size) < 0) return -1;
-    struct snag_session candidate;
-    snag_session_init(&candidate);
+    struct snag_session *candidate = malloc(sizeof(*candidate));
+    if (!candidate) return snag_errno(ENOMEM);
+    snag_session_init(candidate);
     struct snag_binary_checkpoint_sources current = {0};
     struct snag_binary_index_tree tree;
     struct snag_binary_anchor through;
@@ -729,24 +730,25 @@ snag_store_recover_binary_context(struct snag_session *session,
     uint64_t floor = through.end > window ? through.end - window : SNAG_BINARY_HEADER_SIZE;
     if (floor < SNAG_BINARY_HEADER_SIZE) floor = SNAG_BINARY_HEADER_SIZE;
     if (checkpoint_images_open(session, images, error, error_size) < 0 ||
-        snag_store_admit_binary_context_checkpoint(session, &candidate, images, floor, NULL,
+        snag_store_admit_binary_context_checkpoint(session, candidate, images, floor, NULL,
             &recovery, NULL, &admission, control, error, error_size) < 0) goto done;
     unsigned char expected_root[32], recovered_root[32];
-    if (!same_anchor(&through, &recovery.verified) || strcmp(session->id, candidate.id) ||
+    if (!same_anchor(&through, &recovery.verified) || strcmp(session->id, candidate->id) ||
         snag_binary_index_tree_root(&tree, expected_root) < 0 ||
         snag_binary_index_tree_root(&admission.tree, recovered_root) < 0 ||
         memcmp(expected_root, recovered_root, sizeof(expected_root))) {
         snag_fail(error, error_size, ESTALE, "native provider recovery boundary changed");
         goto done;
     }
-    rc = snag_context_capture_take(&candidate, control, capture, error, error_size);
+    rc = snag_context_capture_take(candidate, control, capture, error, error_size);
 done:
     if (rc < 0 && error_size && !error[0]) {
         snag_errorf(error, error_size, "cannot recover native provider context: %s",
             strerror(errno));
     }
     int saved = errno;
-    snag_session_close(&candidate);
+    snag_session_close(candidate);
+    free(candidate);
     for (size_t i = 0u; i < 2u; ++i) {
         if (images[i] >= 0) (void)close(images[i]);
     }
@@ -888,8 +890,9 @@ verify_checkpoint(int fd, const struct snag_binary_anchor *boundary,
     const json_t *recent, *history;
     if (snag_context_capture_seam(state, &recent, &history) < 0) return -1;
     struct snag_buf core = {.max = SIZE_MAX}, provider = {.max = SIZE_MAX};
-    struct snag_session loaded;
-    snag_session_init(&loaded);
+    struct snag_session *loaded = malloc(sizeof(*loaded));
+    if (!loaded) return snag_errno(ENOMEM);
+    snag_session_init(loaded);
     struct snag_binary_checkpoint_sources loaded_origins = {0};
     struct snag_context_capture *capture = NULL;
     json_t *events = NULL, *history_events = NULL;
@@ -906,22 +909,23 @@ verify_checkpoint(int fd, const struct snag_binary_anchor *boundary,
     /* Keep strict replay as the source/epoch authority, while materializing the
      * returned state from the candidate sections. Payload values are shared from
      * its verified canonical pool; no weaker inert record decoder is needed. */
-    if (snag_binary_checkpoint_core_read(fd, &frame, NULL, &loaded, &loaded_origins) < 0 ||
+    if (snag_binary_checkpoint_core_read(fd, &frame, NULL, loaded, &loaded_origins) < 0 ||
         snag_binary_checkpoint_provider_materialize(frame.provider.data, frame.provider.size,
             recent, history, &events, &history_events) < 0) goto done;
     capture = snag_context_capture_new(control);
     if (!capture) { errno = ENOMEM; goto done; }
     if (snag_context_capture_seed(capture, events, history_events) < 0 ||
-        snag_context_capture_bind(&capture, &loaded, error, error_size) < 0) goto done;
+        snag_context_capture_bind(&capture, loaded, error, error_size) < 0) goto done;
     snag_session_close(state);
-    *state = loaded;
-    snag_session_init(&loaded);
+    *state = *loaded;
+    snag_session_init(loaded);
     snag_binary_checkpoint_sources_free(origins);
     *origins = loaded_origins;
     loaded_origins = (struct snag_binary_checkpoint_sources){0};
     rc = 0;
 done:
-    snag_session_close(&loaded);
+    snag_session_close(loaded);
+    free(loaded);
     snag_binary_checkpoint_sources_free(&loaded_origins);
     snag_context_capture_free(capture);
     json_decref(events);
@@ -948,25 +952,29 @@ reconcile_context(struct snag_session *source, struct snag_session *restored,
         return snag_fail(error, error_size, EINVAL, "cannot inspect native context source");
     if (snag_fstat(source->log_fd, &before) < 0)
         return snag_fail(error, error_size, errno, "cannot inspect native context source");
+    struct snag_session *candidate = malloc(sizeof(*candidate));
+    if (!candidate) return snag_errno(ENOMEM);
     struct snag_context_capture *capture = snag_context_capture_new(control);
-    if (!capture) return snag_fail(error, error_size, ENOMEM, "cannot capture provider context");
-    struct snag_session candidate;
-    snag_session_init(&candidate);
+    if (!capture) {
+        free(candidate);
+        return snag_fail(error, error_size, ENOMEM, "cannot capture provider context");
+    }
+    snag_session_init(candidate);
     struct snag_binary_checkpoint_sources origins = {0};
     int rc = prefix ?
-        snag_store_reconcile_binary_prefix(source, &candidate, prefix, snag_context_capture_event,
+        snag_store_reconcile_binary_prefix(source, candidate, prefix, snag_context_capture_event,
             capture, recovery, sources || checkpoint ? &origins : NULL, error, error_size) :
-        snag_store_reconcile_binary(source, &candidate, snag_context_capture_event, capture,
+        snag_store_reconcile_binary(source, candidate, snag_context_capture_event, capture,
             recovery, sources || checkpoint ? &origins : NULL, error, error_size);
     struct source_walk walk = {.fd = source->log_fd, .control = control,
         .verified = &recovery->verified};
     if (rc == 0) {
-        rc = snag_context_capture_sources(capture, &candidate, walk_sources, &walk,
+        rc = snag_context_capture_sources(capture, candidate, walk_sources, &walk,
             error, error_size);
     }
-    if (rc == 0) rc = snag_context_capture_bind(&capture, &candidate, error, error_size);
+    if (rc == 0) rc = snag_context_capture_bind(&capture, candidate, error, error_size);
     if (rc == 0 && checkpoint) {
-        rc = verify_checkpoint(source->log_fd, &recovery->verified, &candidate, &origins,
+        rc = verify_checkpoint(source->log_fd, &recovery->verified, candidate, &origins,
             checkpoint, checkpoint_size, control, error, error_size);
         if (rc == 0 && control && control->cancelled && control->cancelled(control->opaque)) {
             rc = snag_fail(error, error_size, ECANCELED, "checkpoint verification cancelled");
@@ -974,15 +982,15 @@ reconcile_context(struct snag_session *source, struct snag_session *restored,
     }
     if (rc == 0 && suffix) {
         uint64_t prefix_batches = recovery->batches;
-        rc = snag_context_capture_take(&candidate, control, &capture, error, error_size);
+        rc = snag_context_capture_take(candidate, control, &capture, error, error_size);
         if (rc == 0) {
-            rc = snag_store_reduce_binary_suffix(source, &candidate, &recovery->verified,
+            rc = snag_store_reduce_binary_suffix(source, candidate, &recovery->verified,
                 snag_context_capture_event, capture, recovery, &origins, error, error_size);
             recovery->batches += prefix_batches;
         }
-        if (rc == 0) rc = snag_context_capture_sources(capture, &candidate, walk_sources,
+        if (rc == 0) rc = snag_context_capture_sources(capture, candidate, walk_sources,
             &walk, error, error_size);
-        if (rc == 0) rc = snag_context_capture_bind(&capture, &candidate, error, error_size);
+        if (rc == 0) rc = snag_context_capture_bind(&capture, candidate, error, error_size);
         if (rc == 0 && control && control->cancelled && control->cancelled(control->opaque))
             rc = snag_fail(error, error_size, ECANCELED, "checkpoint suffix replay cancelled");
     }
@@ -993,8 +1001,8 @@ reconcile_context(struct snag_session *source, struct snag_session *restored,
     }
     if (rc == 0) {
         snag_session_close(restored);
-        *restored = candidate;
-        snag_session_init(&candidate);
+        *restored = *candidate;
+        snag_session_init(candidate);
         if (sources) {
             snag_binary_checkpoint_sources_free(sources);
             *sources = origins;
@@ -1002,7 +1010,8 @@ reconcile_context(struct snag_session *source, struct snag_session *restored,
         }
     }
     if (rc < 0) recovery->incomplete_tail_bytes = 0u;
-    snag_session_close(&candidate);
+    snag_session_close(candidate);
+    free(candidate);
     snag_binary_checkpoint_sources_free(&origins);
     snag_context_capture_free(capture);
     return rc;

@@ -5,6 +5,7 @@
 
 #include <errno.h>
 #include <limits.h>
+#include <stdlib.h>
 #include <string.h>
 
 static const unsigned char journal_magic[8] = "SNAGJNL";
@@ -720,14 +721,25 @@ done:
 static int
 tail_is_open(int fd, uint64_t start, uint64_t end)
 {
-    unsigned char bytes[65536];
+    size_t capacity = end - start > 65536u ? 65536u : (size_t)(end - start);
+    if (!capacity) return 1;
+    unsigned char *bytes = malloc(capacity);
+    if (!bytes) return -1;
+    int rc = 1;
     while (start < end) {
-        size_t size = end - start > sizeof(bytes) ? sizeof(bytes) : (size_t)(end - start);
-        if (read_full_at(fd, bytes, size, start) < 0) return -1;
-        if (memchr(bytes, 0, size)) return invalid();
+        size_t size = end - start > capacity ? capacity : (size_t)(end - start);
+        if (read_full_at(fd, bytes, size, start) < 0) {
+            rc = -1;
+            break;
+        }
+        if (memchr(bytes, 0, size)) {
+            rc = invalid();
+            break;
+        }
         start += size;
     }
-    return 1;
+    free(bytes);
+    return rc;
 }
 
 static int

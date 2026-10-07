@@ -490,8 +490,9 @@ snag_binary_checkpoint_core_read(int fd, const struct snag_binary_checkpoint_fra
     if (fd < 0 || !frame || !out || !out_sources || !frame->boundary.next_seq ||
         frame->boundary.end < SNAG_BINARY_HEADER_SIZE || frame->boundary.end > INT64_MAX ||
         frame->boundary.turns >= frame->boundary.next_seq) return snag_errno(EINVAL);
-    struct snag_session state;
-    snag_session_init(&state);
+    struct snag_session *state = malloc(sizeof(*state));
+    if (!state) return snag_errno(ENOMEM);
+    snag_session_init(state);
     struct snag_binary_checkpoint_sources sources = {0};
     struct snag_binary_checkpoint_section blocks[BLOCKS] = {0};
     struct snag_binary_checkpoint_accounting accounting;
@@ -505,85 +506,88 @@ snag_binary_checkpoint_core_read(int fd, const struct snag_binary_checkpoint_fra
     int rc = -1;
     if (split(&frame->core, blocks, &sources, &voice) < 0) goto done;
 #define DECODE(n, f, v) snag_binary_checkpoint_##f##_decode(blocks[n].data, blocks[n].size, v)
-    if (DECODE(CONTROLS, controls, &state) < 0 ||
+    if (DECODE(CONTROLS, controls, state) < 0 ||
         DECODE(ACCOUNTING, accounting, &accounting) < 0 ||
         DECODE(TEXTS, texts, &sources.texts) < 0 || DECODE(CALLS, calls, &calls) < 0 ||
         DECODE(PROCESSES, processes, &processes) < 0 || DECODE(INPUTS, inputs, &inputs) < 0 ||
         DECODE(PAYLOADS, payloads, &payloads) < 0) goto done;
 #undef DECODE
-    bytes_hex(state.id, frame->identity.id, sizeof(frame->identity.id));
-    bytes_hex(state.prev_sha256, frame->boundary.digest, sizeof(frame->boundary.digest));
-    state.next_seq = frame->boundary.next_seq;
-    state.log_end = (int64_t)frame->boundary.end;
-    state.turn_count = frame->boundary.turns;
-    state.active_accounting = accounting.active_accounting;
-    state.usage_anchor = accounting.usage_anchor;
-    state.context_meter = accounting.context_meter;
-    state.capacity_rejection = accounting.capacity_rejection;
-    state.usage_totals = accounting.usage_totals;
+    bytes_hex(state->id, frame->identity.id, sizeof(frame->identity.id));
+    bytes_hex(state->prev_sha256, frame->boundary.digest, sizeof(frame->boundary.digest));
+    state->next_seq = frame->boundary.next_seq;
+    state->log_end = (int64_t)frame->boundary.end;
+    state->turn_count = frame->boundary.turns;
+    state->active_accounting = accounting.active_accounting;
+    state->usage_anchor = accounting.usage_anchor;
+    state->context_meter = accounting.context_meter;
+    state->capacity_rejection = accounting.capacity_rejection;
+    state->usage_totals = accounting.usage_totals;
     sources.calls = calls.source;
     const struct snag_binary_anchor *anchor = &frame->boundary;
-    if (voice && snag_binary_checkpoint_voice_read(fd, anchor, access, voice, state.id,
-        &state.voice_history) < 0) goto done;
-    if (snag_binary_checkpoint_texts_read(fd, anchor, access, &sources.texts, &state.strings) < 0 ||
-        snag_binary_checkpoint_calls_read(fd, anchor, access, &calls, &state,
-            &state.pending_calls) < 0 ||
-        snag_binary_checkpoint_processes_read(fd, anchor, access, &processes, &state,
-            &state.processes) < 0 ||
-        snag_binary_checkpoint_inputs_read(fd, anchor, access, &inputs, &state, &input_state) < 0 ||
-        snag_binary_checkpoint_payloads_read(fd, anchor, access, &payloads, &state,
+    if (voice && snag_binary_checkpoint_voice_read(fd, anchor, access, voice, state->id,
+        &state->voice_history) < 0) goto done;
+    if (snag_binary_checkpoint_texts_read(fd, anchor, access, &sources.texts,
+            &state->strings) < 0 ||
+        snag_binary_checkpoint_calls_read(fd, anchor, access, &calls, state,
+            &state->pending_calls) < 0 ||
+        snag_binary_checkpoint_processes_read(fd, anchor, access, &processes, state,
+            &state->processes) < 0 ||
+        snag_binary_checkpoint_inputs_read(fd, anchor, access, &inputs, state, &input_state) < 0 ||
+        snag_binary_checkpoint_payloads_read(fd, anchor, access, &payloads, state,
             &payload_state) < 0)
         goto done;
-    if (input_state.queue_bytes != state.pending_queue_bytes ||
-        input_state.steering_bytes != state.pending_steering_bytes ||
-        payload_state.response_public_bytes != state.response_public_bytes) {
+    if (input_state.queue_bytes != state->pending_queue_bytes ||
+        input_state.steering_bytes != state->pending_steering_bytes ||
+        payload_state.response_public_bytes != state->response_public_bytes) {
         snag_errno(EINVAL);
         goto done;
     }
-    if (json_object_update(state.strings, input_state.strings) < 0) {
+    if (json_object_update(state->strings, input_state.strings) < 0) {
         snag_errno(ENOMEM);
         goto done;
     }
     if (payload_state.resume_options &&
-        json_object_set(state.strings, "resume_options", payload_state.resume_options) < 0) {
+        json_object_set(state->strings, "resume_options", payload_state.resume_options) < 0) {
         snag_errno(ENOMEM);
         goto done;
     }
     json_decref(payload_state.resume_options);
     payload_state.resume_options = NULL;
     for (size_t i = 0u; i < sizeof(text_slots) / sizeof(*text_slots); ++i) {
-        const char *text = snag_json_string(state.strings, text_slots[i].key);
-        memcpy((unsigned char *)&state + text_slots[i].offset, &text, sizeof(text));
+        const char *text = snag_json_string(state->strings, text_slots[i].key);
+        memcpy((unsigned char *)state + text_slots[i].offset, &text, sizeof(text));
     }
-    if (!json_object_size(state.strings)) { json_decref(state.strings); state.strings = NULL; }
-    state.pending_call_count = state.pending_call_capacity = calls.count;
-    state.process_count = state.process_capacity = processes.count;
-    state.pending_input = input_state.input;
-    state.pending_queue = input_state.queue;
-    state.pending_queue_count = state.pending_queue_capacity = input_state.queue_count;
-    state.pending_steering = input_state.steering;
-    state.pending_steering_count = state.pending_steering_capacity = input_state.steering_count;
+    if (!json_object_size(state->strings)) { json_decref(state->strings); state->strings = NULL; }
+    state->pending_call_count = state->pending_call_capacity = calls.count;
+    state->process_count = state->process_capacity = processes.count;
+    state->pending_input = input_state.input;
+    state->pending_queue = input_state.queue;
+    state->pending_queue_count = state->pending_queue_capacity = input_state.queue_count;
+    state->pending_steering = input_state.steering;
+    state->pending_steering_count = state->pending_steering_capacity = input_state.steering_count;
     json_decref(input_state.strings);
     input_state = (struct snag_binary_checkpoint_inputs_state){0};
-    state.active_instructions = payload_state.instructions;
-    state.compact_output = payload_state.compact_output;
-    state.response_public = payload_state.response_public;
-    state.download_queue = payload_state.downloads;
+    state->active_instructions = payload_state.instructions;
+    state->compact_output = payload_state.compact_output;
+    state->response_public = payload_state.response_public;
+    state->download_queue = payload_state.downloads;
     payload_state = (struct snag_binary_checkpoint_payloads_state){0};
     if ((blocks[IRC].size &&
-        irc_read(fd, anchor, access, &blocks[IRC], &state.irc_conversations) < 0) ||
-        (blocks[ACTIVITY].size && activity_read(&blocks[ACTIVITY], &state) < 0) ||
-        goal_wait_read(fd, anchor, access, &blocks[GOAL_WAIT], &sources, &state) < 0 ||
-        copy_sources(&sources, &processes, &inputs, &payloads, &state) < 0 ||
-        check_sources(&sources, &payloads, &state) < 0 ||
-        snag_binary_checkpoint_epochs_check(fd, anchor, access, &sources, &state) < 0) goto done;
-    *out = state;
+        irc_read(fd, anchor, access, &blocks[IRC], &state->irc_conversations) < 0) ||
+        (blocks[ACTIVITY].size && activity_read(&blocks[ACTIVITY], state) < 0) ||
+        goal_wait_read(fd, anchor, access, &blocks[GOAL_WAIT], &sources, state) < 0 ||
+        copy_sources(&sources, &processes, &inputs, &payloads, state) < 0 ||
+        check_sources(&sources, &payloads, state) < 0 ||
+        snag_binary_checkpoint_epochs_check(fd, anchor, access, &sources, state) < 0) goto done;
+    *out = *state;
     *out_sources = sources;
+    free(state);
     return 0;
 done:
     snag_binary_checkpoint_payloads_free(&payload_state);
     snag_binary_checkpoint_inputs_free(&input_state);
     snag_binary_checkpoint_sources_free(&sources);
-    snag_session_close(&state);
+    snag_session_close(state);
+    free(state);
     return rc;
 }
