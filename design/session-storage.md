@@ -524,9 +524,17 @@ state and installs a separate writer only after source stability checks. Its
 source bytes, descriptor position and state stay unchanged; failure leaves the
 target state intact and provisional output unavailable for publication. Existing
 context control cancels legacy visits, native semantic verification and provider
-reconstruction. The complete directory converter still needs source retention,
-old-writer exclusion and publication-last ordering. Native creation and existing
-native admission use the production backend described below.
+reconstruction. Stopped directory cutover builds all four native files in a
+private `.converting-*` child and retains every original journal byte at
+`.legacy-source/events.jsonl`. It keeps the original writer-lock inode. Derived
+index and checkpoint names move first; the original journal moves into retention
+and both directories synchronize before `journal.bin` publishes native format
+selection. The legacy pathname stays absent to exclude older writers. An
+interrupted cutover can stage again from the retained source; an ambiguous
+existing retention copy stops conversion. Provisional files remain available for
+diagnosis. A sync failure after native selection reports uncertain durability
+and keeps that selection. Bulk command dispatch remains under implementation.
+Native creation and existing native admission use the production backend below.
 
 ### Legacy event names
 

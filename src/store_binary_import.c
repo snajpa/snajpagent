@@ -16,7 +16,7 @@
 
 static int
 bootstrap_native_checkpoint(struct snag_session *session, int index_fd,
-    char *error, size_t error_size)
+    const struct snag_context_control *control, char *error, size_t error_size)
 {
     struct snag_binary_anchor boundary;
     struct snag_binary_index_tree tree;
@@ -50,7 +50,8 @@ bootstrap_native_checkpoint(struct snag_session *session, int index_fd,
         snag_binary_checkpoint_access_plan_build(&plan, &boundary, &sources, session,
             provider.data, provider.len, NULL, NULL) < 0 ||
         snag_binary_checkpoint_access_plan_read(session->log_fd, index_fd, &plan, &available,
-            &tree, NULL, NULL, &selected) < 0) goto out;
+            &tree, control ? control->cancelled : NULL,
+            control ? control->opaque : NULL, &selected) < 0) goto out;
     struct snag_binary_checkpoint_index captured;
     uint64_t generations[2] = {0u, 0u};
     uint64_t sequences[2] = {0u, 0u};
@@ -162,7 +163,7 @@ snag_store_persist_binary_session(struct snag_store *store, struct snag_session 
     int query_fd = index_fd;
     if (snag_session_binary_index_adopt(&candidate, index_fd, error, error_size) < 0) goto out;
     index_fd = -1;
-    if (bootstrap_native_checkpoint(&candidate, query_fd, error, error_size) < 0 ||
+    if (bootstrap_native_checkpoint(&candidate, query_fd, NULL, error, error_size) < 0 ||
         snag_sync_file(query_fd) < 0) goto out;
     if (snag_directory_lock_acquire(store->sessions_fd, &names) < 0 ||
         native_name_available(store, prepared->id, error, error_size) < 0 ||
@@ -725,6 +726,140 @@ done:
         free(writer.records);
         snag_buf_free(&writer.payload);
         snag_buf_free(&writer.index);
+        errno = saved;
+    }
+    return rc;
+}
+
+int
+snag_store_convert_binary_directory(struct snag_session *source,
+    struct snag_binary_import_result *result, const struct snag_context_control *control,
+    char *error, size_t error_size)
+{
+    if (!source || !result || source->dir_fd < 0 || !source->dir_path ||
+        source->log_fd < 0 || source->lock_fd < 0 || source->binary || source->pending_log ||
+        source->snapshot_read_only) {
+        return snag_fail(error, error_size, EINVAL, "invalid stopped conversion directory");
+    }
+    *result = (struct snag_binary_import_result){0};
+    if (error && error_size) error[0] = '\0';
+    snag_file_info before, path;
+    if (snag_fstat(source->log_fd, &before) < 0) return -1;
+    if (!snag_lstat_at(source->dir_fd, "journal.bin", &path) || errno != ENOENT)
+        return snag_fail(error, error_size, EEXIST, "native journal already exists");
+    bool retained = snag_lstat_at(source->dir_fd, "events.jsonl", &path) < 0;
+    if (retained && errno != ENOENT) return -1;
+    if (!retained && !snag_file_unchanged(&before, &path))
+        return snag_fail(error, error_size, ESTALE, "legacy source path changed");
+    int rollback = -1;
+    int index = -1;
+    bool created = false;
+    bool published = false;
+    struct snag_session candidate;
+    snag_session_init(&candidate);
+    char nonce[SNAG_ID_HEX_LEN + 1u];
+    char stage[SNAG_ID_HEX_LEN + sizeof(".converting-")];
+    int rc = -1;
+    if (snag_random_id(nonce) < 0) goto done;
+    (void)snprintf(stage, sizeof(stage), ".converting-%s", nonce);
+    candidate.dir_path = snag_path_join(source->dir_path, stage);
+    if (!candidate.dir_path || snag_mkdir_private_at(source->dir_fd, stage) < 0) goto done;
+    created = true;
+    candidate.dir_fd = snag_open_read_security_at(source->dir_fd, stage, true);
+    if (candidate.dir_fd < 0 || snag_store_verify_private_fd(candidate.dir_fd, true,
+            "provisional conversion directory", error, error_size) < 0) goto done;
+    candidate.lock_fd = snag_create_private_at(candidate.dir_fd, "lock", true);
+    candidate.log_fd = snag_create_private_at(candidate.dir_fd, "journal.bin", true);
+    index = snag_create_private_at(candidate.dir_fd, "history.idx", true);
+    if (candidate.lock_fd < 0 || candidate.log_fd < 0 || index < 0 ||
+        snag_lock_file(candidate.lock_fd, false) < 0 ||
+        snag_store_stage_binary_session(source, &candidate, index, result,
+            control, error, error_size) < 0) goto done;
+    const char *slots[2] = {"checkpoint.0", "checkpoint.1"};
+    for (size_t i = 0u; i < 2u; ++i) {
+        int fd = snag_create_private_at(candidate.dir_fd, slots[i], true);
+        if (fd < 0) goto done;
+        int synced = snag_sync_file(fd);
+        int saved = errno;
+        (void)close(fd);
+        errno = saved;
+        if (synced < 0) goto done;
+    }
+    int query = index;
+    if (snag_session_binary_index_adopt(&candidate, index, error, error_size) < 0) goto done;
+    index = -1;
+    if (bootstrap_native_checkpoint(&candidate, query, control, error, error_size) < 0 ||
+        snag_sync_file(query) < 0 || snag_sync_dir(candidate.dir_fd) < 0 ||
+        snag_sync_dir(source->dir_fd) < 0) goto done;
+    if (control && control->cancelled && control->cancelled(control->opaque)) {
+        rc = snag_fail(error, error_size, ECANCELED, "stopped conversion cancelled before cutover");
+        goto done;
+    }
+    if (snag_fstat(source->log_fd, &path) < 0 || !snag_file_unchanged(&before, &path)) {
+        rc = snag_fail(error, error_size, EAGAIN, "legacy source changed before cutover");
+        goto done;
+    }
+    rollback = snag_open_read_security_at(source->dir_fd, ".legacy-source", true);
+    if (rollback < 0 && errno == ENOENT && !retained) {
+        if (snag_mkdir_private_at(source->dir_fd, ".legacy-source") < 0) goto done;
+        rollback = snag_open_read_security_at(source->dir_fd, ".legacy-source", true);
+    }
+    if (rollback < 0 || snag_store_verify_private_fd(rollback, true,
+            "retained legacy directory", error, error_size) < 0) goto done;
+    if (retained) {
+        if (snag_lstat_at(rollback, "events.jsonl", &path) < 0 ||
+            !snag_file_unchanged(&before, &path)) {
+            rc = snag_fail(error, error_size, ESTALE, "retained legacy source changed");
+            goto done;
+        }
+    } else {
+        if (!snag_lstat_at(rollback, "events.jsonl", &path) || errno != ENOENT) {
+            rc = snag_fail(error, error_size, EEXIST, "retained legacy source already exists");
+            goto done;
+        }
+        if (snag_lstat_at(source->dir_fd, "events.jsonl", &path) < 0 ||
+            !snag_file_unchanged(&before, &path)) {
+            rc = snag_fail(error, error_size, ESTALE, "legacy source path changed before cutover");
+            goto done;
+        }
+    }
+    if (!snag_lstat_at(source->dir_fd, "journal.bin", &path) || errno != ENOENT) {
+        rc = snag_fail(error, error_size, EEXIST, "native selection changed before cutover");
+        goto done;
+    }
+    /* Stop the provisional publisher before moving its directory-bound slots. */
+    snag_session_unbind_binary(&candidate);
+    const char *derived[3] = {"history.idx", "checkpoint.0", "checkpoint.1"};
+    for (size_t i = 0u; i < 3u; ++i) {
+        if (snag_rename_at(candidate.dir_fd, derived[i], source->dir_fd, derived[i]) < 0)
+            goto done;
+    }
+    if (!retained && snag_rename_at(source->dir_fd, "events.jsonl", rollback,
+            "events.jsonl") < 0) goto done;
+    if (snag_sync_dir(rollback) < 0 || snag_sync_dir(candidate.dir_fd) < 0 ||
+        snag_sync_dir(source->dir_fd) < 0 ||
+        snag_rename_at(candidate.dir_fd, "journal.bin", source->dir_fd, "journal.bin") < 0)
+        goto done;
+    published = true;
+    if (snag_sync_dir(candidate.dir_fd) < 0 || snag_sync_dir(source->dir_fd) < 0) goto done;
+    rc = 0;
+done:
+    {
+        int saved = errno;
+        if (index >= 0) (void)close(index);
+        if (rollback >= 0) (void)close(rollback);
+        snag_session_close(&candidate);
+        if (rc < 0) {
+            if (published) {
+                (void)snag_fail(error, error_size, saved,
+                    "native conversion selected; directory durability is uncertain: %s",
+                    strerror(saved));
+            } else if (created && error && error_size && !error[0]) {
+                (void)snag_errorf(error, error_size,
+                    "conversion incomplete; provisional files retained at %s/%s: %s",
+                    source->dir_path, stage, strerror(saved));
+            }
+        }
         errno = saved;
     }
     return rc;

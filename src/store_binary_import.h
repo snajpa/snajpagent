@@ -56,6 +56,18 @@ int snag_store_stage_binary_session(struct snag_session *source, struct snag_ses
     int index_fd, struct snag_binary_import_result *result,
     const struct snag_context_control *control, char *error, size_t error_size);
 
+/* Publish a stopped legacy directory in place while its original writer lock
+ * remains held. Source must refer to events.jsonl, or to the retained copy at
+ * .legacy-source/events.jsonl after an interrupted cutover. Keep all source
+ * bytes there and publish journal.bin last; its presence selects native format.
+ * Source state/fds remain legacy owners and the caller closes them afterwards.
+ * Failures retain identifiable provisional files. A failure after final rename
+ * reports uncertain durability and never attempts to roll back native selection.
+ * Result owns staged sources on completed construction; release on every outcome. */
+int snag_store_convert_binary_directory(struct snag_session *source,
+    struct snag_binary_import_result *result, const struct snag_context_control *control,
+    char *error, size_t error_size);
+
 /* Seed a new native writer from a strictly verified in-memory prepared journal.
  * prepared stays unchanged, including its callbacks and pending bytes. target
  * holds a separate empty private journal and its exclusive lock; it has no state

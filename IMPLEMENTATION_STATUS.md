@@ -166,7 +166,9 @@ verified frontier. The original prepared session stays intact.
 The stopped legacy stage now constructs a separate native writer and streams its
 index with batch-sized scratch. Semantic/core/provider verification and source
 stability precede adoption; existing context control supports cancellation.
-Directory cutover and bulk conversion remain under implementation.
+Stopped directory cutover retains the original journal, keeps the writer lock
+and publishes native selection last. Partial-retention repair stages from the
+preserved source; bulk command dispatch remains under implementation.
 The checkpoint access-plan reader can prove a complete seed closure through that
 cache without a prefix replay. Publication borrows the I/O owner's matching
 cache frontier to prove old and suffix locations against the captured root,

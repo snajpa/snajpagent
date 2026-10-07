@@ -1303,6 +1303,73 @@ check_stopped_native_stage(struct snag_session *source)
 }
 
 static void
+test_stopped_directory_conversion(struct snag_store *store, const char *cwd)
+{
+    for (unsigned int variant = 0u; variant < 2u; ++variant) {
+        struct snag_session source, resumed;
+        snag_session_init(&source);
+        snag_session_init(&resumed);
+        char error[512] = {0};
+        assert(!legacy_fixture_create(store, &source, cwd, "default", "fixture", "default",
+            error, sizeof(error)));
+        commit_data(&source, "goal_started", json_pack("{s:s,s:s}",
+            "goal_id", GOAL_ID, "prompt", "retained conversion goal"));
+        assert(snag_seek(source.log_fd, 7, SEEK_SET) == 7);
+        unsigned char hash[32], after[32];
+        file_digest(source.log_fd, hash);
+        char id[SNAG_ID_HEX_LEN + 1u];
+        memcpy(id, source.id, sizeof(id));
+        uint64_t next = source.next_seq;
+        if (variant) {
+            /* Recreate interruption after retention but before native selection. */
+            assert(!snag_mkdir_private_at(source.dir_fd, ".legacy-source"));
+            int old = snag_open_read_security_at(source.dir_fd, ".legacy-source", true);
+            assert(old >= 0);
+            assert(!snag_rename_at(source.dir_fd, "events.jsonl", old, "events.jsonl"));
+            assert(!snag_sync_dir(old) && !snag_sync_dir(source.dir_fd));
+            assert(!close(old));
+        }
+        struct snag_session before = source;
+        struct snag_binary_import_result result = {0};
+        uint64_t stop = 0u;
+        struct snag_context_control control = {.cancelled = stopped_stage_cancel, .opaque = &stop};
+        assert(snag_store_convert_binary_directory(&source, &result, &control,
+            error, sizeof(error)) < 0 && errno == ECANCELED);
+        assert(!memcmp(&source, &before, sizeof(before)));
+        snag_file_info info;
+        assert(snag_lstat_at(source.dir_fd, "journal.bin", &info) < 0 && errno == ENOENT);
+        int rc = snag_store_convert_binary_directory(&source, &result, NULL,
+            error, sizeof(error));
+        if (rc < 0) fprintf(stderr, "stopped directory conversion failed: %s\n", error);
+        assert(!rc);
+        assert(!memcmp(&source, &before, sizeof(before)));
+        assert(snag_seek(source.log_fd, 0, SEEK_CUR) == 7);
+        file_digest(source.log_fd, after);
+        assert(!memcmp(hash, after, sizeof(hash)));
+        int old = snag_open_read_security_at(source.dir_fd, ".legacy-source", true);
+        assert(old >= 0);
+        int retained = snag_open_read_security_at(old, "events.jsonl", false);
+        assert(retained >= 0);
+        file_digest(retained, after);
+        assert(!memcmp(hash, after, sizeof(hash)));
+        assert(!close(retained) && !close(old));
+        assert(snag_open_private_append_at(source.dir_fd, "events.jsonl", false) < 0 &&
+            errno == ENOENT);
+        snag_binary_checkpoint_sources_free(&result.sources);
+        assert(snag_store_convert_binary_directory(&source, &result, NULL,
+            error, sizeof(error)) < 0 && errno == EEXIST);
+        snag_session_close(&source);
+        assert(!snag_session_open(store, &resumed, id, error, sizeof(error)));
+        /* Bootstrap ACKs one optional receipt after the unchanged imported prefix. */
+        assert(resumed.binary && resumed.next_seq == next + 1u);
+        assert(resumed.checkpoint_seq == next);
+        assert(!strcmp(resumed.goal_id, GOAL_ID));
+        assert(resumed.goal_prompt && !strcmp(resumed.goal_prompt, "retained conversion goal"));
+        snag_session_close(&resumed);
+    }
+}
+
+static void
 test_import_batches(struct snag_store *store, const char *cwd)
 {
     char error[512];
@@ -4619,6 +4686,7 @@ test_store_binary_replay(struct snag_store *store, const char *cwd)
     test_process_origins(store, cwd);
     test_legacy_process_origin(store, cwd);
     test_import_batches(store, cwd);
+    test_stopped_directory_conversion(store, cwd);
     test_import_output_sources(store, cwd);
     test_import_input_sources(store, cwd);
     for (unsigned int ending = 0u; ending < 7u; ++ending) {
