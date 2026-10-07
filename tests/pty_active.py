@@ -5548,8 +5548,9 @@ def test_network_collision_prompts():
         server = Child(["--no-color", "-vvvvvv", "-s", address, "-r", "lab"], env=env)
         children.append(server)
         server.wait(chat_prompt("root0"))
-        names_end = server.send_wait(b"/names\r", b"model nick: agent0")
+        names_end = server.send_wait(b"/rollout\r/names\r", b"model nick: agent0")
         server.wait(b"operator nick: root0", start=names_end)
+        server.send_wait(b"/chat\r", chat_prompt("root0"))
         for suffix in (1, 2):
             client = Child(["--no-color", "-c", address], env=env)
             children.append(client)
@@ -5559,7 +5560,9 @@ def test_network_collision_prompts():
                 remaining = deadline - time.monotonic()
                 assert remaining > 0, f"collision nick was not painted: {bytes(client.buf)!r}"
                 client.read_once(remaining)
-            client.send_wait(b"/names\r", f"model agent{suffix} operator root{suffix}".encode())
+            client.send_wait(b"/rollout\r/names\r",
+                             f"model agent{suffix} operator root{suffix}".encode())
+            client.send_wait(b"/chat\r", chat_prompt(f"root{suffix}"))
             assert b"agent01" not in client.buf
             assert b"root01" not in client.buf
         peer = IRCClient(port, "visitor", agent=True)
@@ -5637,8 +5640,8 @@ def test_network_live_nick_prompt():
         # Registration publishes the accepted prompt nick before the later
         # NAMES reply supplies completion candidates. /names synchronizes the
         # engine snapshot and queues its destination update before this output.
-        names_end = child.send_wait(b"/names\r", b"model agent7 operator operator7")
-        child.wait(chat_prompt("operator7"), start=names_end)
+        child.send_wait(b"/rollout\r/names\r", b"model agent7 operator operator7")
+        child.send_wait(b"/chat\r", chat_prompt("operator7"))
         start = len(child.buf)
         child.send_wait(b"@ag\t", b"@agent7 ", start=start)
         child.send(b"\x03")
@@ -6078,12 +6081,19 @@ def test_network_chat_and_managed_mention():
         child.wait(network_idle, start=help_end)
 
         draft_start = len(child.buf)
-        draft_end = child.send_wait(b"x\t", b"x   ", start=draft_start)
+        draft_end = child.send_wait(b"x", b"x", start=draft_start)
         edit = bytes(child.buf[draft_start:draft_end])
         assert b"\x1b[2K" not in edit, edit
         assert network_idle not in edit, edit
         assert "── rollout ──".encode() not in edit
+        draft_rollout = child.send_wait(b"\t", "── rollout ──".encode(),
+                                        start=draft_end)
+        child.wait(network_rollout_idle, start=draft_rollout)
+        restored = child.send_wait(b"\x1b[Z", chat_banner(endpoint, "#lab"),
+                                   start=draft_rollout)
+        child.wait(network_idle + b"x", start=restored)
         clear_draft_incrementally(child, network_idle)
+        child.assert_unsubmitted()
 
         child.send_wait(b"session setup\r", "localop › session setup".encode())
         session_id = new_session(before, child)

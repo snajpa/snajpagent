@@ -1152,12 +1152,14 @@ fixture_input(struct snag_buf *out, const char *text, const json_t *request)
         const char *end = strchr(p, ' ');
         if (!end) return -1;
         char marker[96u];
-        if (snprintf(marker, sizeof(marker), " id=%.*s]", (int)(end - p), p) < 0) return -1;
+        if (snprintf(marker, sizeof(marker), " id=%.*s", (int)(end - p), p) < 0) return -1;
+        size_t marker_len = strlen(marker);
         const json_t *input = json_object_get(request, "input");
         bool found = false;
         for (size_t i = 0u; i < json_array_size(input); ++i) {
             const char *content = snag_json_string(json_array_get(input, i), "content");
-            if (content && strstr(content, marker)) {
+            const char *match = content ? strstr(content, marker) : NULL;
+            if (match && (match[marker_len] == ']' || match[marker_len] == ' ')) {
                 if (snag_buf_append(out, content, strlen(content)) < 0) return -1;
                 found = true;
                 break;
