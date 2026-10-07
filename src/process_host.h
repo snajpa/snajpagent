@@ -27,7 +27,8 @@ struct snag_child_event {
 };
 
 void snag_child_init(struct snag_child *child);
-/* A child and its streams stay owned by one caller thread through cleanup. */
+/* A child and its streams stay owned by one caller thread through cleanup.
+ * POSIX children have their own session; only PTY children have a terminal. */
 int snag_child_spawn(struct snag_child *child, const char *shell, const char *command,
                      const char *directory, char **environment, bool pty);
 /* Bounded document converter, no shell expansion. argv[0] must be absolute. */

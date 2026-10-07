@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Isolate piped command tools from the session's controlling terminal so child
+  programs cannot leave terminal input assigned to an exited process group.
+
 - Restore the Network chat heading in command help, including addressed chats
   and private conversations.
 

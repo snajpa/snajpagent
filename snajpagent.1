@@ -5070,6 +5070,8 @@ is omitted/null to leave input available for later interaction, or UTF-8 text up
 is true for a pseudo-terminal; false or null uses ordinary pipes.  PTY output
 is a terminal stream rather than separate stdout/stderr, and terminal line
 editing/echo rules may affect interactive input.
+On POSIX systems each command runs in its own process session. Piped commands
+have no controlling terminal; PTY commands receive a separate terminal.
 .PP
 .B yield_ms
 is 0 through 600000, or omitted/null for the configured default.  It bounds the

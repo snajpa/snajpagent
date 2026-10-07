@@ -176,6 +176,60 @@ class SessionViewTests(unittest.TestCase):
         return subprocess.run(['ps', '-ww', '-p', str(self.owner), '-o', 'lstart=', '-o', 'command='],
                               text=True, capture_output=True).stdout.strip()
 
+    def test_piped_tool_cannot_claim_the_owner_terminal(self):
+        probe = self.root / 'terminal-probe.py'
+        result = self.root / 'terminal-probe.json'
+        probe.write_text(
+            'import errno, json, os, signal, sys\n'
+            'state = {"controlling_terminal": False}\n'
+            'try:\n'
+            '    fd = os.open("/dev/tty", os.O_RDWR | os.O_NOCTTY)\n'
+            'except OSError as error:\n'
+            '    assert error.errno == errno.ENXIO, error\n'
+            'else:\n'
+            '    signal.signal(signal.SIGTTOU, signal.SIG_IGN)\n'
+            '    os.tcsetpgrp(fd, os.getpgrp())\n'
+            '    state["controlling_terminal"] = True\n'
+            '    os.close(fd)\n'
+            'with open(sys.argv[1] + ".tmp", "w") as output:\n'
+            '    json.dump(state, output)\n'
+            'os.replace(sys.argv[1] + ".tmp", sys.argv[1])\n'
+            'print("terminal probe finished")\n')
+
+        def respond(handler, request, sequence):
+            completed = any(item.get('type') == 'function_call_output'
+                            for item in request.get('input', []))
+            if completed:
+                body = self.provider.response_body(sequence, 'tool isolation complete')
+            else:
+                body = self.provider.function_body(sequence, 'call_terminal_probe',
+                    'exec_command', {
+                        'command': shlex.join([sys.executable, str(probe), str(result)]),
+                        'workdir': str(self.root), 'pty': False, 'yield_ms': 1000,
+                    })
+            self.provider.reply(handler, body.encode(), close_header=True)
+
+        self.provider.runtime_handler = respond
+        os.write(self.initial.master, b'check tool terminal isolation\r')
+        deadline = time.monotonic() + 10
+        while not result.exists() and time.monotonic() < deadline:
+            time.sleep(.02)
+        self.assertTrue(result.exists(), 'the real command tool did not run')
+        self.assertFalse(json.loads(result.read_text())['controlling_terminal'],
+                         'a piped tool can take the owner terminal foreground group')
+        self.wait_event('turn_completed')
+        os.write(self.initial.master, b'/fast off\r')
+        self.initial.until(b'Fast mode: OFF', 5)
+        self.detach()
+        resumed = self.start(['--resume', self.sid])
+        resumed.until(b'Attached session', 10)
+        os.write(resumed.master, b'/fast on\r')
+        resumed.until(b'Fast mode: ON', 5)
+        self.assertEqual(self.identity(), self.owner_identity)
+        self.assertFalse(any(event['type'] in ('response_failed', 'turn_recovery')
+                             for event in self.events()))
+        self.finish(resumed, b'/s d')
+
     def start(self, args):
         child = RemoteProcess(self.root, self.prefix + args, wrapped=None, extra_env=self.env)
         self.children.append(child)

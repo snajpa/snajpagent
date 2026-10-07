@@ -1508,7 +1508,10 @@ child_spawn(struct snag_child *child, const char *shell, const char *command,
             close_if_open(&pipes[0][0]);
             close_if_open(&pipes[1][0]);
             close_if_open(&pipes[2][1]);
-            (void)setpgid(0, 0);
+            /* Piped tools must not inherit the owner's controlling terminal.
+             * A child opening /dev/tty could otherwise take its foreground
+             * group and leave the session's input worker failing with EIO. */
+            if (setsid() < 0) _exit(125);
             exec_child(shell, command, argv, directory, pipes[2][0], pipes[0][1],
                 pipes[1][1], environment, bounded);
         }
@@ -1517,7 +1520,6 @@ child_spawn(struct snag_child *child, const char *shell, const char *command,
         close_if_open(&slave);
         child->fd[0] = child->fd[2] = master;
     } else {
-        (void)setpgid(child->pid, child->pid);
         for (size_t i = 0; i < 3u; ++i) {
             unsigned int side = i == 2u ? 1u : 0u;
             child->fd[i] = pipes[i][side];
