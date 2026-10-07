@@ -5,6 +5,8 @@
 #include "store_binary_replay.h"
 #include "store_internal.h"
 
+struct snag_context_control;
+
 struct snag_binary_import_result {
     struct snag_legacy_recovery legacy;
     struct snag_binary_recovery native;
@@ -40,6 +42,19 @@ struct snag_binary_import_result {
 int snag_store_import_binary_journal(struct snag_session *source, int destination,
     struct snag_session *restored, struct snag_binary_import_result *result,
     char *error, size_t error_size);
+
+/* Stream a stopped locked legacy source into a separate empty native owner and
+ * empty derived-index file. Source bytes, descriptor position and state remain
+ * unchanged. Target keeps its path/fd owners; only complete success adopts native
+ * state/provider custody. Result owns sources only on success. Failure leaves
+ * target state unchanged and provisional destination bytes unpublishable.
+ * Index scratch covers one batch, not the whole source. Descriptors stay owned
+ * by the caller; attach the index and establish checkpoint/directory durability
+ * before publication. Optional existing context control cancels record visits
+ * and provider reconstruction; cancellation preserves source and target state. */
+int snag_store_stage_binary_session(struct snag_session *source, struct snag_session *target,
+    int index_fd, struct snag_binary_import_result *result,
+    const struct snag_context_control *control, char *error, size_t error_size);
 
 /* Seed a new native writer from a strictly verified in-memory prepared journal.
  * prepared stays unchanged, including its callbacks and pending bytes. target

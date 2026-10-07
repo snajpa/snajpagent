@@ -518,7 +518,13 @@ verified prefix. Any failure leaves provisional output for the caller to discard
 The stopped staging API verifies through the legacy projection domain.
 Canonical-field deduplication and source-coordinate relocation preserve accepting
 field roles; unresolved log coordinates and voice-adoption cursors fail
-verification. The complete directory converter still needs source retention,
+verification. The constructive stopped-session stage also streams derived-index
+bytes a batch at a time, verifies the native frontier, reconstructs provider
+state and installs a separate writer only after source stability checks. Its
+source bytes, descriptor position and state stay unchanged; failure leaves the
+target state intact and provisional output unavailable for publication. Existing
+context control cancels legacy visits, native semantic verification and provider
+reconstruction. The complete directory converter still needs source retention,
 old-writer exclusion and publication-last ordering. Native creation and existing
 native admission use the production backend described below.
 

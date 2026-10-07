@@ -222,6 +222,9 @@ struct import_writer {
     struct snag_sha256 semantic;
     struct snag_buf *prepared_log;
     struct snag_buf index;
+    bool indexed, stream_index;
+    int index_fd;
+    const struct snag_context_control *control;
     struct snag_binary_identity identity;
     struct snag_binary_index_tree tree;
     uint64_t source_end, turns;
@@ -283,9 +286,13 @@ flush_batch(struct import_writer *writer)
     struct snag_binary_anchor next;
     int rc = snag_binary_batch_encode(&bytes, &writer->anchor, writer->records,
         (uint32_t)writer->count, writer->turns, &next);
-    if (rc == 0 && writer->prepared_log)
+    if (rc == 0 && writer->indexed)
         rc = snag_binary_index_tree_append_batch(&writer->index, &writer->tree, &writer->identity,
             &writer->anchor, &next, bytes.data, bytes.len);
+    if (rc == 0 && writer->stream_index) {
+        rc = snag_write_full(writer->index_fd, writer->index.data, writer->index.len);
+        if (!rc) snag_buf_reset(&writer->index);
+    }
     struct snag_buf wire = {.max = SNAG_BINARY_WIRE_BATCH_MAX};
     if (rc == 0) rc = snag_binary_wire_encode(&wire, bytes.data, bytes.len);
     if (rc == 0) rc = snag_write_full(writer->fd, wire.data, wire.len);
@@ -299,6 +306,23 @@ flush_batch(struct import_writer *writer)
     }
     errno = code;
     return rc;
+}
+
+struct stopped_semantic {
+    struct snag_sha256 hash;
+    const struct snag_context_control *control;
+};
+
+static int
+stopped_semantic_event(void *opaque, const struct snag_session *state, uint64_t sequence,
+    const char *type, const json_t *data, char *error, size_t error_size)
+{
+    struct stopped_semantic *read = opaque;
+    if (read->control && read->control->cancelled &&
+        read->control->cancelled(read->control->opaque)) {
+        return snag_fail(error, error_size, ECANCELED, "stopped native verification cancelled");
+    }
+    return semantic_event(&read->hash, state, sequence, type, data, error, error_size);
 }
 
 static int
@@ -402,6 +426,10 @@ import_event(void *opaque, const struct snag_session *state, uint64_t sequence,
     const char *type, const json_t *data, char *error, size_t error_size)
 {
     struct import_writer *writer = opaque;
+    if (writer->control && writer->control->cancelled &&
+        writer->control->cancelled(writer->control->opaque)) {
+        return snag_fail(error, error_size, ECANCELED, "stopped legacy import cancelled");
+    }
     if (sequence == 1u) {
         struct snag_binary_identity identity = {.created_ms = state->last_time_ms};
         hex_bytes(identity.id, state->id, sizeof(identity.id));
@@ -412,7 +440,7 @@ import_event(void *opaque, const struct snag_session *state, uint64_t sequence,
             goto fail;
         }
         writer->identity = identity;
-        if (writer->prepared_log) {
+        if (writer->indexed) {
             unsigned char index_header[SNAG_BINARY_INDEX_HEADER_SIZE];
             snag_binary_index_header_encode(index_header, &identity);
             if (snag_buf_append(&writer->index, index_header, sizeof(index_header)) < 0) goto fail;
@@ -581,6 +609,128 @@ out:
 }
 
 int
+snag_store_stage_binary_session(struct snag_session *source, struct snag_session *target,
+    int index_fd, struct snag_binary_import_result *result,
+    const struct snag_context_control *control, char *error, size_t error_size)
+{
+    if (!source || !target || source == target || !result || index_fd < 0 ||
+        source->log_fd < 0 || source->lock_fd < 0 || source->pending_log || source->binary ||
+        target->log_fd < 0 || target->lock_fd < 0 || target->pending_log || target->binary ||
+        target->snapshot_read_only || target->id[0] ||
+        !snag_hex_is_lower(source->id, SNAG_ID_HEX_LEN)) {
+        return snag_fail(error, error_size, EINVAL, "invalid stopped native stage owners");
+    }
+    *result = (struct snag_binary_import_result){0};
+    if (control && control->cancelled && control->cancelled(control->opaque))
+        return snag_fail(error, error_size, ECANCELED, "stopped native staging cancelled");
+    snag_file_info before, after, journal, index, lock, source_lock;
+    if (snag_fstat(source->log_fd, &before) < 0 || !S_ISREG(before.st_mode) ||
+        before.st_size < 0 || snag_fstat(target->log_fd, &journal) < 0 ||
+        snag_fstat(index_fd, &index) < 0 || snag_fstat(target->lock_fd, &lock) < 0 ||
+        !S_ISREG(journal.st_mode) || journal.st_size != 0 || !S_ISREG(index.st_mode) ||
+        index.st_size != 0 || !S_ISREG(lock.st_mode) ||
+        snag_fstat(source->lock_fd, &source_lock) < 0 ||
+        (journal.st_dev == source_lock.st_dev && journal.st_ino == source_lock.st_ino) ||
+        (index.st_dev == source_lock.st_dev && index.st_ino == source_lock.st_ino) ||
+        (lock.st_dev == source_lock.st_dev && lock.st_ino == source_lock.st_ino) ||
+        (journal.st_dev == before.st_dev && journal.st_ino == before.st_ino) ||
+        (index.st_dev == before.st_dev && index.st_ino == before.st_ino) ||
+        (journal.st_dev == index.st_dev && journal.st_ino == index.st_ino) ||
+        (journal.st_dev == lock.st_dev && journal.st_ino == lock.st_ino) ||
+        (index.st_dev == lock.st_dev && index.st_ino == lock.st_ino)) {
+        return snag_fail(error, error_size, EINVAL, "native stage needs separate empty files");
+    }
+    if (snag_store_verify_private_fd(target->log_fd, false, "staged native journal",
+            error, error_size) < 0 ||
+        snag_store_verify_private_fd(index_fd, false, "staged native index",
+            error, error_size) < 0 ||
+        snag_seek(target->log_fd, 0, SEEK_SET) < 0 || snag_seek(index_fd, 0, SEEK_SET) < 0) {
+        return -1;
+    }
+    struct snag_session legacy, verified, candidate, view;
+    snag_session_init(&legacy);
+    snag_session_init(&verified);
+    snag_session_init(&candidate);
+    snag_session_init(&view);
+    memcpy(view.id, source->id, sizeof(view.id));
+    view.log_fd = target->log_fd;
+    view.lock_fd = target->lock_fd;
+    struct snag_binary_checkpoint_sources sources = {0};
+    struct import_writer writer = {.fd = target->log_fd, .source_fd = source->log_fd,
+        .indexed = true, .stream_index = true, .index_fd = index_fd, .control = control,
+        .index = {.max = SNAG_BINARY_INDEX_TREE_BATCH_MAX + SNAG_BINARY_INDEX_HEADER_SIZE},
+        .payload = {.max = SNAG_MAX_EVENT_LINE},
+        .producer.field = {.max = SNAG_MAX_EVENT_LINE}};
+    snag_sha256_init(&writer.semantic);
+    int rc = snag_store_reconcile_legacy(source, &legacy, import_event, &writer,
+        &result->legacy, error, error_size);
+    if (rc < 0) goto done;
+    if (flush_batch(&writer) < 0 || snag_sync_file(target->log_fd) < 0 ||
+        snag_sync_file(index_fd) < 0) {
+        rc = snag_fail(error, error_size, errno, "cannot finish stopped native stage");
+        goto done;
+    }
+    snag_sha256_final(&writer.semantic, result->semantic_digest);
+    memcpy(result->source_sha256, legacy.prev_sha256, sizeof(result->source_sha256));
+    struct stopped_semantic semantic = {.control = control};
+    snag_sha256_init(&semantic.hash);
+    rc = snag_store_reconcile_binary(&view, &verified, stopped_semantic_event, &semantic,
+        &result->native, &sources, error, error_size);
+    if (rc < 0) goto done;
+    unsigned char actual[32];
+    snag_sha256_final(&semantic.hash, actual);
+    if (result->native.incomplete_tail_bytes ||
+        memcmp(actual, result->semantic_digest, sizeof(actual)) ||
+        compare_core(&legacy, &verified) < 0) {
+        rc = snag_fail(error, error_size, EINVAL,
+            "stopped native stage differs from legacy source");
+        goto done;
+    }
+    rc = snag_store_reconcile_binary_context(&view, &candidate, &result->native,
+        &sources, control, error, error_size);
+    if (rc < 0) goto done;
+    if (compare_core(&legacy, &candidate) < 0 || snag_fstat(source->log_fd, &after) < 0 ||
+        !snag_file_unchanged(&before, &after)) {
+        rc = snag_fail(error, error_size, EAGAIN, "legacy source changed during native staging");
+        goto done;
+    }
+    unsigned char root[32];
+    struct snag_binary_index_tree loaded;
+    if (snag_binary_index_tree_root(&writer.tree, root) < 0 ||
+        snag_binary_index_tree_load(index_fd, &writer.identity, writer.tree.count, root,
+            &loaded) < 0 || memcmp(&writer.tree, &loaded, sizeof(loaded))) {
+        rc = snag_fail(error, error_size, EBADMSG, "stopped native index frontier mismatch");
+        goto done;
+    }
+    candidate.log_fd = target->log_fd;
+    candidate.lock_fd = target->lock_fd;
+    rc = snag_session_bind_binary(&candidate, &writer.identity, &result->native.verified,
+        &writer.tree, &writer.producer, &sources, NULL, error, error_size);
+    if (rc < 0) goto done;
+    candidate.dir_fd = target->dir_fd;
+    candidate.dir_path = target->dir_path;
+    *target = candidate;
+    snag_session_init(&candidate);
+    result->sources = sources;
+    sources = (struct snag_binary_checkpoint_sources){0};
+done:
+    {
+        int saved = errno;
+        candidate.log_fd = candidate.lock_fd = -1;
+        snag_session_close(&candidate);
+        snag_session_close(&verified);
+        snag_session_close(&legacy);
+        snag_binary_checkpoint_sources_free(&sources);
+        snag_binary_producer_free(&writer.producer);
+        free(writer.records);
+        snag_buf_free(&writer.payload);
+        snag_buf_free(&writer.index);
+        errno = saved;
+    }
+    return rc;
+}
+
+int
 snag_store_seed_binary_session(struct snag_session *prepared, struct snag_session *target,
     struct snag_buf *index, char *error, size_t error_size)
 {
@@ -608,7 +758,7 @@ snag_store_seed_binary_session(struct snag_session *prepared, struct snag_sessio
         return snag_fail(error, error_size, errno, "cannot position native seed journal");
     struct import_writer writer = {.fd = target->log_fd, .source_fd = -1,
         .prepared_log = prepared->pending_log, .payload = {.max = SNAG_MAX_EVENT_LINE},
-        .index = {.max = index->max},
+        .index = {.max = index->max}, .indexed = true,
         .producer.field = {.max = SNAG_MAX_EVENT_LINE}};
     snag_sha256_init(&writer.semantic);
     struct snag_session source;

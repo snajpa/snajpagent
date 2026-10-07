@@ -1225,6 +1225,83 @@ check_import(struct snag_session *source, const struct snag_session *expected)
     return counts;
 }
 
+static bool
+stopped_stage_cancel(void *opaque)
+{
+    uint64_t *remaining = opaque;
+    if (!*remaining) return true;
+    --*remaining;
+    return false;
+}
+
+static void
+check_stopped_native_stage(struct snag_session *source)
+{
+    struct snag_session before = *source;
+    struct snag_session target;
+    snag_session_init(&target);
+    target.log_fd = snag_create_private_at(source->dir_fd, "stage-journal", true);
+    target.lock_fd = snag_create_private_at(source->dir_fd, "stage-lock", true);
+    int index = snag_create_private_at(source->dir_fd, "stage-index", true);
+    assert(target.log_fd >= 0 && target.lock_fd >= 0 && index >= 0);
+    assert(!snag_lock_file(target.lock_fd, false));
+    struct snag_session empty = target;
+    unsigned char hash[32], after[32];
+    file_digest(source->log_fd, hash);
+    int64_t position = snag_seek(source->log_fd, 0, SEEK_CUR);
+    assert(position >= 0);
+    struct snag_binary_import_result result = {0};
+    char error[512] = {0};
+    assert(snag_store_stage_binary_session(source, &target, source->lock_fd, &result,
+        NULL, error, sizeof(error)) < 0 && errno == EINVAL);
+    assert(!memcmp(&target, &empty, sizeof(empty)));
+    assert(snag_store_stage_binary_session(source, &target, target.log_fd, &result,
+        NULL, error, sizeof(error)) < 0 && errno == EINVAL);
+    assert(!memcmp(&target, &empty, sizeof(empty)));
+    uint64_t attempts[] = {0u, 4u, source->next_seq + 2u};
+    for (size_t i = 0u; i < sizeof(attempts) / sizeof(attempts[0]); ++i) {
+        struct snag_context_control control = {.cancelled = stopped_stage_cancel,
+            .opaque = &attempts[i]};
+        assert(snag_store_stage_binary_session(source, &target, index, &result,
+            &control, error, sizeof(error)) < 0 && errno == ECANCELED);
+        assert(!memcmp(&target, &empty, sizeof(empty)));
+        assert(!memcmp(source, &before, sizeof(before)));
+        assert(snag_seek(source->log_fd, 0, SEEK_CUR) == position);
+        file_digest(source->log_fd, after);
+        assert(!memcmp(hash, after, sizeof(hash)));
+        assert(!snag_truncate(target.log_fd, 0) && !snag_truncate(index, 0));
+        assert(!result.sources.texts.through);
+    }
+    int rc = snag_store_stage_binary_session(source, &target, index, &result,
+        NULL, error, sizeof(error));
+    if (rc < 0) fprintf(stderr, "stopped native stage failed: %s\n", error);
+    assert(!rc && target.binary && result.native.batches == 4u);
+    assert(!strcmp(source->id, target.id) && source->next_seq == target.next_seq);
+    assert(!memcmp(&before, source, sizeof(before)));
+    assert(snag_seek(source->log_fd, 0, SEEK_CUR) == position);
+    file_digest(source->log_fd, after);
+    assert(!memcmp(hash, after, sizeof(hash)));
+    test_store_binary_core_state(target.log_fd, &result.native.verified,
+        &result.sources, &target);
+    test_store_binary_payloads_state(target.log_fd, &result.native.verified,
+        &result.sources, &target);
+    test_store_binary_inputs_state(target.log_fd, &result.native.verified,
+        &result.sources, &target);
+    struct snag_binary_anchor boundary;
+    struct snag_binary_index_tree tree;
+    assert(!snag_session_binary_checkpoint_capture(&target, &boundary, &tree, NULL,
+        error, sizeof(error)));
+    assert(boundary.next_seq == source->next_seq && tree.count == source->next_seq - 1u);
+    assert(!snag_session_binary_index_setup(&target, index, error, sizeof(error)));
+    snag_binary_checkpoint_sources_free(&result.sources);
+    snag_session_close(&target);
+    assert(!close(index));
+    assert(!snag_unlink_at(source->dir_fd, "stage-journal", false));
+    assert(!snag_unlink_at(source->dir_fd, "stage-lock", false));
+    assert(!snag_unlink_at(source->dir_fd, "stage-index", false));
+    assert(!memcmp(&before, source, sizeof(before)));
+}
+
 static void
 test_import_batches(struct snag_store *store, const char *cwd)
 {
@@ -1255,6 +1332,7 @@ test_import_batches(struct snag_store *store, const char *cwd)
     assert(!snag_store_reconcile_legacy(&original, &expected, NULL, NULL,
         &recovery, error, sizeof(error)));
     assert(snag_seek(original.log_fd, 7, SEEK_SET) == 7);
+    check_stopped_native_stage(&original);
     check_import(&original, &expected);
     int fd = temporary_fd();
     struct snag_binary_import_result result = {0};
