@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Resume native sessions after IRC messages retained across compaction are
+  admitted after a checkpoint. Resolve newly needed adjacent records from the
+  verified journal when the checkpoint lookup table omits them.
+
 - Let turns with deferred steering finish while retaining queued input for the
   next turn, including when an IRC reply remains outstanding.
 

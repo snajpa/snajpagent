@@ -1558,6 +1558,9 @@ pinned_resume_checks(struct snag_session *source, struct snag_session *expected,
         for (size_t i = 0u; i < json_array_size(recent) && !neighbor; ++i) {
             const json_t *row = json_array_get(recent, i);
             if (strcmp(snag_json_string(row, "type"), "irc_admitted")) continue;
+            uint64_t admitted;
+            assert(!snag_json_integer_u64(row, "seq", &admitted));
+            if (admitted >= base->boundary.next_seq) continue;
             const json_t *sequences = json_object_get(json_object_get(row, "data"), "sequences");
             for (size_t j = 0u; j < json_array_size(sequences); ++j) {
                 uint64_t sequence = (uint64_t)json_integer_value(json_array_get(sequences, j));

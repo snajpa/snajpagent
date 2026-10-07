@@ -4729,9 +4729,94 @@ test_prepared_native_seed(const char *cwd)
     }
 }
 
+static void
+test_irc_admission_after_checkpoint(struct snag_store *store, const char *cwd, bool legacy)
+{
+    struct snag_session session;
+    snag_session_init(&session);
+    char error[256] = {0};
+    int created = legacy ?
+        legacy_fixture_create(store, &session, cwd, "default", "fixture", "default",
+            error, sizeof(error)) :
+        snag_session_create(store, &session, cwd, "default", "fixture", "default",
+            error, sizeof(error));
+    assert(!created);
+    char id[SNAG_ID_HEX_LEN + 1u];
+    memcpy(id, session.id, sizeof(id));
+    json_t *paths = checked_json(json_array());
+    commit_data(&session, "input_received", input_data("checkpoint admission", false, paths));
+    commit_data(&session, "turn_started",
+        direct_turn_data(cwd, "checkpoint admission", GOAL_ID, 1, false, paths));
+    json_decref(paths);
+
+    struct snag_irc_event event = {.kind = SNAG_IRC_MESSAGE, .timestamp_ms = 1u,
+        .stream = OTHER_ID, .sequence = 1u, .input = true, .endpoint = "fixture",
+        .room = "#fixture", .nick = "operator", .op = true};
+    assert(snag_strcpy(event.text, sizeof(event.text), "waiting at checkpoint"));
+    uint64_t observation = commit_data(&session, "irc_event", snag_irc_event_data(&event));
+    /* The neighbour is obsolete by the checkpoint and absent from its sparse index. */
+    commit_data(&session, "retry_auto_changed", json_pack("{s:s}", "value", "off"));
+    int64_t neighbor = session.committed_start +
+        (session.committed_end - session.committed_start) / 2;
+    for (size_t i = 0u; i <= SNAG_CONTEXT_COMPACT_OVERLAP_EVENTS; ++i) {
+        commit_data(&session, "retry_auto_changed", json_pack("{s:s}", "value", "on"));
+    }
+    commit_data(&session, "context_rebased", json_pack("{s:s,s:s}",
+        "reason", "turn_recovery", "turn_id", GOAL_ID));
+    assert(!snag_session_checkpoint(&session, error, sizeof(error)));
+    commit_data(&session, "irc_admitted", json_pack("{s:[I]}",
+        "sequences", (json_int_t)observation));
+    uint64_t end = session.next_seq;
+    int journal = dup(session.log_fd);
+    assert(journal >= 0);
+    snag_session_close(&session);
+    snag_session_init(&session);
+    if (!legacy) {
+        unsigned char original;
+        assert(snag_pread(journal, &original, 1u, neighbor) == 1);
+        unsigned char damaged = original ^ 0x80u;
+        assert(snag_seek(journal, neighbor, SEEK_SET) == neighbor);
+        assert(!snag_write_full(journal, &damaged, 1u));
+        assert(snag_session_open(store, &session, id, error, sizeof(error)) < 0);
+        snag_session_close(&session);
+        snag_session_init(&session);
+        assert(snag_seek(journal, neighbor, SEEK_SET) == neighbor);
+        assert(!snag_write_full(journal, &original, 1u));
+    }
+    assert(!close(journal));
+    int opened = snag_session_open(store, &session, id, error, sizeof(error));
+    if (opened < 0) fprintf(stderr, "IRC admission after checkpoint: %s\n", error);
+    assert(!opened && session.next_seq == end && !!session.binary == !legacy);
+    assert(!strcmp(session.retry_auto, "on"));
+    assert(!strcmp(session.active_prompt, "checkpoint admission"));
+    if (!legacy) {
+        const json_t *recent;
+        const json_t *history;
+        assert(!snag_context_capture_seam(&session, &recent, &history));
+        size_t matches = 0u;
+        for (size_t i = 0u; i < json_array_size(history); ++i) {
+            const json_t *row = json_array_get(history, i);
+            if ((uint64_t)json_integer_value(json_object_get(row, "seq")) != observation)
+                continue;
+            assert(!strcmp(snag_json_string(row, "type"), "irc_event"));
+            assert(!strcmp(snag_json_string(json_object_get(row, "data"), "text"), event.text));
+            ++matches;
+        }
+        assert(matches == 1u);
+    }
+    assert(!snag_session_checkpoint(&session, error, sizeof(error)));
+    snag_session_close(&session);
+    snag_session_init(&session);
+    assert(!snag_session_open(store, &session, id, error, sizeof(error)));
+    assert(!strcmp(session.active_prompt, "checkpoint admission"));
+    snag_session_close(&session);
+}
+
 void
 test_store_binary_replay(struct snag_store *store, const char *cwd)
 {
+    test_irc_admission_after_checkpoint(store, cwd, true);
+    test_irc_admission_after_checkpoint(store, cwd, false);
     test_checkpoint_after_streamed_tools(store, cwd, false);
     test_checkpoint_after_streamed_tools(store, cwd, true);
     test_prepared_native_seed(cwd);

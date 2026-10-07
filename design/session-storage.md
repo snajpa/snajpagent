@@ -2142,6 +2142,17 @@ fresh ownership; failed reads retain prior outputs and descriptor position. This
 component does not establish pending membership, adopt core/provider state or
 change the application's JSONL backend.
 
+### IRC admissions after checkpoint capture
+
+Compaction retains unconsumed IRC events while dropping unrelated old rows from
+provider context. A later admission can therefore introduce an adjacent-row
+lookup absent from the checkpoint's working set. Recovery first resolves the
+referenced IRC event through its pinned table. If the neighbour has no table
+entry, it authenticates that one lookup through the canonical journal's batch
+chain. Existing entries retain their checked locations, and malformed entries or
+missing required source references remain errors. This path also recovers existing
+checkpoint images without changing their bytes or the on-disk format.
+
 ### Joint checkpoint materialization
 
 The state-only materializer takes an immutable decoded image already matched to

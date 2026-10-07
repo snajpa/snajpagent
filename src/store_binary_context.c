@@ -131,7 +131,12 @@ walk_selected_sources(const struct source_walk *source, const json_t *wanted,
     const char *key;
     json_t *value;
     json_object_foreach((json_t *)wanted, key, value) {
-        (void)value;
+        uint64_t admission = json_is_integer(value) && json_integer_value(value) > 0 ?
+            (uint64_t)json_integer_value(value) : 0u;
+        if (!admission) {
+            snag_errno(EINVAL);
+            goto done;
+        }
         uint64_t sequence = 0u;
         for (const char *p = key; *p; ++p) {
             if (*p < '0' || *p > '9' || sequence > (UINT64_MAX - (unsigned int)(*p - '0')) / 10u) {
@@ -143,19 +148,28 @@ walk_selected_sources(const struct source_walk *source, const json_t *wanted,
         if (source_point(&selection, sequence, true) < 0) goto done;
         uint64_t next = sequence + 1u;
         if (next >= source->verified->next_seq) continue;
+        const struct snag_binary_checkpoint_index *adjacent_access = source->access;
         if (next < source->access->boundary.next_seq) {
             struct snag_binary_index_entry adjacent;
             int found = snag_binary_checkpoint_index_find(source->access, next, &adjacent);
             if (found < 0) goto done;
-            if (found) { snag_errno(ENOENT); goto done; }
-            if (adjacent.kind != SNAG_BINARY_IRC_EVENT &&
+            /* A suffix admission can name an unconsumed IRC event retained
+             * across compaction. Its neighbour was not yet a checkpoint
+             * dependency; authenticate that new lookup from the journal. */
+            if (found) {
+                if (admission < source->access->boundary.next_seq) {
+                    snag_errno(ENOENT);
+                    goto done;
+                }
+                adjacent_access = NULL;
+            } else if (adjacent.kind != SNAG_BINARY_IRC_EVENT &&
                 adjacent.kind != SNAG_BINARY_IRC_EVENT_V2 &&
                 adjacent.kind != SNAG_BINARY_LEGACY_CHECKPOINT &&
                 adjacent.kind != SNAG_BINARY_CHECKPOINT_RECEIPT) continue;
         }
         /* Match the legacy collector's canonical next-row seam exactly, including
          * non-input IRC metadata. A stream counter never supplies this ordinal. */
-        if (snag_binary_checkpoint_records_read(source->fd, source->verified, source->access,
+        if (snag_binary_checkpoint_records_read(source->fd, source->verified, adjacent_access,
                 next, next + 1u, source_record, source_selection_cancelled, &selection) < 0)
             goto done;
     }

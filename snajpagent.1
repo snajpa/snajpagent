@@ -5816,6 +5816,9 @@ An existing native journal takes precedence over
 the legacy log. Resume validates its checkpoint receipts and bounded suffix;
 damaged native storage or unavailable required checkpoint data stops recovery.
 Legacy fallback applies only when this file is absent.
+IRC messages retained across compaction can be admitted after a checkpoint.
+When that admission needs a neighbouring record outside the saved lookup table,
+recovery verifies the record against the canonical journal.
 A lost model-context cache is rebuilt from the verified native checkpoint and
 bounded suffix. Unavailable required checkpoint data stops this reconstruction
 and leaves committed session state unchanged.
