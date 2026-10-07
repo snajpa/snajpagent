@@ -86,6 +86,8 @@ struct vm_window {
     enum view_kind kind;
     size_t selected, top, composer_top, history_rows, composer_row, composer_rows;
     bool center_composer;
+    char prompt[SNAG_TERM_LABEL_BYTES];
+    struct snag_prompt_clock prompt_clock;
     struct snag_vm_selection visual;
     struct snag_journal_cursor visual_tail;
     struct snag_vm_editor navigation;
@@ -169,7 +171,7 @@ struct vm {
     struct snag_vm_layout *layout;
     struct vm_window *windows;
     size_t count, focus;
-    uint64_t next_window, stored_limit, save_at;
+    uint64_t next_window, stored_limit, save_at, prompt_due;
     json_t *sessions, *workspaces, *buffers;
     struct snag_term_host terminal;
     struct snag_vm_grid grid;
@@ -2044,12 +2046,28 @@ focus_direction(struct vm *vm, unsigned int key)
     uint64_t distance = UINT64_MAX;
     for (size_t i = 0u; i < vm->count; ++i) {
         const struct snag_vm_rectangle *to = &vm->windows[i].rectangle;
-        int64_t y = (int64_t)to->row * 2 + to->rows - ((int64_t)from->row * 2 + from->rows);
-        int64_t x = (int64_t)to->column * 2 + to->columns -
-            ((int64_t)from->column * 2 + from->columns);
-        if (!to->visible || (key == 'h' && x >= 0) || (key == 'l' && x <= 0) ||
-            (key == 'k' && y >= 0) || (key == 'j' && y <= 0)) continue;
-        uint64_t score = (uint64_t)llabs(x) + (uint64_t)llabs(y);
+        bool horizontal = key == 'h' || key == 'l';
+        unsigned int from_start = horizontal ? from->column : from->row;
+        unsigned int from_size = horizontal ? from->columns : from->rows;
+        unsigned int to_start = horizontal ? to->column : to->row;
+        unsigned int to_size = horizontal ? to->columns : to->rows;
+        unsigned int from_cross = horizontal ? from->row : from->column;
+        unsigned int from_extent = horizontal ? from->rows : from->columns;
+        unsigned int to_cross = horizontal ? to->row : to->column;
+        unsigned int to_extent = horizontal ? to->rows : to->columns;
+        bool backward = key == 'h' || key == 'k';
+        if (!to->visible || (backward ? to_start + to_size > from_start :
+            to_start < from_start + from_size) ||
+            to_cross >= from_cross + from_extent || from_cross >= to_cross + to_extent)
+            continue;
+        uint64_t gap = backward ? from_start - to_start - to_size :
+            to_start - from_start - from_size;
+        size_t cursor = horizontal ? vm->cursor_row : vm->cursor_column;
+        if (cursor < from_cross || cursor >= from_cross + from_extent)
+            cursor = from_cross + from_extent / 2u;
+        uint64_t cross = cursor < to_cross ? to_cross - cursor :
+            cursor >= to_cross + to_extent ? cursor - to_cross - to_extent + 1u : 0u;
+        uint64_t score = gap * (vm->grid.rows + vm->grid.columns + 1u) + cross;
         if (score < distance) {
             distance = score;
             best = i;
@@ -2367,7 +2385,7 @@ composer_key(struct vm *vm, const struct snag_vm_input_event *event)
     const struct snag_vm_rectangle *r = &vm->windows[vm->focus].rectangle;
     enum snag_vm_edit_result result = snag_vm_editor_key(c, &vm->reg, event,
         vm->insert, r->columns, (r->rows > 1u ? r->rows - 1u : 0u) / 3u + 1u,
-        vm->windows[vm->focus].composer_top);
+        vm->windows[vm->focus].composer_top, vm->windows[vm->focus].prompt);
     if (result == SNAG_VM_EDIT_UNUSED) return false;
     if (result == SNAG_VM_EDIT_YANK) clipboard_yank(vm);
     else if (result == SNAG_VM_EDIT_ERROR) {
@@ -2790,7 +2808,7 @@ history_key(struct vm *vm, const struct snag_vm_input_event *event,
     window->navigation.operator = window->yank_motion ? 'y' : 0u;
     struct snag_vm_motion motion = snag_vm_editor_motion(&window->navigation, text,
         length, at, key, count, counted, false, false, window->rectangle.columns,
-        window->rectangle.rows, window->top);
+        window->rectangle.rows, window->top, NULL);
     window->navigation.operator = 0u;
     cancel_search(vm);
     if (window->yank_motion) {
@@ -2850,39 +2868,39 @@ mouse_byte(const char *text, size_t begin, size_t end, size_t logical, size_t co
     return at == end && !insert ? previous : at;
 }
 
-struct mouse_draft {
-    struct snag_vm_buffer *buffer;
-    size_t index, row, column;
-    bool insert;
-};
-
-static int
-mouse_draft_row(void *opaque, const struct snag_vm_text_row *row)
-{
-    struct mouse_draft *hit = opaque;
-    if (hit->index++ != hit->row) return 0;
-    const char *text = hit->buffer->draft.len ?
-        (const char *)hit->buffer->draft.data : "";
-    size_t at = mouse_byte(text, row->begin, row->end, row->logical_column,
-        hit->column, hit->insert);
-    snag_vm_draft_cursor(hit->buffer, at);
-    hit->buffer->editor.column_valid = false;
-    if (!hit->insert) snag_vm_editor_normal(hit->buffer, false);
-    return 1;
-}
-
 static void
 mouse_composer(struct vm *vm, struct vm_window *window, unsigned int row, unsigned int column)
 {
-    struct snag_vm_buffer *c = focused_buffer(vm);
-    if (!c) return;
-    struct mouse_draft hit = {.buffer = c,
-        .row = window->composer_top + row - window->composer_row,
-        .column = column - window->rectangle.column, .insert = vm->insert};
-    (void)snag_vm_text_wrap(c->draft.len ? (const char *)c->draft.data : "", c->draft.len,
-        window->rectangle.columns, false, mouse_draft_row, &hit);
+    struct snag_vm_buffer *buffer = focused_buffer(vm);
+    if (!buffer) return;
+    const char *text = buffer->draft.len ? (const char *)buffer->draft.data : "";
+    struct snag_buf frame = {0};
+    struct snag_term_composer_layout layout;
+    unsigned int columns = window->rectangle.columns;
+    if (snag_term_composer_frame(window->prompt, text, buffer->draft.len,
+        buffer->cursor, columns, &frame, &layout) < 0) goto done;
+    size_t target = window->composer_top + row - window->composer_row;
+    size_t at = 0u;
+    struct snag_term_prompt_row line = {0};
+    for (size_t i = 0u; i <= target && at <= frame.len; ++i) {
+        line = snag_term_prompt_row(&frame, at, columns);
+        if (i < target) at = line.next;
+    }
+    size_t hit = mouse_byte((const char *)frame.data, line.start, line.end, 0u,
+        column - window->rectangle.column, true);
+    size_t source;
+    if (snag_term_composer_hit(window->prompt, text, buffer->draft.len, columns,
+        hit, &source) < 0) goto done;
+    source = snag_vm_text_floor(text, buffer->draft.len, source);
+    if (!vm->insert && source == buffer->draft.len && source)
+        source = snag_vm_text_previous(text, buffer->draft.len, source);
+    snag_vm_draft_cursor(buffer, source);
+    buffer->editor.column_valid = false;
+    if (!vm->insert) snag_vm_editor_normal(buffer, false);
     notice(vm, vm->insert ? "INSERT  Enter: submit  Ctrl-J: newline  Esc: NORMAL" :
         "NORMAL composer  Tab: transcript  i: insert");
+done:
+    snag_buf_free(&frame);
 }
 
 static void
@@ -2902,7 +2920,7 @@ mouse_input(struct vm *vm, const struct snag_vm_input_event *event)
     bool motion = button == 32u;
     bool wheel = button == 64u || button == 65u;
     bool dragging = vm->mouse_down && (motion || event->release);
-    if (!vm->mouse || vm->mode || (!dragging &&
+    if (!vm->mouse || (!dragging &&
         (event->release || (button != 0u && !wheel)))) {
         if (event->release) vm->mouse_down = false;
         return 0;
@@ -2968,7 +2986,9 @@ mouse_input(struct vm *vm, const struct snag_vm_input_event *event)
             bool insert = vm->focus == i && vm->composer && vm->insert;
             vm->focus = i;
             vm->composer = vm->insert = false;
+            vm->mode = 0;
             vm->prefix = 0;
+            changed(vm);
             window->visual.kind = SNAG_VM_SELECT_NONE;
             mouse_cancel_operator(window);
             if (window->composer_rows && event->row >= window->composer_row &&
@@ -3041,7 +3061,8 @@ input_event(void *opaque, const struct snag_vm_input_event *event)
         bool control = (event->modifiers & SNAG_VM_CTRL) != 0u;
         bool cancel = event->kind == SNAG_VM_KEY &&
             (event->key == SNAG_VM_KEY_ESCAPE ||
-             (control && (event->key == 'c' || event->key == '[' || event->key == 'z')));
+             (control && (event->key == 'c' || event->key == '[' || event->key == 'z' ||
+                event->key == 'w')));
         bool compose = vm->motion_loading && !vm->pending_input &&
             event->kind == SNAG_VM_TEXT && event->length == 1u &&
             (event->text[0] == 'i' || event->text[0] == 'a' || event->text[0] == 'A') &&
@@ -3156,9 +3177,40 @@ input_event(void *opaque, const struct snag_vm_input_event *event)
         cancel_search(vm);
         return 0;
     }
+    if (!vm->insert && control && key == 'w' && vm->prefix != 'w') {
+        cancel_search(vm);
+        vm->prefix = 'w';
+        return 0;
+    }
     if (vm->prefix != 'w' && composer_key(vm, event)) return 0;
     if (history_key(vm, event, key, control)) return 0;
     if (key == SNAG_VM_KEY_ESCAPE) vm->prefix = 0;
+    else if (vm->prefix == 'w') {
+        if (key == SNAG_VM_KEY_LEFT || key == SNAG_VM_KEY_BACKSPACE) key = 'h';
+        else if (key == SNAG_VM_KEY_DOWN) key = 'j';
+        else if (key == SNAG_VM_KEY_UP) key = 'k';
+        else if (key == SNAG_VM_KEY_RIGHT) key = 'l';
+        vm->prefix = 0;
+        if (key == 's' || key == 'v') split(vm, key == 'v' ? SNAG_VM_VERTICAL : SNAG_VM_HORIZONTAL);
+        else if (key == 'q' || key == 'c') close_window(vm);
+        else if (key == 'w') {
+            cancel_search(vm);
+            vm->focus = (vm->focus + 1u) % vm->count;
+            vm->composer = vm->insert = false;
+            changed(vm);
+        }
+        else if (key == 'h' || key == 'j' || key == 'k' || key == 'l') focus_direction(vm, key);
+        else if (key == '=') {
+            snag_vm_layout_equalize(vm->layout);
+            changed(vm);
+        }
+        else if (key == '+' || key == '-' || key == '>' || key == '<') {
+            (void)snag_vm_layout_resize(vm->layout, window->id,
+                key == '>' || key == '<' ? SNAG_VM_VERTICAL : SNAG_VM_HORIZONTAL,
+                key == '+' || key == '>' ? 5 : -5);
+            changed(vm);
+        }
+    }
     else if (control && key == 'z') {
         if (!snag_term_can_suspend()) {
             notice(vm, "Suspension is unavailable on this host");
@@ -3183,28 +3235,7 @@ input_event(void *opaque, const struct snag_vm_input_event *event)
                 notice(vm, "Interrupt requested");
         }
     }
-    else if (vm->prefix == 'w') {
-        vm->prefix = 0;
-        if (key == 's' || key == 'v') split(vm, key == 'v' ? SNAG_VM_VERTICAL : SNAG_VM_HORIZONTAL);
-        else if (key == 'q' || key == 'c') close_window(vm);
-        else if (key == 'w') {
-            cancel_search(vm);
-            vm->focus = (vm->focus + 1u) % vm->count;
-            vm->composer = vm->insert = false;
-            changed(vm);
-        }
-        else if (key == 'h' || key == 'j' || key == 'k' || key == 'l') focus_direction(vm, key);
-        else if (key == '=') {
-            snag_vm_layout_equalize(vm->layout);
-            changed(vm);
-        }
-        else if (key == '+' || key == '-' || key == '>' || key == '<') {
-            (void)snag_vm_layout_resize(vm->layout, window->id,
-                key == '>' || key == '<' ? SNAG_VM_VERTICAL : SNAG_VM_HORIZONTAL,
-                key == '+' || key == '>' ? 5 : -5);
-            changed(vm);
-        }
-    } else if (key == ':' || key == '/' || (key == '?' && document_view(window))) {
+    else if (key == ':' || key == '/' || (key == '?' && document_view(window))) {
         cancel_search(vm);
         vm->mode = (char)key;
         free(vm->completion_prefix);
@@ -3483,34 +3514,135 @@ mouse_reporting(struct vm *vm)
     return emit(vm, modes, strlen(modes));
 }
 
-struct draft_rows {
-    struct vm *vm;
-    struct vm_window *window;
-    struct snag_vm_buffer *buffer;
-    size_t count, cursor_row, top, height, first_row;
-    bool paint;
-};
+static int
+window_prompt(struct vm *vm, struct vm_window *window, struct snag_vm_connection *connection)
+{
+    const json_t *state = connection ? connection->state : NULL;
+    const json_t *prompt = json_object_get(state, "prompt");
+    const json_t *fields = json_object_get(prompt, "values");
+    const json_t *frames = json_object_get(prompt, "frames");
+    const char *source = snag_json_string(prompt, "template");
+    bool described = source && json_array_size(fields) == SNAG_PROMPT_FIELD_COUNT &&
+        json_array_size(frames) == SNAG_TERM_SPINNER_COUNT;
+    bool active = json_is_true(json_object_get(described ? prompt : state, "active"));
+    unsigned int mode = window->route ? 0u : active ? 2u : 1u;
+    const char *values[SNAG_PROMPT_FIELD_COUNT] = {0};
+    const char *spinners[SNAG_TERM_SPINNER_COUNT] = {vm->config.prompt_spinner_goal,
+        vm->config.prompt_spinner_provider, vm->config.prompt_spinner_tool};
+    unsigned int states = 0u, rate = vm->config.prompt_spinner_per_second;
+    char hour[12], minute[12], second[12], hostname[256];
+    if (described) {
+        for (size_t i = 0u; i < SNAG_PROMPT_FIELD_COUNT; ++i) {
+            values[i] = json_string_value(json_array_get(fields, i));
+            if (!values[i]) return snag_errno(EPROTO);
+        }
+        for (size_t i = 0u; i < SNAG_TERM_SPINNER_COUNT; ++i)
+            spinners[i] = json_string_value(json_array_get(frames, i));
+        json_int_t supplied_rate = json_integer_value(json_object_get(prompt, "rate"));
+        json_int_t supplied_states = json_integer_value(json_object_get(prompt, "states"));
+        if (supplied_rate < 1 || supplied_rate > 60 || supplied_states < 0 ||
+            supplied_states >= (1 << SNAG_TERM_SPINNER_COUNT)) return snag_errno(EPROTO);
+        rate = (unsigned int)supplied_rate;
+        states = (unsigned int)supplied_states;
+    } else {
+        source = vm->config.prompt;
+        values[SNAG_PROMPT_PROVIDER] = snag_json_string(state, "provider");
+        values[SNAG_PROMPT_MODEL] = snag_json_string(state, "model");
+        values[SNAG_PROMPT_EFFORT] = snag_json_string(state, "effort");
+        if (values[SNAG_PROMPT_EFFORT] && !strcmp(values[SNAG_PROMPT_EFFORT], "default"))
+            values[SNAG_PROMPT_EFFORT] = "medium";
+        values[SNAG_PROMPT_OPERATOR] = vm->config.irc.operator_nick;
+        values[SNAG_PROMPT_MODEL_NICK] = vm->config.irc.model_nick;
+        values[SNAG_PROMPT_SESSION_NAME] = snag_json_string(state, "name");
+        values[SNAG_PROMPT_CONTEXT] = "?";
+        values[SNAG_PROMPT_QUEUE] = "?";
+        if (snag_hostname(hostname, sizeof(hostname)) < 0) memcpy(hostname, "localhost", 10u);
+        values[SNAG_PROMPT_HOST] = hostname;
+        struct snag_term clock = {.prompt_clock = window->prompt_clock};
+        snag_term_capture_prompt_clock(&clock, time(NULL));
+        window->prompt_clock = clock.prompt_clock;
+        (void)snprintf(hour, sizeof(hour), "%d", clock.prompt_clock.hour);
+        (void)snprintf(minute, sizeof(minute), "%d", clock.prompt_clock.minute);
+        (void)snprintf(second, sizeof(second), "%d", clock.prompt_clock.second);
+        values[SNAG_PROMPT_HOUR] = hour;
+        values[SNAG_PROMPT_MINUTE] = minute;
+        values[SNAG_PROMPT_SECOND] = second;
+        for (size_t i = 0u; i < SNAG_PROMPT_FIELD_COUNT; ++i)
+            if (!values[i]) values[i] = "?";
+    }
+    values[SNAG_PROMPT_MODE] = mode == 0u ? "chat" : mode == 1u ?
+        "rollout-idle" : "rollout-active";
+    char label[SNAG_TERM_LABEL_BYTES];
+    uint64_t now = snag_monotonic_ms(), epoch = 0u, tool_until = 0u;
+    if (described) {
+        (void)snag_json_integer_u64(prompt, "epoch", &epoch);
+        (void)snag_json_integer_u64(prompt, "tool_until", &tool_until);
+    }
+    if (tool_until > now) states |= 1u << SNAG_TERM_SPINNER_TOOL;
+    uint64_t elapsed = now > epoch ? now - epoch : 0u;
+    bool animated = false;
+    if (snag_config_prompt_expand(source, mode, values, SNAG_TERM_SPINNER_MARKER_BASE,
+        label, sizeof(label)) < 0 || snag_term_prompt_render(label, spinners, states,
+            elapsed / 1000u * rate + elapsed % 1000u * rate / 1000u,
+            window->prompt, &animated) < 0) return -1;
+    uint64_t due = animated ? now + (1000u + rate - 1u) / rate : 0u;
+    if (tool_until > now && (!due || tool_until < due)) due = tool_until;
+    if (due && (!vm->prompt_due || due < vm->prompt_due)) vm->prompt_due = due;
+    return 0;
+}
 
 static int
-draft_row(void *opaque, const struct snag_vm_text_row *row)
+draw_composer(struct vm *vm, struct vm_window *window, struct snag_vm_buffer *buffer,
+    size_t *height, bool editing)
 {
-    struct draft_rows *rows = opaque;
-    struct snag_vm_buffer *c = rows->buffer;
-    size_t index = rows->count++;
-    if (c->cursor >= row->begin && c->cursor <= row->end) rows->cursor_row = index;
-    if (!rows->paint || index < rows->top || index - rows->top >= rows->height) return 0;
-    const struct snag_vm_rectangle *r = &rows->window->rectangle;
-    if (snag_vm_grid_text_column(&rows->vm->grid, rows->first_row + index - rows->top,
-        r->column, r->columns, c->draft.len ? (const char *)c->draft.data + row->begin : "",
-        row->end - row->begin, 0u, row->logical_column) < 0) return -1;
-    if (c->cursor >= row->begin && c->cursor <= row->end &&
-        rows->window == &rows->vm->windows[rows->vm->focus]) {
-        size_t column = snag_vm_text_column((const char *)c->draft.data,
-            c->draft.len, c->cursor, false) - row->logical_column;
-        rows->vm->cursor_row = rows->first_row + index - rows->top;
-        rows->vm->cursor_column = r->column + (column < r->columns ? column : r->columns - 1u);
+    const struct snag_vm_rectangle *r = &window->rectangle;
+    if (window_prompt(vm, window, buffer ? buffer->connection : NULL) < 0) return -1;
+    const char *text = buffer && buffer->draft.len ? (const char *)buffer->draft.data : "";
+    size_t length = buffer ? buffer->draft.len : 0u;
+    size_t cursor = buffer ? buffer->cursor : 0u;
+    struct snag_buf frame = {0};
+    struct snag_term_composer_layout layout;
+    if (snag_term_composer_frame(window->prompt, text, length, cursor, r->columns,
+        &frame, &layout) < 0) { snag_buf_free(&frame); return -1; }
+    size_t count = layout.end_row + 1u;
+    size_t rows = *height / 3u + 1u;
+    if (rows > count) rows = count;
+    if (rows >= *height) rows = *height > 1u ? *height - 1u : *height;
+    size_t top = window->composer_top;
+    if (window->center_composer) {
+        top = layout.cursor_row > rows / 2u ? layout.cursor_row - rows / 2u : 0u;
+        window->center_composer = false;
     }
-    return 0;
+    if (top > count - rows) top = count - rows;
+    if (top > layout.cursor_row) top = layout.cursor_row;
+    if (layout.cursor_row - top >= rows) top = layout.cursor_row - rows + 1u;
+    window->composer_top = top;
+    *height -= rows;
+    window->composer_row = r->row + *height;
+    window->composer_rows = rows;
+    int rc = 0;
+    for (size_t i = 0u, at = 0u; i < top + rows && at <= frame.len; ++i) {
+        struct snag_term_prompt_row row = snag_term_prompt_row(&frame, at, r->columns);
+        if (i >= top) {
+            size_t y = window->composer_row + i - top;
+            rc = snag_vm_grid_text(&vm->grid, y, r->column, r->columns,
+                (const char *)frame.data + at, row.end - at, 0u);
+            size_t label_end = row.end < layout.label ? row.end : layout.label;
+            size_t colored = at < label_end ?
+                snag_term_text_width((const char *)frame.data + at, label_end - at) : 0u;
+            for (size_t x = 0u; x < colored && x < r->columns; ++x)
+                vm->grid.back.cells[y * vm->grid.columns + r->column + x].style =
+                    SNAG_VM_BOLD | SNAG_VM_CYAN;
+            if (rc < 0) break;
+        }
+        at = row.next;
+    }
+    if (editing) {
+        vm->cursor_row = window->composer_row + layout.cursor_row - top;
+        vm->cursor_column = r->column + layout.cursor_column;
+    }
+    snag_buf_free(&frame);
+    return rc;
 }
 
 static void
@@ -3692,36 +3824,9 @@ draw_window(void *opaque, const struct snag_vm_rectangle *rectangle)
     size_t height = rectangle->rows > 1u ? rectangle->rows - 1u : 0u;
     struct snag_vm_connection *c = connection_for(vm, window->session_id, false);
     struct snag_vm_buffer *b = window_buffer(vm, window);
-    struct draft_rows draft = {.vm = vm, .window = window, .buffer = b};
     bool editing = index == vm->focus && vm->composer && snag_vm_buffer_writable(b) && !vm->mode;
-    if (window->kind == VIEW_TRANSCRIPT && c && snag_vm_buffer_writable(b) &&
-        (c->control || b->draft.len || editing) && height > 1u) {
-        const char *text = b->draft.len ? (const char *)b->draft.data : "";
-        if (snag_vm_text_wrap(text, b->draft.len, rectangle->columns, false,
-            draft_row, &draft) < 0) return -1;
-        draft.height = height / 3u + 1u;
-        if (draft.height > draft.count) draft.height = draft.count;
-        if (draft.height >= height) draft.height = height - 1u;
-        draft.top = window->composer_top;
-        if (window->center_composer) {
-            draft.top = draft.cursor_row > draft.height / 2u ?
-                draft.cursor_row - draft.height / 2u : 0u;
-            window->center_composer = false;
-        }
-        if (draft.top > draft.count - draft.height) draft.top = draft.count - draft.height;
-        if (draft.top > draft.cursor_row) draft.top = draft.cursor_row;
-        if (draft.cursor_row - draft.top >= draft.height)
-            draft.top = draft.cursor_row - draft.height + 1u;
-        window->composer_top = draft.top;
-        height -= draft.height;
-        draft.first_row = rectangle->row + height;
-        window->composer_row = draft.first_row;
-        window->composer_rows = draft.height;
-        draft.count = 0u;
-        draft.paint = true;
-        if (snag_vm_text_wrap(text, b->draft.len, rectangle->columns, false,
-            draft_row, &draft) < 0) return -1;
-    }
+    if (window->kind == VIEW_TRANSCRIPT && height &&
+        draw_composer(vm, window, b, &height, editing) < 0) return -1;
     window->history_rows = height;
     size_t count = row_count(vm, window);
     if (document_view(window) && window->follow)
@@ -3905,6 +4010,7 @@ draw(struct vm *vm)
     if (!columns) columns = 1u;
     if (snag_vm_grid_resize(&vm->grid, rows, columns) < 0) return -1;
     vm->dirty = false;
+    vm->prompt_due = 0u;
     if (mouse_reporting(vm) < 0) return -1;
     vm->cursor_row = vm->cursor_column = SIZE_MAX;
     snag_vm_grid_begin(&vm->grid);
@@ -4535,6 +4641,7 @@ interactive(struct vm *vm)
                 window->follow_at <= now)
                 window->load = LOAD_POLL;
         }
+        if (vm->prompt_due && now >= vm->prompt_due) vm->dirty = true;
         bool clipboard_output = vm->clipboard.osc.source ||
             vm->clipboard.packet_at < vm->clipboard.packet_length;
         if (vm->dirty && !clipboard_output && draw(vm) < 0) {
@@ -4543,6 +4650,11 @@ interactive(struct vm *vm)
         }
         load_history(vm);
         int timeout = snag_vm_input_wait_ms(&vm->input, snag_monotonic_ms());
+        if (vm->prompt_due) {
+            uint64_t now = snag_monotonic_ms();
+            int remaining = vm->prompt_due > now ? (int)(vm->prompt_due - now) : 0;
+            if (timeout < 0 || timeout > remaining) timeout = remaining;
+        }
         if (vm->save_at) {
             uint64_t now = snag_monotonic_ms();
             int remaining = vm->save_at > now ? (int)(vm->save_at - now) : 0;

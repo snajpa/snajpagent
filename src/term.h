@@ -195,6 +195,26 @@ void snag_term_trace(const struct snag_term *term, const char *event, const char
 int snag_term_set_prompt_template(struct snag_term *term, bool active, const char *label,
                                  const char *const spinners[SNAG_TERM_SPINNER_COUNT],
                                  uint32_t per_second, unsigned int states);
+struct snag_term_prompt_row {
+    size_t start, end, next, width;
+    bool soft;
+};
+
+struct snag_term_composer_layout {
+    size_t label, cursor_row, cursor_column, end_row, end_column;
+};
+
+/* Sanitized prompt/draft frame and hit mapping share standalone wrapping. */
+int snag_term_composer_frame(const char *, const char *, size_t length, size_t cursor,
+    unsigned int columns, struct snag_buf *, struct snag_term_composer_layout *);
+int snag_term_composer_hit(const char *, const char *, size_t length, unsigned int columns,
+    size_t frame_byte, size_t *source_byte);
+struct snag_term_prompt_row snag_term_prompt_row(const struct snag_buf *, size_t,
+    unsigned int columns);
+
+/* Format a prompt without terminal I/O; shared by terminal and workspace views. */
+int snag_term_prompt_render(const char *, const char *const [SNAG_TERM_SPINNER_COUNT],
+    unsigned int states, uint64_t step, char [SNAG_TERM_LABEL_BYTES], bool *animated);
 int snag_term_set_spinner_states(struct snag_term *term, unsigned int states);
 int snag_term_hide(struct snag_term *term);
 int snag_term_output_begin(struct snag_term *term);

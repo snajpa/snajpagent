@@ -78,6 +78,102 @@ class ControlTests(unittest.TestCase):
         self.owner.status('detached')
         return draft
 
+    def test_click_empty_pane_focuses_without_an_extra_key(self):
+        from test_vm_mouse import mouse
+
+        child = self.start('-N', 'empty-focus', rows=20, columns=120)
+        child.command('attach ' + self.owner.sid)
+        child.repaint_until(b'ATTACHED')
+        child.command('vsp')
+        self.wait_snapshot(lambda rows:
+            next(iter(rows.values()))['state']['focus'] == 2)
+        # Let attachment and empty document loading settle before the click.
+        child.read(.2)
+        mouse(child, 1, 1)
+        mouse(child, 1, 1, release=True)
+        self.wait_snapshot(lambda rows:
+            next(iter(rows.values()))['state']['focus'] == 1)
+        self.assertEqual(self.inputs(), [])
+        child.finish('session detach')
+
+    def test_live_prompt_is_visible_in_each_pane(self):
+        child = self.start('-N', 'pane-prompts', rows=24, columns=160)
+        child.command('attach ' + self.owner.sid)
+        child.repaint_until(b'ATTACHED')
+        child.command('vsp')
+        from test_vm_mouse import positions
+
+        marker = 'fake/host-model/medium   0% ›'
+        deadline = time.monotonic() + 5
+        while len(positions(child, marker)) < 2:
+            self.assertLess(time.monotonic(), deadline)
+        child.write(b'iunsent-pane-draft')
+        self.wait_synced('unsent-pane-draft')
+        child.repaint_until(b'unsent-pane-draft')
+        from test_vm_mouse import position
+        draft_row, draft_column = position(child, 'unsent-pane-draft')
+        prompt_rows = positions(child, marker)
+        self.assertIn((draft_row, draft_column - len(marker) - 1), prompt_rows)
+        self.escape(child)
+        self.assertEqual(self.inputs(), [])
+        child.finish('session detach')
+
+    def test_prompt_wrap_and_mouse_hit_preserve_unicode_draft(self):
+        from test_vm_mouse import mouse, position
+
+        child = self.start('-N', 'prompt-hit', rows=24, columns=100)
+        child.command('attach ' + self.owner.sid)
+        child.repaint_until(b'ATTACHED')
+        child.write('ihead 界 tail'.encode())
+        self.wait_synced('head 界 tail')
+        row, column = position(child, 'head 界 tail')
+        mouse(child, row, column + 6)
+        mouse(child, row, column + 6, release=True)
+        child.write(b'X')
+        self.wait_synced('head X界 tail')
+        child.resize(8, 1)
+        child.read(.1)
+        child.resize(24, 100)
+        child.repaint_until('head X界 tail'.encode())
+        self.escape(child)
+        child.finish('session detach')
+
+    def test_prompt_follows_owner_configuration_and_activity(self):
+        child = self.start('-N', 'configured-prompt', rows=24, columns=140)
+        child.command('attach ' + self.owner.sid)
+        child.repaint_until(b'ATTACHED')
+        template = ('{model}/{effort} {context}% '
+                    '{chat:C>}{rollout-idle:I>}{rollout-active:A>}')
+        with self.owner.config.open('a') as stream:
+            stream.write('prompt = ' + template + '\n')
+        child.write(b'i/configure\r')
+        child.repaint_until(b'REPORT')
+        child.write(b'\x1b')
+        child.command('history ' + self.owner.sid)
+        child.repaint_until(b'host-model/medium 0% I>')
+        started = threading.Event()
+
+        def respond(handler, request, sequence):
+            started.set()
+            self.owner.release.wait(15)
+            self.owner.provider.reply(handler,
+                self.owner.provider.response_body(sequence, 'prompt-state-answer').encode(),
+                close_header=True)
+
+        self.owner.provider.runtime_handler = respond
+        self.addCleanup(self.owner.release.set)
+        child.write(b'iprompt-state-request\r')
+        deadline = time.monotonic() + 5
+        while not started.is_set():
+            child.read(.02)
+            self.assertLess(time.monotonic(), deadline)
+        child.repaint_until(b'A>')
+        self.owner.release.set()
+        child.repaint_until(b'prompt-state-answer')
+        child.repaint_until(b'I>')
+        self.escape(child)
+        child.finish('session detach')
+
     def test_history_observer_uses_committed_tail_without_control(self):
         child = self.start('-N', 'observed', columns=200)
         child.command('history ' + self.owner.sid)

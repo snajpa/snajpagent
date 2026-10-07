@@ -4,6 +4,13 @@
 
 ## Unreleased
 
+- Keep the normal session prompt visible in every workspace pane. Share the
+  standalone composer for colors, wrapping and mouse hits; current owners supply
+  live prompt configuration, model, context and activity state.
+- Focus empty or loading panes immediately on click. Support Vim window moves
+  with Ctrl-W and letters, arrows or Ctrl-held directions; keep movement on the
+  requested split axis and allow it during a pending history read.
+
 - Restore IRC membership across saved connection and channel boundaries so a
   peer can reuse a nickname after reconnecting without blocking session resume.
 

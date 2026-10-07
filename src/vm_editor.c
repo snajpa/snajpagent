@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "vm_editor.h"
+#include "term.h"
 #include "unicode.h"
 #include "vm_connection.h"
 #include "vm_text.h"
@@ -256,9 +257,62 @@ display_row(void *opaque, const struct snag_vm_text_row *row)
 }
 
 static size_t
-display_move(struct snag_vm_editor *editor, const char *text, size_t length, size_t at,
-    size_t count, unsigned int key, size_t columns, size_t rows, size_t top)
+composer_display_move(struct snag_vm_editor *editor, const char *prompt, const char *text,
+    size_t length, size_t at, size_t count, unsigned int key, size_t columns,
+    size_t rows, size_t top)
 {
+    struct snag_buf frame = {0};
+    struct snag_term_composer_layout layout;
+    if (snag_term_composer_frame(prompt, text, length, at, (unsigned int)columns,
+        &frame, &layout) < 0) { snag_buf_free(&frame); return at; }
+    size_t target, column = layout.cursor_column;
+    size_t total = layout.end_row + 1u;
+    bool first = key != 'j' && key != 'k';
+    if (!first) {
+        if (editor->column_valid && editor->column_display) column = editor->column;
+        else editor->column = column;
+        editor->column_valid = editor->column_display = true;
+        if (key == 'j') target = count >= total - layout.cursor_row ? total - 1u :
+            layout.cursor_row + count;
+        else target = count > layout.cursor_row ? 0u : layout.cursor_row - count;
+    } else {
+        if (!rows) rows = 1u;
+        if (rows > total) rows = total;
+        if (top > total - rows) top = total - rows;
+        size_t offset = count > rows ? rows - 1u : count - 1u;
+        target = top + (key == 'H' ? offset : key == 'L' ? rows - offset - 1u :
+            (rows - 1u) / 2u);
+        editor->column_valid = false;
+    }
+    struct snag_term_prompt_row line = {0};
+    for (size_t i = 0u, begin = 0u; i <= target && begin <= frame.len; ++i) {
+        line = snag_term_prompt_row(&frame, begin, (unsigned int)columns);
+        begin = line.next;
+    }
+    size_t byte = line.start;
+    size_t cells = 0u;
+    while (byte < line.end) {
+        struct snag_vm_glyph glyph = snag_vm_glyph((const char *)frame.data + byte,
+            line.end - byte, cells, false);
+        if (first ? frame.data[byte] != ' ' : cells + glyph.columns > column) break;
+        cells += glyph.columns;
+        byte += glyph.bytes;
+    }
+    size_t result = at;
+    if (snag_term_composer_hit(prompt, text, length, (unsigned int)columns,
+        byte, &result) < 0) result = at;
+    result = snag_vm_text_floor(text, length, result);
+    if (result == length && result) result = snag_vm_text_previous(text, length, result);
+    snag_buf_free(&frame);
+    return result;
+}
+
+static size_t
+display_move(struct snag_vm_editor *editor, const char *text, size_t length, size_t at,
+    size_t count, unsigned int key, size_t columns, size_t rows, size_t top, const char *prompt)
+{
+    if (prompt) return composer_display_move(editor, prompt, text, length, at, count, key,
+        columns, rows, top);
     struct display_motion motion = {.text = text, .length = length, .cursor = at, .result = at};
     motion.logical_column = snag_vm_text_column(text, length, at, false);
     if (!columns) columns = 1u;
@@ -291,7 +345,7 @@ display_move(struct snag_vm_editor *editor, const char *text, size_t length, siz
 struct snag_vm_motion
 snag_vm_editor_motion(struct snag_vm_editor *editor, const char *text, size_t length,
     size_t at, unsigned int key, size_t count, bool counted, bool prefixed,
-    bool insert, size_t columns, size_t rows, size_t top)
+    bool insert, size_t columns, size_t rows, size_t top, const char *prompt)
 {
     struct snag_vm_motion motion = {.at = at, .valid = true};
     if (key == 'h' || key == SNAG_VM_KEY_LEFT) {
@@ -332,7 +386,7 @@ snag_vm_editor_motion(struct snag_vm_editor *editor, const char *text, size_t le
             change, editor->operator != 0u);
         motion.inclusive = key == 'e' || change;
     } else if (key == 'H' || key == 'M' || key == 'L') {
-        motion.at = display_move(editor, text, length, at, count, key, columns, rows, top);
+        motion.at = display_move(editor, text, length, at, count, key, columns, rows, top, prompt);
         motion.lines = true;
     } else if (key == 'j' || key == 'k' || key == SNAG_VM_KEY_UP || key == SNAG_VM_KEY_DOWN ||
         key == SNAG_VM_KEY_PAGE_UP || key == SNAG_VM_KEY_PAGE_DOWN) {
@@ -340,7 +394,7 @@ snag_vm_editor_motion(struct snag_vm_editor *editor, const char *text, size_t le
         if (key == SNAG_VM_KEY_PAGE_UP || key == SNAG_VM_KEY_PAGE_DOWN)
             count = rows && count <= SIZE_MAX / rows ? count * rows : SIZE_MAX;
         if (prefixed) motion.at = display_move(editor, text, length, at, count,
-            down ? 'j' : 'k', columns, rows, top);
+            down ? 'j' : 'k', columns, rows, top, prompt);
         else {
             if (!editor->column_valid || editor->column_display) editor->column =
                 snag_vm_text_column(text, length, at, false);
@@ -549,7 +603,8 @@ put(struct snag_vm_buffer *buffer, struct snag_vm_register *reg,
 
 enum snag_vm_edit_result
 snag_vm_editor_key(struct snag_vm_buffer *buffer, struct snag_vm_register *reg,
-    const struct snag_vm_input_event *event, bool insert, size_t columns, size_t rows, size_t top)
+    const struct snag_vm_input_event *event, bool insert, size_t columns, size_t rows,
+    size_t top, const char *prompt)
 {
     struct snag_vm_editor *editor = &buffer->editor;
     unsigned int key = event->kind == SNAG_VM_TEXT && event->length == 1u ? event->text[0] :
@@ -585,7 +640,7 @@ snag_vm_editor_key(struct snag_vm_buffer *buffer, struct snag_vm_register *reg,
                 SNAG_VM_EDIT_ERROR : SNAG_VM_EDIT_DONE;
         if (snag_vm_editor_end(buffer) < 0) return SNAG_VM_EDIT_ERROR;
         struct snag_vm_motion motion = snag_vm_editor_motion(editor, text, length, at,
-            key, 1u, false, false, true, columns, rows, top);
+            key, 1u, false, false, true, columns, rows, top, prompt);
         if (motion.valid && !control) {
             snag_vm_draft_cursor(buffer, motion.at);
             return SNAG_VM_EDIT_DONE;
@@ -617,7 +672,7 @@ snag_vm_editor_key(struct snag_vm_buffer *buffer, struct snag_vm_register *reg,
     if (!control && editor->prefix == 'z' && key == 'z') {
         if (counted) {
             struct snag_vm_motion motion = snag_vm_editor_motion(editor, text, length, at,
-                'G', count, true, false, false, columns, rows, top);
+                'G', count, true, false, false, columns, rows, top, prompt);
             snag_vm_draft_cursor(buffer, motion.at);
         }
         snag_vm_editor_normal(buffer, false);
@@ -677,7 +732,7 @@ snag_vm_editor_key(struct snag_vm_buffer *buffer, struct snag_vm_register *reg,
             motion = (struct snag_vm_motion){.at = line_at(text, length, target),
                 .valid = true, .lines = true};
         } else if (!control) motion = snag_vm_editor_motion(editor, text, length, at,
-            key, count, counted, prefixed, false, columns, rows, top);
+            key, count, counted, prefixed, false, columns, rows, top, prompt);
         if (motion.valid) {
             if (operator) result = operate(buffer, reg, motion, operator);
             else {

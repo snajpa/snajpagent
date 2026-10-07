@@ -2,6 +2,17 @@
 
 # Pager retention and the Vim workspace
 
+Pane interaction: every session pane renders its persistent prompt and draft
+through the standalone composer. Owner view snapshots optionally carry the
+configured template, values, captured clock and spinner state. Earlier owners
+retain model/active-state compatibility with unknown count fields. The workspace
+animates visible activity locally; idle prompts add no polling. Draft cursor,
+mouse hits and wrapped editor motions use the same formatted frame and source
+mapping. Click focus repaints even before transcript content arrives. NORMAL
+window navigation accepts letters, arrows and Ctrl-held Vim variants, honors
+split boundaries and cancels pending history movement.
+
+
 Presentation checkpoint: transcript projection sends typed journal content through
 `render.c`, which supplies the standalone text, wrapping and styles to a typed
 workspace sink. The grid consumes inert text and style runs; provider escape

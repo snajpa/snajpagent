@@ -367,11 +367,12 @@ class WorkspaceTests(unittest.TestCase):
         child.command('history ' + journal.parent.name)
         child.repaint_until(b'viewport-line-099')
         child.resize(62, 255)
-        child.repaint_until(b'viewport-line-041')
+        # One row belongs to the persistent session prompt.
+        child.repaint_until(b'viewport-line-042')
         child.until(b'viewport-line-099')
         self.assertIn(b'viewport-line-099', child.output)
         child.resize(90, 320)
-        child.repaint_until(b'viewport-line-013')
+        child.repaint_until(b'viewport-line-014')
         child.resize(12, 100)
         child.repaint_until(b'viewport-line-099')
         child.finish()
@@ -552,6 +553,40 @@ class WorkspaceTests(unittest.TestCase):
         self.assertIn(b'\trenamed\topen\t', self.cli('-l').stdout)
         resumed.finish('close')
         self.resume_hint(resumed, sid)
+
+    def test_window_navigation_stays_in_the_requested_split_direction(self):
+        child = self.start('-N', 'tall-splits', rows=70, columns=24)
+        child.command('sp')
+        child.command('vsp')
+        child.command('sp')
+        child.command('workspace save')
+        self.wait_snapshot(lambda rows:
+            next(iter(rows.values()))['state']['focus'] == 4)
+        # Left occupies the bottom half; right has two small stacked panes.
+        child.write(b'\x17h')
+        self.wait_snapshot(lambda rows:
+            next(iter(rows.values()))['state']['focus'] == 2)
+        # Up must cross the horizontal divider, not jump diagonally right.
+        child.write(b'\x17k')
+        self.wait_snapshot(lambda rows:
+            next(iter(rows.values()))['state']['focus'] == 1)
+        child.finish()
+
+    def test_window_navigation_accepts_vim_control_and_arrow_keys(self):
+        child = self.start('-N', 'window-keys', rows=30, columns=100)
+        child.command('vsp')
+        child.command('sp')
+        self.wait_snapshot(lambda rows:
+            next(iter(rows.values()))['state']['focus'] == 3)
+        for keys, focus in ((b'\x17k', 2), (b'\x17\x08', 1),
+                            (b'\x17\x0c', 2), (b'\x17\x1b[B', 3),
+                            (b'\x17\x0b', 2), (b'\x17\x0a', 3),
+                            (b'\x17\x17', 1)):
+            with self.subTest(keys=keys):
+                child.write(keys)
+                self.wait_snapshot(lambda rows:
+                    next(iter(rows.values()))['state']['focus'] == focus)
+        child.finish()
 
     def test_split_layout_named_resume_and_tiny_resize(self):
         child = self.start('-N', 'operations')

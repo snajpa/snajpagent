@@ -866,6 +866,29 @@ prompt_fits(const char *prompt, const struct snag_term_spinner spinners[SNAG_TER
     return used ? 0 : -1;
 }
 
+int
+snag_term_prompt_render(const char *text, const char *const frames[SNAG_TERM_SPINNER_COUNT],
+    unsigned int states, uint64_t step, char label[SNAG_TERM_LABEL_BYTES], bool *animated)
+{
+    struct snag_term_spinner spinners[SNAG_TERM_SPINNER_COUNT];
+    if (!text || strlen(text) >= SNAG_TERM_LABEL_BYTES ||
+        states >= (1u << SNAG_TERM_SPINNER_COUNT)) return snag_errno(EINVAL);
+    for (size_t i = 0u; i < SNAG_TERM_SPINNER_COUNT; ++i) {
+        if (!frames[i] || !*frames[i] ||
+            !snag_utf8_valid((const unsigned char *)frames[i], strlen(frames[i]), false) ||
+            prepare_spinner(&spinners[i], frames[i]) < 0) return snag_errno(EINVAL);
+    }
+    if (prompt_fits(text, spinners) < 0) return snag_errno(EINVAL);
+    *animated = false;
+    for (unsigned int slot = 0u; slot < SNAG_TERM_SPINNER_SLOTS; ++slot) {
+        unsigned int id = slot == SNAG_TERM_SPINNER_PROVIDER &&
+            (states & (1u << SNAG_TERM_SPINNER_TOOL)) ? SNAG_TERM_SPINNER_TOOL : slot;
+        if ((states & (1u << id)) && spinners[id].frame_count > 1u &&
+            strchr(text, SNAG_TERM_SPINNER_MARKER_BASE + slot)) *animated = true;
+    }
+    return compose_prompt(text, spinners, states, step, label);
+}
+
 static unsigned int
 visible_spinner_states(const struct snag_term *term)
 {
@@ -965,15 +988,10 @@ sync_prompt_layout_after_resize(struct snag_term *term)
 }
 
 /* Views into sanitized prompt bytes, not a terminal-sized cell grid. */
-struct prompt_row {
-    size_t start, end, next, width;
-    bool soft;
-};
-
-static struct prompt_row
-prompt_row(const struct snag_buf *frame, size_t start, unsigned int columns)
+struct snag_term_prompt_row
+snag_term_prompt_row(const struct snag_buf *frame, size_t start, unsigned int columns)
 {
-    struct prompt_row row = {.start = start, .end = start};
+    struct snag_term_prompt_row row = {.start = start, .end = start};
 
     while (row.end < frame->len) {
         uint32_t cp;
@@ -985,6 +1003,10 @@ prompt_row(const struct snag_buf *frame, size_t start, unsigned int columns)
             return row;
         }
         if (width > 0 && row.width + (size_t)width > columns) {
+            if (row.end == row.start) {
+                row.end += n;
+                row.width = columns;
+            }
             row.next = row.end;
             row.soft = true;
             return row;
@@ -1003,10 +1025,10 @@ frame_position(const struct snag_buf *frame, size_t offset, unsigned int columns
     size_t start = 0u;
     *row = 0u;
     for (;;) {
-        struct prompt_row line = prompt_row(frame, start, columns);
+        struct snag_term_prompt_row line = snag_term_prompt_row(frame, start, columns);
         if (offset <= line.end) {
             *col = snag_term_text_width((char *)frame->data + start, offset - start);
-            if (*col == columns) {
+            if (*col >= columns) {
                 ++*row;
                 *col = 0u;
             }
@@ -1082,6 +1104,36 @@ compose_frame(struct snag_term *term, struct snag_buf *out, size_t *label_bytes,
     return 0;
 }
 
+int
+snag_term_composer_frame(const char *label, const char *text, size_t length, size_t cursor,
+    unsigned int columns, struct snag_buf *frame, struct snag_term_composer_layout *layout)
+{
+    struct snag_term term = {.columns = columns, .cursor = cursor,
+        .draft = {.data = (unsigned char *)text, .len = length}};
+    if (!columns || cursor > length || !snag_strcpy(term.label, sizeof(term.label), label))
+        return snag_errno(EINVAL);
+    return compose_frame(&term, frame, &layout->label, &layout->cursor_row,
+        &layout->cursor_column, &layout->end_row, &layout->end_column, NULL);
+}
+
+int
+snag_term_composer_hit(const char *label, const char *text, size_t length, unsigned int columns,
+    size_t frame_byte, size_t *source_byte)
+{
+    struct snag_term term = {.columns = columns,
+        .draft = {.data = (unsigned char *)text, .len = length}};
+    if (!columns || !snag_strcpy(term.label, sizeof(term.label), label))
+        return snag_errno(EINVAL);
+    struct snag_buf frame = {0};
+    struct snag_term_composer_layout layout;
+    size_t source = frame_byte;
+    int rc = compose_frame(&term, &frame, &layout.label, &layout.cursor_row,
+        &layout.cursor_column, &layout.end_row, &layout.end_column, &source);
+    snag_buf_free(&frame);
+    if (!rc) *source_byte = frame_byte < layout.label ? 0u : source;
+    return rc;
+}
+
 /* Keep the editable cursor on screen. Terminal cursor movement cannot reach
  * draft rows already scrolled into history. Keep one row for a pending margin
  * wrap and one for the output boundary. The full draft remains untouched. */
@@ -1097,7 +1149,7 @@ clip_prompt(struct snag_term *term, struct snag_buf *frame, size_t *label,
     else if (*cursor_row - top >= rows) top = *cursor_row - rows + 1u;
     term->viewport_row = top;
     for (size_t y = 0u, next = 0u; y <= *end_row; ++y) {
-        struct prompt_row line = prompt_row(frame, next, term->columns);
+        struct snag_term_prompt_row line = snag_term_prompt_row(frame, next, term->columns);
         if (y == top) start = next;
         if (y == top + rows - 1u) {
             end = line.end;
@@ -1193,8 +1245,9 @@ same_prompt_layout(const struct snag_term *term, const struct snag_buf *next)
     if (!term->prompt_visible || !term->painted_prompt.len || term->painted_columns != term->columns)
         return false;
     while (a <= term->painted_prompt.len && b <= next->len) {
-        struct prompt_row old = prompt_row(&term->painted_prompt, a, term->columns);
-        struct prompt_row row = prompt_row(next, b, term->columns);
+        struct snag_term_prompt_row old =
+            snag_term_prompt_row(&term->painted_prompt, a, term->columns);
+        struct snag_term_prompt_row row = snag_term_prompt_row(next, b, term->columns);
         if (old.soft != row.soft || (old.next <= term->painted_prompt.len) != (row.next <= next->len) ||
             (old.soft && old.width != row.width)) return false;
         a = old.next;
@@ -1222,8 +1275,9 @@ paint_prompt(struct snag_term *term, struct snag_buf *frame, size_t label,
     if (stable) {
         size_t a = 0u, b = 0u, y = 0u;
         while (b <= frame->len) {
-            struct prompt_row old = prompt_row(&term->painted_prompt, a, term->columns);
-            struct prompt_row next = prompt_row(frame, b, term->columns);
+            struct snag_term_prompt_row old =
+            snag_term_prompt_row(&term->painted_prompt, a, term->columns);
+            struct snag_term_prompt_row next = snag_term_prompt_row(frame, b, term->columns);
             size_t ae = old.end, be = next.end, prefix = 0u;
             a = old.start;
             b = next.start;
@@ -1252,7 +1306,8 @@ paint_prompt(struct snag_term *term, struct snag_buf *frame, size_t label,
                 if (col == term->columns) {
                     col = 0u;
                     if (next.soft) {
-                        struct prompt_row following = prompt_row(frame, next.next, term->columns);
+                        struct snag_term_prompt_row following =
+                            snag_term_prompt_row(frame, next.next, term->columns);
                         ++row;
                         if (following.start < following.end) {
                             size_t first = prompt_cell_end(frame->data, following.start, following.end);
@@ -2249,10 +2304,10 @@ move_vertical(struct snag_term *term, bool down, size_t preferred)
     }
     target = down ? target + 1u : target - 1u;
     source = 0u;
-    struct prompt_row line = prompt_row(&frame, source, term->columns);
+    struct snag_term_prompt_row line = snag_term_prompt_row(&frame, source, term->columns);
     for (size_t y = 0u; y < target; ++y) {
         source = line.next;
-        line = prompt_row(&frame, source, term->columns);
+        line = snag_term_prompt_row(&frame, source, term->columns);
     }
     size_t width = 0u;
     while (source < line.end) {

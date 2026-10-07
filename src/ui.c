@@ -660,6 +660,8 @@ extra_tab(const struct snag_ui_display *display, const struct ui_conversation_ta
     return true;
 }
 
+static int view_state(struct snag_ui_display *, const json_t *);
+
 static int
 apply_prompt(struct snag_ui_display *display)
 {
@@ -673,7 +675,8 @@ apply_prompt(struct snag_ui_display *display)
         }
     }
     term->blank_local = display->prompt.values[0] != NULL;
-    return configure_prompt(display, &display->prompt, &display->term);
+    if (configure_prompt(display, &display->prompt, &display->term) < 0) return -1;
+    return view_state(display, display->view_state);
 }
 
 static const struct snag_irc_destination *
@@ -1291,6 +1294,36 @@ session_command(enum snag_ui_operation kind)
 
 static int admit_input(struct snag_ui_display *, const char *, uint64_t);
 
+static json_t *
+view_prompt(const struct snag_ui_display *display)
+{
+    const struct snag_ui_prompt *prompt = &display->prompt;
+    if (!prompt->source || !prompt->values[0]) return json_null();
+    json_t *values = json_array();
+    json_t *frames = json_array();
+    if (!values || !frames) goto fail;
+    for (size_t i = 0u; i < SNAG_PROMPT_HOUR; ++i)
+        if (json_array_append_new(values, json_string(prompt->values[i])) < 0) goto fail;
+    const struct snag_prompt_clock *clock = &display->term.prompt_clock;
+    int parts[] = {clock->hour, clock->minute, clock->second};
+    for (size_t i = 0u; i < sizeof(parts) / sizeof(parts[0]); ++i) {
+        char value[12];
+        (void)snprintf(value, sizeof(value), clock->valid ? "%d" : "--", parts[i]);
+        if (json_array_append_new(values, json_string(value)) < 0) goto fail;
+    }
+    for (size_t i = 0u; i < SNAG_TERM_SPINNER_COUNT; ++i)
+        if (json_array_append_new(frames, json_string(prompt->frames[i])) < 0) goto fail;
+    return json_pack("{s:s,s:o,s:o,s:i,s:i,s:b,s:I,s:I}", "template", prompt->source,
+        "values", values, "frames", frames, "states", (int)prompt->states,
+        "rate", (int)prompt->rate, "active", prompt->active,
+        "epoch", (json_int_t)display->term.spinner_epoch_ms,
+        "tool_until", (json_int_t)display->term.tool_spinner_off_at);
+fail:
+    json_decref(values);
+    json_decref(frames);
+    return NULL;
+}
+
 static int
 view_state(struct snag_ui_display *display, const json_t *state)
 {
@@ -1299,6 +1332,10 @@ view_state(struct snag_ui_display *display, const json_t *state)
     if (!copy) return -1;
     if (display->term.irc_names &&
         json_object_set(copy, "irc_names", display->term.irc_names) < 0) {
+        json_decref(copy);
+        return -1;
+    }
+    if (json_object_set_new(copy, "prompt", view_prompt(display)) < 0) {
         json_decref(copy);
         return -1;
     }
@@ -1515,8 +1552,10 @@ apply_message(struct snag_ui_display *display, struct snag_ui_command *command,
         snag_term_close(&probe);
         return rc;
     }
-    case SNAG_UI_SPINNERS: display->prompt.states = command->data.value;
-        return snag_term_set_spinner_states(term, command->data.value);
+    case SNAG_UI_SPINNERS:
+        display->prompt.states = command->data.value;
+        if (snag_term_set_spinner_states(term, command->data.value) < 0) return -1;
+        return view_state(display, display->view_state);
     case SNAG_UI_DRAFT: return snag_term_restore_draft(term, command->text);
     case SNAG_UI_INSERT: {
         int rc = snag_term_insert_draft(term, command->text);

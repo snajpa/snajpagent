@@ -27,7 +27,7 @@ struct snag_vm_motion {
 /* Shared pure movement for a composer or one projected logical text field. */
 struct snag_vm_motion snag_vm_editor_motion(struct snag_vm_editor *, const char *,
     size_t length, size_t at, unsigned int key, size_t count, bool counted,
-    bool prefixed, bool insert, size_t columns, size_t rows, size_t top);
+    bool prefixed, bool insert, size_t columns, size_t rows, size_t top, const char *prompt);
 
 enum snag_vm_edit_result {
     SNAG_VM_EDIT_ERROR = -1, SNAG_VM_EDIT_UNUSED, SNAG_VM_EDIT_DONE,
@@ -44,6 +44,6 @@ int snag_vm_editor_undo(struct snag_vm_buffer *, bool redo, size_t count);
 void snag_vm_editor_normal(struct snag_vm_buffer *, bool from_insert);
 enum snag_vm_edit_result snag_vm_editor_key(struct snag_vm_buffer *,
     struct snag_vm_register *, const struct snag_vm_input_event *, bool insert,
-    size_t columns, size_t rows, size_t top);
+    size_t columns, size_t rows, size_t top, const char *prompt);
 
 #endif
