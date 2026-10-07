@@ -24,6 +24,19 @@ redacts the blocker text through its ordinary source mapping.
 
 ## Native-storage workspace integration
 
+Active-turn compaction after an IRC summary is covered in both legacy and native
+storage before and after resume. The regression reproduces an absent compaction
+steering snapshot being treated as a mismatched response snapshot; response builds
+continue to reject altered steering text.
+
+Full Linux PTY report tests exposed stack exhaustion during native catalog opening
+on musl worker threads. Admission state and journal-tail scan buffers use owned
+heap storage; the reader fixture also exercises catalog opening on a 128 KiB stack.
+
+The conversation-tab regression reproduces a rejected send arriving after a tab
+switch. Input restoration uses the captured originating tab and preserves the
+newly focused tab's draft.
+
 The converted-tool PTY regression preserves original JSONL bytes, opens the native
 history, changes verbosity, searches across a 5 MiB output page and verifies secret
 redaction. It reproduced missing converted previews and slow initial loading.

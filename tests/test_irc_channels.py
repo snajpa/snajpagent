@@ -214,6 +214,7 @@ class ChannelFixture(QueryFixture):
 
 class ChannelTests(ChannelFixture):
     def test_native_durable_response_and_repaint(self):
+        self.submit("native durable initial response")
         path, before = read_events(self.root / 'state')
         self.assertEqual(path.name, 'journal.bin')
         self.assertTrue(any(e['type'] == 'response_completed' for e in before))

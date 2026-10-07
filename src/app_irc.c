@@ -569,8 +569,7 @@ rejected:
     if (!rc) rc = snag_app_report(app, SNAG_UI_ERROR,
         error[0] ? error : "IRC command failed");
     if (!rc && !report.len && !app->ui.input_interface) {
-        rc = snag_ui_send(&app->ui, (struct snag_ui_command){
-            .kind = SNAG_UI_DRAFT, .text = line});
+        rc = snag_ui_restore_input(&app->ui, line);
     }
 done:
     free(operand);

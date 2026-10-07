@@ -4,6 +4,15 @@
 
 ## Unreleased
 
+- Preserve summarized IRC steering during active-turn compaction and resumed
+  context reconstruction; response requests still validate their steering snapshot.
+
+- Restore rejected input to its original conversation tab when the selected tab
+  changes during dispatch, preserving the newly selected tab's draft.
+
+- Keep native session admission and journal-tail scratch off small worker stacks,
+  including session-list loading in statically linked Linux workspaces.
+
 - Use logical record boundaries for workspace history paging across legacy and
   native journals, including empty panes and inline command output. Resolve
   converted tool previews through canonical native record ranges.

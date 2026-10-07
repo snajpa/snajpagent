@@ -75,12 +75,13 @@ fixture_history_read(const char *dotdir, const char *id, bool coordinates)
     }
     if (fwrite(rows.data, 1u, rows.len, stdout) != rows.len || fflush(stdout)) goto done;
     rc = 0;
-done:
+done:;
+    int status = rc < 0 ? errno == EAGAIN ? 75 : 1 : 0;
     if (rc < 0) fprintf(stderr, "fixture history: %s\n", error[0] ? error : strerror(errno));
     snag_buf_free(&rows);
     snag_session_close(&source);
     snag_store_close(&store);
-    return rc < 0 ? 1 : 0;
+    return status;
 }
 
 #endif

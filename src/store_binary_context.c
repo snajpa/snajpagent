@@ -778,8 +778,10 @@ snag_store_load_binary_session(struct snag_session *session, enum snag_tail_poli
         (uint64_t)before.st_size - window : SNAG_BINARY_HEADER_SIZE;
     if (floor < SNAG_BINARY_HEADER_SIZE) floor = SNAG_BINARY_HEADER_SIZE;
     int images[2] = {-1, -1};
-    struct snag_session candidate;
-    snag_session_init(&candidate);
+    struct snag_session *candidate = malloc(sizeof(*candidate));
+    if (!candidate)
+        return snag_fail(error, error_size, ENOMEM, "cannot allocate native open state");
+    snag_session_init(candidate);
     struct snag_binary_context_admission admission = {0};
     struct snag_binary_checkpoint_sources sources = {0};
     struct snag_binary_producer producer = {0};
@@ -793,11 +795,11 @@ snag_store_load_binary_session(struct snag_session *session, enum snag_tail_poli
     if (control.cancelled && control.cancelled(control.opaque)) { errno = ECANCELED; goto done; }
     if (checkpoint_images_open(session, images, error, error_size) < 0) goto done;
     if (source_header(session->log_fd, &identity, &initial) < 0 ||
-        snag_store_admit_binary_context_checkpoint(session, &candidate, images, floor, NULL,
+        snag_store_admit_binary_context_checkpoint(session, candidate, images, floor, NULL,
             &recovery, &sources, &admission, &control, error, error_size) < 0 ||
-        restore_checkpoint_clock(session->log_fd, &admission, &recovery.verified, &candidate) < 0 ||
+        restore_checkpoint_clock(session->log_fd, &admission, &recovery.verified, candidate) < 0 ||
         snag_binary_producer_restore(&producer, session->log_fd, &recovery.verified,
-            &admission.available, &sources, &candidate,
+            &admission.available, &sources, candidate,
             control.cancelled, control.opaque) < 0) goto done;
     snag_file_info after;
     if (snag_fstat(session->log_fd, &after) < 0) goto done;
@@ -816,42 +818,43 @@ snag_store_load_binary_session(struct snag_session *session, enum snag_tail_poli
     }
     /* Borrow descriptors while staging the owner. Only complete setup transfers
      * the opener's resource custody; cleanup must leave borrowed fds alive. */
-    candidate.dir_fd = session->dir_fd;
-    candidate.log_fd = session->log_fd;
-    candidate.lock_fd = session->lock_fd;
-    candidate.snapshot_read_only = session->snapshot_read_only;
-    if (snag_session_bind_binary(&candidate, &identity, &recovery.verified, &admission.tree,
+    candidate->dir_fd = session->dir_fd;
+    candidate->log_fd = session->log_fd;
+    candidate->lock_fd = session->lock_fd;
+    candidate->snapshot_read_only = session->snapshot_read_only;
+    if (snag_session_bind_binary(candidate, &identity, &recovery.verified, &admission.tree,
             &producer, &sources, NULL, error, error_size) < 0 ||
-        snag_session_binary_checkpoint_setup(&candidate, candidate.dir_fd,
+        snag_session_binary_checkpoint_setup(candidate, candidate->dir_fd,
             admission.generations, admission.sequences, &admission.available,
             error, error_size) < 0) goto done;
-    if (!candidate.snapshot_read_only) {
-        int index = snag_open_private_append_at(candidate.dir_fd, "history.idx", false);
+    if (!candidate->snapshot_read_only) {
+        int index = snag_open_private_append_at(candidate->dir_fd, "history.idx", false);
         if (index < 0 && errno == ENOENT)
-            index = snag_open_private_append_at(candidate.dir_fd, "history.idx", true);
+            index = snag_open_private_append_at(candidate->dir_fd, "history.idx", true);
         if (index >= 0) {
             char index_error[128];
             if (snag_store_verify_private_fd(index, false, "native index", index_error,
                     sizeof(index_error)) < 0 ||
-                snag_session_binary_index_adopt(&candidate, index,
+                snag_session_binary_index_adopt(candidate, index,
                     index_error, sizeof(index_error)) < 0) (void)close(index);
         }
     }
-    candidate.history_cancel = session->history_cancel;
-    candidate.history_cancel_opaque = session->history_cancel_opaque;
-    candidate.dir_path = session->dir_path;
+    candidate->history_cancel = session->history_cancel;
+    candidate->history_cancel_opaque = session->history_cancel_opaque;
+    candidate->dir_path = session->dir_path;
     session->dir_path = NULL;
     session->dir_fd = session->log_fd = session->lock_fd = -1;
     snag_session_close(session);
-    *session = candidate;
-    snag_session_init(&candidate);
+    *session = *candidate;
+    snag_session_init(candidate);
     rc = 0;
 done:
     saved = errno;
     if (rc < 0 && error_size && !error[0])
         snag_errorf(error, error_size, "cannot open native session: %s", strerror(errno));
-    candidate.dir_fd = candidate.log_fd = candidate.lock_fd = -1;
-    snag_session_close(&candidate);
+    candidate->dir_fd = candidate->log_fd = candidate->lock_fd = -1;
+    snag_session_close(candidate);
+    free(candidate);
     for (size_t i = 0u; i < 2u; ++i)
         if (images[i] >= 0) (void)close(images[i]);
     snag_binary_producer_free(&producer);

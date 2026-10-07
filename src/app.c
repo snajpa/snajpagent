@@ -1010,16 +1010,15 @@ finish_queue_edit(struct app_state *app, const char *text, bool active, char *er
         snag_errorf(error, error_size, "queued text must be nonempty valid UTF-8 within 256 KiB");
         (void)snag_ui_text(&app->ui, SNAG_UI_ERROR, error);
         error[0] = '\0';
-        if (set_input_prompt(app, active) < 0 || snag_ui_send(&app->ui, (struct snag_ui_command){
-                .kind = SNAG_UI_DRAFT, .text = original}) < 0) return -1;
+        if (set_input_prompt(app, active) < 0 ||
+            snag_ui_restore_input(&app->ui, original) < 0) return -1;
         return 1;
     }
     if (commit_event(app, "future_turn_edited",
                      json_pack("{s:b,s:b,s:s,s:s}", "armed", restore_armed && app->session.active_turn,
                                "read_only", read_only, "queue_id", queued->queue_id, "text", text),
                      error, error_size) < 0) {
-        if (set_input_prompt(app, active) == 0) (void)snag_ui_send(&app->ui, (struct snag_ui_command){
-                .kind = SNAG_UI_DRAFT, .text = original});
+        if (set_input_prompt(app, active) == 0) (void)snag_ui_restore_input(&app->ui, original);
         return -1;
     }
     if (snag_ui_submitted(&app->ui, app->ui.label, original, false) < 0)
@@ -2949,8 +2948,7 @@ send_operator_conversation(struct app_state *app, const char *line, const char *
         if (snag_buf_printf(&report, "%s", error[0] ? error : "conversation send failed") < 0 ||
             snag_buf_terminate(&report) < 0 ||
             app_error(app, (const char *)report.data) < 0) goto fail;
-        if (!accepted && snag_ui_send(&app->ui, (struct snag_ui_command){
-            .kind = SNAG_UI_DRAFT, .text = line}) < 0) goto fail;
+        if (!accepted && snag_ui_restore_input(&app->ui, line) < 0) goto fail;
     }
     snag_buf_free(&report);
     return 0;
@@ -2990,8 +2988,7 @@ send_operator_routed(struct app_state *app, const char *line, const char *text,
                 report.len > 1u ? (const char *)report.data : error) < 0) rc = -1;
     }
     snag_buf_free(&report);
-    if (rc == 1) return snag_ui_send(&app->ui, (struct snag_ui_command){
-            .kind = SNAG_UI_DRAFT, .text = line});
+    if (rc == 1) return snag_ui_restore_input(&app->ui, line);
     return rc < 0 ? -1 : 0;
 }
 
@@ -3133,8 +3130,7 @@ handle_destination_command(struct app_state *app, const char *line, bool *handle
     if (command == SNAG_IRC_TARGET_NONE) return 0;
     if (command == SNAG_IRC_TARGET_INVALID) {
         if (app_error(app, "use /N to select, /N TEXT to send once, or /all TEXT") < 0) return -1;
-        return snag_ui_send(&app->ui, (struct snag_ui_command){
-            .kind = SNAG_UI_DRAFT, .text = line});
+        return snag_ui_restore_input(&app->ui, line);
     }
     if (command == SNAG_IRC_TARGET_SELECT) return snag_ui_send(&app->ui, (struct snag_ui_command){
             .kind = SNAG_UI_SELECT, .data.value = id}) < 0 ?
@@ -3143,8 +3139,7 @@ handle_destination_command(struct app_state *app, const char *line, bool *handle
         char error[96u];
         (void)snprintf(error, sizeof(error), "destination %u is unavailable; use /names", id);
         if (app_error(app, error) < 0) return -1;
-        return snag_ui_send(&app->ui, (struct snag_ui_command){
-            .kind = SNAG_UI_DRAFT, .text = line});
+        return snag_ui_restore_input(&app->ui, line);
     }
     return send_operator_routed(app, line, line + body, SNAG_IRC_MESSAGE);
 }
@@ -4053,8 +4048,8 @@ again:;
         rc = queue_future_turn(app, line, true, error, sizeof(error));
         if (rc != 0) {
             (void)snag_ui_text(&app->ui, SNAG_UI_ERROR, error);
-            if (set_input_prompt(app, true) < 0 || snag_ui_send(&app->ui, (struct snag_ui_command){
-                    .kind = SNAG_UI_DRAFT, .text = line}) < 0) rc = -1;
+            if (set_input_prompt(app, true) < 0 ||
+                snag_ui_restore_input(&app->ui, line) < 0) rc = -1;
         } else rc = set_input_prompt(app, true);
     } else {
         bool single_line = strchr(line, '\n') == NULL;
@@ -4087,8 +4082,7 @@ again:;
                     (void)snag_ui_text(&app->ui, SNAG_UI_ERROR,
                         error[0] ? error : "IRC message could not be queued");
                     rc = set_input_prompt(app, true);
-                    if (rc == 0) rc = snag_ui_send(&app->ui, (struct snag_ui_command){
-                            .kind = SNAG_UI_DRAFT, .text = line});
+                    if (rc == 0) rc = snag_ui_restore_input(&app->ui, line);
                 } else rc = set_input_prompt(app, true);
             } else if (!app->session.active_turn) {
                 rc = queue_future_turn(app, text, true, error, sizeof(error));
@@ -4107,8 +4101,7 @@ again:;
                     (void)snag_ui_text(&app->ui, SNAG_UI_ERROR, error[0] ? error :
                                                "active-turn input could not be persisted");
                     if (set_input_prompt(app, true) == 0)
-                        (void)snag_ui_send(&app->ui, (struct snag_ui_command){
-                            .kind = SNAG_UI_DRAFT, .text = line});
+                        (void)snag_ui_restore_input(&app->ui, line);
                 } else {
                     /* A steer during pre-response compaction belongs in the
                      * next projection, not in an interruption of compaction.

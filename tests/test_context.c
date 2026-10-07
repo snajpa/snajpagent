@@ -2091,6 +2091,61 @@ test_durable_irc_input_watermark(struct snag_store *store, const char *path)
 }
 
 static void
+test_irc_summary_during_active_compaction(struct snag_store *store, const char *cwd)
+{
+    const char *turn = "eb100000000000000000000000000000";
+    const char *steer = "eb200000000000000000000000000000";
+    for (unsigned int legacy = 0u; legacy < 2u; ++legacy) {
+        struct snag_session session;
+        char error[256] = "";
+        char id[SNAG_ID_HEX_LEN + 1u];
+        if (legacy) create_legacy_session(store, &session, cwd, "medium");
+        else create_session(store, &session, cwd, "medium");
+        memcpy(id, session.id, sizeof(id));
+        commit_event(&session, "turn_started", turn_started(turn, 1u, "active task", cwd, NULL));
+        struct snag_irc_event event = {.kind = SNAG_IRC_MESSAGE, .timestamp_ms = 1u,
+            .endpoint = "fixture:1234", .room = "#lab", .nick = "peer",
+            .text = "covered room instruction", .stream = "11111111111111111111111111111111",
+            .sequence = 1u, .historical = true, .input = true};
+        commit_event(&session, "irc_event", snag_irc_event_data(&event));
+        commit_event(&session, "irc_admitted", json_pack("{s:[I],s:o}",
+            "sequences", (json_int_t)session.irc_received_seq,
+            "steering", steering_added(turn, steer, event.text)));
+        commit_event(&session, "input_admitted", json_pack("{s:[s],s:I,s:s}",
+            "steering_ids", steer, "time_ms", (json_int_t)1788739291000LL, "turn_id", turn));
+        commit_event(&session, "irc_compacted", json_pack("{s:I,s:I,s:s}",
+            "through_seq", (json_int_t)(session.next_seq - 1u), "count", (json_int_t)1,
+            "summary", "retained room summary"));
+        for (unsigned int resume = 0u; resume < 2u; ++resume) {
+            struct snag_context_projection compact = {0};
+            int rc = snag_context_compact_request_build(&session, SNAJPAGENT_MODEL,
+                "medium", true, 0u, false, NULL, &compact, error, sizeof(error), NULL);
+            if (rc < 0) fprintf(stderr, "covered IRC active compaction: %s\n", error);
+            assert(rc >= 0);
+            snag_context_projection_free(&compact);
+            json_t *snapshot = json_pack("[{s:s,s:s}]", "id", steer, "text", event.text);
+            struct snag_context_projection projection = {0};
+            assert(snapshot);
+            build_context(&session, 1u, snapshot, NULL, &projection);
+            json_t *input = json_object_get(projection.create_request.value, "input");
+            assert(message_matching(input, "retained room summary"));
+            assert(!message_matching(input, event.text));
+            assert(!json_object_set_new(json_array_get(snapshot, 0u),
+                "text", json_string("wrong")));
+            error[0] = '\0';
+            assert(snag_context_build(&session, SNAJPAGENT_MODEL, "medium", 1u, snapshot,
+                0u, false, NULL, NULL, NULL, NULL, &projection, error, sizeof(error), NULL) < 0);
+            assert(strstr(error, "steering"));
+            snag_context_projection_free(&projection);
+            json_decref(snapshot);
+            snag_session_close(&session);
+            assert(!snag_session_open(store, &session, id, error, sizeof(error)));
+        }
+        snag_session_close(&session);
+    }
+}
+
+static void
 test_irc_context_summary(struct snag_store *store, const char *cwd)
 {
     struct snag_session session;
@@ -5478,6 +5533,7 @@ main(int argc, char **argv)
     test_irc_source_shifted_by_checkpoint(&store, cwd);
     test_irc_source_lookup_bounds(&store, cwd);
     test_irc_lookup_skips_unrelated_checkpoint(&store, cwd);
+    test_irc_summary_during_active_compaction(&store, cwd);
     test_irc_context_summary(&store, cwd);
     test_admitted_room_event_stays_out_of_tool_exchange(&store, cwd);
     test_compact_groups(&store, cwd);

@@ -313,6 +313,11 @@ include every split point and prior buffered content, not only complete strings.
 
 ## Authoritative IRC checkpoint state
 
+An IRC summary keeps its covered steering during active-turn conversation
+compaction. Only a response projection supplies and validates a captured steering
+snapshot; compaction uses the durable coverage and has no response snapshot.
+
+
 The native IRC replay state has three distinct parts: per-endpoint/room stream
 watermarks, current replay membership, and the bounded visible history ring.
 The ring alone cannot restore the other two. In particular, a member's JOIN may

@@ -3402,8 +3402,9 @@ file position and effect ownership stay unchanged. Missing images or source
 membership remain unavailable; cancellation leaves the previous cache owner in
 place. This repair has no lifetime replay fallback.
 
-Nested native checkpoint admission, suffix restore and joint materialization use
-heap-owned provisional sessions. Each owner is released on failure or cleared
+Native session opening, nested checkpoint admission, suffix restore and joint
+materialization use heap-owned provisional sessions. Journal-tail searches keep
+their read buffer on the heap as well. Each owner is released on failure or cleared
 after successful transfer. This keeps the fixed worker stack independent of the
 number of restoration stages; the same canonical validation and atomic adoption
 contracts apply.

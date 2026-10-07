@@ -6026,7 +6026,8 @@ after the process exits.
 .TP
 .B My message was not sent to the room.
 Ordinary rollout text is local input.  Select chat or use an explicit numbered
-send.  Offline chat restores an unsendable draft instead of silently running
+send.  Rejected input returns to its originating tab even if the selected tab
+changes while the send is processed. Offline chat restores an unsendable draft instead of silently running
 a private turn.  Check
 .B /names
 and

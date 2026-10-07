@@ -70,6 +70,22 @@ projection_record(struct snag_session *source, const char *type, json_t *data)
     json_decref(event);
 }
 
+struct catalog_stack_test {
+    struct snag_store *store;
+    struct snag_session *owned;
+    json_t *catalog;
+    char error[256];
+};
+
+static void *
+small_stack_catalog(void *opaque)
+{
+    struct catalog_stack_test *test = opaque;
+    test->catalog = snag_store_catalog(test->store, test->owned, 10u,
+        NULL, NULL, test->error, sizeof(test->error));
+    return NULL;
+}
+
 static void
 native_page_test(struct snag_store *store, const char *root)
 {
@@ -81,6 +97,18 @@ native_page_test(struct snag_store *store, const char *root)
     json_t *data = json_pack("{s:s,s:s}", "goal_id", "80000000000000000000000000000000",
         "prompt", "native page input");
     assert(data && !snag_session_commit(&source, "goal_started", data, NULL, error, sizeof(error)));
+    /* Match the shipped musl worker stack on every test host. Native catalog
+     * admission must own large provisional state and I/O buffers on the heap. */
+    struct catalog_stack_test stack = {.store = store, .owned = &source};
+    pthread_attr_t attributes;
+    pthread_t worker;
+    assert(!pthread_attr_init(&attributes));
+    assert(!pthread_attr_setstacksize(&attributes, 128u * 1024u));
+    assert(!pthread_create(&worker, &attributes, small_stack_catalog, &stack));
+    assert(!pthread_attr_destroy(&attributes));
+    assert(!pthread_join(worker, NULL));
+    assert(stack.catalog && json_array_size(stack.catalog) == 1u);
+    json_decref(stack.catalog);
     struct snag_vm_read_request request = {.trusted_tail = true};
     memcpy(request.session_id, source.id, sizeof(request.session_id));
     request.tail.offset = source.log_end;

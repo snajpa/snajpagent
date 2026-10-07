@@ -3,6 +3,7 @@
 """Canonical read-only history for native-default CLI fixtures."""
 import json
 import subprocess
+import time
 from pathlib import Path
 
 
@@ -19,6 +20,23 @@ def journal_paths(dotdir):
             all(char in "0123456789abcdef" for char in directory.name)]
 
 
+def history_result(journal, operation):
+    # Read-only native reconstruction reports EAGAIN when its source grows.
+    # Discard that attempt's output; retry only the fixture's explicit status.
+    deadline = time.monotonic() + 15
+    while True:
+        result = subprocess.run(
+            [str(READER), operation, str(journal.parent.parent.parent),
+             journal.parent.name], capture_output=True,
+            timeout=max(.01, deadline - time.monotonic()))
+        if result.returncode != 75 or time.monotonic() >= deadline:
+            break
+        time.sleep(.01)
+    if result.returncode:
+        raise RuntimeError(result.stderr.decode(errors="replace").strip())
+    return result.stdout
+
+
 def read_events(journal):
     journal = Path(journal)
     if journal.name == "events.jsonl":
@@ -26,12 +44,7 @@ def read_events(journal):
                 if line.strip()]
     if journal.name != "journal.bin":
         raise ValueError(f"unsupported fixture journal: {journal}")
-    result = subprocess.run(
-        [str(READER), "--read-history", str(journal.parent.parent.parent),
-         journal.parent.name], capture_output=True, timeout=15)
-    if result.returncode:
-        raise RuntimeError(result.stderr.decode(errors="replace").strip())
-    return [json.loads(line) for line in result.stdout.splitlines()]
+    return [json.loads(line) for line in history_result(journal, "--read-history").splitlines()]
 
 
 def read_boundary(journal):
@@ -39,12 +52,7 @@ def read_boundary(journal):
     journal = Path(journal)
     if journal.name not in ("events.jsonl", "journal.bin"):
         raise ValueError(f"unsupported fixture journal: {journal}")
-    result = subprocess.run(
-        [str(READER), "--read-boundary", str(journal.parent.parent.parent),
-         journal.parent.name], capture_output=True, timeout=15)
-    if result.returncode:
-        raise RuntimeError(result.stderr.decode(errors="replace").strip())
-    return json.loads(result.stdout)
+    return json.loads(history_result(journal, "--read-boundary"))
 
 
 def create_legacy(dotdir, cwd, provider, model, effort="medium"):

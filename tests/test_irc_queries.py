@@ -56,6 +56,18 @@ class QueryFixture(unittest.TestCase):
         self.observer = self.connect('observer')
         self.wait(lambda: any(e['type'] in ('irc_event', 'irc_event_v2') and
                   e['data'].get('nick') == 'observer' for e in self.events()))
+        # Connection observations can be queued between idle turns. Wait for
+        # the final startup MODE to be admitted and its provider turn completed
+        # before testing that an isolated NOTICE cannot trigger a turn.
+        def startup_idle():
+            events = self.events()
+            mode = next((e['seq'] for e in events if e['type'] == 'irc_event_v2' and
+                         e['data'].get('text') == '+o observer'), None)
+            admitted = [e['seq'] for e in events if e['type'] == 'irc_admitted' and
+                        mode in e['data']['sequences']]
+            return admitted and any(e['type'] in ('turn_completed', 'turn_completed_silent') and
+                                    e['seq'] > admitted[-1] for e in events)
+        self.wait(startup_idle)
         self.wait_idle()
 
     def start(self, *args, ready=b'queryop@'):
@@ -136,10 +148,11 @@ class QueryFixture(unittest.TestCase):
         self.fail(('condition timed out', bytes(self.term.output[-3000:]), self.events()[-3:]))
 
     def wait_idle(self):
-        self.wait(lambda: bool(self.events()) and
-                  sum(e['type'] == 'turn_started' for e in self.events()) ==
-                  sum(e['type'] in ('turn_completed', 'turn_completed_silent')
-                      for e in self.events()))
+        def idle():
+            events = self.events()
+            return bool(events) and sum(e['type'] == 'turn_started' for e in events) == sum(
+                e['type'] in ('turn_completed', 'turn_completed_silent') for e in events)
+        self.wait(idle)
 
     def submit(self, text):
         before = sum(e['type'] == 'turn_completed' for e in self.events())

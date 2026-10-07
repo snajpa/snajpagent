@@ -46,7 +46,7 @@ enum snag_ui_operation {
     SNAG_UI_SELECT, SNAG_UI_ROUTE, SNAG_UI_CONVERSATION, SNAG_UI_CONVERSATION_SELECT,
     SNAG_UI_COMMANDS, SNAG_UI_PAUSE,
     SNAG_UI_OPEN, SNAG_UI_EXTERNAL, SNAG_UI_PROMPT, SNAG_UI_HOLD, SNAG_UI_SPINNERS,
-    SNAG_UI_DRAFT, SNAG_UI_INSERT, SNAG_UI_AUDIO, SNAG_UI_CAPTION,
+    SNAG_UI_DRAFT, SNAG_UI_INPUT_DRAFT, SNAG_UI_INSERT, SNAG_UI_AUDIO, SNAG_UI_CAPTION,
     SNAG_UI_VIEW, SNAG_UI_SUBMITTED, SNAG_UI_PUBLIC_BEGIN, SNAG_UI_PUBLIC, SNAG_UI_VALIDATE,
     SNAG_UI_ORIENTATION, SNAG_UI_HISTORY, SNAG_UI_IRC, SNAG_UI_DURABLE, SNAG_UI_EVENT,
     SNAG_UI_RESUME, SNAG_UI_PROTOCOL, SNAG_UI_TRANSPORT, SNAG_UI_RAW, SNAG_UI_HISTORY_SNAPSHOT,
@@ -77,6 +77,8 @@ struct snag_ui_command {
     size_t len;
     union {
         unsigned int value;
+        struct { enum snag_render_view view; uint32_t destination;
+            const char *conversation; } draft;
         struct snag_session_process *session_process;
         struct snag_view_channel *view_channel;
         struct { uint64_t generation; unsigned char *bytes; bool *present;
@@ -102,6 +104,8 @@ struct snag_ui_command {
 };
 
 int snag_ui_send(struct snag_ui *ui, struct snag_ui_command command);
+/* Restore rejected input to its captured tab without changing current focus. */
+int snag_ui_restore_input(struct snag_ui *ui, const char *text);
 
 int snag_ui_init(struct snag_ui *ui);
 /* Transfer owner descriptors to the presentation thread before opening input. */

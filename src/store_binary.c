@@ -880,26 +880,34 @@ verify_parent(int fd, struct snag_binary_anchor *previous, uint64_t turns)
 static int
 last_wire_end(int fd, uint64_t end, uint64_t *out)
 {
-    unsigned char bytes[65536];
+    struct snag_buf bytes = {.max = 65536u};
+    size_t capacity = end - SNAG_BINARY_HEADER_SIZE < bytes.max ?
+        (size_t)(end - SNAG_BINARY_HEADER_SIZE) : bytes.max;
+    if (snag_buf_reserve(&bytes, capacity) < 0) return -1;
+    int rc = -1;
     uint64_t position = end;
     size_t remaining = SNAG_BINARY_WIRE_BATCH_MAX;
     while (position > SNAG_BINARY_HEADER_SIZE && remaining) {
         uint64_t available = position - SNAG_BINARY_HEADER_SIZE;
-        size_t size = available > sizeof(bytes) ? sizeof(bytes) : (size_t)available;
+        size_t size = available > capacity ? capacity : (size_t)available;
         if (size > remaining) size = remaining;
         position -= size;
-        if (read_full_at(fd, bytes, size, position) < 0) return -1;
+        if (read_full_at(fd, bytes.data, size, position) < 0) goto done;
         for (size_t i = size; i > 0u; --i) {
-            if (!bytes[i - 1u]) {
+            if (!bytes.data[i - 1u]) {
                 *out = position + i;
-                return 0;
+                rc = 0;
+                goto done;
             }
         }
         remaining -= size;
     }
-    if (position != SNAG_BINARY_HEADER_SIZE) return invalid();
+    if (position != SNAG_BINARY_HEADER_SIZE) { invalid(); goto done; }
     *out = SNAG_BINARY_HEADER_SIZE;
-    return 0;
+    rc = 0;
+done:
+    snag_buf_free(&bytes);
+    return rc;
 }
 
 int

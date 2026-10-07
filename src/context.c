@@ -2145,7 +2145,9 @@ context_event(void *opaque, const struct snag_session *state,
         if (irc_covered) {
             const struct snag_pending_steering *pending =
                 steering ? pending_steering_at_seq(builder->session, seq) : NULL;
-            if (pending && pending->first_context_ms &&
+            /* Response projections validate their captured steering snapshot.
+             * Active compaction has no snapshot and retains this IRC coverage. */
+            if (builder->steering && pending && pending->first_context_ms &&
                 !steering_matches_snapshot(builder, snag_json_string(steering, "steering_id"),
                     snag_json_string(steering, "text"), json_object_get(steering, "content")))
                 return snag_fail(error, error_size, EINVAL,

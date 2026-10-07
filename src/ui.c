@@ -729,6 +729,39 @@ display_select_draft(struct snag_ui_display *display, struct ui_conversation_tab
 }
 
 static int
+display_restore_input(struct snag_ui_display *display, const struct snag_ui_command *command)
+{
+    struct snag_buf *draft;
+    size_t *cursor;
+    bool focused;
+    if (command->data.draft.view == SNAG_RENDER_CHAT && command->data.draft.conversation[0]) {
+        struct ui_conversation_tab *tab = display->conversations;
+        while (tab && strcmp(tab->target.conversation, command->data.draft.conversation))
+            tab = tab->next;
+        if (!tab) return snag_errno(ENOENT);
+        draft = &tab->draft;
+        cursor = &tab->cursor;
+        focused = display->conversation == tab;
+    } else {
+        struct ui_channel_draft *main = command->data.draft.view == SNAG_RENDER_ROLLOUT ?
+            &display->rollout_draft :
+            display_channel_draft(display, command->data.draft.destination);
+        if (!main) return -1;
+        draft = &main->text;
+        cursor = &main->cursor;
+        focused = !display->conversation && display->main_draft == main;
+    }
+    if (focused) return snag_term_restore_draft(&display->term, command->text);
+    if (command->len > SNAG_MAX_DIRECT_PROMPT) return snag_errno(EOVERFLOW);
+    if (command->len > draft->len &&
+        snag_buf_reserve(draft, command->len - draft->len) < 0) return -1;
+    snag_buf_reset(draft);
+    if (snag_buf_append(draft, command->text, command->len) < 0) return -1;
+    *cursor = command->len;
+    return 0;
+}
+
+static int
 display_conversation_event(struct snag_ui_display *display, const struct snag_irc_event *event)
 {
     if (!event->routed ||
@@ -1557,6 +1590,7 @@ apply_message(struct snag_ui_display *display, struct snag_ui_command *command,
         if (snag_term_set_spinner_states(term, command->data.value) < 0) return -1;
         return view_state(display, display->view_state);
     case SNAG_UI_DRAFT: return snag_term_restore_draft(term, command->text);
+    case SNAG_UI_INPUT_DRAFT: return display_restore_input(display, command);
     case SNAG_UI_INSERT: {
         int rc = snag_term_insert_draft(term, command->text);
         return rc < 0 && (errno == EOVERFLOW || errno == EILSEQ) ? 1 : rc;
@@ -2186,10 +2220,18 @@ snag_ui_send(struct snag_ui *ui, struct snag_ui_command command)
 {
     struct ui_message message = {.command = command};
     switch (command.kind) {
-    case SNAG_UI_DRAFT: case SNAG_UI_EVENT: case SNAG_UI_DURABLE:
+    case SNAG_UI_DRAFT: case SNAG_UI_INPUT_DRAFT: case SNAG_UI_EVENT: case SNAG_UI_DURABLE:
         return send_message(ui, &message, command.text);
     default: return request(ui, &message, NULL, NULL, 0u);
     }
+}
+
+int
+snag_ui_restore_input(struct snag_ui *ui, const char *text)
+{
+    return snag_ui_send(ui, (struct snag_ui_command){.kind = SNAG_UI_INPUT_DRAFT, .text = text,
+        .data.draft = {.view = ui->input_view, .destination = ui->input_destination,
+            .conversation = ui->input_conversation.conversation}});
 }
 
 int
