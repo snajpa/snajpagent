@@ -17,9 +17,10 @@ def mouse(child, row, column, button=0, release=False):
     child.write(f'\x1b[<{button};{column + 1};{row + 1}{"m" if release else "M"}'.encode())
 
 
-def positions(child, marker):
-    child.repaint_until(marker.encode())
-    # The frontend's forced frame supplies CUP-addressed runs. Locate a marker
+def positions(child, marker, repaint=True):
+    if repaint:
+        child.repaint_until(marker.encode())
+    # The frontend supplies CUP-addressed runs. Locate a marker
     # in those real runs rather than assuming where wrapping put its source.
     output = bytes(child.output).decode('utf-8', 'replace')
     frame = output.rfind('\x1b[2J')

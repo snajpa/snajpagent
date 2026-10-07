@@ -3593,7 +3593,7 @@ window_prompt(struct vm *vm, struct vm_window *window, struct snag_vm_connection
 
 static int
 draw_composer(struct vm *vm, struct vm_window *window, struct snag_vm_buffer *buffer,
-    size_t *height, bool editing)
+    size_t *height, bool cursor_visible)
 {
     const struct snag_vm_rectangle *r = &window->rectangle;
     if (window_prompt(vm, window, buffer ? buffer->connection : NULL) < 0) return -1;
@@ -3637,7 +3637,7 @@ draw_composer(struct vm *vm, struct vm_window *window, struct snag_vm_buffer *bu
         }
         at = row.next;
     }
-    if (editing) {
+    if (cursor_visible) {
         vm->cursor_row = window->composer_row + layout.cursor_row - top;
         vm->cursor_column = r->column + layout.cursor_column;
     }
@@ -3825,10 +3825,12 @@ draw_window(void *opaque, const struct snag_vm_rectangle *rectangle)
     struct snag_vm_connection *c = connection_for(vm, window->session_id, false);
     struct snag_vm_buffer *b = window_buffer(vm, window);
     bool editing = index == vm->focus && vm->composer && snag_vm_buffer_writable(b) && !vm->mode;
-    if (window->kind == VIEW_TRANSCRIPT && height &&
-        draw_composer(vm, window, b, &height, editing) < 0) return -1;
-    window->history_rows = height;
     size_t count = row_count(vm, window);
+    bool prompt_cursor = index == vm->focus && !vm->mode &&
+        window->kind == VIEW_TRANSCRIPT && (editing || window->follow || !count);
+    if (window->kind == VIEW_TRANSCRIPT && height &&
+        draw_composer(vm, window, b, &height, prompt_cursor) < 0) return -1;
+    window->history_rows = height;
     if (document_view(window) && window->follow)
         window->top = count > height ? count - height : 0u;
     if (window->selected >= count) window->selected = count ? count - 1u : 0u;
@@ -3852,7 +3854,7 @@ draw_window(void *opaque, const struct snag_vm_rectangle *rectangle)
             row_styles(vm, rectangle, rectangle->row + i - window->top,
                 snag_vm_document_block(window->document, row.block), &row, text);
             highlight_selection(vm, window, &row, rectangle->row + i - window->top);
-            if (i == window->selected && index == vm->focus && !editing) {
+            if (i == window->selected && index == vm->focus && !prompt_cursor) {
                 const json_t *block = snag_vm_document_block(window->document, row.block);
                 size_t byte = row.begin;
                 if (window->anchor_heading == row.heading &&
@@ -3973,7 +3975,7 @@ draw_window(void *opaque, const struct snag_vm_rectangle *rectangle)
     }
     size_t status_row = rectangle->row + rectangle->rows - 1u;
     unsigned int style = index == vm->focus ?
-        SNAG_VM_BOLD | SNAG_VM_REVERSE | SNAG_VM_CYAN : SNAG_VM_REVERSE;
+        SNAG_VM_REVERSE : SNAG_VM_BOLD | SNAG_VM_REVERSE | SNAG_VM_CYAN;
     for (size_t column = rectangle->column;
         column < rectangle->column + rectangle->columns; ++column)
         vm->grid.back.cells[status_row * vm->grid.columns + column].style = style;

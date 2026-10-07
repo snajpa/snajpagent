@@ -1781,6 +1781,8 @@ saved views retain their selected level. Use :verbosity to change it.
 IRC traffic appears in its channel or query view, separately from the rollout.
 Workspace colors follow [ui] color and NO_COLOR. Split separators and
 full-width status bars identify pane boundaries and the focused window.
+The focused status bar uses the terminal's normal reverse colors; other bars
+use light blue when color is enabled.
 Resizing reflows text to the available width. FOLLOW fills the available height
 with recent history, reading across journal pages as needed; HOLD preserves the
 selected source position.
@@ -1788,6 +1790,10 @@ Pending history loads in other panes continue after resize or catalogue refresh.
 Transcript-only restore reads the displayed sessions; opening :sessions loads the
 session catalogue. Pane status begins with the session name when available.
 Each session pane keeps its normal prompt visible, including an empty draft.
+In FOLLOW, the focused pane places the cursor at its prompt immediately,
+including after restore, pane navigation and resize. Moving through history or
+selecting transcript text puts the cursor at that source position; G returns
+to FOLLOW and the prompt.
 Current owners supply their configured prompt, timestamp, effective model,
 context meter and activity state. Prompt colors, word wrapping, multiline
 indentation and mouse hit positions share the standalone composer.

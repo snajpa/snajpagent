@@ -11,6 +11,11 @@ mouse hits and wrapped editor motions use the same formatted frame and source
 mapping. Click focus repaints even before transcript content arrives. NORMAL
 window navigation accepts letters, arrows and Ctrl-held Vim variants, honors
 split boundaries and cancels pending history movement.
+The focused FOLLOW pane anchors the terminal cursor to its prompt even before
+editing begins or history loads. HOLD and visual selection retain the source
+cursor. The focused status bar uses normal reverse colors; inactive bars use
+the cyan reverse style. Automatic frame updates cover cursor and focus changes
+without depending on a later key or a forced redraw.
 
 
 Presentation checkpoint: transcript projection sends typed journal content through

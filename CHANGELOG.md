@@ -4,6 +4,11 @@
 
 ## Unreleased
 
+- Place the focused workspace cursor at its prompt immediately in FOLLOW,
+  including restore, pane navigation and resize. Keep history selection at its
+  source cursor. Use a white status bar for the active pane and light blue for
+  inactive panes.
+
 - Keep the normal session prompt visible in every workspace pane. Share the
   standalone composer for colors, wrapping and mouse hits; current owners supply
   live prompt configuration, model, context and activity state.

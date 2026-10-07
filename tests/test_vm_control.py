@@ -4,6 +4,7 @@
 import hashlib
 import json
 import os
+import re
 import shutil
 import signal
 import sys
@@ -115,6 +116,110 @@ class ControlTests(unittest.TestCase):
         prompt_rows = positions(child, marker)
         self.assertIn((draft_row, draft_column - len(marker) - 1), prompt_rows)
         self.escape(child)
+        self.assertEqual(self.inputs(), [])
+        child.finish('session detach')
+
+    def test_follow_cursor_is_at_prompt_without_an_extra_key(self):
+        from test_vm_mouse import mouse, positions
+
+        def prompt_cursor(child, occurrence=0, rows=24):
+            marker = 'fake/host-model/medium'
+            deadline = time.monotonic() + 5
+            actual = expected = None
+            while time.monotonic() < deadline:
+                child.read(.02)
+                prompts = [position for position in positions(child, marker, repaint=False)
+                           if position[0] == rows - 3]
+                cursor = re.findall(rb'\x1b\[(\d+);(\d+)H\x1b\[\?25([hl])',
+                                    child.output)
+                if len(prompts) > occurrence and cursor:
+                    row, column = prompts[occurrence]
+                    expected = row, column + len(marker + '   ?% › '), b'h'
+                    y, x, visible = cursor[-1]
+                    actual = int(y) - 1, int(x) - 1, visible
+                    if actual == expected:
+                        return
+            self.assertIsNotNone(expected, (prompts, rows))
+            self.assertEqual(actual, expected, 'cursor needs another input or redraw')
+
+        child = self.start('-N', 'idle-cursor', rows=24, columns=160)
+        child.command('attach ' + self.owner.sid)
+        child.until(b'ATTACHED')
+        prompt_cursor(child)
+        child.write(b'icursor-check\r')
+        child.until(b'semantic-answer')
+        child.write(b'\x1b')
+        child.read(.08)
+        child.write(b'\t')
+        prompt_cursor(child)
+        row, column = positions(child, 'semantic-answer', repaint=False)[0]
+        mouse(child, row, column + 2)
+        mouse(child, row, column + 2, release=True)
+        self.wait_snapshot(lambda rows:
+            not next(iter(rows.values()))['state']['windows'][0]['history']['follow'])
+        cursor = re.findall(rb'\x1b\[(\d+);(\d+)H\x1b\[\?25h', child.output)[-1]
+        self.assertEqual(tuple(int(value) - 1 for value in cursor), (row, column + 2))
+        child.write(b'G')
+        prompt_cursor(child)
+        child.command('vsp')
+        self.wait_snapshot(lambda rows: next(iter(rows.values()))['state']['focus'] == 2)
+        prompt_cursor(child, 1)
+        mouse(child, 22, 1)
+        mouse(child, 22, 1, release=True)
+        self.wait_snapshot(lambda rows: next(iter(rows.values()))['state']['focus'] == 1)
+        prompt_cursor(child)
+        child.write(b'\x17\x0c')
+        self.wait_snapshot(lambda rows: next(iter(rows.values()))['state']['focus'] == 2)
+        prompt_cursor(child, 1)
+        child.resize(40, 200)
+        prompt_cursor(child, 1, rows=40)
+        child.finish('session detach')
+        child = self.start('--resume', 'idle-cursor', expect=b'Workspace restored',
+                           rows=40, columns=200)
+        prompt_cursor(child, 1, rows=40)
+        self.assertEqual(len(self.inputs()), 1)
+        child.finish('session detach')
+
+    def test_status_colors_follow_mouse_focus_without_an_extra_key(self):
+        from test_vm_mouse import mouse
+
+        child = self.start('-N', 'focus-colors', rows=20, columns=120,
+                           extra_env={'NO_COLOR': None})
+        child.command('attach ' + self.owner.sid)
+        child.until(b'ATTACHED')
+        child.command('vsp')
+        self.wait_snapshot(lambda rows: next(iter(rows.values()))['state']['focus'] == 2)
+        # Follow the emitted CUP/SGR runs so unchanged cells retain their old
+        # style. No extra key or forced frame may repair the focus repaint.
+        def status_style(column, expected):
+            deadline = time.monotonic() + 5
+            actual = None
+            while time.monotonic() < deadline:
+                child.read(.02)
+                row = x = 0
+                style = b'0'
+                for part in re.split(r'(\x1b\[[0-9;?]*[A-Za-z])',
+                                     child.output.decode('utf-8', 'replace')):
+                    cup = re.fullmatch(r'\x1b\[(\d+);(\d+)H', part)
+                    sgr = re.fullmatch(r'\x1b\[([0-9;]+)m', part)
+                    if cup:
+                        row, x = (int(value) - 1 for value in cup.groups())
+                    elif sgr:
+                        style = sgr[1].encode()
+                    elif not part.startswith('\x1b['):
+                        if row == 18 and x <= column < x + len(part):
+                            actual = style
+                        x += len(part)
+                if actual == expected:
+                    return
+            self.assertEqual(actual, expected)
+
+        status_style(60, b'0;7')
+        status_style(0, b'0;1;7;36')
+        mouse(child, 1, 1)
+        mouse(child, 1, 1, release=True)
+        status_style(0, b'0;7')
+        status_style(60, b'0;1;7;36')
         self.assertEqual(self.inputs(), [])
         child.finish('session detach')
 
