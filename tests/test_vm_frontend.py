@@ -2,12 +2,14 @@
 """Workspace CLI, real terminal ownership, persistence and input boundaries."""
 
 import fcntl
+import hashlib
 import json
 import os
 import pty
 import re
 import select
 import shlex
+import shutil
 import signal
 import struct
 import subprocess
@@ -344,6 +346,41 @@ class WorkspaceTests(unittest.TestCase):
         child.resize(12, 100)
         child.repaint_until(b'viewport-line-099')
         child.finish()
+
+    def test_resize_keeps_background_history_pending(self):
+        foreground = self.seed_session('foreground-history-marker')
+        other = WorkspaceTests()
+        other.setUp()
+        self.addCleanup(other.doCleanups)
+        background = other.seed_session('background-history-marker')
+        last = json.loads(background.read_bytes().splitlines()[-1])
+        with background.open('ab') as stream:
+            for _ in range(128):
+                event = dict(data={'padding': 'x' * (256 * 1024)},
+                             prev_sha256=last['event_sha256'], seq=last['seq'] + 1,
+                             session_id=last['session_id'], time_ms=last['time_ms'] + 1,
+                             type='provider_request', v=2,
+                             checkpoint_offset=last['checkpoint_offset'])
+                def encode():
+                    return json.dumps(event, sort_keys=True, separators=(',', ':')).encode()
+                event['event_sha256'] = hashlib.sha256(encode()).hexdigest()
+                stream.write(encode() + b'\n')
+                last = event
+        shutil.copytree(background.parent, foreground.parent.parent / background.parent.name)
+        child = self.start('-N', 'background-resize', columns=255)
+        child.command('history ' + foreground.parent.name)
+        child.repaint_until(b'foreground-history-marker')
+        child.command('vsp')
+        child.command('history ' + background.parent.name)
+        child.repaint_until(b'read-only ' + background.parent.name[:8].encode() + b' history')
+        time.sleep(.05)
+        # Reflow the focused foreground while the other pane reads a large
+        # journal. Its interrupted request must remain scheduled.
+        child.write(b'\x17h')
+        child.resize(40, 320)
+        child.repaint_until(b'foreground-history-marker')
+        child.repaint_until(b'background-history-marker', timeout=15)
+        child.finish('session d')
 
     def test_workspace_colors_follow_config_and_environment(self):
         journal = self.seed_session()

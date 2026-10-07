@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Keep background pane history and report loads pending when resize, focus, or
+  catalogue refresh gives another request priority. Every pane finishes loading.
+
 - Add `:session detach` and `:session d` to save and leave a native workspace
   while all agents continue. Wait for saved drafts and detach acknowledgements,
   then print the resume command. Tab/Shift-Tab complete colon commands and options.

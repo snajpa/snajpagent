@@ -713,6 +713,16 @@ reader_request(struct vm *vm, struct vm_read *read, struct snag_vm_read_request 
         if (vm->page.window == vm->windows[vm->focus].id) cancel_read(&vm->page);
         cancel_read(read);
         vm->searching = vm->copying = vm->navigating = false;
+    } else if (read->generation && read->window) {
+        /* Replacing the shared page worker must not abandon another pane's
+         * initial load. A pane without a document cannot poll itself yet. */
+        for (size_t i = 0u; i < vm->count; ++i) {
+            struct vm_window *window = &vm->windows[i];
+            if (window->id != read->window) continue;
+            if (read->load == LOAD_NONE) window->report_catalog = true;
+            else if (!window->load) window->load = read->load;
+            break;
+        }
     }
     json_t *sources = json_array();
     if (!sources) return 0u;

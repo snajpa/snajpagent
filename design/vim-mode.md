@@ -8,6 +8,9 @@ a FOLLOW viewport moves its top to retain a full tail; background reads continue
 across byte pages until they contain the requested rendered rows or reach the
 source boundary. Raw process output is omitted below verbosity3, where bounded
 result previews own its display. HOLD keeps its source anchor through reflow.
+Replacing a page-worker request preserves the displaced pane's pending load,
+including initial history and report catalogues, so resize and refresh cannot
+leave a pane empty with no scheduled work.
 
 Status: implemented in development builds, October 6, 2026.
 [QUALIFICATION.md](../QUALIFICATION.md) records runtime coverage and platform
