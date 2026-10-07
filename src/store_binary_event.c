@@ -4196,7 +4196,7 @@ compact_output_valid(const struct snag_binary_compact_complete *value)
     if (!text_valid(value->output, 2u, maximum)) return false;
     json_t *array = snag_json_load_canonical_bounded(value->output.data, value->output.size,
         maximum, NULL, 0u);
-    bool valid = json_is_array(array) && json_array_size(array) && json_array_size(array) <= 128u;
+    bool valid = json_is_array(array) && json_array_size(array);
     for (size_t i = 0u; valid && i < json_array_size(array); ++i) {
         json_t *item = json_array_get(array, i);
         valid = json_is_object(item) && snag_json_string(item, "type");

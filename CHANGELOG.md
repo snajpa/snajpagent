@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Apply the existing byte bound to native-storage compaction output, preserving
+  summaries with more than128 retained items through checkpoint and resume.
+
 - Preserve counted row navigation across cold history pages when a saved cursor
   lies beyond the first forward page.
 

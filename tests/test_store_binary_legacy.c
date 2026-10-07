@@ -1368,7 +1368,7 @@ compact_output_variants(void)
     roundtrip("compaction_completed", data, 226u);
     assert(!json_array_append(output, item));
     compact_digest(data);
-    reject_json("compaction_completed", data);
+    roundtrip("compaction_completed", data, 226u);
     assert(!json_array_clear(output) && !json_array_append(output, item));
     assert(!json_object_set_new(item, "type", json_integer(1)));
     compact_digest(data);

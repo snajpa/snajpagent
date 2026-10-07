@@ -1086,8 +1086,8 @@ Completion carries ID16, scope-presence1 (0/1), input/output count methods1 each
 input/output token bounds8 each, output-count-request/source/output hashes32 each,
 optional scope32, then length-prefixed provider output. Completion excludes the
 anchored method for both counts, retaining the same unknown/zero and signed-64
-rules. Provider output is a canonical JSON array of1..128 objects, each with a
-string `type`, up to the existing12MiB bound. Empty or unknown type strings and
+rules. Provider output is a nonempty canonical JSON array of objects, each with a
+string `type`, up to the existing12MiB byte bound. Empty or unknown type strings and
 unknown provider extensions remain intact. Its canonical bytes must match the
 recorded output hash. This provider-boundary value is the only opaque JSON field;
 the host envelope and all accounting, identity and presence fields are typed.

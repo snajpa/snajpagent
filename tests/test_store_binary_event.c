@@ -5897,7 +5897,9 @@ test_compact_complete(void)
     value->output_sha256[0] ^= 1u;
     assert_event_encode_rejected(&event);
     struct snag_buf array = {.max = 4096u};
-    for (size_t count = 128u; count <= 129u; ++count) {
+    const size_t counts[] = {128u, 129u, 257u};
+    for (size_t c = 0u; c < sizeof(counts) / sizeof(counts[0]); ++c) {
+        size_t count = counts[c];
         array.len = 0u;
         assert(!snag_buf_putc(&array, '['));
         for (size_t i = 0u; i < count; ++i) {
@@ -5906,8 +5908,7 @@ test_compact_complete(void)
         }
         assert(!snag_buf_putc(&array, ']'));
         compact_output(value, (struct snag_binary_text){array.data, array.len});
-        if (count == 128u) roundtrip(&event);
-        else assert_event_encode_rejected(&event);
+        roundtrip(&event);
     }
     snag_buf_free(&array);
     const size_t maximum = 12u * 1024u * 1024u;
