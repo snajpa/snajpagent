@@ -2198,7 +2198,8 @@ client_channel_state(struct snag_irc *client, struct capture *capture,
     assert(!strcmp(capture->last_nick.text, "last-member"));
     assert(snag_irc_state(client, &state, error, sizeof(error)) == 0);
     assert(snag_buf_terminate(&state) == 0);
-    assert(strstr((const char *)state.data, "IRC state abbreviated"));
+    assert(strstr((const char *)state.data, "remaining members omitted"));
+    assert(strstr((const char *)state.data, "room totals: 0 ops, 2048 non-ops"));
     snag_buf_free(&state);
 
     char reason[6002u] = "x";

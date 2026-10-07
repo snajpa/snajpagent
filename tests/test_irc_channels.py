@@ -2,6 +2,7 @@
 """Model channel selection preserves request-time membership and wire recipients."""
 
 import json
+import re
 import socket
 import tempfile
 import threading
@@ -9,6 +10,7 @@ import unittest
 from pathlib import Path
 
 from test_irc_queries import QueryFixture
+from store_history import create_legacy
 from tmux_terminal import FakeResponses, irc_workspace, read_events
 
 
@@ -141,9 +143,15 @@ class ChannelFixture(QueryFixture):
         self.addCleanup(self.release.set)
         self.provider.runtime_handler = self.respond
         self.terminals = []
-        self.term = self.start('--no-listen', '-c', self.server.endpoint,
-            '-n', 'querybot', '-o', 'queryop', '-N', 'channel-session', '-r', 'lab')
-        self.wait(lambda: len(self.channels()) == 4)
+        resume = ()
+        if self._testMethodName.endswith('_legacy'):
+            journal = create_legacy(self.root / 'state', self.root, 'fake', 'host-model')
+            resume = ('--resume', journal.parent.name)
+        self.term = self.start(*resume, '--no-listen', '-c', self.server.endpoint,
+            '-n', 'querybot', '-o', 'queryop',
+            *(('-N', 'channel-session') if not resume else ()), '-r', 'lab')
+        self.wait(lambda: len(self.channels()) == 4 and
+                  all(c['routing']['joined'] for c in self.channels().values()))
         self.wait_idle()
 
     def channels(self):
@@ -210,6 +218,170 @@ class ChannelFixture(QueryFixture):
     def operator_wire(self, line):
         self.wait(lambda: ('queryop', line) in self.server.lines)
         self.assertEqual([nick for nick, body in self.server.lines if body == line], ['queryop'])
+
+
+class StatusReport:
+    def status_text(self):
+        self.term.output.clear()
+        self.term.write(b'/status\r')
+        self.term.until(b'[IRC room snapshot;')
+        # The following command is an output fence after the complete report.
+        self.term.write(b'/session\r')
+        sid = read_events(self.root / 'state')[0].parent.name
+        self.term.until(('session: ' + sid).encode())
+        self.wait(lambda: bytes(self.term.output).count(sid.encode()) >= 2)
+        text = re.sub(r'\x1b\[[0-?]*[ -/]*[@-~]', '',
+                      self.term.output.decode(errors='replace')).replace('\r', '')
+        report = text[text.index('session: '):text.index('/session')]
+        return re.split(r'\n[^\n]*\d{2}:\d{2}:\d{2} (?:queryop@|fake/host-model/)', report)[0]
+
+
+class StatusTests(StatusReport, ChannelFixture):
+    def roster(self, names, marker):
+        self.server.send('queryop', f':fake 353 queryop = #side :{names}\r\n'
+                         ':fake 366 queryop #side :end\r\n'
+                         f':peer!u@fake NOTICE #side :{marker}\r\n')
+        self.wait(lambda: any(e['data'].get('text') == marker for e in self.events()))
+
+    def test_room_ops_first_and_totals_follow_live_modes(self):
+        self.roster('plain @ops-one queryop @ops-two +voiced', 'mixed-ready')
+        text = self.status_text()
+        line = next(row for row in text.splitlines() if row.startswith('members[') and
+                    '/#side]:' in row)
+        self.assertEqual(line.split(': ', 1)[1], '@ops-one @ops-two plain queryop voiced')
+        self.assertEqual(text.strip().splitlines()[-1], 'room totals: 2 ops, 3 non-ops')
+        self.server.send('queryop', ':ops-one!u@fake MODE #side -o+o ops-two plain\r\n'
+                         ':ops-one!u@fake PART #side :gone\r\n'
+                         ':peer!u@fake NOTICE #side :changed-ready\r\n')
+        self.wait(lambda: any(e['data'].get('text') == 'changed-ready' for e in self.events()))
+        text = self.status_text()
+        self.assertEqual(text.strip().splitlines()[-1], 'room totals: 1 op, 3 non-ops')
+        line = next(row for row in text.splitlines() if row.startswith('members[') and
+                    '/#side]:' in row)
+        self.assertTrue(line.split(': ', 1)[1].startswith('@plain '), line)
+        self.roster('queryop', 'no-ops-ready')
+        self.assertEqual(self.status_text().strip().splitlines()[-1],
+                         'room totals: 0 ops, 1 non-op')
+
+    def test_abbreviated_member_list_keeps_full_counts(self):
+        names = [f'member-{i:04d}-abcdefghijklmnop' for i in range(1200)]
+        for i in range(0, len(names), 150):
+            self.server.send('queryop', ':fake 353 queryop = #side :' +
+                             ' '.join(names[i:i + 150]) + '\r\n')
+        self.server.send('queryop', ':fake 353 queryop = #side :@last-op queryop\r\n'
+                         ':fake 366 queryop #side :end\r\n'
+                         ':peer!u@fake NOTICE #side :counted-ready\r\n')
+        self.wait(lambda: any(e['data'].get('text') == 'counted-ready' for e in self.events()))
+        text = self.status_text()
+        self.assertIn('@last-op', text)
+        self.assertIn('[remaining members omitted]', text)
+        self.assertEqual(text.strip().splitlines()[-1], 'room totals: 1 op, 1201 non-ops')
+
+    def test_context_settings_stay_together(self):
+        with self.config.open('a') as stream:
+            stream.write('\n[model-limit fake/host-model]\nmax_input_tokens = 9000\n')
+        model = dict(id='host-model', count_capability='unsupported', default_effort='medium',
+                     efforts=['medium'], observed_hard_input_tokens=0,
+                     observed_input_tokens=0, observed_input_bytes=0,
+                     limits={name: None for name in (
+                         'auto_compact_input_tokens', 'context_window_tokens',
+                         'effective_context_window_percent', 'input_context_window_tokens',
+                         'max_context_window_tokens', 'max_input_tokens', 'max_output_tokens')})
+        model['limits']['context_window_tokens'] = 12000
+        cache = self.root / 'state' / 'models.json'
+        cache.write_text(json.dumps(dict(schema_version=1, updated_at_ms=1, providers=[dict(
+            name='fake', protocol='openai', base_url=f'http://127.0.0.1:{self.provider.port}/v1',
+            models=[model])])))
+        cache.chmod(0o600)
+        self.command('/configure', 'reloaded')
+        text = self.status_text()
+        fields = ('context: source=', 'configured', 'advertised', 'observed usage:',
+                  'max_parallel_commands:', 'parallel_tool_calls:', '[IRC room snapshot;')
+        positions = [text.index(field) for field in fields]
+        self.assertEqual(positions, sorted(positions))
+
+
+class HostedStatusTests(StatusReport, QueryFixture):
+    def test_hosted_room_sorts_and_counts_channel_ops(self):
+        text = self.status_text()
+        line = next(row for row in text.splitlines() if row.startswith('members['))
+        self.assertEqual(line.split(': ', 1)[1], '@queryop @query-peer @observer querybot')
+        self.assertEqual(text.strip().splitlines()[-1], 'room totals: 3 ops, 1 non-op')
+
+
+class ReminderTests(ChannelFixture):
+    def deferred_reminder(self, pending):
+        calls = []
+        requests = []
+
+        def respond(handler, request, sequence):
+            if 'deferred-reply-input' not in json.dumps(request['input']):
+                self.provider.reply(handler, self.provider.response_body(
+                    sequence, 'channel fixture done').encode(), close_header=True)
+                handler.close_connection = True
+                return
+            requests.append(request)
+            if not calls:
+                calls.append('defer')
+                wire = self.provider.function_body(sequence, 'defer-replies',
+                                                    'defer_steering', {})
+            else:
+                self.held.set()
+                if not self.release.wait(10):
+                    raise AssertionError('deferred response was not released')
+                wire = self.provider.response_body(sequence, 'deferred turn finished')
+            self.provider.reply(handler, wire.encode(), close_header=True)
+            handler.close_connection = True
+
+        self.provider.runtime_handler = respond
+        before = self.events()[-1]['seq']
+        for nick in ('querybot', 'queryop'):
+            self.server.send(nick, '@saj-id=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:1;saj-op=1 '
+                             ':queryop!u@fake PRIVMSG #side :querybot: deferred-reply-input\r\n')
+        self.wait(self.held.is_set)
+        self.assertTrue(any(e['data'].get('reply') and
+                            'deferred-reply-input' in e['data'].get('text', '')
+                            for e in self.events()))
+        deferred = next(e for e in self.events() if e['seq'] > before and
+                        e['type'] == 'steering_deferred')
+        turn = deferred['data']['turn_id']
+        if pending:
+            self.term.write(b'/rollout\r')
+            self.term.until(b'host-model/medium')
+            self.term.write(b'queued-after-deferral\r')
+            self.wait(lambda: any(e['type'] == 'steering_added' and
+                      e['data'].get('text') == 'queued-after-deferral' for e in self.events()))
+        self.release.set()
+        self.wait(lambda: any(e['type'] == 'turn_completed' and
+                  e['data']['turn_id'] == turn for e in self.events()))
+        self.wait_idle()
+        events = [e for e in self.events() if e['seq'] > before]
+        self.assertFalse(any(e['type'] in ('irc_reply_reminder', 'turn_failed') for e in events))
+        self.assertEqual(sum(e['type'] == 'response_started' and
+                         e['data']['turn_id'] == turn for e in events), 2)
+        self.assertNotIn('cannot stage', self.term.output.decode(errors='replace'))
+        if pending:
+            steering = next(e['data']['steering_id'] for e in events
+                            if e['type'] == 'steering_added' and
+                            e['data'].get('text') == 'queued-after-deferral')
+            self.assertFalse(any(steering in e['data'].get('steering_ids', []) for e in events
+                                 if e['type'] == 'input_admitted' and
+                                 e['data']['turn_id'] == turn))
+            self.submit('next-explicit-turn')
+            admitted = [e for e in self.events() if e['type'] == 'input_admitted' and
+                        steering in e['data']['steering_ids']]
+            self.assertEqual(len(admitted), 1)
+            self.assertNotEqual(admitted[0]['data']['turn_id'], turn)
+            self.assertIn('queued-after-deferral', json.dumps(requests[-1]['input']))
+
+    def test_deferred_reply_with_pending_input(self):
+        self.deferred_reminder(True)
+
+    def test_deferred_reply_with_pending_input_legacy(self):
+        self.deferred_reminder(True)
+
+    def test_deferred_reply_without_pending_input(self):
+        self.deferred_reminder(False)
 
 
 class ChannelTests(ChannelFixture):

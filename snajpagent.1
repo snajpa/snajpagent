@@ -2577,8 +2577,13 @@ is an alias for
 .BR /state " goal" .
 .TP
 .B /status
-Show session, model and fast-mode selections, queue, verbosity, capacity, token accounting, requested
-network roles and actual connection state.
+Show session, model and fast-mode selections, queue, verbosity, capacity, token
+accounting, command concurrency and actual network state. Context selection,
+configured limits and advertised limits appear together, before command settings.
+Each room lists channel ops first, marked with @, followed by non-ops. Its final
+line gives both counts, including members omitted from an abbreviated list.
+These privileges come from IRC channel modes, independently of the configured
+operator nickname.
 .TP
 .BR /session , " /s"
 Print the full current session ID followed by running sessions. A new unsaved
@@ -5506,8 +5511,9 @@ to the current turn's policy and cannot authorize a refused side effect.
 .SS Steering
 .B defer_steering
 takes no arguments. The model calls it to switch steering off for the
-remainder of the turn. Steering messages queue and run after the turn ends
-instead of interrupting. New turns start with steers on.
+remainder of the turn. Steering messages remain queued for the next turn.
+The current turn can finish without an additional IRC reply reminder. New turns
+start with steers on and admit the retained input.
 .SS Model IRC controls
 .B irc_sleep
 accepts delay_ms (0 through 4294967295) and wake_after_messages (1 through

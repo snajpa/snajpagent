@@ -1355,10 +1355,6 @@ render_status(struct app_state *app)
     if (capacity.effective_context_window_percent && snag_buf_printf(&text, " · effective=%u%%%s",
                        capacity.effective_context_window_percent, capacity.effective_context_window_derived ?
                            " (derived client policy)" : " (advertised)") < 0) goto out;
-    if (snag_buf_printf(&text, "\nmax_parallel_commands: %u\nparallel_tool_calls: %s",
-        app->session.active_turn ? app->session.max_parallel_commands : app->config->max_parallel_commands,
-        (app->session.active_turn ? app->session.parallel_tool_calls : provider->parallel_tool_calls) ?
-        "true" : "false") < 0) goto out;
     if (configured) {
         if (snag_buf_append(&text, "\nconfigured", 11u) < 0 || append_capacity_value(&text, "context",
                 configured->context_window_tokens, configured->context_window_tokens) < 0 ||
@@ -1457,6 +1453,11 @@ render_status(struct app_state *app)
                          (unsigned long long)((last_milli % 1000u) / 100u));
           if (snag_buf_printf(&text, "\nspeed: this turn %s · last response %s", turn, last) < 0) goto out;
       }
+    if (snag_buf_printf(&text, "\nmax_parallel_commands: %u\nparallel_tool_calls: %s",
+        app->session.active_turn ? app->session.max_parallel_commands :
+            app->config->max_parallel_commands,
+        (app->session.active_turn ? app->session.parallel_tool_calls :
+            provider->parallel_tool_calls) ? "true" : "false") < 0) goto out;
     if (app->irc && (snag_buf_putc(&text, '\n') < 0 || snag_irc_state(app->irc, &text, NULL, 0u) < 0))
         goto out;
     if (snag_buf_terminate(&text) < 0) goto out;
@@ -5561,6 +5562,7 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
             app->recovery_delay_ms = 0u;
         }
         if (app->networked && !app->session.active_read_only &&
+            !app->session.steering_deferred &&
             snag_app_irc_replies_pending(app) && !app->session.irc_reply_reminded &&
             (decision.outcome == SNAG_GRAPH_NONPRODUCTIVE || decision.outcome == SNAG_GRAPH_FINAL ||
              decision.outcome == SNAG_GRAPH_REFUSAL)) {
