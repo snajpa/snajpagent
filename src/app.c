@@ -1495,7 +1495,7 @@ snag_app_help_text(struct snag_buf *text, const char *command)
         {"/state", "Goals and queued work"},
         {"/session", "Session history"},
         {"/cat PATH", "Files and media"},
-        {"/chat", "Network chat"},
+        {"/chat [ADDRESS]", "Network chat"},
     };
     size_t prefix = command ? strlen(command) : 0u;
 

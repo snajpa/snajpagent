@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Restore the Network chat heading in command help, including addressed chats
+  and private conversations.
+
 - Apply the existing byte bound to native-storage compaction output, preserving
   summaries with more than128 retained items through checkpoint and resume.
 

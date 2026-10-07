@@ -2895,6 +2895,8 @@ def run_help_case(binary, root, active=False, chat=False, width=80):
         wait_normalized(terminal, "Full reference: man snajpagent", timeout=5.0)
         screen = terminal.capture()
         text = normalize_space(terminal.capture(join_wrapped=True))
+        assert text.index("Files and media") < text.index("Network chat")
+        assert text.index("Network chat") < text.index("/chat [ADDRESS]")
         for syntax in ("/state", "/state goal [status|help]", "/state goal [set] TEXT", '/state goal "TEXT"',
                 "/state goal pause|resume", "/state goal lock|unlock", "/state goal complete|cancel|clear",
                 "/goal ...",

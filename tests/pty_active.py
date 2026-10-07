@@ -3094,7 +3094,7 @@ def test_goal_interrupt_blocks_background_irc_restart():
         background_seq = None
         while time.monotonic() < deadline:
             matching = [event for event in events(session_id)
-                        if event["type"] == "irc_event" and
+                        if event["type"] in ("irc_event", "irc_event_v2") and
                         event["data"].get("text") ==
                         "ordinary background must wait after cancellation"]
             if matching:
@@ -5268,7 +5268,7 @@ def test_live_nick_listing():
                 deadline = time.monotonic() + MIN_WAIT_S
                 while time.monotonic() < deadline:
                     if any(e["type"] in ("irc_event", "irc_event_v2") and
-                        e["data"]["kind"] == "nick" and
+                           e["data"]["kind"] == "nick" and
                            e["data"]["nick"] == old and e["data"]["text"] == nick
                            for e in events(identity)):
                         break
@@ -5277,7 +5277,7 @@ def test_live_nick_listing():
                 else:
                     raise AssertionError(("server did not acknowledge the nickname change",
                                           bytes(client.buf), bytes(server.buf)))
-                client.send_wait(b"/nick\r", f"model nick: {nick}".encode(), start=start)
+                client.send_wait(b"/rollout\r/nick\r", f"model nick: {nick}".encode(), start=start)
                 result = subprocess.run([BINARY, "--dotdir", DOTDIR, "-l"], cwd=WORKSPACE,
                                         capture_output=True, text=True, timeout=MIN_WAIT_S)
                 assert result.returncode == 0, result.stderr
@@ -5303,8 +5303,7 @@ def test_operator_nick():
                 while time.monotonic() < deadline:
                     changes = [e["data"] for e in events(identity)
                                if e["type"] in ("irc_event", "irc_event_v2") and
-                                   e["data"]["kind"] == "nick"
-                               and e["data"]["text"] == new]
+                               e["data"]["kind"] == "nick" and e["data"]["text"] == new]
                     if changes:
                         assert changes[-1]["nick"] == old, changes
                         break
@@ -5312,16 +5311,18 @@ def test_operator_nick():
                 else:
                     raise AssertionError(("operator rename was not acknowledged", bytes(child.buf)))
                 child.wait(chat_prompt(new), start=start)
-                queried = child.send_wait(b"/nick\r", f"model nick: {model}".encode())
+                queried = child.send_wait(b"/rollout\r/nick\r", f"model nick: {model}".encode())
                 child.wait(f"operator nick: {new}".encode(), start=queried)
+                child.send_wait(b"/chat\r", chat_prompt(new))
                 child.send_wait(b"/nick 9bad nick\r", b"IRC nick is invalid")
                 child.send(b"\x15")
                 refused = (b"-server - Nickname is already in use" if child is client
                            else b"already in use")
                 child.send_wait(f"/nick {model}\r".encode(), refused)
                 child.send(b"\x15")
-                queried = child.send_wait(b"/nick\r", f"model nick: {model}".encode())
+                queried = child.send_wait(b"/rollout\r/nick\r", f"model nick: {model}".encode())
                 child.wait(f"operator nick: {new}".encode(), start=queried)
+                child.send_wait(b"/chat\r", chat_prompt(new))
             sent = len(server.buf)
             client.send(b"operator rename message\r")
             server.wait(b"operator rename message", start=sent)
@@ -5332,13 +5333,13 @@ def test_operator_nick():
             command = client.exit_now()
         with Child.from_command(command) as restored:
             restored.wait(chat_prompt("peerhuman"))
-            queried = restored.send_wait(b"/nick\r", b"model nick: peerbot")
+            queried = restored.send_wait(b"/rollout\r/nick\r", b"model nick: peerbot")
             restored.wait(b"operator nick: peerhuman", start=queried)
             restored.exit_now()
         command = server.exit_now()
     with Child.from_command(command) as restored:
         restored.wait(chat_prompt("hosthuman"))
-        queried = restored.send_wait(b"/nick\r", b"model nick: hostbot")
+        queried = restored.send_wait(b"/rollout\r/nick\r", b"model nick: hostbot")
         restored.wait(b"operator nick: hosthuman", start=queried)
         restored.exit_now()
 
@@ -5498,7 +5499,7 @@ def test_network_resume_roles():
     resumed_server.send(b"\x04")
     resumed_server.finish()
     assert len([event for event in events(server_id)
-                if event["type"] == "irc_event" and
+                if event["type"] in ("irc_event", "irc_event_v2") and
                 event["data"]["text"] == "retained room message"]) == 1
 
     combined_port = free_port()
@@ -6018,7 +6019,7 @@ def test_chat_mention_completion_and_steering():
             assert len(admissions) == 1, admissions
             sequences = admissions[0]["data"]["sequences"]
             received = [event["data"]["text"] for event in log
-                        if event["type"] == "irc_event" and event["seq"] in sequences]
+                        if event["type"] in ("irc_event", "irc_event_v2") and event["seq"] in sequences]
             assert any("@agent terminate it" in text for text in received), received
             assert all("ordinary operator chatter" not in text and "hello @remoteop" not in text
                        for text in received), received
