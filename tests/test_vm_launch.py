@@ -11,6 +11,7 @@ import sys
 import time
 import unittest
 import test_vm_frontend as frontend
+from store_history import journal_paths, read_events
 
 BINARY = frontend.BINARY
 from test_vm_frontend import rollout
@@ -77,10 +78,10 @@ class LaunchTests(unittest.TestCase):
                               capture_output=True, timeout=15)
 
     def journals(self):
-        return list((self.state / 'sessions').glob('*/events.jsonl'))
+        return journal_paths(self.state)
 
     def events(self, journal):
-        return [json.loads(line) for line in journal.read_bytes().splitlines()]
+        return read_events(journal)
 
     def ready(self, child, count=1):
         child.repaint_until(b'ATTACHED', 10)
@@ -93,7 +94,7 @@ class LaunchTests(unittest.TestCase):
         state = next(row['state'] for row in rows.values() if row['state'].get('buffers'))
         sid = next(window['history']['session'] for window in state['windows']
                    if window['kind'] == 'transcript')
-        return self.state / 'sessions' / sid / 'events.jsonl'
+        return next(path for path in self.journals() if path.parent.name == sid)
 
     def seed(self):
         result = self.cli('-e', '--', 'retained seed')

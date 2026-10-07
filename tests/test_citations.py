@@ -10,6 +10,8 @@ import subprocess
 import sys
 import tempfile
 
+from store_history import journal_paths
+
 BINARY = os.path.abspath(sys.argv[1])
 OPEN, CLOSE, SEP = "\ue200", "\ue201", "\ue202"
 PROMPT = "citation_markers"
@@ -30,9 +32,9 @@ def main():
                              capture_output=True, text=True, timeout=60)
         assert run.returncode == 0, run.stderr
         assert run.stdout.strip() == RAW, repr(run.stdout)
-        logs = list(dotdir.glob("sessions/*/events.jsonl"))
+        logs = journal_paths(dotdir)
         assert len(logs) == 1, logs
-        assert OPEN in logs[0].read_text(encoding="utf-8")
+        assert OPEN.encode() in logs[0].read_bytes()
         print("test_citations: ok")
 
 

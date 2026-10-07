@@ -33,6 +33,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from irc_client import IRCClient
+from store_history import create_legacy, journal_paths, read_events
 
 # Pager-specific cases opt in; ordinary PTY reports stay in the terminal.
 os.environ["PAGER"] = ""
@@ -771,7 +772,7 @@ def test_session_list_keeps_live_owner():
 def test_removed_archive_command_and_picker():
     from test_session_archiving import append_legacy_events
 
-    with Child([], ready=DEFAULT_IDLE_PROMPT, cols=200) as child:
+    with legacy_child([], ready=DEFAULT_IDLE_PROMPT, cols=200) as child:
         start = len(child.buf)
         child.send_wait(b"/help\r", b"/delete", start=start)
         child.wait_idle_prompt(start=start)
@@ -1009,10 +1010,20 @@ def command_arguments(command):
     return arguments
 
 
+def legacy_child(args, ready=None, **kwargs):
+    """Explicit released-format producer for raw-envelope mutation cases."""
+    before = session_ids()
+    journal = create_legacy(DOTDIR, WORKSPACE, "openai", DEFAULT_MODEL)
+    child = Child(["--resume", journal.parent.name, *args], ready, **kwargs)
+    child.sessions_before = before
+    return child
+
+
 def session_ids():
     if not STATE_ROOT.exists():
         return set()
-    return {entry.name for entry in STATE_ROOT.iterdir() if entry.is_dir()}
+    return {entry.name for entry in STATE_ROOT.iterdir() if entry.is_dir() and
+            re.fullmatch(r"[0-9a-f]{32}", entry.name)}
 
 
 def new_session(before, child=None):
@@ -1026,7 +1037,8 @@ def new_session(before, child=None):
             if shown:
                 created = {sid for sid in created if sid.startswith(shown[1].decode("ascii"))}
         if child is None or child.pid is None or (created and all(
-                (STATE_ROOT / sid / "events.jsonl").is_file() for sid in created)):
+                any(path.parent.name == sid for path in journal_paths(STATE_ROOT.parent))
+                for sid in created)):
             break
         assert time.monotonic() < deadline, bytes(child.buf)
         child.read_once(0.01)
@@ -1035,16 +1047,19 @@ def new_session(before, child=None):
     return created.pop()
 
 
+def session_journal(session_id):
+    return next(path for path in journal_paths(STATE_ROOT.parent)
+                if path.parent.name == session_id)
+
+
 def events(session_id):
-    path = STATE_ROOT / session_id / "events.jsonl"
-    # A live writer may expose a partial final JSON/UTF-8 record.
-    records = [json.loads(line) for line in path.read_bytes().split(b"\n")[:-1]]
+    records = read_events(session_journal(session_id))
     # Expose logical scheduler input to the existing behavior assertions.
     # Production reconnect tests independently verify raw journal IDs/payloads.
     payloads = {}
     for event in records:
         data = event["data"]
-        if event["type"] == "irc_event" and data.get("stream"):
+        if event["type"] in ("irc_event", "irc_event_v2") and data.get("stream"):
             identity = f"{data['stream']}:{data['sequence']}"
             payloads[identity] = (f"[IRC endpoint={data['endpoint']} room={data['room']} "
                 f"event={data['kind']} sender={data['nick']} operator={str(data['op']).lower()}]\n{data['text']}\n")
@@ -1603,9 +1618,9 @@ def test_compaction_ignores_legacy_samples():
                           "-e", "--", "large prior user " + "a" * 25000],
                          cwd=WORKSPACE, capture_output=True, timeout=10)
     assert run.returncode == 0, run.stderr
-    logs = list((state / "sessions").glob("*/events.jsonl"))
+    logs = journal_paths(state)
     assert len(logs) == 1
-    log = [json.loads(line) for line in logs[0].read_text().splitlines()]
+    log = read_events(logs[0])
     assert not any(event["type"] == "compaction_started" for event in log)
     starts = [event["data"] for event in log if event["type"] == "response_started"]
     assert starts and all(e["count_method"] == "unknown" and e["input_tokens_bound"] == 0 for e in starts)
@@ -1723,7 +1738,7 @@ def test_read_only_multiline_compaction_and_chat():
 
 
 def test_queue_edit_resume_at_acknowledgement():
-    with Child([], DEFAULT_IDLE_PROMPT) as child:
+    with legacy_child([], DEFAULT_IDLE_PROMPT) as child:
         child.send_wait(b"queue_slow\r", b"working slowly")
         child.send_wait(b"/queue repeat\r", b"queued (/next or /q c)")
         child.send_wait(b"/queue 1 edit\r", b"repeat", start=len(child.buf))
@@ -2176,7 +2191,7 @@ def test_history_local_first_archive():
                b"archive-match-995-global\n")
     history.write_bytes(archive)
     try:
-        with Child([], DEFAULT_IDLE_PROMPT, cols=160) as local, Child([], DEFAULT_IDLE_PROMPT, cols=160) as peer:
+        with legacy_child([], DEFAULT_IDLE_PROMPT, cols=160) as local, Child([], DEFAULT_IDLE_PROMPT, cols=160) as peer:
             local.send_wait_idle(b"archive-match-995-local\r", b"fixture answer", start=len(local.buf))
             sid = local.session_id()
             peer.send_wait_idle(b"archive-peer-995\r", b"fixture answer", start=len(peer.buf))
@@ -2255,7 +2270,7 @@ def test_history_large_archive():
             file.write(b"history-large-newest-995\n")
         size = history.stat().st_size
         digest = hashlib.sha256(history.read_bytes()).digest()
-        with Child([], DEFAULT_IDLE_PROMPT) as child:
+        with legacy_child([], DEFAULT_IDLE_PROMPT) as child:
             child.send_wait(b"\x1b[A", b"history-large-newest-995", start=len(child.buf))
             child.send_wait(b"\x03", b"^C\r\n", start=len(child.buf))
             start = len(child.buf)
@@ -2281,7 +2296,7 @@ def test_history_sparse_archive_cancellation():
             file.seek(2**31 + 8192)
             file.write(b"\nsparse-newest-995\n")
         size = history.stat().st_size
-        with Child([], DEFAULT_IDLE_PROMPT) as child:
+        with legacy_child([], DEFAULT_IDLE_PROMPT) as child:
             # No scan of the multi-gigabyte malformed record at startup.
             child.send_wait(b"\x1b[A", b"sparse-newest-995", start=len(child.buf))
             child.send_wait(b"\x03", b"^C\r\n", start=len(child.buf))
@@ -2501,7 +2516,7 @@ def test_network_input_recovery_boundaries():
         port = free_port()
         args = ["--listen", f"127.0.0.1:{port}", "--no-client",
                 "-n", "recoveryagent", "-o", "recoveryop", "-r", "lab"]
-        with Child(args, chat_prompt("recoveryop")) as child:
+        with legacy_child(args, chat_prompt("recoveryop")) as child:
             peer = IRCClient(port, "peer")
             try:
                 peer.message("recoveryagent: network_zero")
@@ -2548,7 +2563,7 @@ def test_irc_update_prompt_names_update_and_replay_resolves_it():
     port = free_port()
     args = ["--listen", f"127.0.0.1:{port}", "--no-client",
             "-n", "replayagent", "-o", "replayop", "-r", "lab"]
-    with Child(args, chat_prompt("replayop")) as child:
+    with legacy_child(args, chat_prompt("replayop")) as child:
         peer = IRCClient(port, "peer")
         try:
             peer.message("replayagent: network_zero")
@@ -3786,7 +3801,9 @@ def test_retry_budget_survives_response_boundary():
     config = write_config("resume-budget.ini", "[agent]\nmax_turn_retries=1\n[provider openai]\n")
     for failure_number in (0, 1):
         before = session_ids()
-        result = subprocess.run([BINARY, "--dotdir", DOTDIR, "--config", str(config),
+        legacy = create_legacy(DOTDIR, WORKSPACE, "openai", DEFAULT_MODEL)
+        result = subprocess.run([BINARY, "--dotdir", DOTDIR, "--resume", legacy.parent.name,
+                                 "--config", str(config),
                                  "-e", "--", "empty"], cwd=WORKSPACE,
                                 capture_output=True, timeout=10)
         assert result.returncode == 4, result.stderr
@@ -3871,7 +3888,7 @@ def test_resume_and_session_persistence():
 
 
 def test_explicit_cancel_is_not_resumed():
-    with Child([], PROMPT.rstrip()) as child:
+    with legacy_child([], PROMPT.rstrip()) as child:
         child.send_wait(b"queue_slow\r", b"working slowly")
         session_id = child.session_id()
         end = child.send_wait(b"\x03", b"turn interrupted", start=len(child.buf))
@@ -3898,7 +3915,7 @@ def test_recovery_at_durable_tool_boundaries():
             ("tool_finished", 0), ("tool_finished", 1),
             ("response_completed", 1)]
     for kind, occurrence in cuts:
-        with Child([], PROMPT.rstrip()) as child:
+        with legacy_child([], PROMPT.rstrip()) as child:
             end = child.send_wait(b"two_tools\r", b"two tools complete")
             child.exit_cleanly(end)
             session_id = child.session_id()
@@ -3928,7 +3945,7 @@ def test_recovery_at_durable_tool_boundaries():
 
 def test_idle_compaction_crash_recovery():
     config = write_config("compact-crash.ini", "[provider openai]\nnative_compaction=false\n")
-    with Child(["--config", str(config)], PROMPT.rstrip()) as child:
+    with legacy_child(["--config", str(config)], PROMPT.rstrip()) as child:
         end = child.send_wait(b"ping\r", b"pong")
         child.wait_idle_prompt(start=end)
         end = child.send_wait(b"/compact\r", COMPACTED, start=len(child.buf))
@@ -4402,12 +4419,12 @@ def test_provider_local_models(native=True):
         assert one(log, "model_selection_changed")["data"]["new_model"] == "large"
         assert "model_alias" not in json.dumps(log)
         assert "model = large" in config.read_text()
-        prefix = (STATE_ROOT / sid / "events.jsonl").read_bytes()
+        prefix = session_journal(sid).read_bytes()
         # A provider rename is recovered explicitly; old history stays byte-identical.
         config.write_text(config.read_text().replace("codex-lb", "renamed"))
         with Child(["--config", str(config), "--provider", "renamed", "--resume", sid], ready=b"renamed/large/high") as resumed:
             resumed.exit_now()
-            assert (STATE_ROOT / sid / "events.jsonl").read_bytes().startswith(prefix)
+            assert session_journal(sid).read_bytes().startswith(prefix)
             changes = [e["data"] for e in events(sid) if e["type"] == "model_selection_changed"]
             assert changes[-1]["new_provider"] == "renamed"
             assert changes[-1]["new_model"] == "large"
@@ -5082,14 +5099,14 @@ def test_empty_session_lifecycle():
         log = events(sid)
         assert len([e for e in log if e["type"] == "session_created"]) == 1
         assert one(log, "turn_started")["data"]["config"]["model"] == "selected-before-prompt"
-    saved = (STATE_ROOT / sid / "events.jsonl").read_bytes()
+    saved = session_journal(sid).read_bytes()
     with Child(["--no-color", "--no-listen", "--no-client", "--resume", sid],
                b"selected-before-prompt/high   ?%") as resumed:
         command = resumed.exit_now()
         assert command_arguments(command)[-2:] == ["--resume", sid]
         # Resume records settings and network state without changing history or
         # inventing a user turn, even when the process is now offline.
-        resumed_log = (STATE_ROOT / sid / "events.jsonl").read_bytes()
+        resumed_log = session_journal(sid).read_bytes()
         assert resumed_log.startswith(saved)
         updates = [json.loads(line) for line in resumed_log[len(saved):].splitlines()]
         assert updates
@@ -5138,7 +5155,7 @@ def test_empty_network_session():
                 child.send(b"\x04")  # Background catch-up may already be active.
                 command = child.finish()
                 assert command_arguments(command)[-2:] == ["--resume", sid]
-                journal = (STATE_ROOT / sid / "events.jsonl").read_text()
+                journal = json.dumps(read_events(session_journal(sid)))
                 assert "background before input" in journal
                 assert ("operator first message" if sent == "operator" else "network_zero") in journal
             else:

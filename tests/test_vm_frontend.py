@@ -19,6 +19,7 @@ import uuid
 from pathlib import Path
 
 import tmux_terminal as harness
+from store_history import journal_paths
 
 
 BINARY = Path(sys.argv.pop(1)).resolve() if len(sys.argv) > 1 and not sys.argv[1].startswith('-') else (
@@ -260,7 +261,7 @@ class WorkspaceTests(unittest.TestCase):
                                                        'SNAJPAGENT_IRC_UI_KEY': 'irc-ui-secret'},
                                     capture_output=True, timeout=30)
             self.assertEqual(result.returncode, 0, result.stderr)
-            journal, = (self.root / 'state' / 'sessions').glob('*/events.jsonl')
+            journal, = journal_paths(self.root / 'state')
         return journal
 
     def append_turn(self, journal, answer):

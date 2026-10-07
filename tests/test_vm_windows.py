@@ -17,6 +17,7 @@ if WINDOWS:
 
 import test_vm_frontend as frontend
 import tmux_terminal as harness
+from store_history import journal_paths, read_events
 
 
 @unittest.skipUnless(WINDOWS, 'requires a Windows executable and console runner')
@@ -76,8 +77,9 @@ class WindowsTests(unittest.TestCase):
         return session
 
     def events(self, session):
-        path = self.root / 'state' / 'sessions' / session / 'events.jsonl'
-        return [json.loads(line) for line in path.read_bytes().splitlines()]
+        path = next(p for p in journal_paths(self.root / 'state')
+                    if p.parent.name == session)
+        return read_events(path)
 
     def complete(self, child, session):
         deadline = time.monotonic() + 10

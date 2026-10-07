@@ -5,6 +5,7 @@
 #include "config.h"
 #include "irc.h"
 #include "store.h"
+#include "store_binary.h"
 #include "term.h"
 
 #include <stdbool.h>
@@ -35,6 +36,9 @@ struct snag_render_record;
 struct snag_render_source {
     int64_t offset;
     size_t len;
+    /* Native presentation pins a canonical sequence beneath its commit boundary. */
+    uint64_t native_sequence;
+    struct snag_binary_anchor native_boundary;
 };
 
 struct snag_markdown_state {

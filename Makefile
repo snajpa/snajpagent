@@ -118,6 +118,7 @@ BINARY_RUNTIME_SRC = src/store_binary.c src/store_binary_wire.c src/store_binary
     src/store_binary_checkpoint_inputs.c src/store_binary_checkpoint_payloads.c \
     src/store_binary_checkpoint_core.c src/store_binary_checkpoint_provider.c \
     src/store_binary_replay.c src/store_binary_checkpoint_closure.c
+BINARY_RUNTIME_SRC += src/store_binary_import.c
 COMMON_SRC += $(BINARY_RUNTIME_SRC)
 COMMON_SRC += src/store_binary_context.c
 COMMON_OBJ = $(COMMON_SRC:.c=.o) $(PDF_OBJ) $(AUDIO_DEVICE_OBJ)
@@ -286,11 +287,20 @@ tests/test_context: CPPFLAGS += $(PDF_CFLAGS)
 
 tests/test_context tests/test_model_cache tests/test_store: $(BINARY_RUNTIME_SRC)
 tests/test_model_cache tests/test_store: src/context.c src/store_binary_context.c
-tests/test_store: src/config.c src/rules.c src/secret_source.c
+tests/test_store: src/config.c src/rules.c src/secret_source.c \
+    tests/fixture_store_legacy.h tests/fixture_store_history.h
 
-tests/test_context: tests/fixture_store_binary.h $(PLATFORM_SRC) src/config.c src/rules.c src/secret_source.c src/json.c src/instructions.c src/context.c src/media.c src/turn.c src/store.c src/store_record.c src/store_checkpoint.c src/irc_event.c src/store_lookup.c src/store_lifecycle.c src/tools_media.c src/tools_document.c src/convert.c src/process_host.c src/av.c src/office.c src/office_package.c src/office_confine.c src/office_sheet.c tests/test_context.c $(HEADERS) $(PDF_OBJ) $(AUDIO_DEVICE_OBJ) src/store_binary_context.c src/store_binary_checkpoint_provider.c src/store_binary.c src/store_binary_wire.c src/store_binary_wire.h src/store_binary_event.c src/store_binary_legacy.c src/store_binary_replay.c src/store_binary_import.c src/store_binary_producer.c src/store_binary_sources.c src/store_binary_checkpoint.c src/store_binary_checkpoint_text.c src/store_binary_checkpoint_calls.c src/store_binary_checkpoint_processes.c src/store_binary_checkpoint_inputs.c src/store_binary_checkpoint_payloads.c src/store_binary_checkpoint_core.c tests/test_context_binary.c
+tests/test_vm_reader tests/test_vm_transcript tests/test_vm_workspace: $(BINARY_RUNTIME_SRC)
+tests/test_vm_reader: tests/fixture_store_legacy.h
+tests/test_vm_reader tests/test_vm_transcript tests/test_vm_workspace: src/context.c src/store_binary_context.c src/config.c src/rules.c src/secret_source.c src/wire.c
+
+tests/test_context: tests/fixture_store_binary.h tests/fixture_store_legacy.h $(PLATFORM_SRC) src/config.c src/rules.c src/secret_source.c src/json.c src/instructions.c src/context.c src/media.c src/turn.c src/store.c src/store_record.c src/store_checkpoint.c src/irc_event.c src/store_lookup.c src/store_lifecycle.c src/tools_media.c src/tools_document.c src/convert.c src/process_host.c src/av.c src/office.c src/office_package.c src/office_confine.c src/office_sheet.c tests/test_context.c $(HEADERS) $(PDF_OBJ) $(AUDIO_DEVICE_OBJ) src/store_binary_context.c src/store_binary_checkpoint_provider.c src/store_binary.c src/store_binary_wire.c src/store_binary_wire.h src/store_binary_event.c src/store_binary_legacy.c src/store_binary_replay.c src/store_binary_import.c src/store_binary_producer.c src/store_binary_sources.c src/store_binary_checkpoint.c src/store_binary_checkpoint_text.c src/store_binary_checkpoint_calls.c src/store_binary_checkpoint_processes.c src/store_binary_checkpoint_inputs.c src/store_binary_checkpoint_payloads.c src/store_binary_checkpoint_core.c tests/test_context_binary.c
 
 tests/test_model_cache: $(PLATFORM_SRC) src/config.c src/rules.c src/secret_source.c src/json.c src/instructions.c src/media.c src/turn.c src/store.c src/store_record.c src/store_checkpoint.c src/irc_event.c src/store_lookup.c src/store_lifecycle.c src/model_cache.c tests/test_model_cache.c $(HEADERS) src/store_binary_checkpoint.c src/store_binary_checkpoint_calls.c src/store_binary_checkpoint_processes.c src/store_binary_checkpoint_inputs.c src/store_binary_checkpoint_payloads.c src/store_binary_checkpoint_core.c src/store_binary_checkpoint_provider.c src/store_binary_replay.c
+
+tests/test_render: $(BINARY_RUNTIME_SRC) src/context.c src/store_binary_context.c \
+    src/config.c src/rules.c src/instructions.c src/media.c src/turn.c src/store.c \
+    src/store_record.c src/store_checkpoint.c src/store_lookup.c src/store_lifecycle.c
 
 tests/test_render: $(PLATFORM_SRC) src/json.c src/wire.c src/secret_source.c src/history.c src/history_view.c src/term.c src/render.c src/irc_event.c src/render_prepare.c tests/test_render.c \
 		src/base.h src/fs.h src/term_host.h src/wake.h src/net.h src/json.h src/wire.h src/secret_source.h src/term.h src/term_host.h src/render.h src/snajpagent.h
@@ -479,6 +489,7 @@ endif
 	./tests/test_turn
 	./tests/test_tools
 	./tests/test_store
+	python3 tests/test_store_history.py ./$(BIN)
 	./tests/test_write
 	$(MAKE) rulescheck
 	$(MAKE) toolscheck

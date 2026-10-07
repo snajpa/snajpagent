@@ -409,7 +409,8 @@ or /history 0 for the total turn count without reading the journal. Replay ends
 with shown turns, completions among those shown, and the total session turn count.
 Unfinished, failed and interrupted work is included. Automatic resume uses the
 same replay and defaults to one turn. The scan covers at most 4 MiB plus one
-atomic journal record. A partial oldest turn is explicitly marked; omitted input
+complete event, counting text expanded from native references toward that budget.
+A partial oldest turn is explicitly marked; omitted input
 is not rendered as user text. When the scan ends early, its continuation sequence
 locates older records through the model's read_session_history tool. IRC references
 outside the window may remain unresolved.
@@ -1843,6 +1844,15 @@ remaining text. Failed or interrupted responses retain their recorded public
 text and state; text absent from their terminal snapshot is labelled unconfirmed.
 The current history snapshot determines these labels and contents. R refreshes
 held output when the response later completes.
+.PP
+Native history readers verify a fixed journal prefix. Refresh adopts newly
+completed batches and leaves an unfinished tail in place. Corruption or a replaced
+source leaves the previous view unchanged. Missing history-index access reports
+unavailable source data; the reader preserves the journal and checkpoints.
+Live display, collected command stdout/stderr and later repaint read committed
+native events with the same detail levels and output limits as stored history.
+The model's read_session_history and read_tool_output tools decode native
+records for history and command-output inspection.
 .PP
 In a transcript or report, /TEXT searches forward and ?TEXT searches backward;
 n repeats the previous direction and N reverses it. Empty search input reuses the
@@ -5636,13 +5646,19 @@ Do not run older builds against these files: versions that bounded global histor
 can truncate the archive. Back up history before manually editing or removing it.
 .TP
 .I $HOME/.snajpagent/sessions/SESSION/events.jsonl
-Append-only legacy session log. New sessions currently use this format.
+Append-only log for existing legacy sessions. Resume preserves their format.
 .TP
 .I $HOME/.snajpagent/sessions/SESSION/journal.bin
-Append-only native journal. An existing native journal takes precedence over
+Append-only native journal, created for new persisted sessions together with
+the two checkpoint slots and history index. The directory becomes visible
+after the first checkpoint receipt and cache frontier are verified.
+An existing native journal takes precedence over
 the legacy log. Resume validates its checkpoint receipts and bounded suffix;
 damaged native storage or unavailable required checkpoint data stops recovery.
 Legacy fallback applies only when this file is absent.
+A lost model-context cache is rebuilt from the verified native checkpoint and
+bounded suffix. Unavailable required checkpoint data stops this reconstruction
+and leaves committed session state unchanged.
 .TP
 .I $HOME/.snajpagent/sessions/SESSION/checkpoint.0
 .TQ

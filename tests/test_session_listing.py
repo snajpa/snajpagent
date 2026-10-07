@@ -17,6 +17,7 @@ import unicodedata
 from pathlib import Path
 
 import tmux_terminal as harness
+from store_history import create_legacy, journal_paths, read_events
 
 
 HEADER = ["SESSION", "NAME", "MODEL", "TURNS", "STATUS", "LAST PROMPT", "IRC"]
@@ -112,10 +113,10 @@ def check_listing(binary):
                 result = subprocess.run(prefix + ["-N", name, "-e", "--", prompt],
                                         cwd=root, env=env, capture_output=True, timeout=20)
                 assert result.returncode == 0, result.stderr
-                paths = set((state / "sessions").glob("*/events.jsonl")) - set(journals)
+                paths = set(journal_paths(state)) - set(journals)
                 assert len(paths) == 1, paths
                 journal = paths.pop()
-                events = [json.loads(line) for line in journal.read_text().split("\n") if line]
+                events = read_events(journal)
                 assert next(e["data"]["text"] for e in events if e["type"] == "turn_started") == prompt
                 journals[journal] = hashlib.sha256(journal.read_bytes()).hexdigest()
                 result = subprocess.run(prefix + ["-l"], cwd=root, env=env,
@@ -144,10 +145,13 @@ def check_listing(binary):
                 assert all(hashlib.sha256(path.read_bytes()).hexdigest() == digest
                            for path, digest in journals.items()), "listing changed saved history"
 
-            # Use a real completed session, then append valid old-format IRC records.
+            # Raw envelopes and old checkpoint bodies use a released-format fixture.
             # The list must resolve the exact referenced input, not newer unrelated chat.
-            path = next(p for p in journals if any(e.get("data", {}).get("name") == "multiline"
-                        for e in map(json.loads, p.read_text().splitlines())))
+            path = create_legacy(state, root, "fake", "host-model")
+            result = subprocess.run(prefix + ["--resume", path.parent.name, "-e", "--",
+                                              "first line\nsecond column"],
+                                    cwd=root, env=env, capture_output=True, timeout=20)
+            assert result.returncode == 0, result.stderr
             stream = "a" * 32
             def event(sequence, message):
                 return dict(endpoint="localhost:6667", historical=False, kind="message",
@@ -289,9 +293,9 @@ def check_renamed_nicks(binary):
             state = root / "state"
             env = {**os.environ, "HOME": str(root), "SNAJPAGENT_IRC_UI_KEY": "irc-ui-secret"}
             prefix = [str(binary), "--config", str(config), "--dotdir", str(state)]
-            subprocess.run(prefix + ["-e", "--", "ping"], cwd=root, env=env,
-                           capture_output=True, check=True, timeout=20)
-            path = next((state / "sessions").glob("*/events.jsonl"))
+            path = create_legacy(state, root, "fake", "host-model")
+            subprocess.run(prefix + ["--resume", path.parent.name, "-e", "--", "ping"],
+                           cwd=root, env=env, capture_output=True, check=True, timeout=20)
             snapshot = ("[IRC room snapshot; @ marks a channel operator]\n"
                         "model nick: minion4\noperator nick: op\nhosted: no\n"
                         "destination[1]: one:7\n"

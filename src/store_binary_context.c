@@ -325,26 +325,29 @@ snag_store_materialize_binary_context_checkpoint(struct snag_session *source,
     struct snag_binary_checkpoint_index access;
     if (snag_binary_checkpoint_index_decode(frame->access.data, frame->access.size,
             &identity, &frame->boundary, receipt->index_root, &access) < 0) return -1;
-    struct snag_session candidate;
-    snag_session_init(&candidate);
+    struct snag_session *candidate = malloc(sizeof(*candidate));
+    if (!candidate) {
+        return snag_fail(error, error_size, ENOMEM, "cannot allocate native restore state");
+    }
+    snag_session_init(candidate);
     struct snag_binary_checkpoint_sources origins = {0};
     struct snag_context_capture *capture = NULL;
     json_t *recent = NULL;
     json_t *history = NULL;
     int rc = -1;
     if (checkpoint_cancelled(control, error, error_size) < 0 ||
-        snag_binary_checkpoint_core_read(source->log_fd, frame, &access, &candidate,
+        snag_binary_checkpoint_core_read(source->log_fd, frame, &access, candidate,
             &origins) < 0 ||
         snag_binary_checkpoint_processes_cursors(source->log_fd, &frame->boundary, &access,
-            &origins, &candidate, control ? control->cancelled : NULL,
+            &origins, candidate, control ? control->cancelled : NULL,
             control ? control->opaque : NULL) < 0 ||
         checkpoint_cancelled(control, error, error_size) < 0) goto done;
     struct snag_binary_checkpoint_provider provider;
     if (snag_binary_checkpoint_provider_decode(frame->provider.data, frame->provider.size,
             &provider) < 0) goto done;
-    if (strcmp(candidate.id, source->id) || provider.next_seq != candidate.next_seq ||
-        provider.compact_seq != candidate.compact_seq ||
-        provider.rebase_seq != candidate.context_rebase_seq) {
+    if (strcmp(candidate->id, source->id) || provider.next_seq != candidate->next_seq ||
+        provider.compact_seq != candidate->compact_seq ||
+        provider.rebase_seq != candidate->context_rebase_seq) {
         snag_fail(error, error_size, EINVAL, "checkpoint core/provider boundary mismatch");
         goto done;
     }
@@ -354,7 +357,7 @@ snag_store_materialize_binary_context_checkpoint(struct snag_session *source,
     capture = snag_context_capture_new(control);
     if (!capture) { snag_errno(ENOMEM); goto done; }
     if (snag_context_capture_seed(capture, recent, history) < 0 ||
-        snag_context_capture_bind(&capture, &candidate, error, error_size) < 0 ||
+        snag_context_capture_bind(&capture, candidate, error, error_size) < 0 ||
         checkpoint_cancelled(control, error, error_size) < 0) goto done;
     /* The last callback precedes this stamp check: a callback cannot rewrite
      * the source after its final validation and still expose adopted state. */
@@ -366,8 +369,8 @@ snag_store_materialize_binary_context_checkpoint(struct snag_session *source,
         goto done;
     }
     snag_session_close(restored);
-    *restored = candidate;
-    snag_session_init(&candidate);
+    *restored = *candidate;
+    snag_session_init(candidate);
     if (sources) {
         snag_binary_checkpoint_sources_free(sources);
         *sources = origins;
@@ -375,7 +378,8 @@ snag_store_materialize_binary_context_checkpoint(struct snag_session *source,
     }
     rc = 0;
 done:
-    snag_session_close(&candidate);
+    snag_session_close(candidate);
+    free(candidate);
     snag_binary_checkpoint_sources_free(&origins);
     snag_context_capture_free(capture);
     json_decref(recent);
@@ -417,27 +421,30 @@ resume_pinned(struct snag_session *source, struct snag_session *restored,
     }
     snag_file_info before;
     if (snag_fstat(source->log_fd, &before) < 0) return -1;
-    struct snag_session candidate;
-    snag_session_init(&candidate);
+    struct snag_session *candidate = malloc(sizeof(*candidate));
+    if (!candidate) {
+        return snag_fail(error, error_size, ENOMEM, "cannot allocate native restore state");
+    }
+    snag_session_init(candidate);
     struct snag_binary_checkpoint_sources origins = {0};
     struct snag_context_capture *capture = NULL;
     struct snag_binary_recovery recovery = {0};
     int rc = -1;
-    if (snag_store_materialize_binary_context_checkpoint(source, &candidate, frame, receipt,
+    if (snag_store_materialize_binary_context_checkpoint(source, candidate, frame, receipt,
             &origins, control, error, error_size) < 0) goto done;
-    if (snag_context_capture_take(&candidate, control, &capture, error, error_size) < 0) goto done;
-    if (snag_store_reduce_binary_suffix_prefix(source, &candidate, &frame->boundary,
+    if (snag_context_capture_take(candidate, control, &capture, error, error_size) < 0) goto done;
+    if (snag_store_reduce_binary_suffix_prefix(source, candidate, &frame->boundary,
             stop, available, snag_context_capture_event, capture,
             control ? control->cancelled : NULL, control ? control->opaque : NULL,
             &recovery, &origins, error, error_size) < 0) goto done;
     if (snag_binary_checkpoint_processes_cursors(source->log_fd, &recovery.verified, available,
-        &origins, &candidate, control ? control->cancelled : NULL,
+        &origins, candidate, control ? control->cancelled : NULL,
         control ? control->opaque : NULL) < 0) goto done;
     struct source_walk walk = {.fd = source->log_fd, .control = control,
         .verified = &recovery.verified, .access = available};
-    if (snag_context_capture_sources(capture, &candidate, walk_sources, &walk,
+    if (snag_context_capture_sources(capture, candidate, walk_sources, &walk,
             error, error_size) < 0 ||
-        snag_context_capture_bind(&capture, &candidate, error, error_size) < 0 ||
+        snag_context_capture_bind(&capture, candidate, error, error_size) < 0 ||
         checkpoint_cancelled(control, error, error_size) < 0) goto done;
     snag_file_info after;
     if (snag_fstat(source->log_fd, &after) < 0) goto done;
@@ -446,8 +453,8 @@ resume_pinned(struct snag_session *source, struct snag_session *restored,
         goto done;
     }
     snag_session_close(restored);
-    *restored = candidate;
-    snag_session_init(&candidate);
+    *restored = *candidate;
+    snag_session_init(candidate);
     if (sources) {
         snag_binary_checkpoint_sources_free(sources);
         *sources = origins;
@@ -456,7 +463,8 @@ resume_pinned(struct snag_session *source, struct snag_session *restored,
     if (recovered) *recovered = recovery;
     rc = 0;
 done:
-    snag_session_close(&candidate);
+    snag_session_close(candidate);
+    free(candidate);
     snag_binary_checkpoint_sources_free(&origins);
     snag_context_capture_free(capture);
     return rc;
@@ -547,8 +555,11 @@ snag_store_admit_binary_context_checkpoint(struct snag_session *source,
     struct snag_binary_recovery found = {0};
     struct snag_buf scratch = {.max = SNAG_BINARY_BATCH_MAX};
     struct snag_buf image = {.max = SIZE_MAX};
-    struct snag_session candidate;
-    snag_session_init(&candidate);
+    struct snag_session *candidate = malloc(sizeof(*candidate));
+    if (!candidate) {
+        return snag_fail(error, error_size, ENOMEM, "cannot allocate native restore state");
+    }
+    snag_session_init(candidate);
     struct snag_binary_checkpoint_sources origins = {0};
     struct snag_binary_context_admission staged = {0};
     int rc = -1;
@@ -588,7 +599,7 @@ snag_store_admit_binary_context_checkpoint(struct snag_session *source,
     struct snag_binary_recovery suffix = {0};
     if (snag_binary_checkpoint_image_read(images[slot], &identity, &receipts[slot], &image,
             &frame, control ? control->cancelled : NULL, control ? control->opaque : NULL) < 0 ||
-        resume_pinned(source, &candidate, &frame, &receipts[slot], &found.verified,
+        resume_pinned(source, candidate, &frame, &receipts[slot], &found.verified,
             available ? available[slot] : NULL, &suffix, &origins,
             control, error, error_size) < 0 ||
         checkpoint_cancelled(control, error, error_size) < 0) goto done;
@@ -610,8 +621,8 @@ snag_store_admit_binary_context_checkpoint(struct snag_session *source,
     }
     found.batches = suffix.batches;
     snag_session_close(restored);
-    *restored = candidate;
-    snag_session_init(&candidate);
+    *restored = *candidate;
+    snag_session_init(candidate);
     if (sources) {
         snag_binary_checkpoint_sources_free(sources);
         *sources = origins;
@@ -625,7 +636,8 @@ snag_store_admit_binary_context_checkpoint(struct snag_session *source,
     }
     rc = 0;
 done:
-    snag_session_close(&candidate);
+    snag_session_close(candidate);
+    free(candidate);
     snag_binary_checkpoint_sources_free(&origins);
     snag_binary_context_admission_free(&staged);
     snag_buf_free(&scratch);
@@ -668,6 +680,82 @@ done:
     return rc;
 }
 
+static int
+checkpoint_images_open(struct snag_session *session, int images[2],
+    char *error, size_t error_size)
+{
+    const char *names[2] = {"checkpoint.0", "checkpoint.1"};
+    for (size_t i = 0u; i < 2u; ++i) {
+        images[i] = snag_open_read_security_at(session->dir_fd, names[i], false);
+        if (images[i] < 0) {
+            if (errno == ENOENT) continue;
+            return -1;
+        }
+        if (snag_store_verify_private_fd(images[i], false, "native checkpoint",
+                error, error_size) < 0) return -1;
+    }
+    return 0;
+}
+
+int
+snag_store_recover_binary_context(struct snag_session *session,
+    struct snag_context_capture **capture, const struct snag_context_control *control,
+    char *error, size_t error_size)
+{
+    if (!session || !session->binary || session->dir_fd < 0 || session->log_fd < 0 ||
+        session->lock_fd < 0 || session->pending_log || !capture || *capture) {
+        return snag_fail(error, error_size, EINVAL, "invalid native provider recovery target");
+    }
+    if (error_size) error[0] = '\0';
+    if (checkpoint_cancelled(control, error, error_size) < 0) return -1;
+    struct snag_session candidate;
+    snag_session_init(&candidate);
+    struct snag_binary_checkpoint_sources current = {0};
+    struct snag_binary_index_tree tree;
+    struct snag_binary_anchor through;
+    struct snag_binary_recovery recovery = {0};
+    struct snag_binary_context_admission admission = {0};
+    int images[2] = {-1, -1};
+    int rc = -1;
+    if (snag_session_binary_checkpoint_capture(session, &through, &tree, &current,
+            error, error_size) < 0) goto done;
+    snag_file_info status;
+    if (snag_fstat(session->log_fd, &status) < 0) goto done;
+    if (status.st_size < 0 || (uint64_t)status.st_size != through.end) {
+        snag_fail(error, error_size, EBUSY, "native provider recovery has unacknowledged bytes");
+        goto done;
+    }
+    uint64_t window = (uint64_t)SNAG_BINARY_SUFFIX_TARGET + SNAG_BINARY_WIRE_BATCH_MAX;
+    uint64_t floor = through.end > window ? through.end - window : SNAG_BINARY_HEADER_SIZE;
+    if (floor < SNAG_BINARY_HEADER_SIZE) floor = SNAG_BINARY_HEADER_SIZE;
+    if (checkpoint_images_open(session, images, error, error_size) < 0 ||
+        snag_store_admit_binary_context_checkpoint(session, &candidate, images, floor, NULL,
+            &recovery, NULL, &admission, control, error, error_size) < 0) goto done;
+    unsigned char expected_root[32], recovered_root[32];
+    if (!same_anchor(&through, &recovery.verified) || strcmp(session->id, candidate.id) ||
+        snag_binary_index_tree_root(&tree, expected_root) < 0 ||
+        snag_binary_index_tree_root(&admission.tree, recovered_root) < 0 ||
+        memcmp(expected_root, recovered_root, sizeof(expected_root))) {
+        snag_fail(error, error_size, ESTALE, "native provider recovery boundary changed");
+        goto done;
+    }
+    rc = snag_context_capture_take(&candidate, control, capture, error, error_size);
+done:
+    if (rc < 0 && error_size && !error[0]) {
+        snag_errorf(error, error_size, "cannot recover native provider context: %s",
+            strerror(errno));
+    }
+    int saved = errno;
+    snag_session_close(&candidate);
+    for (size_t i = 0u; i < 2u; ++i) {
+        if (images[i] >= 0) (void)close(images[i]);
+    }
+    snag_binary_checkpoint_sources_free(&current);
+    snag_binary_context_admission_free(&admission);
+    errno = saved;
+    return rc;
+}
+
 int
 snag_store_load_binary_session(struct snag_session *session, enum snag_tail_policy policy,
     char *error, size_t error_size)
@@ -690,7 +778,6 @@ snag_store_load_binary_session(struct snag_session *session, enum snag_tail_poli
         (uint64_t)before.st_size - window : SNAG_BINARY_HEADER_SIZE;
     if (floor < SNAG_BINARY_HEADER_SIZE) floor = SNAG_BINARY_HEADER_SIZE;
     int images[2] = {-1, -1};
-    const char *names[2] = {"checkpoint.0", "checkpoint.1"};
     struct snag_session candidate;
     snag_session_init(&candidate);
     struct snag_binary_context_admission admission = {0};
@@ -701,15 +788,7 @@ snag_store_load_binary_session(struct snag_session *session, enum snag_tail_poli
     struct snag_binary_anchor initial;
     int rc = -1;
     int saved = 0;
-    for (size_t i = 0u; i < 2u; ++i) {
-        images[i] = snag_open_read_security_at(session->dir_fd, names[i], false);
-        if (images[i] < 0) {
-            if (errno == ENOENT) continue;
-            goto done;
-        }
-        if (snag_store_verify_private_fd(images[i], false, "native checkpoint",
-                error, error_size) < 0) goto done;
-    }
+    if (checkpoint_images_open(session, images, error, error_size) < 0) goto done;
     if (source_header(session->log_fd, &identity, &initial) < 0 ||
         snag_store_admit_binary_context_checkpoint(session, &candidate, images, floor, NULL,
             &recovery, &sources, &admission, NULL, error, error_size) < 0 ||

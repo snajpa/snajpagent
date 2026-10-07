@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "fixture_store_binary.h"
+#include "fixture_store_legacy.h"
 #include "store_binary_replay.h"
 #include "store_binary_import.h"
 #include "store_binary_producer.h"
@@ -1232,7 +1233,7 @@ test_import_batches(struct snag_store *store, const char *cwd)
     snag_session_init(&original);
     snag_session_init(&expected);
     snag_session_init(&restored);
-    assert(!snag_session_create(store, &original, cwd, "default", "fixture", "default",
+    assert(!legacy_fixture_create(store, &original, cwd, "default", "fixture", "default",
         error, sizeof(error)));
     size_t size = SNAG_BINARY_BATCH_TARGET + 31u;
     char *text = malloc(size + 1u);
@@ -1530,7 +1531,7 @@ test_queued_references(struct snag_store *store, const char *cwd, bool edited)
     snag_session_init(&expected);
     snag_session_init(&source);
     snag_session_init(&restored);
-    assert(!snag_session_create(store, &original, cwd, "default", "fixture", "default",
+    assert(!legacy_fixture_create(store, &original, cwd, "default", "fixture", "default",
         error, sizeof(error)));
     struct turn_sources sequences;
     json_t *canonical = queue_data(cancelled_id, text, "");
@@ -1649,7 +1650,7 @@ test_import_input_sources(struct snag_store *store, const char *cwd)
     struct snag_session original, expected;
     snag_session_init(&original);
     snag_session_init(&expected);
-    assert(!snag_session_create(store, &original, cwd, "default", "fixture", "default",
+    assert(!legacy_fixture_create(store, &original, cwd, "default", "fixture", "default",
         error, sizeof(error)));
     for (unsigned int i = 0u; i < 20u; ++i) {
         assert(snprintf(ids[i], sizeof(ids[i]), "%032x", i + 1u) == SNAG_ID_HEX_LEN);
@@ -1734,7 +1735,7 @@ test_direct_references(struct snag_store *store, const char *cwd, bool timer, bo
     snag_session_init(&expected);
     snag_session_init(&source);
     snag_session_init(&restored);
-    assert(!snag_session_create(store, &original, cwd, "default", "fixture", "default",
+    assert(!legacy_fixture_create(store, &original, cwd, "default", "fixture", "default",
         error, sizeof(error)));
     struct turn_sources sequences;
     json_t *receipt_paths = checked_json(json_array());
@@ -1888,7 +1889,7 @@ test_goal_references(struct snag_store *store, const char *cwd, unsigned int var
     snag_session_init(&expected);
     snag_session_init(&source);
     snag_session_init(&restored);
-    assert(!snag_session_create(store, &original, cwd, "default", "fixture", "default",
+    assert(!legacy_fixture_create(store, &original, cwd, "default", "fixture", "default",
         error, sizeof(error)));
     json_t *paths = checked_json(json_array());
     if (nonempty) {
@@ -2049,7 +2050,7 @@ test_steering_references(struct snag_store *store, const char *cwd, unsigned int
     snag_session_init(&expected);
     snag_session_init(&source);
     snag_session_init(&restored);
-    assert(!snag_session_create(store, &original, cwd, "default", "fixture", "default",
+    assert(!legacy_fixture_create(store, &original, cwd, "default", "fixture", "default",
         error, sizeof(error)));
     json_t *paths = checked_json(json_array());
     json_t *input = input_data(text, false, paths);
@@ -2558,7 +2559,7 @@ test_import_output_sources(struct snag_store *store, const char *cwd)
     struct snag_session original, expected;
     snag_session_init(&original);
     snag_session_init(&expected);
-    assert(!snag_session_create(store, &original, cwd, "default", "fixture", "default",
+    assert(!legacy_fixture_create(store, &original, cwd, "default", "fixture", "default",
         error, sizeof(error)));
     struct snag_response_graph templates = {0};
     for (size_t i = 0u; i < 20u; ++i) {
@@ -2666,7 +2667,7 @@ test_snapshot_references(struct snag_store *store, const char *cwd,
     snag_session_init(&expected);
     snag_session_init(&source);
     snag_session_init(&restored);
-    assert(!snag_session_create(store, &original, cwd, "default", "fixture", "default",
+    assert(!legacy_fixture_create(store, &original, cwd, "default", "fixture", "default",
         error, sizeof(error)));
     struct snapshot_sources sequences = {0};
     json_t *paths = checked_json(json_array());
@@ -2861,7 +2862,7 @@ test_queued_instructions(struct snag_store *store, const char *cwd, bool edited,
     snag_session_init(&expected);
     snag_session_init(&source);
     snag_session_init(&restored);
-    assert(!snag_session_create(store, &original, cwd, "default", "fixture", "default",
+    assert(!legacy_fixture_create(store, &original, cwd, "default", "fixture", "default",
         error, sizeof(error)));
     json_t *paths = checked_json(json_array());
     if (nonempty) {
@@ -3000,7 +3001,7 @@ test_voice_references(struct snag_store *store, const char *cwd, bool active, bo
     snag_session_init(&expected);
     snag_session_init(&source);
     snag_session_init(&restored);
-    assert(!snag_session_create(store, &original, cwd, "default", "fixture", "default",
+    assert(!legacy_fixture_create(store, &original, cwd, "default", "fixture", "default",
         error, sizeof(error)));
     json_t *paths = checked_json(json_array());
     for (size_t i = 0u; i < 2u; ++i) {
@@ -3138,7 +3139,7 @@ test_voice_original(struct snag_store *store, const char *cwd)
     snag_session_init(&expected);
     snag_session_init(&source);
     snag_session_init(&restored);
-    assert(!snag_session_create(store, &original, cwd, "default", "fixture", "default",
+    assert(!legacy_fixture_create(store, &original, cwd, "default", "fixture", "default",
         error, sizeof(error)));
     json_t *voice = checked_json(json_pack("{s:s,s:s,s:s,s:s,s:s,s:s,s:s,s:s}",
         "connection_id", GOAL_ID, "input_id", "voice-input", "response_id", "voice-response",
@@ -3233,7 +3234,7 @@ test_compact_origins(struct snag_store *store, const char *cwd, bool scoped)
     char error[512];
     struct snag_session original;
     snag_session_init(&original);
-    assert(!snag_session_create(store, &original, cwd, "default", "fixture", "default",
+    assert(!legacy_fixture_create(store, &original, cwd, "default", "fixture", "default",
         error, sizeof(error)));
     const char *scope = scoped ?
         "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee" : NULL;
@@ -3273,7 +3274,7 @@ test_download_origins(struct snag_store *store, const char *cwd)
     char error[512];
     struct snag_session original;
     snag_session_init(&original);
-    assert(!snag_session_create(store, &original, cwd, "default", "fixture", "default",
+    assert(!legacy_fixture_create(store, &original, cwd, "default", "fixture", "default",
         error, sizeof(error)));
     assert(!original.download_queue);
     check_import(&original, &original);
@@ -3301,7 +3302,7 @@ test_input_context_origins(struct snag_store *store, const char *cwd)
     char error[512];
     struct snag_session original;
     snag_session_init(&original);
-    assert(!snag_session_create(store, &original, cwd, "default", "fixture", "default",
+    assert(!legacy_fixture_create(store, &original, cwd, "default", "fixture", "default",
         error, sizeof(error)));
     json_t *paths = checked_json(json_array());
     uint64_t input = commit_data(&original, "input_received", input_data("pending", true, paths));
@@ -3440,7 +3441,7 @@ test_output_references(struct snag_store *store, const char *cwd, unsigned int m
     snag_session_init(&original);
     snag_session_init(&restored);
     char error[512] = {0};
-    assert(!snag_session_create(store, &original, cwd, "default", "fixture", "default",
+    assert(!legacy_fixture_create(store, &original, cwd, "default", "fixture", "default",
         error, sizeof(error)));
     struct snag_response_graph graph = {0};
     assert(!snag_response_graph_add_call(&graph, "run", "run", "exec_command",
@@ -3551,7 +3552,7 @@ test_process_origins(struct snag_store *store, const char *cwd)
     struct snag_session original, restored;
     snag_session_init(&original);
     snag_session_init(&restored);
-    assert(!snag_session_create(store, &original, cwd, "default", "fixture", "default",
+    assert(!legacy_fixture_create(store, &original, cwd, "default", "fixture", "default",
         error, sizeof(error)));
     struct snag_response_graph graph = {0};
     assert(!snag_response_graph_add_call(&graph, "first", "first", "exec_command",
@@ -3700,7 +3701,7 @@ test_legacy_process_origin(struct snag_store *store, const char *cwd)
     snag_session_init(&source);
     snag_session_init(&expected);
     snag_session_init(&restored);
-    assert(!snag_session_create(store, &source, cwd, "default", "fixture", "default",
+    assert(!legacy_fixture_create(store, &source, cwd, "default", "fixture", "default",
         error, sizeof(error)));
     memcpy(expected.id, source.id, sizeof(expected.id));
     expected.last_time_ms = source.last_time_ms;
@@ -3771,7 +3772,7 @@ test_call_origins(struct snag_store *store, const char *cwd)
     struct snag_session original, restored;
     snag_session_init(&original);
     snag_session_init(&restored);
-    assert(!snag_session_create(store, &original, cwd, "default", "fixture", "default",
+    assert(!legacy_fixture_create(store, &original, cwd, "default", "fixture", "default",
         error, sizeof(error)));
     struct snag_response_graph graph = {0};
     assert(!snag_response_graph_add_public(&graph, SNAG_ITEM_ASSISTANT, SNAG_PHASE_COMMENTARY,
@@ -3854,7 +3855,7 @@ test_text_origins(struct snag_store *store, const char *cwd)
     struct snag_session original, restored;
     snag_session_init(&original);
     snag_session_init(&restored);
-    assert(!snag_session_create(store, &original, cwd, "default", "fixture", "default",
+    assert(!legacy_fixture_create(store, &original, cwd, "default", "fixture", "default",
         error, sizeof(error)));
     commit_data(&original, "banner_updated", json_pack("{s:s}", "text", "same"));
     uint64_t banner = commit_data(&original, "banner_updated", json_pack("{s:s}", "text", "same"));
@@ -3933,7 +3934,7 @@ test_metadata_origins(struct snag_store *store, const char *cwd)
     struct snag_session original, restored;
     snag_session_init(&original);
     snag_session_init(&restored);
-    assert(!snag_session_create(store, &original, cwd, "default", "fixture", "default",
+    assert(!legacy_fixture_create(store, &original, cwd, "default", "fixture", "default",
         error, sizeof(error)));
     struct snag_binary_import_result result = {0};
     uint64_t name_sequence = 0u, options_sequence = 0u;
@@ -3970,7 +3971,7 @@ test_voice_adoption(struct snag_store *store, const char *cwd, unsigned int bad)
     snag_session_init(&original);
     snag_session_init(&restored);
     char error[512] = {0};
-    assert(!snag_session_create(store, &original, cwd, "default", "fixture", "default",
+    assert(!legacy_fixture_create(store, &original, cwd, "default", "fixture", "default",
         error, sizeof(error)));
     commit_data(&original, "banner_updated", json_pack("{s:s}", "text", "destination"));
     for (unsigned int phase = 0u; phase < 2u; ++phase) {
@@ -4074,7 +4075,8 @@ static void
 test_native_factory(const char *cwd)
 {
     enum {FRESH, EMPTY_COLLISION, FULL_COLLISION, FILE_COLLISION,
-        BAD_PREFIX, PARENT_BUSY, PARENT_SYNC, SYMLINK_COLLISION, PENDING_TAIL, CASE_COUNT};
+        BAD_PREFIX, PARENT_BUSY, PARENT_SYNC, SYMLINK_COLLISION, PENDING_TAIL,
+        FRESH_INPUT, FRESH_LARGE, CASE_COUNT};
     for (unsigned int variant = 0u; variant < CASE_COUNT; ++variant) {
 #ifdef _WIN32
         if (variant == PARENT_BUSY || variant == SYMLINK_COLLISION) continue;
@@ -4091,11 +4093,24 @@ test_native_factory(const char *cwd)
         snag_session_init(&prepared);
         assert(!snag_session_prepare(&prepared, cwd, "openai", "factory", "medium",
             error, sizeof(error)));
+        bool fresh = variant == FRESH || variant == FRESH_INPUT || variant == FRESH_LARGE;
+        if (variant == FRESH_INPUT || variant == FRESH_LARGE) {
+            json_t *instructions = json_array();
+            assert(instructions);
+            size_t length = variant == FRESH_LARGE ? SNAG_BINARY_BATCH_TARGET : 24u;
+            char *text = malloc(length + 1u);
+            assert(text);
+            memset(text, 'q', length);
+            text[length] = '\0';
+            commit_data(&prepared, "input_received", input_data(text, false, instructions));
+            free(text);
+            json_decref(instructions);
+        }
         json_t *retry = json_pack("{s:s}", "value", "on");
         assert(retry);
         (void)commit_data(&prepared, "retry_auto_changed", retry);
         struct factory_observer observer = {.store = &store, .owner = &prepared,
-            .published = variant == FRESH || variant == PARENT_SYNC,
+            .published = fresh || variant == PARENT_SYNC,
             .drop_parent = variant == PARENT_SYNC};
         prepared.on_commit_free = factory_observer_free;
         prepared.on_commit_opaque = &observer;
@@ -4141,10 +4156,12 @@ test_native_factory(const char *cwd)
         struct snag_session original = prepared;
         struct snag_buf pending = {.max = SIZE_MAX};
         assert(!snag_buf_append(&pending, prepared.pending_log->data, prepared.pending_log->len));
-        int persisted = snag_store_persist_binary_session(&store, &prepared, error, sizeof(error));
+        int persisted = fresh ?
+            snag_session_persist(&store, &prepared, error, sizeof(error)) :
+            snag_store_persist_binary_session(&store, &prepared, error, sizeof(error));
         if (observer.published) {
-            if (variant == FRESH && persisted < 0) fprintf(stderr, "native factory: %s\n", error);
-            assert(variant == FRESH ? !persisted : persisted < 0);
+            if (fresh && persisted < 0) fprintf(stderr, "native factory: %s\n", error);
+            assert(fresh ? !persisted : persisted < 0);
             if (variant == PARENT_SYNC) {
                 assert(errno == EBADF && strstr(error, "published") && strstr(error, "uncertain"));
             }
@@ -4162,7 +4179,7 @@ test_native_factory(const char *cwd)
             assert(unused);
             snag_file_info st;
             assert(snag_lstat_at(prepared.dir_fd, "events.jsonl", &st) < 0 && errno == ENOENT);
-            if (variant == FRESH) {
+            if (fresh) {
                 int slot = snag_open_private_append_at(prepared.dir_fd, unused, false);
                 assert(slot >= 0 && !snag_write_full(slot, "x", 1u));
                 snag_session_close(&prepared);
@@ -4174,6 +4191,12 @@ test_native_factory(const char *cwd)
                 if (opened < 0) fprintf(stderr, "native factory recovery: %s\n", error);
                 assert(!opened && prepared.binary && !strcmp(prepared.default_model, "factory"));
                 assert(!strcmp(prepared.retry_auto, "on"));
+                if (variant == FRESH_INPUT || variant == FRESH_LARGE) {
+                    const char *text = snag_json_string(prepared.pending_input, "text");
+                    assert(text && strlen(text) == (variant == FRESH_LARGE ?
+                        SNAG_BINARY_BATCH_TARGET : 24u));
+                    for (size_t n = 0u; text[n]; ++n) assert(text[n] == 'q');
+                }
             }
             retry = json_pack("{s:s}", "value", "off");
             assert(retry);
@@ -4201,7 +4224,7 @@ test_native_factory(const char *cwd)
         if (other >= 0) assert(!close(other));
         snag_session_close(&prepared);
         assert(observer.freed == 1u);
-        if (variant == FRESH) {
+        if (fresh) {
             snag_session_init(&prepared);
             assert(!snag_session_open(&store, &prepared, id, error, sizeof(error)));
             assert(prepared.binary && !strcmp(prepared.retry_auto, "off"));
@@ -4548,7 +4571,7 @@ test_store_binary_replay(struct snag_store *store, const char *cwd)
     snag_session_init(&expected);
     snag_session_init(&source);
     snag_session_init(&restored);
-    assert(!snag_session_create(store, &original, cwd, "default", "fixture", "default",
+    assert(!legacy_fixture_create(store, &original, cwd, "default", "fixture", "default",
         error, sizeof(error)));
     commit_data(&original, "banner_updated", json_pack("{s:s}", "text", "before checkpoint"));
     commit_data(&original, "goal_started", json_pack("{s:s,s:s}",

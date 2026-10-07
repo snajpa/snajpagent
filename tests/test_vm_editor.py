@@ -7,6 +7,7 @@ import time
 import unittest
 
 import test_vm_frontend as frontend
+from store_history import journal_paths
 from test_vm_frontend import rollout
 
 
@@ -182,7 +183,7 @@ class EditorTests(unittest.TestCase):
                                                    'SNAJPAGENT_IRC_UI_KEY': 'irc-ui-secret'},
                                 capture_output=True, timeout=10)
         self.assertEqual(result.returncode, 0, result.stderr)
-        other, = (p.parent.name for p in (self.root / 'state' / 'sessions').glob('*/events.jsonl')
+        other, = (p.parent.name for p in journal_paths(self.root / 'state')
                   if p.parent.name != self.journal.parent.name)
         self.child.command('history ' + other)
         self.child.write(b'i')

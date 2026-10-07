@@ -10,6 +10,7 @@ from test_irc_channels import ChannelFixture
 from test_vm_frontend import Terminal
 import test_vm_queries as queries
 from tmux_terminal import read_events
+from store_history import journal_paths, read_events as journal_events
 
 
 class CrossSessionTests(ChannelFixture):
@@ -22,8 +23,7 @@ class CrossSessionTests(ChannelFixture):
     def events(self):
         if not hasattr(self, 'source_path'):
             return super().events()
-        return [json.loads(line) for line in self.source_path.read_bytes().split(b'\n')[:-1]
-                if line.strip()]
+        return journal_events(self.source_path)
 
     def setUp(self):
         super().setUp()
@@ -35,7 +35,7 @@ class CrossSessionTests(ChannelFixture):
                                 '-n', 'secondbot', '-o', 'secondop', '-N', 'other session',
                                 '-r', 'lab', ready=b'secondop@')
         self.wait(lambda: len(self.server.links) == 4)
-        paths = list((self.root / 'state/sessions').glob('*/events.jsonl'))
+        paths = journal_paths(self.root / 'state')
         self.target_path, = [path for path in paths if path != self.source_path]
         self.target = self.target_path.parent.name
         self.other.write(b'/s d\r')

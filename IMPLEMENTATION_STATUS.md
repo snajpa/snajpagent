@@ -177,8 +177,23 @@ the directory under the existing parent-name lock. Prepared state and callbacks
 stay intact until publication. Later parent-sync failures retain the adopted
 native owner and report uncertain durability. Empty reserved checkpoint slots
 remain unavailable; nonempty malformed images cause recovery errors. Default
-session creation still uses the legacy log while factory cutover and conversion
-are being integrated.
+session creation uses this production-linked native factory. Existing legacy
+sessions retain their format; stopped-session conversion remains to be integrated.
+Explicit native history snapshots authenticate their requested canonical prefix
+and extend through complete appended batches. Exhaustive replay preserves its
+captured frontier during concurrent appends; locked replay retains its strict
+source-stability check. Finite pages count expanded reference views toward their
+existing byte budget and expose authenticated reverse cursors for forward paging.
+Live rendering and asynchronous backfill use copied canonical sequences and
+commit boundaries for typed observation without replaying state. Collected native
+command output reads its typed half-open sequence range beneath that frontier;
+legacy output retains its byte reader, sharing formatting and truncation. Read-only
+custody supports proved historical queries
+without application reconstruction or checkpoint publication.
+Cancelled, corrupt or replaced-source reads preserve the prior accepted view;
+missing cache access stays unavailable. Lost provider caches use canonical native
+checkpoint admission and the bounded suffix at the writer's acknowledged frontier.
+Failure preserves the cache owner and committed core state.
 
 snajpagent is a pre-1.0 terminal coding agent. One interactive session supports
 local rollout and native IRC chat. One-shot mode runs tasks from scripts.

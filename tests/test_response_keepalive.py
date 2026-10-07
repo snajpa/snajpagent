@@ -8,6 +8,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+from store_history import journal_paths, read_events
+
 import tmux_terminal as harness
 
 
@@ -53,8 +55,8 @@ def check_keepalives(binary):
                                          "-e", "--", "finish once"], cwd=root, env=env,
                                         capture_output=True, text=True, timeout=20)
                 assert len(provider.requests) == before + 1, (name, result, provider.requests[before:])
-                path, = (state / "sessions").glob("*/events.jsonl")
-                events = [json.loads(line) for line in path.read_text().splitlines()]
+                path, = journal_paths(state)
+                events = read_events(path)
                 completed = [e for e in events if e["type"] == "response_completed"]
                 failed = [e for e in events if e["type"] == "response_failed"]
                 assert sum(e["type"] == "turn_started" for e in events) == 1, name

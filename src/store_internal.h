@@ -19,8 +19,9 @@ int snag_session_bind_binary(struct snag_session *, const struct snag_binary_ide
     const struct snag_binary_producer *, const struct snag_binary_checkpoint_sources *,
     const struct snag_binary_io_ops *, char *, size_t);
 
-/* Capture only acknowledged engine-owned origins/frontier. Sources is initialized
- * and owning; no output changes on failure. No derived file publication or I/O. */
+/* Capture only acknowledged engine-owned origins/frontier. Boundary is required;
+ * tree and initialized owning sources are optional. Outputs change only on success.
+ * No derived file publication or I/O. */
 int snag_session_binary_checkpoint_capture(const struct snag_session *, struct snag_binary_anchor *,
     struct snag_binary_index_tree *, struct snag_binary_checkpoint_sources *, char *, size_t);
 

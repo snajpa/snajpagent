@@ -5,6 +5,8 @@
 import json
 import os
 from pathlib import Path
+
+from store_history import journal_paths, read_events
 import signal
 import subprocess
 import sys
@@ -90,8 +92,8 @@ class WaitChannelTests(unittest.TestCase):
         return child.until(marker.encode(), 10)
 
     def events(self):
-        journal, = (self.state / 'sessions').glob('*/events.jsonl')
-        return journal, [json.loads(line) for line in journal.read_bytes().splitlines()]
+        journal, = journal_paths(self.state)
+        return journal, read_events(journal)
 
     def block(self, wait_for, timer=False):
         self.steps = [('update_goal', {'action': 'block', 'text': 'dependency is unavailable',

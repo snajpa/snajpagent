@@ -10,6 +10,7 @@ import tempfile
 import threading
 import time
 
+from store_history import journal_paths
 from test_provider_https import response
 from test_remote_terminal import RemoteProcess
 
@@ -164,7 +165,7 @@ def check(binary):
             f.query(b, '/old/v1/responses', 'fixture-old')
             f.finish(a)
             f.finish(b)
-            journals = list((f.state / 'sessions').glob('*/events.jsonl'))
+            journals = journal_paths(f.state)
             token = 'at-fixture-enterprise'
             for journal in journals:
                 before = journal.read_bytes()
@@ -177,8 +178,8 @@ def check(binary):
                 f.query(child, '/responses', token, account='workspace')
                 f.finish(child)
                 assert journal.read_bytes().startswith(before)
-                text = journal.read_text()
-                assert 'at-fixture-enterprise' not in text and 'fixture-third' not in text
+                data = journal.read_bytes()
+                assert b'at-fixture-enterprise' not in data and b'fixture-third' not in data
             check_active(f)
             check_oauth(f)
             check_cache(f)

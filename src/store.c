@@ -5,6 +5,7 @@
 #include "instructions.h"
 #include "irc.h"
 #include "snajpagent.h"
+#include "store_binary_import.h"
 #include "store_binary_legacy.h"
 #include "store_binary_replay.h"
 #include "store_record.h"
@@ -3218,6 +3219,13 @@ history_error(struct snag_session *session, char *error, size_t error_size, cons
     return snag_fail(error, error_size, EINVAL, "%s", detail);
 }
 
+/* Explicit history readers authenticate their requested prefix, separately from
+ * bounded checkpoint admission. Native observation extends only that prefix. */
+static int native_history_stage(struct snag_session *, uint64_t,
+    const struct snag_journal_cursor *, bool *, char *, size_t);
+static int native_history_cursor(struct snag_session *, uint64_t, bool,
+    struct snag_journal_cursor *, char *, size_t);
+
 static bool
 history_tail_valid(const struct snag_journal_cursor *tail)
 {
@@ -3229,7 +3237,7 @@ history_tail_valid(const struct snag_journal_cursor *tail)
 
 static int
 history_source_open(struct snag_store *store, struct snag_session *session, const char *id,
-    int64_t *size, char *error, size_t error_size)
+    int64_t *size, bool *native, char *error, size_t error_size)
 {
     if (!store || !session || session->id[0] || session->pending_log ||
         session->log_fd >= 0 || session->lock_fd >= 0 || session->dir_fd >= 0 ||
@@ -3237,7 +3245,12 @@ history_source_open(struct snag_store *store, struct snag_session *session, cons
         return snag_fail(error, error_size, EINVAL, "invalid source history reader");
     }
     if (snag_session_locate(store, session, id, NULL, NULL, error, error_size) < 0) return -1;
-    session->log_fd = snag_open_read_security_at(session->dir_fd, "events.jsonl", false);
+    *native = true;
+    session->log_fd = snag_open_read_security_at(session->dir_fd, "journal.bin", false);
+    if (session->log_fd < 0 && errno == ENOENT) {
+        *native = false;
+        session->log_fd = snag_open_read_security_at(session->dir_fd, "events.jsonl", false);
+    }
     if (session->log_fd < 0) {
         return snag_errorf(error, error_size, "cannot open source history: %s", strerror(errno));
     }
@@ -3277,10 +3290,13 @@ snag_session_history_open(struct snag_store *store, struct snag_session *session
         return snag_fail(error, error_size, EINVAL, "invalid committed history prefix");
     }
     int64_t size;
-    if (history_source_open(store, session, id, &size, error, error_size) < 0) return -1;
+    bool native;
+    if (history_source_open(store, session, id, &size, &native, error, error_size) < 0) return -1;
     if (size < tail->offset) {
         return snag_fail(error, error_size, EINVAL, "source history ends before committed prefix");
     }
+    if (native) return native_history_stage(session, (uint64_t)tail->offset, tail,
+        NULL, error, error_size);
     session->log_end = tail->offset;
     session->next_seq = tail->next_seq;
     memcpy(session->prev_sha256, tail->prev_sha256, sizeof(session->prev_sha256));
@@ -3288,14 +3304,16 @@ snag_session_history_open(struct snag_store *store, struct snag_session *session
 }
 
 static int
-history_identity_valid(struct snag_session *session, int64_t end, char *error, size_t error_size)
+history_identity_valid(struct snag_session *session, int64_t end, bool native,
+    char *error, size_t error_size)
 {
     snag_file_info directory, path, journal;
     if (snag_fstat(session->dir_fd, &directory) < 0 ||
         snag_lstat(session->dir_path, &path) < 0 || !S_ISDIR(path.st_mode) ||
         directory.st_dev != path.st_dev || directory.st_ino != path.st_ino ||
         snag_fstat(session->log_fd, &journal) < 0 || journal.st_size < end ||
-        snag_lstat_at(session->dir_fd, "events.jsonl", &path) < 0 || !S_ISREG(path.st_mode) ||
+        snag_lstat_at(session->dir_fd, native ? "journal.bin" : "events.jsonl", &path) < 0 ||
+        !S_ISREG(path.st_mode) ||
         journal.st_dev != path.st_dev || journal.st_ino != path.st_ino) {
         return snag_fail(error, error_size, ESTALE, "history was replaced or truncated");
     }
@@ -3356,10 +3374,13 @@ snag_session_history_snapshot(struct snag_store *store, struct snag_session *ses
     int64_t size;
     if (!incomplete) return snag_fail(error, error_size, EINVAL, "missing history suffix result");
     *incomplete = false;
-    if (history_source_open(store, session, id, &size, error, error_size) < 0) return -1;
+    bool native;
+    if (history_source_open(store, session, id, &size, &native, error, error_size) < 0) return -1;
+    if (native) return native_history_stage(session, (uint64_t)size, NULL, incomplete,
+        error, error_size);
     struct snag_journal_cursor tail;
     if (history_snapshot_tail(session, size, &tail, incomplete, error, error_size) < 0) return -1;
-    if (history_identity_valid(session, tail.offset, error, error_size) < 0) return -1;
+    if (history_identity_valid(session, tail.offset, false, error, error_size) < 0) return -1;
     session->log_end = tail.offset;
     session->next_seq = tail.next_seq;
     memcpy(session->prev_sha256, tail.prev_sha256, sizeof(session->prev_sha256));
@@ -3394,8 +3415,11 @@ snag_session_history_refresh(struct snag_session *session, const struct snag_jou
         (tail->offset == session->log_end && strcmp(tail->prev_sha256, session->prev_sha256))) {
         return snag_fail(error, error_size, ESTALE, "history prefix changed");
     }
-    if (history_identity_valid(session, tail->offset, error, error_size) < 0) return -1;
+    if (history_identity_valid(session, tail->offset, session->binary != NULL,
+        error, error_size) < 0) return -1;
     if (tail->offset == session->log_end) return 0;
+    if (session->binary) return native_history_stage(session, (uint64_t)tail->offset,
+        tail, NULL, error, error_size);
     if (history_boundary_valid(session, error, error_size) < 0) return -1;
     struct snag_journal_cursor previous = {.offset = session->log_end,
         .next_seq = session->next_seq};
@@ -3409,7 +3433,8 @@ snag_session_history_refresh(struct snag_session *session, const struct snag_jou
         rc = snag_session_each_event_forward(session, &cursor, SIZE_MAX,
             history_verify_event, NULL, error, error_size);
     }
-    if (!rc) rc = history_identity_valid(session, tail->offset, error, error_size);
+    if (!rc) rc = history_identity_valid(session, tail->offset, session->binary != NULL,
+        error, error_size);
     if (rc < 0) {
         session->log_end = previous.offset;
         session->next_seq = previous.next_seq;
@@ -3425,10 +3450,13 @@ snag_session_history_observe(struct snag_session *session, bool *incomplete,
     if (!session || !incomplete || session->log_fd < 0 || session->dir_fd < 0 ||
         session->lock_fd >= 0 || session->pending_log || !session->dir_path)
         return snag_fail(error, error_size, EINVAL, "invalid history observation");
-    if (history_identity_valid(session, session->log_end, error, error_size) < 0) return -1;
+    if (history_identity_valid(session, session->log_end, session->binary != NULL,
+        error, error_size) < 0) return -1;
     snag_file_info info;
     if (snag_fstat(session->log_fd, &info) < 0)
         return snag_errorf(error, error_size, "cannot inspect source history: %s", strerror(errno));
+    if (session->binary) return native_history_stage(session, (uint64_t)info.st_size,
+        NULL, incomplete, error, error_size);
     struct snag_journal_cursor tail;
     bool partial;
     if (history_snapshot_tail(session, info.st_size, &tail, &partial, error, error_size) < 0 ||
@@ -3539,6 +3567,8 @@ snag_session_history_cursor_before(struct snag_session *session, uint64_t before
 {
     if (!session || !cursor || before > session->next_seq)
         return snag_fail(error, size, EINVAL, "invalid history sequence");
+    if (session->binary) return native_history_cursor(session, before, false,
+        cursor, error, size);
     struct snag_journal_cursor found;
     if (history_cursor_before(session, before, &found, error, size) < 0) return -1;
     *cursor = found;
@@ -3551,6 +3581,8 @@ snag_session_history_cursor_at(struct snag_session *session, int64_t offset,
 {
     if (!session || !cursor || offset < 0 || offset > session->log_end)
         return snag_fail(error, error_size, EINVAL, "invalid history offset");
+    if (session->binary) return native_history_cursor(session, (uint64_t)offset, true,
+        cursor, error, error_size);
     if (offset == session->log_end) {
         *cursor = (struct snag_journal_cursor){.offset = offset, .next_seq = session->next_seq};
         memcpy(cursor->prev_sha256, session->prev_sha256, sizeof(cursor->prev_sha256));
@@ -4152,6 +4184,101 @@ close_binary_session(struct snag_session *session)
     session->binary = NULL;
 }
 
+static int
+native_history_stage(struct snag_session *session, uint64_t end,
+    const struct snag_journal_cursor *tail, bool *incomplete, char *error, size_t error_size)
+{
+    bool empty = tail && !tail->offset && tail->next_seq == 1u;
+    if (empty) end = SNAG_BINARY_HEADER_SIZE;
+    struct snag_binary_session *next = calloc(1u, sizeof(*next));
+    if (!next) return -1;
+    next->index_fd = -1;
+    next->access.max = SIZE_MAX;
+    struct snag_buf scratch = {.max = SNAG_BINARY_BATCH_MAX};
+    bool partial = false;
+    int rc = -1;
+    if (session->binary) {
+        next->identity = session->binary->identity;
+        next->boundary = session->binary->boundary;
+        next->tree = session->binary->tree;
+    } else {
+        unsigned char bytes[SNAG_BINARY_HEADER_SIZE];
+        char id[SNAG_ID_HEX_LEN + 1u];
+        if (snag_pread(session->log_fd, bytes, sizeof(bytes), 0) != (ssize_t)sizeof(bytes) ||
+            snag_binary_header_decode(bytes, sizeof(bytes), &next->identity, &next->boundary) < 0)
+            goto done;
+        binary_hex(id, next->identity.id, sizeof(next->identity.id));
+        if (strcmp(id, session->id)) { errno = EBADMSG; goto done; }
+    }
+    if (next->boundary.end > end) { errno = ESTALE; goto done; }
+    while (next->boundary.end < end) {
+        if (session->history_cancel && session->history_cancel(session->history_cancel_opaque)) {
+            errno = ECANCELED;
+            goto done;
+        }
+        struct snag_binary_batch batch;
+        struct snag_binary_anchor after;
+        int read = snag_binary_batch_read(session->log_fd, end, &next->boundary,
+            &scratch, &batch, &after);
+        if (read < 0) goto done;
+        if (read == 1) {
+            if (tail) { errno = EBADMSG; goto done; }
+            partial = true;
+            break;
+        }
+        if (snag_binary_index_tree_append_batch(NULL, &next->tree, &next->identity,
+            &next->boundary, &after, batch.data, batch.size) < 0) goto done;
+        next->boundary = after;
+    }
+    char digest[SNAG_SHA256_HEX_LEN + 1u];
+    binary_hex(digest, next->boundary.digest, sizeof(next->boundary.digest));
+    if (tail && !empty && (next->boundary.end != (uint64_t)tail->offset ||
+        next->boundary.next_seq != tail->next_seq || strcmp(digest, tail->prev_sha256))) {
+        errno = EBADMSG;
+        goto done;
+    }
+    unsigned char root[32];
+    if (next->boundary.end > INT64_MAX ||
+        snag_binary_index_tree_root(&next->tree, root) < 0 ||
+        snag_binary_checkpoint_index_encode(&next->access, &next->identity, &next->boundary,
+            &next->tree, NULL, 0u) < 0 ||
+        snag_binary_checkpoint_index_decode(next->access.data, next->access.len,
+            &next->identity, &next->boundary, root, &next->available) < 0) goto done;
+    next->index_fd = snag_open_read_security_at(session->dir_fd, "history.idx", false);
+    if (next->index_fd < 0 && errno != ENOENT) goto done;
+    if (next->index_fd >= 0) {
+        if (snag_store_verify_private_fd(next->index_fd, false, "history index",
+            error, error_size) < 0) goto done;
+        next->index_owned = true;
+        next->index_configured = true;
+    }
+    if (history_identity_valid(session, (int64_t)next->boundary.end, true,
+        error, error_size) < 0) goto done;
+    next->checkpoint_configured = true; /* Read-only source custody, no publisher. */
+    close_binary_session(session);
+    session->binary = next;
+    session->snapshot_read_only = true;
+    session->log_end = (int64_t)next->boundary.end;
+    session->next_seq = next->boundary.next_seq;
+    session->turn_count = next->boundary.turns;
+    memcpy(session->prev_sha256, digest, sizeof(session->prev_sha256));
+    if (incomplete) *incomplete = partial;
+    next = NULL;
+    rc = 0;
+done:;
+    int saved = errno;
+    if (next) {
+        if (next->index_fd >= 0) (void)close(next->index_fd);
+        snag_buf_free(&next->access);
+        free(next);
+    }
+    snag_buf_free(&scratch);
+    errno = saved;
+    if (rc < 0) return snag_errorf(error, error_size, "cannot snapshot native history: %s",
+        strerror(errno));
+    return 0;
+}
+
 void
 snag_session_unbind_binary(struct snag_session *session)
 {
@@ -4316,9 +4443,18 @@ struct native_history {
     size_t remaining;
     snag_session_event_fn visit;
     void *opaque;
+    bool (*cancelled)(void *);
+    void *cancel_opaque;
     char *error;
     size_t error_size;
 };
+
+static bool
+native_history_cancelled(void *opaque)
+{
+    struct native_history *history = opaque;
+    return history->cancelled && history->cancelled(history->cancel_opaque);
+}
 
 static int
 native_history_query(struct native_history *history, uint64_t sequence)
@@ -4327,8 +4463,8 @@ native_history_query(struct native_history *history, uint64_t sequence)
     history->query_bytes.len = 0u;
     if (history->index_fd < 0) return snag_errno(ENOENT);
     if (snag_binary_checkpoint_query_read(history->fd, history->index_fd, &history->through,
-        &history->available, &history->frontier, &sequence, 1u, NULL, NULL,
-        &history->query_bytes) < 0) {
+        &history->available, &history->frontier, &sequence, 1u, native_history_cancelled,
+        history, &history->query_bytes) < 0) {
         return -1;
     }
     if (snag_binary_checkpoint_index_decode(history->query_bytes.data, history->query_bytes.len,
@@ -4418,6 +4554,22 @@ native_history_visit(void *opaque, const struct snag_binary_record *record, uint
         }
     }
     if (rc < 0) return -1;
+    size_t visited = record->size + SNAG_BINARY_RECORD_HEADER_SIZE;
+    if (!rc && history->remaining != SIZE_MAX) {
+        /* Single-copy references can expand far beyond their wire descriptor.
+         * Charge the existing page budget for the projected view too, keeping
+         * one complete oversized event and its exact continuation cursor. */
+        struct snag_buf projected = {.max = history->remaining};
+        int measured = snag_json_diagnostic(data, &projected);
+        int saved = errno;
+        size_t bytes = measured < 0 ? history->remaining : projected.len;
+        snag_buf_free(&projected);
+        if (measured < 0 && saved != EOVERFLOW) {
+            json_decref(data);
+            return snag_errno(saved);
+        }
+        if (bytes > visited) visited = bytes;
+    }
     int result = 0;
     if (!rc) {
         result = history->visit(history->opaque, NULL, sequence, type, data,
@@ -4435,7 +4587,6 @@ native_history_visit(void *opaque, const struct snag_binary_record *record, uint
     history->cursor->offset = (int64_t)after->before.end;
     history->cursor->next_seq = after->next_seq;
     binary_hex(history->cursor->prev_sha256, after->before.digest, sizeof(after->before.digest));
-    size_t visited = record->size + SNAG_BINARY_RECORD_HEADER_SIZE;
     history->remaining = visited >= history->remaining ? 0u : history->remaining - visited;
     return result == SNAG_JOURNAL_STOP_AFTER || !history->remaining ? 1 : 0;
 }
@@ -4443,6 +4594,9 @@ native_history_visit(void *opaque, const struct snag_binary_record *record, uint
 static int
 native_history_pin(struct snag_session *session, struct native_history *history)
 {
+    history->cancelled = session->history_cancel;
+    history->cancel_opaque = session->history_cancel_opaque;
+    if (native_history_cancelled(history)) return snag_errno(ECANCELED);
     const struct snag_binary_session *binary = session->binary;
     if (binary->faulted) {
         return snag_fail(history->error, history->error_size, ESTALE, "native writer is faulted");
@@ -4488,6 +4642,53 @@ native_history_done(struct native_history *history, int rc)
 }
 
 static int
+native_history_cursor(struct snag_session *session, uint64_t position, bool by_offset,
+    struct snag_journal_cursor *out, char *error, size_t error_size)
+{
+    struct native_history history = {.error = error, .error_size = error_size};
+    struct snag_buf scratch = {.max = SNAG_BINARY_BATCH_MAX};
+    int rc = native_history_pin(session, &history);
+    struct snag_binary_anchor before = history.through, after;
+    struct snag_binary_batch batch, checked;
+    uint64_t sequence = position;
+    if (!rc && ((by_offset && position == history.through.end) ||
+        (!by_offset && (!position || position == history.through.next_seq)))) {
+        sequence = history.through.next_seq;
+    } else if (!rc && by_offset) {
+        if (!position) position = SNAG_BINARY_HEADER_SIZE;
+        while (before.end > position && !rc) {
+            if (native_history_cancelled(&history)) {
+                rc = snag_errno(ECANCELED);
+                break;
+            }
+            after = before;
+            rc = snag_binary_batch_previous(history.fd, &after, &scratch, &batch, &before);
+            if (rc == 1) rc = snag_errno(EINVAL);
+        }
+        if (!rc && before.end != position) rc = snag_errno(EINVAL);
+        sequence = before.next_seq;
+    } else if (!rc) {
+        rc = snag_binary_checkpoint_batch_find(history.fd, &history.through,
+            &history.available, sequence, &scratch, &batch, &before);
+        if (rc < 0 && errno == ENOENT && history.index_fd >= 0) {
+            rc = native_history_query(&history, sequence);
+            if (!rc) rc = snag_binary_checkpoint_batch_find(history.fd, &history.through,
+                &history.query, sequence, &scratch, &batch, &before);
+        }
+        if (!rc) rc = snag_binary_batch_decode(batch.data, batch.size, &before, &checked, &after);
+    }
+    if (!rc) {
+        struct snag_journal_cursor found = {.offset = (int64_t)before.end,
+            .next_seq = sequence};
+        binary_hex(found.prev_sha256, before.digest, sizeof(before.digest));
+        if (sequence == 1u) found.offset = 0;
+        *out = found;
+    }
+    snag_buf_free(&scratch);
+    return native_history_done(&history, rc);
+}
+
+static int
 native_history_forward(struct snag_session *session, struct snag_journal_cursor *cursor,
     uint64_t first, size_t scan_bytes, snag_session_event_fn visit, void *opaque,
     char *error, size_t error_size)
@@ -4500,7 +4701,7 @@ native_history_forward(struct snag_session *session, struct snag_journal_cursor 
     if (!rc) {
         rc = snag_binary_checkpoint_query_cursor_read(history.fd, history.index_fd,
             &history.through, &history.available, &history.frontier, history.through.next_seq,
-            &work, native_history_visit, NULL, &history);
+            &work, native_history_visit, native_history_cancelled, &history);
     }
     return native_history_done(&history, rc);
 }
@@ -4561,22 +4762,35 @@ native_history_reverse(struct snag_session *session, uint64_t before, size_t sca
         .visit = visit, .opaque = opaque, .error = error, .error_size = error_size};
     int rc = native_history_pin(session, &history);
     if (!before || before > history.through.next_seq) before = history.through.next_seq;
+    struct snag_journal_cursor published = session->history_cursor;
+    if (!rc && before == history.through.next_seq) {
+        published.offset = (int64_t)history.through.end;
+        published.next_seq = before;
+        binary_hex(published.prev_sha256, history.through.digest, sizeof(history.through.digest));
+    }
     while (!rc && before > 1u && history.remaining && !history.stopped) {
         uint64_t sequence = before - 1u;
         struct snag_journal_cursor cursor = {0};
-        struct snag_binary_cursor work;
+        struct snag_binary_cursor work = {0};
         history.cursor = &cursor;
         rc = native_history_capture(&history, sequence, &work);
+        struct snag_binary_cursor start = work;
         if (!rc) {
             rc = snag_binary_checkpoint_query_cursor_read(history.fd, history.index_fd,
                 &history.through, &history.available, &history.frontier, before,
-                &work, native_history_visit, NULL, &history);
+                &work, native_history_visit, native_history_cancelled, &history);
         }
         if (rc < 0 || cursor.next_seq != before) break;
         before = sequence;
+        published.offset = (int64_t)start.before.end;
+        published.next_seq = sequence;
+        binary_hex(published.prev_sha256, start.before.digest, sizeof(start.before.digest));
         rc = 0;
     }
-    if (rc >= 0) *next_before = before > 1u ? before : 0u;
+    if (rc >= 0) {
+        session->history_cursor = published;
+        *next_before = before > 1u ? before : 0u;
+    }
     return native_history_done(&history, rc);
 }
 
@@ -4585,16 +4799,16 @@ snag_session_binary_checkpoint_capture(const struct snag_session *session,
     struct snag_binary_anchor *boundary, struct snag_binary_index_tree *tree,
     struct snag_binary_checkpoint_sources *sources, char *error, size_t error_size)
 {
-    if (!session || !boundary || !tree || !sources)
+    if (!session || !boundary)
         return snag_fail(error, error_size, EINVAL, "invalid native checkpoint capture");
     const struct snag_binary_session *binary = session->binary;
     if (!binary) return snag_fail(error, error_size, ENOTSUP, "session is not native");
     if (binary->faulted)
         return snag_fail(error, error_size, ESTALE, "native session requires fresh recovery");
-    if (snag_binary_checkpoint_sources_clone(sources, &binary->sources) < 0)
+    if (sources && snag_binary_checkpoint_sources_clone(sources, &binary->sources) < 0)
         return snag_fail(error, error_size, errno, "cannot capture native checkpoint origins");
     *boundary = binary->boundary;
-    *tree = binary->tree;
+    if (tree) *tree = binary->tree;
     return 0;
 }
 
@@ -5548,50 +5762,11 @@ out: free(resolved);
 }
 
 int
-snag_session_persist(struct snag_store *store, struct snag_session *session, char *error, size_t error_size)
+snag_session_persist(struct snag_store *store, struct snag_session *session,
+    char *error, size_t error_size)
 {
-    struct snag_session disk = *session;
-    char *parent;
-    int rc = -1;
-
     if (!session->pending_log) return 0;
-    if (snag_mkdir_private_at(store->sessions_fd, session->id) < 0) {
-        snag_errorf(error, error_size, "cannot create session directory: %s", strerror(errno));
-        return -1;
-    }
-    parent = snag_path_join(store->root_path, "sessions");
-    disk.dir_path = parent ? snag_path_join(parent, session->id) : NULL;
-    free(parent);
-    if (!disk.dir_path) goto out;
-    disk.dir_fd = snag_open_read_security_at(store->sessions_fd, session->id, true);
-    if (disk.dir_fd < 0 || snag_store_verify_private_fd(disk.dir_fd, true, "session directory",
-                                    error, error_size) < 0 ||
-        snag_store_open_session_files(&disk, true, error, error_size) < 0) goto out;
-    if (snag_write_full(disk.log_fd, session->pending_log->data, session->pending_log->len) < 0 ||
-        snag_sync_file(disk.log_fd) < 0 || snag_sync_dir(disk.dir_fd) < 0 ||
-        snag_sync_dir(store->sessions_fd) < 0) {
-        snag_errorf(error, error_size, "cannot persist new session: %s", strerror(errno));
-        goto out;
-    }
-    session->dir_path = disk.dir_path;
-    session->dir_fd = disk.dir_fd;
-    session->log_fd = disk.log_fd;
-    session->lock_fd = disk.lock_fd;
-    snag_buf_free(session->pending_log);
-    free(session->pending_log);
-    session->pending_log = NULL;
-    return 0;
-out:
-    if (disk.log_fd >= 0) (void)close(disk.log_fd);
-    if (disk.lock_fd >= 0) (void)close(disk.lock_fd);
-    if (disk.dir_fd >= 0) {
-        (void)snag_unlink_at(disk.dir_fd, "events.jsonl", false);
-        (void)snag_unlink_at(disk.dir_fd, "lock", false);
-        (void)close(disk.dir_fd);
-    }
-    free(disk.dir_path);
-    (void)snag_unlink_at(store->sessions_fd, session->id, true);
-    return rc;
+    return snag_store_persist_binary_session(store, session, error, error_size);
 }
 
 int

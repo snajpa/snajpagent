@@ -72,6 +72,9 @@ int snag_store_reconcile_binary(struct snag_session *source, struct snag_session
  * repair authority, and incomplete_tail_bytes is zero. A partial batch boundary
  * fails instead of being adopted as a shorter prefix. Source locking, provisional
  * callbacks and atomic state/origin ownership follow the full-journal API.
+ * An explicitly read-only snapshot may replace the source lock for this exact
+ * prefix; the final source stamp must still match. Full-journal reconstruction
+ * retains its exclusive-lock requirement.
  * The anchor may alias recovery->verified. This is not checkpoint/suffix resume. */
 int snag_store_reconcile_binary_prefix(struct snag_session *source, struct snag_session *restored,
     const struct snag_binary_anchor *prefix, snag_session_event_fn fn, void *opaque,

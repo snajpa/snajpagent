@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0-only
-import json
 import os
 import base64
 import time
 from pathlib import Path
 from pty_active import Child, DEFAULT_IDLE_PROMPT, DOTDIR, WORKSPACE
+from store_history import journal_paths, read_events
 
 # The build reports the compiled profile so a lean configuration can assert its own
 # shapes rather than the multimodal ones. Unset means the full profile, which is what
@@ -22,10 +22,10 @@ child = Child(["-vvvv"])
 buf = child.buf
 child.wait_text(DEFAULT_IDLE_PROMPT, timeout=5.0)
 blank_start = len(buf)
-before_logs = set(Path(DOTDIR, "sessions").glob("*/events.jsonl"))
+before_logs = set(journal_paths(DOTDIR))
 child.send(b"\r" * 3)
 child.drain(0.4)
-assert set(Path(DOTDIR, "sessions").glob("*/events.jsonl")) == before_logs
+assert set(journal_paths(DOTDIR)) == before_logs
 assert bytes(buf[blank_start:]).count(b"\n") >= 3, bytes(buf[blank_start:])
 # Exercise attachment staging/removal and durable submission with the existing
 # terminal fixture, including paths containing spaces. No provider perception
@@ -46,8 +46,9 @@ child.wait_text(b"pong")
 # terminal event is the unambiguous point at which /exit is an idle command.
 child.wait_text(b"turn_completed synced")
 # Earlier CLI cases share DOTDIR; directory order is not event chronology.
-journal = Path(DOTDIR, "sessions", child.session_id(), "events.jsonl")
-events = [json.loads(line) for line in journal.read_text().splitlines()]
+journal = next(path for path in journal_paths(DOTDIR)
+               if path.parent.name == child.session_id())
+events = read_events(journal)
 turns = [event["data"] for event in events if event["type"] == "turn_started"
          and event["data"].get("text") == "ping" and event["data"].get("content")]
 assert turns, "attachment was not journalled with the ping turn"
@@ -70,10 +71,10 @@ terminal_end = buf.find(b"turn_completed synced") + len(b"turn_completed synced"
 child.wait_idle_prompt(start=terminal_end, timeout=5.0)
 # Blank Enter stays local after attachment admission and completion too.
 blank_start = len(buf)
-before_events = [path.read_bytes() for path in sorted(Path(DOTDIR, "sessions").glob("*/events.jsonl"))]
+before_events = [path.read_bytes() for path in sorted(journal_paths(DOTDIR))]
 child.send(b"\r")
 child.drain(0.4)
-assert [path.read_bytes() for path in sorted(Path(DOTDIR, "sessions").glob("*/events.jsonl"))] == before_events
+assert [path.read_bytes() for path in sorted(journal_paths(DOTDIR))] == before_events
 assert b"fixture answer" not in buf[blank_start:]
 child.send(b"slow\r")
 child.wait_text(b"working slowly", timeout=5.0)
@@ -102,9 +103,9 @@ os.close(child.fd)
 if os.waitstatus_to_exitcode(status) != 0:
     raise SystemExit(f"explicit exit status {status}: {bytes(buf)!r}")
 # Only explicit text starts work; blank Enter never manufactures model input.
-logs = list(Path(DOTDIR, "sessions").glob("*/events.jsonl"))
-assert not any(json.loads(line).get("type") == "turn_started" and
-               json.loads(line)["data"]["text"] == "Continue."
-           for path in logs for line in path.read_text().splitlines())
+logs = list(journal_paths(DOTDIR))
+assert not any(event["type"] == "turn_started" and
+               event["data"]["text"] == "Continue."
+               for path in logs for event in read_events(path))
 if os.environ.get("TERM") == "dumb" and b"\x1b" in buf:
     raise SystemExit(f"TERM=dumb received ANSI: {bytes(buf)!r}")

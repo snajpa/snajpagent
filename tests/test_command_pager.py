@@ -19,6 +19,7 @@ import unittest
 from pathlib import Path
 
 from irc_client import IRCClient
+from store_history import journal_paths, read_events
 from test_upload_client import PRODUCT, Session
 
 
@@ -168,8 +169,8 @@ class CommandPagerTests(unittest.TestCase):
         text, _ = self.report(child, "/q", "queued item 00 café 漢字", "queued item 11 café 漢字")
         self.assertEqual(text.count("queued item"), 12)
         self.assertGreater(len(text.splitlines()), 6)
-        journal = next((self.dotdir / "sessions").glob("*/events.jsonl"))
-        events = [json.loads(line) for line in journal.read_text().splitlines()]
+        journal = next(iter(journal_paths(self.dotdir)))
+        events = read_events(journal)
         self.assertEqual(sum(e["type"] == "turn_started" for e in events), 1)
 
     def test_active_turn_survives_report_and_pager_exit(self):
@@ -211,6 +212,9 @@ class CommandPagerTests(unittest.TestCase):
         self.pager_open = True
 
         # Cross the journal's automatic checkpoint boundary while display is held.
+        journal = next(iter(journal_paths(self.dotdir)))
+        checkpoints = {path.name: path.read_bytes()
+                       for path in journal.parent.glob("checkpoint.[01]")}
         messages = [f"pager-held-{index:03d}" for index in range(160)]
         for message in messages:
             peer.message(message)
@@ -227,10 +231,15 @@ class CommandPagerTests(unittest.TestCase):
                 peer.buf.extend(peer.sock.recv(65536))
             if child.master in ready:
                 held_output += os.read(child.master, 65536)
-        journal = next((self.dotdir / "sessions").glob("*/events.jsonl"))
-        records = journal.read_text().rsplit("\n", 1)[0].splitlines()
-        events = [json.loads(line) for line in records]
-        self.assertTrue(any(event["type"] == "session_checkpoint" for event in events))
+        journal = next(iter(journal_paths(self.dotdir)))
+        events = read_events(journal)
+        if journal.name == "journal.bin":
+            current = {path.name: path.read_bytes()
+                       for path in journal.parent.glob("checkpoint.[01]")}
+            self.assertEqual(set(current), {"checkpoint.0", "checkpoint.1"})
+            self.assertNotEqual(current, checkpoints)
+        else:
+            self.assertTrue(any(event["type"] == "session_checkpoint" for event in events))
         retained = [event["data"]["text"] for event in events
                     if event["type"] in ("irc_event", "irc_event_v2") and
                     event["data"]["text"] in messages]
@@ -252,13 +261,12 @@ class CommandPagerTests(unittest.TestCase):
         child.write(b"/status\r")
         child.read_until(b"REPORT_READY")
         self.pager_open = True
-        journal = next((self.dotdir / "sessions").glob("*/events.jsonl"))
+        journal = next(iter(journal_paths(self.dotdir)))
         deadline = time.monotonic() + 6
         completed = False
         while time.monotonic() < deadline:
-            records = journal.read_text().rsplit("\n", 1)[0].splitlines()
-            completed = any(json.loads(line)["type"] == "turn_completed"
-                            for line in records)
+            records = read_events(journal)
+            completed = any(row["type"] == "turn_completed" for row in records)
             if completed:
                 break
             time.sleep(0.025)
@@ -276,14 +284,13 @@ class CommandPagerTests(unittest.TestCase):
         child.write(b"/status\r")
         child.read_until(b"REPORT_READY")
         self.pager_open = True
-        journal = next((self.dotdir / "sessions").glob("*/events.jsonl"))
+        journal = next(iter(journal_paths(self.dotdir)))
         deadline = time.monotonic() + 7
         held = b""
         records = []
         while time.monotonic() < deadline:
             held += self.available_output(child)
-            records = [json.loads(line) for line in
-                       journal.read_text().rsplit("\n", 1)[0].splitlines()]
+            records = read_events(journal)
             if any(row["type"] == event for row in records):
                 break
         held += self.available_output(child)

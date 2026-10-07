@@ -887,7 +887,8 @@ reconcile_binary(struct snag_session *source, struct snag_session *restored,
     char *error, size_t error_size)
 {
     if (!source || !restored || source == restored || !recovery || source->log_fd < 0 ||
-        source->lock_fd < 0 || source->pending_log || restored->dir_fd >= 0 ||
+        (source->lock_fd < 0 && (!prefix || !source->snapshot_read_only)) ||
+        source->pending_log || restored->dir_fd >= 0 ||
         restored->log_fd >= 0 || restored->lock_fd >= 0 || restored->pending_log ||
         !snag_hex_is_lower(source->id, SNAG_ID_HEX_LEN)) {
         return snag_fail(error, error_size, EINVAL,
@@ -928,7 +929,13 @@ reconcile_binary(struct snag_session *source, struct snag_session *restored,
         snag_fail(error, error_size, EINVAL, "native prefix does not match its committed boundary");
         goto done;
     }
-    if (snag_fstat(source->log_fd, &after) < 0 || !snag_file_unchanged(&before, &after)) {
+    bool inspected = snag_fstat(source->log_fd, &after) == 0;
+    /* The authenticated read-only prefix is independent of later appends.
+     * Locked reconstruction retains its whole-source stability contract. */
+    bool growth = inspected && prefix && source->snapshot_read_only && source->lock_fd < 0 &&
+        before.st_dev == after.st_dev && before.st_ino == after.st_ino &&
+        before.st_mode == after.st_mode && after.st_size > before.st_size;
+    if (!inspected || (!growth && !snag_file_unchanged(&before, &after))) {
         recovery->problem_seq = 1u;
         recovery->problem_start = 0u;
         recovery->problem_end = boundary;

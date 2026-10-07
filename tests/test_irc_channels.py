@@ -213,6 +213,20 @@ class ChannelFixture(QueryFixture):
 
 
 class ChannelTests(ChannelFixture):
+    def test_native_durable_response_and_repaint(self):
+        path, before = read_events(self.root / 'state')
+        self.assertEqual(path.name, 'journal.bin')
+        self.assertTrue(any(e['type'] == 'response_completed' for e in before))
+        saved = path.read_bytes()
+        self.submit('native durable repaint')
+        self.term.write(b'/chat\r')
+        self.term.until(b'queryop@')
+        self.term.write(b'/rollout\r')
+        self.term.until(b'host-model/medium')
+        self.wait_idle()
+        self.assertTrue(path.read_bytes().startswith(saved))
+        self.assertTrue(self.term.process.poll() is None)
+
     def test_received_actions_keep_body_and_kind_in_live_and_history(self):
         cases = [('', 'live-action', True, False),
                  ('@batch=old ', 'history-action', True, True),

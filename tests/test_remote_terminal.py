@@ -20,6 +20,7 @@ import unittest
 from pathlib import Path
 
 from test_upload_client import FixtureChildren, ProductSession
+from store_history import journal_paths, read_events
 
 PRODUCT = Path(__file__).resolve().parent / "snajpagent-fixture"
 SCREEN_FIXTURE = Path(__file__).resolve().parent / "fixture_screen_state.py"
@@ -295,8 +296,8 @@ class RemoteStartupTests(unittest.TestCase):
                 self.assertEqual(target.read_bytes(), source.read_bytes())
                 self.assertNotIn(b"SNAJPAGENT-SCREEN/1", output)
                 self.assertNotIn(b"#DATA:", output)
-                log = next((dotdir / "sessions").glob("*/events.jsonl"))
-                events = [json.loads(line) for line in log.read_text().splitlines()]
+                log = next(iter(journal_paths(dotdir)))
+                events = read_events(log)
                 self.assertEqual(sum(e["type"] == "download_queued" for e in events), 1)
                 self.assertEqual(sum(e["type"] == "download_removed" for e in events), 1)
                 os.write(child.master, b"/exit\r")
@@ -761,8 +762,9 @@ class RemoteStartupTests(unittest.TestCase):
                             child.wait(0)
                         finally:
                             child.close()
-                records = [json.loads(line) for line in
-                           (original.session_dir() / "events.jsonl").read_text().splitlines()]
+                directory = original.session_dir()
+                records = read_events(next(path for path in journal_paths(directory.parent.parent)
+                                           if path.parent == directory))
                 self.assertEqual(sum(e["type"] == "tool_finished" for e in records), 2)
                 self.assertEqual(sum(e["type"] == "download_removed" for e in records), 2)
             finally:
@@ -1297,8 +1299,8 @@ class RemoteStartupTests(unittest.TestCase):
                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
         self.assertEqual(detached.returncode, 0, detached.stderr)
         self.assertNotIn(b"::TRZSZ:TRANSFER:", detached.stdout + detached.stderr)
-        journal = next((dotdir / "sessions").glob("*/events.jsonl"))
-        events = [json.loads(line) for line in journal.read_text().splitlines()]
+        journal = next(iter(journal_paths(dotdir)))
+        events = read_events(journal)
         queued = [e["data"] for e in events if e["type"] == "download_queued"]
         self.assertEqual(len(queued), 1)
         return client_home, remote_home, dotdir, journal, events[0]["session_id"], source, env
@@ -1319,14 +1321,14 @@ class RemoteStartupTests(unittest.TestCase):
                 child.wait(0)
             finally:
                 child.close()
-            events = [json.loads(line) for line in journal.read_text().splitlines()]
+            events = read_events(journal)
             self.assertEqual([e["type"] for e in events].count("download_removed"), 1)
             self.assertEqual(events[-1]["type"], "download_removed")
             listed = subprocess.run([str(PRODUCT), "--dotdir", str(dotdir), "--resume", sid,
                                      "-e", "--", "download_queue_list"], cwd=remote_home, env=env,
                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
             self.assertEqual(listed.returncode, 0, listed.stderr)
-            events = [json.loads(line) for line in journal.read_text().splitlines()]
+            events = read_events(journal)
             texts = [e["data"]["result"]["model_text"] for e in events if e["type"] == "tool_finished"]
             self.assertIn("0 pending workstation download(s).", texts[-1])
 
@@ -1344,14 +1346,14 @@ class RemoteStartupTests(unittest.TestCase):
                 child.wait(0)
             finally:
                 child.close()
-            events = [json.loads(line) for line in journal.read_text().splitlines()]
+            events = read_events(journal)
             self.assertEqual([e["type"] for e in events].count("download_removed"), 0)
             listed = subprocess.run([str(PRODUCT), "--dotdir", str(dotdir), "--resume", sid,
                                      "-e", "--", "download_queue_list"], cwd=remote_home,
                                     env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                     timeout=10)
             self.assertEqual(listed.returncode, 0, listed.stderr)
-            events = [json.loads(line) for line in journal.read_text().splitlines()]
+            events = read_events(journal)
             texts = [e["data"]["result"]["model_text"] for e in events
                      if e["type"] == "tool_finished"]
             self.assertIn("1 pending workstation download(s).", texts[-1])
@@ -1377,7 +1379,7 @@ class RemoteStartupTests(unittest.TestCase):
                     child.wait(0)
                 finally:
                     child.close()
-                events = [json.loads(line) for line in journal.read_text().splitlines()]
+                events = read_events(journal)
                 self.assertEqual([e["type"] for e in events].count("download_removed"), 0)
 
     @unittest.skipUnless(shutil.which("screen"), "GNU screen unavailable")
@@ -1409,12 +1411,12 @@ class RemoteStartupTests(unittest.TestCase):
                 deadline = time.monotonic() + 4
                 events = []
                 while time.monotonic() < deadline:
-                    journals = list((dotdir / "sessions").glob("*/events.jsonl"))
+                    journals = journal_paths(dotdir)
                     if not journals:
                         time.sleep(0.05)
                         continue
                     journal = journals[0]
-                    events = [json.loads(line) for line in journal.read_text().splitlines()]
+                    events = read_events(journal)
                     if any(e["type"] == "download_queued" for e in events):
                         break
                     time.sleep(0.05)
@@ -1424,7 +1426,7 @@ class RemoteStartupTests(unittest.TestCase):
                 while not any(e["type"] == "turn_completed" for e in events) and \
                         time.monotonic() < deadline:
                     time.sleep(0.05)
-                    events = [json.loads(line) for line in journal.read_text().splitlines()]
+                    events = read_events(journal)
                 self.assertTrue(any(e["type"] == "turn_completed" for e in events),
                                 "the detached model turn must finish before editing a draft")
                 hardcopy = root / "hardcopy"

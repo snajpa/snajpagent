@@ -1,6 +1,5 @@
 # SPDX-License-Identifier: GPL-2.0-only
 """Native remote wrapper through disposable loopback OpenSSH and GNU screen."""
-import json
 import os
 import pwd
 import select
@@ -13,6 +12,8 @@ import threading
 import time
 import unittest
 from pathlib import Path
+
+from store_history import journal_paths, read_events
 
 from test_remote_terminal import PRODUCT, RemoteProcess
 from test_upload_client import FixtureChildren
@@ -161,17 +162,15 @@ class RemoteSSHTests(unittest.TestCase):
                             os.write(child.master, f"download_tool {source}\r".encode())
                             child.until(str(target).encode(), 15)
                             self.assertEqual(target.read_bytes(), source.read_bytes())
-                            journal = next((dotdir / "sessions").glob("*/events.jsonl"))
-                            events = [json.loads(line) for line in journal.read_text().splitlines()]
+                            journal = next(iter(journal_paths(dotdir)))
+                            events = read_events(journal)
                             self.assertEqual(sum(e["type"] == "download_removed" for e in events), 1)
                             if scenario in ("lost-client", "blackhole"):
                                 # Transfer acknowledgement precedes turn completion. Starting
                                 # the next command earlier admits steering, not a second turn.
                                 deadline = time.monotonic() + 10
                                 while True:
-                                    events = [json.loads(line) for line in
-                                              journal.read_text().splitlines(keepends=True)
-                                              if line.endswith("\n")]
+                                    events = read_events(journal)
                                     if sum(e["type"] == "turn_completed" for e in events) == 1:
                                         break
                                     self.assertLess(time.monotonic(), deadline,
@@ -185,8 +184,7 @@ class RemoteSSHTests(unittest.TestCase):
                                 deadline = time.monotonic() + 10
                                 while not started.exists():
                                     if time.monotonic() >= deadline:
-                                        pending = [json.loads(line) for line in
-                                                   journal.read_text().splitlines()]
+                                        pending = read_events(journal)
                                         facts = [(event["type"], event["data"].get("text"),
                                                   event["data"].get("prompt"),
                                                   event["data"].get("cwd")) for event in pending]
@@ -214,9 +212,7 @@ class RemoteSSHTests(unittest.TestCase):
                                                 "lost client did not leave a surviving remote owner")
                                 deadline = time.monotonic() + 15
                                 while True:
-                                    events = [json.loads(line) for line in
-                                              journal.read_text().splitlines(keepends=True)
-                                              if line.endswith("\n")]
+                                    events = read_events(journal)
                                     if sum(e["type"] == "turn_completed" for e in events) == 2:
                                         break
                                     self.assertLess(time.monotonic(), deadline,
@@ -233,8 +229,7 @@ class RemoteSSHTests(unittest.TestCase):
                                     attached.wait(0)
                                 finally:
                                     attached.close()
-                                events = [json.loads(line) for line in
-                                          journal.read_text().splitlines()]
+                                events = read_events(journal)
                                 calls = [item for event in events
                                          if event["type"] == "response_completed"
                                          for item in event["data"]["items"]

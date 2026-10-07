@@ -5,7 +5,9 @@
 ## Status and purpose
 
 Engineering design, September 27, 2026, with framing implementation begun
-September 28. Installed builds keep the existing JSONL format. The draft header,
+September 28. Current source creates native sessions and opens them through
+bounded checkpoint admission. Released 0.99.8c and existing legacy sessions use
+JSONL; stopped-session conversion remains under implementation. The draft header,
 commit-batch codec and bounded positional reader are exercised by the store tests.
 Typed payloads and data adapters cover all 77 assigned semantic kinds. Archive
 profiles also preserve public checkpoint views and explicitly unassigned source
@@ -13,12 +15,13 @@ names as inert observations.
 Public snapshots preserve literal or span-backed text. Canonical input, output,
 graph-item, continuation and process-byte references resolve exact originals;
 fixed-size output spans assemble contiguous item text across verified batches.
-A test-only native reader resolves input and public-snapshot references before
-projection through the strict core-state reducer. Legacy journal staging builds
-matching receipt-backed turn fields and streamed-output spans, then verifies
-semantic events and core state. Direct checkpoint loading, indexed runtime storage,
-grouped durability, reference relocation and full conversion remain under
-implementation. The application does not yet read or write binary sessions.
+Native readers resolve input and public-snapshot references before projection
+through the strict core-state reducer. Legacy journal staging builds matching
+receipt-backed turn fields and streamed-output spans, then verifies semantic
+events and core state. Runtime storage includes same-boundary core/provider
+checkpoints, bounded indexed admission, grouped durable acknowledgement and
+reference relocation. Complete stopped-session conversion remains under
+implementation.
 
 The storage contract preserves canonical history, exact input authority,
 completed tool results, context lineage and single-writer ownership. Active
@@ -96,7 +99,7 @@ That machinery has no current product benefit.
 
 This decision supersedes the earlier design prohibition on separate checkpoint
 files and durable indexes for the new format. The existing JSONL implementation
-and its one-file tests remain valid until replaced. There is still one checkpoint
+and its one-file tests serve retained legacy sessions. There is still one checkpoint
 concept: reducer state and provider-view state at exactly the same boundary.
 
 ## Binary representation
@@ -136,8 +139,7 @@ A bounded recovery root needs a physical commit boundary distinguishable from
 arbitrary payload bytes. An embedded, self-consistent batch must not become a
 commit merely because a derived pointer or a torn file happens to end there.
 Draft journal format 0.2 uses a reversible, zero-free envelope in the test-linked
-I/O owner, importer and positional readers. Application runtime storage remains
-JSONL while native backend integration continues. Earlier draft 0.1 files are
+I/O owner, importer and positional readers. Ordinary native creation and admission use this envelope. Earlier draft 0.1 files are
 rejected; regenerate development fixtures from their retained originals.
 
 Split a decoded batch into blocks of at most 254 bytes. Within each block,
@@ -460,8 +462,8 @@ lookup, and no constant-time or native-resume claim follows from it.
 
 The provider checkpoint section below records the retained seam as canonical
 sequence references. Its validation path reconstructs provider state from a full
-journal; an efficient loader and suffix cursor remain separate implementation work. No opaque provider-cache JSON is persisted in a
-native checkpoint. Runtime storage and application resume remain JSONL.
+journal. Runtime resume uses bounded receipt admission and suffix replay,
+described below. No opaque provider-cache JSON is persisted in a native checkpoint.
 
 ### Legacy journal staging
 
@@ -513,13 +515,12 @@ native verification. Restored state is adopted only after all checks succeed.
 An incomplete source tail is reported and retained; the output contains only the
 verified prefix. Any failure leaves provisional output for the caller to discard.
 
-The stage is test-linked and verifies through the legacy projection domain.
-Other canonical-field deduplication, source-coordinate relocation, provider
-checkpoints, indexed navigation, durability barriers and format publication remain
-unfinished. Results with unresolved log coordinates and voice-adoption cursors
-fail verification. The complete converter still needs those dependencies, source
-retention, old-writer exclusion and publication-last ordering. The application
-continues to use JSONL.
+The stopped staging API verifies through the legacy projection domain.
+Canonical-field deduplication and source-coordinate relocation preserve accepting
+field roles; unresolved log coordinates and voice-adoption cursors fail
+verification. The complete directory converter still needs source retention,
+old-writer exclusion and publication-last ordering. Native creation and existing
+native admission use the production backend described below.
 
 ### Legacy event names
 
@@ -803,7 +804,7 @@ bounded NUL-terminated UTF-8 path. Unlike the usual length-prefixed text, this
 uses two overhead bytes per plain path instead of five. A near-limit legacy path
 array therefore fits the existing native record budget; no larger limit or path
 truncation is needed. Embedded NUL remains invalid. This refines the unshipped
-draft encoding; production journals remain JSONL. Workspace-era entries also
+draft encoding. Workspace-era entries also
 retain byte count8 and SHA25632, not instruction file contents. Direct input
 receipts accept plain paths only,
 as their existing schema requires. Media content lists use nonzero count4 and
@@ -855,7 +856,7 @@ Legacy configuration validation left the six individual fields and unknown keys
 unconstrained. Their native values preserve null, booleans, signed integers,
 strings, arrays and objects, including absence versus null. Named fields use
 depth45 through `data/config/field`; the extension object uses depth46. This
-refines the unshipped draft layout without changing production JSONL. Execution
+refines the native layout while preserving legacy JSONL decoding. Execution
 settings remain explicit typed slots; there is no whole-config or whole-record
 fallback. Legacy defaults and execution-policy bounds remain reducer/importer
 checks. In particular, the old positive signed64 maximum-parallel literal is
@@ -1844,8 +1845,7 @@ native-reference form, target identity and earlier logical start, then derives
 the cursor and transfer identity. Partial or malformed roots fail encoding.
 Latest-membership/lifecycle validation, provider decoding, native process scan
 cursors and atomic joint adoption remain the enclosing consumer's work. This
-assembly participates in existing-native admission; new session creation still
-uses JSONL.
+assembly participates in existing-native admission and native creation.
 
 A full checkpoint captures all current semantic state:
 
@@ -1951,12 +1951,23 @@ coordinates after independent validation; native-to-native comparisons and the
 final rendered provider requests remain exact.
 Generation selection and durable publication remain writer responsibilities.
 
+Live render sources retain their canonical sequence and a copied acknowledged
+boundary. Immediate presentation and asynchronous backfill project typed records
+beneath that frontier; later appends leave the queued source unchanged. The
+projection produces transient display data without adopting reducer state or
+receipt authority. Native tool completion obtains its output reference from the
+same canonical record and reads only its half-open sequence range before that
+completion. Original presentation coordinates remain metadata rather than byte
+scan hints. Native and legacy chunk display share existing stream labels,
+character/byte limits and omission behavior. Legacy render sources retain their
+original byte ranges.
+
 ## Checkpoint file framing
 
 The test-linked frame codec binds separately versioned core and provider sections
 to one generation, journal identity and committed boundary. Its draft0.2 envelope
 uses a160-byte header, core bytes, provider bytes, optional access bytes, and a48-byte
-footer. Draft0.1 images require regeneration; the runtime backend remains JSONL.
+footer. Draft0.1 images require regeneration.
 All integer fields are little-endian. Header offsets are:
 
 | Offset | Bytes | Field |
@@ -2014,9 +2025,9 @@ consistency and canonical reference provenance before adoption; an unknown requi
 section version fails state loading. Frame decoding alone supplies no state or
 resume authority. Frame tests include synthetic section bytes and snapshots larger
 than one event. Typed core/provider bodies and verified checkpoint-plus-suffix
-materialization have separate semantic tests. Alternating publication is available
-on the test-linked I/O owner described below. Efficient anchor selection and
-application integration remain under implementation. Runtime storage remains JSONL.
+materialization have separate semantic tests. Alternating publication uses the
+sole I/O owner described below. Runtime admission selects canonical receipts
+from its bounded window.
 
 ## Checkpoint cadence and publication
 
@@ -2135,7 +2146,7 @@ lock. A digest or sparse range alone proves none of those conditions. Immutable
 frame and source ownership remain required; source stamps cannot detect a write
 with identical filesystem metadata. This test-linked component supplies neither
 bounded suffix lookup nor tail-repair authority. Live producer maintenance and
-application admission remain under implementation; runtime storage is JSONL.
+application admission use the receipt-pinned frontier described below.
 
 ### Canonical checkpoint receipt codec
 
@@ -2797,7 +2808,7 @@ Fixture access views are built from canonical prefix bytes, independently of
 live closure selection. Indexed and unindexed readers compare to the original
 semantic state, exercise malformed metadata in both paths and remove mandatory
 point entries to check atomic failure and preservation of the read descriptor's
-position. The runtime backend remains JSONL pending native backend integration.
+position. Runtime resume uses bounded native admission.
 
 ### Direct provider source hydration
 
@@ -2888,8 +2899,8 @@ of a retained result uses its encoded excerpt and presentation metadata.
 Fixtures restore core state from captured sparse metadata and recapture from that
 same sparse table to compare exact bytes. Actual paired provider recipe captures
 are restored against the same canonical oracle as dense/unindexed reads. Live
-producer table maintenance, receipt-bound joint admission, runtime ownership and
-backend/converter integration remain separate work; the application uses JSONL.
+producer table maintenance and receipt-bound joint admission are integrated
+with native ownership. Stopped-session conversion remains separate work.
 
 ### Joint pinned checkpoint and bounded suffix restoration
 
@@ -2925,8 +2936,8 @@ prefix oracle, including legacy plain labels and non-input IRC neighbors, then
 free image/access bytes before another provider comparison. Failure coverage
 checks cancellation across observed restore/lookup stages, receipt/frontier/stop
 mismatch, late source mutation and missing historical closure. Runtime receipt
-selection, live producer closure/frontier maintenance, sole I/O ownership and
-backend/converter integration remain pending; the application uses JSONL.
+selection, live closure/frontier maintenance and sole I/O ownership use these
+restoration paths. Stopped-session conversion remains separate work.
 
 ### Shared native reference production
 
@@ -3054,8 +3065,8 @@ clears the operation's ephemeral proof, including any retained archive candidate
 copy proof, so a later ACK cannot recreate import authority. Existing canonical
 archive bytes remain inert observations. Recovery does not implicitly resume an
 unfinished import; a fresh operation captures the current destination boundary.
-The app's source-history walker and normal session lifecycle remain JSONL until
-their native reader/backend integration is completed.
+The app's source-history walker and normal session lifecycle select native
+readers for native sessions and retain the legacy paths for JSONL sessions.
 
 ### Live acknowledged core/provider capture
 
@@ -3147,10 +3158,10 @@ working-set closure and bounded suffix; it never consults this derived index.
 
 Close drains owned publication or journal work before descriptor/lock teardown
 while releasing no abandoned candidate effects. It preserves provisional files
-and already-canonical receipts for recovery. Existing native sessions now open
-through bounded joint admission; provisional native creation, stopped conversion
-and native checkpoint-suffix dispatch remain unfinished. New session creation
-continues to use JSONL until those factory steps are integrated.
+and already-canonical receipts for recovery. Existing native sessions open
+through bounded joint admission. New session creation uses the native factory;
+checkpoint-suffix dispatch preserves semantic history. Stopped-session conversion
+remains under implementation.
 
 ### Prepared native seed
 
@@ -3172,8 +3183,9 @@ for the caller to discard. Success returns an owning index-cache encoding at the
 verified frontier; failure preserves the empty output buffer. Cache membership
 is checked against the independently established frontier, never trusted from
 its own bytes. Checkpoint-slot setup, index attachment and directory
-publication belong to the factory. The stage remains test-linked while ordinary
-creation continues through the JSONL factory.
+publication belong to the factory. Production and unit targets link this stage
+and ordinary creation uses the native factory. Existing legacy sessions keep
+their format; released-format byte fixtures use an explicit test-only constructor.
 
 The existing checkpoint access-plan reader can select the complete core/provider
 closure from this seed cache using proofs beneath that independently established
@@ -3242,7 +3254,7 @@ read or callback failure retains the last accepted prefix. This publication is
 separate from the low-level reader's provisional, failure-atomic cursor. Paging
 charges decoded record bytes and leaves both descriptors' positions unchanged.
 The JSONL reader remains unchanged. Native creation and checkpoint-suffix semantic
-dispatch still require their remaining integration and qualification.
+dispatch are integrated with the ordinary session lifecycle.
 
 ### Native reverse history queries
 
@@ -3277,8 +3289,9 @@ and legacy checkpoint markers have no semantic callback.
 Like the existing full iterator, only negative callback results abort traversal;
 positive results do not turn this API into the paged stop-before/stop-after API.
 Callback effects are provisional until complete source rechecking succeeds.
-A source change, including an explicit callback append, returns EAGAIN rather
-than adopting reconstructed state or claiming a frozen complete result. The
+Locked reconstruction rejects a source change, including an explicit callback
+append, with EAGAIN before adopting reconstructed state. An authenticated read-only
+prefix tolerates later appends on the same source without extending its result. The
 live owner, effects and descriptor positions are otherwise unchanged; the
 callback's own write remains its own acknowledged operation.
 
@@ -3323,5 +3336,52 @@ a retry from reusing the old prepared state after the public name already exists
 Pre-publication failures retain the original prepared owner and identify the
 private .creating-ID-NONCE directory for recovery. Provisional bytes confer no
 public session or checkpoint authority. All allocations needed for accepted
-resource handoff precede publication. Default creation still uses the legacy path
-while this backend and stopped, locked conversion are integrated.
+resource handoff precede publication. Default creation uses this production-linked
+backend. Existing legacy sessions retain their format until explicit stopped,
+locked conversion is integrated.
+
+Finite native history pages charge their existing byte budget for the expanded
+semantic projection as well as the canonical descriptor. A single-copy text
+reference cannot make a page reconstruct many cumulative large snapshots for the
+price of small references. One complete oversized event remains readable, and its
+exact authenticated cursor resumes the next page. Reverse traversal publishes
+that before-record cursor for subsequent forward paging and anchor restoration.
+Exhaustive iteration has no page budget.
+
+### Native explicit-history snapshots
+
+Fixed-prefix history open, snapshot and observation select an existing native
+journal before the legacy path. They hold read-only descriptors and install
+minimal history custody, with no core/provider reconstruction, writer, checkpoint
+publisher or device/process effects. Explicit history initialization authenticates
+the requested canonical prefix and derives its logical frontier; observation
+extends only the already accepted prefix through newly verified complete batches.
+Exhaustive replay of an authenticated read-only prefix tolerates concurrent growth
+of that same journal and returns only the captured frontier. Locked reconstruction
+continues to require the complete source stamp to remain unchanged during replay.
+An open later frame is reported without adoption or repair. Corrupt closed frames,
+changed prefix claims and replaced/truncated source names fail without advancing
+the prior view. Existing native files never authorize a JSONL fallback.
+
+Historical record queries prove derived-cache membership beneath that independently
+established frontier and check canonical tuples. Missing cache access remains
+unavailable; it grants no absence proof. Physical-offset lookup identifies a
+batch boundary. Sequence lookup selects an exact logical record, since several
+records can share a containing-batch predecessor. Semantic enumeration omits
+structural field/receipt records, so its event sequences can have gaps. This
+explicit history traversal is separate from bounded checkpoint admission and
+supplies no application-resume fallback.
+
+Loss of a live native provider cache reuses canonical checkpoint admission and
+its bounded suffix through the writer's acknowledged boundary. A provisional
+core/provider restore must match that boundary and logical frontier before its
+provider capture replaces the invalid cache. Current core state, writer ownership,
+file position and effect ownership stay unchanged. Missing images or source
+membership remain unavailable; cancellation leaves the previous cache owner in
+place. This repair has no lifetime replay fallback.
+
+Nested native checkpoint admission, suffix restore and joint materialization use
+heap-owned provisional sessions. Each owner is released on failure or cleared
+after successful transfer. This keeps the fixed worker stack independent of the
+number of restoration stages; the same canonical validation and atomic adoption
+contracts apply.

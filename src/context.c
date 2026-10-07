@@ -1,12 +1,13 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "context.h"
+#include "base.h"
 #include "credential.h"
 #include "fs.h"
-#include "media.h"
 #include "irc.h"
-#include "base.h"
 #include "json.h"
+#include "media.h"
 #include "snajpagent.h"
+#include "store_binary_context.h"
 #include "store_internal.h"
 
 #include <errno.h>
@@ -660,7 +661,8 @@ context_cache_get(struct snag_session *session, struct snag_context_capture **ou
     struct snag_context_capture *old = session->on_commit == context_cache_commit ?
         session->on_commit_opaque : NULL;
     if (old && !old->invalid) { *out = old; return 0; }
-    if (old || (session->checkpoint_has_context && !session->checkpoint_context)) {
+    if (!session->binary &&
+        (old || (session->checkpoint_has_context && !session->checkpoint_context))) {
         json_t *state = NULL, *context = NULL;
         if (snag_session_checkpoint_read(session, &state, &context,
                 error, error_size) < 0) return -1;
@@ -670,7 +672,12 @@ context_cache_get(struct snag_session *session, struct snag_context_capture **ou
         session->checkpoint_context = context;
     }
     struct snag_context_capture *cache = NULL;
-    if (session->checkpoint_has_context) {
+    if (session->binary) {
+        if (snag_store_recover_binary_context(session, &cache, control, error, error_size) < 0) {
+            return -1;
+        }
+        cache->view.control = NULL;
+    } else if (session->checkpoint_has_context) {
         if (context_cache_restore(session, &cache, error, error_size, control) < 0) return -1;
     } else {
         /* Only the first capture without a saved provider view reads history.
@@ -872,6 +879,18 @@ append_tool_call(struct context_builder *builder, const struct snag_response_ite
     return rc;
 }
 
+static const char *
+rollout_log_name(const struct snag_session *session)
+{
+    snag_file_info status;
+    /* Detached projections retain the source directory without its writer. */
+    if (session->binary || (session->dir_fd >= 0 &&
+        snag_lstat_at(session->dir_fd, "journal.bin", &status) == 0)) {
+        return "journal.bin";
+    }
+    return "events.jsonl";
+}
+
 static int
 bounded_command_output(struct snag_buf *out, const char *text, size_t len, uint32_t max_output_tokens)
 {
@@ -957,8 +976,9 @@ append_tool_result(struct context_builder *builder, const char *call_id, const j
         char *encoded = canonical_string(ref, 4096u);
         if (!encoded) goto out;
         int pr = snag_buf_printf(&full,
-            "[command status=%s; output_ref=%s; full redacted bytes in %s/events.jsonl]\n%s",
-            snag_json_string(result, "status"), encoded, builder->session->dir_path, model_text);
+            "[command status=%s; output_ref=%s; full redacted bytes in %s/%s]\n%s",
+            snag_json_string(result, "status"), encoded, builder->session->dir_path,
+            rollout_log_name(builder->session), model_text);
         free(encoded);
         if (pr < 0 || snag_buf_terminate(&full) < 0) goto out;
         output_text = (const char *)full.data;
@@ -1257,14 +1277,22 @@ append_rollout_log_location(struct context_builder *builder)
 
     if (!builder->session) return 0;
     if (!builder->session->dir_path) return snag_errno(EINVAL);
+    const char *name = rollout_log_name(builder->session);
     struct snag_buf path = {.max = SNAG_PATH_MAX_BYTES + sizeof("/events.jsonl")};
-    if (snag_buf_printf(&path, "%s/events.jsonl", builder->session->dir_path) < 0) goto out;
+    if (snag_buf_printf(&path, "%s/%s", builder->session->dir_path, name) < 0) goto out;
     path_value = json_string((const char *)path.data);
     if (!path_value) goto out;
     quoted_path = canonical_string(path_value, quoted_path_max);
-    if (quoted_path) rc = append_messagef(builder, "system", quoted_path_max + 256u,
+    if (quoted_path && !strcmp(name, "journal.bin")) {
+        rc = append_messagef(builder, "system", quoted_path_max + 256u,
+            "The complete rollout log for this session is at %s. Use read_session_history "
+            "to inspect it when the compacted context lacks needed detail, and read_tool_output "
+            "for retained command output.", quoted_path);
+    } else if (quoted_path) {
+        rc = append_messagef(builder, "system", quoted_path_max + 256u,
             "The complete rollout log for this session is at %s. Use local "
             "tools to inspect it when the compacted context lacks needed detail.", quoted_path);
+    }
 out: free(quoted_path);
     json_decref(path_value);
     snag_buf_free(&path);

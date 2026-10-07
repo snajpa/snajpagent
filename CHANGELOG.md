@@ -4,10 +4,35 @@
 
 ## Unreleased
 
+- Present committed native responses and deferred view repaint through typed
+  sources pinned to their commit boundary, including voice observations and
+  collected command stdout/stderr.
+
+- Account for expanded single-copy text in native history page budgets, retaining
+  complete large events and exact cursors for search and viewport loading.
+
+- Read exhaustive native history through captured read-only prefixes during later
+  appends, while keeping full stopped-journal reconstruction exclusively locked
+  and source-stable.
+
+- Keep native checkpoint restoration scratch owners off small worker stacks during
+  catalog reads, preserving cancellation and atomic adoption.
+
+- Recover a lost native provider cache from its canonical checkpoint and bounded
+  suffix, preserving committed state when required data is unavailable or repair
+  is cancelled.
+
+- Name the session's actual journal in model history hints and command-output
+  references. Native history hints direct inspection through read_session_history
+  and read_tool_output.
+
+- Create new persisted sessions through the verified native four-file factory,
+  including a receipt-pinned first checkpoint. Existing legacy sessions retain
+  their format on resume.
+
 - Add a provisional four-file native creation backend with verified checkpoint
   closure, receipt-ordered publication and ownership-preserving failure handling.
-  Recognize empty reserved checkpoint slots during bounded recovery. Default
-  creation remains JSONL while cutover and conversion are being integrated.
+  Recognize empty reserved checkpoint slots during bounded recovery.
 
 - Preserve explicit automatic-retry overrides in typed native session records and
   checkpoints. Older checkpoints inherit configuration when no override was saved.

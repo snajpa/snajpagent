@@ -26,6 +26,13 @@ int snag_store_reconcile_binary_context_prefix(struct snag_session *source,
     struct snag_binary_recovery *recovery, struct snag_binary_checkpoint_sources *sources,
     const struct snag_context_control *control, char *error, size_t error_size);
 
+/* Rebuild a lost provider cache through the current owner's ACK boundary.
+ * Uses canonical checkpoint admission and bounded suffix work, without lifetime
+ * replay, core adoption, writer binding or effects. Missing images/access fail
+ * unavailable. Success transfers a state-only capture; failure preserves out. */
+int snag_store_recover_binary_context(struct snag_session *, struct snag_context_capture **,
+    const struct snag_context_control *, char *, size_t);
+
 /* Joint state-only core/provider materialization from a frame already decoded
  * and pinned against this independently authenticated canonical receipt.
  * The caller establishes latest membership, capture ancestry, complete producer

@@ -2607,6 +2607,75 @@ live_snapshot_capture(void)
     assert(!fclose(file));
 }
 
+static void
+native_source_projection(struct snag_session *source, unsigned int cycle,
+    const json_t *steering, const struct snag_instruction_set *instructions,
+    const struct snag_context_projection *expected)
+{
+    char error[512] = {0};
+    off_t position = lseek(source->log_fd, 0, SEEK_CUR);
+    assert(position >= 0);
+    FILE *file = tmpfile();
+    assert(file);
+    unsigned char bytes[8192];
+    for (int64_t offset = 0; offset < source->log_end;) {
+        uint64_t remaining = (uint64_t)(source->log_end - offset);
+        size_t size = remaining < sizeof(bytes) ? (size_t)remaining : sizeof(bytes);
+        assert(snag_pread(source->log_fd, bytes, size, offset) == (ssize_t)size);
+        assert(!snag_write_full(fileno(file), bytes, size));
+        offset += (int64_t)size;
+    }
+    struct snag_session copied, native;
+    snag_session_init(&copied);
+    snag_session_init(&native);
+    copied.log_fd = fileno(file);
+    copied.lock_fd = source->lock_fd;
+    memcpy(copied.id, source->id, sizeof(copied.id));
+    struct snag_binary_recovery recovery = {0};
+    struct snag_binary_checkpoint_sources origins = {0};
+    int rc = snag_store_reconcile_binary_context(&copied, &native, &recovery,
+        &origins, NULL, error, sizeof(error));
+    if (rc < 0) fprintf(stderr, "native default provider capture: %s\n", error);
+    assert(!rc);
+    assert(native.log_fd == -1 && native.lock_fd == -1 && native.dir_fd == -1);
+    checkpoint_matches(&copied, &native, &recovery.verified, &origins);
+    checkpoint_suffix_matches(&copied, &native, &recovery.verified, &origins);
+    prefix_matches(&copied, &native, &recovery.verified);
+    if (!checked_failures && native.next_seq > 2u) {
+        failure_paths(&copied, &native, &origins, &recovery.verified);
+        checked_failures = true;
+    }
+    json_t *cache = native.on_checkpoint(native.on_commit_opaque, &native);
+    assert(cache);
+    if (!checked_source_failures && json_array_size(json_object_get(cache, "history_sources"))) {
+        failure_paths(&copied, &native, &origins, &recovery.verified);
+        checked_source_failures = true;
+    }
+    json_decref(cache);
+    copied.log_fd = copied.lock_fd = -1;
+    assert(!fclose(file));
+    native.dir_fd = dup(source->dir_fd);
+    native.dir_path = strdup(source->dir_path);
+    assert(native.dir_fd >= 0 && native.dir_path);
+    for (unsigned int pass = 0u; pass < 2u; ++pass) {
+        struct snag_context_projection projection = {0};
+        rc = snag_context_build(&native, SNAJPAGENT_MODEL, "medium", cycle, steering,
+            0u, false, NULL, NULL, instructions, NULL, &projection, error, sizeof(error), NULL);
+        if (rc < 0) fprintf(stderr, "native default provider projection: %s\n", error);
+        assert(!rc);
+        if (expected) {
+            same_projection(expected, &projection);
+            ++warm_compared;
+        }
+        snag_context_projection_free(&projection);
+    }
+    assert(lseek(source->log_fd, 0, SEEK_CUR) == position);
+    snag_binary_checkpoint_sources_free(&origins);
+    snag_session_close(&native);
+    snag_session_close(&copied);
+    ++compared;
+}
+
 void
 test_context_binary_projection(struct snag_session *source, unsigned int cycle,
     const json_t *steering, const struct snag_instruction_set *instructions,
@@ -2617,6 +2686,10 @@ test_context_binary_projection(struct snag_session *source, unsigned int cycle,
     live_snapshot_capture();
     if (source->pending_log || source->log_fd < 0 || source->lock_fd < 0) {
         ++without_journal;
+        return;
+    }
+    if (source->binary) {
+        native_source_projection(source, cycle, steering, instructions, expected);
         return;
     }
     char error[512] = {0};

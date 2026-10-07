@@ -7,6 +7,7 @@ import subprocess
 import unittest
 
 import test_vm_frontend as frontend
+from store_history import journal_paths, read_events
 
 
 class AnchorTests(unittest.TestCase):
@@ -47,8 +48,8 @@ class AnchorTests(unittest.TestCase):
         config.write_text(self.fixture_config.read_text().replace(
             '${SNAJPAGENT_IRC_UI_KEY}', '"irc-ui-secret"'))
         config.chmod(0o600)
-        event = next(json.loads(line) for line in journal.read_text().splitlines()
-                     if json.loads(line)['type'] == 'response_completed')
+        event = next(event for event in read_events(journal)
+                     if event['type'] == 'response_completed')
         key = event['data']['response_id'] + '/0'
         byte = len((prefix + 'anchor-marker-' + '界' * 3).encode())
         child = self.start('-N', 'source', columns=27)
@@ -119,7 +120,14 @@ class AnchorTests(unittest.TestCase):
                 body = provider.function_body(sequence, 'anchor-call', 'exec_command', {
                     'cmd': command, 'yield_time_ms': 10000, 'max_output_tokens': 100})
             else:
-                body = provider.response_body(sequence, 'final-answer')
+                jobs = frontend.harness.unsettled_commands(request)
+                if jobs:
+                    body = provider.functions_body(sequence, [
+                        (f'anchor-poll-{sequence}-{i}', 'write_stdin', {
+                            'handle': job['handle'], 'yield_ms': 1000,
+                            'max_output_bytes': 100}) for i, job in enumerate(jobs)])
+                else:
+                    body = provider.response_body(sequence, 'final-answer')
             provider.reply(handler, body.encode())
 
         provider.runtime_handler = respond
@@ -131,10 +139,10 @@ class AnchorTests(unittest.TestCase):
                                                    'SNAJPAGENT_IRC_UI_KEY': 'irc-ui-secret'},
                                 capture_output=True, timeout=30)
         self.assertEqual(result.returncode, 0, result.stderr[-4000:])
-        journal, = (self.root / 'state' / 'sessions').glob('*/events.jsonl')
-        event = next(json.loads(line) for line in journal.read_text().splitlines()
-                     if json.loads(line)['type'] == 'process_output' and
-                     (not large or json.loads(line)['data']['offset'] >= 5 * 1024 * 1024))
+        journal, = journal_paths(self.root / 'state')
+        event = next(event for event in read_events(journal)
+                     if event['type'] == 'process_output' and
+                     (not large or event['data']['offset'] >= 5 * 1024 * 1024))
         child = self.start('-N', 'hidden', columns=100)
         child.command('history ' + journal.parent.name)
         child.repaint_until(b'final-answer')

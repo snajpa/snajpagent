@@ -15,6 +15,7 @@ import time
 from pathlib import Path
 
 import tmux_terminal as harness
+from store_history import journal_paths
 
 
 STATUS = {2: 14, 3: 15, 4: 19, 5: 19}
@@ -119,7 +120,7 @@ def check(binary):
                 result = subprocess.run(prefix + ["-N", name, "-e", "--", "hello"],
                                         cwd=root, env=env, capture_output=True, timeout=20)
                 assert result.returncode == 0, result.stderr
-                new = set((state / "sessions").glob("*/events.jsonl")) - journals.keys()
+                new = set(journal_paths(state)) - journals.keys()
                 assert len(new) == 1, new
                 journal = new.pop()
                 journals[journal] = hashlib.sha256(journal.read_bytes()).digest()

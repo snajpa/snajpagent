@@ -10,6 +10,7 @@ import tempfile
 import threading
 from pathlib import Path
 
+from store_history import journal_paths, read_events
 from test_remote_terminal import RemoteProcess
 from tmux_terminal import FakeResponses, write_irc_config
 
@@ -83,8 +84,8 @@ def check_sessions(fixture):
                  "session name does not fit the configured prompt")
     fixture.prompt(child, f"human|agent|[{renamed}]|host-model I>")
     fixture.finish(child)
-    records = [json.loads(line) for line in
-               (state / "sessions" / sid / "events.jsonl").read_text().splitlines()]
+    journal = next(p for p in journal_paths(state) if p.parent.name == sid)
+    records = read_events(journal)
     names = [r["data"]["name"] for r in records if r["type"] == "session_named"]
     assert names == [original, renamed]
     child = fixture.start(state, "--resume", sid)

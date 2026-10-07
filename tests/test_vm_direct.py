@@ -13,6 +13,7 @@ import unittest
 from pathlib import Path
 
 import tmux_terminal as harness
+from store_history import journal_paths, read_events
 
 
 DRIVER = Path(sys.argv.pop(1)).resolve()
@@ -77,8 +78,8 @@ class DirectTests(unittest.TestCase):
                     process.communicate()
 
     def events(self, session):
-        path = self.state / 'sessions' / session / 'events.jsonl'
-        return [json.loads(line) for line in path.read_bytes().splitlines()]
+        path = next(p for p in journal_paths(self.state) if p.parent.name == session)
+        return read_events(path)
 
     def test_turn_command_draft_and_resume(self):
         result = self.run_driver('turn')

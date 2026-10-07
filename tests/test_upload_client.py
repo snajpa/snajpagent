@@ -27,6 +27,8 @@ import unittest
 import zlib
 from pathlib import Path
 
+from store_history import journal_paths, read_events
+
 
 ADAPTER = Path(__file__).resolve().parent / "test_upload_wire"
 PRODUCT = Path(__file__).resolve().parent / "snajpagent-fixture"
@@ -247,7 +249,7 @@ class ProductSession(Session):
                          ready="› ".encode(), cwd=home, env=env)
 
     def session_dir(self):
-        sessions = list((self.dotdir / "sessions").glob("*/events.jsonl"))
+        sessions = journal_paths(self.dotdir)
         if len(sessions) != 1:
             raise AssertionError(f"wanted one saved session, got {sessions}")
         return sessions[0].parent
@@ -257,8 +259,8 @@ class ProductSession(Session):
         return sorted(p.read_bytes() for p in media.iterdir()) if media.exists() else []
 
     def request_count(self):
-        with (self.session_dir() / "events.jsonl").open(encoding="utf-8") as saved:
-            return sum(json.loads(line).get("type") == "response_started" for line in saved)
+        journal, = journal_paths(self.dotdir)
+        return sum(event["type"] == "response_started" for event in read_events(journal))
 
     def tty_settings(self):
         descriptor = os.open(self.slave_name, os.O_RDWR | os.O_NOCTTY)

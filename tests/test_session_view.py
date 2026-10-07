@@ -19,6 +19,8 @@ import unittest
 import uuid
 from pathlib import Path
 
+from store_history import create_legacy, journal_paths, read_boundary, read_events
+
 import tmux_terminal as harness
 from test_remote_terminal import RemoteProcess
 
@@ -152,9 +154,13 @@ class SessionViewTests(unittest.TestCase):
         self.views = []
         self.owner = None
         self.release = threading.Event()
-        child = self.start([])
+        resume = []
+        if self._testMethodName == 'test_legacy_observer_is_a_committed_prefix':
+            journal = create_legacy(self.root / 'state', self.root, 'fake', 'host-model')
+            resume = ['--resume', journal.parent.name]
+        child = self.start(resume)
         child.until('›'.encode(), 15)
-        self.journal, = (self.root / 'state' / 'sessions').glob('*/events.jsonl')
+        self.journal, = journal_paths(self.root / 'state')
         self.directory = self.journal.parent
         self.sid = self.directory.name
         for row in subprocess.check_output(['ps', '-axww', '-o', 'pid=', '-o', 'ppid=', '-o', 'command='],
@@ -247,14 +253,14 @@ class SessionViewTests(unittest.TestCase):
                                     capture_output=True, timeout=5)
             self.assertEqual(result.returncode, 0, result.stderr)
             rows = [line.split('\t') for line in result.stdout.splitlines()[1:]]
-            actual = next(row[4] for row in rows if self.sid.startswith(row[0]))
+            actual = next((row[4] for row in rows if self.sid.startswith(row[0])), None)
             if actual == wanted:
                 return
             time.sleep(.02)
-        self.fail((wanted, actual))
+        self.fail((wanted, actual, result.stdout, result.stderr))
 
     def events(self):
-        return [json.loads(line) for line in self.journal.read_bytes().splitlines()]
+        return read_events(self.journal)
 
     def wait_event(self, kind):
         deadline = time.monotonic() + 10
@@ -293,10 +299,26 @@ class SessionViewTests(unittest.TestCase):
         snapshot = peer.until('state')['state']
         data = self.journal.read_bytes()
         prefix = data[:snapshot['end']]
-        self.assertTrue(prefix.endswith(b'\n'))
-        last = json.loads(prefix.splitlines()[-1])
-        self.assertEqual(last['seq'], snapshot['seq'])
-        self.assertEqual(last['event_sha256'], snapshot['sha256'])
+        if self.journal.name == 'events.jsonl':
+            self.assertTrue(prefix.endswith(b'\n'))
+            last = json.loads(prefix.splitlines()[-1])
+            self.assertEqual(last['seq'], snapshot['seq'])
+            self.assertEqual(last['event_sha256'], snapshot['sha256'])
+        else:
+            # Verify the captured physical prefix with the production decoder,
+            # independently of the live owner's advertised coordinates.
+            root = self.root / 'snapshot-state'
+            root.mkdir(mode=0o700)
+            sessions = root / 'sessions'
+            sessions.mkdir(mode=0o700)
+            directory = sessions / self.sid
+            directory.mkdir(mode=0o700)
+            copied = directory / 'journal.bin'
+            copied.write_bytes(prefix)
+            copied.chmod(0o600)
+            self.assertEqual(read_boundary(copied), {key: snapshot[key]
+                             for key in ('seq', 'end', 'sha256')})
+            self.assertEqual(copied.read_bytes(), prefix)
         self.status('attached')
         peer.send(type='reserve')
         self.assertIn('controller', peer.until('error')['message'])
@@ -308,6 +330,9 @@ class SessionViewTests(unittest.TestCase):
         self.assertEqual(self.journal.read_bytes(), saved)
         self.assertEqual(self.identity(), self.owner_identity)
         self.assertEqual((self.directory / 'view.sock').stat().st_mode & 0o777, 0o600)
+
+    def test_legacy_observer_is_a_committed_prefix(self):
+        self.test_observer_is_read_only_and_snapshot_is_a_committed_prefix()
 
     def test_controller_exclusion_generation_disconnect_and_classic_return(self):
         self.detach()
