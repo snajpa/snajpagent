@@ -654,8 +654,8 @@ insert_input(struct snag_vm_buffer *buffer, const struct snag_vm_input_event *ev
         snag_term_init(editor->input);
         editor->input->input_only = editor->input->defer_redraw = true;
         editor->input->capable = editor->input->blank_local = true;
-        editor->input->cancelled = snag_vm_buffer_cancelled;
-        editor->input->cancelled_opaque = buffer;
+        editor->input->feedback = snag_vm_buffer_feedback;
+        editor->input->feedback_opaque = buffer;
         snag_term_set_commands(editor->input, snag_commands, snag_command_count());
     }
     if (snag_vm_editor_begin(buffer) < 0) return SNAG_VM_EDIT_ERROR;

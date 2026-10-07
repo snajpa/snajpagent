@@ -40,6 +40,9 @@ def connect(directory, name):
     try:
         os.chdir(directory)
         peer.connect(name)
+    except OSError:
+        peer.close()
+        raise
     finally:
         os.chdir(previous)
     return peer

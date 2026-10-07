@@ -881,11 +881,28 @@ output_block(json_t *blocks, struct formatted_text *out, uint64_t seq, uint64_t 
     return 0;
 }
 
+static bool
+presentation_selected(const json_t *route, const json_t *data)
+{
+    if (!strcmp(snag_json_string(data, "op"), "irc")) {
+        const json_t *event = json_object_get(data, "data");
+        return snag_presentation_event_selected(route,
+            json_object_get(event, "routing") ? "irc_event_v2" : "irc_event", event);
+    }
+    const json_t *target = json_object_get(data, "route");
+    if (!route || !target) return !route && !target;
+    static const char *const fields[] = {"connection", "conversation", "identity"};
+    for (size_t i = 0u; i < sizeof(fields) / sizeof(*fields); ++i)
+        if (!json_equal(json_object_get(route, fields[i]), json_object_get(target, fields[i])))
+            return false;
+    return true;
+}
+
 json_t *
-snag_vm_presentation_blocks(const json_t *records, uint64_t origin, int journal_fd,
-    int legacy_fd, unsigned int verbosity, unsigned int columns, bool plain,
-    bool no_color, bool logical, const struct snag_wire_secrets *secrets,
-    bool (*cancel)(void *), void *opaque, char *error, size_t size)
+snag_vm_presentation_blocks(const json_t *records, const json_t *route, uint64_t origin,
+    int journal_fd, int legacy_fd, unsigned int verbosity, unsigned int columns, bool plain,
+    bool no_color, bool logical, const struct snag_wire_secrets *secrets, bool (*cancel)(void *),
+    void *opaque, char *error, size_t size)
 {
     struct transcript view = {.cancel = cancel, .cancel_opaque = opaque};
     struct formatted_text out = {.text = {.max = SNAG_MEMORY_LIMIT / 2u},
@@ -903,15 +920,25 @@ snag_vm_presentation_blocks(const json_t *records, uint64_t origin, int journal_
     render.filter_opaque = (void *)secrets;
     render.sink = (struct snag_render_sink){.text = formatted_span, .opaque = &out,
         .columns = columns, .logical = logical};
-    json_t *input = json_deep_copy(records), *blocks = json_array();
+    json_t *input = json_array(), *blocks = json_array();
     bool open = false;
     int active_fd = -1;
     uint64_t first = 0u, last = 0u;
     if (!input || !blocks || !out.styles || !out.origins) goto failed;
+    /* A chat page must not copy or redact unrelated streamed model output. */
+    for (size_t i = 0u; i < json_array_size(records); ++i) {
+        if (canceled(&view)) goto failed;
+        const json_t *row = json_array_get(records, i);
+        const json_t *data = json_object_get(row, "data");
+        if (!snag_json_string(data, "op")) { errno = EINVAL; goto failed; }
+        if (presentation_selected(route, data) &&
+            json_array_append_new(input, json_deep_copy(row)) < 0) {
+            goto failed;
+        }
+    }
     size_t count = json_array_size(input), start = 0u;
     for (size_t i = 0u; i <= count; ++i) {
         const char *op = snag_json_string(json_object_get(json_array_get(input, i), "data"), "op");
-        if (i < count && !op) { errno = EINVAL; goto failed; }
         if (i == count || snag_string_in(op, "begin end abort")) {
             if (filter_public(input, start, i, secrets, i == count || strcmp(op, "end")) < 0)
                 goto failed;
@@ -928,8 +955,22 @@ snag_vm_presentation_blocks(const json_t *records, uint64_t origin, int journal_
         json_t *data = filter_operation(json_object_get(row, "data"), secrets);
         if (!data) goto failed;
         const char *op = snag_json_string(data, "op");
-        /* IRC has its own selected-conversation projection. */
-        if (!strcmp(op, "irc")) { json_decref(data); continue; }
+        if (!strcmp(op, "irc")) {
+            const json_t *event = json_object_get(data, "data");
+            const json_t *routing = json_object_get(event, "routing");
+            render.view = SNAG_RENDER_CHAT;
+            const char *room = snag_json_string(event, "room");
+            const char *endpoint = snag_json_string(event, "endpoint");
+            const char *kind = snag_json_string(routing, "conversation_kind");
+            const char *conversation = !kind || !strcmp(kind, "channel") ? "" :
+                snag_json_string(routing, !strcmp(kind, "query") ?
+                    "conversation_id" : "connection_id");
+            (void)snag_strcpy(render.chat_room, sizeof(render.chat_room), room ? room : "");
+            (void)snag_strcpy(render.chat_endpoint, sizeof(render.chat_endpoint),
+                endpoint ? endpoint : "");
+            (void)snag_strcpy(render.chat_conversation, sizeof(render.chat_conversation),
+                conversation ? conversation : "");
+        }
         if (!open) {
             if (output_block(blocks, &out, first, last, snag_term_prompt_separation(&term)) < 0) {
                 json_decref(data);

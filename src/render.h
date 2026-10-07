@@ -237,6 +237,7 @@ int snag_render_error_ctx(struct snag_render *render, const char *message);
 int snag_render_warning_ctx(struct snag_render *render, const char *message);
 int snag_render_update(struct snag_render *render, const char *text);
 int snag_render_help(struct snag_render *render, const char *text);
+int snag_render_choices(struct snag_render *, const char *);
 int snag_render_host(struct snag_render *render, const char *text);
 int snag_render_voice_event(struct snag_render *, const json_t *, uint32_t, uint32_t);
 int snag_render_runtime(struct snag_render *render, const char *text);

@@ -1460,6 +1460,9 @@ Macros, mappings, arbitrary Ex commands and Vim scripting are outside this subse
 INSERT feeds the standalone terminal editor. Enter submits through normal
 command/prompt dispatch and Ctrl-J inserts a newline. Tab completes slash commands
 and conversation mentions; an active rollout draft otherwise queues a future turn.
+A second Tab lists ambiguous matches in the conversation scrollback. Completion
+choices and cancelled drafts follow the same retained presentation route as that
+conversation and survive workspace detach/resume.
 Ctrl-P/Ctrl-N navigate session/global prompt history, Ctrl-R searches it, Ctrl-G
 restores the pre-search draft, and Ctrl-U clears the entire draft. Ctrl-C clears a
 nonempty draft before requesting interruption on an empty active draft. These are the existing

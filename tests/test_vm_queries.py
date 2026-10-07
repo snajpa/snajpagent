@@ -188,6 +188,8 @@ class QueryWorkspaceTests(QueryFixture):
         child.write(b'i/me waves\r')
         self.wait_wire(self.peer, b'PRIVMSG query-peer :\x01ACTION waves\x01')
         child.repaint_until(b'/me waves')
+        from test_vm_mouse import current_rows
+        self.assertEqual(sum('/me waves' in row for row in current_rows(child).values()), 1)
         self.normal()
         child.command('workspace save')
         self.wait_snapshot(lambda rows: rows and self.state()['buffers'] and
@@ -196,6 +198,9 @@ class QueryWorkspaceTests(QueryFixture):
         self.assertEqual(self.state()['windows'][0]['kind'], 'transcript')
         self.assertEqual(self.state()['windows'][0]['history']['route']['peer'], 'query-peer')
         self.assertEqual(self.state()['buffers'][0]['reports'][-1]['command'], '/me waves')
+        child.command('history')
+        child.write(b'//me waves\r')
+        child.repaint_until(b'No matches')
         child.finish('close')
 
     def test_nick_change_keeps_draft_pinned_and_recoverable(self):

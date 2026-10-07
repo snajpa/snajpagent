@@ -20,9 +20,9 @@ json_t *snag_vm_transcript_blocks(const json_t *events, const json_t *route, uns
 /* Chronological retained UI operations. Public fragments are sanitized as one
  * source before the shared renderer sees them; a page begins at a stream boundary.
  * Durable references use their original journal backend, including after import. */
-json_t *snag_vm_presentation_blocks(const json_t *, uint64_t origin, int journal_fd,
-    int legacy_fd, unsigned int verbosity, unsigned int columns, bool plain,
-    bool no_color, bool logical, const struct snag_wire_secrets *,
-    bool (*cancel)(void *), void *, char *, size_t);
+json_t *snag_vm_presentation_blocks(const json_t *, const json_t *route, uint64_t origin,
+    int journal_fd, int legacy_fd, unsigned int verbosity, unsigned int columns, bool plain,
+    bool no_color, bool logical, const struct snag_wire_secrets *, bool (*cancel)(void *), void *,
+    char *, size_t);
 
 #endif

@@ -25,6 +25,8 @@
   Preserve streamed source positions through Markdown and wrapping, filter
   protected values across partial fragments, and share prompt spacing.
   Preserve cancelled drafts with their prompt and literal `^C` in scrollback.
+  Route completion choices and cancelled drafts to their originating conversation,
+  including private queries, and keep them available after workspace resume.
 - Refresh live panes on owner output notifications. Anchored history loads include
   following output so `gg` fills the pane. A retention write failure reports its
   cause while preserving the last valid output boundary and session input.

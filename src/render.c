@@ -3337,6 +3337,23 @@ snag_render_update(struct snag_render *render, const char *text)
 }
 
 int
+snag_render_choices(struct snag_render *render, const char *text)
+{
+    if (output_begin(render) < 0) return -1;
+    int rc = 0;
+    if (render->term && render->term->output_seen && !render->term->output_ended_lf) {
+        rc = write_role_block(render, render->boundary, STDERR_FILENO, "", "\n", 1u,
+            0u, false, true);
+    }
+    if (!rc) {
+        rc = write_role_block(render, render->boundary, STDERR_FILENO, "", text,
+            strlen(text), 0u, true, true);
+    }
+    if (output_end(render) < 0) rc = -1;
+    return rc;
+}
+
+int
 snag_render_help(struct snag_render *render, const char *text)
 {
     size_t len = strlen(text);

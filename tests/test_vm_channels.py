@@ -52,6 +52,39 @@ class ChannelWorkspaceTests(ChannelFixture):
         self.normal()
         self.child.finish('close')
 
+    def test_cancelled_query_draft_is_retained_only_in_its_conversation(self):
+        from test_vm_mouse import current_rows
+
+        child = self.child
+        child.write(b'i/query 1/private-peer\r')
+        child.repaint_until(b'[private-peer]')
+        child.write(b'private-cancelled-draft\x03')
+        child.repaint_until(b'private-cancelled-draft^C')
+        self.assertEqual(sum('private-cancelled-draft^C' in row
+                             for row in current_rows(child).values()), 1)
+        self.normal()
+        child.command('history')
+        child.write(b'/private-cancelled-draft\r')
+        child.repaint_until(b'No matches')
+        self.channel('#side')
+        child.write(b'/private-cancelled-draft\r')
+        child.repaint_until(b'No matches')
+        child.write(b'i/query 1/private-peer\r')
+        child.repaint_until(b'[private-peer]')
+        child.repaint_until(b'private-cancelled-draft^C')
+        self.normal()
+        child.finish('workspace detach')
+        self.child = self.workspace_start('--resume', 'channel-panes')
+        self.child.attached()
+        self.child.repaint_until(b'private-cancelled-draft^C')
+        self.assert_no_wire('private-cancelled-draft')
+        self.assertFalse(any('private-cancelled-draft' in str(request)
+                             for request in self.seen))
+        self.child.finish('workspace detach')
+
+    def test_cancelled_query_draft_is_retained_only_in_its_conversation_legacy(self):
+        self.test_cancelled_query_draft_is_retained_only_in_its_conversation()
+
     def test_channel_splits_drafts_wire_and_workspace_resume(self):
         child = self.child
         self.channel('#lab')
@@ -112,6 +145,27 @@ class ChannelWorkspaceTests(ChannelFixture):
         self.child.finish('close')
 
 
+class StandaloneFeedbackTests(ChannelFixture):
+    workspace_start = queries.QueryWorkspaceTests.workspace_start
+
+    def test_standalone_cancelled_query_draft_replays_in_its_pane(self):
+        self.command('/query 1/private-peer', '[private-peer]')
+        self.term.write(b'classic-private-draft\x03')
+        self.term.until(b'classic-private-draft^C')
+        sid = read_events(self.root / 'state')[0].parent.name
+        self.term.write(b'/s d\r')
+        self.term.wait_exit()
+        child = self.workspace_start('-N', 'classic-feedback')
+        child.command('attach ' + sid)
+        child.attached()
+        child.write(b'i/query 1/private-peer\r')
+        child.repaint_until(b'[private-peer]')
+        child.repaint_until(b'classic-private-draft^C')
+        self.assert_no_wire('classic-private-draft')
+        child.write(b'\x1b')
+        child.finish('workspace detach')
+
+
 class ChannelPrefixWorkspaceTests(ChannelFixture):
     chantypes = '#$'
     workspace_start = queries.QueryWorkspaceTests.workspace_start
@@ -131,6 +185,7 @@ class ChannelPrefixWorkspaceTests(ChannelFixture):
         child.write(b'i/chat 1/$side\r')
         child.repaint_until(b'[$side]')
         child.repaint_until(b'custom-channel-retained-in-pane')
+        child.write(b'\x1b')
         child.finish('close')
 
 

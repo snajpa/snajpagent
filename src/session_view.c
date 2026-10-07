@@ -821,7 +821,7 @@ dispatch(struct snag_view_server *server, struct view_peer *peer, const json_t *
         !strcmp(type, "receipt") ? "type id" :
         !strcmp(type, "draft_get") ? "type generation route" :
         !strcmp(type, "draft") ? "type generation route revision edit text cursor" :
-        !strcmp(type, "cancelled") ? "type generation label text" :
+        !strcmp(type, "editor_feedback") ? "type generation kind route label text" :
         !strcmp(type, "command") ? json_object_get(message, "draft_revision") ?
             "type generation id text route draft_revision" : "type generation id text route" :
         (!strcmp(type, "submit") || !strcmp(type, "queue")) ?
@@ -845,8 +845,8 @@ dispatch(struct snag_view_server *server, struct view_peer *peer, const json_t *
             "observe", "control", "submit", "cancel", "quit", "receipts", "drafts",
             "commands", "reports", "irc_queries", "irc_channels", "irc_connections");
         json_t *features = json_object_get(capabilities, "features");
-        if (features && server->callbacks.cancelled &&
-            json_array_append_new(features, json_string("cancelled")) < 0) {
+        if (features && server->callbacks.feedback &&
+            json_array_append_new(features, json_string("editor_feedback")) < 0) {
             json_decref(capabilities);
             return -1;
         }
@@ -909,14 +909,21 @@ dispatch(struct snag_view_server *server, struct view_peer *peer, const json_t *
         return reply(peer, json_pack("{s:s}", "type", "detached"));
     }
     if (!peer->bound) return refuse_request(peer, message, "controller is not bound");
-    if (!strcmp(type, "cancelled")) {
-        const char *label = snag_json_bounded_string(json_object_get(message, "label"),
-            SNAG_TERM_LABEL_BYTES - 1u);
+    if (!strcmp(type, "editor_feedback")) {
+        const json_t *label_value = json_object_get(message, "label");
+        const char *label = json_string_value(label_value);
         const char *text = snag_json_bounded_string(json_object_get(message, "text"),
             SNAG_MAX_DIRECT_PROMPT + 2u);
-        if (!label || !text || !server->callbacks.cancelled ||
-            server->callbacks.cancelled(server->callbacks.opaque, label, text) < 0)
-            return refuse(peer, "cancelled input cannot be retained");
+        const char *kind = snag_json_bounded_string(json_object_get(message, "kind"), 9u);
+        const json_t *route = json_object_get(message, "route");
+        if (!label || json_string_length(label_value) >= SNAG_TERM_LABEL_BYTES ||
+            strlen(label) != json_string_length(label_value) || !text ||
+            !snag_string_in(kind, "choices cancelled") ||
+            !writable_route(route) || !server->callbacks.feedback ||
+            server->callbacks.feedback(server->callbacks.opaque, route,
+                !strcmp(kind, "choices") ? SNAG_TERM_CHOICES : SNAG_TERM_CANCELLED,
+                label, text) < 0)
+            return refuse(peer, "editor feedback cannot be retained");
         return reply(peer, json_pack("{s:s,s:s}", "type", "control", "intent", type));
     }
     if (!strcmp(type, "draft_get")) {

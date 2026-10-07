@@ -264,9 +264,9 @@ snag_vm_connection_close(struct snag_vm_connection *connection)
     connection->reports_supported = connection->reports_subscribed = false;
     connection->drafts = connection->detaching = connection->detach_sent = false;
     connection->cancel_pending = false;
-    connection->cancelled_supported = false;
-    json_decref(connection->cancelled);
-    connection->cancelled = NULL;
+    connection->feedback_supported = false;
+    json_decref(connection->feedback);
+    connection->feedback = NULL;
     connection->draft_wait = connection->inflight = NULL;
     json_decref(connection->draft_sent);
     connection->draft_sent = NULL;
@@ -628,16 +628,19 @@ snag_vm_buffer_recover(struct snag_vm_buffer *buffer, struct snag_vm_buffer *tar
 }
 
 int
-snag_vm_buffer_cancelled(void *opaque, const char *label, const char *text)
+snag_vm_buffer_feedback(void *opaque, enum snag_term_feedback kind, const char *label,
+    const char *text)
 {
     struct snag_vm_buffer *buffer = opaque;
     struct snag_vm_connection *connection = buffer->connection;
-    if (!connection->cancelled_supported) return 0;
-    if (!connection->cancelled) connection->cancelled = json_array();
-    if (!connection->cancelled) return -1;
-    return json_array_append_new(connection->cancelled,
-        json_pack("{s:s,s:I,s:s,s:s}", "type", "cancelled", "generation",
-            (json_int_t)connection->generation, "label", label, "text", text));
+    if (!connection->feedback_supported) return 0;
+    if (!connection->feedback) connection->feedback = json_array();
+    if (!connection->feedback) return -1;
+    return json_array_append_new(connection->feedback,
+        json_pack("{s:s,s:I,s:s,s:O,s:s,s:s}", "type", "editor_feedback", "generation",
+            (json_int_t)connection->generation, "kind",
+            kind == SNAG_TERM_CHOICES ? "choices" : "cancelled", "route", buffer->route,
+            "label", label, "text", text));
 }
 
 int
@@ -909,7 +912,8 @@ receive(struct snag_vm_connection *connection, const json_t *value)
             if (feature && !strcmp(feature, "terminal_commands"))
                 connection->terminal_commands = true;
             if (feature && !strcmp(feature, "reports")) connection->reports_supported = true;
-            if (feature && !strcmp(feature, "cancelled")) connection->cancelled_supported = true;
+            if (feature && !strcmp(feature, "editor_feedback"))
+                connection->feedback_supported = true;
         }
         memcpy(connection->instance, instance, sizeof(connection->instance));
         connection->hello = true;
@@ -1187,11 +1191,11 @@ snag_vm_connection_step(struct snag_vm_connection *connection)
     if (rc > 0) rc = receive(connection, value);
     json_decref(value);
     if (rc < 0) goto failed;
-    if (connection->bound && json_array_size(connection->cancelled) &&
+    if (connection->bound && json_array_size(connection->feedback) &&
         !connection->channel.output) {
-        if (send_message(connection, json_incref(json_array_get(connection->cancelled, 0u))) < 0)
+        if (send_message(connection, json_incref(json_array_get(connection->feedback, 0u))) < 0)
             goto failed;
-        (void)json_array_remove(connection->cancelled, 0u);
+        (void)json_array_remove(connection->feedback, 0u);
     }
     if (connection->bound && connection->cancel_pending && !connection->channel.output) {
         if (snag_vm_connection_control(connection, "cancel") < 0) goto failed;
@@ -1247,7 +1251,7 @@ int
 snag_vm_connection_wait(const struct snag_vm_connection *connection, uint64_t now, int timeout)
 {
     if (connection->bound &&
-        (connection->cancel_pending || json_array_size(connection->cancelled)) &&
+        (connection->cancel_pending || json_array_size(connection->feedback)) &&
         !connection->channel.output)
         return 0;
     uint64_t receipt_at = 0u;

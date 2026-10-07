@@ -32,14 +32,14 @@ its send route remains pinned to the captured generation and nick.
 Clients use only advertised capabilities. An owner without this endpoint
 continues to offer its existing terminal attachment and best-effort history.
 
-The optional `cancelled` control capability retains an editor cancellation as
-presentation without submitting input or changing model context. The shared
-editor emits the visible prompt and draft followed by `^C`; the controller queues
-that echo behind an in-flight frame. The owner checks the controller generation
-and records it through the same presentation writer used by standalone input.
-It resets the prompt clock for the next draft. A disconnected transport does not
-retry an echo whose outcome is unknown. Older owners keep their existing controls.
-
+The optional `editor_feedback` control capability retains completion choices and
+cancelled drafts without submitting input or changing model context. The shared
+editor formats the choices or the visible prompt and draft followed by `^C`;
+the controller queues the result behind an in-flight frame. The owner checks the
+bound controller generation and writable conversation route, then records it
+through the same presentation writer used by standalone input. Cancellation resets
+the prompt clock. A disconnected transport does not retry feedback whose outcome
+is unknown. Older owners keep their advertised controls.
 
 ## Framing and service
 
@@ -72,7 +72,7 @@ All message names below are the JSON `type` value. A new client sends
 `session` ID, a random live-owner `instance` ID and `features`.
 The implemented features are `observe`, `control`, `submit`, `cancel`, `quit`,
 `detach`, `receipts`, `drafts`, `commands`, `queue`, `terminal_commands`, `reports`,
-`irc_queries`, `irc_channels` and `irc_connections`.
+`irc_queries`, `irc_channels`, `irc_connections` and `editor_feedback`.
 
 After hello, `state` messages contain a `state` object with committed `seq`,
 byte `end`, `sha256`, journal `schema`, `active`, and the next-turn `provider`,
@@ -101,6 +101,7 @@ still causes the history reader to return its new page.
 | `receipt` with `id` | Current `result`, or `unknown`. Requires hello but no controller lease. |
 | `draft_get` with `generation` and `route` | Current `draft` snapshot and subscription to later changes to that route. Requires a bound controller. |
 | `draft` with `generation`, `route`, expected `revision`, positive `edit`, `text` and byte `cursor` | A `draft` response echoes `edit`, with `status: accepted` or `conflict` and the current snapshot. The cursor must lie on a grapheme boundary. Unsupported routes and invalid text/cursors leave the draft unchanged. |
+| `editor_feedback` with `generation`, `kind`, `route`, `label` and `text` | `control` with `intent: editor_feedback`. `kind` is `choices` or `cancelled`; an empty label is allowed. Retains presentation in the rollout or exact operator conversation. |
 | `cancel` with `generation` | `control` with `intent: cancel`; the existing owner interrupt path performs cancellation. |
 | `detach` with `generation` | `detached`, then connection close. The owner continues. |
 | `quit` with `generation` | `control` with `intent: quit`; normal owner shutdown follows, then `exit` with its `status` and connection close. |
@@ -262,6 +263,12 @@ legacy history. The presentation thread owns append and publication. A failed
 append freezes the last successful position, publishes `presentation_error` and
 leaves session input available. The frontend displays a changed error once.
 Subsequent state updates retain that bound until the owner is restarted.
+
+Local feedback records carry their captured route. Query selection matches stable
+connection, conversation and local identity; public channel events share the two
+local identities under the canonical event selection rules. Unrouted output belongs
+to the rollout. The canonical prefix and retained operations use one IRC event
+predicate, preserving private query separation through paging and search.
 
 The history worker applies the shared session renderer into its styled sink.
 Public-byte filtering joins fragments before rendering, including protected

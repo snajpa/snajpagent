@@ -28,6 +28,8 @@ snag_presentation_apply(struct snag_render *render, const struct snag_ui_command
         return command->data.value ?
             snag_render_input_submitted(render, command->label, command->text) :
             snag_render_submitted(render, command->label, command->text);
+    case SNAG_UI_CHOICES:
+        return snag_render_choices(render, command->text);
     case SNAG_UI_BEFORE_PROMPT:
         return snag_render_before_prompt(render);
     case SNAG_UI_PUBLIC_BEGIN:
@@ -71,7 +73,8 @@ static const struct presentation_operation {
     {SNAG_UI_HOST, "host"}, {SNAG_UI_HELP, "help"}, {SNAG_UI_RUNTIME, "runtime"},
     {SNAG_UI_ERROR, "error"}, {SNAG_UI_WARNING, "warning"},
     {SNAG_UI_ROLLOUT_END, "end"}, {SNAG_UI_ROLLOUT_ABORT, "abort"},
-    {SNAG_UI_SUBMITTED, "submitted"}, {SNAG_UI_BEFORE_PROMPT, "prompt"},
+    {SNAG_UI_SUBMITTED, "submitted"}, {SNAG_UI_CHOICES, "choices"},
+    {SNAG_UI_BEFORE_PROMPT, "prompt"},
     {SNAG_UI_PUBLIC_BEGIN, "begin"},
     {SNAG_UI_PUBLIC, "public"}, {SNAG_UI_ORIENTATION, "orientation"},
     {SNAG_UI_HISTORY, "history"}, {SNAG_UI_IRC, "irc"},
@@ -161,6 +164,11 @@ snag_presentation_encode(const struct snag_ui_command *command, json_t **out)
     json_t *record = json_pack("{s:s,s:o,s:s?,s:o}", "op", operations[index].name,
         "text", text, "label", command->label, "data", data);
     if (!record) return -1;
+    if (json_is_object(command->route) &&
+        json_object_set(record, "route", (json_t *)command->route) < 0) {
+        json_decref(record);
+        return -1;
+    }
     *out = record;
     return 0;
 }
@@ -294,14 +302,17 @@ snag_presentation_replay(struct snag_render *render, const json_t *record, int j
     default:
         break;
     }
-    if (snag_string_in(op, "host help runtime error warning submitted orientation durable event") &&
-        !command.text) goto invalid;
+    if (snag_string_in(
+            op, "host help runtime error warning submitted choices orientation durable event") &&
+        !command.text)
+        goto invalid;
     if (snag_string_in(op, "submitted orientation protocol") && !command.label) goto invalid;
     struct snag_render_origin previous = render->sink.source;
-    if (render->sink.text && command.text && command.kind != SNAG_UI_DURABLE) {
-        size_t length = encoded ? command.len : strlen(command.text);
+    const char *source_text = command.kind == SNAG_UI_IRC ? irc.text : command.text;
+    if (render->sink.text && source_text && command.kind != SNAG_UI_DURABLE) {
+        size_t length = encoded ? command.len : strlen(source_text);
         render->sink.source = (struct snag_render_origin){
-            (const unsigned char *)command.text, length, previous.byte, NULL};
+            (const unsigned char *)source_text, length, previous.byte, NULL};
         previous.byte += length;
     }
     rc = snag_presentation_apply(render, &command, NULL);
@@ -312,4 +323,42 @@ invalid:
 out:
     snag_buf_free(&bytes);
     return rc;
+}
+
+bool
+snag_presentation_event_selected(const json_t *route, const char *type, const json_t *data)
+{
+    if (!route) return strcmp(type, "irc_event") && strcmp(type, "irc_event_v2");
+    if (json_object_get(route, "room")) {
+        if (strcmp(type, "irc_event") && strcmp(type, "irc_event_v2")) return false;
+        enum snag_irc_casemapping mapping =
+            (enum snag_irc_casemapping)json_integer_value(json_object_get(route, "casemapping"));
+        const char *room = snag_json_string(data, "room");
+        if (!room || !snag_irc_name_equal(mapping, snag_json_string(route, "room"), room))
+            return false;
+        /* Public channel history is shared by the two local identities.
+         * Legacy room records predate durable connection IDs. */
+        if (!strcmp(type, "irc_event"))
+            return json_equal(
+                json_object_get(route, "endpoint"), json_object_get(data, "endpoint"));
+        const json_t *routing = json_object_get(data, "routing");
+        const char *kind = snag_json_string(routing, "conversation_kind");
+        return kind && !strcmp(kind, "channel") &&
+               json_equal(
+                   json_object_get(route, "connection"), json_object_get(routing, "connection_id"));
+    }
+    if (strcmp(type, "irc_event_v2")) return false;
+    const json_t *routing = json_object_get(data, "routing");
+    if (!json_object_get(route, "peer")) {
+        const char *kind = snag_json_string(routing, "conversation_kind");
+        return kind && !strcmp(kind, "connection") &&
+               json_equal(
+                   json_object_get(route, "connection"), json_object_get(routing, "connection_id"));
+    }
+    static const char *const fields[] = {"connection", "conversation", "identity"};
+    static const char *const stored[] = {"connection_id", "conversation_id", "identity"};
+    for (size_t i = 0u; i < sizeof(fields) / sizeof(fields[0]); ++i)
+        if (!json_equal(json_object_get(route, fields[i]), json_object_get(routing, stored[i])))
+            return false;
+    return true;
 }

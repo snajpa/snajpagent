@@ -47,7 +47,7 @@ enum snag_ui_operation {
     SNAG_UI_COMMANDS, SNAG_UI_PAUSE,
     SNAG_UI_OPEN, SNAG_UI_EXTERNAL, SNAG_UI_PROMPT, SNAG_UI_HOLD, SNAG_UI_SPINNERS,
     SNAG_UI_DRAFT, SNAG_UI_INPUT_DRAFT, SNAG_UI_INSERT, SNAG_UI_AUDIO, SNAG_UI_CAPTION,
-    SNAG_UI_VIEW, SNAG_UI_SUBMITTED, SNAG_UI_BEFORE_PROMPT,
+    SNAG_UI_VIEW, SNAG_UI_SUBMITTED, SNAG_UI_CHOICES, SNAG_UI_BEFORE_PROMPT,
     SNAG_UI_PUBLIC_BEGIN, SNAG_UI_PUBLIC, SNAG_UI_VALIDATE,
     SNAG_UI_ORIENTATION, SNAG_UI_HISTORY, SNAG_UI_IRC, SNAG_UI_DURABLE, SNAG_UI_EVENT,
     SNAG_UI_RESUME, SNAG_UI_PROTOCOL, SNAG_UI_TRANSPORT, SNAG_UI_RAW, SNAG_UI_HISTORY_SNAPSHOT,
@@ -68,6 +68,8 @@ struct snag_ui_command {
     const char *label;
     size_t len;
     bool retain_only;
+    /* Selected conversation for local presentation; NULL names the rollout. */
+    const json_t *route;
     union {
         unsigned int value;
         struct { enum snag_render_view view; uint32_t destination;

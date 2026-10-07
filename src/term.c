@@ -2193,12 +2193,19 @@ completion_add(struct completion *matches, const char *name, size_t len,
 static int
 flush_completions(struct snag_term *term)
 {
-    if (!term->completion_output.len || term->input_only || term->output_depth) return 0;
+    if (!term->completion_output.len || term->output_depth ||
+        (term->input_only && !term->feedback)) return 0;
     /* Output may read more input under backpressure. Detach this snapshot so
      * another double Tab cannot invalidate the bytes being written. */
     struct snag_buf output = term->completion_output;
     snag_buf_init(&term->completion_output, SNAG_MAX_DIRECT_PROMPT);
     int rc = -1;
+    if (term->feedback) {
+        if (snag_buf_terminate(&output) < 0) goto out;
+        rc = term->feedback(term->feedback_opaque, SNAG_TERM_CHOICES, "",
+            (const char *)output.data);
+        goto out;
+    }
     if (snag_term_output_begin(term) < 0) goto out;
     if ((!term->output_seen || term->output_ended_lf ||
             snag_term_write(STDERR_FILENO, "\n", 1u) == 0) &&
@@ -2771,14 +2778,15 @@ cancel_line(struct snag_term *term, enum snag_term_action *action)
         term->cursor = term->draft.len;
         if (redraw(term) < 0) return -1;
     }
-    if (term->cancelled) {
+    if (term->feedback) {
         struct snag_buf echo = {.max = SNAG_MAX_DIRECT_PROMPT + 3u};
         int rc = snag_buf_append(&echo, term->draft.data, term->draft.len);
         if (!rc) rc = snag_buf_append(&echo, "^C", 2u);
         if (!rc) rc = snag_buf_terminate(&echo);
         size_t label_length;
         const char *label = term->input_only ? term->label : prompt_label(term, &label_length);
-        if (!rc) rc = term->cancelled(term->cancelled_opaque, label, (const char *)echo.data);
+        if (!rc) rc = term->feedback(term->feedback_opaque, SNAG_TERM_CANCELLED, label,
+            (const char *)echo.data);
         snag_buf_free(&echo);
         if (rc < 0) return -1;
     }

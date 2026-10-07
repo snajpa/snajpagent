@@ -190,12 +190,17 @@ retain_output(struct snag_ui_display *display, const struct snag_ui_command *com
 static int view_state(struct snag_ui_display *, const json_t *);
 
 static int
-retain_cancelled(void *opaque, const char *label, const char *text)
+view_feedback(void *opaque, const json_t *route, enum snag_term_feedback kind,
+    const char *label, const char *text)
 {
     struct snag_ui_display *display = opaque;
-    struct snag_ui_command command = {
-        .kind = SNAG_UI_SUBMITTED, .label = label, .text = text, .data.value = true};
+    struct snag_ui_command command = {.kind = kind == SNAG_TERM_CHOICES ?
+        SNAG_UI_CHOICES : SNAG_UI_SUBMITTED, .label = label, .text = text,
+        .data.value = true, .route = route};
     if (retain_output(display, &command) < 0) return -1;
+    if (kind == SNAG_TERM_CHOICES)
+        return display->term.input_only ? 0 :
+            snag_presentation_apply(&display->render, &command, NULL);
     if (!display->term.input_only) return 0;
     display->term.prompt_clock.captured = false;
     snag_term_capture_prompt_clock(&display->term, time(NULL));
@@ -203,13 +208,30 @@ retain_cancelled(void *opaque, const char *label, const char *text)
 }
 
 static int
-present_local(struct snag_ui_display *display, enum snag_ui_operation kind, const char *label,
-    const char *text, bool input)
+editor_feedback(void *opaque, enum snag_term_feedback kind, const char *label, const char *text)
 {
+    struct snag_ui_display *display = opaque;
+    json_t *route = display->term.chat ?
+        snag_view_conversation_route(&display->term.conversation) : json_null();
+    if (!route) return -1;
+    int rc = view_feedback(display, route, kind, label, text);
+    json_decref(route);
+    return rc;
+}
+
+static int
+present_local(struct snag_ui_display *display, enum snag_ui_operation kind, const char *label,
+    const char *text, bool input, const struct ui_snapshot *origin)
+{
+    json_t *route = origin && origin->view == SNAG_RENDER_CHAT ?
+        snag_view_conversation_route(&origin->conversation) : json_null();
+    if (!route) return -1;
     struct snag_ui_command command = {
-        .kind = kind, .label = label, .text = text, .data.value = input};
-    if (retain_output(display, &command) < 0) return -1;
-    return snag_presentation_apply(&display->render, &command, NULL);
+        .kind = kind, .label = label, .text = text, .data.value = input, .route = route};
+    int rc = retain_output(display, &command);
+    if (!rc) rc = snag_presentation_apply(&display->render, &command, NULL);
+    json_decref(route);
+    return rc;
 }
 
 static int
@@ -1306,7 +1328,7 @@ apply_session(struct snag_ui_display *display, const struct snag_ui_command *com
             return -1;
 #if SNAJPAGENT_VM
         struct snag_view_callbacks callbacks = {
-            view_bound, view_submit, view_control, display, retain_cancelled};
+            view_bound, view_submit, view_control, display, view_feedback};
         display->view =
             display->direct
                 ? snag_view_server_direct(&display->direct_channel, session->id, callbacks)
@@ -1756,7 +1778,8 @@ finish_input(struct snag_ui_display *display, struct ui_action *item, int rc)
      * Their later acknowledgements use this flag to avoid a second echo. */
     if (rc > 0 && item->action == SNAG_TERM_SUBMIT && !term->input_only &&
         snag_prompt_command(item->text)) {
-        if (present_local(display, SNAG_UI_SUBMITTED, item->snapshot.label, item->text, true) < 0)
+        if (present_local(display, SNAG_UI_SUBMITTED, item->snapshot.label, item->text, true,
+                &item->snapshot) < 0)
             goto fail;
         item->submission_echoed = true;
     }
@@ -1958,7 +1981,7 @@ read_input(struct snag_ui_display *display, int timeout_ms)
                 display->turn_generation ? display->turn_generation : UINT64_MAX);
         if (control == HELD_YIELD) {
             if (!term->input_only &&
-                present_local(display, SNAG_UI_SUBMITTED, term->label, "/yield", true) < 0) {
+                present_local(display, SNAG_UI_SUBMITTED, term->label, "/yield", true, NULL) < 0) {
                 return -1;
             }
             atomic_store(&runtime->yield_requested, term->input_only ? 1u : 2u);
@@ -1999,10 +2022,12 @@ local_feedback(struct snag_ui_display *display)
     if (!display->local_acknowledged) {
         display->painting_feedback = true;
         if (!item->submission_echoed) {
-            rc = present_local(display, SNAG_UI_SUBMITTED, item->snapshot.label, item->text, false);
+            rc = present_local(display, SNAG_UI_SUBMITTED, item->snapshot.label, item->text, false,
+                &item->snapshot);
         }
         if (rc == 0 && display->feedback[0])
-            rc = present_local(display, SNAG_UI_HOST, NULL, display->feedback, false);
+            rc = present_local(
+                display, SNAG_UI_HOST, NULL, display->feedback, false, &item->snapshot);
         if (rc == 0) memcpy(item->feedback, display->feedback, sizeof(item->feedback));
         display->painting_feedback = false;
         display->local_acknowledged = true;
@@ -2106,6 +2131,7 @@ apply_display(struct snag_ui_display *display, struct ui_message *message)
         case SNAG_UI_ROLLOUT_END:
         case SNAG_UI_ROLLOUT_ABORT:
         case SNAG_UI_SUBMITTED:
+        case SNAG_UI_CHOICES:
         case SNAG_UI_BEFORE_PROMPT:
         case SNAG_UI_PUBLIC_BEGIN:
         case SNAG_UI_PUBLIC:
@@ -2176,8 +2202,8 @@ presentation_main(void *opaque)
     display->main_draft = &display->rollout_draft;
     display->term.input_checkpoint = output_input_checkpoint;
     display->term.input_opaque = display;
-    display->term.cancelled = retain_cancelled;
-    display->term.cancelled_opaque = display;
+    display->term.feedback = editor_feedback;
+    display->term.feedback_opaque = display;
     snag_render_init(&display->render, 0u);
     display->render.checkpoint = render_input_checkpoint;
     display->render.checkpoint_opaque = display;
@@ -2362,6 +2388,18 @@ send_message(struct snag_ui *ui, struct ui_message *message, const char *text)
     message->command.text = text;
     message->command.len = text ? strlen(text) : 0u;
     return request(ui, message, NULL, NULL, 0u);
+}
+
+static int
+send_input_message(struct snag_ui *ui, struct ui_message *message, const char *text)
+{
+    json_t *route = ui->input_view == SNAG_RENDER_CHAT ?
+        snag_view_conversation_route(&ui->input_conversation) : json_null();
+    if (!route) return -1;
+    message->command.route = route;
+    int rc = send_message(ui, message, text);
+    json_decref(route);
+    return rc;
 }
 
 int
@@ -2749,13 +2787,14 @@ snag_ui_text(struct snag_ui *ui, enum snag_ui_operation op, const char *text)
         if (snag_term_append_safe(ui->command_report, text, length) < 0) return -1;
         int rc = length && text[length - 1u] == '\n' ? 0 : snag_buf_putc(ui->command_report, '\n');
         if (rc < 0) return rc;
-        if (!ui->command_report_passthrough)
-            return snag_ui_send(
-                ui, (struct snag_ui_command){
-                        .kind = op, .text = text, .len = length, .retain_only = true});
+        if (!ui->command_report_passthrough) {
+            struct ui_message message = {.command = {.kind = op, .retain_only = true}};
+            return send_input_message(ui, &message, text);
+        }
     }
     struct ui_message message = {.command = {.kind = op}};
-    return send_message(ui, &message, text);
+    return ui->command_report ? send_input_message(ui, &message, text) :
+        send_message(ui, &message, text);
 }
 
 int
@@ -3122,7 +3161,7 @@ snag_ui_submitted(struct snag_ui *ui, const char *label, const char *text, bool 
     struct ui_message message = {.command = {.kind = SNAG_UI_SUBMITTED, .data.value = input}};
     if (label == ui->label && ui->submitted_label[0]) label = ui->submitted_label;
     message.command.label = label;
-    return send_message(ui, &message, text);
+    return input ? send_input_message(ui, &message, text) : send_message(ui, &message, text);
 }
 
 int

@@ -78,13 +78,15 @@ struct snag_term_command {
     const char *description;
 };
 
+enum snag_term_feedback { SNAG_TERM_CHOICES, SNAG_TERM_CANCELLED };
+
 struct snag_term {
     /* A thread-local rendering target for generated reports. */
     struct snag_buf *capture;
     int (*input_checkpoint)(void *);
     void *input_opaque;
-    int (*cancelled)(void *, const char *label, const char *text);
-    void *cancelled_opaque;
+    int (*feedback)(void *, enum snag_term_feedback, const char *label, const char *text);
+    void *feedback_opaque;
     int (*suspend)(void *);
     void *suspend_opaque;
     int output_fd[2];

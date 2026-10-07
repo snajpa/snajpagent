@@ -165,6 +165,7 @@ render_sink_fixture(struct snag_render *render)
                        "| Key | Value |\n| --- | --- |\n| alpha | some long wrapped value |\n\n"
                        "```c\nprintf(\"hello\");\n```\n\nSafe \033[31m text.\n";
     assert(snag_render_input_submitted(render, "READY> ", "tab\tinput") == 0);
+    assert(snag_render_choices(render, "/status  /state  /session\n") == 0);
     assert(snag_render_public_begin(render, STDOUT_FILENO, NULL) == 0);
     assert(snag_render_public(render, text, strlen(text), NULL) == 0);
     assert(snag_render_public_end(render) == 0);
@@ -272,6 +273,7 @@ test_retained_presentation(void)
         {.kind = SNAG_UI_ORIENTATION, .text = "/fixture", .label = id},
         {.kind = SNAG_UI_SUBMITTED, .text = "/fast off", .label = "READY> ", .data.value = 1u},
         {.kind = SNAG_UI_HOST, .text = "Fast mode off"},
+        {.kind = SNAG_UI_CHOICES, .text = "/status  /state  /session\n"},
         {.kind = SNAG_UI_PUBLIC_BEGIN, .data.public = {STDOUT_FILENO, SNAG_PRESENT_CONVERSATION}},
         {.kind = SNAG_UI_PUBLIC, .text = text, .len = strlen(text)}, {.kind = SNAG_UI_ROLLOUT_END},
         {.kind = SNAG_UI_BEFORE_PROMPT}, {.kind = SNAG_UI_WARNING, .text = "Retained warning"}};
@@ -307,7 +309,7 @@ test_retained_presentation(void)
     bool incomplete;
     assert(!snag_presentation_read(
         fd, id, NULL, NULL, true, SIZE_MAX, &rows, &begin, &tail, &incomplete, NULL, NULL));
-    assert(!incomplete && begin.next_seq == 1u && json_array_size(rows) == 8u);
+    assert(!incomplete && begin.next_seq == 1u && json_array_size(rows) == 9u);
     uint64_t origin;
     struct snag_binary_anchor first;
     assert(!snag_presentation_origin(fd, &tail, &origin, &first));

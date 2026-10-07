@@ -159,7 +159,8 @@ snag_presentation_append(struct snag_presentation_writer *writer,
     /* Streaming deltas share their closing operation's sync. */
     bool sync = command->kind == SNAG_UI_SUBMITTED || command->kind == SNAG_UI_ROLLOUT_END ||
         command->kind == SNAG_UI_ROLLOUT_ABORT || command->kind == SNAG_UI_ERROR ||
-        command->kind == SNAG_UI_HOST || command->kind == SNAG_UI_HELP;
+        command->kind == SNAG_UI_HOST || command->kind == SNAG_UI_HELP ||
+        command->kind == SNAG_UI_CHOICES;
     int rc = append_record(writer, data, 1u, sync);
     if (!rc && command->kind == SNAG_UI_DURABLE &&
         !strcmp(command->text, "response_completed")) {

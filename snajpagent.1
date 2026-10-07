@@ -494,6 +494,8 @@ Completion itself never submits, sends or queues.  Multiple matches expand
 their common beginning; another consecutive Tab lists the choices.  No match
 leaves the draft unchanged, not queued.  Full cursor and command exceptions
 are listed under INTERACTIVE INPUT.
+Workspace panes retain completion lists and cancelled drafts in the selected
+conversation's scrollback across detach and resume.
 .SS Edit or stop
 Ctrl-J inserts a newline.  A completed bracketed paste appears immediately and keeps pasted newlines in the draft
 instead of submitting each line.  Up/Down move through wrapped or multiline

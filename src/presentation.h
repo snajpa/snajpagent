@@ -14,6 +14,8 @@ int snag_presentation_apply(struct snag_render *, const struct snag_ui_command *
  * Journal descriptors are supplied by the reader, never stored as integers. */
 int snag_presentation_encode(const struct snag_ui_command *, json_t **record);
 int snag_presentation_replay(struct snag_render *, const json_t *, int journal_fd);
+/* Public channel events share local identities; queries retain exact identity. */
+bool snag_presentation_event_selected(const json_t *route, const char *type, const json_t *data);
 
 #define SNAG_PRESENTATION_FILE ".view-presentation.snb"
 

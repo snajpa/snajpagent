@@ -230,44 +230,6 @@ struct read_page {
     uint64_t before;
 };
 
-static bool
-conversation_event(const json_t *route, const char *type, const json_t *data)
-{
-    if (!route) return strcmp(type, "irc_event") && strcmp(type, "irc_event_v2");
-    if (json_object_get(route, "room")) {
-        if (strcmp(type, "irc_event") && strcmp(type, "irc_event_v2")) return false;
-        enum snag_irc_casemapping mapping =
-            (enum snag_irc_casemapping)json_integer_value(json_object_get(route, "casemapping"));
-        const char *room = snag_json_string(data, "room");
-        if (!room || !snag_irc_name_equal(mapping, snag_json_string(route, "room"), room))
-            return false;
-        /* Public channel history is shared by the two local identities.
-         * Legacy room records predate durable connection IDs. */
-        if (!strcmp(type, "irc_event"))
-            return json_equal(
-                json_object_get(route, "endpoint"), json_object_get(data, "endpoint"));
-        const json_t *routing = json_object_get(data, "routing");
-        const char *kind = snag_json_string(routing, "conversation_kind");
-        return kind && !strcmp(kind, "channel") &&
-               json_equal(
-                   json_object_get(route, "connection"), json_object_get(routing, "connection_id"));
-    }
-    if (strcmp(type, "irc_event_v2")) return false;
-    const json_t *routing = json_object_get(data, "routing");
-    if (!json_object_get(route, "peer")) {
-        const char *kind = snag_json_string(routing, "conversation_kind");
-        return kind && !strcmp(kind, "connection") &&
-               json_equal(
-                   json_object_get(route, "connection"), json_object_get(routing, "connection_id"));
-    }
-    static const char *const fields[] = {"connection", "conversation", "identity"};
-    static const char *const stored[] = {"connection_id", "conversation_id", "identity"};
-    for (size_t i = 0u; i < sizeof(fields) / sizeof(fields[0]); ++i)
-        if (!json_equal(json_object_get(route, fields[i]), json_object_get(routing, stored[i])))
-            return false;
-    return true;
-}
-
 static int
 read_event(void *opaque, const struct snag_session *state, uint64_t seq, const char *type,
     const json_t *data, char *error, size_t size)
@@ -277,7 +239,8 @@ read_event(void *opaque, const struct snag_session *state, uint64_t seq, const c
     if (read_canceled(page->reader)) {
         return snag_fail(error, size, ECANCELED, "history read canceled");
     }
-    if ((page->before && seq >= page->before) || !conversation_event(page->route, type, data))
+    if ((page->before && seq >= page->before) ||
+        !snag_presentation_event_selected(page->route, type, data))
         return 0;
     if (page->project) {
         /* Lower levels load bounded previews from tool result references. */
@@ -1076,7 +1039,7 @@ read_output(struct snag_vm_reader *reader, struct snag_vm_read_result *result)
     const struct snag_vm_read_request *request = &result->request;
     struct source_view *source = reader->current;
     struct snag_session *view = &source->session;
-    if (!request->project || request->route || (request->trusted_tail && !request->tail.origin))
+    if (!request->project || (request->trusted_tail && !request->tail.origin))
         return 0;
     if (source->output_fd < 0) {
         source->output_fd = snag_open_read_security_at(view->dir_fd, SNAG_PRESENTATION_FILE, false);
@@ -1146,7 +1109,7 @@ read_output(struct snag_vm_reader *reader, struct snag_vm_read_result *result)
             if (source->legacy_fd < 0 && errno != ENOENT) goto out;
         }
         json_decref(result->blocks);
-        result->blocks = snag_vm_presentation_blocks(ordered, origin, view->log_fd,
+        result->blocks = snag_vm_presentation_blocks(ordered, request->route, origin, view->log_fd,
             view->format_version == 4u ? source->legacy_fd : view->log_fd, request->verbosity,
             request->columns, request->plain, request->no_color, request->blocks_only,
             &reader->secrets, read_canceled, reader, result->error, sizeof(result->error));
