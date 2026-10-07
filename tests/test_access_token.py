@@ -12,7 +12,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
 from store_history import journal_paths
-from test_provider_https import response
+from test_provider_https import event, response
 
 TOKEN = "at-fixture-private-token"
 ACCOUNT = "fixture-workspace"
@@ -50,7 +50,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.reply(self.server.status, json.dumps(self.server.metadata).encode())
 
     def do_POST(self):
-        body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+        raw = self.rfile.read(int(self.headers["Content-Length"]))
+        body = json.loads(raw)
+        if hasattr(self.server, "raw_requests"):
+            self.server.raw_requests.append(raw)
         self.server.requests.append(("POST", self.path, dict(self.headers), body))
         assert self.headers.get("Authorization") == "Bearer " + self.server.token
         assert self.headers.get("ChatGPT-Account-Id") == self.server.account
@@ -60,13 +63,22 @@ class Handler(http.server.BaseHTTPRequestHandler):
         assert self.path == "/responses", self.path
         assert body["store"] is False and body["stream"] is True
         assert "instructions" in body and "max_output_tokens" not in body
+        if body.get("input", [])[-1:] == [{"type": "compaction_trigger"}]:
+            item = {"id": "compact-fixture", "type": "compaction",
+                    "encrypted_content": "opaque-fixture-continuation"}
+            data = event("response.created", response={"id": "compact-response",
+                "status": "in_progress", "output": []})
+            data += event("response.completed", response={"id": "compact-response",
+                "status": "completed", "output": [item]})
+            self.reply(self.server.provider_status, data)
+            return
         self.reply(self.server.provider_status, response() if self.server.provider_status == 200
                    else json.dumps({"error": {"message": self.server.token}}).encode())
 
 
 def check(binary):
     with tempfile.TemporaryDirectory(prefix="snag-access-token-") as directory:
-        root = Path(directory)
+        root = Path(directory).resolve()
         root.chmod(0o700)
         server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         server.requests, server.status, server.provider_status = [], 200, 200

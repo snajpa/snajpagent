@@ -4,6 +4,11 @@
 
 ## Unreleased
 
+- Use streamed native compaction for ChatGPT/Codex credentials, including login
+  detection, retained user instructions and encrypted context restoration. Preserve
+  covered history across binding changes and refuse incomplete plaintext reduction.
+  Preserve API compact endpoints and report the provider error on a fallback.
+
 - Preserve command output across journal-write failures and acknowledge saved
   chunks even when terminal presentation fails. Report the underlying journal
   error and stop retrying a failed terminal until the session is resumed.

@@ -285,6 +285,7 @@ static void
 wire_item_free(struct snag_wire_item *item)
 {
     json_decref(item->reasoning);
+    json_decref(item->compaction);
     json_decref(item->hosted_action);
     json_decref(item->hosted_sources);
     free(item->id);
@@ -728,10 +729,10 @@ item_snapshot(struct snag_responses_stream *stream, size_t output_index,
         return stream_fail(stream, EPROTO, "invalid response output item");
     if (output_index < stream->item_count) {
         const struct snag_wire_item *item = &stream->items[output_index];
-        /* Unknown extensions remain inert even when their type name evolves.
-         * Recognized reasoning and hosted-search identities cannot change class. */
+        /* Recognized continuation and hosted-search identities cannot change class. */
         if (item->kind == SNAG_WIRE_ITEM_INERT &&
             (item->reasoning_seen != !strcmp(type, "reasoning") ||
+             item->compaction_seen != !strcmp(type, "compaction") ||
              item->hosted_search != hosted_search_type(type))) {
             return stream_fail(stream, EPROTO, "response item changed kind");
         }
@@ -742,23 +743,28 @@ item_snapshot(struct snag_responses_stream *stream, size_t output_index,
     if (hosted_search_type(type)) return hosted_snapshot(stream, output_index, snapshot, complete);
     if (inert_snapshot(stream, output_index, snag_json_string(snapshot, "id")) < 0) return -1;
     struct snag_wire_item *item = &stream->items[output_index];
-    if (strcmp(type, "reasoning") != 0) return item->reasoning_seen ? stream_fail(stream, EPROTO,
-            "reasoning item changed type") : 0;
-    item->reasoning_seen = true;
+    bool compact = !strcmp(type, "compaction");
+    if (!compact && strcmp(type, "reasoning")) return 0;
+    item->reasoning_seen = !compact;
+    item->compaction_seen = compact;
     if (!complete) return 0;
-    if (!snag_reasoning_item_valid(snapshot))
+    const char *encrypted = snag_json_string(snapshot, "encrypted_content");
+    if (compact && (!encrypted || !*encrypted))
+        return stream_fail(stream, EPROTO, "invalid encrypted compaction item");
+    if (!compact && !snag_reasoning_item_valid(snapshot))
         return stream_fail(stream, EPROTO, "invalid reasoning continuation item");
     /* Private continuation has no delivered prefix. The terminal snapshot is
      * canonical, including metadata absent from output_item.done. */
     size_t bytes, previous = 0u;
-    if (item->reasoning && snag_json_digest_bounded(item->reasoning,
+    json_t **retained = compact ? &item->compaction : &item->reasoning;
+    if (*retained && snag_json_digest_bounded(*retained,
             SNAG_MAX_RESPONSE_GRAPH, NULL, &previous) < 0) return -1;
     stream->aggregate_bytes -= previous;
     if (snag_json_digest_bounded(snapshot, SNAG_MAX_RESPONSE_GRAPH, NULL, &bytes) < 0 ||
         account_bytes(stream, bytes) < 0) return -1;
-    json_decref(item->reasoning);
-    item->reasoning = json_deep_copy(snapshot);
-    return item->reasoning ? 0 : stream_fail(stream, ENOMEM, "cannot retain reasoning");
+    json_decref(*retained);
+    *retained = json_deep_copy(snapshot);
+    return *retained ? 0 : stream_fail(stream, ENOMEM, "cannot retain private continuation");
 }
 
 static int

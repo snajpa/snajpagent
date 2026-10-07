@@ -97,7 +97,21 @@ Output capacity still reserves input-budget headroom. Exact input-token
 preflight is unavailable on this route; the existing auto/strict/off policy
 handles that distinction. Generic/API-key transports are unchanged.
 
-If direct Codex native compaction returns 404/405/501, close that attempt with
+Direct Codex native compaction appends `compaction_trigger` to its input and uses
+the existing `/responses` SSE transport. Request preparation happens before its
+durable hash is calculated. The shared response decoder retains the canonical
+encrypted compaction item; completion must supply exactly one. The next context
+retains the input user messages followed by that capsule. Plaintext reduction
+cannot replace a window containing encrypted state. A model, endpoint or account
+change rebuilds covered history from the journal when its capsule cannot cross
+the binding; the rebuilt projection is cached for subsequent requests. Interrupted,
+missing, duplicate or malformed results preserve the prior context. Compaction never dispatches returned tools. Login probes this
+same protocol. API-key providers retain `/v1/responses/compact`.
+
+The Codex protocol follows upstream
+[`compact_remote_v2_attempt.rs`](https://github.com/openai/codex/blob/b7a76bce20feac9e54d5a9b0c01ed463aa2fbf36/codex-rs/core/src/compact_remote_v2_attempt.rs).
+
+If a native route is unavailable, close that attempt with
 `compaction_interrupted` reason `endpoint_unavailable`, then perform one
 Responses summary attempt using the same provider/account. Each attempt has
 its own exact request hash. Do not guess alternate paths, fall back on auth

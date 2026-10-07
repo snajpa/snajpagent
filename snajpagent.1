@@ -3625,7 +3625,11 @@ The percentage can fall after a completed
 compaction; each new attempt announces itself.  A long turn can compact again after a completed response and later
 tool progress when its next request exceeds the hard budget.  A recovery rebase clears the
 previous usage measurement until a new response supplies one.
-Native compaction is used when enabled.  Set
+Native compaction is used when enabled. Direct ChatGPT/Codex sends a compaction
+trigger through the Responses stream and retains the input user messages and
+completed encrypted result. A model, endpoint or account change rebuilds earlier
+history when the encrypted result cannot be reused. API providers use the separate
+Responses compact endpoint. Set
 .B native_compaction=false
 to summarize through ordinary Responses; the application wraps the returned
 summary text in its stored message format. Direct ChatGPT/Codex also falls back
@@ -3797,14 +3801,15 @@ at its issuer when access must end immediately. OAuth expiry and a pre-output
 401 still renew the current login automatically; renewal leaves a replacement
 shared login intact. API keys and Enterprise tokens have no automatic renewal.
 .PP
-Configuring a provider probes the native compaction endpoint once and records
+Configuring a provider probes native compaction once and records
 the answer as
 .B native_compaction
-in that provider's section: a route that does not serve
+in that provider's section. Direct ChatGPT/Codex verifies a completed encrypted
+result through the Responses stream. An inconclusive result keeps the configured
+setting. API providers probe
 .BR /responses/compact
-(for example a local gateway answering 502) is saved as disabled instead of
-being attempted on every later compaction.  An endpoint that does not answer
-at all leaves the existing setting unchanged.
+and save an unavailable route as disabled. An endpoint that does not answer
+leaves the existing setting unchanged.
 .PP
 Automatic setup never consumes piped task input or runs for execution, resume,
 session listing, or a missing explicitly specified configuration.  Invalid
@@ -4092,16 +4097,19 @@ again; only if it remains too large does it take the same history-oriented
 recovery path. Later compactions recognize the covered active turn even after
 its start leaves the retained checkpoint overlap. Irreducible current input fails clearly; the
 durable history is retained. Normal same-model compaction remains available,
-and a provider/model/account switch retains the saved covered boundary and
-portable summary where it fits.
+and a provider/model/account switch retains a portable plaintext summary where
+it fits. A summary containing encrypted state requires rebuilding its covered
+history under the new binding.
 .TP
 .B native_compaction
-Use the provider's native compaction endpoint.  When false, use an ordinary
+Use the provider's native compaction protocol. Direct ChatGPT/Codex uses an
+encrypted compaction item returned through the Responses stream; API providers
+use the separate compact endpoint. When false, use an ordinary
 Responses summarization request instead.  Default:
 .BR true .
 .PP
 An unavailable native compaction endpoint falls back
-once to Responses summarization. Authentication failures do not trigger this
+once to Responses summarization and reports the provider error. Authentication failures do not trigger this
 fallback, and the configured provider/account and hard context guard stay intact.
 .TP
 .B parallel_tool_calls

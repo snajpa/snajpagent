@@ -74,6 +74,7 @@ static void test_static_alsa_config(void)
 /* Inherited only by the voice-request fixture child, never a product control. */
 static int voice_request_ready_fd = -1;
 static int voice_request_release_fd = -1;
+static int compact_ready_fd = -1;
 
 struct local_server {
     int fd;
@@ -140,6 +141,16 @@ enum model_fixture {
     MODEL_COMPACT_502,
     MODEL_COMPACT_OK,
     MODEL_COMPACT_403,
+    MODEL_CODEX_COMPACT,
+    MODEL_CODEX_COMPACT_CANONICAL,
+    MODEL_CODEX_COMPACT_MISSING,
+    MODEL_CODEX_COMPACT_DUPLICATE,
+    MODEL_CODEX_COMPACT_PARTIAL,
+    MODEL_CODEX_COMPACT_INVALID,
+    MODEL_CODEX_COMPACT_AUTH,
+    MODEL_CODEX_COMPACT_CAPACITY,
+    MODEL_CODEX_COMPACT_CANCEL,
+    MODEL_CODEX_COMPACT_PROBE,
     MODEL_AUDIO_LISTEN,
     MODEL_AUDIO_TRANSCRIBE,
     MODEL_AUDIO_SPEAK,
@@ -1224,6 +1235,94 @@ server_child(int listen_fd, enum model_fixture models, bool transport)
         audio_server_child(listen_fd, models);
     if (models >= MODEL_AUTH_DEVICE)
         auth_server_child(listen_fd, models);
+    if (models >= MODEL_CODEX_COMPACT && models <= MODEL_CODEX_COMPACT_PROBE) {
+        alarm(10u);
+        int fd = accept(listen_fd, NULL, NULL);
+        struct http_request request;
+        assert(fd >= 0);
+        read_request(fd, &request);
+        if (strcmp(request.path, "/responses")) {
+            send_response(fd, 404u, "application/json", "{\"detail\":\"Not Found\"}");
+        } else {
+            json_t *body = json_loads(request.body, 0u, NULL);
+            json_t *input = json_object_get(body, "input");
+            assert(!strcmp(request.method, "POST"));
+            assert(json_is_true(json_object_get(body, "stream")));
+            assert(json_is_false(json_object_get(body, "store")));
+            assert(json_is_array(json_object_get(body, "tools")));
+            assert(!json_array_size(json_object_get(body, "tools")));
+            assert(json_array_size(input) == 2u);
+            assert(!strcmp(snag_json_string(json_array_get(input, 0u), "content"),
+                models == MODEL_CODEX_COMPACT_PROBE ? "ping" :
+                "Remember the fixture color: violet."));
+            assert(!strcmp(snag_json_string(json_array_get(input, 1u), "type"),
+                "compaction_trigger"));
+            if (models != MODEL_CODEX_COMPACT_PROBE)
+                assert(!strcmp(snag_json_string(body, "prompt_cache_key"), "compact-cache"));
+            json_decref(body);
+            if (models == MODEL_CODEX_COMPACT_AUTH || models == MODEL_CODEX_COMPACT_CAPACITY) {
+                send_response(fd, models == MODEL_CODEX_COMPACT_AUTH ? 401u : 400u,
+                    "application/json", models == MODEL_CODEX_COMPACT_AUTH ?
+                    "{\"error\":{\"code\":\"invalid_api_key\",\"message\":\"login rejected\"}}" :
+                    "{\"error\":{\"code\":\"context_length_exceeded\","
+                    "\"message\":\"too much input\"}}");
+            } else {
+                json_t *item = json_pack("{s:s,s:s,s:s}", "id", "compact-one",
+                    "type", "compaction", "encrypted_content",
+                    models == MODEL_CODEX_COMPACT_INVALID ? "" : "opaque-fixture-continuation");
+                json_t *items = json_array();
+                if (models != MODEL_CODEX_COMPACT_MISSING) assert(!json_array_append(items, item));
+                if (models == MODEL_CODEX_COMPACT_DUPLICATE) {
+                    json_t *copy = json_copy(item);
+                    assert(!json_object_set_new(copy, "id", json_string("compact-two")));
+                    assert(!json_array_append_new(items, copy));
+                }
+                json_t *done = json_pack("{s:s,s:i,s:O}", "type", "response.output_item.done",
+                    "output_index", 0, "item", item);
+                char *done_wire = json_dumps(done, JSON_COMPACT);
+                if (models == MODEL_CODEX_COMPACT_CANONICAL)
+                    assert(!json_object_set_new(item, "encrypted_content",
+                        json_string("canonical-fixture-continuation")));
+                json_t *completed = json_pack("{s:s,s:{s:s,s:s,s:O}}", "type",
+                    "response.completed", "response", "id", "compact-response",
+                    "status", "completed", "output", items);
+                char *completed_wire = json_dumps(completed, JSON_COMPACT);
+                struct snag_buf wire = {.max = BODY_MAX};
+                assert(!snag_buf_printf(&wire, "data: {\"type\":\"response.created\","
+                    "\"response\":{\"id\":\"compact-response\",\"status\":\"in_progress\","
+                    "\"output\":[]}}\n\n"));
+                if (models != MODEL_CODEX_COMPACT_MISSING &&
+                    models != MODEL_CODEX_COMPACT_DUPLICATE) {
+                    assert(!snag_buf_printf(&wire, "data: %s\n\n", done_wire));
+                }
+                if (models != MODEL_CODEX_COMPACT_PARTIAL && models != MODEL_CODEX_COMPACT_CANCEL)
+                    assert(!snag_buf_printf(&wire, "data: %s\n\n", completed_wire));
+                assert(!snag_buf_terminate(&wire));
+                if (models == MODEL_CODEX_COMPACT_CANCEL) {
+                    static const char header[] = "HTTP/1.1 200 OK\r\n"
+                        "Content-Type: text/event-stream\r\nConnection: close\r\n\r\n";
+                    write_all_or_die(fd, header, sizeof(header) - 1u);
+                    write_all_or_die(fd, (char *)wire.data, wire.len);
+                    assert(write(compact_ready_fd, "R", 1u) == 1);
+                    char byte;
+                    ssize_t n = read(fd, &byte, 1u);
+                    assert(n == 0 || (n < 0 && errno == ECONNRESET));
+                } else {
+                    send_response(fd, 200u, "text/event-stream", (char *)wire.data);
+                }
+                snag_buf_free(&wire);
+                free(done_wire);
+                free(completed_wire);
+                json_decref(done);
+                json_decref(completed);
+                json_decref(item);
+                json_decref(items);
+            }
+        }
+        close(fd);
+        close(listen_fd);
+        _exit(0);
+    }
     if (models == MODEL_COMPACT_404 || models == MODEL_COMPACT_403 || models == MODEL_COMPACT_502 ||
         models == MODEL_COMPACT_OK) {
         /* The native compaction probe authenticates with its own credential and
@@ -1240,7 +1339,9 @@ server_child(int listen_fd, enum model_fixture models, bool transport)
             if (fd < 0) server_fail("compact accept failed");
             read_request(fd, &request);
             if (strcmp(request.method, "POST") ||
-                (strcmp(request.path, "/responses/compact") && strcmp(request.path, "/v1/responses/compact")))
+                (strcmp(request.path, "/responses/compact") &&
+                 strcmp(request.path, "/v1/responses/compact") &&
+                 strcmp(request.path, "/responses")))
                 server_fail("invalid native compact path");
             send_response(fd, models == MODEL_COMPACT_OK ? 200u :
                               models == MODEL_COMPACT_404 ? 404u :
@@ -2786,6 +2887,94 @@ test_native_compaction_probe(void)
     }
     assert(unsetenv("SNAJPAGENT_TEST_OPENAI_BASE") == 0);
     snag_config_free(&config);
+}
+
+static int
+cancel_compact_after_output(void *opaque, unsigned int wait_ms)
+{
+    int fd = *(int *)opaque;
+    char ready;
+    (void)wait_ms;
+    ssize_t n = read(fd, &ready, 1u);
+    return n == 1 ? 2 : n < 0 && errno == EAGAIN ? 0 : -1;
+}
+
+static void
+test_codex_streaming_compaction(void)
+{
+    for (enum model_fixture mode = MODEL_CODEX_COMPACT;
+        mode <= MODEL_CODEX_COMPACT_PROBE; ++mode) {
+        struct snag_config config;
+        struct snag_credential credential;
+        struct local_server server;
+        struct snag_json_document output = {0};
+        char error[512] = {0};
+        struct snag_provider_connection connection =
+            transport_connection(&config, &credential, SNAG_CHATGPT_BASE);
+        config.providers[0].auth = mode % 2 ? SNAG_AUTH_CHATGPT : SNAG_AUTH_CODEX_TOKEN;
+        config.retry_auto = false;
+        credential.root_fd = -1;
+        int ready[2] = {-1, -1};
+        if (mode == MODEL_CODEX_COMPACT_CANCEL) {
+            assert(!pipe(ready));
+            assert(fcntl(ready[0], F_SETFL, O_NONBLOCK) == 0);
+            compact_ready_fd = ready[1];
+            connection.pump = cancel_compact_after_output;
+            connection.pump_opaque = &ready[0];
+        }
+        json_t *request = json_pack("{s:s,s:[{s:s,s:s}],s:s}",
+            "model", "fixture-model", "input", "role", "user",
+            "content", "Remember the fixture color: violet.", "prompt_cache_key", "compact-cache");
+        json_t *original_input = json_incref(json_object_get(request, "input"));
+        assert(!snag_context_codex_compact_request(request));
+        assert(json_array_size(original_input) == 1u);
+        json_decref(original_input);
+        char before[SNAG_SHA256_HEX_LEN + 1u], after[SNAG_SHA256_HEX_LEN + 1u];
+        assert(!snag_json_digest_bounded(request, BODY_MAX, before, NULL));
+        start_server(&server, mode, false, "");
+        assert(!setenv("SNAJPAGENT_TEST_OPENAI_BASE", server.endpoint, 1));
+        if (mode == MODEL_CODEX_COMPACT_PROBE) {
+            assert(snag_provider_native_compaction_probe(connection, "fixture-model",
+                error, sizeof(error)) == 1);
+        } else {
+            int rc = snag_provider_responses_compact(connection, request, &output,
+                error, sizeof(error), NULL);
+            if (mode <= MODEL_CODEX_COMPACT_CANONICAL) {
+                if (rc) fprintf(stderr, "Codex compaction failed (%d): %s\n", rc, error);
+                assert(!rc);
+                assert(json_array_size(output.value) == 2u);
+                assert(!strcmp(snag_json_string(json_array_get(output.value, 0u),
+                    "content"), "Remember the fixture color: violet."));
+                assert(!strcmp(snag_json_string(json_array_get(output.value, 0u),
+                    "type"), "message"));
+                assert(!strcmp(snag_json_string(json_array_get(output.value, 1u),
+                    "encrypted_content"), mode == MODEL_CODEX_COMPACT_CANONICAL ?
+                    "canonical-fixture-continuation" : "opaque-fixture-continuation"));
+            } else {
+                int expected = mode == MODEL_CODEX_COMPACT_CAPACITY ?
+                    SNAG_PROVIDER_CONTEXT_OVERFLOW : mode == MODEL_CODEX_COMPACT_CANCEL ? 2 : -1;
+                if (rc != expected) fprintf(stderr, "Compaction case %d: rc %d, expected %d: %s\n",
+                    mode, rc, expected, error);
+                assert(rc == expected);
+                assert(!output.value);
+                if (mode != MODEL_CODEX_COMPACT_CANCEL) assert(error[0]);
+            }
+        }
+        assert(!snag_json_digest_bounded(request, BODY_MAX, after, NULL));
+        assert(!strcmp(before, after));
+        snag_json_document_free(&output);
+        json_decref(request);
+        int status;
+        assert(waitpid(server.pid, &status, 0) == server.pid);
+        assert(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+        if (mode == MODEL_CODEX_COMPACT_CANCEL) {
+            assert(!close(ready[0]) && !close(ready[1]));
+            compact_ready_fd = -1;
+        }
+        assert(!unsetenv("SNAJPAGENT_TEST_OPENAI_BASE"));
+        snag_credential_clear(&credential);
+        snag_config_free(&config);
+    }
 }
 
 static void
@@ -10179,6 +10368,12 @@ test_output_commit_survives_presentation_failure(void)
 int
 main(int argc, char **argv)
 {
+    if (argc == 2 && !strcmp(argv[1], "--codex-compaction")) {
+        (void)signal(SIGTERM, fixture_stop);
+        test_codex_streaming_compaction();
+        puts("test_provider_transport Codex compaction: ok");
+        return 0;
+    }
     test_output_commit_survives_presentation_failure();
     if (argc == 2 && !strcmp(argv[1], "--output-recovery")) {
         puts("test_provider_transport output recovery: ok");
@@ -10257,6 +10452,7 @@ main(int argc, char **argv)
     test_provider_auth();
     test_media_count_fallback();
     test_native_compaction_probe();
+    test_codex_streaming_compaction();
     test_local_audio_admission();
     test_ui_output_order_and_failure();
     test_ui_bounded_history();

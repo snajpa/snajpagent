@@ -1334,10 +1334,22 @@ prune_dangling_calls(json_t *array)
     return 0;
 }
 
+static bool
+compact_output_encrypted(const json_t *output)
+{
+    for (size_t i = 0u; i < json_array_size(output); ++i) {
+        const json_t *item = json_array_get(output, i);
+        const char *type = snag_json_string(item, "type");
+        if ((type && !strcmp(type, "compaction")) ||
+            json_object_get(item, "encrypted_content")) return true;
+    }
+    return false;
+}
+
 /* A summary produced under another binding cannot be replayed as provider
  * items, but its text is portable: lead the new source with it so a switch
  * costs the uncovered tail instead of the whole archive. Returns 1 when the
- * output carries no text at all. */
+ * output requires encrypted state or carries no text at all. */
 static int
 install_portable_text(struct context_builder *builder, const json_t *output, char *error, size_t error_size)
 {
@@ -1346,6 +1358,7 @@ install_portable_text(struct context_builder *builder, const json_t *output, cha
     size_t count = output ? json_array_size(output) : 0u;
     int rc = -1;
 
+    if (compact_output_encrypted(output)) return 1;
     snag_buf_init(&text, SNAG_CONTEXT_MAX_COMPACT);
     for (size_t i = 0u; i < count; ++i) {
         json_t *item = json_array_get(output, i);
@@ -2740,6 +2753,25 @@ snag_context_codex_request(json_t *request)
 }
 
 int
+snag_context_codex_compact_request(json_t *request)
+{
+    json_t *input = json_copy(json_object_get(request, "input"));
+    int rc = -1;
+    if (!json_is_array(input) ||
+        json_array_append_new(input, json_pack("{s:s}", "type", "compaction_trigger")) < 0 ||
+        json_object_set(request, "input", input) < 0 ||
+        snag_json_set_new(request, "stream", json_true()) < 0 ||
+        snag_json_set_new(request, "store", json_false()) < 0 ||
+        snag_json_set_new(request, "tools", json_array()) < 0 ||
+        snag_json_set_new(request, "tool_choice", json_string("auto")) < 0 ||
+        snag_context_codex_request(request) < 0) goto out;
+    rc = 0;
+out:
+    json_decref(input);
+    return rc;
+}
+
+int
 snag_context_provider_model(const struct snag_provider_config *provider, const char *model, json_t *request)
 {
     return request && model ? snag_json_set_new(request, "model",
@@ -2959,8 +2991,12 @@ snag_context_compact_reduce_request_build(struct snag_session *session,
     size_t count = output ? json_array_size(output) : 0u;
     int rc = -1;
 
+    if (compact_output_encrypted(output))
+        return snag_fail(error, error_size, EINVAL,
+            "encrypted compaction requires its complete provider window");
     snag_buf_init(&text, SNAG_CONTEXT_MAX_COMPACT);
     if (snag_buf_printf(&text, "%s\n\n", instruction) < 0) goto out;
+    size_t header_bytes = text.len;
     for (size_t i = 0u; i < count; ++i) {
         json_t *item = json_array_get(output, i);
         json_t *parts = json_object_get(item, "content");
@@ -2978,7 +3014,7 @@ snag_context_compact_reduce_request_build(struct snag_session *session,
         }
     }
     if (snag_buf_terminate(&text) < 0) goto out;
-    if (!text.len) {
+    if (text.len == header_bytes) {
         snag_errorf(error, error_size, "compaction reduce has no text to condense");
         goto out;
     }
@@ -3017,6 +3053,7 @@ snag_context_compact_request_build(struct snag_session *session, const char *mod
                       const struct snag_context_control *control)
 {
     struct context_builder builder;
+    bool restore_history = false;
     int rc = -1;
 
     if (!projection) return snag_errno(EINVAL);
@@ -3071,12 +3108,16 @@ snag_context_compact_request_build(struct snag_session *session, const char *mod
         if (install_rc == 1) {   /* no portable text: this attempt cannot claim coverage */
             builder.compact_seq = 0u;
             builder.compact_walk_seq = 0u;
+            restore_history = true;
         }
     }
     {
         struct snag_context_capture *cache = NULL;
-        if (context_cache_get(session, &cache, error, error_size, control) < 0 ||
-            context_recent_each(cache, &builder, compact_event, error, error_size) < 0) goto out;
+        if (context_cache_get(session, &cache, error, error_size, control) < 0) goto out;
+        int walk = restore_history ?
+            snag_session_each_event(session, compact_event, &builder, error, error_size) :
+            context_recent_each(cache, &builder, compact_event, error, error_size);
+        if (walk < 0) goto out;
     }
     if (prune_dangling_calls(builder.request_input) < 0) goto out;
     if (append_deferred_input(&builder) < 0) goto out;
@@ -3375,6 +3416,7 @@ snag_context_build(struct snag_session *session, const char *model, const char *
             "as a reply, and unmentioned channel/background traffic requires no response.";
     struct context_builder builder;
     size_t controller_start;
+    bool restore_history = false;
     int rc = -1;
 
     snag_context_projection_free(projection);
@@ -3451,7 +3493,11 @@ snag_context_build(struct snag_session *session, const char *model, const char *
                 install_compact_output(&builder, session->compact_output, error, error_size) :
                 install_portable_text(&builder, session->compact_output, error, error_size);
             if (install_rc < 0) goto out;
-            if (install_rc == 1) builder.compact_seq = 0u;
+            if (install_rc == 1) {
+                builder.compact_seq = 0u;
+                builder.compact_walk_seq = 0u;
+                restore_history = true;
+            }
         }
         /* Summary and rebase prefixes are installed on every build. Cache
          * only the following journal-derived items, so reuse cannot repeat
@@ -3466,6 +3512,7 @@ snag_context_build(struct snag_session *session, const char *model, const char *
         }
         bool rebuild_cache = cache->rebuild_view ||
             cache->compact_seq != session->compact_seq ||
+            cache->view.compact_seq != builder.compact_seq ||
             cache->rebase_seq != session->context_rebase_seq ||
             strcmp(cache->scope, continuation_scope ? continuation_scope : "");
         bool used_cache = false;
@@ -3497,7 +3544,10 @@ snag_context_build(struct snag_session *session, const char *model, const char *
             json_decref(cache->recent);
             cache->recent = json_incref(old_cache->recent);
             cache->history_sources = json_incref(old_cache->history_sources);
-            if (context_recent_each(old_cache, &builder, context_event, error, error_size) < 0) {
+            int walk = restore_history ?
+                snag_session_each_event(session, context_event, &builder, error, error_size) :
+                context_recent_each(old_cache, &builder, context_event, error, error_size);
+            if (walk < 0) {
                 context_cache_free(cache);
                 goto out;
             }

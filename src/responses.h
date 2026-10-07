@@ -55,6 +55,8 @@ struct snag_wire_item {
     bool output_index_known;
     bool reasoning_seen;
     json_t *reasoning;
+    bool compaction_seen;
+    json_t *compaction;
     char *id;
     char *phase;
     char *name;

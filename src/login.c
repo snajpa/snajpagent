@@ -441,10 +441,10 @@ snag_login_dispatch(const struct snag_cli *cli, bool *handled)
                 &config, &provider, &tokens.credential, NULL, NULL, NULL, NULL, 0, NULL},
                 probe_model, probe_error, sizeof(probe_error));
             if (probe >= 0) provider.native_compaction = probe == 1;
-            (void)fprintf(stderr, "%s: native compaction endpoint %s\n", provider.name,
+            (void)fprintf(stderr, "%s: native compaction %s\n", provider.name,
                           probe == 1 ? "detected" :
                           probe == 0 ? "unavailable; compaction uses Responses summarization" :
-                          "did not answer; the configured native_compaction setting is kept");
+                          "could not be verified; keeping the native_compaction setting");
         }
     }
     if (snag_config_save_provider(path, cli->config_path == NULL, &provider,

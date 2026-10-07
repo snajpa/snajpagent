@@ -110,8 +110,8 @@ int snag_provider_responses_compact(struct snag_provider_connection connection,
                                    const json_t *request, struct snag_json_document *output,
                                    char *error, size_t error_size, unsigned int *retry_count);
 
-/* Detect the provider's native compaction endpoint after a login: 1 answers,
- * 0 is absent or gateway-unreachable, -1 is inconclusive (no response). */
+/* Probe native compaction after login: 1 supported, 0 absent on the API route,
+ * -1 inconclusive. Codex requires a completed encrypted compaction result. */
 int snag_provider_native_compaction_probe(struct snag_provider_connection connection, const char *model,
                                           char *error, size_t error_size);
 

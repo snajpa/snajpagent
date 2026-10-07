@@ -477,6 +477,7 @@ endif
 	./tests/test_provider_retry
 	./tests/test_provider_transport
 	python3 tests/test_access_token.py ./tests/snajpagent-transport
+	python3 tests/test_codex_compaction.py ./tests/snajpagent-transport
 	python3 tests/test_config_reload.py ./tests/snajpagent-transport
 	python3 tests/test_model_auth_recovery.py ./tests/snajpagent-transport
 	python3 tests/test_goal_wait_channel.py ./$(BIN)

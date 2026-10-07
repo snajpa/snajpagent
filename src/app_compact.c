@@ -162,6 +162,14 @@ out: snag_response_graph_free(&graph);
 #endif
 }
 
+static int
+prepare_native_compaction(const struct app_state *app, struct snag_json_document *request)
+{
+    if (!snag_auth_uses_codex(app->turn_provider->auth)) return 0;
+    if (snag_context_codex_compact_request(request->value) < 0) return -1;
+    return snag_json_document_measure(request, SNAG_CONTEXT_MAX_COMPACT);
+}
+
 /* Nothing uncovered: the history is already summarized in full, so no chunk can
  * be compacted and a capacity rejection can only be reduced by condensing the
  * merged summary itself (the merge step) under the same binding. Returns 1 when
@@ -185,6 +193,7 @@ run_reduce_attempt(struct app_state *app, const char *reason, const struct snag_
             app->turn_effort, app->session.compact_output, instruction, &request, error, error_size) != 0)
         return 0;   /* no portable text: nothing to condense */
     rc = -1;
+    if (native && prepare_native_compaction(app, &request) < 0) goto out;
     if (snag_context_compact_output_valid(app->session.compact_output, source_hash, NULL, error, error_size) < 0 ||
         snag_random_id(compact_id) < 0) goto out;
     if (strcmp(reason, "manual") && snag_ui_text(&app->ui, SNAG_UI_HOST,
@@ -422,6 +431,7 @@ run_compaction_attempt(struct app_state *app, const char *reason, bool active_pr
             (void)snag_fail(error, error_size, ENOMEM, "cannot build bounded compaction provider request");
             goto out;
         }
+        if (native && prepare_native_compaction(app, &projection.create_request) < 0) goto out;
         if (snag_json_document_measure(&projection.create_request, SNAG_CONTEXT_MAX_COMPACT) < 0 || projection.create_request.bytes == 0u ||
             snag_json_document_measure(&projection.count_request, SNAG_CONTEXT_MAX_COMPACT) < 0 ||
             projection.count_request.bytes == 0u) {
@@ -569,6 +579,8 @@ run_compaction_attempt(struct app_state *app, const char *reason, bool active_pr
                 model, effort, output.value,
                 "merge these summaries of overlapping chunks, deduplicating anything that appears twice",
                 &reduce_request, reduce_error, sizeof(reduce_error));
+            if (reduce_rc == 0 && native)
+                reduce_rc = prepare_native_compaction(app, &reduce_request);
             if (reduce_rc == 0) {
                 if (snag_app_provider_activity(app, true) < 0) goto out;
                 reduce_rc = native ? snag_app_provider_compact(app, reduce_request.value, credential,
@@ -660,8 +672,12 @@ run_compaction(struct app_state *app, const char *reason, bool active_prefix,
     int rc = run_compaction_attempt(app, reason, active_prefix, true,
                                     credential, &did_compact, error, error_size);
     if (rc == SNAG_PROVIDER_UNSUPPORTED) {
-        if (snag_ui_text(&app->ui, SNAG_UI_WARNING,
-            "native compaction unavailable; compacting through Responses") < 0) return -1;
+        char message[1024];
+        (void)snprintf(message, sizeof(message),
+            "native compaction unavailable; compacting through Responses%s%s",
+            error && error_size && error[0] ? ": " : "",
+            error && error_size ? error : "");
+        if (snag_ui_text(&app->ui, SNAG_UI_WARNING, message) < 0) return -1;
         if (error_size) error[0] = '\0';
         rc = run_compaction_attempt(app, reason, active_prefix, false,
                                     credential, &did_compact, error, error_size);

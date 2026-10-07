@@ -505,7 +505,8 @@ test_worknote_moments(struct snag_store *store, const char *cwd)
            the source it was built from. */
         {
             struct snag_json_document reduce = {0};
-            json_t *merged = compact_output_fixture();
+            json_t *merged = json_pack("[{s:s,s:s}]", "type", "compaction_summary",
+                "text", "overlapping summaries to condense");
             int reduce_rc = snag_context_compact_reduce_request_build(&session, NULL,
                 session.default_model, session.default_effort, merged,
                 "merge these summaries of overlapping chunks, deduplicating anything that appears twice",
@@ -3034,6 +3035,74 @@ test_reasoning_continuation(struct snag_store *store, const char *cwd)
     snag_config_free(&config);
 }
 
+static void
+test_opaque_compaction_binding(struct snag_store *store, const char *cwd, bool legacy)
+{
+    struct snag_session session;
+    struct snag_context_projection compact = {0};
+    struct snag_context_projection next = {0};
+    struct snag_json_document reduce = {0};
+    char scope[65], other[65], saved[33], error[512] = {0};
+    json_t *empty = json_array();
+    json_t *output = compact_output_fixture();
+    json_t *user = json_pack("{s:s,s:s,s:s}", "type", "message",
+        "role", "user", "content", "original user instruction");
+
+    memset(scope, 'a', 64u);
+    scope[64] = 0;
+    memset(other, 'b', 64u);
+    other[64] = 0;
+    assert(empty && user && json_array_insert_new(output, 0u, user) == 0);
+    if (legacy) create_legacy_session(store, &session, cwd, "medium");
+    else create_session(store, &session, cwd, "medium");
+    strcpy(saved, session.id);
+    commit_completed_turn(&session, cwd, "ba100000000000000000000000000000",
+        "ba200000000000000000000000000000", 1u,
+        "original user instruction", "assistant state covered by opaque capsule");
+    for (unsigned int i = 2u; i <= 80u; ++i) {
+        char turn[33], response[33];
+        snprintf(turn, sizeof(turn), "%032x", 0xbc00u + i * 2u);
+        snprintf(response, sizeof(response), "%032x", 0xbc01u + i * 2u);
+        commit_completed_turn(&session, cwd, turn, response, i, "next", "later answer");
+    }
+    assert(snag_context_compact_request_build(&session, SNAJPAGENT_MODEL, "medium",
+        false, 0u, false, scope, &compact, error, sizeof(error), NULL) == 0);
+    commit_counted_compaction(&session, "ba300000000000000000000000000000",
+        "manual", SNAJPAGENT_MODEL, &compact, output);
+    commit_event(&session, "turn_started", turn_started(
+        "ba400000000000000000000000000000", 81u, "continue", cwd, NULL));
+    snag_session_close(&session);
+    assert(snag_session_open(store, &session, saved, error, sizeof(error)) == 0);
+
+    for (unsigned int pass = 0u; pass < 3u; ++pass) {
+        bool changed = pass != 0u;
+        assert(snag_context_build(&session, SNAJPAGENT_MODEL, "medium", 1u, empty,
+            0u, false, NULL, changed ? other : scope, NULL, NULL, &next,
+            error, sizeof(error), NULL) == 0);
+        json_t *input = json_object_get(next.create_request.value, "input");
+        assert((item_by_field(input, "type", "compaction") != NULL) == !changed);
+        bool restored = item_by_field(input, "content",
+            "assistant state covered by opaque capsule") != NULL;
+        if (restored != !!changed) fprintf(stderr, "opaque binding: changed=%u restored=%u\n",
+            changed, restored);
+        assert(restored == !!changed);
+        snag_context_projection_free(&next);
+    }
+    struct snag_context_projection rebuild = {0};
+    assert(snag_context_compact_request_build(&session, SNAJPAGENT_MODEL, "medium",
+        true, 0u, false, other, &rebuild, error, sizeof(error), NULL) == 0);
+    assert(item_by_field(json_object_get(rebuild.create_request.value, "input"),
+        "content", "assistant state covered by opaque capsule"));
+    snag_context_projection_free(&rebuild);
+    assert(snag_context_compact_reduce_request_build(&session, NULL, SNAJPAGENT_MODEL,
+        "medium", output, "merge these summaries", &reduce, error, sizeof(error)) < 0);
+    assert(!reduce.value && strstr(error, "encrypted"));
+    snag_context_projection_free(&compact);
+    json_decref(output);
+    json_decref(empty);
+    snag_session_close(&session);
+}
+
 /* A file tool may refuse its own arguments after dispatch: edit_file reads the
  * target and reports not_run/invalid_arguments when the old text does not occur
  * exactly once. Session ae23a07f aborted because that truthful pair was rejected
@@ -5523,6 +5592,8 @@ main(int argc, char **argv)
     test_read_only_and_queue_controllers(&store, cwd);
     test_provider_model_projection(&store, cwd);
     test_leading_instructions_boundary(&store, cwd);
+    test_opaque_compaction_binding(&store, cwd, false);
+    test_opaque_compaction_binding(&store, cwd, true);
     test_reasoning_continuation(&store, cwd);
     test_query_context_privacy(&store, cwd);
     test_channel_send_context(&store, cwd);

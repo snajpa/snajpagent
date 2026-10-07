@@ -722,6 +722,12 @@ classify_non2xx(struct provider_ctx *ctx, char *error, size_t error_size)
         return snag_fail(error, error_size, EOVERFLOW, ctx->error[0] ? ctx->error :
                   "provider error body could not be retained");
     }
+    /* Final error classification also runs when automatic retries are disabled. */
+    json_t *failure = snag_json_load_strict(ctx->error_body.data, ctx->error_body.len,
+        SNAG_WIRE_BODY_MAX, NULL, 0u);
+    if (snag_provider_failure_from_json(failure, &ctx->provider_failure) < 0)
+        memset(&ctx->provider_failure, 0, sizeof(ctx->provider_failure));
+    json_decref(failure);
     struct snag_buf redacted = {.max = SNAG_WIRE_BODY_MAX};
     rc = snag_wire_json_redact(ctx->error_body.data, ctx->error_body.len, &ctx->secrets.wire, &redacted,
                               json_error, sizeof(json_error));
@@ -1385,6 +1391,55 @@ snag_provider_responses_count(struct snag_provider_connection connection,
     return provider_ctx_finish(&ctx, rc, error, error_size);
 }
 
+static int
+codex_compact_record(void *opaque, const struct snag_sse_record *record)
+{
+    struct provider_ctx *ctx = opaque;
+    return snag_responses_sse_record(&ctx->stream, record);
+}
+
+static int
+codex_compact_output(struct provider_ctx *ctx, const json_t *request,
+    struct snag_json_document *output,
+    char *error, size_t error_size)
+{
+    if (!ctx->stream.terminal || ctx->stream.failed)
+        return snag_fail(error, error_size, EPROTO, "native compaction did not complete");
+    json_t *compact = NULL;
+    for (size_t i = 0; i < ctx->stream.item_count; ++i) {
+        json_t *item = ctx->stream.items[i].compaction;
+        if (!item) continue;
+        if (compact) return snag_fail(error, error_size, EPROTO,
+            "native compaction returned multiple encrypted items");
+        compact = item;
+    }
+    if (!compact) return snag_fail(error, error_size, EPROTO,
+        "native compaction returned no encrypted item");
+    json_t *window = json_array();
+    const json_t *input = json_object_get(request, "input");
+    if (!window) return -1;
+    for (size_t i = 0u; i < json_array_size(input); ++i) {
+        const json_t *item = json_array_get(input, i);
+        const char *role = snag_json_string(item, "role");
+        if (!role || strcmp(role, "user")) continue;
+        json_t *copy = json_copy((json_t *)item);
+        if (!copy || snag_json_set_new(copy, "type", json_string("message")) < 0) {
+            json_decref(copy);
+            json_decref(window);
+            return -1;
+        }
+        if (json_array_append_new(window, copy) < 0) {
+            json_decref(window);
+            return -1;
+        }
+    }
+    if (json_array_append(window, compact) < 0) {
+        json_decref(window);
+        return -1;
+    }
+    return snag_context_compact_output_set(output, window, error, error_size);
+}
+
 int
 snag_provider_responses_compact(struct snag_provider_connection connection, const json_t *compact_request,
                                struct snag_json_document *output, char *error, size_t error_size,
@@ -1397,17 +1452,29 @@ snag_provider_responses_compact(struct snag_provider_connection connection, cons
     if (output) snag_json_document_free(output);
     if (!connection_valid(connection) || !compact_request || !output)
         return snag_fail(error, error_size, EINVAL, "invalid compact request");
+    bool codex = snag_auth_uses_codex(connection.provider->auth);
     provider_ctx_init(&ctx, connection, SNAG_CONTEXT_MAX_COMPACT, SNAG_CONTEXT_MAX_COMPACT);
     /* A summary can stay silent for minutes while the provider ingests a large
      * source; the request timeout bounds it, not the provider idle timeout. */
     ctx.low_speed_ms = connection.provider->request_timeout_ms;
-    if (provider_request_setup(&ctx, connection.credential, "/v1/responses/compact",
-            "application/json", compact_request,
-            "compact request exceeds the bounded body limit", count_write_cb, error, error_size) == 0)
+    if (codex) {
+        snag_responses_stream_init(&ctx.stream, NULL, NULL);
+        snag_sse_init(&ctx.sse, codex_compact_record, &ctx);
+    }
+    if (provider_request_setup(&ctx, connection.credential,
+            codex ? "/v1/responses" : "/v1/responses/compact",
+            codex ? "text/event-stream" : "application/json", compact_request,
+            "compact request exceeds the bounded body limit", codex ? write_cb : count_write_cb,
+            error, error_size) == 0)
         rc = provider_request_perform(&ctx, "compact request failed", error, error_size, retry_count);
-    if (rc < 0 && snag_provider_failure_is_capacity(&ctx.provider_failure))
+    const struct snag_provider_failure *failure = ctx.stream.failed ?
+        &ctx.stream.provider_failure : &ctx.provider_failure;
+    if (rc < 0 && snag_provider_failure_is_capacity(failure))
         rc = SNAG_PROVIDER_CONTEXT_OVERFLOW;
-    if (rc == 0) rc = parse_compact_body(&ctx, output, error, error_size);
+    if (rc == 0) {
+        rc = codex ? codex_compact_output(&ctx, compact_request, output, error, error_size) :
+            parse_compact_body(&ctx, output, error, error_size);
+    }
     {
         long status = ctx.http_status ? ctx.http_status : ctx.last_http_status;
         if (rc < 0 && (status == 404 || status == 405 || status == 501 ||
@@ -1431,6 +1498,15 @@ snag_provider_native_compaction_probe(struct snag_provider_connection connection
     probe.value = json_pack("{s:s,s:[{s:s,s:s}]}", "model", model, "input", "role", "user",
                             "content", "ping");
     if (!probe.value) return -1;
+    if (snag_auth_uses_codex(connection.provider->auth)) {
+        struct snag_json_document output = {0};
+        if (snag_context_codex_compact_request(probe.value) == 0)
+            rc = snag_provider_responses_compact(connection, probe.value, &output,
+                error, error_size, NULL);
+        snag_json_document_free(&output);
+        snag_json_document_free(&probe);
+        return rc == 0 ? 1 : -1;
+    }
     provider_ctx_init(&ctx, connection, SNAG_CONTEXT_MAX_COMPACT, SNAG_CONTEXT_MAX_COMPACT);
     if (provider_request_setup(&ctx, connection.credential, "/v1/responses/compact",
             "application/json", probe.value,
