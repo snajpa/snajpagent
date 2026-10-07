@@ -2138,8 +2138,9 @@ explicitly. Background control completions join the originating transcript too.
 Escape, Ctrl-[ and Ctrl-C leave INSERT,
 preserve the draft and place the cursor on the preceding grapheme within the line.
 In NORMAL, Tab switches transcript/composer focus.
-Escape followed immediately by text leaves INSERT or command input before
-interpreting that text in NORMAL, including a fast Escape-colon.
+Escape followed immediately by text or a control key leaves INSERT or command
+input before interpreting the next key in NORMAL, including fast Escape-colon
+and Escape-Ctrl-W sequences.
 Navigation typed while a report or history view first loads is retained in order.
 Escape cancels pending navigation; pane switching and composer entry remain available.
 Drafts wrap within the window and survive split changes, detach and workspace resume.

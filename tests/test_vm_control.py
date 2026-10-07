@@ -969,6 +969,19 @@ class ControlTests(unittest.TestCase):
         self.escape(resumed)
         resumed.finish()
 
+    def test_fast_escape_control_key_leaves_insert_before_workspace_command(self):
+        child = self.start('-N', 'escape-redraw')
+        child.command('attach ' + self.owner.sid)
+        child.until(b'ATTACHED')
+        child.write(b'ipreserve this\x1b\x0c:workspace save\r')
+        child.until(b'Workspace saved')
+        self.wait_snapshot(lambda rows:
+            rollout(next(iter(rows.values()))['state']['buffers'][0])['draft'] ==
+            'preserve this')
+        self.assertEqual(self.inputs(), [])
+        child.finish('close')
+        self.owner.status('detached')
+
     def test_fast_escape_colon_leaves_insert_without_submitting(self):
         child = self.start('-N', 'fast-escape')
         child.command('attach ' + self.owner.sid)

@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Preserve Escape mode changes when a tunnel or multiplexer batches Escape
+  with the following control key.
+
 - Retain navigation typed before a requested report or history view finishes
   loading. Keep cancellation, pane switching and local prompt editing responsive
   independently of reader work and owner draft acknowledgements.

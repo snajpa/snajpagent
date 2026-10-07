@@ -525,7 +525,9 @@ frame dirty. Saving and JSON construction remain synchronous; the qualification
 checks cover their interaction with typing and detach.
 
 Clicking a controlled pane enters INSERT immediately, including when history is
-loading. Escape returns NORMAL; i/a/I/A re-enter the composer. COMMAND-LINE uses
+loading. Escape returns NORMAL; i/a/I/A re-enter the composer. Escape prefixes
+batched with text or control keys take the same mode-exit path as a separate
+Escape event before dispatching the next key. COMMAND-LINE uses
 colon commands from NORMAL. History navigation owns only keys interpreted in
 NORMAL. A requested report claims NORMAL when admitted; navigation arriving before
 its first document is queued in order. Cancel, pane focus and composer entry remain

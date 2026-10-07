@@ -3073,6 +3073,17 @@ input_event(void *opaque, const struct snag_vm_input_event *event)
     }
     if (vm->clipboard.settling || vm->quit || vm->detach_exit || vm->detach_suspend ||
         vm->switch_workspace || vm->classic_pending) return 0;
+    /* Vim uses an Escape prefix to leave the current mode before the next key.
+     * Transport batching must preserve that order for text and control keys. */
+    if ((event->modifiers & SNAG_VM_ALT) && (event->kind == SNAG_VM_TEXT ||
+        (event->kind == SNAG_VM_KEY && (event->modifiers & SNAG_VM_CTRL)))) {
+        struct snag_vm_input_event escape = {.kind = SNAG_VM_KEY,
+            .key = SNAG_VM_KEY_ESCAPE};
+        struct snag_vm_input_event next = *event;
+        next.modifiers &= ~SNAG_VM_ALT;
+        int rc = input_event(vm, &escape);
+        return rc ? rc : input_event(vm, &next);
+    }
     if (event->kind == SNAG_VM_KEY && event->key == 'c' &&
         (event->modifiers & SNAG_VM_CTRL) && clipboard_cancel(vm)) {
         notice(vm, "Canceling clipboard copy; register retained");
@@ -3161,20 +3172,6 @@ input_event(void *opaque, const struct snag_vm_input_event *event)
     unsigned int key = event->kind == SNAG_VM_TEXT && event->length == 1u ?
         event->text[0] : event->kind == SNAG_VM_KEY ? event->key : 0u;
     bool control = (event->modifiers & SNAG_VM_CTRL) != 0u;
-    /* Terminals encode Alt-text as Escape followed by text. Vim's supported
-     * editing subset uses that sequence to leave INSERT/command input first,
-     * so a fast Escape-colon cannot become literal prompt text. */
-    if (event->kind == SNAG_VM_TEXT && (event->modifiers & SNAG_VM_ALT)) {
-        struct snag_vm_buffer *c = focused_buffer(vm);
-        if (vm->insert && c) {
-            snag_vm_editor_normal(c, true);
-            if (snag_vm_editor_end(c) < 0) return -1;
-        }
-        vm->mode = 0;
-        vm->insert = false;
-        vm->prefix = 0;
-        vm->dirty = true;
-    }
     if (vm->mode) {
         if (control && key == 'l') {
             resized = 1;
