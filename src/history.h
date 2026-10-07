@@ -46,24 +46,24 @@ struct snag_history {
 
 void snag_history_free(struct snag_history *history);
 void snag_history_snapshot_free(struct snag_history_snapshot *snapshot);
-int snag_history_snapshot_copy(struct snag_history_snapshot *out, const struct snag_history_snapshot *source);
+int snag_history_snapshot_copy(
+    struct snag_history_snapshot *out, const struct snag_history_snapshot *source);
 /* Read-only navigation paths. The reader pins and validates file ends on open. */
-int snag_history_snapshot_open(struct snag_history_snapshot *, const char *dotdir,
-    const char *session);
+int snag_history_snapshot_open(
+    struct snag_history_snapshot *, const char *dotdir, const char *session);
 int snag_history_open(struct snag_history *history, const char *dotdir);
 int snag_history_bind(struct snag_history *history, const char *session_dir);
 int snag_history_merge(struct snag_history *history);
 int snag_history_add(struct snag_history *history, const char *text);
 bool snag_history_take_warning(struct snag_history *history);
 void snag_history_reader_close(struct snag_history_reader *reader);
-void snag_history_reader_open(struct snag_history_reader *reader,
-                              const struct snag_history_snapshot *snapshot);
+void snag_history_reader_open(
+    struct snag_history_reader *reader, const struct snag_history_snapshot *snapshot);
 struct snag_history_cursor snag_history_end(const struct snag_history_snapshot *snapshot);
 /* 1: record; 0: boundary; 2: yield (replenish budget); -1: error.
  * Text is borrowed until the next read. Clear scanning to cancel a partial read. */
 int snag_history_read(struct snag_history_reader *reader,
-                     const struct snag_history_snapshot *snapshot, bool newer,
-                     struct snag_history_cursor from, struct snag_history_cursor *start,
-                     struct snag_history_cursor *end, const char **text);
+    const struct snag_history_snapshot *snapshot, bool newer, struct snag_history_cursor from,
+    struct snag_history_cursor *start, struct snag_history_cursor *end, const char **text);
 
 #endif

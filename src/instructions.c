@@ -21,8 +21,8 @@ snag_instructions_free(struct snag_instruction_set *set)
 }
 
 int
-snag_instructions_add_owned(struct snag_instruction_set *set, char *path,
-                            char *error, size_t error_size)
+snag_instructions_add_owned(
+    struct snag_instruction_set *set, char *path, char *error, size_t error_size)
 {
     char **grown;
 
@@ -49,8 +49,8 @@ snag_instructions_add_owned(struct snag_instruction_set *set, char *path,
 }
 
 static int
-try_candidate(struct snag_instruction_set *set, const char *path, bool follow_symlink,
-              bool *added, char *error, size_t error_size)
+try_candidate(struct snag_instruction_set *set, const char *path, bool follow_symlink, bool *added,
+    char *error, size_t error_size)
 {
     snag_file_info st;
     char *canonical;
@@ -58,29 +58,30 @@ try_candidate(struct snag_instruction_set *set, const char *path, bool follow_sy
     *added = false;
     if (snag_lstat(path, &st) < 0) {
         if (errno == ENOENT) return 0;
-        return snag_errorf(error, error_size, "cannot inspect instruction %s: %s", path, strerror(errno));
+        return snag_errorf(
+            error, error_size, "cannot inspect instruction %s: %s", path, strerror(errno));
     }
     if ((!follow_symlink || !S_ISLNK(st.st_mode)) && !S_ISREG(st.st_mode)) {
-        return snag_fail(error, error_size, EINVAL,
-                    "instruction %s must resolve to a regular file", path);
+        return snag_fail(
+            error, error_size, EINVAL, "instruction %s must resolve to a regular file", path);
     }
     canonical = snag_realpath(path);
     if (!canonical)
-        return snag_errorf(error, error_size, "cannot resolve instruction %s: %s",
-            path, strerror(errno));
+        return snag_errorf(
+            error, error_size, "cannot resolve instruction %s: %s", path, strerror(errno));
     if (!snag_text_valid(canonical, 0u, SNAG_PATH_MAX_BYTES)) {
         free(canonical);
         return snag_fail(error, error_size, EINVAL, "instruction path cannot be canonicalized");
     }
     if (snag_stat(canonical, &st) < 0) {
         free(canonical);
-        return snag_errorf(error, error_size, "cannot inspect instruction %s: %s",
-            path, strerror(errno));
+        return snag_errorf(
+            error, error_size, "cannot inspect instruction %s: %s", path, strerror(errno));
     }
     if (!S_ISREG(st.st_mode)) {
         free(canonical);
-        return snag_fail(error, error_size, EINVAL,
-            "instruction %s must resolve to a regular file", path);
+        return snag_fail(
+            error, error_size, EINVAL, "instruction %s must resolve to a regular file", path);
     }
     *added = true;
     for (size_t i = 0; i < set->count; ++i) {
@@ -93,7 +94,8 @@ try_candidate(struct snag_instruction_set *set, const char *path, bool follow_sy
 }
 
 int
-snag_instructions_add_file(struct snag_instruction_set *set, const char *path, char *error, size_t error_size)
+snag_instructions_add_file(
+    struct snag_instruction_set *set, const char *path, char *error, size_t error_size)
 {
     bool added;
     if (try_candidate(set, path, true, &added, error, error_size) < 0) return -1;
@@ -102,7 +104,8 @@ snag_instructions_add_file(struct snag_instruction_set *set, const char *path, c
 }
 
 static int
-try_instruction_dir(struct snag_instruction_set *set, const char *dir, char *error, size_t error_size)
+try_instruction_dir(
+    struct snag_instruction_set *set, const char *dir, char *error, size_t error_size)
 {
     static const char *const names[] = {"AGENTS.override.md", "AGENTS.md"};
 
@@ -121,17 +124,17 @@ try_instruction_dir(struct snag_instruction_set *set, const char *dir, char *err
 }
 
 int
-snag_instructions_add_directory(struct snag_instruction_set *set, const char *dir,
-                                char *error, size_t error_size)
+snag_instructions_add_directory(
+    struct snag_instruction_set *set, const char *dir, char *error, size_t error_size)
 {
     char *canonical = dir && *dir ? snag_realpath(dir) : NULL;
     snag_file_info st;
     int rc = -1;
 
-    if (!snag_text_valid(canonical, 0u, SNAG_PATH_MAX_BYTES) ||
-        snag_stat(canonical, &st) < 0 || !S_ISDIR(st.st_mode)) {
-        (void)snag_fail(error, error_size, EINVAL,
-            "-d requires an existing UTF-8 directory: %s", dir ? dir : "");
+    if (!snag_text_valid(canonical, 0u, SNAG_PATH_MAX_BYTES) || snag_stat(canonical, &st) < 0 ||
+        !S_ISDIR(st.st_mode)) {
+        (void)snag_fail(error, error_size, EINVAL, "-d requires an existing UTF-8 directory: %s",
+            dir ? dir : "");
         goto out;
     }
     rc = try_instruction_dir(set, canonical, error, error_size);
@@ -142,7 +145,8 @@ snag_instructions_add_directory(struct snag_instruction_set *set, const char *di
     } else if (rc > 0) {
         rc = 0;
     }
-out: free(canonical);
+out:
+    free(canonical);
     return rc;
 }
 
@@ -166,7 +170,8 @@ config_instruction_root(char *error, size_t error_size)
         if (!snag_path_root_len(home)) {
             free(home);
             free(xdg);
-            (void)snag_fail(error, error_size, EINVAL, "HOME is unavailable for instruction discovery");
+            (void)snag_fail(
+                error, error_size, EINVAL, "HOME is unavailable for instruction discovery");
             return NULL;
         }
         base = snag_path_join(home, ".config");
@@ -196,7 +201,8 @@ find_project_root(const char *cwd, char **root, char *error, size_t error_size)
         }
         if (snag_lstat(git, &st) == 0) {
             if (S_ISLNK(st.st_mode) || (!S_ISDIR(st.st_mode) && !S_ISREG(st.st_mode))) {
-                snag_errorf(error, error_size, ".git at %s must be a non-symlink file or directory", git);
+                snag_errorf(
+                    error, error_size, ".git at %s must be a non-symlink file or directory", git);
                 free(git);
                 free(current);
                 return snag_errno(EINVAL);
@@ -215,8 +221,10 @@ find_project_root(const char *cwd, char **root, char *error, size_t error_size)
         if (strcmp(current, "/") == 0) break;
         {
             char *slash = strrchr(current, '/');
-            if (!slash || slash == current) current[1] = '\0';
-            else *slash = '\0';
+            if (!slash || slash == current)
+                current[1] = '\0';
+            else
+                *slash = '\0';
         }
     }
     free(current);
@@ -225,16 +233,15 @@ find_project_root(const char *cwd, char **root, char *error, size_t error_size)
 }
 
 static int
-walk_project_chain(struct snag_instruction_set *set, const char *root, const char *cwd,
-                   char *error, size_t error_size)
+walk_project_chain(struct snag_instruction_set *set, const char *root, const char *cwd, char *error,
+    size_t error_size)
 {
     char *current = snag_strdup_checked(cwd, SNAG_PATH_MAX_BYTES);
     size_t end = strlen(root);
     int rc = -1;
 
     if (!current) return -1;
-    if (strncmp(root, cwd, end) != 0 ||
-        (strcmp(root, "/") && cwd[end] && cwd[end] != '/')) {
+    if (strncmp(root, cwd, end) != 0 || (strcmp(root, "/") && cwd[end] && cwd[end] != '/')) {
         (void)snag_fail(error, error_size, EINVAL, "project root is not an ancestor of cwd");
         goto out;
     }
@@ -248,13 +255,14 @@ walk_project_chain(struct snag_instruction_set *set, const char *root, const cha
         end += strcspn(current + end, "/");
     }
     rc = 0;
-out: free(current);
+out:
+    free(current);
     return rc;
 }
 
 int
-snag_instructions_discover(struct snag_instruction_set *set, const char *cwd,
-                          char *error, size_t error_size)
+snag_instructions_discover(
+    struct snag_instruction_set *set, const char *cwd, char *error, size_t error_size)
 {
     char *global = NULL;
     char *canonical_cwd = NULL;
@@ -268,12 +276,14 @@ snag_instructions_discover(struct snag_instruction_set *set, const char *cwd,
     if (!global) goto out;
     if (snag_lstat(global, &st) == 0) {
         if (!S_ISDIR(st.st_mode) || S_ISLNK(st.st_mode)) {
-            (void)snag_fail(error, error_size, EINVAL, "instruction config root must be a real directory");
+            (void)snag_fail(
+                error, error_size, EINVAL, "instruction config root must be a real directory");
             goto out;
         }
         if (try_instruction_dir(set, global, error, error_size) < 0) goto out;
     } else if (errno != ENOENT) {
-        snag_errorf(error, error_size, "cannot inspect instruction config root: %s", strerror(errno));
+        snag_errorf(
+            error, error_size, "cannot inspect instruction config root: %s", strerror(errno));
         goto out;
     }
     canonical_cwd = snag_realpath(cwd);
@@ -284,9 +294,11 @@ snag_instructions_discover(struct snag_instruction_set *set, const char *cwd,
         goto out;
     }
     if (find_project_root(canonical_cwd, &project_root, error, error_size) < 0 ||
-        walk_project_chain(set, project_root, canonical_cwd, error, error_size) < 0) goto out;
+        walk_project_chain(set, project_root, canonical_cwd, error, error_size) < 0)
+        goto out;
     rc = 0;
-out: free(global);
+out:
+    free(global);
     free(canonical_cwd);
     free(project_root);
     if (rc < 0) snag_instructions_free(set);
@@ -320,17 +332,19 @@ snag_instructions_metadata_valid(const json_t *array, char *error, size_t error_
         const char *path = json_string_value(value);
         if (!snag_path_root_len(path) || strlen(path) > SNAG_PATH_MAX_BYTES ||
             json_string_length(value) != strlen(path) ||
-            !snag_utf8_valid((const unsigned char *)path, strlen(path), true)) goto invalid;
+            !snag_utf8_valid((const unsigned char *)path, strlen(path), true))
+            goto invalid;
         for (size_t j = 0; j < i; ++j)
             if (strcmp(json_string_value(json_array_get(array, j)), path) == 0) goto invalid;
     }
     return 0;
-invalid: return snag_fail(error, error_size, EINVAL, "invalid or duplicate instruction path metadata");
+invalid:
+    return snag_fail(error, error_size, EINVAL, "invalid or duplicate instruction path metadata");
 }
 
 int
-snag_instructions_match_metadata(const struct snag_instruction_set *set, const json_t *array,
-                                char *error, size_t error_size)
+snag_instructions_match_metadata(
+    const struct snag_instruction_set *set, const json_t *array, char *error, size_t error_size)
 {
     size_t count;
 
@@ -340,13 +354,13 @@ snag_instructions_match_metadata(const struct snag_instruction_set *set, const j
     for (size_t i = 0; set && i < set->count; ++i)
         if (strcmp(json_string_value(json_array_get(array, i)), set->paths[i]) != 0) goto mismatch;
     return 0;
-mismatch: return snag_fail(error, error_size, EINVAL,
-                "active turn instruction paths no longer match advertised paths");
+mismatch:
+    return snag_fail(error, error_size, EINVAL,
+        "active turn instruction paths no longer match advertised paths");
 }
 
 int
-snag_instructions_worknote(const char *cwd, char **note,
-                           char *error, size_t error_size)
+snag_instructions_worknote(const char *cwd, char **note, char *error, size_t error_size)
 {
     struct snag_instruction_set probe = {0};
     char *canonical_cwd = NULL;

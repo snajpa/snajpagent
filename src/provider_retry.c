@@ -16,9 +16,9 @@ snag_provider_http_status_retryable(long status)
 bool
 snag_provider_failure_retryable(long status, const char *code, const char *type)
 {
-    static const char *const transient[] = {
-        "server_error", "internal_server_error", "service_unavailable_error",
-        "server_is_overloaded", "rate_limit_exceeded", "rate_limit_error", "slow_down" };
+    static const char *const transient[] = {"server_error", "internal_server_error",
+        "service_unavailable_error", "server_is_overloaded", "rate_limit_exceeded",
+        "rate_limit_error", "slow_down"};
     const char *kinds[] = {code, type};
 
     if (status && !snag_provider_http_status_retryable(status)) return false;
@@ -27,7 +27,8 @@ snag_provider_failure_retryable(long status, const char *code, const char *type)
      * as upstream_error/server_error. Retry only an HTTP server response,
      * never an access denial or a streamed policy rejection. */
     if (status >= 500 && code && type && strcmp(code, "upstream_error") == 0 &&
-        strcmp(type, "server_error") == 0) return true;
+        strcmp(type, "server_error") == 0)
+        return true;
     for (size_t k = 0; k < sizeof(kinds) / sizeof(kinds[0]); ++k) {
         size_t i;
         if (!kinds[k] || !*kinds[k]) continue;
@@ -63,11 +64,13 @@ snag_provider_retry_after_parse(const unsigned char *value, size_t len, uint32_t
 }
 
 uint32_t
-snag_provider_retry_delay_ms(unsigned int retries_done, bool retry_after_present, uint32_t retry_after_ms)
+snag_provider_retry_delay_ms(
+    unsigned int retries_done, bool retry_after_present, uint32_t retry_after_ms)
 {
     uint32_t delay = SNAG_PROVIDER_BACKOFF_BASE_MS;
 
-    if (retry_after_present && retry_after_ms <= SNAG_PROVIDER_RETRY_AFTER_MAX_MS) return retry_after_ms;
+    if (retry_after_present && retry_after_ms <= SNAG_PROVIDER_RETRY_AFTER_MAX_MS)
+        return retry_after_ms;
     while (retries_done > 0u && delay < SNAG_PROVIDER_BACKOFF_MAX_MS) {
         if (delay > SNAG_PROVIDER_BACKOFF_MAX_MS / 2u) {
             delay = SNAG_PROVIDER_BACKOFF_MAX_MS;

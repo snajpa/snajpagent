@@ -29,7 +29,10 @@ struct snag_term_prompt {
 };
 
 enum snag_term_spinner_id {
-    SNAG_TERM_SPINNER_GOAL, SNAG_TERM_SPINNER_PROVIDER, SNAG_TERM_SPINNER_TOOL };
+    SNAG_TERM_SPINNER_GOAL,
+    SNAG_TERM_SPINNER_PROVIDER,
+    SNAG_TERM_SPINNER_TOOL
+};
 
 struct snag_prompt_clock {
     bool captured;
@@ -199,15 +202,17 @@ int snag_term_output_prepare(struct snag_term *term);
  * writes or input flush: draft, route and already admitted input are retained. */
 void snag_term_rebind(struct snag_term *term);
 int snag_term_attachment_modes(struct snag_term *term, bool enabled);
-int snag_term_set_destinations(struct snag_term *term, const struct snag_irc_destinations *destinations);
+int snag_term_set_destinations(
+    struct snag_term *term, const struct snag_irc_destinations *destinations);
 int snag_term_select_destination(struct snag_term *term, uint32_t id);
 void snag_term_destination_prefix(const struct snag_term *term, char *out, size_t size);
 void snag_term_conversation_label(const struct snag_irc_destinations *, const char *endpoint,
     const char *target, bool model_chat, char *out, size_t size);
-void snag_term_destination_route(const struct snag_term *term,
-                                 const char *text, struct snag_irc_route *route);
+void snag_term_destination_route(
+    const struct snag_term *term, const char *text, struct snag_irc_route *route);
 void snag_term_capture_prompt_clock(struct snag_term *term, time_t seconds);
-void snag_term_set_commands(struct snag_term *term, const struct snag_term_command *commands, size_t count);
+void snag_term_set_commands(
+    struct snag_term *term, const struct snag_term_command *commands, size_t count);
 int snag_term_open(struct snag_term *term, char *error, size_t error_size);
 void snag_term_close(struct snag_term *term);
 /* Emergency close: restore input immediately and skip terminal output that may
@@ -221,12 +226,11 @@ void snag_term_notify_resize(void);
 void snag_term_trace(const struct snag_term *term, const char *event, const char *source);
 
 int snag_term_set_prompt_template(struct snag_term *term, bool active, const char *label,
-                                 const char *const spinners[SNAG_TERM_SPINNER_COUNT],
-                                 uint32_t per_second, unsigned int states);
+    const char *const spinners[SNAG_TERM_SPINNER_COUNT], uint32_t per_second, unsigned int states);
 void snag_term_prompt_values(const struct snag_term_prompt *, const struct snag_term *,
     const struct snag_term *, const char *values[SNAG_PROMPT_FIELD_COUNT], char clock[3][12]);
-int snag_term_configure_prompt(struct snag_term *, const struct snag_term_prompt *,
-    const struct snag_term *context);
+int snag_term_configure_prompt(
+    struct snag_term *, const struct snag_term_prompt *, const struct snag_term *context);
 struct snag_term_prompt_row {
     size_t start, end, next, width;
     bool soft;
@@ -242,16 +246,16 @@ int snag_term_composer_frame(const char *, const char *, size_t length, size_t c
 int snag_term_composer_hit(const char *, const char *, size_t length, unsigned int columns,
     size_t frame_byte, size_t *source_byte);
 /* Shared visible draft range; terminal_rows includes the session surface only. */
-void snag_term_composer_viewport(size_t terminal_rows, size_t cursor_row, size_t end_row,
-    size_t *top, size_t *rows);
-struct snag_term_prompt_row snag_term_prompt_row(const struct snag_buf *, size_t,
-    unsigned int columns);
+void snag_term_composer_viewport(
+    size_t terminal_rows, size_t cursor_row, size_t end_row, size_t *top, size_t *rows);
+struct snag_term_prompt_row snag_term_prompt_row(
+    const struct snag_buf *, size_t, unsigned int columns);
 
 /* Format a prompt without terminal I/O; shared by terminal and workspace views. */
 int snag_term_animation_configure(struct snag_term_animation *, const char *,
-    const char *const [SNAG_TERM_SPINNER_COUNT], uint32_t rate, unsigned int states);
-int snag_term_animation_render(struct snag_term_animation *, uint64_t now,
-    char label[SNAG_TERM_LABEL_BYTES]);
+    const char *const[SNAG_TERM_SPINNER_COUNT], uint32_t rate, unsigned int states);
+int snag_term_animation_render(
+    struct snag_term_animation *, uint64_t now, char label[SNAG_TERM_LABEL_BYTES]);
 /* Zero means static; otherwise an absolute monotonic time for the next paint. */
 uint64_t snag_term_animation_due(const struct snag_term_animation *, uint64_t now);
 int snag_term_set_spinner_states(struct snag_term *term, unsigned int states);
@@ -259,8 +263,9 @@ int snag_term_hide(struct snag_term *term);
 int snag_term_output_begin(struct snag_term *term);
 int snag_term_output_end(struct snag_term *term);
 int snag_term_poll(struct snag_term *term, int timeout_ms, snag_wake_fd wake_fd,
-                  enum snag_term_action *action, char **text);
-int snag_term_history_set(struct snag_term *term, struct snag_history_snapshot *snapshot, bool refresh);
+    enum snag_term_action *action, char **text);
+int snag_term_history_set(
+    struct snag_term *term, struct snag_history_snapshot *snapshot, bool refresh);
 int snag_term_restore_draft(struct snag_term *term, const char *text);
 int snag_term_swap_draft(struct snag_term *, struct snag_buf *, size_t *);
 int snag_term_insert_draft(struct snag_term *, const char *);

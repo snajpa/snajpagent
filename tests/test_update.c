@@ -37,7 +37,8 @@ main(int argc, char **argv)
     if (update) {
         int timeout = atoi(argv[2]);
         assert(snag_wakeup_wait(wake[0], timeout) >= 0);
-        const char *banner = getenv("SNAJPAGENT_TEST_STOP_BANNER") ? NULL : snag_update_take(update);
+        const char *banner =
+            getenv("SNAJPAGENT_TEST_STOP_BANNER") ? NULL : snag_update_take(update);
         if (banner) {
             fputs(banner, stderr);
             assert(snag_update_take(update) == NULL);

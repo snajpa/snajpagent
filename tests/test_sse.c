@@ -63,32 +63,29 @@ test_streams(void)
         size_t split;
         struct capture expected;
     } cases[] = {
-        {
-            "id: one\r\nevent: response.output_text.delta\r\ndata: {\"delta\":\"ha\"}\r"
-            "\ndata: {\"delta\":\"ha\"}\r\nretry: 1000\r\n\r\n",
-            sizeof("id: one\r\nevent: response.output_text.delta\r\ndata: {\"delta\":\"ha\"}\r") - 1u,
-            {1u, 0u, "response.output_text.delta", "one", "{\"delta\":\"ha\"}\n{\"delta\":\"ha\"}"}
-        },
-        {
-            ": keepalive\n\nid: stable\n\nevent: empty\ndata:\n\n" "data:\ndata:\n\ndata: final\n\n",
-            0u, {3u, 1u, "", "stable", "final"}
-        },
-        {
-            "data: {\"delta\":\"\xe2\x82\xac\"}\n\n"
-            "data: {\"delta\":\"ha\"}\n\ndata: {\"delta\":\"ha\"}\n\n",
-            18u, {3u, 0u, "", "", "{\"delta\":\"ha\"}"}
-        }
-    };
+        {"id: one\r\nevent: response.output_text.delta\r\ndata: {\"delta\":\"ha\"}\r"
+         "\ndata: {\"delta\":\"ha\"}\r\nretry: 1000\r\n\r\n",
+            sizeof("id: one\r\nevent: response.output_text.delta\r\ndata: {\"delta\":\"ha\"}\r") -
+                1u,
+            {1u, 0u, "response.output_text.delta", "one",
+                "{\"delta\":\"ha\"}\n{\"delta\":\"ha\"}"}},
+        {": keepalive\n\nid: stable\n\nevent: empty\ndata:\n\n"
+         "data:\ndata:\n\ndata: final\n\n",
+            0u, {3u, 1u, "", "stable", "final"}},
+        {"data: {\"delta\":\"\xe2\x82\xac\"}\n\n"
+         "data: {\"delta\":\"ha\"}\n\ndata: {\"delta\":\"ha\"}\n\n",
+            18u, {3u, 0u, "", "", "{\"delta\":\"ha\"}"}}};
     for (size_t i = 0u; i < sizeof(cases) / sizeof(cases[0]); ++i) {
         struct snag_sse_parser parser;
         struct capture capture = {0};
         char error[128] = {0};
 
         snag_sse_init(&parser, capture_record, &capture);
-        if (cases[i].split) assert(snag_sse_feed(&parser, cases[i].wire, cases[i].split,
-                                error, sizeof(error)) == 0);
-        assert(snag_sse_feed(&parser, cases[i].wire + cases[i].split, strlen(cases[i].wire) - cases[i].split,
-                            error, sizeof(error)) == 0);
+        if (cases[i].split)
+            assert(
+                snag_sse_feed(&parser, cases[i].wire, cases[i].split, error, sizeof(error)) == 0);
+        assert(snag_sse_feed(&parser, cases[i].wire + cases[i].split,
+                   strlen(cases[i].wire) - cases[i].split, error, sizeof(error)) == 0);
         assert(snag_sse_finish(&parser, error, sizeof(error)) == 0);
         assert(capture.events == cases[i].expected.events);
         assert(capture.comments == cases[i].expected.comments);
@@ -134,8 +131,7 @@ test_bounds(void)
 
     memset(error, 0, sizeof(error));
     snag_sse_init(&parser, NULL, NULL);
-    assert(snag_sse_feed(&parser, "event: private_request_text\n", 28u,
-                         error, sizeof(error)) == 0);
+    assert(snag_sse_feed(&parser, "event: private_request_text\n", 28u, error, sizeof(error)) == 0);
     assert(snag_sse_feed(&parser, input, SNAG_MAX_SSE_EVENT + 1u, error, sizeof(error)) < 0);
     assert(strstr(error, "SSE unknown line exceeds 1 MiB"));
     assert(!strstr(error, "private_request_text"));
@@ -175,8 +171,7 @@ test_chunked_large_line(void)
     line[6u + RUN] = '\r';
     snag_sse_init(&parser, count_record, &count);
     assert(snag_sse_feed(&parser, line, 6u + RUN / 2u, error, sizeof(error)) == 0);
-    assert(snag_sse_feed(&parser, line + 6u + RUN / 2u, RUN / 2u + 1u,
-                         error, sizeof(error)) == 0);
+    assert(snag_sse_feed(&parser, line + 6u + RUN / 2u, RUN / 2u + 1u, error, sizeof(error)) == 0);
     assert(snag_sse_feed(&parser, "\n\r\n", 3u, error, sizeof(error)) == 0);
     assert(snag_sse_finish(&parser, error, sizeof(error)) == 0);
     assert(count == 1u);
@@ -204,12 +199,10 @@ test_failures(void)
     struct bad_case {
         const unsigned char *data;
         size_t len;
-    } cases[] = {
-        {bare_cr, sizeof(bare_cr) - 1u}, {nul, sizeof(nul) - 1u},
+    } cases[] = {{bare_cr, sizeof(bare_cr) - 1u}, {nul, sizeof(nul) - 1u},
         {invalid_utf8, sizeof(invalid_utf8)}, {retry, sizeof(retry) - 1u},
         {truncated, sizeof(truncated) - 1u}, {event_only, sizeof(event_only) - 1u},
-        {cr_at_eof, sizeof(cr_at_eof) - 1u}
-    };
+        {cr_at_eof, sizeof(cr_at_eof) - 1u}};
 
     for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
         struct snag_sse_parser parser;

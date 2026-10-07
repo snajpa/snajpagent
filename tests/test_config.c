@@ -60,27 +60,28 @@ test_clipboard_setting(const char *path)
         assert(config.terminal_clipboard == (enum snag_clipboard_policy)i);
         snag_config_free(&config);
         enum snag_clipboard_policy policy;
-        assert(snag_config_terminal(path, NULL, directory, sizeof(directory), &policy,
-            error, sizeof(error)) == 0);
+        assert(snag_config_terminal(
+                   path, NULL, directory, sizeof(directory), &policy, error, sizeof(error)) == 0);
         assert(policy == (enum snag_clipboard_policy)i && !strcmp(directory, "~/Downloads"));
     }
-    const char *invalid[] = {"[terminal]\nclipboard=auto\n",
-        "[terminal]\nclipboard=off\nclipboard=native\n"};
+    const char *invalid[] = {
+        "[terminal]\nclipboard=auto\n", "[terminal]\nclipboard=off\nclipboard=native\n"};
     for (size_t i = 0u; i < sizeof(invalid) / sizeof(invalid[0]); ++i) {
         write_bytes(path, invalid[i], strlen(invalid[i]));
         expect_invalid(path);
         char directory[128], error[256] = "";
         enum snag_clipboard_policy policy;
-        assert(snag_config_terminal(path, NULL, directory, sizeof(directory), &policy,
-            error, sizeof(error)) < 0 && *error);
+        assert(snag_config_terminal(
+                   path, NULL, directory, sizeof(directory), &policy, error, sizeof(error)) < 0 &&
+               *error);
     }
     const char *isolated = "[provider incomplete]\nnot an agent setting\n"
-        "[terminal]\ndownload_dir=~/Incoming\n";
+                           "[terminal]\ndownload_dir=~/Incoming\n";
     write_bytes(path, isolated, strlen(isolated));
     char directory[128], error[256] = "";
     enum snag_clipboard_policy policy;
-    assert(snag_config_terminal(path, NULL, directory, sizeof(directory), &policy,
-        error, sizeof(error)) == 0);
+    assert(snag_config_terminal(
+               path, NULL, directory, sizeof(directory), &policy, error, sizeof(error)) == 0);
     assert(policy == SNAG_CLIP_NATIVE && !strcmp(directory, "~/Incoming"));
 }
 
@@ -110,10 +111,10 @@ test_model_steering(const char *path)
     const struct snag_model_limit_config *entry;
     char error[256] = {0};
     const char *valid = "[provider p]\n"
-        "[model-limit p/m]\nsteering = all\n"
-        "[model-limit p/other]\nsteering=mentions\n"
-        "[model-limit p]\ncontext_window_tokens=1000\n"
-        "[model-limit p/m*]\nmax_input_tokens=500\n";
+                        "[model-limit p/m]\nsteering = all\n"
+                        "[model-limit p/other]\nsteering=mentions\n"
+                        "[model-limit p]\ncontext_window_tokens=1000\n"
+                        "[model-limit p/m*]\nmax_input_tokens=500\n";
     const char *invalid[] = {"sometimes", "ALL", "Mentions"};
 
     write_bytes(path, valid, strlen(valid));
@@ -135,8 +136,8 @@ test_model_steering(const char *path)
     snag_config_free(&config);
     for (size_t i = 0; i < sizeof(invalid) / sizeof(invalid[0]); ++i) {
         char text[512];
-        int n = snprintf(text, sizeof(text),
-            "[provider p]\n[model-limit p/m]\nsteering=%s\n", invalid[i]);
+        int n = snprintf(
+            text, sizeof(text), "[provider p]\n[model-limit p/m]\nsteering=%s\n", invalid[i]);
         assert(n > 0 && (size_t)n < sizeof(text));
         write_bytes(path, text, (size_t)n);
         expect_invalid(path);
@@ -151,9 +152,9 @@ test_configured_efforts(const char *path)
     const struct snag_model_limit_config *sources[3];
     char error[256] = {0};
     const char *valid = "[provider p]\n[model-limit p/m]\n"
-        "reasoning_efforts = [\"none\", \"low\", \"high\", \"max\"]\n"
-        "[model-limit p]\nreasoning_efforts=[\"broad\"]\n"
-        "[model-limit p/m*]\nreasoning_efforts=[\"pattern\"]\n";
+                        "reasoning_efforts = [\"none\", \"low\", \"high\", \"max\"]\n"
+                        "[model-limit p]\nreasoning_efforts=[\"broad\"]\n"
+                        "[model-limit p/m*]\nreasoning_efforts=[\"pattern\"]\n";
     const char *invalid[] = {"[]", "null", "{}", "[1]", "[\"\"]", "[\"high\",\"high\"]",
         "[\"low\",]", "[\"a\\u0000b\"]", "[\"bad\\nvalue\"]", "[\"a/b\"]", "[\" low\"]",
         "[\"low\"]\nreasoning_efforts=[\"max\"]"};
@@ -177,16 +178,19 @@ test_configured_efforts(const char *path)
     snag_config_free(&config);
     for (size_t i = 0; i < sizeof(invalid) / sizeof(invalid[0]); ++i) {
         char text[512];
-        int n = snprintf(text, sizeof(text), "[provider p]\n[model-limit p/m]\nreasoning_efforts=%s\n", invalid[i]);
+        int n = snprintf(text, sizeof(text),
+            "[provider p]\n[model-limit p/m]\nreasoning_efforts=%s\n", invalid[i]);
         assert(n > 0 && (size_t)n < sizeof(text));
         write_bytes(path, text, (size_t)n);
         expect_invalid(path);
     }
     for (size_t count = 32u; count <= 64u; count += 32u) {
         char text[4096];
-        size_t used = (size_t)snprintf(text, sizeof(text), "[provider p]\n[model-limit p/m]\nreasoning_efforts=[");
+        size_t used = (size_t)snprintf(
+            text, sizeof(text), "[provider p]\n[model-limit p/m]\nreasoning_efforts=[");
         for (size_t i = 0; i < count; ++i)
-            used += (size_t)snprintf(text + used, sizeof(text) - used, "%s\"effort-%zu\"", i ? "," : "", i);
+            used += (size_t)snprintf(
+                text + used, sizeof(text) - used, "%s\"effort-%zu\"", i ? "," : "", i);
         used += (size_t)snprintf(text + used, sizeof(text) - used, "]\n");
         write_bytes(path, text, used);
         load_config(&config, path, NULL);
@@ -195,13 +199,16 @@ test_configured_efforts(const char *path)
     }
     for (size_t len = SNAG_CONFIG_EFFORT_MAX - 1u; len <= SNAG_CONFIG_EFFORT_MAX; ++len) {
         char text[512], effort[SNAG_CONFIG_EFFORT_MAX + 1u];
-        memset(effort, 'x', len); effort[len] = '\0';
-        int n = snprintf(text, sizeof(text), "[provider p]\n[model-limit p/m]\nreasoning_efforts=[\"%s\"]\n", effort);
+        memset(effort, 'x', len);
+        effort[len] = '\0';
+        int n = snprintf(text, sizeof(text),
+            "[provider p]\n[model-limit p/m]\nreasoning_efforts=[\"%s\"]\n", effort);
         write_bytes(path, text, (size_t)n);
         if (len < SNAG_CONFIG_EFFORT_MAX) {
             load_config(&config, path, NULL);
             snag_config_free(&config);
-        } else expect_invalid(path);
+        } else
+            expect_invalid(path);
     }
 }
 
@@ -211,54 +218,52 @@ test_model_execution(const char *path)
     struct snag_config config;
     struct snag_execution_config execution;
     char error[256] = {0};
-    static const char valid[] =
-        "[tool]\n"
-        "default_yield_ms=10\nmax_wait_ms=100\nmax_parallel_commands=1\n"
-        "default_timeout_ms=20\nmax_timeout_ms=200\nmax_output_tokens=300\n"
-        "output_cache_bytes=400\n"
-        "[provider p]\n"
-        "[model-limit p]\n"
-        "default_yield_ms=100\nmax_wait_ms=1000\nmax_parallel_commands=2\n"
-        "default_timeout_ms=2000\nmax_timeout_ms=5000\n"
-        "tool_output_bytes=700\noutput_cache_bytes=800\n"
-        "[model-limit p/m*]\n"
-        "default_yield_ms=200\nmax_wait_ms=2000\nmax_parallel_commands=3\n"
-        "max_timeout_ms=6000\ntool_output_bytes=900\n"
-        "[model-limit p/model]\n"
-        "default_yield_ms=300\nmax_parallel_commands=4\n"
-        "default_timeout_ms=3000\noutput_cache_bytes=1000\n";
+    static const char valid[] = "[tool]\n"
+                                "default_yield_ms=10\nmax_wait_ms=100\nmax_parallel_commands=1\n"
+                                "default_timeout_ms=20\nmax_timeout_ms=200\nmax_output_tokens=300\n"
+                                "output_cache_bytes=400\n"
+                                "[provider p]\n"
+                                "[model-limit p]\n"
+                                "default_yield_ms=100\nmax_wait_ms=1000\nmax_parallel_commands=2\n"
+                                "default_timeout_ms=2000\nmax_timeout_ms=5000\n"
+                                "tool_output_bytes=700\noutput_cache_bytes=800\n"
+                                "[model-limit p/m*]\n"
+                                "default_yield_ms=200\nmax_wait_ms=2000\nmax_parallel_commands=3\n"
+                                "max_timeout_ms=6000\ntool_output_bytes=900\n"
+                                "[model-limit p/model]\n"
+                                "default_yield_ms=300\nmax_parallel_commands=4\n"
+                                "default_timeout_ms=3000\noutput_cache_bytes=1000\n";
     static const char *const invalid[] = {
         "[provider p]\n[model-limit p/m]\ndefault_yield_ms=2\nmax_wait_ms=1\n",
         "[provider p]\n[model-limit p/m]\ndefault_timeout_ms=2\nmax_timeout_ms=1\n",
         "[provider p]\n[model-limit p/m]\ntool_output_bytes=0\n",
-        "[provider p]\n[model-limit p/m]\noutput_cache_bytes=67108865\n"
-    };
+        "[provider p]\n[model-limit p/m]\noutput_cache_bytes=67108865\n"};
 
     write_bytes(path, valid, sizeof(valid) - 1u);
     load_config(&config, path, NULL);
-    assert(snag_config_resolve_execution(&config, "p", "other", &execution,
-                                         error, sizeof(error)) == 0);
+    assert(snag_config_resolve_execution(&config, "p", "other", &execution, error, sizeof(error)) ==
+           0);
     assert(execution.default_yield_ms == 100u && execution.max_wait_ms == 1000u);
     assert(execution.max_parallel_commands == 2u);
     assert(execution.default_timeout_ms == 2000u && execution.max_timeout_ms == 5000u);
     assert(execution.tool_output_bytes == 700u && execution.output_cache_bytes == 800u);
 
-    assert(snag_config_resolve_execution(&config, "p", "match", &execution,
-                                         error, sizeof(error)) == 0);
+    assert(snag_config_resolve_execution(&config, "p", "match", &execution, error, sizeof(error)) ==
+           0);
     assert(execution.default_yield_ms == 200u && execution.max_wait_ms == 2000u);
     assert(execution.max_parallel_commands == 3u);
     assert(execution.default_timeout_ms == 2000u && execution.max_timeout_ms == 6000u);
     assert(execution.tool_output_bytes == 900u && execution.output_cache_bytes == 800u);
 
-    assert(snag_config_resolve_execution(&config, "p", "model", &execution,
-                                         error, sizeof(error)) == 0);
+    assert(snag_config_resolve_execution(&config, "p", "model", &execution, error, sizeof(error)) ==
+           0);
     assert(execution.default_yield_ms == 300u && execution.max_wait_ms == 2000u);
     assert(execution.max_parallel_commands == 4u);
     assert(execution.default_timeout_ms == 3000u && execution.max_timeout_ms == 6000u);
     assert(execution.tool_output_bytes == 900u && execution.output_cache_bytes == 1000u);
 
-    assert(snag_config_resolve_execution(&config, "other", "model", &execution,
-                                         error, sizeof(error)) == 0);
+    assert(snag_config_resolve_execution(
+               &config, "other", "model", &execution, error, sizeof(error)) == 0);
     assert(execution.default_yield_ms == 10u && execution.max_wait_ms == 100u);
     assert(execution.max_parallel_commands == 1u);
     assert(execution.default_timeout_ms == 20u && execution.max_timeout_ms == 200u);
@@ -306,28 +311,26 @@ test_numeric_settings(const char *path)
         unsigned int target;
         uint32_t initial;
         size_t first, end, count, capacity;
-    } cases[] = {
-        {"[provider first]\nauto_compact_input_tokens=%s\n[provider second]\n", NULL,
-         {"auto", "0", "1", "120000", "4000000", "4000001", "4294967295", "-1",
-          "90%", "automatic", "auto\nauto_compact_input_tokens=1"},
-         0u, SNAG_CONFIG_COMPACT_AUTO, 0u, 5u, 11u, 256u},
+    } cases[] = {{"[provider first]\nauto_compact_input_tokens=%s\n[provider second]\n", NULL,
+                     {"auto", "0", "1", "120000", "4000000", "4000001", "4294967295", "-1", "90%",
+                         "automatic", "auto\nauto_compact_input_tokens=1"},
+                     0u, SNAG_CONFIG_COMPACT_AUTO, 0u, 5u, 11u, 256u},
         {"[tool]\nmax_parallel_commands=%s\n[provider openai]\nparallel_tool_calls=false\n",
-         "[tool]\nmax_parallel_commands=4\nmax_parallel_commands=2\n",
-         {"0", "1", "4", "32", "33", "4294967295", "4294967296", "-1", "no"},
-         1u, 4u, 1u, 6u, 9u, 128u},
+            "[tool]\nmax_parallel_commands=4\nmax_parallel_commands=2\n",
+            {"0", "1", "4", "32", "33", "4294967295", "4294967296", "-1", "no"}, 1u, 4u, 1u, 6u, 9u,
+            128u},
         {"[tool]\nmax_wait_ms=%s\n", "[tool]\nmax_wait_ms=1\nmax_wait_ms=2\n",
-         {"1", "60000", "4294967295", "0", "-1", "4294967296", "never"},
-         2u, 60000u, 0u, 3u, 7u, 96u},
+            {"1", "60000", "4294967295", "0", "-1", "4294967296", "never"}, 2u, 60000u, 0u, 3u, 7u,
+            96u},
         {"[agent]\nmax_turn_retries=%s\n", "[agent]\nmax_turn_retries=3\nmax_turn_retries=0\n",
-         {"0", "1", "3", "17", "4294967295", "4294967296", "-1", "3.5", "never"},
-         3u, 5u, 0u, 5u, 9u, 96u},
+            {"0", "1", "3", "17", "4294967295", "4294967296", "-1", "3.5", "never"}, 3u, 5u, 0u, 5u,
+            9u, 96u},
         {"[tool]\nmax_wait_ms=4294967295\ndefault_yield_ms=%s\n", NULL,
-         {"0", "1000", "600000", "4294967295", "4294967296", "-1", "never"},
-         4u, 10000u, 0u, 4u, 7u, 128u},
+            {"0", "1000", "600000", "4294967295", "4294967296", "-1", "never"}, 4u, 10000u, 0u, 4u,
+            7u, 128u},
         {"[tool]\noutput_cache_bytes=%s\n", NULL,
-         {"0", "1", "1048576", "67108864", "67108865", "4294967295", "-1", "never"},
-         5u, 1048576u, 0u, 4u, 8u, 96u}
-    };
+            {"0", "1", "1048576", "67108864", "67108865", "4294967295", "-1", "never"}, 5u,
+            1048576u, 0u, 4u, 8u, 96u}};
     for (size_t c = 0u; c < sizeof(cases) / sizeof(cases[0]); ++c) {
         for (size_t i = 0u; i < cases[c].count; ++i) {
             char text[256], error[256] = {0};
@@ -340,13 +343,16 @@ test_numeric_settings(const char *path)
             value = numeric_target(&config, cases[c].target);
             assert(*value == cases[c].initial);
             bool valid = i >= cases[c].first && i < cases[c].end;
-            assert((snag_config_load(&config, path, c == 3u ? (getenv("TMPDIR") ? getenv("TMPDIR") : "/tmp") : NULL,
-                                    error, sizeof(error)) == 0) == valid);
+            assert((snag_config_load(&config, path,
+                        c == 3u ? (getenv("TMPDIR") ? getenv("TMPDIR") : "/tmp") : NULL, error,
+                        sizeof(error)) == 0) == valid);
             if (valid) {
-                assert(*value == (!strcmp(cases[c].values[i], "auto") ?
-                    SNAG_CONFIG_COMPACT_AUTO : (uint32_t)strtoul(cases[c].values[i], NULL, 10)));
+                assert(*value == (!strcmp(cases[c].values[i], "auto")
+                                         ? SNAG_CONFIG_COMPACT_AUTO
+                                         : (uint32_t)strtoul(cases[c].values[i], NULL, 10)));
                 if (c == 0u)
-                    assert(config.providers[1].auto_compact_input_tokens == SNAG_CONFIG_COMPACT_AUTO);
+                    assert(
+                        config.providers[1].auto_compact_input_tokens == SNAG_CONFIG_COMPACT_AUTO);
                 if (c == 1u) assert(!config.providers[0].parallel_tool_calls);
             } else {
                 assert(error[0]);
@@ -380,7 +386,8 @@ test_auth_settings(const char *path)
     strcpy(provider.base_url, "https://openrouter.ai/api/v1");
     provider.auth = SNAG_AUTH_API_KEY;
     provider.native_compaction = false;
-    assert(snag_config_save_provider(path, false, &provider, NULL, NULL, error, sizeof(error)) == 0);
+    assert(
+        snag_config_save_provider(path, false, &provider, NULL, NULL, error, sizeof(error)) == 0);
     assert(snag_config_load(&config, path, NULL, error, sizeof(error)) == 0);
     assert(config.provider_count == 1u);
     assert(strcmp(config.providers[0].name, "openrouter") == 0);
@@ -393,8 +400,8 @@ test_auth_settings(const char *path)
     assert(snag_config_validate_provider(&provider, error, sizeof(error)) < 0);
     strcpy(provider.base_url, SNAG_CHATGPT_BASE);
     assert(snag_config_validate_provider(&provider, error, sizeof(error)) == 0);
-    assert(snag_config_save_provider(path, false, &provider, "chosen/model", "high",
-                                     error, sizeof(error)) == 0);
+    assert(snag_config_save_provider(
+               path, false, &provider, "chosen/model", "high", error, sizeof(error)) == 0);
     load_config(&config, path, NULL);
     assert(config.provider_count == 1u);
     assert(config.providers[0].auth == SNAG_AUTH_CHATGPT);
@@ -417,46 +424,52 @@ test_auth_settings(const char *path)
     assert(snag_config_validate_provider(&provider, error, sizeof(error)) == 0);
     strcpy(provider.base_url, SNAG_META_BASE_BARE);
     assert(snag_config_validate_provider(&provider, error, sizeof(error)) == 0);
-    assert(snag_config_save_provider(path, false, &provider, NULL, NULL, error, sizeof(error)) == 0);
+    assert(
+        snag_config_save_provider(path, false, &provider, NULL, NULL, error, sizeof(error)) == 0);
     load_config(&config, path, NULL);
     assert(config.providers[0].auth == SNAG_AUTH_META);
     assert(strcmp(config.providers[0].base_url, SNAG_META_BASE_BARE) == 0);
     snag_config_free(&config);
 
     /* Model edits preserve original bytes, including comments and line endings. */
-    static const struct { const char *input, *output; } edits[] = {
-        {"[agent]\r\n# model = ignored\r\n model \t= old\r\n",
-         "[agent]\r\n# model = ignored\r\nmodel = new\r\nprovider = default\nreasoning_effort = high\n"},
+    static const struct {
+        const char *input, *output;
+    } edits[] = {{"[agent]\r\n# model = ignored\r\n model \t= old\r\n",
+                     "[agent]\r\n# model = ignored\r\nmodel = new\r\nprovider = "
+                     "default\nreasoning_effort = high\n"},
         {"[agent]\nprovider=default\nmodel=old\nreasoning_effort=low",
-         "[agent]\nprovider = default\nmodel = new\nreasoning_effort = high\n"}, {"[agent]\n[ui]\n",
-         "[agent]\nprovider = default\nmodel = new\nreasoning_effort = high\n[ui]\n"},
+            "[agent]\nprovider = default\nmodel = new\nreasoning_effort = high\n"},
+        {"[agent]\n[ui]\n",
+            "[agent]\nprovider = default\nmodel = new\nreasoning_effort = high\n[ui]\n"},
         {"[ui]", "[ui]\n[agent]\nprovider = default\nmodel = new\nreasoning_effort = high\n"},
-        {"[agent]", "[agent]\nprovider = default\nmodel = new\nreasoning_effort = high\n"}
-    };
+        {"[agent]", "[agent]\nprovider = default\nmodel = new\nreasoning_effort = high\n"}};
     for (size_t i = 0u; i < sizeof(edits) / sizeof(edits[0]); ++i) {
         char input[512], expected[512], actual[512];
         int n = snprintf(input, sizeof(input), "[provider default]\n%s", edits[i].input);
         int want = snprintf(expected, sizeof(expected), "[provider default]\n%s", edits[i].output);
         assert(n > 0 && n < (int)sizeof(input) && want > 0 && want < (int)sizeof(expected));
         write_bytes(path, input, (size_t)n);
-        assert(snag_config_save_model(path, false, "default", "new", "high", error, sizeof(error)) == 0);
+        assert(snag_config_save_model(
+                   path, false, "default", "new", "high", error, sizeof(error)) == 0);
         int fd = open(path, O_RDONLY);
         assert(fd >= 0 && read(fd, actual, sizeof(actual)) == want && close(fd) == 0);
         assert(memcmp(actual, expected, (size_t)want) == 0);
     }
 
     /* Both writers must reject the same cross-field errors as loading. */
-    const char *invalid_save[] = {
-        invalid, "[model-limit default/model]\ncontext_window_tokens=100\nmax_input_tokens=101\n",
-        "[model-limit missing/model]\nmax_input_tokens=1\n" };
+    const char *invalid_save[] = {invalid,
+        "[model-limit default/model]\ncontext_window_tokens=100\nmax_input_tokens=101\n",
+        "[model-limit missing/model]\nmax_input_tokens=1\n"};
     for (size_t i = 0u; i < sizeof(invalid_save) / sizeof(invalid_save[0]); ++i) {
         struct stat before, after;
         char bytes[256];
         size_t len = strlen(invalid_save[i]);
         write_bytes(path, invalid_save[i], len);
         assert(stat(path, &before) == 0);
-        assert(snag_config_save_model(path, false, "default", "new", "high", error, sizeof(error)) < 0);
-        assert(snag_config_save_provider(path, false, &provider, NULL, NULL, error, sizeof(error)) < 0);
+        assert(snag_config_save_model(path, false, "default", "new", "high", error, sizeof(error)) <
+               0);
+        assert(snag_config_save_provider(path, false, &provider, NULL, NULL, error, sizeof(error)) <
+               0);
         assert(stat(path, &after) == 0 && before.st_ino == after.st_ino);
         int fd = open(path, O_RDONLY);
         assert(fd >= 0 && read(fd, bytes, sizeof(bytes)) == (ssize_t)len);
@@ -467,22 +480,24 @@ test_auth_settings(const char *path)
 static void
 test_layered_limits_and_secrets(const char *path)
 {
-    static const char text[] = "[model-limit codex-lb/gpt-6-astra]\nmax_output_tokens=16000\n"
+    static const char text[] =
+        "[model-limit codex-lb/gpt-6-astra]\nmax_output_tokens=16000\n"
         "[model-limit codex-lb]\ncontext_window_tokens=500000\nimage_tokens=700\n"
-        "[model-limit codex-lb/gpt-*]\nmax_input_tokens=450000\nmax_output_tokens=32000\nimage_tokens=800\n"
+        "[model-limit "
+        "codex-lb/gpt-*]\nmax_input_tokens=450000\nmax_output_tokens=32000\nimage_tokens=800\n"
         "[model-limit codex-lb/gpt-6-*]\nmax_input_tokens=460000\n"
         "[model-limit codex-lb/small*]\nmax_output_tokens=8000\nimage_tokens=850\n"
         "[model-limit codex-lb/small]\ncontext_window_tokens=128000\nimage_tokens=900\n"
         "[model-alias codex-lb/small]\nmodel=gpt-6-astra\n"
         "[model-alias codex-lb/large]\nmodel=gpt-6-astra\n"
-        "[provider codex-lb]\napi_key=${CODEX_LB_API_KEY}\n" "[provider default]\napi_key=./keys/key\n"
+        "[provider codex-lb]\napi_key=${CODEX_LB_API_KEY}\n"
+        "[provider default]\napi_key=./keys/key\n"
         "[model-alias default/small]\nmodel=org/model\n"
         "[model-limit default/org/*]\ncontext_window_tokens=64000\n"
         "[model-limit default/only-image]\nimage_tokens=1025\n"
         "[tool]\nsecret=${ONE}\nsecret=./file key\nsecret=\"${literal}\"\n";
-    static const char *const invalid[] = {
-        "[provider]\n", "[provider:first]\n", "[provider p]\napi_key_env=OLD\n",
-        "[provider p]\nauth=env\n", "[tool]\nsecret_env=OLD\n",
+    static const char *const invalid[] = {"[provider]\n", "[provider:first]\n",
+        "[provider p]\napi_key_env=OLD\n", "[provider p]\nauth=env\n", "[tool]\nsecret_env=OLD\n",
         "[provider p]\n[model-limit p]\n", "[model-limit missing]\nmax_input_tokens=1\n",
         "[provider p]\n[model-limit p]\nmax_input_tokens=1\n[model-limit p]\nmax_output_tokens=2\n",
         "[provider p]\n[model-limit p/*]\nmax_input_tokens=1\nmax_input_tokens=2\n",
@@ -491,7 +506,7 @@ test_layered_limits_and_secrets(const char *path)
         "[provider p]\n[model-alias p/a/b]\nmodel=m\n",
         "[provider p]\n[model-limit p]\nimage_tokens=0\n",
         "[provider p]\n[model-limit p]\nimage_tokens=4000000001\n",
-        "[provider p]\n[model-limit p]\nimage_tokens=1\nimage_tokens=2\n" };
+        "[provider p]\n[model-limit p]\nimage_tokens=1\nimage_tokens=2\n"};
     struct snag_config config;
     struct snag_model_limit_config limits;
     const struct snag_model_limit_config *sources[3];
@@ -534,7 +549,8 @@ test_layered_limits_and_secrets(const char *path)
         expect_invalid(path);
     }
     {
-        const char literal_targets[] = "[provider p]\n[model-alias p/a]\nmodel=b\n"
+        const char literal_targets[] =
+            "[provider p]\n[model-alias p/a]\nmodel=b\n"
             "[model-alias p/b]\nmodel=c\n[model-alias p/self]\nmodel=self\n";
         write_bytes(path, literal_targets, sizeof(literal_targets) - 1u);
         load_config(&config, path, NULL);
@@ -552,37 +568,36 @@ test_prompt_numbers(const char *path)
         "p", "m", "e", "op", "host", "0", "chat", "0", "agent", "session", "3", "7", "9"};
     static const char *const contexts[] = {"0", "9", "10", "99", "100", "?"};
     static const char *const padded[] = {"  0% ", "  9% ", " 10% ", " 99% ", "100% ", "  ?% "};
-    static const char *const invalid[] = {
-        "time", "context:", "context:0", "context:04", "hour:0", "hour:00",
-        "hour:002", "hour:-2", "hour:+2", "minute: 2", "second:2 ",
-        "hour:2:2", "context:511", "hour:0511", "context:99999999999999999999",
-        "model:2", "provider:2", "mode:2", "goal_spinner:1",
-        "activity_spinner:1", "provider_spinner", "tool_spinner", "host:2", "operator:2",
-        "effort:2", "queue:02", "model_nick:2", "session_name:2"};
+    static const char *const invalid[] = {"time", "context:", "context:0", "context:04", "hour:0",
+        "hour:00", "hour:002", "hour:-2", "hour:+2", "minute: 2", "second:2 ", "hour:2:2",
+        "context:511", "hour:0511", "context:99999999999999999999", "model:2", "provider:2",
+        "mode:2", "goal_spinner:1", "activity_spinner:1", "provider_spinner", "tool_spinner",
+        "host:2", "operator:2", "effort:2", "queue:02", "model_nick:2", "session_name:2"};
     char label[SNAG_TERM_LABEL_BYTES], template[256];
 
     const char identities[] = "{operator}|{model_nick}|{session_name}|{model}"
-        "{chat:C}{rollout-idle:I}{rollout-active:A}";
+                              "{chat:C}{rollout-idle:I}{rollout-active:A}";
     expect_ui(path, "prompt", identities, true);
     values[SNAG_PROMPT_SESSION_NAME] = "build {literal} α";
     for (unsigned int mode = 0u; mode < 3u; ++mode) {
-        assert(snag_config_prompt_expand(identities, mode, values, 0xfdu,
-            label, sizeof(label)) == 0);
+        assert(
+            snag_config_prompt_expand(identities, mode, values, 0xfdu, label, sizeof(label)) == 0);
         assert(strncmp(label, "op|agent|build {literal} α|m", strlen(label) - 2u) == 0);
     }
     values[SNAG_PROMPT_SESSION_NAME] = "";
-    assert(snag_config_prompt_expand(identities, 1u, values, 0xfdu,
-        label, sizeof(label)) == 0);
+    assert(snag_config_prompt_expand(identities, 1u, values, 0xfdu, label, sizeof(label)) == 0);
     assert(strcmp(label, "op|agent||mI ") == 0);
 
     for (size_t i = 0u; i < sizeof(contexts) / sizeof(contexts[0]); ++i) {
         values[SNAG_PROMPT_CONTEXT] = contexts[i];
-        assert(snag_config_prompt_expand( "{chat:{context:3}%}{rollout-idle:x}{rollout-active:y}", 0u,
-            values, 0xfdu, label, sizeof(label)) == 0);
+        assert(snag_config_prompt_expand("{chat:{context:3}%}{rollout-idle:x}{rollout-active:y}",
+                   0u, values, 0xfdu, label, sizeof(label)) == 0);
         assert(strcmp(label, padded[i]) == 0);
     }
-    assert(snag_config_prompt_expand( "{chat:{hour}:{minute}:{second}/{hour:2}:{minute:02}:{second:02}}"
-        "{rollout-idle:x}{rollout-active:y}", 0u, values, 0xfdu, label, sizeof(label)) == 0);
+    assert(
+        snag_config_prompt_expand("{chat:{hour}:{minute}:{second}/{hour:2}:{minute:02}:{second:02}}"
+                                  "{rollout-idle:x}{rollout-active:y}",
+            0u, values, 0xfdu, label, sizeof(label)) == 0);
     assert(strcmp(label, "3:7:9/ 3:07:09 ") == 0);
     for (unsigned int i = 0u; i <= 60u; ++i) {
         char number[4], expected[16];
@@ -590,51 +605,60 @@ test_prompt_numbers(const char *path)
         assert(snprintf(number, sizeof(number), "%u", i) > 0);
         values[SNAG_PROMPT_SECOND] = number;
         assert(snprintf(expected, sizeof(expected), "%u/%2u/%02u ", i, i, i) > 0);
-        assert(snag_config_prompt_expand( "{chat:{second}/{second:2}/{second:02}}{rollout-idle:x}"
-            "{rollout-active:y}", 0u, values, 0xfdu, label, sizeof(label)) == 0);
+        assert(snag_config_prompt_expand("{chat:{second}/{second:2}/{second:02}}{rollout-idle:x}"
+                                         "{rollout-active:y}",
+                   0u, values, 0xfdu, label, sizeof(label)) == 0);
         assert(strcmp(label, expected) == 0);
     }
     values[SNAG_PROMPT_CONTEXT] = "100";
     values[SNAG_PROMPT_HOUR] = "23";
     values[SNAG_PROMPT_MINUTE] = "59";
     values[SNAG_PROMPT_SECOND] = "60";
-    assert(snag_config_prompt_expand( "{chat:{context:2}%/{hour:1}:{minute:1}:{second:01}}"
-        "{rollout-idle:x}{rollout-active:y}", 0u, values, 0xfdu, label, sizeof(label)) == 0);
+    assert(snag_config_prompt_expand("{chat:{context:2}%/{hour:1}:{minute:1}:{second:01}}"
+                                     "{rollout-idle:x}{rollout-active:y}",
+               0u, values, 0xfdu, label, sizeof(label)) == 0);
     assert(strcmp(label, "100%/23:59:60 ") == 0);
     values[SNAG_PROMPT_HOUR] = values[SNAG_PROMPT_MINUTE] = values[SNAG_PROMPT_SECOND] = "--";
-    assert(snag_config_prompt_expand( "{chat:{hour:02}:{minute:03}:{second:3}}{rollout-idle:x}"
-        "{rollout-active:y}", 0u, values, 0xfdu, label, sizeof(label)) == 0);
+    assert(snag_config_prompt_expand("{chat:{hour:02}:{minute:03}:{second:3}}{rollout-idle:x}"
+                                     "{rollout-active:y}",
+               0u, values, 0xfdu, label, sizeof(label)) == 0);
     assert(strcmp(label, "--: --: -- ") == 0);
     for (size_t i = 0u; i < sizeof(invalid) / sizeof(invalid[0]); ++i) {
-        assert(snprintf(template, sizeof(template),
-            "{chat:x}{rollout-idle:y}{rollout-active:{%s}}", invalid[i]) > 0);
+        assert(snprintf(template, sizeof(template), "{chat:x}{rollout-idle:y}{rollout-active:{%s}}",
+                   invalid[i]) > 0);
         expect_ui(path, "prompt", template, false);
         /* Even an inactive mode must reject malformed numeric formats. */
         assert(snag_config_prompt_expand(template, 0u, values, 0xfdu, label, sizeof(label)) < 0);
     }
-    expect_ui(path, "prompt", "{chat:{hour:0510}}{rollout-idle:{context:510}}{rollout-active:y}", true);
-    assert(snag_config_prompt_expand( "{chat:{context:510}}{rollout-idle:x}{rollout-active:y}", 0u,
-        values, 0xfdu, label, sizeof(label)) == 0);
+    expect_ui(
+        path, "prompt", "{chat:{hour:0510}}{rollout-idle:{context:510}}{rollout-active:y}", true);
+    assert(snag_config_prompt_expand("{chat:{context:510}}{rollout-idle:x}{rollout-active:y}", 0u,
+               values, 0xfdu, label, sizeof(label)) == 0);
     assert(strlen(label) == sizeof(label) - 1u);
     assert(strcmp(label + 507u, "100 ") == 0);
-    assert(snag_config_prompt_expand( "{chat:{context:510}x}{rollout-idle:x}{rollout-active:y}", 0u,
-        values, 0xfdu, label, sizeof(label)) < 0);
-    assert(snag_config_prompt_expand( "{chat:\\{{hour:02}\\}\\\\}{rollout-idle:x}{rollout-active:y}", 0u,
-        values, 0xfdu, label, sizeof(label)) == 0);
+    assert(snag_config_prompt_expand("{chat:{context:510}x}{rollout-idle:x}{rollout-active:y}", 0u,
+               values, 0xfdu, label, sizeof(label)) < 0);
+    assert(snag_config_prompt_expand("{chat:\\{{hour:02}\\}\\\\}{rollout-idle:x}{rollout-active:y}",
+               0u, values, 0xfdu, label, sizeof(label)) == 0);
     assert(strcmp(label, "{--}\\ ") == 0);
     for (unsigned int queued = 0u; queued < 2u; ++queued) {
         values[SNAG_PROMPT_QUEUE] = queued ? "12" : "0";
         for (unsigned int mode = 0u; mode < 3u; ++mode) {
-            assert(snag_config_prompt_expand( "{queued:[{queue:3}] }{chat:{queue}}{rollout-idle:{queue}}"
-                "{rollout-active:{queue}}{queued:!}", mode, values, 0xfdu, label, sizeof(label)) == 0);
+            assert(snag_config_prompt_expand(
+                       "{queued:[{queue:3}] }{chat:{queue}}{rollout-idle:{queue}}"
+                       "{rollout-active:{queue}}{queued:!}",
+                       mode, values, 0xfdu, label, sizeof(label)) == 0);
             assert(strcmp(label, queued ? "[ 12] 12! " : "0 ") == 0);
         }
     }
     for (unsigned int mode = 0u; mode < 3u; ++mode) {
-        assert(snag_config_prompt_expand( "{activity_spinner}{chat:C}{hour:02}{rollout-idle:I}"
-            "{rollout-active:A}{goal_spinner}", mode, values, 0xfdu, label, sizeof(label)) == 0);
-        assert(strcmp(label, mode == 0u ? "\xfe" "C--\xfd " :
-                             mode == 1u ? "\xfe--I\xfd " : "\xfe--A\xfd ") == 0);
+        assert(snag_config_prompt_expand("{activity_spinner}{chat:C}{hour:02}{rollout-idle:I}"
+                                         "{rollout-active:A}{goal_spinner}",
+                   mode, values, 0xfdu, label, sizeof(label)) == 0);
+        assert(strcmp(label, mode == 0u   ? "\xfe"
+                                            "C--\xfd "
+                             : mode == 1u ? "\xfe--I\xfd "
+                                          : "\xfe--A\xfd ") == 0);
     }
 }
 
@@ -644,40 +668,29 @@ test_openrouter_provider(void)
     static const struct {
         const char *url;
         bool openrouter;
-    } cases[] = {
-        {"https://openrouter.ai/api/v1", true},
-        {"https://openrouter.ai/api/v1/", true},
-        {"https://openrouter.ai", true},
-        {"http://OPENROUTER.AI:80/api/v1", true},
-        {"https://OpenRouter.Ai.:443/api/v1", true},
-        {"https://openrouter.ai.", true},
-        {"https://openrouter.ai:65535/api/v1", true},
-        {"https://api.openai.com", false},
+    } cases[] = {{"https://openrouter.ai/api/v1", true}, {"https://openrouter.ai/api/v1/", true},
+        {"https://openrouter.ai", true}, {"http://OPENROUTER.AI:80/api/v1", true},
+        {"https://OpenRouter.Ai.:443/api/v1", true}, {"https://openrouter.ai.", true},
+        {"https://openrouter.ai:65535/api/v1", true}, {"https://api.openai.com", false},
         {"http://127.0.0.1:2455/backend-api/codex", false},
         {"https://example.test/openrouter.ai/api/v1", false},
         {"https://openrouter.ai.example.test/api/v1", false},
-        {"https://notopenrouter.ai/api/v1", false},
-        {"https://api.openrouter.ai/api/v1", false},
+        {"https://notopenrouter.ai/api/v1", false}, {"https://api.openrouter.ai/api/v1", false},
         {"https://openrouter.ai@elsewhere.test/api/v1", false},
         {"https://user@openrouter.ai/api/v1", false},
         {"https://openrouter.ai:443@elsewhere.test/api/v1", false},
-        {"https://openrouter.ai:0/api/v1", false},
-        {"https://openrouter.ai:65536/api/v1", false},
+        {"https://openrouter.ai:0/api/v1", false}, {"https://openrouter.ai:65536/api/v1", false},
         {"https://openrouter.ai:999999999999/api/v1", false},
-        {"https://openrouter.ai:/api/v1", false},
-        {"https://openrouter.ai:abc/api/v1", false},
-        {"https://openrouter.ai..", false},
-        {"https://openrouter.ai?host=example.test", false},
-        {"ftp://openrouter.ai/api/v1", false},
-        {"", false}
-    };
+        {"https://openrouter.ai:/api/v1", false}, {"https://openrouter.ai:abc/api/v1", false},
+        {"https://openrouter.ai..", false}, {"https://openrouter.ai?host=example.test", false},
+        {"ftp://openrouter.ai/api/v1", false}, {"", false}};
     struct snag_provider_config provider = {0};
 
     assert(!snag_config_provider_is_openrouter(NULL));
     for (size_t i = 0u; i < sizeof(cases) / sizeof(cases[0]); ++i) {
         (void)snprintf(provider.base_url, sizeof(provider.base_url), "%s", cases[i].url);
         (void)snprintf(provider.name, sizeof(provider.name), "%s",
-                       cases[i].openrouter ? "arbitrary" : "openrouter");
+            cases[i].openrouter ? "arbitrary" : "openrouter");
         assert(snag_config_provider_is_openrouter(&provider) == cases[i].openrouter);
     }
 }
@@ -686,11 +699,18 @@ static void
 test_io_rules(const char *path)
 {
     struct snag_config config;
-    static const char valid[] = "[provider openai]\n" "api_key = ${OPENAI_API_KEY}\n" "[rule deny-exec]\n"
-        "match = {\"/kind\":\"^tool_call$\",\"/tool\":\"^exec_command$\"}\n"
-        "action = deny\n" "message = \"Commands are disabled in this workspace.\"\n";
-    static const char invalid[] = "[provider openai]\n" "api_key = ${OPENAI_API_KEY}\n" "[rule old-chain]\n"
-        "chain = out\n" "action = deny\n" "message = \"removed\"\n";
+    static const char valid[] = "[provider openai]\n"
+                                "api_key = ${OPENAI_API_KEY}\n"
+                                "[rule deny-exec]\n"
+                                "match = {\"/kind\":\"^tool_call$\",\"/tool\":\"^exec_command$\"}\n"
+                                "action = deny\n"
+                                "message = \"Commands are disabled in this workspace.\"\n";
+    static const char invalid[] = "[provider openai]\n"
+                                  "api_key = ${OPENAI_API_KEY}\n"
+                                  "[rule old-chain]\n"
+                                  "chain = out\n"
+                                  "action = deny\n"
+                                  "message = \"removed\"\n";
 
     write_bytes(path, valid, sizeof(valid) - 1u);
     load_config(&config, path, NULL);
@@ -710,8 +730,8 @@ test_many_model_aliases(const char *path)
 
     used += (size_t)snprintf(text + used, sizeof(text) - used, "[provider p]\n");
     for (unsigned int i = 0u; i < 140u; ++i)
-        used += (size_t)snprintf(text + used, sizeof(text) - used,
-                                 "[model-alias p/m%u]\nmodel=upstream-%u\n", i, i);
+        used += (size_t)snprintf(
+            text + used, sizeof(text) - used, "[model-alias p/m%u]\nmodel=upstream-%u\n", i, i);
     write_bytes(path, text, used);
     load_config(&config, path, NULL);
     assert(config.provider_count == 1u);
@@ -755,7 +775,7 @@ test_many_providers_and_limits(const char *path)
         used += (size_t)snprintf(text + used, sizeof(text) - used, "[provider p%u]\n", i);
     for (unsigned int i = 0u; i < 140u; ++i)
         used += (size_t)snprintf(text + used, sizeof(text) - used,
-                                 "[model-limit p0/m%u]\ncontext_window_tokens = %u\n", i, 1000u + i);
+            "[model-limit p0/m%u]\ncontext_window_tokens = %u\n", i, 1000u + i);
     assert(used < sizeof(text));
     write_bytes(path, text, used);
     load_config(&config, path, NULL);
@@ -775,7 +795,7 @@ test_many_config_secrets(const char *path)
     size_t used = 0u;
 
     used += (size_t)snprintf(text + used, sizeof(text) - used,
-                             "[provider openai]\napi_key = ${OPENAI_API_KEY}\n[tool]\n");
+        "[provider openai]\napi_key = ${OPENAI_API_KEY}\n[tool]\n");
     for (unsigned int i = 0u; i < 70u; ++i)
         used += (size_t)snprintf(text + used, sizeof(text) - used, "secret = \"many-%u\"\n", i);
     write_bytes(path, text, used);
@@ -788,12 +808,10 @@ test_many_config_secrets(const char *path)
 static void
 test_context_configuration_save(const char *path)
 {
-    const char *cases[] = {
-        "[provider first]\n[agent]\nmodel=chosen\n# keep this comment\n",
+    const char *cases[] = {"[provider first]\n[agent]\nmodel=chosen\n# keep this comment\n",
         "[provider first]\n[model-limit first/chosen]\nmax_output_tokens=100\n[ui]\n",
         ("[provider first]\r\n[model-limit  first/chosen]\r\n"
-         "context_window_tokens=1000\r\n# retain this rule\r\nmax_output_tokens=100\r\n")
-    };
+         "context_window_tokens=1000\r\n# retain this rule\r\nmax_output_tokens=100\r\n")};
     char error[256] = {0};
     for (size_t i = 0u; i < sizeof(cases) / sizeof(cases[0]); ++i) {
         struct snag_config config;
@@ -801,8 +819,8 @@ test_context_configuration_save(const char *path)
         write_bytes(path, cases[i], strlen(cases[i]));
         load_config(&config, path, NULL);
         for (uint64_t tokens = 500000u; tokens <= 600000u; tokens += 100000u) {
-            assert(snag_config_save_context(&config, path, false, "first", "chosen",
-                tokens, error, sizeof(error)) == 0);
+            assert(snag_config_save_context(
+                       &config, path, false, "first", "chosen", tokens, error, sizeof(error)) == 0);
             load_config(&loaded, path, NULL);
             assert(loaded.model_limit_count == 1u && config.model_limit_count == 1u);
             assert(loaded.model_limits[0].context_window_tokens == tokens);
@@ -813,15 +831,15 @@ test_context_configuration_save(const char *path)
         struct stat before;
         struct stat after;
         assert(stat(path, &before) == 0);
+        assert(snag_config_save_context(
+                   &config, path, false, "first", "chosen", 0u, error, sizeof(error)) < 0);
         assert(snag_config_save_context(&config, path, false, "first", "chosen",
-            0u, error, sizeof(error)) < 0);
-        assert(snag_config_save_context(&config, path, false, "first", "chosen",
-            UINT64_C(4000000001), error, sizeof(error)) < 0);
-        assert(snag_config_save_context(&config, path, false, "missing", "chosen",
-            500000u, error, sizeof(error)) < 0);
+                   UINT64_C(4000000001), error, sizeof(error)) < 0);
+        assert(snag_config_save_context(
+                   &config, path, false, "missing", "chosen", 500000u, error, sizeof(error)) < 0);
         if (i) {
-            assert(snag_config_save_context(&config, path, false, "first", "chosen",
-                50u, error, sizeof(error)) < 0);
+            assert(snag_config_save_context(
+                       &config, path, false, "first", "chosen", 50u, error, sizeof(error)) < 0);
         }
         assert(stat(path, &after) == 0 && before.st_ino == after.st_ino);
         assert(config.model_limits[0].context_window_tokens == 600000u);
@@ -830,11 +848,11 @@ test_context_configuration_save(const char *path)
     assert(unlink(path) == 0);
     struct snag_config config;
     snag_config_init(&config);
-    assert(snag_config_save_context(&config, path, false, "openai", "chosen",
-        500000u, error, sizeof(error)) < 0);
+    assert(snag_config_save_context(
+               &config, path, false, "openai", "chosen", 500000u, error, sizeof(error)) < 0);
     assert(access(path, F_OK) < 0);
-    assert(snag_config_save_context(&config, path, true, "openai", "chosen",
-        500000u, error, sizeof(error)) == 0);
+    assert(snag_config_save_context(
+               &config, path, true, "openai", "chosen", 500000u, error, sizeof(error)) == 0);
     snag_config_free(&config);
     load_config(&config, path, NULL);
     assert(config.model_limits[0].context_window_tokens == 500000u);
@@ -852,8 +870,10 @@ main(void)
         "max_goal_prompt_bytes = 123456\n"
         "read_agents_md = false\n"
         "allow_model_change = true\n"
-        "\n[audio]\nprovider=backup\nlisten_model=listen-fixture\ntranscribe_model=transcribe-fixture\n"
-        "speech_model=speech-fixture\nrealtime_model=realtime-fixture\nvoice=alloy\ncapture_device=USB microphone\nplayback_device=USB speaker\n"
+        "\n[audio]\nprovider=backup\nlisten_model=listen-fixture\ntranscribe_model=transcribe-"
+        "fixture\n"
+        "speech_model=speech-fixture\nrealtime_model=realtime-fixture\nvoice=alloy\ncapture_device="
+        "USB microphone\nplayback_device=USB speaker\n"
         "\n[provider default]\n"
         "connect_timeout_ms = 1000\n"
         "idle_timeout_ms = 2000\n"
@@ -862,22 +882,44 @@ main(void)
         "base_url = http://127.0.0.1:2455/backend-api/codex/\n"
         "api_key = ${CODEX_LB_API_KEY}\n"
         "openrouter_referer = https://github.com/snajpa/snajpagent\n"
-        "openrouter_title = snajpagent\n" "exact_token_count = false\n"
-        "native_compaction = 0\n" "\n[provider backup]\n"
+        "openrouter_title = snajpagent\n"
+        "exact_token_count = false\n"
+        "native_compaction = 0\n"
+        "\n[provider backup]\n"
         "base_url = https://backup.example.test/v1\n"
-        "api_key = ${BACKUP_API_KEY}\n" "exact_token_count = true\n"
-        "\n[model-limit default/gpt-5.5]\n" "context_window_tokens = 1050000\n"
-        "max_input_tokens = 922000\n" "max_output_tokens = 128000\n"
-        "\n[model-limit backup/org/model/with/slashes]\n" "max_input_tokens = 4000000000\n"
-        "\n[ui]\n" "color = never\n" "markdown = false\n" "resume_history_turns = 0\n"
+        "api_key = ${BACKUP_API_KEY}\n"
+        "exact_token_count = true\n"
+        "\n[model-limit default/gpt-5.5]\n"
+        "context_window_tokens = 1050000\n"
+        "max_input_tokens = 922000\n"
+        "max_output_tokens = 128000\n"
+        "\n[model-limit backup/org/model/with/slashes]\n"
+        "max_input_tokens = 4000000000\n"
+        "\n[ui]\n"
+        "color = never\n"
+        "markdown = false\n"
+        "resume_history_turns = 0\n"
         "typing_pause_ms = 750\n"
-        "prompt = pre{chat:{operator}{goal_spinner}:}{rollout-idle:{provider}/{model}/{effort} {context}{activity_spinner}›}{rollout-active:{mode}{activity_spinner}»}\n"
-        "prompt_spinner_goal = \"\\0◆\"\n" "prompt_spinner_provider = \" \\|/-\"\n"
-        "prompt_spinner_tool = \" \"\n" "prompt_spinner_per_second = 60\n"
-        "\n[irc]\n" "listen = 127.0.0.1:7667\n" "client = irc-a.example\n" "client = [2001:db8::20]:7667\n"
-        "model_nick = builder\n" "operator_nick = alice\n" "room_name = build-host\n" "history_lines = 321\n"
-        "\n[tool]\n" "default_yield_ms = 0\n" "default_timeout_ms = 4000\n" "max_timeout_ms = 5000\n"
-        "max_output_tokens = 7654\n" "max_output_bytes = 123456\n"
+        "prompt = pre{chat:{operator}{goal_spinner}:}{rollout-idle:{provider}/{model}/{effort} "
+        "{context}{activity_spinner}›}{rollout-active:{mode}{activity_spinner}»}\n"
+        "prompt_spinner_goal = \"\\0◆\"\n"
+        "prompt_spinner_provider = \" \\|/-\"\n"
+        "prompt_spinner_tool = \" \"\n"
+        "prompt_spinner_per_second = 60\n"
+        "\n[irc]\n"
+        "listen = 127.0.0.1:7667\n"
+        "client = irc-a.example\n"
+        "client = [2001:db8::20]:7667\n"
+        "model_nick = builder\n"
+        "operator_nick = alice\n"
+        "room_name = build-host\n"
+        "history_lines = 321\n"
+        "\n[tool]\n"
+        "default_yield_ms = 0\n"
+        "default_timeout_ms = 4000\n"
+        "max_timeout_ms = 5000\n"
+        "max_output_tokens = 7654\n"
+        "max_output_bytes = 123456\n"
         "secret = ${TOKEN_ONE}\nsecret = ${TOKEN_TWO}\n";
     const char *tmp = getenv("TMPDIR");
     char *temp = snag_path_join(tmp ? tmp : "/tmp", "snajpagent-config-XXXXXX");
@@ -911,7 +953,8 @@ main(void)
     assert(config.markdown);
     assert(config.resume_history_turns == 1u);
     assert(config.typing_pause_ms == 500u);
-    assert(strstr(config.prompt, "{activity_spinner}{goal_spinner} {hour:02}:{minute:02}:{second:02} ") ==
+    assert(strstr(config.prompt,
+               "{activity_spinner}{goal_spinner} {hour:02}:{minute:02}:{second:02} ") ==
            config.prompt);
     assert(strstr(config.prompt, "{context:3}%"));
     assert(strstr(config.prompt, "{goal_spinner}") != NULL);
@@ -931,16 +974,16 @@ main(void)
             values[SNAG_PROMPT_QUEUE] = queues[q];
             badge[0] = '\0';
             if (q) assert(snprintf(badge, sizeof(badge), "(%s) ", queues[q]) > 0);
-            assert(snag_config_prompt_expand(config.prompt, 0u, values, 0xfdu,
-                                            expanded, sizeof(expanded)) == 0);
+            assert(snag_config_prompt_expand(
+                       config.prompt, 0u, values, 0xfdu, expanded, sizeof(expanded)) == 0);
             assert(strcmp(expanded, "\xfe\xfd 03:07:09 op@host : ") == 0);
             for (size_t i = 0u; i < sizeof(contexts) / sizeof(contexts[0]); ++i) {
                 values[SNAG_PROMPT_CONTEXT] = contexts[i];
                 for (unsigned int mode = 1u; mode <= 2u; ++mode) {
-                    assert(snag_config_prompt_expand(config.prompt, mode, values, 0xfdu,
-                                                    expanded, sizeof(expanded)) == 0);
+                    assert(snag_config_prompt_expand(config.prompt, mode, values, 0xfdu, expanded,
+                               sizeof(expanded)) == 0);
                     assert(snprintf(expected, sizeof(expected), "%s 03:07:09 p/m/e %3s%% %s%s ",
-                                    "\xfe\xfd", contexts[i], badge, mode == 1u ? "›" : "»") > 0);
+                               "\xfe\xfd", contexts[i], badge, mode == 1u ? "›" : "»") > 0);
                     assert(strcmp(expanded, expected) == 0);
                 }
             }
@@ -1014,17 +1057,15 @@ main(void)
     assert(config.providers[0].idle_timeout_ms == 2000u);
     assert(config.providers[0].request_timeout_ms == 3000u);
     assert(config.providers[0].auto_compact_input_tokens == 12345u);
-    assert(strcmp(config.providers[0].base_url,
-                  "http://127.0.0.1:2455/backend-api/codex") == 0);
+    assert(strcmp(config.providers[0].base_url, "http://127.0.0.1:2455/backend-api/codex") == 0);
     assert(strcmp(config.providers[0].api_key.value, "CODEX_LB_API_KEY") == 0);
-    assert(strcmp(config.providers[0].openrouter_referer,
-                  "https://github.com/snajpa/snajpagent") == 0);
+    assert(strcmp(config.providers[0].openrouter_referer, "https://github.com/snajpa/snajpagent") ==
+           0);
     assert(strcmp(config.providers[0].openrouter_title, "snajpagent") == 0);
     assert(config.providers[0].exact_token_count == SNAG_TOKEN_COUNT_OFF);
     assert(!config.providers[0].native_compaction);
     assert(strcmp(config.providers[1].name, "backup") == 0);
-    assert(strcmp(config.providers[1].base_url,
-                  "https://backup.example.test/v1") == 0);
+    assert(strcmp(config.providers[1].base_url, "https://backup.example.test/v1") == 0);
     assert(strcmp(config.providers[1].api_key.value, "BACKUP_API_KEY") == 0);
     assert(config.providers[1].exact_token_count == SNAG_TOKEN_COUNT_STRICT);
     assert(config.model_limit_count == 2u);
@@ -1039,7 +1080,8 @@ main(void)
     {
         struct snag_model_limit_config resolved;
         const struct snag_model_limit_config *limit = &resolved;
-        assert(snag_config_resolve_limits(&config, "backup", "org/model/with/slashes", &resolved, NULL));
+        assert(snag_config_resolve_limits(
+            &config, "backup", "org/model/with/slashes", &resolved, NULL));
         assert(!limit->context_window_tokens);
         assert(limit->max_input_tokens == SNAG_CONFIG_TOKEN_LIMIT_MAX);
         assert(!limit->max_output_tokens);
@@ -1095,24 +1137,52 @@ main(void)
         const char *key, *value;
         bool valid;
     } ui_cases[] = {
-        {"prompt_spinner_goal", "\"\\0\"", true}, {"prompt_spinner_goal", "\" \"", true},
-        {"prompt_spinner_goal", "\"\\0◆\"", true}, {"prompt_spinner_goal", "\"\\0abcdefghijklmnop\"", true},
-        {"prompt_spinner_goal", "\"\\0abcdefghijklmnopq\"", true}, {"prompt_spinner_goal", "\"\"", false},
-        {"prompt_spinner_goal", "unquoted", false}, {"prompt_spinner_goal", "\" aab\"", false},
-        {"prompt_spinner_goal", "\"\\0" "\xcc\x81" "\"", false},
-        {"prompt_spinner_goal", "\"\\0" "\xe2\x80\x8b" "\"", false},
-        {"prompt_spinner_goal", "\"\\0" "\xe2\x80\xae" "\"", false},
-        {"prompt_spinner_goal", "\"\\0" "\xe7\x95\x8c" "\"", false},
-        {"prompt_spinner_interrupt", "\" x\"", false}, {"prompt_spinner_per_second", "0", false},
-        {"prompt_spinner_per_second", "61", false}, {"prompt_tool_spinner_off_delay_ms", "0", true},
+        {"prompt_spinner_goal", "\"\\0\"", true},
+        {"prompt_spinner_goal", "\" \"", true},
+        {"prompt_spinner_goal", "\"\\0◆\"", true},
+        {"prompt_spinner_goal", "\"\\0abcdefghijklmnop\"", true},
+        {"prompt_spinner_goal", "\"\\0abcdefghijklmnopq\"", true},
+        {"prompt_spinner_goal", "\"\"", false},
+        {"prompt_spinner_goal", "unquoted", false},
+        {"prompt_spinner_goal", "\" aab\"", false},
+        {"prompt_spinner_goal",
+            "\"\\0"
+            "\xcc\x81"
+            "\"",
+            false},
+        {"prompt_spinner_goal",
+            "\"\\0"
+            "\xe2\x80\x8b"
+            "\"",
+            false},
+        {"prompt_spinner_goal",
+            "\"\\0"
+            "\xe2\x80\xae"
+            "\"",
+            false},
+        {"prompt_spinner_goal",
+            "\"\\0"
+            "\xe7\x95\x8c"
+            "\"",
+            false},
+        {"prompt_spinner_interrupt", "\" x\"", false},
+        {"prompt_spinner_per_second", "0", false},
+        {"prompt_spinner_per_second", "61", false},
+        {"prompt_tool_spinner_off_delay_ms", "0", true},
         {"prompt_tool_spinner_off_delay_ms", "60000", true},
         {"prompt_tool_spinner_off_delay_ms", "60001", false},
         {"prompt_tool_spinner_off_delay_ms", "-1", false},
         {"prompt", "{chat:x}{rollout-idle:y}{rollout-active:z}", true},
         {"prompt", "{chat:x}{chat:y}{rollout-idle:y}{rollout-active:z}", false},
         {"prompt", "{chat:x}{rollout-idle:y}", false},
-        {"prompt", "{hour:02}{activity_spinner}{chat:x}{rollout-idle:y}" "{rollout-active:z}{goal_spinner}", true},
-        {"prompt", "{activity_spinner}{chat:x}{rollout-idle:y}" "{rollout-active:z}{activity_spinner}", false},
+        {"prompt",
+            "{hour:02}{activity_spinner}{chat:x}{rollout-idle:y}"
+            "{rollout-active:z}{goal_spinner}",
+            true},
+        {"prompt",
+            "{activity_spinner}{chat:x}{rollout-idle:y}"
+            "{rollout-active:z}{activity_spinner}",
+            false},
         {"prompt", "{goal_spinner}{chat:x}{rollout-idle:{goal_spinner}}{rollout-active:z}", false},
         {"prompt", "{chat:{goal_spinner}}{rollout-idle:y}{rollout-active:z}{goal_spinner}", false},
         {"prompt", "{unknown}{chat:x}{rollout-idle:y}{rollout-active:z}", false},
@@ -1120,14 +1190,26 @@ main(void)
         {"prompt", "{queued:{unknown}}{chat:x}{rollout-idle:y}{rollout-active:z}", false},
         {"prompt", "{queued:}{chat:x}{rollout-idle:y}{rollout-active:z}", false},
         {"prompt", "{queued:x{chat:y}{rollout-idle:y}{rollout-active:z}", false},
-        {"prompt", "{queued:{goal_spinner}}{chat:{goal_spinner}}" "{rollout-idle:y}{rollout-active:z}", false},
+        {"prompt",
+            "{queued:{goal_spinner}}{chat:{goal_spinner}}"
+            "{rollout-idle:y}{rollout-active:z}",
+            false},
         {"prompt", "{chat:{rollout-idle:x}}{rollout-idle:y}{rollout-active:z}", false},
         {"prompt", "{chat:{unknown}}{rollout-idle:y}{rollout-active:z}", false},
-        {"prompt", "{chat:{goal_spinner}{goal_spinner}}{rollout-idle:y}" "{rollout-active:z}", false},
-        {"prompt", "{chat:{activity_spinner}{activity_spinner}}{rollout-idle:y}" "{rollout-active:z}", false},
+        {"prompt",
+            "{chat:{goal_spinner}{goal_spinner}}{rollout-idle:y}"
+            "{rollout-active:z}",
+            false},
+        {"prompt",
+            "{chat:{activity_spinner}{activity_spinner}}{rollout-idle:y}"
+            "{rollout-active:z}",
+            false},
         {"prompt", "{chat:}{rollout-idle:y}{rollout-active:z}", false},
-        {"pager", "on", true}, {"pager", "off", true},
-        {"pager", "less -R %s", true}, {"pager", "", false}, };
+        {"pager", "on", true},
+        {"pager", "off", true},
+        {"pager", "less -R %s", true},
+        {"pager", "", false},
+    };
     for (size_t i = 0u; i < sizeof(ui_cases) / sizeof(ui_cases[0]); ++i)
         expect_ui(path, ui_cases[i].key, ui_cases[i].value, ui_cases[i].valid);
     {
@@ -1137,22 +1219,23 @@ main(void)
         snag_config_free(&defaults);
     }
     {
-        const char *values[SNAG_PROMPT_FIELD_COUNT] = {
-            "prov", "model", "high", "", "host", "0", "rollout-idle", "0",
-            "agent", "", "12", "34", "56"};
+        const char *values[SNAG_PROMPT_FIELD_COUNT] = {"prov", "model", "high", "", "host", "0",
+            "rollout-idle", "0", "agent", "", "12", "34", "56"};
         const char template[] = "pre{chat:{hour:02}:{minute:02}:{second:02} {operator}:}"
-            "{rollout-idle:{provider}/{model}/{effort} " "{context}%{goal_spinner}›}{rollout-active:A}";
-        const unsigned char expected[] = {
-            'p','r','e','p','r','o','v','/','m','o','d','e','l','/','h','i','g','h',
-            ' ','0','%',0xfd,0xe2,0x80,0xba,' ','\0' };
+                                "{rollout-idle:{provider}/{model}/{effort} "
+                                "{context}%{goal_spinner}›}{rollout-active:A}";
+        const unsigned char expected[] = {'p', 'r', 'e', 'p', 'r', 'o', 'v', '/', 'm', 'o', 'd',
+            'e', 'l', '/', 'h', 'i', 'g', 'h', ' ', '0', '%', 0xfd, 0xe2, 0x80, 0xba, ' ', '\0'};
         char expanded[128];
 
-        assert(snag_config_prompt_expand(template, 1u, values, 0xfdu, expanded, sizeof(expanded)) == 0);
+        assert(snag_config_prompt_expand(template, 1u, values, 0xfdu, expanded, sizeof(expanded)) ==
+               0);
         assert(memcmp(expanded, expected, sizeof(expected)) == 0);
-        assert(snag_config_prompt_expand(template, 0u, values, 0xfdu, expanded, sizeof(expanded)) == 0);
+        assert(snag_config_prompt_expand(template, 0u, values, 0xfdu, expanded, sizeof(expanded)) ==
+               0);
         assert(strcmp(expanded, "pre12:34:56 : ") == 0);
-        assert(snag_config_prompt_expand( "{chat:{operator}}{rollout-idle:x}{rollout-active:y}", 0u,
-            values, 0xfdu, expanded, sizeof(expanded)) < 0);
+        assert(snag_config_prompt_expand("{chat:{operator}}{rollout-idle:x}{rollout-active:y}", 0u,
+                   values, 0xfdu, expanded, sizeof(expanded)) < 0);
     }
 
     test_model_change_setting(path);
@@ -1163,37 +1246,43 @@ main(void)
     test_io_rules(path);
     test_auth_settings(path);
     expect_ui(path, "prompt", "{chat:{rollout-idle:x}}{rollout-idle:y}{rollout-active:z}", false);
-    expect_ui(path, "prompt", "{chat:{queued:{goal_spinner}{queued:{goal_spinner}}}}"
-              "{rollout-idle:y}{rollout-active:z}", false);
-    expect_ui(path, "prompt", "{chat:{goal_spinner}}{rollout-idle:{goal_spinner}}"
-              "{rollout-active:{goal_spinner}}", true);
-    expect_ui(path, "prompt", "{queued:{goal_spinner}}{chat:x}{rollout-idle:y}"
-              "{rollout-active:z}{goal_spinner}", false);
+    expect_ui(path, "prompt",
+        "{chat:{queued:{goal_spinner}{queued:{goal_spinner}}}}"
+        "{rollout-idle:y}{rollout-active:z}",
+        false);
+    expect_ui(path, "prompt",
+        "{chat:{goal_spinner}}{rollout-idle:{goal_spinner}}"
+        "{rollout-active:{goal_spinner}}",
+        true);
+    expect_ui(path, "prompt",
+        "{queued:{goal_spinner}}{chat:x}{rollout-idle:y}"
+        "{rollout-active:z}{goal_spinner}",
+        false);
     test_prompt_numbers(path);
     assert(snprintf(link_path, sizeof(link_path), "%s/link.ini", temp) > 0);
     assert(symlink(path, link_path) == 0);
     expect_invalid(link_path);
 
     write_bytes(path, "[tool]\nmax_timeout_ms=4294967295\n",
-                sizeof("[tool]\nmax_timeout_ms=4294967295\n") - 1u);
+        sizeof("[tool]\nmax_timeout_ms=4294967295\n") - 1u);
     load_config(&config, path, dotdir);
     assert(config.max_timeout_ms == UINT32_MAX);
     snag_config_free(&config);
     write_bytes(path, "[tool]\nmax_output_bytes=4294967295\n",
-                sizeof("[tool]\nmax_output_bytes=4294967295\n") - 1u);
+        sizeof("[tool]\nmax_output_bytes=4294967295\n") - 1u);
     load_config(&config, path, dotdir);
     assert(config.max_output_bytes == UINT32_MAX);
     snag_config_free(&config);
     {
-        static const unsigned char bad_header[] = {
-            '[', 'p', 'r', 'o', 'v', 'i', 'd', 'e', 'r', ']', '\n',
-            'o', 'p', 'e', 'n', 'r', 'o', 'u', 't', 'e', 'r', '_', 't', 'i', 't', 'l', 'e', '=', 0x7f, '\n' };
+        static const unsigned char bad_header[] = {'[', 'p', 'r', 'o', 'v', 'i', 'd', 'e', 'r', ']',
+            '\n', 'o', 'p', 'e', 'n', 'r', 'o', 'u', 't', 'e', 'r', '_', 't', 'i', 't', 'l', 'e',
+            '=', 0x7f, '\n'};
         write_bytes(path, bad_header, sizeof(bad_header));
         expect_invalid(path);
     }
     {
-        static const unsigned char with_nul[] = {
-            '[', 'u', 'i', ']', '\n', 'v', 'e', 'r', 'b', 'o', 's', 'i', 't', 'y', '=', '1', '\0', '\n' };
+        static const unsigned char with_nul[] = {'[', 'u', 'i', ']', '\n', 'v', 'e', 'r', 'b', 'o',
+            's', 'i', 't', 'y', '=', '1', '\0', '\n'};
         write_bytes(path, with_nul, sizeof(with_nul));
         snag_config_init(&config);
         assert(snag_config_load(&config, path, NULL, error, sizeof(error)) < 0);
@@ -1213,18 +1302,29 @@ main(void)
     snag_config_free(&config);
 
     {
-        static const char preserved[] = "# keep this comment\n" "[agent]\n" "model = old\r\n"
-            "max_goal_prompt_bytes = 123456\n" "max_turn_retries = 7\n" "reasoning_effort=low\n" "\n"
-            "[provider first]\n"
-            "base_url = https://first.example.test\n"
-            "[provider second]\n"
-            "base_url = https://second.example.test\n";
-        static const char expected[] = "# keep this comment\n" "[agent]\n" "model = new-model\r\n"
-            "max_goal_prompt_bytes = 123456\n" "max_turn_retries = 7\n" "reasoning_effort = ultra\n" "\n"
-            "provider = second\n" "[provider first]\n"
-            "base_url = https://first.example.test\n"
-            "[provider second]\n"
-            "base_url = https://second.example.test\n";
+        static const char preserved[] = "# keep this comment\n"
+                                        "[agent]\n"
+                                        "model = old\r\n"
+                                        "max_goal_prompt_bytes = 123456\n"
+                                        "max_turn_retries = 7\n"
+                                        "reasoning_effort=low\n"
+                                        "\n"
+                                        "[provider first]\n"
+                                        "base_url = https://first.example.test\n"
+                                        "[provider second]\n"
+                                        "base_url = https://second.example.test\n";
+        static const char expected[] = "# keep this comment\n"
+                                       "[agent]\n"
+                                       "model = new-model\r\n"
+                                       "max_goal_prompt_bytes = 123456\n"
+                                       "max_turn_retries = 7\n"
+                                       "reasoning_effort = ultra\n"
+                                       "\n"
+                                       "provider = second\n"
+                                       "[provider first]\n"
+                                       "base_url = https://first.example.test\n"
+                                       "[provider second]\n"
+                                       "base_url = https://second.example.test\n";
         char created[4096];
         char bytes[4096];
         struct stat st;
@@ -1234,8 +1334,8 @@ main(void)
         assert(snprintf(path, sizeof(path), "%s/save.ini", temp) > 0);
         write_bytes(path, preserved, sizeof(preserved) - 1u);
         assert(chmod(path, 0640) == 0);
-        assert(snag_config_save_model(path, false, "second", "new-model",
-                                     "ultra", error, sizeof(error)) == 0);
+        assert(snag_config_save_model(
+                   path, false, "second", "new-model", "ultra", error, sizeof(error)) == 0);
         assert(stat(path, &st) == 0);
         assert((st.st_mode & 0777u) == 0640u);
         fd = open(path, O_RDONLY);
@@ -1261,13 +1361,13 @@ main(void)
         assert(snprintf(created, sizeof(created), "%s/new.ini", dotdir) > 0);
         /* A model-only writer cannot invent the selected provider. */
         mode_t restrictive_mask = umask(0777);
-        assert(snag_config_save_model(created, true, "default", "created-model",
-                                     "medium", error, sizeof(error)) < 0);
+        assert(snag_config_save_model(
+                   created, true, "default", "created-model", "medium", error, sizeof(error)) < 0);
         {
             struct snag_provider_config created_provider;
             snag_config_provider_init(&created_provider, "named");
-            assert(snag_config_save_provider(created, true, &created_provider,
-                                             "created-model", "medium", error, sizeof(error)) == 0);
+            assert(snag_config_save_provider(created, true, &created_provider, "created-model",
+                       "medium", error, sizeof(error)) == 0);
         }
         (void)umask(restrictive_mask);
         assert(stat(created, &st) == 0);
@@ -1278,7 +1378,8 @@ main(void)
         snag_config_free(&config);
 
         assert(snprintf(created, sizeof(created), "%s/absent.ini", dotdir) > 0);
-        assert(snag_config_save_model(created, false, "default", "nope", "medium", error, sizeof(error)) < 0);
+        assert(snag_config_save_model(
+                   created, false, "default", "nope", "medium", error, sizeof(error)) < 0);
         assert(access(created, F_OK) < 0 && errno == ENOENT);
 
         fd = open(path, O_RDONLY);
@@ -1286,7 +1387,8 @@ main(void)
         got = read(fd, bytes, sizeof(bytes));
         assert(got > 0);
         assert(close(fd) == 0);
-        assert(snag_config_save_model(path, false, "missing", "nope", "medium", error, sizeof(error)) < 0);
+        assert(snag_config_save_model(
+                   path, false, "missing", "nope", "medium", error, sizeof(error)) < 0);
         {
             char after[4096];
             ssize_t after_got;

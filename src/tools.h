@@ -20,64 +20,61 @@ typedef int (*snag_tool_pump_fn)(void *opaque, unsigned int timeout_ms);
  * write acknowledges durable admission, independently of presentation, and
  * returns failure details through error/size. read returns a bounded head/tail
  * excerpt for the exact byte interval. */
-typedef int (*snag_tool_output_fn)(void *, const char *, unsigned int, uint64_t,
-    const void *, size_t, char *, size_t);
-typedef int (*snag_tool_read_fn)(void *, const char *, unsigned int, uint64_t, uint64_t, struct snag_buf *);
+typedef int (*snag_tool_output_fn)(
+    void *, const char *, unsigned int, uint64_t, const void *, size_t, char *, size_t);
+typedef int (*snag_tool_read_fn)(
+    void *, const char *, unsigned int, uint64_t, uint64_t, struct snag_buf *);
 void snag_tools_journal(snag_tool_output_fn write, snag_tool_read_fn read, void *opaque);
 /* Filtered host environment for a spawned helper or managed command. */
 char **snag_tools_environment(const struct snag_config *config);
 /* Validates without effects. 1 means rejected with a factual not-run result. */
 int snag_tools_prepare(const struct snag_response_item *, const struct snag_config *,
-                       const char *cwd, uint32_t max_parallel,
-                       char handle[SNAG_ID_HEX_LEN + 1u], uint32_t *yield_ms, json_t **rejected);
+    const char *cwd, uint32_t max_parallel, char handle[SNAG_ID_HEX_LEN + 1u], uint32_t *yield_ms,
+    json_t **rejected);
 int snag_tools_start(const struct snag_response_item *, const struct snag_config *,
-                     const struct snag_credential *, const char *cwd, json_t **result,
-                     char *error, size_t error_size);
+    const struct snag_credential *, const char *cwd, json_t **result, char *error,
+    size_t error_size);
 int snag_tools_service(int timeout_ms, snag_wake_fd wake_fd, char *error, size_t error_size);
 bool snag_tools_ready(const char *handle);
 bool snag_tools_busy(void);
 const char *snag_tools_handoff(const char *handle);
-int snag_tools_collect(const char *handle, const char *reason, json_t **result,
-                       char *error, size_t error_size);
+int snag_tools_collect(
+    const char *handle, const char *reason, json_t **result, char *error, size_t error_size);
 void snag_tools_collected(const char *handle);
 void snag_tools_process_state(struct snag_process_state *state);
 void snag_tools_close_all(bool user_interrupt);
 void snag_tools_shutdown(void);
 
 struct snag_session;
-int snag_tools_document(const struct snag_response_item *, struct snag_session *,
-                        snag_tool_pump_fn, void *, snag_wake_fd, json_t **);
+int snag_tools_document(const struct snag_response_item *, struct snag_session *, snag_tool_pump_fn,
+    void *, snag_wake_fd, json_t **);
 typedef int (*snag_video_audio_fn)(void *, const json_t *, uint64_t, uint64_t, json_t **);
-int snag_tools_video(const struct snag_response_item *, struct snag_session *,
-                     snag_tool_pump_fn, void *, snag_wake_fd, snag_video_audio_fn, json_t **);
+int snag_tools_video(const struct snag_response_item *, struct snag_session *, snag_tool_pump_fn,
+    void *, snag_wake_fd, snag_video_audio_fn, json_t **);
 struct snag_image_crop;
-int snag_image_prepare(struct snag_session *, const char *, uint32_t, const struct snag_image_crop *,
-                        snag_tool_pump_fn, void *, json_t **, char *, size_t);
+int snag_image_prepare(struct snag_session *, const char *, uint32_t,
+    const struct snag_image_crop *, snag_tool_pump_fn, void *, json_t **, char *, size_t);
 int snag_tools_image(const struct snag_response_item *call, struct snag_session *session,
-                     snag_tool_pump_fn pump, void *opaque,
-                     json_t **result);
+    snag_tool_pump_fn pump, void *opaque, json_t **result);
 
-int snag_tools_read_only(const struct snag_response_item *call,
-                        const char *cwd, snag_tool_pump_fn pump,
-                        void *opaque, json_t **result);
+int snag_tools_read_only(const struct snag_response_item *call, const char *cwd,
+    snag_tool_pump_fn pump, void *opaque, json_t **result);
 
 int snag_tools_run(const struct snag_response_item *call, const struct snag_config *config,
-                  const struct snag_credential *credential, const char *session_cwd,
-                  snag_tool_pump_fn pump, void *pump_opaque, snag_wake_fd wake_fd, json_t **result,
-                  char *error, size_t error_size);
+    const struct snag_credential *credential, const char *session_cwd, snag_tool_pump_fn pump,
+    void *pump_opaque, snag_wake_fd wake_fd, json_t **result, char *error, size_t error_size);
 
-int snag_tools_attach_output_limit(const struct snag_response_item *call, const struct snag_config *config,
-                                  json_t *result);
+int snag_tools_attach_output_limit(
+    const struct snag_response_item *call, const struct snag_config *config, json_t *result);
 
-int snag_tools_close_managed(const char *handle, bool user_interrupt,
-                            snag_tool_pump_fn pump, void *pump_opaque, snag_wake_fd wake_fd, json_t **result,
-                            char *error, size_t error_size);
+int snag_tools_close_managed(const char *handle, bool user_interrupt, snag_tool_pump_fn pump,
+    void *pump_opaque, snag_wake_fd wake_fd, json_t **result, char *error, size_t error_size);
 
 int snag_tools_audio(const struct snag_response_item *call, struct snag_session *session,
-                     int root_fd, const struct snag_config *config, snag_tool_pump_fn pump,
-                     void *opaque, snag_wake_fd wake, json_t **result);
+    int root_fd, const struct snag_config *config, snag_tool_pump_fn pump, void *opaque,
+    snag_wake_fd wake, json_t **result);
 /* Host-owned snapshot only: no journal lookup or second copy of the original. */
-int snag_tools_transcribe_asset(struct snag_session *, const json_t *, uint64_t, uint64_t,
-                     int, const struct snag_config *, snag_tool_pump_fn, void *, snag_wake_fd, json_t **);
+int snag_tools_transcribe_asset(struct snag_session *, const json_t *, uint64_t, uint64_t, int,
+    const struct snag_config *, snag_tool_pump_fn, void *, snag_wake_fd, json_t **);
 
 #endif

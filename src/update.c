@@ -5,11 +5,23 @@
 struct snag_update *
 snag_update_start(const char *program, const char *url, snag_wake_fd wake)
 {
-    (void)program; (void)url; (void)wake;
+    (void)program;
+    (void)url;
+    (void)wake;
     return 0;
 }
-const char *snag_update_take(struct snag_update *update) { (void)update; return 0; }
-char *snag_update_stop(struct snag_update *update) { (void)update; return 0; }
+const char *
+snag_update_take(struct snag_update *update)
+{
+    (void)update;
+    return 0;
+}
+char *
+snag_update_stop(struct snag_update *update)
+{
+    (void)update;
+    return 0;
+}
 #else
 #include "base.h"
 #include "fs.h"
@@ -28,7 +40,9 @@ char *snag_update_stop(struct snag_update *update) { (void)update; return 0; }
 
 #define UPDATE_INFO_MAX (16u * 1024u)
 #define UPDATE_BINARY_MAX (256u * 1024u * 1024u)
-#define UPDATE_MARKER "\nsnajpagent-update-v1\n" SNAJPAGENT_NAME "\n" SNAJPAGENT_UPDATE_TARGET "\n" SNAJPAGENT_UPDATE_BASE "\n"
+#define UPDATE_MARKER                                                                              \
+    "\nsnajpagent-update-v1\n" SNAJPAGENT_NAME "\n" SNAJPAGENT_UPDATE_TARGET                       \
+    "\n" SNAJPAGENT_UPDATE_BASE "\n"
 /* Retained in the executable; candidates must retain this publisher/target. */
 static const volatile char identity[] = UPDATE_MARKER SNAJPAGENT_VERSION "\n";
 
@@ -54,14 +68,13 @@ secure_url(const char *url, bool fragment)
 {
     if (!url || strlen(url) >= 2048u) return false;
 #ifdef SNAJPAGENT_TEST_UPDATE
-    if (strncmp(url, "http://127.0.0.1:", 17u) == 0)
-        return true;
+    if (strncmp(url, "http://127.0.0.1:", 17u) == 0) return true;
 #endif
-    if (strncmp(url, "https://", 8u) != 0 || !url[8])
-        return false;
+    if (strncmp(url, "https://", 8u) != 0 || !url[8]) return false;
     for (const char *p = url; *p; ++p)
-        if ((unsigned char)*p <= 32u || (unsigned char)*p >= 127u ||
-            *p == '@' || (!fragment && *p == '#') || *p == '\\') return false;
+        if ((unsigned char)*p <= 32u || (unsigned char)*p >= 127u || *p == '@' ||
+            (!fragment && *p == '#') || *p == '\\')
+            return false;
     return true;
 }
 
@@ -72,15 +85,16 @@ receive(char *data, size_t size, size_t count, void *opaque)
     if (size && count > SIZE_MAX / size) return 0;
     size *= count;
     if (atomic_load(&d->update->cancel) || size > d->limit - d->size) return 0;
-    if (d->body ? snag_buf_append(d->body, data, size) < 0 : snag_write_full(d->fd, data, size) < 0) return 0;
+    if (d->body ? snag_buf_append(d->body, data, size) < 0 : snag_write_full(d->fd, data, size) < 0)
+        return 0;
     snag_sha256_update(&d->hash, data, size);
     d->size += size;
     return size;
 }
 
 static int
-fetch(struct snag_update *update, const char *url, struct snag_buf *body,
-      int fd, uint64_t limit, char hash[65], uint64_t *size)
+fetch(struct snag_update *update, const char *url, struct snag_buf *body, int fd, uint64_t limit,
+    char hash[65], uint64_t *size)
 {
     CURL *curl = NULL;
     CURLM *multi = NULL;
@@ -95,7 +109,10 @@ fetch(struct snag_update *update, const char *url, struct snag_buf *body,
     multi = curl_multi_init();
     snag_sha256_init(&d.hash);
     if (!curl || !multi || snag_http_trust(curl) != CURLE_OK) goto out;
-#define SET(option, value) do { if (curl_easy_setopt(curl, option, value) != CURLE_OK) goto out; } while (0)
+#define SET(option, value)                                                                         \
+    do {                                                                                           \
+        if (curl_easy_setopt(curl, option, value) != CURLE_OK) goto out;                           \
+    } while (0)
     SET(CURLOPT_URL, url);
     SET(CURLOPT_NOSIGNAL, 1L);
     SET(CURLOPT_FOLLOWLOCATION, 1L);
@@ -122,16 +139,19 @@ fetch(struct snag_update *update, const char *url, struct snag_buf *body,
     if (curl_multi_add_handle(multi, curl) != CURLM_OK) goto out;
     attached = true;
     do {
-        if (atomic_load(&update->cancel) || curl_multi_perform(multi, &running) != CURLM_OK) goto out;
+        if (atomic_load(&update->cancel) || curl_multi_perform(multi, &running) != CURLM_OK)
+            goto out;
         if (running && curl_multi_poll(multi, NULL, 0, 100, NULL) != CURLM_OK) goto out;
     } while (running);
     CURLMsg *message = curl_multi_info_read(multi, &pending);
     if (!message || message->msg != CURLMSG_DONE || message->data.result != CURLE_OK ||
-        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status) != CURLE_OK || status != 200) goto out;
+        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status) != CURLE_OK || status != 200)
+        goto out;
     unsigned char digest[32];
     snag_sha256_final(&d.hash, digest);
     if (hash) {
-        for (size_t i = 0; i < sizeof(digest); ++i) (void)snprintf(hash + 2u * i, 3u, "%02x", digest[i]);
+        for (size_t i = 0; i < sizeof(digest); ++i)
+            (void)snprintf(hash + 2u * i, 3u, "%02x", digest[i]);
     }
     if (size) *size = d.size;
     rc = 0;
@@ -145,8 +165,8 @@ out:
 static bool
 same_file(const snag_file_info *a, const snag_file_info *b)
 {
-    return a->st_dev == b->st_dev && a->st_ino == b->st_ino &&
-           a->st_size == b->st_size && a->st_mtime == b->st_mtime;
+    return a->st_dev == b->st_dev && a->st_ino == b->st_ino && a->st_size == b->st_size &&
+           a->st_mtime == b->st_mtime;
 }
 
 static bool
@@ -182,7 +202,8 @@ version_parts(const char *text, uint32_t parts[3])
             if (parts[i] > (UINT32_MAX - digit) / 10u) return NULL;
             parts[i] = parts[i] * 10u + digit;
         }
-        if (text == start || (text - start > 1 && *start == '0') || (i < 2u && *text++ != '.')) return NULL;
+        if (text == start || (text - start > 1 && *start == '0') || (i < 2u && *text++ != '.'))
+            return NULL;
     }
     return text;
 }
@@ -255,25 +276,29 @@ install_update(struct snag_update *update)
     /* Recovery and installation reserve the same canonical name. */
     static const char suffix[] = ".update-old.exe";
     size_t base_len = strlen(base), suffix_len = sizeof(suffix) - 1u;
-    if (base[0] == '.' && base_len > suffix_len + 1u && strcmp(base + base_len - suffix_len, suffix) == 0) {
+    if (base[0] == '.' && base_len > suffix_len + 1u &&
+        strcmp(base + base_len - suffix_len, suffix) == 0) {
         size_t len = base_len - suffix_len - 1u;
         if (len >= sizeof(canonical)) goto out;
-        memcpy(canonical, base + 1u, len); canonical[len] = '\0';
+        memcpy(canonical, base + 1u, len);
+        canonical[len] = '\0';
         restore = base;
         base = canonical;
     }
 #endif
     if (snprintf(lockname, sizeof(lockname), ".%s.update-lock", base) >= (int)sizeof(lockname) ||
         snprintf(stage, sizeof(stage), ".%s.update-new", base) >= (int)sizeof(stage) ||
-        snprintf(backup, sizeof(backup), ".%s.update-old.exe", base) >= (int)sizeof(backup)) goto out;
+        snprintf(backup, sizeof(backup), ".%s.update-old.exe", base) >= (int)sizeof(backup))
+        goto out;
 #ifdef _WIN32
     /* Absolute NT paths ignore the directory descriptor. */
     dir = snag_open_read_security_at(-1, path, true);
 #else
     dir = snag_open_read_security_at(AT_FDCWD, *path ? path : "/", true);
 #endif
-    if (dir < 0 || snag_fstat(dir, &current) < 0 ||
-        snag_fd_privacy(dir, &privacy) < 0 || !privacy.effective_owner) goto out;
+    if (dir < 0 || snag_fstat(dir, &current) < 0 || snag_fd_privacy(dir, &privacy) < 0 ||
+        !privacy.effective_owner)
+        goto out;
 #ifndef _WIN32
     if (current.st_mode & (S_IWGRP | S_IWOTH)) goto out;
 #endif
@@ -281,28 +306,32 @@ install_update(struct snag_update *update)
     if (lock < 0 && errno == EEXIST) lock = snag_open_private_append_at(dir, lockname, false);
     if (lock < 0 || snag_lock_file(lock, false) < 0) goto out;
     original = snag_open_read_security_at(dir, restore ? restore : base, false);
-    if (original < 0 || snag_fstat(original, &before) < 0 || !S_ISREG(before.st_mode) || before.st_size < 0 ||
-        (uint64_t)before.st_size > UPDATE_BINARY_MAX ||
+    if (original < 0 || snag_fstat(original, &before) < 0 || !S_ISREG(before.st_mode) ||
+        before.st_size < 0 || (uint64_t)before.st_size > UPDATE_BINARY_MAX ||
         before.st_nlink != 1 || snag_fd_privacy(original, &privacy) < 0 ||
         !privacy.effective_owner || !has_identity(original, SNAJPAGENT_VERSION, update) ||
-        snag_permissions_capture(original, &permissions) < 0) goto out;
+        snag_permissions_capture(original, &permissions) < 0)
+        goto out;
 #ifndef _WIN32
     if (before.st_mode & (S_ISUID | S_ISGID | S_IWGRP | S_IWOTH)) goto out;
 #endif
     if (restore) {
         if (snag_lstat_at(dir, base, &current) < 0 && errno == ENOENT &&
-            snag_rename_at(dir, restore, dir, base) == 0) (void)snag_sync_dir(dir);
+            snag_rename_at(dir, restore, dir, base) == 0)
+            (void)snag_sync_dir(dir);
         goto out;
     }
     /* The owner-controlled directory and lock reserve these staging names. */
     if (snag_lstat_at(dir, stage, &current) == 0) {
-        if (!S_ISREG(current.st_mode) || current.st_nlink != 1 || snag_unlink_at(dir, stage, false) < 0)
+        if (!S_ISREG(current.st_mode) || current.st_nlink != 1 ||
+            snag_unlink_at(dir, stage, false) < 0)
             goto out;
     } else if (errno != ENOENT) {
         goto out;
     }
     if (snprintf(meta_url, sizeof(meta_url), "%s.json", update->url) >= (int)sizeof(meta_url) ||
-        fetch(update, meta_url, &body, -1, UPDATE_INFO_MAX, NULL, NULL) < 0) goto out;
+        fetch(update, meta_url, &body, -1, UPDATE_INFO_MAX, NULL, NULL) < 0)
+        goto out;
     meta = snag_json_load_strict(body.data, body.len, UPDATE_INFO_MAX, error, sizeof(error));
     if (!meta) goto out;
     const char *name = snag_json_string(meta, "name");
@@ -311,20 +340,25 @@ install_update(struct snag_update *update)
     const char *url = snag_json_string(meta, "url");
     const char *digest = snag_json_string(meta, "sha256");
     const char *changelog = snag_json_string(meta, "changelog");
-    if (!name || strcmp(name, SNAJPAGENT_NAME) || !target || strcmp(target, SNAJPAGENT_UPDATE_TARGET) ||
-        !newer_version(version) || !secure_url(url, false) || !secure_url(changelog, true) ||
-        !digest || strlen(digest) != 64u || !snag_hex_is_lower(digest, 64u) ||
-        snag_json_integer_u64(meta, "size", &expected_size) < 0 ||
-        !expected_size || expected_size > UPDATE_BINARY_MAX || atomic_load(&update->cancel)) goto out;
+    if (!name || strcmp(name, SNAJPAGENT_NAME) || !target ||
+        strcmp(target, SNAJPAGENT_UPDATE_TARGET) || !newer_version(version) ||
+        !secure_url(url, false) || !secure_url(changelog, true) || !digest ||
+        strlen(digest) != 64u || !snag_hex_is_lower(digest, 64u) ||
+        snag_json_integer_u64(meta, "size", &expected_size) < 0 || !expected_size ||
+        expected_size > UPDATE_BINARY_MAX || atomic_load(&update->cancel))
+        goto out;
     output = snag_create_private_at(dir, stage, true);
     if (output < 0) goto out;
     staged = true;
     if (fetch(update, url, NULL, output, expected_size, hash, &downloaded) < 0 ||
-        downloaded != expected_size || strcmp(hash, digest) || !has_identity(output, version, update) ||
+        downloaded != expected_size || strcmp(hash, digest) ||
+        !has_identity(output, version, update) ||
         snag_permissions_apply(output, &permissions) < 0 || snag_sync_file(output) < 0 ||
         snag_lstat_at(dir, base, &current) < 0 || !same_file(&before, &current) ||
-        atomic_load(&update->cancel)) goto out;
-    close(output); output = -1;
+        atomic_load(&update->cancel))
+        goto out;
+    close(output);
+    output = -1;
 #ifdef SNAJPAGENT_TEST_RENAME_ASIDE
     if (true) {
 #else
@@ -354,7 +388,8 @@ install_update(struct snag_update *update)
     staged = false;
     (void)snag_sync_dir(dir);
     (void)snprintf(update->banner, sizeof(update->banner),
-        "=== " SNAJPAGENT_NAME " updated ===\nInstalled %s. Restart when convenient to use it.\nChangelog: %s\n",
+        "=== " SNAJPAGENT_NAME
+        " updated ===\nInstalled %s. Restart when convenient to use it.\nChangelog: %s\n",
         version, changelog);
 out:
     if (output >= 0) close(output);
@@ -388,8 +423,11 @@ snag_update_start(const char *program, const char *url, snag_wake_fd wake)
     update->wake = wake;
     update->program = program ? strdup(program) : NULL;
     update->url = url ? strdup(url) : NULL;
-    if (!update->program || !update->url || pthread_create(&update->thread, NULL, worker, update) != 0) {
-        free(update->program); free(update->url); free(update);
+    if (!update->program || !update->url ||
+        pthread_create(&update->thread, NULL, worker, update) != 0) {
+        free(update->program);
+        free(update->url);
+        free(update);
         return NULL;
     }
     return update;
@@ -412,7 +450,9 @@ snag_update_stop(struct snag_update *update)
     (void)pthread_join(update->thread, NULL);
     const char *pending = snag_update_take(update);
     char *banner = pending ? strdup(pending) : NULL;
-    free(update->program); free(update->url); free(update);
+    free(update->program);
+    free(update->url);
+    free(update);
     return banner;
 }
 #endif

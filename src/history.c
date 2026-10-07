@@ -36,7 +36,8 @@ snag_history_snapshot_free(struct snag_history_snapshot *snapshot)
 }
 
 int
-snag_history_snapshot_copy(struct snag_history_snapshot *out, const struct snag_history_snapshot *source)
+snag_history_snapshot_copy(
+    struct snag_history_snapshot *out, const struct snag_history_snapshot *source)
 {
     memset(out, 0, sizeof(*out));
     if (source->count) {
@@ -74,11 +75,12 @@ snag_history_free(struct snag_history *history)
 }
 
 int
-snag_history_snapshot_open(struct snag_history_snapshot *snapshot, const char *dotdir,
-    const char *session)
+snag_history_snapshot_open(
+    struct snag_history_snapshot *snapshot, const char *dotdir, const char *session)
 {
     if (!snag_path_root_len(dotdir) || !session || strlen(session) != SNAG_ID_HEX_LEN ||
-        !snag_hex_is_lower(session, SNAG_ID_HEX_LEN)) return snag_errno(EINVAL);
+        !snag_hex_is_lower(session, SNAG_ID_HEX_LEN))
+        return snag_errno(EINVAL);
     char *sessions = snag_path_join(dotdir, "sessions");
     char *directory = sessions ? snag_path_join(sessions, session) : NULL;
     struct snag_history_snapshot next = {.local_end = INT64_MAX};
@@ -131,7 +133,7 @@ history_memory_add(struct snag_history_snapshot *snapshot, const char *text, boo
     if (snapshot->head + snapshot->count == snapshot->capacity) {
         if (snapshot->head) {
             memmove(snapshot->items, snapshot->items + snapshot->head,
-                    snapshot->count * sizeof(*snapshot->items));
+                snapshot->count * sizeof(*snapshot->items));
             snapshot->head = 0;
         }
         if (snapshot->count == snapshot->capacity) {
@@ -195,10 +197,14 @@ history_decode(const unsigned char *line, size_t len, struct snag_buf *out)
         }
         if (++i >= len) return -1;
         c = line[i];
-        if (c == '\\') c = '\\';
-        else if (c == 'n') c = '\n';
-        else if (c == 'r') c = '\r';
-        else if (c == 't') c = '\t';
+        if (c == '\\')
+            c = '\\';
+        else if (c == 'n')
+            c = '\n';
+        else if (c == 'r')
+            c = '\r';
+        else if (c == 't')
+            c = '\t';
         else if (c == 'x' && i + 2u < len) {
             const char *hi = strchr(hex, line[++i]);
             const char *lo = strchr(hex, line[++i]);
@@ -209,7 +215,8 @@ history_decode(const unsigned char *line, size_t len, struct snag_buf *out)
         }
         if (!c || snag_buf_putc(out, c) < 0) return -1;
     }
-    if (!out->len || !snag_utf8_valid(out->data, out->len, true) || snag_buf_terminate(out) < 0) return -1;
+    if (!out->len || !snag_utf8_valid(out->data, out->len, true) || snag_buf_terminate(out) < 0)
+        return -1;
     return 0;
 }
 
@@ -222,8 +229,11 @@ history_encode(struct snag_buf *out, const char *text)
     snag_buf_reset(out);
     for (; *p; ++p) {
         unsigned char c = *p;
-        const char *escape = c == '\\' ? "\\\\" : c == '\n' ? "\\n" :
-                             c == '\r' ? "\\r" : c == '\t' ? "\\t" : NULL;
+        const char *escape = c == '\\'   ? "\\\\"
+                             : c == '\n' ? "\\n"
+                             : c == '\r' ? "\\r"
+                             : c == '\t' ? "\\t"
+                                         : NULL;
         if (escape) {
             if (snag_buf_append(out, escape, 2u) < 0) return -1;
         } else if (c < 0x20u || c == 0x7fu) {
@@ -249,7 +259,8 @@ snag_history_reader_close(struct snag_history_reader *reader)
 }
 
 void
-snag_history_reader_open(struct snag_history_reader *reader, const struct snag_history_snapshot *snapshot)
+snag_history_reader_open(
+    struct snag_history_reader *reader, const struct snag_history_snapshot *snapshot)
 {
     const char *paths[] = {snapshot->local_path, snapshot->global_path};
     snag_history_reader_close(reader);
@@ -261,15 +272,16 @@ snag_history_reader_open(struct snag_history_reader *reader, const struct snag_h
         int fd = snag_open_read(paths[i], false);
         snag_file_info st;
         struct snag_file_privacy privacy;
-        if (fd < 0 || snag_fstat(fd, &st) < 0 || st.st_size < 0 ||
-            !S_ISREG(st.st_mode) || st.st_nlink != 1u ||
-            snag_fd_privacy(fd, &privacy) < 0 || !privacy.effective_owner || !privacy.private_access) {
+        if (fd < 0 || snag_fstat(fd, &st) < 0 || st.st_size < 0 || !S_ISREG(st.st_mode) ||
+            st.st_nlink != 1u || snag_fd_privacy(fd, &privacy) < 0 || !privacy.effective_owner ||
+            !privacy.private_access) {
             if (fd >= 0) (void)close(fd);
             reader->warning = true;
             continue;
         }
         reader->fd[i] = fd;
-        reader->size[i] = i == 0u && snapshot->local_end < st.st_size ? snapshot->local_end : st.st_size;
+        reader->size[i] =
+            i == 0u && snapshot->local_end < st.st_size ? snapshot->local_end : st.st_size;
     }
 }
 
@@ -280,7 +292,8 @@ snag_history_end(const struct snag_history_snapshot *snapshot)
 }
 
 static int
-history_byte(struct snag_history_reader *reader, unsigned int source, int64_t offset, unsigned char *byte)
+history_byte(
+    struct snag_history_reader *reader, unsigned int source, int64_t offset, unsigned char *byte)
 {
     if (reader->cache_source != source || offset < reader->cache_start ||
         offset - reader->cache_start >= (int64_t)reader->cache_len) {
@@ -302,10 +315,9 @@ history_byte(struct snag_history_reader *reader, unsigned int source, int64_t of
 }
 
 int
-snag_history_read(struct snag_history_reader *reader,
-                  const struct snag_history_snapshot *snapshot, bool newer,
-                  struct snag_history_cursor from, struct snag_history_cursor *start,
-                  struct snag_history_cursor *end, const char **text)
+snag_history_read(struct snag_history_reader *reader, const struct snag_history_snapshot *snapshot,
+    bool newer, struct snag_history_cursor from, struct snag_history_cursor *start,
+    struct snag_history_cursor *end, const char **text)
 {
     if (reader->scanning) {
         from.source = reader->scan_source;
@@ -368,7 +380,8 @@ snag_history_read(struct snag_history_reader *reader,
             if (reader->encoded.len == reader->encoded.max) reader->scan_oversized = true;
             if (!reader->scan_oversized && snag_buf_putc(&reader->encoded, c) < 0) return -1;
         }
-        if (newer) reader->scan_last = reader->scan_pos;
+        if (newer)
+            reader->scan_last = reader->scan_pos;
         else {
             reader->scan_first = reader->scan_pos;
             for (size_t i = 0u, n = reader->encoded.len; i < n / 2u; ++i) {
@@ -379,8 +392,9 @@ snag_history_read(struct snag_history_reader *reader,
         }
         from.offset = reader->scan_pos;
         reader->scanning = false;
-        if (!reader->scan_complete || reader->scan_oversized || history_decode(reader->encoded.data,
-            reader->encoded.len, &reader->decoded) < 0 || reader->decoded.len > SNAG_MAX_DIRECT_PROMPT) {
+        if (!reader->scan_complete || reader->scan_oversized ||
+            history_decode(reader->encoded.data, reader->encoded.len, &reader->decoded) < 0 ||
+            reader->decoded.len > SNAG_MAX_DIRECT_PROMPT) {
             reader->warning = true;
             continue;
         }
@@ -421,8 +435,9 @@ history_append(int fd, const struct snag_history_snapshot *snapshot, int64_t *en
     int rc = -1;
     if (original < 0 || snag_truncate(fd, original) < 0) return -1;
     for (size_t i = 0u; i < snapshot->count; ++i)
-        if (history_encode(&encoded, history_item(snapshot, i)) < 0 || snag_buf_putc(&encoded, '\n') < 0 ||
-            snag_write_full(fd, encoded.data, encoded.len) < 0) goto out;
+        if (history_encode(&encoded, history_item(snapshot, i)) < 0 ||
+            snag_buf_putc(&encoded, '\n') < 0 || snag_write_full(fd, encoded.data, encoded.len) < 0)
+            goto out;
     if (snag_sync_file(fd) < 0 || (*end = snag_seek(fd, 0, SEEK_END)) < 0) goto out;
     rc = 0;
 out:
@@ -438,7 +453,10 @@ snag_history_open(struct snag_history *history, const char *dotdir)
     history->global_path = snag_path_join(dotdir, "prompt_history");
     history->snapshot.global_path = history->global_path ? strdup(history->global_path) : NULL;
     int fd = history->snapshot.global_path ? snag_open_history(history->global_path) : -1;
-    if (fd < 0) { history_note_warning(history); return -1; }
+    if (fd < 0) {
+        history_note_warning(history);
+        return -1;
+    }
     (void)close(fd);
     return 0;
 }
@@ -465,7 +483,8 @@ snag_history_bind(struct snag_history *history, const char *session_dir)
         }
         if (rc < 0) (void)close(fd);
     }
-    free(path); free(copy);
+    free(path);
+    free(copy);
     if (rc < 0) history_note_warning(history);
     return rc;
 }
@@ -474,10 +493,12 @@ int
 snag_history_merge(struct snag_history *history)
 {
     if (!history || !history->global_path ||
-        (history->merged == history->snapshot.local_end && !history->snapshot.count)) return 0;
+        (history->merged == history->snapshot.local_end && !history->snapshot.count))
+        return 0;
     int fd = history_file_open(history->global_path), rc = -1;
     int64_t original = -1;
-    if (fd < 0 || (original = history_complete_end(fd)) < 0 || snag_truncate(fd, original) < 0) goto out;
+    if (fd < 0 || (original = history_complete_end(fd)) < 0 || snag_truncate(fd, original) < 0)
+        goto out;
     if (history->merged < history->snapshot.local_end) {
         int local = history->local_fd;
         if (snag_seek(local, history->merged, SEEK_SET) < 0) goto out;
@@ -485,7 +506,8 @@ snag_history_merge(struct snag_history *history)
         int64_t pos = history->merged;
         while (pos < history->snapshot.local_end) {
             size_t n = sizeof(block);
-            if (history->snapshot.local_end - pos < (int64_t)n) n = (size_t)(history->snapshot.local_end - pos);
+            if (history->snapshot.local_end - pos < (int64_t)n)
+                n = (size_t)(history->snapshot.local_end - pos);
             ssize_t got = read(local, block, n);
             if (got < 0 && errno == EINTR) continue;
             if (got != (ssize_t)n || snag_write_full(fd, block, n) < 0) goto out;
@@ -518,6 +540,7 @@ snag_history_add(struct snag_history *history, const char *text)
     int rc = history_append(history->local_fd, &history->snapshot, &history->snapshot.local_end);
     if (rc == 0) {
         history_memory_clear(&history->snapshot);
-    } else history_note_warning(history);
+    } else
+        history_note_warning(history);
     return rc;
 }

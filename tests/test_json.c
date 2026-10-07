@@ -9,18 +9,19 @@
 static void
 test_object_iteration(void)
 {
-    json_t *object = json_pack("{s:{s:i,s:i},s:{s:i}}",
-        "a", "x", 1, "skip", 2, "b", "y", 3);
+    json_t *object = json_pack("{s:{s:i,s:i},s:{s:i}}", "a", "x", 1, "skip", 2, "b", "y", 3);
     assert(object);
     const char *key;
     json_t *value;
     unsigned int count = 0u;
     json_int_t sum = 0;
-    json_object_foreach(object, key, value) {
+    json_object_foreach(object, key, value)
+    {
         assert(!strcmp(key, "a") || !strcmp(key, "b"));
         const char *field;
         json_t *number;
-        json_object_foreach(value, field, number) {
+        json_object_foreach(value, field, number)
+        {
             ++count;
             if (!strcmp(field, "skip")) continue;
             sum += json_integer_value(number);
@@ -28,7 +29,8 @@ test_object_iteration(void)
     }
     assert(count == 3u && sum == 4);
     count = 0u;
-    json_object_foreach(object, key, value) {
+    json_object_foreach(object, key, value)
+    {
         ++count;
         break;
     }
@@ -36,8 +38,14 @@ test_object_iteration(void)
     json_decref(object);
     object = json_object();
     assert(object);
-    json_object_foreach(object, key, value) { ++count; }
-    json_object_foreach(NULL, key, value) { ++count; }
+    json_object_foreach(object, key, value)
+    {
+        ++count;
+    }
+    json_object_foreach(NULL, key, value)
+    {
+        ++count;
+    }
     assert(count == 1u);
     json_decref(object);
 }
@@ -47,7 +55,8 @@ test_strict_accepts_wire_json(void)
 {
     static const unsigned char input[] = " \n {\"b\":1.5,\"a\":[true,null]} \t";
     char error[192] = {0};
-    json_t *value = snag_json_load_strict(input, sizeof(input) - 1u, sizeof(input), error, sizeof(error));
+    json_t *value =
+        snag_json_load_strict(input, sizeof(input) - 1u, sizeof(input), error, sizeof(error));
 
     assert(value);
     assert(json_is_object(value));
@@ -61,8 +70,8 @@ test_arguments_resolve_duplicate_keys_last_wins(void)
 {
     static const unsigned char duplicate[] = "{\"x\":1,\"x\":2}";
     char error[192] = {0};
-    json_t *value = snag_json_load_arguments(duplicate, sizeof(duplicate) - 1u, sizeof(duplicate),
-                                            error, sizeof(error));
+    json_t *value = snag_json_load_arguments(
+        duplicate, sizeof(duplicate) - 1u, sizeof(duplicate), error, sizeof(error));
 
     assert(value);
     assert(json_is_object(value));
@@ -70,8 +79,8 @@ test_arguments_resolve_duplicate_keys_last_wins(void)
     json_decref(value);
     /* The strict loader still refuses the same input: records must stay
      * unambiguous, only provider arguments tolerate a repeat. */
-    assert(snag_json_load_strict(duplicate, sizeof(duplicate) - 1u, sizeof(duplicate),
-                                 error, sizeof(error)) == NULL);
+    assert(snag_json_load_strict(
+               duplicate, sizeof(duplicate) - 1u, sizeof(duplicate), error, sizeof(error)) == NULL);
 }
 
 static void
@@ -83,7 +92,7 @@ test_arguments_reject_decoded_nul(void)
     /* Provider arguments tolerate duplicate keys, not an embedded NUL that
      * would truncate a C-string tool parameter after JSON decoding. */
     assert(snag_json_load_arguments(decoded_nul, sizeof(decoded_nul) - 1u, sizeof(decoded_nul),
-                                    error, sizeof(error)) == NULL);
+               error, sizeof(error)) == NULL);
     assert(error[0]);
 }
 
@@ -97,17 +106,15 @@ test_strict_rejects_ambiguous_or_invalid_input(void)
         const unsigned char *data;
         size_t len;
         size_t max;
-    } inputs[] = {
-        {duplicate, sizeof(duplicate) - 1u, sizeof(duplicate)},
+    } inputs[] = {{duplicate, sizeof(duplicate) - 1u, sizeof(duplicate)},
         {decoded_nul, sizeof(decoded_nul) - 1u, sizeof(decoded_nul)},
-        {invalid_utf8, sizeof(invalid_utf8), sizeof(invalid_utf8)}, {(const unsigned char *)"{}", 2u, 1u},
-        {(const unsigned char *)"", 0u, 1u}
-    };
+        {invalid_utf8, sizeof(invalid_utf8), sizeof(invalid_utf8)},
+        {(const unsigned char *)"{}", 2u, 1u}, {(const unsigned char *)"", 0u, 1u}};
 
     for (size_t i = 0; i < sizeof(inputs) / sizeof(inputs[0]); ++i) {
         char error[192] = {0};
-        json_t *value = snag_json_load_strict(inputs[i].data, inputs[i].len, inputs[i].max,
-                                             error, sizeof(error));
+        json_t *value = snag_json_load_strict(
+            inputs[i].data, inputs[i].len, inputs[i].max, error, sizeof(error));
         assert(!value);
         assert(error[0]);
     }
@@ -193,7 +200,8 @@ test_tool_argument_diagnostics(void)
     assert(json_object_set_new(args, "payload", json_stringn("x\0y", 3u)) == 0);
     assert(!snag_json_arg_text(args, "payload", 0u, 20u, false, &text, error, sizeof(error)));
     assert(json_object_set_new(args, "payload", json_null()) == 0);
-    assert(snag_json_arg_text(args, "payload", 0u, 20u, true, &text, error, sizeof(error)) && !text);
+    assert(
+        snag_json_arg_text(args, "payload", 0u, 20u, true, &text, error, sizeof(error)) && !text);
     assert(!snag_json_arg_text(args, "payload", 0u, 20u, false, &text, error, sizeof(error)));
     assert(json_object_del(args, "count") == 0);
     assert(snag_json_arg_keys(args, "payload", "count", error, sizeof(error)));
@@ -259,7 +267,8 @@ main(void)
         json_t *limit = json_loadb(limits[i], strlen(limits[i]), 0, NULL);
         uint64_t value = 999u;
         assert(limit);
-        assert(snag_json_nullable_limit(limit, "n", 100u, &value) == (i == 1u || i == 3u || i == 4u));
+        assert(
+            snag_json_nullable_limit(limit, "n", 100u, &value) == (i == 1u || i == 3u || i == 4u));
         assert(value == (i == 3u ? 1u : i == 4u ? 100u : 0u));
         json_decref(limit);
     }

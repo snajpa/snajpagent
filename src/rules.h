@@ -19,8 +19,7 @@
 #define SNAG_RULE_TEXT_MAX (64u * 1024u)
 #define SNAG_RULE_ENVELOPE_MAX (4u * 1024u * 1024u)
 
-enum snag_rule_verb {
-    SNAG_RULE_ALLOW, SNAG_RULE_DENY, SNAG_RULE_VERB_COUNT };
+enum snag_rule_verb { SNAG_RULE_ALLOW, SNAG_RULE_DENY, SNAG_RULE_VERB_COUNT };
 
 struct snag_rules;
 struct snag_rule;
@@ -39,8 +38,8 @@ struct snag_rule_verdict {
 /* Report one matched rule to the host (fixed-format logging). Return 0 to
  * continue scanning, -1 for a host failure. The verdict belongs to the first
  * matching rule; the callback never changes it. */
-typedef int (*snag_rule_effect_fn)(void *opaque, const struct snag_rule *rule, struct snag_rule_frame *frame,
-                                   char *error, size_t size);
+typedef int (*snag_rule_effect_fn)(void *opaque, const struct snag_rule *rule,
+    struct snag_rule_frame *frame, char *error, size_t size);
 
 struct snag_rules *snag_rules_compile(const json_t *definition, char *error, size_t size);
 void snag_rules_free(struct snag_rules *rules);
@@ -53,7 +52,7 @@ enum snag_rule_verb snag_rule_verb(const struct snag_rule *rule);
 const char *snag_rule_message(const struct snag_rule *rule);
 
 int snag_rules_eval(const struct snag_rules *rules, struct snag_rule_frame *frame,
-                    snag_rule_effect_fn effect, void *opaque,
-                    struct snag_rule_verdict *verdict, char *error, size_t size);
+    snag_rule_effect_fn effect, void *opaque, struct snag_rule_verdict *verdict, char *error,
+    size_t size);
 
 #endif

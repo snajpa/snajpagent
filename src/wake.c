@@ -41,8 +41,8 @@ snag_wakeup_create(snag_wake_fd pair[2])
     address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
     if (setsockopt(listener, SOL_SOCKET, SO_EXCLUSIVEADDRUSE, (char *)&yes, sizeof(yes)) < 0 ||
         bind(listener, (struct sockaddr *)&address, sizeof(address)) < 0 ||
-        getsockname(listener, (struct sockaddr *)&address, &size) < 0 ||
-        listen(listener, 1) < 0 || connect(writer, (struct sockaddr *)&address, sizeof(address)) < 0)
+        getsockname(listener, (struct sockaddr *)&address, &size) < 0 || listen(listener, 1) < 0 ||
+        connect(writer, (struct sockaddr *)&address, sizeof(address)) < 0)
         goto fail;
     size = sizeof(peer);
     reader = accept(listener, (struct sockaddr *)&peer, &size);
@@ -56,13 +56,15 @@ snag_wakeup_create(snag_wake_fd pair[2])
     }
     if (snag_socket_noinherit(reader) < 0) goto fail;
     if (setsockopt(writer, IPPROTO_TCP, TCP_NODELAY, (char *)&yes, sizeof(yes)) < 0 ||
-        ioctlsocket(reader, FIONBIO, &nonblocking) < 0 || ioctlsocket(writer, FIONBIO, &nonblocking) < 0)
+        ioctlsocket(reader, FIONBIO, &nonblocking) < 0 ||
+        ioctlsocket(writer, FIONBIO, &nonblocking) < 0)
         goto fail;
     (void)closesocket(listener);
     pair[0] = reader;
     pair[1] = writer;
     return 0;
-fail: error = WSAGetLastError();
+fail:
+    error = WSAGetLastError();
     if (listener != INVALID_SOCKET) (void)closesocket(listener);
     if (writer != INVALID_SOCKET) (void)closesocket(writer);
     if (reader != INVALID_SOCKET) (void)closesocket(reader);
@@ -74,7 +76,7 @@ void
 snag_wakeup_send(snag_wake_fd writer)
 {
     int saved = errno;
-    while (send(writer, "", 1, 0) < 0 && WSAGetLastError() == WSAEINTR) ;
+    while (send(writer, "", 1, 0) < 0 && WSAGetLastError() == WSAEINTR);
     errno = saved;
 }
 
@@ -84,7 +86,7 @@ snag_wakeup_drain(snag_wake_fd reader)
     int saved = errno;
     char bytes[64];
 
-    while (recv(reader, bytes, sizeof(bytes), 0) > 0) ;
+    while (recv(reader, bytes, sizeof(bytes), 0) > 0);
     errno = saved;
 }
 
@@ -94,7 +96,8 @@ snag_wakeup_wait(snag_wake_fd reader, int timeout_ms)
     fd_set ready;
     struct timeval timeout;
 
-    if (timeout_ms < -1 || (reader == SNAG_WAKE_INVALID && timeout_ms < 0)) return snag_errno(EINVAL);
+    if (timeout_ms < -1 || (reader == SNAG_WAKE_INVALID && timeout_ms < 0))
+        return snag_errno(EINVAL);
     if (reader == SNAG_WAKE_INVALID) return snag_sleep_ms((unsigned int)timeout_ms);
     FD_ZERO(&ready);
     FD_SET(reader, &ready);
@@ -127,7 +130,8 @@ snag_wakeup_create(snag_wake_fd pair[2])
     if (pipe(pair) < 0) return -1;
     for (size_t i = 0; i < 2u; ++i) {
         int flags = fcntl(pair[i], F_GETFL);
-        if (flags < 0 || fcntl(pair[i], F_SETFL, flags | O_NONBLOCK) < 0 || snag_fd_cloexec(pair[i]) < 0) {
+        if (flags < 0 || fcntl(pair[i], F_SETFL, flags | O_NONBLOCK) < 0 ||
+            snag_fd_cloexec(pair[i]) < 0) {
             snag_wakeup_close(pair);
             return -1;
         }
@@ -141,7 +145,7 @@ snag_wakeup_send(snag_wake_fd writer)
     int saved = errno;
     char byte = 0;
 
-    while (write(writer, &byte, 1u) < 0 && errno == EINTR) ;
+    while (write(writer, &byte, 1u) < 0 && errno == EINTR);
     errno = saved;
 }
 
@@ -151,7 +155,7 @@ snag_wakeup_drain(snag_wake_fd reader)
     int saved = errno;
     char bytes[64];
 
-    while (read(reader, bytes, sizeof(bytes)) > 0) ;
+    while (read(reader, bytes, sizeof(bytes)) > 0);
     errno = saved;
 }
 
@@ -160,7 +164,8 @@ snag_wakeup_wait(snag_wake_fd reader, int timeout_ms)
 {
     struct pollfd ready = {reader, POLLIN, 0};
 
-    if (timeout_ms < -1 || (reader == SNAG_WAKE_INVALID && timeout_ms < 0)) return snag_errno(EINVAL);
+    if (timeout_ms < -1 || (reader == SNAG_WAKE_INVALID && timeout_ms < 0))
+        return snag_errno(EINVAL);
     int rc = poll(&ready, 1u, timeout_ms);
     if (rc > 0 && (ready.revents & POLLNVAL)) return snag_errno(EBADF);
     return rc;

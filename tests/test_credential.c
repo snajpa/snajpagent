@@ -27,16 +27,16 @@ test_sources(void)
     struct snag_secret_source source = {0};
     struct snag_credential credential;
     char *value = NULL;
-    static const char *const invalid[] = {
-        "", "${}", "${1BAD}", "${VALID:-other}", "${VALID}suffix",
-        "\"unterminated", "\"secret\" trailing", "\"\"", "\"nul\\u0000byte\"" };
+    static const char *const invalid[] = {"", "${}", "${1BAD}", "${VALID:-other}", "${VALID}suffix",
+        "\"unterminated", "\"secret\" trailing", "\"\"", "\"nul\\u0000byte\""};
 
     assert(mkdtemp(dir));
     (void)snprintf(path, sizeof(path), "%s/key file#1", dir);
     (void)snprintf(config, sizeof(config), "%s/config.ini", dir);
     (void)snprintf(link, sizeof(link), "%s/key-link", dir);
     assert(setenv("SNAG_SECRET_TEST", "env-key", 1) == 0);
-    assert(snag_secret_source_parse(&source, "${SNAG_SECRET_TEST}", config, error, sizeof(error)) == 0);
+    assert(snag_secret_source_parse(&source, "${SNAG_SECRET_TEST}", config, error, sizeof(error)) ==
+           0);
     assert(source.kind == SNAG_SECRET_ENV);
     assert(snag_credential_resolve(&credential, &source, error, sizeof(error)) == 0);
     assert(strcmp(credential.value, "env-key") == 0);
@@ -45,10 +45,12 @@ test_sources(void)
     assert(snag_credential_resolve(&credential, &source, error, sizeof(error)) < 0);
     assert(credential.len == 0u);
 
-    assert(snag_secret_source_parse(&source, "\"${SNAG_SECRET_TEST}\"", config, error, sizeof(error)) == 0);
+    assert(snag_secret_source_parse(
+               &source, "\"${SNAG_SECRET_TEST}\"", config, error, sizeof(error)) == 0);
     assert(snag_credential_resolve(&credential, &source, error, sizeof(error)) == 0);
     assert(strcmp(credential.value, "${SNAG_SECRET_TEST}") == 0);
-    assert(snag_secret_source_parse(&source, "\"line\\nvalue\"", config, error, sizeof(error)) == 0);
+    assert(
+        snag_secret_source_parse(&source, "\"line\\nvalue\"", config, error, sizeof(error)) == 0);
     assert(snag_secret_source_resolve(&source, &value, error, sizeof(error)) == 0);
     assert(strcmp(value, "line\nvalue") == 0);
     snag_secret_bytes_free(value);
@@ -78,7 +80,8 @@ test_sources(void)
         assert(snag_secret_source_parse(&source, invalid[i], config, error, sizeof(error)) < 0);
         assert(!strstr(error, "unterminated") && !strstr(error, "nul\\u0000byte"));
     }
-    assert(snag_secret_source_parse(&source, "SNAG_SECRET_TEST", config, error, sizeof(error)) == 0);
+    assert(
+        snag_secret_source_parse(&source, "SNAG_SECRET_TEST", config, error, sizeof(error)) == 0);
     assert(source.kind == SNAG_SECRET_FILE);
     snag_secret_source_free(&source);
     snag_credential_clear(&credential);

@@ -12,8 +12,8 @@ struct host_log {
 };
 
 static int
-host_effect(void *opaque, const struct snag_rule *rule,
-            struct snag_rule_frame *frame, char *error, size_t error_size)
+host_effect(void *opaque, const struct snag_rule *rule, struct snag_rule_frame *frame, char *error,
+    size_t error_size)
 {
     struct host_log *log = opaque;
     (void)frame;
@@ -21,7 +21,7 @@ host_effect(void *opaque, const struct snag_rule *rule,
     (void)error_size;
     ++log->calls;
     (void)snprintf(log->last, sizeof(log->last), "%s:%d", snag_rule_name(rule),
-                   snag_rule_verb(rule) == SNAG_RULE_DENY);
+        snag_rule_verb(rule) == SNAG_RULE_DENY);
     return 0;
 }
 
@@ -47,7 +47,8 @@ definition(const char *rules)
 }
 
 static int
-evaluate(struct snag_rules *rules, json_t *envelope, struct host_log *log, struct snag_rule_verdict *verdict)
+evaluate(struct snag_rules *rules, json_t *envelope, struct host_log *log,
+    struct snag_rule_verdict *verdict)
 {
     struct snag_rule_frame frame = {envelope};
     char error[192] = {0};
@@ -59,9 +60,9 @@ evaluate(struct snag_rules *rules, json_t *envelope, struct host_log *log, struc
 static void
 test_deny_and_default_allow(void)
 {
-    json_t *def = definition( "[{\"name\":\"deny-exec\","
-        "\"match\":{\"/tool\":\"^exec_command$\"},\"action\":\"deny\","
-        "\"message\":\"Running commands is disabled here.\"}]");
+    json_t *def = definition("[{\"name\":\"deny-exec\","
+                             "\"match\":{\"/tool\":\"^exec_command$\"},\"action\":\"deny\","
+                             "\"message\":\"Running commands is disabled here.\"}]");
     struct snag_rules *rules = snag_rules_compile(def, NULL, 0u);
     struct host_log log = {0};
     struct snag_rule_verdict verdict;
@@ -69,12 +70,14 @@ test_deny_and_default_allow(void)
 
     assert(rules && !snag_rules_empty(rules));
     assert(snag_rules_digest(rules)[0]);
-    envelope = json_pack("{s:s,s:s,s:s}", "boundary", "out", "kind", "tool_call", "tool", "exec_command");
+    envelope =
+        json_pack("{s:s,s:s,s:s}", "boundary", "out", "kind", "tool_call", "tool", "exec_command");
     assert(evaluate(rules, envelope, &log, &verdict) == 0);
     assert(verdict.rejected && verdict.matches == 1u && log.calls == 1u);
     json_decref(envelope);
 
-    envelope = json_pack("{s:s,s:s,s:s}", "boundary", "out", "kind", "tool_call", "tool", "read_file");
+    envelope =
+        json_pack("{s:s,s:s,s:s}", "boundary", "out", "kind", "tool_call", "tool", "read_file");
     assert(evaluate(rules, envelope, &log, &verdict) == 0);
     assert(!verdict.rejected && verdict.matches == 0u);
     json_decref(envelope);
@@ -85,7 +88,8 @@ test_deny_and_default_allow(void)
 static void
 test_first_match_wins(void)
 {
-    json_t *def = definition( "[{\"name\":\"allow-exec\",\"match\":{\"/tool\":\"^exec_command$\"},"
+    json_t *def = definition(
+        "[{\"name\":\"allow-exec\",\"match\":{\"/tool\":\"^exec_command$\"},"
         "\"action\":\"allow\"},{\"name\":\"deny-all\",\"action\":\"deny\",\"message\":\"no\"}]");
     struct snag_rules *rules = snag_rules_compile(def, NULL, 0u);
     struct host_log log = {0};
@@ -110,7 +114,8 @@ test_first_match_wins(void)
 static void
 test_order_decides(void)
 {
-    json_t *def = definition( "[{\"name\":\"deny-all\",\"action\":\"deny\",\"message\":\"no\"},"
+    json_t *def = definition(
+        "[{\"name\":\"deny-all\",\"action\":\"deny\",\"message\":\"no\"},"
         "{\"name\":\"allow-exec\",\"match\":{\"/tool\":\"^exec_command$\"},\"action\":\"allow\"}]");
     struct snag_rules *rules = snag_rules_compile(def, NULL, 0u);
     struct host_log log = {0};
@@ -129,10 +134,10 @@ test_order_decides(void)
 static void
 test_invalid_definitions_rejected(void)
 {
-    static const char *const bad[] = {
-        "[{\"name\":\"x\",\"action\":\"explode\"}]",
+    static const char *const bad[] = {"[{\"name\":\"x\",\"action\":\"explode\"}]",
         "[{\"name\":\"x\",\"action\":\"allow\",\"match\":{\"/a\":\"(\"}}]",
-        "[{\"name\":\"x\",\"action\":\"allow\"},{\"name\":\"x\",\"action\":\"deny\",\"message\":\"m\"}]",
+        "[{\"name\":\"x\",\"action\":\"allow\"},{\"name\":\"x\",\"action\":\"deny\",\"message\":"
+        "\"m\"}]",
         "[{\"name\":\"x\",\"action\":\"allow\",\"bogus\":1}]",
         "[{\"name\":\"x\",\"action\":\"allow\",\"match\":{\"bad\":\"a\"}}]",
         "[{\"name\":\"x\",\"action\":\"allow\",\"message\":\"m\"}]",
@@ -145,7 +150,7 @@ test_invalid_definitions_rejected(void)
         "[{\"name\":\"x\",\"action\":\"deny\",\"message\":\"m\",\"command\":\"/bin/true\"}]",
         "[{\"name\":\"x\",\"action\":\"deny\",\"message\":\"m\",\"to\":\"model\",\"text\":\"t\"}]",
         "[{\"name\":\"Bad Name!\",\"action\":\"allow\"}]",
-        "[{\"name\":\"x\",\"action\":\"deny\"}]" };
+        "[{\"name\":\"x\",\"action\":\"deny\"}]"};
 
     for (size_t i = 0u; i < sizeof(bad) / sizeof(bad[0]) - 1u; ++i) {
         json_t *def = definition(bad[i]);
@@ -193,12 +198,12 @@ test_many_rules(void)
     for (unsigned int i = 0u; i < 300u; ++i) {
         char name[32];
         snprintf(name, sizeof(name), "rule%u", i);
-        assert(json_array_append_new(list, json_pack("{s:s,s:s,s:{s:s},s:s}",
-            "name", name, "action", "deny", "match", "/tool", "^absent$",
-            "message", "denied")) == 0);
+        assert(json_array_append_new(
+                   list, json_pack("{s:s,s:s,s:{s:s},s:s}", "name", name, "action", "deny", "match",
+                             "/tool", "^absent$", "message", "denied")) == 0);
     }
-    assert(json_array_append_new(list, json_pack("{s:s,s:s,s:s}",
-        "name", "last", "action", "deny", "message", "last rule reached")) == 0);
+    assert(json_array_append_new(list, json_pack("{s:s,s:s,s:s}", "name", "last", "action", "deny",
+                                           "message", "last rule reached")) == 0);
     def = json_pack("{s:o}", "rules", list);
     rules = snag_rules_compile(def, NULL, 0u);
     assert(rules);

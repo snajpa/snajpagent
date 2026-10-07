@@ -52,7 +52,7 @@ add_client(struct snag_cli *cli, const char *value, char *error, size_t error_si
 {
     if (cli->irc_client_count >= SNAG_CLI_IRC_CLIENT_MAX)
         return snag_fail(error, error_size, E2BIG, "at most %u -c options are supported",
-                         SNAG_CLI_IRC_CLIENT_MAX);
+            SNAG_CLI_IRC_CLIENT_MAX);
     if (strlen(value) > SNAG_CONFIG_URL_MAX)
         return snag_fail(error, error_size, EOVERFLOW, "-c endpoint is too long or unavailable");
     for (size_t i = 0; i < cli->irc_client_count; ++i)
@@ -66,15 +66,16 @@ static int
 set_once(const char **slot, const char *value, const char *name, char *error, size_t error_size)
 {
     if (*slot) return snag_fail(error, error_size, EINVAL, "duplicate %s option", name);
-    if (strlen(value) > SNAG_PATH_MAX_BYTES) return snag_fail(error, error_size, EOVERFLOW,
-                         "%s argument is too long or unavailable", name);
+    if (strlen(value) > SNAG_PATH_MAX_BYTES)
+        return snag_fail(
+            error, error_size, EOVERFLOW, "%s argument is too long or unavailable", name);
     *slot = value;
     return 0;
 }
 
 static const char *
-option_argument(int argc, char **argv, int *index, const char *attached,
-                const char *name, char *error, size_t error_size)
+option_argument(int argc, char **argv, int *index, const char *attached, const char *name,
+    char *error, size_t error_size)
 {
     if (attached && *attached) return attached;
     if (*index + 1 >= argc) {
@@ -97,10 +98,11 @@ optional_endpoint(int argc, char **argv, int *index, const char *attached)
 }
 
 static int
-parse_color_value(struct snag_cli *cli, const char *value, const char *name, char *error, size_t error_size)
+parse_color_value(
+    struct snag_cli *cli, const char *value, const char *name, char *error, size_t error_size)
 {
-    if (!snag_string_in(value, "auto always never")) return snag_fail(error, error_size, EINVAL,
-                         "%s accepts auto, always, or never", name);
+    if (!snag_string_in(value, "auto always never"))
+        return snag_fail(error, error_size, EINVAL, "%s accepts auto, always, or never", name);
     return set_once(&cli->color, value, name, error, error_size);
 }
 
@@ -111,12 +113,14 @@ read_execute_prompt(struct snag_cli *cli, char *error, size_t error_size)
 
     if (snag_isatty(STDIN_FILENO) == 1) {
         if (cli->resume) return 0;
-        return snag_fail(error, error_size, EINVAL, "-e requires a prompt after -- or non-terminal stdin");
+        return snag_fail(
+            error, error_size, EINVAL, "-e requires a prompt after -- or non-terminal stdin");
     }
     int rc = snag_buf_read(&prompt, STDIN_FILENO);
     if (rc < 0) {
-        snag_errorf(error, error_size, rc == -2 ?
-            "stdin prompt is invalid or exceeds 1 MiB" : "stdin prompt could not be read");
+        snag_errorf(error, error_size,
+            rc == -2 ? "stdin prompt is invalid or exceeds 1 MiB"
+                     : "stdin prompt could not be read");
         snag_buf_free(&prompt);
         return -1;
     }
@@ -139,17 +143,22 @@ read_execute_prompt(struct snag_cli *cli, char *error, size_t error_size)
 }
 
 static int
-parse_auth_command(struct snag_cli *cli, int argc, char **argv, int first, char *error, size_t error_size)
+parse_auth_command(
+    struct snag_cli *cli, int argc, char **argv, int first, char *error, size_t error_size)
 {
     cli->auth_command = strcmp(argv[first], "logout") == 0 ? SNAG_CLI_LOGOUT : SNAG_CLI_LOGIN;
-    if (cli->auth_command == SNAG_CLI_LOGIN && first + 1 < argc && strcmp(argv[first + 1], "status") == 0) {
+    if (cli->auth_command == SNAG_CLI_LOGIN && first + 1 < argc &&
+        strcmp(argv[first + 1], "status") == 0) {
         cli->auth_command = SNAG_CLI_LOGIN_STATUS;
         ++first;
     }
     for (int i = first + 1; i < argc; ++i) {
-        if (strcmp(argv[i], "--openai-device-auth") == 0 && !cli->openai_device_auth) cli->openai_device_auth = true;
-        else if (strcmp(argv[i], "--meta-device-auth") == 0 && !cli->meta_device_auth) cli->meta_device_auth = true;
-        else if (strcmp(argv[i], "--with-api-key") == 0 && !cli->with_api_key) cli->with_api_key = true;
+        if (strcmp(argv[i], "--openai-device-auth") == 0 && !cli->openai_device_auth)
+            cli->openai_device_auth = true;
+        else if (strcmp(argv[i], "--meta-device-auth") == 0 && !cli->meta_device_auth)
+            cli->meta_device_auth = true;
+        else if (strcmp(argv[i], "--with-api-key") == 0 && !cli->with_api_key)
+            cli->with_api_key = true;
         else if (!strcmp(argv[i], "--with-access-token") && !cli->with_access_token)
             cli->with_access_token = true;
         else if (argv[i][0] != '-' && !cli->auth_provider) {
@@ -158,26 +167,30 @@ parse_auth_command(struct snag_cli *cli, int argc, char **argv, int first, char 
                 goto invalid;
             }
             cli->auth_provider = argv[i];
-        } else goto invalid;
+        } else
+            goto invalid;
     }
     if (cli->update_model_cache || cli->list || cli->last || cli->provider || cli->session_name ||
-        cli->irc_listen || cli->irc_client_count ||
-        cli->doc_instructions.count || cli->irc_no_listen || cli->irc_no_client ||
-        cli->irc_model_nick || cli->irc_operator_nick || cli->irc_room_name ||
+        cli->irc_listen || cli->irc_client_count || cli->doc_instructions.count ||
+        cli->irc_no_listen || cli->irc_no_client || cli->irc_model_nick || cli->irc_operator_nick ||
+        cli->irc_room_name ||
         (cli->openai_device_auth + cli->meta_device_auth + cli->with_api_key +
-         cli->with_access_token > 1) ||
-        (cli->auth_command != SNAG_CLI_LOGIN && (cli->openai_device_auth ||
-         cli->meta_device_auth || cli->with_api_key || cli->with_access_token ||
-         cli->model || cli->effort)))
+                cli->with_access_token >
+            1) ||
+        (cli->auth_command != SNAG_CLI_LOGIN &&
+            (cli->openai_device_auth || cli->meta_device_auth || cli->with_api_key ||
+                cli->with_access_token || cli->model || cli->effort)))
         goto invalid;
     return 0;
 invalid:
-    snag_errorf(error, error_size, "invalid login/logout arguments; put common options before the command");
+    snag_errorf(
+        error, error_size, "invalid login/logout arguments; put common options before the command");
     return -1;
 }
 
 static int
-parse_options(struct snag_cli *cli, int argc, char **argv, int *index, char *error, size_t error_size)
+parse_options(
+    struct snag_cli *cli, int argc, char **argv, int *index, char *error, size_t error_size)
 {
     const struct option {
         const char *name;
@@ -190,20 +203,30 @@ parse_options(struct snag_cli *cli, int argc, char **argv, int *index, char *err
         {"--model-nick", 'n', true, &cli->irc_model_nick, NULL},
         {"--name", 'N', true, &cli->session_name, NULL},
         {"--operator-nick", 'o', true, &cli->irc_operator_nick, NULL},
-        {"--room-name", 'r', true, &cli->irc_room_name, NULL}, {"--dotdir", 0, true, &cli->dotdir, NULL},
-        {"--provider", 0, true, &cli->provider, NULL}, {"--config", 0, true, &cli->config_path, NULL},
-        {"--effort", 0, true, &cli->effort, NULL}, {"--listen", 's', true, &cli->irc_listen, NULL},
-        {"--client", 'c', true, NULL, NULL}, {"--last", 0, false, NULL, &cli->last},
+        {"--room-name", 'r', true, &cli->irc_room_name, NULL},
+        {"--dotdir", 0, true, &cli->dotdir, NULL},
+        {"--provider", 0, true, &cli->provider, NULL},
+        {"--config", 0, true, &cli->config_path, NULL},
+        {"--effort", 0, true, &cli->effort, NULL},
+        {"--listen", 's', true, &cli->irc_listen, NULL},
+        {"--client", 'c', true, NULL, NULL},
+        {"--last", 0, false, NULL, &cli->last},
         {"--resume", 0, false, NULL, &cli->resume},
         {"--attach", 'A', false, NULL, &cli->attach},
         {"--no-listen", 0, false, NULL, &cli->irc_no_listen},
-        {"--no-client", 0, false, NULL, &cli->irc_no_client}, {NULL, 'e', false, NULL, &cli->execute},
-        {NULL, 'l', true, NULL, &cli->list}, {"--help", 'h', false, NULL, &cli->help},
+        {"--no-client", 0, false, NULL, &cli->irc_no_client},
+        {NULL, 'e', false, NULL, &cli->execute},
+        {NULL, 'l', true, NULL, &cli->list},
+        {"--help", 'h', false, NULL, &cli->help},
         {"--update-model-cache", 0, false, NULL, &cli->update_model_cache},
-        {NULL, 'V', false, NULL, &cli->version}, {NULL, 'v', false, NULL, NULL},
-        {NULL, 'd', true, NULL, NULL}, {"--color", 0, true, NULL, NULL},
-        {"--no-color", 0, false, NULL, NULL}, {"--markdown", 0, false, NULL, NULL},
-        {"--no-markdown", 0, false, NULL, NULL}, };
+        {NULL, 'V', false, NULL, &cli->version},
+        {NULL, 'v', false, NULL, NULL},
+        {NULL, 'd', true, NULL, NULL},
+        {"--color", 0, true, NULL, NULL},
+        {"--no-color", 0, false, NULL, NULL},
+        {"--markdown", 0, false, NULL, NULL},
+        {"--no-markdown", 0, false, NULL, NULL},
+    };
     const char *arg = argv[*index], *p = arg + 1;
     bool long_option = *p == '-';
 
@@ -217,7 +240,8 @@ parse_options(struct snag_cli *cli, int argc, char **argv, int *index, char *err
                 if (!candidate->name) continue;
                 size_t len = strlen(candidate->name);
                 if (strncmp(arg, candidate->name, len) ||
-                    (arg[len] && !(candidate->argument && arg[len] == '='))) continue;
+                    (arg[len] && !(candidate->argument && arg[len] == '=')))
+                    continue;
                 attached = arg[len] ? arg + len + 1u : NULL;
             } else {
                 if (candidate->short_name != *p) continue;
@@ -250,18 +274,23 @@ parse_options(struct snag_cli *cli, int argc, char **argv, int *index, char *err
                 return snag_errorf(error, error_size, "at most six -v flags are allowed");
             ++cli->verbosity;
         } else if (flag == 'c' || flag == 's') {
-            if (long_option && attached && !*attached) return snag_fail(error, error_size, EINVAL,
-                                 "%s= requires a nonempty endpoint", name);
+            if (long_option && attached && !*attached)
+                return snag_fail(
+                    error, error_size, EINVAL, "%s= requires a nonempty endpoint", name);
             const char *value = optional_endpoint(argc, argv, index, attached);
-            if ((flag == 'c' ? add_client(cli, value, error, error_size) :
-                 set_once(option->slot, value, name, error, error_size)) < 0) return -1;
+            if ((flag == 'c' ? add_client(cli, value, error, error_size)
+                             : set_once(option->slot, value, name, error, error_size)) < 0)
+                return -1;
         } else if (option->slot || flag == 'd') {
-            const char *value = option_argument(argc, argv, index, attached, name, error, error_size);
-            if (!value || (option->slot ? set_once(option->slot, value, name, error, error_size) :
-                snag_instructions_add_directory(&cli->doc_instructions, value, error, error_size)) < 0)
+            const char *value =
+                option_argument(argc, argv, index, attached, name, error, error_size);
+            if (!value || (option->slot ? set_once(option->slot, value, name, error, error_size)
+                                        : snag_instructions_add_directory(&cli->doc_instructions,
+                                              value, error, error_size)) < 0)
                 return -1;
         } else if (strcmp(name, "--color") == 0) {
-            if (!attached && *index + 1 < argc && snag_string_in(argv[*index + 1], "auto always never"))
+            if (!attached && *index + 1 < argc &&
+                snag_string_in(argv[*index + 1], "auto always never"))
                 attached = argv[++*index];
             if (parse_color_value(cli, attached ? attached : "always", name, error, error_size) < 0)
                 return -1;
@@ -298,8 +327,10 @@ snag_cli_parse(struct snag_cli *cli, int argc, char **argv, char *error, size_t 
     if ((cli->resume || cli->attach) && positional >= 0 && !dashdash && !cli->last) {
         if (strlen(argv[positional]) > SNAG_ID_HEX_LEN)
             return snag_fail(error, error_size, EOVERFLOW, "session id is too long or unavailable");
-        if (cli->attach) cli->attach_id = argv[positional];
-        else cli->resume_id = argv[positional];
+        if (cli->attach)
+            cli->attach_id = argv[positional];
+        else
+            cli->resume_id = argv[positional];
         ++positional;
         while (positional < argc) {
             const char *tail = argv[positional];
@@ -308,19 +339,19 @@ snag_cli_parse(struct snag_cli *cli, int argc, char **argv, char *error, size_t 
                 ++positional;
                 break;
             }
-            if (tail[0] != '-' || tail[1] == '\0')
-                break;
+            if (tail[0] != '-' || tail[1] == '\0') break;
             int tail_index = positional;
-            if (parse_options(cli, argc, argv, &tail_index, error, error_size) < 0)
-                return -1;
+            if (parse_options(cli, argc, argv, &tail_index, error, error_size) < 0) return -1;
             positional = tail_index + 1;
         }
         if (positional < argc && !dashdash)
-            return snag_errorf(error, error_size, cli->attach ?
-                "--attach accepts one session id" : "resume follow-up must follow --");
+            return snag_errorf(error, error_size,
+                cli->attach ? "--attach accepts one session id"
+                            : "resume follow-up must follow --");
     }
-    if ((cli->help || cli->version) && (argc != 2 ||
-         (strcmp(argv[1], "-h") != 0 && strcmp(argv[1], "--help") != 0 && strcmp(argv[1], "-V") != 0)))
+    if ((cli->help || cli->version) &&
+        (argc != 2 || (strcmp(argv[1], "-h") != 0 && strcmp(argv[1], "--help") != 0 &&
+                          strcmp(argv[1], "-V") != 0)))
         return snag_errorf(error, error_size, "-h, --help and -V must stand alone");
     if (cli->help || cli->version) return 0;
     if (cli->session_name) {
@@ -335,8 +366,8 @@ snag_cli_parse(struct snag_cli *cli, int argc, char **argv, char *error, size_t 
     }
     if (cli->attach) {
         if (cli->resume || cli->execute || cli->list || cli->last || dashdash ||
-            (positional >= 0 && positional < argc) || cli->doc_instructions.count ||
-            cli->model || cli->provider || cli->effort || cli->verbosity || cli->config_path ||
+            (positional >= 0 && positional < argc) || cli->doc_instructions.count || cli->model ||
+            cli->provider || cli->effort || cli->verbosity || cli->config_path ||
             cli->update_model_cache || cli->color || cli->markdown || cli->irc_listen ||
             cli->irc_no_listen || cli->irc_no_client || cli->irc_client_count ||
             cli->irc_model_nick || cli->irc_operator_nick || cli->irc_room_name)
@@ -352,30 +383,34 @@ snag_cli_parse(struct snag_cli *cli, int argc, char **argv, char *error, size_t 
         (strcmp(argv[positional], "login") == 0 || strcmp(argv[positional], "logout") == 0))
         return parse_auth_command(cli, argc, argv, positional, error, error_size);
     if (cli->list && (cli->resume || cli->execute || cli->last || cli->session_name ||
-                      cli->doc_instructions.count ||
-                      cli->model || cli->provider || cli->effort || cli->verbosity ||
-                      cli->irc_listen || cli->irc_no_listen || cli->irc_no_client ||
-                      cli->irc_client_count || cli->irc_model_nick ||
-                      cli->irc_operator_nick || cli->irc_room_name)) return snag_errorf(error, error_size,
-                  "-l accepts only --config, --dotdir, --update-model-cache, "
-                  "and presentation options");
+                         cli->doc_instructions.count || cli->model || cli->provider ||
+                         cli->effort || cli->verbosity || cli->irc_listen || cli->irc_no_listen ||
+                         cli->irc_no_client || cli->irc_client_count || cli->irc_model_nick ||
+                         cli->irc_operator_nick || cli->irc_room_name))
+        return snag_errorf(error, error_size,
+            "-l accepts only --config, --dotdir, --update-model-cache, "
+            "and presentation options");
     if (cli->execute && (cli->irc_listen || cli->irc_client_count || cli->irc_model_nick ||
-                         cli->irc_operator_nick || cli->irc_room_name)) return snag_errorf(error, error_size,
-                  "-e cannot be combined with network options");
+                            cli->irc_operator_nick || cli->irc_room_name))
+        return snag_errorf(error, error_size, "-e cannot be combined with network options");
     if ((cli->irc_listen || cli->irc_client_count) && positional >= 0 && !dashdash && !cli->resume)
         return snag_errorf(error, error_size, "networked initial chat text must follow --");
-    if (cli->last && !cli->resume) return snag_errorf(error, error_size, "--last requires --resume");
-    if (cli->model && !snag_text_valid(cli->model, 1u,
-        SNAG_CONFIG_MODEL_MAX + SNAG_CONFIG_PROVIDER_NAME_MAX + SNAG_CONFIG_EFFORT_MAX + 1u))
+    if (cli->last && !cli->resume)
+        return snag_errorf(error, error_size, "--last requires --resume");
+    if (cli->model &&
+        !snag_text_valid(cli->model, 1u,
+            SNAG_CONFIG_MODEL_MAX + SNAG_CONFIG_PROVIDER_NAME_MAX + SNAG_CONFIG_EFFORT_MAX + 1u))
         return snag_errorf(error, error_size, "model exceeds the supported structural bounds");
     if (cli->provider && !snag_text_valid(cli->provider, 1u, SNAG_CONFIG_PROVIDER_NAME_MAX))
         return snag_errorf(error, error_size, "provider name is empty or oversized");
     if (cli->effort && !snag_text_valid(cli->effort, 1u, SNAG_CONFIG_EFFORT_MAX - 1u))
-        return snag_errorf(error, error_size, "reasoning effort exceeds the supported structural bounds");
+        return snag_errorf(
+            error, error_size, "reasoning effort exceeds the supported structural bounds");
     if (cli->resume) {
         if (!cli->resume_id && positional >= 0 && !dashdash && !cli->last) {
             if (strlen(argv[positional]) > SNAG_ID_HEX_LEN)
-                return snag_fail(error, error_size, EOVERFLOW, "session id is too long or unavailable");
+                return snag_fail(
+                    error, error_size, EOVERFLOW, "session id is too long or unavailable");
             cli->resume_id = argv[positional];
             ++positional;
             if (positional < argc) {
@@ -388,14 +423,16 @@ snag_cli_parse(struct snag_cli *cli, int argc, char **argv, char *error, size_t 
         if (cli->last && positional >= 0 && !dashdash)
             return snag_errorf(error, error_size, "--last cannot be combined with a session id");
         if (positional >= 0 && positional < argc) {
-            cli->prompt = snag_join_words(argv + positional, (size_t)(argc - positional),
-                                         SNAG_MAX_DIRECT_PROMPT);
-            if (!cli->prompt) return snag_errorf(error, error_size, "prompt is invalid or exceeds 1 MiB");
+            cli->prompt = snag_join_words(
+                argv + positional, (size_t)(argc - positional), SNAG_MAX_DIRECT_PROMPT);
+            if (!cli->prompt)
+                return snag_errorf(error, error_size, "prompt is invalid or exceeds 1 MiB");
         }
     } else if (!cli->list && positional >= 0 && positional < argc) {
         if (cli->execute && !dashdash)
             return snag_errorf(error, error_size, "-e requires -- before its prompt");
-        cli->prompt = snag_join_words(argv + positional, (size_t)(argc - positional), SNAG_MAX_DIRECT_PROMPT);
+        cli->prompt =
+            snag_join_words(argv + positional, (size_t)(argc - positional), SNAG_MAX_DIRECT_PROMPT);
         if (!cli->prompt) return -1;
     }
     if (cli->execute && !cli->prompt && read_execute_prompt(cli, error, error_size) < 0) return -1;
@@ -408,7 +445,8 @@ snag_cli_parse(struct snag_cli *cli, int argc, char **argv, char *error, size_t 
 void
 snag_cli_usage(int fd)
 {
-    static const char text[] = "usage: " SNAJPAGENT_NAME " [OPTIONS] [--] [INITIAL PROMPT...]\n"
+    static const char text[] =
+        "usage: " SNAJPAGENT_NAME " [OPTIONS] [--] [INITIAL PROMPT...]\n"
         "       " SNAJPAGENT_NAME
         " --resume [OPTIONS] [SESSION_ID|-N NAME|--last] [-- FOLLOW-UP...]\n"
         "       " SNAJPAGENT_NAME " --attach [--dotdir DIR] [SESSION_ID|-N NAME] (alias -A)\n"
@@ -444,7 +482,8 @@ snag_cli_usage(int fd)
         "                               1 tools; 2 previews; 3 full tools;\n"
         "                               4 debug; 5 protocol; 6 wire (default 0)\n"
         "      --resume [ID|--last]      attach if running; resume if stored\n"
-        "  -e                           one-shot execution (prompt/stdin, or saved work on resume)\n"
+        "  -e                           one-shot execution (prompt/stdin, or saved work on "
+        "resume)\n"
         "  -l [N]                       list running sessions, then N recent stored sessions\n"
         "                               (default 10; zero for running only)\n"
         "  -h                           show short help\n"

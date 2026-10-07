@@ -45,11 +45,16 @@ find_item(struct projection *projection, const char *response, uint64_t ordinal,
         projection->items = items;
         projection->capacity = capacity;
     }
-    if (json_object_set_new(projection->by_key, key, json_integer((json_int_t)projection->count)) < 0)
+    if (json_object_set_new(projection->by_key, key, json_integer((json_int_t)projection->count)) <
+        0)
         return NULL;
     struct public_item *item = &projection->items[projection->count++];
-    *item = (struct public_item){.response = response, .ordinal = ordinal, .seq = seq,
-        .state = "streaming", .source_exact = true, .text = {.max = SNAG_MEMORY_LIMIT / 2u}};
+    *item = (struct public_item){.response = response,
+        .ordinal = ordinal,
+        .seq = seq,
+        .state = "streaming",
+        .source_exact = true,
+        .text = {.max = SNAG_MEMORY_LIMIT / 2u}};
     memcpy(item->key, key, strlen(key) + 1u);
     return item;
 }
@@ -62,19 +67,21 @@ is_public(const json_t *value)
 }
 
 static int
-record_item(struct projection *projection, const char *response, uint64_t ordinal,
-    uint64_t seq, const json_t *value, uint64_t offset, uint64_t source_length, const char *state)
+record_item(struct projection *projection, const char *response, uint64_t ordinal, uint64_t seq,
+    const json_t *value, uint64_t offset, uint64_t source_length, const char *state)
 {
     const char *text = snag_json_string(value, "text");
     const char *phase = snag_json_string(value, "phase");
     if (!is_public(value) || !text || !phase || offset > SNAG_MAX_PUBLIC_ITEM ||
-        source_length > SNAG_MAX_PUBLIC_ITEM - offset) return snag_errno(EINVAL);
+        source_length > SNAG_MAX_PUBLIC_ITEM - offset)
+        return snag_errno(EINVAL);
     struct public_item *item = find_item(projection, response, ordinal, seq);
     if (!item) return -1;
     bool replace = strcmp(state, "streaming") != 0;
-    if (!replace && item->last_seq && (item->end != offset ||
-        strcmp(item->kind, snag_json_string(value, "kind")) || strcmp(item->phase, phase) ||
-        strcmp(item->state, "streaming"))) return snag_errno(EINVAL);
+    if (!replace && item->last_seq &&
+        (item->end != offset || strcmp(item->kind, snag_json_string(value, "kind")) ||
+            strcmp(item->phase, phase) || strcmp(item->state, "streaming")))
+        return snag_errno(EINVAL);
     if (replace) {
         projection->bytes -= item->text.len;
         snag_secret_clear(item->text.data, item->text.len);
@@ -100,10 +107,11 @@ record_item(struct projection *projection, const char *response, uint64_t ordina
 const char *
 snag_vm_public_state(const char *type)
 {
-    return !strcmp(type, "response_completed") ? "complete" :
-        !strcmp(type, "response_interrupted") ? "interrupted" :
-        !strcmp(type, "response_failed") ? "failed" :
-        !strcmp(type, "response_output_correction") ? "corrected" : NULL;
+    return !strcmp(type, "response_completed")           ? "complete"
+           : !strcmp(type, "response_interrupted")       ? "interrupted"
+           : !strcmp(type, "response_failed")            ? "failed"
+           : !strcmp(type, "response_output_correction") ? "corrected"
+                                                         : NULL;
 }
 
 static size_t
@@ -115,14 +123,15 @@ slice_boundary(const char *text, size_t length, uint64_t offset)
 }
 
 static int
-resolved_output(struct projection *projection, const char *response, uint64_t ordinal,
-    uint64_t seq, const json_t *value, uint64_t offset, const json_t *snapshot)
+resolved_output(struct projection *projection, const char *response, uint64_t ordinal, uint64_t seq,
+    const json_t *value, uint64_t offset, const json_t *snapshot)
 {
     const json_t *canonical = json_array_get(json_object_get(snapshot, "items"), (size_t)ordinal);
     const char *text = snag_json_string(canonical, "text");
     const char *original = snag_json_string(value, "text");
     if (!original || offset > SNAG_MAX_PUBLIC_ITEM ||
-        strlen(original) > SNAG_MAX_PUBLIC_ITEM - offset) return snag_errno(EINVAL);
+        strlen(original) > SNAG_MAX_PUBLIC_ITEM - offset)
+        return snag_errno(EINVAL);
     const char *state = text ? snag_json_string(snapshot, "state") : "unconfirmed";
     if (!state) return snag_errno(EINVAL);
     size_t begin = (size_t)offset, length = strlen(original);
@@ -135,7 +144,10 @@ resolved_output(struct projection *projection, const char *response, uint64_t or
         length = end - begin;
         if (json_object_set_new(part, "text", json_stringn(text + begin, length)) < 0) goto out;
     }
-    if (!length) { rc = 0; goto out; }
+    if (!length) {
+        rc = 0;
+        goto out;
+    }
     rc = record_item(projection, response, ordinal, seq, part, begin, length, "streaming");
     if (!rc) {
         struct public_item *item = find_item(projection, response, ordinal, seq);
@@ -159,18 +171,21 @@ project_event(struct projection *projection, const json_t *event, uint64_t seq)
         uint64_t ordinal, offset, length;
         const char *text = snag_json_string(item, "text");
         if (!text || snag_json_integer_u64(data, "index", &ordinal) < 0 ||
-            snag_json_integer_u64(data, "offset", &offset) < 0) return snag_errno(EINVAL);
+            snag_json_integer_u64(data, "offset", &offset) < 0)
+            return snag_errno(EINVAL);
         const json_t *snapshot = json_object_get(event, "public_snapshot");
-        if (snapshot) return resolved_output(projection, response, ordinal, seq, item,
-            offset, snapshot);
+        if (snapshot)
+            return resolved_output(projection, response, ordinal, seq, item, offset, snapshot);
         length = strlen(text);
         if (json_object_get(event, "source_text_bytes") &&
-            snag_json_integer_u64(event, "source_text_bytes", &length) < 0) return -1;
+            snag_json_integer_u64(event, "source_text_bytes", &length) < 0)
+            return -1;
         return record_item(projection, response, ordinal, seq, item, offset, length, "streaming");
     }
     const char *state = snag_vm_public_state(type);
     if (!state) return 0;
-    const json_t *items = json_object_get(data, !strcmp(state, "complete") ? "items" : "partial_public");
+    const json_t *items =
+        json_object_get(data, !strcmp(state, "complete") ? "items" : "partial_public");
     const json_t *lengths = json_object_get(event, "source_public_bytes");
     if (!json_is_array(items) || (lengths && !json_is_array(lengths))) return snag_errno(EINVAL);
     if (!response) return snag_errno(EINVAL);
@@ -199,16 +214,16 @@ project_event(struct projection *projection, const json_t *event, uint64_t seq)
             (void)snprintf(key, sizeof(key), "%s/%llu", response, (unsigned long long)ordinal);
             (void)snprintf(index, sizeof(index), "%llu", (unsigned long long)ordinal);
             const json_t *found = json_object_get(projection->by_key, key);
-            uint64_t covered = found ? projection->items[json_integer_value(found)].begin :
-                (uint64_t)json_integer_value(json_object_get(prior, index));
+            uint64_t covered = found ? projection->items[json_integer_value(found)].begin
+                                     : (uint64_t)json_integer_value(json_object_get(prior, index));
             begin = slice_boundary(text, strlen(text), covered);
             length = strlen(text) - begin;
         }
         json_t *part = json_copy((json_t *)item);
         int rc = part ? 0 : -1;
         if (!rc && begin) rc = json_object_set_new(part, "text", json_string(text + begin));
-        if (!rc && (length || !prior)) rc = record_item(projection, response, ordinal, seq, part,
-            begin, length, state);
+        if (!rc && (length || !prior))
+            rc = record_item(projection, response, ordinal, seq, part, begin, length, state);
         json_decref(part);
         if (rc < 0) return -1;
         ++ordinal;
@@ -225,11 +240,13 @@ snag_vm_public_source_bytes(json_t *event, const json_t *source)
     if (!strcmp(type, "response_output")) {
         const json_t *text = json_object_get(json_object_get(source, "item"), "text");
         if (!json_is_string(text)) return snag_errno(EINVAL);
-        return json_object_set_new(event, "source_text_bytes", json_integer(json_string_length(text)));
+        return json_object_set_new(
+            event, "source_text_bytes", json_integer(json_string_length(text)));
     }
     bool completed = !strcmp(type, "response_completed");
     if (!completed && strcmp(type, "response_interrupted") && strcmp(type, "response_failed") &&
-        strcmp(type, "response_output_correction")) return 0;
+        strcmp(type, "response_output_correction"))
+        return 0;
     const json_t *items = json_object_get(source, completed ? "items" : "partial_public");
     if (!json_is_array(items)) return snag_errno(EINVAL);
     json_t *lengths = json_array();
@@ -255,11 +272,12 @@ redact_text(const struct public_item *item, const struct snag_wire_secrets *secr
     for (size_t at = 0u; at < item->text.len;) {
         const unsigned char *bytes = item->text.data + at;
         size_t remaining = item->text.len - at;
-        size_t matched = snag_wire_secret_span(bytes, remaining,
-            !at && item->begin, streaming, secrets);
+        size_t matched =
+            snag_wire_secret_span(bytes, remaining, !at && item->begin, streaming, secrets);
         if (matched) {
-            if (item->source_exact && snag_vm_source_replace(map, text.len,
-                item->begin + at, 17u, matched) < 0) goto failed;
+            if (item->source_exact &&
+                snag_vm_source_replace(map, text.len, item->begin + at, 17u, matched) < 0)
+                goto failed;
             if (snag_buf_append(&text, "<redacted:secret>", 17u) < 0) goto failed;
             at += matched;
         } else {
@@ -282,8 +300,8 @@ failed:
 }
 
 json_t *
-snag_vm_public_blocks(const json_t *events, const struct snag_wire_secrets *secrets,
-    char *error, size_t size)
+snag_vm_public_blocks(
+    const json_t *events, const struct snag_wire_secrets *secrets, char *error, size_t size)
 {
     struct projection projection = {.by_key = json_object()};
     json_t *result = NULL;
@@ -309,12 +327,14 @@ snag_vm_public_blocks(const json_t *events, const struct snag_wire_secrets *secr
         if (item->resolved_state) item->state = item->resolved_state;
         json_t *map = json_array();
         json_t *text = map ? redact_text(item, secrets, map) : NULL;
-        json_t *block = text ? json_pack("{s:s,s:s,s:I,s:I,s:I,s:I,s:I,s:s,s:s,s:s,s:o,s:O}",
-            "key", item->key, "response_id", item->response, "ordinal", (json_int_t)item->ordinal,
-            "seq", (json_int_t)item->seq, "last_seq", (json_int_t)item->last_seq,
-            "source_begin", (json_int_t)item->begin, "source_end", (json_int_t)item->end,
-            "kind", item->kind, "phase", item->phase, "state", item->state, "text", text,
-            "source_map", map) : NULL;
+        json_t *block =
+            text ? json_pack("{s:s,s:s,s:I,s:I,s:I,s:I,s:I,s:s,s:s,s:s,s:o,s:O}", "key", item->key,
+                       "response_id", item->response, "ordinal", (json_int_t)item->ordinal, "seq",
+                       (json_int_t)item->seq, "last_seq", (json_int_t)item->last_seq,
+                       "source_begin", (json_int_t)item->begin, "source_end", (json_int_t)item->end,
+                       "kind", item->kind, "phase", item->phase, "state", item->state, "text", text,
+                       "source_map", map)
+                 : NULL;
         json_decref(map);
         if (!block || json_array_append_new(result, block) < 0) {
             json_decref(result);
@@ -322,8 +342,9 @@ snag_vm_public_blocks(const json_t *events, const struct snag_wire_secrets *secr
         }
     }
 out:
-    if (!result) (void)snag_fail(error, size, errno ? errno : EINVAL,
-        "cannot project response text: incomplete or invalid source range");
+    if (!result)
+        (void)snag_fail(error, size, errno ? errno : EINVAL,
+            "cannot project response text: incomplete or invalid source range");
     for (size_t i = 0u; i < projection.count; ++i) {
         snag_secret_clear(projection.items[i].text.data, projection.items[i].text.len);
         snag_buf_free(&projection.items[i].text);

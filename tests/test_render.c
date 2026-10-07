@@ -58,8 +58,8 @@ capture_open(bool stdout_enabled, bool stderr_enabled)
 }
 
 static struct output_capture
-capture_terminal(struct snag_render *render, struct snag_term *term,
-                 unsigned int columns, bool stdout_enabled, bool stderr_enabled)
+capture_terminal(struct snag_render *render, struct snag_term *term, unsigned int columns,
+    bool stdout_enabled, bool stderr_enabled)
 {
     struct output_capture capture = capture_open(stdout_enabled, stderr_enabled);
     snag_term_init(term);
@@ -108,8 +108,8 @@ struct styled_output {
 };
 
 static int
-collect_styled(void *opaque, const char *text, size_t length, unsigned int style,
-    uint64_t source, size_t source_length)
+collect_styled(void *opaque, const char *text, size_t length, unsigned int style, uint64_t source,
+    size_t source_length)
 {
     struct styled_output *out = opaque;
     (void)source;
@@ -132,17 +132,24 @@ styled_terminal(struct styled_output *out, const char *text)
                 unsigned long value = strtoul(text, &end, 10);
                 assert(end != text);
                 text = end;
-                if (value == 0u) style = 0u;
-                else if (value == 1u) style |= 1u;
-                else if (value == 2u) style |= 2u;
-                else if (value == 3u) style |= 256u;
-                else if (value == 4u) style |= 4u;
-                else if (value == 7u) style |= 8u;
+                if (value == 0u)
+                    style = 0u;
+                else if (value == 1u)
+                    style |= 1u;
+                else if (value == 2u)
+                    style |= 2u;
+                else if (value == 3u)
+                    style |= 256u;
+                else if (value == 4u)
+                    style |= 4u;
+                else if (value == 7u)
+                    style |= 8u;
                 else if (value >= 30u && value <= 37u)
                     style = (style & ~240u) | ((unsigned int)(value - 29u) << 4u);
                 else if (value >= 40u && value <= 47u)
                     style = (style & ~7680u) | ((unsigned int)(value - 39u) << 9u);
-                else assert(false);
+                else
+                    assert(false);
             } while (*text == ';' && *++text);
             assert(*text++ == 'm');
         } else {
@@ -155,23 +162,26 @@ static void
 render_sink_fixture(struct snag_render *render)
 {
     const char *text = "## Heading\n\nA **bold** and *italic* word with `code`.\n\n"
-        "| Key | Value |\n| --- | --- |\n| alpha | some long wrapped value |\n\n"
-        "```c\nprintf(\"hello\");\n```\n\nSafe \033[31m text.\n";
+                       "| Key | Value |\n| --- | --- |\n| alpha | some long wrapped value |\n\n"
+                       "```c\nprintf(\"hello\");\n```\n\nSafe \033[31m text.\n";
     assert(snag_render_input_submitted(render, "READY> ", "tab\tinput") == 0);
     assert(snag_render_public_begin(render, STDOUT_FILENO, NULL) == 0);
     assert(snag_render_public(render, text, strlen(text), NULL) == 0);
     assert(snag_render_public_end(render) == 0);
-    struct snag_response_item call = {.name = "read_file", .call_id = "fixture-call",
+    struct snag_response_item call = {.name = "read_file",
+        .call_id = "fixture-call",
         .arguments = json_pack("{s:s}", "path", "file.txt")};
     struct snag_render_block tool = {0};
-    assert(snag_render_prepare_tool_start(&tool, &call, "/fixture", 0u,
-        render->verbosity, render->sink.columns ? render->sink.columns :
-            render->term->columns) == 0);
+    assert(snag_render_prepare_tool_start(&tool, &call, "/fixture", 0u, render->verbosity,
+               render->sink.columns ? render->sink.columns : render->term->columns) == 0);
     assert(snag_render_tool_block(render, &tool) == 0);
     snag_render_block_free(&tool);
     json_decref(call.arguments);
-    struct snag_irc_event irc = {.kind = SNAG_IRC_MESSAGE, .timestamp_ms = 1000u,
-        .endpoint = "local:16667", .room = "#lab", .nick = "peer",
+    struct snag_irc_event irc = {.kind = SNAG_IRC_MESSAGE,
+        .timestamp_ms = 1000u,
+        .endpoint = "local:16667",
+        .room = "#lab",
+        .nick = "peer",
         .text = "Chat **bold** with a long line which can wrap across the pane."};
     render->view = SNAG_RENDER_CHAT;
     strcpy(render->chat_endpoint, irc.endpoint);
@@ -189,8 +199,8 @@ read_presentation_file(const char *path, const char *id)
     json_t *rows = NULL;
     struct snag_binary_anchor begin, tail;
     bool incomplete;
-    int rc = snag_presentation_read(fd, id, NULL, NULL, true, SIZE_MAX, &rows, &begin, &tail,
-        &incomplete, NULL, NULL);
+    int rc = snag_presentation_read(
+        fd, id, NULL, NULL, true, SIZE_MAX, &rows, &begin, &tail, &incomplete, NULL, NULL);
     if (!rc) rc = json_dumpf(rows, stdout, JSON_COMPACT);
     json_decref(rows);
     (void)close(fd);
@@ -217,13 +227,15 @@ test_retained_response_reopen(void)
     struct snag_presentation_writer *writer = snag_presentation_writer_open(dir, id);
     assert(writer && !snag_presentation_start(writer, 31u));
     struct snag_ui_command response = {.kind = SNAG_UI_DURABLE,
-        .text = "response_completed", .data.durable.source = {.offset = 123, .len = 45u}};
+        .text = "response_completed",
+        .data.durable.source = {.offset = 123, .len = 45u}};
     assert(!snag_presentation_append(writer, &response));
     snag_presentation_writer_close(writer);
     writer = snag_presentation_writer_open(dir, id);
     assert(writer && !snag_presentation_start(writer, 32u));
     struct snag_ui_command tool = {.kind = SNAG_UI_DURABLE,
-        .text = "tool_started", .data.durable.source = {.offset = 168, .len = 24u}};
+        .text = "tool_started",
+        .data.durable.source = {.offset = 168, .len = 24u}};
     assert(!snag_presentation_append(writer, &tool));
     snag_presentation_writer_close(writer);
     int fd = snag_open_read_at(dir, SNAG_PRESENTATION_FILE, false);
@@ -231,8 +243,8 @@ test_retained_response_reopen(void)
     json_t *rows = NULL;
     struct snag_binary_anchor begin, tail;
     bool incomplete;
-    assert(!snag_presentation_read(fd, id, NULL, NULL, true, SIZE_MAX,
-        &rows, &begin, &tail, &incomplete, NULL, NULL));
+    assert(!snag_presentation_read(
+        fd, id, NULL, NULL, true, SIZE_MAX, &rows, &begin, &tail, &incomplete, NULL, NULL));
     const json_t *data = json_object_get(json_array_get(rows, 0u), "data");
     const json_t *saved = json_object_get(data, "response");
     assert(json_integer_value(json_object_get(saved, "offset")) == 123);
@@ -261,11 +273,8 @@ test_retained_presentation(void)
         {.kind = SNAG_UI_SUBMITTED, .text = "/fast off", .label = "READY> ", .data.value = 1u},
         {.kind = SNAG_UI_HOST, .text = "Fast mode off"},
         {.kind = SNAG_UI_PUBLIC_BEGIN, .data.public = {STDOUT_FILENO, SNAG_PRESENT_CONVERSATION}},
-        {.kind = SNAG_UI_PUBLIC, .text = text, .len = strlen(text)},
-        {.kind = SNAG_UI_ROLLOUT_END},
-        {.kind = SNAG_UI_BEFORE_PROMPT},
-        {.kind = SNAG_UI_WARNING, .text = "Retained warning"}
-    };
+        {.kind = SNAG_UI_PUBLIC, .text = text, .len = strlen(text)}, {.kind = SNAG_UI_ROLLOUT_END},
+        {.kind = SNAG_UI_BEFORE_PROMPT}, {.kind = SNAG_UI_WARNING, .text = "Retained warning"}};
     struct snag_render direct, replay;
     struct styled_output expected = {.text = {.max = 65536u}, .styles = {.max = 262144u}};
     struct styled_output actual = {.text = {.max = 65536u}, .styles = {.max = 262144u}};
@@ -274,10 +283,10 @@ test_retained_presentation(void)
     direct.stdout_terminal = direct.stderr_terminal = true;
     replay.stdout_terminal = replay.stderr_terminal = true;
     direct.color_stdout = direct.color_stderr = replay.color_stdout = replay.color_stderr = true;
-    direct.sink = (struct snag_render_sink){.text = collect_styled,
-        .opaque = &expected, .columns = 40u};
-    replay.sink = (struct snag_render_sink){.text = collect_styled,
-        .opaque = &actual, .columns = 40u};
+    direct.sink =
+        (struct snag_render_sink){.text = collect_styled, .opaque = &expected, .columns = 40u};
+    replay.sink =
+        (struct snag_render_sink){.text = collect_styled, .opaque = &actual, .columns = 40u};
     for (size_t i = 0u; i < sizeof(commands) / sizeof(*commands); ++i) {
         assert(!snag_presentation_append(writer, &commands[i]));
         assert(!snag_presentation_apply(&direct, &commands[i], NULL));
@@ -296,30 +305,31 @@ test_retained_presentation(void)
     struct snag_binary_anchor begin, tail;
     json_t *rows = NULL;
     bool incomplete;
-    assert(!snag_presentation_read(fd, id, NULL, NULL, true, SIZE_MAX, &rows, &begin, &tail,
-        &incomplete, NULL, NULL));
+    assert(!snag_presentation_read(
+        fd, id, NULL, NULL, true, SIZE_MAX, &rows, &begin, &tail, &incomplete, NULL, NULL));
     assert(!incomplete && begin.next_seq == 1u && json_array_size(rows) == 8u);
     uint64_t origin;
     struct snag_binary_anchor first;
     assert(!snag_presentation_origin(fd, &tail, &origin, &first));
     assert(origin == 31u && first.next_seq == 2u);
     for (size_t i = json_array_size(rows); i; --i)
-        assert(!snag_presentation_replay(&replay,
-            json_object_get(json_array_get(rows, i - 1u), "data"), -1));
+        assert(!snag_presentation_replay(
+            &replay, json_object_get(json_array_get(rows, i - 1u), "data"), -1));
     assert(expected.text.len == actual.text.len &&
-        !memcmp(expected.text.data, actual.text.data, actual.text.len));
+           !memcmp(expected.text.data, actual.text.data, actual.text.len));
     assert(expected.styles.len == actual.styles.len &&
-        !memcmp(expected.styles.data, actual.styles.data, actual.styles.len));
+           !memcmp(expected.styles.data, actual.styles.data, actual.styles.len));
     json_decref(rows);
     rows = NULL;
     struct snag_binary_anchor preserved_begin = begin, preserved_tail = tail;
     unsigned int remaining = 2u;
     assert(snag_presentation_read(fd, id, NULL, NULL, true, SIZE_MAX, &rows, &begin, &tail,
-        &incomplete, cancel_presentation_read, &remaining) < 0 && errno == ECANCELED);
+               &incomplete, cancel_presentation_read, &remaining) < 0 &&
+           errno == ECANCELED);
     assert(!rows && !memcmp(&begin, &preserved_begin, sizeof(begin)) &&
-        !memcmp(&tail, &preserved_tail, sizeof(tail)));
-    assert(!snag_presentation_writer_open(dir, "1123456789abcdef0123456789abcdef") &&
-        errno == EINVAL);
+           !memcmp(&tail, &preserved_tail, sizeof(tail)));
+    assert(
+        !snag_presentation_writer_open(dir, "1123456789abcdef0123456789abcdef") && errno == EINVAL);
     assert(!snag_write_full(fd, "unfinished", 10u));
     assert(!close(fd));
     writer = snag_presentation_writer_open(dir, id);
@@ -352,23 +362,21 @@ test_styled_sink_matches_terminal(void)
         for (unsigned int level = 0u; level <= 3u; ++level) {
             struct snag_render terminal, pane;
             struct snag_term term;
-            struct output_capture capture = capture_terminal(&terminal, &term,
-                widths[w], true, true);
+            struct output_capture capture =
+                capture_terminal(&terminal, &term, widths[w], true, true);
             terminal.verbosity = level;
             terminal.color_stdout = terminal.color_stderr = true;
             render_sink_fixture(&terminal);
             char wire[16384];
             (void)capture_close(&capture, wire, sizeof(wire), 0u);
-            struct styled_output expected = {.text = {.max = 65536u},
-                .styles = {.max = 262144u}};
-            struct styled_output actual = {.text = {.max = 65536u},
-                .styles = {.max = 262144u}};
+            struct styled_output expected = {.text = {.max = 65536u}, .styles = {.max = 262144u}};
+            struct styled_output actual = {.text = {.max = 65536u}, .styles = {.max = 262144u}};
             styled_terminal(&expected, wire);
             snag_render_init(&pane, level);
             pane.stdout_terminal = pane.stderr_terminal = true;
             pane.color_stdout = pane.color_stderr = true;
-            pane.sink = (struct snag_render_sink){.text = collect_styled,
-                .opaque = &actual, .columns = widths[w]};
+            pane.sink = (struct snag_render_sink){
+                .text = collect_styled, .opaque = &actual, .columns = widths[w]};
             render_sink_fixture(&pane);
             assert(expected.text.len == actual.text.len);
             assert(!memcmp(expected.text.data, actual.text.data, actual.text.len));
@@ -398,8 +406,8 @@ test_native_rebind(void)
     term.cursor = 4u;
     term.input[0] = 'x';
     term.input_len = 1u;
-    assert(snag_render_rollout_begin(&render, STDERR_FILENO, "agent: ",
-                                     SNAG_PRESENT_CONVERSATION) == 0);
+    assert(snag_render_rollout_begin(
+               &render, STDERR_FILENO, "agent: ", SNAG_PRESENT_CONVERSATION) == 0);
     assert(snag_render_rollout(&render, "before", 6u, &delivered) == 0);
     struct snag_render_record *open = render.rollout_open;
     assert(open);
@@ -625,7 +633,8 @@ test_prompt_history(void)
     snag_history_reader_open(&reader, &term.snapshot);
     struct snag_history_cursor cursor = snag_history_end(&term.snapshot), end;
     const char *entry_text;
-    assert(snag_history_read(&reader, &term.snapshot, false, cursor, &cursor, &end, &entry_text) == 1);
+    assert(
+        snag_history_read(&reader, &term.snapshot, false, cursor, &cursor, &end, &entry_text) == 1);
     assert(reader.warning && strcmp(entry_text, "duplicate") == 0);
     snag_history_reader_close(&reader);
     assert(term.snapshot.count == 0u && history_records(&term, NULL, false) == 3u);
@@ -706,7 +715,7 @@ test_prompt_history(void)
         assert(snag_history_open(&term, subdir) < 0);
         assert(snag_history_take_warning(&term));
         assert(snag_history_merge(&term) == 0);
-    snag_history_free(&term);
+        snag_history_free(&term);
         assert(unlink(path) == 0 && rmdir(subdir) == 0);
     }
 
@@ -769,7 +778,8 @@ test_prompt_clock(void)
     snag_term_init(&term);
     snag_term_capture_prompt_clock(&term, 86399);
     assert(term.prompt_clock.captured && term.prompt_clock.valid);
-    assert(term.prompt_clock.hour == 23 && term.prompt_clock.minute == 59 && term.prompt_clock.second == 59);
+    assert(term.prompt_clock.hour == 23 && term.prompt_clock.minute == 59 &&
+           term.prompt_clock.second == 59);
     snag_term_capture_prompt_clock(&term, 86400);
     assert(term.prompt_clock.hour == 23 && term.prompt_clock.second == 59);
     term.prompt_clock.captured = false;
@@ -795,8 +805,10 @@ test_submit_holds_composer_until_activity(void)
     enum snag_term_action action;
     char *text = NULL;
     char output[8192];
-    char prompt[] = {'x', (char)(SNAG_TERM_SPINNER_MARKER_BASE + SNAG_TERM_SPINNER_PROVIDER), '>', ' ', '\0'};
-    const char *spinners[SNAG_TERM_SPINNER_COUNT] = {" \u2691", " \u25f4\u25f7\u25f6\u25f5", " \u280b\u2819"};
+    char prompt[] = {
+        'x', (char)(SNAG_TERM_SPINNER_MARKER_BASE + SNAG_TERM_SPINNER_PROVIDER), '>', ' ', '\0'};
+    const char *spinners[SNAG_TERM_SPINNER_COUNT] = {
+        " \u2691", " \u25f4\u25f7\u25f6\u25f5", " \u280b\u2819"};
 
     snag_term_init(&term);
     term.opened = term.capable = term.raw = true;
@@ -823,14 +835,14 @@ test_submit_holds_composer_until_activity(void)
      * prompt acknowledgement releases the hold. */
     capture = capture_open(false, true);
     assert(snag_term_set_spinner_states(&term, 1u << SNAG_TERM_SPINNER_PROVIDER) == 0);
-    assert(snag_term_set_prompt_template(&term, true, prompt, spinners, 8u,
-                                        1u << SNAG_TERM_SPINNER_PROVIDER) == 0);
+    assert(snag_term_set_prompt_template(
+               &term, true, prompt, spinners, 8u, 1u << SNAG_TERM_SPINNER_PROVIDER) == 0);
     (void)capture_close(&capture, output, sizeof(output), 0u);
     assert(strstr(output, "\u25f4") == NULL);
     term.submit_awaiting_activity = false;
     capture = capture_open(false, true);
-    assert(snag_term_set_prompt_template(&term, true, prompt, spinners, 8u,
-                                        1u << SNAG_TERM_SPINNER_PROVIDER) == 0);
+    assert(snag_term_set_prompt_template(
+               &term, true, prompt, spinners, 8u, 1u << SNAG_TERM_SPINNER_PROVIDER) == 0);
     (void)capture_close(&capture, output, sizeof(output), 0u);
     assert(strstr(output, "\u25f4") != NULL);
 
@@ -886,8 +898,8 @@ test_prompt_spinners(void)
     assert(snag_term_set_prompt_template(&term, false, prompt, bad, 8u, 0u) < 0);
     assert(memcmp(saved, term.label, sizeof(saved)) == 0);
     assert(term.animation.states == (1u << SNAG_TERM_SPINNER_PROVIDER));
-    assert(snag_term_set_prompt_template(&term, false, prompt, spinners, 8u,
-                                        1u << SNAG_TERM_SPINNER_COUNT) < 0);
+    assert(snag_term_set_prompt_template(
+               &term, false, prompt, spinners, 8u, 1u << SNAG_TERM_SPINNER_COUNT) < 0);
     memset(oversized, 'x', sizeof(oversized));
     oversized[sizeof(oversized) - 3u] = (char)SNAG_TERM_SPINNER_MARKER_BASE;
     oversized[sizeof(oversized) - 2u] = '\0';
@@ -896,7 +908,8 @@ test_prompt_spinners(void)
     {
         /* Frame capacity follows the spinner string; the former 16-frame cap
          * is gone, so a longer sequence is accepted and fully retained. */
-        const char *many[SNAG_TERM_SPINNER_COUNT] = {"\\0abcdefghijklmnopqrstuvwxyz0123", " ", "\\0"};
+        const char *many[SNAG_TERM_SPINNER_COUNT] = {
+            "\\0abcdefghijklmnopqrstuvwxyz0123", " ", "\\0"};
 
         assert(snag_term_set_prompt_template(&term, false, prompt, many, 8u, 0u) == 0);
         assert(term.animation.frames[SNAG_TERM_SPINNER_GOAL].frame_count == 30u);
@@ -914,7 +927,9 @@ test_prompt_spinners(void)
             char expected[32];
 
             assert(snprintf(expected, sizeof(expected), "%s%s  9%%> ", state & 1u ? "⚑" : " ",
-                state & 4u ? "⠋" : state & 2u ? "P" : " ") > 0);
+                       state & 4u   ? "⠋"
+                       : state & 2u ? "P"
+                                    : " ") > 0);
             assert(strcmp(term.label, expected) == 0);
             assert(snag_term_text_width(term.label, strlen(term.label)) == 8u);
             assert(snag_term_set_spinner_states(&term, 2u) == 0);
@@ -1173,7 +1188,8 @@ resize_input_checkpoint(void *opaque)
 {
     struct resize_input *input = opaque;
     char bytes[4096];
-    while (read(input->output, bytes, sizeof(bytes)) > 0) {}
+    while (read(input->output, bytes, sizeof(bytes)) > 0) {
+    }
     assert(errno == EAGAIN);
     ++input->checkpoints;
     enum snag_term_action action;
@@ -1183,7 +1199,8 @@ resize_input_checkpoint(void *opaque)
     if (rc > 0) {
         assert(action == SNAG_TERM_SUBMIT && !input->submitted);
         input->submitted = text;
-    } else assert(!text);
+    } else
+        assert(!text);
     return 0;
 }
 
@@ -1204,7 +1221,8 @@ test_resize_checkpoint_preserves_newly_read_input(void)
     assert(fcntl(capture.fd, F_SETFL, O_NONBLOCK) == 0);
     assert(fcntl(STDERR_FILENO, F_SETFL, O_NONBLOCK) == 0);
     char output[4096] = {0};
-    while (write(STDERR_FILENO, output, sizeof(output)) > 0) {}
+    while (write(STDERR_FILENO, output, sizeof(output)) > 0) {
+    }
     assert(errno == EAGAIN);
     for (unsigned int attempt = 0u; !input.submitted && attempt < 3u; ++attempt) {
         enum snag_term_action action;
@@ -1214,7 +1232,8 @@ test_resize_checkpoint_preserves_newly_read_input(void)
         if (rc > 0) {
             assert(action == SNAG_TERM_SUBMIT && !input.submitted);
             input.submitted = text;
-        } else assert(!text);
+        } else
+            assert(!text);
     }
     term.input_checkpoint = NULL;
     term.opened = false;
@@ -1361,13 +1380,20 @@ test_mention_completion(void)
         const char *nicks, *draft, *expected;
         size_t cursor, result_cursor;
     } cases[] = {
-        {"agent\n", "@ag", "@agent ", 3u, 7u}, {"Agent\nagent\n", "hey @AG", "hey @Agent ", 7u, 11u},
-        {"agent1\nagent2\n", "@ag", "@agent", 3u, 6u}, {"agent1\nagent2\n", "@agent", "@agent", 6u, 6u},
-        {"agent\n", "@missing", NULL, 8u, 8u}, {"", "@", NULL, 1u, 1u},
+        {"agent\n", "@ag", "@agent ", 3u, 7u},
+        {"Agent\nagent\n", "hey @AG", "hey @Agent ", 7u, 11u},
+        {"agent1\nagent2\n", "@ag", "@agent", 3u, 6u},
+        {"agent1\nagent2\n", "@agent", "@agent", 6u, 6u},
+        {"agent\n", "@missing", NULL, 8u, 8u},
+        {"", "@", NULL, 1u, 1u},
         {"agent\n", "hi @agxxx, bye", "hi @agent , bye", 6u, 10u},
-        {"agent\n", "hey\n@ag tail", "hey\n@agent tail", 7u, 11u}, {"agent\n", "@agent", "@agent ", 6u, 7u},
-        {"[bot]\n", "@{bo", "@[bot] ", 4u, 7u}, {"čenda\n", "@če", "@čenda ", 4u, 8u},
-        {"čenda\nčerven\n", "@č", "@če", 3u, 4u}, {"ač\naď\n", "@a", "@a", 2u, 2u}, };
+        {"agent\n", "hey\n@ag tail", "hey\n@agent tail", 7u, 11u},
+        {"agent\n", "@agent", "@agent ", 6u, 7u},
+        {"[bot]\n", "@{bo", "@[bot] ", 4u, 7u},
+        {"čenda\n", "@če", "@čenda ", 4u, 8u},
+        {"čenda\nčerven\n", "@č", "@če", 3u, 4u},
+        {"ač\naď\n", "@a", "@a", 2u, 2u},
+    };
 
     for (size_t i = 0u; i < sizeof(cases) / sizeof(cases[0]); ++i) {
         for (unsigned int active = 0u; active < 2u; ++active) {
@@ -1402,25 +1428,31 @@ test_mention_completion(void)
 static void
 test_completion_choices(void)
 {
-    static const struct snag_term_command commands[] = {
-        {"/connect ENDPOINT", NULL}, {"/config FILE", NULL},
-        {"/compact", NULL}, {"/help", NULL}, {"/help", NULL}
-    };
+    static const struct snag_term_command commands[] = {{"/connect ENDPOINT", NULL},
+        {"/config FILE", NULL}, {"/compact", NULL}, {"/help", NULL}, {"/help", NULL}};
     static const struct {
         const char *draft, *common, *first, *second;
     } cases[] = {
-        {"/c", "/co", "/connect", "/config"}, {"/1", "/1", "/12", "/17"},
-        {"@ag", "@agent", "@agent1", "@agent2"}, {"/17 @ag", "/17 @Agent", "@Agent1", "@agent2"},
-        {"/all @ag", "/all @agent", "@agent1", "@agent2"}, {"@č", "@če", "@čenda", "@červen"}, };
+        {"/c", "/co", "/connect", "/config"},
+        {"/1", "/1", "/12", "/17"},
+        {"@ag", "@agent", "@agent1", "@agent2"},
+        {"/17 @ag", "/17 @Agent", "@Agent1", "@agent2"},
+        {"/all @ag", "/all @agent", "@agent1", "@agent2"},
+        {"@č", "@če", "@čenda", "@červen"},
+    };
     struct output_capture capture = capture_open(false, true);
     assert(fcntl(capture.fd, F_SETFL, O_NONBLOCK) == 0);
     for (unsigned int flags = 0u; flags < 4u; ++flags) {
         for (size_t i = 0u; i < sizeof(cases) / sizeof(cases[0]); ++i) {
             struct snag_term term;
             char output[4096];
-            struct snag_irc_destinations destinations = {.count = 2u, .items = {
-                {.target = {.id = 12u}, .joined = true, .nicks = "agent1\nagent2\nčenda\nčerven\n"},
-                {.target = {.id = 17u}, .joined = true, .nicks = "Agent1\nagent2\n"}, }};
+            struct snag_irc_destinations destinations = {.count = 2u,
+                .items = {
+                    {.target = {.id = 12u},
+                        .joined = true,
+                        .nicks = "agent1\nagent2\nčenda\nčerven\n"},
+                    {.target = {.id = 17u}, .joined = true, .nicks = "Agent1\nagent2\n"},
+                }};
             snag_term_init(&term);
             term.chat = true;
             term.active = (flags & 1u) != 0u;
@@ -1446,7 +1478,8 @@ test_completion_choices(void)
             /* Capture while output is stalled; listing is deferred, not lost. */
             term.input_only = true;
             editor_input(&term, "\t");
-            assert(term.completion_output.len && prompt_output(capture.fd, output, sizeof(output)) == 0u);
+            assert(term.completion_output.len &&
+                   prompt_output(capture.fd, output, sizeof(output)) == 0u);
             term.input_only = false;
             editor_input(&term, "x");
             assert(prompt_output(capture.fd, output, sizeof(output)) > 0u);
@@ -1470,11 +1503,8 @@ test_completion_choices(void)
         assert(!term.completion_armed);
     }
     const char *submissions[] = {
-        "/help ", "/17 ", "/model value ", "ordinary ", "//help ", "/help\n "
-    };
-    const char *submitted[] = {
-        "/help", "/17", "/model value ", "ordinary ", "//help ", "/help\n "
-    };
+        "/help ", "/17 ", "/model value ", "ordinary ", "//help ", "/help\n "};
+    const char *submitted[] = {"/help", "/17", "/model value ", "ordinary ", "//help ", "/help\n "};
     for (size_t i = 0u; i < sizeof(submissions) / sizeof(submissions[0]); ++i) {
         enum snag_term_action action;
         char *text = NULL;
@@ -1503,15 +1533,19 @@ test_dictation_editor(void)
     int input[2], output[2], saved_in = dup(STDIN_FILENO), saved_out = dup(STDERR_FILENO);
     assert(saved_in >= 0 && saved_out >= 0 && pipe(input) == 0 && pipe(output) == 0);
     assert(dup2(input[0], STDIN_FILENO) >= 0 && dup2(output[1], STDERR_FILENO) >= 0);
-    close(input[0]); close(output[1]);
+    close(input[0]);
+    close(output[1]);
     term.raw = term.opened = term.capable = term.active = true;
     term.columns = 160u;
     assert(snag_term_audio(&term, "[mic] ", true) == 0);
     assert(term.prompt_wanted);
     const char *keys[] = {"\r", "\003", "\t"};
-    const enum snag_term_action expected[] = {SNAG_TERM_DICTATE_DONE, SNAG_TERM_DICTATE_CANCEL, SNAG_TERM_NONE};
+    const enum snag_term_action expected[] = {
+        SNAG_TERM_DICTATE_DONE, SNAG_TERM_DICTATE_CANCEL, SNAG_TERM_NONE};
     for (size_t i = 0; i < 3u; ++i) {
-        term.input_pos = 0; term.input_len = 1; term.input[0] = (unsigned char)*keys[i];
+        term.input_pos = 0;
+        term.input_len = 1;
+        term.input[0] = (unsigned char)*keys[i];
         (void)snag_term_poll(&term, 0, -1, &action, &text);
         assert(action == expected[i] && !text && term.dictating);
         assert(term.draft.len == 10u && !memcmp(term.draft.data, "keep typed", 10u));
@@ -1520,7 +1554,9 @@ test_dictation_editor(void)
     assert(snag_term_insert_draft(&term, "spoken ") == 0);
     assert(term.draft.len == 17u && !memcmp(term.draft.data, "keep spoken typed", 17u));
     assert(snag_term_insert_draft(&term, "\xff") < 0 && term.draft.len == 17u);
-    term.input_pos = 0; term.input_len = 1; term.input[0] = 0x1bu;
+    term.input_pos = 0;
+    term.input_len = 1;
+    term.input[0] = 0x1bu;
     assert(snag_term_poll(&term, 0, -1, &action, &text) == 0);
     assert(snag_term_poll(&term, 0, -1, &action, &text) == 1);
     assert(action == SNAG_TERM_DICTATE_CANCEL && term.draft.len == 17u);
@@ -1537,16 +1573,22 @@ test_dictation_editor(void)
     assert(!strcmp(term.caption[0], "spoken partial"));
     assert(snag_term_restore_draft(&term, "first\nsecond") == 0);
     assert(term.rendered_rows >= 4u);
-    term.input_pos = 0; term.input_len = 1; term.input[0] = '\r';
+    term.input_pos = 0;
+    term.input_len = 1;
+    term.input[0] = '\r';
     assert(snag_term_poll(&term, 0, -1, &action, &text) == 1);
     assert(action == SNAG_TERM_SUBMIT && text && !strcmp(text, "first\nsecond"));
-    free(text); text = NULL;
+    free(text);
+    text = NULL;
     assert(snag_term_audio(&term, "", false) == 0);
     assert(!term.caption[0][0] && !term.caption[1][0]);
     term.raw = false;
     snag_term_close(&term);
     assert(dup2(saved_in, STDIN_FILENO) >= 0 && dup2(saved_out, STDERR_FILENO) >= 0);
-    close(saved_in); close(saved_out); close(input[1]); close(output[0]);
+    close(saved_in);
+    close(saved_out);
+    close(input[1]);
+    close(output[0]);
 }
 
 static void
@@ -1580,11 +1622,9 @@ test_destination_editor(void)
     static const struct {
         const char *draft, *expected;
         bool chat;
-    } cases[] = {
-        {"@ag", "@agent2 ", true}, {"/17 @ag", "/17 @agent17 ", true},
+    } cases[] = {{"@ag", "@agent2 ", true}, {"/17 @ag", "/17 @agent17 ", true},
         {"/17 @ag", "/17 @agent17 ", false}, {"/all @ag", "/all @agent", true},
-        {"/9 @ag", NULL, true}, {"/2oops @ag", NULL, true}, {"/1", "/17 ", true}
-    };
+        {"/9 @ag", NULL, true}, {"/2oops @ag", NULL, true}, {"/1", "/17 ", true}};
     struct snag_irc_destinations destinations = {0};
     struct snag_irc_route route, frozen;
     struct snag_term term;
@@ -1652,7 +1692,9 @@ test_destination_editor(void)
     strcpy(destinations.items[0].endpoint, "first:6667");
     assert(snag_term_set_destinations(&term, &destinations) == 0);
     term.conversation = (struct snag_irc_conversation_target){.kind = SNAG_IRC_QUERY,
-        .identity = SNAG_IRC_OPERATOR, .endpoint = "first:6667", .peer = "peer",
+        .identity = SNAG_IRC_OPERATOR,
+        .endpoint = "first:6667",
+        .peer = "peer",
         .conversation = "11111111111111111111111111111111"};
     snag_term_destination_prefix(&term, label, sizeof(label));
     assert(!strcmp(label, "[peer] "));
@@ -1705,8 +1747,8 @@ capture_orientation(bool resumed, char *out, size_t out_size)
     struct output_capture capture = capture_open(false, true);
 
     snag_render_init(&render, 0u);
-    assert(snag_render_orientation(&render, "/work/tree",
-        "0123456789abcdef0123456789abcdef", 3u, 2u, resumed, false) == 0);
+    assert(snag_render_orientation(&render, "/work/tree", "0123456789abcdef0123456789abcdef", 3u,
+               2u, resumed, false) == 0);
     return capture_close(&capture, out, out_size, 0u);
 }
 
@@ -1722,9 +1764,9 @@ drain_available(int fd, char *out, size_t out_size, size_t used)
 }
 
 static size_t
-capture_wrapped(const char *first, const char *second, unsigned int columns,
-                bool markdown, const char *first_output,
-                const char *second_output, char *out, size_t out_size, struct snag_buf *delivered)
+capture_wrapped(const char *first, const char *second, unsigned int columns, bool markdown,
+    const char *first_output, const char *second_output, char *out, size_t out_size,
+    struct snag_buf *delivered)
 {
     struct snag_render render;
     struct snag_term term;
@@ -1750,9 +1792,9 @@ capture_wrapped(const char *first, const char *second, unsigned int columns,
 static void
 test_punctuation_wrapping(void)
 {
-    static const char *const punctuation[] = {
-        "-", ",", ".", ";", ":", "!", "?", "/", ")", "]", "}", "..", "\")",
-        "\xe2\x80\x90", "\xe2\x80\x92", "\xe2\x80\x93", "\xe2\x80\x94", "\xe2\x80\xa6" };
+    static const char *const punctuation[] = {"-", ",", ".", ";", ":", "!", "?", "/", ")", "]", "}",
+        "..", "\")", "\xe2\x80\x90", "\xe2\x80\x92", "\xe2\x80\x93", "\xe2\x80\x94",
+        "\xe2\x80\xa6"};
     static const char first[] = "1234567890 word";
     char second[32];
     char first_output[64];
@@ -1764,17 +1806,16 @@ test_punctuation_wrapping(void)
         const char *prefix = enabled ? "• " : "";
 
         assert(snprintf(first_output, sizeof(first_output), "%s%s", prefix, "1234567890") > 0);
-        for (size_t i = 0u; i < sizeof(punctuation) / sizeof(punctuation[0]);
-             ++i) {
+        for (size_t i = 0u; i < sizeof(punctuation) / sizeof(punctuation[0]); ++i) {
             assert(snprintf(second, sizeof(second), "%smores", punctuation[i]) > 0);
             assert(snprintf(second_output, sizeof(second_output), "%s1234567890", prefix) > 0);
-            assert(snprintf(delivered_output, sizeof(delivered_output),
-                            "%s%smores", first, punctuation[i]) > 0);
+            assert(snprintf(delivered_output, sizeof(delivered_output), "%s%smores", first,
+                       punctuation[i]) > 0);
             struct snag_buf delivered = {.max = sizeof(delivered_output)};
-            assert(capture_wrapped(first, second, 20u, enabled != 0u, first_output, second_output, output,
-                                   sizeof(output), &delivered) > 0u);
-            assert(snprintf(second_output, sizeof(second_output), "%s1234567890\n%sword%smores", prefix,
-                            enabled ? "  " : "", punctuation[i]) > 0);
+            assert(capture_wrapped(first, second, 20u, enabled != 0u, first_output, second_output,
+                       output, sizeof(output), &delivered) > 0u);
+            assert(snprintf(second_output, sizeof(second_output), "%s1234567890\n%sword%smores",
+                       prefix, enabled ? "  " : "", punctuation[i]) > 0);
             assert(strstr(output, second_output));
             assert(snag_buf_terminate(&delivered) == 0);
             assert(strcmp((const char *)delivered.data, delivered_output) == 0);
@@ -1784,9 +1825,8 @@ test_punctuation_wrapping(void)
             assert(snprintf(first_output, sizeof(first_output), "%s1234567890", prefix) > 0);
             assert(snprintf(second_output, sizeof(second_output), "%s1234567890", prefix) > 0);
             struct snag_buf delivered = {.max = 32u};
-            assert(capture_wrapped("1234567890 ", "-something", 20u,
-                                   enabled != 0u, first_output, second_output,
-                                   output, sizeof(output), &delivered) > 0u);
+            assert(capture_wrapped("1234567890 ", "-something", 20u, enabled != 0u, first_output,
+                       second_output, output, sizeof(output), &delivered) > 0u);
             assert(snag_buf_terminate(&delivered) == 0);
             assert(strcmp((const char *)delivered.data, "1234567890 -something") == 0);
             snag_buf_free(&delivered);
@@ -1803,8 +1843,8 @@ editable_checkpoint(void *opaque)
 }
 
 static size_t
-capture_markdown(const char *text, bool enabled, bool split, enum snag_color_mode color, unsigned int columns,
-                 char *out, size_t out_size, struct snag_buf *delivered)
+capture_markdown(const char *text, bool enabled, bool split, enum snag_color_mode color,
+    unsigned int columns, char *out, size_t out_size, struct snag_buf *delivered)
 {
     struct snag_render render;
     struct snag_term term;
@@ -1819,7 +1859,8 @@ capture_markdown(const char *text, bool enabled, bool split, enum snag_color_mod
     render.checkpoint_opaque = &term;
     assert(snag_render_public_begin(&render, STDOUT_FILENO, NULL) == 0);
     if (split) {
-        for (size_t i = 0u; i < len; ++i) assert(snag_render_public(&render, text + i, 1u, delivered) == 0);
+        for (size_t i = 0u; i < len; ++i)
+            assert(snag_render_public(&render, text + i, 1u, delivered) == 0);
     } else {
         assert(snag_render_public(&render, text, len, delivered) == 0);
     }
@@ -1857,12 +1898,17 @@ static void
 test_punctuation_word_boundaries(void)
 {
     static const char *const sources[] = {
-        "1234567890 WAL-like: next", "1234567890 **WAL-like**: next",
-        "1234567890 `WAL-like`: next", "1234567890 record, next",
-        "1234567890 **record**, next", "1234567890 café́界: next",
-        "1234567890 *word*?! next", "1234567890 `word`). next", };
+        "1234567890 WAL-like: next",
+        "1234567890 **WAL-like**: next",
+        "1234567890 `WAL-like`: next",
+        "1234567890 record, next",
+        "1234567890 **record**, next",
+        "1234567890 café́界: next",
+        "1234567890 *word*?! next",
+        "1234567890 `word`). next",
+    };
     static const char *const words[] = {
-        "WAL-like:", "WAL-like:", "WAL-like:", "record,", "record,", "café́界:", "word?!", "word)." };
+        "WAL-like:", "WAL-like:", "WAL-like:", "record,", "record,", "café́界:", "word?!", "word)."};
     char output[4096], plain[4096];
 
     for (size_t i = 0u; i < sizeof(sources) / sizeof(sources[0]); ++i) {
@@ -1871,8 +1917,8 @@ test_punctuation_word_boundaries(void)
                 for (size_t color = 0u; color < 2u; ++color) {
                     struct snag_buf delivered = {.max = 1024u};
                     assert(capture_markdown(sources[i], true, split != 0u,
-                        color ? SNAG_COLOR_ALWAYS : SNAG_COLOR_NEVER, columns,
-                        output, sizeof(output), &delivered) > 0u);
+                               color ? SNAG_COLOR_ALWAYS : SNAG_COLOR_NEVER, columns, output,
+                               sizeof(output), &delivered) > 0u);
                     size_t used = 0u;
                     for (size_t at = 0u; output[at]; ++at) {
                         if (output[at] == '\033') {
@@ -1977,37 +2023,37 @@ test_help_layout(void)
     const char *sources[] = {"streamed", "```c\nint", "**bold", "# heading"};
     const unsigned int widths[] = {20u, 28u, 40u, 80u, 120u};
     for (size_t w = 0u; w < sizeof(widths) / sizeof(widths[0]); ++w)
-    for (size_t i = 0u; i < sizeof(sources) / sizeof(sources[0]); ++i) {
-        struct snag_render render;
-        struct snag_term term;
-        struct snag_buf delivered = {.max = 1024u};
-        char output[4096];
-        struct output_capture capture = capture_open(false, true);
-        snag_term_init(&term);
-        term.columns = widths[w];
-        assert(snag_term_restore_draft(&term, "keep draft") == 0);
-        snag_render_init(&render, 0u);
-        render.stderr_terminal = true;
-        snag_render_set_color(&render, SNAG_COLOR_NEVER);
-        snag_render_attach_term(&render, &term);
-        assert(snag_render_public_begin(&render, STDERR_FILENO, NULL) == 0);
-        assert(snag_render_public(&render, sources[i], strlen(sources[i]), &delivered) == 0);
-        assert(snag_render_help(&render, help) == 0);
-        assert(term.cursor == strlen("keep draft") && term.draft.len == term.cursor);
-        assert(!memcmp(term.draft.data, "keep draft", term.cursor));
-        assert(snag_render_public(&render, " suffix", 7u, &delivered) == 0);
-        assert(snag_render_public_end(&render) == 0);
-        assert(snag_buf_terminate(&delivered) == 0);
-        assert(delivered.len == strlen(sources[i]) + 7u);
-        assert(!memcmp(delivered.data, sources[i], strlen(sources[i])));
-        assert(!strcmp((char *)delivered.data + strlen(sources[i]), " suffix"));
-        assert(capture_close(&capture, output, sizeof(output), 0u) > 0u);
-        assert(count_text(output, "continuation") == 1u);
-        assert(count_text(output, "/goal") == 1u);
-        snag_buf_free(&delivered);
-        snag_render_free(&render);
-        snag_term_close(&term);
-    }
+        for (size_t i = 0u; i < sizeof(sources) / sizeof(sources[0]); ++i) {
+            struct snag_render render;
+            struct snag_term term;
+            struct snag_buf delivered = {.max = 1024u};
+            char output[4096];
+            struct output_capture capture = capture_open(false, true);
+            snag_term_init(&term);
+            term.columns = widths[w];
+            assert(snag_term_restore_draft(&term, "keep draft") == 0);
+            snag_render_init(&render, 0u);
+            render.stderr_terminal = true;
+            snag_render_set_color(&render, SNAG_COLOR_NEVER);
+            snag_render_attach_term(&render, &term);
+            assert(snag_render_public_begin(&render, STDERR_FILENO, NULL) == 0);
+            assert(snag_render_public(&render, sources[i], strlen(sources[i]), &delivered) == 0);
+            assert(snag_render_help(&render, help) == 0);
+            assert(term.cursor == strlen("keep draft") && term.draft.len == term.cursor);
+            assert(!memcmp(term.draft.data, "keep draft", term.cursor));
+            assert(snag_render_public(&render, " suffix", 7u, &delivered) == 0);
+            assert(snag_render_public_end(&render) == 0);
+            assert(snag_buf_terminate(&delivered) == 0);
+            assert(delivered.len == strlen(sources[i]) + 7u);
+            assert(!memcmp(delivered.data, sources[i], strlen(sources[i])));
+            assert(!strcmp((char *)delivered.data + strlen(sources[i]), " suffix"));
+            assert(capture_close(&capture, output, sizeof(output), 0u) > 0u);
+            assert(count_text(output, "continuation") == 1u);
+            assert(count_text(output, "/goal") == 1u);
+            snag_buf_free(&delivered);
+            snag_render_free(&render);
+            snag_term_close(&term);
+        }
     struct snag_render render;
     char output[256];
     struct output_capture capture = capture_open(false, true);
@@ -2023,43 +2069,44 @@ static void
 test_update_banner(void)
 {
     const char *const sources[] = {"streamed", "```c\nint", "**bold", "# heading"};
-    const char *banner = "=== snajpagent updated ===\nInstalled test. Restart when convenient.\nChangelog: https://example.test/#changelog\n";
+    const char *banner = "=== snajpagent updated ===\nInstalled test. Restart when "
+                         "convenient.\nChangelog: https://example.test/#changelog\n";
     const unsigned int widths[] = {20u, 28u, 40u, 80u, 120u};
     for (size_t w = 0; w < sizeof(widths) / sizeof(widths[0]); ++w)
-    for (size_t i = 0; i < sizeof(sources) / sizeof(sources[0]); ++i) {
-        struct snag_render render;
-        struct snag_term term;
-        struct snag_buf delivered;
-        char output[4096];
-        struct output_capture capture = capture_open(false, true);
-        snag_term_init(&term);
-        term.columns = widths[w];
-        assert(snag_term_restore_draft(&term, "keep my draft") == 0);
-        size_t cursor = term.cursor;
-        snag_render_init(&render, 0u);
-        render.stderr_terminal = true;
-        snag_render_set_color(&render, SNAG_COLOR_NEVER);
-        snag_render_attach_term(&render, &term);
-        snag_buf_init(&delivered, 1024u);
-        assert(snag_render_public_begin(&render, STDERR_FILENO, NULL) == 0);
-        assert(snag_render_public(&render, sources[i], strlen(sources[i]), &delivered) == 0);
-        assert(snag_render_update(&render, banner) == 0);
-        assert(term.cursor == cursor && term.draft.len == strlen("keep my draft"));
-        assert(memcmp(term.draft.data, "keep my draft", term.draft.len) == 0);
-        assert(snag_render_public(&render, " tail", 5u, &delivered) == 0);
-        assert(snag_render_public_end(&render) == 0);
-        assert(delivered.len == strlen(sources[i]) + 5u);
-        assert(memcmp(delivered.data, sources[i], strlen(sources[i])) == 0);
-        snag_buf_free(&delivered);
-        snag_render_free(&render);
-        snag_term_close(&term);
-        assert(capture_close(&capture, output, sizeof(output), 0u) > 0u);
-        assert(strstr(output, "\n\n=== snajpagent"));
-        assert(strstr(output, "updated"));
-        assert(strstr(output, "convenient."));
-        assert(strstr(output, "#changelog\n\n"));
-        if (widths[w] >= 40u) assert(strstr(output, "=== snajpagent updated ===\n"));
-    }
+        for (size_t i = 0; i < sizeof(sources) / sizeof(sources[0]); ++i) {
+            struct snag_render render;
+            struct snag_term term;
+            struct snag_buf delivered;
+            char output[4096];
+            struct output_capture capture = capture_open(false, true);
+            snag_term_init(&term);
+            term.columns = widths[w];
+            assert(snag_term_restore_draft(&term, "keep my draft") == 0);
+            size_t cursor = term.cursor;
+            snag_render_init(&render, 0u);
+            render.stderr_terminal = true;
+            snag_render_set_color(&render, SNAG_COLOR_NEVER);
+            snag_render_attach_term(&render, &term);
+            snag_buf_init(&delivered, 1024u);
+            assert(snag_render_public_begin(&render, STDERR_FILENO, NULL) == 0);
+            assert(snag_render_public(&render, sources[i], strlen(sources[i]), &delivered) == 0);
+            assert(snag_render_update(&render, banner) == 0);
+            assert(term.cursor == cursor && term.draft.len == strlen("keep my draft"));
+            assert(memcmp(term.draft.data, "keep my draft", term.draft.len) == 0);
+            assert(snag_render_public(&render, " tail", 5u, &delivered) == 0);
+            assert(snag_render_public_end(&render) == 0);
+            assert(delivered.len == strlen(sources[i]) + 5u);
+            assert(memcmp(delivered.data, sources[i], strlen(sources[i])) == 0);
+            snag_buf_free(&delivered);
+            snag_render_free(&render);
+            snag_term_close(&term);
+            assert(capture_close(&capture, output, sizeof(output), 0u) > 0u);
+            assert(strstr(output, "\n\n=== snajpagent"));
+            assert(strstr(output, "updated"));
+            assert(strstr(output, "convenient."));
+            assert(strstr(output, "#changelog\n\n"));
+            if (widths[w] >= 40u) assert(strstr(output, "=== snajpagent updated ===\n"));
+        }
     /* Narrow terminal geometry must not change redirected notice bytes. */
     struct snag_render render;
     struct snag_term term;
@@ -2080,27 +2127,32 @@ test_update_banner(void)
 static void
 test_markdown_fences(void)
 {
-    static const struct { const char *source, *expected; } cases[] = {
-        { "```text\nplain\n```\n", "┌─\n│ plain\n└─\n" }, { "~~~ txt  \nplain\n~~~\n", "┌─\n│ plain\n└─\n" },
-        { "```plaintext\nplain\n```", "┌─\n│ plain\n└─" }, { "```c\nint x;\n```\n", "┌─ c\n│ int x;\n└─\n" },
-        { "```text example\nplain\n```\n", "┌─ text example\n│ plain\n└─\n" },
-        { "```\n    **literal**\n| A |\n| --- |\n| B |\n```\n",
-          "┌─\n│     **literal**\n│ | A |\n│ | --- |\n│ | B |\n└─\n" }, };
+    static const struct {
+        const char *source, *expected;
+    } cases[] = {
+        {"```text\nplain\n```\n", "┌─\n│ plain\n└─\n"},
+        {"~~~ txt  \nplain\n~~~\n", "┌─\n│ plain\n└─\n"},
+        {"```plaintext\nplain\n```", "┌─\n│ plain\n└─"},
+        {"```c\nint x;\n```\n", "┌─ c\n│ int x;\n└─\n"},
+        {"```text example\nplain\n```\n", "┌─ text example\n│ plain\n└─\n"},
+        {"```\n    **literal**\n| A |\n| --- |\n| B |\n```\n",
+            "┌─\n│     **literal**\n│ | A |\n│ | --- |\n│ | B |\n└─\n"},
+    };
     char output[2048];
 
     for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
         for (unsigned int split = 0; split < 2u; ++split) {
             struct snag_buf delivered;
             snag_buf_init(&delivered, 1024u);
-            assert(capture_markdown(cases[i].source, true, split != 0u,
-                                   SNAG_COLOR_NEVER, 120u, output, sizeof(output), &delivered) > 0u);
+            assert(capture_markdown(cases[i].source, true, split != 0u, SNAG_COLOR_NEVER, 120u,
+                       output, sizeof(output), &delivered) > 0u);
             assert(strcmp(output, cases[i].expected) == 0);
             assert(snag_buf_terminate(&delivered) == 0);
             assert(strcmp((const char *)delivered.data, cases[i].source) == 0);
             snag_buf_free(&delivered);
         }
-        assert(capture_markdown(cases[i].source, false, true, SNAG_COLOR_NEVER, 120u,
-                               output, sizeof(output), NULL) > 0u);
+        assert(capture_markdown(cases[i].source, false, true, SNAG_COLOR_NEVER, 120u, output,
+                   sizeof(output), NULL) > 0u);
         assert(strcmp(output, cases[i].source) == 0);
     }
 }
@@ -2132,12 +2184,17 @@ test_model_prompt_boundaries(void)
         const char *rendered;
         bool markdown;
     } cases[] = {
-        { "plain prose", "\n• plain prose", true }, { "# heading", "heading", true },
-        { "- unordered", "• unordered", true }, { "7. ordered", "7. ordered", true },
-        { "> quotation", "│ quotation", true }, { "```c\nint x;\n```", "┌─ c\n│ int x;\n└─", true },
-        { "| A |\n| --- |\n| B |", "┌───┐\n│ A │\n├───┤\n│ B │\n└───┘", true },
-        { "**inline**", "\n• inline", true }, { "- literal", "- literal", false }, };
-    static const char *const suffixes[] = { "", "\n", "\n\n" };
+        {"plain prose", "\n• plain prose", true},
+        {"# heading", "heading", true},
+        {"- unordered", "• unordered", true},
+        {"7. ordered", "7. ordered", true},
+        {"> quotation", "│ quotation", true},
+        {"```c\nint x;\n```", "┌─ c\n│ int x;\n└─", true},
+        {"| A |\n| --- |\n| B |", "┌───┐\n│ A │\n├───┤\n│ B │\n└───┘", true},
+        {"**inline**", "\n• inline", true},
+        {"- literal", "- literal", false},
+    };
+    static const char *const suffixes[] = {"", "\n", "\n\n"};
     char source[256];
     char expected[256];
     char output[512];
@@ -2155,22 +2212,28 @@ test_model_prompt_boundaries(void)
 static void
 test_paragraph_spacing(void)
 {
-    static const struct { const char *source, *expected; } cases[] = {
-        { "one\n\n\n\nsecond", "\n• one\n\n• second\n\n" }, { "one\ncontinued", "\n• one\n  continued\n\n" },
-        { "# heading\none\n# next", "heading\n\n• one\n\nnext" }, { "- first\n- second\none\n- next",
-          "• first\n• second\n\n• one\n\n• next" },
-        { "1. first\none\n2. next", "1. first\n\n• one\n\n2. next" }, { "> first\n> second\none\n> next",
-          "│ first\n│ second\n\n• one\n\n│ next" }, { "one\n```c\na\n\n\nb\n```\nsecond",
-          "\n• one\n\n┌─ c\n│ a\n│ \n│ \n│ b\n└─\n\n• second\n\n" }, { "one\n| A |\n| --- |\n| B |\nsecond",
-          "\n• one\n\n┌───┐\n│ A │\n├───┤\n│ B │\n└───┘\n\n• second\n\n" },
-        { "one\n \n  \nsecond", "\n• one\n\n• second\n\n" }, };
+    static const struct {
+        const char *source, *expected;
+    } cases[] = {
+        {"one\n\n\n\nsecond", "\n• one\n\n• second\n\n"},
+        {"one\ncontinued", "\n• one\n  continued\n\n"},
+        {"# heading\none\n# next", "heading\n\n• one\n\nnext"},
+        {"- first\n- second\none\n- next", "• first\n• second\n\n• one\n\n• next"},
+        {"1. first\none\n2. next", "1. first\n\n• one\n\n2. next"},
+        {"> first\n> second\none\n> next", "│ first\n│ second\n\n• one\n\n│ next"},
+        {"one\n```c\na\n\n\nb\n```\nsecond",
+            "\n• one\n\n┌─ c\n│ a\n│ \n│ \n│ b\n└─\n\n• second\n\n"},
+        {"one\n| A |\n| --- |\n| B |\nsecond",
+            "\n• one\n\n┌───┐\n│ A │\n├───┤\n│ B │\n└───┘\n\n• second\n\n"},
+        {"one\n \n  \nsecond", "\n• one\n\n• second\n\n"},
+    };
     char output[4096];
     for (size_t i = 0u; i < sizeof(cases) / sizeof(cases[0]); ++i)
         for (unsigned int split = 0u; split < 2u; ++split) {
             struct snag_buf delivered;
             snag_buf_init(&delivered, 4096u);
-            assert(capture_markdown(cases[i].source, true, split != 0u,
-                                   SNAG_COLOR_NEVER, 120u, output, sizeof(output), &delivered) > 0u);
+            assert(capture_markdown(cases[i].source, true, split != 0u, SNAG_COLOR_NEVER, 120u,
+                       output, sizeof(output), &delivered) > 0u);
             assert(strcmp(output, cases[i].expected) == 0);
             assert(delivered.len == strlen(cases[i].source));
             assert(memcmp(delivered.data, cases[i].source, delivered.len) == 0);
@@ -2205,8 +2268,8 @@ static void
 test_spacing_classes(void)
 {
     const char *frames[SNAG_TERM_SPINNER_COUNT] = {" ", " ", " "};
-    const char *events[] = {"goal_started", "goal_reworded", "goal_replaced",
-        "goal_resumed", "goal_completed", "goal_cancelled", "compaction_completed"};
+    const char *events[] = {"goal_started", "goal_reworded", "goal_replaced", "goal_resumed",
+        "goal_completed", "goal_cancelled", "compaction_completed"};
     char output[8192];
     struct snag_render render;
     struct snag_term term;
@@ -2253,9 +2316,10 @@ test_spacing_classes(void)
     assert(snag_render_input_submitted(&render, "input › ", "three") == 0);
     snag_render_free(&render);
     (void)capture_close(&capture, output, sizeof(output), 0u);
-    assert(strcmp(output, "input › one\ninput › two\n\n" "• Goal set\n• Goal updated\n"
-        "• Goal updated\n• Goal resumed\n• Goal cleared\n• Goal cleared\n"
-        "• Compacted\n\nheading\n\ninput › three\n") == 0);
+    assert(strcmp(output, "input › one\ninput › two\n\n"
+                          "• Goal set\n• Goal updated\n"
+                          "• Goal updated\n• Goal resumed\n• Goal cleared\n• Goal cleared\n"
+                          "• Compacted\n\nheading\n\ninput › three\n") == 0);
 
     /* A provider wait notice must not consume the literal model paragraph's gap. */
     capture = capture_open(true, true);
@@ -2336,13 +2400,12 @@ test_live_paragraph_gap(void)
 static void
 test_input_model_boundaries(void)
 {
-    static const char *const suffixes[] = { "", "\n", "\n\n" };
+    static const char *const suffixes[] = {"", "\n", "\n\n"};
     char output[256];
     char question[32];
 
     for (size_t enabled = 0u; enabled < 2u; ++enabled) {
-        for (size_t suffix = 0u;
-             suffix < sizeof(suffixes) / sizeof(suffixes[0]); ++suffix) {
+        for (size_t suffix = 0u; suffix < sizeof(suffixes) / sizeof(suffixes[0]); ++suffix) {
             struct snag_render render;
             struct snag_term term;
             struct output_capture capture = capture_terminal(&render, &term, 120u, true, true);
@@ -2358,8 +2421,8 @@ test_input_model_boundaries(void)
             snag_render_free(&render);
             snag_term_close(&term);
             (void)capture_close(&capture, output, sizeof(output), 0u);
-            assert(strcmp(output, enabled ? "model/low › question\n\n• answer\n\n" :
-                          "model/low › question\n\nanswer\n\n") == 0);
+            assert(strcmp(output, enabled ? "model/low › question\n\n• answer\n\n"
+                                          : "model/low › question\n\nanswer\n\n") == 0);
         }
     }
     {
@@ -2383,15 +2446,15 @@ capture_static_markdown(unsigned int verbosity, char *out, size_t out_size)
         enum snag_irc_event_kind kind;
         const char *nick, *text;
         bool op;
-    } events[] = {
-        {SNAG_IRC_MESSAGE, "agent", "**answer** and `code`", false},
+    } events[] = {{SNAG_IRC_MESSAGE, "agent", "**answer** and `code`", false},
         {SNAG_IRC_MESSAGE, "agent", "- actual list item", false},
         {SNAG_IRC_MESSAGE, "operator", "**literal operator**", true},
-        {SNAG_IRC_MESSAGE, "remote", "```c", false}, {SNAG_IRC_MESSAGE, "remote", "int value = 1;", false},
-        {SNAG_IRC_MESSAGE, "remote", "```", false}, {SNAG_IRC_NOTICE, "remote", "**literal notice**", false},
+        {SNAG_IRC_MESSAGE, "remote", "```c", false},
+        {SNAG_IRC_MESSAGE, "remote", "int value = 1;", false},
+        {SNAG_IRC_MESSAGE, "remote", "```", false},
+        {SNAG_IRC_NOTICE, "remote", "**literal notice**", false},
         {SNAG_IRC_MESSAGE, "remote", "```c", false}, {SNAG_IRC_QUIT, "remote", "gone", false},
-        {SNAG_IRC_MESSAGE, "remote", "plain after quit", false}
-    };
+        {SNAG_IRC_MESSAGE, "remote", "plain after quit", false}};
     struct snag_render render;
     struct snag_irc_event event = {.timestamp_ms = 1000u, .endpoint = "local", .local = true};
 
@@ -2407,15 +2470,17 @@ capture_static_markdown(unsigned int verbosity, char *out, size_t out_size)
         strcpy(event.text, events[i].text);
         assert(snag_render_irc_event(&render, &event) == 0);
     }
-    assert(snag_render_history(&render, &(struct snag_history_turn){
-        .user = "**literal user**", .assistant = "## Saved *answer*"}, 1u, 2u, 3u) == 0);
+    assert(snag_render_history(&render,
+               &(struct snag_history_turn){
+                   .user = "**literal user**", .assistant = "## Saved *answer*"},
+               1u, 2u, 3u) == 0);
     assert(snag_render_history(&render, NULL, 1u, 2u, 3u) == 0);
     snag_render_set_markdown(&render, false);
     event.kind = SNAG_IRC_MESSAGE;
     memcpy(event.text, "**literal agent**", 18u);
     assert(snag_render_irc_event(&render, &event) == 0);
-    assert(snag_render_history(&render, &(struct snag_history_turn){
-        .assistant = "## Literal assistant"}, 1u, 2u, 3u) == 0);
+    assert(snag_render_history(&render,
+               &(struct snag_history_turn){.assistant = "## Literal assistant"}, 1u, 2u, 3u) == 0);
     assert(snag_render_history(&render, NULL, 1u, 2u, 3u) == 0);
     return capture_close(&capture, out, out_size, 0u);
 }
@@ -2424,18 +2489,25 @@ static void
 test_query_markdown_isolation(void)
 {
     struct snag_render render;
-    struct snag_irc_event event = {.routed = true, .kind = SNAG_IRC_MESSAGE,
-        .timestamp_ms = 1000u, .endpoint = "server:6667", .nick = "peer",
-        .text = "```", .route = {.identity = SNAG_IRC_OPERATOR, .kind = SNAG_IRC_QUERY,
+    struct snag_irc_event event = {.routed = true,
+        .kind = SNAG_IRC_MESSAGE,
+        .timestamp_ms = 1000u,
+        .endpoint = "server:6667",
+        .nick = "peer",
+        .text = "```",
+        .route = {.identity = SNAG_IRC_OPERATOR,
+            .kind = SNAG_IRC_QUERY,
             .connection = "11111111111111111111111111111111",
-            .conversation = "22222222222222222222222222222222", .peer = "peer"}};
+            .conversation = "22222222222222222222222222222222",
+            .peer = "peer"}};
     char output[8192];
     struct output_capture capture = capture_open(false, true);
     snag_render_init(&render, 1u);
     render.stderr_terminal = true;
     snag_render_set_color(&render, SNAG_COLOR_NEVER);
     struct snag_irc_conversation_target target = {.kind = SNAG_IRC_QUERY,
-        .identity = SNAG_IRC_OPERATOR, .peer = "peer",
+        .identity = SNAG_IRC_OPERATOR,
+        .peer = "peer",
         .conversation = "22222222222222222222222222222222"};
     assert(snag_render_set_chat_conversation(&render, event.endpoint, &target, false) == 0);
     assert(snag_render_set_view(&render, SNAG_RENDER_CHAT) == 0);
@@ -2458,22 +2530,29 @@ test_query_markdown_isolation(void)
     if (!strstr(output, "**code**") || strstr(output, "**other conversation**"))
         fprintf(stderr, "query Markdown output: %s\n", output);
     assert(strstr(output, "other conversation") && !strstr(output, "**other conversation**") &&
-        strstr(output, "**code**"));
+           strstr(output, "**code**"));
 }
 
 static void
 test_query_send_receipts(void)
 {
     struct snag_render render;
-    struct snag_irc_event event = {.routed = true, .kind = SNAG_IRC_MESSAGE,
-        .timestamp_ms = 1000u, .endpoint = "server:6667", .nick = "operator",
-        .text = "one-private-body", .route = {.identity = SNAG_IRC_OPERATOR,
-            .kind = SNAG_IRC_QUERY, .direction = SNAG_IRC_OUTGOING,
+    struct snag_irc_event event = {.routed = true,
+        .kind = SNAG_IRC_MESSAGE,
+        .timestamp_ms = 1000u,
+        .endpoint = "server:6667",
+        .nick = "operator",
+        .text = "one-private-body",
+        .route = {.identity = SNAG_IRC_OPERATOR,
+            .kind = SNAG_IRC_QUERY,
+            .direction = SNAG_IRC_OUTGOING,
             .connection = "11111111111111111111111111111111",
-            .conversation = "22222222222222222222222222222222", .peer = "peer",
+            .conversation = "22222222222222222222222222222222",
+            .peer = "peer",
             .send = "33333333333333333333333333333333"}};
     struct snag_irc_conversation_target target = {.kind = SNAG_IRC_QUERY,
-        .identity = SNAG_IRC_OPERATOR, .peer = "peer",
+        .identity = SNAG_IRC_OPERATOR,
+        .peer = "peer",
         .conversation = "22222222222222222222222222222222"};
     char output[8192];
     struct output_capture capture = capture_open(false, true);
@@ -2506,8 +2585,8 @@ test_history_failure(void)
     snag_render_init(&render, 0u);
     render.stderr_terminal = true;
     errno = 0;
-    assert(snag_render_history(&render, &(struct snag_history_turn){
-        .assistant = "\xff"}, 1u, 1u, 1u) < 0);
+    assert(snag_render_history(
+               &render, &(struct snag_history_turn){.assistant = "\xff"}, 1u, 1u, 1u) < 0);
     assert(errno == EILSEQ && !render.public_item_open);
     assert(snag_render_public_begin(&render, STDERR_FILENO, NULL) == 0);
     assert(snag_render_public_end(&render) == 0);
@@ -2518,10 +2597,8 @@ test_history_failure(void)
 static void
 test_history_turns(void)
 {
-    const struct snag_history_turn turns[] = {
-        {.user = "first input", .assistant = "first answer"},
-        {.user = "second input", .assistant = "second answer"}
-    };
+    const struct snag_history_turn turns[] = {{.user = "first input", .assistant = "first answer"},
+        {.user = "second input", .assistant = "second answer"}};
     struct snag_render render;
     char output[4096];
     struct output_capture capture = capture_open(false, true);
@@ -2530,7 +2607,8 @@ test_history_turns(void)
     assert(snag_render_history(&render, NULL, 0u, 0u, 0u) == 0);
     assert(snag_render_rollout_begin(&render, STDERR_FILENO, NULL, SNAG_PRESENT_CONVERSATION) == 0);
     assert(snag_render_rollout(&render, "active prefix", 13u, NULL) == 0);
-    for (size_t i = 0u; i < 2u; ++i) assert(snag_render_history(&render, &turns[i], i + 1u, 2u, 3u) == 0);
+    for (size_t i = 0u; i < 2u; ++i)
+        assert(snag_render_history(&render, &turns[i], i + 1u, 2u, 3u) == 0);
     assert(snag_render_history(&render, NULL, 2u, 2u, 3u) == 0);
     assert(snag_render_rollout(&render, "active suffix", 13u, NULL) == 0);
     assert(snag_render_rollout_end(&render) == 0);
@@ -2538,10 +2616,9 @@ test_history_turns(void)
     assert(count_text(output, "── history: 3 total turns ──") == 1u);
     assert(count_text(output, "history: 0 shown · 0 completed among shown · 0 total") == 1u);
     const char *position = output;
-    const char *const fragments[] = {
-        "active prefix", "history: 3 total turns", "user: first input",
+    const char *const fragments[] = {"active prefix", "history: 3 total turns", "user: first input",
         "first answer", "user: second input", "second answer",
-        "history: 2 shown · 2 completed among shown · 3 total", "active suffix" };
+        "history: 2 shown · 2 completed among shown · 3 total", "active suffix"};
     for (size_t i = 0u; i < sizeof(fragments) / sizeof(fragments[0]); ++i) {
         position = strstr(position, fragments[i]);
         assert(position);
@@ -2577,32 +2654,28 @@ test_markdown_streaming(void)
     assert(strcmp(output, "Live café [docs]") == 0);
     assert(snag_render_public(&render, third, sizeof(third) - 1u, &delivered) == 0);
     used = drain_available(capture.fd, output, sizeof(output), used);
-    assert(strcmp(output,
-                  "Live café [docs] <https://example.test> and") == 0);
+    assert(strcmp(output, "Live café [docs] <https://example.test> and") == 0);
     assert(snag_render_public(&render, fourth, sizeof(fourth) - 1u, &delivered) == 0);
     used = drain_available(capture.fd, output, sizeof(output), used);
-    assert(strcmp(output,
-                  "Live café [docs] <https://example.test> and code\n") == 0);
+    assert(strcmp(output, "Live café [docs] <https://example.test> and code\n") == 0);
     assert(snag_render_public_end(&render) == 0);
     assert(snag_buf_terminate(&delivered) == 0);
     assert(strcmp((const char *)delivered.data,
-                  "# **Live** café [docs](https://example.test) and `code`\n") == 0);
+               "# **Live** café [docs](https://example.test) and `code`\n") == 0);
     snag_buf_free(&delivered);
 
     assert(snag_render_public_begin(&render, STDOUT_FILENO, NULL) == 0);
     assert(snag_render_public(&render, "**aborted", 9u, NULL) == 0);
     used = drain_available(capture.fd, output, sizeof(output), used);
-    assert(strcmp(output,
-                  "Live café [docs] <https://example.test> and code\n\n"
-                  "•") == 0);
+    assert(strcmp(output, "Live café [docs] <https://example.test> and code\n\n"
+                          "•") == 0);
     assert(snag_render_public_abort(&render) == 0);
     assert(snag_render_public_begin(&render, STDOUT_FILENO, NULL) == 0);
     assert(snag_render_public(&render, "literal", 7u, NULL) == 0);
     assert(snag_render_public_end(&render) == 0);
     used = drain_available(capture.fd, output, sizeof(output), used);
-    assert(strcmp(output,
-                  "Live café [docs] <https://example.test> and code\n\n"
-                  "• aborted\n\n• literal\n\n") == 0);
+    assert(strcmp(output, "Live café [docs] <https://example.test> and code\n\n"
+                          "• aborted\n\n• literal\n\n") == 0);
     (void)capture_close(&capture, output, sizeof(output), used);
     snag_term_close(&term);
 }
@@ -2632,7 +2705,8 @@ check_timeline_grid(const char *output, const char *source, unsigned int columns
     for (const char *line = output; *line;) {
         const char *end = strchr(line, '\n');
         if (!end) end = line + strlen(line);
-        assert(snag_term_text_width(line, (size_t)(end - line)) == table_width && table_width < columns);
+        assert(snag_term_text_width(line, (size_t)(end - line)) == table_width &&
+               table_width < columns);
         if (!strncmp(line, "│", strlen("│"))) {
             const char *part = line + strlen("│");
             for (size_t i = 0u; i < 2u; ++i) {
@@ -2650,7 +2724,8 @@ check_timeline_grid(const char *output, const char *source, unsigned int columns
                 part = next + strlen("│");
             }
             assert(part == end);
-        } else if ((!strncmp(line, "├", strlen("├")) || !strncmp(line, "└", strlen("└"))) && used[0]) {
+        } else if ((!strncmp(line, "├", strlen("├")) || !strncmp(line, "└", strlen("└"))) &&
+                   used[0]) {
             const char *part = source + 1u;
             for (size_t i = 0u; i < 2u; ++i) {
                 const char *next = strchr(part, '|'), *finish = next;
@@ -2659,7 +2734,8 @@ check_timeline_grid(const char *output, const char *source, unsigned int columns
                 while (finish > part && finish[-1] == ' ') --finish;
                 assert((size_t)(finish - part) == used[i]);
                 assert(!memcmp(values[i], part, used[i]));
-                values[i][0] = '\0'; used[i] = 0u;
+                values[i][0] = '\0';
+                used[i] = 0u;
                 part = next + 1u;
             }
             source = strchr(source, '\n') + 1u;
@@ -2678,20 +2754,22 @@ test_wrapped_markdown_tables(void)
     const unsigned int widths[] = {40u, 80u, 120u, 160u};
     for (size_t i = 0u; i < sizeof(widths) / sizeof(widths[0]); ++i) {
         struct snag_buf delivered = {.max = SNAG_MAX_PUBLIC_ITEM};
-        assert(capture_markdown(timeline, true, true, SNAG_COLOR_NEVER,
-                                widths[i], output, sizeof(output), &delivered) > 0u);
+        assert(capture_markdown(timeline, true, true, SNAG_COLOR_NEVER, widths[i], output,
+                   sizeof(output), &delivered) > 0u);
         if (strstr(output, "┌─ table"))
             fprintf(stderr, "long two-column cells incorrectly force vertical table fallback\n");
         assert(!strstr(output, "┌─ table"));
         assert(strstr(output, "┬") && strstr(output, "┼") && strstr(output, "┴"));
-        assert(delivered.len == strlen(timeline) && !memcmp(delivered.data, timeline, delivered.len));
+        assert(
+            delivered.len == strlen(timeline) && !memcmp(delivered.data, timeline, delivered.len));
         snag_buf_free(&delivered);
         check_timeline_grid(output, timeline, widths[i]);
-        assert(capture_markdown(timeline, true, false, SNAG_COLOR_NEVER,
-                                widths[i], whole, sizeof(whole), NULL) > 0u);
+        assert(capture_markdown(timeline, true, false, SNAG_COLOR_NEVER, widths[i], whole,
+                   sizeof(whole), NULL) > 0u);
         assert(!strcmp(whole, output));
     }
-    assert(capture_markdown(timeline, true, true, SNAG_COLOR_NEVER, 28u, output, sizeof(output), NULL) > 0u);
+    assert(capture_markdown(
+               timeline, true, true, SNAG_COLOR_NEVER, 28u, output, sizeof(output), NULL) > 0u);
     assert(strstr(output, "┌─ table"));
     for (const char *line = output; *line;) {
         const char *end = strchr(line, '\n');
@@ -2702,30 +2780,36 @@ test_wrapped_markdown_tables(void)
         line = *end ? end + 1u : end;
     }
     static const char aligned[] = "| A | B | C |\n| :---: | :---: | ---: |\n"
-        "| abc def ghi jkl mno pqr stu vwx | M | 7 |\n" "| after | middle | 8 | ignored |\n";
-    assert(capture_markdown(aligned, true, true, SNAG_COLOR_NEVER, 35u, output, sizeof(output), NULL) > 0u);
+                                  "| abc def ghi jkl mno pqr stu vwx | M | 7 |\n"
+                                  "| after | middle | 8 | ignored |\n";
+    assert(capture_markdown(
+               aligned, true, true, SNAG_COLOR_NEVER, 35u, output, sizeof(output), NULL) > 0u);
     assert(!strstr(output, "┌─ table") && !strstr(output, "ignored"));
     assert(strstr(output, "│  abc def ghi jkl  │   M    │ 7 │"));
     assert(strstr(output, "│  mno pqr stu vwx  │        │   │"));
-    static const char styled[] = "| Key | Result |\n| :--- | ---: |\n"
+    static const char styled[] =
+        "| Key | Result |\n| :--- | ---: |\n"
         "| **café 界 é** | `one two three four five six seven eight nine ten eleven twelve` |\n"
         "| tab\tkey | ~~struck~~ and [link](https://example.test) plus escaped \\| and `a|b` |\n";
-    assert(capture_markdown(styled, true, true, SNAG_COLOR_NEVER, 48u, output, sizeof(output), NULL) > 0u);
+    assert(capture_markdown(
+               styled, true, true, SNAG_COLOR_NEVER, 48u, output, sizeof(output), NULL) > 0u);
     assert(!strstr(output, "┌─ table"));
     assert(strstr(output, "café 界 é") && strstr(output, "a|b"));
     size_t styled_width = snag_term_text_width(output, (size_t)(strchr(output, '\n') - output));
     for (const char *line = output; *line;) {
         const char *end = strchr(line, '\n');
         if (!end) end = line + strlen(line);
-        assert(snag_term_text_width(line, (size_t)(end - line)) == styled_width && styled_width < 48u);
+        assert(
+            snag_term_text_width(line, (size_t)(end - line)) == styled_width && styled_width < 48u);
         line = *end ? end + 1u : end;
     }
-    assert(capture_markdown(styled, true, true, SNAG_COLOR_ALWAYS, 48u, output, sizeof(output), NULL) > 0u);
+    assert(capture_markdown(
+               styled, true, true, SNAG_COLOR_ALWAYS, 48u, output, sizeof(output), NULL) > 0u);
     assert(count_text(output, "\033[0;33m") >= 2u);
     assert(strstr(output, "\033[0;1mcafé") && strstr(output, "\033[0;4;34mhttps://example.test"));
     assert(snag_utf8_valid((const unsigned char *)output, strlen(output), true));
     assert(capture_markdown("**before\n| Key | Value |\n| --- | --- |\n| item | body |\nafter\n",
-                            true, true, SNAG_COLOR_ALWAYS, 80u, output, sizeof(output), NULL) > 0u);
+               true, true, SNAG_COLOR_ALWAYS, 80u, output, sizeof(output), NULL) > 0u);
     assert(!strstr(output, "\033[0;1m┌") && !strstr(output, "\033[0;1mafter"));
 }
 
@@ -2733,67 +2817,84 @@ static void
 test_markdown_tables(void)
 {
     static const char markdown[] = "| Name | State | Count\n"
-        "| :--- | :---: | ---:\n" "| **alpha** | `ready` | 7\n"
-        "| escaped \\| pipe | [docs](https://example.test) | 42 |\n"
-        "after table\n";
+                                   "| :--- | :---: | ---:\n"
+                                   "| **alpha** | `ready` | 7\n"
+                                   "| escaped \\| pipe | [docs](https://example.test) | 42 |\n"
+                                   "after table\n";
     static const char rendered[] = "┌────────────────┬───────────────────────────────┬───────┐\n"
-        "│ Name           │             State             │ Count │\n"
-        "├────────────────┼───────────────────────────────┼───────┤\n"
-        "│ alpha          │             ready             │     7 │\n"
-        "│ escaped | pipe │ [docs] <https://example.test> │    42 │\n"
-        "└────────────────┴───────────────────────────────┴───────┘\n" "\n• after table\n\n";
-    static const char narrow[] = "┌─ table\n" "├─ row\n" "│ Name: alpha\n"
-        "│ State: ready\n" "│ Count: 7\n" "├─ row\n" "│ Name: escaped | pipe\n"
-        "│ State: [docs]\n│ <https://example.test>\n"
-        "│ Count: 42\n" "└─\n" "\n• after table\n\n";
-    static const char malformed[] = "| Name | State |\n" "| -- | nope |\n" "after\n";
-    static const char code_pipe[] = "| Code | Other\n" "| --- | ---\n" "| `a|b` | tail\n";
-    static const char code_pipe_rendered[] = "┌──────┬───────┐\n" "│ Code │ Other │\n" "├──────┼───────┤\n"
-        "│ a|b  │ tail  │\n" "└──────┴───────┘\n";
+                                   "│ Name           │             State             │ Count │\n"
+                                   "├────────────────┼───────────────────────────────┼───────┤\n"
+                                   "│ alpha          │             ready             │     7 │\n"
+                                   "│ escaped | pipe │ [docs] <https://example.test> │    42 │\n"
+                                   "└────────────────┴───────────────────────────────┴───────┘\n"
+                                   "\n• after table\n\n";
+    static const char narrow[] = "┌─ table\n"
+                                 "├─ row\n"
+                                 "│ Name: alpha\n"
+                                 "│ State: ready\n"
+                                 "│ Count: 7\n"
+                                 "├─ row\n"
+                                 "│ Name: escaped | pipe\n"
+                                 "│ State: [docs]\n│ <https://example.test>\n"
+                                 "│ Count: 42\n"
+                                 "└─\n"
+                                 "\n• after table\n\n";
+    static const char malformed[] = "| Name | State |\n"
+                                    "| -- | nope |\n"
+                                    "after\n";
+    static const char code_pipe[] = "| Code | Other\n"
+                                    "| --- | ---\n"
+                                    "| `a|b` | tail\n";
+    static const char code_pipe_rendered[] = "┌──────┬───────┐\n"
+                                             "│ Code │ Other │\n"
+                                             "├──────┼───────┤\n"
+                                             "│ a|b  │ tail  │\n"
+                                             "└──────┴───────┘\n";
     char output[8192];
 
     struct snag_buf delivered = {.max = sizeof(markdown)};
-    assert(capture_markdown(markdown, true, true, SNAG_COLOR_NEVER, 120u,
-                            output, sizeof(output), &delivered) > 0u);
+    assert(capture_markdown(markdown, true, true, SNAG_COLOR_NEVER, 120u, output, sizeof(output),
+               &delivered) > 0u);
     assert(strcmp(output, rendered) == 0);
     assert(snag_buf_terminate(&delivered) == 0);
     assert(strcmp((const char *)delivered.data, markdown) == 0);
     snag_buf_free(&delivered);
-    assert(capture_markdown(markdown, true, false, SNAG_COLOR_ALWAYS, 120u,
-                            output, sizeof(output), NULL) > 0u);
+    assert(capture_markdown(
+               markdown, true, false, SNAG_COLOR_ALWAYS, 120u, output, sizeof(output), NULL) > 0u);
     assert(strstr(output, "\033[0;1mName") != NULL);
     assert(strstr(output, "\033[0;1malpha") != NULL);
     assert(strstr(output, "\033[0;33mready") != NULL);
     assert(strstr(output, "\033[0;4;34mhttps://example.test") != NULL);
 
-    assert(capture_markdown(markdown, true, true, SNAG_COLOR_NEVER, 28u, output, sizeof(output), NULL) > 0u);
+    assert(capture_markdown(
+               markdown, true, true, SNAG_COLOR_NEVER, 28u, output, sizeof(output), NULL) > 0u);
     assert(strcmp(output, narrow) == 0);
 
-    assert(capture_markdown("| Name |\n| --- |\n", true, true, SNAG_COLOR_NEVER,
-                            9u, output, sizeof(output), NULL) > 0u);
+    assert(capture_markdown("| Name |\n| --- |\n", true, true, SNAG_COLOR_NEVER, 9u, output,
+               sizeof(output), NULL) > 0u);
     assert(strcmp(output, "┌─ table\n│ Name\n└─\n") == 0);
-    assert(capture_markdown("| Name |\n| --- |", true, true, SNAG_COLOR_NEVER,
-                            9u, output, sizeof(output), NULL) > 0u);
+    assert(capture_markdown("| Name |\n| --- |", true, true, SNAG_COLOR_NEVER, 9u, output,
+               sizeof(output), NULL) > 0u);
     assert(strcmp(output, "┌─ table\n│ Name\n└─") == 0);
 
-    assert(capture_markdown(malformed, true, true, SNAG_COLOR_NEVER, 120u,
-                            output, sizeof(output), NULL) > 0u);
+    assert(capture_markdown(
+               malformed, true, true, SNAG_COLOR_NEVER, 120u, output, sizeof(output), NULL) > 0u);
     assert(strcmp(output, "\n• | Name | State |\n  | -- | nope |\n  after\n\n") == 0);
-    assert(capture_markdown(code_pipe, true, true, SNAG_COLOR_NEVER, 120u,
-                            output, sizeof(output), NULL) > 0u);
+    assert(capture_markdown(
+               code_pipe, true, true, SNAG_COLOR_NEVER, 120u, output, sizeof(output), NULL) > 0u);
     assert(strcmp(output, code_pipe_rendered) == 0);
-    assert(capture_markdown(markdown, false, false, SNAG_COLOR_NEVER, 120u,
-                            output, sizeof(output), NULL) > 0u);
+    assert(capture_markdown(
+               markdown, false, false, SNAG_COLOR_NEVER, 120u, output, sizeof(output), NULL) > 0u);
     assert(strcmp(output, markdown) == 0);
 }
 
 static size_t
 capture_color(enum snag_color_mode mode, bool chat_view, unsigned int verbosity, int timeout_ms,
-              uint32_t default_timeout_ms, uint32_t max_output_bytes, char *out, size_t out_size)
+    uint32_t default_timeout_ms, uint32_t max_output_bytes, char *out, size_t out_size)
 {
     struct snag_render render;
-    struct snag_irc_event event = {.kind = SNAG_IRC_MESSAGE, .timestamp_ms = 1000u,
-                                   .nick = "agent", .text = "answer"};
+    struct snag_irc_event event = {
+        .kind = SNAG_IRC_MESSAGE, .timestamp_ms = 1000u, .nick = "agent", .text = "answer"};
     struct snag_response_item call = {.name = "exec_command"};
     json_t *arguments;
     json_t *result;
@@ -2808,23 +2909,24 @@ capture_color(enum snag_color_mode mode, bool chat_view, unsigned int verbosity,
     assert(snag_render_host(&render, "status") == 0);
     assert(snag_render_event(&render, 7u, "compaction_completed") == 0);
     arguments = json_pack("{s:s,s:o}", "command", "printf plain", "timeout_ms",
-                          timeout_ms < 0 ? json_null() : json_integer(timeout_ms));
+        timeout_ms < 0 ? json_null() : json_integer(timeout_ms));
     assert(arguments != NULL);
     call.arguments = arguments;
     {
         struct snag_render_block block;
-        assert(snag_render_prepare_tool_start(&block, &call, "/tmp", default_timeout_ms, verbosity, 0u) == 0);
+        assert(snag_render_prepare_tool_start(
+                   &block, &call, "/tmp", default_timeout_ms, verbosity, 0u) == 0);
         assert(snag_render_tool_block(&render, &block) == 0);
         snag_render_block_free(&block);
     }
     json_decref(arguments);
-    result = json_pack("{s:i,s:i,s:s,s:n,s:s}", "duration_ms", 12, "exit_code", 0,
-                       "model_text", "fixture tool output: café\n", "reason", "status", "succeeded");
+    result = json_pack("{s:i,s:i,s:s,s:n,s:s}", "duration_ms", 12, "exit_code", 0, "model_text",
+        "fixture tool output: café\n", "reason", "status", "succeeded");
     assert(result != NULL);
     {
         struct snag_render_block block;
-        assert(snag_render_prepare_tool_finish(&block, call.name, NULL, result,
-                                              max_output_bytes, verbosity, 0u) == 0);
+        assert(snag_render_prepare_tool_finish(
+                   &block, call.name, NULL, result, max_output_bytes, verbosity, 0u) == 0);
         assert(snag_render_tool_block(&render, &block) == 0);
         snag_render_block_free(&block);
     }
@@ -2839,8 +2941,7 @@ capture_color(enum snag_color_mode mode, bool chat_view, unsigned int verbosity,
         assert(snag_render_irc_event(&render, &event) == 0);
     }
     assert(snag_render_set_view(&render, SNAG_RENDER_CHAT) == 0);
-    while (snag_render_view_pending(&render))
-        assert(snag_render_flush_pending(&render, 8u) == 0);
+    while (snag_render_view_pending(&render)) assert(snag_render_flush_pending(&render, 8u) == 0);
     if (chat_view) assert(snag_render_set_view(&render, SNAG_RENDER_ROLLOUT) == 0);
     snag_render_free(&render);
     return capture_close(&capture, out, out_size, 0u);
@@ -2857,7 +2958,8 @@ test_local_mention_highlight(void)
         {"@ALICE **bold** `code` tail", "alice", "#room", "peer", SNAG_IRC_MESSAGE, false, true},
         {"alice: plain tail", "alice", "#room", "peer", SNAG_IRC_MESSAGE, true, true},
         {"@alice notice tail", "alice", "#room", "peer", SNAG_IRC_NOTICE, false, true},
-        {"malice alice2 alice-other éalice aliceé", "alice", "#room", "peer", SNAG_IRC_MESSAGE, false, false},
+        {"malice alice2 alice-other éalice aliceé", "alice", "#room", "peer", SNAG_IRC_MESSAGE,
+            false, false},
         {"@bob wrong destination", "alice", "#room", "peer", SNAG_IRC_MESSAGE, false, false},
         {"@alice wrong room", "alice", "#other", "peer", SNAG_IRC_MESSAGE, false, false},
         {"@alice old alias", "alice2", "#room", "peer", SNAG_IRC_MESSAGE, false, false},
@@ -2867,7 +2969,8 @@ test_local_mention_highlight(void)
         {"@local-other also addressed", "alice", "#room", "peer", SNAG_IRC_MESSAGE, false, true},
         {"# @alice heading", "alice", "#room", "peer", SNAG_IRC_MESSAGE, false, true},
         {"> @alice quote", "alice", "#room", "peer", SNAG_IRC_MESSAGE, false, true},
-        {"@alice *italic* ~~strike~~ [link](https://example.test)", "alice", "#room", "peer", SNAG_IRC_MESSAGE, false, true},
+        {"@alice *italic* ~~strike~~ [link](https://example.test)", "alice", "#room", "peer",
+            SNAG_IRC_MESSAGE, false, true},
         {"@alice self", "alice", "#room", "alice", SNAG_IRC_MESSAGE, false, false},
         {"@alice self operator", "alice", "#room", "ALICE", SNAG_IRC_MESSAGE, true, false},
         {"@alice self notice", "alice", "#room", "Alice", SNAG_IRC_NOTICE, false, false},
@@ -2876,22 +2979,32 @@ test_local_mention_highlight(void)
         {"@alice not self", "alice", "#room", "alice2", SNAG_IRC_MESSAGE, false, true},
         {"@alice and @local-other", "alice", "#room", "alice", SNAG_IRC_MESSAGE, false, true},
         {"@alice and @local-other", "alice", "#room", "local-other", SNAG_IRC_MESSAGE, true, true},
-        {"@local-other self", "alice", "#room", "local-other", SNAG_IRC_MESSAGE, false, false}, };
+        {"@local-other self", "alice", "#room", "local-other", SNAG_IRC_MESSAGE, false, false},
+    };
     for (unsigned int flags = 0u; flags < 16u; ++flags) {
         for (size_t i = 0u; i < sizeof(cases) / sizeof(cases[0]); ++i) {
             struct snag_render render;
             struct snag_term term;
-            struct snag_irc_destinations destinations = {.count = 2u, .items = {
-                {.endpoint = "server", .room = "#room", .operator = "local-other",
-                 .model = "local-other", .target = {.id = 1u}},
-                {.endpoint = "other", .room = "#room", .operator = "bob",
-                 .model = "bob", .target = {.id = 2u}}, }};
+            struct snag_irc_destinations destinations = {.count = 2u,
+                .items = {
+                    {.endpoint = "server",
+                        .room = "#room",
+                        .operator = "local-other",
+                        .model = "local-other",
+                        .target = {.id = 1u}},
+                    {.endpoint = "other",
+                        .room = "#room",
+                        .operator = "bob",
+                        .model = "bob",
+                        .target = {.id = 2u}},
+                }};
             struct snag_irc_event event = {.endpoint = "server", .nick = "peer"};
             char output[8192] = {0};
             struct output_capture capture = capture_terminal(&render, &term, 40u, false, true);
             bool color = (flags & 1u) != 0u;
             assert(fcntl(capture.fd, F_SETFL, O_NONBLOCK) == 0);
-            strcpy(flags & 4u ? destinations.items[0].model : destinations.items[0].operator, cases[i].nick);
+            strcpy(flags & 4u ? destinations.items[0].model : destinations.items[0].operator,
+                cases[i].nick);
             assert(snag_term_set_destinations(&term, &destinations) == 0);
             render.markdown = !(flags & 8u);
             snag_render_set_color(&render, color ? SNAG_COLOR_ALWAYS : SNAG_COLOR_NEVER);
@@ -2917,8 +3030,9 @@ test_local_mention_highlight(void)
             close(capture.fd);
             assert((strstr(output, "[1] \033[1;35m") != NULL) == (color && cases[i].highlight));
             if (color) {
-                assert(strstr(output, strcmp(cases[i].room, "#room") == 0 ?
-                              "\033[2m[1] " : "\033[2m[server #other] "));
+                assert(strstr(output, strcmp(cases[i].room, "#room") == 0
+                                          ? "\033[2m[1] "
+                                          : "\033[2m[server #other] "));
                 if (cases[i].kind == SNAG_IRC_MESSAGE || cases[i].kind == SNAG_IRC_NOTICE) {
                     char nick[128u], boundary[32u];
                     const char *separator = cases[i].kind == SNAG_IRC_NOTICE ? "- " : "› ";
@@ -2927,12 +3041,13 @@ test_local_mention_highlight(void)
                     assert(body);
                     body += strlen(nick);
                     snprintf(boundary, sizeof(boundary), "%s%s\033[0m",
-                             cases[i].highlight ? "" : "\033[0m", separator);
+                        cases[i].highlight ? "" : "\033[0m", separator);
                     assert(strncmp(body, boundary, strlen(boundary)) == 0);
                     assert(!strstr(body, "35m"));
                     snprintf(nick, sizeof(nick), "\033[1;35m%s ", cases[i].sender);
-                    assert((strstr(output, nick) != NULL) == (!cases[i].op && cases[i].highlight &&
-                            cases[i].kind == SNAG_IRC_MESSAGE));
+                    assert(
+                        (strstr(output, nick) != NULL) ==
+                        (!cases[i].op && cases[i].highlight && cases[i].kind == SNAG_IRC_MESSAGE));
                 }
             }
             assert(strstr(output + used, "ordinary") && strstr(output + used, "followup"));
@@ -2961,9 +3076,8 @@ test_local_mention_highlight(void)
 static size_t
 capture_lifecycle(unsigned int verbosity, enum snag_color_mode color, char *out, size_t out_size)
 {
-    static const char *const events[] = {
-        "compaction_completed", "goal_started", "goal_reworded", "goal_replaced",
-        "goal_completed", "goal_cancelled", "turn_completed" };
+    static const char *const events[] = {"compaction_completed", "goal_started", "goal_reworded",
+        "goal_replaced", "goal_completed", "goal_cancelled", "turn_completed"};
     struct snag_render render;
 
     struct output_capture capture = capture_open(false, true);
@@ -3006,7 +3120,8 @@ test_tool_previews(void)
     for (unsigned int level = 0u; level <= SNAG_VERBOSITY_MAX; ++level) {
         assert(snag_presentation_enabled(SNAG_PRESENT_CHAT, level, SNAG_RENDER_CHAT));
         assert(!snag_presentation_enabled(SNAG_PRESENT_TOOL, level, SNAG_RENDER_CHAT));
-        assert(snag_presentation_enabled(SNAG_PRESENT_DEBUG, level, SNAG_RENDER_ROLLOUT) == (level >= 4u));
+        assert(snag_presentation_enabled(SNAG_PRESENT_DEBUG, level, SNAG_RENDER_ROLLOUT) ==
+               (level >= 4u));
     }
     for (size_t n = 1023u; n <= 1025u; ++n) {
         call.arguments = json_object();
@@ -3019,7 +3134,8 @@ test_tool_previews(void)
             assert(block.context.len == 0u || level == 3u);
             assert(block.text.len <= 512u);
             assert(snag_term_text_width((char *)block.text.data, block.text.len - 1u) < 40u);
-            assert(memchr(block.text.data, '\n', block.text.len) == block.text.data + block.text.len - 1u);
+            assert(memchr(block.text.data, '\n', block.text.len) ==
+                   block.text.data + block.text.len - 1u);
             snag_render_block_free(&block);
         }
         json_decref(call.arguments);
@@ -3029,7 +3145,8 @@ test_tool_previews(void)
         assert(result);
         assert(json_object_set_new(result, "model_text", json_stringn(text, n)) == 0);
         for (unsigned int level = 1u; level <= 3u; ++level) {
-            assert(snag_render_prepare_tool_finish(&block, call.name, NULL, result, 0u, level, 0u) == 0);
+            assert(snag_render_prepare_tool_finish(
+                       &block, call.name, NULL, result, 0u, level, 0u) == 0);
             assert(block.body.len == (level == 1u ? 0u : level == 2u && n > 512u ? 512u : n));
             assert(block.truncated == (level == 2u && n > 512u));
             assert(snag_buf_terminate(&block.text) == 0);
@@ -3072,22 +3189,22 @@ test_native_durable_source(void)
     snag_store_init(&store);
     snag_session_init(&session);
     assert(!snag_store_open(&store, root, error, sizeof(error)));
-    assert(!snag_session_create(&store, &session, cwd, "default", "fixture", "high",
-        error, sizeof(error)) && session.binary);
-    json_t *data = json_pack("{s:s,s:s,s:s,s:{s:s,s:s,s:s}}",
-        "connection_id", "0123456789abcdef0123456789abcdef", "provider", "default",
-        "model", "fixture", "event", "type", "voice_transcript", "speaker", "user",
-        "text", "native-pinned-caption");
+    assert(!snag_session_create(
+               &store, &session, cwd, "default", "fixture", "high", error, sizeof(error)) &&
+           session.binary);
+    json_t *data = json_pack("{s:s,s:s,s:s,s:{s:s,s:s,s:s}}", "connection_id",
+        "0123456789abcdef0123456789abcdef", "provider", "default", "model", "fixture", "event",
+        "type", "voice_transcript", "speaker", "user", "text", "native-pinned-caption");
     assert(data);
     json_t *transcript = json_incref(json_object_get(data, "event"));
     uint64_t sequence;
-    assert(data && !snag_session_commit(&session, "voice_event", data, &sequence,
-        error, sizeof(error)));
+    assert(data &&
+           !snag_session_commit(&session, "voice_event", data, &sequence, error, sizeof(error)));
     struct snag_render_source source = {.offset = session.committed_start,
         .len = (size_t)(session.committed_end - session.committed_start),
         .native_sequence = sequence};
-    assert(!snag_session_binary_checkpoint_capture(&session, &source.native_boundary,
-        NULL, NULL, error, sizeof(error)));
+    assert(!snag_session_binary_checkpoint_capture(
+        &session, &source.native_boundary, NULL, NULL, error, sizeof(error)));
     struct output_capture capture = capture_open(false, true);
     struct snag_render render;
     snag_render_init(&render, 6u);
@@ -3097,17 +3214,16 @@ test_native_durable_source(void)
     assert(!snag_render_voice_event(&render, transcript, 0u, 0u));
     json_decref(transcript);
     assert(!snag_render_durable(&render, session.log_fd, source, "voice_event", 0u, 0u));
-    assert(!snag_session_commit(&session, "retry_auto_changed", json_pack("{s:s}",
-        "value", "on"), NULL, error, sizeof(error)));
+    assert(!snag_session_commit(&session, "retry_auto_changed", json_pack("{s:s}", "value", "on"),
+        NULL, error, sizeof(error)));
     int64_t position = snag_seek(session.log_fd, 13, SEEK_SET);
     assert(position == 13);
-    while (snag_render_view_pending(&render))
-        assert(!snag_render_flush_pending(&render, 8u));
+    while (snag_render_view_pending(&render)) assert(!snag_render_flush_pending(&render, 8u));
     assert(snag_seek(session.log_fd, 0, SEEK_CUR) == position);
     struct snag_render_source invalid = source;
     invalid.native_sequence = invalid.native_boundary.next_seq;
-    assert(snag_render_durable(&render, session.log_fd, invalid, "goal_lock_changed",
-        0u, 0u) < 0 && errno == EINVAL);
+    assert(snag_render_durable(&render, session.log_fd, invalid, "goal_lock_changed", 0u, 0u) < 0 &&
+           errno == EINVAL);
     snag_render_free(&render);
     char output[4096];
     assert(capture_close(&capture, output, sizeof(output), 0u));
@@ -3120,149 +3236,157 @@ static void
 test_voice_tool_history(void)
 {
     for (unsigned int live = 0u; live <= 1u; ++live)
-    for (unsigned int level = 0u; level <= 3u; ++level) {
-        char path[] = "build/voice-tool-log-XXXXXX";
-        int log_fd = mkstemp(path);
-        assert(log_fd >= 0 && unlink(path) == 0);
-        FILE *file = fdopen(log_fd, "w+");
-        assert(file);
-        struct output_capture capture = capture_open(false, true);
-        assert(fcntl(capture.fd, F_SETFL, O_NONBLOCK) == 0);
-        struct snag_render render;
-        snag_render_init(&render, live ? level : 6u);
-        snag_render_set_color(&render, SNAG_COLOR_NEVER);
-        if (!live) assert(snag_render_set_view(&render, SNAG_RENDER_CHAT) == 0);
+        for (unsigned int level = 0u; level <= 3u; ++level) {
+            char path[] = "build/voice-tool-log-XXXXXX";
+            int log_fd = mkstemp(path);
+            assert(log_fd >= 0 && unlink(path) == 0);
+            FILE *file = fdopen(log_fd, "w+");
+            assert(file);
+            struct output_capture capture = capture_open(false, true);
+            assert(fcntl(capture.fd, F_SETFL, O_NONBLOCK) == 0);
+            struct snag_render render;
+            snag_render_init(&render, live ? level : 6u);
+            snag_render_set_color(&render, SNAG_COLOR_NEVER);
+            if (!live) assert(snag_render_set_view(&render, SNAG_RENDER_CHAT) == 0);
 
-        struct snag_render_source source = append_event(file,
-            "{\"data\":{\"event\":{\"type\":\"voice_response\","
-            "\"operation\":\"interface_tool_started\",\"tool\":\"submit_input\","
-            "\"tool_call_id\":\"voice-call\",\"arguments\":{\"target\":\"queue\","
-            "\"text\":\"requested task\"}}}}\n");
-        assert(snag_render_durable(&render, fileno(file), source, "voice_event", 0u, 0u) == 0);
-        source = append_event(file,
-            "{\"data\":{\"event\":{\"type\":\"voice_response\","
-            "\"operation\":\"interface_tool\",\"tool\":\"submit_input\","
-            "\"tool_call_id\":\"voice-call\",\"result\":{\"status\":\"succeeded\","
-            "\"model_text\":\"Queued request fixture-queue.\"}}}}\n");
-        assert(snag_render_durable(&render, fileno(file), source, "voice_event", 0u, 0u) == 0);
-        bool streaming = live && !level;
-        if (streaming) {
-            while (snag_render_view_pending(&render)) {
-                assert(snag_render_flush_pending(&render, 8u) == 0);
+            struct snag_render_source source = append_event(file,
+                "{\"data\":{\"event\":{\"type\":\"voice_response\","
+                "\"operation\":\"interface_tool_started\",\"tool\":\"submit_input\","
+                "\"tool_call_id\":\"voice-call\",\"arguments\":{\"target\":\"queue\","
+                "\"text\":\"requested task\"}}}}\n");
+            assert(snag_render_durable(&render, fileno(file), source, "voice_event", 0u, 0u) == 0);
+            source = append_event(file,
+                "{\"data\":{\"event\":{\"type\":\"voice_response\","
+                "\"operation\":\"interface_tool\",\"tool\":\"submit_input\","
+                "\"tool_call_id\":\"voice-call\",\"result\":{\"status\":\"succeeded\","
+                "\"model_text\":\"Queued request fixture-queue.\"}}}}\n");
+            assert(snag_render_durable(&render, fileno(file), source, "voice_event", 0u, 0u) == 0);
+            bool streaming = live && !level;
+            if (streaming) {
+                while (snag_render_view_pending(&render)) {
+                    assert(snag_render_flush_pending(&render, 8u) == 0);
+                }
+                assert(snag_render_rollout_begin(
+                           &render, STDERR_FILENO, "assistant: ", SNAG_PRESENT_CONVERSATION) == 0);
+                assert(snag_render_rollout(&render, "working before", 14u, NULL) == 0);
             }
-            assert(snag_render_rollout_begin(&render, STDERR_FILENO, "assistant: ",
-                SNAG_PRESENT_CONVERSATION) == 0);
-            assert(snag_render_rollout(&render, "working before", 14u, NULL) == 0);
-        }
-        json_t *transcript = json_pack("{s:s,s:s,s:s}", "type", "voice_transcript",
-            "speaker", "user", "text", "original spoken words");
-        assert(snag_render_voice_event(&render, transcript, 0u, 0u) == 0);
-        json_decref(transcript);
-        transcript = json_pack("{s:s,s:s,s:s}", "type", "voice_transcript",
-            "speaker", "assistant", "text", "spoken reply");
-        assert(snag_render_voice_event(&render, transcript, 0u, 0u) == 0);
-        json_decref(transcript);
-        if (streaming) {
-            assert(snag_render_rollout(&render, "working after", 13u, NULL) == 0);
-            assert(snag_render_rollout_end(&render) == 0);
-        }
-        source = append_event(file,
-            "{\"data\":{\"event\":{\"type\":\"voice_started\",\"state\":\"ready\"}}}\n");
-        assert(snag_render_durable(&render, fileno(file), source, "voice_event", 0u, 0u) == 0);
-        render.verbosity = level;
-        assert(snag_render_set_view(&render, SNAG_RENDER_ROLLOUT) == 0);
-        while (snag_render_view_pending(&render))
-            assert(snag_render_flush_pending(&render, 8u) == 0);
+            json_t *transcript = json_pack("{s:s,s:s,s:s}", "type", "voice_transcript", "speaker",
+                "user", "text", "original spoken words");
+            assert(snag_render_voice_event(&render, transcript, 0u, 0u) == 0);
+            json_decref(transcript);
+            transcript = json_pack("{s:s,s:s,s:s}", "type", "voice_transcript", "speaker",
+                "assistant", "text", "spoken reply");
+            assert(snag_render_voice_event(&render, transcript, 0u, 0u) == 0);
+            json_decref(transcript);
+            if (streaming) {
+                assert(snag_render_rollout(&render, "working after", 13u, NULL) == 0);
+                assert(snag_render_rollout_end(&render) == 0);
+            }
+            source = append_event(
+                file, "{\"data\":{\"event\":{\"type\":\"voice_started\",\"state\":\"ready\"}}}\n");
+            assert(snag_render_durable(&render, fileno(file), source, "voice_event", 0u, 0u) == 0);
+            render.verbosity = level;
+            assert(snag_render_set_view(&render, SNAG_RENDER_ROLLOUT) == 0);
+            while (snag_render_view_pending(&render))
+                assert(snag_render_flush_pending(&render, 8u) == 0);
 
-        char output[4096] = {0};
-        size_t used = drain_available(capture.fd, output, sizeof(output), 0u);
-        assert(snag_render_set_view(&render, SNAG_RENDER_CHAT) == 0);
-        assert(snag_render_set_view(&render, SNAG_RENDER_ROLLOUT) == 0);
-        (void)drain_available(capture.fd, output, sizeof(output), used);
-        snag_render_free(&render);
-        fclose(file);
-        capture_restore(&capture);
-        close(capture.fd);
-        assert((strstr(output, "→ voice: submit_input") != NULL) == (level >= 1u));
-        assert((strstr(output, "← voice: submit_input") != NULL) == (level >= 1u));
-        assert((strstr(output, "Queued request fixture-queue.") != NULL) == (level >= 2u));
-        assert(!strstr(output, "ready"));
-        assert(count_text(output, "submit_input") == (level ? 2u : 0u));
-        assert(count_text(output, "You [voice, ASR]: original spoken words") == 1u);
-        assert(count_text(output, "Voice model [generated]: spoken reply") == 1u);
-        if (streaming) {
-            assert(count_text(output, "working before") == 1u);
-            assert(count_text(output, "working after") == 1u);
-            assert(strstr(output, "working before") < strstr(output, "You [voice, ASR]"));
-            assert(strstr(output, "Voice model [generated]") < strstr(output, "working after"));
+            char output[4096] = {0};
+            size_t used = drain_available(capture.fd, output, sizeof(output), 0u);
+            assert(snag_render_set_view(&render, SNAG_RENDER_CHAT) == 0);
+            assert(snag_render_set_view(&render, SNAG_RENDER_ROLLOUT) == 0);
+            (void)drain_available(capture.fd, output, sizeof(output), used);
+            snag_render_free(&render);
+            fclose(file);
+            capture_restore(&capture);
+            close(capture.fd);
+            assert((strstr(output, "→ voice: submit_input") != NULL) == (level >= 1u));
+            assert((strstr(output, "← voice: submit_input") != NULL) == (level >= 1u));
+            assert((strstr(output, "Queued request fixture-queue.") != NULL) == (level >= 2u));
+            assert(!strstr(output, "ready"));
+            assert(count_text(output, "submit_input") == (level ? 2u : 0u));
+            assert(count_text(output, "You [voice, ASR]: original spoken words") == 1u);
+            assert(count_text(output, "Voice model [generated]: spoken reply") == 1u);
+            if (streaming) {
+                assert(count_text(output, "working before") == 1u);
+                assert(count_text(output, "working after") == 1u);
+                assert(strstr(output, "working before") < strstr(output, "You [voice, ASR]"));
+                assert(strstr(output, "Voice model [generated]") < strstr(output, "working after"));
+            }
         }
-    }
 }
 
 static void
 test_semantic_history(void)
 {
     for (unsigned int live = 0u; live <= 1u; ++live)
-    for (unsigned int rejected = 0u; rejected <= 1u; ++rejected)
-    for (unsigned int level = 0u; level <= 3u; ++level) {
-        char path[] = "build/verbosity-log-XXXXXX";
-        int log_fd = mkstemp(path);
-        assert(log_fd >= 0 && unlink(path) == 0);
-        FILE *file = fdopen(log_fd, "w+");
-        struct snag_render render;
-        char args[1401], result[801], output[8192] = {0};
-        struct output_capture capture = capture_open(false, true);
-        assert(file);
-        assert(fcntl(capture.fd, F_SETFL, O_NONBLOCK) == 0);
-        memset(args, 'A', sizeof(args) - 1u);
-        args[sizeof(args) - 1u] = '\0';
-        memset(result, 'R', sizeof(result) - 1u);
-        result[sizeof(result) - 1u] = '\0';
-        struct snag_buf response = {.max = 4096u};
-        struct snag_buf finish = {.max = 4096u};
-        assert(snag_buf_printf(&response,
-            "{\"data\":{\"items\":[{\"name\":\"future_tool\",\"call_id\":\"one\","
-            "\"arguments\":\"%s\"}]}}\n", args) == 0);
-        assert(snag_buf_terminate(&response) == 0);
-        assert(snag_buf_printf(&finish, "{\"data\":{\"call_id\":\"one\",\"result\":{"
-                              "\"status\":\"%s\",\"reason\":\"invalid_arguments\",\"model_text\":\"%s\"}}}\n",
-                              rejected ? "not_run" : "failed", result) == 0);
-        assert(snag_buf_terminate(&finish) == 0);
-        snag_render_init(&render, live ? level : 6u);
-        snag_render_set_color(&render, SNAG_COLOR_NEVER);
-        if (!live) assert(snag_render_set_view(&render, SNAG_RENDER_CHAT) == 0);
-        struct snag_render_source source = append_event(file, (char *)response.data);
-        assert(snag_render_durable(&render, fileno(file), source, "response_completed", 0u, 0u) == 0);
-        source = append_event(file, "{\"data\":{\"call_id\":\"one\",\"resolved_workdir\":\"/work\"}}\n");
-        if (!rejected)
-            assert(snag_render_durable(&render, fileno(file), source, "tool_started", 0u, 0u) == 0);
-        source = append_event(file, (char *)finish.data);
-        assert(snag_render_durable(&render, fileno(file), source, "tool_finished", 0u, 0u) == 0);
-        assert(snag_render_runtime(&render, "hidden-debug") == 0);
-        assert(snag_render_protocol(&render, "hidden", "hidden-protocol", 15u) == 0);
-        render.verbosity = level;
-        assert(snag_render_set_view(&render, SNAG_RENDER_ROLLOUT) == 0);
-        while (snag_render_view_pending(&render))
-            assert(snag_render_flush_pending(&render, 8u) == 0);
-        size_t used = drain_available(capture.fd, output, sizeof(output), 0u);
-        assert((strstr(output, "future_tool") != NULL) == (level >= 1u));
-        assert((strstr(output, "invalid_arguments") != NULL) == (rejected && level >= 1u));
-        if (level == 1u && rejected) assert(!strstr(output, "AAAA") && !strstr(output, "RRRR"));
-        assert((strstr(output, "RRRR") != NULL) == (level >= 2u));
-        assert((strstr(output, "[…]") != NULL) == (level == 2u));
-        assert(!strstr(output, "hidden-debug") && !strstr(output, "hidden-protocol"));
-        render.verbosity = 6u;
-        assert(snag_render_set_view(&render, SNAG_RENDER_CHAT) == 0);
-        assert(snag_render_set_view(&render, SNAG_RENDER_ROLLOUT) == 0);
-        (void)drain_available(capture.fd, output, sizeof(output), used);
-        assert(count_text(output, "future_tool") == (level ? (rejected ? 1u : 2u) : 0u));
-        snag_render_free(&render);
-        snag_buf_free(&response);
-        snag_buf_free(&finish);
-        fclose(file);
-        capture_restore(&capture);
-        close(capture.fd);
-    }
+        for (unsigned int rejected = 0u; rejected <= 1u; ++rejected)
+            for (unsigned int level = 0u; level <= 3u; ++level) {
+                char path[] = "build/verbosity-log-XXXXXX";
+                int log_fd = mkstemp(path);
+                assert(log_fd >= 0 && unlink(path) == 0);
+                FILE *file = fdopen(log_fd, "w+");
+                struct snag_render render;
+                char args[1401], result[801], output[8192] = {0};
+                struct output_capture capture = capture_open(false, true);
+                assert(file);
+                assert(fcntl(capture.fd, F_SETFL, O_NONBLOCK) == 0);
+                memset(args, 'A', sizeof(args) - 1u);
+                args[sizeof(args) - 1u] = '\0';
+                memset(result, 'R', sizeof(result) - 1u);
+                result[sizeof(result) - 1u] = '\0';
+                struct snag_buf response = {.max = 4096u};
+                struct snag_buf finish = {.max = 4096u};
+                assert(snag_buf_printf(&response,
+                           "{\"data\":{\"items\":[{\"name\":\"future_tool\",\"call_id\":\"one\","
+                           "\"arguments\":\"%s\"}]}}\n",
+                           args) == 0);
+                assert(snag_buf_terminate(&response) == 0);
+                assert(snag_buf_printf(&finish,
+                           "{\"data\":{\"call_id\":\"one\",\"result\":{"
+                           "\"status\":\"%s\",\"reason\":\"invalid_arguments\",\"model_text\":\"%"
+                           "s\"}}}\n",
+                           rejected ? "not_run" : "failed", result) == 0);
+                assert(snag_buf_terminate(&finish) == 0);
+                snag_render_init(&render, live ? level : 6u);
+                snag_render_set_color(&render, SNAG_COLOR_NEVER);
+                if (!live) assert(snag_render_set_view(&render, SNAG_RENDER_CHAT) == 0);
+                struct snag_render_source source = append_event(file, (char *)response.data);
+                assert(snag_render_durable(
+                           &render, fileno(file), source, "response_completed", 0u, 0u) == 0);
+                source = append_event(
+                    file, "{\"data\":{\"call_id\":\"one\",\"resolved_workdir\":\"/work\"}}\n");
+                if (!rejected)
+                    assert(snag_render_durable(
+                               &render, fileno(file), source, "tool_started", 0u, 0u) == 0);
+                source = append_event(file, (char *)finish.data);
+                assert(snag_render_durable(
+                           &render, fileno(file), source, "tool_finished", 0u, 0u) == 0);
+                assert(snag_render_runtime(&render, "hidden-debug") == 0);
+                assert(snag_render_protocol(&render, "hidden", "hidden-protocol", 15u) == 0);
+                render.verbosity = level;
+                assert(snag_render_set_view(&render, SNAG_RENDER_ROLLOUT) == 0);
+                while (snag_render_view_pending(&render))
+                    assert(snag_render_flush_pending(&render, 8u) == 0);
+                size_t used = drain_available(capture.fd, output, sizeof(output), 0u);
+                assert((strstr(output, "future_tool") != NULL) == (level >= 1u));
+                assert((strstr(output, "invalid_arguments") != NULL) == (rejected && level >= 1u));
+                if (level == 1u && rejected)
+                    assert(!strstr(output, "AAAA") && !strstr(output, "RRRR"));
+                assert((strstr(output, "RRRR") != NULL) == (level >= 2u));
+                assert((strstr(output, "[…]") != NULL) == (level == 2u));
+                assert(!strstr(output, "hidden-debug") && !strstr(output, "hidden-protocol"));
+                render.verbosity = 6u;
+                assert(snag_render_set_view(&render, SNAG_RENDER_CHAT) == 0);
+                assert(snag_render_set_view(&render, SNAG_RENDER_ROLLOUT) == 0);
+                (void)drain_available(capture.fd, output, sizeof(output), used);
+                assert(count_text(output, "future_tool") == (level ? (rejected ? 1u : 2u) : 0u));
+                snag_render_free(&render);
+                snag_buf_free(&response);
+                snag_buf_free(&finish);
+                fclose(file);
+                capture_restore(&capture);
+                close(capture.fd);
+            }
 }
 
 struct downgrade {
@@ -3339,7 +3463,8 @@ test_append_only_views(unsigned int verbosity)
     assert(snag_render_event(&render, 1u, "goal_started") == 0);
     assert(snag_render_event(&render, 2u, "compaction_completed") == 0);
     struct snag_buf delivered = {.max = 1024u};
-    assert(snag_render_rollout_begin(&render, STDERR_FILENO, "agent › ", SNAG_PRESENT_CONVERSATION) == 0);
+    assert(snag_render_rollout_begin(
+               &render, STDERR_FILENO, "agent › ", SNAG_PRESENT_CONVERSATION) == 0);
     assert(snag_render_rollout(&render, "hidden-prefix ", 14u, &delivered) == 0);
     used = drain_available(capture.fd, output, sizeof(output), used);
     assert(strstr(output, "chat-one") != NULL);
@@ -3355,7 +3480,7 @@ test_append_only_views(unsigned int verbosity)
     assert(snag_render_irc_event(&render, &event) == 0);
     used = drain_available(capture.fd, output, sizeof(output), used);
     assert(strstr(output, "── rollout ──\n• Goal set\n• Compacted\n"
-                  "agent › hidden-prefix live-suffix ") != NULL);
+                          "agent › hidden-prefix live-suffix ") != NULL);
     assert(strstr(output, "queued-runtime") != NULL);
     assert(strstr(output, "chat-two") == NULL);
 
@@ -3385,7 +3510,7 @@ test_append_only_views(unsigned int verbosity)
     used = drain_available(capture.fd, output, sizeof(output), used);
     assert(count_text(output, "── rollout ──") == 2u);
     errno = 0;
-    assert(snag_render_set_view(&render, (enum snag_render_view)-1) < 0);
+    assert(snag_render_set_view(&render, (enum snag_render_view) - 1) < 0);
     assert(errno == EINVAL);
     render.verbosity = verbosity;
     event.local = true;
@@ -3546,14 +3671,13 @@ test_async_render_backfill(void)
     assert(snag_render_set_view(&render, SNAG_RENDER_CHAT) == 0);
     assert(snag_render_backfill_start(&render, wake[1]) == 0);
 
-    struct snag_render_source response = append_event(file,
-        "{\"data\":{\"items\":[{\"name\":\"exec_command\",\"call_id\":\"one\","
-        "\"arguments\":{\"command\":\"printf async\"}}]}}\n");
-    assert(snag_render_durable(&render, fileno(file), response,
-                               "response_completed", 0u, 0u) == 0);
+    struct snag_render_source response =
+        append_event(file, "{\"data\":{\"items\":[{\"name\":\"exec_command\",\"call_id\":\"one\","
+                           "\"arguments\":{\"command\":\"printf async\"}}]}}\n");
+    assert(snag_render_durable(&render, fileno(file), response, "response_completed", 0u, 0u) == 0);
     for (unsigned int i = 0u; i < 24u; ++i) {
-        struct snag_render_source source = append_event(file,
-            "{\"data\":{\"call_id\":\"one\",\"resolved_workdir\":\"/tmp\"}}\n");
+        struct snag_render_source source =
+            append_event(file, "{\"data\":{\"call_id\":\"one\",\"resolved_workdir\":\"/tmp\"}}\n");
         assert(snag_render_durable(&render, fileno(file), source, "tool_started", 0u, 0u) == 0);
     }
     assert(snag_render_set_view(&render, SNAG_RENDER_ROLLOUT) == 0);
@@ -3580,11 +3704,12 @@ test_async_render_backfill(void)
 static void
 test_safe_text_width(void)
 {
-    const struct { const char *input, *output; size_t width; } cases[] = {
-        {"\xff", "\\xFF", 4u}, {"\xe2\x82", "\\xE2\\x82", 8u},
-        {"\xc2\x9b", "\\x9B", 4u}, {"\xe2\x80\xae", "\\u{202E}", 8u},
-        {"\x1b[31m", "\\x1B[31m", 8u}, {"a\t", "a   ", 4u}, {"café界", "café界", 6u}, {"a\nb", "a\nb", 6u}
-    };
+    const struct {
+        const char *input, *output;
+        size_t width;
+    } cases[] = {{"\xff", "\\xFF", 4u}, {"\xe2\x82", "\\xE2\\x82", 8u}, {"\xc2\x9b", "\\x9B", 4u},
+        {"\xe2\x80\xae", "\\u{202E}", 8u}, {"\x1b[31m", "\\x1B[31m", 8u}, {"a\t", "a   ", 4u},
+        {"café界", "café界", 6u}, {"a\nb", "a\nb", 6u}};
     for (size_t i = 0u; i < sizeof(cases) / sizeof(cases[0]); ++i) {
         struct snag_buf safe = {.max = 64u};
         const char *input = cases[i].input;
@@ -3628,8 +3753,10 @@ test_citation_blocks(void)
     assert(strlen(open) == 3u && strlen(close) == 3u && strlen(sep) == 3u);
 
     /* Sorted, deduplicated turns collapse into one reference. */
-    assert(snprintf(text, sizeof(text), "a%scite%sturn2view0%sturn1view0%s"
-                     "turn0view2%sbuild", open, sep, sep, sep, close) > 0);
+    assert(snprintf(text, sizeof(text),
+               "a%scite%sturn2view0%sturn1view0%s"
+               "turn0view2%sbuild",
+               open, sep, sep, sep, close) > 0);
     chunks[0] = text;
     assert(capture_citations(chunks, 1u, out, sizeof(out)) > 0u);
     assert(strcmp(out, "a[cite: turn 0-2]build") == 0);
@@ -3645,8 +3772,10 @@ test_citation_blocks(void)
     assert(strcmp(out, "x[cite: turn 3, 5]y") == 0);
 
     /* Non-consecutive and repeated turns stay one reference each. */
-    assert(snprintf(text, sizeof(text), "%scite%sturn4view0%sturn4view1%s"
-                     "turn0view3%s", open, sep, sep, sep, close) > 0);
+    assert(snprintf(text, sizeof(text),
+               "%scite%sturn4view0%sturn4view1%s"
+               "turn0view3%s",
+               open, sep, sep, sep, close) > 0);
     chunks[0] = text;
     assert(capture_citations(chunks, 1u, out, sizeof(out)) > 0u);
     assert(strcmp(out, "[cite: turn 0, 4]") == 0);
@@ -3669,10 +3798,12 @@ test_citation_blocks(void)
 static void
 test_citation_fragment_budget(void)
 {
-    static const char *const inputs[] = {
-        "x\xee\x88\x80" "cite\xee\x88\x82" "turn2view3\xee\x88\x81y",
-        "x\xee\x88\x80" "note\xee\x88\x82" "turn2view3\xee\x88\x81y"
-    };
+    static const char *const inputs[] = {"x\xee\x88\x80"
+                                         "cite\xee\x88\x82"
+                                         "turn2view3\xee\x88\x81y",
+        "x\xee\x88\x80"
+        "note\xee\x88\x82"
+        "turn2view3\xee\x88\x81y"};
     static const char *const expected[] = {"x[cite: turn 2]y", inputs[1]};
     for (size_t c = 0u; c < 2u; ++c) {
         size_t len = strlen(inputs[c]);
@@ -3683,17 +3814,17 @@ test_citation_fragment_budget(void)
                 char output[1024];
                 struct output_capture capture = capture_open(true, false);
                 snag_render_init(&render, 0u);
-                assert((rollout ? snag_render_rollout_begin(&render, STDOUT_FILENO, NULL,
-                            SNAG_PRESENT_CONVERSATION) :
-                        snag_render_public_begin(&render, STDOUT_FILENO, NULL)) == 0);
+                assert((rollout ? snag_render_rollout_begin(
+                                      &render, STDOUT_FILENO, NULL, SNAG_PRESENT_CONVERSATION)
+                                : snag_render_public_begin(&render, STDOUT_FILENO, NULL)) == 0);
                 for (unsigned int part = 0u; part < 2u; ++part) {
                     const char *text = inputs[c] + (part ? split : 0u);
                     size_t size = part ? len - split : split;
-                    assert((rollout ? snag_render_rollout(&render, text, size, &delivered) :
-                            snag_render_public(&render, text, size, &delivered)) == 0);
+                    assert((rollout ? snag_render_rollout(&render, text, size, &delivered)
+                                    : snag_render_public(&render, text, size, &delivered)) == 0);
                 }
-                assert((rollout ? snag_render_rollout_end(&render) :
-                        snag_render_public_end(&render)) == 0);
+                assert((rollout ? snag_render_rollout_end(&render)
+                                : snag_render_public_end(&render)) == 0);
                 assert(snag_buf_terminate(&delivered) == 0);
                 assert(!strcmp((const char *)delivered.data, expected[c]));
                 assert(capture_close(&capture, output, sizeof(output), 0u) > 0u);
@@ -3726,7 +3857,8 @@ test_tool_ref_rows(void)
     /* Both rows carry the same 8-character reference at the same column, even
        when the provider id is longer than the stored id limit. */
     assert(start_ref != NULL && finish_ref != NULL);
-    assert((size_t)(start_ref - (char *)start.text.data) == (size_t)(finish_ref - (char *)finish.text.data));
+    assert((size_t)(start_ref - (char *)start.text.data) ==
+           (size_t)(finish_ref - (char *)finish.text.data));
     assert(strstr((char *)start.text.data, "[call_abcdef1234567890") == NULL);
     snag_render_block_free(&start);
     snag_render_block_free(&finish);
@@ -3758,8 +3890,8 @@ test_output_span_prompt_repaint(void)
     snag_render_attach_term(&render, &term);
     assert(snag_term_set_prompt_template(&term, true, "BURST> ", frames, 1u, 0u) == 0);
     assert(prompt_output(capture.fd, output, sizeof(output)) > 0u);
-    result = json_pack("{s:i,s:i,s:s,s:s}", "duration_ms", 3, "exit_code", 0,
-                       "status", "succeeded", "model_text", body);
+    result = json_pack("{s:i,s:i,s:s,s:s}", "duration_ms", 3, "exit_code", 0, "status", "succeeded",
+        "model_text", body);
     assert(result != NULL);
     assert(snag_render_prepare_tool_finish(&block, "exec", NULL, result, 0u, 3u, 80u) == 0);
     assert(snag_render_tool_block(&render, &block) == 0);
@@ -3767,7 +3899,8 @@ test_output_span_prompt_repaint(void)
     json_decref(result);
     free(body);
     (void)prompt_output(capture.fd, output, sizeof(output));
-    /* A logical tool burst must park and repaint the composer once, not once per internal output slice. */
+    /* A logical tool burst must park and repaint the composer once, not once per internal output
+     * slice. */
     assert(term.prompt_visible);
     assert(count_text(output, "BURST> ") == 1u);
     snag_render_free(&render);
@@ -3782,8 +3915,8 @@ test_hosted_search_rows(void)
     static const char prefix[] = "→ web_search [ws_1]";
     struct snag_render_block block;
     json_t *action = json_pack("{s:s,s:s}", "query", "selinux 6.18", "type", "search");
-    json_t *sources = json_pack("[s,s]", "https://example.test/selinux",
-                                "https://example.test/kernel");
+    json_t *sources =
+        json_pack("[s,s]", "https://example.test/selinux", "https://example.test/kernel");
 
     assert(action && sources);
     for (unsigned int level = 1u; level <= 3u; ++level) {
@@ -3795,12 +3928,12 @@ test_hosted_search_rows(void)
         assert((block.body.len != 0u) == (level >= 2u));
         snag_render_block_free(&block);
 
-        assert(snag_render_prepare_hosted_finish(&block, "ws_1", "completed", sources,
-                                                 level, 0u) == 0);
+        assert(snag_render_prepare_hosted_finish(&block, "ws_1", "completed", sources, level, 0u) ==
+               0);
         assert(block.role == SNAG_ROLE_SUCCESS);
         assert(snag_buf_terminate(&block.text) == 0);
-        assert(strcmp((char *)block.text.data,
-                      "← web_search [ws_1]  completed · 2 sources\n") == 0);
+        assert(
+            strcmp((char *)block.text.data, "← web_search [ws_1]  completed · 2 sources\n") == 0);
         assert((block.body.len != 0u) == (level >= 2u));
         if (level >= 2u) {
             assert(snag_buf_terminate(&block.body) == 0);
@@ -3829,7 +3962,8 @@ test_hosted_search_rows(void)
             (void)snprintf(url, sizeof(url), "https://example.test/%zu", i);
             assert(json_array_append_new(many, json_string(url)) == 0);
         }
-        assert(snag_render_prepare_hosted_finish(&block, "ws_many", "completed", many, 2u, 0u) == 0);
+        assert(
+            snag_render_prepare_hosted_finish(&block, "ws_many", "completed", many, 2u, 0u) == 0);
         assert(block.role == SNAG_ROLE_SUCCESS);
         assert(snag_buf_terminate(&block.text) == 0);
         assert(strstr((char *)block.text.data, "completed · 40 sources") != NULL);
@@ -3850,13 +3984,18 @@ main(int argc, char **argv)
     test_null_output();
     test_query_markdown_isolation();
     static const char markdown[] = "# **Live** _Markdown_\n"
-        "- item with `code` and [docs](https://example.test)\n"
-        "> ~~old~~ new\n" "````c\nint main(void) { return 0; }\n````\n"
-        "~~~text\ntilde fence\n~~~\n" "First prose line\ncontinued prose\n\nsecond paragraph\n";
-    static const char rendered[] = "Live Markdown\n"
+                                   "- item with `code` and [docs](https://example.test)\n"
+                                   "> ~~old~~ new\n"
+                                   "````c\nint main(void) { return 0; }\n````\n"
+                                   "~~~text\ntilde fence\n~~~\n"
+                                   "First prose line\ncontinued prose\n\nsecond paragraph\n";
+    static const char rendered[] =
+        "Live Markdown\n"
         "• item with code and [docs] <https://example.test>\n"
-        "│ old new\n" "┌─ c\n│ int main(void) { return 0; }\n└─\n"
-        "┌─\n│ tilde fence\n└─\n" "\n• First prose line\n  continued prose\n\n• second paragraph\n\n";
+        "│ old new\n"
+        "┌─ c\n│ int main(void) { return 0; }\n└─\n"
+        "┌─\n│ tilde fence\n└─\n"
+        "\n• First prose line\n  continued prose\n\n• second paragraph\n\n";
     char output[4096];
     struct snag_render render;
 
@@ -3870,7 +4009,7 @@ main(int argc, char **argv)
     assert(strstr(output, "model-must-not-appear") == NULL);
     assert(capture_orientation(true, output, sizeof(output)) > 0u);
     assert(strcmp(output, SNAJPAGENT_IDENTITY " · resumed · /work/tree · session id 01234567"
-                  " · 3 turns · 2 queued paused\n") == 0);
+                                              " · 3 turns · 2 queued paused\n") == 0);
     assert(strstr(output, "model-must-not-appear") == NULL);
     assert(capture(4u, output, sizeof(output)) == 0u);
     assert(capture(5u, output, sizeof(output)) > 0u);
@@ -3892,15 +4031,15 @@ main(int argc, char **argv)
     test_spacing_classes();
 
     struct snag_buf delivered = {.max = 1024u};
-    assert(capture_wrapped("alpha beta gamm", "a delta", 20u, true, "• alpha beta", "• alpha beta gamma",
-                           output, sizeof(output), &delivered) > 0u);
+    assert(capture_wrapped("alpha beta gamm", "a delta", 20u, true, "• alpha beta",
+               "• alpha beta gamma", output, sizeof(output), &delivered) > 0u);
     assert(strcmp(output, "\n• alpha beta gamma\n  delta\n\n") == 0);
     assert(snag_buf_terminate(&delivered) == 0);
     assert(strcmp((const char *)delivered.data, "alpha beta gamma delta") == 0);
     snag_buf_free(&delivered);
     snag_buf_init(&delivered, 64u);
     assert(capture_wrapped("123456789012345678 ", "next", 20u, true, "• 123456789012345678",
-                           "• 123456789012345678", output, sizeof(output), &delivered) > 0u);
+               "• 123456789012345678", output, sizeof(output), &delivered) > 0u);
     assert(snag_buf_terminate(&delivered) == 0);
     assert(strcmp((const char *)delivered.data, "123456789012345678 next") == 0);
     snag_buf_free(&delivered);
@@ -3912,23 +4051,23 @@ main(int argc, char **argv)
     test_citation_fragment_budget();
 
     snag_buf_init(&delivered, sizeof(markdown));
-    assert(capture_markdown(markdown, true, true, SNAG_COLOR_NEVER, 120u,
-                            output, sizeof(output), &delivered) > 0u);
+    assert(capture_markdown(markdown, true, true, SNAG_COLOR_NEVER, 120u, output, sizeof(output),
+               &delivered) > 0u);
     assert(strcmp(output, rendered) == 0);
     assert(snag_buf_terminate(&delivered) == 0);
     assert(strcmp((const char *)delivered.data, markdown) == 0);
     snag_buf_free(&delivered);
-    assert(capture_markdown(markdown, false, false, SNAG_COLOR_NEVER, 120u,
-                            output, sizeof(output), NULL) > 0u);
+    assert(capture_markdown(
+               markdown, false, false, SNAG_COLOR_NEVER, 120u, output, sizeof(output), NULL) > 0u);
     assert(strcmp(output, markdown) == 0);
-    assert(capture_markdown(markdown, true, false, SNAG_COLOR_ALWAYS, 120u,
-                            output, sizeof(output), NULL) > 0u);
+    assert(capture_markdown(
+               markdown, true, false, SNAG_COLOR_ALWAYS, 120u, output, sizeof(output), NULL) > 0u);
     assert(strstr(output, "\033[0;1;36mLive") != NULL);
     assert(strstr(output, "\033[0;33mcode") != NULL);
     assert(strstr(output, "\033[0;4;34mhttps://example.test") != NULL);
     assert(strstr(output, "\033[0;34;2mold") != NULL);
-    assert(capture_markdown("**", true, true, SNAG_COLOR_NEVER, 120u,
-                            output, sizeof(output), NULL) == strlen("\n• **\n\n"));
+    assert(capture_markdown("**", true, true, SNAG_COLOR_NEVER, 120u, output, sizeof(output),
+               NULL) == strlen("\n• **\n\n"));
     assert(strcmp(output, "\n• **\n\n") == 0);
 
     assert(capture_static_markdown(0u, output, sizeof(output)) > 0u);
@@ -3991,14 +4130,19 @@ main(int argc, char **argv)
     test_native_durable_source();
     test_voice_tool_history();
     test_live_downgrade();
-    for (unsigned int verbosity = 0u; verbosity <= 6u; ++verbosity) test_append_only_views(verbosity);
+    for (unsigned int verbosity = 0u; verbosity <= 6u; ++verbosity)
+        test_append_only_views(verbosity);
     test_chat_room_views();
     test_query_send_receipts();
     test_async_render_backfill();
 
     assert(capture_lifecycle(0u, SNAG_COLOR_NEVER, output, sizeof(output)) > 0u);
-    assert(strcmp(output, "• Compacted\n" "• Goal set\n" "• Goal updated\n"
-        "• Goal updated\n" "• Goal cleared\n" "• Goal cleared\n") == 0);
+    assert(strcmp(output, "• Compacted\n"
+                          "• Goal set\n"
+                          "• Goal updated\n"
+                          "• Goal updated\n"
+                          "• Goal cleared\n"
+                          "• Goal cleared\n") == 0);
     assert(capture_lifecycle(4u, SNAG_COLOR_NEVER, output, sizeof(output)) > 0u);
     assert(strstr(output, "• Compacted\nevent › 1 compaction_completed synced\n"));
     assert(strstr(output, "• Goal cleared\nevent › 6 goal_cancelled synced\n"));
@@ -4008,10 +4152,10 @@ main(int argc, char **argv)
     assert(count_text(output, "\n\033[0m") == 6u);
     assert(capture_resume_hint(SNAG_COLOR_NEVER, output, sizeof(output)) > 0u);
     assert(strcmp(output, "• You can resume this session with the following command:\n"
-        "'snajpagent' --resume '0123'\n") == 0);
+                          "'snajpagent' --resume '0123'\n") == 0);
     assert(capture_resume_hint(SNAG_COLOR_ALWAYS, output, sizeof(output)) > 0u);
     assert(strcmp(output, "\033[1;32m• You can resume this session with the following command:"
-        "\033[0m\n'snajpagent' --resume '0123'\n") == 0);
+                          "\033[0m\n'snajpagent' --resume '0123'\n") == 0);
 
     snag_render_init(&render, 6u);
     errno = 0;
@@ -4062,10 +4206,10 @@ main(int argc, char **argv)
     snag_render_set_color(&render, SNAG_COLOR_AUTO);
     assert(!render.color_stderr);
     assert(unsetenv("NO_COLOR") == 0);
-    /* A draft at the direct-prompt cap must clamp, not fail. The old behaviour returned EOVERFLOW
-     * from the insert, the runtime latched it as fatal, and the poll then returned it on every pass
-     * without reading input - no keystroke, not even Ctrl-C, could be consumed, so a session holding
-     * an oversized draft was unreachable except by signal. */
+    /* A draft at the direct-prompt cap must clamp, not fail. The old behaviour returned
+     * EOVERFLOW from the insert, the runtime latched it as fatal, and the poll then returned it
+     * on every pass without reading input - no keystroke, not even Ctrl-C, could be consumed, so
+     * a session holding an oversized draft was unreachable except by signal. */
     {
         struct snag_term capper;
         size_t cap = SNAG_MAX_DIRECT_PROMPT;
@@ -4095,7 +4239,7 @@ main(int argc, char **argv)
         close(fd);
         assert(unlink(path) == 0);
         snag_term_init(&traced);
-        snag_term_trace(&traced, "skip", "output_depth");     /* gate unset: must write nothing */
+        snag_term_trace(&traced, "skip", "output_depth"); /* gate unset: must write nothing */
         assert(access(path, F_OK) != 0);
         assert(setenv("SNAJPAGENT_TERM_TRACE", path, 1) == 0);
         snag_term_trace(&traced, "skip", "output_depth");
@@ -4120,9 +4264,10 @@ main(int argc, char **argv)
         buf[got] = '\0';
         assert(strstr(buf, "ev=skip src=output_depth") != NULL);
         assert(strstr(buf, "ev=paint src=compose_frame") != NULL);
-        assert(strstr(buf, "want=") != NULL && strstr(buf, "vis=") != NULL && strstr(buf, "rows=") != NULL);
-        assert(strstr(buf, "src=restore_draft") != NULL);      /* a "draft" caller is not content */
-        assert(strstr(buf, CANARY) == NULL);                    /* and no content is recorded at all */
+        assert(strstr(buf, "want=") != NULL && strstr(buf, "vis=") != NULL &&
+               strstr(buf, "rows=") != NULL);
+        assert(strstr(buf, "src=restore_draft") != NULL); /* a "draft" caller is not content */
+        assert(strstr(buf, CANARY) == NULL);              /* and no content is recorded at all */
         assert(strstr(buf, "want-true src=set_prompt_template") != NULL);
         unlink(path);
     }
@@ -4134,34 +4279,52 @@ main(int argc, char **argv)
         snag_term_init(&t);
         t.opened = true;
         t.capable = true;
-        snag_buf_reset(&t.output_line); snag_buf_reset(&t.output_cell); t.output_columns = 0u; t.output_newlines = 0u;
+        snag_buf_reset(&t.output_line);
+        snag_buf_reset(&t.output_cell);
+        t.output_columns = 0u;
+        t.output_newlines = 0u;
         assert(snag_term_note_output(&t, "abc def", 7u, "s") == 0);
         assert(t.output_line.len == 7u && memcmp(t.output_line.data, "abc def", 7u) == 0);
         assert(t.output_columns == 7u);
         assert(t.output_cell.len == 1u && memcmp(t.output_cell.data, "f", 1u) == 0);
         assert(t.output_cell_width == 1u);
         /* tab: expanded by column, so a fast path here would drop three spaces */
-        snag_buf_reset(&t.output_line); snag_buf_reset(&t.output_cell); t.output_columns = 0u; t.output_newlines = 0u;
+        snag_buf_reset(&t.output_line);
+        snag_buf_reset(&t.output_cell);
+        t.output_columns = 0u;
+        t.output_newlines = 0u;
         assert(snag_term_note_output(&t, "a\tb", 3u, "s") == 0);
         assert(t.output_line.len == 5u && memcmp(t.output_line.data, "a   b", 5u) == 0);
         assert(t.output_columns == 5u);
         /* carriage return: escaped to four characters */
-        snag_buf_reset(&t.output_line); snag_buf_reset(&t.output_cell); t.output_columns = 0u; t.output_newlines = 0u;
+        snag_buf_reset(&t.output_line);
+        snag_buf_reset(&t.output_cell);
+        t.output_columns = 0u;
+        t.output_newlines = 0u;
         assert(snag_term_note_output(&t, "a\rb", 3u, "s") == 0);
         assert(t.output_line.len == 6u && memcmp(t.output_line.data, "a\\x0Db", 6u) == 0);
         assert(t.output_columns == 6u);
         /* invalid UTF-8: escaped, not copied */
-        snag_buf_reset(&t.output_line); snag_buf_reset(&t.output_cell); t.output_columns = 0u; t.output_newlines = 0u;
+        snag_buf_reset(&t.output_line);
+        snag_buf_reset(&t.output_cell);
+        t.output_columns = 0u;
+        t.output_newlines = 0u;
         assert(snag_term_note_output(&t, "\xff", 1u, "s") == 0);
         assert(t.output_line.len == 4u && memcmp(t.output_line.data, "\\xFF", 4u) == 0);
         assert(t.output_columns == 4u);
         /* wide glyph: preserved, width 2 */
-        snag_buf_reset(&t.output_line); snag_buf_reset(&t.output_cell); t.output_columns = 0u; t.output_newlines = 0u;
+        snag_buf_reset(&t.output_line);
+        snag_buf_reset(&t.output_cell);
+        t.output_columns = 0u;
+        t.output_newlines = 0u;
         assert(snag_term_note_output(&t, "\xe4\xb8\xad", 3u, "s") == 0);
         assert(t.output_line.len == 3u && memcmp(t.output_line.data, "\xe4\xb8\xad", 3u) == 0);
         assert(t.output_columns == 2u && t.output_cell_width == 2u);
         /* newline resets the line model and is counted */
-        snag_buf_reset(&t.output_line); snag_buf_reset(&t.output_cell); t.output_columns = 0u; t.output_newlines = 0u;
+        snag_buf_reset(&t.output_line);
+        snag_buf_reset(&t.output_cell);
+        t.output_columns = 0u;
+        t.output_newlines = 0u;
         assert(snag_term_note_output(&t, "ab\n", 3u, "s") == 0);
         assert(t.output_columns == 0u && t.output_line.len == 0u && t.output_newlines == 1u);
         snag_term_close(&t);
@@ -4175,8 +4338,10 @@ main(int argc, char **argv)
         t.opened = true;
         t.capable = true;
         t.columns = 5u;
-        snag_buf_reset(&t.output_line); snag_buf_reset(&t.output_cell);
-        t.output_columns = 0u; t.output_newlines = 0u;
+        snag_buf_reset(&t.output_line);
+        snag_buf_reset(&t.output_cell);
+        t.output_columns = 0u;
+        t.output_newlines = 0u;
         /* a run crossing the wrap boundary: 1..5, reset, 1..3 */
         assert(snag_term_note_output(&t, "abcdefgh", 8u, "s") == 0);
         assert(t.output_line.len == 8u && memcmp(t.output_line.data, "abcdefgh", 8u) == 0);
@@ -4184,8 +4349,10 @@ main(int argc, char **argv)
         assert(t.output_cell.len == 1u && memcmp(t.output_cell.data, "h", 1u) == 0);
         assert(t.output_cell_width == 1u);
         /* a full line wraps on the next run */
-        snag_buf_reset(&t.output_line); snag_buf_reset(&t.output_cell);
-        t.output_columns = 0u; t.output_newlines = 0u;
+        snag_buf_reset(&t.output_line);
+        snag_buf_reset(&t.output_cell);
+        t.output_columns = 0u;
+        t.output_newlines = 0u;
         assert(snag_term_note_output(&t, "abcde", 5u, "s") == 0);
         assert(t.output_columns == 5u);
         assert(snag_term_note_output(&t, "f", 1u, "s") == 0);
@@ -4193,15 +4360,19 @@ main(int argc, char **argv)
         assert(t.output_line.len == 6u && memcmp(t.output_line.data, "abcdef", 6u) == 0);
         assert(t.output_cell.len == 1u && memcmp(t.output_cell.data, "f", 1u) == 0);
         /* a newline mid-chunk resets the line model and keeps only the tail */
-        snag_buf_reset(&t.output_line); snag_buf_reset(&t.output_cell);
-        t.output_columns = 0u; t.output_newlines = 0u;
+        snag_buf_reset(&t.output_line);
+        snag_buf_reset(&t.output_cell);
+        t.output_columns = 0u;
+        t.output_newlines = 0u;
         assert(snag_term_note_output(&t, "ab\ncde", 6u, "s") == 0);
         assert(t.output_line.len == 3u && memcmp(t.output_line.data, "cde", 3u) == 0);
         assert(t.output_columns == 3u);
         assert(t.output_cell.len == 1u && memcmp(t.output_cell.data, "e", 1u) == 0);
         /* a trailing newline leaves an empty line model */
-        snag_buf_reset(&t.output_line); snag_buf_reset(&t.output_cell);
-        t.output_columns = 0u; t.output_newlines = 0u;
+        snag_buf_reset(&t.output_line);
+        snag_buf_reset(&t.output_cell);
+        t.output_columns = 0u;
+        t.output_newlines = 0u;
         assert(snag_term_note_output(&t, "xy\n", 3u, "s") == 0);
         assert(t.output_columns == 0u && t.output_line.len == 0u && t.output_cell.len == 0u);
         assert(t.output_newlines == 1u);

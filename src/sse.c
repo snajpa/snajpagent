@@ -38,18 +38,15 @@ fail(struct snag_sse_parser *parser, char *error, size_t error_size, const char 
 static const char *
 oversized_line_kind(const struct snag_sse_parser *parser)
 {
-    static const char *const names[] = {
-        "response.created", "response.completed", "response.failed",
+    static const char *const names[] = {"response.created", "response.completed", "response.failed",
         "response.output_item.added", "response.output_item.done",
         "response.function_call_arguments.done", "response.output_text.delta",
-        "response.reasoning_summary_text.delta"
-    };
+        "response.reasoning_summary_text.delta"};
     for (size_t i = 0u; i < sizeof(names) / sizeof(names[0]); ++i)
         if (parser->event.len == strlen(names[i]) &&
             memcmp(parser->event.data, names[i], parser->event.len) == 0)
             return names[i];
-    if (parser->line.len >= 5u && memcmp(parser->line.data, "data:", 5u) == 0)
-        return "data";
+    if (parser->line.len >= 5u && memcmp(parser->line.data, "data:", 5u) == 0) return "data";
     if (parser->line.len && parser->line.data[0] == ':') return "comment";
     return "unknown";
 }
@@ -62,12 +59,14 @@ assign(struct snag_buf *target, const unsigned char *value, size_t len)
 }
 
 static int
-deliver(struct snag_sse_parser *parser, const struct snag_sse_record *record, char *error, size_t error_size)
+deliver(struct snag_sse_parser *parser, const struct snag_sse_record *record, char *error,
+    size_t error_size)
 {
     if (!parser->record || parser->record(parser->opaque, record) == 0) return 0;
     parser->failed = true;
-    if (error_size && !error[0]) snag_errorf(error, error_size, "SSE consumer rejected %s",
-                    record->kind == SNAG_SSE_EVENT ? "an event" : "a comment");
+    if (error_size && !error[0])
+        snag_errorf(error, error_size, "SSE consumer rejected %s",
+            record->kind == SNAG_SSE_EVENT ? "an event" : "a comment");
     if (!errno) errno = EPROTO;
     return -1;
 }
@@ -83,8 +82,8 @@ dispatch(struct snag_sse_parser *parser, char *error, size_t error_size)
     }
     if (!snag_utf8_valid(parser->event.data, parser->event.len, true) ||
         !snag_utf8_valid(parser->id.data, parser->id.len, true) ||
-        !snag_utf8_valid(parser->data.data, parser->data.len, true)) return fail(parser, error, error_size,
-                    "SSE event contains invalid UTF-8 or NUL");
+        !snag_utf8_valid(parser->data.data, parser->data.len, true))
+        return fail(parser, error, error_size, "SSE event contains invalid UTF-8 or NUL");
     memset(&record, 0, sizeof(record));
     record.kind = SNAG_SSE_EVENT;
     record.event = parser->event.data;
@@ -110,10 +109,10 @@ process_line(struct snag_sse_parser *parser, char *error, size_t error_size)
     size_t value_len;
 
     if (len == 0u) return dispatch(parser, error, error_size);
-    if (!snag_utf8_valid(line, len, true)) return fail(parser, error, error_size,
-                    "SSE line contains invalid UTF-8 or NUL");
+    if (!snag_utf8_valid(line, len, true))
+        return fail(parser, error, error_size, "SSE line contains invalid UTF-8 or NUL");
     if (line[0] == ':') {
-        struct snag_sse_record record = { .kind = SNAG_SSE_COMMENT };
+        struct snag_sse_record record = {.kind = SNAG_SSE_COMMENT};
 
         value = line + 1u;
         value_len = len - 1u;
@@ -144,13 +143,14 @@ process_line(struct snag_sse_parser *parser, char *error, size_t error_size)
         if (assign(&parser->event, value, value_len) < 0)
             return fail(parser, error, error_size, "SSE event name is too large");
     } else if (colon == 2u && memcmp(line, "id", 2u) == 0) {
-        if (memchr(value, '\0', value_len)) return fail(parser, error, error_size, "SSE id contains NUL");
+        if (memchr(value, '\0', value_len))
+            return fail(parser, error, error_size, "SSE id contains NUL");
         if (assign(&parser->id, value, value_len) < 0)
             return fail(parser, error, error_size, "SSE id is too large");
     } else if (colon == 5u && memcmp(line, "retry", 5u) == 0) {
         for (size_t i = 0; i < value_len; ++i)
-            if (value[i] < '0' || value[i] > '9') return fail(parser, error, error_size,
-                            "SSE retry field is not unsigned decimal");
+            if (value[i] < '0' || value[i] > '9')
+                return fail(parser, error, error_size, "SSE retry field is not unsigned decimal");
     }
     return 0;
 }
@@ -164,7 +164,8 @@ end_line(struct snag_sse_parser *parser, char *error, size_t error_size)
 }
 
 int
-snag_sse_feed(struct snag_sse_parser *parser, const void *data, size_t len, char *error, size_t error_size)
+snag_sse_feed(
+    struct snag_sse_parser *parser, const void *data, size_t len, char *error, size_t error_size)
 {
     const unsigned char *input = data;
 
@@ -172,14 +173,14 @@ snag_sse_feed(struct snag_sse_parser *parser, const void *data, size_t len, char
         errno = EPROTO;
         return snag_errorf(error, error_size, "SSE parser is already failed");
     }
-    if (len > SNAG_MAX_PROVIDER_WIRE - parser->wire_bytes) return fail(parser, error, error_size,
-                    "provider wire aggregate exceeds 64 MiB");
+    if (len > SNAG_MAX_PROVIDER_WIRE - parser->wire_bytes)
+        return fail(parser, error, error_size, "provider wire aggregate exceeds 64 MiB");
     parser->wire_bytes += len;
     for (size_t i = 0; i < len;) {
         if (parser->pending_cr) {
             parser->pending_cr = false;
-            if (input[i++] != '\n') return fail(parser, error, error_size,
-                                      "SSE stream contains bare carriage return");
+            if (input[i++] != '\n')
+                return fail(parser, error, error_size, "SSE stream contains bare carriage return");
             if (end_line(parser, error, error_size) < 0) return -1;
             continue;
         }
@@ -193,14 +194,15 @@ snag_sse_feed(struct snag_sse_parser *parser, const void *data, size_t len, char
             span > amount) {
             parser->failed = true;
             return snag_fail(error, error_size, EPROTO, "SSE %s line exceeds 1 MiB",
-                             oversized_line_kind(parser));
+                oversized_line_kind(parser));
         }
         if (i == len) break;
         unsigned char c = input[i++];
         if (c == '\0') return fail(parser, error, error_size, "SSE stream contains NUL");
         if (c == '\r') {
             parser->pending_cr = true;
-        } else if (end_line(parser, error, error_size) < 0) return -1;
+        } else if (end_line(parser, error, error_size) < 0)
+            return -1;
     }
     return 0;
 }

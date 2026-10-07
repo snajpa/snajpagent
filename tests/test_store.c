@@ -35,8 +35,7 @@ assert_session_lock_retained(const struct snag_session *session, const char *sta
 #ifndef _WIN32
     pid_t pid = fork();
     assert(pid >= 0);
-    if (pid == 0)
-        _exit(snag_lock_file(session->lock_fd, false) < 0 && errno == EAGAIN ? 0 : 1);
+    if (pid == 0) _exit(snag_lock_file(session->lock_fd, false) < 0 && errno == EAGAIN ? 0 : 1);
     int status;
     assert(waitpid(pid, &status, 0) == pid);
     if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
@@ -98,12 +97,9 @@ matches_fail(void *opaque, const char *text, size_t len)
 static void
 test_session_location(struct snag_store *store, const struct snag_session *owned)
 {
-    static const char ids[][SNAG_ID_HEX_LEN + 1u] = {
-        "abcdefab111111111111111111111111", "abcdefab222222222222222222222222",
-        "abcdefab333333333333333333333333"
-    };
-    static const char trash[] =
-        "abcdefab444444444444444444444444.11111111111111111111111111111111";
+    static const char ids[][SNAG_ID_HEX_LEN + 1u] = {"abcdefab111111111111111111111111",
+        "abcdefab222222222222222222222222", "abcdefab333333333333333333333333"};
+    static const char trash[] = "abcdefab444444444444444444444444.11111111111111111111111111111111";
     struct snag_buf matches = {.max = 1024u};
     struct snag_session target;
     char error[256];
@@ -111,13 +107,13 @@ test_session_location(struct snag_store *store, const struct snag_session *owned
     /* Locating our own session must not open/close another lock descriptor. */
     snag_session_init(&target);
     assert_session_lock_retained(owned, "before target lookup");
-    assert(snag_session_locate(store, &target, owned->id, matches_to_buf, &matches,
-                               error, sizeof(error)) == 0);
+    assert(snag_session_locate(
+               store, &target, owned->id, matches_to_buf, &matches, error, sizeof(error)) == 0);
     assert(!strcmp(target.id, owned->id) && !strcmp(target.dir_path, owned->dir_path));
     assert(target.dir_fd >= 0 && target.lock_fd == -1 && target.log_fd == -1);
     assert(matches.len == 0u);
-    assert(snag_session_locate(store, &target, owned->id, NULL, NULL,
-                               error, sizeof(error)) < 0 && errno == EINVAL);
+    assert(snag_session_locate(store, &target, owned->id, NULL, NULL, error, sizeof(error)) < 0 &&
+           errno == EINVAL);
     snag_session_close(&target);
     assert_session_lock_retained(owned, "after target lookup");
 
@@ -127,27 +123,29 @@ test_session_location(struct snag_store *store, const struct snag_session *owned
     }
     assert(mkdirat(store->trash_fd, trash, 0700) == 0);
     snag_session_init(&target);
-    assert(snag_session_locate(store, &target, "abcdefab", matches_to_buf, &matches,
-                               error, sizeof(error)) < 0 && errno == EEXIST);
+    assert(snag_session_locate(
+               store, &target, "abcdefab", matches_to_buf, &matches, error, sizeof(error)) < 0 &&
+           errno == EEXIST);
     assert(matches.len == (sizeof(ids) / sizeof(ids[0])) * (SNAG_ID_HEX_LEN + 1u));
     for (size_t i = 0u; i < (sizeof(ids) / sizeof(ids[0])); ++i) {
         assert(strstr((char *)matches.data, ids[i]));
     }
     assert(target.dir_fd == -1 && target.dir_path == NULL);
-    assert(snag_session_locate(store, &target, "abcdefab", matches_fail, NULL,
-                               error, sizeof(error)) < 0 && errno == EPIPE);
-    assert(snag_session_locate(store, &target, "abcdefab4", NULL, NULL,
-                               error, sizeof(error)) < 0 && errno == ENOENT);
-    assert(snag_session_locate(store, &target, "abcdefa", NULL, NULL,
-                               error, sizeof(error)) < 0 && errno == EEXIST);
-    static const char *invalid[] = {NULL, "", "ABCDEFAB", "../abcdefab",
-                                    "abcdefab1111111111111111111111111"};
+    assert(snag_session_locate(
+               store, &target, "abcdefab", matches_fail, NULL, error, sizeof(error)) < 0 &&
+           errno == EPIPE);
+    assert(snag_session_locate(store, &target, "abcdefab4", NULL, NULL, error, sizeof(error)) < 0 &&
+           errno == ENOENT);
+    assert(snag_session_locate(store, &target, "abcdefa", NULL, NULL, error, sizeof(error)) < 0 &&
+           errno == EEXIST);
+    static const char *invalid[] = {
+        NULL, "", "ABCDEFAB", "../abcdefab", "abcdefab1111111111111111111111111"};
     for (size_t i = 0u; i < (sizeof(invalid) / sizeof(invalid[0])); ++i) {
-        assert(snag_session_locate(store, &target, invalid[i], NULL, NULL,
-                                   error, sizeof(error)) < 0 && errno == EINVAL);
+        assert(
+            snag_session_locate(store, &target, invalid[i], NULL, NULL, error, sizeof(error)) < 0 &&
+            errno == EINVAL);
     }
-    assert(snag_session_locate(store, &target, "abcdefab1", NULL, NULL,
-                               error, sizeof(error)) == 0);
+    assert(snag_session_locate(store, &target, "abcdefab1", NULL, NULL, error, sizeof(error)) == 0);
     assert(!strcmp(target.id, ids[0]));
     int dir_fd = dup(target.dir_fd);
     assert(dir_fd >= 0);
@@ -158,8 +156,7 @@ test_session_location(struct snag_store *store, const struct snag_session *owned
     assert(fd >= 0 && snag_write_full(fd, "unfinished", 10u) == 0);
     assert(mkdirat(dir_fd, "uploads", 0700) == 0);
     snag_session_init(&target);
-    assert(snag_session_locate(store, &target, ids[0], NULL, NULL,
-                               error, sizeof(error)) == 0);
+    assert(snag_session_locate(store, &target, ids[0], NULL, NULL, error, sizeof(error)) == 0);
     assert(target.log_fd == -1 && target.lock_fd == -1);
     snag_session_close(&target);
     char tail[16] = {0};
@@ -176,8 +173,7 @@ test_session_location(struct snag_store *store, const struct snag_session *owned
 #ifndef _WIN32
     assert(fchmod(dir_fd, 0755) == 0);
     snag_session_init(&target);
-    assert(snag_session_locate(store, &target, ids[0], NULL, NULL,
-                               error, sizeof(error)) < 0);
+    assert(snag_session_locate(store, &target, ids[0], NULL, NULL, error, sizeof(error)) < 0);
     snag_session_close(&target);
     assert(fchmod(dir_fd, 0700) == 0);
 #endif
@@ -188,8 +184,7 @@ test_session_location(struct snag_store *store, const struct snag_session *owned
 #ifndef _WIN32
     assert(symlinkat(owned->id, store->sessions_fd, ids[0]) == 0);
     snag_session_init(&target);
-    assert(snag_session_locate(store, &target, ids[0], NULL, NULL,
-                               error, sizeof(error)) < 0);
+    assert(snag_session_locate(store, &target, ids[0], NULL, NULL, error, sizeof(error)) < 0);
     snag_session_close(&target);
     assert(unlinkat(store->sessions_fd, ids[0], 0) == 0);
 #endif
@@ -205,8 +200,8 @@ change_data(const char *old_key, const char *old_value, const char *new_key, con
 }
 
 static int
-check_replay(void *opaque, const struct snag_session *state, uint64_t seq,
-             const char *type, const json_t *data, char *error, size_t error_size)
+check_replay(void *opaque, const struct snag_session *state, uint64_t seq, const char *type,
+    const json_t *data, char *error, size_t error_size)
 {
     const struct snag_session *source = opaque;
     (void)error;
@@ -231,14 +226,15 @@ check_replay(void *opaque, const struct snag_session *state, uint64_t seq,
 static json_t *
 queued_data(const char *turn_id, const char *queue_id, const char *text)
 {
-    return checked_json(json_pack("{s:s,s:b,s:s,s:s}",
-        "queue_id", queue_id, "read_only", 0, "text", text, "while_turn_id", turn_id));
+    return checked_json(json_pack("{s:s,s:b,s:s,s:s}", "queue_id", queue_id, "read_only", 0, "text",
+        text, "while_turn_id", turn_id));
 }
 
 static json_t *
 edited_data(const char *queue_id, const char *text)
 {
-    return checked_json(json_pack("{s:s,s:b,s:s}", "queue_id", queue_id, "read_only", 0, "text", text));
+    return checked_json(
+        json_pack("{s:s,s:b,s:s}", "queue_id", queue_id, "read_only", 0, "text", text));
 }
 
 static json_t *
@@ -247,17 +243,15 @@ turn_started_data(const struct snag_session *session, const char *turn_id)
     struct snag_instruction_set instructions = {0};
     json_t *metadata = snag_instructions_metadata_json(&instructions);
     assert(metadata);
-    return checked_json(json_pack(
-        "{s:{s:s,s:s,s:n,s:s,s:s,s:s,s:i,s:i,s:i,s:i,s:b},"
-        "s:s,s:b,s:o,s:n,s:n,s:s,s:s,s:i,s:s}",
-        "config", "capability_version", SNAJPAGENT_CAPABILITY_VERSION,
-        "effort", session->default_effort, "max_output_tokens",
-        "model", session->default_model, "provider", session->default_provider,
-        "profile_id", SNAJPAGENT_PROFILE_ID, "prompt_schema", 1, "replay_schema", 1,
-        "tool_schema", 1, "max_parallel_commands", 4, "parallel_tool_calls", 1,
-        "input_kind", "direct", "read_only", 0, "instructions", metadata,
-        "queue_id", "queue_seq", "text", "queue test", "turn_id", turn_id,
-        "turn_number", (int)session->turn_count + 1, "cwd", session->cwd));
+    return checked_json(json_pack("{s:{s:s,s:s,s:n,s:s,s:s,s:s,s:i,s:i,s:i,s:i,s:b},"
+                                  "s:s,s:b,s:o,s:n,s:n,s:s,s:s,s:i,s:s}",
+        "config", "capability_version", SNAJPAGENT_CAPABILITY_VERSION, "effort",
+        session->default_effort, "max_output_tokens", "model", session->default_model, "provider",
+        session->default_provider, "profile_id", SNAJPAGENT_PROFILE_ID, "prompt_schema", 1,
+        "replay_schema", 1, "tool_schema", 1, "max_parallel_commands", 4, "parallel_tool_calls", 1,
+        "input_kind", "direct", "read_only", 0, "instructions", metadata, "queue_id", "queue_seq",
+        "text", "queue test", "turn_id", turn_id, "turn_number", (int)session->turn_count + 1,
+        "cwd", session->cwd));
 }
 
 static void
@@ -268,8 +262,8 @@ test_long_session_list(struct snag_store *store, const char *cwd)
     prompt[sizeof(prompt) - 1u] = '\0';
     struct snag_session session;
     snag_session_init(&session);
-    assert(!snag_session_create(store, &session, cwd, "default", "fixture", "default",
-        error, sizeof(error)));
+    assert(!snag_session_create(
+        store, &session, cwd, "default", "fixture", "default", error, sizeof(error)));
     json_t *data = turn_started_data(&session, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
     assert(!snag_json_set_new(data, "text", json_string(prompt)));
     commit_event(&session, "turn_started", data);
@@ -279,14 +273,15 @@ test_long_session_list(struct snag_store *store, const char *cwd)
     const uint64_t limits[] = {0u, 1u, UINT64_MAX};
     for (size_t i = 0u; i < sizeof(limits) / sizeof(limits[0]); ++i) {
         struct listed_session listed = {.prefix = prefix};
-        assert(!snag_store_list(store, &session, limits[i], 0u, find_listed_session,
-            &listed, error, sizeof(error)));
+        assert(!snag_store_list(
+            store, &session, limits[i], 0u, find_listed_session, &listed, error, sizeof(error)));
         assert(listed.found && listed.header);
         assert(!strcmp(session.first_user, prompt));
         assert_session_lock_retained(&session, "after listing long prompt");
     }
-    assert(snag_store_list(store, &session, UINT64_MAX, 0u, matches_fail, NULL,
-        error, sizeof(error)) < 0 && errno == EPIPE);
+    assert(snag_store_list(
+               store, &session, UINT64_MAX, 0u, matches_fail, NULL, error, sizeof(error)) < 0 &&
+           errno == EPIPE);
     assert_session_lock_retained(&session, "after failed listing long prompt");
     snag_session_close(&session);
 }
@@ -312,11 +307,11 @@ goal_reworded_data(const char *goal_id, const char *actor, const char *prompt)
 }
 
 static json_t *
-goal_replaced_data(const char *goal_id, const char *new_goal_id, const char *actor,
-                   const char *prompt)
+goal_replaced_data(
+    const char *goal_id, const char *new_goal_id, const char *actor, const char *prompt)
 {
-    return checked_json(json_pack("{s:s,s:s,s:s,s:s}", "actor", actor,
-        "goal_id", goal_id, "new_goal_id", new_goal_id, "prompt", prompt));
+    return checked_json(json_pack("{s:s,s:s,s:s,s:s}", "actor", actor, "goal_id", goal_id,
+        "new_goal_id", new_goal_id, "prompt", prompt));
 }
 
 static json_t *
@@ -342,8 +337,8 @@ compaction_interrupted_data(const char *compact_id, const char *reason)
 }
 
 static int
-count_event(void *opaque, const struct snag_session *state,
-            uint64_t seq, const char *type, const json_t *data, char *error, size_t error_size)
+count_event(void *opaque, const struct snag_session *state, uint64_t seq, const char *type,
+    const json_t *data, char *error, size_t error_size)
 {
     size_t *count = opaque;
     assert(state->next_seq == seq + 1u);
@@ -358,9 +353,8 @@ count_event(void *opaque, const struct snag_session *state,
 }
 
 static int
-count_cursor_event(void *opaque, const struct snag_session *state,
-                   uint64_t seq, const char *type, const json_t *data,
-                   char *error, size_t error_size)
+count_cursor_event(void *opaque, const struct snag_session *state, uint64_t seq, const char *type,
+    const json_t *data, char *error, size_t error_size)
 {
     (void)state;
     (void)seq;
@@ -374,16 +368,16 @@ count_cursor_event(void *opaque, const struct snag_session *state,
 
 static void
 legacy_event(int fd, const char *session_id, uint64_t seq, char hash[SNAG_SHA256_HEX_LEN + 1u],
-             const char *type, json_t *data)
+    const char *type, json_t *data)
 {
     char digest[SNAG_SHA256_HEX_LEN + 1u];
     struct snag_buf line;
     json_t *event;
 
     snag_buf_init(&line, SNAG_MAX_EVENT_LINE);
-    event = checked_json(json_pack("{s:O,s:s,s:I,s:s,s:I,s:s,s:i}", "data", data,
-        "prev_sha256", hash, "seq", (json_int_t)seq, "session_id", session_id,
-        "time_ms", (json_int_t)(1700000000000 + (json_int_t)seq), "type", type, "v", 1));
+    event = checked_json(json_pack("{s:O,s:s,s:I,s:s,s:I,s:s,s:i}", "data", data, "prev_sha256",
+        hash, "seq", (json_int_t)seq, "session_id", session_id, "time_ms",
+        (json_int_t)(1700000000000 + (json_int_t)seq), "type", type, "v", 1));
     assert(snag_json_digest(event, digest) == 0);
     assert(snag_json_set_new(event, "event_sha256", json_string(digest)) == 0);
     assert(snag_json_canonical(event, &line) == 0);
@@ -402,8 +396,8 @@ struct reverse_scan {
 };
 
 static int
-reverse_event(void *opaque, const struct snag_session *state, uint64_t seq,
-    const char *type, const json_t *data, char *error, size_t error_size)
+reverse_event(void *opaque, const struct snag_session *state, uint64_t seq, const char *type,
+    const json_t *data, char *error, size_t error_size)
 {
     struct reverse_scan *scan = opaque;
     (void)type;
@@ -422,8 +416,8 @@ struct forward_scan {
 };
 
 static int
-forward_event(void *opaque, const struct snag_session *state, uint64_t seq,
-    const char *type, const json_t *data, char *error, size_t error_size)
+forward_event(void *opaque, const struct snag_session *state, uint64_t seq, const char *type,
+    const json_t *data, char *error, size_t error_size)
 {
     struct forward_scan *scan = opaque;
     assert(!state && seq == scan->next && type && json_is_object(data));
@@ -431,8 +425,7 @@ forward_event(void *opaque, const struct snag_session *state, uint64_t seq,
         /* Native receipts project as an empty marker; legacy scans summarize
          * their JSON checkpoint without exposing state/provider bodies. */
         assert(!json_object_size(data) || json_object_size(data) == 3u);
-        if (json_object_size(data))
-            assert(json_is_boolean(json_object_get(data, "provider_view")));
+        if (json_object_size(data)) assert(json_is_boolean(json_object_get(data, "provider_view")));
         assert(!json_object_get(data, "state") && !json_object_get(data, "context"));
     }
     if (scan->action < 0)
@@ -447,54 +440,59 @@ test_forward_history(struct snag_store *store, const char *cwd)
     struct snag_session session;
     char error[256], id[SNAG_ID_HEX_LEN + 1u];
     snag_session_init(&session);
-    assert(snag_session_prepare(&session, cwd, "default", "model", "high",
-        error, sizeof(error)) == 0);
+    assert(
+        snag_session_prepare(&session, cwd, "default", "model", "high", error, sizeof(error)) == 0);
     memcpy(id, session.id, sizeof(id));
-    commit_event(&session, "effort_changed",
-        change_data("old_effort", "high", "new_effort", "low"));
+    commit_event(
+        &session, "effort_changed", change_data("old_effort", "high", "new_effort", "low"));
     for (unsigned int phase = 0u; phase < 3u; ++phase) {
         struct snag_journal_cursor cursor = {0};
         struct forward_scan scan = {.next = 1u};
         uint64_t original_seq = session.next_seq;
         int64_t original_end = session.log_end;
-        assert(snag_session_each_event_forward(&session, &cursor, 1u, forward_event,
-            &scan, error, sizeof(error)) == 0);
+        assert(snag_session_each_event_forward(
+                   &session, &cursor, 1u, forward_event, &scan, error, sizeof(error)) == 0);
         assert(cursor.next_seq == 2u && scan.next == 2u && cursor.offset > 0);
         struct snag_journal_cursor saved = cursor;
         scan.action = 1;
-        assert(snag_session_each_event_forward(&session, &cursor, SIZE_MAX, forward_event,
-            &scan, error, sizeof(error)) == 0);
+        assert(snag_session_each_event_forward(
+                   &session, &cursor, SIZE_MAX, forward_event, &scan, error, sizeof(error)) == 0);
         assert(cursor.next_seq == saved.next_seq && cursor.offset == saved.offset);
         scan.action = -1;
-        assert(snag_session_each_event_forward(&session, &cursor, SIZE_MAX, forward_event,
-            &scan, error, sizeof(error)) < 0 && errno == ECANCELED);
+        assert(snag_session_each_event_forward(
+                   &session, &cursor, SIZE_MAX, forward_event, &scan, error, sizeof(error)) < 0 &&
+               errno == ECANCELED);
         assert(cursor.next_seq == saved.next_seq && cursor.offset == saved.offset);
         scan.action = SNAG_JOURNAL_STOP_AFTER;
-        assert(snag_session_each_event_forward(&session, &cursor, SIZE_MAX, forward_event,
-            &scan, error, sizeof(error)) == 0);
+        assert(snag_session_each_event_forward(
+                   &session, &cursor, SIZE_MAX, forward_event, &scan, error, sizeof(error)) == 0);
         assert(cursor.next_seq == saved.next_seq + 1u && scan.next == cursor.next_seq);
         scan.action = 0;
-        assert(snag_session_each_event_forward(&session, &cursor, SIZE_MAX, forward_event,
-            &scan, error, sizeof(error)) == 0);
+        assert(snag_session_each_event_forward(
+                   &session, &cursor, SIZE_MAX, forward_event, &scan, error, sizeof(error)) == 0);
         assert(cursor.next_seq == original_seq && cursor.offset == original_end);
         assert(!strcmp(cursor.prev_sha256, session.prev_sha256));
         assert(session.next_seq == original_seq && session.log_end == original_end);
-        assert(snag_session_each_event_forward(&session, &cursor, SIZE_MAX, forward_event,
-            &scan, error, sizeof(error)) == 0 && scan.next == original_seq);
+        assert(snag_session_each_event_forward(
+                   &session, &cursor, SIZE_MAX, forward_event, &scan, error, sizeof(error)) == 0 &&
+               scan.next == original_seq);
         commit_event(&session, "effort_changed",
             change_data("old_effort", session.default_effort, "new_effort",
                 !strcmp(session.default_effort, "high") ? "low" : "high"));
-        assert(snag_session_each_event_forward(&session, &cursor, SIZE_MAX, forward_event,
-            &scan, error, sizeof(error)) == 0 && scan.next == original_seq + 1u);
+        assert(snag_session_each_event_forward(
+                   &session, &cursor, SIZE_MAX, forward_event, &scan, error, sizeof(error)) == 0 &&
+               scan.next == original_seq + 1u);
         cursor = saved;
         cursor.prev_sha256[0] = cursor.prev_sha256[0] == '0' ? '1' : '0';
         scan.next = saved.next_seq;
-        assert(snag_session_each_event_forward(&session, &cursor, SIZE_MAX, forward_event,
-            &scan, error, sizeof(error)) < 0 && scan.next == saved.next_seq);
+        assert(snag_session_each_event_forward(
+                   &session, &cursor, SIZE_MAX, forward_event, &scan, error, sizeof(error)) < 0 &&
+               scan.next == saved.next_seq);
         cursor = saved;
         ++cursor.offset;
-        assert(snag_session_each_event_forward(&session, &cursor, SIZE_MAX, forward_event,
-            &scan, error, sizeof(error)) < 0 && scan.next == saved.next_seq);
+        assert(snag_session_each_event_forward(
+                   &session, &cursor, SIZE_MAX, forward_event, &scan, error, sizeof(error)) < 0 &&
+               scan.next == saved.next_seq);
         if (!phase) {
             assert(snag_session_persist(store, &session, error, sizeof(error)) == 0);
         } else if (phase == 1u) {
@@ -514,22 +512,18 @@ test_history_prefix(struct snag_store *store, const char *cwd)
     snag_session_init(&source);
     snag_session_init(&view);
     snag_session_init(&other);
-    assert(snag_session_create(store, &source, cwd, "default", "model", "high",
-        error, sizeof(error)) == 0);
-    commit_event(&source, "effort_changed",
-        change_data("old_effort", "high", "new_effort", "low"));
+    assert(snag_session_create(
+               store, &source, cwd, "default", "model", "high", error, sizeof(error)) == 0);
+    commit_event(&source, "effort_changed", change_data("old_effort", "high", "new_effort", "low"));
     struct snag_journal_cursor tail = {.offset = source.log_end, .next_seq = source.next_seq};
     memcpy(tail.prev_sha256, source.prev_sha256, sizeof(tail.prev_sha256));
-    assert(snag_session_history_open(store, &source, source.id, &tail,
-        error, sizeof(error)) < 0);
+    assert(snag_session_history_open(store, &source, source.id, &tail, error, sizeof(error)) < 0);
     assert_session_lock_retained(&source, "after refusing an owned history view");
-    assert(snag_session_history_open(store, &view, source.id, &tail,
-        error, sizeof(error)) == 0);
+    assert(snag_session_history_open(store, &view, source.id, &tail, error, sizeof(error)) == 0);
     assert(view.lock_fd < 0 && !view.strings && !view.pending_log && !view.pending_queue);
     assert(snag_seek(view.log_fd, 0, SEEK_SET) == 0 && write(view.log_fd, "!", 1u) < 0);
     /* A live writer can append; neither scan direction adopts its later suffix. */
-    commit_event(&source, "effort_changed",
-        change_data("old_effort", "low", "new_effort", "high"));
+    commit_event(&source, "effort_changed", change_data("old_effort", "low", "new_effort", "high"));
     struct snag_journal_cursor cursor = {0};
     struct forward_scan scan = {.next = 1u};
     while (scan.next < tail.next_seq) {
@@ -537,99 +531,115 @@ test_history_prefix(struct snag_store *store, const char *cwd)
         /* A native batch can contain several logical records at the same
          * physical predecessor; its exact cursor is selected by sequence. */
         if (view.binary)
-            assert(snag_session_history_cursor_before(&view, scan.next, &located,
-                error, sizeof(error)) == 0);
-        else assert(snag_session_history_cursor_at(&view, cursor.offset, &located,
-            error, sizeof(error)) == 0);
+            assert(snag_session_history_cursor_before(
+                       &view, scan.next, &located, error, sizeof(error)) == 0);
+        else
+            assert(snag_session_history_cursor_at(
+                       &view, cursor.offset, &located, error, sizeof(error)) == 0);
         assert(located.offset == cursor.offset && located.next_seq == scan.next);
         struct snag_journal_cursor by_sequence;
-        assert(snag_session_history_cursor_before(&view, scan.next, &by_sequence,
-            error, sizeof(error)) == 0);
+        assert(snag_session_history_cursor_before(
+                   &view, scan.next, &by_sequence, error, sizeof(error)) == 0);
         assert(by_sequence.offset == located.offset && by_sequence.next_seq == located.next_seq &&
-            !strcmp(by_sequence.prev_sha256, located.prev_sha256));
+               !strcmp(by_sequence.prev_sha256, located.prev_sha256));
         if (cursor.next_seq) assert(!strcmp(located.prev_sha256, cursor.prev_sha256));
-        assert(snag_session_each_event_forward(&view, &cursor, 1u, forward_event,
-            &scan, error, sizeof(error)) == 0);
+        assert(snag_session_each_event_forward(
+                   &view, &cursor, 1u, forward_event, &scan, error, sizeof(error)) == 0);
     }
     assert(cursor.offset == tail.offset && !strcmp(cursor.prev_sha256, tail.prev_sha256));
     struct snag_journal_cursor located;
-    assert(snag_session_history_cursor_at(&view, tail.offset, &located,
-        error, sizeof(error)) == 0 && located.next_seq == tail.next_seq &&
-        !strcmp(located.prev_sha256, tail.prev_sha256));
+    assert(
+        snag_session_history_cursor_at(&view, tail.offset, &located, error, sizeof(error)) == 0 &&
+        located.next_seq == tail.next_seq && !strcmp(located.prev_sha256, tail.prev_sha256));
     assert(snag_session_history_cursor_before(&view, 0u, &located, error, sizeof(error)) == 0 &&
-        located.offset == tail.offset && located.next_seq == tail.next_seq);
-    assert(snag_session_history_cursor_before(&view, tail.next_seq + 1u, &located,
-        error, sizeof(error)) < 0 && located.offset == tail.offset &&
-        located.next_seq == tail.next_seq);
+           located.offset == tail.offset && located.next_seq == tail.next_seq);
+    assert(snag_session_history_cursor_before(
+               &view, tail.next_seq + 1u, &located, error, sizeof(error)) < 0 &&
+           located.offset == tail.offset && located.next_seq == tail.next_seq);
     const int64_t invalid_offsets[] = {-1, 1, tail.offset + 1};
     for (size_t i = 0u; i < sizeof(invalid_offsets) / sizeof(invalid_offsets[0]); ++i) {
-        assert(snag_session_history_cursor_at(&view, invalid_offsets[i], &located,
-            error, sizeof(error)) < 0);
+        assert(snag_session_history_cursor_at(
+                   &view, invalid_offsets[i], &located, error, sizeof(error)) < 0);
         assert(located.offset == tail.offset && located.next_seq == tail.next_seq &&
-            !strcmp(located.prev_sha256, tail.prev_sha256));
+               !strcmp(located.prev_sha256, tail.prev_sha256));
     }
-    assert(snag_session_each_event_forward(&view, &cursor, SIZE_MAX, forward_event,
-        &scan, error, sizeof(error)) == 0 && scan.next == tail.next_seq);
+    assert(snag_session_each_event_forward(
+               &view, &cursor, SIZE_MAX, forward_event, &scan, error, sizeof(error)) == 0 &&
+           scan.next == tail.next_seq);
     struct reverse_scan reverse = {.next = tail.next_seq, .limit = SIZE_MAX};
     uint64_t before = 0u;
-    assert(snag_session_each_event_reverse(&view, 0u, SIZE_MAX, reverse_event,
-        &reverse, &before, error, sizeof(error)) == 0);
+    assert(snag_session_each_event_reverse(
+               &view, 0u, SIZE_MAX, reverse_event, &reverse, &before, error, sizeof(error)) == 0);
     assert(!before && reverse.count == tail.next_seq - 1u);
     reverse = (struct reverse_scan){.next = tail.next_seq, .limit = SIZE_MAX};
-    assert(!snag_session_each_event_reverse(&view, 0u, 1u, reverse_event,
-        &reverse, &before, error, sizeof(error)) && reverse.count == 1u && before);
-    assert(!snag_session_history_cursor_before(&view, before, &located,
-        error, sizeof(error)));
+    assert(!snag_session_each_event_reverse(
+               &view, 0u, 1u, reverse_event, &reverse, &before, error, sizeof(error)) &&
+           reverse.count == 1u && before);
+    assert(!snag_session_history_cursor_before(&view, before, &located, error, sizeof(error)));
     assert(view.history_cursor.offset == located.offset &&
-        view.history_cursor.next_seq == located.next_seq &&
-        !strcmp(view.history_cursor.prev_sha256, located.prev_sha256));
+           view.history_cursor.next_seq == located.next_seq &&
+           !strcmp(view.history_cursor.prev_sha256, located.prev_sha256));
     snag_session_close(&view);
     assert_session_lock_retained(&source, "after closing source history view");
     /* Empty prefixes have the genesis hash and expose no events. */
     struct snag_journal_cursor empty = {.next_seq = 1u};
     memset(empty.prev_sha256, '0', SNAG_SHA256_HEX_LEN);
-    assert(snag_session_history_open(store, &view, source.id, &empty,
-        error, sizeof(error)) == 0);
+    assert(snag_session_history_open(store, &view, source.id, &empty, error, sizeof(error)) == 0);
     cursor = (struct snag_journal_cursor){0};
     scan = (struct forward_scan){.next = 1u};
-    assert(snag_session_each_event_forward(&view, &cursor, SIZE_MAX, forward_event,
-        &scan, error, sizeof(error)) == 0 && scan.next == 1u);
+    assert(snag_session_each_event_forward(
+               &view, &cursor, SIZE_MAX, forward_event, &scan, error, sizeof(error)) == 0 &&
+           scan.next == 1u);
     snag_session_close(&view);
     for (unsigned int trial = 0u; trial < 8u; ++trial) {
         struct snag_journal_cursor bad = tail;
         switch (trial) {
-        case 0: --bad.offset; break;
-        case 1: ++bad.offset; break;
-        case 2: ++bad.next_seq; break;
-        case 3: bad.next_seq = 1u; break;
-        case 4: bad.prev_sha256[0] = bad.prev_sha256[0] == '0' ? '1' : '0'; break;
-        case 5: bad.prev_sha256[0] = 'Z'; break;
-        case 6: bad.offset = source.log_end + 1; break;
-        default: bad = empty; bad.prev_sha256[0] = '1'; break;
+        case 0:
+            --bad.offset;
+            break;
+        case 1:
+            ++bad.offset;
+            break;
+        case 2:
+            ++bad.next_seq;
+            break;
+        case 3:
+            bad.next_seq = 1u;
+            break;
+        case 4:
+            bad.prev_sha256[0] = bad.prev_sha256[0] == '0' ? '1' : '0';
+            break;
+        case 5:
+            bad.prev_sha256[0] = 'Z';
+            break;
+        case 6:
+            bad.offset = source.log_end + 1;
+            break;
+        default:
+            bad = empty;
+            bad.prev_sha256[0] = '1';
+            break;
         }
-        assert(snag_session_history_open(store, &view, source.id, &bad,
-            error, sizeof(error)) < 0);
+        assert(snag_session_history_open(store, &view, source.id, &bad, error, sizeof(error)) < 0);
         snag_session_close(&view);
     }
-    assert(snag_session_history_open(store, &view, "12345678", &tail,
-        error, sizeof(error)) < 0 && view.dir_fd < 0);
-    assert(snag_session_create(store, &other, cwd, "default", "model", "high",
-        error, sizeof(error)) == 0);
-    commit_event(&other, "effort_changed",
-        change_data("old_effort", "high", "new_effort", "low"));
-    assert(snag_session_history_open(store, &view, other.id, &tail,
-        error, sizeof(error)) < 0);
+    assert(snag_session_history_open(store, &view, "12345678", &tail, error, sizeof(error)) < 0 &&
+           view.dir_fd < 0);
+    assert(snag_session_create(
+               store, &other, cwd, "default", "model", "high", error, sizeof(error)) == 0);
+    commit_event(&other, "effort_changed", change_data("old_effort", "high", "new_effort", "low"));
+    assert(snag_session_history_open(store, &view, other.id, &tail, error, sizeof(error)) < 0);
     snag_session_close(&view);
     snag_session_close(&other);
     /* An incomplete later write is neither adopted nor repaired by the view. */
     assert(snag_seek(source.log_fd, 0, SEEK_END) == source.log_end);
     assert(write(source.log_fd, "{torn", 5u) == 5);
-    assert(snag_session_history_open(store, &view, source.id, &tail,
-        error, sizeof(error)) == 0);
+    assert(snag_session_history_open(store, &view, source.id, &tail, error, sizeof(error)) == 0);
     cursor = (struct snag_journal_cursor){0};
     scan = (struct forward_scan){.next = 1u};
-    assert(snag_session_each_event_forward(&view, &cursor, SIZE_MAX, forward_event,
-        &scan, error, sizeof(error)) == 0 && scan.next == tail.next_seq);
+    assert(snag_session_each_event_forward(
+               &view, &cursor, SIZE_MAX, forward_event, &scan, error, sizeof(error)) == 0 &&
+           scan.next == tail.next_seq);
     snag_session_close(&view);
     assert(snag_seek(source.log_fd, 0, SEEK_END) == source.log_end + 5);
     assert(snag_truncate(source.log_fd, source.log_end) == 0);
@@ -641,29 +651,27 @@ test_history_prefix(struct snag_store *store, const char *cwd)
     int corrupt = snag_create_private_at(source.dir_fd, journal, false);
     assert(corrupt >= 0 && write(corrupt, "[", 1u) == 1);
     if (source.binary) {
-        assert(snag_session_history_open(store, &view, source.id, &tail,
-            error, sizeof(error)) < 0);
+        assert(snag_session_history_open(store, &view, source.id, &tail, error, sizeof(error)) < 0);
     } else {
-        assert(snag_session_history_open(store, &view, source.id, &tail,
-            error, sizeof(error)) == 0);
+        assert(
+            snag_session_history_open(store, &view, source.id, &tail, error, sizeof(error)) == 0);
         cursor = (struct snag_journal_cursor){0};
         scan = (struct forward_scan){.next = 1u};
-        assert(snag_session_each_event_forward(&view, &cursor, SIZE_MAX, forward_event,
-            &scan, error, sizeof(error)) < 0 && scan.next == 1u);
+        assert(snag_session_each_event_forward(
+                   &view, &cursor, SIZE_MAX, forward_event, &scan, error, sizeof(error)) < 0 &&
+               scan.next == 1u);
     }
     snag_session_close(&view);
     assert(snag_seek(corrupt, 0, SEEK_SET) == 0 && write(corrupt, &original, 1u) == 1);
     assert(close(corrupt) == 0);
 #ifndef _WIN32
     assert(fchmod(source.log_fd, 0644) == 0);
-    assert(snag_session_history_open(store, &view, source.id, &tail,
-        error, sizeof(error)) < 0);
+    assert(snag_session_history_open(store, &view, source.id, &tail, error, sizeof(error)) < 0);
     snag_session_close(&view);
     assert(fchmod(source.log_fd, 0600) == 0);
     assert(renameat(source.dir_fd, journal, source.dir_fd, "history-original") == 0);
     assert(symlinkat("history-original", source.dir_fd, journal) == 0);
-    assert(snag_session_history_open(store, &view, source.id, &tail,
-        error, sizeof(error)) < 0);
+    assert(snag_session_history_open(store, &view, source.id, &tail, error, sizeof(error)) < 0);
     snag_session_close(&view);
     assert(unlinkat(source.dir_fd, journal, 0) == 0);
     assert(renameat(source.dir_fd, "history-original", source.dir_fd, journal) == 0);
@@ -673,12 +681,12 @@ test_history_prefix(struct snag_store *store, const char *cwd)
     tail.offset = source.log_end;
     tail.next_seq = source.next_seq;
     memcpy(tail.prev_sha256, source.prev_sha256, sizeof(tail.prev_sha256));
-    assert(snag_session_history_open(store, &view, source.id, &tail,
-        error, sizeof(error)) == 0);
+    assert(snag_session_history_open(store, &view, source.id, &tail, error, sizeof(error)) == 0);
     cursor = (struct snag_journal_cursor){0};
     scan = (struct forward_scan){.next = 1u};
-    assert(snag_session_each_event_forward(&view, &cursor, SIZE_MAX, forward_event,
-        &scan, error, sizeof(error)) == 0 && scan.next == tail.next_seq);
+    assert(snag_session_each_event_forward(
+               &view, &cursor, SIZE_MAX, forward_event, &scan, error, sizeof(error)) == 0 &&
+           scan.next == tail.next_seq);
     snag_session_close(&view);
     snag_session_close(&source);
 }
@@ -701,8 +709,7 @@ append_during_history(void *opaque, const struct snag_session *state, uint64_t s
     (void)error_size;
     assert(seq < history->next_seq);
     if (!history->events) {
-        commit_event(history->writer, "retry_auto_changed",
-            json_pack("{s:s}", "value", "on"));
+        commit_event(history->writer, "retry_auto_changed", json_pack("{s:s}", "value", "on"));
     }
     ++history->events;
     return 0;
@@ -716,47 +723,50 @@ test_native_history_observe(struct snag_store *store, const char *cwd)
     snag_session_init(&view);
     char error[256];
     bool incomplete = true;
-    assert(!snag_session_create(store, &source, cwd, "default", "history", "high",
-        error, sizeof(error)) && source.binary);
+    assert(!snag_session_create(
+               store, &source, cwd, "default", "history", "high", error, sizeof(error)) &&
+           source.binary);
     struct snag_binary_anchor boundary_only, captured;
     struct snag_binary_index_tree captured_tree;
     struct snag_binary_checkpoint_sources captured_origins = {0};
-    assert(!snag_session_binary_checkpoint_capture(&source, &captured, &captured_tree,
-        &captured_origins, error, sizeof(error)));
-    assert(!snag_session_binary_checkpoint_capture(&source, &boundary_only, NULL, NULL,
-        error, sizeof(error)) && !memcmp(&boundary_only, &captured, sizeof(captured)));
+    assert(!snag_session_binary_checkpoint_capture(
+        &source, &captured, &captured_tree, &captured_origins, error, sizeof(error)));
+    assert(!snag_session_binary_checkpoint_capture(
+               &source, &boundary_only, NULL, NULL, error, sizeof(error)) &&
+           !memcmp(&boundary_only, &captured, sizeof(captured)));
     snag_binary_checkpoint_sources_free(&captured_origins);
-    assert(!snag_session_history_snapshot(store, &view, source.id, &incomplete,
-        error, sizeof(error)) && !incomplete && view.binary && view.snapshot_read_only);
+    assert(!snag_session_history_snapshot(
+               store, &view, source.id, &incomplete, error, sizeof(error)) &&
+           !incomplete && view.binary && view.snapshot_read_only);
     assert(view.log_end == source.log_end && view.next_seq == source.next_seq);
     struct snag_session unchanged = view;
     int64_t position = snag_seek(view.log_fd, 0, SEEK_CUR);
     size_t events = 0u;
     assert(!snag_session_each_event(&view, count_event, &events, error, sizeof(error)));
     assert(events && !memcmp(&view, &unchanged, sizeof(view)) &&
-        snag_seek(view.log_fd, 0, SEEK_CUR) == position);
+           snag_seek(view.log_fd, 0, SEEK_CUR) == position);
     struct growing_history growing = {.writer = &source, .next_seq = view.next_seq};
-    assert(!snag_session_each_event(&view, append_during_history, &growing,
-        error, sizeof(error)));
+    assert(!snag_session_each_event(&view, append_during_history, &growing, error, sizeof(error)));
     assert(growing.events == events && source.log_end > view.log_end &&
-        source.next_seq > view.next_seq && !memcmp(&view, &unchanged, sizeof(view)) &&
-        snag_seek(view.log_fd, 0, SEEK_CUR) == position);
+           source.next_seq > view.next_seq && !memcmp(&view, &unchanged, sizeof(view)) &&
+           snag_seek(view.log_fd, 0, SEEK_CUR) == position);
     struct snag_session replay;
     snag_session_init(&replay);
     struct snag_binary_recovery recovery = {0};
-    assert(snag_store_reconcile_binary(&view, &replay, NULL, NULL, &recovery, NULL,
-        error, sizeof(error)) < 0 && errno == EINVAL);
+    assert(snag_store_reconcile_binary(
+               &view, &replay, NULL, NULL, &recovery, NULL, error, sizeof(error)) < 0 &&
+           errno == EINVAL);
     assert(!memcmp(&view, &unchanged, sizeof(view)) && replay.log_fd < 0);
     struct snag_session untouched = replay;
     struct snag_binary_anchor locked;
     struct snag_binary_index_tree tree;
     struct snag_binary_checkpoint_sources origins = {0};
-    assert(!snag_session_binary_checkpoint_capture(&source, &locked, &tree, &origins,
-        error, sizeof(error)));
+    assert(!snag_session_binary_checkpoint_capture(
+        &source, &locked, &tree, &origins, error, sizeof(error)));
     growing = (struct growing_history){.writer = &source, .next_seq = source.next_seq};
-    assert(snag_store_reconcile_binary_prefix(&source, &replay, &locked,
-        append_during_history, &growing, &recovery, NULL, error, sizeof(error)) < 0 &&
-        errno == EAGAIN && growing.events && source.next_seq > locked.next_seq);
+    assert(snag_store_reconcile_binary_prefix(&source, &replay, &locked, append_during_history,
+               &growing, &recovery, NULL, error, sizeof(error)) < 0 &&
+           errno == EAGAIN && growing.events && source.next_seq > locked.next_seq);
     assert(!memcmp(&replay, &untouched, sizeof(replay)));
     snag_binary_checkpoint_sources_free(&origins);
     snag_session_close(&replay);
@@ -766,13 +776,12 @@ test_native_history_observe(struct snag_store *store, const char *cwd)
     struct snag_journal_cursor cursor = {.offset = 123, .next_seq = 456u};
     struct snag_journal_cursor saved = cursor;
     assert(snag_session_history_cursor_at(&view, 0, &cursor, error, sizeof(error)) < 0 &&
-        errno == ECANCELED && !memcmp(&cursor, &saved, sizeof(cursor)));
+           errno == ECANCELED && !memcmp(&cursor, &saved, sizeof(cursor)));
     view.history_cancel = NULL;
     view.history_cancel_opaque = NULL;
 
     int64_t old_end = view.log_end;
-    commit_event(&source, "effort_changed",
-        change_data("old_effort", "high", "new_effort", "low"));
+    commit_event(&source, "effort_changed", change_data("old_effort", "high", "new_effort", "low"));
     assert(view.log_end == old_end);
     unsigned char original;
     int writer = openat(source.dir_fd, "journal.bin", O_WRONLY | O_CLOEXEC);
@@ -787,11 +796,10 @@ test_native_history_observe(struct snag_store *store, const char *cwd)
     view.history_cancel_opaque = &remaining;
     intact = view;
     assert(snag_session_history_observe(&view, &incomplete, error, sizeof(error)) < 0 &&
-        errno == ECANCELED && !memcmp(&view, &intact, sizeof(view)));
+           errno == ECANCELED && !memcmp(&view, &intact, sizeof(view)));
     view.history_cancel = NULL;
     view.history_cancel_opaque = NULL;
-    assert(!snag_session_history_observe(&view, &incomplete, error, sizeof(error)) &&
-        !incomplete);
+    assert(!snag_session_history_observe(&view, &incomplete, error, sizeof(error)) && !incomplete);
     assert(view.log_end == source.log_end && view.next_seq == source.next_seq);
     struct snag_session before = view;
     struct snag_journal_cursor bad = {.offset = source.log_end, .next_seq = source.next_seq};
@@ -805,20 +813,22 @@ test_native_history_observe(struct snag_store *store, const char *cwd)
     assert(view.log_end == source.log_end && view.next_seq == source.next_seq);
     assert(snag_seek(source.log_fd, 0, SEEK_END) == source.log_end + 7);
     assert(!snag_truncate(source.log_fd, source.log_end));
-    assert(snag_session_commit(&view, "retry_auto_changed", json_pack("{s:s}", "value", "on"),
-        NULL, error, sizeof(error)) < 0 && errno == EROFS);
+    assert(snag_session_commit(&view, "retry_auto_changed", json_pack("{s:s}", "value", "on"), NULL,
+               error, sizeof(error)) < 0 &&
+           errno == EROFS);
     snag_session_close(&view);
     assert(!snag_rename_at(source.dir_fd, "history.idx", source.dir_fd, "history.saved"));
     snag_session_init(&view);
-    assert(!snag_session_history_snapshot(store, &view, source.id, &incomplete,
-        error, sizeof(error)) && !incomplete);
+    assert(!snag_session_history_snapshot(
+               store, &view, source.id, &incomplete, error, sizeof(error)) &&
+           !incomplete);
     cursor = saved;
-    assert(snag_session_history_cursor_before(&view, source.next_seq - 1u, &cursor,
-        error, sizeof(error)) < 0 && errno == ENOENT);
+    assert(snag_session_history_cursor_before(
+               &view, source.next_seq - 1u, &cursor, error, sizeof(error)) < 0 &&
+           errno == ENOENT);
     assert(!memcmp(&cursor, &saved, sizeof(cursor)));
     snag_file_info absent;
-    assert(snag_lstat_at(source.dir_fd, "history.idx", &absent) < 0 &&
-        errno == ENOENT);
+    assert(snag_lstat_at(source.dir_fd, "history.idx", &absent) < 0 && errno == ENOENT);
     snag_session_close(&view);
     assert(!snag_rename_at(source.dir_fd, "history.saved", source.dir_fd, "history.idx"));
     snag_session_close(&source);
@@ -832,19 +842,19 @@ test_history_snapshot_refresh(struct snag_store *store, const char *cwd)
     bool incomplete = true;
     snag_session_init(&source);
     snag_session_init(&view);
-    assert(legacy_fixture_create(store, &source, cwd, "default", "model", "high",
-        error, sizeof(error)) == 0);
-    assert(snag_session_history_snapshot(store, &source, source.id, &incomplete,
-        error, sizeof(error)) < 0);
+    assert(legacy_fixture_create(
+               store, &source, cwd, "default", "model", "high", error, sizeof(error)) == 0);
+    assert(snag_session_history_snapshot(
+               store, &source, source.id, &incomplete, error, sizeof(error)) < 0);
     assert_session_lock_retained(&source, "after refusing owned snapshot");
-    assert(snag_session_history_snapshot(store, &view, source.id, &incomplete,
-        error, sizeof(error)) == 0 && !incomplete);
+    assert(snag_session_history_snapshot(
+               store, &view, source.id, &incomplete, error, sizeof(error)) == 0 &&
+           !incomplete);
     assert(view.log_end == source.log_end && view.next_seq == source.next_seq);
     assert(view.lock_fd < 0 && !view.strings && !view.pending_log);
     struct snag_journal_cursor original = {.offset = view.log_end, .next_seq = view.next_seq};
     memcpy(original.prev_sha256, view.prev_sha256, sizeof(original.prev_sha256));
-    commit_event(&source, "effort_changed",
-        change_data("old_effort", "high", "new_effort", "low"));
+    commit_event(&source, "effort_changed", change_data("old_effort", "high", "new_effort", "low"));
     struct snag_journal_cursor tail = {.offset = source.log_end, .next_seq = source.next_seq};
     memcpy(tail.prev_sha256, source.prev_sha256, sizeof(tail.prev_sha256));
     assert(snag_session_history_refresh(&source, &tail, error, sizeof(error)) < 0);
@@ -853,31 +863,33 @@ test_history_snapshot_refresh(struct snag_store *store, const char *cwd)
     bad.prev_sha256[0] = bad.prev_sha256[0] == '0' ? '1' : '0';
     assert(snag_session_history_refresh(&view, &bad, error, sizeof(error)) < 0);
     assert(view.log_end == original.offset && view.next_seq == original.next_seq &&
-        !strcmp(view.prev_sha256, original.prev_sha256));
+           !strcmp(view.prev_sha256, original.prev_sha256));
     assert(snag_session_history_observe(&source, &incomplete, error, sizeof(error)) < 0);
-    assert(snag_session_history_observe(&view, &incomplete, error, sizeof(error)) == 0 &&
-        !incomplete);
+    assert(
+        snag_session_history_observe(&view, &incomplete, error, sizeof(error)) == 0 && !incomplete);
     assert(view.log_end == tail.offset && view.next_seq == tail.next_seq &&
-        !strcmp(view.prev_sha256, tail.prev_sha256));
+           !strcmp(view.prev_sha256, tail.prev_sha256));
     assert(snag_session_history_refresh(&view, &tail, error, sizeof(error)) == 0);
     assert(snag_session_history_refresh(&view, &original, error, sizeof(error)) < 0 &&
-        errno == ESTALE);
+           errno == ESTALE);
     struct snag_journal_cursor cursor = original;
     struct forward_scan scan = {.next = original.next_seq};
-    assert(snag_session_each_event_forward(&view, &cursor, SIZE_MAX, forward_event,
-        &scan, error, sizeof(error)) == 0 && scan.next == tail.next_seq);
+    assert(snag_session_each_event_forward(
+               &view, &cursor, SIZE_MAX, forward_event, &scan, error, sizeof(error)) == 0 &&
+           scan.next == tail.next_seq);
     snag_session_close(&view);
     assert(write(source.log_fd, "{unfinished", 11u) == 11);
-    assert(snag_session_history_snapshot(store, &view, source.id, &incomplete,
-        error, sizeof(error)) == 0 && incomplete);
+    assert(snag_session_history_snapshot(
+               store, &view, source.id, &incomplete, error, sizeof(error)) == 0 &&
+           incomplete);
     assert(view.log_end == tail.offset && view.next_seq == tail.next_seq);
     assert(snag_seek(source.log_fd, 0, SEEK_END) == tail.offset + 11);
-    assert(snag_session_history_observe(&view, &incomplete, error, sizeof(error)) == 0 &&
-        incomplete);
+    assert(
+        snag_session_history_observe(&view, &incomplete, error, sizeof(error)) == 0 && incomplete);
     assert(snag_seek(source.log_fd, 0, SEEK_END) == tail.offset + 11);
     assert(snag_truncate(source.log_fd, tail.offset) == 0);
-    assert(snag_session_history_observe(&view, &incomplete, error, sizeof(error)) == 0 &&
-        !incomplete);
+    assert(
+        snag_session_history_observe(&view, &incomplete, error, sizeof(error)) == 0 && !incomplete);
     assert(snag_session_history_refresh(&view, &tail, error, sizeof(error)) == 0);
     /* Replacement with even an identical prefix invalidates cached page identity. */
     assert(renameat(source.dir_fd, "events.jsonl", source.dir_fd, "original-events") == 0);
@@ -890,7 +902,7 @@ test_history_snapshot_refresh(struct snag_store *store, const char *cwd)
     free(bytes);
     assert(snag_session_history_refresh(&view, &tail, error, sizeof(error)) < 0 && errno == ESTALE);
     assert(snag_session_history_observe(&view, &incomplete, error, sizeof(error)) < 0 &&
-        errno == ESTALE);
+           errno == ESTALE);
     assert(unlinkat(source.dir_fd, "events.jsonl", 0) == 0);
     assert(renameat(source.dir_fd, "original-events", source.dir_fd, "events.jsonl") == 0);
     assert(snag_session_history_refresh(&view, &tail, error, sizeof(error)) == 0);
@@ -899,8 +911,9 @@ test_history_snapshot_refresh(struct snag_store *store, const char *cwd)
     assert(snag_session_history_refresh(&view, &tail, error, sizeof(error)) < 0 && errno == ESTALE);
     snag_session_close(&view);
     assert(write(source.log_fd, "{unfinished", 11u) == 11);
-    assert(snag_session_history_snapshot(store, &view, source.id, &incomplete,
-        error, sizeof(error)) == 0 && incomplete && !view.log_end && view.next_seq == 1u);
+    assert(snag_session_history_snapshot(
+               store, &view, source.id, &incomplete, error, sizeof(error)) == 0 &&
+           incomplete && !view.log_end && view.next_seq == 1u);
     assert(snag_seek(source.log_fd, 0, SEEK_END) == 11);
     snag_session_close(&view);
     assert_session_lock_retained(&source, "after snapshot and refresh");
@@ -913,44 +926,46 @@ test_reverse_history(struct snag_store *store, const char *cwd)
     struct snag_session session;
     char error[256], id[SNAG_ID_HEX_LEN + 1u];
     snag_session_init(&session);
-    assert(snag_session_prepare(&session, cwd, "default", "model", "high",
-        error, sizeof(error)) == 0);
+    assert(
+        snag_session_prepare(&session, cwd, "default", "model", "high", error, sizeof(error)) == 0);
     memcpy(id, session.id, sizeof(id));
     for (size_t i = 0u; i < 140u; ++i)
-        commit_event(&session, "effort_changed", change_data("old_effort",
-            i % 2u ? "low" : "high", "new_effort", i % 2u ? "high" : "low"));
+        commit_event(&session, "effort_changed",
+            change_data(
+                "old_effort", i % 2u ? "low" : "high", "new_effort", i % 2u ? "high" : "low"));
     for (size_t phase = 0u; phase < 3u; ++phase) {
         uint64_t next, original_seq = session.next_seq;
         int64_t original_end = session.log_end;
         struct reverse_scan scan = {.next = original_seq, .limit = SIZE_MAX};
-        assert(snag_session_each_event_reverse(&session, 0u, SIZE_MAX, reverse_event,
-            &scan, &next, error, sizeof(error)) == 0);
+        assert(snag_session_each_event_reverse(
+                   &session, 0u, SIZE_MAX, reverse_event, &scan, &next, error, sizeof(error)) == 0);
         assert(!next && scan.count == original_seq - 1u && scan.next == 1u);
         /* Exercise every binary-search boundary without the derived cursor. */
         for (uint64_t before = 2u; before < original_seq; ++before) {
             session.history_cursor = (struct snag_journal_cursor){0};
             scan = (struct reverse_scan){.next = before, .limit = SIZE_MAX};
-            assert(snag_session_each_event_reverse(&session, before, 1u, reverse_event,
-                &scan, &next, error, sizeof(error)) == 0);
+            assert(snag_session_each_event_reverse(&session, before, 1u, reverse_event, &scan,
+                       &next, error, sizeof(error)) == 0);
             assert(scan.count == 1u && scan.next == before - 1u);
             assert(next == (before == 2u ? 0u : before - 1u));
         }
         /* A callback pause leaves the unreturned record eligible. */
         scan = (struct reverse_scan){.next = original_seq, .limit = 2u};
-        assert(snag_session_each_event_reverse(&session, 0u, SIZE_MAX, reverse_event,
-            &scan, &next, error, sizeof(error)) == 0);
+        assert(snag_session_each_event_reverse(
+                   &session, 0u, SIZE_MAX, reverse_event, &scan, &next, error, sizeof(error)) == 0);
         assert(next == original_seq - 2u && scan.count == 2u);
         struct snag_journal_cursor saved = session.history_cursor;
         scan = (struct reverse_scan){.next = next, .limit = SIZE_MAX, .cancel = true};
         uint64_t resume = next;
-        assert(snag_session_each_event_reverse(&session, resume, 1u, reverse_event,
-            &scan, &next, error, sizeof(error)) < 0 && errno == ECANCELED);
+        assert(snag_session_each_event_reverse(
+                   &session, resume, 1u, reverse_event, &scan, &next, error, sizeof(error)) < 0 &&
+               errno == ECANCELED);
         assert(saved.offset == session.history_cursor.offset &&
-            saved.next_seq == session.history_cursor.next_seq &&
-            !strcmp(saved.prev_sha256, session.history_cursor.prev_sha256));
+               saved.next_seq == session.history_cursor.next_seq &&
+               !strcmp(saved.prev_sha256, session.history_cursor.prev_sha256));
         scan.cancel = false;
-        assert(snag_session_each_event_reverse(&session, resume, 1u, reverse_event,
-            &scan, &next, error, sizeof(error)) == 0);
+        assert(snag_session_each_event_reverse(
+                   &session, resume, 1u, reverse_event, &scan, &next, error, sizeof(error)) == 0);
         assert(next == resume - 1u && scan.count == 1u);
         assert(session.next_seq == original_seq && session.log_end == original_end);
         if (!phase) {
@@ -969,17 +984,19 @@ test_reverse_history(struct snag_store *store, const char *cwd)
     assert(pwrite(writer, "X", 1u, session.checkpoint_offset) == 1);
     struct reverse_scan scan = {.next = session.next_seq, .limit = SIZE_MAX};
     uint64_t next;
-    assert(snag_session_each_event_reverse(&session, 0u, 1u, reverse_event,
-        &scan, &next, error, sizeof(error)) < 0 && !scan.count);
+    assert(snag_session_each_event_reverse(
+               &session, 0u, 1u, reverse_event, &scan, &next, error, sizeof(error)) < 0 &&
+           !scan.count);
     assert(pwrite(writer, &original, 1u, session.checkpoint_offset) == 1);
     assert(close(writer) == 0);
-    assert(snag_session_each_event_reverse(&session, 0u, 1u, reverse_event,
-        &scan, &next, error, sizeof(error)) == 0 && scan.count == 1u);
+    assert(snag_session_each_event_reverse(
+               &session, 0u, 1u, reverse_event, &scan, &next, error, sizeof(error)) == 0 &&
+           scan.count == 1u);
     snag_session_close(&session);
 
     /* A self-consistent suffix is not the beginning of a complete journal. */
-    assert(legacy_fixture_create(store, &session, cwd, "default", "model", "high",
-        error, sizeof(error)) == 0);
+    assert(legacy_fixture_create(
+               store, &session, cwd, "default", "model", "high", error, sizeof(error)) == 0);
     writer = openat(session.dir_fd, "events.jsonl", O_WRONLY | O_TRUNC | O_CLOEXEC);
     assert(writer >= 0);
     char hash[SNAG_SHA256_HEX_LEN + 1u];
@@ -994,8 +1011,9 @@ test_reverse_history(struct snag_store *store, const char *cwd)
     session.next_seq = 4u;
     memcpy(session.prev_sha256, hash, sizeof(hash));
     scan = (struct reverse_scan){.next = session.next_seq, .limit = SIZE_MAX};
-    assert(snag_session_each_event_reverse(&session, 0u, SIZE_MAX, reverse_event,
-        &scan, &next, error, sizeof(error)) < 0 && scan.count == 1u);
+    assert(snag_session_each_event_reverse(
+               &session, 0u, SIZE_MAX, reverse_event, &scan, &next, error, sizeof(error)) < 0 &&
+           scan.count == 1u);
     snag_session_close(&session);
 }
 
@@ -1014,8 +1032,8 @@ test_legacy_journal(struct snag_store *store, const char *cwd)
     assert(snprintf(agent_path, sizeof(agent_path), "%s/AGENTS.md", cwd) > 0);
 
     snag_session_init(&session);
-    assert(legacy_fixture_create(store, &session, cwd, "default", "model", "high",
-                               error, sizeof(error)) == 0);
+    assert(legacy_fixture_create(
+               store, &session, cwd, "default", "model", "high", error, sizeof(error)) == 0);
     memcpy(id, session.id, sizeof(id));
     snag_session_close(&session);
 
@@ -1027,27 +1045,26 @@ test_legacy_journal(struct snag_store *store, const char *cwd)
     hash[SNAG_SHA256_HEX_LEN] = '\0';
     /* Format 2: the removed workspace field is the session's directory. */
     legacy_event(fd, id, 1u, hash, "session_created",
-        checked_json(json_pack("{s:s,s:s,s:s,s:i,s:s,s:s}",
-            "default_effort", "high", "default_model", "model", "default_provider", "default",
-            "format", 2, "protocol", "responses", "workspace", cwd)));
+        checked_json(json_pack("{s:s,s:s,s:s,s:i,s:s,s:s}", "default_effort", "high",
+            "default_model", "model", "default_provider", "default", "format", 2, "protocol",
+            "responses", "workspace", cwd)));
     /* Workspace-era turn: no read_only, no per-turn execution limits and
        object-shaped instruction metadata. */
     legacy_event(fd, id, 2u, hash, "turn_started",
         checked_json(json_pack(
             "{s:{s:s,s:s,s:s,s:s,s:s,s:i,s:i,s:i},s:s,s:[{s:i,s:s,s:s}],s:n,s:n,s:s,s:s,s:i,s:s}",
-            "config", "capability_version", SNAJPAGENT_CAPABILITY_VERSION,
-            "effort", "high", "model", "model", "provider", "default",
-            "profile_id", SNAJPAGENT_PROFILE_ID, "prompt_schema", 1, "replay_schema", 1,
-            "tool_schema", 1, "input_kind", "direct",
-            "instructions", "bytes", 16298, "path", agent_path, "sha256", sha,
-            "queue_id", "queue_seq", "text", "legacy", "turn_id", turn_id,
-            "turn_number", 1, "workspace", cwd)));
+            "config", "capability_version", SNAJPAGENT_CAPABILITY_VERSION, "effort", "high",
+            "model", "model", "provider", "default", "profile_id", SNAJPAGENT_PROFILE_ID,
+            "prompt_schema", 1, "replay_schema", 1, "tool_schema", 1, "input_kind", "direct",
+            "instructions", "bytes", 16298, "path", agent_path, "sha256", sha, "queue_id",
+            "queue_seq", "text", "legacy", "turn_id", turn_id, "turn_number", 1, "workspace",
+            cwd)));
     /* A record whose historical shape is no longer reconstructible contributes
        no state instead of making the session unloadable. */
     legacy_event(fd, id, 3u, hash, "tool_finished",
-        checked_json(json_pack("{s:s,s:{s:s,s:s},s:s}",
-            "call_id", "fedcba9876543210fedcba9876543210",
-            "result", "status", "running", "handle", turn_id, "turn_id", turn_id)));
+        checked_json(
+            json_pack("{s:s,s:{s:s,s:s},s:s}", "call_id", "fedcba9876543210fedcba9876543210",
+                "result", "status", "running", "handle", turn_id, "turn_id", turn_id)));
     assert(close(fd) == 0);
     assert(close(dir) == 0);
 
@@ -1062,8 +1079,8 @@ test_legacy_journal(struct snag_store *store, const char *cwd)
     assert(!session.active_read_only);
     struct reverse_scan scan = {.next = session.next_seq, .limit = SIZE_MAX};
     uint64_t next;
-    assert(snag_session_each_event_reverse(&session, 0u, SIZE_MAX, reverse_event,
-        &scan, &next, error, sizeof(error)) == 0);
+    assert(snag_session_each_event_reverse(
+               &session, 0u, SIZE_MAX, reverse_event, &scan, &next, error, sizeof(error)) == 0);
     assert(!next && scan.count == session.next_seq - 1u);
     snag_session_close(&session);
 }
@@ -1078,21 +1095,23 @@ test_pending_session(struct snag_store *store, const char *cwd)
     int64_t end;
 
     snag_session_init(&session);
-    assert(snag_session_prepare(&session, cwd, "default", "model", "high",
-        error, sizeof(error)) == 0);
+    assert(
+        snag_session_prepare(&session, cwd, "default", "model", "high", error, sizeof(error)) == 0);
     memcpy(id, session.id, sizeof(id));
     assert(session.pending_log && session.log_fd == -1 && session.dir_fd == -1);
     assert(fstatat(store->sessions_fd, id, &st, 0) < 0 && errno == ENOENT);
     snag_session_close(&session);
     assert(fstatat(store->sessions_fd, id, &st, 0) < 0 && errno == ENOENT);
 
-    assert(snag_session_prepare(&session, cwd, "default", "model", "high",
-        error, sizeof(error)) == 0);
-    assert(snag_session_commit(&session, "model_selection_changed", json_pack("{s:s,s:s,s:s,s:s,s:s,s:s}",
-                  "old_provider", "default", "new_provider", "default",
-                  "old_model", "model", "new_model", "selected",
-                  "old_effort", "high", "new_effort", "low"), NULL, error, sizeof(error)) == 0);
-    assert(snag_session_each_event(&session, count_event, &count, error, sizeof(error)) == 0 && count == 2u);
+    assert(
+        snag_session_prepare(&session, cwd, "default", "model", "high", error, sizeof(error)) == 0);
+    assert(snag_session_commit(&session, "model_selection_changed",
+               json_pack("{s:s,s:s,s:s,s:s,s:s,s:s}", "old_provider", "default", "new_provider",
+                   "default", "old_model", "model", "new_model", "selected", "old_effort", "high",
+                   "new_effort", "low"),
+               NULL, error, sizeof(error)) == 0);
+    assert(snag_session_each_event(&session, count_event, &count, error, sizeof(error)) == 0 &&
+           count == 2u);
     memcpy(id, session.id, sizeof(id));
     end = session.log_end;
     /* Failed publication must leave the complete in-memory session retryable. */
@@ -1114,7 +1133,8 @@ test_pending_session(struct snag_store *store, const char *cwd)
     assert(strcmp(session.default_model, "selected") == 0);
     assert(strcmp(session.default_effort, "low") == 0);
     count = 0u;
-    assert(snag_session_each_event(&session, count_event, &count, error, sizeof(error)) == 0 && count == 2u);
+    assert(snag_session_each_event(&session, count_event, &count, error, sizeof(error)) == 0 &&
+           count == 2u);
     int history = openat(session.dir_fd, "prompt_history", O_CREAT | O_WRONLY, 0600);
     assert(history >= 0 && write(history, "session-only\n", 13u) == 13);
     assert(close(history) == 0);
@@ -1135,12 +1155,12 @@ test_upload_staging_lifecycle(struct snag_store *store, const char *cwd)
     struct stat st;
 
     snag_session_init(&session);
-    assert(snag_session_prepare(&session, cwd, "default", "model", "high",
-                                error, sizeof(error)) == 0);
+    assert(
+        snag_session_prepare(&session, cwd, "default", "model", "high", error, sizeof(error)) == 0);
     assert(snag_session_persist(store, &session, error, sizeof(error)) == 0);
     memcpy(id, session.id, sizeof(id));
-    assert(snag_media_save(session.dir_fd, "retained", 8u, "application/octet-stream",
-                           &asset, error, sizeof(error)) == 0);
+    assert(snag_media_save(session.dir_fd, "retained", 8u, "application/octet-stream", &asset,
+               error, sizeof(error)) == 0);
     assert(mkdirat(session.dir_fd, stage, 0700) == 0);
     stage_fd = openat(session.dir_fd, stage, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
     assert(stage_fd >= 0);
@@ -1189,18 +1209,19 @@ test_goal_wait_channel(struct snag_store *store, const char *cwd)
     char error[256], id[SNAG_ID_HEX_LEN + 1u];
     const char *goal = "12121212121212121212121212121212";
     snag_session_init(&session);
-    assert(!snag_session_create(store, &session, cwd, "default", "model", "high",
-        error, sizeof(error)));
+    assert(!snag_session_create(
+        store, &session, cwd, "default", "model", "high", error, sizeof(error)));
     memcpy(id, session.id, sizeof(id));
     commit_event(&session, "goal_started", goal_started_data(goal, "wait for the reply"));
     int64_t end = session.log_end;
-    assert(snag_session_commit(&session, "goal_blocked", json_pack("{s:s,s:s,s:s,s:s}",
-        "goal_id", goal, "actor", "model", "reason", "reply missing",
-        "wait_for", "irc: missing-peer"), NULL, error, sizeof(error)) < 0);
+    assert(snag_session_commit(&session, "goal_blocked",
+               json_pack("{s:s,s:s,s:s,s:s}", "goal_id", goal, "actor", "model", "reason",
+                   "reply missing", "wait_for", "irc: missing-peer"),
+               NULL, error, sizeof(error)) < 0);
     assert(session.log_end == end && session.goal_status == SNAG_GOAL_ACTIVE);
-    commit_event(&session, "goal_blocked", json_pack("{s:s,s:s,s:s,s:s}",
-        "goal_id", goal, "actor", "model", "reason", "reply missing",
-        "wait_for", "irc: team/secretary"));
+    commit_event(&session, "goal_blocked",
+        json_pack("{s:s,s:s,s:s,s:s}", "goal_id", goal, "actor", "model", "reason", "reply missing",
+            "wait_for", "irc: team/secretary"));
     assert(!strcmp(snag_goal_wait_for(&session), "irc: team/secretary"));
     json_t *state = snag_checkpoint_state_encode(&session);
     assert(state && !snag_checkpoint_state_decode(state, &restored));
@@ -1213,8 +1234,8 @@ test_goal_wait_channel(struct snag_store *store, const char *cwd)
     assert(session.checkpoint_seq && !strcmp(snag_goal_wait_for(&session), "irc: team/secretary"));
     commit_event(&session, "goal_resumed", json_pack("{s:s}", "goal_id", goal));
     assert(!json_object_get(session.strings, "goal_wait_for"));
-    commit_event(&session, "goal_blocked",
-        goal_reason_data(goal, "model", "reason", "old blocker"));
+    commit_event(
+        &session, "goal_blocked", goal_reason_data(goal, "model", "reason", "old blocker"));
     assert(strstr(snag_goal_wait_for(&session), "unspecified"));
     state = snag_checkpoint_state_encode(&session);
     assert(state && !snag_checkpoint_state_decode(state, &restored));
@@ -1234,8 +1255,8 @@ test_retry_and_service_tier(struct snag_store *store, const char *cwd)
     struct snag_session session, restored;
     char error[256], id[SNAG_ID_HEX_LEN + 1u];
     snag_session_init(&session);
-    assert(snag_session_create(store, &session, cwd, "default", "model", "high",
-        error, sizeof(error)) == 0);
+    assert(snag_session_create(
+               store, &session, cwd, "default", "model", "high", error, sizeof(error)) == 0);
     memcpy(id, session.id, sizeof(id));
     json_t *state = snag_checkpoint_state_encode(&session);
     assert(state && snag_checkpoint_state_decode(state, &restored) == 0);
@@ -1252,20 +1273,20 @@ test_retry_and_service_tier(struct snag_store *store, const char *cwd)
     assert(!strcmp(session.retry_auto, "off"));
     int64_t end = session.log_end;
     assert(snag_session_commit(&session, "retry_auto_changed",
-        json_pack("{s:s}", "value", "unknown"), NULL, error, sizeof(error)) < 0);
+               json_pack("{s:s}", "value", "unknown"), NULL, error, sizeof(error)) < 0);
     assert(session.log_end == end && !strcmp(session.retry_auto, "off"));
     assert(snag_session_commit(&session, "service_tier_changed",
-        json_pack("{s:s}", "value", "unknown"), NULL, error, sizeof(error)) < 0);
+               json_pack("{s:s}", "value", "unknown"), NULL, error, sizeof(error)) < 0);
     assert(session.log_end == end && !strcmp(session.service_tier, "priority"));
     state = snag_checkpoint_state_encode(&session);
-    assert(state && json_object_set_new(state, "strings",
-        json_copy(json_object_get(state, "strings"))) == 0);
-    assert(json_object_set_new(json_object_get(state, "strings"),
-        "service_tier", json_true()) == 0);
+    assert(state && json_object_set_new(
+                        state, "strings", json_copy(json_object_get(state, "strings"))) == 0);
+    assert(
+        json_object_set_new(json_object_get(state, "strings"), "service_tier", json_true()) == 0);
     assert(snag_checkpoint_state_decode(state, &restored) < 0);
     snag_session_close(&restored);
-    assert(json_object_set_new(json_object_get(state, "strings"),
-        "service_tier", json_string("priority")) == 0);
+    assert(json_object_set_new(
+               json_object_get(state, "strings"), "service_tier", json_string("priority")) == 0);
     assert(json_object_set_new(json_object_get(state, "strings"), "retry_auto", json_true()) == 0);
     assert(snag_checkpoint_state_decode(state, &restored) < 0);
     snag_session_close(&restored);
@@ -1301,17 +1322,23 @@ test_irc_conversation_checkpoint(struct snag_store *store, const char *cwd)
 {
     struct snag_session session;
     char error[256], id[SNAG_ID_HEX_LEN + 1u];
-    struct snag_irc_event event = {.routed = true, .kind = SNAG_IRC_MESSAGE,
-        .timestamp_ms = 1u, .endpoint = "localhost:6667", .nick = "peer",
-        .text = "operator private message", .route = {
-            .connection = "11111111111111111111111111111111",
+    struct snag_irc_event event = {.routed = true,
+        .kind = SNAG_IRC_MESSAGE,
+        .timestamp_ms = 1u,
+        .endpoint = "localhost:6667",
+        .nick = "peer",
+        .text = "operator private message",
+        .route = {.connection = "11111111111111111111111111111111",
             .conversation = "22222222222222222222222222222222",
-            .generation = 1u, .identity = SNAG_IRC_OPERATOR, .kind = SNAG_IRC_QUERY,
-            .peer = "peer", .target = "operator"}};
+            .generation = 1u,
+            .identity = SNAG_IRC_OPERATOR,
+            .kind = SNAG_IRC_QUERY,
+            .peer = "peer",
+            .target = "operator"}};
 
     snag_session_init(&session);
-    assert(snag_session_create(store, &session, cwd, "default", "model", "default",
-        error, sizeof(error)) == 0);
+    assert(snag_session_create(
+               store, &session, cwd, "default", "model", "default", error, sizeof(error)) == 0);
     memcpy(id, session.id, sizeof(id));
     commit_event(&session, "irc_event_v2", snag_irc_event_data(&event));
     assert(!session.irc_received_seq && !session.irc_message_count);
@@ -1321,8 +1348,8 @@ test_irc_conversation_checkpoint(struct snag_store *store, const char *cwd)
     strcpy(event.route.peer, "renamed");
     strcpy(event.text, "renamed");
     commit_event(&session, "irc_event_v2", snag_irc_event_data(&event));
-    const json_t *activity = json_object_get(json_object_get(session.irc_activity, "items"),
-        conversation);
+    const json_t *activity =
+        json_object_get(json_object_get(session.irc_activity, "items"), conversation);
     assert(json_integer_value(json_object_get(activity, "received")) == 1);
     assert(json_integer_value(json_object_get(activity, "incoming")) == (json_int_t)first);
     assert(json_integer_value(json_object_get(activity, "seq")) == (json_int_t)first);
@@ -1339,21 +1366,23 @@ test_irc_conversation_checkpoint(struct snag_store *store, const char *cwd)
     assert(snag_checkpoint_state_decode(old_state, &legacy) == 0);
     assert(!legacy.irc_activity && legacy.irc_conversations);
     json_t *gap = snag_irc_activity_update(NULL, &event, legacy.next_seq, legacy.next_seq - 1u);
-    assert(gap && json_integer_value(json_object_get(gap, "after")) ==
-        (json_int_t)(legacy.next_seq - 1u));
+    assert(gap &&
+           json_integer_value(json_object_get(gap, "after")) == (json_int_t)(legacy.next_seq - 1u));
     json_decref(gap);
     json_decref(old_state);
     snag_session_close(&legacy);
-    assert(snag_session_each_event(&session, irc_checkpoint_revision, NULL,
-        error, sizeof(error)) == 0);
-    assert(snag_session_commit(&session, "session_checkpoint", json_pack(
-        "{s:O,s:n,s:i,s:i}", "state", before, "context", "snapshot_v", 1, "format", 4),
-        NULL, error, sizeof(error)) < 0);
+    assert(snag_session_each_event(&session, irc_checkpoint_revision, NULL, error, sizeof(error)) ==
+           0);
+    assert(snag_session_commit(&session, "session_checkpoint",
+               json_pack(
+                   "{s:O,s:n,s:i,s:i}", "state", before, "context", "snapshot_v", 1, "format", 4),
+               NULL, error, sizeof(error)) < 0);
     json_t *damaged = json_deep_copy(before);
     assert(damaged && json_object_del(damaged, "irc_conversations") == 0);
-    assert(snag_session_commit(&session, "session_checkpoint", json_pack(
-        "{s:o,s:n,s:i,s:i}", "state", damaged, "context", "snapshot_v", 3, "format", 4),
-        NULL, error, sizeof(error)) < 0);
+    assert(snag_session_commit(&session, "session_checkpoint",
+               json_pack(
+                   "{s:o,s:n,s:i,s:i}", "state", damaged, "context", "snapshot_v", 3, "format", 4),
+               NULL, error, sizeof(error)) < 0);
 
     /* The staged directory must roll back with a failed durable append. */
     struct rlimit saved, limited;
@@ -1364,29 +1393,27 @@ test_irc_conversation_checkpoint(struct snag_store *store, const char *cwd)
     void (*old)(int) = signal(SIGXFSZ, SIG_IGN);
     assert(old != SIG_ERR && setrlimit(RLIMIT_FSIZE, &limited) == 0);
     strcpy(event.text, "failed append");
-    int failed = snag_session_commit(&session, "irc_event_v2", snag_irc_event_data(&event),
-        NULL, error, sizeof(error));
+    int failed = snag_session_commit(
+        &session, "irc_event_v2", snag_irc_event_data(&event), NULL, error, sizeof(error));
     assert(setrlimit(RLIMIT_FSIZE, &saved) == 0 && signal(SIGXFSZ, old) != SIG_ERR);
     assert(failed < 0 && session.log_end == end &&
-        json_equal(session.irc_conversations, json_object_get(before, "irc_conversations")));
+           json_equal(session.irc_conversations, json_object_get(before, "irc_conversations")));
     assert(json_equal(session.irc_activity, json_object_get(before, "irc_activity")));
     /* The native worker retains its exact unacknowledged transaction. Retry
      * that event after the test-owned file limit is lifted before new work. */
-    if (session.binary)
-        commit_event(&session, "irc_event_v2", snag_irc_event_data(&event));
+    if (session.binary) commit_event(&session, "irc_event_v2", snag_irc_event_data(&event));
     strcpy(event.text, "after checkpoint");
     commit_event(&session, "irc_event_v2", snag_irc_event_data(&event));
     json_t *after = snag_checkpoint_state_encode(&session);
     assert(after && !json_equal(json_object_get(before, "irc_conversations"),
-        json_object_get(after, "irc_conversations")));
+                        json_object_get(after, "irc_conversations")));
     activity = json_object_get(json_object_get(session.irc_activity, "items"), conversation);
-    assert(json_integer_value(json_object_get(activity, "received")) ==
-        (session.binary ? 3 : 2));
+    assert(json_integer_value(json_object_get(activity, "received")) == (session.binary ? 3 : 2));
     assert(json_integer_value(json_object_get(activity, "incoming")) ==
-        (json_int_t)(session.next_seq - 1u));
+           (json_int_t)(session.next_seq - 1u));
     json_t *bad_state = json_deep_copy(after);
-    json_t *bad_activity = json_object_get(json_object_get(
-        json_object_get(bad_state, "irc_activity"), "items"), conversation);
+    json_t *bad_activity = json_object_get(
+        json_object_get(json_object_get(bad_state, "irc_activity"), "items"), conversation);
     assert(json_object_set_new(bad_activity, "received", json_integer(INT64_MAX)) == 0);
     snag_session_init(&legacy);
     assert(snag_checkpoint_state_decode(bad_state, &legacy) < 0);
@@ -1409,10 +1436,9 @@ test_irc_conversation_checkpoint(struct snag_store *store, const char *cwd)
     commit_event(&session, "irc_event_v2", snag_irc_event_data(&event));
     event.historical = false;
     activity = json_object_get(json_object_get(session.irc_activity, "items"), conversation);
-    assert(json_integer_value(json_object_get(activity, "received")) ==
-        (session.binary ? 3 : 2));
+    assert(json_integer_value(json_object_get(activity, "received")) == (session.binary ? 3 : 2));
     assert(json_integer_value(json_object_get(activity, "seq")) ==
-        (json_int_t)(session.next_seq - 2u));
+           (json_int_t)(session.next_seq - 2u));
     json_decref(after);
     after = snag_checkpoint_state_encode(&session);
     assert(after);
@@ -1420,19 +1446,22 @@ test_irc_conversation_checkpoint(struct snag_store *store, const char *cwd)
     /* A conversation cannot silently acquire another local identity. */
     event.route.identity = SNAG_IRC_AGENT;
     uint64_t next = session.next_seq;
-    assert(snag_session_commit(&session, "irc_event_v2", snag_irc_event_data(&event),
-        NULL, error, sizeof(error)) < 0 && session.next_seq == next);
+    assert(snag_session_commit(&session, "irc_event_v2", snag_irc_event_data(&event), NULL, error,
+               sizeof(error)) < 0 &&
+           session.next_seq == next);
     snag_session_close(&session);
     snag_session_init(&session);
     assert(snag_session_open(store, &session, id, error, sizeof(error)) == 0);
     json_t *restored = snag_checkpoint_state_encode(&session);
     assert(restored && json_equal(json_object_get(after, "irc_conversations"),
-        json_object_get(restored, "irc_conversations")));
-    assert(json_equal(json_object_get(after, "irc_activity"),
-        json_object_get(restored, "irc_activity")));
-    if (session.binary) assert(!session.checkpoint_state && session.checkpoint_seq);
-    else assert(json_equal(json_object_get(before, "irc_conversations"),
-        json_object_get(session.checkpoint_state, "irc_conversations")));
+                           json_object_get(restored, "irc_conversations")));
+    assert(json_equal(
+        json_object_get(after, "irc_activity"), json_object_get(restored, "irc_activity")));
+    if (session.binary)
+        assert(!session.checkpoint_state && session.checkpoint_seq);
+    else
+        assert(json_equal(json_object_get(before, "irc_conversations"),
+            json_object_get(session.checkpoint_state, "irc_conversations")));
     json_decref(restored);
     json_decref(after);
     json_decref(before);
@@ -1454,8 +1483,8 @@ test_checkpoint_optional_download_queue(const char *cwd)
     snag_store_init(store);
     assert(snag_store_open(store, root, error, sizeof(error)) == 0);
     snag_session_init(&session);
-    assert(legacy_fixture_create(store, &session, cwd, "default", "model", "default",
-        error, sizeof(error)) == 0);
+    assert(legacy_fixture_create(
+               store, &session, cwd, "default", "model", "default", error, sizeof(error)) == 0);
     memcpy(id, session.id, sizeof(id));
     state = snag_checkpoint_state_encode(&session);
     assert(state && json_object_del(state, "download_queue") == 0);
@@ -1465,10 +1494,11 @@ test_checkpoint_optional_download_queue(const char *cwd)
     /* Retired archive flags in old checkpoints have no selection effect. */
     /* Earlier snapshot-v1 writers predate the download outbox. Their verified
      * checkpoints still carry every required field of the original format. */
-    commit_event(&session, "session_checkpoint", checked_json(json_pack(
-        "{s:o,s:n,s:i,s:i}", "state", state, "context", "snapshot_v", 1, "format", 4)));
-    commit_event(&session, "effort_changed", checked_json(json_pack(
-        "{s:s,s:s}", "old_effort", "default", "new_effort", "high")));
+    commit_event(&session, "session_checkpoint",
+        checked_json(json_pack(
+            "{s:o,s:n,s:i,s:i}", "state", state, "context", "snapshot_v", 1, "format", 4)));
+    commit_event(&session, "effort_changed",
+        checked_json(json_pack("{s:s,s:s}", "old_effort", "default", "new_effort", "high")));
     snag_session_close(&session);
     snag_session_init(&session);
     assert(snag_session_open(store, &session, id, error, sizeof(error)) == 0);
@@ -1478,9 +1508,9 @@ test_checkpoint_optional_download_queue(const char *cwd)
     assert(snag_store_find_last(store, last, error, sizeof(error)) == 0);
     assert(strcmp(last, id) == 0);
     assert(snag_session_commit(&session, "session_archived",
-        checked_json(json_pack("{s:s}", "origin", "user")), NULL, error, sizeof(error)) < 0);
+               checked_json(json_pack("{s:s}", "origin", "user")), NULL, error, sizeof(error)) < 0);
     assert(snag_session_commit(&session, "control_requested",
-        checked_json(json_pack("{s:i}", "control", 8)), NULL, error, sizeof(error)) < 0);
+               checked_json(json_pack("{s:i}", "control", 8)), NULL, error, sizeof(error)) < 0);
     commit_event(&session, "session_named", checked_json(json_pack("{s:s}", "name", "lead")));
     assert(snag_session_checkpoint(&session, error, sizeof(error)) == 0);
     snag_session_close(&session);
@@ -1517,8 +1547,8 @@ test_one_file_checkpoint(struct snag_store *store, const char *cwd)
     struct snag_session session;
     char error[256], id[SNAG_ID_HEX_LEN + 1u];
     snag_session_init(&session);
-    assert(snag_session_prepare(&session, cwd, "default", "model", "default",
-        error, sizeof(error)) == 0);
+    assert(snag_session_prepare(
+               &session, cwd, "default", "model", "default", error, sizeof(error)) == 0);
     assert(legacy_fixture_persist(store, &session, error, sizeof(error)) == 0);
     memcpy(id, session.id, sizeof(id));
     for (unsigned int i = 0u; i < 130u; ++i) {
@@ -1535,14 +1565,13 @@ test_one_file_checkpoint(struct snag_store *store, const char *cwd)
     cursor.log_seq = session.next_seq;
     memcpy(cursor.log_hash, session.prev_sha256, sizeof(cursor.log_hash));
     commit_event(&session, "effort_changed",
-        checked_json(json_pack("{s:s,s:s}", "old_effort", "default",
-                               "new_effort", "high")));
+        checked_json(json_pack("{s:s,s:s}", "old_effort", "default", "new_effort", "high")));
     size_t tail_count = 0u;
-    assert(snag_session_each_event_since(&session, &cursor, count_cursor_event,
-        &tail_count, error, sizeof(error)) == 0 && tail_count == 1u);
+    assert(snag_session_each_event_since(
+               &session, &cursor, count_cursor_event, &tail_count, error, sizeof(error)) == 0 &&
+           tail_count == 1u);
     commit_event(&session, "effort_changed",
-        checked_json(json_pack("{s:s,s:s}", "old_effort", "high",
-                               "new_effort", "default")));
+        checked_json(json_pack("{s:s,s:s}", "old_effort", "high", "new_effort", "default")));
     assert(faccessat(session.dir_fd, "checkpoint.json", F_OK, 0) < 0 && errno == ENOENT);
     snag_session_close(&session);
     snag_session_init(&session);
@@ -1615,20 +1644,22 @@ checkpoint_metadata_view(struct snag_store *store, struct snag_session *session)
     struct snag_journal_cursor tail = {.offset = session->log_end, .next_seq = session->next_seq};
     memcpy(tail.prev_sha256, session->prev_sha256, sizeof(tail.prev_sha256));
     char error[256];
-    assert(snag_session_history_open(store, &view, session->id, &tail,
-        error, sizeof(error)) == 0);
+    assert(snag_session_history_open(store, &view, session->id, &tail, error, sizeof(error)) == 0);
     struct snag_journal_cursor cursor = {0};
     struct forward_scan scan = {.next = 1u};
-    assert(snag_session_each_event_forward(&view, &cursor, 1u, forward_event,
-        &scan, error, sizeof(error)) == 0 && scan.next == 2u);
+    assert(snag_session_each_event_forward(
+               &view, &cursor, 1u, forward_event, &scan, error, sizeof(error)) == 0 &&
+           scan.next == 2u);
     /* The existing quantum admits one complete large checkpoint. */
-    assert(snag_session_each_event_forward(&view, &cursor, 1u, forward_event,
-        &scan, error, sizeof(error)) == 0 && scan.next == tail.next_seq);
+    assert(snag_session_each_event_forward(
+               &view, &cursor, 1u, forward_event, &scan, error, sizeof(error)) == 0 &&
+           scan.next == tail.next_seq);
     assert(cursor.offset == tail.offset && !strcmp(cursor.prev_sha256, tail.prev_sha256));
     struct reverse_scan reverse = {.next = tail.next_seq, .limit = SIZE_MAX};
     uint64_t before = 0u;
-    assert(snag_session_each_event_reverse(&view, 0u, SIZE_MAX, reverse_event,
-        &reverse, &before, error, sizeof(error)) == 0 && !before && reverse.count == 2u);
+    assert(snag_session_each_event_reverse(
+               &view, 0u, SIZE_MAX, reverse_event, &reverse, &before, error, sizeof(error)) == 0 &&
+           !before && reverse.count == 2u);
     snag_session_close(&view);
 }
 
@@ -1651,59 +1682,64 @@ test_checkpoint_cancellation(struct snag_store *store, struct snag_session *sour
     snag_session_init(&view);
     view.history_cancel = cancel_history_read;
     view.history_cancel_opaque = &remaining;
-    assert(snag_session_history_open(store, &view, source->id, &tail,
-        error, sizeof(error)) < 0 && errno == ECANCELED && !remaining);
+    assert(snag_session_history_open(store, &view, source->id, &tail, error, sizeof(error)) < 0 &&
+           errno == ECANCELED && !remaining);
     snag_session_close(&view);
     remaining = 64u;
     view.history_cancel = cancel_history_read;
     view.history_cancel_opaque = &remaining;
     bool incomplete;
-    assert(snag_session_history_snapshot(store, &view, source->id, &incomplete,
-        error, sizeof(error)) < 0 && errno == ECANCELED && !remaining);
+    assert(snag_session_history_snapshot(
+               store, &view, source->id, &incomplete, error, sizeof(error)) < 0 &&
+           errno == ECANCELED && !remaining);
     snag_session_close(&view);
-    assert(snag_session_history_open(store, &view, source->id, &tail,
-        error, sizeof(error)) == 0);
+    assert(snag_session_history_open(store, &view, source->id, &tail, error, sizeof(error)) == 0);
     remaining = 64u;
     view.history_cancel = cancel_history_read;
     view.history_cancel_opaque = &remaining;
     /* The unchanged large checkpoint must not be parsed during idle polling. */
     assert(snag_session_history_observe(&view, &incomplete, error, sizeof(error)) == 0 &&
-        !incomplete && remaining == 64u);
+           !incomplete && remaining == 64u);
     struct snag_journal_cursor cursor = {0};
     struct forward_scan scan = {.next = 1u};
-    assert(snag_session_each_event_forward(&view, &cursor, SIZE_MAX, forward_event,
-        &scan, error, sizeof(error)) < 0 && errno == ECANCELED);
+    assert(snag_session_each_event_forward(
+               &view, &cursor, SIZE_MAX, forward_event, &scan, error, sizeof(error)) < 0 &&
+           errno == ECANCELED);
     assert(cursor.next_seq == 2u && scan.next == 2u);
     view.history_cancel = NULL;
-    assert(snag_session_each_event_forward(&view, &cursor, SIZE_MAX, forward_event,
-        &scan, error, sizeof(error)) == 0 && cursor.next_seq == tail.next_seq);
+    assert(snag_session_each_event_forward(
+               &view, &cursor, SIZE_MAX, forward_event, &scan, error, sizeof(error)) == 0 &&
+           cursor.next_seq == tail.next_seq);
     remaining = 64u;
     view.history_cancel = cancel_history_read;
     struct reverse_scan reverse = {.next = tail.next_seq, .limit = SIZE_MAX};
     uint64_t before;
-    assert(snag_session_each_event_reverse(&view, 0u, SIZE_MAX, reverse_event,
-        &reverse, &before, error, sizeof(error)) < 0 && errno == ECANCELED && !reverse.count);
+    assert(snag_session_each_event_reverse(
+               &view, 0u, SIZE_MAX, reverse_event, &reverse, &before, error, sizeof(error)) < 0 &&
+           errno == ECANCELED && !reverse.count);
     view.history_cancel = NULL;
-    assert(snag_session_each_event_reverse(&view, 0u, SIZE_MAX, reverse_event,
-        &reverse, &before, error, sizeof(error)) == 0 && !before && reverse.count == 2u);
+    assert(snag_session_each_event_reverse(
+               &view, 0u, SIZE_MAX, reverse_event, &reverse, &before, error, sizeof(error)) == 0 &&
+           !before && reverse.count == 2u);
     snag_session_close(&view);
     cursor = (struct snag_journal_cursor){0};
     scan = (struct forward_scan){.next = 1u};
-    assert(snag_session_each_event_forward(source, &cursor, 1u, forward_event,
-        &scan, error, sizeof(error)) == 0 && cursor.next_seq == 2u);
-    assert(snag_session_history_open(store, &view, source->id, &cursor,
-        error, sizeof(error)) == 0);
+    assert(snag_session_each_event_forward(
+               source, &cursor, 1u, forward_event, &scan, error, sizeof(error)) == 0 &&
+           cursor.next_seq == 2u);
+    assert(snag_session_history_open(store, &view, source->id, &cursor, error, sizeof(error)) == 0);
     remaining = 64u;
     view.history_cancel = cancel_history_read;
     view.history_cancel_opaque = &remaining;
     assert(snag_session_history_refresh(&view, &tail, error, sizeof(error)) < 0 &&
-        errno == ECANCELED && view.log_end == cursor.offset && view.next_seq == cursor.next_seq);
+           errno == ECANCELED && view.log_end == cursor.offset && view.next_seq == cursor.next_seq);
     view.history_cancel = NULL;
     assert(snag_session_history_refresh(&view, &tail, error, sizeof(error)) == 0);
     snag_session_close(&view);
     remaining = 64u;
-    assert(!snag_store_catalog(store, source, UINT64_MAX, cancel_history_read,
-        &remaining, error, sizeof(error)) && errno == ECANCELED && !remaining);
+    assert(!snag_store_catalog(
+               store, source, UINT64_MAX, cancel_history_read, &remaining, error, sizeof(error)) &&
+           errno == ECANCELED && !remaining);
     assert_session_lock_retained(source, "after canceled checkpoint reads");
 }
 
@@ -1721,11 +1757,12 @@ test_catalog_checkpoint_suffix(struct snag_store *store, const char *cwd)
     char error[256];
     snag_session_init(&source);
     snag_session_init(&view);
-    assert(legacy_fixture_create(store, &source, cwd, "default", "model", "high",
-        error, sizeof(error)) == 0);
+    assert(legacy_fixture_create(
+               store, &source, cwd, "default", "model", "high", error, sizeof(error)) == 0);
     assert(snag_session_checkpoint(&source, error, sizeof(error)) == 0);
-    assert(snag_session_commit(&source, "effort_changed", json_pack("{s:s,s:s}",
-        "old_effort", "high", "new_effort", "low"), NULL, error, sizeof(error)) == 0);
+    assert(snag_session_commit(&source, "effort_changed",
+               json_pack("{s:s,s:s}", "old_effort", "high", "new_effort", "low"), NULL, error,
+               sizeof(error)) == 0);
     memcpy(view.id, source.id, sizeof(view.id));
     view.log_fd = snag_open_read_security_at(source.dir_fd, "events.jsonl", false);
     assert(view.log_fd >= 0);
@@ -1735,7 +1772,7 @@ test_catalog_checkpoint_suffix(struct snag_store *store, const char *cwd)
     /* Replacing reducer state with a checkpoint must preserve cancellation
      * during the remaining journal and later IRC metadata scans. */
     assert(snag_store_scan_log(&view, SNAG_TAIL_IGNORE, error, sizeof(error)) < 0 &&
-        errno == ECANCELED && view.checkpoint_seq == source.checkpoint_seq);
+           errno == ECANCELED && view.checkpoint_seq == source.checkpoint_seq);
     snag_session_close(&view);
     assert_session_lock_retained(&source, "after canceled checkpoint suffix");
     snag_session_close(&source);
@@ -1748,8 +1785,8 @@ test_large_embedded_checkpoint(struct snag_store *store, const char *cwd)
     struct snag_session session;
     char id[SNAG_ID_HEX_LEN + 1u], error[256];
     snag_session_init(&session);
-    assert(legacy_fixture_create(store, &session, cwd, "default", "model", "medium",
-                               error, sizeof(error)) == 0);
+    assert(legacy_fixture_create(
+               store, &session, cwd, "default", "model", "medium", error, sizeof(error)) == 0);
     memcpy(id, session.id, sizeof(id));
     session.on_checkpoint = large_checkpoint_context;
     assert(snag_session_checkpoint(&session, error, sizeof(error)) == 0);
@@ -1787,13 +1824,12 @@ test_large_embedded_checkpoint(struct snag_store *store, const char *cwd)
     snag_session_init(&view);
     struct snag_journal_cursor tail = {.offset = session.log_end, .next_seq = session.next_seq};
     memcpy(tail.prev_sha256, session.prev_sha256, sizeof(tail.prev_sha256));
-    assert(snag_session_history_open(store, &view, session.id, &tail,
-        error, sizeof(error)) < 0);
+    assert(snag_session_history_open(store, &view, session.id, &tail, error, sizeof(error)) < 0);
     snag_session_close(&view);
     /* A seek hint for the requested checkpoint cannot authenticate its body. */
     struct snag_journal_cursor boundary = {.offset = 123, .next_seq = 456u};
-    assert(snag_session_history_cursor_before(&session, session.checkpoint_seq,
-        &boundary, error, sizeof(error)) < 0);
+    assert(snag_session_history_cursor_before(
+               &session, session.checkpoint_seq, &boundary, error, sizeof(error)) < 0);
     assert(boundary.offset == 123 && boundary.next_seq == 456u);
     assert(pwrite(writer, &original, 1u, changed) == 1 && close(writer) == 0);
     assert_session_lock_retained(&session, "after large checkpoint history view");
@@ -1801,8 +1837,8 @@ test_large_embedded_checkpoint(struct snag_store *store, const char *cwd)
     snag_session_init(&session);
     assert(snag_session_open(store, &session, id, error, sizeof(error)) == 0);
     assert(session.checkpoint_has_context &&
-        json_string_length(json_object_get(session.checkpoint_context, "payload")) ==
-            17u * 1024u * 1024u);
+           json_string_length(json_object_get(session.checkpoint_context, "payload")) ==
+               17u * 1024u * 1024u);
     size_t count = 0u;
     assert(snag_session_each_event(&session, count_event, &count, error, sizeof(error)) == 0);
     assert(count == 2u);
@@ -1816,8 +1852,8 @@ test_failed_append_retry(struct snag_store *store, const char *cwd)
     struct rlimit saved, limited;
     char error[256], id[SNAG_ID_HEX_LEN + 1u];
     snag_session_init(&session);
-    assert(snag_session_create(store, &session, cwd, "default", "test", "default",
-                               error, sizeof(error)) == 0);
+    assert(snag_session_create(
+               store, &session, cwd, "default", "test", "default", error, sizeof(error)) == 0);
     memcpy(id, session.id, sizeof(id));
     int64_t end = session.log_end;
     assert(getrlimit(RLIMIT_FSIZE, &saved) == 0);
@@ -1826,7 +1862,8 @@ test_failed_append_retry(struct snag_store *store, const char *cwd)
     void (*old)(int) = signal(SIGXFSZ, SIG_IGN);
     assert(old != SIG_ERR && setrlimit(RLIMIT_FSIZE, &limited) == 0);
     assert(snag_session_commit(&session, "effort_changed",
-        change_data("old_effort", "default", "new_effort", "high"), NULL, error, sizeof(error)) < 0);
+               change_data("old_effort", "default", "new_effort", "high"), NULL, error,
+               sizeof(error)) < 0);
     assert(setrlimit(RLIMIT_FSIZE, &saved) == 0 && signal(SIGXFSZ, old) != SIG_ERR);
     assert(session.log_end == end && !strcmp(session.default_effort, "default"));
     assert(session.write_failures == 1u);
@@ -1835,7 +1872,8 @@ test_failed_append_retry(struct snag_store *store, const char *cwd)
     off_t physical = lseek(session.log_fd, 0, SEEK_END);
     assert(session.binary ? physical > end : physical == end);
     assert(snag_session_commit(&session, "effort_changed",
-        change_data("old_effort", "default", "new_effort", "high"), NULL, error, sizeof(error)) == 0);
+               change_data("old_effort", "default", "new_effort", "high"), NULL, error,
+               sizeof(error)) == 0);
     assert(session.write_failures == 1u);
     snag_session_close(&session);
     assert(snag_session_open(store, &session, id, error, sizeof(error)) == 0);
@@ -1852,15 +1890,15 @@ test_pending_input_media(struct snag_store *store, const char *cwd)
     json_t *asset = NULL, *found = NULL;
     char *path = NULL;
     snag_session_init(&session);
-    assert(snag_session_create(store, &session, cwd, "default", "fixture", "medium",
-                               error, sizeof(error)) == 0);
+    assert(snag_session_create(
+               store, &session, cwd, "default", "fixture", "medium", error, sizeof(error)) == 0);
     memcpy(id, session.id, sizeof(id));
-    assert(snag_media_save(session.dir_fd, "attachment", 10u, "text/plain", &asset,
-                           error, sizeof(error)) == 0);
+    assert(snag_media_save(
+               session.dir_fd, "attachment", 10u, "text/plain", &asset, error, sizeof(error)) == 0);
     json_t *content = checked_json(json_pack("[{s:s,s:O}]", "type", "file", "asset", asset));
-    json_t *input = checked_json(json_pack("{s:s,s:[],s:s,s:s,s:b,s:I,s:s,s:O}",
-        "effort", "medium", "instructions", "model", "fixture", "provider", "default",
-        "read_only", 0, "received_at_ms", (json_int_t)1, "text", "queue test", "content", content));
+    json_t *input = checked_json(json_pack("{s:s,s:[],s:s,s:s,s:b,s:I,s:s,s:O}", "effort", "medium",
+        "instructions", "model", "fixture", "provider", "default", "read_only", 0, "received_at_ms",
+        (json_int_t)1, "text", "queue test", "content", content));
     commit_event(&session, "input_received", json_incref(input));
     assert(json_equal(session.pending_input, input) && !session.active_turn);
     snag_session_close(&session);
@@ -1868,17 +1906,18 @@ test_pending_input_media(struct snag_store *store, const char *cwd)
     assert(snag_session_open(store, &session, id, error, sizeof(error)) == 0);
     assert(json_equal(session.pending_input, input));
     assert(snprintf(reference, sizeof(reference), "asset:%s", snag_json_string(asset, "id")) == 38);
-    assert(snag_session_media(&session, reference, NULL, NULL, NULL, &found, &path,
-                              error, sizeof(error)) == 0);
+    assert(snag_session_media(
+               &session, reference, NULL, NULL, NULL, &found, &path, error, sizeof(error)) == 0);
     assert(json_equal(found, asset));
-    json_decref(found); free(path);
+    json_decref(found);
+    free(path);
     uint64_t seq = session.next_seq;
     /* A pending prompt's attachments cannot disappear or be replaced on start. */
-    assert(snag_session_commit(&session, "turn_started", turn_started_data(&session, turn),
-                               NULL, error, sizeof(error)) < 0);
+    assert(snag_session_commit(&session, "turn_started", turn_started_data(&session, turn), NULL,
+               error, sizeof(error)) < 0);
     json_t *started = turn_started_data(&session, turn);
     assert(json_object_set_new(started, "content",
-        json_pack("[{s:s,s:s}]", "type", "input_text", "text", "replacement")) == 0);
+               json_pack("[{s:s,s:s}]", "type", "input_text", "text", "replacement")) == 0);
     assert(snag_session_commit(&session, "turn_started", started, NULL, error, sizeof(error)) < 0);
     assert(session.next_seq == seq && json_equal(session.pending_input, input));
     started = turn_started_data(&session, turn);
@@ -1890,7 +1929,9 @@ test_pending_input_media(struct snag_store *store, const char *cwd)
     assert(snag_session_open(store, &session, id, error, sizeof(error)) == 0);
     assert(session.active_turn && !session.pending_input);
     snag_session_close(&session);
-    json_decref(input); json_decref(content); json_decref(asset);
+    json_decref(input);
+    json_decref(content);
+    json_decref(asset);
 }
 
 struct config_replay_check {
@@ -1900,8 +1941,8 @@ struct config_replay_check {
 };
 
 static int
-check_config_replay(void *opaque, const struct snag_session *state, uint64_t seq,
-    const char *type, const json_t *data, char *error, size_t error_size)
+check_config_replay(void *opaque, const struct snag_session *state, uint64_t seq, const char *type,
+    const json_t *data, char *error, size_t error_size)
 {
     struct config_replay_check *check = opaque;
     (void)error;
@@ -1916,10 +1957,8 @@ check_config_replay(void *opaque, const struct snag_session *state, uint64_t seq
 static void
 test_turn_config_domain(struct snag_store *store, const char *cwd)
 {
-    static const char *const names[] = {
-        "prompt_schema", "replay_schema", "tool_schema", "capability_version",
-        "profile_id", "max_output_tokens"
-    };
+    static const char *const names[] = {"prompt_schema", "replay_schema", "tool_schema",
+        "capability_version", "profile_id", "max_output_tokens"};
     json_t *values = checked_json(json_loads(
         "[null,false,true,-9223372036854775808,\"text\",[1,null],{\"nested\":false}]", 0u, NULL));
     struct snag_session session;
@@ -1927,8 +1966,8 @@ test_turn_config_domain(struct snag_store *store, const char *cwd)
     char id[SNAG_ID_HEX_LEN + 1u];
     for (size_t i = 0u; i < json_array_size(values); ++i) {
         snag_session_init(&session);
-        assert(!snag_session_create(store, &session, cwd, "default", "fixture", "medium",
-            error, sizeof(error)));
+        assert(!snag_session_create(
+            store, &session, cwd, "default", "fixture", "medium", error, sizeof(error)));
         memcpy(id, session.id, sizeof(id));
         char turn[SNAG_ID_HEX_LEN + 1u];
         assert(snprintf(turn, sizeof(turn), "%032x", (unsigned int)i + 1u) == 32);
@@ -1941,15 +1980,15 @@ test_turn_config_domain(struct snag_store *store, const char *cwd)
         assert(!json_object_set(config, "", value));
         assert(!json_object_set(config, "extension", value));
         /* Legacy replay narrows this without rejecting the original literal. */
-        assert(!json_object_set_new(config, "max_parallel_commands",
-            json_integer((json_int_t)UINT32_MAX + 2)));
+        assert(!json_object_set_new(
+            config, "max_parallel_commands", json_integer((json_int_t)UINT32_MAX + 2)));
         struct config_replay_check check = {.data = data, .seq = session.next_seq};
         commit_event(&session, "turn_started", json_incref(data));
         snag_session_close(&session);
         assert(!snag_session_open(store, &session, id, error, sizeof(error)));
         assert(session.active_turn && session.max_parallel_commands == 1u);
-        assert(!snag_session_each_event(&session, check_config_replay, &check,
-            error, sizeof(error)));
+        assert(
+            !snag_session_each_event(&session, check_config_replay, &check, error, sizeof(error)));
         assert(check.seen == 1u);
         snag_session_close(&session);
         json_decref(data);
@@ -1984,46 +2023,49 @@ test_archive_projection_data(struct snag_store *store, const char *cwd)
 {
     /* Public shapes from app_events.c, plus the wider source archive domain.
      * These observations do not satisfy ordinary executable-event schemas. */
-    static const struct { const char *type; const char *data; } cases[] = {
-        {"session_checkpoint", "{\"covers_through_seq\":1,\"provider_view\":true,"
-            "\"snapshot_v\":2}"},
+    static const struct {
+        const char *type;
+        const char *data;
+    } cases[] = {{"session_checkpoint", "{\"covers_through_seq\":1,\"provider_view\":true,"
+                                        "\"snapshot_v\":2}"},
         {"voice_transfer_adopted", "{\"session_boundary\":true,\"source_session_id\":\"redacted\","
-            "\"target_session_id\":\"redacted\",\"source_as_of_seq\":1}"},
-        {"response_completed", "{\"turn_id\":\"redacted\",\"response_id\":\"redacted\","
+                                   "\"target_session_id\":\"redacted\",\"source_as_of_seq\":1}"},
+        {"response_completed",
+            "{\"turn_id\":\"redacted\",\"response_id\":\"redacted\","
             "\"cycle\":1,\"status\":\"completed\",\"provider_response_id\":\"p\",\"items\":[],"
             "\"usage\":{\"input_tokens\":null,\"output_tokens\":null,\"reasoning_tokens\":null,"
             "\"total_tokens\":null},\"continuation_scope\":\"redacted\","
             "\"provider_payload_omitted\":true}"},
-        {"compaction_completed", "{\"compact_id\":\"redacted\",\"count_method\":\"unknown\","
+        {"compaction_completed",
+            "{\"compact_id\":\"redacted\",\"count_method\":\"unknown\","
             "\"input_tokens_bound\":0,\"output_count_method\":\"exact\",\"output_tokens_bound\":1,"
             "\"output_count_request_sha256\":\"redacted\",\"source_sha256\":\"redacted\","
             "\"output_sha256\":\"redacted\",\"output\":[{\"type\":\"compaction\"}],"
             "\"provider_payload_omitted\":true}"},
         {"input_received", "{}"},
         {"tool_started", "{\"action_sha256\":false,\"\":null,"
-            "\"extra\":[-9223372036854775808,{\"data\":\"uninterpreted\"}]}"},
-        {"unassigned_source_type", "{\"any\":[null,false,true,3,\"t\",[],{}]}"}
-    };
+                         "\"extra\":[-9223372036854775808,{\"data\":\"uninterpreted\"}]}"},
+        {"unassigned_source_type", "{\"any\":[null,false,true,3,\"t\",[],{}]}"}};
     struct snag_session session;
     snag_session_init(&session);
     char error[256];
-    assert(!snag_session_create(store, &session, cwd, "default", "fixture", "medium",
-        error, sizeof(error)));
+    assert(!snag_session_create(
+        store, &session, cwd, "default", "fixture", "medium", error, sizeof(error)));
     char id[SNAG_ID_HEX_LEN + 1u];
     memcpy(id, session.id, sizeof(id));
     struct archive_projection_check check = {.records = checked_json(json_array())};
     for (size_t i = 0u; i < sizeof(cases) / sizeof(cases[0]); ++i) {
         json_t *source = checked_json(json_loads(cases[i].data, JSON_REJECT_DUPLICATES, NULL));
-        json_t *data = checked_json(json_pack("{s:s,s:s,s:s,s:I,s:s,s:o}",
-            "transfer_id", id, "target_session_id", id, "source_session_id", id,
-            "source_seq", (json_int_t)(i + 1u), "source_type", cases[i].type, "data", source));
+        json_t *data = checked_json(json_pack("{s:s,s:s,s:s,s:I,s:s,s:o}", "transfer_id", id,
+            "target_session_id", id, "source_session_id", id, "source_seq", (json_int_t)(i + 1u),
+            "source_type", cases[i].type, "data", source));
         assert(!json_array_append(check.records, data));
         commit_event(&session, "voice_transfer_record", data);
     }
     snag_session_close(&session);
     assert(!snag_session_open(store, &session, id, error, sizeof(error)));
-    assert(!snag_session_each_event(&session, check_archive_projection, &check,
-        error, sizeof(error)));
+    assert(
+        !snag_session_each_event(&session, check_archive_projection, &check, error, sizeof(error)));
     assert(check.seen == sizeof(cases) / sizeof(cases[0]));
     snag_session_close(&session);
     for (size_t i = 0u; i < check.seen; ++i) {
@@ -2032,7 +2074,9 @@ test_archive_projection_data(struct snag_store *store, const char *cwd)
         enum snag_binary_kind kind;
         assert(!snag_binary_legacy_encode(&bytes, "voice_transfer_record", data, &kind));
         struct snag_binary_record record = {.kind = (uint16_t)kind,
-            .version = snag_binary_event_version(kind), .payload = bytes.data, .size = bytes.len};
+            .version = snag_binary_event_version(kind),
+            .payload = bytes.data,
+            .size = bytes.len};
         const char *type = NULL;
         json_t *projected = NULL;
         assert(!snag_binary_legacy_decode(&record, &type, &projected));
@@ -2050,8 +2094,8 @@ test_journal_lifetime_boundaries(struct snag_store *store, const char *cwd)
     char error[256];
     char id[SNAG_ID_HEX_LEN + 1u];
     snag_session_init(&session);
-    assert(legacy_fixture_create(store, &session, cwd, "default", "test", "default",
-        error, sizeof(error)) == 0);
+    assert(legacy_fixture_create(
+               store, &session, cwd, "default", "test", "default", error, sizeof(error)) == 0);
     memcpy(id, session.id, sizeof(id));
 
     /* Sparse fixture: cross the former closure reserve with an ordinary event
@@ -2059,8 +2103,8 @@ test_journal_lifetime_boundaries(struct snag_store *store, const char *cwd)
     session.log_end = INT64_C(2) * 1024 * 1024 * 1024 - 32 * 1024 * 1024 - 64;
     assert(ftruncate(session.log_fd, session.log_end) == 0);
     assert(snag_session_commit(&session, "effort_changed",
-        change_data("old_effort", "default", "new_effort", "high"),
-        NULL, error, sizeof(error)) == 0);
+               change_data("old_effort", "default", "new_effort", "high"), NULL, error,
+               sizeof(error)) == 0);
 
     /* Checkpoints and their suffix must also work past both old lifetime caps.
      * Reopening reads the checkpoint, not the deliberately sparse old prefix. */
@@ -2070,8 +2114,8 @@ test_journal_lifetime_boundaries(struct snag_store *store, const char *cwd)
     assert(snag_session_checkpoint(&session, error, sizeof(error)) == 0);
     assert(session.checkpoint_offset > INT64_C(2) * 1024 * 1024 * 1024);
     assert(snag_session_commit(&session, "effort_changed",
-        change_data("old_effort", "high", "new_effort", "default"),
-        NULL, error, sizeof(error)) == 0);
+               change_data("old_effort", "high", "new_effort", "default"), NULL, error,
+               sizeof(error)) == 0);
     uint64_t seq = session.next_seq;
     int64_t end = session.log_end;
     snag_session_close(&session);
@@ -2079,23 +2123,25 @@ test_journal_lifetime_boundaries(struct snag_store *store, const char *cwd)
     assert(session.next_seq == seq && session.log_end == end);
     assert(strcmp(session.default_effort, "default") == 0);
     assert(snag_session_commit(&session, "effort_changed",
-        change_data("old_effort", "default", "new_effort", "high"),
-        NULL, error, sizeof(error)) == 0);
+               change_data("old_effort", "default", "new_effort", "high"), NULL, error,
+               sizeof(error)) == 0);
     seq = session.next_seq;
     end = session.log_end;
     uint64_t checkpoint_seq = session.checkpoint_seq;
     session.next_seq = (uint64_t)INT64_MAX;
     session.checkpoint_seq = session.next_seq - 1u;
     assert(snag_session_commit(&session, "effort_changed",
-        change_data("old_effort", "high", "new_effort", "default"),
-        NULL, error, sizeof(error)) < 0 && errno == EOVERFLOW);
+               change_data("old_effort", "high", "new_effort", "default"), NULL, error,
+               sizeof(error)) < 0 &&
+           errno == EOVERFLOW);
     assert(session.log_end == end && strcmp(session.default_effort, "high") == 0);
     session.next_seq = seq;
     session.checkpoint_seq = checkpoint_seq;
     session.log_end = INT64_MAX - 1;
     assert(snag_session_commit(&session, "effort_changed",
-        change_data("old_effort", "high", "new_effort", "default"),
-        NULL, error, sizeof(error)) < 0 && errno == EOVERFLOW);
+               change_data("old_effort", "high", "new_effort", "default"), NULL, error,
+               sizeof(error)) < 0 &&
+           errno == EOVERFLOW);
     assert(strcmp(session.default_effort, "high") == 0 && session.next_seq == seq);
     session.log_end = end;
     snag_session_close(&session);
@@ -2107,56 +2153,72 @@ struct audio_usage_check {
 };
 
 static int
-check_audio_usage(void *opaque,const struct snag_session *state,uint64_t seq,const char *type,const json_t *data,char *error,size_t size)
+check_audio_usage(void *opaque, const struct snag_session *state, uint64_t seq, const char *type,
+    const json_t *data, char *error, size_t size)
 {
-    (void)state;(void)error;(void)size;
-    if(strcmp(type,"audio_usage"))return 0;
+    (void)state;
+    (void)error;
+    (void)size;
+    if (strcmp(type, "audio_usage")) return 0;
     struct audio_usage_check *check = opaque;
     assert(seq == check->seq);
-    assert(!strcmp(snag_json_string(data,"operation"),"dictation"));
-    assert(!strcmp(snag_json_string(data,"provider"),"default"));
-    assert(!strcmp(snag_json_string(data,"model"),"fixture-transcribe"));
-    assert(!strcmp(snag_json_string(data,"report"),"Provider-reported duration: 0.01 seconds"));
-    ++check->found;return 0;
+    assert(!strcmp(snag_json_string(data, "operation"), "dictation"));
+    assert(!strcmp(snag_json_string(data, "provider"), "default"));
+    assert(!strcmp(snag_json_string(data, "model"), "fixture-transcribe"));
+    assert(!strcmp(snag_json_string(data, "report"), "Provider-reported duration: 0.01 seconds"));
+    ++check->found;
+    return 0;
 }
 
 static void
-test_audio_usage(struct snag_store *store,const char *cwd)
+test_audio_usage(struct snag_store *store, const char *cwd)
 {
-    struct snag_session session;char id[33],error[256];
+    struct snag_session session;
+    char id[33], error[256];
     snag_session_init(&session);
-    assert(snag_session_create(store,&session,cwd,"default",SNAJPAGENT_MODEL,"medium",error,sizeof(error))==0);
-    memcpy(id,session.id,sizeof(id));
+    assert(snag_session_create(store, &session, cwd, "default", SNAJPAGENT_MODEL, "medium", error,
+               sizeof(error)) == 0);
+    memcpy(id, session.id, sizeof(id));
     uint64_t before = session.next_seq, accepted = 0u;
-    json_t *event=json_pack("{s:s,s:s,s:s,s:s}","operation","dictation","provider","default",
-        "model","fixture-transcribe","report","Provider-reported duration: 0.01 seconds");
+    json_t *event = json_pack("{s:s,s:s,s:s,s:s}", "operation", "dictation", "provider", "default",
+        "model", "fixture-transcribe", "report", "Provider-reported duration: 0.01 seconds");
     assert(event);
-    json_t *bad=json_deep_copy(event);assert(bad);
-    assert(json_object_set_new(bad,"operation",json_string("execute"))==0);
-    assert(snag_session_commit(&session,"audio_usage",bad,NULL,error,sizeof(error))<0);
-    bad=json_deep_copy(event);assert(bad);
-    assert(json_object_set_new(bad,"report",json_null())==0);
-    assert(snag_session_commit(&session,"audio_usage",bad,NULL,error,sizeof(error))<0);
+    json_t *bad = json_deep_copy(event);
+    assert(bad);
+    assert(json_object_set_new(bad, "operation", json_string("execute")) == 0);
+    assert(snag_session_commit(&session, "audio_usage", bad, NULL, error, sizeof(error)) < 0);
+    bad = json_deep_copy(event);
+    assert(bad);
+    assert(json_object_set_new(bad, "report", json_null()) == 0);
+    assert(snag_session_commit(&session, "audio_usage", bad, NULL, error, sizeof(error)) < 0);
     assert(session.next_seq == before);
-    assert(snag_session_commit(&session,"audio_usage",event,&accepted,error,sizeof(error))==0);
-    for(unsigned int replay=0;replay<2u;++replay) {
+    assert(
+        snag_session_commit(&session, "audio_usage", event, &accepted, error, sizeof(error)) == 0);
+    for (unsigned int replay = 0; replay < 2u; ++replay) {
         struct audio_usage_check check = {.seq = accepted};
-        assert(snag_session_each_event(&session, check_audio_usage, &check,
-            error, sizeof(error)) == 0 && check.found == 1u);
-        assert(session.next_seq==accepted+1u && !session.turn_count && !session.active_turn);
-        assert(!session.usage_anchor.valid && !session.context_meter.valid && !session.pending_queue_count);
-        snag_session_close(&session);snag_session_init(&session);
-        if(!replay)assert(snag_session_open(store,&session,id,error,sizeof(error))==0);
+        assert(snag_session_each_event(&session, check_audio_usage, &check, error, sizeof(error)) ==
+                   0 &&
+               check.found == 1u);
+        assert(session.next_seq == accepted + 1u && !session.turn_count && !session.active_turn);
+        assert(!session.usage_anchor.valid && !session.context_meter.valid &&
+               !session.pending_queue_count);
+        snag_session_close(&session);
+        snag_session_init(&session);
+        if (!replay) assert(snag_session_open(store, &session, id, error, sizeof(error)) == 0);
     }
 }
 
-static void voice_status(struct snag_session *session,const char *queue,const char *expected,const char *turn)
+static void
+voice_status(
+    struct snag_session *session, const char *queue, const char *expected, const char *turn)
 {
-    char error[256];json_t *result=NULL;uint64_t seq=session->next_seq;
-    assert(snag_session_voice_status(session,queue,&result,error,sizeof(error))==0);
-    assert(!strcmp(snag_json_string(result,"status"),expected));
-    assert(!strcmp(snag_json_string(result,"turn_id"),turn));
-    assert(snag_json_string(result,"text") && session->next_seq==seq);
+    char error[256];
+    json_t *result = NULL;
+    uint64_t seq = session->next_seq;
+    assert(snag_session_voice_status(session, queue, &result, error, sizeof(error)) == 0);
+    assert(!strcmp(snag_json_string(result, "status"), expected));
+    assert(!strcmp(snag_json_string(result, "turn_id"), turn));
+    assert(snag_json_string(result, "text") && session->next_seq == seq);
     json_decref(result);
     assert(snag_session_voice_context(session, &result, error, sizeof(error)) == 0);
     const json_t *latest = json_object_get(result, "latest_voice_handoff");
@@ -2171,137 +2233,182 @@ static void voice_status(struct snag_session *session,const char *queue,const ch
 }
 
 static void
-test_banner_steering(struct snag_store *store,const char *cwd)
+test_banner_steering(struct snag_store *store, const char *cwd)
 {
-    struct snag_session session;char id[33],error[256];
+    struct snag_session session;
+    char id[33], error[256];
     uint64_t durable_seq;
     snag_session_init(&session);
-    assert(snag_session_create(store,&session,cwd,"default",SNAJPAGENT_MODEL,"medium",error,sizeof(error))==0);
-    memcpy(id,session.id,sizeof(id));
+    assert(snag_session_create(store, &session, cwd, "default", SNAJPAGENT_MODEL, "medium", error,
+               sizeof(error)) == 0);
+    memcpy(id, session.id, sizeof(id));
     assert(!session.banner_text && !session.steering_override);
-    commit_event(&session,"banner_updated",checked_json(json_pack("{s:s}","text","lead cursor: land r33")));
-    assert(session.banner_text && !strcmp(session.banner_text,"lead cursor: land r33"));
-    commit_event(&session,"steering_updated",checked_json(json_pack("{s:s}","mode","all")));
-    assert(session.steering_override && !strcmp(session.steering_override,"all"));
+    commit_event(&session, "banner_updated",
+        checked_json(json_pack("{s:s}", "text", "lead cursor: land r33")));
+    assert(session.banner_text && !strcmp(session.banner_text, "lead cursor: land r33"));
+    commit_event(&session, "steering_updated", checked_json(json_pack("{s:s}", "mode", "all")));
+    assert(session.steering_override && !strcmp(session.steering_override, "all"));
     durable_seq = session.next_seq;
-    assert(snag_session_commit(&session,"steering_updated",checked_json(json_pack("{s:s}","mode","every")),NULL,error,sizeof(error))<0);
+    assert(snag_session_commit(&session, "steering_updated",
+               checked_json(json_pack("{s:s}", "mode", "every")), NULL, error, sizeof(error)) < 0);
     assert(session.next_seq == durable_seq);
-    assert(session.steering_override && !strcmp(session.steering_override,"all"));
-    assert(snag_session_commit(&session,"banner_updated",checked_json(json_pack("{s:i}","text",1)),NULL,error,sizeof(error))<0);
+    assert(session.steering_override && !strcmp(session.steering_override, "all"));
+    assert(snag_session_commit(&session, "banner_updated",
+               checked_json(json_pack("{s:i}", "text", 1)), NULL, error, sizeof(error)) < 0);
     assert(session.next_seq == durable_seq);
-    assert(session.banner_text && !strcmp(session.banner_text,"lead cursor: land r33"));
-    snag_session_close(&session);snag_session_init(&session);
-    assert(snag_session_open(store,&session,id,error,sizeof(error))==0);
-    assert(session.banner_text && !strcmp(session.banner_text,"lead cursor: land r33"));
-    assert(session.steering_override && !strcmp(session.steering_override,"all"));
-    commit_event(&session,"banner_updated",checked_json(json_pack("{s:s}","text","")));
-    commit_event(&session,"steering_updated",checked_json(json_pack("{s:s}","mode","")));
+    assert(session.banner_text && !strcmp(session.banner_text, "lead cursor: land r33"));
+    snag_session_close(&session);
+    snag_session_init(&session);
+    assert(snag_session_open(store, &session, id, error, sizeof(error)) == 0);
+    assert(session.banner_text && !strcmp(session.banner_text, "lead cursor: land r33"));
+    assert(session.steering_override && !strcmp(session.steering_override, "all"));
+    commit_event(&session, "banner_updated", checked_json(json_pack("{s:s}", "text", "")));
+    commit_event(&session, "steering_updated", checked_json(json_pack("{s:s}", "mode", "")));
     assert(!session.banner_text && !session.steering_override);
-    snag_session_close(&session);snag_session_init(&session);
-    assert(snag_session_open(store,&session,id,error,sizeof(error))==0);
+    snag_session_close(&session);
+    snag_session_init(&session);
+    assert(snag_session_open(store, &session, id, error, sizeof(error)) == 0);
     assert(!session.banner_text && !session.steering_override);
     snag_session_close(&session);
 }
 
 static void
-test_voice_queue(struct snag_store *store,const char *cwd)
+test_voice_queue(struct snag_store *store, const char *cwd)
 {
-    struct snag_session session;char id[33],queue[33],again[33],error[256];bool duplicate;
+    struct snag_session session;
+    char id[33], queue[33], again[33], error[256];
+    bool duplicate;
     snag_session_init(&session);
-    assert(snag_session_create(store,&session,cwd,"default",SNAJPAGENT_MODEL,"medium",error,sizeof(error))==0);
-    memcpy(id,session.id,sizeof(id));
-    json_t *source=json_pack("{s:s,s:s,s:s,s:s,s:s,s:s,s:s,s:s}",
-        "connection_id","0123456789abcdef0123456789abcdef","input_id","utterance-1","response_id","response-1",
-        "call_id","call-1","provider","default","model","voice-model","transcript","inspect the build",
-        "request","look for compiler errors");
+    assert(snag_session_create(store, &session, cwd, "default", SNAJPAGENT_MODEL, "medium", error,
+               sizeof(error)) == 0);
+    memcpy(id, session.id, sizeof(id));
+    json_t *source = json_pack("{s:s,s:s,s:s,s:s,s:s,s:s,s:s,s:s}", "connection_id",
+        "0123456789abcdef0123456789abcdef", "input_id", "utterance-1", "response_id", "response-1",
+        "call_id", "call-1", "provider", "default", "model", "voice-model", "transcript",
+        "inspect the build", "request", "look for compiler errors");
     assert(source);
-    assert(snag_session_voice_queue(&session,source,queue,&duplicate,error,sizeof(error))==0 && !duplicate);
-    assert(!session.active_turn && session.pending_queue_count==1u &&
-        session.next_seq==session.pending_queue[0].seq+1u);
-    voice_status(&session,queue,"queued","");
-    assert(!strcmp(session.pending_queue[0].queue_id,queue));
-    assert(strstr(session.pending_queue[0].text,"ASR-derived") && strstr(session.pending_queue[0].text,"inspect the build"));
-    assert(strstr(session.pending_queue[0].text,"not an additional user instruction or approval"));
+    assert(
+        snag_session_voice_queue(&session, source, queue, &duplicate, error, sizeof(error)) == 0 &&
+        !duplicate);
+    assert(!session.active_turn && session.pending_queue_count == 1u &&
+           session.next_seq == session.pending_queue[0].seq + 1u);
+    voice_status(&session, queue, "queued", "");
+    assert(!strcmp(session.pending_queue[0].queue_id, queue));
+    assert(strstr(session.pending_queue[0].text, "ASR-derived") &&
+           strstr(session.pending_queue[0].text, "inspect the build"));
+    assert(strstr(session.pending_queue[0].text, "not an additional user instruction or approval"));
     assert(!strstr(session.pending_queue[0].text, "speaker identity"));
     assert(strstr(session.pending_queue[0].text, "The voice interface relays requests"));
-    uint64_t seq=session.next_seq;
-    assert(snag_session_voice_queue(&session,source,again,&duplicate,error,sizeof(error))==0 && duplicate);
-    assert(!strcmp(queue,again) && session.next_seq==seq && session.pending_queue_count==1u);
+    uint64_t seq = session.next_seq;
+    assert(
+        snag_session_voice_queue(&session, source, again, &duplicate, error, sizeof(error)) == 0 &&
+        duplicate);
+    assert(!strcmp(queue, again) && session.next_seq == seq && session.pending_queue_count == 1u);
     /* A new call/paraphrase of an already accepted utterance keeps its first acceptance. */
-    assert(json_object_set_new(source,"call_id",json_string("call-2"))==0);
-    assert(json_object_set_new(source,"request",json_string("different paraphrase"))==0);
-    assert(snag_session_voice_queue(&session,source,again,&duplicate,error,sizeof(error))==0 && duplicate);
-    assert(session.next_seq==seq);
-    snag_session_close(&session);snag_session_init(&session);
-    assert(snag_session_open(store,&session,id,error,sizeof(error))==0);
-    assert(session.pending_queue_count==1u && !strcmp(session.pending_queue[0].queue_id,queue));
-    assert(snag_session_voice_queue(&session,source,again,&duplicate,error,sizeof(error))==0 && duplicate);
-    assert(snag_session_commit(&session,"future_turn_cancelled",json_pack("{s:[s],s:s}","queue_ids",queue,"reason","user"),NULL,error,sizeof(error))==0);
-    seq=session.next_seq;
-    assert(snag_session_voice_queue(&session,source,again,&duplicate,error,sizeof(error))==0 && duplicate);
-    assert(session.next_seq==seq && !session.pending_queue_count);
-    voice_status(&session,queue,"cancelled","");
-    assert(json_object_set_new(source,"input_id",json_string("utterance-2"))==0);
-    assert(snag_session_voice_queue(&session,source,again,&duplicate,error,sizeof(error))==0 && !duplicate);
-    assert(strcmp(queue,again) && session.pending_queue_count==1u);
-    const char *turn="11111111111111111111111111111111";
-    json_t *started=turn_started_data(&session,turn);
-    assert(json_object_set_new(started,"input_kind",json_string("queued"))==0);
-    assert(json_object_set_new(started,"queue_id",json_string(again))==0);
-    assert(json_object_set_new(started,"queue_seq",json_integer((json_int_t)session.pending_queue[0].seq))==0);
-    assert(json_object_set_new(started,"text",json_string(session.pending_queue[0].text))==0);
-    assert(snag_session_commit(&session,"turn_started",started,NULL,error,sizeof(error))==0);
-    voice_status(&session,again,"running",turn);
-    assert(snag_session_commit(&session,"turn_failed",json_pack("{s:s,s:s,s:s}","turn_id",turn,
-        "class","provider","message","fixture failure"),NULL,error,sizeof(error))==0);
-    voice_status(&session,again,"failed",turn);
+    assert(json_object_set_new(source, "call_id", json_string("call-2")) == 0);
+    assert(json_object_set_new(source, "request", json_string("different paraphrase")) == 0);
+    assert(
+        snag_session_voice_queue(&session, source, again, &duplicate, error, sizeof(error)) == 0 &&
+        duplicate);
+    assert(session.next_seq == seq);
+    snag_session_close(&session);
+    snag_session_init(&session);
+    assert(snag_session_open(store, &session, id, error, sizeof(error)) == 0);
+    assert(session.pending_queue_count == 1u && !strcmp(session.pending_queue[0].queue_id, queue));
+    assert(
+        snag_session_voice_queue(&session, source, again, &duplicate, error, sizeof(error)) == 0 &&
+        duplicate);
+    assert(snag_session_commit(&session, "future_turn_cancelled",
+               json_pack("{s:[s],s:s}", "queue_ids", queue, "reason", "user"), NULL, error,
+               sizeof(error)) == 0);
+    seq = session.next_seq;
+    assert(
+        snag_session_voice_queue(&session, source, again, &duplicate, error, sizeof(error)) == 0 &&
+        duplicate);
+    assert(session.next_seq == seq && !session.pending_queue_count);
+    voice_status(&session, queue, "cancelled", "");
+    assert(json_object_set_new(source, "input_id", json_string("utterance-2")) == 0);
+    assert(
+        snag_session_voice_queue(&session, source, again, &duplicate, error, sizeof(error)) == 0 &&
+        !duplicate);
+    assert(strcmp(queue, again) && session.pending_queue_count == 1u);
+    const char *turn = "11111111111111111111111111111111";
+    json_t *started = turn_started_data(&session, turn);
+    assert(json_object_set_new(started, "input_kind", json_string("queued")) == 0);
+    assert(json_object_set_new(started, "queue_id", json_string(again)) == 0);
+    assert(json_object_set_new(
+               started, "queue_seq", json_integer((json_int_t)session.pending_queue[0].seq)) == 0);
+    assert(json_object_set_new(started, "text", json_string(session.pending_queue[0].text)) == 0);
+    assert(snag_session_commit(&session, "turn_started", started, NULL, error, sizeof(error)) == 0);
+    voice_status(&session, again, "running", turn);
+    assert(snag_session_commit(&session, "turn_failed",
+               json_pack("{s:s,s:s,s:s}", "turn_id", turn, "class", "provider", "message",
+                   "fixture failure"),
+               NULL, error, sizeof(error)) == 0);
+    voice_status(&session, again, "failed", turn);
     /* Later keyboard work and replay cannot replace the original result. */
-    const char *keyboard="22222222222222222222222222222222";
-    started=turn_started_data(&session,keyboard);
-    assert(json_object_set_new(started,"turn_number",json_integer(2))==0);
-    assert(snag_session_commit(&session,"turn_started",started,NULL,error,sizeof(error))==0);
-    voice_status(&session,again,"failed",turn);
-    snag_session_close(&session);snag_session_init(&session);
-    assert(snag_session_open(store,&session,id,error,sizeof(error))==0);
-    voice_status(&session,queue,"cancelled","");voice_status(&session,again,"failed",turn);
-    char *long_text=malloc(10001u);assert(long_text);memset(long_text,'x',10000u);long_text[10000]=0;
-    assert(snag_session_commit(&session,"voice_event",json_pack("{s:s,s:s,s:s,s:{s:s,s:s,s:s,s:s}}",
-        "connection_id","0123456789abcdef0123456789abcdef","provider","default","model","fixture",
-        "event","type","voice_transcript","speaker","user","item_id","input-3","text",long_text),NULL,error,sizeof(error))==0);
-    free(long_text);json_t *context=NULL;seq=session.next_seq;
-    assert(snag_session_voice_context(&session,&context,error,sizeof(error))==0);
-    const char *excerpt=snag_json_string(context,"recent_asr");
-    assert(excerpt && strlen(excerpt)<8192u && strstr(excerpt,"[excerpt truncated]"));
-    assert(!strcmp(snag_json_string(json_object_get(context,"latest_voice_handoff"),"status"),"failed"));
-    assert(session.next_seq==seq);json_decref(context);
-    json_t *missing=NULL;
-    assert(snag_session_voice_status(&session,"ffffffffffffffffffffffffffffffff",&missing,error,sizeof(error))<0 && !missing);
+    const char *keyboard = "22222222222222222222222222222222";
+    started = turn_started_data(&session, keyboard);
+    assert(json_object_set_new(started, "turn_number", json_integer(2)) == 0);
+    assert(snag_session_commit(&session, "turn_started", started, NULL, error, sizeof(error)) == 0);
+    voice_status(&session, again, "failed", turn);
+    snag_session_close(&session);
+    snag_session_init(&session);
+    assert(snag_session_open(store, &session, id, error, sizeof(error)) == 0);
+    voice_status(&session, queue, "cancelled", "");
+    voice_status(&session, again, "failed", turn);
+    char *long_text = malloc(10001u);
+    assert(long_text);
+    memset(long_text, 'x', 10000u);
+    long_text[10000] = 0;
+    assert(snag_session_commit(&session, "voice_event",
+               json_pack("{s:s,s:s,s:s,s:{s:s,s:s,s:s,s:s}}", "connection_id",
+                   "0123456789abcdef0123456789abcdef", "provider", "default", "model", "fixture",
+                   "event", "type", "voice_transcript", "speaker", "user", "item_id", "input-3",
+                   "text", long_text),
+               NULL, error, sizeof(error)) == 0);
+    free(long_text);
+    json_t *context = NULL;
+    seq = session.next_seq;
+    assert(snag_session_voice_context(&session, &context, error, sizeof(error)) == 0);
+    const char *excerpt = snag_json_string(context, "recent_asr");
+    assert(excerpt && strlen(excerpt) < 8192u && strstr(excerpt, "[excerpt truncated]"));
+    assert(!strcmp(
+        snag_json_string(json_object_get(context, "latest_voice_handoff"), "status"), "failed"));
+    assert(session.next_seq == seq);
+    json_decref(context);
+    json_t *missing = NULL;
+    assert(snag_session_voice_status(
+               &session, "ffffffffffffffffffffffffffffffff", &missing, error, sizeof(error)) < 0 &&
+           !missing);
     /* Forward projection verifies envelopes without replaying the reducer. */
     json_t *malformed = json_pack("{s:[n],s:s}", "queue_ids", "reason", "fixture");
     assert(malformed);
-    assert(snag_session_commit(&session, "future_turn_cancelled", json_deep_copy(malformed),
-        NULL, error, sizeof(error)) < 0 && session.next_seq == seq);
+    assert(snag_session_commit(&session, "future_turn_cancelled", json_deep_copy(malformed), NULL,
+               error, sizeof(error)) < 0 &&
+           session.next_seq == seq);
     struct snag_session broken;
     snag_session_init(&broken);
-    assert(!legacy_fixture_create(store, &broken, cwd, "default", "voice", "medium",
-        error, sizeof(error)));
+    assert(!legacy_fixture_create(
+        store, &broken, cwd, "default", "voice", "medium", error, sizeof(error)));
     char broken_queue[SNAG_ID_HEX_LEN + 1u];
-    assert(!snag_session_voice_queue(&broken, source, broken_queue, &duplicate,
-        error, sizeof(error)) && !duplicate);
+    assert(!snag_session_voice_queue(
+               &broken, source, broken_queue, &duplicate, error, sizeof(error)) &&
+           !duplicate);
     append_import_fixture(&broken, "future_turn_cancelled", malformed, false);
     assert(snag_session_voice_context(&broken, &missing, error, sizeof(error)) < 0 && !missing);
     snag_session_close(&broken);
-    json_decref(source);snag_session_close(&session);
+    json_decref(source);
+    snag_session_close(&session);
 }
 
 static void
 voice_context_record(struct snag_session *session, const char *speaker, const char *text)
 {
-    commit_event(session, "voice_event", checked_json(json_pack(
-        "{s:s,s:s,s:s,s:{s:s,s:s,s:s}}",
-        "connection_id", "0123456789abcdef0123456789abcdef", "provider", "default",
-        "model", "fixture", "event", "type", "voice_transcript", "speaker", speaker,
-        "text", text)));
+    commit_event(session, "voice_event",
+        checked_json(json_pack("{s:s,s:s,s:s,s:{s:s,s:s,s:s}}", "connection_id",
+            "0123456789abcdef0123456789abcdef", "provider", "default", "model", "fixture", "event",
+            "type", "voice_transcript", "speaker", speaker, "text", text)));
 }
 
 static void
@@ -2310,8 +2417,8 @@ test_voice_context_cursor(struct snag_store *store, const char *cwd)
     struct snag_session session;
     char error[256], id[SNAG_ID_HEX_LEN + 1u];
     snag_session_init(&session);
-    assert(snag_session_prepare(&session, cwd, "default", "model", "high",
-        error, sizeof(error)) == 0);
+    assert(
+        snag_session_prepare(&session, cwd, "default", "model", "high", error, sizeof(error)) == 0);
     memcpy(id, session.id, sizeof(id));
     voice_context_record(&session, "user", "Earlier source utterance");
     char *padding = malloc(1024u * 1024u + 1u);
@@ -2319,10 +2426,10 @@ test_voice_context_cursor(struct snag_store *store, const char *cwd)
     memset(padding, 'x', 1024u * 1024u);
     padding[1024u * 1024u] = '\0';
     for (unsigned int i = 0u; i < 4u; ++i) {
-        commit_event(&session, "voice_event", checked_json(json_pack(
-            "{s:s,s:s,s:s,s:{s:s,s:s}}", "connection_id",
-            "0123456789abcdef0123456789abcdef", "provider", "default", "model", "fixture",
-            "event", "type", "voice_usage", "padding", padding)));
+        commit_event(&session, "voice_event",
+            checked_json(json_pack("{s:s,s:s,s:s,s:{s:s,s:s}}", "connection_id",
+                "0123456789abcdef0123456789abcdef", "provider", "default", "model", "fixture",
+                "event", "type", "voice_usage", "padding", padding)));
     }
     free(padding);
     voice_context_record(&session, "assistant", "Reply beyond the first scan quantum");
@@ -2332,8 +2439,8 @@ test_voice_context_cursor(struct snag_store *store, const char *cwd)
         assert(snag_session_voice_context(&session, &context, error, sizeof(error)) == 0);
         if (phase != 1u) {
             assert(json_is_false(json_object_get(context, "history_complete")));
-            assert((uint64_t)json_integer_value(json_object_get(context,
-                "history_as_of_seq")) < seq - 1u);
+            assert((uint64_t)json_integer_value(json_object_get(context, "history_as_of_seq")) <
+                   seq - 1u);
             assert(!strcmp(snag_json_string(context, "recent_generated_reply"), ""));
             json_decref(context);
             assert(snag_session_voice_context(&session, &context, error, sizeof(error)) == 0);
@@ -2341,20 +2448,19 @@ test_voice_context_cursor(struct snag_store *store, const char *cwd)
         /* Native creation replaces the provisional JSONL cursor. Structural
          * fields also count toward each scan quantum. Finish the new view by
          * accepted sequence progress, preserving the legacy two-page checks. */
-        while (session.binary &&
-            !json_is_true(json_object_get(context, "history_complete"))) {
-            uint64_t before = (uint64_t)json_integer_value(json_object_get(context,
-                "history_as_of_seq"));
+        while (session.binary && !json_is_true(json_object_get(context, "history_complete"))) {
+            uint64_t before =
+                (uint64_t)json_integer_value(json_object_get(context, "history_as_of_seq"));
             json_decref(context);
             assert(!snag_session_voice_context(&session, &context, error, sizeof(error)));
-            assert((uint64_t)json_integer_value(json_object_get(context,
-                "history_as_of_seq")) > before);
+            assert((uint64_t)json_integer_value(json_object_get(context, "history_as_of_seq")) >
+                   before);
         }
         assert(json_is_true(json_object_get(context, "history_complete")));
-        assert((uint64_t)json_integer_value(json_object_get(context,
-            "history_as_of_seq")) == seq - 1u);
-        assert((uint64_t)json_integer_value(json_object_get(context,
-            "state_as_of_seq")) == seq - 1u);
+        assert((uint64_t)json_integer_value(json_object_get(context, "history_as_of_seq")) ==
+               seq - 1u);
+        assert(
+            (uint64_t)json_integer_value(json_object_get(context, "state_as_of_seq")) == seq - 1u);
         assert(!strcmp(snag_json_string(context, "recent_asr"), "Earlier source utterance"));
         assert(!strcmp(snag_json_string(context, "recent_generated_reply"),
             "Reply beyond the first scan quantum"));
@@ -2420,8 +2526,8 @@ test_media(const struct snag_session *session)
     fd = open(source, O_CREAT | O_EXCL | O_RDWR, 0600);
     assert(fd >= 0 && snag_write_full(fd, data, sizeof(data)) == 0);
     close(fd);
-    assert(snag_media_snapshot(session->dir_fd, session->cwd, "input.png",
-        "image/png", sizeof(data), NULL, NULL, &asset, error, sizeof(error)) == 0);
+    assert(snag_media_snapshot(session->dir_fd, session->cwd, "input.png", "image/png",
+               sizeof(data), NULL, NULL, &asset, error, sizeof(error)) == 0);
     assert(asset && snag_media_valid(asset));
     media_fd = snag_open_read_at(session->dir_fd, "media", true);
     assert(media_fd >= 0);
@@ -2446,24 +2552,31 @@ test_media(const struct snag_session *session)
     assert(bytes.len == 6u + sizeof(data));
     json_decref(bad);
     bad = json_deep_copy(asset);
-    assert(snag_json_set_new(bad, "sha256", json_string(
-        "0000000000000000000000000000000000000000000000000000000000000000")) == 0);
+    assert(
+        snag_json_set_new(bad, "sha256",
+            json_string("0000000000000000000000000000000000000000000000000000000000000000")) == 0);
     assert(snag_media_read(session->dir_fd, bad, &bytes, error, sizeof(error)) < 0);
     assert(bytes.len == 6u + sizeof(data));
-    json_decref(bad); bad = NULL;
+    json_decref(bad);
+    bad = NULL;
     /* Path traversal rejects symlinks and binary input isn't mistaken for text. */
     fd = open(source, O_CREAT | O_EXCL | O_RDWR, 0600);
-    assert(fd >= 0 && snag_write_full(fd, data, sizeof(data)) == 0); close(fd);
+    assert(fd >= 0 && snag_write_full(fd, data, sizeof(data)) == 0);
+    close(fd);
     assert(symlink(source, link) == 0);
-    assert(snag_media_snapshot(session->dir_fd, session->cwd, "alias.png",
-        "image/png", 32u, NULL, NULL, &bad, error, sizeof(error)) < 0 && !bad);
-    assert(snag_media_snapshot(session->dir_fd, session->cwd, "input.png",
-        "image/png", 2u, NULL, NULL, &bad, error, sizeof(error)) < 0 && !bad);
-    assert(snag_media_snapshot(session->dir_fd, session->cwd, "input.png",
-        "image/png", 32u, cancel_media, &calls, &bad, error, sizeof(error)) < 0 && !bad);
+    assert(snag_media_snapshot(session->dir_fd, session->cwd, "alias.png", "image/png", 32u, NULL,
+               NULL, &bad, error, sizeof(error)) < 0 &&
+           !bad);
+    assert(snag_media_snapshot(session->dir_fd, session->cwd, "input.png", "image/png", 2u, NULL,
+               NULL, &bad, error, sizeof(error)) < 0 &&
+           !bad);
+    assert(snag_media_snapshot(session->dir_fd, session->cwd, "input.png", "image/png", 32u,
+               cancel_media, &calls, &bad, error, sizeof(error)) < 0 &&
+           !bad);
     assert(errno == ECANCELED && calls == 2u);
-    assert(snag_media_snapshot(session->dir_fd, session->cwd, "input.png",
-        "text/plain\ninvalid", 32u, NULL, NULL, &bad, error, sizeof(error)) < 0 && !bad);
+    assert(snag_media_snapshot(session->dir_fd, session->cwd, "input.png", "text/plain\ninvalid",
+               32u, NULL, NULL, &bad, error, sizeof(error)) < 0 &&
+           !bad);
     /* Reopened session directory reads retained assets, not the live source. */
     fd = snag_open_read(session->dir_path, true);
     assert(fd >= 0);
@@ -2472,73 +2585,85 @@ test_media(const struct snag_session *session)
     close(fd);
     /* Corruption and missing files fail without exposing a partial append. */
     fd = snag_create_private_at(media_fd, snag_json_string(asset, "id"), false);
-    assert(fd >= 0 && snag_write_full(fd, "X", 1u) == 0); close(fd);
+    assert(fd >= 0 && snag_write_full(fd, "X", 1u) == 0);
+    close(fd);
     assert(snag_media_read(session->dir_fd, asset, &bytes, error, sizeof(error)) < 0);
     assert(bytes.len == sizeof(data));
     assert(snag_unlink_at(media_fd, snag_json_string(asset, "id"), false) == 0);
     assert(snag_media_read(session->dir_fd, asset, &bytes, error, sizeof(error)) < 0);
     assert(bytes.len == sizeof(data));
-    assert(snag_media_snapshot(session->dir_fd, session->cwd, "input.png",
-        "image/png", 32u, NULL, NULL, &bad, error, sizeof(error)) == 0);
+    assert(snag_media_snapshot(session->dir_fd, session->cwd, "input.png", "image/png", 32u, NULL,
+               NULL, &bad, error, sizeof(error)) == 0);
     assert(unlink(source) == 0 && unlink(link) == 0);
     close(media_fd);
     assert(snag_media_remove(session->dir_fd, error, sizeof(error)) == 0);
     assert(snag_media_read(session->dir_fd, bad, &bytes, error, sizeof(error)) < 0);
     assert(snag_media_remove(session->dir_fd, error, sizeof(error)) == 0);
     /* Scratch cleanup and live-worker ownership also work in lean builds. */
-    int work=snag_media_work_open(session->dir_fd,error,sizeof(error));
-    assert(work>=0);
-    assert(snag_mkdir_private_at(work,"profile")==0);
-    int profile=snag_open_read_at(work,"profile",true);
-    assert(profile>=0);
-    int residue=snag_create_private_at(profile,"residue",true);
-    assert(residue>=0 && snag_write_full(residue,"private",7u)==0);close(residue);
-    assert(snag_media_work_check(work)==0);
+    int work = snag_media_work_open(session->dir_fd, error, sizeof(error));
+    assert(work >= 0);
+    assert(snag_mkdir_private_at(work, "profile") == 0);
+    int profile = snag_open_read_at(work, "profile", true);
+    assert(profile >= 0);
+    int residue = snag_create_private_at(profile, "residue", true);
+    assert(residue >= 0 && snag_write_full(residue, "private", 7u) == 0);
+    close(residue);
+    assert(snag_media_work_check(work) == 0);
     /* Cleanup removes an unexpected link itself, preserving its destination. */
-    char *work_path=snag_path_join(session->dir_path,SNAG_MEDIA_WORK_NAME);
-    char *link_path=snag_path_join(work_path,"outside");
-    assert(link_path && symlink(session->dir_path,link_path)==0);
-    assert(snag_media_work_check(work)<0);
-    assert(snag_unlink_at(work,"outside",false)==0);
-    free(link_path);free(work_path);
-    residue=snag_create_private_at(profile,"too-large",true);
-    assert(residue>=0 && snag_truncate(residue,SNAG_MEDIA_WORK_MAX+1ull)==0);close(residue);
-    assert(snag_media_work_check(work)<0);
-    assert(snag_unlink_at(profile,"too-large",false)==0);
+    char *work_path = snag_path_join(session->dir_path, SNAG_MEDIA_WORK_NAME);
+    char *link_path = snag_path_join(work_path, "outside");
+    assert(link_path && symlink(session->dir_path, link_path) == 0);
+    assert(snag_media_work_check(work) < 0);
+    assert(snag_unlink_at(work, "outside", false) == 0);
+    free(link_path);
+    free(work_path);
+    residue = snag_create_private_at(profile, "too-large", true);
+    assert(residue >= 0 && snag_truncate(residue, SNAG_MEDIA_WORK_MAX + 1ull) == 0);
+    close(residue);
+    assert(snag_media_work_check(work) < 0);
+    assert(snag_unlink_at(profile, "too-large", false) == 0);
     close(profile);
-    struct snag_directory_lock lock={.fd=-1};
-    assert(snag_directory_lock_acquire(work,&lock)==0);
-    assert(snag_media_work_remove(session->dir_fd,error,sizeof(error))==1);
-    assert(snag_media_work_open(session->dir_fd,error,sizeof(error))<0);
+    struct snag_directory_lock lock = {.fd = -1};
+    assert(snag_directory_lock_acquire(work, &lock) == 0);
+    assert(snag_media_work_remove(session->dir_fd, error, sizeof(error)) == 1);
+    assert(snag_media_work_open(session->dir_fd, error, sizeof(error)) < 0);
     /* Retained inventory can exceed the removed 1 GiB / 4096-file caps.
      * Sparse fixtures avoid allocating that logical size in the test. */
-    assert(snag_mkdir_private_at(session->dir_fd,"media")==0);
-    media_fd=snag_open_read_at(session->dir_fd,"media",true);
-    assert(media_fd>=0);
-    for(unsigned int i=0;i<4097u;++i) {
-        char retained_id[33];snprintf(retained_id,sizeof(retained_id),"%032x",i);
-        residue=snag_create_private_at(media_fd,retained_id,true);
-        assert(residue>=0);
-        if(!i)assert(snag_truncate(residue,(1ull<<30)+1u)==0);
+    assert(snag_mkdir_private_at(session->dir_fd, "media") == 0);
+    media_fd = snag_open_read_at(session->dir_fd, "media", true);
+    assert(media_fd >= 0);
+    for (unsigned int i = 0; i < 4097u; ++i) {
+        char retained_id[33];
+        snprintf(retained_id, sizeof(retained_id), "%032x", i);
+        residue = snag_create_private_at(media_fd, retained_id, true);
+        assert(residue >= 0);
+        if (!i) assert(snag_truncate(residue, (1ull << 30) + 1u) == 0);
         close(residue);
     }
-    json_t *accepted=NULL;
-    assert(snag_media_save(session->dir_fd,data,sizeof(data),"image/png",&accepted,error,sizeof(error))==0);
-    json_decref(accepted);accepted=NULL;
-    fd=open(source,O_CREAT|O_EXCL|O_RDWR,0600);
-    assert(fd>=0 && snag_write_full(fd,data,sizeof(data))==0);close(fd);
-    assert(snag_media_snapshot(session->dir_fd,session->cwd,"input.png","image/png",
-        sizeof(data),NULL,NULL,&accepted,error,sizeof(error))==0);
-    json_decref(accepted);assert(unlink(source)==0);close(media_fd);
-    assert(snag_media_remove(session->dir_fd,error,sizeof(error))==0);
-    assert(snag_directory_lock_release(&lock)==0);close(work);
-    assert(snag_media_work_remove(session->dir_fd,error,sizeof(error))==0);
-    assert(snag_media_work_remove(session->dir_fd,error,sizeof(error))==0);
-    assert(snag_lstat_at(session->dir_fd,SNAG_MEDIA_WORK_NAME,&info)<0 && errno==ENOENT);
+    json_t *accepted = NULL;
+    assert(snag_media_save(session->dir_fd, data, sizeof(data), "image/png", &accepted, error,
+               sizeof(error)) == 0);
+    json_decref(accepted);
+    accepted = NULL;
+    fd = open(source, O_CREAT | O_EXCL | O_RDWR, 0600);
+    assert(fd >= 0 && snag_write_full(fd, data, sizeof(data)) == 0);
+    close(fd);
+    assert(snag_media_snapshot(session->dir_fd, session->cwd, "input.png", "image/png",
+               sizeof(data), NULL, NULL, &accepted, error, sizeof(error)) == 0);
+    json_decref(accepted);
+    assert(unlink(source) == 0);
+    close(media_fd);
+    assert(snag_media_remove(session->dir_fd, error, sizeof(error)) == 0);
+    assert(snag_directory_lock_release(&lock) == 0);
+    close(work);
+    assert(snag_media_work_remove(session->dir_fd, error, sizeof(error)) == 0);
+    assert(snag_media_work_remove(session->dir_fd, error, sizeof(error)) == 0);
+    assert(snag_lstat_at(session->dir_fd, SNAG_MEDIA_WORK_NAME, &info) < 0 && errno == ENOENT);
     json_decref(bad);
     json_decref(asset);
     snag_buf_free(&bytes);
-    free(source); free(link);
+    free(source);
+    free(link);
 }
 
 static void
@@ -2550,11 +2675,10 @@ test_refusal_diagnostic(const char *cwd)
     /* A refused transition must name the clause that failed and the call it
      * concerned, so a crash report is diagnostic without a debug build. */
     snag_session_init(&session);
-    assert(snag_session_prepare(&session, cwd, "default", "model", "high",
-               error, sizeof(error)) == 0);
+    assert(
+        snag_session_prepare(&session, cwd, "default", "model", "high", error, sizeof(error)) == 0);
     assert(snag_session_commit(&session, "tool_finished",
-               json_pack("{s:s}", "call_id", "0123456789abcdef"), NULL, error,
-               sizeof(error)) < 0);
+               json_pack("{s:s}", "call_id", "0123456789abcdef"), NULL, error, sizeof(error)) < 0);
     assert(strstr(error, "clause=keys") != NULL);
     assert(strstr(error, "call=0123456789abcdef") != NULL);
     /* The same refusal is persisted beside the session, so a later occurrence is captured without
@@ -2586,7 +2710,7 @@ test_many_queued_turns(struct snag_store *store, const char *cwd)
 
     snag_session_init(&session);
     assert(snag_session_create(store, &session, cwd, "default", "gpt-5.5-2026-04-23", "default",
-                              error, sizeof(error)) == 0);
+               error, sizeof(error)) == 0);
     commit_event(&session, "turn_started", turn_started_data(&session, turn_id));
     for (unsigned int i = 0; i < 130u; ++i) {
         char queue_id[SNAG_ID_HEX_LEN + 1u], text[32];
@@ -2608,13 +2732,13 @@ test_image_compaction_control(struct snag_store *store, const char *cwd)
     uint64_t source_seq;
 
     snag_session_init(&session);
-    assert(snag_session_create(store, &session, cwd, "default", "model", "high",
-                               error, sizeof(error)) == 0);
+    assert(snag_session_create(
+               store, &session, cwd, "default", "model", "high", error, sizeof(error)) == 0);
     memcpy(id, session.id, sizeof(id));
     source_seq = session.next_seq - 1u;
-    commit_event(&session, "control_requested", checked_json(json_pack("{s:i,s:s,s:I}",
-        "control", (int)SNAG_CONTROL_COMPACT, "origin", "image_boundary",
-        "source_seq", (json_int_t)source_seq)));
+    commit_event(&session, "control_requested",
+        checked_json(json_pack("{s:i,s:s,s:I}", "control", (int)SNAG_CONTROL_COMPACT, "origin",
+            "image_boundary", "source_seq", (json_int_t)source_seq)));
     assert(session.pending_controls & SNAG_CONTROL_COMPACT);
     assert(session.compact_control_image_boundary);
     assert(session.compact_control_source_seq == source_seq);
@@ -2626,9 +2750,9 @@ test_image_compaction_control(struct snag_store *store, const char *cwd)
     assert(session.compact_control_image_boundary);
     assert(session.compact_control_source_seq == source_seq);
     commit_event(&session, "control_started",
-                 checked_json(json_pack("{s:i}", "control", (int)SNAG_CONTROL_COMPACT)));
+        checked_json(json_pack("{s:i}", "control", (int)SNAG_CONTROL_COMPACT)));
     commit_event(&session, "control_finished",
-                 checked_json(json_pack("{s:i}", "control", (int)SNAG_CONTROL_COMPACT)));
+        checked_json(json_pack("{s:i}", "control", (int)SNAG_CONTROL_COMPACT)));
     assert(!(session.pending_controls & SNAG_CONTROL_COMPACT));
     assert(!session.compact_control_image_boundary);
     assert(session.compact_control_source_seq == 0u);
@@ -2638,22 +2762,23 @@ test_image_compaction_control(struct snag_store *store, const char *cwd)
 /* Write intentionally obsolete/malformed records only into an owned fixture.
  * The normal commit path must continue refusing these records. */
 static void
-append_import_fixture(struct snag_session *source, const char *type, json_t *data,
-    bool bad_pointer)
+append_import_fixture(struct snag_session *source, const char *type, json_t *data, bool bad_pointer)
 {
     assert(!source->binary);
     bool checkpoint = !strcmp(type, "session_checkpoint");
     struct snag_buf bytes = {.max = SNAG_MAX_EVENT_LINE};
     char digest[SNAG_SHA256_HEX_LEN + 1u];
-    json_t *event = json_pack("{s:O,s:s,s:I,s:s,s:I,s:s,s:i}", "data", data,
-        "prev_sha256", source->prev_sha256, "seq", (json_int_t)source->next_seq,
-        "session_id", source->id, "time_ms", (json_int_t)source->last_time_ms,
-        "type", type, "v", source->format_version == 4u ? 2 : 1);
+    json_t *event = json_pack("{s:O,s:s,s:I,s:s,s:I,s:s,s:i}", "data", data, "prev_sha256",
+        source->prev_sha256, "seq", (json_int_t)source->next_seq, "session_id", source->id,
+        "time_ms", (json_int_t)source->last_time_ms, "type", type, "v",
+        source->format_version == 4u ? 2 : 1);
     json_decref(data);
     assert(event);
     if (source->format_version == 4u)
-        assert(!json_object_set_new(event, "checkpoint_offset", json_integer(bad_pointer ? 0 :
-            checkpoint ? source->log_end : source->checkpoint_offset)));
+        assert(!json_object_set_new(event, "checkpoint_offset",
+            json_integer(bad_pointer  ? 0
+                         : checkpoint ? source->log_end
+                                      : source->checkpoint_offset)));
     assert(!snag_json_digest(event, digest));
     assert(!json_object_set_new(event, "event_sha256", json_string(digest)));
     assert(!snag_json_canonical(event, &bytes) && !snag_buf_putc(&bytes, '\n'));
@@ -2671,31 +2796,41 @@ append_import_fixture(struct snag_session *source, const char *type, json_t *dat
 }
 
 static int
-reconcile_count(void *opaque, const struct snag_session *session, uint64_t seq,
-    const char *type, const json_t *data, char *error, size_t error_size)
+reconcile_count(void *opaque, const struct snag_session *session, uint64_t seq, const char *type,
+    const json_t *data, char *error, size_t error_size)
 {
     uint64_t *count = opaque;
-    (void)type; (void)data; (void)error; (void)error_size;
+    (void)type;
+    (void)data;
+    (void)error;
+    (void)error_size;
     assert(session && session->next_seq == seq + 1u && seq == *count + 1u);
     ++*count;
     return 0;
 }
 
 static int
-reconcile_append(void *opaque, const struct snag_session *state, uint64_t seq,
-    const char *type, const json_t *data, char *error, size_t error_size)
+reconcile_append(void *opaque, const struct snag_session *state, uint64_t seq, const char *type,
+    const json_t *data, char *error, size_t error_size)
 {
     struct snag_session *source = opaque;
-    (void)state; (void)type; (void)data; (void)error; (void)error_size;
+    (void)state;
+    (void)type;
+    (void)data;
+    (void)error;
+    (void)error_size;
     if (seq == 1u) assert(!snag_write_full(source->log_fd, "{new", 4u));
     return 0;
 }
 
 static int
-reconcile_cancel(void *opaque, const struct snag_session *state, uint64_t seq,
-    const char *type, const json_t *data, char *error, size_t error_size)
+reconcile_cancel(void *opaque, const struct snag_session *state, uint64_t seq, const char *type,
+    const json_t *data, char *error, size_t error_size)
 {
-    (void)opaque; (void)state; (void)type; (void)data;
+    (void)opaque;
+    (void)state;
+    (void)type;
+    (void)data;
     return seq == 2u ? snag_fail(error, error_size, ECANCELED, "import interrupted") : 0;
 }
 
@@ -2710,15 +2845,16 @@ test_legacy_reconciliation(struct snag_store *store, const char *cwd)
     assert(work && refusals && !mkdir(work, 0700));
     snag_session_init(&source);
     snag_session_init(&restored);
-    assert(!legacy_fixture_create(store, &source, work, "default", "model", "default",
-                               error, sizeof(error)));
+    assert(!legacy_fixture_create(
+        store, &source, work, "default", "model", "default", error, sizeof(error)));
     commit_event(&source, "goal_started",
-                 goal_started_data("11111111111111111111111111111111", "retain this objective"));
-    commit_event(&source, "timer_scheduled", json_pack("{s:s,s:I,s:s}", "timer_id",
-        "22222222222222222222222222222222", "due_ms", (json_int_t)1234, "text", "remind me"));
+        goal_started_data("11111111111111111111111111111111", "retain this objective"));
+    commit_event(&source, "timer_scheduled",
+        json_pack("{s:s,s:I,s:s}", "timer_id", "22222222222222222222222222222222", "due_ms",
+            (json_int_t)1234, "text", "remind me"));
     assert(!snag_session_checkpoint(&source, error, sizeof(error)));
     commit_event(&source, "effort_changed",
-                 json_pack("{s:s,s:s}", "old_effort", "default", "new_effort", "high"));
+        json_pack("{s:s,s:s}", "old_effort", "default", "new_effort", "high"));
     append_import_fixture(&source, "session_checkpoint",
         json_pack("{s:i,s:s}", "snapshot_v", 999, "state", "obsolete derived body"), true);
     int64_t bad_checkpoint = source.checkpoint_offset, checkpoint_end = source.log_end;
@@ -2726,12 +2862,12 @@ test_legacy_reconciliation(struct snag_store *store, const char *cwd)
     uint64_t seen = 0;
     int64_t size = source.log_end;
     assert(snag_seek(source.log_fd, 7, SEEK_SET) == 7);
-    assert(!snag_store_reconcile_legacy(&source, &restored, reconcile_count, &seen,
-                                       &recovery, error, sizeof(error)));
+    assert(!snag_store_reconcile_legacy(
+        &source, &restored, reconcile_count, &seen, &recovery, error, sizeof(error)));
     assert(seen == source.next_seq - 1u && recovery.verified_records == seen);
     assert(recovery.discarded_checkpoints == 2u && recovery.repaired_pointers == 1u);
-    assert(recovery.verified_end == size && !recovery.incomplete_tail_bytes &&
-           !recovery.problem_seq);
+    assert(
+        recovery.verified_end == size && !recovery.incomplete_tail_bytes && !recovery.problem_seq);
     assert(restored.goal_status == SNAG_GOAL_ACTIVE && restored.timer_due_ms == 1234u);
     assert(!strcmp(restored.goal_prompt, "retain this objective"));
     assert(!strcmp(restored.banner_text, "after bad checkpoint"));
@@ -2744,20 +2880,20 @@ test_legacy_reconciliation(struct snag_store *store, const char *cwd)
         struct snag_journal_cursor cursor = {0};
         assert(!snag_store_legacy_cursor_at(&view, 0, &cursor, error, sizeof(error)));
         assert(cursor.next_seq == 1u && cursor.offset == 0 &&
-            strspn(cursor.prev_sha256, "0") == SNAG_SHA256_HEX_LEN);
+               strspn(cursor.prev_sha256, "0") == SNAG_SHA256_HEX_LEN);
         assert(!snag_store_legacy_cursor_at(&view, bad_checkpoint, &cursor, error, sizeof(error)));
         assert(cursor.next_seq == source.next_seq - 2u && cursor.offset == bad_checkpoint);
         assert(!snag_store_legacy_cursor_at(&view, checkpoint_end, &cursor, error, sizeof(error)));
         assert(cursor.next_seq == source.next_seq - 1u && cursor.offset == checkpoint_end);
         assert(!snag_store_legacy_cursor_at(&view, size, &cursor, error, sizeof(error)));
         assert(cursor.next_seq == source.next_seq && cursor.offset == size &&
-            !strcmp(cursor.prev_sha256, source.prev_sha256));
+               !strcmp(cursor.prev_sha256, source.prev_sha256));
         struct snag_journal_cursor saved;
         memcpy(&saved, &cursor, sizeof(saved));
         const int64_t invalid[] = {-1, size + 1, bad_checkpoint + 1, checkpoint_end - 1};
         for (size_t i = 0u; i < sizeof(invalid) / sizeof(invalid[0]); ++i) {
-            assert(snag_store_legacy_cursor_at(&view, invalid[i], &cursor,
-                error, sizeof(error)) < 0);
+            assert(
+                snag_store_legacy_cursor_at(&view, invalid[i], &cursor, error, sizeof(error)) < 0);
             assert(errno == EINVAL && !memcmp(&saved, &cursor, sizeof(saved)));
         }
         assert(snag_seek(source.log_fd, 0, SEEK_CUR) == 7);
@@ -2765,14 +2901,15 @@ test_legacy_reconciliation(struct snag_store *store, const char *cwd)
     json_t *expected = snag_checkpoint_state_encode(&source);
     json_t *actual = snag_checkpoint_state_encode(&restored);
     assert(expected && actual && json_equal(expected, actual));
-    json_decref(expected); json_decref(actual);
+    json_decref(expected);
+    json_decref(actual);
     assert_session_lock_retained(&source, "after legacy import");
 
     /* A torn append is counted, never truncated or interpreted as an event. */
     assert(!snag_write_full(source.log_fd, "{torn", 5u));
     assert(snag_seek(source.log_fd, 7, SEEK_SET) == 7);
-    assert(!snag_store_reconcile_legacy(&source, &restored, NULL, NULL,
-                                       &recovery, error, sizeof(error)));
+    assert(!snag_store_reconcile_legacy(
+        &source, &restored, NULL, NULL, &recovery, error, sizeof(error)));
     assert(recovery.incomplete_tail_bytes == 5u && recovery.verified_end == size);
     assert(snag_seek(source.log_fd, 0, SEEK_CUR) == 7);
     struct stat st;
@@ -2781,14 +2918,16 @@ test_legacy_reconciliation(struct snag_store *store, const char *cwd)
 
     const char *saved_prompt = restored.goal_prompt;
     uint64_t saved_seq = restored.next_seq;
-    assert(snag_store_reconcile_legacy(&source, &restored, reconcile_cancel, NULL,
-                                      &recovery, error, sizeof(error)) < 0 && errno == ECANCELED);
+    assert(snag_store_reconcile_legacy(
+               &source, &restored, reconcile_cancel, NULL, &recovery, error, sizeof(error)) < 0 &&
+           errno == ECANCELED);
     assert(recovery.verified_records == 1u && recovery.problem_seq == 2u);
     assert(recovery.problem_start == recovery.verified_end &&
            recovery.problem_end > recovery.problem_start);
     assert(restored.goal_prompt == saved_prompt && restored.next_seq == saved_seq);
-    assert(snag_store_reconcile_legacy(&source, &restored, reconcile_append, &source,
-                                      &recovery, error, sizeof(error)) < 0 && errno == EAGAIN);
+    assert(snag_store_reconcile_legacy(&source, &restored, reconcile_append, &source, &recovery,
+               error, sizeof(error)) < 0 &&
+           errno == EAGAIN);
     assert(strstr(error, "changed during import") && recovery.problem_seq == 1u);
     assert(recovery.problem_start == 0 && recovery.problem_end == size);
     assert(restored.goal_prompt == saved_prompt && restored.next_seq == saved_seq);
@@ -2804,8 +2943,8 @@ test_legacy_reconciliation(struct snag_store *store, const char *cwd)
     int writer = openat(source.dir_fd, "events.jsonl", O_WRONLY | O_CLOEXEC);
     int64_t changed_offset = bad_checkpoint + (int64_t)(value - record);
     assert(writer >= 0 && pwrite(writer, "O", 1u, changed_offset) == 1);
-    assert(snag_store_reconcile_legacy(&source, &restored, NULL, NULL,
-                                      &recovery, error, sizeof(error)) < 0);
+    assert(snag_store_reconcile_legacy(
+               &source, &restored, NULL, NULL, &recovery, error, sizeof(error)) < 0);
     assert(strstr(error, "digest mismatch") && recovery.problem_seq == 6u);
     assert(recovery.verified_records == 5u && recovery.verified_end == bad_checkpoint);
     assert(recovery.problem_start == bad_checkpoint && recovery.problem_end == checkpoint_end);
@@ -2815,56 +2954,63 @@ test_legacy_reconciliation(struct snag_store *store, const char *cwd)
     /* A committed invalid semantic event is not a replaceable checkpoint. */
     append_import_fixture(&source, "goal_completed",
         goal_actor_data("33333333333333333333333333333333", "model"), false);
-    assert(snag_store_reconcile_legacy(&source, &restored, NULL, NULL,
-                                      &recovery, error, sizeof(error)) < 0);
+    assert(snag_store_reconcile_legacy(
+               &source, &restored, NULL, NULL, &recovery, error, sizeof(error)) < 0);
     assert(strstr(error, "goal_completed") && recovery.problem_seq == saved_seq);
     assert(recovery.verified_end == size && recovery.problem_start == size);
     assert(recovery.problem_end == source.log_end && restored.next_seq == saved_seq);
     assert(restored.goal_prompt == saved_prompt && restored.goal_status == SNAG_GOAL_ACTIVE);
     assert(access(refusals, F_OK) < 0 && errno == ENOENT);
     assert(!snag_truncate(source.log_fd, size));
-    source.log_end = size; source.next_seq = saved_seq;
+    source.log_end = size;
+    source.next_seq = saved_seq;
     memcpy(source.prev_sha256, restored.prev_sha256, sizeof(source.prev_sha256));
     append_import_fixture(&source, "future_required_event", json_object(), false);
-    assert(snag_store_reconcile_legacy(&source, &restored, NULL, NULL,
-                                      &recovery, error, sizeof(error)) < 0 && errno == ENOTSUP);
+    assert(snag_store_reconcile_legacy(
+               &source, &restored, NULL, NULL, &recovery, error, sizeof(error)) < 0 &&
+           errno == ENOTSUP);
     assert(recovery.problem_seq == saved_seq && recovery.problem_start == size &&
            recovery.problem_end == source.log_end && restored.next_seq == saved_seq);
     int lock = source.lock_fd;
     source.lock_fd = -1;
-    assert(snag_store_reconcile_legacy(&source, &restored, NULL, NULL,
-                                      &recovery, error, sizeof(error)) < 0 && errno == EINVAL);
+    assert(snag_store_reconcile_legacy(
+               &source, &restored, NULL, NULL, &recovery, error, sizeof(error)) < 0 &&
+           errno == EINVAL);
     source.lock_fd = lock;
     assert(restored.goal_prompt == saved_prompt);
     snag_session_close(&source);
     snag_session_close(&restored);
 
     /* Format2's permissive ordinary replay must not hide lost state in import. */
-    assert(!legacy_fixture_create(store, &source, work, "default", "model", "high",
-                               error, sizeof(error)));
+    assert(!legacy_fixture_create(
+        store, &source, work, "default", "model", "high", error, sizeof(error)));
     assert(!snag_truncate(source.log_fd, 0));
-    source.log_end = 0; source.next_seq = 1u; source.format_version = 2u;
+    source.log_end = 0;
+    source.next_seq = 1u;
+    source.format_version = 2u;
     memset(source.prev_sha256, '0', SNAG_SHA256_HEX_LEN);
-    append_import_fixture(&source, "session_created", json_pack("{s:s,s:s,s:s,s:i,s:s,s:s}",
-        "default_effort", "high", "default_model", "model", "default_provider", "default",
-        "format", 2, "protocol", "responses", "workspace", work), false);
+    append_import_fixture(&source, "session_created",
+        json_pack("{s:s,s:s,s:s,s:i,s:s,s:s}", "default_effort", "high", "default_model", "model",
+            "default_provider", "default", "format", 2, "protocol", "responses", "workspace", work),
+        false);
     size = source.log_end;
     append_import_fixture(&source, "effort_changed",
         json_pack("{s:s,s:s}", "old_effort", "not-the-old-value", "new_effort", "low"), false);
-    assert(snag_store_reconcile_legacy(&source, &restored, NULL, NULL,
-                                      &recovery, error, sizeof(error)) < 0);
+    assert(snag_store_reconcile_legacy(
+               &source, &restored, NULL, NULL, &recovery, error, sizeof(error)) < 0);
     assert(strstr(error, "effort_changed") && recovery.verified_records == 1u);
     assert(recovery.problem_seq == 2u && recovery.problem_start == size);
     assert(recovery.problem_end == source.log_end && restored.log_fd < 0 && !restored.cwd);
     assert(access(refusals, F_OK) < 0 && errno == ENOENT);
     assert(!snag_truncate(source.log_fd, 0));
-    assert(snag_store_reconcile_legacy(&source, &restored, NULL, NULL,
-                                      &recovery, error, sizeof(error)) < 0);
+    assert(snag_store_reconcile_legacy(
+               &source, &restored, NULL, NULL, &recovery, error, sizeof(error)) < 0);
     assert(strstr(error, "no complete events") && !recovery.verified_records &&
            recovery.problem_seq == 1u && !recovery.problem_start && !recovery.problem_end);
     snag_session_close(&source);
     snag_session_close(&restored);
-    free(refusals); free(work);
+    free(refusals);
+    free(work);
 }
 
 static void
@@ -2908,8 +3054,7 @@ void test_store_binary_replay(struct snag_store *store, const char *cwd);
 int
 main(int argc, char **argv)
 {
-    if (argc == 4 && (!strcmp(argv[1], "--read-history") ||
-        !strcmp(argv[1], "--read-boundary"))) {
+    if (argc == 4 && (!strcmp(argv[1], "--read-history") || !strcmp(argv[1], "--read-boundary"))) {
         return fixture_history_read(argv[2], argv[3], !strcmp(argv[1], "--read-boundary"));
     }
     if (argc == 7 && !strcmp(argv[1], "--create-legacy")) {
@@ -2937,8 +3082,8 @@ main(int argc, char **argv)
     test_store_binary_event();
     test_store_binary_legacy();
     test_checkpoint_text_width();
-    char *temp = snag_path_join(getenv("TMPDIR") ? getenv("TMPDIR") : "/tmp",
-                                "snajpagent-store-XXXXXX");
+    char *temp =
+        snag_path_join(getenv("TMPDIR") ? getenv("TMPDIR") : "/tmp", "snajpagent-store-XXXXXX");
     char state[4096];
     char cwd[4096];
     char cwd2[4096];
@@ -2985,23 +3130,22 @@ main(int argc, char **argv)
     test_journal_lifetime_boundaries(&store, cwd);
     /* Released-format lifecycle and raw descriptor/JSONL byte faults. Native
      * default creation and history are exercised by the focused tests above. */
-    assert(legacy_fixture_create(&store, &session, cwd, "default",
-            "gpt-5.5-2026-04-23", "default",
-                              error, sizeof(error)) == 0);
+    assert(legacy_fixture_create(&store, &session, cwd, "default", "gpt-5.5-2026-04-23", "default",
+               error, sizeof(error)) == 0);
     test_media(&session);
     test_session_location(&store, &session);
     memcpy(id, session.id, sizeof(id));
     memcpy(id_prefix, session.id, 8u);
     id_prefix[8] = '\0';
-    commit_event(&session, "model_selection_changed", json_pack("{s:s,s:s,s:s,s:s,s:s,s:s}",
-                     "old_model", "gpt-5.5-2026-04-23", "new_model", "gpt-5.5-2026-04-23-alt",
-                     "old_provider", "default", "new_provider", "default",
-                     "old_effort", "default", "new_effort", "default"));
-    commit_event(&session, "effort_changed", change_data("old_effort", "default", "new_effort", "high"));
+    commit_event(&session, "model_selection_changed",
+        json_pack("{s:s,s:s,s:s,s:s,s:s,s:s}", "old_model", "gpt-5.5-2026-04-23", "new_model",
+            "gpt-5.5-2026-04-23-alt", "old_provider", "default", "new_provider", "default",
+            "old_effort", "default", "new_effort", "default"));
+    commit_event(
+        &session, "effort_changed", change_data("old_effort", "default", "new_effort", "high"));
     assert(strcmp(session.default_model, "gpt-5.5-2026-04-23-alt") == 0);
     assert(strcmp(session.default_effort, "high") == 0);
-    commit_event(&session, "cwd_changed", change_data("old_cwd", cwd,
-                     "new_cwd", cwd2));
+    commit_event(&session, "cwd_changed", change_data("old_cwd", cwd, "new_cwd", cwd2));
     assert(strcmp(session.cwd, cwd2) == 0);
     {
         int writable = session.log_fd;
@@ -3011,8 +3155,8 @@ main(int argc, char **argv)
         session.log_fd = openat(session.dir_fd, "events.jsonl", O_RDONLY);
         assert(session.log_fd >= 0);
         struct snag_session before = session;
-        assert(snag_session_commit(&session, "cwd_changed",
-            json_incref(change), &written, error, sizeof(error)) < 0);
+        assert(snag_session_commit(&session, "cwd_changed", json_incref(change), &written, error,
+                   sizeof(error)) < 0);
         ++before.write_failures; /* Only the process-local error diagnostic advances. */
         assert(memcmp(&session, &before, sizeof(session)) == 0);
         assert(written == UINT64_MAX);
@@ -3026,25 +3170,29 @@ main(int argc, char **argv)
     durable_seq = session.next_seq;
     bad = json_object();
     assert(bad);
-    assert(snag_json_set_new(bad, "final_item_id", json_string("00000000000000000000000000000000")) == 0);
-    assert(snag_json_set_new(bad, "final_response_id", json_string("00000000000000000000000000000000")) == 0);
+    assert(snag_json_set_new(
+               bad, "final_item_id", json_string("00000000000000000000000000000000")) == 0);
+    assert(snag_json_set_new(
+               bad, "final_response_id", json_string("00000000000000000000000000000000")) == 0);
     assert(snag_json_set_new(bad, "turn_id", json_string("00000000000000000000000000000000")) == 0);
     assert(snag_session_commit(&session, "turn_completed", bad, NULL, error, sizeof(error)) < 0);
     assert(session.log_end == durable_end);
     assert(session.next_seq == durable_seq);
     assert(snag_write_full(session.log_fd, "incomplete", 10u) == 0);
     assert(snag_sync_file(session.log_fd) == 0);
-    int crashed_work=snag_media_work_open(session.dir_fd,error,sizeof(error));
-    assert(crashed_work>=0);
-    int crashed_file=snag_create_private_at(crashed_work,"residue",true);
-    assert(crashed_file>=0 && snag_write_full(crashed_file,"residue",7u)==0);
-    close(crashed_file);close(crashed_work);
+    int crashed_work = snag_media_work_open(session.dir_fd, error, sizeof(error));
+    assert(crashed_work >= 0);
+    int crashed_file = snag_create_private_at(crashed_work, "residue", true);
+    assert(crashed_file >= 0 && snag_write_full(crashed_file, "residue", 7u) == 0);
+    close(crashed_file);
+    close(crashed_work);
     snag_session_close(&session);
 
     snag_session_init(&session);
     assert(snag_session_open(&store, &session, id, error, sizeof(error)) == 0);
     snag_file_info scratch_info;
-    assert(snag_lstat_at(session.dir_fd,SNAG_MEDIA_WORK_NAME,&scratch_info)<0 && errno==ENOENT);
+    assert(
+        snag_lstat_at(session.dir_fd, SNAG_MEDIA_WORK_NAME, &scratch_info) < 0 && errno == ENOENT);
     assert(session.log_end == durable_end);
     assert(session.next_seq == 5u);
     assert(session.turn_count == 0u);
@@ -3060,42 +3208,44 @@ main(int argc, char **argv)
         memset(text, 'x', sizeof(text) - 1u);
         text[sizeof(text) - 1u] = '\0';
         event = checked_json(json_pack("{s:s,s:b,s:s,s:b,s:s,s:b,s:s,s:s,s:i,s:s,s:i,s:b}",
-            "endpoint", "local", "historical", 0, "kind", "message", "local", 1,
-            "nick", "agent", "op", 0, "room", "#lab", "text", text,
-            "timestamp_ms", 1000, "stream", "", "sequence", 0, "input", 0));
+            "endpoint", "local", "historical", 0, "kind", "message", "local", 1, "nick", "agent",
+            "op", 0, "room", "#lab", "text", text, "timestamp_ms", 1000, "stream", "", "sequence",
+            0, "input", 0));
         oversized = json_deep_copy(event);
         assert(oversized);
         durable_seq = session.next_seq;
         durable_end = session.log_end;
-        assert(snag_session_commit(&session, "irc_event", oversized, NULL, error, sizeof(error)) < 0);
+        assert(
+            snag_session_commit(&session, "irc_event", oversized, NULL, error, sizeof(error)) < 0);
         assert(session.next_seq == durable_seq && session.log_end == durable_end);
         text[SNAG_IRC_TEXT_MAX] = '\0';
         assert(snag_json_set_new(event, "text", json_string(text)) == 0);
         struct snag_irc_event decoded;
-        static const char *const kinds[] = {
-            "connected", "disconnected", "join", "part", "quit", "nick",
-            "message", "notice", "topic", "mode", "history_ready" };
+        static const char *const kinds[] = {"connected", "disconnected", "join", "part", "quit",
+            "nick", "message", "notice", "topic", "mode", "history_ready"};
         for (size_t i = 0u; i < sizeof(kinds) / sizeof(kinds[0]); ++i) {
             assert(snag_json_set_new(event, "kind", json_string(kinds[i])) == 0);
             assert(snag_irc_event_read(event, &decoded) == 0);
             assert(decoded.kind == (enum snag_irc_event_kind)i);
-            assert(decoded.timestamp_ms == 1000u && decoded.local && !decoded.op && !decoded.historical);
+            assert(decoded.timestamp_ms == 1000u && decoded.local && !decoded.op &&
+                   !decoded.historical);
             assert(!strcmp(decoded.endpoint, "local") && !strcmp(decoded.room, "#lab") &&
                    !strcmp(decoded.nick, "agent") && !strcmp(decoded.text, text));
             json_t *encoded = snag_irc_event_data(&decoded);
             assert(encoded && json_equal(event, encoded));
             json_decref(encoded);
         }
-        static const char *const invalid[] = {
-            "{\"kind\":\"unknown\"}", "{\"endpoint\":\"\"}", "{\"room\":\"bad\\nroom\"}", "{\"nick\":null}",
-            "{\"historical\":1}", "{\"local\":null}", "{\"op\":\"true\"}",
-            "{\"timestamp_ms\":0}", "{\"timestamp_ms\":-1}", "{\"extra\":true}" };
+        static const char *const invalid[] = {"{\"kind\":\"unknown\"}", "{\"endpoint\":\"\"}",
+            "{\"room\":\"bad\\nroom\"}", "{\"nick\":null}", "{\"historical\":1}",
+            "{\"local\":null}", "{\"op\":\"true\"}", "{\"timestamp_ms\":0}",
+            "{\"timestamp_ms\":-1}", "{\"extra\":true}"};
         for (size_t i = 0u; i < sizeof(invalid) / sizeof(invalid[0]); ++i) {
             json_t *bad = json_deep_copy(event);
             json_t *change = json_loadb(invalid[i], strlen(invalid[i]), 0u, NULL);
             assert(bad && change);
             void *field = json_object_iter(change);
-            assert(json_object_set(bad, json_object_iter_key(field), json_object_iter_value(field)) == 0);
+            assert(json_object_set(
+                       bad, json_object_iter_key(field), json_object_iter_value(field)) == 0);
             assert(snag_irc_event_read(bad, &decoded) < 0);
             json_decref(change);
             json_decref(bad);
@@ -3123,44 +3273,47 @@ main(int argc, char **argv)
         durable_end = session.log_end;
         durable_seq = session.next_seq;
         assert(snag_session_commit(&session, "goal_reworded",
-            goal_reworded_data(goal1, "model", "model rewrite"), NULL, error, sizeof(error)) < 0);
+                   goal_reworded_data(goal1, "model", "model rewrite"), NULL, error,
+                   sizeof(error)) < 0);
         assert(session.log_end == durable_end);
         assert(session.next_seq == durable_seq);
         assert(strcmp(session.goal_prompt, "finish the release") == 0);
         /* Locked also means the model may not block it, which it could do before this
          * rule existed. Finishing it stays allowed, so the goal can still complete. */
         assert(snag_session_commit(&session, "goal_blocked",
-            goal_reason_data(goal1, "model", "reason", "dependency unavailable"), NULL, error, sizeof(error)) < 0);
+                   goal_reason_data(goal1, "model", "reason", "dependency unavailable"), NULL,
+                   error, sizeof(error)) < 0);
         assert(session.goal_status == SNAG_GOAL_ACTIVE && session.goal_blocker == NULL);
         commit_event(&session, "goal_reworded",
-                     goal_reworded_data(goal1, "user", "finish and publish the release"));
+            goal_reworded_data(goal1, "user", "finish and publish the release"));
         assert(session.goal_revision == 2u);
         commit_event(&session, "goal_lock_changed", goal_lock_data(goal1, false));
         assert(!session.goal_locked);
         /* Unlocked again, so the model's own block and completion below are allowed. */
         commit_event(&session, "goal_paused", goal_reason_data(goal1, NULL, "reason", "user"));
         assert(session.goal_status == SNAG_GOAL_PAUSED);
-        assert(snag_session_commit(&session, "goal_completed", goal_actor_data(goal1, "model"), NULL,
-            error, sizeof(error)) < 0);
+        assert(snag_session_commit(&session, "goal_completed", goal_actor_data(goal1, "model"),
+                   NULL, error, sizeof(error)) < 0);
         assert(snag_session_commit(&session, "goal_resumed",
-            goal_reason_data(goal1, NULL, "unused", "bad"), NULL, error, sizeof(error)) < 0);
+                   goal_reason_data(goal1, NULL, "unused", "bad"), NULL, error, sizeof(error)) < 0);
         commit_event(&session, "goal_resumed", checked_json(json_pack("{s:s}", "goal_id", goal1)));
-        commit_event(&session, "goal_blocked", goal_reason_data(goal1, "model", "reason",
-                         "dependency unavailable"));
+        commit_event(&session, "goal_blocked",
+            goal_reason_data(goal1, "model", "reason", "dependency unavailable"));
         assert(session.goal_status == SNAG_GOAL_BLOCKED);
         assert(strcmp(session.goal_blocker, "dependency unavailable") == 0);
         commit_event(&session, "goal_resumed", checked_json(json_pack("{s:s}", "goal_id", goal1)));
         assert(session.goal_blocker == NULL);
         commit_event(&session, "goal_completed", goal_actor_data(goal1, "model"));
         assert(session.goal_status == SNAG_GOAL_COMPLETED);
-        assert(snag_session_commit(&session, "goal_started", goal_started_data(goal1, "duplicate id"), NULL,
-            error, sizeof(error)) < 0);
+        assert(snag_session_commit(&session, "goal_started",
+                   goal_started_data(goal1, "duplicate id"), NULL, error, sizeof(error)) < 0);
         commit_event(&session, "goal_started", goal_started_data(goal2, "next goal"));
-        commit_event(&session, "goal_cancelled", checked_json(json_pack("{s:s}", "goal_id", goal2)));
+        commit_event(
+            &session, "goal_cancelled", checked_json(json_pack("{s:s}", "goal_id", goal2)));
         commit_event(&session, "goal_started", goal_started_data(goal3, "copy-on-write goal"));
         session.goal_turn_count = 9u; /* replacement must establish a fresh identity counter */
         commit_event(&session, "goal_replaced",
-                     goal_replaced_data(goal3, goal4, "user", "replacement goal"));
+            goal_replaced_data(goal3, goal4, "user", "replacement goal"));
         assert(strcmp(session.goal_parent_id, goal3) == 0);
         assert(strcmp(session.goal_id, goal4) == 0);
         assert(strcmp(session.goal_prompt, "replacement goal") == 0);
@@ -3184,7 +3337,8 @@ main(int argc, char **argv)
          * committed now stays refused. Self-contained, in its own store, so the rest of the suite
          * sees no extra session. */
         const char *locked_goal = "33333333333333333333333333333333";
-        char legacy_state[4096], legacy_work[4096], legacy_id[SNAG_ID_HEX_LEN + 1u], legacy_error[256];
+        char legacy_state[4096], legacy_work[4096], legacy_id[SNAG_ID_HEX_LEN + 1u],
+            legacy_error[256];
         struct snag_store legacy_store;
         struct snag_session legacy_session;
         struct snag_buf legacy_line = {.max = 1024u * 1024u};
@@ -3198,30 +3352,32 @@ main(int argc, char **argv)
         assert(mkdir(legacy_work, 0700) == 0);
         snag_store_init(&legacy_store);
         snag_session_init(&legacy_session);
-        assert(snag_store_open(&legacy_store, legacy_state, legacy_error, sizeof(legacy_error)) == 0);
-        assert(legacy_fixture_create(&legacy_store, &legacy_session, legacy_work,
-            "default", "model", "high", legacy_error, sizeof(legacy_error)) == 0);
+        assert(
+            snag_store_open(&legacy_store, legacy_state, legacy_error, sizeof(legacy_error)) == 0);
+        assert(legacy_fixture_create(&legacy_store, &legacy_session, legacy_work, "default",
+                   "model", "high", legacy_error, sizeof(legacy_error)) == 0);
         assert(snag_strcpy(legacy_id, sizeof(legacy_id), legacy_session.id));
-        commit_event(&legacy_session, "goal_started", goal_started_data(locked_goal, "legacy replay"));
+        commit_event(
+            &legacy_session, "goal_started", goal_started_data(locked_goal, "legacy replay"));
         commit_event(&legacy_session, "goal_lock_changed", goal_lock_data(locked_goal, true));
         assert(snag_session_commit(&legacy_session, "goal_blocked",
-                   goal_reason_data(locked_goal, "model", "reason", "refused while live"),
-                   NULL, legacy_error, sizeof(legacy_error)) < 0);
+                   goal_reason_data(locked_goal, "model", "reason", "refused while live"), NULL,
+                   legacy_error, sizeof(legacy_error)) < 0);
 
         /* Write the block the way a build without the rule would have written it. */
         legacy_data = goal_reason_data(locked_goal, "model", "reason", "written before the rule");
         legacy_event = json_pack("{s:O,s:s,s:I,s:s,s:I,s:s,s:i,s:I}", "data", legacy_data,
             "prev_sha256", legacy_session.prev_sha256, "seq", (json_int_t)legacy_session.next_seq,
             "session_id", legacy_session.id, "time_ms", (json_int_t)legacy_session.last_time_ms,
-            "type", "goal_blocked", "v", 2,
-            "checkpoint_offset", (json_int_t)legacy_session.checkpoint_offset);
+            "type", "goal_blocked", "v", 2, "checkpoint_offset",
+            (json_int_t)legacy_session.checkpoint_offset);
         json_decref(legacy_data);
         assert(legacy_event && snag_json_digest(legacy_event, digest) == 0);
         assert(json_object_set_new(legacy_event, "event_sha256", json_string(digest)) == 0);
         assert(snag_json_canonical(legacy_event, &legacy_line) == 0);
         assert(snag_buf_putc(&legacy_line, '\n') == 0);
         assert(snprintf(journal, sizeof(journal), "%s/sessions/%s/events.jsonl", legacy_state,
-                        legacy_id) > 0);
+                   legacy_id) > 0);
         file = fopen(journal, "ab");
         assert(file && fwrite(legacy_line.data, 1u, legacy_line.len, file) == legacy_line.len);
         assert(fclose(file) == 0);
@@ -3231,8 +3387,8 @@ main(int argc, char **argv)
         /* Reopening is the replay that used to fail. */
         snag_session_close(&legacy_session);
         snag_session_init(&legacy_session);
-        assert(snag_session_open(&legacy_store, &legacy_session, legacy_id,
-                                 legacy_error, sizeof(legacy_error)) == 0);
+        assert(snag_session_open(&legacy_store, &legacy_session, legacy_id, legacy_error,
+                   sizeof(legacy_error)) == 0);
         assert(legacy_session.goal_locked && legacy_session.goal_status == SNAG_GOAL_BLOCKED);
         assert(legacy_session.goal_blocker &&
                strcmp(legacy_session.goal_blocker, "written before the rule") == 0);
@@ -3249,11 +3405,12 @@ main(int argc, char **argv)
     unique_prefix[9] = '\0';
     struct snag_buf list_text = {.max = 1024u * 1024u};
     struct listed_session listed = {.prefix = unique_prefix, .text = &list_text};
-    assert(!snag_store_list(&store, &session, UINT64_MAX, 0u, find_listed_session,
-        &listed, error, sizeof(error)));
+    assert(!snag_store_list(
+        &store, &session, UINT64_MAX, 0u, find_listed_session, &listed, error, sizeof(error)));
     assert(listed.rows && listed.found && listed.header);
     assert_session_lock_retained(&session, "after listing");
-    json_t *catalog = snag_store_catalog(&store, &session, UINT64_MAX, NULL, NULL, error, sizeof(error));
+    json_t *catalog =
+        snag_store_catalog(&store, &session, UINT64_MAX, NULL, NULL, error, sizeof(error));
     assert(catalog && json_array_size(catalog));
     bool catalog_found = false;
     struct snag_buf catalog_text = {.max = list_text.max};
@@ -3282,8 +3439,8 @@ main(int argc, char **argv)
     assert(unlinkat(store.sessions_fd, collision, AT_REMOVEDIR) == 0);
     /* Presentation files survive ordinary resume, but explicit session
      * deletion must remove them even in a build with WITH_VM=0. */
-    int report_fd = snag_create_private_at(session.dir_fd,
-        ".view-report-0123456789abcdef0123456789abcdef", true);
+    int report_fd = snag_create_private_at(
+        session.dir_fd, ".view-report-0123456789abcdef0123456789abcdef", true);
     assert(report_fd >= 0 && snag_write_full(report_fd, "/status\nretained report\n", 24u) == 0);
     assert(close(report_fd) == 0);
     report_fd = snag_create_private_at(session.dir_fd, ".view-reports.jsonl", true);
@@ -3299,11 +3456,11 @@ main(int argc, char **argv)
         static const char compact_id[] = "55555555555555555555555555555555";
 
         snag_session_init(&session);
-        assert(legacy_fixture_create(&store, &session, cwd, "default",
-            "gpt-5.5-2026-04-23", "default",
-                                  error, sizeof(error)) == 0);
+        assert(legacy_fixture_create(&store, &session, cwd, "default", "gpt-5.5-2026-04-23",
+                   "default", error, sizeof(error)) == 0);
         memcpy(id, session.id, sizeof(id));
-        static const char hash[] = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        static const char hash[] =
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
         commit_event(&session, "compaction_started",
             checked_json(json_pack("{s:s,s:s,s:s,s:s,s:I,s:s,s:n,s:s,s:s,s:s,s:I,s:s}",
                 "capability_version", SNAJPAGENT_CAPABILITY_VERSION, "compact_id", compact_id,
@@ -3314,12 +3471,14 @@ main(int argc, char **argv)
         assert(strcmp(session.active_compact_id, compact_id) == 0);
         durable_end = session.log_end;
         durable_seq = session.next_seq;
-        assert(snag_session_commit(&session, "compaction_interrupted", compaction_interrupted_data(compact_id,
-                                                              "invalid"), NULL, error, sizeof(error)) < 0);
+        assert(snag_session_commit(&session, "compaction_interrupted",
+                   compaction_interrupted_data(compact_id, "invalid"), NULL, error,
+                   sizeof(error)) < 0);
         assert(session.log_end == durable_end);
         assert(session.next_seq == durable_seq);
         assert(strcmp(session.active_compact_id, compact_id) == 0);
-        commit_event(&session, "compaction_interrupted", compaction_interrupted_data(compact_id, "steering"));
+        commit_event(&session, "compaction_interrupted",
+            compaction_interrupted_data(compact_id, "steering"));
         assert(session.active_compact_id[0] == '\0');
         assert(session.active_compact_source_sha256[0] == '\0');
         assert(session.active_compact_source_seq == 0u);
@@ -3335,16 +3494,16 @@ main(int argc, char **argv)
 
     for (unsigned int cut = 0u; cut < 4u; ++cut) {
         snag_session_init(&session);
-        assert(legacy_fixture_create(&store, &session, cwd, "default",
-            "gpt-5.5-2026-04-23", "default",
-                                  error, sizeof(error)) == 0);
+        assert(legacy_fixture_create(&store, &session, cwd, "default", "gpt-5.5-2026-04-23",
+                   "default", error, sizeof(error)) == 0);
         memcpy(id, session.id, sizeof(id));
         memcpy(id_prefix, session.id, 8u);
         id_prefix[8] = '\0';
-        assert(snprintf(trash_name, sizeof(trash_name), "%s.%032x",
-                        session.id, 1u) == (int)(sizeof(trash_name) - 1u));
-        commit_event(&session, "session_delete_requested", checked_json(json_pack("{s:s,s:s}",
-            "confirmed_id_prefix", id_prefix, "trash_name", trash_name)));
+        assert(snprintf(trash_name, sizeof(trash_name), "%s.%032x", session.id, 1u) ==
+               (int)(sizeof(trash_name) - 1u));
+        commit_event(&session, "session_delete_requested",
+            checked_json(json_pack(
+                "{s:s,s:s}", "confirmed_id_prefix", id_prefix, "trash_name", trash_name)));
         assert(renameat(store.sessions_fd, id, store.trash_fd, trash_name) == 0);
         if (cut) assert(unlinkat(session.dir_fd, "events.jsonl", 0) == 0);
         if (cut > 1u) assert(unlinkat(session.dir_fd, "lock", 0) == 0);
@@ -3365,26 +3524,26 @@ main(int argc, char **argv)
         snag_session_close(&session);
     }
     snag_session_init(&session);
-    assert(legacy_fixture_create(&store, &session, cwd,
-                              "default", "gpt-5.5-2026-04-23", "default",
-                              error, sizeof(error)) == 0);
+    assert(legacy_fixture_create(&store, &session, cwd, "default", "gpt-5.5-2026-04-23", "default",
+               error, sizeof(error)) == 0);
     memcpy(id, session.id, sizeof(id));
     memcpy(id_prefix, session.id, 8u);
     id_prefix[8] = '\0';
-    assert(snprintf(trash_name, sizeof(trash_name), "%s.%032x",
-                    session.id, 1u) == (int)(sizeof(trash_name) - 1u));
-    commit_event(&session, "session_delete_requested", checked_json(json_pack("{s:s,s:s}",
-        "confirmed_id_prefix", id_prefix, "trash_name", trash_name)));
-    crashed_work=snag_media_work_open(session.dir_fd,error,sizeof(error));
-    assert(crashed_work>=0);
-    crashed_file=snag_create_private_at(crashed_work,"delete-residue",true);
-    assert(crashed_file>=0 && snag_write_full(crashed_file,"private",7u)==0);
-    close(crashed_file);close(crashed_work);
+    assert(snprintf(trash_name, sizeof(trash_name), "%s.%032x", session.id, 1u) ==
+           (int)(sizeof(trash_name) - 1u));
+    commit_event(&session, "session_delete_requested",
+        checked_json(
+            json_pack("{s:s,s:s}", "confirmed_id_prefix", id_prefix, "trash_name", trash_name)));
+    crashed_work = snag_media_work_open(session.dir_fd, error, sizeof(error));
+    assert(crashed_work >= 0);
+    crashed_file = snag_create_private_at(crashed_work, "delete-residue", true);
+    assert(crashed_file >= 0 && snag_write_full(crashed_file, "private", 7u) == 0);
+    close(crashed_file);
+    close(crashed_work);
     assert(renameat(store.sessions_fd, id, store.trash_fd, trash_name) == 0);
     snag_session_close(&session);
     snag_session_init(&session);
-    assert(snag_session_open(&store, &session, id_prefix,
-                            error, sizeof(error)) == 1);
+    assert(snag_session_open(&store, &session, id_prefix, error, sizeof(error)) == 1);
     assert(openat(store.trash_fd, trash_name, O_RDONLY | O_DIRECTORY) < 0);
     assert(errno == ENOENT);
     snag_session_close(&session);
@@ -3398,9 +3557,8 @@ main(int argc, char **argv)
         uint64_t second_seq;
 
         snag_session_init(&session);
-        assert(legacy_fixture_create(&store, &session, cwd, "default",
-            "gpt-5.5-2026-04-23", "default",
-                                  error, sizeof(error)) == 0);
+        assert(legacy_fixture_create(&store, &session, cwd, "default", "gpt-5.5-2026-04-23",
+                   "default", error, sizeof(error)) == 0);
         memcpy(id, session.id, sizeof(id));
         commit_event(&session, "turn_started", turn_started_data(&session, turn_id));
         json_t *enqueued = queued_data(turn_id, first_id, "first");
@@ -3415,12 +3573,12 @@ main(int argc, char **argv)
         second_seq = session.pending_queue[1].seq;
         durable_end = session.log_end;
         durable_seq = session.next_seq;
-        assert(snag_session_commit(&session, "future_turn_edited", edited_data(missing_id, "missing"), NULL,
-                                  error, sizeof(error)) < 0);
+        assert(snag_session_commit(&session, "future_turn_edited",
+                   edited_data(missing_id, "missing"), NULL, error, sizeof(error)) < 0);
         assert(session.log_end == durable_end);
         assert(session.next_seq == durable_seq);
-        assert(snag_session_commit(&session, "future_turn_edited", edited_data(first_id, "first"), NULL,
-                                  error, sizeof(error)) < 0);
+        assert(snag_session_commit(&session, "future_turn_edited", edited_data(first_id, "first"),
+                   NULL, error, sizeof(error)) < 0);
         assert(session.log_end == durable_end);
         assert(session.next_seq == durable_seq);
         commit_event(&session, "future_turn_edited", edited_data(second_id, "second edited"));
@@ -3429,7 +3587,7 @@ main(int argc, char **argv)
         assert(session.log_fd >= 0);
         struct snag_session failed = session;
         assert(snag_session_commit(&session, "future_turn_edited",
-            edited_data(first_id, "not adopted"), NULL, error, sizeof(error)) < 0);
+                   edited_data(first_id, "not adopted"), NULL, error, sizeof(error)) < 0);
         ++failed.write_failures;
         assert(memcmp(&session, &failed, sizeof(session)) == 0);
         assert(!strcmp(first_text, "first"));
@@ -3442,7 +3600,8 @@ main(int argc, char **argv)
         assert(session.pending_queue[1].seq == second_seq);
         assert(session.pending_queue_bytes == strlen("first") + strlen("second edited"));
         struct snag_session before = session;
-        assert(snag_session_each_event(&session, check_replay, &session, error, sizeof(error)) == 0);
+        assert(
+            snag_session_each_event(&session, check_replay, &session, error, sizeof(error)) == 0);
         assert(memcmp(&session, &before, sizeof(session)) == 0);
         ++session.log_end;
         ++session.next_seq;
@@ -3463,42 +3622,44 @@ main(int argc, char **argv)
         assert(session.pending_queue[0].seq == first_seq);
         assert(session.pending_queue[1].seq == second_seq);
         assert(session.pending_queue_bytes == strlen("first") + strlen("second edited"));
-        const char *invalid_cancellations[][2] = {
-            {first_id, first_id}, {second_id, first_id}, {first_id, missing_id},
-            {first_id, "bad"}, {first_id, NULL}
-        };
-        for (size_t i = 0u; i < sizeof(invalid_cancellations) / sizeof(invalid_cancellations[0]); ++i) {
+        const char *invalid_cancellations[][2] = {{first_id, first_id}, {second_id, first_id},
+            {first_id, missing_id}, {first_id, "bad"}, {first_id, NULL}};
+        for (size_t i = 0u; i < sizeof(invalid_cancellations) / sizeof(invalid_cancellations[0]);
+            ++i) {
             struct snag_session before_cancel = session;
             assert(snag_session_commit(&session, "future_turn_cancelled",
-                checked_json(json_pack("{s:[s,s?],s:s}", "queue_ids",
-                    invalid_cancellations[i][0], invalid_cancellations[i][1], "reason", "user")),
-                NULL, error, sizeof(error)) < 0);
+                       checked_json(
+                           json_pack("{s:[s,s?],s:s}", "queue_ids", invalid_cancellations[i][0],
+                               invalid_cancellations[i][1], "reason", "user")),
+                       NULL, error, sizeof(error)) < 0);
             assert(memcmp(&session, &before_cancel, sizeof(session)) == 0);
             assert(!strcmp(session.pending_queue[0].text, "first"));
             assert(!strcmp(session.pending_queue[1].text, "second edited"));
         }
         commit_event(&session, "future_turn_cancelled",
             checked_json(json_pack("{s:[s],s:s}", "queue_ids", first_id, "reason", "user")));
-        assert(session.pending_queue_count == 1u && session.pending_queue_bytes == strlen("second edited"));
+        assert(session.pending_queue_count == 1u &&
+               session.pending_queue_bytes == strlen("second edited"));
         assert(!strcmp(session.pending_queue[0].queue_id, second_id));
         assert(session.pending_queue[0].seq == second_seq && !session.pending_queue[1].text);
         assert(!json_object_get(session.strings, first_id));
         snag_session_close(&session);
         snag_session_init(&session);
         assert(snag_session_open(&store, &session, id, error, sizeof(error)) == 0);
-        assert(session.pending_queue_count == 1u && session.pending_queue_bytes == strlen("second edited"));
+        assert(session.pending_queue_count == 1u &&
+               session.pending_queue_bytes == strlen("second edited"));
         assert(!strcmp(session.pending_queue[0].text, "second edited"));
         snag_session_close(&session);
     }
     test_refusal_diagnostic(cwd);
-    test_audio_usage(&store,cwd);
-    test_voice_queue(&store,cwd);
+    test_audio_usage(&store, cwd);
+    test_voice_queue(&store, cwd);
     test_voice_context_cursor(&store, cwd);
-    test_banner_steering(&store,cwd);
+    test_banner_steering(&store, cwd);
     test_image_compaction_control(&store, cwd);
     test_legacy_journal(&store, cwd);
 
-    test_many_queued_turns(&store,cwd);
+    test_many_queued_turns(&store, cwd);
     {
         /* Replay a canonical line across several 8 KiB read boundaries,
          * then reject a blank line just after its final newline. */
@@ -3509,8 +3670,8 @@ main(int argc, char **argv)
         memset(text, 'y', sizeof(text) - 1u);
         text[sizeof(text) - 1u] = '\0';
         snag_session_init(&long_line);
-        assert(legacy_fixture_create(&store, &long_line, cwd, "default",
-            "gpt-5.5-2026-04-23", "default", error, sizeof(error)) == 0);
+        assert(legacy_fixture_create(&store, &long_line, cwd, "default", "gpt-5.5-2026-04-23",
+                   "default", error, sizeof(error)) == 0);
         json_t *started = turn_started_data(&long_line, "55555555555555555555555555555555");
         assert(snag_json_set_new(started, "text", json_string(text)) == 0);
         commit_event(&long_line, "turn_started", started);

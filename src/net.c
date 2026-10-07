@@ -42,7 +42,8 @@ address_initialize(void)
 }
 
 static int
-lookup_addresses(const char *host, const char *service, const struct addrinfo *hints, struct addrinfo **out)
+lookup_addresses(
+    const char *host, const char *service, const struct addrinfo *hints, struct addrinfo **out)
 {
     if (pthread_once(&address_once, address_initialize) != 0) return EAI_FAIL;
     return address_lookup(host, service, hints, out);
@@ -63,8 +64,8 @@ snag_socket_addresses_free(struct addrinfo *addresses)
 }
 
 int
-snag_socket_addresses(const char *host, const char *service,
-                       const struct addrinfo *hints, struct addrinfo **out)
+snag_socket_addresses(
+    const char *host, const char *service, const struct addrinfo *hints, struct addrinfo **out)
 {
     int rc = lookup_addresses(host, service, hints, out);
 #ifdef _WIN32
@@ -83,24 +84,60 @@ int
 snag_socket_error(int code)
 {
     switch (code) {
-    case WSAEWOULDBLOCK: errno = EAGAIN; break;
-    case WSAEINPROGRESS: errno = EINPROGRESS; break;
-    case WSAEINTR: errno = EINTR; break;
-    case WSAEINVAL: errno = EINVAL; break;
-    case WSAENOTSOCK: errno = EBADF; break;
-    case WSAEMFILE: errno = EMFILE; break;
-    case WSAENOBUFS: errno = ENOMEM; break;
-    case WSAEACCES: errno = EACCES; break;
-    case WSAEADDRINUSE: errno = EADDRINUSE; break;
-    case WSAEADDRNOTAVAIL: errno = EADDRNOTAVAIL; break;
-    case WSAECONNREFUSED: errno = ECONNREFUSED; break;
-    case WSAECONNRESET: errno = ECONNRESET; break;
-    case WSAECONNABORTED: errno = ECONNABORTED; break;
-    case WSAETIMEDOUT: errno = ETIMEDOUT; break;
-    case WSAEHOSTUNREACH: errno = EHOSTUNREACH; break;
-    case WSAENETUNREACH: errno = ENETUNREACH; break;
-    case WSAENOTCONN: errno = ENOTCONN; break;
-    default: errno = EIO; break;
+    case WSAEWOULDBLOCK:
+        errno = EAGAIN;
+        break;
+    case WSAEINPROGRESS:
+        errno = EINPROGRESS;
+        break;
+    case WSAEINTR:
+        errno = EINTR;
+        break;
+    case WSAEINVAL:
+        errno = EINVAL;
+        break;
+    case WSAENOTSOCK:
+        errno = EBADF;
+        break;
+    case WSAEMFILE:
+        errno = EMFILE;
+        break;
+    case WSAENOBUFS:
+        errno = ENOMEM;
+        break;
+    case WSAEACCES:
+        errno = EACCES;
+        break;
+    case WSAEADDRINUSE:
+        errno = EADDRINUSE;
+        break;
+    case WSAEADDRNOTAVAIL:
+        errno = EADDRNOTAVAIL;
+        break;
+    case WSAECONNREFUSED:
+        errno = ECONNREFUSED;
+        break;
+    case WSAECONNRESET:
+        errno = ECONNRESET;
+        break;
+    case WSAECONNABORTED:
+        errno = ECONNABORTED;
+        break;
+    case WSAETIMEDOUT:
+        errno = ETIMEDOUT;
+        break;
+    case WSAEHOSTUNREACH:
+        errno = EHOSTUNREACH;
+        break;
+    case WSAENETUNREACH:
+        errno = ENETUNREACH;
+        break;
+    case WSAENOTCONN:
+        errno = ENOTCONN;
+        break;
+    default:
+        errno = EIO;
+        break;
     }
     return -1;
 }
@@ -128,7 +165,8 @@ snag_socket_noinherit(snag_socket fd)
         WSASetLastError(WSAENOTSOCK);
         return -1;
     }
-    if ((flags & HANDLE_FLAG_INHERIT) && !SetHandleInformation((HANDLE)fd, HANDLE_FLAG_INHERIT, 0)) {
+    if ((flags & HANDLE_FLAG_INHERIT) &&
+        !SetHandleInformation((HANDLE)fd, HANDLE_FLAG_INHERIT, 0)) {
         WSASetLastError(WSAEACCES);
         return -1;
     }
@@ -169,8 +207,9 @@ option(snag_socket fd, int level, int key)
 {
     int one = 1;
 
-    return setsockopt(fd, level, key, (char *)&one, sizeof(one)) < 0 ?
-           snag_socket_error(WSAGetLastError()) : 0;
+    return setsockopt(fd, level, key, (char *)&one, sizeof(one)) < 0
+               ? snag_socket_error(WSAGetLastError())
+               : 0;
 }
 
 int
@@ -206,7 +245,8 @@ nonblocking(snag_socket fd)
 {
     int flags = fcntl(fd, F_GETFL);
 
-    return flags < 0 || fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0 || snag_fd_cloexec(fd) < 0 ? -1 : 0;
+    return flags < 0 || fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0 || snag_fd_cloexec(fd) < 0 ? -1
+                                                                                              : 0;
 }
 
 int

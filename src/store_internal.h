@@ -57,9 +57,8 @@ int snag_session_binary_projection_read(const struct snag_session *, uint64_t se
  * NULL access uses previously installed custody; no implicit empty table.
  * Outputs are initialized/owning and change together on success; no I/O. */
 int snag_session_binary_snapshot_capture(const struct snag_session *,
-    const struct snag_binary_checkpoint_index *,
-    struct snag_binary_io_snapshot *, struct snag_binary_index_tree *,
-    struct snag_binary_checkpoint_sources *, char *, size_t);
+    const struct snag_binary_checkpoint_index *, struct snag_binary_io_snapshot *,
+    struct snag_binary_index_tree *, struct snag_binary_checkpoint_sources *, char *, size_t);
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -67,8 +66,7 @@ int snag_session_binary_snapshot_capture(const struct snag_session *,
 #define SNAG_TRASH_SUFFIX_HEX_LEN SNAG_ID_HEX_LEN
 #define SNAG_TRASH_NAME_LEN (SNAG_ID_HEX_LEN + 1u + SNAG_TRASH_SUFFIX_HEX_LEN)
 
-enum snag_tail_policy {
-    SNAG_TAIL_REJECT, SNAG_TAIL_TRUNCATE, SNAG_TAIL_IGNORE };
+enum snag_tail_policy { SNAG_TAIL_REJECT, SNAG_TAIL_TRUNCATE, SNAG_TAIL_IGNORE };
 
 struct snag_legacy_recovery {
     uint64_t verified_records, discarded_checkpoints, repaired_pointers;
@@ -93,8 +91,8 @@ int snag_store_legacy_cursor_at(struct snag_session *session, int64_t offset,
  * Recovery reports the verified prefix and exact failing record range, or the
  * unresolved suffix when a whole record cannot be read. It is not a converter. */
 int snag_store_reconcile_legacy(struct snag_session *source, struct snag_session *restored,
-    snag_session_event_fn fn, void *opaque, struct snag_legacy_recovery *recovery,
-    char *error, size_t error_size);
+    snag_session_event_fn fn, void *opaque, struct snag_legacy_recovery *recovery, char *error,
+    size_t error_size);
 
 /* Shared strict state transition for verified history. The caller supplies a
  * provisional state/clock and validated record identity and discards it on error.
@@ -104,14 +102,15 @@ int snag_store_reduce_event(struct snag_session *state, const char *type, const 
 
 /* Derive pending-call metadata from a validated graph item and its graph-time
  * directory. Failure preserves out; lifecycle flags start cleared. */
-int snag_pending_call_from_item(const struct snag_response_item *, const char *cwd,
-    struct snag_pending_call *out);
+int snag_pending_call_from_item(
+    const struct snag_response_item *, const char *cwd, struct snag_pending_call *out);
 
 json_t *snag_checkpoint_state_encode(const struct snag_session *session);
 int snag_checkpoint_state_decode(const json_t *data, struct snag_session *state);
 
 bool snag_store_trash_id(const char *name, char id[SNAG_ID_HEX_LEN + 1u]);
-int snag_store_verify_private_fd(int fd, bool directory, const char *name, char *error, size_t error_size);
+int snag_store_verify_private_fd(
+    int fd, bool directory, const char *name, char *error, size_t error_size);
 /* Full resolved ID; open only the private directory, without replay or a writer. */
 int snag_store_open_session_directory(struct snag_store *store, struct snag_session *session,
     const char *id, char *error, size_t error_size);
@@ -121,8 +120,8 @@ int snag_store_open_session_files(struct snag_session *, bool create, char *, si
 int snag_store_load_binary_session(struct snag_session *, enum snag_tail_policy, char *, size_t);
 int snag_store_remove_upload_staging(int session_fd, char *error, size_t error_size);
 int snag_store_scan_log(struct snag_session *session, enum snag_tail_policy tail_policy,
-                       char *error, size_t error_size);
-int snag_store_complete_trash_delete(struct snag_store *store, const char *trash_name,
-                                    char *error, size_t error_size);
+    char *error, size_t error_size);
+int snag_store_complete_trash_delete(
+    struct snag_store *store, const char *trash_name, char *error, size_t error_size);
 
 #endif

@@ -10,8 +10,8 @@ static bool
 unsafe_format(uint32_t cp)
 {
     return cp == 0x00adu || cp == 0x061cu || cp == 0x200bu || cp == 0x200eu || cp == 0x200fu ||
-        (cp >= 0x202au && cp <= 0x202eu) || cp == 0x2060u ||
-        (cp >= 0x2066u && cp <= 0x206fu) || cp == 0xfeffu || (cp >= 0xfff9u && cp <= 0xfffbu);
+           (cp >= 0x202au && cp <= 0x202eu) || cp == 0x2060u || (cp >= 0x2066u && cp <= 0x206fu) ||
+           cp == 0xfeffu || (cp >= 0xfff9u && cp <= 0xfffbu);
 }
 
 struct snag_vm_glyph
@@ -96,7 +96,8 @@ snag_vm_text_column(const char *text, size_t length, size_t at, bool ambiguous)
     at = snag_vm_text_floor(text, length, at);
     size_t cursor = snag_vm_text_line_start(text, length, at), column = 0u;
     while (cursor < at) {
-        struct snag_vm_glyph glyph = snag_vm_glyph(text + cursor, length - cursor, column, ambiguous);
+        struct snag_vm_glyph glyph =
+            snag_vm_glyph(text + cursor, length - cursor, column, ambiguous);
         if (column > SIZE_MAX - glyph.columns) return SIZE_MAX;
         column += glyph.columns;
         cursor += glyph.bytes;
@@ -130,8 +131,8 @@ snag_vm_text_wrap(const char *text, size_t length, size_t columns, bool ambiguou
             row.end = at;
             int rc = emit(opaque, &row);
             if (rc) return rc;
-            row = (struct snag_vm_text_row){.begin = at, .line = row.line,
-                .logical_column = column};
+            row =
+                (struct snag_vm_text_row){.begin = at, .line = row.line, .logical_column = column};
         }
         if (glyph.newline) {
             row.end = at;

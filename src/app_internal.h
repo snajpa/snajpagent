@@ -177,7 +177,7 @@ int snag_app_audio_command(struct app_state *, const char *, bool *);
 int snag_app_audio_service(struct app_state *);
 int snag_app_audio_action(struct app_state *, enum snag_term_action);
 void snag_app_audio_close(struct app_state *);
-int snag_app_voice_command(struct app_state *,const char *,bool *);
+int snag_app_voice_command(struct app_state *, const char *, bool *);
 int snag_app_voice_service(struct app_state *);
 void snag_app_voice_close(struct app_state *);
 /* Source-side transfer preparation, called only by the session owner.
@@ -205,10 +205,10 @@ int snag_app_voice_transfer_history(struct app_state *, const char *, uint64_t,
     struct snag_voice_transfer_cursor *, json_t **, char *, size_t);
 /* One source quantum per call; 1 sealed, 0 preparing, -1 failed. The sealed
  * reference is published only after all source records have been verified. */
-int snag_app_voice_transfer_archive(struct app_state *, const char *, uint64_t,
-    struct snag_voice_archive *, char *, size_t);
-int snag_app_voice_import_begin(struct app_state *, const struct snag_voice_archive *,
-    char *, size_t);
+int snag_app_voice_transfer_archive(
+    struct app_state *, const char *, uint64_t, struct snag_voice_archive *, char *, size_t);
+int snag_app_voice_import_begin(
+    struct app_state *, const struct snag_voice_archive *, char *, size_t);
 int snag_app_voice_import_service(struct app_state *, char *, size_t);
 int snag_app_voice_import_adopt(struct app_state *, char *, size_t);
 void snag_app_voice_import_close(struct app_state *);
@@ -216,33 +216,33 @@ int snag_app_voice_switch_request(struct app_state *, const char *, char *, size
 int snag_app_voice_attachment_service(struct app_state *);
 int snag_app_voice_attachment_prepare(struct app_state *, uint64_t);
 void snag_app_voice_attachment_close(struct app_state *);
-void snag_app_voice_event(struct app_state *,const char *,const json_t *);
+void snag_app_voice_event(struct app_state *, const char *, const json_t *);
 json_t *snag_app_voice_tools(void);
-int snag_app_voice_read(struct app_state *, const struct snag_response_item *,
-                        json_t **, char *, size_t);
-int snag_app_voice_ui_input(struct app_state *, const struct snag_response_item *,
-    json_t **, char *, size_t);
+int snag_app_voice_read(
+    struct app_state *, const struct snag_response_item *, json_t **, char *, size_t);
+int snag_app_voice_ui_input(
+    struct app_state *, const struct snag_response_item *, json_t **, char *, size_t);
 /* One independent provider request; only the session owner takes its graph.
  * take: 0 pending, 1 settled with provider outcome, -1 invalid host state.
  * Optional metrics are owned by the caller; the worker never journals them. */
 int snag_app_voice_request_start(struct app_state *, const json_t *, char *, size_t);
-int snag_app_voice_request_take(struct app_state *, struct snag_response_graph *,
-                                int *, json_t **, char *, size_t);
+int snag_app_voice_request_take(
+    struct app_state *, struct snag_response_graph *, int *, json_t **, char *, size_t);
 int snag_app_voice_submit(struct app_state *, const json_t *, const char *target,
-                          char id[SNAG_ID_HEX_LEN + 1u], json_t **, char *, size_t);
+    char id[SNAG_ID_HEX_LEN + 1u], json_t **, char *, size_t);
 int snag_app_voice_interrupt(struct app_state *, const char *turn, json_t **, char *, size_t);
 #ifdef SNAJPAGENT_TEST_TRANSPORT_ENDPOINTS
-int snag_app_audio_fixture(struct app_state *,bool playing);
+int snag_app_audio_fixture(struct app_state *, bool playing);
 int snag_app_audio_fixture_checkpoint(struct app_state *);
-int snag_app_voice_fixture(struct app_state *,const json_t *notices,bool done);
+int snag_app_voice_fixture(struct app_state *, const json_t *notices, bool done);
 json_t *snag_app_voice_fixture_captions(const json_t *events);
 json_t *snag_app_voice_fixture_result(struct app_state *);
 json_t *snag_app_voice_fixture_observation(struct app_state *);
 bool snag_app_voice_fixture_capture_ready(struct app_state *);
 bool snag_app_voice_fixture_request_done(struct app_state *);
 bool snag_app_voice_fixture_credential_ready(struct app_state *);
-int snag_app_voice_fixture_failure(struct app_state *, const json_t *,
-    const struct snag_provider_failure *);
+int snag_app_voice_fixture_failure(
+    struct app_state *, const json_t *, const struct snag_provider_failure *);
 json_t *snag_app_voice_fixture_state(struct app_state *);
 int snag_app_voice_fixture_restart(struct app_state *, const struct snag_credential *);
 json_t *snag_app_voice_fixture_context(struct app_state *);
@@ -250,8 +250,8 @@ int snag_app_voice_fixture_mute(struct app_state *);
 int snag_app_voice_fixture_play(struct app_state *, const int16_t *, uint32_t);
 struct snag_audio_device;
 struct snag_voice_rtc;
-int snag_app_voice_fixture_capture(struct app_state *, struct snag_audio_device *,
-    struct snag_voice_rtc *);
+int snag_app_voice_fixture_capture(
+    struct app_state *, struct snag_audio_device *, struct snag_voice_rtc *);
 int snag_app_voice_fixture_checkpoint(struct app_state *);
 #endif
 bool snag_app_shutdown(struct app_state *);
@@ -260,113 +260,115 @@ int snag_app_queue_arm(struct app_state *, bool);
 
 int snag_app_media_command(struct app_state *app, const char *line, bool *handled);
 int snag_app_prepare_attachment(struct app_state *, const char *path, const char *name,
-                                int (*pump)(void *, unsigned int), json_t **part,
-                                char *error, size_t error_size);
+    int (*pump)(void *, unsigned int), json_t **part, char *error, size_t error_size);
 void snag_app_discard_part(struct app_state *, const json_t *part);
 int snag_app_upload_command(struct app_state *app, bool directory);
-int snag_app_download(struct app_state *app, const char *path, json_t **result,
-                      char *error, size_t error_size);
+int snag_app_download(
+    struct app_state *app, const char *path, json_t **result, char *error, size_t error_size);
 int snag_app_remote_probe(struct app_state *app);
 void snag_app_remote_reply(struct app_state *app, const char *nonce);
-int snag_app_download_pending(struct app_state *app, const json_t *item,
-                              bool *unavailable, json_t **result,
-                              char *error, size_t error_size);
-int snag_app_download_queue(struct app_state *app, const char *path, json_t **result,
-                            char *error, size_t error_size);
+int snag_app_download_pending(struct app_state *app, const json_t *item, bool *unavailable,
+    json_t **result, char *error, size_t error_size);
+int snag_app_download_queue(
+    struct app_state *app, const char *path, json_t **result, char *error, size_t error_size);
 
-int snag_app_tool_output(void *, const char *, unsigned int, uint64_t,
-    const void *, size_t, char *, size_t);
+int snag_app_tool_output(
+    void *, const char *, unsigned int, uint64_t, const void *, size_t, char *, size_t);
 int snag_app_tool_read(void *, const char *, unsigned int, uint64_t, uint64_t, struct snag_buf *);
 int snag_app_recovered_output(struct app_state *, const char *, json_t *);
-int snag_app_output_page(struct app_state *, const struct snag_response_item *, json_t **,
-                         char *, size_t);
+int snag_app_output_page(
+    struct app_state *, const struct snag_response_item *, json_t **, char *, size_t);
 /* Filter structured records before quoting or excerpting their public data. */
 int snag_app_history_page(struct app_state *, const struct snag_response_item *,
     const struct snag_wire_secrets *, json_t **, char *, size_t);
-int snag_app_goal_list(struct app_state *, const struct snag_response_item *, json_t **,
-                       char *, size_t);
-int snag_app_select_model_tool(struct app_state *, const struct snag_response_item *,
-                               json_t **, char *, size_t);
-int snag_app_voice_output(struct app_state *, const struct snag_response_item *,
-                          json_t **, char *, size_t);
+int snag_app_goal_list(
+    struct app_state *, const struct snag_response_item *, json_t **, char *, size_t);
+int snag_app_select_model_tool(
+    struct app_state *, const struct snag_response_item *, json_t **, char *, size_t);
+int snag_app_voice_output(
+    struct app_state *, const struct snag_response_item *, json_t **, char *, size_t);
 
 enum {
     /* Provider pump results already use 1 and 2. */
     SNAG_APP_COUNT_SKIPPED = 3,
     /* Failed request yielded to new input; do not pause armed future turns. */
-    SNAG_APP_INPUT_READY = 7, SNAG_APP_COMPACT_DEFERRED = 8 };
+    SNAG_APP_INPUT_READY = 7,
+    SNAG_APP_COMPACT_DEFERRED = 8
+};
 
 int snag_app_input_command(struct app_state *, const char *, bool, bool *, bool *);
 /* Fresh local consent for a rule-requested action. 0 confirmed, 1 not
  * confirmed (or not presentable), -1 on error. */
 int snag_app_consent(struct app_state *app, const char *reason, char *error, size_t error_size);
 int snag_app_sync_destinations(struct app_state *app);
-int snag_app_commit_event(struct app_state *app, const char *type, json_t *data,
-                         char *error, size_t error_size);
+int snag_app_commit_event(
+    struct app_state *app, const char *type, json_t *data, char *error, size_t error_size);
 bool snag_app_measured_input(struct app_state *app, uint64_t *tokens);
 int snag_app_capacity_resolve(struct app_state *app, const struct snag_provider_config *provider,
-                             const char *model, struct snag_model_capacity *capacity,
-                             char *error, size_t error_size);
+    const char *model, struct snag_model_capacity *capacity, char *error, size_t error_size);
 /* Tool-free summary request shared by working and interface context maintenance. */
 json_t *snag_app_summary_request(const json_t *request, const char *model, const char *effort,
     const struct snag_model_capacity *capacity);
 /* Resolve one candidate context selection without recording it; /context uses
  * this before the choice enters the session log. */
 int snag_app_context_preview(struct app_state *app, const struct snag_provider_config *provider,
-                             const char *model, const struct snag_context_choice *choice,
-                             struct snag_model_capacity *capacity, char *error, size_t error_size);
-void snag_app_record_model_accounting(struct app_state *app, enum snag_count_capability capability,
-                                     uint64_t hard_input_tokens);
+    const char *model, const struct snag_context_choice *choice,
+    struct snag_model_capacity *capacity, char *error, size_t error_size);
+void snag_app_record_model_accounting(
+    struct app_state *app, enum snag_count_capability capability, uint64_t hard_input_tokens);
 int snag_app_help(struct app_state *app, const char *command);
 int snag_app_report(struct app_state *, enum snag_ui_operation, const char *);
 int snag_app_help_text(struct snag_buf *text, const char *command);
 int snag_app_goal_command(struct app_state *app, const char *line, bool active);
 int snag_app_goal_tool(struct app_state *app, const struct snag_response_item *call,
-                      json_t **result, char *error, size_t error_size);
+    json_t **result, char *error, size_t error_size);
 int snag_app_timer_tool(struct app_state *app, const struct snag_response_item *call,
-                       json_t **result, char *error, size_t error_size);
+    json_t **result, char *error, size_t error_size);
 int snag_app_goal_pause(struct app_state *app, const char *reason, char *error, size_t error_size);
 
 enum queue_command_kind {
-    QUEUE_COMMAND_LIST, QUEUE_COMMAND_ADD, QUEUE_COMMAND_DELETE, QUEUE_COMMAND_EDIT,
-    QUEUE_COMMAND_CLEAR, QUEUE_COMMAND_POP };
+    QUEUE_COMMAND_LIST,
+    QUEUE_COMMAND_ADD,
+    QUEUE_COMMAND_DELETE,
+    QUEUE_COMMAND_EDIT,
+    QUEUE_COMMAND_CLEAR,
+    QUEUE_COMMAND_POP
+};
 
 json_t *snag_app_steering_snapshot(const struct snag_session *session);
 int snag_app_request_build(struct app_state *app, const json_t *steering, unsigned int cycle,
-                       const struct snag_credential *credential, struct snag_context_projection *projection,
-                       const char **count_method, struct snag_buf *request_body,
-                       char *error, size_t error_size);
-json_t *snag_app_response_started_data(const struct app_state *app,
-                               const char *turn_id, const char *response_id, unsigned int cycle,
-                               const struct snag_context_projection *projection, const char *count_method,
-                               const char *provider_source_sha256, const json_t *steering);
-json_t *snag_app_response_capacity_rejected_data( const char *turn_id,
-                                      const char *response_id, unsigned int cycle,
-                                      const char *request_hash, const struct snag_provider_failure *failure,
-                                      const struct snag_model_capacity *capacity,
-                                      const char *provider_source_sha256);
-json_t *snag_app_turn_completed_data(const char *turn_id, const char *response_id, const char *item_id);
-json_t *snag_app_steering_added_data(const char *turn_id, const char *steering_id, const char *text);
+    const struct snag_credential *credential, struct snag_context_projection *projection,
+    const char **count_method, struct snag_buf *request_body, char *error, size_t error_size);
+json_t *snag_app_response_started_data(const struct app_state *app, const char *turn_id,
+    const char *response_id, unsigned int cycle, const struct snag_context_projection *projection,
+    const char *count_method, const char *provider_source_sha256, const json_t *steering);
+json_t *snag_app_response_capacity_rejected_data(const char *turn_id, const char *response_id,
+    unsigned int cycle, const char *request_hash, const struct snag_provider_failure *failure,
+    const struct snag_model_capacity *capacity, const char *provider_source_sha256);
+json_t *snag_app_turn_completed_data(
+    const char *turn_id, const char *response_id, const char *item_id);
+json_t *snag_app_steering_added_data(
+    const char *turn_id, const char *steering_id, const char *text);
 json_t *snag_app_response_interrupted_data(const char *turn_id, const char *response_id,
-                                          unsigned int cycle, const char *origin,
-                                          const char *reason, json_t *partial_public);
+    unsigned int cycle, const char *origin, const char *reason, json_t *partial_public);
 json_t *snag_app_turn_failed_data(const char *turn_id, const char *class_name, const char *message);
 int snag_app_compact_requested(struct app_state *app, char *error, size_t error_size);
 int snag_app_compact_image_boundary(struct app_state *app, char *error, size_t error_size);
-int snag_app_compact_after_turn(struct app_state *app, uint64_t input_tokens_bound, const char *count_method,
-                               char *error, size_t error_size);
-int snag_app_compact_before_response(struct app_state *app, const struct snag_credential *credential,
-                                    uint64_t input_tokens_bound, const char *count_method, bool *compacted,
-                                    char *error, size_t error_size);
-int snag_app_compact_after_capacity_rejection( struct app_state *app,
-                                    const struct snag_credential *credential, bool *compacted,
-                                    char *error, size_t error_size);
+int snag_app_compact_after_turn(struct app_state *app, uint64_t input_tokens_bound,
+    const char *count_method, char *error, size_t error_size);
+int snag_app_compact_before_response(struct app_state *app,
+    const struct snag_credential *credential, uint64_t input_tokens_bound, const char *count_method,
+    bool *compacted, char *error, size_t error_size);
+int snag_app_compact_after_capacity_rejection(struct app_state *app,
+    const struct snag_credential *credential, bool *compacted, char *error, size_t error_size);
 void snag_app_response_cycle_release(struct app_state *app, struct snag_response_graph *graph,
-                                    json_t **steering, struct snag_context_projection *projection,
-                                    struct snag_buf *request_body);
-int snag_app_close_active_processes(struct app_state *, const char *, const char *, bool, char *, size_t);
-int snag_app_lifecycle_command(struct app_state *app, const char *line, bool *handled, bool *exit_now);
-int snag_app_parse_queue_argument(const char *argument, enum queue_command_kind *kind, size_t *number);
+    json_t **steering, struct snag_context_projection *projection, struct snag_buf *request_body);
+int snag_app_close_active_processes(
+    struct app_state *, const char *, const char *, bool, char *, size_t);
+int snag_app_lifecycle_command(
+    struct app_state *app, const char *line, bool *handled, bool *exit_now);
+int snag_app_parse_queue_argument(
+    const char *argument, enum queue_command_kind *kind, size_t *number);
 
 json_t *snag_app_input_received_data(struct app_state *, const char *, bool, bool);
 
@@ -376,60 +378,59 @@ int snag_app_provider_input_pump(void *opaque, unsigned int timeout_ms);
 bool snag_app_retry_allowed(const void *opaque);
 int snag_app_provider_activity(struct app_state *app, bool active);
 int snag_app_irc_event(void *opaque, const struct snag_irc_event *event);
-int snag_app_irc_trace(void *opaque, unsigned int level, char direction,
-                      const char *endpoint, const char *text, size_t len);
+int snag_app_irc_trace(void *opaque, unsigned int level, char direction, const char *endpoint,
+    const char *text, size_t len);
 int snag_app_irc_command(struct app_state *, const char *, bool *);
-int snag_app_irc_select_conversation(struct app_state *,
-    const struct snag_irc_conversation_target *);
+int snag_app_irc_select_conversation(
+    struct app_state *, const struct snag_irc_conversation_target *);
 int snag_app_irc_conversation_send(struct app_state *, const struct snag_irc_conversation_target *,
     enum snag_irc_event_kind, const char *, bool, struct snag_buf *, char *, size_t);
 int snag_app_irc_query_target(struct app_state *, const struct snag_irc_scopes *, const json_t *,
     enum snag_irc_identity, uint32_t, const char *, const struct snag_irc_query_target *,
     struct snag_irc_query_target *, char *, size_t);
-int snag_app_irc_channel_target(struct app_state *, const struct snag_irc_scopes *,
-    const json_t *, enum snag_irc_identity, uint32_t, const char *,
-    struct snag_irc_channel_target *, char *, size_t);
+int snag_app_irc_channel_target(struct app_state *, const struct snag_irc_scopes *, const json_t *,
+    enum snag_irc_identity, uint32_t, const char *, struct snag_irc_channel_target *, char *,
+    size_t);
 int snag_app_irc_restore(struct app_state *app, char *error, size_t error_size);
 int snag_app_save_resume_options(struct app_state *, char *, size_t);
-int snag_app_restore_resume_options(struct snag_cli *, struct snag_cli *,
-    const struct snag_session *, json_t **, char *, size_t);
+int snag_app_restore_resume_options(
+    struct snag_cli *, struct snag_cli *, const struct snag_session *, json_t **, char *, size_t);
 int snag_app_irc_flush_urgent(struct app_state *app, char *error, size_t error_size);
 char *snag_app_irc_take_pending(struct app_state *app, bool *local_operator, bool force_background);
-int snag_app_irc_snapshot(struct app_state *app, const char *reason, char *error, size_t error_size);
+int snag_app_irc_snapshot(
+    struct app_state *app, const char *reason, char *error, size_t error_size);
 bool snag_app_irc_replies_pending(const struct app_state *);
 int snag_app_irc_sleeping(struct app_state *, char *, size_t);
-int snag_app_irc_attention_tool(struct app_state *, const struct snag_response_item *,
-                              json_t **, char *, size_t);
-void snag_app_irc_summary_start(struct app_state *, const struct snag_context_projection *,
-                              const struct snag_credential *);
+int snag_app_irc_attention_tool(
+    struct app_state *, const struct snag_response_item *, json_t **, char *, size_t);
+void snag_app_irc_summary_start(
+    struct app_state *, const struct snag_context_projection *, const struct snag_credential *);
 int snag_app_irc_summary_take(struct app_state *, char *, size_t);
 void snag_app_irc_summary_retry_policy(struct app_state *);
 void snag_app_irc_summary_close(struct app_state *);
-bool snag_app_exact_count_enabled(enum snag_token_count_mode mode, enum snag_count_capability capability);
+bool snag_app_exact_count_enabled(
+    enum snag_token_count_mode mode, enum snag_count_capability capability);
 int snag_app_provider_count(struct app_state *app, const json_t *count_request,
-                           const struct snag_credential *credential, uint64_t *input_tokens,
-                           const char **count_method, char *error, size_t error_size);
+    const struct snag_credential *credential, uint64_t *input_tokens, const char **count_method,
+    char *error, size_t error_size);
 int snag_app_provider_models(struct app_state *app, const struct snag_provider_config *provider,
-                            json_t **models, char *error, size_t error_size);
+    json_t **models, char *error, size_t error_size);
 int snag_app_provider_compact(struct app_state *app, const json_t *compact_request,
-                             const struct snag_credential *credential, struct snag_json_document *output,
-                             char *error, size_t error_size);
-int snag_app_provider_run(struct app_state *app, const char *prompt,
-                         const json_t *steering, unsigned int cycle, const json_t *create_request,
-                         const struct snag_credential *credential, struct snag_response_graph *graph,
-                         struct snag_provider_failure *failure, char *error, size_t error_size,
-                         unsigned int *retry_count);
+    const struct snag_credential *credential, struct snag_json_document *output, char *error,
+    size_t error_size);
+int snag_app_provider_run(struct app_state *app, const char *prompt, const json_t *steering,
+    unsigned int cycle, const json_t *create_request, const struct snag_credential *credential,
+    struct snag_response_graph *graph, struct snag_provider_failure *failure, char *error,
+    size_t error_size, unsigned int *retry_count);
 int snag_app_tool_run(struct app_state *app, const struct snag_response_item *call,
-                     const struct snag_credential *credential,
-                     json_t **result, char *error, size_t error_size);
+    const struct snag_credential *credential, json_t **result, char *error, size_t error_size);
 
 void snag_app_clear_partial_public(struct app_state *app);
 json_t *snag_app_partial_public_json(const struct app_state *app);
 int snag_app_close_stream_item(struct app_state *app, bool abort);
 int snag_app_flush_public(struct app_state *app, bool force);
-int snag_app_stream_public(void *opaque, size_t item_index,
-                          enum snag_item_kind kind, enum snag_item_phase phase, const char *provider_item_id,
-                          const char *text, size_t len);
+int snag_app_stream_public(void *opaque, size_t item_index, enum snag_item_kind kind,
+    enum snag_item_phase phase, const char *provider_item_id, const char *text, size_t len);
 void snag_app_reset_stream(struct app_state *app);
 
 #endif

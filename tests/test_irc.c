@@ -70,8 +70,8 @@ capture_event(void *opaque, const struct snag_irc_event *event)
         struct snag_irc_event decoded;
         assert(snag_irc_event_record_read("irc_event_v2", data, &decoded) == 0);
         if (capture->retain_conversations) {
-            json_t *next = snag_irc_conversations_update(capture->conversations,
-                data, ++capture->sequence);
+            json_t *next =
+                snag_irc_conversations_update(capture->conversations, data, ++capture->sequence);
             assert(next);
             json_decref(capture->conversations);
             capture->conversations = next;
@@ -106,8 +106,8 @@ capture_event(void *opaque, const struct snag_irc_event *event)
 }
 
 static int
-capture_trace(void *opaque, unsigned int level, char direction,
-              const char *endpoint, const char *text, size_t len)
+capture_trace(void *opaque, unsigned int level, char direction, const char *endpoint,
+    const char *text, size_t len)
 {
     struct capture *capture = opaque;
 
@@ -115,8 +115,10 @@ capture_trace(void *opaque, unsigned int level, char direction,
     assert((level == 5u || level == 6u) && (direction == '<' || direction == '>'));
     assert(endpoint && *endpoint && text && len != 0u);
     if (strstr(text, "private-body")) capture->private_trace = true;
-    if (level == 5u) ++capture->protocol_traces;
-    else ++capture->transport_traces;
+    if (level == 5u)
+        ++capture->protocol_traces;
+    else
+        ++capture->transport_traces;
     return 0;
 }
 
@@ -201,7 +203,8 @@ tick(struct snag_irc *irc, unsigned int rounds)
 
     /* Protocol I/O is independent; trace wakeups are not completed I/O ticks. */
     do {
-        if (snag_irc_tick(irc, 2, error, sizeof(error)) < 0) fprintf(stderr, "IRC tick failed: %s\n", error);
+        if (snag_irc_tick(irc, 2, error, sizeof(error)) < 0)
+            fprintf(stderr, "IRC tick failed: %s\n", error);
         assert(error[0] == '\0');
     } while (snag_monotonic_ms() < until);
 }
@@ -228,7 +231,8 @@ drain(snag_socket fd, char *out, size_t size)
 }
 
 static void
-wait_wire(struct snag_irc *server, snag_socket fd, char *wire, size_t wire_size, const char *expected)
+wait_wire(
+    struct snag_irc *server, snag_socket fd, char *wire, size_t wire_size, const char *expected)
 {
     size_t used = 0;
     uint64_t deadline = snag_monotonic_ms() + 1000u;
@@ -253,13 +257,15 @@ drain_ready(struct snag_irc *runtime, snag_socket fd, char *wire, size_t size)
 }
 
 static void
-register_peer(struct snag_irc *server, snag_socket fd, const char *nick,
-              bool agent, char *wire, size_t wire_size)
+register_peer(struct snag_irc *server, snag_socket fd, const char *nick, bool agent, char *wire,
+    size_t wire_size)
 {
     char input[1024u];
-    int n = snprintf(input, sizeof(input), "CAP LS 302\r\nCAP REQ :batch server-time draft/chathistory%s\r\n"
+    int n = snprintf(input, sizeof(input),
+        "CAP LS 302\r\nCAP REQ :batch server-time draft/chathistory%s\r\n"
         "CAP END\r\nNICK %s\r\nUSER %s 0 * :%s\r\nJOIN #lab\r\n",
-        agent ? " " SNAJPAGENT_NAME "/agent" : "", nick, nick, agent ? SNAJPAGENT_NAME " agent" : "human");
+        agent ? " " SNAJPAGENT_NAME "/agent" : "", nick, nick,
+        agent ? SNAJPAGENT_NAME " agent" : "human");
     assert(n > 0 && (size_t)n < sizeof(input));
     send_text(fd, input);
     wait_wire(server, fd, wire, wire_size, " BATCH -");
@@ -306,16 +312,18 @@ open_server(struct snag_config *config, struct capture *capture)
 
     memset(&cli, 0, sizeof(cli));
     assert(snag_irc_apply_cli(config, &cli, error, sizeof(error)) == 0);
-    if (snag_irc_open(&server, config, "/workspace", capture_event,
-                      capture_trace, capture, error, sizeof(error)) < 0) {
-        (void)fprintf(stderr, "IRC server %s open: errno=%d %s\n", config->irc.listen, errno, error);
+    if (snag_irc_open(&server, config, "/workspace", capture_event, capture_trace, capture, error,
+            sizeof(error)) < 0) {
+        (void)fprintf(
+            stderr, "IRC server %s open: errno=%d %s\n", config->irc.listen, errno, error);
         abort();
     }
     return server;
 }
 
 static void
-init_client_config(struct snag_config *config, const char *address, const char *model, const char *operator)
+init_client_config(
+    struct snag_config *config, const char *address, const char *model, const char *operator)
 {
     struct snag_cli cli = {0};
     char error[256] = {0};
@@ -329,8 +337,8 @@ init_client_config(struct snag_config *config, const char *address, const char *
 }
 
 static int
-send_all(struct snag_irc *irc, bool model, enum snag_irc_event_kind kind,
-         const char *text, char *error, size_t error_size)
+send_all(struct snag_irc *irc, bool model, enum snag_irc_event_kind kind, const char *text,
+    char *error, size_t error_size)
 {
     struct snag_irc_route route;
 
@@ -339,7 +347,8 @@ send_all(struct snag_irc *irc, bool model, enum snag_irc_event_kind kind,
 }
 
 /* Keep large scenario frames separate from main on small legacy stacks. */
-static void __attribute__((noinline)) test_listener_collision(void)
+static void __attribute__((noinline))
+test_listener_collision(void)
 {
     static const char *const hosts[] = {"127.0.0.1", "localhost"};
 
@@ -352,11 +361,11 @@ static void __attribute__((noinline)) test_listener_collision(void)
         char error[256u] = {0};
 
         init_server_config(&config, port);
-        assert(snprintf(config.irc.listen, sizeof(config.irc.listen),
-                        "%s:%u", hosts[i], (unsigned int)port) > 0);
+        assert(snprintf(config.irc.listen, sizeof(config.irc.listen), "%s:%u", hosts[i],
+                   (unsigned int)port) > 0);
         server = open_server(&config, &capture);
-        assert(snag_irc_open(&duplicate, &config, "/duplicate", capture_event,
-                            capture_trace, &capture, error, sizeof(error)) < 0);
+        assert(snag_irc_open(&duplicate, &config, "/duplicate", capture_event, capture_trace,
+                   &capture, error, sizeof(error)) < 0);
         assert(!duplicate);
         assert(strstr(error, config.irc.listen));
         assert(strstr(error, strerror(EADDRINUSE)));
@@ -368,7 +377,8 @@ static void __attribute__((noinline)) test_listener_collision(void)
     }
 }
 
-static void __attribute__((noinline)) test_runtime_roles(void)
+static void __attribute__((noinline))
+test_runtime_roles(void)
 {
     struct snag_config config, upstream_config;
     struct capture capture = {0}, upstream_capture = {0};
@@ -390,8 +400,8 @@ static void __attribute__((noinline)) test_runtime_roles(void)
     init_server_config(&config, host_port);
     config.irc.listen_explicit = false;
     assert(snag_irc_normalize(&config, error, sizeof(error)) == 0);
-    assert(snag_irc_open(&runtime, &config, "/private-workspace", capture_event,
-                         capture_trace, &capture, error, sizeof(error)) == 0);
+    assert(snag_irc_open(&runtime, &config, "/private-workspace", capture_event, capture_trace,
+               &capture, error, sizeof(error)) == 0);
     struct snag_buf state = {.max = 65536u};
     assert(snag_irc_state(runtime, &state, error, sizeof(error)) == 0);
     assert(snag_buf_terminate(&state) == 0);
@@ -408,7 +418,7 @@ static void __attribute__((noinline)) test_runtime_roles(void)
     /* Registration includes both clients and catch-up, even on slow CPUs. */
     uint64_t registration_deadline = snag_monotonic_ms() + 10000u;
     while ((!snag_irc_mentions_agent(runtime, other, "agent1: work") ||
-            upstream_capture.events[SNAG_IRC_JOIN] < joins + 2u) &&
+               upstream_capture.events[SNAG_IRC_JOIN] < joins + 2u) &&
            snag_monotonic_ms() < registration_deadline) {
         tick(runtime, 1u);
         tick(upstream, 1u);
@@ -424,7 +434,8 @@ static void __attribute__((noinline)) test_runtime_roles(void)
     assert(snag_irc_destinations_generation(runtime) == destination_generation);
 
     /* A failed listener addition leaves the existing client connected. */
-    assert(snag_irc_add(runtime, &config, "/private-workspace", true, other, error, sizeof(error)) < 0);
+    assert(snag_irc_add(runtime, &config, "/private-workspace", true, other, error, sizeof(error)) <
+           0);
     tick(upstream, 2u);
     assert(upstream_capture.events[SNAG_IRC_JOIN] == joins);
     assert(snag_irc_routing_revision(runtime) == revision);
@@ -435,7 +446,8 @@ static void __attribute__((noinline)) test_runtime_roles(void)
     assert(strcmp(snag_irc_model_nick(runtime), "agent") == 0);
     human = connect_local(host_port, false);
     register_peer(runtime, human, "human", false, wire, sizeof(wire));
-    assert(send_all(runtime, false, SNAG_IRC_MESSAGE, "shared-before-stop", error, sizeof(error)) == 0);
+    assert(send_all(runtime, false, SNAG_IRC_MESSAGE, "shared-before-stop", error, sizeof(error)) ==
+           0);
     tick(runtime, 3u);
     drain_ready(runtime, human, wire, sizeof(wire));
     assert(strstr(wire, "shared-before-stop"));
@@ -455,22 +467,23 @@ static void __attribute__((noinline)) test_runtime_roles(void)
     route.targets[0] = destinations.items[1].target;
     removed_id = route.targets[0].id;
     snag_buf_reset(&state);
-    assert(snag_irc_send_route(runtime, &route, false, SNAG_IRC_MESSAGE,
-        "host-only", &state, error, sizeof(error)) == 0);
+    assert(snag_irc_send_route(runtime, &route, false, SNAG_IRC_MESSAGE, "host-only", &state, error,
+               sizeof(error)) == 0);
     tick(runtime, 3u);
     tick(upstream, 3u);
     drain_ready(runtime, human, wire, sizeof(wire));
     assert(strstr(wire, "host-only"));
     assert(!strstr(upstream_capture.message_text, "host-only"));
     route.targets[0] = destinations.items[0].target;
-    assert(snag_irc_send_route(runtime, &route, true, SNAG_IRC_MESSAGE,
-        "upstream-only", NULL, error, sizeof(error)) == 0);
+    assert(snag_irc_send_route(runtime, &route, true, SNAG_IRC_MESSAGE, "upstream-only", NULL,
+               error, sizeof(error)) == 0);
     uint64_t route_deadline = snag_monotonic_ms() + 1000u;
     do {
         tick(runtime, 1u);
         tick(upstream, 1u);
     } while ((!strstr(upstream_capture.message_text, "upstream-only") ||
-              strcmp(capture.last_message.text, "upstream-only")) && snag_monotonic_ms() < route_deadline);
+                 strcmp(capture.last_message.text, "upstream-only")) &&
+             snag_monotonic_ms() < route_deadline);
     drain_ready(runtime, human, wire, sizeof(wire));
     assert(!strstr(wire, "upstream-only"));
     assert(strstr(upstream_capture.message_text, "upstream-only"));
@@ -479,22 +492,22 @@ static void __attribute__((noinline)) test_runtime_roles(void)
     assert(strcmp(capture.last_message.nick, "agent1") == 0);
     /* A secondary endpoint's accepted rename must refresh the saved identities. */
     (void)snag_irc_identity_changed(runtime);
-    assert(snag_irc_send_route(runtime, &route, true, SNAG_IRC_NICK,
-        "secondary", NULL, error, sizeof(error)) == 0);
+    assert(snag_irc_send_route(
+               runtime, &route, true, SNAG_IRC_NICK, "secondary", NULL, error, sizeof(error)) == 0);
     uint64_t nick_deadline = snag_monotonic_ms() + 1000u;
     do {
         tick(upstream, 1u);
         tick(runtime, 1u);
         snag_irc_destinations(runtime, &destinations);
-    } while (strcmp(destinations.items[0].model, "secondary") &&
-        snag_monotonic_ms() < nick_deadline);
+    } while (
+        strcmp(destinations.items[0].model, "secondary") && snag_monotonic_ms() < nick_deadline);
     assert(strcmp(destinations.items[0].model, "secondary") == 0);
     assert(strcmp(snag_irc_model_nick(runtime), "agent") == 0);
     assert(snag_irc_identity_changed(runtime));
     route.targets[0] = destinations.items[0].target;
     ++route.targets[0].revision;
-    assert(snag_irc_send_route(runtime, &route, true, SNAG_IRC_MESSAGE,
-        "wrong-revision", NULL, error, sizeof(error)) == 1);
+    assert(snag_irc_send_route(runtime, &route, true, SNAG_IRC_MESSAGE, "wrong-revision", NULL,
+               error, sizeof(error)) == 1);
     /* A stored route gone stale across a reconnect still names the same
      * destination by id: it rebinds instead of failing like a future revision. */
     snag_irc_destinations(runtime, &destinations);
@@ -504,8 +517,8 @@ static void __attribute__((noinline)) test_runtime_roles(void)
             route.targets[0] = destinations.items[i].target;
             --route.targets[0].revision;
         }
-    assert(snag_irc_send_route(runtime, &route, true, SNAG_IRC_MESSAGE,
-        "stale-revision", NULL, error, sizeof(error)) == 0);
+    assert(snag_irc_send_route(runtime, &route, true, SNAG_IRC_MESSAGE, "stale-revision", NULL,
+               error, sizeof(error)) == 0);
     snag_irc_capture_route(runtime, &frozen);
     assert(frozen.count == 2u);
 
@@ -530,16 +543,19 @@ static void __attribute__((noinline)) test_runtime_roles(void)
     snag_socket_close(human);
     tick(upstream, 3u);
     assert(upstream_capture.events[SNAG_IRC_JOIN] == joins);
-    assert(send_all(runtime, false, SNAG_IRC_MESSAGE, "after-host-stop", error, sizeof(error)) == 0);
+    assert(
+        send_all(runtime, false, SNAG_IRC_MESSAGE, "after-host-stop", error, sizeof(error)) == 0);
     route_deadline = snag_monotonic_ms() + 1000u;
-    while (!strstr(upstream_capture.message_text, "after-host-stop") && snag_monotonic_ms() < route_deadline)
+    while (!strstr(upstream_capture.message_text, "after-host-stop") &&
+           snag_monotonic_ms() < route_deadline)
         tick(upstream, 1u);
     assert(strstr(upstream_capture.message_text, "after-host-stop"));
-    assert(snag_irc_send_route(runtime, &frozen, false, SNAG_IRC_MESSAGE,
-        "partial-to-survivor", NULL, error, sizeof(error)) == 2);
+    assert(snag_irc_send_route(runtime, &frozen, false, SNAG_IRC_MESSAGE, "partial-to-survivor",
+               NULL, error, sizeof(error)) == 2);
     route_deadline = snag_monotonic_ms() + 1000u;
     while (!strstr(upstream_capture.message_text, "partial-to-survivor") &&
-           snag_monotonic_ms() < route_deadline) tick(upstream, 1u);
+           snag_monotonic_ms() < route_deadline)
+        tick(upstream, 1u);
     assert(strstr(upstream_capture.message_text, "partial-to-survivor"));
 
     config.irc.client_count = 0u;
@@ -550,8 +566,8 @@ static void __attribute__((noinline)) test_runtime_roles(void)
     assert(snag_buf_terminate(&state) == 0);
     assert(strstr((char *)state.data, "no active endpoints"));
     assert(strstr((char *)state.data, "accepted-before-removal"));
-    assert(snag_irc_send_route(runtime, &frozen, true, SNAG_IRC_MESSAGE,
-        "no-targets", NULL, error, sizeof(error)) == 1);
+    assert(snag_irc_send_route(runtime, &frozen, true, SNAG_IRC_MESSAGE, "no-targets", NULL, error,
+               sizeof(error)) == 1);
 
     /* Re-add the host after freeing both primary owners. Public history only. */
     config.irc.listen_explicit = true;
@@ -560,8 +576,8 @@ static void __attribute__((noinline)) test_runtime_roles(void)
     register_peer(runtime, human, "newhuman", false, wire, sizeof(wire));
     snag_irc_destinations(runtime, &destinations);
     assert(destinations.count == 1u && destinations.items[0].target.id > removed_id);
-    assert(snag_irc_send_route(runtime, &frozen, false, SNAG_IRC_MESSAGE,
-        "not-to-replacement", NULL, error, sizeof(error)) == 1);
+    assert(snag_irc_send_route(runtime, &frozen, false, SNAG_IRC_MESSAGE, "not-to-replacement",
+               NULL, error, sizeof(error)) == 1);
     assert(strstr(wire, "accepted-before-removal"));
     assert(!strstr(wire, "after-host-stop"));
     assert(!strstr(wire, "not queued"));
@@ -573,7 +589,8 @@ static void __attribute__((noinline)) test_runtime_roles(void)
     snag_config_free(&upstream_config);
 }
 
-static void __attribute__((noinline)) test_validation(void)
+static void __attribute__((noinline))
+test_validation(void)
 {
     struct snag_config config;
     struct snag_cli cli;
@@ -582,9 +599,7 @@ static void __attribute__((noinline)) test_validation(void)
     memset(&cli, 0, sizeof(cli));
     const struct {
         const char *user, *operator;
-    } defaults[] = {
-        {"root", "root0"}, {"agent", "localop0"}, {"not valid", "operator0"}
-    };
+    } defaults[] = {{"root", "root0"}, {"agent", "localop0"}, {"not valid", "operator0"}};
     for (size_t i = 0u; i < sizeof(defaults) / sizeof(defaults[0]); ++i) {
         set_user(defaults[i].user);
         snag_config_init(&config);
@@ -621,24 +636,25 @@ static void __attribute__((noinline)) test_validation(void)
     const struct {
         const char *model, *operator, *room;
         bool valid;
-    } names[] = {
-        {"worker", "WORKER", "", false}, {"b\xc3\xb6t", "alice", "", true},
+    } names[] = {{"worker", "WORKER", "", false}, {"b\xc3\xb6t", "alice", "", true},
         {"bad\xc2\x85", "alice", "", false}, {"bad\xc2\xa0nick", "alice", "", false},
-        {"worker", "alice", "bad\xe2\x80\x8broom", false}
-    };
+        {"worker", "alice", "bad\xe2\x80\x8broom", false}};
     for (size_t i = 0u; i < sizeof(names) / sizeof(names[0]); ++i) {
         snag_config_init(&config);
         config.irc.listen_explicit = true;
         assert(snag_strcpy(config.irc.model_nick, sizeof(config.irc.model_nick), names[i].model));
-        assert(snag_strcpy(config.irc.operator_nick, sizeof(config.irc.operator_nick), names[i].operator));
+        assert(snag_strcpy(
+            config.irc.operator_nick, sizeof(config.irc.operator_nick), names[i].operator));
         assert(snag_strcpy(config.irc.room_name, sizeof(config.irc.room_name), names[i].room));
         error[0] = '\0';
-        assert(snag_irc_apply_cli(&config, &cli, error, sizeof(error)) == (names[i].valid ? 0 : -1));
+        assert(
+            snag_irc_apply_cli(&config, &cli, error, sizeof(error)) == (names[i].valid ? 0 : -1));
         snag_config_free(&config);
     }
 }
 
-static void __attribute__((noinline)) test_cli_network_roles(void)
+static void __attribute__((noinline))
+test_cli_network_roles(void)
 {
     struct snag_config config;
     struct snag_cli cli;
@@ -682,7 +698,8 @@ static void __attribute__((noinline)) test_cli_network_roles(void)
     snag_config_free(&config);
 }
 
-static void __attribute__((noinline)) test_server(void)
+static void __attribute__((noinline))
+test_server(void)
 {
     struct snag_config config;
     struct capture capture = {0};
@@ -698,7 +715,8 @@ static void __attribute__((noinline)) test_server(void)
 
     init_server_config(&config, port);
     config.irc.client_count = 1u;
-    assert(snprintf(config.irc.clients[0], sizeof(config.irc.clients[0]), "%s", config.irc.listen) > 0);
+    assert(snprintf(config.irc.clients[0], sizeof(config.irc.clients[0]), "%s", config.irc.listen) >
+           0);
     server = open_server(&config, &capture);
     assert(snag_irc_mentions_agent(server, config.irc.listen, "AGENT: please"));
     assert(!snag_irc_mentions_agent(server, config.irc.listen, "otheragent: no"));
@@ -739,7 +757,8 @@ static void __attribute__((noinline)) test_server(void)
     assert(capture.protocol_traces != 0u && capture.transport_traces != 0u);
 
     send_text(human, "NICK renamed\r\nNICK renamed\r\nNICK RENAMED\r\n"
-                     "NICK agent\r\nPRIVMSG #lab :renamed speech\r\n" "TOPIC #lab :agent topic\r\n");
+                     "NICK agent\r\nPRIVMSG #lab :renamed speech\r\n"
+                     "TOPIC #lab :agent topic\r\n");
     wait_wire(server, human, wire, sizeof(wire), " :renamed speech\r\n");
     assert(capture.events[SNAG_IRC_NICK] == 2u);
     assert(strcmp(capture.last_nick.nick, "renamed") == 0);
@@ -865,7 +884,8 @@ static void __attribute__((noinline)) test_server(void)
     snag_config_free(&config);
 }
 
-static void __attribute__((noinline)) test_nick_rename(void)
+static void __attribute__((noinline))
+test_nick_rename(void)
 {
     struct snag_config config;
     struct capture capture = {0};
@@ -909,19 +929,22 @@ pump_pair(struct snag_irc *server, struct snag_irc *client, unsigned int rounds)
 }
 
 static void
-wait_pair_event(struct snag_irc *server, struct snag_irc *client,
-                const struct capture *capture, enum snag_irc_event_kind kind, unsigned int count)
+wait_pair_event(struct snag_irc *server, struct snag_irc *client, const struct capture *capture,
+    enum snag_irc_event_kind kind, unsigned int count)
 {
     /* Registration includes names/history exchange on both client identities.
      * Expected output gets the same 30 s floor as the pty and tmux harnesses: a
      * loaded host must not fail a correct exchange on a one-second budget. */
     uint64_t deadline = snag_monotonic_ms() + 30000u;
     while (capture->events[kind] < count && snag_monotonic_ms() < deadline) {
-        if (server) pump_pair(server, client, 1u);
-        else tick(client, 1u);
+        if (server)
+            pump_pair(server, client, 1u);
+        else
+            tick(client, 1u);
     }
     if (capture->events[kind] < count)
-        (void)fprintf(stderr, "wait_pair_event: kind=%u expected=%u received=%u messages=%u notices=%u history=%u\n",
+        (void)fprintf(stderr,
+            "wait_pair_event: kind=%u expected=%u received=%u messages=%u notices=%u history=%u\n",
             (unsigned int)kind, count, capture->events[kind], capture->events[SNAG_IRC_MESSAGE],
             capture->events[SNAG_IRC_NOTICE], capture->events[SNAG_IRC_HISTORY_READY]);
     assert(capture->events[kind] >= count);
@@ -940,7 +963,8 @@ wait_pair_state(struct snag_irc *server, struct snag_irc *client, const char *jo
         snag_buf_reset(&state);
         assert(snag_irc_state(client, &state, error, sizeof(error)) == 0);
         assert(snag_buf_terminate(&state) == 0);
-        if (strstr((const char *)state.data, joined) && strstr((const char *)state.data, "]: /workspace"))
+        if (strstr((const char *)state.data, joined) &&
+            strstr((const char *)state.data, "]: /workspace"))
             break;
         if (snag_monotonic_ms() >= deadline) {
             (void)fprintf(stderr, "missing IRC state %s: %s\n", joined, state.data);
@@ -950,7 +974,8 @@ wait_pair_state(struct snag_irc *server, struct snag_irc *client, const char *jo
     snag_buf_free(&state);
 }
 
-static void __attribute__((noinline)) test_client_reconnect(void)
+static void __attribute__((noinline))
+test_client_reconnect(void)
 {
     struct snag_config server_config;
     struct snag_config client_config;
@@ -993,8 +1018,8 @@ static void __attribute__((noinline)) test_client_reconnect(void)
     endpoint(address, port);
     init_client_config(&client_config, address, "remoteagent", "remoteop");
     client_config.irc.history_lines = 1000u;
-    assert(snag_irc_open(&client, &client_config, "/client", capture_event, capture_trace, &client_capture,
-                        error, sizeof(error)) == 0);
+    assert(snag_irc_open(&client, &client_config, "/client", capture_event, capture_trace,
+               &client_capture, error, sizeof(error)) == 0);
     /* Observe the complete 4 MiB replay; poll counts do not measure progress. */
     uint64_t history_deadline = snag_monotonic_ms() + 120000u;
     while (!client_capture.events[SNAG_IRC_HISTORY_READY] && snag_monotonic_ms() < history_deadline)
@@ -1022,8 +1047,8 @@ static void __attribute__((noinline)) test_client_reconnect(void)
     tick(server, 10u);
     client = NULL;
     client_capture.events[SNAG_IRC_HISTORY_READY] = 0u;
-    assert(snag_irc_open(&client, &client_config, "/client", capture_event, capture_trace, &client_capture,
-                        error, sizeof(error)) == 0);
+    assert(snag_irc_open(&client, &client_config, "/client", capture_event, capture_trace,
+               &client_capture, error, sizeof(error)) == 0);
     history_deadline = snag_monotonic_ms() + 120000u;
     while (!client_capture.events[SNAG_IRC_HISTORY_READY] && snag_monotonic_ms() < history_deadline)
         pump_pair(server, client, 1u);
@@ -1052,13 +1077,17 @@ static void __attribute__((noinline)) test_client_reconnect(void)
     assert(strcmp(client_capture.message_text, long_text) == 0);
 
     memset(long_text, 'b', SNAG_IRC_TEXT_MAX - 1u);
-    memcpy(long_text + SNAG_IRC_TEXT_MAX - 1u, "\xf0\x9f\x8c\x99" "end", 8u);
+    memcpy(long_text + SNAG_IRC_TEXT_MAX - 1u,
+        "\xf0\x9f\x8c\x99"
+        "end",
+        8u);
     server_capture.message_text[0] = '\0';
     client_capture.message_text[0] = '\0';
     received = client_capture.events[SNAG_IRC_MESSAGE];
     assert(send_all(client, true, SNAG_IRC_MESSAGE, long_text, error, sizeof(error)) == 0);
     wait_pair_event(server, client, &client_capture, SNAG_IRC_MESSAGE, received + 2u);
-    assert(strcmp(server_capture.last_message.text, "\xf0\x9f\x8c\x99" "end") == 0);
+    assert(strcmp(server_capture.last_message.text, "\xf0\x9f\x8c\x99"
+                                                    "end") == 0);
     assert(strcmp(server_capture.message_text, long_text) == 0);
     assert(strcmp(client_capture.message_text, long_text) == 0);
 
@@ -1070,15 +1099,15 @@ static void __attribute__((noinline)) test_client_reconnect(void)
 
     uint64_t revision = snag_irc_routing_revision(client);
     snag_irc_close(server);
-    for (unsigned int i = 0u;
-         i < 50u && !client_capture.events[SNAG_IRC_DISCONNECTED]; ++i) tick(client, 1u);
+    for (unsigned int i = 0u; i < 50u && !client_capture.events[SNAG_IRC_DISCONNECTED]; ++i)
+        tick(client, 1u);
     assert(client_capture.events[SNAG_IRC_DISCONNECTED] != 0u);
     /* A server that stays down reports one disconnect, not one per retry: the
      * outage must not crowd the model context or stdout. The reconnect below
      * runs through several retries, so the count must stay exactly one. */
     unsigned int disconnected_once = client_capture.events[SNAG_IRC_DISCONNECTED];
-    assert(send_all(client, true, SNAG_IRC_MESSAGE, "retained while disconnected",
-                              error, sizeof(error)) == 0);
+    assert(send_all(client, true, SNAG_IRC_MESSAGE, "retained while disconnected", error,
+               sizeof(error)) == 0);
     assert(strcmp(client_capture.last_message.room, "#lab") == 0);
     next_server = open_server(&server_config, &next_capture);
     unsigned int connected_before = client_capture.events[SNAG_IRC_CONNECTED];
@@ -1087,8 +1116,9 @@ static void __attribute__((noinline)) test_client_reconnect(void)
      * connected counter is updated: pump until both facts hold (or the deadline
      * passes) instead of stopping at the message and racing the counter. */
     while ((strcmp(next_capture.last_message.text, "retained while disconnected") != 0 ||
-            client_capture.events[SNAG_IRC_CONNECTED] <= connected_before) &&
-           snag_monotonic_ms() < reconnect_deadline) pump_pair(next_server, client, 1u);
+               client_capture.events[SNAG_IRC_CONNECTED] <= connected_before) &&
+           snag_monotonic_ms() < reconnect_deadline)
+        pump_pair(next_server, client, 1u);
     assert(strcmp(next_capture.last_message.nick, "remoteagent") == 0);
     assert(strcmp(next_capture.last_message.text, "retained while disconnected") == 0);
     /* Recovery reports itself once, after the single outage notice, and the
@@ -1133,7 +1163,8 @@ static void __attribute__((noinline)) test_client_reconnect(void)
     snag_config_free(&server_config);
 }
 
-static void __attribute__((noinline)) test_default_nick_sequence(void)
+static void __attribute__((noinline))
+test_default_nick_sequence(void)
 {
     struct snag_config server_config;
     struct snag_config client_config[2u];
@@ -1166,8 +1197,8 @@ static void __attribute__((noinline)) test_default_nick_sequence(void)
         assert(strcmp(client_config[i].irc.operator_nick, "root0") == 0);
         assert(client_config[i].irc.model_nick_implicit);
         assert(client_config[i].irc.operator_nick_implicit);
-        assert(snag_irc_open(&client[i], &client_config[i], "/client",
-                            capture_event, capture_trace, &client_capture[i], error, sizeof(error)) == 0);
+        assert(snag_irc_open(&client[i], &client_config[i], "/client", capture_event, capture_trace,
+                   &client_capture[i], error, sizeof(error)) == 0);
         wait_pair_event(server, client[i], &client_capture[i], SNAG_IRC_HISTORY_READY, 1u);
         assert(client_capture[i].events[SNAG_IRC_CONNECTED] == 1u);
         assert(client_capture[i].events[SNAG_IRC_DISCONNECTED] == 0u);
@@ -1187,7 +1218,8 @@ static void __attribute__((noinline)) test_default_nick_sequence(void)
     snag_config_free(&server_config);
 }
 
-static void __attribute__((noinline)) test_client_nick_collision(bool explicit_zero)
+static void __attribute__((noinline))
+test_client_nick_collision(bool explicit_zero)
 {
     struct snag_config server_config;
     struct snag_config client_config;
@@ -1207,18 +1239,19 @@ static void __attribute__((noinline)) test_client_nick_collision(bool explicit_z
     init_server_config(&server_config, port);
     server = open_server(&server_config, &server_capture);
     occupied[0] = connect_local(port, false);
-    register_peer(server, occupied[0], explicit_zero ? "worker0" : "agent1",
-                   explicit_zero, wire, sizeof(wire));
+    register_peer(server, occupied[0], explicit_zero ? "worker0" : "agent1", explicit_zero, wire,
+        sizeof(wire));
     occupied[1] = connect_local(port, false);
-    register_peer(server, occupied[1], explicit_zero ? "local0" : "operator1", false, wire, sizeof(wire));
+    register_peer(
+        server, occupied[1], explicit_zero ? "local0" : "operator1", false, wire, sizeof(wire));
 
     endpoint(address, port);
     init_client_config(&client_config, address, explicit_zero ? "worker0" : "agent",
-                        explicit_zero ? "local0" : "operator");
+        explicit_zero ? "local0" : "operator");
     assert(!client_config.irc.model_nick_implicit);
     assert(!client_config.irc.operator_nick_implicit);
-    assert(snag_irc_open(&client, &client_config, "/client", capture_event, capture_trace, &client_capture,
-                        error, sizeof(error)) == 0);
+    assert(snag_irc_open(&client, &client_config, "/client", capture_event, capture_trace,
+               &client_capture, error, sizeof(error)) == 0);
     wait_pair_event(server, client, &client_capture, SNAG_IRC_HISTORY_READY, 1u);
     assert(client_capture.events[SNAG_IRC_HISTORY_READY] != 0u);
     assert(client_capture.events[SNAG_IRC_CONNECTED] == 1u);
@@ -1247,7 +1280,8 @@ static void __attribute__((noinline)) test_client_nick_collision(bool explicit_z
     assert(strcmp(server_capture.last_message.text, "agent alias") == 0);
 
     messages = client_capture.events[SNAG_IRC_MESSAGE];
-    assert(send_all(server, true, SNAG_IRC_MESSAGE, "preferred nick is remote", error, sizeof(error)) == 0);
+    assert(send_all(server, true, SNAG_IRC_MESSAGE, "preferred nick is remote", error,
+               sizeof(error)) == 0);
     wait_pair_event(server, client, &client_capture, SNAG_IRC_MESSAGE, messages + 1u);
     assert(client_capture.events[SNAG_IRC_MESSAGE] == messages + 1u);
     assert(strcmp(client_capture.last_message.nick, "agent") == 0);
@@ -1262,23 +1296,26 @@ static void __attribute__((noinline)) test_client_nick_collision(bool explicit_z
 
     for (size_t i = 0u; i < 2u; ++i) assert(snag_socket_close(occupied[i]) == 0);
     snag_irc_close(server);
-    for (unsigned int i = 0u;
-         i < 50u && !client_capture.events[SNAG_IRC_DISCONNECTED]; ++i) tick(client, 1u);
+    for (unsigned int i = 0u; i < 50u && !client_capture.events[SNAG_IRC_DISCONNECTED]; ++i)
+        tick(client, 1u);
     assert(client_capture.events[SNAG_IRC_DISCONNECTED] != 0u);
     next_server = open_server(&server_config, &next_capture);
     wait_pair_state(next_server, client, "joined #lab");
     assert(client_capture.events[SNAG_IRC_CONNECTED] == 2u);
     messages = client_capture.events[SNAG_IRC_MESSAGE];
-    assert(send_all(client, false, SNAG_IRC_MESSAGE, "stable operator alias", error, sizeof(error)) == 0);
+    assert(send_all(client, false, SNAG_IRC_MESSAGE, "stable operator alias", error,
+               sizeof(error)) == 0);
     wait_pair_event(next_server, client, &client_capture, SNAG_IRC_MESSAGE, messages + 1u);
     assert(strcmp(next_capture.last_message.nick, "operator2") == 0);
     messages = client_capture.events[SNAG_IRC_MESSAGE];
-    assert(send_all(client, true, SNAG_IRC_MESSAGE, "stable agent alias", error, sizeof(error)) == 0);
+    assert(
+        send_all(client, true, SNAG_IRC_MESSAGE, "stable agent alias", error, sizeof(error)) == 0);
     wait_pair_event(next_server, client, &client_capture, SNAG_IRC_MESSAGE, messages + 1u);
     assert(strcmp(next_capture.last_message.nick, "agent2") == 0);
 
     server = next_server;
-out: snag_irc_close(client);
+out:
+    snag_irc_close(client);
     if (explicit_zero)
         for (size_t i = 0u; i < 2u; ++i) assert(snag_socket_close(occupied[i]) == 0);
     snag_irc_close(server);
@@ -1310,8 +1347,7 @@ test_private_relay(void)
     send_text(recipient, "PART #lab\r\n");
     drain_ready(server, recipient, wire, sizeof(wire));
     send_text(sender, "PRIVMSG ReCiPiEnT :private-body unicast\r\n");
-    wait_wire(server, recipient, wire, sizeof(wire),
-        "PRIVMSG recipient :private-body unicast\r\n");
+    wait_wire(server, recipient, wire, sizeof(wire), "PRIVMSG recipient :private-body unicast\r\n");
     assert(strstr(wire, ":sender!sender@"));
     drain_ready(server, sender, wire, sizeof(wire));
     assert(!strstr(wire, "private-body"));
@@ -1335,28 +1371,27 @@ test_private_relay(void)
 
     /* Failed negotiation is atomic; NOTICE failures never generate replies. */
     send_text(sender, "CAP REQ :-echo-message nonexistent\r\n"
-        "PRIVMSG recipient :private-body still-echoed\r\n");
+                      "PRIVMSG recipient :private-body still-echoed\r\n");
     drain_ready(server, sender, wire, sizeof(wire));
     assert(strstr(wire, " NAK :-echo-message nonexistent\r\n"));
     assert(strstr(wire, " :private-body still-echoed\r\n"));
     drain_ready(server, recipient, wire, sizeof(wire));
     send_text(sender, "PRIVMSG missing :private-body missing\r\n"
-        "NOTICE missing :private-body missing-notice\r\n");
+                      "NOTICE missing :private-body missing-notice\r\n");
     drain_ready(server, sender, wire, sizeof(wire));
     assert(strstr(wire, " 401 sender missing :"));
     assert(!strstr(wire, "missing-notice"));
     assert(!strstr(strstr(wire, " 401 ") + 1u, " 401 "));
     send_text(sender, "CAP REQ :-echo-message\r\n"
-        "NOTICE recipient :private-body notice\r\n");
+                      "NOTICE recipient :private-body notice\r\n");
     drain_ready(server, sender, wire, sizeof(wire));
     assert(!strstr(wire, "private-body notice"));
-    wait_wire(server, recipient, wire, sizeof(wire),
-        "NOTICE recipient :private-body notice\r\n");
+    wait_wire(server, recipient, wire, sizeof(wire), "NOTICE recipient :private-body notice\r\n");
 
     /* Registration is required on both ends. A reserved nick is not a user. */
     snag_socket unregistered = connect_local(port, false);
     send_text(unregistered, "NICK reserved\r\nPRIVMSG recipient :private-body unregistered\r\n"
-        "NOTICE recipient :private-body unregistered-notice\r\n");
+                            "NOTICE recipient :private-body unregistered-notice\r\n");
     drain_ready(server, unregistered, wire, sizeof(wire));
     assert(strstr(wire, " 451 "));
     send_text(sender, "PRIVMSG reserved :private-body reserved\r\n");
@@ -1398,7 +1433,7 @@ test_private_hosted_identities(void)
     snag_socket sender = connect_local(port, false);
     register_peer(server, sender, "peer", false, wire, sizeof(wire));
     send_text(sender, "CAP REQ :echo-message\r\nPART #lab\r\n"
-        "PRIVMSG operator :private-body operator\r\n");
+                      "PRIVMSG operator :private-body operator\r\n");
     wait_wire(server, sender, wire, sizeof(wire), " :private-body operator\r\n");
     struct snag_irc_event operator = capture.query[SNAG_IRC_OPERATOR];
     assert(operator.routed && !operator.room[0] && !operator.stream[0]);
@@ -1415,8 +1450,8 @@ test_private_hosted_identities(void)
     send_text(sender, "NOTICE operator :private-body notice\r\n");
     wait_wire(server, sender, wire, sizeof(wire), " :private-body notice\r\n");
     assert(capture.query[SNAG_IRC_OPERATOR].kind == SNAG_IRC_NOTICE);
-    assert(!strcmp(capture.query[SNAG_IRC_OPERATOR].route.conversation,
-        operator.route.conversation));
+    assert(
+        !strcmp(capture.query[SNAG_IRC_OPERATOR].route.conversation, operator.route.conversation));
 
     /* A verified nick change outside the channel preserves both queries. */
     send_text(sender, "NICK renamed\r\n");
@@ -1489,8 +1524,8 @@ test_private_client_identities(void)
     struct snag_irc *client;
     endpoint(address, port);
     init_client_config(&config, address, "agent", "operator");
-    assert(snag_irc_open(&client, &config, "/client", capture_event,
-        capture_trace, &capture, error, sizeof(error)) == 0);
+    assert(snag_irc_open(&client, &config, "/client", capture_event, capture_trace, &capture, error,
+               sizeof(error)) == 0);
     assert(snag_irc_bind_conversations(client, NULL) == 0);
     tick(client, 5u);
     for (size_t i = 0u; i < 2u; ++i) {
@@ -1511,45 +1546,49 @@ test_private_client_identities(void)
         wait_wire(client, fd, wire, sizeof(wire), "CAP REQ :batch server-time message-tags\r\n");
         assert(!strstr(wire, SNAJPAGENT_NAME "/catchup"));
         assert(!strstr(wire, "CAP END"));
-        send_text(fd, model ? ":fake CAP * ACK :batch server-time message-tags\r\n" :
-            ":fake CAP * NAK :batch server-time message-tags\r\n");
+        send_text(fd, model ? ":fake CAP * ACK :batch server-time message-tags\r\n"
+                            : ":fake CAP * NAK :batch server-time message-tags\r\n");
         wait_wire(client, fd, wire, sizeof(wire), "CAP END\r\n");
-        send_text(fd, model ? ":fake 001 agent :welcome\r\n"
-            ":fake 005 agent CASEMAPPING=ascii :supported\r\n:fake 376 agent :end\r\n" :
-            ":fake 001 operator :welcome\r\n:fake 005 operator CASEMAPPING=ascii :supported\r\n"
-            ":fake 376 operator :end\r\n");
+        send_text(
+            fd, model ? ":fake 001 agent :welcome\r\n"
+                        ":fake 005 agent CASEMAPPING=ascii :supported\r\n:fake 376 agent :end\r\n"
+                      : ":fake 001 operator :welcome\r\n:fake 005 operator CASEMAPPING=ascii "
+                        ":supported\r\n"
+                        ":fake 376 operator :end\r\n");
     }
     tick(client, 5u);
-    send_text(peers[SNAG_IRC_OPERATOR],
-        ":peer[!u@host PRIVMSG operator :private-body operator\r\n");
+    send_text(
+        peers[SNAG_IRC_OPERATOR], ":peer[!u@host PRIVMSG operator :private-body operator\r\n");
     drain_ready(client, peers[SNAG_IRC_OPERATOR], wire, sizeof(wire));
     assert(capture.query_count[SNAG_IRC_OPERATOR] == 1u);
     assert(capture.query_count[SNAG_IRC_AGENT] == 0u);
     struct snag_irc_event first = capture.query[SNAG_IRC_OPERATOR];
-    send_text(peers[SNAG_IRC_OPERATOR],
-        ":peer{!u@host PRIVMSG operator :private-body distinct\r\n");
+    send_text(
+        peers[SNAG_IRC_OPERATOR], ":peer{!u@host PRIVMSG operator :private-body distinct\r\n");
     drain_ready(client, peers[SNAG_IRC_OPERATOR], wire, sizeof(wire));
     assert(strcmp(first.route.conversation, capture.query[SNAG_IRC_OPERATOR].route.conversation));
     send_text(peers[SNAG_IRC_OPERATOR], ":PEER[!u@host NICK :renamed\r\n"
-        ":renamed!u@host PRIVMSG OPERATOR :private-body renamed\r\n"
-        ":peer!u@host PRIVMSG agent :private-body wrong-link\r\n");
+                                        ":renamed!u@host PRIVMSG OPERATOR :private-body renamed\r\n"
+                                        ":peer!u@host PRIVMSG agent :private-body wrong-link\r\n");
     drain_ready(client, peers[SNAG_IRC_OPERATOR], wire, sizeof(wire));
     assert(!strcmp(first.route.conversation, capture.query[SNAG_IRC_OPERATOR].route.conversation));
     assert(!strcmp(capture.query[SNAG_IRC_OPERATOR].route.peer, "renamed"));
     assert(!strcmp(capture.query[SNAG_IRC_OPERATOR].text, "private-body renamed"));
     assert(capture.query_count[SNAG_IRC_AGENT] == 0u);
     send_text(peers[SNAG_IRC_AGENT], "@msgid=one\\:two\\sthree "
-        ":peer!u@host PRIVMSG agent :private-body agent\r\n");
+                                     ":peer!u@host PRIVMSG agent :private-body agent\r\n");
     drain_ready(client, peers[SNAG_IRC_AGENT], wire, sizeof(wire));
     assert(capture.query_count[SNAG_IRC_AGENT] == 1u);
     assert(!strcmp(capture.query[SNAG_IRC_AGENT].route.target, "agent"));
     assert(!strcmp(capture.query[SNAG_IRC_AGENT].route.source, "one;two three"));
-    send_text(peers[SNAG_IRC_AGENT], ":fake BATCH +query chathistory peer\r\n"
+    send_text(peers[SNAG_IRC_AGENT],
+        ":fake BATCH +query chathistory peer\r\n"
         "@batch=query :peer!u@host PRIVMSG agent :private-body historical\r\n"
         ":fake BATCH -query\r\n");
     drain_ready(client, peers[SNAG_IRC_AGENT], wire, sizeof(wire));
     assert(capture.query[SNAG_IRC_AGENT].historical);
-    send_text(peers[SNAG_IRC_OPERATOR], ":fake BATCH +private chathistory peer\r\n"
+    send_text(peers[SNAG_IRC_OPERATOR],
+        ":fake BATCH +private chathistory peer\r\n"
         "@batch=private;saj-id=11111111111111111111111111111111:1;saj-kind=message "
         ":peer!u@host PRIVMSG operator :private-body tagged-history\r\n"
         ":fake BATCH -private\r\n");
@@ -1558,7 +1597,8 @@ test_private_client_identities(void)
     assert(capture.last_message.historical && !capture.last_message.room[0]);
     assert(!snag_irc_event_model_visible(&capture.last_message));
     unsigned int messages = capture.events[SNAG_IRC_MESSAGE];
-    send_text(peers[SNAG_IRC_OPERATOR], ":fake 005 operator SAJROOM=#lab :supported\r\n"
+    send_text(peers[SNAG_IRC_OPERATOR],
+        ":fake 005 operator SAJROOM=#lab :supported\r\n"
         ":fake BATCH +public chathistory #lab\r\n"
         "@batch=public;saj-id=11111111111111111111111111111111:2;saj-kind=message "
         ":peer!u@host PRIVMSG agent :private-body wrong-history-link\r\n"
@@ -1577,7 +1617,8 @@ test_private_client_identities(void)
     drain_ready(client, peers[SNAG_IRC_AGENT], wire, sizeof(wire));
     assert(capture.query_count[SNAG_IRC_AGENT] == before + 2u);
     assert(strlen(capture.query[SNAG_IRC_AGENT].text) == 2049u);
-    send_text(peers[SNAG_IRC_OPERATOR], ":operator!u@host NICK :operator[\r\n"
+    send_text(peers[SNAG_IRC_OPERATOR],
+        ":operator!u@host NICK :operator[\r\n"
         ":operator{!u@host NICK :unrelated\r\n"
         ":peer!u@host PRIVMSG operator[ :private-body still-local\r\n");
     drain_ready(client, peers[SNAG_IRC_OPERATOR], wire, sizeof(wire));
@@ -1588,12 +1629,12 @@ test_private_client_identities(void)
     snag_irc_destinations(client, &destinations);
     struct snag_irc_query_target target;
     assert(snag_irc_query_open(client, destinations.items[0].target.id, SNAG_IRC_AGENT, "peer",
-        &target, error, sizeof(error)) == 0);
+               &target, error, sizeof(error)) == 0);
     char outgoing[1801u];
     for (size_t i = 0u; i < sizeof(outgoing) - 1u; i += 3u) memcpy(outgoing + i, "界", 3u);
     outgoing[sizeof(outgoing) - 1u] = '\0';
-    assert(snag_irc_query_send(client, &target, SNAG_IRC_MESSAGE, outgoing,
-        true, NULL, error, sizeof(error)) == 0);
+    assert(snag_irc_query_send(
+               client, &target, SNAG_IRC_MESSAGE, outgoing, true, NULL, error, sizeof(error)) == 0);
     drain_ready(client, peers[SNAG_IRC_AGENT], wire, sizeof(wire));
     size_t chunks = 0u;
     for (char *p = wire; *p;) {
@@ -1608,8 +1649,8 @@ test_private_client_identities(void)
     assert(capture.delivery[SNAG_IRC_AGENT][SNAG_IRC_ACKNOWLEDGED] == 0u);
     send_text(peers[SNAG_IRC_AGENT], ":fake 005 agent LINELEN=1024 :supported\r\n");
     drain_ready(client, peers[SNAG_IRC_AGENT], wire, sizeof(wire));
-    assert(snag_irc_query_send(client, &target, SNAG_IRC_MESSAGE, outgoing,
-        false, NULL, error, sizeof(error)) == 0);
+    assert(snag_irc_query_send(client, &target, SNAG_IRC_MESSAGE, outgoing, false, NULL, error,
+               sizeof(error)) == 0);
     drain_ready(client, peers[SNAG_IRC_AGENT], wire, sizeof(wire));
     assert(strstr(wire, "\r\n") - wire > 512);
     assert(strstr(wire, "\r\n") - wire <= 1022);
@@ -1640,8 +1681,8 @@ private_destination(struct snag_irc *irc)
 }
 
 static void
-channel_fixture_connect(struct snag_irc *client, snag_socket listener, snag_socket peers[2u],
-                        bool resumed)
+channel_fixture_connect(
+    struct snag_irc *client, snag_socket listener, snag_socket peers[2u], bool resumed)
 {
     char wire[8192u];
     tick(client, 5u);
@@ -1654,16 +1695,16 @@ channel_fixture_connect(struct snag_irc *client, snag_socket listener, snag_sock
         drain_ready(client, fd, wire, sizeof(wire));
         bool model = strstr(wire, "NICK agent\r\n") != NULL;
         peers[model ? SNAG_IRC_AGENT : SNAG_IRC_OPERATOR] = fd;
-        send_text(fd, model ? ":fake 001 agent :welcome\r\n"
-            ":fake 005 agent SAJROOM=#lab :supported\r\n:fake 376 agent :end\r\n" :
-            ":fake 001 operator :welcome\r\n"
-            ":fake 005 operator SAJROOM=#lab :supported\r\n:fake 376 operator :end\r\n");
+        send_text(fd,
+            model ? ":fake 001 agent :welcome\r\n"
+                    ":fake 005 agent SAJROOM=#lab :supported\r\n:fake 376 agent :end\r\n"
+                  : ":fake 001 operator :welcome\r\n"
+                    ":fake 005 operator SAJROOM=#lab :supported\r\n:fake 376 operator :end\r\n");
         wait_wire(client, fd, wire, sizeof(wire), "JOIN #lab\r\n");
         assert(!strstr(wire, "JOIN #closed\r\n"));
         if (resumed && !model) assert(strstr(wire, "JOIN #side\r\n"));
         if (model) assert(!strstr(wire, "JOIN #side\r\n"));
-        send_text(fd, model ? ":agent!u@fake JOIN #lab\r\n" :
-            ":operator!u@fake JOIN #lab\r\n");
+        send_text(fd, model ? ":agent!u@fake JOIN #lab\r\n" : ":operator!u@fake JOIN #lab\r\n");
         if (resumed && !model) send_text(fd, ":operator!u@fake JOIN #side\r\n");
     }
     tick(client, 10u);
@@ -1694,8 +1735,8 @@ test_channel_routes(void)
     struct snag_irc *client;
     endpoint(address, port);
     init_client_config(&config, address, "agent", "operator");
-    assert(snag_irc_open(&client, &config, "/client", capture_event,
-        capture_trace, &capture, error, sizeof(error)) == 0);
+    assert(snag_irc_open(&client, &config, "/client", capture_event, capture_trace, &capture, error,
+               sizeof(error)) == 0);
     assert(snag_irc_bind_conversations(client, NULL) == 0);
     channel_fixture_connect(client, listener, peers, false);
     struct snag_irc_query_target scope = channel_fixture_scope(client);
@@ -1703,15 +1744,17 @@ test_channel_routes(void)
     struct snag_irc_query_target stale_scope = scope;
     ++stale_scope.generation;
     assert(snag_irc_connection_action(client, &stale_scope, SNAG_IRC_CONNECTION_NICK,
-        "stale-operator", &connection_report, error, sizeof(error)) < 0 && errno == ESTALE);
+               "stale-operator", &connection_report, error, sizeof(error)) < 0 &&
+           errno == ESTALE);
     stale_scope = scope;
     stale_scope.identity = SNAG_IRC_AGENT;
-    assert(snag_irc_connection_action(client, &stale_scope, SNAG_IRC_CONNECTION_WHOIS,
-        "peer", &connection_report, error, sizeof(error)) < 0 && errno == EACCES);
+    assert(snag_irc_connection_action(client, &stale_scope, SNAG_IRC_CONNECTION_WHOIS, "peer",
+               &connection_report, error, sizeof(error)) < 0 &&
+           errno == EACCES);
     assert(snag_irc_connection_action(client, &scope, SNAG_IRC_CONNECTION_WHOIS,
-        "peer\r\nNICK injected", &connection_report, error, sizeof(error)) < 0);
-    assert(snag_irc_connection_action(client, &scope, SNAG_IRC_CONNECTION_WHOIS,
-        "peer", &connection_report, error, sizeof(error)) == 0);
+               "peer\r\nNICK injected", &connection_report, error, sizeof(error)) < 0);
+    assert(snag_irc_connection_action(client, &scope, SNAG_IRC_CONNECTION_WHOIS, "peer",
+               &connection_report, error, sizeof(error)) == 0);
     wait_wire(client, peers[SNAG_IRC_OPERATOR], wire, sizeof(wire), "WHOIS peer\r\n");
     assert(!strstr(wire, "stale-operator") && !strstr(wire, "injected"));
     snag_buf_free(&connection_report);
@@ -1720,22 +1763,21 @@ test_channel_routes(void)
     assert(!strcmp(lab.room, "#lab"));
     struct snag_irc_channel_target wrong_role = lab;
     wrong_role.identity = SNAG_IRC_AGENT;
-    assert(snag_irc_channel_action(client, &wrong_role, SNAG_IRC_CHANNEL_NAMES,
-        NULL, NULL, error, sizeof(error)) < 0);
-    assert(snag_irc_channel_open(client, &scope, "#missing", false,
-        &side, error, sizeof(error)) < 0);
-    assert(snag_irc_channel_open(client, &scope, "#side\nJOIN #wrong", true,
-        &side, error, sizeof(error)) < 0);
-    assert(snag_irc_channel_open(client, &scope, "#side", true,
-        &side, error, sizeof(error)) == 0);
+    assert(snag_irc_channel_action(
+               client, &wrong_role, SNAG_IRC_CHANNEL_NAMES, NULL, NULL, error, sizeof(error)) < 0);
+    assert(
+        snag_irc_channel_open(client, &scope, "#missing", false, &side, error, sizeof(error)) < 0);
+    assert(snag_irc_channel_open(
+               client, &scope, "#side\nJOIN #wrong", true, &side, error, sizeof(error)) < 0);
+    assert(snag_irc_channel_open(client, &scope, "#side", true, &side, error, sizeof(error)) == 0);
     wait_wire(client, peers[SNAG_IRC_OPERATOR], wire, sizeof(wire), "JOIN #side\r\n");
-    assert(snag_irc_channel_action(client, &side, SNAG_IRC_CHANNEL_NAMES,
-        NULL, NULL, error, sizeof(error)) < 0);
+    assert(snag_irc_channel_action(
+               client, &side, SNAG_IRC_CHANNEL_NAMES, NULL, NULL, error, sizeof(error)) < 0);
     send_text(peers[SNAG_IRC_OPERATOR], ":operator!u@fake JOIN #side\r\n");
     tick(client, 5u);
     struct snag_buf report = {.max = 8192u};
-    assert(snag_irc_channel_send(client, &side, SNAG_IRC_MESSAGE,
-        "channel-body é界", false, &report, error, sizeof(error)) == 0);
+    assert(snag_irc_channel_send(client, &side, SNAG_IRC_MESSAGE, "channel-body é界", false,
+               &report, error, sizeof(error)) == 0);
     wait_wire(client, peers[SNAG_IRC_OPERATOR], wire, sizeof(wire),
         "PRIVMSG #side :channel-body é界\r\n");
     tick(client, 2u);
@@ -1745,19 +1787,19 @@ test_channel_routes(void)
     assert(!capture.channel_delivery[SNAG_IRC_AGENT][SNAG_IRC_PENDING]);
     assert(snag_buf_terminate(&report) == 0 && strstr((char *)report.data, "queued to #side"));
     snag_buf_free(&report);
-    assert(snag_irc_channel_send(client, &side, SNAG_IRC_NOTICE,
-        "channel notice", false, NULL, error, sizeof(error)) == 0);
-    wait_wire(client, peers[SNAG_IRC_OPERATOR], wire, sizeof(wire),
-        "NOTICE #side :channel notice\r\n");
-    assert(snag_irc_channel_send(client, &side, SNAG_IRC_MESSAGE,
-        "channel action", true, NULL, error, sizeof(error)) == 0);
+    assert(snag_irc_channel_send(client, &side, SNAG_IRC_NOTICE, "channel notice", false, NULL,
+               error, sizeof(error)) == 0);
+    wait_wire(
+        client, peers[SNAG_IRC_OPERATOR], wire, sizeof(wire), "NOTICE #side :channel notice\r\n");
+    assert(snag_irc_channel_send(client, &side, SNAG_IRC_MESSAGE, "channel action", true, NULL,
+               error, sizeof(error)) == 0);
     wait_wire(client, peers[SNAG_IRC_OPERATOR], wire, sizeof(wire),
         "PRIVMSG #side :\001ACTION channel action\001\r\n");
     char long_text[905u];
     for (size_t i = 0u; i < 300u; ++i) memcpy(long_text + i * 3u, "界", 3u);
     memcpy(long_text + 900u, "tail", 5u);
-    assert(snag_irc_channel_send(client, &side, SNAG_IRC_MESSAGE,
-        long_text, false, NULL, error, sizeof(error)) == 0);
+    assert(snag_irc_channel_send(
+               client, &side, SNAG_IRC_MESSAGE, long_text, false, NULL, error, sizeof(error)) == 0);
     wait_wire(client, peers[SNAG_IRC_OPERATOR], wire, sizeof(wire), "tail\r\n");
     char recovered[sizeof(long_text)] = {0};
     size_t used = 0u;
@@ -1775,59 +1817,59 @@ test_channel_routes(void)
         line = end + 2u;
     }
     assert(!strcmp(recovered, long_text));
-    assert(snag_irc_channel_send(client, &side, SNAG_IRC_MESSAGE,
-        "\n\r\n", false, NULL, error, sizeof(error)) < 0);
+    assert(snag_irc_channel_send(
+               client, &side, SNAG_IRC_MESSAGE, "\n\r\n", false, NULL, error, sizeof(error)) < 0);
+    assert(snag_irc_channel_action(client, &side, SNAG_IRC_CHANNEL_TOPIC, "é界 channel topic", NULL,
+               error, sizeof(error)) == 0);
+    wait_wire(
+        client, peers[SNAG_IRC_OPERATOR], wire, sizeof(wire), "TOPIC #side :é界 channel topic\r\n");
     assert(snag_irc_channel_action(client, &side, SNAG_IRC_CHANNEL_TOPIC,
-        "é界 channel topic", NULL, error, sizeof(error)) == 0);
-    wait_wire(client, peers[SNAG_IRC_OPERATOR], wire, sizeof(wire),
-        "TOPIC #side :é界 channel topic\r\n");
-    assert(snag_irc_channel_action(client, &side, SNAG_IRC_CHANNEL_TOPIC,
-        "bad\r\nPRIVMSG #lab :wrong", NULL, error, sizeof(error)) < 0);
+               "bad\r\nPRIVMSG #lab :wrong", NULL, error, sizeof(error)) < 0);
     char large[513u];
     memset(large, 'x', sizeof(large) - 1u);
     large[sizeof(large) - 1u] = '\0';
-    assert(snag_irc_channel_action(client, &side, SNAG_IRC_CHANNEL_TOPIC,
-        large, NULL, error, sizeof(error)) < 0);
-    assert(snag_irc_channel_action(client, &side, SNAG_IRC_CHANNEL_PART,
-        "leaving", NULL, error, sizeof(error)) == 0);
-    assert(snag_irc_channel_action(client, &side, SNAG_IRC_CHANNEL_NAMES,
-        NULL, NULL, error, sizeof(error)) < 0);
-    assert(snag_irc_channel_send(client, &side, SNAG_IRC_MESSAGE,
-        "stale channel send", false, NULL, error, sizeof(error)) < 0);
-    assert(snag_irc_channel_open(client, &scope, "#side", true,
-        &current, error, sizeof(error)) < 0);
+    assert(snag_irc_channel_action(
+               client, &side, SNAG_IRC_CHANNEL_TOPIC, large, NULL, error, sizeof(error)) < 0);
+    assert(snag_irc_channel_action(
+               client, &side, SNAG_IRC_CHANNEL_PART, "leaving", NULL, error, sizeof(error)) == 0);
+    assert(snag_irc_channel_action(
+               client, &side, SNAG_IRC_CHANNEL_NAMES, NULL, NULL, error, sizeof(error)) < 0);
+    assert(snag_irc_channel_send(client, &side, SNAG_IRC_MESSAGE, "stale channel send", false, NULL,
+               error, sizeof(error)) < 0);
+    assert(
+        snag_irc_channel_open(client, &scope, "#side", true, &current, error, sizeof(error)) < 0);
     wait_wire(client, peers[SNAG_IRC_OPERATOR], wire, sizeof(wire), "PART #side :leaving\r\n");
     send_text(peers[SNAG_IRC_OPERATOR], ":operator!u@fake PART #side :leaving\r\n");
     tick(client, 5u);
-    assert(snag_irc_channel_open(client, &scope, "#side", true,
-        &current, error, sizeof(error)) == 0);
+    assert(
+        snag_irc_channel_open(client, &scope, "#side", true, &current, error, sizeof(error)) == 0);
     assert(!strcmp(side.conversation, current.conversation));
     assert(strcmp(side.membership, current.membership));
     wait_wire(client, peers[SNAG_IRC_OPERATOR], wire, sizeof(wire), "JOIN #side\r\n");
     send_text(peers[SNAG_IRC_OPERATOR], ":operator!u@fake JOIN #side\r\n");
     tick(client, 5u);
-    assert(snag_irc_channel_action(client, &side, SNAG_IRC_CHANNEL_NAMES,
-        NULL, NULL, error, sizeof(error)) < 0);
-    assert(snag_irc_channel_action(client, &lab, SNAG_IRC_CHANNEL_NAMES,
-        NULL, NULL, error, sizeof(error)) == 0);
+    assert(snag_irc_channel_action(
+               client, &side, SNAG_IRC_CHANNEL_NAMES, NULL, NULL, error, sizeof(error)) < 0);
+    assert(snag_irc_channel_action(
+               client, &lab, SNAG_IRC_CHANNEL_NAMES, NULL, NULL, error, sizeof(error)) == 0);
     wait_wire(client, peers[SNAG_IRC_OPERATOR], wire, sizeof(wire), "NAMES #lab\r\n");
-    assert(snag_irc_channel_action(client, &current, SNAG_IRC_CHANNEL_NAMES,
-        NULL, NULL, error, sizeof(error)) == 0);
+    assert(snag_irc_channel_action(
+               client, &current, SNAG_IRC_CHANNEL_NAMES, NULL, NULL, error, sizeof(error)) == 0);
     wait_wire(client, peers[SNAG_IRC_OPERATOR], wire, sizeof(wire), "NAMES #side\r\n");
     send_text(peers[SNAG_IRC_OPERATOR], ":peer!u@fake KICK #side operator :kicked\r\n");
     tick(client, 5u);
-    assert(snag_irc_channel_action(client, &current, SNAG_IRC_CHANNEL_NAMES,
-        NULL, NULL, error, sizeof(error)) < 0);
-    assert(snag_irc_channel_open(client, &scope, "#side", true,
-        &side, error, sizeof(error)) == 0);
+    assert(snag_irc_channel_action(
+               client, &current, SNAG_IRC_CHANNEL_NAMES, NULL, NULL, error, sizeof(error)) < 0);
+    assert(snag_irc_channel_open(client, &scope, "#side", true, &side, error, sizeof(error)) == 0);
     assert(!strcmp(side.conversation, current.conversation));
     assert(strcmp(side.membership, current.membership));
     wait_wire(client, peers[SNAG_IRC_OPERATOR], wire, sizeof(wire), "JOIN #side\r\n");
-    send_text(peers[SNAG_IRC_OPERATOR], ":operator!u@fake JOIN #side\r\n"
+    send_text(peers[SNAG_IRC_OPERATOR],
+        ":operator!u@fake JOIN #side\r\n"
         ":operator!u@fake JOIN #closed\r\n:operator!u@fake PART #closed :done\r\n");
     tick(client, 5u);
-    assert(snag_irc_channel_open(client, &scope, "#closed", false,
-        &closed, error, sizeof(error)) == 0);
+    assert(snag_irc_channel_open(client, &scope, "#closed", false, &closed, error, sizeof(error)) ==
+           0);
     assert(snag_irc_conversations_valid(capture.conversations, capture.sequence + 1u));
     json_t *saved = json_incref(capture.conversations);
     struct snag_buf snapshot = {.max = SNAG_MAX_IRC_SNAPSHOT};
@@ -1838,34 +1880,35 @@ test_channel_routes(void)
     snag_buf_free(&snapshot);
     snag_irc_close(client);
     for (size_t i = 0u; i < 2u; ++i) snag_socket_close(peers[i]);
-    assert(snag_irc_open(&client, &config, "/client", capture_event,
-        capture_trace, &capture, error, sizeof(error)) == 0);
+    assert(snag_irc_open(&client, &config, "/client", capture_event, capture_trace, &capture, error,
+               sizeof(error)) == 0);
     assert(snag_irc_bind_conversations(client, saved) == 0);
     channel_fixture_connect(client, listener, peers, true);
     const char *key;
     json_t *entry;
     json_t *connection = json_object_get(saved, side.connection);
-    json_object_foreach(json_object_get(connection, "conversations"), key, entry) {
+    json_object_foreach(json_object_get(connection, "conversations"), key, entry)
+    {
         (void)key;
         struct snag_irc_event event;
-        assert(snag_irc_event_record_read("irc_event_v2", json_object_get(entry, "data"),
-            &event) == 0);
+        assert(snag_irc_event_record_read("irc_event_v2", json_object_get(entry, "data"), &event) ==
+               0);
         if (event.route.kind == SNAG_IRC_CHANNEL)
             assert(snag_irc_restore_event(client, &event) == 0);
     }
-    assert(snag_irc_channel_open(client, &scope, "#side", false,
-        &current, error, sizeof(error)) < 0);
+    assert(
+        snag_irc_channel_open(client, &scope, "#side", false, &current, error, sizeof(error)) < 0);
     scope = channel_fixture_scope(client);
-    assert(snag_irc_channel_open(client, &scope, "#side", false,
-        &current, error, sizeof(error)) == 0);
+    assert(
+        snag_irc_channel_open(client, &scope, "#side", false, &current, error, sizeof(error)) == 0);
     assert(!strcmp(side.connection, current.connection));
     assert(!strcmp(side.conversation, current.conversation));
     assert(strcmp(side.membership, current.membership));
     assert(current.generation > side.generation);
-    assert(snag_irc_channel_action(client, &side, SNAG_IRC_CHANNEL_NAMES,
-        NULL, NULL, error, sizeof(error)) < 0);
-    assert(snag_irc_channel_action(client, &current, SNAG_IRC_CHANNEL_NAMES,
-        NULL, NULL, error, sizeof(error)) == 0);
+    assert(snag_irc_channel_action(
+               client, &side, SNAG_IRC_CHANNEL_NAMES, NULL, NULL, error, sizeof(error)) < 0);
+    assert(snag_irc_channel_action(
+               client, &current, SNAG_IRC_CHANNEL_NAMES, NULL, NULL, error, sizeof(error)) == 0);
     wait_wire(client, peers[SNAG_IRC_OPERATOR], wire, sizeof(wire), "NAMES #side\r\n");
     assert(snag_irc_conversations_valid(capture.conversations, capture.sequence + 1u));
     snag_irc_close(client);
@@ -1895,21 +1938,22 @@ test_private_sends(void)
     drain_ready(server, peer, wire, sizeof(wire));
     struct snag_irc_query_target target;
     uint32_t destination = private_destination(server);
-    assert(snag_irc_query_open(server, destination, SNAG_IRC_OPERATOR, "peer",
-        &target, error, sizeof(error)) == 0);
+    assert(snag_irc_query_open(
+               server, destination, SNAG_IRC_OPERATOR, "peer", &target, error, sizeof(error)) == 0);
     assert(capture.query[SNAG_IRC_OPERATOR].kind == SNAG_IRC_CONNECTED);
     struct snag_irc_query_target scope = target;
     struct snag_irc_query_target rejected;
     ++scope.generation;
     unsigned int opened = capture.query_count[SNAG_IRC_OPERATOR];
-    assert(snag_irc_query_open_frozen(server, &scope, "other-peer", &rejected,
-        error, sizeof(error)) < 0 && errno == ESTALE);
+    assert(snag_irc_query_open_frozen(
+               server, &scope, "other-peer", &rejected, error, sizeof(error)) < 0 &&
+           errno == ESTALE);
     assert(capture.query_count[SNAG_IRC_OPERATOR] == opened);
     drain_ready(server, peer, wire, sizeof(wire));
     assert(!strstr(wire, "PRIVMSG") && !strstr(wire, "NOTICE"));
     struct snag_buf report = {.max = 32768u};
-    assert(snag_irc_query_send(server, &target, SNAG_IRC_MESSAGE, "private-body one\nsecond",
-        true, &report, error, sizeof(error)) == 0);
+    assert(snag_irc_query_send(server, &target, SNAG_IRC_MESSAGE, "private-body one\nsecond", true,
+               &report, error, sizeof(error)) == 0);
     wait_wire(server, peer, wire, sizeof(wire), " :\001ACTION second\001\r\n");
     assert(strstr(wire, ":operator!operator@"));
     assert(strstr(wire, " PRIVMSG peer :\001ACTION private-body one"));
@@ -1922,35 +1966,36 @@ test_private_sends(void)
     assert(!strstr(wire, "private-body") && !strstr(wire, "second"));
 
     struct snag_irc_query_target same;
-    assert(snag_irc_query_open(server, destination, SNAG_IRC_OPERATOR, "PEER",
-        &same, error, sizeof(error)) == 0);
+    assert(snag_irc_query_open(
+               server, destination, SNAG_IRC_OPERATOR, "PEER", &same, error, sizeof(error)) == 0);
     assert(!strcmp(same.conversation, target.conversation));
     send_text(peer, "NICK renamed\r\n");
     drain_ready(server, peer, wire, sizeof(wire));
-    assert(snag_irc_query_send(server, &target, SNAG_IRC_MESSAGE, "private-body stale",
-        false, NULL, error, sizeof(error)) < 0 && errno == ESTALE);
-    assert(snag_irc_query_open(server, destination, SNAG_IRC_OPERATOR, "renamed",
-        &same, error, sizeof(error)) == 0);
+    assert(snag_irc_query_send(server, &target, SNAG_IRC_MESSAGE, "private-body stale", false, NULL,
+               error, sizeof(error)) < 0 &&
+           errno == ESTALE);
+    assert(snag_irc_query_open(server, destination, SNAG_IRC_OPERATOR, "renamed", &same, error,
+               sizeof(error)) == 0);
     assert(!strcmp(same.conversation, target.conversation));
-    assert(snag_irc_query_send(server, &same, SNAG_IRC_NOTICE, "private-body notice",
-        false, NULL, error, sizeof(error)) == 0);
+    assert(snag_irc_query_send(server, &same, SNAG_IRC_NOTICE, "private-body notice", false, NULL,
+               error, sizeof(error)) == 0);
     wait_wire(server, peer, wire, sizeof(wire), " NOTICE renamed :private-body notice\r\n");
     assert(!strstr(wire, "stale"));
 
     /* The hosted operator and model keep distinct incoming/outgoing records. */
-    assert(snag_irc_query_open(server, destination, SNAG_IRC_OPERATOR, "agent",
-        &target, error, sizeof(error)) == 0);
-    assert(snag_irc_query_send(server, &target, SNAG_IRC_MESSAGE, "private-body local",
-        false, NULL, error, sizeof(error)) == 0);
+    assert(snag_irc_query_open(server, destination, SNAG_IRC_OPERATOR, "agent", &target, error,
+               sizeof(error)) == 0);
+    assert(snag_irc_query_send(server, &target, SNAG_IRC_MESSAGE, "private-body local", false, NULL,
+               error, sizeof(error)) == 0);
     assert(capture.query[SNAG_IRC_AGENT].route.direction == SNAG_IRC_INCOMING);
     assert(!strcmp(capture.query[SNAG_IRC_AGENT].nick, "operator"));
     assert(capture.outgoing[SNAG_IRC_OPERATOR].route.delivery == SNAG_IRC_ACKNOWLEDGED);
     assert(strcmp(capture.query[SNAG_IRC_AGENT].route.conversation, target.conversation));
-    assert(snag_irc_query_open(server, destination, SNAG_IRC_AGENT, "agent",
-        &target, error, sizeof(error)) == 0);
+    assert(snag_irc_query_open(
+               server, destination, SNAG_IRC_AGENT, "agent", &target, error, sizeof(error)) == 0);
     unsigned int before = capture.query_count[SNAG_IRC_AGENT];
-    assert(snag_irc_query_send(server, &target, SNAG_IRC_MESSAGE, "private-body self",
-        false, NULL, error, sizeof(error)) == 0);
+    assert(snag_irc_query_send(server, &target, SNAG_IRC_MESSAGE, "private-body self", false, NULL,
+               error, sizeof(error)) == 0);
     assert(capture.query_count[SNAG_IRC_AGENT] == before + 2u);
     assert(capture.query[SNAG_IRC_AGENT].local);
     assert(!capture.private_trace);
@@ -1978,16 +2023,16 @@ test_private_native_receipts(void)
     assert(snag_irc_bind_conversations(server, NULL) == 0);
     init_client_config(&client_config, address, "remoteagent", "remoteop");
     struct snag_irc *client;
-    assert(snag_irc_open(&client, &client_config, "/client", capture_event,
-        capture_trace, &client_capture, error, sizeof(error)) == 0);
+    assert(snag_irc_open(&client, &client_config, "/client", capture_event, capture_trace,
+               &client_capture, error, sizeof(error)) == 0);
     assert(snag_irc_bind_conversations(client, NULL) == 0);
     wait_pair_event(server, client, &client_capture, SNAG_IRC_HISTORY_READY, 1u);
     uint32_t destination = private_destination(client);
     struct snag_irc_query_target target;
-    assert(snag_irc_query_open(client, destination, SNAG_IRC_AGENT, "operator",
-        &target, error, sizeof(error)) == 0);
+    assert(snag_irc_query_open(client, destination, SNAG_IRC_AGENT, "operator", &target, error,
+               sizeof(error)) == 0);
     assert(snag_irc_query_send(client, &target, SNAG_IRC_MESSAGE,
-        "private-body same\nprivate-body same", false, NULL, error, sizeof(error)) == 0);
+               "private-body same\nprivate-body same", false, NULL, error, sizeof(error)) == 0);
     uint64_t until = snag_monotonic_ms() + 1000u;
     while (client_capture.delivery[SNAG_IRC_AGENT][SNAG_IRC_ACKNOWLEDGED] < 2u) {
         assert(snag_monotonic_ms() < until);
@@ -1997,10 +2042,10 @@ test_private_native_receipts(void)
     assert(server_capture.query_count[SNAG_IRC_OPERATOR] == 2u);
     assert(client_capture.delivery[SNAG_IRC_AGENT][SNAG_IRC_PENDING] == 2u);
     assert(client_capture.delivery[SNAG_IRC_AGENT][SNAG_IRC_WRITTEN] == 2u);
-    assert(snag_irc_query_open(client, destination, SNAG_IRC_AGENT, "missing",
-        &target, error, sizeof(error)) == 0);
-    assert(snag_irc_query_send(client, &target, SNAG_IRC_MESSAGE, "private-body nonexistent",
-        false, NULL, error, sizeof(error)) == 0);
+    assert(snag_irc_query_open(
+               client, destination, SNAG_IRC_AGENT, "missing", &target, error, sizeof(error)) == 0);
+    assert(snag_irc_query_send(client, &target, SNAG_IRC_MESSAGE, "private-body nonexistent", false,
+               NULL, error, sizeof(error)) == 0);
     until = snag_monotonic_ms() + 1000u;
     while (!client_capture.delivery[SNAG_IRC_AGENT][SNAG_IRC_FAILED]) {
         assert(snag_monotonic_ms() < until);
@@ -2009,12 +2054,12 @@ test_private_native_receipts(void)
     }
     assert(!strcmp(client_capture.outgoing[SNAG_IRC_AGENT].route.peer, "missing"));
     assert(!server_capture.private_trace && !client_capture.private_trace);
-    assert(snag_irc_query_open(client, destination, SNAG_IRC_AGENT, "operator",
-        &target, error, sizeof(error)) == 0);
+    assert(snag_irc_query_open(client, destination, SNAG_IRC_AGENT, "operator", &target, error,
+               sizeof(error)) == 0);
     /* Hold engine admission at the receiver: a complete write without its
      * receipt becomes uncertain when the endpoint is explicitly removed. */
-    assert(snag_irc_query_send(client, &target, SNAG_IRC_MESSAGE, "private-body unconfirmed",
-        false, NULL, error, sizeof(error)) == 0);
+    assert(snag_irc_query_send(client, &target, SNAG_IRC_MESSAGE, "private-body unconfirmed", false,
+               NULL, error, sizeof(error)) == 0);
     until = snag_monotonic_ms() + 1000u;
     while (client_capture.delivery[SNAG_IRC_AGENT][SNAG_IRC_WRITTEN] < 4u) {
         assert(snag_monotonic_ms() < until);
@@ -2022,8 +2067,9 @@ test_private_native_receipts(void)
     }
     assert(snag_irc_remove(client, false, address, error, sizeof(error)) == 0);
     assert(client_capture.delivery[SNAG_IRC_AGENT][SNAG_IRC_UNCERTAIN] == 1u);
-    assert(snag_irc_query_send(client, &target, SNAG_IRC_MESSAGE, "private-body removed",
-        false, NULL, error, sizeof(error)) < 0 && errno == ESTALE);
+    assert(snag_irc_query_send(client, &target, SNAG_IRC_MESSAGE, "private-body removed", false,
+               NULL, error, sizeof(error)) < 0 &&
+           errno == ESTALE);
     snag_irc_close(client);
     snag_irc_close(server);
     snag_config_free(&client_config);
@@ -2050,8 +2096,7 @@ test_private_commit_failure(void)
     capture.fail_message = true;
     send_text(sender, "PRIVMSG agent :private-body uncommitted\r\n");
     uint64_t until = snag_monotonic_ms() + 1000u;
-    while (snag_irc_tick(server, 2, error, sizeof(error)) == 0)
-        assert(snag_monotonic_ms() < until);
+    while (snag_irc_tick(server, 2, error, sizeof(error)) == 0) assert(snag_monotonic_ms() < until);
     assert(capture.query_count[SNAG_IRC_AGENT] == 1u);
     (void)drain(sender, wire, sizeof(wire));
     assert(!strstr(wire, "private-body"));
@@ -2062,17 +2107,17 @@ test_private_commit_failure(void)
 }
 
 static snag_socket
-client_channel_state(struct snag_irc *client, struct capture *capture,
-                     snag_socket operator_fd, snag_socket agent_fd, snag_socket listener)
+client_channel_state(struct snag_irc *client, struct capture *capture, snag_socket operator_fd,
+    snag_socket agent_fd, snag_socket listener)
 {
     unsigned int joins = capture->events[SNAG_IRC_JOIN];
     send_text(operator_fd, ":OpFinal!u@fake JOIN #side\r\n"
-        ":fake 353 OpFinal = #side :@OpFinal final friend sidepeer\r\n"
-        ":fake 366 OpFinal #side :end\r\n"
-        ":fake 332 OpFinal #side :side topic\r\n");
+                           ":fake 353 OpFinal = #side :@OpFinal final friend sidepeer\r\n"
+                           ":fake 366 OpFinal #side :end\r\n"
+                           ":fake 332 OpFinal #side :side topic\r\n");
     send_text(agent_fd, ":final!u@fake JOIN #side\r\n"
-        ":fake 353 final = #side :@OpFinal final friend sidepeer\r\n"
-        ":fake 366 final #side :end\r\n");
+                        ":fake 353 final = #side :@OpFinal final friend sidepeer\r\n"
+                        ":fake 366 final #side :end\r\n");
     wait_pair_event(NULL, client, capture, SNAG_IRC_JOIN, joins + 1u);
     tick(client, 10u);
     assert(capture->events[SNAG_IRC_DISCONNECTED] == 0u);
@@ -2103,13 +2148,13 @@ client_channel_state(struct snag_irc *client, struct capture *capture,
 
     unsigned int nicks = capture->events[SNAG_IRC_NICK];
     send_text(operator_fd, ":outsider!u@fake JOIN #side\r\n"
-        ":outsider!u@fake NICK :bothrooms\r\n");
+                           ":outsider!u@fake NICK :bothrooms\r\n");
     wait_pair_event(NULL, client, capture, SNAG_IRC_NICK, nicks + 2u);
     unsigned int quits = capture->events[SNAG_IRC_QUIT];
     send_text(operator_fd, ":bothrooms!u@fake QUIT :gone\r\n");
     wait_pair_event(NULL, client, capture, SNAG_IRC_QUIT, quits + 2u);
     send_text(operator_fd, ":sidepeer!u@fake KICK #side OpFinal :removed\r\n"
-        ":sidepeer!u@fake PRIVMSG #side :after removal\r\n");
+                           ":sidepeer!u@fake PRIVMSG #side :after removal\r\n");
     tick(client, 10u);
     assert(capture->events[SNAG_IRC_MESSAGE] == messages + 2u);
     snag_irc_destinations(client, &destinations);
@@ -2118,9 +2163,9 @@ client_channel_state(struct snag_irc *client, struct capture *capture,
     /* Channel errors are scoped failures; the same connection stays usable. */
     unsigned int notices = capture->events[SNAG_IRC_NOTICE];
     send_text(operator_fd, ":fake 403 OpFinal #missing :No such channel\r\n"
-        ":fake 404 OpFinal #lab :Cannot send to channel\r\n"
-        ":fake 471 OpFinal #full :Channel is full\r\n"
-        ":sidepeer!u@fake PRIVMSG #lab :after channel errors\r\n");
+                           ":fake 404 OpFinal #lab :Cannot send to channel\r\n"
+                           ":fake 471 OpFinal #full :Channel is full\r\n"
+                           ":sidepeer!u@fake PRIVMSG #lab :after channel errors\r\n");
     wait_pair_event(NULL, client, capture, SNAG_IRC_MESSAGE, messages + 3u);
     assert(capture->events[SNAG_IRC_NOTICE] == notices + 3u);
     assert(capture->events[SNAG_IRC_DISCONNECTED] == 0u);
@@ -2129,16 +2174,16 @@ client_channel_state(struct snag_irc *client, struct capture *capture,
     /* The advertised channel prefixes and mapping also apply to non-default rooms. */
     joins = capture->events[SNAG_IRC_JOIN];
     send_text(operator_fd, ":fake 005 OpFinal CHANTYPES=#& CASEMAPPING=ascii :supported\r\n"
-        ":OpFinal!u@fake JOIN &keep\r\n"
-        ":fake 353 OpFinal = &keep :@OpFinal peer[ peer{\r\n"
-        ":fake 366 OpFinal &keep :end\r\n"
-        ":peer[!u@fake PART &KEEP :bye\r\n"
-        ":fake 332 OpFinal &keep :old topic\r\n"
-        ":OpFinal!u@fake JOIN #side\r\n"
-        ":OpFinal!u@fake PART #side :leave\r\n"
-        ":fake 353 OpFinal = #side :OpFinal phantom\r\n"
-        ":fake 366 OpFinal #side :end\r\n"
-        ":phantom!u@fake PRIVMSG #side :names alone cannot join\r\n");
+                           ":OpFinal!u@fake JOIN &keep\r\n"
+                           ":fake 353 OpFinal = &keep :@OpFinal peer[ peer{\r\n"
+                           ":fake 366 OpFinal &keep :end\r\n"
+                           ":peer[!u@fake PART &KEEP :bye\r\n"
+                           ":fake 332 OpFinal &keep :old topic\r\n"
+                           ":OpFinal!u@fake JOIN #side\r\n"
+                           ":OpFinal!u@fake PART #side :leave\r\n"
+                           ":fake 353 OpFinal = #side :OpFinal phantom\r\n"
+                           ":fake 366 OpFinal #side :end\r\n"
+                           ":phantom!u@fake PRIVMSG #side :names alone cannot join\r\n");
     wait_pair_event(NULL, client, capture, SNAG_IRC_JOIN, joins + 2u);
     tick(client, 10u);
     assert(capture->events[SNAG_IRC_MESSAGE] == messages + 3u);
@@ -2159,16 +2204,16 @@ client_channel_state(struct snag_irc *client, struct capture *capture,
     char wire[8192u];
     wait_wire(client, operator_fd, wire, sizeof(wire), "USER OpFinal");
     send_text(operator_fd, ":fake 001 OpFinal :welcome\r\n"
-        ":fake 005 OpFinal CHANTYPES=#& SAJROOM=#lab :supported\r\n"
-        ":fake 376 OpFinal :end\r\n");
+                           ":fake 005 OpFinal CHANTYPES=#& SAJROOM=#lab :supported\r\n"
+                           ":fake 376 OpFinal :end\r\n");
     wait_wire(client, operator_fd, wire, sizeof(wire), "JOIN #lab\r\n");
     assert(strstr(wire, "JOIN &keep\r\n"));
     assert(!strstr(wire, "JOIN #side\r\n"));
     send_text(operator_fd, ":OpFinal!u@fake JOIN #lab\r\n"
-        ":OpFinal!u@fake JOIN &keep\r\n"
-        ":fake 353 OpFinal = &keep :OpFinal fresh\r\n"
-        ":fake 366 OpFinal &keep :end\r\n"
-        ":fresh!u@fake PRIVMSG &keep :after reconnect\r\n");
+                           ":OpFinal!u@fake JOIN &keep\r\n"
+                           ":fake 353 OpFinal = &keep :OpFinal fresh\r\n"
+                           ":fake 366 OpFinal &keep :end\r\n"
+                           ":fresh!u@fake PRIVMSG &keep :after reconnect\r\n");
     wait_pair_event(NULL, client, capture, SNAG_IRC_MESSAGE, messages + 4u);
     assert(!strcmp(capture->last_message.room, "&keep"));
     assert(snag_irc_state(client, &state, error, sizeof(error)) == 0);
@@ -2192,7 +2237,7 @@ client_channel_state(struct snag_irc *client, struct capture *capture,
     }
     nicks = capture->events[SNAG_IRC_NICK];
     send_text(operator_fd, ":fake 366 OpFinal #large :end\r\n"
-        ":member-2047-abcdefghijkl!u@fake NICK :last-member\r\n");
+                           ":member-2047-abcdefghijkl!u@fake NICK :last-member\r\n");
     wait_pair_event(NULL, client, capture, SNAG_IRC_NICK, nicks + 1u);
     assert(!strcmp(capture->last_nick.room, "#large"));
     assert(!strcmp(capture->last_nick.text, "last-member"));
@@ -2211,8 +2256,8 @@ client_channel_state(struct snag_irc *client, struct capture *capture,
     send_text(operator_fd, (const char *)long_wire.data);
     wait_pair_event(NULL, client, capture, SNAG_IRC_PART, parts + 1u);
     assert(strlen(capture->last_part.text) > 4000u);
-    assert(snag_utf8_valid((const unsigned char *)capture->last_part.text,
-        strlen(capture->last_part.text), true));
+    assert(snag_utf8_valid(
+        (const unsigned char *)capture->last_part.text, strlen(capture->last_part.text), true));
     snag_buf_reset(&long_wire);
     assert(snag_buf_printf(&long_wire, ":fake 404 OpFinal #lab :%s\r\n", reason) == 0);
     assert(snag_buf_terminate(&long_wire) == 0);
@@ -2220,17 +2265,17 @@ client_channel_state(struct snag_irc *client, struct capture *capture,
     send_text(operator_fd, (const char *)long_wire.data);
     wait_pair_event(NULL, client, capture, SNAG_IRC_NOTICE, notices + 1u);
     assert(strlen(capture->last_notice.text) > 4000u);
-    assert(snag_utf8_valid((const unsigned char *)capture->last_notice.text,
-        strlen(capture->last_notice.text), true));
+    assert(snag_utf8_valid(
+        (const unsigned char *)capture->last_notice.text, strlen(capture->last_notice.text), true));
     snag_buf_free(&long_wire);
 
     send_text(agent_fd, ":fake 005 final CASEMAPPING=ascii :supported\r\n"
-        ":final!u@fake NICK :Attention[\r\n");
+                        ":final!u@fake NICK :Attention[\r\n");
     tick(client, 10u);
     assert(snag_irc_mentions_agent(client, "local", "@attention[ hello"));
     assert(!snag_irc_mentions_agent(client, "local", "@attention{ hello"));
     send_text(agent_fd, ":fake 005 Attention[ CASEMAPPING=rfc1459-strict :supported\r\n"
-        ":Attention[!u@fake NICK :Attention^\r\n");
+                        ":Attention[!u@fake NICK :Attention^\r\n");
     tick(client, 10u);
     assert(snag_irc_mentions_agent(client, "local", "attention^: hello"));
     assert(!snag_irc_mentions_agent(client, "local", "attention~: hello"));
@@ -2247,7 +2292,8 @@ client_channel_state(struct snag_irc *client, struct capture *capture,
     return operator_fd;
 }
 
-static void __attribute__((noinline)) test_client_events(void)
+static void __attribute__((noinline))
+test_client_events(void)
 {
     struct snag_config config;
     struct capture capture = {0};
@@ -2263,8 +2309,8 @@ static void __attribute__((noinline)) test_client_events(void)
 
     endpoint(address, port);
     init_client_config(&config, address, "remoteagent", "remoteop");
-    assert(snag_irc_open(&client, &config, "/client", capture_event,
-                        capture_trace, &capture, error, sizeof(error)) == 0);
+    assert(snag_irc_open(&client, &config, "/client", capture_event, capture_trace, &capture, error,
+               sizeof(error)) == 0);
     tick(client, 5u);
     for (size_t i = 0u; i < 2u; ++i) {
         snag_socket_event ready = {listener, SNAG_NET_READ, 0};
@@ -2280,13 +2326,18 @@ static void __attribute__((noinline)) test_client_events(void)
 
         drain_ready(client, peers[i], wire, sizeof(wire));
         nick = strstr(wire, "NICK remoteop\r\n") ? "remoteop" : "remoteagent";
-        if (strcmp(nick, "remoteop") == 0) operator_fd = peers[i];
-        else agent_fd = peers[i];
-        assert(strstr(wire, strcmp(nick, "remoteop") == 0 ? "NICK remoteop\r\n" : "NICK remoteagent\r\n"));
+        if (strcmp(nick, "remoteop") == 0)
+            operator_fd = peers[i];
+        else
+            agent_fd = peers[i];
+        assert(strstr(
+            wire, strcmp(nick, "remoteop") == 0 ? "NICK remoteop\r\n" : "NICK remoteagent\r\n"));
         {
             char welcome[1024u];
-            int n = snprintf(welcome, sizeof(welcome), ":fake 001 %s :welcome\r\n"
-                ":fake 005 %s SAJROOM=#lab :supported\r\n" ":fake 376 %s :end\r\n",
+            int n = snprintf(welcome, sizeof(welcome),
+                ":fake 001 %s :welcome\r\n"
+                ":fake 005 %s SAJROOM=#lab :supported\r\n"
+                ":fake 376 %s :end\r\n",
                 peers[i] == agent_fd ? "acceptedagent" : nick, nick, nick);
             assert(n > 0 && (size_t)n < sizeof(welcome));
             send_text(peers[i], welcome);
@@ -2305,9 +2356,13 @@ static void __attribute__((noinline)) test_client_events(void)
         drain_ready(client, peers[i], wire, sizeof(wire));
         assert(strstr(wire, "JOIN #lab\r\n"));
         nick = peers[i] == operator_fd ? "remoteop" : "remoteagent";
-        n = snprintf(joined, sizeof(joined), ":%s!u@fake JOIN #lab\r\n"
-            ":fake 353 %s = #lab :  @remoteop   remoteagent  peer  \r\n" ":fake 366 %s #lab :end\r\n"
-            ":fake BATCH +h chathistory #lab\r\n" ":fake BATCH -h\r\n", nick, nick, nick);
+        n = snprintf(joined, sizeof(joined),
+            ":%s!u@fake JOIN #lab\r\n"
+            ":fake 353 %s = #lab :  @remoteop   remoteagent  peer  \r\n"
+            ":fake 366 %s #lab :end\r\n"
+            ":fake BATCH +h chathistory #lab\r\n"
+            ":fake BATCH -h\r\n",
+            nick, nick, nick);
         assert(n > 0 && (size_t)n < sizeof(joined));
         send_text(peers[i], joined);
     }
@@ -2358,13 +2413,17 @@ static void __attribute__((noinline)) test_client_events(void)
 
         /* Observer receives the model rename first, followed by its echo. */
         send_text(operator_fd, ":remoteagent!u@fake NICK :agent7\r\n"
-            ":agent7!u@fake PRIVMSG #lab :own echo\r\n" ":remoteop!u@fake NICK :operator7\r\n"
-            ":operator7!u@fake NICK :Operator7\r\n" ":outsider!u@fake NICK :ignored\r\n"
-            ":peer!u@fake NICK :friend\r\n" ":fake 433 Operator7 taken :Nickname is already in use\r\n");
+                               ":agent7!u@fake PRIVMSG #lab :own echo\r\n"
+                               ":remoteop!u@fake NICK :operator7\r\n"
+                               ":operator7!u@fake NICK :Operator7\r\n"
+                               ":outsider!u@fake NICK :ignored\r\n"
+                               ":peer!u@fake NICK :friend\r\n"
+                               ":fake 433 Operator7 taken :Nickname is already in use\r\n");
         tick(client, 10u);
         send_text(agent_fd, ":remoteagent!u@fake NICK :agent7\r\n"
-            ":remoteop!u@fake NICK :operator7\r\n" ":operator7!u@fake NICK :Operator7\r\n"
-            ":peer!u@fake NICK :friend\r\n");
+                            ":remoteop!u@fake NICK :operator7\r\n"
+                            ":operator7!u@fake NICK :Operator7\r\n"
+                            ":peer!u@fake NICK :friend\r\n");
         wait_pair_event(NULL, client, &capture, SNAG_IRC_NICK, 5u);
         assert(capture.events[SNAG_IRC_NICK] == 5u);
         assert(capture.events[SNAG_IRC_MESSAGE] == messages);
@@ -2378,13 +2437,14 @@ static void __attribute__((noinline)) test_client_events(void)
         struct snag_buf snapshot = {.max = SNAG_MAX_IRC_SNAPSHOT};
         assert(snag_irc_snapshot(client, &snapshot, error, sizeof(error)) == 0);
         assert(snag_buf_terminate(&snapshot) == 0);
-        assert(strstr((const char *)snapshot.data, "model nick: agent7\noperator nick: Operator7\n"));
+        assert(
+            strstr((const char *)snapshot.data, "model nick: agent7\noperator nick: Operator7\n"));
         assert(strstr((const char *)snapshot.data, "@Operator7 agent7 friend"));
         snag_buf_free(&snapshot);
         assert(send_all(client, false, SNAG_IRC_TOPIC, "renamed topic", error, sizeof(error)) == 0);
         unsigned int modes = capture.events[SNAG_IRC_MODE];
         send_text(operator_fd, ":friend!u@fake MODE #lab -o Operator7\r\n"
-            ":friend!u@fake MODE #lab +o agent7\r\n");
+                               ":friend!u@fake MODE #lab +o agent7\r\n");
         send_text(agent_fd, ":friend!u@fake MODE #lab +o agent7\r\n");
         wait_pair_event(NULL, client, &capture, SNAG_IRC_MODE, modes + 2u);
         /* External room policy belongs to the server: -t permits this joined
@@ -2400,14 +2460,16 @@ static void __attribute__((noinline)) test_client_events(void)
         send_text(agent_fd, ":friend!u@fake MODE #lab +o agent7\r\n");
         tick(client, 5u);
         send_text(operator_fd, ":remoteagent!u@fake JOIN #lab\r\n"
-            ":remoteagent!u@fake PRIVMSG #lab :old nick is someone else\r\n"
-            ":friend!u@fake PART #lab :bye\r\n");
+                               ":remoteagent!u@fake PRIVMSG #lab :old nick is someone else\r\n"
+                               ":friend!u@fake PART #lab :bye\r\n");
         wait_pair_event(NULL, client, &capture, SNAG_IRC_MESSAGE, messages + 1u);
         assert(capture.events[SNAG_IRC_MESSAGE] == messages + 1u);
         assert(strcmp(capture.last_message.nick, "remoteagent") == 0);
-        assert(send_all(client, false, SNAG_IRC_MESSAGE, "local renamed op", error, sizeof(error)) == 0);
+        assert(send_all(
+                   client, false, SNAG_IRC_MESSAGE, "local renamed op", error, sizeof(error)) == 0);
         assert(strcmp(capture.last_message.nick, "Operator7") == 0);
-        assert(send_all(client, true, SNAG_IRC_MESSAGE, "local renamed model", error, sizeof(error)) == 0);
+        assert(send_all(client, true, SNAG_IRC_MESSAGE, "local renamed model", error,
+                   sizeof(error)) == 0);
         assert(strcmp(capture.last_message.nick, "agent7") == 0);
     }
     /* Requested names differ from the server-confirmed sender until its ack. */
@@ -2419,7 +2481,7 @@ static void __attribute__((noinline)) test_client_events(void)
     assert(send_all(client, true, SNAG_IRC_NICK, "first", error, sizeof(error)) == 0);
     assert(send_all(client, true, SNAG_IRC_NICK, "final", error, sizeof(error)) == 0);
     send_text(agent_fd, ":agent7!u@fake NICK :docsowner\r\n"
-        ":docsowner!u@fake NICK :first\r\n:first!u@fake NICK :final\r\n");
+                        ":docsowner!u@fake NICK :first\r\n:first!u@fake NICK :final\r\n");
     tick(client, 10u);
     assert(strcmp(snag_irc_model_nick(client), "final") == 0);
     send_text(operator_fd, ":docsowner!u@fake NICK :first\r\n:first!u@fake NICK :final\r\n");
@@ -2448,7 +2510,8 @@ static void __attribute__((noinline)) test_client_events(void)
     snag_config_free(&config);
 }
 
-static void __attribute__((noinline)) test_independent_owners(void)
+static void __attribute__((noinline))
+test_independent_owners(void)
 {
     struct snag_config config;
     struct capture capture = {0};
@@ -2467,8 +2530,8 @@ static void __attribute__((noinline)) test_independent_owners(void)
         endpoint(address, remote);
         assert(snag_strcpy(config.irc.clients[i], sizeof(config.irc.clients[i]), address));
     }
-    assert(snag_irc_open(&irc, &config, "/workspace", capture_event,
-                        capture_trace, &capture, error, sizeof(error)) == 0);
+    assert(snag_irc_open(&irc, &config, "/workspace", capture_event, capture_trace, &capture, error,
+               sizeof(error)) == 0);
     tick(irc, 10u);
     for (size_t i = 0u; i < 2u; ++i)
         for (size_t j = 0u; j < 2u; ++j) {
@@ -2497,7 +2560,8 @@ static void __attribute__((noinline)) test_independent_owners(void)
     snag_config_free(&config);
 }
 
-static void __attribute__((noinline)) test_callback_failure(void)
+static void __attribute__((noinline))
+test_callback_failure(void)
 {
     struct snag_config config;
     struct capture capture = {.fail_message = true};
@@ -2521,12 +2585,12 @@ test_typed_channel_checkpoint(void)
     config.irc.history_lines = 2u;
     for (size_t i = 0u; i < sizeof(rooms) / sizeof(rooms[0]); ++i) {
         struct snag_irc_core *source = NULL, *restored = NULL;
-        assert(snag_irc_core_open(&source, &config, "/fixture", false,
-            NULL, NULL, NULL, error, sizeof(error)) == 0);
-        assert(snag_irc_core_open(&restored, &config, "/fixture", false,
-            NULL, NULL, NULL, error, sizeof(error)) == 0);
-        struct snag_irc_event event = {.kind = SNAG_IRC_JOIN, .timestamp_ms = 1u,
-            .sequence = 1u, .op = true, .routed = true};
+        assert(snag_irc_core_open(&source, &config, "/fixture", false, NULL, NULL, NULL, error,
+                   sizeof(error)) == 0);
+        assert(snag_irc_core_open(&restored, &config, "/fixture", false, NULL, NULL, NULL, error,
+                   sizeof(error)) == 0);
+        struct snag_irc_event event = {
+            .kind = SNAG_IRC_JOIN, .timestamp_ms = 1u, .sequence = 1u, .op = true, .routed = true};
         strcpy(event.endpoint, config.irc.listen);
         strcpy(event.room, rooms[i]);
         strcpy(event.nick, "operator");
@@ -2557,8 +2621,9 @@ test_typed_channel_checkpoint(void)
         assert(snag_irc_core_restore_event(restored, &event) < 0 && errno == EINVAL);
         for (unsigned int bad_field = 0u; bad_field < 3u; ++bad_field) {
             json_t *bad = json_deep_copy(saved);
-            const char *section = bad_field == 0u ? "cursors" :
-                bad_field == 1u ? "members" : "history";
+            const char *section = bad_field == 0u   ? "cursors"
+                                  : bad_field == 1u ? "members"
+                                                    : "history";
             json_t *entry = json_array_get(json_object_get(bad, section), 0u);
             assert(json_object_set_new(entry, "room", json_string(":invalid")) == 0);
             assert(snag_irc_core_restore_checkpoint(restored, bad) < 0 && errno == EINVAL);
@@ -2581,14 +2646,14 @@ test_replay_membership_boundaries(void)
     struct snag_irc_core *irc = NULL;
     char error[256] = {0};
     init_server_config(&config, 16667u);
-    assert(snag_irc_core_open(&irc, &config, "/fixture", false,
-        NULL, NULL, NULL, error, sizeof(error)) == 0);
+    assert(snag_irc_core_open(
+               &irc, &config, "/fixture", false, NULL, NULL, NULL, error, sizeof(error)) == 0);
     struct snag_irc_event join = {.kind = SNAG_IRC_JOIN, .timestamp_ms = 1u};
     strcpy(join.endpoint, config.irc.listen);
     strcpy(join.room, "#lab");
     strcpy(join.nick, "previous");
-    struct snag_irc_event boundary = {.kind = SNAG_IRC_CONNECTED, .timestamp_ms = 2u,
-        .local = true, .routed = true};
+    struct snag_irc_event boundary = {
+        .kind = SNAG_IRC_CONNECTED, .timestamp_ms = 2u, .local = true, .routed = true};
     strcpy(boundary.endpoint, config.irc.listen);
     strcpy(boundary.nick, "host");
     boundary.route.generation = 1u;
@@ -2638,15 +2703,15 @@ test_replay_checkpoint(void)
     struct capture capture = {0};
     char error[256] = {0};
     struct snag_irc_event quiet = {.kind = SNAG_IRC_JOIN, .timestamp_ms = 1u, .sequence = 9u};
-    struct snag_irc_event event = {.kind = SNAG_IRC_JOIN, .timestamp_ms = 2u,
-        .sequence = 41u, .op = true};
+    struct snag_irc_event event = {
+        .kind = SNAG_IRC_JOIN, .timestamp_ms = 2u, .sequence = 41u, .op = true};
 
     init_server_config(&config, 16667u);
     config.irc.history_lines = 2u;
-    assert(snag_irc_core_open(&source, &config, "/fixture", false,
-        NULL, NULL, NULL, error, sizeof(error)) == 0);
-    assert(snag_irc_core_open(&restored, &config, "/fixture", false,
-        capture_event, NULL, &capture, error, sizeof(error)) == 0);
+    assert(snag_irc_core_open(
+               &source, &config, "/fixture", false, NULL, NULL, NULL, error, sizeof(error)) == 0);
+    assert(snag_irc_core_open(&restored, &config, "/fixture", false, capture_event, NULL, &capture,
+               error, sizeof(error)) == 0);
     strcpy(quiet.endpoint, "127.0.0.1:16668");
     strcpy(quiet.room, "#lab");
     strcpy(quiet.nick, "quiet");
@@ -2696,22 +2761,22 @@ test_replay_checkpoint(void)
         json_t *history = json_object_get(bad, "history");
         assert(bad);
         if (i == 0u)
-            assert(json_object_set_new(json_array_get(cursors, 1u),
-                "sequence", json_integer(0)) == 0);
+            assert(
+                json_object_set_new(json_array_get(cursors, 1u), "sequence", json_integer(0)) == 0);
         else if (i == 1u)
             assert(json_array_append(cursors, json_array_get(cursors, 0u)) == 0);
         else if (i == 2u)
             assert(json_array_append(members, json_array_get(members, 0u)) == 0);
         else if (i == 3u)
-            assert(json_object_set_new(json_array_get(history, 1u),
-                "room", json_string("invalid")) == 0);
+            assert(json_object_set_new(
+                       json_array_get(history, 1u), "room", json_string("invalid")) == 0);
         else if (i == 4u)
             assert(json_object_set_new(bad, "v", json_integer(2)) == 0);
         else if (i == 5u)
             assert(json_array_set(history, 1u, json_array_get(history, 0u)) == 0);
         else if (i == 6u)
-            assert(json_object_set_new(json_array_get(cursors, 0u),
-                "sequence", json_integer(1)) == 0);
+            assert(
+                json_object_set_new(json_array_get(cursors, 0u), "sequence", json_integer(1)) == 0);
         else
             while (json_array_size(history) <= SNAG_CONFIG_IRC_HISTORY_MAX)
                 assert(json_array_append(history, json_array_get(history, 0u)) == 0);
@@ -2730,25 +2795,27 @@ test_replay_checkpoint(void)
     strcpy(event.text, "+o visitor");
     assert(snag_irc_core_restore_event(restored, &event) == 0);
     /* A restored host continues the original stream, not a newly minted one. */
-    assert(snag_irc_core_send(restored, true, SNAG_IRC_MESSAGE,
-        "after checkpoint", error, sizeof(error)) == 0);
+    assert(snag_irc_core_send(
+               restored, true, SNAG_IRC_MESSAGE, "after checkpoint", error, sizeof(error)) == 0);
     assert(capture.events[SNAG_IRC_MESSAGE] == 1u);
     assert(capture.last_message.sequence == event.sequence + 1u);
     assert(!strcmp(capture.last_message.stream, event.stream));
 
     for (unsigned int limit = 0u; limit < 2u; ++limit) {
         config.irc.history_lines = limit;
-        assert(snag_irc_core_open(&small, &config, "/fixture", false,
-            NULL, NULL, NULL, error, sizeof(error)) == 0);
+        assert(snag_irc_core_open(&small, &config, "/fixture", false, NULL, NULL, NULL, error,
+                   sizeof(error)) == 0);
         assert(snag_irc_core_restore_checkpoint(small, saved) == 0);
         roundtrip = snag_irc_core_checkpoint(small);
         assert(roundtrip && json_array_size(json_object_get(roundtrip, "history")) == limit);
-        assert(json_equal(json_object_get(saved, "members"),
-            json_object_get(roundtrip, "members")));
-        assert(json_equal(json_object_get(saved, "cursors"),
-            json_object_get(roundtrip, "cursors")));
-        if (limit) assert(!strcmp(snag_json_string(json_array_get(
-            json_object_get(roundtrip, "history"), 0u), "text"), "second"));
+        assert(
+            json_equal(json_object_get(saved, "members"), json_object_get(roundtrip, "members")));
+        assert(
+            json_equal(json_object_get(saved, "cursors"), json_object_get(roundtrip, "cursors")));
+        if (limit)
+            assert(!strcmp(
+                snag_json_string(json_array_get(json_object_get(roundtrip, "history"), 0u), "text"),
+                "second"));
         json_decref(roundtrip);
         snag_irc_core_close(small);
     }

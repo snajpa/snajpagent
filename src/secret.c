@@ -46,26 +46,30 @@ append_secret(struct snag_secret_set *set, char *value)
 
 int
 snag_secret_set_build(struct snag_secret_set *set, const struct snag_config *config,
-                     const struct snag_credential *credential, char *error, size_t error_size)
+    const struct snag_credential *credential, char *error, size_t error_size)
 {
     set->wire.values = set->values;
     if (credential && credential->len &&
-        append_secret(set, snag_strdup_checked(credential->value, SNAG_WIRE_SECRET_MAX)) < 0) goto failed;
+        append_secret(set, snag_strdup_checked(credential->value, SNAG_WIRE_SECRET_MAX)) < 0)
+        goto failed;
     if (!config) return 0;
     for (size_t i = 0; i < config->provider_count; ++i) {
         const struct snag_secret_source *source = &config->providers[i].api_key;
         char *value = NULL;
-        if (source->kind == SNAG_SECRET_NONE || snag_secret_source_resolve(source, &value, NULL, 0u) < 0)
+        if (source->kind == SNAG_SECRET_NONE ||
+            snag_secret_source_resolve(source, &value, NULL, 0u) < 0)
             continue; /* Inactive providers do not gate the selected one. */
         if (append_secret(set, value) < 0) goto failed;
     }
     for (size_t i = 0; i < config->secret_count; ++i) {
         char *value = NULL;
-        if (snag_secret_source_resolve(&config->secrets[i], &value, error, error_size) < 0) return -1;
+        if (snag_secret_source_resolve(&config->secrets[i], &value, error, error_size) < 0)
+            return -1;
         if (append_secret(set, value) < 0) goto failed;
     }
     return 0;
-failed: return snag_errorf(error, error_size, "cannot retain secret protection snapshot");
+failed:
+    return snag_errorf(error, error_size, "cannot retain secret protection snapshot");
 }
 
 int
@@ -80,8 +84,8 @@ snag_secret_set_merge(struct snag_secret_set *set, const struct snag_secret_set 
 }
 
 static int
-redact_text(const struct snag_secret_set *set, json_t *result, const char *key,
-                   char *error, size_t error_size)
+redact_text(const struct snag_secret_set *set, json_t *result, const char *key, char *error,
+    size_t error_size)
 {
     json_t *text = json_object_get(result, key);
     json_t *wrapper = NULL, *redacted = NULL;
@@ -93,12 +97,12 @@ redact_text(const struct snag_secret_set *set, json_t *result, const char *key,
     wrapper = json_object();
     if (wrapper && json_object_set_new(wrapper, "text", json_incref(text)) == 0 &&
         snag_json_canonical(wrapper, &encoded) == 0 &&
-        snag_wire_json_redact(encoded.data, encoded.len, &set->wire, &clean, error, error_size) == 0)
+        snag_wire_json_redact(encoded.data, encoded.len, &set->wire, &clean, error, error_size) ==
+            0)
         redacted = json_loadb((const char *)clean.data, clean.len, JSON_REJECT_DUPLICATES, NULL);
     if (redacted && json_is_string(json_object_get(redacted, "text")))
         rc = json_object_set_new(result, key, json_incref(json_object_get(redacted, "text")));
-    if (rc < 0)
-        snag_errorf(error, error_size, "cannot redact native tool result safely");
+    if (rc < 0) snag_errorf(error, error_size, "cannot redact native tool result safely");
     json_decref(wrapper);
     json_decref(redacted);
     snag_secret_clear(encoded.data, encoded.len);
@@ -108,8 +112,8 @@ redact_text(const struct snag_secret_set *set, json_t *result, const char *key,
 }
 
 int
-snag_secret_result(const struct snag_secret_set *set, json_t *result,
-                   char *error, size_t error_size)
+snag_secret_result(
+    const struct snag_secret_set *set, json_t *result, char *error, size_t error_size)
 {
     if (redact_text(set, result, "model_text", error, error_size) < 0) return -1;
     json_t *content = json_object_get(result, "content");
@@ -117,7 +121,8 @@ snag_secret_result(const struct snag_secret_set *set, json_t *result,
         json_t *part = json_array_get(content, i);
         const char *type = snag_json_string(part, "type");
         if (type && !strcmp(type, "input_text") &&
-            redact_text(set, part, "text", error, error_size) < 0) return -1;
+            redact_text(set, part, "text", error, error_size) < 0)
+            return -1;
     }
     return 0;
 }

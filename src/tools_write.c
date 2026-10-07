@@ -48,7 +48,7 @@ static size_t
 count_occurrences(const unsigned char *hay, size_t hay_len, const char *needle, size_t needle_len)
 {
     size_t count = 0u;
-    for (size_t i = 0u; needle_len && i + needle_len <= hay_len; ) {
+    for (size_t i = 0u; needle_len && i + needle_len <= hay_len;) {
         if (memcmp(hay + i, needle, needle_len) == 0) {
             ++count;
             i += needle_len;
@@ -61,7 +61,7 @@ count_occurrences(const unsigned char *hay, size_t hay_len, const char *needle, 
 
 static int
 replace_all(const struct snag_buf *source, const char *needle, size_t needle_len,
-            const char *replacement, size_t replacement_len, struct snag_buf *out)
+    const char *replacement, size_t replacement_len, struct snag_buf *out)
 {
     size_t i = 0u;
 
@@ -80,7 +80,7 @@ replace_all(const struct snag_buf *source, const char *needle, size_t needle_len
 
 static int
 read_target(int parent_fd, const char *leaf, const char *path, struct snag_buf *bytes,
-            struct snag_permissions *permissions, char *error, size_t error_size)
+    struct snag_permissions *permissions, char *error, size_t error_size)
 {
     snag_file_info info;
     int fd;
@@ -90,8 +90,8 @@ read_target(int parent_fd, const char *leaf, const char *path, struct snag_buf *
         snag_errorf(error, error_size, "target %s cannot be opened", path);
         return -1;
     }
-    if (snag_fstat(fd, &info) < 0 || !S_ISREG(info.st_mode) ||
-        info.st_size < 0 || (uint64_t)info.st_size > TOOL_FILE_MAX) {
+    if (snag_fstat(fd, &info) < 0 || !S_ISREG(info.st_mode) || info.st_size < 0 ||
+        (uint64_t)info.st_size > TOOL_FILE_MAX) {
         close(fd);
         snag_errorf(error, error_size, "target %s is not a regular file within 16 MiB", path);
         return -1;
@@ -108,7 +108,7 @@ read_target(int parent_fd, const char *leaf, const char *path, struct snag_buf *
 
 static int
 install_bytes(int parent_fd, const char *leaf, const char *path, const struct snag_buf *bytes,
-              const struct snag_permissions *permissions, char *error, size_t error_size)
+    const struct snag_permissions *permissions, char *error, size_t error_size)
 {
     char temp[SNAG_NAME_MAX_BYTES + 1u] = {0};
     int saved;
@@ -133,7 +133,8 @@ install_bytes(int parent_fd, const char *leaf, const char *path, const struct sn
 
 /* Returns 0 with *create set, or -1 after filling *error. */
 static int
-prepare(int root_fd, const char *path, char leaf[SNAG_NAME_MAX_BYTES + 1u], char *error, size_t error_size)
+prepare(int root_fd, const char *path, char leaf[SNAG_NAME_MAX_BYTES + 1u], char *error,
+    size_t error_size)
 {
     if (snag_file_path_valid(path, error, error_size) < 0) return -1;
     if (snag_file_parent(root_fd, path, leaf, error, error_size) < 0) return -1;
@@ -142,7 +143,7 @@ prepare(int root_fd, const char *path, char leaf[SNAG_NAME_MAX_BYTES + 1u], char
 
 int
 snag_tools_write_file(const struct snag_response_item *call, const char *session_cwd,
-                      json_t **result, char *error, size_t error_size)
+    json_t **result, char *error, size_t error_size)
 {
     const char *path, *content;
     char leaf[SNAG_NAME_MAX_BYTES + 1u], message[512];
@@ -157,10 +158,13 @@ snag_tools_write_file(const struct snag_response_item *call, const char *session
     snag_buf_init(&bytes, TOOL_FILE_MAX);
     memset(&permissions, 0, sizeof(permissions));
     if (!snag_json_arg_keys(call->arguments, "path content", "", error, error_size) ||
-        !snag_json_arg_text(call->arguments, "path", 1u, TOOL_PATH_MAX, false, &path, error, error_size) ||
-        !snag_json_arg_text(call->arguments, "content", 0u, TOOL_FILE_MAX, false, &content, error, error_size) ||
+        !snag_json_arg_text(
+            call->arguments, "path", 1u, TOOL_PATH_MAX, false, &path, error, error_size) ||
+        !snag_json_arg_text(
+            call->arguments, "content", 0u, TOOL_FILE_MAX, false, &content, error, error_size) ||
         snag_buf_append(&bytes, content, strlen(content)) < 0) {
-        *result = rejected(*error ? error : "write_file requires bounded path and content strings.");
+        *result =
+            rejected(*error ? error : "write_file requires bounded path and content strings.");
         goto out;
     }
     root_fd = snag_file_root_open(session_cwd, path, error, error_size);
@@ -176,7 +180,8 @@ snag_tools_write_file(const struct snag_response_item *call, const char *session
     if (snag_lstat_at(parent_fd, leaf, &info) == 0) {
         bool have = false;
         if (!S_ISREG(info.st_mode) || info.st_size < 0 || (uint64_t)info.st_size > TOOL_FILE_MAX) {
-            (void)snprintf(message, sizeof(message), "Target %s is not a regular file within 16 MiB.", path);
+            (void)snprintf(
+                message, sizeof(message), "Target %s is not a regular file within 16 MiB.", path);
             *result = failed(message);
             goto out;
         }
@@ -202,7 +207,8 @@ snag_tools_write_file(const struct snag_response_item *call, const char *session
         *result = failed(*error ? error : "write_file failed");
         goto out;
     }
-    *result = finish(message, sizeof(message), "Wrote %s (%llu bytes).", path, (unsigned long long)bytes.len);
+    *result = finish(
+        message, sizeof(message), "Wrote %s (%llu bytes).", path, (unsigned long long)bytes.len);
 out:
     if (fd >= 0) close(fd);
     if (parent_fd >= 0) close(parent_fd);
@@ -214,7 +220,7 @@ out:
 
 int
 snag_tools_edit_file(const struct snag_response_item *call, const char *session_cwd,
-                     json_t **result, char *error, size_t error_size)
+    json_t **result, char *error, size_t error_size)
 {
     const char *path, *old, *replacement;
     char leaf[SNAG_NAME_MAX_BYTES + 1u], message[512];
@@ -231,11 +237,16 @@ snag_tools_edit_file(const struct snag_response_item *call, const char *session_
     snag_buf_init(&updated, TOOL_FILE_MAX);
     memset(&permissions, 0, sizeof(permissions));
     if (!snag_json_arg_keys(call->arguments, "path old new", "count", error, error_size) ||
-        !snag_json_arg_text(call->arguments, "path", 1u, TOOL_PATH_MAX, false, &path, error, error_size) ||
-        !snag_json_arg_text(call->arguments, "old", 1u, TOOL_EDIT_PATTERN_MAX, false, &old, error, error_size) ||
-        !snag_json_arg_text(call->arguments, "new", 0u, TOOL_FILE_MAX, false, &replacement, error, error_size) ||
-        !snag_json_arg_uint(call->arguments, "count", 1u, 1u, 1000000u, &expected, error, error_size)) {
-        *result = rejected(*error ? error : "edit_file requires bounded path, old and new strings.");
+        !snag_json_arg_text(
+            call->arguments, "path", 1u, TOOL_PATH_MAX, false, &path, error, error_size) ||
+        !snag_json_arg_text(
+            call->arguments, "old", 1u, TOOL_EDIT_PATTERN_MAX, false, &old, error, error_size) ||
+        !snag_json_arg_text(
+            call->arguments, "new", 0u, TOOL_FILE_MAX, false, &replacement, error, error_size) ||
+        !snag_json_arg_uint(
+            call->arguments, "count", 1u, 1u, 1000000u, &expected, error, error_size)) {
+        *result =
+            rejected(*error ? error : "edit_file requires bounded path, old and new strings.");
         goto out;
     }
     old_len = strlen(old);
@@ -245,20 +256,22 @@ snag_tools_edit_file(const struct snag_response_item *call, const char *session_
         goto out;
     }
     parent_fd = snag_file_parent(root_fd, path, leaf, error, error_size);
-    if (parent_fd < 0 || read_target(parent_fd, leaf, path, &source, &permissions, error, error_size) < 0) {
+    if (parent_fd < 0 ||
+        read_target(parent_fd, leaf, path, &source, &permissions, error, error_size) < 0) {
         *result = failed(*error ? error : "target cannot be read");
         goto out;
     }
     found = count_occurrences(source.data, source.len, old, old_len);
     if (found != expected) {
         (void)snprintf(message, sizeof(message),
-                       "Target %s contains %llu exact match(es); expected %llu. Nothing changed.",
-                       path, (unsigned long long)found, (unsigned long long)expected);
+            "Target %s contains %llu exact match(es); expected %llu. Nothing changed.", path,
+            (unsigned long long)found, (unsigned long long)expected);
         *result = rejected(message);
         goto out;
     }
     if (replace_all(&source, old, old_len, replacement, strlen(replacement), &updated) < 0) {
-        (void)snprintf(message, sizeof(message), "Resulting %s exceeds 16 MiB. Nothing changed.", path);
+        (void)snprintf(
+            message, sizeof(message), "Resulting %s exceeds 16 MiB. Nothing changed.", path);
         *result = rejected(message);
         goto out;
     }
@@ -267,7 +280,7 @@ snag_tools_edit_file(const struct snag_response_item *call, const char *session_
         goto out;
     }
     *result = finish(message, sizeof(message), "Replaced %llu occurrence(s) in %s.",
-                     (unsigned long long)found, path);
+        (unsigned long long)found, path);
 out:
     if (parent_fd >= 0) close(parent_fd);
     if (root_fd >= 0) close(root_fd);

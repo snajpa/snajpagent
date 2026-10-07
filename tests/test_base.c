@@ -78,9 +78,12 @@ test_term_modes_pending_output(void)
             assert(snag_term_input_capture(&host) == 0);
             if (!operation) assert(snag_term_input_raw(&host, true) == 0);
             assert(write(slave, "retained-output", 15u) == 15);
-            if (!operation) assert(snag_term_input_restore(&host, true) == 0);
-            else if (operation == 1u) assert(snag_term_input_raw(&host, true) == 0);
-            else assert(snag_term_input_hidden(&host) == 0);
+            if (!operation)
+                assert(snag_term_input_restore(&host, true) == 0);
+            else if (operation == 1u)
+                assert(snag_term_input_raw(&host, true) == 0);
+            else
+                assert(snag_term_input_hidden(&host) == 0);
             assert(snag_term_input_restore(&host, false) == 0);
             struct termios restored;
             assert(tcgetattr(slave, &restored) == 0);
@@ -132,7 +135,7 @@ test_tmpfile(void)
     const char *temp = getenv("TMPDIR");
     char path[4096];
     assert(snprintf(path, sizeof(path), "%s/snajpagent-file-XXXXXX",
-                    temp && temp[0] ? temp : "/tmp") < (int)sizeof(path));
+               temp && temp[0] ? temp : "/tmp") < (int)sizeof(path));
     int fd = mkstemp(path);
     assert(fd >= 0 && unlink(path) == 0);
     FILE *file = fdopen(fd, "w+");
@@ -142,7 +145,7 @@ test_tmpfile(void)
 }
 
 static atomic_int shutdown_signal_seen;
-#if (!defined(__APPLE__) || __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ >= 1070) && \
+#if (!defined(__APPLE__) || __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ >= 1070) &&              \
     (!defined(__FreeBSD__) || __FreeBSD__ >= 6)
 static _Thread_local int thread_local_value = 7;
 #endif
@@ -159,7 +162,7 @@ thread_local_worker(void *unused)
     volatile uintptr_t address = (uintptr_t)aligned;
     assert(address % 16u == 0u && aligned[0] == 0u);
     (void)unused;
-#if (!defined(__APPLE__) || __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ >= 1070) && \
+#if (!defined(__APPLE__) || __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ >= 1070) &&              \
     (!defined(__FreeBSD__) || __FreeBSD__ >= 6)
     assert(thread_local_value == 7);
     thread_local_value = 13;
@@ -186,11 +189,13 @@ test_memory_primitives(void)
             for (size_t i = 0u; i < size; ++i) expected[offset + i] = (unsigned char)(64u + i);
             assert(!memcmp(bytes, expected, sizeof(bytes)));
             assert(move(bytes + 64u, bytes + 64u + offset, size) == bytes + 64u);
-            for (size_t i = 0u; i < size; ++i) expected[64u + i] = (unsigned char)(64u + offset + i);
+            for (size_t i = 0u; i < size; ++i)
+                expected[64u + i] = (unsigned char)(64u + offset + i);
             assert(!memcmp(bytes, expected, sizeof(bytes)));
             for (size_t i = 0u; i < sizeof(bytes); ++i) bytes[i] = expected[i] = (unsigned char)i;
             assert(move(bytes + 64u + offset, bytes + 64u, size) == bytes + 64u + offset);
-            for (size_t i = 0u; i < size; ++i) expected[64u + offset + i] = (unsigned char)(64u + i);
+            for (size_t i = 0u; i < size; ++i)
+                expected[64u + offset + i] = (unsigned char)(64u + i);
             assert(!memcmp(bytes, expected, sizeof(bytes)));
             assert(fill(bytes + offset, 0xa5, size) == bytes + offset);
             for (size_t i = 0u; i < size; ++i) expected[offset + i] = 0xa5;
@@ -202,7 +207,7 @@ test_memory_primitives(void)
 static void
 test_thread_local(void)
 {
-#if (!defined(__APPLE__) || __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ >= 1070) && \
+#if (!defined(__APPLE__) || __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ >= 1070) &&              \
     (!defined(__FreeBSD__) || __FreeBSD__ >= 6)
     thread_local_value = 41;
 #endif
@@ -220,7 +225,7 @@ test_thread_local(void)
         assert(pthread_create(&thread, NULL, thread_local_worker, NULL) == 0);
         assert(pthread_join(thread, &result) == 0 && result == NULL);
 #endif
-#if (!defined(__APPLE__) || __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ >= 1070) && \
+#if (!defined(__APPLE__) || __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ >= 1070) &&              \
     (!defined(__FreeBSD__) || __FreeBSD__ >= 6)
         assert(thread_local_value == 41);
 #endif
@@ -240,7 +245,7 @@ test_shutdown_signal(int number)
 static BOOL
 test_create_symbolic_link(const char *link, const char *target, DWORD flags)
 {
-    BOOLEAN (WINAPI *create)(LPCSTR, LPCSTR, DWORD);
+    BOOLEAN(WINAPI * create)(LPCSTR, LPCSTR, DWORD);
     FARPROC function = GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "CreateSymbolicLinkA");
     memcpy(&create, &function, sizeof(create));
     if (!create) {
@@ -266,8 +271,8 @@ test_cmd_argument_probe(void)
     assert(exe && program_utf8);
     assert(SetEnvironmentVariableW(L"PATH^", L"unexpected-expansion"));
     const char *cases[] = {"", "plain", "a%PATH% & b!x!^<c>", "spaces and (parens)",
-                           "embedded \" quote", "C:\\tail\\", "quote\\\"after",
-                           "\xe4\xb8\xad \xf0\x9f\x98\x80", "literal %snpct% !snbang!"};
+        "embedded \" quote", "C:\\tail\\", "quote\\\"after", "\xe4\xb8\xad \xf0\x9f\x98\x80",
+        "literal %snpct% !snbang!"};
     for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
         char marked[512];
         assert(snprintf(marked, sizeof(marked), "x%s", cases[i]) > 0);
@@ -286,13 +291,15 @@ test_cmd_argument_probe(void)
         wchar_t *command = snag_utf8_to_wide((char *)outer.data);
         STARTUPINFOW startup = {.cb = sizeof(startup)};
         PROCESS_INFORMATION child;
-        assert(command && CreateProcessW(exe, command, NULL, NULL, FALSE, 0, NULL, NULL, &startup, &child));
+        assert(command &&
+               CreateProcessW(exe, command, NULL, NULL, FALSE, 0, NULL, NULL, &startup, &child));
         assert(CloseHandle(child.hThread));
         assert(WaitForSingleObject(child.hProcess, 5000u) == WAIT_OBJECT_0);
         DWORD code;
         assert(GetExitCodeProcess(child.hProcess, &code) && CloseHandle(child.hProcess));
         if (code) {
-            (void)fprintf(stderr, "cmd quote case=%zu status=%lu command=%s\n", i, (unsigned long)code, outer.data);
+            (void)fprintf(stderr, "cmd quote case=%zu status=%lu command=%s\n", i,
+                (unsigned long)code, outer.data);
             abort();
         }
         free(command);
@@ -323,8 +330,8 @@ test_child_pipe_privacy(void)
         PACL acl = NULL;
         PSID owner = NULL;
         assert(GetSecurityInfo(GetStdHandle(streams[i]), SE_FILE_OBJECT,
-            OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
-            &owner, NULL, &acl, NULL, &descriptor) == ERROR_SUCCESS);
+                   OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION, &owner, NULL, &acl, NULL,
+                   &descriptor) == ERROR_SUCCESS);
         assert(owner && EqualSid(owner, user->User.Sid) && acl && acl->AceCount == 1u);
         SECURITY_DESCRIPTOR_CONTROL control;
         DWORD revision;
@@ -359,13 +366,18 @@ native_process_child(const char *mode)
         WCHAR program[32768], command[32768];
         assert(GetModuleFileNameW(NULL, program, 32768u));
         assert(swprintf(command, 32768u, L"\"%ls\" -c wait", program) > 0);
-        STARTUPINFOW startup = {.cb = sizeof(startup), .dwFlags = STARTF_USESTDHANDLES,
-            .hStdInput = input, .hStdOutput = output, .hStdError = GetStdHandle(STD_ERROR_HANDLE)};
+        STARTUPINFOW startup = {.cb = sizeof(startup),
+            .dwFlags = STARTF_USESTDHANDLES,
+            .hStdInput = input,
+            .hStdOutput = output,
+            .hStdError = GetStdHandle(STD_ERROR_HANDLE)};
         PROCESS_INFORMATION child;
         assert(CreateProcessW(program, command, NULL, NULL, TRUE, 0, NULL, NULL, &startup, &child));
         char message[64];
-        int n = snprintf(message, sizeof(message), "descendant=%lu\n", (unsigned long)child.dwProcessId);
-        assert(n > 0 && WriteFile(output, message, (DWORD)n, &written, NULL) && written == (DWORD)n);
+        int n = snprintf(
+            message, sizeof(message), "descendant=%lu\n", (unsigned long)child.dwProcessId);
+        assert(
+            n > 0 && WriteFile(output, message, (DWORD)n, &written, NULL) && written == (DWORD)n);
         assert(CloseHandle(child.hThread) && CloseHandle(child.hProcess));
         return 0;
     }
@@ -378,13 +390,16 @@ native_process_child(const char *mode)
     if (!strcmp(mode, "flood")) {
         memset(bytes, 'x', sizeof(bytes));
         for (size_t i = 63u; i < sizeof(bytes); i += 64u) bytes[i] = '\n';
-        for (;;) assert(WriteFile(output, bytes, sizeof(bytes), &written, NULL) && written == sizeof(bytes));
+        for (;;)
+            assert(WriteFile(output, bytes, sizeof(bytes), &written, NULL) &&
+                   written == sizeof(bytes));
     }
     if (!strcmp(mode, "unicode")) {
         wchar_t text[32];
         const wchar_t expected[] = {L'A', 0x4e2d, 0xd83d, 0xde00, L'Z', L'\r', L'\n'};
         assert(ReadConsoleW(input, text, 32u, &got, NULL));
-        assert(got == sizeof(expected) / sizeof(expected[0]) && !memcmp(text, expected, sizeof(expected)));
+        assert(got == sizeof(expected) / sizeof(expected[0]) &&
+               !memcmp(text, expected, sizeof(expected)));
         assert(WriteFile(output, "unicode-ok\r\n", 12u, &written, NULL) && written == 12u);
         for (;;) {
             INPUT_RECORD event;
@@ -393,7 +408,8 @@ native_process_child(const char *mode)
             CONSOLE_SCREEN_BUFFER_INFO info;
             assert(GetConsoleScreenBufferInfo(output, &info));
             if (info.srWindow.Right - info.srWindow.Left == 79 &&
-                info.srWindow.Bottom - info.srWindow.Top == 22) break;
+                info.srWindow.Bottom - info.srWindow.Top == 22)
+                break;
         }
         assert(WriteFile(output, "resize-ok\r\n", 11u, &written, NULL) && written == 11u);
         return 0;
@@ -423,26 +439,29 @@ test_standard_console_creation(void)
         unsigned int slot = variant / 2u;
         DWORD which = slot ? STD_ERROR_HANDLE : STD_OUTPUT_HANDLE;
         assert(swprintf(command, 32768u, L"\"%ls\" -c shared-%ls", program,
-                          slot ? L"error" : L"standard") > 0);
+                   slot ? L"error" : L"standard") > 0);
         SECURITY_ATTRIBUTES security = {sizeof(security), NULL, variant % 2u != 0};
         HANDLE screen = CreateConsoleScreenBuffer(GENERIC_READ | GENERIC_WRITE,
             FILE_SHARE_READ | FILE_SHARE_WRITE, &security, CONSOLE_TEXTMODE_BUFFER, NULL);
-        assert(screen != INVALID_HANDLE_VALUE && SetConsoleCursorPosition(screen, (COORD){0,0}));
+        assert(screen != INVALID_HANDLE_VALUE && SetConsoleCursorPosition(screen, (COORD){0, 0}));
         HANDLE original = GetStdHandle(which);
         assert(SetStdHandle(which, screen));
         STARTUPINFOW startup = {.cb = sizeof(startup)};
         PROCESS_INFORMATION child;
-        BOOL created = CreateProcessW(program, command, NULL, NULL, FALSE,
-            CREATE_NEW_PROCESS_GROUP, NULL, NULL, &startup, &child);
+        BOOL created = CreateProcessW(program, command, NULL, NULL, FALSE, CREATE_NEW_PROCESS_GROUP,
+            NULL, NULL, &startup, &child);
         assert(SetStdHandle(which, original) && created);
-        assert(CloseHandle(child.hThread) && WaitForSingleObject(child.hProcess, 5000u) == WAIT_OBJECT_0);
+        assert(CloseHandle(child.hThread) &&
+               WaitForSingleObject(child.hProcess, 5000u) == WAIT_OBJECT_0);
         DWORD status, got;
         assert(GetExitCodeProcess(child.hProcess, &status) && CloseHandle(child.hProcess));
         wchar_t text[6] = {0};
-        assert(ReadConsoleOutputCharacterW(screen, text, 6u, (COORD){0,0}, &got));
+        assert(ReadConsoleOutputCharacterW(screen, text, 6u, (COORD){0, 0}, &got));
         assert(got == 6u);
-        if (variant % 2u || !status) assert(status == 0 && !wmemcmp(text, L"shared", 6u));
-        else assert(status == 1 && text[0] == L' ');
+        if (variant % 2u || !status)
+            assert(status == 0 && !wmemcmp(text, L"shared", 6u));
+        else
+            assert(status == 1 && text[0] == L' ');
         struct snag_output_broker *broker = NULL;
         assert(SetStdHandle(which, screen));
         int rc = snag_output_broker_write_standard(&broker, slot, "slot", 4u, NULL, NULL);
@@ -450,9 +469,10 @@ test_standard_console_creation(void)
         assert(SetStdHandle(which, original));
         if (variant % 2u) {
             assert(rc == 0);
-            assert(ReadConsoleOutputCharacterW(screen, text, 4u, (COORD){6,0}, &got));
+            assert(ReadConsoleOutputCharacterW(screen, text, 4u, (COORD){6, 0}, &got));
             assert(got == 4u && !wmemcmp(text, L"slot", 4u));
-        } else assert(rc == -1 && error == ENOTSUP && !broker);
+        } else
+            assert(rc == -1 && error == ENOTSUP && !broker);
         snag_output_broker_close(broker);
         assert(CloseHandle(screen));
     }
@@ -476,7 +496,8 @@ test_native_process_input(bool pty, bool isolated)
     snag_child_init(&child);
     assert(executable && directory && env);
     if (isolated) {
-        assert(snag_child_spawn_isolated(&child, "C:/no-such-snajpagent.exe", "echo", directory, env) < 0);
+        assert(snag_child_spawn_isolated(
+                   &child, "C:/no-such-snajpagent.exe", "echo", directory, env) < 0);
         assert(errno == ENOENT && !child.native);
     }
 #ifdef SNAG_LEGACY_PTY
@@ -484,12 +505,14 @@ test_native_process_input(bool pty, bool isolated)
         assert(snag_child_spawn_legacy_pty(&child, executable, "unicode", directory, env) == 0);
     else
 #endif
-    assert((isolated ? snag_child_spawn_isolated(&child, executable, "echo", directory, env) :
-            snag_child_spawn(&child, executable, pty ? "line" : "echo", directory, env, pty)) == 0);
+        assert((isolated ? snag_child_spawn_isolated(&child, executable, "echo", directory, env)
+                         : snag_child_spawn(&child, executable, pty ? "line" : "echo", directory,
+                               env, pty)) == 0);
     unsigned char payload[131072];
     size_t size = pty ? (isolated ? 10u : 13u) : sizeof(payload), written = 0;
     for (size_t i = 0; i < sizeof(payload); ++i) payload[i] = (unsigned char)(i % 251u);
-    if (pty) memcpy(payload, isolated ? "A\xe4\xb8\xad\xf0\x9f\x98\x80Z\r" : "native stdin\r", size);
+    if (pty)
+        memcpy(payload, isolated ? "A\xe4\xb8\xad\xf0\x9f\x98\x80Z\r" : "native stdin\r", size);
     struct snag_buf output;
     snag_buf_init(&output, 2u * sizeof(payload));
     bool input_open = true, open[2] = {true, !pty};
@@ -501,7 +524,8 @@ test_native_process_input(bool pty, bool isolated)
         size_t count = 0;
         for (unsigned int i = 0; i < 2u; ++i)
             if (open[i]) events[count++] = (struct snag_child_event){&child, i, SNAG_CHILD_READ, 0};
-        if (input_open) events[count++] = (struct snag_child_event){&child, 2u, SNAG_CHILD_WRITE, 0};
+        if (input_open)
+            events[count++] = (struct snag_child_event){&child, 2u, SNAG_CHILD_WRITE, 0};
         assert(snag_child_wait(events, count, SNAG_WAKE_INVALID, 20) >= 0);
         for (size_t i = 0; i < count; ++i) {
             unsigned int stream = events[i].stream;
@@ -532,9 +556,11 @@ test_native_process_input(bool pty, bool isolated)
                         if (strstr((char *)output.data, "unicode-ok")) {
                             HANDLE original = GetStdHandle(STD_ERROR_HANDLE);
                             HANDLE screen = CreateConsoleScreenBuffer(GENERIC_READ | GENERIC_WRITE,
-                                FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, CONSOLE_TEXTMODE_BUFFER, NULL);
+                                FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, CONSOLE_TEXTMODE_BUFFER,
+                                NULL);
                             SMALL_RECT size = {0, 0, 79, 22};
-                            assert(screen != INVALID_HANDLE_VALUE && SetConsoleWindowInfo(screen, TRUE, &size));
+                            assert(screen != INVALID_HANDLE_VALUE &&
+                                   SetConsoleWindowInfo(screen, TRUE, &size));
                             assert(SetStdHandle(STD_ERROR_HANDLE, screen));
                             snag_child_resize(&child);
                             assert(SetStdHandle(STD_ERROR_HANDLE, original) && CloseHandle(screen));
@@ -550,7 +576,8 @@ test_native_process_input(bool pty, bool isolated)
         assert(snag_buf_terminate(&output) == 0);
         assert(strstr((char *)output.data, isolated ? "unicode-ok" : "native stdin"));
         if (isolated) assert(resized && strstr((char *)output.data, "resize-ok"));
-    } else assert(output.len == size && !memcmp(output.data, payload, size));
+    } else
+        assert(output.len == size && !memcmp(output.data, payload, size));
     snag_child_free(&child);
     assert(WaitForSingleObject(excluded, 0) == WAIT_TIMEOUT && CloseHandle(excluded));
     assert(SetEnvironmentVariableW(L"SNAJPAGENT_INHERIT_PROBE", NULL));
@@ -560,23 +587,30 @@ test_native_process_input(bool pty, bool isolated)
     free(directory);
 }
 
-static void test_direct_argv_limits(void)
+static void
+test_direct_argv_limits(void)
 {
-    char *program=snag_program_path(NULL),*dir=snag_realpath(".");
-    char id[SNAG_ID_HEX_LEN+1u];assert(dir && snag_random_id(id)==0);
-    char *scratch=snag_path_join(dir,id);
-    assert(scratch && snag_mkdir_private(scratch)==0);
-    char **env=snag_environment_entries();
-    const char *args[]={program,"--direct-argv-limits",scratch,NULL};
-    struct snag_child child;snag_child_init(&child);
-    assert(program && dir && env && snag_child_spawn_argv(&child,args,scratch,env)==0);
-    snag_child_close_stream(&child,2u);
-    DWORD started=GetTickCount();
-    while(!snag_child_exited(&child) && GetTickCount()-started<10000u)Sleep(10u);
+    char *program = snag_program_path(NULL), *dir = snag_realpath(".");
+    char id[SNAG_ID_HEX_LEN + 1u];
+    assert(dir && snag_random_id(id) == 0);
+    char *scratch = snag_path_join(dir, id);
+    assert(scratch && snag_mkdir_private(scratch) == 0);
+    char **env = snag_environment_entries();
+    const char *args[] = {program, "--direct-argv-limits", scratch, NULL};
+    struct snag_child child;
+    snag_child_init(&child);
+    assert(program && dir && env && snag_child_spawn_argv(&child, args, scratch, env) == 0);
+    snag_child_close_stream(&child, 2u);
+    DWORD started = GetTickCount();
+    while (!snag_child_exited(&child) && GetTickCount() - started < 10000u) Sleep(10u);
     assert(snag_child_exited(&child));
-    assert(snag_child_reap(&child)==0 && child.exit_code==0);
-    snag_child_free(&child);free(program);free(dir);snag_environment_entries_free(env);
-    assert(snag_unlink_at(-1,scratch,true)==0);free(scratch);
+    assert(snag_child_reap(&child) == 0 && child.exit_code == 0);
+    snag_child_free(&child);
+    free(program);
+    free(dir);
+    snag_environment_entries_free(env);
+    assert(snag_unlink_at(-1, scratch, true) == 0);
+    free(scratch);
 }
 
 static void
@@ -593,17 +627,18 @@ test_native_process(bool pty, bool legacy)
     assert(shell && env && directory);
 #ifdef SNAG_LEGACY_PTY
     if (legacy) {
-        int rc = snag_child_spawn_legacy_pty(&child, shell,
-            "echo native-out&echo native-err 1>&2&exit /b 7", directory, env);
+        int rc = snag_child_spawn_legacy_pty(
+            &child, shell, "echo native-out&echo native-err 1>&2&exit /b 7", directory, env);
         if (rc < 0)
-            (void)fprintf(stderr, "legacy spawn errno=%d winerr=%lu\n", errno, (unsigned long)GetLastError());
+            (void)fprintf(
+                stderr, "legacy spawn errno=%d winerr=%lu\n", errno, (unsigned long)GetLastError());
         assert(rc == 0);
     } else
 #else
     (void)legacy;
 #endif
-    assert(snag_child_spawn(&child, shell, "echo native-out&echo native-err 1>&2&exit /b 7",
-                            directory, env, pty) == 0);
+        assert(snag_child_spawn(&child, shell, "echo native-out&echo native-err 1>&2&exit /b 7",
+                   directory, env, pty) == 0);
     snag_child_close_stream(&child, 2u);
     bool open[2] = {true, !pty};
     struct snag_buf output[2];
@@ -612,8 +647,9 @@ test_native_process(bool pty, bool legacy)
     uint64_t deadline = snag_monotonic_ms() + 5000u;
     while (open[0] || open[1] || snag_child_exited(&child) == 0) {
         if (snag_monotonic_ms() >= deadline) {
-            (void)fprintf(stderr, "native process timeout pty=%d exited=%d open=%d/%d bytes=%zu/%zu\n",
-                           pty, snag_child_exited(&child), open[0], open[1], output[0].len, output[1].len);
+            (void)fprintf(stderr,
+                "native process timeout pty=%d exited=%d open=%d/%d bytes=%zu/%zu\n", pty,
+                snag_child_exited(&child), open[0], open[1], output[0].len, output[1].len);
             abort();
         }
         struct snag_child_event events[2];
@@ -630,15 +666,16 @@ test_native_process(bool pty, bool legacy)
                 if (!n) {
                     open[stream] = false;
                     snag_child_close_stream(&child, stream);
-                } else assert(snag_buf_append(&output[stream], bytes, (size_t)n) == 0);
+                } else
+                    assert(snag_buf_append(&output[stream], bytes, (size_t)n) == 0);
             }
     }
     assert(snag_child_reap(&child) == 0 && child.exit_code == 7);
     for (size_t i = 0; i < 2u; ++i) assert(snag_buf_terminate(&output[i]) == 0);
     if (!strstr((char *)output[0].data, "native-out") ||
         !strstr((char *)output[pty ? 0u : 1u].data, "native-err")) {
-        (void)fprintf(stderr, "native output pty=%u legacy=%u bytes=%zu/%zu\n",
-                       (unsigned int)pty, (unsigned int)legacy, output[0].len, output[1].len);
+        (void)fprintf(stderr, "native output pty=%u legacy=%u bytes=%zu/%zu\n", (unsigned int)pty,
+            (unsigned int)legacy, output[0].len, output[1].len);
         for (size_t i = 0; i < output[0].len && i < 512u; ++i)
             (void)fprintf(stderr, "%02x ", output[0].data[i]);
         (void)fprintf(stderr, "\n");
@@ -698,12 +735,13 @@ test_native_process_fanout(void)
             assert(sent <= 256u * 1024u);
         }
         for (unsigned int stream = 0; stream < 3u; ++stream)
-            events[i * 3u + stream] = (struct snag_child_event){&children[i], stream,
-                stream == 2u ? SNAG_CHILD_WRITE : SNAG_CHILD_READ, 0};
+            events[i * 3u + stream] = (struct snag_child_event){
+                &children[i], stream, stream == 2u ? SNAG_CHILD_WRITE : SNAG_CHILD_READ, 0};
     }
     snag_wake_fd wake[2];
     assert(snag_wakeup_create(wake) == 0);
-    struct native_wait_wake sender = {.wake = wake[1], .ready = CreateEventW(NULL, TRUE, FALSE, NULL),
+    struct native_wait_wake sender = {.wake = wake[1],
+        .ready = CreateEventW(NULL, TRUE, FALSE, NULL),
         .go = CreateEventW(NULL, TRUE, FALSE, NULL)};
     assert(sender.ready && sender.go);
     HANDLE thread = (HANDLE)_beginthreadex(NULL, 0, wake_native_process_wait, &sender, 0, NULL);
@@ -716,9 +754,10 @@ test_native_process_fanout(void)
     assert(WaitForSingleObject(thread, 1000u) == WAIT_OBJECT_0 && CloseHandle(thread));
     assert(returned_at >= sender.sent_at);
     uint64_t delivery = returned_at - sender.sent_at;
-    if (delivery >= 500u) (void)fprintf(stderr, "fanout wake: wait=%llu ms sender=%llu ms delivery=%llu ms\n",
-                       (unsigned long long)elapsed, (unsigned long long)sender.delay,
-                       (unsigned long long)delivery);
+    if (delivery >= 500u)
+        (void)fprintf(stderr, "fanout wake: wait=%llu ms sender=%llu ms delivery=%llu ms\n",
+            (unsigned long long)elapsed, (unsigned long long)sender.delay,
+            (unsigned long long)delivery);
     assert(delivery < 500u);
     for (size_t i = 0; i < 96u; ++i) assert(!events[i].revents);
     assert(CloseHandle(sender.ready) && CloseHandle(sender.go));
@@ -742,11 +781,13 @@ test_native_process_descendant(bool isolated, bool legacy)
     snag_child_init(&child);
     assert(executable && directory && env);
 #ifdef SNAG_LEGACY_PTY
-    if (legacy) assert(snag_child_spawn_legacy_pty(&child, executable, "tree", directory, env) == 0);
+    if (legacy)
+        assert(snag_child_spawn_legacy_pty(&child, executable, "tree", directory, env) == 0);
     else
 #endif
-    assert((isolated ? snag_child_spawn_isolated(&child, executable, "tree", directory, env) :
-            snag_child_spawn(&child, executable, "tree", directory, env, false)) == 0);
+        assert(
+            (isolated ? snag_child_spawn_isolated(&child, executable, "tree", directory, env)
+                      : snag_child_spawn(&child, executable, "tree", directory, env, false)) == 0);
     snag_child_close_stream(&child, 2u);
     char message[512] = {0};
     size_t used = 0;
@@ -777,7 +818,8 @@ test_native_process_descendant(bool isolated, bool legacy)
             assert(snag_monotonic_ms() < deadline);
             assert(snag_child_read(&child, 0u, message, sizeof(message)) > 0);
         }
-    } else assert(snag_child_wait(&quiet, 1u, SNAG_WAKE_INVALID, 20) == 0);
+    } else
+        assert(snag_child_wait(&quiet, 1u, SNAG_WAKE_INVALID, 20) == 0);
     snag_child_signal(&child, SNAG_CHILD_KILL);
     assert(WaitForSingleObject(descendant, 1000u) == WAIT_OBJECT_0 && CloseHandle(descendant));
     assert(snag_child_reap(&child) == 0 && child.exit_code == 0);
@@ -805,7 +847,8 @@ test_legacy_collector_failure(void)
     PROCESSENTRY32W entry = {.dwSize = sizeof(entry)};
     assert(snapshot != INVALID_HANDLE_VALUE && Process32FirstW(snapshot, &entry));
     do {
-        if (entry.th32ParentProcessID == GetCurrentProcessId() && !_wcsicmp(entry.szExeFile, name)) {
+        if (entry.th32ParentProcessID == GetCurrentProcessId() &&
+            !_wcsicmp(entry.szExeFile, name)) {
             assert(!broker);
             broker = OpenProcess(SYNCHRONIZE | PROCESS_TERMINATE, FALSE, entry.th32ProcessID);
             assert(broker);
@@ -831,7 +874,8 @@ test_legacy_console_interrupt(void)
     struct snag_child child;
     snag_child_init(&child);
     assert(program && directory && environment);
-    assert(snag_child_spawn_legacy_pty(&child, program, "interrupt-ready", directory, environment) == 0);
+    assert(snag_child_spawn_legacy_pty(
+               &child, program, "interrupt-ready", directory, environment) == 0);
     uint64_t deadline = snag_monotonic_ms() + 5000u;
     char ready[4096] = {0};
     size_t used = 0;
@@ -869,7 +913,8 @@ test_legacy_console_interrupt(void)
 static void
 test_home_environment(void)
 {
-    wchar_t *wide[] = {L"C:\\Program Files\\\x4e2d\\snajpagent.exe", L"", L"quoted \"value\"", L"\xd83d\xde00", L"*.c"};
+    wchar_t *wide[] = {L"C:\\Program Files\\\x4e2d\\snajpagent.exe", L"", L"quoted \"value\"",
+        L"\xd83d\xde00", L"*.c"};
     char **args = snag_wide_arguments(5, wide);
     assert(args && !args[5]);
     assert(!strcmp(args[0], "C:\\Program Files\\\xe4\xb8\xad\\snajpagent.exe"));
@@ -928,8 +973,8 @@ editor_test_child(void)
     WCHAR *path = calloc(len + 1u, sizeof(*path));
     assert(path);
     memcpy(path, start, len * sizeof(*path));
-    HANDLE file = CreateFileW(path, GENERIC_WRITE, FILE_SHARE_READ, NULL,
-                              OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    HANDLE file = CreateFileW(
+        path, GENERIC_WRITE, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
     free(path);
     assert(file != INVALID_HANDLE_VALUE);
     DWORD written;
@@ -990,8 +1035,9 @@ check_windows_permission_copy(int fd, const wchar_t *source)
             SECURITY_DESCRIPTOR_CONTROL control;
             DWORD revision;
             assert(ConvertSecurityDescriptorToStringSecurityDescriptorA(descriptors[i],
-                SDDL_REVISION_1, OWNER_SECURITY_INFORMATION | GROUP_SECURITY_INFORMATION |
-                DACL_SECURITY_INFORMATION, &sddl, NULL));
+                SDDL_REVISION_1,
+                OWNER_SECURITY_INFORMATION | GROUP_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
+                &sddl, NULL));
             assert(GetSecurityDescriptorControl(descriptors[i], &control, &revision));
             (void)fprintf(stderr, "%s control=%x %s\n", i ? "copy" : "source", control, sddl);
             LocalFree(sddl);
@@ -1041,8 +1087,8 @@ test_windows_privacy(void)
     entries[1].Trustee.ptstrName = (LPWSTR)world;
     assert(GetTempFileNameW(temp, L"snp", 0, path));
     handle = CreateFileW(path, GENERIC_READ | GENERIC_WRITE | WRITE_DAC | WRITE_OWNER,
-                         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-                         NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING,
+        FILE_ATTRIBUTE_NORMAL, NULL);
     assert(handle != INVALID_HANDLE_VALUE);
     fd = _open_osfhandle((intptr_t)handle, _O_BINARY | _O_RDWR);
     assert(fd >= 0);
@@ -1050,12 +1096,13 @@ test_windows_privacy(void)
     for (size_t i = 0; i < sizeof(rights) / sizeof(rights[0]); ++i) {
         PACL acl = NULL;
         entries[1].grfAccessPermissions = rights[i];
-        entries[1].grfInheritance = i == 4u ?
-            SUB_CONTAINERS_AND_OBJECTS_INHERIT | INHERIT_ONLY : NO_INHERITANCE;
+        entries[1].grfInheritance =
+            i == 4u ? SUB_CONTAINERS_AND_OBJECTS_INHERIT | INHERIT_ONLY : NO_INHERITANCE;
         assert(SetEntriesInAclW(rights[i] ? 2u : 1u, entries, NULL, &acl) == ERROR_SUCCESS);
-        assert(SetSecurityInfo(handle, SE_FILE_OBJECT, OWNER_SECURITY_INFORMATION |
-                               DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
-                               user->User.Sid, NULL, acl, NULL) == ERROR_SUCCESS);
+        assert(SetSecurityInfo(handle, SE_FILE_OBJECT,
+                   OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION |
+                       PROTECTED_DACL_SECURITY_INFORMATION,
+                   user->User.Sid, NULL, acl, NULL) == ERROR_SUCCESS);
         LocalFree(acl);
         assert(snag_fd_privacy(fd, &privacy) == 0);
         assert(privacy.real_owner && privacy.effective_owner);
@@ -1063,8 +1110,8 @@ test_windows_privacy(void)
         check_windows_permission_copy(fd, path);
     }
     assert(SetSecurityInfo(handle, SE_FILE_OBJECT,
-                           DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
-                           NULL, NULL, NULL, NULL) == ERROR_SUCCESS);
+               DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION, NULL, NULL, NULL,
+               NULL) == ERROR_SUCCESS);
     assert(SetFileAttributesW(path, FILE_ATTRIBUTE_READONLY));
     assert(snag_fd_privacy(fd, &privacy) == 0 && !privacy.private_access);
     check_windows_permission_copy(fd, path);
@@ -1075,14 +1122,15 @@ test_windows_privacy(void)
     assert(swprintf(directory, sizeof(directory) / sizeof(directory[0]), L"%ls-dir", path) > 0);
     assert(CreateDirectoryW(directory, NULL));
     handle = CreateFileW(directory, READ_CONTROL | WRITE_DAC | WRITE_OWNER,
-                         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-                         NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING,
+        FILE_FLAG_BACKUP_SEMANTICS, NULL);
     assert(handle != INVALID_HANDLE_VALUE);
     PACL acl = NULL;
     assert(SetEntriesInAclW(1u, entries, NULL, &acl) == ERROR_SUCCESS);
-    assert(SetSecurityInfo(handle, SE_FILE_OBJECT, OWNER_SECURITY_INFORMATION |
-                           DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
-                           user->User.Sid, NULL, acl, NULL) == ERROR_SUCCESS);
+    assert(SetSecurityInfo(handle, SE_FILE_OBJECT,
+               OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION |
+                   PROTECTED_DACL_SECURITY_INFORMATION,
+               user->User.Sid, NULL, acl, NULL) == ERROR_SUCCESS);
     LocalFree(acl);
     fd = _open_osfhandle((intptr_t)handle, _O_BINARY | _O_RDONLY);
     assert(fd >= 0);
@@ -1123,8 +1171,10 @@ try_directory_lock(void *opaque)
     struct directory_waiter *waiter = opaque;
     int rc = snag_directory_lock_acquire(waiter->fd, &waiter->lock);
 
-    if (waiter->abandon) assert(rc == 0); /* Leave it owned to test abandoned-writer recovery. */
-    else assert(rc < 0 && errno == EAGAIN && waiter->lock.fd == -1);
+    if (waiter->abandon)
+        assert(rc == 0); /* Leave it owned to test abandoned-writer recovery. */
+    else
+        assert(rc < 0 && errno == EAGAIN && waiter->lock.fd == -1);
     return 0u;
 }
 #endif
@@ -1171,9 +1221,8 @@ test_file_lock(int dirfd)
 
     assert(fd >= 0 && snag_lock_file(fd, false) == 0);
 #ifdef _WIN32
-    struct lock_waiter waiter = {
-        .fd = snag_create_private_at(dirfd, "lock-test", false),
-        .ready = CreateEventW(NULL, TRUE, FALSE, NULL) };
+    struct lock_waiter waiter = {.fd = snag_create_private_at(dirfd, "lock-test", false),
+        .ready = CreateEventW(NULL, TRUE, FALSE, NULL)};
     assert(waiter.fd >= 0 && waiter.ready);
     HANDLE thread = (HANDLE)_beginthreadex(NULL, 0, wait_for_lock, &waiter, 0, NULL);
     DWORD status;
@@ -1261,10 +1310,12 @@ test_private_directory(void)
         int file_flags = fcntl(file, F_GETFD);
         assert(file_flags >= 0 && (file_flags & FD_CLOEXEC) != 0);
 #endif
-        assert(snag_fd_privacy(file, &privacy) == 0 && privacy.effective_owner && privacy.private_access);
+        assert(snag_fd_privacy(file, &privacy) == 0 && privacy.effective_owner &&
+               privacy.private_access);
         assert(snag_write_full(file, bytes, sizeof(bytes)) == 0);
         snag_file_info info, linked;
-        assert(snag_fstat(file, &info) == 0 && S_ISREG(info.st_mode) && info.st_size == sizeof(bytes));
+        assert(
+            snag_fstat(file, &info) == 0 && S_ISREG(info.st_mode) && info.st_size == sizeof(bytes));
         assert(snag_lstat_at(fd, "data", &linked) == 0 && linked.st_dev == info.st_dev &&
                linked.st_ino == info.st_ino && linked.st_size == sizeof(bytes));
         assert(snag_sync_file(file) == 0 && close(file) == 0);
@@ -1276,8 +1327,8 @@ test_private_directory(void)
         assert(memcmp(bytes, received, sizeof(bytes)) == 0);
 #ifdef _WIN32
         DWORD returned;
-        assert(DeviceIoControl((HANDLE)_get_osfhandle(file), FSCTL_SET_SPARSE,
-                               NULL, 0, NULL, 0, &returned, NULL));
+        assert(DeviceIoControl(
+            (HANDLE)_get_osfhandle(file), FSCTL_SET_SPARSE, NULL, 0, NULL, 0, &returned, NULL));
 #endif
         assert(snag_truncate(file, INT64_C(5368709120)) == 0);
         assert(snag_fstat(file, &linked) == 0 && linked.st_size == INT64_C(5368709120));
@@ -1328,12 +1379,13 @@ test_private_directory(void)
             (void)fprintf(stderr, "hardlink rejection: fd=%d errno=%d\n", rejected, error);
 #ifdef _WIN32
             HANDLE inspect = CreateFileA(data, FILE_READ_ATTRIBUTES,
-                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING, 0, NULL);
+                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING, 0,
+                NULL);
             BY_HANDLE_FILE_INFORMATION info;
             if (inspect != INVALID_HANDLE_VALUE) {
                 if (GetFileInformationByHandle(inspect, &info))
-                    (void)fprintf(stderr, "file links=%lu attributes=%lu\n",
-                                  info.nNumberOfLinks, info.dwFileAttributes);
+                    (void)fprintf(stderr, "file links=%lu attributes=%lu\n", info.nNumberOfLinks,
+                        info.dwFileAttributes);
                 (void)CloseHandle(inspect);
             }
 #endif
@@ -1367,16 +1419,16 @@ test_private_directory(void)
         assert(snag_stat(data, &linked) == 0 && S_ISREG(linked.st_mode));
 #ifdef _WIN32
         assert(SetNamedSecurityInfoA(data, SE_FILE_OBJECT,
-            DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
-            NULL, NULL, NULL, NULL) == ERROR_SUCCESS);
+                   DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION, NULL, NULL,
+                   NULL, NULL) == ERROR_SUCCESS);
 #else
         assert(chmod(data, 0644) == 0);
 #endif
         errno = 0;
         assert(snag_create_private_at(fd, "data", false) == -1 && errno == EACCES);
         file = snag_open_history(data);
-        assert(file >= 0 && snag_fd_privacy(file, &privacy) == 0 &&
-               privacy.effective_owner && privacy.private_access);
+        assert(file >= 0 && snag_fd_privacy(file, &privacy) == 0 && privacy.effective_owner &&
+               privacy.private_access);
         assert(read(file, received, sizeof(received)) == sizeof(received));
         assert(!memcmp(bytes, received, sizeof(bytes)));
         assert(lseek(file, 0, SEEK_SET) == 0 && snag_write_full(file, "z", 1u) == 0);
@@ -1493,7 +1545,8 @@ test_private_directory(void)
         mode_t mask = umask(0777);
         int file = snag_create_private_at(fd, "permissions", true);
         (void)umask(mask);
-        assert(file >= 0 && snag_fstat(file, &path_info) == 0 && (path_info.st_mode & 0777u) == 0600u);
+        assert(
+            file >= 0 && snag_fstat(file, &path_info) == 0 && (path_info.st_mode & 0777u) == 0600u);
         const mode_t modes[] = {0u, 0400u, 0640u, 0751u};
         for (size_t i = 0; i < sizeof(modes) / sizeof(modes[0]); ++i) {
             assert(fchmod(file, modes[i]) == 0);
@@ -1546,7 +1599,8 @@ test_private_directory(void)
         assert(path_info.st_dev == root_info.st_dev && path_info.st_ino == root_info.st_ino);
         dir = snag_directory_open(read_fd);
         assert(dir);
-        while ((entry = snag_directory_next(dir))) assert(!strcmp(entry, ".") || !strcmp(entry, ".."));
+        while ((entry = snag_directory_next(dir)))
+            assert(!strcmp(entry, ".") || !strcmp(entry, ".."));
         assert(errno == 0 && snag_directory_close(dir) == 0);
     }
     assert(snag_mkdir_private_at(fd, "after-rename") == 0);
@@ -1629,7 +1683,8 @@ test_realpath(void)
     DWORD count = GetTempPathW(MAX_PATH, temp);
     assert(count && count < MAX_PATH);
     assert(GetTempFileNameW(temp, L"snp", 0, source));
-    assert(swprintf(target, sizeof(target) / sizeof(target[0]), L"%ls-\u03b1-\U0001f600", source) > 0);
+    assert(
+        swprintf(target, sizeof(target) / sizeof(target[0]), L"%ls-\u03b1-\U0001f600", source) > 0);
     assert(MoveFileW(source, target));
     assert(WideCharToMultiByte(CP_UTF8, 0, target, -1, input, sizeof(input), NULL, NULL));
     path = snag_realpath(input);
@@ -1689,7 +1744,8 @@ broker_orphan_child(const char *value, bool spawn, bool input, bool legacy)
         assert(program && directory && environment);
 #ifdef SNAG_LEGACY_PTY
         if (legacy)
-            assert(snag_child_spawn_legacy_pty(&child, program, "flood", directory, environment) == 0);
+            assert(
+                snag_child_spawn_legacy_pty(&child, program, "flood", directory, environment) == 0);
         else
 #else
         (void)legacy;
@@ -1721,7 +1777,8 @@ broker_orphan_child(const char *value, bool spawn, bool input, bool legacy)
     assert(close(sink) == 0 && _pipe(pair, 4096u, _O_BINARY | _O_NOINHERIT) == 0);
     unsigned char output[65536];
     memset(output, 'x', sizeof(output));
-    (void)snag_output_broker_write(&broker, pair[1], output, sizeof(output), broker_orphan_ready, event);
+    (void)snag_output_broker_write(
+        &broker, pair[1], output, sizeof(output), broker_orphan_ready, event);
     snag_output_broker_close(broker);
     return 1;
 }
@@ -1737,15 +1794,19 @@ test_broker_parent_death(bool spawn, bool input, bool legacy)
     const wchar_t *name = wcsrchr(program, L'\\');
     name = name ? name + 1 : program;
     assert(swprintf(command, 32768u, L"\"%ls\" --%ls-orphan %llu", program,
-                      legacy ? L"pty" : spawn ? L"spawn" : input ? L"input" : L"broker",
-                      (unsigned long long)(uintptr_t)ready) > 0);
+               legacy  ? L"pty"
+               : spawn ? L"spawn"
+               : input ? L"input"
+                       : L"broker",
+               (unsigned long long)(uintptr_t)ready) > 0);
     STARTUPINFOW startup = {.cb = sizeof(startup)};
     PROCESS_INFORMATION child;
-    assert(CreateProcessW(program, command, NULL, NULL, TRUE, CREATE_NEW_PROCESS_GROUP,
-                           NULL, NULL, &startup, &child));
+    assert(CreateProcessW(program, command, NULL, NULL, TRUE, CREATE_NEW_PROCESS_GROUP, NULL, NULL,
+        &startup, &child));
     assert(CloseHandle(child.hThread));
     assert(WaitForSingleObject(ready, 5000u) == WAIT_OBJECT_0 && CloseHandle(ready));
-    if (legacy) assert(snag_sleep_ms(2000u) == 0); /* Deliberately leave collector output undrained. */
+    if (legacy)
+        assert(snag_sleep_ms(2000u) == 0); /* Deliberately leave collector output undrained. */
     HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
     PROCESSENTRY32W entry = {.dwSize = sizeof(entry)};
     DWORD broker_id = 0;
@@ -1764,7 +1825,8 @@ test_broker_parent_death(bool spawn, bool input, bool legacy)
             /* A new console can also place conhost under this helper. */
             if (entry.th32ParentProcessID == broker_id && !_wcsicmp(entry.szExeFile, name)) {
                 assert(!process);
-                process = OpenProcess(SYNCHRONIZE | PROCESS_QUERY_INFORMATION, FALSE, entry.th32ProcessID);
+                process = OpenProcess(
+                    SYNCHRONIZE | PROCESS_QUERY_INFORMATION, FALSE, entry.th32ProcessID);
                 assert(process);
             }
         } while (Process32NextW(snapshot, &entry));
@@ -1773,14 +1835,15 @@ test_broker_parent_death(bool spawn, bool input, bool legacy)
     assert(CloseHandle(snapshot));
     HANDLE broker = OpenProcess(SYNCHRONIZE | PROCESS_QUERY_INFORMATION, FALSE, broker_id);
     assert(broker && TerminateProcess(child.hProcess, 77u));
-    assert(WaitForSingleObject(child.hProcess, 2000u) == WAIT_OBJECT_0 && CloseHandle(child.hProcess));
+    assert(
+        WaitForSingleObject(child.hProcess, 2000u) == WAIT_OBJECT_0 && CloseHandle(child.hProcess));
     assert(WaitForSingleObject(broker, 2000u) == WAIT_OBJECT_0);
     DWORD status;
     assert(GetExitCodeProcess(broker, &status));
     /* An idle spawn helper may process pipe EOF before its parent watcher. */
     if (status != 125u && !(spawn && status == 0u))
-        (void)fprintf(stderr, "broker parent-death spawn=%u status=%lu\n",
-                       (unsigned int)spawn, (unsigned long)status);
+        (void)fprintf(stderr, "broker parent-death spawn=%u status=%lu\n", (unsigned int)spawn,
+            (unsigned long)status);
     assert((status == 125u || (spawn && status == 0u)) && CloseHandle(broker));
     if (process) {
         assert(WaitForSingleObject(process, 2000u) == WAIT_OBJECT_0);
@@ -1802,7 +1865,8 @@ warm_input_broker(struct snag_term_host *host, bool isolated)
 {
     if (!isolated) return;
     int sink = _open("NUL", _O_WRONLY | _O_BINARY | _O_NOINHERIT);
-    assert(sink >= 0 && snag_output_broker_write(&host->input_broker, sink, "ready", 5u, NULL, NULL) == 0);
+    assert(sink >= 0 &&
+           snag_output_broker_write(&host->input_broker, sink, "ready", 5u, NULL, NULL) == 0);
     assert(close(sink) == 0 && host->input_broker);
 }
 
@@ -1815,7 +1879,8 @@ test_hidden_console(bool isolated)
     assert(snag_term_input_capture(&host) == 0);
     assert(snag_term_input_hidden(&host) == 0);
     warm_input_broker(&host, isolated);
-    assert(GetConsoleMode(input, &mode) && !(mode & ENABLE_ECHO_INPUT) && (mode & ENABLE_LINE_INPUT));
+    assert(
+        GetConsoleMode(input, &mode) && !(mode & ENABLE_ECHO_INPUT) && (mode & ENABLE_LINE_INPUT));
     const WCHAR chars[] = {0x4e2du, 0xd83du, 0xde00u, L'\r'};
     INPUT_RECORD keys[4] = {0};
     for (size_t i = 0; i < 4u; ++i) {
@@ -1903,7 +1968,8 @@ test_classic_console(void)
     host.output_mode[0] = original_mode;
     host.output_state[0] = (struct snag_console_state){
         .legacy = true, .initial_attributes = theme, .cursor = info.dwCursorPosition};
-#define CLASSIC(text) assert(snag_term_output_write(&host, fd, text, sizeof(text) - 1u, false, NULL, NULL) == 0)
+#define CLASSIC(text)                                                                              \
+    assert(snag_term_output_write(&host, fd, text, sizeof(text) - 1u, false, NULL, NULL) == 0)
     CLASSIC("\033[2J\033[H\033[1;31");
     CLASSIC("mAB\033[0mC");
     CHAR_INFO cells[3];
@@ -1916,7 +1982,8 @@ test_classic_console(void)
     CLASSIC("\033[2D\033[K");
     WCHAR row[4];
     DWORD got;
-    assert(ReadConsoleOutputCharacterW(screen, row, 3u, (COORD){0, info.srWindow.Top}, &got) && got == 3u);
+    assert(ReadConsoleOutputCharacterW(screen, row, 3u, (COORD){0, info.srWindow.Top}, &got) &&
+           got == 3u);
     assert(row[0] == L'A' && row[1] == L' ' && row[2] == L' ');
     CLASSIC("\033[H");
     assert(GetConsoleScreenBufferInfo(screen, &info));
@@ -1930,16 +1997,20 @@ test_classic_console(void)
     assert(GetConsoleScreenBufferInfo(screen, &info));
     if (info.dwCursorPosition.X != info.srWindow.Right ||
         info.dwCursorPosition.Y != info.srWindow.Top || !host.output_state[0].pending_wrap) {
-        (void)fprintf(stderr, "classic margin: columns=%zu before=%d,%d cursor=%d,%d viewport=%d,%d-%d,%d buffer=%d,%d pending=%u wrap=%d\n",
-                       columns, before.X, before.Y, info.dwCursorPosition.X, info.dwCursorPosition.Y,
-                       info.srWindow.Left, info.srWindow.Top, info.srWindow.Right, info.srWindow.Bottom,
-                       info.dwSize.X, info.dwSize.Y, (unsigned int)host.output_state[0].pending_wrap,
-                       host.output_state[0].wrap_column);
+        (void)fprintf(stderr,
+            "classic margin: columns=%zu before=%d,%d cursor=%d,%d viewport=%d,%d-%d,%d "
+            "buffer=%d,%d pending=%u wrap=%d\n",
+            columns, before.X, before.Y, info.dwCursorPosition.X, info.dwCursorPosition.Y,
+            info.srWindow.Left, info.srWindow.Top, info.srWindow.Right, info.srWindow.Bottom,
+            info.dwSize.X, info.dwSize.Y, (unsigned int)host.output_state[0].pending_wrap,
+            host.output_state[0].wrap_column);
         WCHAR *written = malloc(columns * sizeof(*written));
-        assert(written && ReadConsoleOutputCharacterW(screen, written, (DWORD)columns, before, &got));
+        assert(
+            written && ReadConsoleOutputCharacterW(screen, written, (DWORD)columns, before, &got));
         size_t prefix = 0;
         while (prefix < got && written[prefix] == L'x') ++prefix;
-        (void)fprintf(stderr, "classic margin cells: got=%lu x-prefix=%zu\n", (unsigned long)got, prefix);
+        (void)fprintf(
+            stderr, "classic margin cells: got=%lu x-prefix=%zu\n", (unsigned long)got, prefix);
         free(written);
     }
     assert(info.dwCursorPosition.X == info.srWindow.Right &&
@@ -1948,7 +2019,8 @@ test_classic_console(void)
     assert(GetConsoleScreenBufferInfo(screen, &info));
     assert(info.dwCursorPosition.X == 1 && info.dwCursorPosition.Y == info.srWindow.Top + 1);
     CLASSIC("\033[1A\r\033[2K");
-    assert(ReadConsoleOutputCharacterW(screen, row, 3u, (COORD){0, info.srWindow.Top}, &got) && got == 3u);
+    assert(ReadConsoleOutputCharacterW(screen, row, 3u, (COORD){0, info.srWindow.Top}, &got) &&
+           got == 3u);
     assert(row[0] == L' ' && row[1] == L' ' && row[2] == L' ');
     CLASSIC("\033[?2004h\033[?2004l\033[H");
     assert(GetConsoleScreenBufferInfo(screen, &info) && info.dwCursorPosition.X == 0 &&
@@ -1957,8 +2029,10 @@ test_classic_console(void)
     CHAR_INFO colors[4];
     area = (SMALL_RECT){0, info.srWindow.Top, 3, info.srWindow.Top};
     assert(ReadConsoleOutputW(screen, colors, (COORD){4, 1}, (COORD){0, 0}, &area));
-    assert((colors[0].Attributes & FOREGROUND_INTENSITY) && (colors[1].Attributes & FOREGROUND_INTENSITY) &&
-           !(colors[2].Attributes & FOREGROUND_INTENSITY) && (colors[3].Attributes & FOREGROUND_INTENSITY));
+    assert((colors[0].Attributes & FOREGROUND_INTENSITY) &&
+           (colors[1].Attributes & FOREGROUND_INTENSITY) &&
+           !(colors[2].Attributes & FOREGROUND_INTENSITY) &&
+           (colors[3].Attributes & FOREGROUND_INTENSITY));
     CLASSIC("\033[H");
     line = malloc(columns);
     assert(line);
@@ -1981,8 +2055,9 @@ test_classic_console(void)
     CLASSIC("Y");
     assert(GetConsoleScreenBufferInfo(screen, &info));
     assert(info.dwCursorPosition.X == 1 && info.dwCursorPosition.Y == info.dwSize.Y - 1);
-    assert(ReadConsoleOutputCharacterW(screen, row, 1u, (COORD){0, info.dwCursorPosition.Y}, &got) &&
-           got == 1u && row[0] == L'Y');
+    assert(
+        ReadConsoleOutputCharacterW(screen, row, 1u, (COORD){0, info.dwCursorPosition.Y}, &got) &&
+        got == 1u && row[0] == L'Y');
     free(line);
     CLASSIC("\033[H\033[2K");
     CLASSIC("A\xe4\xb8\xadZ");
@@ -2018,8 +2093,9 @@ test_console_output(void)
     memset(output, 'x', sizeof(output));
     unsigned int calls = 0;
     uint64_t start = snag_monotonic_ms();
-    assert(snag_term_output_write(&host, pair[1], output, sizeof(output), false,
-                                  cancel_console_output, &calls) < 0 && errno == ECANCELED);
+    assert(snag_term_output_write(
+               &host, pair[1], output, sizeof(output), false, cancel_console_output, &calls) < 0 &&
+           errno == ECANCELED);
     assert(calls == 2u && snag_monotonic_ms() - start < 2000u);
     assert(close(pair[1]) == 0);
     DWORD got;
@@ -2028,7 +2104,8 @@ test_console_output(void)
     assert(close(pair[0]) == 0);
     int sink = _open("NUL", _O_WRONLY | _O_BINARY | _O_NOINHERIT);
     assert(sink >= 0);
-    assert(snag_term_output_write(&host, sink, "ok", 2u, false, cancel_console_output, &calls) == 0);
+    assert(
+        snag_term_output_write(&host, sink, "ok", 2u, false, cancel_console_output, &calls) == 0);
     assert(close(sink) == 0);
     snag_term_host_close(&host);
     assert(!host.writer);
@@ -2042,8 +2119,9 @@ test_console_output(void)
     memset(output, 'x', sizeof(output));
     calls = 0;
     start = snag_monotonic_ms();
-    assert(snag_output_broker_write(&broker, pair[1], output, sizeof(output),
-                                    cancel_console_output, &calls) < 0 && errno == ECANCELED);
+    assert(snag_output_broker_write(
+               &broker, pair[1], output, sizeof(output), cancel_console_output, &calls) < 0 &&
+           errno == ECANCELED);
     assert(!broker && calls == 2u && snag_monotonic_ms() - start < 2000u);
     assert(close(pair[1]) == 0);
     assert(ReadFile((HANDLE)_get_osfhandle(pair[0]), output, sizeof(output), &got, NULL) && got);
@@ -2058,7 +2136,8 @@ test_console_output(void)
     assert(screen != INVALID_HANDLE_VALUE);
     int fd = _open_osfhandle((intptr_t)screen, _O_WRONLY | _O_BINARY | _O_NOINHERIT);
     assert(fd >= 0);
-    assert(snag_term_output_write(NULL, fd, "A\xe4\xb8\xad\xf0\x9f\x98\x80Z", 9u, false, NULL, NULL) == 0);
+    assert(snag_term_output_write(
+               NULL, fd, "A\xe4\xb8\xad\xf0\x9f\x98\x80Z", 9u, false, NULL, NULL) == 0);
     WCHAR result[16] = {0};
     BOOL read_ok = ReadConsoleOutputCharacterW(screen, result, 10u, (COORD){0, 0}, &got);
     const WCHAR expected[] = {L'A', 0x4e2du, 0xd83du, 0xde00u, L'Z'};
@@ -2070,23 +2149,26 @@ test_console_output(void)
     /* Classic fonts/codepages can substitute non-ASCII glyphs even for direct
      * WriteConsoleW. Compare identical native screen projections. */
     if (!read_ok || got != direct_count || memcmp(result, direct, got * sizeof(*result))) {
-        (void)fprintf(stderr, "console output ok=%u got=%lu error=%lu units:",
-                       (unsigned int)read_ok, (unsigned long)got, (unsigned long)GetLastError());
+        (void)fprintf(stderr,
+            "console output ok=%u got=%lu error=%lu units:", (unsigned int)read_ok,
+            (unsigned long)got, (unsigned long)GetLastError());
         for (DWORD i = 0; i < got; ++i) (void)fprintf(stderr, " %04x", (unsigned int)result[i]);
         (void)fprintf(stderr, "\n");
         (void)fprintf(stderr, "direct wide output got=%lu units:", (unsigned long)direct_count);
-        for (DWORD i = 0; i < direct_count; ++i) (void)fprintf(stderr, " %04x", (unsigned int)direct[i]);
+        for (DWORD i = 0; i < direct_count; ++i)
+            (void)fprintf(stderr, " %04x", (unsigned int)direct[i]);
         (void)fprintf(stderr, "\n");
         CONSOLE_SCREEN_BUFFER_INFO info;
         if (GetConsoleScreenBufferInfo(screen, &info))
-            (void)fprintf(stderr, "console cursor %d,%d\n", info.dwCursorPosition.X, info.dwCursorPosition.Y);
+            (void)fprintf(
+                stderr, "console cursor %d,%d\n", info.dwCursorPosition.X, info.dwCursorPosition.Y);
         CHAR_INFO cells[10] = {0};
         SMALL_RECT rect = {0, 0, 9, 0};
         if (ReadConsoleOutputW(screen, cells, (COORD){10, 1}, (COORD){0, 0}, &rect)) {
             (void)fprintf(stderr, "console cells:");
             for (size_t i = 0; i < 10u; ++i)
                 (void)fprintf(stderr, " %04x/%04x", (unsigned int)cells[i].Char.UnicodeChar,
-                               (unsigned int)cells[i].Attributes);
+                    (unsigned int)cells[i].Attributes);
             (void)fprintf(stderr, "\n");
         }
         abort();
@@ -2094,7 +2176,8 @@ test_console_output(void)
     assert(result[0] == L'A');
     broker = NULL;
     assert(SetConsoleCursorPosition(screen, (COORD){0, 2}));
-    assert(snag_output_broker_write(&broker, fd, "A\xe4\xb8\xad\xf0\x9f\x98\x80Z", 9u, NULL, NULL) == 0);
+    assert(snag_output_broker_write(
+               &broker, fd, "A\xe4\xb8\xad\xf0\x9f\x98\x80Z", 9u, NULL, NULL) == 0);
     memset(result, 0, sizeof(result));
     assert(ReadConsoleOutputCharacterW(screen, result, 10u, (COORD){0, 2}, &got));
     assert(got == direct_count && !memcmp(result, direct, got * sizeof(*result)));
@@ -2115,25 +2198,25 @@ test_console_keys(struct snag_term_host *host)
         WORD repeats;
         const char *bytes;
         size_t size;
-    } cases[] = {
-        {VK_ESCAPE, 0, 0, 1, "\033", 1}, {VK_ESCAPE, 27, 0, 1, "\033", 1},
-        {VK_ESCAPE, 0, SHIFT_PRESSED, 2, "\033\033", 2},
-        {VK_UP, 0, 0, 1, "\033[A", 3}, {VK_LEFT, 0, LEFT_CTRL_PRESSED, 1, "\033[1;5D", 6},
+    } cases[] = {{VK_ESCAPE, 0, 0, 1, "\033", 1}, {VK_ESCAPE, 27, 0, 1, "\033", 1},
+        {VK_ESCAPE, 0, SHIFT_PRESSED, 2, "\033\033", 2}, {VK_UP, 0, 0, 1, "\033[A", 3},
+        {VK_LEFT, 0, LEFT_CTRL_PRESSED, 1, "\033[1;5D", 6},
         {VK_HOME, 0, SHIFT_PRESSED | LEFT_ALT_PRESSED, 1, "\033[1;4H", 6},
-        {VK_DELETE, 0, LEFT_ALT_PRESSED, 1, "\033[3;3~", 6}, {VK_TAB, L'\t', SHIFT_PRESSED, 1, "\033[Z", 3},
+        {VK_DELETE, 0, LEFT_ALT_PRESSED, 1, "\033[3;3~", 6},
+        {VK_TAB, L'\t', SHIFT_PRESSED, 1, "\033[Z", 3},
         {'X', L'x', LEFT_ALT_PRESSED, 1, "\033x", 2},
         {'Q', L'@', RIGHT_ALT_PRESSED | LEFT_CTRL_PRESSED, 1, "@", 1},
         {VK_SPACE, 0, LEFT_CTRL_PRESSED, 1, "\0", 1}, {'C', 3, LEFT_CTRL_PRESSED, 1, "\003", 1},
-        {'X', L'x', 0, 10, "xxxxxxxxxx", 10}, {VK_UP, 0, 0, 3, "\033[A\033[A\033[A", 9}
-    };
+        {'X', L'x', 0, 10, "xxxxxxxxxx", 10}, {VK_UP, 0, 0, 3, "\033[A\033[A\033[A", 9}};
     HANDLE input = (HANDLE)_get_osfhandle(0);
     DWORD written;
     for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
         INPUT_RECORD event = {.EventType = KEY_EVENT};
-        event.Event.KeyEvent = (KEY_EVENT_RECORD){
-            .bKeyDown = TRUE, .wRepeatCount = cases[i].repeats,
-            .wVirtualKeyCode = cases[i].key, .uChar.UnicodeChar = cases[i].c,
-            .dwControlKeyState = cases[i].modifiers };
+        event.Event.KeyEvent = (KEY_EVENT_RECORD){.bKeyDown = TRUE,
+            .wRepeatCount = cases[i].repeats,
+            .wVirtualKeyCode = cases[i].key,
+            .uChar.UnicodeChar = cases[i].c,
+            .dwControlKeyState = cases[i].modifiers};
         assert(WriteConsoleInputW(input, &event, 1u, &written) && written == 1u);
         size_t used = 0;
         while (used < cases[i].size) {
@@ -2271,17 +2354,21 @@ test_input_mode(void)
 #ifdef _WIN32
         DWORD flags;
         assert(GetConsoleMode((HANDLE)_get_osfhandle(copy), &changed_mode));
-        assert(output_host.output_state[1].legacy ?
-               !(changed_mode & (ENABLE_VIRTUAL_TERMINAL_PROCESSING | ENABLE_WRAP_AT_EOL_OUTPUT)) :
-               (changed_mode & ENABLE_VIRTUAL_TERMINAL_PROCESSING) != 0);
+        assert(
+            output_host.output_state[1].legacy
+                ? !(changed_mode & (ENABLE_VIRTUAL_TERMINAL_PROCESSING | ENABLE_WRAP_AT_EOL_OUTPUT))
+                : (changed_mode & ENABLE_VIRTUAL_TERMINAL_PROCESSING) != 0);
         assert(snag_term_output_mode(&output_host, false) == 0);
-        assert(GetConsoleMode((HANDLE)_get_osfhandle(copy), &changed_mode) && changed_mode == original_mode);
+        assert(GetConsoleMode((HANDLE)_get_osfhandle(copy), &changed_mode) &&
+               changed_mode == original_mode);
         assert(snag_term_output_mode(&output_host, true) == 0);
         assert(GetConsoleMode((HANDLE)_get_osfhandle(copy), &changed_mode));
-        assert(output_host.output_state[1].legacy ?
-               !(changed_mode & (ENABLE_VIRTUAL_TERMINAL_PROCESSING | ENABLE_WRAP_AT_EOL_OUTPUT)) :
-               (changed_mode & ENABLE_VIRTUAL_TERMINAL_PROCESSING) != 0);
-        assert(GetHandleInformation((HANDLE)_get_osfhandle(copy), &flags) && !(flags & HANDLE_FLAG_INHERIT));
+        assert(
+            output_host.output_state[1].legacy
+                ? !(changed_mode & (ENABLE_VIRTUAL_TERMINAL_PROCESSING | ENABLE_WRAP_AT_EOL_OUTPUT))
+                : (changed_mode & ENABLE_VIRTUAL_TERMINAL_PROCESSING) != 0);
+        assert(GetHandleInformation((HANDLE)_get_osfhandle(copy), &flags) &&
+               !(flags & HANDLE_FLAG_INHERIT));
 #else
         int flags = fcntl(copy, F_GETFD);
         assert(flags >= 0 && (flags & FD_CLOEXEC) != 0);
@@ -2291,7 +2378,8 @@ test_input_mode(void)
 #endif
         snag_term_host_close(&output_host);
 #ifdef _WIN32
-        assert(GetConsoleMode((HANDLE)_get_osfhandle(2), &changed_mode) && changed_mode == original_mode);
+        assert(GetConsoleMode((HANDLE)_get_osfhandle(2), &changed_mode) &&
+               changed_mode == original_mode);
 #endif
         assert(close(copy) == 0 && snag_isatty(2));
     }
@@ -2333,7 +2421,8 @@ test_input_mode(void)
     assert(raise(SIGINT) == 0);
     uint64_t deadline = snag_monotonic_ms() + 1000u;
     /* Old libc_r defers process-directed raise until its scheduler runs. */
-    while (!atomic_load(&console_interrupts) && snag_monotonic_ms() < deadline) (void)snag_sleep_ms(1u);
+    while (!atomic_load(&console_interrupts) && snag_monotonic_ms() < deadline)
+        (void)snag_sleep_ms(1u);
     assert(atomic_load(&console_interrupts) == 1u);
 #endif
     snag_term_controls_restore(&host);
@@ -2375,9 +2464,10 @@ test_input_mode(void)
         if (ready < 0 || !(ready & SNAG_TERM_WAIT_INPUT)) {
             DWORD available = 0;
             (void)GetNumberOfConsoleInputEvents(input, &available);
-            (void)fprintf(stderr, "console ready=%d used=%zu queued=%lu cache=%u/%u key=%u/%u repeat=%u\n",
-                           ready, used, (unsigned long)available, host.input_next, host.input_count,
-                           host.input_key_at, host.input_key_len, host.input_repeats);
+            (void)fprintf(stderr,
+                "console ready=%d used=%zu queued=%lu cache=%u/%u key=%u/%u repeat=%u\n", ready,
+                used, (unsigned long)available, host.input_next, host.input_count,
+                host.input_key_at, host.input_key_len, host.input_repeats);
             (void)snag_term_input_restore(&host, true);
             abort();
         }
@@ -2433,8 +2523,10 @@ test_input_mode(void)
            restored.c_iflag == host.input_mode.c_iflag);
 #endif
     assert(snag_term_input_raw(&host, true) == 0 && snag_term_input_restore(&host, true) == 0);
-    if (snag_isatty(2)) assert(snag_term_host_columns() > 0u);
-    else assert(snag_term_host_columns() == 0u);
+    if (snag_isatty(2))
+        assert(snag_term_host_columns() > 0u);
+    else
+        assert(snag_term_host_columns() == 0u);
 }
 
 #ifndef _WIN32
@@ -2481,8 +2573,8 @@ test_posix_process(bool pty)
     struct snag_child child;
     snag_child_init(&child);
     assert(env && directory && shell);
-    const char *command = pty ? "test -t 1 && printf native-pty; exit 7" :
-        "read value; printf native-out; printf native-err >&2; exit 7";
+    const char *command = pty ? "test -t 1 && printf native-pty; exit 7"
+                              : "read value; printf native-out; printf native-err >&2; exit 7";
     assert(snag_child_spawn(&child, shell, command, directory, env, pty) == 0);
     if (!pty) {
         assert(snag_child_exited(&child) == 0 && !child.reaped);
@@ -2504,7 +2596,7 @@ test_posix_process(bool pty)
             unsigned int stream = events[i].stream;
             if (!events[i].revents) continue;
             ssize_t n = snag_child_read(&child, stream, output[stream] + used[stream],
-                                       sizeof(output[stream]) - used[stream] - 1u);
+                sizeof(output[stream]) - used[stream] - 1u);
             assert(n >= 0 || errno == EAGAIN || errno == EINTR);
             if (n > 0) {
                 used[stream] += (size_t)n;
@@ -2520,8 +2612,8 @@ test_posix_process(bool pty)
         assert(snag_sleep_ms(1u) == 0);
     }
     if (exited != 1 || child.reaped)
-        fprintf(stderr, "process exit poll: pty=%d pid=%ld rc=%d errno=%d reaped=%d\n",
-                pty, (long)child.pid, exited, errno, child.reaped);
+        fprintf(stderr, "process exit poll: pty=%d pid=%ld rc=%d errno=%d reaped=%d\n", pty,
+            (long)child.pid, exited, errno, child.reaped);
     assert(exited == 1 && !child.reaped);
     assert(snag_child_exited(&child) == 1 && !child.reaped);
     assert(!strcmp(output[0], pty ? "native-pty" : "native-out"));
@@ -2559,7 +2651,8 @@ test_platform(void)
 #else
     test_posix_child_ownership();
     test_posix_process(false);
-#if defined(__linux__) || defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
+#if defined(__linux__) || defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) ||    \
+    defined(__NetBSD__)
     test_posix_process(true);
 #endif
 #endif
@@ -2621,7 +2714,7 @@ test_platform(void)
     before = next;
     assert(snag_sleep_ms(20u) == 0 && snag_monotonic_ms() >= before + 1u);
 #ifdef SNAJPAGENT_LEGACY_LINUX_CLOCK
-    int __real_clock_gettime(clockid_t clock, struct timespec *out);
+    int __real_clock_gettime(clockid_t clock, struct timespec * out);
     struct timespec invalid_clock;
     errno = 0;
     assert(__real_clock_gettime((clockid_t)123456, &invalid_clock) == -1);
@@ -2668,8 +2761,8 @@ test_platform(void)
     {
         time_t seconds = 1709164800; /* 2024-02-29, UTC. */
         struct tm utc, local;
-        assert(snag_gmtime(&seconds, &utc) == &utc && utc.tm_year == 124 &&
-               utc.tm_mon == 1 && utc.tm_mday == 29 && utc.tm_hour == 0);
+        assert(snag_gmtime(&seconds, &utc) == &utc && utc.tm_year == 124 && utc.tm_mon == 1 &&
+               utc.tm_mday == 29 && utc.tm_hour == 0);
         assert(snag_localtime(&seconds, &local) == &local && mktime(&local) == seconds);
     }
 #ifdef _WIN32
@@ -2767,17 +2860,16 @@ test_wakeup(void)
 static void
 test_session_transport(void)
 {
-    assert(SNAG_SESSION_BOUND == 14 && SNAG_SESSION_OFFER == 15 &&
-        SNAG_SESSION_PROGRESS == 16 && SNAG_SESSION_RELEASE == 17 &&
-        SNAG_SESSION_RELEASED == 18 && SNAG_SESSION_STATUS == 19);
+    assert(SNAG_SESSION_BOUND == 14 && SNAG_SESSION_OFFER == 15 && SNAG_SESSION_PROGRESS == 16 &&
+           SNAG_SESSION_RELEASE == 17 && SNAG_SESSION_RELEASED == 18 && SNAG_SESSION_STATUS == 19);
     struct snag_session_packet sent = {0}, received = {0};
     assert(snag_session_packet_set(&sent, SNAG_SESSION_OUTPUT, "hello", 5u) == 0);
     assert(snag_session_packet_length(&sent) == 5u);
     assert(snag_session_packet_type(&sent) == SNAG_SESSION_OUTPUT);
     assert(snag_session_packet_set(&sent, 0, NULL, 0u) < 0 && errno == EINVAL);
     assert(snag_session_packet_set(&sent, SNAG_SESSION_INPUT, NULL, 1u) < 0 && errno == EINVAL);
-    assert(snag_session_packet_set(&sent, SNAG_SESSION_INPUT, "x",
-                                  SNAG_SESSION_FRAME_MAX + 1u) < 0);
+    assert(
+        snag_session_packet_set(&sent, SNAG_SESSION_INPUT, "x", SNAG_SESSION_FRAME_MAX + 1u) < 0);
 #ifndef _WIN32
     if (!snag_session_host_supported()) return;
     assert(snag_session_peer_verify(-1) < 0 && errno == EBADF);
@@ -2798,8 +2890,8 @@ test_session_transport(void)
             assert(snag_session_peer_verify(pair[1]) == 1);
         }
         assert(snag_session_packet_read(pair[1], &received) == 0);
-        assert(write(pair[0], sent.bytes + split, sent.used - split) ==
-               (ssize_t)(sent.used - split));
+        assert(
+            write(pair[0], sent.bytes + split, sent.used - split) == (ssize_t)(sent.used - split));
         assert(snag_session_packet_read(pair[1], &received) == 1);
         assert(received.used == sent.used && !memcmp(received.bytes, sent.bytes, sent.used));
     }
@@ -2914,7 +3006,8 @@ test_session_transport(void)
     assert(snag_session_listener_open(&other, dir, root, lock) < 0 && errno == EADDRINUSE);
     /* The stale-endpoint probe connected but did not reserve an attachment. */
     int peer = snag_session_listener_accept(&listener);
-    if (peer >= 0) assert(close(peer) == 0);
+    if (peer >= 0)
+        assert(close(peer) == 0);
     else {
 #ifdef __APPLE__
         /* SO_NOSIGPIPE rejects this already-closed probe with EINVAL. */
@@ -2951,16 +3044,16 @@ test_session_transport(void)
             if (fchdir(dir) < 0) _exit(2);
             int raw = socket(AF_UNIX, SOCK_STREAM, 0);
             if (raw < 0) _exit(2);
-            int length = snprintf(address.sun_path, sizeof(address.sun_path),
-                                   "%s", SNAG_SESSION_ENDPOINT);
+            int length =
+                snprintf(address.sun_path, sizeof(address.sun_path), "%s", SNAG_SESSION_ENDPOINT);
             if (length < 0 || (size_t)length >= sizeof(address.sun_path)) _exit(3);
             if (connect(raw, (const struct sockaddr *)&address, sizeof(address)) < 0) _exit(4);
             if (write(raw, "x", 1u) != 1) _exit(5);
             _exit(0);
         }
         int result;
-        assert(waitpid(stranger, &result, 0) == stranger &&
-               WIFEXITED(result) && !WEXITSTATUS(result));
+        assert(
+            waitpid(stranger, &result, 0) == stranger && WIFEXITED(result) && !WEXITSTATUS(result));
         assert(snag_session_listener_accept(&listener) < 0 && errno == EACCES);
         assert(fchmod(dir, 0700) == 0);
         assert(chmod(socket_path, 0600) == 0);
@@ -2970,8 +3063,7 @@ test_session_transport(void)
     assert(snag_session_listener_open(&other, dir, root, lock) == 0);
     snag_session_listener_close(&listener);
     struct stat st;
-    assert(snag_lstat_at(dir, SNAG_SESSION_ENDPOINT, &st) == 0 &&
-           S_ISSOCK(st.st_mode));
+    assert(snag_lstat_at(dir, SNAG_SESSION_ENDPOINT, &st) == 0 && S_ISSOCK(st.st_mode));
     snag_session_listener_close(&other);
     assert(snag_unlink_at(dir, "old.sock", false) == 0);
     /* A crashed listener leaves a recoverable socket, never a writable file
@@ -2983,8 +3075,7 @@ test_session_transport(void)
     int regular = snag_open_private_append_at(dir, SNAG_SESSION_ENDPOINT, true);
     assert(regular >= 0 && close(regular) == 0);
     assert(snag_session_listener_open(&listener, dir, root, lock) < 0 && errno == EACCES);
-    assert(snag_lstat_at(dir, SNAG_SESSION_ENDPOINT, &st) == 0 &&
-           S_ISREG(st.st_mode));
+    assert(snag_lstat_at(dir, SNAG_SESSION_ENDPOINT, &st) == 0 && S_ISREG(st.st_mode));
     assert(snag_unlink_at(dir, SNAG_SESSION_ENDPOINT, false) == 0);
     assert(symlink("lock", socket_path) == 0);
     assert(snag_session_listener_open(&listener, dir, root, lock) < 0 && errno == EACCES);
@@ -3119,13 +3210,14 @@ relay_send_frame(int fd, enum snag_session_message type, const void *bytes, size
     if (type == SNAG_SESSION_COMMIT) {
         struct snag_terminal_profile profile = {.term = "xterm"};
         assert(len == 4u && snag_session_commit_set(&packet, bytes, &profile) == 0);
-    } else assert(snag_session_packet_set(&packet, type, bytes, len) == 0);
+    } else
+        assert(snag_session_packet_set(&packet, type, bytes, len) == 0);
     assert(snag_session_packet_write(fd, &packet) == 1);
 }
 
 static void
-client_receive_frame(struct snag_session_client *client, int fd,
-                      enum snag_session_message type, struct snag_session_packet *packet)
+client_receive_frame(struct snag_session_client *client, int fd, enum snag_session_message type,
+    struct snag_session_packet *packet)
 {
     *packet = (struct snag_session_packet){0};
     for (unsigned int i = 0u; i < 1000u; ++i) {
@@ -3156,8 +3248,8 @@ client_wait_event(struct snag_session_client *client, enum snag_session_message 
 }
 
 static void
-terminal_expect(pid_t child, int peer, enum snag_session_message type,
-                 struct snag_session_packet *packet)
+terminal_expect(
+    pid_t child, int peer, enum snag_session_message type, struct snag_session_packet *packet)
 {
     uint64_t deadline = snag_monotonic_ms() + 5000u;
     *packet = (struct snag_session_packet){0};
@@ -3171,7 +3263,10 @@ terminal_expect(pid_t child, int peer, enum snag_session_message type,
             (void)waitpid(child, &status, 0);
         }
         assert(okay);
-        if (!rc) { (void)snag_sleep_ms(1u); continue; }
+        if (!rc) {
+            (void)snag_sleep_ms(1u);
+            continue;
+        }
         if (snag_session_packet_type(packet) == type) return;
         assert(snag_session_packet_type(packet) == SNAG_SESSION_RESIZE);
         *packet = (struct snag_session_packet){0};
@@ -3204,16 +3299,16 @@ test_session_terminal(void)
             assert(setenv("TERM", "xterm", 1) == 0);
             struct snag_session_typeahead typeahead = {.bytes.max = 1024u};
             if (trial == 1u) assert(snag_buf_append(&typeahead.bytes, "prefix", 6u) == 0);
-            int rc = snag_session_client_terminal(pair[1], trial == 0u, 0u,
-                NULL, NULL, &typeahead, error, sizeof(error));
+            int rc = snag_session_client_terminal(
+                pair[1], trial == 0u, 0u, NULL, NULL, &typeahead, error, sizeof(error));
             assert(!typeahead.bytes.len);
             assert(typeahead.signal == (trial == 1u ? SIGTERM : 0));
             if (trial == 1u) {
                 volatile sig_atomic_t cancelled = SIGTERM;
                 typeahead.cancelled = &cancelled;
                 assert(snag_buf_append(&typeahead.bytes, "unsent", 6u) == 0);
-                assert(snag_session_client_terminal(-1, false, 0u, NULL, NULL,
-                    &typeahead, error, sizeof(error)) == 128 + SIGTERM);
+                assert(snag_session_client_terminal(-1, false, 0u, NULL, NULL, &typeahead, error,
+                           sizeof(error)) == 128 + SIGTERM);
                 assert(typeahead.signal == SIGTERM && typeahead.bytes.len == 6u);
             }
             snag_buf_free(&typeahead.bytes);
@@ -3233,7 +3328,8 @@ test_session_terminal(void)
                 assert(snag_session_packet_length(&packet) == 6u);
                 assert(!memcmp(packet.bytes + SNAG_SESSION_HEADER, "prefix", 6u));
             }
-        } else terminal_expect(child, pair[0], SNAG_SESSION_RESIZE, &packet);
+        } else
+            terminal_expect(child, pair[0], SNAG_SESSION_RESIZE, &packet);
         assert(tcgetattr(slave, &current) == 0 && !(current.c_lflag & (ICANON | ISIG | ECHO)));
         assert(fcntl(slave, F_GETFL) == flags);
         relay_send_frame(pair[0], SNAG_SESSION_OUTPUT, "native-screen", 13u);
@@ -3283,7 +3379,8 @@ test_session_terminal(void)
             assert(!memcmp(packet.bytes + SNAG_SESSION_HEADER, "more", 4u));
             unsigned char code = 7u;
             relay_send_frame(pair[0], SNAG_SESSION_EXIT, &code, 1u);
-        } else if (trial == 1u) assert(kill(child, SIGTERM) == 0);
+        } else if (trial == 1u)
+            assert(kill(child, SIGTERM) == 0);
         else {
             if (trial == 2u) {
                 relay_send_frame(pair[0], SNAG_SESSION_QUITTING, NULL, 0u);
@@ -3454,7 +3551,8 @@ test_session_client(void)
             relay_send_frame(target[1], SNAG_SESSION_ERROR, "busy", 4u);
         } else if (failure % 3u == 1u) {
             assert(close(target[1]) == 0);
-        } else client.target_deadline = 1u;
+        } else
+            client.target_deadline = 1u;
         assert(write(terminal[1], "pending", 7u) == 7);
         client_wait_event(&client, SNAG_SESSION_ERROR);
         assert(client.peer == source[0] && client.target == -1);
@@ -3474,8 +3572,7 @@ test_session_client(void)
     unsigned char output[SNAG_SESSION_FRAME_MAX];
     for (size_t i = 0u; i < sizeof(output); ++i) output[i] = (unsigned char)i;
     relay_send_frame(source[1], SNAG_SESSION_OUTPUT, output, sizeof(output));
-    for (unsigned int i = 0u; i < 100u &&
-         (!client.output_pending || !client.terminal_offset); ++i)
+    for (unsigned int i = 0u; i < 100u && (!client.output_pending || !client.terminal_offset); ++i)
         assert(snag_session_client_step(&client, 1, &event) == 0 && !event);
     assert(client.output_pending && client.terminal_offset > 0u);
     assert(client.terminal_offset < sizeof(output));
@@ -3519,7 +3616,7 @@ test_session_client(void)
             assert(snag_session_packet_type(&ack) == SNAG_SESSION_OUTPUT_ACK);
             assert(snag_session_packet_length(&ack) == 2u);
             size_t offset = (size_t)ack.bytes[SNAG_SESSION_HEADER] |
-                (size_t)ack.bytes[SNAG_SESSION_HEADER + 1u] << 8u;
+                            (size_t)ack.bytes[SNAG_SESSION_HEADER + 1u] << 8u;
             assert(offset > acknowledged && offset <= sizeof(output));
             acknowledged = offset;
             ack = (struct snag_session_packet){0};
@@ -3623,12 +3720,14 @@ test_session_client(void)
         }
         assert(!client.input.used && !client.output_pending);
         assert(read(terminal[1], bytes, sizeof(bytes)) < 0 && errno == EAGAIN);
-        if (failure) client.target_deadline = 1u;
-        else assert(close(target[1]) == 0);
+        if (failure)
+            client.target_deadline = 1u;
+        else
+            assert(close(target[1]) == 0);
         client_wait_event(&client, SNAG_SESSION_ERROR);
         assert(!strstr((const char *)client.event_data, "retained"));
         assert(strstr((const char *)client.event_data, "after acceptance") ||
-            strstr((const char *)client.event_data, "after destination acceptance"));
+               strstr((const char *)client.event_data, "after destination acceptance"));
         assert(snag_session_client_error(&client, "failed") < 0 && errno == ENOTCONN);
         snag_session_client_close(&client);
         assert(close(terminal[1]) == 0 && close(source[1]) == 0);
@@ -3689,9 +3788,8 @@ relay_ack_output(struct snag_session_relay *relay, int peer, size_t offset)
 }
 
 static void
-relay_receive_frame(struct snag_session_relay *relay,
-                     const struct snag_session_listener *listener, int fd,
-                     enum snag_session_message type, struct snag_session_packet *packet)
+relay_receive_frame(struct snag_session_relay *relay, const struct snag_session_listener *listener,
+    int fd, enum snag_session_message type, struct snag_session_packet *packet)
 {
     *packet = (struct snag_session_packet){0};
     for (unsigned int i = 0u; i < 1000u; ++i) {
@@ -3710,8 +3808,8 @@ relay_receive_frame(struct snag_session_relay *relay,
 }
 
 static void
-relay_wait_event(struct snag_session_relay *relay,
-                  const struct snag_session_listener *listener, enum snag_session_message type)
+relay_wait_event(struct snag_session_relay *relay, const struct snag_session_listener *listener,
+    enum snag_session_message type)
 {
     for (unsigned int i = 0u; i < 1000u; ++i) {
         enum snag_session_message event;
@@ -3726,7 +3824,7 @@ relay_wait_event(struct snag_session_relay *relay,
 
 static int
 relay_reserve(struct snag_session_relay *relay, const struct snag_session_listener *listener,
-               int dir, const char *path)
+    int dir, const char *path)
 {
     int fd = snag_session_endpoint_connect(dir, path);
     assert(fd >= 0);
@@ -3739,7 +3837,7 @@ relay_reserve(struct snag_session_relay *relay, const struct snag_session_listen
 
 static void
 relay_status(struct snag_session_relay *relay, const struct snag_session_listener *listener,
-              int dir, const char *path, bool attached)
+    int dir, const char *path, bool attached)
 {
     uint64_t generation = relay->generation, deadline = relay->handshake_deadline;
     int peer = relay->peer;
@@ -3809,8 +3907,8 @@ relay_output_pressure(struct snag_session_relay *relay, int slave, int client)
         packet = (struct snag_session_packet){0};
     }
     if (written != total || received != total || !backpressured)
-        fprintf(stderr, "relay pressure: written=%zu received=%zu total=%zu waiting=%d\n",
-                written, received, total, backpressured);
+        fprintf(stderr, "relay pressure: written=%zu received=%zu total=%zu waiting=%d\n", written,
+            received, total, backpressured);
     assert(written == total && received == total && backpressured);
     assert(!relay->output.used && snag_session_packet_read(client, &packet) == 0);
 }
@@ -3818,8 +3916,7 @@ relay_output_pressure(struct snag_session_relay *relay, int slave, int client)
 static void
 test_session_relay(void)
 {
-    char *root = snag_path_join(getenv("TMPDIR") ? getenv("TMPDIR") : "/tmp",
-                                "snag-relay-XXXXXX");
+    char *root = snag_path_join(getenv("TMPDIR") ? getenv("TMPDIR") : "/tmp", "snag-relay-XXXXXX");
     assert(root && mkdtemp(root));
     int dir = open(root, O_RDONLY | O_DIRECTORY);
     assert(dir >= 0);
@@ -4036,10 +4133,14 @@ test_session_relay(void)
         assert(snag_session_relay_activate(&relay, relay.generation, slave) == 0);
         relay_receive_frame(&relay, &listener, client, SNAG_SESSION_READY, &packet);
         assert(relay.phase == SNAG_SESSION_ACCEPTED && relay.handshake_deadline);
-        if (!trial) relay_send_frame(client, SNAG_SESSION_INPUT, "early", 5u);
-        else if (trial == 1u) relay_send_frame(client, SNAG_SESSION_BOUND, "bad", 3u);
-        else if (trial == 2u) assert(close(client) == 0);
-        else if (trial == 3u) relay.handshake_deadline = 1u;
+        if (!trial)
+            relay_send_frame(client, SNAG_SESSION_INPUT, "early", 5u);
+        else if (trial == 1u)
+            relay_send_frame(client, SNAG_SESSION_BOUND, "bad", 3u);
+        else if (trial == 2u)
+            assert(close(client) == 0);
+        else if (trial == 3u)
+            relay.handshake_deadline = 1u;
         else {
             relay_send_frame(client, SNAG_SESSION_BOUND, NULL, 0u);
             relay_wait_event(&relay, &listener, SNAG_SESSION_BOUND);
@@ -4060,14 +4161,14 @@ test_session_relay(void)
         memset(offer, 42, 16u);
         offer[SNAG_SESSION_VOICE_MODE] = trial == 3u ? 3u : SNAG_SESSION_VOICE_ON;
         client = relay_reserve(&relay, &listener, dir, root);
-        relay_send_frame(client, SNAG_SESSION_OFFER, offer,
-            SNAG_SESSION_VOICE_BYTES - (trial == 4u ? 1u : 0u));
+        relay_send_frame(
+            client, SNAG_SESSION_OFFER, offer, SNAG_SESSION_VOICE_BYTES - (trial == 4u ? 1u : 0u));
         if (trial == 3u || trial == 4u) {
             relay_wait_event(&relay, &listener, SNAG_SESSION_DETACH);
         } else {
             relay_receive_frame(&relay, &listener, client, SNAG_SESSION_READY, &packet);
-            assert(relay.voice_offered && !memcmp(relay.voice_offer, offer,
-                SNAG_SESSION_VOICE_BYTES));
+            assert(
+                relay.voice_offered && !memcmp(relay.voice_offer, offer, SNAG_SESSION_VOICE_BYTES));
             if (trial == 5u) {
                 relay_send_frame(client, SNAG_SESSION_OFFER, offer, SNAG_SESSION_VOICE_BYTES);
                 relay_wait_event(&relay, &listener, SNAG_SESSION_DETACH);
@@ -4082,12 +4183,13 @@ test_session_relay(void)
                 relay_receive_frame(&relay, &listener, client, SNAG_SESSION_READY, &packet);
                 unsigned char mode = (unsigned char)trial;
                 relay_send_frame(client, SNAG_SESSION_BOUND, &mode, trial == 6u ? 0u : 1u);
-                if (trial >= 6u) relay_wait_event(&relay, &listener, SNAG_SESSION_DETACH);
+                if (trial >= 6u)
+                    relay_wait_event(&relay, &listener, SNAG_SESSION_DETACH);
                 else {
                     relay_wait_event(&relay, &listener, SNAG_SESSION_BOUND);
                     assert(relay.voice_offer[SNAG_SESSION_VOICE_MODE] == mode);
-                    assert(snag_session_relay_control(&relay, SNAG_SESSION_SWITCH,
-                        request, sizeof(request)) == 0);
+                    assert(snag_session_relay_control(
+                               &relay, SNAG_SESSION_SWITCH, request, sizeof(request)) == 0);
                     relay_receive_frame(&relay, &listener, client, SNAG_SESSION_SWITCH, &packet);
                     relay_send_frame(client, SNAG_SESSION_RELEASE, offer, 16u);
                     relay_wait_event(&relay, &listener, SNAG_SESSION_RELEASE);
@@ -4104,11 +4206,12 @@ test_session_relay(void)
                     memcpy(released, offer, 16u);
                     released[16] = mode;
                     released[0] ^= 1u;
-                    assert(snag_session_relay_control(&relay, SNAG_SESSION_RELEASED,
-                        released, sizeof(released)) < 0 && errno == EINVAL);
+                    assert(snag_session_relay_control(
+                               &relay, SNAG_SESSION_RELEASED, released, sizeof(released)) < 0 &&
+                           errno == EINVAL);
                     released[0] ^= 1u;
-                    assert(snag_session_relay_control(&relay, SNAG_SESSION_RELEASED,
-                        released, sizeof(released)) == 0);
+                    assert(snag_session_relay_control(
+                               &relay, SNAG_SESSION_RELEASED, released, sizeof(released)) == 0);
                     relay_wait_event(&relay, &listener, SNAG_SESSION_DETACH);
                     assert(snag_session_packet_read(client, &packet) == 1);
                     assert(snag_session_packet_type(&packet) == SNAG_SESSION_RELEASED);
@@ -4139,7 +4242,8 @@ test_session_relay(void)
             assert(snag_session_packet_set(&packet, SNAG_SESSION_RESERVE, NULL, 0u) == 0);
             packet.bytes[2] = (unsigned char)(2u + trial);
             assert(snag_session_packet_write(client, &packet) == 1);
-        } else relay_send_frame(client, SNAG_SESSION_COMMIT, geometry, sizeof(geometry));
+        } else
+            relay_send_frame(client, SNAG_SESSION_COMMIT, geometry, sizeof(geometry));
         bool rejected = false;
         packet = (struct snag_session_packet){0};
         for (unsigned int i = 0u; i < 1000u && !rejected; ++i) {
@@ -4168,19 +4272,20 @@ test_session_relay(void)
         client = relay_reserve(&relay, &listener, dir, root);
         assert(snag_session_commit_set(&packet, changed_geometry, &screen_profile) == 0);
         unsigned char *profile = packet.bytes + SNAG_SESSION_HEADER + 4u;
-        if (trial < 2u) packet.bytes[2] = trial ? 2u : 1u;
+        if (trial < 2u)
+            packet.bytes[2] = trial ? 2u : 1u;
         else if (trial == 2u) {
-            assert(snag_session_packet_set(&packet, SNAG_SESSION_COMMIT,
-                                            changed_geometry, 4u) == 0);
+            assert(
+                snag_session_packet_set(&packet, SNAG_SESSION_COMMIT, changed_geometry, 4u) == 0);
         } else if (trial < 5u) {
-            memset(profile + (trial == 4u ? SNAG_TERMINAL_NAME_BYTES : 0u),
-                   'x', SNAG_TERMINAL_NAME_BYTES);
+            memset(profile + (trial == 4u ? SNAG_TERMINAL_NAME_BYTES : 0u), 'x',
+                SNAG_TERMINAL_NAME_BYTES);
         } else if (trial < 7u) {
             memset(profile, 0, SNAG_TERMINAL_NAME_BYTES);
             if (trial == 6u) memcpy(profile, "dumb", 4u);
         } else {
-            memset(profile + (trial - 5u) * SNAG_TERMINAL_NAME_BYTES,
-                   'x', SNAG_TERMINAL_NAME_BYTES);
+            memset(
+                profile + (trial - 5u) * SNAG_TERMINAL_NAME_BYTES, 'x', SNAG_TERMINAL_NAME_BYTES);
         }
         assert(snag_session_packet_write(client, &packet) == 1);
         relay_wait_event(&relay, &listener, SNAG_SESSION_DETACH);
@@ -4294,8 +4399,10 @@ test_sockets(void)
            !(inherited_flags & HANDLE_FLAG_INHERIT));
     assert(closesocket(inherited) == 0);
     assert(snag_socket_noinherit(SNAG_SOCKET_INVALID) < 0 && WSAGetLastError() == WSAENOTSOCK);
-    struct addrinfo legacy_hints = {.ai_family = AF_INET, .ai_socktype = SOCK_STREAM,
-        .ai_protocol = IPPROTO_TCP, .ai_flags = AI_NUMERICHOST};
+    struct addrinfo legacy_hints = {.ai_family = AF_INET,
+        .ai_socktype = SOCK_STREAM,
+        .ai_protocol = IPPROTO_TCP,
+        .ai_flags = AI_NUMERICHOST};
     struct addrinfo *legacy = NULL;
     assert(WspiapiLegacyGetAddrInfo("127.0.0.1", "8080", &legacy_hints, &legacy) == 0 && legacy);
     assert(legacy->ai_family == AF_INET && legacy->ai_socktype == SOCK_STREAM);
@@ -4310,7 +4417,8 @@ test_sockets(void)
     assert(((struct sockaddr_in *)legacy->ai_addr)->sin_addr.s_addr == htonl(INADDR_LOOPBACK));
     WspiapiLegacyFreeAddrInfo(legacy);
     legacy_hints.ai_flags = AI_NUMERICHOST;
-    assert(WspiapiLegacyGetAddrInfo("not-an-address", "80", &legacy_hints, &legacy) == EAI_NONAME && !legacy);
+    assert(WspiapiLegacyGetAddrInfo("not-an-address", "80", &legacy_hints, &legacy) == EAI_NONAME &&
+           !legacy);
     legacy_hints.ai_family = AF_INET6;
     assert(WspiapiLegacyGetAddrInfo("::1", "80", &legacy_hints, &legacy) == EAI_FAMILY && !legacy);
 #endif
@@ -4332,7 +4440,8 @@ test_sockets(void)
     assert(snag_socket_addresses("localhost", "80", &hints, &addresses) == 0 && addresses);
     for (struct addrinfo *item = addresses; item; item = item->ai_next) {
         if (item->ai_family == AF_INET)
-            assert(((struct sockaddr_in *)item->ai_addr)->sin_addr.s_addr == htonl(INADDR_LOOPBACK));
+            assert(
+                ((struct sockaddr_in *)item->ai_addr)->sin_addr.s_addr == htonl(INADDR_LOOPBACK));
         else {
             assert(item->ai_family == AF_INET6);
             assert(IN6_IS_ADDR_LOOPBACK(&((struct sockaddr_in6 *)item->ai_addr)->sin6_addr));
@@ -4359,7 +4468,8 @@ test_sockets(void)
     assert(snag_socket_bind(occupied, (struct sockaddr *)&address, sizeof(address)) < 0);
     assert(errno == EADDRINUSE || errno == EACCES);
     assert(snag_socket_close(occupied) == 0);
-    assert(snag_socket_accept(listener) == SNAG_SOCKET_INVALID && (errno == EAGAIN || errno == EWOULDBLOCK));
+    assert(snag_socket_accept(listener) == SNAG_SOCKET_INVALID &&
+           (errno == EAGAIN || errno == EWOULDBLOCK));
     snag_socket client = snag_socket_open(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     assert(client != SNAG_SOCKET_INVALID);
     int rc = snag_socket_connect(client, (struct sockaddr *)&address, sizeof(address));
@@ -4386,7 +4496,8 @@ test_sockets(void)
     }
     assert(!memcmp(bytes, received, sizeof(bytes)));
     snag_socket_event many[80];
-    for (size_t i = 0; i < 80u; ++i) many[i] = (snag_socket_event){SNAG_SOCKET_INVALID, SNAG_NET_READ, 0};
+    for (size_t i = 0; i < 80u; ++i)
+        many[i] = (snag_socket_event){SNAG_SOCKET_INVALID, SNAG_NET_READ, 0};
     many[79] = (snag_socket_event){client, SNAG_NET_WRITE, 0};
     assert(snag_socket_poll(many, 80u, 1000) == 1 && (many[79].revents & SNAG_NET_WRITE));
     assert(snag_socket_close(client) == 0);
@@ -4404,14 +4515,12 @@ test_regex(void)
         const char *pattern, *text;
         int flags;
         bool match;
-    } cases[] = {
-        {"^alpha", "Alpha beta", REG_ICASE, true}, {"^(ab|cd){2}$", "abcd", 0, true},
+    } cases[] = {{"^alpha", "Alpha beta", REG_ICASE, true}, {"^(ab|cd){2}$", "abcd", 0, true},
         {"^(ab|cd){2}$", "abcde", 0, false}, {"[[:digit:]]+", "value 42", 0, true},
         {"^.$", "\xc3\xa9", 0, true}, {"^.$", "\xf0\x9f\x98\x80", 0, true},
         {"^..$", "\xf0\x9f\x98\x80", 0, false}, {"^\xc3\x89$", "\xc3\xa9", REG_ICASE, true},
         {"^\xc3\xa9$", "\xc3\x89", REG_ICASE, true}, {"^\xce\xa9$", "\xcf\x89", REG_ICASE, true},
-        {"^[[:alpha:]]+$", "\xc3\xa9", 0, true}, {"^[[:alpha:]]+$", "\xf0\x9f\x98\x80", 0, false}
-    };
+        {"^[[:alpha:]]+$", "\xc3\xa9", 0, true}, {"^[[:alpha:]]+$", "\xf0\x9f\x98\x80", 0, false}};
 #if defined(_WIN32) || defined(SNAJPAGENT_STATIC_UTF8)
     /* The static engine is UTF-8 even when the legacy CRT is in the C locale. */
     assert(setlocale(LC_CTYPE, "C"));
@@ -4423,7 +4532,8 @@ test_regex(void)
         assert(regcomp(&regex, cases[i].pattern, REG_EXTENDED | REG_NOSUB | cases[i].flags) == 0);
         int rc = regexec(&regex, cases[i].text, 0, NULL, 0);
         if (rc != (cases[i].match ? 0 : REG_NOMATCH)) {
-            (void)fprintf(stderr, "regex case %zu: rc=%d expected match=%d\n", i, rc, cases[i].match);
+            (void)fprintf(
+                stderr, "regex case %zu: rc=%d expected match=%d\n", i, rc, cases[i].match);
             abort();
         }
         regfree(&regex);
@@ -4487,26 +4597,24 @@ test_irc_target_parse(void)
         const char *text, *body;
         enum snag_irc_target_command command;
         uint32_t id;
-    } cases[] = {
-        {"hello", "", SNAG_IRC_TARGET_NONE, 0u}, {"/", "", SNAG_IRC_TARGET_NONE, 0u},
-        {"//2 hi", "", SNAG_IRC_TARGET_NONE, 0u},
-        {"/topic x", "", SNAG_IRC_TARGET_NONE, 0u}, {"/alligator", "", SNAG_IRC_TARGET_NONE, 0u},
-        {"/1", "", SNAG_IRC_TARGET_SELECT, 1u}, {"/2 \t", "", SNAG_IRC_TARGET_SELECT, 2u},
-        {"/17 hi", "hi", SNAG_IRC_TARGET_SEND, 17u},
+    } cases[] = {{"hello", "", SNAG_IRC_TARGET_NONE, 0u}, {"/", "", SNAG_IRC_TARGET_NONE, 0u},
+        {"//2 hi", "", SNAG_IRC_TARGET_NONE, 0u}, {"/topic x", "", SNAG_IRC_TARGET_NONE, 0u},
+        {"/alligator", "", SNAG_IRC_TARGET_NONE, 0u}, {"/1", "", SNAG_IRC_TARGET_SELECT, 1u},
+        {"/2 \t", "", SNAG_IRC_TARGET_SELECT, 2u}, {"/17 hi", "hi", SNAG_IRC_TARGET_SEND, 17u},
         {"/02 café\nnext", "café\nnext", SNAG_IRC_TARGET_SEND, 2u},
         {"/2 /all literal", "/all literal", SNAG_IRC_TARGET_SEND, 2u},
         {"/all hi", "hi", SNAG_IRC_TARGET_ALL, 0u}, {"/all\nhi", "hi", SNAG_IRC_TARGET_ALL, 0u},
-        {"/4294967295 hi", "hi", SNAG_IRC_TARGET_SEND, UINT32_MAX}, {"/0", "", SNAG_IRC_TARGET_INVALID, 0u},
-        {"/2oops", "", SNAG_IRC_TARGET_INVALID, 0u}, {"/4294967296", "", SNAG_IRC_TARGET_INVALID, 0u},
+        {"/4294967295 hi", "hi", SNAG_IRC_TARGET_SEND, UINT32_MAX},
+        {"/0", "", SNAG_IRC_TARGET_INVALID, 0u}, {"/2oops", "", SNAG_IRC_TARGET_INVALID, 0u},
+        {"/4294967296", "", SNAG_IRC_TARGET_INVALID, 0u},
         {"/999999999999999999999", "", SNAG_IRC_TARGET_INVALID, 0u},
-        {"/all", "", SNAG_IRC_TARGET_INVALID, 0u}, {"/all \t", "", SNAG_IRC_TARGET_INVALID, 0u}
-    };
+        {"/all", "", SNAG_IRC_TARGET_INVALID, 0u}, {"/all \t", "", SNAG_IRC_TARGET_INVALID, 0u}};
 
     for (size_t i = 0u; i < sizeof(cases) / sizeof(cases[0]); ++i) {
         size_t body;
         uint32_t id;
-        enum snag_irc_target_command command = snag_irc_target_parse(
-            cases[i].text, strlen(cases[i].text), &id, &body);
+        enum snag_irc_target_command command =
+            snag_irc_target_parse(cases[i].text, strlen(cases[i].text), &id, &body);
         assert(command == cases[i].command);
         if (command > SNAG_IRC_TARGET_NONE) {
             assert(id == cases[i].id);
@@ -4554,13 +4662,15 @@ static void
 test_streaming_base64(void)
 {
     static const char *const raw[] = {"", "f", "fo", "foo", "foob", "fooba", "foobar"};
-    static const char *const expected[] = {"", "Zg==", "Zm8=", "Zm9v", "Zm9vYg==", "Zm9vYmE=", "Zm9vYmFy"};
-    for (size_t i = 0; i < sizeof(raw)/sizeof(raw[0]); ++i)
+    static const char *const expected[] = {
+        "", "Zg==", "Zm8=", "Zm9v", "Zm9vYg==", "Zm9vYmE=", "Zm9vYmFy"};
+    for (size_t i = 0; i < sizeof(raw) / sizeof(raw[0]); ++i)
         for (size_t split = 0; split <= strlen(raw[i]); ++split) {
             struct snag_base64_stream stream = {0};
             struct encoder_output out = {0};
             assert(snag_base64_write(&stream, raw[i], split, encoder_sink, &out) == 0);
-            assert(snag_base64_write(&stream, raw[i] + split, strlen(raw[i]) - split, encoder_sink, &out) == 0);
+            assert(snag_base64_write(
+                       &stream, raw[i] + split, strlen(raw[i]) - split, encoder_sink, &out) == 0);
             assert(snag_base64_finish(&stream, encoder_sink, &out) == 0);
             assert(out.len == strlen(expected[i]) && !memcmp(out.bytes, expected[i], out.len));
             size_t calls = out.calls;
@@ -4594,7 +4704,8 @@ test_streaming_base64(void)
         if (final) {
             assert(snag_base64_write(&stream, "f", 1u, encoder_sink, &out) == 0);
             assert(snag_base64_finish(&stream, encoder_sink, &out) < 0);
-        } else assert(snag_base64_write(&stream, "foo", 3u, encoder_sink, &out) < 0);
+        } else
+            assert(snag_base64_write(&stream, "foo", 3u, encoder_sink, &out) < 0);
         assert(stream.failed && out.calls == 1u);
         out.reject = false;
         assert(snag_base64_write(&stream, "foo", 3u, encoder_sink, &out) < 0);
@@ -4615,7 +4726,8 @@ test_pcm(void)
     assert(snag_pcm_read(&ring, out, 3u) == 3u && !memcmp(out, input, 6u));
     assert(snag_pcm_write(&ring, input + 8, 3u) == 3u);
     assert(snag_pcm_read(&ring, out, 8u) == 8u && !memcmp(out, input + 3, 16u));
-    atomic_store(&ring.read, UINT32_MAX - 3u); atomic_store(&ring.written, UINT32_MAX - 3u);
+    atomic_store(&ring.read, UINT32_MAX - 3u);
+    atomic_store(&ring.written, UINT32_MAX - 3u);
     assert(snag_pcm_write(&ring, input, 8u) == 8u);
     assert(snag_pcm_read(&ring, out, 8u) == 8u && !memcmp(out, input, 16u));
     assert(snag_pcm_write(&ring, input, 4u) == 4u);
@@ -4623,7 +4735,8 @@ test_pcm(void)
     assert(snag_pcm_write(&ring, input + 4u, 3u) == 3u);
     assert(snag_pcm_read(&ring, out, 8u) == 3u && !memcmp(out, input + 4u, 6u));
     /* An ancient flush must not become active after cursor half-wrap. */
-    atomic_store(&ring.read, 0x80000010u); atomic_store(&ring.written, 0x80000010u);
+    atomic_store(&ring.read, 0x80000010u);
+    atomic_store(&ring.written, 0x80000010u);
     assert(snag_pcm_write(&ring, input, 8u) == 8u);
     assert(snag_pcm_read(&ring, out, 8u) == 8u && !memcmp(out, input, 16u));
     assert(snag_pcm_write(&ring, input, 6u) == 6u);
@@ -4634,83 +4747,87 @@ test_pcm(void)
      * Storage stays fixed while the consumer adjusts its prefill target. */
     struct snag_pcm_playout p;
     int16_t storage[32], stream[64], played[64];
-    for(int i=0;i<64;++i)stream[i]=(int16_t)(i+1);
-    assert(snag_pcm_init(&ring,storage,32u)==0);
-    snag_pcm_playout_init(&p,2u);
-    assert(p.target==6u && p.maximum==20u);
-    for(unsigned i=0;i<8u;++i)assert(snag_pcm_playout_read(&p,&ring,played,2u)==0);
+    for (int i = 0; i < 64; ++i) stream[i] = (int16_t)(i + 1);
+    assert(snag_pcm_init(&ring, storage, 32u) == 0);
+    snag_pcm_playout_init(&p, 2u);
+    assert(p.target == 6u && p.maximum == 20u);
+    for (unsigned i = 0; i < 8u; ++i) assert(snag_pcm_playout_read(&p, &ring, played, 2u) == 0);
     assert(!atomic_load(&p.gaps) && !p.clean);
-    assert(snag_pcm_write(&ring,stream,2u)==2u);
-    assert(snag_pcm_playout_read(&p,&ring,played,2u)==0);
-    assert(snag_pcm_write(&ring,stream+2u,4u)==4u);
-    assert(snag_pcm_playout_read(&p,&ring,played,2u)==2u && !memcmp(played,stream,4u));
-    assert(snag_pcm_playout_read(&p,&ring,played,4u)==4u && !memcmp(played,stream+2u,8u));
-    for(unsigned i=0;i<8u;++i)assert(snag_pcm_playout_read(&p,&ring,played,2u)==0);
+    assert(snag_pcm_write(&ring, stream, 2u) == 2u);
+    assert(snag_pcm_playout_read(&p, &ring, played, 2u) == 0);
+    assert(snag_pcm_write(&ring, stream + 2u, 4u) == 4u);
+    assert(snag_pcm_playout_read(&p, &ring, played, 2u) == 2u && !memcmp(played, stream, 4u));
+    assert(snag_pcm_playout_read(&p, &ring, played, 4u) == 4u && !memcmp(played, stream + 2u, 8u));
+    for (unsigned i = 0; i < 8u; ++i) assert(snag_pcm_playout_read(&p, &ring, played, 2u) == 0);
     assert(!atomic_load(&p.gaps)); /* could still be delayed EOF */
-    assert(snag_pcm_write(&ring,stream+6u,2u)==2u);
-    assert(snag_pcm_playout_read(&p,&ring,played,2u)==0);
-    assert(p.target==8u && atomic_load(&p.gaps)==1u);
-    assert(snag_pcm_write(&ring,stream+8u,6u)==6u);
-    assert(snag_pcm_playout_read(&p,&ring,played,8u)==8u && !memcmp(played,stream+6u,16u));
-    snag_pcm_playout_end(&p,&ring);
-    assert(snag_pcm_playout_read(&p,&ring,played,2u)==0 && p.target==8u);
-    for(unsigned i=0;i<8u;++i) {
-        assert(snag_pcm_write(&ring,stream,1u)==1u);
-        snag_pcm_playout_end(&p,&ring); /* one-sample reply drains immediately */
-        assert(snag_pcm_playout_read(&p,&ring,played,2u)==1u && played[0]==stream[0]);
-        assert(snag_pcm_playout_read(&p,&ring,played,2u)==0);
+    assert(snag_pcm_write(&ring, stream + 6u, 2u) == 2u);
+    assert(snag_pcm_playout_read(&p, &ring, played, 2u) == 0);
+    assert(p.target == 8u && atomic_load(&p.gaps) == 1u);
+    assert(snag_pcm_write(&ring, stream + 8u, 6u) == 6u);
+    assert(snag_pcm_playout_read(&p, &ring, played, 8u) == 8u && !memcmp(played, stream + 6u, 16u));
+    snag_pcm_playout_end(&p, &ring);
+    assert(snag_pcm_playout_read(&p, &ring, played, 2u) == 0 && p.target == 8u);
+    for (unsigned i = 0; i < 8u; ++i) {
+        assert(snag_pcm_write(&ring, stream, 1u) == 1u);
+        snag_pcm_playout_end(&p, &ring); /* one-sample reply drains immediately */
+        assert(snag_pcm_playout_read(&p, &ring, played, 2u) == 1u && played[0] == stream[0]);
+        assert(snag_pcm_playout_read(&p, &ring, played, 2u) == 0);
     }
-    assert(p.target==6u && atomic_load(&p.gaps)==1u);
+    assert(p.target == 6u && atomic_load(&p.gaps) == 1u);
     /* Late EOF after an empty callback does not inflate the target. */
-    assert(snag_pcm_write(&ring,stream,6u)==6u);
-    assert(snag_pcm_playout_read(&p,&ring,played,6u)==6u);
-    assert(snag_pcm_playout_read(&p,&ring,played,2u)==0);
-    snag_pcm_playout_end(&p,&ring);
-    assert(snag_pcm_playout_read(&p,&ring,played,2u)==0 && atomic_load(&p.gaps)==1u);
+    assert(snag_pcm_write(&ring, stream, 6u) == 6u);
+    assert(snag_pcm_playout_read(&p, &ring, played, 6u) == 6u);
+    assert(snag_pcm_playout_read(&p, &ring, played, 2u) == 0);
+    snag_pcm_playout_end(&p, &ring);
+    assert(snag_pcm_playout_read(&p, &ring, played, 2u) == 0 && atomic_load(&p.gaps) == 1u);
     /* Cancel a prefill, then drain only the new generation's short reply. */
-    assert(snag_pcm_write(&ring,stream,2u)==2u);
-    assert(snag_pcm_playout_read(&p,&ring,played,2u)==0);
-    snag_pcm_flush(&ring);snag_pcm_playout_end(&p,&ring);
-    assert(snag_pcm_write(&ring,stream+20u,1u)==1u);
-    snag_pcm_playout_end(&p,&ring);
-    assert(snag_pcm_playout_read(&p,&ring,played,2u)==1u && played[0]==stream[20]);
-    assert(snag_pcm_playout_read(&p,&ring,played,2u)==0);
+    assert(snag_pcm_write(&ring, stream, 2u) == 2u);
+    assert(snag_pcm_playout_read(&p, &ring, played, 2u) == 0);
+    snag_pcm_flush(&ring);
+    snag_pcm_playout_end(&p, &ring);
+    assert(snag_pcm_write(&ring, stream + 20u, 1u) == 1u);
+    snag_pcm_playout_end(&p, &ring);
+    assert(snag_pcm_playout_read(&p, &ring, played, 2u) == 1u && played[0] == stream[20]);
+    assert(snag_pcm_playout_read(&p, &ring, played, 2u) == 0);
     /* Repeated real starvation stops growing at the delay budget. */
-    for(unsigned i=0;i<16u;++i) {
-        assert(snag_pcm_write(&ring,stream,20u)==20u);
-        assert(snag_pcm_playout_read(&p,&ring,played,21u)==20u);
-        assert(!memcmp(played,stream,40u));
+    for (unsigned i = 0; i < 16u; ++i) {
+        assert(snag_pcm_write(&ring, stream, 20u) == 20u);
+        assert(snag_pcm_playout_read(&p, &ring, played, 21u) == 20u);
+        assert(!memcmp(played, stream, 40u));
     }
-    assert(p.target==p.maximum && ring.capacity==32u && ring.samples==storage);
-    snag_pcm_playout_end(&p,&ring);
-    assert(snag_pcm_playout_read(&p,&ring,played,2u)==0);
+    assert(p.target == p.maximum && ring.capacity == 32u && ring.samples == storage);
+    snag_pcm_playout_end(&p, &ring);
+    assert(snag_pcm_playout_read(&p, &ring, played, 2u) == 0);
     /* A slow producer cannot hold a small prefix indefinitely. */
-    assert(snag_pcm_write(&ring,stream,1u)==1u);
-    for(unsigned i=0;i<10u;++i)assert(snag_pcm_playout_read(&p,&ring,played,2u)==0);
-    assert(snag_pcm_playout_read(&p,&ring,played,2u)==1u);
+    assert(snag_pcm_write(&ring, stream, 1u) == 1u);
+    for (unsigned i = 0; i < 10u; ++i) assert(snag_pcm_playout_read(&p, &ring, played, 2u) == 0);
+    assert(snag_pcm_playout_read(&p, &ring, played, 2u) == 1u);
 }
 
 static int
 run_base(int argc, char **argv)
 {
 #ifdef _WIN32
-    if(argc==3 && !strcmp(argv[1],"--direct-argv-limits")) {
-        JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits={0};
-        assert(QueryInformationJobObject(NULL,JobObjectExtendedLimitInformation,&limits,sizeof(limits),NULL));
-        DWORD flags=JOB_OBJECT_LIMIT_JOB_MEMORY|JOB_OBJECT_LIMIT_JOB_TIME;
-        assert((limits.BasicLimitInformation.LimitFlags&flags)==flags);
-        assert(limits.JobMemoryLimit==((SIZE_T)2u<<30));
-        assert(limits.BasicLimitInformation.PerJobUserTimeLimit.QuadPart==60ll*10000000ll);
+    if (argc == 3 && !strcmp(argv[1], "--direct-argv-limits")) {
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits = {0};
+        assert(QueryInformationJobObject(
+            NULL, JobObjectExtendedLimitInformation, &limits, sizeof(limits), NULL));
+        DWORD flags = JOB_OBJECT_LIMIT_JOB_MEMORY | JOB_OBJECT_LIMIT_JOB_TIME;
+        assert((limits.BasicLimitInformation.LimitFlags & flags) == flags);
+        assert(limits.JobMemoryLimit == ((SIZE_T)2u << 30));
+        assert(limits.BasicLimitInformation.PerJobUserTimeLimit.QuadPart == 60ll * 10000000ll);
 #if SNAJPAGENT_OFFICE
-        assert(_wputenv(L"SNAJPAGENT_OFFICE_SECRET=must disappear")==0);
+        assert(_wputenv(L"SNAJPAGENT_OFFICE_SECRET=must disappear") == 0);
         char error[256];
-        assert(snag_office_worker_limits(argv[2],error,sizeof(error))==0);
-        assert(!getenv("SNAJPAGENT_OFFICE_SECRET") && !snag_environment("SNAJPAGENT_OFFICE_SECRET"));
-        char *home=snag_environment("HOME"),*plugin=snag_environment("SAL_USE_VCLPLUGIN");
-        assert(home && !strcmp(home,argv[2]) && plugin && !strcmp(plugin,"svp"));
-        free(home);free(plugin);
-        assert(snag_office_confine(argv[2],argv[2],argv[2],error,sizeof(error))==1);
-        assert(strstr(error,"confinement unavailable") && !strstr(error,"syscalls denied"));
+        assert(snag_office_worker_limits(argv[2], error, sizeof(error)) == 0);
+        assert(
+            !getenv("SNAJPAGENT_OFFICE_SECRET") && !snag_environment("SNAJPAGENT_OFFICE_SECRET"));
+        char *home = snag_environment("HOME"), *plugin = snag_environment("SAL_USE_VCLPLUGIN");
+        assert(home && !strcmp(home, argv[2]) && plugin && !strcmp(plugin, "svp"));
+        free(home);
+        free(plugin);
+        assert(snag_office_confine(argv[2], argv[2], argv[2], error, sizeof(error)) == 1);
+        assert(strstr(error, "confinement unavailable") && !strstr(error, "syscalls denied"));
 #endif
         return 0;
     }
@@ -4735,12 +4852,12 @@ run_base(int argc, char **argv)
         HANDLE output = GetStdHandle(STD_OUTPUT_HANDLE);
         DWORD mode;
         assert(GetConsoleMode(output, &mode));
-        BOOL supported = SetConsoleMode(output, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING |
-                                         DISABLE_NEWLINE_AUTO_RETURN);
+        BOOL supported = SetConsoleMode(
+            output, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING | DISABLE_NEWLINE_AUTO_RETURN);
         DWORD error = supported ? ERROR_SUCCESS : GetLastError();
         if (supported) assert(SetConsoleMode(output, mode));
         (void)printf("console VT supported=%u error=%lu original-mode=%lu\n",
-                       (unsigned int)supported, (unsigned long)error, (unsigned long)mode);
+            (unsigned int)supported, (unsigned long)error, (unsigned long)mode);
         return 0;
     }
     if (argc == 3 && !strcmp(argv[1], "--broker-orphan"))
@@ -4750,12 +4867,14 @@ run_base(int argc, char **argv)
     if (argc == 3 && !strcmp(argv[1], "--input-orphan"))
         return broker_orphan_child(argv[2], false, true, false);
 #ifdef SNAG_LEGACY_PTY
-    if (argc == 3 && !strcmp(argv[1], "--pty-orphan")) return broker_orphan_child(argv[2], true, false, true);
+    if (argc == 3 && !strcmp(argv[1], "--pty-orphan"))
+        return broker_orphan_child(argv[2], true, false, true);
 #endif
     if (argc == 3 && !strcmp(argv[1], "--quote-probe")) {
         char *expected = snag_environment("SNAJPAGENT_QUOTE_EXPECT");
         if (!expected || strcmp(argv[2], expected + 1u)) {
-            (void)fprintf(stderr, "quote actual=[%s] expected=[%s]\n", argv[2], expected ? expected : "missing");
+            (void)fprintf(stderr, "quote actual=[%s] expected=[%s]\n", argv[2],
+                expected ? expected : "missing");
             return 1;
         }
         free(expected);
@@ -4772,8 +4891,8 @@ run_base(int argc, char **argv)
         STARTUPINFOW startup = {.cb = sizeof(startup)};
         PROCESS_INFORMATION child;
         /* Generated control events must never interrupt the parent shell. */
-        assert(CreateProcessW(program, command, NULL, NULL, FALSE, CREATE_NEW_PROCESS_GROUP,
-                               NULL, NULL, &startup, &child));
+        assert(CreateProcessW(program, command, NULL, NULL, FALSE, CREATE_NEW_PROCESS_GROUP, NULL,
+            NULL, &startup, &child));
         assert(CloseHandle(child.hThread));
         assert(WaitForSingleObject(child.hProcess, INFINITE) == WAIT_OBJECT_0);
         DWORD status;
@@ -4790,20 +4909,20 @@ run_base(int argc, char **argv)
     assert(u32_strlen(wide_text) == 2u && u32_strlen(wide_text + 2u) == 0u);
 #endif
     char formatted[48];
-    assert(snprintf(formatted, sizeof(formatted), "%zu/%td/%ju", (size_t)17,
-                    (ptrdiff_t)-3, (uintmax_t)4294967296ULL) == 16);
+    assert(snprintf(formatted, sizeof(formatted), "%zu/%td/%ju", (size_t)17, (ptrdiff_t)-3,
+               (uintmax_t)4294967296ULL) == 16);
     assert(strcmp(formatted, "17/-3/4294967296") == 0);
     FILE *format_file = test_tmpfile();
-    assert(format_file && fprintf(format_file, "%zu/%td/%ju", (size_t)17,
-           (ptrdiff_t)-3, (uintmax_t)4294967296ULL) == 16);
+    assert(format_file && fprintf(format_file, "%zu/%td/%ju", (size_t)17, (ptrdiff_t)-3,
+                              (uintmax_t)4294967296ULL) == 16);
     assert(fflush(format_file) == 0 && fseek(format_file, 0, SEEK_SET) == 0);
     memset(formatted, 0, sizeof(formatted));
     assert(fread(formatted, 1, sizeof(formatted), format_file) == 16);
     assert(strcmp(formatted, "17/-3/4294967296") == 0 && fclose(format_file) == 0);
     struct snag_buf format_buf;
     snag_buf_init(&format_buf, 64u);
-    assert(snag_buf_printf(&format_buf, "%zu/%td/%ju", (size_t)17,
-                          (ptrdiff_t)-3, (uintmax_t)4294967296ULL) == 0);
+    assert(snag_buf_printf(&format_buf, "%zu/%td/%ju", (size_t)17, (ptrdiff_t)-3,
+               (uintmax_t)4294967296ULL) == 0);
     assert(format_buf.len == 16 && !memcmp(format_buf.data, formatted, 16));
     snag_buf_free(&format_buf);
     char failure[8];
@@ -4899,13 +5018,14 @@ run_base(int argc, char **argv)
     snag_buf_free(&buf);
     {
         uint64_t count;
-        const char *const invalid[] = {"", "  ", "-1", "+2", "1.5", "2 3", "#2",
-            "999999999999999999999999999999x"};
+        const char *const invalid[] = {
+            "", "  ", "-1", "+2", "1.5", "2 3", "#2", "999999999999999999999999999999x"};
         assert(snag_parse_count("0", &count) == 0 && count == 0u);
         assert(snag_parse_count("  00101\t", &count) == 0 && count == 101u);
         assert(snag_parse_count("4294967296", &count) == 0 && count == UINT64_C(4294967296));
         assert(snag_parse_count("18446744073709551615", &count) == 0 && count == UINT64_MAX);
-        assert(snag_parse_count("999999999999999999999999999999", &count) == 0 && count == UINT64_MAX);
+        assert(
+            snag_parse_count("999999999999999999999999999999", &count) == 0 && count == UINT64_MAX);
         for (size_t i = 0u; i < sizeof(invalid) / sizeof(invalid[0]); ++i)
             assert(snag_parse_count(invalid[i], &count) < 0);
     }
@@ -4964,13 +5084,20 @@ test_rate_math(void)
     assert(snag_rate_microtokens_per_second(UINT64_MAX, 1u) == UINT64_MAX);
     {
         char out[24];
-        snag_format_count(out, sizeof(out), 0u); assert(!strcmp(out, "0"));
-        snag_format_count(out, sizeof(out), 999u); assert(!strcmp(out, "999"));
-        snag_format_count(out, sizeof(out), 1000u); assert(!strcmp(out, "1.0k"));
-        snag_format_count(out, sizeof(out), 15104u); assert(!strcmp(out, "15.1k"));
-        snag_format_count(out, sizeof(out), 807384372u); assert(!strcmp(out, "807.4M"));
-        snag_format_count(out, sizeof(out), 1500000000u); assert(!strcmp(out, "1.5G"));
-        snag_format_count(out, sizeof(out), 4823276u); assert(!strcmp(out, "4.8M"));
+        snag_format_count(out, sizeof(out), 0u);
+        assert(!strcmp(out, "0"));
+        snag_format_count(out, sizeof(out), 999u);
+        assert(!strcmp(out, "999"));
+        snag_format_count(out, sizeof(out), 1000u);
+        assert(!strcmp(out, "1.0k"));
+        snag_format_count(out, sizeof(out), 15104u);
+        assert(!strcmp(out, "15.1k"));
+        snag_format_count(out, sizeof(out), 807384372u);
+        assert(!strcmp(out, "807.4M"));
+        snag_format_count(out, sizeof(out), 1500000000u);
+        assert(!strcmp(out, "1.5G"));
+        snag_format_count(out, sizeof(out), 4823276u);
+        assert(!strcmp(out, "4.8M"));
     }
 }
 

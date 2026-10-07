@@ -39,12 +39,13 @@ snag_irc_address_parse(struct snag_irc_address *out, const char *text,
         return snag_fail(error, size, EINVAL, "invalid address form");
     const char *parts[3] = {text};
     size_t lengths[3] = {0}, count = 1u;
-    for (const char *at = text; ; ++at) {
+    for (const char *at = text;; ++at) {
         if (*at != '/' && *at) continue;
         lengths[count - 1u] = (size_t)(at - parts[count - 1u]);
         if (!*at) break;
-        if (count == 3u) return snag_fail(error, size, EINVAL,
-            "address has too many components; escape literal slash as %%2F");
+        if (count == 3u)
+            return snag_fail(error, size, EINVAL,
+                "address has too many components; escape literal slash as %%2F");
         parts[count++] = at + 1u;
     }
     if (form == SNAG_IRC_BUFFER_ADDRESS && count == 2u)
@@ -59,11 +60,12 @@ snag_irc_address_parse(struct snag_irc_address *out, const char *text,
             decode(address.session, sizeof(address.session), parts[0], lengths[0], error, size) < 0)
             return -1;
         if (count >= 2u && decode(address.endpoint, sizeof(address.endpoint), parts[count - 2u],
-            lengths[count - 2u], error, size) < 0) return -1;
+                               lengths[count - 2u], error, size) < 0)
+            return -1;
         if (form == SNAG_IRC_BUFFER_ADDRESS && !lengths[count - 1u]) {
             address.kind = SNAG_IRC_CONNECTION;
         } else if (decode(address.target, sizeof(address.target), parts[count - 1u],
-            lengths[count - 1u], error, size) < 0) {
+                       lengths[count - 1u], error, size) < 0) {
             return -1;
         }
     }
@@ -88,10 +90,13 @@ char *
 snag_irc_address_format(const struct snag_irc_address *address)
 {
     struct snag_buf out = {.max = 3u * sizeof(*address)};
-    if (address->session[0] && (encode(&out, address->session) < 0 ||
-        (address->kind != SNAG_IRC_TRANSCRIPT && snag_buf_putc(&out, '/') < 0))) goto failed;
-    if (address->endpoint[0] && (encode(&out, address->endpoint) < 0 ||
-        snag_buf_putc(&out, '/') < 0)) goto failed;
+    if (address->session[0] &&
+        (encode(&out, address->session) < 0 ||
+            (address->kind != SNAG_IRC_TRANSCRIPT && snag_buf_putc(&out, '/') < 0)))
+        goto failed;
+    if (address->endpoint[0] &&
+        (encode(&out, address->endpoint) < 0 || snag_buf_putc(&out, '/') < 0))
+        goto failed;
     if (address->kind == SNAG_IRC_CONVERSATION && encode(&out, address->target) < 0) goto failed;
     if (snag_buf_terminate(&out) < 0) goto failed;
     return (char *)out.data;
@@ -101,7 +106,8 @@ failed:
 }
 
 int
-snag_irc_address_operand(const char *input, char **operand, const char **rest, char *error, size_t size)
+snag_irc_address_operand(
+    const char *input, char **operand, const char **rest, char *error, size_t size)
 {
     *operand = NULL;
     *rest = input;
@@ -133,6 +139,6 @@ snag_irc_address_operand(const char *input, char **operand, const char **rest, c
     return 0;
 invalid:
     snag_buf_free(&out);
-    return snag_fail(error, size, EINVAL,
-        "address operand is missing, oversized or has unfinished quoting");
+    return snag_fail(
+        error, size, EINVAL, "address operand is missing, oversized or has unfinished quoting");
 }

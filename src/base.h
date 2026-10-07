@@ -95,23 +95,21 @@ struct snag_terminal_profile {
 int snag_terminal_profile_capture(struct snag_terminal_profile *);
 bool snag_terminal_profile_ansi(const struct snag_terminal_profile *);
 int snag_editor_run(const char *path, bool *success, void (*service)(void *),
-                int (*suspend)(void *), void *opaque,
-                const struct snag_terminal_profile *profile);
+    int (*suspend)(void *), void *opaque, const struct snag_terminal_profile *profile);
 const char *snag_default_pager(void);
 /* Show text through an external pager command; *shown reports that it ran. */
 int snag_pager_show(const char *command, const char *text, size_t length, bool *shown,
-                    void (*service)(void *), int (*suspend)(void *), void *opaque,
-                    const struct snag_terminal_profile *profile);
+    void (*service)(void *), int (*suspend)(void *), void *opaque,
+    const struct snag_terminal_profile *profile);
 /* Pass an existing file to the same pager command without copying its contents. */
-int snag_pager_file(const char *command, const char *path, bool *shown,
-                    void (*service)(void *), int (*suspend)(void *), void *opaque,
-                    const struct snag_terminal_profile *profile);
+int snag_pager_file(const char *command, const char *path, bool *shown, void (*service)(void *),
+    int (*suspend)(void *), void *opaque, const struct snag_terminal_profile *profile);
 /* An external pager owns the terminal while its caller continues normal work.
  * Poll returns 0 while running, 1 on exit, or -1 on failure. Close reaps the
  * child, restores terminal ownership and removes any private report file. */
 struct snag_pager;
-struct snag_pager *snag_pager_start(const char *, const char *, const char *, size_t,
-    const struct snag_terminal_profile *);
+struct snag_pager *snag_pager_start(
+    const char *, const char *, const char *, size_t, const struct snag_terminal_profile *);
 int snag_pager_poll(struct snag_pager *, bool *, int (*)(void *), void *);
 void snag_pager_close(struct snag_pager *);
 int snag_hostname(char *out, size_t size);
@@ -140,9 +138,14 @@ unsigned char snag_irc_fold(unsigned char c);
 bool snag_irc_nick_char(unsigned char c);
 bool snag_irc_nick_mentioned(const char *text, const char *nick);
 enum snag_irc_target_command {
-    SNAG_IRC_TARGET_INVALID = -1, SNAG_IRC_TARGET_NONE,
-    SNAG_IRC_TARGET_SELECT, SNAG_IRC_TARGET_SEND, SNAG_IRC_TARGET_ALL };
-enum snag_irc_target_command snag_irc_target_parse(const char *text, size_t len, uint32_t *id, size_t *body);
+    SNAG_IRC_TARGET_INVALID = -1,
+    SNAG_IRC_TARGET_NONE,
+    SNAG_IRC_TARGET_SELECT,
+    SNAG_IRC_TARGET_SEND,
+    SNAG_IRC_TARGET_ALL
+};
+enum snag_irc_target_command snag_irc_target_parse(
+    const char *text, size_t len, uint32_t *id, size_t *body);
 int snag_random_id(char out[SNAG_ID_HEX_LEN + 1u]);
 int snag_random_bytes(unsigned char *out, size_t len);
 uint64_t snag_time_ms(void);
@@ -188,8 +191,7 @@ void snag_sha256_init(struct snag_sha256 *ctx);
 void snag_sha256_update(struct snag_sha256 *ctx, const void *data, size_t len);
 void snag_sha256_final(struct snag_sha256 *ctx, unsigned char out[32]);
 void snag_sha256_final_hex(struct snag_sha256 *ctx, char out[SNAG_SHA256_HEX_LEN + 1u]);
-void snag_sha256_hex(const void *data, size_t len,
-                    char out[SNAG_SHA256_HEX_LEN + 1u]);
+void snag_sha256_hex(const void *data, size_t len, char out[SNAG_SHA256_HEX_LEN + 1u]);
 bool snag_hex_is_lower(const char *s, size_t len);
 int snag_base64_append(struct snag_buf *out, const unsigned char *data, size_t len);
 int snag_base64_decode(struct snag_buf *out, const char *text);

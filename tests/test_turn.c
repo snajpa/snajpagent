@@ -21,25 +21,26 @@ cancel_read(void *opaque, unsigned int timeout)
 }
 
 static void
-check_native_read(const char *workspace, const char *name, const char *arguments,
-                  bool success, const char *expected, snag_tool_pump_fn pump)
+check_native_read(const char *workspace, const char *name, const char *arguments, bool success,
+    const char *expected, snag_tool_pump_fn pump)
 {
     struct snag_response_item call = {.kind = SNAG_ITEM_TOOL_CALL, .name = (char *)name};
     json_t *result = NULL;
     char error[128];
 
-    call.arguments = snag_json_load_strict((const unsigned char *)arguments,
-                                          strlen(arguments), 8192u, error, sizeof(error));
+    call.arguments = snag_json_load_strict(
+        (const unsigned char *)arguments, strlen(arguments), 8192u, error, sizeof(error));
     assert(call.arguments);
     assert(snag_tools_read_only(&call, workspace, pump, NULL, &result) == (pump ? 2 : 0));
     assert(snag_tool_result_valid(result) == 0);
     if (strcmp(snag_json_string(result, "status"), success ? "succeeded" : "failed")) {
-        (void)fprintf(stderr, "%s status=%s output=%s\n", name,
-                       snag_json_string(result, "status"), snag_json_string(result, "model_text"));
+        (void)fprintf(stderr, "%s status=%s output=%s\n", name, snag_json_string(result, "status"),
+            snag_json_string(result, "model_text"));
         abort();
     }
     if (!strstr(snag_json_string(result, "model_text"), expected)) {
-        (void)fprintf(stderr, "%s unexpected output: %s\n", name, snag_json_string(result, "model_text"));
+        (void)fprintf(
+            stderr, "%s unexpected output: %s\n", name, snag_json_string(result, "model_text"));
         abort();
     }
     json_decref(result);
@@ -80,26 +81,35 @@ test_native_read_results(void)
     free(path);
     int dir = snag_open_read(root, true);
     int file = snag_create_private_at(dir, "text", true);
-    const char text[] = "Alpha\n\xce\xb2" "eta\n\xf0\x9f\x98\x80\n";
+    const char text[] = "Alpha\n\xce\xb2"
+                        "eta\n\xf0\x9f\x98\x80\n";
     assert(root && dir >= 0 && file >= 0);
     assert(snag_write_full(file, text, sizeof(text) - 1u) == 0 && close(file) == 0);
-    check_native_read(root, "read_file", "{\"path\":\"text\",\"start_line\":null,\"end_line\":null}",
-        true, "1:Alpha\n2:\xce\xb2" "eta\n3:\xf0\x9f\x98\x80\n", NULL);
+    check_native_read(root, "read_file",
+        "{\"path\":\"text\",\"start_line\":null,\"end_line\":null}", true,
+        "1:Alpha\n2:\xce\xb2"
+        "eta\n3:\xf0\x9f\x98\x80\n",
+        NULL);
     check_native_read(root, "read_file", "{\"path\":\"text\",\"start_line\":2,\"end_line\":2}",
-        true, "2:\xce\xb2" "eta\n", NULL);
+        true,
+        "2:\xce\xb2"
+        "eta\n",
+        NULL);
     assert(snag_mkdir_private_at(dir, "sub") == 0);
-    check_native_read(root, "read_file", "{\"path\":\"./sub/../text\",\"start_line\":1,\"end_line\":1}",
-        true, "1:Alpha\n", NULL);
-    check_native_read(root, "read_file", "{\"path\":\"text/.\",\"start_line\":null,\"end_line\":null}",
-        false, "Cannot open", NULL);
+    check_native_read(root, "read_file",
+        "{\"path\":\"./sub/../text\",\"start_line\":1,\"end_line\":1}", true, "1:Alpha\n", NULL);
+    check_native_read(root, "read_file",
+        "{\"path\":\"text/.\",\"start_line\":null,\"end_line\":null}", false, "Cannot open", NULL);
     assert(snag_unlink_at(dir, "sub", true) == 0);
-    check_native_read(root, "list_files", "{\"path\":\".\",\"recursive\":true,\"offset\":null,\"limit\":null}",
-        true, "./text\tfile", NULL);
+    check_native_read(root, "list_files",
+        "{\"path\":\".\",\"recursive\":true,\"offset\":null,\"limit\":null}", true, "./text\tfile",
+        NULL);
     char *root_path = snag_strdup_checked(root, SNAG_PATH_MAX_BYTES);
     assert(root_path);
     root_path[snag_path_root_len(root_path)] = '\0';
     char *above = snag_path_join(root_path, "../..");
-    json_t *listing = json_pack("{s:s,s:b,s:n,s:i}", "path", above, "recursive", 0, "offset", "limit", 1);
+    json_t *listing =
+        json_pack("{s:s,s:b,s:n,s:i}", "path", above, "recursive", 0, "offset", "limit", 1);
     struct snag_buf listing_text = {.max = 8192u};
     assert(above && listing && snag_json_canonical(listing, &listing_text) == 0 &&
            snag_buf_terminate(&listing_text) == 0);
@@ -108,18 +118,24 @@ test_native_read_results(void)
     json_decref(listing);
     free(above);
     free(root_path);
-    check_native_read(root, "grep", "{\"path\":\".\",\"pattern\":\"^.$\",\"recursive\":true,\"ignore_case\":false,\"literal\":false,\"offset\":null,\"limit\":null}",
+    check_native_read(root, "grep",
+        "{\"path\":\".\",\"pattern\":\"^.$\",\"recursive\":true,\"ignore_case\":false,\"literal\":"
+        "false,\"offset\":null,\"limit\":null}",
         true, "./text:3:\xf0\x9f\x98\x80", NULL);
-    check_native_read(root, "grep", "{\"path\":\"text\",\"pattern\":\"[\",\"recursive\":false,\"ignore_case\":false,\"literal\":false,\"offset\":null,\"limit\":null}",
+    check_native_read(root, "grep",
+        "{\"path\":\"text\",\"pattern\":\"[\",\"recursive\":false,\"ignore_case\":false,"
+        "\"literal\":false,\"offset\":null,\"limit\":null}",
         false, "", NULL);
-    check_native_read(root, "read_file", "{\"path\":\"text\",\"start_line\":null,\"end_line\":null}",
-        false, "interrupted", cancel_read);
+    check_native_read(root, "read_file",
+        "{\"path\":\"text\",\"start_line\":null,\"end_line\":null}", false, "interrupted",
+        cancel_read);
     file = snag_create_private_at(dir, "a ; echo nope", true);
     const char cancelled_text[] = "Alpha\nβeta\nlast";
     assert(file >= 0 && snag_write_full(file, cancelled_text, sizeof(cancelled_text) - 1u) == 0);
     assert(close(file) == 0);
-    check_native_read(root, "read_file", "{\"path\":\"a ; echo nope\",\"start_line\":null,\"end_line\":null}",
-        false, "interrupted", cancel_read);
+    check_native_read(root, "read_file",
+        "{\"path\":\"a ; echo nope\",\"start_line\":null,\"end_line\":null}", false, "interrupted",
+        cancel_read);
     assert(snag_unlink_at(dir, "a ; echo nope", false) == 0);
     assert(snag_unlink_at(dir, "text", false) == 0 && close(dir) == 0);
     assert(snag_unlink_at(-1, root, true) == 0);
@@ -160,17 +176,14 @@ slow_then_cancel_pump(void *opaque, unsigned int timeout_ms)
 }
 
 static json_t *
-run_grep_pump(const char *workspace, const char *arguments,
-              snag_tool_pump_fn pump, int *status)
+run_grep_pump(const char *workspace, const char *arguments, snag_tool_pump_fn pump, int *status)
 {
-    struct snag_response_item call = {
-        .kind = SNAG_ITEM_TOOL_CALL, .name = (char *)"grep"};
+    struct snag_response_item call = {.kind = SNAG_ITEM_TOOL_CALL, .name = (char *)"grep"};
     json_t *result = NULL;
     char error[128];
 
-    call.arguments = snag_json_load_strict((const unsigned char *)arguments,
-                                           strlen(arguments), 8192u,
-                                           error, sizeof(error));
+    call.arguments = snag_json_load_strict(
+        (const unsigned char *)arguments, strlen(arguments), 8192u, error, sizeof(error));
     assert(call.arguments);
     *status = snag_tools_read_only(&call, workspace, pump, NULL, &result);
     assert(snag_tool_result_valid(result) == 0);
@@ -207,8 +220,7 @@ test_read_pump_cadence(void)
     assert(root && dir >= 0 && file >= 0);
     out = fdopen(file, "w");
     assert(out);
-    for (unsigned int i = 0u; i < lines; ++i)
-        assert(fprintf(out, "line %u\n", i) > 0);
+    for (unsigned int i = 0u; i < lines; ++i) assert(fprintf(out, "line %u\n", i) > 0);
     assert(fclose(out) == 0);
 
     /* The first checkpoint pumps before any line is scanned, so a cancel
@@ -226,8 +238,7 @@ test_read_pump_cadence(void)
     result = run_grep_pump(root, arguments, counting_pump, &status);
     elapsed = snag_monotonic_ms() - started;
     assert(status == 0);
-    assert(strstr(snag_json_string(result, "model_text"),
-                  "many.txt:8000:line 7999"));
+    assert(strstr(snag_json_string(result, "model_text"), "many.txt:8000:line 7999"));
     assert(strstr(snag_json_string(result, "model_text"), "Complete;"));
     assert(cadence_pump_calls >= 1u);
     assert(cadence_pump_calls <= lines / 16u + 8u);
@@ -259,14 +270,15 @@ main(void)
     char *large;
 
     struct snag_response_graph graph = {0};
-    assert(snag_response_graph_add_call(&graph, "item_web", "call_web", "web_search", json_object()) < 0);
-    assert(snag_response_graph_add_call(&graph, "item_web", "call_web",
-                                       "openrouter:web_search", json_object()) < 0);
+    assert(snag_response_graph_add_call(
+               &graph, "item_web", "call_web", "web_search", json_object()) < 0);
+    assert(snag_response_graph_add_call(
+               &graph, "item_web", "call_web", "openrouter:web_search", json_object()) < 0);
     assert(graph.count == 0u);
     assert(snag_response_graph_set_provider_id(&graph, "bad\nresponse") < 0);
     assert(snag_response_graph_set_provider_id(&graph, "resp_final") == 0);
-    assert(snag_response_graph_add_public(&graph, SNAG_ITEM_ASSISTANT, SNAG_PHASE_FINAL_ANSWER,
-                                         "msg_final", "pong") == 0);
+    assert(snag_response_graph_add_public(
+               &graph, SNAG_ITEM_ASSISTANT, SNAG_PHASE_FINAL_ANSWER, "msg_final", "pong") == 0);
     assert(snag_response_graph_classify(&graph, &decision, error, sizeof(error)) == 0);
     assert(decision.outcome == SNAG_GRAPH_FINAL);
     assert(decision.final_index == 0u);
@@ -287,11 +299,10 @@ main(void)
     snag_response_graph_free(&graph);
     assert(snag_response_graph_set_provider_id(&graph, "resp_calls") == 0);
     assert(snag_response_graph_add_public(&graph, SNAG_ITEM_ASSISTANT, SNAG_PHASE_COMMENTARY,
-                                         "msg_commentary", "checking") == 0);
-    assert(snag_response_graph_add_call(&graph, "item_call", "provider_call",
-                                       "exec_command", checked_json(json_pack("{s:s,s:b,s:n,s:i,s:s,s:i}",
-        "command", "true", "pty", 0, "stdin", "timeout_ms", 1000, "workdir", "/tmp",
-        "yield_ms", 1000))) == 0);
+               "msg_commentary", "checking") == 0);
+    assert(snag_response_graph_add_call(&graph, "item_call", "provider_call", "exec_command",
+               checked_json(json_pack("{s:s,s:b,s:n,s:i,s:s,s:i}", "command", "true", "pty", 0,
+                   "stdin", "timeout_ms", 1000, "workdir", "/tmp", "yield_ms", 1000))) == 0);
     assert(snag_response_graph_classify(&graph, &decision, error, sizeof(error)) == 0);
     assert(decision.outcome == SNAG_GRAPH_CALLS);
     assert(decision.call_count == 1u);
@@ -318,9 +329,10 @@ main(void)
         assert(snag_json_canonical(roundtrip, &b) == 0);
         assert(a.len == b.len && memcmp(a.data, b.data, a.len) == 0);
         assert(graph.encoded_bytes == a.len && copy.encoded_bytes == b.len);
-        assert(json_object_set_new(json_object_get(json_array_get(roundtrip, 1u),
-            "arguments"), "command", json_string("changed")) == 0);
-        assert(json_equal(snag_response_graph_item(&copy, 1).arguments, snag_response_graph_item(&graph, 1).arguments));
+        assert(json_object_set_new(json_object_get(json_array_get(roundtrip, 1u), "arguments"),
+                   "command", json_string("changed")) == 0);
+        assert(json_equal(snag_response_graph_item(&copy, 1).arguments,
+            snag_response_graph_item(&graph, 1).arguments));
         assert(!json_equal(roundtrip, encoded));
         snag_buf_free(&a);
         snag_buf_free(&b);
@@ -332,15 +344,15 @@ main(void)
     assert(snag_tool_action_digest(&call, "/tmp", action_a) == 0);
     assert(snag_tool_action_digest(&call, "/var/tmp", action_b) == 0);
     assert(strcmp(action_a, action_b) != 0);
-    assert(snag_response_graph_add_public(&graph, SNAG_ITEM_ASSISTANT, SNAG_PHASE_FINAL_ANSWER,
-                                         "msg_conflict", "done") == 0);
+    assert(snag_response_graph_add_public(
+               &graph, SNAG_ITEM_ASSISTANT, SNAG_PHASE_FINAL_ANSWER, "msg_conflict", "done") == 0);
     assert(snag_response_graph_classify(&graph, &decision, error, sizeof(error)) == 0);
     assert(decision.outcome == SNAG_GRAPH_CONFLICT);
     snag_response_graph_free(&graph);
     assert(snag_response_graph_set_provider_id(&graph, "resp_irc") == 0);
     {
         static const char *const names[] = {
-            "irc_send", "irc_state", "irc_topic", "irc_nick", "irc_sleep", "irc_compact" };
+            "irc_send", "irc_state", "irc_topic", "irc_nick", "irc_sleep", "irc_compact"};
 
         for (size_t i = 0u; i < sizeof(names) / sizeof(names[0]); ++i) {
             json_t *arguments = json_object();
@@ -378,21 +390,22 @@ main(void)
     large[SNAG_MAX_PUBLIC_ITEM] = '\0';
     graph = (struct snag_response_graph){0};
     assert(snag_response_graph_set_provider_id(&graph, "resp_large") == 0);
-    assert(snag_response_graph_add_public(&graph, SNAG_ITEM_ASSISTANT, SNAG_PHASE_COMMENTARY,
-                                         "msg_large_1", large) == 0);
-    assert(snag_response_graph_add_public(&graph, SNAG_ITEM_ASSISTANT, SNAG_PHASE_COMMENTARY,
-                                         "msg_large_2", large) == 0);
-    assert(snag_response_graph_add_public(&graph, SNAG_ITEM_ASSISTANT, SNAG_PHASE_COMMENTARY,
-                                         "msg_large_3", large) == 0);
-    assert(snag_response_graph_add_public(&graph, SNAG_ITEM_ASSISTANT, SNAG_PHASE_COMMENTARY,
-                                         "msg_large_4", large) < 0);
+    assert(snag_response_graph_add_public(
+               &graph, SNAG_ITEM_ASSISTANT, SNAG_PHASE_COMMENTARY, "msg_large_1", large) == 0);
+    assert(snag_response_graph_add_public(
+               &graph, SNAG_ITEM_ASSISTANT, SNAG_PHASE_COMMENTARY, "msg_large_2", large) == 0);
+    assert(snag_response_graph_add_public(
+               &graph, SNAG_ITEM_ASSISTANT, SNAG_PHASE_COMMENTARY, "msg_large_3", large) == 0);
+    assert(snag_response_graph_add_public(
+               &graph, SNAG_ITEM_ASSISTANT, SNAG_PHASE_COMMENTARY, "msg_large_4", large) < 0);
     assert(graph.count == 3u);
     snag_response_graph_free(&graph);
     free(large);
 
     const char *rejections[] = {"process_limit", "process_busy", "stdin_busy", "stdin_closed",
         "managed_process_handle_mismatch", "managed_process_conflict", "invalid_arguments",
-        "read_only", "recovery_unstarted", "batch_yield", "superseded_by_steering", "turn_cancelled"};
+        "read_only", "recovery_unstarted", "batch_yield", "superseded_by_steering",
+        "turn_cancelled"};
     for (size_t i = 0u; i < sizeof(rejections) / sizeof(rejections[0]); ++i) {
         result = snag_tool_result_not_run(rejections[i]);
         assert(result && snag_tool_result_valid(result) == 0);
@@ -420,9 +433,14 @@ main(void)
     json_decref(result);
 
     {
-        struct snag_response_usage usage = {
-            .input_tokens = 10u, .output_tokens = 4u, .reasoning_tokens = 3u, .total_tokens = 14u,
-            .input_known = true, .output_known = true, .reasoning_known = true, .total_known = true };
+        struct snag_response_usage usage = {.input_tokens = 10u,
+            .output_tokens = 4u,
+            .reasoning_tokens = 3u,
+            .total_tokens = 14u,
+            .input_known = true,
+            .output_known = true,
+            .reasoning_known = true,
+            .total_known = true};
         struct snag_response_usage parsed;
         json_t *usage_json = snag_response_usage_json(&usage);
         assert(usage_json);
@@ -447,7 +465,7 @@ main(void)
             (void)snprintf(item, sizeof(item), "item_wide_%zu", i);
             (void)snprintf(call, sizeof(call), "call_wide_%zu", i);
             assert(snag_response_graph_add_call(&wide, item, call, "read_file",
-                                               checked_json(json_pack("{s:s}", "path", "probe.txt"))) == 0);
+                       checked_json(json_pack("{s:s}", "path", "probe.txt"))) == 0);
         }
         assert(snag_response_graph_classify(&wide, &decision, error, sizeof(error)) == 0);
         assert(decision.outcome == SNAG_GRAPH_CALLS && decision.call_count == 120u);

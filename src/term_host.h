@@ -18,7 +18,9 @@ void snag_term_output_bind(struct snag_term *term);
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
-struct snag_signal_mask { unsigned char unused; };
+struct snag_signal_mask {
+    unsigned char unused;
+};
 struct snag_shutdown {
     HANDLE done;
     void (*handler)(int);
@@ -63,7 +65,9 @@ struct snag_term_host {
 #include <signal.h>
 #include <termios.h>
 
-struct snag_signal_mask { sigset_t native; };
+struct snag_signal_mask {
+    sigset_t native;
+};
 struct snag_shutdown {
     int numbers[3];
     struct sigaction saved[3];
@@ -88,7 +92,8 @@ void snag_shutdown_detach(struct snag_shutdown *saved);
 void snag_shutdown_finish(struct snag_shutdown *saved);
 int snag_term_signals_restore(const struct snag_signal_mask *saved);
 int snag_term_signals_unblock(void);
-int snag_term_controls_install(struct snag_term_host *host, void (*interrupt)(int), void (*resize)(int));
+int snag_term_controls_install(
+    struct snag_term_host *host, void (*interrupt)(int), void (*resize)(int));
 void snag_term_controls_restore(struct snag_term_host *host);
 bool snag_term_host_capable(void);
 unsigned int snag_term_host_columns(void);
@@ -104,15 +109,12 @@ ssize_t snag_term_input_read(struct snag_term_host *host, void *buffer, size_t s
  * input lets the presentation owner keep the existing editor/poll path. */
 ssize_t snag_term_input_native_read(struct snag_term_host *host, void *buffer, size_t size);
 bool snag_term_input_resized(struct snag_term_host *host);
-enum {
-    SNAG_TERM_WAIT_INPUT = 1, SNAG_TERM_WAIT_WAKE = 2, SNAG_TERM_WAIT_END = 4 };
+enum { SNAG_TERM_WAIT_INPUT = 1, SNAG_TERM_WAIT_WAKE = 2, SNAG_TERM_WAIT_END = 4 };
 /* Bitmask above, zero timeout, or -1 error; wake-only does not consume input. */
 int snag_term_input_wait(struct snag_term_host *host, snag_wake_fd wake, int timeout_ms);
 int snag_term_input_native_wait(struct snag_term_host *host, snag_wake_fd wake, int timeout_ms);
-void snag_term_input_redirect(struct snag_term_host *host,
-                              int (*status)(void *),
-                              ssize_t (*read_input)(void *, void *, size_t),
-                              void *opaque);
+void snag_term_input_redirect(struct snag_term_host *host, int (*status)(void *),
+    ssize_t (*read_input)(void *, void *, size_t), void *opaque);
 int snag_term_output_open(struct snag_term_host *host, int fd);
 #ifndef _WIN32
 /* Reopen the same terminal with independent status flags, nonblocking and
@@ -120,8 +122,8 @@ int snag_term_output_open(struct snag_term_host *host, int fd);
 int snag_term_reopen(int fd, int access);
 #endif
 int snag_term_output_mode(struct snag_term_host *host, bool active);
-int snag_term_output_write(struct snag_term_host *host, int fd, const void *text, size_t len, bool input,
-                           int (*checkpoint)(void *), void *opaque);
+int snag_term_output_write(struct snag_term_host *host, int fd, const void *text, size_t len,
+    bool input, int (*checkpoint)(void *), void *opaque);
 void snag_term_host_close(struct snag_term_host *host);
 bool snag_term_can_suspend(void);
 int snag_term_suspend(void);

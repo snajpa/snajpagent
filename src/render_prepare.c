@@ -7,8 +7,8 @@
 #include <string.h>
 
 static int
-preview(struct snag_buf *out, const char *text, size_t len, size_t characters,
-        size_t cells, bool single_line, bool *truncated)
+preview(struct snag_buf *out, const char *text, size_t len, size_t characters, size_t cells,
+    bool single_line, bool *truncated)
 {
     size_t used = 0u, width = 0u;
     int rc = -1;
@@ -61,7 +61,8 @@ preview(struct snag_buf *out, const char *text, size_t len, size_t characters,
         i += n;
     }
     rc = 0;
-out: snag_buf_free(&safe);
+out:
+    snag_buf_free(&safe);
     return rc;
 }
 
@@ -103,7 +104,8 @@ append_tool_ref(struct snag_buf *row, const char *call_id)
 }
 
 static int
-summary(struct snag_render_block *block, const struct snag_buf *row, unsigned int columns, size_t colored_len)
+summary(struct snag_render_block *block, const struct snag_buf *row, unsigned int columns,
+    size_t colored_len)
 {
     size_t cells = columns && columns <= 120u ? columns - 1u : 120u;
     bool truncated = false;
@@ -111,8 +113,8 @@ summary(struct snag_render_block *block, const struct snag_buf *row, unsigned in
 
     /* Reserve an ellipsis and LF before clipping. */
     block->text.max -= 4u;
-    rc = preview(&block->text, (const char *)row->data, row->len, SIZE_MAX,
-                  cells ? cells - 1u : 0u, true, &truncated);
+    rc = preview(&block->text, (const char *)row->data, row->len, SIZE_MAX, cells ? cells - 1u : 0u,
+        true, &truncated);
     block->text.max += 4u;
     if (rc == 0 && truncated && cells) rc = snag_buf_append(&block->text, "…", 3u);
     block->colored_len = colored_len < block->text.len ? colored_len : block->text.len;
@@ -120,14 +122,16 @@ summary(struct snag_render_block *block, const struct snag_buf *row, unsigned in
 }
 
 int
-snag_render_prepare_tool_start(struct snag_render_block *block, const struct snag_response_item *call,
-                              const char *workdir, uint64_t default_timeout_ms,
-                              unsigned int level, unsigned int columns)
+snag_render_prepare_tool_start(struct snag_render_block *block,
+    const struct snag_response_item *call, const char *workdir, uint64_t default_timeout_ms,
+    unsigned int level, unsigned int columns)
 {
     struct snag_buf args;
     bool truncated = false;
     size_t limit = snag_presentation_limit(SNAG_PRESENT_ARGUMENTS, level);
-    size_t bytes = limit == SIZE_MAX ? SNAG_MAX_TOOL_ARGUMENTS * 6u + 2u : limit ? limit * 4u + 16u : 512u;
+    size_t bytes = limit == SIZE_MAX ? SNAG_MAX_TOOL_ARGUMENTS * 6u + 2u
+                   : limit           ? limit * 4u + 16u
+                                     : 512u;
     int rc = -1;
 
     block_init(block, SNAG_PRESENT_ARGUMENTS);
@@ -135,16 +139,19 @@ snag_render_prepare_tool_start(struct snag_render_block *block, const struct sna
     struct snag_buf row = {.max = 4096u};
     if (canonical_prefix(call->arguments, &args, bytes, &truncated) < 0) goto out;
     bool arguments_truncated = truncated;
-    if (snag_buf_printf(&row, "→ %s", call->name) < 0 || append_tool_ref(&row, call->call_id) < 0) goto out;
+    if (snag_buf_printf(&row, "→ %s", call->name) < 0 || append_tool_ref(&row, call->call_id) < 0)
+        goto out;
     size_t colored_len = row.len;
     if (snag_buf_append(&row, "  ", 2u) < 0 ||
         preview(&row, (const char *)args.data, args.len, 95u, 95u, true, &truncated) < 0 ||
-        (truncated && snag_buf_append(&row, "…", 3u) < 0) || summary(block, &row, columns, colored_len) < 0)
+        (truncated && snag_buf_append(&row, "…", 3u) < 0) ||
+        summary(block, &row, columns, colored_len) < 0)
         goto out;
     if (limit) {
         block->truncated = arguments_truncated;
-        if (preview(&block->body, (const char *)args.data, args.len,
-                      limit, SIZE_MAX, false, &block->truncated) < 0) goto out;
+        if (preview(&block->body, (const char *)args.data, args.len, limit, SIZE_MAX, false,
+                &block->truncated) < 0)
+            goto out;
     }
     if (snag_presentation_limit(SNAG_PRESENT_CONTEXT, level)) {
         uint64_t timeout = default_timeout_ms;
@@ -152,12 +159,15 @@ snag_render_prepare_tool_start(struct snag_render_block *block, const struct sna
         if (explicit_workdir) workdir = explicit_workdir;
         (void)snag_json_integer_u64(call->arguments, "timeout_ms", &timeout);
         if (snag_buf_printf(&block->context, "  workdir: %s\n  timeout: ", workdir) < 0 ||
-            (timeout == UINT64_MAX ? snag_buf_append(&block->context, "unrecorded\n", 11u) :
-             timeout ? snag_buf_printf(&block->context, "%llums\n", (unsigned long long)timeout) :
-                       snag_buf_append(&block->context, "none\n", 5u)) < 0) goto out;
+            (timeout == UINT64_MAX ? snag_buf_append(&block->context, "unrecorded\n", 11u)
+                : timeout
+                    ? snag_buf_printf(&block->context, "%llums\n", (unsigned long long)timeout)
+                    : snag_buf_append(&block->context, "none\n", 5u)) < 0)
+            goto out;
     }
     rc = 0;
-out: snag_buf_free(&args);
+out:
+    snag_buf_free(&args);
     snag_buf_free(&row);
     if (rc < 0) snag_render_block_free(block);
     return rc;
@@ -165,8 +175,8 @@ out: snag_buf_free(&args);
 
 int
 snag_render_prepare_tool_finish(struct snag_render_block *block, const char *name,
-                               const char *call_id, const json_t *result, uint32_t max_output_bytes,
-                               unsigned int level, unsigned int columns)
+    const char *call_id, const json_t *result, uint32_t max_output_bytes, unsigned int level,
+    unsigned int columns)
 {
     const char *status = snag_json_string(result, "status");
     const char *output = snag_json_string(result, "model_text");
@@ -179,25 +189,31 @@ snag_render_prepare_tool_finish(struct snag_render_block *block, const char *nam
     int rc = -1;
 
     block_init(block, SNAG_PRESENT_OUTPUT);
-    block->role = status && strcmp(status, "succeeded") == 0 ? SNAG_ROLE_SUCCESS :
-                  status && strcmp(status, "failed") == 0 ? SNAG_ROLE_ERROR : SNAG_ROLE_WARNING;
+    block->role = status && strcmp(status, "succeeded") == 0 ? SNAG_ROLE_SUCCESS
+                  : status && strcmp(status, "failed") == 0  ? SNAG_ROLE_ERROR
+                                                             : SNAG_ROLE_WARNING;
     struct snag_buf row = {.max = 4096u};
     if (snag_buf_printf(&row, "← %s", name) < 0 || append_tool_ref(&row, call_id) < 0 ||
-        snag_buf_append(&row, "  ", 2u) < 0) goto out;
+        snag_buf_append(&row, "  ", 2u) < 0)
+        goto out;
     if (json_is_integer(exit_value)) {
         block->role = json_integer_value(exit_value) ? SNAG_ROLE_ERROR : SNAG_ROLE_SUCCESS;
-        if (snag_buf_printf(&row, "exit %lld", (long long)json_integer_value(exit_value)) < 0) goto out;
+        if (snag_buf_printf(&row, "exit %lld", (long long)json_integer_value(exit_value)) < 0)
+            goto out;
     } else if (snag_buf_printf(&row, "%s", status ? status : "unknown") < 0) {
         goto out;
     }
     /* Reasons are host-owned status codes, not command output or arguments. */
     const char *reason = snag_json_string(result, "reason");
-    if (status && !strcmp(status, "not_run") && reason && snag_buf_printf(&row, " · %s", reason) < 0)
+    if (status && !strcmp(status, "not_run") && reason &&
+        snag_buf_printf(&row, " · %s", reason) < 0)
         goto out;
-    if (snag_json_integer_u64(result, "duration_ms", &duration) == 0 && (duration < 1000u ?
-         snag_buf_printf(&row, " · %llums", (unsigned long long)duration) :
-         snag_buf_printf(&row, " · %llu.%llus", (unsigned long long)(duration / 1000u),
-                        (unsigned long long)(duration % 1000u / 100u))) < 0) goto out;
+    if (snag_json_integer_u64(result, "duration_ms", &duration) == 0 &&
+        (duration < 1000u
+                ? snag_buf_printf(&row, " · %llums", (unsigned long long)duration)
+                : snag_buf_printf(&row, " · %llu.%llus", (unsigned long long)(duration / 1000u),
+                      (unsigned long long)(duration % 1000u / 100u))) < 0)
+        goto out;
     if (handle && snag_buf_printf(&row, " · %s", handle) < 0) goto out;
     if (summary(block, &row, columns, row.len) < 0) goto out;
     if (output && limit && !ref) {
@@ -205,24 +221,27 @@ snag_render_prepare_tool_finish(struct snag_render_block *block, const char *nam
         size_t shown = max_output_bytes && len > max_output_bytes ? max_output_bytes : len;
         while (shown < len && shown && ((unsigned char)output[shown] & 0xc0u) == 0x80u) --shown;
         block->truncated = shown < len;
-        if (preview(&block->body, output, shown, limit, SIZE_MAX, false, &block->truncated) < 0) goto out;
+        if (preview(&block->body, output, shown, limit, SIZE_MAX, false, &block->truncated) < 0)
+            goto out;
     }
     rc = 0;
-out: snag_buf_free(&row);
+out:
+    snag_buf_free(&row);
     if (rc < 0) snag_render_block_free(block);
     return rc;
 }
 
 int
 snag_render_prepare_hosted_start(struct snag_render_block *block, const char *item_id,
-                                 const json_t *action, unsigned int level, unsigned int columns)
+    const json_t *action, unsigned int level, unsigned int columns)
 {
     struct snag_buf args = {0};
     bool truncated = false;
     bool arguments_truncated = false;
     size_t limit = snag_presentation_limit(SNAG_PRESENT_ARGUMENTS, level);
-    size_t bytes = limit == SIZE_MAX ? SNAG_MAX_HOSTED_ACTION * 2u + 2u :
-                   limit ? limit * 4u + 16u : 512u;
+    size_t bytes = limit == SIZE_MAX ? SNAG_MAX_HOSTED_ACTION * 2u + 2u
+                   : limit           ? limit * 4u + 16u
+                                     : 512u;
     int rc = -1;
 
     block_init(block, SNAG_PRESENT_ARGUMENTS);
@@ -232,17 +251,21 @@ snag_render_prepare_hosted_start(struct snag_render_block *block, const char *it
     arguments_truncated = truncated;
     if (snag_buf_printf(&row, "→ web_search") < 0 || append_tool_ref(&row, item_id) < 0) goto out;
     size_t colored_len = row.len;
-    if (action && (snag_buf_append(&row, "  ", 2u) < 0 ||
-        preview(&row, (const char *)args.data, args.len, 95u, 95u, true, &truncated) < 0 ||
-        (truncated && snag_buf_append(&row, "…", 3u) < 0))) goto out;
+    if (action &&
+        (snag_buf_append(&row, "  ", 2u) < 0 ||
+            preview(&row, (const char *)args.data, args.len, 95u, 95u, true, &truncated) < 0 ||
+            (truncated && snag_buf_append(&row, "…", 3u) < 0)))
+        goto out;
     if (summary(block, &row, columns, colored_len) < 0) goto out;
     if (limit && action) {
         block->truncated = arguments_truncated;
-        if (preview(&block->body, (const char *)args.data, args.len,
-                    limit, SIZE_MAX, false, &block->truncated) < 0) goto out;
+        if (preview(&block->body, (const char *)args.data, args.len, limit, SIZE_MAX, false,
+                &block->truncated) < 0)
+            goto out;
     }
     rc = 0;
-out: snag_buf_free(&args);
+out:
+    snag_buf_free(&args);
     snag_buf_free(&row);
     if (rc < 0) snag_render_block_free(block);
     return rc;
@@ -250,8 +273,7 @@ out: snag_buf_free(&args);
 
 int
 snag_render_prepare_hosted_finish(struct snag_render_block *block, const char *item_id,
-                                  const char *status, const json_t *sources,
-                                  unsigned int level, unsigned int columns)
+    const char *status, const json_t *sources, unsigned int level, unsigned int columns)
 {
     size_t limit = snag_presentation_limit(SNAG_PRESENT_OUTPUT, level);
     size_t count = json_array_size(sources);
@@ -260,12 +282,14 @@ snag_render_prepare_hosted_finish(struct snag_render_block *block, const char *i
     int rc = -1;
 
     block_init(block, SNAG_PRESENT_OUTPUT);
-    block->role = status && !strcmp(status, "completed") ? SNAG_ROLE_SUCCESS :
-                  status && (!strcmp(status, "failed") || !strcmp(status, "incomplete")) ?
-                      SNAG_ROLE_ERROR : SNAG_ROLE_WARNING;
+    block->role = status && !strcmp(status, "completed") ? SNAG_ROLE_SUCCESS
+                  : status && (!strcmp(status, "failed") || !strcmp(status, "incomplete"))
+                      ? SNAG_ROLE_ERROR
+                      : SNAG_ROLE_WARNING;
     if (snag_buf_printf(&row, "← web_search") < 0 || append_tool_ref(&row, item_id) < 0 ||
         snag_buf_append(&row, "  ", 2u) < 0 ||
-        snag_buf_printf(&row, "%s", status && status[0] ? status : "unknown") < 0) goto out;
+        snag_buf_printf(&row, "%s", status && status[0] ? status : "unknown") < 0)
+        goto out;
     if (count && snag_buf_printf(&row, " · %zu %s", count, count == 1u ? "source" : "sources") < 0)
         goto out;
     if (summary(block, &row, columns, row.len) < 0) goto out;
@@ -285,11 +309,13 @@ snag_render_prepare_hosted_finish(struct snag_render_block *block, const char *i
             if (!url) continue;
             if (snag_buf_printf(&body, "%s%s", body.len ? "\n" : "", url) < 0) goto out;
         }
-        if (preview(&block->body, (const char *)body.data, body.len,
-                    limit, SIZE_MAX, false, &block->truncated) < 0) goto out;
+        if (preview(&block->body, (const char *)body.data, body.len, limit, SIZE_MAX, false,
+                &block->truncated) < 0)
+            goto out;
     }
     rc = 0;
-out: snag_buf_free(&row);
+out:
+    snag_buf_free(&row);
     snag_buf_free(&body);
     if (rc < 0) snag_render_block_free(block);
     return rc;

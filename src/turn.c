@@ -45,21 +45,26 @@ const char *
 snag_item_kind_name(enum snag_item_kind kind)
 {
     switch (kind) {
-    case SNAG_ITEM_ASSISTANT: return "assistant";
-    case SNAG_ITEM_REFUSAL: return "refusal";
-    case SNAG_ITEM_TOOL_CALL: return "tool_call";
+    case SNAG_ITEM_ASSISTANT:
+        return "assistant";
+    case SNAG_ITEM_REFUSAL:
+        return "refusal";
+    case SNAG_ITEM_TOOL_CALL:
+        return "tool_call";
     }
     return NULL;
 }
 
 uint64_t
 snag_capacity_safety_ceiling(uint64_t context_limit_tokens, uint64_t requested_input_tokens,
-                            uint64_t requested_output_tokens)
+    uint64_t requested_output_tokens)
 {
     uint64_t ceiling = 0u;
 
-    if (context_limit_tokens) ceiling = context_limit_tokens > requested_output_tokens ?
-            context_limit_tokens - requested_output_tokens : 1u;
+    if (context_limit_tokens)
+        ceiling = context_limit_tokens > requested_output_tokens
+                      ? context_limit_tokens - requested_output_tokens
+                      : 1u;
     if (requested_input_tokens > 1u && (!ceiling || requested_input_tokens - 1u < ceiling))
         ceiling = requested_input_tokens - 1u;
     return ceiling;
@@ -69,9 +74,12 @@ const char *
 snag_item_phase_name(enum snag_item_phase phase)
 {
     switch (phase) {
-    case SNAG_PHASE_COMMENTARY: return "commentary";
-    case SNAG_PHASE_FINAL_ANSWER: return "final_answer";
-    case SNAG_PHASE_NONE: break;
+    case SNAG_PHASE_COMMENTARY:
+        return "commentary";
+    case SNAG_PHASE_FINAL_ANSWER:
+        return "final_answer";
+    case SNAG_PHASE_NONE:
+        break;
     }
     return NULL;
 }
@@ -83,8 +91,10 @@ snag_provider_id_valid(const char *s)
     size_t len = strlen(s);
     for (size_t i = 0; i < len; ++i) {
         unsigned char c = (unsigned char)s[i];
-        if (c < 0x20u || c == 0x7fu || (c == 0xc2u && i + 1u < len &&
-             (unsigned char)s[i + 1u] >= 0x80u && (unsigned char)s[i + 1u] <= 0x9fu)) return false;
+        if (c < 0x20u || c == 0x7fu ||
+            (c == 0xc2u && i + 1u < len && (unsigned char)s[i + 1u] >= 0x80u &&
+                (unsigned char)s[i + 1u] <= 0x9fu))
+            return false;
     }
     return true;
 }
@@ -104,16 +114,19 @@ snag_response_graph_item(const struct snag_response_graph *graph, size_t index)
     const char *local = snag_json_string(value, "local_item_id");
     const char *call = snag_json_string(value, "call_id");
     return (struct snag_response_item){
-        .kind = kind && !strcmp(kind, "assistant") ? SNAG_ITEM_ASSISTANT :
-                kind && !strcmp(kind, "refusal") ? SNAG_ITEM_REFUSAL : SNAG_ITEM_TOOL_CALL,
-        .phase = phase && !strcmp(phase, "commentary") ? SNAG_PHASE_COMMENTARY :
-                 phase && !strcmp(phase, "final_answer") ? SNAG_PHASE_FINAL_ANSWER : SNAG_PHASE_NONE,
+        .kind = kind && !strcmp(kind, "assistant") ? SNAG_ITEM_ASSISTANT
+                : kind && !strcmp(kind, "refusal") ? SNAG_ITEM_REFUSAL
+                                                   : SNAG_ITEM_TOOL_CALL,
+        .phase = phase && !strcmp(phase, "commentary")     ? SNAG_PHASE_COMMENTARY
+                 : phase && !strcmp(phase, "final_answer") ? SNAG_PHASE_FINAL_ANSWER
+                                                           : SNAG_PHASE_NONE,
         .local_item_id = local && snag_hex_is_lower(local, SNAG_ID_HEX_LEN) ? local : "",
         .call_id = call && snag_hex_is_lower(call, SNAG_ID_HEX_LEN) ? call : "",
         .provider_item_id = (char *)snag_json_string(value, "provider_item_id"),
         .provider_call_id = (char *)snag_json_string(value, "provider_call_id"),
-        .name = (char *)snag_json_string(value, "name"), .text = (char *)snag_json_string(value, "text"),
-        .arguments = json_object_get(value, "arguments") };
+        .name = (char *)snag_json_string(value, "name"),
+        .text = (char *)snag_json_string(value, "text"),
+        .arguments = json_object_get(value, "arguments")};
 }
 
 int
@@ -125,8 +138,10 @@ snag_response_usage_valid(const struct snag_response_usage *usage)
     if ((usage->input_known && usage->input_tokens > (uint64_t)LLONG_MAX) ||
         (usage->output_known && usage->output_tokens > (uint64_t)LLONG_MAX) ||
         (usage->reasoning_known && usage->reasoning_tokens > (uint64_t)LLONG_MAX) ||
-        (usage->total_known && usage->total_tokens > (uint64_t)LLONG_MAX)) return snag_errno(EOVERFLOW);
-    if (usage->reasoning_known && usage->output_known && usage->reasoning_tokens > usage->output_tokens)
+        (usage->total_known && usage->total_tokens > (uint64_t)LLONG_MAX))
+        return snag_errno(EOVERFLOW);
+    if (usage->reasoning_known && usage->output_known &&
+        usage->reasoning_tokens > usage->output_tokens)
         return snag_errno(EINVAL);
     if (usage->input_known && usage->output_known && usage->total_known) {
         if (usage->input_tokens > UINT64_MAX - usage->output_tokens) return snag_errno(EOVERFLOW);
@@ -140,20 +155,32 @@ json_t *
 snag_response_usage_json(const struct snag_response_usage *usage)
 {
     if (snag_response_usage_valid(usage) < 0) return NULL;
-    return usage->cached_known ?
-        json_pack("{s:o,s:o,s:o,s:o,s:o}", "input_tokens", usage->input_known ?
-                json_integer((json_int_t)usage->input_tokens) : json_null(),
-            "output_tokens", usage->output_known ? json_integer((json_int_t)usage->output_tokens) : json_null(),
-            "reasoning_tokens", usage->reasoning_known ?
-                json_integer((json_int_t)usage->reasoning_tokens) : json_null(),
-            "total_tokens", usage->total_known ? json_integer((json_int_t)usage->total_tokens) : json_null(),
-            "cached_tokens", json_integer((json_int_t)usage->cached_input_tokens)) :
-        json_pack("{s:o,s:o,s:o,s:o}", "input_tokens", usage->input_known ?
-                json_integer((json_int_t)usage->input_tokens) : json_null(),
-            "output_tokens", usage->output_known ? json_integer((json_int_t)usage->output_tokens) : json_null(),
-            "reasoning_tokens", usage->reasoning_known ?
-                json_integer((json_int_t)usage->reasoning_tokens) : json_null(),
-            "total_tokens", usage->total_known ? json_integer((json_int_t)usage->total_tokens) : json_null());
+    return usage->cached_known
+               ? json_pack("{s:o,s:o,s:o,s:o,s:o}", "input_tokens",
+                     usage->input_known ? json_integer((json_int_t)usage->input_tokens)
+                                        : json_null(),
+                     "output_tokens",
+                     usage->output_known ? json_integer((json_int_t)usage->output_tokens)
+                                         : json_null(),
+                     "reasoning_tokens",
+                     usage->reasoning_known ? json_integer((json_int_t)usage->reasoning_tokens)
+                                            : json_null(),
+                     "total_tokens",
+                     usage->total_known ? json_integer((json_int_t)usage->total_tokens)
+                                        : json_null(),
+                     "cached_tokens", json_integer((json_int_t)usage->cached_input_tokens))
+               : json_pack("{s:o,s:o,s:o,s:o}", "input_tokens",
+                     usage->input_known ? json_integer((json_int_t)usage->input_tokens)
+                                        : json_null(),
+                     "output_tokens",
+                     usage->output_known ? json_integer((json_int_t)usage->output_tokens)
+                                         : json_null(),
+                     "reasoning_tokens",
+                     usage->reasoning_known ? json_integer((json_int_t)usage->reasoning_tokens)
+                                            : json_null(),
+                     "total_tokens",
+                     usage->total_known ? json_integer((json_int_t)usage->total_tokens)
+                                        : json_null());
 }
 
 int
@@ -163,16 +190,22 @@ snag_response_usage_from_json(const json_t *value, struct snag_response_usage *u
 
     memset(&parsed, 0, sizeof(parsed));
     /* Journals written before cache accounting carry the four-key form; accept both. */
-    if (!usage || (!snag_json_exact_keys(value, "input_tokens output_tokens reasoning_tokens total_tokens") &&
-                   !snag_json_exact_keys(value, "input_tokens output_tokens reasoning_tokens total_tokens "
-                                                "cached_tokens")) ||
-        snag_json_optional_u64(value, "cached_tokens", &parsed.cached_input_tokens, &parsed.cached_known) < 0 ||
-        snag_json_optional_u64(value, "input_tokens", &parsed.input_tokens, &parsed.input_known) < 0 ||
-        snag_json_optional_u64(value, "output_tokens", &parsed.output_tokens, &parsed.output_known) < 0 ||
-        snag_json_optional_u64(value, "reasoning_tokens", &parsed.reasoning_tokens,
-                              &parsed.reasoning_known) < 0 ||
-        snag_json_optional_u64(value, "total_tokens", &parsed.total_tokens, &parsed.total_known) < 0 ||
-        snag_response_usage_valid(&parsed) < 0) return snag_errno(EINVAL);
+    if (!usage ||
+        (!snag_json_exact_keys(value, "input_tokens output_tokens reasoning_tokens total_tokens") &&
+            !snag_json_exact_keys(value, "input_tokens output_tokens reasoning_tokens total_tokens "
+                                         "cached_tokens")) ||
+        snag_json_optional_u64(
+            value, "cached_tokens", &parsed.cached_input_tokens, &parsed.cached_known) < 0 ||
+        snag_json_optional_u64(value, "input_tokens", &parsed.input_tokens, &parsed.input_known) <
+            0 ||
+        snag_json_optional_u64(
+            value, "output_tokens", &parsed.output_tokens, &parsed.output_known) < 0 ||
+        snag_json_optional_u64(
+            value, "reasoning_tokens", &parsed.reasoning_tokens, &parsed.reasoning_known) < 0 ||
+        snag_json_optional_u64(value, "total_tokens", &parsed.total_tokens, &parsed.total_known) <
+            0 ||
+        snag_response_usage_valid(&parsed) < 0)
+        return snag_errno(EINVAL);
     *usage = parsed;
     return 0;
 }
@@ -191,12 +224,15 @@ snag_reasoning_item_valid(const json_t *item)
 {
     const char *type = snag_json_string(item, "type");
     const char *status = snag_json_string(item, "status");
-    if (!type || strcmp(type, "reasoning") != 0 || (json_object_get(item, "id") &&
-         !snag_text_valid(snag_json_string(item, "id"), 1u, SNAG_MAX_PROVIDER_ID)) ||
+    if (!type || strcmp(type, "reasoning") != 0 ||
+        (json_object_get(item, "id") &&
+            !snag_text_valid(snag_json_string(item, "id"), 1u, SNAG_MAX_PROVIDER_ID)) ||
         (json_object_get(item, "status") && !json_is_null(json_object_get(item, "status")) &&
-         (!status || strcmp(status, "completed") != 0)) ||
-        (json_object_get(item, "encrypted_content") && !json_is_null(json_object_get(item, "encrypted_content")) &&
-         !snag_text_valid(snag_json_string(item, "encrypted_content"), 0u, SNAG_MAX_RESPONSE_GRAPH)))
+            (!status || strcmp(status, "completed") != 0)) ||
+        (json_object_get(item, "encrypted_content") &&
+            !json_is_null(json_object_get(item, "encrypted_content")) &&
+            !snag_text_valid(
+                snag_json_string(item, "encrypted_content"), 0u, SNAG_MAX_RESPONSE_GRAPH)))
         return false;
     /* Preserve bounded provider extensions as opaque continuation, never as
      * graph actions. Only the fields consumed by this protocol need decoding. */
@@ -210,7 +246,8 @@ snag_reasoning_item_valid(const json_t *item)
             const json_t *part = json_array_get(parts, i);
             const char *kind = snag_json_string(part, "type");
             if (!json_is_object(part) || !kind || strcmp(kind, types[f]) != 0 ||
-                !snag_text_valid(snag_json_string(part, "text"), 0u, SNAG_MAX_RESPONSE_GRAPH)) return false;
+                !snag_text_valid(snag_json_string(part, "text"), 0u, SNAG_MAX_RESPONSE_GRAPH))
+                return false;
         }
     }
     return snag_json_digest_bounded(item, SNAG_MAX_RESPONSE_GRAPH, NULL, NULL) == 0;
@@ -221,21 +258,24 @@ snag_response_continuation_valid(const json_t *items, size_t semantic_count)
 {
     size_t previous = 0u;
     if (!json_is_array(items) ||
-        snag_json_digest_bounded(items, SNAG_MAX_RESPONSE_GRAPH, NULL, NULL) < 0) return false;
+        snag_json_digest_bounded(items, SNAG_MAX_RESPONSE_GRAPH, NULL, NULL) < 0)
+        return false;
     for (size_t i = 0; i < json_array_size(items); ++i) {
         const json_t *record = json_array_get(items, i);
         json_t *index = json_object_get(record, "before");
         if (!snag_json_exact_keys(record, "before item") || !json_is_integer(index) ||
             json_integer_value(index) < 0 || (uint64_t)json_integer_value(index) > semantic_count ||
             (uint64_t)json_integer_value(index) < previous ||
-            !snag_reasoning_item_valid(json_object_get(record, "item"))) return false;
+            !snag_reasoning_item_valid(json_object_get(record, "item")))
+            return false;
         previous = (size_t)json_integer_value(index);
     }
     return true;
 }
 
 int
-snag_response_graph_set_provider_id(struct snag_response_graph *graph, const char *provider_response_id)
+snag_response_graph_set_provider_id(
+    struct snag_response_graph *graph, const char *provider_response_id)
 {
     char *copy;
     if (!snag_provider_id_valid(provider_response_id)) return snag_errno(EINVAL);
@@ -249,13 +289,14 @@ snag_response_graph_set_provider_id(struct snag_response_graph *graph, const cha
 bool
 snag_tool_name_valid(const char *name)
 {
-    return snag_read_only_tool(name) || snag_string_in(name,
-        "exec_command write_stdin speak_text apply_patch write_file edit_file cd "
-        "select_model send_file inspect_session submit_input interrupt_turn "
-        "set_voice_mode voice_output ui_input "
-        "create_goal update_goal irc_send irc_state "
-        "irc_topic irc_nick irc_connect irc_host irc_disconnect irc_sleep irc_compact "
-        "timer defer_steering set_command_shell");
+    return snag_read_only_tool(name) ||
+           snag_string_in(name,
+               "exec_command write_stdin speak_text apply_patch write_file edit_file cd "
+               "select_model send_file inspect_session submit_input interrupt_turn "
+               "set_voice_mode voice_output ui_input "
+               "create_goal update_goal irc_send irc_state "
+               "irc_topic irc_nick irc_connect irc_host irc_disconnect irc_sleep irc_compact "
+               "timer defer_steering set_command_shell");
 }
 
 static bool
@@ -270,21 +311,23 @@ item_valid(const json_t *value)
 {
     const char *kind = snag_json_string(value, "kind");
     const char *phase = snag_json_string(value, "phase");
-    const char *id = snag_json_string(value, kind && !strcmp(kind, "tool_call") ?
-                                     "call_id" : "local_item_id");
+    const char *id =
+        snag_json_string(value, kind && !strcmp(kind, "tool_call") ? "call_id" : "local_item_id");
 
     if (!kind || !id || !snag_hex_is_lower(id, SNAG_ID_HEX_LEN) ||
-        !snag_provider_id_valid(snag_json_string(value, "provider_item_id"))) return false;
-    if (!strcmp(kind, "tool_call")) return snag_json_exact_keys(value,
-            "arguments call_id kind name provider_call_id provider_item_id") &&
-            snag_provider_id_valid(snag_json_string(value, "provider_call_id")) &&
-            snag_tool_name_valid(snag_json_string(value, "name")) &&
-            arguments_bounded(json_object_get(value, "arguments"));
+        !snag_provider_id_valid(snag_json_string(value, "provider_item_id")))
+        return false;
+    if (!strcmp(kind, "tool_call"))
+        return snag_json_exact_keys(
+                   value, "arguments call_id kind name provider_call_id provider_item_id") &&
+               snag_provider_id_valid(snag_json_string(value, "provider_call_id")) &&
+               snag_tool_name_valid(snag_json_string(value, "name")) &&
+               arguments_bounded(json_object_get(value, "arguments"));
     return snag_string_in(kind, "assistant refusal") &&
-        snag_json_exact_keys(value, "kind local_item_id phase provider_item_id text") &&
-        phase && (!strcmp(phase, "final_answer") ||
-                  (!strcmp(kind, "assistant") && !strcmp(phase, "commentary"))) &&
-        snag_text_valid(snag_json_string(value, "text"), 1u, SNAG_MAX_PUBLIC_ITEM);
+           snag_json_exact_keys(value, "kind local_item_id phase provider_item_id text") && phase &&
+           (!strcmp(phase, "final_answer") ||
+               (!strcmp(kind, "assistant") && !strcmp(phase, "commentary"))) &&
+           snag_text_valid(snag_json_string(value, "text"), 1u, SNAG_MAX_PUBLIC_ITEM);
 }
 
 /* Takes ownership. Admission never leaves a partially appended item. */
@@ -311,30 +354,31 @@ append_item(struct snag_response_graph *graph, json_t *value)
     ++graph->count;
     graph->encoded_bytes = total;
     rc = 0;
-out: json_decref(value);
+out:
+    json_decref(value);
     return rc;
 }
 
 int
-snag_response_graph_add_public(struct snag_response_graph *graph,
-                              enum snag_item_kind kind, enum snag_item_phase phase,
-                              const char *provider_item_id, const char *text)
+snag_response_graph_add_public(struct snag_response_graph *graph, enum snag_item_kind kind,
+    enum snag_item_phase phase, const char *provider_item_id, const char *text)
 {
     char id[SNAG_ID_HEX_LEN + 1u];
-    if (!public_kind(kind) || (phase != SNAG_PHASE_FINAL_ANSWER &&
-         (kind != SNAG_ITEM_ASSISTANT || phase != SNAG_PHASE_COMMENTARY)) ||
-        !snag_provider_id_valid(provider_item_id) || !snag_text_valid(text, 1u, SNAG_MAX_PUBLIC_ITEM))
+    if (!public_kind(kind) ||
+        (phase != SNAG_PHASE_FINAL_ANSWER &&
+            (kind != SNAG_ITEM_ASSISTANT || phase != SNAG_PHASE_COMMENTARY)) ||
+        !snag_provider_id_valid(provider_item_id) ||
+        !snag_text_valid(text, 1u, SNAG_MAX_PUBLIC_ITEM))
         return snag_errno(EINVAL);
     if (snag_random_id(id) < 0) return -1;
-    return append_item(graph, json_pack("{s:s,s:s,s:s,s:s,s:s}",
-        "kind", snag_item_kind_name(kind), "local_item_id", id,
-        "phase", snag_item_phase_name(phase), "provider_item_id", provider_item_id, "text", text));
+    return append_item(graph, json_pack("{s:s,s:s,s:s,s:s,s:s}", "kind", snag_item_kind_name(kind),
+                                  "local_item_id", id, "phase", snag_item_phase_name(phase),
+                                  "provider_item_id", provider_item_id, "text", text));
 }
 
 int
-snag_response_graph_add_call(struct snag_response_graph *graph,
-                            const char *provider_item_id, const char *provider_call_id,
-                            const char *name, json_t *arguments)
+snag_response_graph_add_call(struct snag_response_graph *graph, const char *provider_item_id,
+    const char *provider_call_id, const char *name, json_t *arguments)
 {
     char id[SNAG_ID_HEX_LEN + 1u];
     json_t *value;
@@ -347,9 +391,9 @@ snag_response_graph_add_call(struct snag_response_graph *graph,
         json_decref(arguments);
         return -1;
     }
-    value = json_pack("{s:s,s:s,s:s,s:s,s:s,s:O}",
-        "kind", "tool_call", "call_id", id, "provider_item_id", provider_item_id,
-        "provider_call_id", provider_call_id, "name", name, "arguments", arguments);
+    value = json_pack("{s:s,s:s,s:s,s:s,s:s,s:O}", "kind", "tool_call", "call_id", id,
+        "provider_item_id", provider_item_id, "provider_call_id", provider_call_id, "name", name,
+        "arguments", arguments);
     json_decref(arguments);
     return append_item(graph, value);
 }
@@ -362,22 +406,23 @@ identifiers_valid(const struct snag_response_graph *graph, char *error, size_t e
         bool public = public_kind(item.kind);
         const char *id = public ? item.local_item_id : item.call_id;
 
-        if (!snag_hex_is_lower(id, SNAG_ID_HEX_LEN)) return snag_fail(error, error_size, EINVAL,
-                "response item %zu has an invalid %s id", i, public ? "local" : "call");
+        if (!snag_hex_is_lower(id, SNAG_ID_HEX_LEN))
+            return snag_fail(error, error_size, EINVAL, "response item %zu has an invalid %s id", i,
+                public ? "local" : "call");
         for (size_t j = 0; j < i; ++j) {
             struct snag_response_item previous = snag_response_graph_item(graph, j);
             if (public == public_kind(previous.kind) &&
                 !strcmp(id, public ? previous.local_item_id : previous.call_id))
-                return snag_fail(error, error_size, EINVAL,
-                    "response graph repeats a %s id", public ? "local item" : "call");
+                return snag_fail(error, error_size, EINVAL, "response graph repeats a %s id",
+                    public ? "local item" : "call");
         }
     }
     return 0;
 }
 
 int
-snag_response_graph_classify(const struct snag_response_graph *graph, struct snag_graph_decision *decision,
-                            char *error, size_t error_size)
+snag_response_graph_classify(const struct snag_response_graph *graph,
+    struct snag_graph_decision *decision, char *error, size_t error_size)
 {
     size_t terminal_count = 0;
     size_t terminal_index = 0;
@@ -394,7 +439,8 @@ snag_response_graph_classify(const struct snag_response_graph *graph, struct sna
         const struct snag_response_item *item = &view;
         bad_index = i;
         if (!snag_provider_id_valid(item->provider_item_id)) {
-            return snag_fail(error, error_size, EINVAL, "response item %zu has invalid identity", i);
+            return snag_fail(
+                error, error_size, EINVAL, "response item %zu has invalid identity", i);
         }
         if (!item_valid(json_array_get(graph->items, i))) goto bad_item;
         if (public_kind(item->kind)) {
@@ -417,15 +463,18 @@ snag_response_graph_classify(const struct snag_response_graph *graph, struct sna
     if (terminal_count > 1u || (terminal_count && calls) ||
         (terminal_count && terminal_index != last_speech)) {
         decision->outcome = SNAG_GRAPH_CONFLICT;
-        decision->message = terminal_count > 1u ? "provider response contained multiple terminal answers" :
-            calls ? "provider response combined a terminal answer with tool calls" :
-            "terminal answer was not the last assistant or refusal item";
+        decision->message = terminal_count > 1u
+                                ? "provider response contained multiple terminal answers"
+                            : calls ? "provider response combined a terminal answer with tool calls"
+                                    : "terminal answer was not the last assistant or refusal item";
         return 0;
     }
     if (terminal_count == 1u) {
         decision->final_index = terminal_index;
-        decision->outcome = snag_response_graph_item(graph, terminal_index).kind == SNAG_ITEM_REFUSAL ?
-                            SNAG_GRAPH_REFUSAL : SNAG_GRAPH_FINAL;
+        decision->outcome =
+            snag_response_graph_item(graph, terminal_index).kind == SNAG_ITEM_REFUSAL
+                ? SNAG_GRAPH_REFUSAL
+                : SNAG_GRAPH_FINAL;
         return 0;
     }
     if (calls) {
@@ -436,19 +485,21 @@ snag_response_graph_classify(const struct snag_response_graph *graph, struct sna
     decision->message = "provider completed without a final answer, refusal, or tool call";
     return 0;
 
-bad_item: return snag_fail(error, error_size, EINVAL, "response item %zu has an invalid shape", bad_index);
+bad_item:
+    return snag_fail(
+        error, error_size, EINVAL, "response item %zu has an invalid shape", bad_index);
 }
 
 int
 snag_tool_action_digest(const struct snag_response_item *call, const char *resolved_workdir,
-                       char out[SNAG_SHA256_HEX_LEN + 1u])
+    char out[SNAG_SHA256_HEX_LEN + 1u])
 {
     json_t *action;
     int rc;
 
     if (!call || call->kind != SNAG_ITEM_TOOL_CALL || !resolved_workdir) return -1;
-    action = json_pack("{s:O,s:s,s:s}", "arguments", call->arguments,
-                       "name", call->name, "resolved_workdir", resolved_workdir);
+    action = json_pack("{s:O,s:s,s:s}", "arguments", call->arguments, "name", call->name,
+        "resolved_workdir", resolved_workdir);
     if (!action) return -1;
     rc = snag_json_digest(action, out);
     json_decref(action);
@@ -462,14 +513,15 @@ snag_response_graph_json(const struct snag_response_graph *graph)
 }
 
 int
-snag_response_graph_from_json(struct snag_response_graph *graph, const json_t *items,
-                             char *error, size_t error_size)
+snag_response_graph_from_json(
+    struct snag_response_graph *graph, const json_t *items, char *error, size_t error_size)
 {
     if (!json_is_array(items))
         return snag_fail(error, error_size, EINVAL, "invalid response item array");
     for (size_t i = 0u; i < json_array_size(items); ++i)
         if (append_item(graph, json_deep_copy(json_array_get(items, i))) < 0)
-            return snag_fail(error, error_size, EINVAL, "invalid response item at index %zu", graph->count);
+            return snag_fail(
+                error, error_size, EINVAL, "invalid response item at index %zu", graph->count);
     return identifiers_valid(graph, error, error_size);
 }
 
@@ -482,27 +534,28 @@ snag_partial_public_validate(const json_t *items, char *error, size_t error_size
     if (snag_response_graph_from_json(&graph, items, error, error_size) < 0) goto out;
     for (size_t i = 0; i < graph.count; ++i) {
         if (!public_kind(snag_response_graph_item(&graph, i).kind)) {
-            (void)snag_fail(error, error_size, EINVAL, "partial public array contains a non-public item");
+            (void)snag_fail(
+                error, error_size, EINVAL, "partial public array contains a non-public item");
             goto out;
         }
     }
     rc = 0;
-out: snag_response_graph_free(&graph);
+out:
+    snag_response_graph_free(&graph);
     return rc;
 }
 
 json_t *
-snag_tool_result(const char *status, const char *reason,
-                const char *model_text, int exit_code, uint64_t duration_ms)
+snag_tool_result(const char *status, const char *reason, const char *model_text, int exit_code,
+    uint64_t duration_ms)
 {
-    json_t *out = json_pack( "{s:I,s:n,s:n,s:s,s:s?,s:n,s:s,"
-        "s:{s:i,s:s,s:i,s:s,s:i},s:{s:i,s:s,s:i,s:s,s:i}}",
-        "duration_ms", (json_int_t)duration_ms, "exit_code", "handle",
-        "model_text", model_text, "reason", reason, "signal", "status", status,
-        "stderr", "discarded_bytes", 0, "encoding", "utf8", "original_bytes", 0,
-            "retained", "", "retained_bytes", 0,
-        "stdout", "discarded_bytes", 0, "encoding", "utf8", "original_bytes", 0,
-            "retained", "", "retained_bytes", 0);
+    json_t *out = json_pack("{s:I,s:n,s:n,s:s,s:s?,s:n,s:s,"
+                            "s:{s:i,s:s,s:i,s:s,s:i},s:{s:i,s:s,s:i,s:s,s:i}}",
+        "duration_ms", (json_int_t)duration_ms, "exit_code", "handle", "model_text", model_text,
+        "reason", reason, "signal", "status", status, "stderr", "discarded_bytes", 0, "encoding",
+        "utf8", "original_bytes", 0, "retained", "", "retained_bytes", 0, "stdout",
+        "discarded_bytes", 0, "encoding", "utf8", "original_bytes", 0, "retained", "",
+        "retained_bytes", 0);
 
     if (out && exit_code >= 0 && snag_json_set_new(out, "exit_code", json_integer(exit_code)) < 0) {
         json_decref(out);
@@ -514,29 +567,43 @@ snag_tool_result(const char *status, const char *reason,
 json_t *
 snag_tool_result_not_run(const char *reason)
 {
-    const char *help = "Review the declared tool schema and current session state before proposing another call.";
+    const char *help =
+        "Review the declared tool schema and current session state before proposing another call.";
     if (!strcmp(reason, "process_limit"))
-        help = "All managed process slots are occupied. Collect ready results or finish an existing handle before starting another command.";
+        help = "All managed process slots are occupied. Collect ready results or finish an "
+               "existing handle before starting another command.";
     else if (!strcmp(reason, "process_busy"))
-        help = "This handle already has an invocation in progress. Use at most one write_stdin per handle per response; collect it after the current invocation returns.";
+        help = "This handle already has an invocation in progress. Use at most one write_stdin per "
+               "handle per response; collect it after the current invocation returns.";
     else if (!strcmp(reason, "stdin_busy"))
-        help = "Previously accepted input is still pending. Do not resend it; wait with write_stdin data=\"\" or do independent work.";
+        help = "Previously accepted input is still pending. Do not resend it; wait with "
+               "write_stdin data=\"\" or do independent work.";
     else if (!strcmp(reason, "stdin_closed"))
-        help = "This process's input is already closed and cannot be reopened. Use write_stdin data=\"\" to collect output without sending more input.";
+        help = "This process's input is already closed and cannot be reopened. Use write_stdin "
+               "data=\"\" to collect output without sending more input.";
     else if (!strcmp(reason, "managed_process_handle_mismatch"))
-        help = "No live process matches this handle. Use an exact handle from current unsettled process state; terminal or previous-process handles cannot be reused.";
+        help = "No live process matches this handle. Use an exact handle from current unsettled "
+               "process state; terminal or previous-process handles cannot be reused.";
     else if (snag_string_in(reason, "managed_process_conflict process_interaction_required"))
-        help = "Inspect the current unsettled commands and use their write_stdin handles; do not restart a command merely to wait for it.";
+        help = "Inspect the current unsettled commands and use their write_stdin handles; do not "
+               "restart a command merely to wait for it.";
     else if (!strcmp(reason, "invalid_arguments"))
-        help = "Correct field names, types and ranges using the current tool schema. Supply required fields; nullable defaults use JSON null. Do not repeat unchanged invalid arguments.";
+        help =
+            "Correct field names, types and ranges using the current tool schema. Supply required "
+            "fields; nullable defaults use JSON null. Do not repeat unchanged invalid arguments.";
     else if (!strcmp(reason, "read_only"))
-        help = "This turn permits only its declared read-only tools; use list_files, read_file or grep for local inspection.";
+        help = "This turn permits only its declared read-only tools; use list_files, read_file or "
+               "grep for local inspection.";
     else if (!strcmp(reason, "rule_rejected"))
-        help = "A configured rule denied this call. Follow the stated policy or choose an allowed action.";
+        help = "A configured rule denied this call. Follow the stated policy or choose an allowed "
+               "action.";
     else if (!strcmp(reason, "recovery_unstarted"))
-        help = "The previous agent process ended before this proposal started. Inspect current state before deciding whether to repeat the work.";
-    else if (snag_string_in(reason, "batch_yield operator_yield superseded_by_steering turn_cancelled"))
-        help = "This proposal was skipped. Reassess current operator instructions and retained running handles before further work; started commands remain separate.";
+        help = "The previous agent process ended before this proposal started. Inspect current "
+               "state before deciding whether to repeat the work.";
+    else if (snag_string_in(
+                 reason, "batch_yield operator_yield superseded_by_steering turn_cancelled"))
+        help = "This proposal was skipped. Reassess current operator instructions and retained "
+               "running handles before further work; started commands remain separate.";
     char text[768];
     (void)snprintf(text, sizeof(text), "Tool was not run: %s. %s", reason, help);
     return snag_tool_result("not_run", reason, text, -1, 0u);
@@ -545,7 +612,8 @@ snag_tool_result_not_run(const char *reason)
 json_t *
 snag_tool_result_terminal(bool succeeded, const char *model_text)
 {
-    return snag_tool_result(succeeded ? "succeeded" : "failed", NULL, model_text, succeeded ? 0 : 1, 0u);
+    return snag_tool_result(
+        succeeded ? "succeeded" : "failed", NULL, model_text, succeeded ? 0 : 1, 0u);
 }
 
 json_t *
@@ -565,13 +633,14 @@ tool_excerpt_valid(const json_t *excerpt)
     uint64_t original;
     uint64_t retained_bytes;
 
-    if (!snag_json_exact_keys((json_t *)excerpt,
-        "discarded_bytes encoding original_bytes retained retained_bytes") ||
+    if (!snag_json_exact_keys(
+            (json_t *)excerpt, "discarded_bytes encoding original_bytes retained retained_bytes") ||
         !(encoding = snag_json_string(excerpt, "encoding")) ||
         !(retained = snag_json_string(excerpt, "retained")) ||
         snag_json_integer_u64(excerpt, "discarded_bytes", &discarded) < 0 ||
         snag_json_integer_u64(excerpt, "original_bytes", &original) < 0 ||
-        snag_json_integer_u64(excerpt, "retained_bytes", &retained_bytes) < 0) return -1;
+        snag_json_integer_u64(excerpt, "retained_bytes", &retained_bytes) < 0)
+        return -1;
     if (!snag_string_in(encoding, "utf8 base64")) return -1;
     if (strcmp(encoding, "utf8") == 0 && strlen(retained) != retained_bytes) return -1;
     if (strcmp(encoding, "base64") == 0 && strlen(retained) % 4u != 0) return -1;
@@ -582,7 +651,8 @@ static bool
 reason_is_not_run(const char *reason)
 {
     return snag_string_in(reason,
-        "protocol_conflict read_only process_limit batch_yield operator_yield process_busy stdin_busy "
+        "protocol_conflict read_only process_limit batch_yield operator_yield process_busy "
+        "stdin_busy "
         "stdin_closed invalid_arguments managed_process_conflict "
         "managed_process_handle_mismatch recovery_unstarted superseded_by_steering "
         "turn_cancelled process_interaction_required rule_rejected");
@@ -605,22 +675,27 @@ snag_tool_result_valid(const json_t *result)
     json_t *signal_value;
     json_t *limit_value;
 
-    if (!json_object_get(result, "output_ref")) keys += json_object_get(result, "max_output_tokens") ?
-                sizeof("output_ref") : sizeof("output_ref max_output_tokens");
-    json_t *content=json_object_get(result,"content");
+    if (!json_object_get(result, "output_ref"))
+        keys += json_object_get(result, "max_output_tokens")
+                    ? sizeof("output_ref")
+                    : sizeof("output_ref max_output_tokens");
+    json_t *content = json_object_get(result, "content");
     if (content) {
-        if (!snag_media_content_valid(content))return -1;
-        snprintf(content_keys,sizeof(content_keys),"content %s",keys);keys=content_keys;
+        if (!snag_media_content_valid(content)) return -1;
+        snprintf(content_keys, sizeof(content_keys), "content %s", keys);
+        keys = content_keys;
     }
     if (!snag_json_exact_keys(result, keys) ||
         snag_json_integer_u64(result, "duration_ms", &duration) < 0 ||
         !(status = snag_json_string(result, "status")) ||
         !(model_text = snag_json_string(result, "model_text")) ||
         tool_excerpt_valid(json_object_get(result, "stdout")) < 0 ||
-        tool_excerpt_valid(json_object_get(result, "stderr")) < 0) return -1;
+        tool_excerpt_valid(json_object_get(result, "stderr")) < 0)
+        return -1;
     limit_value = json_object_get(result, "max_output_tokens");
     if (limit_value && (!json_is_integer(limit_value) || json_integer_value(limit_value) < 1 ||
-         (uint64_t)json_integer_value(limit_value) > SNAG_CONFIG_TOKEN_LIMIT_MAX)) return -1;
+                           (uint64_t)json_integer_value(limit_value) > SNAG_CONFIG_TOKEN_LIMIT_MAX))
+        return -1;
     json_t *ref = json_object_get(result, "output_ref");
     if (ref) {
         const char *h = snag_json_string(ref, "handle");
@@ -628,22 +703,26 @@ snag_tool_result_valid(const json_t *result)
         const char *const end[] = {"stdout_end", "stderr_end"};
         const char *const streams[] = {"stdout", "stderr"};
         uint64_t accepted, written, pending, log_start, log_end;
-        if (!snag_json_exact_keys(ref,
-            "handle stdout_start stdout_end stderr_start stderr_end stdin_accepted stdin_written "
-            "stdin_pending stdin_open log_start log_end") || !h || !snag_hex_is_lower(h, SNAG_ID_HEX_LEN) ||
+        if (!snag_json_exact_keys(ref, "handle stdout_start stdout_end stderr_start stderr_end "
+                                       "stdin_accepted stdin_written "
+                                       "stdin_pending stdin_open log_start log_end") ||
+            !h || !snag_hex_is_lower(h, SNAG_ID_HEX_LEN) ||
             snag_json_integer_u64(ref, "log_start", &log_start) < 0 ||
             snag_json_integer_u64(ref, "log_end", &log_end) < 0 || log_start > log_end ||
             !json_is_boolean(json_object_get(ref, "stdin_open")) ||
             snag_json_integer_u64(ref, "stdin_accepted", &accepted) < 0 ||
             snag_json_integer_u64(ref, "stdin_written", &written) < 0 ||
-            snag_json_integer_u64(ref, "stdin_pending", &pending) < 0 ||
-            written > accepted || pending > accepted - written) return -1;
+            snag_json_integer_u64(ref, "stdin_pending", &pending) < 0 || written > accepted ||
+            pending > accepted - written)
+            return -1;
         for (unsigned int s = 0u; s < 2u; ++s) {
             uint64_t from, to, bytes;
             if (snag_json_integer_u64(ref, begin[s], &from) < 0 ||
                 snag_json_integer_u64(ref, end[s], &to) < 0 || from > to ||
-                snag_json_integer_u64(json_object_get(result, streams[s]), "original_bytes", &bytes) < 0 ||
-                bytes != to - from) return -1;
+                snag_json_integer_u64(
+                    json_object_get(result, streams[s]), "original_bytes", &bytes) < 0 ||
+                bytes != to - from)
+                return -1;
         }
     }
     (void)model_text;
@@ -652,20 +731,29 @@ snag_tool_result_valid(const json_t *result)
     exit_value = json_object_get(result, "exit_code");
     signal_value = json_object_get(result, "signal");
     reason = snag_json_string(result, "reason");
-    if (strcmp(status, "not_run") == 0) return reason_is_not_run(reason) && json_is_null(handle) ? 0 : -1;
+    if (strcmp(status, "not_run") == 0)
+        return reason_is_not_run(reason) && json_is_null(handle) ? 0 : -1;
     if (strcmp(status, "outcome_unknown") == 0)
         return reason && (snag_string_in(reason, "owner_lost unreaped_after_sigkill")) &&
-               json_is_null(handle) ? 0 : -1;
-    if (strcmp(status, "denied") == 0) return reason && strcmp(reason, "user_denied") == 0 &&
-               json_is_null(handle) ? 0 : -1;
-    if (strcmp(status, "cancelled") == 0) return reason && strcmp(reason, "turn_cancelled") == 0 &&
-               json_is_null(handle) ? 0 : -1;
-    if (strcmp(status, "running") == 0) return json_is_string(handle) &&
-               snag_hex_is_lower(json_string_value(handle), SNAG_ID_HEX_LEN) && (json_is_null(reason_value) ||
-                snag_string_in(reason, "timeout_handoff wait_timeout operator_yield batch_yield steering_handoff")) ? 0 : -1;
-    if (!json_is_null(handle) || (!json_is_null(reason_value) &&
-         !(reason && strcmp(reason, "output_drain_timeout") == 0 &&
-           snag_string_in(status, "succeeded failed signaled")))) return -1;
+                       json_is_null(handle)
+                   ? 0
+                   : -1;
+    if (strcmp(status, "denied") == 0)
+        return reason && strcmp(reason, "user_denied") == 0 && json_is_null(handle) ? 0 : -1;
+    if (strcmp(status, "cancelled") == 0)
+        return reason && strcmp(reason, "turn_cancelled") == 0 && json_is_null(handle) ? 0 : -1;
+    if (strcmp(status, "running") == 0)
+        return json_is_string(handle) &&
+                       snag_hex_is_lower(json_string_value(handle), SNAG_ID_HEX_LEN) &&
+                       (json_is_null(reason_value) ||
+                           snag_string_in(reason, "timeout_handoff wait_timeout operator_yield "
+                                                  "batch_yield steering_handoff"))
+                   ? 0
+                   : -1;
+    if (!json_is_null(handle) ||
+        (!json_is_null(reason_value) && !(reason && strcmp(reason, "output_drain_timeout") == 0 &&
+                                            snag_string_in(status, "succeeded failed signaled"))))
+        return -1;
     if (snag_string_in(status, "succeeded failed"))
         return json_is_integer(exit_value) && json_is_null(signal_value) ? 0 : -1;
     if (strcmp(status, "signaled") == 0)

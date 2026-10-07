@@ -18,37 +18,52 @@
 #define SNAG_MAX_PENDING_QUEUE_TEXT (16u * 1024u * 1024u)
 #define SNAG_MAX_IRC_SNAPSHOT (8u * 1024u * 1024u)
 #define SNAG_MAX_TIMER_TEXT (256u * 1024u)
-#define SNAG_IRC_REPLY_REMINDER_TEXT \
-    "Use irc_send to reply to the originating conversation before ending this turn. " \
+#define SNAG_IRC_REPLY_REMINDER_TEXT                                                               \
+    "Use irc_send to reply to the originating conversation before ending this turn. "              \
     "For a private query select query:CONVERSATION_ID; keep private replies in that query."
 #define SNAG_MAX_GOAL_PROMPT (1024u * 1024u)
 #define SNAG_BANNER_MAX (4u * 1024u)
 #define SNAG_MAX_GOAL_BLOCKER (64u * 1024u)
 #define SNAG_GOAL_CONTINUATION_TEXT "Continue the active goal from its durable state."
-#define SNAG_HOST_CONTEXT_BEGIN \
-    "[snajpagent host continuation — not a new user message]\n" \
+#define SNAG_HOST_CONTEXT_BEGIN                                                                    \
+    "[snajpagent host continuation — not a new user message]\n"                                    \
     "Host state snapshot: the following facts replace earlier snapshots."
-#define SNAG_HOST_CONTEXT_END \
-    "[snajpagent host continuation — not a new user message]\n" \
+#define SNAG_HOST_CONTEXT_END                                                                      \
+    "[snajpagent host continuation — not a new user message]\n"                                    \
     "End host state snapshot."
 
 enum snag_policy_stop {
-    SNAG_POLICY_STOP_NONE, SNAG_POLICY_STOP_PROVIDER, SNAG_POLICY_STOP_REFUSAL };
+    SNAG_POLICY_STOP_NONE,
+    SNAG_POLICY_STOP_PROVIDER,
+    SNAG_POLICY_STOP_REFUSAL
+};
 
 enum snag_goal_status {
-    SNAG_GOAL_NONE, SNAG_GOAL_ACTIVE, SNAG_GOAL_PAUSED, SNAG_GOAL_BLOCKED,
-    SNAG_GOAL_COMPLETED, SNAG_GOAL_CANCELLED };
+    SNAG_GOAL_NONE,
+    SNAG_GOAL_ACTIVE,
+    SNAG_GOAL_PAUSED,
+    SNAG_GOAL_BLOCKED,
+    SNAG_GOAL_COMPLETED,
+    SNAG_GOAL_CANCELLED
+};
 
 enum snag_response_terminal {
-    SNAG_RESPONSE_TERMINAL_NONE, SNAG_RESPONSE_TERMINAL_STEERED,
-    SNAG_RESPONSE_TERMINAL_INTERRUPTED, SNAG_RESPONSE_TERMINAL_FAILED };
+    SNAG_RESPONSE_TERMINAL_NONE,
+    SNAG_RESPONSE_TERMINAL_STEERED,
+    SNAG_RESPONSE_TERMINAL_INTERRUPTED,
+    SNAG_RESPONSE_TERMINAL_FAILED
+};
 
 enum snag_session_control {
-    SNAG_CONTROL_CONFIG = 1u, SNAG_CONTROL_CACHE = 2u, SNAG_CONTROL_COMPACT = 4u,
+    SNAG_CONTROL_CONFIG = 1u,
+    SNAG_CONTROL_CACHE = 2u,
+    SNAG_CONTROL_COMPACT = 4u,
     /* Retained only to finish controls recorded by older builds. */
     SNAG_CONTROL_LEGACY_ARCHIVE = 8u,
-    SNAG_CONTROL_DELETE = 16u, SNAG_CONTROL_RETRY = 32u,
-    SNAG_CONTROL_RELOAD = 64u };
+    SNAG_CONTROL_DELETE = 16u,
+    SNAG_CONTROL_RETRY = 32u,
+    SNAG_CONTROL_RELOAD = 64u
+};
 
 struct snag_pending_call {
     char call_id[SNAG_ID_HEX_LEN + 1u];
@@ -103,9 +118,8 @@ struct snag_input_observation {
     bool valid;
 };
 
-bool snag_input_observation_matches(const struct snag_input_observation *,
-    const char *provider, const char *model, const char *effort,
-    const char *source_sha256, const char *compact_id);
+bool snag_input_observation_matches(const struct snag_input_observation *, const char *provider,
+    const char *model, const char *effort, const char *source_sha256, const char *compact_id);
 
 /* Per-session usage totals, accumulated where a completed response is applied, so a
  * resumed session derives them from its journal rather than from memory. */
@@ -143,7 +157,8 @@ struct snag_session {
     char active_response_id[SNAG_ID_HEX_LEN + 1u];
     char final_item_id[SNAG_ID_HEX_LEN + 1u];
     char final_response_id[SNAG_ID_HEX_LEN + 1u];
-    struct snag_input_observation active_accounting, usage_anchor, context_meter, capacity_rejection;
+    struct snag_input_observation active_accounting, usage_anchor, context_meter,
+        capacity_rejection;
     struct snag_usage_totals usage_totals;
     struct snag_process_state *processes;
     size_t process_count, process_capacity;
@@ -181,7 +196,7 @@ struct snag_session {
     char command_shell[SNAG_CONFIG_PATH_MAX + 1u];
     const char *cwd;
     const char *service_tier; /* NULL preserves the provider's default. */
-    const char *retry_auto; /* NULL inherits the owner's configuration. */
+    const char *retry_auto;   /* NULL inherits the owner's configuration. */
     char trash_name[SNAG_ID_HEX_LEN + 1u + SNAG_ID_HEX_LEN + 1u];
     char *dir_path;
     const char *name;
@@ -197,15 +212,15 @@ struct snag_session {
     json_t *strings;
     json_t *compact_output;
     char compact_scope[SNAG_SHA256_HEX_LEN + 1u];
-    json_t *pending_input; /* Accepted direct input awaiting turn preparation. */
+    json_t *pending_input;       /* Accepted direct input awaiting turn preparation. */
     json_t *active_instructions; /* Original path metadata for same-turn recovery. */
-    json_t *response_public; /* Reconstructed public prefix of the current response. */
+    json_t *response_public;     /* Reconstructed public prefix of the current response. */
     /* The one-file journal checkpoint's persisted provider view is consumed
      * once on resume. Live checkpoint encoding is supplied by context.c. */
     json_t *checkpoint_context, *checkpoint_state;
-    json_t *download_queue; /* Pending workstation downloads, durable in the journal. */
+    json_t *download_queue;    /* Pending workstation downloads, durable in the journal. */
     json_t *irc_conversations; /* Immutable connection/conversation directory, snapshot v3. */
-    json_t *irc_activity; /* Optional derived counters; older checkpoints leave a known gap. */
+    json_t *irc_activity;      /* Optional derived counters; older checkpoints leave a known gap. */
     size_t response_public_bytes;
     int dir_fd;
     int log_fd;
@@ -318,20 +333,18 @@ void snag_session_close(struct snag_session *session);
 /* Resolve a cwd path and require an existing UTF-8 directory. label
  * names the cwd in diagnostics; NULL uses the bare "cwd" wording. */
 char *snag_cwd_resolve(const char *cwd, const char *label, char *error, size_t error_size);
-int snag_session_prepare(struct snag_session *session, const char *cwd,
-                         const char *provider, const char *model, const char *effort,
-                         char *error, size_t error_size);
-int snag_session_persist(struct snag_store *store, struct snag_session *session,
-                         char *error, size_t error_size);
-int snag_session_create(struct snag_store *store, struct snag_session *session,
-                       const char *cwd, const char *provider, const char *model,
-                       const char *effort, char *error, size_t error_size);
-int snag_session_open(struct snag_store *store, struct snag_session *session,
-                     const char *prefix, char *error, size_t error_size);
-int snag_session_open_last(struct snag_store *store, struct snag_session *session,
-                          char *error, size_t error_size);
-int snag_store_find_last(struct snag_store *, char id[SNAG_ID_HEX_LEN + 1u],
-                         char *error, size_t error_size);
+int snag_session_prepare(struct snag_session *session, const char *cwd, const char *provider,
+    const char *model, const char *effort, char *error, size_t error_size);
+int snag_session_persist(
+    struct snag_store *store, struct snag_session *session, char *error, size_t error_size);
+int snag_session_create(struct snag_store *store, struct snag_session *session, const char *cwd,
+    const char *provider, const char *model, const char *effort, char *error, size_t error_size);
+int snag_session_open(struct snag_store *store, struct snag_session *session, const char *prefix,
+    char *error, size_t error_size);
+int snag_session_open_last(
+    struct snag_store *store, struct snag_session *session, char *error, size_t error_size);
+int snag_store_find_last(
+    struct snag_store *, char id[SNAG_ID_HEX_LEN + 1u], char *error, size_t error_size);
 bool snag_session_is_live(const struct snag_session *);
 typedef int (*snag_store_emit_fn)(void *, const char *, size_t);
 bool snag_session_name_valid(const char *name);
@@ -339,72 +352,72 @@ bool snag_session_name_valid(const char *name);
 int snag_session_option_arity(const char *name);
 bool snag_session_options_valid(const json_t *args);
 int snag_store_find_name(struct snag_store *, const char *name, char id[SNAG_ID_HEX_LEN + 1u],
-                         snag_store_emit_fn matches_emit, void *, char *error, size_t error_size);
+    snag_store_emit_fn matches_emit, void *, char *error, size_t error_size);
 /* Resolve a saved session's private directory without opening its lock/journal
  * or cleaning up trash. The caller supplies an initialized, unopened session
  * and closes it on every outcome. This does not establish live-owner status.
  * On EEXIST, matches_emit (if non-NULL) receives each full matching ID + newline. */
 int snag_session_locate(struct snag_store *, struct snag_session *, const char *prefix,
-                        snag_store_emit_fn matches_emit, void *, char *error, size_t error_size);
+    snag_store_emit_fn matches_emit, void *, char *error, size_t error_size);
 /* Supply the caller's owned session so probing never opens/closes its lock.
  * All running sessions precede up to stored_limit saved sessions, newest first
  * within each attachment state. UINT64_MAX includes all stored sessions. */
 int snag_store_list(struct snag_store *store, const struct snag_session *owned,
-                    uint64_t stored_limit, unsigned int columns,
-                    snag_store_emit_fn emit, void *opaque,
-                    char *error, size_t error_size);
+    uint64_t stored_limit, unsigned int columns, snag_store_emit_fn emit, void *opaque, char *error,
+    size_t error_size);
 /* Same selection/comparator as the CLI. Owned rows contain the full id,
  * activity_ms, status_rank and seven display cells. Empty stores return []. */
 json_t *snag_store_catalog(struct snag_store *, const struct snag_session *owned,
     uint64_t stored_limit, bool (*cancel)(void *), void *cancel_opaque, char *, size_t);
 int snag_session_delete(struct snag_store *store, struct snag_session *session,
-                       const char *confirmed_prefix, uint64_t *written_seq, char *error, size_t error_size);
-int snag_session_complete_delete(struct snag_store *store, struct snag_session *session,
-                                char *error, size_t error_size);
+    const char *confirmed_prefix, uint64_t *written_seq, char *error, size_t error_size);
+int snag_session_complete_delete(
+    struct snag_store *store, struct snag_session *session, char *error, size_t error_size);
 
 /* Called by the sole session owner after finalized voice input. Acceptance is
  * one queued-input event; repeated connection/input IDs never enqueue twice,
  * including after queue consumption, deletion, or session replay. */
-int snag_session_voice_queue(struct snag_session *,const json_t *,char id[SNAG_ID_HEX_LEN+1u],
-                             bool *duplicate,char *,size_t);
+int snag_session_voice_queue(struct snag_session *, const json_t *, char id[SNAG_ID_HEX_LEN + 1u],
+    bool *duplicate, char *, size_t);
 int snag_session_voice_prompt(const json_t *, struct snag_buf *, char *, size_t);
 /* Read the original queue/turn state, including after disconnect or replay.
  * Caller owns *result: status, turn_id (empty while queued), and text. */
-int snag_session_voice_status(struct snag_session *,const char *queue_id,json_t **result,char *,size_t);
+int snag_session_voice_status(
+    struct snag_session *, const char *queue_id, json_t **result, char *, size_t);
 /* Bounded textual seed for an explicitly opened connection; never actions or
  * orphaned function outputs. Includes recent captions and latest handoff state. */
-int snag_session_voice_context(struct snag_session *,json_t **result,char *,size_t);
+int snag_session_voice_context(struct snag_session *, json_t **result, char *, size_t);
 
 /* Full replay supplies validated post-event state; cursor scans supply NULL. */
 typedef int (*snag_session_event_fn)(void *opaque, const struct snag_session *state, uint64_t seq,
-                                    const char *type, const json_t *data, char *error, size_t error_size);
+    const char *type, const json_t *data, char *error, size_t error_size);
 int snag_session_each_event(struct snag_session *session, snag_session_event_fn fn, void *opaque,
-                           char *error, size_t error_size);
+    char *error, size_t error_size);
 struct snag_process_state *snag_session_process(struct snag_session *, const char *handle);
 bool snag_session_pending_steering_unadmitted(const struct snag_session *);
 int snag_process_output_decode(const json_t *data, struct snag_buf *bytes);
 int snag_session_each_event_since(struct snag_session *, const struct snag_process_state *,
-                                  snag_session_event_fn, void *, char *, size_t);
+    snag_session_event_fn, void *, char *, size_t);
 /* Replay only the suffix after an embedded checkpoint's pre-event state. */
-int snag_session_each_event_from_checkpoint(struct snag_session *, const json_t *,
-                                            snag_session_event_fn, void *, char *, size_t);
+int snag_session_each_event_from_checkpoint(
+    struct snag_session *, const json_t *, snag_session_event_fn, void *, char *, size_t);
 
 /* Consumes data on success and failure. */
-int snag_session_commit(struct snag_session *session, const char *type, json_t *data, uint64_t *written_seq,
-                       char *error, size_t error_size);
+int snag_session_commit(struct snag_session *session, const char *type, json_t *data,
+    uint64_t *written_seq, char *error, size_t error_size);
 /* Receipt-pinned native image, or one indexed checkpoint record in the legacy log. */
 int snag_session_checkpoint(struct snag_session *, char *error, size_t error_size);
 /* Capture the existing voice import operation's current durable destination
  * cursor. Native admission retains its identity/count proof until adoption or
  * explicit abandonment; copied source-data records remain inert. */
 int snag_session_voice_import_cursor(struct snag_session *session, const char *transfer_id,
-    const char *source_id, uint64_t source_as_of, uint64_t count,
-    struct snag_journal_cursor *out, char *error, size_t error_size);
+    const char *source_id, uint64_t source_as_of, uint64_t count, struct snag_journal_cursor *out,
+    char *error, size_t error_size);
 void snag_session_voice_import_abandon(struct snag_session *session, const char *transfer_id);
 /* Read owned snapshot documents without replacing current live state.
  * No established checkpoint returns NULL documents; a damaged one fails. */
-int snag_session_checkpoint_read(struct snag_session *, json_t **state, json_t **context,
-    char *error, size_t error_size);
+int snag_session_checkpoint_read(
+    struct snag_session *, json_t **state, json_t **context, char *error, size_t error_size);
 /* Backward, envelope/hash-verified records without reducer replay. The callback
  * gets NULL state; positive pauses before consuming that record, negative fails.
  * SNAG_JOURNAL_STOP_AFTER consumes that record and stops without reading another.
@@ -414,18 +427,18 @@ int snag_session_checkpoint_read(struct snag_session *, json_t **state, json_t *
 #define SNAG_JOURNAL_STOP_AFTER 2
 /* Verify a record boundary already referenced by this pinned journal. Failure
  * preserves the caller's cursor; the committed end is a valid empty boundary. */
-int snag_session_history_cursor_at(struct snag_session *, int64_t offset,
-    struct snag_journal_cursor *, char *, size_t);
+int snag_session_history_cursor_at(
+    struct snag_session *, int64_t offset, struct snag_journal_cursor *, char *, size_t);
 /* Seek by sequence in the pinned prefix; zero selects its committed end.
  * Checkpoint footer hints guide the search; the selected boundary is verified. */
-int snag_session_history_cursor_before(struct snag_session *, uint64_t before_seq,
-    struct snag_journal_cursor *, char *, size_t);
+int snag_session_history_cursor_before(
+    struct snag_session *, uint64_t before_seq, struct snag_journal_cursor *, char *, size_t);
 /* Resolve a tool completion's collected output inside the pinned history.
  * Converted native records retain legacy display offsets; their canonical
  * sequence ranges select the actual source. Outputs change only on success. */
 int snag_session_history_output_range(struct snag_session *, uint64_t sequence,
-    const json_t *reference, struct snag_journal_cursor *begin,
-    struct snag_journal_cursor *end, char *, size_t);
+    const json_t *reference, struct snag_journal_cursor *begin, struct snag_journal_cursor *end,
+    char *, size_t);
 int snag_session_each_event_reverse(struct snag_session *, uint64_t before_seq, size_t scan_bytes,
     snag_session_event_fn, void *opaque, uint64_t *next_before, char *error, size_t error_size);
 /* Forward envelope/hash-verified records; zero cursor starts at the beginning.
@@ -449,8 +462,8 @@ int snag_session_history_snapshot(struct snag_store *, struct snag_session *, co
     bool *incomplete, char *error, size_t error_size);
 /* Verify identity and the new chain before extending a read-only view. Failure
  * retains its previous bound; replacement/truncation requires cache invalidation. */
-int snag_session_history_refresh(struct snag_session *, const struct snag_journal_cursor *tail,
-    char *error, size_t error_size);
+int snag_session_history_refresh(
+    struct snag_session *, const struct snag_journal_cursor *tail, char *error, size_t error_size);
 
 /* Discover and verify newly complete records on an existing snapshot. An
  * unchanged complete tail performs identity checks only, including when its
@@ -458,8 +471,8 @@ int snag_session_history_refresh(struct snag_session *, const struct snag_journa
 int snag_session_history_observe(struct snag_session *, bool *incomplete, char *, size_t);
 
 int snag_session_media(struct snag_session *session, const char *path, const char *mime,
-                       int (*pump)(void *, unsigned int), void *opaque,
-                       json_t **asset, char **retained_path, char *error, size_t error_size);
+    int (*pump)(void *, unsigned int), void *opaque, json_t **asset, char **retained_path,
+    char *error, size_t error_size);
 
 /* Context-selection mode names are durable session-log values; the session
  * store owns their parsing so replay and the application agree. */

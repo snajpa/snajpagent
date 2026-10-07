@@ -37,15 +37,17 @@ name_valid(const char *name)
 {
     if (!name || !*name || strlen(name) > SNAG_RULE_NAME_MAX) return false;
     for (const unsigned char *p = (const unsigned char *)name; *p; ++p)
-        if (!((*p >= 'a' && *p <= 'z') || (*p >= '0' && *p <= '9') ||
-              *p == '-' || *p == '_' || *p == '.')) return false;
+        if (!((*p >= 'a' && *p <= 'z') || (*p >= '0' && *p <= '9') || *p == '-' || *p == '_' ||
+                *p == '.'))
+            return false;
     return true;
 }
 
 bool
 snag_rules_boundary(const char *boundary)
 {
-    return boundary && (!strcmp(boundary, "in") || !strcmp(boundary, "out") || !strcmp(boundary, "event"));
+    return boundary &&
+           (!strcmp(boundary, "in") || !strcmp(boundary, "out") || !strcmp(boundary, "event"));
 }
 
 /* JSON pointer subset: nonempty segments, ~0 for ~ and ~1 for /. */
@@ -113,9 +115,9 @@ rule_free(struct snag_rule *rule)
 static int
 compile_rule(struct snag_rules *rules, json_t *definition, size_t index, char *error, size_t size)
 {
-    static const char *const removed =
-        " (rule chains, jumps, thresholds, templates and helper verbs are unsupported by this build;"
-        " see design/io-rules.md for the migration)";
+    static const char *const removed = " (rule chains, jumps, thresholds, templates and helper "
+                                       "verbs are unsupported by this build;"
+                                       " see design/io-rules.md for the migration)";
     struct snag_rule *rule = &rules->rules[index];
     const char *name = snag_json_string(definition, "name");
     const char *action = snag_json_string(definition, "action");
@@ -126,7 +128,7 @@ compile_rule(struct snag_rules *rules, json_t *definition, size_t index, char *e
         return invalid(error, size, "invalid rule identity");
     {
         for (void *it = json_object_iter(definition); it;
-             it = json_object_iter_next(definition, it)) {
+            it = json_object_iter_next(definition, it)) {
             const char *key = json_object_iter_key(it);
             if (strcmp(key, "name") && strcmp(key, "match") && strcmp(key, "action") &&
                 strcmp(key, "message")) {
@@ -137,7 +139,8 @@ compile_rule(struct snag_rules *rules, json_t *definition, size_t index, char *e
         }
     }
     for (size_t i = 0u; i < index; ++i)
-        if (strcmp(rules->rules[i].name, name) == 0) return invalid(error, size, "duplicate rule name");
+        if (strcmp(rules->rules[i].name, name) == 0)
+            return invalid(error, size, "duplicate rule name");
     if (!strcmp(action, "allow")) {
         rule->verb = SNAG_RULE_ALLOW;
     } else if (!strcmp(action, "deny")) {
@@ -149,7 +152,8 @@ compile_rule(struct snag_rules *rules, json_t *definition, size_t index, char *e
         const json_t *node = json_object_get(definition, "message");
         if (!json_is_string(node) || strlen(message) > SNAG_RULE_TEXT_MAX)
             return invalid(error, size, "message must be a bounded string");
-        if (rule->verb == SNAG_RULE_ALLOW) return invalid(error, size, "message applies only to deny");
+        if (rule->verb == SNAG_RULE_ALLOW)
+            return invalid(error, size, "message applies only to deny");
         rule->message = snag_strdup_checked(message, SNAG_RULE_TEXT_MAX + 1u);
         if (!rule->message) return -1;
     }
@@ -158,7 +162,7 @@ compile_rule(struct snag_rules *rules, json_t *definition, size_t index, char *e
         rule->predicates = calloc(json_object_size(match), sizeof(*rule->predicates));
         if (!rule->predicates) return -1;
         for (void *it = json_object_iter((json_t *)match); it;
-             it = json_object_iter_next((json_t *)match, it)) {
+            it = json_object_iter_next((json_t *)match, it)) {
             const char *key = json_object_iter_key(it);
             const json_t *value = json_object_iter_value(it);
             if (!pointer_valid(key) || !json_is_string(value))
@@ -208,7 +212,7 @@ snag_rules_compile(const json_t *definition, char *error, size_t size)
     }
     {
         for (void *it = json_object_iter((json_t *)definition); it;
-             it = json_object_iter_next((json_t *)definition, it)) {
+            it = json_object_iter_next((json_t *)definition, it)) {
             const char *key = json_object_iter_key(it);
             if (strcmp(key, "rules")) {
                 invalid(error, size, "rules must be an object with a rules array");
@@ -258,9 +262,21 @@ snag_rules_digest(const struct snag_rules *rules)
     return rules ? rules->digest : "";
 }
 
-const char *snag_rule_name(const struct snag_rule *rule) { return rule->name; }
-enum snag_rule_verb snag_rule_verb(const struct snag_rule *rule) { return rule->verb; }
-const char *snag_rule_message(const struct snag_rule *rule) { return rule->message; }
+const char *
+snag_rule_name(const struct snag_rule *rule)
+{
+    return rule->name;
+}
+enum snag_rule_verb
+snag_rule_verb(const struct snag_rule *rule)
+{
+    return rule->verb;
+}
+const char *
+snag_rule_message(const struct snag_rule *rule)
+{
+    return rule->message;
+}
 
 static int
 rule_matches(const struct snag_rule *rule, const json_t *envelope)
@@ -291,7 +307,8 @@ rule_matches(const struct snag_rule *rule, const json_t *envelope)
         }
     }
     result = 1;
-done: snag_buf_free(&bytes);
+done:
+    snag_buf_free(&bytes);
     return result;
 }
 
@@ -301,8 +318,8 @@ struct snag_rule_position {
 
 int
 snag_rules_eval(const struct snag_rules *rules, struct snag_rule_frame *frame,
-                snag_rule_effect_fn effect, void *opaque,
-                struct snag_rule_verdict *verdict, char *error, size_t size)
+    snag_rule_effect_fn effect, void *opaque, struct snag_rule_verdict *verdict, char *error,
+    size_t size)
 {
     const char *boundary;
     bool decided = false;

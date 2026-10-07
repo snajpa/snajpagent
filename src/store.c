@@ -30,16 +30,18 @@ open_dir_path(const char *path)
     return snag_open_read_security_at(-1, path, true);
 }
 int
-snag_store_verify_private_fd(int fd, bool directory, const char *name, char *error, size_t error_size)
+snag_store_verify_private_fd(
+    int fd, bool directory, const char *name, char *error, size_t error_size)
 {
     snag_file_info st;
     struct snag_file_privacy privacy;
     bool valid;
     if (snag_fstat(fd, &st) < 0 || snag_fd_privacy(fd, &privacy) < 0)
         return snag_errorf(error, error_size, "cannot inspect %s: %s", name, strerror(errno));
-    valid = (directory ? S_ISDIR(st.st_mode) : S_ISREG(st.st_mode)) &&
-            privacy.real_owner && privacy.private_access;
-    if (!valid) return snag_fail(error, error_size, EACCES, "%s must be private and user-owned", name);
+    valid = (directory ? S_ISDIR(st.st_mode) : S_ISREG(st.st_mode)) && privacy.real_owner &&
+            privacy.private_access;
+    if (!valid)
+        return snag_fail(error, error_size, EACCES, "%s must be private and user-owned", name);
     return 0;
 }
 static int
@@ -47,12 +49,12 @@ ensure_directory(const char *path, bool require_private, char *error, size_t err
 {
     snag_file_info st;
     if (snag_lstat(path, &st) < 0) {
-        if (errno != ENOENT) return snag_errorf(error, error_size, "cannot inspect %s: %s", path,
-                      strerror(errno));
-        if (snag_mkdir_private(path) < 0) return snag_errorf(error, error_size, "cannot create %s: %s", path,
-                      strerror(errno));
-        if (snag_lstat(path, &st) < 0) return snag_errorf(error, error_size, "cannot verify %s: %s", path,
-                      strerror(errno));
+        if (errno != ENOENT)
+            return snag_errorf(error, error_size, "cannot inspect %s: %s", path, strerror(errno));
+        if (snag_mkdir_private(path) < 0)
+            return snag_errorf(error, error_size, "cannot create %s: %s", path, strerror(errno));
+        if (snag_lstat(path, &st) < 0)
+            return snag_errorf(error, error_size, "cannot verify %s: %s", path, strerror(errno));
     }
     if (!S_ISDIR(st.st_mode) || S_ISLNK(st.st_mode))
         return snag_fail(error, error_size, EINVAL, "%s is not a real directory", path);
@@ -110,28 +112,35 @@ snag_store_open(struct snag_store *store, const char *dotdir, char *error, size_
     int rc = -1;
     if (!snag_path_root_len(dotdir) || !snag_text_valid(dotdir, 0u, SNAG_PATH_MAX_BYTES)) {
         return snag_fail(error, error_size, EINVAL,
-                  "dotdir must be an absolute UTF-8 path within the supported limit");
+            "dotdir must be an absolute UTF-8 path within the supported limit");
     }
     store->root_path = snag_strdup_checked(dotdir, SNAG_PATH_MAX_BYTES);
     if (!store->root_path || mkdir_parents(store->root_path, error, error_size) < 0 ||
-        ensure_directory(store->root_path, true, error, error_size) < 0) goto out;
+        ensure_directory(store->root_path, true, error, error_size) < 0)
+        goto out;
     store->root_fd = open_dir_path(store->root_path);
     if (store->root_fd < 0) goto io_error;
-    if (snag_store_verify_private_fd(store->root_fd, true, "state root", error, error_size) < 0) goto out;
+    if (snag_store_verify_private_fd(store->root_fd, true, "state root", error, error_size) < 0)
+        goto out;
     sessions = snag_path_join(store->root_path, "sessions");
     trash = snag_path_join(store->root_path, "trash");
     if (!sessions || !trash || ensure_directory(sessions, true, error, error_size) < 0 ||
-        ensure_directory(trash, true, error, error_size) < 0) goto out;
+        ensure_directory(trash, true, error, error_size) < 0)
+        goto out;
     store->sessions_fd = open_dir_path(sessions);
     store->trash_fd = open_dir_path(trash);
     if (store->sessions_fd < 0 || store->trash_fd < 0) goto io_error;
-    if (snag_store_verify_private_fd(store->sessions_fd, true, "sessions directory", error, error_size) < 0 ||
-        snag_store_verify_private_fd(store->trash_fd, true, "trash directory", error, error_size) < 0)
+    if (snag_store_verify_private_fd(
+            store->sessions_fd, true, "sessions directory", error, error_size) < 0 ||
+        snag_store_verify_private_fd(store->trash_fd, true, "trash directory", error, error_size) <
+            0)
         goto out;
     rc = 0;
     goto out;
-io_error: snag_errorf(error, error_size, "cannot open state directory: %s", strerror(errno));
-out: free(sessions);
+io_error:
+    snag_errorf(error, error_size, "cannot open state directory: %s", strerror(errno));
+out:
+    free(sessions);
     free(trash);
     if (rc < 0) snag_store_close(store);
     return rc;
@@ -193,7 +202,7 @@ snag_session_option_arity(const char *name)
 {
     if (snag_string_in(name, "--no-listen --no-client --markdown --no-markdown -v")) return 0;
     if (snag_string_in(name,
-        "--config -d --color --listen --client --model-nick --operator-nick --room-name")) {
+            "--config -d --color --listen --client --model-nick --operator-nick --room-name")) {
         return 1;
     }
     return -1;
@@ -207,8 +216,9 @@ snag_session_options_valid(const json_t *args)
         const char *name = json_string_value(json_array_get(args, i));
         int arity = snag_session_option_arity(name);
         if (arity == 0) continue;
-        if (arity < 0 || !snag_text_valid(json_string_value(json_array_get(args, ++i)),
-                1u, SNAG_PATH_MAX_BYTES)) return false;
+        if (arity < 0 ||
+            !snag_text_valid(json_string_value(json_array_get(args, ++i)), 1u, SNAG_PATH_MAX_BYTES))
+            return false;
     }
     return true;
 }
@@ -227,8 +237,10 @@ snag_session_init(struct snag_session *session)
 static void
 free_session_state(struct snag_session *session)
 {
-    for(size_t i=0;i<session->pending_steering_count;++i)json_decref(session->pending_steering[i].content);
-    for(size_t i=0;i<session->pending_queue_count;++i)json_decref(session->pending_queue[i].content);
+    for (size_t i = 0; i < session->pending_steering_count; ++i)
+        json_decref(session->pending_steering[i].content);
+    for (size_t i = 0; i < session->pending_queue_count; ++i)
+        json_decref(session->pending_queue[i].content);
     free(session->pending_calls);
     free(session->pending_steering);
     free(session->pending_queue);
@@ -267,15 +279,18 @@ lock_session(int dir_fd, int *fd_out, char *error, size_t error_size)
 {
     int fd;
     fd = snag_create_private_at(dir_fd, "lock", false);
-    if (fd < 0) return snag_errorf(error, error_size, "cannot open session lock: %s", strerror(errno));
+    if (fd < 0)
+        return snag_errorf(error, error_size, "cannot open session lock: %s", strerror(errno));
     if (snag_fd_cloexec(fd) < 0 ||
         snag_store_verify_private_fd(fd, false, "session lock", error, error_size) < 0) {
         (void)close(fd);
         return -1;
     }
     if (snag_lock_file(fd, false) < 0) {
-        snag_errorf(error, error_size, errno == EACCES || errno == EAGAIN ?
-                  "session is already open" : "cannot lock session: %s", strerror(errno));
+        snag_errorf(error, error_size,
+            errno == EACCES || errno == EAGAIN ? "session is already open"
+                                               : "cannot lock session: %s",
+            strerror(errno));
         (void)close(fd);
         return -1;
     }
@@ -283,12 +298,13 @@ lock_session(int dir_fd, int *fd_out, char *error, size_t error_size)
     return 0;
 }
 int
-snag_store_open_session_files(struct snag_session *session, bool create, char *error, size_t error_size)
+snag_store_open_session_files(
+    struct snag_session *session, bool create, char *error, size_t error_size)
 {
     if (lock_session(session->dir_fd, &session->lock_fd, error, error_size) < 0) return -1;
     bool native = !create;
-    session->log_fd = snag_open_private_append_at(session->dir_fd,
-        native ? "journal.bin" : "events.jsonl", create);
+    session->log_fd = snag_open_private_append_at(
+        session->dir_fd, native ? "journal.bin" : "events.jsonl", create);
     if (native && session->log_fd < 0 && errno == ENOENT) {
         native = false;
         session->log_fd = snag_open_private_append_at(session->dir_fd, "events.jsonl", false);
@@ -296,7 +312,8 @@ snag_store_open_session_files(struct snag_session *session, bool create, char *e
     if (session->log_fd < 0)
         return snag_errorf(error, error_size, "cannot open event log: %s", strerror(errno));
     if (snag_fd_cloexec(session->log_fd) < 0 ||
-        snag_store_verify_private_fd(session->log_fd, false, "event log", error, error_size) < 0) return -1;
+        snag_store_verify_private_fd(session->log_fd, false, "event log", error, error_size) < 0)
+        return -1;
     session->log_end = snag_seek(session->log_fd, 0, SEEK_END);
     if (session->log_end < 0)
         return snag_errorf(error, error_size, "cannot seek event log: %s", strerror(errno));
@@ -315,7 +332,7 @@ session_closure_event(const char *type)
 
 static int
 snag_session_append(struct snag_session *session, const char *type, json_t *data,
-                   uint64_t *written_seq, char *error, size_t error_size)
+    uint64_t *written_seq, char *error, size_t error_size)
 {
     json_t *event = NULL;
     char digest[SNAG_SHA256_HEX_LEN + 1u];
@@ -333,22 +350,23 @@ snag_session_append(struct snag_session *session, const char *type, json_t *data
     /* Offsets and the next sequence are serialized as signed JSON integers.
      * Session lifetime has no quota beyond that representation and storage. */
     if (!seq || seq >= (uint64_t)INT64_MAX || session->log_end < 0) {
-        (void)snag_fail(error, error_size, EOVERFLOW,
-            "session journal position is not representable");
+        (void)snag_fail(
+            error, error_size, EOVERFLOW, "session journal position is not representable");
         goto out;
     }
-    event = json_pack("{s:O,s:s,s:I,s:s,s:I,s:s,s:i}", "data", data, "prev_sha256", session->prev_sha256,
-        "seq", (json_int_t)seq, "session_id", session->id,
-        "time_ms", (json_int_t)session->last_time_ms, "type", type, "v", new_format ? 2 : 1);
+    event = json_pack("{s:O,s:s,s:I,s:s,s:I,s:s,s:i}", "data", data, "prev_sha256",
+        session->prev_sha256, "seq", (json_int_t)seq, "session_id", session->id, "time_ms",
+        (json_int_t)session->last_time_ms, "type", type, "v", new_format ? 2 : 1);
     if (event && new_format &&
         snag_json_set_new(event, "checkpoint_offset", json_integer(checkpoint_offset)) < 0)
         goto memory_error;
     if (!event || snag_json_digest_bounded(event, line.max, digest, NULL) < 0) goto memory_error;
     if (snag_json_set_new(event, "event_sha256", json_string(digest)) < 0 ||
-        snag_json_canonical(event, &line) < 0 || snag_buf_putc(&line, '\n') < 0) goto memory_error;
+        snag_json_canonical(event, &line) < 0 || snag_buf_putc(&line, '\n') < 0)
+        goto memory_error;
     if ((uint64_t)line.len > (uint64_t)(INT64_MAX - session->log_end)) {
-        (void)snag_fail(error, error_size, EOVERFLOW,
-            "session event exceeds representable file offsets");
+        (void)snag_fail(
+            error, error_size, EOVERFLOW, "session event exceeds representable file offsets");
         goto out;
     }
     if (session->pending_log) {
@@ -364,8 +382,10 @@ snag_session_append(struct snag_session *session, const char *type, json_t *data
             int saved = errno;
             session->append_rollback_end = snag_seek(session->log_fd, 0, SEEK_END);
             session->append_rollback_pending = session->append_rollback_end != session->log_end;
-            if (session->append_rollback_pending && session->append_rollback_end >= session->log_end &&
-                snag_truncate(session->log_fd, session->log_end) == 0 && snag_sync_file(session->log_fd) == 0)
+            if (session->append_rollback_pending &&
+                session->append_rollback_end >= session->log_end &&
+                snag_truncate(session->log_fd, session->log_end) == 0 &&
+                snag_sync_file(session->log_fd) == 0)
                 session->append_rollback_pending = false;
             else if (session->append_rollback_pending)
                 session->append_rollback_end = snag_seek(session->log_fd, 0, SEEK_END);
@@ -384,13 +404,16 @@ snag_session_append(struct snag_session *session, const char *type, json_t *data
     if (written_seq) *written_seq = seq;
     rc = 0;
     goto out;
-memory_error: snag_errorf(error, error_size, "cannot encode %s event", type);
-out: json_decref(event);
+memory_error:
+    snag_errorf(error, error_size, "cannot encode %s event", type);
+out:
+    json_decref(event);
     snag_buf_free(&line);
     return rc;
 }
 static int
-replace_text(struct snag_session *session, const char **slot, const char *key, const char *text, size_t max)
+replace_text(
+    struct snag_session *session, const char **slot, const char *key, const char *text, size_t max)
 {
     if (strlen(text) > max) return snag_errno(EOVERFLOW);
     if (!session->strings && !(session->strings = json_object())) return -1;
@@ -410,27 +433,33 @@ common_event_valid_digest(json_t *event, struct snag_session *session, uint64_t 
     uint64_t n, checkpoint_pointer;
     char computed[SNAG_SHA256_HEX_LEN + 1u];
     if (snag_json_integer_u64(event, "v", &n) < 0 || (n != 1u && n != 2u) ||
-        !snag_json_exact_keys(event, n == 1u ?
-            "data event_sha256 prev_sha256 seq session_id time_ms type v" :
-            "checkpoint_offset data event_sha256 prev_sha256 seq session_id time_ms type v") ||
+        !snag_json_exact_keys(
+            event, n == 1u ? "data event_sha256 prev_sha256 seq session_id time_ms type v"
+                           : "checkpoint_offset data event_sha256 prev_sha256 seq session_id "
+                             "time_ms type v") ||
         (n == 2u && (snag_json_integer_u64(event, "checkpoint_offset", &checkpoint_pointer) < 0 ||
-                     checkpoint_pointer > (uint64_t)INT64_MAX)) ||
+                        checkpoint_pointer > (uint64_t)INT64_MAX)) ||
         snag_json_integer_u64(event, "seq", &n) < 0 || n != seq ||
         snag_json_integer_u64(event, "time_ms", &n) < 0 ||
         !(event_hash = snag_json_string(event, "event_sha256")) ||
         !(prev_hash = snag_json_string(event, "prev_sha256")) ||
-        !(session_id = snag_json_string(event, "session_id")) || !(type = snag_json_string(event, "type")) ||
+        !(session_id = snag_json_string(event, "session_id")) ||
+        !(type = snag_json_string(event, "type")) ||
         !snag_hex_is_lower(event_hash, SNAG_SHA256_HEX_LEN) ||
-        !snag_hex_is_lower(prev_hash, SNAG_SHA256_HEX_LEN) || strcmp(prev_hash, session->prev_sha256) != 0 ||
-        strcmp(session_id, session->id) != 0 || !json_is_object(json_object_get(event, "data"))) {
-        snag_errorf(error, error_size, "invalid event envelope at sequence %llu", (unsigned long long)seq);
+        !snag_hex_is_lower(prev_hash, SNAG_SHA256_HEX_LEN) ||
+        strcmp(prev_hash, session->prev_sha256) != 0 || strcmp(session_id, session->id) != 0 ||
+        !json_is_object(json_object_get(event, "data"))) {
+        snag_errorf(
+            error, error_size, "invalid event envelope at sequence %llu", (unsigned long long)seq);
         return false;
     }
     if (!digest) {
         json_t *copy = json_copy(event);
         if (!copy || json_object_del(copy, "event_sha256") < 0 ||
-            snag_json_digest_bounded(copy, !strcmp(type, "session_checkpoint") ?
-                SNAG_CHECKPOINT_EVENT_MAX : SNAG_MAX_EVENT_LINE, computed, NULL) < 0) {
+            snag_json_digest_bounded(copy,
+                !strcmp(type, "session_checkpoint") ? SNAG_CHECKPOINT_EVENT_MAX
+                                                    : SNAG_MAX_EVENT_LINE,
+                computed, NULL) < 0) {
             json_decref(copy);
             snag_errorf(error, error_size, "cannot verify event digest");
             return false;
@@ -439,7 +468,8 @@ common_event_valid_digest(json_t *event, struct snag_session *session, uint64_t 
         digest = computed;
     }
     if (strcmp(event_hash, digest) != 0) {
-        snag_errorf(error, error_size, "event digest mismatch at sequence %llu", (unsigned long long)seq);
+        snag_errorf(
+            error, error_size, "event digest mismatch at sequence %llu", (unsigned long long)seq);
         return false;
     }
     memcpy(session->prev_sha256, event_hash, SNAG_SHA256_HEX_LEN + 1u);
@@ -450,20 +480,20 @@ common_event_valid_digest(json_t *event, struct snag_session *session, uint64_t 
 }
 
 static bool
-common_event_valid(json_t *event, struct snag_session *session, uint64_t seq,
-    const char **type_out, json_t **data_out, char *error, size_t error_size)
+common_event_valid(json_t *event, struct snag_session *session, uint64_t seq, const char **type_out,
+    json_t **data_out, char *error, size_t error_size)
 {
-    return common_event_valid_digest(event, session, seq, type_out, data_out, NULL,
-        error, error_size);
+    return common_event_valid_digest(
+        event, session, seq, type_out, data_out, NULL, error, error_size);
 }
 bool
-snag_input_observation_matches(const struct snag_input_observation *value,
-    const char *provider, const char *model, const char *effort,
-    const char *source_sha256, const char *compact_id)
+snag_input_observation_matches(const struct snag_input_observation *value, const char *provider,
+    const char *model, const char *effort, const char *source_sha256, const char *compact_id)
 {
-    return value->valid && !strcmp(value->provider, provider) &&
-        !strcmp(value->model, model) && !strcmp(value->effort, effort) &&
-        !strcmp(value->provider_source_sha256, source_sha256) && !strcmp(value->compact_id, compact_id);
+    return value->valid && !strcmp(value->provider, provider) && !strcmp(value->model, model) &&
+           !strcmp(value->effort, effort) &&
+           !strcmp(value->provider_source_sha256, source_sha256) &&
+           !strcmp(value->compact_id, compact_id);
 }
 
 static void
@@ -521,9 +551,9 @@ current_response(const struct snag_session *session, const json_t *data)
     uint64_t cycle;
 
     return session->response_open && response_id && turn_id &&
-        strcmp(response_id, session->active_response_id) == 0 &&
-        strcmp(turn_id, session->active_turn_id) == 0 && snag_json_integer_u64(data, "cycle", &cycle) == 0 &&
-        cycle == session->active_cycle;
+           strcmp(response_id, session->active_response_id) == 0 &&
+           strcmp(turn_id, session->active_turn_id) == 0 &&
+           snag_json_integer_u64(data, "cycle", &cycle) == 0 && cycle == session->active_cycle;
 }
 
 static bool
@@ -562,8 +592,8 @@ process_label(char out[257], const char *text)
 }
 
 int
-snag_pending_call_from_item(const struct snag_response_item *item, const char *cwd,
-    struct snag_pending_call *out)
+snag_pending_call_from_item(
+    const struct snag_response_item *item, const char *cwd, struct snag_pending_call *out)
 {
     if (!item || !cwd || !out || item->kind != SNAG_ITEM_TOOL_CALL || !item->name ||
         !json_is_object(item->arguments) || !snag_hex_is_lower(item->call_id, SNAG_ID_HEX_LEN))
@@ -592,7 +622,8 @@ snag_process_output_decode(const json_t *data, struct snag_buf *bytes)
 {
     const char *encoding = snag_json_string(data, "encoding");
     const char *text = snag_json_string(data, "data");
-    if (!snag_json_exact_keys(data, "turn_id handle stream offset encoding data") || !encoding || !text)
+    if (!snag_json_exact_keys(data, "turn_id handle stream offset encoding data") || !encoding ||
+        !text)
         return -1;
     if (!strcmp(encoding, "utf8")) return snag_buf_append(bytes, text, strlen(text));
     return !strcmp(encoding, "base64") ? snag_base64_decode(bytes, text) : -1;
@@ -602,8 +633,7 @@ compact_output_digest(const json_t *output, char out[SNAG_SHA256_HEX_LEN + 1u], 
 {
     /* Native compaction can retain every user message alongside its summary.
      * The encoded byte bound below limits storage independently of item count. */
-    if (!json_is_array(output) || json_array_size(output) == 0u)
-        return snag_errno(EINVAL);
+    if (!json_is_array(output) || json_array_size(output) == 0u) return snag_errno(EINVAL);
     for (size_t i = 0; i < json_array_size(output); ++i) {
         json_t *item = json_array_get(output, i);
         if (!json_is_object(item) || !snag_json_string(item, "type")) return snag_errno(EINVAL);
@@ -614,14 +644,16 @@ static bool
 valid_trash_name(const struct snag_session *session, const char *name)
 {
     if (!name || strlen(name) != SNAG_TRASH_NAME_LEN) return false;
-    if (memcmp(name, session->id, SNAG_ID_HEX_LEN) != 0 || name[SNAG_ID_HEX_LEN] != '.') return false;
+    if (memcmp(name, session->id, SNAG_ID_HEX_LEN) != 0 || name[SNAG_ID_HEX_LEN] != '.')
+        return false;
     return snag_hex_is_lower(name + SNAG_ID_HEX_LEN + 1u, SNAG_TRASH_SUFFIX_HEX_LEN);
 }
 static struct snag_pending_call *
 find_pending_call(struct snag_session *session, const char *call_id)
 {
     for (size_t i = 0; i < session->pending_call_count; ++i)
-        if (strcmp(session->pending_calls[i].call_id, call_id) == 0) return &session->pending_calls[i];
+        if (strcmp(session->pending_calls[i].call_id, call_id) == 0)
+            return &session->pending_calls[i];
     return NULL;
 }
 static bool
@@ -634,12 +666,13 @@ pending_user_id_exists(const struct snag_session *session, const char *id)
     return false;
 }
 static int
-add_pending_steering(struct snag_session *session, const char *id, const char *text, size_t len, uint64_t seq)
+add_pending_steering(
+    struct snag_session *session, const char *id, const char *text, size_t len, uint64_t seq)
 {
     struct snag_pending_steering *pending;
     if (session->pending_steering_count == session->pending_steering_capacity) {
-        size_t capacity = session->pending_steering_capacity ?
-            session->pending_steering_capacity * 2u : 16u;
+        size_t capacity =
+            session->pending_steering_capacity ? session->pending_steering_capacity * 2u : 16u;
         struct snag_pending_steering *grown;
         if (capacity < session->pending_steering_capacity) return snag_errno(EOVERFLOW);
         grown = realloc(session->pending_steering, capacity * sizeof(*grown));
@@ -662,8 +695,8 @@ add_pending_steering(struct snag_session *session, const char *id, const char *t
  * result instead of a process state of its own. Replay gives the call back the
  * handle it referenced; the collected counters restart at zero. */
 static int
-replay_process_add(struct snag_session *session, const char *handle, const char *command,
-                   const char *workdir)
+replay_process_add(
+    struct snag_session *session, const char *handle, const char *command, const char *workdir)
 {
     struct snag_process_state *process;
 
@@ -675,7 +708,7 @@ replay_process_add(struct snag_session *session, const char *handle, const char 
         grown = realloc(session->processes, capacity * sizeof(*grown));
         if (!grown) return -1;
         memset(grown + session->process_capacity, 0,
-               (capacity - session->process_capacity) * sizeof(*grown));
+            (capacity - session->process_capacity) * sizeof(*grown));
         session->processes = grown;
         session->process_capacity = capacity;
     }
@@ -690,16 +723,17 @@ static int
 consume_oldest_queue(struct snag_session *session)
 {
     size_t len;
-    if (session->pending_queue_count == 0u || !session->pending_queue[0].text) return snag_errno(EINVAL);
+    if (session->pending_queue_count == 0u || !session->pending_queue[0].text)
+        return snag_errno(EINVAL);
     len = strlen(session->pending_queue[0].text);
     json_object_del(session->strings, session->pending_queue[0].queue_id);
     json_decref(session->pending_queue[0].content);
     if (session->pending_queue_count > 1u)
         memmove(&session->pending_queue[0], &session->pending_queue[1],
-                (session->pending_queue_count - 1u) *
-                sizeof(session->pending_queue[0]));
+            (session->pending_queue_count - 1u) * sizeof(session->pending_queue[0]));
     --session->pending_queue_count;
-    memset(&session->pending_queue[session->pending_queue_count], 0, sizeof(session->pending_queue[0]));
+    memset(&session->pending_queue[session->pending_queue_count], 0,
+        sizeof(session->pending_queue[0]));
     session->pending_queue_bytes -= len;
     return 0;
 }
@@ -708,12 +742,18 @@ const char *
 snag_goal_status_name(enum snag_goal_status status)
 {
     switch (status) {
-    case SNAG_GOAL_NONE: return "none";
-    case SNAG_GOAL_ACTIVE: return "active";
-    case SNAG_GOAL_PAUSED: return "paused";
-    case SNAG_GOAL_BLOCKED: return "blocked";
-    case SNAG_GOAL_COMPLETED: return "completed";
-    case SNAG_GOAL_CANCELLED: return "cancelled";
+    case SNAG_GOAL_NONE:
+        return "none";
+    case SNAG_GOAL_ACTIVE:
+        return "active";
+    case SNAG_GOAL_PAUSED:
+        return "paused";
+    case SNAG_GOAL_BLOCKED:
+        return "blocked";
+    case SNAG_GOAL_COMPLETED:
+        return "completed";
+    case SNAG_GOAL_CANCELLED:
+        return "cancelled";
     }
     return "unknown";
 }
@@ -737,11 +777,14 @@ snag_goal_wait_valid(const char *wait_for)
         const char *slash = strrchr(target, '/');
         return slash && slash > target && slash[1] && !strchr(target, ' ');
     }
-    if (!strncmp(wait_for, "process: ", 9u)) target = wait_for + 9u;
-    else if (!strncmp(wait_for, "external: ", 10u)) target = wait_for + 10u;
-    else return false;
+    if (!strncmp(wait_for, "process: ", 9u))
+        target = wait_for + 9u;
+    else if (!strncmp(wait_for, "external: ", 10u))
+        target = wait_for + 10u;
+    else
+        return false;
     return *target && !snag_text_blank(target) && *target != ' ' &&
-        target[strlen(target) - 1u] != ' ';
+           target[strlen(target) - 1u] != ' ';
 }
 
 const char *
@@ -762,26 +805,28 @@ host_context_valid(const json_t *snapshot)
         const char *role = snag_json_string(item, "role");
         const char *text = snag_json_string(item, "content");
         if (!snag_json_exact_keys(item, "role content") || !role || strcmp(role, "user") ||
-            !snag_text_valid(text, 1u, SNAG_MAX_EVENT_LINE)) return false;
+            !snag_text_valid(text, 1u, SNAG_MAX_EVENT_LINE))
+            return false;
         if ((!i && strcmp(text, SNAG_HOST_CONTEXT_BEGIN)) ||
-            (i == count - 1u && strcmp(text, SNAG_HOST_CONTEXT_END))) return false;
+            (i == count - 1u && strcmp(text, SNAG_HOST_CONTEXT_END)))
+            return false;
     }
     return true;
 }
 
 /* Typed parts extend the original text/timing event fields. */
 static bool
-input_fields_valid(const json_t *data,const char *keys)
+input_fields_valid(const json_t *data, const char *keys)
 {
-    const json_t *content=json_object_get(data,"content");
+    const json_t *content = json_object_get(data, "content");
     char fields[256];
-    if(content) {
-        if(!snag_media_content_valid(content))return false;
-        int n=snprintf(fields,sizeof(fields),"%s content",keys);
-        if(n<0 || (size_t)n>=sizeof(fields))return false;
-        keys=fields;
+    if (content) {
+        if (!snag_media_content_valid(content)) return false;
+        int n = snprintf(fields, sizeof(fields), "%s content", keys);
+        if (n < 0 || (size_t)n >= sizeof(fields)) return false;
+        keys = fields;
     }
-    return snag_json_exact_keys(data,keys);
+    return snag_json_exact_keys(data, keys);
 }
 
 /* Current journals record instruction paths as an array of strings.
@@ -804,7 +849,8 @@ legacy_instructions_metadata_valid(const json_t *array, char *error, size_t erro
             if (!snag_json_exact_keys(value, "bytes path sha256") ||
                 snag_json_integer_u64(value, "bytes", &bytes) < 0 ||
                 !(sha256 = snag_json_string(value, "sha256")) ||
-                !snag_hex_is_lower(sha256, SNAG_SHA256_HEX_LEN)) goto invalid;
+                !snag_hex_is_lower(sha256, SNAG_SHA256_HEX_LEN))
+                goto invalid;
             path = snag_json_string(value, "path");
         } else if (json_is_string(value)) {
             path = json_string_value(value);
@@ -812,11 +858,13 @@ legacy_instructions_metadata_valid(const json_t *array, char *error, size_t erro
             goto invalid;
         }
         if (!path || !snag_path_root_len(path) || strlen(path) > SNAG_PATH_MAX_BYTES ||
-            !snag_utf8_valid((const unsigned char *)path, strlen(path), true)) goto invalid;
+            !snag_utf8_valid((const unsigned char *)path, strlen(path), true))
+            goto invalid;
         for (size_t j = 0; j < i; ++j) {
             const json_t *other = json_array_get(array, j);
-            const char *other_path = json_is_object(other) ? snag_json_string(other, "path") :
-                (json_is_string(other) ? json_string_value(other) : NULL);
+            const char *other_path =
+                json_is_object(other) ? snag_json_string(other, "path")
+                                      : (json_is_string(other) ? json_string_value(other) : NULL);
             if (other_path && strcmp(other_path, path) == 0) goto invalid;
         }
     }
@@ -830,26 +878,35 @@ invalid:
 static bool
 voice_source_valid(const json_t *voice)
 {
-    static const char *const keys[]={"connection_id","input_id","response_id","call_id",
-        "provider","model","transcript","request"};
-    if(!snag_json_exact_keys(voice,"connection_id input_id response_id call_id provider model transcript request") ||
-        !snag_hex_is_lower(snag_json_string(voice,"connection_id"),SNAG_ID_HEX_LEN))return false;
-    for(size_t i=1u;i<4u;++i)
-        if(!snag_text_valid(snag_json_string(voice,keys[i]),1u,(SNAG_MAX_PROVIDER_ID+1u)-1u))return false;
-    return snag_text_valid(snag_json_string(voice,"provider"),1u,(SNAG_CONFIG_PROVIDER_NAME_MAX+1u)-1u) &&
-        snag_text_valid(snag_json_string(voice,"model"),1u,(SNAG_MODEL_MAX_BYTES)-1u) &&
-        snag_text_valid(snag_json_string(voice,"transcript"),1u,(SNAG_MAX_QUEUED_TEXT)-1u) &&
-        snag_text_valid(snag_json_string(voice,"request"),1u,(SNAG_MAX_QUEUED_TEXT)-1u);
+    static const char *const keys[] = {"connection_id", "input_id", "response_id", "call_id",
+        "provider", "model", "transcript", "request"};
+    if (!snag_json_exact_keys(voice,
+            "connection_id input_id response_id call_id provider model transcript request") ||
+        !snag_hex_is_lower(snag_json_string(voice, "connection_id"), SNAG_ID_HEX_LEN))
+        return false;
+    for (size_t i = 1u; i < 4u; ++i)
+        if (!snag_text_valid(
+                snag_json_string(voice, keys[i]), 1u, (SNAG_MAX_PROVIDER_ID + 1u) - 1u))
+            return false;
+    return snag_text_valid(snag_json_string(voice, "provider"), 1u,
+               (SNAG_CONFIG_PROVIDER_NAME_MAX + 1u) - 1u) &&
+           snag_text_valid(snag_json_string(voice, "model"), 1u, (SNAG_MODEL_MAX_BYTES)-1u) &&
+           snag_text_valid(snag_json_string(voice, "transcript"), 1u, (SNAG_MAX_QUEUED_TEXT)-1u) &&
+           snag_text_valid(snag_json_string(voice, "request"), 1u, (SNAG_MAX_QUEUED_TEXT)-1u);
 }
 
 static int
-voice_queue_id(const json_t *voice,char id[SNAG_ID_HEX_LEN+1u])
+voice_queue_id(const json_t *voice, char id[SNAG_ID_HEX_LEN + 1u])
 {
-    json_t *key=json_pack("{s:s,s:s}","connection_id",snag_json_string(voice,"connection_id"),
-        "input_id",snag_json_string(voice,"input_id"));
-    char digest[SNAG_SHA256_HEX_LEN+1u];
-    int rc=key?snag_json_digest(key,digest):-1;json_decref(key);
-    if(!rc) {memcpy(id,digest,SNAG_ID_HEX_LEN);id[SNAG_ID_HEX_LEN]=0;}
+    json_t *key = json_pack("{s:s,s:s}", "connection_id", snag_json_string(voice, "connection_id"),
+        "input_id", snag_json_string(voice, "input_id"));
+    char digest[SNAG_SHA256_HEX_LEN + 1u];
+    int rc = key ? snag_json_digest(key, digest) : -1;
+    json_decref(key);
+    if (!rc) {
+        memcpy(id, digest, SNAG_ID_HEX_LEN);
+        id[SNAG_ID_HEX_LEN] = 0;
+    }
     return rc;
 }
 
@@ -885,9 +942,12 @@ const char *
 snag_context_mode_name(enum snag_context_mode mode)
 {
     switch (mode) {
-    case SNAG_CONTEXT_MODE_DEFAULT: return "default";
-    case SNAG_CONTEXT_MODE_MAX: return "max";
-    case SNAG_CONTEXT_MODE_TOKENS: return "tokens";
+    case SNAG_CONTEXT_MODE_DEFAULT:
+        return "default";
+    case SNAG_CONTEXT_MODE_MAX:
+        return "max";
+    case SNAG_CONTEXT_MODE_TOKENS:
+        return "tokens";
     }
     return "default";
 }
@@ -896,10 +956,14 @@ int
 snag_context_mode_parse(const char *name, enum snag_context_mode *mode)
 {
     if (!name || !mode) return -1;
-    if (strcmp(name, "default") == 0) *mode = SNAG_CONTEXT_MODE_DEFAULT;
-    else if (strcmp(name, "max") == 0) *mode = SNAG_CONTEXT_MODE_MAX;
-    else if (strcmp(name, "tokens") == 0) *mode = SNAG_CONTEXT_MODE_TOKENS;
-    else return -1;
+    if (strcmp(name, "default") == 0)
+        *mode = SNAG_CONTEXT_MODE_DEFAULT;
+    else if (strcmp(name, "max") == 0)
+        *mode = SNAG_CONTEXT_MODE_MAX;
+    else if (strcmp(name, "tokens") == 0)
+        *mode = SNAG_CONTEXT_MODE_TOKENS;
+    else
+        return -1;
     return 0;
 }
 
@@ -927,14 +991,14 @@ download_queue_entry_valid(const json_t *entry)
     json_int_t mtime = json_integer_value(json_object_get(entry, "mtime"));
     json_int_t queued = json_integer_value(json_object_get(entry, "queued_ms"));
 
-    return snag_json_exact_keys(entry, "id path name bytes mtime sha256 queued_ms") &&
-        id && snag_hex_is_lower(id, SNAG_ID_HEX_LEN) &&
-        snag_text_valid(path, 1u, SNAG_PATH_MAX_BYTES) && snag_path_root_len(path) &&
-        snag_text_valid(name, 1u, SNAG_NAME_MAX_BYTES) &&
-        sha && snag_hex_is_lower(sha, SNAG_SHA256_HEX_LEN) &&
-        json_is_integer(json_object_get(entry, "bytes")) && bytes >= 0 &&
-        json_is_integer(json_object_get(entry, "mtime")) && mtime >= 0 &&
-        json_is_integer(json_object_get(entry, "queued_ms")) && queued >= 0;
+    return snag_json_exact_keys(entry, "id path name bytes mtime sha256 queued_ms") && id &&
+           snag_hex_is_lower(id, SNAG_ID_HEX_LEN) &&
+           snag_text_valid(path, 1u, SNAG_PATH_MAX_BYTES) && snag_path_root_len(path) &&
+           snag_text_valid(name, 1u, SNAG_NAME_MAX_BYTES) && sha &&
+           snag_hex_is_lower(sha, SNAG_SHA256_HEX_LEN) &&
+           json_is_integer(json_object_get(entry, "bytes")) && bytes >= 0 &&
+           json_is_integer(json_object_get(entry, "mtime")) && mtime >= 0 &&
+           json_is_integer(json_object_get(entry, "queued_ms")) && queued >= 0;
 }
 
 static int
@@ -958,7 +1022,8 @@ download_queue_remove(struct snag_session *session, const json_t *data)
     const char *id = snag_json_string(data, "id");
     if (!snag_json_exact_keys(data, "id reason") || !id ||
         !snag_hex_is_lower(id, SNAG_ID_HEX_LEN) ||
-        !snag_text_valid(snag_json_string(data, "reason"), 0u, 1024u)) return snag_errno(EINVAL);
+        !snag_text_valid(snag_json_string(data, "reason"), 0u, 1024u))
+        return snag_errno(EINVAL);
     if (!session->download_queue) return snag_errno(ENOENT);
     for (size_t i = 0; i < json_array_size(session->download_queue); ++i) {
         const char *item = snag_json_string(json_array_get(session->download_queue, i), "id");
@@ -972,20 +1037,21 @@ static int
 download_queue_clear(struct snag_session *session, const json_t *data)
 {
     if (!snag_json_exact_keys(data, "reason") ||
-        !snag_text_valid(snag_json_string(data, "reason"), 0u, 1024u)) return snag_errno(EINVAL);
+        !snag_text_valid(snag_json_string(data, "reason"), 0u, 1024u))
+        return snag_errno(EINVAL);
     json_decref(session->download_queue);
     session->download_queue = json_array();
     return session->download_queue ? 0 : -1;
 }
 
 static int
-apply_event(struct snag_session *session, const char *type, const json_t *data,
-            uint64_t seq, bool live, bool importing, char *error, size_t error_size)
+apply_event(struct snag_session *session, const char *type, const json_t *data, uint64_t seq,
+    bool live, bool importing, char *error, size_t error_size)
 {
     uint64_t n;
     const char *event_turn_id = snag_json_string(data, "turn_id");
-    bool current_turn = session->active_turn && event_turn_id &&
-                        !strcmp(event_turn_id, session->active_turn_id);
+    bool current_turn =
+        session->active_turn && event_turn_id && !strcmp(event_turn_id, session->active_turn_id);
 
     /* A refused transition names the clause that failed and the call it concerned,
      * so a crash report is diagnostic without a debug build: every rejection below
@@ -1018,8 +1084,9 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
                 goto invalid;
             cwd = snag_json_string(data, "workspace");
             session->legacy_journal = true;
-        } else if ((n != 3u && n != 4u) || !snag_json_exact_keys(data,
-                "default_effort default_model default_provider format protocol cwd")) {
+        } else if ((n != 3u && n != 4u) ||
+                   !snag_json_exact_keys(
+                       data, "default_effort default_model default_provider format protocol cwd")) {
             goto invalid;
         }
         if (!protocol || strcmp(protocol, "responses") != 0 ||
@@ -1028,10 +1095,8 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             !snag_text_valid(provider, 1u, SNAG_CONFIG_PROVIDER_NAME_MAX) ||
             !snag_path_root_len(cwd) || !snag_text_valid(cwd, 0u, SNAG_PATH_MAX_BYTES))
             goto invalid;
-        if (replace_text(session, &session->cwd, "cwd", cwd, SNAG_PATH_MAX_BYTES) < 0)
-            return -1;
-        if (snag_json_set_new(session->strings, "irc_snapshot", json_string("")) < 0)
-            return -1;
+        if (replace_text(session, &session->cwd, "cwd", cwd, SNAG_PATH_MAX_BYTES) < 0) return -1;
+        if (snag_json_set_new(session->strings, "irc_snapshot", json_string("")) < 0) return -1;
         if (!snag_strcpy(session->default_effort, sizeof(session->default_effort), effort) ||
             !snag_strcpy(session->default_model, sizeof(session->default_model), model) ||
             !snag_strcpy(session->default_provider, sizeof(session->default_provider), provider))
@@ -1051,11 +1116,14 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         /* Auxiliary billing is retained for inspection only. It changes no
          * coding context, token counters, queue or executor state. */
 
-        const char *operation=snag_json_string(data,"operation");
-        if(!snag_json_exact_keys(data,"operation provider model report") || !operation || strcmp(operation,"dictation") ||
-            !snag_text_valid(snag_json_string(data,"provider"),1u,(SNAG_CONFIG_PROVIDER_NAME_MAX+1u)-1u) ||
-            !snag_text_valid(snag_json_string(data,"model"),1u,(SNAG_MODEL_MAX_BYTES)-1u) ||
-            !snag_text_valid(snag_json_string(data,"report"),1u,(256u*1024u)-1u))goto invalid;
+        const char *operation = snag_json_string(data, "operation");
+        if (!snag_json_exact_keys(data, "operation provider model report") || !operation ||
+            strcmp(operation, "dictation") ||
+            !snag_text_valid(snag_json_string(data, "provider"), 1u,
+                (SNAG_CONFIG_PROVIDER_NAME_MAX + 1u) - 1u) ||
+            !snag_text_valid(snag_json_string(data, "model"), 1u, (SNAG_MODEL_MAX_BYTES)-1u) ||
+            !snag_text_valid(snag_json_string(data, "report"), 1u, (256u * 1024u) - 1u))
+            goto invalid;
     } else if (!strcmp(type, "voice_transfer_record")) {
         if (!snag_json_exact_keys(data,
                 "transfer_id target_session_id source_session_id source_seq source_type data") ||
@@ -1066,18 +1134,20 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             !snag_text_valid(snag_json_string(data, "source_type"), 1u, SNAG_MAX_EVENT_LINE) ||
             snag_string_in(snag_json_string(data, "source_type"),
                 "voice_transfer_record voice_transfer_sealed") ||
-            !json_is_object(json_object_get(data, "data"))) goto invalid;
+            !json_is_object(json_object_get(data, "data")))
+            goto invalid;
         /* Inert public source data. Neither staging nor copying applies the
          * enclosed event to this session's queue, provider graph or controls. */
     } else if (!strcmp(type, "voice_transfer_sealed")) {
-        if (!snag_json_exact_keys(data,
-                "transfer_id target_session_id source_session_id source_as_of_seq count") ||
+        if (!snag_json_exact_keys(
+                data, "transfer_id target_session_id source_session_id source_as_of_seq count") ||
             !snag_hex_is_lower(snag_json_string(data, "transfer_id"), SNAG_ID_HEX_LEN) ||
             !snag_hex_is_lower(snag_json_string(data, "target_session_id"), SNAG_ID_HEX_LEN) ||
             !snag_json_string(data, "source_session_id") ||
             strcmp(snag_json_string(data, "source_session_id"), session->id) ||
             snag_json_integer_u64(data, "source_as_of_seq", &n) < 0 || !n || n >= seq ||
-            snag_json_integer_u64(data, "count", &n) < 0 || !n || n >= seq) goto invalid;
+            snag_json_integer_u64(data, "count", &n) < 0 || !n || n >= seq)
+            goto invalid;
     } else if (!strcmp(type, "voice_transfer_adopted")) {
         struct snag_voice_history_root root = {0};
         uint64_t offset;
@@ -1092,41 +1162,50 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             !snag_json_string(data, "target_session_id") ||
             strcmp(snag_json_string(data, "target_session_id"), session->id) ||
             snag_json_integer_u64(data, "source_as_of_seq", &n) < 0 || !n ||
-            snag_json_integer_u64(data, "begin_offset", &offset) < 0 ||
-            !offset || (live && offset > (uint64_t)session->log_end) ||
+            snag_json_integer_u64(data, "begin_offset", &offset) < 0 || !offset ||
+            (live && offset > (uint64_t)session->log_end) ||
             snag_json_integer_u64(data, "begin_seq", &root.begin.next_seq) < 0 ||
             root.begin.next_seq < 2u || root.begin.next_seq >= seq ||
             !snag_hex_is_lower(hash, SNAG_SHA256_HEX_LEN) ||
             snag_json_integer_u64(data, "count", &count) < 0 || !count ||
-            count > seq - root.begin.next_seq) goto invalid;
+            count > seq - root.begin.next_seq)
+            goto invalid;
         strcpy(root.transfer_id, id);
         strcpy(root.begin.prev_sha256, hash);
         root.begin.offset = (int64_t)offset;
         root.adopted_seq = seq;
         session->voice_history = root;
-    } else if (strcmp(type,"voice_event")==0) {
-        static const char types[]="voice_started voice_stopped voice_transcript voice_usage voice_asr_failed voice_interrupted voice_response voice_result voice_muted";
-        const json_t *event=json_object_get(data,"event");
-        const char *kind=snag_json_string(event,"type");
-        char digest[SNAG_SHA256_HEX_LEN+1u];size_t bytes;
-        if(!snag_json_exact_keys(data,"connection_id provider model event") ||
-            !snag_hex_is_lower(snag_json_string(data,"connection_id"),SNAG_ID_HEX_LEN) ||
-            !snag_text_valid(snag_json_string(data,"provider"),1u,(SNAG_CONFIG_PROVIDER_NAME_MAX+1u)-1u) ||
-            !snag_text_valid(snag_json_string(data,"model"),1u,(SNAG_MODEL_MAX_BYTES)-1u) ||
-            !snag_string_in(kind,types) ||
-            snag_json_digest_bounded(event, SNAG_MAX_EVENT_LINE, digest, &bytes) < 0) goto invalid;
+    } else if (strcmp(type, "voice_event") == 0) {
+        static const char types[] =
+            "voice_started voice_stopped voice_transcript voice_usage voice_asr_failed "
+            "voice_interrupted voice_response voice_result voice_muted";
+        const json_t *event = json_object_get(data, "event");
+        const char *kind = snag_json_string(event, "type");
+        char digest[SNAG_SHA256_HEX_LEN + 1u];
+        size_t bytes;
+        if (!snag_json_exact_keys(data, "connection_id provider model event") ||
+            !snag_hex_is_lower(snag_json_string(data, "connection_id"), SNAG_ID_HEX_LEN) ||
+            !snag_text_valid(snag_json_string(data, "provider"), 1u,
+                (SNAG_CONFIG_PROVIDER_NAME_MAX + 1u) - 1u) ||
+            !snag_text_valid(snag_json_string(data, "model"), 1u, (SNAG_MODEL_MAX_BYTES)-1u) ||
+            !snag_string_in(kind, types) ||
+            snag_json_digest_bounded(event, SNAG_MAX_EVENT_LINE, digest, &bytes) < 0)
+            goto invalid;
         /* Transcript/status provenance only. Coding work enters through the
          * existing queued-input event, never through a voice notice. */
     } else if (snag_string_in(type, "irc_event irc_event_v2")) {
         struct snag_irc_event event;
         if (snag_irc_event_record_read(type, data, &event) < 0) goto invalid;
         if (event.routed) {
-            json_t *directory = snag_irc_conversations_update(
-                session->irc_conversations, data, seq);
+            json_t *directory =
+                snag_irc_conversations_update(session->irc_conversations, data, seq);
             if (!directory) goto invalid;
-            json_t *activity = snag_irc_activity_update(session->irc_activity, &event,
-                seq, session->irc_conversations ? seq - 1u : 0u);
-            if (!activity) { json_decref(directory); goto invalid; }
+            json_t *activity = snag_irc_activity_update(
+                session->irc_activity, &event, seq, session->irc_conversations ? seq - 1u : 0u);
+            if (!activity) {
+                json_decref(directory);
+                goto invalid;
+            }
             json_decref(session->irc_conversations);
             session->irc_conversations = directory;
             json_decref(session->irc_activity);
@@ -1141,26 +1220,33 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         uint64_t previous = 0u;
         const json_t *input = json_object_get(data, "input");
         const json_t *steering = json_object_get(data, "steering");
-        if (!snag_json_exact_keys(data, input ? "input sequences" : steering ? "sequences steering" : "sequences") ||
-            !json_is_array(items) || !json_array_size(items)) goto invalid;
+        if (!snag_json_exact_keys(data, input      ? "input sequences"
+                                        : steering ? "sequences steering"
+                                                   : "sequences") ||
+            !json_is_array(items) || !json_array_size(items))
+            goto invalid;
         for (size_t i = 0u; i < json_array_size(items); ++i) {
             json_t *item = json_array_get(items, i);
             if (!json_is_integer(item) || json_integer_value(item) <= 0 ||
-                (uint64_t)json_integer_value(item) <= previous || (uint64_t)json_integer_value(item) >= seq)
+                (uint64_t)json_integer_value(item) <= previous ||
+                (uint64_t)json_integer_value(item) >= seq)
                 goto invalid;
             previous = (uint64_t)json_integer_value(item);
         }
-        if (input && apply_event(session, "input_received", input, seq, true, importing,
-                                error, error_size) < 0) return -1;
+        if (input && apply_event(session, "input_received", input, seq, true, importing, error,
+                         error_size) < 0)
+            return -1;
         if (steering && apply_event(session, "steering_added", steering, seq, true, importing,
-                                   error, error_size) < 0) return -1;
+                            error, error_size) < 0)
+            return -1;
         session->irc_admitted_count += json_array_size(items);
     } else if (!strcmp(type, "irc_sleep_set")) {
         uint64_t until, messages;
         if (!snag_json_exact_keys(data, "until_ms messages") ||
             snag_json_integer_u64(data, "until_ms", &until) < 0 ||
-            snag_json_integer_u64(data, "messages", &messages) < 0 ||
-            messages > UINT32_MAX || (until && !messages)) goto invalid;
+            snag_json_integer_u64(data, "messages", &messages) < 0 || messages > UINT32_MAX ||
+            (until && !messages))
+            goto invalid;
         session->irc_sleep_until_ms = until;
         session->irc_sleep_messages = messages;
         session->irc_sleep_start_count = session->irc_message_count;
@@ -1173,11 +1259,12 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         uint64_t updates;
         const char *instruction = snag_json_string(data, "instruction");
         if (!snag_json_exact_keys(data, "after_updates instruction") ||
-            snag_json_integer_u64(data, "after_updates", &updates) < 0 ||
-            updates > UINT32_MAX || !snag_text_valid(instruction, 0, SNAG_MAX_STEERING_TEXT))
+            snag_json_integer_u64(data, "after_updates", &updates) < 0 || updates > UINT32_MAX ||
+            !snag_text_valid(instruction, 0, SNAG_MAX_STEERING_TEXT))
             goto invalid;
-        if (snag_json_set_new(session->strings, "irc_compact_instruction",
-                json_string(instruction)) < 0) return -1;
+        if (snag_json_set_new(
+                session->strings, "irc_compact_instruction", json_string(instruction)) < 0)
+            return -1;
         session->irc_compact_updates = updates;
     } else if (!strcmp(type, "irc_compacted")) {
         uint64_t through, count;
@@ -1187,7 +1274,8 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             snag_json_integer_u64(data, "count", &count) < 0 ||
             through <= session->irc_compact_seq || through >= seq ||
             count <= session->irc_compact_count || count > session->irc_admitted_count ||
-            !snag_text_valid(summary, 1, SNAG_MAX_IRC_SNAPSHOT)) goto invalid;
+            !snag_text_valid(summary, 1, SNAG_MAX_IRC_SNAPSHOT))
+            goto invalid;
         session->irc_compact_seq = through;
         session->irc_summary_seq = seq;
         session->irc_compact_count = count;
@@ -1201,8 +1289,7 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             !snag_text_valid(text, 1u, SNAG_MAX_IRC_SNAPSHOT) ||
             snag_json_integer_u64(data, "timestamp_ms", &timestamp_ms) < 0 || timestamp_ms == 0u)
             goto invalid;
-        if (snag_json_set_new(session->strings, "irc_snapshot", json_string(text)) < 0)
-            return -1;
+        if (snag_json_set_new(session->strings, "irc_snapshot", json_string(text)) < 0) return -1;
     } else if (strcmp(type, "cwd_changed") == 0) {
         const char *old_cwd = snag_json_string(data, "old_cwd");
         const char *new_cwd = snag_json_string(data, "new_cwd");
@@ -1215,26 +1302,29 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         const char *origin = snag_json_string(data, "origin");
         /* Old journals retain these inert markers; new writers cannot create them. */
         if (live || !snag_json_exact_keys(data, "origin") || session->response_open ||
-            session->pending_call_count || session->process_count != 0u ||
-            !origin || strcmp(origin, "user") != 0) goto invalid;
+            session->pending_call_count || session->process_count != 0u || !origin ||
+            strcmp(origin, "user") != 0)
+            goto invalid;
     } else if (strcmp(type, "session_delete_requested") == 0) {
         const char *prefix = snag_json_string(data, "confirmed_id_prefix");
         const char *trash = snag_json_string(data, "trash_name");
-        if (!snag_json_exact_keys(data, "confirmed_id_prefix trash_name") || session->response_open ||
-            session->pending_call_count || session->process_count != 0u || !prefix || strlen(prefix) != 8u ||
-            !snag_hex_is_lower(prefix, 8u) || memcmp(prefix, session->id, 8u) != 0 ||
-            !valid_trash_name(session, trash)) goto invalid;
+        if (!snag_json_exact_keys(data, "confirmed_id_prefix trash_name") ||
+            session->response_open || session->pending_call_count || session->process_count != 0u ||
+            !prefix || strlen(prefix) != 8u || !snag_hex_is_lower(prefix, 8u) ||
+            memcmp(prefix, session->id, 8u) != 0 || !valid_trash_name(session, trash))
+            goto invalid;
         memcpy(session->trash_name, trash, SNAG_TRASH_NAME_LEN + 1u);
         session->delete_requested = true;
     } else if (strcmp(type, "timer_scheduled") == 0) {
         const char *timer_id = snag_json_string(data, "timer_id");
         const char *text = snag_json_string(data, "text");
         uint64_t due_ms;
-        if (!snag_json_exact_keys(data, "due_ms text timer_id") ||
-            !timer_id || !snag_hex_is_lower(timer_id, SNAG_ID_HEX_LEN) ||
+        if (!snag_json_exact_keys(data, "due_ms text timer_id") || !timer_id ||
+            !snag_hex_is_lower(timer_id, SNAG_ID_HEX_LEN) ||
             snag_json_integer_u64(data, "due_ms", &due_ms) < 0 || !due_ms ||
             !snag_text_valid(text, 1u, SNAG_MAX_TIMER_TEXT) || snag_text_blank(text) ||
-            replace_text(session, &session->timer_text, "timer_text", text, SNAG_MAX_TIMER_TEXT) < 0)
+            replace_text(session, &session->timer_text, "timer_text", text, SNAG_MAX_TIMER_TEXT) <
+                0)
             goto invalid;
         memcpy(session->timer_id, timer_id, sizeof(session->timer_id));
         session->timer_due_ms = due_ms;
@@ -1251,15 +1341,18 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
     } else if (strcmp(type, "goal_started") == 0) {
         const char *goal_id = snag_json_string(data, "goal_id");
         const char *prompt = snag_json_string(data, "prompt");
-        if (!snag_json_exact_keys(data, "goal_id prompt") || snag_goal_unfinished(session->goal_status) ||
-            !goal_id || !snag_hex_is_lower(goal_id, SNAG_ID_HEX_LEN) || strcmp(goal_id, session->id) == 0 ||
+        if (!snag_json_exact_keys(data, "goal_id prompt") ||
+            snag_goal_unfinished(session->goal_status) || !goal_id ||
+            !snag_hex_is_lower(goal_id, SNAG_ID_HEX_LEN) || strcmp(goal_id, session->id) == 0 ||
             (session->goal_id[0] && strcmp(goal_id, session->goal_id) == 0) ||
             !snag_text_valid(prompt, 1u, SNAG_MAX_GOAL_PROMPT) || snag_text_blank(prompt) ||
-            replace_text(session, &session->goal_prompt, "goal_prompt", prompt, SNAG_MAX_GOAL_PROMPT) < 0)
+            replace_text(
+                session, &session->goal_prompt, "goal_prompt", prompt, SNAG_MAX_GOAL_PROMPT) < 0)
             goto invalid;
-        if ((!session->first_user && replace_text(session, &session->first_user, "first_user", prompt,
-                          SNAG_MAX_GOAL_PROMPT) < 0) ||
-            replace_text(session, &session->last_user, "last_user", prompt, SNAG_MAX_GOAL_PROMPT) < 0)
+        if ((!session->first_user && replace_text(session, &session->first_user, "first_user",
+                                         prompt, SNAG_MAX_GOAL_PROMPT) < 0) ||
+            replace_text(session, &session->last_user, "last_user", prompt, SNAG_MAX_GOAL_PROMPT) <
+                0)
             return -1;
         json_object_del(session->strings, "goal_blocker");
         session->goal_blocker = NULL;
@@ -1281,23 +1374,26 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         /* An operator lock freezes the objective, not the goal's ending: the model may
          * not reword or block a locked goal, but it may still finish one. Operator events
          * carry no actor or actor "user", so they are unaffected. */
-          /* The lock governs what this build accepts, not what an older build already wrote:
+        /* The lock governs what this build accepts, not what an older build already wrote:
            * enforcing it while replaying would leave the affected journal unrestorable. */
-        if (live && model && session->goal_locked && snag_string_in(action, "reworded replaced blocked cancelled"))
+        if (live && model && session->goal_locked &&
+            snag_string_in(action, "reworded replaced blocked cancelled"))
             goto invalid;
         enum snag_goal_status status = session->goal_status;
 
-        if (!snag_goal_unfinished(status) || !goal_id || strcmp(goal_id, session->goal_id) != 0) goto invalid;
+        if (!snag_goal_unfinished(status) || !goal_id || strcmp(goal_id, session->goal_id) != 0)
+            goto invalid;
         if (strcmp(action, "replaced") == 0) {
             const char *new_goal_id = snag_json_string(data, "new_goal_id");
             if (!snag_json_exact_keys(data, "actor goal_id new_goal_id prompt") ||
                 (!model && (!actor || strcmp(actor, "user"))) ||
-                (model && (status != SNAG_GOAL_ACTIVE || session->goal_locked)) ||
-                !new_goal_id || !snag_hex_is_lower(new_goal_id, SNAG_ID_HEX_LEN) ||
+                (model && (status != SNAG_GOAL_ACTIVE || session->goal_locked)) || !new_goal_id ||
+                !snag_hex_is_lower(new_goal_id, SNAG_ID_HEX_LEN) ||
                 strcmp(new_goal_id, session->id) == 0 || strcmp(new_goal_id, goal_id) == 0 ||
                 !snag_text_valid(prompt, 1u, SNAG_MAX_GOAL_PROMPT) || snag_text_blank(prompt) ||
                 strcmp(prompt, session->goal_prompt) == 0 ||
-                replace_text(session, &session->goal_prompt, "goal_prompt", prompt, SNAG_MAX_GOAL_PROMPT) < 0)
+                replace_text(session, &session->goal_prompt, "goal_prompt", prompt,
+                    SNAG_MAX_GOAL_PROMPT) < 0)
                 goto invalid;
             memcpy(session->goal_parent_id, goal_id, sizeof(session->goal_parent_id));
             memcpy(session->goal_id, new_goal_id, sizeof(session->goal_id));
@@ -1305,41 +1401,48 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             session->goal_turn_count = 0u;
             session->goal_locked = false;
             if (!model && replace_text(session, &session->last_user, "last_user", prompt,
-                                        SNAG_MAX_GOAL_PROMPT) < 0) return -1;
+                              SNAG_MAX_GOAL_PROMPT) < 0)
+                return -1;
         } else if (strcmp(action, "reworded") == 0) {
             if (!snag_json_exact_keys(data, "actor goal_id prompt") ||
                 (!model && (!actor || strcmp(actor, "user"))) ||
                 (model && (status != SNAG_GOAL_ACTIVE || session->goal_locked)) ||
                 !snag_text_valid(prompt, 1u, SNAG_MAX_GOAL_PROMPT) || snag_text_blank(prompt) ||
                 strcmp(prompt, session->goal_prompt) == 0 ||
-                replace_text(session, &session->goal_prompt, "goal_prompt", prompt, SNAG_MAX_GOAL_PROMPT) < 0)
+                replace_text(session, &session->goal_prompt, "goal_prompt", prompt,
+                    SNAG_MAX_GOAL_PROMPT) < 0)
                 goto invalid;
             ++session->goal_revision;
             if (!model && replace_text(session, &session->last_user, "last_user", prompt,
-                                        SNAG_MAX_GOAL_PROMPT) < 0) return -1;
+                              SNAG_MAX_GOAL_PROMPT) < 0)
+                return -1;
         } else if (strcmp(action, "lock_changed") == 0) {
             json_t *locked = json_object_get(data, "locked");
-            if (!snag_json_exact_keys(data, "goal_id locked") ||
-                !json_is_boolean(locked) || json_is_true(locked) == session->goal_locked) goto invalid;
+            if (!snag_json_exact_keys(data, "goal_id locked") || !json_is_boolean(locked) ||
+                json_is_true(locked) == session->goal_locked)
+                goto invalid;
             session->goal_locked = json_is_true(locked);
         } else if (strcmp(action, "paused") == 0) {
             static const char reasons[] =
                 "input_closed provider_policy refusal session_resumed turn_stopped user";
             if (!snag_json_exact_keys(data, "goal_id reason") || status != SNAG_GOAL_ACTIVE ||
-                !snag_string_in(reason, reasons)) goto invalid;
+                !snag_string_in(reason, reasons))
+                goto invalid;
             status = SNAG_GOAL_PAUSED;
         } else if (strcmp(action, "blocked") == 0) {
             const char *wait_for = snag_json_string(data, "wait_for");
             bool has_wait = json_object_get(data, "wait_for") != NULL;
-            if (!snag_json_exact_keys(data, has_wait ? "actor goal_id reason wait_for" :
-                    "actor goal_id reason") || status != SNAG_GOAL_ACTIVE || !model ||
+            if (!snag_json_exact_keys(
+                    data, has_wait ? "actor goal_id reason wait_for" : "actor goal_id reason") ||
+                status != SNAG_GOAL_ACTIVE || !model ||
                 (has_wait && !snag_goal_wait_valid(wait_for)) ||
                 !snag_text_valid(reason, 1u, SNAG_MAX_GOAL_BLOCKER) || snag_text_blank(reason) ||
                 replace_text(session, &session->goal_blocker, "goal_blocker", reason,
-                             SNAG_MAX_GOAL_BLOCKER) < 0) goto invalid;
+                    SNAG_MAX_GOAL_BLOCKER) < 0)
+                goto invalid;
             if (has_wait) {
-                if (snag_json_set_new(session->strings, "goal_wait_for",
-                        json_string(wait_for)) < 0) return -1;
+                if (snag_json_set_new(session->strings, "goal_wait_for", json_string(wait_for)) < 0)
+                    return -1;
             } else {
                 json_object_del(session->strings, "goal_wait_for");
             }
@@ -1347,7 +1450,8 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         } else if (strcmp(action, "completed") == 0) {
             if (!snag_json_exact_keys(data, "actor goal_id") ||
                 (!model && (!actor || strcmp(actor, "user"))) ||
-                (model && (status != SNAG_GOAL_ACTIVE || session->process_count))) goto invalid;
+                (model && (status != SNAG_GOAL_ACTIVE || session->process_count)))
+                goto invalid;
             status = SNAG_GOAL_COMPLETED;
         } else if (snag_string_in(action, "resumed cancelled")) {
             bool resume = strcmp(action, "resumed") == 0;
@@ -1357,7 +1461,8 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         } else {
             goto invalid;
         }
-        if (status != session->goal_status && (status == SNAG_GOAL_ACTIVE || !snag_goal_unfinished(status))) {
+        if (status != session->goal_status &&
+            (status == SNAG_GOAL_ACTIVE || !snag_goal_unfinished(status))) {
             json_object_del(session->strings, "goal_blocker");
             session->goal_blocker = NULL;
             json_object_del(session->strings, "goal_wait_for");
@@ -1371,8 +1476,8 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             json_object_del(session->strings, "banner_text");
             session->banner_text = NULL;
         } else if (!snag_text_valid(text, 1u, SNAG_BANNER_MAX) ||
-                   replace_text(session, &session->banner_text, "banner_text", text,
-                                SNAG_BANNER_MAX) < 0) {
+                   replace_text(
+                       session, &session->banner_text, "banner_text", text, SNAG_BANNER_MAX) < 0) {
             goto invalid;
         }
     } else if (strcmp(type, "steering_updated") == 0) {
@@ -1383,12 +1488,12 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             session->steering_override = NULL;
         } else if ((strcmp(mode, "mentions") != 0 && strcmp(mode, "all") != 0) ||
                    replace_text(session, &session->steering_override, "steering_override", mode,
-                                sizeof("mentions")) < 0) {
+                       sizeof("mentions")) < 0) {
             goto invalid;
         }
     } else if (strcmp(type, "compaction_started") == 0) {
-        static const char methods[] =
-            "exact media_upper_bound unknown anchored_upper_bound statistical_upper_estimate qualified_upper_bound";
+        static const char methods[] = "exact media_upper_bound unknown anchored_upper_bound "
+                                      "statistical_upper_estimate qualified_upper_bound";
         static const char reasons[] =
             "manual proactive hard_budget provider_rejection model_switch image_boundary reduce";
         const char *compact_id = snag_json_string(data, "compact_id");
@@ -1410,34 +1515,36 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         active_prefix = session->active_turn && !session->response_open;
         expected_model = active_prefix ? session->active_turn_model : session->default_model;
         if (!snag_json_arg_keys(data,
-            "capability_version compact_id count_method count_request_sha256 input_tokens_bound model "
-            "predecessor_compact_id profile_id reason request_sha256 source_seq source_sha256",
-            "continuation_scope compaction_model", error, error_size) ||
+                "capability_version compact_id count_method count_request_sha256 "
+                "input_tokens_bound model "
+                "predecessor_compact_id profile_id reason request_sha256 source_seq source_sha256",
+                "continuation_scope compaction_model", error, error_size) ||
             (json_object_get(data, "compaction_model") &&
-             (!snag_json_string(data, "compaction_model") ||
-              !snag_json_string(data, "compaction_model")[0])) ||
+                (!snag_json_string(data, "compaction_model") ||
+                    !snag_json_string(data, "compaction_model")[0])) ||
             (json_object_get(data, "continuation_scope") &&
-             (!scope || !snag_hex_is_lower(scope, SNAG_SHA256_HEX_LEN))) ||
+                (!scope || !snag_hex_is_lower(scope, SNAG_SHA256_HEX_LEN))) ||
             (session->active_turn && !active_prefix) || session->response_open ||
             session->pending_call_count || (!active_prefix && session->process_count) ||
-            session->active_compact_id[0] != '\0' ||
-            !compact_id || !snag_hex_is_lower(compact_id, SNAG_ID_HEX_LEN) ||
+            session->active_compact_id[0] != '\0' || !compact_id ||
+            !snag_hex_is_lower(compact_id, SNAG_ID_HEX_LEN) ||
             strcmp(compact_id, session->id) == 0 || !snag_string_in(method, methods) ||
-            !snag_string_in(reason, reasons) ||
-            !source_hash || !snag_hex_is_lower(source_hash, SNAG_SHA256_HEX_LEN) ||
-            !request_hash || !snag_hex_is_lower(request_hash, SNAG_SHA256_HEX_LEN) ||
-            !count_hash || !snag_hex_is_lower(count_hash, SNAG_SHA256_HEX_LEN) ||
-            !model || strcmp(model, expected_model) != 0 ||
-            !profile || strcmp(profile, SNAJPAGENT_PROFILE_ID) != 0 || !capability ||
+            !snag_string_in(reason, reasons) || !source_hash ||
+            !snag_hex_is_lower(source_hash, SNAG_SHA256_HEX_LEN) || !request_hash ||
+            !snag_hex_is_lower(request_hash, SNAG_SHA256_HEX_LEN) || !count_hash ||
+            !snag_hex_is_lower(count_hash, SNAG_SHA256_HEX_LEN) || !model ||
+            strcmp(model, expected_model) != 0 || !profile ||
+            strcmp(profile, SNAJPAGENT_PROFILE_ID) != 0 || !capability ||
             strcmp(capability, SNAJPAGENT_CAPABILITY_VERSION) != 0 ||
-            snag_json_integer_u64(data, "source_seq", &source_seq) < 0 ||
-            source_seq == 0u || source_seq >= seq ||
+            snag_json_integer_u64(data, "source_seq", &source_seq) < 0 || source_seq == 0u ||
+            source_seq >= seq ||
             /* A reduce keeps the covered boundary and only shrinks the merged
              * summary, so the replay guard does not apply to it. */
             (source_seq <= session->compact_seq && strcmp(reason, "reduce") != 0 &&
-             (!scope || !session->compact_scope[0] || !strcmp(scope, session->compact_scope))) ||
+                (!scope || !session->compact_scope[0] || !strcmp(scope, session->compact_scope))) ||
             snag_json_integer_u64(data, "input_tokens_bound", &tokens) < 0 ||
-            (strcmp(method, "unknown") == 0 ? tokens != 0u : tokens == 0u)) goto invalid;
+            (strcmp(method, "unknown") == 0 ? tokens != 0u : tokens == 0u))
+            goto invalid;
         if (session->compact_id[0] == '\0') {
             if (!json_is_null(json_object_get(data, "predecessor_compact_id"))) goto invalid;
         } else if (!predecessor || strcmp(predecessor, session->compact_id) != 0) {
@@ -1445,10 +1552,11 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         }
         memcpy(session->active_compact_id, compact_id, sizeof(session->active_compact_id));
         memcpy(session->active_compact_source_sha256, source_hash,
-               sizeof(session->active_compact_source_sha256));
+            sizeof(session->active_compact_source_sha256));
         session->active_compact_source_seq = source_seq;
         session->active_compact_scope[0] = '\0';
-        if (scope) memcpy(session->active_compact_scope, scope, sizeof(session->active_compact_scope));
+        if (scope)
+            memcpy(session->active_compact_scope, scope, sizeof(session->active_compact_scope));
     } else if (strcmp(type, "compaction_interrupted") == 0) {
         static const char reasons[] = "steering user endpoint_unavailable context_rejected error";
         const char *compact_id = snag_json_string(data, "compact_id");
@@ -1476,16 +1584,18 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
 
         const char *scope = snag_json_string(data, "continuation_scope");
         if (json_object_get(data, "continuation_scope") &&
-            (!scope || !snag_hex_is_lower(scope, SNAG_SHA256_HEX_LEN))) goto invalid;
-        if (session->active_compact_scope[0] &&
-            (!scope || strcmp(scope, session->active_compact_scope))) goto invalid;
-        if (!snag_json_arg_keys(data,
-            "compact_id count_method input_tokens_bound output output_count_method "
-            "output_count_request_sha256 output_sha256 output_tokens_bound source_sha256",
-            "continuation_scope", error, error_size))
+            (!scope || !snag_hex_is_lower(scope, SNAG_SHA256_HEX_LEN)))
             goto invalid;
-        if (session->active_compact_id[0] == '\0' ||
-            !compact_id || strcmp(compact_id, session->active_compact_id) != 0 ||
+        if (session->active_compact_scope[0] &&
+            (!scope || strcmp(scope, session->active_compact_scope)))
+            goto invalid;
+        if (!snag_json_arg_keys(data,
+                "compact_id count_method input_tokens_bound output output_count_method "
+                "output_count_request_sha256 output_sha256 output_tokens_bound source_sha256",
+                "continuation_scope", error, error_size))
+            goto invalid;
+        if (session->active_compact_id[0] == '\0' || !compact_id ||
+            strcmp(compact_id, session->active_compact_id) != 0 ||
             !snag_string_in(method, methods) || !snag_string_in(output_method, methods) ||
             !output_count_hash || !snag_hex_is_lower(output_count_hash, SNAG_SHA256_HEX_LEN) ||
             !source_hash || strcmp(source_hash, session->active_compact_source_sha256) != 0 ||
@@ -1495,7 +1605,8 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             (strcmp(method, "unknown") == 0 ? in_tokens != 0u : in_tokens == 0u) ||
             (strcmp(output_method, "unknown") == 0 ? out_tokens != 0u : out_tokens == 0u) ||
             compact_output_digest(output, computed, &bytes) < 0 || bytes == 0u ||
-            strcmp(output_hash, computed) != 0) goto invalid;
+            strcmp(output_hash, computed) != 0)
+            goto invalid;
         json_decref(session->compact_output);
         session->compact_output = json_deep_copy(output);
         if (!session->compact_output) return -1;
@@ -1511,15 +1622,20 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         json_t *source_value = requested ? json_object_get(data, "source_seq") : NULL;
         const char *origin = requested ? snag_json_string(data, "origin") : NULL;
         uint64_t source_seq = 0u;
-        if (!(requested ? snag_json_arg_keys(data, "control", "origin source_seq", error, error_size) :
-                          snag_json_exact_keys(data, "control")) ||
-            snag_json_integer_u64(data, "control", &control) < 0 ||
-            !control || control > SNAG_CONTROL_RELOAD || (control & (control - 1u)) ||
-            (live && requested && control == SNAG_CONTROL_LEGACY_ARCHIVE)) goto invalid;
-        if ((origin_value && !origin) || (origin &&
-             (control != SNAG_CONTROL_COMPACT || strcmp(origin, "image_boundary") || !source_value ||
-              snag_json_integer_u64(data, "source_seq", &source_seq) < 0 || !source_seq || source_seq >= seq)) ||
-            (!origin && source_value)) goto invalid;
+        if (!(requested
+                    ? snag_json_arg_keys(data, "control", "origin source_seq", error, error_size)
+                    : snag_json_exact_keys(data, "control")) ||
+            snag_json_integer_u64(data, "control", &control) < 0 || !control ||
+            control > SNAG_CONTROL_RELOAD || (control & (control - 1u)) ||
+            (live && requested && control == SNAG_CONTROL_LEGACY_ARCHIVE))
+            goto invalid;
+        if ((origin_value && !origin) ||
+            (origin &&
+                (control != SNAG_CONTROL_COMPACT || strcmp(origin, "image_boundary") ||
+                    !source_value || snag_json_integer_u64(data, "source_seq", &source_seq) < 0 ||
+                    !source_seq || source_seq >= seq)) ||
+            (!origin && source_value))
+            goto invalid;
         unsigned int index = 0u;
         while ((UINT64_C(1) << index) != control) ++index;
         if (requested) {
@@ -1551,64 +1667,68 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         const char *new_model = snag_json_string(data, "new_model");
         const char *old_effort = snag_json_string(data, "old_effort");
         const char *new_effort = snag_json_string(data, "new_effort");
-        if (!snag_json_exact_keys(data,
-            "new_effort new_model new_provider old_effort old_model old_provider") ||
+        if (!snag_json_exact_keys(
+                data, "new_effort new_model new_provider old_effort old_model old_provider") ||
             !old_provider || !snag_text_valid(new_provider, 1u, SNAG_CONFIG_PROVIDER_NAME_MAX) ||
-            strcmp(old_provider, session->default_provider) != 0 ||
-            !old_model || strcmp(old_model, session->default_model) != 0 ||
-            !snag_text_valid(new_model, 1u, sizeof(session->default_model) - 1u) ||
-            !old_effort || strcmp(old_effort, session->default_effort) != 0 ||
+            strcmp(old_provider, session->default_provider) != 0 || !old_model ||
+            strcmp(old_model, session->default_model) != 0 ||
+            !snag_text_valid(new_model, 1u, sizeof(session->default_model) - 1u) || !old_effort ||
+            strcmp(old_effort, session->default_effort) != 0 ||
             !snag_text_valid(new_effort, 1u, sizeof(session->default_effort) - 1u) ||
             (strcmp(old_provider, new_provider) == 0 && strcmp(old_model, new_model) == 0 &&
-             strcmp(old_effort, new_effort) == 0) || !snag_strcpy(session->default_provider,
-                        sizeof(session->default_provider), new_provider) ||
+                strcmp(old_effort, new_effort) == 0) ||
+            !snag_strcpy(
+                session->default_provider, sizeof(session->default_provider), new_provider) ||
             !snag_strcpy(session->default_model, sizeof(session->default_model), new_model) ||
-            !snag_strcpy(session->default_effort, sizeof(session->default_effort), new_effort)) goto invalid;
+            !snag_strcpy(session->default_effort, sizeof(session->default_effort), new_effort))
+            goto invalid;
     } else if (strcmp(type, "turn_model_changed") == 0) {
         const char *old_provider = snag_json_string(data, "old_provider");
         const char *old_model = snag_json_string(data, "old_model");
         const char *old_effort = snag_json_string(data, "old_effort");
         const char *turn_id = snag_json_string(data, "turn_id");
         const char *new_effort = snag_json_string(data, "new_effort");
-        const char *effective_effort = strcmp(session->default_effort, "default") == 0 ?
-            "medium" : session->default_effort;
+        const char *effective_effort =
+            strcmp(session->default_effort, "default") == 0 ? "medium" : session->default_effort;
 
         if (!session->active_turn || session->response_open ||
             !snag_json_exact_keys(data, "new_effort old_effort old_model old_provider turn_id") ||
-            !turn_id || strcmp(turn_id, session->active_turn_id) != 0 ||
-            !new_effort || strcmp(new_effort, effective_effort) != 0 ||
-            !old_provider || strcmp(old_provider, session->active_turn_provider) != 0 ||
-            !old_model || strcmp(old_model, session->active_turn_model) != 0 ||
-            !old_effort || strcmp(old_effort, session->active_turn_effort) != 0 ||
+            !turn_id || strcmp(turn_id, session->active_turn_id) != 0 || !new_effort ||
+            strcmp(new_effort, effective_effort) != 0 || !old_provider ||
+            strcmp(old_provider, session->active_turn_provider) != 0 || !old_model ||
+            strcmp(old_model, session->active_turn_model) != 0 || !old_effort ||
+            strcmp(old_effort, session->active_turn_effort) != 0 ||
             (strcmp(old_provider, session->default_provider) == 0 &&
-             strcmp(old_model, session->default_model) == 0 &&
-             strcmp(old_effort, new_effort) == 0) ||
+                strcmp(old_model, session->default_model) == 0 &&
+                strcmp(old_effort, new_effort) == 0) ||
             !snag_strcpy(session->active_turn_provider, sizeof(session->active_turn_provider),
-                         session->default_provider) ||
+                session->default_provider) ||
             !snag_strcpy(session->active_turn_model, sizeof(session->active_turn_model),
-                         session->default_model) ||
-            !snag_strcpy(session->active_turn_effort, sizeof(session->active_turn_effort),
-                         new_effort)) goto invalid;
+                session->default_model) ||
+            !snag_strcpy(
+                session->active_turn_effort, sizeof(session->active_turn_effort), new_effort))
+            goto invalid;
     } else if (strcmp(type, "effort_changed") == 0) {
         const char *old_effort = snag_json_string(data, "old_effort");
         const char *new_effort = snag_json_string(data, "new_effort");
         if (!snag_json_exact_keys(data, "new_effort old_effort") ||
             !snag_text_valid(old_effort, 1u, sizeof(session->default_effort) - 1u) ||
             !snag_text_valid(new_effort, 1u, sizeof(session->default_effort) - 1u) ||
-            strcmp(old_effort, session->default_effort) != 0 || strcmp(old_effort, new_effort) == 0 ||
-            !snag_strcpy(session->default_effort, sizeof(session->default_effort), new_effort)) goto invalid;
+            strcmp(old_effort, session->default_effort) != 0 ||
+            strcmp(old_effort, new_effort) == 0 ||
+            !snag_strcpy(session->default_effort, sizeof(session->default_effort), new_effort))
+            goto invalid;
     } else if (strcmp(type, "retry_auto_changed") == 0) {
         const char *value = snag_json_string(data, "value");
-        if (!snag_json_exact_keys(data, "value") ||
-            !snag_string_in(value, "on off")) goto invalid;
-        if (replace_text(session, &session->retry_auto, "retry_auto", value, 3u) < 0)
-            return -1;
+        if (!snag_json_exact_keys(data, "value") || !snag_string_in(value, "on off")) goto invalid;
+        if (replace_text(session, &session->retry_auto, "retry_auto", value, 3u) < 0) return -1;
     } else if (strcmp(type, "service_tier_changed") == 0) {
         const char *value = snag_json_string(data, "value");
-        if (!snag_json_exact_keys(data, "value") ||
-            !snag_string_in(value, "priority default")) goto invalid;
+        if (!snag_json_exact_keys(data, "value") || !snag_string_in(value, "priority default"))
+            goto invalid;
         if (replace_text(session, &session->service_tier, "service_tier", value,
-                sizeof("priority") - 1u) < 0) return -1;
+                sizeof("priority") - 1u) < 0)
+            return -1;
     } else if (strcmp(type, "context_selection_changed") == 0) {
         const char *old_mode = snag_json_string(data, "old_mode");
         const char *new_mode = snag_json_string(data, "new_mode");
@@ -1617,56 +1737,62 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
 
         if (!snag_json_exact_keys(data, "new_mode new_tokens old_mode old_tokens") ||
             snag_json_integer_u64(data, "old_tokens", &old_tokens) < 0 ||
-            snag_json_integer_u64(data, "new_tokens", &new_tokens) < 0 ||
-            !old_mode || !new_mode ||
+            snag_json_integer_u64(data, "new_tokens", &new_tokens) < 0 || !old_mode || !new_mode ||
             snag_context_mode_parse(old_mode, &parsed) < 0 || parsed != session->context_mode ||
             old_tokens != session->context_tokens ||
             snag_context_mode_parse(new_mode, &parsed) < 0 ||
             !snag_context_choice_valid(parsed, new_tokens) ||
-            (parsed == session->context_mode && new_tokens == session->context_tokens)) goto invalid;
+            (parsed == session->context_mode && new_tokens == session->context_tokens))
+            goto invalid;
         session->context_mode = parsed;
         session->context_tokens = new_tokens;
     } else if (strcmp(type, "command_shell_changed") == 0) {
         const char *shell = snag_json_string(data, "shell");
         if (!snag_json_exact_keys(data, "shell") ||
             !snag_text_valid(shell, 1u, SNAG_CONFIG_PATH_MAX) || !snag_path_root_len(shell) ||
-            !snag_strcpy(session->command_shell, sizeof(session->command_shell), shell)) goto invalid;
+            !snag_strcpy(session->command_shell, sizeof(session->command_shell), shell))
+            goto invalid;
     } else if (snag_string_in(type, "steering_added irc_reply_reminder")) {
         const char *steering_id = snag_json_string(data, "steering_id");
         const char *text = snag_json_string(data, "text");
         size_t len;
         bool reminder = strcmp(type, "irc_reply_reminder") == 0;
 
-        if (!input_fields_valid(data, json_object_get(data, "received_at_ms") ?
-                "steering_id text turn_id received_at_ms" : "steering_id text turn_id") || !current_turn ||
-            session->response_terminal == SNAG_RESPONSE_TERMINAL_FAILED ||
-            session->response_terminal == SNAG_RESPONSE_TERMINAL_INTERRUPTED ||
-            !steering_id || !snag_hex_is_lower(steering_id, SNAG_ID_HEX_LEN) ||
+        if (!input_fields_valid(data, json_object_get(data, "received_at_ms")
+                                          ? "steering_id text turn_id received_at_ms"
+                                          : "steering_id text turn_id") ||
+            !current_turn || session->response_terminal == SNAG_RESPONSE_TERMINAL_FAILED ||
+            session->response_terminal == SNAG_RESPONSE_TERMINAL_INTERRUPTED || !steering_id ||
+            !snag_hex_is_lower(steering_id, SNAG_ID_HEX_LEN) ||
             pending_user_id_exists(session, steering_id) || !text || !*text ||
             (len = strlen(text)) > SNAG_MAX_STEERING_TEXT ||
             session->pending_steering_bytes > SNAG_MAX_PENDING_STEERING_BYTES - len ||
             (reminder && (!session->response_complete ||
-                          (session->response_outcome != SNAG_GRAPH_NONPRODUCTIVE &&
-                           session->response_outcome != SNAG_GRAPH_FINAL &&
-                           session->response_outcome != SNAG_GRAPH_REFUSAL) || session->irc_reply_reminded ||
-                          session->pending_steering_count != 0u ||
-                          strcmp(text, SNAG_IRC_REPLY_REMINDER_TEXT) != 0))) goto invalid;
+                             (session->response_outcome != SNAG_GRAPH_NONPRODUCTIVE &&
+                                 session->response_outcome != SNAG_GRAPH_FINAL &&
+                                 session->response_outcome != SNAG_GRAPH_REFUSAL) ||
+                             session->irc_reply_reminded || session->pending_steering_count != 0u ||
+                             strcmp(text, SNAG_IRC_REPLY_REMINDER_TEXT) != 0)))
+            goto invalid;
         if (add_pending_steering(session, steering_id, text, len, seq) < 0) return -1;
         if (!reminder) session->policy_stopped = SNAG_POLICY_STOP_NONE;
-        session->pending_steering[session->pending_steering_count-1u].content=json_incref(json_object_get(data,"content"));
+        session->pending_steering[session->pending_steering_count - 1u].content =
+            json_incref(json_object_get(data, "content"));
         if (json_object_get(data, "received_at_ms") &&
             snag_json_integer_u64(data, "received_at_ms",
                 &session->pending_steering[session->pending_steering_count - 1u].received_ms) < 0)
             goto invalid;
         if (reminder) session->irc_reply_reminded = true;
     } else if (strcmp(type, "steering_deferred") == 0) {
-        if (!snag_json_exact_keys(data, "turn_id") || !current_turn ||
-            session->response_open || !session->response_complete) goto invalid;
+        if (!snag_json_exact_keys(data, "turn_id") || !current_turn || session->response_open ||
+            !session->response_complete)
+            goto invalid;
         session->steering_deferred = true;
     } else if (strcmp(type, "future_queue_state") == 0) {
         json_t *armed = json_object_get(data, "armed");
         if (!snag_json_exact_keys(data, "armed") || !json_is_boolean(armed) ||
-            (json_is_true(armed) && !session->pending_queue_count)) goto invalid;
+            (json_is_true(armed) && !session->pending_queue_count))
+            goto invalid;
         session->queue_armed = json_is_true(armed);
     } else if (snag_string_in(type, "future_turn_queued future_turn_edited")) {
         bool adding = strcmp(type, "future_turn_queued") == 0;
@@ -1677,36 +1803,48 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         size_t old_len = 0u, len;
 
         bool has_arm = json_object_get(data, "armed") != NULL;
-        const char *keys = adding ? (has_arm ? (json_object_get(data, "received_at_ms") ?
-                "armed queue_id read_only text while_turn_id received_at_ms" :
-                "armed queue_id read_only text while_turn_id") :
-             (json_object_get(data, "received_at_ms") ? "queue_id read_only text while_turn_id received_at_ms" :
-                                                     "queue_id read_only text while_turn_id")) :
-            (has_arm ? (json_object_get(data, "received_at_ms") ?
-                "armed queue_id read_only text received_at_ms" : "armed queue_id read_only text") :
-             (json_object_get(data, "received_at_ms") ? "queue_id read_only text received_at_ms" :
-                                                     "queue_id read_only text"));
-        const json_t *voice=json_object_get(data,"voice");
-        char voice_id[SNAG_ID_HEX_LEN+1u],voice_keys[256];
-        if(voice) {
-            if(!adding || read_only || json_object_get(data,"content") || !voice_source_valid(voice) ||
-                voice_queue_id(voice,voice_id)<0 || !queue_id || strcmp(voice_id,queue_id))goto invalid;
-            snprintf(voice_keys,sizeof(voice_keys),"%s voice",keys);keys=voice_keys;
+        const char *keys =
+            adding
+                ? (has_arm ? (json_object_get(data, "received_at_ms")
+                                     ? "armed queue_id read_only text while_turn_id received_at_ms"
+                                     : "armed queue_id read_only text while_turn_id")
+                           : (json_object_get(data, "received_at_ms")
+                                     ? "queue_id read_only text while_turn_id received_at_ms"
+                                     : "queue_id read_only text while_turn_id"))
+                : (has_arm ? (json_object_get(data, "received_at_ms")
+                                     ? "armed queue_id read_only text received_at_ms"
+                                     : "armed queue_id read_only text")
+                           : (json_object_get(data, "received_at_ms")
+                                     ? "queue_id read_only text received_at_ms"
+                                     : "queue_id read_only text"));
+        const json_t *voice = json_object_get(data, "voice");
+        char voice_id[SNAG_ID_HEX_LEN + 1u], voice_keys[256];
+        if (voice) {
+            if (!adding || read_only || json_object_get(data, "content") ||
+                !voice_source_valid(voice) || voice_queue_id(voice, voice_id) < 0 || !queue_id ||
+                strcmp(voice_id, queue_id))
+                goto invalid;
+            snprintf(voice_keys, sizeof(voice_keys), "%s voice", keys);
+            keys = voice_keys;
         }
         if (!input_fields_valid(data, keys) ||
             (has_arm && !json_is_boolean(json_object_get(data, "armed"))) ||
-            !json_is_boolean(json_object_get(data, "read_only")) ||
-            !queue_id || !snag_hex_is_lower(queue_id, SNAG_ID_HEX_LEN) ||
-            !text || !*text || (len = strlen(text)) > SNAG_MAX_QUEUED_TEXT) goto invalid;
+            !json_is_boolean(json_object_get(data, "read_only")) || !queue_id ||
+            !snag_hex_is_lower(queue_id, SNAG_ID_HEX_LEN) || !text || !*text ||
+            (len = strlen(text)) > SNAG_MAX_QUEUED_TEXT)
+            goto invalid;
         if (adding) {
             const char *turn_id = snag_json_string(data, "while_turn_id");
-            if ((voice ? (session->active_turn ? (!turn_id || strcmp(turn_id,session->active_turn_id)) :
-                    !json_is_null(json_object_get(data,"while_turn_id"))) :
-                (!turn_id || strcmp(turn_id,session->active_turn?session->active_turn_id:""))) ||
-                pending_user_id_exists(session, queue_id)) goto invalid;
+            if ((voice ? (session->active_turn
+                                 ? (!turn_id || strcmp(turn_id, session->active_turn_id))
+                                 : !json_is_null(json_object_get(data, "while_turn_id")))
+                       : (!turn_id || strcmp(turn_id,
+                                          session->active_turn ? session->active_turn_id : ""))) ||
+                pending_user_id_exists(session, queue_id))
+                goto invalid;
             if (session->pending_queue_count == session->pending_queue_capacity) {
-                size_t capacity = session->pending_queue_capacity ?
-                    session->pending_queue_capacity * 2u : 16u;
+                size_t capacity =
+                    session->pending_queue_capacity ? session->pending_queue_capacity * 2u : 16u;
                 struct snag_queued_turn *grown;
                 if (capacity < session->pending_queue_capacity) goto invalid;
                 grown = realloc(session->pending_queue, capacity * sizeof(*grown));
@@ -1719,21 +1857,25 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             for (size_t i = 0; i < session->pending_queue_count && !queued; ++i)
                 if (strcmp(session->pending_queue[i].queue_id, queue_id) == 0)
                     queued = &session->pending_queue[i];
-            if (!queued || (!has_arm && !strcmp(queued->text, text) && queued->read_only == read_only))
+            if (!queued ||
+                (!has_arm && !strcmp(queued->text, text) && queued->read_only == read_only))
                 goto invalid;
             old_len = strlen(queued->text);
         }
-        if (len > old_len && session->pending_queue_bytes > SNAG_MAX_PENDING_QUEUE_TEXT - (len - old_len))
+        if (len > old_len &&
+            session->pending_queue_bytes > SNAG_MAX_PENDING_QUEUE_TEXT - (len - old_len))
             goto invalid;
         if (adding) memset(queued, 0, sizeof(*queued));
-        if (replace_text(session, &queued->text, queue_id, text, SNAG_MAX_QUEUED_TEXT) < 0) return -1;
+        if (replace_text(session, &queued->text, queue_id, text, SNAG_MAX_QUEUED_TEXT) < 0)
+            return -1;
         queued->received_ms = session->last_time_ms;
         if (json_object_get(data, "received_at_ms") &&
-            snag_json_integer_u64(data, "received_at_ms", &queued->received_ms) < 0) goto invalid;
+            snag_json_integer_u64(data, "received_at_ms", &queued->received_ms) < 0)
+            goto invalid;
         if (adding) {
             ++session->pending_queue_count;
             memcpy(queued->queue_id, queue_id, sizeof(queued->queue_id));
-            queued->content=json_incref(json_object_get(data,"content"));
+            queued->content = json_incref(json_object_get(data, "content"));
             queued->seq = seq;
         }
         if (has_arm) session->queue_armed = json_is_true(json_object_get(data, "armed"));
@@ -1745,12 +1887,13 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         size_t count, removed = 0u, out = 0u;
 
         if (!snag_json_exact_keys(data, "queue_ids reason") || !reason ||
-            strcmp(reason, "user") != 0 || !json_is_array(ids) ||
-            !(count = json_array_size(ids))) goto invalid;
+            strcmp(reason, "user") != 0 || !json_is_array(ids) || !(count = json_array_size(ids)))
+            goto invalid;
         /* IDs must follow queue order. Mutations remain in the event stage. */
         for (size_t i = 0u; i < session->pending_queue_count; ++i) {
             struct snag_queued_turn *queued = &session->pending_queue[i];
-            const char *id = removed < count ? json_string_value(json_array_get(ids, removed)) : NULL;
+            const char *id =
+                removed < count ? json_string_value(json_array_get(ids, removed)) : NULL;
 
             if (removed < count && (!id || !snag_hex_is_lower(id, SNAG_ID_HEX_LEN))) goto invalid;
             if (id && !strcmp(queued->queue_id, id)) {
@@ -1765,27 +1908,31 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         }
         if (removed != count) goto invalid;
         memset(&session->pending_queue[out], 0,
-               (session->pending_queue_count - out) * sizeof(session->pending_queue[0]));
+            (session->pending_queue_count - out) * sizeof(session->pending_queue[0]));
         session->pending_queue_count = out;
     } else if (strcmp(type, "input_received") == 0) {
         if (session->active_turn || session->pending_input ||
-            !input_fields_valid(data, json_object_get(data, "origin") ?
-                "effort instructions model origin provider read_only received_at_ms text" :
-                "effort instructions model provider read_only received_at_ms text") ||
+            !input_fields_valid(data,
+                json_object_get(data, "origin")
+                    ? "effort instructions model origin provider read_only received_at_ms text"
+                    : "effort instructions model provider read_only received_at_ms text") ||
             (json_object_get(data, "origin") &&
-             !snag_string_in(snag_json_string(data, "origin"), "timer")) ||
+                !snag_string_in(snag_json_string(data, "origin"), "timer")) ||
             !snag_text_valid(snag_json_string(data, "text"), 1u, SNAG_MAX_DIRECT_PROMPT) ||
             !snag_text_valid(snag_json_string(data, "model"), 1u, SNAG_MODEL_MAX_BYTES - 1u) ||
             !snag_text_valid(snag_json_string(data, "effort"), 1u, SNAG_EFFORT_MAX_BYTES - 1u) ||
-            !snag_text_valid(snag_json_string(data, "provider"), 1u, SNAG_CONFIG_PROVIDER_NAME_MAX) ||
+            !snag_text_valid(
+                snag_json_string(data, "provider"), 1u, SNAG_CONFIG_PROVIDER_NAME_MAX) ||
             !json_is_boolean(json_object_get(data, "read_only")) ||
             snag_json_integer_u64(data, "received_at_ms", &n) < 0 ||
-            snag_instructions_metadata_valid(json_object_get(data, "instructions"), error, error_size) < 0)
+            snag_instructions_metadata_valid(
+                json_object_get(data, "instructions"), error, error_size) < 0)
             goto invalid;
         session->pending_input = json_deep_copy(data);
         if (!session->pending_input) return -1;
     } else if (strcmp(type, "input_cancelled") == 0) {
-        if (!session->pending_input || session->active_turn || !snag_json_exact_keys(data, "")) goto invalid;
+        if (!session->pending_input || session->active_turn || !snag_json_exact_keys(data, ""))
+            goto invalid;
         json_decref(session->pending_input);
         session->pending_input = NULL;
         session->queue_armed = false;
@@ -1827,29 +1974,33 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         if (session->legacy_journal && json_is_object(config)) {
             if (json_object_get(config, "max_parallel_commands") &&
                 (snag_json_integer_u64(config, "max_parallel_commands", &max_parallel) < 0 ||
-                 max_parallel < 1u)) goto invalid;
+                    max_parallel < 1u))
+                goto invalid;
             if (json_object_get(config, "parallel_tool_calls") &&
-                !json_is_boolean(json_object_get(config, "parallel_tool_calls"))) goto invalid;
+                !json_is_boolean(json_object_get(config, "parallel_tool_calls")))
+                goto invalid;
         }
         legacy_instruction_metadata = session->legacy_journal && json_is_array(instructions) &&
-            json_array_size(instructions) > 0u && json_is_object(json_array_get(instructions, 0u));
-        read_only_ok = json_object_get(data, "read_only") ?
-            json_is_boolean(json_object_get(data, "read_only")) : session->legacy_journal;
+                                      json_array_size(instructions) > 0u &&
+                                      json_is_object(json_array_get(instructions, 0u));
+        read_only_ok = json_object_get(data, "read_only")
+                           ? json_is_boolean(json_object_get(data, "read_only"))
+                           : session->legacy_journal;
         /* Steering submitted after the previous turn's final request is
          * durable but has no model context yet. Carry exactly that state into
          * the next explicit/queued/goal turn; admitted steering may never
          * cross a turn boundary. */
         if (session->active_turn || session->process_count != 0u ||
             !snag_session_pending_steering_unadmitted(session) ||
-            !input_fields_valid(data, fields) ||
-            !read_only_ok ||
-            !(turn_id = snag_json_string(data, "turn_id")) || !snag_hex_is_lower(turn_id, SNAG_ID_HEX_LEN) ||
+            !input_fields_valid(data, fields) || !read_only_ok ||
+            !(turn_id = snag_json_string(data, "turn_id")) ||
+            !snag_hex_is_lower(turn_id, SNAG_ID_HEX_LEN) ||
             snag_json_integer_u64(data, "turn_number", &n) < 0 || n != session->turn_count + 1u ||
             !(kind = snag_json_string(data, "input_kind")) || !json_is_object(config) ||
             (!session->legacy_journal &&
-             (snag_json_integer_u64(config, "max_parallel_commands", &max_parallel) < 0 ||
-              max_parallel < 1u ||
-              !json_is_boolean(json_object_get(config, "parallel_tool_calls")))) ||
+                (snag_json_integer_u64(config, "max_parallel_commands", &max_parallel) < 0 ||
+                    max_parallel < 1u ||
+                    !json_is_boolean(json_object_get(config, "parallel_tool_calls")))) ||
             !(model = snag_json_string(config, "model")) || !*model ||
             !(provider = snag_json_string(config, "provider")) || !*provider ||
             strlen(provider) > SNAG_CONFIG_PROVIDER_NAME_MAX ||
@@ -1857,16 +2008,18 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             strlen(effort) >= sizeof(session->active_turn_effort) ||
             strlen(model) >= sizeof(session->active_turn_model) ||
             !snag_utf8_valid((const unsigned char *)model, strlen(model), true) ||
-            (legacy_instruction_metadata ?
-                legacy_instructions_metadata_valid(instructions, error, error_size) < 0 :
-                snag_instructions_metadata_valid(instructions, error, error_size) < 0) ||
-            !(cwd = snag_json_string(data, cwd_key)) ||
-            strcmp(cwd, session->cwd) != 0 || !(text = snag_json_string(data, "text")) || !*text)
+            (legacy_instruction_metadata
+                    ? legacy_instructions_metadata_valid(instructions, error, error_size) < 0
+                    : snag_instructions_metadata_valid(instructions, error, error_size) < 0) ||
+            !(cwd = snag_json_string(data, cwd_key)) || strcmp(cwd, session->cwd) != 0 ||
+            !(text = snag_json_string(data, "text")) || !*text)
             goto invalid;
-#define OPTIONAL_EXEC_U32(key, value) do { \
-            if (json_object_get(config, (key)) && \
-                (snag_json_integer_u64(config, (key), &(value)) < 0 || (value) > UINT32_MAX)) goto invalid; \
-        } while (0)
+#define OPTIONAL_EXEC_U32(key, value)                                                              \
+    do {                                                                                           \
+        if (json_object_get(config, (key)) &&                                                      \
+            (snag_json_integer_u64(config, (key), &(value)) < 0 || (value) > UINT32_MAX))          \
+            goto invalid;                                                                          \
+    } while (0)
         OPTIONAL_EXEC_U32("default_yield_ms", default_yield);
         OPTIONAL_EXEC_U32("max_wait_ms", max_wait);
         OPTIONAL_EXEC_U32("default_timeout_ms", default_timeout);
@@ -1875,7 +2028,8 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         OPTIONAL_EXEC_U32("output_cache_bytes", output_cache);
 #undef OPTIONAL_EXEC_U32
         if (!max_wait || !max_timeout || !tool_output || default_yield > max_wait ||
-            default_timeout > max_timeout || output_cache > SNAG_CONFIG_OUTPUT_CACHE_MAX) goto invalid;
+            default_timeout > max_timeout || output_cache > SNAG_CONFIG_OUTPUT_CACHE_MAX)
+            goto invalid;
         queued = strcmp(kind, "queued") == 0;
         goal = strcmp(kind, "goal") == 0;
         timer = strcmp(kind, "timer") == 0;
@@ -1889,9 +2043,11 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
                 strcmp(provider, snag_json_string(pending, "provider")) ||
                 strcmp(effort, snag_json_string(pending, "effort")) ||
                 (json_object_get(data, "content") != json_object_get(pending, "content") &&
-                 !json_equal(json_object_get(data, "content"), json_object_get(pending, "content"))) ||
+                    !json_equal(
+                        json_object_get(data, "content"), json_object_get(pending, "content"))) ||
                 json_is_true(json_object_get(data, "read_only")) !=
-                    json_is_true(json_object_get(pending, "read_only"))) goto invalid;
+                    json_is_true(json_object_get(pending, "read_only")))
+                goto invalid;
         }
         if (goal) {
             if (json_object_get(data, "content")) goto invalid;
@@ -1899,20 +2055,23 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
                 json_is_true(json_object_get(data, "read_only")) ||
                 !json_is_null(json_object_get(data, "queue_id")) ||
                 !json_is_null(json_object_get(data, "queue_seq")) ||
-                strcmp(text, SNAG_GOAL_CONTINUATION_TEXT) != 0) goto invalid;
+                strcmp(text, SNAG_GOAL_CONTINUATION_TEXT) != 0)
+                goto invalid;
         } else if (!queued) {
             if (!json_is_null(json_object_get(data, "queue_id")) ||
-                !json_is_null(json_object_get(data, "queue_seq")) || strlen(text) > SNAG_MAX_DIRECT_PROMPT)
+                !json_is_null(json_object_get(data, "queue_seq")) ||
+                strlen(text) > SNAG_MAX_DIRECT_PROMPT)
                 goto invalid;
         } else {
             const char *queue_id = snag_json_string(data, "queue_id");
-            if (session->pending_queue_count == 0u || !session->pending_queue[0].text || !queue_id ||
-                snag_json_integer_u64(data, "queue_seq", &queue_seq) < 0 ||
+            if (session->pending_queue_count == 0u || !session->pending_queue[0].text ||
+                !queue_id || snag_json_integer_u64(data, "queue_seq", &queue_seq) < 0 ||
                 strcmp(queue_id, session->pending_queue[0].queue_id) != 0 ||
                 queue_seq != session->pending_queue[0].seq ||
                 strcmp(text, session->pending_queue[0].text) != 0 ||
                 (json_object_get(data, "content") != session->pending_queue[0].content &&
-                 !json_equal(json_object_get(data, "content"), session->pending_queue[0].content)) ||
+                    !json_equal(
+                        json_object_get(data, "content"), session->pending_queue[0].content)) ||
                 session->pending_queue[0].read_only !=
                     json_is_true(json_object_get(data, "read_only")) ||
                 strlen(text) > SNAG_MAX_QUEUED_TEXT)
@@ -1920,16 +2079,19 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         }
         memcpy(session->active_turn_id, turn_id, sizeof(session->active_turn_id));
         if (!snag_strcpy(session->active_turn_model, sizeof(session->active_turn_model), model) ||
-            !snag_strcpy(session->active_turn_provider, sizeof(session->active_turn_provider), provider) ||
+            !snag_strcpy(
+                session->active_turn_provider, sizeof(session->active_turn_provider), provider) ||
             !snag_strcpy(session->active_turn_effort, sizeof(session->active_turn_effort), effort))
             goto invalid;
         session->input_received_ms = session->last_time_ms;
         session->input_first_context_ms = 0u;
         if (json_object_get(data, "received_at_ms") &&
-            snag_json_integer_u64(data, "received_at_ms", &session->input_received_ms) < 0) goto invalid;
+            snag_json_integer_u64(data, "received_at_ms", &session->input_received_ms) < 0)
+            goto invalid;
         uint64_t retry_limit = 5u;
         if (json_object_get(config, "max_turn_retries") &&
-            (snag_json_integer_u64(config, "max_turn_retries", &retry_limit) < 0 || retry_limit > UINT32_MAX))
+            (snag_json_integer_u64(config, "max_turn_retries", &retry_limit) < 0 ||
+                retry_limit > UINT32_MAX))
             goto invalid;
         session->turn_retry_limit = (uint32_t)retry_limit;
         session->turn_retry_attempts = 0u;
@@ -1942,13 +2104,16 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         session->max_timeout_ms = (uint32_t)max_timeout;
         session->tool_output_bytes = (uint32_t)tool_output;
         session->output_cache_bytes = (uint32_t)output_cache;
-        session->parallel_tool_calls = json_object_get(config, "parallel_tool_calls") ?
-            json_is_true(json_object_get(config, "parallel_tool_calls")) : true;
+        session->parallel_tool_calls =
+            json_object_get(config, "parallel_tool_calls")
+                ? json_is_true(json_object_get(config, "parallel_tool_calls"))
+                : true;
         session->active_read_only = json_is_true(json_object_get(data, "read_only"));
         session->active_queued = queued;
         session->active_goal = goal;
         session->steering_deferred = false;
-        if (replace_text(session, &session->active_prompt, "active_prompt", text, SNAG_MAX_DIRECT_PROMPT) < 0)
+        if (replace_text(session, &session->active_prompt, "active_prompt", text,
+                SNAG_MAX_DIRECT_PROMPT) < 0)
             return -1;
         session->turn_count = n;
         if (goal) ++session->goal_turn_count;
@@ -1956,9 +2121,11 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         session->irc_reply_reminded = false;
         session->output_correction_used = false;
         clear_response_state(session);
-        if (!goal && ((!session->first_user &&
-             replace_text(session, &session->first_user, "first_user", text, SNAG_MAX_DIRECT_PROMPT) < 0) ||
-            replace_text(session, &session->last_user, "last_user", text, SNAG_MAX_DIRECT_PROMPT) < 0))
+        if (!goal &&
+            ((!session->first_user && replace_text(session, &session->first_user, "first_user",
+                                          text, SNAG_MAX_DIRECT_PROMPT) < 0) ||
+                replace_text(
+                    session, &session->last_user, "last_user", text, SNAG_MAX_DIRECT_PROMPT) < 0))
             return -1;
         if (queued && consume_oldest_queue(session) < 0) goto invalid;
         json_decref(session->pending_input);
@@ -1971,7 +2138,8 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         if (!snag_json_exact_keys(data, "steering_ids time_ms turn_id") || !current_turn ||
             !json_is_array(ids) || json_array_size(ids) > session->pending_steering_count ||
             snag_json_integer_u64(data, "time_ms", &when) < 0 || !when ||
-            (session->input_first_context_ms && !json_array_size(ids))) goto invalid;
+            (session->input_first_context_ms && !json_array_size(ids)))
+            goto invalid;
         if (!session->input_first_context_ms) session->input_first_context_ms = when;
         for (size_t i = 0; i < json_array_size(ids); ++i) {
             const char *id = json_string_value(json_array_get(ids, i));
@@ -1988,7 +2156,8 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         }
     } else if (strcmp(type, "turn_yield_requested") == 0) {
         if (!current_turn || (!session->pending_call_count && !session->process_count) ||
-            !snag_json_exact_keys(data, "turn_id")) goto invalid;
+            !snag_json_exact_keys(data, "turn_id"))
+            goto invalid;
     } else if (strcmp(type, "turn_cancel_requested") == 0) {
         if (!current_turn || !snag_json_exact_keys(data, "turn_id")) goto invalid;
         session->cancel_requested = true;
@@ -1996,11 +2165,15 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
     } else if (strcmp(type, "turn_recovery") == 0) {
         const char *message = snag_json_string(data, "message");
         bool retry = json_object_get(data, "retry_attempts") != NULL;
-        if (!snag_json_exact_keys(data, retry ? "class message turn_id retry_attempts" : "class message turn_id") || !current_turn ||
-            (retry && (snag_json_integer_u64(data, "retry_attempts", &session->turn_retry_attempts) < 0 ||
-                       session->turn_retry_attempts > (uint64_t)UINT32_MAX + 1u)) ||
+        if (!snag_json_exact_keys(
+                data, retry ? "class message turn_id retry_attempts" : "class message turn_id") ||
+            !current_turn ||
+            (retry &&
+                (snag_json_integer_u64(data, "retry_attempts", &session->turn_retry_attempts) < 0 ||
+                    session->turn_retry_attempts > (uint64_t)UINT32_MAX + 1u)) ||
             !snag_json_string(data, "class") || !message || strlen(message) > 8192u ||
-            session->response_open || !all_pending_finished(session)) goto invalid;
+            session->response_open || !all_pending_finished(session))
+            goto invalid;
         clear_response_state(session);
         /* Older writers cleared failed compaction only in memory. A recorded
          * failed attempt closes it on replay before the next compaction. */
@@ -2010,10 +2183,11 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         const char *reason = snag_json_string(data, "reason");
         if (!snag_json_exact_keys(data, "reason turn_id") || !current_turn ||
             session->response_open || !all_pending_finished(session) ||
-            !snag_string_in(reason, "goal_recovery turn_recovery")) goto invalid;
+            !snag_string_in(reason, "goal_recovery turn_recovery"))
+            goto invalid;
         session->context_rebase_seq = seq;
         memcpy(session->context_rebase_turn_id, session->active_turn_id,
-               sizeof(session->context_rebase_turn_id));
+            sizeof(session->context_rebase_turn_id));
         session->context_rebase_has_new_results = false;
         /* A recovery rebase replaces the measured request's history while
          * retaining its compact_id. The old usage/meter and anchor must not
@@ -2061,7 +2235,8 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
                 json_object_set_new(copy, "request_input_count", json_integer(0)) < 0 ||
                 json_object_set_new(copy, "request_input_sha256", json_string("")) < 0 ||
                 json_object_set_new(copy, "provider_source_sha256", json_string("")) < 0 ||
-                json_object_set_new(copy, "provider", json_string(session->active_turn_provider)) < 0 ||
+                json_object_set_new(copy, "provider", json_string(session->active_turn_provider)) <
+                    0 ||
                 json_object_set_new(copy, "effort", json_string(session->active_turn_effort)) < 0) {
                 json_decref(copy);
                 return -1;
@@ -2079,15 +2254,17 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         count_hash = snag_json_string(data, "count_request_sha256");
         host_context = json_object_get(data, "host_context");
         steering_ids = json_object_get(data, "steering_ids");
-        state_allows_start = !session->response_open &&
+        state_allows_start =
+            !session->response_open &&
             session->response_terminal != SNAG_RESPONSE_TERMINAL_FAILED &&
             session->response_terminal != SNAG_RESPONSE_TERMINAL_INTERRUPTED &&
             (session->response_terminal != SNAG_RESPONSE_TERMINAL_STEERED ||
-             session->pending_steering_count != 0u) && (!session->response_complete ||
-             ((session->pending_steering_count != 0u ||
-               (session->process_count && session->response_outcome == SNAG_GRAPH_FINAL)) &&
-              all_pending_finished(session) &&
-              session->response_outcome != SNAG_GRAPH_CONFLICT));
+                session->pending_steering_count != 0u) &&
+            (!session->response_complete ||
+                ((session->pending_steering_count != 0u ||
+                     (session->process_count && session->response_outcome == SNAG_GRAPH_FINAL)) &&
+                    all_pending_finished(session) &&
+                    session->response_outcome != SNAG_GRAPH_CONFLICT));
         bool has_irc_seq = json_object_get(data, "irc_seq") != NULL;
         /* Pre-watermark journals contain the same request facts without irc_seq. */
         session->response_irc_seq = 0u;
@@ -2106,68 +2283,78 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             }
         }
         if (!snag_json_arg_keys(data, keys + (has_irc_seq ? 0u : sizeof("irc_seq ") - 1u),
-                               "host_context", NULL, 0u) ||
+                "host_context", NULL, 0u) ||
             (host_context && !host_context_valid(host_context)) ||
-            (has_irc_seq && snag_json_integer_u64(data, "irc_seq", &session->response_irc_seq) < 0) ||
+            (has_irc_seq &&
+                snag_json_integer_u64(data, "irc_seq", &session->response_irc_seq) < 0) ||
             session->response_irc_seq > session->irc_received_seq || !current_turn ||
             !state_allows_start || !response_id ||
             !snag_hex_is_lower(response_id, SNAG_ID_HEX_LEN) || !method ||
-            (!snag_string_in(method, "exact media_upper_bound unknown anchored_upper_bound statistical_upper_estimate qualified_upper_bound")) ||
+            (!snag_string_in(method, "exact media_upper_bound unknown anchored_upper_bound "
+                                     "statistical_upper_estimate qualified_upper_bound")) ||
             !capability || strcmp(capability, SNAJPAGENT_CAPABILITY_VERSION) != 0 ||
             !snag_strcpy(value.model, sizeof(value.model), snag_json_string(data, "model")) ||
             strcmp(value.model, session->active_turn_model) != 0 ||
-            !snag_strcpy(value.provider, sizeof(value.provider), snag_json_string(data, "provider")) ||
+            !snag_strcpy(
+                value.provider, sizeof(value.provider), snag_json_string(data, "provider")) ||
             strcmp(value.provider, session->active_turn_provider) != 0 ||
             !snag_strcpy(value.provider_source_sha256, sizeof(value.provider_source_sha256),
-                         snag_json_string(data, "provider_source_sha256")) ||
+                snag_json_string(data, "provider_source_sha256")) ||
             (has_full_accounting &&
-             !snag_hex_is_lower(value.provider_source_sha256, SNAG_SHA256_HEX_LEN)) ||
+                !snag_hex_is_lower(value.provider_source_sha256, SNAG_SHA256_HEX_LEN)) ||
             !snag_strcpy(value.effort, sizeof(value.effort), snag_json_string(data, "effort")) ||
-            strcmp(value.effort, session->active_turn_effort) != 0 || (!capacity_source ||
-             (!snag_string_in(capacity_source, "unknown advertised configured observed stale-catalog-ignored"))) ||
+            strcmp(value.effort, session->active_turn_effort) != 0 ||
+            (!capacity_source ||
+                (!snag_string_in(capacity_source,
+                    "unknown advertised configured observed stale-catalog-ignored"))) ||
             (!json_is_true(json_object_get(data, "source_bound")) &&
-             !json_is_false(json_object_get(data, "source_bound"))) ||
+                !json_is_false(json_object_get(data, "source_bound"))) ||
             (!json_is_null(json_object_get(data, "hard_input_tokens")) &&
-             snag_json_integer_u64(data, "hard_input_tokens", &n) < 0) ||
-            !snag_json_nullable_limit(data, "requested_output_tokens",
-                                     SNAG_CONFIG_TOKEN_LIMIT_MAX, &value.requested_output_tokens) ||
+                snag_json_integer_u64(data, "hard_input_tokens", &n) < 0) ||
+            !snag_json_nullable_limit(data, "requested_output_tokens", SNAG_CONFIG_TOKEN_LIMIT_MAX,
+                &value.requested_output_tokens) ||
             !profile || strcmp(profile, SNAJPAGENT_PROFILE_ID) != 0 ||
-            (strcmp(method, "anchored_upper_bound") == 0 ?
-                (!snag_input_observation_matches(&session->usage_anchor,
-                    value.provider, value.model, value.effort, value.provider_source_sha256,
-                    session->compact_id) || !snag_json_string(data, "baseline_sha256") ||
-                 !snag_hex_is_lower(snag_json_string(data, "baseline_sha256"), SNAG_SHA256_HEX_LEN) ||
-                 strcmp(snag_json_string(data, "baseline_sha256"),
-                        session->usage_anchor.model_input_sha256) != 0) :
-                !json_is_null(json_object_get(data, "baseline_sha256"))) || (session->compact_id[0] == '\0' ?
-             !json_is_null(json_object_get(data, "compact_id")) :
-             (!compact_id || strcmp(compact_id, session->compact_id) != 0)) || !json_is_array(steering_ids) ||
+            (strcmp(method, "anchored_upper_bound") == 0
+                    ? (!snag_input_observation_matches(&session->usage_anchor, value.provider,
+                           value.model, value.effort, value.provider_source_sha256,
+                           session->compact_id) ||
+                          !snag_json_string(data, "baseline_sha256") ||
+                          !snag_hex_is_lower(
+                              snag_json_string(data, "baseline_sha256"), SNAG_SHA256_HEX_LEN) ||
+                          strcmp(snag_json_string(data, "baseline_sha256"),
+                              session->usage_anchor.model_input_sha256) != 0)
+                    : !json_is_null(json_object_get(data, "baseline_sha256"))) ||
+            (session->compact_id[0] == '\0'
+                    ? !json_is_null(json_object_get(data, "compact_id"))
+                    : (!compact_id || strcmp(compact_id, session->compact_id) != 0)) ||
+            !json_is_array(steering_ids) ||
             json_array_size(steering_ids) != admitted_steering_count(session) ||
             !snag_strcpy(value.model_input_sha256, sizeof(value.model_input_sha256),
-                         snag_json_string(data, "model_input_sha256")) ||
+                snag_json_string(data, "model_input_sha256")) ||
             !snag_hex_is_lower(value.model_input_sha256, SNAG_SHA256_HEX_LEN) ||
             !snag_strcpy(value.request_input_sha256, sizeof(value.request_input_sha256),
-                         snag_json_string(data, "request_input_sha256")) ||
+                snag_json_string(data, "request_input_sha256")) ||
             (has_full_accounting &&
-             !snag_hex_is_lower(value.request_input_sha256, SNAG_SHA256_HEX_LEN)) ||
+                !snag_hex_is_lower(value.request_input_sha256, SNAG_SHA256_HEX_LEN)) ||
             !snag_strcpy(value.request_sha256, sizeof(value.request_sha256),
-                         snag_json_string(data, "request_sha256")) ||
-            !snag_hex_is_lower(value.request_sha256, SNAG_SHA256_HEX_LEN) ||
-            !count_hash || !snag_hex_is_lower(count_hash, SNAG_SHA256_HEX_LEN) ||
+                snag_json_string(data, "request_sha256")) ||
+            !snag_hex_is_lower(value.request_sha256, SNAG_SHA256_HEX_LEN) || !count_hash ||
+            !snag_hex_is_lower(count_hash, SNAG_SHA256_HEX_LEN) ||
             snag_json_integer_u64(data, "input_tokens_bound", &value.input_tokens) < 0 ||
             (strcmp(method, "unknown") == 0 && value.input_tokens != 0u) ||
             (strcmp(method, "anchored_upper_bound") == 0 &&
-             value.input_tokens < session->usage_anchor.input_tokens) ||
+                value.input_tokens < session->usage_anchor.input_tokens) ||
             snag_json_integer_u64(data, "model_input_bytes", &value.model_input_bytes) < 0 ||
             (has_full_accounting && value.model_input_bytes == 0u) ||
             snag_json_integer_u64(data, "request_input_bytes", &value.request_input_bytes) < 0 ||
             (has_full_accounting && value.request_input_bytes == 0u) ||
             snag_json_integer_u64(data, "request_input_count", &value.request_input_count) < 0 ||
             (strcmp(method, "anchored_upper_bound") == 0 &&
-             (value.request_input_bytes < session->usage_anchor.request_input_bytes ||
-              value.request_input_count < session->usage_anchor.request_input_count)) ||
+                (value.request_input_bytes < session->usage_anchor.request_input_bytes ||
+                    value.request_input_count < session->usage_anchor.request_input_count)) ||
             snag_json_integer_u64(data, "cycle", &cycle) < 0 ||
-            cycle != (uint64_t)session->active_cycle + 1u || cycle > UINT_MAX) goto invalid;
+            cycle != (uint64_t)session->active_cycle + 1u || cycle > UINT_MAX)
+            goto invalid;
         for (size_t i = 0u, admitted = 0u; i < session->pending_steering_count; ++i) {
             if (!session->pending_steering[i].first_context_ms) continue;
             json_t *entry = json_array_get(steering_ids, admitted++);
@@ -2196,36 +2383,42 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         bool expected_ceiling_known;
         bool same_binding;
 
-        if (!snag_json_exact_keys(data, "code context_limit_tokens cycle message observed_hard_input_tokens "
-            "provider_source_sha256 request_sha256 requested_input_tokens response_id "
-            "turn_id") || !current_response(session, data) ||
-            !code || strcmp(code, "context_length_exceeded") != 0 || !message || strlen(message) > 255u ||
-            !provider_source_sha256 || !snag_hex_is_lower(provider_source_sha256,
-                              SNAG_SHA256_HEX_LEN) || !request_hash || !snag_hex_is_lower(request_hash,
-                                                SNAG_SHA256_HEX_LEN) || strcmp(request_hash,
-                   session->active_accounting.request_sha256) != 0 ||
-            !snag_json_nullable_limit(data, "context_limit_tokens",
-                                     SNAG_CONFIG_TOKEN_LIMIT_MAX, &context_limit_tokens) ||
-            !snag_json_nullable_limit(data, "requested_input_tokens",
-                                     SNAG_CONFIG_TOKEN_LIMIT_MAX, &requested_input_tokens) ||
-            !snag_json_nullable_limit(data, "observed_hard_input_tokens",
-                                     SNAG_CONFIG_TOKEN_LIMIT_MAX, &recorded_ceiling)) goto invalid;
-        expected_ceiling = snag_capacity_safety_ceiling( context_limit_tokens, requested_input_tokens,
-            session->active_accounting.requested_output_tokens);
+        if (!snag_json_exact_keys(data,
+                "code context_limit_tokens cycle message observed_hard_input_tokens "
+                "provider_source_sha256 request_sha256 requested_input_tokens response_id "
+                "turn_id") ||
+            !current_response(session, data) || !code ||
+            strcmp(code, "context_length_exceeded") != 0 || !message || strlen(message) > 255u ||
+            !provider_source_sha256 ||
+            !snag_hex_is_lower(provider_source_sha256, SNAG_SHA256_HEX_LEN) || !request_hash ||
+            !snag_hex_is_lower(request_hash, SNAG_SHA256_HEX_LEN) ||
+            strcmp(request_hash, session->active_accounting.request_sha256) != 0 ||
+            !snag_json_nullable_limit(
+                data, "context_limit_tokens", SNAG_CONFIG_TOKEN_LIMIT_MAX, &context_limit_tokens) ||
+            !snag_json_nullable_limit(data, "requested_input_tokens", SNAG_CONFIG_TOKEN_LIMIT_MAX,
+                &requested_input_tokens) ||
+            !snag_json_nullable_limit(
+                data, "observed_hard_input_tokens", SNAG_CONFIG_TOKEN_LIMIT_MAX, &recorded_ceiling))
+            goto invalid;
+        expected_ceiling = snag_capacity_safety_ceiling(context_limit_tokens,
+            requested_input_tokens, session->active_accounting.requested_output_tokens);
         expected_ceiling_known = expected_ceiling != 0u;
         if (expected_ceiling_known != !json_is_null(observed_ceiling) ||
-            (expected_ceiling_known && expected_ceiling != recorded_ceiling)) goto invalid;
-        same_binding = session->capacity_ceiling_valid && strcmp(session->capacity_ceiling_provider,
-                   session->active_turn_provider) == 0 && strcmp(session->capacity_ceiling_model,
-                   session->active_turn_model) == 0 && strcmp(session->capacity_ceiling_source_sha256,
-                   provider_source_sha256) == 0;
-        if (expected_ceiling_known && (!same_binding || expected_ceiling <
-                              session->capacity_ceiling_input_tokens)) {
-            if (!snag_strcpy(session->capacity_ceiling_provider, sizeof(session->capacity_ceiling_provider),
-                            session->active_turn_provider) || !snag_strcpy(session->capacity_ceiling_model,
-                            sizeof(session->capacity_ceiling_model), session->active_turn_model) ||
+            (expected_ceiling_known && expected_ceiling != recorded_ceiling))
+            goto invalid;
+        same_binding =
+            session->capacity_ceiling_valid &&
+            strcmp(session->capacity_ceiling_provider, session->active_turn_provider) == 0 &&
+            strcmp(session->capacity_ceiling_model, session->active_turn_model) == 0 &&
+            strcmp(session->capacity_ceiling_source_sha256, provider_source_sha256) == 0;
+        if (expected_ceiling_known &&
+            (!same_binding || expected_ceiling < session->capacity_ceiling_input_tokens)) {
+            if (!snag_strcpy(session->capacity_ceiling_provider,
+                    sizeof(session->capacity_ceiling_provider), session->active_turn_provider) ||
+                !snag_strcpy(session->capacity_ceiling_model,
+                    sizeof(session->capacity_ceiling_model), session->active_turn_model) ||
                 !snag_strcpy(session->capacity_ceiling_source_sha256,
-                            sizeof(session->capacity_ceiling_source_sha256), provider_source_sha256))
+                    sizeof(session->capacity_ceiling_source_sha256), provider_source_sha256))
                 goto invalid;
             session->capacity_ceiling_input_tokens = expected_ceiling;
             session->capacity_ceiling_valid = true;
@@ -2240,16 +2433,20 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         bool cyber = text && strcmp(text, SNAG_CYBER_CLARIFICATION) == 0;
 
         if (!snag_json_exact_keys(data, "correction_id cycle partial_public response_id text "
-            "turn_id") || !current_response(session, data) || (!cyber && session->output_correction_used) ||
+                                        "turn_id") ||
+            !current_response(session, data) || (!cyber && session->output_correction_used) ||
             !correction_id || !snag_hex_is_lower(correction_id, SNAG_ID_HEX_LEN) ||
             pending_user_id_exists(session, correction_id) || !text ||
             (!cyber && strcmp(text, SNAG_EMPTY_OUTPUT_CORRECTION) != 0 &&
-             strcmp(text, SNAG_OVERSIZED_OUTPUT_CORRECTION) != 0) ||
+                strcmp(text, SNAG_OVERSIZED_OUTPUT_CORRECTION) != 0) ||
             snag_partial_public_validate(partial, error, error_size) < 0 ||
-            session->pending_steering_bytes > SNAG_MAX_PENDING_STEERING_BYTES - (len = strlen(text))) goto invalid;
+            session->pending_steering_bytes >
+                SNAG_MAX_PENDING_STEERING_BYTES - (len = strlen(text)))
+            goto invalid;
         if (cyber)
             for (size_t i = 0; i < json_array_size(partial); ++i)
-                if (strcmp(snag_json_string(json_array_get(partial, i), "kind"), "assistant")) goto invalid;
+                if (strcmp(snag_json_string(json_array_get(partial, i), "kind"), "assistant"))
+                    goto invalid;
         if (add_pending_steering(session, correction_id, text, len, seq) < 0) return -1;
         clear_response_state(session);
         if (!cyber) session->output_correction_used = true;
@@ -2260,16 +2457,18 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         size_t len = text ? strlen(text) : 0u;
         if (!snag_json_exact_keys(data, "cycle index item offset response_id turn_id") ||
             !current_response(session, data) || snag_json_integer_u64(data, "index", &index) < 0 ||
-            snag_json_integer_u64(data, "offset", &offset) < 0 ||
-            !len || len > SNAG_MAX_PUBLIC_ITEM ||
-            session->response_public_bytes > SNAG_MAX_RESPONSE_GRAPH - len) goto invalid;
+            snag_json_integer_u64(data, "offset", &offset) < 0 || !len ||
+            len > SNAG_MAX_PUBLIC_ITEM ||
+            session->response_public_bytes > SNAG_MAX_RESPONSE_GRAPH - len)
+            goto invalid;
         json_t *one = json_pack("[O]", item);
         int valid = one ? snag_partial_public_validate(one, error, error_size) : -1;
         json_decref(one);
         if (valid < 0) goto invalid;
         size_t count = json_array_size(session->response_public);
         if (index > count || (index < count && index + 1u != count)) goto invalid;
-        json_t *copy = session->response_public ? json_copy(session->response_public) : json_array();
+        json_t *copy =
+            session->response_public ? json_copy(session->response_public) : json_array();
         if (!copy) return -1;
         if (index == count) {
             json_t *owned = json_deep_copy(item);
@@ -2281,7 +2480,8 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         } else {
             json_t *old = json_array_get(copy, (size_t)index);
             const char *prior = snag_json_string(old, "text");
-            static const char *const keys[] = {"kind", "phase", "local_item_id", "provider_item_id"};
+            static const char *const keys[] = {
+                "kind", "phase", "local_item_id", "provider_item_id"};
             for (size_t i = 0u; i < sizeof(keys) / sizeof(keys[0]); ++i) {
                 if (strcmp(snag_json_string(old, keys[i]), snag_json_string(item, keys[i]))) {
                     json_decref(copy);
@@ -2291,16 +2491,22 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             struct snag_buf joined = {.max = SNAG_MAX_PUBLIC_ITEM};
             json_t *replacement = json_copy(old);
             int rc = offset == strlen(prior) && replacement &&
-                snag_buf_append(&joined, prior, (size_t)offset) == 0 &&
-                snag_buf_append(&joined, text, len) == 0 ? snag_json_set_new(replacement, "text",
-                    json_stringn((const char *)joined.data, joined.len)) : -1;
+                             snag_buf_append(&joined, prior, (size_t)offset) == 0 &&
+                             snag_buf_append(&joined, text, len) == 0
+                         ? snag_json_set_new(replacement, "text",
+                               json_stringn((const char *)joined.data, joined.len))
+                         : -1;
             if (rc == 0) rc = json_array_set_new(copy, (size_t)index, json_incref(replacement));
             snag_buf_free(&joined);
             json_decref(replacement);
-            if (rc < 0) { json_decref(copy); goto invalid; }
+            if (rc < 0) {
+                json_decref(copy);
+                goto invalid;
+            }
         }
         if (snag_partial_public_validate(copy, error, error_size) < 0) {
-            json_decref(copy); goto invalid;
+            json_decref(copy);
+            goto invalid;
         }
         json_decref(session->response_public);
         session->response_public = copy;
@@ -2311,16 +2517,19 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         const char *origin = snag_json_string(data, "origin");
         const char *reason = snag_json_string(data, "reason");
         json_t *partial = json_object_get(data, "partial_public");
-        if (!snag_json_exact_keys(data, "cycle origin partial_public reason response_id turn_id") || !current_response(session, data) ||
-            !snag_string_in(origin, origins) || !snag_string_in(reason, reasons) ||
+        if (!snag_json_exact_keys(data, "cycle origin partial_public reason response_id turn_id") ||
+            !current_response(session, data) || !snag_string_in(origin, origins) ||
+            !snag_string_in(reason, reasons) ||
             ((strcmp(origin, "steering") == 0) != (strcmp(reason, "steered") == 0)) ||
             (strcmp(origin, "steering") == 0 && session->pending_steering_count == 0u) ||
-            snag_partial_public_validate(partial, error, error_size) < 0) goto invalid;
+            snag_partial_public_validate(partial, error, error_size) < 0)
+            goto invalid;
         session->response_open = false;
         session->response_complete = false;
-        session->response_terminal = strcmp(origin, "steering") == 0 ?
-            SNAG_RESPONSE_TERMINAL_STEERED : strcmp(reason, "control") == 0 ?
-            SNAG_RESPONSE_TERMINAL_NONE : SNAG_RESPONSE_TERMINAL_INTERRUPTED;
+        session->response_terminal =
+            strcmp(origin, "steering") == 0  ? SNAG_RESPONSE_TERMINAL_STEERED
+            : strcmp(reason, "control") == 0 ? SNAG_RESPONSE_TERMINAL_NONE
+                                             : SNAG_RESPONSE_TERMINAL_INTERRUPTED;
     } else if (strcmp(type, "response_failed") == 0) {
         static const char classes[] = "context provider protocol resource output internal";
         const char *class_name = snag_json_string(data, "class");
@@ -2331,32 +2540,44 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         bool has_retry = json_object_get(data, "turn_retry_attempts") != NULL;
         bool has_handoff = json_object_get(data, "new_input") != NULL;
         const json_t *policy = json_object_get(data, "policy");
-        if (policy && (!snag_json_exact_keys(policy, "code type clarification_skipped") ||
-            !snag_text_valid(snag_json_string(policy, "code"), 0u, 63u) ||
-            !snag_text_valid(snag_json_string(policy, "type"), 0u, 63u) ||
-            !snag_text_valid(snag_json_string(policy, "clarification_skipped"), 1u, 127u))) goto invalid;
-        if (!snag_json_exact_keys(data, policy ?
-            "class cycle message partial_public response_id retry_count turn_id policy_stopped turn_retry_attempts new_input policy" : has_handoff ?
-            "class cycle message partial_public response_id retry_count turn_id policy_stopped turn_retry_attempts new_input" : has_retry ?
-            "class cycle message partial_public response_id retry_count turn_id policy_stopped turn_retry_attempts" : has_policy ?
-            "class cycle message partial_public response_id retry_count turn_id policy_stopped" :
-            "class cycle message partial_public response_id retry_count turn_id") ||
+        if (policy &&
+            (!snag_json_exact_keys(policy, "code type clarification_skipped") ||
+                !snag_text_valid(snag_json_string(policy, "code"), 0u, 63u) ||
+                !snag_text_valid(snag_json_string(policy, "type"), 0u, 63u) ||
+                !snag_text_valid(snag_json_string(policy, "clarification_skipped"), 1u, 127u)))
+            goto invalid;
+        if (!snag_json_exact_keys(
+                data, policy ? "class cycle message partial_public response_id retry_count turn_id "
+                               "policy_stopped turn_retry_attempts new_input policy"
+                      : has_handoff ? "class cycle message partial_public response_id retry_count "
+                                      "turn_id policy_stopped turn_retry_attempts new_input"
+                      : has_retry   ? "class cycle message partial_public response_id retry_count "
+                                      "turn_id policy_stopped turn_retry_attempts"
+                      : has_policy
+                          ? "class cycle message partial_public response_id retry_count turn_id "
+                            "policy_stopped"
+                          : "class cycle message partial_public response_id retry_count turn_id") ||
             (has_policy && !json_is_boolean(json_object_get(data, "policy_stopped"))) ||
             (has_handoff && !json_is_boolean(json_object_get(data, "new_input"))) ||
-            !current_response(session, data) || !snag_string_in(class_name, classes) ||
-            !message || strlen(message) > 8192u ||
+            !current_response(session, data) || !snag_string_in(class_name, classes) || !message ||
+            strlen(message) > 8192u ||
             snag_partial_public_validate(partial, error, error_size) < 0 ||
-            snag_json_integer_u64(data, "retry_count", &retry_count) < 0 || retry_count > 2u) goto invalid;
+            snag_json_integer_u64(data, "retry_count", &retry_count) < 0 || retry_count > 2u)
+            goto invalid;
         session->response_open = false;
         session->response_complete = false;
         session->response_terminal = SNAG_RESPONSE_TERMINAL_FAILED;
         session->response_handoff = json_is_true(json_object_get(data, "new_input"));
         if (!strcmp(class_name, "context") && !json_array_size(partial))
             session->capacity_rejection = session->active_accounting;
-        if (has_retry && (snag_json_integer_u64(data, "turn_retry_attempts", &session->turn_retry_attempts) < 0 ||
-                          session->turn_retry_attempts > (uint64_t)UINT32_MAX + 1u)) goto invalid;
-        if (has_policy) session->policy_stopped = json_is_true(json_object_get(data, "policy_stopped")) ?
-            SNAG_POLICY_STOP_PROVIDER : SNAG_POLICY_STOP_NONE;
+        if (has_retry && (snag_json_integer_u64(
+                              data, "turn_retry_attempts", &session->turn_retry_attempts) < 0 ||
+                             session->turn_retry_attempts > (uint64_t)UINT32_MAX + 1u))
+            goto invalid;
+        if (has_policy)
+            session->policy_stopped = json_is_true(json_object_get(data, "policy_stopped"))
+                                          ? SNAG_POLICY_STOP_PROVIDER
+                                          : SNAG_POLICY_STOP_NONE;
     } else if (strcmp(type, "response_completed") == 0) {
         if (session->response_irc_seq > session->irc_consumed_seq)
             session->irc_consumed_seq = session->response_irc_seq;
@@ -2367,9 +2588,9 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         struct snag_graph_decision decision;
         /* The event owns these values until admission finishes. Retained session
          * fields copy their text; classification does not mutate this view. */
-        struct snag_response_graph graph = {
-            .provider_response_id = (char *)provider_response_id,
-            .items = items, .count = json_array_size(items) };
+        struct snag_response_graph graph = {.provider_response_id = (char *)provider_response_id,
+            .items = items,
+            .count = json_array_size(items)};
         const json_t *continuation = json_object_get(data, "continuation");
         const char *scope = snag_json_string(data, "continuation_scope");
         if (json_object_get(data, "continuation_scope") &&
@@ -2382,13 +2603,27 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             clause = "continuation";
             goto invalid;
         }
-        if (!snag_json_exact_keys(data, "cycle items provider_response_id response_id status turn_id "
-            "usage") && !snag_json_exact_keys(data,
-            "cycle items provider_response_id response_id status turn_id "
-            "usage continuation continuation_scope")) { clause = "keys"; goto invalid; }
-        if (!current_response(session, data)) { clause = "current"; goto invalid; }
-        if (!status || strcmp(status, "completed") != 0) { clause = "status"; goto invalid; }
-        if (!json_is_array(items)) { clause = "items"; goto invalid; }
+        if (!snag_json_exact_keys(data,
+                "cycle items provider_response_id response_id status turn_id "
+                "usage") &&
+            !snag_json_exact_keys(data,
+                "cycle items provider_response_id response_id status turn_id "
+                "usage continuation continuation_scope")) {
+            clause = "keys";
+            goto invalid;
+        }
+        if (!current_response(session, data)) {
+            clause = "current";
+            goto invalid;
+        }
+        if (!status || strcmp(status, "completed") != 0) {
+            clause = "status";
+            goto invalid;
+        }
+        if (!json_is_array(items)) {
+            clause = "items";
+            goto invalid;
+        }
         if (snag_response_usage_from_json(json_object_get(data, "usage"), &graph.usage) < 0) {
             clause = "usage";
             goto invalid;
@@ -2397,23 +2632,27 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             clause = "graph";
             goto invalid;
         }
-        if (session->context_rebase_seq && !strcmp(session->context_rebase_turn_id,
-                                                     session->active_turn_id))
+        if (session->context_rebase_seq &&
+            !strcmp(session->context_rebase_turn_id, session->active_turn_id))
             session->context_rebase_has_new_results = true;
         if (snag_input_observation_matches(&session->capacity_rejection,
                 session->active_accounting.provider, session->active_accounting.model,
-                session->active_accounting.effort, session->active_accounting.provider_source_sha256,
+                session->active_accounting.effort,
+                session->active_accounting.provider_source_sha256,
                 session->capacity_rejection.compact_id))
             session->capacity_rejection.valid = false;
         if (graph.usage.cached_known || graph.usage.input_known || graph.usage.output_known ||
             graph.usage.reasoning_known || graph.usage.total_known) {
             struct snag_usage_totals *totals = &session->usage_totals;
             if (totals->responses != UINT64_MAX) ++totals->responses;
-            if (graph.usage.input_known && totals->input_tokens <= UINT64_MAX - graph.usage.input_tokens)
+            if (graph.usage.input_known &&
+                totals->input_tokens <= UINT64_MAX - graph.usage.input_tokens)
                 totals->input_tokens += graph.usage.input_tokens;
-            if (graph.usage.cached_known && (!graph.usage.input_known ||
-                graph.usage.cached_input_tokens <= graph.usage.input_tokens)) {
-                /* The reported cache figure is believed only while it stays a subset of the input. */
+            if (graph.usage.cached_known &&
+                (!graph.usage.input_known ||
+                    graph.usage.cached_input_tokens <= graph.usage.input_tokens)) {
+                /* The reported cache figure is believed only while it stays a subset of the
+                 * input. */
                 totals->cached_seen = true;
                 if (totals->cached_input_tokens <= UINT64_MAX - graph.usage.cached_input_tokens)
                     totals->cached_input_tokens += graph.usage.cached_input_tokens;
@@ -2427,12 +2666,14 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
                 /* No cache figure, or an impossible one: the whole input counts as uncached. */
                 totals->uncached_input_tokens += graph.usage.input_tokens;
             }
-            if (graph.usage.output_known && totals->output_tokens <= UINT64_MAX - graph.usage.output_tokens)
+            if (graph.usage.output_known &&
+                totals->output_tokens <= UINT64_MAX - graph.usage.output_tokens)
                 totals->output_tokens += graph.usage.output_tokens;
             if (graph.usage.reasoning_known &&
                 totals->reasoning_tokens <= UINT64_MAX - graph.usage.reasoning_tokens)
                 totals->reasoning_tokens += graph.usage.reasoning_tokens;
-            if (graph.usage.total_known && totals->total_tokens <= UINT64_MAX - graph.usage.total_tokens)
+            if (graph.usage.total_known &&
+                totals->total_tokens <= UINT64_MAX - graph.usage.total_tokens)
                 totals->total_tokens += graph.usage.total_tokens;
         }
         if (graph.usage.input_known) {
@@ -2440,7 +2681,7 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             /* An already-started compaction may finish during the response.
              * The durable anchor follows completion-time lineage, not the meter. */
             memcpy(session->usage_anchor.compact_id, session->compact_id,
-                   sizeof(session->usage_anchor.compact_id));
+                sizeof(session->usage_anchor.compact_id));
             session->usage_anchor.input_tokens = graph.usage.input_tokens;
             context_meter_set(session, graph.usage.input_tokens);
         }
@@ -2450,9 +2691,11 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         session->response_outcome = decision.outcome;
         if (decision.outcome == SNAG_GRAPH_CALLS || decision.outcome == SNAG_GRAPH_FINAL)
             session->turn_retry_attempts = 0u;
-        else if (decision.outcome != SNAG_GRAPH_REFUSAL && session->turn_retry_attempts <= UINT32_MAX)
+        else if (decision.outcome != SNAG_GRAPH_REFUSAL &&
+                 session->turn_retry_attempts <= UINT32_MAX)
             ++session->turn_retry_attempts;
-        if (decision.outcome == SNAG_GRAPH_REFUSAL) session->policy_stopped = SNAG_POLICY_STOP_REFUSAL;
+        if (decision.outcome == SNAG_GRAPH_REFUSAL)
+            session->policy_stopped = SNAG_POLICY_STOP_REFUSAL;
         session->pending_call_count = 0;
         session->final_item_id[0] = '\0';
         session->final_response_id[0] = '\0';
@@ -2462,8 +2705,8 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             if (item->kind == SNAG_ITEM_TOOL_CALL) {
                 struct snag_pending_call *pending;
                 if (session->pending_call_count == session->pending_call_capacity) {
-                    size_t capacity = session->pending_call_capacity ?
-                        session->pending_call_capacity * 2u : 16u;
+                    size_t capacity =
+                        session->pending_call_capacity ? session->pending_call_capacity * 2u : 16u;
                     struct snag_pending_call *grown;
                     if (capacity < session->pending_call_capacity) return -1;
                     grown = realloc(session->pending_calls, capacity * sizeof(*grown));
@@ -2493,17 +2736,20 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         const char *call_id = snag_json_string(data, "call_id");
         const char *cwd = snag_json_string(data, "resolved_workdir");
         struct snag_pending_call *call;
-        if (!snag_json_exact_keys(data, "action_sha256 call_id resolved_workdir turn_id") || !current_turn ||
-            !session->response_complete || session->response_outcome != SNAG_GRAPH_CALLS ||
-            !action || !snag_hex_is_lower(action, SNAG_SHA256_HEX_LEN) ||
-            !cwd || strcmp(cwd, session->cwd) != 0 ||
-            !call_id || !(call = find_pending_call(session, call_id)) ||
-            strcmp(action, call->action_sha256) != 0 || call->started || call->finished) goto invalid;
+        if (!snag_json_exact_keys(data, "action_sha256 call_id resolved_workdir turn_id") ||
+            !current_turn || !session->response_complete ||
+            session->response_outcome != SNAG_GRAPH_CALLS || !action ||
+            !snag_hex_is_lower(action, SNAG_SHA256_HEX_LEN) || !cwd ||
+            strcmp(cwd, session->cwd) != 0 || !call_id ||
+            !(call = find_pending_call(session, call_id)) ||
+            strcmp(action, call->action_sha256) != 0 || call->started || call->finished)
+            goto invalid;
         if (session->active_read_only && !snag_read_only_tool(call->tool_name)) goto invalid;
         if (!strcmp(call->tool_name, "exec_command")) {
             struct snag_process_state *process;
             if (session->process_count >= session->max_parallel_commands ||
-                snag_session_process(session, call->process_handle)) goto invalid;
+                snag_session_process(session, call->process_handle))
+                goto invalid;
             if (session->process_count == session->process_capacity) {
                 size_t capacity = session->process_capacity ? session->process_capacity * 2u : 8u;
                 struct snag_process_state *grown;
@@ -2512,7 +2758,7 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
                 grown = realloc(session->processes, capacity * sizeof(*grown));
                 if (!grown) return snag_errno(ENOMEM);
                 memset(grown + session->process_capacity, 0,
-                       (capacity - session->process_capacity) * sizeof(*grown));
+                    (capacity - session->process_capacity) * sizeof(*grown));
                 session->processes = grown;
                 session->process_capacity = capacity;
             }
@@ -2523,12 +2769,13 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             memcpy(process->workdir, call->workdir, sizeof(process->workdir));
         } else if (!strcmp(call->tool_name, "write_stdin")) {
             if (!snag_session_process(session, call->process_handle) &&
-                (!session->legacy_journal ||
-                 replay_process_add(session, call->process_handle, call->command, call->workdir) < 0))
+                (!session->legacy_journal || replay_process_add(session, call->process_handle,
+                                                 call->command, call->workdir) < 0))
                 goto invalid;
             for (size_t i = 0u; i < session->pending_call_count; ++i)
                 if (session->pending_calls[i].started &&
-                    !strcmp(session->pending_calls[i].process_handle, call->process_handle)) goto invalid;
+                    !strcmp(session->pending_calls[i].process_handle, call->process_handle))
+                    goto invalid;
         }
         call->started = true;
     } else if (strcmp(type, "tool_finished") == 0) {
@@ -2539,14 +2786,38 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         struct snag_pending_call *call;
         diag_call = call_id;
         diag_status = status;
-        if (!snag_json_exact_keys(data, "call_id result turn_id")) { clause = "keys"; goto invalid; }
-        if (!current_turn) { clause = "turn"; goto invalid; }
-        if (!session->response_complete) { clause = "complete"; goto invalid; }
-        if (!call_id) { clause = "call"; goto invalid; }
-        if (!(call = find_pending_call(session, call_id))) { clause = "found"; goto invalid; }
-        if (call->finished) { clause = "fin"; goto invalid; }
-        if (snag_tool_result_valid(result) < 0) { clause = "valid"; goto invalid; }
-        if (!status) { clause = "status"; goto invalid; }
+        if (!snag_json_exact_keys(data, "call_id result turn_id")) {
+            clause = "keys";
+            goto invalid;
+        }
+        if (!current_turn) {
+            clause = "turn";
+            goto invalid;
+        }
+        if (!session->response_complete) {
+            clause = "complete";
+            goto invalid;
+        }
+        if (!call_id) {
+            clause = "call";
+            goto invalid;
+        }
+        if (!(call = find_pending_call(session, call_id))) {
+            clause = "found";
+            goto invalid;
+        }
+        if (call->finished) {
+            clause = "fin";
+            goto invalid;
+        }
+        if (snag_tool_result_valid(result) < 0) {
+            clause = "valid";
+            goto invalid;
+        }
+        if (!status) {
+            clause = "status";
+            goto invalid;
+        }
         if (call->started) {
             /* A tool may refuse its own arguments after dispatch: edit_file reads
              * the target and reports not_run when the old text does not occur
@@ -2568,41 +2839,47 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
              * the result and wrote no process_started event; there is no state
              * to keep, so the call is taken as finished. */
             if (!process) {
-                if (!session->legacy_journal) { clause = "process"; goto invalid; }
-            } else {
-            json_t *ref = json_object_get(result, "output_ref");
-            if (ref) {
-                const char *ref_handle = snag_json_string(ref, "handle");
-                const char *const begin[] = {"stdout_start", "stderr_start"};
-                const char *const end[] = {"stdout_end", "stderr_end"};
-                if (!ref_handle || strcmp(ref_handle, process->handle)) {
-                    clause = "output-ref-handle";
+                if (!session->legacy_journal) {
+                    clause = "process";
                     goto invalid;
                 }
-                for (unsigned int s = 0u; s < 2u; ++s) {
-                    uint64_t from, to;
-                    if (snag_json_integer_u64(ref, begin[s], &from) < 0 ||
-                        snag_json_integer_u64(ref, end[s], &to) < 0 ||
-                        from != process->collected_bytes[s] || to != process->output_bytes[s]) {
-                        clause = "output-ref-bounds";
+            } else {
+                json_t *ref = json_object_get(result, "output_ref");
+                if (ref) {
+                    const char *ref_handle = snag_json_string(ref, "handle");
+                    const char *const begin[] = {"stdout_start", "stderr_start"};
+                    const char *const end[] = {"stdout_end", "stderr_end"};
+                    if (!ref_handle || strcmp(ref_handle, process->handle)) {
+                        clause = "output-ref-handle";
                         goto invalid;
                     }
-                    process->collected_bytes[s] = to;
+                    for (unsigned int s = 0u; s < 2u; ++s) {
+                        uint64_t from, to;
+                        if (snag_json_integer_u64(ref, begin[s], &from) < 0 ||
+                            snag_json_integer_u64(ref, end[s], &to) < 0 ||
+                            from != process->collected_bytes[s] || to != process->output_bytes[s]) {
+                            clause = "output-ref-bounds";
+                            goto invalid;
+                        }
+                        process->collected_bytes[s] = to;
+                    }
+                } else if ((process->output_bytes[0] || process->output_bytes[1]) &&
+                           strcmp(status, "outcome_unknown")) {
+                    clause = "output-unref";
+                    goto invalid;
                 }
-            } else if ((process->output_bytes[0] || process->output_bytes[1]) &&
-                       strcmp(status, "outcome_unknown")) {
-                clause = "output-unref";
-                goto invalid;
-            }
-            if (!strcmp(status, "running")) {
-                if (!handle || strcmp(handle, process->handle)) {
-                    /* Workspace-era journals minted the result's process id
+                if (!strcmp(status, "running")) {
+                    if (!handle || strcmp(handle, process->handle)) {
+                        /* Workspace-era journals minted the result's process id
                      * apart from the replayed call state; the call still ends. */
-                    if (!session->legacy_journal) { clause = "running-handle"; goto invalid; }
+                        if (!session->legacy_journal) {
+                            clause = "running-handle";
+                            goto invalid;
+                        }
+                    }
+                } else if (strcmp(status, "outcome_unknown")) {
+                    remove_process(session, process);
                 }
-            } else if (strcmp(status, "outcome_unknown")) {
-                remove_process(session, process);
-            }
             }
         } else if (!strcmp(status, "running")) {
             if (!session->legacy_journal) goto invalid;
@@ -2620,30 +2897,48 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         json_t *action = json_object_get(data, "action");
         json_t *sources = json_object_get(data, "sources");
 
-        if (!current_turn) { clause = "turn"; goto invalid; }
-        if (!session->response_open) { clause = "open"; goto invalid; }
-        if (!snag_provider_id_valid(item_id)) { clause = "item"; goto invalid; }
+        if (!current_turn) {
+            clause = "turn";
+            goto invalid;
+        }
+        if (!session->response_open) {
+            clause = "open";
+            goto invalid;
+        }
+        if (!snag_provider_id_valid(item_id)) {
+            clause = "item";
+            goto invalid;
+        }
         if (started) {
             if (!snag_json_exact_keys(data, "item_id turn_id") &&
-                !snag_json_exact_keys(data, "action item_id turn_id")) { clause = "keys"; goto invalid; }
-            if (action && (!json_is_object(action) ||
-                snag_json_digest_bounded(action, SNAG_MAX_HOSTED_ACTION, NULL, NULL) < 0)) {
+                !snag_json_exact_keys(data, "action item_id turn_id")) {
+                clause = "keys";
+                goto invalid;
+            }
+            if (action &&
+                (!json_is_object(action) ||
+                    snag_json_digest_bounded(action, SNAG_MAX_HOSTED_ACTION, NULL, NULL) < 0)) {
                 clause = "action";
                 goto invalid;
             }
         } else {
-            if (!snag_text_valid(status, 1u, 64u)) { clause = "status"; goto invalid; }
+            if (!snag_text_valid(status, 1u, 64u)) {
+                clause = "status";
+                goto invalid;
+            }
             if (!snag_json_exact_keys(data, "item_id status turn_id") &&
                 !snag_json_exact_keys(data, "item_id sources status turn_id")) {
                 clause = "keys";
                 goto invalid;
             }
             if (sources) {
-                if (!json_is_array(sources))
-                    { clause = "sources"; goto invalid; }
+                if (!json_is_array(sources)) {
+                    clause = "sources";
+                    goto invalid;
+                }
                 for (size_t i = 0; i < json_array_size(sources); ++i)
                     if (!snag_text_valid(json_string_value(json_array_get(sources, i)), 1u,
-                                         SNAG_MAX_HOSTED_SOURCE_URL)) {
+                            SNAG_MAX_HOSTED_SOURCE_URL)) {
                         clause = "source";
                         goto invalid;
                     }
@@ -2654,14 +2949,16 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         struct snag_process_state *process = snag_session_process(session, handle);
         uint64_t stream, offset;
         int rc;
-        if (!current_turn || !process || snag_json_integer_u64(data, "stream", &stream) < 0 || stream > 1u ||
-            snag_json_integer_u64(data, "offset", &offset) < 0 || offset != process->output_bytes[stream])
+        if (!current_turn || !process || snag_json_integer_u64(data, "stream", &stream) < 0 ||
+            stream > 1u || snag_json_integer_u64(data, "offset", &offset) < 0 ||
+            offset != process->output_bytes[stream])
             goto invalid;
         struct snag_buf bytes = {.max = 16384u};
         rc = snag_process_output_decode(data, &bytes);
         if (rc == 0 && bytes.len && offset <= (uint64_t)INT64_MAX - bytes.len)
             process->output_bytes[stream] += bytes.len;
-        else rc = -1;
+        else
+            rc = -1;
         snag_buf_free(&bytes);
         if (rc < 0) goto invalid;
     } else if (strcmp(type, "process_closed") == 0) {
@@ -2674,12 +2971,16 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         const char *status = snag_json_string(result, "status");
         struct snag_process_state *process = snag_session_process(session, handle);
         if (!snag_json_exact_keys(data, "cause handle result turn_id") || !current_turn ||
-            session->response_open || (session->response_complete && !all_pending_finished(session)) ||
-            !handle || !snag_hex_is_lower(handle, SNAG_ID_HEX_LEN) || !process ||
-            !snag_string_in(cause, causes) || snag_tool_result_valid(result) < 0 || !snag_string_in(status,
-                "succeeded failed signaled timed_out cancelled outcome_unknown io_failed")) goto invalid;
+            session->response_open ||
+            (session->response_complete && !all_pending_finished(session)) || !handle ||
+            !snag_hex_is_lower(handle, SNAG_ID_HEX_LEN) || !process ||
+            !snag_string_in(cause, causes) || snag_tool_result_valid(result) < 0 ||
+            !snag_string_in(
+                status, "succeeded failed signaled timed_out cancelled outcome_unknown io_failed"))
+            goto invalid;
         remove_process(session, process);
-    } else if (snag_string_in(type, "turn_completed turn_completed_silent turn_interrupted turn_failed")) {
+    } else if (snag_string_in(
+                   type, "turn_completed turn_completed_silent turn_interrupted turn_failed")) {
         const char *reason = snag_json_string(data, "reason");
         bool completed = !strcmp(type, "turn_completed") || !strcmp(type, "turn_completed_silent");
 
@@ -2695,22 +2996,25 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
                 const char *response_id = snag_json_string(data, "final_response_id");
                 if (!snag_json_exact_keys(data, "final_item_id final_response_id turn_id") ||
                     (session->response_outcome != SNAG_GRAPH_FINAL &&
-                     session->response_outcome != SNAG_GRAPH_REFUSAL) ||
-                    !item_id || strcmp(item_id, session->final_item_id) ||
-                    !response_id || strcmp(response_id, session->final_response_id)) goto invalid;
+                        session->response_outcome != SNAG_GRAPH_REFUSAL) ||
+                    !item_id || strcmp(item_id, session->final_item_id) || !response_id ||
+                    strcmp(response_id, session->final_response_id))
+                    goto invalid;
             } else {
                 const char *response_id = snag_json_string(data, "response_id");
                 if (!snag_json_exact_keys(data, "reason response_id turn_id") ||
-                    session->response_outcome != SNAG_GRAPH_NONPRODUCTIVE ||
-                    !response_id || strcmp(response_id, session->active_response_id) ||
+                    session->response_outcome != SNAG_GRAPH_NONPRODUCTIVE || !response_id ||
+                    strcmp(response_id, session->active_response_id) ||
                     !snag_string_in(reason, "room_update_quiet reply_reminder_exhausted") ||
                     (!strcmp(reason, "reply_reminder_exhausted") && !session->irc_reply_reminded))
                     goto invalid;
             }
         } else {
-            if (session->response_open || (session->response_complete && !all_pending_finished(session)))
+            if (session->response_open ||
+                (session->response_complete && !all_pending_finished(session)))
                 goto invalid;
-            if (!session->response_handoff || !strcmp(type, "turn_interrupted")) session->queue_armed = false;
+            if (!session->response_handoff || !strcmp(type, "turn_interrupted"))
+                session->queue_armed = false;
             if (!strcmp(type, "turn_interrupted")) {
                 if (!snag_json_exact_keys(data, "origin reason turn_id") ||
                     !snag_string_in(snag_json_string(data, "origin"), "user recovery output") ||
@@ -2721,7 +3025,8 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
                 if (!snag_json_exact_keys(data, "class message turn_id") ||
                     !snag_string_in(snag_json_string(data, "class"),
                         "context provider protocol tool persistence resource output internal") ||
-                    !message || strlen(message) > 8192u) goto invalid;
+                    !message || strlen(message) > 8192u)
+                    goto invalid;
                 session->last_turn_failed = true;
                 session->retry_read_only = session->active_read_only;
             }
@@ -2747,7 +3052,8 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             !snag_hex_is_lower(original, SNAG_SHA256_HEX_LEN) ||
             !snag_hex_is_lower(effective, SNAG_SHA256_HEX_LEN) ||
             !(call = find_pending_call(session, call_id)) || call->started || call->finished ||
-            strcmp(call->action_sha256, original) != 0) goto invalid;
+            strcmp(call->action_sha256, original) != 0)
+            goto invalid;
         memcpy(call->action_sha256, effective, SNAG_SHA256_HEX_LEN + 1u);
     } else if (strcmp(type, "session_checkpoint") == 0) {
         const json_t *state = json_object_get(data, "state");
@@ -2773,38 +3079,37 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             json_decref(session->checkpoint_state);
             json_decref(session->checkpoint_context);
             session->checkpoint_state = json_incref((json_t *)state);
-            session->checkpoint_context = json_is_null(context) ? NULL :
-                json_incref((json_t *)context);
+            session->checkpoint_context =
+                json_is_null(context) ? NULL : json_incref((json_t *)context);
         }
         session->checkpoint_has_context = !json_is_null(context);
     } else {
         return snag_fail(error, error_size, ENOTSUP,
-                  "event type %s is not implemented by this checkpoint", type);
+            "event type %s is not implemented by this checkpoint", type);
     }
     if (!session->pending_queue_count) session->queue_armed = false;
     return 0;
-invalid:
-    {
-        char detail[512];
-        if (clause)
-            (void)snprintf(detail, sizeof(detail),
-                "invalid %s transition at sequence %llu (clause=%s call=%s status=%s)", type,
-                (unsigned long long)seq, clause, diag_call ? diag_call : "-",
-                diag_status ? diag_status : "-");
-        else
-            (void)snprintf(detail, sizeof(detail), "invalid %s transition at sequence %llu", type,
-                (unsigned long long)seq);
-        if (!importing) record_refusal(session, detail);
-        if (!live && !importing && session->legacy_journal) {
-            /* A format-2 journal predates the current record contract. Its
+invalid: {
+    char detail[512];
+    if (clause)
+        (void)snprintf(detail, sizeof(detail),
+            "invalid %s transition at sequence %llu (clause=%s call=%s status=%s)", type,
+            (unsigned long long)seq, clause, diag_call ? diag_call : "-",
+            diag_status ? diag_status : "-");
+    else
+        (void)snprintf(detail, sizeof(detail), "invalid %s transition at sequence %llu", type,
+            (unsigned long long)seq);
+    if (!importing) record_refusal(session, detail);
+    if (!live && !importing && session->legacy_journal) {
+        /* A format-2 journal predates the current record contract. Its
              * records stay in the durable history, but a record whose shape is
              * no longer reconstructible contributes no state instead of making
              * the session unloadable; new journals and live appends keep the
              * strict error. */
-            return 0;
-        }
-        return snag_fail(error, error_size, EINVAL, "%s", detail);
+        return 0;
     }
+    return snag_fail(error, error_size, EINVAL, "%s", detail);
+}
 }
 
 int
@@ -2831,12 +3136,11 @@ session_read_at(struct snag_session *session, void *buffer, size_t size, int64_t
 }
 
 static int
-read_event_log(struct snag_session *source, struct snag_session *verifier,
-               int64_t boundary, enum snag_tail_policy tail_policy, snag_session_event_fn fn, void *opaque,
-               const struct snag_process_state *cursor, bool apply_suffix,
-               struct snag_legacy_recovery *recovery,
-               int64_t *complete_end_out, uint64_t *next_seq_out,
-               char *error, size_t error_size)
+read_event_log(struct snag_session *source, struct snag_session *verifier, int64_t boundary,
+    enum snag_tail_policy tail_policy, snag_session_event_fn fn, void *opaque,
+    const struct snag_process_state *cursor, bool apply_suffix,
+    struct snag_legacy_recovery *recovery, int64_t *complete_end_out, uint64_t *next_seq_out,
+    char *error, size_t error_size)
 {
     unsigned char chunk[8192];
     int64_t complete_end = cursor ? (int64_t)cursor->log_offset : 0;
@@ -2889,35 +3193,35 @@ read_event_log(struct snag_session *source, struct snag_session *verifier,
             size_t record_len = line.len ? line.len : span;
             i += (ssize_t)span;
             if (!record_len) {
-                (void)snag_fail(error, error_size, EINVAL,
-                    "blank event line at sequence %llu", (unsigned long long)seq);
+                (void)snag_fail(error, error_size, EINVAL, "blank event line at sequence %llu",
+                    (unsigned long long)seq);
                 goto out;
             }
             event = snag_json_load_canonical_bounded(record, record_len,
                 record_len > SNAG_MAX_EVENT_LINE ? SNAG_CHECKPOINT_EVENT_MAX : SNAG_MAX_EVENT_LINE,
                 jerr, sizeof(jerr));
             if (!event) {
-                snag_errorf(error, error_size, "corrupt event %llu: %s", (unsigned long long)seq, jerr);
+                snag_errorf(
+                    error, error_size, "corrupt event %llu: %s", (unsigned long long)seq, jerr);
                 goto out;
             }
             const char *event_type = snag_json_string(event, "type");
             uint64_t pointer = 0u;
             bool indexed = json_integer_value(json_object_get(event, "v")) == 2;
-            bool pointer_valid = !indexed ||
-                (snag_json_integer_u64(event, "checkpoint_offset", &pointer) == 0 &&
-                 pointer <= (uint64_t)complete_end &&
-                 (event_type && !strcmp(event_type, "session_checkpoint") ?
-                    pointer == (uint64_t)complete_end :
-                    ((cursor && !apply_suffix) ||
-                     pointer == (uint64_t)verifier->checkpoint_offset)));
+            bool pointer_valid =
+                !indexed || (snag_json_integer_u64(event, "checkpoint_offset", &pointer) == 0 &&
+                                pointer <= (uint64_t)complete_end &&
+                                (event_type && !strcmp(event_type, "session_checkpoint")
+                                        ? pointer == (uint64_t)complete_end
+                                        : ((cursor && !apply_suffix) ||
+                                              pointer == (uint64_t)verifier->checkpoint_offset)));
             if ((record_len > SNAG_MAX_EVENT_LINE &&
-                 (!event_type || strcmp(event_type, "session_checkpoint"))) ||
+                    (!event_type || strcmp(event_type, "session_checkpoint"))) ||
                 (!recovery && !pointer_valid) ||
                 (!indexed && (verifier->checkpoint_seq || verifier->format_version == 4u))) {
                 json_decref(event);
                 (void)snag_fail(error, error_size, EINVAL,
-                    "invalid checkpoint pointer at event %llu",
-                    (unsigned long long)seq);
+                    "invalid checkpoint pointer at event %llu", (unsigned long long)seq);
                 goto out;
             }
             if (!common_event_valid(event, verifier, seq, &type, &data, error, error_size)) {
@@ -2931,8 +3235,8 @@ read_event_log(struct snag_session *source, struct snag_session *verifier,
             }
             bool derived = recovery && !strcmp(type, "session_checkpoint");
             if ((!cursor || apply_suffix) && !derived &&
-                apply_event(verifier, type, data, seq, false, recovery != NULL,
-                            error, error_size) < 0) {
+                apply_event(verifier, type, data, seq, false, recovery != NULL, error, error_size) <
+                    0) {
                 json_decref(event);
                 goto out;
             }
@@ -2946,8 +3250,8 @@ read_event_log(struct snag_session *source, struct snag_session *verifier,
             if (fn) {
                 verifier->log_end = complete_end;
                 verifier->next_seq = seq + 1u;
-                if (fn(opaque, cursor && !apply_suffix ? NULL : verifier,
-                       seq, type, data, error, error_size) < 0) {
+                if (fn(opaque, cursor && !apply_suffix ? NULL : verifier, seq, type, data, error,
+                        error_size) < 0) {
                     json_decref(event);
                     goto out;
                 }
@@ -2971,8 +3275,8 @@ read_event_log(struct snag_session *source, struct snag_session *verifier,
         (void)snag_fail(error, error_size, EINVAL, "event log has an incomplete final suffix");
         goto out;
     }
-    if (line.len && tail_policy == SNAG_TAIL_TRUNCATE && (snag_truncate(source->log_fd, complete_end) < 0 ||
-         snag_sync_file(source->log_fd) < 0)) {
+    if (line.len && tail_policy == SNAG_TAIL_TRUNCATE &&
+        (snag_truncate(source->log_fd, complete_end) < 0 || snag_sync_file(source->log_fd) < 0)) {
         snag_errorf(error, error_size, "cannot truncate incomplete log tail: %s", strerror(errno));
         goto out;
     }
@@ -2981,15 +3285,17 @@ read_event_log(struct snag_session *source, struct snag_session *verifier,
     rc = 0;
     goto out;
 
-boundary_error: (void)snag_fail(error, error_size, EIO, "event log ended before recorded boundary");
-out: snag_buf_free(&line);
+boundary_error:
+    (void)snag_fail(error, error_size, EIO, "event log ended before recorded boundary");
+out:
+    snag_buf_free(&line);
     return rc;
 }
 
 int
 snag_store_reconcile_legacy(struct snag_session *source, struct snag_session *restored,
-    snag_session_event_fn fn, void *opaque, struct snag_legacy_recovery *recovery,
-    char *error, size_t error_size)
+    snag_session_event_fn fn, void *opaque, struct snag_legacy_recovery *recovery, char *error,
+    size_t error_size)
 {
     snag_file_info before, after;
     struct snag_session verifier;
@@ -2999,17 +3305,17 @@ snag_store_reconcile_legacy(struct snag_session *source, struct snag_session *re
         source->lock_fd < 0 || source->pending_log || restored->dir_fd >= 0 ||
         restored->log_fd >= 0 || restored->lock_fd >= 0 || restored->pending_log ||
         !snag_hex_is_lower(source->id, SNAG_ID_HEX_LEN))
-        return snag_fail(error, error_size, EINVAL,
-                         "invalid locked legacy import source/destination");
+        return snag_fail(
+            error, error_size, EINVAL, "invalid locked legacy import source/destination");
     if (snag_fstat(source->log_fd, &before) < 0 || !S_ISREG(before.st_mode) || before.st_size < 0)
         return snag_fail(error, error_size, EINVAL, "cannot inspect legacy source");
     *recovery = (struct snag_legacy_recovery){.problem_seq = 1u, .problem_end = before.st_size};
     snag_session_init(&verifier);
     memcpy(verifier.id, source->id, sizeof(verifier.id));
-    int rc = read_event_log(source, &verifier, before.st_size, SNAG_TAIL_IGNORE,
-        fn, opaque, NULL, false, recovery, &complete_end, &next_seq, error, error_size);
-    if (rc == 0 && (snag_fstat(source->log_fd, &after) < 0 ||
-        !snag_file_unchanged(&before, &after))) {
+    int rc = read_event_log(source, &verifier, before.st_size, SNAG_TAIL_IGNORE, fn, opaque, NULL,
+        false, recovery, &complete_end, &next_seq, error, error_size);
+    if (rc == 0 &&
+        (snag_fstat(source->log_fd, &after) < 0 || !snag_file_unchanged(&before, &after))) {
         recovery->problem_seq = 1u;
         recovery->problem_start = 0;
         recovery->problem_end = before.st_size;
@@ -3037,8 +3343,9 @@ static int64_t
 previous_newline(struct snag_session *session, int64_t before)
 {
     unsigned char chunk[8192];
-    int64_t floor = before > (int64_t)SNAG_CHECKPOINT_EVENT_MAX + 1 ?
-        before - (int64_t)SNAG_CHECKPOINT_EVENT_MAX - 1 : 0;
+    int64_t floor = before > (int64_t)SNAG_CHECKPOINT_EVENT_MAX + 1
+                        ? before - (int64_t)SNAG_CHECKPOINT_EVENT_MAX - 1
+                        : 0;
     while (before > floor) {
         int64_t available = before - floor;
         size_t size = available < (int64_t)sizeof(chunk) ? (size_t)available : sizeof(chunk);
@@ -3050,7 +3357,10 @@ previous_newline(struct snag_session *session, int64_t before)
             if (chunk[i - 1u] == '\n') return start + (int64_t)i - 1;
         before = start;
     }
-    if (floor) { errno = EOVERFLOW; return -2; }
+    if (floor) {
+        errno = EOVERFLOW;
+        return -2;
+    }
     return -1;
 }
 
@@ -3114,7 +3424,8 @@ history_record_read(struct snag_session *session, int64_t start, int64_t *end,
     if (start < 0 || start >= session->log_end) return NULL;
     if (*end <= start) *end = history_record_end(session, start);
     if (*end <= start || *end > session->log_end ||
-        (uint64_t)(*end - start - 1) > SNAG_CHECKPOINT_EVENT_MAX) return NULL;
+        (uint64_t)(*end - start - 1) > SNAG_CHECKPOINT_EVENT_MAX)
+        return NULL;
     static const char tail[] = ",\"type\":\"session_checkpoint\",\"v\":1}\n";
     unsigned char suffix[sizeof(tail) - 1u];
     if (*end - start >= (int64_t)sizeof(suffix)) {
@@ -3149,17 +3460,19 @@ history_record_valid(struct snag_session *session, json_t *record, int64_t start
     json_t *data;
     if (!prev || !snag_hex_is_lower(prev, SNAG_SHA256_HEX_LEN)) goto invalid;
     if (seq != 1u) memcpy(verifier.prev_sha256, prev, sizeof(verifier.prev_sha256));
-    if (!common_event_valid_digest(record, &verifier, seq, &type, &data,
-        digest[0] ? digest : NULL, error, error_size)) return -1;
+    if (!common_event_valid_digest(
+            record, &verifier, seq, &type, &data, digest[0] ? digest : NULL, error, error_size))
+        return -1;
     if (start < 0 || end <= start || end > session->log_end || (start == 0) != (seq == 1u) ||
-        ((uint64_t)(end - start - 1) > SNAG_MAX_EVENT_LINE &&
-         strcmp(type, "session_checkpoint"))) goto invalid;
+        ((uint64_t)(end - start - 1) > SNAG_MAX_EVENT_LINE && strcmp(type, "session_checkpoint")))
+        goto invalid;
     if (json_integer_value(json_object_get(record, "v")) == 2) {
         uint64_t pointer;
         if (snag_json_integer_u64(record, "checkpoint_offset", &pointer) < 0 ||
             pointer > (uint64_t)start ||
-            (!strcmp(type, "session_checkpoint") ? pointer != (uint64_t)start :
-                (start > 0 && pointer == (uint64_t)start))) goto invalid;
+            (!strcmp(type, "session_checkpoint") ? pointer != (uint64_t)start
+                                                 : (start > 0 && pointer == (uint64_t)start)))
+            goto invalid;
     }
     return 0;
 invalid:
@@ -3170,8 +3483,8 @@ int
 snag_store_legacy_cursor_at(struct snag_session *session, int64_t offset,
     struct snag_journal_cursor *out, char *error, size_t error_size)
 {
-    if (!session || !out || (!session->pending_log && session->log_fd < 0) ||
-        offset < 0 || offset > session->log_end || !session->next_seq)
+    if (!session || !out || (!session->pending_log && session->log_fd < 0) || offset < 0 ||
+        offset > session->log_end || !session->next_seq)
         return snag_fail(error, error_size, EINVAL, "invalid legacy cursor boundary");
     struct snag_journal_cursor cursor = {.offset = offset};
     if (offset == session->log_end) {
@@ -3181,8 +3494,9 @@ snag_store_legacy_cursor_at(struct snag_session *session, int64_t offset,
         unsigned char delimiter;
         ssize_t got;
         if (offset) {
-            do { got = session_read_at(session, &delimiter, 1u, offset - 1); }
-            while (got < 0 && errno == EINTR);
+            do {
+                got = session_read_at(session, &delimiter, 1u, offset - 1);
+            } while (got < 0 && errno == EINTR);
             if (got < 0) return -1;
             if (got != 1 || delimiter != '\n')
                 return snag_fail(error, error_size, EINVAL, "legacy cursor is not a line boundary");
@@ -3190,15 +3504,18 @@ snag_store_legacy_cursor_at(struct snag_session *session, int64_t offset,
         int64_t end = 0;
         errno = 0;
         json_t *record = read_record_at(session, offset, &end);
-        if (!record) return snag_fail(error, error_size, errno ? errno : EINVAL,
-            "cannot read legacy cursor record");
+        if (!record)
+            return snag_fail(
+                error, error_size, errno ? errno : EINVAL, "cannot read legacy cursor record");
         /* The caller already verified this envelope and chain. Its derived
          * checkpoint pointer may have been discarded; it is not cursor authority. */
         const char *prev = snag_json_string(record, "prev_sha256");
         int rc = snag_json_integer_u64(record, "seq", &cursor.next_seq);
-        if (!rc && (!cursor.next_seq || cursor.next_seq >= session->next_seq ||
-            (offset == 0) != (cursor.next_seq == 1u) || end <= offset || end > session->log_end ||
-            !prev || !snag_hex_is_lower(prev, SNAG_SHA256_HEX_LEN))) rc = snag_errno(EINVAL);
+        if (!rc &&
+            (!cursor.next_seq || cursor.next_seq >= session->next_seq ||
+                (offset == 0) != (cursor.next_seq == 1u) || end <= offset ||
+                end > session->log_end || !prev || !snag_hex_is_lower(prev, SNAG_SHA256_HEX_LEN)))
+            rc = snag_errno(EINVAL);
         if (!rc) memcpy(cursor.prev_sha256, prev, sizeof(cursor.prev_sha256));
         json_decref(record);
         if (rc < 0) return -1;
@@ -3219,27 +3536,27 @@ history_error(struct snag_session *session, char *error, size_t error_size, cons
 
 /* Explicit history readers authenticate their requested prefix, separately from
  * bounded checkpoint admission. Native observation extends only that prefix. */
-static int native_history_stage(struct snag_session *, uint64_t,
-    const struct snag_journal_cursor *, bool *, char *, size_t);
-static int native_history_cursor(struct snag_session *, uint64_t, bool,
-    struct snag_journal_cursor *, char *, size_t);
+static int native_history_stage(
+    struct snag_session *, uint64_t, const struct snag_journal_cursor *, bool *, char *, size_t);
+static int native_history_cursor(
+    struct snag_session *, uint64_t, bool, struct snag_journal_cursor *, char *, size_t);
 
 static bool
 history_tail_valid(const struct snag_journal_cursor *tail)
 {
     return tail && tail->offset >= 0 && tail->next_seq &&
-        snag_hex_is_lower(tail->prev_sha256, SNAG_SHA256_HEX_LEN) &&
-        ((tail->offset == 0) == (tail->next_seq == 1u)) &&
-        (tail->offset || strspn(tail->prev_sha256, "0") == SNAG_SHA256_HEX_LEN);
+           snag_hex_is_lower(tail->prev_sha256, SNAG_SHA256_HEX_LEN) &&
+           ((tail->offset == 0) == (tail->next_seq == 1u)) &&
+           (tail->offset || strspn(tail->prev_sha256, "0") == SNAG_SHA256_HEX_LEN);
 }
 
 static int
 history_source_open(struct snag_store *store, struct snag_session *session, const char *id,
     int64_t *size, bool *native, char *error, size_t error_size)
 {
-    if (!store || !session || session->id[0] || session->pending_log ||
-        session->log_fd >= 0 || session->lock_fd >= 0 || session->dir_fd >= 0 ||
-        !id || !snag_hex_is_lower(id, SNAG_ID_HEX_LEN)) {
+    if (!store || !session || session->id[0] || session->pending_log || session->log_fd >= 0 ||
+        session->lock_fd >= 0 || session->dir_fd >= 0 || !id ||
+        !snag_hex_is_lower(id, SNAG_ID_HEX_LEN)) {
         return snag_fail(error, error_size, EINVAL, "invalid source history reader");
     }
     if (snag_session_locate(store, session, id, NULL, NULL, error, error_size) < 0) return -1;
@@ -3252,8 +3569,9 @@ history_source_open(struct snag_store *store, struct snag_session *session, cons
     if (session->log_fd < 0) {
         return snag_errorf(error, error_size, "cannot open source history: %s", strerror(errno));
     }
-    if (snag_store_verify_private_fd(session->log_fd, false, "source history",
-            error, error_size) < 0) return -1;
+    if (snag_store_verify_private_fd(session->log_fd, false, "source history", error, error_size) <
+        0)
+        return -1;
     snag_file_info info;
     if (snag_fstat(session->log_fd, &info) < 0 || info.st_size < 0) {
         return snag_errorf(error, error_size, "cannot inspect source history: %s", strerror(errno));
@@ -3273,7 +3591,8 @@ history_boundary_valid(struct snag_session *session, char *error, size_t error_s
     char digest[SNAG_SHA256_HEX_LEN + 1u];
     json_t *record = history_record_read(session, split + 1, &end, digest);
     int rc = end == session->log_end ? history_record_valid(session, record, split + 1, end,
-        session->next_seq - 1u, digest, error, error_size) : -1;
+                                           session->next_seq - 1u, digest, error, error_size)
+                                     : -1;
     if (!rc && strcmp(session->prev_sha256, snag_json_string(record, "event_sha256"))) rc = -1;
     json_decref(record);
     if (rc < 0) return history_error(session, error, error_size, "invalid source history boundary");
@@ -3293,8 +3612,8 @@ snag_session_history_open(struct snag_store *store, struct snag_session *session
     if (size < tail->offset) {
         return snag_fail(error, error_size, EINVAL, "source history ends before committed prefix");
     }
-    if (native) return native_history_stage(session, (uint64_t)tail->offset, tail,
-        NULL, error, error_size);
+    if (native)
+        return native_history_stage(session, (uint64_t)tail->offset, tail, NULL, error, error_size);
     session->log_end = tail->offset;
     session->next_seq = tail->next_seq;
     memcpy(session->prev_sha256, tail->prev_sha256, sizeof(session->prev_sha256));
@@ -3302,29 +3621,27 @@ snag_session_history_open(struct snag_store *store, struct snag_session *session
 }
 
 static int
-history_identity_valid(struct snag_session *session, int64_t end, bool native,
-    char *error, size_t error_size)
+history_identity_valid(
+    struct snag_session *session, int64_t end, bool native, char *error, size_t error_size)
 {
     snag_file_info directory, path, journal;
-    if (snag_fstat(session->dir_fd, &directory) < 0 ||
-        snag_lstat(session->dir_path, &path) < 0 || !S_ISDIR(path.st_mode) ||
-        directory.st_dev != path.st_dev || directory.st_ino != path.st_ino ||
-        snag_fstat(session->log_fd, &journal) < 0 || journal.st_size < end ||
+    if (snag_fstat(session->dir_fd, &directory) < 0 || snag_lstat(session->dir_path, &path) < 0 ||
+        !S_ISDIR(path.st_mode) || directory.st_dev != path.st_dev ||
+        directory.st_ino != path.st_ino || snag_fstat(session->log_fd, &journal) < 0 ||
+        journal.st_size < end ||
         snag_lstat_at(session->dir_fd, native ? "journal.bin" : "events.jsonl", &path) < 0 ||
-        !S_ISREG(path.st_mode) ||
-        journal.st_dev != path.st_dev || journal.st_ino != path.st_ino) {
+        !S_ISREG(path.st_mode) || journal.st_dev != path.st_dev || journal.st_ino != path.st_ino) {
         return snag_fail(error, error_size, ESTALE, "history was replaced or truncated");
     }
-    return snag_store_verify_private_fd(session->log_fd, false, "source history",
-        error, error_size);
+    return snag_store_verify_private_fd(
+        session->log_fd, false, "source history", error, error_size);
 }
 
 static int
-history_snapshot_tail(struct snag_session *session, int64_t size,
-    struct snag_journal_cursor *tail, bool *incomplete, char *error, size_t error_size)
+history_snapshot_tail(struct snag_session *session, int64_t size, struct snag_journal_cursor *tail,
+    bool *incomplete, char *error, size_t error_size)
 {
-    *tail = (struct snag_journal_cursor){.offset = session->log_end,
-        .next_seq = session->next_seq};
+    *tail = (struct snag_journal_cursor){.offset = session->log_end, .next_seq = session->next_seq};
     memcpy(tail->prev_sha256, session->prev_sha256, sizeof(tail->prev_sha256));
     *incomplete = false;
     if (size == session->log_end) return 0;
@@ -3332,7 +3649,9 @@ history_snapshot_tail(struct snag_session *session, int64_t size,
         return snag_fail(error, error_size, ESTALE, "history was truncated");
     unsigned char last;
     ssize_t got;
-    do { got = session_read_at(session, &last, 1u, size - 1); } while (got < 0 && errno == EINTR);
+    do {
+        got = session_read_at(session, &last, 1u, size - 1);
+    } while (got < 0 && errno == EINTR);
     if (got != 1) goto invalid;
     if (last != '\n') {
         int64_t newline = previous_newline(session, size);
@@ -3349,15 +3668,16 @@ history_snapshot_tail(struct snag_session *session, int64_t size,
     session->log_end = size;
     json_t *record = history_record_read(session, split + 1, &end, digest);
     uint64_t seq;
-    int rc = end == size && snag_json_integer_u64(record, "seq", &seq) == 0 &&
-        seq < UINT64_MAX ? history_record_valid(session, record, split + 1, end, seq,
-            digest, error, error_size) : -1;
+    int rc =
+        end == size && snag_json_integer_u64(record, "seq", &seq) == 0 && seq < UINT64_MAX
+            ? history_record_valid(session, record, split + 1, end, seq, digest, error, error_size)
+            : -1;
     session->log_end = previous_end;
     if (!rc) {
         tail->offset = size;
         tail->next_seq = seq + 1u;
-        memcpy(tail->prev_sha256, snag_json_string(record, "event_sha256"),
-            sizeof(tail->prev_sha256));
+        memcpy(
+            tail->prev_sha256, snag_json_string(record, "event_sha256"), sizeof(tail->prev_sha256));
     }
     json_decref(record);
     if (!rc) return 0;
@@ -3374,8 +3694,8 @@ snag_session_history_snapshot(struct snag_store *store, struct snag_session *ses
     *incomplete = false;
     bool native;
     if (history_source_open(store, session, id, &size, &native, error, error_size) < 0) return -1;
-    if (native) return native_history_stage(session, (uint64_t)size, NULL, incomplete,
-        error, error_size);
+    if (native)
+        return native_history_stage(session, (uint64_t)size, NULL, incomplete, error, error_size);
     struct snag_journal_cursor tail;
     if (history_snapshot_tail(session, size, &tail, incomplete, error, error_size) < 0) return -1;
     if (history_identity_valid(session, tail.offset, false, error, error_size) < 0) return -1;
@@ -3386,8 +3706,8 @@ snag_session_history_snapshot(struct snag_store *store, struct snag_session *ses
 }
 
 static int
-history_verify_event(void *opaque, const struct snag_session *state, uint64_t seq,
-    const char *type, const json_t *data, char *error, size_t error_size)
+history_verify_event(void *opaque, const struct snag_session *state, uint64_t seq, const char *type,
+    const json_t *data, char *error, size_t error_size)
 {
     (void)opaque;
     (void)state;
@@ -3404,8 +3724,7 @@ snag_session_history_refresh(struct snag_session *session, const struct snag_jou
     char *error, size_t error_size)
 {
     if (!session || session->log_fd < 0 || session->dir_fd < 0 || !session->dir_path ||
-        session->lock_fd >= 0 || session->pending_log ||
-        !history_tail_valid(tail)) {
+        session->lock_fd >= 0 || session->pending_log || !history_tail_valid(tail)) {
         return snag_fail(error, error_size, EINVAL, "invalid history refresh");
     }
     if (tail->offset < session->log_end || tail->next_seq < session->next_seq ||
@@ -3413,14 +3732,15 @@ snag_session_history_refresh(struct snag_session *session, const struct snag_jou
         (tail->offset == session->log_end && strcmp(tail->prev_sha256, session->prev_sha256))) {
         return snag_fail(error, error_size, ESTALE, "history prefix changed");
     }
-    if (history_identity_valid(session, tail->offset, session->binary != NULL,
-        error, error_size) < 0) return -1;
+    if (history_identity_valid(session, tail->offset, session->binary != NULL, error, error_size) <
+        0)
+        return -1;
     if (tail->offset == session->log_end) return 0;
-    if (session->binary) return native_history_stage(session, (uint64_t)tail->offset,
-        tail, NULL, error, error_size);
+    if (session->binary)
+        return native_history_stage(session, (uint64_t)tail->offset, tail, NULL, error, error_size);
     if (history_boundary_valid(session, error, error_size) < 0) return -1;
-    struct snag_journal_cursor previous = {.offset = session->log_end,
-        .next_seq = session->next_seq};
+    struct snag_journal_cursor previous = {
+        .offset = session->log_end, .next_seq = session->next_seq};
     memcpy(previous.prev_sha256, session->prev_sha256, sizeof(previous.prev_sha256));
     struct snag_journal_cursor cursor = previous;
     session->log_end = tail->offset;
@@ -3428,11 +3748,12 @@ snag_session_history_refresh(struct snag_session *session, const struct snag_jou
     memcpy(session->prev_sha256, tail->prev_sha256, sizeof(session->prev_sha256));
     int rc = 0;
     while (!rc && cursor.offset < tail->offset) {
-        rc = snag_session_each_event_forward(session, &cursor, SIZE_MAX,
-            history_verify_event, NULL, error, error_size);
+        rc = snag_session_each_event_forward(
+            session, &cursor, SIZE_MAX, history_verify_event, NULL, error, error_size);
     }
-    if (!rc) rc = history_identity_valid(session, tail->offset, session->binary != NULL,
-        error, error_size);
+    if (!rc)
+        rc = history_identity_valid(
+            session, tail->offset, session->binary != NULL, error, error_size);
     if (rc < 0) {
         session->log_end = previous.offset;
         session->next_seq = previous.next_seq;
@@ -3442,36 +3763,38 @@ snag_session_history_refresh(struct snag_session *session, const struct snag_jou
 }
 
 int
-snag_session_history_observe(struct snag_session *session, bool *incomplete,
-    char *error, size_t error_size)
+snag_session_history_observe(
+    struct snag_session *session, bool *incomplete, char *error, size_t error_size)
 {
     if (!session || !incomplete || session->log_fd < 0 || session->dir_fd < 0 ||
         session->lock_fd >= 0 || session->pending_log || !session->dir_path)
         return snag_fail(error, error_size, EINVAL, "invalid history observation");
-    if (history_identity_valid(session, session->log_end, session->binary != NULL,
-        error, error_size) < 0) return -1;
+    if (history_identity_valid(
+            session, session->log_end, session->binary != NULL, error, error_size) < 0)
+        return -1;
     snag_file_info info;
     if (snag_fstat(session->log_fd, &info) < 0)
         return snag_errorf(error, error_size, "cannot inspect source history: %s", strerror(errno));
-    if (session->binary) return native_history_stage(session, (uint64_t)info.st_size,
-        NULL, incomplete, error, error_size);
+    if (session->binary)
+        return native_history_stage(
+            session, (uint64_t)info.st_size, NULL, incomplete, error, error_size);
     struct snag_journal_cursor tail;
     bool partial;
     if (history_snapshot_tail(session, info.st_size, &tail, &partial, error, error_size) < 0 ||
-        snag_session_history_refresh(session, &tail, error, error_size) < 0) return -1;
+        snag_session_history_refresh(session, &tail, error, error_size) < 0)
+        return -1;
     *incomplete = partial;
     return 0;
 }
 
 static int
-history_checkpoint_hint(struct snag_session *session, int64_t start, int64_t end,
-    uint64_t *seq)
+history_checkpoint_hint(struct snag_session *session, int64_t start, int64_t end, uint64_t *seq)
 {
     /* The canonical checkpoint footer fits here in both journal versions.
      * It directs a byte search only; the selected boundary is still verified. */
     char bytes[512];
-    size_t length = end - start < (int64_t)sizeof(bytes) ?
-        (size_t)(end - start) : sizeof(bytes) - 1u;
+    size_t length =
+        end - start < (int64_t)sizeof(bytes) ? (size_t)(end - start) : sizeof(bytes) - 1u;
     ssize_t got;
     do {
         got = session_read_at(session, bytes, length, end - (int64_t)length);
@@ -3488,12 +3811,14 @@ history_checkpoint_hint(struct snag_session *session, int64_t start, int64_t end
     if (!marker) return -1;
     *marker = '{';
     char error[128];
-    json_t *footer = snag_json_load_canonical_bounded((unsigned char *)marker,
-        strlen(marker), sizeof(bytes), error, sizeof(error));
+    json_t *footer = snag_json_load_canonical_bounded(
+        (unsigned char *)marker, strlen(marker), sizeof(bytes), error, sizeof(error));
     const char *id = snag_json_string(footer, "session_id");
-    int rc = snag_json_exact_keys(footer, "seq session_id time_ms type v") &&
-        id && !strcmp(id, session->id) &&
-        snag_json_integer_u64(footer, "seq", seq) == 0 && *seq ? 1 : -1;
+    int rc = snag_json_exact_keys(footer, "seq session_id time_ms type v") && id &&
+                     !strcmp(id, session->id) && snag_json_integer_u64(footer, "seq", seq) == 0 &&
+                     *seq
+                 ? 1
+                 : -1;
     json_decref(footer);
     return rc;
 }
@@ -3526,19 +3851,21 @@ history_cursor_before(struct snag_session *session, uint64_t before,
         int64_t start = split + 1;
         int64_t end = history_record_end(session, start);
         if (start < low || end <= start || end > high ||
-            (uint64_t)(end - start - 1) > SNAG_CHECKPOINT_EVENT_MAX) goto invalid;
+            (uint64_t)(end - start - 1) > SNAG_CHECKPOINT_EVENT_MAX)
+            goto invalid;
         uint64_t seq;
         int hint = history_checkpoint_hint(session, start, end, &seq);
         if (hint < 0) goto invalid;
         if (hint && seq != before) {
-            if (seq < before) low = end;
-            else high = start;
+            if (seq < before)
+                low = end;
+            else
+                high = start;
             continue;
         }
         char digest[SNAG_SHA256_HEX_LEN + 1u];
         json_t *record = history_record_read(session, start, &end, digest);
-        if (start < low || end > high ||
-            snag_json_integer_u64(record, "seq", &seq) < 0 ||
+        if (start < low || end > high || snag_json_integer_u64(record, "seq", &seq) < 0 ||
             history_record_valid(session, record, start, end, seq, digest, error, error_size) < 0) {
             json_decref(record);
             goto invalid;
@@ -3552,8 +3879,10 @@ history_cursor_before(struct snag_session *session, uint64_t before,
             return 0;
         }
         json_decref(record);
-        if (seq < before) low = end;
-        else high = start;
+        if (seq < before)
+            low = end;
+        else
+            high = start;
     }
 invalid:
     return history_error(session, error, error_size, "cannot locate verified history boundary");
@@ -3565,8 +3894,7 @@ snag_session_history_cursor_before(struct snag_session *session, uint64_t before
 {
     if (!session || !cursor || before > session->next_seq)
         return snag_fail(error, size, EINVAL, "invalid history sequence");
-    if (session->binary) return native_history_cursor(session, before, false,
-        cursor, error, size);
+    if (session->binary) return native_history_cursor(session, before, false, cursor, error, size);
     struct snag_journal_cursor found;
     if (history_cursor_before(session, before, &found, error, size) < 0) return -1;
     *cursor = found;
@@ -3579,8 +3907,8 @@ snag_session_history_cursor_at(struct snag_session *session, int64_t offset,
 {
     if (!session || !cursor || offset < 0 || offset > session->log_end)
         return snag_fail(error, error_size, EINVAL, "invalid history offset");
-    if (session->binary) return native_history_cursor(session, (uint64_t)offset, true,
-        cursor, error, error_size);
+    if (session->binary)
+        return native_history_cursor(session, (uint64_t)offset, true, cursor, error, error_size);
     if (offset == session->log_end) {
         *cursor = (struct snag_journal_cursor){.offset = offset, .next_seq = session->next_seq};
         memcpy(cursor->prev_sha256, session->prev_sha256, sizeof(cursor->prev_sha256));
@@ -3590,20 +3918,23 @@ snag_session_history_cursor_at(struct snag_session *session, int64_t offset,
     char digest[SNAG_SHA256_HEX_LEN + 1u];
     json_t *record = history_record_read(session, offset, &end, digest);
     uint64_t seq;
-    int rc = snag_json_integer_u64(record, "seq", &seq) == 0 && seq < session->next_seq ?
-        history_record_valid(session, record, offset, end, seq, digest, error, error_size) : -1;
+    int rc =
+        snag_json_integer_u64(record, "seq", &seq) == 0 && seq < session->next_seq
+            ? history_record_valid(session, record, offset, end, seq, digest, error, error_size)
+            : -1;
     if (!rc) {
         *cursor = (struct snag_journal_cursor){.offset = offset, .next_seq = seq};
         memcpy(cursor->prev_sha256, snag_json_string(record, "prev_sha256"),
             sizeof(cursor->prev_sha256));
     }
     json_decref(record);
-    return rc < 0 ? history_error(session, error, error_size,
-        "cannot locate verified history offset") : 0;
+    return rc < 0
+               ? history_error(session, error, error_size, "cannot locate verified history offset")
+               : 0;
 }
 
-static int native_history_reverse(struct snag_session *, uint64_t, size_t,
-    snag_session_event_fn, void *, uint64_t *, char *, size_t);
+static int native_history_reverse(struct snag_session *, uint64_t, size_t, snag_session_event_fn,
+    void *, uint64_t *, char *, size_t);
 
 int
 snag_session_each_event_reverse(struct snag_session *session, uint64_t before, size_t scan_bytes,
@@ -3614,8 +3945,8 @@ snag_session_each_event_reverse(struct snag_session *session, uint64_t before, s
         return snag_fail(error, error_size, EINVAL, "invalid reverse history scan");
     *next_before = 0u;
     if (session->binary) {
-        return native_history_reverse(session, before, scan_bytes,
-            fn, opaque, next_before, error, error_size);
+        return native_history_reverse(
+            session, before, scan_bytes, fn, opaque, next_before, error, error_size);
     }
     if (history_cursor_before(session, before, &cursor, error, error_size) < 0) return -1;
     while (cursor.offset > 0 && scan_bytes) {
@@ -3666,8 +3997,8 @@ snag_session_each_event_forward(struct snag_session *session, struct snag_journa
     if (!session || !cursor || !scan_bytes || !fn || session->log_end < 0)
         return snag_fail(error, error_size, EINVAL, "invalid forward history scan");
     if (session->binary) {
-        return native_history_forward(session, cursor, 0u, scan_bytes,
-            fn, opaque, error, error_size);
+        return native_history_forward(
+            session, cursor, 0u, scan_bytes, fn, opaque, error, error_size);
     }
     if (!cursor->next_seq) {
         if (cursor->offset || cursor->prev_sha256[0])
@@ -3689,8 +4020,8 @@ snag_session_each_event_forward(struct snag_session *session, struct snag_journa
         json_t *record = history_record_read(session, cursor->offset, &end, digest);
         uint64_t seq = cursor->next_seq;
         if (seq >= tail.next_seq || end > tail.offset ||
-            history_record_valid(session, record, cursor->offset, end, seq,
-                digest, error, error_size) < 0) {
+            history_record_valid(
+                session, record, cursor->offset, end, seq, digest, error, error_size) < 0) {
             json_decref(record);
             return history_error(session, error, error_size, "invalid forward history record");
         }
@@ -3724,8 +4055,7 @@ snag_session_each_event_forward(struct snag_session *session, struct snag_journa
  * A malformed index is never interpreted as permission to scan the prefix. */
 static int
 latest_checkpoint_pointer(struct snag_session *session, enum snag_tail_policy tail_policy,
-                          int64_t *offset_out, int64_t *complete_out,
-                          char *error, size_t error_size)
+    int64_t *offset_out, int64_t *complete_out, char *error, size_t error_size)
 {
     int64_t end = snag_seek(session->log_fd, 0, SEEK_END);
     if (end <= 0) return 0;
@@ -3736,8 +4066,8 @@ latest_checkpoint_pointer(struct snag_session *session, enum snag_tail_policy ta
         if (newline < 0 || tail_policy == SNAG_TAIL_REJECT) goto invalid;
         end = newline + 1;
         if (tail_policy == SNAG_TAIL_TRUNCATE &&
-            (snag_truncate(session->log_fd, end) < 0 ||
-             snag_sync_file(session->log_fd) < 0)) goto invalid;
+            (snag_truncate(session->log_fd, end) < 0 || snag_sync_file(session->log_fd) < 0))
+            goto invalid;
     }
     int64_t delimiter = previous_newline(session, end - 1);
     if (delimiter < -1) goto invalid;
@@ -3745,16 +4075,27 @@ latest_checkpoint_pointer(struct snag_session *session, enum snag_tail_policy ta
     if (start >= end - 1 || end - start > SNAG_CHECKPOINT_EVENT_MAX) goto invalid;
     int64_t read_end = -1;
     json_t *record = read_record_at(session, start, &read_end);
-    if (!record || read_end != end) { json_decref(record); goto invalid; }
+    if (!record || read_end != end) {
+        json_decref(record);
+        goto invalid;
+    }
     uint64_t version = 0u, offset = 0u;
     if (snag_json_integer_u64(record, "v", &version) < 0 ||
-        strcmp(snag_json_string(record, "session_id") ?
-               snag_json_string(record, "session_id") : "", session->id)) {
-        json_decref(record); goto invalid;
+        strcmp(snag_json_string(record, "session_id") ? snag_json_string(record, "session_id") : "",
+            session->id)) {
+        json_decref(record);
+        goto invalid;
     }
-    if (version == 1u) { json_decref(record); *complete_out = end; return 0; }
+    if (version == 1u) {
+        json_decref(record);
+        *complete_out = end;
+        return 0;
+    }
     if (version != 2u || snag_json_integer_u64(record, "checkpoint_offset", &offset) < 0 ||
-        offset > (uint64_t)start || offset > INT64_MAX) { json_decref(record); goto invalid; }
+        offset > (uint64_t)start || offset > INT64_MAX) {
+        json_decref(record);
+        goto invalid;
+    }
     json_decref(record);
     *offset_out = (int64_t)offset;
     *complete_out = end;
@@ -3764,25 +4105,26 @@ invalid:
 }
 
 static int
-read_checkpoint_at(struct snag_session *session, int64_t checkpoint_offset,
-    int64_t boundary, struct snag_session *restored, char *error, size_t error_size)
+read_checkpoint_at(struct snag_session *session, int64_t checkpoint_offset, int64_t boundary,
+    struct snag_session *restored, char *error, size_t error_size)
 {
     snag_session_init(restored);
     int64_t record_end = -1;
     json_t *record = read_record_at(session, checkpoint_offset, &record_end);
     if (!record || record_end > boundary ||
         strcmp(snag_json_string(record, "type") ? snag_json_string(record, "type") : "",
-               "session_checkpoint")) goto invalid;
+            "session_checkpoint"))
+        goto invalid;
     json_t *data = json_object_get(record, "data");
     if (snag_checkpoint_state_decode(json_object_get(data, "state"), restored) < 0) goto invalid;
     uint64_t seq = 0u, pointer = 0u;
     if (snag_json_integer_u64(record, "seq", &seq) < 0 ||
         snag_json_integer_u64(record, "checkpoint_offset", &pointer) < 0 ||
-        pointer != (uint64_t)checkpoint_offset ||
-        strcmp(restored->id, session->id) || restored->log_end != checkpoint_offset ||
-        restored->next_seq != seq ||
-        strcmp(restored->prev_sha256, snag_json_string(record, "prev_sha256") ?
-               snag_json_string(record, "prev_sha256") : "")) goto invalid;
+        pointer != (uint64_t)checkpoint_offset || strcmp(restored->id, session->id) ||
+        restored->log_end != checkpoint_offset || restored->next_seq != seq ||
+        strcmp(restored->prev_sha256,
+            snag_json_string(record, "prev_sha256") ? snag_json_string(record, "prev_sha256") : ""))
+        goto invalid;
     const char *type;
     json_t *event_data;
     if (!common_event_valid(record, restored, seq, &type, &event_data, error, error_size) ||
@@ -3801,15 +4143,16 @@ invalid:
 }
 
 int
-snag_session_checkpoint_read(struct snag_session *session, json_t **state, json_t **context,
-    char *error, size_t error_size)
+snag_session_checkpoint_read(
+    struct snag_session *session, json_t **state, json_t **context, char *error, size_t error_size)
 {
     *state = NULL;
     *context = NULL;
     if (!session->checkpoint_seq) return 0;
     struct snag_session restored;
-    if (read_checkpoint_at(session, session->checkpoint_offset, session->log_end,
-            &restored, error, error_size) < 0) return -1;
+    if (read_checkpoint_at(session, session->checkpoint_offset, session->log_end, &restored, error,
+            error_size) < 0)
+        return -1;
     if (restored.checkpoint_seq != session->checkpoint_seq ||
         restored.checkpoint_has_context != session->checkpoint_has_context) {
         snag_session_close(&restored);
@@ -3822,19 +4165,20 @@ snag_session_checkpoint_read(struct snag_session *session, json_t **state, json_
 }
 
 static int
-scan_checkpoint_suffix(struct snag_session *session, int64_t checkpoint_offset,
-    int64_t boundary, int64_t *complete_end_out, uint64_t *next_seq_out,
-    char *error, size_t error_size)
+scan_checkpoint_suffix(struct snag_session *session, int64_t checkpoint_offset, int64_t boundary,
+    int64_t *complete_end_out, uint64_t *next_seq_out, char *error, size_t error_size)
 {
     struct snag_session restored;
-    if (read_checkpoint_at(session, checkpoint_offset, boundary,
-            &restored, error, error_size) < 0) return -1;
+    if (read_checkpoint_at(session, checkpoint_offset, boundary, &restored, error, error_size) < 0)
+        return -1;
     int dir_fd = session->dir_fd, log_fd = session->log_fd, lock_fd = session->lock_fd;
     char *dir_path = session->dir_path;
     bool (*cancel)(void *) = session->history_cancel;
     void *cancel_opaque = session->history_cancel_opaque;
     *session = restored;
-    session->dir_fd = dir_fd; session->log_fd = log_fd; session->lock_fd = lock_fd;
+    session->dir_fd = dir_fd;
+    session->log_fd = log_fd;
+    session->lock_fd = lock_fd;
     session->dir_path = dir_path;
     session->history_cancel = cancel;
     session->history_cancel_opaque = cancel_opaque;
@@ -3842,42 +4186,45 @@ scan_checkpoint_suffix(struct snag_session *session, int64_t checkpoint_offset,
     anchor.log_offset = (uint64_t)session->log_end;
     anchor.log_seq = session->next_seq;
     memcpy(anchor.log_hash, session->prev_sha256, sizeof(anchor.log_hash));
-    return read_event_log(session, session, boundary, SNAG_TAIL_REJECT, NULL, NULL,
-        &anchor, true, NULL, complete_end_out, next_seq_out, error, error_size);
+    return read_event_log(session, session, boundary, SNAG_TAIL_REJECT, NULL, NULL, &anchor, true,
+        NULL, complete_end_out, next_seq_out, error, error_size);
 }
 
 int
-snag_store_scan_log(struct snag_session *session, enum snag_tail_policy tail_policy,
-                   char *error, size_t error_size)
+snag_store_scan_log(
+    struct snag_session *session, enum snag_tail_policy tail_policy, char *error, size_t error_size)
 {
     int64_t complete_end = -1, checkpoint_offset = 0, boundary = -1;
     uint64_t next_seq = 0u;
-    int indexed = session->pending_log ? 0 : latest_checkpoint_pointer(session, tail_policy,
-        &checkpoint_offset, &boundary, error, error_size);
+    int indexed = session->pending_log ? 0
+                                       : latest_checkpoint_pointer(session, tail_policy,
+                                             &checkpoint_offset, &boundary, error, error_size);
     if (indexed < 0) return -1;
     if (indexed && checkpoint_offset) {
-        if (scan_checkpoint_suffix(session, checkpoint_offset, boundary,
-                                   &complete_end, &next_seq, error, error_size) < 0) return -1;
-    } else if (read_event_log(session, session, boundary, tail_policy, NULL, NULL, NULL,
-                              false, NULL, &complete_end, &next_seq, error, error_size) < 0)
+        if (scan_checkpoint_suffix(session, checkpoint_offset, boundary, &complete_end, &next_seq,
+                error, error_size) < 0)
+            return -1;
+    } else if (read_event_log(session, session, boundary, tail_policy, NULL, NULL, NULL, false,
+                   NULL, &complete_end, &next_seq, error, error_size) < 0)
         return -1;
     session->log_end = complete_end;
     session->next_seq = next_seq;
     if (next_seq == 1) return snag_fail(error, error_size, EINVAL, "session event log is empty");
-    if (tail_policy == SNAG_TAIL_TRUNCATE && session->lock_fd >= 0 &&
-        !session->delete_requested && !session->checkpoint_seq && next_seq > 128u &&
-        snag_session_checkpoint(session, error, error_size) < 0) return -1;
+    if (tail_policy == SNAG_TAIL_TRUNCATE && session->lock_fd >= 0 && !session->delete_requested &&
+        !session->checkpoint_seq && next_seq > 128u &&
+        snag_session_checkpoint(session, error, error_size) < 0)
+        return -1;
     return 0;
 }
 
-static int native_history_each(struct snag_session *, snag_session_event_fn,
-    void *, char *, size_t);
+static int native_history_each(
+    struct snag_session *, snag_session_event_fn, void *, char *, size_t);
 static int native_history_since(struct snag_session *, const struct snag_process_state *,
     snag_session_event_fn, void *, char *, size_t);
 
 int
-snag_session_each_event(struct snag_session *session, snag_session_event_fn fn,
-                       void *opaque, char *error, size_t error_size)
+snag_session_each_event(struct snag_session *session, snag_session_event_fn fn, void *opaque,
+    char *error, size_t error_size)
 {
     struct snag_session verifier;
 
@@ -3888,21 +4235,21 @@ snag_session_each_event(struct snag_session *session, snag_session_event_fn fn,
     if (session->binary) return native_history_each(session, fn, opaque, error, error_size);
     snag_session_init(&verifier);
     memcpy(verifier.id, session->id, sizeof(verifier.id));
-    int rc = read_event_log(session, &verifier, session->log_end,
-                           SNAG_TAIL_REJECT, fn, opaque, NULL, false, NULL,
-                           NULL, NULL, error, error_size);
+    int rc = read_event_log(session, &verifier, session->log_end, SNAG_TAIL_REJECT, fn, opaque,
+        NULL, false, NULL, NULL, NULL, error, error_size);
     snag_session_close(&verifier);
     return rc;
 }
 
 int
 snag_session_each_event_since(struct snag_session *session, const struct snag_process_state *cursor,
-                              snag_session_event_fn fn, void *opaque, char *error, size_t error_size)
+    snag_session_event_fn fn, void *opaque, char *error, size_t error_size)
 {
     struct snag_session verifier;
     if (!session || !fn)
         return snag_fail(error, error_size, EINVAL, "invalid process output iterator");
-    if (!cursor || !cursor->log_seq) return snag_session_each_event(session, fn, opaque, error, error_size);
+    if (!cursor || !cursor->log_seq)
+        return snag_session_each_event(session, fn, opaque, error, error_size);
     if (session->log_end < 0 || cursor->log_offset > (uint64_t)session->log_end ||
         !snag_hex_is_lower(cursor->log_hash, SNAG_SHA256_HEX_LEN))
         return snag_fail(error, error_size, EINVAL, "invalid process output cursor");
@@ -3911,15 +4258,13 @@ snag_session_each_event_since(struct snag_session *session, const struct snag_pr
     snag_session_init(&verifier);
     memcpy(verifier.id, session->id, sizeof(verifier.id));
     memcpy(verifier.prev_sha256, cursor->log_hash, sizeof(verifier.prev_sha256));
-    return read_event_log(session, &verifier, session->log_end,
-                          SNAG_TAIL_REJECT, fn, opaque, cursor, false, NULL,
-                          NULL, NULL, error, error_size);
+    return read_event_log(session, &verifier, session->log_end, SNAG_TAIL_REJECT, fn, opaque,
+        cursor, false, NULL, NULL, NULL, error, error_size);
 }
 
 int
 snag_session_each_event_from_checkpoint(struct snag_session *session, const json_t *state,
-                                        snag_session_event_fn fn, void *opaque,
-                                        char *error, size_t error_size)
+    snag_session_event_fn fn, void *opaque, char *error, size_t error_size)
 {
     struct snag_session verifier;
     struct snag_process_state anchor = {0};
@@ -3935,9 +4280,8 @@ snag_session_each_event_from_checkpoint(struct snag_session *session, const json
     anchor.log_offset = (uint64_t)verifier.log_end;
     anchor.log_seq = verifier.next_seq;
     memcpy(anchor.log_hash, verifier.prev_sha256, sizeof(anchor.log_hash));
-    int rc = read_event_log(session, &verifier, session->log_end,
-                            SNAG_TAIL_REJECT, fn, opaque, &anchor, true, NULL,
-                            NULL, NULL, error, error_size);
+    int rc = read_event_log(session, &verifier, session->log_end, SNAG_TAIL_REJECT, fn, opaque,
+        &anchor, true, NULL, NULL, NULL, error, error_size);
     snag_session_close(&verifier);
     return rc;
 }
@@ -3968,42 +4312,47 @@ clone_session_state(const struct snag_session *source, struct snag_session *stag
     staged->irc_conversations = json_incref(source->irc_conversations);
     staged->irc_activity = json_incref(source->irc_activity);
     if (source->pending_call_count) {
-        staged->pending_calls = malloc(source->pending_call_capacity * sizeof(*staged->pending_calls));
+        staged->pending_calls =
+            malloc(source->pending_call_capacity * sizeof(*staged->pending_calls));
         if (!staged->pending_calls) return -1;
         memcpy(staged->pending_calls, source->pending_calls,
-               source->pending_call_capacity * sizeof(*staged->pending_calls));
+            source->pending_call_capacity * sizeof(*staged->pending_calls));
         staged->pending_call_capacity = source->pending_call_capacity;
     }
     if (source->pending_steering_count) {
-        staged->pending_steering = malloc(source->pending_steering_capacity * sizeof(*staged->pending_steering));
+        staged->pending_steering =
+            malloc(source->pending_steering_capacity * sizeof(*staged->pending_steering));
         if (!staged->pending_steering) return -1;
         memcpy(staged->pending_steering, source->pending_steering,
-               source->pending_steering_capacity * sizeof(*staged->pending_steering));
+            source->pending_steering_capacity * sizeof(*staged->pending_steering));
         staged->pending_steering_capacity = source->pending_steering_capacity;
         staged->pending_steering_count = source->pending_steering_count;
-        for(size_t i=0;i<staged->pending_steering_count;++i)
-            staged->pending_steering[i].content=json_incref(source->pending_steering[i].content);
+        for (size_t i = 0; i < staged->pending_steering_count; ++i)
+            staged->pending_steering[i].content = json_incref(source->pending_steering[i].content);
     }
     if (source->pending_queue_count) {
-        staged->pending_queue = malloc(source->pending_queue_capacity * sizeof(*staged->pending_queue));
+        staged->pending_queue =
+            malloc(source->pending_queue_capacity * sizeof(*staged->pending_queue));
         if (!staged->pending_queue) return -1;
         memcpy(staged->pending_queue, source->pending_queue,
-               source->pending_queue_capacity * sizeof(*staged->pending_queue));
+            source->pending_queue_capacity * sizeof(*staged->pending_queue));
         staged->pending_queue_capacity = source->pending_queue_capacity;
         staged->pending_queue_count = source->pending_queue_count;
-        for(size_t i=0;i<staged->pending_queue_count;++i)
-            staged->pending_queue[i].content=json_incref(source->pending_queue[i].content);
+        for (size_t i = 0; i < staged->pending_queue_count; ++i)
+            staged->pending_queue[i].content = json_incref(source->pending_queue[i].content);
     }
     if (source->process_capacity) {
         staged->processes = malloc(source->process_capacity * sizeof(*staged->processes));
         if (!staged->processes) return -1;
         memcpy(staged->processes, source->processes,
-               source->process_capacity * sizeof(*staged->processes));
+            source->process_capacity * sizeof(*staged->processes));
         staged->process_capacity = source->process_capacity;
         staged->process_count = source->process_count;
     }
     return (source->strings && !staged->strings) ||
-           (source->download_queue && !staged->download_queue) ? -1 : 0;
+                   (source->download_queue && !staged->download_queue)
+               ? -1
+               : 0;
 }
 
 /* Ephemeral proof for the existing single app voice-import operation. Partial
@@ -4053,16 +4402,15 @@ binary_hex(char *out, const unsigned char *bytes, size_t size)
 
 int
 snag_session_voice_import_cursor(struct snag_session *session, const char *transfer_id,
-    const char *source_id, uint64_t source_as_of, uint64_t count,
-    struct snag_journal_cursor *out, char *error, size_t error_size)
+    const char *source_id, uint64_t source_as_of, uint64_t count, struct snag_journal_cursor *out,
+    char *error, size_t error_size)
 {
     if (!session || !out || !snag_hex_is_lower(transfer_id, SNAG_ID_HEX_LEN) ||
         !snag_hex_is_lower(source_id, SNAG_ID_HEX_LEN) || !strcmp(source_id, session->id) ||
         !count || count > source_as_of || session->log_end <= 0 || session->next_seq < 2u ||
         !snag_hex_is_lower(session->prev_sha256, SNAG_SHA256_HEX_LEN))
         return snag_fail(error, error_size, EINVAL, "invalid voice import capture");
-    struct snag_journal_cursor cursor = {.offset = session->log_end,
-        .next_seq = session->next_seq};
+    struct snag_journal_cursor cursor = {.offset = session->log_end, .next_seq = session->next_seq};
     strcpy(cursor.prev_sha256, session->prev_sha256);
     struct snag_binary_session *binary = session->binary;
     if (binary) {
@@ -4071,8 +4419,8 @@ snag_session_voice_import_cursor(struct snag_session *session, const char *trans
         cursor.offset = (int64_t)binary->boundary.end;
         cursor.next_seq = binary->boundary.next_seq;
         binary_hex(cursor.prev_sha256, binary->boundary.digest, sizeof(binary->boundary.digest));
-        struct binary_voice_import proof = {.begin = cursor,
-            .source_as_of = source_as_of, .count = count};
+        struct binary_voice_import proof = {
+            .begin = cursor, .source_as_of = source_as_of, .count = count};
         strcpy(proof.id, transfer_id);
         strcpy(proof.source, source_id);
         binary->voice_import = proof;
@@ -4098,7 +4446,7 @@ static bool
 binary_anchor_equal(const struct snag_binary_anchor *a, const struct snag_binary_anchor *b)
 {
     return a->end == b->end && a->next_seq == b->next_seq && a->turns == b->turns &&
-        a->previous == b->previous && !memcmp(a->digest, b->digest, sizeof(a->digest));
+           a->previous == b->previous && !memcmp(a->digest, b->digest, sizeof(a->digest));
 }
 
 static void
@@ -4139,14 +4487,13 @@ static int
 binary_take_checkpoint(struct snag_binary_session *binary)
 {
     for (;;) {
-        int rc = snag_binary_io_checkpoint_take_access(binary->io,
-            &binary->checkpoint_result, &binary->checkpoint_access);
+        int rc = snag_binary_io_checkpoint_take_access(
+            binary->io, &binary->checkpoint_result, &binary->checkpoint_access);
         if (rc != 1) {
             binary->checkpoint_pending = false;
             return rc;
         }
-        if (snag_wakeup_wait(snag_binary_io_wake(binary->io), -1) < 0 && errno != EINTR)
-            return -1;
+        if (snag_wakeup_wait(snag_binary_io_wake(binary->io), -1) < 0 && errno != EINTR) return -1;
     }
 }
 
@@ -4206,9 +4553,15 @@ native_history_stage(struct snag_session *session, uint64_t end,
             snag_binary_header_decode(bytes, sizeof(bytes), &next->identity, &next->boundary) < 0)
             goto done;
         binary_hex(id, next->identity.id, sizeof(next->identity.id));
-        if (strcmp(id, session->id)) { errno = EBADMSG; goto done; }
+        if (strcmp(id, session->id)) {
+            errno = EBADMSG;
+            goto done;
+        }
     }
-    if (next->boundary.end > end) { errno = ESTALE; goto done; }
+    if (next->boundary.end > end) {
+        errno = ESTALE;
+        goto done;
+    }
     while (next->boundary.end < end) {
         if (session->history_cancel && session->history_cancel(session->history_cancel_opaque)) {
             errno = ECANCELED;
@@ -4216,42 +4569,48 @@ native_history_stage(struct snag_session *session, uint64_t end,
         }
         struct snag_binary_batch batch;
         struct snag_binary_anchor after;
-        int read = snag_binary_batch_read(session->log_fd, end, &next->boundary,
-            &scratch, &batch, &after);
+        int read =
+            snag_binary_batch_read(session->log_fd, end, &next->boundary, &scratch, &batch, &after);
         if (read < 0) goto done;
         if (read == 1) {
-            if (tail) { errno = EBADMSG; goto done; }
+            if (tail) {
+                errno = EBADMSG;
+                goto done;
+            }
             partial = true;
             break;
         }
-        if (snag_binary_index_tree_append_batch(NULL, &next->tree, &next->identity,
-            &next->boundary, &after, batch.data, batch.size) < 0) goto done;
+        if (snag_binary_index_tree_append_batch(NULL, &next->tree, &next->identity, &next->boundary,
+                &after, batch.data, batch.size) < 0)
+            goto done;
         next->boundary = after;
     }
     char digest[SNAG_SHA256_HEX_LEN + 1u];
     binary_hex(digest, next->boundary.digest, sizeof(next->boundary.digest));
-    if (tail && !empty && (next->boundary.end != (uint64_t)tail->offset ||
-        next->boundary.next_seq != tail->next_seq || strcmp(digest, tail->prev_sha256))) {
+    if (tail && !empty &&
+        (next->boundary.end != (uint64_t)tail->offset ||
+            next->boundary.next_seq != tail->next_seq || strcmp(digest, tail->prev_sha256))) {
         errno = EBADMSG;
         goto done;
     }
     unsigned char root[32];
-    if (next->boundary.end > INT64_MAX ||
-        snag_binary_index_tree_root(&next->tree, root) < 0 ||
-        snag_binary_checkpoint_index_encode(&next->access, &next->identity, &next->boundary,
-            &next->tree, NULL, 0u) < 0 ||
-        snag_binary_checkpoint_index_decode(next->access.data, next->access.len,
-            &next->identity, &next->boundary, root, &next->available) < 0) goto done;
+    if (next->boundary.end > INT64_MAX || snag_binary_index_tree_root(&next->tree, root) < 0 ||
+        snag_binary_checkpoint_index_encode(
+            &next->access, &next->identity, &next->boundary, &next->tree, NULL, 0u) < 0 ||
+        snag_binary_checkpoint_index_decode(next->access.data, next->access.len, &next->identity,
+            &next->boundary, root, &next->available) < 0)
+        goto done;
     next->index_fd = snag_open_read_security_at(session->dir_fd, "history.idx", false);
     if (next->index_fd < 0 && errno != ENOENT) goto done;
     if (next->index_fd >= 0) {
-        if (snag_store_verify_private_fd(next->index_fd, false, "history index",
-            error, error_size) < 0) goto done;
+        if (snag_store_verify_private_fd(
+                next->index_fd, false, "history index", error, error_size) < 0)
+            goto done;
         next->index_owned = true;
         next->index_configured = true;
     }
-    if (history_identity_valid(session, (int64_t)next->boundary.end, true,
-        error, error_size) < 0) goto done;
+    if (history_identity_valid(session, (int64_t)next->boundary.end, true, error, error_size) < 0)
+        goto done;
     next->checkpoint_configured = true; /* Read-only source custody, no publisher. */
     close_binary_session(session);
     session->binary = next;
@@ -4272,8 +4631,9 @@ done:;
     }
     snag_buf_free(&scratch);
     errno = saved;
-    if (rc < 0) return snag_errorf(error, error_size, "cannot snapshot native history: %s",
-        strerror(errno));
+    if (rc < 0)
+        return snag_errorf(
+            error, error_size, "cannot snapshot native history: %s", strerror(errno));
     return 0;
 }
 
@@ -4292,10 +4652,10 @@ snag_session_bind_binary(struct snag_session *session, const struct snag_binary_
 {
     if (!session || !identity || !boundary || !tree || !producer || !sources || session->binary ||
         session->pending_log || session->log_fd < 0 ||
-        (session->lock_fd < 0 && !session->snapshot_read_only) ||
-        session->log_end < 0 || boundary->end != (uint64_t)session->log_end ||
-        boundary->next_seq != session->next_seq || boundary->turns != session->turn_count ||
-        !boundary->next_seq || tree->count != boundary->next_seq - 1u ||
+        (session->lock_fd < 0 && !session->snapshot_read_only) || session->log_end < 0 ||
+        boundary->end != (uint64_t)session->log_end || boundary->next_seq != session->next_seq ||
+        boundary->turns != session->turn_count || !boundary->next_seq ||
+        tree->count != boundary->next_seq - 1u ||
         producer->queue_count != session->pending_queue_count ||
         sources->queue_count != session->pending_queue_count ||
         sources->process_count != session->process_count ||
@@ -4321,12 +4681,12 @@ snag_session_bind_binary(struct snag_session *session, const struct snag_binary_
         snag_binary_header_decode(bytes, sizeof(bytes), &found, &initial) < 0 ||
         found.created_ms != identity->created_ms ||
         memcmp(found.id, identity->id, sizeof(found.id))) {
-        return snag_fail(error, error_size, EINVAL,
-            "native session boundary does not match journal");
+        return snag_fail(
+            error, error_size, EINVAL, "native session boundary does not match journal");
     }
     if (boundary->next_seq == 1u && !binary_anchor_equal(boundary, &initial)) {
-        return snag_fail(error, error_size, EINVAL,
-            "native initial boundary does not match header");
+        return snag_fail(
+            error, error_size, EINVAL, "native initial boundary does not match header");
     }
     struct snag_binary_session *binary = calloc(1u, sizeof(*binary));
     if (!binary) return snag_fail(error, error_size, ENOMEM, "cannot stage native session owner");
@@ -4348,8 +4708,8 @@ snag_session_bind_binary(struct snag_session *session, const struct snag_binary_
 }
 
 int
-snag_session_binary_index_setup(struct snag_session *session, int fd,
-    char *error, size_t error_size)
+snag_session_binary_index_setup(
+    struct snag_session *session, int fd, char *error, size_t error_size)
 {
     if (!session || fd < 0)
         return snag_fail(error, error_size, EINVAL, "invalid native index attachment");
@@ -4359,8 +4719,7 @@ snag_session_binary_index_setup(struct snag_session *session, int fd,
     if (!binary) return snag_fail(error, error_size, ENOTSUP, "session has no native owner");
     if (binary->faulted)
         return snag_fail(error, error_size, ESTALE, "native session needs fresh recovery");
-    if (binary->candidate)
-        return snag_fail(error, error_size, EBUSY, "native commit is pending");
+    if (binary->candidate) return snag_fail(error, error_size, EBUSY, "native commit is pending");
     if (snag_binary_io_index_setup(binary->io, fd, &binary->identity, &binary->tree) < 0)
         return snag_errorf(error, error_size, "cannot attach native index: %s", strerror(errno));
     binary->index_configured = true;
@@ -4369,8 +4728,8 @@ snag_session_binary_index_setup(struct snag_session *session, int fd,
 }
 
 int
-snag_session_binary_index_adopt(struct snag_session *session, int fd,
-    char *error, size_t error_size)
+snag_session_binary_index_adopt(
+    struct snag_session *session, int fd, char *error, size_t error_size)
 {
     int rc = snag_session_binary_index_setup(session, fd, error, error_size);
     if (!rc) session->binary->index_owned = true;
@@ -4378,8 +4737,7 @@ snag_session_binary_index_adopt(struct snag_session *session, int fd,
 }
 
 int
-snag_session_binary_index_status(const struct snag_session *session,
-    char *error, size_t error_size)
+snag_session_binary_index_status(const struct snag_session *session, char *error, size_t error_size)
 {
     if (!session) return snag_fail(error, error_size, EINVAL, "invalid native index status");
     const struct snag_binary_session *binary = session->binary;
@@ -4388,8 +4746,8 @@ snag_session_binary_index_status(const struct snag_session *session,
     if (binary->faulted)
         return snag_fail(error, error_size, ESTALE, "native session needs fresh recovery");
     if (binary->index_error)
-        return snag_fail(error, error_size, binary->index_error,
-            "native index unavailable: %s", strerror(binary->index_error));
+        return snag_fail(error, error_size, binary->index_error, "native index unavailable: %s",
+            strerror(binary->index_error));
     return 0;
 }
 
@@ -4404,21 +4762,22 @@ snag_session_binary_projection_read(const struct snag_session *session, uint64_t
     if (binary->faulted) return snag_fail(error, error_size, ESTALE, "native writer is faulted");
     if (!binary->checkpoint_configured)
         return snag_fail(error, error_size, ENOTSUP, "native source custody is not installed");
-    int rc = snag_binary_checkpoint_projection_read(session->log_fd, &binary->boundary,
-        &binary->available, sequence, type, out);
+    int rc = snag_binary_checkpoint_projection_read(
+        session->log_fd, &binary->boundary, &binary->available, sequence, type, out);
     if (rc < 0 && errno == ENOENT && binary->index_configured) {
         struct snag_buf bytes = {.max = SIZE_MAX};
-        rc = snag_binary_checkpoint_query_read(session->log_fd, binary->index_fd,
-            &binary->boundary, &binary->available, &binary->tree, &sequence, 1u,
-            NULL, NULL, &bytes);
+        rc = snag_binary_checkpoint_query_read(session->log_fd, binary->index_fd, &binary->boundary,
+            &binary->available, &binary->tree, &sequence, 1u, NULL, NULL, &bytes);
         if (!rc) {
             unsigned char root[32];
             struct snag_binary_checkpoint_index query;
             rc = snag_binary_index_tree_root(&binary->tree, root);
-            if (!rc) rc = snag_binary_checkpoint_index_decode(bytes.data, bytes.len,
-                &binary->identity, &binary->boundary, root, &query);
-            if (!rc) rc = snag_binary_checkpoint_projection_read(session->log_fd,
-                &binary->boundary, &query, sequence, type, out);
+            if (!rc)
+                rc = snag_binary_checkpoint_index_decode(
+                    bytes.data, bytes.len, &binary->identity, &binary->boundary, root, &query);
+            if (!rc)
+                rc = snag_binary_checkpoint_projection_read(
+                    session->log_fd, &binary->boundary, &query, sequence, type, out);
         }
         int saved = errno;
         snag_buf_free(&bytes);
@@ -4461,12 +4820,12 @@ native_history_query(struct native_history *history, uint64_t sequence)
     history->query_bytes.len = 0u;
     if (history->index_fd < 0) return snag_errno(ENOENT);
     if (snag_binary_checkpoint_query_read(history->fd, history->index_fd, &history->through,
-        &history->available, &history->frontier, &sequence, 1u, native_history_cancelled,
-        history, &history->query_bytes) < 0) {
+            &history->available, &history->frontier, &sequence, 1u, native_history_cancelled,
+            history, &history->query_bytes) < 0) {
         return -1;
     }
     if (snag_binary_checkpoint_index_decode(history->query_bytes.data, history->query_bytes.len,
-        &history->available.identity, &history->through, history->root, &history->query) < 0) {
+            &history->available.identity, &history->through, history->root, &history->query) < 0) {
         return -1;
     }
     history->has_query = true;
@@ -4474,27 +4833,28 @@ native_history_query(struct native_history *history, uint64_t sequence)
 }
 
 static int
-native_history_capture(struct native_history *history, uint64_t first,
-    struct snag_binary_cursor *out)
+native_history_capture(
+    struct native_history *history, uint64_t first, struct snag_binary_cursor *out)
 {
     const struct snag_journal_cursor *public = history->cursor;
     static const char zero[] = "0000000000000000000000000000000000000000000000000000000000000000";
     /* A sequence-based source query supplies no serialized physical cut.
      * Resolve its predecessor canonically, including admitted semantic roots. */
     bool begin = first || (!public->next_seq && !public->offset && !public->prev_sha256[0]) ||
-        (public->next_seq == 1u && !public->offset &&
-            !memcmp(public->prev_sha256, zero, sizeof(zero)));
+                 (public->next_seq == 1u && !public->offset &&
+                     !memcmp(public->prev_sha256, zero, sizeof(zero)));
     uint64_t sequence = first ? first : begin ? 1u : public->next_seq;
-    if (!sequence || sequence > history->through.next_seq || (!begin &&
-        (public->offset < 0 || (uint64_t)public->offset > history->through.end ||
-            public->prev_sha256[SNAG_SHA256_HEX_LEN] ||
-            !snag_hex_is_lower(public->prev_sha256, SNAG_SHA256_HEX_LEN)))) {
+    if (!sequence || sequence > history->through.next_seq ||
+        (!begin && (public->offset < 0 || (uint64_t)public->offset > history->through.end ||
+                       public->prev_sha256[SNAG_SHA256_HEX_LEN] ||
+                       !snag_hex_is_lower(public->prev_sha256, SNAG_SHA256_HEX_LEN)))) {
         return snag_errno(EINVAL);
     }
     struct snag_binary_cursor captured;
     if (sequence == history->through.next_seq) {
         captured = (struct snag_binary_cursor){.before = history->through,
-            .next_seq = sequence, .record_offset = SNAG_BINARY_BATCH_HEADER_SIZE};
+            .next_seq = sequence,
+            .record_offset = SNAG_BINARY_BATCH_HEADER_SIZE};
     } else {
         struct snag_buf scratch = {.max = SNAG_BINARY_BATCH_MAX};
         struct snag_binary_batch batch, checked;
@@ -4521,8 +4881,8 @@ native_history_capture(struct native_history *history, uint64_t first,
     }
     char digest[SNAG_SHA256_HEX_LEN + 1u];
     binary_hex(digest, captured.before.digest, sizeof(captured.before.digest));
-    if (!begin && ((uint64_t)public->offset != captured.before.end ||
-        strcmp(public->prev_sha256, digest))) {
+    if (!begin &&
+        ((uint64_t)public->offset != captured.before.end || strcmp(public->prev_sha256, digest))) {
         return snag_errno(EINVAL);
     }
     *out = captured;
@@ -4536,12 +4896,12 @@ native_history_visit(void *opaque, const struct snag_binary_record *record, uint
     struct native_history *history = opaque;
     const char *type = NULL;
     json_t *data = NULL;
-    int rc = snag_binary_checkpoint_record_project(history->fd, &history->through,
-        &history->available, record, sequence, &type, &data);
+    int rc = snag_binary_checkpoint_record_project(
+        history->fd, &history->through, &history->available, record, sequence, &type, &data);
     if (rc < 0 && errno == ENOENT && history->index_fd >= 0) {
         if (history->has_query) {
-            rc = snag_binary_checkpoint_record_project(history->fd,
-                &history->through, &history->query, record, sequence, &type, &data);
+            rc = snag_binary_checkpoint_record_project(
+                history->fd, &history->through, &history->query, record, sequence, &type, &data);
         }
         if (rc < 0 && errno == ENOENT) {
             rc = native_history_query(history, sequence);
@@ -4570,8 +4930,8 @@ native_history_visit(void *opaque, const struct snag_binary_record *record, uint
     }
     int result = 0;
     if (!rc) {
-        result = history->visit(history->opaque, NULL, sequence, type, data,
-            history->error, history->error_size);
+        result = history->visit(
+            history->opaque, NULL, sequence, type, data, history->error, history->error_size);
     }
     json_decref(data);
     if (result < 0) {
@@ -4600,8 +4960,8 @@ native_history_pin(struct snag_session *session, struct native_history *history)
         return snag_fail(history->error, history->error_size, ESTALE, "native writer is faulted");
     }
     if (!binary->checkpoint_configured) {
-        return snag_fail(history->error, history->error_size, ENOTSUP,
-            "native source custody is not installed");
+        return snag_fail(
+            history->error, history->error_size, ENOTSUP, "native source custody is not installed");
     }
     if (binary->boundary.end > INT64_MAX) return snag_errno(EOVERFLOW);
     history->fd = session->log_fd;
@@ -4633,8 +4993,8 @@ native_history_done(struct native_history *history, int rc)
     snag_buf_free(&history->access);
     errno = saved;
     if (rc < 0 && !history->callback_failed) {
-        return snag_errorf(history->error, history->error_size,
-            "cannot read native history: %s", strerror(errno));
+        return snag_errorf(
+            history->error, history->error_size, "cannot read native history: %s", strerror(errno));
     }
     return rc < 0 ? -1 : 0;
 }
@@ -4650,7 +5010,7 @@ native_history_cursor(struct snag_session *session, uint64_t position, bool by_o
     struct snag_binary_batch batch, checked;
     uint64_t sequence = position;
     if (!rc && ((by_offset && position == history.through.end) ||
-        (!by_offset && (!position || position == history.through.next_seq)))) {
+                   (!by_offset && (!position || position == history.through.next_seq)))) {
         sequence = history.through.next_seq;
     } else if (!rc && by_offset) {
         if (!position) position = SNAG_BINARY_HEADER_SIZE;
@@ -4666,18 +5026,18 @@ native_history_cursor(struct snag_session *session, uint64_t position, bool by_o
         if (!rc && before.end != position) rc = snag_errno(EINVAL);
         sequence = before.next_seq;
     } else if (!rc) {
-        rc = snag_binary_checkpoint_batch_find(history.fd, &history.through,
-            &history.available, sequence, &scratch, &batch, &before);
+        rc = snag_binary_checkpoint_batch_find(
+            history.fd, &history.through, &history.available, sequence, &scratch, &batch, &before);
         if (rc < 0 && errno == ENOENT && history.index_fd >= 0) {
             rc = native_history_query(&history, sequence);
-            if (!rc) rc = snag_binary_checkpoint_batch_find(history.fd, &history.through,
-                &history.query, sequence, &scratch, &batch, &before);
+            if (!rc)
+                rc = snag_binary_checkpoint_batch_find(history.fd, &history.through, &history.query,
+                    sequence, &scratch, &batch, &before);
         }
         if (!rc) rc = snag_binary_batch_decode(batch.data, batch.size, &before, &checked, &after);
     }
     if (!rc) {
-        struct snag_journal_cursor found = {.offset = (int64_t)before.end,
-            .next_seq = sequence};
+        struct snag_journal_cursor found = {.offset = (int64_t)before.end, .next_seq = sequence};
         binary_hex(found.prev_sha256, before.digest, sizeof(before.digest));
         if (sequence == 1u) found.offset = 0;
         *out = found;
@@ -4687,8 +5047,8 @@ native_history_cursor(struct snag_session *session, uint64_t position, bool by_o
 }
 
 static int
-native_history_output(void *opaque, const struct snag_binary_record *record,
-    uint64_t sequence, const struct snag_binary_cursor *after)
+native_history_output(void *opaque, const struct snag_binary_record *record, uint64_t sequence,
+    const struct snag_binary_cursor *after)
 {
     struct native_history *history = opaque;
     struct snag_binary_tool_output_ref *ref = history->opaque;
@@ -4698,47 +5058,47 @@ native_history_output(void *opaque, const struct snag_binary_record *record,
     if (record->flags || record->kind != SNAG_BINARY_TOOL_FINISHED ||
         snag_binary_event_decode(record, &event) < 0 ||
         !event.data.tool_finished.result.has_output_ref ||
-        !event.data.tool_finished.result.output_ref.native) return snag_errno(EINVAL);
+        !event.data.tool_finished.result.output_ref.native)
+        return snag_errno(EINVAL);
     *ref = event.data.tool_finished.result.output_ref;
     return 0;
 }
 
 int
 snag_session_history_output_range(struct snag_session *session, uint64_t sequence,
-    const json_t *reference, struct snag_journal_cursor *begin,
-    struct snag_journal_cursor *end, char *error, size_t error_size)
+    const json_t *reference, struct snag_journal_cursor *begin, struct snag_journal_cursor *end,
+    char *error, size_t error_size)
 {
     uint64_t first, last;
     if (!sequence || sequence >= session->next_seq ||
         snag_json_integer_u64(reference, "log_start", &first) < 0 ||
-        snag_json_integer_u64(reference, "log_end", &last) < 0 || first > last ||
-        last > INT64_MAX) return snag_errno(EINVAL);
+        snag_json_integer_u64(reference, "log_end", &last) < 0 || first > last || last > INT64_MAX)
+        return snag_errno(EINVAL);
     struct snag_journal_cursor from, to;
     if (session->binary) {
         struct snag_binary_tool_output_ref ref = {0};
-        struct native_history history = {.opaque = &ref, .error = error,
-            .error_size = error_size};
+        struct native_history history = {.opaque = &ref, .error = error, .error_size = error_size};
         struct snag_binary_cursor cursor;
         int rc = native_history_pin(session, &history);
         if (!rc) rc = native_history_capture(&history, sequence, &cursor);
         if (!rc) {
             rc = snag_binary_checkpoint_query_cursor_read(history.fd, history.index_fd,
-                &history.through, &history.available, &history.frontier, sequence + 1u,
-                &cursor, native_history_output, native_history_cancelled, &history);
+                &history.through, &history.available, &history.frontier, sequence + 1u, &cursor,
+                native_history_output, native_history_cancelled, &history);
         }
         if (native_history_done(&history, rc) < 0) return -1;
         if (!ref.first_sequence || ref.first_sequence > ref.end_sequence ||
             ref.end_sequence > sequence || ref.log_start != first || ref.log_end != last)
             return snag_errno(EINVAL);
-        if (snag_session_history_cursor_before(session, ref.first_sequence,
-                &from, error, error_size) < 0 ||
-            snag_session_history_cursor_before(session, ref.end_sequence,
-                &to, error, error_size) < 0) return -1;
+        if (snag_session_history_cursor_before(
+                session, ref.first_sequence, &from, error, error_size) < 0 ||
+            snag_session_history_cursor_before(session, ref.end_sequence, &to, error, error_size) <
+                0)
+            return -1;
     } else {
-        if (snag_session_history_cursor_at(session, (int64_t)first,
-                &from, error, error_size) < 0 ||
-            snag_session_history_cursor_at(session, (int64_t)last,
-                &to, error, error_size) < 0) return -1;
+        if (snag_session_history_cursor_at(session, (int64_t)first, &from, error, error_size) < 0 ||
+            snag_session_history_cursor_at(session, (int64_t)last, &to, error, error_size) < 0)
+            return -1;
     }
     if (to.next_seq > sequence) return snag_errno(EINVAL);
     *begin = from;
@@ -4748,11 +5108,15 @@ snag_session_history_output_range(struct snag_session *session, uint64_t sequenc
 
 static int
 native_history_forward(struct snag_session *session, struct snag_journal_cursor *cursor,
-    uint64_t first, size_t scan_bytes, snag_session_event_fn visit, void *opaque,
-    char *error, size_t error_size)
+    uint64_t first, size_t scan_bytes, snag_session_event_fn visit, void *opaque, char *error,
+    size_t error_size)
 {
-    struct native_history history = {.cursor = cursor, .remaining = scan_bytes,
-        .visit = visit, .opaque = opaque, .error = error, .error_size = error_size};
+    struct native_history history = {.cursor = cursor,
+        .remaining = scan_bytes,
+        .visit = visit,
+        .opaque = opaque,
+        .error = error,
+        .error_size = error_size};
     int rc = native_history_pin(session, &history);
     struct snag_binary_cursor work;
     if (!rc) rc = native_history_capture(&history, first, &work);
@@ -4775,20 +5139,21 @@ native_suffix_visit(void *opaque, const struct snag_session *state, uint64_t seq
 {
     struct native_suffix_callback *callback = opaque;
     /* This full suffix API ignores positive results, unlike paged history. */
-    return callback->visit(callback->opaque, state, sequence, type, data,
-        error, error_size) < 0 ? -1 : 0;
+    return callback->visit(callback->opaque, state, sequence, type, data, error, error_size) < 0
+               ? -1
+               : 0;
 }
 
 static int
 native_history_since(struct snag_session *session, const struct snag_process_state *process,
     snag_session_event_fn visit, void *opaque, char *error, size_t error_size)
 {
-    struct snag_journal_cursor cursor = {.offset = (int64_t)process->log_offset,
-        .next_seq = process->log_seq};
+    struct snag_journal_cursor cursor = {
+        .offset = (int64_t)process->log_offset, .next_seq = process->log_seq};
     memcpy(cursor.prev_sha256, process->log_hash, sizeof(cursor.prev_sha256));
     struct native_suffix_callback callback = {.visit = visit, .opaque = opaque};
-    return native_history_forward(session, &cursor, 0u, SIZE_MAX, native_suffix_visit,
-        &callback, error, error_size);
+    return native_history_forward(
+        session, &cursor, 0u, SIZE_MAX, native_suffix_visit, &callback, error, error_size);
 }
 
 static int
@@ -4803,8 +5168,8 @@ native_history_each(struct snag_session *session, snag_session_event_fn visit, v
     struct snag_binary_recovery recovery;
     struct snag_session verifier;
     snag_session_init(&verifier);
-    int rc = snag_store_reconcile_binary_prefix(session, &verifier, &through,
-        visit, opaque, &recovery, NULL, error, error_size);
+    int rc = snag_store_reconcile_binary_prefix(
+        session, &verifier, &through, visit, opaque, &recovery, NULL, error, error_size);
     int saved = errno;
     snag_session_close(&verifier);
     errno = saved;
@@ -4813,11 +5178,14 @@ native_history_each(struct snag_session *session, snag_session_event_fn visit, v
 
 static int
 native_history_reverse(struct snag_session *session, uint64_t before, size_t scan_bytes,
-    snag_session_event_fn visit, void *opaque, uint64_t *next_before,
-    char *error, size_t error_size)
+    snag_session_event_fn visit, void *opaque, uint64_t *next_before, char *error,
+    size_t error_size)
 {
     struct native_history history = {.remaining = scan_bytes,
-        .visit = visit, .opaque = opaque, .error = error, .error_size = error_size};
+        .visit = visit,
+        .opaque = opaque,
+        .error = error,
+        .error_size = error_size};
     int rc = native_history_pin(session, &history);
     if (!before || before > history.through.next_seq) before = history.through.next_seq;
     struct snag_journal_cursor published = session->history_cursor;
@@ -4828,7 +5196,10 @@ native_history_reverse(struct snag_session *session, uint64_t before, size_t sca
     }
     struct snag_buf bytes = {.max = SNAG_BINARY_BATCH_MAX};
     struct snag_buf rows = {.max = SIZE_MAX};
-    struct reverse_row { uint32_t offset; uint64_t turn; };
+    struct reverse_row {
+        uint32_t offset;
+        uint64_t turn;
+    };
     while (!rc && before > 1u && history.remaining && !history.stopped) {
         struct snag_journal_cursor cursor = {0};
         struct snag_binary_cursor work = {0};
@@ -4837,8 +5208,8 @@ native_history_reverse(struct snag_session *session, uint64_t before, size_t sca
         if (rc < 0) break;
         struct snag_binary_batch batch;
         struct snag_binary_anchor after;
-        rc = snag_binary_batch_read(history.fd, history.through.end, &work.before,
-            &bytes, &batch, &after);
+        rc = snag_binary_batch_read(
+            history.fd, history.through.end, &work.before, &bytes, &batch, &after);
         if (rc != 0 || after.end > history.through.end ||
             after.next_seq > history.through.next_seq || after.turns > history.through.turns ||
             ((after.end == history.through.end || after.next_seq == history.through.next_seq) &&
@@ -4857,34 +5228,58 @@ native_history_reverse(struct snag_session *session, uint64_t before, size_t sca
             struct reverse_row row = {.offset = (uint32_t)offset};
             next = snag_binary_record_next(&batch, &offset, &record, &sequence);
             if (next != 0) break;
-            if (native_history_cancelled(&history)) { next = snag_errno(ECANCELED); break; }
+            if (native_history_cancelled(&history)) {
+                next = snag_errno(ECANCELED);
+                break;
+            }
             if (record.kind == SNAG_BINARY_TURN_STARTED) {
                 struct snag_binary_event event;
                 if (turn == UINT64_MAX || snag_binary_event_decode(&record, &event) < 0 ||
-                    event.data.started.number != ++turn) { next = snag_errno(EINVAL); break; }
+                    event.data.started.number != ++turn) {
+                    next = snag_errno(EINVAL);
+                    break;
+                }
             }
             row.turn = turn;
-            if (snag_buf_append(&rows, &row, sizeof(row)) < 0) { next = -1; break; }
+            if (snag_buf_append(&rows, &row, sizeof(row)) < 0) {
+                next = -1;
+                break;
+            }
         }
-        if (next < 0 || turn != after.turns) { rc = next < 0 ? -1 : snag_errno(EINVAL); break; }
+        if (next < 0 || turn != after.turns) {
+            rc = next < 0 ? -1 : snag_errno(EINVAL);
+            break;
+        }
         while (before > work.before.next_seq && history.remaining && !history.stopped) {
-            if (native_history_cancelled(&history)) { rc = snag_errno(ECANCELED); break; }
+            if (native_history_cancelled(&history)) {
+                rc = snag_errno(ECANCELED);
+                break;
+            }
             uint64_t wanted = before - 1u;
             struct reverse_row row;
             size_t index = (size_t)(wanted - work.before.next_seq);
-            if (index >= rows.len / sizeof(row)) { rc = snag_errno(EINVAL); break; }
+            if (index >= rows.len / sizeof(row)) {
+                rc = snag_errno(EINVAL);
+                break;
+            }
             memcpy(&row, rows.data + index * sizeof(row), sizeof(row));
             offset = row.offset;
             if (snag_binary_record_next(&batch, &offset, &record, &sequence) != 0 ||
-                sequence != wanted) { rc = snag_errno(EINVAL); break; }
+                sequence != wanted) {
+                rc = snag_errno(EINVAL);
+                break;
+            }
             if (sequence < history.available.boundary.next_seq) {
                 struct snag_binary_index_entry entry;
                 rc = snag_binary_checkpoint_index_find(&history.available, sequence, &entry);
                 if (rc > 0 && history.index_fd >= 0)
                     rc = snag_binary_index_read_verified(history.index_fd,
-                        &history.available.identity, history.through.next_seq - 1u,
-                        history.root, sequence, &entry);
-                if (rc != 0) { if (rc > 0) rc = snag_errno(ENOENT); break; }
+                        &history.available.identity, history.through.next_seq - 1u, history.root,
+                        sequence, &entry);
+                if (rc != 0) {
+                    if (rc > 0) rc = snag_errno(ENOENT);
+                    break;
+                }
                 if (entry.batch_offset != work.before.end || entry.record_offset != row.offset ||
                     entry.kind != record.kind || entry.turn != row.turn ||
                     memcmp(entry.batch_digest, after.digest, sizeof(after.digest))) {
@@ -4893,10 +5288,12 @@ native_history_reverse(struct snag_session *session, uint64_t before, size_t sca
                 }
             }
             struct snag_binary_cursor cut = {.before = work.before,
-                .next_seq = sequence + 1u, .record_offset = (uint32_t)offset};
-            if (cut.next_seq == after.next_seq) cut = (struct snag_binary_cursor){
-                .before = after, .next_seq = after.next_seq,
-                .record_offset = SNAG_BINARY_BATCH_HEADER_SIZE};
+                .next_seq = sequence + 1u,
+                .record_offset = (uint32_t)offset};
+            if (cut.next_seq == after.next_seq)
+                cut = (struct snag_binary_cursor){.before = after,
+                    .next_seq = after.next_seq,
+                    .record_offset = SNAG_BINARY_BATCH_HEADER_SIZE};
             cursor.next_seq = 0u;
             rc = native_history_visit(&history, &record, sequence, &cut);
             if (rc < 0 || cursor.next_seq != before) break;
@@ -4935,16 +5332,16 @@ snag_session_binary_checkpoint_capture(const struct snag_session *session,
 }
 
 static bool
-binary_access_within(const struct snag_binary_session *binary,
-    const struct snag_binary_checkpoint_index *available)
+binary_access_within(
+    const struct snag_binary_session *binary, const struct snag_binary_checkpoint_index *available)
 {
     return available->identity.created_ms == binary->identity.created_ms &&
-        !memcmp(available->identity.id, binary->identity.id, sizeof(binary->identity.id)) &&
-        available->boundary.next_seq <= binary->boundary.next_seq &&
-        available->boundary.end <= binary->boundary.end &&
-        (available->boundary.next_seq != binary->boundary.next_seq ||
-            (binary_anchor_equal(&available->boundary, &binary->boundary) &&
-                !memcmp(&available->tree, &binary->tree, sizeof(binary->tree))));
+           !memcmp(available->identity.id, binary->identity.id, sizeof(binary->identity.id)) &&
+           available->boundary.next_seq <= binary->boundary.next_seq &&
+           available->boundary.end <= binary->boundary.end &&
+           (available->boundary.next_seq != binary->boundary.next_seq ||
+               (binary_anchor_equal(&available->boundary, &binary->boundary) &&
+                   !memcmp(&available->tree, &binary->tree, sizeof(binary->tree))));
 }
 
 int
@@ -4961,15 +5358,16 @@ snag_session_binary_checkpoint_setup(struct snag_session *session, int directory
     if (binary->checkpoint_configured || binary->candidate)
         return snag_fail(error, error_size, EBUSY, "native checkpoint setup is not idle");
     if (!binary_access_within(binary, available))
-        return snag_fail(error, error_size, EINVAL,
-            "native access does not match captured history");
+        return snag_fail(
+            error, error_size, EINVAL, "native access does not match captured history");
     struct snag_buf staged = {.max = SIZE_MAX};
     struct snag_binary_checkpoint_index pinned;
     unsigned char root[32];
     int rc = snag_binary_checkpoint_index_copy(&staged, available);
     if (!rc) rc = snag_binary_index_tree_root(&available->tree, root);
-    if (!rc) rc = snag_binary_checkpoint_index_decode(staged.data, staged.len,
-        &binary->identity, &available->boundary, root, &pinned);
+    if (!rc)
+        rc = snag_binary_checkpoint_index_decode(
+            staged.data, staged.len, &binary->identity, &available->boundary, root, &pinned);
     if (!rc && !session->snapshot_read_only)
         rc = snag_binary_io_checkpoint_setup(binary->io, directory, generations, sequences);
     if (rc < 0) {
@@ -4985,9 +5383,9 @@ snag_session_binary_checkpoint_setup(struct snag_session *session, int directory
 
 int
 snag_session_binary_snapshot_capture(const struct snag_session *session,
-    const struct snag_binary_checkpoint_index *available,
-    struct snag_binary_io_snapshot *snapshot, struct snag_binary_index_tree *tree,
-    struct snag_binary_checkpoint_sources *sources, char *error, size_t error_size)
+    const struct snag_binary_checkpoint_index *available, struct snag_binary_io_snapshot *snapshot,
+    struct snag_binary_index_tree *tree, struct snag_binary_checkpoint_sources *sources,
+    char *error, size_t error_size)
 {
     if (!session || !snapshot || !tree || !sources)
         return snag_fail(error, error_size, EINVAL, "invalid native snapshot capture");
@@ -4999,13 +5397,13 @@ snag_session_binary_snapshot_capture(const struct snag_session *session,
         return snag_fail(error, error_size, ENOTSUP, "native provider cache is not captured");
     if (!available) {
         if (!binary->checkpoint_configured)
-            return snag_fail(error, error_size, ENOTSUP,
-                "native checkpoint custody is not installed");
+            return snag_fail(
+                error, error_size, ENOTSUP, "native checkpoint custody is not installed");
         available = &binary->available;
     }
     if (!binary_access_within(binary, available)) {
-        return snag_fail(error, error_size, EINVAL,
-            "native access does not match captured history");
+        return snag_fail(
+            error, error_size, EINVAL, "native access does not match captured history");
     }
     json_t *context = session->on_checkpoint(session->on_commit_opaque, session);
     if (!context)
@@ -5013,21 +5411,23 @@ snag_session_binary_snapshot_capture(const struct snag_session *session,
     const json_t *recent = json_object_get(context, "recent");
     const json_t *history = json_object_get(context, "history_sources");
     struct snag_binary_io_snapshot staged = {.identity = binary->identity,
-        .boundary = binary->boundary, .core = {.max = SIZE_MAX}, .provider = {.max = SIZE_MAX},
-        .access = {.max = SIZE_MAX}, .core_version = SNAG_BINARY_CORE_VERSION,
+        .boundary = binary->boundary,
+        .core = {.max = SIZE_MAX},
+        .provider = {.max = SIZE_MAX},
+        .access = {.max = SIZE_MAX},
+        .core_version = SNAG_BINARY_CORE_VERSION,
         .provider_version = 1u};
     struct snag_binary_checkpoint_sources origins = {0};
     int rc = -1;
     if (!json_is_array(recent) || !json_is_array(history) ||
         session->next_seq != binary->boundary.next_seq) {
-        snag_fail(error, error_size, EINVAL,
-            "native provider seam is not available at the frontier");
+        snag_fail(
+            error, error_size, EINVAL, "native provider seam is not available at the frontier");
         goto done;
     }
     if (snag_binary_checkpoint_sources_clone(&origins, &binary->sources) < 0 ||
         snag_binary_checkpoint_core_encode(&staged.core, &origins, session) < 0 ||
-        snag_binary_checkpoint_provider_encode(&staged.provider,
-            session, recent, history) < 0) {
+        snag_binary_checkpoint_provider_encode(&staged.provider, session, recent, history) < 0) {
         snag_fail(error, error_size, errno, "cannot freeze native checkpoint sections");
         goto done;
     }
@@ -5065,7 +5465,8 @@ static int
 binary_voice_reference(struct snag_binary_session *binary, struct snag_binary_record *record)
 {
     if (record->kind != SNAG_BINARY_VOICE_TRANSFER_RECORD &&
-        record->kind != SNAG_BINARY_VOICE_TRANSFER_ADOPTED) return 0;
+        record->kind != SNAG_BINARY_VOICE_TRANSFER_ADOPTED)
+        return 0;
     struct snag_binary_event event;
     if (snag_binary_event_decode(record, &event) < 0) return -1;
     struct binary_voice_import *proof = &binary->proposed_voice_import;
@@ -5090,13 +5491,13 @@ binary_voice_reference(struct snag_binary_session *binary, struct snag_binary_re
     binary_hex(target, value->transfer.target, sizeof(value->transfer.target));
     binary_hex(source, value->transfer.source, sizeof(value->transfer.source));
     binary_hex(hash, value->begin_sha256, sizeof(value->begin_sha256));
-    if (value->native || !proof->id[0] || strcmp(id, proof->id) ||
-        strcmp(target, session_id) || strcmp(source, proof->source) ||
-        value->transfer.source_as_of != proof->source_as_of ||
+    if (value->native || !proof->id[0] || strcmp(id, proof->id) || strcmp(target, session_id) ||
+        strcmp(source, proof->source) || value->transfer.source_as_of != proof->source_as_of ||
         value->transfer.count != proof->count || proof->copied != proof->count ||
         value->begin_seq != proof->begin.next_seq ||
         value->begin_offset != (uint64_t)proof->begin.offset ||
-        strcmp(hash, proof->begin.prev_sha256)) return snag_errno(EINVAL);
+        strcmp(hash, proof->begin.prev_sha256))
+        return snag_errno(EINVAL);
     value->native = true;
     value->begin_offset = 0u;
     memset(value->begin_sha256, 0, sizeof(value->begin_sha256));
@@ -5114,8 +5515,8 @@ binary_voice_reference(struct snag_binary_session *binary, struct snag_binary_re
 }
 
 static int
-binary_prepare_candidate(struct snag_session *session, const char *type, json_t *data,
-    char *error, size_t error_size)
+binary_prepare_candidate(
+    struct snag_session *session, const char *type, json_t *data, char *error, size_t error_size)
 {
     struct snag_binary_session *binary = session->binary;
     struct snag_buf decoded = {.max = SNAG_BINARY_BATCH_MAX};
@@ -5131,51 +5532,56 @@ binary_prepare_candidate(struct snag_session *session, const char *type, json_t 
         goto fail;
     data = binary->data;
     struct snag_session *candidate = binary->candidate;
-    candidate->last_time_ms = session->next_seq == 1u ?
-        binary->identity.created_ms : snag_time_ms();
+    candidate->last_time_ms =
+        session->next_seq == 1u ? binary->identity.created_ms : snag_time_ms();
     stage = "reducer";
-    if (apply_event(candidate, type, data, session->next_seq, true, false,
-        error, error_size) < 0) goto fail;
+    if (apply_event(candidate, type, data, session->next_seq, true, false, error, error_size) < 0)
+        goto fail;
     enum snag_binary_kind kind;
     stage = "literal fields";
     if (snag_binary_legacy_encode(&binary->proposed.field, type, data, &kind) < 0) goto fail;
     struct snag_binary_record record = {.kind = (uint16_t)kind,
-        .version = snag_binary_event_version(kind), .timestamp_ms = candidate->last_time_ms,
-        .payload = binary->proposed.field.data, .size = binary->proposed.field.len};
+        .version = snag_binary_event_version(kind),
+        .timestamp_ms = candidate->last_time_ms,
+        .payload = binary->proposed.field.data,
+        .size = binary->proposed.field.len};
     stage = "voice import boundary";
     if (binary_voice_reference(binary, &record) < 0) goto fail;
     stage = "result range";
     if (snag_binary_producer_live_result(&binary->proposed, session, &record) < 0) goto fail;
     stage = "working references";
-    if (snag_binary_producer_reference(&binary->proposed, candidate, session->next_seq,
-        &record, data) < 0) goto fail;
+    if (snag_binary_producer_reference(
+            &binary->proposed, candidate, session->next_seq, &record, data) < 0)
+        goto fail;
     stage = "checkpoint origins";
-    if (snag_binary_checkpoint_sources_step(&binary->proposed_sources, candidate,
-        &record, session->next_seq, data) < 0) goto fail;
+    if (snag_binary_checkpoint_sources_step(
+            &binary->proposed_sources, candidate, &record, session->next_seq, data) < 0)
+        goto fail;
     stage = "batch";
-    if (snag_binary_batch_encode(&decoded, &binary->boundary, &record, 1u,
-        candidate->turn_count, &binary->proposed_boundary) < 0) goto fail;
+    if (snag_binary_batch_encode(&decoded, &binary->boundary, &record, 1u, candidate->turn_count,
+            &binary->proposed_boundary) < 0)
+        goto fail;
     binary->proposed_tree = binary->tree;
     stage = "frontier";
     if (snag_binary_index_tree_append_batch(NULL, &binary->proposed_tree, &binary->identity,
-        &binary->boundary, &binary->proposed_boundary, decoded.data, decoded.len) < 0) goto fail;
+            &binary->boundary, &binary->proposed_boundary, decoded.data, decoded.len) < 0)
+        goto fail;
     stage = "I/O admission";
     if (snag_binary_io_submit(binary->io, &record, 1u, candidate->turn_count) < 0) goto fail;
     binary->io_pending = true;
     snag_buf_free(&decoded);
     return 0;
-fail:
-    {
-        int code = errno;
-        snag_buf_free(&decoded);
-        binary_discard_candidate(binary);
-        return snag_fail(error, error_size, code, "cannot stage native %s event (%s)", type, stage);
-    }
+fail: {
+    int code = errno;
+    snag_buf_free(&decoded);
+    binary_discard_candidate(binary);
+    return snag_fail(error, error_size, code, "cannot stage native %s event (%s)", type, stage);
+}
 }
 
 static int
-binary_ack_candidate(struct snag_session *session, uint64_t *written_seq,
-    char *error, size_t error_size)
+binary_ack_candidate(
+    struct snag_session *session, uint64_t *written_seq, char *error, size_t error_size)
 {
     struct snag_binary_session *binary = session->binary;
     bool receipt = binary->receipt_candidate;
@@ -5195,12 +5601,12 @@ binary_ack_candidate(struct snag_session *session, uint64_t *written_seq,
     struct snag_binary_index_tree next = binary->tree;
     if (result.checkpoint_receipt != receipt ||
         !binary_anchor_equal(&result.durable, &binary->proposed_boundary) ||
-        snag_binary_index_tree_append_batch(NULL, &next, &binary->identity,
-            &binary->boundary, &result.durable, batch.data, batch.len) < 0) {
+        snag_binary_index_tree_append_batch(NULL, &next, &binary->identity, &binary->boundary,
+            &result.durable, batch.data, batch.len) < 0) {
         binary->faulted = true;
         snag_buf_free(&batch);
-        return snag_fail(error, error_size, ESTALE,
-            "native durability ACK violates staged boundary");
+        return snag_fail(
+            error, error_size, ESTALE, "native durability ACK violates staged boundary");
     }
     snag_buf_free(&batch);
     uint64_t sequence = session->next_seq;
@@ -5231,8 +5637,9 @@ binary_ack_candidate(struct snag_session *session, uint64_t *written_seq,
     json_t *committed_data = binary->data;
     binary->type = NULL;
     binary->data = NULL;
-    if (!receipt && session->on_commit) session->on_commit(session->on_commit_opaque,
-        session, sequence, committed_type, committed_data);
+    if (!receipt && session->on_commit)
+        session->on_commit(
+            session->on_commit_opaque, session, sequence, committed_type, committed_data);
     free(committed_type);
     json_decref(committed_data);
     return 0;
@@ -5246,16 +5653,16 @@ commit_binary_session(struct snag_session *session, const char *type, json_t *da
     if (binary->receipt_candidate)
         return snag_fail(error, error_size, EBUSY, "native receipt still awaits durability");
     if (!type || !data || !strcmp(type, "session_checkpoint")) {
-        return snag_fail(error, error_size, ENOTSUP,
-            "native event requires its canonical producer");
+        return snag_fail(
+            error, error_size, ENOTSUP, "native event requires its canonical producer");
     }
     if (binary->faulted) {
         return snag_fail(error, error_size, ESTALE, "native session requires fresh recovery");
     }
     if (binary->candidate) {
         if (strcmp(type, binary->type) || !json_equal(data, binary->data)) {
-            return snag_fail(error, error_size, EBUSY,
-                "native transaction still awaits durability");
+            return snag_fail(
+                error, error_size, EBUSY, "native transaction still awaits durability");
         }
         if (!binary->io_pending) {
             if (!binary->retryable || snag_binary_io_retry(binary->io) < 0) {
@@ -5276,7 +5683,8 @@ binary_prepare_checkpoint_receipt(struct snag_session *session, char *error, siz
     struct snag_binary_session *binary = session->binary;
     const struct snag_binary_publication_result *published = &binary->checkpoint_result;
     struct snag_binary_checkpoint_receipt receipt = {.generation = published->generation,
-        .image_size = published->image_size, .boundary = published->boundary};
+        .image_size = published->image_size,
+        .boundary = published->boundary};
     memcpy(receipt.image_digest, published->image_digest, sizeof(receipt.image_digest));
     struct snag_buf payload = {.max = SIZE_MAX}, decoded = {.max = SIZE_MAX};
     binary->candidate = calloc(1u, sizeof(*binary->candidate));
@@ -5284,35 +5692,41 @@ binary_prepare_checkpoint_receipt(struct snag_session *session, char *error, siz
         snag_binary_producer_clone(&binary->proposed, &binary->producer) < 0 ||
         snag_binary_checkpoint_sources_clone(&binary->proposed_sources, &binary->sources) < 0 ||
         snag_binary_index_tree_root(&binary->checkpoint_tree, receipt.index_root) < 0 ||
-        snag_binary_checkpoint_receipt_encode(&payload, &receipt) < 0) goto fail;
+        snag_binary_checkpoint_receipt_encode(&payload, &receipt) < 0)
+        goto fail;
     struct snag_binary_record record = {.kind = SNAG_BINARY_CHECKPOINT_RECEIPT,
-        .version = SNAG_BINARY_CHECKPOINT_RECEIPT_VERSION, .flags = SNAG_BINARY_RECORD_OPTIONAL,
-        .timestamp_ms = binary->checkpoint_timestamp, .payload = payload.data, .size = payload.len};
-    if (snag_binary_batch_encode(&decoded, &binary->boundary, &record, 1u,
-        session->turn_count, &binary->proposed_boundary) < 0) goto fail;
+        .version = SNAG_BINARY_CHECKPOINT_RECEIPT_VERSION,
+        .flags = SNAG_BINARY_RECORD_OPTIONAL,
+        .timestamp_ms = binary->checkpoint_timestamp,
+        .payload = payload.data,
+        .size = payload.len};
+    if (snag_binary_batch_encode(&decoded, &binary->boundary, &record, 1u, session->turn_count,
+            &binary->proposed_boundary) < 0)
+        goto fail;
     binary->proposed_tree = binary->tree;
     if (snag_binary_index_tree_append_batch(NULL, &binary->proposed_tree, &binary->identity,
-        &binary->boundary, &binary->proposed_boundary, decoded.data, decoded.len) < 0) goto fail;
+            &binary->boundary, &binary->proposed_boundary, decoded.data, decoded.len) < 0)
+        goto fail;
     binary->candidate->last_time_ms = record.timestamp_ms;
     binary->candidate->checkpoint_seq = session->next_seq;
     binary->candidate->checkpoint_offset = (int64_t)binary->boundary.end;
     binary->proposed_sources.texts.through = binary->proposed_boundary.next_seq - 1u;
     binary->proposed_voice_import = binary->voice_import;
-    if (snag_binary_io_checkpoint_receipt_submit(binary->io, receipt.index_root,
-        record.timestamp_ms) < 0) goto fail;
+    if (snag_binary_io_checkpoint_receipt_submit(
+            binary->io, receipt.index_root, record.timestamp_ms) < 0)
+        goto fail;
     binary->receipt_candidate = true;
     binary->io_pending = true;
     snag_buf_free(&payload);
     snag_buf_free(&decoded);
     return 0;
-fail:
-    {
-        int code = errno;
-        snag_buf_free(&payload);
-        snag_buf_free(&decoded);
-        binary_discard_candidate(binary);
-        return snag_fail(error, error_size, code, "cannot stage native checkpoint receipt");
-    }
+fail: {
+    int code = errno;
+    snag_buf_free(&payload);
+    snag_buf_free(&decoded);
+    binary_discard_candidate(binary);
+    return snag_fail(error, error_size, code, "cannot stage native checkpoint receipt");
+}
 }
 
 static int
@@ -5334,12 +5748,11 @@ checkpoint_binary_session(struct snag_session *session, char *error, size_t erro
             struct snag_binary_io_snapshot snapshot = {0};
             struct snag_binary_index_tree tree;
             struct snag_binary_checkpoint_sources sources = {0};
-            int rc = snag_session_binary_snapshot_capture(session, NULL, &snapshot,
-                &tree, &sources, error, error_size);
+            int rc = snag_session_binary_snapshot_capture(
+                session, NULL, &snapshot, &tree, &sources, error, error_size);
             if (!rc) {
                 rc = snag_binary_io_checkpoint_submit(binary->io, &snapshot);
-                if (rc < 0)
-                    snag_fail(error, error_size, errno, "cannot submit native checkpoint");
+                if (rc < 0) snag_fail(error, error_size, errno, "cannot submit native checkpoint");
             }
             snag_binary_io_snapshot_free(&snapshot);
             snag_binary_checkpoint_sources_free(&sources);
@@ -5388,29 +5801,30 @@ snag_session_checkpoint(struct snag_session *session, char *error, size_t error_
 {
     if (session && session->snapshot_read_only)
         return snag_fail(error, error_size, EROFS, "cannot checkpoint a read-only snapshot");
-    if (session && session->binary)
-        return checkpoint_binary_session(session, error, error_size);
+    if (session && session->binary) return checkpoint_binary_session(session, error, error_size);
     if (!session || session->pending_log || session->log_fd < 0 || session->lock_fd < 0)
         return snag_fail(error, error_size, EINVAL, "session has no durable checkpoint boundary");
     json_t *state = snag_checkpoint_state_encode(session);
-    json_t *context = session->on_checkpoint ?
-        session->on_checkpoint(session->on_commit_opaque, session) : json_null();
+    json_t *context = session->on_checkpoint
+                          ? session->on_checkpoint(session->on_commit_opaque, session)
+                          : json_null();
     if (!state || !context) {
         json_decref(state);
         json_decref(context);
         return snag_fail(error, error_size, ENOMEM, "cannot materialize session checkpoint");
     }
-    json_t *data = json_pack("{s:o,s:o,s:i,s:i}", "state", state,
-                             "context", context, "snapshot_v",
-                             session->irc_conversations ? 3 :
-                             session->voice_history.adopted_seq ? 2 : 1, "format", 4);
+    json_t *data = json_pack("{s:o,s:o,s:i,s:i}", "state", state, "context", context, "snapshot_v",
+        session->irc_conversations           ? 3
+        : session->voice_history.adopted_seq ? 2
+                                             : 1,
+        "format", 4);
     if (!data) return snag_fail(error, error_size, ENOMEM, "cannot encode session checkpoint");
     return snag_session_commit(session, "session_checkpoint", data, NULL, error, error_size);
 }
 
 int
 snag_session_commit(struct snag_session *session, const char *type, json_t *data,
-                   uint64_t *written_seq, char *error, size_t error_size)
+    uint64_t *written_seq, char *error, size_t error_size)
 {
     if (session->snapshot_read_only) {
         json_decref(data);
@@ -5419,7 +5833,7 @@ snag_session_commit(struct snag_session *session, const char *type, json_t *data
     if (session->binary) {
         struct snag_binary_session *binary = session->binary;
         bool maintenance = type && data && binary->checkpoint_configured &&
-            strcmp(type, "session_checkpoint") && !session_closure_event(type);
+                           strcmp(type, "session_checkpoint") && !session_closure_event(type);
         if (maintenance && (!binary->candidate || binary->receipt_candidate) &&
             session->next_seq - 1u - session->checkpoint_seq >= 128u &&
             snag_session_checkpoint(session, error, error_size) < 0) {
@@ -5427,8 +5841,7 @@ snag_session_commit(struct snag_session *session, const char *type, json_t *data
             return -1;
         }
         int rc = commit_binary_session(session, type, data, written_seq, error, error_size);
-        if (!rc && maintenance &&
-            session->next_seq - 1u - session->checkpoint_seq >= 128u) {
+        if (!rc && maintenance && session->next_seq - 1u - session->checkpoint_seq >= 128u) {
             int64_t start = session->committed_start;
             int64_t end = session->committed_end;
             char ignored[128];
@@ -5472,8 +5885,8 @@ snag_session_commit(struct snag_session *session, const char *type, json_t *data
     if (!data || clone_session_state(session, &staged) < 0) {
         (void)snag_fail(error, error_size, ENOMEM, "cannot stage %s event", type);
     } else if ((staged.last_time_ms = snag_time_ms(),
-                apply_event(&staged, type, data, session->next_seq, true, false,
-                            error, error_size)) == 0) {
+                   apply_event(&staged, type, data, session->next_seq, true, false, error,
+                       error_size)) == 0) {
         /* Append updates the staged metadata too. No live state is adopted
          * until durable append succeeds; descriptors and dir_path are borrowed. */
         append_attempted = true;
@@ -5490,8 +5903,9 @@ snag_session_commit(struct snag_session *session, const char *type, json_t *data
         free_session_state(session);
         *session = staged;
         int64_t end = session->log_end;
-        if (session->on_commit) session->on_commit(session->on_commit_opaque,
-            session, session->next_seq - 1u, type, data);
+        if (session->on_commit)
+            session->on_commit(
+                session->on_commit_opaque, session, session->next_seq - 1u, type, data);
         /* No retroactive failure after a synced ordinary event. A failed
          * checkpoint prevents the next admission from growing its tail. */
         if (strcmp(type, "session_checkpoint") && !session_closure_event(type) &&
@@ -5514,20 +5928,26 @@ struct voice_queue_lookup {
 };
 
 static int
-voice_queue_find(void *opaque,const struct snag_session *state,uint64_t seq,const char *type,const json_t *data,char *error,size_t size)
+voice_queue_find(void *opaque, const struct snag_session *state, uint64_t seq, const char *type,
+    const json_t *data, char *error, size_t size)
 {
-    (void)state;(void)seq;
-    struct voice_queue_lookup *lookup=opaque;
-    if(strcmp(type,"future_turn_queued"))return 0;
-    const char *id=snag_json_string(data,"queue_id");
-    if(!id || strcmp(id,lookup->queue_id))return 0;
-    const json_t *source=json_object_get(data,"voice");
-    if(!voice_source_valid(source) ||
-        strcmp(snag_json_string(source,"connection_id"),snag_json_string(lookup->source,"connection_id")) ||
-        strcmp(snag_json_string(source,"input_id"),snag_json_string(lookup->source,"input_id"))) {
-        snag_errorf(error,size,"Voice input identity conflicts with an existing queued input");return -1;
+    (void)state;
+    (void)seq;
+    struct voice_queue_lookup *lookup = opaque;
+    if (strcmp(type, "future_turn_queued")) return 0;
+    const char *id = snag_json_string(data, "queue_id");
+    if (!id || strcmp(id, lookup->queue_id)) return 0;
+    const json_t *source = json_object_get(data, "voice");
+    if (!voice_source_valid(source) ||
+        strcmp(snag_json_string(source, "connection_id"),
+            snag_json_string(lookup->source, "connection_id")) ||
+        strcmp(
+            snag_json_string(source, "input_id"), snag_json_string(lookup->source, "input_id"))) {
+        snag_errorf(error, size, "Voice input identity conflicts with an existing queued input");
+        return -1;
     }
-    lookup->found=true;return 0;
+    lookup->found = true;
+    return 0;
 }
 
 int
@@ -5551,41 +5971,58 @@ snag_session_voice_prompt(const json_t *source, struct snag_buf *prompt, char *e
 }
 
 int
-snag_session_voice_queue(struct snag_session *session,const json_t *source,char id[SNAG_ID_HEX_LEN+1u],
-                         bool *duplicate,char *error,size_t size)
+snag_session_voice_queue(struct snag_session *session, const json_t *source,
+    char id[SNAG_ID_HEX_LEN + 1u], bool *duplicate, char *error, size_t size)
 {
-    if(!session || !source || !id || !duplicate || !voice_source_valid(source) || voice_queue_id(source,id)<0) {
-        snag_errorf(error,size,"Invalid voice handoff provenance");return -1;
+    if (!session || !source || !id || !duplicate || !voice_source_valid(source) ||
+        voice_queue_id(source, id) < 0) {
+        snag_errorf(error, size, "Invalid voice handoff provenance");
+        return -1;
     }
-    *duplicate=false;
-    struct voice_queue_lookup lookup={source,id,false};
-    if(snag_session_each_event(session,voice_queue_find,&lookup,error,size)<0)return -1;
-    if(lookup.found) {*duplicate=true;return 0;}
-    struct snag_buf prompt;snag_buf_init(&prompt,SNAG_MAX_QUEUED_TEXT);
+    *duplicate = false;
+    struct voice_queue_lookup lookup = {source, id, false};
+    if (snag_session_each_event(session, voice_queue_find, &lookup, error, size) < 0) return -1;
+    if (lookup.found) {
+        *duplicate = true;
+        return 0;
+    }
+    struct snag_buf prompt;
+    snag_buf_init(&prompt, SNAG_MAX_QUEUED_TEXT);
     int rc = snag_session_voice_prompt(source, &prompt, error, size);
-    if(!rc) {
-        json_t *event=json_pack("{s:s,s:b,s:s,s:o,s:O}","queue_id",id,"read_only",0,"text",(char *)prompt.data,
-            "while_turn_id",session->active_turn?json_string(session->active_turn_id):json_null(),"voice",(json_t *)source);
-        rc=event?snag_session_commit(session,"future_turn_queued",event,NULL,error,size):-1;
+    if (!rc) {
+        json_t *event = json_pack("{s:s,s:b,s:s,s:o,s:O}", "queue_id", id, "read_only", 0, "text",
+            (char *)prompt.data, "while_turn_id",
+            session->active_turn ? json_string(session->active_turn_id) : json_null(), "voice",
+            (json_t *)source);
+        rc = event ? snag_session_commit(session, "future_turn_queued", event, NULL, error, size)
+                   : -1;
     }
-    snag_buf_free(&prompt);return rc;
+    snag_buf_free(&prompt);
+    return rc;
 }
 
 struct voice_status_lookup {
-    const char *queue,*status;
-    char turn[SNAG_ID_HEX_LEN+1u];
+    const char *queue, *status;
+    char turn[SNAG_ID_HEX_LEN + 1u];
     char *text;
 };
 
-static int voice_status_event(void *opaque,const struct snag_session *state,uint64_t seq,const char *type,const json_t *data,char *error,size_t size)
+static int
+voice_status_event(void *opaque, const struct snag_session *state, uint64_t seq, const char *type,
+    const json_t *data, char *error, size_t size)
 {
-    (void)state;(void)seq;(void)error;(void)size;
-    struct voice_status_lookup *s=opaque;
-    const char *queue=snag_json_string(data,"queue_id"),*turn=snag_json_string(data,"turn_id");
-    if(!strcmp(type,"future_turn_queued") && queue && !strcmp(queue,s->queue) && json_object_get(data,"voice"))
-        s->status="queued";
-    if(!s->status)return 0;
-    if(!strcmp(type,"future_turn_cancelled")) {
+    (void)state;
+    (void)seq;
+    (void)error;
+    (void)size;
+    struct voice_status_lookup *s = opaque;
+    const char *queue = snag_json_string(data, "queue_id"),
+               *turn = snag_json_string(data, "turn_id");
+    if (!strcmp(type, "future_turn_queued") && queue && !strcmp(queue, s->queue) &&
+        json_object_get(data, "voice"))
+        s->status = "queued";
+    if (!s->status) return 0;
+    if (!strcmp(type, "future_turn_cancelled")) {
         const json_t *ids = json_object_get(data, "queue_ids");
         if (!json_is_array(ids))
             return snag_errorf(error, size, "Invalid voice queue cancellation");
@@ -5595,24 +6032,34 @@ static int voice_status_event(void *opaque,const struct snag_session *state,uint
                 return snag_errorf(error, size, "Invalid voice queue cancellation identity");
             if (!strcmp(id, s->queue)) s->status = "cancelled";
         }
-    } else if(!strcmp(type,"turn_started") && queue && !strcmp(queue,s->queue)) {
-        if(!snag_strcpy(s->turn,sizeof(s->turn),turn))return -1;
-        s->status="running";
-    } else if(turn && s->turn[0] && !strcmp(turn,s->turn)) {
-        if(!strcmp(type,"response_completed")) {
-            const json_t *items=json_object_get(data,"items");
-            for(size_t i=0;i<json_array_size(items);++i) {
-                const json_t *item=json_array_get(items,i);
-                const char *kind=snag_json_string(item,"kind"),*text=snag_json_string(item,"text");
-                if(!kind || (strcmp(kind,"assistant") && strcmp(kind,"refusal")) || !text)continue;
-                if(strlen(text)>=SNAG_MAX_QUEUED_TEXT)text="Coding result exceeds the voice message limit; inspect the coding session.";
-                char *copy=snag_strdup_checked(text,SNAG_MAX_QUEUED_TEXT);if(!copy)return -1;
-                free(s->text);s->text=copy;
+    } else if (!strcmp(type, "turn_started") && queue && !strcmp(queue, s->queue)) {
+        if (!snag_strcpy(s->turn, sizeof(s->turn), turn)) return -1;
+        s->status = "running";
+    } else if (turn && s->turn[0] && !strcmp(turn, s->turn)) {
+        if (!strcmp(type, "response_completed")) {
+            const json_t *items = json_object_get(data, "items");
+            for (size_t i = 0; i < json_array_size(items); ++i) {
+                const json_t *item = json_array_get(items, i);
+                const char *kind = snag_json_string(item, "kind"),
+                           *text = snag_json_string(item, "text");
+                if (!kind || (strcmp(kind, "assistant") && strcmp(kind, "refusal")) || !text)
+                    continue;
+                if (strlen(text) >= SNAG_MAX_QUEUED_TEXT)
+                    text = "Coding result exceeds the voice message limit; inspect the coding "
+                           "session.";
+                char *copy = snag_strdup_checked(text, SNAG_MAX_QUEUED_TEXT);
+                if (!copy) return -1;
+                free(s->text);
+                s->text = copy;
             }
-        } else if(!strcmp(type,"turn_completed"))s->status="completed";
-        else if(!strcmp(type,"turn_completed_silent"))s->status="completed_silent";
-        else if(!strcmp(type,"turn_interrupted"))s->status="interrupted";
-        else if(!strcmp(type,"turn_failed"))s->status="failed";
+        } else if (!strcmp(type, "turn_completed"))
+            s->status = "completed";
+        else if (!strcmp(type, "turn_completed_silent"))
+            s->status = "completed_silent";
+        else if (!strcmp(type, "turn_interrupted"))
+            s->status = "interrupted";
+        else if (!strcmp(type, "turn_failed"))
+            s->status = "failed";
     }
     return 0;
 }
@@ -5623,20 +6070,22 @@ voice_status_result(const struct voice_status_lookup *s)
     const char *text = "Coding request is queued.";
     if (!strcmp(s->status, "running"))
         text = "Coding turn is running under the existing session owner.";
-    else if (!strcmp(s->status, "cancelled")) text = "Coding request cancelled before execution.";
+    else if (!strcmp(s->status, "cancelled"))
+        text = "Coding request cancelled before execution.";
     else if (!strcmp(s->status, "interrupted"))
         text = "Coding turn interrupted by the existing session controls.";
     else if (!strcmp(s->status, "failed"))
         text = "Coding turn failed. Inspect the coding session for the error.";
     else if (!strcmp(s->status, "completed_silent"))
         text = "Coding turn completed without a spoken result.";
-    else if (!strcmp(s->status, "completed")) text = s->text ? s->text : "Coding turn completed.";
+    else if (!strcmp(s->status, "completed"))
+        text = s->text ? s->text : "Coding turn completed.";
     return json_pack("{s:s,s:s,s:s}", "status", s->status, "turn_id", s->turn, "text", text);
 }
 
 int
-snag_session_voice_status(struct snag_session *session, const char *queue, json_t **result,
-    char *error, size_t size)
+snag_session_voice_status(
+    struct snag_session *session, const char *queue, json_t **result, char *error, size_t size)
 {
     if (!session || !queue || !result || !snag_hex_is_lower(queue, SNAG_ID_HEX_LEN)) return -1;
     *result = NULL;
@@ -5673,20 +6122,25 @@ voice_projection_free(struct snag_voice_projection *s)
 
 /* Three 8 KiB excerpts leave room for escaped JSON inside a realtime text
  * message and live history within 256 KiB. This bounds a snapshot, not storage. */
-static char *voice_excerpt(const char *text)
+static char *
+voice_excerpt(const char *text)
 {
-    if(!text)return NULL;
-    const size_t limit=SNAG_MAX_QUEUED_TEXT/32u;
-    size_t len=strlen(text);if(len<limit)return snag_strdup_checked(text,limit);
-    size_t end=limit-32u;
-    while(end && ((unsigned char)text[end]&0xc0u)==0x80u)--end;
-    char *out=malloc(end+32u);if(!out)return NULL;
-    memcpy(out,text,end);strcpy(out+end,"\n[excerpt truncated]");return out;
+    if (!text) return NULL;
+    const size_t limit = SNAG_MAX_QUEUED_TEXT / 32u;
+    size_t len = strlen(text);
+    if (len < limit) return snag_strdup_checked(text, limit);
+    size_t end = limit - 32u;
+    while (end && ((unsigned char)text[end] & 0xc0u) == 0x80u) --end;
+    char *out = malloc(end + 32u);
+    if (!out) return NULL;
+    memcpy(out, text, end);
+    strcpy(out + end, "\n[excerpt truncated]");
+    return out;
 }
 
 static int
-voice_context_event(void *opaque, const struct snag_session *state, uint64_t seq,
-    const char *type, const json_t *data, char *error, size_t size)
+voice_context_event(void *opaque, const struct snag_session *state, uint64_t seq, const char *type,
+    const json_t *data, char *error, size_t size)
 {
     struct snag_voice_projection *s = opaque;
     const char *origin = s->session_id;
@@ -5695,7 +6149,8 @@ voice_context_event(void *opaque, const struct snag_session *state, uint64_t seq
         const char *id = snag_json_string(data, "transfer_id");
         const char *source_type = snag_json_string(data, "source_type");
         if (strcmp(type, "voice_transfer_record") || !id || !source_type ||
-            strcmp(id, s->root.transfer_id) || strcmp(source_type, "voice_event")) return 0;
+            strcmp(id, s->root.transfer_id) || strcmp(source_type, "voice_event"))
+            return 0;
         origin = snag_json_string(data, "source_session_id");
         if (snag_json_integer_u64(data, "source_seq", &origin_seq) < 0) return -1;
         data = json_object_get(data, "data");
@@ -5724,8 +6179,8 @@ voice_context_event(void *opaque, const struct snag_session *state, uint64_t seq
             free(s->transcript[who]);
             s->transcript[who] = copy;
             s->transcript_seq[who] = seq;
-            if (!snag_strcpy(s->transcript_origin[who],
-                    sizeof(s->transcript_origin[who]), origin)) return -1;
+            if (!snag_strcpy(s->transcript_origin[who], sizeof(s->transcript_origin[who]), origin))
+                return -1;
             s->transcript_origin_seq[who] = origin_seq;
         }
     }
@@ -5741,8 +6196,8 @@ native_voice_context(struct snag_session *session, struct snag_voice_projection 
         first = projection->root.adopted_seq ? projection->root.begin.next_seq : 1u;
         if (!first) return snag_fail(error, size, EINVAL, "invalid native voice history root");
     }
-    return native_history_forward(session, &projection->cursor, first,
-        SNAG_JOURNAL_PAGE_BYTES, voice_context_event, projection, error, size);
+    return native_history_forward(session, &projection->cursor, first, SNAG_JOURNAL_PAGE_BYTES,
+        voice_context_event, projection, error, size);
 }
 
 int
@@ -5756,16 +6211,18 @@ snag_session_voice_context(struct snag_session *session, json_t **result, char *
         session->voice_projection = NULL;
     }
     if (!session->voice_projection &&
-        !(session->voice_projection = calloc(1u, sizeof(*session->voice_projection)))) return -1;
+        !(session->voice_projection = calloc(1u, sizeof(*session->voice_projection))))
+        return -1;
     struct snag_voice_projection *s = session->voice_projection;
     memcpy(s->session_id, session->id, sizeof(s->session_id));
     s->root = session->voice_history;
     int rc;
-    if (session->binary) rc = native_voice_context(session, s, error, size);
+    if (session->binary)
+        rc = native_voice_context(session, s, error, size);
     else {
         if (s->cursor.next_seq < s->root.begin.next_seq) s->cursor = s->root.begin;
-        rc = snag_session_each_event_forward(session, &s->cursor, SNAG_JOURNAL_PAGE_BYTES,
-            voice_context_event, s, error, size);
+        rc = snag_session_each_event_forward(
+            session, &s->cursor, SNAG_JOURNAL_PAGE_BYTES, voice_context_event, s, error, size);
     }
     if (rc < 0) {
         /* A failed callback may have partially updated the current record's view.
@@ -5779,51 +6236,53 @@ snag_session_voice_context(struct snag_session *session, json_t **result, char *
     if (handoff) {
         char *text = voice_excerpt(snag_json_string(handoff, "text"));
         if (!text || json_object_set_new(handoff, "text", json_string(text)) < 0 ||
-            json_object_set_new(handoff, "queue_id", json_string(s->queue)) < 0) rc = -1;
+            json_object_set_new(handoff, "queue_id", json_string(s->queue)) < 0)
+            rc = -1;
         free(text);
     }
     if (!rc) {
         uint64_t next = s->cursor.next_seq;
         *result = json_pack("{s:s,s:s,s:s,s:i,s:s,s:s,s:O,s:I,s:I,s:b,s:I,s:I,s:s,s:I,s:s,s:I}",
-            "kind", "session_context", "session_id", session->id,
-            "active_turn_id", session->active_turn ? session->active_turn_id : "",
-            "queued_inputs", (int)session->pending_queue_count,
-            "recent_asr", s->transcript[0] ? s->transcript[0] : "",
-            "recent_generated_reply", s->transcript[1] ? s->transcript[1] : "",
-            "latest_voice_handoff", handoff ? handoff : json_null(),
-            "state_as_of_seq", (json_int_t)(session->next_seq - 1u),
-            "history_as_of_seq", (json_int_t)(next - 1u),
-            "history_complete", next == session->next_seq,
-            "recent_asr_seq", (json_int_t)s->transcript_seq[0],
-            "recent_generated_reply_seq", (json_int_t)s->transcript_seq[1],
-            "recent_asr_origin_session_id", s->transcript_origin[0],
-            "recent_asr_origin_seq", (json_int_t)s->transcript_origin_seq[0],
-            "recent_generated_reply_origin_session_id", s->transcript_origin[1],
-            "recent_generated_reply_origin_seq", (json_int_t)s->transcript_origin_seq[1]);
+            "kind", "session_context", "session_id", session->id, "active_turn_id",
+            session->active_turn ? session->active_turn_id : "", "queued_inputs",
+            (int)session->pending_queue_count, "recent_asr",
+            s->transcript[0] ? s->transcript[0] : "", "recent_generated_reply",
+            s->transcript[1] ? s->transcript[1] : "", "latest_voice_handoff",
+            handoff ? handoff : json_null(), "state_as_of_seq",
+            (json_int_t)(session->next_seq - 1u), "history_as_of_seq", (json_int_t)(next - 1u),
+            "history_complete", next == session->next_seq, "recent_asr_seq",
+            (json_int_t)s->transcript_seq[0], "recent_generated_reply_seq",
+            (json_int_t)s->transcript_seq[1], "recent_asr_origin_session_id",
+            s->transcript_origin[0], "recent_asr_origin_seq",
+            (json_int_t)s->transcript_origin_seq[0], "recent_generated_reply_origin_session_id",
+            s->transcript_origin[1], "recent_generated_reply_origin_seq",
+            (json_int_t)s->transcript_origin_seq[1]);
         if (!*result) rc = -1;
     }
     if (!rc) {
-        char *task = voice_excerpt(session->active_turn && session->active_prompt ?
-            session->active_prompt : "");
+        char *task = voice_excerpt(
+            session->active_turn && session->active_prompt ? session->active_prompt : "");
         json_t *operations = json_array();
         if (!task || !operations) rc = -1;
         for (size_t i = 0; !rc && i < session->pending_call_count; ++i) {
             const struct snag_pending_call *call = &session->pending_calls[i];
             if (call->finished) continue;
-            if (json_array_append_new(operations, json_pack("{s:s,s:s,s:b}",
-                    "tool", call->tool_name, "command", call->command,
-                    "started", call->started)) < 0) rc = -1;
+            if (json_array_append_new(
+                    operations, json_pack("{s:s,s:s,s:b}", "tool", call->tool_name, "command",
+                                    call->command, "started", call->started)) < 0)
+                rc = -1;
         }
         if (!rc && (json_object_set_new(*result, "active_task", json_string(task)) < 0 ||
-            json_object_set(*result, "operations", operations) < 0 ||
-            json_object_set_new(*result, "pending_steering",
-                json_integer((json_int_t)session->pending_steering_count)) < 0 ||
-            json_object_set_new(*result, "steering_deferred",
-                json_boolean(session->steering_deferred)) < 0 ||
-            json_object_set_new(*result, "cancellation_requested",
-                json_boolean(session->cancel_requested)) < 0 ||
-            json_object_set_new(*result, "provider_responding",
-                json_boolean(session->response_open)) < 0)) rc = -1;
+                       json_object_set(*result, "operations", operations) < 0 ||
+                       json_object_set_new(*result, "pending_steering",
+                           json_integer((json_int_t)session->pending_steering_count)) < 0 ||
+                       json_object_set_new(*result, "steering_deferred",
+                           json_boolean(session->steering_deferred)) < 0 ||
+                       json_object_set_new(*result, "cancellation_requested",
+                           json_boolean(session->cancel_requested)) < 0 ||
+                       json_object_set_new(*result, "provider_responding",
+                           json_boolean(session->response_open)) < 0))
+            rc = -1;
         free(task);
         json_decref(operations);
     }
@@ -5842,16 +6301,19 @@ snag_cwd_resolve(const char *cwd, const char *label, char *error, size_t error_s
     snag_file_info st;
 
     if (!resolved) {
-        if (label) snag_errorf(error, error_size, "cannot resolve %s cwd %s: %s",
-                        label, cwd, strerror(errno));
-        else snag_errorf(error, error_size, "cannot resolve cwd %s: %s", cwd, strerror(errno));
+        if (label)
+            snag_errorf(
+                error, error_size, "cannot resolve %s cwd %s: %s", label, cwd, strerror(errno));
+        else
+            snag_errorf(error, error_size, "cannot resolve cwd %s: %s", cwd, strerror(errno));
         return NULL;
     }
-    if (!snag_text_valid(resolved, 0u, SNAG_PATH_MAX_BYTES) ||
-        snag_stat(resolved, &st) < 0 || !S_ISDIR(st.st_mode)) {
-        if (label) snag_errorf(error, error_size,
-            "%s cwd must be an existing UTF-8 directory", label);
-        else snag_errorf(error, error_size, "cwd must be an existing UTF-8 directory");
+    if (!snag_text_valid(resolved, 0u, SNAG_PATH_MAX_BYTES) || snag_stat(resolved, &st) < 0 ||
+        !S_ISDIR(st.st_mode)) {
+        if (label)
+            snag_errorf(error, error_size, "%s cwd must be an existing UTF-8 directory", label);
+        else
+            snag_errorf(error, error_size, "cwd must be an existing UTF-8 directory");
         free(resolved);
         errno = EINVAL;
         return NULL;
@@ -5860,9 +6322,8 @@ snag_cwd_resolve(const char *cwd, const char *label, char *error, size_t error_s
 }
 
 int
-snag_session_prepare(struct snag_session *session, const char *cwd,
-                     const char *provider, const char *model, const char *effort,
-                     char *error, size_t error_size)
+snag_session_prepare(struct snag_session *session, const char *cwd, const char *provider,
+    const char *model, const char *effort, char *error, size_t error_size)
 {
     char *resolved = snag_cwd_resolve(cwd, NULL, error, error_size);
     int rc = -1;
@@ -5875,29 +6336,29 @@ snag_session_prepare(struct snag_session *session, const char *cwd,
     session->pending_log = calloc(1u, sizeof(*session->pending_log));
     if (!session->pending_log) goto out;
     snag_buf_init(session->pending_log, SNAG_PENDING_LOG_MAX);
-    rc = snag_session_commit(session, "session_created", json_pack("{s:s,s:s,s:s,s:i,s:s,s:s}",
-            "default_effort", effort, "default_model", model,
+    rc = snag_session_commit(session, "session_created",
+        json_pack("{s:s,s:s,s:s,s:i,s:s,s:s}", "default_effort", effort, "default_model", model,
             "default_provider", provider, "format", 4, "protocol", "responses", "cwd", resolved),
         NULL, error, error_size);
-out: free(resolved);
+out:
+    free(resolved);
     return rc;
 }
 
 int
-snag_session_persist(struct snag_store *store, struct snag_session *session,
-    char *error, size_t error_size)
+snag_session_persist(
+    struct snag_store *store, struct snag_session *session, char *error, size_t error_size)
 {
     if (!session->pending_log) return 0;
     return snag_store_persist_binary_session(store, session, error, error_size);
 }
 
 int
-snag_session_create(struct snag_store *store, struct snag_session *session,
-                   const char *cwd, const char *provider, const char *model, const char *effort,
-                   char *error, size_t error_size)
+snag_session_create(struct snag_store *store, struct snag_session *session, const char *cwd,
+    const char *provider, const char *model, const char *effort, char *error, size_t error_size)
 {
-    if (snag_session_prepare(session, cwd, provider, model, effort,
-            error, error_size) < 0) return -1;
+    if (snag_session_prepare(session, cwd, provider, model, effort, error, error_size) < 0)
+        return -1;
     return snag_session_persist(store, session, error, error_size);
 }
 
@@ -5909,28 +6370,33 @@ struct media_lookup {
 };
 
 static int
-find_asset_event(void *opaque, const struct snag_session *state, uint64_t seq, const char *type, const json_t *data,
-                 char *error, size_t error_size)
+find_asset_event(void *opaque, const struct snag_session *state, uint64_t seq, const char *type,
+    const json_t *data, char *error, size_t error_size)
 {
     struct media_lookup *lookup = opaque;
-    (void)state;(void)seq;
+    (void)state;
+    (void)seq;
     if (lookup->pump && lookup->pump(lookup->opaque, 0u)) {
-        snag_errorf(error, error_size, "Asset lookup interrupted"); return -1;
+        snag_errorf(error, error_size, "Asset lookup interrupted");
+        return -1;
     }
     if (lookup->found) return 0;
     /* Only accepted input/result content is authority for a retained reference.
      * Never treat model tool arguments or arbitrary JSON in a log as assets. */
     const json_t *content = NULL;
-    if (!strcmp(type, "tool_finished")) content = json_object_get(json_object_get(data, "result"), "content");
-    else if (!strcmp(type, "input_received") || !strcmp(type, "turn_started") || !strcmp(type, "steering_added") ||
-             !strcmp(type, "future_turn_queued")) content = json_object_get(data, "content");
+    if (!strcmp(type, "tool_finished"))
+        content = json_object_get(json_object_get(data, "result"), "content");
+    else if (!strcmp(type, "input_received") || !strcmp(type, "turn_started") ||
+             !strcmp(type, "steering_added") || !strcmp(type, "future_turn_queued"))
+        content = json_object_get(data, "content");
     for (size_t i = 0; i < json_array_size(content); ++i) {
         json_t *part = json_array_get(content, i);
         const char *keys[] = {"asset", "source"};
         for (size_t j = 0; j < 2u; ++j) {
             json_t *asset = json_object_get(part, keys[j]);
             if (snag_media_valid(asset) && !strcmp(snag_json_string(asset, "id"), lookup->id)) {
-                lookup->found = json_incref(asset); return 0;
+                lookup->found = json_incref(asset);
+                return 0;
             }
         }
     }
@@ -5939,31 +6405,41 @@ find_asset_event(void *opaque, const struct snag_session *state, uint64_t seq, c
 
 int
 snag_session_media(struct snag_session *session, const char *path, const char *mime,
-                    int (*pump)(void *, unsigned int), void *opaque,
-                    json_t **asset, char **retained_path, char *error, size_t error_size)
+    int (*pump)(void *, unsigned int), void *opaque, json_t **asset, char **retained_path,
+    char *error, size_t error_size)
 {
-    *asset = NULL; *retained_path = NULL;
+    *asset = NULL;
+    *retained_path = NULL;
     if (!path || !*path) return -1;
     if (!strncmp(path, "asset:", 6u)) {
         struct media_lookup lookup = {.id = path + 6u, .pump = pump, .opaque = opaque};
         if (!snag_hex_is_lower(lookup.id, SNAG_ID_HEX_LEN) ||
             snag_session_each_event(session, find_asset_event, &lookup, error, error_size) < 0) {
-            json_decref(lookup.found); return -1;
+            json_decref(lookup.found);
+            return -1;
         }
-        if (!lookup.found) { snag_errorf(error, error_size, "No accepted asset with that ID in this session"); return -1; }
+        if (!lookup.found) {
+            snag_errorf(error, error_size, "No accepted asset with that ID in this session");
+            return -1;
+        }
         *asset = lookup.found;
-    } else if (snag_media_snapshot(session->dir_fd, session->cwd, path, mime,
-              SNAG_MEDIA_FILE_MAX, pump, opaque, asset, error, error_size) < 0) return -1;
+    } else if (snag_media_snapshot(session->dir_fd, session->cwd, path, mime, SNAG_MEDIA_FILE_MAX,
+                   pump, opaque, asset, error, error_size) < 0)
+        return -1;
     if (snag_media_verify(session->dir_fd, *asset, pump, opaque, error, error_size) < 0) {
         if (strncmp(path, "asset:", 6u)) (void)snag_media_discard(session->dir_fd, *asset);
-        json_decref(*asset); *asset = NULL; return -1;
+        json_decref(*asset);
+        *asset = NULL;
+        return -1;
     }
     char *dir = snag_path_join(session->dir_path, "media");
     if (dir) *retained_path = snag_path_join(dir, snag_json_string(*asset, "id"));
     free(dir);
     if (!*retained_path) {
         if (strncmp(path, "asset:", 6u)) (void)snag_media_discard(session->dir_fd, *asset);
-        json_decref(*asset); *asset = NULL; return -1;
+        json_decref(*asset);
+        *asset = NULL;
+        return -1;
     }
     return 0;
 }

@@ -20,7 +20,7 @@
 
 /* One live socket/device owner; the coding/session owner exchanges bounded
  * notices and serialized, correlated coding results. No second executor. */
-#define VOICE_MESSAGE (2u*1024u*1024u)
+#define VOICE_MESSAGE (2u * 1024u * 1024u)
 #define VOICE_NOTICES 16u
 /* Bound queue projections within the interface's serialized message budget. */
 #define VOICE_QUEUE_PAGE 100u
@@ -39,8 +39,7 @@ json_t *
 snag_app_voice_tools(void)
 {
     static const char *const names[] = {
-        "get_cwd", "list_files", "read_file", "grep", "read_session_history"
-    };
+        "get_cwd", "list_files", "read_file", "grep", "read_session_history"};
     json_t *tools = json_array();
     if (!tools) return NULL;
     for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); ++i) {
@@ -49,48 +48,56 @@ snag_app_voice_tools(void)
             return NULL;
         }
     }
-    if (json_array_append_new(tools, interface_tool("inspect_session",
-            "Read current session state, effective instruction paths and exact queued IDs. "
-            "Queue text is a marked preview. queue_limit defaults to 20 (maximum 100); "
-            "when queue_more is true, pass queue_next_after_seq as queue_after_seq. "
-            "Each page reflects current state. Inspection does not start or arm work.",
-            json_pack("{s:{s:s,s:i},s:{s:s,s:i,s:i}}",
-                "queue_after_seq", "type", "integer", "minimum", 0,
-                "queue_limit", "type", "integer", "minimum", 1,
-                "maximum", (int)VOICE_QUEUE_PAGE), json_array())) < 0) {
+    if (json_array_append_new(tools,
+            interface_tool("inspect_session",
+                "Read current session state, effective instruction paths and exact queued IDs. "
+                "Queue text is a marked preview. queue_limit defaults to 20 (maximum 100); "
+                "when queue_more is true, pass queue_next_after_seq as queue_after_seq. "
+                "Each page reflects current state. Inspection does not start or arm work.",
+                json_pack("{s:{s:s,s:i},s:{s:s,s:i,s:i}}", "queue_after_seq", "type", "integer",
+                    "minimum", 0, "queue_limit", "type", "integer", "minimum", 1, "maximum",
+                    (int)VOICE_QUEUE_PAGE),
+                json_array())) < 0) {
         json_decref(tools);
         return NULL;
     }
-    if (json_array_append_new(tools, interface_tool("submit_input",
-            "Send an instruction to the model. Use an exact active turn ID for steering, "
-            "or queue for an independent task. The host retains the original spoken source; "
-            "text is your interpretation, not extra authority. Returns acceptance, not completion.",
-            json_pack("{s:{s:s},s:{s:s}}", "target", "type", "string", "text", "type", "string"),
-            json_pack("[s,s]", "target", "text"))) < 0 ||
-        json_array_append_new(tools, interface_tool("ui_input",
-            "Enter a slash command or an explicit reply to the current UI prompt, using the "
-            "same input queue and dispatcher as the keyboard. The initial CLI help is the "
-            "command reference. Preserve the typed draft. Admission is not completion; "
-            "read subsequent UI output for the result or a confirmation prompt. For new "
-            "model work or exact-turn steering use submit_input. Never infer confirmation.",
-            json_pack("{s:{s:s}}", "text", "type", "string"),
-            json_pack("[s]", "text"))) < 0 ||
-        json_array_append_new(tools, interface_tool("interrupt_turn",
-            "Request cancellation of the specified currently active coding turn. "
-            "Playback interruption alone never cancels work.",
-            json_pack("{s:{s:s}}", "turn_id", "type", "string"),
-            json_pack("[s]", "turn_id"))) < 0 ||
-        json_array_append_new(tools, interface_tool("select_model",
-            "Change the coding session's provider/model/effort using a cached selector. "
-            "Existing process handles and completed results are retained. "
-            "This interface does not perform catalog refresh.",
-            json_pack("{s:{s:s}}", "selector", "type", "string"),
-            json_pack("[s]", "selector"))) < 0 ||
-        json_array_append_new(tools, interface_tool("set_voice_mode",
-            "Set microphone forwarding or turn voice off. Coding work continues independently. "
-            "Listening requires the same attached terminal.",
-            json_pack("{s:{s:s,s:[s,s,s]}}", "mode", "type", "string", "enum",
-                "listening", "muted", "off"), json_pack("[s]", "mode"))) < 0) {
+    if (json_array_append_new(tools,
+            interface_tool("submit_input",
+                "Send an instruction to the model. Use an exact active turn ID for steering, "
+                "or queue for an independent task. The host retains the original spoken source; "
+                "text is your interpretation, not extra authority. Returns acceptance, not "
+                "completion.",
+                json_pack(
+                    "{s:{s:s},s:{s:s}}", "target", "type", "string", "text", "type", "string"),
+                json_pack("[s,s]", "target", "text"))) < 0 ||
+        json_array_append_new(tools,
+            interface_tool("ui_input",
+                "Enter a slash command or an explicit reply to the current UI prompt, using the "
+                "same input queue and dispatcher as the keyboard. The initial CLI help is the "
+                "command reference. Preserve the typed draft. Admission is not completion; "
+                "read subsequent UI output for the result or a confirmation prompt. For new "
+                "model work or exact-turn steering use submit_input. Never infer confirmation.",
+                json_pack("{s:{s:s}}", "text", "type", "string"), json_pack("[s]", "text"))) < 0 ||
+        json_array_append_new(tools,
+            interface_tool("interrupt_turn",
+                "Request cancellation of the specified currently active coding turn. "
+                "Playback interruption alone never cancels work.",
+                json_pack("{s:{s:s}}", "turn_id", "type", "string"), json_pack("[s]", "turn_id"))) <
+            0 ||
+        json_array_append_new(
+            tools, interface_tool("select_model",
+                       "Change the coding session's provider/model/effort using a cached selector. "
+                       "Existing process handles and completed results are retained. "
+                       "This interface does not perform catalog refresh.",
+                       json_pack("{s:{s:s}}", "selector", "type", "string"),
+                       json_pack("[s]", "selector"))) < 0 ||
+        json_array_append_new(tools,
+            interface_tool("set_voice_mode",
+                "Set microphone forwarding or turn voice off. Coding work continues independently. "
+                "Listening requires the same attached terminal.",
+                json_pack("{s:{s:s,s:[s,s,s]}}", "mode", "type", "string", "enum", "listening",
+                    "muted", "off"),
+                json_pack("[s]", "mode"))) < 0) {
         json_decref(tools);
         return NULL;
     }
@@ -98,8 +105,7 @@ snag_app_voice_tools(void)
 }
 
 static int
-voice_queue_view(const struct snag_session *session, json_t *context,
-                 uint64_t after, size_t limit)
+voice_queue_view(const struct snag_session *session, json_t *context, uint64_t after, size_t limit)
 {
     json_t *entries = json_array();
     bool more = false;
@@ -114,12 +120,10 @@ voice_queue_view(const struct snag_session *session, json_t *context,
         }
         size_t bytes = strlen(queued->text);
         size_t length = bytes < VOICE_QUEUE_PREVIEW ? bytes : VOICE_QUEUE_PREVIEW;
-        while (length < bytes && ((unsigned char)queued->text[length] & 0xc0u) == 0x80u)
-            --length;
-        json_t *entry = json_pack("{s:s,s:I,s:b,s:I,s:b,s:s%}",
-            "queue_id", queued->queue_id, "enqueued_seq", (json_int_t)queued->seq,
-            "read_only", queued->read_only, "text_bytes", (json_int_t)bytes,
-            "text_truncated", length != bytes, "text", queued->text, length);
+        while (length < bytes && ((unsigned char)queued->text[length] & 0xc0u) == 0x80u) --length;
+        json_t *entry = json_pack("{s:s,s:I,s:b,s:I,s:b,s:s%}", "queue_id", queued->queue_id,
+            "enqueued_seq", (json_int_t)queued->seq, "read_only", queued->read_only, "text_bytes",
+            (json_int_t)bytes, "text_truncated", length != bytes, "text", queued->text, length);
         if (json_array_append_new(entries, entry) < 0) goto out;
         after = queued->seq;
     }
@@ -136,12 +140,12 @@ out:
     return rc;
 }
 
-static int voice_history_page(struct app_state *, const struct snag_response_item *,
-    json_t **, char *, size_t);
+static int voice_history_page(
+    struct app_state *, const struct snag_response_item *, json_t **, char *, size_t);
 
 int
-snag_app_voice_read(struct app_state *app, const struct snag_response_item *call,
-                    json_t **result, char *error, size_t size)
+snag_app_voice_read(struct app_state *app, const struct snag_response_item *call, json_t **result,
+    char *error, size_t size)
 {
     if (!app || !call || !call->name || !result) return -1;
     *result = NULL;
@@ -156,10 +160,10 @@ snag_app_voice_read(struct app_state *app, const struct snag_response_item *call
     }
     uint64_t after, limit;
     if (!snag_json_arg_keys(call->arguments, "", "queue_after_seq queue_limit", error, size) ||
-        !snag_json_arg_uint(call->arguments, "queue_after_seq", 0u, 0u, INT64_MAX,
-            &after, error, size) ||
-        !snag_json_arg_uint(call->arguments, "queue_limit", 20u, 1u, VOICE_QUEUE_PAGE,
-            &limit, error, size)) {
+        !snag_json_arg_uint(
+            call->arguments, "queue_after_seq", 0u, 0u, INT64_MAX, &after, error, size) ||
+        !snag_json_arg_uint(
+            call->arguments, "queue_limit", 20u, 1u, VOICE_QUEUE_PAGE, &limit, error, size)) {
         *result = snag_tool_result_terminal(false, error);
         return *result ? 0 : -1;
     }
@@ -179,11 +183,12 @@ snag_app_voice_read(struct app_state *app, const struct snag_response_item *call
             goto out;
         }
         const json_t *saved = json_object_get(app->session.pending_input, "instructions");
-        size_t count = saved ? json_array_size(saved) :
-            app->cli ? app->cli->doc_instructions.count : 0u;
+        size_t count = saved      ? json_array_size(saved)
+                       : app->cli ? app->cli->doc_instructions.count
+                                  : 0u;
         for (size_t i = 0; i < count; ++i) {
-            const char *path = saved ? json_string_value(json_array_get(saved, i)) :
-                app->cli->doc_instructions.paths[i];
+            const char *path = saved ? json_string_value(json_array_get(saved, i))
+                                     : app->cli->doc_instructions.paths[i];
             if (snag_instructions_add_file(&discovered, path, error, size) < 0) {
                 rc = -1;
                 goto out;
@@ -192,8 +197,7 @@ snag_app_voice_read(struct app_state *app, const struct snag_response_item *call
         paths = snag_instructions_metadata_json(&discovered);
     }
     if (!paths) paths = json_array();
-    if (!paths ||
-        json_object_set_new(context, "cwd", json_string(app->session.cwd)) < 0 ||
+    if (!paths || json_object_set_new(context, "cwd", json_string(app->session.cwd)) < 0 ||
         json_object_set(context, "instructions", paths) < 0 ||
         json_object_set_new(context, "provider", json_string(app->session.default_provider)) < 0 ||
         json_object_set_new(context, "model", json_string(app->session.default_model)) < 0 ||
@@ -276,20 +280,20 @@ struct interface_compaction {
 struct app_voice {
     pthread_t thread;
     pthread_mutex_t mutex;
-    atomic_bool stop,muted,mute_pending,activate,done;
+    atomic_bool stop, muted, mute_pending, activate, done;
     atomic_bool output_ready;
     atomic_bool history_queued, history_sent;
     atomic_bool credential_ready, credential_accepted;
     atomic_uint pending_handoffs; /* Notices plus session-owner handoff slots. */
-    bool retryable; /* Published with done by the connection owner. */
-    bool capacity_pending; /* Published with done; owner clears after compaction. */
-    bool ui_observation_failed; /* Owner-only; retention failure must not fail the UI command. */
+    bool retryable;               /* Published with done by the connection owner. */
+    bool capacity_pending;        /* Published with done; owner clears after compaction. */
+    bool ui_observation_failed;   /* Owner-only; retention failure must not fail the UI command. */
     bool capacity_announced;
     uint64_t reconnect_at;
     unsigned int reconnects;
     uint32_t retry_after_ms; /* Published with done; positive bounded provider hint. */
     int root_fd;
-    bool thread_started,announced,applied_mute,device_started,stopped_recorded,expiry_warned;
+    bool thread_started, announced, applied_mute, device_started, stopped_recorded, expiry_warned;
     struct snag_provider_config provider;
     struct snag_audio_config config;
     struct snag_credential credential;
@@ -298,22 +302,22 @@ struct app_voice {
     struct snag_voice_rtc *rtc;
     struct snag_voice *protocol;
     struct snag_audio_device *device;
-    json_t *notices[VOICE_NOTICES],*result,*context;
+    json_t *notices[VOICE_NOTICES], *result, *context;
     json_t *observation;
     json_t *observation_record; /* Owner-only source for the next bounded fragment. */
     struct snag_journal_cursor observation_cursor;
     size_t observation_offset;
-    size_t notice_read,notice_count,notice_bytes,notice_size[VOICE_NOTICES];
-    struct snag_buf send[8],receive;
+    size_t notice_read, notice_count, notice_bytes, notice_size[VOICE_NOTICES];
+    struct snag_buf send[8], receive;
     bool send_audio[8];
-    size_t send_read,send_count,send_bytes,send_offset;
-    uint64_t send_deadline,start_ms,drained_ms,expires_ms;
+    size_t send_read, send_count, send_bytes, send_offset;
+    uint64_t send_deadline, start_ms, drained_ms, expires_ms;
     const struct snag_ui *ui;
     uint64_t attachment;
-    char connection[33],error[256],audio_item[SNAG_MAX_PROVIDER_ID+1u];
-    uint32_t audio_base,gaps;
+    char connection[33], error[256], audio_item[SNAG_MAX_PROVIDER_ID + 1u];
+    uint32_t audio_base, gaps;
     bool gap_reported;
-    char caption[2][384],caption_item[2][SNAG_MAX_PROVIDER_ID+1u];
+    char caption[2][384], caption_item[2][SNAG_MAX_PROVIDER_ID + 1u];
     bool caption_dirty[2]; /* Coalesced previews under mutex. */
     bool caption_stream[2];
     /* Session-owner-only handoff/result correlation. */
@@ -342,8 +346,8 @@ struct app_voice {
 };
 
 static int
-voice_history_page(struct app_state *app, const struct snag_response_item *call,
-    json_t **result, char *error, size_t size)
+voice_history_page(struct app_state *app, const struct snag_response_item *call, json_t **result,
+    char *error, size_t size)
 {
     if (!app->voice) return snag_app_tool_run(app, call, NULL, result, error, size);
     const struct snag_secret_set *secrets = &app->voice->secrets;
@@ -376,14 +380,15 @@ observation_start(struct app_voice *v, const struct snag_session *session)
  * adopted root replaces the older destination conversation; unrelated staging
  * and destination work before the boundary do not enter the carried dialog. */
 static int
-history_origin(const struct snag_voice_history_root *root, uint64_t seq,
-    const char **type, const json_t **data, const char **origin, uint64_t *origin_seq)
+history_origin(const struct snag_voice_history_root *root, uint64_t seq, const char **type,
+    const json_t **data, const char **origin, uint64_t *origin_seq)
 {
     if (!strcmp(*type, "voice_transfer_record")) {
         const char *id = snag_json_string(*data, "transfer_id");
         if (!snag_hex_is_lower(id, SNAG_ID_HEX_LEN)) return -1;
         if (!root->adopted_seq || seq < root->begin.next_seq || seq >= root->adopted_seq ||
-            strcmp(id, root->transfer_id)) return 0;
+            strcmp(id, root->transfer_id))
+            return 0;
         *origin = snag_json_string(*data, "source_session_id");
         *type = snag_json_string(*data, "source_type");
         if (!snag_hex_is_lower(*origin, SNAG_ID_HEX_LEN) || !*type ||
@@ -415,8 +420,8 @@ request_ready(void *opaque)
 }
 
 static int
-request_text(void *opaque, size_t index, enum snag_item_kind kind,
-    enum snag_item_phase phase, const char *id, const char *text, size_t length)
+request_text(void *opaque, size_t index, enum snag_item_kind kind, enum snag_item_phase phase,
+    const char *id, const char *text, size_t length)
 {
     (void)index;
     (void)kind;
@@ -440,15 +445,18 @@ request_owner(void *opaque)
         &request->credential, request_pump, request, request->error, sizeof(request->error));
     if (!request->outcome) {
         struct snag_provider_failure failure = {0};
-        request->outcome = snag_provider_responses_create((struct snag_provider_connection){
-            .config = request->config, .provider = &request->provider,
-            .credential = &request->credential, .pump = request_pump,
-            .pump_opaque = request,
-            .session_id = snag_json_string(request->input, "prompt_cache_key"),
-            .low_speed_override_ms = request->summary ? request->provider.request_timeout_ms : 0u},
+        request->outcome = snag_provider_responses_create(
+            (struct snag_provider_connection){.config = request->config,
+                .provider = &request->provider,
+                .credential = &request->credential,
+                .pump = request_pump,
+                .pump_opaque = request,
+                .session_id = snag_json_string(request->input, "prompt_cache_key"),
+                .low_speed_override_ms =
+                    request->summary ? request->provider.request_timeout_ms : 0u},
             request->input, request_text, request, NULL, NULL, request_ready, request,
-            &request->graph, &failure, &request->protection,
-            request->error, sizeof(request->error), &request->retries);
+            &request->graph, &failure, &request->protection, request->error, sizeof(request->error),
+            &request->retries);
         if (request->outcome && request->outcome != 2 &&
             snag_provider_failure_is_capacity(&failure)) {
             request->outcome = SNAG_PROVIDER_CONTEXT_OVERFLOW;
@@ -484,7 +492,7 @@ request_free(struct voice_request *request)
 
 static int
 request_start(struct app_state *app, const struct snag_provider_config *provider,
-               const json_t *input, char *error, size_t size)
+    const json_t *input, char *error, size_t size)
 {
     struct app_voice *v = app ? app->voice : NULL;
     if (!v || v->request || !json_is_object(input)) {
@@ -520,16 +528,16 @@ request_start(struct app_state *app, const struct snag_provider_config *provider
 }
 
 int
-snag_app_voice_request_start(struct app_state *app, const json_t *input,
-                             char *error, size_t size)
+snag_app_voice_request_start(struct app_state *app, const json_t *input, char *error, size_t size)
 {
-    return request_start(app, app ? snag_config_provider(app->config,
-        app->session.default_provider) : NULL, input, error, size);
+    return request_start(app,
+        app ? snag_config_provider(app->config, app->session.default_provider) : NULL, input, error,
+        size);
 }
 
 int
-snag_app_voice_request_take(struct app_state *app, struct snag_response_graph *graph,
-                            int *outcome, json_t **metrics, char *error, size_t size)
+snag_app_voice_request_take(struct app_state *app, struct snag_response_graph *graph, int *outcome,
+    json_t **metrics, char *error, size_t size)
 {
     if (metrics) *metrics = NULL;
     struct app_voice *v = app ? app->voice : NULL;
@@ -538,16 +546,16 @@ snag_app_voice_request_take(struct app_state *app, struct snag_response_graph *g
     if (!atomic_load_explicit(&request->done, memory_order_acquire)) return 0;
     /* Include setup and refreshed transport credentials before releasing public output. */
     if (snag_secret_set_build(&v->secrets, NULL, &request->credential, error, size) < 0 ||
-        snag_secret_set_merge(&v->secrets, &request->protection, error, size) < 0) return -1;
+        snag_secret_set_merge(&v->secrets, &request->protection, error, size) < 0)
+        return -1;
     if (metrics) {
-        *metrics = json_pack("{s:I,s:o,s:o,s:I,s:o}",
-            "elapsed_ms", (json_int_t)request->elapsed_ms,
-            "response_ready_ms", request->ready_seen ?
-                json_integer((json_int_t)request->ready_ms) : json_null(),
-            "first_text_ms", request->text_seen ?
-                json_integer((json_int_t)request->first_text_ms) : json_null(),
-            "retries", (json_int_t)request->retries,
-            "usage", snag_response_usage_json(&request->graph.usage));
+        *metrics = json_pack("{s:I,s:o,s:o,s:I,s:o}", "elapsed_ms", (json_int_t)request->elapsed_ms,
+            "response_ready_ms",
+            request->ready_seen ? json_integer((json_int_t)request->ready_ms) : json_null(),
+            "first_text_ms",
+            request->text_seen ? json_integer((json_int_t)request->first_text_ms) : json_null(),
+            "retries", (json_int_t)request->retries, "usage",
+            snag_response_usage_json(&request->graph.usage));
         if (!*metrics) return -1;
     }
     request_stop(request);
@@ -560,10 +568,11 @@ snag_app_voice_request_take(struct app_state *app, struct snag_response_graph *g
     return 1;
 }
 
-static bool voice_attachment_lost(const struct app_voice *v)
+static bool
+voice_attachment_lost(const struct app_voice *v)
 {
     return v->ui && v->ui->native &&
-        (!v->attachment || snag_ui_session_attachment(v->ui)!=v->attachment);
+           (!v->attachment || snag_ui_session_attachment(v->ui) != v->attachment);
 }
 
 static const char lost_terminal[] =
@@ -572,8 +581,8 @@ static const char lost_terminal[] =
 static bool
 voice_capture_ready(const struct app_voice *v)
 {
-    return atomic_load(&v->activate) && atomic_load(&v->history_sent) &&
-        !atomic_load(&v->stop) && !atomic_load(&v->done) && !voice_attachment_lost(v);
+    return atomic_load(&v->activate) && atomic_load(&v->history_sent) && !atomic_load(&v->stop) &&
+           !atomic_load(&v->done) && !voice_attachment_lost(v);
 }
 
 /* The connection owner publishes this only after writing the initial context.
@@ -594,10 +603,10 @@ voice_protect_json(const struct snag_wire_secrets *secrets, const json_t *value,
     struct snag_buf raw = {.max = max};
     struct snag_buf clean = {.max = max};
     int rc = snag_json_canonical(value, &raw);
-    if (!rc) rc = snag_wire_json_redact_bounded(raw.data, raw.len, max,
-        secrets, &clean, error, size);
-    json_t *safe = !rc ? json_loadb((char *)clean.data, clean.len,
-        JSON_REJECT_DUPLICATES, NULL) : NULL;
+    if (!rc)
+        rc = snag_wire_json_redact_bounded(raw.data, raw.len, max, secrets, &clean, error, size);
+    json_t *safe =
+        !rc ? json_loadb((char *)clean.data, clean.len, JSON_REJECT_DUPLICATES, NULL) : NULL;
     snag_secret_clear(raw.data, raw.len);
     snag_buf_free(&raw);
     snag_buf_free(&clean);
@@ -605,8 +614,7 @@ voice_protect_json(const struct snag_wire_secrets *secrets, const json_t *value,
 }
 
 static json_t *
-voice_redact_bounded(struct app_voice *v, const json_t *value, size_t max,
-    char *error, size_t size)
+voice_redact_bounded(struct app_voice *v, const json_t *value, size_t max, char *error, size_t size)
 {
     return voice_protect_json(&v->secrets.wire, value, max, error, size);
 }
@@ -618,8 +626,8 @@ voice_redact(struct app_voice *v, const json_t *value, char *error, size_t size)
 }
 
 static int
-voice_context_snapshot(struct app_state *app, struct app_voice *v, json_t **result,
-    char *error, size_t size)
+voice_context_snapshot(
+    struct app_state *app, struct app_voice *v, json_t **result, char *error, size_t size)
 {
     json_t *context = NULL;
     *result = NULL;
@@ -632,8 +640,7 @@ voice_context_snapshot(struct app_state *app, struct app_voice *v, json_t **resu
 }
 
 static int
-voice_record_at(struct app_state *app, struct app_voice *v,
-    const char *connection, json_t *event)
+voice_record_at(struct app_state *app, struct app_voice *v, const char *connection, json_t *event)
 {
     if (!event) return -1;
     char error[256];
@@ -642,9 +649,10 @@ voice_record_at(struct app_state *app, struct app_voice *v,
     json_t *safe = voice_redact_bounded(v, event, SNAG_MAX_EVENT_LINE, error, sizeof(error));
     json_decref(event);
     if (!safe) return -1;
-    return snag_app_commit_event(app, "voice_event", json_pack("{s:s,s:s,s:s,s:o}",
-        "connection_id", connection, "provider", v->config.provider,
-        "model", v->config.realtime_model, "event", safe), error, sizeof(error));
+    return snag_app_commit_event(app, "voice_event",
+        json_pack("{s:s,s:s,s:s,s:o}", "connection_id", connection, "provider", v->config.provider,
+            "model", v->config.realtime_model, "event", safe),
+        error, sizeof(error));
 }
 
 static int
@@ -659,9 +667,9 @@ ui_observation(void *opaque, const char *presentation, const char *text, const c
     struct app_state *app = opaque;
     struct app_voice *v = app->voice;
     if (!v || v->ui_observation_failed || app->session.delete_requested) return;
-    json_t *event = json_pack("{s:s,s:s,s:s,s:s,s:o}", "type", "voice_response",
-        "operation", "ui_observation", "presentation", presentation, "text", text,
-        "input", input ? json_string(input) : json_null());
+    json_t *event = json_pack("{s:s,s:s,s:s,s:s,s:o}", "type", "voice_response", "operation",
+        "ui_observation", "presentation", presentation, "text", text, "input",
+        input ? json_string(input) : json_null());
     if (voice_record(app, v, event) < 0) {
         v->ui_observation_failed = true;
         atomic_store(&v->stop, true);
@@ -676,28 +684,32 @@ observe_ui(struct app_state *app)
 }
 
 static int
-handoff_record(struct app_state *app, struct app_voice *v,
-    const struct voice_handoff *handoff, json_t *event)
+handoff_record(
+    struct app_state *app, struct app_voice *v, const struct voice_handoff *handoff, json_t *event)
 {
     return voice_record_at(app, v, snag_json_string(handoff->source, "connection_id"), event);
 }
 
 static int
-interface_settled(struct app_state *app, const struct voice_handoff *handoff,
-    int outcome, json_t *metrics, bool discarded)
+interface_settled(struct app_state *app, const struct voice_handoff *handoff, int outcome,
+    json_t *metrics, bool discarded)
 {
     struct app_voice *v = app->voice;
-    json_t *event = json_pack("{s:s,s:s,s:s,s:s,s:s,s:s,s:o}",
-        "type", "voice_response", "operation", !handoff ? "native_compaction_settled" :
-            v->compact.active ? "interface_compaction_settled" : "interface_request_settled",
-        "provider", handoff ? handoff->provider : v->compact.provider,
-        "model", handoff ? handoff->model : v->compact.model,
-        "effort", handoff ? handoff->effort : v->compact.effort,
-        "status", outcome == 2 ? "cancelled" : outcome ? "failed" : "completed",
-        "metrics", metrics);
+    json_t *event =
+        json_pack("{s:s,s:s,s:s,s:s,s:s,s:s,s:o}", "type", "voice_response", "operation",
+            !handoff            ? "native_compaction_settled"
+            : v->compact.active ? "interface_compaction_settled"
+                                : "interface_request_settled",
+            "provider", handoff ? handoff->provider : v->compact.provider, "model",
+            handoff ? handoff->model : v->compact.model, "effort",
+            handoff ? handoff->effort : v->compact.effort, "status",
+            outcome == 2 ? "cancelled"
+            : outcome    ? "failed"
+                         : "completed",
+            "metrics", metrics);
     if ((handoff && json_object_set_new(event, "call_id", json_string(handoff->call)) < 0) ||
-        (discarded && json_object_set_new(event, "disposition",
-            json_string("discarded_on_voice_stop")) < 0)) {
+        (discarded && json_object_set_new(
+                          event, "disposition", json_string("discarded_on_voice_stop")) < 0)) {
         json_decref(event);
         return -1;
     }
@@ -716,26 +728,26 @@ request_record_output(struct app_state *app, const struct voice_handoff *handoff
         struct snag_response_item item = snag_response_graph_item(graph, i);
         json_t *event = NULL;
         if (item.kind == SNAG_ITEM_TOOL_CALL) {
-            event = json_pack("{s:s,s:s,s:s,s:s,s:O}",
-                "type", "voice_response", "operation", handoff ?
-                    "interface_tool_discarded" : "native_compaction_tool_discarded",
-                "tool_call_id", item.provider_call_id ? item.provider_call_id : "",
-                "tool", item.name ? item.name : "",
-                "arguments", item.arguments ? item.arguments : json_null());
+            event = json_pack("{s:s,s:s,s:s,s:s,s:O}", "type", "voice_response", "operation",
+                handoff ? "interface_tool_discarded" : "native_compaction_tool_discarded",
+                "tool_call_id", item.provider_call_id ? item.provider_call_id : "", "tool",
+                item.name ? item.name : "", "arguments",
+                item.arguments ? item.arguments : json_null());
         } else if (item.text && *item.text) {
-            const char *operation = handoff ? "interface_output_discarded" : discarded ?
-                "native_compaction_output_discarded" : "native_compaction_output";
-            event = json_pack("{s:s,s:s,s:I,s:s,s:s}",
-                "type", "voice_response", "operation", operation,
-                "item_index", (json_int_t)i,
-                "kind", item.kind == SNAG_ITEM_REFUSAL ? "refusal" : "assistant",
-                "text", item.text);
-        } else continue;
+            const char *operation = handoff     ? "interface_output_discarded"
+                                    : discarded ? "native_compaction_output_discarded"
+                                                : "native_compaction_output";
+            event = json_pack("{s:s,s:s,s:I,s:s,s:s}", "type", "voice_response", "operation",
+                operation, "item_index", (json_int_t)i, "kind",
+                item.kind == SNAG_ITEM_REFUSAL ? "refusal" : "assistant", "text", item.text);
+        } else
+            continue;
         if (handoff && json_object_set_new(event, "call_id", json_string(handoff->call)) < 0) {
             json_decref(event);
             rc = -1;
-        } else if ((handoff ? handoff_record(app, v, handoff, event) :
-                voice_record(app, v, event)) < 0) rc = -1;
+        } else if ((handoff ? handoff_record(app, v, handoff, event)
+                            : voice_record(app, v, event)) < 0)
+            rc = -1;
     }
     return rc;
 }
@@ -751,12 +763,13 @@ interface_close(struct app_state *app)
         json_t *metrics = NULL;
         int outcome = 0;
         char error[256];
-        int ready = snag_app_voice_request_take(app, &graph, &outcome, &metrics,
-            error, sizeof(error));
+        int ready =
+            snag_app_voice_request_take(app, &graph, &outcome, &metrics, error, sizeof(error));
         if (ready != 1) {
             json_decref(metrics);
             rc = -1;
-        } else if (interface_settled(app, handoff, outcome, metrics, true) < 0) rc = -1;
+        } else if (interface_settled(app, handoff, outcome, metrics, true) < 0)
+            rc = -1;
         if (request_record_output(app, handoff, &graph, true) < 0) rc = -1;
         snag_response_graph_free(&graph);
     }
@@ -766,29 +779,30 @@ interface_close(struct app_state *app)
     for (size_t i = 0u; i < SNAG_VOICE_HANDOFFS; ++i) {
         handoff = &v->handoffs[i];
         if (!handoff->source) continue;
-        if (handoff_record(app, v, handoff, json_pack("{s:s,s:s,s:s,s:s,s:O}",
-                "type", "voice_response", "operation", "interface_closed",
-                "call_id", handoff->call, "queue_id", handoff->queue,
-                "reply", handoff->reply ? handoff->reply : json_null())) < 0) rc = -1;
+        if (handoff_record(app, v, handoff,
+                json_pack("{s:s,s:s,s:s,s:s,s:O}", "type", "voice_response", "operation",
+                    "interface_closed", "call_id", handoff->call, "queue_id", handoff->queue,
+                    "reply", handoff->reply ? handoff->reply : json_null())) < 0)
+            rc = -1;
     }
     return rc;
 }
 
 int
-snag_app_voice_output(struct app_state *app, const struct snag_response_item *call,
-                      json_t **result, char *error, size_t size)
+snag_app_voice_output(struct app_state *app, const struct snag_response_item *call, json_t **result,
+    char *error, size_t size)
 {
     const char *text = NULL;
     *result = NULL;
     if (!snag_json_arg_keys(call->arguments, "", "text", error, size) ||
-        !snag_json_arg_text(call->arguments, "text", 1u, SNAG_MAX_QUEUED_TEXT - 128u,
-            true, &text, error, size)) {
+        !snag_json_arg_text(
+            call->arguments, "text", 1u, SNAG_MAX_QUEUED_TEXT - 128u, true, &text, error, size)) {
         *result = snag_tool_result_terminal(false, error);
         return *result ? 0 : -1;
     }
     struct app_voice *v = app->voice;
-    bool ready = v && atomic_load(&v->output_ready) &&
-        !atomic_load(&v->stop) && !atomic_load(&v->done) && !voice_attachment_lost(v);
+    bool ready = v && atomic_load(&v->output_ready) && !atomic_load(&v->stop) &&
+                 !atomic_load(&v->done) && !voice_attachment_lost(v);
     bool busy = false;
     if (v) {
         pthread_mutex_lock(&v->mutex);
@@ -805,10 +819,10 @@ snag_app_voice_output(struct app_state *app, const struct snag_response_item *ca
         return *result ? 0 : -1;
     }
     if (app->session.active_read_only || !ready || busy) {
-        *result = snag_tool_result_terminal(false, app->session.active_read_only ?
-            "Read-only turns cannot send speech." : !ready ?
-            "Voice output is unavailable; no audio device was activated." :
-            "A voice output is pending; this message was not accepted.");
+        *result = snag_tool_result_terminal(
+            false, app->session.active_read_only ? "Read-only turns cannot send speech."
+                   : !ready ? "Voice output is unavailable; no audio device was activated."
+                            : "A voice output is pending; this message was not accepted.");
         return *result ? 0 : -1;
     }
     json_t *safe = snag_tool_result_terminal(true, text);
@@ -817,18 +831,18 @@ snag_app_voice_output(struct app_state *app, const struct snag_response_item *ca
     if (!rc) rc = snag_random_id(id);
     struct snag_buf content = {.max = SNAG_MAX_QUEUED_TEXT};
     if (!rc) {
-        rc = snag_buf_printf(&content, "Model output:\n%s",
-            snag_json_string(safe, "model_text"));
+        rc = snag_buf_printf(&content, "Model output:\n%s", snag_json_string(safe, "model_text"));
     }
     if (!rc) rc = snag_buf_terminate(&content);
-    json_t *message = !rc ? json_pack("{s:s,s:s,s:b}", "id", id,
-        "text", (const char *)content.data, "standalone", true) : NULL;
+    json_t *message = !rc ? json_pack("{s:s,s:s,s:b}", "id", id, "text", (const char *)content.data,
+                                "standalone", true)
+                          : NULL;
     snag_buf_free(&content);
     json_decref(safe);
     if (!message) return -1;
-    rc = voice_record(app, v, json_pack("{s:s,s:s,s:s,s:O}", "type", "voice_response",
-        "operation", "agent_output_queued", "source_call_id", call->call_id ? call->call_id : "",
-        "output", message));
+    rc = voice_record(app, v,
+        json_pack("{s:s,s:s,s:s,s:O}", "type", "voice_response", "operation", "agent_output_queued",
+            "source_call_id", call->call_id ? call->call_id : "", "output", message));
     if (rc < 0) {
         json_decref(message);
         return -1;
@@ -854,8 +868,8 @@ caption_finish(struct app_voice *v, unsigned int who, const char *text)
     if (!have || !length) return;
     if (length <= have && !memcmp(caption, text, length)) {
         memmove(caption, caption + length, have - length + 1u);
-    } else if (length >= have && (!memcmp(text, caption, have) ||
-        !memcmp(text + length - have, caption, have))) {
+    } else if (length >= have &&
+               (!memcmp(text, caption, have) || !memcmp(text + length - have, caption, have))) {
         caption[0] = '\0';
     } else {
         return;
@@ -863,16 +877,18 @@ caption_finish(struct app_voice *v, unsigned int who, const char *text)
     v->caption_dirty[who] = true;
 }
 
-static int owner_notice(void *opaque,const json_t *event)
+static int
+owner_notice(void *opaque, const json_t *event)
 {
-    struct app_voice *v=opaque;
-    const char *type=snag_json_string(event,"type"),*speaker=snag_json_string(event,"speaker");
-    const char *item=snag_json_string(event,"item_id");
-    unsigned int who=speaker && !strcmp(speaker,"assistant");
-    if(type && !strcmp(type,"voice_caption")) {
-        const char *text=snag_json_string(event,"text");
-        if(!speaker || !item || !text)return -1;
-        size_t len=strlen(text),size=sizeof(v->caption[who]);
+    struct app_voice *v = opaque;
+    const char *type = snag_json_string(event, "type"),
+               *speaker = snag_json_string(event, "speaker");
+    const char *item = snag_json_string(event, "item_id");
+    unsigned int who = speaker && !strcmp(speaker, "assistant");
+    if (type && !strcmp(type, "voice_caption")) {
+        const char *text = snag_json_string(event, "text");
+        if (!speaker || !item || !text) return -1;
+        size_t len = strlen(text), size = sizeof(v->caption[who]);
         bool stream = json_is_true(json_object_get(event, "stream"));
         pthread_mutex_lock(&v->mutex);
         /* Native turn captions can mirror the per-speaker transcript stream.
@@ -881,53 +897,63 @@ static int owner_notice(void *opaque,const json_t *event)
             pthread_mutex_unlock(&v->mutex);
             return 0;
         }
-        if (json_is_true(json_object_get(event, "replace")) ||
-            stream != v->caption_stream[who] || (!stream && strcmp(item, v->caption_item[who]))) {
+        if (json_is_true(json_object_get(event, "replace")) || stream != v->caption_stream[who] ||
+            (!stream && strcmp(item, v->caption_item[who]))) {
             v->caption[who][0] = '\0';
         }
         if (strcmp(item, v->caption_item[who])) {
-            if(!snag_strcpy(v->caption_item[who],sizeof(v->caption_item[who]),item)) {
-                pthread_mutex_unlock(&v->mutex);return -1;
+            if (!snag_strcpy(v->caption_item[who], sizeof(v->caption_item[who]), item)) {
+                pthread_mutex_unlock(&v->mutex);
+                return -1;
             }
         }
         v->caption_stream[who] = stream;
-        size_t old=strlen(v->caption[who]);
-        if(len>=size) {
-            size_t skip=len-(size-1u);
-            while(skip<len && ((unsigned char)text[skip]&0xc0u)==0x80u)++skip;
-            text+=skip;len-=skip;old=0;
-        } else if(old+len>=size) {
-            size_t skip=old+len-(size-1u);
-            while(skip<old && ((unsigned char)v->caption[who][skip]&0xc0u)==0x80u)++skip;
-            memmove(v->caption[who],v->caption[who]+skip,old-skip);old-=skip;
+        size_t old = strlen(v->caption[who]);
+        if (len >= size) {
+            size_t skip = len - (size - 1u);
+            while (skip < len && ((unsigned char)text[skip] & 0xc0u) == 0x80u) ++skip;
+            text += skip;
+            len -= skip;
+            old = 0;
+        } else if (old + len >= size) {
+            size_t skip = old + len - (size - 1u);
+            while (skip < old && ((unsigned char)v->caption[who][skip] & 0xc0u) == 0x80u) ++skip;
+            memmove(v->caption[who], v->caption[who] + skip, old - skip);
+            old -= skip;
         }
-        memcpy(v->caption[who]+old,text,len);v->caption[who][old+len]=0;
-        v->caption_dirty[who]=true;
-        pthread_mutex_unlock(&v->mutex);return 0;
+        memcpy(v->caption[who] + old, text, len);
+        v->caption[who][old + len] = 0;
+        v->caption_dirty[who] = true;
+        pthread_mutex_unlock(&v->mutex);
+        return 0;
     }
-    char digest[SNAG_SHA256_HEX_LEN+1u];size_t bytes;
-    if(snag_json_digest_bounded(event,VOICE_MESSAGE,digest,&bytes)<0)return -1;
+    char digest[SNAG_SHA256_HEX_LEN + 1u];
+    size_t bytes;
+    if (snag_json_digest_bounded(event, VOICE_MESSAGE, digest, &bytes) < 0) return -1;
     bool handoff = type && !strcmp(type, "voice_handoff");
     if (handoff && atomic_load(&v->pending_handoffs) >= SNAG_VOICE_HANDOFFS) return 1;
     pthread_mutex_lock(&v->mutex);
-    if(type && !strcmp(type,"voice_muted") && json_is_true(json_object_get(event,"muted"))) {
-        v->caption[0][0]=0;v->caption_dirty[0]=true;
+    if (type && !strcmp(type, "voice_muted") && json_is_true(json_object_get(event, "muted"))) {
+        v->caption[0][0] = 0;
+        v->caption_dirty[0] = true;
     }
     if (type && !strcmp(type, "voice_transcript") &&
         json_is_true(json_object_get(event, "stream")) && v->caption_stream[who]) {
         caption_finish(v, who, snag_json_string(event, "text"));
-    } else if (type && ((!strcmp(type, "voice_transcript") && item &&
-        !strcmp(item, v->caption_item[who])) || !strcmp(type, "voice_asr_failed") ||
-        !strcmp(type, "voice_interrupted"))) {
-        if(!strcmp(type,"voice_interrupted"))who=1u;
-        if(strcmp(type,"voice_asr_failed") || (item && !strcmp(item,v->caption_item[who]))) {
-            v->caption[who][0]=0;v->caption_dirty[who]=true;
+    } else if (type &&
+               ((!strcmp(type, "voice_transcript") && item &&
+                    !strcmp(item, v->caption_item[who])) ||
+                   !strcmp(type, "voice_asr_failed") || !strcmp(type, "voice_interrupted"))) {
+        if (!strcmp(type, "voice_interrupted")) who = 1u;
+        if (strcmp(type, "voice_asr_failed") || (item && !strcmp(item, v->caption_item[who]))) {
+            v->caption[who][0] = 0;
+            v->caption_dirty[who] = true;
         }
     }
-    int rc=-1;
-    if(v->notice_count<VOICE_NOTICES && bytes<=VOICE_MESSAGE-v->notice_bytes) {
-        size_t at=(v->notice_read+v->notice_count)%VOICE_NOTICES;
-        v->notices[at]=json_deep_copy(event);
+    int rc = -1;
+    if (v->notice_count < VOICE_NOTICES && bytes <= VOICE_MESSAGE - v->notice_bytes) {
+        size_t at = (v->notice_read + v->notice_count) % VOICE_NOTICES;
+        v->notices[at] = json_deep_copy(event);
         if (v->notices[at]) {
             v->notice_size[at] = bytes;
             v->notice_count++;
@@ -936,7 +962,8 @@ static int owner_notice(void *opaque,const json_t *event)
             rc = 0;
         }
     }
-    pthread_mutex_unlock(&v->mutex);return rc;
+    pthread_mutex_unlock(&v->mutex);
+    return rc;
 }
 #ifdef SNAJPAGENT_TEST_TRANSPORT_ENDPOINTS
 json_t *
@@ -953,8 +980,8 @@ snag_app_voice_fixture_captions(const json_t *events)
     for (size_t i = 0; !rc && i < json_array_size(events); ++i) {
         rc = owner_notice(v, json_array_get(events, i));
     }
-    json_t *result = !rc ? json_pack("{s:s,s:s}",
-        "user", v->caption[0], "assistant", v->caption[1]) : NULL;
+    json_t *result =
+        !rc ? json_pack("{s:s,s:s}", "user", v->caption[0], "assistant", v->caption[1]) : NULL;
     for (size_t i = 0; i < v->notice_count; ++i) json_decref(v->notices[i]);
     pthread_mutex_destroy(&v->mutex);
     free(v);
@@ -963,40 +990,54 @@ snag_app_voice_fixture_captions(const json_t *events)
 
 /* Existing transport tests exercise main-owner close without opening devices
  * or connecting to a provider. Production has no fixture entry point. */
-int snag_app_voice_fixture(struct app_state *app,const json_t *notices,bool done)
+int
+snag_app_voice_fixture(struct app_state *app, const json_t *notices, bool done)
 {
-    if(app->voice)return -1;
-    struct app_voice *v=calloc(1,sizeof(*v));if(!v)return -1;
-    if(pthread_mutex_init(&v->mutex,NULL)) {free(v);return -1;}
-    atomic_init(&v->stop,false);atomic_init(&v->muted,false);atomic_init(&v->mute_pending,false);
-    atomic_init(&v->activate,false);atomic_init(&v->done,done);
+    if (app->voice) return -1;
+    struct app_voice *v = calloc(1, sizeof(*v));
+    if (!v) return -1;
+    if (pthread_mutex_init(&v->mutex, NULL)) {
+        free(v);
+        return -1;
+    }
+    atomic_init(&v->stop, false);
+    atomic_init(&v->muted, false);
+    atomic_init(&v->mute_pending, false);
+    atomic_init(&v->activate, false);
+    atomic_init(&v->done, done);
     atomic_init(&v->credential_ready, false);
     atomic_init(&v->pending_handoffs, 0u);
     atomic_init(&v->history_queued, false);
     atomic_init(&v->history_sent, false);
     atomic_init(&v->credential_accepted, true);
     atomic_init(&v->output_ready, !done);
-    v->ui=&app->ui;v->attachment=snag_ui_session_attachment(&app->ui);
-    strcpy(v->connection,"0123456789abcdef0123456789abcdef");
-    strcpy(v->config.provider,"default");strcpy(v->config.realtime_model,"fixture");
+    v->ui = &app->ui;
+    v->attachment = snag_ui_session_attachment(&app->ui);
+    strcpy(v->connection, "0123456789abcdef0123456789abcdef");
+    strcpy(v->config.provider, "default");
+    strcpy(v->config.realtime_model, "fixture");
     strcpy(v->config.transcribe_model, "asr");
     strcpy(v->config.voice, "voice");
     v->root_fd = app->store.root_fd;
-    const struct snag_provider_config *provider = app->config ?
-        snag_config_provider(app->config, app->config->audio.provider[0] ?
-            app->config->audio.provider : app->session.default_provider) : NULL;
+    const struct snag_provider_config *provider =
+        app->config ? snag_config_provider(app->config, app->config->audio.provider[0]
+                                                            ? app->config->audio.provider
+                                                            : app->session.default_provider)
+                    : NULL;
     if (provider) {
         v->provider = *provider;
         v->provider.models = NULL;
         v->provider.model_count = 0u;
     }
-    for(size_t i=0;i<8u;++i)snag_buf_init(&v->send[i],VOICE_MESSAGE);
-    snag_buf_init(&v->receive,VOICE_MESSAGE);v->announced=true;app->voice=v;
+    for (size_t i = 0; i < 8u; ++i) snag_buf_init(&v->send[i], VOICE_MESSAGE);
+    snag_buf_init(&v->receive, VOICE_MESSAGE);
+    v->announced = true;
+    app->voice = v;
     observation_start(v, &app->session);
     if (snag_secret_set_build(&v->secrets, app->config, NULL, NULL, 0u) < 0) return -1;
     observe_ui(app);
-    for(size_t i=0;i<json_array_size(notices);++i)
-        if(owner_notice(v,json_array_get(notices,i))<0)return -1;
+    for (size_t i = 0; i < json_array_size(notices); ++i)
+        if (owner_notice(v, json_array_get(notices, i)) < 0) return -1;
     return 0;
 }
 bool
@@ -1054,35 +1095,40 @@ snag_app_voice_fixture_context(struct app_state *app)
 }
 #endif
 
-static int owner_send(void *opaque,const json_t *event)
+static int
+owner_send(void *opaque, const json_t *event)
 {
-    struct app_voice *v=opaque;
-    if(v->send_count==8u)return -1;
-    struct snag_buf *out=&v->send[(v->send_read+v->send_count)%8u];
+    struct app_voice *v = opaque;
+    if (v->send_count == 8u) return -1;
+    struct snag_buf *out = &v->send[(v->send_read + v->send_count) % 8u];
     snag_buf_reset(out);
-    if(snag_json_canonical(event,out)<0 || out->len>VOICE_MESSAGE-v->send_bytes)return -1;
-    if(!v->send_count)v->send_deadline=snag_monotonic_ms()+2000u;
-    const char *type=snag_json_string(event,"type");
-    v->send_audio[(v->send_read+v->send_count)%8u]=type && !strcmp(type,"input_audio_buffer.append");
-    ++v->send_count;v->send_bytes+=out->len;return 0;
+    if (snag_json_canonical(event, out) < 0 || out->len > VOICE_MESSAGE - v->send_bytes) return -1;
+    if (!v->send_count) v->send_deadline = snag_monotonic_ms() + 2000u;
+    const char *type = snag_json_string(event, "type");
+    v->send_audio[(v->send_read + v->send_count) % 8u] =
+        type && !strcmp(type, "input_audio_buffer.append");
+    ++v->send_count;
+    v->send_bytes += out->len;
+    return 0;
 }
-static int owner_play(void *opaque,const char *item,const int16_t *samples,uint32_t frames)
+static int
+owner_play(void *opaque, const char *item, const int16_t *samples, uint32_t frames)
 {
-    struct app_voice *v=opaque;
+    struct app_voice *v = opaque;
     /* Sideband completion can precede device activation during history restore. */
     if (!frames) {
         if (v->device) snag_audio_finish(v->device);
         return 0;
     }
     if (!v->device) return -1;
-    if(strcmp(v->audio_item,item)) {
-        if(snag_audio_pending(v->device))return -1;
-        if(!snag_strcpy(v->audio_item,sizeof(v->audio_item),item))return -1;
-        v->audio_base=snag_audio_delivered(v->device);
-        v->gap_reported=false;
+    if (strcmp(v->audio_item, item)) {
+        if (snag_audio_pending(v->device)) return -1;
+        if (!snag_strcpy(v->audio_item, sizeof(v->audio_item), item)) return -1;
+        v->audio_base = snag_audio_delivered(v->device);
+        v->gap_reported = false;
     }
-    v->drained_ms=0;
-    return snag_audio_play(v->device,samples,frames)==frames?0:-1;
+    v->drained_ms = 0;
+    return snag_audio_play(v->device, samples, frames) == frames ? 0 : -1;
 }
 #ifdef SNAJPAGENT_TEST_TRANSPORT_ENDPOINTS
 int
@@ -1091,51 +1137,63 @@ snag_app_voice_fixture_play(struct app_state *app, const int16_t *samples, uint3
     return app->voice ? owner_play(app->voice, "native-output", samples, frames) : -1;
 }
 #endif
-static uint32_t owner_interrupt(void *opaque)
+static uint32_t
+owner_interrupt(void *opaque)
 {
-    struct app_voice *v=opaque;
-    if (v->rtc)snag_voice_rtc_flush(v->rtc);
-    if(!v->device)return 0;
+    struct app_voice *v = opaque;
+    if (v->rtc) snag_voice_rtc_flush(v->rtc);
+    if (!v->device) return 0;
     /* Read before flush, so callback progress racing the flush cannot be
      * attributed to audio heard by the user. Subtract device pipeline latency. */
-    uint32_t frames=snag_audio_delivered(v->device)-v->audio_base;
-    uint32_t ms=frames/24u,latency=snag_audio_latency_ms(v->device);
-    snag_audio_interrupt(v->device);v->drained_ms=0;
-    return ms>latency?ms-latency:0;
+    uint32_t frames = snag_audio_delivered(v->device) - v->audio_base;
+    uint32_t ms = frames / 24u, latency = snag_audio_latency_ms(v->device);
+    snag_audio_interrupt(v->device);
+    v->drained_ms = 0;
+    return ms > latency ? ms - latency : 0;
 }
-static int owner_controls(void *opaque,unsigned int timeout)
+static int
+owner_controls(void *opaque, unsigned int timeout)
 {
-    struct app_voice *v=opaque;
+    struct app_voice *v = opaque;
     if (timeout && !atomic_load(&v->stop)) (void)snag_sleep_ms(timeout);
-    if (voice_attachment_lost(v))atomic_store(&v->stop,true);
-    return atomic_load(&v->stop)?2:0;
+    if (voice_attachment_lost(v)) atomic_store(&v->stop, true);
+    return atomic_load(&v->stop) ? 2 : 0;
 }
-static int owner_flush(struct app_voice *v)
+static int
+owner_flush(struct app_voice *v)
 {
-    if (!v->send_count || owner_controls(v,0u))return 0;
-    if(!v->send_offset && v->send_audio[v->send_read] &&
+    if (!v->send_count || owner_controls(v, 0u)) return 0;
+    if (!v->send_offset && v->send_audio[v->send_read] &&
         (atomic_load(&v->muted) || atomic_load(&v->mute_pending))) {
-        struct snag_buf *out=&v->send[v->send_read];v->send_bytes-=out->len;
-        snag_secret_clear(out->data,out->len);snag_buf_reset(out);
-        v->send_read=(v->send_read+1u)%8u;--v->send_count;return 0;
+        struct snag_buf *out = &v->send[v->send_read];
+        v->send_bytes -= out->len;
+        snag_secret_clear(out->data, out->len);
+        snag_buf_reset(out);
+        v->send_read = (v->send_read + 1u) % 8u;
+        --v->send_count;
+        return 0;
     }
     if (snag_monotonic_ms() > v->send_deadline) {
         strcpy(v->error, "Realtime send stalled; renewing without replay");
         v->retryable = true;
         return SNAG_PROVIDER_VOICE_RETRY;
     }
-    struct snag_buf *out=&v->send[v->send_read];
-    size_t before=v->send_offset;
-    int rc = snag_provider_voice_send(v->socket, out->data, out->len,
-        &v->send_offset, v->error, sizeof(v->error));
+    struct snag_buf *out = &v->send[v->send_read];
+    size_t before = v->send_offset;
+    int rc = snag_provider_voice_send(
+        v->socket, out->data, out->len, &v->send_offset, v->error, sizeof(v->error));
     if (rc < 0) {
         v->retryable = rc == SNAG_PROVIDER_VOICE_RETRY;
         return rc;
     }
-    if(v->send_offset!=before)v->send_deadline=snag_monotonic_ms()+2000u;
-    if(v->send_offset==out->len) {
-        v->send_bytes-=out->len;snag_secret_clear(out->data,out->len);snag_buf_reset(out);
-        v->send_read=(v->send_read+1u)%8u;--v->send_count;v->send_offset=0;
+    if (v->send_offset != before) v->send_deadline = snag_monotonic_ms() + 2000u;
+    if (v->send_offset == out->len) {
+        v->send_bytes -= out->len;
+        snag_secret_clear(out->data, out->len);
+        snag_buf_reset(out);
+        v->send_read = (v->send_read + 1u) % 8u;
+        --v->send_count;
+        v->send_offset = 0;
     }
     return 0;
 }
@@ -1145,20 +1203,23 @@ owner_capture(struct app_voice *v)
 {
     /* Public PCM shares the control socket; native media has its own transport. */
     if (atomic_load(&v->stop) || atomic_load(&v->muted) || v->applied_mute ||
-        (!v->rtc && v->send_count)) return 0;
+        (!v->rtc && v->send_count))
+        return 0;
     int16_t pcm[480];
     uint32_t position = 0u;
     uint32_t count = snag_audio_capture(v->device, pcm, 480u, &position);
-    int rc = count ? (v->rtc ? snag_voice_rtc_input(v->rtc, pcm, count, position) :
-        snag_voice_input(v->protocol, pcm, count, v->error, sizeof(v->error))) : 0;
+    int rc = count
+                 ? (v->rtc ? snag_voice_rtc_input(v->rtc, pcm, count, position)
+                           : snag_voice_input(v->protocol, pcm, count, v->error, sizeof(v->error)))
+                 : 0;
     snag_secret_clear(pcm, sizeof(pcm));
     return rc;
 }
 
 #ifdef SNAJPAGENT_TEST_TRANSPORT_ENDPOINTS
 int
-snag_app_voice_fixture_capture(struct app_state *app, struct snag_audio_device *device,
-    struct snag_voice_rtc *rtc)
+snag_app_voice_fixture_capture(
+    struct app_state *app, struct snag_audio_device *device, struct snag_voice_rtc *rtc)
 {
     struct app_voice *v = app->voice;
     if (!v || v->thread_started || v->device || v->rtc) return -1;
@@ -1174,70 +1235,91 @@ snag_app_voice_fixture_capture(struct app_state *app, struct snag_audio_device *
 }
 #endif /* SNAJPAGENT_TEST_TRANSPORT_ENDPOINTS */
 
-static int owner_mute(struct app_voice *v)
+static int
+owner_mute(struct app_voice *v)
 {
-    if(!snag_voice_ready(v->protocol))return 0;
-    bool mute=atomic_load(&v->muted);
+    if (!snag_voice_ready(v->protocol)) return 0;
+    bool mute = atomic_load(&v->muted);
     /* A complete mute/unmute pair between iterations still clears old input. */
-    if(atomic_exchange(&v->mute_pending,false))mute=true;
-    if(mute==v->applied_mute)return 0;
-    int rc=v->device?snag_audio_mute(v->device,mute):0;
-    if(rc)return rc<0?-1:0;
-    v->applied_mute=mute;
+    if (atomic_exchange(&v->mute_pending, false)) mute = true;
+    if (mute == v->applied_mute) return 0;
+    int rc = v->device ? snag_audio_mute(v->device, mute) : 0;
+    if (rc) return rc < 0 ? -1 : 0;
+    v->applied_mute = mute;
     if (mute && v->rtc && snag_voice_rtc_input(v->rtc, NULL, 0u, 0u) < 0) return -1;
     /* An unsent audio message can be withdrawn. A partially sent frame must
      * finish before clear, preserving WebSocket framing. */
-    if(mute && v->send_count && !v->send_offset && v->send_audio[v->send_read]) {
-        struct snag_buf *out=&v->send[v->send_read];v->send_bytes-=out->len;
-        snag_secret_clear(out->data,out->len);snag_buf_reset(out);
-        v->send_read=(v->send_read+1u)%8u;--v->send_count;
+    if (mute && v->send_count && !v->send_offset && v->send_audio[v->send_read]) {
+        struct snag_buf *out = &v->send[v->send_read];
+        v->send_bytes -= out->len;
+        snag_secret_clear(out->data, out->len);
+        snag_buf_reset(out);
+        v->send_read = (v->send_read + 1u) % 8u;
+        --v->send_count;
     }
-    if(snag_voice_mute(v->protocol,mute,v->error,sizeof(v->error))<0)return -1;
-    if(mute || v->device) {
-        json_t *event=json_pack("{s:s,s:b}","type","voice_muted","muted",mute);
-        rc=event?owner_notice(v,event):-1;json_decref(event);
+    if (snag_voice_mute(v->protocol, mute, v->error, sizeof(v->error)) < 0) return -1;
+    if (mute || v->device) {
+        json_t *event = json_pack("{s:s,s:b}", "type", "voice_muted", "muted", mute);
+        rc = event ? owner_notice(v, event) : -1;
+        json_decref(event);
     }
     return rc;
 }
 
 #ifdef SNAJPAGENT_TEST_TRANSPORT_ENDPOINTS
-int snag_app_voice_fixture_checkpoint(struct app_state *app)
+int
+snag_app_voice_fixture_checkpoint(struct app_state *app)
 {
-    return app->voice?owner_controls(app->voice,0u):-1;
+    return app->voice ? owner_controls(app->voice, 0u) : -1;
 }
 
-int snag_app_voice_fixture_mute(struct app_state *app)
+int
+snag_app_voice_fixture_mute(struct app_state *app)
 {
-    struct app_voice *v=app->voice;if(!v)return -1;
-    struct snag_voice_io io={owner_send,owner_notice,owner_play,owner_interrupt};
+    struct app_voice *v = app->voice;
+    if (!v) return -1;
+    struct snag_voice_io io = {owner_send, owner_notice, owner_play, owner_interrupt};
     v->protocol = snag_voice_new(&io, v, "fixture", "asr", "voice", NULL);
-    if(!v->protocol || snag_voice_begin(v->protocol,v->error,sizeof(v->error))<0)return -1;
-    json_t *sent=json_loadb((char *)v->send[0].data,v->send[0].len,0,NULL);
-    json_t *event=sent?json_pack("{s:s,s:O}","type","session.updated","session",json_object_get(sent,"session")):NULL;
-    int rc=event?snag_voice_event(v->protocol,event,v->error,sizeof(v->error)):-1;
-    json_decref(event);json_decref(sent);if(rc<0)return -1;
-    snag_buf_reset(&v->send[0]);v->send_bytes=v->send_count=0;
-    int16_t pcm[480]={0};
-    if(snag_voice_input(v->protocol,pcm,480u,v->error,sizeof(v->error))<0)return -1;
-    atomic_store(&v->muted,true);atomic_store(&v->mute_pending,true);atomic_store(&v->muted,false);
-    if(owner_mute(v)<0 || !v->applied_mute || v->send_count!=1u || v->send_audio[v->send_read])return -1;
-    if(owner_mute(v)<0 || v->applied_mute || v->notice_count!=1u)return -1;
+    if (!v->protocol || snag_voice_begin(v->protocol, v->error, sizeof(v->error)) < 0) return -1;
+    json_t *sent = json_loadb((char *)v->send[0].data, v->send[0].len, 0, NULL);
+    json_t *event = sent ? json_pack("{s:s,s:O}", "type", "session.updated", "session",
+                               json_object_get(sent, "session"))
+                         : NULL;
+    int rc = event ? snag_voice_event(v->protocol, event, v->error, sizeof(v->error)) : -1;
+    json_decref(event);
+    json_decref(sent);
+    if (rc < 0) return -1;
+    snag_buf_reset(&v->send[0]);
+    v->send_bytes = v->send_count = 0;
+    int16_t pcm[480] = {0};
+    if (snag_voice_input(v->protocol, pcm, 480u, v->error, sizeof(v->error)) < 0) return -1;
+    atomic_store(&v->muted, true);
+    atomic_store(&v->mute_pending, true);
+    atomic_store(&v->muted, false);
+    if (owner_mute(v) < 0 || !v->applied_mute || v->send_count != 1u || v->send_audio[v->send_read])
+        return -1;
+    if (owner_mute(v) < 0 || v->applied_mute || v->notice_count != 1u) return -1;
     /* A late mute at flush time withdraws an untouched PCM frame too. */
-    snag_buf_reset(&v->send[v->send_read]);v->send_bytes=v->send_count=0;
-    if(snag_voice_input(v->protocol,pcm,480u,v->error,sizeof(v->error))<0)return -1;
-    atomic_store(&v->muted,true);
-    if(owner_flush(v)<0 || v->send_count)return -1;
+    snag_buf_reset(&v->send[v->send_read]);
+    v->send_bytes = v->send_count = 0;
+    if (snag_voice_input(v->protocol, pcm, 480u, v->error, sizeof(v->error)) < 0) return -1;
+    atomic_store(&v->muted, true);
+    if (owner_flush(v) < 0 || v->send_count) return -1;
     /* Partially sent PCM stays ahead of clear until its framing completes. */
-    if(snag_voice_input(v->protocol,pcm,480u,v->error,sizeof(v->error))<0)return -1;
-    v->send_offset=1u;
-    if(owner_mute(v)<0 || v->send_count!=2u || !v->send_audio[v->send_read] || v->send_offset!=1u)return -1;
+    if (snag_voice_input(v->protocol, pcm, 480u, v->error, sizeof(v->error)) < 0) return -1;
+    v->send_offset = 1u;
+    if (owner_mute(v) < 0 || v->send_count != 2u || !v->send_audio[v->send_read] ||
+        v->send_offset != 1u)
+        return -1;
     /* The existing stall deadline retires a partial frame without resending it. */
     v->send_deadline = 0u;
-    if (owner_flush(v) != SNAG_PROVIDER_VOICE_RETRY || !v->retryable ||
-        v->send_count != 2u || v->send_offset != 1u) return -1;
+    if (owner_flush(v) != SNAG_PROVIDER_VOICE_RETRY || !v->retryable || v->send_count != 2u ||
+        v->send_offset != 1u)
+        return -1;
     v->retryable = false;
     v->error[0] = '\0';
-    snag_voice_free(v->protocol);v->protocol=NULL;
+    snag_voice_free(v->protocol);
+    v->protocol = NULL;
     return 0;
 }
 #endif
@@ -1279,8 +1361,8 @@ connection_failure(struct app_voice *v, const struct snag_provider_failure *fail
 
 #ifdef SNAJPAGENT_TEST_TRANSPORT_ENDPOINTS
 int
-snag_app_voice_fixture_failure(struct app_state *app, const json_t *event,
-    const struct snag_provider_failure *failure)
+snag_app_voice_fixture_failure(
+    struct app_state *app, const json_t *event, const struct snag_provider_failure *failure)
 {
     struct app_voice *v = app->voice;
     if (!v || v->thread_started || v->protocol) return -1;
@@ -1294,8 +1376,8 @@ snag_app_voice_fixture_failure(struct app_state *app, const json_t *event,
     struct snag_voice_io io = {owner_send, owner_notice, owner_play, owner_interrupt};
     v->protocol = snag_voice_new(&io, v, "fixture", "asr", "voice", NULL);
     if (!v->protocol) return -1;
-    int rc = failure ? connection_failure(v, failure) :
-        snag_voice_event(v->protocol, event, v->error, sizeof(v->error));
+    int rc = failure ? connection_failure(v, failure)
+                     : snag_voice_event(v->protocol, event, v->error, sizeof(v->error));
     v->capacity_pending = rc == SNAG_VOICE_CAPACITY;
     v->retryable = v->capacity_pending || rc == SNAG_VOICE_RETRY;
     connection_finished(v);
@@ -1307,27 +1389,26 @@ snag_app_voice_fixture_state(struct app_state *app)
 {
     struct app_voice *v = app->voice;
     if (!v || (v->thread_started && atomic_load(&v->credential_accepted))) return NULL;
-    return json_pack("{s:s,s:b,s:b,s:i,s:I,s:I,s:I,s:I,s:I,s:s,s:O}",
-        "connection_id", v->connection,
-        "muted", atomic_load(&v->muted), "transport_empty",
+    return json_pack("{s:s,s:b,s:b,s:i,s:I,s:I,s:I,s:I,s:I,s:s,s:O}", "connection_id",
+        v->connection, "muted", atomic_load(&v->muted), "transport_empty",
         !v->send_count && !v->send_bytes && !v->send_offset && !v->receive.len && !v->result,
-        "pending_handoffs", (int)atomic_load(&v->pending_handoffs),
-        "reconnects", (json_int_t)v->reconnects,
-        "retry_after_ms", (json_int_t)v->retry_after_ms,
-        "reconnect_at", (json_int_t)v->reconnect_at,
-        "covered_next_seq", (json_int_t)v->native_covered.next_seq,
+        "pending_handoffs", (int)atomic_load(&v->pending_handoffs), "reconnects",
+        (json_int_t)v->reconnects, "retry_after_ms", (json_int_t)v->retry_after_ms, "reconnect_at",
+        (json_int_t)v->reconnect_at, "covered_next_seq", (json_int_t)v->native_covered.next_seq,
         "compacting_through_seq", (json_int_t)(v->compact.native ? v->compact.source_seq : 0u),
-        "transfer_target", v->transfer_target,
-        "history", v->interface_history ? v->interface_history : json_null());
+        "transfer_target", v->transfer_target, "history",
+        v->interface_history ? v->interface_history : json_null());
 }
 #endif /* SNAJPAGENT_TEST_TRANSPORT_ENDPOINTS */
 
-static void *voice_owner(void *opaque)
+static void *
+voice_owner(void *opaque)
 {
-    struct app_voice *v=opaque;
-    struct snag_voice_io io={owner_send,owner_notice,owner_play,owner_interrupt};
-    if (snag_auth_read(v->root_fd, &v->provider, false, NULL, &v->credential,
-            owner_controls, v, v->error, sizeof(v->error)) < 0) goto done;
+    struct app_voice *v = opaque;
+    struct snag_voice_io io = {owner_send, owner_notice, owner_play, owner_interrupt};
+    if (snag_auth_read(v->root_fd, &v->provider, false, NULL, &v->credential, owner_controls, v,
+            v->error, sizeof(v->error)) < 0)
+        goto done;
     atomic_store_explicit(&v->credential_ready, true, memory_order_release);
     while (!atomic_load_explicit(&v->credential_accepted, memory_order_acquire)) {
         if (owner_controls(v, 10u)) goto done;
@@ -1336,125 +1417,154 @@ static void *voice_owner(void *opaque)
     v->start_ms = snag_monotonic_ms();
     struct snag_buf help = {.max = 64u * 1024u};
     if (snag_app_help_text(&help, NULL) == 0) {
-        v->protocol = snag_voice_new(&io, v, v->config.realtime_model,
-            v->config.transcribe_model, v->config.voice, (const char *)help.data);
+        v->protocol = snag_voice_new(&io, v, v->config.realtime_model, v->config.transcribe_model,
+            v->config.voice, (const char *)help.data);
     }
     snag_buf_free(&help);
-    if (!v->protocol)goto done;
+    if (!v->protocol) goto done;
     if (snag_provider_native_audio(&v->provider)) {
-        struct snag_buf offer={.max=32768u},answer={.max=32768u};char call[257];
-        json_t *session=snag_voice_native_session(v->protocol);int rc=-1;
-        if (!session || snag_voice_rtc_open(&v->rtc,v->error,sizeof(v->error))<0)goto native_done;
-        while (!owner_controls(v,0u) && snag_monotonic_ms()-v->start_ms<15000u) {
-            rc=snag_voice_rtc_offer(v->rtc,&offer);
-            if (rc)break;
+        struct snag_buf offer = {.max = 32768u}, answer = {.max = 32768u};
+        char call[257];
+        json_t *session = snag_voice_native_session(v->protocol);
+        int rc = -1;
+        if (!session || snag_voice_rtc_open(&v->rtc, v->error, sizeof(v->error)) < 0)
+            goto native_done;
+        while (!owner_controls(v, 0u) && snag_monotonic_ms() - v->start_ms < 15000u) {
+            rc = snag_voice_rtc_offer(v->rtc, &offer);
+            if (rc) break;
             snag_sleep_ms(10u);
         }
-        if (rc!=1) {
-            rc=-1;
-            snprintf(v->error,sizeof(v->error),
-                "Native voice media preparation stopped or timed out");
+        if (rc != 1) {
+            rc = -1;
+            snprintf(
+                v->error, sizeof(v->error), "Native voice media preparation stopped or timed out");
             goto native_done;
         }
         struct snag_provider_failure failure;
-        rc = snag_provider_voice_call(NULL, &v->provider, &v->credential,
-            (char *)offer.data, session, owner_controls, v, &answer, call,
-            &failure, v->error, sizeof(v->error));
+        rc = snag_provider_voice_call(NULL, &v->provider, &v->credential, (char *)offer.data,
+            session, owner_controls, v, &answer, call, &failure, v->error, sizeof(v->error));
         if (rc < 0 && failure.http_status) {
             int reported = connection_failure(v, &failure);
-            rc = reported == SNAG_VOICE_RETRY || reported == SNAG_VOICE_CAPACITY ?
-                SNAG_PROVIDER_VOICE_RETRY : -1;
+            rc = reported == SNAG_VOICE_RETRY || reported == SNAG_VOICE_CAPACITY
+                     ? SNAG_PROVIDER_VOICE_RETRY
+                     : -1;
         }
-        if (rc)goto native_done;
-        if (snag_voice_rtc_answer(v->rtc,(char *)answer.data)<0) {
-            rc=-1;
-            strcpy(v->error,"Native voice media answer could not be applied");
+        if (rc) goto native_done;
+        if (snag_voice_rtc_answer(v->rtc, (char *)answer.data) < 0) {
+            rc = -1;
+            strcpy(v->error, "Native voice media answer could not be applied");
             goto native_done;
         }
-        rc=snag_provider_voice_attach(&v->provider,&v->credential,call,owner_controls,v,
-            &v->socket,v->error,sizeof(v->error));
-native_done:
-        json_decref(session);snag_buf_free(&offer);snag_buf_free(&answer);
+        rc = snag_provider_voice_attach(&v->provider, &v->credential, call, owner_controls, v,
+            &v->socket, v->error, sizeof(v->error));
+    native_done:
+        json_decref(session);
+        snag_buf_free(&offer);
+        snag_buf_free(&answer);
         if (rc) {
             v->retryable = rc == SNAG_PROVIDER_VOICE_RETRY;
             goto done;
         }
     } else {
-        int rc = snag_provider_voice_open(&v->provider, &v->credential,
-            v->config.realtime_model, owner_controls, v,
-            &v->socket, v->error, sizeof(v->error));
+        int rc = snag_provider_voice_open(&v->provider, &v->credential, v->config.realtime_model,
+            owner_controls, v, &v->socket, v->error, sizeof(v->error));
         if (rc) {
             v->retryable = rc == SNAG_PROVIDER_VOICE_RETRY;
             goto done;
         }
     }
     snag_credential_clear(&v->credential);
-    if (snag_voice_begin(v->protocol,v->error,sizeof(v->error))<0)goto done;
-    while (!owner_controls(v,0u)) {
-        uint64_t now=snag_monotonic_ms();
+    if (snag_voice_begin(v->protocol, v->error, sizeof(v->error)) < 0) goto done;
+    while (!owner_controls(v, 0u)) {
+        uint64_t now = snag_monotonic_ms();
         if (v->announced && v->rtc && !snag_voice_rtc_ready(v->rtc)) {
-            strcpy(v->error,"Native voice media connection stopped");break;
+            strcpy(v->error, "Native voice media connection stopped");
+            break;
         }
         if ((!snag_voice_ready(v->protocol) || (v->rtc && !snag_voice_rtc_ready(v->rtc))) &&
-            now-v->start_ms>v->provider.connect_timeout_ms+10000u) {
-            strcpy(v->error,"Voice session or media connection did not become ready");break;
+            now - v->start_ms > v->provider.connect_timeout_ms + 10000u) {
+            strcpy(v->error, "Voice session or media connection did not become ready");
+            break;
         }
         if (connection_expired(v, now)) break;
-        if(v->expires_ms && !v->expiry_warned && v->expires_ms-now<=60000u) {
-            json_t *event=json_pack("{s:s}","type","voice_expiring");
-            int rc=event?owner_notice(v,event):-1;json_decref(event);if(rc<0)goto failed;
-            v->expiry_warned=true;
+        if (v->expires_ms && !v->expiry_warned && v->expires_ms - now <= 60000u) {
+            json_t *event = json_pack("{s:s}", "type", "voice_expiring");
+            int rc = event ? owner_notice(v, event) : -1;
+            json_decref(event);
+            if (rc < 0) goto failed;
+            v->expiry_warned = true;
         }
-        if(owner_mute(v)<0)goto failed;
-        if(owner_flush(v)<0)break;
-        for(unsigned int i=0;i<16u;++i) {
-            int rc=snag_provider_voice_receive(v->socket,&v->receive,v->error,sizeof(v->error));
+        if (owner_mute(v) < 0) goto failed;
+        if (owner_flush(v) < 0) break;
+        for (unsigned int i = 0; i < 16u; ++i) {
+            int rc =
+                snag_provider_voice_receive(v->socket, &v->receive, v->error, sizeof(v->error));
             if (rc < 0) {
                 v->retryable = rc == SNAG_PROVIDER_VOICE_RETRY;
                 goto done;
             }
-            if(!rc)break;
-            json_t *event=snag_json_load_strict(v->receive.data,v->receive.len,VOICE_MESSAGE,v->error,sizeof(v->error));
-            if(!event)goto done;
-            const char *type=snag_json_string(event,"type");
-            if (type && (!strcmp(type,"session.created") || !strcmp(type,"session.started"))) {
+            if (!rc) break;
+            json_t *event = snag_json_load_strict(
+                v->receive.data, v->receive.len, VOICE_MESSAGE, v->error, sizeof(v->error));
+            if (!event) goto done;
+            const char *type = snag_json_string(event, "type");
+            if (type && (!strcmp(type, "session.created") || !strcmp(type, "session.started"))) {
                 uint64_t expires;
-                if(!snag_json_integer_u64(json_object_get(event,"session"),"expires_at",&expires)) {
-                    uint64_t seconds=(uint64_t)time(NULL);
-                    if(expires<=seconds || expires-seconds>(UINT64_MAX-now)/1000u) {json_decref(event);goto failed;}
-                    v->expires_ms=now+(expires-seconds)*1000u;
+                if (!snag_json_integer_u64(
+                        json_object_get(event, "session"), "expires_at", &expires)) {
+                    uint64_t seconds = (uint64_t)time(NULL);
+                    if (expires <= seconds || expires - seconds > (UINT64_MAX - now) / 1000u) {
+                        json_decref(event);
+                        goto failed;
+                    }
+                    v->expires_ms = now + (expires - seconds) * 1000u;
                 }
             }
             rc = snag_voice_event(v->protocol, event, v->error, sizeof(v->error));
             json_decref(event);
-            snag_secret_clear(v->receive.data,v->receive.len);snag_buf_reset(&v->receive);
+            snag_secret_clear(v->receive.data, v->receive.len);
+            snag_buf_reset(&v->receive);
             if (rc < 0) {
                 v->capacity_pending = rc == SNAG_VOICE_CAPACITY;
                 v->retryable = v->capacity_pending || rc == SNAG_VOICE_RETRY;
                 goto done;
             }
         }
-        if (snag_voice_ready(v->protocol) &&
-            (!v->rtc || snag_voice_rtc_ready(v->rtc)) &&
+        if (snag_voice_ready(v->protocol) && (!v->rtc || snag_voice_rtc_ready(v->rtc)) &&
             !v->announced) {
-            json_t *event=json_pack("{s:s}","type","voice_ready");
-            int rc=event?owner_notice(v,event):-1;json_decref(event);if(rc<0)goto failed;
-            v->announced=true;
+            json_t *event = json_pack("{s:s}", "type", "voice_ready");
+            int rc = event ? owner_notice(v, event) : -1;
+            json_decref(event);
+            if (rc < 0) goto failed;
+            v->announced = true;
         }
-        if (owner_controls(v,0u))break;
+        if (owner_controls(v, 0u)) break;
         if (v->announced && !v->device_started && voice_capture_ready(v)) {
-            if(snag_audio_open(true,true,1u,v->config.capture_device,v->config.playback_device,&v->device,v->error,sizeof(v->error))<0)break;
+            if (snag_audio_open(true, true, 1u, v->config.capture_device, v->config.playback_device,
+                    &v->device, v->error, sizeof(v->error)) < 0)
+                break;
             /* Duplex opens gated: even mute/stop during backend startup cannot
              * accumulate stale capture. Unmute is acknowledged next iteration. */
-            v->device_started=true;v->applied_mute=true;
-            if(snag_voice_mute(v->protocol,true,v->error,sizeof(v->error))<0)break;
+            v->device_started = true;
+            v->applied_mute = true;
+            if (snag_voice_mute(v->protocol, true, v->error, sizeof(v->error)) < 0) break;
             atomic_store(&v->output_ready, true);
         }
-        pthread_mutex_lock(&v->mutex);json_t *result=v->result;v->result=NULL;pthread_mutex_unlock(&v->mutex);
-        pthread_mutex_lock(&v->mutex);json_t *context=v->context;v->context=NULL;pthread_mutex_unlock(&v->mutex);
-        if(context) {
-            int rc=snag_voice_context(v->protocol,context,v->error,sizeof(v->error));
-            json_decref(context);if(rc<0) {json_decref(result);break;}
+        pthread_mutex_lock(&v->mutex);
+        json_t *result = v->result;
+        v->result = NULL;
+        pthread_mutex_unlock(&v->mutex);
+        pthread_mutex_lock(&v->mutex);
+        json_t *context = v->context;
+        v->context = NULL;
+        pthread_mutex_unlock(&v->mutex);
+        if (context) {
+            int rc = snag_voice_context(v->protocol, context, v->error, sizeof(v->error));
+            json_decref(context);
+            if (rc < 0) {
+                json_decref(result);
+                break;
+            }
         }
         pthread_mutex_lock(&v->mutex);
         json_t *observation = v->observation;
@@ -1471,53 +1581,60 @@ native_done:
         if (result) {
             int rc;
             if (json_is_true(json_object_get(result, "standalone"))) {
-                rc = snag_voice_output(v->protocol, snag_json_string(result, "text"),
-                    v->error, sizeof(v->error));
-                json_t *notice = json_pack("{s:s,s:s,s:s}", "type", "voice_response",
-                    "operation", rc ? "agent_output_failed" : "agent_output_prepared",
-                    "output_id", snag_json_string(result, "id"));
+                rc = snag_voice_output(
+                    v->protocol, snag_json_string(result, "text"), v->error, sizeof(v->error));
+                json_t *notice = json_pack("{s:s,s:s,s:s}", "type", "voice_response", "operation",
+                    rc ? "agent_output_failed" : "agent_output_prepared", "output_id",
+                    snag_json_string(result, "id"));
                 if (!notice || owner_notice(v, notice) < 0) rc = -1;
                 json_decref(notice);
             } else {
-                rc = json_is_false(json_object_get(result, "final")) ?
-                    snag_voice_progress(v->protocol, snag_json_string(result, "call_id"),
-                        snag_json_string(result, "text"), v->error, sizeof(v->error)) :
-                    snag_voice_result(v->protocol, snag_json_string(result, "call_id"),
-                        snag_json_string(result, "text"), v->error, sizeof(v->error));
+                rc = json_is_false(json_object_get(result, "final"))
+                         ? snag_voice_progress(v->protocol, snag_json_string(result, "call_id"),
+                               snag_json_string(result, "text"), v->error, sizeof(v->error))
+                         : snag_voice_result(v->protocol, snag_json_string(result, "call_id"),
+                               snag_json_string(result, "text"), v->error, sizeof(v->error));
             }
             json_decref(result);
             if (rc < 0) break;
         }
-        if (owner_controls(v,0u))break;
-        if(v->device) {
-            if(snag_audio_fault(v->device)) {strcpy(v->error,"Realtime audio device stopped, rerouted or overflowed");break;}
-            uint32_t gaps=snag_audio_gaps(v->device);
-            if(gaps!=v->gaps) {
-                v->gaps=gaps;
-                if(!v->gap_reported) {
-                    json_t *event=json_pack("{s:s}","type","voice_buffering");
-                    int rc=event?owner_notice(v,event):-1;json_decref(event);
-                    if(rc<0)goto failed;
-                    v->gap_reported=true;
+        if (owner_controls(v, 0u)) break;
+        if (v->device) {
+            if (snag_audio_fault(v->device)) {
+                strcpy(v->error, "Realtime audio device stopped, rerouted or overflowed");
+                break;
+            }
+            uint32_t gaps = snag_audio_gaps(v->device);
+            if (gaps != v->gaps) {
+                v->gaps = gaps;
+                if (!v->gap_reported) {
+                    json_t *event = json_pack("{s:s}", "type", "voice_buffering");
+                    int rc = event ? owner_notice(v, event) : -1;
+                    json_decref(event);
+                    if (rc < 0) goto failed;
+                    v->gap_reported = true;
                 }
             }
             if (owner_capture(v) < 0) break;
             if (v->rtc) {
-                for (unsigned int i=0;i<4u;++i) {
+                for (unsigned int i = 0; i < 4u; ++i) {
                     int16_t pcm[2880];
-                    int n=snag_voice_rtc_output(v->rtc,pcm,2880u);
-                    if (n<0 || (n>0 && snag_voice_native_output(v->protocol,pcm,(uint32_t)n)<0)) {
-                        strcpy(v->error,"Native voice media stopped or playback fell behind");
+                    int n = snag_voice_rtc_output(v->rtc, pcm, 2880u);
+                    if (n < 0 ||
+                        (n > 0 && snag_voice_native_output(v->protocol, pcm, (uint32_t)n) < 0)) {
+                        strcpy(v->error, "Native voice media stopped or playback fell behind");
                         goto done;
                     }
-                    if (!n)break;
+                    if (!n) break;
                 }
             }
-            bool drained=snag_audio_pending(v->device)==0u;
-            if(!drained)v->drained_ms=0;
-            else if(!v->drained_ms)v->drained_ms=now;
-            drained=drained && now-v->drained_ms>=snag_audio_latency_ms(v->device);
-            if(snag_voice_respond(v->protocol,drained,v->error,sizeof(v->error))<0)break;
+            bool drained = snag_audio_pending(v->device) == 0u;
+            if (!drained)
+                v->drained_ms = 0;
+            else if (!v->drained_ms)
+                v->drained_ms = now;
+            drained = drained && now - v->drained_ms >= snag_audio_latency_ms(v->device);
+            if (snag_voice_respond(v->protocol, drained, v->error, sizeof(v->error)) < 0) break;
         }
         if (owner_flush(v) < 0) break;
         observation_flushed(v);
@@ -1525,7 +1642,8 @@ native_done:
     }
     goto done;
 failed:
-    strcpy(v->error,"Realtime voice stopped because its device, protocol or mailbox became unavailable");
+    strcpy(v->error,
+        "Realtime voice stopped because its device, protocol or mailbox became unavailable");
 done:
     connection_finished(v);
     return NULL;
@@ -1538,9 +1656,10 @@ connection_reset(struct app_state *app)
     char connection[33];
     if (snag_random_id(connection) < 0) return -1;
     if (json_is_true(json_object_get(v->result, "standalone")) &&
-        voice_record(app, v, json_pack("{s:s,s:s,s:s}", "type", "voice_response",
-            "operation", "agent_output_not_sent",
-            "output_id", snag_json_string(v->result, "id"))) < 0) return -1;
+        voice_record(app, v,
+            json_pack("{s:s,s:s,s:s}", "type", "voice_response", "operation",
+                "agent_output_not_sent", "output_id", snag_json_string(v->result, "id"))) < 0)
+        return -1;
 
     /* The old worker has joined. Its call IDs, media and transport buffers
      * cannot cross generations; helper history and accepted work stay owned. */
@@ -1617,32 +1736,37 @@ connection_restart(struct app_state *app, char *error, size_t size)
     return 0;
 }
 
-void snag_app_voice_close(struct app_state *app)
+void
+snag_app_voice_close(struct app_state *app)
 {
-    struct app_voice *v=app->voice;if(!v)return;
-    atomic_store(&v->stop,true);
+    struct app_voice *v = app->voice;
+    if (!v) return;
+    atomic_store(&v->stop, true);
     request_stop(v->request);
-    if(v->thread_started)pthread_join(v->thread,NULL);
-    if (voice_attachment_lost(v))strcpy(v->error,lost_terminal);
+    if (v->thread_started) pthread_join(v->thread, NULL);
+    if (voice_attachment_lost(v)) strcpy(v->error, lost_terminal);
     /* The worker is joined: preserve final notices on shutdown/error as well
      * as /voice off. Closing never accepts a previously unaccepted handoff. */
     bool protected = atomic_load(&v->credential_accepted) ||
-        snag_secret_set_build(&v->secrets, NULL, &v->credential, NULL, 0u) == 0;
+                     snag_secret_set_build(&v->secrets, NULL, &v->credential, NULL, 0u) == 0;
     bool failed = !protected;
     if (protected && json_is_true(json_object_get(v->result, "standalone")) &&
-        voice_record(app, v, json_pack("{s:s,s:s,s:s}", "type", "voice_response",
-            "operation", "agent_output_not_sent",
-            "output_id", snag_json_string(v->result, "id"))) < 0) {
+        voice_record(app, v,
+            json_pack("{s:s,s:s,s:s}", "type", "voice_response", "operation",
+                "agent_output_not_sent", "output_id", snag_json_string(v->result, "id"))) < 0) {
         failed = true;
     }
-    while(v->notice_count) {
-        json_t *event=v->notices[v->notice_read];v->notices[v->notice_read]=NULL;
-        v->notice_read=(v->notice_read+1u)%VOICE_NOTICES;--v->notice_count;
-        const char *type=snag_json_string(event,"type");
+    while (v->notice_count) {
+        json_t *event = v->notices[v->notice_read];
+        v->notices[v->notice_read] = NULL;
+        v->notice_read = (v->notice_read + 1u) % VOICE_NOTICES;
+        --v->notice_count;
+        const char *type = snag_json_string(event, "type");
         if (protected && type && strcmp(type, "voice_ready") && strcmp(type, "voice_handoff") &&
-            strcmp(type,"voice_buffering") && strcmp(type,"voice_expiring")) {
-            if(voice_record(app,v,event)<0)failed=true;
-        } else json_decref(event);
+            strcmp(type, "voice_buffering") && strcmp(type, "voice_expiring")) {
+            if (voice_record(app, v, event) < 0) failed = true;
+        } else
+            json_decref(event);
     }
     if (protected) {
         if (interface_close(app) < 0) failed = true;
@@ -1651,12 +1775,21 @@ void snag_app_voice_close(struct app_state *app)
         v->request = NULL;
     }
     if (protected && !v->stopped_recorded && v->announced &&
-        voice_record(app,v,json_pack("{s:s,s:s}","type","voice_stopped",
-            "reason",v->error[0]?v->error:"Voice stopped."))<0)failed=true;
-    if(failed)snag_ui_text(&app->ui,SNAG_UI_ERROR,"Voice stopped; some final voice records could not be saved. Inspect the session journal.");
-    snag_ui_audio(&app->ui,"",false);
-    for(size_t i=0;i<8u;++i) {snag_secret_clear(v->send[i].data,v->send[i].len);snag_buf_free(&v->send[i]);}
-    snag_secret_clear(v->receive.data,v->receive.len);snag_buf_free(&v->receive);
+        voice_record(app, v,
+            json_pack("{s:s,s:s}", "type", "voice_stopped", "reason",
+                v->error[0] ? v->error : "Voice stopped.")) < 0)
+        failed = true;
+    if (failed)
+        snag_ui_text(&app->ui, SNAG_UI_ERROR,
+            "Voice stopped; some final voice records could not be saved. Inspect the session "
+            "journal.");
+    snag_ui_audio(&app->ui, "", false);
+    for (size_t i = 0; i < 8u; ++i) {
+        snag_secret_clear(v->send[i].data, v->send[i].len);
+        snag_buf_free(&v->send[i]);
+    }
+    snag_secret_clear(v->receive.data, v->receive.len);
+    snag_buf_free(&v->receive);
     for (size_t i = 0; i < SNAG_VOICE_HANDOFFS; ++i) {
         json_decref(v->handoffs[i].source);
         json_decref(v->handoffs[i].input);
@@ -1668,17 +1801,21 @@ void snag_app_voice_close(struct app_state *app)
     json_decref(v->compact.summary);
     json_decref(v->compact.page);
     json_decref(v->native_summary);
-    snag_credential_clear(&v->credential);snag_secret_set_free(&v->secrets);json_decref(v->result);json_decref(v->context);
-    pthread_mutex_destroy(&v->mutex);free(v);app->voice=NULL;
+    snag_credential_clear(&v->credential);
+    snag_secret_set_free(&v->secrets);
+    json_decref(v->result);
+    json_decref(v->context);
+    pthread_mutex_destroy(&v->mutex);
+    free(v);
+    app->voice = NULL;
 }
 
 static int
-voice_transfer_check(struct app_state *app, const char *target, uint64_t attachment,
-    char *error, size_t size)
+voice_transfer_check(
+    struct app_state *app, const char *target, uint64_t attachment, char *error, size_t size)
 {
     if (!target || strlen(target) != SNAG_ID_HEX_LEN ||
-        strspn(target, "0123456789abcdef") != SNAG_ID_HEX_LEN ||
-        !strcmp(target, app->session.id)) {
+        strspn(target, "0123456789abcdef") != SNAG_ID_HEX_LEN || !strcmp(target, app->session.id)) {
         return snag_errorf(error, size, "Voice transfer requires a different full session ID");
     }
     struct app_voice *v = app->voice;
@@ -1695,8 +1832,8 @@ voice_transfer_check(struct app_state *app, const char *target, uint64_t attachm
 }
 
 int
-snag_app_voice_transfer_pause(struct app_state *app, const char *target,
-    uint64_t attachment, char *error, size_t size)
+snag_app_voice_transfer_pause(
+    struct app_state *app, const char *target, uint64_t attachment, char *error, size_t size)
 {
     if (voice_transfer_check(app, target, attachment, error, size) < 0) return -1;
     struct app_voice *v = app->voice;
@@ -1726,11 +1863,11 @@ snag_app_voice_transfer_pause(struct app_state *app, const char *target,
     if (snag_app_voice_service(app) < 0 || app->voice != v) {
         return snag_errorf(error, size, "Voice stopped while preparing the session switch");
     }
-    if (voice_record(app, v, json_pack("{s:s,s:s,s:s,s:b}", "type", "voice_response",
-            "operation", "interface_transfer_paused", "target_session_id", target,
-            "muted", atomic_load(&v->muted))) < 0 ||
-        snag_ui_voice(&app->ui,
-            "[voice switching sessions; mic off] ") != 0) {
+    if (voice_record(app, v,
+            json_pack("{s:s,s:s,s:s,s:b}", "type", "voice_response", "operation",
+                "interface_transfer_paused", "target_session_id", target, "muted",
+                atomic_load(&v->muted))) < 0 ||
+        snag_ui_voice(&app->ui, "[voice switching sessions; mic off] ") != 0) {
         snag_app_voice_close(app);
         return snag_errorf(error, size, "Voice transfer pause could not be retained or displayed");
     }
@@ -1762,21 +1899,21 @@ transfer_history_record(void *opaque, const struct snag_session *session, uint64
     if (read->bytes >= SNAG_JOURNAL_PAGE_BYTES) return 1;
     const char *origin = read->source_id;
     uint64_t origin_seq = seq;
-    int selected = history_origin(&read->voice->history_root, seq, &type, &data,
-        &origin, &origin_seq);
+    int selected =
+        history_origin(&read->voice->history_root, seq, &type, &data, &origin, &origin_seq);
     if (selected <= 0) return selected;
-    char *encoded = snag_history_event_data(origin_seq, type, data,
-        &read->voice->secrets.wire, error, size);
+    char *encoded =
+        snag_history_event_data(origin_seq, type, data, &read->voice->secrets.wire, error, size);
     json_t *view = encoded ? json_loads(encoded, JSON_REJECT_DUPLICATES, NULL) : NULL;
     if (encoded) snag_secret_clear(encoded, strlen(encoded));
     free(encoded);
-    json_t *record = view ? json_pack("{s:I,s:s,s:O,s:s,s:I}", "seq", (json_int_t)seq,
-        "type", type, "data", view, "source_session_id", origin,
-        "source_seq", (json_int_t)origin_seq) : NULL;
+    json_t *record =
+        view ? json_pack("{s:I,s:s,s:O,s:s,s:I}", "seq", (json_int_t)seq, "type", type, "data",
+                   view, "source_session_id", origin, "source_seq", (json_int_t)origin_seq)
+             : NULL;
     json_decref(view);
     size_t bytes = 0u;
-    int rc = record ? snag_json_digest_bounded(record, SNAG_CONTEXT_MAX_REQUEST,
-        NULL, &bytes) : -1;
+    int rc = record ? snag_json_digest_bounded(record, SNAG_CONTEXT_MAX_REQUEST, NULL, &bytes) : -1;
     if (!rc) rc = json_array_append(read->records, record);
     if (!rc) read->bytes += bytes;
     json_decref(record);
@@ -1784,9 +1921,8 @@ transfer_history_record(void *opaque, const struct snag_session *session, uint64
 }
 
 int
-snag_app_voice_transfer_history(struct app_state *app, const char *target,
-    uint64_t attachment, struct snag_voice_transfer_cursor *cursor, json_t **result,
-    char *error, size_t size)
+snag_app_voice_transfer_history(struct app_state *app, const char *target, uint64_t attachment,
+    struct snag_voice_transfer_cursor *cursor, json_t **result, char *error, size_t size)
 {
     if (!result) return snag_errorf(error, size, "Missing voice history result");
     *result = NULL;
@@ -1797,13 +1933,13 @@ snag_app_voice_transfer_history(struct app_state *app, const char *target,
         return snag_errorf(error, size, "Voice history has no prepared source");
     }
     bool first = cursor->source.next_seq == 0u;
-    if ((first && (cursor->source.offset || cursor->source.prev_sha256[0] ||
-            cursor->position.offset || cursor->position.next_seq ||
-            cursor->position.prev_sha256[0])) ||
+    if ((first &&
+            (cursor->source.offset || cursor->source.prev_sha256[0] || cursor->position.offset ||
+                cursor->position.next_seq || cursor->position.prev_sha256[0])) ||
         (!first && (cursor->source.offset != v->transfer_tail.offset ||
-            cursor->source.next_seq != v->transfer_tail.next_seq ||
-            memcmp(cursor->source.prev_sha256, v->transfer_tail.prev_sha256,
-                sizeof(cursor->source.prev_sha256))))) {
+                       cursor->source.next_seq != v->transfer_tail.next_seq ||
+                       memcmp(cursor->source.prev_sha256, v->transfer_tail.prev_sha256,
+                           sizeof(cursor->source.prev_sha256))))) {
         return snag_errorf(error, size, "Voice history belongs to a different preparation");
     }
     struct snag_voice_transfer_cursor next = *cursor;
@@ -1811,23 +1947,25 @@ snag_app_voice_transfer_history(struct app_state *app, const char *target,
     if (first) next.position = v->history_root.begin;
     struct snag_session view;
     snag_session_init(&view);
-    struct voice_transfer_read read = {.voice = v, .source_id = app->session.id,
-        .records = json_array()};
+    struct voice_transfer_read read = {
+        .voice = v, .source_id = app->session.id, .records = json_array()};
     json_t *page = NULL, *safe = NULL;
-    int rc = read.records ? snag_session_history_open(&app->store, &view,
-        app->session.id, &next.source, error, size) : -1;
-    if (!rc) rc = snag_session_each_event_forward(&view, &next.position,
-        SNAG_JOURNAL_PAGE_BYTES, transfer_history_record, &read, error, size);
+    int rc = read.records ? snag_session_history_open(
+                                &app->store, &view, app->session.id, &next.source, error, size)
+                          : -1;
+    if (!rc)
+        rc = snag_session_each_event_forward(&view, &next.position, SNAG_JOURNAL_PAGE_BYTES,
+            transfer_history_record, &read, error, size);
     if (!rc) {
         page = json_pack("{s:s,s:s,s:I,s:b,s:O}", "source_session_id", app->session.id,
             "target_session_id", target, "as_of_seq", (json_int_t)(next.source.next_seq - 1u),
             "complete", next.position.next_seq == next.source.next_seq, "records", read.records);
         safe = page ? voice_redact_bounded(v, page, SNAG_CONTEXT_MAX_REQUEST, error, size) : NULL;
         bool identity = safe &&
-            json_equal(json_object_get(page, "source_session_id"),
-                json_object_get(safe, "source_session_id")) &&
-            json_equal(json_object_get(page, "target_session_id"),
-                json_object_get(safe, "target_session_id"));
+                        json_equal(json_object_get(page, "source_session_id"),
+                            json_object_get(safe, "source_session_id")) &&
+                        json_equal(json_object_get(page, "target_session_id"),
+                            json_object_get(safe, "target_session_id"));
         json_t *records = json_object_get(safe, "records");
         for (size_t i = 0u; identity && i < json_array_size(read.records); ++i) {
             const char *keys[] = {"seq", "type", "source_session_id", "source_seq"};
@@ -1837,8 +1975,8 @@ snag_app_voice_transfer_history(struct app_state *app, const char *target,
             }
         }
         if (!identity) {
-            rc = snag_errorf(error, size,
-                "Voice history protection failed or changed its identity");
+            rc =
+                snag_errorf(error, size, "Voice history protection failed or changed its identity");
         }
     }
     if (!rc) {
@@ -1865,11 +2003,10 @@ static int
 archive_commit(struct app_state *app, const struct snag_wire_secrets *secrets, const char *type,
     json_t *data, char *error, size_t size)
 {
-    json_t *safe = data ?
-        voice_protect_json(secrets, data, SNAG_MAX_EVENT_LINE, error, size) : NULL;
-    const char *keys[] = {"transfer_id", "target_session_id", "source_session_id",
-        "source_seq", "source_type", "source_as_of_seq", "count", "begin_offset",
-        "begin_seq", "begin_sha256"};
+    json_t *safe =
+        data ? voice_protect_json(secrets, data, SNAG_MAX_EVENT_LINE, error, size) : NULL;
+    const char *keys[] = {"transfer_id", "target_session_id", "source_session_id", "source_seq",
+        "source_type", "source_as_of_seq", "count", "begin_offset", "begin_seq", "begin_sha256"};
     bool identity = safe != NULL;
     for (size_t i = 0u; identity && i < sizeof(keys) / sizeof(keys[0]); ++i) {
         const json_t *original = json_object_get(data, keys[i]);
@@ -1885,8 +2022,8 @@ archive_commit(struct app_state *app, const struct snag_wire_secrets *secrets, c
 }
 
 int
-snag_app_voice_transfer_archive(struct app_state *app, const char *target,
-    uint64_t attachment, struct snag_voice_archive *result, char *error, size_t size)
+snag_app_voice_transfer_archive(struct app_state *app, const char *target, uint64_t attachment,
+    struct snag_voice_archive *result, char *error, size_t size)
 {
     if (!result) return snag_errorf(error, size, "Missing voice archive result");
     int ready = snag_app_voice_transfer_pause(app, target, attachment, error, size);
@@ -1907,24 +2044,23 @@ snag_app_voice_transfer_archive(struct app_state *app, const char *target,
     }
     struct snag_voice_transfer_cursor next = v->transfer_cursor;
     json_t *page = NULL;
-    if (snag_app_voice_transfer_history(app, target, attachment, &next,
-            &page, error, size) < 0) goto failed;
+    if (snag_app_voice_transfer_history(app, target, attachment, &next, &page, error, size) < 0)
+        goto failed;
     const json_t *records = json_object_get(page, "records");
     for (size_t i = 0u; i < json_array_size(records); ++i) {
         const json_t *record = json_array_get(records, i);
-        json_t *data = json_pack("{s:s,s:s,s:s,s:I,s:s,s:O}",
-            "transfer_id", archive->transfer_id, "target_session_id", target,
-            "source_session_id", snag_json_string(record, "source_session_id"),
-            "source_seq", json_integer_value(json_object_get(record, "source_seq")),
-            "source_type", snag_json_string(record, "type"),
-            "data", json_object_get(record, "data"));
+        json_t *data = json_pack("{s:s,s:s,s:s,s:I,s:s,s:O}", "transfer_id", archive->transfer_id,
+            "target_session_id", target, "source_session_id",
+            snag_json_string(record, "source_session_id"), "source_seq",
+            json_integer_value(json_object_get(record, "source_seq")), "source_type",
+            snag_json_string(record, "type"), "data", json_object_get(record, "data"));
         if (archive->records == INT64_MAX) {
             json_decref(data);
             (void)snag_errorf(error, size, "Voice archive record count overflow");
             goto failed;
         }
-        if (archive_commit(app, &v->secrets.wire, "voice_transfer_record",
-                data, error, size) < 0) goto failed;
+        if (archive_commit(app, &v->secrets.wire, "voice_transfer_record", data, error, size) < 0)
+            goto failed;
         ++archive->records;
     }
     bool complete = json_is_true(json_object_get(page, "complete"));
@@ -1933,11 +2069,10 @@ snag_app_voice_transfer_archive(struct app_state *app, const char *target,
     v->transfer_cursor = next;
     if (!complete) return 0;
     json_t *seal = json_pack("{s:s,s:s,s:s,s:I,s:I}", "transfer_id", archive->transfer_id,
-        "target_session_id", target, "source_session_id", app->session.id,
-        "source_as_of_seq", (json_int_t)archive->source_seq,
-        "count", (json_int_t)archive->records);
-    if (archive_commit(app, &v->secrets.wire, "voice_transfer_sealed",
-            seal, error, size) < 0) goto failed;
+        "target_session_id", target, "source_session_id", app->session.id, "source_as_of_seq",
+        (json_int_t)archive->source_seq, "count", (json_int_t)archive->records);
+    if (archive_commit(app, &v->secrets.wire, "voice_transfer_sealed", seal, error, size) < 0)
+        goto failed;
     archive->tail = voice_journal_tail(&app->session);
     *result = *archive;
     return 1;
@@ -1984,19 +2119,18 @@ snag_app_voice_import_close(struct app_state *app)
 }
 
 int
-snag_app_voice_import_begin(struct app_state *app, const struct snag_voice_archive *archive,
-    char *error, size_t size)
+snag_app_voice_import_begin(
+    struct app_state *app, const struct snag_voice_archive *archive, char *error, size_t size)
 {
     if (!archive || app->voice_import || app->voice || app->audio || app->attaching ||
         !snag_hex_is_lower(archive->source_id, SNAG_ID_HEX_LEN) ||
         !snag_hex_is_lower(archive->target_id, SNAG_ID_HEX_LEN) ||
         !snag_hex_is_lower(archive->transfer_id, SNAG_ID_HEX_LEN) ||
         strcmp(archive->target_id, app->session.id) ||
-        !strcmp(archive->source_id, app->session.id) || !archive->source_seq ||
-        !archive->records || archive->records > archive->source_seq ||
-        archive->begin.next_seq <= archive->source_seq ||
-        archive->begin.next_seq >= archive->tail.next_seq ||
-        archive->begin.offset <= 0 || archive->begin.offset >= archive->tail.offset ||
+        !strcmp(archive->source_id, app->session.id) || !archive->source_seq || !archive->records ||
+        archive->records > archive->source_seq || archive->begin.next_seq <= archive->source_seq ||
+        archive->begin.next_seq >= archive->tail.next_seq || archive->begin.offset <= 0 ||
+        archive->begin.offset >= archive->tail.offset ||
         !snag_hex_is_lower(archive->begin.prev_sha256, SNAG_SHA256_HEX_LEN) ||
         !snag_hex_is_lower(archive->tail.prev_sha256, SNAG_SHA256_HEX_LEN))
         return snag_errorf(error, size, "Invalid or busy voice history destination");
@@ -2007,15 +2141,14 @@ snag_app_voice_import_begin(struct app_state *app, const struct snag_voice_archi
     import->archive = *archive;
     import->position = archive->begin;
     if (snag_secret_set_build(&import->secrets, app->config, NULL, error, size) < 0 ||
-        snag_session_history_open(&app->store, &import->source, archive->source_id,
-            &archive->tail, error, size) < 0 ||
+        snag_session_history_open(
+            &app->store, &import->source, archive->source_id, &archive->tail, error, size) < 0 ||
         snag_session_persist(&app->store, &app->session, error, size) < 0) {
         snag_app_voice_import_close(app);
         return -1;
     }
-    if (snag_session_voice_import_cursor(&app->session, archive->transfer_id,
-        archive->source_id, archive->source_seq, archive->records, &import->begin,
-        error, size) < 0) {
+    if (snag_session_voice_import_cursor(&app->session, archive->transfer_id, archive->source_id,
+            archive->source_seq, archive->records, &import->begin, error, size) < 0) {
         snag_app_voice_import_close(app);
         return -1;
     }
@@ -2024,8 +2157,8 @@ snag_app_voice_import_begin(struct app_state *app, const struct snag_voice_archi
 }
 
 static int
-voice_import_event(void *opaque, const struct snag_session *state, uint64_t seq,
-    const char *type, const json_t *data, char *error, size_t size)
+voice_import_event(void *opaque, const struct snag_session *state, uint64_t seq, const char *type,
+    const json_t *data, char *error, size_t size)
 {
     struct app_state *app = opaque;
     struct app_voice_import *import = app->voice_import;
@@ -2041,25 +2174,27 @@ voice_import_event(void *opaque, const struct snag_session *state, uint64_t seq,
     }
     const char *id = snag_json_string(data, "transfer_id");
     const char *target = snag_json_string(data, "target_session_id");
-    if (import->sealed || !id || strcmp(id, archive->transfer_id) ||
-        !target || strcmp(target, app->session.id)) goto invalid;
+    if (import->sealed || !id || strcmp(id, archive->transfer_id) || !target ||
+        strcmp(target, app->session.id))
+        goto invalid;
     if (record) {
         if (import->records >= archive->records) goto invalid;
-        if (archive_commit(app, &import->secrets.wire, type,
-                json_incref((json_t *)data), error, size) < 0) return -1;
+        if (archive_commit(
+                app, &import->secrets.wire, type, json_incref((json_t *)data), error, size) < 0)
+            return -1;
         ++import->records;
         return 0;
     }
     uint64_t count;
     uint64_t covered;
     const char *source = snag_json_string(data, "source_session_id");
-    if (!snag_json_exact_keys(data,
-            "transfer_id target_session_id source_session_id source_as_of_seq count") ||
+    if (!snag_json_exact_keys(
+            data, "transfer_id target_session_id source_session_id source_as_of_seq count") ||
         !source || strcmp(source, archive->source_id) ||
-        snag_json_integer_u64(data, "count", &count) < 0 ||
-        count != archive->records || count != import->records ||
-        snag_json_integer_u64(data, "source_as_of_seq", &covered) < 0 ||
-        covered != archive->source_seq) goto invalid;
+        snag_json_integer_u64(data, "count", &count) < 0 || count != archive->records ||
+        count != import->records || snag_json_integer_u64(data, "source_as_of_seq", &covered) < 0 ||
+        covered != archive->source_seq)
+        goto invalid;
     import->sealed = true;
     return 0;
 invalid:
@@ -2072,8 +2207,9 @@ snag_app_voice_import_service(struct app_state *app, char *error, size_t size)
     struct app_voice_import *import = app->voice_import;
     if (!import) return snag_errorf(error, size, "No prepared voice history destination");
     if (import->verified) return 1;
-    if (snag_session_each_event_forward(&import->source, &import->position,
-            SNAG_JOURNAL_PAGE_BYTES, voice_import_event, app, error, size) < 0) goto failed;
+    if (snag_session_each_event_forward(&import->source, &import->position, SNAG_JOURNAL_PAGE_BYTES,
+            voice_import_event, app, error, size) < 0)
+        goto failed;
     if (import->position.next_seq < import->archive.tail.next_seq) return 0;
     if (!import->sealed || import->position.next_seq != import->archive.tail.next_seq ||
         import->position.offset != import->archive.tail.offset ||
@@ -2096,15 +2232,13 @@ snag_app_voice_import_adopt(struct app_state *app, char *error, size_t size)
     if (!import || !import->verified)
         return snag_errorf(error, size, "Voice history has not completed verification");
     const struct snag_voice_archive *archive = &import->archive;
-    json_t *event = json_pack("{s:s,s:s,s:s,s:I,s:I,s:I,s:s,s:I}",
-        "transfer_id", archive->transfer_id, "target_session_id", app->session.id,
-        "source_session_id", archive->source_id,
-        "source_as_of_seq", (json_int_t)archive->source_seq,
-        "begin_offset", (json_int_t)import->begin.offset,
-        "begin_seq", (json_int_t)import->begin.next_seq,
+    json_t *event = json_pack("{s:s,s:s,s:s,s:I,s:I,s:I,s:s,s:I}", "transfer_id",
+        archive->transfer_id, "target_session_id", app->session.id, "source_session_id",
+        archive->source_id, "source_as_of_seq", (json_int_t)archive->source_seq, "begin_offset",
+        (json_int_t)import->begin.offset, "begin_seq", (json_int_t)import->begin.next_seq,
         "begin_sha256", import->begin.prev_sha256, "count", (json_int_t)import->records);
-    int rc = archive_commit(app, &import->secrets.wire,
-        "voice_transfer_adopted", event, error, size);
+    int rc =
+        archive_commit(app, &import->secrets.wire, "voice_transfer_adopted", event, error, size);
     snag_app_voice_import_close(app);
     return rc;
 }
@@ -2113,11 +2247,10 @@ static void
 archive_hex_write(unsigned char *out, const char *text, size_t bytes)
 {
     for (size_t i = 0u; i < bytes; ++i) {
-        unsigned int high = text[i * 2u] <= '9' ?
-            (unsigned int)(text[i * 2u] - '0') : (unsigned int)(text[i * 2u] - 'a' + 10);
-        unsigned int low = text[i * 2u + 1u] <= '9' ?
-            (unsigned int)(text[i * 2u + 1u] - '0') :
-            (unsigned int)(text[i * 2u + 1u] - 'a' + 10);
+        unsigned int high = text[i * 2u] <= '9' ? (unsigned int)(text[i * 2u] - '0')
+                                                : (unsigned int)(text[i * 2u] - 'a' + 10);
+        unsigned int low = text[i * 2u + 1u] <= '9' ? (unsigned int)(text[i * 2u + 1u] - '0')
+                                                    : (unsigned int)(text[i * 2u + 1u] - 'a' + 10);
         out[i] = (unsigned char)((high << 4u) | low);
     }
 }
@@ -2143,8 +2276,8 @@ archive_offer_write(const struct snag_voice_archive *archive, unsigned int mode,
     archive_hex_write(bytes + 96u, archive->tail.prev_sha256, 32u);
     const size_t offsets[] = {32u, 40u, 80u, 88u, 128u, 136u};
     const uint64_t values[] = {(uint64_t)archive->begin.offset, archive->begin.next_seq,
-        (uint64_t)archive->tail.offset, archive->tail.next_seq,
-        archive->source_seq, archive->records};
+        (uint64_t)archive->tail.offset, archive->tail.next_seq, archive->source_seq,
+        archive->records};
     for (size_t i = 0u; i < sizeof(offsets) / sizeof(offsets[0]); ++i) {
         for (size_t j = 0u; j < 8u; ++j) {
             bytes[offsets[i] + j] = (unsigned char)(values[i] >> (j * 8u));
@@ -2161,8 +2294,7 @@ archive_offer_read(struct app_state *app, const unsigned char bytes[SNAG_SESSION
     uint64_t values[6] = {0};
     if (bytes[SNAG_SESSION_VOICE_MODE] > SNAG_SESSION_VOICE_MUTED) return -1;
     for (size_t i = 0u; i < sizeof(offsets) / sizeof(offsets[0]); ++i) {
-        for (size_t j = 0u; j < 8u; ++j)
-            values[i] |= (uint64_t)bytes[offsets[i] + j] << (j * 8u);
+        for (size_t j = 0u; j < 8u; ++j) values[i] |= (uint64_t)bytes[offsets[i] + j] << (j * 8u);
         if (values[i] > INT64_MAX) return -1;
     }
     *archive = (struct snag_voice_archive){0};
@@ -2191,8 +2323,8 @@ snag_app_voice_switch_request(struct app_state *app, const char *target, char *e
     if (!pending) return snag_errorf(error, size, "Cannot allocate voice session switch");
     strcpy(pending->target, target);
     pending->attachment = attachment;
-    pending->mode = atomic_load(&app->voice->muted) ?
-        SNAG_SESSION_VOICE_MUTED : SNAG_SESSION_VOICE_ON;
+    pending->mode =
+        atomic_load(&app->voice->muted) ? SNAG_SESSION_VOICE_MUTED : SNAG_SESSION_VOICE_ON;
     app->voice_switch = pending;
     return 0;
 }
@@ -2206,9 +2338,9 @@ voice_switch_service(struct app_state *app)
     if (snag_ui_session_releasing(&app->ui) == pending->attachment) {
         snag_app_voice_close(app);
         if (app->voice) return 0;
-        int rc = snag_ui_send(&app->ui, (struct snag_ui_command){
-            .kind = SNAG_UI_SESSION_RELEASED,
-            .data.session_voice = {.generation = pending->attachment, .mode = pending->mode}});
+        int rc = snag_ui_send(&app->ui,
+            (struct snag_ui_command){.kind = SNAG_UI_SESSION_RELEASED,
+                .data.session_voice = {.generation = pending->attachment, .mode = pending->mode}});
         if (rc < 0 && errno == EAGAIN) return 0;
         free(pending);
         app->voice_switch = NULL;
@@ -2225,8 +2357,8 @@ voice_switch_service(struct app_state *app)
         goto failed;
     }
     if (!pending->archive.tail.next_seq) {
-        int rc = snag_app_voice_transfer_archive(app, pending->target, pending->attachment,
-            &pending->archive, error, sizeof(error));
+        int rc = snag_app_voice_transfer_archive(
+            app, pending->target, pending->attachment, &pending->archive, error, sizeof(error));
         if (rc < 0) goto failed;
         if (!rc) return 0;
     }
@@ -2235,15 +2367,16 @@ voice_switch_service(struct app_state *app)
     archive_offer_write(&pending->archive, pending->mode, request + SNAG_ID_HEX_LEN);
     pending->failures = snag_ui_session_failures(&app->ui);
     if (snag_ui_session_control(&app->ui, SNAG_SESSION_SWITCH, request, sizeof(request)) < 0) {
-        (void)snag_errorf(error, sizeof(error),
-            "Cannot send voice session switch: %s", strerror(errno));
+        (void)snag_errorf(
+            error, sizeof(error), "Cannot send voice session switch: %s", strerror(errno));
         goto failed;
     }
     pending->sent = true;
     return 0;
 failed:
-    if (snag_app_voice_transfer_resume(app, pending->target, pending->attachment,
-            error, sizeof(error)) < 0) snag_app_voice_close(app);
+    if (snag_app_voice_transfer_resume(
+            app, pending->target, pending->attachment, error, sizeof(error)) < 0)
+        snag_app_voice_close(app);
     free(pending);
     app->voice_switch = NULL;
     return snag_ui_text(&app->ui, SNAG_UI_ERROR, error[0] ? error : "Voice session switch failed");
@@ -2255,19 +2388,17 @@ destination_voice_check(struct app_state *app, char *error, size_t size)
     struct app_voice_import *import = app->voice_import;
     if (import->mode == SNAG_SESSION_VOICE_OFF) return 0;
     struct snag_audio_config config;
-    const struct snag_provider_config *provider = snag_provider_audio_config(app->config,
-        app->session.default_provider, &config);
-    if (!provider)
-        return snag_errorf(error, size, "Destination voice provider is not configured");
+    const struct snag_provider_config *provider =
+        snag_provider_audio_config(app->config, app->session.default_provider, &config);
+    if (!provider) return snag_errorf(error, size, "Destination voice provider is not configured");
     /* Local validation and protection, without token refresh or provider I/O.
      * Recheck after copying, immediately before READY, in case config changed. */
     struct snag_auth_tokens tokens = {0};
-    int rc = provider->api_key.kind == SNAG_SECRET_NONE ?
-        snag_auth_load(app->store.root_fd, provider, &tokens, error, size) :
-        snag_credential_resolve(&tokens.credential, &provider->api_key, error, size);
+    int rc = provider->api_key.kind == SNAG_SECRET_NONE
+                 ? snag_auth_load(app->store.root_fd, provider, &tokens, error, size)
+                 : snag_credential_resolve(&tokens.credential, &provider->api_key, error, size);
     if (!rc) {
-        rc = snag_secret_set_build(&import->secrets, app->config,
-            &tokens.credential, error, size);
+        rc = snag_secret_set_build(&import->secrets, app->config, &tokens.credential, error, size);
     }
     snag_auth_clear(&tokens);
     if (rc && !error[0])
@@ -2284,9 +2415,11 @@ snag_app_voice_attachment_prepare(struct app_state *app, uint64_t generation)
     if (!app->voice_import) {
         unsigned char offer[SNAG_SESSION_VOICE_BYTES];
         bool present = false;
-        if (snag_ui_send(&app->ui, (struct snag_ui_command){.kind = SNAG_UI_SESSION_OFFER,
-                .data.session_voice = {.generation = generation, .bytes = offer,
-                    .present = &present}}) < 0) return errno == ESTALE ? 0 : -1;
+        if (snag_ui_send(&app->ui,
+                (struct snag_ui_command){.kind = SNAG_UI_SESSION_OFFER,
+                    .data.session_voice = {
+                        .generation = generation, .bytes = offer, .present = &present}}) < 0)
+            return errno == ESTALE ? 0 : -1;
         if (!present) return 1;
         struct snag_voice_archive archive;
         if (archive_offer_read(app, offer, &archive) < 0) {
@@ -2309,13 +2442,17 @@ snag_app_voice_attachment_prepare(struct app_state *app, uint64_t generation)
         return 1;
     }
     if (snag_ui_send(&app->ui, (struct snag_ui_command){.kind = SNAG_UI_SESSION_PROGRESS,
-            .data.seq = generation}) < 0 && errno != ESTALE) goto failed;
+                                   .data.seq = generation}) < 0 &&
+        errno != ESTALE)
+        goto failed;
     return 0;
 failed:
     snag_app_voice_import_close(app);
     if (!error[0]) (void)snag_errorf(error, sizeof(error), "Voice history preparation failed");
     rc = snag_ui_send(&app->ui, (struct snag_ui_command){.kind = SNAG_UI_SESSION_REFUSE,
-        .data.seq = generation, .text = error, .len = strlen(error)});
+                                    .data.seq = generation,
+                                    .text = error,
+                                    .len = strlen(error)});
     return rc < 0 && errno != ESTALE ? -1 : 0;
 }
 
@@ -2328,9 +2465,11 @@ snag_app_voice_attachment_service(struct app_state *app)
     uint64_t attachment = import->attachment;
     unsigned char offer[SNAG_SESSION_VOICE_BYTES];
     bool present = false;
-    if (snag_ui_send(&app->ui, (struct snag_ui_command){.kind = SNAG_UI_SESSION_BOUND,
-            .data.session_voice = {.generation = attachment, .bytes = offer,
-                .present = &present}}) < 0) return -1;
+    if (snag_ui_send(
+            &app->ui, (struct snag_ui_command){.kind = SNAG_UI_SESSION_BOUND,
+                          .data.session_voice = {
+                              .generation = attachment, .bytes = offer, .present = &present}}) < 0)
+        return -1;
     if (present) {
         char error[256] = {0};
         char transfer[SNAG_ID_HEX_LEN + 1u];
@@ -2342,8 +2481,9 @@ snag_app_voice_attachment_service(struct app_state *app)
         unsigned int mode = offer[SNAG_SESSION_VOICE_MODE];
         if (snag_app_voice_import_adopt(app, error, sizeof(error)) < 0)
             return snag_ui_text(&app->ui, SNAG_UI_ERROR, error);
-        return mode == SNAG_SESSION_VOICE_OFF ? 0 :
-            voice_start(app, mode == SNAG_SESSION_VOICE_MUTED, attachment);
+        return mode == SNAG_SESSION_VOICE_OFF
+                   ? 0
+                   : voice_start(app, mode == SNAG_SESSION_VOICE_MUTED, attachment);
     }
     if (snag_ui_session_pending(&app->ui) != import->attachment) {
         /* Rebind clears pending when READY is queued, before BOUND. Check
@@ -2351,8 +2491,10 @@ snag_app_voice_attachment_service(struct app_state *app)
         unsigned char offer[SNAG_SESSION_VOICE_BYTES];
         bool present = false;
         if (snag_ui_send(&app->ui, (struct snag_ui_command){.kind = SNAG_UI_SESSION_OFFER,
-                .data.session_voice = {.generation = import->attachment,
-                    .bytes = offer, .present = &present}}) < 0 || !present)
+                                       .data.session_voice = {.generation = import->attachment,
+                                           .bytes = offer,
+                                           .present = &present}}) < 0 ||
+            !present)
             snag_app_voice_import_close(app);
     }
     return 0;
@@ -2367,22 +2509,22 @@ snag_app_voice_attachment_close(struct app_state *app)
 }
 
 int
-snag_app_voice_transfer_resume(struct app_state *app, const char *target,
-    uint64_t attachment, char *error, size_t size)
+snag_app_voice_transfer_resume(
+    struct app_state *app, const char *target, uint64_t attachment, char *error, size_t size)
 {
     if (voice_transfer_check(app, target, attachment, error, size) < 0) return -1;
     struct app_voice *v = app->voice;
     /* Explicit off supersedes rollback; ordinary attachment cannot revive it. */
     if (!v || !v->transfer_target[0]) return 0;
     if (v->servicing) return snag_errorf(error, size, "Voice interface is still servicing input");
-    if (voice_record(app, v, json_pack("{s:s,s:s,s:s,s:b}", "type", "voice_response",
-            "operation", "interface_transfer_resuming", "target_session_id", target,
-            "muted", atomic_load(&v->muted))) < 0 ||
-        snag_ui_voice(&app->ui,
-            "[voice restoring history; mic off; /voice off cancels] ") != 0) {
+    if (voice_record(app, v,
+            json_pack("{s:s,s:s,s:s,s:b}", "type", "voice_response", "operation",
+                "interface_transfer_resuming", "target_session_id", target, "muted",
+                atomic_load(&v->muted))) < 0 ||
+        snag_ui_voice(&app->ui, "[voice restoring history; mic off; /voice off cancels] ") != 0) {
         snag_app_voice_close(app);
-        return snag_errorf(error, size,
-            "Voice transfer rollback could not be retained or displayed");
+        return snag_errorf(
+            error, size, "Voice transfer rollback could not be retained or displayed");
     }
     atomic_store(&v->stop, false);
     /* A paused retry keeps its advertised delay and pending capacity work.
@@ -2444,14 +2586,14 @@ deliver_result(struct app_voice *v, const char *call, const char *text, bool fin
     while (end && ((unsigned char)text[end] & 0xc0u) == 0x80u) --end;
     if ((!final && snag_buf_printf(&spoken, "Host interface update:\n") < 0) ||
         snag_buf_append(&spoken, text, end) < 0 ||
-        (end < length && snag_buf_printf(&spoken,
-            "\n[Voice excerpt; full text retained in session.]") < 0) ||
+        (end < length &&
+            snag_buf_printf(&spoken, "\n[Voice excerpt; full text retained in session.]") < 0) ||
         snag_buf_terminate(&spoken) < 0) {
         snag_buf_free(&spoken);
         return -1;
     }
-    json_t *result = json_pack("{s:s,s:s,s:b}", "call_id", call,
-        "text", (const char *)spoken.data, "final", final);
+    json_t *result = json_pack(
+        "{s:s,s:s,s:b}", "call_id", call, "text", (const char *)spoken.data, "final", final);
     snag_buf_free(&spoken);
     if (!result) return -1;
     pthread_mutex_lock(&v->mutex);
@@ -2489,8 +2631,7 @@ static json_t *
 interface_public(struct app_voice *v, const json_t *item)
 {
     /* Responses items use the request bound, not the smaller native envelope. */
-    json_t *safe = item ?
-        voice_redact_bounded(v, item, SNAG_CONTEXT_MAX_REQUEST, NULL, 0u) : NULL;
+    json_t *safe = item ? voice_redact_bounded(v, item, SNAG_CONTEXT_MAX_REQUEST, NULL, 0u) : NULL;
     static const char *keys[] = {"type", "role", "call_id", "name"};
     for (size_t i = 0; safe && i < sizeof(keys) / sizeof(keys[0]); ++i) {
         json_t *identity = json_object_get(item, keys[i]);
@@ -2523,12 +2664,12 @@ interface_snapshot(struct app_state *app, char *error, size_t size)
 {
     struct snag_response_item inspect = {.name = "inspect_session", .arguments = json_object()};
     json_t *context = NULL;
-    int rc = inspect.arguments ?
-        snag_app_voice_read(app, &inspect, &context, error, size) : -1;
+    int rc = inspect.arguments ? snag_app_voice_read(app, &inspect, &context, error, size) : -1;
     json_decref(inspect.arguments);
     if (!rc) rc = snag_secret_result(&app->voice->secrets, context, error, size);
-    json_t *message = !rc ? json_pack("{s:s,s:s}", "role", "developer",
-        "content", snag_json_string(context, "model_text")) : NULL;
+    json_t *message = !rc ? json_pack("{s:s,s:s}", "role", "developer", "content",
+                                snag_json_string(context, "model_text"))
+                          : NULL;
     json_decref(context);
     return message;
 }
@@ -2560,8 +2701,8 @@ interface_history_init(struct app_voice *v)
         "Ordinary executable tasks need not appear in CLI help.\n\n");
     if (!rc) rc = snag_app_help_text(&instructions, NULL);
     if (!rc) {
-        v->interface_history = json_pack("[{s:s,s:s}]", "role", "developer",
-            "content", (const char *)instructions.data);
+        v->interface_history = json_pack(
+            "[{s:s,s:s}]", "role", "developer", "content", (const char *)instructions.data);
         if (!v->interface_history) rc = -1;
     }
     snag_buf_free(&instructions);
@@ -2578,8 +2719,8 @@ interface_seed(struct app_state *app, struct voice_handoff *handoff, char *error
     if (!rc) rc = snag_session_voice_prompt(handoff->source, &prompt, error, size);
     if (!rc) {
         json_t *history = json_copy(v->interface_history);
-        json_t *message = json_pack("{s:s,s:s}", "role", "user",
-            "content", (const char *)prompt.data);
+        json_t *message =
+            json_pack("{s:s,s:s}", "role", "user", "content", (const char *)prompt.data);
         json_t *safe = interface_public(v, message);
         json_decref(message);
         handoff->history_start = json_array_size(history);
@@ -2619,8 +2760,8 @@ working_observation(const char *type)
 }
 
 static bool
-history_observation(const struct app_voice *v, uint64_t seq, const char *type,
-    const json_t *data, bool text_interface)
+history_observation(const struct app_voice *v, uint64_t seq, const char *type, const json_t *data,
+    bool text_interface)
 {
     if (!strcmp(type, "voice_transfer_adopted")) return true;
     if (working_observation(type)) return true;
@@ -2628,8 +2769,8 @@ history_observation(const struct app_voice *v, uint64_t seq, const char *type,
     const char *record_type = snag_json_string(json_object_get(data, "event"), "type");
     if (!record_type) return false;
     const char *operation = snag_json_string(json_object_get(data, "event"), "operation");
-    if (!strcmp(record_type, "voice_response") && operation &&
-        !strcmp(operation, "ui_observation")) return true;
+    if (!strcmp(record_type, "voice_response") && operation && !strcmp(operation, "ui_observation"))
+        return true;
     /* Maintenance receipts stay in the journal; their adopted summary is
      * supplied separately, once, before the uncovered conversation tail. */
     if (operation && !strncmp(operation, "native_compact", 14u)) return false;
@@ -2664,16 +2805,18 @@ interface_history_event(void *opaque, const struct snag_session *state, uint64_t
     json_t *view = encoded ? json_loads(encoded, JSON_REJECT_DUPLICATES, NULL) : NULL;
     if (encoded) snag_secret_clear(encoded, strlen(encoded));
     free(encoded);
-    json_t *event = view ? json_pack("{s:s,s:s,s:I,s:s,s:O,s:s,s:I}",
-        "kind", "session_observation", "session_id", read->app->session.id,
-        "seq", (json_int_t)seq, "event_type", type, "data", view,
-        "origin_session_id", origin, "origin_seq", (json_int_t)origin_seq) : NULL;
+    json_t *event =
+        view ? json_pack("{s:s,s:s,s:I,s:s,s:O,s:s,s:I}", "kind", "session_observation",
+                   "session_id", read->app->session.id, "seq", (json_int_t)seq, "event_type", type,
+                   "data", view, "origin_session_id", origin, "origin_seq", (json_int_t)origin_seq)
+             : NULL;
     json_decref(view);
     struct snag_buf text = {.max = SNAG_CONTEXT_MAX_REQUEST};
     int rc = event ? snag_json_canonical(event, &text) : -1;
     json_decref(event);
-    json_t *item = !rc ? json_pack("{s:s,s:s%}", "role", "developer",
-        "content", (const char *)text.data, text.len) : NULL;
+    json_t *item = !rc ? json_pack("{s:s,s:s%}", "role", "developer", "content",
+                             (const char *)text.data, text.len)
+                       : NULL;
     if (!rc) rc = interface_append_public(v, read->handoff, item);
     json_decref(item);
     snag_secret_clear(text.data, text.len);
@@ -2682,8 +2825,8 @@ interface_history_event(void *opaque, const struct snag_session *state, uint64_t
 }
 
 static int
-interface_history_catchup(struct app_state *app, struct voice_handoff *handoff,
-    char *error, size_t size)
+interface_history_catchup(
+    struct app_state *app, struct voice_handoff *handoff, char *error, size_t size)
 {
     struct app_voice *v = app->voice;
     if (!handoff->history_target) handoff->history_target = app->session.next_seq;
@@ -2694,8 +2837,7 @@ interface_history_catchup(struct app_state *app, struct voice_handoff *handoff,
     }
     /* Bound live catch-up by request bytes plus one reader quantum/atomic record. */
     errno = 0;
-    if (snag_json_digest_bounded(v->interface_history, SNAG_CONTEXT_MAX_REQUEST,
-            NULL, NULL) < 0) {
+    if (snag_json_digest_bounded(v->interface_history, SNAG_CONTEXT_MAX_REQUEST, NULL, NULL) < 0) {
         if (errno != EOVERFLOW) return -1;
         v->interface_needs_compact = true;
         return 1;
@@ -2718,22 +2860,22 @@ interface_compact_begin(struct app_state *app, const struct voice_handoff *hando
     interface_compact_clear(v);
     v->compact.active = true;
     v->compact.index = 1u; /* The stable orientation/help message stays verbatim. */
-    v->compact.count = handoff->input && handoff->history_start > 1u ?
-        handoff->history_start : json_array_size(v->interface_history);
+    v->compact.count = handoff->input && handoff->history_start > 1u
+                           ? handoff->history_start
+                           : json_array_size(v->interface_history);
     /* This is a service/staging quantum, never a claimed model token window. */
     v->compact.chunk_bytes = SNAG_JOURNAL_PAGE_BYTES;
     v->compact.source_seq = app->session.next_seq - 1u;
     if (handoff->capacity_retries) {
-        v->compact.retry_at = snag_monotonic_ms() +
-            snag_provider_retry_delay_ms(handoff->capacity_retries - 1u, false, 0u);
+        v->compact.retry_at = snag_monotonic_ms() + snag_provider_retry_delay_ms(
+                                                        handoff->capacity_retries - 1u, false, 0u);
     }
 }
 
 static int
-interface_compact_start(struct app_state *app, const json_t *history,
-    const char *model, const char *effort,
-    const struct snag_provider_config *provider, const struct snag_model_capacity *capacity,
-    char *error, size_t size)
+interface_compact_start(struct app_state *app, const json_t *history, const char *model,
+    const char *effort, const struct snag_provider_config *provider,
+    const struct snag_model_capacity *capacity, char *error, size_t size)
 {
     struct app_voice *v = app->voice;
     struct interface_compaction *c = &v->compact;
@@ -2753,7 +2895,8 @@ interface_compact_start(struct app_state *app, const json_t *history,
         snag_buf_reset(&record);
         json_t *item = json_array_get(history, index);
         int copied = c->native ? snag_buf_append(&record, snag_json_string(item, "text"),
-            json_string_length(json_object_get(item, "text"))) : snag_json_canonical(item, &record);
+                                     json_string_length(json_object_get(item, "text")))
+                               : snag_json_canonical(item, &record);
         if (copied < 0 || offset >= record.len) {
             goto out;
         }
@@ -2764,11 +2907,11 @@ interface_compact_start(struct app_state *app, const json_t *history,
             --end;
         }
         if (end == offset) break;
-        json_t *part = json_pack("{s:I,s:I,s:I,s:b,s:s%}",
-            "history_item", (json_int_t)index, "offset", (json_int_t)offset,
-            "end", (json_int_t)end, "complete", end == record.len,
+        json_t *part = json_pack("{s:I,s:I,s:I,s:b,s:s%}", "history_item", (json_int_t)index,
+            "offset", (json_int_t)offset, "end", (json_int_t)end, "complete", end == record.len,
             "source_json", (char *)record.data + offset, end - offset);
-        if (c->native && (json_object_set(part, "source_seq", json_object_get(item, "seq")) < 0 ||
+        if (c->native &&
+            (json_object_set(part, "source_seq", json_object_get(item, "seq")) < 0 ||
                 json_object_set(part, "session_id", json_object_get(item, "session_id")) < 0 ||
                 json_object_set(part, "event_type", json_object_get(item, "event_type")) < 0)) {
             json_decref(part);
@@ -2793,20 +2936,24 @@ interface_compact_start(struct app_state *app, const json_t *history,
         "request. Merge new facts and corrections into the prior summary; retain current "
         "intent, referents, exact action identities/outcomes and unresolved controls. "
         "Do not perform or re-admit historical work. Original records remain in session history.");
-    if (!input || (c->summary && json_array_append_new(input, json_pack("{s:s,s:s}",
-            "role", "developer", "content", snag_json_string(c->summary, "text"))) < 0) ||
-        json_array_append_new(input, json_pack("{s:s,s:s}", "role", "user",
-            "content", (char *)text.data)) < 0) {
+    if (!input ||
+        (c->summary &&
+            json_array_append_new(input, json_pack("{s:s,s:s}", "role", "developer", "content",
+                                             snag_json_string(c->summary, "text"))) < 0) ||
+        json_array_append_new(
+            input, json_pack("{s:s,s:s}", "role", "user", "content", (char *)text.data)) < 0) {
         goto out;
     }
     json_t *tools = json_array();
-    base = tools ? snag_context_interface_request(&app->session, provider,
-        model, effort, input, tools) : NULL;
+    base =
+        tools ? snag_context_interface_request(&app->session, provider, model, effort, input, tools)
+              : NULL;
     json_decref(tools);
-    request = base ? snag_app_summary_request(base, snag_json_string(base, "model"),
-        effort, capacity) : NULL;
-    if (!request || (snag_auth_uses_codex(provider->auth) &&
-            snag_context_codex_request(request) < 0)) {
+    request =
+        base ? snag_app_summary_request(base, snag_json_string(base, "model"), effort, capacity)
+             : NULL;
+    if (!request ||
+        (snag_auth_uses_codex(provider->auth) && snag_context_codex_request(request) < 0)) {
         goto out;
     }
     rc = request_start(app, provider, request, error, size);
@@ -2826,14 +2973,14 @@ out:
 }
 
 static int
-interface_compact_adopt(struct app_state *app, struct voice_handoff *handoff,
-    char *error, size_t size)
+interface_compact_adopt(
+    struct app_state *app, struct voice_handoff *handoff, char *error, size_t size)
 {
     struct app_voice *v = app->voice;
     struct interface_compaction *c = &v->compact;
-    json_t *event = json_pack("{s:s,s:s,s:s,s:I,s:O}", "type", "voice_response",
-        "operation", "interface_compacted", "call_id", handoff->call,
-        "source_as_of_seq", (json_int_t)c->source_seq, "summary", c->summary);
+    json_t *event = json_pack("{s:s,s:s,s:s,s:I,s:O}", "type", "voice_response", "operation",
+        "interface_compacted", "call_id", handoff->call, "source_as_of_seq",
+        (json_int_t)c->source_seq, "summary", c->summary);
     json_t *safe = event ? voice_redact(v, event, NULL, 0u) : NULL;
     json_decref(event);
     event = safe;
@@ -2841,8 +2988,8 @@ interface_compact_adopt(struct app_state *app, struct voice_handoff *handoff,
     json_t *history = json_array();
     if (!summary || !history ||
         json_array_append(history, json_array_get(v->interface_history, 0u)) < 0 ||
-        json_array_append_new(history, json_pack("{s:s,s:s}", "role", "developer",
-            "content", summary)) < 0) {
+        json_array_append_new(
+            history, json_pack("{s:s,s:s}", "role", "developer", "content", summary)) < 0) {
         goto fail;
     }
     for (size_t i = c->count; i < json_array_size(v->interface_history); ++i) {
@@ -2850,15 +2997,16 @@ interface_compact_adopt(struct app_state *app, struct voice_handoff *handoff,
     }
     bool whole = handoff->input && c->count == json_array_size(v->interface_history);
     if (whole) {
-        json_t *marker = json_pack("{s:s,s:s,s:s}", "kind", "interface_continuation",
-            "call_id", snag_json_string(event, "call_id"), "instruction",
+        json_t *marker = json_pack("{s:s,s:s,s:s}", "kind", "interface_continuation", "call_id",
+            snag_json_string(event, "call_id"), "instruction",
             "Continue this existing delegation using its summary and current state. "
             "The original speech is retained in session history. This host marker "
             "adds no new user request or approval; accepted actions must not be replayed.");
         char *text = marker ? interface_json(marker) : NULL;
         json_decref(marker);
-        int rc = text ? json_array_append_new(history, json_pack("{s:s,s:s}",
-            "role", "user", "content", text)) : -1;
+        int rc = text ? json_array_append_new(
+                            history, json_pack("{s:s,s:s}", "role", "user", "content", text))
+                      : -1;
         free(text);
         if (rc < 0) goto fail;
     }
@@ -2866,8 +3014,8 @@ interface_compact_adopt(struct app_state *app, struct voice_handoff *handoff,
     size_t after = 0u;
     if (snag_json_digest_bounded(v->interface_history, SIZE_MAX, NULL, &before) < 0 ||
         snag_json_digest_bounded(history, SIZE_MAX, NULL, &after) < 0 || after >= before) {
-        (void)snag_errorf(error, size,
-            "Interface summary did not reduce its source; history retained");
+        (void)snag_errorf(
+            error, size, "Interface summary did not reduce its source; history retained");
         goto fail;
     }
     json_t *input = handoff->input ? json_copy(history) : NULL;
@@ -2907,9 +3055,9 @@ interface_start(struct app_state *app, struct voice_handoff *handoff, char *erro
         snag_config_provider(app->config, handoff->provider);
     struct snag_context_choice choice = {.mode = SNAG_CONTEXT_MODE_DEFAULT};
     struct snag_model_capacity capacity;
-    if (!provider || snag_model_capacity_resolve(&app->model_cache, app->config, provider,
-            handoff->model, snag_provider_catalog_protocol(provider), &choice, &capacity,
-            error, size) < 0) {
+    if (!provider ||
+        snag_model_capacity_resolve(&app->model_cache, app->config, provider, handoff->model,
+            snag_provider_catalog_protocol(provider), &choice, &capacity, error, size) < 0) {
         return -1;
     }
     if (interface_history_init(v) < 0) return -1;
@@ -2917,8 +3065,8 @@ interface_start(struct app_state *app, struct voice_handoff *handoff, char *erro
         interface_compact_begin(app, handoff);
     }
     if (v->compact.active) {
-        return interface_compact_start(app, v->interface_history, handoff->model,
-            handoff->effort, provider, &capacity, error, size);
+        return interface_compact_start(app, v->interface_history, handoff->model, handoff->effort,
+            provider, &capacity, error, size);
     }
     int caught_up = interface_history_catchup(app, handoff, error, size);
     if (caught_up) return caught_up;
@@ -2934,8 +3082,8 @@ interface_start(struct app_state *app, struct voice_handoff *handoff, char *erro
     }
     json_t *tools = snag_app_voice_tools();
     errno = 0;
-    json_t *request = snag_context_interface_request(&app->session, provider,
-        handoff->model, handoff->effort, handoff->input, tools);
+    json_t *request = snag_context_interface_request(
+        &app->session, provider, handoff->model, handoff->effort, handoff->input, tools);
     json_decref(tools);
     if (!request && errno == EOVERFLOW) {
         v->interface_needs_compact = true;
@@ -2957,31 +3105,31 @@ snag_app_voice_ui_input(struct app_state *app, const struct snag_response_item *
     const char *text = NULL;
     *result = NULL;
     if (!snag_json_arg_keys(call->arguments, "text", "", error, size) ||
-        !snag_json_arg_text(call->arguments, "text", 1u, SNAG_MAX_DIRECT_PROMPT,
-            false, &text, error, size)) {
+        !snag_json_arg_text(
+            call->arguments, "text", 1u, SNAG_MAX_DIRECT_PROMPT, false, &text, error, size)) {
         *result = snag_tool_result_terminal(false, error);
         return *result ? 0 : -1;
     }
     struct app_voice *v = app->voice;
-    if (!v || atomic_load(&v->stop) ||
-        (atomic_load(&v->done) && !v->retryable) || voice_attachment_lost(v)) {
-        *result = snag_tool_result_terminal(false,
-            "Voice input no longer belongs to an active attachment; nothing was admitted.");
+    if (!v || atomic_load(&v->stop) || (atomic_load(&v->done) && !v->retryable) ||
+        voice_attachment_lost(v)) {
+        *result = snag_tool_result_terminal(
+            false, "Voice input no longer belongs to an active attachment; nothing was admitted.");
         return *result ? 0 : -1;
     }
     int rc = snag_ui_input(&app->ui, text, v->attachment);
-    *result = snag_tool_result_terminal(rc == 0, rc == 0 ?
-        "UI input accepted. This acknowledgement does not establish command completion. "
-        "Read subsequent UI output for execution, refusal or confirmation." :
-        errno == EAGAIN ? "UI input queue is busy; nothing was admitted." :
-        errno == ESTALE ? "Originating attachment ended; nothing was admitted." :
-        "UI input could not be admitted.");
+    *result = snag_tool_result_terminal(rc == 0,
+        rc == 0 ? "UI input accepted. This acknowledgement does not establish command completion. "
+                  "Read subsequent UI output for execution, refusal or confirmation."
+        : errno == EAGAIN ? "UI input queue is busy; nothing was admitted."
+        : errno == ESTALE ? "Originating attachment ended; nothing was admitted."
+                          : "UI input could not be admitted.");
     return *result ? 0 : -1;
 }
 
 static int
 interface_call(struct app_state *app, struct voice_handoff *handoff,
-                const struct snag_response_item *call, json_t **result, char *error, size_t size)
+    const struct snag_response_item *call, json_t **result, char *error, size_t size)
 {
     struct app_voice *v = app->voice;
     *result = NULL;
@@ -2990,8 +3138,9 @@ interface_call(struct app_state *app, struct voice_handoff *handoff,
     if (!strcmp(call->name, "submit_input")) {
         const char *target = snag_json_string(call->arguments, "target");
         const char *text = snag_json_string(call->arguments, "text");
-        if (!snag_json_arg_keys(call->arguments, "target text", "", error, size) ||
-            !target || !snag_text_valid(text, 1u, SNAG_MAX_QUEUED_TEXT - 1u)) goto invalid;
+        if (!snag_json_arg_keys(call->arguments, "target text", "", error, size) || !target ||
+            !snag_text_valid(text, 1u, SNAG_MAX_QUEUED_TEXT - 1u))
+            goto invalid;
         if (handoff->submitted[0]) {
             *result = snag_tool_result_terminal(false, "This spoken input was already submitted.");
             return *result ? 0 : -1;
@@ -3010,13 +3159,12 @@ interface_call(struct app_state *app, struct voice_handoff *handoff,
     }
     if (!strcmp(call->name, "interrupt_turn")) {
         if (!snag_json_arg_keys(call->arguments, "turn_id", "", error, size)) goto invalid;
-        return snag_app_voice_interrupt(app, snag_json_string(call->arguments, "turn_id"),
-            result, error, size);
+        return snag_app_voice_interrupt(
+            app, snag_json_string(call->arguments, "turn_id"), result, error, size);
     }
     if (!strcmp(call->name, "select_model")) {
         const char *selector = snag_json_string(call->arguments, "selector");
-        if (!snag_json_arg_keys(call->arguments, "selector", "", error, size) ||
-            !selector) {
+        if (!snag_json_arg_keys(call->arguments, "selector", "", error, size) || !selector) {
             goto invalid;
         }
         if (!strcmp(selector, "cache")) {
@@ -3030,7 +3178,8 @@ interface_call(struct app_state *app, struct voice_handoff *handoff,
     if (!strcmp(call->name, "set_voice_mode")) {
         const char *mode = snag_json_string(call->arguments, "mode");
         if (!snag_json_arg_keys(call->arguments, "mode", "", error, size) ||
-            !snag_string_in(mode, "listening muted off")) goto invalid;
+            !snag_string_in(mode, "listening muted off"))
+            goto invalid;
         if (!strcmp(mode, "off")) {
             atomic_store(&v->stop, true);
             v->close_requested = true;
@@ -3048,8 +3197,8 @@ invalid:
 }
 
 static int
-interface_append_graph(struct app_voice *v, struct voice_handoff *handoff,
-    const struct snag_response_graph *graph)
+interface_append_graph(
+    struct app_voice *v, struct voice_handoff *handoff, const struct snag_response_graph *graph)
 {
     json_t *input = json_copy(handoff->input);
     json_t *history = json_copy(v->interface_history);
@@ -3067,9 +3216,9 @@ interface_append_graph(struct app_voice *v, struct voice_handoff *handoff,
         json_t *wire = NULL;
         if (item.kind == SNAG_ITEM_TOOL_CALL) {
             char *arguments = interface_json(item.arguments);
-            wire = arguments ? json_pack("{s:s,s:s,s:s,s:s}", "type", "function_call",
-                "call_id", item.provider_call_id, "name", item.name,
-                "arguments", arguments) : NULL;
+            wire = arguments ? json_pack("{s:s,s:s,s:s,s:s}", "type", "function_call", "call_id",
+                                   item.provider_call_id, "name", item.name, "arguments", arguments)
+                             : NULL;
             free(arguments);
         } else {
             wire = json_pack("{s:s,s:s,s:[{s:s,s:s}]}", "type", "message", "role", "assistant",
@@ -3098,21 +3247,21 @@ fail:
 }
 
 static int
-interface_reply(struct app_state *app, struct voice_handoff *handoff,
-    const char *status, const char *text)
+interface_reply(
+    struct app_state *app, struct voice_handoff *handoff, const char *status, const char *text)
 {
     struct app_voice *v = app->voice;
     if (handoff->input && !strcmp(status, "failed")) {
-        json_t *event = json_pack("{s:s,s:s,s:s,s:s,s:s,s:s,s:s}",
-            "type", "voice_response", "operation", "interface_failed",
-            "call_id", handoff->call, "status", status, "text", text,
-            "submitted_id", handoff->submitted, "queue_id", handoff->queue);
+        json_t *event = json_pack("{s:s,s:s,s:s,s:s,s:s,s:s,s:s}", "type", "voice_response",
+            "operation", "interface_failed", "call_id", handoff->call, "status", status, "text",
+            text, "submitted_id", handoff->submitted, "queue_id", handoff->queue);
         json_t *safe = event ? voice_redact(v, event, NULL, 0u) : NULL;
         json_decref(event);
         char *encoded = safe ? interface_json(safe) : NULL;
         json_t *history = encoded ? json_copy(v->interface_history) : NULL;
-        int rc = history ? json_array_append_new(history, json_pack("{s:s,s:s}",
-            "role", "developer", "content", encoded)) : -1;
+        int rc = history ? json_array_append_new(history,
+                               json_pack("{s:s,s:s}", "role", "developer", "content", encoded))
+                         : -1;
         free(encoded);
         if (!rc) rc = handoff_record(app, v, handoff, json_incref(safe));
         json_decref(safe);
@@ -3150,8 +3299,8 @@ interface_compact_result(struct app_state *app, struct voice_handoff *handoff,
     struct snag_graph_decision decision;
     if (snag_response_graph_classify(graph, &decision, error, size) < 0 ||
         decision.outcome != SNAG_GRAPH_FINAL) {
-        return snag_errorf(error, size,
-            "Interface compaction returned no summary; history retained");
+        return snag_errorf(
+            error, size, "Interface compaction returned no summary; history retained");
     }
     struct snag_response_item item = snag_response_graph_item(graph, decision.final_index);
     json_t *raw = item.text ? json_pack("{s:s}", "text", item.text) : NULL;
@@ -3203,22 +3352,22 @@ interface_service(struct app_state *app, char *error, size_t size)
         }
         if (outcome) {
             snag_response_graph_free(&graph);
-            return interface_reply(app, handoff, "failed",
-                error[0] ? error : "Interface request failed.");
+            return interface_reply(
+                app, handoff, "failed", error[0] ? error : "Interface request failed.");
         }
         struct snag_graph_decision decision;
         if (snag_response_graph_classify(&graph, &decision, error, size) < 0 ||
             decision.outcome == SNAG_GRAPH_CONFLICT ||
             decision.outcome == SNAG_GRAPH_NONPRODUCTIVE) {
             snag_response_graph_free(&graph);
-            return interface_reply(app, handoff, "failed",
-                "Interface returned no usable action or answer.");
+            return interface_reply(
+                app, handoff, "failed", "Interface returned no usable action or answer.");
         }
         handoff->capacity_retries = 0u;
         if (interface_append_graph(v, handoff, &graph) < 0) {
             snag_response_graph_free(&graph);
-            return interface_reply(app, handoff, "failed",
-                "Interface response could not be safely retained.");
+            return interface_reply(
+                app, handoff, "failed", "Interface response could not be safely retained.");
         }
         bool called = false;
         const char *answer = NULL;
@@ -3226,10 +3375,11 @@ interface_service(struct app_state *app, char *error, size_t size)
         for (size_t i = 0; i < graph.count; ++i) {
             struct snag_response_item item = snag_response_graph_item(&graph, i);
             if (item.kind != SNAG_ITEM_TOOL_CALL) {
-                if (item.text && *item.text && handoff_record(app, v, handoff,
-                        json_pack("{s:s,s:s,s:s,s:I,s:s}", "type", "voice_response",
-                            "operation", "interface_output", "call_id", handoff->call,
-                            "item_index", (json_int_t)i, "text", item.text)) < 0) {
+                if (item.text && *item.text &&
+                    handoff_record(app, v, handoff,
+                        json_pack("{s:s,s:s,s:s,s:I,s:s}", "type", "voice_response", "operation",
+                            "interface_output", "call_id", handoff->call, "item_index",
+                            (json_int_t)i, "text", item.text)) < 0) {
                     snag_response_graph_free(&graph);
                     return -1;
                 }
@@ -3240,28 +3390,30 @@ interface_service(struct app_state *app, char *error, size_t size)
             called = true;
             json_t *result = NULL;
             error[0] = '\0';
-            if (handoff_record(app, v, handoff, json_pack("{s:s,s:s,s:s,s:s,s:s,s:O}",
-                    "type", "voice_response", "operation", "interface_tool_started",
-                    "call_id", handoff->call, "tool_call_id", item.provider_call_id,
-                    "tool", item.name, "arguments", item.arguments)) < 0) {
+            if (handoff_record(app, v, handoff,
+                    json_pack("{s:s,s:s,s:s,s:s,s:s,s:O}", "type", "voice_response", "operation",
+                        "interface_tool_started", "call_id", handoff->call, "tool_call_id",
+                        item.provider_call_id, "tool", item.name, "arguments", item.arguments)) <
+                0) {
                 snag_response_graph_free(&graph);
                 return -1;
             }
             int rc = interface_call(app, handoff, &item, &result, error, size);
             if (rc < 0) {
                 json_decref(result);
-                result = snag_tool_result_terminal(false,
-                    error[0] ? error : "The requested operation could not be acknowledged.");
+                result = snag_tool_result_terminal(
+                    false, error[0] ? error : "The requested operation could not be acknowledged.");
             }
             rc = result ? snag_secret_result(&v->secrets, result, error, size) : -1;
-            if (!rc) rc = handoff_record(app, v, handoff, json_pack("{s:s,s:s,s:s,s:s,s:s,s:O}",
-                "type", "voice_response", "operation", "interface_tool", "call_id", handoff->call,
-                "tool_call_id", item.provider_call_id, "tool", item.name,
-                "result", result));
+            if (!rc)
+                rc = handoff_record(app, v, handoff,
+                    json_pack("{s:s,s:s,s:s,s:s,s:s,s:O}", "type", "voice_response", "operation",
+                        "interface_tool", "call_id", handoff->call, "tool_call_id",
+                        item.provider_call_id, "tool", item.name, "result", result));
             char *text = !rc ? interface_json(result) : NULL;
-            json_t *output = text ? json_pack("{s:s,s:s,s:s}",
-                "type", "function_call_output", "call_id", item.provider_call_id,
-                "output", text) : NULL;
+            json_t *output = text ? json_pack("{s:s,s:s,s:s}", "type", "function_call_output",
+                                        "call_id", item.provider_call_id, "output", text)
+                                  : NULL;
             if (!rc) rc = interface_append_public(v, handoff, output);
             json_decref(output);
             free(text);
@@ -3281,28 +3433,30 @@ interface_service(struct app_state *app, char *error, size_t size)
         snag_response_graph_free(&graph);
     }
     if (v->close_requested || atomic_load(&v->stop) ||
-        (atomic_load(&v->done) && !v->capacity_pending) || v->compact.native) return 0;
+        (atomic_load(&v->done) && !v->capacity_pending) || v->compact.native)
+        return 0;
     if (!handoff) {
         for (size_t i = 0; i < SNAG_VOICE_HANDOFFS; ++i) {
             struct voice_handoff *candidate = &v->handoffs[i];
             if (candidate->source && !candidate->interface_done &&
-                (!handoff || candidate->order < handoff->order)) handoff = candidate;
+                (!handoff || candidate->order < handoff->order))
+                handoff = candidate;
         }
     }
     if (!handoff || v->request) return 0;
     int started = interface_start(app, handoff, error, size);
     if (started < 0) {
         interface_compact_clear(v);
-        return interface_reply(app, handoff, "failed",
-            error[0] ? error : "Interface request could not be started.");
+        return interface_reply(
+            app, handoff, "failed", error[0] ? error : "Interface request could not be started.");
     }
     if (!started) v->interface_active = handoff;
     return 0;
 }
 
 static int
-voice_transcript(struct app_state *app, struct app_voice *v, const json_t *event,
-    char *error, size_t size)
+voice_transcript(
+    struct app_state *app, struct app_voice *v, const json_t *event, char *error, size_t size)
 {
     const char *speaker = snag_json_string(event, "speaker");
     if (!speaker || (strcmp(speaker, "user") && strcmp(speaker, "assistant"))) {
@@ -3311,10 +3465,12 @@ voice_transcript(struct app_state *app, struct app_voice *v, const json_t *event
     json_t *safe = json_pack("{s:s}", "model_text", snag_json_string(event, "text"));
     int rc = safe ? snag_secret_result(&v->secrets, safe, error, size) : -1;
     if (!rc) {
-        json_t *transcript = json_pack("{s:s,s:s,s:s}", "type", "voice_transcript",
-            "speaker", speaker, "text", snag_json_string(safe, "model_text"));
-        rc = transcript ? snag_ui_send(&app->ui, (struct snag_ui_command){
-            .kind = SNAG_UI_VOICE_EVENT, .data.voice = transcript}) : -1;
+        json_t *transcript = json_pack("{s:s,s:s,s:s}", "type", "voice_transcript", "speaker",
+            speaker, "text", snag_json_string(safe, "model_text"));
+        rc = transcript
+                 ? snag_ui_send(&app->ui, (struct snag_ui_command){.kind = SNAG_UI_VOICE_EVENT,
+                                              .data.voice = transcript})
+                 : -1;
         json_decref(transcript);
     }
     json_decref(safe);
@@ -3322,27 +3478,25 @@ voice_transcript(struct app_state *app, struct app_voice *v, const json_t *event
 }
 
 static json_t *
-observation_record(struct app_state *app, uint64_t seq,
-    const char *type, const json_t *data, const char *origin, uint64_t origin_seq,
-    char *error, size_t size)
+observation_record(struct app_state *app, uint64_t seq, const char *type, const json_t *data,
+    const char *origin, uint64_t origin_seq, char *error, size_t size)
 {
     struct app_voice *v = app->voice;
     char *encoded = snag_history_event_data(origin_seq, type, data, &v->secrets.wire, error, size);
     if (!encoded) return NULL;
     size_t length = strlen(encoded);
-    json_t *record = json_pack("{s:s,s:s,s:I,s:s,s:I,s:s%,s:s,s:I}",
-        "kind", "session_observation", "session_id", app->session.id,
-        "seq", (json_int_t)seq, "event_type", type, "length", (json_int_t)length,
-        "text", encoded, length, "origin_session_id", origin,
-        "origin_seq", (json_int_t)origin_seq);
+    json_t *record = json_pack("{s:s,s:s,s:I,s:s,s:I,s:s%,s:s,s:I}", "kind", "session_observation",
+        "session_id", app->session.id, "seq", (json_int_t)seq, "event_type", type, "length",
+        (json_int_t)length, "text", encoded, length, "origin_session_id", origin, "origin_seq",
+        (json_int_t)origin_seq);
     snag_secret_clear(encoded, length);
     free(encoded);
     return record;
 }
 
 static int
-observation_event(void *opaque, const struct snag_session *state, uint64_t seq,
-    const char *type, const json_t *data, char *error, size_t size)
+observation_event(void *opaque, const struct snag_session *state, uint64_t seq, const char *type,
+    const json_t *data, char *error, size_t size)
 {
     struct app_state *app = opaque;
     struct app_voice *v = app->voice;
@@ -3353,14 +3507,14 @@ observation_event(void *opaque, const struct snag_session *state, uint64_t seq,
     int selected = history_origin(&v->history_root, seq, &type, &data, &origin, &origin_seq);
     if (selected <= 0) return selected;
     if (!history_observation(v, seq, type, data, false)) return 0;
-    v->observation_record = observation_record(app, seq, type, data, origin, origin_seq,
-        error, size);
+    v->observation_record =
+        observation_record(app, seq, type, data, origin, origin_seq, error, size);
     return v->observation_record ? SNAG_JOURNAL_STOP_AFTER : -1;
 }
 
 static int
-native_compact_event(void *opaque, const struct snag_session *state, uint64_t seq,
-    const char *type, const json_t *data, char *error, size_t size)
+native_compact_event(void *opaque, const struct snag_session *state, uint64_t seq, const char *type,
+    const json_t *data, char *error, size_t size)
 {
     struct app_state *app = opaque;
     struct app_voice *v = app->voice;
@@ -3403,9 +3557,10 @@ native_compact_begin(struct app_state *app)
     /* The physical owner has joined. All its public dialogue is now archive,
      * including records made after its original activation boundary. */
     v->native_restore_before = c->source_seq + 1u;
-    if (voice_record(app, v, json_pack("{s:s,s:s,s:I}", "type", "voice_response",
-            "operation", "native_compaction_started",
-            "source_through_seq", (json_int_t)c->source_seq)) < 0) return -1;
+    if (voice_record(app, v,
+            json_pack("{s:s,s:s,s:I}", "type", "voice_response", "operation",
+                "native_compaction_started", "source_through_seq", (json_int_t)c->source_seq)) < 0)
+        return -1;
     return snag_ui_voice(&app->ui, "[voice compacting history; mic off; /voice off cancels] ");
 }
 
@@ -3415,22 +3570,21 @@ native_compact_adopt(struct app_state *app, char *error, size_t size)
     struct app_voice *v = app->voice;
     struct interface_compaction *c = &v->compact;
     const char *text = snag_json_string(c->summary, "text");
-    json_t *packet = text ? json_pack("{s:s,s:s,s:I,s:I,s:s}",
-        "kind", "session_history_summary", "session_id", app->session.id,
-        "seq", (json_int_t)c->source_seq, "length", (json_int_t)strlen(text),
-        "text", text) : NULL;
+    json_t *packet = text ? json_pack("{s:s,s:s,s:I,s:I,s:s}", "kind", "session_history_summary",
+                                "session_id", app->session.id, "seq", (json_int_t)c->source_seq,
+                                "length", (json_int_t)strlen(text), "text", text)
+                          : NULL;
     size_t bytes = 0u;
     if (!packet || c->cursor.next_seq != c->source_seq + 1u ||
         snag_json_digest_bounded(packet, VOICE_MESSAGE, NULL, &bytes) < 0 ||
         bytes >= c->source_bytes) {
         json_decref(packet);
-        return snag_errorf(error, size,
-            "Native summary did not reduce its source; history retained");
+        return snag_errorf(
+            error, size, "Native summary did not reduce its source; history retained");
     }
-    json_t *event = json_pack("{s:s,s:s,s:I,s:I,s:s,s:O}", "type", "voice_response",
-        "operation", "native_compacted", "covered_next_seq", (json_int_t)c->cursor.next_seq,
-        "covered_offset", (json_int_t)c->cursor.offset,
-        "covered_sha256", c->cursor.prev_sha256, "summary", packet);
+    json_t *event = json_pack("{s:s,s:s,s:I,s:I,s:s,s:O}", "type", "voice_response", "operation",
+        "native_compacted", "covered_next_seq", (json_int_t)c->cursor.next_seq, "covered_offset",
+        (json_int_t)c->cursor.offset, "covered_sha256", c->cursor.prev_sha256, "summary", packet);
     json_t *safe = event ? voice_redact(v, event, error, size) : NULL;
     json_decref(event);
     const char *anchor = snag_json_string(safe, "covered_sha256");
@@ -3459,10 +3613,11 @@ native_compact_service(struct app_state *app, char *error, size_t size)
     struct app_voice *v = app->voice;
     struct interface_compaction *c = &v->compact;
     if (!v->capacity_announced) {
-        if (voice_record(app, v, json_pack("{s:s,s:s,s:s}", "type", "voice_response",
-                "operation", "native_compaction_waiting", "reason", v->error)) < 0 ||
-            snag_ui_voice(&app->ui,
-                "[voice recovering context; mic off; /voice off cancels] ") < 0) {
+        if (voice_record(app, v,
+                json_pack("{s:s,s:s,s:s}", "type", "voice_response", "operation",
+                    "native_compaction_waiting", "reason", v->error)) < 0 ||
+            snag_ui_voice(&app->ui, "[voice recovering context; mic off; /voice off cancels] ") <
+                0) {
             return -1;
         }
         v->capacity_announced = true;
@@ -3492,23 +3647,23 @@ native_compact_service(struct app_state *app, char *error, size_t size)
         c->index = c->offset = c->count = 0u;
         if (!c->page) return -1;
         if (c->cursor.next_seq <= c->source_seq &&
-            snag_session_each_event_forward(&app->session, &c->cursor,
-                SNAG_JOURNAL_PAGE_BYTES, native_compact_event, app, error, size) < 0) return -1;
+            snag_session_each_event_forward(&app->session, &c->cursor, SNAG_JOURNAL_PAGE_BYTES,
+                native_compact_event, app, error, size) < 0)
+            return -1;
         c->count = json_array_size(c->page);
         if (!c->count) {
-            return c->cursor.next_seq <= c->source_seq ? 1 :
-                native_compact_adopt(app, error, size);
+            return c->cursor.next_seq <= c->source_seq ? 1 : native_compact_adopt(app, error, size);
         }
     }
     const struct snag_provider_config *provider = snag_config_provider(app->config, c->provider);
     struct snag_context_choice choice = {.mode = SNAG_CONTEXT_MODE_DEFAULT};
     struct snag_model_capacity capacity;
     if (!provider) return snag_errorf(error, size, "Voice summary provider is unavailable");
-    if (snag_model_capacity_resolve(&app->model_cache, app->config, provider,
-            c->model, snag_provider_catalog_protocol(provider), &choice, &capacity,
-            error, size) < 0) return -1;
-    int rc = interface_compact_start(app, c->page, c->model, c->effort,
-        provider, &capacity, error, size);
+    if (snag_model_capacity_resolve(&app->model_cache, app->config, provider, c->model,
+            snag_provider_catalog_protocol(provider), &choice, &capacity, error, size) < 0)
+        return -1;
+    int rc = interface_compact_start(
+        app, c->page, c->model, c->effort, provider, &capacity, error, size);
     return rc < 0 ? -1 : 1;
 }
 
@@ -3585,7 +3740,8 @@ observation_service(struct app_state *app, char *error, size_t size)
     return 0;
 }
 
-int snag_app_voice_service(struct app_state *app)
+int
+snag_app_voice_service(struct app_state *app)
 {
     struct app_voice *v = app->voice;
     if (!v || v->servicing) return 0;
@@ -3597,7 +3753,7 @@ int snag_app_voice_service(struct app_state *app)
     }
     if (voice_attachment_lost(v)) {
         snag_app_voice_close(app);
-        return snag_ui_text(&app->ui,SNAG_UI_HOST,lost_terminal);
+        return snag_ui_text(&app->ui, SNAG_UI_HOST, lost_terminal);
     }
     bool finished = atomic_load_explicit(&v->done, memory_order_acquire);
     if (finished && v->thread_started) {
@@ -3624,43 +3780,56 @@ int snag_app_voice_service(struct app_state *app)
         }
         atomic_store_explicit(&v->credential_accepted, true, memory_order_release);
     }
-    if ((v->context_dirty || v->context_pending) &&
-        !atomic_load(&v->stop) && !atomic_load(&v->done)) {
-        json_t *context=NULL;
+    if ((v->context_dirty || v->context_pending) && !atomic_load(&v->stop) &&
+        !atomic_load(&v->done)) {
+        json_t *context = NULL;
         if (voice_context_snapshot(app, v, &context, error, sizeof(error)) < 0) goto failed;
-        pthread_mutex_lock(&v->mutex);json_decref(v->context);v->context=context;pthread_mutex_unlock(&v->mutex);
-        v->context_dirty=false;
+        pthread_mutex_lock(&v->mutex);
+        json_decref(v->context);
+        v->context = context;
+        pthread_mutex_unlock(&v->mutex);
+        v->context_dirty = false;
     }
     if (observation_service(app, error, sizeof(error)) < 0) goto failed;
-    for(;;) {
+    for (;;) {
         pthread_mutex_lock(&v->mutex);
-        json_t *event=NULL;
-        if(v->notice_count) {
-            event=v->notices[v->notice_read];v->notices[v->notice_read]=NULL;
-            v->notice_bytes-=v->notice_size[v->notice_read];
-            v->notice_read=(v->notice_read+1u)%VOICE_NOTICES;--v->notice_count;
+        json_t *event = NULL;
+        if (v->notice_count) {
+            event = v->notices[v->notice_read];
+            v->notices[v->notice_read] = NULL;
+            v->notice_bytes -= v->notice_size[v->notice_read];
+            v->notice_read = (v->notice_read + 1u) % VOICE_NOTICES;
+            --v->notice_count;
         }
         pthread_mutex_unlock(&v->mutex);
-        if(!event)break;
-        const char *type=snag_json_string(event,"type");
-        if(!strcmp(type,"voice_ready")) {
+        if (!event) break;
+        const char *type = snag_json_string(event, "type");
+        if (!strcmp(type, "voice_ready")) {
             if (atomic_load(&v->stop) || atomic_load(&v->done) || voice_attachment_lost(v)) {
-                json_decref(event);continue;
+                json_decref(event);
+                continue;
             }
-            bool mute=atomic_load(&v->muted);
-            const char *label = !atomic_load(&v->history_sent) ?
-                "[voice restoring history; mic off; /voice off cancels] " :
-                mute ? "[voice mic off; /voice unmute | off] " :
-                "[voice starting mic; /voice mute | off] ";
+            bool mute = atomic_load(&v->muted);
+            const char *label = !atomic_load(&v->history_sent)
+                                    ? "[voice restoring history; mic off; /voice off cancels] "
+                                : mute ? "[voice mic off; /voice unmute | off] "
+                                       : "[voice starting mic; /voice mute | off] ";
             if (snag_ui_voice(&app->ui, label) == 0) {
-                if(voice_record(app,v,json_pack("{s:s}","type","voice_started"))<0) {json_decref(event);goto failed;}
-                atomic_store(&v->activate,true);
-            } else {json_decref(event);goto failed;}
-        } else if(!strcmp(type,"voice_handoff")) {
+                if (voice_record(app, v, json_pack("{s:s}", "type", "voice_started")) < 0) {
+                    json_decref(event);
+                    goto failed;
+                }
+                atomic_store(&v->activate, true);
+            } else {
+                json_decref(event);
+                goto failed;
+            }
+        } else if (!strcmp(type, "voice_handoff")) {
             if (atomic_load(&v->stop) || (atomic_load(&v->done) && !v->retryable) ||
                 voice_attachment_lost(v)) {
                 atomic_fetch_sub(&v->pending_handoffs, 1u);
-                json_decref(event);continue;
+                json_decref(event);
+                continue;
             }
             struct voice_handoff *handoff = NULL;
             for (size_t i = 0; i < SNAG_VOICE_HANDOFFS; ++i) {
@@ -3673,23 +3842,28 @@ int snag_app_voice_service(struct app_state *app)
                 json_decref(event);
                 goto failed;
             }
-            json_t *source=json_pack("{s:s,s:s,s:s,s:s,s:s,s:s,s:s,s:s}","connection_id",v->connection,
-                "input_id",snag_json_string(event,"input_id"),"response_id",snag_json_string(event,"response_id"),
-                "call_id",snag_json_string(event,"call_id"),"provider",v->config.provider,"model",v->config.realtime_model,
-                "transcript",snag_json_string(event,"transcript"),"request",snag_json_string(event,"request"));
-            const char *text_keys[]={"transcript","request"};
-            for(size_t i=0;source && i<2u;++i) {
-                json_t *text=json_pack("{s:s}","model_text",snag_json_string(source,text_keys[i]));
-                if(!text || snag_secret_result(&v->secrets,text,error,sizeof(error))<0 ||
-                    json_object_set(source,text_keys[i],json_object_get(text,"model_text"))<0) {
-                    json_decref(source);source=NULL;
+            json_t *source = json_pack("{s:s,s:s,s:s,s:s,s:s,s:s,s:s,s:s}", "connection_id",
+                v->connection, "input_id", snag_json_string(event, "input_id"), "response_id",
+                snag_json_string(event, "response_id"), "call_id",
+                snag_json_string(event, "call_id"), "provider", v->config.provider, "model",
+                v->config.realtime_model, "transcript", snag_json_string(event, "transcript"),
+                "request", snag_json_string(event, "request"));
+            const char *text_keys[] = {"transcript", "request"};
+            for (size_t i = 0; source && i < 2u; ++i) {
+                json_t *text =
+                    json_pack("{s:s}", "model_text", snag_json_string(source, text_keys[i]));
+                if (!text || snag_secret_result(&v->secrets, text, error, sizeof(error)) < 0 ||
+                    json_object_set(source, text_keys[i], json_object_get(text, "model_text")) <
+                        0) {
+                    json_decref(source);
+                    source = NULL;
                 }
                 json_decref(text);
             }
             if (!source || v->interface_order == UINT64_MAX ||
-                voice_record(app, v, json_pack("{s:s,s:s,s:O}",
-                    "type", "voice_response", "operation", "interface_request",
-                    "source", source)) < 0) {
+                voice_record(app, v,
+                    json_pack("{s:s,s:s,s:O}", "type", "voice_response", "operation",
+                        "interface_request", "source", source)) < 0) {
                 json_decref(source);
                 json_decref(event);
                 goto failed;
@@ -3698,22 +3872,33 @@ int snag_app_voice_service(struct app_state *app)
             handoff->order = ++v->interface_order;
             snag_strcpy(handoff->call, sizeof(handoff->call), snag_json_string(event, "call_id"));
             v->context_dirty = true;
-        } else if(!strcmp(type,"voice_expiring")) {
+        } else if (!strcmp(type, "voice_expiring")) {
             if (snag_ui_text(&app->ui, SNAG_UI_HOST,
                     "Voice connection expires within one minute and will renew automatically. "
                     "/voice off cancels renewal.") < 0) {
-                json_decref(event);goto failed;
+                json_decref(event);
+                goto failed;
             }
-        } else if(!strcmp(type,"voice_buffering")) {
-            if(snag_ui_text(&app->ui,SNAG_UI_HOST,"Voice audio arrived late; playback prefill adjusted. /voice off stops voice.")<0) {
-                json_decref(event);goto failed;
+        } else if (!strcmp(type, "voice_buffering")) {
+            if (snag_ui_text(&app->ui, SNAG_UI_HOST,
+                    "Voice audio arrived late; playback prefill adjusted. /voice off stops "
+                    "voice.") < 0) {
+                json_decref(event);
+                goto failed;
             }
         } else {
-            if(voice_record(app,v,json_incref(event))<0) {json_decref(event);goto failed;}
-            if(!strcmp(type,"voice_muted")) {
-                bool mute=json_is_true(json_object_get(event,"muted"));
-                if(mute==atomic_load(&v->muted) && snag_ui_voice(&app->ui,mute?
-                    "[VOICE MUTED; /voice unmute | off] ":"[VOICE MIC ON; /voice mute | off] ")<0) {json_decref(event);goto failed;}
+            if (voice_record(app, v, json_incref(event)) < 0) {
+                json_decref(event);
+                goto failed;
+            }
+            if (!strcmp(type, "voice_muted")) {
+                bool mute = json_is_true(json_object_get(event, "muted"));
+                if (mute == atomic_load(&v->muted) &&
+                    snag_ui_voice(&app->ui, mute ? "[VOICE MUTED; /voice unmute | off] "
+                                                 : "[VOICE MIC ON; /voice mute | off] ") < 0) {
+                    json_decref(event);
+                    goto failed;
+                }
             }
             if (!strcmp(type, "voice_transcript") &&
                 voice_transcript(app, v, event, error, sizeof(error)) < 0) {
@@ -3723,22 +3908,25 @@ int snag_app_voice_service(struct app_state *app)
         }
         json_decref(event);
     }
-    for(unsigned int who=0;who<2u;++who) {
+    for (unsigned int who = 0; who < 2u; ++who) {
         char caption[sizeof(v->caption[who])];
         pthread_mutex_lock(&v->mutex);
-        bool changed=v->caption_dirty[who];
-        memcpy(caption,v->caption[who],sizeof(caption));v->caption_dirty[who]=false;
+        bool changed = v->caption_dirty[who];
+        memcpy(caption, v->caption[who], sizeof(caption));
+        v->caption_dirty[who] = false;
         pthread_mutex_unlock(&v->mutex);
-        if(changed) {
-            json_t *safe=json_pack("{s:s}","model_text",caption);
-            int rc=safe?snag_secret_result(&v->secrets,safe,error,sizeof(error)):-1;
-            if(!rc)rc=snag_ui_caption(&app->ui,who,snag_json_string(safe,"model_text"));
-            json_decref(safe);if(rc<0)goto failed;
+        if (changed) {
+            json_t *safe = json_pack("{s:s}", "model_text", caption);
+            int rc = safe ? snag_secret_result(&v->secrets, safe, error, sizeof(error)) : -1;
+            if (!rc) rc = snag_ui_caption(&app->ui, who, snag_json_string(safe, "model_text"));
+            json_decref(safe);
+            if (rc < 0) goto failed;
         }
     }
 interface:
     if ((!atomic_load(&v->done) || v->retryable) && !atomic_load(&v->stop) &&
-        interface_service(app, error, sizeof(error)) < 0) goto failed;
+        interface_service(app, error, sizeof(error)) < 0)
+        goto failed;
     if (v->close_requested) {
         snag_app_voice_close(app);
         return snag_ui_text(&app->ui, SNAG_UI_HOST, "Voice off; coding work continues.");
@@ -3746,14 +3934,15 @@ interface:
     for (size_t i = 0; i < SNAG_VOICE_HANDOFFS; ++i) {
         struct voice_handoff *handoff = &v->handoffs[i];
         if (!handoff->call[0]) continue;
-        bool current = !strcmp(v->connection,
-            snag_json_string(handoff->source, "connection_id"));
+        bool current = !strcmp(v->connection, snag_json_string(handoff->source, "connection_id"));
         if (!current && handoff->interface_done && !handoff->reply) {
             /* The canonical queue still owns accepted work and publishes its
              * eventual outcome. This obsolete native call cannot receive it. */
-            if (handoff_record(app, v, handoff, json_pack("{s:s,s:s,s:s,s:s}",
-                    "type", "voice_response", "operation", "interface_connection_retired",
-                    "call_id", handoff->call, "queue_id", handoff->queue)) < 0) goto failed;
+            if (handoff_record(app, v, handoff,
+                    json_pack("{s:s,s:s,s:s,s:s}", "type", "voice_response", "operation",
+                        "interface_connection_retired", "call_id", handoff->call, "queue_id",
+                        handoff->queue)) < 0)
+                goto failed;
             handoff_clear(v, handoff);
             continue;
         }
@@ -3767,9 +3956,10 @@ interface:
         if (occupied && deliver) continue;
         if (handoff->reply) {
             const char *text = snag_json_string(handoff->reply, "text");
-            int rc = handoff_record(app, v, handoff, json_pack("{s:s,s:s,s:s,s:s,s:O}",
-                "type", "voice_response", "operation", "interface_reply",
-                "call_id", handoff->call, "queue_id", handoff->queue, "reply", handoff->reply));
+            int rc = handoff_record(app, v, handoff,
+                json_pack("{s:s,s:s,s:s,s:s,s:O}", "type", "voice_response", "operation",
+                    "interface_reply", "call_id", handoff->call, "queue_id", handoff->queue,
+                    "reply", handoff->reply));
             if (!rc && deliver) {
                 rc = deliver_result(v, handoff->call, text, !handoff->queue[0]);
             }
@@ -3781,13 +3971,14 @@ interface:
         }
         if (!handoff->interface_done) continue;
         json_t *result = NULL;
-        if (snag_session_voice_status(&app->session, handoff->queue, &result,
-                error, sizeof(error)) < 0) goto failed;
+        if (snag_session_voice_status(
+                &app->session, handoff->queue, &result, error, sizeof(error)) < 0)
+            goto failed;
         const char *text = snag_json_string(result, "text");
-        int rc = handoff_record(app, v, handoff, json_pack("{s:s,s:s,s:s,s:s,s:s,s:s}",
-            "type", "voice_result", "call_id", handoff->call, "queue_id", handoff->queue,
-            "turn_id", snag_json_string(result, "turn_id"),
-            "status", snag_json_string(result, "status"), "text", text));
+        int rc = handoff_record(app, v, handoff,
+            json_pack("{s:s,s:s,s:s,s:s,s:s,s:s}", "type", "voice_result", "call_id", handoff->call,
+                "queue_id", handoff->queue, "turn_id", snag_json_string(result, "turn_id"),
+                "status", snag_json_string(result, "status"), "text", text));
         if (!rc && deliver) {
             rc = deliver_result(v, handoff->call, text, true);
         }
@@ -3802,8 +3993,8 @@ interface:
     if (finished && v->capacity_pending && !atomic_load(&v->stop)) {
         int rc = native_compact_service(app, error, sizeof(error));
         if (rc < 0) {
-            snprintf(v->error, sizeof(v->error), "%s", error[0] ? error :
-                "Native voice history could not be reduced; originals retained");
+            snprintf(v->error, sizeof(v->error), "%s",
+                error[0] ? error : "Native voice history could not be reduced; originals retained");
             v->retryable = false;
         } else if (rc) {
             v->servicing = false;
@@ -3813,11 +4004,11 @@ interface:
     if (finished && v->retryable && !atomic_load(&v->stop)) {
         uint64_t now = snag_monotonic_ms();
         if (!v->reconnect_at) {
-            uint32_t delay = snag_provider_retry_delay_ms(v->reconnects,
-                v->retry_after_ms != 0u, v->retry_after_ms);
-            if (voice_record(app, v, json_pack("{s:s,s:s,s:s,s:i}", "type", "voice_response",
-                    "operation", "connection_retry", "reason", v->error,
-                    "delay_ms", (int)delay)) < 0 ||
+            uint32_t delay = snag_provider_retry_delay_ms(
+                v->reconnects, v->retry_after_ms != 0u, v->retry_after_ms);
+            if (voice_record(app, v,
+                    json_pack("{s:s,s:s,s:s,s:i}", "type", "voice_response", "operation",
+                        "connection_retry", "reason", v->error, "delay_ms", (int)delay)) < 0 ||
                 snag_ui_voice(&app->ui, "[voice reconnecting; mic off; /voice off cancels] ") < 0) {
                 goto failed;
             }
@@ -3830,25 +4021,35 @@ interface:
         return 0;
     }
     if (finished) {
-        snprintf(error,sizeof(error),"%s",v->error[0]?v->error:"Voice stopped.");
-        int rc=voice_record(app,v,json_pack("{s:s,s:s}","type","voice_stopped","reason",error));
-        v->stopped_recorded=!rc;
-        snag_app_voice_close(app);snag_ui_audio(&app->ui,"",false);
-        return rc<0?-1:snag_ui_text(&app->ui,SNAG_UI_HOST,error);
+        snprintf(error, sizeof(error), "%s", v->error[0] ? v->error : "Voice stopped.");
+        int rc =
+            voice_record(app, v, json_pack("{s:s,s:s}", "type", "voice_stopped", "reason", error));
+        v->stopped_recorded = !rc;
+        snag_app_voice_close(app);
+        snag_ui_audio(&app->ui, "", false);
+        return rc < 0 ? -1 : snag_ui_text(&app->ui, SNAG_UI_HOST, error);
     }
     v->servicing = false;
     return 0;
 failed:
-    snag_app_voice_close(app);snag_ui_audio(&app->ui,"",false);
-    return snag_ui_text(&app->ui,SNAG_UI_ERROR,"Voice stopped: its input, journal, device or UI could not be retained safely. Coding work stays with its existing owner.");
+    snag_app_voice_close(app);
+    snag_ui_audio(&app->ui, "", false);
+    return snag_ui_text(&app->ui, SNAG_UI_ERROR,
+        "Voice stopped: its input, journal, device or UI could not be retained safely. Coding work "
+        "stays with its existing owner.");
 }
-int snag_app_voice_command(struct app_state *app,const char *line,bool *handled)
+int
+snag_app_voice_command(struct app_state *app, const char *line, bool *handled)
 {
-    *handled=!strcmp(line,"/voice") || !strncmp(line,"/voice ",7u);
-    if(!*handled || !strcmp(line,"/voice devices")) {*handled=false;return 0;}
-    if(!strcmp(line,"/voice off")) {
+    *handled = !strcmp(line, "/voice") || !strncmp(line, "/voice ", 7u);
+    if (!*handled || !strcmp(line, "/voice devices")) {
+        *handled = false;
+        return 0;
+    }
+    if (!strcmp(line, "/voice off")) {
         if (app->voice_switch) {
-            if (app->voice_switch->sent) app->voice_switch->mode = SNAG_SESSION_VOICE_OFF;
+            if (app->voice_switch->sent)
+                app->voice_switch->mode = SNAG_SESSION_VOICE_OFF;
             else {
                 free(app->voice_switch);
                 app->voice_switch = NULL;
@@ -3857,31 +4058,38 @@ int snag_app_voice_command(struct app_state *app,const char *line,bool *handled)
         if (app->voice) {
             /* Off supersedes a prepared transfer and follows the usual durable stop. */
             app->voice->transfer_target[0] = '\0';
-            struct app_voice *v=app->voice;atomic_store(&v->stop,true);
-            if(v->thread_started) {pthread_join(v->thread,NULL);v->thread_started=false;}
-            if(snag_app_voice_service(app)<0)return -1;
+            struct app_voice *v = app->voice;
+            atomic_store(&v->stop, true);
+            if (v->thread_started) {
+                pthread_join(v->thread, NULL);
+                v->thread_started = false;
+            }
+            if (snag_app_voice_service(app) < 0) return -1;
         }
-        return snag_ui_text(&app->ui,SNAG_UI_HOST,"Voice off; coding work remains under the existing session controls.");
+        return snag_ui_text(&app->ui, SNAG_UI_HOST,
+            "Voice off; coding work remains under the existing session controls.");
     }
-    if(!strcmp(line,"/voice mute") || !strcmp(line,"/voice unmute")) {
-        if(!app->voice)return snag_ui_text(&app->ui,SNAG_UI_ERROR,"Voice is off. Use /voice on first.");
-        bool mute=!strcmp(line,"/voice mute");
-        if(mute==atomic_load(&app->voice->muted))return 0;
-        if(mute) {
-            atomic_store(&app->voice->muted,true);atomic_store(&app->voice->mute_pending,true);
+    if (!strcmp(line, "/voice mute") || !strcmp(line, "/voice unmute")) {
+        if (!app->voice)
+            return snag_ui_text(&app->ui, SNAG_UI_ERROR, "Voice is off. Use /voice on first.");
+        bool mute = !strcmp(line, "/voice mute");
+        if (mute == atomic_load(&app->voice->muted)) return 0;
+        if (mute) {
+            atomic_store(&app->voice->muted, true);
+            atomic_store(&app->voice->mute_pending, true);
         }
-        const char *label = app->voice->transfer_target[0] ?
-            "[voice switching sessions; mic off] " : mute ?
-            "[voice muting; /voice unmute | off] " :
-            "[voice starting mic; /voice mute | off] ";
+        const char *label = app->voice->transfer_target[0] ? "[voice switching sessions; mic off] "
+                            : mute                         ? "[voice muting; /voice unmute | off] "
+                                   : "[voice starting mic; /voice mute | off] ";
         int rc = snag_ui_voice(&app->ui, label);
-        if(!rc && !mute)atomic_store(&app->voice->muted,false);
+        if (!rc && !mute) atomic_store(&app->voice->muted, false);
         if (!rc && app->voice_switch && app->voice_switch->mode != SNAG_SESSION_VOICE_OFF)
             app->voice_switch->mode = mute ? SNAG_SESSION_VOICE_MUTED : SNAG_SESSION_VOICE_ON;
-        if(rc)snag_app_voice_close(app);
-        return rc<0?-1:0;
+        if (rc) snag_app_voice_close(app);
+        return rc < 0 ? -1 : 0;
     }
-    if(strcmp(line,"/voice on"))return snag_ui_text(&app->ui,SNAG_UI_HOST,"Use /voice on, off, mute, unmute or devices.");
+    if (strcmp(line, "/voice on"))
+        return snag_ui_text(&app->ui, SNAG_UI_HOST, "Use /voice on, off, mute, unmute or devices.");
     return voice_start(app, false, snag_ui_session_attachment(&app->ui));
 }
 
@@ -3890,35 +4098,46 @@ voice_start(struct app_state *app, bool muted, uint64_t attachment)
 {
     if (attachment && snag_ui_session_attachment(&app->ui) != attachment) return 0;
     if (app->voice || app->audio || app->attaching)
-        return snag_ui_text(&app->ui, SNAG_UI_ERROR,
-            "Stop the active audio operation before starting voice.");
+        return snag_ui_text(
+            &app->ui, SNAG_UI_ERROR, "Stop the active audio operation before starting voice.");
     struct snag_audio_config resolved;
-    const struct snag_provider_config *provider=snag_provider_audio_config(app->config,
-        app->session.default_provider,&resolved);
-    const struct snag_audio_config *cfg=&resolved;
+    const struct snag_provider_config *provider =
+        snag_provider_audio_config(app->config, app->session.default_provider, &resolved);
+    const struct snag_audio_config *cfg = &resolved;
     if (!provider)
-        return snag_ui_text(&app->ui,SNAG_UI_ERROR,"Selected voice provider is not configured.");
-    if(snag_ui_voice(&app->ui,"[voice connecting; mic off; /voice off cancels] ")!=0)
-        return snag_ui_text(&app->ui,SNAG_UI_ERROR,"Voice requires a raw interactive terminal with a visible capture prompt.");
-    char message[SNAG_CONFIG_URL_MAX+SNAG_CONFIG_MODEL_MAX+SNAG_CONFIG_PROVIDER_NAME_MAX+256u],
+        return snag_ui_text(&app->ui, SNAG_UI_ERROR, "Selected voice provider is not configured.");
+    if (snag_ui_voice(&app->ui, "[voice connecting; mic off; /voice off cancels] ") != 0)
+        return snag_ui_text(&app->ui, SNAG_UI_ERROR,
+            "Voice requires a raw interactive terminal with a visible capture prompt.");
+    char
+        message[SNAG_CONFIG_URL_MAX + SNAG_CONFIG_MODEL_MAX + SNAG_CONFIG_PROVIDER_NAME_MAX + 256u],
         error[256];
-    if(snag_session_persist(&app->store,&app->session,error,sizeof(error))<0) {
-        snag_ui_audio(&app->ui,"",false);return snag_ui_text(&app->ui,SNAG_UI_ERROR,error);
+    if (snag_session_persist(&app->store, &app->session, error, sizeof(error)) < 0) {
+        snag_ui_audio(&app->ui, "", false);
+        return snag_ui_text(&app->ui, SNAG_UI_ERROR, error);
     }
-    snprintf(message,sizeof(message),
+    snprintf(message, sizeof(message),
         "Voice sends microphone audio and coding context to %.*s. Use /voice mute or /voice off.",
-        (int)sizeof(cfg->provider)-1,cfg->provider);
-    if(snag_ui_text(&app->ui,SNAG_UI_HOST,message)<0)return -1;
-    struct app_voice *v=calloc(1,sizeof(*v));if(!v)return -1;
-    v->provider=*provider;v->provider.models=NULL;v->provider.model_count=0;v->config=*cfg;
+        (int)sizeof(cfg->provider) - 1, cfg->provider);
+    if (snag_ui_text(&app->ui, SNAG_UI_HOST, message) < 0) return -1;
+    struct app_voice *v = calloc(1, sizeof(*v));
+    if (!v) return -1;
+    v->provider = *provider;
+    v->provider.models = NULL;
+    v->provider.model_count = 0;
+    v->config = *cfg;
     /* Configuration reload is excluded while voice owns this borrowed source. */
     v->root_fd = app->store.root_fd;
     snag_credential_clear(&v->credential);
-    if(pthread_mutex_init(&v->mutex,NULL)) {free(v);return -1;}
+    if (pthread_mutex_init(&v->mutex, NULL)) {
+        free(v);
+        return -1;
+    }
     atomic_init(&v->stop, false);
     atomic_init(&v->muted, muted);
     atomic_init(&v->mute_pending, false);
-    atomic_init(&v->activate,false);atomic_init(&v->done,false);
+    atomic_init(&v->activate, false);
+    atomic_init(&v->done, false);
     atomic_init(&v->credential_ready, false);
     atomic_init(&v->pending_handoffs, 0u);
     atomic_init(&v->history_queued, false);
@@ -3927,17 +4146,21 @@ voice_start(struct app_state *app, bool muted, uint64_t attachment)
     atomic_init(&v->output_ready, false);
     v->ui = &app->ui;
     v->attachment = attachment;
-    for(size_t i=0;i<8u;++i)snag_buf_init(&v->send[i],VOICE_MESSAGE);
-    snag_buf_init(&v->receive,VOICE_MESSAGE);app->voice=v;
-    if (snag_random_id(v->connection)<0 ||
-        snag_secret_set_build(&v->secrets,app->config,NULL,
-            error,sizeof(error))<0)goto failed;
+    for (size_t i = 0; i < 8u; ++i) snag_buf_init(&v->send[i], VOICE_MESSAGE);
+    snag_buf_init(&v->receive, VOICE_MESSAGE);
+    app->voice = v;
+    if (snag_random_id(v->connection) < 0 ||
+        snag_secret_set_build(&v->secrets, app->config, NULL, error, sizeof(error)) < 0)
+        goto failed;
     if (voice_context_snapshot(app, v, &v->context, error, sizeof(error)) < 0) goto failed;
     observation_start(v, &app->session);
-    if(pthread_create(&v->thread,NULL,voice_owner,v))goto failed;
+    if (pthread_create(&v->thread, NULL, voice_owner, v)) goto failed;
     observe_ui(app);
-    v->thread_started=true;return 0;
+    v->thread_started = true;
+    return 0;
 failed:
-    snag_app_voice_close(app);snag_ui_audio(&app->ui,"",false);
-    return snag_ui_text(&app->ui,SNAG_UI_ERROR,"Voice could not load credentials or start its connection owner; microphone stayed off.");
+    snag_app_voice_close(app);
+    snag_ui_audio(&app->ui, "", false);
+    return snag_ui_text(&app->ui, SNAG_UI_ERROR,
+        "Voice could not load credentials or start its connection owner; microphone stayed off.");
 }

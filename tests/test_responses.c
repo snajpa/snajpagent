@@ -37,7 +37,7 @@ parsed_free(struct parsed_stream *parsed)
 
 static int
 capture_emit(void *opaque, size_t output_index, enum snag_item_kind kind,
-             enum snag_item_phase phase, const char *provider_item_id, const char *text, size_t len)
+    enum snag_item_phase phase, const char *provider_item_id, const char *text, size_t len)
 {
     struct parsed_stream *emitted = opaque;
 
@@ -45,8 +45,9 @@ capture_emit(void *opaque, size_t output_index, enum snag_item_kind kind,
     emitted->last_index = output_index;
     emitted->last_kind = kind;
     emitted->last_phase = phase;
-    if (provider_item_id) (void)snprintf(emitted->last_provider_id,
-                       sizeof(emitted->last_provider_id), "%s", provider_item_id);
+    if (provider_item_id)
+        (void)snprintf(
+            emitted->last_provider_id, sizeof(emitted->last_provider_id), "%s", provider_item_id);
     return snag_buf_append(&emitted->text, text, len);
 }
 
@@ -68,9 +69,10 @@ parse_stream(const char *wire, size_t chunk, struct parsed_stream *emitted)
         offset += take;
     }
     if (rc == 0) rc = snag_sse_finish(&sse, error, error_size);
-    if (rc == 0) rc = snag_responses_stream_finish(&responses, &emitted->graph, error, error_size);
-    else if (responses.failed) (void)snprintf(error, error_size, "%s",
-                       snag_responses_stream_error(&responses));
+    if (rc == 0)
+        rc = snag_responses_stream_finish(&responses, &emitted->graph, error, error_size);
+    else if (responses.failed)
+        (void)snprintf(error, error_size, "%s", snag_responses_stream_error(&responses));
     snag_sse_free(&sse);
     snag_responses_stream_free(&responses);
     return rc;
@@ -79,24 +81,49 @@ parse_stream(const char *wire, size_t chunk, struct parsed_stream *emitted)
 static void
 test_deltas_survive_empty_terminal_output(void)
 {
-    static const char wire[] = "event: response.created\n"
-        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_ping\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
+    static const char wire[] =
+        "event: response.created\n"
+        "data: "
+        "{\"type\":\"response.created\",\"response\":{\"id\":\"resp_ping\",\"status\":\"in_"
+        "progress\",\"output\":[]}}\n\n"
         "event: response.output_item.added\n"
-        "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"id\":\"msg_ping\",\"type\":\"message\",\"status\":\"in_progress\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[]}}\n\n"
+        "data: "
+        "{\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"id\":\"msg_ping\","
+        "\"type\":\"message\",\"status\":\"in_progress\",\"role\":\"assistant\",\"phase\":\"final_"
+        "answer\",\"content\":[]}}\n\n"
         "event: response.content_part.added\n"
-        "data: {\"type\":\"response.content_part.added\",\"item_id\":\"msg_ping\",\"output_index\":0,\"content_index\":0,\"part\":{\"type\":\"output_text\",\"text\":\"\",\"annotations\":[]}}\n\n"
+        "data: "
+        "{\"type\":\"response.content_part.added\",\"item_id\":\"msg_ping\",\"output_index\":0,"
+        "\"content_index\":0,\"part\":{\"type\":\"output_text\",\"text\":\"\",\"annotations\":[]}}"
+        "\n\n"
         "event: response.output_text.delta\n"
-        "data: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_ping\",\"output_index\":0,\"content_index\":0,\"delta\":\"ha\"}\n\n"
+        "data: "
+        "{\"type\":\"response.output_text.delta\",\"item_id\":\"msg_ping\",\"output_index\":0,"
+        "\"content_index\":0,\"delta\":\"ha\"}\n\n"
         "event: response.output_text.delta\n"
-        "data: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_ping\",\"output_index\":0,\"content_index\":0,\"delta\":\"ha\"}\n\n"
+        "data: "
+        "{\"type\":\"response.output_text.delta\",\"item_id\":\"msg_ping\",\"output_index\":0,"
+        "\"content_index\":0,\"delta\":\"ha\"}\n\n"
         "event: response.output_text.done\n"
-        "data: {\"type\":\"response.output_text.done\",\"item_id\":\"msg_ping\",\"output_index\":0,\"content_index\":0,\"text\":\"haha\"}\n\n"
+        "data: "
+        "{\"type\":\"response.output_text.done\",\"item_id\":\"msg_ping\",\"output_index\":0,"
+        "\"content_index\":0,\"text\":\"haha\"}\n\n"
         "event: response.content_part.done\n"
-        "data: {\"type\":\"response.content_part.done\",\"item_id\":\"msg_ping\",\"output_index\":0,\"content_index\":0,\"part\":{\"type\":\"output_text\",\"text\":\"haha\",\"annotations\":[]}}\n\n"
+        "data: "
+        "{\"type\":\"response.content_part.done\",\"item_id\":\"msg_ping\",\"output_index\":0,"
+        "\"content_index\":0,\"part\":{\"type\":\"output_text\",\"text\":\"haha\",\"annotations\":["
+        "]}}\n\n"
         "event: response.output_item.done\n"
-        "data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"id\":\"msg_ping\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[{\"type\":\"output_text\",\"text\":\"haha\",\"annotations\":[]}]}}\n\n"
+        "data: "
+        "{\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"id\":\"msg_ping\","
+        "\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"phase\":\"final_"
+        "answer\",\"content\":[{\"type\":\"output_text\",\"text\":\"haha\",\"annotations\":[]}]}}"
+        "\n\n"
         "event: response.completed\n"
-        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_ping\",\"status\":\"completed\",\"usage\":{\"input_tokens\":12,\"output_tokens\":4,\"total_tokens\":16,\"output_tokens_details\":{\"reasoning_tokens\":2}},\"output\":[]}}\n\n"
+        "data: "
+        "{\"type\":\"response.completed\",\"response\":{\"id\":\"resp_ping\",\"status\":"
+        "\"completed\",\"usage\":{\"input_tokens\":12,\"output_tokens\":4,\"total_tokens\":16,"
+        "\"output_tokens_details\":{\"reasoning_tokens\":2}},\"output\":[]}}\n\n"
         "data: [DONE]\n\n";
     struct parsed_stream emitted = parsed_new(SNAG_MAX_PUBLIC_ITEM + 1u);
 
@@ -123,17 +150,40 @@ test_llamacpp_stream_without_indexes(void)
      * content_index; the item id is the only identity it provides, so the
      * client must resolve indexes from it instead of rejecting the stream. */
     static const char wire[] =
-        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_llama\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
-        "data: {\"type\":\"response.output_item.added\",\"item\":{\"id\":\"rs_1\",\"type\":\"reasoning\",\"summary\":[],\"content\":[]}}\n\n"
-        "data: {\"type\":\"response.reasoning_text.delta\",\"item_id\":\"rs_1\",\"delta\":\"think\"}\n\n"
-        "data: {\"type\":\"response.output_item.done\",\"item\":{\"id\":\"rs_1\",\"type\":\"reasoning\",\"summary\":[],\"content\":[]}}\n\n"
-        "data: {\"type\":\"response.output_item.added\",\"item\":{\"id\":\"msg_1\",\"type\":\"message\",\"status\":\"in_progress\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[]}}\n\n"
-        "data: {\"type\":\"response.content_part.added\",\"item_id\":\"msg_1\",\"part\":{\"type\":\"output_text\",\"text\":\"\"}}\n\n"
+        "data: "
+        "{\"type\":\"response.created\",\"response\":{\"id\":\"resp_llama\",\"status\":\"in_"
+        "progress\",\"output\":[]}}\n\n"
+        "data: "
+        "{\"type\":\"response.output_item.added\",\"item\":{\"id\":\"rs_1\",\"type\":\"reasoning\","
+        "\"summary\":[],\"content\":[]}}\n\n"
+        "data: "
+        "{\"type\":\"response.reasoning_text.delta\",\"item_id\":\"rs_1\",\"delta\":\"think\"}\n\n"
+        "data: "
+        "{\"type\":\"response.output_item.done\",\"item\":{\"id\":\"rs_1\",\"type\":\"reasoning\","
+        "\"summary\":[],\"content\":[]}}\n\n"
+        "data: "
+        "{\"type\":\"response.output_item.added\",\"item\":{\"id\":\"msg_1\",\"type\":\"message\","
+        "\"status\":\"in_progress\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":["
+        "]}}\n\n"
+        "data: "
+        "{\"type\":\"response.content_part.added\",\"item_id\":\"msg_1\",\"part\":{\"type\":"
+        "\"output_text\",\"text\":\"\"}}\n\n"
         "data: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_1\",\"delta\":\"hi\"}\n\n"
         "data: {\"type\":\"response.output_text.done\",\"item_id\":\"msg_1\",\"text\":\"hi\"}\n\n"
-        "data: {\"type\":\"response.content_part.done\",\"item_id\":\"msg_1\",\"part\":{\"type\":\"output_text\",\"text\":\"hi\"}}\n\n"
-        "data: {\"type\":\"response.output_item.done\",\"item\":{\"id\":\"msg_1\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[{\"type\":\"output_text\",\"text\":\"hi\"}]}}\n\n"
-        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_llama\",\"status\":\"completed\",\"usage\":{\"input_tokens\":3,\"output_tokens\":1,\"total_tokens\":4},\"output\":[{\"id\":\"rs_1\",\"type\":\"reasoning\",\"summary\":[],\"content\":[]},{\"id\":\"msg_1\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[{\"type\":\"output_text\",\"text\":\"hi\"}]}]}}\n\n"
+        "data: "
+        "{\"type\":\"response.content_part.done\",\"item_id\":\"msg_1\",\"part\":{\"type\":"
+        "\"output_text\",\"text\":\"hi\"}}\n\n"
+        "data: "
+        "{\"type\":\"response.output_item.done\",\"item\":{\"id\":\"msg_1\",\"type\":\"message\","
+        "\"status\":\"completed\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[{"
+        "\"type\":\"output_text\",\"text\":\"hi\"}]}}\n\n"
+        "data: "
+        "{\"type\":\"response.completed\",\"response\":{\"id\":\"resp_llama\",\"status\":"
+        "\"completed\",\"usage\":{\"input_tokens\":3,\"output_tokens\":1,\"total_tokens\":4},"
+        "\"output\":[{\"id\":\"rs_1\",\"type\":\"reasoning\",\"summary\":[],\"content\":[]},{"
+        "\"id\":\"msg_1\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\","
+        "\"phase\":\"final_answer\",\"content\":[{\"type\":\"output_text\",\"text\":\"hi\"}]}]}}"
+        "\n\n"
         "data: [DONE]\n\n";
     struct parsed_stream emitted = parsed_new(1024u);
 
@@ -152,8 +202,18 @@ static void
 test_terminal_snapshot_can_supply_unseen_items(void)
 {
     static const char wire[] =
-        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_snapshot\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
-        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_snapshot\",\"status\":\"completed\",\"output\":[{\"id\":\"msg_comment\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"phase\":\"commentary\",\"content\":[{\"type\":\"output_text\",\"text\":\"Working. \",\"annotations\":[]},{\"type\":\"output_text\",\"text\":\"Done.\",\"annotations\":[]}]},{\"id\":\"msg_final\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[{\"type\":\"output_text\",\"text\":\"answer\",\"annotations\":[]}]}]}}\n\n";
+        "data: "
+        "{\"type\":\"response.created\",\"response\":{\"id\":\"resp_snapshot\",\"status\":\"in_"
+        "progress\",\"output\":[]}}\n\n"
+        "data: "
+        "{\"type\":\"response.completed\",\"response\":{\"id\":\"resp_snapshot\",\"status\":"
+        "\"completed\",\"output\":[{\"id\":\"msg_comment\",\"type\":\"message\",\"status\":"
+        "\"completed\",\"role\":\"assistant\",\"phase\":\"commentary\",\"content\":[{\"type\":"
+        "\"output_text\",\"text\":\"Working. "
+        "\",\"annotations\":[]},{\"type\":\"output_text\",\"text\":\"Done.\",\"annotations\":[]}]},"
+        "{\"id\":\"msg_final\",\"type\":\"message\",\"status\":\"completed\",\"role\":"
+        "\"assistant\",\"phase\":\"final_answer\",\"content\":[{\"type\":\"output_text\",\"text\":"
+        "\"answer\",\"annotations\":[]}]}]}}\n\n";
     struct parsed_stream emitted = parsed_new(1024u);
 
     if (parse_stream(wire, 17u, &emitted) != 0) {
@@ -176,11 +236,9 @@ test_failed_snapshot_preserves_only_consistent_text(void)
     static const struct {
         const char *id, *status, *text;
         bool eligible;
-    } cases[] = {
-        {"m", "in_progress", "hello world", true}, {"m", "completed", "hello world", true},
+    } cases[] = {{"m", "in_progress", "hello world", true}, {"m", "completed", "hello world", true},
         {"m", "in_progress", "hello", true}, {"m", "in_progress", "other", false},
-        {"m", "in_progress", "hel", false}, {"other", "in_progress", "hello world", false}
-    };
+        {"m", "in_progress", "hel", false}, {"other", "in_progress", "hello world", false}};
     for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
         struct parsed_stream emitted = parsed_new(1024u);
         struct snag_responses_stream responses;
@@ -188,12 +246,26 @@ test_failed_snapshot_preserves_only_consistent_text(void)
         struct snag_buf wire = {.max = 8192u};
         char error[256] = {0};
         assert(snag_buf_printf(&wire,
-            "data: {\"type\":\"response.created\",\"response\":{\"id\":\"r\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
-            "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"id\":\"m\",\"type\":\"message\",\"status\":\"in_progress\",\"role\":\"assistant\",\"phase\":\"commentary\",\"content\":[]}}\n\n"
-            "data: {\"type\":\"response.content_part.added\",\"item_id\":\"m\",\"output_index\":0,\"content_index\":0,\"part\":{\"type\":\"output_text\",\"text\":\"\"}}\n\n"
-            "data: {\"type\":\"response.output_text.delta\",\"item_id\":\"m\",\"output_index\":0,\"content_index\":0,\"delta\":\"hello\"}\n\n"
-            "data: {\"type\":\"response.failed\",\"response\":{\"error\":{\"code\":\"cyber_policy\",\"message\":\"policy rejected\"},\"output\":[{\"id\":\"%s\",\"type\":\"message\",\"status\":\"%s\",\"role\":\"assistant\",\"phase\":\"commentary\",\"content\":[{\"type\":\"output_text\",\"text\":\"%s\"}]}]}}\n\n",
-            cases[i].id, cases[i].status, cases[i].text) == 0);
+                   "data: "
+                   "{\"type\":\"response.created\",\"response\":{\"id\":\"r\",\"status\":\"in_"
+                   "progress\",\"output\":[]}}\n\n"
+                   "data: "
+                   "{\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"id\":"
+                   "\"m\",\"type\":\"message\",\"status\":\"in_progress\",\"role\":\"assistant\","
+                   "\"phase\":\"commentary\",\"content\":[]}}\n\n"
+                   "data: "
+                   "{\"type\":\"response.content_part.added\",\"item_id\":\"m\",\"output_index\":0,"
+                   "\"content_index\":0,\"part\":{\"type\":\"output_text\",\"text\":\"\"}}\n\n"
+                   "data: "
+                   "{\"type\":\"response.output_text.delta\",\"item_id\":\"m\",\"output_index\":0,"
+                   "\"content_index\":0,\"delta\":\"hello\"}\n\n"
+                   "data: "
+                   "{\"type\":\"response.failed\",\"response\":{\"error\":{\"code\":\"cyber_"
+                   "policy\",\"message\":\"policy "
+                   "rejected\"},\"output\":[{\"id\":\"%s\",\"type\":\"message\",\"status\":\"%s\","
+                   "\"role\":\"assistant\",\"phase\":\"commentary\",\"content\":[{\"type\":"
+                   "\"output_text\",\"text\":\"%s\"}]}]}}\n\n",
+                   cases[i].id, cases[i].status, cases[i].text) == 0);
         snag_responses_stream_init(&responses, capture_emit, &emitted);
         snag_sse_init(&sse, snag_responses_sse_record, &responses);
         assert(snag_sse_feed(&sse, wire.data, wire.len, error, sizeof(error)) < 0);
@@ -233,12 +305,26 @@ static void
 test_completed_announcements_and_empty_placeholders(void)
 {
     static const char announced[] =
-        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"r\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
-        "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"id\":\"m\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[{\"type\":\"output_text\",\"text\":\"summary\"}]}}\n\n"
-        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r\",\"status\":\"completed\",\"output\":[]}}\n\n";
+        "data: "
+        "{\"type\":\"response.created\",\"response\":{\"id\":\"r\",\"status\":\"in_progress\","
+        "\"output\":[]}}\n\n"
+        "data: "
+        "{\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"id\":\"m\","
+        "\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"phase\":\"final_"
+        "answer\",\"content\":[{\"type\":\"output_text\",\"text\":\"summary\"}]}}\n\n"
+        "data: "
+        "{\"type\":\"response.completed\",\"response\":{\"id\":\"r\",\"status\":\"completed\","
+        "\"output\":[]}}\n\n";
     static const char placeholder[] =
-        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"r\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
-        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r\",\"status\":\"completed\",\"output\":[{\"id\":\"empty\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"phase\":\"commentary\",\"content\":[]},{\"id\":\"m\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[{\"type\":\"output_text\",\"text\":\"summary\"}]}]}}\n\n";
+        "data: "
+        "{\"type\":\"response.created\",\"response\":{\"id\":\"r\",\"status\":\"in_progress\","
+        "\"output\":[]}}\n\n"
+        "data: "
+        "{\"type\":\"response.completed\",\"response\":{\"id\":\"r\",\"status\":\"completed\","
+        "\"output\":[{\"id\":\"empty\",\"type\":\"message\",\"status\":\"completed\",\"role\":"
+        "\"assistant\",\"phase\":\"commentary\",\"content\":[]},{\"id\":\"m\",\"type\":\"message\","
+        "\"status\":\"completed\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[{"
+        "\"type\":\"output_text\",\"text\":\"summary\"}]}]}}\n\n";
     const char *const wires[] = {announced, placeholder};
     unsigned int failed = 0u;
     for (size_t i = 0u; i < sizeof(wires) / sizeof(wires[0]); ++i) {
@@ -259,25 +345,32 @@ test_completed_announcements_and_empty_placeholders(void)
     /* Empty finals cannot promote commentary; real calls/refusals still carry
      * their own outcome. An empty refusal remains a correction, not permission. */
     static const char *const tails[] = {
-        "{\"id\":\"m\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"phase\":\"commentary\",\"content\":[{\"type\":\"output_text\",\"text\":\"working\"}]}",
-        "{\"id\":\"f\",\"type\":\"function_call\",\"status\":\"completed\",\"call_id\":\"c\",\"name\":\"read_file\",\"arguments\":\"{}\"}",
-        "{\"id\":\"m\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"content\":[{\"type\":\"refusal\",\"refusal\":\"declined\"}]}"
-    };
+        "{\"id\":\"m\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\","
+        "\"phase\":\"commentary\",\"content\":[{\"type\":\"output_text\",\"text\":\"working\"}]}",
+        "{\"id\":\"f\",\"type\":\"function_call\",\"status\":\"completed\",\"call_id\":\"c\","
+        "\"name\":\"read_file\",\"arguments\":\"{}\"}",
+        "{\"id\":\"m\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\","
+        "\"content\":[{\"type\":\"refusal\",\"refusal\":\"declined\"}]}"};
     for (size_t i = 0u; i < 4u; ++i) {
         struct parsed_stream parsed = parsed_new(4096u);
         struct snag_buf wire = {.max = 4096u};
         assert(snag_buf_printf(&wire,
-            "data: {\"type\":\"response.created\",\"response\":{\"id\":\"r\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
-            "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r\",\"status\":\"completed\",\"output\":["
-            "{\"id\":\"e\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[%s]},%s]}}\n\n",
-            i == 3u ? "{\"type\":\"refusal\",\"refusal\":\"\"}" : "",
-            tails[i == 3u ? 1u : i]) == 0);
+                   "data: "
+                   "{\"type\":\"response.created\",\"response\":{\"id\":\"r\",\"status\":\"in_"
+                   "progress\",\"output\":[]}}\n\n"
+                   "data: "
+                   "{\"type\":\"response.completed\",\"response\":{\"id\":\"r\",\"status\":"
+                   "\"completed\",\"output\":["
+                   "{\"id\":\"e\",\"type\":\"message\",\"status\":\"completed\",\"role\":"
+                   "\"assistant\",\"phase\":\"final_answer\",\"content\":[%s]},%s]}}\n\n",
+                   i == 3u ? "{\"type\":\"refusal\",\"refusal\":\"\"}" : "",
+                   tails[i == 3u ? 1u : i]) == 0);
         assert(snag_buf_terminate(&wire) == 0);
         assert(parse_stream((char *)wire.data, 7u, &parsed) == (i == 0u || i == 3u ? 1 : 0));
         if (i == 1u || i == 2u) {
             assert(parsed.graph.count == 1u);
             assert(snag_response_graph_item(&parsed.graph, 0u).kind ==
-                (i == 1u ? SNAG_ITEM_TOOL_CALL : SNAG_ITEM_REFUSAL));
+                   (i == 1u ? SNAG_ITEM_TOOL_CALL : SNAG_ITEM_REFUSAL));
         }
         snag_buf_free(&wire);
         parsed_free(&parsed);
@@ -288,21 +381,54 @@ static void
 test_empty_public_items_get_specific_correction(void)
 {
     static const char streamed[] =
-        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_empty_stream\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
-        "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"id\":\"msg_empty_stream\",\"type\":\"message\",\"status\":\"in_progress\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[]}}\n\n"
-        "data: {\"type\":\"response.content_part.added\",\"item_id\":\"msg_empty_stream\",\"output_index\":0,\"content_index\":0,\"part\":{\"type\":\"output_text\",\"text\":\"\",\"annotations\":[]}}\n\n"
-        "data: {\"type\":\"response.output_text.done\",\"item_id\":\"msg_empty_stream\",\"output_index\":0,\"content_index\":0,\"text\":\"\"}\n\n"
-        "data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"id\":\"msg_empty_stream\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[{\"type\":\"output_text\",\"text\":\"\",\"annotations\":[]}]}}\n\n"
-        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_empty_stream\",\"status\":\"completed\",\"output\":[]}}\n\n";
+        "data: "
+        "{\"type\":\"response.created\",\"response\":{\"id\":\"resp_empty_stream\",\"status\":\"in_"
+        "progress\",\"output\":[]}}\n\n"
+        "data: "
+        "{\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"id\":\"msg_empty_"
+        "stream\",\"type\":\"message\",\"status\":\"in_progress\",\"role\":\"assistant\",\"phase\":"
+        "\"final_answer\",\"content\":[]}}\n\n"
+        "data: "
+        "{\"type\":\"response.content_part.added\",\"item_id\":\"msg_empty_stream\",\"output_"
+        "index\":0,\"content_index\":0,\"part\":{\"type\":\"output_text\",\"text\":\"\","
+        "\"annotations\":[]}}\n\n"
+        "data: "
+        "{\"type\":\"response.output_text.done\",\"item_id\":\"msg_empty_stream\",\"output_index\":"
+        "0,\"content_index\":0,\"text\":\"\"}\n\n"
+        "data: "
+        "{\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"id\":\"msg_empty_"
+        "stream\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"phase\":"
+        "\"final_answer\",\"content\":[{\"type\":\"output_text\",\"text\":\"\",\"annotations\":[]}]"
+        "}}\n\n"
+        "data: "
+        "{\"type\":\"response.completed\",\"response\":{\"id\":\"resp_empty_stream\",\"status\":"
+        "\"completed\",\"output\":[]}}\n\n";
     static const char snapshot[] =
-        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_empty_snapshot\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
-        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_empty_snapshot\",\"status\":\"completed\",\"output\":[{\"id\":\"msg_empty_snapshot\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[{\"type\":\"output_text\",\"text\":\"\",\"annotations\":[]}]}]}}\n\n";
+        "data: "
+        "{\"type\":\"response.created\",\"response\":{\"id\":\"resp_empty_snapshot\",\"status\":"
+        "\"in_progress\",\"output\":[]}}\n\n"
+        "data: "
+        "{\"type\":\"response.completed\",\"response\":{\"id\":\"resp_empty_snapshot\",\"status\":"
+        "\"completed\",\"output\":[{\"id\":\"msg_empty_snapshot\",\"type\":\"message\",\"status\":"
+        "\"completed\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[{\"type\":"
+        "\"output_text\",\"text\":\"\",\"annotations\":[]}]}]}}\n\n";
     static const char refusal[] =
-        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_empty_refusal\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
-        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_empty_refusal\",\"status\":\"completed\",\"output\":[{\"id\":\"msg_empty_refusal\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[{\"type\":\"refusal\",\"refusal\":\"\"}]}]}}\n\n";
+        "data: "
+        "{\"type\":\"response.created\",\"response\":{\"id\":\"resp_empty_refusal\",\"status\":"
+        "\"in_progress\",\"output\":[]}}\n\n"
+        "data: "
+        "{\"type\":\"response.completed\",\"response\":{\"id\":\"resp_empty_refusal\",\"status\":"
+        "\"completed\",\"output\":[{\"id\":\"msg_empty_refusal\",\"type\":\"message\",\"status\":"
+        "\"completed\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[{\"type\":"
+        "\"refusal\",\"refusal\":\"\"}]}]}}\n\n";
     static const char no_content[] =
-        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_empty_message\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
-        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_empty_message\",\"status\":\"completed\",\"output\":[{\"id\":\"msg_empty\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[]}]}}\n\n";
+        "data: "
+        "{\"type\":\"response.created\",\"response\":{\"id\":\"resp_empty_message\",\"status\":"
+        "\"in_progress\",\"output\":[]}}\n\n"
+        "data: "
+        "{\"type\":\"response.completed\",\"response\":{\"id\":\"resp_empty_message\",\"status\":"
+        "\"completed\",\"output\":[{\"id\":\"msg_empty\",\"type\":\"message\",\"status\":"
+        "\"completed\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[]}]}}\n\n";
     const char *const wires[] = {streamed, snapshot, refusal, no_content};
 
     for (size_t i = 0; i < sizeof(wires) / sizeof(wires[0]); ++i) {
@@ -322,7 +448,7 @@ static void
 test_oversized_public_items_get_specific_correction(void)
 {
     static const char *const event_types[] = {
-        "response.output_text.delta", "response.refusal.delta" };
+        "response.output_text.delta", "response.refusal.delta"};
     static const char *const delta_keys[] = {"delta", "delta"};
     static const char *const part_types[] = {"output_text", "refusal"};
     const size_t delta_len = 700u * 1024u;
@@ -336,13 +462,23 @@ test_oversized_public_items_get_specific_correction(void)
 
         struct snag_buf wire = {.max = SNAG_MAX_RESPONSE_GRAPH};
         assert(snag_buf_printf(&wire,
-            "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_large\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
-            "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"id\":\"msg_large\",\"type\":\"message\",\"status\":\"in_progress\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[]}}\n\n"
-            "data: {\"type\":\"response.content_part.added\",\"item_id\":\"msg_large\",\"output_index\":0,\"content_index\":0,\"part\":{\"type\":\"%s\",\"%s\":\"\"}}\n\n",
-            part_types[kind], kind == 0u ? "text" : "refusal") == 0);
-        for (size_t i = 0; i < 3u; ++i) assert(snag_buf_printf(&wire,
-                "data: {\"type\":\"%s\",\"item_id\":\"msg_large\",\"output_index\":0,\"content_index\":0,\"%s\":\"%s\"}\n\n",
-                event_types[kind], delta_keys[kind], delta) == 0);
+                   "data: "
+                   "{\"type\":\"response.created\",\"response\":{\"id\":\"resp_large\",\"status\":"
+                   "\"in_progress\",\"output\":[]}}\n\n"
+                   "data: "
+                   "{\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"id\":"
+                   "\"msg_large\",\"type\":\"message\",\"status\":\"in_progress\",\"role\":"
+                   "\"assistant\",\"phase\":\"final_answer\",\"content\":[]}}\n\n"
+                   "data: "
+                   "{\"type\":\"response.content_part.added\",\"item_id\":\"msg_large\",\"output_"
+                   "index\":0,\"content_index\":0,\"part\":{\"type\":\"%s\",\"%s\":\"\"}}\n\n",
+                   part_types[kind], kind == 0u ? "text" : "refusal") == 0);
+        for (size_t i = 0; i < 3u; ++i)
+            assert(snag_buf_printf(&wire,
+                       "data: "
+                       "{\"type\":\"%s\",\"item_id\":\"msg_large\",\"output_index\":0,\"content_"
+                       "index\":0,\"%s\":\"%s\"}\n\n",
+                       event_types[kind], delta_keys[kind], delta) == 0);
         assert(snag_buf_terminate(&wire) == 0);
         assert(parse_stream((const char *)wire.data, 8191u, &emitted) < 0);
         assert(strcmp(emitted.error, SNAG_OVERSIZED_OUTPUT_CORRECTION) == 0);
@@ -358,12 +494,19 @@ test_oversized_public_items_get_specific_correction(void)
 static void
 test_structured_keepalives_do_not_end_response(void)
 {
-    static const char wire[] = "event: keepalive\n"
-        "data: {\"type\":\"keepalive\"}\n\n" "event: response.created\n"
-        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_keepalive\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
-        "event: keepalive\n" "data: {\"type\":\"keepalive\",\"time_ms\":123}\n\n"
+    static const char wire[] =
+        "event: keepalive\n"
+        "data: {\"type\":\"keepalive\"}\n\n"
+        "event: response.created\n"
+        "data: "
+        "{\"type\":\"response.created\",\"response\":{\"id\":\"resp_keepalive\",\"status\":\"in_"
+        "progress\",\"output\":[]}}\n\n"
+        "event: keepalive\n"
+        "data: {\"type\":\"keepalive\",\"time_ms\":123}\n\n"
         "event: response.completed\n"
-        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_keepalive\",\"status\":\"completed\",\"output\":[]}}\n\n"
+        "data: "
+        "{\"type\":\"response.completed\",\"response\":{\"id\":\"resp_keepalive\",\"status\":"
+        "\"completed\",\"output\":[]}}\n\n"
         "event: keepalive\ndata: {\"type\":\"keepalive\",\"time_ms\":124}\n\n"
         "data: {\"type\":\"keepalive\"}\n\n"
         "event: keepalive\ndata: {\"time_ms\":125}\n\n";
@@ -387,105 +530,241 @@ test_public_stream(size_t which)
         size_t chunk, index;
         enum snag_item_phase emitted_phase;
     } cases[] = {
-        {"unused_response_events_are_ignored", "event: response.created\n"
-         "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_citation\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
-         "event: response.output_item.added\n"
-         "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"id\":\"msg_citation\",\"type\":\"message\",\"status\":\"in_progress\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[]}}\n\n"
-         "event: response.content_part.added\n"
-         "data: {\"type\":\"response.content_part.added\",\"item_id\":\"msg_citation\",\"output_index\":0,\"content_index\":0,\"part\":{\"type\":\"output_text\",\"text\":\"\",\"annotations\":[]}}\n\n"
-         "event: response.output_text.delta\n"
-         "data: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_citation\",\"output_index\":0,\"content_index\":0,\"delta\":\"Source.\"}\n\n"
-         "event: response.output_text.annotation.added\n"
-         "data: {\"type\":\"response.output_text.annotation.added\",\"item_id\":\"msg_citation\",\"output_index\":0,\"content_index\":0,\"annotation_index\":0,\"annotation\":{\"type\":\"url_citation\",\"start_index\":0,\"end_index\":7,\"title\":\"Example\",\"url\":\"https://example.com/\"},\"sequence_number\":5}\n\n"
-         "event: response.in_progress\n" "data: {\"type\":\"response.in_progress\",\"payload\":false}\n\n"
-         "event: response.image_generation_call.partial_image\n"
-         "data: {\"type\":\"response.image_generation_call.partial_image\",\"payload\":null}\n\n"
-         "event: response.future.progress\n"
-         "data: {\"type\":\"response.future.progress\",\"payload\":{\"anything\":true}}\n\n"
-         "event: response.output_text.done\n"
-         "data: {\"type\":\"response.output_text.done\",\"item_id\":\"msg_citation\",\"output_index\":0,\"content_index\":0,\"text\":\"Source.\"}\n\n"
-         "event: response.content_part.done\n"
-         "data: {\"type\":\"response.content_part.done\",\"item_id\":\"msg_citation\",\"output_index\":0,\"content_index\":0,\"part\":{\"type\":\"output_text\",\"text\":\"Source.\",\"annotations\":[{\"type\":\"url_citation\",\"start_index\":0,\"end_index\":7,\"title\":\"Example\",\"url\":\"https://example.com/\"}]}}\n\n"
-         "event: response.output_item.done\n"
-         "data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"id\":\"msg_citation\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[{\"type\":\"output_text\",\"text\":\"Source.\",\"annotations\":[{\"type\":\"url_citation\",\"start_index\":0,\"end_index\":7,\"title\":\"Example\",\"url\":\"https://example.com/\"}]}]}}\n\n"
-         "event: response.completed\n"
-         "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_citation\",\"status\":\"completed\",\"output\":[]}}\n\n",
-         "msg_citation", "Source.", 11u, 0u, SNAG_PHASE_FINAL_ANSWER},
+        {"unused_response_events_are_ignored",
+            "event: response.created\n"
+            "data: "
+            "{\"type\":\"response.created\",\"response\":{\"id\":\"resp_citation\",\"status\":\"in_"
+            "progress\",\"output\":[]}}\n\n"
+            "event: response.output_item.added\n"
+            "data: "
+            "{\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"id\":\"msg_"
+            "citation\",\"type\":\"message\",\"status\":\"in_progress\",\"role\":\"assistant\","
+            "\"phase\":\"final_answer\",\"content\":[]}}\n\n"
+            "event: response.content_part.added\n"
+            "data: "
+            "{\"type\":\"response.content_part.added\",\"item_id\":\"msg_citation\",\"output_"
+            "index\":0,\"content_index\":0,\"part\":{\"type\":\"output_text\",\"text\":\"\","
+            "\"annotations\":[]}}\n\n"
+            "event: response.output_text.delta\n"
+            "data: "
+            "{\"type\":\"response.output_text.delta\",\"item_id\":\"msg_citation\",\"output_"
+            "index\":0,\"content_index\":0,\"delta\":\"Source.\"}\n\n"
+            "event: response.output_text.annotation.added\n"
+            "data: "
+            "{\"type\":\"response.output_text.annotation.added\",\"item_id\":\"msg_citation\","
+            "\"output_index\":0,\"content_index\":0,\"annotation_index\":0,\"annotation\":{"
+            "\"type\":\"url_citation\",\"start_index\":0,\"end_index\":7,\"title\":\"Example\","
+            "\"url\":\"https://example.com/\"},\"sequence_number\":5}\n\n"
+            "event: response.in_progress\n"
+            "data: {\"type\":\"response.in_progress\",\"payload\":false}\n\n"
+            "event: response.image_generation_call.partial_image\n"
+            "data: {\"type\":\"response.image_generation_call.partial_image\",\"payload\":null}\n\n"
+            "event: response.future.progress\n"
+            "data: {\"type\":\"response.future.progress\",\"payload\":{\"anything\":true}}\n\n"
+            "event: response.output_text.done\n"
+            "data: "
+            "{\"type\":\"response.output_text.done\",\"item_id\":\"msg_citation\",\"output_index\":"
+            "0,\"content_index\":0,\"text\":\"Source.\"}\n\n"
+            "event: response.content_part.done\n"
+            "data: "
+            "{\"type\":\"response.content_part.done\",\"item_id\":\"msg_citation\",\"output_"
+            "index\":0,\"content_index\":0,\"part\":{\"type\":\"output_text\",\"text\":\"Source.\","
+            "\"annotations\":[{\"type\":\"url_citation\",\"start_index\":0,\"end_index\":7,"
+            "\"title\":\"Example\",\"url\":\"https://example.com/\"}]}}\n\n"
+            "event: response.output_item.done\n"
+            "data: "
+            "{\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"id\":\"msg_"
+            "citation\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\","
+            "\"phase\":\"final_answer\",\"content\":[{\"type\":\"output_text\",\"text\":\"Source."
+            "\",\"annotations\":[{\"type\":\"url_citation\",\"start_index\":0,\"end_index\":7,"
+            "\"title\":\"Example\",\"url\":\"https://example.com/\"}]}]}}\n\n"
+            "event: response.completed\n"
+            "data: "
+            "{\"type\":\"response.completed\",\"response\":{\"id\":\"resp_citation\",\"status\":"
+            "\"completed\",\"output\":[]}}\n\n",
+            "msg_citation", "Source.", 11u, 0u, SNAG_PHASE_FINAL_ANSWER},
         {"terminal_snapshot_ignores_unused_text_metadata",
-         "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_file\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
-         "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_file\",\"status\":\"completed\",\"output\":[{\"id\":\"msg_file\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[{\"type\":\"output_text\",\"text\":\"See file.\",\"annotations\":{\"unused\":true},\"logprobs\":\"unused\"}]}]}}\n\n",
-         "msg_file", "See file.", 13u, 0u, SNAG_PHASE_FINAL_ANSWER}, {"phase-absent text",
-         "event: response.created\n"
-         "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_pong\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
-         "event: response.output_item.added\n"
-         "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"id\":\"msg_pong\",\"type\":\"message\",\"status\":\"in_progress\",\"role\":\"assistant\",\"content\":[]}}\n\n"
-         "event: response.content_part.added\n"
-         "data: {\"type\":\"response.content_part.added\",\"item_id\":\"msg_pong\",\"output_index\":0,\"content_index\":0,\"part\":{\"type\":\"output_text\",\"text\":\"\",\"annotations\":[]}}\n\n"
-         "event: response.output_text.delta\n"
-         "data: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_pong\",\"output_index\":0,\"content_index\":0,\"delta\":\"pong\"}\n\n"
-         "event: response.output_text.done\n"
-         "data: {\"type\":\"response.output_text.done\",\"item_id\":\"msg_pong\",\"output_index\":0,\"content_index\":0,\"text\":\"pong\"}\n\n"
-         "event: response.output_item.done\n"
-         "data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"id\":\"msg_pong\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"pong\",\"annotations\":[]}]}}\n\n"
-         "event: response.completed\n"
-         "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_pong\",\"status\":\"completed\",\"output\":[]}}\n\n",
-         "msg_pong", "pong", 9u, 0u, SNAG_PHASE_COMMENTARY}, {"empty_reasoning_item_is_internal_only",
-         "event: response.created\n"
-         "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_reasoning\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
-         "event: response.output_item.added\n"
-         "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"id\":\"rs_1\",\"type\":\"reasoning\",\"content\":[],\"summary\":[]}}\n\n"
-         "event: response.output_item.done\n"
-         "data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"id\":\"rs_1\",\"type\":\"reasoning\",\"content\":[],\"summary\":[]}}\n\n"
-         "event: response.output_item.added\n"
-         "data: {\"type\":\"response.output_item.added\",\"output_index\":1,\"item\":{\"id\":\"msg_after_reasoning\",\"type\":\"message\",\"status\":\"in_progress\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[]}}\n\n"
-         "event: response.content_part.added\n"
-         "data: {\"type\":\"response.content_part.added\",\"item_id\":\"msg_after_reasoning\",\"output_index\":1,\"content_index\":0,\"part\":{\"type\":\"output_text\",\"text\":\"\",\"annotations\":[]}}\n\n"
-         "event: response.output_text.delta\n"
-         "data: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_after_reasoning\",\"output_index\":1,\"content_index\":0,\"delta\":\"ok\"}\n\n"
-         "event: response.output_text.done\n"
-         "data: {\"type\":\"response.output_text.done\",\"item_id\":\"msg_after_reasoning\",\"output_index\":1,\"content_index\":0,\"text\":\"ok\"}\n\n"
-         "event: response.output_item.done\n"
-         "data: {\"type\":\"response.output_item.done\",\"output_index\":1,\"item\":{\"id\":\"msg_after_reasoning\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[{\"type\":\"output_text\",\"text\":\"ok\",\"annotations\":[]}]}}\n\n"
-         "event: response.completed\n"
-         "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_reasoning\",\"status\":\"completed\",\"output\":[]}}\n\n",
-         "msg_after_reasoning", "ok", 19u, 1u, SNAG_PHASE_FINAL_ANSWER}, {"web_search_item_is_internal_only",
-         "event: response.created\n"
-         "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_web\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
-         "event: response.output_item.added\n"
-         "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"id\":\"ws_1\",\"type\":\"web_search_call\",\"status\":\"in_progress\",\"action\":{\"type\":\"search\",\"query\":\"selinux 6.18\"}}}\n\n"
-         "event: response.web_search_call.in_progress\n"
-         "data: {\"type\":\"response.web_search_call.in_progress\",\"output_index\":0,\"item_id\":\"ws_1\"}\n\n"
-         "event: response.web_search_call.searching\n"
-         "data: {\"type\":\"response.web_search_call.searching\",\"output_index\":0,\"item_id\":\"ws_1\"}\n\n"
-         "event: response.web_search_call.completed\n"
-         "data: {\"type\":\"response.web_search_call.completed\",\"output_index\":0,\"item_id\":\"ws_1\"}\n\n"
-         "event: response.output_item.done\n"
-         "data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"id\":\"ws_1\",\"type\":\"web_search_call\",\"status\":\"completed\",\"action\":{\"type\":\"search\",\"query\":\"selinux 6.18\"}}}\n\n"
-         "event: response.output_item.added\n"
-         "data: {\"type\":\"response.output_item.added\",\"output_index\":1,\"item\":{\"id\":\"msg_after_web\",\"type\":\"message\",\"status\":\"in_progress\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[]}}\n\n"
-         "event: response.content_part.added\n"
-         "data: {\"type\":\"response.content_part.added\",\"item_id\":\"msg_after_web\",\"output_index\":1,\"content_index\":0,\"part\":{\"type\":\"output_text\",\"text\":\"\",\"annotations\":[]}}\n\n"
-         "event: response.output_text.delta\n"
-         "data: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_after_web\",\"output_index\":1,\"content_index\":0,\"delta\":\"done\"}\n\n"
-         "event: response.output_text.done\n"
-         "data: {\"type\":\"response.output_text.done\",\"item_id\":\"msg_after_web\",\"output_index\":1,\"content_index\":0,\"text\":\"done\"}\n\n"
-         "event: response.output_item.done\n"
-         "data: {\"type\":\"response.output_item.done\",\"output_index\":1,\"item\":{\"id\":\"msg_after_web\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[{\"type\":\"output_text\",\"text\":\"done\",\"annotations\":[]}]}}\n\n"
-         "event: response.completed\n"
-         "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_web\",\"status\":\"completed\",\"output\":[]}}\n\n",
-         "msg_after_web", "done", 23u, 1u, SNAG_PHASE_FINAL_ANSWER}, {"future_items_and_content_are_inert",
-         "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_inert\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
-         "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":\"future_action\",\"name\":\"exec_command\",\"arguments\":\"{\\\"command\\\":\\\"false\\\"}\"}}\n\n"
-         "data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"type\":\"future_result\",\"output\":\"unused\"}}\n\n"
-         "data: {\"type\":\"response.output_item.added\",\"output_index\":1,\"item\":{\"id\":\"msg_inert\",\"type\":\"message\",\"status\":\"in_progress\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[]}}\n\n"
-         "data: {\"type\":\"response.content_part.added\",\"item_id\":\"msg_inert\",\"output_index\":1,\"content_index\":0,\"part\":{\"type\":\"future_content\",\"text\":\"hidden\"}}\n\n"
-         "data: {\"type\":\"response.content_part.done\",\"item_id\":\"msg_inert\",\"output_index\":1,\"content_index\":0,\"part\":{\"type\":\"future_content_result\"}}\n\n"
-         "data: {\"type\":\"response.content_part.added\",\"item_id\":\"msg_inert\",\"output_index\":1,\"content_index\":1,\"part\":{\"type\":\"output_text\",\"text\":\"\"}}\n\n"
-         "data: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_inert\",\"output_index\":1,\"content_index\":1,\"delta\":\"visible\"}\n\n"
-         "data: {\"type\":\"response.output_text.done\",\"item_id\":\"msg_inert\",\"output_index\":1,\"content_index\":1,\"text\":\"visible\"}\n\n"
-         "data: {\"type\":\"response.output_item.done\",\"output_index\":1,\"item\":{\"id\":\"msg_inert\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[{\"type\":\"future_content_result\"},{\"type\":\"output_text\",\"text\":\"visible\"}]}}\n\n"
-         "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_inert\",\"status\":\"completed\",\"output\":[]}}\n\n",
-         "msg_inert", "visible", 17u, 1u, SNAG_PHASE_FINAL_ANSWER}, };
+            "data: "
+            "{\"type\":\"response.created\",\"response\":{\"id\":\"resp_file\",\"status\":\"in_"
+            "progress\",\"output\":[]}}\n\n"
+            "data: "
+            "{\"type\":\"response.completed\",\"response\":{\"id\":\"resp_file\",\"status\":"
+            "\"completed\",\"output\":[{\"id\":\"msg_file\",\"type\":\"message\",\"status\":"
+            "\"completed\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[{"
+            "\"type\":\"output_text\",\"text\":\"See "
+            "file.\",\"annotations\":{\"unused\":true},\"logprobs\":\"unused\"}]}]}}\n\n",
+            "msg_file", "See file.", 13u, 0u, SNAG_PHASE_FINAL_ANSWER},
+        {"phase-absent text",
+            "event: response.created\n"
+            "data: "
+            "{\"type\":\"response.created\",\"response\":{\"id\":\"resp_pong\",\"status\":\"in_"
+            "progress\",\"output\":[]}}\n\n"
+            "event: response.output_item.added\n"
+            "data: "
+            "{\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"id\":\"msg_"
+            "pong\",\"type\":\"message\",\"status\":\"in_progress\",\"role\":\"assistant\","
+            "\"content\":[]}}\n\n"
+            "event: response.content_part.added\n"
+            "data: "
+            "{\"type\":\"response.content_part.added\",\"item_id\":\"msg_pong\",\"output_index\":0,"
+            "\"content_index\":0,\"part\":{\"type\":\"output_text\",\"text\":\"\",\"annotations\":["
+            "]}}\n\n"
+            "event: response.output_text.delta\n"
+            "data: "
+            "{\"type\":\"response.output_text.delta\",\"item_id\":\"msg_pong\",\"output_index\":0,"
+            "\"content_index\":0,\"delta\":\"pong\"}\n\n"
+            "event: response.output_text.done\n"
+            "data: "
+            "{\"type\":\"response.output_text.done\",\"item_id\":\"msg_pong\",\"output_index\":0,"
+            "\"content_index\":0,\"text\":\"pong\"}\n\n"
+            "event: response.output_item.done\n"
+            "data: "
+            "{\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"id\":\"msg_"
+            "pong\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\","
+            "\"content\":[{\"type\":\"output_text\",\"text\":\"pong\",\"annotations\":[]}]}}\n\n"
+            "event: response.completed\n"
+            "data: "
+            "{\"type\":\"response.completed\",\"response\":{\"id\":\"resp_pong\",\"status\":"
+            "\"completed\",\"output\":[]}}\n\n",
+            "msg_pong", "pong", 9u, 0u, SNAG_PHASE_COMMENTARY},
+        {"empty_reasoning_item_is_internal_only",
+            "event: response.created\n"
+            "data: "
+            "{\"type\":\"response.created\",\"response\":{\"id\":\"resp_reasoning\",\"status\":"
+            "\"in_progress\",\"output\":[]}}\n\n"
+            "event: response.output_item.added\n"
+            "data: "
+            "{\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"id\":\"rs_1\","
+            "\"type\":\"reasoning\",\"content\":[],\"summary\":[]}}\n\n"
+            "event: response.output_item.done\n"
+            "data: "
+            "{\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"id\":\"rs_1\","
+            "\"type\":\"reasoning\",\"content\":[],\"summary\":[]}}\n\n"
+            "event: response.output_item.added\n"
+            "data: "
+            "{\"type\":\"response.output_item.added\",\"output_index\":1,\"item\":{\"id\":\"msg_"
+            "after_reasoning\",\"type\":\"message\",\"status\":\"in_progress\",\"role\":"
+            "\"assistant\",\"phase\":\"final_answer\",\"content\":[]}}\n\n"
+            "event: response.content_part.added\n"
+            "data: "
+            "{\"type\":\"response.content_part.added\",\"item_id\":\"msg_after_reasoning\","
+            "\"output_index\":1,\"content_index\":0,\"part\":{\"type\":\"output_text\",\"text\":"
+            "\"\",\"annotations\":[]}}\n\n"
+            "event: response.output_text.delta\n"
+            "data: "
+            "{\"type\":\"response.output_text.delta\",\"item_id\":\"msg_after_reasoning\",\"output_"
+            "index\":1,\"content_index\":0,\"delta\":\"ok\"}\n\n"
+            "event: response.output_text.done\n"
+            "data: "
+            "{\"type\":\"response.output_text.done\",\"item_id\":\"msg_after_reasoning\",\"output_"
+            "index\":1,\"content_index\":0,\"text\":\"ok\"}\n\n"
+            "event: response.output_item.done\n"
+            "data: "
+            "{\"type\":\"response.output_item.done\",\"output_index\":1,\"item\":{\"id\":\"msg_"
+            "after_reasoning\",\"type\":\"message\",\"status\":\"completed\",\"role\":"
+            "\"assistant\",\"phase\":\"final_answer\",\"content\":[{\"type\":\"output_text\","
+            "\"text\":\"ok\",\"annotations\":[]}]}}\n\n"
+            "event: response.completed\n"
+            "data: "
+            "{\"type\":\"response.completed\",\"response\":{\"id\":\"resp_reasoning\",\"status\":"
+            "\"completed\",\"output\":[]}}\n\n",
+            "msg_after_reasoning", "ok", 19u, 1u, SNAG_PHASE_FINAL_ANSWER},
+        {"web_search_item_is_internal_only",
+            "event: response.created\n"
+            "data: "
+            "{\"type\":\"response.created\",\"response\":{\"id\":\"resp_web\",\"status\":\"in_"
+            "progress\",\"output\":[]}}\n\n"
+            "event: response.output_item.added\n"
+            "data: "
+            "{\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"id\":\"ws_1\","
+            "\"type\":\"web_search_call\",\"status\":\"in_progress\",\"action\":{\"type\":"
+            "\"search\",\"query\":\"selinux 6.18\"}}}\n\n"
+            "event: response.web_search_call.in_progress\n"
+            "data: "
+            "{\"type\":\"response.web_search_call.in_progress\",\"output_index\":0,\"item_id\":"
+            "\"ws_1\"}\n\n"
+            "event: response.web_search_call.searching\n"
+            "data: "
+            "{\"type\":\"response.web_search_call.searching\",\"output_index\":0,\"item_id\":\"ws_"
+            "1\"}\n\n"
+            "event: response.web_search_call.completed\n"
+            "data: "
+            "{\"type\":\"response.web_search_call.completed\",\"output_index\":0,\"item_id\":\"ws_"
+            "1\"}\n\n"
+            "event: response.output_item.done\n"
+            "data: "
+            "{\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"id\":\"ws_1\","
+            "\"type\":\"web_search_call\",\"status\":\"completed\",\"action\":{\"type\":\"search\","
+            "\"query\":\"selinux 6.18\"}}}\n\n"
+            "event: response.output_item.added\n"
+            "data: "
+            "{\"type\":\"response.output_item.added\",\"output_index\":1,\"item\":{\"id\":\"msg_"
+            "after_web\",\"type\":\"message\",\"status\":\"in_progress\",\"role\":\"assistant\","
+            "\"phase\":\"final_answer\",\"content\":[]}}\n\n"
+            "event: response.content_part.added\n"
+            "data: "
+            "{\"type\":\"response.content_part.added\",\"item_id\":\"msg_after_web\",\"output_"
+            "index\":1,\"content_index\":0,\"part\":{\"type\":\"output_text\",\"text\":\"\","
+            "\"annotations\":[]}}\n\n"
+            "event: response.output_text.delta\n"
+            "data: "
+            "{\"type\":\"response.output_text.delta\",\"item_id\":\"msg_after_web\",\"output_"
+            "index\":1,\"content_index\":0,\"delta\":\"done\"}\n\n"
+            "event: response.output_text.done\n"
+            "data: "
+            "{\"type\":\"response.output_text.done\",\"item_id\":\"msg_after_web\",\"output_"
+            "index\":1,\"content_index\":0,\"text\":\"done\"}\n\n"
+            "event: response.output_item.done\n"
+            "data: "
+            "{\"type\":\"response.output_item.done\",\"output_index\":1,\"item\":{\"id\":\"msg_"
+            "after_web\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\","
+            "\"phase\":\"final_answer\",\"content\":[{\"type\":\"output_text\",\"text\":\"done\","
+            "\"annotations\":[]}]}}\n\n"
+            "event: response.completed\n"
+            "data: "
+            "{\"type\":\"response.completed\",\"response\":{\"id\":\"resp_web\",\"status\":"
+            "\"completed\",\"output\":[]}}\n\n",
+            "msg_after_web", "done", 23u, 1u, SNAG_PHASE_FINAL_ANSWER},
+        {"future_items_and_content_are_inert",
+            "data: "
+            "{\"type\":\"response.created\",\"response\":{\"id\":\"resp_inert\",\"status\":\"in_"
+            "progress\",\"output\":[]}}\n\n"
+            "data: "
+            "{\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":"
+            "\"future_action\",\"name\":\"exec_command\",\"arguments\":\"{\\\"command\\\":"
+            "\\\"false\\\"}\"}}\n\n"
+            "data: "
+            "{\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"type\":"
+            "\"future_result\",\"output\":\"unused\"}}\n\n"
+            "data: "
+            "{\"type\":\"response.output_item.added\",\"output_index\":1,\"item\":{\"id\":\"msg_"
+            "inert\",\"type\":\"message\",\"status\":\"in_progress\",\"role\":\"assistant\","
+            "\"phase\":\"final_answer\",\"content\":[]}}\n\n"
+            "data: "
+            "{\"type\":\"response.content_part.added\",\"item_id\":\"msg_inert\",\"output_index\":"
+            "1,\"content_index\":0,\"part\":{\"type\":\"future_content\",\"text\":\"hidden\"}}\n\n"
+            "data: "
+            "{\"type\":\"response.content_part.done\",\"item_id\":\"msg_inert\",\"output_index\":1,"
+            "\"content_index\":0,\"part\":{\"type\":\"future_content_result\"}}\n\n"
+            "data: "
+            "{\"type\":\"response.content_part.added\",\"item_id\":\"msg_inert\",\"output_index\":"
+            "1,\"content_index\":1,\"part\":{\"type\":\"output_text\",\"text\":\"\"}}\n\n"
+            "data: "
+            "{\"type\":\"response.output_text.delta\",\"item_id\":\"msg_inert\",\"output_index\":1,"
+            "\"content_index\":1,\"delta\":\"visible\"}\n\n"
+            "data: "
+            "{\"type\":\"response.output_text.done\",\"item_id\":\"msg_inert\",\"output_index\":1,"
+            "\"content_index\":1,\"text\":\"visible\"}\n\n"
+            "data: "
+            "{\"type\":\"response.output_item.done\",\"output_index\":1,\"item\":{\"id\":\"msg_"
+            "inert\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\","
+            "\"phase\":\"final_answer\",\"content\":[{\"type\":\"future_content_result\"},{"
+            "\"type\":\"output_text\",\"text\":\"visible\"}]}}\n\n"
+            "data: "
+            "{\"type\":\"response.completed\",\"response\":{\"id\":\"resp_inert\",\"status\":"
+            "\"completed\",\"output\":[]}}\n\n",
+            "msg_inert", "visible", 17u, 1u, SNAG_PHASE_FINAL_ANSWER},
+    };
     struct parsed_stream emitted = parsed_new(1024u);
 
     assert(which < sizeof(cases) / sizeof(cases[0]));
@@ -510,20 +789,46 @@ static void
 test_unused_annotation_shapes_are_ignored(void)
 {
     static const char prefix[] =
-        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"r\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
-        "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"id\":\"m\",\"type\":\"message\",\"status\":\"in_progress\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[]}}\n\n"
-        "data: {\"type\":\"response.content_part.added\",\"item_id\":\"m\",\"output_index\":0,\"content_index\":0,\"part\":{\"type\":\"output_text\",\"text\":\"\",\"annotations\":[]}}\n\n";
+        "data: "
+        "{\"type\":\"response.created\",\"response\":{\"id\":\"r\",\"status\":\"in_progress\","
+        "\"output\":[]}}\n\n"
+        "data: "
+        "{\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"id\":\"m\","
+        "\"type\":\"message\",\"status\":\"in_progress\",\"role\":\"assistant\",\"phase\":\"final_"
+        "answer\",\"content\":[]}}\n\n"
+        "data: "
+        "{\"type\":\"response.content_part.added\",\"item_id\":\"m\",\"output_index\":0,\"content_"
+        "index\":0,\"part\":{\"type\":\"output_text\",\"text\":\"\",\"annotations\":[]}}\n\n";
     static const char *const bad_suffixes[] = {
-        "data: {\"type\":\"response.output_text.annotation.added\",\"item_id\":\"m\",\"output_index\":0,\"content_index\":0,\"annotation_index\":1,\"annotation\":{\"type\":\"file_path\",\"file_id\":\"file-a\",\"index\":0}}\n\n",
-        "data: {\"type\":\"response.output_text.annotation.added\",\"item_id\":\"m\",\"output_index\":0,\"content_index\":0,\"annotation_index\":0}\n\n",
-        "data: {\"type\":\"response.output_text.annotation.added\",\"item_id\":\"m\",\"output_index\":0,\"content_index\":0,\"annotation_index\":0,\"annotation\":{\"type\":\"url_citation\",\"start_index\":0,\"end_index\":1,\"url\":\"https://example.com/\"}}\n\n",
-        "data: {\"type\":\"response.output_text.annotation.added\",\"item_id\":\"m\",\"output_index\":0,\"content_index\":0,\"annotation_index\":0,\"annotation\":{\"type\":\"future_citation\"}}\n\n"
-    };
+        "data: "
+        "{\"type\":\"response.output_text.annotation.added\",\"item_id\":\"m\",\"output_index\":0,"
+        "\"content_index\":0,\"annotation_index\":1,\"annotation\":{\"type\":\"file_path\",\"file_"
+        "id\":\"file-a\",\"index\":0}}\n\n",
+        "data: "
+        "{\"type\":\"response.output_text.annotation.added\",\"item_id\":\"m\",\"output_index\":0,"
+        "\"content_index\":0,\"annotation_index\":0}\n\n",
+        "data: "
+        "{\"type\":\"response.output_text.annotation.added\",\"item_id\":\"m\",\"output_index\":0,"
+        "\"content_index\":0,\"annotation_index\":0,\"annotation\":{\"type\":\"url_citation\","
+        "\"start_index\":0,\"end_index\":1,\"url\":\"https://example.com/\"}}\n\n",
+        "data: "
+        "{\"type\":\"response.output_text.annotation.added\",\"item_id\":\"m\",\"output_index\":0,"
+        "\"content_index\":0,\"annotation_index\":0,\"annotation\":{\"type\":\"future_citation\"}}"
+        "\n\n"};
     static const char finish[] =
-        "data: {\"type\":\"response.output_text.delta\",\"item_id\":\"m\",\"output_index\":0,\"content_index\":0,\"delta\":\"x\"}\n\n"
-        "data: {\"type\":\"response.output_text.done\",\"item_id\":\"m\",\"output_index\":0,\"content_index\":0,\"text\":\"x\"}\n\n"
-        "data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"id\":\"m\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[{\"type\":\"output_text\",\"text\":\"x\"}]}}\n\n"
-        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r\",\"status\":\"completed\",\"output\":[]}}\n\n";
+        "data: "
+        "{\"type\":\"response.output_text.delta\",\"item_id\":\"m\",\"output_index\":0,\"content_"
+        "index\":0,\"delta\":\"x\"}\n\n"
+        "data: "
+        "{\"type\":\"response.output_text.done\",\"item_id\":\"m\",\"output_index\":0,\"content_"
+        "index\":0,\"text\":\"x\"}\n\n"
+        "data: "
+        "{\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"id\":\"m\","
+        "\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"phase\":\"final_"
+        "answer\",\"content\":[{\"type\":\"output_text\",\"text\":\"x\"}]}}\n\n"
+        "data: "
+        "{\"type\":\"response.completed\",\"response\":{\"id\":\"r\",\"status\":\"completed\","
+        "\"output\":[]}}\n\n";
 
     for (size_t i = 0; i < sizeof(bad_suffixes) / sizeof(bad_suffixes[0]); ++i) {
         struct parsed_stream emitted = parsed_new(1024u);
@@ -545,17 +850,44 @@ static void
 test_phase_absent_text_before_tool_stays_commentary(void)
 {
     static const char wire[] =
-        "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_call_text\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
-        "event: response.output_item.added\ndata: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"id\":\"msg_note\",\"type\":\"message\",\"status\":\"in_progress\",\"role\":\"assistant\",\"content\":[]}}\n\n"
-        "event: response.content_part.added\ndata: {\"type\":\"response.content_part.added\",\"item_id\":\"msg_note\",\"output_index\":0,\"content_index\":0,\"part\":{\"type\":\"output_text\",\"text\":\"\",\"annotations\":[]}}\n\n"
-        "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_note\",\"output_index\":0,\"content_index\":0,\"delta\":\"Checking.\"}\n\n"
-        "event: response.output_text.done\ndata: {\"type\":\"response.output_text.done\",\"item_id\":\"msg_note\",\"output_index\":0,\"content_index\":0,\"text\":\"Checking.\"}\n\n"
-        "event: response.output_item.done\ndata: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"id\":\"msg_note\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"Checking.\",\"annotations\":[]}]}}\n\n"
-        "event: response.output_item.added\ndata: {\"type\":\"response.output_item.added\",\"output_index\":1,\"item\":{\"id\":\"fc_2\",\"type\":\"function_call\",\"status\":\"in_progress\",\"call_id\":\"call_2\",\"name\":\"exec_command\",\"arguments\":\"\"}}\n\n"
-        "event: response.function_call_arguments.delta\ndata: {\"type\":\"response.function_call_arguments.delta\",\"item_id\":\"fc_2\",\"output_index\":1,\"delta\":\"{\\\"command\\\":\\\"true\\\"}\"}\n\n"
-        "event: response.function_call_arguments.done\ndata: {\"type\":\"response.function_call_arguments.done\",\"item_id\":\"fc_2\",\"output_index\":1,\"arguments\":\"{\\\"command\\\":\\\"true\\\"}\"}\n\n"
-        "event: response.output_item.done\ndata: {\"type\":\"response.output_item.done\",\"output_index\":1,\"item\":{\"id\":\"fc_2\",\"type\":\"function_call\",\"status\":\"completed\",\"call_id\":\"call_2\",\"name\":\"exec_command\",\"arguments\":\"{\\\"command\\\":\\\"true\\\"}\"}}\n\n"
-        "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_call_text\",\"status\":\"completed\",\"output\":[]}}\n\n";
+        "event: response.created\ndata: "
+        "{\"type\":\"response.created\",\"response\":{\"id\":\"resp_call_text\",\"status\":\"in_"
+        "progress\",\"output\":[]}}\n\n"
+        "event: response.output_item.added\ndata: "
+        "{\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"id\":\"msg_note\","
+        "\"type\":\"message\",\"status\":\"in_progress\",\"role\":\"assistant\",\"content\":[]}}"
+        "\n\n"
+        "event: response.content_part.added\ndata: "
+        "{\"type\":\"response.content_part.added\",\"item_id\":\"msg_note\",\"output_index\":0,"
+        "\"content_index\":0,\"part\":{\"type\":\"output_text\",\"text\":\"\",\"annotations\":[]}}"
+        "\n\n"
+        "event: response.output_text.delta\ndata: "
+        "{\"type\":\"response.output_text.delta\",\"item_id\":\"msg_note\",\"output_index\":0,"
+        "\"content_index\":0,\"delta\":\"Checking.\"}\n\n"
+        "event: response.output_text.done\ndata: "
+        "{\"type\":\"response.output_text.done\",\"item_id\":\"msg_note\",\"output_index\":0,"
+        "\"content_index\":0,\"text\":\"Checking.\"}\n\n"
+        "event: response.output_item.done\ndata: "
+        "{\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"id\":\"msg_note\","
+        "\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"content\":[{"
+        "\"type\":\"output_text\",\"text\":\"Checking.\",\"annotations\":[]}]}}\n\n"
+        "event: response.output_item.added\ndata: "
+        "{\"type\":\"response.output_item.added\",\"output_index\":1,\"item\":{\"id\":\"fc_2\","
+        "\"type\":\"function_call\",\"status\":\"in_progress\",\"call_id\":\"call_2\",\"name\":"
+        "\"exec_command\",\"arguments\":\"\"}}\n\n"
+        "event: response.function_call_arguments.delta\ndata: "
+        "{\"type\":\"response.function_call_arguments.delta\",\"item_id\":\"fc_2\",\"output_"
+        "index\":1,\"delta\":\"{\\\"command\\\":\\\"true\\\"}\"}\n\n"
+        "event: response.function_call_arguments.done\ndata: "
+        "{\"type\":\"response.function_call_arguments.done\",\"item_id\":\"fc_2\",\"output_index\":"
+        "1,\"arguments\":\"{\\\"command\\\":\\\"true\\\"}\"}\n\n"
+        "event: response.output_item.done\ndata: "
+        "{\"type\":\"response.output_item.done\",\"output_index\":1,\"item\":{\"id\":\"fc_2\","
+        "\"type\":\"function_call\",\"status\":\"completed\",\"call_id\":\"call_2\",\"name\":"
+        "\"exec_command\",\"arguments\":\"{\\\"command\\\":\\\"true\\\"}\"}}\n\n"
+        "event: response.completed\ndata: "
+        "{\"type\":\"response.completed\",\"response\":{\"id\":\"resp_call_text\",\"status\":"
+        "\"completed\",\"output\":[]}}\n\n";
     struct parsed_stream emitted = parsed_new(1024u);
 
     if (parse_stream(wire, 23u, &emitted) != 0) {
@@ -575,8 +907,15 @@ static void
 test_inert_only_response_has_empty_graph(void)
 {
     static const char wire[] =
-        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_empty\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
-        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_empty\",\"status\":\"completed\",\"output\":[{\"type\":\"future_action\",\"name\":\"exec_command\",\"arguments\":{}},{\"id\":\"msg_empty\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"content\":[{\"type\":\"future_content\",\"text\":\"hidden\"}]}]}}\n\n";
+        "data: "
+        "{\"type\":\"response.created\",\"response\":{\"id\":\"resp_empty\",\"status\":\"in_"
+        "progress\",\"output\":[]}}\n\n"
+        "data: "
+        "{\"type\":\"response.completed\",\"response\":{\"id\":\"resp_empty\",\"status\":"
+        "\"completed\",\"output\":[{\"type\":\"future_action\",\"name\":\"exec_command\","
+        "\"arguments\":{}},{\"id\":\"msg_empty\",\"type\":\"message\",\"status\":\"completed\","
+        "\"role\":\"assistant\",\"content\":[{\"type\":\"future_content\",\"text\":\"hidden\"}]}]}}"
+        "\n\n";
     struct parsed_stream emitted = parsed_new(1024u);
 
     assert(parse_stream(wire, 19u, &emitted) == 0);
@@ -589,13 +928,29 @@ static void
 test_function_call_arguments(void)
 {
     static const char wire[] =
-        "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_call\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
-        "event: response.output_item.added\ndata: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"id\":\"fc_1\",\"type\":\"function_call\",\"status\":\"in_progress\",\"call_id\":\"call_1\",\"name\":\"exec_command\",\"arguments\":\"\"}}\n\n"
-        "event: response.function_call_arguments.delta\ndata: {\"type\":\"response.function_call_arguments.delta\",\"item_id\":\"fc_1\",\"output_index\":0,\"delta\":\"{\\\"command\\\":\\\"printf hi\\\"\"}\n\n"
-        "event: response.function_call_arguments.delta\ndata: {\"type\":\"response.function_call_arguments.delta\",\"item_id\":\"fc_1\",\"output_index\":0,\"delta\":\"}\"}\n\n"
-        "event: response.function_call_arguments.done\ndata: {\"type\":\"response.function_call_arguments.done\",\"item_id\":\"fc_1\",\"output_index\":0,\"arguments\":\"{\\\"command\\\":\\\"printf hi\\\"}\"}\n\n"
-        "event: response.output_item.done\ndata: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"id\":\"fc_1\",\"type\":\"function_call\",\"status\":\"completed\",\"call_id\":\"call_1\",\"name\":\"exec_command\",\"arguments\":\"{\\\"command\\\":\\\"printf hi\\\"}\"}}\n\n"
-        "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_call\",\"status\":\"completed\",\"output\":[]}}\n\n";
+        "event: response.created\ndata: "
+        "{\"type\":\"response.created\",\"response\":{\"id\":\"resp_call\",\"status\":\"in_"
+        "progress\",\"output\":[]}}\n\n"
+        "event: response.output_item.added\ndata: "
+        "{\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"id\":\"fc_1\","
+        "\"type\":\"function_call\",\"status\":\"in_progress\",\"call_id\":\"call_1\",\"name\":"
+        "\"exec_command\",\"arguments\":\"\"}}\n\n"
+        "event: response.function_call_arguments.delta\ndata: "
+        "{\"type\":\"response.function_call_arguments.delta\",\"item_id\":\"fc_1\",\"output_"
+        "index\":0,\"delta\":\"{\\\"command\\\":\\\"printf hi\\\"\"}\n\n"
+        "event: response.function_call_arguments.delta\ndata: "
+        "{\"type\":\"response.function_call_arguments.delta\",\"item_id\":\"fc_1\",\"output_"
+        "index\":0,\"delta\":\"}\"}\n\n"
+        "event: response.function_call_arguments.done\ndata: "
+        "{\"type\":\"response.function_call_arguments.done\",\"item_id\":\"fc_1\",\"output_index\":"
+        "0,\"arguments\":\"{\\\"command\\\":\\\"printf hi\\\"}\"}\n\n"
+        "event: response.output_item.done\ndata: "
+        "{\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"id\":\"fc_1\","
+        "\"type\":\"function_call\",\"status\":\"completed\",\"call_id\":\"call_1\",\"name\":"
+        "\"exec_command\",\"arguments\":\"{\\\"command\\\":\\\"printf hi\\\"}\"}}\n\n"
+        "event: response.completed\ndata: "
+        "{\"type\":\"response.completed\",\"response\":{\"id\":\"resp_call\",\"status\":"
+        "\"completed\",\"output\":[]}}\n\n";
     struct parsed_stream emitted = parsed_new(1024u);
 
     assert(parse_stream(wire, 31u, &emitted) == 0);
@@ -603,8 +958,9 @@ test_function_call_arguments(void)
     assert(snag_response_graph_item(&emitted.graph, 0).kind == SNAG_ITEM_TOOL_CALL);
     assert(strcmp(snag_response_graph_item(&emitted.graph, 0).provider_call_id, "call_1") == 0);
     assert(strcmp(snag_response_graph_item(&emitted.graph, 0).name, "exec_command") == 0);
-    assert(strcmp(snag_json_string(snag_response_graph_item(&emitted.graph, 0).arguments, "command"),
-                  "printf hi") == 0);
+    assert(
+        strcmp(snag_json_string(snag_response_graph_item(&emitted.graph, 0).arguments, "command"),
+            "printf hi") == 0);
     assert(emitted.calls == 0u);
     parsed_free(&emitted);
 }
@@ -613,8 +969,14 @@ static void
 test_refusal(void)
 {
     static const char wire[] =
-        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_refuse\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
-        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_refuse\",\"status\":\"completed\",\"output\":[{\"id\":\"msg_refuse\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[{\"type\":\"refusal\",\"refusal\":\"I cannot do that.\"}]}]}}\n\n";
+        "data: "
+        "{\"type\":\"response.created\",\"response\":{\"id\":\"resp_refuse\",\"status\":\"in_"
+        "progress\",\"output\":[]}}\n\n"
+        "data: "
+        "{\"type\":\"response.completed\",\"response\":{\"id\":\"resp_refuse\",\"status\":"
+        "\"completed\",\"output\":[{\"id\":\"msg_refuse\",\"type\":\"message\",\"status\":"
+        "\"completed\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[{\"type\":"
+        "\"refusal\",\"refusal\":\"I cannot do that.\"}]}]}}\n\n";
     struct parsed_stream emitted = parsed_new(1024u);
 
     assert(parse_stream(wire, 0u, &emitted) == 0);
@@ -628,21 +990,27 @@ test_refusal(void)
 static void
 test_invalid_call_after_public_item(void)
 {
-    static const char *const calls[] = {
-        "\"name\":\"unknown\",\"arguments\":\"{}\"", "\"name\":\"exec_command\",\"arguments\":\"[]\"" };
+    static const char *const calls[] = {"\"name\":\"unknown\",\"arguments\":\"{}\"",
+        "\"name\":\"exec_command\",\"arguments\":\"[]\""};
 
     for (size_t i = 0; i < sizeof(calls) / sizeof(calls[0]); ++i) {
         struct parsed_stream emitted = parsed_new(1024u);
 
         assert(snag_response_graph_add_public(&emitted.graph, SNAG_ITEM_ASSISTANT,
-            SNAG_PHASE_FINAL_ANSWER, "retained", "previous graph") == 0);
+                   SNAG_PHASE_FINAL_ANSWER, "retained", "previous graph") == 0);
         struct snag_buf wire = {.max = 4096u};
         assert(snag_buf_printf(&wire,
-            "data: {\"type\":\"response.created\",\"response\":{\"id\":\"r\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
-            "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r\",\"status\":\"completed\",\"output\":["
-            "{\"id\":\"m\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"visible\"}]},"
-            "{\"id\":\"f\",\"type\":\"function_call\",\"status\":\"completed\",\"call_id\":\"c\",%s}]}}\n\n",
-            calls[i]) == 0);
+                   "data: "
+                   "{\"type\":\"response.created\",\"response\":{\"id\":\"r\",\"status\":\"in_"
+                   "progress\",\"output\":[]}}\n\n"
+                   "data: "
+                   "{\"type\":\"response.completed\",\"response\":{\"id\":\"r\",\"status\":"
+                   "\"completed\",\"output\":["
+                   "{\"id\":\"m\",\"type\":\"message\",\"status\":\"completed\",\"role\":"
+                   "\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"visible\"}]},"
+                   "{\"id\":\"f\",\"type\":\"function_call\",\"status\":\"completed\",\"call_id\":"
+                   "\"c\",%s}]}}\n\n",
+                   calls[i]) == 0);
         assert(snag_buf_terminate(&wire) == 0);
         /* Finalization must reject the whole staged graph, even after a
          * successful public item. Already emitted text cannot be withdrawn. */
@@ -659,21 +1027,79 @@ test_invalid_call_after_public_item(void)
 static void
 test_protocol_conflicts_fail_closed(void)
 {
-    static const char *const bad[] = {
-        "data: [DONE]\n\n",
-        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"r\",\"status\":\"in_progress\",\"output\":[]}}\n\ndata: [DONE]\n\n",
-        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"r\",\"status\":\"in_progress\",\"output\":[]}}\n\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"r\",\"status\":\"completed\",\"output\":[]}}\n\nevent: response.completed\ndata: [DONE]\n\n",
-        "event: wrong\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"r\",\"status\":\"in_progress\",\"output\":[]}}\n\n",
-        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"r\",\"status\":\"in_progress\",\"output\":[]}}\n\ndata: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"id\":\"m\",\"type\":\"message\",\"status\":\"in_progress\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[]}}\n\ndata: {\"type\":\"response.content_part.added\",\"item_id\":\"m\",\"output_index\":0,\"content_index\":0,\"part\":{\"type\":\"output_text\",\"text\":\"\",\"annotations\":[]}}\n\ndata: {\"type\":\"response.output_text.delta\",\"item_id\":\"m\",\"output_index\":0,\"content_index\":0,\"delta\":\"a\"}\n\ndata: {\"type\":\"response.output_text.done\",\"item_id\":\"m\",\"output_index\":0,\"content_index\":0,\"text\":\"b\"}\n\n",
-        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"r\",\"status\":\"in_progress\",\"output\":[]}}\n\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"r\",\"status\":\"completed\",\"output\":[{\"id\":\"m\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[{\"type\":\"output_text\",\"text\":\"x\",\"annotations\":[]},{\"type\":\"refusal\",\"refusal\":\"no\"}]}]}}\n\n",
-        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"r\",\"status\":\"in_progress\",\"output\":[]}}\n\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"r\",\"status\":\"completed\",\"usage\":{\"input_tokens\":4,\"output_tokens\":3,\"total_tokens\":99},\"output\":[]}}\n\n",
-        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"r\",\"status\":\"in_progress\",\"output\":[]}}\n\ndata: {\"type\":\"future.event\"}\n\n",
-        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"r\",\"status\":\"in_progress\",\"output\":[]}}\n\ndata: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":\"future_item\"}}\n\ndata: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"id\":\"m\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"content\":[]}}\n\n",
-        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"r\",\"status\":\"in_progress\",\"output\":[]}}\n\ndata: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"id\":\"m\",\"type\":\"message\",\"status\":\"in_progress\",\"role\":\"assistant\",\"content\":[]}}\n\ndata: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"type\":\"future_item\"}}\n\n",
-        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"r\",\"status\":\"in_progress\",\"output\":[]}}\n\ndata: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"id\":\"m\",\"type\":\"message\",\"status\":\"in_progress\",\"role\":\"assistant\",\"content\":[]}}\n\ndata: {\"type\":\"response.content_part.added\",\"item_id\":\"m\",\"output_index\":0,\"content_index\":0,\"part\":{\"type\":\"future_part\"}}\n\ndata: {\"type\":\"response.content_part.done\",\"item_id\":\"m\",\"output_index\":0,\"content_index\":0,\"part\":{\"type\":\"output_text\",\"text\":\"x\"}}\n\n",
-        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"r\",\"status\":\"in_progress\",\"output\":[]}}\n\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"r\",\"status\":\"completed\",\"output\":[]}}\n\ndata: {\"type\":\"response.future.progress\"}\n\n",
-        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"r\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
-    };
+    static const char *const bad[] = {"data: [DONE]\n\n",
+        "data: "
+        "{\"type\":\"response.created\",\"response\":{\"id\":\"r\",\"status\":\"in_progress\","
+        "\"output\":[]}}\n\ndata: [DONE]\n\n",
+        "data: "
+        "{\"type\":\"response.created\",\"response\":{\"id\":\"r\",\"status\":\"in_progress\","
+        "\"output\":[]}}\n\ndata: "
+        "{\"type\":\"response.completed\",\"response\":{\"id\":\"r\",\"status\":\"completed\","
+        "\"output\":[]}}\n\nevent: response.completed\ndata: [DONE]\n\n",
+        "event: wrong\ndata: "
+        "{\"type\":\"response.created\",\"response\":{\"id\":\"r\",\"status\":\"in_progress\","
+        "\"output\":[]}}\n\n",
+        "data: "
+        "{\"type\":\"response.created\",\"response\":{\"id\":\"r\",\"status\":\"in_progress\","
+        "\"output\":[]}}\n\ndata: "
+        "{\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"id\":\"m\","
+        "\"type\":\"message\",\"status\":\"in_progress\",\"role\":\"assistant\",\"phase\":\"final_"
+        "answer\",\"content\":[]}}\n\ndata: "
+        "{\"type\":\"response.content_part.added\",\"item_id\":\"m\",\"output_index\":0,\"content_"
+        "index\":0,\"part\":{\"type\":\"output_text\",\"text\":\"\",\"annotations\":[]}}\n\ndata: "
+        "{\"type\":\"response.output_text.delta\",\"item_id\":\"m\",\"output_index\":0,\"content_"
+        "index\":0,\"delta\":\"a\"}\n\ndata: "
+        "{\"type\":\"response.output_text.done\",\"item_id\":\"m\",\"output_index\":0,\"content_"
+        "index\":0,\"text\":\"b\"}\n\n",
+        "data: "
+        "{\"type\":\"response.created\",\"response\":{\"id\":\"r\",\"status\":\"in_progress\","
+        "\"output\":[]}}\n\ndata: "
+        "{\"type\":\"response.completed\",\"response\":{\"id\":\"r\",\"status\":\"completed\","
+        "\"output\":[{\"id\":\"m\",\"type\":\"message\",\"status\":\"completed\",\"role\":"
+        "\"assistant\",\"phase\":\"final_answer\",\"content\":[{\"type\":\"output_text\",\"text\":"
+        "\"x\",\"annotations\":[]},{\"type\":\"refusal\",\"refusal\":\"no\"}]}]}}\n\n",
+        "data: "
+        "{\"type\":\"response.created\",\"response\":{\"id\":\"r\",\"status\":\"in_progress\","
+        "\"output\":[]}}\n\ndata: "
+        "{\"type\":\"response.completed\",\"response\":{\"id\":\"r\",\"status\":\"completed\","
+        "\"usage\":{\"input_tokens\":4,\"output_tokens\":3,\"total_tokens\":99},\"output\":[]}}"
+        "\n\n",
+        "data: "
+        "{\"type\":\"response.created\",\"response\":{\"id\":\"r\",\"status\":\"in_progress\","
+        "\"output\":[]}}\n\ndata: {\"type\":\"future.event\"}\n\n",
+        "data: "
+        "{\"type\":\"response.created\",\"response\":{\"id\":\"r\",\"status\":\"in_progress\","
+        "\"output\":[]}}\n\ndata: "
+        "{\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":\"future_"
+        "item\"}}\n\ndata: "
+        "{\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"id\":\"m\","
+        "\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"content\":[]}}\n\n",
+        "data: "
+        "{\"type\":\"response.created\",\"response\":{\"id\":\"r\",\"status\":\"in_progress\","
+        "\"output\":[]}}\n\ndata: "
+        "{\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"id\":\"m\","
+        "\"type\":\"message\",\"status\":\"in_progress\",\"role\":\"assistant\",\"content\":[]}}"
+        "\n\ndata: "
+        "{\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"type\":\"future_"
+        "item\"}}\n\n",
+        "data: "
+        "{\"type\":\"response.created\",\"response\":{\"id\":\"r\",\"status\":\"in_progress\","
+        "\"output\":[]}}\n\ndata: "
+        "{\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"id\":\"m\","
+        "\"type\":\"message\",\"status\":\"in_progress\",\"role\":\"assistant\",\"content\":[]}}"
+        "\n\ndata: "
+        "{\"type\":\"response.content_part.added\",\"item_id\":\"m\",\"output_index\":0,\"content_"
+        "index\":0,\"part\":{\"type\":\"future_part\"}}\n\ndata: "
+        "{\"type\":\"response.content_part.done\",\"item_id\":\"m\",\"output_index\":0,\"content_"
+        "index\":0,\"part\":{\"type\":\"output_text\",\"text\":\"x\"}}\n\n",
+        "data: "
+        "{\"type\":\"response.created\",\"response\":{\"id\":\"r\",\"status\":\"in_progress\","
+        "\"output\":[]}}\n\ndata: "
+        "{\"type\":\"response.completed\",\"response\":{\"id\":\"r\",\"status\":\"completed\","
+        "\"output\":[]}}\n\ndata: {\"type\":\"response.future.progress\"}\n\n",
+        "data: "
+        "{\"type\":\"response.created\",\"response\":{\"id\":\"r\",\"status\":\"in_progress\","
+        "\"output\":[]}}\n\n"};
 
     for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); ++i) {
         struct parsed_stream emitted = parsed_new(1024u);
@@ -693,24 +1119,29 @@ test_interleaved_content_bound(void)
     for (unsigned int count = 96u; count <= 120u; count += 24u) {
         struct snag_buf wire = {.max = 65536u};
         struct parsed_stream emitted = parsed_new(256u);
+        assert(snag_buf_printf(&wire, "data: "
+                                      "{\"type\":\"response.created\",\"response\":{\"id\":\"r\","
+                                      "\"status\":\"in_progress\",\"output\":[]}}\n\n") == 0);
+        for (unsigned int item = 0; item < 2u; ++item)
+            assert(snag_buf_printf(&wire,
+                       "data: {\"type\":\"response.output_item.added\",\"output_index\":%u,"
+                       "\"item\":{\"id\":\"m%u\",\"type\":\"message\",\"role\":\"assistant\","
+                       "\"phase\":\"%s\",\"status\":\"in_progress\",\"content\":[]}}\n\n",
+                       item, item, item ? "final_answer" : "commentary") == 0);
+        for (unsigned int i = 0; i < count; ++i)
+            assert(snag_buf_printf(&wire,
+                       "data: {\"type\":\"response.content_part.done\",\"output_index\":%u,"
+                       "\"item_id\":\"m%u\",\"content_index\":%u,"
+                       "\"part\":{\"type\":\"output_text\",\"text\":\"%c\"}}\n\n",
+                       i % 2u, i % 2u, i / 2u, i % 2u ? 'b' : 'a') == 0);
         assert(snag_buf_printf(&wire,
-            "data: {\"type\":\"response.created\",\"response\":{\"id\":\"r\",\"status\":\"in_progress\",\"output\":[]}}\n\n") == 0);
-        for (unsigned int item = 0; item < 2u; ++item) assert(snag_buf_printf(&wire,
-                "data: {\"type\":\"response.output_item.added\",\"output_index\":%u,"
-                "\"item\":{\"id\":\"m%u\",\"type\":\"message\",\"role\":\"assistant\","
-                "\"phase\":\"%s\",\"status\":\"in_progress\",\"content\":[]}}\n\n", item, item,
-                item ? "final_answer" : "commentary") == 0);
-        for (unsigned int i = 0; i < count; ++i) assert(snag_buf_printf(&wire,
-                "data: {\"type\":\"response.content_part.done\",\"output_index\":%u,"
-                "\"item_id\":\"m%u\",\"content_index\":%u,"
-                "\"part\":{\"type\":\"output_text\",\"text\":\"%c\"}}\n\n",
-                i % 2u, i % 2u, i / 2u, i % 2u ? 'b' : 'a') == 0);
-        assert(snag_buf_printf(&wire, "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r\","
-            "\"status\":\"completed\",\"output\":[]}}\n\n") == 0);
+                   "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r\","
+                   "\"status\":\"completed\",\"output\":[]}}\n\n") == 0);
         int rc = parse_stream((char *)wire.data, 7u, &emitted);
         assert(rc == 0 && emitted.graph.count == 2u);
         assert(emitted.calls == count && emitted.text.len == count);
-        for (size_t i = 0; i < emitted.text.len; ++i) assert(emitted.text.data[i] == (i % 2u ? 'b' : 'a'));
+        for (size_t i = 0; i < emitted.text.len; ++i)
+            assert(emitted.text.data[i] == (i % 2u ? 'b' : 'a'));
         for (size_t item = 0; item < 2u; ++item) {
             const char *text = snag_response_graph_item(&emitted.graph, item).text;
             assert(strlen(text) == count / 2u && strspn(text, item ? "b" : "a") == count / 2u);
@@ -724,8 +1155,8 @@ static void
 test_structured_capacity_failure(void)
 {
     static const char payload[] = "{\"type\":\"response.failed\",\"response\":{\"error\":{"
-        "\"code\":\"context_length_exceeded\",\"message\":\"too large\","
-        "\"context_length\":272000,\"requested_tokens\":300000}}}";
+                                  "\"code\":\"context_length_exceeded\",\"message\":\"too large\","
+                                  "\"context_length\":272000,\"requested_tokens\":300000}}}";
     struct snag_responses_stream stream;
     struct snag_sse_record record;
     json_t *root;
@@ -743,8 +1174,8 @@ test_structured_capacity_failure(void)
     assert(strcmp(stream.provider_failure.message, "too large") == 0);
     assert(stream.provider_failure.context_limit_tokens == 272000u);
     assert(stream.provider_failure.requested_input_tokens == 300000u);
-    assert(snag_capacity_safety_ceiling( stream.provider_failure.context_limit_tokens,
-        stream.provider_failure.requested_input_tokens, 128000u) == 144000u);
+    assert(snag_capacity_safety_ceiling(stream.provider_failure.context_limit_tokens,
+               stream.provider_failure.requested_input_tokens, 128000u) == 144000u);
     assert(snag_capacity_safety_ceiling(0u, 0u, 0u) == 0u);
     assert(snag_capacity_safety_ceiling(0u, 1u, 0u) == 0u);
     assert(snag_capacity_safety_ceiling(0u, 2u, 0u) == 1u);
@@ -755,10 +1186,10 @@ test_structured_capacity_failure(void)
 
     {
         static const char ordinary[] = "{\"error\":{\"code\":\"rate_limit_exceeded\","
-            "\"message\":\"later\"}}";
+                                       "\"message\":\"later\"}}";
         char json_error[128] = {0};
-        root = snag_json_load_strict((const unsigned char *)ordinary, strlen(ordinary), sizeof(ordinary),
-                                    json_error, sizeof(json_error));
+        root = snag_json_load_strict((const unsigned char *)ordinary, strlen(ordinary),
+            sizeof(ordinary), json_error, sizeof(json_error));
     }
     assert(root);
     assert(snag_provider_failure_from_json(root, &failure) == 0);
@@ -767,11 +1198,12 @@ test_structured_capacity_failure(void)
     json_decref(root);
 
     {
-        static const char top_level[] = "{\"type\":\"error\",\"code\":\"context_length_exceeded\","
+        static const char top_level[] =
+            "{\"type\":\"error\",\"code\":\"context_length_exceeded\","
             "\"message\":\"top-level failure\",\"max_context_tokens\":42}";
         char json_error[128] = {0};
-        root = snag_json_load_strict((const unsigned char *)top_level, strlen(top_level), sizeof(top_level),
-                                    json_error, sizeof(json_error));
+        root = snag_json_load_strict((const unsigned char *)top_level, strlen(top_level),
+            sizeof(top_level), json_error, sizeof(json_error));
     }
     assert(root);
     assert(snag_provider_failure_from_json(root, &failure) == 0);
@@ -799,18 +1231,37 @@ test_structured_capacity_failure(void)
 static void
 test_provider_context_formats(void)
 {
-    const struct { const char *json; bool capacity; uint64_t limit, input; } cases[] = {
-        {"{\"error\":{\"code\":\"invalid_prompt\"},\"error_type\":\"context_length_exceeded\"}", true, 0, 0},
-        {"{\"response\":{\"error\":{\"code\":\"invalid_prompt\"},\"error_type\":\"context_length_exceeded\"}}", true, 0, 0},
-        {"{\"error\":{\"code\":400,\"metadata\":{\"error_type\":\"context_length_exceeded\"}}}", true, 0, 0},
-        {"{\"error\":{\"code\":400,\"type\":\"exceed_context_size_error\",\"n_ctx\":8192,\"n_prompt_tokens\":9000}}", true, 8192, 9000},
-        {"{\"code\":400,\"type\":\"exceed_context_size_error\",\"n_ctx\":8192,\"n_prompt_tokens\":9000}", true, 8192, 9000},
-        {"{\"error\":{\"type\":\"invalid_request_error\",\"param\":\"input\",\"message\":\"The engine prompt length 9000 exceeds the max_model_len 8192. Please reduce prompt.\"}}", true, 8191, 9000},
-        {"{\"error\":{\"type\":\"invalid_request_error\",\"param\":\"model\",\"message\":\"The engine prompt length 9000 exceeds the max_model_len 8192. Please reduce prompt.\"}}", false, 0, 0},
+    const struct {
+        const char *json;
+        bool capacity;
+        uint64_t limit, input;
+    } cases[] = {
+        {"{\"error\":{\"code\":\"invalid_prompt\"},\"error_type\":\"context_length_exceeded\"}",
+            true, 0, 0},
+        {"{\"response\":{\"error\":{\"code\":\"invalid_prompt\"},\"error_type\":\"context_length_"
+         "exceeded\"}}",
+            true, 0, 0},
+        {"{\"error\":{\"code\":400,\"metadata\":{\"error_type\":\"context_length_exceeded\"}}}",
+            true, 0, 0},
+        {"{\"error\":{\"code\":400,\"type\":\"exceed_context_size_error\",\"n_ctx\":8192,\"n_"
+         "prompt_tokens\":9000}}",
+            true, 8192, 9000},
+        {"{\"code\":400,\"type\":\"exceed_context_size_error\",\"n_ctx\":8192,\"n_prompt_tokens\":"
+         "9000}",
+            true, 8192, 9000},
+        {"{\"error\":{\"type\":\"invalid_request_error\",\"param\":\"input\",\"message\":\"The "
+         "engine prompt length 9000 exceeds the max_model_len 8192. Please reduce prompt.\"}}",
+            true, 8191, 9000},
+        {"{\"error\":{\"type\":\"invalid_request_error\",\"param\":\"model\",\"message\":\"The "
+         "engine prompt length 9000 exceeds the max_model_len 8192. Please reduce prompt.\"}}",
+            false, 0, 0},
         {"{\"error\":{\"code\":400,\"message\":\"context error\"}}", false, 0, 0},
-        {"{\"error\":{\"code\":\"invalid_prompt\"},\"error_type\":\"max_tokens_exceeded\"}", false, 0, 0},
-        {"{\"error\":{\"code\":\"invalid_prompt\"},\"error_type\":\"authentication_error\"}", false, 0, 0},
-        {"{\"error\":{\"code\":\"invalid_prompt\"}}", false, 0, 0}, };
+        {"{\"error\":{\"code\":\"invalid_prompt\"},\"error_type\":\"max_tokens_exceeded\"}", false,
+            0, 0},
+        {"{\"error\":{\"code\":\"invalid_prompt\"},\"error_type\":\"authentication_error\"}", false,
+            0, 0},
+        {"{\"error\":{\"code\":\"invalid_prompt\"}}", false, 0, 0},
+    };
     for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
         struct snag_provider_failure failure;
         json_t *root = json_loadb(cases[i].json, strlen(cases[i].json), 0, NULL);
@@ -823,22 +1274,22 @@ test_provider_context_formats(void)
     }
     static const char *const policy_errors[] = {
         "{\"error\":{\"code\":\"context_length_exceeded\",\"type\":\"content_filter\","
-            "\"max_context_tokens\":42,\"input_tokens\":43}}",
+        "\"max_context_tokens\":42,\"input_tokens\":43}}",
         "{\"error\":{\"code\":\"cyber_policy\",\"type\":\"exceed_context_size_error\"}}",
         "{\"error\":{\"code\":\"content_filter\"},\"error_type\":\"context_length_exceeded\"}",
         "{\"error\":{\"code\":\"cyber_policy\",\"type\":\"invalid_request_error\","
-            "\"param\":\"input\",\"message\":\"The engine prompt length 9000 exceeds "
-            "the max_model_len 8192. Please reduce prompt.\"}}",
+        "\"param\":\"input\",\"message\":\"The engine prompt length 9000 exceeds "
+        "the max_model_len 8192. Please reduce prompt.\"}}",
         "{\"error\":{\"code\":\"context_length_exceeded\"},\"error_type\":\"cyber_policy\"}",
         "{\"error\":{\"code\":\"context_length_exceeded\","
-            "\"metadata\":{\"error_type\":\"content_filter\"}}}",
+        "\"metadata\":{\"error_type\":\"content_filter\"}}}",
         "{\"response\":{\"error\":{\"code\":\"context_length_exceeded\"},"
-            "\"error_type\":\"content_filter\"}}",
+        "\"error_type\":\"content_filter\"}}",
         "{\"code\":\"context_length_exceeded\",\"type\":\"content_filter\"}",
         "{\"code\":\"invalid_prompt\",\"type\":\"cyber_policy\","
-            "\"error_type\":\"context_length_exceeded\"}",
+        "\"error_type\":\"context_length_exceeded\"}",
         "{\"error\":{\"code\":\"invalid_prompt\",\"metadata\":{\"error_type\":\"cyber_policy\"}},"
-            "\"error_type\":\"context_length_exceeded\"}",
+        "\"error_type\":\"context_length_exceeded\"}",
         "{\"code\":\"context_length_exceeded\",\"metadata\":{\"error_type\":\"content_filter\"}}",
     };
     unsigned int policy_failures = 0u;
@@ -850,16 +1301,19 @@ test_provider_context_formats(void)
             snag_provider_failure_is_capacity(&failure) ||
             failure.context_limit_tokens != (!i ? 42u : 0u) ||
             failure.requested_input_tokens != (!i ? 43u : 0u)) {
-            fprintf(stderr, "policy/capacity case %zu: code=%s type=%s\n",
-                i, failure.code, failure.type);
+            fprintf(stderr, "policy/capacity case %zu: code=%s type=%s\n", i, failure.code,
+                failure.type);
             ++policy_failures;
         }
         json_decref(root);
     }
     assert(!policy_failures);
     struct snag_responses_stream stream;
-    const char *created = "{\"type\":\"response.created\",\"response\":{\"id\":\"resp_cap\",\"status\":\"in_progress\"}}";
-    const char *completed = "{\"type\":\"response.completed\",\"response\":{\"id\":\"resp_cap\",\"status\":\"completed\",\"error_type\":\"context_length_exceeded\",\"output\":[]}}";
+    const char *created = "{\"type\":\"response.created\",\"response\":{\"id\":\"resp_cap\","
+                          "\"status\":\"in_progress\"}}";
+    const char *completed =
+        "{\"type\":\"response.completed\",\"response\":{\"id\":\"resp_cap\",\"status\":"
+        "\"completed\",\"error_type\":\"context_length_exceeded\",\"output\":[]}}";
     snag_responses_stream_init(&stream, NULL, NULL);
     struct snag_sse_record record = {0};
     record.kind = SNAG_SSE_EVENT;
@@ -877,32 +1331,80 @@ static void
 test_reasoning_content_parts(void)
 {
     static const char created[] =
-        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"r\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
-        "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":\"reasoning\",\"id\":\"rs\",\"summary\":[]}}\n\n";
+        "data: "
+        "{\"type\":\"response.created\",\"response\":{\"id\":\"r\",\"status\":\"in_progress\","
+        "\"output\":[]}}\n\n"
+        "data: "
+        "{\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":"
+        "\"reasoning\",\"id\":\"rs\",\"summary\":[]}}\n\n";
     static const char finish[] =
-        "data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"type\":\"reasoning\",\"id\":\"rs\",\"content\":[{\"type\":\"reasoning_text\",\"text\":\"hidden\"}]}}\n\n"
-        "data: {\"type\":\"response.output_item.added\",\"output_index\":1,\"item\":{\"type\":\"message\",\"id\":\"m\",\"role\":\"assistant\",\"status\":\"in_progress\",\"content\":[]}}\n\n"
-        "data: {\"type\":\"response.content_part.added\",\"output_index\":1,\"item_id\":\"m\",\"content_index\":0,\"part\":{\"type\":\"output_text\",\"text\":\"\"}}\n\n"
-        "data: {\"type\":\"response.output_text.delta\",\"output_index\":1,\"item_id\":\"m\",\"content_index\":0,\"delta\":\"ok\"}\n\n"
-        "data: {\"type\":\"response.content_part.done\",\"output_index\":1,\"item_id\":\"m\",\"content_index\":0,\"part\":{\"type\":\"output_text\",\"text\":\"ok\"}}\n\n"
-        "data: {\"type\":\"response.output_item.done\",\"output_index\":1,\"item\":{\"type\":\"message\",\"id\":\"m\",\"role\":\"assistant\",\"status\":\"completed\",\"content\":[{\"type\":\"output_text\",\"text\":\"ok\"}]}}\n\n"
-        "data: {\"type\":\"response.output_item.done\",\"output_index\":2,\"item\":{\"type\":\"function_call\",\"id\":\"f\",\"call_id\":\"c\",\"name\":\"exec_command\",\"arguments\":\"{}\",\"status\":\"completed\"}}\n\n"
-        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r\",\"status\":\"completed\",\"output\":[]}}\n\n";
+        "data: "
+        "{\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"type\":"
+        "\"reasoning\",\"id\":\"rs\",\"content\":[{\"type\":\"reasoning_text\",\"text\":\"hidden\"}"
+        "]}}\n\n"
+        "data: "
+        "{\"type\":\"response.output_item.added\",\"output_index\":1,\"item\":{\"type\":"
+        "\"message\",\"id\":\"m\",\"role\":\"assistant\",\"status\":\"in_progress\",\"content\":[]}"
+        "}\n\n"
+        "data: "
+        "{\"type\":\"response.content_part.added\",\"output_index\":1,\"item_id\":\"m\",\"content_"
+        "index\":0,\"part\":{\"type\":\"output_text\",\"text\":\"\"}}\n\n"
+        "data: "
+        "{\"type\":\"response.output_text.delta\",\"output_index\":1,\"item_id\":\"m\",\"content_"
+        "index\":0,\"delta\":\"ok\"}\n\n"
+        "data: "
+        "{\"type\":\"response.content_part.done\",\"output_index\":1,\"item_id\":\"m\",\"content_"
+        "index\":0,\"part\":{\"type\":\"output_text\",\"text\":\"ok\"}}\n\n"
+        "data: "
+        "{\"type\":\"response.output_item.done\",\"output_index\":1,\"item\":{\"type\":\"message\","
+        "\"id\":\"m\",\"role\":\"assistant\",\"status\":\"completed\",\"content\":[{\"type\":"
+        "\"output_text\",\"text\":\"ok\"}]}}\n\n"
+        "data: "
+        "{\"type\":\"response.output_item.done\",\"output_index\":2,\"item\":{\"type\":\"function_"
+        "call\",\"id\":\"f\",\"call_id\":\"c\",\"name\":\"exec_command\",\"arguments\":\"{}\","
+        "\"status\":\"completed\"}}\n\n"
+        "data: "
+        "{\"type\":\"response.completed\",\"response\":{\"id\":\"r\",\"status\":\"completed\","
+        "\"output\":[]}}\n\n";
     /* DeepSeek content parts, vLLM reasoning deltas, and llama.cpp summary
      * events all stay private; public messages and calls keep their indexes. */
     static const char *variants[] = {
-        "data: {\"type\":\"response.content_part.added\",\"output_index\":0,\"item_id\":\"rs\",\"content_index\":0,\"part\":{\"type\":\"reasoning_text\",\"text\":\"\"}}\n\n"
-        "data: {\"type\":\"response.reasoning_text.delta\",\"output_index\":0,\"item_id\":\"rs\",\"content_index\":0,\"delta\":\"hidden\"}\n\n"
-        "data: {\"type\":\"response.content_part.done\",\"output_index\":0,\"item_id\":\"rs\",\"content_index\":0,\"part\":{\"type\":\"reasoning_text\",\"text\":\"hidden\"}}\n\n",
-        "data: {\"type\":\"response.reasoning_part.added\",\"output_index\":0,\"item_id\":\"rs\",\"content_index\":0,\"part\":{\"type\":\"reasoning_text\",\"text\":\"\"}}\n\n"
-        "data: {\"type\":\"response.reasoning_text.delta\",\"output_index\":0,\"item_id\":\"rs\",\"content_index\":0,\"delta\":\"hidden\"}\n\n"
-        "data: {\"type\":\"response.reasoning_text.done\",\"output_index\":0,\"item_id\":\"rs\",\"content_index\":0,\"text\":\"hidden\"}\n\n"
-        "data: {\"type\":\"response.reasoning_part.done\",\"output_index\":0,\"item_id\":\"rs\",\"content_index\":0,\"part\":{\"type\":\"reasoning_text\",\"text\":\"hidden\"}}\n\n",
-        "data: {\"type\":\"response.reasoning_summary_part.added\",\"item_id\":\"rs\",\"part\":{\"type\":\"summary_text\",\"text\":\"\"}}\n\n"
-        "data: {\"type\":\"response.reasoning_summary_text.delta\",\"item_id\":\"rs\",\"delta\":\"hidden\"}\n\n"
-        "data: {\"type\":\"response.reasoning_summary_text.done\",\"item_id\":\"rs\",\"text\":\"hidden\"}\n\n"
-        "data: {\"type\":\"response.reasoning_summary_part.done\",\"item_id\":\"rs\",\"part\":{\"type\":\"summary_text\",\"text\":\"hidden\"}}\n\n",
-        "data: {\"type\":\"response.content_part.done\",\"output_index\":0,\"content_index\":0,\"part\":{\"type\":\"future_content\",\"name\":\"exec_command\",\"arguments\":\"bad\"}}\n\n",
+        "data: "
+        "{\"type\":\"response.content_part.added\",\"output_index\":0,\"item_id\":\"rs\",\"content_"
+        "index\":0,\"part\":{\"type\":\"reasoning_text\",\"text\":\"\"}}\n\n"
+        "data: "
+        "{\"type\":\"response.reasoning_text.delta\",\"output_index\":0,\"item_id\":\"rs\","
+        "\"content_index\":0,\"delta\":\"hidden\"}\n\n"
+        "data: "
+        "{\"type\":\"response.content_part.done\",\"output_index\":0,\"item_id\":\"rs\",\"content_"
+        "index\":0,\"part\":{\"type\":\"reasoning_text\",\"text\":\"hidden\"}}\n\n",
+        "data: "
+        "{\"type\":\"response.reasoning_part.added\",\"output_index\":0,\"item_id\":\"rs\","
+        "\"content_index\":0,\"part\":{\"type\":\"reasoning_text\",\"text\":\"\"}}\n\n"
+        "data: "
+        "{\"type\":\"response.reasoning_text.delta\",\"output_index\":0,\"item_id\":\"rs\","
+        "\"content_index\":0,\"delta\":\"hidden\"}\n\n"
+        "data: "
+        "{\"type\":\"response.reasoning_text.done\",\"output_index\":0,\"item_id\":\"rs\","
+        "\"content_index\":0,\"text\":\"hidden\"}\n\n"
+        "data: "
+        "{\"type\":\"response.reasoning_part.done\",\"output_index\":0,\"item_id\":\"rs\","
+        "\"content_index\":0,\"part\":{\"type\":\"reasoning_text\",\"text\":\"hidden\"}}\n\n",
+        "data: "
+        "{\"type\":\"response.reasoning_summary_part.added\",\"item_id\":\"rs\",\"part\":{\"type\":"
+        "\"summary_text\",\"text\":\"\"}}\n\n"
+        "data: "
+        "{\"type\":\"response.reasoning_summary_text.delta\",\"item_id\":\"rs\",\"delta\":"
+        "\"hidden\"}\n\n"
+        "data: "
+        "{\"type\":\"response.reasoning_summary_text.done\",\"item_id\":\"rs\",\"text\":\"hidden\"}"
+        "\n\n"
+        "data: "
+        "{\"type\":\"response.reasoning_summary_part.done\",\"item_id\":\"rs\",\"part\":{\"type\":"
+        "\"summary_text\",\"text\":\"hidden\"}}\n\n",
+        "data: "
+        "{\"type\":\"response.content_part.done\",\"output_index\":0,\"content_index\":0,\"part\":{"
+        "\"type\":\"future_content\",\"name\":\"exec_command\",\"arguments\":\"bad\"}}\n\n",
     };
     for (size_t v = 0; v < sizeof(variants) / sizeof(variants[0]); ++v) {
         struct snag_buf wire = {.max = 32768u};
@@ -916,8 +1418,11 @@ test_reasoning_content_parts(void)
             assert(json_array_size(parsed.graph.continuation) == 1u);
             json_t *record = json_array_get(parsed.graph.continuation, 0);
             assert(json_integer_value(json_object_get(record, "before")) == 0);
-            assert(strcmp(snag_json_string(json_array_get(json_object_get(
-                json_object_get(record, "item"), "content"), 0), "text"), "hidden") == 0);
+            assert(strcmp(snag_json_string(
+                              json_array_get(
+                                  json_object_get(json_object_get(record, "item"), "content"), 0),
+                              "text"),
+                       "hidden") == 0);
             assert(snag_response_graph_item(&parsed.graph, 0u).kind == SNAG_ITEM_ASSISTANT);
             assert(snag_response_graph_item(&parsed.graph, 1u).kind == SNAG_ITEM_TOOL_CALL);
             assert(strcmp(snag_response_graph_item(&parsed.graph, 1u).name, "exec_command") == 0);
@@ -930,17 +1435,29 @@ test_reasoning_content_parts(void)
 
     /* An ignored item cannot swallow public semantics or invent an index. */
     static const char *invalid[] = {
-        "{\"type\":\"response.content_part.added\",\"output_index\":0,\"item_id\":\"rs\",\"content_index\":0,\"part\":{\"type\":\"output_text\",\"text\":\"bad\"}}",
-        "{\"type\":\"response.content_part.done\",\"output_index\":0,\"item_id\":\"rs\",\"content_index\":0,\"part\":{\"type\":\"refusal\",\"refusal\":\"bad\"}}",
-        "{\"type\":\"response.output_text.delta\",\"output_index\":0,\"item_id\":\"rs\",\"content_index\":0,\"delta\":\"bad\"}",
-        "{\"type\":\"response.refusal.done\",\"output_index\":0,\"item_id\":\"rs\",\"content_index\":0,\"refusal\":\"bad\"}",
-        "{\"type\":\"response.function_call_arguments.delta\",\"output_index\":0,\"item_id\":\"rs\",\"delta\":\"{}\"}",
-        "{\"type\":\"response.content_part.added\",\"output_index\":1,\"item_id\":\"rs\",\"content_index\":0,\"part\":{\"type\":\"reasoning_text\"}}",
-        "{\"type\":\"response.content_part.added\",\"output_index\":-1,\"content_index\":0,\"part\":{\"type\":\"reasoning_text\"}}",
-        "{\"type\":\"response.content_part.added\",\"output_index\":0,\"content_index\":-1,\"part\":{\"type\":\"reasoning_text\"}}",
-        "{\"type\":\"response.content_part.added\",\"output_index\":0,\"content_index\":0,\"part\":{}}",
-        "{\"type\":\"response.content_part.done\",\"output_index\":0,\"content_index\":0,\"part\":null}",
-        "{\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"type\":\"function_call\",\"id\":\"f\",\"call_id\":\"c\",\"name\":\"exec_command\",\"arguments\":\"{}\",\"status\":\"completed\"}}",
+        "{\"type\":\"response.content_part.added\",\"output_index\":0,\"item_id\":\"rs\",\"content_"
+        "index\":0,\"part\":{\"type\":\"output_text\",\"text\":\"bad\"}}",
+        "{\"type\":\"response.content_part.done\",\"output_index\":0,\"item_id\":\"rs\",\"content_"
+        "index\":0,\"part\":{\"type\":\"refusal\",\"refusal\":\"bad\"}}",
+        "{\"type\":\"response.output_text.delta\",\"output_index\":0,\"item_id\":\"rs\",\"content_"
+        "index\":0,\"delta\":\"bad\"}",
+        "{\"type\":\"response.refusal.done\",\"output_index\":0,\"item_id\":\"rs\",\"content_"
+        "index\":0,\"refusal\":\"bad\"}",
+        "{\"type\":\"response.function_call_arguments.delta\",\"output_index\":0,\"item_id\":"
+        "\"rs\",\"delta\":\"{}\"}",
+        "{\"type\":\"response.content_part.added\",\"output_index\":1,\"item_id\":\"rs\",\"content_"
+        "index\":0,\"part\":{\"type\":\"reasoning_text\"}}",
+        "{\"type\":\"response.content_part.added\",\"output_index\":-1,\"content_index\":0,"
+        "\"part\":{\"type\":\"reasoning_text\"}}",
+        "{\"type\":\"response.content_part.added\",\"output_index\":0,\"content_index\":-1,"
+        "\"part\":{\"type\":\"reasoning_text\"}}",
+        "{\"type\":\"response.content_part.added\",\"output_index\":0,\"content_index\":0,\"part\":"
+        "{}}",
+        "{\"type\":\"response.content_part.done\",\"output_index\":0,\"content_index\":0,\"part\":"
+        "null}",
+        "{\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"type\":\"function_"
+        "call\",\"id\":\"f\",\"call_id\":\"c\",\"name\":\"exec_command\",\"arguments\":\"{}\","
+        "\"status\":\"completed\"}}",
     };
     for (size_t i = 0; i < sizeof(invalid) / sizeof(invalid[0]); ++i) {
         struct snag_buf wire = {.max = 32768u};
@@ -959,9 +1476,15 @@ static void
 test_reasoning_part_cannot_complete_response(void)
 {
     static const char wire[] =
-        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"r\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
-        "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":\"reasoning\",\"id\":\"rs\"}}\n\n"
-        "data: {\"type\":\"response.content_part.done\",\"output_index\":0,\"content_index\":0,\"part\":{\"type\":\"reasoning_text\",\"text\":\"hidden\"}}\n\n";
+        "data: "
+        "{\"type\":\"response.created\",\"response\":{\"id\":\"r\",\"status\":\"in_progress\","
+        "\"output\":[]}}\n\n"
+        "data: "
+        "{\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":"
+        "\"reasoning\",\"id\":\"rs\"}}\n\n"
+        "data: "
+        "{\"type\":\"response.content_part.done\",\"output_index\":0,\"content_index\":0,\"part\":{"
+        "\"type\":\"reasoning_text\",\"text\":\"hidden\"}}\n\n";
     struct parsed_stream parsed = parsed_new(1024u);
     assert(parse_stream(wire, 7u, &parsed) < 0);
     assert(parsed.calls == 0u && parsed.graph.count == 0u);
@@ -972,37 +1495,55 @@ static void
 test_reasoning_terminal_and_validation(void)
 {
     static const char ordered[] =
-        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"r\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
-        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r\",\"status\":\"completed\",\"output\":["
-        "{\"type\":\"message\",\"id\":\"m\",\"role\":\"assistant\",\"status\":\"completed\",\"content\":[{\"type\":\"output_text\",\"text\":\"progress\"}]},"
+        "data: "
+        "{\"type\":\"response.created\",\"response\":{\"id\":\"r\",\"status\":\"in_progress\","
+        "\"output\":[]}}\n\n"
+        "data: "
+        "{\"type\":\"response.completed\",\"response\":{\"id\":\"r\",\"status\":\"completed\","
+        "\"output\":["
+        "{\"type\":\"message\",\"id\":\"m\",\"role\":\"assistant\",\"status\":\"completed\","
+        "\"content\":[{\"type\":\"output_text\",\"text\":\"progress\"}]},"
         "{\"type\":\"reasoning\",\"id\":\"rs_a\",\"summary\":[],\"encrypted_content\":\"first\"},"
-        "{\"type\":\"function_call\",\"id\":\"f\",\"call_id\":\"c\",\"name\":\"exec_command\",\"arguments\":\"{}\",\"status\":\"completed\"},"
-        "{\"type\":\"reasoning\",\"id\":\"rs_b\",\"summary\":[],\"encrypted_content\":\"second\"}]}}\n\n";
+        "{\"type\":\"function_call\",\"id\":\"f\",\"call_id\":\"c\",\"name\":\"exec_command\","
+        "\"arguments\":\"{}\",\"status\":\"completed\"},"
+        "{\"type\":\"reasoning\",\"id\":\"rs_b\",\"summary\":[],\"encrypted_content\":\"second\"}]}"
+        "}\n\n";
     struct parsed_stream ordered_result = parsed_new(1024u);
     assert(parse_stream(ordered, 7u, &ordered_result) == 0);
     assert(ordered_result.graph.count == 2u);
     assert(json_array_size(ordered_result.graph.continuation) == 2u);
-    for (size_t i = 0u; i < 2u; ++i) assert(json_integer_value(json_object_get(json_array_get(
-            ordered_result.graph.continuation, i), "before")) == (json_int_t)i + 1);
+    for (size_t i = 0u; i < 2u; ++i)
+        assert(
+            json_integer_value(json_object_get(json_array_get(ordered_result.graph.continuation, i),
+                "before")) == (json_int_t)i + 1);
     parsed_free(&ordered_result);
-    static const char *snapshots[] = {
-        "{\"type\":\"reasoning\",\"id\":\"rs\",\"summary\":[],\"encrypted_content\":\"opaque-final\"}",
-        "{\"type\":\"reasoning\",\"id\":\"rs\",\"content\":[{\"type\":\"reasoning_text\",\"text\":\"retained\"}],\"summary\":null,\"encrypted_content\":null,\"status\":null}",
-        "{\"type\":\"reasoning\",\"summary\":[{\"type\":\"summary_text\",\"text\":\"private summary\"}]}" };
+    static const char *snapshots[] = {"{\"type\":\"reasoning\",\"id\":\"rs\",\"summary\":[],"
+                                      "\"encrypted_content\":\"opaque-final\"}",
+        "{\"type\":\"reasoning\",\"id\":\"rs\",\"content\":[{\"type\":\"reasoning_text\",\"text\":"
+        "\"retained\"}],\"summary\":null,\"encrypted_content\":null,\"status\":null}",
+        "{\"type\":\"reasoning\",\"summary\":[{\"type\":\"summary_text\",\"text\":\"private "
+        "summary\"}]}"};
     for (size_t i = 0u; i < sizeof(snapshots) / sizeof(snapshots[0]); ++i) {
         struct snag_buf wire = {.max = 8192u};
         struct parsed_stream parsed = parsed_new(1024u);
         assert(snag_buf_printf(&wire,
-            "data: {\"type\":\"response.created\",\"response\":{\"id\":\"r\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
-            "data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"type\":\"reasoning\",\"summary\":[]}}\n\n"
-            "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r\",\"status\":\"completed\",\"output\":[%s]}}\n\n",
-            snapshots[i]) == 0);
+                   "data: "
+                   "{\"type\":\"response.created\",\"response\":{\"id\":\"r\",\"status\":\"in_"
+                   "progress\",\"output\":[]}}\n\n"
+                   "data: "
+                   "{\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"type\":"
+                   "\"reasoning\",\"summary\":[]}}\n\n"
+                   "data: "
+                   "{\"type\":\"response.completed\",\"response\":{\"id\":\"r\",\"status\":"
+                   "\"completed\",\"output\":[%s]}}\n\n",
+                   snapshots[i]) == 0);
         assert(parse_stream((char *)wire.data, 1u, &parsed) == 0);
         assert(parsed.calls == 0u && parsed.graph.count == 0u);
         assert(json_array_size(parsed.graph.continuation) == 1u);
         assert(snag_response_continuation_valid(parsed.graph.continuation, 0u));
         struct snag_graph_decision decision;
-        assert(snag_response_graph_classify(&parsed.graph, &decision, parsed.error, sizeof(parsed.error)) == 0);
+        assert(snag_response_graph_classify(
+                   &parsed.graph, &decision, parsed.error, sizeof(parsed.error)) == 0);
         assert(decision.outcome == SNAG_GRAPH_NONPRODUCTIVE);
         json_t *item = json_object_get(json_array_get(parsed.graph.continuation, 0), "item");
         assert(i != 0u || strcmp(snag_json_string(item, "encrypted_content"), "opaque-final") == 0);
@@ -1017,8 +1558,9 @@ test_reasoning_terminal_and_validation(void)
     assert(snag_response_continuation_valid(records, 0u));
     assert(json_object_set_new(json_array_get(records, 0), "before", json_integer(1)) == 0);
     assert(!snag_response_continuation_valid(records, 0u));
-    assert(json_object_set_new(item, "content", json_pack("[{s:s,s:s}]",
-        "type", "output_text", "text", "must not become public")) == 0);
+    assert(json_object_set_new(item, "content",
+               json_pack("[{s:s,s:s}]", "type", "output_text", "text", "must not become public")) ==
+           0);
     assert(!snag_reasoning_item_valid(item));
     assert(json_object_set_new(item, "content", json_string("not-an-array")) == 0);
     assert(!snag_reasoning_item_valid(item));
@@ -1041,12 +1583,16 @@ static void
 test_failed_function_clarification_boundaries(void)
 {
     const char *snapshots[] = {
-        "{\"type\":\"function_call\",\"id\":\"f\",\"call_id\":\"c\",\"name\":\"exec_command\",\"arguments\":\"{}\",\"status\":\"completed\"}",
-        "{\"type\":\"function_call\",\"id\":\"other\",\"call_id\":\"c\",\"name\":\"exec_command\",\"arguments\":\"{}\",\"status\":\"completed\"}",
-        "{\"type\":\"function_call\",\"id\":\"f\",\"call_id\":\"other\",\"name\":\"exec_command\",\"arguments\":\"{}\",\"status\":\"completed\"}",
-        "{\"type\":\"function_call\",\"id\":\"f\",\"call_id\":\"c\",\"name\":\"exec_command\",\"arguments\":\"changed\",\"status\":\"completed\"}",
+        "{\"type\":\"function_call\",\"id\":\"f\",\"call_id\":\"c\",\"name\":\"exec_command\","
+        "\"arguments\":\"{}\",\"status\":\"completed\"}",
+        "{\"type\":\"function_call\",\"id\":\"other\",\"call_id\":\"c\",\"name\":\"exec_command\","
+        "\"arguments\":\"{}\",\"status\":\"completed\"}",
+        "{\"type\":\"function_call\",\"id\":\"f\",\"call_id\":\"other\",\"name\":\"exec_command\","
+        "\"arguments\":\"{}\",\"status\":\"completed\"}",
+        "{\"type\":\"function_call\",\"id\":\"f\",\"call_id\":\"c\",\"name\":\"exec_command\","
+        "\"arguments\":\"changed\",\"status\":\"completed\"}",
         "{\"type\":\"function_call\"}",
-        "{\"type\":\"web_search_call\",\"id\":\"hosted\",\"status\":\"in_progress\"}" };
+        "{\"type\":\"web_search_call\",\"id\":\"hosted\",\"status\":\"in_progress\"}"};
     for (size_t i = 0u; i < sizeof(snapshots) / sizeof(snapshots[0]); ++i) {
         struct parsed_stream emitted = parsed_new(1024u);
         struct snag_responses_stream responses;
@@ -1055,11 +1601,20 @@ test_failed_function_clarification_boundaries(void)
         struct snag_response_graph graph = {0};
         char error[256] = {0};
         assert(snag_buf_printf(&wire,
-            "data: {\"type\":\"response.created\",\"response\":{\"id\":\"r\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
-            "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":\"function_call\",\"id\":\"f\",\"call_id\":\"c\",\"name\":\"exec_command\",\"arguments\":\"\",\"status\":\"in_progress\"}}\n\n"
-            "data: {\"type\":\"response.function_call_arguments.delta\",\"output_index\":0,\"item_id\":\"f\",\"delta\":\"{}\"}\n\n"
-            "data: {\"type\":\"response.failed\",\"response\":{\"error\":{\"code\":\"cyber_policy\"},\"output\":[%s]}}\n\n",
-            snapshots[i]) == 0);
+                   "data: "
+                   "{\"type\":\"response.created\",\"response\":{\"id\":\"r\",\"status\":\"in_"
+                   "progress\",\"output\":[]}}\n\n"
+                   "data: "
+                   "{\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":"
+                   "\"function_call\",\"id\":\"f\",\"call_id\":\"c\",\"name\":\"exec_command\","
+                   "\"arguments\":\"\",\"status\":\"in_progress\"}}\n\n"
+                   "data: "
+                   "{\"type\":\"response.function_call_arguments.delta\",\"output_index\":0,\"item_"
+                   "id\":\"f\",\"delta\":\"{}\"}\n\n"
+                   "data: "
+                   "{\"type\":\"response.failed\",\"response\":{\"error\":{\"code\":\"cyber_"
+                   "policy\"},\"output\":[%s]}}\n\n",
+                   snapshots[i]) == 0);
         snag_responses_stream_init(&responses, capture_emit, &emitted);
         snag_sse_init(&sse, snag_responses_sse_record, &responses);
         assert(snag_sse_feed(&sse, wire.data, wire.len, error, sizeof(error)) < 0);
@@ -1086,32 +1641,49 @@ test_message_completion_finalizes_phase(void)
                 struct snag_buf wire = {.max = 8192u};
                 struct parsed_stream emitted = parsed_new(1024u);
                 const char *initial = phases[direction], *final = phases[1u - direction];
-                const char *snapshot = "{\"id\":\"m\",\"type\":\"message\",\"role\":\"assistant\","
+                const char *snapshot =
+                    "{\"id\":\"m\",\"type\":\"message\",\"role\":\"assistant\","
                     "\"status\":\"completed\",\"phase\":\"%s\","
                     "\"content\":[{\"type\":\"output_text\",\"text\":\"Checking.\"}]}";
                 struct snag_buf item = {.max = 1024u};
                 assert(snag_buf_printf(&item, snapshot, final) == 0);
-                assert(snag_buf_printf(&wire,
-                    "data: {\"type\":\"response.created\",\"response\":{\"id\":\"r\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
-                    "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{"
-                    "\"id\":\"m\",\"type\":\"message\",\"role\":\"assistant\",\"phase\":\"%s\","
-                    "\"status\":\"in_progress\",\"content\":[]}}\n\n"
-                    "data: {\"type\":\"response.content_part.added\",\"output_index\":0,\"item_id\":\"m\","
-                    "\"content_index\":0,\"part\":{\"type\":\"output_text\",\"text\":\"\"}}\n\n"
-                    "data: {\"type\":\"response.output_text.delta\",\"output_index\":0,\"item_id\":\"m\","
-                    "\"content_index\":0,\"delta\":\"Checking\"}\n\n", initial) == 0);
-                if (!terminal_only || conflict) assert(snag_buf_printf(&wire,
-                        "data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":%s}\n\n",
-                        item.data) == 0);
+                assert(
+                    snag_buf_printf(&wire,
+                        "data: "
+                        "{\"type\":\"response.created\",\"response\":{\"id\":\"r\",\"status\":\"in_"
+                        "progress\",\"output\":[]}}\n\n"
+                        "data: "
+                        "{\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{"
+                        "\"id\":\"m\",\"type\":\"message\",\"role\":\"assistant\",\"phase\":\"%s\","
+                        "\"status\":\"in_progress\",\"content\":[]}}\n\n"
+                        "data: "
+                        "{\"type\":\"response.content_part.added\",\"output_index\":0,\"item_id\":"
+                        "\"m\","
+                        "\"content_index\":0,\"part\":{\"type\":\"output_text\",\"text\":\"\"}}\n\n"
+                        "data: "
+                        "{\"type\":\"response.output_text.delta\",\"output_index\":0,\"item_id\":"
+                        "\"m\","
+                        "\"content_index\":0,\"delta\":\"Checking\"}\n\n",
+                        initial) == 0);
+                if (!terminal_only || conflict)
+                    assert(snag_buf_printf(&wire,
+                               "data: "
+                               "{\"type\":\"response.output_item.done\",\"output_index\":0,"
+                               "\"item\":%s}\n\n",
+                               item.data) == 0);
                 if (conflict) {
                     snag_buf_reset(&item);
                     assert(snag_buf_printf(&item, snapshot, initial) == 0);
                 }
                 assert(snag_buf_printf(&wire,
-                    "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r\","
-                    "\"status\":\"completed\",\"output\":[%s%s]}}\n\n", item.data,
-                    direction ? "" : ",{\"type\":\"function_call\",\"id\":\"fc\",\"call_id\":\"call\","
-                        "\"name\":\"exec_command\",\"arguments\":\"{\\\"command\\\":\\\"printf hi\\\"}\",\"status\":\"completed\"}") == 0);
+                           "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r\","
+                           "\"status\":\"completed\",\"output\":[%s%s]}}\n\n",
+                           item.data,
+                           direction
+                               ? ""
+                               : ",{\"type\":\"function_call\",\"id\":\"fc\",\"call_id\":\"call\","
+                                 "\"name\":\"exec_command\",\"arguments\":\"{\\\"command\\\":"
+                                 "\\\"printf hi\\\"}\",\"status\":\"completed\"}") == 0);
                 int rc = parse_stream((char *)wire.data, terminal_only ? 1u : 31u, &emitted);
                 if (conflict) {
                     assert(rc < 0 && emitted.graph.count == 0u);
@@ -1120,11 +1692,13 @@ test_message_completion_finalizes_phase(void)
                     if (rc) fprintf(stderr, "phase completion: %s\n", emitted.error);
                     assert(rc == 0 && emitted.graph.count == (direction ? 1u : 2u));
                     struct snag_response_item view = snag_response_graph_item(&emitted.graph, 0u);
-                    assert(view.phase == (direction ? SNAG_PHASE_FINAL_ANSWER : SNAG_PHASE_COMMENTARY));
+                    assert(view.phase ==
+                           (direction ? SNAG_PHASE_FINAL_ANSWER : SNAG_PHASE_COMMENTARY));
                     assert(!strcmp(view.text, "Checking."));
                     /* Completion can add a suffix without changing the live delta phase. */
                     assert(emitted.text.len == 9u && !memcmp(emitted.text.data, "Checking.", 9u));
-                    assert(emitted.last_phase == (direction ? SNAG_PHASE_COMMENTARY : SNAG_PHASE_FINAL_ANSWER));
+                    assert(emitted.last_phase ==
+                           (direction ? SNAG_PHASE_COMMENTARY : SNAG_PHASE_FINAL_ANSWER));
                 }
                 snag_buf_free(&item);
                 snag_buf_free(&wire);
@@ -1189,7 +1763,7 @@ struct hosted_capture {
 
 static int
 capture_hosted(void *opaque, bool started, const char *item_id, const char *status,
-               const json_t *action, const json_t *sources)
+    const json_t *action, const json_t *sources)
 {
     struct hosted_capture *capture = opaque;
     size_t index = capture->calls;
@@ -1198,7 +1772,8 @@ capture_hosted(void *opaque, bool started, const char *item_id, const char *stat
     if (index >= 4u) return snag_errno(EOVERFLOW);
     capture->started[index] = started;
     (void)snprintf(capture->item_id[index], sizeof(capture->item_id[index]), "%s", item_id);
-    if (status) (void)snprintf(capture->status[index], sizeof(capture->status[index]), "%s", status);
+    if (status)
+        (void)snprintf(capture->status[index], sizeof(capture->status[index]), "%s", status);
     if (query) (void)snprintf(capture->query[index], sizeof(capture->query[index]), "%s", query);
     capture->sources[index] = json_array_size(sources);
     ++capture->calls;
@@ -1224,10 +1799,11 @@ parse_hosted(const char *wire, struct parsed_stream *parsed, struct hosted_captu
     }
     if (rc == 0) rc = snag_sse_finish(&sse, parsed->error, sizeof(parsed->error));
     if (rc == 0)
-        rc = snag_responses_stream_finish(&responses, &parsed->graph,
-                                          parsed->error, sizeof(parsed->error));
+        rc = snag_responses_stream_finish(
+            &responses, &parsed->graph, parsed->error, sizeof(parsed->error));
     else if (responses.failed)
-        (void)snprintf(parsed->error, sizeof(parsed->error), "%s", snag_responses_stream_error(&responses));
+        (void)snprintf(
+            parsed->error, sizeof(parsed->error), "%s", snag_responses_stream_error(&responses));
     snag_sse_free(&sse);
     snag_responses_stream_free(&responses);
     return rc;
@@ -1239,25 +1815,48 @@ test_hosted_search_activity(void)
     /* OpenAI-style item: the action arrives with the added snapshot. */
     static const char openai_wire[] =
         "event: response.created\n"
-        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_hosted\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
+        "data: "
+        "{\"type\":\"response.created\",\"response\":{\"id\":\"resp_hosted\",\"status\":\"in_"
+        "progress\",\"output\":[]}}\n\n"
         "event: response.output_item.added\n"
-        "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"id\":\"ws_1\",\"type\":\"web_search_call\",\"status\":\"in_progress\",\"action\":{\"type\":\"search\",\"query\":\"selinux 6.18\"}}}\n\n"
+        "data: "
+        "{\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"id\":\"ws_1\","
+        "\"type\":\"web_search_call\",\"status\":\"in_progress\",\"action\":{\"type\":\"search\","
+        "\"query\":\"selinux 6.18\"}}}\n\n"
         "event: response.web_search_call.searching\n"
-        "data: {\"type\":\"response.web_search_call.searching\",\"output_index\":0,\"item_id\":\"ws_1\"}\n\n"
+        "data: "
+        "{\"type\":\"response.web_search_call.searching\",\"output_index\":0,\"item_id\":\"ws_1\"}"
+        "\n\n"
         "event: response.output_item.done\n"
-        "data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"id\":\"ws_1\",\"type\":\"web_search_call\",\"status\":\"completed\",\"action\":{\"type\":\"search\",\"query\":\"selinux 6.18\"},\"sources\":[{\"type\":\"url\",\"url\":\"https://example.test/selinux\"}]}}\n\n"
+        "data: "
+        "{\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"id\":\"ws_1\","
+        "\"type\":\"web_search_call\",\"status\":\"completed\",\"action\":{\"type\":\"search\","
+        "\"query\":\"selinux "
+        "6.18\"},\"sources\":[{\"type\":\"url\",\"url\":\"https://example.test/selinux\"}]}}\n\n"
         "event: response.completed\n"
-        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_hosted\",\"status\":\"completed\",\"output\":[]}}\n\n";
+        "data: "
+        "{\"type\":\"response.completed\",\"response\":{\"id\":\"resp_hosted\",\"status\":"
+        "\"completed\",\"output\":[]}}\n\n";
     /* OpenRouter-style item: query and sources arrive only at completion. */
     static const char openrouter_wire[] =
         "event: response.created\n"
-        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_openrouter\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
+        "data: "
+        "{\"type\":\"response.created\",\"response\":{\"id\":\"resp_openrouter\",\"status\":\"in_"
+        "progress\",\"output\":[]}}\n\n"
         "event: response.output_item.added\n"
-        "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":\"openrouter:web_search\",\"id\":\"ws_tmp_abc123\",\"status\":\"in_progress\"}}\n\n"
+        "data: "
+        "{\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":"
+        "\"openrouter:web_search\",\"id\":\"ws_tmp_abc123\",\"status\":\"in_progress\"}}\n\n"
         "event: response.output_item.done\n"
-        "data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"type\":\"openrouter:web_search\",\"id\":\"ws_tmp_abc123\",\"status\":\"completed\",\"action\":{\"type\":\"search\",\"query\":\"example domains\",\"sources\":[{\"type\":\"url\",\"url\":\"https://example.com\"}]}}}\n\n"
+        "data: "
+        "{\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"type\":"
+        "\"openrouter:web_search\",\"id\":\"ws_tmp_abc123\",\"status\":\"completed\",\"action\":{"
+        "\"type\":\"search\",\"query\":\"example "
+        "domains\",\"sources\":[{\"type\":\"url\",\"url\":\"https://example.com\"}]}}}\n\n"
         "event: response.completed\n"
-        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_openrouter\",\"status\":\"completed\",\"output\":[]}}\n\n";
+        "data: "
+        "{\"type\":\"response.completed\",\"response\":{\"id\":\"resp_openrouter\",\"status\":"
+        "\"completed\",\"output\":[]}}\n\n";
     struct parsed_stream parsed = parsed_new(1024u);
     struct hosted_capture hosted = {0};
 
@@ -1327,24 +1926,37 @@ test_stream_accepts_many_items(void)
     struct snag_buf wire = {.max = 1024u * 1024u};
     struct parsed_stream emitted = parsed_new(1024u * 1024u);
 
-    assert(snag_buf_printf(&wire,
-        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"r_wide\",\"status\":\"in_progress\",\"output\":[]}}\n\n") == 0);
+    assert(snag_buf_printf(&wire, "data: "
+                                  "{\"type\":\"response.created\",\"response\":{\"id\":\"r_wide\","
+                                  "\"status\":\"in_progress\",\"output\":[]}}\n\n") == 0);
     for (size_t i = 0u; i < 120u; ++i) {
         assert(snag_buf_printf(&wire,
-            "data: {\"type\":\"response.output_item.added\",\"output_index\":%zu,\"item\":{\"type\":\"function_call\",\"id\":\"f_%zu\",\"call_id\":\"c_%zu\",\"name\":\"exec_command\",\"arguments\":\"\",\"status\":\"in_progress\"}}\n\n",
-            i, i, i) == 0);
+                   "data: "
+                   "{\"type\":\"response.output_item.added\",\"output_index\":%zu,\"item\":{"
+                   "\"type\":\"function_call\",\"id\":\"f_%zu\",\"call_id\":\"c_%zu\",\"name\":"
+                   "\"exec_command\",\"arguments\":\"\",\"status\":\"in_progress\"}}\n\n",
+                   i, i, i) == 0);
         assert(snag_buf_printf(&wire,
-            "data: {\"type\":\"response.function_call_arguments.delta\",\"output_index\":%zu,\"item_id\":\"f_%zu\",\"delta\":\"{\\\"command\\\":\\\"true\\\"}\"}\n\n",
-            i, i) == 0);
+                   "data: "
+                   "{\"type\":\"response.function_call_arguments.delta\",\"output_index\":%zu,"
+                   "\"item_id\":\"f_%zu\",\"delta\":\"{\\\"command\\\":\\\"true\\\"}\"}\n\n",
+                   i, i) == 0);
         assert(snag_buf_printf(&wire,
-            "data: {\"type\":\"response.function_call_arguments.done\",\"output_index\":%zu,\"item_id\":\"f_%zu\",\"arguments\":\"{\\\"command\\\":\\\"true\\\"}\"}\n\n",
-            i, i) == 0);
+                   "data: "
+                   "{\"type\":\"response.function_call_arguments.done\",\"output_index\":%zu,"
+                   "\"item_id\":\"f_%zu\",\"arguments\":\"{\\\"command\\\":\\\"true\\\"}\"}\n\n",
+                   i, i) == 0);
         assert(snag_buf_printf(&wire,
-            "data: {\"type\":\"response.output_item.done\",\"output_index\":%zu,\"item\":{\"type\":\"function_call\",\"id\":\"f_%zu\",\"call_id\":\"c_%zu\",\"name\":\"exec_command\",\"arguments\":\"{\\\"command\\\":\\\"true\\\"}\",\"status\":\"completed\"}}\n\n",
-            i, i, i) == 0);
+                   "data: "
+                   "{\"type\":\"response.output_item.done\",\"output_index\":%zu,\"item\":{"
+                   "\"type\":\"function_call\",\"id\":\"f_%zu\",\"call_id\":\"c_%zu\",\"name\":"
+                   "\"exec_command\",\"arguments\":\"{\\\"command\\\":\\\"true\\\"}\",\"status\":"
+                   "\"completed\"}}\n\n",
+                   i, i, i) == 0);
     }
-    assert(snag_buf_printf(&wire,
-        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r_wide\",\"status\":\"completed\",\"output\":[]}}\n\n") == 0);
+    assert(snag_buf_printf(&wire, "data: "
+                                  "{\"type\":\"response.completed\",\"response\":{\"id\":\"r_"
+                                  "wide\",\"status\":\"completed\",\"output\":[]}}\n\n") == 0);
     assert(snag_buf_terminate(&wire) == 0);
     if (parse_stream((const char *)wire.data, 4093u, &emitted) != 0) {
         (void)fprintf(stderr, "wide item stream: %s\n", emitted.error);
@@ -1365,16 +1977,30 @@ test_stream_accepts_many_parts(void)
     struct parsed_stream emitted = parsed_new(1024u * 1024u);
 
     assert(snag_buf_printf(&wire,
-        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"r_parts\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
-        "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":\"message\",\"id\":\"m_wide\",\"role\":\"assistant\",\"status\":\"in_progress\",\"content\":[]}}\n\n") == 0);
+               "data: "
+               "{\"type\":\"response.created\",\"response\":{\"id\":\"r_parts\",\"status\":\"in_"
+               "progress\",\"output\":[]}}\n\n"
+               "data: "
+               "{\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":"
+               "\"message\",\"id\":\"m_wide\",\"role\":\"assistant\",\"status\":\"in_progress\","
+               "\"content\":[]}}\n\n") == 0);
     for (size_t i = 0u; i < 120u; ++i) {
         assert(snag_buf_printf(&wire,
-            "data: {\"type\":\"response.content_part.added\",\"item_id\":\"m_wide\",\"output_index\":0,\"content_index\":%zu,\"part\":{\"type\":\"output_text\",\"text\":\"x\",\"annotations\":[]}}\n\n", i) == 0);
+                   "data: "
+                   "{\"type\":\"response.content_part.added\",\"item_id\":\"m_wide\",\"output_"
+                   "index\":0,\"content_index\":%zu,\"part\":{\"type\":\"output_text\",\"text\":"
+                   "\"x\",\"annotations\":[]}}\n\n",
+                   i) == 0);
         assert(snag_buf_printf(&wire,
-            "data: {\"type\":\"response.content_part.done\",\"item_id\":\"m_wide\",\"output_index\":0,\"content_index\":%zu,\"part\":{\"type\":\"output_text\",\"text\":\"x\",\"annotations\":[]}}\n\n", i) == 0);
+                   "data: "
+                   "{\"type\":\"response.content_part.done\",\"item_id\":\"m_wide\",\"output_"
+                   "index\":0,\"content_index\":%zu,\"part\":{\"type\":\"output_text\",\"text\":"
+                   "\"x\",\"annotations\":[]}}\n\n",
+                   i) == 0);
     }
-    assert(snag_buf_printf(&wire,
-        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r_parts\",\"status\":\"completed\",\"output\":[]}}\n\n") == 0);
+    assert(snag_buf_printf(&wire, "data: "
+                                  "{\"type\":\"response.completed\",\"response\":{\"id\":\"r_"
+                                  "parts\",\"status\":\"completed\",\"output\":[]}}\n\n") == 0);
     assert(snag_buf_terminate(&wire) == 0);
     if (parse_stream((const char *)wire.data, 2048u, &emitted) != 0) {
         (void)fprintf(stderr, "wide part stream: %s\n", emitted.error);
@@ -1400,25 +2026,35 @@ test_hosted_search_many_sources(void)
     assert(snag_buf_printf(&sources, "[") == 0);
     for (unsigned int i = 0u; i < 20u; ++i)
         assert(snag_buf_printf(&sources, "%s{\"type\":\"url\",\"url\":\"https://example.test/%u\"}",
-                               i ? "," : "", i) == 0);
+                   i ? "," : "", i) == 0);
     assert(snag_buf_printf(&sources, "]") == 0);
     assert(snag_buf_terminate(&sources) == 0);
     assert(snag_buf_printf(&wire,
-        "event: response.created\n"
-        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_many\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
-        "event: response.output_item.added\n"
-        "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"id\":\"ws_many\",\"type\":\"web_search_call\",\"status\":\"in_progress\",\"action\":{\"type\":\"search\",\"query\":\"many\"}}}\n\n"
-        "event: response.output_item.done\n"
-        "data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"id\":\"ws_many\",\"type\":\"web_search_call\",\"status\":\"completed\",\"action\":{\"type\":\"search\",\"query\":\"many\"},\"sources\":") == 0);
+               "event: response.created\n"
+               "data: "
+               "{\"type\":\"response.created\",\"response\":{\"id\":\"resp_many\",\"status\":\"in_"
+               "progress\",\"output\":[]}}\n\n"
+               "event: response.output_item.added\n"
+               "data: "
+               "{\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"id\":\"ws_"
+               "many\",\"type\":\"web_search_call\",\"status\":\"in_progress\",\"action\":{"
+               "\"type\":\"search\",\"query\":\"many\"}}}\n\n"
+               "event: response.output_item.done\n"
+               "data: "
+               "{\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"id\":\"ws_"
+               "many\",\"type\":\"web_search_call\",\"status\":\"completed\",\"action\":{\"type\":"
+               "\"search\",\"query\":\"many\"},\"sources\":") == 0);
     assert(snag_buf_append(&wire, sources.data, sources.len) == 0);
-    assert(snag_buf_printf(&wire,
-        "}}\n\n"
-        "event: response.completed\n"
-        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_many\",\"status\":\"completed\",\"output\":[]}}\n\n") == 0);
+    assert(snag_buf_printf(&wire, "}}\n\n"
+                                  "event: response.completed\n"
+                                  "data: "
+                                  "{\"type\":\"response.completed\",\"response\":{\"id\":\"resp_"
+                                  "many\",\"status\":\"completed\",\"output\":[]}}\n\n") == 0);
     assert(snag_buf_terminate(&wire) == 0);
     assert(parse_hosted((const char *)wire.data, &parsed, &hosted) == 0);
     assert(hosted.calls == 2u);
-    assert(!hosted.started[1] && strcmp(hosted.status[1], "completed") == 0 && hosted.sources[1] == 20u);
+    assert(!hosted.started[1] && strcmp(hosted.status[1], "completed") == 0 &&
+           hosted.sources[1] == 20u);
     parsed_free(&parsed);
     snag_buf_free(&sources);
     snag_buf_free(&wire);
@@ -1428,14 +2064,14 @@ static void
 test_sparse_output_identities(void)
 {
     const char *search1 = "{\"id\":\"ws_1\",\"type\":\"web_search_call\","
-        "\"status\":\"completed\"}";
+                          "\"status\":\"completed\"}";
     const char *search2 = "{\"id\":\"ws_2\",\"type\":\"web_search_call\","
-        "\"status\":\"completed\"}";
+                          "\"status\":\"completed\"}";
     const char *message = "{\"id\":\"m\",\"type\":\"message\",\"role\":\"assistant\","
-        "\"status\":\"completed\",\"phase\":\"commentary\","
-        "\"content\":[{\"type\":\"output_text\",\"text\":\"ok\"}]}";
+                          "\"status\":\"completed\",\"phase\":\"commentary\","
+                          "\"content\":[{\"type\":\"output_text\",\"text\":\"ok\"}]}";
     const char *call = "{\"id\":\"f\",\"type\":\"function_call\",\"status\":\"completed\","
-        "\"call_id\":\"c\",\"name\":\"get_cwd\",\"arguments\":\"{}\"}";
+                       "\"call_id\":\"c\",\"name\":\"get_cwd\",\"arguments\":\"{}\"}";
 
     /* Sparse and very large keys, reversed snapshot order, late inert items,
      * omitted indexes, collisions, duplicate/omitted terminal identities,
@@ -1446,66 +2082,70 @@ test_sparse_output_identities(void)
         struct parsed_stream parsed = parsed_new(1024u);
         unsigned long long base = mode == 2u ? 1000000000ull : 0ull;
         assert(snag_buf_printf(&wire,
-            "data: {\"type\":\"response.created\",\"response\":{\"id\":\"r_sparse\","
-            "\"status\":\"in_progress\",\"output\":[]}}\n\n"
-            "data: {\"type\":\"response.output_item.added\",\"output_index\":%llu,"
-            "\"item\":%s}\n\n"
-            "data: {\"type\":\"response.output_item.added\",\"output_index\":%llu,"
-            "\"item\":%s}\n\n"
-            "data: {\"type\":\"response.output_item.added\",\"output_index\":%llu,"
-            "\"item\":{\"id\":\"m\",\"type\":\"message\",\"role\":\"assistant\","
-            "\"status\":\"in_progress\",\"phase\":\"commentary\",\"content\":[]}}\n\n"
-            "data: {\"type\":\"response.content_part.added\",\"output_index\":%llu,"
-            "\"item_id\":\"m\",\"content_index\":0,"
-            "\"part\":{\"type\":\"output_text\",\"text\":\"\"}}\n\n",
-            base + 7u, search1, base + (mode == 3u ? 7u : 2u),
-            mode == 4u ? search1 : search2, base + 9u, base + 9u) == 0);
+                   "data: {\"type\":\"response.created\",\"response\":{\"id\":\"r_sparse\","
+                   "\"status\":\"in_progress\",\"output\":[]}}\n\n"
+                   "data: {\"type\":\"response.output_item.added\",\"output_index\":%llu,"
+                   "\"item\":%s}\n\n"
+                   "data: {\"type\":\"response.output_item.added\",\"output_index\":%llu,"
+                   "\"item\":%s}\n\n"
+                   "data: {\"type\":\"response.output_item.added\",\"output_index\":%llu,"
+                   "\"item\":{\"id\":\"m\",\"type\":\"message\",\"role\":\"assistant\","
+                   "\"status\":\"in_progress\",\"phase\":\"commentary\",\"content\":[]}}\n\n"
+                   "data: {\"type\":\"response.content_part.added\",\"output_index\":%llu,"
+                   "\"item_id\":\"m\",\"content_index\":0,"
+                   "\"part\":{\"type\":\"output_text\",\"text\":\"\"}}\n\n",
+                   base + 7u, search1, base + (mode == 3u ? 7u : 2u),
+                   mode == 4u ? search1 : search2, base + 9u, base + 9u) == 0);
         if (mode == 10u) {
             assert(snag_buf_printf(&wire,
-                "data: {\"type\":\"response.output_text.delta\",\"item_id\":\"m\","
-                "\"content_index\":0,\"delta\":\"ok\"}\n\n") == 0);
+                       "data: {\"type\":\"response.output_text.delta\",\"item_id\":\"m\","
+                       "\"content_index\":0,\"delta\":\"ok\"}\n\n") == 0);
         } else {
             assert(snag_buf_printf(&wire,
-                "data: {\"type\":\"response.output_text.delta\",\"output_index\":%llu,"
-                "\"item_id\":\"%s\",\"content_index\":0,\"delta\":\"ok\"}\n\n",
-                base + 9u, mode == 5u ? "ws_1" : "m") == 0);
+                       "data: {\"type\":\"response.output_text.delta\",\"output_index\":%llu,"
+                       "\"item_id\":\"%s\",\"content_index\":0,\"delta\":\"ok\"}\n\n",
+                       base + 9u, mode == 5u ? "ws_1" : "m") == 0);
         }
         assert(snag_buf_printf(&wire,
-            "data: {\"type\":\"response.output_item.added\",\"output_index\":%llu,"
-            "\"item\":{\"id\":\"f\",\"type\":\"function_call\",\"status\":\"in_progress\","
-            "\"call_id\":\"c\",\"name\":\"get_cwd\",\"arguments\":\"\"}}\n\n"
-            "data: {\"type\":\"response.function_call_arguments.delta\","
-            "\"output_index\":%llu,\"item_id\":\"f\",\"delta\":\"{}\"}\n\n"
-            "data: {\"type\":\"response.function_call_arguments.done\","
-            "\"output_index\":%llu,\"item_id\":\"f\",\"arguments\":\"{}\"}\n\n",
-            base + 25u, base + 25u, base + 25u) == 0);
+                   "data: {\"type\":\"response.output_item.added\",\"output_index\":%llu,"
+                   "\"item\":{\"id\":\"f\",\"type\":\"function_call\",\"status\":\"in_progress\","
+                   "\"call_id\":\"c\",\"name\":\"get_cwd\",\"arguments\":\"\"}}\n\n"
+                   "data: {\"type\":\"response.function_call_arguments.delta\","
+                   "\"output_index\":%llu,\"item_id\":\"f\",\"delta\":\"{}\"}\n\n"
+                   "data: {\"type\":\"response.function_call_arguments.done\","
+                   "\"output_index\":%llu,\"item_id\":\"f\",\"arguments\":\"{}\"}\n\n",
+                   base + 25u, base + 25u, base + 25u) == 0);
         if (mode == 1u) {
-            assert(snag_buf_printf(&terminal, "%s,%s,%s,%s",
-                call, message, search2, search1) == 0);
+            assert(snag_buf_printf(&terminal, "%s,%s,%s,%s", call, message, search2, search1) == 0);
         } else {
-            const char *first = mode == 13u ?
-                "{\"id\":\"ws_1\",\"type\":\"reasoning\",\"summary\":[]}" : search1;
-            assert(snag_buf_printf(&terminal, "%s,%s,%s", first, search2,
-                mode == 12u ? "{\"id\":\"m\",\"type\":\"message\",\"role\":\"assistant\","
-                    "\"status\":\"completed\",\"content\":[{\"type\":\"output_text\","
-                    "\"text\":\"conflict\"}]}" : message) == 0);
+            const char *first =
+                mode == 13u ? "{\"id\":\"ws_1\",\"type\":\"reasoning\",\"summary\":[]}" : search1;
+            assert(
+                snag_buf_printf(&terminal, "%s,%s,%s", first, search2,
+                    mode == 12u ? "{\"id\":\"m\",\"type\":\"message\",\"role\":\"assistant\","
+                                  "\"status\":\"completed\",\"content\":[{\"type\":\"output_text\","
+                                  "\"text\":\"conflict\"}]}"
+                                : message) == 0);
             if (mode == 6u) assert(snag_buf_printf(&terminal, ",%s", message) == 0);
             if (mode != 7u) {
-                assert(snag_buf_printf(&terminal, ",%s", mode == 8u ?
-                    "{\"id\":\"f\",\"type\":\"function_call\",\"status\":\"completed\","
-                    "\"call_id\":\"c\",\"name\":\"get_other\",\"arguments\":\"{}\"}" : call) == 0);
+                assert(
+                    snag_buf_printf(&terminal, ",%s",
+                        mode == 8u
+                            ? "{\"id\":\"f\",\"type\":\"function_call\",\"status\":\"completed\","
+                              "\"call_id\":\"c\",\"name\":\"get_other\",\"arguments\":\"{}\"}"
+                            : call) == 0);
             }
             if (mode == 11u) {
                 assert(snag_buf_printf(&terminal,
-                    ",{\"id\":\"late\",\"type\":\"reasoning\",\"summary\":[]}") == 0);
+                           ",{\"id\":\"late\",\"type\":\"reasoning\",\"summary\":[]}") == 0);
             }
         }
         assert(snag_buf_terminate(&terminal) == 0);
         assert(snag_buf_printf(&wire,
-            "data: {\"type\":\"response.%s\",\"response\":{\"id\":\"r_sparse\","
-            "\"status\":\"%s\",\"output\":[%s]}}\n\n",
-            mode == 9u ? "failed" : "completed", mode == 9u ? "failed" : "completed",
-            terminal.data) == 0);
+                   "data: {\"type\":\"response.%s\",\"response\":{\"id\":\"r_sparse\","
+                   "\"status\":\"%s\",\"output\":[%s]}}\n\n",
+                   mode == 9u ? "failed" : "completed", mode == 9u ? "failed" : "completed",
+                   terminal.data) == 0);
         assert(snag_buf_terminate(&wire) == 0);
         int rc = parse_stream((const char *)wire.data, 1u, &parsed);
         if (mode < 3u || mode == 10u || mode == 11u) {
@@ -1515,9 +2155,9 @@ test_sparse_output_identities(void)
             assert(parsed.text.len == 2u && !memcmp(parsed.text.data, "ok", 2u));
             assert(parsed.last_index == 2u);
             assert(snag_response_graph_item(&parsed.graph, mode == 1u ? 0u : 1u).kind ==
-                SNAG_ITEM_TOOL_CALL);
-            assert(!strcmp(snag_response_graph_item(&parsed.graph,
-                mode == 1u ? 1u : 0u).text, "ok"));
+                   SNAG_ITEM_TOOL_CALL);
+            assert(
+                !strcmp(snag_response_graph_item(&parsed.graph, mode == 1u ? 1u : 0u).text, "ok"));
         } else {
             if (rc >= 0) fprintf(stderr, "sparse conflict mode %u accepted\n", mode);
             assert(rc < 0);

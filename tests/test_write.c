@@ -63,7 +63,8 @@ invoke(const char *name, json_t *arguments)
     call.arguments = arguments;
     if (strcmp(name, "write_file") == 0)
         rc = snag_tools_write_file(&call, workspace, &result, error, sizeof(error));
-    else rc = snag_tools_edit_file(&call, workspace, &result, error, sizeof(error));
+    else
+        rc = snag_tools_edit_file(&call, workspace, &result, error, sizeof(error));
     assert(rc == 0);
     assert(result);
     return result;
@@ -129,27 +130,28 @@ test_write_rejects_unsafe_paths(void)
     (void)snprintf(absolute, sizeof(absolute), "%s/absolute.txt", canonical);
     result = invoke("write_file", json_pack("{s:s,s:s}", "path", absolute, "content", "outside\n"));
     expect_status(result, "succeeded");
-    result = invoke("edit_file", json_pack("{s:s,s:s,s:s}", "path", absolute,
-        "old", "outside", "new", "changed"));
+    result = invoke("edit_file",
+        json_pack("{s:s,s:s,s:s}", "path", absolute, "old", "outside", "new", "changed"));
     expect_status(result, "succeeded");
     assert(access(absolute, F_OK) == 0);
 
-    result = invoke("write_file", json_pack("{s:s,s:s}", "path", "./explicit.txt",
-                                          "content", "cwd\n"));
+    result =
+        invoke("write_file", json_pack("{s:s,s:s}", "path", "./explicit.txt", "content", "cwd\n"));
     expect_status(result, "succeeded");
     assert(strcmp(read_file_bytes("explicit.txt"), "cwd\n") == 0);
     (void)snprintf(linked, sizeof(linked), "%s/linked", workspace);
     assert(symlink(canonical, linked) == 0);
     free(canonical);
-    result = invoke("write_file", json_pack("{s:s,s:s}", "path", "./linked/no.txt",
-                                          "content", "x"));
+    result =
+        invoke("write_file", json_pack("{s:s,s:s}", "path", "./linked/no.txt", "content", "x"));
     expect_status(result, "failed");
     assert(!exists("linked/no.txt"));
 
     result = invoke("write_file", json_pack("{s:s,s:s}", "path", "../escape.txt", "content", "x"));
     expect_status(result, "failed");
 
-    result = invoke("write_file", json_pack("{s:s,s:s}", "path", "missing/parent.txt", "content", "x"));
+    result =
+        invoke("write_file", json_pack("{s:s,s:s}", "path", "missing/parent.txt", "content", "x"));
     expect_status(result, "failed");
     assert(!exists("missing/parent.txt"));
 }
@@ -166,21 +168,25 @@ test_edit_exact_and_ambiguous(void)
     assert(chmod(path, 0600) == 0);
 
     /* Default is exactly one match: two occurrences must change nothing. */
-    result = invoke("edit_file", json_pack("{s:s,s:s,s:s}", "path", "edit.txt", "old", "two", "new", "2"));
+    result = invoke(
+        "edit_file", json_pack("{s:s,s:s,s:s}", "path", "edit.txt", "old", "two", "new", "2"));
     expect_status(result, "not_run");
     assert(strcmp(read_file_bytes("edit.txt"), "one two two\n") == 0);
 
-    result = invoke("edit_file", json_pack("{s:s,s:s,s:s,s:i}", "path", "edit.txt", "old", "two", "new", "2", "count", 2));
+    result = invoke("edit_file",
+        json_pack("{s:s,s:s,s:s,s:i}", "path", "edit.txt", "old", "two", "new", "2", "count", 2));
     expect_status(result, "succeeded");
     assert(strcmp(read_file_bytes("edit.txt"), "one 2 2\n") == 0);
     assert(stat(path, &st) == 0);
     assert((st.st_mode & 0777) == 0600);
 
-    result = invoke("edit_file", json_pack("{s:s,s:s,s:s}", "path", "edit.txt", "old", "absent", "new", "x"));
+    result = invoke(
+        "edit_file", json_pack("{s:s,s:s,s:s}", "path", "edit.txt", "old", "absent", "new", "x"));
     expect_status(result, "not_run");
     assert(strcmp(read_file_bytes("edit.txt"), "one 2 2\n") == 0);
 
-    result = invoke("edit_file", json_pack("{s:s,s:s,s:s}", "path", "no-such.txt", "old", "x", "new", "y"));
+    result = invoke(
+        "edit_file", json_pack("{s:s,s:s,s:s}", "path", "no-such.txt", "old", "x", "new", "y"));
     expect_status(result, "failed");
 }
 

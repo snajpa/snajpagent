@@ -41,7 +41,8 @@ environment_name(const char *name)
 {
     for (size_t i = 0; name[i]; ++i) {
         unsigned char c = (unsigned char)name[i];
-        if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c == '_' || (i && c >= '0' && c <= '9')))
+        if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c == '_' ||
+                (i && c >= '0' && c <= '9')))
             return false;
     }
     return name[0] && strlen(name) <= 255u;
@@ -49,7 +50,7 @@ environment_name(const char *name)
 
 int
 snag_secret_source_parse(struct snag_secret_source *out, const char *expression,
-                        const char *config_path, char *error, size_t error_size)
+    const char *config_path, char *error, size_t error_size)
 {
     struct snag_secret_source source = {0};
     json_t *literal = NULL;
@@ -65,7 +66,8 @@ snag_secret_source_parse(struct snag_secret_source *out, const char *expression,
         literal = json_loadb(expression, len, JSON_DECODE_ANY, NULL);
         if (!json_is_string(literal) || !json_string_length(literal) ||
             json_string_length(literal) > SNAG_SECRET_MAX ||
-            strlen(json_string_value(literal)) != json_string_length(literal)) goto invalid;
+            strlen(json_string_value(literal)) != json_string_length(literal))
+            goto invalid;
         source.kind = SNAG_SECRET_LITERAL;
         source.value = snag_strdup_checked(json_string_value(literal), SNAG_SECRET_MAX);
     } else if (strncmp(expression, "${", 2u) == 0) {
@@ -85,13 +87,15 @@ snag_secret_source_parse(struct snag_secret_source *out, const char *expression,
         } else if (strncmp(expression, "~/", 2u) == 0) {
             home = snag_home_directory();
             base = home;
-            if (!snag_path_root_len(base) || snag_buf_printf(&path, "%s/%s", base, expression + 2u) < 0)
+            if (!snag_path_root_len(base) ||
+                snag_buf_printf(&path, "%s/%s", base, expression + 2u) < 0)
                 goto invalid;
         } else {
             const char *slash = config_path ? strrchr(config_path, '/') : NULL;
             if (!slash || !snag_path_root_len(config_path) ||
                 snag_buf_append(&path, config_path, (size_t)(slash - config_path)) < 0 ||
-                snag_buf_printf(&path, "/%s", expression) < 0) goto invalid;
+                snag_buf_printf(&path, "/%s", expression) < 0)
+                goto invalid;
         }
         if (snag_buf_terminate(&path) < 0) goto invalid;
         snag_path_slashes((char *)path.data);
@@ -104,10 +108,12 @@ snag_secret_source_parse(struct snag_secret_source *out, const char *expression,
     memset(&source, 0, sizeof(source));
     rc = 0;
     goto done;
-invalid: errno = EINVAL;
+invalid:
+    errno = EINVAL;
     snag_errorf(error, error_size,
-               "invalid secret source; use ${ENV}, a double-quoted literal, or a file path");
-done: free(home);
+        "invalid secret source; use ${ENV}, a double-quoted literal, or a file path");
+done:
+    free(home);
     if (json_is_string(literal))
         snag_secret_clear((void *)json_string_value(literal), json_string_length(literal));
     json_decref(literal);
@@ -117,8 +123,8 @@ done: free(home);
 }
 
 int
-snag_secret_source_resolve(const struct snag_secret_source *source, char **out,
-                          char *error, size_t error_size)
+snag_secret_source_resolve(
+    const struct snag_secret_source *source, char **out, char *error, size_t error_size)
 {
     char *value = NULL;
     size_t len = 0u;
@@ -142,8 +148,9 @@ snag_secret_source_resolve(const struct snag_secret_source *source, char **out,
         snag_file_info st;
         /* Reject special files without hanging; symlinks are intentional sources. */
         fd = snag_open_secret_file(source->path);
-        if (fd < 0 || snag_fstat(fd, &st) < 0 || !S_ISREG(st.st_mode) ||
-            st.st_size < 0 || (uintmax_t)st.st_size > SNAG_SECRET_MAX + 2u) goto done;
+        if (fd < 0 || snag_fstat(fd, &st) < 0 || !S_ISREG(st.st_mode) || st.st_size < 0 ||
+            (uintmax_t)st.st_size > SNAG_SECRET_MAX + 2u)
+            goto done;
         value = calloc(SNAG_SECRET_MAX + 4u, 1u);
         if (!value) goto done;
         while (len < SNAG_SECRET_MAX + 3u) {
@@ -158,7 +165,8 @@ snag_secret_source_resolve(const struct snag_secret_source *source, char **out,
             if (len && value[len - 1u] == '\r') value[--len] = '\0';
         }
     }
-    if (!value || !len || len > SNAG_SECRET_MAX || !snag_utf8_valid((const unsigned char *)value, len, true))
+    if (!value || !len || len > SNAG_SECRET_MAX ||
+        !snag_utf8_valid((const unsigned char *)value, len, true))
         goto done;
     *out = value;
     value = NULL;
@@ -172,10 +180,11 @@ done:
     if (rc < 0) {
         errno = EINVAL;
         snag_errorf(error, error_size, "%s secret source%s%s is unavailable, empty or invalid",
-                   snag_secret_source_kind(source),
-                   source->kind == SNAG_SECRET_ENV || source->kind == SNAG_SECRET_FILE ? " " : "",
-                   source->kind == SNAG_SECRET_ENV ? source->value :
-                   source->kind == SNAG_SECRET_FILE ? source->path : "");
+            snag_secret_source_kind(source),
+            source->kind == SNAG_SECRET_ENV || source->kind == SNAG_SECRET_FILE ? " " : "",
+            source->kind == SNAG_SECRET_ENV    ? source->value
+            : source->kind == SNAG_SECRET_FILE ? source->path
+                                               : "");
     }
     return rc;
 }
@@ -192,10 +201,14 @@ const char *
 snag_secret_source_kind(const struct snag_secret_source *source)
 {
     switch (source->kind) {
-    case SNAG_SECRET_NONE: return "managed";
-    case SNAG_SECRET_ENV: return "environment";
-    case SNAG_SECRET_LITERAL: return "literal";
-    case SNAG_SECRET_FILE: return "file";
+    case SNAG_SECRET_NONE:
+        return "managed";
+    case SNAG_SECRET_ENV:
+        return "environment";
+    case SNAG_SECRET_LITERAL:
+        return "literal";
+    case SNAG_SECRET_FILE:
+        return "file";
     }
     return "invalid";
 }

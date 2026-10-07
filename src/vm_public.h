@@ -13,7 +13,8 @@
  * so a loaded page emits only its own part of the completed body.
  * Input comes from the public history reader. Source byte metadata preserves
  * offsets through redaction; joined chunks receive a second redaction pass. */
-json_t *snag_vm_public_blocks(const json_t *events, const struct snag_wire_secrets *, char *, size_t);
+json_t *snag_vm_public_blocks(
+    const json_t *events, const struct snag_wire_secrets *, char *, size_t);
 /* Terminal response state, or NULL for other event types. */
 const char *snag_vm_public_state(const char *type);
 /* Add source byte counts before the reader drops its unredacted event data. */

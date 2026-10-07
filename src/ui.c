@@ -169,10 +169,13 @@ retain_output(struct snag_ui_display *display, const struct snag_ui_command *com
         }
         /* Nested fields already belong to this immutable display snapshot. */
         json_t *state = json_copy(display->view_state);
-        if (!state) { json_decref(position); return -1; }
+        if (!state) {
+            json_decref(position);
+            return -1;
+        }
         if (json_object_set_new(state, "presentation", position) < 0 ||
             (failed && json_object_set_new(state, "presentation_error",
-                json_string(display->presentation_error)) < 0)) {
+                           json_string(display->presentation_error)) < 0)) {
             json_decref(state);
             return -1;
         }
@@ -190,8 +193,8 @@ static int
 retain_cancelled(void *opaque, const char *label, const char *text)
 {
     struct snag_ui_display *display = opaque;
-    struct snag_ui_command command = {.kind = SNAG_UI_SUBMITTED, .label = label,
-        .text = text, .data.value = true};
+    struct snag_ui_command command = {
+        .kind = SNAG_UI_SUBMITTED, .label = label, .text = text, .data.value = true};
     if (retain_output(display, &command) < 0) return -1;
     if (!display->term.input_only) return 0;
     display->term.prompt_clock.captured = false;
@@ -200,11 +203,11 @@ retain_cancelled(void *opaque, const char *label, const char *text)
 }
 
 static int
-present_local(struct snag_ui_display *display, enum snag_ui_operation kind,
-    const char *label, const char *text, bool input)
+present_local(struct snag_ui_display *display, enum snag_ui_operation kind, const char *label,
+    const char *text, bool input)
 {
-    struct snag_ui_command command = {.kind = kind, .label = label, .text = text,
-        .data.value = input};
+    struct snag_ui_command command = {
+        .kind = kind, .label = label, .text = text, .data.value = input};
     if (retain_output(display, &command) < 0) return -1;
     return snag_presentation_apply(&display->render, &command, NULL);
 }
@@ -228,13 +231,13 @@ verbosity_command(struct snag_ui_display *display, const char *text)
         while (isspace((unsigned char)*end)) ++end;
         if (*value < '0' || *value > '6' || *end) {
             (void)snprintf(display->feedback, sizeof(display->feedback),
-                           "/verbose expects one integer from 0 through 6");
+                "/verbose expects one integer from 0 through 6");
             return;
         }
         (void)set_level(display, (unsigned int)(*value - '0'));
     }
-    (void)snprintf(display->feedback, sizeof(display->feedback),
-        "verbosity: %u (%s)%s", display->render.verbosity, snag_verbosity_name(display->render.verbosity),
+    (void)snprintf(display->feedback, sizeof(display->feedback), "verbosity: %u (%s)%s",
+        display->render.verbosity, snag_verbosity_name(display->render.verbosity),
         display->render.view == SNAG_RENDER_CHAT ? " · work detail is in /rollout" : "");
 }
 
@@ -250,14 +253,16 @@ static bool
 queue_full(struct ui_queue *queue)
 {
     return atomic_load_explicit(&queue->head, memory_order_relaxed) -
-           atomic_load_explicit(&queue->tail, memory_order_acquire) == UI_QUEUE_CAPACITY;
+               atomic_load_explicit(&queue->tail, memory_order_acquire) ==
+           UI_QUEUE_CAPACITY;
 }
 
 static bool
 queue_push(struct ui_queue *queue, void *item)
 {
     size_t head = atomic_load_explicit(&queue->head, memory_order_relaxed);
-    if (head - atomic_load_explicit(&queue->tail, memory_order_acquire) == UI_QUEUE_CAPACITY) return false;
+    if (head - atomic_load_explicit(&queue->tail, memory_order_acquire) == UI_QUEUE_CAPACITY)
+        return false;
     queue->items[head % UI_QUEUE_CAPACITY] = item;
     atomic_store_explicit(&queue->head, head + 1u, memory_order_release);
     snag_wakeup_send(queue->wake[1]);
@@ -379,8 +384,10 @@ input_note_controls(struct snag_ui_runtime *runtime, const unsigned char *bytes,
             watchdog->host = emergency_host;
             watchdog->deadline_ms = deadline_ms;
             rc = pthread_create(&thread, NULL, input_hard_exit_watchdog, watchdog);
-            if (rc == 0) (void)pthread_detach(thread);
-            else free(watchdog);
+            if (rc == 0)
+                (void)pthread_detach(thread);
+            else
+                free(watchdog);
         }
         atomic_store(&runtime->exit_requested, true);
         snag_wakeup_send(runtime->actions.wake[1]);
@@ -435,8 +442,12 @@ input_take_held_control(struct ui_input *input, bool allow_yield)
 
             for (size_t j = 0u; j < sizeof(yield_line) - 1u; ++j)
                 if (input->bytes[(input->head + i + j) % UI_INPUT_CAPACITY] !=
-                    (unsigned char)yield_line[j]) matches = false;
-            if (matches) { action = HELD_YIELD; used = sizeof(yield_line) - 1u; }
+                    (unsigned char)yield_line[j])
+                    matches = false;
+            if (matches) {
+                action = HELD_YIELD;
+                used = sizeof(yield_line) - 1u;
+            }
         }
         if (!used) continue;
         /* Cancel hidden typeahead before this priority control. Bytes typed
@@ -555,43 +566,47 @@ input_stop(struct snag_ui_display *display)
 }
 
 static void
-display_capture_conversation(struct snag_ui_display *display, const char *text,
-                      struct ui_snapshot *snapshot)
+display_capture_conversation(
+    struct snag_ui_display *display, const char *text, struct ui_snapshot *snapshot)
 {
     memset(&snapshot->address_conversation, 0, sizeof(snapshot->address_conversation));
     if (!text) return;
     size_t verb = strcspn(text, " \t\r\n");
     if (!((verb == 6u && !strncmp(text, "/query", verb)) ||
-        (verb == 4u && !strncmp(text, "/msg", verb)) ||
-        (verb == 5u && !strncmp(text, "/part", verb)) ||
-        (verb == 7u && !strncmp(text, "/notice", verb)))) return;
+            (verb == 4u && !strncmp(text, "/msg", verb)) ||
+            (verb == 5u && !strncmp(text, "/part", verb)) ||
+            (verb == 7u && !strncmp(text, "/notice", verb))))
+        return;
     char *operand = NULL;
     const char *rest;
     char error[128u];
     if (snag_irc_address_operand(text + verb, &operand, &rest, error, sizeof(error)) < 0) return;
     (void)rest;
     bool channel_id = !strncmp(operand, "channel:", 8u);
-    const char *id = channel_id ? operand + 8u :
-        !strncmp(operand, "query:", 6u) ? operand + 6u : NULL;
+    const char *id = channel_id                        ? operand + 8u
+                     : !strncmp(operand, "query:", 6u) ? operand + 6u
+                                                       : NULL;
     const struct snag_irc_scope *scope = NULL;
     struct snag_irc_address address;
     if (!id) {
-        if (snag_irc_address_parse(&address, operand, SNAG_IRC_MESSAGE_ADDRESS,
-            error, sizeof(error)) < 0) goto done;
+        if (snag_irc_address_parse(
+                &address, operand, SNAG_IRC_MESSAGE_ADDRESS, error, sizeof(error)) < 0)
+            goto done;
         scope = snag_irc_scope_resolve(&snapshot->scopes,
-            snapshot->view == SNAG_RENDER_CHAT ? snapshot->selection.id : 0u,
-            address.endpoint, error, sizeof(error));
+            snapshot->view == SNAG_RENDER_CHAT ? snapshot->selection.id : 0u, address.endpoint,
+            error, sizeof(error));
         if (!scope) goto done;
     }
     for (struct ui_conversation_tab *tab = display->conversations; tab; tab = tab->next) {
         if (tab->target.identity != SNAG_IRC_OPERATOR) continue;
         if (id && (tab->target.kind == SNAG_IRC_CHANNEL) != channel_id) continue;
-        if (id ? strcmp(id, tab->target.conversation) :
-            (strcmp(scope->target.connection, tab->target.connection) ||
-            scope->target.generation != tab->target.generation ||
-            !snag_irc_name_equal(scope->casemapping[SNAG_IRC_OPERATOR],
-                address.target, tab->target.kind == SNAG_IRC_CHANNEL ?
-                    tab->target.room : tab->target.peer))) continue;
+        if (id ? strcmp(id, tab->target.conversation)
+               : (strcmp(scope->target.connection, tab->target.connection) ||
+                     scope->target.generation != tab->target.generation ||
+                     !snag_irc_name_equal(scope->casemapping[SNAG_IRC_OPERATOR], address.target,
+                         tab->target.kind == SNAG_IRC_CHANNEL ? tab->target.room
+                                                              : tab->target.peer)))
+            continue;
         snapshot->address_conversation = tab->target;
         break;
     }
@@ -656,8 +671,8 @@ same_conversation_view(const struct ui_conversation_tab *a, const struct ui_conv
         b->target.kind == SNAG_IRC_CONNECTION_EVENTS)
         return !strcmp(a->target.connection, b->target.connection);
     return a->target.kind == SNAG_IRC_CHANNEL && b->target.kind == SNAG_IRC_CHANNEL &&
-        !strcmp(a->target.connection, b->target.connection) &&
-        snag_irc_name_equal(a->target.casemapping, a->target.room, b->target.room);
+           !strcmp(a->target.connection, b->target.connection) &&
+           snag_irc_name_equal(a->target.casemapping, a->target.room, b->target.room);
 }
 
 static bool
@@ -678,8 +693,9 @@ extra_tab(const struct snag_ui_display *display, const struct ui_conversation_ta
     for (size_t i = 0u; term->destinations && i < term->destinations->count; ++i) {
         const struct snag_irc_destination *destination = &term->destinations->items[i];
         if (!strcmp(destination->connection, tab->target.connection) &&
-            snag_irc_name_equal(destination->casemapping[SNAG_IRC_OPERATOR],
-                destination->room, tab->target.room)) return false;
+            snag_irc_name_equal(
+                destination->casemapping[SNAG_IRC_OPERATOR], destination->room, tab->target.room))
+            return false;
     }
     return true;
 }
@@ -729,7 +745,7 @@ display_channel_draft(struct snag_ui_display *display, uint32_t destination)
 
 static int
 display_select_draft(struct snag_ui_display *display, struct ui_conversation_tab *next,
-                     struct ui_channel_draft *main)
+    struct ui_channel_draft *main)
 {
     if (!next && !main) return -1;
     if (display->conversation == next && (next || display->main_draft == main)) return 0;
@@ -737,9 +753,10 @@ display_select_draft(struct snag_ui_display *display, struct ui_conversation_tab
     struct ui_conversation_tab *old = display->conversation;
     term->defer_redraw = true;
     if (snag_term_swap_draft(term, old ? &old->draft : &display->main_draft->text,
-        old ? &old->cursor : &display->main_draft->cursor) < 0 ||
-        snag_term_swap_draft(term, next ? &next->draft : &main->text,
-        next ? &next->cursor : &main->cursor) < 0) return -1;
+            old ? &old->cursor : &display->main_draft->cursor) < 0 ||
+        snag_term_swap_draft(
+            term, next ? &next->draft : &main->text, next ? &next->cursor : &main->cursor) < 0)
+        return -1;
     display->conversation = next;
     if (!next) display->main_draft = main;
     term->conversation = next ? next->target : (struct snag_irc_conversation_target){0};
@@ -767,9 +784,10 @@ display_restore_input(struct snag_ui_display *display, const struct snag_ui_comm
         cursor = &tab->cursor;
         focused = display->conversation == tab;
     } else {
-        struct ui_channel_draft *main = command->data.draft.view == SNAG_RENDER_ROLLOUT ?
-            &display->rollout_draft :
-            display_channel_draft(display, command->data.draft.destination);
+        struct ui_channel_draft *main =
+            command->data.draft.view == SNAG_RENDER_ROLLOUT
+                ? &display->rollout_draft
+                : display_channel_draft(display, command->data.draft.destination);
         if (!main) return -1;
         draft = &main->text;
         cursor = &main->cursor;
@@ -777,8 +795,8 @@ display_restore_input(struct snag_ui_display *display, const struct snag_ui_comm
     }
     if (focused) return snag_term_restore_draft(&display->term, command->text);
     if (command->len > SNAG_MAX_DIRECT_PROMPT) return snag_errno(EOVERFLOW);
-    if (command->len > draft->len &&
-        snag_buf_reserve(draft, command->len - draft->len) < 0) return -1;
+    if (command->len > draft->len && snag_buf_reserve(draft, command->len - draft->len) < 0)
+        return -1;
     snag_buf_reset(draft);
     if (snag_buf_append(draft, command->text, command->len) < 0) return -1;
     *cursor = command->len;
@@ -788,8 +806,8 @@ display_restore_input(struct snag_ui_display *display, const struct snag_ui_comm
 static int
 display_conversation_event(struct snag_ui_display *display, const struct snag_irc_event *event)
 {
-    if (!event->routed ||
-        (event->route.kind == SNAG_IRC_CHANNEL && !event->route.membership[0])) return 0;
+    if (!event->routed || (event->route.kind == SNAG_IRC_CHANNEL && !event->route.membership[0]))
+        return 0;
     struct snag_term *term = &display->term;
     struct ui_conversation_tab **slot = &display->conversations;
     while (*slot && strcmp((*slot)->target.conversation, event->route.conversation))
@@ -830,8 +848,9 @@ display_conversation_event(struct snag_ui_display *display, const struct snag_ir
         for (size_t i = 0u; term->destinations && i < term->destinations->count; ++i) {
             const struct snag_irc_destination *destination = &term->destinations->items[i];
             if (strcmp(destination->connection, tab->target.connection) ||
-                !snag_irc_name_equal(destination->casemapping[SNAG_IRC_OPERATOR],
-                    destination->room, tab->target.room)) continue;
+                !snag_irc_name_equal(destination->casemapping[SNAG_IRC_OPERATOR], destination->room,
+                    tab->target.room))
+                continue;
             struct ui_channel_draft *main = display_channel_draft(display, destination->target.id);
             if (!main) return -1;
             if (!display->conversation && display->main_draft == main && term->chat) {
@@ -853,8 +872,8 @@ display_conversation_event(struct snag_ui_display *display, const struct snag_ir
 }
 
 static int
-display_set_chat_room(struct snag_ui_display *display,
-                      const struct snag_irc_destination *destination, bool announce)
+display_set_chat_room(
+    struct snag_ui_display *display, const struct snag_irc_destination *destination, bool announce)
 {
     const char *endpoint = destination ? destination->endpoint : "";
     const char *room = destination ? destination->room : "";
@@ -864,37 +883,45 @@ display_set_chat_room(struct snag_ui_display *display,
         if (destination && tab->target.kind == SNAG_IRC_CHANNEL &&
             tab->target.identity == SNAG_IRC_OPERATOR &&
             !strcmp(tab->target.connection, destination->connection) &&
-            snag_irc_name_equal(destination->casemapping[SNAG_IRC_OPERATOR],
-                tab->target.room, room)) break;
+            snag_irc_name_equal(
+                destination->casemapping[SNAG_IRC_OPERATOR], tab->target.room, room))
+            break;
     bool leaving_conversation = display->conversation != tab;
     if (display_select_draft(display, tab,
-        display_channel_draft(display, destination ? destination->target.id : 0u)) < 0) return -1;
+            display_channel_draft(display, destination ? destination->target.id : 0u)) < 0)
+        return -1;
     if (snag_render_set_chat_room(&display->render, endpoint, room, announce) < 0) return -1;
-    display->view_repainting = display->render.view == SNAG_RENDER_CHAT &&
-        snag_render_view_pending(&display->render);
-    if (display->view_repainting) display->term.defer_redraw = true;
-    else if (leaving_conversation && !display->native_barrier) display->term.defer_redraw = false;
+    display->view_repainting =
+        display->render.view == SNAG_RENDER_CHAT && snag_render_view_pending(&display->render);
+    if (display->view_repainting)
+        display->term.defer_redraw = true;
+    else if (leaving_conversation && !display->native_barrier)
+        display->term.defer_redraw = false;
     return 0;
 }
 
 static int
-display_set_view(struct snag_ui_display *display, enum snag_render_view view, bool announce,
-                 bool prompt_ready)
+display_set_view(
+    struct snag_ui_display *display, enum snag_render_view view, bool announce, bool prompt_ready)
 {
     struct snag_term *term = &display->term;
     bool changed = display->render.view != view;
 
     if (view != SNAG_RENDER_CHAT && view != SNAG_RENDER_ROLLOUT) return snag_errno(EINVAL);
     term->defer_redraw = true;
-    if (announce && changed && snag_render_host(&display->render,
-            view == SNAG_RENDER_CHAT ? "switching to chat" : "switching to rollout") < 0) return -1;
+    if (announce && changed &&
+        snag_render_host(&display->render,
+            view == SNAG_RENDER_CHAT ? "switching to chat" : "switching to rollout") < 0)
+        return -1;
     if (view == SNAG_RENDER_ROLLOUT && display->conversation) {
         if (display_set_chat_room(display, selected_destination(term), false) < 0) return -1;
     }
     if (view == SNAG_RENDER_ROLLOUT) {
         if (display_select_draft(display, NULL, &display->rollout_draft) < 0) return -1;
-    } else if (!display->conversation && display_select_draft(display, NULL,
-        display_channel_draft(display, term->destination.id)) < 0) return -1;
+    } else if (!display->conversation &&
+               display_select_draft(
+                   display, NULL, display_channel_draft(display, term->destination.id)) < 0)
+        return -1;
     term->defer_redraw = true;
     term->chat = view == SNAG_RENDER_CHAT;
     if (snag_render_set_view(&display->render, view) < 0) return -1;
@@ -916,8 +943,8 @@ static int
 display_cycle_view(struct snag_ui_display *display)
 {
     struct snag_term *term = &display->term;
-    size_t channels = term->destinations && term->destinations->count ?
-        term->destinations->count : 1u;
+    size_t channels =
+        term->destinations && term->destinations->count ? term->destinations->count : 1u;
     size_t count = channels + 1u;
     size_t current = 0u;
     for (struct ui_conversation_tab *tab = display->conversations; tab; tab = tab->next) {
@@ -931,12 +958,13 @@ display_cycle_view(struct snag_ui_display *display)
         for (size_t i = 0u; term->destinations && i < term->destinations->count; ++i)
             if (term->destinations->items[i].target.id == term->destination.id) current = i + 1u;
     }
-    size_t next = term->view_reverse ? (current ? current - 1u : count - 1u) :
-        (current + 1u) % count;
+    size_t next =
+        term->view_reverse ? (current ? current - 1u : count - 1u) : (current + 1u) % count;
     if (!next) return display_set_view(display, SNAG_RENDER_ROLLOUT, true, true);
     if (next <= channels) {
-        const struct snag_irc_destination *destination = term->destinations &&
-            term->destinations->count ? &term->destinations->items[next - 1u] : NULL;
+        const struct snag_irc_destination *destination =
+            term->destinations && term->destinations->count ? &term->destinations->items[next - 1u]
+                                                            : NULL;
         if (destination && snag_term_select_destination(term, destination->target.id) < 0)
             return -1;
         if (display_set_chat_room(display, destination, true) < 0) return -1;
@@ -947,8 +975,8 @@ display_cycle_view(struct snag_ui_display *display)
             if (extra_tab(display, tab) && ++index == next) break;
         if (!tab) return snag_errno(EINVAL);
         if (display_select_draft(display, tab, NULL) < 0 ||
-            snag_render_set_chat_conversation(&display->render, tab->endpoint,
-                &term->conversation, true) < 0)
+            snag_render_set_chat_conversation(
+                &display->render, tab->endpoint, &term->conversation, true) < 0)
             return -1;
     }
     return display_set_view(display, SNAG_RENDER_CHAT, true, true);
@@ -1001,7 +1029,8 @@ view_submit(void *opaque, const char *id, const char *text, const json_t *route,
     struct snag_ui_display *display = opaque;
     struct snag_ui_runtime *runtime = display->runtime;
     if (display->suspended || display->input_closed ||
-        atomic_load(&runtime->session_attachment) != generation) return snag_errno(ESTALE);
+        atomic_load(&runtime->session_attachment) != generation)
+        return snag_errno(ESTALE);
     if (queue_full(&runtime->actions) || display->local) return snag_errno(EAGAIN);
     struct ui_action *item = calloc(1u, sizeof(*item));
     if (!item) return -1;
@@ -1032,12 +1061,14 @@ view_submit(void *opaque, const char *id, const char *text, const json_t *route,
     if (json_is_object(route)) {
         struct snag_irc_conversation_target target;
         if (terminal || snag_view_conversation_read(route, &target) < 0 ||
-            target.identity != SNAG_IRC_OPERATOR) goto stale;
+            target.identity != SNAG_IRC_OPERATOR)
+            goto stale;
         struct ui_conversation_tab *tab;
         for (tab = display->conversations; tab; tab = tab->next)
             if (!strcmp(tab->target.connection, target.connection) &&
                 !strcmp(tab->target.conversation, target.conversation) &&
-                tab->target.identity == target.identity && tab->target.kind == target.kind) break;
+                tab->target.identity == target.identity && tab->target.kind == target.kind)
+                break;
         if (!tab) goto stale;
         struct snag_irc_scope *scope = NULL;
         for (size_t i = 0u; i < item->snapshot.scopes.count; ++i)
@@ -1056,7 +1087,7 @@ view_submit(void *opaque, const char *id, const char *text, const json_t *route,
     }
     display_capture_conversation(display, text, &item->snapshot);
     item->steering = !queued && item->snapshot.view == SNAG_RENDER_ROLLOUT &&
-        item->snapshot.active && !snag_prompt_command(text);
+                     item->snapshot.active && !snag_prompt_command(text);
     if (item->steering) atomic_fetch_add(&runtime->steering_pending, 1u);
     if (queue_push(&runtime->actions, item)) {
         display->term.prompt_clock.captured = false;
@@ -1097,13 +1128,13 @@ session_service(struct snag_ui_display *display, int timeout_ms)
     snag_view_server_step(display->view);
     if (!display->native) return 0;
     if (!display->native_quitting && atomic_load(&display->runtime->hard_exit_requested) &&
-        display->relay.peer >= 0 &&
-        display->relay.phase == SNAG_SESSION_ATTACHED) {
+        display->relay.peer >= 0 && display->relay.phase == SNAG_SESSION_ATTACHED) {
         /* The sole relay writer announces the watchdog's accepted hard escape.
          * Never have the input/watchdog thread interleave transport frames. */
         if (snag_session_relay_control(&display->relay, SNAG_SESSION_QUITTING, NULL, 0u) == 0)
             display->native_quitting = true;
-        else if (errno != EAGAIN && errno != EALREADY) return -1;
+        else if (errno != EAGAIN && errno != EALREADY)
+            return -1;
     }
     int rc = snag_session_relay_step(&display->relay, &display->listener, timeout_ms, &event);
     if (rc) return rc < 0 ? -1 : snag_errno(EPIPE);
@@ -1123,16 +1154,15 @@ session_service(struct snag_ui_display *display, int timeout_ms)
         atomic_store(&display->runtime->session_attachment, display->relay.generation);
         snag_wakeup_send(display->runtime->actions.wake[1]);
     } else if (event == SNAG_SESSION_COMMAND) {
-        display->relay.command_admitted = snag_view_server_terminal(display->view,
-            display->relay.command_reference) == 0;
+        display->relay.command_admitted =
+            snag_view_server_terminal(display->view, display->relay.command_reference) == 0;
     } else if (event == SNAG_SESSION_RELEASE) {
         atomic_store(&display->runtime->session_attachment, 0u);
         atomic_store(&display->runtime->session_releasing, display->relay.generation);
         snag_wakeup_send(display->runtime->actions.wake[1]);
     } else if (event == SNAG_SESSION_RESIZE) {
         snag_term_notify_resize();
-        if (display->suspended)
-            (void)snag_session_process_redraw(&display->native_process);
+        if (display->suspended) (void)snag_session_process_redraw(&display->native_process);
     } else if (event == SNAG_SESSION_DETACH) {
         display->native_continuing = false;
         display->native_quitting = false;
@@ -1169,8 +1199,10 @@ session_control_generation(struct snag_ui_display *display, enum snag_session_me
     uint64_t deadline = snag_monotonic_ms() + 5000u;
     for (;;) {
         if (session_service(display, 0) < 0) return -1;
-        if (generation && (display->relay.generation != generation ||
-            display->relay.phase != SNAG_SESSION_ATTACHED || display->relay.peer < 0)) return 0;
+        if (generation &&
+            (display->relay.generation != generation ||
+                display->relay.phase != SNAG_SESSION_ATTACHED || display->relay.peer < 0))
+            return 0;
         if (snag_session_relay_control(&display->relay, type, data, length) == 0) break;
         if (type == SNAG_SESSION_EXIT && errno == ENOTCONN) break;
         if (errno != EAGAIN) return -1;
@@ -1184,7 +1216,7 @@ session_control_generation(struct snag_ui_display *display, enum snag_session_me
     /* Synchronous UI completion includes the control frame, not only its
      * placement behind output. The engine can then resume producing output. */
     while (display->relay.output.used ||
-        (type == SNAG_SESSION_EXIT && snag_view_server_busy(display->view))) {
+           (type == SNAG_SESSION_EXIT && snag_view_server_busy(display->view))) {
         if (snag_monotonic_ms() >= deadline) return snag_errno(ETIMEDOUT);
         if (session_service(display, 1) < 0) return -1;
     }
@@ -1192,8 +1224,8 @@ session_control_generation(struct snag_ui_display *display, enum snag_session_me
 }
 
 static int
-session_control(struct snag_ui_display *display, enum snag_session_message type,
-    const void *data, size_t length)
+session_control(struct snag_ui_display *display, enum snag_session_message type, const void *data,
+    size_t length)
 {
     return session_control_generation(display, type, data, length, 0u);
 }
@@ -1202,8 +1234,8 @@ static int
 session_suspend(void *opaque)
 {
     struct snag_ui_display *display = opaque;
-    if (snag_term_hide(&display->term) < 0 ||
-        snag_term_attachment_modes(&display->term, false) < 0) return -1;
+    if (snag_term_hide(&display->term) < 0 || snag_term_attachment_modes(&display->term, false) < 0)
+        return -1;
     if (session_control(display, SNAG_SESSION_SUSPEND, NULL, 0u) < 0)
         (void)snprintf(display->native_notice, sizeof(display->native_notice),
             "cannot suspend terminal client: %s", strerror(errno));
@@ -1229,8 +1261,7 @@ apply_session(struct snag_ui_display *display, const struct snag_ui_command *com
     if (command->kind == SNAG_UI_SESSION_START) {
         struct snag_session_process *process = command->data.session_process;
         if (display->native || display->direct) return snag_errno(EALREADY);
-        if (snag_session_relay_init(&display->relay, process->master, process->peer) < 0)
-            return -1;
+        if (snag_session_relay_init(&display->relay, process->master, process->peer) < 0) return -1;
         display->listener = (struct snag_session_listener){.fd = -1, .dir_fd = -1};
         display->native_process = (struct snag_session_process){
             .master = -1, .slave = process->slave, .peer = -1, .profile = process->profile};
@@ -1265,19 +1296,22 @@ apply_session(struct snag_ui_display *display, const struct snag_ui_command *com
             if (!display->presentation) {
                 (void)snprintf(display->presentation_error, sizeof(display->presentation_error),
                     "Session output retention unavailable: %s", strerror(errno));
-                if (!display->direct && snag_render_warning_ctx(&display->render,
-                    display->presentation_error) < 0) return -1;
+                if (!display->direct &&
+                    snag_render_warning_ctx(&display->render, display->presentation_error) < 0)
+                    return -1;
             }
         }
         if (display->native && snag_session_listener_open(&display->listener, session->dir_fd,
-                session->dir_path, session->lock_fd) < 0) return -1;
+                                   session->dir_path, session->lock_fd) < 0)
+            return -1;
 #if SNAJPAGENT_VM
-        struct snag_view_callbacks callbacks = {view_bound, view_submit, view_control,
-            display, retain_cancelled};
-        display->view = display->direct ?
-            snag_view_server_direct(&display->direct_channel, session->id, callbacks) :
-            snag_view_server_open(session->dir_fd, session->dir_path,
-                session->lock_fd, session->id, &display->relay, callbacks);
+        struct snag_view_callbacks callbacks = {
+            view_bound, view_submit, view_control, display, retain_cancelled};
+        display->view =
+            display->direct
+                ? snag_view_server_direct(&display->direct_channel, session->id, callbacks)
+                : snag_view_server_open(session->dir_fd, session->dir_path, session->lock_fd,
+                      session->id, &display->relay, callbacks);
         if (!display->view) {
             if (display->native) snag_session_listener_close(&display->listener);
             return -1;
@@ -1286,14 +1320,14 @@ apply_session(struct snag_ui_display *display, const struct snag_ui_command *com
         return 0;
     }
     if (command->kind == SNAG_UI_SESSION_CONTROL)
-        return session_control(display, (enum snag_session_message)command->data.value,
-                                command->text, command->len);
+        return session_control(
+            display, (enum snag_session_message)command->data.value, command->text, command->len);
     if (display->direct) return snag_errno(ENOTSUP);
     if (command->kind == SNAG_UI_SESSION_BOUND) {
         if (!command->data.session_voice.bytes || !command->data.session_voice.present)
             return snag_errno(EINVAL);
-        bool present = display->voice_bound_generation && display->voice_bound_generation ==
-            command->data.session_voice.generation;
+        bool present = display->voice_bound_generation &&
+                       display->voice_bound_generation == command->data.session_voice.generation;
         *command->data.session_voice.present = present;
         if (present) {
             memcpy(command->data.session_voice.bytes, display->voice_bound_offer,
@@ -1322,8 +1356,8 @@ apply_session(struct snag_ui_display *display, const struct snag_ui_command *com
         unsigned char receipt[17];
         memcpy(receipt, display->relay.voice_offer, 16u);
         receipt[16] = (unsigned char)command->data.session_voice.mode;
-        int rc = snag_session_relay_control(&display->relay, SNAG_SESSION_RELEASED,
-            receipt, sizeof(receipt));
+        int rc = snag_session_relay_control(
+            &display->relay, SNAG_SESSION_RELEASED, receipt, sizeof(receipt));
         if (!rc) atomic_store(&runtime->session_releasing, 0u);
         return rc;
     }
@@ -1343,20 +1377,22 @@ apply_session(struct snag_ui_display *display, const struct snag_ui_command *com
         display->native_barrier = true;
         display->term.defer_redraw = true;
         if (snag_render_rebind(&display->render) < 0 ||
-            snag_session_relay_activate(&display->relay, command->data.seq,
-                                         display->native_process.slave) < 0) return -1;
+            snag_session_relay_activate(
+                &display->relay, command->data.seq, display->native_process.slave) < 0)
+            return -1;
         display->profile = display->relay.profile;
         display->term.screen = display->profile.sty[0] != '\0';
         display->term.backend = display->profile;
         atomic_store(&runtime->session_pending, 0u);
-        if (display->suspended)
-            (void)snag_session_process_redraw(&display->native_process);
+        if (display->suspended) (void)snag_session_process_redraw(&display->native_process);
         if (!display->suspended && display->term.opened &&
-            snag_term_attachment_modes(&display->term, true) < 0) return -1;
+            snag_term_attachment_modes(&display->term, true) < 0)
+            return -1;
         return 0;
     }
     if (display->relay.phase != SNAG_SESSION_ATTACHED &&
-        display->relay.phase != SNAG_SESSION_ACCEPTED) return snag_errno(ESTALE);
+        display->relay.phase != SNAG_SESSION_ACCEPTED)
+        return snag_errno(ESTALE);
     display->native_barrier = false;
     display->term.defer_redraw = display->view_repainting;
     if (!display->suspended && display->prompt.source && !display->view_repainting)
@@ -1388,12 +1424,11 @@ view_prompt(const struct snag_ui_display *display)
     for (size_t i = 0u; i < SNAG_TERM_SPINNER_COUNT; ++i)
         if (json_array_append_new(frames, json_string(prompt->frames[i])) < 0) goto fail;
     return json_pack("{s:s,s:o,s:o,s:i,s:i,s:b,s:I,s:I,s:b,s:b}", "template", prompt->source,
-        "values", values, "frames", frames, "states", (int)prompt->states,
-        "rate", (int)prompt->rate, "active", prompt->active,
-        "epoch", (json_int_t)display->term.animation.epoch,
-        "tool_until", (json_int_t)display->term.animation.tool_until,
-        "interrupted", display->term.interrupt_pending,
-        "conversation_labels", display->term.conversation_labels);
+        "values", values, "frames", frames, "states", (int)prompt->states, "rate",
+        (int)prompt->rate, "active", prompt->active, "epoch",
+        (json_int_t)display->term.animation.epoch, "tool_until",
+        (json_int_t)display->term.animation.tool_until, "interrupted",
+        display->term.interrupt_pending, "conversation_labels", display->term.conversation_labels);
 fail:
     json_decref(values);
     json_decref(frames);
@@ -1415,13 +1450,13 @@ view_state(struct snag_ui_display *display, const json_t *state)
         json_decref(copy);
         return -1;
     }
-    if (json_object_set_new(copy, "presentation",
-        snag_presentation_snapshot(display->presentation)) < 0) {
+    if (json_object_set_new(
+            copy, "presentation", snag_presentation_snapshot(display->presentation)) < 0) {
         json_decref(copy);
         return -1;
     }
     if (display->presentation_error[0] && json_object_set_new(copy, "presentation_error",
-        json_string(display->presentation_error)) < 0) {
+                                              json_string(display->presentation_error)) < 0) {
         json_decref(copy);
         return -1;
     }
@@ -1432,14 +1467,14 @@ view_state(struct snag_ui_display *display, const json_t *state)
 }
 
 static int
-apply_message(struct snag_ui_display *display, struct snag_ui_command *command,
-              char *error, size_t error_size)
+apply_message(struct snag_ui_display *display, struct snag_ui_command *command, char *error,
+    size_t error_size)
 {
     struct snag_render *render = &display->render;
     struct snag_term *term = &display->term;
 
-    if (command->kind == SNAG_UI_IRC &&
-        display_conversation_event(display, command->data.irc) < 0) return -1;
+    if (command->kind == SNAG_UI_IRC && display_conversation_event(display, command->data.irc) < 0)
+        return -1;
     int presented = snag_presentation_apply(render, command, NULL);
     if (presented != 1) return presented;
 
@@ -1454,10 +1489,11 @@ apply_message(struct snag_ui_display *display, struct snag_ui_command *command,
             for (size_t j = 0u; term->destinations && j < term->destinations->count; ++j) {
                 const struct snag_irc_destination *destination = &term->destinations->items[j];
                 if (strcmp(destination->connection, connection)) continue;
-                enum snag_irc_identity role = !strcmp(identity, "operator") ?
-                    SNAG_IRC_OPERATOR : SNAG_IRC_AGENT;
-                if (json_object_set_new(route, "casemapping",
-                    json_integer(destination->casemapping[role])) < 0) return -1;
+                enum snag_irc_identity role =
+                    !strcmp(identity, "operator") ? SNAG_IRC_OPERATOR : SNAG_IRC_AGENT;
+                if (json_object_set_new(
+                        route, "casemapping", json_integer(destination->casemapping[role])) < 0)
+                    return -1;
                 break;
             }
         }
@@ -1469,11 +1505,12 @@ apply_message(struct snag_ui_display *display, struct snag_ui_command *command,
         const json_t *result = command->data.voice;
         uint64_t generation = 0u;
         if (json_is_true(json_object_get(result, "return_terminal")) &&
-            snag_view_server_terminal_generation(display->view,
-                snag_json_string(result, "id"), &generation) < 0) return -1;
+            snag_view_server_terminal_generation(
+                display->view, snag_json_string(result, "id"), &generation) < 0)
+            return -1;
         int rc = snag_view_server_command_result(display->view, result);
-        if (!rc && generation) rc = session_control_generation(display,
-            SNAG_SESSION_DETACH, NULL, 0u, generation);
+        if (!rc && generation)
+            rc = session_control_generation(display, SNAG_SESSION_DETACH, NULL, 0u, generation);
         return rc;
     }
     case SNAG_UI_VIEW_RESULT: {
@@ -1483,15 +1520,22 @@ apply_message(struct snag_ui_display *display, struct snag_ui_command *command,
         return snag_view_server_result(display->view, snag_json_string(r, "id"),
             snag_json_string(r, "status"), seq, snag_json_string(r, "event"));
     }
-    case SNAG_UI_SESSION_START: case SNAG_UI_SESSION_DIRECT:
-    case SNAG_UI_SESSION_LISTEN: case SNAG_UI_SESSION_CONTROL:
-    case SNAG_UI_SESSION_REBIND: case SNAG_UI_SESSION_READY:
-    case SNAG_UI_SESSION_OFFER: case SNAG_UI_SESSION_PROGRESS:
-    case SNAG_UI_SESSION_REFUSE: case SNAG_UI_SESSION_RELEASED:
+    case SNAG_UI_SESSION_START:
+    case SNAG_UI_SESSION_DIRECT:
+    case SNAG_UI_SESSION_LISTEN:
+    case SNAG_UI_SESSION_CONTROL:
+    case SNAG_UI_SESSION_REBIND:
+    case SNAG_UI_SESSION_READY:
+    case SNAG_UI_SESSION_OFFER:
+    case SNAG_UI_SESSION_PROGRESS:
+    case SNAG_UI_SESSION_REFUSE:
+    case SNAG_UI_SESSION_RELEASED:
     case SNAG_UI_SESSION_BOUND:
         return apply_session(display, command);
-    case SNAG_UI_LEVEL: return set_level(display, command->data.value);
-    case SNAG_UI_CLOSE: snag_render_attach_term(render, NULL);
+    case SNAG_UI_LEVEL:
+        return set_level(display, command->data.value);
+    case SNAG_UI_CLOSE:
+        snag_render_attach_term(render, NULL);
         display->direct_opened = false;
         input_stop(display);
         snag_term_close(term);
@@ -1499,9 +1543,11 @@ apply_message(struct snag_ui_display *display, struct snag_ui_command *command,
     case SNAG_UI_COLOR: {
         bool previous = render->color_stderr;
         snag_render_set_color(render, (enum snag_color_mode)command->data.value);
-        return previous != render->color_stderr && display->prompt.source ? apply_prompt(display) : 0;
+        return previous != render->color_stderr && display->prompt.source ? apply_prompt(display)
+                                                                          : 0;
     }
-    case SNAG_UI_MARKDOWN: snag_render_set_markdown(render, command->data.value != 0u);
+    case SNAG_UI_MARKDOWN:
+        snag_render_set_markdown(render, command->data.value != 0u);
         return 0;
     case SNAG_UI_IRC_NAMES:
         if (json_equal(term->irc_names, command->data.voice)) return 0;
@@ -1519,9 +1565,11 @@ apply_message(struct snag_ui_display *display, struct snag_ui_command *command,
     case SNAG_UI_SELECT:
         if (snag_term_select_destination(term, command->data.value) < 0) return -1;
         if (render->view == SNAG_RENDER_CHAT &&
-            display_set_chat_room(display, selected_destination(term), true) < 0) return -1;
+            display_set_chat_room(display, selected_destination(term), true) < 0)
+            return -1;
         return display->prompt.source && !display->view_repainting ? apply_prompt(display) : 0;
-    case SNAG_UI_ROUTE: snag_term_destination_route(term, command->text, command->data.route);
+    case SNAG_UI_ROUTE:
+        snag_term_destination_route(term, command->text, command->data.route);
         return 0;
     case SNAG_UI_CONVERSATION:
         return display_conversation_event(display, command->data.irc);
@@ -1532,15 +1580,17 @@ apply_message(struct snag_ui_display *display, struct snag_ui_command *command,
             tab->target = *command->data.conversation;
             if (display_select_draft(display, tab, NULL) < 0) return -1;
             term->conversation = tab->target;
-            if (snag_render_set_chat_conversation(render, tab->endpoint,
-                &term->conversation, true) < 0) return -1;
+            if (snag_render_set_chat_conversation(
+                    render, tab->endpoint, &term->conversation, true) < 0)
+                return -1;
             return display_set_view(display, SNAG_RENDER_CHAT, true, true);
         }
         return snag_errno(ENOENT);
-    case SNAG_UI_COMMANDS: snag_term_set_commands(term, command->data.commands.items,
-                             command->data.commands.count);
+    case SNAG_UI_COMMANDS:
+        snag_term_set_commands(term, command->data.commands.items, command->data.commands.count);
         return 0;
-    case SNAG_UI_PAUSE: snag_term_set_typing_pause(term, command->data.timing.typing_pause_ms);
+    case SNAG_UI_PAUSE:
+        snag_term_set_typing_pause(term, command->data.timing.typing_pause_ms);
         term->animation.tool_delay_ms = command->data.timing.tool_spinner_off_delay_ms;
         if (!term->animation.tool_delay_ms) term->animation.tool_until = 0u;
         return 0;
@@ -1551,7 +1601,8 @@ apply_message(struct snag_ui_display *display, struct snag_ui_command *command,
         }
         if (snag_term_open(term, error, error_size) < 0) return -1;
         if (input_start(display, NULL, 0u) < 0) {
-            (void)snprintf(error, error_size, "cannot start terminal input worker: %s", strerror(errno));
+            (void)snprintf(
+                error, error_size, "cannot start terminal input worker: %s", strerror(errno));
             snag_term_close(term);
             return -1;
         }
@@ -1579,13 +1630,14 @@ apply_message(struct snag_ui_display *display, struct snag_ui_command *command,
                 term->defer_redraw = display->native_barrier || display->view_repainting;
             }
             if (rc == 0 && command->len && (!command->text || command->len > UI_INPUT_CAPACITY))
-                rc = snag_errorf(error, error_size,
-                                "transfer input tail exceeds terminal capacity");
+                rc =
+                    snag_errorf(error, error_size, "transfer input tail exceeds terminal capacity");
             /* input_start resets the ring; seed the tail after that reset but
              * before the restarted worker can read newer terminal bytes. */
-            if (rc == 0 && input_start(display, (const unsigned char *)command->text,
-                                       command->len) < 0)
-                rc = snag_errorf(error, error_size, "cannot restart terminal input worker: %s", strerror(errno));
+            if (rc == 0 &&
+                input_start(display, (const unsigned char *)command->text, command->len) < 0)
+                rc = snag_errorf(
+                    error, error_size, "cannot restart terminal input worker: %s", strerror(errno));
         }
         if (rc == 0) display->suspended = command->data.value != 0u;
         return rc;
@@ -1621,10 +1673,11 @@ apply_message(struct snag_ui_display *display, struct snag_ui_command *command,
         const char *frames[SNAG_TERM_SPINNER_COUNT];
         struct snag_term probe;
         int rc;
-        for (size_t i = 0u; i < SNAG_TERM_SPINNER_COUNT; ++i) frames[i] = command->data.prompt.frames[i];
+        for (size_t i = 0u; i < SNAG_TERM_SPINNER_COUNT; ++i)
+            frames[i] = command->data.prompt.frames[i];
         snag_term_init(&probe);
-        rc = snag_term_set_prompt_template(&probe, false, command->text, frames, command->data.prompt.rate,
-                    (1u << SNAG_TERM_SPINNER_COUNT) - 1u);
+        rc = snag_term_set_prompt_template(&probe, false, command->text, frames,
+            command->data.prompt.rate, (1u << SNAG_TERM_SPINNER_COUNT) - 1u);
         snag_term_close(&probe);
         return rc;
     }
@@ -1632,25 +1685,33 @@ apply_message(struct snag_ui_display *display, struct snag_ui_command *command,
         display->prompt.states = command->data.value;
         if (snag_term_set_spinner_states(term, command->data.value) < 0) return -1;
         return view_state(display, display->view_state);
-    case SNAG_UI_DRAFT: return snag_term_restore_draft(term, command->text);
-    case SNAG_UI_INPUT_DRAFT: return display_restore_input(display, command);
+    case SNAG_UI_DRAFT:
+        return snag_term_restore_draft(term, command->text);
+    case SNAG_UI_INPUT_DRAFT:
+        return display_restore_input(display, command);
     case SNAG_UI_INSERT: {
         int rc = snag_term_insert_draft(term, command->text);
         return rc < 0 && (errno == EOVERFLOW || errno == EILSEQ) ? 1 : rc;
     }
     case SNAG_UI_AUDIO: {
-        bool voice=command->data.value==2u;
+        bool voice = command->data.value == 2u;
         if (command->text[0] && display->native &&
-            !atomic_load(&display->runtime->session_attachment))return 1;
-        if(voice && (!term->opened || !term->raw || !term->capable || term->input_only || term->output_depth))return 1;
+            !atomic_load(&display->runtime->session_attachment))
+            return 1;
+        if (voice && (!term->opened || !term->raw || !term->capable || term->input_only ||
+                         term->output_depth))
+            return 1;
         int rc = snag_term_audio(term, command->text, command->data.value == 1u);
         return rc < 0 && errno == ENOTTY ? 1 : rc;
     }
-    case SNAG_UI_CAPTION: return snag_term_caption(term,command->data.value,command->text);
+    case SNAG_UI_CAPTION:
+        return snag_term_caption(term, command->data.value, command->text);
     case SNAG_UI_VIEW:
         if (!term->opened) {
-            struct ui_channel_draft *draft = command->data.value == SNAG_RENDER_CHAT ?
-                display_channel_draft(display, term->destination.id) : &display->rollout_draft;
+            struct ui_channel_draft *draft =
+                command->data.value == SNAG_RENDER_CHAT
+                    ? display_channel_draft(display, term->destination.id)
+                    : &display->rollout_draft;
             if (display_select_draft(display, NULL, draft) < 0) return -1;
             render->view = (enum snag_render_view)command->data.value;
             term->chat = render->view == SNAG_RENDER_CHAT;
@@ -1658,16 +1719,21 @@ apply_message(struct snag_ui_display *display, struct snag_ui_command *command,
             return 0;
         }
         return display_set_view(display, (enum snag_render_view)command->data.value, false, true);
-    case SNAG_UI_HISTORY_SNAPSHOT: return snag_term_history_set(term, &command->data.history.entries,
-                                    command->data.history.refresh);
+    case SNAG_UI_HISTORY_SNAPSHOT:
+        return snag_term_history_set(
+            term, &command->data.history.entries, command->data.history.refresh);
     case SNAG_UI_UPDATE:
         if (display->direct) return 0;
-        if (!display->update) display->update = snag_update_start(command->label, command->text,
-                                                display->runtime->commands[1]);
+        if (!display->update)
+            display->update =
+                snag_update_start(command->label, command->text, display->runtime->commands[1]);
         return 0;
-    case SNAG_UI_INPUT: return admit_input(display, command->text, command->data.seq);
-    case SNAG_UI_STOP: return 0;
-    default: break; /* Output was applied above; raw bytes are sliced by apply_display. */
+    case SNAG_UI_INPUT:
+        return admit_input(display, command->text, command->data.seq);
+    case SNAG_UI_STOP:
+        return 0;
+    default:
+        break; /* Output was applied above; raw bytes are sliced by apply_display. */
     }
     return snag_errno(EINVAL);
 }
@@ -1690,14 +1756,13 @@ finish_input(struct snag_ui_display *display, struct ui_action *item, int rc)
      * Their later acknowledgements use this flag to avoid a second echo. */
     if (rc > 0 && item->action == SNAG_TERM_SUBMIT && !term->input_only &&
         snag_prompt_command(item->text)) {
-        if (present_local(display, SNAG_UI_SUBMITTED, item->snapshot.label,
-            item->text, true) < 0) goto fail;
+        if (present_local(display, SNAG_UI_SUBMITTED, item->snapshot.label, item->text, true) < 0)
+            goto fail;
         item->submission_echoed = true;
     }
     /* A /yield completed as the prompt becomes held uses the same priority
      * path as a line found in the held input ring. */
-    if (rc > 0 && item->action == SNAG_TERM_SUBMIT && item->text &&
-        !strcmp(item->text, "/yield") &&
+    if (rc > 0 && item->action == SNAG_TERM_SUBMIT && item->text && !strcmp(item->text, "/yield") &&
         (term->animation.states & (1u << SNAG_TERM_SPINNER_TOOL))) {
         atomic_store(&runtime->yield_requested, item->submission_echoed ? 2u : 1u);
         snag_wakeup_send(runtime->actions.wake[1]);
@@ -1710,9 +1775,11 @@ finish_input(struct snag_ui_display *display, struct ui_action *item, int rc)
     if (item->action == SNAG_TERM_INTERRUPT) term->interrupt_pending = true;
     if (item->action == SNAG_TERM_CANCEL || item->action == SNAG_TERM_INTERRUPT) {
         bool deferred = term->defer_redraw;
-        term->defer_redraw = deferred || item->action == SNAG_TERM_SUBMIT || item->action == SNAG_TERM_QUEUE;
+        term->defer_redraw =
+            deferred || item->action == SNAG_TERM_SUBMIT || item->action == SNAG_TERM_QUEUE;
         if (!term->input_only && display->prompt.source && !display->view_repainting &&
-            apply_prompt(display) < 0) goto fail;
+            apply_prompt(display) < 0)
+            goto fail;
         term->defer_redraw = deferred;
     }
     atomic_store(&runtime->pause_until,
@@ -1728,27 +1795,31 @@ finish_input(struct snag_ui_display *display, struct ui_action *item, int rc)
     if (item->action == SNAG_TERM_SUBMIT && item->text) {
         uint32_t id;
         size_t body;
-        enum snag_irc_target_command command = snag_irc_target_parse(
-            item->text, strlen(item->text), &id, &body);
+        enum snag_irc_target_command command =
+            snag_irc_target_parse(item->text, strlen(item->text), &id, &body);
         if (term->blank_local && snag_text_blank(item->text)) {
             display->feedback[0] = '\0';
             if (!term->input_only && display->prompt.source && !display->view_repainting &&
-                apply_prompt(display) < 0) goto fail;
+                apply_prompt(display) < 0)
+                goto fail;
             item->local = true;
         } else if (command == SNAG_IRC_TARGET_SELECT) {
             if (snag_term_select_destination(term, id) == 0) {
                 (void)snprintf(display->feedback, sizeof(display->feedback), "destination: %u", id);
                 if (display->render.view == SNAG_RENDER_CHAT &&
-                    display_set_chat_room(display, selected_destination(term), true) < 0) goto fail;
-            } else (void)snprintf(display->feedback, sizeof(display->feedback),
-                               "destination %u is unavailable; use /names", id);
+                    display_set_chat_room(display, selected_destination(term), true) < 0)
+                    goto fail;
+            } else
+                (void)snprintf(display->feedback, sizeof(display->feedback),
+                    "destination %u is unavailable; use /names", id);
             if (!term->input_only && display->prompt.source && !display->view_repainting &&
-                apply_prompt(display) < 0) goto fail;
+                apply_prompt(display) < 0)
+                goto fail;
             take_snapshot(display, &item->snapshot, item->text);
             item->local = true;
         } else if (!strcmp(item->text, "/chat") || !strcmp(item->text, "/rollout")) {
-            enum snag_render_view view = !strcmp(item->text, "/chat") ?
-                SNAG_RENDER_CHAT : SNAG_RENDER_ROLLOUT;
+            enum snag_render_view view =
+                !strcmp(item->text, "/chat") ? SNAG_RENDER_CHAT : SNAG_RENDER_ROLLOUT;
             if (view == SNAG_RENDER_CHAT) {
                 const struct snag_irc_destination *destination = selected_destination(term);
                 if (!destination && term->destinations && term->destinations->count) {
@@ -1787,7 +1858,8 @@ finish_input(struct snag_ui_display *display, struct ui_action *item, int rc)
             atomic_store(&runtime->dictation_control, (unsigned int)item->action);
         else {
             unsigned int empty = 0u;
-            (void)atomic_compare_exchange_strong(&runtime->dictation_control, &empty, (unsigned int)item->action);
+            (void)atomic_compare_exchange_strong(
+                &runtime->dictation_control, &empty, (unsigned int)item->action);
         }
     } else if (item->action == SNAG_TERM_INTERRUPT) {
         atomic_store(&runtime->interrupt, display->turn_generation);
@@ -1796,8 +1868,8 @@ finish_input(struct snag_ui_display *display, struct ui_action *item, int rc)
         display->input_closed = true;
     } else if (item->action == SNAG_TERM_CANCEL && term->input_backlog) {
         atomic_store(&runtime->cancel, true);
-    } else if (item->action != SNAG_TERM_NONE || item->local ||
-               item->history_refresh || item->history_warning || item->error) {
+    } else if (item->action != SNAG_TERM_NONE || item->local || item->history_refresh ||
+               item->history_warning || item->error) {
         if (item->action == SNAG_TERM_SUBMIT || item->action == SNAG_TERM_QUEUE) {
             /* The action is admitted to the engine, but it has not finished.
              * Keep subsequent typeahead in the input ring until the engine
@@ -1813,10 +1885,9 @@ finish_input(struct snag_ui_display *display, struct ui_action *item, int rc)
          * accept another composer yet. */
         if (item->action == SNAG_TERM_SUBMIT && item->text && item->snapshot.active &&
             item->snapshot.view == SNAG_RENDER_ROLLOUT && !item->submission_echoed &&
-            (item->text[0] != '/' || item->text[1] == '/') &&
-            !queue_full(&runtime->actions)) {
-            if (snag_render_input_submitted(&display->render, item->snapshot.label,
-                                            item->text) < 0) goto fail;
+            (item->text[0] != '/' || item->text[1] == '/') && !queue_full(&runtime->actions)) {
+            if (snag_render_input_submitted(&display->render, item->snapshot.label, item->text) < 0)
+                goto fail;
             item->submission_echoed = true;
         }
         if (queue_push(&runtime->actions, item)) return 0;
@@ -1829,7 +1900,8 @@ finish_input(struct snag_ui_display *display, struct ui_action *item, int rc)
         if (notify) snag_wakeup_send(runtime->actions.wake[1]);
     }
     return 0;
-fail: free(item->text);
+fail:
+    free(item->text);
     free(item);
     return -1;
 }
@@ -1840,8 +1912,7 @@ admit_input(struct snag_ui_display *display, const char *text, uint64_t attachme
     struct snag_ui_runtime *runtime = display->runtime;
     if (!text || !snag_text_valid(text, 0u, SNAG_MAX_DIRECT_PROMPT)) return snag_errno(EINVAL);
     if (!display->term.opened || display->suspended || display->input_closed ||
-        display->native_barrier ||
-        atomic_load(&runtime->session_attachment) != attachment ||
+        display->native_barrier || atomic_load(&runtime->session_attachment) != attachment ||
         (display->native && !attachment)) {
         return snag_errno(ESTALE);
     }
@@ -1876,10 +1947,10 @@ read_input(struct snag_ui_display *display, int timeout_ms)
      * Settle it before reading the next Enter from the same input burst. */
     if (!term->input_only && local_feedback(display) < 0) return -1;
     bool held = display->painting_feedback ||
-        (!term->prompt_wanted && !term->dictating && !term->input_only);
+                (!term->prompt_wanted && !term->dictating && !term->input_only);
     if (term->opened && !display->suspended && !display->input_closed && held) {
-        enum held_control control = input_take_held_control(&runtime->input,
-            (term->animation.states & (1u << SNAG_TERM_SPINNER_TOOL)) != 0u);
+        enum held_control control = input_take_held_control(
+            &runtime->input, (term->animation.states & (1u << SNAG_TERM_SPINNER_TOOL)) != 0u);
 
         if (control == HELD_EXIT) atomic_store(&runtime->exit_requested, true);
         if (control == HELD_INTERRUPT)
@@ -1904,11 +1975,13 @@ read_input(struct snag_ui_display *display, int timeout_ms)
     }
     term->input_backlog = queue_full(&runtime->actions);
     term->local_backlog = display->local != NULL;
-    if (!term->input_backlog) display->backlog_warned = false;
+    if (!term->input_backlog)
+        display->backlog_warned = false;
     else if (!display->backlog_warned && !term->input_only) {
         display->backlog_warned = true;
-        if (snag_render_warning_ctx(&display->render,
-                "input backlog is full; draft retained, retry Enter shortly") < 0) return -1;
+        if (snag_render_warning_ctx(
+                &display->render, "input backlog is full; draft retained, retry Enter shortly") < 0)
+            return -1;
     }
     item = calloc(1u, sizeof(*item));
     if (!item) return -1;
@@ -1938,7 +2011,8 @@ local_feedback(struct snag_ui_display *display)
         free(item->text);
         free(item);
         display->local = NULL;
-    } else if (queue_push(&display->runtime->actions, item)) display->local = NULL;
+    } else if (queue_push(&display->runtime->actions, item))
+        display->local = NULL;
     return rc;
 }
 
@@ -1957,7 +2031,8 @@ render_input_checkpoint(void *opaque)
     struct snag_ui_display *display = opaque;
     int rc = read_input(display, 0);
     display->render.suppress_optional = atomic_load(&display->runtime->exit_requested) ||
-        atomic_load(&display->runtime->interrupt) || atomic_load(&display->runtime->steering_pending);
+                                        atomic_load(&display->runtime->interrupt) ||
+                                        atomic_load(&display->runtime->steering_pending);
     if (rc < 0) return -1;
     if (atomic_load(&display->runtime->exit_requested)) return snag_errno(ECANCELED);
     return local_feedback(display);
@@ -1981,10 +2056,10 @@ apply_display(struct snag_ui_display *display, struct ui_message *message)
         struct snag_term submitted;
         snag_term_init(&submitted);
         submitted.defer_redraw = true;
-        int rc = snag_term_configure_prompt(&submitted, &message->command.data.prompt,
-            &display->term);
-        struct snag_ui_command echo = {.kind = SNAG_UI_SUBMITTED,
-            .label = submitted.label, .text = message->command.label};
+        int rc =
+            snag_term_configure_prompt(&submitted, &message->command.data.prompt, &display->term);
+        struct snag_ui_command echo = {
+            .kind = SNAG_UI_SUBMITTED, .label = submitted.label, .text = message->command.label};
         if (!rc) rc = retain_output(display, &echo);
         if (!rc && !display->direct && !snag_view_server_attached(display->view))
             rc = snag_presentation_apply(&display->render, &echo, NULL);
@@ -1996,12 +2071,13 @@ apply_display(struct snag_ui_display *display, struct ui_message *message)
         if (retain_output(display, &boundary) < 0) return -1;
         const struct snag_term_prompt *old = &display->prompt;
         const struct snag_term_prompt *next = &message->command.data.prompt;
-        message->prompt_changed = !display->term.prompt_wanted || old->active != next->active ||
-            old->mode != next->mode || strcmp(old->source ? old->source : "",
-                next->source ? next->source : "");
+        message->prompt_changed =
+            !display->term.prompt_wanted || old->active != next->active ||
+            old->mode != next->mode ||
+            strcmp(old->source ? old->source : "", next->source ? next->source : "");
         for (size_t i = 0u; i < SNAG_PROMPT_HOUR && !message->prompt_changed; ++i) {
             message->prompt_changed = strcmp(old->values[i] ? old->values[i] : "",
-                next->values[i] ? next->values[i] : "") != 0;
+                                          next->values[i] ? next->values[i] : "") != 0;
         }
     } else if (message->command.kind == SNAG_UI_HOLD || message->command.kind == SNAG_UI_CLOSE) {
         message->prompt_changed = display->term.prompt_wanted;
@@ -2022,28 +2098,43 @@ apply_display(struct snag_ui_display *display, struct ui_message *message)
             return apply_prompt(display);
         case SNAG_UI_IRC:
             return display_conversation_event(display, message->command.data.irc);
-        case SNAG_UI_HOST: case SNAG_UI_HELP: case SNAG_UI_RUNTIME:
-        case SNAG_UI_ERROR: case SNAG_UI_WARNING: case SNAG_UI_ROLLOUT_END:
-        case SNAG_UI_ROLLOUT_ABORT: case SNAG_UI_SUBMITTED: case SNAG_UI_BEFORE_PROMPT:
+        case SNAG_UI_HOST:
+        case SNAG_UI_HELP:
+        case SNAG_UI_RUNTIME:
+        case SNAG_UI_ERROR:
+        case SNAG_UI_WARNING:
+        case SNAG_UI_ROLLOUT_END:
+        case SNAG_UI_ROLLOUT_ABORT:
+        case SNAG_UI_SUBMITTED:
+        case SNAG_UI_BEFORE_PROMPT:
         case SNAG_UI_PUBLIC_BEGIN:
-        case SNAG_UI_PUBLIC: case SNAG_UI_ORIENTATION: case SNAG_UI_HISTORY:
-        case SNAG_UI_DURABLE: case SNAG_UI_EVENT:
-        case SNAG_UI_RESUME: case SNAG_UI_PROTOCOL: case SNAG_UI_TRANSPORT:
-        case SNAG_UI_RAW: case SNAG_UI_VOICE_EVENT: case SNAG_UI_CAPTION:
+        case SNAG_UI_PUBLIC:
+        case SNAG_UI_ORIENTATION:
+        case SNAG_UI_HISTORY:
+        case SNAG_UI_DURABLE:
+        case SNAG_UI_EVENT:
+        case SNAG_UI_RESUME:
+        case SNAG_UI_PROTOCOL:
+        case SNAG_UI_TRANSPORT:
+        case SNAG_UI_RAW:
+        case SNAG_UI_VOICE_EVENT:
+        case SNAG_UI_CAPTION:
             return 0;
-        default: break;
+        default:
+            break;
         }
     }
 
     display->render.suppress_optional = public_stopped(runtime);
-    if (!raw && message->command.kind != SNAG_UI_PUBLIC) return apply_message(display, &message->command,
-                             message->error, sizeof(message->error));
+    if (!raw && message->command.kind != SNAG_UI_PUBLIC)
+        return apply_message(display, &message->command, message->error, sizeof(message->error));
     while (offset < message->command.len) {
         size_t amount = message->command.len - offset;
         if (amount > 1024u) amount = 1024u;
         if (raw && amount < message->command.len - offset) {
             size_t boundary = amount;
-            while (boundary && ((unsigned char)message->command.text[offset + boundary] & 0xc0u) == 0x80u)
+            while (boundary &&
+                   ((unsigned char)message->command.text[offset + boundary] & 0xc0u) == 0x80u)
                 --boundary;
             if (boundary) amount = boundary;
         }
@@ -2053,10 +2144,11 @@ apply_display(struct snag_ui_display *display, struct ui_message *message)
                snag_term_typing_pause_remaining(&display->term, snag_monotonic_ms()))
             if (read_input(display, 16) < 0) return -1;
         if (!raw && public_stopped(runtime)) return 0;
-        if (raw ? snag_term_write((int)message->command.data.value,
-                                 message->command.text + offset, amount) < 0 :
-            snag_render_rollout(&display->render, message->command.text + offset, amount,
-                                &message->delivered) < 0) return -1;
+        if (raw ? snag_term_write(
+                      (int)message->command.data.value, message->command.text + offset, amount) < 0
+                : snag_render_rollout(&display->render, message->command.text + offset, amount,
+                      &message->delivered) < 0)
+            return -1;
         offset += amount;
     }
     return 0;
@@ -2099,7 +2191,7 @@ presentation_main(void *opaque)
         message = atomic_exchange_explicit(&runtime->request, NULL, memory_order_acquire);
         const char *banner = display->suspended ? NULL : snag_update_take(display->update);
         bool runnable = !display->direct && !snag_view_server_attached(display->view) &&
-            snag_render_view_runnable(&display->render);
+                        snag_render_view_runnable(&display->render);
         if (banner) (void)snag_render_update(&display->render, banner);
         if (read_input(display, message || banner || runnable ? 0 : -1) < 0) {
             int error = errno ? errno : EIO;
@@ -2117,14 +2209,13 @@ presentation_main(void *opaque)
         }
         if (message) {
             /* A short delivery may release a citation held by the renderer. */
-            snag_buf_init(&message->delivered,
-                message->command.len + 4u + SNAG_CITE_BLOCK_MAX);
+            snag_buf_init(&message->delivered, message->command.len + 4u + SNAG_CITE_BLOCK_MAX);
             message->result = apply_display(display, message);
             message->saved_errno = errno;
             if (message->result < 0 && message->command.kind != SNAG_UI_VALIDATE &&
                 !(message->command.kind == SNAG_UI_INPUT &&
                     (message->saved_errno == ESTALE || message->saved_errno == EAGAIN ||
-                    message->saved_errno == EINVAL)) &&
+                        message->saved_errno == EINVAL)) &&
                 !session_command(message->command.kind) &&
                 !(message->saved_errno == ECANCELED && atomic_load(&runtime->exit_requested))) {
                 int error = errno ? errno : EIO;
@@ -2175,8 +2266,10 @@ presentation_main(void *opaque)
         free(display->local);
     }
     input_stop(display);
-    if (hard_exit) snag_term_abort(&display->term);
-    else snag_term_close(&display->term);
+    if (hard_exit)
+        snag_term_abort(&display->term);
+    else
+        snag_term_close(&display->term);
     snag_view_server_close(display->view);
 #if SNAJPAGENT_VM
     if (display->direct) snag_view_channel_close(&display->direct_channel);
@@ -2206,8 +2299,8 @@ presentation_main(void *opaque)
 }
 
 static int
-request(struct snag_ui *ui, struct ui_message *message, struct snag_buf *delivered,
-        char *error, size_t error_size)
+request(struct snag_ui *ui, struct ui_message *message, struct snag_buf *delivered, char *error,
+    size_t error_size)
 {
     int rc = -1, saved;
     struct snag_ui_runtime *runtime = ui->runtime;
@@ -2227,16 +2320,26 @@ request(struct snag_ui *ui, struct ui_message *message, struct snag_buf *deliver
     rc = message->result;
     adopt_snapshot(ui, &message->snapshot);
     if (error && error_size) (void)snprintf(error, error_size, "%s", message->error);
-    if (delivered && message->delivered.len && snag_buf_append(delivered, message->delivered.data,
-                       message->delivered.len) < 0) rc = -1;
+    if (delivered && message->delivered.len &&
+        snag_buf_append(delivered, message->delivered.data, message->delivered.len) < 0)
+        rc = -1;
     if (rc == 0 && ui->observe) {
         const char *kind = NULL;
         switch (message->command.kind) {
-        case SNAG_UI_HOST: kind = "host"; break;
-        case SNAG_UI_HELP: kind = "help"; break;
-        case SNAG_UI_ERROR: kind = "error"; break;
-        case SNAG_UI_WARNING: kind = "warning"; break;
-        default: break;
+        case SNAG_UI_HOST:
+            kind = "host";
+            break;
+        case SNAG_UI_HELP:
+            kind = "help";
+            break;
+        case SNAG_UI_ERROR:
+            kind = "error";
+            break;
+        case SNAG_UI_WARNING:
+            kind = "warning";
+            break;
+        default:
+            break;
         }
         if (kind && message->command.text)
             ui->observe(ui->observe_opaque, kind, message->command.text, NULL);
@@ -2246,7 +2349,8 @@ request(struct snag_ui *ui, struct ui_message *message, struct snag_buf *deliver
     }
     snag_buf_free(&message->delivered);
     if (rc < 0 && message->saved_errno) errno = message->saved_errno;
-out: saved = errno;
+out:
+    saved = errno;
     message_free(message);
     errno = saved;
     return rc;
@@ -2265,25 +2369,31 @@ snag_ui_send(struct snag_ui *ui, struct snag_ui_command command)
 {
     struct ui_message message = {.command = command};
     switch (command.kind) {
-    case SNAG_UI_DRAFT: case SNAG_UI_INPUT_DRAFT: case SNAG_UI_EVENT: case SNAG_UI_DURABLE:
+    case SNAG_UI_DRAFT:
+    case SNAG_UI_INPUT_DRAFT:
+    case SNAG_UI_EVENT:
+    case SNAG_UI_DURABLE:
         return send_message(ui, &message, command.text);
-    default: return request(ui, &message, NULL, NULL, 0u);
+    default:
+        return request(ui, &message, NULL, NULL, 0u);
     }
 }
 
 int
 snag_ui_restore_input(struct snag_ui *ui, const char *text)
 {
-    return snag_ui_send(ui, (struct snag_ui_command){.kind = SNAG_UI_INPUT_DRAFT, .text = text,
-        .data.draft = {.view = ui->input_view, .destination = ui->input_destination,
-            .conversation = ui->input_conversation.conversation}});
+    return snag_ui_send(ui, (struct snag_ui_command){.kind = SNAG_UI_INPUT_DRAFT,
+                                .text = text,
+                                .data.draft = {.view = ui->input_view,
+                                    .destination = ui->input_destination,
+                                    .conversation = ui->input_conversation.conversation}});
 }
 
 int
 snag_ui_session_start(struct snag_ui *ui, struct snag_session_process *process)
 {
-    int rc = snag_ui_send(ui, (struct snag_ui_command){
-        .kind = SNAG_UI_SESSION_START, .data.session_process = process});
+    int rc = snag_ui_send(ui,
+        (struct snag_ui_command){.kind = SNAG_UI_SESSION_START, .data.session_process = process});
     if (rc == 0) ui->native = true;
     return rc;
 }
@@ -2292,8 +2402,8 @@ snag_ui_session_start(struct snag_ui *ui, struct snag_session_process *process)
 int
 snag_ui_session_direct(struct snag_ui *ui, struct snag_view_channel *channel)
 {
-    int rc = snag_ui_send(ui, (struct snag_ui_command){
-        .kind = SNAG_UI_SESSION_DIRECT, .data.view_channel = channel});
+    int rc = snag_ui_send(
+        ui, (struct snag_ui_command){.kind = SNAG_UI_SESSION_DIRECT, .data.view_channel = channel});
     if (!rc) ui->direct = true;
     return rc;
 }
@@ -2302,8 +2412,8 @@ snag_ui_session_direct(struct snag_ui *ui, struct snag_view_channel *channel)
 int
 snag_ui_session_listen(struct snag_ui *ui, const struct snag_session *session)
 {
-    int rc = snag_ui_send(ui, (struct snag_ui_command){
-        .kind = SNAG_UI_SESSION_LISTEN, .data.session = session});
+    int rc = snag_ui_send(
+        ui, (struct snag_ui_command){.kind = SNAG_UI_SESSION_LISTEN, .data.session = session});
     if (!rc) {
         ui->view_listening = SNAJPAGENT_VM && session != NULL;
         ui->view_state_seq = UINT64_MAX;
@@ -2319,7 +2429,8 @@ connection_activity(const struct snag_session *session, const json_t *connection
     uint64_t latest = 0u, time = 0u, received = 0u, incoming = 0u;
     const char *id;
     const json_t *item;
-    json_object_foreach(json_object_get(connection, "conversations"), id, item) {
+    json_object_foreach(json_object_get(connection, "conversations"), id, item)
+    {
         const json_t *routing = json_object_get(json_object_get(item, "data"), "routing");
         if (strcmp(snag_json_string(routing, "conversation_kind"), "connection")) continue;
         uint64_t at = (uint64_t)json_integer_value(json_object_get(item, "seq"));
@@ -2335,9 +2446,10 @@ connection_activity(const struct snag_session *session, const json_t *connection
         at = (uint64_t)json_integer_value(json_object_get(activity, "incoming"));
         if (at > incoming) incoming = at;
     }
-    return latest ? json_pack("{s:I,s:I,s:I,s:I}", "seq", (json_int_t)latest,
-        "time", (json_int_t)time, "received", (json_int_t)received,
-        "incoming", (json_int_t)incoming) : json_null();
+    return latest
+               ? json_pack("{s:I,s:I,s:I,s:I}", "seq", (json_int_t)latest, "time", (json_int_t)time,
+                     "received", (json_int_t)received, "incoming", (json_int_t)incoming)
+               : json_null();
 }
 
 static json_t *
@@ -2347,15 +2459,18 @@ view_conversations(const struct snag_session *session, enum snag_irc_conversatio
     if (!queries) return NULL;
     const char *connection;
     json_t *entry;
-    json_object_foreach(session->irc_conversations, connection, entry) {
+    json_object_foreach(session->irc_conversations, connection, entry)
+    {
         const char *conversation;
         json_t *item;
-        json_object_foreach(json_object_get(entry, "conversations"), conversation, item) {
+        json_object_foreach(json_object_get(entry, "conversations"), conversation, item)
+        {
             const json_t *data = json_object_get(item, "data");
             const json_t *routing = json_object_get(data, "routing");
             const char *kind = snag_json_string(routing, "conversation_kind");
-            if (!kind || strcmp(kind, wanted == SNAG_IRC_CHANNEL ? "channel" :
-                wanted == SNAG_IRC_QUERY ? "query" : "connection"))
+            if (!kind || strcmp(kind, wanted == SNAG_IRC_CHANNEL ? "channel"
+                                      : wanted == SNAG_IRC_QUERY ? "query"
+                                                                 : "connection"))
                 continue;
             struct snag_irc_conversation_target target = {0};
             target.kind = wanted;
@@ -2363,34 +2478,38 @@ view_conversations(const struct snag_session *session, enum snag_irc_conversatio
             (void)snag_strcpy(target.connection, sizeof(target.connection), connection);
             (void)snag_strcpy(target.conversation, sizeof(target.conversation), conversation);
             (void)snag_strcpy(target.peer, sizeof(target.peer), snag_json_string(routing, "peer"));
-            (void)snag_strcpy(target.endpoint, sizeof(target.endpoint),
-                snag_json_string(entry, "endpoint"));
+            (void)snag_strcpy(
+                target.endpoint, sizeof(target.endpoint), snag_json_string(entry, "endpoint"));
             if (wanted == SNAG_IRC_CHANNEL) {
                 const char *membership = snag_json_string(routing, "membership");
                 if (!membership || !*membership) continue;
                 (void)snag_strcpy(target.membership, sizeof(target.membership), membership);
                 (void)snag_strcpy(target.room, sizeof(target.room), snag_json_string(data, "room"));
-                (void)snag_strcpy(target.endpoint, sizeof(target.endpoint),
-                    snag_json_string(entry, "endpoint"));
+                (void)snag_strcpy(
+                    target.endpoint, sizeof(target.endpoint), snag_json_string(entry, "endpoint"));
             }
-            target.identity = !strcmp(snag_json_string(routing, "identity"), "operator") ?
-                SNAG_IRC_OPERATOR : SNAG_IRC_AGENT;
-            if (wanted == SNAG_IRC_CONNECTION_EVENTS && target.identity == SNAG_IRC_AGENT)
-                continue;
+            target.identity = !strcmp(snag_json_string(routing, "identity"), "operator")
+                                  ? SNAG_IRC_OPERATOR
+                                  : SNAG_IRC_AGENT;
+            if (wanted == SNAG_IRC_CONNECTION_EVENTS && target.identity == SNAG_IRC_AGENT) continue;
             (void)snag_json_integer_u64(routing, "generation", &target.generation);
             json_t *route = snag_view_conversation_route(&target);
             uint64_t seq = (uint64_t)json_integer_value(json_object_get(item, "seq"));
-            json_t *activity = wanted == SNAG_IRC_CONNECTION_EVENTS ?
-                connection_activity(session, entry, &seq) : json_incref(json_object_get(
-                    json_object_get(session->irc_activity, "items"), conversation));
+            json_t *activity =
+                wanted == SNAG_IRC_CONNECTION_EVENTS
+                    ? connection_activity(session, entry, &seq)
+                    : json_incref(json_object_get(
+                          json_object_get(session->irc_activity, "items"), conversation));
             if (!activity && wanted != SNAG_IRC_CONNECTION_EVENTS) activity = json_null();
-            json_t *query = route && activity ? json_pack("{s:O,s:O,s:O,s:I,s:O,s:O}",
-                "route", route,
-                "endpoint", json_object_get(entry, "endpoint"),
-                "connected", json_object_get(entry, "connected"),
-                "seq", (json_int_t)seq, "activity", activity,
-                "joined", json_object_get(routing, "joined") ?
-                    json_object_get(routing, "joined") : json_null()) : NULL;
+            json_t *query =
+                route && activity
+                    ? json_pack("{s:O,s:O,s:O,s:I,s:O,s:O}", "route", route, "endpoint",
+                          json_object_get(entry, "endpoint"), "connected",
+                          json_object_get(entry, "connected"), "seq", (json_int_t)seq, "activity",
+                          activity, "joined",
+                          json_object_get(routing, "joined") ? json_object_get(routing, "joined")
+                                                             : json_null())
+                    : NULL;
             json_decref(activity);
             json_decref(route);
             if (!query || json_array_append_new(queries, query) < 0) {
@@ -2407,17 +2526,17 @@ int
 snag_ui_view_state(struct snag_ui *ui, const struct snag_session *session)
 {
     if (!ui->view_listening || ui->view_state_seq == session->next_seq) return 0;
-    json_t *state = json_pack("{s:I,s:I,s:s,s:i,s:b,s:s,s:s,s:s,s:s,s:s}",
-        "seq", (json_int_t)(session->next_seq - 1u), "end", (json_int_t)session->log_end,
-        "sha256", session->prev_sha256, "schema", (int)session->format_version,
-        "active", session->active_turn, "provider", session->default_provider,
-        "model", session->default_model, "effort", session->default_effort,
-        "service_tier", session->service_tier ? session->service_tier : "",
-        "name", session->name ? session->name : "");
+    json_t *state = json_pack("{s:I,s:I,s:s,s:i,s:b,s:s,s:s,s:s,s:s,s:s}", "seq",
+        (json_int_t)(session->next_seq - 1u), "end", (json_int_t)session->log_end, "sha256",
+        session->prev_sha256, "schema", (int)session->format_version, "active",
+        session->active_turn, "provider", session->default_provider, "model",
+        session->default_model, "effort", session->default_effort, "service_tier",
+        session->service_tier ? session->service_tier : "", "name",
+        session->name ? session->name : "");
     if (!state) return -1;
 #if SNAJPAGENT_VM
     if (session->irc_activity && json_object_set(state, "irc_activity_after",
-        json_object_get(session->irc_activity, "after")) < 0) {
+                                     json_object_get(session->irc_activity, "after")) < 0) {
         json_decref(state);
         return -1;
     }
@@ -2437,23 +2556,23 @@ snag_ui_view_state(struct snag_ui *ui, const struct snag_session *session)
         return -1;
     }
 #endif
-    int rc = snag_ui_send(ui, (struct snag_ui_command){
-        .kind = SNAG_UI_VIEW_STATE, .data.voice = state});
+    int rc =
+        snag_ui_send(ui, (struct snag_ui_command){.kind = SNAG_UI_VIEW_STATE, .data.voice = state});
     json_decref(state);
     if (!rc) ui->view_state_seq = session->next_seq;
     return rc;
 }
 
 int
-snag_ui_view_result(struct snag_ui *ui, const char *id, const char *status,
-                    uint64_t seq, const char *event)
+snag_ui_view_result(
+    struct snag_ui *ui, const char *id, const char *status, uint64_t seq, const char *event)
 {
     if (!ui->view_listening || !id || !*id) return 0;
-    json_t *result = json_pack("{s:s,s:s,s:I,s:s}", "id", id, "status", status,
-        "seq", (json_int_t)seq, "event", event ? event : "");
+    json_t *result = json_pack("{s:s,s:s,s:I,s:s}", "id", id, "status", status, "seq",
+        (json_int_t)seq, "event", event ? event : "");
     if (!result) return -1;
-    int rc = snag_ui_send(ui, (struct snag_ui_command){
-        .kind = SNAG_UI_VIEW_RESULT, .data.voice = result});
+    int rc = snag_ui_send(
+        ui, (struct snag_ui_command){.kind = SNAG_UI_VIEW_RESULT, .data.voice = result});
     json_decref(result);
     if (!strcmp(ui->view_request, id)) ui->view_request[0] = '\0';
     return rc;
@@ -2463,24 +2582,27 @@ int
 snag_ui_command_result(struct snag_ui *ui, const json_t *result)
 {
     if (!ui->view_listening) return 0;
-    return snag_ui_send(ui, (struct snag_ui_command){
-        .kind = SNAG_UI_COMMAND_RESULT, .data.voice = result});
+    return snag_ui_send(
+        ui, (struct snag_ui_command){.kind = SNAG_UI_COMMAND_RESULT, .data.voice = result});
 }
 
 int
 snag_ui_command_report(struct snag_ui *ui, const json_t *report, const char *error)
 {
     if (!ui->view_listening) return 0;
-    return snag_ui_send(ui, (struct snag_ui_command){
-        .kind = SNAG_UI_COMMAND_REPORT, .data.voice = report, .text = error});
+    return snag_ui_send(
+        ui, (struct snag_ui_command){
+                .kind = SNAG_UI_COMMAND_REPORT, .data.voice = report, .text = error});
 }
 
 int
-snag_ui_session_control(struct snag_ui *ui, enum snag_session_message type,
-                        const void *data, size_t length)
+snag_ui_session_control(
+    struct snag_ui *ui, enum snag_session_message type, const void *data, size_t length)
 {
     return snag_ui_send(ui, (struct snag_ui_command){.kind = SNAG_UI_SESSION_CONTROL,
-        .data.value = (unsigned int)type, .text = data, .len = length});
+                                .data.value = (unsigned int)type,
+                                .text = data,
+                                .len = length});
 }
 
 uint64_t
@@ -2510,15 +2632,15 @@ snag_ui_session_failures(const struct snag_ui *ui)
 int
 snag_ui_session_rebind(struct snag_ui *ui, uint64_t generation)
 {
-    return snag_ui_send(ui, (struct snag_ui_command){
-        .kind = SNAG_UI_SESSION_REBIND, .data.seq = generation});
+    return snag_ui_send(
+        ui, (struct snag_ui_command){.kind = SNAG_UI_SESSION_REBIND, .data.seq = generation});
 }
 
 int
 snag_ui_session_ready(struct snag_ui *ui, uint64_t generation)
 {
-    return snag_ui_send(ui, (struct snag_ui_command){
-        .kind = SNAG_UI_SESSION_READY, .data.seq = generation});
+    return snag_ui_send(
+        ui, (struct snag_ui_command){.kind = SNAG_UI_SESSION_READY, .data.seq = generation});
 }
 
 int
@@ -2553,7 +2675,10 @@ snag_ui_init(struct snag_ui *ui)
     runtime->input.bytes = malloc(UI_INPUT_CAPACITY);
     if (!runtime->input.bytes) goto fail;
     rc = pthread_mutex_init(&runtime->input.lock, NULL);
-    if (rc != 0) { errno = rc; goto input_buffer; }
+    if (rc != 0) {
+        errno = rc;
+        goto input_buffer;
+    }
     if (snag_wakeup_create(runtime->input.control) < 0) goto input_mutex;
     if (snag_wakeup_create(runtime->commands) < 0) goto input_control;
     if (queue_open(&runtime->actions) < 0) goto commands;
@@ -2567,12 +2692,18 @@ snag_ui_init(struct snag_ui *ui)
     ui->runtime = runtime;
     ui->view = SNAG_RENDER_ROLLOUT;
     return 0;
-actions: snag_wakeup_close(runtime->actions.wake);
-commands: snag_wakeup_close(runtime->commands);
-input_control: snag_wakeup_close(runtime->input.control);
-input_mutex: (void)pthread_mutex_destroy(&runtime->input.lock);
-input_buffer: free(runtime->input.bytes);
-fail: free(display);
+actions:
+    snag_wakeup_close(runtime->actions.wake);
+commands:
+    snag_wakeup_close(runtime->commands);
+input_control:
+    snag_wakeup_close(runtime->input.control);
+input_mutex:
+    (void)pthread_mutex_destroy(&runtime->input.lock);
+input_buffer:
+    free(runtime->input.bytes);
+fail:
+    free(display);
     free(runtime);
     return -1;
 }
@@ -2611,16 +2742,17 @@ snag_ui_update(struct snag_ui *ui, const char *program, const char *url)
 int
 snag_ui_text(struct snag_ui *ui, enum snag_ui_operation op, const char *text)
 {
-    if (ui->command_report && (op == SNAG_UI_HOST || op == SNAG_UI_HELP ||
-        op == SNAG_UI_ERROR || op == SNAG_UI_WARNING || op == SNAG_UI_RUNTIME)) {
+    if (ui->command_report && (op == SNAG_UI_HOST || op == SNAG_UI_HELP || op == SNAG_UI_ERROR ||
+                                  op == SNAG_UI_WARNING || op == SNAG_UI_RUNTIME)) {
         if (op == SNAG_UI_ERROR) ui->command_error = true;
         size_t length = strlen(text);
         if (snag_term_append_safe(ui->command_report, text, length) < 0) return -1;
         int rc = length && text[length - 1u] == '\n' ? 0 : snag_buf_putc(ui->command_report, '\n');
         if (rc < 0) return rc;
         if (!ui->command_report_passthrough)
-            return snag_ui_send(ui, (struct snag_ui_command){.kind = op,
-                .text = text, .len = length, .retain_only = true});
+            return snag_ui_send(
+                ui, (struct snag_ui_command){
+                        .kind = op, .text = text, .len = length, .retain_only = true});
     }
     struct ui_message message = {.command = {.kind = op}};
     return send_message(ui, &message, text);
@@ -2643,19 +2775,22 @@ snag_ui_verbosity(const struct snag_ui *ui)
 enum snag_render_view
 snag_ui_view(const struct snag_ui *ui)
 {
-    return ui && ui->runtime ? (enum snag_render_view)atomic_load(&ui->runtime->view) : SNAG_RENDER_ROLLOUT;
+    return ui && ui->runtime ? (enum snag_render_view)atomic_load(&ui->runtime->view)
+                             : SNAG_RENDER_ROLLOUT;
 }
 
 bool
 snag_ui_enabled(const struct snag_ui *ui, enum snag_presentation kind)
 {
-    return ui && ui->runtime && snag_presentation_enabled(kind, snag_ui_verbosity(ui), snag_ui_view(ui));
+    return ui && ui->runtime &&
+           snag_presentation_enabled(kind, snag_ui_verbosity(ui), snag_ui_view(ui));
 }
 
 int
 snag_ui_capture_route(struct snag_ui *ui, const char *text)
 {
-    struct ui_message message = {.command = {.kind = SNAG_UI_ROUTE, .data.route = &ui->input_route}};
+    struct ui_message message = {
+        .command = {.kind = SNAG_UI_ROUTE, .data.route = &ui->input_route}};
     int rc = send_message(ui, &message, text);
     if (!rc) {
         ui->input_conversation = message.snapshot.conversation;
@@ -2691,30 +2826,31 @@ snag_ui_external(struct snag_ui *ui, bool begin, char *error, size_t error_size)
 }
 
 int
-snag_ui_external_replay(struct snag_ui *ui, const unsigned char *tail, size_t length,
-                        char *error, size_t error_size)
+snag_ui_external_replay(
+    struct snag_ui *ui, const unsigned char *tail, size_t length, char *error, size_t error_size)
 {
-    struct ui_message message = {.command = {
-        .kind = SNAG_UI_EXTERNAL, .data.value = false, .text = (const char *)tail, .len = length}};
+    struct ui_message message = {.command = {.kind = SNAG_UI_EXTERNAL,
+                                     .data.value = false,
+                                     .text = (const char *)tail,
+                                     .len = length}};
     return request(ui, &message, NULL, error, error_size);
 }
 
 int
 snag_ui_hold(struct snag_ui *ui, bool active)
 {
-    return snag_ui_send(ui, (struct snag_ui_command){
-        .kind = SNAG_UI_HOLD, .data.value = active});
+    return snag_ui_send(ui, (struct snag_ui_command){.kind = SNAG_UI_HOLD, .data.value = active});
 }
 
 static int
 send_prompt(struct snag_ui *ui, enum snag_ui_operation kind, bool active, const char *label,
-              const char *const spinners[SNAG_TERM_SPINNER_COUNT], uint32_t per_second, unsigned int states,
-              const char *const values[SNAG_PROMPT_HOUR], unsigned int mode, const char *submitted)
+    const char *const spinners[SNAG_TERM_SPINNER_COUNT], uint32_t per_second, unsigned int states,
+    const char *const values[SNAG_PROMPT_HOUR], unsigned int mode, const char *submitted)
 {
-    struct ui_message message = {.command = {
-        .kind = kind, .label = submitted,
-        .data.prompt = {.active = active, .rate = per_second, .states = states, .mode = mode}
-    }};
+    struct ui_message message = {
+        .command = {.kind = kind,
+            .label = submitted,
+            .data.prompt = {.active = active, .rate = per_second, .states = states, .mode = mode}}};
     for (size_t i = 0u; i < SNAG_TERM_SPINNER_COUNT; ++i) {
         if (strlen(spinners[i]) >= sizeof(message.command.data.prompt.frames[i]))
             return snag_errno(EOVERFLOW);
@@ -2738,26 +2874,28 @@ send_prompt(struct snag_ui *ui, enum snag_ui_operation kind, bool active, const 
 
 int
 snag_ui_prompt(struct snag_ui *ui, bool active, const char *label,
-              const char *const spinners[SNAG_TERM_SPINNER_COUNT], uint32_t per_second, unsigned int states)
+    const char *const spinners[SNAG_TERM_SPINNER_COUNT], uint32_t per_second, unsigned int states)
 {
-    return send_prompt(ui, SNAG_UI_PROMPT, active, label, spinners, per_second, states, NULL, 0u, NULL);
+    return send_prompt(
+        ui, SNAG_UI_PROMPT, active, label, spinners, per_second, states, NULL, 0u, NULL);
 }
 
 int
 snag_ui_composer(struct snag_ui *ui, bool active, const char *format,
-                 const char *const values[SNAG_PROMPT_HOUR], unsigned int mode,
-                 const char *const spinners[SNAG_TERM_SPINNER_COUNT],
-                 uint32_t per_second, unsigned int states, const char *submitted)
+    const char *const values[SNAG_PROMPT_HOUR], unsigned int mode,
+    const char *const spinners[SNAG_TERM_SPINNER_COUNT], uint32_t per_second, unsigned int states,
+    const char *submitted)
 {
-    return send_prompt(ui, SNAG_UI_PROMPT, active, format, spinners, per_second,
-                        states, values, mode, submitted);
+    return send_prompt(
+        ui, SNAG_UI_PROMPT, active, format, spinners, per_second, states, values, mode, submitted);
 }
 
 int
 snag_ui_validate_prompt(struct snag_ui *ui, const char *label,
-                       const char *const spinners[SNAG_TERM_SPINNER_COUNT], uint32_t per_second)
+    const char *const spinners[SNAG_TERM_SPINNER_COUNT], uint32_t per_second)
 {
-    return send_prompt(ui, SNAG_UI_VALIDATE, false, label, spinners, per_second, 0u, NULL, 0u, NULL);
+    return send_prompt(
+        ui, SNAG_UI_VALIDATE, false, label, spinners, per_second, 0u, NULL, 0u, NULL);
 }
 
 int
@@ -2767,36 +2905,44 @@ snag_ui_simple_prompt(struct snag_ui *ui, bool active)
     return snag_ui_prompt(ui, active, active ? "» " : "› ", frames, 1u, 0u);
 }
 
-int snag_ui_insert_draft(struct snag_ui *ui, const char *text)
+int
+snag_ui_insert_draft(struct snag_ui *ui, const char *text)
 {
-    return snag_ui_send(ui,(struct snag_ui_command){.kind=SNAG_UI_INSERT,.text=text});
+    return snag_ui_send(ui, (struct snag_ui_command){.kind = SNAG_UI_INSERT, .text = text});
 }
-int snag_ui_audio(struct snag_ui *ui, const char *label, bool dictating)
+int
+snag_ui_audio(struct snag_ui *ui, const char *label, bool dictating)
 {
     struct snag_ui_command message = {.kind = SNAG_UI_AUDIO, .data.value = dictating};
-    int rc = snag_ui_send(ui,(struct snag_ui_command){.kind=message.kind,.data=message.data,.text=label});
+    int rc = snag_ui_send(
+        ui, (struct snag_ui_command){.kind = message.kind, .data = message.data, .text = label});
     if (!dictating) atomic_store(&ui->runtime->dictation_control, 0u);
     return rc;
 }
 
-int snag_ui_voice(struct snag_ui *ui,const char *label)
+int
+snag_ui_voice(struct snag_ui *ui, const char *label)
 {
-    struct snag_ui_command message={.kind=SNAG_UI_AUDIO,.data.value=2u};
-    return snag_ui_send(ui,(struct snag_ui_command){.kind=message.kind,.data=message.data,.text=label});
+    struct snag_ui_command message = {.kind = SNAG_UI_AUDIO, .data.value = 2u};
+    return snag_ui_send(
+        ui, (struct snag_ui_command){.kind = message.kind, .data = message.data, .text = label});
 }
 
-int snag_ui_caption(struct snag_ui *ui,unsigned int speaker,const char *text)
+int
+snag_ui_caption(struct snag_ui *ui, unsigned int speaker, const char *text)
 {
-    struct snag_ui_command message={.kind=SNAG_UI_CAPTION,.data.value=speaker};
-    return snag_ui_send(ui,(struct snag_ui_command){.kind=message.kind,.data=message.data,.text=text});
+    struct snag_ui_command message = {.kind = SNAG_UI_CAPTION, .data.value = speaker};
+    return snag_ui_send(
+        ui, (struct snag_ui_command){.kind = message.kind, .data = message.data, .text = text});
 }
 
 int
 snag_ui_input(struct snag_ui *ui, const char *text, uint64_t attachment)
 {
     if (!ui || !ui->runtime || !text) return snag_errno(EINVAL);
-    return snag_ui_send(ui, (struct snag_ui_command){.kind = SNAG_UI_INPUT,
-        .text = text, .len = strlen(text), .data.seq = attachment});
+    return snag_ui_send(
+        ui, (struct snag_ui_command){
+                .kind = SNAG_UI_INPUT, .text = text, .len = strlen(text), .data.seq = attachment});
 }
 
 static int history_snapshot(struct snag_ui *ui, bool refresh);
@@ -2841,8 +2987,9 @@ snag_ui_poll(struct snag_ui *ui, int timeout_ms, enum snag_term_action *action, 
     ui->input_echoed = false;
     ui->input_error = false;
     ui->input_interface = ui->input_terminal_command = false;
-    if (ui->view_request[0] && snag_ui_view_result(ui, ui->view_request,
-            "rejected", 0u, "input was not admitted") < 0) return -1;
+    if (ui->view_request[0] &&
+        snag_ui_view_result(ui, ui->view_request, "rejected", 0u, "input was not admitted") < 0)
+        return -1;
     for (;;) {
         snag_wakeup_drain(runtime->actions.wake[0]);
         int fatal = atomic_load(&runtime->fatal);
@@ -2863,7 +3010,10 @@ snag_ui_poll(struct snag_ui *ui, int timeout_ms, enum snag_term_action *action, 
             return 1;
         }
         unsigned int dictation = atomic_exchange(&runtime->dictation_control, 0u);
-        if (dictation) { *action = (enum snag_term_action)dictation; return 1; }
+        if (dictation) {
+            *action = (enum snag_term_action)dictation;
+            return 1;
+        }
         uint64_t interrupted = atomic_exchange(&runtime->interrupt, 0u);
         if (interrupted && (interrupted == ui->turn_generation || interrupted == UINT64_MAX)) {
             *action = SNAG_TERM_INTERRUPT;
@@ -2896,16 +3046,15 @@ snag_ui_poll(struct snag_ui *ui, int timeout_ms, enum snag_term_action *action, 
             return -1;
         }
     }
-    if (item->interface_input &&
-        (item->attachment != atomic_load(&runtime->session_attachment) ||
-        (ui->native && !item->attachment))) {
+    if (item->interface_input && (item->attachment != atomic_load(&runtime->session_attachment) ||
+                                     (ui->native && !item->attachment))) {
         if (item->steering) atomic_fetch_sub(&runtime->steering_pending, 1u);
-        (void)snag_ui_view_result(ui, item->view_request, "rejected", 0u,
-            "originating controller detached");
+        (void)snag_ui_view_result(
+            ui, item->view_request, "rejected", 0u, "originating controller detached");
         free(item->text);
         free(item);
-        return snag_ui_text(ui, SNAG_UI_WARNING,
-            "UI input discarded: its originating attachment ended.");
+        return snag_ui_text(
+            ui, SNAG_UI_WARNING, "UI input discarded: its originating attachment ended.");
     }
     memcpy(ui->view_request, item->view_request, sizeof(ui->view_request));
     ui->input_received_ms = item->received_ms;
@@ -2933,7 +3082,8 @@ snag_ui_poll(struct snag_ui *ui, int timeout_ms, enum snag_term_action *action, 
     *action = item->action;
     *text = item->text;
     if (item->steering) atomic_fetch_sub(&runtime->steering_pending, 1u);
-    if (item->history_warning && !ui->history.warned) ui->history.warning = ui->history.warned = true;
+    if (item->history_warning && !ui->history.warned)
+        ui->history.warning = ui->history.warned = true;
     if (item->history_refresh) {
         if (history_snapshot(ui, true) < 0) {
             item->error = errno;
@@ -2978,18 +3128,18 @@ snag_ui_submitted(struct snag_ui *ui, const char *label, const char *text, bool 
 int
 snag_ui_public(struct snag_ui *ui, const char *text, size_t len, struct snag_buf *delivered)
 {
-    struct ui_message message = {.command = {
-        .kind = SNAG_UI_PUBLIC, .text = text, .len = len}};
+    struct ui_message message = {.command = {.kind = SNAG_UI_PUBLIC, .text = text, .len = len}};
     return request(ui, &message, delivered, NULL, 0u);
 }
 
 int
 snag_ui_orientation(struct snag_ui *ui, const struct snag_session *session, bool resumed)
 {
-    struct ui_message message = {.command = {
-        .kind = SNAG_UI_ORIENTATION, .data.orientation = {.turns = session->turn_count,
-            .queued = session->pending_queue_count, .resumed = resumed, .queue_armed = session->queue_armed}
-    }};
+    struct ui_message message = {.command = {.kind = SNAG_UI_ORIENTATION,
+                                     .data.orientation = {.turns = session->turn_count,
+                                         .queued = session->pending_queue_count,
+                                         .resumed = resumed,
+                                         .queue_armed = session->queue_armed}}};
     message.command.label = session->id;
     return send_message(ui, &message, session->cwd);
 }
@@ -3021,8 +3171,8 @@ history_note_irc_event(struct history_replay *history, const char *type, const j
     struct snag_buf rendered;
     snag_buf_init(&rendered, sizeof(event) + 1024u);
     if (snag_irc_event_record_read(type, data, &event) < 0) return 0;
-    if (!event.stream[0] || snag_irc_event_projection(&rendered, &event) < 0 ||
-        !rendered.len || !rendered.data) {
+    if (!event.stream[0] || snag_irc_event_projection(&rendered, &event) < 0 || !rendered.len ||
+        !rendered.data) {
         snag_buf_free(&rendered);
         return 0;
     }
@@ -3038,8 +3188,8 @@ history_note_irc_event(struct history_replay *history, const char *type, const j
     ++history->payload_count;
     while (rendered.len && ((char *)rendered.data)[rendered.len - 1u] == '\n') --rendered.len;
     ((char *)rendered.data)[rendered.len] = '\0';
-    (void)snprintf(slot->id, sizeof(slot->id), "%s:%llu", event.stream,
-        (unsigned long long)event.sequence);
+    (void)snprintf(
+        slot->id, sizeof(slot->id), "%s:%llu", event.stream, (unsigned long long)event.sequence);
     free(slot->text);
     slot->text = (char *)rendered.data;
     return 0;
@@ -3050,11 +3200,12 @@ history_irc_payload(struct history_replay *history, const char *id, size_t len)
 {
     size_t count;
     if (!history->payloads) return NULL;
-    count = history->payload_count < HISTORY_IRC_PAYLOADS ?
-        history->payload_count : HISTORY_IRC_PAYLOADS;
+    count = history->payload_count < HISTORY_IRC_PAYLOADS ? history->payload_count
+                                                          : HISTORY_IRC_PAYLOADS;
     for (size_t i = 0u; i < count; ++i)
         if (history->payloads[i].text && strlen(history->payloads[i].id) == len &&
-            !strncmp(history->payloads[i].id, id, len)) return history->payloads[i].text;
+            !strncmp(history->payloads[i].id, id, len))
+            return history->payloads[i].text;
     return NULL;
 }
 
@@ -3077,8 +3228,10 @@ history_resolve_irc(struct history_replay *history, const char *text)
             const char *space = memchr(id, ' ', line - (sizeof(marker) - 1u));
             if (space) payload = history_irc_payload(history, id, (size_t)(space - id));
         }
-        if (snag_buf_append(&out, payload ? payload : cursor, payload ? strlen(payload) : line) < 0 ||
-            (end && snag_buf_putc(&out, '\n') < 0)) goto fail;
+        if (snag_buf_append(&out, payload ? payload : cursor, payload ? strlen(payload) : line) <
+                0 ||
+            (end && snag_buf_putc(&out, '\n') < 0))
+            goto fail;
         cursor = end ? end + 1 : cursor + line;
     }
     if (snag_buf_terminate(&out) < 0) goto fail;
@@ -3092,12 +3245,14 @@ static int
 history_display(struct history_replay *history, const struct snag_history_turn *turn)
 {
     if (history->report) {
-        return snag_render_history(history->report, turn, history->shown,
-            history->completed, history->total);
+        return snag_render_history(
+            history->report, turn, history->shown, history->completed, history->total);
     }
     return snag_ui_send(history->ui, (struct snag_ui_command){.kind = SNAG_UI_HISTORY,
-        .data.replay = {.turn = turn, .shown = history->shown,
-            .completed = history->completed, .total = history->total}});
+                                         .data.replay = {.turn = turn,
+                                             .shown = history->shown,
+                                             .completed = history->completed,
+                                             .total = history->total}});
 }
 
 static int
@@ -3123,7 +3278,8 @@ history_items(struct history_replay *history, const json_t *items)
         const json_t *item = json_array_get(items, i);
         const char *kind = snag_json_string(item, "kind");
         if (snag_string_in(kind, "assistant refusal") &&
-            history_append(&history->turn.assistant, snag_json_string(item, "text"), "\n\n") < 0) return -1;
+            history_append(&history->turn.assistant, snag_json_string(item, "text"), "\n\n") < 0)
+            return -1;
     }
     return 0;
 }
@@ -3142,7 +3298,8 @@ history_flush(struct history_replay *history, bool finish)
     }
     if (finish && history->response.len) {
         if (snag_buf_terminate(&history->response) < 0 ||
-            history_append(&history->turn.assistant, (char *)history->response.data, "\n\n") < 0) return -1;
+            history_append(&history->turn.assistant, (char *)history->response.data, "\n\n") < 0)
+            return -1;
         snag_buf_reset(&history->response);
     }
     if (!history->turn.continuation) ++history->shown;
@@ -3168,13 +3325,16 @@ history_finish(struct history_replay *history)
 }
 
 static int
-history_event(void *opaque, const struct snag_session *state, uint64_t seq,
-              const char *type, const json_t *data, char *error, size_t error_size)
+history_event(void *opaque, const struct snag_session *state, uint64_t seq, const char *type,
+    const json_t *data, char *error, size_t error_size)
 {
     struct history_replay *history = opaque;
     struct snag_history_turn *turn = &history->turn;
     bool completed = snag_string_in(type, "turn_completed turn_completed_silent");
-    (void)state; (void)seq; (void)error; (void)error_size;
+    (void)state;
+    (void)seq;
+    (void)error;
+    (void)error_size;
     if (history->ui && snag_ui_leaving(history->ui)) return snag_errno(ECANCELED);
     if (history->ui && snag_string_in(type, "irc_event irc_event_v2") &&
         history_note_irc_event(history, type, data) < 0)
@@ -3182,11 +3342,10 @@ history_event(void *opaque, const struct snag_session *state, uint64_t seq,
     if (!strcmp(type, "voice_event")) {
         if (history_flush(history, false) < 0) return -1;
         if (history->report) {
-            return snag_render_voice_event(history->report,
-                json_object_get(data, "event"), 0u, 0u);
+            return snag_render_voice_event(history->report, json_object_get(data, "event"), 0u, 0u);
         }
         return snag_ui_send(history->ui, (struct snag_ui_command){.kind = SNAG_UI_VOICE_EVENT,
-            .data.voice = json_object_get(data, "event")});
+                                             .data.voice = json_object_get(data, "event")});
     }
     if (!strcmp(type, "turn_started")) {
         if (history_finish(history) < 0) return -1;
@@ -3200,7 +3359,8 @@ history_event(void *opaque, const struct snag_session *state, uint64_t seq,
     }
     if (!turn->user && !turn->partial && !turn->continuation) return 0;
     if (!strcmp(type, "irc_admitted") && json_object_get(data, "steering"))
-        return history_append(&turn->user, snag_json_string(json_object_get(data, "steering"), "text"), "\nsteering: ");
+        return history_append(&turn->user,
+            snag_json_string(json_object_get(data, "steering"), "text"), "\nsteering: ");
     if (!strcmp(type, "steering_added"))
         return history_append(&turn->user, snag_json_string(data, "text"), "\nsteering: ");
     if (!strcmp(type, "response_started")) {
@@ -3212,14 +3372,17 @@ history_event(void *opaque, const struct snag_session *state, uint64_t seq,
         if (!offset && history->response.len && snag_buf_append(&history->response, "\n\n", 2u) < 0)
             return -1;
         return snag_buf_append(&history->response, text, strlen(text));
-    } else if (snag_string_in(type, "response_completed response_failed response_interrupted response_output_correction")) {
+    } else if (snag_string_in(type, "response_completed response_failed response_interrupted "
+                                    "response_output_correction")) {
         snag_buf_reset(&history->response);
         json_t *items = json_object_get(data, "items");
         if (!items) items = json_object_get(data, "partial_public");
         return history_items(history, items);
     } else if (completed || snag_string_in(type, "turn_failed turn_interrupted")) {
         history->completed += completed;
-        turn->status = completed ? "completed" : !strcmp(type, "turn_failed") ? "failed" : "interrupted";
+        turn->status = completed                      ? "completed"
+                       : !strcmp(type, "turn_failed") ? "failed"
+                                                      : "interrupted";
         return history_finish(history);
     }
     return 0;
@@ -3234,11 +3397,14 @@ struct history_window {
 };
 
 static int
-history_collect(void *opaque, const struct snag_session *state, uint64_t seq,
-    const char *type, const json_t *data, char *error, size_t error_size)
+history_collect(void *opaque, const struct snag_session *state, uint64_t seq, const char *type,
+    const json_t *data, char *error, size_t error_size)
 {
     struct history_window *window = opaque;
-    (void)state; (void)seq; (void)error; (void)error_size;
+    (void)state;
+    (void)seq;
+    (void)error;
+    (void)error_size;
     if (snag_ui_leaving(window->ui)) return snag_errno(ECANCELED);
     bool irc = snag_string_in(type, "irc_event irc_event_v2");
     if (!strcmp(type, "irc_admitted") && !json_object_get(data, "steering")) return 0;
@@ -3246,36 +3412,42 @@ history_collect(void *opaque, const struct snag_session *state, uint64_t seq,
         if (!window->wants_irc || window->prefix_irc == HISTORY_IRC_PAYLOADS) return 1;
         if (!irc) return 0;
         ++window->prefix_irc;
-    } else if (!irc && !snag_string_in(type,
+    } else if (
+        !irc &&
+        !snag_string_in(type,
             "voice_event turn_started steering_added irc_admitted response_started response_output "
             "response_completed response_failed response_interrupted response_output_correction "
-            "turn_completed turn_completed_silent turn_failed turn_interrupted")) return 0;
-    const json_t *text_data = !strcmp(type, "irc_admitted") ?
-        json_object_get(data, "steering") : data;
+            "turn_completed turn_completed_silent turn_failed turn_interrupted"))
+        return 0;
+    const json_t *text_data =
+        !strcmp(type, "irc_admitted") ? json_object_get(data, "steering") : data;
     const char *text = !irc ? snag_json_string(text_data, "text") : NULL;
     if (text && strstr(text, "[IRC update id=")) window->wants_irc = true;
     if (!strcmp(type, "turn_started")) --window->remaining;
-    if (json_array_append_new(window->events,
-            json_pack("{s:s,s:O}", "type", type, "data", (json_t *)data)) < 0) return -1;
-    bool done = !window->remaining &&
-        (!window->wants_irc || window->prefix_irc == HISTORY_IRC_PAYLOADS);
+    if (json_array_append_new(
+            window->events, json_pack("{s:s,s:O}", "type", type, "data", (json_t *)data)) < 0)
+        return -1;
+    bool done =
+        !window->remaining && (!window->wants_irc || window->prefix_irc == HISTORY_IRC_PAYLOADS);
     return done ? SNAG_JOURNAL_STOP_AFTER : 0;
 }
 
 static int
-history_show(struct snag_ui *ui, struct snag_session *session, uint64_t count,
-    struct snag_render *report)
+history_show(
+    struct snag_ui *ui, struct snag_session *session, uint64_t count, struct snag_render *report)
 {
     /* One response's public text plus one separator per fragment, under the
      * response-public byte bound. */
-    struct history_replay history = {.ui = ui, .report = report, .total = session->turn_count,
+    struct history_replay history = {.ui = ui,
+        .report = report,
+        .total = session->turn_count,
         .response = {.max = 3u * SNAG_MAX_RESPONSE_GRAPH}};
     struct history_window window = {.ui = ui, .remaining = count, .events = json_array()};
     uint64_t before = 0u;
     int rc = window.events ? 0 : -1;
     if (!rc && count) {
-        rc = snag_session_each_event_reverse(session, 0u, SNAG_JOURNAL_PAGE_BYTES,
-            history_collect, &window, &before, NULL, 0u);
+        rc = snag_session_each_event_reverse(
+            session, 0u, SNAG_JOURNAL_PAGE_BYTES, history_collect, &window, &before, NULL, 0u);
         bool first = true;
         for (size_t i = json_array_size(window.events); !rc && i; --i) {
             const json_t *entry = json_array_get(window.events, i - 1u);
@@ -3293,14 +3465,13 @@ history_show(struct snag_ui *ui, struct snag_session *session, uint64_t count,
             (void)snprintf(notice, sizeof(notice),
                 "History scan window ended; earlier events: read_session_history before_seq=%llu.",
                 (unsigned long long)before);
-            rc = report ? snag_render_host(report, notice) :
-                snag_ui_text(ui, SNAG_UI_HOST, notice);
+            rc = report ? snag_render_host(report, notice) : snag_ui_text(ui, SNAG_UI_HOST, notice);
         }
     }
     if (rc == 0 && count && session->pending_input) {
         const char *text = snag_json_string(session->pending_input, "text");
-        rc = report ? snag_render_submitted(report, "pending input › ", text) :
-            snag_ui_submitted(ui, "pending input › ", text, false);
+        rc = report ? snag_render_submitted(report, "pending input › ", text)
+                    : snag_ui_submitted(ui, "pending input › ", text, false);
     }
     if (rc == 0) rc = history_display(&history, NULL);
     free(history.turn.user);
@@ -3320,8 +3491,8 @@ snag_ui_history(struct snag_ui *ui, struct snag_session *session, uint64_t count
 }
 
 int
-snag_ui_history_report(struct snag_ui *ui, struct snag_session *session, uint64_t count,
-    struct snag_buf *text)
+snag_ui_history_report(
+    struct snag_ui *ui, struct snag_session *session, uint64_t count, struct snag_buf *text)
 {
     struct snag_render render;
     struct snag_term target = {.capture = text, .output_fd = {-1, -1}};
@@ -3341,9 +3512,10 @@ snag_ui_history_report(struct snag_ui *ui, struct snag_session *session, uint64_
 static int
 history_snapshot(struct snag_ui *ui, bool refresh)
 {
-    struct ui_message message = {.command = {
-        .kind = SNAG_UI_HISTORY_SNAPSHOT, .data.history.refresh = refresh }};
-    if (snag_history_snapshot_copy(&message.command.data.history.entries, &ui->history.snapshot) < 0)
+    struct ui_message message = {
+        .command = {.kind = SNAG_UI_HISTORY_SNAPSHOT, .data.history.refresh = refresh}};
+    if (snag_history_snapshot_copy(&message.command.data.history.entries, &ui->history.snapshot) <
+        0)
         return -1;
     return send_message(ui, &message, NULL);
 }

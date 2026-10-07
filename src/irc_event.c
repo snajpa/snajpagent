@@ -6,8 +6,8 @@
 #include <string.h>
 
 void
-snag_irc_capture_scopes(const struct snag_irc_destinations *destinations,
-                        struct snag_irc_scopes *out)
+snag_irc_capture_scopes(
+    const struct snag_irc_destinations *destinations, struct snag_irc_scopes *out)
 {
     memset(out, 0, sizeof(*out));
     for (size_t i = 0u; destinations && i < destinations->count; ++i) {
@@ -53,54 +53,60 @@ snag_irc_name_mentioned(enum snag_irc_casemapping mapping, const char *text, con
     if (!len) return false;
     for (size_t i = 0u; text[i]; ++i) {
         if (i && ((unsigned char)text[i - 1u] >= 0x80u ||
-            snag_irc_nick_char((unsigned char)text[i - 1u]))) continue;
+                     snag_irc_nick_char((unsigned char)text[i - 1u])))
+            continue;
         size_t j = 0u;
         while (j < len && text[i + j] &&
-            snag_irc_name_fold(mapping, (unsigned char)text[i + j]) ==
-            snag_irc_name_fold(mapping, (unsigned char)nick[j])) ++j;
+               snag_irc_name_fold(mapping, (unsigned char)text[i + j]) ==
+                   snag_irc_name_fold(mapping, (unsigned char)nick[j]))
+            ++j;
         if (j == len && (unsigned char)text[i + len] < 0x80u &&
-            !snag_irc_nick_char((unsigned char)text[i + len])) return true;
+            !snag_irc_nick_char((unsigned char)text[i + len]))
+            return true;
     }
     return false;
 }
 
 json_t *
 snag_irc_completion_names(const json_t *catalog, const struct snag_irc_conversation_target *target,
-                          enum snag_irc_casemapping *mapping)
+    enum snag_irc_casemapping *mapping)
 {
     *mapping = SNAG_IRC_CASE_UNKNOWN;
     const json_t *connection = json_object_get(catalog, target->connection);
     uint64_t generation;
     if ((unsigned int)target->identity > SNAG_IRC_AGENT ||
         snag_json_integer_u64(connection, "generation", &generation) < 0 ||
-        generation != target->generation) return json_array();
-    const json_t *value = json_array_get(json_object_get(connection, "casemapping"),
-        target->identity);
+        generation != target->generation)
+        return json_array();
+    const json_t *value =
+        json_array_get(json_object_get(connection, "casemapping"), target->identity);
     if (json_is_integer(value) && json_integer_value(value) >= SNAG_IRC_RFC1459 &&
         json_integer_value(value) <= SNAG_IRC_CASE_UNKNOWN)
         *mapping = (enum snag_irc_casemapping)json_integer_value(value);
     if (target->kind == SNAG_IRC_QUERY) {
-        const char *nick = snag_json_bounded_string(json_object_get(connection,
-            target->identity == SNAG_IRC_AGENT ? "agent" : "operator"), SNAG_CONFIG_IRC_NICK_MAX);
+        const char *nick = snag_json_bounded_string(
+            json_object_get(connection, target->identity == SNAG_IRC_AGENT ? "agent" : "operator"),
+            SNAG_CONFIG_IRC_NICK_MAX);
         if (!nick || !*nick) return json_array();
-        return snag_irc_name_equal(*mapping, target->peer, nick) ?
-            json_pack("[s]", target->peer) : json_pack("[s,s]", target->peer, nick);
+        return snag_irc_name_equal(*mapping, target->peer, nick)
+                   ? json_pack("[s]", target->peer)
+                   : json_pack("[s,s]", target->peer, nick);
     }
-    const json_t *channel = json_object_get(json_object_get(connection, "channels"),
-        target->conversation);
+    const json_t *channel =
+        json_object_get(json_object_get(connection, "channels"), target->conversation);
     const char *membership = snag_json_string(channel, "membership");
     json_t *names = json_object_get(channel, "names");
     return target->kind == SNAG_IRC_CHANNEL && membership &&
-        !strcmp(membership, target->membership) && json_is_array(names) ?
-        json_incref(names) : json_array();
+                   !strcmp(membership, target->membership) && json_is_array(names)
+               ? json_incref(names)
+               : json_array();
 }
 
 const char *
 snag_irc_kind_name(enum snag_irc_event_kind kind)
 {
-    static const char *const names[] = {
-        "connected", "disconnected", "join", "part", "quit", "nick",
-        "message", "notice", "topic", "mode", "history_ready" };
+    static const char *const names[] = {"connected", "disconnected", "join", "part", "quit", "nick",
+        "message", "notice", "topic", "mode", "history_ready"};
 
     return (unsigned int)kind < sizeof(names) / sizeof(names[0]) ? names[kind] : "unknown";
 }
@@ -108,8 +114,8 @@ snag_irc_kind_name(enum snag_irc_event_kind kind)
 static const char *const identities[] = {"operator", "agent"};
 static const char *const conversations[] = {"connection", "channel", "query"};
 static const char *const directions[] = {"incoming", "outgoing"};
-static const char *const deliveries[] = {"none", "pending", "written", "acknowledged",
-    "failed", "uncertain"};
+static const char *const deliveries[] = {
+    "none", "pending", "written", "acknowledged", "failed", "uncertain"};
 
 static json_t *
 route_data(const struct snag_irc_event_route *route)
@@ -121,21 +127,20 @@ route_data(const struct snag_irc_event_route *route)
         errno = EINVAL;
         return NULL;
     }
-    json_t *data = json_pack("{s:s,s:s,s:s,s:s,s:s,s:s,s:s,s:s,s:s,s:s,s:I,s:b}",
-        "connection_id", route->connection, "conversation_id", route->conversation,
-        "identity", identities[route->identity], "conversation_kind", conversations[route->kind],
-        "peer", route->peer, "target", route->target, "direction", directions[route->direction],
-        "send_id", route->send, "state", deliveries[route->delivery],
-        "source_message_id", route->source, "generation", (json_int_t)route->generation,
-        "action", route->action);
+    json_t *data = json_pack("{s:s,s:s,s:s,s:s,s:s,s:s,s:s,s:s,s:s,s:s,s:I,s:b}", "connection_id",
+        route->connection, "conversation_id", route->conversation, "identity",
+        identities[route->identity], "conversation_kind", conversations[route->kind], "peer",
+        route->peer, "target", route->target, "direction", directions[route->direction], "send_id",
+        route->send, "state", deliveries[route->delivery], "source_message_id", route->source,
+        "generation", (json_int_t)route->generation, "action", route->action);
     if (route->revised && snag_json_set_new(data, "revised", json_true()) < 0) {
         json_decref(data);
         return NULL;
     }
     if (route->membership[0] &&
         (snag_json_set_new(data, "membership", json_string(route->membership)) < 0 ||
-         snag_json_set_new(data, "joined", json_boolean(route->joined)) < 0 ||
-         snag_json_set_new(data, "rejoin", json_boolean(route->rejoin)) < 0)) {
+            snag_json_set_new(data, "joined", json_boolean(route->joined)) < 0 ||
+            snag_json_set_new(data, "rejoin", json_boolean(route->rejoin)) < 0)) {
         json_decref(data);
         return NULL;
     }
@@ -145,24 +150,27 @@ route_data(const struct snag_irc_event_route *route)
 json_t *
 snag_irc_event_data(const struct snag_irc_event *event)
 {
-    json_t *data = json_pack("{s:s,s:b,s:s,s:b,s:s,s:b,s:s,s:s,s:I,s:s,s:I,s:b}",
-        "endpoint", event->endpoint, "historical", event->historical,
-        "kind", snag_irc_kind_name(event->kind), "local", event->local,
-        "nick", event->nick, "op", event->op, "room", event->room,
-        "text", event->text, "timestamp_ms", (json_int_t)event->timestamp_ms,
-        "stream", event->stream, "sequence", (json_int_t)event->sequence, "input", event->input);
-    if (event->classified && (snag_json_set_new(data, "urgent", json_boolean(event->urgent)) < 0 ||
-                             snag_json_set_new(data, "reply", json_boolean(event->reply)) < 0)) {
-        json_decref(data); return NULL;
+    json_t *data = json_pack("{s:s,s:b,s:s,s:b,s:s,s:b,s:s,s:s,s:I,s:s,s:I,s:b}", "endpoint",
+        event->endpoint, "historical", event->historical, "kind", snag_irc_kind_name(event->kind),
+        "local", event->local, "nick", event->nick, "op", event->op, "room", event->room, "text",
+        event->text, "timestamp_ms", (json_int_t)event->timestamp_ms, "stream", event->stream,
+        "sequence", (json_int_t)event->sequence, "input", event->input);
+    if (event->classified &&
+        (snag_json_set_new(data, "urgent", json_boolean(event->urgent)) < 0 ||
+            snag_json_set_new(data, "reply", json_boolean(event->reply)) < 0)) {
+        json_decref(data);
+        return NULL;
     }
     if (event->routed && snag_json_set_new(data, "routing", route_data(&event->route)) < 0) {
         json_decref(data);
         return NULL;
     }
-    if (event->reply_captured && snag_json_set_new(data, "reply_to",
-        event->reply_conversation[0] ? json_pack("{s:s,s:s}",
-            "conversation_id", event->reply_conversation,
-            "membership", event->reply_membership) : json_null()) < 0) {
+    if (event->reply_captured &&
+        snag_json_set_new(data, "reply_to",
+            event->reply_conversation[0]
+                ? json_pack("{s:s,s:s}", "conversation_id", event->reply_conversation, "membership",
+                      event->reply_membership)
+                : json_null()) < 0) {
         json_decref(data);
         return NULL;
     }
@@ -176,7 +184,8 @@ event_field(const json_t *data, const char *key, char *out, size_t size)
     size_t length = json_string_length(json_object_get(data, key));
 
     if (!value || strlen(value) != length || length >= size ||
-        !snag_utf8_valid((const unsigned char *)value, length, true)) return false;
+        !snag_utf8_valid((const unsigned char *)value, length, true))
+        return false;
     for (const unsigned char *p = (const unsigned char *)value; *p; ++p)
         if (*p < 0x20u || *p == 0x7fu) return false;
     return snag_strcpy(out, size, value);
@@ -198,18 +207,18 @@ snag_irc_prompt(const char *text)
     /* The admission batch is the prompt of an IRC-triggered turn: runtime
      * plumbing rather than text the operator submitted. Callers must not echo
      * it as a submission, and it carries no conversation-level formatting. */
-    return text && (!strncmp(text, "[IRC update id=", 15u) ||
-                    !strncmp(text, "[IRC endpoint=", 14u));
+    return text &&
+           (!strncmp(text, "[IRC update id=", 15u) || !strncmp(text, "[IRC endpoint=", 14u));
 }
 
 bool
 snag_irc_event_model_visible(const struct snag_irc_event *event)
 {
-    if (event->routed && event->route.kind == SNAG_IRC_CHANNEL &&
-        event->route.membership[0] &&
-        (event->kind == SNAG_IRC_CONNECTED || event->kind == SNAG_IRC_DISCONNECTED)) return false;
+    if (event->routed && event->route.kind == SNAG_IRC_CHANNEL && event->route.membership[0] &&
+        (event->kind == SNAG_IRC_CONNECTED || event->kind == SNAG_IRC_DISCONNECTED))
+        return false;
     return !event->routed || event->route.kind == SNAG_IRC_CHANNEL ||
-        (event->route.kind == SNAG_IRC_QUERY && event->route.identity == SNAG_IRC_AGENT);
+           (event->route.kind == SNAG_IRC_QUERY && event->route.identity == SNAG_IRC_AGENT);
 }
 
 static int
@@ -221,13 +230,14 @@ route_read(const json_t *data, struct snag_irc_event *event)
     int direction = named_value(data, "direction", directions, 2u);
     int delivery = named_value(data, "state", deliveries, 6u);
     bool membership = json_object_get(data, "membership") != NULL;
-    const char *keys = membership ?
-        "connection_id conversation_id generation identity conversation_kind peer target "
-        "direction send_id state source_message_id action membership joined rejoin" :
-        "connection_id conversation_id generation identity conversation_kind peer target "
-        "direction send_id state source_message_id action";
-    if (!snag_json_arg_keys(data, keys, "revised", NULL, 0u) ||
-        identity < 0 || kind < 0 || direction < 0 || delivery < 0 ||
+    const char *keys =
+        membership
+            ? "connection_id conversation_id generation identity conversation_kind peer target "
+              "direction send_id state source_message_id action membership joined rejoin"
+            : "connection_id conversation_id generation identity conversation_kind peer target "
+              "direction send_id state source_message_id action";
+    if (!snag_json_arg_keys(data, keys, "revised", NULL, 0u) || identity < 0 || kind < 0 ||
+        direction < 0 || delivery < 0 ||
         !event_field(data, "connection_id", route->connection, sizeof(route->connection)) ||
         !snag_hex_is_lower(route->connection, SNAG_ID_HEX_LEN) ||
         !event_field(data, "conversation_id", route->conversation, sizeof(route->conversation)) ||
@@ -237,7 +247,8 @@ route_read(const json_t *data, struct snag_irc_event *event)
         !event_field(data, "target", route->target, sizeof(route->target)) ||
         !event_field(data, "source_message_id", route->source, sizeof(route->source)) ||
         !event_field(data, "send_id", route->send, sizeof(route->send)) ||
-        !json_is_boolean(json_object_get(data, "action"))) return -1;
+        !json_is_boolean(json_object_get(data, "action")))
+        return -1;
     route->identity = (enum snag_irc_identity)identity;
     route->kind = (enum snag_irc_conversation_kind)kind;
     route->direction = (enum snag_irc_direction)direction;
@@ -245,28 +256,32 @@ route_read(const json_t *data, struct snag_irc_event *event)
     route->action = json_is_true(json_object_get(data, "action"));
     route->revised = json_object_get(data, "revised") != NULL;
     if (route->revised && (!json_is_true(json_object_get(data, "revised")) ||
-        direction != SNAG_IRC_OUTGOING || delivery < SNAG_IRC_ACKNOWLEDGED)) return -1;
+                              direction != SNAG_IRC_OUTGOING || delivery < SNAG_IRC_ACKNOWLEDGED))
+        return -1;
     if (membership) {
         if (kind != SNAG_IRC_CHANNEL ||
             !event_field(data, "membership", route->membership, sizeof(route->membership)) ||
             !snag_hex_is_lower(route->membership, SNAG_ID_HEX_LEN) ||
             !json_is_boolean(json_object_get(data, "joined")) ||
-            !json_is_boolean(json_object_get(data, "rejoin"))) return -1;
+            !json_is_boolean(json_object_get(data, "rejoin")))
+            return -1;
         route->joined = json_is_true(json_object_get(data, "joined"));
         route->rejoin = json_is_true(json_object_get(data, "rejoin"));
         if ((event->kind == SNAG_IRC_CONNECTED || event->kind == SNAG_IRC_DISCONNECTED) &&
             (!event->local || event->historical ||
-             (event->kind == SNAG_IRC_CONNECTED) != route->joined)) return -1;
+                (event->kind == SNAG_IRC_CONNECTED) != route->joined))
+            return -1;
     }
     bool chat = event->kind == SNAG_IRC_MESSAGE || event->kind == SNAG_IRC_NOTICE;
-    bool sent_input = chat && event->local && !event->historical && event->input &&
+    bool sent_input =
+        chat && event->local && !event->historical && event->input &&
         route->kind == SNAG_IRC_CHANNEL && route->identity == SNAG_IRC_OPERATOR &&
         route->direction == SNAG_IRC_OUTGOING &&
         (route->delivery == SNAG_IRC_WRITTEN || route->delivery == SNAG_IRC_ACKNOWLEDGED);
     if ((route->kind == SNAG_IRC_QUERY && (!route->peer[0] || event->room[0])) ||
         (route->kind != SNAG_IRC_QUERY && route->peer[0]) ||
-        (route->kind == SNAG_IRC_CHANNEL && (!event->room[0] ||
-            strcmp(route->target, event->room))) ||
+        (route->kind == SNAG_IRC_CHANNEL &&
+            (!event->room[0] || strcmp(route->target, event->room))) ||
         (route->kind == SNAG_IRC_CONNECTION_EVENTS &&
             (event->room[0] || event->kind == SNAG_IRC_MESSAGE)) ||
         (chat && !route->target[0]) || (route->action && event->kind != SNAG_IRC_MESSAGE) ||
@@ -278,9 +293,10 @@ route_read(const json_t *data, struct snag_irc_event *event)
                 (event->input && !sent_input))) ||
         (!snag_irc_event_model_visible(event) && (event->input || event->urgent || event->reply)) ||
         ((event->historical || event->kind != SNAG_IRC_MESSAGE ||
-            (route->direction != SNAG_IRC_INCOMING && !sent_input)) &&
+             (route->direction != SNAG_IRC_INCOMING && !sent_input)) &&
             (event->urgent || event->reply)) ||
-        (event->reply && !event->urgent)) return -1;
+        (event->reply && !event->urgent))
+        return -1;
     return 0;
 }
 
@@ -298,8 +314,7 @@ event_read(const json_t *data, struct snag_irc_event *event, bool routed)
     if (!routed && !json_object_get(data, "stream") && !json_object_get(data, "sequence") &&
         !json_object_get(data, "input")) {
         filled = json_deep_copy(data);
-        if (!filled ||
-            json_object_set_new(filled, "stream", json_string("")) < 0 ||
+        if (!filled || json_object_set_new(filled, "stream", json_string("")) < 0 ||
             json_object_set_new(filled, "sequence", json_integer(0)) < 0 ||
             json_object_set_new(filled, "input", json_false()) < 0) {
             json_decref(filled);
@@ -310,30 +325,35 @@ event_read(const json_t *data, struct snag_irc_event *event, bool routed)
     event->classified = json_object_get(data, "urgent") != NULL;
     event->urgent = json_is_true(json_object_get(data, "urgent"));
     event->reply = json_is_true(json_object_get(data, "reply"));
-    const char *keys = routed ? event->classified ?
-        "endpoint historical kind local nick op room text timestamp_ms stream sequence "
-            "input urgent reply routing" :
-        "endpoint historical kind local nick op room text timestamp_ms stream sequence "
-            "input routing" :
-        event->classified ?
-        "endpoint historical kind local nick op room text timestamp_ms stream sequence "
-            "input urgent reply" :
-        "endpoint historical kind local nick op room text timestamp_ms stream sequence input";
+    const char *keys =
+        routed
+            ? event->classified
+                  ? "endpoint historical kind local nick op room text timestamp_ms stream sequence "
+                    "input urgent reply routing"
+                  : "endpoint historical kind local nick op room text timestamp_ms stream sequence "
+                    "input routing"
+        : event->classified
+            ? "endpoint historical kind local nick op room text timestamp_ms stream sequence "
+              "input urgent reply"
+            : "endpoint historical kind local nick op room text timestamp_ms stream sequence input";
     if (!snag_json_arg_keys(data, keys, routed ? "reply_to" : "", NULL, 0u) || !kind ||
         strlen(kind) != json_string_length(json_object_get(data, "kind")) ||
         (event->classified && (!json_is_boolean(json_object_get(data, "urgent")) ||
-                               !json_is_boolean(json_object_get(data, "reply")))) ||
-        !event_field(data, "endpoint", event->endpoint, sizeof(event->endpoint)) || !event->endpoint[0] ||
-        !event_field(data, "room", event->room, sizeof(event->room)) ||
+                                  !json_is_boolean(json_object_get(data, "reply")))) ||
+        !event_field(data, "endpoint", event->endpoint, sizeof(event->endpoint)) ||
+        !event->endpoint[0] || !event_field(data, "room", event->room, sizeof(event->room)) ||
         !event_field(data, "nick", event->nick, sizeof(event->nick)) ||
         !event_field(data, "text", event->text, sizeof(event->text)) ||
         !json_is_boolean(json_object_get(data, "historical")) ||
-        !json_is_boolean(json_object_get(data, "local")) || !json_is_boolean(json_object_get(data, "op")) ||
-        snag_json_integer_u64(data, "timestamp_ms", &event->timestamp_ms) < 0 || !event->timestamp_ms ||
+        !json_is_boolean(json_object_get(data, "local")) ||
+        !json_is_boolean(json_object_get(data, "op")) ||
+        snag_json_integer_u64(data, "timestamp_ms", &event->timestamp_ms) < 0 ||
+        !event->timestamp_ms ||
         !event_field(data, "stream", event->stream, sizeof(event->stream)) ||
         (event->stream[0] && !snag_hex_is_lower(event->stream, SNAG_ID_HEX_LEN)) ||
         snag_json_integer_u64(data, "sequence", &event->sequence) < 0 ||
-        (!!event->sequence != !!event->stream[0]) || !json_is_boolean(json_object_get(data, "input")))
+        (!!event->sequence != !!event->stream[0]) ||
+        !json_is_boolean(json_object_get(data, "input")))
         goto invalid;
     for (unsigned int i = 0u; i <= (unsigned int)SNAG_IRC_HISTORY_READY; ++i) {
         if (strcmp(kind, snag_irc_kind_name((enum snag_irc_event_kind)i)) != 0) continue;
@@ -350,12 +370,13 @@ event_read(const json_t *data, struct snag_irc_event *event, bool routed)
             event->reply_captured = true;
             if (!json_is_null(reply) &&
                 (!snag_json_exact_keys(reply, "conversation_id membership") ||
-                 !event_field(reply, "conversation_id", event->reply_conversation,
-                    sizeof(event->reply_conversation)) ||
-                 !snag_hex_is_lower(event->reply_conversation, SNAG_ID_HEX_LEN) ||
-                 !event_field(reply, "membership", event->reply_membership,
-                    sizeof(event->reply_membership)) ||
-                 !snag_hex_is_lower(event->reply_membership, SNAG_ID_HEX_LEN))) goto invalid;
+                    !event_field(reply, "conversation_id", event->reply_conversation,
+                        sizeof(event->reply_conversation)) ||
+                    !snag_hex_is_lower(event->reply_conversation, SNAG_ID_HEX_LEN) ||
+                    !event_field(reply, "membership", event->reply_membership,
+                        sizeof(event->reply_membership)) ||
+                    !snag_hex_is_lower(event->reply_membership, SNAG_ID_HEX_LEN)))
+                goto invalid;
         }
         json_decref(filled);
         return 0;
@@ -393,8 +414,8 @@ snag_irc_event_payload_read(const json_t *data, struct snag_irc_event *event)
 }
 
 int
-snag_irc_event_capture_reply(struct snag_irc_event *event, const json_t *directory,
-    enum snag_irc_casemapping mapping)
+snag_irc_event_capture_reply(
+    struct snag_irc_event *event, const json_t *directory, enum snag_irc_casemapping mapping)
 {
     if (!event->routed || !event->reply || event->route.kind != SNAG_IRC_CHANNEL) return 0;
     event->reply_captured = true;
@@ -402,20 +423,23 @@ snag_irc_event_capture_reply(struct snag_irc_event *event, const json_t *directo
     const json_t *connection = json_object_get(directory, event->route.connection);
     const char *id;
     json_t *item;
-    json_object_foreach(json_object_get(connection, "conversations"), id, item) {
+    json_object_foreach(json_object_get(connection, "conversations"), id, item)
+    {
         (void)id;
         struct snag_irc_event candidate;
-        if (snag_irc_event_record_read("irc_event_v2", json_object_get(item, "data"),
-            &candidate) < 0) return -1;
+        if (snag_irc_event_record_read("irc_event_v2", json_object_get(item, "data"), &candidate) <
+            0)
+            return -1;
         if (candidate.route.kind != SNAG_IRC_CHANNEL ||
             candidate.route.identity != SNAG_IRC_AGENT || !candidate.route.joined ||
             !candidate.route.membership[0] ||
             candidate.route.generation != event->route.generation ||
-            !snag_irc_name_equal(mapping, candidate.room, event->room)) continue;
+            !snag_irc_name_equal(mapping, candidate.room, event->room))
+            continue;
         memcpy(event->reply_conversation, candidate.route.conversation,
             sizeof(event->reply_conversation));
-        memcpy(event->reply_membership, candidate.route.membership,
-            sizeof(event->reply_membership));
+        memcpy(
+            event->reply_membership, candidate.route.membership, sizeof(event->reply_membership));
         return 0;
     }
     return 0;
@@ -425,8 +449,8 @@ static bool
 conversation_entry(const json_t *entry, uint64_t *seq, struct snag_irc_event *event)
 {
     return snag_json_exact_keys(entry, "seq data") &&
-        snag_json_integer_u64(entry, "seq", seq) == 0 && *seq &&
-        snag_irc_event_record_read("irc_event_v2", json_object_get(entry, "data"), event) == 0;
+           snag_json_integer_u64(entry, "seq", seq) == 0 && *seq &&
+           snag_irc_event_record_read("irc_event_v2", json_object_get(entry, "data"), event) == 0;
 }
 
 bool
@@ -434,11 +458,11 @@ snag_irc_activity_item_valid(const json_t *item, uint64_t after, uint64_t next)
 {
     uint64_t seq, time, received, incoming;
     return snag_json_exact_keys(item, "seq time received incoming") &&
-        snag_json_integer_u64(item, "seq", &seq) == 0 && seq > after && seq < next &&
-        snag_json_integer_u64(item, "time", &time) == 0 &&
-        snag_json_integer_u64(item, "received", &received) == 0 &&
-        snag_json_integer_u64(item, "incoming", &incoming) == 0 && incoming <= seq &&
-        (received ? incoming > after && received <= incoming - after : !incoming);
+           snag_json_integer_u64(item, "seq", &seq) == 0 && seq > after && seq < next &&
+           snag_json_integer_u64(item, "time", &time) == 0 &&
+           snag_json_integer_u64(item, "received", &received) == 0 &&
+           snag_json_integer_u64(item, "incoming", &incoming) == 0 && incoming <= seq &&
+           (received ? incoming > after && received <= incoming - after : !incoming);
 }
 
 bool
@@ -448,20 +472,24 @@ snag_irc_activity_valid(const json_t *activity, const json_t *directory, uint64_
     const json_t *items = json_object_get(activity, "items");
     if (!snag_json_exact_keys(activity, "after items") || !json_is_object(items) ||
         snag_json_integer_u64(activity, "after", &after) < 0 || after >= next ||
-        !json_is_object(directory)) return false;
+        !json_is_object(directory))
+        return false;
     size_t found = 0u;
     uint64_t received = 0u;
     const char *connection, *conversation;
     const json_t *entry, *row;
-    json_object_foreach((json_t *)directory, connection, entry) {
+    json_object_foreach((json_t *)directory, connection, entry)
+    {
         (void)connection;
-        json_object_foreach(json_object_get(entry, "conversations"), conversation, row) {
+        json_object_foreach(json_object_get(entry, "conversations"), conversation, row)
+        {
             const json_t *item = json_object_get(items, conversation);
             if (!item) continue;
             uint64_t seq;
             if (!snag_irc_activity_item_valid(item, after, next) ||
                 snag_json_integer_u64(row, "seq", &seq) < 0 ||
-                (uint64_t)json_integer_value(json_object_get(item, "seq")) > seq) return false;
+                (uint64_t)json_integer_value(json_object_get(item, "seq")) > seq)
+                return false;
             uint64_t count = (uint64_t)json_integer_value(json_object_get(item, "received"));
             if (count > next - 1u - after - received) return false;
             received += count;
@@ -472,13 +500,16 @@ snag_irc_activity_valid(const json_t *activity, const json_t *directory, uint64_
 }
 
 json_t *
-snag_irc_activity_update(const json_t *activity, const struct snag_irc_event *event,
-                         uint64_t seq, uint64_t after)
+snag_irc_activity_update(
+    const json_t *activity, const struct snag_irc_event *event, uint64_t seq, uint64_t after)
 {
-    if (!seq || seq > INT64_MAX || after >= seq) { errno = EINVAL; return NULL; }
+    if (!seq || seq > INT64_MAX || after >= seq) {
+        errno = EINVAL;
+        return NULL;
+    }
     if (activity && snag_json_integer_u64(activity, "after", &after) < 0) return NULL;
-    bool message = !event->historical &&
-        (event->kind == SNAG_IRC_MESSAGE || event->kind == SNAG_IRC_NOTICE);
+    bool message =
+        !event->historical && (event->kind == SNAG_IRC_MESSAGE || event->kind == SNAG_IRC_NOTICE);
     if (activity && !message) return json_incref((json_t *)activity);
     json_t *items = activity ? json_copy(json_object_get(activity, "items")) : json_object();
     json_t *result = NULL;
@@ -498,9 +529,9 @@ snag_irc_activity_update(const json_t *activity, const struct snag_irc_event *ev
             ++received;
             incoming = seq;
         }
-        json_t *item = json_pack("{s:I,s:I,s:I,s:I}", "seq", (json_int_t)seq,
-            "time", (json_int_t)event->timestamp_ms, "received", (json_int_t)received,
-            "incoming", (json_int_t)incoming);
+        json_t *item = json_pack("{s:I,s:I,s:I,s:I}", "seq", (json_int_t)seq, "time",
+            (json_int_t)event->timestamp_ms, "received", (json_int_t)received, "incoming",
+            (json_int_t)incoming);
         if (!item || json_object_set_new(items, event->route.conversation, item) < 0) goto out;
     }
     result = json_pack("{s:I,s:O}", "after", (json_int_t)after, "items", items);
@@ -518,7 +549,8 @@ snag_irc_conversations_valid(const json_t *state, uint64_t next_seq)
     const json_t *connection;
     bool valid = false;
     if (!seen) return false;
-    json_object_foreach((json_t *)state, connection_id, connection) {
+    json_object_foreach((json_t *)state, connection_id, connection)
+    {
         uint64_t generation;
         char endpoint[SNAG_CONFIG_IRC_ENDPOINT_MAX + 1u];
         const json_t *status = json_object_get(connection, "connected");
@@ -527,22 +559,24 @@ snag_irc_conversations_valid(const json_t *state, uint64_t next_seq)
             !snag_json_exact_keys(connection, "endpoint generation connected conversations") ||
             !event_field(connection, "endpoint", endpoint, sizeof(endpoint)) || !endpoint[0] ||
             snag_json_integer_u64(connection, "generation", &generation) < 0 || !generation ||
-            !snag_json_exact_keys(status, "operator agent") ||
-            !json_is_object(items) || !json_object_size(items)) goto out;
+            !snag_json_exact_keys(status, "operator agent") || !json_is_object(items) ||
+            !json_object_size(items))
+            goto out;
         for (size_t i = 0u; i < 2u; ++i) {
             const json_t *value = json_object_get(status, identities[i]);
             if (!json_is_null(value) && !json_is_boolean(value)) goto out;
         }
         const char *id;
         const json_t *entry;
-        json_object_foreach((json_t *)items, id, entry) {
+        json_object_foreach((json_t *)items, id, entry)
+        {
             struct snag_irc_event event;
             uint64_t seq;
             if (!conversation_entry(entry, &seq, &event) || seq >= next_seq ||
                 strcmp(id, event.route.conversation) ||
-                strcmp(connection_id, event.route.connection) ||
-                strcmp(endpoint, event.endpoint) || event.route.generation > generation ||
-                json_object_get(seen, id) || json_object_set_new(seen, id, json_true()) < 0)
+                strcmp(connection_id, event.route.connection) || strcmp(endpoint, event.endpoint) ||
+                event.route.generation > generation || json_object_get(seen, id) ||
+                json_object_set_new(seen, id, json_true()) < 0)
                 goto out;
         }
     }
@@ -569,39 +603,43 @@ snag_irc_conversations_update(const json_t *state, const json_t *data, uint64_t 
     const char *key;
     const json_t *value;
     /* A stable conversation belongs to exactly one connection and local role. */
-    json_object_foreach((json_t *)state, key, value) {
+    json_object_foreach((json_t *)state, key, value)
+    {
         if (strcmp(key, route->connection) &&
             json_object_get(json_object_get(value, "conversations"), route->conversation))
             goto invalid;
     }
     if (old && (snag_json_integer_u64(old, "generation", &generation) < 0 ||
-        route->generation < generation ||
-        !snag_json_string(old, "endpoint") ||
-        strcmp(event.endpoint, snag_json_string(old, "endpoint")))) goto invalid;
+                   route->generation < generation || !snag_json_string(old, "endpoint") ||
+                   strcmp(event.endpoint, snag_json_string(old, "endpoint"))))
+        goto invalid;
     if (previous) {
         struct snag_irc_event prior;
         uint64_t prior_seq;
         if (!conversation_entry(previous, &prior_seq, &prior) || seq <= prior_seq ||
             route->identity != prior.route.identity || route->kind != prior.route.kind ||
-            strcmp(event.room, prior.room)) goto invalid;
+            strcmp(event.room, prior.room))
+            goto invalid;
         if (strcmp(route->peer, prior.route.peer) &&
             (event.kind != SNAG_IRC_NICK || route->generation != prior.route.generation ||
-                route->direction != SNAG_IRC_INCOMING ||
-                strcmp(event.nick, prior.route.peer) || strcmp(event.text, route->peer)))
+                route->direction != SNAG_IRC_INCOMING || strcmp(event.nick, prior.route.peer) ||
+                strcmp(event.text, route->peer)))
             goto invalid;
     }
 
     json_t *result = state ? json_copy((json_t *)state) : json_object();
     json_t *connection = old ? json_copy((json_t *)old) : json_object();
     json_t *conversations = items ? json_copy((json_t *)items) : json_object();
-    json_t *status = old && generation == route->generation ?
-        json_copy(json_object_get(old, "connected")) : json_pack("{s:n,s:n}", "operator", "agent");
+    json_t *status = old && generation == route->generation
+                         ? json_copy(json_object_get(old, "connected"))
+                         : json_pack("{s:n,s:n}", "operator", "agent");
     json_t *entry = json_pack("{s:I,s:O}", "seq", (json_int_t)seq, "data", data);
-    bool connected_event = route->kind == SNAG_IRC_CONNECTION_EVENTS &&
+    bool connected_event =
+        route->kind == SNAG_IRC_CONNECTION_EVENTS &&
         (event.kind == SNAG_IRC_CONNECTED || event.kind == SNAG_IRC_DISCONNECTED);
     if (!result || !connection || !conversations || !status || !entry ||
         (connected_event && json_object_set_new(status, identities[route->identity],
-            json_boolean(event.kind == SNAG_IRC_CONNECTED)) < 0) ||
+                                json_boolean(event.kind == SNAG_IRC_CONNECTED)) < 0) ||
         json_object_set_new(connection, "endpoint", json_string(event.endpoint)) < 0 ||
         json_object_set_new(connection, "generation", json_integer(route->generation)) < 0 ||
         json_object_set(connection, "connected", status) < 0 ||
@@ -628,27 +666,29 @@ snag_irc_event_reference(struct snag_buf *out, const struct snag_irc_event *even
     if (!snag_irc_event_model_visible(event)) return 0;
     if (!event->routed) {
         return snag_buf_printf(out,
-            "[IRC update id=%s:%llu endpoint=%s room=%s event=%s sender=%s]\n",
-            event->stream, (unsigned long long)event->sequence, event->endpoint, event->room,
+            "[IRC update id=%s:%llu endpoint=%s room=%s event=%s sender=%s]\n", event->stream,
+            (unsigned long long)event->sequence, event->endpoint, event->room,
             snag_irc_kind_name(event->kind), event->nick[0] ? event->nick : "server");
     }
     const struct snag_irc_event_route *route = &event->route;
     if ((unsigned int)route->identity > SNAG_IRC_AGENT ||
         (unsigned int)route->kind > SNAG_IRC_QUERY ||
         (unsigned int)route->direction > SNAG_IRC_OUTGOING ||
-        (unsigned int)route->delivery > SNAG_IRC_UNCERTAIN) return snag_errno(EINVAL);
-    return snag_buf_printf(out, "[IRC update id=%s:%llu endpoint=%s connection=%s "
+        (unsigned int)route->delivery > SNAG_IRC_UNCERTAIN)
+        return snag_errno(EINVAL);
+    return snag_buf_printf(out,
+        "[IRC update id=%s:%llu endpoint=%s connection=%s "
         "generation=%llu identity=%s conversation=%s kind=%s peer=%s target=%s "
         "direction=%s event=%s sender=%s action=%s%s%s%s%s]\n",
         event->stream, (unsigned long long)event->sequence, event->endpoint, route->connection,
         (unsigned long long)route->generation, identities[route->identity], route->conversation,
         conversations[route->kind], route->peer, route->target, directions[route->direction],
         snag_irc_kind_name(event->kind), event->nick[0] ? event->nick : "server",
-        route->action ? "true" : "false",
-        route->direction == SNAG_IRC_OUTGOING ? " delivery=" : "",
+        route->action ? "true" : "false", route->direction == SNAG_IRC_OUTGOING ? " delivery=" : "",
         route->direction == SNAG_IRC_OUTGOING ? deliveries[route->delivery] : "",
-        event->reply_captured ? event->reply_conversation[0] ?
-            " reply_to=channel:" : " reply_to=unavailable" : "",
+        event->reply_captured
+            ? event->reply_conversation[0] ? " reply_to=channel:" : " reply_to=unavailable"
+            : "",
         event->reply_conversation);
 }
 
@@ -661,26 +701,29 @@ snag_irc_event_projection(struct snag_buf *out, const struct snag_irc_event *eve
         if ((unsigned int)route->identity > SNAG_IRC_AGENT ||
             (unsigned int)route->kind > SNAG_IRC_QUERY ||
             (unsigned int)route->direction > SNAG_IRC_OUTGOING ||
-            (unsigned int)route->delivery > SNAG_IRC_UNCERTAIN) return snag_errno(EINVAL);
-        return snag_buf_printf(out, "[IRC endpoint=%s connection=%s generation=%llu "
+            (unsigned int)route->delivery > SNAG_IRC_UNCERTAIN)
+            return snag_errno(EINVAL);
+        return snag_buf_printf(out,
+            "[IRC endpoint=%s connection=%s generation=%llu "
             "identity=%s conversation=%s kind=%s peer=%s target=%s direction=%s "
             "event=%s sender=%s action=%s historical=%s id=%s:%llu%s%s%s%s]\n%s\n",
             event->endpoint, route->connection, (unsigned long long)route->generation,
             identities[route->identity], route->conversation, conversations[route->kind],
             route->peer, route->target, directions[route->direction],
             snag_irc_kind_name(event->kind), event->nick[0] ? event->nick : "server",
-            route->action ? "true" : "false", event->historical ? "true" : "false",
-            event->stream, (unsigned long long)event->sequence,
+            route->action ? "true" : "false", event->historical ? "true" : "false", event->stream,
+            (unsigned long long)event->sequence,
             route->direction == SNAG_IRC_OUTGOING ? " delivery=" : "",
             route->direction == SNAG_IRC_OUTGOING ? deliveries[route->delivery] : "",
-            event->reply_captured ? event->reply_conversation[0] ?
-                " reply_to=channel:" : " reply_to=unavailable" : "",
+            event->reply_captured
+                ? event->reply_conversation[0] ? " reply_to=channel:" : " reply_to=unavailable"
+                : "",
             event->reply_conversation, event->text);
     }
     return snag_buf_printf(out,
         "[IRC endpoint=%s room=%s event=%s sender=%s operator=%s historical=%s id=%s:%llu]\n%s\n",
         event->endpoint, event->room, snag_irc_kind_name(event->kind),
         event->nick[0] ? event->nick : "server", event->op ? "true" : "false",
-        event->historical ? "true" : "false", event->stream,
-        (unsigned long long)event->sequence, event->text);
+        event->historical ? "true" : "false", event->stream, (unsigned long long)event->sequence,
+        event->text);
 }

@@ -98,8 +98,8 @@ process_slots_reserve(size_t needed)
 }
 
 static bool
-json_u32_member(const json_t *object, const char *key, uint32_t fallback,
-                uint32_t min, uint32_t max, uint32_t *out, char *error, size_t size)
+json_u32_member(const json_t *object, const char *key, uint32_t fallback, uint32_t min,
+    uint32_t max, uint32_t *out, char *error, size_t size)
 {
     uint64_t value;
     if (!snag_json_arg_uint(object, key, fallback, min, max, &value, error, size)) return false;
@@ -108,11 +108,14 @@ json_u32_member(const json_t *object, const char *key, uint32_t fallback,
 }
 
 static bool
-command_output_limit(const json_t *arguments, uint32_t ceiling, uint32_t *out, char *error, size_t size)
+command_output_limit(
+    const json_t *arguments, uint32_t ceiling, uint32_t *out, char *error, size_t size)
 {
-    const char *key = snag_json_arg_name(arguments, "max_output_bytes", "max_output_tokens", error, size);
-    if (!key || !json_u32_member(arguments, key, ceiling, 1u,
-                         (uint32_t)SNAG_CONFIG_TOKEN_LIMIT_MAX, out, error, size)) return false;
+    const char *key =
+        snag_json_arg_name(arguments, "max_output_bytes", "max_output_tokens", error, size);
+    if (!key || !json_u32_member(arguments, key, ceiling, 1u, (uint32_t)SNAG_CONFIG_TOKEN_LIMIT_MAX,
+                    out, error, size))
+        return false;
     if (*out > ceiling) *out = ceiling;
     return true;
 }
@@ -123,7 +126,8 @@ absolute_dir_arg_valid(const char *path)
     snag_file_info st;
 
     if (!path || !snag_path_root_len(path)) return false;
-    return snag_text_valid(path, 0u, SNAG_PATH_MAX_BYTES) && snag_stat(path, &st) == 0 && S_ISDIR(st.st_mode);
+    return snag_text_valid(path, 0u, SNAG_PATH_MAX_BYTES) && snag_stat(path, &st) == 0 &&
+           S_ISDIR(st.st_mode);
 }
 
 static int
@@ -132,14 +136,14 @@ output_append(struct managed_process *proc, unsigned int stream, const unsigned 
 {
     struct snag_buf *data = &proc->output[stream].data;
 
-    if (len > data->max - data->len &&
-        flush_capture(proc, stream, error, error_size) < 0) return -1;
+    if (len > data->max - data->len && flush_capture(proc, stream, error, error_size) < 0)
+        return -1;
     return snag_buf_append(data, text, len);
 }
 
 static int
-redact_output(struct managed_process *proc, unsigned int stream, bool final,
-    char *error, size_t error_size)
+redact_output(
+    struct managed_process *proc, unsigned int stream, bool final, char *error, size_t error_size)
 {
     static const unsigned char marker[] = "<redacted:secret>";
     struct snag_buf *pending = &proc->output[stream].pending;
@@ -156,10 +160,10 @@ redact_output(struct managed_process *proc, unsigned int stream, bool final,
         off = limit;
     } else {
         while (off < limit) {
-            size_t matched = snag_wire_secret_match(pending->data + off,
-                                pending->len - off, &proc->secrets.wire);
+            size_t matched = snag_wire_secret_match(
+                pending->data + off, pending->len - off, &proc->secrets.wire);
             if (output_append(proc, stream, matched ? marker : pending->data + off,
-                               matched ? sizeof(marker) - 1u : 1u, error, error_size) < 0) {
+                    matched ? sizeof(marker) - 1u : 1u, error, error_size) < 0) {
                 rc = -1;
                 break;
             }
@@ -183,44 +187,51 @@ excerpt_json(struct snag_buf *text, const char *label, const struct output_excer
     if (data->len) {
         if (snag_buf_printf(text, "%s%s:\n", text->len ? "\n" : "", label) < 0 ||
             (!textual && snag_buf_printf(text, "<%llu binary bytes; base64 follows>\n",
-                                        (unsigned long long)data->len) < 0)) return NULL;
+                             (unsigned long long)data->len) < 0))
+            return NULL;
         offset = text->len;
-        if ((textual ? snag_buf_append(text, data->data, data->len) :
-                       snag_base64_append(text, data->data, data->len)) < 0) return NULL;
+        if ((textual ? snag_buf_append(text, data->data, data->len)
+                     : snag_base64_append(text, data->data, data->len)) < 0)
+            return NULL;
         length = text->len - offset;
         if (text->data[text->len - 1u] != '\n' && snag_buf_putc(text, '\n') < 0) return NULL;
     }
-    return json_pack("{s:I,s:s,s:I,s:s%,s:I}",
-        "discarded_bytes", (json_int_t)(stream->bytes - data->len), "encoding", textual ? "utf8" : "base64",
-        "original_bytes", (json_int_t)stream->bytes,
-        "retained", length ? (const char *)text->data + offset : "", length,
-        "retained_bytes", (json_int_t)data->len);
+    return json_pack("{s:I,s:s,s:I,s:s%,s:I}", "discarded_bytes",
+        (json_int_t)(stream->bytes - data->len), "encoding", textual ? "utf8" : "base64",
+        "original_bytes", (json_int_t)stream->bytes, "retained",
+        length ? (const char *)text->data + offset : "", length, "retained_bytes",
+        (json_int_t)data->len);
 }
 
 static int
 output_limit_notice(struct snag_buf *text, uint64_t requested, uint32_t effective)
 {
     return requested > effective ? snag_buf_printf(text,
-        "Requested max_output_bytes=%llu; applied max_output_bytes=%u (configured maximum, UTF-8 bytes).\n",
-        (unsigned long long)requested, effective) : 0;
+                                       "Requested max_output_bytes=%llu; applied "
+                                       "max_output_bytes=%u (configured maximum, UTF-8 bytes).\n",
+                                       (unsigned long long)requested, effective)
+                                 : 0;
 }
 
 static json_t *
-result_json(const char *status, const char *reason, int64_t exit_code,
-            int signal_number, uint64_t duration_ms, const char *handle, const struct managed_process *proc,
-            const struct output_excerpt *stdout_stream, const struct output_excerpt *stderr_stream)
+result_json(const char *status, const char *reason, int64_t exit_code, int signal_number,
+    uint64_t duration_ms, const char *handle, const struct managed_process *proc,
+    const struct output_excerpt *stdout_stream, const struct output_excerpt *stderr_stream)
 {
     uint64_t wait_ms = snag_monotonic_ms() - proc->wait_started_ms;
     json_t *out = NULL, *stdout_json = NULL, *stderr_json = NULL;
     const char *msg = NULL;
     struct snag_buf text = {.max = SIZE_MAX};
 
-    if (output_limit_notice(&text, proc->requested_output_tokens, proc->max_output_tokens) < 0) goto done;
+    if (output_limit_notice(&text, proc->requested_output_tokens, proc->max_output_tokens) < 0)
+        goto done;
 
     if (snag_string_in(status, "succeeded failed")) {
-        if (snag_buf_printf(&text, "Process exited with code %lld.\n", (long long)exit_code) < 0) goto done;
+        if (snag_buf_printf(&text, "Process exited with code %lld.\n", (long long)exit_code) < 0)
+            goto done;
     } else if (strcmp(status, "signaled") == 0) {
-        if (snag_buf_printf(&text, "Process was terminated by signal %d.\n", signal_number) < 0) goto done;
+        if (snag_buf_printf(&text, "Process was terminated by signal %d.\n", signal_number) < 0)
+            goto done;
     } else if (strcmp(status, "cancelled") == 0) {
         msg = "Process was cancelled by the user.\n";
     } else if (strcmp(status, "running") == 0) {
@@ -228,19 +239,33 @@ result_json(const char *status, const char *reason, int64_t exit_code,
 
         if (reason && strcmp(reason, "wait_timeout") == 0) {
             if (snag_buf_printf(&text,
-                "Tool wait limit reached after %llu ms (requested yield_ms=%u; host max_wait_ms=%u). ",
-                (unsigned long long)wait_ms, proc->requested_yield_ms, proc->max_wait_ms) < 0) goto done;
-            msg = "Control returned to the model; the process remains owned by this session. Evaluate its output and state, then use the same handle to wait, interact, or request termination. Do not restart the command merely because this wait expired.\n";
+                    "Tool wait limit reached after %llu ms (requested yield_ms=%u; host "
+                    "max_wait_ms=%u). ",
+                    (unsigned long long)wait_ms, proc->requested_yield_ms, proc->max_wait_ms) < 0)
+                goto done;
+            msg = "Control returned to the model; the process remains owned by this session. "
+                  "Evaluate its output and state, then use the same handle to wait, interact, or "
+                  "request termination. Do not restart the command merely because this wait "
+                  "expired.\n";
         } else if (reason && strcmp(reason, "operator_yield") == 0)
-            msg = "The operator requested /yield: control returned to the model while the process remains owned by this session. Evaluate its output and state before deciding what to do next. Use the same handle to wait, interact, or request termination; /yield sends no signal.\n";
+            msg = "The operator requested /yield: control returned to the model while the process "
+                  "remains owned by this session. Evaluate its output and state before deciding "
+                  "what to do next. Use the same handle to wait, interact, or request termination; "
+                  "/yield sends no signal.\n";
         else if (reason && strcmp(reason, "timeout_handoff") == 0)
-            msg = "Command timeout elapsed; the process continues in the background. Use write_stdin with the active handle to wait for, interact with, or terminate it.\n";
+            msg =
+                "Command timeout elapsed; the process continues in the background. Use write_stdin "
+                "with the active handle to wait for, interact with, or terminate it.\n";
         else if (reason && strcmp(reason, "steering_handoff") == 0)
-            msg = "Command is still running because steering arrived. Use write_stdin with the active handle to wait for, interact with, or terminate it after considering the steer.\n";
-        else msg = "Process is still running.\n";
+            msg = "Command is still running because steering arrived. Use write_stdin with the "
+                  "active handle to wait for, interact with, or terminate it after considering the "
+                  "steer.\n";
+        else
+            msg = "Process is still running.\n";
         if (snag_buf_append(&text, msg, strlen(msg)) < 0) goto done;
         if (proc->closing) {
-            const char *pending = "Termination was already requested; process exit or output drain is still pending. The live handle remains valid.\n";
+            const char *pending = "Termination was already requested; process exit or output drain "
+                                  "is still pending. The live handle remains valid.\n";
             if (snag_buf_append(&text, pending, strlen(pending)) < 0) goto done;
         }
     } else if (strcmp(status, "io_failed") == 0) {
@@ -250,18 +275,22 @@ result_json(const char *status, const char *reason, int64_t exit_code,
     }
     if (msg && snag_buf_append(&text, msg, strlen(msg)) < 0) goto done;
     if (proc->output_incomplete) {
-        const char *warning = "Post-exit output drain reached its 2000 ms limit; output may be incomplete. The command has exited; remaining capture streams were closed without signalling unrelated descriptor owners.\n";
+        const char *warning = "Post-exit output drain reached its 2000 ms limit; output may be "
+                              "incomplete. The command has exited; remaining capture streams were "
+                              "closed without signalling unrelated descriptor owners.\n";
         if (snag_buf_append(&text, warning, strlen(warning)) < 0) goto done;
     }
     stdout_json = excerpt_json(&text, "stdout", stdout_stream);
     stderr_json = excerpt_json(&text, "stderr", stderr_stream);
     if (!stdout_json || !stderr_json || snag_buf_terminate(&text) < 0) goto done;
-    out = json_pack("{s:I,s:o,s:s?,s:s,s:s?,s:o,s:s,s:O,s:O}", "duration_ms", (json_int_t)duration_ms,
-        "exit_code", exit_code >= 0 ? json_integer(exit_code) : json_null(),
-        "handle", handle, "model_text", (const char *)text.data, "reason", reason,
-        "signal", signal_number > 0 ? json_integer(signal_number) : json_null(),
-        "status", status, "stderr", stderr_json, "stdout", stdout_json);
-done: json_decref(stdout_json);
+    out =
+        json_pack("{s:I,s:o,s:s?,s:s,s:s?,s:o,s:s,s:O,s:O}", "duration_ms", (json_int_t)duration_ms,
+            "exit_code", exit_code >= 0 ? json_integer(exit_code) : json_null(), "handle", handle,
+            "model_text", (const char *)text.data, "reason", reason, "signal",
+            signal_number > 0 ? json_integer(signal_number) : json_null(), "status", status,
+            "stderr", stderr_json, "stdout", stdout_json);
+done:
+    json_decref(stdout_json);
     json_decref(stderr_json);
     snag_buf_free(&text);
     return out;
@@ -294,14 +323,16 @@ static bool
 remove_env_entry(const char *entry, const struct snag_config *config)
 {
     static const char *const proxy_names[] = {
-        "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy" };
+        "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"};
 
     if (env_name_matches(entry, "OPENAI_API_KEY")) return true;
     for (size_t i = 0; i < config->provider_count; ++i)
         if (config->providers[i].api_key.kind == SNAG_SECRET_ENV &&
-            env_name_matches(entry, config->providers[i].api_key.value)) return true;
+            env_name_matches(entry, config->providers[i].api_key.value))
+            return true;
     for (size_t i = 0; i < config->secret_count; ++i)
-        if (config->secrets[i].kind == SNAG_SECRET_ENV && env_name_matches(entry, config->secrets[i].value))
+        if (config->secrets[i].kind == SNAG_SECRET_ENV &&
+            env_name_matches(entry, config->secrets[i].value))
             return true;
     for (size_t i = 0; i < sizeof(proxy_names) / sizeof(proxy_names[0]); ++i)
         if (env_name_matches(entry, proxy_names[i]) && proxy_with_userinfo(entry)) return true;
@@ -316,7 +347,8 @@ filtered_environment(const struct snag_config *config)
     char **env = snag_environment_entries();
     if (!env) return NULL;
     for (size_t i = 0; env[i]; ++i)
-        if (!remove_env_entry(env[i], config)) env[kept++] = env[i];
+        if (!remove_env_entry(env[i], config))
+            env[kept++] = env[i];
         else {
             size_t size = strlen(env[i]);
             volatile char *p = env[i];
@@ -334,8 +366,8 @@ snag_tools_environment(const struct snag_config *config)
 }
 
 static void
-write_stdin_chunk(struct managed_process *proc, const char *data, size_t len, size_t *written,
-                  bool *open_flag)
+write_stdin_chunk(
+    struct managed_process *proc, const char *data, size_t len, size_t *written, bool *open_flag)
 {
     while (*written < len) {
         ssize_t n = snag_child_write(&proc->child, data + *written, len - *written);
@@ -477,8 +509,7 @@ snag_tools_close_all(bool user_interrupt)
 }
 
 static int
-flush_capture(struct managed_process *proc, unsigned int stream,
-    char *error, size_t error_size)
+flush_capture(struct managed_process *proc, unsigned int stream, char *error, size_t error_size)
 {
     struct snag_buf *data = &proc->output[stream].data;
     size_t consumed = 0u;
@@ -492,8 +523,10 @@ flush_capture(struct managed_process *proc, unsigned int stream,
         size_t full = n;
         for (size_t tail = 1u; tail <= 3u && tail <= full; ++tail) {
             unsigned char c = data->data[consumed + full - tail];
-            size_t width = c >= 0xc2u && c <= 0xdfu ? 2u : c >= 0xe0u && c <= 0xefu ? 3u :
-                           c >= 0xf0u && c <= 0xf4u ? 4u : 0u;
+            size_t width = c >= 0xc2u && c <= 0xdfu   ? 2u
+                           : c >= 0xe0u && c <= 0xefu ? 3u
+                           : c >= 0xf0u && c <= 0xf4u ? 4u
+                                                      : 0u;
             if (width > tail && (open || consumed + full < data->len) &&
                 snag_utf8_valid(data->data + consumed, full - tail, true)) {
                 n = full - tail;
@@ -501,8 +534,9 @@ flush_capture(struct managed_process *proc, unsigned int stream,
             }
         }
         if (!n) break;
-        if (!journal_write || journal_write(journal_opaque, proc->handle, stream,
-            proc->output_offset[stream], data->data + consumed, n, error, error_size) < 0) {
+        if (!journal_write ||
+            journal_write(journal_opaque, proc->handle, stream, proc->output_offset[stream],
+                data->data + consumed, n, error, error_size) < 0) {
             rc = -1;
             break;
         }
@@ -515,8 +549,7 @@ flush_capture(struct managed_process *proc, unsigned int stream,
 }
 
 static int
-close_output(struct managed_process *proc, unsigned int stream,
-    char *error, size_t error_size)
+close_output(struct managed_process *proc, unsigned int stream, char *error, size_t error_size)
 {
     struct process_output *output = &proc->output[stream];
     if (redact_output(proc, stream, true, error, error_size) < 0) return -1;
@@ -531,8 +564,7 @@ close_output(struct managed_process *proc, unsigned int stream,
 }
 
 static int
-process_read(struct managed_process *proc, unsigned int stream,
-    char *error, size_t error_size)
+process_read(struct managed_process *proc, unsigned int stream, char *error, size_t error_size)
 {
     struct process_output *output = &proc->output[stream];
     unsigned char bytes[4096];
@@ -555,8 +587,9 @@ process_write(struct managed_process *proc)
     size_t before = proc->input_written;
     size_t end = proc->input.len;
     if (end - before > 4096u) end = before + 4096u;
-    if (before < end) write_stdin_chunk(proc, (const char *)proc->input.data, end,
-                           &proc->input_written, &proc->stdin_open);
+    if (before < end)
+        write_stdin_chunk(
+            proc, (const char *)proc->input.data, end, &proc->input_written, &proc->stdin_open);
     proc->input_written_total += proc->input_written - before;
     if (proc->input_written == proc->input.len) {
         snag_buf_reset(&proc->input);
@@ -577,7 +610,10 @@ int
 snag_tools_service(int timeout_ms, snag_wake_fd wake_fd, char *error, size_t error_size)
 {
     struct snag_child_event *fds;
-    struct { struct managed_process *proc; unsigned int stream; } *map;
+    struct {
+        struct managed_process *proc;
+        unsigned int stream;
+    } *map;
     size_t count = 0u, live = 0u, slots;
     uint64_t now = snag_monotonic_ms();
     int rc, saved;
@@ -598,7 +634,8 @@ snag_tools_service(int timeout_ms, snag_wake_fd wake_fd, char *error, size_t err
         if (!proc) continue;
         for (unsigned int s = 0u; s < 2u; ++s) {
             if (redact_output(proc, s, false, error, error_size) < 0 ||
-                flush_capture(proc, s, error, error_size) < 0) goto fail;
+                flush_capture(proc, s, error, error_size) < 0)
+                goto fail;
         }
         if (!proc->child_done) {
             int exited = snag_child_exited(&proc->child);
@@ -619,17 +656,20 @@ snag_tools_service(int timeout_ms, snag_wake_fd wake_fd, char *error, size_t err
             }
         }
         if (proc->in_call && !process_ready(proc) && !proc->handoff &&
-            now - proc->wait_started_ms >= proc->max_wait_ms) proc->handoff = "wait_timeout";
+            now - proc->wait_started_ms >= proc->max_wait_ms)
+            proc->handoff = "wait_timeout";
         if (proc->deadline_ms > now && proc->deadline_ms - now < (uint64_t)timeout_ms)
             timeout_ms = (int)(proc->deadline_ms - now);
         if (proc->child.pty && proc->output[0].open) snag_child_resize(&proc->child);
-        bool input = proc->stdin_open && (proc->input.len || (proc->input_eof && !proc->pty_eof_sent));
+        bool input =
+            proc->stdin_open && (proc->input.len || (proc->input_eof && !proc->pty_eof_sent));
         if (input && !proc->input.len && !proc->child.pty) process_write(proc);
         for (unsigned int s = 0u; s < 3u; ++s) {
-            bool open = s < 2u ? proc->output[s].open : input && proc->stdin_open && !proc->child.pty;
+            bool open =
+                s < 2u ? proc->output[s].open : input && proc->stdin_open && !proc->child.pty;
             if (!open) continue;
-            fds[count] = (struct snag_child_event){&proc->child, s,
-                s == 2u ? SNAG_CHILD_WRITE : SNAG_CHILD_READ, 0};
+            fds[count] = (struct snag_child_event){
+                &proc->child, s, s == 2u ? SNAG_CHILD_WRITE : SNAG_CHILD_READ, 0};
             if (s == 0u && proc->child.pty && input) fds[count].events |= SNAG_CHILD_WRITE;
             map[count].proc = proc;
             map[count++].stream = s;
@@ -650,7 +690,8 @@ snag_tools_service(int timeout_ms, snag_wake_fd wake_fd, char *error, size_t err
             process_write(proc);
             ++serviced;
         }
-        if (serviced < 16u && map[i].stream < 2u && (fds[i].revents & (SNAG_CHILD_READ | SNAG_CHILD_END))) {
+        if (serviced < 16u && map[i].stream < 2u &&
+            (fds[i].revents & (SNAG_CHILD_READ | SNAG_CHILD_END))) {
             if (process_read(proc, map[i].stream, error, error_size) < 0) goto fail;
             ++serviced;
         }
@@ -680,11 +721,13 @@ fail:
     free(map);
     errno = saved;
     if (error && error_size && error[0]) return -1;
-    return snag_errorf(error, error_size, "command I/O or output journal failed: %s", strerror(errno));
+    return snag_errorf(
+        error, error_size, "command I/O or output journal failed: %s", strerror(errno));
 }
 
 int
-snag_tools_collect(const char *handle, const char *reason, json_t **result, char *error, size_t error_size)
+snag_tools_collect(
+    const char *handle, const char *reason, json_t **result, char *error, size_t error_size)
 {
     struct managed_process *proc = find_process(handle);
     struct output_excerpt streams[2] = {0};
@@ -699,7 +742,8 @@ snag_tools_collect(const char *handle, const char *reason, json_t **result, char
         snag_buf_init(&streams[s].data, cap);
         streams[s].bytes = proc->output_offset[s] - proc->collected_offset[s];
         if (journal_read(journal_opaque, handle, s, proc->collected_offset[s],
-                         proc->output_offset[s], &streams[s].data) < 0) goto out;
+                proc->output_offset[s], &streams[s].data) < 0)
+            goto out;
         proc->result_offset[s] = proc->output_offset[s];
     }
     if (process_ready(proc)) {
@@ -730,16 +774,16 @@ snag_tools_collect(const char *handle, const char *reason, json_t **result, char
         snag_monotonic_ms() - proc->started_ms, process_ready(proc) ? NULL : handle, proc,
         &streams[0], &streams[1]);
     if (!*result ||
-        snag_json_set_new(*result, "max_output_tokens", json_integer(proc->max_output_tokens)) < 0) goto out;
-    json_t *ref = json_pack("{s:I,s:I,s:I,s:I,s:I,s:I,s:I,s:i,s:i,s:s,s:b}",
-        "stdout_start", (json_int_t)proc->collected_offset[0],
-        "stdout_end", (json_int_t)proc->result_offset[0],
-        "stderr_start", (json_int_t)proc->collected_offset[1],
-        "stderr_end", (json_int_t)proc->result_offset[1],
-        "stdin_accepted", (json_int_t)proc->input_accepted_total,
-        "stdin_written", (json_int_t)proc->input_written_total,
-        "stdin_pending", (json_int_t)(proc->input.len - proc->input_written),
-        "log_start", 0, "log_end", 0, "handle", handle, "stdin_open", (int)proc->stdin_open);
+        snag_json_set_new(*result, "max_output_tokens", json_integer(proc->max_output_tokens)) < 0)
+        goto out;
+    json_t *ref = json_pack("{s:I,s:I,s:I,s:I,s:I,s:I,s:I,s:i,s:i,s:s,s:b}", "stdout_start",
+        (json_int_t)proc->collected_offset[0], "stdout_end", (json_int_t)proc->result_offset[0],
+        "stderr_start", (json_int_t)proc->collected_offset[1], "stderr_end",
+        (json_int_t)proc->result_offset[1], "stdin_accepted",
+        (json_int_t)proc->input_accepted_total, "stdin_written",
+        (json_int_t)proc->input_written_total, "stdin_pending",
+        (json_int_t)(proc->input.len - proc->input_written), "log_start", 0, "log_end", 0, "handle",
+        handle, "stdin_open", (int)proc->stdin_open);
     if (snag_json_set_new(*result, "output_ref", ref) < 0) goto out;
     rc = 0;
 out:
@@ -766,17 +810,16 @@ snag_tools_collected(const char *handle)
 }
 
 static int
-start_command(const char *handle, const char *command, const char *workdir,
-                         const char *stdin_text, uint32_t timeout_ms, uint32_t max_output_tokens,
-                         bool pty, const struct snag_config *config,
-                         const struct snag_credential *credential, char *error, size_t error_size)
+start_command(const char *handle, const char *command, const char *workdir, const char *stdin_text,
+    uint32_t timeout_ms, uint32_t max_output_tokens, bool pty, const struct snag_config *config,
+    const struct snag_credential *credential, char *error, size_t error_size)
 {
     char **env = NULL;
     struct managed_process *proc = NULL;
     size_t slot;
     size_t stdin_len = stdin_text ? strlen(stdin_text) : 0u;
 
-    for (slot = 0u; slot < process_capacity && processes[slot]; ++slot) ;
+    for (slot = 0u; slot < process_capacity && processes[slot]; ++slot);
     if (slot == process_capacity) {
         size_t previous = process_capacity;
 
@@ -822,7 +865,8 @@ start_command(const char *handle, const char *command, const char *workdir,
     env = NULL;
     return 0;
 
-out: managed_release(proc);
+out:
+    managed_release(proc);
     snag_environment_entries_free(env);
     return -1;
 }
@@ -836,34 +880,40 @@ struct command_args {
 
 static int
 command_args(const struct snag_response_item *call, const struct snag_config *config,
-              const char *cwd, struct command_args *args, char *error, size_t size)
+    const char *cwd, struct command_args *args, char *error, size_t size)
 {
     memset(args, 0, sizeof(*args));
     args->exec = !strcmp(call->name, "exec_command");
-    const char *command = args->exec ?
-        snag_json_arg_name(call->arguments, "command", "cmd", error, size) : "handle";
-    const char *yield = snag_json_arg_name(call->arguments, "yield_ms", "yield_time_ms", error, size);
+    const char *command =
+        args->exec ? snag_json_arg_name(call->arguments, "command", "cmd", error, size) : "handle";
+    const char *yield =
+        snag_json_arg_name(call->arguments, "yield_ms", "yield_time_ms", error, size);
     if (!command || !yield || (!args->exec && strcmp(call->name, "write_stdin")) ||
         !snag_json_arg_keys(call->arguments, command,
-            args->exec ? "command cmd workdir stdin pty yield_ms yield_time_ms timeout_ms max_output_bytes max_output_tokens" :
-                         "data eof terminate yield_ms yield_time_ms max_output_bytes max_output_tokens", error, size) ||
+            args->exec
+                ? "command cmd workdir stdin pty yield_ms yield_time_ms timeout_ms "
+                  "max_output_bytes max_output_tokens"
+                : "data eof terminate yield_ms yield_time_ms max_output_bytes max_output_tokens",
+            error, size) ||
         !json_u32_member(call->arguments, yield,
-                          config->default_yield_ms < config->max_wait_ms ?
-                              config->default_yield_ms : config->max_wait_ms,
-                          0u, config->max_wait_ms, &args->yield, error, size) ||
-        !command_output_limit(call->arguments, config->max_output_tokens, &args->limit, error, size))
+            config->default_yield_ms < config->max_wait_ms ? config->default_yield_ms
+                                                           : config->max_wait_ms,
+            0u, config->max_wait_ms, &args->yield, error, size) ||
+        !command_output_limit(
+            call->arguments, config->max_output_tokens, &args->limit, error, size))
         return -1;
     if (args->exec) {
         args->handle = call->call_id;
-        if (!snag_json_arg_text(call->arguments, command, 0u, SNAG_TOOL_COMMAND_MAX,
-                                false, &args->command, error, size) ||
-            !snag_json_arg_text(call->arguments, "workdir", 1u, SNAG_PATH_MAX_BYTES,
-                                true, &args->workdir, error, size) ||
-            !snag_json_arg_text(call->arguments, "stdin", 0u, SNAG_TOOL_STDIN_MAX,
-                                true, &args->input, error, size) ||
+        if (!snag_json_arg_text(call->arguments, command, 0u, SNAG_TOOL_COMMAND_MAX, false,
+                &args->command, error, size) ||
+            !snag_json_arg_text(call->arguments, "workdir", 1u, SNAG_PATH_MAX_BYTES, true,
+                &args->workdir, error, size) ||
+            !snag_json_arg_text(call->arguments, "stdin", 0u, SNAG_TOOL_STDIN_MAX, true,
+                &args->input, error, size) ||
             !snag_json_arg_bool(call->arguments, "pty", false, &args->pty, error, size) ||
-            !json_u32_member(call->arguments, "timeout_ms", config->default_timeout_ms,
-                             1u, config->max_timeout_ms, &args->timeout, error, size)) return -1;
+            !json_u32_member(call->arguments, "timeout_ms", config->default_timeout_ms, 1u,
+                config->max_timeout_ms, &args->timeout, error, size))
+            return -1;
         if (!args->workdir) args->workdir = cwd;
         args->eof = args->input != NULL;
         if (args->workdir[0] == '.' && args->workdir[1] == '/') {
@@ -876,29 +926,33 @@ command_args(const struct snag_response_item *call, const struct snag_config *co
             args->workdir = args->owned_workdir;
         }
         if (!absolute_dir_arg_valid(args->workdir))
-            return snag_errorf(error, size,
-                "workdir must name an existing absolute or ./ directory.");
+            return snag_errorf(
+                error, size, "workdir must name an existing absolute or ./ directory.");
     } else {
-        if (!snag_json_arg_text(call->arguments, "handle", SNAG_ID_HEX_LEN, SNAG_ID_HEX_LEN,
-                                false, &args->handle, error, size) ||
+        if (!snag_json_arg_text(call->arguments, "handle", SNAG_ID_HEX_LEN, SNAG_ID_HEX_LEN, false,
+                &args->handle, error, size) ||
             (json_object_get(call->arguments, "data") &&
-             !snag_json_arg_text(call->arguments, "data", 0u, SNAG_TOOL_STDIN_MAX,
-                                false, &args->input, error, size)) ||
+                !snag_json_arg_text(call->arguments, "data", 0u, SNAG_TOOL_STDIN_MAX, false,
+                    &args->input, error, size)) ||
             !snag_json_arg_bool(call->arguments, "eof", false, &args->eof, error, size) ||
             !snag_json_arg_bool(call->arguments, "terminate", false, &args->terminate, error, size))
             return -1;
         if (!args->input) args->input = "";
         if (args->terminate && (args->input[0] || args->eof))
-            return snag_errorf(error, size, "terminate=true requires data=\"\" and eof=false or null.");
+            return snag_errorf(
+                error, size, "terminate=true requires data=\"\" and eof=false or null.");
     }
-    return args->handle && snag_hex_is_lower(args->handle, SNAG_ID_HEX_LEN) ? 0 :
-        snag_errorf(error, size, "handle must be the 32-character lowercase hex handle returned by exec_command.");
+    return args->handle && snag_hex_is_lower(args->handle, SNAG_ID_HEX_LEN)
+               ? 0
+               : snag_errorf(error, size,
+                     "handle must be the 32-character lowercase hex handle returned by "
+                     "exec_command.");
 }
 
 int
 snag_tools_prepare(const struct snag_response_item *call, const struct snag_config *config,
-                    const char *cwd, uint32_t max_parallel,
-                    char handle[SNAG_ID_HEX_LEN + 1u], uint32_t *yield_ms, json_t **rejected)
+    const char *cwd, uint32_t max_parallel, char handle[SNAG_ID_HEX_LEN + 1u], uint32_t *yield_ms,
+    json_t **rejected)
 {
     struct command_args args;
     const char *reason = NULL;
@@ -912,19 +966,26 @@ snag_tools_prepare(const struct snag_response_item *call, const struct snag_conf
         *yield_ms = args.yield;
         proc = find_process(args.handle);
         for (size_t i = 0u; i < process_capacity; ++i) used += processes[i] != NULL;
-        if (args.exec && used >= max_parallel) reason = "process_limit";
-        else if (args.exec && proc) reason = "process_busy";
-        else if (!args.exec && !proc) reason = "managed_process_handle_mismatch";
-        else if (!args.exec && proc->in_call) reason = "process_busy";
-        else if (!args.exec && args.input[0] && proc->input.len) reason = "stdin_busy";
-        else if (!args.exec && args.input[0] && !proc->stdin_open) reason = "stdin_closed";
+        if (args.exec && used >= max_parallel)
+            reason = "process_limit";
+        else if (args.exec && proc)
+            reason = "process_busy";
+        else if (!args.exec && !proc)
+            reason = "managed_process_handle_mismatch";
+        else if (!args.exec && proc->in_call)
+            reason = "process_busy";
+        else if (!args.exec && args.input[0] && proc->input.len)
+            reason = "stdin_busy";
+        else if (!args.exec && args.input[0] && !proc->stdin_open)
+            reason = "stdin_closed";
     }
     if (reason) {
         free(args.owned_workdir);
         if (*diagnostic) {
             char text[1024];
             (void)snprintf(text, sizeof(text),
-                "%s was not run: %s Correct the arguments using the declared schema before retrying.",
+                "%s was not run: %s Correct the arguments using the declared schema before "
+                "retrying.",
                 call->name, diagnostic);
             *rejected = snag_tool_result("not_run", reason, text, -1, 0u);
         } else {
@@ -941,8 +1002,8 @@ snag_tools_prepare(const struct snag_response_item *call, const struct snag_conf
 
 int
 snag_tools_start(const struct snag_response_item *call, const struct snag_config *config,
-                  const struct snag_credential *credential, const char *cwd, json_t **result,
-                  char *error, size_t error_size)
+    const struct snag_credential *credential, const char *cwd, json_t **result, char *error,
+    size_t error_size)
 {
     struct command_args args;
     struct managed_process *proc;
@@ -953,11 +1014,11 @@ snag_tools_start(const struct snag_response_item *call, const struct snag_config
     }
     if (args.exec) {
         int started = start_command(args.handle, args.command, args.workdir, args.input,
-                                    args.timeout, args.limit, args.pty, config, credential,
-                                    error, error_size);
+            args.timeout, args.limit, args.pty, config, credential, error, error_size);
         free(args.owned_workdir);
         if (started < 0) {
-            *result = snag_tool_result_terminal(false, error[0] ? error : "Command could not start.");
+            *result =
+                snag_tool_result_terminal(false, error[0] ? error : "Command could not start.");
             return *result ? 0 : -1;
         }
         proc = find_process(args.handle);
@@ -975,10 +1036,11 @@ snag_tools_start(const struct snag_response_item *call, const struct snag_config
             if (args.eof) proc->input_eof = true;
         }
     }
-    const char *key = snag_json_arg_name(call->arguments, "max_output_bytes", "max_output_tokens", NULL, 0u);
+    const char *key =
+        snag_json_arg_name(call->arguments, "max_output_bytes", "max_output_tokens", NULL, 0u);
     const json_t *requested = key ? json_object_get(call->arguments, key) : NULL;
-    proc->requested_output_tokens = json_is_integer(requested) ?
-        (uint64_t)json_integer_value(requested) : args.limit;
+    proc->requested_output_tokens =
+        json_is_integer(requested) ? (uint64_t)json_integer_value(requested) : args.limit;
     proc->wait_started_ms = snag_monotonic_ms();
     proc->max_wait_ms = config->max_wait_ms;
     proc->requested_yield_ms = args.yield;
@@ -986,25 +1048,32 @@ snag_tools_start(const struct snag_response_item *call, const struct snag_config
 }
 
 int
-snag_tools_attach_output_limit(const struct snag_response_item *call, const struct snag_config *config,
-                              json_t *result)
+snag_tools_attach_output_limit(
+    const struct snag_response_item *call, const struct snag_config *config, json_t *result)
 {
     uint32_t max_output_tokens;
 
-    if (!call || !call->name || !config || !result || json_object_get(result, "max_output_tokens") ||
-        (!snag_string_in(call->name, "exec_command write_stdin"))) return 0;
-    if (!command_output_limit(call->arguments, config->max_output_tokens, &max_output_tokens, NULL, 0u))
+    if (!call || !call->name || !config || !result ||
+        json_object_get(result, "max_output_tokens") ||
+        (!snag_string_in(call->name, "exec_command write_stdin")))
+        return 0;
+    if (!command_output_limit(
+            call->arguments, config->max_output_tokens, &max_output_tokens, NULL, 0u))
         max_output_tokens = config->max_output_tokens;
-    if (snag_json_set_new(result, "max_output_tokens", json_integer(max_output_tokens)) < 0) return -1;
+    if (snag_json_set_new(result, "max_output_tokens", json_integer(max_output_tokens)) < 0)
+        return -1;
     uint64_t requested;
-    const char *key = snag_json_arg_name(call->arguments, "max_output_bytes", "max_output_tokens", NULL, 0u);
+    const char *key =
+        snag_json_arg_name(call->arguments, "max_output_bytes", "max_output_tokens", NULL, 0u);
     if (key && snag_json_integer_u64(call->arguments, key, &requested) == 0 &&
         requested > max_output_tokens && requested <= SNAG_CONFIG_TOKEN_LIMIT_MAX) {
         const char *old = snag_json_string(result, "model_text");
         struct snag_buf text = {.max = SNAG_MAX_EVENT_LINE};
-        int rc = !old || output_limit_notice(&text, requested, max_output_tokens) < 0 ||
-            snag_buf_append(&text, old, strlen(old)) < 0 || snag_buf_terminate(&text) < 0 ? -1 :
-            snag_json_set_new(result, "model_text", json_string((const char *)text.data));
+        int rc =
+            !old || output_limit_notice(&text, requested, max_output_tokens) < 0 ||
+                    snag_buf_append(&text, old, strlen(old)) < 0 || snag_buf_terminate(&text) < 0
+                ? -1
+                : snag_json_set_new(result, "model_text", json_string((const char *)text.data));
         snag_buf_free(&text);
         return rc;
     }
@@ -1012,8 +1081,8 @@ snag_tools_attach_output_limit(const struct snag_response_item *call, const stru
 }
 
 static int
-wait_process(const char *handle, uint32_t yield_ms, snag_tool_pump_fn pump,
-              void *opaque, snag_wake_fd wake_fd, json_t **result, char *error, size_t error_size)
+wait_process(const char *handle, uint32_t yield_ms, snag_tool_pump_fn pump, void *opaque,
+    snag_wake_fd wake_fd, json_t **result, char *error, size_t error_size)
 {
     uint64_t end = saturating_deadline(snag_monotonic_ms(), yield_ms);
     const char *reason = NULL;
@@ -1044,9 +1113,8 @@ wait_process(const char *handle, uint32_t yield_ms, snag_tool_pump_fn pump,
 }
 
 int
-snag_tools_close_managed(const char *handle, bool user_interrupt,
-                        snag_tool_pump_fn pump, void *pump_opaque, snag_wake_fd wake_fd,
-                        json_t **result, char *error, size_t error_size)
+snag_tools_close_managed(const char *handle, bool user_interrupt, snag_tool_pump_fn pump,
+    void *pump_opaque, snag_wake_fd wake_fd, json_t **result, char *error, size_t error_size)
 {
     struct managed_process *proc = find_process(handle);
     if (!proc) {
@@ -1059,9 +1127,8 @@ snag_tools_close_managed(const char *handle, bool user_interrupt,
 
 int
 snag_tools_run(const struct snag_response_item *call, const struct snag_config *config,
-              const struct snag_credential *credential, const char *session_cwd,
-              snag_tool_pump_fn pump, void *pump_opaque, snag_wake_fd wake_fd,
-              json_t **result, char *error, size_t error_size)
+    const struct snag_credential *credential, const char *session_cwd, snag_tool_pump_fn pump,
+    void *pump_opaque, snag_wake_fd wake_fd, json_t **result, char *error, size_t error_size)
 {
     char handle[SNAG_ID_HEX_LEN + 1u];
     uint32_t yield_ms;
@@ -1076,16 +1143,18 @@ snag_tools_run(const struct snag_response_item *call, const struct snag_config *
         snag_secret_set_free(&secrets);
         return rc;
     }
-    rc = snag_tools_prepare(call, config, session_cwd,
-        config->max_parallel_commands, handle, &yield_ms, result);
+    rc = snag_tools_prepare(
+        call, config, session_cwd, config->max_parallel_commands, handle, &yield_ms, result);
     if (rc != 0) return rc < 0 ? -1 : 0;
     if (snag_tools_start(call, config, credential, session_cwd, result, error, error_size) < 0)
         return -1;
     const json_t *requested_yield = json_object_get(call->arguments, "yield_ms");
     if (!requested_yield) requested_yield = json_object_get(call->arguments, "yield_time_ms");
-    if (!yield_ms && !(json_is_integer(requested_yield) && json_integer_value(requested_yield) == 0))
+    if (!yield_ms &&
+        !(json_is_integer(requested_yield) && json_integer_value(requested_yield) == 0))
         yield_ms = config->max_wait_ms;
-    if (!*result && wait_process(handle, yield_ms, pump, pump_opaque, wake_fd, result, error, error_size) < 0)
+    if (!*result &&
+        wait_process(handle, yield_ms, pump, pump_opaque, wake_fd, result, error, error_size) < 0)
         return -1;
     snag_tools_collected(handle);
     return snag_tools_attach_output_limit(call, config, *result);
