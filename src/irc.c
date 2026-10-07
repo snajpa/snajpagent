@@ -4226,10 +4226,11 @@ replay_member_remove(struct snag_irc_core *irc, struct irc_replay_member *member
 }
 
 static void
-replay_endpoint_clear(struct snag_irc_core *irc, const char *endpoint)
+replay_members_clear(struct snag_irc_core *irc, const char *endpoint, const char *room)
 {
     for (size_t i = irc->replay_member_count; i > 0u; --i)
-        if (strcmp(irc->replay_members[i - 1u].endpoint, endpoint) == 0)
+        if (snag_irc_endpoint_equal(irc->replay_members[i - 1u].endpoint, endpoint) &&
+            (!room || irc_casecmp(irc->replay_members[i - 1u].room, room) == 0))
             replay_member_remove(irc, &irc->replay_members[i - 1u]);
 }
 
@@ -4241,7 +4242,7 @@ replay_transition(struct snag_irc_core *irc, const struct snag_irc_event *event)
     if (event->historical) return 0;
     if (event->kind == SNAG_IRC_CONNECTED || event->kind == SNAG_IRC_DISCONNECTED ||
         event->kind == SNAG_IRC_HISTORY_READY) {
-        replay_endpoint_clear(irc, event->endpoint);
+        replay_members_clear(irc, event->endpoint, NULL);
         return 0;
     }
     member = replay_member_find(irc, event->endpoint, event->room, event->nick);
@@ -4281,12 +4282,20 @@ snag_irc_core_restore_event(struct snag_irc_core *irc, const struct snag_irc_eve
 {
     if (irc && event && event->routed && (event->route.kind != SNAG_IRC_CHANNEL ||
         !snag_irc_event_model_visible(event) || event->route.direction == SNAG_IRC_OUTGOING)) {
-        /* Conversation metadata is reconstructed from its session directory.
-         * It cannot establish live membership or populate channel replay. */
+        /* Connection and channel lifecycles delimit replay membership even
+         * though their metadata stays outside model-visible channel history. */
         json_t *data = snag_irc_event_data(event);
         struct snag_irc_event decoded;
         int rc = snag_irc_event_record_read("irc_event_v2", data, &decoded);
         json_decref(data);
+        if (rc == 0 && decoded.route.identity == SNAG_IRC_AGENT &&
+            decoded.route.direction == SNAG_IRC_INCOMING && !decoded.historical &&
+            (decoded.kind == SNAG_IRC_CONNECTED || decoded.kind == SNAG_IRC_DISCONNECTED)) {
+            if (decoded.route.kind == SNAG_IRC_CONNECTION_EVENTS)
+                replay_members_clear(irc, decoded.endpoint, NULL);
+            else if (decoded.route.kind == SNAG_IRC_CHANNEL)
+                replay_members_clear(irc, decoded.endpoint, decoded.room);
+        }
         return rc;
     }
     if (!irc || !event || event->timestamp_ms == 0u || !restored_event_shape_valid(event) ||

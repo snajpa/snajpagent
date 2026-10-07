@@ -2575,6 +2575,62 @@ test_typed_channel_checkpoint(void)
 }
 
 static void
+test_replay_membership_boundaries(void)
+{
+    struct snag_config config;
+    struct snag_irc_core *irc = NULL;
+    char error[256] = {0};
+    init_server_config(&config, 16667u);
+    assert(snag_irc_core_open(&irc, &config, "/fixture", false,
+        NULL, NULL, NULL, error, sizeof(error)) == 0);
+    struct snag_irc_event join = {.kind = SNAG_IRC_JOIN, .timestamp_ms = 1u};
+    strcpy(join.endpoint, config.irc.listen);
+    strcpy(join.room, "#lab");
+    strcpy(join.nick, "previous");
+    struct snag_irc_event boundary = {.kind = SNAG_IRC_CONNECTED, .timestamp_ms = 2u,
+        .local = true, .routed = true};
+    strcpy(boundary.endpoint, config.irc.listen);
+    strcpy(boundary.nick, "host");
+    boundary.route.generation = 1u;
+    boundary.route.kind = SNAG_IRC_CONNECTION_EVENTS;
+    boundary.route.identity = SNAG_IRC_AGENT;
+    strcpy(boundary.route.connection, "11111111111111111111111111111111");
+    strcpy(boundary.route.conversation, "22222222222222222222222222222222");
+    struct snag_irc_event rename = join;
+    rename.kind = SNAG_IRC_NICK;
+    strcpy(rename.nick, "newpeer");
+    strcpy(rename.text, "previous");
+    for (unsigned int channel = 0u; channel < 2u; ++channel) {
+        assert(snag_irc_core_restore_event(irc, &join) == 0);
+        assert(snag_irc_core_restore_event(irc, &rename) < 0 && errno == EINVAL);
+        if (channel) {
+            boundary.route.kind = SNAG_IRC_CHANNEL;
+            strcpy(boundary.room, "#lab");
+            strcpy(boundary.route.target, "#lab");
+            strcpy(boundary.route.membership, "33333333333333333333333333333333");
+            boundary.route.joined = true;
+        }
+        /* Operator metadata must not discard the agent's membership proof. */
+        boundary.route.identity = SNAG_IRC_OPERATOR;
+        assert(snag_irc_core_restore_event(irc, &boundary) == 0);
+        assert(snag_irc_core_restore_event(irc, &rename) < 0 && errno == EINVAL);
+        boundary.route.identity = SNAG_IRC_AGENT;
+        strcpy(boundary.route.connection, "invalid");
+        assert(snag_irc_core_restore_event(irc, &boundary) < 0 && errno == EINVAL);
+        assert(snag_irc_core_restore_event(irc, &rename) < 0 && errno == EINVAL);
+        strcpy(boundary.route.connection, "11111111111111111111111111111111");
+        strcpy(boundary.endpoint, "127.0.0.1:16668");
+        assert(snag_irc_core_restore_event(irc, &boundary) == 0);
+        assert(snag_irc_core_restore_event(irc, &rename) < 0 && errno == EINVAL);
+        strcpy(boundary.endpoint, config.irc.listen);
+        assert(snag_irc_core_restore_event(irc, &boundary) == 0);
+        assert(snag_irc_core_restore_event(irc, &rename) == 0);
+    }
+    snag_irc_core_close(irc);
+    snag_config_free(&config);
+}
+
+static void
 test_replay_checkpoint(void)
 {
     struct snag_config config;
@@ -2724,6 +2780,7 @@ main(int argc, char **argv)
     assert(snag_network_init() == 0);
     set_user("root");
     test_validation();
+    test_replay_membership_boundaries();
     test_replay_checkpoint();
     test_typed_channel_checkpoint();
     test_cli_network_roles();

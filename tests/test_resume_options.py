@@ -274,6 +274,66 @@ def check_hosted_rename_resume(binary):
         provider.close()
 
 
+def check_hosted_peer_reuse(binary):
+    provider = harness.FakeResponses()
+    try:
+        with tempfile.TemporaryDirectory(prefix="snag-resume-peer-") as tmp:
+            root = Path(tmp).resolve()
+            config = root / "config.ini"
+            harness.write_irc_config(config, provider.port, "host-model")
+            with config.open("a") as out:
+                out.write("prompt = {chat:READY>}{rollout-idle:READY>}{rollout-active:WORK>}\n")
+            state = root / "state"
+            with socket.socket() as sock:
+                sock.bind(("127.0.0.1", 0))
+                port = sock.getsockname()[1]
+            base = [str(binary), "--dotdir", str(state)]
+            sid = None
+            for attempt in range(3):
+                args = (["--config", str(config), "-s", f"127.0.0.1:{port}",
+                         "--no-client", "-n", "host", "-o", "operator", "-r", "lab"]
+                        if sid is None else ["--resume", sid])
+                child = RemoteProcess(root, [*base, *args], wrapped=None,
+                                      extra_env={"SNAJPAGENT_IRC_UI_KEY": "irc-ui-secret"})
+                peer = None
+                try:
+                    child.until(b"READY>", 10)
+                    sid = next((state / "sessions").iterdir()).name
+                    if attempt < 2:
+                        peer = socket.create_connection(("127.0.0.1", port), timeout=5)
+                        name = "previous" if attempt == 0 else "newpeer"
+                        peer.sendall(f"NICK {name}\r\nUSER peer 0 * :fixture\r\n"
+                                     "JOIN #lab\r\n".encode())
+                        wire = b""
+                        while b" 366 " not in wire:
+                            wire += peer.recv(8192)
+                        if attempt == 1:
+                            peer.sendall(b"NICK previous\r\nPING :renamed\r\n")
+                            wire = b""
+                            while b"PONG" not in wire:
+                                wire += peer.recv(8192)
+                            assert b" 433 " not in wire, wire
+                    child.output.clear()
+                    # Keep the peer connected until host exit: the next owner
+                    # must clear its stale membership at the connection boundary.
+                    os.write(child.master, b"/exit\r")
+                    child.until(b"--resume", 10)
+                    child.wait(0)
+                finally:
+                    if peer is not None:
+                        peer.close()
+                    child.close()
+            records = harness.read_events(state)[1]
+            assert any(e["type"] == "irc_event_v2" and
+                       e["data"]["kind"] == "nick" and
+                       e["data"]["nick"] == "newpeer" and
+                       e["data"]["text"] == "previous" for e in records)
+            assert not provider.failure, provider.failure
+            print("resume after hosted peer nickname reuse: ok")
+    finally:
+        provider.close()
+
+
 def check_display_preferences(binary):
     provider = harness.FakeResponses()
     provider.runtime_handler = lambda handler, request, sequence: provider.reply(
@@ -336,4 +396,5 @@ if __name__ == "__main__":
     check(binary)
     check_network(binary, Path(sys.argv[2]).resolve() if len(sys.argv) > 2 else None)
     check_hosted_rename_resume(binary)
+    check_hosted_peer_reuse(binary)
     check_display_preferences(binary)

@@ -592,6 +592,8 @@ are not revived.
 Resuming a stopped session retains its saved listener, clients, nicks and room.
 IRC history includes local nickname changes, including when networking is
 disabled on resume. An IRC history restore error identifies the journal sequence.
+Saved connection and channel boundaries clear stale peer membership before
+subsequent nickname changes are replayed.
 Explicit startup options replace the corresponding setting before work continues.
 For example, reopen a session with a hosted IRC server and no
 outgoing client connections:

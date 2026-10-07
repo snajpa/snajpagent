@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Restore IRC membership across saved connection and channel boundaries so a
+  peer can reuse a nickname after reconnecting without blocking session resume.
+
 - Keep background pane history and report loads pending when resize, focus, or
   catalogue refresh gives another request priority. Every pane finishes loading.
 
