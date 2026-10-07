@@ -10075,9 +10075,115 @@ test_native_ui(void)
 }
 #endif /* __linux__ && !_WIN32 */
 
-int
-main(void)
+static void
+test_output_commit_survives_presentation_failure(void)
 {
+    char path[] = "/private/tmp/output-commit-XXXXXX";
+#ifndef __APPLE__
+    strcpy(path, "/tmp/output-commit-XXXXXX");
+#endif
+    assert(mkdtemp(path));
+    const char *turn = "11111111111111111111111111111111";
+    const char *response = "22222222222222222222222222222222";
+    const char *hash = "0000000000000000000000000000000000000000000000000000000000000000";
+    for (unsigned int legacy = 0u; legacy < 2u; ++legacy) {
+        char error[512] = "", handle[33], id[33];
+        struct snag_config config;
+        snag_config_init(&config);
+        struct app_state app = {.config = &config};
+        snag_store_init(&app.store);
+        snag_session_init(&app.session);
+        assert(!snag_store_open(&app.store, path, error, sizeof(error)));
+        int rc = legacy ? legacy_fixture_create(&app.store, &app.session, path,
+            "default", "fixture", "default", error, sizeof(error)) :
+            snag_session_create(&app.store, &app.session, path,
+                "default", "fixture", "default", error, sizeof(error));
+        assert(!rc && !snag_ui_init(&app.ui));
+        assert(!snag_session_commit(&app.session, "turn_started", json_pack(
+            "{s:s,s:i,s:s,s:n,s:n,s:s,s:s,s:b,s:[],s:{s:s,s:s,s:s,s:i,s:b}}",
+            "turn_id", turn, "turn_number", 1, "input_kind", "direct", "queue_id",
+            "queue_seq", "cwd", path, "text", "Retain command output.", "read_only", 0,
+            "instructions", "config", "provider", "default", "model", "fixture",
+            "effort", "default", "max_parallel_commands", 4, "parallel_tool_calls", 1),
+            NULL, error, sizeof(error)));
+        assert(!snag_session_commit(&app.session, "response_started", json_pack(
+            "{s:i,s:n,s:s,s:n,s:s,s:s,s:s,s:i,s:s,s:n,s:i,s:s,s:i,s:s,s:i,s:i,s:s,"
+            "s:s,s:s,s:s,s:s,s:n,s:s,s:b,s:[],s:s}",
+            "irc_seq", 0, "baseline_sha256", "capability_version", SNAJPAGENT_CAPABILITY_VERSION,
+            "compact_id", "count_method", "exact", "capacity_source", "unknown",
+            "count_request_sha256", hash, "cycle", 1, "effort", "default", "hard_input_tokens",
+            "input_tokens_bound", 1000, "model", "fixture", "model_input_bytes", 4000,
+            "model_input_sha256", hash, "request_input_bytes", 3000, "request_input_count", 1,
+            "request_input_sha256", hash, "profile_id", SNAJPAGENT_PROFILE_ID,
+            "provider", "default", "provider_source_sha256", hash, "request_sha256", hash,
+            "requested_output_tokens", "response_id", response, "source_bound", 0,
+            "steering_ids", "turn_id", turn), NULL, error, sizeof(error)));
+        struct snag_response_graph graph = {0};
+        assert(!snag_response_graph_add_call(&graph, "run", "run", "exec_command",
+            json_pack("{s:s}", "command", "printf fixture")));
+        assert(!snag_session_commit(&app.session, "response_completed", json_pack(
+            "{s:s,s:s,s:i,s:s,s:s,s:O,s:{s:i,s:i,s:i,s:i}}", "turn_id", turn,
+            "response_id", response, "cycle", 1, "status", "completed",
+            "provider_response_id", "fixture", "items", graph.items, "usage",
+            "input_tokens", 17, "output_tokens", 7, "reasoning_tokens", 3, "total_tokens", 24),
+            NULL, error, sizeof(error)));
+        const struct snag_pending_call *call = &app.session.pending_calls[0];
+        assert(!snag_session_commit(&app.session, "tool_started", json_pack(
+            "{s:s,s:s,s:s,s:s}", "turn_id", turn, "call_id", call->call_id,
+            "action_sha256", call->action_sha256, "resolved_workdir", path),
+            NULL, error, sizeof(error)));
+        strcpy(handle, app.session.processes[0].handle);
+        strcpy(id, app.session.id);
+        app.session.snapshot_read_only = true;
+        assert(snag_app_tool_output(&app, handle, 0u, 0u, "first", 5u,
+            error, sizeof(error)) < 0 && errno == EROFS);
+        assert(strstr(error,
+            "command output journal failed: cannot commit to a read-only snapshot"));
+        assert(!app.session.processes[0].output_bytes[0]);
+        app.session.snapshot_read_only = false;
+        assert(!snag_ui_set_verbosity(&app.ui, 4u));
+        int saved = dup(STDERR_FILENO);
+        assert(saved >= 0);
+        int read_only = open("/dev/null", O_RDONLY);
+        assert(read_only >= 0 && dup2(read_only, STDERR_FILENO) == STDERR_FILENO);
+        assert(!close(read_only));
+        rc = snag_app_tool_output(&app, handle, 0u, 0u, "first", 5u, error, sizeof(error));
+        assert(dup2(saved, STDERR_FILENO) == STDERR_FILENO && !close(saved));
+        assert(app.session.processes[0].output_bytes[0] == 5u);
+        assert(!rc);
+        enum snag_term_action action;
+        char *text = NULL;
+        assert(snag_ui_poll(&app.ui, 0, &action, &text) < 0 && errno == EBADF);
+        free(text);
+        assert(!snag_app_tool_output(&app, handle, 0u, 5u, "second", 6u, error, sizeof(error)));
+        assert(snag_app_tool_output(&app, handle, 0u, 0u, "duplicate", 9u,
+            error, sizeof(error)) < 0 && errno == EINVAL);
+        assert(app.session.processes[0].output_bytes[0] == 11u);
+        assert(snag_app_active_input_pump(&app, 0u) < 0 && app.input_closed);
+        snag_ui_free(&app.ui);
+        snag_session_close(&app.session);
+        assert(!snag_session_open(&app.store, &app.session, id, error, sizeof(error)));
+        assert(app.session.active_turn && app.session.process_count == 1u &&
+            app.session.processes[0].output_bytes[0] == 11u);
+        struct snag_buf out = {.max = 64u};
+        assert(!snag_app_tool_read(&app, handle, 0u, 0u, 11u, &out));
+        assert(out.len == 11u && !memcmp(out.data, "firstsecond", 11u));
+        snag_buf_free(&out);
+        snag_session_close(&app.session);
+        snag_store_close(&app.store);
+        snag_response_graph_free(&graph);
+        snag_config_free(&config);
+    }
+}
+
+int
+main(int argc, char **argv)
+{
+    test_output_commit_survives_presentation_failure();
+    if (argc == 2 && !strcmp(argv[1], "--output-recovery")) {
+        puts("test_provider_transport output recovery: ok");
+        return 0;
+    }
     test_query_history_privacy();
     test_history_and_goal_list_tools();
     test_native_voice_caption_mirrors();

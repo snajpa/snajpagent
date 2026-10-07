@@ -274,7 +274,8 @@ int snag_app_download_pending(struct app_state *app, const json_t *item,
 int snag_app_download_queue(struct app_state *app, const char *path, json_t **result,
                             char *error, size_t error_size);
 
-int snag_app_tool_output(void *, const char *, unsigned int, uint64_t, const void *, size_t);
+int snag_app_tool_output(void *, const char *, unsigned int, uint64_t,
+    const void *, size_t, char *, size_t);
 int snag_app_tool_read(void *, const char *, unsigned int, uint64_t, uint64_t, struct snag_buf *);
 int snag_app_recovered_output(struct app_state *, const char *, json_t *);
 int snag_app_output_page(struct app_state *, const struct snag_response_item *, json_t **,

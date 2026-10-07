@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Preserve command output across journal-write failures and acknowledge saved
+  chunks even when terminal presentation fails. Report the underlying journal
+  error and stop retrying a failed terminal until the session is resumed.
+
 - Fix native checkpoint failures after the last tool in a streamed response
   finishes. Completed commentary and tool results remain available on resume.
 

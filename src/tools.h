@@ -17,8 +17,11 @@
 typedef int (*snag_tool_pump_fn)(void *opaque, unsigned int timeout_ms);
 
 /* The engine owns the journal. Chunks are borrowed, already secret-redacted.
- * read returns a bounded head/tail excerpt for the exact byte interval. */
-typedef int (*snag_tool_output_fn)(void *, const char *, unsigned int, uint64_t, const void *, size_t);
+ * write acknowledges durable admission, independently of presentation, and
+ * returns failure details through error/size. read returns a bounded head/tail
+ * excerpt for the exact byte interval. */
+typedef int (*snag_tool_output_fn)(void *, const char *, unsigned int, uint64_t,
+    const void *, size_t, char *, size_t);
 typedef int (*snag_tool_read_fn)(void *, const char *, unsigned int, uint64_t, uint64_t, struct snag_buf *);
 void snag_tools_journal(snag_tool_output_fn write, snag_tool_read_fn read, void *opaque);
 /* Filtered host environment for a spawned helper or managed command. */
