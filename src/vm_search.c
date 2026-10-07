@@ -122,9 +122,15 @@ search_text(struct snag_vm_search *search, const json_t *block, const char *text
         uint32_t cp, folded[3];
         size_t bytes = snag_utf8_decode((const unsigned char *)text + at, length - at, &cp);
         if (!bytes) return snag_errno(EILSEQ);
-        if (prose && !snag_vm_source_mapped(block, at)) { at += bytes; continue; }
         folded[0] = cp;
         unsigned int count = search->ignorecase ? snag_unicode_casefold(cp, folded) : 1u;
+        bool candidate = false;
+        for (unsigned int i = 0u; i < count; ++i)
+            candidate |= folded[i] == search->pattern[0];
+        /* With no prefix in flight, a noncandidate cannot contribute an
+         * origin. Avoid source-map searches across unrelated prose. */
+        if (!search->matched && !candidate) { at += bytes; continue; }
+        if (prose && !snag_vm_source_mapped(block, at)) { at += bytes; continue; }
         uint64_t source = search->heading ? at : snag_vm_source_position(block, at, true);
         for (unsigned int i = 0u; i < count; ++i) {
             search->origins[search->slot] = (struct origin){seq, source, i == 0u};

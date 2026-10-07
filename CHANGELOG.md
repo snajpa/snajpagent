@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Reduce source-position lookup work during whole-history searches while
+  preserving formatted-text anchors and Unicode matching.
+
 - Preserve live FOLLOW when clicking into an attached pane to type. Text dragging
   and scrolling still hold history for navigation and selection.
 

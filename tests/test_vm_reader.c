@@ -526,6 +526,22 @@ search_blocks_test(void)
         found.seq == 1u && !strcmp(found.key, "event/1/output"));
     snag_vm_search_close(search);
     json_decref(block);
+
+    block = json_pack("{s:s,s:i,s:i,s:i,s:s,s:s,s:s,s:[[i,i,i,i],[i,i,i,i]]}",
+        "key", "public/1", "seq", 1, "source_begin", 0, "source_end", 12,
+        "kind", "assistant", "text", "zzabaababßz", "display", "zzaba**ababßz",
+        "format_map", 0, 5, 0, 5, 7, 14, 5, 7);
+    static const char *const mapped_queries[] = {"abab", "ABAB", "SS", "s", "**"};
+    static const int mapped_offsets[] = {5, 5, 9, -1, -1};
+    for (size_t i = 0u; i < sizeof(mapped_offsets) / sizeof(mapped_offsets[0]); ++i) {
+        search = snag_vm_search_open(mapped_queries[i], true, false, &start);
+        assert(search && snag_vm_search_block(search, block, NULL, NULL) == 0);
+        bool matched = snag_vm_search_result(search, &found, &wrapped);
+        assert(matched == (mapped_offsets[i] >= 0));
+        if (matched) assert(found.byte == (uint64_t)mapped_offsets[i] && !wrapped);
+        snag_vm_search_close(search);
+    }
+    json_decref(block);
 }
 
 static void

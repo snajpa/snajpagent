@@ -1464,6 +1464,8 @@ bytes/events, cancellation and a pinned committed tail. Report wraparound.
 Reaching the pinned end offers subsequent live output on the next repeat.
 Cold whole-history search is linear in the inspected history; a UI label must
 not imply completion while only loaded pages have been searched.
+Source-map lookup is needed only for characters that can begin or continue a
+match. Skipped prose still checks cancellation and Unicode codepoint boundaries.
 
 Search results contain source anchors and excerpts. Opening a result does not
 move other windows. Changing view/verbosity cancels an obsolete scan and keeps
