@@ -76,7 +76,7 @@ static snag_tool_read_fn journal_read;
 static void *journal_opaque;
 static size_t next_fd;
 static bool managed_cleanup_registered;
-static int flush_capture(struct managed_process *, unsigned int);
+static int flush_capture(struct managed_process *, unsigned int, char *, size_t);
 
 static int
 process_slots_reserve(size_t needed)
@@ -127,34 +127,42 @@ absolute_dir_arg_valid(const char *path)
 }
 
 static int
-output_append(struct managed_process *proc, unsigned int stream, const unsigned char *text, size_t len)
+output_append(struct managed_process *proc, unsigned int stream, const unsigned char *text,
+    size_t len, char *error, size_t error_size)
 {
     struct snag_buf *data = &proc->output[stream].data;
 
-    if (len > data->max - data->len && flush_capture(proc, stream) < 0) return -1;
+    if (len > data->max - data->len &&
+        flush_capture(proc, stream, error, error_size) < 0) return -1;
     return snag_buf_append(data, text, len);
 }
 
 static int
-redact_output(struct managed_process *proc, unsigned int stream, bool final)
+redact_output(struct managed_process *proc, unsigned int stream, bool final,
+    char *error, size_t error_size)
 {
     static const unsigned char marker[] = "<redacted:secret>";
     struct snag_buf *pending = &proc->output[stream].pending;
     size_t limit = pending->len, off = 0u;
+    int rc = 0;
 
     if (!final && proc->max_secret) {
         size_t suffix = proc->max_secret - 1u;
         limit = limit > suffix ? limit - suffix : 0u;
     }
     if (!proc->max_secret) {
-        if (limit && output_append(proc, stream, pending->data, limit) < 0) return -1;
+        if (limit && output_append(proc, stream, pending->data, limit, error, error_size) < 0)
+            return -1;
         off = limit;
     } else {
         while (off < limit) {
             size_t matched = snag_wire_secret_match(pending->data + off,
                                 pending->len - off, &proc->secrets.wire);
             if (output_append(proc, stream, matched ? marker : pending->data + off,
-                               matched ? sizeof(marker) - 1u : 1u) < 0) return -1;
+                               matched ? sizeof(marker) - 1u : 1u, error, error_size) < 0) {
+                rc = -1;
+                break;
+            }
             off += matched ? matched : 1u;
         }
     }
@@ -162,7 +170,7 @@ redact_output(struct managed_process *proc, unsigned int stream, bool final)
         memmove(pending->data, pending->data + off, pending->len - off);
         pending->len -= off;
     }
-    return 0;
+    return rc;
 }
 
 static json_t *
@@ -469,10 +477,12 @@ snag_tools_close_all(bool user_interrupt)
 }
 
 static int
-flush_capture(struct managed_process *proc, unsigned int stream)
+flush_capture(struct managed_process *proc, unsigned int stream,
+    char *error, size_t error_size)
 {
     struct snag_buf *data = &proc->output[stream].data;
     size_t consumed = 0u;
+    int rc = 0;
     while (consumed < data->len) {
         size_t n = data->len - consumed;
         bool open = proc->output[stream].open;
@@ -492,41 +502,51 @@ flush_capture(struct managed_process *proc, unsigned int stream)
         }
         if (!n) break;
         if (!journal_write || journal_write(journal_opaque, proc->handle, stream,
-                          proc->output_offset[stream], data->data + consumed, n) < 0) return -1;
+            proc->output_offset[stream], data->data + consumed, n, error, error_size) < 0) {
+            rc = -1;
+            break;
+        }
         proc->output_offset[stream] += n;
         consumed += n;
     }
     if (data->len > consumed) memmove(data->data, data->data + consumed, data->len - consumed);
     data->len -= consumed;
+    return rc;
+}
+
+static int
+close_output(struct managed_process *proc, unsigned int stream,
+    char *error, size_t error_size)
+{
+    struct process_output *output = &proc->output[stream];
+    if (redact_output(proc, stream, true, error, error_size) < 0) return -1;
+    output->open = false;
+    if (flush_capture(proc, stream, error, error_size) < 0) {
+        output->open = true;
+        return -1;
+    }
+    snag_child_close_stream(&proc->child, stream);
+    if (proc->child.pty) proc->stdin_open = false;
     return 0;
 }
 
 static int
-close_output(struct managed_process *proc, unsigned int stream)
-{
-    struct process_output *output = &proc->output[stream];
-    if (redact_output(proc, stream, true) < 0) return -1;
-    output->open = false;
-    snag_child_close_stream(&proc->child, stream);
-    if (proc->child.pty) proc->stdin_open = false;
-    return flush_capture(proc, stream);
-}
-
-static int
-process_read(struct managed_process *proc, unsigned int stream)
+process_read(struct managed_process *proc, unsigned int stream,
+    char *error, size_t error_size)
 {
     struct process_output *output = &proc->output[stream];
     unsigned char bytes[4096];
     ssize_t n = snag_child_read(&proc->child, stream, bytes, sizeof(bytes));
     if (n > 0) {
-        if (snag_buf_append(&output->pending, bytes, (size_t)n) < 0 || redact_output(proc, stream, false) < 0)
+        if (snag_buf_append(&output->pending, bytes, (size_t)n) < 0 ||
+            redact_output(proc, stream, false, error, error_size) < 0)
             return -1;
     } else if (n == 0) {
-        return close_output(proc, stream);
+        return close_output(proc, stream, error, error_size);
     } else if (errno != EINTR && errno != EAGAIN && errno != EWOULDBLOCK) {
         return -1;
     }
-    return flush_capture(proc, stream);
+    return flush_capture(proc, stream, error, error_size);
 }
 
 static void
@@ -561,6 +581,7 @@ snag_tools_service(int timeout_ms, snag_wake_fd wake_fd, char *error, size_t err
     size_t count = 0u, live = 0u, slots;
     uint64_t now = snag_monotonic_ms();
     int rc, saved;
+    if (error && error_size) error[0] = '\0';
     if (timeout_ms > (int)SNAG_TOOL_POLL_MS) timeout_ms = (int)SNAG_TOOL_POLL_MS;
     for (size_t i = 0u; i < process_capacity; ++i) live += processes[i] != NULL;
     if (live > SIZE_MAX / 3u) return snag_errno(EOVERFLOW);
@@ -575,6 +596,10 @@ snag_tools_service(int timeout_ms, snag_wake_fd wake_fd, char *error, size_t err
     for (size_t i = 0u; i < process_capacity; ++i) {
         struct managed_process *proc = processes[i];
         if (!proc) continue;
+        for (unsigned int s = 0u; s < 2u; ++s) {
+            if (redact_output(proc, s, false, error, error_size) < 0 ||
+                flush_capture(proc, s, error, error_size) < 0) goto fail;
+        }
         if (!proc->child_done) {
             int exited = snag_child_exited(&proc->child);
             if (exited < 0) {
@@ -626,7 +651,7 @@ snag_tools_service(int timeout_ms, snag_wake_fd wake_fd, char *error, size_t err
             ++serviced;
         }
         if (serviced < 16u && map[i].stream < 2u && (fds[i].revents & (SNAG_CHILD_READ | SNAG_CHILD_END))) {
-            if (process_read(proc, map[i].stream) < 0) goto fail;
+            if (process_read(proc, map[i].stream, error, error_size) < 0) goto fail;
             ++serviced;
         }
         if (map[i].stream == 2u && (fds[i].revents & SNAG_CHILD_END)) managed_close_input(proc);
@@ -643,7 +668,7 @@ snag_tools_service(int timeout_ms, snag_wake_fd wake_fd, char *error, size_t err
         for (unsigned int s = 0u; s < 2u; ++s) {
             if (!proc->output[s].open) continue;
             proc->output_incomplete = true;
-            if (close_output(proc, s) < 0) goto fail;
+            if (close_output(proc, s, error, error_size) < 0) goto fail;
         }
     }
     free(fds);
@@ -654,6 +679,7 @@ fail:
     free(fds);
     free(map);
     errno = saved;
+    if (error && error_size && error[0]) return -1;
     return snag_errorf(error, error_size, "command I/O or output journal failed: %s", strerror(errno));
 }
 

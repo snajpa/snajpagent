@@ -200,6 +200,7 @@ static struct {
 } output_journal[128];
 static size_t output_count;
 static bool fail_output;
+static int writes_before_failure = -1;
 
 static size_t
 output_index(const char *handle)
@@ -216,13 +217,13 @@ output_index(const char *handle)
 
 static int
 retain_output(void *opaque, const char *handle, unsigned int stream,
-               uint64_t offset, const void *bytes, size_t len)
+               uint64_t offset, const void *bytes, size_t len, char *error, size_t error_size)
 {
     (void)opaque;
-    if (fail_output) {
-        errno = ENOSPC;
-        return -1;
+    if (fail_output || writes_before_failure == 0) {
+        return snag_fail(error, error_size, ENOSPC, "fixture output journal unavailable");
     }
+    if (writes_before_failure > 0) --writes_before_failure;
     struct snag_buf *out = &output_journal[output_index(handle)].streams[stream];
     assert(offset == out->len);
     return snag_buf_append(out, bytes, len);
@@ -873,6 +874,61 @@ test_steering_with_blocked_stdin(void)
 }
 
 static void
+test_output_journal_recovery(unsigned int expanded)
+{
+    struct snag_config config;
+    struct snag_credential credential;
+    struct snag_response_graph graph;
+    char cwd[4096], handle[SNAG_ID_HEX_LEN + 1u], error[256] = {0};
+    snag_config_init(&config);
+    snag_credential_clear(&credential);
+    assert(getcwd(cwd, sizeof(cwd)));
+    assert(!snag_config_add_secret(&config, expanded ? "\"x\"" :
+        "\"never-value-to-redact-0123456789\"", NULL, error, sizeof(error)));
+    if (expanded == 2u) {
+        char secret[8196];
+        memset(secret, 'z', sizeof(secret));
+        secret[0] = secret[sizeof(secret) - 2u] = '"';
+        secret[sizeof(secret) - 1u] = '\0';
+        assert(!snag_config_add_secret(&config, secret, NULL, error, sizeof(error)));
+    }
+    uint32_t yield;
+    json_t *result = NULL;
+    make_call(&graph, expanded ? "printf '%8192s' '' | tr ' ' x" :
+        "printf buffered-output", cwd, 5000, NULL);
+    struct snag_response_item call = snag_response_graph_item(&graph, 0u);
+    assert(!snag_tools_prepare(&call, &config, cwd, config.max_parallel_commands,
+        handle, &yield, &result));
+    assert(!snag_tools_start(&call, &config, &credential, cwd, &result, error, sizeof(error)));
+    snag_response_graph_free(&graph);
+    writes_before_failure = expanded ? 1 : 0;
+    uint64_t deadline = snag_monotonic_ms() + 2000u;
+    while (!snag_tools_service(10, -1, error, sizeof(error)))
+        assert(snag_monotonic_ms() < deadline);
+    assert(errno == ENOSPC);
+    assert(!strcmp(error, "fixture output journal unavailable"));
+    writes_before_failure = -1;
+    while (!snag_tools_ready(handle)) {
+        assert(snag_monotonic_ms() < deadline);
+        assert(!snag_tools_service(10, -1, error, sizeof(error)));
+    }
+    assert(!snag_tools_collect(handle, NULL, &result, error, sizeof(error)));
+    struct snag_buf *out = &output_journal[output_index(handle)].streams[0];
+    if (expanded) {
+        const char marker[] = "<redacted:secret>";
+        assert(out->len == 8192u * (sizeof(marker) - 1u));
+        for (size_t i = 0u; i < out->len; i += sizeof(marker) - 1u)
+            assert(!memcmp(out->data + i, marker, sizeof(marker) - 1u));
+    } else {
+        assert(!strcmp(snag_json_string(json_object_get(result, "stdout"), "retained"),
+            "buffered-output"));
+    }
+    snag_tools_collected(handle);
+    json_decref(result);
+    snag_config_free(&config);
+}
+
+static void
 test_journal_failure_closes_owned_commands(void)
 {
     struct snag_config config;
@@ -895,6 +951,7 @@ test_journal_failure_closes_owned_commands(void)
     uint64_t deadline = snag_monotonic_ms() + 2000u;
     while (snag_tools_service(10, -1, error, sizeof(error)) == 0) assert(snag_monotonic_ms() < deadline);
     assert(errno == ENOSPC);
+    assert(!strcmp(error, "fixture output journal unavailable"));
     snag_tools_shutdown();
     assert(!snag_tools_busy());
     fail_output = false;
@@ -988,8 +1045,17 @@ test_many_secret_sources(void)
 }
 
 int
-main(void)
+main(int argc, char **argv)
 {
+    if (argc == 2 && snag_string_in(argv[1], "--output-recovery --output-partial")) {
+        (void)signal(SIGPIPE, SIG_IGN);
+        snag_tools_journal(retain_output, read_output, NULL);
+        if (!strcmp(argv[1], "--output-recovery")) test_output_journal_recovery(0u);
+        test_output_journal_recovery(1u);
+        test_output_journal_recovery(2u);
+        puts("test_tools output recovery: ok");
+        return 0;
+    }
     test_command_argument_feedback();
     test_atomic_sequence();
     test_child_wait_ownership();
@@ -998,6 +1064,9 @@ main(void)
     test_converter_boundary();
     (void)signal(SIGPIPE, SIG_IGN);
     snag_tools_journal(retain_output, read_output, NULL);
+    test_output_journal_recovery(0u);
+    test_output_journal_recovery(1u);
+    test_output_journal_recovery(2u);
     test_minimal_command_contract();
     test_process_capacity_and_ready_collection();
     test_steering_with_blocked_stdin();

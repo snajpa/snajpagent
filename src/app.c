@@ -3909,7 +3909,9 @@ again:;
                 "active input could not be read";
         }
         (void)snag_ui_text(&app->ui, SNAG_UI_ERROR, message);
-        return input_errno == EOVERFLOW || input_errno == EILSEQ ? 0 : -1;
+        if (input_errno == EOVERFLOW || input_errno == EILSEQ) return 0;
+        app->input_closed = true;
+        return -1;
     }
     if (rc == 0) {
         if (app->networked) {

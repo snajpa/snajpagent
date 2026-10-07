@@ -6122,6 +6122,16 @@ validation fails. Fix the reported file, login or cache error, then run
 again. Only changed IRC fields replace current runtime network state; unrelated
 edits preserve it.
 .TP
+.B Command output journal or terminal presentation failed.
+Journal errors include the underlying storage or checkpoint failure. Retries
+preserve unsaved command output and append each acknowledged chunk once. A later
+display failure leaves already saved output available in history. A persistent
+terminal failure ends the owner instead of retrying model
+requests against failed input. Resume the saved session after correcting the
+reported problem. Installing a new binary updates future owners; use
+.B /exit
+and then the resume command to replace a running owner.
+.TP
 .B Session resume reports a lock or incompatible format.
 A live session cannot be resumed concurrently.  Do not delete its lock to start
 a second owner.  Pre-1.0 internal formats can change; preserve older logs and

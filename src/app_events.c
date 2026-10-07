@@ -1044,10 +1044,10 @@ snag_app_turn_failed_data(const char *turn_id, const char *class_name, const cha
 
 int
 snag_app_tool_output(void *opaque, const char *handle, unsigned int stream,
-                     uint64_t offset, const void *bytes, size_t len)
+    uint64_t offset, const void *bytes, size_t len, char *error, size_t error_size)
 {
     struct app_state *app = opaque;
-    char error[256] = {0};
+    char detail[256] = {0};
     bool utf8 = snag_utf8_valid(bytes, len, true);
     json_t *event;
     int rc = -1;
@@ -1058,8 +1058,23 @@ snag_app_tool_output(void *opaque, const char *handle, unsigned int stream,
     event = json_pack("{s:s,s:s,s:i,s:I,s:s,s:s%}", "turn_id", app->session.active_turn_id, "handle", handle,
         "stream", (int)stream, "offset", (json_int_t)offset, "encoding", utf8 ? "utf8" : "base64",
         "data", (const char *)(utf8 ? bytes : (const void *)encoded.data), utf8 ? len : encoded.len);
-    if (event) rc = snag_app_commit_event(app, "process_output", event, error, sizeof(error));
-out: snag_buf_free(&encoded);
+    if (!event) {
+        errno = ENOMEM;
+        goto out;
+    }
+    struct snag_process_state *process = snag_session_process(&app->session, handle);
+    bool at_offset = process && stream < 2u && process->output_bytes[stream] == offset;
+    rc = snag_app_commit_event(app, "process_output", event, detail, sizeof(detail));
+    process = snag_session_process(&app->session, handle);
+    /* Presentation follows durable admission. A failed display must not cause
+     * the tools owner to resend an acknowledged chunk at its previous offset. */
+    if (rc < 0 && at_offset && process && len && len <= UINT64_MAX - offset &&
+        process->output_bytes[stream] == offset + len) rc = 0;
+out:;
+    int saved = errno;
+    snag_buf_free(&encoded);
+    if (rc < 0) return snag_fail(error, error_size, saved,
+        "command output journal failed: %s", detail[0] ? detail : strerror(saved));
     return rc;
 }
 
