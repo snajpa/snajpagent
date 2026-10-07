@@ -2624,6 +2624,17 @@ cancel_line(struct snag_term *term, enum snag_term_action *action)
         term->cursor = term->draft.len;
         if (redraw(term) < 0) return -1;
     }
+    if (term->cancelled) {
+        struct snag_buf echo = {.max = SNAG_MAX_DIRECT_PROMPT + 3u};
+        int rc = snag_buf_append(&echo, term->draft.data, term->draft.len);
+        if (!rc) rc = snag_buf_append(&echo, "^C", 2u);
+        if (!rc) rc = snag_buf_terminate(&echo);
+        size_t label_length;
+        const char *label = term->input_only ? term->label : prompt_label(term, &label_length);
+        if (!rc) rc = term->cancelled(term->cancelled_opaque, label, (const char *)echo.data);
+        snag_buf_free(&echo);
+        if (rc < 0) return -1;
+    }
     if (!term->input_only && snag_term_write(STDERR_FILENO, "^C\n", 3u) < 0) return -1;
     free(term->search_original);
     term->search_original = NULL;

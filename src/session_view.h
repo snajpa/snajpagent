@@ -55,6 +55,7 @@ struct snag_view_callbacks {
         uint64_t generation, bool terminal, bool queued);
     int (*control)(void *, bool quit);
     void *opaque;
+    int (*cancelled)(void *, const char *label, const char *text);
 };
 
 #if SNAJPAGENT_VM

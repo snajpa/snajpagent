@@ -32,6 +32,15 @@ its send route remains pinned to the captured generation and nick.
 Clients use only advertised capabilities. An owner without this endpoint
 continues to offer its existing terminal attachment and best-effort history.
 
+The optional `cancelled` control capability retains an editor cancellation as
+presentation without submitting input or changing model context. The shared
+editor emits the visible prompt and draft followed by `^C`; the controller queues
+that echo behind an in-flight frame. The owner checks the controller generation
+and records it through the same presentation writer used by standalone input.
+It resets the prompt clock for the next draft. A disconnected transport does not
+retry an echo whose outcome is unknown. Older owners keep their existing controls.
+
+
 ## Framing and service
 
 Each frame has the existing eight-byte header shape: `SV`, version byte `1`,
@@ -235,6 +244,33 @@ adding model steering. Private `committed` confirms durable local send admission
 IRC delivery state remains in the typed journal events. A partially admitted
 send cannot be replayed merely because its remaining chunks failed. Input
 consisting only of empty or stripped lines is rejected without clearing its draft.
+
+
+## Retained session presentation
+
+New owners publish an optional `presentation` position alongside the independently
+validated canonical journal position. Its `origin` is the first canonical ordinal
+covered by the retained display stream. `tail` contains the native-framing end,
+next sequence, turn count, previous batch offset and base64 digest. Display
+ordinals after `origin` belong to this auxiliary stream; they must never be passed
+to model-journal APIs. Missing positions retain the older canonical-history path.
+
+The private `.view-presentation.snb` file uses the existing checked native batch
+framing and session identity. It stores ordered typed UI operations, including
+submitted labels and transient notices, plus references into canonical native or
+legacy history. The presentation thread owns append and publication. A failed
+append freezes the last successful position, publishes `presentation_error` and
+leaves session input available. The frontend displays a changed error once.
+Subsequent state updates retain that bound until the owner is restarted.
+
+The history worker applies the shared session renderer into its styled sink.
+Public-byte filtering joins fragments before rendering, including protected
+prefixes at an incomplete boundary. The shared rollout path carries source
+positions through UTF-8, citations, Markdown and wrapping. Prompt separation comes
+from the same terminal output bookkeeping used by standalone sessions. Window code
+places that result and responds to new owner positions without waiting for the
+stored-snapshot polling interval; an in-flight read completes before a newer bound
+is read. Anchored reads resolve the source position and fill forward from it.
 
 ## Terminal command references
 

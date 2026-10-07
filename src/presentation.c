@@ -131,7 +131,8 @@ snag_presentation_encode(const struct snag_ui_command *command, json_t **out)
             "timer", turn->timer, "partial", turn->partial, "continuation", turn->continuation) :
             json_null();
         data = json_pack("[I,I,I,o]", (json_int_t)command->data.replay.shown,
-            (json_int_t)command->data.replay.completed, (json_int_t)command->data.replay.total, row);
+            (json_int_t)command->data.replay.completed,
+            (json_int_t)command->data.replay.total, row);
         break;
     }
     case SNAG_UI_IRC:
@@ -296,7 +297,15 @@ snag_presentation_replay(struct snag_render *render, const json_t *record, int j
     if (snag_string_in(op, "host help runtime error warning submitted orientation durable event") &&
         !command.text) goto invalid;
     if (snag_string_in(op, "submitted orientation protocol") && !command.label) goto invalid;
+    struct snag_render_origin previous = render->sink.source;
+    if (render->sink.text && command.text && command.kind != SNAG_UI_DURABLE) {
+        size_t length = encoded ? command.len : strlen(command.text);
+        render->sink.source = (struct snag_render_origin){
+            (const unsigned char *)command.text, length, previous.byte, NULL};
+        previous.byte += length;
+    }
     rc = snag_presentation_apply(render, &command, NULL);
+    render->sink.source = previous;
     goto out;
 invalid:
     errno = EINVAL;

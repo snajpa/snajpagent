@@ -80,6 +80,8 @@ struct snag_term {
     struct snag_buf *capture;
     int (*input_checkpoint)(void *);
     void *input_opaque;
+    int (*cancelled)(void *, const char *label, const char *text);
+    void *cancelled_opaque;
     int (*suspend)(void *);
     void *suspend_opaque;
     int output_fd[2];

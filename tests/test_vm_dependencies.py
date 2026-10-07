@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0-only
 """Tool descriptions survive history page boundaries without owner replay."""
 
+import base64
 import json
 import os
 import subprocess
@@ -37,6 +38,81 @@ class DependencyTests(unittest.TestCase):
 
     def test_native_streamed_tool_output_empty(self):
         self.check_streamed_output(empty=True)
+
+    def test_native_retained_output_uses_current_secrets(self):
+        self.check_retained_secrets(False)
+
+    def test_legacy_retained_output_uses_current_secrets(self):
+        self.check_retained_secrets(True)
+
+    def check_retained_secrets(self, legacy):
+        provider = frontend.harness.FakeResponses()
+        self.addCleanup(provider.close)
+        secret = 'later-protected-value'
+        command = ("python3 -c \"import os; "
+                   f"os.write(1, b'output-before {secret} output-after\\n'); "
+                   f"os.write(2, b'\\x00{secret}\\n')\"")
+
+        def respond(handler, request, sequence):
+            if sequence == 1:
+                body = provider.function_body(sequence, 'retained-output', 'exec_command', {
+                    'command': command, 'yield_ms': 1000, 'max_output_bytes': 10000})
+            else:
+                jobs = frontend.harness.unsettled_commands(request)
+                body = provider.functions_body(sequence, [
+                    (f'collect-{sequence}-{i}', 'write_stdin', {
+                        'handle': job['handle'], 'yield_ms': 1000})
+                    for i, job in enumerate(jobs)]) if jobs else provider.response_body(
+                        sequence, 'retained-output-finished')
+            provider.reply(handler, body.encode())
+
+        provider.runtime_handler = respond
+        config = self.root / 'config.ini'
+        frontend.harness.write_irc_config(config, provider.port, 'host-model')
+        resume = []
+        if legacy:
+            journal = create_legacy(self.root / 'state', self.root, 'fake', 'host-model')
+            resume = ['--resume', journal.parent.name]
+        owner = frontend.Terminal(self.root, ['--config', str(config), *resume],
+                                  subcommand=None,
+                                  extra_env={'SNAJPAGENT_IRC_UI_KEY': 'irc-ui-secret'})
+        self.addCleanup(owner.close)
+        owner.until(b'host-model')
+        owner.write(b'run output\r')
+        owner.until(b'retained-output-finished')
+        owner.write(b'/exit\r')
+        owner.wait_exit()
+        self.assertEqual(owner.process.returncode, 0, owner.output)
+        journal, = journal_paths(self.root / 'state')
+        self.assertTrue((journal.parent / '.view-presentation.snb').is_file())
+        original = journal.read_bytes()
+        chunks = [event['data'] for event in read_events(journal)
+                  if event['type'] == 'process_output']
+        encoded = [chunk['data'] for chunk in chunks if chunk['encoding'] == 'base64']
+        self.assertTrue(encoded)
+        stderr = b''.join(base64.b64decode(chunk['data'])
+                          if chunk['encoding'] == 'base64' else chunk['data'].encode()
+                          for chunk in chunks if chunk['stream'] == 1)
+        self.assertIn(secret.encode(), stderr)
+        # A newly configured secret must protect older output through the actual
+        # retained-presentation reader, including payloads stored as base64.
+        (self.root / 'state' / 'config.ini').write_text(config.read_text() +
+            f'\n[tool]\nsecret = "{secret}"\n')
+        (self.root / 'state' / 'config.ini').chmod(0o600)
+        child = self.start('-N', 'retained-secrets', rows=40, columns=200,
+                          extra_env={'SNAJPAGENT_IRC_UI_KEY': 'irc-ui-secret'})
+        child.command('history ' + journal.parent.name)
+        child.repaint_until(b'retained-output-finished')
+        child.command('verbosity 3')
+        child.repaint_until(b'output-after')
+        from test_vm_mouse import current_rows
+        visible = '\n'.join(current_rows(child).values())
+        self.assertNotIn(secret, visible)
+        for text in encoded:
+            self.assertNotIn(text, visible)
+        self.assertIn('<redacted:secret>', visible)
+        child.finish('workspace detach')
+        self.assertEqual(journal.read_bytes(), original)
 
     def check_streamed_output(self, legacy=False, truncated=False, empty=False):
         provider = frontend.harness.FakeResponses()

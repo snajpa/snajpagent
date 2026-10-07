@@ -821,6 +821,7 @@ dispatch(struct snag_view_server *server, struct view_peer *peer, const json_t *
         !strcmp(type, "receipt") ? "type id" :
         !strcmp(type, "draft_get") ? "type generation route" :
         !strcmp(type, "draft") ? "type generation route revision edit text cursor" :
+        !strcmp(type, "cancelled") ? "type generation label text" :
         !strcmp(type, "command") ? json_object_get(message, "draft_revision") ?
             "type generation id text route draft_revision" : "type generation id text route" :
         (!strcmp(type, "submit") || !strcmp(type, "queue")) ?
@@ -844,6 +845,11 @@ dispatch(struct snag_view_server *server, struct view_peer *peer, const json_t *
             "observe", "control", "submit", "cancel", "quit", "receipts", "drafts",
             "commands", "reports", "irc_queries", "irc_channels", "irc_connections");
         json_t *features = json_object_get(capabilities, "features");
+        if (features && server->callbacks.cancelled &&
+            json_array_append_new(features, json_string("cancelled")) < 0) {
+            json_decref(capabilities);
+            return -1;
+        }
         if (!features || json_array_append_new(features, json_string("queue")) < 0) {
             json_decref(capabilities);
             return -1;
@@ -903,6 +909,16 @@ dispatch(struct snag_view_server *server, struct view_peer *peer, const json_t *
         return reply(peer, json_pack("{s:s}", "type", "detached"));
     }
     if (!peer->bound) return refuse_request(peer, message, "controller is not bound");
+    if (!strcmp(type, "cancelled")) {
+        const char *label = snag_json_bounded_string(json_object_get(message, "label"),
+            SNAG_TERM_LABEL_BYTES - 1u);
+        const char *text = snag_json_bounded_string(json_object_get(message, "text"),
+            SNAG_MAX_DIRECT_PROMPT + 2u);
+        if (!label || !text || !server->callbacks.cancelled ||
+            server->callbacks.cancelled(server->callbacks.opaque, label, text) < 0)
+            return refuse(peer, "cancelled input cannot be retained");
+        return reply(peer, json_pack("{s:s,s:s}", "type", "control", "intent", type));
+    }
     if (!strcmp(type, "draft_get")) {
         const json_t *route = json_object_get(message, "route");
         if (!writable_route(route)) return refuse(peer, "unsupported draft route");

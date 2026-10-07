@@ -165,7 +165,8 @@ view_open(struct snag_vm_reader *reader, const struct snag_vm_read_request *requ
     while (source && strcmp(source->session.id, request->session_id)) source = source->next;
     reader->current = source;
     if (source && request->pin_tail && request->trusted_tail &&
-        source->session.log_fd >= 0 && source->session.log_end > canonical_cursor(request->tail).offset) {
+        source->session.log_fd >= 0 &&
+        source->session.log_end > canonical_cursor(request->tail).offset) {
         view_close(reader);
         return view_open(reader, request, error, size);
     }
@@ -187,7 +188,8 @@ view_open(struct snag_vm_reader *reader, const struct snag_vm_read_request *requ
             if (!rc) source->best_effort = true;
             return rc;
         }
-        struct snag_journal_cursor tail = request->trusted_tail ? canonical_cursor(request->tail) : view_tail(view);
+        struct snag_journal_cursor tail = request->trusted_tail ?
+            canonical_cursor(request->tail) : view_tail(view);
         /* A snapshot can lead a queued owner notification. Keep its verified
          * prefix and current certification until the owner catches up. */
         if (request->trusted_tail && tail.offset < view->log_end &&
@@ -1011,6 +1013,11 @@ read_output(struct snag_vm_reader *reader, struct snag_vm_read_result *result)
         source->output_fd = snag_open_read_security_at(view->dir_fd, SNAG_PRESENTATION_FILE, false);
         if (source->output_fd < 0) return errno == ENOENT && !request->tail.origin ? 0 : -1;
     }
+    snag_file_info held, named;
+    if (snag_fstat(source->output_fd, &held) < 0 ||
+        snag_lstat_at(view->dir_fd, SNAG_PRESENTATION_FILE, &named) < 0 ||
+        !S_ISREG(named.st_mode) || held.st_dev != named.st_dev || held.st_ino != named.st_ino)
+        return snag_errno(ESTALE);
     struct snag_binary_anchor tail, first;
     json_t *probe = NULL;
     bool incomplete = false;
@@ -1031,15 +1038,17 @@ read_output(struct snag_vm_reader *reader, struct snag_vm_read_result *result)
         request->previous.offset == result->tail.offset &&
         !strcmp(request->previous.prev_sha256, result->tail.prev_sha256);
     if (request->tail_only || (request->if_changed && result->unchanged)) return 1;
+    uint64_t forward = request->start_seq ? request->start_seq : request->cursor.next_seq;
     bool prefix = request->reverse ? request->before_seq && request->before_seq <= origin :
-        (!request->cursor.next_seq || request->cursor.next_seq < origin);
+        (!forward || forward < origin);
     if (prefix && origin > 1u) return 0;
     struct snag_binary_anchor position;
     uint64_t seq = request->reverse ? request->before_seq ? request->before_seq :
-        result->tail.next_seq : request->cursor.next_seq;
+        result->tail.next_seq : forward;
     if (output_seek(reader, &result->tail, &request->cursor,
         seq ? seq : origin, &position) < 0) return -1;
     result->end = output_cursor(&result->tail, &position);
+    if (!request->reverse) result->request.cursor = result->end;
     json_t *records = NULL, *ordered = json_array();
     if (!ordered) return -1;
     int rc = -1;
@@ -1168,6 +1177,12 @@ read_page(struct snag_vm_reader *reader, struct snag_vm_read_result *result)
     if (result->tail.origin && (!before || before > result->tail.origin))
         before = result->tail.origin;
     result->cursor = request->cursor;
+    if (!request->reverse && request->start_seq) {
+        struct snag_journal_cursor begin;
+        if (snag_session_history_cursor_before(view, request->start_seq,
+            &begin, result->error, sizeof(result->error)) < 0) goto failed;
+        result->cursor = result->request.cursor = snag_vm_cursor_journal(begin);
+    }
     result->end = result->tail;
     if (request->reverse && before) {
         struct snag_journal_cursor end;
@@ -1197,7 +1212,8 @@ read_page(struct snag_vm_reader *reader, struct snag_vm_read_result *result)
         }
         if (request->project && project_history(reader, result) < 0) goto failed;
     } while (result->more && !(result->tail.origin &&
-        !request->reverse && result->cursor.next_seq >= result->tail.origin) && ((request->route && !json_array_size(result->events)) ||
+        !request->reverse && result->cursor.next_seq >= result->tail.origin) &&
+        ((request->route && !json_array_size(result->events)) ||
         (request->project && !request->blocks_only && request->rows &&
          snag_vm_document_rows(result->document) < request->rows)));
     if (request->project) {

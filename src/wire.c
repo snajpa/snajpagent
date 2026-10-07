@@ -39,6 +39,26 @@ snag_wire_secret_match(const unsigned char *data, size_t len, const struct snag_
     return best;
 }
 
+size_t
+snag_wire_secret_span(const unsigned char *data, size_t len, bool partial_begin,
+    bool partial_end, const struct snag_wire_secrets *secrets)
+{
+    if (!len) return 0u;
+    size_t matched = snag_wire_secret_match(data, len, secrets);
+    if (!secrets) return matched;
+    for (size_t i = 0u; i < secrets->count; ++i) {
+        const char *secret = secrets->values[i];
+        if (!secret) continue;
+        size_t length = strlen(secret);
+        if (partial_end && length > len && !memcmp(secret, data, len)) matched = len;
+        if (partial_begin) {
+            for (size_t suffix = matched + 1u; suffix < length && suffix <= len; ++suffix)
+                if (!memcmp(secret + length - suffix, data, suffix)) matched = suffix;
+        }
+    }
+    return matched;
+}
+
 static bool
 contains_secret(const unsigned char *data, size_t len, const struct snag_wire_secrets *secrets)
 {

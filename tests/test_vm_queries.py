@@ -47,13 +47,24 @@ class QueryWorkspaceTests(QueryFixture):
 
     def query(self, peer):
         self.child.write(b'i/query ' + peer.encode() + b'\r')
-        self.child.repaint_until(b'query/' + peer.encode())
+        self.child.repaint_until(b'[' + peer.encode() + b']')
+        self.normal()
 
     def normal(self):
         self.child.write(b'\x1b')
         time.sleep(.06)
         self.child.write(b'\x1b')
         time.sleep(.06)
+
+    def test_query_command_keeps_insert_mode_for_the_reply(self):
+        child = self.child
+        child.write(b'i/query query-peer\r')
+        child.repaint_until(b'[query-peer]')
+        child.write(b'immediate private reply\r')
+        self.wait_wire(self.peer, b'PRIVMSG query-peer :immediate private reply')
+        self.assertNotIn('immediate private reply', json.dumps(self.seen))
+        self.normal()
+        child.finish('q')
 
     def test_query_selects_origin_split_and_preserves_three_drafts(self):
         child = self.child
@@ -83,7 +94,7 @@ class QueryWorkspaceTests(QueryFixture):
         child.command('close')
         child.finish('close')
         resumed = self.workspace_start('--resume', 'private-panes')
-        resumed.repaint_until(b'query/query-peer')
+        resumed.repaint_until(b'[query-peer]')
         resumed.repaint_until(b'unsent peer')
         resumed.finish('close')
 
@@ -96,7 +107,7 @@ class QueryWorkspaceTests(QueryFixture):
         agent_id = re.search(rb"([0-9a-f]{8}) [^\x1b\r\n]*query-peer \[model's chat\]",
                              child.output)[1]
         child.write(b'/' + agent_id + b'\r\r')
-        child.repaint_until(b"[viewing model's chat]")
+        child.repaint_until(b"viewing model's chat")
         child.repaint_until(b'agent chat body')
         self.assertNotIn(b'operator chat body', child.output)
         child.write(b'i\x1b[200~never send from the agent identity\x1b[201~')
@@ -107,9 +118,9 @@ class QueryWorkspaceTests(QueryFixture):
         self.assertTrue(all(not b['draft'] and not b['pending']
                             for b in self.state()['buffers'][0]['buffers']))
         child.command('bn')
-        child.repaint_until(b'query/query-peer')
+        child.repaint_until(b'[query-peer]')
         child.command('bp')
-        child.repaint_until(b"[viewing model's chat]")
+        child.repaint_until(b"viewing model's chat")
         child.finish('q')
 
     def test_two_windows_share_one_query_editor_and_undo(self):

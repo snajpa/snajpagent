@@ -13,6 +13,15 @@
   chunks even when terminal presentation fails. Report the underlying journal
   error and stop retrying a failed terminal until the session is resumed.
 
+- Retain ordered session display operations for workspace replay through the
+  standalone renderer, including submitted labels, command output and notices.
+  Preserve streamed source positions through Markdown and wrapping, filter
+  protected values across partial fragments, and share prompt spacing.
+  Preserve cancelled drafts with their prompt and literal `^C` in scrollback.
+- Refresh live panes on owner output notifications. Anchored history loads include
+  following output so `gg` fills the pane. A retention write failure reports its
+  cause while preserving the last valid output boundary and session input.
+
 - Fix native checkpoint failures after the last tool in a streamed response
   finishes. Completed commentary and tool results remain available on resume.
 

@@ -177,6 +177,8 @@ render_sink_fixture(struct snag_render *render)
     strcpy(render->chat_endpoint, irc.endpoint);
     strcpy(render->chat_room, irc.room);
     assert(snag_render_irc_event(render, &irc) == 0);
+    const char *resume = "'snajpagent' --resume '0123'";
+    assert(!snag_render_resume_hint(render, resume, strlen(resume)));
 }
 
 static int
@@ -202,6 +204,44 @@ cancel_presentation_read(void *opaque)
     if (!*remaining) return true;
     --*remaining;
     return false;
+}
+
+static void
+test_retained_response_reopen(void)
+{
+    char path[] = "build/presentation-response-XXXXXX";
+    assert(mkdtemp(path));
+    int dir = snag_open_read(path, true);
+    assert(dir >= 0);
+    const char *id = "0123456789abcdef0123456789abcdef";
+    struct snag_presentation_writer *writer = snag_presentation_writer_open(dir, id);
+    assert(writer && !snag_presentation_start(writer, 31u));
+    struct snag_ui_command response = {.kind = SNAG_UI_DURABLE,
+        .text = "response_completed", .data.durable.source = {.offset = 123, .len = 45u}};
+    assert(!snag_presentation_append(writer, &response));
+    snag_presentation_writer_close(writer);
+    writer = snag_presentation_writer_open(dir, id);
+    assert(writer && !snag_presentation_start(writer, 32u));
+    struct snag_ui_command tool = {.kind = SNAG_UI_DURABLE,
+        .text = "tool_started", .data.durable.source = {.offset = 168, .len = 24u}};
+    assert(!snag_presentation_append(writer, &tool));
+    snag_presentation_writer_close(writer);
+    int fd = snag_open_read_at(dir, SNAG_PRESENTATION_FILE, false);
+    assert(fd >= 0);
+    json_t *rows = NULL;
+    struct snag_binary_anchor begin, tail;
+    bool incomplete;
+    assert(!snag_presentation_read(fd, id, NULL, NULL, true, SIZE_MAX,
+        &rows, &begin, &tail, &incomplete, NULL, NULL));
+    const json_t *data = json_object_get(json_array_get(rows, 0u), "data");
+    const json_t *saved = json_object_get(data, "response");
+    assert(json_integer_value(json_object_get(saved, "offset")) == 123);
+    assert(json_integer_value(json_object_get(saved, "length")) == 45);
+    json_decref(rows);
+    assert(!close(fd));
+    assert(!snag_unlink_at(dir, SNAG_PRESENTATION_FILE, false));
+    assert(!close(dir));
+    assert(!rmdir(path));
 }
 
 static void
@@ -3925,6 +3965,7 @@ main(int argc, char **argv)
     test_retained_prompt();
     test_styled_sink_matches_terminal();
     test_retained_presentation();
+    test_retained_response_reopen();
     test_native_rebind();
     test_history_refresh_cursor();
     test_tool_ref_rows();

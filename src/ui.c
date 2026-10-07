@@ -154,33 +154,49 @@ struct snag_ui_display {
 static int
 retain_output(struct snag_ui_display *display, const struct snag_ui_command *command)
 {
-    if (snag_presentation_append(display->presentation, command) == 0) {
-        if (!display->view_state) return 0;
+    if (display->presentation_error[0]) return 0;
+    bool failed = snag_presentation_append(display->presentation, command) < 0;
+    if (failed) {
+        (void)snprintf(display->presentation_error, sizeof(display->presentation_error),
+            "Session output retention stopped: %s", strerror(errno));
+    }
+    if (display->view_state) {
         json_t *position = snag_presentation_snapshot(display->presentation);
         if (!position) return -1;
-        if (json_equal(position, json_object_get(display->view_state, "presentation"))) {
+        if (!failed && json_equal(position, json_object_get(display->view_state, "presentation"))) {
             json_decref(position);
             return 0;
         }
         /* Nested fields already belong to this immutable display snapshot. */
         json_t *state = json_copy(display->view_state);
         if (!state) { json_decref(position); return -1; }
-        if (json_object_set_new(state, "presentation", position) < 0) {
+        if (json_object_set_new(state, "presentation", position) < 0 ||
+            (failed && json_object_set_new(state, "presentation_error",
+                json_string(display->presentation_error)) < 0)) {
             json_decref(state);
             return -1;
         }
         snag_view_server_state(display->view, state);
         json_decref(display->view_state);
         display->view_state = state;
-        return 0;
     }
-    int cause = errno;
-    snag_presentation_writer_close(display->presentation);
-    display->presentation = NULL;
-    (void)snprintf(display->presentation_error, sizeof(display->presentation_error),
-        "Session output retention stopped: %s", strerror(cause));
-    if (display->direct || snag_view_server_attached(display->view)) return 0;
+    if (!failed || display->direct || snag_view_server_attached(display->view)) return 0;
     return snag_render_warning_ctx(&display->render, display->presentation_error);
+}
+
+static int view_state(struct snag_ui_display *, const json_t *);
+
+static int
+retain_cancelled(void *opaque, const char *label, const char *text)
+{
+    struct snag_ui_display *display = opaque;
+    struct snag_ui_command command = {.kind = SNAG_UI_SUBMITTED, .label = label,
+        .text = text, .data.value = true};
+    if (retain_output(display, &command) < 0) return -1;
+    if (!display->term.input_only) return 0;
+    display->term.prompt_clock.captured = false;
+    snag_term_capture_prompt_clock(&display->term, time(NULL));
+    return view_state(display, display->view_state);
 }
 
 static int
@@ -630,7 +646,6 @@ message_free(struct ui_message *message)
     if (message->command.kind == SNAG_UI_PROMPT || message->command.kind == SNAG_UI_VALIDATE)
         prompt_free(&message->command.data.prompt);
 }
-
 
 static bool
 same_conversation_view(const struct ui_conversation_tab *a, const struct ui_conversation_tab *b)
@@ -1235,6 +1250,7 @@ apply_session(struct snag_ui_display *display, const struct snag_ui_command *com
         if (!session) {
             snag_presentation_writer_close(display->presentation);
             display->presentation = NULL;
+            display->presentation_error[0] = '\0';
             snag_view_server_stop(display->view);
             if (display->native) snag_session_listener_close(&display->listener);
             return 0;
@@ -1256,7 +1272,8 @@ apply_session(struct snag_ui_display *display, const struct snag_ui_command *com
         if (display->native && snag_session_listener_open(&display->listener, session->dir_fd,
                 session->dir_path, session->lock_fd) < 0) return -1;
 #if SNAJPAGENT_VM
-        struct snag_view_callbacks callbacks = {view_bound, view_submit, view_control, display};
+        struct snag_view_callbacks callbacks = {view_bound, view_submit, view_control,
+            display, retain_cancelled};
         display->view = display->direct ?
             snag_view_server_direct(&display->direct_channel, session->id, callbacks) :
             snag_view_server_open(session->dir_fd, session->dir_path,
@@ -2067,6 +2084,8 @@ presentation_main(void *opaque)
     display->main_draft = &display->rollout_draft;
     display->term.input_checkpoint = output_input_checkpoint;
     display->term.input_opaque = display;
+    display->term.cancelled = retain_cancelled;
+    display->term.cancelled_opaque = display;
     snag_render_init(&display->render, 0u);
     display->render.checkpoint = render_input_checkpoint;
     display->render.checkpoint_opaque = display;

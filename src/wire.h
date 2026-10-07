@@ -18,6 +18,10 @@ struct snag_wire_secrets {
 
 /* Length of the longest secret matching the supplied byte prefix, or zero. */
 size_t snag_wire_secret_match(const unsigned char *data, size_t len, const struct snag_wire_secrets *secrets);
+/* A partial range also protects matching secret suffixes at its beginning and
+ * prefixes at its unfinished end, until adjacent bytes disambiguate them. */
+size_t snag_wire_secret_span(const unsigned char *, size_t, bool partial_begin,
+    bool partial_end, const struct snag_wire_secrets *);
 int snag_wire_json_redact_bounded(const unsigned char *data, size_t len, size_t input_max,
                                  const struct snag_wire_secrets *secrets, struct snag_buf *out,
                                  char *error, size_t error_size);

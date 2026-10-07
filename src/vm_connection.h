@@ -44,12 +44,14 @@ struct snag_vm_connection {
     const char *dotdir;
     struct snag_vm_buffer *buffers, *rollout, *draft_wait, *inflight, *sync_next;
     json_t *state, *draft_sent, *reports;
+    json_t *cancelled;
     char message[256];
     uint64_t generation, deadline, revision, draft_edit, draft_deadline;
     bool control, bound, hello, quitting, exited, direct;
     bool commands, queue, drafts, terminal_commands, irc_queries, irc_channels, irc_connections;
     bool reports_supported, reports_subscribed, reports_changed, detaching, detach_sent;
     bool cancel_pending;
+    bool cancelled_supported;
 };
 
 /* NULL selects the rollout. Returned buffers live until their session closes. */
@@ -60,6 +62,7 @@ bool snag_vm_connection_unsaved(const struct snag_vm_connection *);
 void snag_vm_connection_discard(struct snag_vm_connection *);
 
 struct snag_vm_connection *snag_vm_connection_new(const char *session);
+int snag_vm_buffer_cancelled(void *, const char *label, const char *text);
 void snag_vm_connections_free(struct snag_vm_connection *);
 void snag_vm_connection_close(struct snag_vm_connection *);
 int snag_vm_connection_open(struct snag_vm_connection *, struct snag_store *, bool control);

@@ -1799,15 +1799,15 @@ load_history(struct vm *vm)
              (window->end.next_seq && window->anchor_seq >= window->end.next_seq))) {
             load = LOAD_ANCHOR;
         }
-        if (load == LOAD_LAST || load == LOAD_PREVIOUS || load == LOAD_ANCHOR ||
+        if (load == LOAD_LAST || load == LOAD_PREVIOUS ||
             load == LOAD_POLL || load == LOAD_KEEP_PREVIOUS) {
             request.reverse = true;
             if (load == LOAD_PREVIOUS || load == LOAD_KEEP_PREVIOUS)
                 request.before_seq = window->begin.next_seq;
             if (load == LOAD_PREVIOUS || load == LOAD_KEEP_PREVIOUS)
                 request.cursor = window->begin;
-            if (load == LOAD_ANCHOR) request.before_seq = window->anchor_seq + 1u;
-        } else if (load == LOAD_NEXT || load == LOAD_KEEP_NEXT) request.cursor = window->end;
+        } else if (load == LOAD_ANCHOR) request.start_seq = window->anchor_seq;
+        else if (load == LOAD_NEXT || load == LOAD_KEEP_NEXT) request.cursor = window->end;
         else if (load == LOAD_KEEP || load == LOAD_REFRESH) request.cursor = window->begin;
         request.rows = window->document ? window->rectangle.rows : 0u;
         vm->page.generation = reader_request(vm, &vm->page, &request);
@@ -2408,7 +2408,7 @@ composer_key(struct vm *vm, const struct snag_vm_input_event *event)
         if (c->connection->queue) submit_draft(vm, true);
         else notice(vm, "This owner requires /queue TEXT to queue a turn; draft retained");
     }
-    else if (result == SNAG_VM_EDIT_CANCEL) notice(vm, "^C");
+    else if (result == SNAG_VM_EDIT_CANCEL) notice(vm, "");
     else if (result == SNAG_VM_EDIT_INTERRUPT) {
         if (snag_vm_connection_control(c->connection, "cancel") == 0)
             notice(vm, "Cancellation requested; waiting...");
@@ -3554,8 +3554,18 @@ connection_step(struct vm *vm, struct snag_vm_connection *c)
     uint64_t revision = c->revision;
     char previous[sizeof(c->message)];
     memcpy(previous, c->message, sizeof(previous));
+    struct snag_vm_cursor before, after;
+    bool had_tail = history_tail(c, &before);
     snag_vm_connection_step(c);
     if (revision != c->revision) {
+        if (history_tail(c, &after) && (!had_tail || before.origin != after.origin ||
+            before.offset != after.offset || before.next_seq != after.next_seq)) {
+            for (size_t i = 0u; i < vm->count; ++i) {
+                struct vm_window *window = &vm->windows[i];
+                if (window->kind == VIEW_TRANSCRIPT && !window->source_failed &&
+                    !strcmp(window->session_id, c->session)) window->follow_at = 0u;
+            }
+        }
         if (focused_connection(vm) == c && strcmp(previous, c->message))
             notice(vm, c->message);
         if (feedback && feedback->connection == c &&
@@ -3596,7 +3606,15 @@ connections_step(struct vm *vm)
             }
             if (b->selection) {
                 struct snag_vm_buffer *selected = snag_vm_buffer_get(c, b->selection, true);
-                if (selected && origin && !source->draft.len) open_conversation(vm, selected);
+                if (selected && origin && !source->draft.len) {
+                    bool composer = vm->composer, insert = vm->insert;
+                    open_conversation(vm, selected);
+                    if (snag_vm_buffer_writable(selected)) {
+                        vm->composer = composer;
+                        vm->insert = insert;
+                        if (insert) notice(vm, "");
+                    }
+                }
             }
             json_decref(b->selection);
             b->selection = NULL;
@@ -3813,8 +3831,17 @@ draw_composer(struct vm *vm, struct vm_window *window, struct snag_vm_buffer *bu
     snag_term_composer_viewport(*height, layout.cursor_row, layout.end_row, &top, &rows);
     window->composer_top = top;
     *height -= rows;
+    size_t gap = 0u;
+    struct snag_vm_document_row last;
+    if (window->follow && history_rows &&
+        !snag_vm_document_row(window->document, history_rows - 1u, &last)) {
+        gap = (size_t)json_integer_value(json_object_get(
+            snag_vm_document_block(window->document, last.block), "prompt_gap"));
+        if (gap > *height) gap = *height;
+        *height -= gap;
+    }
     window->composer_row = r->row +
-        (window->follow && history_rows < *height ? history_rows : *height);
+        (window->follow && history_rows < *height ? history_rows : *height) + gap;
     window->composer_rows = rows;
     int rc = 0;
     for (size_t i = 0u, at = 0u; i < top + rows && at <= frame.len; ++i) {
@@ -4388,6 +4415,10 @@ collect(struct vm *vm, struct vm_read *read)
             if (window->id != target || window->kind != VIEW_TRANSCRIPT ||
                 strcmp(window->session_id, result->request.session_id)) continue;
             window->follow_at = snag_monotonic_ms() + 1000u;
+            struct snag_vm_cursor latest;
+            if (history_tail(connection_for(vm, window->session_id, false), &latest) &&
+                (latest.origin != result->tail.origin || latest.next_seq > result->tail.next_seq))
+                window->follow_at = 0u;
             if (load == LOAD_POLL &&
                 (result->unchanged || result->request.tail_only || !window->follow)) {
                 if (!result->unchanged || window->incomplete != result->incomplete ||

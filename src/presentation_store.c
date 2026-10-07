@@ -25,6 +25,37 @@ hex_byte(const char *text)
         (strchr(digits, text[1]) - digits));
 }
 
+static int
+restore_response(struct snag_presentation_writer *writer, const char *id)
+{
+    struct snag_binary_anchor position = writer->tail;
+    while (position.next_seq > 1u) {
+        struct snag_binary_anchor begin, tail;
+        json_t *rows = NULL;
+        bool incomplete;
+        if (snag_presentation_read(writer->fd, id, &writer->tail, &position, true,
+            SNAG_JOURNAL_PAGE_BYTES, &rows, &begin, &tail, &incomplete, NULL, NULL) < 0)
+            return -1;
+        for (size_t i = 0u; i < json_array_size(rows); ++i) {
+            const json_t *data = json_object_get(json_array_get(rows, i), "data");
+            json_t *response = json_object_get(data, "response");
+            const char *op = snag_json_string(data, "op");
+            const char *type = snag_json_string(data, "text");
+            if (!response && op && !strcmp(op, "durable") && type &&
+                !strcmp(type, "response_completed"))
+                response = json_array_get(json_object_get(data, "data"), 0u);
+            if (response) {
+                writer->response = json_incref(response);
+                break;
+            }
+        }
+        json_decref(rows);
+        if (writer->response) return 0;
+        position = begin;
+    }
+    return 0;
+}
+
 struct snag_presentation_writer *
 snag_presentation_writer_open(int directory, const char *id)
 {
@@ -58,6 +89,7 @@ snag_presentation_writer_open(int directory, const char *id)
         if (memcmp(found.id, identity.id, sizeof(identity.id))) { errno = EINVAL; goto fail; }
         if (incomplete && (snag_truncate(writer->fd, (int64_t)writer->tail.end) < 0 ||
             snag_sync_file(writer->fd) < 0)) goto fail;
+        if (restore_response(writer, id) < 0) goto fail;
     }
     return writer;
 fail: {
@@ -95,13 +127,13 @@ append_record(struct snag_presentation_writer *writer, const json_t *data, uint1
     if (!rc) rc = snag_binary_wire_encode(&writer->wire, writer->batch.data, writer->batch.len);
     if (!rc) {
         rc = snag_write_full(writer->fd, writer->wire.data, writer->wire.len);
+        if (!rc && sync) rc = snag_sync_file(writer->fd);
         if (rc < 0) {
             int cause = errno;
             (void)snag_truncate(writer->fd, (int64_t)writer->tail.end);
             errno = cause;
         } else {
             writer->tail = next;
-            if (sync) rc = snag_sync_file(writer->fd);
         }
     }
     free(text);
@@ -117,10 +149,7 @@ snag_presentation_append(struct snag_presentation_writer *writer,
     int encoded = snag_presentation_encode(command, &data);
     if (encoded != 0) return encoded < 0 ? -1 : 0;
     if (command->kind == SNAG_UI_DURABLE) {
-        if (!strcmp(command->text, "response_completed")) {
-            json_decref(writer->response);
-            writer->response = json_incref(json_array_get(json_object_get(data, "data"), 0u));
-        } else if (writer->response &&
+        if (writer->response &&
             snag_string_in(command->text, "tool_started tool_finished") &&
             json_object_set(data, "response", writer->response) < 0) {
             json_decref(data);
@@ -132,6 +161,11 @@ snag_presentation_append(struct snag_presentation_writer *writer,
         command->kind == SNAG_UI_ROLLOUT_ABORT || command->kind == SNAG_UI_ERROR ||
         command->kind == SNAG_UI_HOST || command->kind == SNAG_UI_HELP;
     int rc = append_record(writer, data, 1u, sync);
+    if (!rc && command->kind == SNAG_UI_DURABLE &&
+        !strcmp(command->text, "response_completed")) {
+        json_decref(writer->response);
+        writer->response = json_incref(json_array_get(json_object_get(data, "data"), 0u));
+    }
     json_decref(data);
     return rc;
 }
@@ -242,7 +276,8 @@ snag_presentation_bound(const json_t *snapshot, uint64_t *origin,
 
 int
 snag_presentation_read(int fd, const char *id, const struct snag_binary_anchor *bound,
-    const struct snag_binary_anchor *position, bool reverse, size_t budget, json_t **out, struct snag_binary_anchor *begin,
+    const struct snag_binary_anchor *position, bool reverse, size_t budget,
+    json_t **out, struct snag_binary_anchor *begin,
     struct snag_binary_anchor *tail, bool *incomplete, bool (*cancel)(void *), void *opaque)
 {
     if (!id || !snag_hex_is_lower(id, SNAG_ID_HEX_LEN) || !budget)
@@ -275,7 +310,10 @@ snag_presentation_read(int fd, const char *id, const struct snag_binary_anchor *
         if (snag_binary_journal_tail(fd, SNAG_BINARY_HEADER_SIZE, &scratch,
             &identity, &current, &ignored) < 0) goto out;
     }
-    if (current.end > observed.end || current.next_seq > observed.next_seq) { errno = ESTALE; goto out; }
+    if (current.end > observed.end || current.next_seq > observed.next_seq) {
+        errno = ESTALE;
+        goto out;
+    }
     size_t bytes = 0u;
     bool public_open = false;
     while ((reverse ? current.next_seq > 1u : current.end < observed.end) &&

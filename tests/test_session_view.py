@@ -149,6 +149,14 @@ class SessionViewTests(unittest.TestCase):
         harness.write_irc_config(self.config, self.provider.port, 'host-model')
         self.prefix = [str(BINARY), '--config', str(self.config), '--dotdir',
                        str(self.root / 'state')]
+        if self._testMethodName == 'test_retention_failure_preserves_bound_and_publishes_error':
+            launcher = self.root / 'limited-owner.py'
+            launcher.write_text(
+                'import os, resource, signal, sys\n'
+                'signal.signal(signal.SIGXFSZ, signal.SIG_IGN)\n'
+                'resource.setrlimit(resource.RLIMIT_FSIZE, (16384, 16384))\n'
+                'os.execv(sys.argv[1], sys.argv[1:])\n')
+            self.prefix = [sys.executable, str(launcher)] + self.prefix
         self.env = {'SNAJPAGENT_IRC_UI_KEY': 'irc-ui-secret'}
         self.children = []
         self.views = []
@@ -229,6 +237,32 @@ class SessionViewTests(unittest.TestCase):
         self.assertFalse(any(event['type'] in ('response_failed', 'turn_recovery')
                              for event in self.events()))
         self.finish(resumed, b'/s d')
+
+    def test_retention_failure_preserves_bound_and_publishes_error(self):
+        self.detach()
+        peer = self.view()
+        peer.bind()
+        for i in range(40):
+            result = peer.result(peer.command('/fast on' if i % 2 else '/fast off'))
+            self.assertEqual(result['status'], 'completed')
+            peer.draft()
+            state = peer.states[-1]
+            if state.get('presentation_error'):
+                break
+        self.assertIn('retention stopped', state.get('presentation_error', '').lower())
+        bound = state['presentation']
+        self.assertIsInstance(bound, dict)
+        self.assertGreater(bound['tail'][1], 2)
+        self.assertLessEqual(bound['tail'][0],
+                            (self.directory / '.view-presentation.snb').stat().st_size)
+        result = peer.result(peer.command('/fast off'))
+        self.assertEqual(result['status'], 'completed')
+        peer.draft()
+        self.assertEqual(peer.states[-1]['presentation'], bound)
+        self.assertEqual(peer.states[-1]['presentation_error'], state['presentation_error'])
+        self.assertEqual(self.identity(), self.owner_identity)
+        self.assertFalse(any(event['type'] in ('input_received', 'response_failed')
+                             for event in self.events()))
 
     def start(self, args):
         child = RemoteProcess(self.root, self.prefix + args, wrapped=None, extra_env=self.env)

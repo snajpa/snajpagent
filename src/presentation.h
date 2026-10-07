@@ -34,7 +34,8 @@ int snag_presentation_origin(int fd, const struct snag_binary_anchor *tail,
  * be a boundary returned by this reader for the same immutable prefix. The
  * caller owns the private descriptor and cancellation/lifetime. */
 int snag_presentation_read(int fd, const char *id, const struct snag_binary_anchor *bound,
-    const struct snag_binary_anchor *position, bool reverse, size_t budget, json_t **records, struct snag_binary_anchor *begin,
+    const struct snag_binary_anchor *position, bool reverse, size_t budget,
+    json_t **records, struct snag_binary_anchor *begin,
     struct snag_binary_anchor *tail, bool *incomplete,
     bool (*cancel)(void *), void *opaque);
 

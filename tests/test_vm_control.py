@@ -99,7 +99,7 @@ class ControlTests(unittest.TestCase):
         self.owner.status('detached')
         self.assertEqual(self.owner.identity(), identity)
         self.assertEqual(self.owner_draft()['text'], 'keep this draft')
-        resumed = self.start('--resume', name, expect=b'history')
+        resumed = self.start('--resume', name, expect=b'Workspace restored')
         resumed.attached()
         saved = next(iter(self.snapshots().values()))
         self.assertEqual(len(saved['state']['windows']), 2)
@@ -137,7 +137,7 @@ class ControlTests(unittest.TestCase):
         child.finish('workspace detach')
 
     def test_panes_replay_native_notices_and_exact_submission_labels(self):
-        child = self.start('-N', 'native-output')
+        child = self.start('-N', 'native-output', rows=30)
         child.command('attach ' + self.owner.sid)
         child.attached()
         from test_vm_mouse import current_rows
@@ -158,6 +158,61 @@ class ControlTests(unittest.TestCase):
         self.assertIn('Fast mode: OFF', rows)
         self.assertRegex(rows, r'fake/host-model/[^\n]+/fast off')
         self.assertEqual(rows.count('/fast off'), 1)
+        cells = current_rows(child)
+        output_row = next(row for row, text in cells.items() if 'Fast mode: OFF' in text)
+        prompt_row = next(row for row, text in cells.items()
+                          if '[' + self.owner.sid[:8] + ']' in text)
+        self.assertEqual(prompt_row, output_row + 2,
+                         'pane prompt must use the standalone output separator')
+        self.assertFalse(cells.get(output_row + 1, '').strip())
+        self.escape(child)
+        child.finish('workspace detach')
+
+    def test_owner_output_wakes_the_pane_before_the_snapshot_poll(self):
+        child = self.start('-N', 'live-output', rows=30)
+        child.command('attach ' + self.owner.sid)
+        child.attached()
+        from test_vm_mouse import current_rows
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            child.read(.02)
+            if 'session id ' + self.owner.sid[:8] in '\n'.join(current_rows(child).values()):
+                break
+        else:
+            self.fail('initial retained output did not load')
+        requested = threading.Event()
+
+        def respond(handler, request, sequence):
+            requested.set()
+            self.owner.release.wait(10)
+            self.owner.provider.reply(handler, self.owner.provider.response_body(
+                sequence, 'spontaneous-output-marker').encode(), close_header=True)
+
+        self.owner.provider.runtime_handler = respond
+        command = 'show-input-immediately'
+        started = time.monotonic()
+        child.write(b'i' + command.encode() + b'\r')
+        self.assertTrue(requested.wait(5))
+        found = False
+        while time.monotonic() - started < 5:
+            child.read(.01)
+            # The committed echo has the native prompt. The draft's workspace
+            # prompt starts with the pane identifier instead.
+            found = any(re.search(r'^\s+[0-9:]+ fake/host-model/.*' + command, row)
+                        for row in current_rows(child).values())
+            if found:
+                break
+        self.assertTrue(found, 'submitted input did not load')
+        child.read(.1)
+        started = time.monotonic()
+        self.owner.release.set()
+        found = False
+        while time.monotonic() - started < .6:
+            child.read(.01)
+            found = 'spontaneous-output-marker' in '\n'.join(current_rows(child).values())
+            if found:
+                break
+        self.assertTrue(found, 'owner output waited for the one-second snapshot poll')
         self.escape(child)
         child.finish('workspace detach')
 
@@ -240,6 +295,31 @@ class ControlTests(unittest.TestCase):
             child.read(.08)
             child.finish('workspace detach')
         self.assertEqual(self.owner.identity(), self.owner.owner_identity)
+        self.assertEqual(self.owner.provider.requests, [])
+
+    def test_cancelled_draft_is_retained_without_submitting_it(self):
+        from test_vm_mouse import current_rows
+
+        child = self.start('-N', 'cancelled-draft', columns=140)
+        child.command('attach ' + self.owner.sid)
+        child.attached()
+        child.write(b'icancelled sample\x03')
+        self.wait_synced('')
+        child.repaint_until(b'cancelled sample^C')
+        self.assertEqual(sum('cancelled sample^C' in row
+                             for row in current_rows(child).values()), 1)
+        child.write(b'next draft')
+        self.wait_synced('next draft')
+        self.escape(child)
+        child.finish('workspace detach')
+        resumed = self.start('--resume', 'cancelled-draft',
+                             expect=b'Workspace restored', columns=140)
+        resumed.attached()
+        resumed.repaint_until(b'cancelled sample^C')
+        self.assertEqual(sum('cancelled sample^C' in row
+                             for row in current_rows(resumed).values()), 1)
+        resumed.finish('workspace detach')
+        self.assertEqual(self.inputs(), [])
         self.assertEqual(self.owner.provider.requests, [])
 
     def test_insert_paste_normalizes_cr_and_cancels_before_terminator(self):
@@ -357,7 +437,17 @@ class ControlTests(unittest.TestCase):
         self.assertEqual(self.owner.journal.name, 'journal.bin')
         child = self.start('-N', 'native-start', columns=140)
         child.command('attach ' + self.owner.sid)
-        child.repaint_until(b'[start]  [tail]')
+        child.attached()
+        child.write(b'gg')
+        self.wait_snapshot(lambda rows:
+            not next(iter(rows.values()))['state']['windows'][0]['history']['follow'] and
+            next(iter(rows.values()))['state']['windows'][0]['row'] == 0)
+        from test_vm_mouse import current_rows
+        child.repaint_until(b'session id ' + self.owner.sid[:8].encode())
+        self.assertTrue(current_rows(child)[0].startswith('snajpagent '))
+        child.write(b'G')
+        self.wait_snapshot(lambda rows:
+            next(iter(rows.values()))['state']['windows'][0]['history']['follow'])
         child.write(b'iempty-pane-draft')
         self.wait_synced('empty-pane-draft')
         self.escape(child)
@@ -409,7 +499,7 @@ class ControlTests(unittest.TestCase):
         self.wait_synced('begin /fast :literal')
         self.escape(child)
         child.write(b':workspace name canceled')
-        child.repaint_until(b'COMMAND-LINE')
+        child.repaint_until(b'workspace name canceled')
         child.write(b'\x1b')
         child.read(.08)
         child.write(b'A!')
@@ -559,19 +649,20 @@ class ControlTests(unittest.TestCase):
         child.command('attach ' + self.owner.sid)
         child.attached()
         child.command('vsp')
-        from test_vm_mouse import positions
+        from test_vm_mouse import current_rows
 
         marker = 'fake/host-model/medium   0% ›'
+        prefix = '[' + self.owner.sid[:8] + ']'
         deadline = time.monotonic() + 5
-        while len(positions(child, marker)) < 2:
+        while sum(line.count(prefix) for line in current_rows(child).values()) < 2:
             self.assertLess(time.monotonic(), deadline)
+            child.read(.02)
         child.write(b'iunsent-pane-draft')
         self.wait_synced('unsent-pane-draft')
         child.repaint_until(b'unsent-pane-draft')
-        from test_vm_mouse import position
-        draft_row, draft_column = position(child, 'unsent-pane-draft')
-        prompt_rows = positions(child, marker)
-        self.assertIn((draft_row, draft_column - len(marker) - 1), prompt_rows)
+        draft_line, = (line for line in current_rows(child).values()
+                       if 'unsent-pane-draft' in line)
+        self.assertIn(marker + ' unsent-pane-draft', draft_line)
         self.escape(child)
         self.assertEqual(self.inputs(), [])
         child.finish('workspace detach')
@@ -585,15 +676,15 @@ class ControlTests(unittest.TestCase):
             actual = expected = None
             while time.monotonic() < deadline:
                 child.read(.02)
-                prompts = [(row, match.start()) for row, text in current_rows(child).items()
-                           for match in re.finditer(re.escape(marker), text)
-                           if row < rows - 2]
+                label = re.escape('[' + self.owner.sid[:8]) + r'(?:;[^\]]*)?\] [^›»]*[›»] '
+                prompts = [(row, match.end()) for row, text in current_rows(child).items()
+                           for match in re.finditer(label, text) if row < rows - 1]
                 prompts.sort(key=lambda position: position[1])
                 cursor = re.findall(rb'\x1b\[(\d+);(\d+)H\x1b\[\?25([hl])',
                                     child.output)
                 if len(prompts) > occurrence and cursor:
                     row, column = prompts[occurrence]
-                    expected = row, column + len(marker + '   ?% › '), b'h'
+                    expected = row, column, b'h'
                     y, x, visible = cursor[-1]
                     actual = int(y) - 1, int(x) - 1, visible
                     if actual == expected:
@@ -657,8 +748,8 @@ class ControlTests(unittest.TestCase):
             child.read(.02)
             rows = current_rows(child)
             answer = next((y for y, text in rows.items() if 'semantic-answer' in text), None)
-            prompt = next((y for y, text in rows.items()
-                           if 'fake/host-model/medium' in text and '›' in text), None)
+            prompt = max((y for y, text in rows.items()
+                          if 'fake/host-model/medium' in text and '›' in text), default=None)
             if answer is not None and prompt is not None and answer < prompt <= answer + 2:
                 break
         self.assertIsNotNone(answer)
@@ -844,24 +935,24 @@ class ControlTests(unittest.TestCase):
     def test_history_observer_uses_committed_tail_without_control(self):
         child = self.start('-N', 'observed', columns=200)
         child.command('history ' + self.owner.sid)
-        child.repaint_until(b'FOLLOW committed')
+        child.repaint_until(b'view only; :attach')
         self.owner.status('detached')
         peer = self.owner.view()
         peer.bind()
         request = peer.submit('observer-watermark-marker')
         self.assertEqual(peer.result(request)['status'], 'committed')
         child.repaint_until(b'observer-watermark-marker')
-        child.repaint_until(b'FOLLOW committed')
+        child.repaint_until(b'view only; :attach')
         child.write(b'gg')
-        child.repaint_until(b'HOLD committed')
+        child.repaint_until(b'; HOLD')
         peer.send(type='detach', generation=peer.generation)
         peer.until('detached')
         peer.close()
         child.command('detach')
-        child.repaint_until(b'HOLD snapshot')
+        child.repaint_until(b'Session detached')
         child.command('attach')
         child.attached()
-        child.repaint_until(b'HOLD committed')
+        child.repaint_until(b'; HOLD')
         self.assertEqual(self.owner.identity(), self.owner.owner_identity)
         child.finish('close')
         self.owner.status('detached')
@@ -981,7 +1072,7 @@ class ControlTests(unittest.TestCase):
             rollout(saved['state']['buffers'][0])['cursor'] = len('local ' + choice)
             path.write_text(json.dumps(saved))
             self.owner_draft('owner ' + choice)
-            resumed = self.start('--resume', 'conflict', expect=b'history')
+            resumed = self.start('--resume', 'conflict', expect=b'Workspace restored')
             resumed.repaint_until(b'Draft conflict')
             rows = self.wait_snapshot(lambda rows:
                 rollout(next(iter(rows.values()))['state']['buffers'][0]).get('conflict') is not None)
@@ -992,7 +1083,7 @@ class ControlTests(unittest.TestCase):
             self.owner.status('detached')
             self.owner_draft('later owner edit')
             previous = json.loads(path.read_text())['activity_ms']
-            resumed = self.start('--resume', 'conflict', expect=b'history')
+            resumed = self.start('--resume', 'conflict', expect=b'Workspace restored')
             resumed.repaint_until(b'Draft conflict')
             resumed.command('workspace save')
             self.wait_snapshot(lambda rows: next(iter(rows.values()))['activity_ms'] > previous)
@@ -1019,12 +1110,12 @@ class ControlTests(unittest.TestCase):
         rollout(saved['state']['buffers'][0])['draft'] = 'local offline edit'
         rollout(saved['state']['buffers'][0])['cursor'] = len('local offline edit')
         path.write_text(json.dumps(saved))
-        resumed = self.start('--resume', 'offline', expect=b'history')
+        resumed = self.start('--resume', 'offline', expect=b'Workspace restored')
         self.wait_synced('local offline edit')
         resumed.finish('close')
         self.assertEqual(self.owner_draft()['text'], 'local offline edit')
         self.owner_draft('owner changed')
-        resumed = self.start('--resume', 'offline', expect=b'history')
+        resumed = self.start('--resume', 'offline', expect=b'Workspace restored')
         self.wait_synced('owner changed')
         resumed.finish('close')
         saved = json.loads(path.read_text())
@@ -1041,7 +1132,7 @@ class ControlTests(unittest.TestCase):
         buffer = saved['state']['buffers'][0]
         buffer['draft'], buffer['cursor'] = '', 0
         path.write_text(json.dumps(saved))
-        resumed = self.start('--resume', 'offline', expect=b'history')
+        resumed = self.start('--resume', 'offline', expect=b'Workspace restored')
         self.wait_synced('owner changed')
         resumed.finish('close')
         self.assertEqual(self.inputs(), [])
@@ -1092,7 +1183,7 @@ class ControlTests(unittest.TestCase):
         finally:
             os.kill(self.owner.owner, signal.SIGCONT)
         self.owner.status('detached')
-        resumed = self.start('--resume', 'unacknowledged', expect=b'history')
+        resumed = self.start('--resume', 'unacknowledged', expect=b'Workspace restored')
         self.wait_synced('acknowledged-suffix')
         resumed.finish('close')
         self.owner.status('detached')
@@ -1134,6 +1225,9 @@ class ControlTests(unittest.TestCase):
             if b'\tdestination\topen\t' in rows:
                 break
         self.assertIn(b'\tdestination\topen\t', rows)
+        # The destination lock is acquired before the source draft is flushed.
+        # Restoration acknowledges the completed save and actual switch.
+        child.until(b'Workspace restored')
         self.owner.status('detached')
         self.assertEqual(self.owner_draft()['text'], 'final source draft')
         source = next(x for x in self.snapshots().values() if x['name'] == 'source')
@@ -1165,7 +1259,7 @@ class ControlTests(unittest.TestCase):
         self.assertIsNone(child.process.poll())
         child.finish('close')
         self.owner.status('detached')
-        resumed = self.start('--resume', 'composing', expect=b'history')
+        resumed = self.start('--resume', 'composing', expect=b'Workspace restored')
         resumed.attached()
         resumed.repaint_until(b'next-draft')
         resumed.command('detach')
@@ -1224,7 +1318,7 @@ class ControlTests(unittest.TestCase):
         rollout(saved['state']['buffers'][0])['pending'] = {
             'id': uuid.uuid4().hex, 'instance': instance, 'text': 'possibly-admitted-text'}
         path.write_text(json.dumps(saved))
-        resumed = self.start('--resume', 'uncertain', expect=b'history')
+        resumed = self.start('--resume', 'uncertain', expect=b'Workspace restored')
         resumed.repaint_until(b'Submission outcome unknown')
         self.owner.status('attached')
         resumed.attached()
@@ -1250,7 +1344,7 @@ class ControlTests(unittest.TestCase):
         child.signal(signal.SIGTERM)
         child.wait_exit()
         self.owner.status('detached')
-        resumed = self.start('--resume', 'signal-draft', expect=b'history')
+        resumed = self.start('--resume', 'signal-draft', expect=b'Workspace restored')
         resumed.attached()
         resumed.repaint_until(b'durable-unsent')
         resumed.finish('close')
@@ -1279,7 +1373,7 @@ class ControlTests(unittest.TestCase):
         sid, = rows
         frontend.WorkspaceTests.resume_hint(self, child, sid)
         self.assertEqual(len(rows[sid]['state']['windows']), 3)
-        resumed = self.start('--resume', sid, expect=b'history')
+        resumed = self.start('--resume', sid, expect=b'Workspace restored')
         resumed.attached()
         resumed.repaint_until(b'preserve workspace draft')
         self.assertEqual(self.owner.identity(), self.owner.owner_identity)
@@ -1364,7 +1458,7 @@ class ControlTests(unittest.TestCase):
         child.signal(signal.SIGCONT)
         child.wait_exit()
         self.owner.status('detached')
-        resumed = self.start('--resume', 'lost-receipt', expect=b'history')
+        resumed = self.start('--resume', 'lost-receipt', expect=b'Workspace restored')
         resumed.repaint_until(b'newer-text')
         self.wait_snapshot(lambda rows:
                            rollout(next(iter(rows.values()))['state']['buffers'][0])['pending'] is None)
@@ -1382,7 +1476,7 @@ class ControlTests(unittest.TestCase):
         self.assertEqual(rollout(next(iter(rows.values()))['state']['buffers'][0])['cursor'], len('👩‍💻'.encode()))
         self.escape(child)
         child.finish('close')
-        resumed = self.start('--resume', 'clusters', expect=b'history')
+        resumed = self.start('--resume', 'clusters', expect=b'Workspace restored')
         resumed.write(b'A\x7f')
         self.wait_snapshot(lambda rows:
                            rollout(next(iter(rows.values()))['state']['buffers'][0])['draft'] == '')

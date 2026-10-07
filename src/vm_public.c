@@ -255,22 +255,8 @@ redact_text(const struct public_item *item, const struct snag_wire_secrets *secr
     for (size_t at = 0u; at < item->text.len;) {
         const unsigned char *bytes = item->text.data + at;
         size_t remaining = item->text.len - at;
-        size_t matched = snag_wire_secret_match(bytes, remaining, secrets);
-        if (secrets) {
-            for (size_t i = 0u; i < secrets->count; ++i) {
-                const char *secret = secrets->values[i];
-                if (streaming && secret && strlen(secret) > remaining &&
-                    !memcmp(secret, bytes, remaining)) matched = remaining;
-                if (secret && !at && item->begin) {
-                    size_t length = strlen(secret);
-                    for (size_t suffix = 1u; suffix < length && suffix <= remaining; ++suffix) {
-                        if (!memcmp(secret + length - suffix, bytes, suffix) && suffix > matched) {
-                            matched = suffix;
-                        }
-                    }
-                }
-            }
-        }
+        size_t matched = snag_wire_secret_span(bytes, remaining,
+            !at && item->begin, streaming, secrets);
         if (matched) {
             if (item->source_exact && snag_vm_source_replace(map, text.len,
                 item->begin + at, 17u, matched) < 0) goto failed;

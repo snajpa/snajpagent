@@ -60,7 +60,7 @@ struct snag_render_record {
     enum snag_render_record_kind kind;
     enum snag_presentation presentation;
     unsigned int boundary;
-    struct snag_buf text;
+    struct snag_buf text, origins;
     const char *color;
     char *label;
     struct snag_irc_event *irc;
@@ -424,6 +424,7 @@ free_record(struct snag_render_record *record)
 {
     if (!record) return;
     snag_buf_free(&record->text);
+    snag_buf_free(&record->origins);
     snag_buf_free(&record->source_data);
     snag_buf_free(&record->response_data);
     snag_buf_free(&record->cite.pending);
@@ -2952,23 +2953,35 @@ static int
 rollout_physical_append(struct snag_render *render, struct snag_render_record *record,
                         const char *text, size_t len)
 {
+    struct snag_render_origin previous = render->origin;
+    if (record->origins.len) {
+        render->origin = (struct snag_render_origin){record->text.data, record->text.len,
+            0u, (const uint64_t *)record->origins.data};
+    }
+    int rc = -1;
     while (len) {
         size_t amount = text_slice(text, len);
         if (!snag_render_enabled(render, record->presentation)) {
             record->omitted = true;
             if (record->physical_open) {
-                if (snag_render_public_abort(render) < 0 || write_omitted(render) < 0) return -1;
+                if (snag_render_public_abort(render) < 0 || write_omitted(render) < 0) goto out;
                 record->physical_open = false;
             }
         }
+        /* Rollout bytes have already passed UTF-8 and citation processing.
+         * Paint the retained bytes with their original positions intact. */
         if (!record->omitted && (rollout_physical_begin(render, record) < 0 ||
-             snag_render_public(render, text, amount, NULL) < 0)) return -1;
+            public_emit(render, (const unsigned char *)text, amount, NULL) < 0 ||
+            close_public_output(render) < 0)) goto out;
         record->displayed += amount;
         text += amount;
         len -= amount;
-        if (len && render_checkpoint(render) < 0) return -1;
+        if (len && render_checkpoint(render) < 0) goto out;
     }
-    return 0;
+    rc = 0;
+out:
+    render->origin = previous;
+    return rc;
 }
 
 int
@@ -2986,6 +2999,7 @@ snag_render_rollout_begin(struct snag_render *render, int fd, const char *label,
     record->presentation = kind;
     record->fd = fd;
     snag_buf_init(&record->text, SNAG_MAX_PUBLIC_ITEM);
+    snag_buf_init(&record->origins, SNAG_MAX_PUBLIC_ITEM * sizeof(uint64_t));
     if (label) {
         record->label = snag_strdup_checked(label, 1024u);
         if (!record->label) {
@@ -3016,17 +3030,21 @@ snag_render_rollout(struct snag_render *render, const char *text, size_t len, st
     }
     snag_buf_init(&complete, complete_max);
     snag_buf_init(&filtered, filtered_max);
+    uint64_t source = render_origin(render, text);
+    if (source != UINT64_MAX && source >= record->utf8_pending_len)
+        source -= record->utf8_pending_len;
     if (complete_utf8(record->utf8_pending, &record->utf8_pending_len, text, len, &complete) < 0) goto out;
     cite_prepare(&record->cite);
     if (complete.len && cite_feed(&record->cite, (const char *)complete.data, complete.len,
-                  &filtered, NULL, UINT64_MAX) < 0) goto out;
+        &filtered, render->sink.text ? &record->origins : NULL, source) < 0) goto out;
     if (filtered.len) {
+        size_t offset = record->text.len;
         if (snag_buf_reserve(&record->text, filtered.len) < 0 ||
             (delivered && snag_buf_reserve(delivered, filtered.len) < 0) ||
             snag_buf_append(&record->text, filtered.data, filtered.len) < 0) goto out;
         if (!render->suspended && render->view == SNAG_RENDER_ROLLOUT &&
             render->view_head[SNAG_RENDER_ROLLOUT] == record && rollout_physical_append(render, record,
-                                    (const char *)filtered.data, filtered.len) < 0) goto out;
+                (const char *)record->text.data + offset, filtered.len) < 0) goto out;
         if (delivered && snag_buf_append(delivered, filtered.data, filtered.len) < 0) goto out;
     }
     rc = 0;
@@ -3055,13 +3073,24 @@ close_rollout_record(struct snag_render *render, bool abort)
         if (cite_flush(&record->cite, &tail) < 0) {
             rc = -1;
         } else if (!abort && tail.len) {
+            size_t offset = record->text.len;
+            if (render->sink.text) {
+                for (size_t i = 0u; i < tail.len; ++i) {
+                    uint64_t source = record->cite.source == UINT64_MAX ? UINT64_MAX :
+                        record->cite.source + i;
+                    if (snag_buf_append(&record->origins, &source, sizeof(source)) < 0) {
+                        snag_buf_free(&tail);
+                        return -1;
+                    }
+                }
+            }
             if (snag_buf_reserve(&record->text, tail.len) < 0 ||
                 snag_buf_append(&record->text, tail.data, tail.len) < 0) {
                 rc = -1;
             } else if (!render->suspended && render->view == SNAG_RENDER_ROLLOUT &&
                        render->view_head[SNAG_RENDER_ROLLOUT] == record &&
                        rollout_physical_append(render, record,
-                                               (const char *)tail.data, tail.len) < 0) {
+                            (const char *)record->text.data + offset, tail.len) < 0) {
                 rc = -1;
             }
         }
@@ -3831,6 +3860,20 @@ render_process_chunk(struct render_process_chunks *chunks, const json_t *data)
         snag_json_integer_u64(data, "stream", &stream) < 0 || stream > 1u ||
         snag_json_integer_u64(data, "offset", &offset) < 0 ||
         offset < chunks->from[stream] || offset >= chunks->to[stream]) return 0;
+    json_t *filtered = NULL;
+    if (chunks->render->filter_event) {
+        json_t *event = json_pack("{s:s,s:O}", "type", "process_output", "data", data);
+        if (!event) return -1;
+        filtered = chunks->render->filter_event(chunks->render->filter_opaque, event);
+        json_decref(event);
+        if (!filtered) return -1;
+        text = snag_json_string(json_object_get(filtered, "data"), "data");
+        encoding = snag_json_string(json_object_get(filtered, "data"), "encoding");
+        if (!text || !encoding) {
+            json_decref(filtered);
+            return snag_errno(EINVAL);
+        }
+    }
     size_t len = strlen(text), shown = 0u, count = 0u;
     size_t limit = snag_presentation_limit(SNAG_PRESENT_OUTPUT, chunks->render->verbosity);
     while (shown < len && chunks->characters + count < limit &&
@@ -3851,6 +3894,7 @@ render_process_chunk(struct render_process_chunks *chunks, const json_t *data)
     chunks->displayed += shown;
     chunks->characters += count;
     chunks->truncated = shown < len;
+    json_decref(filtered);
     return rc;
 }
 
@@ -4259,10 +4303,13 @@ snag_render_resume_hint(struct snag_render *render, const char *command, size_t 
     if (snag_buf_putc(&block, '\n') < 0 || snag_buf_append(&block, command, command_len) < 0 ||
         snag_buf_putc(&block, '\n') < 0) goto out;
     if (render->sink.text) {
+        size_t heading = sizeof(header) - 1u + strlen(note) + 1u;
         if (render->color_stderr && write_literal(render, STDERR_FILENO, COLOR_LIFECYCLE) < 0)
             goto out;
-        rc = render_write(render, STDERR_FILENO, (const char *)block.data, block.len, true);
+        rc = render_write(render, STDERR_FILENO, (const char *)block.data, heading, true);
         if (render->color_stderr && write_literal(render, STDERR_FILENO, COLOR_RESET) < 0) rc = -1;
+        if (!rc) rc = render_write(render, STDERR_FILENO,
+            (const char *)block.data + heading, block.len - heading, true);
     } else rc = snag_term_write(STDERR_FILENO, block.data, block.len);
 out: snag_buf_free(&block);
     return rc;

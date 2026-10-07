@@ -8,6 +8,7 @@
 #include "history_view.h"
 #include "irc.h"
 #include "json.h"
+#include "presentation.h"
 #include "session_view.h"
 #include "vm_connection.h"
 #include "vm_report.h"
@@ -142,6 +143,148 @@ native_page_test(struct snag_store *store, const char *root)
         !strcmp(result->end.prev_sha256, boundary.prev_sha256));
     snag_vm_read_result_free(result);
     snag_vm_reader_close(reader);
+    char prefix[9];
+    memcpy(prefix, source.id, 8u);
+    prefix[8] = '\0';
+    assert(!snag_session_delete(store, &source, prefix, NULL, error, sizeof(error)));
+    snag_session_close(&source);
+}
+
+static void
+retained_public_test(struct snag_store *store, const char *root)
+{
+    const char *values[] = {"test-secret-value"};
+    struct snag_wire_secrets secrets = {.values = values, .count = 1u};
+    for (unsigned int native = 0u; native < 2u; ++native) {
+        struct snag_session source;
+        snag_session_init(&source);
+        char error[256] = "";
+        assert(!(native ? snag_session_create : legacy_fixture_create)(store, &source,
+            root, "default", "retained-public", "high", error, sizeof(error)));
+        struct snag_presentation_writer *writer =
+            snag_presentation_writer_open(source.dir_fd, source.id);
+        assert(writer && !snag_presentation_start(writer, source.next_seq));
+        struct snag_ui_command commands[] = {
+            {.kind = SNAG_UI_PUBLIC_BEGIN,
+                .data.public = {STDOUT_FILENO, SNAG_PRESENT_CONVERSATION}},
+            {.kind = SNAG_UI_PUBLIC, .text = "Before test-", .len = 12u},
+            {.kind = SNAG_UI_WARNING, .text = "A notice between fragments"},
+            {.kind = SNAG_UI_PUBLIC, .text = "secret-", .len = 7u},
+            {.kind = SNAG_UI_WARNING, .text = "A notice after the partial secret"}
+        };
+        for (size_t i = 0u; i < sizeof(commands) / sizeof(*commands); ++i)
+            assert(!snag_presentation_append(writer, &commands[i]));
+        struct snag_vm_reader *reader = snag_vm_reader_open(store, &secrets, error, sizeof(error));
+        assert(reader);
+        struct snag_vm_read_request request = {.project = true, .reverse = true,
+            .columns = 40u, .plain = true, .verbosity = 3u};
+        memcpy(request.session_id, source.id, sizeof(source.id));
+        for (unsigned int complete = 0u; complete < 2u; ++complete) {
+            if (complete) {
+                struct snag_ui_command rest = {.kind = SNAG_UI_PUBLIC,
+                    .text = "value after.\n", .len = 13u};
+                struct snag_ui_command end = {.kind = SNAG_UI_ROLLOUT_END};
+                assert(!snag_presentation_append(writer, &rest));
+                assert(!snag_presentation_append(writer, &end));
+            }
+            request.refresh = true;
+            struct snag_vm_read_result *result = await_page(reader,
+                snag_vm_reader_request(reader, &request));
+            if (result->error_number) fprintf(stderr, "%s\n", result->error);
+            assert(!result->error_number && result->document && result->tail.origin);
+            char *dump = json_dumps(result->blocks, JSON_COMPACT);
+            assert(dump && strstr(dump, "Before") && strstr(dump, "A notice between"));
+            assert(!strstr(dump, "test-") && !strstr(dump, "secret-value"));
+            assert(strstr(dump, "<redacted:secret>"));
+            if (complete) assert(strstr(dump, "after."));
+            free(dump);
+            snag_vm_read_result_free(result);
+        }
+        snag_vm_reader_close(reader);
+        snag_presentation_writer_close(writer);
+        char prefix[9];
+        memcpy(prefix, source.id, 8u);
+        prefix[8] = '\0';
+        assert(!snag_session_delete(store, &source, prefix, NULL, error, sizeof(error)));
+        snag_session_close(&source);
+    }
+}
+
+static void
+retained_source_test(struct snag_store *store, const char *root)
+{
+    struct snag_session source;
+    snag_session_init(&source);
+    char error[256] = "";
+    assert(!snag_session_create(store, &source, root, "default", "retained-source", "high",
+        error, sizeof(error)));
+    struct snag_presentation_writer *writer =
+        snag_presentation_writer_open(source.dir_fd, source.id);
+    assert(writer && !snag_presentation_start(writer, source.next_seq));
+    const char *parts[] = {"A **bold** [an", "chor-word](https://example.invalid) tail.\n"};
+    struct snag_ui_command begin = {.kind = SNAG_UI_PUBLIC_BEGIN,
+        .data.public = {STDOUT_FILENO, SNAG_PRESENT_CONVERSATION}};
+    struct snag_ui_command end = {.kind = SNAG_UI_ROLLOUT_END};
+    assert(!snag_presentation_append(writer, &begin));
+    for (size_t i = 0u; i < 2u; ++i) {
+        struct snag_ui_command part = {.kind = SNAG_UI_PUBLIC,
+            .text = parts[i], .len = strlen(parts[i])};
+        assert(!snag_presentation_append(writer, &part));
+    }
+    assert(!snag_presentation_append(writer, &end));
+    struct snag_vm_reader *reader = snag_vm_reader_open(store, NULL, error, sizeof(error));
+    assert(reader);
+    struct snag_vm_read_request request = {.project = true, .reverse = true};
+    memcpy(request.session_id, source.id, sizeof(source.id));
+    for (unsigned int variant = 0u; variant < 4u; ++variant) {
+        request.columns = variant & 1u ? 40u : 90u;
+        request.plain = variant >= 2u;
+        request.verbosity = variant;
+        struct snag_vm_read_result *result = await_page(reader,
+            snag_vm_reader_request(reader, &request));
+        assert(!result->error_number && result->document);
+        const json_t *block = json_array_get(result->blocks, 0u);
+        const char *text = snag_vm_block_text(block, false);
+        const char *word = text ? strstr(text, "anchor-word") : NULL;
+        assert(word);
+        /* Markdown punctuation is source text; bullets, wrapping and styles
+         * are presentation. Every view must name the same original byte. */
+        size_t offset = strlen("A **bold** [");
+        assert(snag_vm_source_position(block, (size_t)(word - text), true) == offset);
+        assert(snag_vm_source_position(block, offset, false) == (size_t)(word - text));
+        snag_vm_read_result_free(result);
+    }
+    request.reverse = false;
+    request.query = "anchor-word";
+    struct snag_vm_read_result *match = await_page(reader,
+        snag_vm_reader_request(reader, &request));
+    assert(!match->error_number && match->found);
+    assert(match->match.byte == strlen("A **bold** ["));
+    request.query = NULL;
+    request.navigation = (struct snag_vm_navigation_request){
+        .kind = SNAG_VM_NAV_LINE, .count = 1u, .start = match->match};
+    snag_vm_read_result_free(match);
+    match = await_page(reader, snag_vm_reader_request(reader, &request));
+    assert(!match->error_number && match->found && match->match.byte == 0u);
+    snag_vm_read_result_free(match);
+    assert(!snag_rename_at(source.dir_fd, SNAG_PRESENTATION_FILE,
+        source.dir_fd, "retained-old.snb"));
+    struct snag_presentation_writer *replacement =
+        snag_presentation_writer_open(source.dir_fd, source.id);
+    assert(replacement && !snag_presentation_start(replacement, source.next_seq));
+    struct snag_ui_command notice = {.kind = SNAG_UI_HOST, .text = "Replacement output"};
+    assert(!snag_presentation_append(replacement, &notice));
+    request.navigation = (struct snag_vm_navigation_request){0};
+    request.refresh = true;
+    match = await_page(reader, snag_vm_reader_request(reader, &request));
+    assert(match->error_number == ESTALE);
+    snag_vm_read_result_free(match);
+    snag_presentation_writer_close(replacement);
+    assert(!snag_unlink_at(source.dir_fd, SNAG_PRESENTATION_FILE, false));
+    assert(!snag_rename_at(source.dir_fd, "retained-old.snb",
+        source.dir_fd, SNAG_PRESENTATION_FILE));
+    snag_vm_reader_close(reader);
+    snag_presentation_writer_close(writer);
     char prefix[9];
     memcpy(prefix, source.id, 8u);
     prefix[8] = '\0';
@@ -1095,7 +1238,7 @@ static void
 owner_state_test(void)
 {
 #ifndef _WIN32
-    for (unsigned int variant = 0u; variant < 12u; ++variant) {
+    for (unsigned int variant = 0u; variant < 14u; ++variant) {
         int sockets[2];
         assert(socketpair(AF_UNIX, SOCK_STREAM, 0, sockets) == 0);
         for (unsigned int i = 0u; i < 2u; ++i)
@@ -1133,7 +1276,11 @@ owner_state_test(void)
             assert(json_object_set_new(state, "active", json_integer(1)) == 0);
         else if (variant == 8u)
             assert(json_object_set_new(state, "seq", json_integer(-1)) == 0);
-        else if (variant >= 9u) {
+        else if (variant >= 12u) {
+            assert(!json_object_set_new(state, "presentation_error", variant == 12u ?
+                json_string("Session output retention stopped: No space left on device") :
+                json_true()));
+        } else if (variant >= 9u) {
             assert(json_object_set_new(state, "irc_activity_after", json_integer(0)) == 0);
             assert(json_object_set_new(state, "queries", json_array()) == 0);
             assert(json_object_set_new(state, "channels", json_array()) == 0);
@@ -1159,10 +1306,12 @@ owner_state_test(void)
             snag_vm_connection_step(connection);
         }
         struct snag_journal_cursor tail;
-        if (variant < 2u || variant == 9u) {
+        if (variant < 2u || variant == 9u || variant == 12u) {
             assert(connection->channel.fd >= 0 && snag_vm_connection_tail(connection, &tail));
             assert(json_equal(connection->state, state) &&
                 tail.next_seq == (variant == 1u ? 12u : 11u));
+            if (variant == 12u)
+                assert(strstr(connection->message, "No space left on device"));
         } else assert(connection->channel.fd < 0 && !snag_vm_connection_tail(connection, &tail));
         assert(connection->rollout->draft.len == 14u &&
             !memcmp(connection->rollout->draft.data, "retained draft", 14u));
@@ -1548,6 +1697,8 @@ main(void)
     snag_session_init(&source);
     assert(snag_store_open(&store, root, error, sizeof(error)) == 0);
     native_page_test(&store, root);
+    retained_public_test(&store, root);
+    retained_source_test(&store, root);
     dependency_test(&store, root);
     viewport_test(&store, root);
     public_offset_bounds_test(&store, root);

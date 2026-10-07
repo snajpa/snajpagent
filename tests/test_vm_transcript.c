@@ -37,7 +37,8 @@ static json_t *
 project(const json_t *events, unsigned int level)
 {
     char error[256];
-    json_t *blocks = snag_vm_transcript_blocks(events, NULL, level, 80u, false, false, false, &secrets,
+    json_t *blocks = snag_vm_transcript_blocks(events, NULL, level, 80u,
+        false, false, false, &secrets,
         NULL, NULL, error, sizeof(error));
     if (!blocks) (void)fprintf(stderr, "%s\n", error);
     assert(blocks);

@@ -225,7 +225,7 @@ test_server(void)
     struct snag_view_channel pair[2];
     assert(snag_view_channel_pair(pair) == 0);
     struct engine engine = {0};
-    struct snag_view_callbacks callbacks = {bound, submit, control, &engine};
+    struct snag_view_callbacks callbacks = {bound, submit, control, &engine, NULL};
     const char *session = "11111111111111111111111111111111";
     const char *request = "22222222222222222222222222222222";
     struct snag_view_server *server = snag_view_server_direct(&pair[1], session, callbacks);
@@ -323,7 +323,7 @@ test_lost_workspace(void)
     struct snag_view_channel pair[2];
     assert(snag_view_channel_pair(pair) == 0);
     struct engine engine = {0};
-    struct snag_view_callbacks callbacks = {bound, submit, control, &engine};
+    struct snag_view_callbacks callbacks = {bound, submit, control, &engine, NULL};
     struct snag_view_server *server = snag_view_server_direct(&pair[1],
         "11111111111111111111111111111111", callbacks);
     assert(server);

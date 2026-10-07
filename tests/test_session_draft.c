@@ -172,7 +172,7 @@ test_admission_edit_order(void)
     struct snag_session_relay relay;
     assert(snag_session_relay_init(&relay, pipe_fd[0], -1) == 0);
     struct engine engine = {0};
-    struct snag_view_callbacks callbacks = {bound, submit, control, &engine};
+    struct snag_view_callbacks callbacks = {bound, submit, control, &engine, NULL};
     struct snag_view_server *server = snag_view_server_open(dir, root, lock,
         "0123456789abcdef0123456789abcdef", &relay, callbacks);
     assert(server);

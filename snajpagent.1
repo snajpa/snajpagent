@@ -501,6 +501,8 @@ draft rows, then prompt history at the start or end of the text.  Ctrl-A/Ctrl-E
 jump to the start/end of the whole prompt.  Ctrl-P/Ctrl-N go directly through
 history; Ctrl-R searches it.  Ctrl-C clears a nonempty draft without interrupting the turn.  On an
 empty draft it interrupts active work.  Ctrl-D on an empty draft exits.
+Cancelled drafts remain in scrollback with their prompt and literal ^C,
+including after a workspace detach and resume with a current owner.
 .SS Continue toward a goal
 A normal final answer ends the turn and returns control to you.  A goal asks
 snajpagent to keep taking turns toward an explicit result:
@@ -1878,11 +1880,19 @@ journal positions to read-only observers; browsing leaves their attachment
 status and controller unchanged. The prompt identifies a view that needs :attach
 before input can be sent.
 Older or stopped owners use the last complete snapshot, labelled snapshot.
-Both modes check for updates once per second. An unchanged committed position
+Live owner notifications update visible panes as output arrives; stored snapshots
+are checked once per second. An unchanged committed position
 needs only file-identity checks, including while the owner is writing an
 unfinished record. An unchanged complete snapshot also emits no frame.
 If an owner notification temporarily trails an already displayed snapshot,
 that snapshot remains visible until the owner catches up.
+Current owners retain submitted prompt labels, command output and notices with
+their ordered display operations. Workspace panes replay them through the session
+renderer at the selected verbosity and width. Earlier owners supply their retained
+model history. After a display-retention write failure, the last complete output
+remains available and the workspace reports the cause; session input continues.
+Correct the reported storage problem before restarting the session to restore
+output retention.
 Open buffers retain verified descriptors across focus, attach and detach changes. A replaced,
 truncated or invalid journal stops automatic observation with a visible error;
 G or R explicitly retries after the source is repaired. A snapshot uses the last complete record and shows a partial-tail label
@@ -2179,7 +2189,8 @@ without queue capability retains the draft and directs you to /queue TEXT.
 Ctrl-C clears a nonempty draft; with an empty active draft it requests interruption.
 Enter submits; Ctrl-J inserts a newline. Submitting returns the pane to FOLLOW
 and appends the prompt or command and its output to the transcript. Commands
-keep the composer in INSERT; :report and :reports open retained command output
+keep the composer in INSERT, including /query and /chat selections of a writable
+conversation; :report and :reports open retained command output
 explicitly. Background control completions join the originating transcript too.
 Escape and Ctrl-[ leave INSERT,
 preserve the draft and place the cursor on the preceding grapheme within the line.

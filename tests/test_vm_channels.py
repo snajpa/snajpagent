@@ -28,9 +28,10 @@ class ChannelWorkspaceTests(ChannelFixture):
 
     def channel(self, room):
         self.child.write(b'i/chat 1/' + room.encode() + b'\r')
-        self.child.repaint_until(b'channel/' + room.encode())
+        self.child.repaint_until(b'[' + room.encode() + b']')
+        self.normal()
 
-    def test_mention_completion_uses_pane_roster_and_cycles(self):
+    def test_mention_completion_uses_pane_roster_and_shared_tab_choices(self):
         self.server.send('queryop', ':fake 353 queryop = #lab :@queryop team-lab\r\n'
                          ':fake 366 queryop #lab :end\r\n'
                          ':fake 353 queryop = #side :@queryop team-a team-b\r\n'
@@ -38,18 +39,15 @@ class ChannelWorkspaceTests(ChannelFixture):
                          ':peer!u@fake NOTICE #side :roster-ready\r\n')
         self.channel('#side')
         self.child.repaint_until(b'roster-ready')
-        self.child.write(b'i@team-\x0e')
+        self.child.write(b'i@team-\t\t')
         self.child.repaint_until(b'@team-a')
-        self.child.write(b'\x0e')
         self.child.repaint_until(b'@team-b')
-        self.child.write(b'\x10')
-        self.child.repaint_until(b'@team-a')
-        self.child.write(b' hello\r')
+        self.child.write(b'a hello\r')
         self.operator_wire('PRIVMSG #side :@team-a hello')
         self.normal()
         self.child.write(b'i/query 1/private-peer\r')
-        self.child.repaint_until(b'query/private-peer')
-        self.child.write(b'i@priv\x0e hello\r')
+        self.child.repaint_until(b'[private-peer]')
+        self.child.write(b'@priv\thello\r')
         self.operator_wire('PRIVMSG private-peer :@private-peer hello')
         self.normal()
         self.child.finish('close')
@@ -107,7 +105,7 @@ class ChannelWorkspaceTests(ChannelFixture):
         self.child.command('vsp channel-session/' + self.server.endpoint + '/#lab')
         self.child.repaint_until(b'lab-public-body')
         self.child.write(b'i/query 1/peer\r')
-        self.child.repaint_until(b'query/peer')
+        self.child.repaint_until(b'[peer]')
         self.child.repaint_until(b'private-hidden-body')
         self.normal()
         self.child.command('close')
@@ -131,7 +129,7 @@ class ChannelPrefixWorkspaceTests(ChannelFixture):
         child.command('session ' + sid)
         child.attached()
         child.write(b'i/chat 1/$side\r')
-        child.repaint_until(b'channel/$side')
+        child.repaint_until(b'[$side]')
         child.repaint_until(b'custom-channel-retained-in-pane')
         child.finish('close')
 
@@ -155,7 +153,8 @@ class HostedChannelWorkspaceTests(QueryFixture):
         child.command('attach ' + sid)
         child.attached()
         child.write(b'i/chat 1/#lab\r')
-        child.repaint_until(b'channel/#lab')
+        child.repaint_until(b'[#lab]')
+        self.normal()
         child.repaint_until(b'hosted-pane-public')
         child.write(b'/hosted-pane-private\r')
         child.repaint_until(b'No matches')
@@ -164,7 +163,8 @@ class HostedChannelWorkspaceTests(QueryFixture):
         child.command('vsp')
         child.command('history')
         child.write(b'i/query 1/query-peer\r')
-        child.repaint_until(b'query/query-peer')
+        child.repaint_until(b'[query-peer]')
+        self.normal()
         child.repaint_until(b'hosted-pane-private')
         child.write(b'ihosted-private-draft')
         self.normal()

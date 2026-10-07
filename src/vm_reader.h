@@ -61,6 +61,9 @@ struct snag_vm_read_request {
      * displayed bound, independently used by if_changed and tail_only. */
     struct snag_vm_cursor tail, previous, cursor;
     uint64_t before_seq;
+    /* Inclusive source event for an anchored viewport, followed by enough
+     * later output to fill the requested rows. The reader resolves its cursor. */
+    uint64_t start_seq;
 };
 
 struct snag_vm_read_result {

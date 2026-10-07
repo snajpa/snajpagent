@@ -157,17 +157,22 @@ class Terminal:
         from test_vm_mouse import current_rows
 
         labels = set()
-        for directory in (self.root / 'state' / 'sessions').iterdir():
-            if not (directory / 'view.sock').exists():
-                continue
-            observer = View(directory)
-            try:
-                state = observer.until('state')['state']
-                labels.add(state.get('name') or directory.name[:8])
-            finally:
-                observer.close()
+        seen = set()
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
+            for directory in (self.root / 'state' / 'sessions').iterdir():
+                if directory in seen or not (directory / 'view.sock').exists():
+                    continue
+                try:
+                    observer = View(directory)
+                except (ConnectionRefusedError, FileNotFoundError):
+                    continue
+                try:
+                    state = observer.until('state')['state']
+                    labels.add(state.get('name') or directory.name[:8])
+                    seen.add(directory)
+                finally:
+                    observer.close()
             self.write(b'\x0c')
             self.read(.05)
             rows = current_rows(self).values()
@@ -357,7 +362,8 @@ class WorkspaceTests(unittest.TestCase):
             next(iter(values.values()))['state']['windows'][0]['history']['seq'] == first_input)
         anchor = next(iter(values.values()))['state']['windows'][0]['history']
         self.append_turn(journal, 'live-append-two')
-        child.until(b'newer')
+        # HOLD keeps its source position while the stored tail advances.
+        child.read(1.2)
         child.command('workspace save')
         self.assertEqual(next(iter(self.snapshots().values()))['state']['windows'][0]['history'], anchor)
         child.write(b'G')
@@ -392,7 +398,7 @@ class WorkspaceTests(unittest.TestCase):
         if unrelated.stat().st_atime_ns == stamp:
             self.skipTest('filesystem does not record journal access')
         os.utime(unrelated, ns=(stamp, mtime))
-        child = self.start('--resume', 'only-transcript', expect=b'history')
+        child = self.start('--resume', 'only-transcript', expect=b'Workspace restored')
         child.repaint_until(b'retained-answer-marker')
         child.finish('workspace d')
         self.assertEqual(unrelated.stat().st_atime_ns, stamp,
@@ -475,7 +481,7 @@ class WorkspaceTests(unittest.TestCase):
                            extra_env={'NO_COLOR': None})
         child.command('history ' + journal.parent.name)
         child.repaint_until('• A '.encode())
-        self.assertIn(b'history v0', child.output)
+        self.assertIn(b'stored; :session', child.output)
         # The provider's Markdown is interpreted by the same formatter as the
         # standalone terminal. Internal response-phase headings stay hidden.
         child.write(b'\x0c')
@@ -512,7 +518,7 @@ class WorkspaceTests(unittest.TestCase):
         child.repaint_until(b'foreground-history-marker')
         child.command('vsp')
         child.command('history ' + background.parent.name)
-        child.repaint_until(b'read-only ' + background.parent.name[:8].encode() + b' history')
+        child.repaint_until(b'[' + background.parent.name[:8].encode() + b'; stored; :session')
         time.sleep(.05)
         # Reflow the focused foreground while the other pane reads a large
         # journal. Its interrupted request must remain scheduled.
@@ -572,7 +578,7 @@ class WorkspaceTests(unittest.TestCase):
         child.write(b'gg')
         child.until(b'retained-question-marker')
         child.command('verbosity 4')
-        child.until(b'input_received')
+        child.repaint_until(b'input_received')
         child.command('vsp')
         child.resize(10, 27)
         child.command('workspace save')
@@ -581,8 +587,11 @@ class WorkspaceTests(unittest.TestCase):
         self.assertTrue(all(x['kind'] == 'transcript' for x in windows))
         self.assertTrue(all(x['history']['session'] == journal.parent.name for x in windows))
         child.finish()
-        resumed = self.start('--resume', 'reading', expect=b'history')
-        resumed.until(b'history v4')
+        resumed = self.start('--resume', 'reading', expect=b'Workspace restored')
+        resumed.repaint_until(b'input_received')
+        self.assertTrue(all(window['history']['verbosity'] == 4
+                            for window in next(iter(self.snapshots().values()))[
+                                'state']['windows']))
         resumed.command('sessions')
         resumed.command('history ' + journal.parent.name[:8])
         resumed.until(b'retained-answer-marker')
