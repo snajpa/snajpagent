@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Preserve live FOLLOW when clicking into an attached pane to type. Text dragging
+  and scrolling still hold history for navigation and selection.
+
 - Preserve summarized IRC steering during active-turn compaction and resumed
   context reconstruction; response requests still validate their steering snapshot.
 

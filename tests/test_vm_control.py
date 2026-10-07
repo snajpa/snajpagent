@@ -145,6 +145,40 @@ class ControlTests(unittest.TestCase):
         self.assertEqual(next(iter(self.snapshots().values()))['name'], 'command-scope')
         child.finish('session detach')
 
+    def test_click_keeps_follow_until_scrolling_or_dragging(self):
+        from test_vm_mouse import mouse, position
+
+        child = self.start('-N', 'click-follow', rows=24, columns=140)
+        child.command('attach ' + self.owner.sid)
+        child.until(b'ATTACHED')
+        child.write(b'ifollow seed\r')
+        child.until(b'semantic-answer')
+        self.escape(child)
+        child.write(b'\tG')
+        row, column = position(child, 'semantic-answer')
+        mouse(child, row, column)
+        mouse(child, row, column, release=True)
+        child.write(b'unsent')
+        state = next(iter(self.wait_synced('unsent').values()))['state']
+        self.assertTrue(state['windows'][0]['history']['follow'])
+        self.escape(child)
+        row, column = position(child, 'semantic-answer')
+        mouse(child, row, column)
+        mouse(child, row, column + 4, button=32)
+        mouse(child, row, column + 4, release=True)
+        self.wait_snapshot(lambda rows:
+            not next(iter(rows.values()))['state']['windows'][0]['history']['follow'])
+        child.write(b'\x1b')
+        child.read(.08)
+        mouse(child, row, column)
+        mouse(child, row, column, release=True)
+        child.write(b'A')
+        state = next(iter(self.wait_synced('unsenAt').values()))['state']
+        self.assertFalse(state['windows'][0]['history']['follow'])
+        self.assertEqual(len(self.inputs()), 1)
+        self.escape(child)
+        child.finish('session detach')
+
     def test_uppercase_i_enters_composer_from_history(self):
         child = self.start('-N', 'insert-start')
         child.command('attach ' + self.owner.sid)
@@ -237,7 +271,9 @@ class ControlTests(unittest.TestCase):
             next(iter(rows.values()))['state']['windows'][0]['history']['follow'] and
             len(self.inputs()) == 2)
         self.assertTrue(started.wait(5))
-        child.repaint_until('› submitted-history-marker'.encode())
+        child.repaint_until(b'submitted-history-marker')
+        self.assertIn('› submitted-history-marker'.encode(),
+                      re.sub(rb'\x1b\[[0-9;]*m', b'', child.output))
         self.assertEqual(rollout(next(iter(self.snapshots().values()))[
             'state']['buffers'][0])['draft'], '')
         self.owner.release.set()

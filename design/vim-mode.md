@@ -1488,6 +1488,7 @@ Mouse mode is enabled inside VM and can be toggled with `:set mouse` /
 `:set nomouse`. Use SGR mouse reports: clicking a writable attached pane enters
 INSERT; clicking its prompt also positions the draft cursor. Body and status
 clicks use the remembered draft position. Read-only clicks place source cursors.
+Click focus preserves FOLLOW/HOLD; text dragging and scrolling select HOLD.
 The wheel scrolls the hovered window, dragging text enters VISUAL, and dragging
 a separator resizes splits. Use one click/drag implementation before adding multi-click gestures.
 Terminal-native selection remains available through the terminal's own bypass

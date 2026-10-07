@@ -198,7 +198,7 @@ struct vm {
     bool dirty, save_dirty, meaningful, quit, suspend, entering, paste_failed;
     bool composer, insert, quit_all, detach_exit, detach_suspend;
     bool classic_pending, classic_ready, classic_uncertain;
-    bool mouse, mouse_reported, mouse_down, mouse_select, unfocused;
+    bool mouse, mouse_reported, mouse_down, mouse_select, mouse_follow, unfocused;
     uint64_t mouse_window;
     struct snag_vm_separator mouse_separator;
     uint64_t quit_window;
@@ -2996,6 +2996,10 @@ mouse_input(struct vm *vm, const struct snag_vm_input_event *event)
         }
         if (dragging && !vm->mouse_select && event->release) {
             vm->mouse_down = false;
+            if (vm->mouse_follow) {
+                window->follow = true;
+                changed(vm);
+            }
             return 0;
         }
         if (!dragging) {
@@ -3032,6 +3036,7 @@ mouse_input(struct vm *vm, const struct snag_vm_input_event *event)
                 return 0;
             }
             vm->mouse_window = window->id;
+            vm->mouse_follow = vm->insert && window->follow;
             vm->mouse_down = true;
         }
         if (!window->history_rows) return 0;
