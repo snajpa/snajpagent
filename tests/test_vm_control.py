@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0-only
 """Real workspace -> native owner -> durable journal/provider integration."""
 
+import copy
 import hashlib
 import json
 import os
@@ -95,6 +96,142 @@ class ControlTests(unittest.TestCase):
         self.wait_snapshot(lambda rows:
             next(iter(rows.values()))['state']['focus'] == 1)
         self.assertEqual(self.inputs(), [])
+        self.escape(child)
+        child.finish('session detach')
+
+    def test_click_enters_pane_insert_and_escape_separates_workspace_commands(self):
+        from test_vm_mouse import mouse
+
+        child = self.start('-N', 'click-input', rows=20, columns=120)
+        child.command('attach ' + self.owner.sid)
+        child.until(b'ATTACHED')
+        child.command('vsp')
+        self.wait_snapshot(lambda rows: next(iter(rows.values()))['state']['focus'] == 2)
+        mouse(child, 1, 1)
+        mouse(child, 1, 1, release=True)
+        child.write(b'/fast')
+        self.wait_synced('/fast')
+        self.escape(child)
+        child.command('workspace name command-scope')
+        self.wait_snapshot(lambda rows: next(iter(rows.values()))['name'] == 'command-scope')
+        self.assertEqual(self.inputs(), [])
+        self.assertEqual(rollout(next(iter(self.snapshots().values()))[
+            'state']['buffers'][0])['draft'], '/fast')
+        # INSERT keeps colon text in the session draft; Ex is reached via Esc.
+        child.write(b'A :literal')
+        self.wait_synced('/fast :literal')
+        self.escape(child)
+        child.write(b'\tIbegin ')
+        self.wait_synced('begin /fast :literal')
+        self.escape(child)
+        child.write(b':workspace name canceled')
+        child.repaint_until(b'COMMAND-LINE')
+        child.write(b'\x1b')
+        child.read(.08)
+        child.write(b'A!')
+        self.wait_synced('begin /fast :literal!')
+        self.escape(child)
+        self.assertEqual(next(iter(self.snapshots().values()))['name'], 'command-scope')
+        child.finish('session detach')
+
+    def test_uppercase_i_enters_composer_from_history(self):
+        child = self.start('-N', 'insert-start')
+        child.command('attach ' + self.owner.sid)
+        child.until(b'ATTACHED')
+        child.write(b'i  suffix')
+        self.wait_synced('  suffix')
+        self.escape(child)
+        child.write(b'\tIprefix ')
+        self.wait_synced('  prefix suffix')
+        self.escape(child)
+        self.assertEqual(self.inputs(), [])
+        child.finish('session detach')
+
+    def test_sixteen_panes_echo_without_waiting_for_owner_draft_ack(self):
+        from test_vm_mouse import mouse
+
+        child = self.start('-N', 'input-fairness', rows=80, columns=240)
+        child.command('attach ' + self.owner.sid)
+        child.until(b'ATTACHED')
+        child.write(b'ihistory before typing\r')
+        child.until(b'semantic-answer')
+        self.escape(child)
+        child.finish('session detach')
+        path, = (self.root / 'state/workspaces').glob('*/workspace.json')
+        saved = json.loads(path.read_text())
+        window = saved['state']['windows'][0]
+        saved['state']['windows'] = [dict(copy.deepcopy(window), id=i) for i in range(1, 17)]
+
+        def layout(ids, depth=0):
+            if len(ids) == 1:
+                return {'window': ids[0]}
+            middle = len(ids) // 2
+            return {'split': 'vertical' if depth % 2 == 0 else 'horizontal', 'weight': 5000,
+                    'first': layout(ids[:middle], depth + 1),
+                    'second': layout(ids[middle:], depth + 1)}
+
+        saved['state']['layout'] = layout(list(range(1, 17)))
+        path.write_text(json.dumps(saved))
+        child = self.start('--resume', 'input-fairness', rows=80, columns=240,
+                           expect=b'Workspace restored')
+        child.until(b'ATTACHED')
+        child.read(.2)
+        mouse(child, 1, 1)
+        mouse(child, 1, 1, release=True)
+        # The real owner is deliberately unable to acknowledge draft edits.
+        # Keyboard echo must remain local and no second key may repair a frame.
+        os.kill(self.owner.owner, signal.SIGSTOP)
+        try:
+            for letter in b'KEYBOARD':
+                child.output.clear()
+                started = time.monotonic()
+                child.write(bytes([letter]))
+                child.until(bytes([letter]), timeout=.5)
+                self.assertLess(time.monotonic() - started, .5)
+        finally:
+            os.kill(self.owner.owner, signal.SIGCONT)
+        self.wait_synced('KEYBOARD')
+        self.assertEqual(len(self.inputs()), 1)
+        self.assertEqual(self.owner.identity(), self.owner.owner_identity)
+        self.escape(child)
+        child.finish('session detach')
+
+    def test_submission_returns_held_pane_to_visible_prompt_history(self):
+        from test_vm_mouse import mouse
+
+        child = self.start('-N', 'submitted-history', rows=24, columns=140)
+        child.command('attach ' + self.owner.sid)
+        child.until(b'ATTACHED')
+        child.write(b'ifirst prompt\r')
+        child.until(b'semantic-answer')
+        self.escape(child)
+        child.write(b'\tgg')
+        self.wait_snapshot(lambda rows:
+            not next(iter(rows.values()))['state']['windows'][0]['history']['follow'])
+        started = threading.Event()
+
+        def respond(handler, request, sequence):
+            started.set()
+            self.owner.release.wait(15)
+            self.owner.provider.reply(handler,
+                self.owner.provider.response_body(sequence, 'second answer').encode(),
+                close_header=True)
+
+        self.owner.provider.runtime_handler = respond
+        self.addCleanup(self.owner.release.set)
+        mouse(child, 0, 2)
+        mouse(child, 0, 2, release=True)
+        child.write(b'submitted-history-marker\r')
+        self.wait_snapshot(lambda rows:
+            next(iter(rows.values()))['state']['windows'][0]['history']['follow'] and
+            len(self.inputs()) == 2)
+        self.assertTrue(started.wait(5))
+        child.repaint_until('› submitted-history-marker'.encode())
+        self.assertEqual(rollout(next(iter(self.snapshots().values()))[
+            'state']['buffers'][0])['draft'], '')
+        self.owner.release.set()
+        child.until(b'second answer')
+        self.escape(child)
         child.finish('session detach')
 
     def test_live_prompt_is_visible_in_each_pane(self):
@@ -154,11 +291,14 @@ class ControlTests(unittest.TestCase):
         prompt_cursor(child)
         row, column = positions(child, 'semantic-answer', repaint=False)[0]
         mouse(child, row, column + 2)
-        mouse(child, row, column + 2, release=True)
+        mouse(child, row, column + 3, button=32)
+        mouse(child, row, column + 3, release=True)
         self.wait_snapshot(lambda rows:
             not next(iter(rows.values()))['state']['windows'][0]['history']['follow'])
         cursor = re.findall(rb'\x1b\[(\d+);(\d+)H\x1b\[\?25h', child.output)[-1]
-        self.assertEqual(tuple(int(value) - 1 for value in cursor), (row, column + 2))
+        self.assertEqual(tuple(int(value) - 1 for value in cursor), (row, column + 3))
+        child.write(b'\x1b')
+        child.read(.08)
         child.write(b'G')
         prompt_cursor(child)
         child.command('vsp')
@@ -168,6 +308,7 @@ class ControlTests(unittest.TestCase):
         mouse(child, 22, 1, release=True)
         self.wait_snapshot(lambda rows: next(iter(rows.values()))['state']['focus'] == 1)
         prompt_cursor(child)
+        self.escape(child)
         child.write(b'\x17\x0c')
         self.wait_snapshot(lambda rows: next(iter(rows.values()))['state']['focus'] == 2)
         prompt_cursor(child, 1)
@@ -221,6 +362,7 @@ class ControlTests(unittest.TestCase):
         status_style(0, b'0;7')
         status_style(60, b'0;1;7;36')
         self.assertEqual(self.inputs(), [])
+        self.escape(child)
         child.finish('session detach')
 
     def test_prompt_wrap_and_mouse_hit_preserve_unicode_draft(self):
@@ -252,8 +394,8 @@ class ControlTests(unittest.TestCase):
         with self.owner.config.open('a') as stream:
             stream.write('prompt = ' + template + '\n')
         child.write(b'i/configure\r')
-        child.repaint_until(b'REPORT')
-        child.write(b'\x1b')
+        child.repaint_until(b'configuration reloaded:')
+        self.escape(child)
         child.command('history ' + self.owner.sid)
         child.repaint_until(b'host-model/medium 0% I>')
         started = threading.Event()
@@ -399,7 +541,7 @@ class ControlTests(unittest.TestCase):
         self.owner.status('detached')
         self.assertEqual(self.owner_draft()['text'], 'retained 👩‍💻-final')
         saved = next(iter(self.snapshots().values()))['state']
-        self.assertEqual(saved['v'], 12)
+        self.assertEqual(saved['v'], 13)
         self.assertEqual(rollout(saved['buffers'][0])['draft'], 'retained 👩‍💻-final')
         self.assertTrue(saved['buffers'][0]['control'])
         self.assertEqual(self.inputs(), [])
@@ -803,7 +945,7 @@ class ControlTests(unittest.TestCase):
         child.wait_exit()
         self.owner.status('detached')
         resumed = self.start('--resume', 'lost-receipt', expect=b'history')
-        resumed.repaint_until(b'Prompt committed')
+        resumed.repaint_until(b'newer-text')
         self.wait_snapshot(lambda rows:
                            rollout(next(iter(rows.values()))['state']['buffers'][0])['pending'] is None)
         self.assertEqual(rollout(next(iter(self.snapshots().values()))['state']['buffers'][0])['draft'],

@@ -17,7 +17,7 @@ enum snag_vm_read_kind { SNAG_VM_READ_HISTORY, SNAG_VM_READ_SESSIONS,
 struct snag_vm_read_request {
     enum snag_vm_read_kind kind;
     uint64_t stored_limit;
-    json_t *report, *known_reports;
+    json_t *report, *known_reports, *inline_reports;
     /* A query route selects its stable conversation and local identity across
      * all retained generations. Sending still uses the exact captured route. */
     json_t *route;

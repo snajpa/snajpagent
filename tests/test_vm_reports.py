@@ -33,15 +33,81 @@ class ReportTests(unittest.TestCase):
             len(next(iter(rows.values()))['state']['buffers'][0].get('reports', [])) == count)
         return next(iter(rows.values()))['state']['buffers'][0]['reports']
 
+    def test_commands_stay_in_transcript_and_survive_workspace_resume(self):
+        child = self.attached('inline-commands')
+        child.write(b'i/fast off\r')
+        self.reports(1)
+        child.repaint_until(b'OFF')
+        child.write(b'/fast on\r')
+        self.reports(2)
+        child.repaint_until(b'ON')
+        saved = next(iter(self.snapshots().values()))['state']
+        self.assertEqual(saved['windows'][0]['kind'], 'transcript')
+        child.repaint_until(b'/fast off')
+        child.repaint_until(b'/fast on')
+        self.escape(child)
+        child.finish('session detach')
+        resumed = self.start('--resume', 'inline-commands', expect=b'Workspace restored',
+                             columns=120)
+        resumed.repaint_until(b'/fast off')
+        resumed.repaint_until(b'/fast on')
+        resumed.command('report')
+        resumed.repaint_until(b'REPORT')
+        self.assertEqual(self.inputs(), [])
+        resumed.finish('close')
+
+    def test_search_orders_two_commands_at_the_same_journal_position(self):
+        child = self.attached('ordered-commands')
+        before = self.owner.journal.read_bytes()
+        child.write(b'i/status\r')
+        self.reports(1)
+        child.write(b'/status\r')
+        references = self.reports(2)
+        self.escape(child)
+        child.write(b'/session:\r')
+        child.repaint_until(b'Match')
+        rows = self.wait_snapshot(lambda rows:
+            next(iter(rows.values()))['state']['windows'][0]['history']['key']
+            in [r['id'] for r in references] and
+            not next(iter(rows.values()))['state']['windows'][0]['history']['follow'] and
+            next(iter(rows.values()))['state']['windows'][0]['history']['byte'] == 8)
+        first = next(iter(rows.values()))['state']['windows'][0]['history']['key']
+        child.write(b'n')
+        rows = self.wait_snapshot(lambda rows:
+            next(iter(rows.values()))['state']['windows'][0]['history']['key'] != first)
+        second = next(iter(rows.values()))['state']['windows'][0]['history']['key']
+        self.assertEqual({first, second}, {r['id'] for r in references})
+        inline = rollout(next(iter(rows.values()))['state']['buffers'][0])['inline']
+        self.assertEqual(inline[0]['seq'], inline[1]['seq'])
+        self.assertEqual(self.owner.journal.read_bytes(), before)
+        child.finish('session detach')
+
+    def test_pending_report_does_not_take_over_new_composer_input(self):
+        child = self.attached('pending-report-input')
+        child.write(b'i/status\r')
+        self.reports(1)
+        self.escape(child)
+        child.write(b':report\riinput-during-report-load')
+        self.wait_synced('input-during-report-load')
+        self.assertEqual(next(iter(self.snapshots().values()))[
+            'state']['windows'][0]['kind'], 'transcript')
+        self.assertEqual(self.inputs(), [])
+        self.escape(child)
+        child.finish('session detach')
+
     def test_commands_reports_splits_and_fast_status(self):
         child = self.attached('commands')
         before = self.owner.journal.read_bytes()
         child.write(b'i/status\r')
+        self.reports(1)
+        self.escape(child)
+        child.command('report')
         child.repaint_until(b'REPORT')
         child.repaint_until(b'/status')
         first, = self.reports(1)
         child.write(b'G')
         rows = self.wait_snapshot(lambda rows:
+            next(iter(rows.values()))['state']['windows'][0]['kind'] == 'report' and
             next(iter(rows.values()))['state']['windows'][0]['row'] > 0)
         self.assertEqual(next(iter(rows.values()))['state']['windows'][0]['kind'], 'report')
         child.command('vsp')
@@ -55,6 +121,7 @@ class ReportTests(unittest.TestCase):
         child.write(b'i/fast\r')
         child.repaint_until(b'ON')
         self.reports(2)
+        self.escape(child)
         child.command('history')
         child.repaint_until(b'FAST')
         child.command('reports')
@@ -71,8 +138,10 @@ class ReportTests(unittest.TestCase):
     def test_saved_report_reopens_after_owner_shutdown(self):
         child = self.attached('saved-report')
         child.write(b'i/help\r')
-        child.repaint_until(b'/help')
         report, = self.reports(1)
+        self.escape(child)
+        child.command('report')
+        child.repaint_until(b'/help')
         child.write(b'G')
         child.finish('close')
         saved = next(iter(self.snapshots().values()))['state']
@@ -100,7 +169,7 @@ class ReportTests(unittest.TestCase):
             resumed.repaint_until(report['id'][:8].encode())
             resumed.command('workspace save')
             rows = self.wait_snapshot(lambda rows:
-                next(iter(rows.values()))['state']['v'] == 12 and
+                next(iter(rows.values()))['state']['v'] == 13 and
                 next(iter(rows.values()))['state']['windows'][0].get('source'))
             window = next(iter(rows.values()))['state']['windows'][0]
             self.assertEqual(window['byte'], saved['windows'][0]['byte'])
@@ -155,13 +224,16 @@ class ReportTests(unittest.TestCase):
         effects = [event for event in self.owner.events()
                    if event['type'] == 'service_tier_changed']
         self.assertEqual(len(effects), 1)
-        resumed.finish('q')
+        resumed.finish('session detach')
         self.owner.status('detached')
         self.assertEqual(self.inputs(), [])
 
     def test_changed_report_keeps_loaded_snapshot_and_recovers(self):
         child = self.attached('changed-report')
         child.write(b'i/status\r')
+        self.reports(1)
+        self.escape(child)
+        child.command('report')
         child.repaint_until(b'REPORT')
         report, = self.reports(1)
         path = self.owner.directory / ('.view-report-' + report['id'])

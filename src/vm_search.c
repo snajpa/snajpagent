@@ -179,8 +179,11 @@ uint64_t
 snag_vm_search_order(const json_t *block)
 {
     const char *kind = snag_json_string(block, "kind");
-    return kind && !strcmp(kind, "event") ? UINT64_MAX :
-        (uint64_t)json_integer_value(json_object_get(block, "ordinal"));
+    uint64_t ordinal = (uint64_t)json_integer_value(json_object_get(block, "ordinal"));
+    /* Native block ordinals are signed JSON integers. Operator receipts sort
+     * after their acknowledged event, retaining receipt order at that boundary. */
+    if (kind && !strcmp(kind, "command")) return (uint64_t)INT64_MAX + 1u + ordinal;
+    return kind && !strcmp(kind, "event") ? INT64_MAX : ordinal;
 }
 
 bool

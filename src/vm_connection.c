@@ -175,7 +175,13 @@ snag_vm_buffer_get(struct snag_vm_connection *connection, const json_t *route, b
     struct snag_vm_buffer *buffer = calloc(1u, sizeof(*buffer));
     if (!buffer) return NULL;
     buffer->route = route ? json_deep_copy(route) : json_string("rollout");
-    if (!buffer->route) { free(buffer); return NULL; }
+    buffer->inline_reports = json_array();
+    if (!buffer->route || !buffer->inline_reports) {
+        json_decref(buffer->route);
+        json_decref(buffer->inline_reports);
+        free(buffer);
+        return NULL;
+    }
     buffer->connection = connection;
     for (struct snag_vm_buffer *b = connection->buffers; b; b = b->next) {
         if (same_history(buffer->route, b->route) && same_history(b->route, buffer->route) &&
@@ -270,6 +276,7 @@ snag_vm_connections_free(struct snag_vm_connection *connection)
         while (connection->buffers) {
             struct snag_vm_buffer *b = connection->buffers;
             connection->buffers = b->next;
+            json_decref(b->inline_reports);
             snag_vm_editor_reset(&b->editor);
             if (b->draft.data) memset(b->draft.data, 0, b->draft.len);
             snag_buf_free(&b->draft);
@@ -742,6 +749,7 @@ retain_report(struct snag_vm_connection *connection, const json_t *report, bool 
         return 0;
     }
     if (json_array_append(connection->reports, (json_t *)report) < 0) return -1;
+    connection->reports_changed = true;
     ++connection->revision;
     return 1;
 }
@@ -783,6 +791,7 @@ snag_vm_reports_merge(struct snag_vm_connection *connection, const json_t *catal
     if (!json_equal(connection->reports, merged)) {
         json_decref(connection->reports);
         connection->reports = json_incref(merged);
+        connection->reports_changed = true;
         ++connection->revision;
     }
     rc = 0;
@@ -989,13 +998,8 @@ receive(struct snag_vm_connection *connection, const json_t *value)
                 json_t *report = json_object_get(value, "report");
                 if (retain_report(connection, report, false) < 0) return -1;
                 json_decref(buffer->report_open);
-                const char *text = snag_json_string(buffer->pending, "text");
-                size_t verb = strcspn(text, " \t\r\n");
-                bool private_send = (verb == 4u && !strncmp(text, "/msg", verb)) ||
-                    (verb == 7u && !strncmp(text, "/notice", verb)) ||
-                    (verb == 3u && !strncmp(text, "/me", verb));
-                bool ok = !strcmp(snag_json_string(value, "outcome"), "ok");
-                buffer->report_open = private_send && ok ? NULL : json_incref(report);
+                buffer->report_open = json_incref(report);
+                buffer->report_seq = seq;
             }
             json_t *selection = json_object_get(value, "selection");
             if (selection && (!command || !json_is_object(selection) || !valid_route(selection)))
@@ -1012,10 +1016,8 @@ receive(struct snag_vm_connection *connection, const json_t *value)
             buffer->draft_get = connection->drafts;
             if (command) {
                 const char *error = snag_json_string(value, "report_error");
-                buffer_message(buffer, error && *error ? error :
-                    "Command completed; :reports reopens output");
-            } else buffer_message(buffer, json_is_object(buffer->route) ?
-                "Conversation message admitted" : "Prompt committed");
+                buffer_message(buffer, error && *error ? error : "");
+            } else buffer_message(buffer, "");
         } else if (!strcmp(status, "unknown") || !strcmp(status, "rejected")) {
             buffer->submitting = false;
             buffer->query = false;
@@ -1156,13 +1158,15 @@ snag_vm_connection_wait(const struct snag_vm_connection *connection, uint64_t no
 static json_t *
 buffer_json(const struct snag_vm_buffer *buffer)
 {
-    return json_pack("{s:O,s:s,s:I,s:O,s:O,s:O,s:I,s:s,s:{s:I,s:I,s:I}}", "route", buffer->route,
+    return json_pack("{s:O,s:s,s:I,s:O,s:O,s:O,s:I,s:s,s:O,s:{s:I,s:I,s:I}}",
+        "route", buffer->route,
         "draft", buffer->draft.len ? (const char *)buffer->draft.data : "",
         "cursor", (json_int_t)buffer->cursor,
         "pending", buffer->pending ? buffer->pending : json_null(),
         "base", buffer->draft_base ? buffer->draft_base : json_null(),
         "conflict", buffer->conflict_draft ? buffer->conflict_draft : json_null(),
         "window", (json_int_t)buffer->request_window, "endpoint", buffer->endpoint,
+        "inline", buffer->inline_reports,
         "read", "seq", (json_int_t)buffer->read_seq,
         "received", (json_int_t)buffer->read_received, "after", (json_int_t)buffer->read_after);
 }
@@ -1198,11 +1202,13 @@ load_buffer(struct snag_vm_connection *connection, const json_t *row, bool legac
     const json_t *route = legacy ? NULL : json_object_get(row, "route");
     const char *draft = snag_json_string(row, "draft");
     const json_t *read = json_object_get(row, "read");
+    json_t *reports = json_object_get(row, "inline");
     uint64_t cursor, window = 0u;
     const char *endpoint = legacy ? "" : snag_json_string(row, "endpoint");
     if (!endpoint || strlen(endpoint) > SNAG_CONFIG_IRC_ENDPOINT_MAX ||
         (!legacy && strlen(endpoint) != json_string_length(json_object_get(row, "endpoint"))) ||
-        (!legacy && (!snag_json_exact_keys(row, read ?
+        (!legacy && (!snag_json_exact_keys(row, reports ?
+            "route draft cursor pending base conflict window endpoint read inline" : read ?
             "route draft cursor pending base conflict window endpoint read" :
             "route draft cursor pending base conflict window endpoint") ||
             !valid_route(route) || snag_json_integer_u64(row, "window", &window) < 0)) ||
@@ -1212,6 +1218,23 @@ load_buffer(struct snag_vm_connection *connection, const json_t *row, bool legac
         snag_vm_text_floor(draft, strlen(draft), (size_t)cursor) != cursor) return -1;
     struct snag_vm_buffer *buffer = snag_vm_buffer_get(connection, route, true);
     if (!buffer || snag_vm_draft_replace(buffer, 0u, 0u, draft, strlen(draft)) < 0) return -1;
+    if (reports) {
+        if (!json_is_array(reports)) return -1;
+        uint64_t previous = 0u;
+        for (size_t i = 0u; i < json_array_size(reports); ++i) {
+            const json_t *item = json_array_get(reports, i);
+            const char *session = snag_json_bounded_string(json_object_get(item, "session"),
+                SNAG_ID_HEX_LEN);
+            uint64_t seq;
+            if (!snag_json_exact_keys(item, "session seq report") || !session ||
+                !snag_hex_is_lower(session, SNAG_ID_HEX_LEN) ||
+                snag_json_integer_u64(item, "seq", &seq) < 0 || !seq || seq < previous ||
+                !snag_vm_report_valid(json_object_get(item, "report"))) return -1;
+            previous = seq;
+        }
+        json_decref(buffer->inline_reports);
+        buffer->inline_reports = json_incref(reports);
+    }
     if (read) {
         uint64_t seq, received, after;
         if (!snag_json_exact_keys(read, "seq received after") ||
@@ -1324,6 +1347,7 @@ snag_vm_connections_load(const json_t *rows, struct snag_vm_connection **out)
             }
             json_decref(connection->reports);
             connection->reports = json_incref(saved);
+            connection->reports_changed = true;
         }
     }
     for (struct snag_vm_connection *c = head; c; c = c->next) {

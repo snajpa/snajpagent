@@ -377,6 +377,60 @@ class WorkspaceTests(unittest.TestCase):
         child.repaint_until(b'viewport-line-099')
         child.finish()
 
+    @unittest.skipUnless(shutil.which('tmux'), 'tmux is unavailable')
+    def test_scrolling_past_hidden_boundaries_keeps_visible_history(self):
+        from test_session_listing import canonical, append_event
+
+        journal = self.seed_session('first-visible-marker\n' + 'retained-line\n' * 35 +
+                                    'last-visible-marker')
+        events = [json.loads(line) for line in journal.read_bytes().splitlines()]
+        # Keep source references intact while placing non-rendered metadata
+        # before the first visible event, beyond the reader's byte-page size.
+        events[1]['data']['padding'] = 'x' * (5 * 1024 * 1024)
+        previous = events[0]['prev_sha256']
+        with journal.open('wb') as stream:
+            for event in events:
+                del event['event_sha256']
+                event['prev_sha256'] = previous
+                event['event_sha256'] = hashlib.sha256(canonical(event).encode()).hexdigest()
+                previous = event['event_sha256']
+                stream.write(canonical(event).encode() + b'\n')
+        tmux = [shutil.which('tmux'), '-S', str(self.root / 'scroll-tmux.sock')]
+        self.addCleanup(subprocess.run, [*tmux, 'kill-server'],
+                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
+        child = self.start('-N', 'scroll-boundaries', rows=14, columns=120,
+                           transport=[*tmux, '-f', '/dev/null', 'new-session',
+                                      '-s', 'scroll', '--'])
+
+        def frame_until(marker):
+            deadline = time.monotonic() + 10
+            frame = ''
+            while time.monotonic() < deadline:
+                child.read(.03)
+                frame = subprocess.check_output([*tmux, 'capture-pane', '-p',
+                                                 '-t', 'scroll:0.0'], text=True, timeout=5)
+                if marker in frame and ' loading' not in frame:
+                    return frame
+            self.fail((marker, frame))
+
+        def wheel(button):
+            for _ in range(28):
+                child.write(f'\x1b[<{button};3;3M'.encode())
+                child.read(.03)
+
+        child.command('history ' + journal.parent.name)
+        frame_until('last-visible-marker')
+        wheel(64)
+        frame = frame_until('[start]')
+        self.assertIn('first-visible-marker', frame)
+        # A new hidden tail must likewise leave the last visible output intact.
+        append_event(journal, 'provider_request', {'padding': 'y' * (5 * 1024 * 1024)})
+        frame_until('newer')
+        wheel(65)
+        frame = frame_until('[tail]')
+        self.assertIn('last-visible-marker', frame)
+        child.finish('session detach')
+
     def test_history_renders_standalone_markdown(self):
         journal = self.seed_session('## Shared heading\n\nA **bold** word and `code`.\n\n'
                                     '- First item\n- Second item\n')
@@ -691,7 +745,7 @@ class WorkspaceTests(unittest.TestCase):
         path.write_text(json.dumps(value))
         child = self.start('--resume', 'legacy-picker')
         child.command('workspace save')
-        self.wait_snapshot(lambda values: next(iter(values.values()))['state']['v'] == 12)
+        self.wait_snapshot(lambda values: next(iter(values.values()))['state']['v'] == 13)
         child.finish()
 
     def test_unknown_state_is_preserved_and_terminal_not_entered(self):

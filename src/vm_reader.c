@@ -50,6 +50,7 @@ snag_vm_read_result_free(struct snag_vm_read_result *result)
     json_decref(result->request.report);
     json_decref(result->request.route);
     json_decref(result->request.known_reports);
+    json_decref(result->request.inline_reports);
     free((char *)result->request.query);
     json_decref(result->events);
     json_decref(result->catalog);
@@ -834,6 +835,41 @@ out:
     return rc;
 }
 
+/* Command receipts belong to the operator transcript. Their immutable report
+ * files are read on this worker, never on the keyboard/rendering thread. */
+static int
+project_reports(struct snag_vm_reader *reader, struct snag_vm_read_result *result)
+{
+    const struct snag_vm_read_request *request = &result->request;
+    uint64_t first = request->reverse ? result->cursor.next_seq : request->cursor.next_seq;
+    uint64_t end = request->reverse ? request->before_seq ? request->before_seq :
+        result->tail.next_seq : result->cursor.next_seq;
+    size_t count = json_array_size(request->inline_reports), at = 0u;
+    for (size_t i = 0u; i < count; ++i) {
+        const json_t *item = json_array_get(request->inline_reports, i);
+        uint64_t seq = (uint64_t)json_integer_value(json_object_get(item, "seq"));
+        if (seq < first || seq >= end) continue;
+        struct snag_vm_document *document = snag_vm_report_read(reader->store,
+            snag_json_string(item, "session"), json_object_get(item, "report"),
+            request->columns, &reader->secrets, read_canceled, reader,
+            result->error, sizeof(result->error));
+        if (!document) return -1;
+        json_t *block = json_deep_copy(snag_vm_document_block(document, 0u));
+        snag_vm_document_free(document);
+        if (!block) return -1;
+        while (at < json_array_size(result->blocks) &&
+            (uint64_t)json_integer_value(json_object_get(
+                json_array_get(result->blocks, at), "seq")) <= seq) ++at;
+        int rc = json_object_set_new(block, "seq", json_integer((json_int_t)seq));
+        if (!rc) rc = json_object_set_new(block, "kind", json_string("command"));
+        if (!rc) rc = json_object_set_new(block, "ordinal", json_integer((json_int_t)i));
+        if (!rc) rc = json_array_insert(result->blocks, at++, block);
+        json_decref(block);
+        if (rc < 0) return -1;
+    }
+    return 0;
+}
+
 static int
 project_history(struct snag_vm_reader *reader, struct snag_vm_read_result *result)
 {
@@ -861,7 +897,7 @@ project_history(struct snag_vm_reader *reader, struct snag_vm_read_result *resul
         request->columns, request->plain, request->no_color, request->blocks_only, &reader->secrets,
         read_canceled, reader,
         result->error, sizeof(result->error));
-    if (!result->blocks) goto out;
+    if (!result->blocks || project_reports(reader, result) < 0) goto out;
     if (!request->blocks_only) {
         snag_vm_document_free(result->document);
         result->document = snag_vm_document_open(result->blocks,
@@ -1144,11 +1180,14 @@ snag_vm_reader_request(struct snag_vm_reader *reader, const struct snag_vm_read_
     result->request.route = request->route ? json_deep_copy(request->route) : NULL;
     result->request.known_reports = request->known_reports ?
         json_deep_copy(request->known_reports) : NULL;
+    result->request.inline_reports = request->inline_reports ?
+        json_deep_copy(request->inline_reports) : NULL;
     result->request.query = request->query ? strdup(request->query) : NULL;
     if ((request->retained_sessions && !result->request.retained_sessions) ||
         (request->report && !result->request.report) ||
         (request->route && !result->request.route) ||
         (request->known_reports && !result->request.known_reports) ||
+        (request->inline_reports && !result->request.inline_reports) ||
         (request->query && !result->request.query)) {
         snag_vm_read_result_free(result);
         return 0u;

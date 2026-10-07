@@ -1562,6 +1562,11 @@ program. Put Mosh options before the hostname. Full option names, short options
 and their values are recognized; abbreviated or unfamiliar options retain Mosh's
 own parsing and require an explicit -- before the hostname. An existing
 separator is preserved. Argument text remains literal.
+For a direct snajpagent vm remote command, Mosh prediction defaults to never:
+the workspace echoes typing within its pane boundaries. Explicit --predict,
+-a, -n or MOSH_PREDICTION_DISPLAY settings take precedence. For a workspace
+behind a remote shell, Screen or tmux, use mosh --predict=never explicitly.
+This uses confirmed remote rendering, so keyboard echo includes network latency.
 .PP
 Client mode reads only the workstation configuration's terminal section. It
 starts no agent, provider, tools, IRC connection, media preparation or session
@@ -1787,6 +1792,8 @@ Resizing reflows text to the available width. FOLLOW fills the available height
 with recent history, reading across journal pages as needed; HOLD preserves the
 selected source position.
 Pending history loads in other panes continue after resize or catalogue refresh.
+Scrolling stops at the first or last visible output. Pages containing only
+hidden bookkeeping preserve the visible transcript while extending its known boundary.
 Transcript-only restore reads the displayed sessions; opening :sessions loads the
 session catalogue. Pane status begins with the session name when available.
 Each session pane keeps its normal prompt visible, including an empty draft.
@@ -1991,8 +1998,11 @@ Ctrl-W in INSERT retains Vim's delete-word behavior. Ctrl-W also interrupts
 pending history navigation so focus can move immediately.
 Ctrl-W = equalizes proportions, +/- changes height and >/< changes width.
 Terminal shrink temporarily hides windows while preserving their layout.
-Mouse reporting is enabled inside the workspace. Click to focus a window and
-place its transcript, report or composer cursor. Hits on a wide character,
+Mouse reporting is enabled inside the workspace. Click an attached, writable
+session pane to focus it and enter INSERT. A click on its prompt also positions
+the draft cursor; a body or status click uses the remembered draft position.
+Dragging transcript text enters VISUAL selection. Read-only history and report
+clicks place the source cursor. Hits on a wide character,
 combining sequence, escaped control or tab retain the whole source unit.
 Drag transcript/report text to select it, then press y to copy. The drag stays
 in its original window; release leaves the selection available for keyboard
@@ -2036,7 +2046,9 @@ any nondefault --dotdir.
 .PP
 Snapshots are private files under $DOTDIR/workspaces/WORKSPACE_ID/workspace.json.
 They retain the layout, focus, selection, filters, transcript source anchors,
-verbosity, FOLLOW/HOLD, per-conversation drafts and unresolved submissions.
+verbosity, FOLLOW/HOLD, per-conversation drafts, command transcript references
+and unresolved submissions. Version13 snapshots read earlier workspace versions;
+older binaries cannot resume a newly saved version13 workspace.
 Unsent classic-attachment input retains its destination session too.
 Restoring a controlled view attempts to reattach its existing owner; a busy or
 unavailable owner leaves the draft intact. Other transcript views read history
@@ -2104,14 +2116,32 @@ the running owner. In NORMAL, Ctrl-C requests the owner's ordinary turn interrup
 Attached window status shows the provider, model, effort and working/idle state
 reported by the owner.
 .PP
-Press i, a or A in a transcript to enter the prompt editor. INSERT accepts
+The focused status bar names the current mode:
+.B NORMAL
+for navigation and draft editing,
+.B INSERT
+for entering prompts and slash commands in that pane, and
+.B COMMAND-LINE
+for workspace command or search entry. Type : from NORMAL for Ex commands such
+as :vsp or :session detach. Escape returns to NORMAL with the session draft intact.
+A colon typed in INSERT is ordinary draft text. VISUAL identifies transcript selection.
+.PP
+Click an attached writable pane, or press i, a, I or A in a transcript, to enter
+the composer in INSERT. The keys insert before or after the remembered cursor,
+at the first nonblank character, or at the end of its logical line. INSERT accepts
 text, literal bracketed paste, arrows, Home/End and Backspace/Delete.
 Ctrl-U deletes to the logical line start; Ctrl-W deletes the preceding word.
-Enter submits; Ctrl-J inserts a newline. Escape, Ctrl-[ and Ctrl-C leave INSERT,
+Enter submits; Ctrl-J inserts a newline. Submitting returns the pane to FOLLOW
+and appends the prompt or command and its output to the transcript. Commands
+keep the composer in INSERT; :report and :reports open retained command output
+explicitly. Background control completions join the originating transcript too.
+Escape, Ctrl-[ and Ctrl-C leave INSERT,
 preserve the draft and place the cursor on the preceding grapheme within the line.
 In NORMAL, Tab switches transcript/composer focus.
 Escape followed immediately by text leaves INSERT or command input before
 interpreting that text in NORMAL, including a fast Escape-colon.
+Navigation typed while a report or history view first loads is retained in order.
+Escape cancels pending navigation; pane switching and composer entry remain available.
 Drafts wrap within the window and survive split changes, detach and workspace resume.
 .PP
 Composer NORMAL controls:

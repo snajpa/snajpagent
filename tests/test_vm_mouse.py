@@ -231,7 +231,8 @@ class MouseTests(unittest.TestCase):
         for byte in sequence:
             child.write(bytes([byte]))
         child.write(b'yP')
-        self.assertEqual(rollout(self.save(child)['buffers'][0])['draft'], 'remote-copy')
+        self.assertEqual(rollout(self.save(child)['buffers'][0])['draft'], 'remote-copy',
+                         bytes(child.output[-6000:]))
         child.finish()
 
     @unittest.skipUnless(shutil.which('tmux'), 'tmux is unavailable')
@@ -280,6 +281,9 @@ class ReportMouseTests(unittest.TestCase):
     def test_report_drag_copies_without_owner_input(self):
         child = self.attached('mouse-report')
         child.write(b'i/status\r')
+        reports.ReportTests.reports(self, 1)
+        reports.ReportTests.escape(self, child)
+        child.command('report')
         child.repaint_until(b'REPORT')
         child.write(b'gg')
         row, column = position(child, '/status')

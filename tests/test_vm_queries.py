@@ -176,7 +176,7 @@ class QueryWorkspaceTests(QueryFixture):
         child = self.child
         child.write(b'i/me waves\r')
         self.wait_wire(self.peer, b'PRIVMSG query-peer :\x01ACTION waves\x01')
-        child.repaint_until(b'Command completed')
+        child.repaint_until(b'/me waves')
         self.normal()
         child.command('workspace save')
         self.wait_snapshot(lambda rows: rows and self.state()['buffers'] and

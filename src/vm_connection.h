@@ -17,10 +17,10 @@ struct snag_vm_buffer {
     struct snag_vm_editor editor;
     size_t cursor;
     json_t *pending, *draft_base, *owner_draft, *conflict_draft;
-    json_t *report_open, *selection, *origin;
+    json_t *report_open, *selection, *origin, *inline_reports;
     char message[256];
     char endpoint[SNAG_CONFIG_IRC_ENDPOINT_MAX + 1u];
-    uint64_t receipt_at, request_window;
+    uint64_t receipt_at, request_window, report_seq;
     uint64_t read_seq, read_received, read_after;
     bool query, submitting, send_pending, reconcile_pending;
     bool draft_ready, draft_dirty, draft_conflict, draft_get;
@@ -47,7 +47,7 @@ struct snag_vm_connection {
     uint64_t generation, deadline, revision, draft_edit, draft_deadline;
     bool control, bound, hello, quitting, exited, direct;
     bool commands, drafts, terminal_commands, irc_queries, irc_channels, irc_connections;
-    bool reports_supported, reports_subscribed, detaching, detach_sent;
+    bool reports_supported, reports_subscribed, reports_changed, detaching, detach_sent;
 };
 
 /* NULL selects the rollout. Returned buffers live until their session closes. */

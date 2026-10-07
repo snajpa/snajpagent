@@ -162,7 +162,11 @@ class ReportSelectionTests(unittest.TestCase):
         child = self.attached('copy-report')
         before = self.owner.journal.read_bytes()
         child.write(b'i/status\r')
-        child.repaint_until(b'REPORT')
+        reports.ReportTests.reports(self, 1)
+        reports.ReportTests.escape(self, child)
+        child.command('report')
+        # Navigation belongs to the requested report even while its catalogue
+        # and immutable source are still loading on the worker.
         child.write(b'ggyy')
         child.repaint_until(b'Yanked')
         child.write(b'P')

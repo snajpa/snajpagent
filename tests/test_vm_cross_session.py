@@ -64,6 +64,33 @@ class CrossSessionTests(ChannelFixture):
         self.child.command('close')
         self.child.finish('close')
 
+    def test_mouse_insert_routes_commands_and_drafts_to_clicked_owner(self):
+        from test_vm_mouse import mouse
+
+        child = self.child
+        requests = len(self.seen)
+        mouse(child, 1, 1)
+        mouse(child, 1, 1, release=True)
+        child.write(b'/fast off\r')
+        self.wait_snapshot(lambda rows: rows and any(
+            report['command'] == '/fast off' for report in self.owner(self.source)['reports']))
+        self.assertFalse(self.owner(self.target)['reports'])
+        self.assertEqual(self.rollout(self.target)['draft'], 'keep-target-rollout')
+        child.write(b'\x1b')
+        child.read(.08)
+        child.command('history ' + self.source)
+        child.repaint_until(b'ATTACHED')
+        # Clicking the other pane preserves its remembered draft position.
+        mouse(child, 1, 112)
+        mouse(child, 1, 112, release=True)
+        child.write(b'RIGHT')
+        self.wait_snapshot(lambda rows: rows and
+                           self.rollout(self.target)['draft'] == 'keep-target-rollouRIGHTt')
+        self.assertEqual(self.rollout(self.source)['draft'], '')
+        self.normal()
+        self.assertEqual(len(self.seen), requests)
+        child.finish('session detach')
+
     def test_query_uses_named_owner_and_preserves_target_draft(self):
         address = 'other session/' + self.server.endpoint + '/peer'
         command = '/query "' + address + '" hello-target'
@@ -90,7 +117,7 @@ class CrossSessionTests(ChannelFixture):
         address = self.target[:8] + '/' + self.server.endpoint
         self.child.write(b'i/notice ' + address.encode() + b'/peer private-notice\r')
         self.wait(lambda: ('secondop', 'NOTICE peer :private-notice') in self.server.lines)
-        self.child.repaint_until(b'Command completed')
+        self.child.repaint_until(b'private-notice')
         self.normal()
         self.child.command('workspace save')
         self.wait_snapshot(lambda rows: rows and self.owner(self.target)['reports'])
@@ -192,7 +219,7 @@ class CrossSessionTests(ChannelFixture):
         self.wait_snapshot(lambda rows: rows and self.rollout(self.source)['draft'] == command)
         self.assertEqual(self.rollout(self.target)['draft'], 'keep-target-rollout')
         self.assertIsNone(self.rollout(self.target)['pending'])
-        self.assertEqual(self.state()['v'], 12)
+        self.assertEqual(self.state()['v'], 13)
         self.assertFalse(any('retained-text' in line for nick, line in self.server.lines))
         self.finish()
 

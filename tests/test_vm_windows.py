@@ -90,7 +90,7 @@ class WindowsTests(unittest.TestCase):
     def escape(self, child):
         child.write(b'\x1b')
         time.sleep(.06)
-        child.repaint_until(b'NORMAL draft')
+        child.repaint_until(b'NORMAL composer')
 
     def test_hidden_engine_split_draft_and_explicit_quit(self):
         child = self.start('-N', 'windows-live')
@@ -101,7 +101,8 @@ class WindowsTests(unittest.TestCase):
         self.assertEqual(len(list((self.root / 'state' / 'sessions').iterdir())), 1)
 
         child.write(b'i/fast\r')
-        child.repaint_until(b'REPORT')
+        child.repaint_until(b'ON')
+        self.escape(child)
         child.command('history')
         child.write('iwindows-prompt ž\rnext unsent ž'.encode())
         self.assertTrue(self.requested.wait(5), 'Windows HTTP request never arrived')

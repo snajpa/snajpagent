@@ -121,6 +121,38 @@ class RemoteProcess:
 
 
 class RemoteStartupTests(unittest.TestCase):
+    def test_workspace_mosh_prediction_is_disabled_unless_explicit(self):
+        with tempfile.TemporaryDirectory(prefix='snag-mosh-prediction-') as tmp:
+            root = Path(tmp)
+            mosh = root / 'mosh'
+            mosh.write_text(f'#!{sys.executable}\n' +
+                            'import json,sys\nfrom pathlib import Path\n' +
+                            'Path(__file__).with_suffix(".json").write_text(json.dumps(sys.argv[1:]))\n' +
+                            'print("CAPTURED", flush=True)\n')
+            mosh.chmod(0o755)
+            cases = [
+                ([], ['host', '/opt/bin/snajpagent', 'vm'], True),
+                (['--'], ['host', 'snajpagent', 'vm', '--resume', 'fixture'], True),
+                (['--ssh', 'ssh -p 2200'], ['host', 'snajpagent', 'vm'], True),
+                (['--predict=always'], ['host', 'snajpagent', 'vm'], False),
+                (['--predict', 'adaptive'], ['host', 'snajpagent', 'vm'], False),
+                (['-a'], ['host', 'snajpagent', 'vm'], False),
+                (['-n'], ['host', 'snajpagent', 'vm'], False),
+                ([], ['host', 'snajpagent', '--resume', 'fixture'], False),
+            ]
+            for options, command, disabled in cases:
+                with self.subTest(options=options, command=command):
+                    child = RemoteProcess(root, [str(mosh), *options, *command],
+                                          extra_env={'MOSH_PREDICTION_DISPLAY': None})
+                    try:
+                        child.until(b'CAPTURED')
+                        child.wait(0)
+                        args = json.loads(mosh.with_suffix('.json').read_text())
+                        self.assertEqual('--predict=never' in args, disabled)
+                        self.assertEqual(args[-len(command):], command)
+                    finally:
+                        child.close()
+
     @staticmethod
     def wait_exited(child):
         if sys.platform == "darwin" and child.slave is not None:

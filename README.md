@@ -381,7 +381,11 @@ tracked `config.mk`; `make WITH_*=…` stays an explicit override.
 
 The development `snajpagent vm` frontend provides named workspaces, splits,
 retained transcripts, retrospective verbosity, search, mouse controls and Vim
-editing. `:new [NAME]` creates an agent; `:session ID` resumes one. On POSIX,
+editing. Click an attached pane to enter **INSERT** for its prompts and `/commands`.
+Escape returns to **NORMAL**; `i`/`a`/`I`/`A` enter its composer again. From NORMAL,
+`:` enters **COMMAND-LINE** for workspace commands. The focused status bar names
+the current mode; dragging transcript text enters **VISUAL** selection.
+`:new [NAME]` creates an agent; `:session ID` resumes one. On POSIX,
 `:session detach` (or `:session d`) saves and detaches the whole workspace while
 agents continue. Tab/Shift-Tab complete commands and their options.
 `:close` closes a pane; `:q` shuts down an attached rollout owner or closes a conversation pane.
@@ -398,7 +402,9 @@ history; agent conversations are read-only.
 Use `/query SESSION/ENDPOINT/NICK` to select another attached session's query;
 `:attach ID` in another split gives the workspace control of that session.
 
-`:reports` lists command output; `:history` returns to rollout. Search with
+Commands and their output remain in the pane transcript, ready for more typing.
+`:report` opens one output separately; `:reports` lists retained outputs.
+`:history` returns to rollout. Search with
 `/TEXT`, `?TEXT` and `n`/`N`; select with `v`, `V` or Ctrl-V and yank with `y`.
 Yanks copy to the workstation clipboard, including through `snajpagent remote`.
 `[terminal] clipboard` selects `native`, `osc52` or `off`; OSC 52 is unconfirmed.

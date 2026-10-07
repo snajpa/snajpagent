@@ -4,6 +4,23 @@
 
 ## Unreleased
 
+- Retain navigation typed before a requested report or history view finishes
+  loading. Keep cancellation, pane switching and local prompt editing responsive
+  independently of reader work and owner draft acknowledgements.
+
+- Keep submitted prompts, commands and command output in workspace scrollback;
+  submission follows new output and commands leave INSERT ready for typing.
+  Retain command positions across workspace resume (snapshot version13).
+- Use confirmed Mosh rendering for direct remote workspace launches by default,
+  preventing speculative edits from shifting neighboring panes. Explicit Mosh
+  prediction settings remain available.
+
+- Keep visible workspace history when scrolling reaches pages containing only
+  hidden bookkeeping at either end of the transcript.
+- Click an attached writable pane to enter INSERT; drag transcript text for
+  VISUAL selection. Support i/a/I/A from history and identify NORMAL, INSERT,
+  VISUAL and COMMAND-LINE consistently in the focused status bar and help.
+
 - Place the focused workspace cursor at its prompt immediately in FOLLOW,
   including restore, pane navigation and resize. Keep history selection at its
   source cursor. Use a white status bar for the active pane and light blue for

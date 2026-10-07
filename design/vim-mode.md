@@ -8,7 +8,10 @@ configured template, values, captured clock and spinner state. Earlier owners
 retain model/active-state compatibility with unknown count fields. The workspace
 animates visible activity locally; idle prompts add no polling. Draft cursor,
 mouse hits and wrapped editor motions use the same formatted frame and source
-mapping. Click focus repaints even before transcript content arrives. NORMAL
+mapping. Clicking an attached writable pane enters INSERT immediately, including
+empty panes. Prompt clicks also position the draft cursor; body and status clicks
+use its remembered position. Transcript drags enter VISUAL; read-only history and
+report clicks retain source navigation. NORMAL
 window navigation accepts letters, arrows and Ctrl-held Vim variants, honors
 split boundaries and cancels pending history movement.
 The focused FOLLOW pane anchors the terminal cursor to its prompt even before
@@ -33,7 +36,9 @@ Display checkpoint: the grid uses semantic ANSI colors under the existing color
 policy, with visible split separators and status bars spanning each pane. Growing
 a FOLLOW viewport moves its top to retain a full tail; background reads continue
 across byte pages until they contain the requested rendered rows or reach the
-source boundary. Raw process output is omitted below verbosity3, where bounded
+source boundary. A previous/next page containing no rendered rows extends the
+known source boundary while retaining the existing viewport, preventing hidden
+metadata at either end from erasing visible output. Raw process output is omitted below verbosity3, where bounded
 result previews own its display. HOLD keeps its source anchor through reflow.
 Replacing a page-worker request preserves the displaced pane's pending load,
 including initial history and report catalogues, so resize and refresh cannot
@@ -99,8 +104,8 @@ an unattached or externally controlled session leaves the source command intact.
 Dispatch uses the target rollout mailbox without consuming its existing draft.
 The pending record retains the originating session and route, so feedback,
 selection and :recover return there. New typing and focus changes suppress automatic
-selection. Successful /msg and /notice preserve the window. Version12 snapshots
-retain forwarded submissions and read versions1–11; resume queries their receipts
+selection. Successful /msg and /notice preserve the window. Version13 snapshots
+retain forwarded submissions and inline report references and read versions1–12; resume queries their receipts
 without resubmission. Owner admission recovery remains separate from IRC chunk
 delivery receipts. Older owners accept exact saved names and full session IDs;
 abbreviated IDs in forwarded slash commands require the updated owner parser.
@@ -253,7 +258,8 @@ including decoded bracketed-paste events; Ctrl-C or Escape cancels that operatio
 The queue shares the direct-input size bound. Rectangular registers insert columns
 into existing draft lines, expand intersected tabs, pad short lines, extend the
 draft and form one undo group. Mouse hit testing shares the renderer's grapheme,
-tab and source mappings. Clicks place transcript/report/composer cursors;
+tab and source mappings. Attached writable pane clicks enter INSERT; read-only
+history/report clicks place source cursors;
 transcript/report drags select within their original window. The wheel scrolls
 its hovered window while retaining keyboard focus. Separator drags use the same
 geometry as layout placement and save proportional sizes; stale drags cannot
@@ -333,7 +339,9 @@ The backend now accepts typed rollout commands through that mailbox and retains
 command echoes/results as immutable private presentation files. Completed command
 receipts survive live-owner reconnect; commands needing terminal adapters
 return a terminal requirement before effects. The frontend now submits typed
-commands and opens immediate output in report windows. `:reports` lists saved
+commands and appends their immutable reports at the acknowledged journal boundary
+in the originating transcript. Submission returns that pane to FOLLOW and keeps
+INSERT active. Explicit :report opens a separate report view. `:reports` lists saved
 references; `:report [ID]` reopens one. Version6 workspace snapshots retain report
 metadata and positions while accepting earlier layouts. Background reads verify
 private regular-file access, exact bytes and SHA256, then redact and build the
@@ -504,6 +512,36 @@ not embed Vim, add a scripting language or turn transcript text into an editable
 file. The first implementation has one session-host connection domain per
 workspace. A remote workspace runs on its session host through the existing
 `remote` wrapper.
+
+### Input and presentation contract
+
+The frontend edits and echoes its local draft before any owner acknowledgement.
+The owner receives revision-checked, coalesced draft updates independently. Input
+polling services keyboard, owner channels and worker wakeups; owner framing takes
+one transport fragment per step. History parsing, report-file validation, search
+and source reflow run on reader workers. The grid paints the current draft and
+cursor in the same frame. Input received during output backpressure marks another
+frame dirty. Saving and JSON construction remain synchronous; the qualification
+checks cover their interaction with typing and detach.
+
+Clicking a controlled pane enters INSERT immediately, including when history is
+loading. Escape returns NORMAL; i/a/I/A re-enter the composer. COMMAND-LINE uses
+colon commands from NORMAL. History navigation owns only keys interpreted in
+NORMAL. A requested report claims NORMAL when admitted; navigation arriving before
+its first document is queued in order. Cancel, pane focus and composer entry remain
+available and cancel obsolete queued navigation. Editing a transcript also cancels
+an outstanding report takeover. Worker errors release the affected input queue.
+Commands retain their output in the originating conversation transcript;
+report IDs and journal anchors survive workspace resume without adding operator
+commands to model context. Coalesced controls publish one completion per command
+kind; ordered catalogue groups identify its originating retained command reports.
+
+Mosh predicts edits across an entire terminal row and cannot infer split bounds.
+The workstation wrapper therefore selects --predict=never for direct remote
+snajpagent vm commands unless the operator supplied a prediction policy. Nested
+shell/multiplexer launches can specify that option explicitly. The confirmed
+screen includes network round-trip time; local draft echo remains independent
+of provider activity and native draft acknowledgements.
 
 ## 2. Pre-implementation baseline and pager failure mechanism
 
@@ -1360,7 +1398,7 @@ this avoids copying text that no longer matches the highlighted view.
 
 The transcript is a read-only buffer. The composer is an editable draft. The
 status line identifies `NORMAL`, `INSERT`, `VISUAL`, `VISUAL LINE`, `VISUAL BLOCK`
-or command/search entry, together with session identity, live/stored/read-only
+or `COMMAND-LINE` for Ex command/search entry, together with session identity, live/stored/read-only
 state, model/effort/priority, verbosity and FOLLOW/HOLD. A tiny terminal prioritizes
 session identity, mode and connection state. Engine “working” status comes from
 owner state, not a frontend animation left running after an error.
@@ -1378,7 +1416,7 @@ commands report briefly and leave the buffer unchanged.
 | `gg`, `G`, `[count]G` | Beginning, live tail, or one-based logical line. A distant numbered line may require cancellable scanning. |
 | `Ctrl-U`, `Ctrl-D`, `Ctrl-B`, `Ctrl-F` | Half-page and full-page movement. |
 | `H M L`, `zz` | Top/middle/bottom visible position; center the cursor. |
-| `i`, `a`, `A` from transcript | Focus its composer at the remembered position or end and enter INSERT. |
+| `i`, `a`, `I`, `A` from transcript | Enter composer INSERT before/after its remembered cursor, at first nonblank, or at line end. |
 | `Esc`, `Ctrl-[` | Leave INSERT/visual/command entry for NORMAL; preserve draft text. |
 | `Tab` in NORMAL | Switch focus between transcript and composer. |
 | `Ctrl-L` | Force a complete redraw from the current semantic state. |
@@ -1445,9 +1483,11 @@ combining character. The status reports copied bytes/lines and clipboard result.
 Very large selections stream through a private file/register backing store.
 
 Mouse mode is enabled inside VM and can be toggled with `:set mouse` /
-`:set nomouse`. Use SGR mouse reports: click focuses and places the cursor,
-wheel scrolls the hovered window, drag selects, and a separator drag resizes
-splits. Use one click/drag implementation before adding multi-click gestures.
+`:set nomouse`. Use SGR mouse reports: clicking a writable attached pane enters
+INSERT; clicking its prompt also positions the draft cursor. Body and status
+clicks use the remembered draft position. Read-only clicks place source cursors.
+The wheel scrolls the hovered window, dragging text enters VISUAL, and dragging
+a separator resizes splits. Use one click/drag implementation before adding multi-click gestures.
 Terminal-native selection remains available through the terminal's own bypass
 modifier or by disabling mouse reporting. Leaving VM restores mouse modes.
 

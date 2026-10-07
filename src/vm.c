@@ -55,7 +55,8 @@ static const char *const help_rows[] = {
     "History: h/l w/b/e 0/^/$, j/k logical lines, gj/gk wrapped rows; counted gg/G: line",
     "v/V/Ctrl-V: character/line/block selection    y: yank    p/P: paste into composer",
     "yy or y + motion: copy    Esc: cancel selection    Ctrl-C: cancel copy",
-    "Mouse: click cursor, drag text, wheel hovered window; drag separators to resize",
+    "Mouse: click an attached pane to INSERT; drag text to select; wheel hovered window",
+    "Drag separators to resize. Read-only history/report clicks place the source cursor.",
     ":set mouse/nomouse: enable/disable terminal mouse reporting",
     ":split [BUFFER] or :sp    :vsplit [BUFFER] or :vsp    :close    :q    :qa",
     ":buffers: conversations    :buffer ADDRESS/ID    :bn/:bp: cycle",
@@ -66,10 +67,11 @@ static const char *const help_rows[] = {
     "Workspace names accept quoted text. :q in these pickers closes the window.",
     "Enter/:session [ID]: resume owner    :new [NAME]: create owner",
     ":session detach (or :session d): save and detach the workspace; owners continue",
-    "Command line: Tab/Shift-Tab complete commands and options; Enter executes",
+    "NORMAL: navigate/edit    INSERT: type into pane    COMMAND-LINE (Ex): : commands",
+    "COMMAND-LINE: Tab/Shift-Tab complete commands and options; Enter executes",
     ":attach [ID]: control a running owner    o/:history SESSION: read-only",
     ":classic [SESSION]: use its full terminal; /s d returns to this workspace",
-    "i/a/A: edit prompt    Esc: NORMAL    Enter: submit    Ctrl-J: newline",
+    "i/a/I/A: edit prompt    Esc: NORMAL    Enter: submit    Ctrl-J: newline",
     "INSERT Ctrl-N/Ctrl-P: complete @nicknames from the current conversation",
     "Composer: h/j/k/l w/b/e 0/^/$ gg/G; counts multiply (2d3w deletes six words).",
     "gj/gk: wrapped rows    H/M/L: visible rows    zz: center    Ctrl-U/D/B/F: pages",
@@ -509,7 +511,7 @@ state_snapshot(const struct vm *vm)
         json_decref(windows);
         return NULL;
     }
-    json_t *result = json_pack("{s:i,s:I,s:o,s:o,s:o}", "v", 12,
+    json_t *result = json_pack("{s:i,s:I,s:o,s:o,s:o}", "v", 13,
         "focus", (json_int_t)vm->windows[vm->focus].id, "layout", layout,
         "windows", windows, "buffers", buffers);
     json_t *classic = json_null();
@@ -539,7 +541,7 @@ state_restore(struct vm *vm, const json_t *state, char *error, size_t size)
     size_t count = json_array_size(json_object_get(state, "windows")), focus = SIZE_MAX;
     if (!snag_json_exact_keys(state, version >= 5 ? "v focus layout windows buffers classic" :
         version >= 3 ? "v focus layout windows buffers" :
-        "v focus layout windows") || (version < 1 || version > 12) || !count ||
+        "v focus layout windows") || (version < 1 || version > 13) || !count ||
         (version >= 3 &&
          snag_vm_connections_load(json_object_get(state, "buffers"), &connections) < 0) ||
         snag_json_integer_u64(state, "focus", &focus_id) < 0 ||
@@ -748,6 +750,9 @@ reader_request(struct vm *vm, struct vm_read *read, struct snag_vm_read_request 
     request->plain = !vm->config.markdown;
     request->no_color = !vm->grid.color;
     request->retained_sessions = sources;
+    struct snag_vm_buffer *buffer = snag_vm_buffer_get(
+        connection_for(vm, request->session_id, false), request->route, false);
+    request->inline_reports = buffer ? buffer->inline_reports : NULL;
     uint64_t generation = snag_vm_reader_request(read->reader, request);
     json_decref(sources);
     request->retained_sessions = NULL;
@@ -1836,6 +1841,7 @@ command(struct vm *vm, const char *text)
             struct vm_window *window = &vm->windows[vm->focus];
             memcpy(window->report_selector, rest, strlen(rest) + 1u);
             window->report_catalog = window->report_open_pending = true;
+            vm->composer = vm->insert = false;
             notice(vm, "Reading retained report catalogue");
         }
     } else if (!strcmp(word, "history")) {
@@ -2257,7 +2263,12 @@ submit_draft(struct vm *vm)
     changed(vm);
     if (save(vm, NULL) < 0) return;
     if (snag_vm_buffer_send(target) < 0) notice(vm, "Submission was not sent; :recover its text");
-    else notice(vm, target->message);
+    else {
+        struct vm_window *window = &vm->windows[vm->focus];
+        window->follow = true;
+        queue_history(vm, window, LOAD_LAST);
+        notice(vm, target->message);
+    }
 }
 
 static void
@@ -2830,12 +2841,21 @@ history_key(struct vm *vm, const struct snag_vm_input_event *event,
     return true;
 }
 
+static bool
+document_input_pending(const struct vm *vm)
+{
+    const struct vm_window *window = &vm->windows[vm->focus];
+    return window->report_open_pending || (document_view(window) && !window->document &&
+        (window->load || vm->page.window == window->id));
+}
+
 static int
 queue_input(struct vm *vm, const struct snag_vm_input_event *event)
 {
     size_t charge = event->length ? event->length : 1u;
     if (charge > SNAG_MAX_DIRECT_PROMPT - vm->pending_input_bytes) {
         cancel_search(vm);
+        clear_pending_input(vm);
         notice(vm, "Pending input exceeds the input limit; operation canceled");
         return 0;
     }
@@ -2925,6 +2945,7 @@ mouse_input(struct vm *vm, const struct snag_vm_input_event *event)
         if (event->release) vm->mouse_down = false;
         return 0;
     }
+    if (document_input_pending(vm)) clear_pending_input(vm);
     cancel_search(vm);
     if (dragging && vm->mouse_separator.first) {
         int rc = snag_vm_layout_drag(vm->layout, vm->windows[vm->focus].id,
@@ -2983,18 +3004,25 @@ mouse_input(struct vm *vm, const struct snag_vm_input_event *event)
                 snag_vm_editor_normal(old, vm->insert);
                 if (snag_vm_editor_end(old) < 0) return -1;
             }
-            bool insert = vm->focus == i && vm->composer && vm->insert;
             vm->focus = i;
+            window->report_open_pending = false;
             vm->composer = vm->insert = false;
             vm->mode = 0;
             vm->prefix = 0;
             changed(vm);
             window->visual.kind = SNAG_VM_SELECT_NONE;
             mouse_cancel_operator(window);
+            struct snag_vm_buffer *buffer = focused_buffer(vm);
+            struct snag_vm_connection *connection = focused_connection(vm);
+            if (window->kind == VIEW_TRANSCRIPT && snag_vm_buffer_writable(buffer) &&
+                connection && connection->bound) {
+                vm->composer = vm->insert = true;
+                notice(vm, "INSERT  Enter: submit  Ctrl-J: newline  Esc: NORMAL");
+            }
             if (window->composer_rows && event->row >= window->composer_row &&
-                event->row - window->composer_row < window->composer_rows) {
-                vm->composer = true;
-                vm->insert = insert;
+                event->row - window->composer_row < window->composer_rows &&
+                snag_vm_buffer_writable(buffer)) {
+                vm->composer = vm->insert = true;
                 mouse_composer(vm, window, event->row, event->column);
                 changed(vm);
                 return 0;
@@ -3016,6 +3044,7 @@ mouse_input(struct vm *vm, const struct snag_vm_input_event *event)
             if (index >= count) index = count ? count - 1u : 0u;
             if (snag_vm_document_row(window->document, index, &row) < 0) return 0;
             if (dragging && !vm->mouse_select) {
+                vm->composer = vm->insert = false;
                 visual_begin(vm, SNAG_VM_SELECT_CHAR);
                 vm->mouse_select = true;
             }
@@ -3057,15 +3086,42 @@ input_event(void *opaque, const struct snag_vm_input_event *event)
     }
     if (event->kind == SNAG_VM_MOUSE) return mouse_input(vm, event);
     vm->mouse_down = false;
+    if (!vm->mode && !vm->composer && vm->prefix != 'w' && document_input_pending(vm)) {
+        bool control = (event->modifiers & SNAG_VM_CTRL) != 0u;
+        bool boundary = !vm->pending_input && event->kind == SNAG_VM_TEXT && event->length == 1u &&
+            (event->text[0] == ':' || (vm->windows[vm->focus].kind == VIEW_TRANSCRIPT &&
+             strchr("iIaA", event->text[0])));
+        boundary |= event->kind == SNAG_VM_KEY &&
+            (event->key == SNAG_VM_KEY_ESCAPE ||
+             (event->key == SNAG_VM_KEY_TAB && !vm->pending_input) ||
+             (control && (event->key == 'c' || event->key == 'w' ||
+                          event->key == 'z' || event->key == '[')));
+        if (event->kind == SNAG_VM_KEY && control && event->key == 'l') {
+            resized = 1;
+            vm->dirty = true;
+            return 0;
+        }
+        if (boundary) {
+            clear_pending_input(vm);
+            if (!(control && event->key == 'w'))
+                vm->windows[vm->focus].report_open_pending = false;
+            if (control && event->key == 'c') {
+                notice(vm, "Pending navigation canceled");
+                return 0;
+            }
+        } else return queue_input(vm, event);
+    }
     if (vm->copying || vm->navigating || vm->motion_loading) {
         bool control = (event->modifiers & SNAG_VM_CTRL) != 0u;
         bool cancel = event->kind == SNAG_VM_KEY &&
             (event->key == SNAG_VM_KEY_ESCAPE ||
              (control && (event->key == 'c' || event->key == '[' || event->key == 'z' ||
                 event->key == 'w')));
-        bool compose = vm->motion_loading && !vm->pending_input &&
+        bool compose = !vm->pending_input &&
+            (vm->motion_loading || vm->navigating || vm->copying) &&
             event->kind == SNAG_VM_TEXT && event->length == 1u &&
-            (event->text[0] == 'i' || event->text[0] == 'a' || event->text[0] == 'A') &&
+            (event->text[0] == 'i' || event->text[0] == 'a' ||
+             event->text[0] == 'I' || event->text[0] == 'A') &&
             snag_vm_buffer_writable(focused_buffer(vm));
         if (cancel || compose) cancel_search(vm);
         else if (event->kind == SNAG_VM_KEY && control && event->key == 'l') {
@@ -3132,7 +3188,7 @@ input_event(void *opaque, const struct snag_vm_input_event *event)
         const char *bytes = (const char *)vm->command.data;
         size_t at = vm->command_cursor, end = at;
         if (event->kind == SNAG_VM_TEXT) return insert_command(vm, event->text, event->length);
-        if (key == SNAG_VM_KEY_ESCAPE || (control && key == 'c')) vm->mode = 0;
+        if (key == SNAG_VM_KEY_ESCAPE || (control && (key == 'c' || key == '['))) vm->mode = 0;
         else if (key == SNAG_VM_KEY_ENTER) {
             if (snag_buf_putc(&vm->command, 0u) < 0) return -1;
             --vm->command.len;
@@ -3262,7 +3318,8 @@ input_event(void *opaque, const struct snag_vm_input_event *event)
             (void)connection_for(vm, window->session_id, true);
             vm->insert = false;
             changed(vm);
-        } else if ((key == 'i' || key == 'a' || key == 'A') && window->kind == VIEW_TRANSCRIPT) {
+        } else if ((key == 'i' || key == 'a' || key == 'I' || key == 'A') &&
+            window->kind == VIEW_TRANSCRIPT) {
             struct snag_vm_connection *c = connection_for(vm, window->session_id, true);
             if (c) {
                 vm->composer = true;
@@ -3309,7 +3366,8 @@ input_event(void *opaque, const struct snag_vm_input_event *event)
 static void
 drain_input(struct vm *vm)
 {
-    while (vm->pending_input && !vm->copying && !vm->navigating && !vm->motion_loading) {
+    while (vm->pending_input && !vm->copying && !vm->navigating && !vm->motion_loading &&
+        !document_input_pending(vm)) {
         vm->input_drained = true;
         struct vm_pending_input *pending = vm->pending_input;
         vm->pending_input = pending->next;
@@ -3402,6 +3460,73 @@ input_ready(struct vm *vm, int timeout)
 }
 
 static void
+inline_report(struct vm *vm, struct snag_vm_buffer *source,
+    struct snag_vm_connection *owner, json_t *report, uint64_t seq)
+{
+    for (size_t i = 0u; i < json_array_size(source->inline_reports); ++i) {
+        const json_t *item = json_array_get(source->inline_reports, i);
+        if (!strcmp(snag_json_string(json_object_get(item, "report"), "id"),
+            snag_json_string(report, "id"))) return;
+    }
+    json_t *last = json_array_get(source->inline_reports,
+        json_array_size(source->inline_reports) - 1u);
+    uint64_t previous = (uint64_t)json_integer_value(json_object_get(last, "seq"));
+    if (seq < previous) seq = previous;
+    json_t *item = json_pack("{s:s,s:I,s:O}", "session", owner->session,
+        "seq", (json_int_t)seq, "report", report);
+    if (!item || json_array_append_new(source->inline_reports, item) < 0) {
+        notice(vm, "Cannot retain command output in transcript; :reports opens it");
+        return;
+    }
+    for (size_t i = 0u; i < vm->count; ++i) {
+        struct vm_window *w = &vm->windows[i];
+        if (w->kind == VIEW_TRANSCRIPT && window_buffer(vm, w) == source)
+            queue_history(vm, w, w->follow ? LOAD_LAST : LOAD_KEEP);
+    }
+    changed(vm);
+}
+
+/* Deferred control results use the owner's retained completion report. Reconcile
+ * only when that catalogue changes or a command receipt establishes its origin. */
+static void
+inline_completions(struct vm *vm, struct snag_vm_connection *owner)
+{
+    static const char suffix[] = " (completion)";
+    owner->reports_changed = false;
+    for (size_t i = 0u; i < json_array_size(owner->reports); ++i) {
+        json_t *report = json_array_get(owner->reports, i);
+        const char *command = snag_json_string(report, "command");
+        size_t length = strlen(command), suffix_length = sizeof(suffix) - 1u;
+        if (length <= suffix_length || strcmp(command + length - suffix_length, suffix)) continue;
+        size_t prefix = length - suffix_length;
+        /* Each control kind coalesces requests until its completion report.
+         * Catalogue order identifies that group, even across reconnect. Match
+         * retained request report IDs, so old chats do not receive later work. */
+        for (size_t j = i; j > 0u; --j) {
+            const json_t *request = json_array_get(owner->reports, j - 1u);
+            const char *original = snag_json_string(request, "command");
+            if (!strcmp(original, command)) break;
+            if (strlen(original) != prefix || strncmp(original, command, prefix)) continue;
+            for (struct snag_vm_connection *c = vm->connections; c; c = c->next) {
+                for (struct snag_vm_buffer *b = c->buffers; b; b = b->next) {
+                    for (size_t n = json_array_size(b->inline_reports); n > 0u; --n) {
+                        const json_t *item = json_array_get(b->inline_reports, n - 1u);
+                        if (strcmp(snag_json_string(item, "session"), owner->session) ||
+                            strcmp(snag_json_string(json_object_get(item, "report"), "id"),
+                                snag_json_string(request, "id"))) continue;
+                        struct snag_journal_cursor tail;
+                        uint64_t seq = (uint64_t)json_integer_value(json_object_get(item, "seq"));
+                        if (snag_vm_connection_tail(c, &tail)) seq = tail.next_seq - 1u;
+                        inline_report(vm, b, owner, report, seq);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+}
+
+static void
 connections_step(struct vm *vm)
 {
     bool waiting = false, connected = false;
@@ -3435,11 +3560,18 @@ connections_step(struct vm *vm)
                 !vm->copying && !vm->navigating && !vm->mode &&
                 !vm->classic_pending && !vm->detach_exit && !vm->switch_workspace &&
                 !vm->detach_suspend && !vm->quit_all && !vm->quit_window;
+            if (b->report_open && source) {
+                struct snag_journal_cursor tail;
+                uint64_t seq = b->report_seq;
+                if (source != b && snag_vm_connection_tail(source->connection, &tail))
+                    seq = tail.next_seq - 1u;
+                inline_report(vm, source, c, b->report_open, seq);
+                c->reports_changed = true;
+            }
             if (b->selection) {
                 struct snag_vm_buffer *selected = snag_vm_buffer_get(c, b->selection, true);
                 if (selected && origin && !source->draft.len) open_conversation(vm, selected);
-            } else if (b->report_open && origin && !source->draft.len)
-                open_report(vm, c, b->report_open);
+            }
             json_decref(b->selection);
             b->selection = NULL;
             json_decref(b->report_open);
@@ -3453,6 +3585,7 @@ connections_step(struct vm *vm)
                 classic_request(vm, c->session);
             }
         }
+        if (c->reports_changed) inline_completions(vm, c);
         if (catalog && revision != c->revision && buffer_catalog(vm) < 0)
             notice(vm, "Cannot update buffer list");
         if (c->quitting && !c->exited && c->control) waiting = true;
@@ -3947,11 +4080,7 @@ draw_window(void *opaque, const struct snag_vm_rectangle *rectangle)
         char identity[256];
         if (name && *name) (void)snprintf(identity, sizeof(identity), "%s %s", name, attachment);
         else (void)snprintf(identity, sizeof(identity), "%s %.8s", attachment, window->session_id);
-        (void)snprintf(status, sizeof(status), "%s%s%s%s history v%u %s %s  seq %llu%s%s%s%s%s",
-            editing ? vm->insert ? "INSERT " : "NORMAL draft " :
-                window->visual.kind == SNAG_VM_SELECT_LINE ? "VISUAL LINE " :
-                window->visual.kind == SNAG_VM_SELECT_BLOCK ? "VISUAL BLOCK " :
-                window->visual.kind ? "VISUAL " : "",
+        (void)snprintf(status, sizeof(status), "%s%s%s history v%u %s %s  seq %llu%s%s%s%s%s",
             b && b->draft_conflict ? "[draft conflict] " : "", identity, owner,
             window->verbosity, window->follow ? "FOLLOW" : "HOLD",
             window->document ? window->best_effort ? "snapshot" : "committed" : "",
@@ -3979,8 +4108,16 @@ draw_window(void *opaque, const struct snag_vm_rectangle *rectangle)
     for (size_t column = rectangle->column;
         column < rectangle->column + rectangle->columns; ++column)
         vm->grid.back.cells[status_row * vm->grid.columns + column].style = style;
+    char labeled[sizeof(status) + 32u];
+    const char *mode = vm->mode ? "COMMAND-LINE" : vm->insert ? "INSERT" :
+        window->visual.kind == SNAG_VM_SELECT_LINE ? "VISUAL LINE" :
+        window->visual.kind == SNAG_VM_SELECT_BLOCK ? "VISUAL BLOCK" :
+        window->visual.kind ? "VISUAL" : "NORMAL";
+    if (index == vm->focus)
+        (void)snprintf(labeled, sizeof(labeled), "%s %s", mode, status);
+    else (void)snprintf(labeled, sizeof(labeled), "%s", status);
     return snag_vm_grid_text(&vm->grid, status_row, rectangle->column,
-        rectangle->columns, status, strlen(status), style);
+        rectangle->columns, labeled, strlen(labeled), style);
 }
 
 static int
@@ -4144,6 +4281,7 @@ collect(struct vm *vm, struct vm_read *read)
         return;
     }
     if (result->error_number) {
+        if (target == vm->windows[vm->focus].id) clear_pending_input(vm);
         if (vm->motion_loading && vm->motion_origin.window == target) restore_motion(vm, true);
         notice(vm, result->error);
         for (size_t i = 0u; i < vm->count; ++i) {
@@ -4218,6 +4356,19 @@ collect(struct vm *vm, struct vm_read *read)
                 if (!window->visual.kind) window->tail = result->tail;
                 window->incomplete = result->incomplete;
                 window->best_effort = result->best_effort;
+                continue;
+            }
+            /* A page beyond the visible boundary can contain only hidden
+             * metadata. Extend the known bound without erasing the viewport. */
+            if ((load == LOAD_PREVIOUS || load == LOAD_NEXT) &&
+                !snag_vm_document_rows(result->document) &&
+                snag_vm_document_rows(window->document)) {
+                if (load == LOAD_PREVIOUS) window->begin = result->cursor;
+                else window->end = result->cursor;
+                window->tail = result->tail;
+                window->incomplete = result->incomplete;
+                window->best_effort = result->best_effort;
+                changed(vm);
                 continue;
             }
             struct snag_journal_cursor end = result->request.before_seq && load != LOAD_ANCHOR ?
