@@ -522,6 +522,8 @@ Use
 .B /s d
 to return to the shell while requests, commands, IRC and goals continue.
 Graceful exit and detach deliver pending terminal output before returning to the shell.
+Detaching prints a shell-quoted --resume command with the full session ID and
+any nondefault --dotdir. Run it to reattach with the retained session settings.
 Reconnect with
 .BR "snajpagent --attach SESSION_ID" ;
 .B \-A
@@ -1976,6 +1978,10 @@ renames it and :workspace save writes immediately. Quote names containing spaces
 Layout, filter and draft changes save at one-second intervals; clean exit,
 switch and suspend also save. A save failure stays visible and can be retried.
 Leaving an untouched initial picker creates no saved workspace.
+After a successful save and terminal restoration, normal workspace exit prints
+its shell-quoted snajpagent vm --resume command. The command uses the current
+workspace's full ID, including after a rename or workspace switch, and retains
+any nondefault --dotdir.
 .PP
 Snapshots are private files under $DOTDIR/workspaces/WORKSPACE_ID/workspace.json.
 They retain the layout, focus, selection, filters, transcript source anchors,
@@ -2104,6 +2110,7 @@ edit before releasing control. A connection failure leaves unacknowledged text
 in the workspace snapshot; unresolved conflicts remain saved there too.
 The saving notice remains until the owner acknowledges detach; the completed
 detach notice means another client can claim the controller.
+It includes :attach SESSION_ID to reconnect from the workspace.
 Draft synchronization does not submit text or add it to model history.
 .PP
 Before transmitting, the workspace saves the request ID, text and owner identity.
@@ -2521,8 +2528,9 @@ The name is retained across detach and restart. Use -N NAME with
 .TP
 .BR "/session detach" , " /session d" , " /s d"
 Return to the shell while the native session continues. Terminal loss has
-the same lifetime behavior. Use /exit to stop the session, or --attach to
-reconnect. File attachment commands /attach and /detach keep their existing meaning.
+the same lifetime behavior. Detach prints a copyable --resume command for that
+session; --attach also reconnects. Use /exit to stop the session.
+File attachment commands /attach and /detach keep their existing meaning.
 An unfinished file exchange is cancelled when its terminal disconnects;
 reattachment restores ordinary input and verifies the new workstation client.
 .TP

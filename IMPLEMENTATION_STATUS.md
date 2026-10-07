@@ -2,6 +2,10 @@
 
 # Implementation status
 
+Native session detach prints a copyable resume command. Saved workspaces print
+their return command after terminal restoration, using the current full ID and
+nondefault dotdir. Workspace agent detach shows :attach SESSION_ID after release.
+
 Enterprise Codex personal access tokens use native `--with-access-token` login,
 validated workspace metadata and the Codex backend. Managed tokens are reloaded
 for each request and use the same Codex formatting/compaction/count behavior as

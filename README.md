@@ -101,7 +101,8 @@ Linux sessions started on ANSI terminals at least 20 columns wide survive
 terminal loss. Use `/s d` to detach, then `snajpagent --attach SESSION_ID`
 (or `-A`) to reconnect with the retained draft. Without an ID, attach offers a
 running-session picker. `/s a ID` switches live sessions; failure keeps the source.
-Normal exit prints a minimal resume command; omitted options retain session settings.
+Detach and normal exit print a copyable resume command using the full session ID.
+It reconnects to a running owner and retains session settings.
 
 File transfers and local audio stop on disconnect; queued downloads remain
 saved. Restart microphone capture after reconnecting. New editors and pagers
@@ -382,6 +383,8 @@ The development `snajpagent vm` frontend provides named workspaces, splits,
 retained transcripts, retrospective verbosity, search, mouse controls and Vim
 editing. `:new [NAME]` creates an agent; `:session ID` resumes one. On POSIX, `:close`
 detaches; `:q` shuts down an attached rollout owner or closes a conversation pane.
+Leaving a saved workspace prints its `snajpagent vm --resume WORKSPACE_ID` command
+after restoring the shell screen. `:detach` shows `:attach SESSION_ID` inside the workspace.
 Restoring a workspace leaves stopped owners stopped.
 The experimental Windows workspace runs one live agent: `:close` hides it and
 `:qa` quits it before exiting. Additional live agents and persistent detach are unavailable.

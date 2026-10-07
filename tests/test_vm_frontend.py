@@ -6,6 +6,7 @@ import json
 import os
 import pty
 import select
+import shlex
 import signal
 import struct
 import subprocess
@@ -224,6 +225,16 @@ class WorkspaceTests(unittest.TestCase):
                               env={**os.environ, 'HOME': str(self.root)},
                               capture_output=True, timeout=5)
 
+    def resume_hint(self, child, sid):
+        # The footer belongs to the shell screen, after leaving the workspace.
+        output = child.output.rsplit(b'\x1b[?1049l', 1)[-1].decode(errors='replace')
+        marker = 'You can resume this workspace with the following command'
+        self.assertEqual(output.count(marker), 1, output)
+        command = output.split(marker)[1].splitlines()[1]
+        self.assertEqual(shlex.split(command), [str(BINARY), 'vm', '--dotdir',
+                        str(self.root / 'state'), '--resume', sid])
+        return shlex.split(command)
+
     def seed_session(self, response='retained-answer-marker'):
         provider = harness.FakeResponses()
         self.addCleanup(provider.close)
@@ -382,6 +393,22 @@ class WorkspaceTests(unittest.TestCase):
         child.finish('q')
         self.assertEqual(self.snapshots(), {})
         self.assertEqual(list((self.root / 'state' / 'sessions').iterdir()), [])
+        self.assertNotIn(b'You can resume', child.output)
+
+    def test_detach_prints_quoted_command_for_saved_workspace(self):
+        self.root = self.root / "operator's workspace"
+        self.root.mkdir()
+        child = self.start('-N', 'original')
+        child.command('workspace name renamed')
+        saved = self.wait_snapshot(lambda rows: any(row['name'] == 'renamed'
+                                                  for row in rows.values()))
+        sid, = saved
+        child.finish('close')
+        command = self.resume_hint(child, sid)
+        resumed = self.start(*command[4:])
+        self.assertIn(b'\trenamed\topen\t', self.cli('-l').stdout)
+        resumed.finish('close')
+        self.resume_hint(resumed, sid)
 
     def test_split_layout_named_resume_and_tiny_resize(self):
         child = self.start('-N', 'operations')
@@ -505,6 +532,7 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(other.process.returncode, 2)
         self.assertNotIn(b'\x1b[?1049h', other.output)
         self.assertEqual(path.read_bytes(), before)
+        self.assertNotIn(b'You can resume', other.output)
 
     def test_workspace_picker_switch_and_failed_switch_preserve_owner(self):
         first = self.start('-N', 'first')
@@ -536,6 +564,8 @@ class WorkspaceTests(unittest.TestCase):
         child.command('workspace name still-owned')
         self.wait_snapshot(lambda values: any(x['name'] == 'still-owned' for x in values.values()))
         child.finish()
+        sid, = (sid for sid, row in self.snapshots().items() if row['name'] == 'still-owned')
+        self.resume_hint(child, sid)
 
     def test_stalled_output_still_accepts_signal_and_restores_modes(self):
         child = self.start('-N', 'backpressure')

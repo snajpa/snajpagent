@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import select
+import shlex
 import signal
 import socket
 import struct
@@ -188,6 +189,47 @@ class SessionViewTests(unittest.TestCase):
     def detach(self):
         self.finish(self.initial, b'/s d')
         self.status('detached')
+
+    def resume_hint(self, child, sid):
+        output = child.output.decode(errors='replace')
+        marker = 'You can resume this session with the following command'
+        self.assertEqual(output.count(marker), 1, output)
+        command = output.split(marker)[1].splitlines()[1]
+        self.assertEqual(shlex.split(command), [str(BINARY), '--dotdir',
+                        str(self.root / 'state'), '--resume', sid])
+        return command
+
+    def test_detach_prints_command_that_reattaches_same_owner(self):
+        os.write(self.initial.master, b'/session name renamed session\r')
+        self.initial.until(b'session name: renamed session')
+        self.initial.output.clear()
+        self.detach()
+        command = self.resume_hint(self.initial, self.sid)
+        resumed = RemoteProcess(self.root, ['/bin/sh', '-c', 'exec ' + command],
+                                wrapped=None, extra_env=self.env)
+        self.children.append(resumed)
+        resumed.until(b'Attached session', 10)
+        self.status('attached')
+        self.assertEqual(self.identity(), self.owner_identity)
+        resumed.output.clear()
+        self.finish(resumed, b'/session detach')
+        self.resume_hint(resumed, self.sid)
+        self.status('detached')
+        self.assertEqual(self.identity(), self.owner_identity)
+
+    def test_detach_after_switch_prints_destination_id(self):
+        target = self.start(['-N', 'destination'])
+        target.until('›'.encode(), 15)
+        target_sid, = (path.name for path in (self.root / 'state' / 'sessions').iterdir()
+                       if path.is_dir() and path.name != self.sid)
+        self.finish(target, b'/s d')
+        os.write(self.initial.master, ('/session attach ' + target_sid + '\r').encode())
+        self.initial.until(b'Attached session', 10)
+        self.initial.output.clear()
+        self.finish(self.initial, b'/s d')
+        self.resume_hint(self.initial, target_sid)
+        self.status('detached')
+        self.assertEqual(self.identity(), self.owner_identity)
 
     def view(self, bind=False):
         peer = View(self.directory)

@@ -80,6 +80,7 @@ static const char *const view_control_names[] = {
 
 static atomic_int pending_shutdown_signal;
 static _Atomic(struct snag_ui *) shutdown_ui;
+static void write_resume_command(struct app_state *, const char *, const char *);
 
 static void
 mark_shutdown_signal(int signal_number)
@@ -3399,6 +3400,7 @@ handle_common_command(struct app_state *app, const char *line, bool active, bool
         if ((len == 1u && argument[0] == 'd') ||
             (len == 6u && !strncmp(argument, "detach", 6u))) {
             if (!app->ui.native) return app_error(app, "native attachment is unavailable here");
+            write_resume_command(app, app->program, app->store.root_path);
             if (snag_ui_session_control(&app->ui, SNAG_SESSION_DETACH, NULL, 0u) < 0)
                 return app_error(app, "cannot detach terminal client");
             return 0;
@@ -5969,39 +5971,42 @@ append_command_option(struct snag_buf *command, const char *option, const char *
            snag_command_argument(command, argument) < 0 ? -1 : 0;
 }
 
-static int
-build_resume_command(const struct app_state *app, const char *program,
-                     const char *dotdir, struct snag_buf *command)
+char *
+snag_app_resume_command(const char *program, const char *dotdir, const char *id, bool workspace)
 {
+    struct snag_buf command = {.max = RESUME_COMMAND_MAX};
     char *resolved = snag_program_path(program && *program ? program : SNAJPAGENT_NAME);
     char *default_dir = snag_app_dotdir(NULL, NULL, 0u);
     snag_file_info actual, standard;
     bool is_default = default_dir && (!strcmp(dotdir, default_dir) ||
         (snag_stat(dotdir, &actual) == 0 && snag_stat(default_dir, &standard) == 0 &&
          actual.st_dev == standard.st_dev && actual.st_ino == standard.st_ino));
-    int rc = -1;
+    char *result = NULL;
 
     free(default_dir);
-    if (!resolved) return -1;
-    if (snag_command_argument(command, resolved) < 0 ||
-        (!is_default && append_command_option(command, "--dotdir", dotdir) < 0)) goto out;
-    if (append_command_literal(command, "--resume") < 0 ||
-        snag_command_argument(command, app->session.id) < 0) goto out;
-    rc = 0;
+    if (!resolved) return NULL;
+    if (snag_command_argument(&command, resolved) < 0 ||
+        (workspace && append_command_literal(&command, "vm") < 0) ||
+        (!is_default && append_command_option(&command, "--dotdir", dotdir) < 0) ||
+        append_command_literal(&command, "--resume") < 0 ||
+        snag_command_argument(&command, id) < 0 || snag_command_finish(&command) < 0 ||
+        snag_buf_terminate(&command) < 0) goto out;
+    result = (char *)command.data;
+    command.data = NULL;
 out: free(resolved);
-    return rc;
+    snag_buf_free(&command);
+    return result;
 }
 
 static void
 write_resume_command(struct app_state *app, const char *program, const char *dotdir)
 {
     if (!dotdir || app->session.log_fd < 0 || app->session.delete_requested) return;
-    struct snag_buf command = {.max = RESUME_COMMAND_MAX};
-    if (build_resume_command(app, program, dotdir, &command) == 0 &&
-        snag_command_finish(&command) == 0 && snag_buf_terminate(&command) == 0)
+    char *command = snag_app_resume_command(program, dotdir, app->session.id, false);
+    if (command)
         (void)snag_ui_send(&app->ui, (struct snag_ui_command){
-            .kind = SNAG_UI_RESUME, .text = (char *)command.data, .len = command.len});
-    snag_buf_free(&command);
+            .kind = SNAG_UI_RESUME, .text = command, .len = strlen(command)});
+    free(command);
 }
 
 static unsigned int
@@ -6503,6 +6508,7 @@ run_owner(const struct snag_cli *cli, const char *program, struct snag_session_p
     bool signal_handlers_installed = false;
     int rc = 3;
     memset(&app, 0, sizeof(app));
+    app.program = program;
     app.switch_target = SNAG_RENDER_VIEW_COUNT;
     snag_buf_init(&app.irc_urgent, SNAG_MAX_IRC_SNAPSHOT);
     snag_buf_init(&app.irc_urgent_refs, SNAG_MAX_IRC_SNAPSHOT);

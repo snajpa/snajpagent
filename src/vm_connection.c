@@ -1062,8 +1062,11 @@ receive(struct snag_vm_connection *connection, const json_t *value)
         for (struct snag_vm_buffer *b = connection->buffers; b; b = b->next)
             conflict |= b->draft_conflict || b->reconcile_pending;
         snag_vm_connection_close(connection);
-        message(connection, conflict ? "Detached; unresolved draft retained in workspace" :
-            "Detached; owner continues running");
+        char text[sizeof(connection->message)];
+        (void)snprintf(text, sizeof(text), "%s; :attach %s",
+            conflict ? "Detached; unresolved draft retained in workspace" :
+                "Detached; owner continues running", connection->session);
+        message(connection, text);
     } else if (strcmp(type, "control")) return snag_errno(EPROTO);
     return 0;
 }

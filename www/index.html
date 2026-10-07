@@ -74,7 +74,8 @@
         least 20 columns wide. Use
         <code>/s d</code> to return to the shell while work continues, then
         <code>snajpagent --attach SESSION_ID</code> to reconnect with the retained
-        draft. Without an ID, attach lists running sessions. Current source accepts
+        draft. Detach prints a copyable resume command for the same session.
+        Without an ID, attach lists running sessions. Current source accepts
         <code>-N NAME</code> to name a new session and select it on attach or resume;
         <code>/session name NAME</code> names an existing session. <code>--resume</code> attaches to a running owner and restarts a stored session. Session lists show
         <code>attached</code>, <code>detached</code>, <code>running</code> (attachment status unavailable) or <code>stored</code> with prompts and IRC <code>nick@endpoint</code> (<code>s/</code> server, <code>c/</code> client).

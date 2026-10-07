@@ -493,7 +493,7 @@ class ControlTests(unittest.TestCase):
         resumed.finish('close')
 
     def test_detach_notice_waits_for_owner_acknowledgement(self):
-        child = self.start('-N', 'detach-ack')
+        child = self.start('-N', 'detach-ack', columns=160)
         child.command('attach ' + self.owner.sid)
         child.until(b'ATTACHED')
         os.kill(self.owner.owner, signal.SIGSTOP)
@@ -506,8 +506,13 @@ class ControlTests(unittest.TestCase):
         finally:
             os.kill(self.owner.owner, signal.SIGCONT)
         child.repaint_until(b'Detached; owner continues')
+        child.repaint_until((':attach ' + self.owner.sid).encode())
         self.owner.status('detached')
         self.assertEqual(self.owner_draft()['text'], 'preserve before detach')
+        child.command('attach ' + self.owner.sid)
+        child.repaint_until(b'ATTACHED')
+        self.owner.status('attached')
+        self.assertEqual(self.owner.identity(), self.owner.owner_identity)
         child.finish('close')
 
     def test_undo_stops_at_submitted_and_adopted_draft_boundaries(self):

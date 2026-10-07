@@ -49,6 +49,7 @@ struct snag_output_cache {
     bool valid;
 };
 struct app_state {
+    const char *program;
     /* Informational output from one command is shown in one pager invocation. */
     struct snag_buf *command_report;
     struct app_view_terminal *view_terminal;

@@ -4500,6 +4500,15 @@ snag_vm_main(int argc, char **argv, const char *program)
     }
     if (name) vm.meaningful = true;
     rc = interactive(&vm);
+    /* Signal-driven shutdown must finish even when terminal output is stalled. */
+    if (rc == 0 && !stopped && vm.workspace->id[0]) {
+        char *command = snag_app_resume_command(vm.program, vm.store.root_path,
+            vm.workspace->id, true);
+        if (command) (void)fprintf(stderr,
+            "• You can resume this workspace with the following command%s:\n%s\n",
+            snag_command_shell_note(), command);
+        free(command);
+    }
     goto out;
 invalid:
     usage();

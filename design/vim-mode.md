@@ -625,6 +625,11 @@ agent, `:buffer ADDRESS` selects a buffer and `:help` shows the
 supported controls. Session names, endpoint names and peer nicks in examples are
 ordinary user-selected identifiers, never special roles.
 
+Normal workspace exit prints a shell-quoted `vm --resume` command after
+terminal restoration, using the active workspace's full ID and any nondefault
+dotdir. An untouched picker has no saved workspace or return command. Within
+the workspace, acknowledged agent detach shows `:attach SESSION_ID`.
+
 ### 4.2 Saved state and workspace listing
 
 Store workspace state privately under `$DOTDIR/workspaces/<workspace-id>/`,

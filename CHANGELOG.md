@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Print a copyable return command when detaching a native session or leaving a
+  saved workspace. Use the current full ID and shell-quote custom state paths.
+  Workspace `:detach` shows `:attach SESSION_ID` after the owner releases control.
+
 - Keep interactive commands alive when a model reply asks for input. Wait for
   operator input or command completion without model retries, retain output,
   and continue with the same handles. `/yield` and Ctrl-C remain available.
