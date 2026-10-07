@@ -22,7 +22,7 @@ class ConnectionWorkspaceTests(ChannelFixture):
         self.term.wait_exit()
         self.child = self.workspace_start('-N', 'connection-panes')
         self.child.command('attach ' + self.sid)
-        self.child.repaint_until(b'ATTACHED')
+        self.child.attached()
 
     def test_connection_address_history_draft_and_split_query(self):
         child = self.child

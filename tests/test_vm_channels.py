@@ -24,7 +24,7 @@ class ChannelWorkspaceTests(ChannelFixture):
         self.term.wait_exit()
         self.child = self.workspace_start('-N', 'channel-panes')
         self.child.command('attach ' + self.sid)
-        self.child.repaint_until(b'ATTACHED')
+        self.child.attached()
 
     def channel(self, room):
         self.child.write(b'i/chat 1/' + room.encode() + b'\r')
@@ -119,7 +119,7 @@ class ChannelPrefixWorkspaceTests(ChannelFixture):
     workspace_start = queries.QueryWorkspaceTests.workspace_start
 
     def test_stored_custom_channel_opens_with_retained_history(self):
-        self.command('/join 1/$side', 'channel $side operator')
+        self.command('/join 1/$side', '[$side]')
         self.server.send('querybot', ':querybot!u@fake JOIN $side\r\n')
         self.wait(lambda: self.channels().get(('agent', '$side'), {})
                   .get('routing', {}).get('joined'))
@@ -129,7 +129,7 @@ class ChannelPrefixWorkspaceTests(ChannelFixture):
         self.term.wait_exit()
         child = self.workspace_start('-N', 'custom-channel-history')
         child.command('session ' + sid)
-        child.repaint_until(b'ATTACHED')
+        child.attached()
         child.write(b'i/chat 1/$side\r')
         child.repaint_until(b'channel/$side')
         child.repaint_until(b'custom-channel-retained-in-pane')
@@ -153,7 +153,7 @@ class HostedChannelWorkspaceTests(QueryFixture):
         self.child = self.workspace_start('-N', 'hosted-panes')
         child = self.child
         child.command('attach ' + sid)
-        child.repaint_until(b'ATTACHED')
+        child.attached()
         child.write(b'i/chat 1/#lab\r')
         child.repaint_until(b'channel/#lab')
         child.repaint_until(b'hosted-pane-public')
@@ -179,7 +179,7 @@ class HostedChannelWorkspaceTests(QueryFixture):
         child.command('close')
         child.finish('close')
         self.child = self.workspace_start('--resume', 'hosted-panes')
-        self.child.repaint_until(b'ATTACHED')
+        self.child.attached()
         self.child.repaint_until(b'hosted-pane-draft')
         self.child.write(b'i\r')
         self.wait_wire(self.peer, b'PRIVMSG #lab :hosted-pane-draft')

@@ -362,7 +362,7 @@ struct view_receipt {
     json_t *result;
     struct view_draft *draft;
     char *command_text;
-    bool pending, command, terminal_dispatched;
+    bool pending, command, queued, terminal_dispatched;
     uint64_t draft_revision, terminal_generation;
     struct view_receipt *next;
 };
@@ -655,7 +655,7 @@ snag_view_server_terminal(struct snag_view_server *server, const unsigned char *
         "status", "pending");
     if (!pending) return -1;
     int rc = server->callbacks.submit(server->callbacks.opaque, id, receipt->command_text,
-        receipt->draft->route, server->relay->generation, true);
+        receipt->draft->route, server->relay->generation, true, false);
     if (rc < 0) { json_decref(pending); return -1; }
     receipt->terminal_dispatched = receipt->pending = true;
     receipt->terminal_generation = server->relay->generation;
@@ -692,7 +692,7 @@ refuse_request(struct view_peer *peer, const json_t *message, const char *error)
 {
     const char *type = snag_json_string(message, "type");
     const char *id = snag_json_string(message, "id");
-    if (type && (!strcmp(type, "submit") || !strcmp(type, "command")) && request_id(id))
+    if (type && snag_string_in(type, "submit command queue") && request_id(id))
         return reply(peer, json_pack("{s:s,s:s,s:s}", "type", "error", "id", id, "message", error));
     uint64_t edit;
     if (type && !strcmp(type, "draft") &&
@@ -752,10 +752,12 @@ submit(struct snag_view_server *server, struct view_peer *peer, const json_t *me
         SNAG_MAX_DIRECT_PROMPT);
     if (!request_id(id) || !text) return refuse_request(peer, message, "invalid submission");
     bool command = !strcmp(snag_json_string(message, "type"), "command");
-    if (command != snag_prompt_command(text))
+    bool queued = !strcmp(snag_json_string(message, "type"), "queue");
+    if (!queued && command != snag_prompt_command(text))
         return refuse_request(peer, message, "use the command capability for slash commands");
     const json_t *route = json_object_get(message, "route");
-    if ((route && !writable_route(route)) || (command && !route))
+    if ((route && !writable_route(route)) || (command && !route) ||
+        (queued && route && !json_is_string(route)))
         return refuse_request(peer, message, "unsupported submission route");
     json_t *default_route = route ? NULL : json_string("rollout");
     struct view_draft *draft = route_draft(server, route ? route : default_route);
@@ -765,7 +767,7 @@ submit(struct snag_view_server *server, struct view_peer *peer, const json_t *me
     snag_sha256_hex(text, strlen(text), digest);
     struct view_receipt *receipt = find_receipt(server, id);
     if (receipt) {
-        if (receipt->command != command || receipt->draft != draft ||
+        if (receipt->command != command || receipt->queued != queued || receipt->draft != draft ||
             strcmp(receipt->sha256, digest))
             return refuse_request(peer, message, "request ID already used");
         return reply(peer, json_incref(receipt->result));
@@ -795,13 +797,14 @@ submit(struct snag_view_server *server, struct view_peer *peer, const json_t *me
     }
     receipt->pending = true;
     receipt->command = command;
+    receipt->queued = queued;
     receipt->draft_revision = draft_revision;
     receipt->draft = draft;
     receipt->next = server->receipts;
     server->receipts = server->pending = receipt;
     peer->waiting = receipt;
     if (server->callbacks.submit(server->callbacks.opaque, id, text, draft->route,
-        peer->generation, false) < 0)
+        peer->generation, false, queued) < 0)
         return snag_view_server_result(server, id, "rejected", 0u, "admission unavailable");
     /* Pending is deliberately not an acceptance acknowledgement. The final
      * result is published by the engine only after its durable admission. */
@@ -820,7 +823,7 @@ dispatch(struct snag_view_server *server, struct view_peer *peer, const json_t *
         !strcmp(type, "draft") ? "type generation route revision edit text cursor" :
         !strcmp(type, "command") ? json_object_get(message, "draft_revision") ?
             "type generation id text route draft_revision" : "type generation id text route" :
-        !strcmp(type, "submit") ?
+        (!strcmp(type, "submit") || !strcmp(type, "queue")) ?
             json_object_get(message, "draft_revision") ?
             "type generation id text route draft_revision" : json_object_get(message, "route") ?
             "type generation id text route" : "type generation id text" :
@@ -841,6 +844,10 @@ dispatch(struct snag_view_server *server, struct view_peer *peer, const json_t *
             "observe", "control", "submit", "cancel", "quit", "receipts", "drafts",
             "commands", "reports", "irc_queries", "irc_channels", "irc_connections");
         json_t *features = json_object_get(capabilities, "features");
+        if (!features || json_array_append_new(features, json_string("queue")) < 0) {
+            json_decref(capabilities);
+            return -1;
+        }
         if (!capabilities || json_array_append_new(features,
             json_string(server->relay ? "detach" : "direct")) < 0 ||
             (server->relay &&
@@ -904,7 +911,7 @@ dispatch(struct snag_view_server *server, struct view_peer *peer, const json_t *
         return draft_snapshot(peer, 0u, "snapshot");
     }
     if (!strcmp(type, "draft")) return replace_draft(server, peer, message);
-    if (!strcmp(type, "submit") || !strcmp(type, "command"))
+    if (!strcmp(type, "submit") || !strcmp(type, "command") || !strcmp(type, "queue"))
         return submit(server, peer, message);
     if (!strcmp(type, "cancel") || !strcmp(type, "quit")) {
         if (server->callbacks.control(server->callbacks.opaque, !strcmp(type, "quit")) < 0)

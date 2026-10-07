@@ -52,7 +52,7 @@ struct snag_view_callbacks {
     /* All callbacks run on the presentation owner, never on the engine. */
     void (*bound)(void *, uint64_t generation);
     int (*submit)(void *, const char *id, const char *text, const json_t *route,
-        uint64_t generation, bool terminal);
+        uint64_t generation, bool terminal, bool queued);
     int (*control)(void *, bool quit);
     void *opaque;
 };

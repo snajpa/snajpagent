@@ -25,7 +25,7 @@ class ReportTests(unittest.TestCase):
     def attached(self, name):
         child = self.start('-N', name, columns=120)
         child.command('attach ' + self.owner.sid)
-        child.until(b'ATTACHED')
+        child.attached()
         return child
 
     def reports(self, count):
@@ -46,7 +46,7 @@ class ReportTests(unittest.TestCase):
         child.repaint_until(b'/fast off')
         child.repaint_until(b'/fast on')
         self.escape(child)
-        child.finish('session detach')
+        child.finish('workspace detach')
         resumed = self.start('--resume', 'inline-commands', expect=b'Workspace restored',
                              columns=120)
         resumed.repaint_until(b'/fast off')
@@ -80,7 +80,7 @@ class ReportTests(unittest.TestCase):
         inline = rollout(next(iter(rows.values()))['state']['buffers'][0])['inline']
         self.assertEqual(inline[0]['seq'], inline[1]['seq'])
         self.assertEqual(self.owner.journal.read_bytes(), before)
-        child.finish('session detach')
+        child.finish('workspace detach')
 
     def test_pending_report_does_not_take_over_new_composer_input(self):
         child = self.attached('pending-report-input')
@@ -93,7 +93,7 @@ class ReportTests(unittest.TestCase):
             'state']['windows'][0]['kind'], 'transcript')
         self.assertEqual(self.inputs(), [])
         self.escape(child)
-        child.finish('session detach')
+        child.finish('workspace detach')
 
     def test_commands_reports_splits_and_fast_status(self):
         child = self.attached('commands')
@@ -113,10 +113,10 @@ class ReportTests(unittest.TestCase):
         child.command('vsp')
         child.write(b'gg')
         child.repaint_until(b'/status')
-        child.command('q')
+        child.command('close')
         self.owner.status('attached')
         child.command('history')
-        child.repaint_until(b'ATTACHED')
+        child.attached()
         self.assertEqual(self.owner.journal.read_bytes(), before)
         child.write(b'i/fast\r')
         child.repaint_until(b'ON')
@@ -169,7 +169,7 @@ class ReportTests(unittest.TestCase):
             resumed.repaint_until(report['id'][:8].encode())
             resumed.command('workspace save')
             rows = self.wait_snapshot(lambda rows:
-                next(iter(rows.values()))['state']['v'] == 13 and
+                next(iter(rows.values()))['state']['v'] == 14 and
                 next(iter(rows.values()))['state']['windows'][0].get('source'))
             window = next(iter(rows.values()))['state']['windows'][0]
             self.assertEqual(window['byte'], saved['windows'][0]['byte'])
@@ -224,7 +224,7 @@ class ReportTests(unittest.TestCase):
         effects = [event for event in self.owner.events()
                    if event['type'] == 'service_tier_changed']
         self.assertEqual(len(effects), 1)
-        resumed.finish('session detach')
+        resumed.finish('workspace detach')
         self.owner.status('detached')
         self.assertEqual(self.inputs(), [])
 

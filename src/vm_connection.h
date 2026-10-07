@@ -41,13 +41,15 @@ struct snag_vm_connection {
     struct snag_vm_connection *next;
     struct snag_view_channel channel;
     char session[SNAG_ID_HEX_LEN + 1u], instance[SNAG_ID_HEX_LEN + 1u];
+    const char *dotdir;
     struct snag_vm_buffer *buffers, *rollout, *draft_wait, *inflight, *sync_next;
     json_t *state, *draft_sent, *reports;
     char message[256];
     uint64_t generation, deadline, revision, draft_edit, draft_deadline;
     bool control, bound, hello, quitting, exited, direct;
-    bool commands, drafts, terminal_commands, irc_queries, irc_channels, irc_connections;
+    bool commands, queue, drafts, terminal_commands, irc_queries, irc_channels, irc_connections;
     bool reports_supported, reports_subscribed, reports_changed, detaching, detach_sent;
+    bool cancel_pending;
 };
 
 /* NULL selects the rollout. Returned buffers live until their session closes. */
@@ -68,7 +70,10 @@ bool snag_vm_connection_tail(const struct snag_vm_connection *, struct snag_jour
 int snag_vm_connection_wait(const struct snag_vm_connection *, uint64_t now, int timeout);
 int snag_vm_connection_control(struct snag_vm_connection *, const char *intent);
 /* Prepare has no wire effects. Save the workspace before calling send. */
-int snag_vm_buffer_prepare(struct snag_vm_buffer *, struct snag_vm_buffer *source, uint64_t window);
+int snag_vm_buffer_prepare(struct snag_vm_buffer *, struct snag_vm_buffer *source,
+    uint64_t window, bool queued);
+/* A workstation drop uses the existing terminal command receipt and keeps the draft. */
+int snag_vm_buffer_upload(struct snag_vm_buffer *, uint64_t window, bool directory);
 int snag_vm_buffer_send(struct snag_vm_buffer *);
 int snag_vm_buffer_recover(struct snag_vm_buffer *, struct snag_vm_buffer *target);
 void snag_vm_connection_detach(struct snag_vm_connection *);

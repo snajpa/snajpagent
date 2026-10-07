@@ -539,6 +539,50 @@ class SessionViewTests(unittest.TestCase):
         self.assertFalse(any(event['type'] == 'input_received' for event in self.events()))
         self.assertEqual(self.identity(), self.owner_identity)
 
+    def test_queue_receipt_keeps_intent_across_reconnect_and_rejects_query_routes(self):
+        started = threading.Event()
+
+        def held(handler, request, sequence):
+            started.set()
+            self.release.wait(15)
+            self.provider.reply(handler, self.provider.response_body(
+                sequence, 'held-answer').encode(), close_header=True)
+
+        self.provider.runtime_handler = held
+        self.detach()
+        peer = self.view(bind=True)
+        self.assertEqual(peer.result(peer.submit('hold active turn'))['status'], 'committed')
+        self.assertTrue(started.wait(5))
+        request = uuid.uuid4().hex
+        message = dict(type='queue', generation=peer.generation, id=request,
+                       text='queued once', route='rollout')
+        peer.send(**message)
+        receipt = peer.result(request)
+        self.assertEqual(receipt['event'], 'future_turn_queued')
+        peer.send(**message)
+        self.assertEqual(peer.result(request), receipt)
+        peer.send(**dict(message, text='changed queued text'))
+        self.assertEqual(peer.until('error').get('id'), request)
+        peer.send(**dict(message, type='submit'))
+        self.assertEqual(peer.until('error').get('id'), request)
+        route = dict(connection=uuid.uuid4().hex, conversation=uuid.uuid4().hex,
+                     generation=1, identity='operator', peer='private-peer')
+        refused = uuid.uuid4().hex
+        peer.send(**dict(message, id=refused, route=route, text='private draft'))
+        self.assertEqual(peer.until('error').get('id'), refused)
+        peer.send(type='detach', generation=peer.generation)
+        peer.until('detached')
+        peer = self.view(bind=True)
+        peer.send(type='receipt', id=request)
+        self.assertEqual(peer.result(request), receipt)
+        queued = [event['data']['text'] for event in self.events()
+                  if event['type'] == 'future_turn_queued']
+        self.assertEqual(queued, ['queued once'])
+        peer.send(type='cancel', generation=peer.generation)
+        peer.until('control')
+        self.release.set()
+        self.wait_event('turn_interrupted')
+
     def test_revisioned_draft_survives_disconnect_without_journal_mutation(self):
         self.detach()
         original = self.journal.read_bytes()

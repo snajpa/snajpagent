@@ -93,14 +93,14 @@ COMMON_SRC = $(PLATFORM_SRC) src/config.c src/rules.c src/secret_source.c src/cr
 COMMON_SRC += src/convert.c src/tools_media.c src/media.c src/tools_document.c src/tools_audio.c src/app_media.c src/app_upload.c src/app_audio.c src/av.c src/pcm.c src/audio_device.c src/office.c src/office_package.c src/office_confine.c src/office_sheet.c src/voice.c src/voice_rtc.c src/app_voice.c
 COMMON_SRC += src/upload_wire.c src/upload_md5.c src/screen_wire.c src/upload.c src/remote.c
 COMMON_SRC += src/clipboard.c src/clipboard_transfer.c
-COMMON_SRC += src/app_resume.c
+COMMON_SRC += src/app_resume.c src/commands.c src/unicode.c src/presentation.c src/presentation_store.c
 COMMON_SRC += src/store_convert.c
 COMMON_SRC += src/irc_address.c src/app_irc.c
 COMMON_SRC += src/vm.c
 ifeq ($(WITH_VM),1)
 COMMON_SRC += src/session_view.c src/vm_connection.c src/vm_report.c
 COMMON_SRC += src/vm_editor.c src/vm_selection.c src/vm_navigation.c
-COMMON_SRC += src/vm_reader.c src/vm_search.c src/vm_grid.c src/unicode.c src/vm_workspace.c src/vm_layout.c
+COMMON_SRC += src/vm_reader.c src/vm_search.c src/vm_grid.c src/vm_workspace.c src/vm_layout.c
 COMMON_SRC += src/vm_input.c src/vm_text.c
 COMMON_SRC += src/vm_public.c src/vm_source.c
 COMMON_SRC += src/vm_transcript.c src/vm_document.c
@@ -139,7 +139,7 @@ HEADERS += src/vm_text.h
 HEADERS += src/vm_public.h
 HEADERS += src/vm.h
 HEADERS += src/vm_transcript.h src/vm_document.h
-HEADERS += src/irc_address.h
+HEADERS += src/irc_address.h src/commands.h
 FIXTURE_BIN = tests/$(NAME)-fixture
 TEST_BIN = tests/snajpagent-transport tests/test_base tests/test_config tests/test_irc tests/test_instructions tests/test_credential tests/test_sse tests/test_json tests/test_store_record $(VM_TEST_BIN) tests/test_rules tests/test_wire tests/test_responses tests/test_provider_retry tests/test_provider_transport tests/test_context tests/test_model_cache tests/test_render tests/test_turn tests/test_tools tests/test_store tests/test_write tests/test_upload_wire tests/test_clipboard tests/test_clipboard_transfer $(FIXTURE_BIN)
 TEST_BIN += tests/test_json_abi
@@ -303,7 +303,7 @@ tests/test_render: $(BINARY_RUNTIME_SRC) src/context.c src/store_binary_context.
     src/config.c src/rules.c src/instructions.c src/media.c src/turn.c src/store.c \
     src/store_record.c src/store_checkpoint.c src/store_lookup.c src/store_lifecycle.c
 
-tests/test_render: $(PLATFORM_SRC) src/json.c src/wire.c src/secret_source.c src/history.c src/history_view.c src/term.c src/render.c src/irc_event.c src/render_prepare.c tests/test_render.c \
+tests/test_render: $(PLATFORM_SRC) src/json.c src/wire.c src/secret_source.c src/history.c src/history_view.c src/term.c src/unicode.c src/render.c src/presentation.c src/presentation_store.c src/irc_event.c src/render_prepare.c tests/test_render.c \
 		src/base.h src/fs.h src/term_host.h src/wake.h src/net.h src/json.h src/wire.h src/secret_source.h src/term.h src/term_host.h src/render.h src/snajpagent.h
 
 tests/test_turn: $(PLATFORM_SRC) src/json.c src/media.c src/turn.c src/tools_read.c tests/test_turn.c $(HEADERS)
@@ -344,7 +344,7 @@ tests/test_vm_reader: $(PLATFORM_SRC) src/json.c src/wire.c src/secret_source.c 
 
 tests/test_vm_reader tests/test_vm_transcript: src/history.c src/term.c src/render.c src/render_prepare.c src/vm_transcript.c src/vm_document.c src/vm_text.c src/unicode.c
 tests/test_vm_reader tests/test_vm_transcript tests/test_vm_public: src/vm_source.c
-tests/test_vm_reader: src/vm_navigation.c src/vm_selection.c src/vm_connection.c src/vm_editor.c src/session_view.c src/vm_report.c src/vm_search.c
+tests/test_vm_reader: src/presentation.c src/presentation_store.c src/commands.c src/vm_navigation.c src/vm_selection.c src/vm_connection.c src/vm_editor.c src/session_view.c src/vm_report.c src/vm_search.c
 
 tests/test_vm_transcript: $(PLATFORM_SRC) src/json.c src/wire.c src/secret_source.c src/instructions.c src/media.c src/turn.c src/store.c src/store_record.c src/store_checkpoint.c src/irc_event.c src/store_lookup.c src/store_lifecycle.c src/history_view.c src/vm_public.c tests/test_vm_transcript.c $(HEADERS)
 

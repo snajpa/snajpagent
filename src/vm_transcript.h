@@ -13,8 +13,16 @@
  * events with call metadata and a decoded output preview from earlier records.
  * Missing metadata remains identified by needs_call. Annotation text passes
  * through the same display redaction as in-page data. */
-json_t *snag_vm_transcript_blocks(const json_t *events, unsigned int verbosity,
+json_t *snag_vm_transcript_blocks(const json_t *events, const json_t *route, unsigned int verbosity,
     unsigned int columns, bool plain, bool no_color, bool logical, const struct snag_wire_secrets *,
     bool (*cancel)(void *), void *cancel_opaque, char *, size_t);
+
+/* Chronological retained UI operations. Public fragments are sanitized as one
+ * source before the shared renderer sees them; a page begins at a stream boundary.
+ * Durable references use their original journal backend, including after import. */
+json_t *snag_vm_presentation_blocks(const json_t *, uint64_t origin, int journal_fd,
+    int legacy_fd, unsigned int verbosity, unsigned int columns, bool plain,
+    bool no_color, bool logical, const struct snag_wire_secrets *,
+    bool (*cancel)(void *), void *, char *, size_t);
 
 #endif

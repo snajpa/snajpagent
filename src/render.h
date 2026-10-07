@@ -125,6 +125,9 @@ struct snag_render {
     struct snag_render_origin origin;
     int (*checkpoint)(void *);
     void *checkpoint_opaque;
+    /* A read-only presentation consumer sanitizes durable data before markup. */
+    json_t *(*filter_event)(void *, const json_t *);
+    void *filter_opaque;
     unsigned int verbosity;
     bool suppress_optional;
     bool suspended;
@@ -261,7 +264,7 @@ int snag_render_durable(struct snag_render *render, int fd,
                         uint32_t timeout_ms, uint32_t max_output_bytes);
 int snag_render_tool_block(struct snag_render *render, const struct snag_render_block *block);
 int snag_render_event(struct snag_render *render, uint64_t seq, const char *type);
-int snag_render_resume_hint(const struct snag_render *render, const char *command, size_t command_len);
+int snag_render_resume_hint(struct snag_render *render, const char *command, size_t command_len);
 int snag_render_protocol(struct snag_render *render, const char *label, const char *text, size_t len);
 int snag_render_transport(struct snag_render *render, char direction, const char *text, size_t len);
 

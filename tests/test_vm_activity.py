@@ -27,7 +27,7 @@ class ActivityWorkspaceTests(ChannelFixture):
         self.term.wait_exit()
         self.child = self.workspace_start('-N', 'activity-panes')
         self.child.command('attach ' + self.sid)
-        self.child.repaint_until(b'ATTACHED')
+        self.child.attached()
 
     def incoming(self, peer, body, local='queryop', target=None):
         self.server.send(local, f':{peer}!u@fake NOTICE {target or local} :{body}\r\n')

@@ -47,7 +47,8 @@ enum snag_ui_operation {
     SNAG_UI_COMMANDS, SNAG_UI_PAUSE,
     SNAG_UI_OPEN, SNAG_UI_EXTERNAL, SNAG_UI_PROMPT, SNAG_UI_HOLD, SNAG_UI_SPINNERS,
     SNAG_UI_DRAFT, SNAG_UI_INPUT_DRAFT, SNAG_UI_INSERT, SNAG_UI_AUDIO, SNAG_UI_CAPTION,
-    SNAG_UI_VIEW, SNAG_UI_SUBMITTED, SNAG_UI_PUBLIC_BEGIN, SNAG_UI_PUBLIC, SNAG_UI_VALIDATE,
+    SNAG_UI_VIEW, SNAG_UI_SUBMITTED, SNAG_UI_BEFORE_PROMPT,
+    SNAG_UI_PUBLIC_BEGIN, SNAG_UI_PUBLIC, SNAG_UI_VALIDATE,
     SNAG_UI_ORIENTATION, SNAG_UI_HISTORY, SNAG_UI_IRC, SNAG_UI_DURABLE, SNAG_UI_EVENT,
     SNAG_UI_RESUME, SNAG_UI_PROTOCOL, SNAG_UI_TRANSPORT, SNAG_UI_RAW, SNAG_UI_HISTORY_SNAPSHOT,
     SNAG_UI_UPDATE, SNAG_UI_SESSION_START, SNAG_UI_SESSION_DIRECT,
@@ -59,15 +60,6 @@ enum snag_ui_operation {
     SNAG_UI_COMMAND_RESULT, SNAG_UI_COMMAND_REPORT, SNAG_UI_STOP
 };
 
-struct snag_ui_prompt {
-    char *source;
-    bool active;
-    uint32_t rate;
-    unsigned int states, mode;
-    char frames[SNAG_TERM_SPINNER_COUNT][80];
-    char *values[SNAG_PROMPT_HOUR];
-};
-
 /* Borrowed command bytes remain valid until the synchronous call returns.
  * Prompt/history payloads transfer their retained ownership to the UI. */
 struct snag_ui_command {
@@ -75,6 +67,7 @@ struct snag_ui_command {
     const char *text;
     const char *label;
     size_t len;
+    bool retain_only;
     union {
         unsigned int value;
         struct { enum snag_render_view view; uint32_t destination;
@@ -84,7 +77,7 @@ struct snag_ui_command {
         struct { uint64_t generation; unsigned char *bytes; bool *present;
             unsigned int mode; } session_voice;
         const struct snag_session *session;
-        struct snag_ui_prompt prompt;
+        struct snag_term_prompt prompt;
         struct { uint32_t typing_pause_ms, tool_spinner_off_delay_ms; } timing;
         struct { int fd; enum snag_presentation kind; } public;
         struct { uint64_t turns; size_t queued; bool resumed, queue_armed; } orientation;

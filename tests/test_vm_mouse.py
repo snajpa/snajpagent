@@ -43,6 +43,35 @@ def positions(child, marker, repaint=True):
     return list(dict.fromkeys(found))
 
 
+def current_rows(child):
+    """Apply VM's absolute-addressed paint runs, including overwritten cells."""
+    output = bytes(child.output).decode('utf-8', 'replace')
+    frame = output.rfind('\x1b[2J')
+    if frame >= 0:
+        output = output[frame + 4:]
+    row = column = 0
+    cells = {}
+    for part in re.split(r'(\x1b\[[0-9;?]*[A-Za-z])', output):
+        if part.startswith('\x1b['):
+            match = re.fullmatch(r'\x1b\[(\d+);(\d+)H', part)
+            if match:
+                row, column = (int(x) - 1 for x in match.groups())
+            continue
+        for char in part:
+            if char == '\r':
+                column = 0
+            elif char == '\n':
+                row += 1
+            elif ord(char) >= 32 and not unicodedata.combining(char) and char != '\u200d':
+                cells.setdefault(row, {})[column] = char
+                width = 2 if unicodedata.east_asian_width(char) in ('W', 'F') else 1
+                if width == 2:
+                    cells[row][column + 1] = ''
+                column += width
+    return {y: ''.join(line.get(x, ' ') for x in range(max(line) + 1))
+            for y, line in cells.items()}
+
+
 def position(child, marker, occurrence=0, minimum=1):
     deadline = time.monotonic() + 5
     found = []

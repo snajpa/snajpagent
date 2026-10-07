@@ -383,21 +383,28 @@ updater-free. The manual covers channels, publisher URLs and recovery.
 `./configure` probes the toolchain and the four optional modalities and tunes the
 tracked `config.mk`; `make WITH_*=…` stays an explicit override.
 
+A session is one agent run. A workspace is a saved layout of panes showing
+sessions and conversations; several panes can show the same session.
 The development `snajpagent vm` frontend provides named workspaces, splits,
 retained transcripts, retrospective verbosity, search, mouse controls and Vim
 editing. Click an attached pane to enter **INSERT** for its prompts and `/commands`.
 Escape returns to **NORMAL**; `i`/`a`/`I`/`A` enter its composer again. From NORMAL,
-`:` enters **COMMAND-LINE** for workspace commands. The focused status bar names
+`:` enters **COMMAND-LINE** for workspace commands. The workspace command line names
 the current mode; dragging transcript text enters **VISUAL** selection.
+Each session prompt shows its name and live status. Conversation labels appear
+when there are multiple channels or queries to switch between.
 `:new [NAME]` creates an agent; `:session ID` resumes one. On POSIX,
-`:session detach` (or `:session d`) saves and detaches the whole workspace while
+`:workspace detach` (or `:workspace d`) saves and detaches the whole workspace while
 agents continue. Tab/Shift-Tab complete commands and their options.
-`:close` closes a pane; `:q` shuts down an attached rollout owner or closes a conversation pane.
+`:w` saves the workspace; `:q` / `:x` / `:wq` save and detach it. `:q!` stops
+all controlled sessions and exits, preserving layout and drafts. `:close` closes
+a pane; `:session quit` stops the focused session.
 Leaving a saved workspace prints its `snajpagent vm --resume WORKSPACE_ID` command
-after restoring the shell screen. `:detach` shows `:attach SESSION_ID` inside the workspace.
+after restoring the shell screen. `:session detach` (also `:session d` or
+`:detach`) detaches only the focused session and shows `:attach SESSION_ID`.
 Restoring a workspace leaves stopped owners stopped.
 The experimental Windows workspace runs one live agent: `:close` hides it and
-`:qa` quits it before exiting. Additional live agents and persistent detach are unavailable.
+`:q!` stops it before exiting. Additional live agents and persistent detach are unavailable.
 
 `/query NICK` opens a private conversation; `/chat #CHANNEL` opens a known channel.
 `:buffers` lists conversations;

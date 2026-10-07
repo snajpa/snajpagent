@@ -169,8 +169,9 @@ bound(void *opaque, uint64_t generation)
 
 static int
 submit(void *opaque, const char *id, const char *text, const json_t *route,
-    uint64_t generation, bool terminal)
+    uint64_t generation, bool terminal, bool queued)
 {
+    assert(!queued);
     struct engine *engine = opaque;
     assert(generation == engine->generation && generation && !terminal);
     assert(strlen(id) == SNAG_ID_HEX_LEN && !strcmp(text, "direct prompt ž"));

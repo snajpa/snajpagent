@@ -751,8 +751,14 @@ The terminal starts in the timestamped
 view.  Model text and tools belong to the
 .B rollout
 view regardless of verbosity.  Chat input goes to the selected room as the
-local operator.  Multiple destinations receive short source/prompt labels;
-a hosted room counts once regardless of how many clients joined it.  After a
+local operator. A single channel with no open private conversations has no
+extra destination label. Multiple channels or queries use a compact label for
+the selected conversation; different servers add their endpoint to disambiguate
+it. The same rule applies to standalone sessions and workspace panes. Messages
+in the selected conversation omit repeated route and identity prefixes.
+A hosted room counts once regardless of how many clients joined it.
+A model-owned private conversation says "viewing model's chat". The model can
+continue sending there; use /query NICK to open your own chat and reply as yourself.  After a
 submission the composer returns once that turn has begun processing rather than
 at once, so a ready-looking prompt never appears under a line nothing has acted
 on yet; keys typed in that window are buffered and appear with the composer,
@@ -1779,7 +1785,12 @@ its export for wrapped attachment. Read-only model turns reject send_file.
 .SH "Vim workspace"
 The development workspace opens with
 .BR "snajpagent vm" .
-It provides session/workspace pickers, retained transcript browsing, prompt
+A session is one agent run, with its own identity, model context and history.
+A workspace is a saved layout of panes that display sessions and conversations.
+Several panes can show the same session without starting another run.
+Session names and IDs belong to runs; workspace names and IDs belong to layouts.
+.PP
+The workspace provides separate session and workspace pickers, transcript browsing, prompt
 editing, owner creation/resumption and persistent split layouts.
 Workspace browsing does not start model turns or IRC connections.
 Runtime activation is explicit; ordinary startup retains its terminal interface.
@@ -1789,10 +1800,10 @@ width: prose bullets, emphasis, code, tables and tool detail follow the same
 presentation settings. New transcript and conversation views start at verbosity0;
 saved views retain their selected level. Use :verbosity to change it.
 IRC traffic appears in its channel or query view, separately from the rollout.
-Workspace colors follow [ui] color and NO_COLOR. Split separators and
-full-width status bars identify pane boundaries and the focused window.
-The focused status bar uses the terminal's normal reverse colors; other bars
-use light blue when color is enabled.
+Workspace colors follow [ui] color and NO_COLOR. Split separators identify pane
+boundaries. Each session's prompt carries its status and conversation. The focused
+prompt uses the terminal's normal reverse colors; other prompts use light blue
+when color is enabled. Session panes have no separate status bar.
 Resizing reflows text to the available width. FOLLOW fills the available height
 with recent history, reading across journal pages as needed; HOLD preserves the
 selected source position.
@@ -1821,20 +1832,22 @@ restores an exact workspace name or a unique ID prefix;
 restores the most recently active workspace.
 An open workspace remains exclusively owned by its frontend. A second resume
 reports that ownership without stealing or stopping it.
-Workspace names and IDs are separate from agent-session names and IDs.
 .PP
 On supported POSIX hosts,
-.B :session detach
+.B :workspace detach
 or
-.B :session d
+.B :workspace d
 saves the workspace layout and drafts, releases all agent controllers and
 returns to the shell. Running agents continue. Exit waits for owner draft and
 detach acknowledgements; the shell displays a copyable workspace resume command.
+Use :session detach, :session d or :detach to release only the focused session
+and keep the workspace open. Earlier development builds used :session detach
+for the whole workspace; that operation is now :workspace detach.
 .PP
 In the colon command line, Tab completes command names and fixed options;
 repeated Tab cycles matches and Shift-Tab cycles backwards. Enter executes the
-completed command. For example, type :session d and press Tab to complete
-:session detach. Ctrl-L redraws the command line and workspace.
+completed command. For example, type :workspace d and press Tab to complete
+:workspace detach. Ctrl-L redraws the command line and workspace.
 .PP
 .B vm -l [N]
 lists all open workspaces and up to N stored workspaces, newest activity first.
@@ -1862,7 +1875,8 @@ HOLD: incoming output updates the newer-output indicator while the viewport stay
 in place. R refreshes the current range while retaining the selected source
 anchor and FOLLOW/HOLD state. Live workspace-capable owners supply committed
 journal positions to read-only observers; browsing leaves their attachment
-status and controller unchanged. The status line labels these views committed.
+status and controller unchanged. The prompt identifies a view that needs :attach
+before input can be sent.
 Older or stopped owners use the last complete snapshot, labelled snapshot.
 Both modes check for updates once per second. An unchanged committed position
 needs only file-identity checks, including while the owner is writing an
@@ -2036,13 +2050,20 @@ Report mouse clicks & drags as well as mouse reporting.
 Exit, suspension and classic terminal handoff restore mouse modes; returning
 to the workspace reapplies the current setting.
 .PP
-In a read-only transcript, picker or help view,
-.B :q
-or :close closes the window; the last window exits the workspace.
-In an attached rollout transcript, :q requests normal owner shutdown and waits for its
-acknowledgement; :qa requests shutdown of every owner controlled by this workspace,
-then exits. Unsent drafts or unresolved submissions block these commands.
-:q! and :qa! discard the affected drafts and request the same normal shutdown.
+.B :w
+saves the workspace. :q, :x and :wq save and detach the workspace, preserving
+its sessions, panes and drafts. :qa is also accepted for detaching the workspace.
+.B :q!
+(or :qa!) saves the layout and drafts, requests normal shutdown of all sessions
+controlled by the workspace, and exits after their acknowledgements. A live
+observed session must first be attached; otherwise shutdown is refused before
+stopping any session.
+.B :session quit
+stops the focused controlled session. Unsent drafts or unresolved submissions
+block this command; :session quit! discards that session's drafts and requests
+normal shutdown. :sessions quit and :sessions quit! apply to all controlled
+sessions and exit; the latter preserves workspace drafts for later restoration.
+These commands do not send SIGKILL.
 .B :close
 closes only the window; the last view of a session releases control and preserves
 its owner. Terminal loss also releases control and preserves owners.
@@ -2062,8 +2083,8 @@ any nondefault --dotdir.
 Snapshots are private files under $DOTDIR/workspaces/WORKSPACE_ID/workspace.json.
 They retain the layout, focus, selection, filters, transcript source anchors,
 verbosity, FOLLOW/HOLD, per-conversation drafts, command transcript references
-and unresolved submissions. Version13 snapshots read earlier workspace versions;
-older binaries cannot resume a newly saved version13 workspace.
+and unresolved submissions, including queued-turn intent. Version14 snapshots read
+earlier workspace versions; older binaries cannot resume a newly saved version14 workspace.
 Unsent classic-attachment input retains its destination session too.
 Restoring a controlled view attempts to reattach its existing owner; a busy or
 unavailable owner leaves the draft intact. Other transcript views read history
@@ -2101,7 +2122,7 @@ report is lost, inspect :sessions before issuing another :new command.
 Saved workspaces never replay launch commands. New owners keep their own private
 terminal and can later be reached through ordinary snajpagent --resume or :classic.
 Native owner launch requires a supported POSIX host.
-.SS "Live workspace sessions on Windows"
+.SS "Sessions in a Windows workspace"
 The experimental Windows workspace runs one live agent inside its own process.
 .B :new
 creates it; :session or vm --session starts a stored session with its saved options.
@@ -2109,8 +2130,8 @@ Splits share this agent and can also display other stored histories. Closing its
 last window keeps the agent and drafts hidden; :buffers reopens them. Closing the
 last workspace window returns to the picker while the agent remains live.
 .PP
-Use :q in the agent transcript to quit it, or :qa to quit it and the workspace.
-Unsent drafts block shutdown; :q! and :qa! explicitly discard them.
+Use :session quit to stop the agent, or :q! to save the workspace and stop it
+before exiting. :q and :x require the session to be stopped on this backend.
 Workspace switching requires the live agent to finish shutting down first.
 Closing the console or terminating the workspace ends its in-process agent;
 resume the stored session explicitly to continue.
@@ -2128,29 +2149,39 @@ share one controller; splits displaying the same conversation share its draft
 and undo history. Different conversations keep separate drafts.
 :detach releases control for all those views and preserves
 the running owner. In NORMAL, Ctrl-C requests the owner's ordinary turn interruption.
-Attached window status shows the provider, model, effort and working/idle state
-reported by the owner.
+The session prompt shows the provider, model, effort and activity reported by
+its owner. In a workspace it also identifies the session. A live session opened
+for viewing says "view only; :attach"; use :attach to control it and i to type.
+Stored history says "stored; :session"; :session starts that session again.
 .PP
-The focused status bar names the current mode:
+The workspace command line names the current mode:
 .B NORMAL
 for navigation and draft editing,
 .B INSERT
 for entering prompts and slash commands in that pane, and
 .B COMMAND-LINE
 for workspace command or search entry. Type : from NORMAL for Ex commands such
-as :vsp or :session detach. Escape returns to NORMAL with the session draft intact.
+as :vsp or :workspace detach. Escape returns to NORMAL with the session draft intact.
 A colon typed in INSERT is ordinary draft text. VISUAL identifies transcript selection.
 .PP
 Click an attached writable pane, or press i, a, I or A in a transcript, to enter
 the composer in INSERT. The keys insert before or after the remembered cursor,
 at the first nonblank character, or at the end of its logical line. INSERT accepts
 text, literal bracketed paste, arrows, Home/End and Backspace/Delete.
-Ctrl-U deletes to the logical line start; Ctrl-W deletes the preceding word.
+In FOLLOW, the prompt follows the displayed output. Multiline drafts use the
+same visible range as standalone sessions and keep the editing cursor visible.
+The standalone input editor supplies these controls. Ctrl-U clears the whole draft;
+Ctrl-W deletes the preceding word. Ctrl-P/Ctrl-N navigate prompt history and
+Ctrl-R starts reverse history search; Ctrl-G restores the draft before that search.
+Tab completes slash command names or a conversation's @nickname. For an active
+rollout draft that has no completion, Tab queues a future turn. An older owner
+without queue capability retains the draft and directs you to /queue TEXT.
+Ctrl-C clears a nonempty draft; with an empty active draft it requests interruption.
 Enter submits; Ctrl-J inserts a newline. Submitting returns the pane to FOLLOW
 and appends the prompt or command and its output to the transcript. Commands
 keep the composer in INSERT; :report and :reports open retained command output
 explicitly. Background control completions join the originating transcript too.
-Escape, Ctrl-[ and Ctrl-C leave INSERT,
+Escape and Ctrl-[ leave INSERT,
 preserve the draft and place the cursor on the preceding grapheme within the line.
 In NORMAL, Tab switches transcript/composer focus.
 Escape followed immediately by text or a control key leaves INSERT or command
@@ -2230,11 +2261,10 @@ in the composer for the current connection directory. /query and /join inherit
 the pane's endpoint. Ordinary text requires an explicit target and stays in the
 draft. Connection panes share the session's existing owner and sockets.
 .PP
-In an INSERT-mode conversation composer, Ctrl-N and Ctrl-P complete and cycle
-matching @nickname words forward and backward. Candidates come from that
-channel or private query. Completion preserves surrounding text and stays in
-the current window; it adds no trailing space or submission. Owners that do
-not provide a current roster report no matches.
+In an INSERT-mode conversation composer, Tab completes @nickname words from
+that channel or private query using the standalone completion rules. Completion
+preserves surrounding text. Ctrl-P and Ctrl-N navigate prompt history in every
+conversation. An empty-draft Tab or Shift-Tab cycles conversation buffers.
 .PP
 Enter /query NICK or /query ENDPOINT/NICK in an attached composer to open an
 operator private conversation in that window. A successful command changes the
@@ -2275,7 +2305,7 @@ composer to restore an uncertain or rejected command without sending it again.
 .PP
 .B :buffers
 lists the workspace's rollout, connection, channel and private conversation buffers, including
-operator and read-only agent conversations. Rows group by session and endpoint,
+your conversations and model conversations available for viewing. Rows group by session and endpoint,
 with connection views above their channels and private queries. Each row shows
 its buffer ID, identity, unread count, connection state, drafts, pending submissions
 and last message time in local time. Use / to filter by name, qualified address,
@@ -2321,8 +2351,7 @@ legacy room records. Case comparison follows the captured server rules. Other
 rooms, endpoints and private messages stay outside that channel view.
 The operator can inspect agent conversations; their composers are read-only.
 Conversation windows and their drafts survive named-workspace resume.
-:q closes a conversation window and preserves its owner; :qa retains its explicit
-shutdown meaning for all controlled owners. :history returns to the rollout.
+:close closes a conversation window and preserves its owner. :history returns to the rollout.
 .PP
 Successful /msg, /notice and /me commands preserve the conversation
 window. Their command reports remain available through :reports.
@@ -2342,8 +2371,9 @@ to open the latest report or an exact unique prefix. Enter opens a selected repo
 Reports support gg, G, j/k, page movement and splits. Use
 .B :history
 to return to the associated session.
-.B :q
-closes a report window and preserves its owner; :qa still requests owner shutdown.
+.B :close
+closes a report window and preserves its owner. Workspace exit commands retain
+the same meaning in reports and conversation windows.
 Report references and positions survive named-workspace resume, including after
 an owner has stopped. Reading saved reports never starts an owner.
 .PP
@@ -2379,7 +2409,10 @@ New typing in the workspace before the handoff remains saved in its draft.
 Use /receive in a rollout composer to upload workstation files through
 snajpagent remote, or /attach PATH for a file on the owner's host. The whole
 terminal handles selection and transfer, then returns to the workspace on
-completion or cancellation. /attachments lists pending files in a retained
+completion or cancellation. Workstation drops and the trz launch alias
+use the same transfer and preserve an existing pane draft. Directory requests
+(trz \-d or /receive \-d) are rejected before transfer.
+/attachments lists pending files in a retained
 report; /detach N|all removes them. Files remain with that session's rollout
 until its next private prompt, queue or steer is admitted. IRC messages and
 transfer commands do not submit them to the model. Older owners may require
@@ -2421,7 +2454,8 @@ attachment completes, before later terminal input.
 Input remains raw during both directions of the terminal handoff.
 If attachment fails,
 unsent keys remain associated with that session. :classic retries that
-destination; :close saves them, and :q/:qa require recovery or explicit ! discard.
+destination; workspace save/detach/exit preserves them. :session quit requires
+recovery or explicit :session quit! discard.
 .PP
 After workspace resume, saved classic input has an uncertain delivery outcome
 and is never replayed automatically. Inspect the session history, then use
@@ -3185,8 +3219,9 @@ the accepted source asset remains in the session.
 Interrupt file playback. Dictation and file playback share one local device
 owner and return busy when the other operation is active.
 .TP
-.B /receive
+.B /receive [\-d]
 Receive workstation files as unsent attachments through the trzsz wrapper.
+Directory mode (\-d, also accepted by the trz alias) is rejected before transfer.
 See Terminal file transfers for setup, drag behavior, verification and limits.
 .TP
 .B /send PATH

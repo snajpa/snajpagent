@@ -19,6 +19,15 @@
 #define SNAG_TERM_SPINNER_MARKER_BASE 0xfdu
 #define SNAG_TERM_SPINNER_BYTES 80u
 
+struct snag_term_prompt {
+    const char *source;
+    const char *values[SNAG_PROMPT_FIELD_COUNT];
+    char frames[SNAG_TERM_SPINNER_COUNT][SNAG_TERM_SPINNER_BYTES];
+    bool active;
+    uint32_t rate;
+    unsigned int states, mode;
+};
+
 enum snag_term_spinner_id {
     SNAG_TERM_SPINNER_GOAL, SNAG_TERM_SPINNER_PROVIDER, SNAG_TERM_SPINNER_TOOL };
 
@@ -36,6 +45,15 @@ struct snag_term_spinner {
     unsigned char frame_len[SNAG_TERM_SPINNER_BYTES];
     unsigned char inactive_len;
     unsigned char frame_count;
+};
+
+/* Prompt animation belongs to the session surface, independent of its output. */
+struct snag_term_animation {
+    char source[SNAG_TERM_LABEL_BYTES];
+    struct snag_term_spinner frames[SNAG_TERM_SPINNER_COUNT];
+    uint64_t epoch, tool_until;
+    uint32_t rate, tool_delay_ms;
+    unsigned int states;
 };
 
 enum snag_term_action {
@@ -77,6 +95,7 @@ struct snag_term {
     struct snag_buf output_line;
     struct snag_buf painted_prompt;
     struct snag_buf completion_output;
+    struct snag_buf paste_text;
     bool completion_armed;
     size_t painted_label_len;
     size_t painted_cursor_byte;
@@ -132,15 +151,12 @@ struct snag_term {
     size_t paste_end_match;
     char label[SNAG_TERM_LABEL_BYTES];
     char destination_label[SNAG_TERM_LABEL_BYTES + 192u];
-    char prompt_template[SNAG_TERM_LABEL_BYTES];
     struct snag_prompt_clock prompt_clock;
-    struct snag_term_spinner spinner[SNAG_TERM_SPINNER_COUNT];
-    uint64_t spinner_epoch_ms, tool_spinner_off_at;
-    uint32_t spinner_per_second, tool_spinner_off_delay_ms;
-    unsigned int spinner_states;
+    struct snag_term_animation animation;
     bool opened;
     bool raw;
     bool paste;
+    bool paste_overflow;
     bool bracketed_paste;
     bool prompt_wanted;
     /* A submitted action keeps the next prompt hidden until the engine
@@ -167,6 +183,14 @@ struct snag_term {
 };
 
 void snag_term_init(struct snag_term *term);
+/* Apply one input byte with the same editor used by terminal polling. The caller
+ * initializes action/text and owns returned text. input_only suppresses painting. */
+int snag_term_feed_byte(struct snag_term *, unsigned char, enum snag_term_action *, char **);
+int snag_term_history_step(struct snag_term *);
+/* A bracketed paste is one literal edit; CR becomes LF. Ctrl-C uses feed_byte. */
+void snag_term_paste_begin(struct snag_term *);
+int snag_term_paste_append(struct snag_term *, const void *, size_t);
+int snag_term_paste_end(struct snag_term *);
 /* Bind private nonblocking output before interactive input is opened. */
 int snag_term_output_prepare(struct snag_term *term);
 /* Forget physical coordinates at a native attachment barrier. No terminal
@@ -176,6 +200,8 @@ int snag_term_attachment_modes(struct snag_term *term, bool enabled);
 int snag_term_set_destinations(struct snag_term *term, const struct snag_irc_destinations *destinations);
 int snag_term_select_destination(struct snag_term *term, uint32_t id);
 void snag_term_destination_prefix(const struct snag_term *term, char *out, size_t size);
+void snag_term_conversation_label(const struct snag_irc_destinations *, const char *endpoint,
+    const char *target, bool model_chat, char *out, size_t size);
 void snag_term_destination_route(const struct snag_term *term,
                                  const char *text, struct snag_irc_route *route);
 void snag_term_capture_prompt_clock(struct snag_term *term, time_t seconds);
@@ -195,6 +221,10 @@ void snag_term_trace(const struct snag_term *term, const char *event, const char
 int snag_term_set_prompt_template(struct snag_term *term, bool active, const char *label,
                                  const char *const spinners[SNAG_TERM_SPINNER_COUNT],
                                  uint32_t per_second, unsigned int states);
+void snag_term_prompt_values(const struct snag_term_prompt *, const struct snag_term *,
+    const struct snag_term *, const char *values[SNAG_PROMPT_FIELD_COUNT], char clock[3][12]);
+int snag_term_configure_prompt(struct snag_term *, const struct snag_term_prompt *,
+    const struct snag_term *context);
 struct snag_term_prompt_row {
     size_t start, end, next, width;
     bool soft;
@@ -209,12 +239,19 @@ int snag_term_composer_frame(const char *, const char *, size_t length, size_t c
     unsigned int columns, struct snag_buf *, struct snag_term_composer_layout *);
 int snag_term_composer_hit(const char *, const char *, size_t length, unsigned int columns,
     size_t frame_byte, size_t *source_byte);
+/* Shared visible draft range; terminal_rows includes the session surface only. */
+void snag_term_composer_viewport(size_t terminal_rows, size_t cursor_row, size_t end_row,
+    size_t *top, size_t *rows);
 struct snag_term_prompt_row snag_term_prompt_row(const struct snag_buf *, size_t,
     unsigned int columns);
 
 /* Format a prompt without terminal I/O; shared by terminal and workspace views. */
-int snag_term_prompt_render(const char *, const char *const [SNAG_TERM_SPINNER_COUNT],
-    unsigned int states, uint64_t step, char [SNAG_TERM_LABEL_BYTES], bool *animated);
+int snag_term_animation_configure(struct snag_term_animation *, const char *,
+    const char *const [SNAG_TERM_SPINNER_COUNT], uint32_t rate, unsigned int states);
+int snag_term_animation_render(struct snag_term_animation *, uint64_t now,
+    char label[SNAG_TERM_LABEL_BYTES]);
+/* Zero means static; otherwise an absolute monotonic time for the next paint. */
+uint64_t snag_term_animation_due(const struct snag_term_animation *, uint64_t now);
 int snag_term_set_spinner_states(struct snag_term *term, unsigned int states);
 int snag_term_hide(struct snag_term *term);
 int snag_term_output_begin(struct snag_term *term);
@@ -231,6 +268,7 @@ void snag_term_set_typing_pause(struct snag_term *term, uint32_t pause_ms);
 void snag_term_set_color(struct snag_term *term, bool enabled);
 uint32_t snag_term_typing_pause_remaining(const struct snag_term *term, uint64_t now_ms);
 int snag_term_note_output(struct snag_term *term, const char *text, size_t len, const char *style);
+unsigned int snag_term_prompt_separation(const struct snag_term *);
 unsigned int snag_term_columns(const struct snag_term *term);
 size_t snag_term_text_width(const char *text, size_t len);
 bool snag_term_consume_echoed_submission(struct snag_term *term, const char *label);

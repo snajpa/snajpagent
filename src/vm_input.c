@@ -165,6 +165,7 @@ sequence(struct snag_vm_input *input, snag_vm_input_emit emit, void *opaque)
         case 4: case 8: code = SNAG_VM_KEY_END; break;
         case 5: code = SNAG_VM_KEY_PAGE_UP; break;
         case 6: code = SNAG_VM_KEY_PAGE_DOWN; break;
+        case 9002: code = SNAG_VM_KEY_UPLOAD; break;
         default: break;
         }
         return key(emit, opaque, code, modifiers);
@@ -177,6 +178,11 @@ static int
 paste(struct snag_vm_input *input, unsigned char byte, snag_vm_input_emit emit, void *opaque)
 {
     static const unsigned char end[] = "\033[201~";
+    if (byte == 0x03u) {
+        input->paste = false;
+        input->paste_match = 0u;
+        return key(emit, opaque, 'c', SNAG_VM_CTRL);
+    }
     if (byte == end[input->paste_match]) {
         if (++input->paste_match < sizeof(end) - 1u) return 0;
         input->paste_match = 0u;
@@ -250,8 +256,9 @@ snag_vm_input_feed(struct snag_vm_input *input, const void *data, size_t length,
             /* Deliver ordinary paste spans together; only its closing marker
              * needs bytewise matching across read boundaries. */
             size_t begin = i;
-            if (!input->paste_match && byte != 0x1bu) {
-                while (i + 1u < length && bytes[i + 1u] != 0x1bu) ++i;
+            if (!input->paste_match && byte != 0x1bu && byte != 0x03u) {
+                while (i + 1u < length && bytes[i + 1u] != 0x1bu &&
+                    bytes[i + 1u] != 0x03u) ++i;
                 rc = text(emit, opaque, SNAG_VM_PASTE_TEXT, bytes + begin, i - begin + 1u, 0u);
             } else {
                 rc = paste(input, byte, emit, opaque);

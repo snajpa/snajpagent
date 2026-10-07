@@ -149,6 +149,21 @@ snag_grapheme_next(const unsigned char *text, size_t length)
     return position;
 }
 
+size_t
+snag_grapheme_floor(const unsigned char *text, size_t length, size_t at)
+{
+    if (at > length) at = length;
+    size_t cursor = at;
+    while (cursor && text[cursor - 1u] != '\n') --cursor;
+    while (cursor < at) {
+        size_t bytes = snag_grapheme_next(text + cursor, length - cursor);
+        if (!bytes) bytes = 1u;
+        if (bytes > at - cursor) break;
+        cursor += bytes;
+    }
+    return cursor;
+}
+
 int
 snag_grapheme_cells_feed(struct snag_grapheme_cells *state, uint32_t cp, bool ambiguous)
 {

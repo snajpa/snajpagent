@@ -7,17 +7,17 @@
 
 struct snag_vm_buffer;
 struct snag_vm_undo;
+struct snag_term;
 
 /* History belongs to a conversation draft; the unnamed register belongs to the
  * workspace and can be pasted into any composer. Neither enters model context. */
 struct snag_vm_editor {
+    struct snag_term *input;
     struct snag_vm_undo *undo, *redo;
     struct snag_buf original;
     size_t original_cursor, count, operator_count, column;
-    size_t completion_begin, completion_prefix, completion_end;
     unsigned int operator, prefix;
-    bool grouping, column_valid, column_display;
-    bool completing;
+    bool grouping, column_valid, column_display, upload_directory;
 };
 
 struct snag_vm_motion {
@@ -32,7 +32,8 @@ struct snag_vm_motion snag_vm_editor_motion(struct snag_vm_editor *, const char 
 enum snag_vm_edit_result {
     SNAG_VM_EDIT_ERROR = -1, SNAG_VM_EDIT_UNUSED, SNAG_VM_EDIT_DONE,
     SNAG_VM_EDIT_INSERT, SNAG_VM_EDIT_NORMAL, SNAG_VM_EDIT_SUBMIT, SNAG_VM_EDIT_CENTER,
-    SNAG_VM_EDIT_YANK
+    SNAG_VM_EDIT_YANK, SNAG_VM_EDIT_CANCEL, SNAG_VM_EDIT_INTERRUPT, SNAG_VM_EDIT_VIEW,
+    SNAG_VM_EDIT_QUEUE, SNAG_VM_EDIT_EXIT, SNAG_VM_EDIT_UPLOAD
 };
 
 void snag_vm_editor_reset(struct snag_vm_editor *);
@@ -42,6 +43,8 @@ int snag_vm_editor_replace(struct snag_vm_buffer *, size_t begin, size_t end,
     const void *text, size_t length);
 int snag_vm_editor_undo(struct snag_vm_buffer *, bool redo, size_t count);
 void snag_vm_editor_normal(struct snag_vm_buffer *, bool from_insert);
+/* Continue the shared bounded history scan without requiring another key. */
+int snag_vm_editor_poll(struct snag_vm_buffer *);
 enum snag_vm_edit_result snag_vm_editor_key(struct snag_vm_buffer *,
     struct snag_vm_register *, const struct snag_vm_input_event *, bool insert,
     size_t columns, size_t rows, size_t top, const char *prompt);

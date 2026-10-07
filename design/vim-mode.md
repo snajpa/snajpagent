@@ -2,22 +2,30 @@
 
 # Pager retention and the Vim workspace
 
+A **session** is one agent run, with its own owner, model context and history. A
+**workspace** is the saved Vim layout containing panes that view sessions and
+conversations. A **pane/window** is a view, so two panes can share one session.
+Session and workspace names, IDs, lists and detach/resume operations are separate.
+
 Pane interaction: every session pane renders its persistent prompt and draft
 through the standalone composer. Owner view snapshots optionally carry the
 configured template, values, captured clock and spinner state. Earlier owners
-retain model/active-state compatibility with unknown count fields. The workspace
-animates visible activity locally; idle prompts add no polling. Draft cursor,
+retain model/active-state compatibility with unknown count fields. The shared
+terminal animation state renders frames and schedules the next visible
+change in both interfaces; idle prompts add no polling. Earlier owners with only
+an active flag receive the configured provider activity indicator. Draft cursor,
 mouse hits and wrapped editor motions use the same formatted frame and source
 mapping. Clicking an attached writable pane enters INSERT immediately, including
-empty panes. Prompt clicks also position the draft cursor; body and status clicks
+empty panes. Prompt clicks also position the draft cursor; body clicks
 use its remembered position. Transcript drags enter VISUAL; read-only history and
 report clicks retain source navigation. NORMAL
 window navigation accepts letters, arrows and Ctrl-held Vim variants, honors
 split boundaries and cancels pending history movement.
 The focused FOLLOW pane anchors the terminal cursor to its prompt even before
 editing begins or history loads. HOLD and visual selection retain the source
-cursor. The focused status bar uses normal reverse colors; inactive bars use
-the cyan reverse style. Automatic frame updates cover cursor and focus changes
+cursor. Session prompts carry their name, activity and conversation; session panes
+have no separate status bar. The focused prompt uses normal reverse colors;
+inactive prompts use the cyan reverse style. Automatic frame updates cover cursor and focus changes
 without depending on a later key or a forced redraw.
 
 
@@ -28,12 +36,21 @@ sequences remain text. Display-to-source maps compose Markdown/citation/tab
 formatting with redaction maps so anchors, search and selection survive reflow.
 New views start at verbosity0; saved explicit levels persist. Channel/query
 history stays in its routed view. Transcript-only restore skips the global session
-catalogue until a picker is opened. Names lead pane status for narrow splits.
+catalogue until a picker is opened. Names lead the workspace form of each session prompt.
 Older journals retain their stored content; prompt clock/template snapshots and
 transient terminal-only notices were never recorded and cannot be recovered.
 
+Input checkpoint: bracketed paste uses the terminal editor's literal insertion
+operation in both interfaces. It normalizes CR to LF, rejects invalid UTF-8 and
+preserves complete characters at the existing draft byte limit. Completed paste
+is one insertion; Ctrl-C cancels before a terminator arrives. Workstation drops
+use the existing receipt-bound terminal command handoff with an explicit literal
+request, leaving the session draft independent of the transfer command. Owner
+connections progress during terminal output checkpoints, including cancellation
+queued behind a partially written draft update.
+
 Display checkpoint: the grid uses semantic ANSI colors under the existing color
-policy, with visible split separators and status bars spanning each pane. Growing
+policy, with visible split separators and the session prompt carrying status. Growing
 a FOLLOW viewport moves its top to retain a full tail; background reads continue
 across byte pages until they contain the requested rendered rows or reach the
 source boundary. A previous/next page containing no rendered rows extends the
@@ -104,8 +121,9 @@ an unattached or externally controlled session leaves the source command intact.
 Dispatch uses the target rollout mailbox without consuming its existing draft.
 The pending record retains the originating session and route, so feedback,
 selection and :recover return there. New typing and focus changes suppress automatic
-selection. Successful /msg and /notice preserve the window. Version13 snapshots
-retain forwarded submissions and inline report references and read versions1–12; resume queries their receipts
+selection. Successful /msg and /notice preserve the window. Version14 snapshots
+retain forwarded submissions, queued intent, draft-preserving upload requests
+and inline report references and read versions1–13; resume queries their receipts
 without resubmission. Owner admission recovery remains separate from IRC chunk
 delivery receipts. Older owners accept exact saved names and full session IDs;
 abbreviated IDs in forwarded slash commands require the updated owner parser.
@@ -150,7 +168,8 @@ membership, names, aliases or case rules change. The UI receives independent
 snapshots, scoped by connection, generation and membership, outside the model
 journal and workspace snapshots. Classic Tab uses the selected room's members
 or a query's peer/local identity; an unmatched mention can cycle conversations.
-Vim INSERT Ctrl-N/Ctrl-P cycles matching mentions in its current composer.
+Vim INSERT uses the standalone Tab completion, Ctrl-P/Ctrl-N history and Ctrl-R
+reverse search through the shared terminal input engine.
 Roster changes beyond abbreviated status text still reach completion.
 
 External channel-state checkpoint: each client identity keeps separate channel
@@ -501,9 +520,10 @@ The main decisions are:
   visible layouts; cache eviction never deletes history.
 - Explicit yanks update an internal register and attempt workstation clipboard
   delivery. Remote delivery uses the existing negotiated wrapper transport.
-- `:q` in an agent transcript explicitly quits that session. In an IRC or report
-  buffer it closes the window. `:detach` preserves the session owner; `:close`
-  closes any window. These distinctions are visible in help.
+- `:q` / `:x` / `:wq` save and detach the workspace; `:w` saves it. `:q!`
+  stops all controlled sessions and exits with recoverable layout/drafts.
+  `:session quit` stops one session; `:detach` releases its controller; `:close`
+  closes a window. These meanings hold in every buffer and picker.
 - `WITH_VM=1` includes the module in ordinary and release builds. `WITH_VM=0`
   removes its implementation. Runtime activation remains explicit.
 
@@ -702,7 +722,7 @@ agent, `:buffer ADDRESS` selects a buffer and `:help` shows the
 supported controls. Session names, endpoint names and peer nicks in examples are
 ordinary user-selected identifiers, never special roles.
 
-On native POSIX backends, `:session detach` (or `:session d`) saves the complete
+On native POSIX backends, `:workspace detach` (or `:workspace d`) saves the complete
 workspace and releases all controllers after their draft/detach acknowledgements.
 The owners continue, including owners shared by several splits. Direct in-process
 backends keep their existing lifetime restriction and explain why the workspace
@@ -712,7 +732,8 @@ editing resets the completion prefix and only Enter executes the result.
 Normal workspace exit prints a shell-quoted `vm --resume` command after
 terminal restoration, using the active workspace's full ID and any nondefault
 dotdir. An untouched picker has no saved workspace or return command. Within
-the workspace, acknowledged agent detach shows `:attach SESSION_ID`.
+the workspace, `:session detach` (also `:session d` or `:detach`) releases only
+the focused session and shows `:attach SESSION_ID` after acknowledgement.
 
 ### 4.2 Saved state and workspace listing
 
@@ -760,7 +781,7 @@ activity reorders rows. Enter attaches/resumes, `o` opens read-only history,
 `n` creates, `/` filters metadata and `R` refreshes. Preview columns collapse on
 narrow terminals while ID/name and state stay readable.
 
-`:buffers` shows a tree of workspace agent sessions, their IRC connections,
+`:buffers` shows a tree of sessions in the workspace, their IRC connections,
 channels, operator queries, agent queries and reports. Selecting a child changes
 only the focused window. Agent-query buffers are labelled with the agent's IRC
 identity and are read-only for operator sending. Buffer activity does not create
@@ -1399,11 +1420,13 @@ this avoids copying text that no longer matches the highlighted view.
 ## 8. Interaction contract
 
 The transcript is a read-only buffer. The composer is an editable draft. The
-status line identifies `NORMAL`, `INSERT`, `VISUAL`, `VISUAL LINE`, `VISUAL BLOCK`
-or `COMMAND-LINE` for Ex command/search entry, together with session identity, live/stored/read-only
-state, model/effort/priority, verbosity and FOLLOW/HOLD. A tiny terminal prioritizes
-session identity, mode and connection state. Engine “working” status comes from
-owner state, not a frontend animation left running after an error.
+command line identifies `NORMAL`, `INSERT`, `VISUAL`, `VISUAL LINE`, `VISUAL BLOCK`
+or `COMMAND-LINE` for Ex command/search entry. Session identity, provider/model/effort,
+clock and activity belong in the shared session prompt. Its workspace prefix
+identifies the session and marks HOLD, loading, history failure or the action
+needed to control a viewing-only/stored session. Session panes have no separate
+status bar. Engine activity comes from the owner's prompt snapshot; older owners
+supply their live active flag.
 
 ### 8.1 Movement and composition
 
@@ -1434,8 +1457,12 @@ an owner draft reset undo. The unnamed register is shared within the workspace;
 register/undo state is memory-only. Transcript delete/change commands report “read-only”.
 Macros, mappings, arbitrary Ex commands and Vim scripting are outside this subset.
 
-INSERT retains the existing composer behavior: Enter submits through normal
-command/prompt dispatch and Ctrl-J inserts a newline. These are the existing
+INSERT feeds the standalone terminal editor. Enter submits through normal
+command/prompt dispatch and Ctrl-J inserts a newline. Tab completes slash commands
+and conversation mentions; an active rollout draft otherwise queues a future turn.
+Ctrl-P/Ctrl-N navigate session/global prompt history, Ctrl-R searches it, Ctrl-G
+restores the pre-search draft, and Ctrl-U clears the entire draft. Ctrl-C clears a
+nonempty draft before requesting interruption on an empty active draft. These are the existing
 bindings; additional modified-Enter sequences require terminal support.
 Multi-line bracketed paste
 is inserted as one edit and cannot submit, invoke `:q` or execute normal-mode
@@ -1443,7 +1470,7 @@ keys embedded in the text. Completion, history, queued-input editing and file
 attachments retain their current commands through the composer adapter.
 
 Normal-mode `Ctrl-C` first cancels a local search/copy/external operation if one
-is active; otherwise it performs the current session interrupt. The status bar
+is active; otherwise it performs the current session interrupt. The workspace command line
 names the cancelled operation. Existing hard-escape behavior remains a separate
 explicit sequence and must be tested through the new input decoder.
 
@@ -1516,27 +1543,24 @@ temporarily hides windows that cannot fit their content/status minima, prioritiz
 the focused window. Retain their buffers, leases and layout for expansion; show
 the hidden-window count. Closing a window does not delete session storage.
 
-Session quit deliberately follows the session lifecycle requested for this UI:
+Workspace commands have the same scope in every pane, report and picker:
 
-| Command/context | Effect |
+| Command | Effect |
 | --- | --- |
-| `:q` in a controlled agent transcript | Dispatch normal `/exit`: interrupt/settle active work, preserve the session and stop its owner. All buffers of that session show their offline/stopped state. Other owners keep running. |
-| `:q` in an IRC buffer, read-only session or report | Close this window, preserving its draft/history. No IRC PART/QUIT, endpoint removal or agent shutdown occurs. |
-| `:q` in the picker with no active view | Exit the workspace, releasing any remaining leases through detach. |
-| `:close` | Close this window. If it was the last view of a controlled session, detach and preserve the owner and its draft. |
-| `:session detach` / `:session d` | Save layout and drafts, detach all native owners, and leave the workspace after acknowledgements. |
-| `:detach` | Release the associated agent-session controller for all its buffers, leave its engine/connections running and show read-only history or the picker. |
-| `:qa` | Explicitly quit the sessions controlled by this workspace, then exit after their normal shutdown acknowledgements. Unrelated and observed owners remain running. |
+| `:w` / `:workspace save` | Save layout, buffers and drafts. |
+| `:q` / `:x` / `:wq` / `:qa` / `:workspace detach` | Save and detach the workspace; native owners continue. |
+| `:q!` / `:qa!` | Save the workspace, request normal shutdown of all controlled sessions, and exit after acknowledgement. Preserve workspace drafts. |
+| `:close` / `Ctrl-W q` | Close the focused window, releasing control when its last view closes. |
+| `:session detach` / `:detach` | Release the focused session controller for all its buffers. |
+| `:session quit` | Request normal shutdown of the focused controlled session; refuse unsent drafts or unresolved submissions. |
+| `:session quit!` | Discard that session's drafts and request normal shutdown. |
+| `:sessions quit[!]` | Apply shutdown to all controlled sessions and exit; `!` permits retained drafts. |
 
-Unsent conversation drafts block a session-quitting `:q`/`:qa` with a clear
-message. `:q!` in the agent transcript discards that session's drafts and requests
-the same normal shutdown; it is never SIGKILL. An IRC-buffer `:q` only closes the
-view and retains its draft; `/exit` remains explicit agent shutdown from there.
-`:qa!` applies that rule to the workspace's controlled sessions. A slow quit
-shows “waiting for session shutdown” and permits inspection or explicit detach.
-It does not silently turn a timeout into a kill. Terminal close, broken SSH,
-workspace crash and job-control suspension preserve session owners. A report's
-close returns to its originating window without changing the session lifecycle.
+Shutdown uses the existing owner protocol and never sends SIGKILL. A slow shutdown
+remains visible and allows inspection or explicit detach. Terminal loss, broken
+SSH, workspace crash and suspension preserve native owners. Direct in-process
+backends must keep the workspace alive until their session stops. A report's
+`:close` returns to its originating window without changing the session lifecycle.
 
 ## 9. Screen rendering and terminal correctness
 
@@ -1785,7 +1809,7 @@ data-structure shape.
 | View projection | Retrospective verbosity toggles preserve source position; hidden anchors restore predictably. Completion records do not duplicate streamed text. HOLD does not move on incoming output. |
 | Input | Slow/fragmented Escape, UTF-8 and bracketed paste; a paste ending exactly at a read boundary appears without an extra key. Pasted Vim commands never execute. Composer edits, undo and queue handling preserve text. |
 | Grid | PTY screen assertions cover partial writes, blocked output, resize, wide/combining text, external return and force-redraw. No protocol frame or raw model escape reaches the visible terminal. |
-| Windows and lifecycle | Same-conversation splits share one draft; different queries/channels have distinct drafts and frozen routes. Session buffers share one controller. Verify transcript versus query `:q`, `:close`, `:detach`, unsent drafts, failed attach, stale generation and lost acknowledgement without duplicate input or owner kill. |
+| Windows and lifecycle | Same-conversation splits share one draft; different queries/channels have distinct drafts and frozen routes. Session buffers share one controller. Verify identical workspace `:q`/`:q!` scope in transcripts and queries, `:close`, `:detach`, unsent drafts, failed attach, stale generation and lost acknowledgement without duplicate input or owner kill. |
 | Saved workspaces | `vm -N`, `-l N`, `--resume`, `--last`, rename and atomic save use a separate namespace from agent CLI flags. Restore split proportions, buffer addresses and anchors across exit/crash; detect live locks and corrupt/newer snapshots. Retain conflicting newer drafts. Never send saved text or restart stopped agents implicitly. |
 | IRC direct routing | Operator and agent DMs work with the built-in and an external IRC fixture, including peers without common channels. Verify exact recipient/identity, same nick on different endpoints/sessions, nick changes/reuse, reconnect, line splitting, errors, NOTICE/actions and mid-send focus changes. Public `/all` never includes queries. |
 | IRC privacy and history | Uninvolved clients, channel history and hosting-agent context never receive peer DMs. Operator DMs stay out of model admission/default history and IRC summaries. Agent DMs wake the right admission path. Resume and read-only history retain recipient/provenance; older readers reject the new schema before mutation. |

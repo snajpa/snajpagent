@@ -73,6 +73,28 @@ snag_history_free(struct snag_history *history)
     memset(history, 0, sizeof(*history));
 }
 
+int
+snag_history_snapshot_open(struct snag_history_snapshot *snapshot, const char *dotdir,
+    const char *session)
+{
+    if (!snag_path_root_len(dotdir) || !session || strlen(session) != SNAG_ID_HEX_LEN ||
+        !snag_hex_is_lower(session, SNAG_ID_HEX_LEN)) return snag_errno(EINVAL);
+    char *sessions = snag_path_join(dotdir, "sessions");
+    char *directory = sessions ? snag_path_join(sessions, session) : NULL;
+    struct snag_history_snapshot next = {.local_end = INT64_MAX};
+    next.local_path = directory ? snag_path_join(directory, "prompt_history") : NULL;
+    next.global_path = snag_path_join(dotdir, "prompt_history");
+    free(sessions);
+    free(directory);
+    if (!next.local_path || !next.global_path) {
+        snag_history_snapshot_free(&next);
+        return -1;
+    }
+    snag_history_snapshot_free(snapshot);
+    *snapshot = next;
+    return 0;
+}
+
 static void
 history_note_warning(struct snag_history *term)
 {

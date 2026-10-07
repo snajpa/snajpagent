@@ -3,6 +3,7 @@
 #define SNAJPAGENT_VM_READER_H
 
 #include "store.h"
+#include "store_binary.h"
 #include "vm_document.h"
 #include "vm_navigation.h"
 #include "vm_search.h"
@@ -11,6 +12,21 @@
 #include "wire.h"
 
 struct snag_vm_reader;
+/* A display position has its own sequence space after the historical prefix.
+ * origin == 0 identifies a canonical journal cursor. Otherwise output is an
+ * auxiliary presentation boundary and canonical pins its durable dependencies.
+ * Display ordinals must never be passed to the model journal APIs. */
+struct snag_vm_cursor {
+    int64_t offset;
+    uint64_t next_seq;
+    char prev_sha256[SNAG_SHA256_HEX_LEN + 1u];
+    uint64_t origin;
+    struct snag_binary_anchor output;
+    struct snag_journal_cursor canonical;
+};
+
+struct snag_vm_cursor snag_vm_cursor_journal(struct snag_journal_cursor);
+int snag_vm_cursor_output(struct snag_vm_cursor *, const json_t *);
 enum snag_vm_read_kind { SNAG_VM_READ_HISTORY, SNAG_VM_READ_SESSIONS,
     SNAG_VM_READ_REPORT, SNAG_VM_READ_REPORTS };
 
@@ -43,16 +59,16 @@ struct snag_vm_read_request {
     struct snag_vm_navigation_request navigation;
     /* tail is the owner's bound when trusted; previous is the already
      * displayed bound, independently used by if_changed and tail_only. */
-    struct snag_journal_cursor tail, previous, cursor;
+    struct snag_vm_cursor tail, previous, cursor;
     uint64_t before_seq;
 };
 
 struct snag_vm_read_result {
     uint64_t generation;
     struct snag_vm_read_request request;
-    struct snag_journal_cursor tail, cursor;
+    struct snag_vm_cursor tail, cursor;
     /* Exact exclusive end of a reverse page, including an interior anchor. */
-    struct snag_journal_cursor end;
+    struct snag_vm_cursor end;
     /* In scan order; entries have seq, type, data and original public-text byte
      * counts for offsets through redaction. Checkpoints are metadata.
      * Private provider payloads and the reader's secret snapshot are filtered. */

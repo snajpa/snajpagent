@@ -175,6 +175,8 @@ snag_app_upload_command(struct app_state *app, bool directory)
     (void)directory;
     return snag_ui_text(&app->ui, SNAG_UI_ERROR, "Terminal upload is not available on this host.");
 #else
+    if (directory)
+        return snag_ui_text(&app->ui, SNAG_UI_ERROR, "Directory uploads are unsupported.");
     struct snag_upload_result result = {0};
     struct terminal_transfer lease = {.app = app,
         .attachment = snag_ui_session_attachment(&app->ui)};

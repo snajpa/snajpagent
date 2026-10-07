@@ -84,7 +84,7 @@ class LaunchTests(unittest.TestCase):
         return read_events(journal)
 
     def ready(self, child, count=1):
-        child.repaint_until(b'ATTACHED', 10)
+        child.attached(10)
         self.assertEqual(len(self.journals()), count)
         child.command('workspace save')
         rows = self.wait_snapshot(lambda rows: rows and
@@ -173,7 +173,7 @@ os.execv({str(BINARY)!r}, [{str(BINARY)!r}] + sys.argv[1:])
         time.sleep(.06)
         pids = self.owner_pids()
         self.assertEqual(len(pids), 2)
-        child.finish('session d')
+        child.finish('workspace d')
         for journal in (first, second):
             self.status(journal.parent.name, 'detached')
         self.assertEqual(self.owner_pids(), pids)
@@ -208,7 +208,7 @@ os.execv({str(BINARY)!r}, [{str(BINARY)!r}] + sys.argv[1:])
         self.status(journal.parent.name, 'detached')
         self.assertEqual(len([e for e in self.events(journal) if e['type'] == 'input_received']), 1)
         resumed = self.start('--resume', 'layout', expect=b'history')
-        resumed.repaint_until(b'ATTACHED')
+        resumed.attached()
         resumed.finish('q!')
         self.status(journal.parent.name, 'stored')
 
@@ -254,7 +254,7 @@ os.execv({str(BINARY)!r}, [{str(BINARY)!r}] + sys.argv[1:])
         self.assertEqual(len(self.journals()), 1)
         self.assertEqual(len(self.owner_pids()), 1)
         child.write(b'\x17h')
-        child.repaint_until(b'ATTACHED')
+        child.attached()
         child.finish('qa!')
         self.assertTrue(journal.exists())
 
@@ -400,7 +400,7 @@ os.execv({str(BINARY)!r}, [{str(BINARY)!r}] + sys.argv[1:])
     def test_multiple_explicit_new_requests_create_independent_owners(self):
         child = self.start('-N', 'many')
         child.write(b':new first\r:vsp\r:new second\r')
-        child.repaint_until(b'ATTACHED', 10)
+        child.attached(10)
         deadline = time.monotonic() + 10
         while len(self.journals()) < 2 and time.monotonic() < deadline:
             child.read()

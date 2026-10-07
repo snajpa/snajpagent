@@ -3,6 +3,7 @@
 #include "fs.h"
 #include "json.h"
 #include "tmux.h"
+#include "unicode.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -232,6 +233,7 @@ snag_term_init(struct snag_term *term)
     snag_buf_init(&term->output_line, SIZE_MAX);
     snag_buf_init(&term->painted_prompt, SIZE_MAX);
     snag_buf_init(&term->completion_output, SNAG_MAX_DIRECT_PROMPT);
+    snag_buf_init(&term->paste_text, SNAG_MAX_DIRECT_PROMPT + 4u);
     term->columns = 80u;
     term->rows = 24u;
     term->history_pos = SIZE_MAX;
@@ -281,6 +283,19 @@ snag_term_select_destination(struct snag_term *term, uint32_t id)
 }
 
 void
+snag_term_conversation_label(const struct snag_irc_destinations *destinations,
+    const char *endpoint, const char *target, bool model_chat, char *out, size_t size)
+{
+    bool include_endpoint = *endpoint && (!destinations || !destinations->count);
+    for (size_t i = 0u; destinations && i < destinations->count; ++i)
+        if (*endpoint && strcmp(destinations->items[i].endpoint, endpoint))
+            include_endpoint = true;
+    (void)snprintf(out, size, "[%s%s%s%s] ", include_endpoint ? endpoint : "",
+        include_endpoint && *target ? "/" : "", target,
+        model_chat ? "; viewing model's chat" : "");
+}
+
+void
 snag_term_destination_prefix(const struct snag_term *term, char *out, size_t size)
 {
     const struct snag_irc_destination *selected = NULL;
@@ -298,13 +313,11 @@ snag_term_destination_prefix(const struct snag_term *term, char *out, size_t siz
         if (term->conversation.kind == SNAG_IRC_CHANNEL &&
             term->conversation.identity == SNAG_IRC_OPERATOR &&
             !term->conversation_labels && selected && selected->joined) return;
-        (void)snprintf(out, size, "[%u %s %s %s] ", term->conversation.destination,
-            term->conversation.kind == SNAG_IRC_CHANNEL ? "channel" :
-                term->conversation.kind == SNAG_IRC_QUERY ? "query" : "connection",
-            term->conversation.kind == SNAG_IRC_CHANNEL ?
-                term->conversation.room : term->conversation.kind == SNAG_IRC_QUERY ?
-                term->conversation.peer : term->conversation.endpoint,
-            term->conversation.identity == SNAG_IRC_OPERATOR ? "operator" : "agent read-only");
+        snag_term_conversation_label(term->conversation.kind == SNAG_IRC_CONNECTION_EVENTS ?
+            NULL : term->destinations, selected ? selected->endpoint : term->conversation.endpoint,
+            term->conversation.kind == SNAG_IRC_CHANNEL ? term->conversation.room :
+                term->conversation.kind == SNAG_IRC_QUERY ? term->conversation.peer : "",
+            term->conversation.identity == SNAG_IRC_AGENT, out, size);
         return;
     }
     if (!term->destinations) return;
@@ -866,101 +879,106 @@ prompt_fits(const char *prompt, const struct snag_term_spinner spinners[SNAG_TER
     return used ? 0 : -1;
 }
 
-int
-snag_term_prompt_render(const char *text, const char *const frames[SNAG_TERM_SPINNER_COUNT],
-    unsigned int states, uint64_t step, char label[SNAG_TERM_LABEL_BYTES], bool *animated)
-{
-    struct snag_term_spinner spinners[SNAG_TERM_SPINNER_COUNT];
-    if (!text || strlen(text) >= SNAG_TERM_LABEL_BYTES ||
-        states >= (1u << SNAG_TERM_SPINNER_COUNT)) return snag_errno(EINVAL);
-    for (size_t i = 0u; i < SNAG_TERM_SPINNER_COUNT; ++i) {
-        if (!frames[i] || !*frames[i] ||
-            !snag_utf8_valid((const unsigned char *)frames[i], strlen(frames[i]), false) ||
-            prepare_spinner(&spinners[i], frames[i]) < 0) return snag_errno(EINVAL);
-    }
-    if (prompt_fits(text, spinners) < 0) return snag_errno(EINVAL);
-    *animated = false;
-    for (unsigned int slot = 0u; slot < SNAG_TERM_SPINNER_SLOTS; ++slot) {
-        unsigned int id = slot == SNAG_TERM_SPINNER_PROVIDER &&
-            (states & (1u << SNAG_TERM_SPINNER_TOOL)) ? SNAG_TERM_SPINNER_TOOL : slot;
-        if ((states & (1u << id)) && spinners[id].frame_count > 1u &&
-            strchr(text, SNAG_TERM_SPINNER_MARKER_BASE + slot)) *animated = true;
-    }
-    return compose_prompt(text, spinners, states, step, label);
-}
-
 static unsigned int
-visible_spinner_states(const struct snag_term *term)
+visible_spinner_states(const struct snag_term_animation *animation, uint64_t now)
 {
-    return term->spinner_states | (term->tool_spinner_off_delay_ms &&
-        snag_monotonic_ms() < term->tool_spinner_off_at ? 1u << SNAG_TERM_SPINNER_TOOL : 0u);
+    return animation->states | (now < animation->tool_until ?
+        1u << SNAG_TERM_SPINNER_TOOL : 0u);
 }
 
 static void
-set_spinner_states(struct snag_term *term, unsigned int states)
+set_spinner_states(struct snag_term_animation *animation, unsigned int states)
 {
-    if ((term->spinner_states & (1u << SNAG_TERM_SPINNER_TOOL)) && !(states & (1u << SNAG_TERM_SPINNER_TOOL)))
-        term->tool_spinner_off_at = snag_monotonic_ms() + term->tool_spinner_off_delay_ms;
-    if ((states & (1u << SNAG_TERM_SPINNER_TOOL)) || !term->tool_spinner_off_delay_ms)
-        term->tool_spinner_off_at = 0u;
-    term->spinner_states = states;
+    if ((animation->states & (1u << SNAG_TERM_SPINNER_TOOL)) &&
+        !(states & (1u << SNAG_TERM_SPINNER_TOOL)))
+        animation->tool_until = snag_monotonic_ms() + animation->tool_delay_ms;
+    if ((states & (1u << SNAG_TERM_SPINNER_TOOL)) || !animation->tool_delay_ms)
+        animation->tool_until = 0u;
+    animation->states = states;
 }
 
-static int
-update_spinners(struct snag_term *term, uint64_t step)
+int
+snag_term_animation_configure(struct snag_term_animation *animation, const char *source,
+    const char *const frames[SNAG_TERM_SPINNER_COUNT], uint32_t rate, unsigned int states)
 {
-    char label[SNAG_TERM_LABEL_BYTES];
-    bool changed;
-
-    if (term->input_only) return 0;
-    if (snag_monotonic_ms() >= term->tool_spinner_off_at || !term->tool_spinner_off_delay_ms)
-        term->tool_spinner_off_at = 0u;
-    if (compose_prompt(term->prompt_template, term->spinner, visible_spinner_states(term), step, label) < 0)
-        return -1;
-    changed = strcmp(label, term->label) != 0;
-    memcpy(term->label, label, strlen(label) + 1u);
-    return changed && term->prompt_visible && term->capable &&
-           !term->searching && !term->output_depth ? redraw(term) : 0;
-}
-
-static bool
-animated_spinners(const struct snag_term *term)
-{
-    /* A held static frame also needs one final repaint when its delay expires. */
-    if (term->tool_spinner_off_at) return true;
-    unsigned int states = visible_spinner_states(term);
-    for (unsigned int slot = 0u; slot < SNAG_TERM_SPINNER_SLOTS; ++slot) {
-        unsigned int id = slot == SNAG_TERM_SPINNER_PROVIDER && (states & (1u << SNAG_TERM_SPINNER_TOOL)) ?
-            SNAG_TERM_SPINNER_TOOL : slot;
-        if (strchr(term->prompt_template, SNAG_TERM_SPINNER_MARKER_BASE + slot) &&
-            term->spinner[id].frame_count > 1u && (states & (1u << id))) return true;
+    if (!source || !*source || strlen(source) >= sizeof(animation->source) || !frames ||
+        rate < 1u || rate > 60u || states >= (1u << SNAG_TERM_SPINNER_COUNT))
+        return snag_errno(EINVAL);
+    bool unchanged = !strcmp(animation->source, source) && animation->states == states &&
+        animation->rate == rate;
+    struct snag_term_spinner configured[SNAG_TERM_SPINNER_COUNT];
+    for (size_t i = 0u; i < SNAG_TERM_SPINNER_COUNT; ++i) {
+        if (!frames[i]) return snag_errno(EINVAL);
+        unchanged = unchanged && !strcmp(animation->frames[i].value, frames[i]);
     }
-    return false;
+    if (unchanged) return 0;
+    for (size_t i = 0u; i < SNAG_TERM_SPINNER_COUNT; ++i)
+        if (prepare_spinner(&configured[i], frames[i]) < 0) return snag_errno(EINVAL);
+    if (prompt_fits(source, configured) < 0) return snag_errno(EINVAL);
+    set_spinner_states(animation, states);
+    memcpy(animation->source, source, strlen(source) + 1u);
+    memcpy(animation->frames, configured, sizeof(configured));
+    animation->rate = rate;
+    animation->epoch = snag_monotonic_ms();
+    return 0;
 }
 
 static uint64_t
-spinner_step(const struct snag_term *term, uint64_t now)
+spinner_step(const struct snag_term_animation *animation, uint64_t now)
 {
-    uint64_t elapsed = now >= term->spinner_epoch_ms ? now - term->spinner_epoch_ms : 0u;
-    return elapsed * term->spinner_per_second / 1000u;
+    uint64_t elapsed = now >= animation->epoch ? now - animation->epoch : 0u;
+    return elapsed / 1000u * animation->rate + elapsed % 1000u * animation->rate / 1000u;
+}
+
+int
+snag_term_animation_render(struct snag_term_animation *animation, uint64_t now,
+    char label[SNAG_TERM_LABEL_BYTES])
+{
+    if (now >= animation->tool_until) animation->tool_until = 0u;
+    return compose_prompt(animation->source, animation->frames,
+        visible_spinner_states(animation, now), spinner_step(animation, now), label);
+}
+
+uint64_t
+snag_term_animation_due(const struct snag_term_animation *animation, uint64_t now)
+{
+    uint64_t due = animation->tool_until > now ? animation->tool_until : 0u;
+    unsigned int states = visible_spinner_states(animation, now);
+    for (unsigned int slot = 0u; slot < SNAG_TERM_SPINNER_SLOTS; ++slot) {
+        unsigned int id = slot == SNAG_TERM_SPINNER_PROVIDER &&
+            (states & (1u << SNAG_TERM_SPINNER_TOOL)) ? SNAG_TERM_SPINNER_TOOL : slot;
+        if (!strchr(animation->source, SNAG_TERM_SPINNER_MARKER_BASE + slot) ||
+            animation->frames[id].frame_count <= 1u || !(states & (1u << id))) continue;
+        uint64_t elapsed = now >= animation->epoch ? now - animation->epoch : 0u;
+        uint64_t boundary = ((elapsed % 1000u * animation->rate / 1000u + 1u) * 1000u +
+            animation->rate - 1u) / animation->rate;
+        uint64_t next = now + boundary - elapsed % 1000u;
+        if (!due || next < due) due = next;
+    }
+    return due;
+}
+
+static int
+update_spinners(struct snag_term *term)
+{
+    char label[SNAG_TERM_LABEL_BYTES];
+    if (term->input_only) return 0;
+    if (snag_term_animation_render(&term->animation, snag_monotonic_ms(), label) < 0) return -1;
+    bool changed = strcmp(label, term->label) != 0;
+    memcpy(term->label, label, strlen(label) + 1u);
+    return changed && term->prompt_visible && term->capable &&
+        !term->searching && !term->output_depth ? redraw(term) : 0;
 }
 
 static int
 spinner_timeout(struct snag_term *term, int timeout_ms)
 {
-    uint64_t now, elapsed, step, boundary, wait;
-
-    if (!term->prompt_visible || !term->capable || term->searching ||
-        term->output_depth || !animated_spinners(term)) return timeout_ms;
-    now = snag_monotonic_ms();
-    elapsed = now >= term->spinner_epoch_ms ? now - term->spinner_epoch_ms : 0u;
-    step = spinner_step(term, now);
-    boundary = ((step + 1u) * 1000u + term->spinner_per_second - 1u) / term->spinner_per_second;
-    wait = boundary > elapsed ? boundary - elapsed : 1u;
-    if (term->tool_spinner_off_at) {
-        uint64_t remaining = term->tool_spinner_off_at > now ? term->tool_spinner_off_at - now : 1u;
-        if (remaining < wait) wait = remaining;
-    }
+    if (!term->prompt_visible || !term->capable || term->searching || term->output_depth)
+        return timeout_ms;
+    uint64_t now = snag_monotonic_ms();
+    uint64_t due = snag_term_animation_due(&term->animation, now);
+    if (!due) return timeout_ms;
+    uint64_t wait = due > now ? due - now : 1u;
     return timeout_ms < 0 || wait < (uint64_t)timeout_ms ? (int)wait : timeout_ms;
 }
 
@@ -1134,19 +1152,25 @@ snag_term_composer_hit(const char *label, const char *text, size_t length, unsig
     return rc;
 }
 
-/* Keep the editable cursor on screen. Terminal cursor movement cannot reach
- * draft rows already scrolled into history. Keep one row for a pending margin
- * wrap and one for the output boundary. The full draft remains untouched. */
+/* Leave a row for pending margin wrap and one for the output boundary. */
+void
+snag_term_composer_viewport(size_t terminal_rows, size_t cursor_row, size_t end_row,
+    size_t *top, size_t *rows)
+{
+    *rows = terminal_rows > 2u ? terminal_rows - 2u : 1u;
+    if (end_row < *rows) { *top = 0u; *rows = end_row + 1u; }
+    else if (cursor_row < *top) *top = cursor_row;
+    else if (cursor_row - *top >= *rows) *top = cursor_row - *rows + 1u;
+}
+
+/* Terminal cursor movement cannot reach draft rows already in scrollback. */
 static void
 clip_prompt(struct snag_term *term, struct snag_buf *frame, size_t *label,
             size_t *cursor_row, size_t *cursor_col, size_t *end_row, size_t *end_col)
 {
-    size_t rows = term->rows > 2u ? term->rows - 2u : 1u;
+    size_t rows;
     size_t top = term->viewport_row, start = 0u, end = frame->len;
-
-    if (*end_row < rows) top = 0u;
-    else if (*cursor_row < top) top = *cursor_row;
-    else if (*cursor_row - top >= rows) top = *cursor_row - rows + 1u;
+    snag_term_composer_viewport(term->rows, *cursor_row, *end_row, &top, &rows);
     term->viewport_row = top;
     for (size_t y = 0u, next = 0u; y <= *end_row; ++y) {
         struct snag_term_prompt_row line = snag_term_prompt_row(frame, next, term->columns);
@@ -1442,6 +1466,14 @@ snag_term_trace(const struct snag_term *term, const char *event, const char *sou
     g_trace_bytes += (size_t)n;
 }
 
+unsigned int
+snag_term_prompt_separation(const struct snag_term *term)
+{
+    if (!term->output_seen || term->output_detour) return 0u;
+    return term->output_gap > term->output_newlines ?
+        term->output_gap - term->output_newlines : !term->output_ended_lf;
+}
+
 static int
 redraw(struct snag_term *term)
 {
@@ -1463,14 +1495,13 @@ redraw(struct snag_term *term)
             !term->prompt_wanted ? "not-wanted" : "output_depth");
         return 0;
     }
-    if (term->prompt_template[0] && compose_prompt(term->prompt_template, term->spinner,
-                       visible_spinner_states(term), spinner_step(term, snag_monotonic_ms()), current) < 0)
+    if (term->animation.source[0] &&
+        snag_term_animation_render(&term->animation, snag_monotonic_ms(), current) < 0)
         return -1;
-    if (term->prompt_template[0]) memcpy(term->label, current, strlen(current) + 1u);
+    if (term->animation.source[0]) memcpy(term->label, current, strlen(current) + 1u);
     label = prompt_label(term, &label_len);
     if (!term->prompt_visible && term->output_seen && !term->output_detour) {
-        unsigned int rows = term->output_gap > term->output_newlines ?
-            term->output_gap - term->output_newlines : !term->output_ended_lf;
+        unsigned int rows = snag_term_prompt_separation(term);
         if (rows && snag_term_write(STDERR_FILENO, term->capable ? "\r\n\r\n" : "\n\n",
                 rows * (term->capable ? 2u : 1u)) < 0) return -1;
         term->output_detour = term->capable ? rows : 0u;
@@ -1494,53 +1525,79 @@ out: snag_buf_free(&out);
     return rc;
 }
 
+void
+snag_term_prompt_values(const struct snag_term_prompt *prompt, const struct snag_term *term,
+    const struct snag_term *context, const char *values[SNAG_PROMPT_FIELD_COUNT], char clock[3][12])
+{
+    for (size_t i = 0u; i < SNAG_PROMPT_FIELD_COUNT; ++i) values[i] = prompt->values[i];
+    const struct snag_irc_destinations *destinations = context->destinations;
+    for (size_t i = 0u; destinations && i < destinations->count; ++i) {
+        const struct snag_irc_destination *destination = &destinations->items[i];
+        if (prompt->mode == 0u ? destination->target.id != context->destination.id : i != 0u)
+            continue;
+        if (destination->operator[0]) values[SNAG_PROMPT_OPERATOR] = destination->operator;
+        if (destination->model[0]) values[SNAG_PROMPT_MODEL_NICK] = destination->model;
+    }
+    int parts[] = {term->prompt_clock.hour, term->prompt_clock.minute, term->prompt_clock.second};
+    for (size_t i = 0u; i < 3u; ++i) {
+        (void)snprintf(clock[i], 12u, term->prompt_clock.valid ? "%d" : "--", parts[i]);
+        if (!values[SNAG_PROMPT_HOUR + i]) values[SNAG_PROMPT_HOUR + i] = clock[i];
+    }
+    values[SNAG_PROMPT_MODE] = prompt->mode == 0u ? "chat" :
+        prompt->mode == 1u ? "rollout-idle" : "rollout-active";
+    for (size_t i = 0u; i < SNAG_PROMPT_FIELD_COUNT; ++i)
+        if (!values[i]) values[i] = "?";
+}
+
+int
+snag_term_configure_prompt(struct snag_term *term, const struct snag_term_prompt *prompt,
+    const struct snag_term *context)
+{
+    const char *frames[SNAG_TERM_SPINNER_COUNT];
+    const char *values[SNAG_PROMPT_FIELD_COUNT];
+    char clock[3][12], label[SNAG_TERM_LABEL_BYTES];
+    const char *text = prompt->source;
+    snag_term_capture_prompt_clock(term, time(NULL));
+    if (prompt->values[0]) {
+        snag_term_prompt_values(prompt, term, context, values, clock);
+        if (snag_config_prompt_expand(text, prompt->mode, values,
+            SNAG_TERM_SPINNER_MARKER_BASE, label, sizeof(label)) < 0) return -1;
+        text = label;
+    }
+    for (size_t i = 0u; i < SNAG_TERM_SPINNER_COUNT; ++i) frames[i] = prompt->frames[i];
+    if (term->interrupt_pending) text = "Cancellation requested; waiting... ";
+    return snag_term_set_prompt_template(term, prompt->active, text, frames,
+        prompt->rate, prompt->states);
+}
+
 int
 snag_term_set_prompt_template(struct snag_term *term, bool active, const char *label,
                              const char *const spinners[SNAG_TERM_SPINNER_COUNT],
                              uint32_t per_second, unsigned int states)
 {
-    struct snag_term_spinner configured[SNAG_TERM_SPINNER_COUNT];
     char expanded[SNAG_TERM_LABEL_BYTES];
-    size_t len;
-    bool unchanged;
-
-    if (!term || !label || !(len = strlen(label)) || len >= sizeof(term->prompt_template) || !spinners ||
-        per_second < 1u || per_second > 60u || states >= (1u << SNAG_TERM_SPINNER_COUNT))
-        return snag_errno(EINVAL);
-    for (size_t i = 0u; i < SNAG_TERM_SPINNER_COUNT; ++i)
-        if (!spinners[i] || prepare_spinner(&configured[i], spinners[i]) < 0) goto invalid;
-    if (prompt_fits(label, configured) < 0) goto invalid;
-    unchanged = strcmp(term->prompt_template, label) == 0 &&
-                term->spinner_states == states && term->spinner_per_second == per_second;
-    for (size_t i = 0u; i < SNAG_TERM_SPINNER_COUNT && unchanged; ++i)
-        unchanged = strcmp(term->spinner[i].value, spinners[i]) == 0;
-    set_spinner_states(term, states);
-    if (compose_prompt(label, configured, visible_spinner_states(term),
-                       unchanged ? spinner_step(term, snag_monotonic_ms()) : 0u, expanded) < 0) return -1;
+    if (snag_term_animation_configure(&term->animation, label, spinners, per_second, states) < 0 ||
+        snag_term_animation_render(&term->animation, snag_monotonic_ms(), expanded) < 0)
+        return -1;
     if (!term->capable && (term->active != active || strcmp(term->label, expanded) != 0) &&
         snag_term_hide(term) < 0) return -1;
-    memcpy(term->prompt_template, label, len + 1u);
     memcpy(term->label, expanded, strlen(expanded) + 1u);
-    memcpy(term->spinner, configured, sizeof(term->spinner));
-    term->spinner_per_second = per_second;
-    if (!unchanged) term->spinner_epoch_ms = snag_monotonic_ms();
     term->active = active;
     if (!active) term->typing_active = false;
     term->prompt_wanted = true;
     snag_term_trace(term, "want-true", "set_prompt_template");
     term->line_submission_echoed = false;
     return term->defer_redraw ? 0 : redraw(term);
-invalid: return snag_errno(EINVAL);
 }
 
 int
 snag_term_set_spinner_states(struct snag_term *term, unsigned int states)
 {
     if (!term || states >= (1u << SNAG_TERM_SPINNER_COUNT)) return snag_errno(EINVAL);
-    if (!term->prompt_template[0] || term->spinner_states == states) return 0;
-    set_spinner_states(term, states);
-    term->spinner_epoch_ms = snag_monotonic_ms();
-    return update_spinners(term, 0u);
+    if (!term->animation.source[0] || term->animation.states == states) return 0;
+    set_spinner_states(&term->animation, states);
+    term->animation.epoch = snag_monotonic_ms();
+    return update_spinners(term);
 }
 
 int
@@ -1758,6 +1815,15 @@ search_begin(struct snag_term *term)
 }
 
 int
+snag_term_history_step(struct snag_term *term)
+{
+    if (term->history_pending == 1u) return history_up(term);
+    if (term->history_pending == 2u) return history_down(term);
+    if (term->history_pending == 3u) return search_find(term, term->history_scan);
+    return 0;
+}
+
+int
 snag_term_history_set(struct snag_term *term, struct snag_history_snapshot *snapshot, bool refresh)
 {
     bool active = term->searching || term->history_pos != SIZE_MAX;
@@ -1850,8 +1916,10 @@ search_insert(struct snag_term *term, const unsigned char *data, size_t len)
 static int
 search_backspace(struct snag_term *term)
 {
-    if (term->search_query.len) term->search_query.len = previous_cp(term->search_query.data,
-                                             term->search_query.len);
+    if (term->search_query.len) {
+        term->search_query.len = snag_grapheme_floor(term->search_query.data,
+            term->search_query.len, term->search_query.len - 1u);
+    }
     mark_input_activity(term);
     term->history_reader.scanning = false;
     term->search_failed = false;
@@ -1869,12 +1937,12 @@ previous_cp(const unsigned char *s, size_t pos)
 }
 
 static size_t
-next_cp(const unsigned char *s, size_t len, size_t pos)
+next_character(const unsigned char *s, size_t len, size_t pos)
 {
     size_t n;
 
     if (pos >= len) return len;
-    n = snag_utf8_size(s[pos]);
+    n = snag_grapheme_next(s + pos, len - pos);
     return n && n <= len - pos ? pos + n : pos + 1u;
 }
 
@@ -1890,6 +1958,7 @@ replace_range(struct snag_term *term, size_t start, size_t end, const void *data
      * stays editable, submittable and cancellable. */
     if (len > SNAG_MAX_DIRECT_PROMPT - next_len) {
         len = SNAG_MAX_DIRECT_PROMPT - next_len;
+        while (len && (((const unsigned char *)data)[len] & 0xc0u) == 0x80u) --len;
         term->draft_clamped = true;
     }
     next_len += len;
@@ -1900,6 +1969,11 @@ replace_range(struct snag_term *term, size_t start, size_t end, const void *data
     if (len) memcpy(term->draft.data + start, data, len);
     term->draft.len = next_len;
     term->cursor = start + len;
+    if (term->cursor < next_len) {
+        size_t boundary = snag_grapheme_floor(term->draft.data, next_len, term->cursor);
+        if (boundary != term->cursor)
+            term->cursor = next_character(term->draft.data, next_len, boundary);
+    }
     history_reset_navigation(term);
     mark_input_activity(term);
     return redraw(term);
@@ -2276,7 +2350,7 @@ word_left(const struct snag_term *term)
         pos = previous_cp(term->draft.data, pos);
     while (pos && !word_space(term->draft.data[previous_cp(term->draft.data, pos)]))
         pos = previous_cp(term->draft.data, pos);
-    return pos;
+    return snag_grapheme_floor(term->draft.data, term->draft.len, pos);
 }
 
 static int
@@ -2321,14 +2395,14 @@ move_vertical(struct snag_term *term, bool down, size_t preferred)
     rc = compose_frame(term, &frame, &label, &row, &col, &end_row, &end_col, &source);
     snag_buf_free(&frame);
     if (rc < 0) return -1;
-    term->cursor = source;
+    term->cursor = snag_grapheme_floor(term->draft.data, term->draft.len, source);
     rc = compose_frame(term, &frame, &label, &row, &col, &end_row, &end_col, NULL);
     snag_buf_free(&frame);
     if (rc < 0) return -1;
     /* A soft-wrap boundary maps to the next row's first byte. Stay on the
      * requested row, including when its final space starts a display wrap. */
     while (row > target && term->cursor) {
-        term->cursor = previous_cp(term->draft.data, term->cursor);
+        term->cursor = snag_grapheme_floor(term->draft.data, term->draft.len, term->cursor - 1u);
         rc = compose_frame(term, &frame, &label, &row, &col, &end_row, &end_col, NULL);
         snag_buf_free(&frame);
         if (rc < 0) return -1;
@@ -2376,22 +2450,26 @@ apply_key(struct snag_term *term, int key)
         return redraw(term);
     case KEY_WORD_RIGHT:
         while (term->cursor < term->draft.len && word_space(term->draft.data[term->cursor]))
-            term->cursor = next_cp(term->draft.data, term->draft.len, term->cursor);
+            term->cursor = next_character(term->draft.data, term->draft.len, term->cursor);
         while (term->cursor < term->draft.len && !word_space(term->draft.data[term->cursor]))
-            term->cursor = next_cp(term->draft.data, term->draft.len, term->cursor);
+            term->cursor = next_character(term->draft.data, term->draft.len, term->cursor);
         return redraw(term);
-    case KEY_RIGHT: term->cursor = next_cp(term->draft.data, term->draft.len, term->cursor);
+    case KEY_RIGHT: term->cursor = next_character(term->draft.data, term->draft.len, term->cursor);
         return redraw(term);
-    case KEY_LEFT: term->cursor = previous_cp(term->draft.data, term->cursor);
+    case KEY_LEFT:
+        if (term->cursor) {
+            term->cursor = snag_grapheme_floor(term->draft.data,
+                term->draft.len, term->cursor - 1u);
+        }
         return redraw(term);
     case KEY_HOME: term->cursor = 0u;
         return redraw(term);
     case KEY_END: term->cursor = term->draft.len;
         return redraw(term);
     case KEY_DELETE: return term->cursor < term->draft.len ?
-            delete_range(term, term->cursor, next_cp(term->draft.data, term->draft.len, term->cursor)) : 0;
-    case KEY_PASTE_BEGIN: term->paste = true;
-        term->paste_end_match = 0u;
+            delete_range(term, term->cursor,
+                next_character(term->draft.data, term->draft.len, term->cursor)) : 0;
+    case KEY_PASTE_BEGIN: snag_term_paste_begin(term);
         return 0;
     default: return 0;
     }
@@ -2454,33 +2532,75 @@ feed_escape(struct snag_term *term, unsigned char byte, enum snag_term_action *a
 }
 
 static int
+insert_paste(struct snag_term *term, const void *data, size_t len)
+{
+    if (!snag_utf8_valid(data, len, true)) return snag_errno(EILSEQ);
+    struct snag_buf text = {.max = SNAG_MAX_DIRECT_PROMPT + 4u};
+    if (snag_buf_append(&text, data, len) < 0) return -1;
+    for (size_t i = 0u; i < text.len; ++i)
+        if (text.data[i] == '\r') text.data[i] = '\n';
+    int rc = term->searching ? search_insert(term, text.data, text.len) :
+        insert_bytes(term, text.data, text.len);
+    snag_buf_free(&text);
+    return rc;
+}
+
+void
+snag_term_paste_begin(struct snag_term *term)
+{
+    term->paste = true;
+    term->paste_end_match = 0u;
+    term->paste_overflow = false;
+    snag_buf_reset(&term->paste_text);
+}
+
+int
+snag_term_paste_append(struct snag_term *term, const void *data, size_t len)
+{
+    size_t available = term->paste_text.max - term->paste_text.len;
+    if (len > available) {
+        len = available;
+        term->paste_overflow = term->draft_clamped = true;
+    }
+    return snag_buf_append(&term->paste_text, data, len);
+}
+
+int
+snag_term_paste_end(struct snag_term *term)
+{
+    term->paste = false;
+    term->paste_end_match = 0u;
+    size_t len = term->paste_text.len;
+    if (term->paste_overflow) {
+        len = SNAG_MAX_DIRECT_PROMPT;
+        while (len && (term->paste_text.data[len] & 0xc0u) == 0x80u) --len;
+    }
+    int rc = insert_paste(term, term->paste_text.data, len);
+    snag_buf_reset(&term->paste_text);
+    return rc;
+}
+
+static int
 feed_paste(struct snag_term *term, unsigned char byte)
 {
     static const unsigned char end[] = "\033[201~";
 
     if (byte == end[term->paste_end_match]) {
         ++term->paste_end_match;
-        if (term->paste_end_match == sizeof(end) - 1u) {
-            term->paste = false;
-            term->paste_end_match = 0u;
-            /* A native input batch defers painting until its last byte. The
-             * paste terminator completes that edit without inserting text. */
-            return redraw(term);
-        }
+        if (term->paste_end_match == sizeof(end) - 1u)
+            return snag_term_paste_end(term);
         return 0;
     }
     if (term->paste_end_match) {
         size_t matched = term->paste_end_match;
         term->paste_end_match = 0u;
-        for (size_t i = 0u; i < matched; ++i)
-            if (feed_text_byte(term, end[i]) < 0) return -1;
+        if (snag_term_paste_append(term, end, matched) < 0) return -1;
         if (byte == end[0]) {
             term->paste_end_match = 1u;
             return 0;
         }
     }
-    if (byte == '\r') byte = '\n';
-    return feed_text_byte(term, byte);
+    return snag_term_paste_append(term, &byte, 1u);
 }
 
 static int
@@ -2518,6 +2638,7 @@ cancel_line(struct snag_term *term, enum snag_term_action *action)
     term->escape_len = 0u;
     term->paste = false;
     term->paste_end_match = 0u;
+    snag_buf_reset(&term->paste_text);
     term->typing_active = false;
     if (term->input_only) {
         term->cancel_pending = true;
@@ -2533,8 +2654,9 @@ logical: history_reset_navigation(term);
     return 1;
 }
 
-static int
-feed_byte(struct snag_term *term, unsigned char byte, enum snag_term_action *action, char **text)
+int
+snag_term_feed_byte(struct snag_term *term, unsigned char byte,
+    enum snag_term_action *action, char **text)
 {
     if (term->dictating && (byte == 0x03u || (!term->paste && !term->escape_len &&
         (byte == '\r' || (!term->capable && byte == '\n'))))) {
@@ -2602,7 +2724,7 @@ feed_byte(struct snag_term *term, unsigned char byte, enum snag_term_action *act
     case 0x04u:
         if (!term->draft.len) return complete_exit(term, action);
         return term->cursor < term->draft.len ? delete_range(term, term->cursor,
-                         next_cp(term->draft.data, term->draft.len, term->cursor)) : 0;
+                         next_character(term->draft.data, term->draft.len, term->cursor)) : 0;
     case 0x0cu:
         if (snag_term_hide(term) < 0) return -1;
         return redraw(term);
@@ -2621,7 +2743,8 @@ feed_byte(struct snag_term *term, unsigned char byte, enum snag_term_action *act
     case 0x7fu:
         if (term->searching) return search_backspace(term);
         return term->cursor ? delete_range(term,
-                    previous_cp(term->draft.data, term->cursor), term->cursor) : 0;
+            snag_grapheme_floor(term->draft.data, term->draft.len, term->cursor - 1u),
+            term->cursor) : 0;
     case 0x07u:
         return term->searching ? search_accept(term, true) : 0;
     case 0x12u:
@@ -2691,11 +2814,11 @@ snag_term_poll(struct snag_term *term, int timeout_ms, snag_wake_fd wake_fd,
     }
     if (consume_resize(term) < 0 || flush_completions(term) < 0) return -1;
     if (term->prompt_visible && term->capable && !term->searching &&
-        !term->output_depth && animated_spinners(term) &&
-        update_spinners(term, spinner_step(term, snag_monotonic_ms())) < 0) return -1;
+        !term->output_depth && snag_term_animation_due(&term->animation, snag_monotonic_ms()) &&
+        update_spinners(term) < 0) return -1;
     if (sigint_pending) {
         (void)atomic_fetch_sub_explicit(&sigint_pending, 1u, memory_order_relaxed);
-        return feed_byte(term, 0x03u, action, text);
+        return snag_term_feed_byte(term, 0x03u, action, text);
     }
     if (term->input_pos == term->input_len) {
         term->input_pos = 0u;
@@ -2707,7 +2830,7 @@ snag_term_poll(struct snag_term *term, int timeout_ms, snag_wake_fd wake_fd,
         rc = snag_term_input_wait(&term->host, wake_fd, timeout_ms);
         if (sigint_pending) {
             (void)atomic_fetch_sub_explicit(&sigint_pending, 1u, memory_order_relaxed);
-            return feed_byte(term, 0x03u, action, text);
+            return snag_term_feed_byte(term, 0x03u, action, text);
         }
         if (sigwinch_pending) {
             if (consume_resize(term) < 0) return -1;
@@ -2722,12 +2845,10 @@ snag_term_poll(struct snag_term *term, int timeout_ms, snag_wake_fd wake_fd,
             term->escape_len = 0u;
             return search_accept(term, false);
         }
-        if (rc == 0 && animated_spinners(term) &&
-            update_spinners(term, spinner_step(term, snag_monotonic_ms())) < 0) return -1;
+        if (rc == 0 && snag_term_animation_due(&term->animation, snag_monotonic_ms()) &&
+            update_spinners(term) < 0) return -1;
         if (rc == 0 && term->history_pending && !term->input_only) {
-            if (term->history_pending == 1u) return history_up(term);
-            if (term->history_pending == 2u) return history_down(term);
-            return search_find(term, term->history_scan);
+            return snag_term_history_step(term);
         }
         if (rc <= 0) return rc;
         if (!(rc & SNAG_TERM_WAIT_INPUT)) {
@@ -2741,7 +2862,7 @@ snag_term_poll(struct snag_term *term, int timeout_ms, snag_wake_fd wake_fd,
         if (snag_term_input_resized(&term->host)) sigwinch_pending = 1;
         if (sigint_pending) {
             (void)atomic_fetch_sub_explicit(&sigint_pending, 1u, memory_order_relaxed);
-            return feed_byte(term, 0x03u, action, text);
+            return snag_term_feed_byte(term, 0x03u, action, text);
         }
         /* Resize painting can admit input through an output checkpoint. */
         if (count > 0) term->input_len = (size_t)count;
@@ -2761,7 +2882,7 @@ snag_term_poll(struct snag_term *term, int timeout_ms, snag_wake_fd wake_fd,
          * buffered typing burst is still being painted. */
         if (consume_resize(term) < 0) return -1;
         if (term->input_pos == term->input_len) break;
-        rc = feed_byte(term, term->input[term->input_pos++], action, text);
+        rc = snag_term_feed_byte(term, term->input[term->input_pos++], action, text);
         if (rc < 0) return -1;
         if (rc > 0) return 1;
         /* Let the native UI service output acknowledgements and geometry
@@ -2809,6 +2930,7 @@ snag_term_close(struct snag_term *term)
     snag_buf_free(&term->output_line);
     snag_buf_free(&term->painted_prompt);
     snag_buf_free(&term->completion_output);
+    snag_buf_free(&term->paste_text);
     if (snag_term_output_owner() == term) snag_term_output_bind(NULL);
     for (size_t i = 0u; i < 2u; ++i)
         if (term->output_fd[i] >= 0) close(term->output_fd[i]);

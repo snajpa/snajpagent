@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "app_internal.h"
+#include "commands.h"
 #include "store_internal.h"
 #include "http.h"
 #include "media.h"
@@ -211,7 +212,10 @@ snag_app_report(struct app_state *app, enum snag_ui_operation operation, const c
     if (!app->command_report) return snag_ui_text(&app->ui, operation, text);
     size_t len = strlen(text);
     if (snag_term_append_safe(app->command_report, text, len) < 0) return -1;
-    return len && text[len - 1u] == '\n' ? 0 : snag_buf_putc(app->command_report, '\n');
+    if ((!len || text[len - 1u] != '\n') && snag_buf_putc(app->command_report, '\n') < 0)
+        return -1;
+    return snag_ui_send(&app->ui, (struct snag_ui_command){.kind = operation,
+        .text = text, .len = len, .retain_only = true});
 }
 
 static int
@@ -275,91 +279,6 @@ graph_outcome_name(enum snag_graph_outcome outcome)
     case SNAG_GRAPH_CONFLICT: return "conflict";
     }
     return "unknown";
-}
-static const struct snag_term_command commands[] = {
-    {"/help", "commands and keys (alias /?)"},
-    {"/?", "same as /help"},
-    {"/status", "session and next-turn settings"},
-    {"/config", "edit/reload configuration at a safe boundary"},
-    {"/configure", "reload saved configuration, credentials and model cache"},
-    {"/verbose [0..6]", "show/set verbosity for this process"},
-    {"/banner [TEXT|clear]", "show/set session banner echoed in later requests"},
-    {"/model [list|cache]", "list cached models; cache refreshes all providers"},
-    {"/model [#]N [save|s]", "select numbered model/effort row (N starts at 1)"},
-    {"/model MODEL[/EFFORT] [save|s]", "select on the next-turn provider"},
-    {"/model PROVIDER/MODEL/EFFORT [save|s]", "select explicit provider/model/effort"},
-    {"/fast [on|off|status]", "toggle fast service; retain the selected model and effort"},
-    {"/effort [LEVEL]", "show/set provider-defined effort (default means medium)"},
-    {"/context", "show the context window, its reserve and compaction budget"},
-    {"/context default", "use the configured or advertised working window"},
-    {"/context max", "use the advertised maximum context"},
-    {"/context N [s|save]", "set N tokens; optionally save this model's config default"},
-    {"/compact", "compact context at a safe request boundary"},
-    {"/state", "session state including goal and its actions"},
-    {"/state goal [status|help]", "show goal section or this usage"},
-    {"/state goal [set] TEXT", "start/reword goal; set accepts reserved first words"},
-    {"/state goal \"TEXT\"", "start/reword with quoted wording"},
-    {"/state goal pause|resume", "stop/restart automatic continuation"},
-    {"/state goal lock|unlock", "prevent/allow model rewording"},
-    {"/state goal complete|cancel|clear", "end goal; clear=cancel; current turn finishes"},
-    {"/goal ...", "alias for /state goal ..."},
-    {"/ro QUERY", "one read-only turn; queued during active work"},
-    {"/queue [TEXT]", "list/add future turns (alias /q)"},
-    {"/queue clear|c", "remove all queued turns"},
-    {"/queue pop|p", "remove newest queued turn"},
-    {"/queue N delete|d", "remove queued turn N (N starts at 1)"},
-    {"/queue N edit|e", "edit queued turn N in the composer"},
-    {"/queue Nd|Ne", "short forms of N delete / N edit"},
-    {"/next", "run oldest paused turn; arm queue if active"},
-    {"/retry", "retry failed turn; if active, restart at a safe boundary"},
-    {"/retry auto [on|off]", "toggle automatic retries or set the saved session preference"},
-    {"/yield", "return tool wait to model; keep running processes"},
-    {"/session", "current session ID and running sessions"},
-    {"/session list|l", "all saved sessions and their attachment state"},
-    {"/session name NAME", "set the current session's saved name"},
-    {"/session attach|a ID", "switch to a live session; failure keeps this attachment"},
-    {"/session detach|d", "return to the shell while this session continues"},
-    {"/s [list|l|name NAME|attach|a ID|detach|d]", "alias for /session"},
-    {"/history [N]", "show N retained turns; default 1, 0 counts only"},
-    {"/delete", "delete after confirmation at a safe boundary"},
-    {"/exit", "stop work, preserve session and exit"},
-    {"/cat PATH", "open a local file in the configured pager"},
-    {"/receive", "receive workstation files as unsent attachments"},
-    {"/send PATH", "send one file to the workstation through trzsz"},
-    {"/attach PATH", "prepare an image or retain a media/document file for the next private input"},
-    {"/attachments", "list unsent attachments"},
-    {"/detach N|all", "remove unsent attachments"},
-    {"/dictate", "capture up to 60s; Enter finishes, Escape cancels; insert transcript into draft"},
-    {"/voice on", "start explicit live voice using the configured API route"},
-    {"/voice off", "close voice; coding work keeps its existing owner"},
-    {"/voice mute", "stop microphone forwarding; /voice unmute resumes fresh audio"},
-    {"/voice devices", "list exact capture and playback device names"},
-    {"/play asset:ID", "play the first 60s of an accepted audio asset; /play stop interrupts"},
-    {"/chat [ADDRESS]", "show the selected or addressed channel"},
-    {"/rollout", "show local model activity"},
-    {"/query [ADDRESS [TEXT]]", "open a private chat; no address lists opened queries"},
-    {"/connections [SESSION|ADDRESS]", "list connections or open SESSION/ENDPOINT/"},
-    {"/whois [NICK]", "inspect a nick on the selected connection"},
-    {"/msg ADDRESS TEXT", "send to a nick or channel without changing tabs"},
-    {"/notice ADDRESS TEXT", "send a notice to a nick or channel"},
-    {"/me TEXT", "send an action to the selected operator conversation"},
-    {"/join ADDRESS", "join a channel as the operator and open its conversation"},
-    {"/part [ADDRESS [REASON]]", "leave the selected or addressed operator channel"},
-    {"/topic [TEXT]", "show/set selected room topic"},
-    {"/nick [NICK]", "show nicks/set your operator nick (shared via IRC)"},
-    {"/steering [mentions|all|clear]", "show/set steering admission for next turn"},
-    {"/names", "numbered destinations, members and modes"},
-    {"/server [start [ENDPOINT]|stop]", "show/start/stop hosting; default localhost:6667"},
-    {"/connect [ENDPOINT]", "add outgoing connection; default localhost:6667"},
-    {"/disconnect [ENDPOINT]", "remove one/all outgoing connections; keep hosting"},
-    {"/N [TEXT]", "select destination N, or send there once"},
-    {"/all TEXT", "send once to all destinations"},
-};
-
-static size_t
-command_count(void)
-{
-    return sizeof(commands) / sizeof(commands[0]);
 }
 static const char *
 effective_model(const char *model)
@@ -1500,19 +1419,20 @@ snag_app_help_text(struct snag_buf *text, const char *command)
     size_t prefix = command ? strlen(command) : 0u;
 
     if (snag_buf_append(text, legend, sizeof(legend) - 1u) < 0) return -1;
-    for (size_t i = 0u; i < command_count(); ++i) {
-        if (command && (strncmp(commands[i].syntax, command, prefix) ||
-                        (commands[i].syntax[prefix] && commands[i].syntax[prefix] != ' '))) continue;
+    for (size_t i = 0u; i < snag_command_count(); ++i) {
+        if (command && (strncmp(snag_commands[i].syntax, command, prefix) ||
+            (snag_commands[i].syntax[prefix] && snag_commands[i].syntax[prefix] != ' ')))
+            continue;
         if (!command) {
             for (size_t j = 0u; j < sizeof(sections) / sizeof(sections[0]); ++j) {
-                if (!strcmp(commands[i].syntax, sections[j].first) &&
+                if (!strcmp(snag_commands[i].syntax, sections[j].first) &&
                     snag_buf_printf(text, "\n%s\n", sections[j].title) < 0) {
                     return -1;
                 }
             }
         }
-        if (snag_buf_printf(text, "%s — %s\n", commands[i].syntax,
-                commands[i].description) < 0) {
+        if (snag_buf_printf(text, "%s — %s\n", snag_commands[i].syntax,
+                snag_commands[i].description) < 0) {
             return -1;
         }
     }
@@ -2511,7 +2431,7 @@ reload_config(struct app_state *app, char *error, size_t error_size)
     snag_ui_send(&app->ui, (struct snag_ui_command){
         .kind = SNAG_UI_MARKDOWN, .data.value = snag_cli_markdown(app->cli, app->config->markdown)});
     snag_ui_send(&app->ui, (struct snag_ui_command){
-        .kind = SNAG_UI_COMMANDS, .data.commands = {commands, command_count()}});
+        .kind = SNAG_UI_COMMANDS, .data.commands = {snag_commands, snag_command_count()}});
     snag_ui_send(&app->ui, (struct snag_ui_command){
         .kind = SNAG_UI_PAUSE, .data.timing = {app->config->typing_pause_ms, app->config->prompt_tool_spinner_off_delay_ms}});
     snag_auth_config_close(&previous);
@@ -2929,7 +2849,9 @@ send_operator_conversation(struct app_state *app, const char *line, const char *
     int rc;
     if (target->identity != SNAG_IRC_OPERATOR) {
         rc = snag_fail(error, sizeof(error), EACCES,
-            "agent conversation is read-only; open an operator conversation to reply");
+            "Viewing the model's chat; use %s %s to reply as yourself",
+            target->kind == SNAG_IRC_QUERY ? "/query" : "/chat",
+            target->kind == SNAG_IRC_QUERY ? target->peer : target->room);
     } else if (kind != SNAG_IRC_MESSAGE && kind != SNAG_IRC_NOTICE) {
         rc = snag_fail(error, sizeof(error), EINVAL, "this command requires a channel");
     } else {
@@ -3319,7 +3241,8 @@ handle_common_command(struct app_state *app, const char *line, bool active, bool
         rc = snag_app_audio_command(app, line, handled);
         if (*handled) return rc;
         if ((app->audio || app->voice) &&
-            (!strncmp(line, "/attach", 7u) || !strcmp(line, "/receive"))) {
+            (!strncmp(line, "/attach", 7u) || !strcmp(line, "/receive") ||
+             !strcmp(line, "/receive -d"))) {
             *handled = true;
             return app_error(app, "Stop local audio before preparing an attachment.");
         }
@@ -3773,7 +3696,7 @@ view_terminal_finish(struct app_state *app)
 static bool
 view_terminal_finite(const char *line)
 {
-    return !strcmp(line, "/config") || !strcmp(line, "/receive") ||
+    return !strcmp(line, "/config") || !strcmp(line, "/receive") || !strcmp(line, "/receive -d") ||
         (!strncmp(line, "/attach", 7u) && (!line[7] || isspace((unsigned char)line[7]))) ||
         (!strncmp(line, "/send", 5u) && (!line[5] || isspace((unsigned char)line[5]))) ||
         (!strncmp(line, "/cat", 4u) && (!line[4] || isspace((unsigned char)line[4])));
@@ -6617,7 +6540,7 @@ run_owner(const struct snag_cli *cli, const char *program, struct snag_session_p
         goto invalid;
     app.networked = !cli->execute && !cli->list && snag_irc_enabled(&config);
     snag_ui_send(&app.ui, (struct snag_ui_command){
-        .kind = SNAG_UI_COMMANDS, .data.commands = {commands, command_count()}});
+        .kind = SNAG_UI_COMMANDS, .data.commands = {snag_commands, snag_command_count()}});
     if (app.networked && snag_ui_send(&app.ui, (struct snag_ui_command){
         .kind = SNAG_UI_VIEW, .data.value = SNAG_RENDER_CHAT}) < 0) goto out;
     snag_ui_send(&app.ui, (struct snag_ui_command){

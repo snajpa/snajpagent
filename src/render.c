@@ -3338,10 +3338,19 @@ render_irc_event_now(struct snag_render *render, const struct snag_irc_event *ev
     if (!prefix || !source) goto cleanup;
     irc_markdown_lifecycle(render, event);
     if (event->routed) {
-        (void)snprintf(source, source_size, "[%s/%s %s%s] ", endpoint,
-            event->route.kind == SNAG_IRC_QUERY ? peer : room,
-            event->route.identity == SNAG_IRC_AGENT ? "agent" : "operator",
-            event->route.kind == SNAG_IRC_QUERY ? " query" : "");
+        const char *conversation = event->route.kind == SNAG_IRC_CHANNEL ? "" :
+            event->route.kind == SNAG_IRC_QUERY ? event->route.conversation :
+                event->route.connection;
+        bool selected = render->view == SNAG_RENDER_CHAT &&
+            (!render->chat_endpoint[0] || !strcmp(render->chat_endpoint, event->endpoint)) &&
+            !strcmp(render->chat_room, event->room) &&
+            !strcmp(render->chat_conversation, conversation);
+        if (!selected) {
+            snag_term_conversation_label(render->term ? render->term->destinations : NULL,
+                endpoint, event->route.kind == SNAG_IRC_QUERY ? peer : room,
+                event->route.kind == SNAG_IRC_QUERY && event->route.identity == SNAG_IRC_AGENT,
+                source, source_size);
+        }
         if (event->route.direction == SNAG_IRC_OUTGOING &&
             event->route.delivery == SNAG_IRC_PENDING) {
             size_t used = strlen(source);
@@ -3575,9 +3584,10 @@ render_view_banner(struct snag_render *render, enum snag_render_view view)
 
     if (view == SNAG_RENDER_ROLLOUT) return render_banner(render, "── rollout ──\n");
     if (render->chat_conversation[0]) {
-        rc = snag_buf_printf(&banner, "── %s %s/%s (%s) ──\n",
-            render->chat_peer[0] ? "query" : "connection", render->chat_endpoint, render->chat_peer,
-            render->chat_identity == SNAG_IRC_OPERATOR ? "operator" : "agent, read-only");
+        rc = snag_buf_printf(&banner, "── %s %s%s%s%s ──\n",
+            render->chat_peer[0] ? "query" : "connection", render->chat_endpoint,
+            render->chat_peer[0] ? "/" : "", render->chat_peer,
+            render->chat_identity == SNAG_IRC_OPERATOR ? "" : "; viewing model's chat");
     } else if (!render->chat_endpoint[0] && !render->chat_room[0]) {
         return render_banner(render, "── chat ──\n");
     } else rc = snag_buf_printf(&banner, "── chat %s%s%s ──\n", render->chat_endpoint,
@@ -3732,7 +3742,15 @@ source_event(struct snag_render *render, struct snag_render_source source)
     json_t *event = NULL;
     char error[128];
 
-    if (source.native_sequence) return native_source_event(render->history_fd, source);
+    if (source.native_sequence) {
+        event = native_source_event(render->history_fd, source);
+        if (event && render->filter_event) {
+            json_t *filtered = render->filter_event(render->filter_opaque, event);
+            json_decref(event);
+            event = filtered;
+        }
+        return event;
+    }
     if (source.offset < 0 || !source.len || source.len > SNAG_MAX_EVENT_LINE) {
         errno = EINVAL;
         return NULL;
@@ -3754,6 +3772,11 @@ source_event(struct snag_render *render, struct snag_render_source source)
         if (text.len < source.len && render_checkpoint(render) < 0) goto out;
     }
     event = snag_json_load_strict(text.data, text.len, text.max, error, sizeof(error));
+    if (event && render->filter_event) {
+        json_t *filtered = render->filter_event(render->filter_opaque, event);
+        json_decref(event);
+        event = filtered;
+    }
 out: snag_buf_free(&text);
     return event;
 }
@@ -4214,7 +4237,7 @@ snag_render_event(struct snag_render *render, uint64_t seq, const char *type)
 }
 
 int
-snag_render_resume_hint(const struct snag_render *render, const char *command, size_t command_len)
+snag_render_resume_hint(struct snag_render *render, const char *command, size_t command_len)
 {
     static const char header[] = "• You can resume this session with the following command";
     const char *note = snag_command_shell_note();
@@ -4225,7 +4248,7 @@ snag_render_resume_hint(const struct snag_render *render, const char *command, s
     if (!render || !command || !command_len) return snag_errno(EINVAL);
     if (!snag_size_add(max, sizeof(header) + 2u, &max) || !snag_size_add(max, strlen(note), &max))
         return snag_errno(EOVERFLOW);
-    colored = render->color_stderr;
+    colored = render->color_stderr && !render->sink.text;
     if (colored && (!snag_size_add(max, sizeof(COLOR_LIFECYCLE) - 1u, &max) ||
          !snag_size_add(max, sizeof(COLOR_RESET) - 1u, &max))) return snag_errno(EOVERFLOW);
     struct snag_buf block = {.max = max};
@@ -4235,7 +4258,12 @@ snag_render_resume_hint(const struct snag_render *render, const char *command, s
     if (colored && snag_buf_append(&block, COLOR_RESET, sizeof(COLOR_RESET) - 1u) < 0) goto out;
     if (snag_buf_putc(&block, '\n') < 0 || snag_buf_append(&block, command, command_len) < 0 ||
         snag_buf_putc(&block, '\n') < 0) goto out;
-    rc = snag_term_write(STDERR_FILENO, block.data, block.len);
+    if (render->sink.text) {
+        if (render->color_stderr && write_literal(render, STDERR_FILENO, COLOR_LIFECYCLE) < 0)
+            goto out;
+        rc = render_write(render, STDERR_FILENO, (const char *)block.data, block.len, true);
+        if (render->color_stderr && write_literal(render, STDERR_FILENO, COLOR_RESET) < 0) rc = -1;
+    } else rc = snag_term_write(STDERR_FILENO, block.data, block.len);
 out: snag_buf_free(&block);
     return rc;
 }

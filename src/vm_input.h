@@ -14,7 +14,7 @@ enum snag_vm_key {
     SNAG_VM_KEY_TAB, SNAG_VM_KEY_BACKSPACE, SNAG_VM_KEY_UP, SNAG_VM_KEY_DOWN,
     SNAG_VM_KEY_LEFT, SNAG_VM_KEY_RIGHT, SNAG_VM_KEY_HOME, SNAG_VM_KEY_END,
     SNAG_VM_KEY_PAGE_UP, SNAG_VM_KEY_PAGE_DOWN, SNAG_VM_KEY_INSERT, SNAG_VM_KEY_DELETE,
-    SNAG_VM_KEY_F1, SNAG_VM_KEY_F2, SNAG_VM_KEY_F3, SNAG_VM_KEY_F4
+    SNAG_VM_KEY_F1, SNAG_VM_KEY_F2, SNAG_VM_KEY_F3, SNAG_VM_KEY_F4, SNAG_VM_KEY_UPLOAD
 };
 
 enum snag_vm_modifier { SNAG_VM_SHIFT = 1u, SNAG_VM_ALT = 2u, SNAG_VM_CTRL = 4u };
@@ -39,7 +39,8 @@ struct snag_vm_input {
 
 /* Zero-initialize. Text is borrowed for the callback duration. Normal text is
  * valid UTF-8; malformed bytes become U+FFFD. Paste bytes remain literal and
- * streamed between begin/end events, for one atomic composer edit. */
+ * streamed between begin/end events, for one atomic composer edit; Ctrl-C ends
+ * paste and emits cancellation immediately. */
 typedef int (*snag_vm_input_emit)(void *, const struct snag_vm_input_event *);
 int snag_vm_input_feed(struct snag_vm_input *, const void *, size_t, uint64_t now_ms,
     snag_vm_input_emit, void *);

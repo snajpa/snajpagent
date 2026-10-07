@@ -62,8 +62,8 @@ All message names below are the JSON `type` value. A new client sends
 `{"type":"hello","version":1}`. `capabilities` supplies `version`, the full
 `session` ID, a random live-owner `instance` ID and `features`.
 The implemented features are `observe`, `control`, `submit`, `cancel`, `quit`,
-`detach`, `receipts`, `drafts`, `commands`, `terminal_commands`, `reports` and
-`irc_queries`.
+`detach`, `receipts`, `drafts`, `commands`, `queue`, `terminal_commands`, `reports`,
+`irc_queries`, `irc_channels` and `irc_connections`.
 
 After hello, `state` messages contain a `state` object with committed `seq`,
 byte `end`, `sha256`, journal `schema`, `active`, and the next-turn `provider`,
@@ -87,6 +87,7 @@ still causes the history reader to return its new page.
 | `reserve` | `reserved` with a `generation`, or `error`. Uses the same exclusive reservation as the classic terminal. |
 | `commit` with `generation` | `bound` with that generation. The client may then submit input. Classic STATUS now reports attached. |
 | `submit` with `generation`, 32-character lowercase hexadecimal `id`, and `text` | `result` with that ID and `pending`, followed by `committed` or `rejected`. Input without `route` addresses the rollout, including when the previous terminal showed IRC. A query route addresses that exact operator conversation. Active work uses existing steering/queue admission. Slash commands use the separate `command` exchange; `/ro` retains the ordinary read-only prompt syntax. |
+| `queue` with the same fields as `submit` | Retains the draft as a future rollout turn through ordinary queue admission. Only the rollout route is accepted. The capability is required; older owners retain `/queue TEXT`. Receipt identity includes queued versus immediate intent. |
 | `command` with `generation`, `id`, `text`, `route`, and optional `draft_revision` | `pending`, then `completed` with an immutable report or `terminal` before executing any effect. Uses the same mailbox, receipt and draft-revision rules as submission. |
 | `receipt` with `id` | Current `result`, or `unknown`. Requires hello but no controller lease. |
 | `draft_get` with `generation` and `route` | Current `draft` snapshot and subscription to later changes to that route. Requires a bound controller. |
@@ -109,7 +110,7 @@ The journal format stays unchanged.
 
 The owner retains request IDs, exact routes, text digests and results across
 connection loss. Repeating the same ID/route/text returns the receipt; changing
-its route or text is rejected.
+its route, text or immediate/queued intent is rejected.
 The workspace must query an uncertain ID before taking further action and must
 never automatically resubmit it as a new request. An owner restart changes
 `instance`; an unknown receipt remains uncertain until explicitly reconciled

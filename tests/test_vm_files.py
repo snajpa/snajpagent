@@ -114,7 +114,7 @@ class WorkspaceFileTests(unittest.TestCase):
         source.write_bytes(b'file-start\nirc-ui-secret\n\x00\xff\nfile-end\n')
         child = self.start('-N', 'files', columns=120)
         child.command('attach ' + self.owner.sid)
-        child.until(b'ATTACHED')
+        child.attached()
         child.write(b'i/cat operator-file\r')
         self.reports(1)
         child.write(b'\x1b')

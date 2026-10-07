@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "vm_editor.h"
+#include "commands.h"
 #include "term.h"
 #include "unicode.h"
 #include "vm_connection.h"
@@ -29,6 +30,10 @@ undo_free(struct snag_vm_undo *undo)
 void
 snag_vm_editor_reset(struct snag_vm_editor *editor)
 {
+    if (editor->input) {
+        snag_term_close(editor->input);
+        free(editor->input);
+    }
     undo_free(editor->undo);
     undo_free(editor->redo);
     if (editor->original.data) memset(editor->original.data, 0, editor->original.len);
@@ -601,6 +606,128 @@ put(struct snag_vm_buffer *buffer, struct snag_vm_register *reg,
     return rc < 0 ? SNAG_VM_EDIT_ERROR : SNAG_VM_EDIT_DONE;
 }
 
+static const char *
+insert_key(const struct snag_vm_input_event *event, unsigned char *control)
+{
+    if ((event->modifiers & SNAG_VM_CTRL) && event->key >= '@' && event->key <= '~') {
+        *control = event->key & 0x1fu;
+        return (const char *)control;
+    }
+    bool word = (event->modifiers & (SNAG_VM_ALT | SNAG_VM_CTRL)) != 0u;
+    switch (event->key) {
+    case SNAG_VM_KEY_ENTER: return "\r";
+    case SNAG_VM_KEY_TAB: return event->modifiers & SNAG_VM_SHIFT ? "\033[Z" : "\t";
+    case SNAG_VM_KEY_BACKSPACE: return "\177";
+    case SNAG_VM_KEY_UP: return "\033[A";
+    case SNAG_VM_KEY_DOWN: return "\033[B";
+    case SNAG_VM_KEY_LEFT: return word ? "\033[1;5D" : "\033[D";
+    case SNAG_VM_KEY_RIGHT: return word ? "\033[1;5C" : "\033[C";
+    case SNAG_VM_KEY_HOME: return "\033[H";
+    case SNAG_VM_KEY_END: return "\033[F";
+    case SNAG_VM_KEY_DELETE: return "\033[3~";
+    case SNAG_VM_KEY_UPLOAD: return "\033[9002~";
+    default: return NULL;
+    }
+}
+
+static enum snag_vm_edit_result
+insert_input(struct snag_vm_buffer *buffer, const struct snag_vm_input_event *event,
+    size_t columns, size_t rows, const char *prompt)
+{
+    unsigned char control[2] = {0};
+    const unsigned char *bytes = event->text;
+    size_t length = event->length;
+    bool paste = event->kind == SNAG_VM_PASTE_BEGIN ||
+        event->kind == SNAG_VM_PASTE_TEXT || event->kind == SNAG_VM_PASTE_END;
+    if (event->kind != SNAG_VM_TEXT && !paste) {
+        if (event->kind != SNAG_VM_KEY ||
+            ((event->modifiers & SNAG_VM_CTRL) && event->key == 'z'))
+            return SNAG_VM_EDIT_UNUSED;
+        bytes = (const unsigned char *)insert_key(event, control);
+        if (!bytes) return SNAG_VM_EDIT_UNUSED;
+        length = strlen((const char *)bytes);
+    }
+    struct snag_vm_editor *editor = &buffer->editor;
+    if (!editor->input) {
+        editor->input = malloc(sizeof(*editor->input));
+        if (!editor->input) return SNAG_VM_EDIT_ERROR;
+        snag_term_init(editor->input);
+        editor->input->input_only = editor->input->defer_redraw = true;
+        editor->input->capable = editor->input->blank_local = true;
+        snag_term_set_commands(editor->input, snag_commands, snag_command_count());
+    }
+    if (snag_vm_editor_begin(buffer) < 0) return SNAG_VM_EDIT_ERROR;
+    struct snag_term *term = editor->input;
+    if (!term->history.global_path && buffer->connection->dotdir &&
+        snag_history_snapshot_open(&term->history, buffer->connection->dotdir,
+            buffer->connection->session) < 0) return SNAG_VM_EDIT_ERROR;
+    term->columns = (unsigned int)columns;
+    term->rows = (unsigned int)rows;
+    const json_t *state = buffer->connection->state;
+    const json_t *owner_prompt = json_object_get(state, "prompt");
+    term->active = json_is_true(json_object_get(
+        json_is_object(owner_prompt) ? owner_prompt : state, "active"));
+    term->chat = json_is_object(buffer->route);
+    term->conversation_tabs = buffer->connection->buffers &&
+        buffer->connection->buffers->next;
+    json_decref(term->irc_names);
+    term->irc_names = json_incref(json_object_get(buffer->connection->state, "irc_names"));
+    if (term->chat && snag_view_conversation_read(buffer->route, &term->conversation) < 0)
+        return SNAG_VM_EDIT_ERROR;
+    if (!snag_strcpy(term->label, sizeof(term->label), prompt)) return SNAG_VM_EDIT_ERROR;
+
+    /* The buffer owns the draft across persistence and Vim edits. Lend it to
+     * the terminal editor for this input step without a second text copy. */
+    struct snag_buf spare = term->draft;
+    term->draft = buffer->draft;
+    term->cursor = buffer->cursor;
+    enum snag_term_action action = SNAG_TERM_NONE;
+    char *submitted = NULL;
+    int rc = length || paste ? 0 : snag_term_history_step(term);
+    if (event->kind == SNAG_VM_PASTE_BEGIN) snag_term_paste_begin(term);
+    else if (event->kind == SNAG_VM_PASTE_TEXT) rc = snag_term_paste_append(term, bytes, length);
+    else if (event->kind == SNAG_VM_PASTE_END) rc = snag_term_paste_end(term);
+    else for (size_t i = 0u; !rc && i < length; ++i)
+        rc = snag_term_feed_byte(term, bytes[i], &action, &submitted);
+    if (action == SNAG_TERM_UPLOAD)
+        editor->upload_directory = submitted && !strcmp(submitted, "trz -d");
+    if (submitted) {
+        /* Admission retains the draft until its durable request is prepared. */
+        if (action != SNAG_TERM_UPLOAD) {
+            rc = snag_buf_append(&term->draft, submitted, strlen(submitted));
+            term->cursor = term->draft.len;
+        }
+        free(submitted);
+    }
+    buffer->draft = term->draft;
+    buffer->cursor = term->cursor;
+    term->draft = spare;
+    buffer->draft_dirty = true;
+    ++buffer->connection->revision;
+    if (snag_buf_terminate(&buffer->draft) < 0 || rc < 0) return SNAG_VM_EDIT_ERROR;
+    switch (action) {
+    case SNAG_TERM_SUBMIT: return SNAG_VM_EDIT_SUBMIT;
+    case SNAG_TERM_QUEUE: return SNAG_VM_EDIT_QUEUE;
+    case SNAG_TERM_VIEW: return SNAG_VM_EDIT_VIEW;
+    case SNAG_TERM_CANCEL: return SNAG_VM_EDIT_CANCEL;
+    case SNAG_TERM_INTERRUPT: return SNAG_VM_EDIT_INTERRUPT;
+    case SNAG_TERM_EXIT: return SNAG_VM_EDIT_EXIT;
+    case SNAG_TERM_UPLOAD: return SNAG_VM_EDIT_UPLOAD;
+    default: return SNAG_VM_EDIT_DONE;
+    }
+}
+
+int
+snag_vm_editor_poll(struct snag_vm_buffer *buffer)
+{
+    struct snag_term *term = buffer->editor.input;
+    if (!term || !term->history_pending) return 0;
+    const struct snag_vm_input_event tick = {.kind = SNAG_VM_TEXT};
+    char prompt[SNAG_TERM_LABEL_BYTES];
+    memcpy(prompt, term->label, sizeof(prompt));
+    return insert_input(buffer, &tick, term->columns, term->rows, prompt) < 0 ? -1 : 1;
+}
+
 enum snag_vm_edit_result
 snag_vm_editor_key(struct snag_vm_buffer *buffer, struct snag_vm_register *reg,
     const struct snag_vm_input_event *event, bool insert, size_t columns, size_t rows,
@@ -612,41 +739,11 @@ snag_vm_editor_key(struct snag_vm_buffer *buffer, struct snag_vm_register *reg,
     bool control = (event->modifiers & SNAG_VM_CTRL) != 0u;
     const char *text = buffer->draft.len ? (const char *)buffer->draft.data : "";
     size_t length = buffer->draft.len, at = buffer->cursor;
-    if (key == SNAG_VM_KEY_ESCAPE || (control && key == '[') || (insert && control && key == 'c')) {
+    if (key == SNAG_VM_KEY_ESCAPE || (control && key == '[')) {
         snag_vm_editor_normal(buffer, insert);
         return snag_vm_editor_end(buffer) < 0 ? SNAG_VM_EDIT_ERROR : SNAG_VM_EDIT_NORMAL;
     }
-    if (insert) {
-        if (event->kind == SNAG_VM_TEXT)
-            return snag_vm_editor_replace(buffer, at, at, event->text, event->length) < 0 ?
-                SNAG_VM_EDIT_ERROR : SNAG_VM_EDIT_DONE;
-        if (key == SNAG_VM_KEY_ENTER)
-            return snag_vm_editor_end(buffer) < 0 ? SNAG_VM_EDIT_ERROR : SNAG_VM_EDIT_SUBMIT;
-        if ((control && key == 'j') || key == SNAG_VM_KEY_TAB) {
-            const char *character = key == SNAG_VM_KEY_TAB ? "\t" : "\n";
-            return snag_vm_editor_replace(buffer, at, at, character, 1u) < 0 ?
-                SNAG_VM_EDIT_ERROR : SNAG_VM_EDIT_DONE;
-        }
-        if (key == SNAG_VM_KEY_BACKSPACE || (control && (key == 'u' || key == 'w'))) {
-            size_t begin = control ? key == 'u' ? snag_vm_text_line_start(text, length, at) :
-                word_move(text, length, at, 1u, 'b', false, false) :
-                snag_vm_text_previous(text, length, at);
-            return snag_vm_editor_replace(buffer, begin, at, NULL, 0u) < 0 ?
-                SNAG_VM_EDIT_ERROR : SNAG_VM_EDIT_DONE;
-        }
-        if (key == SNAG_VM_KEY_DELETE)
-            return snag_vm_editor_replace(buffer, at,
-                snag_vm_text_next(text, length, at), NULL, 0u) < 0 ?
-                SNAG_VM_EDIT_ERROR : SNAG_VM_EDIT_DONE;
-        if (snag_vm_editor_end(buffer) < 0) return SNAG_VM_EDIT_ERROR;
-        struct snag_vm_motion motion = snag_vm_editor_motion(editor, text, length, at,
-            key, 1u, false, false, true, columns, rows, top, prompt);
-        if (motion.valid && !control) {
-            snag_vm_draft_cursor(buffer, motion.at);
-            return SNAG_VM_EDIT_DONE;
-        }
-        return SNAG_VM_EDIT_UNUSED;
-    }
+    if (insert) return insert_input(buffer, event, columns, rows, prompt);
     if (!control && key >= '0' && key <= '9' && (key != '0' || editor->count)) {
         size_t digit = key - '0';
         if (editor->count > (SIZE_MAX - digit) / 10u) {

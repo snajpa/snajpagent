@@ -2,6 +2,7 @@
 #include "ui.h"
 #include "irc.h"
 #include "irc_address.h"
+#include "presentation.h"
 #include "session_relay.h"
 #include "session_view.h"
 #include "turn.h"
@@ -121,11 +122,13 @@ struct ui_channel_draft {
 
 struct snag_ui_display {
     struct snag_render render;
+    struct snag_presentation_writer *presentation;
+    char presentation_error[256];
     struct snag_term term;
     struct ui_conversation_tab *conversations, *conversation;
     struct ui_channel_draft rollout_draft;
     struct ui_channel_draft *channel_drafts, *main_draft;
-    struct snag_ui_prompt prompt;
+    struct snag_term_prompt prompt;
     struct snag_update *update;
     struct snag_ui_runtime *runtime;
     uint64_t turn_generation;
@@ -147,6 +150,48 @@ struct snag_ui_display {
     struct ui_action *local;
     bool local_acknowledged, painting_feedback;
 };
+
+static int
+retain_output(struct snag_ui_display *display, const struct snag_ui_command *command)
+{
+    if (snag_presentation_append(display->presentation, command) == 0) {
+        if (!display->view_state) return 0;
+        json_t *position = snag_presentation_snapshot(display->presentation);
+        if (!position) return -1;
+        if (json_equal(position, json_object_get(display->view_state, "presentation"))) {
+            json_decref(position);
+            return 0;
+        }
+        /* Nested fields already belong to this immutable display snapshot. */
+        json_t *state = json_copy(display->view_state);
+        if (!state) { json_decref(position); return -1; }
+        if (json_object_set_new(state, "presentation", position) < 0) {
+            json_decref(state);
+            return -1;
+        }
+        snag_view_server_state(display->view, state);
+        json_decref(display->view_state);
+        display->view_state = state;
+        return 0;
+    }
+    int cause = errno;
+    snag_presentation_writer_close(display->presentation);
+    display->presentation = NULL;
+    (void)snprintf(display->presentation_error, sizeof(display->presentation_error),
+        "Session output retention stopped: %s", strerror(cause));
+    if (display->direct || snag_view_server_attached(display->view)) return 0;
+    return snag_render_warning_ctx(&display->render, display->presentation_error);
+}
+
+static int
+present_local(struct snag_ui_display *display, enum snag_ui_operation kind,
+    const char *label, const char *text, bool input)
+{
+    struct snag_ui_command command = {.kind = kind, .label = label, .text = text,
+        .data.value = input};
+    if (retain_output(display, &command) < 0) return -1;
+    return snag_presentation_apply(&display->render, &command, NULL);
+}
 
 static int
 set_level(struct snag_ui_display *display, unsigned int level)
@@ -570,10 +615,10 @@ adopt_snapshot(struct snag_ui *ui, const struct ui_snapshot *snapshot)
 }
 
 static void
-prompt_free(struct snag_ui_prompt *prompt)
+prompt_free(struct snag_term_prompt *prompt)
 {
-    free(prompt->source);
-    for (size_t i = 0u; i < SNAG_PROMPT_HOUR; ++i) free(prompt->values[i]);
+    free((void *)prompt->source);
+    for (size_t i = 0u; i < SNAG_PROMPT_HOUR; ++i) free((void *)prompt->values[i]);
     memset(prompt, 0, sizeof(*prompt));
 }
 
@@ -586,42 +631,6 @@ message_free(struct ui_message *message)
         prompt_free(&message->command.data.prompt);
 }
 
-static int
-configure_prompt(struct snag_ui_display *display, const struct snag_ui_prompt *prompt, struct snag_term *term)
-{
-    const char *frames[SNAG_TERM_SPINNER_COUNT];
-    const char *values[SNAG_PROMPT_FIELD_COUNT];
-    const struct snag_prompt_clock *clock = &term->prompt_clock;
-    char hour[12], minute[12], second[12], label[SNAG_TERM_LABEL_BYTES];
-    const char *text = prompt->source;
-
-    snag_term_capture_prompt_clock(term, time(NULL));
-    if (prompt->values[0]) {
-        (void)snprintf(hour, sizeof(hour), clock->valid ? "%u" : "--", clock->hour);
-        (void)snprintf(minute, sizeof(minute), clock->valid ? "%u" : "--", clock->minute);
-        (void)snprintf(second, sizeof(second), clock->valid ? "%u" : "--", clock->second);
-        for (size_t i = 0u; i < SNAG_PROMPT_HOUR; ++i) values[i] = prompt->values[i];
-        if (display->term.destinations)
-            for (size_t i = 0u; i < display->term.destinations->count; ++i) {
-                const struct snag_irc_destination *destination = &display->term.destinations->items[i];
-                if (prompt->mode == 0u ?
-                    destination->target.id != display->term.destination.id : i != 0u) continue;
-                if (destination->operator[0])
-                    values[SNAG_PROMPT_OPERATOR] = destination->operator;
-                if (destination->model[0])
-                    values[SNAG_PROMPT_MODEL_NICK] = destination->model;
-            }
-        values[SNAG_PROMPT_HOUR] = hour;
-        values[SNAG_PROMPT_MINUTE] = minute;
-        values[SNAG_PROMPT_SECOND] = second;
-        if (snag_config_prompt_expand(text, prompt->mode, values,
-                SNAG_TERM_SPINNER_MARKER_BASE, label, sizeof(label)) < 0) return -1;
-        text = label;
-    }
-    for (size_t i = 0u; i < SNAG_TERM_SPINNER_COUNT; ++i) frames[i] = prompt->frames[i];
-    if (term->interrupt_pending) text = "Cancellation requested; waiting... ";
-    return snag_term_set_prompt_template(term, prompt->active, text, frames, prompt->rate, prompt->states);
-}
 
 static bool
 same_conversation_view(const struct ui_conversation_tab *a, const struct ui_conversation_tab *b)
@@ -675,7 +684,7 @@ apply_prompt(struct snag_ui_display *display)
         }
     }
     term->blank_local = display->prompt.values[0] != NULL;
-    if (configure_prompt(display, &display->prompt, &display->term) < 0) return -1;
+    if (snag_term_configure_prompt(&display->term, &display->prompt, &display->term) < 0) return -1;
     return view_state(display, display->view_state);
 }
 
@@ -972,7 +981,7 @@ view_selects_conversation(const char *text)
 
 static int
 view_submit(void *opaque, const char *id, const char *text, const json_t *route,
-    uint64_t generation, bool terminal)
+    uint64_t generation, bool terminal, bool queued)
 {
     struct snag_ui_display *display = opaque;
     struct snag_ui_runtime *runtime = display->runtime;
@@ -988,7 +997,7 @@ view_submit(void *opaque, const char *id, const char *text, const json_t *route,
     }
     memcpy(item->view_request, id, sizeof(item->view_request));
     item->received_ms = snag_time_ms();
-    item->action = SNAG_TERM_SUBMIT;
+    item->action = queued ? SNAG_TERM_QUEUE : SNAG_TERM_SUBMIT;
     item->attachment = generation;
     item->interface_input = true;
     item->terminal_command = terminal;
@@ -1031,10 +1040,13 @@ view_submit(void *opaque, const char *id, const char *text, const json_t *route,
         item->snapshot.conversation = target;
     }
     display_capture_conversation(display, text, &item->snapshot);
-    item->steering = item->snapshot.view == SNAG_RENDER_ROLLOUT &&
+    item->steering = !queued && item->snapshot.view == SNAG_RENDER_ROLLOUT &&
         item->snapshot.active && !snag_prompt_command(text);
     if (item->steering) atomic_fetch_add(&runtime->steering_pending, 1u);
-    if (queue_push(&runtime->actions, item)) return 0;
+    if (queue_push(&runtime->actions, item)) {
+        display->term.prompt_clock.captured = false;
+        return 0;
+    }
     if (item->steering) atomic_fetch_sub(&runtime->steering_pending, 1u);
     free(item->text);
     free(item);
@@ -1221,9 +1233,25 @@ apply_session(struct snag_ui_display *display, const struct snag_ui_command *com
     if (command->kind == SNAG_UI_SESSION_LISTEN) {
         const struct snag_session *session = command->data.session;
         if (!session) {
+            snag_presentation_writer_close(display->presentation);
+            display->presentation = NULL;
             snag_view_server_stop(display->view);
             if (display->native) snag_session_listener_close(&display->listener);
             return 0;
+        }
+        if (!display->presentation) {
+            display->presentation = snag_presentation_writer_open(session->dir_fd, session->id);
+            if (display->presentation &&
+                snag_presentation_start(display->presentation, session->next_seq) < 0) {
+                snag_presentation_writer_close(display->presentation);
+                display->presentation = NULL;
+            }
+            if (!display->presentation) {
+                (void)snprintf(display->presentation_error, sizeof(display->presentation_error),
+                    "Session output retention unavailable: %s", strerror(errno));
+                if (!display->direct && snag_render_warning_ctx(&display->render,
+                    display->presentation_error) < 0) return -1;
+            }
         }
         if (display->native && snag_session_listener_open(&display->listener, session->dir_fd,
                 session->dir_path, session->lock_fd) < 0) return -1;
@@ -1330,27 +1358,25 @@ static int admit_input(struct snag_ui_display *, const char *, uint64_t);
 static json_t *
 view_prompt(const struct snag_ui_display *display)
 {
-    const struct snag_ui_prompt *prompt = &display->prompt;
+    const struct snag_term_prompt *prompt = &display->prompt;
     if (!prompt->source || !prompt->values[0]) return json_null();
     json_t *values = json_array();
     json_t *frames = json_array();
     if (!values || !frames) goto fail;
-    for (size_t i = 0u; i < SNAG_PROMPT_HOUR; ++i)
-        if (json_array_append_new(values, json_string(prompt->values[i])) < 0) goto fail;
-    const struct snag_prompt_clock *clock = &display->term.prompt_clock;
-    int parts[] = {clock->hour, clock->minute, clock->second};
-    for (size_t i = 0u; i < sizeof(parts) / sizeof(parts[0]); ++i) {
-        char value[12];
-        (void)snprintf(value, sizeof(value), clock->valid ? "%d" : "--", parts[i]);
-        if (json_array_append_new(values, json_string(value)) < 0) goto fail;
-    }
+    const char *resolved[SNAG_PROMPT_FIELD_COUNT];
+    char clock[3][12];
+    snag_term_prompt_values(prompt, &display->term, &display->term, resolved, clock);
+    for (size_t i = 0u; i < SNAG_PROMPT_FIELD_COUNT; ++i)
+        if (json_array_append_new(values, json_string(resolved[i])) < 0) goto fail;
     for (size_t i = 0u; i < SNAG_TERM_SPINNER_COUNT; ++i)
         if (json_array_append_new(frames, json_string(prompt->frames[i])) < 0) goto fail;
-    return json_pack("{s:s,s:o,s:o,s:i,s:i,s:b,s:I,s:I}", "template", prompt->source,
+    return json_pack("{s:s,s:o,s:o,s:i,s:i,s:b,s:I,s:I,s:b,s:b}", "template", prompt->source,
         "values", values, "frames", frames, "states", (int)prompt->states,
         "rate", (int)prompt->rate, "active", prompt->active,
-        "epoch", (json_int_t)display->term.spinner_epoch_ms,
-        "tool_until", (json_int_t)display->term.tool_spinner_off_at);
+        "epoch", (json_int_t)display->term.animation.epoch,
+        "tool_until", (json_int_t)display->term.animation.tool_until,
+        "interrupted", display->term.interrupt_pending,
+        "conversation_labels", display->term.conversation_labels);
 fail:
     json_decref(values);
     json_decref(frames);
@@ -1372,6 +1398,16 @@ view_state(struct snag_ui_display *display, const json_t *state)
         json_decref(copy);
         return -1;
     }
+    if (json_object_set_new(copy, "presentation",
+        snag_presentation_snapshot(display->presentation)) < 0) {
+        json_decref(copy);
+        return -1;
+    }
+    if (display->presentation_error[0] && json_object_set_new(copy, "presentation_error",
+        json_string(display->presentation_error)) < 0) {
+        json_decref(copy);
+        return -1;
+    }
     snag_view_server_state(display->view, copy);
     json_decref(display->view_state);
     display->view_state = copy;
@@ -1384,6 +1420,11 @@ apply_message(struct snag_ui_display *display, struct snag_ui_command *command,
 {
     struct snag_render *render = &display->render;
     struct snag_term *term = &display->term;
+
+    if (command->kind == SNAG_UI_IRC &&
+        display_conversation_event(display, command->data.irc) < 0) return -1;
+    int presented = snag_presentation_apply(render, command, NULL);
+    if (presented != 1) return presented;
 
     switch (command->kind) {
     case SNAG_UI_VIEW_STATE: {
@@ -1433,13 +1474,6 @@ apply_message(struct snag_ui_display *display, struct snag_ui_command *command,
     case SNAG_UI_SESSION_BOUND:
         return apply_session(display, command);
     case SNAG_UI_LEVEL: return set_level(display, command->data.value);
-    case SNAG_UI_HOST: return snag_render_host(render, command->text);
-    case SNAG_UI_HELP: return snag_render_help(render, command->text);
-    case SNAG_UI_RUNTIME: return snag_render_runtime(render, command->text);
-    case SNAG_UI_ERROR: return snag_render_error_ctx(render, command->text);
-    case SNAG_UI_WARNING: return snag_render_warning_ctx(render, command->text);
-    case SNAG_UI_ROLLOUT_END: return snag_render_rollout_end(render);
-    case SNAG_UI_ROLLOUT_ABORT: return snag_render_rollout_abort(render);
     case SNAG_UI_CLOSE: snag_render_attach_term(render, NULL);
         display->direct_opened = false;
         input_stop(display);
@@ -1490,7 +1524,8 @@ apply_message(struct snag_ui_display *display, struct snag_ui_command *command,
                              command->data.commands.count);
         return 0;
     case SNAG_UI_PAUSE: snag_term_set_typing_pause(term, command->data.timing.typing_pause_ms);
-        term->tool_spinner_off_delay_ms = command->data.timing.tool_spinner_off_delay_ms;
+        term->animation.tool_delay_ms = command->data.timing.tool_spinner_off_delay_ms;
+        if (!term->animation.tool_delay_ms) term->animation.tool_until = 0u;
         return 0;
     case SNAG_UI_OPEN:
         if (display->direct) {
@@ -1545,18 +1580,9 @@ apply_message(struct snag_ui_display *display, struct snag_ui_command *command,
         term->prompt_wanted = false;
         return 0;
     case SNAG_UI_PROMPT: {
-        if (command->label) {
-            /* Dispatch gets a fresh label without replacing a live draft/clock. */
-            struct snag_term submitted;
-            snag_term_init(&submitted);
-            submitted.defer_redraw = true;
-            int rc = configure_prompt(display, &command->data.prompt, &submitted);
-            if (rc == 0) rc = snag_render_submitted(render, submitted.label, command->label);
-            snag_term_close(&submitted);
-            return rc;
-        }
         term->defer_redraw = true;
-        if (snag_render_before_prompt(render) < 0) return -1;
+        struct snag_ui_command boundary = {.kind = SNAG_UI_BEFORE_PROMPT};
+        if (snag_presentation_apply(render, &boundary, NULL) < 0) return -1;
         term->defer_redraw = false;
         if (command->data.prompt.active && !term->active) ++display->turn_generation;
         /* After consuming Ctrl-C the owner can acknowledge an editor-only
@@ -1615,28 +1641,6 @@ apply_message(struct snag_ui_display *display, struct snag_ui_command *command,
             return 0;
         }
         return display_set_view(display, (enum snag_render_view)command->data.value, false, true);
-    case SNAG_UI_SUBMITTED: return command->data.value ?
-            snag_render_input_submitted(render, command->label, command->text) :
-            snag_render_submitted(render, command->label, command->text);
-    case SNAG_UI_PUBLIC_BEGIN: return snag_render_rollout_begin(render, command->data.public.fd,
-                                        command->label, command->data.public.kind);
-    case SNAG_UI_ORIENTATION: return snag_render_orientation(render, command->text, command->label,
-                    command->data.orientation.turns, command->data.orientation.queued,
-                    command->data.orientation.resumed, command->data.orientation.queue_armed);
-    case SNAG_UI_HISTORY: return snag_render_history(render, command->data.replay.turn,
-            command->data.replay.shown, command->data.replay.completed, command->data.replay.total);
-    case SNAG_UI_IRC:
-        if (display_conversation_event(display, command->data.irc) < 0) return -1;
-        return snag_render_irc_event(render, command->data.irc);
-    case SNAG_UI_VOICE_EVENT: return snag_render_voice_event(render, command->data.voice, 0u, 0u);
-    case SNAG_UI_DURABLE: return snag_render_durable(render, command->data.durable.fd,
-            command->data.durable.source, command->text,
-            command->data.durable.timeout_ms, command->data.durable.max_output_bytes);
-    case SNAG_UI_EVENT: return snag_render_event(render, command->data.seq, command->text);
-    case SNAG_UI_RESUME: return snag_render_resume_hint(render, command->text, command->len);
-    case SNAG_UI_PROTOCOL: return snag_render_protocol(render, command->label, command->text, command->len);
-    case SNAG_UI_TRANSPORT: return snag_render_transport(render, (char)command->data.value,
-                                    command->text, command->len);
     case SNAG_UI_HISTORY_SNAPSHOT: return snag_term_history_set(term, &command->data.history.entries,
                                     command->data.history.refresh);
     case SNAG_UI_UPDATE:
@@ -1646,7 +1650,7 @@ apply_message(struct snag_ui_display *display, struct snag_ui_command *command,
         return 0;
     case SNAG_UI_INPUT: return admit_input(display, command->text, command->data.seq);
     case SNAG_UI_STOP: return 0;
-    case SNAG_UI_PUBLIC: case SNAG_UI_RAW: break; /* Sliced by apply_display. */
+    default: break; /* Output was applied above; raw bytes are sliced by apply_display. */
     }
     return snag_errno(EINVAL);
 }
@@ -1669,15 +1673,15 @@ finish_input(struct snag_ui_display *display, struct ui_action *item, int rc)
      * Their later acknowledgements use this flag to avoid a second echo. */
     if (rc > 0 && item->action == SNAG_TERM_SUBMIT && !term->input_only &&
         snag_prompt_command(item->text)) {
-        if (snag_render_input_submitted(&display->render, item->snapshot.label,
-                item->text) < 0) goto fail;
+        if (present_local(display, SNAG_UI_SUBMITTED, item->snapshot.label,
+            item->text, true) < 0) goto fail;
         item->submission_echoed = true;
     }
     /* A /yield completed as the prompt becomes held uses the same priority
      * path as a line found in the held input ring. */
     if (rc > 0 && item->action == SNAG_TERM_SUBMIT && item->text &&
         !strcmp(item->text, "/yield") &&
-        (term->spinner_states & (1u << SNAG_TERM_SPINNER_TOOL))) {
+        (term->animation.states & (1u << SNAG_TERM_SPINNER_TOOL))) {
         atomic_store(&runtime->yield_requested, item->submission_echoed ? 2u : 1u);
         snag_wakeup_send(runtime->actions.wake[1]);
         free(item->text);
@@ -1858,7 +1862,7 @@ read_input(struct snag_ui_display *display, int timeout_ms)
         (!term->prompt_wanted && !term->dictating && !term->input_only);
     if (term->opened && !display->suspended && !display->input_closed && held) {
         enum held_control control = input_take_held_control(&runtime->input,
-            (term->spinner_states & (1u << SNAG_TERM_SPINNER_TOOL)) != 0u);
+            (term->animation.states & (1u << SNAG_TERM_SPINNER_TOOL)) != 0u);
 
         if (control == HELD_EXIT) atomic_store(&runtime->exit_requested, true);
         if (control == HELD_INTERRUPT)
@@ -1866,7 +1870,7 @@ read_input(struct snag_ui_display *display, int timeout_ms)
                 display->turn_generation ? display->turn_generation : UINT64_MAX);
         if (control == HELD_YIELD) {
             if (!term->input_only &&
-                snag_render_input_submitted(&display->render, term->label, "/yield") < 0) {
+                present_local(display, SNAG_UI_SUBMITTED, term->label, "/yield", true) < 0) {
                 return -1;
             }
             atomic_store(&runtime->yield_requested, term->input_only ? 1u : 2u);
@@ -1905,9 +1909,10 @@ local_feedback(struct snag_ui_display *display)
     if (!display->local_acknowledged) {
         display->painting_feedback = true;
         if (!item->submission_echoed) {
-            rc = snag_render_submitted(&display->render, item->snapshot.label, item->text);
+            rc = present_local(display, SNAG_UI_SUBMITTED, item->snapshot.label, item->text, false);
         }
-        if (rc == 0 && display->feedback[0]) rc = snag_render_host(&display->render, display->feedback);
+        if (rc == 0 && display->feedback[0])
+            rc = present_local(display, SNAG_UI_HOST, NULL, display->feedback, false);
         if (rc == 0) memcpy(item->feedback, display->feedback, sizeof(item->feedback));
         display->painting_feedback = false;
         display->local_acknowledged = true;
@@ -1954,9 +1959,26 @@ apply_display(struct snag_ui_display *display, struct ui_message *message)
     struct snag_ui_runtime *runtime = display->runtime;
     size_t offset = 0u;
     bool raw = message->command.kind == SNAG_UI_RAW;
+    if (message->command.kind == SNAG_UI_PROMPT && message->command.label) {
+        /* Dispatch gets a fresh label without replacing a live draft/clock. */
+        struct snag_term submitted;
+        snag_term_init(&submitted);
+        submitted.defer_redraw = true;
+        int rc = snag_term_configure_prompt(&submitted, &message->command.data.prompt,
+            &display->term);
+        struct snag_ui_command echo = {.kind = SNAG_UI_SUBMITTED,
+            .label = submitted.label, .text = message->command.label};
+        if (!rc) rc = retain_output(display, &echo);
+        if (!rc && !display->direct && !snag_view_server_attached(display->view))
+            rc = snag_presentation_apply(&display->render, &echo, NULL);
+        snag_term_close(&submitted);
+        return rc;
+    }
     if (message->command.kind == SNAG_UI_PROMPT && !message->command.label) {
-        const struct snag_ui_prompt *old = &display->prompt;
-        const struct snag_ui_prompt *next = &message->command.data.prompt;
+        struct snag_ui_command boundary = {.kind = SNAG_UI_BEFORE_PROMPT};
+        if (retain_output(display, &boundary) < 0) return -1;
+        const struct snag_term_prompt *old = &display->prompt;
+        const struct snag_term_prompt *next = &message->command.data.prompt;
         message->prompt_changed = !display->term.prompt_wanted || old->active != next->active ||
             old->mode != next->mode || strcmp(old->source ? old->source : "",
                 next->source ? next->source : "");
@@ -1968,10 +1990,12 @@ apply_display(struct snag_ui_display *display, struct ui_message *message)
         message->prompt_changed = display->term.prompt_wanted;
     }
 
+    if (retain_output(display, &message->command) < 0) return -1;
+    if (message->command.retain_only) return 0;
+
     if (display->direct || snag_view_server_attached(display->view)) {
         switch (message->command.kind) {
         case SNAG_UI_PROMPT:
-            if (message->command.label) return 0;
             if (message->command.data.prompt.active && !display->term.active)
                 ++display->turn_generation;
             prompt_free(&display->prompt);
@@ -1983,7 +2007,8 @@ apply_display(struct snag_ui_display *display, struct ui_message *message)
             return display_conversation_event(display, message->command.data.irc);
         case SNAG_UI_HOST: case SNAG_UI_HELP: case SNAG_UI_RUNTIME:
         case SNAG_UI_ERROR: case SNAG_UI_WARNING: case SNAG_UI_ROLLOUT_END:
-        case SNAG_UI_ROLLOUT_ABORT: case SNAG_UI_SUBMITTED: case SNAG_UI_PUBLIC_BEGIN:
+        case SNAG_UI_ROLLOUT_ABORT: case SNAG_UI_SUBMITTED: case SNAG_UI_BEFORE_PROMPT:
+        case SNAG_UI_PUBLIC_BEGIN:
         case SNAG_UI_PUBLIC: case SNAG_UI_ORIENTATION: case SNAG_UI_HISTORY:
         case SNAG_UI_DURABLE: case SNAG_UI_EVENT:
         case SNAG_UI_RESUME: case SNAG_UI_PROTOCOL: case SNAG_UI_TRANSPORT:
@@ -2124,6 +2149,7 @@ presentation_main(void *opaque)
         (void)snag_render_update(&display->render, banner);
         free(banner);
     }
+    snag_presentation_writer_close(display->presentation);
     snag_render_free(&display->render);
     if (display->local) {
         free(display->local->text);
@@ -2572,11 +2598,10 @@ snag_ui_text(struct snag_ui *ui, enum snag_ui_operation op, const char *text)
         size_t length = strlen(text);
         if (snag_term_append_safe(ui->command_report, text, length) < 0) return -1;
         int rc = length && text[length - 1u] == '\n' ? 0 : snag_buf_putc(ui->command_report, '\n');
-        if (!rc && !ui->command_report_passthrough && ui->observe && op != SNAG_UI_RUNTIME)
-            ui->observe(ui->observe_opaque, op == SNAG_UI_ERROR ? "error" :
-                op == SNAG_UI_WARNING ? "warning" : op == SNAG_UI_HELP ? "help" : "host",
-                text, NULL);
-        if (rc < 0 || !ui->command_report_passthrough) return rc;
+        if (rc < 0) return rc;
+        if (!ui->command_report_passthrough)
+            return snag_ui_send(ui, (struct snag_ui_command){.kind = op,
+                .text = text, .len = length, .retain_only = true});
     }
     struct ui_message message = {.command = {.kind = op}};
     return send_message(ui, &message, text);

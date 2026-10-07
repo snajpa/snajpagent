@@ -2,6 +2,7 @@
 #include "vm_transcript.h"
 #include "history_view.h"
 #include "irc.h"
+#include "presentation.h"
 #include "render.h"
 #include "secret_source.h"
 #include "store.h"
@@ -564,7 +565,7 @@ format_checkpoint(void *opaque)
 }
 
 static int
-format_blocks(struct transcript *view, json_t *blocks, bool plain, bool no_color, bool logical)
+format_blocks(struct transcript *view, json_t *blocks, const json_t *route, bool plain, bool no_color, bool logical)
 {
     struct formatted_text out = {.text = {.max = SNAG_MEMORY_LIMIT / 2u}};
     struct snag_render render;
@@ -574,6 +575,17 @@ format_blocks(struct transcript *view, json_t *blocks, bool plain, bool no_color
     render.stdout_terminal = render.stderr_terminal = true;
     render.color_stdout = render.color_stderr = !no_color;
     render.markdown = !plain;
+    if (route) {
+        render.view = SNAG_RENDER_CHAT;
+        const char *room = snag_json_string(route, "room");
+        const char *conversation = snag_json_string(route, "conversation");
+        const char *endpoint = snag_json_string(route, "endpoint");
+        (void)snag_strcpy(render.chat_room, sizeof(render.chat_room), room ? room : "");
+        (void)snag_strcpy(render.chat_endpoint, sizeof(render.chat_endpoint),
+            endpoint ? endpoint : "");
+        (void)snag_strcpy(render.chat_conversation, sizeof(render.chat_conversation),
+            room ? "" : conversation ? conversation : snag_json_string(route, "connection"));
+    }
     render.sink = (struct snag_render_sink){.text = formatted_span, .opaque = &out,
         .columns = view->columns, .logical = logical};
     int rc = -1;
@@ -637,7 +649,7 @@ sort_blocks(struct transcript *view)
 }
 
 json_t *
-snag_vm_transcript_blocks(const json_t *events, unsigned int verbosity, unsigned int columns,
+snag_vm_transcript_blocks(const json_t *events, const json_t *route, unsigned int verbosity, unsigned int columns,
     bool plain, bool no_color, bool logical,
     const struct snag_wire_secrets *secrets, bool (*cancel)(void *), void *opaque,
     char *error, size_t size)
@@ -688,7 +700,7 @@ snag_vm_transcript_blocks(const json_t *events, unsigned int verbosity, unsigned
         if (rc < 0) goto out;
     }
     result = sort_blocks(&view);
-    if (result && format_blocks(&view, result, plain, no_color, logical) < 0) {
+    if (result && format_blocks(&view, result, route, plain, no_color, logical) < 0) {
         json_decref(result);
         result = NULL;
     }
@@ -708,4 +720,216 @@ out:
     json_decref(view.blocks);
     json_decref(view.calls);
     return result;
+}
+
+static json_t *
+filter_output(void *opaque, const json_t *value)
+{
+    const struct snag_wire_secrets *secrets = opaque;
+    char *encoded = json_dumps(value, JSON_COMPACT | JSON_ENCODE_ANY);
+    if (!encoded) return NULL;
+    struct snag_buf filtered = {.max = SNAG_MEMORY_LIMIT / 2u};
+    char error[128];
+    int rc = snag_wire_json_redact_bounded((const unsigned char *)encoded, strlen(encoded),
+        SNAG_MEMORY_LIMIT / 2u, secrets, &filtered, error, sizeof(error));
+    snag_secret_bytes_free(encoded);
+    json_t *result = rc ? NULL : json_loadb((const char *)filtered.data,
+        filtered.len, JSON_DECODE_ANY, NULL);
+    snag_buf_free(&filtered);
+    return result;
+}
+
+/* Match across fragment boundaries before Markdown can remove secret bytes.
+ * Retain the original fragment order, including notices between fragments. */
+static int
+filter_public(json_t *records, size_t start, size_t end,
+    const struct snag_wire_secrets *secrets)
+{
+    struct snag_buf source = {.max = SNAG_MAX_PUBLIC_ITEM};
+    struct snag_buf decoded = {.max = SNAG_MAX_PUBLIC_ITEM};
+    int rc = -1;
+    for (size_t i = start; i < end; ++i) {
+        const json_t *data = json_object_get(json_array_get(records, i), "data");
+        if (strcmp(snag_json_string(data, "op"), "public")) continue;
+        const char *text = snag_json_string(data, "text");
+        if (!text || snag_base64_decode(&source, text) < 0) goto out;
+    }
+    size_t offset = 0u, skip = 0u;
+    for (size_t i = start; i < end; ++i) {
+        json_t *data = json_object_get(json_array_get(records, i), "data");
+        if (strcmp(snag_json_string(data, "op"), "public")) continue;
+        snag_buf_reset(&decoded);
+        if (snag_base64_decode(&decoded, snag_json_string(data, "text")) < 0) goto out;
+        size_t limit = offset + decoded.len;
+        struct snag_buf text = {.max = SNAG_MAX_PUBLIC_ITEM};
+        while (offset < limit) {
+            if (skip) { --skip; ++offset; continue; }
+            size_t matched = snag_wire_secret_match(source.data + offset,
+                source.len - offset, secrets);
+            if (matched) {
+                if (snag_buf_append(&text, "<redacted:secret>", 17u) < 0) break;
+                skip = matched;
+            } else {
+                if (snag_buf_putc(&text, source.data[offset]) < 0) break;
+                ++offset;
+            }
+        }
+        struct snag_buf encoded = {.max = SNAG_MAX_EVENT_LINE};
+        rc = offset == limit ? snag_base64_append(&encoded, text.data, text.len) : -1;
+        if (!rc) rc = json_object_set_new(data, "text", json_stringn(
+            encoded.data ? (const char *)encoded.data : "", encoded.len));
+        snag_buf_free(&text);
+        snag_buf_free(&encoded);
+        if (rc < 0) goto out;
+    }
+    rc = 0;
+out:
+    snag_secret_clear(source.data, source.len);
+    snag_secret_clear(decoded.data, decoded.len);
+    snag_buf_free(&source);
+    snag_buf_free(&decoded);
+    return rc;
+}
+
+static json_t *
+filter_operation(const json_t *record, const struct snag_wire_secrets *secrets)
+{
+    const char *op = snag_json_string(record, "op");
+    if (!op) { errno = EINVAL; return NULL; }
+    /* Public bytes have already been matched across their complete stream. */
+    if (!strcmp(op, "public") || !strcmp(op, "durable")) return json_incref((json_t *)record);
+    bool bytes = snag_string_in(op, "protocol transport resume");
+    if (!bytes) return filter_output((void *)secrets, record);
+    json_t *copy = json_copy((json_t *)record), *filtered = NULL;
+    struct snag_buf text = {.max = SNAG_MAX_EVENT_LINE};
+    const char *encoded = snag_json_string(record, "text");
+    if (!copy || !encoded || snag_base64_decode(&text, encoded) < 0 ||
+        json_object_set_new(copy, "text", json_stringn((const char *)text.data, text.len)) < 0)
+        goto out;
+    filtered = filter_output((void *)secrets, copy);
+    snag_buf_reset(&text);
+    const json_t *value = json_object_get(filtered, "text");
+    if (filtered && (snag_base64_append(&text, (const unsigned char *)json_string_value(value),
+        json_string_length(value)) < 0 || json_object_set_new(filtered, "text",
+        json_stringn((const char *)text.data, text.len)) < 0)) {
+        json_decref(filtered);
+        filtered = NULL;
+    }
+out:
+    snag_secret_clear(text.data, text.len);
+    snag_buf_free(&text);
+    json_decref(copy);
+    return filtered;
+}
+
+static int
+output_block(json_t *blocks, struct formatted_text *out, uint64_t seq, uint64_t last)
+{
+    if (!out->text.len) return 0;
+    char key[80];
+    (void)snprintf(key, sizeof(key), "presentation:%llu", (unsigned long long)seq);
+    json_t *text = json_stringn((const char *)out->text.data, out->text.len);
+    json_t *block = text ? json_pack("{s:s,s:I,s:I,s:s,s:s,s:O,s:o,s:O}",
+        "key", key, "seq", (json_int_t)seq, "last_seq", (json_int_t)last,
+        "kind", "presentation", "label", "", "text", text, "display", text,
+        "styles", out->styles) : NULL;
+    if (!block || json_array_append_new(blocks, block) < 0) return -1;
+    snag_buf_reset(&out->text);
+    json_decref(out->styles);
+    json_decref(out->origins);
+    out->styles = json_array();
+    out->origins = json_array();
+    if (!out->styles || !out->origins) return -1;
+    return 0;
+}
+
+json_t *
+snag_vm_presentation_blocks(const json_t *records, uint64_t origin, int journal_fd,
+    int legacy_fd, unsigned int verbosity, unsigned int columns, bool plain,
+    bool no_color, bool logical, const struct snag_wire_secrets *secrets,
+    bool (*cancel)(void *), void *opaque, char *error, size_t size)
+{
+    struct transcript view = {.cancel = cancel, .cancel_opaque = opaque};
+    struct formatted_text out = {.text = {.max = SNAG_MEMORY_LIMIT / 2u},
+        .styles = json_array(), .origins = json_array()};
+    struct snag_render render;
+    snag_render_init(&render, verbosity);
+    render.stdout_terminal = render.stderr_terminal = true;
+    render.color_stdout = render.color_stderr = !no_color;
+    render.markdown = !plain;
+    render.checkpoint = format_checkpoint;
+    render.checkpoint_opaque = &view;
+    render.filter_event = filter_output;
+    render.filter_opaque = (void *)secrets;
+    render.sink = (struct snag_render_sink){.text = formatted_span, .opaque = &out,
+        .columns = columns, .logical = logical};
+    json_t *input = json_deep_copy(records), *blocks = json_array();
+    bool open = false;
+    int active_fd = -1;
+    uint64_t first = 0u, last = 0u;
+    if (!input || !blocks || !out.styles || !out.origins) goto failed;
+    size_t count = json_array_size(input), start = 0u;
+    for (size_t i = 0u; i <= count; ++i) {
+        const char *op = snag_json_string(json_object_get(json_array_get(input, i), "data"), "op");
+        if (i < count && !op) { errno = EINVAL; goto failed; }
+        if (i == count || snag_string_in(op, "begin end abort")) {
+            if (filter_public(input, start, i, secrets) < 0) goto failed;
+            start = i + 1u;
+        }
+    }
+    for (size_t i = 0u; i < count; ++i) {
+        if (canceled(&view)) goto failed;
+        const json_t *row = json_array_get(input, i);
+        uint64_t sequence;
+        if (snag_json_integer_u64(row, "seq", &sequence) < 0 || sequence < 2u ||
+            sequence - 2u > INT64_MAX - origin) goto failed;
+        uint64_t seq = origin + sequence - 2u;
+        json_t *data = filter_operation(json_object_get(row, "data"), secrets);
+        if (!data) goto failed;
+        const char *op = snag_json_string(data, "op");
+        /* IRC has its own selected-conversation projection. */
+        if (!strcmp(op, "irc")) { json_decref(data); continue; }
+        if (!open) {
+            if (output_block(blocks, &out, first, last) < 0) {
+                json_decref(data);
+                goto failed;
+            }
+            first = seq;
+        }
+        last = seq;
+        if (!strcmp(op, "begin")) open = true;
+        int fd = journal_fd;
+        if (!strcmp(op, "durable")) {
+            const json_t *source = json_array_get(json_object_get(data, "data"), 0u);
+            if (!json_integer_value(json_object_get(source, "sequence"))) fd = legacy_fd;
+            if (fd < 0) { json_decref(data); errno = ESTALE; goto failed; }
+            /* Each reference names its backend. Queued tool records only use
+             * one backend within a response; an import occurs between owners. */
+            if (render.history_fd >= 0 && active_fd != fd) {
+                (void)close(render.history_fd);
+                render.history_fd = -1;
+            }
+        }
+        active_fd = fd;
+        bool closed = snag_string_in(op, "end abort");
+        int rc = snag_presentation_replay(&render, data, fd);
+        if (!rc) rc = snag_render_flush_pending(&render, SIZE_MAX);
+        json_decref(data);
+        if (rc < 0) goto failed;
+        if (closed) open = false;
+    }
+    if (output_block(blocks, &out, first, last) < 0) goto failed;
+    goto done;
+failed:
+    if (!errno) errno = EINVAL;
+    (void)snag_errorf(error, size, "cannot render retained session output: %s", strerror(errno));
+    json_decref(blocks);
+    blocks = NULL;
+done:
+    snag_render_free(&render);
+    snag_buf_free(&out.text);
+    json_decref(out.styles);
+    json_decref(out.origins);
+    json_decref(input);
+    return blocks;
 }

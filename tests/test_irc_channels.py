@@ -258,7 +258,7 @@ class ChannelTests(ChannelFixture):
                          ':fake 366 queryop #side :end\r\n'
                          ':peer!u@fake NOTICE #side :ascii-roster-ready\r\n')
         self.wait(lambda: any(e['data'].get('text') == 'ascii-roster-ready' for e in self.events()))
-        self.command('/chat 1/#side', 'channel #side operator')
+        self.command('/chat 1/#side', '[#side]')
         self.term.write(b'@member{\t')
         self.term.repaint_until(b'host-model/medium')
         self.term.write(b'\x1b[Z')
@@ -280,7 +280,7 @@ class ChannelTests(ChannelFixture):
         self.server.send('queryop', ':fake 366 queryop #side :end\r\n'
                          ':peer!u@fake NOTICE #side :large-roster-ready\r\n')
         self.wait(lambda: any(e['data'].get('text') == 'large-roster-ready' for e in self.events()))
-        self.command('/chat 1/#side', 'channel #side operator')
+        self.command('/chat 1/#side', '[#side]')
         self.term.write(b'@deep-\t')
         self.term.repaint_until(b'@deep-roster-final ')
         self.server.send('queryop', ':deep-roster-final!u@fake NICK new-tail-name\r\n')
@@ -295,7 +295,7 @@ class ChannelTests(ChannelFixture):
                          ':fake 366 queryop #side :end\r\n'
                          ':peer!u@fake NOTICE #side :roster-ready\r\n')
         self.wait(lambda: any(e['data'].get('text') == 'roster-ready' for e in self.events()))
-        self.command('/chat 1/#side', 'channel #side operator')
+        self.command('/chat 1/#side', '[#side]')
         self.term.write(b'@team-\t')
         self.term.repaint_until(b'@team-side ')
         self.term.write(b'hello\r')
@@ -304,7 +304,7 @@ class ChannelTests(ChannelFixture):
         self.wait(lambda: any(e['data'].get('text') == 'side-renamed' for e in self.events()))
         self.term.write(b'@side-\t')
         self.term.repaint_until(b'@side-renamed ')
-        self.command('/query 1/private-peer', 'query private-peer operator')
+        self.command('/query 1/private-peer', '[private-peer]')
         self.term.write(b'@priv\t')
         self.term.repaint_until(b'@private-peer ')
         self.term.write(b'hello\r')
@@ -321,9 +321,9 @@ class ChannelTests(ChannelFixture):
         self.wait(lambda: ('agent', '#agentonly') in self.channels())
         self.command('/rollout', 'host-model/medium')
         self.term.write(b'\x1b[Z')
-        self.term.repaint_until(b'channel #agentonly agent read-only')
+        self.term.repaint_until(b"[#agentonly; viewing model's chat]")
         self.term.write(b'agent-channel-impersonation\r')
-        self.term.until(b'agent conversation is read-only')
+        self.term.until(b"Viewing the model's chat")
         self.assert_no_wire('agent-channel-impersonation')
 
     def test_operator_channel_addresses_actions_and_scope(self):
@@ -331,7 +331,7 @@ class ChannelTests(ChannelFixture):
         self.operator_wire('PRIVMSG #side :operator-channel-body')
         self.command('/notice ' + self.selector(identity='operator') + ' channel-notice')
         self.operator_wire('NOTICE #side :channel-notice')
-        self.command('/chat 1/#SIDE', 'channel #side operator')
+        self.command('/chat 1/#SIDE', '[#side]')
         self.command('/me channel-action')
         self.operator_wire('PRIVMSG #side :\x01ACTION channel-action\x01')
         self.command('/topic selected-channel-topic')
@@ -339,7 +339,7 @@ class ChannelTests(ChannelFixture):
         self.command('/names', 'NAMES refresh requested')
         self.operator_wire('NAMES #side')
         self.assertIn(b'members[', self.term.output)
-        self.command('/query 1/private-peer', 'query private-peer operator')
+        self.command('/query 1/private-peer', '[private-peer]')
         before = len(self.server.lines)
         self.command('/topic private-topic-forbidden', 'requires a channel')
         self.command('/names', 'requires a channel')
@@ -352,7 +352,7 @@ class ChannelTests(ChannelFixture):
         self.assertFalse(any(line == 'JOIN #missing' for _, line in self.server.lines))
 
     def test_operator_join_part_and_explicit_reopen(self):
-        self.command('/join 1/#extra', 'channel #extra operator')
+        self.command('/join 1/#extra', '[#extra]')
         self.wait(lambda: self.channels().get(('operator', '#extra'), {})
                   .get('routing', {}).get('joined'))
         self.operator_wire('JOIN #extra')
@@ -365,21 +365,21 @@ class ChannelTests(ChannelFixture):
         self.term.until(b'membership changed')
         self.term.repaint_until(b'parted-channel-draft')
         self.assert_no_wire('parted-channel-draft')
-        self.command('/join 1/#extra', 'channel #extra operator')
+        self.command('/join 1/#extra', '[#extra]')
         self.wait(lambda: self.channels()[('operator', '#extra')]['routing']['joined'])
         self.term.write(b'explicitly-reopened-body\r')
         self.operator_wire('PRIVMSG #extra :explicitly-reopened-body')
 
     def test_channels_query_and_rollout_cycle_preserves_four_drafts(self):
-        self.command('/query 1/private-peer', 'query private-peer operator')
+        self.command('/query 1/private-peer', '[private-peer]')
         self.term.write(b'private-draft\t')
         self.term.repaint_until(b'host-model/medium')
         self.term.write(b'rollout-draft\x1b[Z')
         self.term.repaint_until(b'private-draft')
         self.term.write(b'\x1b[Z')
-        self.term.repaint_until(b'channel #side operator')
+        self.term.repaint_until(b'[#side]')
         self.term.write(b'side-draft\x1b[Z')
-        self.term.repaint_until(b'channel #lab operator')
+        self.term.repaint_until(b'[#lab]')
         self.term.write(b'lab-draft\x1b[Z')
         self.term.repaint_until(b'rollout-draft')
         self.term.write(b'\x1b[Z')
@@ -400,7 +400,7 @@ class ChannelTests(ChannelFixture):
         self.assertFalse(any(self.provider.latest_user(r) == 'rollout-draft' for r in self.seen))
 
     def test_channel_draft_stays_stale_after_kick_rejoin(self):
-        self.command('/chat 1/#side', 'channel #side operator')
+        self.command('/chat 1/#side', '[#side]')
         self.term.write(b'frozen-channel-draft')
         self.term.repaint_until(b'frozen-channel-draft')
         previous = self.channels()[('operator', '#side')]['routing']['membership']
@@ -411,7 +411,7 @@ class ChannelTests(ChannelFixture):
         self.term.until(b'membership changed')
         self.term.repaint_until(b'frozen-channel-draft')
         self.assert_no_wire('frozen-channel-draft')
-        self.command('/chat 1/#side', 'channel #side operator')
+        self.command('/chat 1/#side', '[#side]')
         self.term.write(b'fresh-channel-draft\r')
         self.operator_wire('PRIVMSG #side :fresh-channel-draft')
 
@@ -597,7 +597,7 @@ class ChannelPrefixTests(ChannelFixture):
     chantypes = '#$'
 
     def test_custom_channel_history_survives_resume(self):
-        self.command('/join 1/$side', 'channel $side operator')
+        self.command('/join 1/$side', '[$side]')
         self.server.send('querybot', ':querybot!u@fake JOIN $side\r\n')
         self.wait(lambda: self.channels().get(('agent', '$side'), {})
                   .get('routing', {}).get('joined'))
@@ -617,13 +617,13 @@ class ChannelPrefixTests(ChannelFixture):
         self.seen.clear()
         self.submit('verify-custom-resume')
         self.assertIn('retained-custom-channel', json.dumps(self.seen))
-        self.command('/chat 1/$side', 'channel $side operator')
+        self.command('/chat 1/$side', '[$side]')
         self.command('after-custom-resume')
         self.operator_wire('PRIVMSG $side :after-custom-resume')
 
     def test_advertised_prefix_classifies_operator_commands(self):
         self.command('/query 1/$side', 'select a nick')
-        self.command('/join 1/$side', 'channel $side operator')
+        self.command('/join 1/$side', '[$side]')
         self.wait(lambda: self.channels().get(('operator', '$side'), {})
                   .get('routing', {}).get('joined'))
         self.operator_wire('JOIN $side')

@@ -89,11 +89,11 @@ class ClassicTests(unittest.TestCase):
     def test_flush_draft_and_restore_shared_split_controller(self):
         child = self.start('-N', 'draft')
         child.command('attach ' + self.owner.sid)
-        child.repaint_until(b'ATTACHED')
+        child.attached()
         child.write(b'iunsent semantic draft\x1b:vsp\r:classic\r')
         child.until('›'.encode())
         self.returned(child)
-        child.repaint_until(b'ATTACHED')
+        child.attached()
         child.repaint_until(b'unsent semantic draft')
         child.command('workspace save')
         self.wait_snapshot(lambda rows: len(next(iter(rows.values()))['state']['windows']) == 2)

@@ -185,8 +185,11 @@ main(void)
     assert(snag_vm_input_feed(&input, "\033[200~", 6u, 6000u, collect, &full) == 0);
     assert(snag_vm_input_expire(&input, 100000u, collect, &full) == 0 && input.paste);
     assert(snag_vm_input_feed(&input, "\003:q\r\033[201~", 10u, 100001u, collect, &full) == 0);
-    assert(!input.paste && full.count == 3u);
-    bytes(&full, 1u, SNAG_VM_PASTE_TEXT, "\003:q\r");
+    assert(!input.paste && full.count == 5u);
+    key(&full, 1u, 'c', SNAG_VM_CTRL);
+    bytes(&full, 2u, SNAG_VM_TEXT, ":q");
+    key(&full, 3u, SNAG_VM_KEY_ENTER, 0u);
+    key(&full, 4u, SNAG_VM_KEY_UNKNOWN, 0u);
     clear(&full);
     puts("test_vm_input: ok");
     return 0;

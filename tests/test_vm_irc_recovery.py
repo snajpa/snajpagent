@@ -26,7 +26,7 @@ class RecoveryTests(ChannelFixture):
         self.child = self.workspace_start('-N', 'irc-recovery')
         self.term = self.child
         self.child.command('attach ' + self.sid)
-        self.child.repaint_until(b'ATTACHED')
+        self.child.attached()
         self.query()
 
     def focused_buffer(self):
@@ -103,7 +103,7 @@ class RecoveryTests(ChannelFixture):
         self.child.finish('close')
         self.child = self.workspace_start('--resume', 'irc-recovery')
         self.term = self.child
-        self.child.repaint_until(b'ATTACHED')
+        self.child.attached()
         self.child.repaint_until(b'uncertain')
         self.assertEqual(len(self.wire(text)), 1)
         self.recover_body(text)

@@ -37,7 +37,7 @@ static json_t *
 project(const json_t *events, unsigned int level)
 {
     char error[256];
-    json_t *blocks = snag_vm_transcript_blocks(events, level, 80u, false, false, false, &secrets,
+    json_t *blocks = snag_vm_transcript_blocks(events, NULL, level, 80u, false, false, false, &secrets,
         NULL, NULL, error, sizeof(error));
     if (!blocks) (void)fprintf(stderr, "%s\n", error);
     assert(blocks);
@@ -140,7 +140,7 @@ irc_redaction_expansion(void)
     json_t *events = json_array();
     event(events, "irc_event_v2", snag_irc_event_data(&irc));
     char error[256];
-    json_t *blocks = snag_vm_transcript_blocks(events, 0u, 80u, false, false, false,
+    json_t *blocks = snag_vm_transcript_blocks(events, NULL, 0u, 80u, false, false, false,
         &one, NULL, NULL, error, sizeof(error));
     assert(blocks && json_array_size(blocks) == 1u);
     const char *display = snag_json_string(json_array_get(blocks, 0u), "display");
@@ -245,7 +245,7 @@ output_offset_bounds(void)
         json_t *events = json_array();
         output(events, 0u, offsets[i], "end", 3u);
         errno = 0;
-        json_t *blocks = snag_vm_transcript_blocks(events, 3u, 80u, false, false, false,
+        json_t *blocks = snag_vm_transcript_blocks(events, NULL, 3u, 80u, false, false, false,
             NULL, NULL, NULL,
             error, sizeof(error));
         if (i == 2u) {
@@ -311,7 +311,7 @@ redaction_expansion(void)
     memset(bytes, 'a', sizeof(bytes));
     json_t *events = json_array();
     output(events, 0u, 0u, bytes, sizeof(bytes));
-    json_t *blocks = snag_vm_transcript_blocks(events, 3u, 80u, false, false, false,
+    json_t *blocks = snag_vm_transcript_blocks(events, NULL, 3u, 80u, false, false, false,
         &one, NULL, NULL,
         error, sizeof(error));
     assert(blocks && json_array_size(blocks) == 1u);
@@ -459,11 +459,11 @@ failure_paths(void)
     json_decref(blocks);
     output(events, 0u, 0u, "abc", 3u);
     output(events, 0u, 7u, "gap", 3u);
-    assert(!snag_vm_transcript_blocks(events, 3u, 80u, false, false, false, &secrets,
+    assert(!snag_vm_transcript_blocks(events, NULL, 3u, 80u, false, false, false, &secrets,
         NULL, NULL, error, sizeof(error)) && errno == EINVAL);
     assert(json_array_remove(events, 2u) == 0);
     unsigned int remaining = 3u;
-    assert(!snag_vm_transcript_blocks(events, 3u, 80u, false, false, false,
+    assert(!snag_vm_transcript_blocks(events, NULL, 3u, 80u, false, false, false,
         &secrets, cancel, &remaining,
         error, sizeof(error)) && errno == ECANCELED);
     json_decref(events);

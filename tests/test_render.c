@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "render.h"
 #include "fs.h"
+#include "presentation.h"
 #include "snajpagent.h"
 #include "store.h"
 #include "store_internal.h"
@@ -176,6 +177,131 @@ render_sink_fixture(struct snag_render *render)
     strcpy(render->chat_endpoint, irc.endpoint);
     strcpy(render->chat_room, irc.room);
     assert(snag_render_irc_event(render, &irc) == 0);
+}
+
+static int
+read_presentation_file(const char *path, const char *id)
+{
+    int fd = snag_open_read(path, false);
+    if (fd < 0) return 2;
+    json_t *rows = NULL;
+    struct snag_binary_anchor begin, tail;
+    bool incomplete;
+    int rc = snag_presentation_read(fd, id, NULL, NULL, true, SIZE_MAX, &rows, &begin, &tail,
+        &incomplete, NULL, NULL);
+    if (!rc) rc = json_dumpf(rows, stdout, JSON_COMPACT);
+    json_decref(rows);
+    (void)close(fd);
+    return rc < 0 ? 3 : 0;
+}
+
+static bool
+cancel_presentation_read(void *opaque)
+{
+    unsigned int *remaining = opaque;
+    if (!*remaining) return true;
+    --*remaining;
+    return false;
+}
+
+static void
+test_retained_presentation(void)
+{
+    char path[] = "build/presentation-XXXXXX";
+    assert(mkdtemp(path));
+    int dir = snag_open_read(path, true);
+    assert(dir >= 0);
+    const char *id = "0123456789abcdef0123456789abcdef";
+    struct snag_presentation_writer *writer = snag_presentation_writer_open(dir, id);
+    assert(writer);
+    assert(!snag_presentation_start(writer, 31u));
+    const char *text = "A **bold** answer.\n";
+    struct snag_ui_command commands[] = {
+        {.kind = SNAG_UI_ORIENTATION, .text = "/fixture", .label = id},
+        {.kind = SNAG_UI_SUBMITTED, .text = "/fast off", .label = "READY> ", .data.value = 1u},
+        {.kind = SNAG_UI_HOST, .text = "Fast mode off"},
+        {.kind = SNAG_UI_PUBLIC_BEGIN, .data.public = {STDOUT_FILENO, SNAG_PRESENT_CONVERSATION}},
+        {.kind = SNAG_UI_PUBLIC, .text = text, .len = strlen(text)},
+        {.kind = SNAG_UI_ROLLOUT_END},
+        {.kind = SNAG_UI_BEFORE_PROMPT},
+        {.kind = SNAG_UI_WARNING, .text = "Retained warning"}
+    };
+    struct snag_render direct, replay;
+    struct styled_output expected = {.text = {.max = 65536u}, .styles = {.max = 262144u}};
+    struct styled_output actual = {.text = {.max = 65536u}, .styles = {.max = 262144u}};
+    snag_render_init(&direct, 0u);
+    snag_render_init(&replay, 0u);
+    direct.stdout_terminal = direct.stderr_terminal = true;
+    replay.stdout_terminal = replay.stderr_terminal = true;
+    direct.color_stdout = direct.color_stderr = replay.color_stdout = replay.color_stderr = true;
+    direct.sink = (struct snag_render_sink){.text = collect_styled,
+        .opaque = &expected, .columns = 40u};
+    replay.sink = (struct snag_render_sink){.text = collect_styled,
+        .opaque = &actual, .columns = 40u};
+    for (size_t i = 0u; i < sizeof(commands) / sizeof(*commands); ++i) {
+        assert(!snag_presentation_append(writer, &commands[i]));
+        assert(!snag_presentation_apply(&direct, &commands[i], NULL));
+    }
+    snag_presentation_writer_close(writer);
+    writer = snag_presentation_writer_open(dir, id);
+    assert(writer);
+    assert(!snag_presentation_start(writer, 100u));
+    json_t *position = snag_presentation_snapshot(writer);
+    assert(position && json_integer_value(json_object_get(position, "origin")) == 31);
+    assert(json_array_size(json_object_get(position, "tail")) == 5u);
+    json_decref(position);
+    snag_presentation_writer_close(writer);
+    int fd = snag_open_private_append_at(dir, SNAG_PRESENTATION_FILE, false);
+    assert(fd >= 0);
+    struct snag_binary_anchor begin, tail;
+    json_t *rows = NULL;
+    bool incomplete;
+    assert(!snag_presentation_read(fd, id, NULL, NULL, true, SIZE_MAX, &rows, &begin, &tail,
+        &incomplete, NULL, NULL));
+    assert(!incomplete && begin.next_seq == 1u && json_array_size(rows) == 8u);
+    uint64_t origin;
+    struct snag_binary_anchor first;
+    assert(!snag_presentation_origin(fd, &tail, &origin, &first));
+    assert(origin == 31u && first.next_seq == 2u);
+    for (size_t i = json_array_size(rows); i; --i)
+        assert(!snag_presentation_replay(&replay,
+            json_object_get(json_array_get(rows, i - 1u), "data"), -1));
+    assert(expected.text.len == actual.text.len &&
+        !memcmp(expected.text.data, actual.text.data, actual.text.len));
+    assert(expected.styles.len == actual.styles.len &&
+        !memcmp(expected.styles.data, actual.styles.data, actual.styles.len));
+    json_decref(rows);
+    rows = NULL;
+    struct snag_binary_anchor preserved_begin = begin, preserved_tail = tail;
+    unsigned int remaining = 2u;
+    assert(snag_presentation_read(fd, id, NULL, NULL, true, SIZE_MAX, &rows, &begin, &tail,
+        &incomplete, cancel_presentation_read, &remaining) < 0 && errno == ECANCELED);
+    assert(!rows && !memcmp(&begin, &preserved_begin, sizeof(begin)) &&
+        !memcmp(&tail, &preserved_tail, sizeof(tail)));
+    assert(!snag_presentation_writer_open(dir, "1123456789abcdef0123456789abcdef") &&
+        errno == EINVAL);
+    assert(!snag_write_full(fd, "unfinished", 10u));
+    assert(!close(fd));
+    writer = snag_presentation_writer_open(dir, id);
+    assert(writer);
+    snag_presentation_writer_close(writer);
+    fd = snag_open_read_at(dir, SNAG_PRESENTATION_FILE, false);
+    snag_file_info info;
+    assert(fd >= 0 && !snag_fstat(fd, &info) && (uint64_t)info.st_size == tail.end);
+    assert(!close(fd));
+    fd = snag_open_private_append_at(dir, SNAG_PRESENTATION_FILE, false);
+    assert(fd >= 0 && !snag_write_full(fd, "closed-corruption", 18u));
+    assert(!snag_presentation_writer_open(dir, id));
+    assert(!snag_fstat(fd, &info) && (uint64_t)info.st_size == tail.end + 18u);
+    assert(!close(fd));
+    snag_render_free(&direct);
+    snag_render_free(&replay);
+    snag_buf_free(&expected.text);
+    snag_buf_free(&expected.styles);
+    snag_buf_free(&actual.text);
+    snag_buf_free(&actual.styles);
+    assert(!snag_unlink_at(dir, SNAG_PRESENTATION_FILE, false));
+    assert(!close(dir) && !rmdir(path));
 }
 
 static void
@@ -709,9 +835,9 @@ test_prompt_spinners(void)
     snag_term_init(&term);
     assert(snag_term_set_prompt_template(&term, false, prompt, spinners, 8u, 0u) == 0);
     assert(strcmp(term.label, "x >") == 0);
-    assert(term.spinner[SNAG_TERM_SPINNER_GOAL].inactive_len == 0u);
-    assert(term.spinner[SNAG_TERM_SPINNER_PROVIDER].inactive_len == 1u);
-    assert(term.spinner[SNAG_TERM_SPINNER_TOOL].inactive_len == 0u);
+    assert(term.animation.frames[SNAG_TERM_SPINNER_GOAL].inactive_len == 0u);
+    assert(term.animation.frames[SNAG_TERM_SPINNER_PROVIDER].inactive_len == 1u);
+    assert(term.animation.frames[SNAG_TERM_SPINNER_TOOL].inactive_len == 0u);
     assert(snag_term_set_spinner_states(&term, 1u << SNAG_TERM_SPINNER_GOAL) == 0);
     assert(strcmp(term.label, "x◆ >") == 0);
     assert(snag_term_set_spinner_states(&term, 1u << SNAG_TERM_SPINNER_PROVIDER) == 0);
@@ -719,7 +845,7 @@ test_prompt_spinners(void)
     memcpy(saved, term.label, sizeof(saved));
     assert(snag_term_set_prompt_template(&term, false, prompt, bad, 8u, 0u) < 0);
     assert(memcmp(saved, term.label, sizeof(saved)) == 0);
-    assert(term.spinner_states == (1u << SNAG_TERM_SPINNER_PROVIDER));
+    assert(term.animation.states == (1u << SNAG_TERM_SPINNER_PROVIDER));
     assert(snag_term_set_prompt_template(&term, false, prompt, spinners, 8u,
                                         1u << SNAG_TERM_SPINNER_COUNT) < 0);
     memset(oversized, 'x', sizeof(oversized));
@@ -733,7 +859,7 @@ test_prompt_spinners(void)
         const char *many[SNAG_TERM_SPINNER_COUNT] = {"\\0abcdefghijklmnopqrstuvwxyz0123", " ", "\\0"};
 
         assert(snag_term_set_prompt_template(&term, false, prompt, many, 8u, 0u) == 0);
-        assert(term.spinner[SNAG_TERM_SPINNER_GOAL].frame_count == 30u);
+        assert(term.animation.frames[SNAG_TERM_SPINNER_GOAL].frame_count == 30u);
         assert(snag_term_set_spinner_states(&term, 1u << SNAG_TERM_SPINNER_GOAL) == 0);
         assert(strcmp(term.label, "xa >") == 0);
     }
@@ -798,23 +924,23 @@ test_prompt_spinners(void)
         term.prompt_visible = false;
     }
     term.opened = false;
-    term.tool_spinner_off_delay_ms = 500u;
+    term.animation.tool_delay_ms = 500u;
     const char *held[] = {" G", " P", " T"};
     assert(snag_term_set_prompt_template(&term, true, "\xfd\xfe> ", held, 8u, 6u) == 0);
     assert(snag_term_set_spinner_states(&term, 3u) == 0);
-    assert(strcmp(term.label, "GT> ") == 0 && term.spinner_states == 3u);
-    uint64_t deadline = term.tool_spinner_off_at;
+    assert(strcmp(term.label, "GT> ") == 0 && term.animation.states == 3u);
+    uint64_t deadline = term.animation.tool_until;
     assert(snag_term_set_prompt_template(&term, false, "\xfd\xfe idle> ", held, 8u, 1u) == 0);
-    assert(term.tool_spinner_off_at == deadline && strstr(term.label, "GT"));
-    assert(snag_term_set_spinner_states(&term, 5u) == 0 && !term.tool_spinner_off_at);
-    assert(snag_term_set_spinner_states(&term, 3u) == 0 && term.tool_spinner_off_at >= deadline);
-    term.tool_spinner_off_at = 1u;
+    assert(term.animation.tool_until == deadline && strstr(term.label, "GT"));
+    assert(snag_term_set_spinner_states(&term, 5u) == 0 && !term.animation.tool_until);
+    assert(snag_term_set_spinner_states(&term, 3u) == 0 && term.animation.tool_until >= deadline);
+    term.animation.tool_until = 1u;
     assert(snag_term_set_prompt_template(&term, true, "\xfd\xfe> ", held, 8u, 3u) == 0);
     assert(strcmp(term.label, "GP> ") == 0);
-    term.tool_spinner_off_delay_ms = 0u;
+    term.animation.tool_delay_ms = 0u;
     assert(snag_term_set_spinner_states(&term, 6u) == 0);
     assert(snag_term_set_spinner_states(&term, 2u) == 0);
-    assert(strcmp(term.label, " P> ") == 0 && !term.tool_spinner_off_at);
+    assert(strcmp(term.label, " P> ") == 0 && !term.animation.tool_until);
     snag_term_close(&term);
 }
 
@@ -847,6 +973,52 @@ unexpected_native_suspend(void *opaque)
     (void)opaque;
     assert(false);
     return -1;
+}
+
+static void
+test_editor_grapheme_deletion(void)
+{
+    struct snag_term term;
+    snag_term_init(&term);
+    term.input_only = term.capable = true;
+    assert(snag_term_restore_draft(&term, "é👩‍💻X") == 0);
+    editor_input(&term, "\033[D\177");
+    assert(term.draft.len == strlen("éX"));
+    assert(memcmp(term.draft.data, "éX", term.draft.len) == 0);
+    editor_input(&term, "\001\033[3~");
+    assert(term.draft.len == 1u && term.draft.data[0] == 'X');
+    snag_term_close(&term);
+}
+
+static void
+test_editor_literal_paste(void)
+{
+    struct snag_term term;
+    snag_term_init(&term);
+    term.input_only = term.capable = true;
+    assert(snag_term_restore_draft(&term, "headtail") == 0);
+    term.cursor = 4u;
+    editor_input(&term, "\033[200~first\rsecond");
+    assert(term.draft.len == 8u);
+    editor_input(&term, "\033[201~");
+    assert(term.draft.len == strlen("headfirst\nsecondtail"));
+    assert(!memcmp(term.draft.data, "headfirst\nsecondtail", term.draft.len));
+    editor_input(&term, "\033[200~unfinished");
+    enum snag_term_action action = SNAG_TERM_NONE;
+    char *text = NULL;
+    term.input[0] = 0x03u;
+    term.input_pos = 0u;
+    term.input_len = 1u;
+    assert(snag_term_poll(&term, 0, -1, &action, &text) == 1);
+    assert(action == SNAG_TERM_CANCEL && !text && !term.paste && !term.draft.len);
+    assert(!term.paste_text.len);
+    assert(snag_buf_reserve(&term.draft, SNAG_MAX_DIRECT_PROMPT) == 0);
+    memset(term.draft.data, 'x', SNAG_MAX_DIRECT_PROMPT - 1u);
+    term.cursor = term.draft.len = SNAG_MAX_DIRECT_PROMPT - 1u;
+    editor_input(&term, "\033[200~é\033[201~");
+    assert(term.draft.len == SNAG_MAX_DIRECT_PROMPT - 1u && term.draft_clamped);
+    assert(snag_utf8_valid(term.draft.data, term.draft.len, true));
+    snag_term_close(&term);
 }
 
 static void
@@ -1086,10 +1258,10 @@ test_retained_prompt(void)
     assert(snag_term_restore_draft(&term, "") == 0);
     assert(snag_term_set_prompt_template(&term, true, "\xfd\xfe> ", frames, 8u, 2u) == 0);
     (void)prompt_output(capture.fd, output, sizeof(output));
-    term.spinner_epoch_ms -= 125u;
-    uint64_t epoch = term.spinner_epoch_ms;
+    term.animation.epoch -= 125u;
+    uint64_t epoch = term.animation.epoch;
     assert(snag_term_set_prompt_template(&term, true, "\xfd\xfe> ", frames, 8u, 2u) == 0);
-    assert(term.spinner_epoch_ms == epoch);
+    assert(term.animation.epoch == epoch);
     assert(prompt_output(capture.fd, output, sizeof(output)) > 0u);
     assert(strchr(output, '/') && !strchr(output, '>'));
     assert(snag_term_set_prompt_template(&term, true, "\xfd\xfe> ", frames, 8u, 2u) == 0);
@@ -1437,6 +1609,23 @@ test_destination_editor(void)
     assert(snag_term_select_destination(&term, 2u) == 0);
     snag_term_destination_prefix(&term, label, sizeof(label));
     assert(!label[0]);
+    strcpy(destinations.items[0].endpoint, "first:6667");
+    assert(snag_term_set_destinations(&term, &destinations) == 0);
+    term.conversation = (struct snag_irc_conversation_target){.kind = SNAG_IRC_QUERY,
+        .identity = SNAG_IRC_OPERATOR, .endpoint = "first:6667", .peer = "peer",
+        .conversation = "11111111111111111111111111111111"};
+    snag_term_destination_prefix(&term, label, sizeof(label));
+    assert(!strcmp(label, "[peer] "));
+    term.conversation.identity = SNAG_IRC_AGENT;
+    snag_term_destination_prefix(&term, label, sizeof(label));
+    assert(!strcmp(label, "[peer; viewing model's chat] "));
+    destinations.count = 2u;
+    strcpy(destinations.items[1].endpoint, "second:6667");
+    assert(snag_term_set_destinations(&term, &destinations) == 0);
+    snag_term_destination_prefix(&term, label, sizeof(label));
+    assert(!strcmp(label, "[first:6667/peer; viewing model's chat] "));
+    memset(&term.conversation, 0, sizeof(term.conversation));
+    destinations.count = 1u;
     destinations.items[0].joined = false;
     assert(snag_term_set_destinations(&term, &destinations) == 0);
     snag_term_destination_prefix(&term, label, sizeof(label));
@@ -2224,8 +2413,8 @@ test_query_markdown_isolation(void)
     assert(snag_render_set_chat_conversation(&render, event.endpoint, &target, true) == 0);
     snag_render_free(&render);
     (void)capture_close(&capture, output, sizeof(output), 0u);
-    assert(strstr(output, "[server:6667/peer operator query]") &&
-        strstr(output, "[server:6667/peer agent query]"));
+    assert(!strstr(output, "[server:6667/peer"));
+    assert(strstr(output, "query server:6667/peer; viewing model's chat"));
     if (!strstr(output, "**code**") || strstr(output, "**other conversation**"))
         fprintf(stderr, "query Markdown output: %s\n", output);
     assert(strstr(output, "other conversation") && !strstr(output, "**other conversation**") &&
@@ -3614,8 +3803,10 @@ test_hosted_search_rows(void)
 }
 
 int
-main(void)
+main(int argc, char **argv)
 {
+    if (argc == 4 && !strcmp(argv[1], "--read-presentation"))
+        return read_presentation_file(argv[2], argv[3]);
     test_null_output();
     test_query_markdown_isolation();
     static const char markdown[] = "# **Live** _Markdown_\n"
@@ -3733,6 +3924,7 @@ main(void)
     test_resize_checkpoint_preserves_newly_read_input();
     test_retained_prompt();
     test_styled_sink_matches_terminal();
+    test_retained_presentation();
     test_native_rebind();
     test_history_refresh_cursor();
     test_tool_ref_rows();
@@ -3740,6 +3932,8 @@ main(void)
     test_mention_completion();
     test_completion_choices();
     test_dictation_editor();
+    test_editor_grapheme_deletion();
+    test_editor_literal_paste();
     test_destination_editor();
     test_query_tab_keeps_modal_queue_action();
     test_markdown_streaming();

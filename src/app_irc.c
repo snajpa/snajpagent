@@ -145,7 +145,8 @@ snag_app_irc_conversation_send(struct app_state *app,
     const char *text, bool action, struct snag_buf *report, char *error, size_t error_size)
 {
     if (target->identity != SNAG_IRC_OPERATOR)
-        return snag_fail(error, error_size, EACCES, "agent conversations are read-only");
+        return snag_fail(error, error_size, EACCES,
+            "Viewing the model's chat; open your own conversation to reply");
     if (target->kind == SNAG_IRC_QUERY) {
         struct snag_irc_query_target query = {.destination = target->destination,
             .generation = target->generation, .identity = target->identity};

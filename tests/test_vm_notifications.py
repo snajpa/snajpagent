@@ -207,7 +207,7 @@ class WorkspaceNotificationTests(unittest.TestCase):
     def test_new_draft_and_selected_report_survive_notification_and_reconnect(self):
         child = self.start('-N', 'notifications', columns=120)
         child.command('attach ' + self.owner.sid)
-        child.until(b'ATTACHED')
+        child.attached()
         child.write(b'i/configure\rnewer unsent draft')
         reports = self.reports(2)
         self.wait_synced('newer unsent draft')
@@ -228,7 +228,7 @@ class WorkspaceNotificationTests(unittest.TestCase):
     def test_reports_created_while_workspace_closed_are_discovered(self):
         child = self.start('-N', 'offline-notifications')
         child.command('attach ' + self.owner.sid)
-        child.until(b'ATTACHED')
+        child.attached()
         child.finish('close')
         peer = self.owner.view(bind=True)
         peer.result(peer.command('/configure'))

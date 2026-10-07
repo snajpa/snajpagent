@@ -25,7 +25,7 @@ class QueryWorkspaceTests(QueryFixture):
         self.term.wait_exit()
         self.child = self.workspace_start('-N', 'private-panes')
         self.child.command('attach ' + self.sid)
-        self.child.repaint_until(b'ATTACHED')
+        self.child.attached()
 
     def workspace_start(self, *args):
         child = Terminal(self.root, args, rows=30, columns=220)
@@ -92,11 +92,11 @@ class QueryWorkspaceTests(QueryFixture):
         self.direct('querybot', 'agent chat body', notice=True)
         child = self.child
         child.command('buffers')
-        child.repaint_until(b'/query-peer [agent]')
-        agent_id = re.search(rb'([0-9a-f]{8}) [^\x1b\r\n]*query-peer \[agent\]',
+        child.repaint_until(b"/query-peer [model's chat]")
+        agent_id = re.search(rb"([0-9a-f]{8}) [^\x1b\r\n]*query-peer \[model's chat\]",
                              child.output)[1]
         child.write(b'/' + agent_id + b'\r\r')
-        child.repaint_until(b'[agent read-only]')
+        child.repaint_until(b"[viewing model's chat]")
         child.repaint_until(b'agent chat body')
         self.assertNotIn(b'operator chat body', child.output)
         child.write(b'i\x1b[200~never send from the agent identity\x1b[201~')
@@ -107,9 +107,9 @@ class QueryWorkspaceTests(QueryFixture):
         self.assertTrue(all(not b['draft'] and not b['pending']
                             for b in self.state()['buffers'][0]['buffers']))
         child.command('bn')
-        child.repaint_until(b'[operator]')
+        child.repaint_until(b'query/query-peer')
         child.command('bp')
-        child.repaint_until(b'[agent read-only]')
+        child.repaint_until(b"[viewing model's chat]")
         child.finish('q')
 
     def test_two_windows_share_one_query_editor_and_undo(self):
@@ -163,7 +163,7 @@ class QueryWorkspaceTests(QueryFixture):
         child.write(b'ikeep hidden private draft')
         self.normal()
         child.command('history')
-        child.command('qa')
+        child.command('sessions quit')
         child.repaint_until(b'Unsent draft or unresolved submission')
         self.assertIsNone(child.process.poll())
         child.command('buffers')

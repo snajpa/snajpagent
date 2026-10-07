@@ -361,7 +361,7 @@ class QueryTests(QueryFixture):
     def test_explicit_command_keeps_known_peer_when_nick_is_reused(self):
         self.direct('queryop', 'command-stale-start')
         self.term.write(b'/query query-peer\r')
-        self.term.until(b'query query-peer operator')
+        self.term.until(b'[query-peer]')
         self.term.write(b'/msg query-peer frozen-command-recipient')
         self.term.repaint_until(b'frozen-command-recipient')
         self.peer.sock.sendall(b'NICK changed-command-peer\r\n')
@@ -386,7 +386,7 @@ class QueryTests(QueryFixture):
 
     def test_query_command_opens_sends_and_lists_operator_tab(self):
         self.term.write(b'/query query-peer\r')
-        self.term.until(b'query query-peer operator')
+        self.term.until(b'[query-peer]')
         self.peer.drain(.1)
         self.assertNotIn(b'PRIVMSG query-peer :', self.peer.buf)
         self.term.write(b'opened-query-reply\r')
@@ -401,7 +401,7 @@ class QueryTests(QueryFixture):
 
     def test_msg_and_notice_preserve_focus_and_choose_operator_identity(self):
         self.term.write(b'/query query-peer\r')
-        self.term.until(b'query query-peer operator')
+        self.term.until(b'[query-peer]')
         sid = read_events(self.root / 'state')[0].parent.name
         self.term.write((f'/msg "{sid}/127.0.0.1:{self.port}/observer" '
                          'message-with #literal and /slashes\r').encode())
@@ -479,19 +479,41 @@ class QueryTests(QueryFixture):
         self.assertNotIn('first-private-tab', json.dumps(self.seen))
         self.assertNotIn('second-private-tab', json.dumps(self.seen))
 
+    def test_selected_chat_uses_compact_labels_and_no_repeated_route_prefix(self):
+        self.term.write(b'/query query-peer\r')
+        self.term.repaint_until(b'[query-peer] ')
+        self.term.output.clear()
+        self.direct('queryop', 'compact-query-line', notice=True)
+        self.term.until(b'compact-query-line')
+        plain = re.sub(rb'\x1b\[[0-?]*[ -/]*[@-~]', b'', self.term.output)
+        self.assertNotIn(b'operator]', plain)
+        self.assertNotIn(b'operator query]', plain)
+        self.assertNotIn(b'/query-peer', plain)
+        self.direct('querybot', 'model-query-line', notice=True)
+        self.term.write(b'/rollout\r')
+        self.term.repaint_until(b'host-model/medium')
+        self.term.write(b'\x1b[Z')
+        self.term.repaint_until(b"[query-peer; viewing model's chat] ")
+        self.assertNotIn(b'agent read-only', self.term.output)
+        self.term.write(b'must-not-send-as-model\r')
+        self.term.until(b"Viewing the model's chat; use /query query-peer to reply as yourself")
+        self.peer.drain(.1)
+        self.assertNotIn(b'must-not-send-as-model', self.peer.buf)
+        self.assertNotIn('must-not-send-as-model', json.dumps(self.seen))
+
     def test_single_channel_prompt_and_hidden_query_do_not_show_unread(self):
         self.term.write(b'/chat\r')
         self.term.repaint_until(b'queryop@')
-        self.assertNotIn(b'channel #lab operator', self.term.output)
+        self.assertNotIn(b'[#lab]', self.term.output)
 
         self.direct('queryop', 'quiet-private-message', notice=True)
-        self.term.repaint_until(b'channel #lab operator')
+        self.term.repaint_until(b'[#lab]')
         self.assertNotIn(b'unread', self.term.output)
         self.term.write(b'/rollout\r')
         self.term.repaint_until(b'host-model/medium')
         self.assertNotIn(b'unread', self.term.output)
         self.term.write(b'/query query-peer\r')
-        self.term.repaint_until(b'query query-peer operator')
+        self.term.repaint_until(b'[query-peer]')
         self.assertNotIn(b'unread', self.term.output)
 
     def test_agent_tab_is_read_only_and_incoming_does_not_steal_focus(self):
@@ -502,7 +524,7 @@ class QueryTests(QueryFixture):
         self.term.write(b'\x1b[Z')
         self.term.until(b'read-only-private-tab')
         self.term.write(b'operator-must-not-impersonate-agent\r')
-        self.term.until(b'agent conversation is read-only')
+        self.term.until(b"Viewing the model's chat")
         self.term.repaint_until(b'operator-must-not-impersonate-agent')
         self.peer.drain(.1)
         self.assertNotIn(b'operator-must-not-impersonate-agent', self.peer.buf)
@@ -590,7 +612,7 @@ class QueryTests(QueryFixture):
         self.term.write(b'/rollout\r')
         self.term.until(b'host-model/medium')
         self.term.write(b'\x1b[Z')
-        self.term.repaint_until(b'query query-peer agent read-only')
+        self.term.repaint_until(b"[query-peer; viewing model's chat]")
         self.term.write(b'/rollout\r')
         self.peer = self.connect('query-peer')
         self.peer.drain(.1)

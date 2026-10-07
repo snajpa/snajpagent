@@ -261,7 +261,7 @@ viewport_test(struct snag_store *store, const char *root)
     assert(result->cursor.offset > 0 && result->cursor.offset < source.log_end);
     assert(result->end.offset == source.log_end && result->end.next_seq == source.next_seq &&
         !strcmp(result->end.prev_sha256, source.prev_sha256));
-    struct snag_journal_cursor boundary = result->cursor;
+    struct snag_vm_cursor boundary = result->cursor;
     request.before_seq = result->cursor.next_seq;
     snag_vm_read_result_free(result);
     result = await_page(reader, snag_vm_reader_request(reader, &request));
@@ -274,12 +274,12 @@ viewport_test(struct snag_store *store, const char *root)
     snag_session_close(&source);
 }
 
-static struct snag_journal_cursor
+static struct snag_vm_cursor
 public_cursor(const struct snag_session *source)
 {
     struct snag_journal_cursor cursor = {.offset = source->log_end, .next_seq = source->next_seq};
     memcpy(cursor.prev_sha256, source->prev_sha256, sizeof(cursor.prev_sha256));
-    return cursor;
+    return snag_vm_cursor_journal(cursor);
 }
 
 static json_t *
@@ -353,10 +353,10 @@ public_dependency_test(struct snag_store *store, const char *root)
         projection_record(&source, "response_started", json_pack("{s:s}", "response_id", id));
         projection_record(&source, "response_output", json_pack("{s:s,s:i,s:i,s:o}",
             "response_id", id, "index", 0, "offset", 0, "item", response_item("old-a")));
-        struct snag_journal_cursor first = public_cursor(&source);
+        struct snag_vm_cursor first = public_cursor(&source);
         projection_record(&source, "response_output", json_pack("{s:s,s:i,s:i,s:o}",
             "response_id", id, "index", 0, "offset", 5, "item", response_item("bcdef")));
-        struct snag_journal_cursor second = public_cursor(&source);
+        struct snag_vm_cursor second = public_cursor(&source);
         json_t *items = json_array();
         assert(items);
         if (variant != 4u) assert(json_array_append_new(items, response_item("new-界-rest")) == 0);
@@ -461,7 +461,7 @@ public_full_pages_test(struct snag_store *store, const char *root)
     assert(reader);
     for (unsigned int direction = 0u; direction < 2u; ++direction) {
         request.reverse = direction != 0u;
-        request.cursor = (struct snag_journal_cursor){0};
+        request.cursor = (struct snag_vm_cursor){0};
         uint64_t covered[4] = {0};
         if (direction) for (size_t i = 0u; i < 4u; ++i) covered[i] = length;
         size_t pages = 0u;
@@ -1389,7 +1389,7 @@ conversation_snapshot_test(void)
     assert(json_object_set_new(route, "identity", json_string("agent")) == 0);
     struct snag_vm_buffer *agent = snag_vm_buffer_get(owner, route, true);
     assert(agent && !snag_vm_buffer_writable(agent));
-    assert(snag_vm_buffer_prepare(agent, agent, 1u) < 0 && errno == EACCES);
+    assert(snag_vm_buffer_prepare(agent, agent, 1u, false) < 0 && errno == EACCES);
     assert(!owner->rollout->draft.len && snag_vm_connection_unsaved(owner));
 
     struct snag_irc_conversation_target channel = {.kind = SNAG_IRC_CHANNEL,
@@ -1480,7 +1480,7 @@ forwarded_snapshot_test(void)
     const char *text = "/query other/server/peer hello";
     assert(snag_vm_draft_replace(source->rollout, 0u, 0u, text, strlen(text)) == 0);
     assert(snag_vm_draft_replace(target->rollout, 0u, 0u, "kept", 4u) == 0);
-    assert(snag_vm_buffer_prepare(target->rollout, source->rollout, 7u) == 0);
+    assert(snag_vm_buffer_prepare(target->rollout, source->rollout, 7u, false) == 0);
     assert(!source->rollout->draft.len && target->rollout->draft.len == 4u);
     assert(!strcmp(snag_json_string(target->rollout->pending, "text"), text));
     assert(target->rollout->request_window == 7u && target->rollout->origin);
@@ -1674,7 +1674,7 @@ main(void)
     projected.project = true;
     projected.verbosity = 4u;
     projected.columns = 80u;
-    projected.cursor = (struct snag_journal_cursor){0};
+    projected.cursor = (struct snag_vm_cursor){0};
     generation = snag_vm_reader_request(reader, &projected);
     result = await_page(reader, generation);
     assert(!result->error_number && result->blocks && !result->events && !result->catalog);

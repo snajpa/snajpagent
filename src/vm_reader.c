@@ -1,8 +1,10 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "vm_reader.h"
+#include "fs.h"
 #include "history_view.h"
 #include "irc.h"
 #include "json.h"
+#include "presentation.h"
 #include "render.h"
 #include "session_view.h"
 #include "vm_public.h"
@@ -11,14 +13,50 @@
 #include "vm_transcript.h"
 
 #include <errno.h>
+#include <limits.h>
 #include <pthread.h>
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
+
+struct snag_vm_cursor
+snag_vm_cursor_journal(struct snag_journal_cursor journal)
+{
+    struct snag_vm_cursor cursor = {.offset = journal.offset, .next_seq = journal.next_seq};
+    memcpy(cursor.prev_sha256, journal.prev_sha256, sizeof(cursor.prev_sha256));
+    return cursor;
+}
+
+static struct snag_journal_cursor
+canonical_cursor(struct snag_vm_cursor cursor)
+{
+    if (cursor.origin) return cursor.canonical;
+    struct snag_journal_cursor journal = {.offset = cursor.offset, .next_seq = cursor.next_seq};
+    memcpy(journal.prev_sha256, cursor.prev_sha256, sizeof(journal.prev_sha256));
+    return journal;
+}
+
+int
+snag_vm_cursor_output(struct snag_vm_cursor *cursor, const json_t *snapshot)
+{
+    struct snag_binary_anchor output;
+    uint64_t origin;
+    if (snag_presentation_bound(snapshot, &origin, &output) < 0 ||
+        output.next_seq - 2u > INT64_MAX - origin) return snag_errno(EINVAL);
+    struct snag_journal_cursor canonical = canonical_cursor(*cursor);
+    *cursor = (struct snag_vm_cursor){.offset = (int64_t)output.end,
+        .next_seq = origin + output.next_seq - 2u, .origin = origin,
+        .output = output, .canonical = canonical};
+    for (size_t i = 0u; i < sizeof(output.digest); ++i)
+        (void)snprintf(cursor->prev_sha256 + i * 2u, 3u, "%02x", output.digest[i]);
+    return 0;
+}
 
 struct source_view {
     struct snag_session session;
+    int output_fd, legacy_fd;
     bool best_effort, incomplete, verified;
     char public_id[SNAG_ID_HEX_LEN + 1u];
     json_t *public_snapshot;
@@ -77,6 +115,8 @@ view_close(struct snag_vm_reader *reader)
         struct source_view *old = *link;
         *link = old->next;
         snag_session_close(&old->session);
+        if (old->output_fd >= 0) (void)close(old->output_fd);
+        if (old->legacy_fd >= 0) (void)close(old->legacy_fd);
         json_decref(old->public_snapshot);
         free(old);
     }
@@ -125,7 +165,7 @@ view_open(struct snag_vm_reader *reader, const struct snag_vm_read_request *requ
     while (source && strcmp(source->session.id, request->session_id)) source = source->next;
     reader->current = source;
     if (source && request->pin_tail && request->trusted_tail &&
-        source->session.log_fd >= 0 && source->session.log_end > request->tail.offset) {
+        source->session.log_fd >= 0 && source->session.log_end > canonical_cursor(request->tail).offset) {
         view_close(reader);
         return view_open(reader, request, error, size);
     }
@@ -133,6 +173,7 @@ view_open(struct snag_vm_reader *reader, const struct snag_vm_read_request *requ
         source = calloc(1u, sizeof(*source));
         if (!source) return -1;
         snag_session_init(&source->session);
+        source->output_fd = source->legacy_fd = -1;
         source->session.history_cancel = read_canceled;
         source->session.history_cancel_opaque = reader;
         source->next = reader->views;
@@ -146,7 +187,7 @@ view_open(struct snag_vm_reader *reader, const struct snag_vm_read_request *requ
             if (!rc) source->best_effort = true;
             return rc;
         }
-        struct snag_journal_cursor tail = request->trusted_tail ? request->tail : view_tail(view);
+        struct snag_journal_cursor tail = request->trusted_tail ? canonical_cursor(request->tail) : view_tail(view);
         /* A snapshot can lead a queued owner notification. Keep its verified
          * prefix and current certification until the owner catches up. */
         if (request->trusted_tail && tail.offset < view->log_end &&
@@ -165,8 +206,9 @@ view_open(struct snag_vm_reader *reader, const struct snag_vm_read_request *requ
     source->incomplete = false;
     int rc;
     if (request->trusted_tail) {
+        struct snag_journal_cursor bound = canonical_cursor(request->tail);
         rc = snag_session_history_open(reader->store, view, request->session_id,
-            &request->tail, error, size);
+            &bound, error, size);
     } else {
         rc = snag_session_history_snapshot(reader->store, view, request->session_id,
             &source->incomplete, error, size);
@@ -181,6 +223,7 @@ struct read_page {
     const json_t *route;
     unsigned int verbosity;
     bool project;
+    uint64_t before;
 };
 
 static bool
@@ -230,7 +273,8 @@ read_event(void *opaque, const struct snag_session *state, uint64_t seq,
     if (read_canceled(page->reader)) {
         return snag_fail(error, size, ECANCELED, "history read canceled");
     }
-    if (!conversation_event(page->route, type, data)) return 0;
+    if ((page->before && seq >= page->before) ||
+        !conversation_event(page->route, type, data)) return 0;
     if (page->project) {
         /* Lower levels load bounded previews from tool result references. */
         if (page->verbosity < 3u && !strcmp(type, "process_output")) return 0;
@@ -594,7 +638,7 @@ load_preview(struct snag_vm_reader *reader, json_t *event, const json_t *ref,
         errno = EINVAL;
         goto out;
     }
-    blocks = snag_vm_transcript_blocks(preview.events, 3u, columns, false, true, true,
+    blocks = snag_vm_transcript_blocks(preview.events, NULL, 3u, columns, false, true, true,
         &reader->secrets, read_canceled, reader, error, size);
     if (!blocks) goto out;
     size_t characters = 0u;
@@ -712,7 +756,7 @@ scan_rows(struct snag_vm_reader *reader, struct snag_vm_read_result *result)
         }
         scan_progress(reader, (uint64_t)page.cursor.offset, page.cursor.next_seq,
             (uint64_t)page.tail.offset);
-        struct snag_journal_cursor begin = page.request.reverse ? page.cursor : page.request.cursor;
+        struct snag_vm_cursor begin = page.request.reverse ? page.cursor : page.request.cursor;
         if ((!remaining && rows) || (down ? !page.more : begin.next_seq <= 1u)) { rc = 0; break; }
         if (rows) --remaining;
         page.request.reverse = !down;
@@ -753,8 +797,8 @@ scan_text(struct snag_vm_reader *reader, struct snag_vm_read_result *result)
     page.request.blocks_only = page.request.project = true;
     page.request.reverse = page.request.tail_only = page.request.if_changed = false;
     page.request.before_seq = 0u;
-    struct snag_journal_cursor begin = navigating ? request->cursor :
-        (struct snag_journal_cursor){0};
+    struct snag_vm_cursor begin = navigating ? request->cursor :
+        (struct snag_vm_cursor){0};
     page.request.cursor = begin;
     char first_key[160] = "";
     bool certified = false;
@@ -813,7 +857,7 @@ again:
             snag_vm_navigation_close(navigation);
             navigation = snag_vm_navigation_open(&request->navigation);
             if (!navigation) goto out;
-            begin = (struct snag_journal_cursor){0};
+            begin = (struct snag_vm_cursor){0};
             first_key[0] = 0;
             pass = 0u;
             restart = true;
@@ -900,7 +944,7 @@ project_history(struct snag_vm_reader *reader, struct snag_vm_read_result *resul
             result->error, sizeof(result->error)) < 0) goto out;
     }
     json_decref(result->blocks);
-    result->blocks = snag_vm_transcript_blocks(events, request->verbosity,
+    result->blocks = snag_vm_transcript_blocks(events, request->route, request->verbosity,
         request->columns, request->plain, request->no_color, request->blocks_only, &reader->secrets,
         read_canceled, reader,
         result->error, sizeof(result->error));
@@ -914,6 +958,141 @@ project_history(struct snag_vm_reader *reader, struct snag_vm_read_result *resul
     rc = 0;
 out:
     json_decref(events);
+    return rc;
+}
+
+static struct snag_vm_cursor
+output_cursor(const struct snag_vm_cursor *tail, const struct snag_binary_anchor *at)
+{
+    struct snag_vm_cursor cursor = *tail;
+    cursor.output = *at;
+    cursor.next_seq = tail->origin + (at->next_seq > 2u ? at->next_seq - 2u : 0u);
+    cursor.offset = (int64_t)at->end;
+    for (size_t i = 0u; i < sizeof(at->digest); ++i)
+        (void)snprintf(cursor.prev_sha256 + i * 2u, 3u, "%02x", at->digest[i]);
+    return cursor;
+}
+
+static int
+output_seek(struct snag_vm_reader *reader, const struct snag_vm_cursor *tail,
+    const struct snag_vm_cursor *hint, uint64_t seq, struct snag_binary_anchor *at)
+{
+    struct source_view *source = reader->current;
+    uint64_t ordinal = seq > tail->origin ? seq - tail->origin + 2u : 2u;
+    *at = hint->origin == tail->origin && hint->output.next_seq >= ordinal &&
+        hint->output.end <= tail->output.end ? hint->output : tail->output;
+    struct snag_buf scratch = {.max = SNAG_BINARY_BATCH_MAX};
+    int rc = -1;
+    while (at->next_seq > ordinal) {
+        if (read_canceled(reader)) { errno = ECANCELED; goto out; }
+        struct snag_binary_batch batch;
+        struct snag_binary_anchor previous;
+        if (snag_binary_batch_previous(source->output_fd, at, &scratch,
+            &batch, &previous) != 0) goto out;
+        *at = previous;
+    }
+    rc = at->next_seq == ordinal ? 0 : snag_errno(ESTALE);
+out:
+    snag_buf_free(&scratch);
+    return rc;
+}
+
+/* Return zero for the canonical historical prefix, one for a presentation page.
+ * The canonical bound remains independently pinned for every durable reference. */
+static int
+read_output(struct snag_vm_reader *reader, struct snag_vm_read_result *result)
+{
+    const struct snag_vm_read_request *request = &result->request;
+    struct source_view *source = reader->current;
+    struct snag_session *view = &source->session;
+    if (!request->project || request->route ||
+        (request->trusted_tail && !request->tail.origin)) return 0;
+    if (source->output_fd < 0) {
+        source->output_fd = snag_open_read_security_at(view->dir_fd, SNAG_PRESENTATION_FILE, false);
+        if (source->output_fd < 0) return errno == ENOENT && !request->tail.origin ? 0 : -1;
+    }
+    struct snag_binary_anchor tail, first;
+    json_t *probe = NULL;
+    bool incomplete = false;
+    /* This checks the file identity and the exact supplied complete boundary. */
+    if (snag_presentation_read(source->output_fd, view->id,
+        request->tail.origin ? &request->tail.output : NULL,
+        request->tail.origin ? &request->tail.output : NULL, false, 1u,
+        &probe, &first, &tail, &incomplete, read_canceled, reader) < 0) return -1;
+    json_decref(probe);
+    uint64_t origin;
+    if (snag_presentation_origin(source->output_fd, &tail, &origin, &first) < 0 ||
+        origin > view->next_seq || tail.next_seq - 2u > INT64_MAX - origin ||
+        (request->tail.origin && request->tail.origin != origin)) return snag_errno(ESTALE);
+    result->tail = output_cursor(&(struct snag_vm_cursor){.origin = origin,
+        .canonical = view_tail(view)}, &tail);
+    result->incomplete |= incomplete;
+    result->unchanged = request->previous.origin == origin &&
+        request->previous.offset == result->tail.offset &&
+        !strcmp(request->previous.prev_sha256, result->tail.prev_sha256);
+    if (request->tail_only || (request->if_changed && result->unchanged)) return 1;
+    bool prefix = request->reverse ? request->before_seq && request->before_seq <= origin :
+        (!request->cursor.next_seq || request->cursor.next_seq < origin);
+    if (prefix && origin > 1u) return 0;
+    struct snag_binary_anchor position;
+    uint64_t seq = request->reverse ? request->before_seq ? request->before_seq :
+        result->tail.next_seq : request->cursor.next_seq;
+    if (output_seek(reader, &result->tail, &request->cursor,
+        seq ? seq : origin, &position) < 0) return -1;
+    result->end = output_cursor(&result->tail, &position);
+    json_t *records = NULL, *ordered = json_array();
+    if (!ordered) return -1;
+    int rc = -1;
+    for (;;) {
+        struct snag_binary_anchor next, ignored;
+        if (snag_presentation_read(source->output_fd, view->id, &tail, &position,
+            request->reverse, SNAG_JOURNAL_PAGE_BYTES, &records, &next, &ignored,
+            &incomplete, read_canceled, reader) < 0) goto out;
+        size_t count = json_array_size(records);
+        for (size_t i = 0u; i < count; ++i) {
+            json_t *row = json_array_get(records, i);
+            if ((request->reverse ? json_array_insert(ordered, 0u, row) :
+                json_array_append(ordered, row)) < 0) goto out;
+        }
+        json_decref(records);
+        records = NULL;
+        position = next;
+        if (source->legacy_fd < 0 && view->format_version == 4u) {
+            source->legacy_fd = snag_open_read_security_at(view->dir_fd,
+                ".legacy-source/events.jsonl", false);
+            if (source->legacy_fd < 0 && errno != ENOENT) goto out;
+        }
+        json_decref(result->blocks);
+        result->blocks = snag_vm_presentation_blocks(ordered, origin, view->log_fd,
+            view->format_version == 4u ? source->legacy_fd : view->log_fd,
+            request->verbosity, request->columns, request->plain, request->no_color,
+            request->blocks_only, &reader->secrets, read_canceled, reader,
+            result->error, sizeof(result->error));
+        if (!result->blocks) goto out;
+        snag_vm_document_free(result->document);
+        result->document = NULL;
+        if (!request->blocks_only) {
+            result->document = snag_vm_document_open(result->blocks,
+                request->columns ? request->columns : 80u, read_canceled, reader);
+            if (!result->document) goto out;
+        }
+        if (request->reverse ? position.next_seq <= 2u : position.end == tail.end) break;
+        if (!request->rows || request->blocks_only ||
+            snag_vm_document_rows(result->document) >= request->rows) break;
+    }
+    result->cursor = output_cursor(&result->tail, &position);
+    if (request->reverse && position.next_seq <= 2u) {
+        struct snag_journal_cursor prefix;
+        if (snag_session_history_cursor_before(view, origin, &prefix,
+            result->error, sizeof(result->error)) < 0) goto out;
+        result->cursor = snag_vm_cursor_journal(prefix);
+    }
+    result->more = request->reverse ? result->cursor.next_seq > 1u :
+        result->cursor.next_seq < result->tail.next_seq;
+    rc = 1;
+out:
+    json_decref(records);
+    json_decref(ordered);
     return rc;
 }
 
@@ -970,9 +1149,12 @@ read_page(struct snag_vm_reader *reader, struct snag_vm_read_result *result)
     }
     if (view_open(reader, request, result->error, sizeof(result->error)) < 0) goto failed;
     struct snag_session *view = &reader->current->session;
-    result->tail = view_tail(view);
+    result->tail = snag_vm_cursor_journal(view_tail(view));
     result->best_effort = reader->current->best_effort;
     result->incomplete = reader->current->incomplete;
+    int output = read_output(reader, result);
+    if (output < 0) goto failed;
+    if (output) return;
     result->unchanged = request->previous.offset == result->tail.offset &&
         request->previous.next_seq == result->tail.next_seq &&
         !strcmp(request->previous.prev_sha256, result->tail.prev_sha256);
@@ -980,27 +1162,42 @@ read_page(struct snag_vm_reader *reader, struct snag_vm_read_result *result)
     result->events = json_array();
     if (!result->events) goto failed;
     struct read_page page = {.reader = reader, .events = result->events,
-        .route = request->route, .project = request->project, .verbosity = request->verbosity};
+        .route = request->route, .project = request->project, .verbosity = request->verbosity,
+        .before = result->tail.origin};
     uint64_t before = request->before_seq;
+    if (result->tail.origin && (!before || before > result->tail.origin))
+        before = result->tail.origin;
     result->cursor = request->cursor;
     result->end = result->tail;
-    if (request->reverse && before && snag_session_history_cursor_before(view, before,
-        &result->end, result->error, sizeof(result->error)) < 0) goto failed;
+    if (request->reverse && before) {
+        struct snag_journal_cursor end;
+        if (snag_session_history_cursor_before(view, before,
+            &end, result->error, sizeof(result->error)) < 0) goto failed;
+        result->end = snag_vm_cursor_journal(end);
+    }
     do {
         if (request->reverse) {
             if (snag_session_each_event_reverse(view, before,
                 SNAG_JOURNAL_PAGE_BYTES, read_event, &page, &before,
                 result->error, sizeof(result->error)) < 0) goto failed;
-            result->cursor = view->history_cursor;
+            result->cursor = snag_vm_cursor_journal(view->history_cursor);
             result->more = before != 0u;
         } else {
-            if (snag_session_each_event_forward(view, &result->cursor,
+            struct snag_journal_cursor cursor = canonical_cursor(result->cursor);
+            if (snag_session_each_event_forward(view, &cursor,
                 SNAG_JOURNAL_PAGE_BYTES, read_event, &page,
                 result->error, sizeof(result->error)) < 0) goto failed;
+            result->cursor = snag_vm_cursor_journal(cursor);
+            if (result->tail.origin && cursor.next_seq >= result->tail.origin) {
+                if (snag_session_history_cursor_before(view, result->tail.origin,
+                    &cursor, result->error, sizeof(result->error)) < 0) goto failed;
+                result->cursor = snag_vm_cursor_journal(cursor);
+            }
             result->more = result->cursor.next_seq < result->tail.next_seq;
         }
         if (request->project && project_history(reader, result) < 0) goto failed;
-    } while (result->more && ((request->route && !json_array_size(result->events)) ||
+    } while (result->more && !(result->tail.origin &&
+        !request->reverse && result->cursor.next_seq >= result->tail.origin) && ((request->route && !json_array_size(result->events)) ||
         (request->project && !request->blocks_only && request->rows &&
          snag_vm_document_rows(result->document) < request->rows)));
     if (request->project) {
@@ -1165,11 +1362,12 @@ snag_vm_reader_request(struct snag_vm_reader *reader, const struct snag_vm_read_
         errno = EINVAL;
         return 0u;
     }
-    if (request->trusted_tail && (request->tail.offset < 0 || !request->tail.next_seq ||
-        !snag_hex_is_lower(request->tail.prev_sha256, SNAG_SHA256_HEX_LEN) ||
-        ((request->tail.offset == 0) != (request->tail.next_seq == 1u)) ||
-        (!request->tail.offset &&
-         strspn(request->tail.prev_sha256, "0") != SNAG_SHA256_HEX_LEN))) {
+    struct snag_journal_cursor bound = canonical_cursor(request->tail);
+    if (request->trusted_tail && (bound.offset < 0 || !bound.next_seq ||
+        !snag_hex_is_lower(bound.prev_sha256, SNAG_SHA256_HEX_LEN) ||
+        ((bound.offset == 0) != (bound.next_seq == 1u)) ||
+        (!bound.offset &&
+         strspn(bound.prev_sha256, "0") != SNAG_SHA256_HEX_LEN))) {
         errno = EINVAL;
         return 0u;
     }

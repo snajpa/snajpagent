@@ -69,7 +69,7 @@ class WindowsTests(unittest.TestCase):
         self.assertIn(b'\x1b[?1049l', child.output.replace(b'\r\n', b''))
 
     def live(self, child):
-        child.repaint_until(b'ATTACHED')
+        child.attached()
         self.wait_snapshot(lambda rows: rows and self.state().get('buffers'))
         session = self.state()['buffers'][0]['session']
         child.command('detach')
@@ -113,14 +113,14 @@ class WindowsTests(unittest.TestCase):
         child.repaint_until(b'Live session hidden')
         self.wait_snapshot(lambda rows: frontend.rollout(self.state()['buffers'][0])['draft']
                            == 'next unsent ž')
-        child.command('q')
+        child.command('session quit')
         child.repaint_until(b'Live session hidden')
         self.assertIsNone(child.process.poll())
         child.command('workspaces')
         child.write(b'\r')
         child.repaint_until(b'Quit the live session before switching workspaces')
         child.command('buffer ' + session)
-        child.repaint_until(b'ATTACHED')
+        child.attached()
         child.command('vsp')
         self.wait_snapshot(lambda rows: len(self.state()['windows']) == 2)
         self.assertEqual(len(self.state()['buffers']), 1)
@@ -132,7 +132,7 @@ class WindowsTests(unittest.TestCase):
         child.write(b'?windows-direct-answer\r')
         child.repaint_until(b'Match')
         child.repaint_until(b'windows-direct-answer')
-        child.command('qa')
+        child.command('sessions quit')
         child.repaint_until(b'Unsent draft or unresolved submission')
         self.assertIsNone(child.process.poll())
         self.finish(child, 'qa!')

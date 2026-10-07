@@ -25,6 +25,8 @@ int snag_grapheme_cells_width(const struct snag_grapheme_cells *);
  * byte length, or zero for empty input/invalid initial UTF-8. A later malformed
  * byte starts a new invalid span, preserving the preceding valid cluster. */
 size_t snag_grapheme_next(const unsigned char *, size_t);
+/* Boundary at or before a byte offset. Malformed bytes form separate spans. */
+size_t snag_grapheme_floor(const unsigned char *, size_t length, size_t at);
 /* Terminal-cell policy for one valid cluster: emoji/flags/keycaps occupy two
  * cells; combining marks have no independent width. Ambiguous East Asian width
  * is explicit. Controls/invalid input return -1; isolated marks return zero. */

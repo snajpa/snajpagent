@@ -83,6 +83,7 @@ class Terminal:
         settings = config.read_text() if config.exists() else ''
         if '[terminal]' not in settings:
             config.write_text(settings + '\n[terminal]\nclipboard=off\n')
+        self.root = root
         self.master, self.slave = pty.openpty()
         self.original = normalized_modes(termios.tcgetattr(self.slave))
         self.receipt = root / ('terminal-' + uuid.uuid4().hex + '.json')
@@ -149,6 +150,35 @@ class Terminal:
             self.read(.1)
         if marker not in self.output:
             raise AssertionError((marker, bytes(self.output[-5000:])))
+
+    def attached(self, timeout=5):
+        """Wait for a controlled session surface, including older frontends."""
+        from test_session_view import View
+        from test_vm_mouse import current_rows
+
+        labels = set()
+        for directory in (self.root / 'state' / 'sessions').iterdir():
+            if not (directory / 'view.sock').exists():
+                continue
+            observer = View(directory)
+            try:
+                state = observer.until('state')['state']
+                labels.add(state.get('name') or directory.name[:8])
+            finally:
+                observer.close()
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            self.write(b'\x0c')
+            self.read(.05)
+            rows = current_rows(self).values()
+            for line in rows:
+                if 'ATTACHED' in line:
+                    return
+                for label in labels:
+                    if re.search(r'\[' + re.escape(label) +
+                                 r'(?:; (?:HOLD|loading|history error, R))*\] ', line):
+                        return
+        raise AssertionError(('controlled session prompt', bytes(self.output[-5000:])))
 
     def write(self, text):
         os.write(self.master, text)
@@ -302,7 +332,12 @@ class WorkspaceTests(unittest.TestCase):
         child.repaint_until(b'\x1b[0mset nomouse')
         child.write(b'\x1b')
         time.sleep(.06)
-        child.finish('session d')
+        child.write(b':workspace d\t')
+        child.repaint_until(b'\x1b[0mworkspace detach')
+        self.assertIsNone(child.process.poll(), 'completion executed workspace detach')
+        child.write(b'\x1b')
+        time.sleep(.06)
+        child.finish('workspace d')
 
     def test_follow_hold_and_idle_polling(self):
         journal = self.seed_session()
@@ -339,7 +374,7 @@ class WorkspaceTests(unittest.TestCase):
         child = self.start('-N', 'only-transcript')
         child.command('history ' + journal.parent.name)
         child.repaint_until(b'retained-answer-marker')
-        child.finish('session d')
+        child.finish('workspace d')
         other = WorkspaceTests()
         other.setUp()
         self.addCleanup(other.doCleanups)
@@ -359,7 +394,7 @@ class WorkspaceTests(unittest.TestCase):
         os.utime(unrelated, ns=(stamp, mtime))
         child = self.start('--resume', 'only-transcript', expect=b'history')
         child.repaint_until(b'retained-answer-marker')
-        child.finish('session d')
+        child.finish('workspace d')
         self.assertEqual(unrelated.stat().st_atime_ns, stamp,
                          'transcript restore read an unrelated session journal')
 
@@ -431,7 +466,7 @@ class WorkspaceTests(unittest.TestCase):
         wheel(65)
         frame = frame_until('[tail]')
         self.assertIn('last-visible-marker', frame)
-        child.finish('session detach')
+        child.finish('workspace detach')
 
     def test_history_renders_standalone_markdown(self):
         journal = self.seed_session('## Shared heading\n\nA **bold** word and `code`.\n\n'
@@ -450,7 +485,7 @@ class WorkspaceTests(unittest.TestCase):
         self.assertNotIn(b'`code`', screen)
         self.assertNotIn(b'assistant final_answer', screen)
         self.assertIn(b'\x1b[0;1m', screen)
-        child.finish('session d')
+        child.finish('workspace d')
 
     def test_resize_keeps_background_history_pending(self):
         foreground = self.seed_session('foreground-history-marker')
@@ -485,7 +520,7 @@ class WorkspaceTests(unittest.TestCase):
         child.resize(40, 320)
         child.repaint_until(b'foreground-history-marker')
         child.repaint_until(b'background-history-marker', timeout=15)
-        child.finish('session d')
+        child.finish('workspace d')
 
     def test_workspace_colors_follow_config_and_environment(self):
         journal = self.seed_session()
@@ -747,7 +782,7 @@ class WorkspaceTests(unittest.TestCase):
         path.write_text(json.dumps(value))
         child = self.start('--resume', 'legacy-picker')
         child.command('workspace save')
-        self.wait_snapshot(lambda values: next(iter(values.values()))['state']['v'] == 13)
+        self.wait_snapshot(lambda values: next(iter(values.values()))['state']['v'] == 14)
         child.finish()
 
     def test_unknown_state_is_preserved_and_terminal_not_entered(self):

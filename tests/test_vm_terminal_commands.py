@@ -113,7 +113,7 @@ input()
     def attached(self, name):
         child = self.start('-N', name)
         child.command('attach ' + self.owner.sid)
-        child.repaint_until(b'ATTACHED')
+        child.attached()
         return child
 
     def return_to_workspace(self, child):
@@ -205,7 +205,7 @@ input()
         self.return_to_workspace(child)
         self.show_report(child, '/config')
         child.command('history')
-        child.repaint_until(b'ATTACHED')
+        child.attached()
         child.finish('close')
         self.assertEqual((self.root / 'editor-runs').read_text(), 'started\n')
         self.assertEqual(self.inputs(), [])
@@ -247,7 +247,7 @@ input()
         child = self.start('-N', 'transfer',
                            transport=[str(control.frontend.BINARY), 'remote'])
         child.command('attach ' + self.owner.sid)
-        child.repaint_until(b'ATTACHED')
+        child.attached()
         child.write(('i/send ' + str(path) + '\r').encode())
         child.until(b'\x1b[?1049l')
         del child.output[:child.output.index(b'\x1b[?1049l') + len(b'\x1b[?1049l')]
@@ -309,7 +309,7 @@ input()
         self.owner.provider.runtime_handler = record
         child = self.transfer_terminal('receive', **transport)
         child.command('attach ' + self.owner.sid)
-        child.repaint_until(b'ATTACHED')
+        child.attached()
         child.command('vsp')
         if background:
             child.write(b'iwork during upload\r')
@@ -335,7 +335,7 @@ input()
         child.output.clear()
         child.write((str(path) + '\r').encode())
         if resize:
-            child.until(b'ATTACHED', 15)
+            child.attached(15)
             child.resize(14, 200)
             child.repaint_until(b'1 unsent attachment(s)')
         else:
@@ -373,6 +373,53 @@ input()
         child.command('close')
         child.finish('close')
         self.owner.status('detached')
+
+    def pane_upload(self, trigger, draft, name):
+        path = self.root / 'dropped.txt'
+        path.write_text('drop from workspace\n')
+        child = self.transfer_terminal(name)
+        child.command('attach ' + self.owner.sid)
+        child.attached()
+        child.write(b'i' + trigger)
+        child.until(b'Select local file', 10)
+        rows = self.snapshots()
+        pending = rollout(next(iter(rows.values()))['state']['buffers'][0])
+        self.assertTrue(pending['pending']['literal'])
+        self.assertEqual(pending['draft'], draft)
+        child.output.clear()
+        child.write((str(path) + '\r').encode())
+        child.until(b'1 unsent attachment(s)', 15)
+        self.wait_snapshot(lambda rows: not rollout(next(iter(rows.values()))[
+            'state']['buffers'][0])['pending'])
+        child.write(b'\x1b')
+        child.read(.06)
+        child.command('workspace save')
+        rows = self.wait_snapshot(lambda rows: rollout(next(iter(rows.values()))[
+            'state']['buffers'][0])['draft'] == draft)
+        self.assertEqual(rollout(next(iter(rows.values()))[
+            'state']['buffers'][0])['draft'], draft)
+        self.assertEqual(self.inputs(), [])
+        self.assertEqual(self.owner.identity(), self.owner.owner_identity)
+        child.finish('workspace detach')
+
+    def test_drop_upload_keeps_unsent_pane_draft(self):
+        self.pane_upload(b'unsent draft\x1b[9002~', 'unsent draft', 'drop-receive')
+
+    def test_stock_upload_launch_alias_uses_terminal_transfer(self):
+        self.pane_upload(b'trz\r', '', 'upload-alias')
+
+    def test_stock_directory_upload_alias_uses_terminal_transfer(self):
+        child = self.transfer_terminal('directory-upload-alias')
+        child.command('attach ' + self.owner.sid)
+        child.attached()
+        child.write(b'itrz -d\r')
+        child.until(b'Directory uploads are unsupported.', 10)
+        child.attached(10)
+        self.assertEqual(self.inputs(), [])
+        self.assertEqual(self.owner.identity(), self.owner.owner_identity)
+        child.write(b'\x1b')
+        child.read(.06)
+        child.finish('workspace detach')
 
     def test_receive_through_remote_keeps_attachment_for_workspace_submit(self):
         self.receive_and_send(background=True)
@@ -416,7 +463,7 @@ input()
         child = self.start('-N', 'cancel-receive',
                            transport=[str(control.frontend.BINARY), 'remote'])
         child.command('attach ' + self.owner.sid)
-        child.repaint_until(b'ATTACHED')
+        child.attached()
         child.write(b'i/receive\r')
         child.until(b'Select local file', 10)
         child.output.clear()
@@ -439,7 +486,7 @@ input()
     def test_ssh_loss_at_upload_picker_restores_terminal_and_workspace(self):
         child = self.transfer_terminal('lost-upload', ssh=True)
         child.command('attach ' + self.owner.sid)
-        child.repaint_until(b'ATTACHED')
+        child.attached()
         path = self.root / 'retained.txt'
         body = b'previously retained attachment\n'
         path.write_bytes(body)
@@ -494,7 +541,7 @@ input()
         child = self.transfer_terminal('mux-loss', ssh=protocol == 'ssh',
                                        mosh=protocol == 'mosh', mux=mux)
         child.command('attach ' + self.owner.sid)
-        child.repaint_until(b'ATTACHED')
+        child.attached()
         child.command('vsp')
         child.write(b'i/receive\rretained workspace draft')
         child.until(b'Select local file', 10)
@@ -551,7 +598,7 @@ input()
         resumed.write(b'\x03')
         self.wait_snapshot(lambda rows:
             rollout(next(iter(rows.values()))['state']['buffers'][0])['pending'] is None)
-        resumed.repaint_until(b'ATTACHED')
+        resumed.attached()
         self.assertEqual(identity(), original)
         self.assertEqual(self.inputs(), [])
         saved = next(iter(self.snapshots().values()))['state']['buffers'][0]
@@ -628,7 +675,7 @@ input()
         child.repaint_until(b'1 unsent attachment(s)')
         for command, count in (('/attachments', 1), ('/detach all', 0)):
             child.command('history')
-            child.repaint_until(b'ATTACHED')
+            child.attached()
             child.write(('i' + command + '\r').encode())
             self.wait_snapshot(lambda rows:
                 rollout(next(iter(rows.values()))['state']['buffers'][0])['pending'] is None and

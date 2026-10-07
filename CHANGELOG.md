@@ -10,6 +10,41 @@
 - Isolate piped command tools from the session's controlling terminal so child
   programs cannot leave terminal input assigned to an exited process group.
 
+- Session prompts share the standalone builder and carry workspace identity and
+  control guidance. Per-session workspace status bars are removed; the global
+  command line shows Vim mode and notices.
+
+- Compact IRC conversation labels follow the available channel/query tabs. Selected
+  chats omit repeated route prefixes, and model-owned chats explain that they are
+  being viewed through the model's identity.
+
+- Use session for one agent run and workspace for its saved pane layout.
+  `:workspace detach` / `:workspace d` saves and leaves the whole workspace;
+  `:session detach` / `:session d` / `:detach` releases only the focused session.
+  `:w` saves the workspace; `:q` / `:x` / `:wq` save and detach it.
+  `:q!` stops all controlled workspace sessions through normal shutdown, retains
+  the layout and drafts, and exits. `:session quit` stops the focused session.
+- Apply bracketed paste through the shared terminal editor, normalize CR to LF,
+  cancel unfinished paste with Ctrl-C and preserve UTF-8 at the draft limit.
+  Insert a completed paste in one edit, including in the middle of a large draft.
+- Receive workstation drops from a workspace pane through the existing terminal
+  transfer, preserving its unsent draft. Support the `trz` launch alias.
+  Reject unsupported `trz -d` / `/receive -d` before starting a handshake.
+- Keep owner sockets progressing when terminal output is backpressured, and
+  retain cancellation while an earlier owner request is still being written.
+
+- Share standalone key handling with workspace INSERT: slash-command and mention
+  completion, prompt history/reverse search, whole-draft clearing, cancellation
+  and active-turn queueing. Preserve queued intent through workspace resume in
+  snapshot version14; older workspace snapshots remain readable.
+- Move prompt animation and repaint timing into shared terminal code. Advance
+  the owner prompt timestamp after semantic submission and show active state
+  when attaching to older owners. Preserve whole graphemes during input movement
+  and deletion in both interfaces.
+- Flow the prompt after short pane output and use the standalone editor's draft
+  viewport, including tall multiline drafts. Preserve the cursor through focus,
+  resize and workspace resume.
+
 - Restore the Network chat heading in command help, including addressed chats
   and private conversations.
 

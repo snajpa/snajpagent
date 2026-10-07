@@ -64,6 +64,56 @@ class CrossSessionTests(ChannelFixture):
         self.child.command('close')
         self.child.finish('close')
 
+    def test_workspace_force_quit_stops_all_sessions_and_keeps_layout_drafts(self):
+        self.child.finish('q!')
+        self.wait(lambda: all(link.fileno() < 0 for link in self.server.links.values()))
+        saved = self.state()
+        self.assertEqual(len(saved['windows']), 2)
+        self.assertEqual(self.rollout(self.target)['draft'], 'keep-target-rollout')
+
+    def test_workspace_force_quit_refuses_an_observed_session_before_stopping_any(self):
+        self.child.command('session detach')
+        self.wait_snapshot(lambda rows: rows and not self.owner(self.source)['control'])
+        self.child.command('q!')
+        self.child.repaint_until(b'is not controlled')
+        self.assertIsNone(self.child.process.poll())
+        self.assertTrue(all(link.fileno() >= 0 for link in self.server.links.values()))
+        self.assertTrue(self.owner(self.target)['control'])
+        self.child.command('attach ' + self.source)
+        self.child.repaint_until(b'ATTACHED ' + self.source[:8].encode())
+        self.child.finish('q!')
+        self.wait(lambda: all(link.fileno() < 0 for link in self.server.links.values()))
+
+    def test_workspace_force_quit_saves_before_stopping_sessions(self):
+        path, = (self.root / 'state' / 'workspaces').glob('*/workspace.json')
+        original = path.with_name('saved-workspace.json')
+        path.rename(original)
+        path.mkdir()
+        try:
+            self.child.command('q!')
+            self.child.repaint_until(b'cannot save workspace')
+            self.assertIsNone(self.child.process.poll())
+            self.assertTrue(all(link.fileno() >= 0 for link in self.server.links.values()))
+        finally:
+            path.rmdir()
+            original.rename(path)
+        self.child.finish('q!')
+        self.wait(lambda: all(link.fileno() < 0 for link in self.server.links.values()))
+
+    def test_session_detach_keeps_workspace_and_other_session_attached(self):
+        self.child.command('session detach')
+        self.wait_snapshot(lambda rows: rows and not self.owner(self.source)['control'])
+        self.assertIsNone(self.child.process.poll())
+        self.assertTrue(self.owner(self.target)['control'])
+        self.assertEqual(len(self.server.links), 4)
+        self.assertEqual(len(self.state()['windows']), 2)
+        self.child.write(b'\x17w')
+        self.child.write(b'i\x15/fast off\r')
+        self.wait_snapshot(lambda rows: rows and any(
+            report['command'] == '/fast off' for report in self.owner(self.target)['reports']))
+        self.normal()
+        self.child.finish('workspace detach')
+
     def test_mouse_insert_routes_commands_and_drafts_to_clicked_owner(self):
         from test_vm_mouse import mouse
 
@@ -79,7 +129,7 @@ class CrossSessionTests(ChannelFixture):
         child.write(b'\x1b')
         child.read(.08)
         child.command('history ' + self.source)
-        child.repaint_until(b'ATTACHED')
+        child.attached()
         # Clicking the other pane preserves its remembered draft position.
         mouse(child, 1, 112)
         mouse(child, 1, 112, release=True)
@@ -89,7 +139,7 @@ class CrossSessionTests(ChannelFixture):
         self.assertEqual(self.rollout(self.source)['draft'], '')
         self.normal()
         self.assertEqual(len(self.seen), requests)
-        child.finish('session detach')
+        child.finish('workspace detach')
 
     def test_query_uses_named_owner_and_preserves_target_draft(self):
         address = 'other session/' + self.server.endpoint + '/peer'
@@ -219,7 +269,7 @@ class CrossSessionTests(ChannelFixture):
         self.wait_snapshot(lambda rows: rows and self.rollout(self.source)['draft'] == command)
         self.assertEqual(self.rollout(self.target)['draft'], 'keep-target-rollout')
         self.assertIsNone(self.rollout(self.target)['pending'])
-        self.assertEqual(self.state()['v'], 13)
+        self.assertEqual(self.state()['v'], 14)
         self.assertFalse(any('retained-text' in line for nick, line in self.server.lines))
         self.finish()
 
