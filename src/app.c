@@ -4789,6 +4789,37 @@ turn_recovery_wait(struct app_state *app, struct turn_retry *retry)
 }
 
 static int
+wait_for_command_or_input(struct app_state *app)
+{
+    /* Ready results need collection immediately. A live command may instead
+     * need the answer to the question that the model has just displayed. */
+    for (size_t i = 0u; i < app->session.process_count; ++i)
+        if (snag_tools_ready(app->session.processes[i].handle)) return 3;
+    if (app_textf(app, SNAG_UI_HOST,
+            "Waiting for command completion or your input; /yield returns to the model, "
+            "Ctrl-C interrupts.") < 0 || ensure_turn_prompt(app) < 0) return -1;
+    app->tool_waiting = true;
+    int rc = 0;
+    while (!app->input_closed && !app->interrupt_requested) {
+        rc = snag_app_active_input_pump(app, 25u);
+        if (rc < 0 || rc == 2) break;
+        if (app->control_requested && apply_controls(app) < 0) {
+            rc = -1;
+            break;
+        }
+        if (app->steering_requested || app->yield_requested || app->irc_urgent.len ||
+            (app->irc_sleep_released && app->irc_background.len)) break;
+        bool ready = false;
+        for (size_t i = 0u; i < app->session.process_count; ++i)
+            ready |= snag_tools_ready(app->session.processes[i].handle);
+        if (ready) break;
+    }
+    app->tool_waiting = app->yield_requested = false;
+    if (app->input_closed || app->interrupt_requested) return 2;
+    return rc < 0 ? -1 : 0;
+}
+
+static int
 admit_input(struct app_state *app, char *error, size_t error_size)
 {
     json_t *ids = json_array();
@@ -5506,6 +5537,12 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
          * wave and hands running commands back before the next cycle sees it. */
         if (decision.outcome == SNAG_GRAPH_REFUSAL) app->turn_policy_stopped = SNAG_POLICY_STOP_REFUSAL;
         if (app->session.process_count && decision.outcome != SNAG_GRAPH_CALLS) {
+            if (!app->execute && decision.outcome == SNAG_GRAPH_FINAL) {
+                int wait_rc = wait_for_command_or_input(app);
+                if (wait_rc < 0) goto fail;
+                if (wait_rc == 2) goto user_interrupted;
+                if (wait_rc == 0) continue;
+            }
             const char *message = SNAG_UNSETTLED_COMMANDS_MESSAGE;
             if (fail_turn(app, retry, turn_id, "protocol_failure", "protocol", message,
                            error, sizeof(error)) < 0) (void)app_error(app, error);

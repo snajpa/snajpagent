@@ -5731,7 +5731,8 @@ main(int argc, char **argv)
         json_t *policy = message_matching(input, "Unsettled-command snapshots");
         assert_string(policy, "role", "system");
         assert(strstr(snag_json_string(policy, "content"), "independent work") != NULL);
-        assert(strstr(snag_json_string(policy, "content"), "until every handle is settled") != NULL);
+        assert(strstr(snag_json_string(policy, "content"),
+            "Collect all handles before claiming completion") != NULL);
         assert(strstr(gate_text, handle) != NULL);
     }
     {
@@ -5772,7 +5773,8 @@ main(int argc, char **argv)
         json_t *policy = message_matching(input, "Unsettled-command snapshots");
         assert_string(policy, "role", "system");
         assert(strstr(snag_json_string(policy, "content"), "independent work") != NULL);
-        assert(strstr(snag_json_string(policy, "content"), "until every handle is settled") != NULL);
+        assert(strstr(snag_json_string(policy, "content"),
+            "Collect all handles before claiming completion") != NULL);
         assert(strstr(gate_text, handle) != NULL);
         snag_config_free(&network_config);
     }

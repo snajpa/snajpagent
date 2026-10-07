@@ -54,6 +54,9 @@
         stay alive; the model can let them finish or stop them. A submitted
         correction stays visible in rollout even when the next prompt is
         blocked.</p>
+      <p>With current source, a reply while commands are running waits for your
+        input or command completion. Output keeps buffering; <code>/yield</code>
+        returns control to the model.</p>
       <p>Foreground slash commands finish before another command runs. Controls
         needing a safe boundary acknowledge it. The prompt shows context usage.
         <code>/history N</code> shows retained turns; <code>/cat PATH</code> opens

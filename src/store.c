@@ -1941,7 +1941,7 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             if (!found) goto invalid;
         }
     } else if (strcmp(type, "turn_yield_requested") == 0) {
-        if (!current_turn || !session->pending_call_count ||
+        if (!current_turn || (!session->pending_call_count && !session->process_count) ||
             !snag_json_exact_keys(data, "turn_id")) goto invalid;
     } else if (strcmp(type, "turn_cancel_requested") == 0) {
         if (!current_turn || !snag_json_exact_keys(data, "turn_id")) goto invalid;
@@ -2038,7 +2038,9 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             session->response_terminal != SNAG_RESPONSE_TERMINAL_INTERRUPTED &&
             (session->response_terminal != SNAG_RESPONSE_TERMINAL_STEERED ||
              session->pending_steering_count != 0u) && (!session->response_complete ||
-             (session->pending_steering_count != 0u && all_pending_finished(session) &&
+             ((session->pending_steering_count != 0u ||
+               (session->process_count && session->response_outcome == SNAG_GRAPH_FINAL)) &&
+              all_pending_finished(session) &&
               session->response_outcome != SNAG_GRAPH_CONFLICT));
         bool has_irc_seq = json_object_get(data, "irc_seq") != NULL;
         /* Pre-watermark journals contain the same request facts without irc_seq. */

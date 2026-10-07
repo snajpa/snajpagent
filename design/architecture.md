@@ -153,9 +153,9 @@ may require one new cache write; subsequent requests extend that snapshot's
 prefix. Provider cache availability remains external to this representation.
 
 Each accepted user turn is projected into an OpenAI-compatible Responses API
-request. Streaming events update the terminal as they arrive. A final answer,
-refusal, or completed tool cycle closes the turn; it does not close the
-session.
+request. Streaming events update the terminal as they arrive. Tool results feed
+the next response. A final answer or refusal closes the turn once its command
+handles are settled; the session remains available for subsequent turns.
 
 Context has one immutable transcript: the actual Responses input items. The
 model-input accounting envelope adds instruction metadata, cycle and capability
@@ -473,7 +473,10 @@ order, identified by call ID. One call uses this same path.
 Yielded jobs keep the normal tool catalog available; `write_stdin` can address
 any known handle once per response. Invalid/duplicate interactions are not run
 and never touch the job. A ready, uncollected result retains its slot. Final
-answers and goal completion require every handle settled. A steer stops new
+answers and goal completion require every handle settled. An interactive reply
+with live commands waits in the input pump until input, explicit yield, urgent
+IRC or command readiness. The same turn then requests a response with current
+process facts. This wait retains output and runs no provider retries. A steer stops new
 admissions, returns live handles without signaling them, and marks unstarted
 calls `superseded_by_steering`; no skipped call launches after handoff. A batch
 shares the smallest positive effective yield interval. Pending stdin is owned

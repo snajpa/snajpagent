@@ -4638,11 +4638,20 @@ input continue under a process handle; the model can wait, interact, or
 explicitly terminate them with
 .BR write_stdin .
 .PP
-An unsettled command handle blocks a final model answer.  Recovery points
-the model to the current process snapshot and
+In interactive sessions, a final model reply while commands are running keeps
+the turn open and waits for operator input or command completion.  This lets
+the model ask for input needed by an interactive command.  Output continues
+to be buffered, and the same command handles remain available.  No provider
+requests or automatic retries run during this wait.
+.B /yield
+returns control to the model; Ctrl-C interrupts the turn and closes its commands.
+Urgent IRC input also returns control to the model.
+.PP
+Ready command results must be collected before a final answer completes the
+turn.  One-shot execution requires every command to settle before answering.
+Recovery points the model to the current process snapshot and
 .B write_stdin
-so it can collect terminal results before answering; a terminally failed
-turn closes its owned commands.
+to collect outstanding results.  A terminally failed turn closes its commands.
 .PP
 The current foreground process owns its command handles.  Turn interruption, closure, or process exit closes managed commands;
 resume does not revive an operating-system process.

@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Keep interactive commands alive when a model reply asks for input. Wait for
+  operator input or command completion without model retries, retain output,
+  and continue with the same handles. `/yield` and Ctrl-C remain available.
+
 - Default to `less -FX` so reports and files that fit on one screen return
   automatically and remain visible. Explicit pager arguments are preserved.
 

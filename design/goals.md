@@ -136,11 +136,13 @@ continuation. In networked mode IRC tools may precede that continuation so
 urgent chat can be handled without abandoning the process. snajpagent never
 parses lifecycle requests, completion claims, documentation, or magic phrases
 from assistant prose.
-An attempted final answer while handles remain unsettled is rejected. Its
-model-facing recovery note names `write_stdin` and points to the current
-process snapshot; the model must collect terminal results before finalizing.
-This guidance does not transfer command ownership across turns. A terminal
-turn failure still closes its owned commands.
+An interactive final reply with live commands parks the current turn until
+operator input, urgent IRC, explicit `/yield`, or command completion. The input
+pump continues to retain output and serve controls without provider requests.
+This supports commands that need the answer to a question in that reply.
+The turn retains ownership; the model uses the same `write_stdin` handles after
+waking. Ready uncollected results and one-shot execution retain the final-answer
+guard and recovery guidance. Cancellation or terminal failure closes owned jobs.
 
 ## Turn Boundaries And Continuation
 
