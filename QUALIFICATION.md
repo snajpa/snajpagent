@@ -81,11 +81,20 @@ fifteen native-owner and nineteen controller cases on FreeBSD 14.5-RELEASE-p1.
 All sixteen frontend cases pass across the suite and a corrected legacy-snapshot
 case. The launcher covers exec failure and explicit retry, independent process
 groups, signal-mask restoration, temporary PTY modes and owner lifetime.
-Legacy FreeBSD 5.1, both NetBSD, all three OpenBSD, Windows ARM64 and Linux AArch64
-production profiles compile.
-The remaining production compile profiles are still being qualified. These
-development checks do not constitute a release-matrix receipt or establish
-runtime behavior on the older BSD kernels.
+All eighteen production profiles compile at revision `20b94173`: Linux x86_64,
+AArch64, ARMv6, RISC-V64, PPC64LE and i686; macOS ARM64, x86_64 and universal;
+Windows x86_64 and ARM64; both FreeBSD profiles; all three OpenBSD profiles; and
+both NetBSD profiles. The copied executables' SHA-256 hashes match their successful
+build records, and the target set matches `PROD_TARGETS`. This qualifies compilation
+at that revision; runtime coverage remains the platform-specific scope above.
+These development artifacts are separate from a release-matrix receipt.
+
+The full macOS ARM64 and Linux x86_64 development installations at `7277eb5f`
+also pass workspace restore/navigation, query/channel panes and cross-session
+addressing. The installed Linux binary passes clipboard and upload reconnect
+checks through all four SSH/Mosh × Screen/tmux paths. Separate `WITH_VM=0` builds
+at that revision pass all twenty-one classic IRC query cases on each host and
+report the disabled frontend when invoked with `vm`.
 
 ## tmux transfers and paste display
 
