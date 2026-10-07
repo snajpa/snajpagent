@@ -1742,12 +1742,12 @@ manual and check example syntax. Preserve the classic interface's append-only
 rendering contract outside VM. The VM exception is explicit in the architecture.
 
 Development delivery follows the current staging/master policy and recorded
-shipment authority, using `Pavel Snajdr <snajpa@snajpa.net>`. Implementation
-deliveries refresh the Mac and snajpadev binaries and manuals, preserve rollback
-copies and keep running production owners intact. A running old owner gains new
+shipment authority. Implementation deliveries refresh the configured binaries
+and manuals, preserve rollback copies and keep running production owners intact.
+A running old owner gains new
 features only on its normal exit/resume; installation never authorizes restarting
 it. Source/development delivery does not select a new release version, tag or
-website publication. No release is produced on E2B hardware.
+website publication. Releases use the designated release hosts.
 
 ## 14. Operational boundaries
 

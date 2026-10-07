@@ -451,7 +451,7 @@ class RemoteStartupTests(unittest.TestCase):
             client.write_text(f"#!{sys.executable}\nprint(256)\n")
             client.chmod(0o755)
             command = ["/usr/local/bin/snajpagent", "--resume",
-                       "2d491a2c01ce8583aad5895dc067d56d", "--help", "--",
+                       "0123456789abcdef0123456789abcdef", "--help", "--",
                        "a b", "$(touch forbidden)", "résumé", ""]
             cases = [
                 ("mosh", []),

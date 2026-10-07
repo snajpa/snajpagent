@@ -2,8 +2,8 @@
 
 # Regression audit, 2026-10-01
 
-The inventory covers all 32 commits reachable from local refs at audit intake
-whose author or committer address ends in `@e2b.dev`. The delivered source base
+The inventory covers the 32 commits listed below, reachable from local refs at
+audit intake. The delivered source base
 is `197dbf07328e52bdcf413050f36842b3e0ef752a`. Thirty inventory commits are
 ancestors of that base; `df431147` is the original Mosh patch superseded by
 `165d9120`, and `8a01098b` is an unintegrated test-only branch change.
