@@ -168,7 +168,10 @@ index with batch-sized scratch. Semantic/core/provider verification and source
 stability precede adoption; existing context control supports cancellation.
 Stopped directory cutover retains the original journal, keeps the writer lock
 and publishes native selection last. Partial-retention repair stages from the
-preserved source; bulk command dispatch remains under implementation.
+preserved source. `convert` streams session IDs through bounded parallel workers,
+skips locked writers, continues independent failures and reports individual and
+summary outcomes. Already-current validation preserves native bytes and rejects
+unverified tails. Collection acceptance and full release qualification remain.
 The checkpoint access-plan reader can prove a complete seed closure through that
 cache without a prefix replay. Publication borrows the I/O owner's matching
 cache frontier to prove old and suffix locations against the captured root,

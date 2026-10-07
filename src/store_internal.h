@@ -112,6 +112,9 @@ int snag_checkpoint_state_decode(const json_t *data, struct snag_session *state)
 
 bool snag_store_trash_id(const char *name, char id[SNAG_ID_HEX_LEN + 1u]);
 int snag_store_verify_private_fd(int fd, bool directory, const char *name, char *error, size_t error_size);
+/* Full resolved ID; open only the private directory, without replay or a writer. */
+int snag_store_open_session_directory(struct snag_store *store, struct snag_session *session,
+    const char *id, char *error, size_t error_size);
 /* Existing opens return 1 for native, 0 for legacy; only absence permits fallback.
  * New creation remains legacy until native provisional persistence is integrated. */
 int snag_store_open_session_files(struct snag_session *, bool create, char *, size_t);

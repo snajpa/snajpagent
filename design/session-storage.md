@@ -7,7 +7,9 @@
 Engineering design, September 27, 2026, with framing implementation begun
 September 28. Current source creates native sessions and opens them through
 bounded checkpoint admission. Released 0.99.8c and existing legacy sessions use
-JSONL; stopped-session conversion remains under implementation. The draft header,
+JSONL until explicitly converted with `snajpagent convert`. Its bounded worker
+pool streams session IDs, skips locked writers, preserves originals and reports
+independent results. The draft header,
 commit-batch codec and bounded positional reader are exercised by the store tests.
 Typed payloads and data adapters cover all 77 assigned semantic kinds. Archive
 profiles also preserve public checkpoint views and explicitly unassigned source
@@ -533,7 +535,13 @@ selection. The legacy pathname stays absent to exclude older writers. An
 interrupted cutover can stage again from the retained source; an ambiguous
 existing retention copy stops conversion. Provisional files remain available for
 diagnosis. A sync failure after native selection reports uncertain durability
-and keeps that selection. Bulk command dispatch remains under implementation.
+and keeps that selection. `snajpagent convert [--dotdir DIR] [--jobs N]` streams
+resolved IDs through a mutex-protected directory iterator. The default worker
+count is the online CPU count bounded by discovered session names; an explicit
+positive jobs count sets the concurrency. State capture stays worker-owned and
+index scratch stays batch-sized. A failed or locked session leaves other work
+ready. Already-current validation uses immutable native admission and requires
+its verified physical extent to cover the whole journal, retaining rejected tails.
 Native creation and existing native admission use the production backend below.
 
 ### Legacy event names

@@ -94,6 +94,7 @@ COMMON_SRC += src/convert.c src/tools_media.c src/media.c src/tools_document.c s
 COMMON_SRC += src/upload_wire.c src/upload_md5.c src/screen_wire.c src/upload.c src/remote.c
 COMMON_SRC += src/clipboard.c src/clipboard_transfer.c
 COMMON_SRC += src/app_resume.c
+COMMON_SRC += src/store_convert.c
 COMMON_SRC += src/irc_address.c src/app_irc.c
 COMMON_SRC += src/vm.c
 ifeq ($(WITH_VM),1)
@@ -472,6 +473,7 @@ endif
 	python3 tests/test_session_states.py ./$(BIN)
 	python3 tests/test_session_status_protocol.py ./$(BIN)
 	python3 tests/test_resume_options.py ./$(BIN)
+	python3 tests/test_store_conversion.py ./$(BIN)
 	./tests/test_provider_retry
 	./tests/test_provider_transport
 	python3 tests/test_access_token.py ./tests/snajpagent-transport

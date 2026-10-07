@@ -119,6 +119,10 @@ snajpagent --resume --last
 recent stored sessions. Each group sorts by latest saved activity. `-l N`
 changes the stored count; `-l 0` shows running sessions only.
 
+Convert stopped legacy sessions with `snajpagent convert --jobs 4`. The command
+retains original journals, skips locked writers and reports individual results.
+The [manual](snajpagent.1) covers interruption and recovery.
+
 Name sessions with `-N lead` or `/session name lead`. Use `--attach -N lead`
 while running; `--resume -N lead` also reopens stored sessions. Duplicates
 require IDs. **Active goals continue on resume**; pause before exiting to keep

@@ -415,6 +415,7 @@ snag_cli_usage(int fd)
         "       " SNAJPAGENT_NAME " -e [OPTIONS] [-- PROMPT...]\n"
         "       " SNAJPAGENT_NAME " -l [N] [OPTIONS]\n"
         "       " SNAJPAGENT_NAME " vm [--dotdir DIR] [-N NAME|--resume WORKSPACE|--last|-l [N]]\n"
+        "       " SNAJPAGENT_NAME " convert [--dotdir DIR] [--jobs N]\n"
         "       " SNAJPAGENT_NAME " [OPTIONS] login [PROVIDER] [AUTH_OPTION]\n"
         "       AUTH_OPTION: --openai-device-auth | --meta-device-auth |\n"
         "                    --with-api-key | --with-access-token\n"

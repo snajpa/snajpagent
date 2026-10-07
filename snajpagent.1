@@ -1,5 +1,5 @@
 .\" SPDX-License-Identifier: GPL-2.0-only
-.TH SNAJPAGENT 1 "September 2026" "snajpagent" "User Commands"
+.TH SNAJPAGENT 1 "October 2026" "snajpagent" "User Commands"
 .SH NAME
 snajpagent \- terminal coding agent with built-in IRC
 .SH SYNOPSIS
@@ -50,6 +50,10 @@ snajpagent \- terminal coding agent with built-in IRC
 .B snajpagent vm
 .RI [ --dotdir " PATH]"
 .RI [ -N " NAME | --resume WORKSPACE | --last | -l [N]]"
+.br
+.B snajpagent convert
+.RI [ --dotdir " PATH]"
+.RI [ --jobs " N]"
 .SH DESCRIPTION
 .B snajpagent
 is a coding agent for the terminal, with a built-in IRC server and client.
@@ -5515,6 +5519,61 @@ destination number keeps naming the same endpoint across reconnects: a send
 with a stale revision follows the number to its current revision, while a
 claimed future revision still fails.
 .SH "Sessions and files"
+.SS Convert stored sessions
+.B snajpagent convert
+migrates stopped saved sessions in the application directory to native storage.
+Use
+.B \-\-dotdir DIR
+to select another application directory. Conversion needs no provider request
+or interactive terminal.
+.PP
+The worker pool defaults to the online processor count, bounded by the number
+of discovered sessions.
+.B \-\-jobs N
+sets a positive maximum worker count. Each worker streams journal and derived
+index batches; reconstructed session state also consumes memory. Reduce the
+worker count when memory or available disk space constrains conversion.
+.nf
+snajpagent convert --jobs 4
+snajpagent convert --dotdir /path/to/.snajpagent --jobs 2
+.fi
+.PP
+Each session's existing writer lock guards verification and cutover. Locked
+sessions are skipped. Other failures remain visible while independent conversions
+continue. Progress identifies each session; the final counts show converted,
+already-current, skipped and failed sessions. Already-current native journals
+are checked through an immutable reader; an unverified native tail is a failure
+and remains intact.
+.PP
+Legacy conversion replays canonical records with existing compatibility defaults,
+rebuilds derived checkpoint state and verifies native semantic, core and provider
+state before publication. An invalid derived snapshot can be reconstructed from
+its canonical history. Unsealed legacy tail bytes remain in the retained original
+and are reported; only the verified prefix enters the native journal.
+.PP
+The original journal is retained at
+.I .legacy-source/events.jsonl
+inside the same session directory. Media and other session files keep their paths;
+the original lock inode stays in use. The native journal publishes last. The
+legacy pathname stays absent after cutover, excluding older legacy writers.
+The retained journal represents the pre-conversion state; later work appends to
+.IR journal.bin .
+.PP
+Rerun the same command after interruption. When retention completed before native
+selection, conversion rebuilds from the preserved original. Ambiguous retention
+copies stop that session's conversion. Private
+.I .converting-*
+directories preserve provisional files for diagnosis. A sync error after native
+selection reports uncertain durability and keeps the selected native journal;
+rerunning checks its state. Keep all native files and the retained source when
+backing up a converted session.
+.PP
+Exit status is 0 when processing finishes without failures, including locked
+skips; 1 for session, enumeration or worker-start failures; 2 for command syntax;
+3 for application-directory setup errors; and 130 for a handled interruption.
+Interruption stops new worker assignments and cancels in-flight legacy record
+visits and provider reconstruction. Already published sessions stay native.
+
 .SS Session durability
 Resume continues unfinished model/tool turns from their durable state, without
 requiring a fresh prompt. Already completed calls stay completed. The next model
@@ -5646,7 +5705,13 @@ Do not run older builds against these files: versions that bounded global histor
 can truncate the archive. Back up history before manually editing or removing it.
 .TP
 .I $HOME/.snajpagent/sessions/SESSION/events.jsonl
-Append-only log for existing legacy sessions. Resume preserves their format.
+Append-only log for existing legacy sessions. Resume preserves their format;
+.B snajpagent convert
+migrates stopped sessions explicitly.
+.TP
+.I $HOME/.snajpagent/sessions/SESSION/.legacy-source/events.jsonl
+Retained pre-conversion journal, including any unsealed tail bytes. Preserve it
+with the native session files for inspection and recovery.
 .TP
 .I $HOME/.snajpagent/sessions/SESSION/journal.bin
 Append-only native journal, created for new persisted sessions together with

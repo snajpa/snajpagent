@@ -4,6 +4,12 @@
 
 ## Unreleased
 
+- Convert stopped legacy session collections in bounded parallel workers with
+  `snajpagent convert`. Retain original journals, rebuild derived snapshots from
+  canonical history, skip locked writers, continue independent failures and
+  publish native selection last. Interrupted retention can be repaired by rerunning
+  the command; native already-current checks preserve canonical bytes.
+
 - Present committed native responses and deferred view repaint through typed
   sources pinned to their commit boundary, including voice observations and
   collected command stdout/stderr.
