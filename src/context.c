@@ -517,12 +517,14 @@ snag_context_capture_sources(struct snag_context_capture *cache, const struct sn
     for (size_t i = 0u; i < json_array_size(cache->recent); ++i) {
         const json_t *entry = json_array_get(cache->recent, i);
         if (strcmp(snag_json_string(entry, "type"), "irc_admitted")) continue;
+        json_t *admission = json_object_get(entry, "seq");
         const json_t *sequences = json_object_get(json_object_get(entry, "data"), "sequences");
         for (size_t j = 0u; j < json_array_size(sequences); ++j) {
             char key[32];
             (void)snprintf(key, sizeof(key), "%lld",
                 (long long)json_integer_value(json_array_get(sequences, j)));
-            if (json_object_set_new(sources.wanted, key, json_true()) < 0) goto memory;
+            if (!json_object_get(sources.wanted, key) &&
+                json_object_set(sources.wanted, key, admission) < 0) goto memory;
         }
     }
     if ((sources.prompt || json_object_size(sources.wanted)) &&

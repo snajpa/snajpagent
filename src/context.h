@@ -75,10 +75,11 @@ int snag_context_capture_bind(struct snag_context_capture **capture, struct snag
     char *error, size_t error_size);
 void snag_context_capture_free(struct snag_context_capture *capture);
 /* Populate only historical IRC sources referenced by the captured seam/current
- * input. wanted maps canonical sequence strings to true; prompt may name IRC
- * stream tuples, which are not canonical ordinals. The ordered read-only walker
- * establishes the complete requested closure under immutable source ownership;
- * it may emit just irc_event and checkpoint metadata (type session_checkpoint).
+ * input. wanted maps canonical sequence strings to their first retained admission
+ * sequence; prompt may name IRC stream tuples, which are not canonical ordinals.
+ * The ordered read-only walker establishes the complete requested closure under
+ * immutable source ownership; it emits IRC events and checkpoint metadata
+ * (type session_checkpoint).
  * Those metadata rows are lookup-only, never reducer/provider event admission.
  * Resolve before bind. Failure preserves the capture's previous source table. */
 typedef int (*snag_context_source_walk_fn)(void *source, const json_t *wanted, const char *prompt,

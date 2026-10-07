@@ -9,6 +9,10 @@
   covered history across binding changes and refuse incomplete plaintext reduction.
   Preserve API compact endpoints and report the provider error on a fallback.
 
+- Resume native sessions after IRC messages retained across compaction are
+  admitted after a checkpoint. Resolve newly needed adjacent records from the
+  verified journal when the checkpoint lookup table omits them.
+
 - Let turns with deferred steering finish while retaining queued input for the
   next turn, including when an IRC reply remains outstanding.
 
