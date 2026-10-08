@@ -1876,7 +1876,8 @@ finish_input(struct snag_ui_display *display, struct ui_action *item, int rc)
             if (display_set_view(display, view, true, false) < 0) goto fail;
             item->view_applied = true;
             take_snapshot(display, &item->snapshot, item->text);
-        } else if (snag_verbosity_command(item->text, strlen(item->text))) {
+        } else if (snag_verbosity_command(item->text, strlen(item->text)) &&
+            !snag_command_chained(item->text, strlen(item->text))) {
             const char *value = item->text + 8u;
             while (isspace((unsigned char)*value)) ++value;
             /* Active queries remain responsive while the engine is held. */
@@ -2826,9 +2827,9 @@ snag_ui_update(struct snag_ui *ui, const char *program, const char *url)
 int
 snag_ui_text(struct snag_ui *ui, enum snag_ui_operation op, const char *text)
 {
+    if (op == SNAG_UI_ERROR) ui->command_error = true;
     if (ui->command_report && (op == SNAG_UI_HOST || op == SNAG_UI_HELP || op == SNAG_UI_ERROR ||
                                   op == SNAG_UI_WARNING || op == SNAG_UI_RUNTIME)) {
-        if (op == SNAG_UI_ERROR) ui->command_error = true;
         size_t length = strlen(text);
         if (snag_term_append_safe(ui->command_report, text, length) < 0) return -1;
         int rc = length && text[length - 1u] == '\n' ? 0 : snag_buf_putc(ui->command_report, '\n');

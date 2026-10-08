@@ -27,9 +27,11 @@ bool
 snag_prompt_command(const char *text)
 {
     bool read_only;
-    if (!text || text[0] != '/' || text[1] == '/' || strchr(text, '\n')) return false;
+    if (!text) return false;
+    while (isspace((unsigned char)*text)) ++text;
+    if (text[0] != '/' || text[1] == '/' || strchr(text, '\n')) return false;
     (void)snag_prompt_parse(text, &read_only);
-    return !read_only;
+    return !read_only || snag_command_chained(text, strlen(text));
 }
 
 static bool

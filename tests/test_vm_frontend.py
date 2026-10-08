@@ -326,6 +326,39 @@ class WorkspaceTests(unittest.TestCase):
                                 capture_output=True, timeout=30)
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_ex_command_chain_preserves_quoted_names_and_split_order(self):
+        child = self.start('-N', 'chain-start')
+        child.command("  vsp ; :split ; workspace name 'chain; workspace'; w ; ")
+        rows = self.wait_snapshot(lambda rows: rows and
+                                  next(iter(rows.values()))['name'] == 'chain; workspace')
+        state = next(iter(rows.values()))['state']
+        self.assertEqual(len(state['windows']), 3)
+        self.assertEqual(state['layout']['split'], 'vertical')
+        self.assertEqual(state['layout']['second']['split'], 'horizontal')
+        child.finish('workspace detach; vsp')
+        self.assertEqual(len(next(iter(self.snapshots().values()))['state']['windows']), 3)
+
+    def test_ex_chain_stops_on_validation_and_operational_errors(self):
+        child = self.start('-N', 'chain-errors')
+        for command, expected in [('set invalid; vsp', b'Use :set'),
+                                  ('attach; vsp', b'Use :attach'),
+                                  ('buffer missing; vsp', b'Unknown buffer')]:
+            child.command(command)
+            child.repaint_until(expected)
+            child.command('w')
+            rows = self.wait_snapshot(lambda rows: rows and
+                                      next(iter(rows.values()))['name'] == 'chain-errors')
+            self.assertEqual(len(next(iter(rows.values()))['state']['windows']), 1)
+        child.finish('workspace detach')
+
+    def test_ex_completion_after_separator_preserves_prior_commands(self):
+        child = self.start('-N', 'chain-completion')
+        child.write(b':vsp; :worksp\t name completed-chain\r')
+        rows = self.wait_snapshot(lambda rows: rows and
+                                  next(iter(rows.values()))['name'] == 'completed-chain')
+        self.assertEqual(len(next(iter(rows.values()))['state']['windows']), 2)
+        child.finish('workspace detach')
+
     def test_ex_completion_cycles_and_preserves_editing(self):
         child = self.start('-N', 'completion')
         child.write(b':sess\t')

@@ -10,6 +10,25 @@ external-terminal buffering and a proposed, explicitly selected full-screen
 interface. Its history redraw and window controls apply to that optional mode;
 the streaming presentation contract here continues to apply to ordinary startup.
 
+## Command lines
+
+The shared base lexer recognizes explicitly slash-prefixed session input and
+workspace Ex input. It trims command-edge whitespace, splits unquoted semicolons,
+preserves each command's argument syntax and removes only separator escapes.
+Normal prompts, literal leading slashes and multiline input retain their text.
+Complete syntax validation precedes dispatch. Completion uses the same separator
+scanner to select the command word under the cursor.
+
+Each executor feeds parsed commands to its existing single-command dispatcher.
+Errors and lifecycle boundaries stop the remainder; earlier effects stay committed.
+Deferred controls keep their existing admission and application boundaries. The
+original line owns the echo, prompt-history entry and semantic command receipt.
+Command reports aggregate while file snapshots retain their separate ownership.
+The existing pager service keeps a file pager foreground until it exits before
+dispatching the next command. Workspace chains select one owner before dispatch;
+cross-owner chains and mixed pane-local searches are refused without effects.
+The manual's Commands section owns the complete grammar and user examples.
+
 ## Runtime Ownership And Scheduling
 
 ### Native session attachment

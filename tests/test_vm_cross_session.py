@@ -165,6 +165,41 @@ class CrossSessionTests(ChannelFixture):
         self.assertNotIn('hello-target', json.dumps(self.seen))
         self.finish()
 
+    def test_addressed_chain_uses_one_owner_and_keeps_its_other_draft(self):
+        address = self.target + '/' + self.server.endpoint + '/peer'
+        command = '/query ' + address + '; me chained-target'
+        self.child.write(b'i' + command.encode() + b'\r')
+        self.wait(lambda: ('secondop', 'PRIVMSG peer :\x01ACTION chained-target\x01')
+                  in self.server.lines)
+        self.child.repaint_until(b'[peer]')
+        self.normal()
+        self.child.command('workspace save')
+        self.wait_snapshot(lambda rows: rows and self.owner(self.target)['reports'] and
+                           not self.rollout(self.target)['pending'])
+        self.assertEqual(self.owner(self.target)['reports'][-1]['command'], command)
+        self.assertEqual(self.rollout(self.target)['draft'], 'keep-target-rollout')
+        self.assertEqual(self.rollout(self.source)['draft'], '')
+        self.assertEqual([nick for nick, line in self.server.lines if 'chained-target' in line],
+                         ['secondop'])
+        self.assertNotIn('chained-target', json.dumps(self.seen))
+        self.finish()
+
+    def test_chain_refuses_mixed_owners_or_local_search_before_effects(self):
+        address = self.target + '/' + self.server.endpoint + '/peer'
+        for command, notice in [('/fast on; msg ' + address + ' never-send', b'one session'),
+                                ('/fast on; search retained', b'/search command separately')]:
+            self.child.write(b'i\x15' + command.encode() + b'\r')
+            self.child.repaint_until(notice)
+            self.normal()
+            self.child.command('workspace save')
+            self.wait_snapshot(lambda rows: rows and self.rollout(self.source)['draft'] == command)
+            self.assertFalse(any(e['type'] == 'service_tier_changed'
+                                 for path in (self.source_path, self.target_path)
+                                 for e in journal_events(path)))
+            self.assertFalse(any('never-send' in line for nick, line in self.server.lines))
+            self.assertEqual(self.rollout(self.target)['draft'], 'keep-target-rollout')
+        self.finish()
+
     def test_prefix_notice_and_connection_selection_use_target_owner(self):
         address = self.target[:8] + '/' + self.server.endpoint
         self.child.write(b'i/notice ' + address.encode() + b'/peer private-notice\r')

@@ -201,7 +201,7 @@ struct vm {
     char message[512];
     int output;
     bool dirty, save_dirty, buffers_dirty, meaningful, quit, suspend, entering, paste_failed;
-    bool composer, insert, quit_all, detach_exit, detach_suspend;
+    bool composer, insert, quit_all, detach_exit, detach_suspend, command_failed;
     bool classic_pending, classic_ready, classic_uncertain;
     bool mouse, mouse_reported, mouse_down, mouse_select, mouse_follow, unfocused;
     uint64_t mouse_window;
@@ -236,6 +236,13 @@ notice(struct vm *vm, const char *text)
 {
     (void)snprintf(vm->message, sizeof(vm->message), "%s", text);
     vm->dirty = true;
+}
+
+static void
+command_error(struct vm *vm, const char *text)
+{
+    vm->command_failed = true;
+    notice(vm, text);
 }
 
 static void
@@ -727,7 +734,7 @@ save(struct vm *vm, const char *name)
         }
     }
     json_decref(state);
-    if (rc < 0) notice(vm, error);
+    if (rc < 0) command_error(vm, error);
     else vm->save_dirty = false;
     /* Failed storage stays visible; retry on another edit or explicit save. */
     vm->save_at = 0u;
@@ -948,19 +955,23 @@ static void
 split(struct vm *vm, enum snag_vm_split axis)
 {
     cancel_search(vm);
-    if (vm->count == SIZE_MAX / sizeof(*vm->windows) || vm->next_window > INT64_MAX) return;
+    if (vm->count == SIZE_MAX / sizeof(*vm->windows) || vm->next_window > INT64_MAX) {
+        command_error(vm, "Cannot add another window");
+        return;
+    }
     struct vm_window copy = vm->windows[vm->focus];
     copy.filter = snag_strdup_checked(copy.filter ? copy.filter : "", SNAG_MAX_DIRECT_PROMPT);
-    if (!copy.filter) return;
+    if (!copy.filter) { command_error(vm, "Cannot retain window filter"); return; }
     struct vm_window *grown = realloc(vm->windows, (vm->count + 1u) * sizeof(*grown));
     if (!grown) {
         free(copy.filter);
+        command_error(vm, "Cannot allocate window");
         return;
     }
     vm->windows = grown;
     if (snag_vm_layout_split(vm->layout, copy.id, vm->next_window, axis) < 0) {
         free(copy.filter);
-        notice(vm, "Cannot split this window further");
+        command_error(vm, "Cannot split this window further");
         return;
     }
     copy.document = snag_vm_document_ref(copy.document);
@@ -983,7 +994,8 @@ static void
 detach_workspace(struct vm *vm)
 {
     if (direct_session(vm)) {
-        notice(vm, "This host runs the session inside the workspace; keep it open to preserve it");
+        command_error(vm,
+            "This host runs the session inside the workspace; keep it open to preserve it");
         return;
     }
     cancel_search(vm);
@@ -1008,7 +1020,10 @@ close_window(struct vm *vm)
         detach_workspace(vm);
         return;
     }
-    if (snag_vm_layout_close(vm->layout, vm->windows[vm->focus].id) < 0) return;
+    if (snag_vm_layout_close(vm->layout, vm->windows[vm->focus].id) < 0) {
+        command_error(vm, "Cannot close this window");
+        return;
+    }
     free(vm->windows[vm->focus].filter);
     snag_vm_document_free(vm->windows[vm->focus].document);
     json_decref(vm->windows[vm->focus].report);
@@ -1064,7 +1079,7 @@ open_history(struct vm *vm, const char *selector)
     snag_session_init(&location);
     bool opened = snag_session_locate(&vm->store, &location, selector, NULL, NULL,
         error, sizeof(error)) == 0;
-    if (!opened) notice(vm, error);
+    if (!opened) command_error(vm, error);
     else {
         view(vm, VIEW_TRANSCRIPT);
         struct vm_window *window = &vm->windows[vm->focus];
@@ -1262,6 +1277,7 @@ buffer_catalog(struct vm *vm)
 failed:
     free(ordered);
     json_decref(rows);
+    command_error(vm, "Cannot build the buffer catalogue");
     return -1;
 }
 
@@ -1271,7 +1287,7 @@ open_buffer_row(struct vm *vm, const json_t *row)
     if (!row) return;
     struct snag_vm_connection *c = connection_for(vm, snag_json_string(row, "session"), false);
     struct snag_vm_buffer *b = snag_vm_buffer_get(c, json_object_get(row, "route"), false);
-    if (!b) { notice(vm, "Buffer is no longer available"); return; }
+    if (!b) { command_error(vm, "Buffer is no longer available"); return; }
     if (json_is_object(b->route)) {
         open_conversation(vm, b);
         if (!snag_view_channel_opened(&c->channel) && snag_session_host_supported())
@@ -1296,10 +1312,10 @@ buffer_select(struct vm *vm, const char *text)
     char *selector = NULL, error[256];
     const char *rest;
     if (snag_irc_address_operand(text, &selector, &rest, error, sizeof(error)) < 0) {
-        notice(vm, error);
+        command_error(vm, error);
         return;
     }
-    if (*rest) notice(vm, "Use :buffer ADDRESS or :buffer ID from :buffers");
+    if (*rest) command_error(vm, "Use :buffer ADDRESS or :buffer ID from :buffers");
     else if (buffer_catalog(vm) == 0) {
         const json_t *match = NULL;
         size_t matches = 0u;
@@ -1344,7 +1360,7 @@ buffer_select(struct vm *vm, const char *text)
             snag_session_close(&location);
         }
         if (matches == 1u) open_buffer_row(vm, match);
-        else notice(vm, matches ? "Ambiguous buffer; choose its exact ID in :buffers" :
+        else command_error(vm, matches ? "Ambiguous buffer; choose its exact ID in :buffers" :
             "Unknown buffer; use :buffers, /query NICK or /chat #CHANNEL");
     }
     free(selector);
@@ -1429,7 +1445,7 @@ buffer_cycle(struct vm *vm, bool previous)
                 if (candidate->next == b || (!candidate->next && b == c->buffers)) next = candidate;
         }
     }
-    if (!next) { notice(vm, "Cannot select conversation"); return; }
+    if (!next) { command_error(vm, "Cannot select conversation"); return; }
     if (next == b) return;
     if (json_is_object(next->route)) open_conversation(vm, next);
     else (void)open_history(vm, c->session);
@@ -1459,17 +1475,20 @@ attach(struct vm *vm, const char *selector)
     if (*selector && !open_history(vm, selector)) return;
     struct vm_window *window = &vm->windows[vm->focus];
     if (window->kind != VIEW_TRANSCRIPT) {
-        notice(vm, "Use :attach SESSION or Enter in the session picker");
+        command_error(vm, "Use :attach SESSION or Enter in the session picker");
         return;
     }
     struct snag_vm_connection *c = connection_for(vm, window->session_id, true);
-    if (!c) return;
+    if (!c) { command_error(vm, "Cannot retain session connection"); return; }
     if (!snag_session_host_supported() && !c->direct) {
-        notice(vm, "Use :session to start a stored session; "
+        command_error(vm, "Use :session to start a stored session; "
             "attaching another process is unavailable");
         return;
     }
-    if (!c->bound && !c->direct) (void)snag_vm_connection_open(c, &vm->store, true);
+    if (!c->bound && !c->direct && snag_vm_connection_open(c, &vm->store, true) < 0) {
+        command_error(vm, c->message);
+        return;
+    }
     notice(vm, c->message);
     changed(vm);
 }
@@ -1478,7 +1497,8 @@ static void
 launch_owner(struct vm *vm, const char *id, const char *name)
 {
     if (direct_session(vm)) {
-        notice(vm, "One live session per workspace on this host; quit it before starting another");
+        command_error(vm,
+            "One live session per workspace on this host; quit it before starting another");
         return;
     }
     for (struct vm_launch *job = vm->launches; id && job; job = job->next) {
@@ -1489,7 +1509,7 @@ launch_owner(struct vm *vm, const char *id, const char *name)
         }
     }
     struct vm_launch *job = calloc(1u, sizeof(*job));
-    if (!job) return;
+    if (!job) { command_error(vm, "Cannot allocate session launch"); return; }
     job->fd = -1;
     snag_view_channel_init(&job->channel, -1);
     if (snag_session_host_supported())
@@ -1500,7 +1520,7 @@ launch_owner(struct vm *vm, const char *id, const char *name)
     if (job->fd < 0 && !job->direct) {
         char error[256];
         (void)snprintf(error, sizeof(error), "Cannot launch owner: %s", strerror(errno));
-        notice(vm, error);
+        command_error(vm, error);
         free(job);
         return;
     }
@@ -1522,7 +1542,7 @@ session_request(struct vm *vm, const char *selector)
     if (!*selector) selector = window->session_id[0] ? window->session_id :
         window->kind == VIEW_SESSIONS ? snag_json_string(selected_row(vm, window), "id") : NULL;
     if (!selector || !*selector) {
-        notice(vm, "Use :session SESSION_ID or select a session");
+        command_error(vm, "Use :session SESSION_ID or select a session");
         return;
     }
     struct snag_session location;
@@ -1535,7 +1555,7 @@ session_request(struct vm *vm, const char *selector)
         live = snag_session_is_live(&location);
     }
     snag_session_close(&location);
-    if (rc < 0) notice(vm, error);
+    if (rc < 0) command_error(vm, error);
     else if (live) attach(vm, id);
     else if (open_history(vm, id)) launch_owner(vm, id, NULL);
 }
@@ -1659,11 +1679,12 @@ classic_request(struct vm *vm, const char *selector)
 {
     char id[SNAG_ID_HEX_LEN + 1u], error[256];
     if (!snag_session_host_supported()) {
-        notice(vm, "Classic attachment is unavailable on this host");
+        command_error(vm, "Classic attachment is unavailable on this host");
         return;
     }
     if (vm->classic_uncertain && vm->classic.bytes.len) {
-        notice(vm, "Saved classic input has an uncertain outcome; inspect history, then :recover");
+        command_error(vm,
+            "Saved classic input has an uncertain outcome; inspect history, then :recover");
         return;
     }
     const struct vm_window *window = &vm->windows[vm->focus];
@@ -1671,7 +1692,7 @@ classic_request(struct vm *vm, const char *selector)
         window->session_id[0] ? window->session_id :
         window->kind == VIEW_SESSIONS ? snag_json_string(selected_row(vm, window), "id") : "";
     if (!*selector) {
-        notice(vm, "Use :classic SESSION_ID or select a session");
+        command_error(vm, "Use :classic SESSION_ID or select a session");
         return;
     }
     struct snag_session location;
@@ -1681,11 +1702,11 @@ classic_request(struct vm *vm, const char *selector)
     if (!found) memcpy(id, location.id, sizeof(id));
     snag_session_close(&location);
     if (found < 0) {
-        notice(vm, error);
+        command_error(vm, error);
         return;
     }
     if (vm->classic.bytes.len && strcmp(id, vm->classic.session)) {
-        notice(vm, "Queued classic input belongs to another session; :recover it first");
+        command_error(vm, "Queued classic input belongs to another session; :recover it first");
         return;
     }
     memset(vm->classic.command, 0, sizeof(vm->classic.command));
@@ -1724,7 +1745,8 @@ classic_recover(struct vm *vm)
             rc = snag_buf_printf(&text, "\\x%02x", *bytes);
         } else rc = snag_buf_append(&text, bytes, count);
         if (rc < 0) {
-            notice(vm, "Recovered input exceeds the draft limit; classic input remains saved");
+            command_error(vm,
+                "Recovered input exceeds the draft limit; classic input remains saved");
             snag_buf_free(&text);
             return true;
         }
@@ -1742,7 +1764,7 @@ classic_recover(struct vm *vm)
             changed(vm);
             notice(vm, "Classic input recovered as unsent draft; review it before submitting");
             (void)save(vm, NULL);
-        } else notice(vm, "Cannot recover into this draft; classic input remains saved");
+        } else command_error(vm, "Cannot recover into this draft; classic input remains saved");
     }
     snag_buf_free(&text);
     return true;
@@ -1762,6 +1784,7 @@ quit_sessions(struct vm *vm, bool all, bool force)
                     "Session %.8s is not controlled; :attach %s before quitting all sessions",
                     c->session, c->session);
                 vm->dirty = true;
+                vm->command_failed = true;
                 return;
             }
         }
@@ -1769,7 +1792,7 @@ quit_sessions(struct vm *vm, bool all, bool force)
     if (vm->classic.bytes.len && (all || vm->count == 1u || (focused &&
         !strcmp(focused->session, vm->classic.session)))) {
         if (!force) {
-            notice(vm, "Unsent classic input; :recover it, :close preserves it, "
+            command_error(vm, "Unsent classic input; :recover it, :close preserves it, "
                 "or :session quit! discards it");
             return;
         }
@@ -1782,11 +1805,11 @@ quit_sessions(struct vm *vm, bool all, bool force)
         if ((!c->bound && !(all && direct && !strcmp(c->session, direct->session))) ||
             (!all && c != focused)) continue;
         if (c->detaching) {
-            notice(vm, "Session is detaching; :attach it before requesting shutdown");
+            command_error(vm, "Session is detaching; :attach it before requesting shutdown");
             return;
         }
         if (!force && snag_vm_connection_unsaved(c)) {
-            notice(vm, "Unsent draft or unresolved submission; "
+            command_error(vm, "Unsent draft or unresolved submission; "
                 ":close preserves it, :session quit! discards");
             return;
         }
@@ -1797,7 +1820,7 @@ quit_sessions(struct vm *vm, bool all, bool force)
             synchronizing |= b->draft_get || !b->draft_ready || b->draft_dirty;
         }
         if (!force && c->drafts && synchronizing) {
-            notice(vm, "Waiting for the owner draft; retry quit after synchronization");
+            command_error(vm, "Waiting for the owner draft; retry quit after synchronization");
             return;
         }
     }
@@ -1806,7 +1829,7 @@ quit_sessions(struct vm *vm, bool all, bool force)
         if (!c->bound || (!all && c != focused)) continue;
         if (force && !all) snag_vm_connection_discard(c);
         if (snag_vm_connection_control(c, "quit") < 0) {
-            notice(vm, "Cannot request session shutdown");
+            command_error(vm, "Cannot request session shutdown");
             return;
         }
         any = true;
@@ -1914,11 +1937,12 @@ detach_session(struct vm *vm)
 {
     struct snag_vm_connection *connection = focused_connection(vm);
     if (!connection) {
-        notice(vm, "Select a session pane to detach; :workspace detach leaves the workspace");
+        command_error(vm,
+            "Select a session pane to detach; :workspace detach leaves the workspace");
         return;
     }
     if (connection->direct) {
-        notice(vm, "This session runs inside the workspace; "
+        command_error(vm, "This session runs inside the workspace; "
             ":close hides it, :session quit stops it");
         return;
     }
@@ -1944,12 +1968,12 @@ window_verbosity(struct vm *vm, struct vm_window *window, unsigned int level)
 }
 
 static void
-command(struct vm *vm, const char *text)
+command_single(struct vm *vm, const char *text)
 {
     char *word = NULL, error[256];
     const char *rest;
     if (snag_irc_address_operand(text, &word, &rest, error, sizeof(error)) < 0) {
-        notice(vm, error);
+        command_error(vm, error);
         return;
     }
     if (!strcmp(word, "workspace")) {
@@ -1967,21 +1991,21 @@ command(struct vm *vm, const char *text)
             char *name = NULL;
             const char *tail;
             if (snag_irc_address_operand(rest + 5u, &name, &tail, error, sizeof(error)) < 0)
-                notice(vm, error);
-            else if (*tail) notice(vm, "Quote a workspace name containing spaces");
+                command_error(vm, error);
+            else if (*tail) command_error(vm, "Quote a workspace name containing spaces");
             else if (save(vm, name) == 0) {
                 vm->meaningful = true;
                 notice(vm, "Workspace named and saved");
             }
             free(name);
-        } else notice(vm,
+        } else command_error(vm,
             "Use :workspace, :workspace save, :workspace name NAME, or :workspace detach");
     } else if (!strcmp(word, "draft")) {
         struct snag_vm_buffer *c = focused_buffer(vm);
         if (strcmp(rest, "local") && strcmp(rest, "owner"))
-            notice(vm, "Use :draft local or :draft owner to resolve a draft conflict");
+            command_error(vm, "Use :draft local or :draft owner to resolve a draft conflict");
         else if (!c || snag_vm_draft_choose(c, !strcmp(rest, "local")) < 0)
-            notice(vm, "No ready draft conflict; recover any retained submission first");
+            command_error(vm, "No ready draft conflict; recover any retained submission first");
         else {
             notice(vm, c->message);
             changed(vm);
@@ -1991,7 +2015,7 @@ command(struct vm *vm, const char *text)
         quit_sessions(vm, true, rest[4] == '!');
     } else if (!strcmp(word, "reports")) {
         struct snag_vm_connection *c = focused_connection(vm);
-        if (*rest || !c) notice(vm, "Use :reports in a session window");
+        if (*rest || !c) command_error(vm, "Use :reports in a session window");
         else {
             view(vm, VIEW_REPORTS);
             memcpy(vm->windows[vm->focus].session_id, c->session, sizeof(c->session));
@@ -2001,7 +2025,7 @@ command(struct vm *vm, const char *text)
     } else if (!strcmp(word, "report")) {
         struct snag_vm_connection *c = focused_connection(vm);
         if (!c || strlen(rest) > SNAG_ID_HEX_LEN) {
-            notice(vm, "No retained command report; use :reports");
+            command_error(vm, "No retained command report; use :reports");
         } else {
             struct vm_window *window = &vm->windows[vm->focus];
             memcpy(window->report_selector, rest, strlen(rest) + 1u);
@@ -2013,7 +2037,7 @@ command(struct vm *vm, const char *text)
         char id[SNAG_ID_HEX_LEN + 1u];
         memcpy(id, vm->windows[vm->focus].session_id, sizeof(id));
         if (*rest || *id) open_history(vm, *rest ? rest : id);
-        else notice(vm, "Use :history SESSION_ID");
+        else command_error(vm, "Use :history SESSION_ID");
     }
     else if (!strcmp(word, "attach")) attach(vm, rest);
     else if (!strcmp(word, "session")) {
@@ -2026,16 +2050,16 @@ command(struct vm *vm, const char *text)
         char *name = NULL;
         const char *tail = "";
         if (*rest && snag_irc_address_operand(rest, &name, &tail, error, sizeof(error)) < 0)
-            notice(vm, error);
+            command_error(vm, error);
         else if (*tail || (name && !snag_session_name_valid(name)))
-            notice(vm, "Use :new [NAME]; quote a name containing spaces");
+            command_error(vm, "Use :new [NAME]; quote a name containing spaces");
         else launch_owner(vm, NULL, name);
         free(name);
     } else if (!strcmp(word, "verbosity")) {
         struct vm_window *window = &vm->windows[vm->focus];
         uint64_t level;
         if (window->kind != VIEW_TRANSCRIPT || snag_parse_count(rest, &level) < 0 ||
-            level > SNAG_VERBOSITY_MAX) notice(vm, "Use :verbosity 0..6 in a transcript");
+            level > SNAG_VERBOSITY_MAX) command_error(vm, "Use :verbosity 0..6 in a transcript");
         else {
             window_verbosity(vm, window, (unsigned int)level);
         }
@@ -2049,7 +2073,7 @@ command(struct vm *vm, const char *text)
             vm->mouse_down = false;
             notice(vm, vm->mouse ? "mouse: click, drag, scroll and resize" :
                 "nomouse: terminal selection enabled");
-        } else notice(vm, "Use :set ignorecase/noignorecase or :set mouse/nomouse");
+        } else command_error(vm, "Use :set ignorecase/noignorecase or :set mouse/nomouse");
     } else if (!strcmp(word, "classic")) classic_request(vm, rest);
     else if (!strcmp(word, "buffer") || !strcmp(word, "b")) buffer_select(vm, rest);
     else if (!strcmp(word, "split") || !strcmp(word, "sp") ||
@@ -2058,7 +2082,7 @@ command(struct vm *vm, const char *text)
         split(vm, word[0] == 'v' ? SNAG_VM_VERTICAL : SNAG_VM_HORIZONTAL);
         if (vm->count > count && *rest) buffer_select(vm, rest);
     }
-    else if (*rest) notice(vm, "Unexpected command argument");
+    else if (*rest) command_error(vm, "Unexpected command argument");
     else if (!strcmp(word, "close")) close_window(vm);
     else if (!strcmp(word, "q!") || !strcmp(word, "qa!")) {
         quit_sessions(vm, true, true);
@@ -2076,7 +2100,8 @@ command(struct vm *vm, const char *text)
         struct snag_vm_buffer *c = focused_buffer(vm);
         struct snag_vm_buffer *pending = submission_from(vm, c);
         if (!pending || snag_vm_buffer_recover(pending, c) < 0)
-            notice(vm, "Recovery needs an empty draft and a resolved or disconnected submission");
+            command_error(vm,
+                "Recovery needs an empty draft and a resolved or disconnected submission");
         else {
             vm->composer = true;
             notice(vm, c->message);
@@ -2094,10 +2119,33 @@ command(struct vm *vm, const char *text)
         refresh(vm);
         view(vm, VIEW_WORKSPACES);
     } else if (!strcmp(word, "help")) view(vm, VIEW_HELP);
-    else notice(vm, "Unknown workspace command; use :help");
+    else command_error(vm, "Unknown workspace command; use :help");
     detach_unused(vm);
     free(word);
     vm->dirty = true;
+}
+
+static void
+command(struct vm *vm, const char *text)
+{
+    struct snag_command_line commands;
+    if (snag_command_line_parse(text, strlen(text), ':', &commands) < 0) {
+        command_error(vm, commands.error ? commands.error : "Cannot retain command chain");
+        snag_buf_free(&commands.parts);
+        return;
+    }
+    size_t offset = 0u;
+    for (size_t i = 0u; i < commands.count; ++i) {
+        const char *part = (const char *)commands.parts.data + offset;
+        offset += strlen(part) + 1u;
+        vm->command_failed = false;
+        command_single(vm, part);
+        if (vm->command_failed || vm->quit || vm->quit_all || vm->detach_exit ||
+            vm->quit_window || vm->classic_pending || vm->switch_workspace || stopped ||
+            !strcmp(part, "session d") || !strcmp(part, "session detach") ||
+            !strcmp(part, "detach")) break;
+    }
+    snag_buf_free(&commands.parts);
 }
 
 static json_t *
@@ -2277,20 +2325,24 @@ complete_command(struct vm *vm, bool previous)
             memcpy(vm->completion_prefix, vm->command.data, vm->command_cursor);
         vm->completion_prefix[vm->command_cursor] = '\0';
     }
-    size_t length = strlen(vm->completion_prefix);
-    bool argument = strchr(vm->completion_prefix, ' ') != NULL;
+    size_t start = snag_command_start(vm->completion_prefix, strlen(vm->completion_prefix));
+    if (vm->completion_prefix[start] == ':') ++start;
+    const char *prefix = vm->completion_prefix + start;
+    size_t length = strlen(prefix);
+    bool argument = strchr(prefix, ' ') != NULL;
     size_t index = first ? (previous ? 0u : count - 1u) : vm->completion_index;
     for (size_t i = 0u; i < count; ++i) {
         index = previous ? (index ? index - 1u : count - 1u) : (index + 1u) % count;
         const char *choice = choices[index];
         if (argument != (strchr(choice, ' ') != NULL) ||
-            strncmp(choice, vm->completion_prefix, length)) continue;
-        size_t size = strlen(choice), at = vm->command_cursor;
+            strncmp(choice, prefix, length)) continue;
+        size_t size = strlen(choice), at = vm->command_cursor - start;
         if (size > at && snag_buf_reserve(&vm->command, size - at) < 0) return -1;
-        memmove(vm->command.data + size, vm->command.data + at, vm->command.len - at);
-        memcpy(vm->command.data, choice, size);
+        memmove(vm->command.data + start + size, vm->command.data + start + at,
+            vm->command.len - start - at);
+        memcpy(vm->command.data + start, choice, size);
         vm->command.len = vm->command.len - at + size;
-        vm->command_cursor = size;
+        vm->command_cursor = start + size;
         vm->completion_index = index;
         vm->dirty = true;
         return 0;
@@ -2300,7 +2352,7 @@ complete_command(struct vm *vm, bool previous)
 }
 
 static struct snag_vm_buffer *
-command_buffer(struct vm *vm, struct snag_vm_buffer *source, const char *text)
+single_command_buffer(struct vm *vm, struct snag_vm_buffer *source, const char *text)
 {
     size_t verb = strcspn(text, " \t\r\n");
     const char *commands[] = {"/query", "/msg", "/notice", "/chat", "/join", "/part",
@@ -2345,6 +2397,38 @@ command_buffer(struct vm *vm, struct snag_vm_buffer *source, const char *text)
     return result;
 }
 
+static struct snag_vm_buffer *
+command_buffer(struct vm *vm, struct snag_vm_buffer *source, const char *text)
+{
+    struct snag_command_line commands;
+    if (snag_command_line_parse(text, strlen(text), '/', &commands) < 0) {
+        snag_buf_free(&commands.parts);
+        return source;
+    }
+    struct snag_vm_buffer *target = source;
+    size_t offset = 0u;
+    for (size_t i = 0u; i < commands.count; ++i) {
+        const char *part = (const char *)commands.parts.data + offset;
+        offset += strlen(part) + 1u;
+        if (commands.chained && !strncmp(part, "/search", 7u) &&
+            (!part[7] || isspace((unsigned char)part[7]))) {
+            notice(vm, "Use the pane's /search command separately from owner commands");
+            target = NULL;
+            break;
+        }
+        struct snag_vm_buffer *next = single_command_buffer(vm, target, part);
+        if (!next) { target = NULL; break; }
+        if (i && next != target) {
+            notice(vm, "A command chain belongs to one session; select its pane before submitting");
+            target = NULL;
+            break;
+        }
+        target = next;
+    }
+    snag_buf_free(&commands.parts);
+    return target;
+}
+
 static void
 submit_draft(struct vm *vm, bool queued)
 {
@@ -2360,12 +2444,15 @@ submit_draft(struct vm *vm, bool queued)
         notice(vm, "Connection text needs an explicit target; use /query, /chat or /msg");
         return;
     }
-    if (!strncmp(text, "/search", 7u) && (!text[7] || isspace((unsigned char)text[7]))) {
+    const char *local = text;
+    while (isspace((unsigned char)*local)) ++local;
+    if (!snag_command_chained(local, strlen(local)) &&
+        !strncmp(local, "/search", 7u) && (!local[7] || isspace((unsigned char)local[7]))) {
         if (c->pending || c->draft_conflict) {
             notice(vm, "Resolve the retained submission or draft conflict first");
             return;
         }
-        const char *query = text + 7u;
+        const char *query = local + 7u;
         while (isspace((unsigned char)*query)) ++query;
         bool entry = !*query;
         if (!entry) search(vm, query, false, true);
@@ -2395,6 +2482,8 @@ submit_draft(struct vm *vm, bool queued)
         vm->windows[vm->focus].verbosity) < 0) {
         notice(vm, errno == ENOTSUP ? !snag_vm_buffer_supported(target) ?
             "This owner does not support this conversation input" :
+            snag_command_chained(text, strlen(text)) && !target->connection->command_chains ?
+            "Chained commands need an updated owner; exit and resume the session" :
             "This owner needs :classic for slash commands" :
             target->pending ? "Addressed composer has a retained submission; inspect its receipt" :
             c->draft_conflict ? "Resolve the draft conflict with :draft local or :draft owner" :

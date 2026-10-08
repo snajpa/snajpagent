@@ -1492,6 +1492,11 @@ and conversation mentions; an active rollout draft otherwise queues a future tur
 A second Tab lists ambiguous matches in the conversation scrollback. Completion
 choices and cancelled drafts follow the same retained presentation route as that
 conversation and survive workspace detach/resume.
+Explicit slash command chains and workspace Ex chains share the base separator
+scanner, including completion of the current command after a semicolon. Native
+chains use the owner capability and one original receipt; a chain addressing
+different owners is refused before dispatch. Pane-local `/search` stays a separate
+frontend command. The manual's Commands section defines syntax and failure boundaries.
 Ctrl-P/Ctrl-N navigate session/global prompt history, Ctrl-R searches it, Ctrl-G
 restores the pre-search draft, and Ctrl-U clears the entire draft. Ctrl-C clears a
 nonempty draft before requesting interruption on an empty active draft. These are the existing

@@ -31,6 +31,15 @@ class ChannelWorkspaceTests(ChannelFixture):
         self.child.repaint_until(b'[' + room.encode() + b']')
         self.normal()
 
+    def test_command_chain_sends_to_the_newly_selected_conversation(self):
+        self.child.write(b'i/query 1/private-peer; me chain-action; chat 1/#side; '
+                         b'me side-action\r')
+        self.operator_wire('PRIVMSG private-peer :\x01ACTION chain-action\x01')
+        self.operator_wire('PRIVMSG #side :\x01ACTION side-action\x01')
+        self.child.repaint_until(b'[#side]')
+        self.normal()
+        self.child.finish('workspace detach')
+
     def test_mention_completion_uses_pane_roster_and_shared_tab_choices(self):
         self.server.send('queryop', ':fake 353 queryop = #lab :@queryop team-lab\r\n'
                          ':fake 366 queryop #lab :end\r\n'

@@ -119,6 +119,48 @@ class CommandPagerTests(unittest.TestCase):
         child.write(b"/exit\r")
         child.read_until(b"--resume")
 
+    def test_chain_waits_for_each_file_pager_before_later_effects(self):
+        child = self.start()
+        paths = [self.root / ('file-' + str(i)) for i in range(2)]
+        for i, path in enumerate(paths):
+            path.write_text('file-body-' + str(i))
+        child.write(('/cat ' + str(paths[0]) + '; cat ' + str(paths[1]) +
+                     '; fast on\r').encode())
+        journal = next(iter(journal_paths(self.dotdir)))
+        for i in range(2):
+            child.read_until(b'REPORT_READY')
+            self.pager_open = True
+            self.assertEqual(self.capture.read_text(), 'file-body-' + str(i))
+            self.assertFalse(any(e['type'] == 'service_tier_changed'
+                                 for e in read_events(journal)))
+            child.write(b'q\n')
+            self.pager_open = False
+        child.read_until(b'Fast mode: ON')
+        child.read_until(self.ready)
+        self.assertEqual([e['data']['value'] for e in read_events(journal)
+                          if e['type'] == 'service_tier_changed'], ['priority'])
+        child.write(b'/exit; fast off\r')
+        child.read_until(b'--resume')
+        self.assertEqual([e['data']['value'] for e in read_events(journal)
+                          if e['type'] == 'service_tier_changed'], ['priority'])
+
+    def test_chain_completion_and_error_stop_in_standalone_input(self):
+        child = self.start(configured='off')
+        child.write(b'/fast on; fas\t off; retry auto off\r')
+        child.read_until(b'Automatic retry: OFF')
+        child.read_until(self.ready)
+        journal = next(iter(journal_paths(self.dotdir)))
+        self.assertEqual([e['data']['value'] for e in read_events(journal)
+                          if e['type'] == 'service_tier_changed'], ['priority', 'default'])
+        child.write(b' /fast on ; fast invalid ; fast off\r')
+        child.read_until(b'usage: /fast')
+        child.read_until(self.ready)
+        self.assertEqual([e['data']['value'] for e in read_events(journal)
+                          if e['type'] == 'service_tier_changed'],
+                         ['priority', 'default', 'priority'])
+        child.write(b' /exit \r')
+        child.read_until(b'--resume')
+
     def test_report_commands_and_aliases_share_the_pager(self):
         child = self.start()
         child.write(b"/model cache\r")

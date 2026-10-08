@@ -2,8 +2,8 @@
 #include "base.h"
 #include "base64.h"
 
-#include <errno.h>
 #include <ctype.h>
+#include <errno.h>
 #include <limits.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -32,6 +32,130 @@ snag_verbosity_command(const char *text, size_t len)
 {
     return text && len >= 8u && memcmp(text, "/verbose", 8u) == 0 &&
            (len == 8u || text[8] == ' ' || text[8] == '\t' || text[8] == '\n');
+}
+
+static size_t
+command_end(const char *text, size_t length, size_t start, const char **error)
+{
+    char quote = 0;
+    for (size_t i = start; i < length; ++i) {
+        char c = text[i];
+        if (c == '\\' && quote != '\'') {
+            if (++i == length) *error = "command chain ends with an escape";
+        } else if (quote) {
+            if (c == quote) quote = 0;
+        } else if (c == '\'' || c == '"') {
+            quote = c;
+        } else if (c == ';') return i;
+    }
+    if (quote) *error = "command chain has an unclosed quote";
+    return length;
+}
+
+bool
+snag_command_chained(const char *text, size_t length)
+{
+    const char *error = NULL;
+    return text && command_end(text, length, 0u, &error) < length;
+}
+
+size_t
+snag_command_start(const char *text, size_t length)
+{
+    size_t start = 0u;
+    while (start < length) {
+        const char *error = NULL;
+        size_t end = command_end(text, length, start, &error);
+        if (end == length) break;
+        start = end + 1u;
+    }
+    while (start < length && isspace((unsigned char)text[start])) ++start;
+    return start;
+}
+
+static int
+command_part(struct snag_command_line *line, const char *text, size_t start, size_t end,
+    char prefix)
+{
+    while (start < end && isspace((unsigned char)text[start])) ++start;
+    while (end > start && isspace((unsigned char)text[end - 1u])) --end;
+    if (start == end) return 0;
+    if (text[start] == prefix) ++start;
+    if (start == end || text[start] == prefix || isspace((unsigned char)text[start])) {
+        line->error = "command chain expects a command after each separator";
+        return snag_errno(EINVAL);
+    }
+    if (prefix == '/' && snag_buf_putc(&line->parts, '/') < 0) return -1;
+    bool argument = false;
+    char quote = 0;
+    for (size_t i = start; i < end; ++i) {
+        unsigned char c = (unsigned char)text[i];
+        if (!argument && isspace(c)) {
+            while (i + 1u < end && isspace((unsigned char)text[i + 1u])) ++i;
+            c = ' ';
+            argument = true;
+        }
+        if (c == '\\' && quote != '\'' && i + 1u < end) {
+            if (text[i + 1u] == ';') {
+                c = ';';
+                ++i;
+            } else {
+                if (snag_buf_putc(&line->parts, c) < 0) return -1;
+                c = (unsigned char)text[++i];
+            }
+        } else if (quote) {
+            if (c == (unsigned char)quote) quote = 0;
+        } else if (c == '\'' || c == '"') quote = (char)c;
+        if (snag_buf_putc(&line->parts, c) < 0) return -1;
+    }
+    if (snag_buf_putc(&line->parts, 0u) < 0) return -1;
+    ++line->count;
+    return 0;
+}
+
+int
+snag_command_line_parse(const char *text, size_t length, char prefix,
+    struct snag_command_line *line)
+{
+    size_t start = 0u;
+    memset(line, 0, sizeof(*line));
+    snag_buf_init(&line->parts, SIZE_MAX);
+    if (!text) return 0;
+    while (start < length && isspace((unsigned char)text[start])) ++start;
+    if (start == length || memchr(text, '\n', length) ||
+        (prefix == '/' && (text[start] != '/' ||
+            (start + 1u < length && text[start + 1u] == '/')))) return 0;
+    bool separators = memchr(text, ';', length) != NULL;
+    while (start < length) {
+        const char *error = NULL;
+        size_t end = command_end(text, length, start, &error);
+        if (error && (line->chained || separators)) {
+            line->error = error;
+            return snag_errno(EINVAL);
+        }
+        if (end < length) line->chained = true;
+        if (command_part(line, text, start, end, prefix) < 0) return -1;
+        start = end < length ? end + 1u : length;
+    }
+    return 0;
+}
+
+bool
+snag_verbosity_input(const char *text, size_t length)
+{
+    struct snag_command_line line;
+    bool found = false;
+    if (snag_command_line_parse(text, length, '/', &line) == 0) {
+        size_t offset = 0u;
+        for (size_t i = 0u; i < line.count; ++i) {
+            const char *part = (const char *)line.parts.data + offset;
+            size_t size = strlen(part);
+            if (snag_verbosity_command(part, size)) found = true;
+            offset += size + 1u;
+        }
+    }
+    snag_buf_free(&line.parts);
+    return found;
 }
 
 unsigned char

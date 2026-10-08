@@ -744,7 +744,7 @@ submit(struct snag_view_server *server, struct view_peer *peer, const json_t *me
         return refuse_request(peer, message, "unsupported submission route");
     uint64_t level = 0u;
     bool has_level = json_object_get(message, "verbosity") != NULL;
-    if (has_level && (!command || !snag_verbosity_command(text, strlen(text)) ||
+    if (has_level && (!command || !snag_verbosity_input(text, strlen(text)) ||
         snag_json_integer_u64(message, "verbosity", &level) < 0 || level > SNAG_VERBOSITY_MAX))
         return refuse_request(peer, message, "invalid command verbosity");
     int verbosity = has_level ? (int)level : -1;
@@ -844,6 +844,7 @@ dispatch(struct snag_view_server *server, struct view_peer *peer, const json_t *
             return -1;
         }
         if (!features || json_array_append_new(features, json_string("command_verbosity")) < 0 ||
+            json_array_append_new(features, json_string("command_chains")) < 0 ||
             json_array_append_new(features, json_string("queue")) < 0) {
             json_decref(capabilities);
             return -1;

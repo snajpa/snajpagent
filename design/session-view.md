@@ -142,6 +142,16 @@ with instructions to open the rollout for that transaction. The client can
 refer to that original request through a bound whole-terminal transaction;
 this result never contains a shell command supplied by the owner.
 
+The optional `command_chains` capability admits a complete semicolon command line
+as one command request. The shared parser validates syntax and native/terminal
+support before effects. A chain needing a terminal returns `terminal` for the
+whole line. Native dispatch uses existing command owners in order, stops on error
+or lifecycle handoff and retains earlier effects. One original echo and receipt
+cover the chain; immutable file snapshots are published independently of its
+combined report. Repeating its request ID returns the original result.
+Conversation selection applies before later commands capture their route.
+Older owners receive single commands only; a refused chain keeps the workspace draft.
+
 An idle `/retry` that starts a turn receives `committed` at the same durable input
 admission as an ordinary prompt. An active retry receives its control receipt;
 an idle retry with no failed work completes with an error. All three stay in the pane.
@@ -341,11 +351,14 @@ The optional `command_verbosity` capability allows `/verbose` requests to carry
 `verbosity`, the submitting pane's current level. The shared renderer helper
 parses the command and formats the same feedback as the standalone UI. The owner
 returns the resulting level in the completed receipt without changing its own
-renderer. Invalid levels and context attached to other commands are refused;
+renderer. Chains containing `/verbose` carry the same pane context; subsequent
+verbosity queries see earlier changes. If a later command fails, the receipt
+still returns the earlier applied level. Invalid levels and context attached to
+lines without a verbosity command are refused;
 request-ID deduplication includes the supplied level.
 
 The workspace retains this context with its pending command and applies a
-successful result only to the original window while it still views that buffer.
+result only to the original window while it still views that buffer.
 The existing Ex verbosity path owns reprojection, selection invalidation and
 reading-position preservation for both callers. A closed or repurposed window
 receives no effect. Older saved submissions remain readable; older owners receive

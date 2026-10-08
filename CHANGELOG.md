@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Chain slash commands and workspace Ex commands with semicolons, quoted or
+  escaped literals, ordered dispatch, error/exit boundaries and completion after
+  separators. Keep one entered line and semantic receipt; preserve separate file reports.
+
 - Show routine IRC pending/written/acknowledged receipts at verbosity 1 and above
   in live conversations, replay and workspace panes. Verbosity 0 retains message
   bodies, failed or uncertain sends and server-text corrections.

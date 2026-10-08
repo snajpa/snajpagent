@@ -266,6 +266,7 @@ snag_vm_connection_close(struct snag_vm_connection *connection)
     connection->drafts = connection->detaching = connection->detach_sent = false;
     connection->cancel_pending = connection->quit_pending = false;
     connection->feedback_supported = connection->command_verbosity = false;
+    connection->command_chains = false;
     json_decref(connection->feedback);
     connection->feedback = NULL;
     connection->draft_wait = connection->inflight = NULL;
@@ -541,6 +542,8 @@ prepare_input(struct snag_vm_buffer *buffer, struct snag_vm_buffer *source, uint
         source->draft_conflict)
         return snag_errno(EBUSY);
     const char *text = literal ? literal : (const char *)source->draft.data;
+    if (!queued && snag_prompt_command(text) && snag_command_chained(text, strlen(text)) &&
+        !connection->command_chains) return snag_errno(ENOTSUP);
     bool forwarded = source != buffer;
     if (queued && !connection->queue) return snag_errno(ENOTSUP);
     if (forwarded && !snag_prompt_command(text)) return snag_errno(EINVAL);
@@ -550,7 +553,7 @@ prepare_input(struct snag_vm_buffer *buffer, struct snag_vm_buffer *source, uint
     json_t *pending =
         json_pack("{s:s,s:s,s:s}", "id", id, "instance", connection->instance, "text", text);
     if (!pending) return -1;
-    if (connection->command_verbosity && !queued && snag_verbosity_command(text, strlen(text)) &&
+    if (connection->command_verbosity && !queued && snag_verbosity_input(text, strlen(text)) &&
         json_object_set_new(pending, "verbosity", json_integer(verbosity)) < 0) {
         json_decref(pending);
         return -1;
@@ -951,6 +954,7 @@ receive(struct snag_vm_connection *connection, const json_t *value)
             if (feature && !strcmp(feature, "queue")) connection->queue = true;
             if (feature && !strcmp(feature, "command_verbosity"))
                 connection->command_verbosity = true;
+            if (feature && !strcmp(feature, "command_chains")) connection->command_chains = true;
             if (feature && !strcmp(feature, "terminal_commands"))
                 connection->terminal_commands = true;
             if (feature && !strcmp(feature, "reports")) connection->reports_supported = true;
@@ -1142,7 +1146,9 @@ receive(struct snag_vm_connection *connection, const json_t *value)
             if (verbosity) {
                 uint64_t level;
                 if (!command || !json_object_get(buffer->pending, "verbosity") ||
-                    strcmp(snag_json_string(value, "outcome"), "ok") ||
+                    (!snag_command_chained(snag_json_string(buffer->pending, "text"),
+                        strlen(snag_json_string(buffer->pending, "text"))) &&
+                        strcmp(snag_json_string(value, "outcome"), "ok")) ||
                     snag_json_integer_u64(value, "verbosity", &level) < 0 ||
                     level > SNAG_VERBOSITY_MAX) return snag_errno(EPROTO);
                 buffer->result_level = (unsigned int)level;
@@ -1479,7 +1485,7 @@ load_buffer(struct snag_vm_connection *connection, const json_t *row, bool legac
         return -1;
     if (json_object_get(pending, "verbosity")) {
         uint64_t level;
-        if (queued || literal || origin || !snag_verbosity_command(text, strlen(text)) ||
+        if (queued || literal || origin || !snag_verbosity_input(text, strlen(text)) ||
             snag_json_integer_u64(pending, "verbosity", &level) < 0 ||
             level > SNAG_VERBOSITY_MAX) return -1;
     }

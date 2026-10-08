@@ -1790,6 +1790,33 @@ verbosity_pending_test(void)
     snag_vm_connections_free(connection);
 }
 
+static void
+command_chain_capability_test(void)
+{
+    struct snag_vm_connection *connection =
+        snag_vm_connection_new("11111111111111111111111111111111");
+    assert(connection);
+    connection->bound = connection->commands = connection->command_verbosity = true;
+    strcpy(connection->instance, "22222222222222222222222222222222");
+    struct snag_vm_buffer *buffer = connection->rollout;
+    const char *text = "/fast on; verbose 2";
+    assert(snag_vm_draft_replace(buffer, 0u, 0u, text, strlen(text)) == 0);
+    assert(snag_vm_buffer_prepare(buffer, buffer, 7u, false, 3u) < 0 && errno == ENOTSUP);
+    assert(!buffer->pending && !strcmp((const char *)buffer->draft.data, text));
+    connection->command_chains = true;
+    assert(snag_vm_buffer_prepare(buffer, buffer, 7u, false, 3u) == 0);
+    assert(json_integer_value(json_object_get(buffer->pending, "verbosity")) == 3);
+    json_t *saved = snag_vm_connections_json(connection);
+    struct snag_vm_connection *restored = NULL;
+    assert(saved && snag_vm_connections_load(saved, &restored) == 0);
+    json_t *roundtrip = snag_vm_connections_json(restored);
+    assert(roundtrip && json_equal(saved, roundtrip));
+    json_decref(roundtrip);
+    json_decref(saved);
+    snag_vm_connections_free(restored);
+    snag_vm_connections_free(connection);
+}
+
 int
 main(void)
 {
@@ -1807,6 +1834,7 @@ main(void)
     conversation_snapshot_test();
     forwarded_snapshot_test();
     verbosity_pending_test();
+    command_chain_capability_test();
     char *root = snag_path_join(getenv("TMPDIR") ? getenv("TMPDIR") : "/tmp",
         "snajpagent-vm-reader-XXXXXX");
     char error[256];

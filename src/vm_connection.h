@@ -53,7 +53,7 @@ struct snag_vm_connection {
     bool commands, queue, drafts, terminal_commands, irc_queries, irc_channels, irc_connections;
     bool reports_supported, reports_subscribed, reports_changed, detaching, detach_sent;
     bool cancel_pending, quit_pending;
-    bool feedback_supported, command_verbosity;
+    bool feedback_supported, command_verbosity, command_chains;
 };
 
 /* NULL selects the rollout. Returned buffers live until their session closes. */

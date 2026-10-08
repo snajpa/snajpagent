@@ -62,6 +62,7 @@ struct app_view_command {
     const char *line;
     json_t *snapshot, *selection;
     int verbosity;
+    bool chained;
 };
 struct app_view_terminal {
     char id[SNAG_ID_HEX_LEN + 1u];
@@ -82,6 +83,7 @@ static const char *const view_control_names[] = {"/config (completion)",
 static atomic_int pending_shutdown_signal;
 static _Atomic(struct snag_ui *) shutdown_ui;
 static void write_resume_command(struct app_state *, const char *, const char *);
+static int submit_idle(struct app_state *, const char *, enum snag_render_view, bool *);
 
 static void
 mark_shutdown_signal(int signal_number)
@@ -3032,6 +3034,10 @@ snag_app_irc_select_conversation(
         if (!route) return -1;
         json_decref(app->view_command->selection);
         app->view_command->selection = route;
+        if (app->view_command->chained) {
+            app->ui.input_conversation = *target;
+            app->ui.input_view = SNAG_RENDER_CHAT;
+        }
         return 0;
     }
 #endif
@@ -3499,6 +3505,10 @@ handle_common_command(
         unsigned int level = snag_ui_verbosity(&app->ui);
         bool pane = app->ui.input_interface && app->ui.input_verbosity >= 0;
         if (pane) level = (unsigned int)app->ui.input_verbosity;
+#if SNAJPAGENT_VM
+        if (pane && app->view_command && app->view_command->verbosity >= 0)
+            level = (unsigned int)app->view_command->verbosity;
+#endif
         char feedback[192];
         enum snag_render_view view = app->ui.input_interface ? app->ui.input_view :
             snag_ui_view(&app->ui);
@@ -3836,7 +3846,7 @@ input_view_toggle(struct app_state *app)
 }
 
 static int
-input_command(
+input_single_command(
     struct app_state *app, const char *line, bool active, bool *handled, bool *prompt_ready)
 {
     bool single_line = strchr(line, '\n') == NULL;
@@ -3868,11 +3878,88 @@ input_command(
     return rc;
 }
 
+static bool
+command_leaves_session(const char *line)
+{
+    if (!strcmp(line, "/exit") || !strcmp(line, "/delete")) return true;
+    if (!strncmp(line, "/session ", 9u) || !strncmp(line, "/s ", 3u)) {
+        const char *rest = line + (line[2] == 'e' ? 9u : 3u);
+        size_t length = strcspn(rest, " \t");
+        return (length == 1u && (rest[0] == 'd' || rest[0] == 'a')) ||
+            (length == 6u && !memcmp(rest, "detach", length)) ||
+            (length == 6u && !memcmp(rest, "attach", length));
+    }
+    return false;
+}
+
+static int
+input_commands(struct app_state *app, const char *source,
+    const struct snag_command_line *commands, bool active, bool *handled, bool *prompt_ready)
+{
+    if (!commands->count && !commands->error)
+        return input_single_command(app, source, active, handled, prompt_ready);
+    *handled = true;
+    *prompt_ready = false;
+    bool echoed = app->ui.input_echoed;
+    if (!echoed && snag_ui_submitted(&app->ui, app->ui.label, source, true) < 0) return -1;
+    if (commands->error) return app_error(app, commands->error);
+    app->ui.input_echoed = true;
+    bool previous_error = app->ui.command_error;
+    app->ui.command_error = false;
+    int rc = 0;
+    size_t offset = 0u;
+    for (size_t i = 0u; i < commands->count; ++i) {
+        const char *line = (const char *)commands->parts.data + offset;
+        offset += strlen(line) + 1u;
+        bool read_only;
+        (void)snag_prompt_parse(line, &read_only);
+        bool canonical = commands->chained || strcmp(line, source);
+        bool starts_turn = canonical && !active &&
+            (read_only || !strcmp(line, "/retry"));
+#if SNAJPAGENT_VM
+        if (app->view_command && commands->chained) app->view_command->line = line;
+#endif
+        if (commands->chained && !app->ui.input_interface &&
+            snag_ui_capture_route(&app->ui, line) < 0) {
+            rc = -1;
+            break;
+        }
+        rc = starts_turn ? 0 : input_single_command(app, line, active, handled, prompt_ready);
+#if SNAJPAGENT_VM
+        if (!rc && commands->chained && app->view_command && app->view_command->snapshot) {
+            rc = snag_ui_command_report(&app->ui, app->view_command->snapshot, "");
+            json_decref(app->view_command->snapshot);
+            app->view_command->snapshot = NULL;
+        }
+#endif
+        if (canonical && !rc && (starts_turn || !*handled)) {
+            *handled = true;
+            if (!active) {
+                int submitted = submit_idle(app, line, app->ui.input_view, prompt_ready);
+                if (submitted == 1) app->input_closed = true;
+                else if (submitted) rc = -1;
+            } else rc = app_error(app, "unknown slash command");
+        }
+        while (!rc && commands->chained && app->pager &&
+            !app->interrupt_requested && !snag_app_shutdown(app)) {
+            service_external(app);
+            rc = service_pager(app);
+            if (!rc && app->pager) (void)snag_sleep_ms(25u);
+        }
+        if (rc || app->ui.command_error || app->input_closed || snag_app_shutdown(app) ||
+            (commands->chained && app->interrupt_requested) ||
+            (commands->chained && command_leaves_session(line))) break;
+    }
+    app->ui.command_error |= previous_error;
+    app->ui.input_echoed = echoed;
+    return rc;
+}
+
 #if SNAJPAGENT_VM
 /* Commands requiring terminal-bound input or IRC scope hand off before any
  * effect. This list grows only when that command has a semantic adapter. */
 static bool
-view_command_native(const char *line)
+view_single_command_native(const char *line, bool chained)
 {
     size_t length = strcspn(line, " \t\r\n");
     char verb[32];
@@ -3885,7 +3972,19 @@ view_command_native(const char *line)
             "/attachments /detach "
             "/query /msg /notice /me /chat /join /part /names /topic /connections /whois /nick"))
         return true;
-    if (strcmp(verb, "/session") && strcmp(verb, "/s")) return false;
+    if (strcmp(verb, "/session") && strcmp(verb, "/s")) {
+        if (!chained) return false;
+        uint32_t id;
+        size_t body;
+        if (snag_irc_target_parse(line, strlen(line), &id, &body) != SNAG_IRC_TARGET_NONE)
+            return false;
+        for (size_t i = 0u; i < snag_command_count(); ++i) {
+            const char *syntax = snag_commands[i].syntax;
+            if (!strncmp(syntax, verb, length) &&
+                (!syntax[length] || isspace((unsigned char)syntax[length]))) return false;
+        }
+        return true;
+    }
     const char *argument = line + length;
     while (isspace((unsigned char)*argument)) ++argument;
     return !*argument || !strcmp(argument, "l") || !strcmp(argument, "list") ||
@@ -3939,7 +4038,7 @@ view_command_complete(struct app_state *app, const char *id, const char *line,
     json_decref(saved);
     int rc = result ? 0 : -1;
     if (!rc && selection) rc = json_object_set(result, "selection", selection);
-    if (!rc && !failed && verbosity >= 0)
+    if (!rc && verbosity >= 0 && (!failed || snag_command_chained(line, strlen(line))))
         rc = json_object_set_new(result, "verbosity", json_integer(verbosity));
     if (!rc) rc = snag_ui_command_result(&app->ui, result);
     json_decref(result);
@@ -3978,7 +4077,8 @@ view_terminal_finite(const char *line)
 
 static int
 view_input_command(
-    struct app_state *app, const char *line, bool active, bool *handled, bool *prompt_ready)
+    struct app_state *app, const char *line, const struct snag_command_line *commands,
+    bool active, bool *handled, bool *prompt_ready)
 {
     char id[SNAG_ID_HEX_LEN + 1u];
     memcpy(id, app->ui.view_request, sizeof(id));
@@ -3988,7 +4088,15 @@ view_input_command(
     *handled = true;
     *prompt_ready = false;
     bool terminal = app->ui.input_terminal_command;
-    if (!terminal && !view_command_native(line)) {
+    bool native = true, finite = false;
+    size_t offset = 0u;
+    for (size_t i = 0u; i < commands->count; ++i) {
+        const char *part = (const char *)commands->parts.data + offset;
+        native &= view_single_command_native(part, commands->chained);
+        finite |= view_terminal_finite(part);
+        offset += strlen(part) + 1u;
+    }
+    if (!terminal && !commands->error && !native) {
         if (app->ui.input_conversation.conversation[0])
             return snag_ui_view_result(&app->ui, id, "rejected", 0u,
                 "open the rollout to use this command's whole-terminal interface");
@@ -4006,7 +4114,7 @@ view_input_command(
         snag_buf_free(&report);
         return snag_ui_view_result(&app->ui, id, "rejected", 0u, "cannot retain command");
     }
-    bool finite = terminal && view_terminal_finite(line);
+    finite &= terminal;
     if (finite) {
         if (app->view_terminal) {
             snag_buf_free(&report);
@@ -4031,10 +4139,11 @@ view_input_command(
     app->ui.command_report = &report;
     app->ui.command_report_passthrough = terminal;
     app->ui.command_error = false;
-    struct app_view_command capture = {.line = line, .verbosity = -1};
+    struct app_view_command capture = {
+        .line = line, .verbosity = -1, .chained = commands->chained};
     struct app_view_command *previous_capture = app->view_command;
     app->view_command = terminal ? NULL : &capture;
-    rc = input_command(app, line, active, handled, prompt_ready);
+    rc = input_commands(app, line, commands, active, handled, prompt_ready);
     app->view_command = previous_capture;
     if (!rc && !*handled) rc = app_error(app, "unknown slash command");
     bool failed = rc < 0 || app->ui.command_error;
@@ -4060,13 +4169,13 @@ view_input_command(
 }
 #endif
 
-int
-snag_app_input_command(
-    struct app_state *app, const char *line, bool active, bool *handled, bool *prompt_ready)
+static int
+input_line_command(struct app_state *app, const char *line,
+    const struct snag_command_line *commands, bool active, bool *handled, bool *prompt_ready)
 {
     /* Idle retry starts a turn through submit_idle. Keep its frontend request
      * until the same durable input admission used by ordinary prompts. */
-    if (!active && !strcmp(line, "/retry") &&
+    if (!active && !commands->error && !commands->chained && !strcmp(line, "/retry") &&
         (app->session.last_turn_failed || app->session.active_turn || app->session.pending_input)) {
         *handled = *prompt_ready = false;
         return app->ui.input_echoed ? 0 :
@@ -4083,7 +4192,7 @@ snag_app_input_command(
     }
     if ((app->ui.input_interface || app->ui.input_terminal_command) && app->ui.view_request[0] &&
         snag_prompt_command(line))
-        return view_input_command(app, line, active, handled, prompt_ready);
+        return view_input_command(app, line, commands, active, handled, prompt_ready);
 #endif
     if (app->command_report || app->ui.command_report) {
         /* A deferred operation can pump a replacement classic terminal.
@@ -4098,7 +4207,7 @@ snag_app_input_command(
 #endif
         app->command_report = app->ui.command_report = NULL;
         app->ui.command_report_passthrough = app->ui.command_error = false;
-        int rc = input_command(app, line, active, handled, prompt_ready);
+        int rc = input_commands(app, line, commands, active, handled, prompt_ready);
         app->command_report = previous_app_report;
         app->ui.command_report = previous_report;
         app->ui.command_report_passthrough = previous_passthrough;
@@ -4110,12 +4219,12 @@ snag_app_input_command(
     }
     if (!app->ui.opened || app->ui.input_interface || app->execute || !pager_command(app) ||
         snag_isatty(STDIN_FILENO) != 1 || snag_isatty(STDERR_FILENO) != 1) {
-        return input_command(app, line, active, handled, prompt_ready);
+        return input_commands(app, line, commands, active, handled, prompt_ready);
     }
 
     struct snag_buf report = {.max = SIZE_MAX};
     app->command_report = &report;
-    int rc = input_command(app, line, active, handled, prompt_ready);
+    int rc = input_commands(app, line, commands, active, handled, prompt_ready);
     app->command_report = NULL;
     if (rc == 0 && report.len) {
         rc = snag_buf_terminate(&report);
@@ -4124,6 +4233,21 @@ snag_app_input_command(
         }
     }
     snag_buf_free(&report);
+    return rc;
+}
+
+int
+snag_app_input_command(
+    struct app_state *app, const char *line, bool active, bool *handled, bool *prompt_ready)
+{
+    struct snag_command_line commands = {0};
+    if (snag_prompt_command(line) &&
+        snag_command_line_parse(line, strlen(line), '/', &commands) < 0 && !commands.error) {
+        snag_buf_free(&commands.parts);
+        return -1;
+    }
+    int rc = input_line_command(app, line, &commands, active, handled, prompt_ready);
+    snag_buf_free(&commands.parts);
     return rc;
 }
 

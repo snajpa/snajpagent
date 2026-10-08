@@ -50,6 +50,19 @@ struct snag_buf {
     size_t max;
 };
 
+struct snag_command_line {
+    struct snag_buf parts;
+    size_t count;
+    bool chained;
+    const char *error;
+};
+
+/* NUL-separated commands; slash input requires /, colon input is already Ex. */
+int snag_command_line_parse(const char *, size_t, char, struct snag_command_line *);
+bool snag_command_chained(const char *, size_t);
+size_t snag_command_start(const char *, size_t);
+bool snag_verbosity_input(const char *, size_t);
+
 struct snag_key_ref {
     const char *name;
     size_t len;

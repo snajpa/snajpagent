@@ -2266,16 +2266,21 @@ finish_completion(struct snag_term *term, struct completion *matches, size_t sta
 static int
 complete_command_name(struct snag_term *term, bool *handled)
 {
-    size_t token_end = 0u, prefix_len = term->cursor;
     struct completion matches = {0};
     int rc = -1;
 
     *handled = false;
-    if (!prefix_len || !term->draft.len || term->draft.data[0] != '/' ||
-        (term->draft.len > 1u && term->draft.data[1] == '/'))
-        return 0;
-    while (token_end < term->draft.len && !word_space(term->draft.data[token_end])) ++token_end;
-    if (prefix_len > token_end) return 0;
+    size_t first = 0u;
+    while (first < term->draft.len && word_space(term->draft.data[first])) ++first;
+    if (first == term->draft.len || term->draft.data[first] != '/' ||
+        (first + 1u < term->draft.len && term->draft.data[first + 1u] == '/')) return 0;
+    size_t start = snag_command_start((const char *)term->draft.data, term->cursor);
+    size_t token_end = start;
+    while (token_end < term->draft.len && !word_space(term->draft.data[token_end]) &&
+        term->draft.data[token_end] != ';') ++token_end;
+    if (term->cursor < start || term->cursor > token_end) return 0;
+    size_t prefix_len = term->cursor - start;
+    bool slash = start < term->draft.len && term->draft.data[start] == '/';
     *handled = true;
     snag_buf_init(&matches.names, SNAG_MAX_DIRECT_PROMPT);
     size_t destinations = term->destinations ? term->destinations->count : 0u;
@@ -2290,11 +2295,11 @@ complete_command_name(struct snag_term *term, bool *handled)
                 term->destinations->items[i - term->command_count].target.id);
             command = (struct snag_term_command){numeric, NULL};
         }
-        if (command.syntax && completion_add(&matches, command.syntax,
-                                  command_name_length(&command), term->draft.data, prefix_len) < 0)
+        if (command.syntax && completion_add(&matches, command.syntax + !slash,
+            command_name_length(&command) - !slash, term->draft.data + start, prefix_len) < 0)
             goto out;
     }
-    rc = finish_completion(term, &matches, 0u, token_end);
+    rc = finish_completion(term, &matches, start, token_end);
 out:
     snag_buf_free(&matches.names);
     return rc;

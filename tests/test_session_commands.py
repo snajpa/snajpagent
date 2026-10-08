@@ -30,7 +30,7 @@ class CommandTests(unittest.TestCase):
         self.assertEqual(path.stat().st_mode & 0o777, 0o600)
         self.assertEqual(len(data), report['bytes'])
         self.assertEqual(hashlib.sha256(data).hexdigest(), report['sha256'])
-        self.assertTrue(data.startswith(report['command'].encode() + b'\n'))
+        self.assertTrue(data.startswith(report['command'].expandtabs(4).encode() + b'\n'))
         return data
 
     def command(self, text, **options):
@@ -61,6 +61,96 @@ class CommandTests(unittest.TestCase):
                   if e['type'] == 'retry_auto_changed']
         self.assertEqual(values, ['off'])
         self.assertIn(b'Automatic retry: ON', self.report(self.command('/retry auto')))
+
+    def test_command_chain_orders_effects_and_reconciles_one_receipt(self):
+        text = '/fast on \t;\t retry auto off ; /status ; fast off ; '
+        request = self.peer.command(text)
+        result = self.peer.result(request)
+        self.assertEqual(result['outcome'], 'ok')
+        data = self.report(result)
+        self.assertEqual(result['report']['command'], text)
+        self.assertEqual(data.count(text.expandtabs(4).encode()), 1)
+        self.assertLess(data.index(b'Fast mode: ON'), data.index(b'Automatic retry: OFF'))
+        self.assertLess(data.index(b'Automatic retry: OFF'), data.index(b'session:'))
+        self.assertLess(data.index(b'session:'), data.index(b'Fast mode: OFF'))
+        effects = [e['data']['value'] for e in self.owner.events()
+                   if e['type'] == 'service_tier_changed']
+        self.assertEqual(effects, ['priority', 'default'])
+        self.peer.command(text, request)
+        self.assertEqual(self.peer.result(request), result)
+        self.assertEqual([e['data']['value'] for e in self.owner.events()
+                          if e['type'] == 'service_tier_changed'], effects)
+        self.assertFalse(any(e['type'] == 'input_received' for e in self.owner.events()))
+
+    def test_command_chain_stops_after_usage_or_unknown_command_error(self):
+        for failed in ('fast invalid', 'no-such-command'):
+            with self.subTest(failed=failed):
+                self.command('/fast off')
+                result = self.command('/fast on; ' + failed + '; /fast off')
+                self.assertEqual(result['outcome'], 'error')
+                data = self.report(result)
+                self.assertIn(b'Fast mode: ON', data)
+                self.assertNotIn(b'Fast mode: OFF', data)
+                self.assertIn(b'fast: ON', self.report(self.command('/status')))
+
+    def test_command_chain_preserves_quoted_and_escaped_semicolons(self):
+        for command, expected in [('/banner "quote; body"; /banner', '"quote; body"'),
+                                  (r'/banner escaped\;body; /banner', 'escaped;body')]:
+            with self.subTest(command=command):
+                result = self.command(command)
+                self.assertEqual(result['outcome'], 'ok')
+                self.assertIn(expected.encode(), self.report(result))
+                values = [e['data']['text'] for e in self.owner.events()
+                          if e['type'] == 'banner_updated']
+                self.assertEqual(values[-1], expected)
+        for command in ('/fast on; /banner "unterminated; /fast off',
+                        '/fast on; /banner trailing\\'):
+            self.command('/fast off')
+            result = self.command(command)
+            self.assertEqual(result['outcome'], 'error')
+            self.assertNotIn(b'Fast mode: ON', self.report(result))
+
+    def test_command_chain_uses_and_updates_the_pane_verbosity(self):
+        result = self.command('/fast on; verbose 2; /verbose; /status', verbosity=3)
+        self.assertEqual(result['outcome'], 'ok')
+        self.assertEqual(result['verbosity'], 2)
+        self.assertEqual(self.report(result).count(b'verbosity: 2'), 2)
+        self.assertIn(b'verbosity: 0', self.report(self.command('/verbose')))
+        failed = self.command('/verbose 1; fast invalid; verbose 4', verbosity=2)
+        self.assertEqual(failed['outcome'], 'error')
+        self.assertEqual(failed['verbosity'], 1)
+        self.assertNotIn(b'verbosity: 4', self.report(failed))
+
+    def test_command_chain_retains_each_raw_file_and_the_remaining_report(self):
+        paths = [self.owner.root / ('file-' + str(i)) for i in range(2)]
+        for i, path in enumerate(paths):
+            path.write_bytes(('raw-file-' + str(i)).encode())
+        result = self.command('/cat ' + str(paths[0]) + '; cat ' + str(paths[1]) + '; fast on')
+        self.assertEqual(result['outcome'], 'ok')
+        self.assertIn(b'Fast mode: ON', self.report(result))
+        raw = [p.read_bytes() for p in self.owner.directory.glob('.view-report-*')]
+        for i in range(2):
+            self.assertEqual(sum(data.endswith(('\nraw-file-' + str(i)).encode())
+                                 for data in raw), 1)
+
+    def test_terminal_chain_hands_off_before_any_effect(self):
+        result = self.command('/fast on; config; fast off')
+        self.assertEqual(result['status'], 'terminal')
+        self.assertFalse(any(e['type'] == 'service_tier_changed' for e in self.owner.events()))
+
+    def test_command_chain_accepts_leading_whitespace_and_empty_segments(self):
+        result = self.command(' \t/fast on; ;\t; /fast off; ')
+        self.assertEqual(result['outcome'], 'ok')
+        self.assertIn(b'Fast mode: OFF', self.report(result))
+
+    def test_plain_prompt_semicolons_remain_literal(self):
+        text = 'ordinary prompt; /fast on; status'
+        result = self.peer.result(self.peer.submit(text))
+        self.assertEqual(result['status'], 'committed')
+        self.owner.wait_event('turn_completed')
+        self.assertEqual([e['data']['text'] for e in self.owner.events()
+                          if e['type'] == 'input_received'], [text])
+        self.assertFalse(any(e['type'] == 'service_tier_changed' for e in self.owner.events()))
 
     def test_fast_duplicate_reconnect_and_changed_id_text(self):
         request = self.peer.command('/fast')
@@ -154,7 +244,10 @@ class CommandTests(unittest.TestCase):
         self.owner.provider.runtime_handler = held
         self.assertEqual(self.peer.result(self.peer.submit('held turn'))['status'], 'committed')
         self.assertTrue(started.wait(5))
-        self.assertIn(b'ON', self.report(self.command('/fast')))
+        active_chain = self.report(self.command('/fast on; retry auto off; status'))
+        self.assertIn(b'Fast mode: ON', active_chain)
+        self.assertIn(b'Automatic retry: OFF', active_chain)
+        self.assertIn(b'session:', active_chain)
         self.assertIn(b'/status', self.report(self.command('/status')))
         self.assertFalse(any(e['type'] in ('turn_interrupted', 'steering_added',
                                           'turn_cancel_requested') for e in self.owner.events()))

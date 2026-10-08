@@ -405,6 +405,12 @@ admission does not print the text a second time. Slash commands and queued
 controls keep their own acknowledgement timing.
 Empty-draft Ctrl-C interrupts an active operation.
 .PP
+Combine controls on one line, for example
+.BR "/fast on; retry auto off; status" .
+The initial slash identifies command input; later commands may include or omit it.
+Commands run in order and stop at the first error. Deferred controls retain their
+usual safe-boundary timing. See Commands for separators and literal text.
+.PP
 Queue editing keeps command input separate from replacement text.  Enter on
 /status inspects the session, and /exit preserves it; use // for a literal
 leading slash in replacement text.  Delete confirmation also accepts commands,
@@ -462,14 +468,16 @@ NORMAL-mode Ctrl-C can interrupt copying. A detected source change aborts the co
 retry /cat to read it again. File contents remain outside model context.
 Older owners may use the whole-terminal pager adapter for this command.
 .SS Complete names with Tab
-Command completion starts with a slash at the beginning of the draft.
+Command completion starts with a slash after any leading whitespace in the draft.
 Type
 .B /sta
 and press Tab to get
 .B /status
 followed by a space.  Press Enter to run the command.  Completion applies
-while the cursor is in or at the end of that first command word, not in its
-arguments.  Ordinary words do not trigger command completion.
+while the cursor is in or at the end of a command word. In a command chain,
+.B /fast on; sta
+completes the last word to status and preserves the preceding commands.
+Ordinary words and command arguments do not trigger command completion.
 .PP
 In chat, begin a nickname word with
 .B @
@@ -2206,6 +2214,12 @@ for workspace command or search entry. Type : from NORMAL for Ex commands such
 as :vsp or :workspace detach. Escape returns to NORMAL with the session draft intact.
 A colon typed in INSERT is ordinary draft text. VISUAL identifies transcript selection.
 .PP
+Ex commands use the same semicolon rules as slash commands. For example,
+.B :vsp; split; w
+creates a vertical split, splits its current window horizontally and saves the
+workspace. A later command may repeat the colon. Tab completes the current
+command after a separator while preserving earlier commands.
+.PP
 Click an attached writable pane, or press i, a, I or A in a transcript, to enter
 the composer in INSERT. The keys insert before or after the remembered cursor,
 at the first nonblank character, or at the end of its logical line. INSERT accepts
@@ -2581,6 +2595,39 @@ also accept multiline message text.  Prefix text with
 .B //
 to submit a literal leading
 .BR / .
+.PP
+An initial slash after leading whitespace identifies a command line. Separate
+commands with unquoted semicolons; a later command may include or omit its slash:
+.PP
+.nf
+  /fast on; retry auto off; /status
+  /query local/peer; me hello
+  /banner retained\e; literal; status
+.fi
+.PP
+Spaces and tabs around separators and at either end are ignored. Empty segments
+are skipped. Single or double quotes protect enclosed semicolons; \e; supplies a
+literal semicolon outside single quotes. Each command keeps its existing argument
+quoting rules. Other backslash escapes are preserved. A chain with an unclosed
+quote, a trailing escape or a missing command after a prefix is rejected before
+any command runs. Ordinary prompts, // text and multiline messages retain their
+semicolons literally.
+.PP
+Commands dispatch in order through the same session. An error stops later
+commands; earlier successful effects remain. Exit, deletion, detach and session
+switching also end dispatch. Deferred controls acknowledge
+acceptance in that order and take effect at their usual safe boundaries. The
+original entered line appears once in prompt history and scrollback. This syntax
+does not invoke a shell or provide conditional operators.
+.PP
+In a workspace, a chain belongs to one session; choose its pane before entering
+it. A first addressed command may select that session, while a later command
+addressing another session is refused before effects. Use the pane-local /search
+separately from owner commands. A chain requiring a whole-terminal command hands
+off its complete line before any native command runs.
+Owners advertise command-chain support; an older
+owner retains the draft and requests an ordinary exit and resume with the new binary.
+.PP
 Commands can be submitted when the application displays a prompt. A foreground
 slash command completes before the next app command is accepted; typeahead is
 held without a second ready prompt. Model selection changes the next response
@@ -2617,8 +2664,11 @@ Informational command reports use the configured
 on an interactive terminal. This includes /help, /status, /state, goal status,
 /queue, /session lists, /history, /model lists, /context, /effort, /verbose,
 /banner, /attachments, /voice devices, /names, /topic, /nick, /steering and
-/server status, including their aliases. Each command opens one report;
+/server status, including their aliases. Each submitted command line opens one report;
 /state combines session status, goal status and goal actions in that report.
+Informational reports in a chain share that report. Each /cat opens its own file
+pager; the chain continues after it closes. Workspace file snapshots remain
+separate retained reports, followed by the chain's combined command report.
 Commands that display an updated report after a setting change also page it.
 Quit the pager to return to the composer. Brief acknowledgements, errors,
 view switches and ongoing model output remain in the normal terminal display.
