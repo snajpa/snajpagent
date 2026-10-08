@@ -560,7 +560,7 @@ assert "--replace-fail '__REPB_PREFIX(used)' '__REPB_PREFIX(snag_used)'" in andr
 print("PASS: Android links the shared static Unicode regex implementation")
 
 # The system shell is shared by command defaults and EDITOR on Android.
-assert 'char *const arguments[] = {"sh", "-c", (char *)script,' in platform
+assert re.search(r'char \*const arguments\[\] = \{\s*"sh", "-c", \(char \*\)script,', platform)
 assert 'execve(SNAG_SYSTEM_SHELL, arguments, environment ? environment : environ);' in platform
 shell_start = platform.index("#if defined(__ANDROID__)\n#define SNAG_SYSTEM_SHELL")
 shell_end = platform.index("\nint\nsnag_hostname", shell_start)
@@ -1486,7 +1486,8 @@ with tempfile.TemporaryDirectory(prefix="darwin-archive-", dir=root / "build") a
                             "\nAR=ar\nARFLAGS=rcs\nAR_O=$@\nRANLIB=ranlib\nRM=rm -f\n" + rule + "\n")
         subprocess.run(["make", "-s", "-B"], cwd=tmp, check=True)
         names = subprocess.check_output(["ar", "t", "fixture.a"], cwd=tmp, text=True).splitlines()
-        assert len(names) == 2
+        names = [name for name in names if name not in ("__.SYMDEF", "__.SYMDEF SORTED")]
+        assert len(names) == 2, names
         if revised:
             assert names == [name.replace("/", "_") for name in objects]
             for name, member in zip(objects, names):
@@ -1771,6 +1772,8 @@ with tempfile.TemporaryDirectory(prefix="media-stat-", dir=root / "build") as tm
         named = platform in ("__APPLE__", "__FreeBSD__", "__OpenBSD__", "__NetBSD__")
         mt, ct = ("st_mtimespec", "st_ctimespec") if named else ("st_mtim", "st_ctim")
         source.write_text("#include <assert.h>\n#include <stdbool.h>\n" +
+            "#undef __APPLE__\n#undef __FreeBSD__\n#undef __OpenBSD__\n"
+            "#undef __NetBSD__\n#undef _WIN32\n" +
             ("" if platform == "POSIX" else "#define " + platform + " 1\n") +
             "#define S_ISREG(mode) ((mode) == 1)\n"
             "typedef struct { unsigned st_dev, st_ino, st_size, st_mtime, st_ctime, st_mode;\n" +
@@ -2496,6 +2499,10 @@ with tempfile.TemporaryDirectory(prefix="archive-zip-charset-", dir=root / "buil
 #include <assert.h>
 #include <stddef.h>
 #include <string.h>
+#undef __APPLE__
+#ifdef TEST_APPLE
+#define __APPLE__ 1
+#endif
 #define ZIP_ENTRY_FLAG_UTF8_NAME 1
 struct zip { const char *entry, *opt_sconv; unsigned entry_flags; };
 static const char *detected;
@@ -2514,7 +2521,7 @@ int main(void) {
     struct zip zip = {"\xc5\xbe", NULL, 0};
     detected = "UTF-8";
     flags(&zip);
-#if (HAVE_NL_LANGINFO && defined(CODESET)) || HAVE_LOCALE_CHARSET
+#if EXPECTED_UTF8_DETECTION
     assert(zip.entry_flags == ZIP_ENTRY_FLAG_UTF8_NAME);
 #else
     assert(zip.entry_flags == 0);
@@ -2528,10 +2535,15 @@ int main(void) {
     return 0;
 }
 """)
-    for defines in (("-DHAVE_NL_LANGINFO=1", "-DHAVE_LOCALE_CHARSET=1"),
-                    ("-DHAVE_NL_LANGINFO=1", "-DCODESET=1", "-DHAVE_LOCALE_CHARSET=0"),
-                    ("-DHAVE_NL_LANGINFO=1", "-DHAVE_LOCALE_CHARSET=0")):
+    for defines, detected_utf8 in (
+        (("-DHAVE_NL_LANGINFO=1", "-DHAVE_LOCALE_CHARSET=1"), True),
+        (("-DHAVE_NL_LANGINFO=1", "-DCODESET=1", "-DHAVE_LOCALE_CHARSET=0"), True),
+        (("-DHAVE_NL_LANGINFO=1", "-DHAVE_LOCALE_CHARSET=0"), False),
+        (("-DTEST_APPLE=1", "-DHAVE_LOCALE_CHARSET=1"), False),
+        (("-DTEST_APPLE=1", "-DHAVE_NL_LANGINFO=1", "-DCODESET=1"), True),
+    ):
         subprocess.run(["cc", "-std=c11", "-Wall", "-Wextra", "-Werror", *defines,
+                        f"-DEXPECTED_UTF8_DETECTION={int(detected_utf8)}",
                         str(source), "-o", str(Path(tmp) / "charset")], check=True)
         subprocess.run([str(Path(tmp) / "charset")], check=True)
 print("PASS: ZIP UTF-8 flags preserve explicit, native, fallback and unknown charset behavior")
@@ -2567,7 +2579,7 @@ else:
 # The disposable Office worker must terminate without atexit/global destructors.
 office_source = (root / "src/office.c").read_text()
 assert "_Exit(" not in office_source and "_exit(rc);" in office_source
-worker_stub = re.search(r"#else\n(int snag_office_worker\(.*?\n})",
+worker_stub = re.search(r"#else\n(int\nsnag_office_worker\(.*?\n})",
                         office_source, re.S).group(1)
 with tempfile.TemporaryDirectory(prefix="office-worker-exit-", dir=root / "build") as tmp:
     source = Path(tmp) / "worker.c"
