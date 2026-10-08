@@ -426,6 +426,8 @@ event_block(struct transcript *view, uint64_t seq, const char *type,
 struct formatted_text {
     struct snag_buf text;
     json_t *styles, *origins;
+    json_t *source_map;
+    uint64_t source_bytes;
 };
 
 static int
@@ -789,16 +791,23 @@ filter_public(json_t *records, size_t start, size_t end,
         if (strcmp(snag_json_string(data, "op"), "public")) continue;
         snag_buf_reset(&decoded);
         if (snag_base64_decode(&decoded, snag_json_string(data, "text")) < 0) goto out;
+        size_t begin = offset;
         size_t limit = offset + decoded.len;
         struct snag_buf text = {.max = SNAG_MAX_PUBLIC_ITEM};
+        json_t *map = json_array();
+        if (!map) goto out;
         while (offset < limit) {
             if (skip) { --skip; ++offset; continue; }
             size_t matched = snag_wire_secret_span(source.data + offset,
                 source.len - offset, false, partial_end, secrets);
             if (matched) {
-                if (snag_buf_append(&text, "<redacted:secret>", 17u) < 0) break;
+                size_t local = matched < limit - offset ? matched : limit - offset;
+                if (snag_vm_source_replace(map, text.len, offset - begin, 17u, local) < 0 ||
+                    snag_buf_append(&text, "<redacted:secret>", 17u) < 0) break;
                 skip = matched;
             } else {
+                if (!text.len && offset > begin &&
+                    snag_vm_source_replace(map, 0u, offset - begin, 1u, 1u) < 0) break;
                 if (snag_buf_putc(&text, source.data[offset]) < 0) break;
                 ++offset;
             }
@@ -807,6 +816,9 @@ filter_public(json_t *records, size_t start, size_t end,
         rc = offset == limit ? snag_base64_append(&encoded, text.data, text.len) : -1;
         if (!rc) rc = json_object_set_new(data, "text", json_stringn(
             encoded.data ? (const char *)encoded.data : "", encoded.len));
+        if (!rc) rc = json_object_set(data, "source_map", map);
+        if (!rc) rc = json_object_set_new(data, "source_size", json_integer(decoded.len));
+        json_decref(map);
         snag_buf_free(&text);
         snag_buf_free(&encoded);
         if (rc < 0) goto out;
@@ -820,6 +832,24 @@ out:
     return rc;
 }
 
+static int
+operation_source(json_t *filtered, const json_t *original,
+    const struct snag_wire_secrets *secrets)
+{
+    bool irc = !strcmp(snag_json_string(original, "op"), "irc");
+    const char *source = snag_json_string(irc ? json_object_get(original, "data") : original,
+        "text");
+    const char *display = snag_json_string(irc ? json_object_get(filtered, "data") : filtered,
+        "text");
+    if (!source || !display) return 0;
+    json_t *map = snag_vm_source_redactions(source, display, secrets);
+    if (!map) return -1;
+    int rc = json_object_set(filtered, "source_map", map);
+    if (!rc) rc = json_object_set_new(filtered, "source_size", json_integer(strlen(source)));
+    json_decref(map);
+    return rc;
+}
+
 static json_t *
 filter_operation(const json_t *record, const struct snag_wire_secrets *secrets)
 {
@@ -828,7 +858,14 @@ filter_operation(const json_t *record, const struct snag_wire_secrets *secrets)
     /* Public bytes have already been matched across their complete stream. */
     if (!strcmp(op, "public") || !strcmp(op, "durable")) return json_incref((json_t *)record);
     bool bytes = snag_string_in(op, "protocol transport resume");
-    if (!bytes) return filter_output((void *)secrets, record);
+    if (!bytes) {
+        json_t *filtered = filter_output((void *)secrets, record);
+        if (filtered && operation_source(filtered, record, secrets) < 0) {
+            json_decref(filtered);
+            return NULL;
+        }
+        return filtered;
+    }
     json_t *copy = json_copy((json_t *)record), *filtered = NULL;
     struct snag_buf text = {.max = SNAG_MAX_EVENT_LINE};
     const char *encoded = snag_json_string(record, "text");
@@ -836,6 +873,10 @@ filter_operation(const json_t *record, const struct snag_wire_secrets *secrets)
         json_object_set_new(copy, "text", json_stringn((const char *)text.data, text.len)) < 0)
         goto out;
     filtered = filter_output((void *)secrets, copy);
+    if (filtered && operation_source(filtered, copy, secrets) < 0) {
+        json_decref(filtered);
+        filtered = NULL;
+    }
     snag_buf_reset(&text);
     const json_t *value = json_object_get(filtered, "text");
     if (filtered && (snag_base64_append(&text, (const unsigned char *)json_string_value(value),
@@ -849,6 +890,40 @@ out:
     snag_buf_free(&text);
     json_decref(copy);
     return filtered;
+}
+
+/* Formatting uses filtered bytes. Compose each operation's redaction map into
+ * the block coordinate shared by navigation, search, selection and persistence. */
+static int
+operation_map(struct formatted_text *out, const json_t *data, uint64_t begin, uint64_t end)
+{
+    const json_t *map = json_object_get(data, "source_map");
+    uint64_t original = end - begin;
+    if (map && snag_json_integer_u64(data, "source_size", &original) < 0) return -1;
+    if (original > INT64_MAX - out->source_bytes) return snag_errno(EOVERFLOW);
+    uint64_t display = 0u;
+    uint64_t source = 0u;
+    for (size_t i = 0u; i < json_array_size(map); ++i) {
+        const json_t *run = json_array_get(map, i);
+        uint64_t at = (uint64_t)json_integer_value(json_array_get(run, 0u));
+        uint64_t start = (uint64_t)json_integer_value(json_array_get(run, 1u));
+        uint64_t width = (uint64_t)json_integer_value(json_array_get(run, 2u));
+        uint64_t span = (uint64_t)json_integer_value(json_array_get(run, 3u));
+        uint64_t count = (uint64_t)json_integer_value(json_array_get(run, 4u));
+        if (at > display && snag_vm_source_replace(out->source_map, begin + display,
+                out->source_bytes + source, 1u, 1u) < 0) return -1;
+        for (uint64_t j = 0u; j < count; ++j) {
+            if (snag_vm_source_replace(out->source_map, begin + at + j * width,
+                    out->source_bytes + start + j * span, width, span) < 0) return -1;
+        }
+        display = at + width * count;
+        source = start + span * count;
+    }
+    if (end - begin > display && snag_vm_source_replace(out->source_map, begin + display,
+            out->source_bytes + source, 1u, 1u) < 0)
+        return -1;
+    out->source_bytes += original;
+    return 0;
 }
 
 static int
@@ -867,6 +942,8 @@ output_block(json_t *blocks, struct formatted_text *out, uint64_t seq, uint64_t 
     if (json_object_set_new(block, "prompt_gap", json_integer(gap)) < 0) return -1;
     if (json_array_size(out->origins) && json_object_set(block, "format_map", out->origins) < 0)
         return -1;
+    if (json_array_size(out->source_map) &&
+        json_object_set(block, "source_map", out->source_map) < 0) return -1;
     uint64_t end = snag_vm_source_position(block, out->text.len, true);
     if (end > INT64_MAX ||
         json_object_set_new(block, "source_begin", json_integer(0)) < 0 ||
@@ -875,9 +952,11 @@ output_block(json_t *blocks, struct formatted_text *out, uint64_t seq, uint64_t 
     snag_buf_reset(&out->text);
     json_decref(out->styles);
     json_decref(out->origins);
+    json_decref(out->source_map);
     out->styles = json_array();
     out->origins = json_array();
-    if (!out->styles || !out->origins) return -1;
+    out->source_map = json_array();
+    if (!out->styles || !out->origins || !out->source_map) return -1;
     return 0;
 }
 
@@ -906,7 +985,7 @@ snag_vm_presentation_blocks(const json_t *records, const json_t *route, uint64_t
 {
     struct transcript view = {.cancel = cancel, .cancel_opaque = opaque};
     struct formatted_text out = {.text = {.max = SNAG_MEMORY_LIMIT / 2u},
-        .styles = json_array(), .origins = json_array()};
+        .styles = json_array(), .origins = json_array(), .source_map = json_array()};
     struct snag_term term = {.columns = columns};
     struct snag_render render;
     snag_render_init(&render, verbosity);
@@ -924,7 +1003,7 @@ snag_vm_presentation_blocks(const json_t *records, const json_t *route, uint64_t
     bool open = false;
     int active_fd = -1;
     uint64_t first = 0u, last = 0u;
-    if (!input || !blocks || !out.styles || !out.origins) goto failed;
+    if (!input || !blocks || !out.styles || !out.origins || !out.source_map) goto failed;
     /* A chat page must not copy or redact unrelated streamed model output. */
     for (size_t i = 0u; i < json_array_size(records); ++i) {
         if (canceled(&view)) goto failed;
@@ -978,6 +1057,8 @@ snag_vm_presentation_blocks(const json_t *records, const json_t *route, uint64_t
             }
             first = seq;
             render.sink.source.byte = 0u;
+            out.source_bytes = 0u;
+            json_array_clear(out.source_map);
         }
         last = seq;
         if (!strcmp(op, "begin")) open = true;
@@ -995,8 +1076,10 @@ snag_vm_presentation_blocks(const json_t *records, const json_t *route, uint64_t
         }
         active_fd = fd;
         bool closed = snag_string_in(op, "end abort");
+        uint64_t before = render.sink.source.byte;
         int rc = snag_presentation_replay(&render, data, fd);
         if (!rc) rc = snag_render_flush_pending(&render, SIZE_MAX);
+        if (!rc) rc = operation_map(&out, data, before, render.sink.source.byte);
         json_decref(data);
         if (rc < 0) goto failed;
         if (closed) open = false;
@@ -1014,6 +1097,7 @@ done:
     snag_buf_free(&out.text);
     json_decref(out.styles);
     json_decref(out.origins);
+    json_decref(out.source_map);
     json_decref(input);
     return blocks;
 }

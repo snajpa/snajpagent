@@ -1399,6 +1399,12 @@ the nearest stable source anchor; if its block becomes hidden, anchor to its
 containing visible heading or nearest visible neighbor and show that adjustment.
 Keep the original source anchor so restoring detail can recover the position.
 
+Retained presentation maps current redactions to each operation's original bytes
+before composing the shared renderer's formatting origins. Public fragments keep
+their original lengths even when a secret spans fragments with intervening
+notices. Changing the secret snapshot therefore preserves held source positions.
+These maps are reader-owned projection data; the stored operation format is unchanged.
+
 An older saved canonical anchor retains journal coordinates while held. Its
 page reads, search, motions and selections use the same canonical projection;
 resizing and verbosity changes preserve the original byte. G enables FOLLOW

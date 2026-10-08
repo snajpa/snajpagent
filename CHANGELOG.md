@@ -43,6 +43,8 @@
 - Restore older workspace history positions in their original journal coordinates,
   including search, copying, resizing and verbosity changes. G returns to the
   current retained display history.
+- Keep held positions in retained output after changing configured secrets,
+  including redactions spanning streamed fragments and workspace detach/resume.
 - Keep conversation read positions in journal coordinates so background, held
   and detached views retain their unread counts.
 - Refresh live panes on owner output notifications. Anchored history loads include

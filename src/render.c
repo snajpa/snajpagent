@@ -3306,9 +3306,15 @@ render_message(struct snag_render *render, const char *message, const char *colo
 
     struct snag_buf line = {.max = 16384u};
     rc = snag_buf_printf(&line, SNAJPAGENT_NAME ": %s\n", message);
-    if (rc == 0)
+    if (rc == 0) {
+        struct snag_render_origin previous = render->origin;
+        render->origin = (struct snag_render_origin){
+            line.data + sizeof(SNAJPAGENT_NAME ": ") - 1u, strlen(message),
+            render_origin(render, message), NULL};
         rc = write_role_block(render, BOUNDARY_UPDATE, STDERR_FILENO, color, (char *)line.data,
             line.len, line.len, render->stderr_terminal, true);
+        render->origin = previous;
+    }
     snag_buf_free(&line);
     return rc;
 }
@@ -3389,10 +3395,15 @@ snag_render_host(struct snag_render *render, const char *text)
     struct snag_buf line = {.max = 4u * 1024u * 1024u};
     rc = snag_buf_append(&line, text, len);
     if (rc == 0 && (len == 0u || text[len - 1u] != '\n')) rc = snag_buf_putc(&line, '\n');
-    if (rc == 0)
+    if (rc == 0) {
+        struct snag_render_origin previous = render->origin;
+        render->origin = (struct snag_render_origin){line.data, len, render_origin(render, text),
+            NULL};
         rc = write_role_block(render, BOUNDARY_CONTENT, STDERR_FILENO, COLOR_HOST,
             (char *)line.data, line.len, first_line_len((char *)line.data, line.len),
             render->stderr_terminal, true);
+        render->origin = previous;
+    }
     snag_buf_free(&line);
     return rc;
 }
@@ -3408,9 +3419,14 @@ snag_render_runtime(struct snag_render *render, const char *text)
     struct snag_buf line = {.max = 4u * 1024u * 1024u};
     rc = snag_buf_append(&line, text, len);
     if (rc == 0 && (!len || text[len - 1u] != '\n')) rc = snag_buf_putc(&line, '\n');
-    if (rc == 0)
+    if (rc == 0) {
+        struct snag_render_origin previous = render->origin;
+        render->origin = (struct snag_render_origin){line.data, len, render_origin(render, text),
+            NULL};
         rc = write_optional_block(render, SNAG_PRESENT_DEBUG, COLOR_META, (char *)line.data,
             line.len, first_line_len((char *)line.data, line.len));
+        render->origin = previous;
+    }
     snag_buf_free(&line);
     return rc;
 }

@@ -198,6 +198,19 @@ retained_public_test(struct snag_store *store, const char *root)
             assert(strstr(dump, "<redacted:secret>"));
             if (complete) assert(strstr(dump, "after."));
             free(dump);
+            const json_t *block = json_array_get(result->blocks, 0u);
+            const char *text = snag_vm_block_text(block, false);
+            const char *notice = strstr(text, "A notice between");
+            assert(notice && snag_vm_source_position(block, notice - text, true) == 12u);
+            notice = strstr(text, "A notice after");
+            size_t offset = 12u + strlen(commands[2].text) + 7u;
+            assert(notice && snag_vm_source_position(block, notice - text, true) == offset);
+            if (complete) {
+                const char *after = strstr(text, "after.");
+                offset += strlen(commands[4].text) + 6u;
+                assert(after && snag_vm_source_position(block, after - text, true) == offset);
+                assert(snag_vm_source_position(block, offset, false) == (size_t)(after - text));
+            }
             snag_vm_read_result_free(result);
         }
         snag_vm_reader_close(reader);

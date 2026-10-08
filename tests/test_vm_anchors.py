@@ -149,6 +149,70 @@ class AnchorTests(unittest.TestCase):
         self.assertNotIn(b'irc-ui-secret', child.output)
         child.finish('qa')
 
+    def test_retained_anchor_survives_new_secret(self):
+        self.retained_secret_anchor(False)
+
+    def test_legacy_retained_anchor_survives_new_secret(self):
+        self.retained_secret_anchor(True)
+
+    def retained_secret_anchor(self, legacy):
+        from test_vm_mouse import current_rows
+
+        journal = self.seed_session('setup', legacy=legacy)
+        secret = 'newly-protected-retained-value-' + 'x' * 32
+        body = (secret + '\n') * 40 + ''.join(
+            f'retained-row-{i:03d}\n' for i in range(80))
+        config = self.root / 'state' / 'config.ini'
+        config.write_text(self.fixture_config.read_text().replace(
+            '${SNAJPAGENT_IRC_UI_KEY}', '"irc-ui-secret"'))
+        config.chmod(0o600)
+        previous = max(event['seq'] for event in read_events(journal))
+        provider = self.fixture_provider
+
+        def respond(handler, request, sequence):
+            provider.reply(handler, provider.response_body(sequence, body).encode())
+
+        provider.runtime_handler = respond
+        owner = frontend.Terminal(self.root, ['--config', str(config), '--resume',
+            journal.parent.name], subcommand=None)
+        self.addCleanup(owner.close)
+        owner.until(b'session id')
+        owner.write(b'generate retained stream\r')
+        deadline = time.monotonic() + 5
+        while not any(event['seq'] > previous and event['type'] == 'turn_completed'
+                      for event in read_events(journal)):
+            if time.monotonic() >= deadline:
+                self.fail('retained stream did not complete')
+            owner.read(.05)
+        owner.write(b'/exit\r')
+        owner.wait_exit()
+        self.assertEqual(owner.state()['returncode'], 0)
+        self.assertTrue((journal.parent / '.view-presentation.snb').is_file())
+
+        child = self.start('-N', 'retained-anchor', rows=24, columns=88)
+        child.command('history ' + journal.parent.name)
+        child.repaint_until(b'retained-row-079')
+        child.write(b'30k')
+        child.repaint_until(b'retained-row-040')
+        anchor = self.save(child)['windows'][0]['history']
+        self.assertTrue(anchor['key'].startswith('presentation:'), anchor)
+        self.assertTrue(anchor['source'])
+        self.assertFalse(anchor['follow'])
+        before = [line.strip() for line in current_rows(child).values()
+                  if 'retained-row-' in line]
+        self.assertTrue(before)
+        child.finish('workspace detach')
+        config.write_text(config.read_text() + f'\n[tool]\nsecret = "{secret}"\n')
+        child = self.start('--resume', 'retained-anchor', rows=24, columns=88,
+                           expect=b'Workspace restored')
+        child.repaint_until(before[0].encode())
+        after = [line.strip() for line in current_rows(child).values()
+                 if 'retained-row-' in line]
+        self.assertEqual(after, before)
+        self.assertEqual(self.save(child)['windows'][0]['history'], anchor)
+        self.assertNotIn(secret.encode(), child.output)
+        child.finish('workspace detach')
+
     def test_hidden_tool_anchor_returns_after_verbosity_change(self):
         self.hidden_tool_anchor(False)
 

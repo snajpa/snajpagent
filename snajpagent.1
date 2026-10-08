@@ -1912,6 +1912,8 @@ moves to the next visible event. Restoring detail returns to the original anchor
 until a navigation command selects another position. Redaction and binary escapes
 retain offsets into the original text, including when a source page starts midway
 through output. Older workspace positions are converted when loaded.
+Retained display history preserves these original offsets when newly configured
+secrets shorten or expand earlier text, including across streamed fragments.
 Positions saved before retained display history keep their original journal
 coordinates while held, including search and copying. G returns to the current
 display history and enables FOLLOW.
