@@ -519,6 +519,30 @@ class MCPTests(unittest.TestCase):
         self.assertFalse(files[0].exists())
         self.assertEqual(self.server.tokens[-1][0], '/revoke')
 
+    def test_oauth_saved_grant_handles_clock_discontinuity(self):
+        self.login()
+        self.server.oauth = True
+        file = next(p for p in (self.state / 'mcp-auth').iterdir() if '.' not in p.name)
+        self.run_cli('tools', 'fixture')
+        self.assertEqual(len(self.server.tokens), 1)
+        for direction in ('backward', 'forward'):
+            with self.subTest(direction=direction):
+                grant = json.loads(file.read_text())
+                now = int(time.time() * 1000)
+                if direction == 'backward':
+                    grant['issued_at_ms'] = now + 3600000
+                    grant['expires_at_ms'] = now + 7200000
+                else:
+                    grant['issued_at_ms'] = now - 7200000
+                    grant['expires_at_ms'] = now - 3600000
+                file.write_text(json.dumps(grant))
+                before = len(self.server.tokens)
+                self.run_cli('tools', 'fixture')
+                self.assertEqual(len(self.server.tokens), before + 1)
+                self.assertEqual(self.server.tokens[-1][1]['grant_type'], ['refresh_token'])
+                self.run_cli('tools', 'fixture')
+                self.assertEqual(len(self.server.tokens), before + 1)
+
     @unittest.skipIf(os.name == 'nt', 'Windows credentials use a private DACL')
     def test_oauth_private_posix_storage(self):
         self.login()
