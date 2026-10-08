@@ -61,6 +61,7 @@ static atomic_bool direct_busy;
 struct app_view_command {
     const char *line;
     json_t *snapshot, *selection;
+    int verbosity;
 };
 struct app_view_terminal {
     char id[SNAG_ID_HEX_LEN + 1u];
@@ -3485,20 +3486,20 @@ handle_common_command(
     }
     if (strcmp(line, "/help") == 0 || strcmp(line, "/?") == 0) return snag_app_help(app, NULL);
     if (snag_verbosity_command(line, strlen(line))) {
-        const char *value = line + 8u;
-        while (isspace((unsigned char)*value)) ++value;
-        if (*value && app->ui.input_interface) {
-            uint64_t level;
-            if (snag_parse_count(value, &level) < 0 || level > 6u)
-                return app_error(app, "usage: /verbose [0..6]");
-            if (snag_ui_set_verbosity(&app->ui, (unsigned int)level) < 0) return -1;
-            value = "";
-        }
-        if (!*value) {
-            unsigned int level = snag_ui_verbosity(&app->ui);
-            return app_reportf(app, "verbosity: %u (%s)%s", level, snag_verbosity_name(level),
-                snag_ui_view(&app->ui) == SNAG_RENDER_CHAT ? " · work detail is in /rollout" : "");
-        }
+        unsigned int level = snag_ui_verbosity(&app->ui);
+        bool pane = app->ui.input_interface && app->ui.input_verbosity >= 0;
+        if (pane) level = (unsigned int)app->ui.input_verbosity;
+        char feedback[192];
+        enum snag_render_view view = app->ui.input_interface ? app->ui.input_view :
+            snag_ui_view(&app->ui);
+        if (!snag_verbosity_apply(line, &level, view, feedback, sizeof(feedback)))
+            return app_error(app, feedback);
+#if SNAJPAGENT_VM
+        if (pane && app->view_command) app->view_command->verbosity = (int)level;
+#endif
+        if (!pane && level != snag_ui_verbosity(&app->ui) &&
+            snag_ui_set_verbosity(&app->ui, level) < 0) return -1;
+        return app_reportf(app, "%s", feedback);
     }
     if (strncmp(line, "/compact", 8u) == 0 && (!line[8] || isspace((unsigned char)line[8]))) {
         const char *rest = line + 8u;
@@ -3885,7 +3886,8 @@ view_control_publish(struct app_state *app, unsigned int index, bool interrupted
 
 static int
 view_command_complete(struct app_state *app, const char *id, const char *line,
-    const struct snag_buf *report, bool failed, bool terminal, json_t *snapshot, json_t *selection)
+    const struct snag_buf *report, bool failed, bool terminal, json_t *snapshot,
+    json_t *selection, int verbosity)
 {
     json_t *saved = snapshot ? json_incref(snapshot) : view_command_report(app, line, report);
     char error[256] = "";
@@ -3897,6 +3899,8 @@ view_command_complete(struct app_state *app, const char *id, const char *line,
     json_decref(saved);
     int rc = result ? 0 : -1;
     if (!rc && selection) rc = json_object_set(result, "selection", selection);
+    if (!rc && !failed && verbosity >= 0)
+        rc = json_object_set_new(result, "verbosity", json_integer(verbosity));
     if (!rc) rc = snag_ui_command_result(&app->ui, result);
     json_decref(result);
     return rc;
@@ -3917,8 +3921,8 @@ view_terminal_finish(struct app_state *app)
 {
     struct app_view_terminal *command = app->view_terminal;
     if (!command || command->dispatching || command->controls || command->pager) return 0;
-    int rc = view_command_complete(
-        app, command->id, command->command, &command->report, command->failed, true, NULL, NULL);
+    int rc = view_command_complete(app, command->id, command->command, &command->report,
+        command->failed, true, NULL, NULL, -1);
     view_terminal_free(app);
     return rc;
 }
@@ -3987,7 +3991,7 @@ view_input_command(
     app->ui.command_report = &report;
     app->ui.command_report_passthrough = terminal;
     app->ui.command_error = false;
-    struct app_view_command capture = {.line = line};
+    struct app_view_command capture = {.line = line, .verbosity = -1};
     struct app_view_command *previous_capture = app->view_command;
     app->view_command = terminal ? NULL : &capture;
     rc = input_command(app, line, active, handled, prompt_ready);
@@ -4007,8 +4011,8 @@ view_input_command(
         int completed = view_terminal_finish(app);
         return rc < 0 ? rc : completed;
     }
-    int published = view_command_complete(
-        app, id, line, &report, failed, false, capture.snapshot, capture.selection);
+    int published = view_command_complete(app, id, line, &report, failed, false,
+        capture.snapshot, capture.selection, capture.verbosity);
     json_decref(capture.selection);
     json_decref(capture.snapshot);
     snag_buf_free(&report);

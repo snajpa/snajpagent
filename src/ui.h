@@ -18,6 +18,7 @@ struct snag_ui {
     bool active, input_active, input_echoed, input_view_applied;
     bool input_error;
     bool input_interface, input_terminal_command;
+    int input_verbosity;
     /* Engine-local capture for the duration of semantic command dispatch. */
     struct snag_buf *command_report;
     bool command_error, command_report_passthrough;

@@ -74,6 +74,7 @@ struct ui_action {
     uint64_t received_ms;
     uint64_t attachment;
     bool interface_input, terminal_command;
+    int verbosity;
     char view_request[SNAG_ID_HEX_LEN + 1u];
     enum snag_term_action action;
     char *text;
@@ -246,21 +247,9 @@ set_level(struct snag_ui_display *display, unsigned int level)
 static void
 verbosity_command(struct snag_ui_display *display, const char *text)
 {
-    const char *value = text + 8u;
-    while (isspace((unsigned char)*value)) ++value;
-    if (*value) {
-        const char *end = value + 1u;
-        while (isspace((unsigned char)*end)) ++end;
-        if (*value < '0' || *value > '6' || *end) {
-            (void)snprintf(display->feedback, sizeof(display->feedback),
-                "/verbose expects one integer from 0 through 6");
-            return;
-        }
-        (void)set_level(display, (unsigned int)(*value - '0'));
-    }
-    (void)snprintf(display->feedback, sizeof(display->feedback), "verbosity: %u (%s)%s",
-        display->render.verbosity, snag_verbosity_name(display->render.verbosity),
-        display->render.view == SNAG_RENDER_CHAT ? " · work detail is in /rollout" : "");
+    unsigned int level = display->render.verbosity;
+    if (snag_verbosity_apply(text, &level, display->render.view,
+        display->feedback, sizeof(display->feedback))) (void)set_level(display, level);
 }
 
 static int
@@ -1046,7 +1035,7 @@ view_selects_conversation(const char *text)
 
 static int
 view_submit(void *opaque, const char *id, const char *text, const json_t *route,
-    uint64_t generation, bool terminal, bool queued)
+    uint64_t generation, bool terminal, bool queued, int verbosity)
 {
     struct snag_ui_display *display = opaque;
     struct snag_ui_runtime *runtime = display->runtime;
@@ -1067,6 +1056,7 @@ view_submit(void *opaque, const char *id, const char *text, const json_t *route,
     item->attachment = generation;
     item->interface_input = true;
     item->terminal_command = terminal;
+    item->verbosity = verbosity;
     if (terminal) {
         if (snag_term_hide(&display->term) < 0) {
             free(item->text);
@@ -3026,6 +3016,7 @@ snag_ui_poll(struct snag_ui *ui, int timeout_ms, enum snag_term_action *action, 
     ui->input_echoed = false;
     ui->input_error = false;
     ui->input_interface = ui->input_terminal_command = false;
+    ui->input_verbosity = -1;
     if (ui->view_request[0] &&
         snag_ui_view_result(ui, ui->view_request, "rejected", 0u, "input was not admitted") < 0)
         return -1;
@@ -3100,6 +3091,7 @@ snag_ui_poll(struct snag_ui *ui, int timeout_ms, enum snag_term_action *action, 
     ui->input_error = item->input_error;
     ui->input_terminal_command = item->terminal_command;
     ui->input_interface = item->interface_input && !item->terminal_command;
+    ui->input_verbosity = ui->input_interface ? item->verbosity : -1;
     ui->input_view = item->snapshot.view;
     ui->input_active = item->snapshot.active;
     ui->input_route = item->route;

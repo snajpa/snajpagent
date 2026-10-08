@@ -38,6 +38,8 @@ bool snag_presentation_enabled(
     enum snag_presentation kind, unsigned int level, enum snag_render_view view);
 size_t snag_presentation_limit(enum snag_presentation kind, unsigned int level);
 const char *snag_verbosity_name(unsigned int level);
+/* Parse /verbose and format the common feedback; invalid input preserves level. */
+bool snag_verbosity_apply(const char *, unsigned int *, enum snag_render_view, char *, size_t);
 
 struct snag_render_record;
 

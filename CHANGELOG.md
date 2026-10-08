@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Make `/verbose` reformat the submitting workspace pane and report its own level,
+  sharing standalone command parsing and preserving other panes' settings.
+
 - Retry a failed turn from its workspace pane without switching terminals.
   Active retries keep using the session's safe request boundary.
 

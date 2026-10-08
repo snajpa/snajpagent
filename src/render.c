@@ -7,6 +7,7 @@
 #include "store_binary_checkpoint.h"
 #include "store_binary_legacy.h"
 
+#include <ctype.h>
 #include <errno.h>
 #include <limits.h>
 #include <pthread.h>
@@ -143,6 +144,26 @@ snag_verbosity_name(unsigned int level)
     static const char *const names[] = {
         "conversation", "tools", "previews", "full tools", "debug", "protocol", "wire"};
     return level <= SNAG_VERBOSITY_MAX ? names[level] : NULL;
+}
+
+bool
+snag_verbosity_apply(const char *text, unsigned int *level, enum snag_render_view view,
+    char *feedback, size_t size)
+{
+    const char *value = text + 8u;
+    while (isspace((unsigned char)*value)) ++value;
+    if (*value) {
+        const char *end = value + 1u;
+        while (isspace((unsigned char)*end)) ++end;
+        if (*value < '0' || *value > '6' || *end) {
+            (void)snprintf(feedback, size, "/verbose expects one integer from 0 through 6");
+            return false;
+        }
+        *level = (unsigned int)(*value - '0');
+    }
+    (void)snprintf(feedback, size, "verbosity: %u (%s)%s", *level, snag_verbosity_name(*level),
+        view == SNAG_RENDER_CHAT ? " · work detail is in /rollout" : "");
+    return true;
 }
 
 bool

@@ -363,6 +363,7 @@ struct view_receipt {
     struct view_draft *draft;
     char *command_text;
     bool pending, command, queued, terminal_dispatched;
+    int verbosity;
     uint64_t draft_revision, terminal_generation;
     struct view_receipt *next;
 };
@@ -655,7 +656,7 @@ snag_view_server_terminal(struct snag_view_server *server, const unsigned char *
         "status", "pending");
     if (!pending) return -1;
     int rc = server->callbacks.submit(server->callbacks.opaque, id, receipt->command_text,
-        receipt->draft->route, server->relay->generation, true, false);
+        receipt->draft->route, server->relay->generation, true, false, -1);
     if (rc < 0) { json_decref(pending); return -1; }
     receipt->terminal_dispatched = receipt->pending = true;
     receipt->terminal_generation = server->relay->generation;
@@ -759,6 +760,12 @@ submit(struct snag_view_server *server, struct view_peer *peer, const json_t *me
     if ((route && !writable_route(route)) || (command && !route) ||
         (queued && route && !json_is_string(route)))
         return refuse_request(peer, message, "unsupported submission route");
+    uint64_t level = 0u;
+    bool has_level = json_object_get(message, "verbosity") != NULL;
+    if (has_level && (!command || !snag_verbosity_command(text, strlen(text)) ||
+        snag_json_integer_u64(message, "verbosity", &level) < 0 || level > SNAG_VERBOSITY_MAX))
+        return refuse_request(peer, message, "invalid command verbosity");
+    int verbosity = has_level ? (int)level : -1;
     json_t *default_route = route ? NULL : json_string("rollout");
     struct view_draft *draft = route_draft(server, route ? route : default_route);
     json_decref(default_route);
@@ -768,7 +775,7 @@ submit(struct snag_view_server *server, struct view_peer *peer, const json_t *me
     struct view_receipt *receipt = find_receipt(server, id);
     if (receipt) {
         if (receipt->command != command || receipt->queued != queued || receipt->draft != draft ||
-            strcmp(receipt->sha256, digest))
+            receipt->verbosity != verbosity || strcmp(receipt->sha256, digest))
             return refuse_request(peer, message, "request ID already used");
         return reply(peer, json_incref(receipt->result));
     }
@@ -798,13 +805,14 @@ submit(struct snag_view_server *server, struct view_peer *peer, const json_t *me
     receipt->pending = true;
     receipt->command = command;
     receipt->queued = queued;
+    receipt->verbosity = verbosity;
     receipt->draft_revision = draft_revision;
     receipt->draft = draft;
     receipt->next = server->receipts;
     server->receipts = server->pending = receipt;
     peer->waiting = receipt;
     if (server->callbacks.submit(server->callbacks.opaque, id, text, draft->route,
-        peer->generation, false, queued) < 0)
+        peer->generation, false, queued, verbosity) < 0)
         return snag_view_server_result(server, id, "rejected", 0u, "admission unavailable");
     /* Pending is deliberately not an acceptance acknowledgement. The final
      * result is published by the engine only after its durable admission. */
@@ -829,7 +837,10 @@ dispatch(struct snag_view_server *server, struct view_peer *peer, const json_t *
             "type generation id text route draft_revision" : json_object_get(message, "route") ?
             "type generation id text route" : "type generation id text" :
             "type generation";
-    if (!snag_json_exact_keys(message, fields)) {
+    bool valid = !strcmp(type, "command") ?
+        snag_json_arg_keys(message, fields, "verbosity", NULL, 0u) :
+        snag_json_exact_keys(message, fields);
+    if (!valid) {
         if (!peer->hello) return snag_errno(EPROTO);
         return refuse_request(peer, message, "unsupported message fields");
     }
@@ -850,7 +861,8 @@ dispatch(struct snag_view_server *server, struct view_peer *peer, const json_t *
             json_decref(capabilities);
             return -1;
         }
-        if (!features || json_array_append_new(features, json_string("queue")) < 0) {
+        if (!features || json_array_append_new(features, json_string("command_verbosity")) < 0 ||
+            json_array_append_new(features, json_string("queue")) < 0) {
             json_decref(capabilities);
             return -1;
         }

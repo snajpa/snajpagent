@@ -28,7 +28,7 @@ submit(struct snag_vm_connection *connection, const char *text, uint64_t deadlin
     struct snag_vm_buffer *buffer = connection->rollout;
     while (!buffer->draft_ready || connection->channel.output) step(connection, deadline);
     assert(snag_vm_draft_replace(buffer, 0u, buffer->draft.len, text, strlen(text)) == 0);
-    assert(snag_vm_buffer_prepare(buffer, buffer, 1u, false) == 0);
+    assert(snag_vm_buffer_prepare(buffer, buffer, 1u, false, 0u) == 0);
     assert(snag_vm_buffer_send(buffer) == 0);
 }
 

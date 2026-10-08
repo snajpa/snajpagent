@@ -216,6 +216,30 @@ class CommandTests(unittest.TestCase):
         self.owner.wait_event('control_finished')
         self.assertFalse(any(e['type'] == 'input_received' for e in self.owner.events()))
 
+    def test_pane_verbosity_context_is_receipted_and_does_not_mutate_owner(self):
+        self.assertIn('command_verbosity', self.peer.capabilities['features'])
+        result = self.command('/verbose', verbosity=3)
+        self.assertEqual(result['verbosity'], 3)
+        self.assertIn(b'verbosity: 3', self.report(result))
+        changed = self.command('/verbose 2', verbosity=3)
+        self.assertEqual(changed['verbosity'], 2)
+        self.assertIn(b'verbosity: 2', self.report(changed))
+        self.assertIn(b'verbosity: 0', self.report(self.command('/verbose')))
+        invalid = self.command('/verbose 7', verbosity=3)
+        self.assertEqual(invalid['outcome'], 'error')
+        self.assertNotIn('verbosity', invalid)
+        self.assertIn(b'expects one integer', self.report(invalid))
+        request = self.peer.command('/verbose', verbosity=1)
+        receipt = self.peer.result(request)
+        self.peer.command('/verbose', request, verbosity=1)
+        self.assertEqual(self.peer.result(request), receipt)
+        self.peer.command('/verbose', request, verbosity=2)
+        self.assertEqual(self.peer.until('error')['id'], request)
+        for text, level in [('/verbose', 7), ('/fast', 2), ('/verbose', -1)]:
+            request = self.peer.command(text, verbosity=level)
+            self.assertEqual(self.peer.until('error')['id'], request)
+        self.assertEqual(self.owner.provider.requests, [])
+
     def test_history_report_exceeds_transport_frame(self):
         # A generated report spans many transport frames without putting its
         # contents in the receipt. The existing /history scan policy still applies.

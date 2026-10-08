@@ -1857,6 +1857,18 @@ detach_session(struct vm *vm)
 }
 
 static void
+window_verbosity(struct vm *vm, struct vm_window *window, unsigned int level)
+{
+    cancel_search(vm);
+    if (window->visual.kind) notice(vm, "Visual selection ended; register preserved");
+    window->visual.kind = SNAG_VM_SELECT_NONE;
+    window->yank_motion = window->yank_after_load = false;
+    window->verbosity = level;
+    queue_history(vm, window, LOAD_KEEP);
+    changed(vm);
+}
+
+static void
 command(struct vm *vm, const char *text)
 {
     char *word = NULL, error[256];
@@ -1950,13 +1962,7 @@ command(struct vm *vm, const char *text)
         if (window->kind != VIEW_TRANSCRIPT || snag_parse_count(rest, &level) < 0 ||
             level > SNAG_VERBOSITY_MAX) notice(vm, "Use :verbosity 0..6 in a transcript");
         else {
-            cancel_search(vm);
-            if (window->visual.kind) notice(vm, "Visual selection ended; register preserved");
-            window->visual.kind = SNAG_VM_SELECT_NONE;
-            window->yank_motion = window->yank_after_load = false;
-            window->verbosity = (unsigned int)level;
-            queue_history(vm, window, LOAD_KEEP);
-            changed(vm);
+            window_verbosity(vm, window, (unsigned int)level);
         }
     } else if (!strcmp(word, "set")) {
         if (!strcmp(rest, "ignorecase") || !strcmp(rest, "noignorecase")) {
@@ -2310,7 +2316,8 @@ submit_draft(struct vm *vm, bool queued)
         notice(vm, "Addressed composer has a retained submission; inspect its receipt");
         return;
     }
-    if (snag_vm_buffer_prepare(target, c, vm->windows[vm->focus].id, queued) < 0) {
+    if (snag_vm_buffer_prepare(target, c, vm->windows[vm->focus].id, queued,
+        vm->windows[vm->focus].verbosity) < 0) {
         notice(vm, errno == ENOTSUP ? !snag_vm_buffer_supported(target) ?
             "This owner does not support this conversation input" :
             "This owner needs :classic for slash commands" :
@@ -3609,6 +3616,17 @@ connections_step(struct vm *vm)
                 !vm->copying && !vm->navigating && !vm->mode &&
                 !vm->classic_pending && !vm->detach_exit && !vm->switch_workspace &&
                 !vm->detach_suspend && !vm->quit_all && !vm->quit_window;
+            if (b->level_ready) {
+                for (size_t j = 0u; j < vm->count; ++j) {
+                    struct vm_window *target = &vm->windows[j];
+                    if (!source || target->kind != VIEW_TRANSCRIPT ||
+                        target->id != b->request_window || window_buffer(vm, target) != source)
+                        continue;
+                    if (target->verbosity != b->result_level)
+                        window_verbosity(vm, target, b->result_level);
+                }
+                b->level_ready = false;
+            }
             if (b->report_open && source) {
                 struct snag_journal_cursor tail;
                 uint64_t seq = b->report_seq;

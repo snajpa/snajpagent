@@ -28,9 +28,9 @@ bound(void *opaque, uint64_t generation)
 
 static int
 submit(void *opaque, const char *id, const char *text, const json_t *route, uint64_t generation,
-    bool terminal, bool queued)
+    bool terminal, bool queued, int verbosity)
 {
-    assert(!queued);
+    assert(!queued && verbosity == -1);
     assert(!terminal && route);
     struct engine *engine = opaque;
     assert(strlen(id) == SNAG_ID_HEX_LEN && *text && generation == engine->generation);

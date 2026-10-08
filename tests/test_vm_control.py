@@ -326,6 +326,50 @@ class ControlTests(unittest.TestCase):
         self.assertEqual(len(provider.requests), 2)
         self.assertEqual(self.owner.identity(), self.owner.owner_identity)
 
+    def test_verbose_reprojects_only_the_submitting_pane(self):
+        provider = self.owner.provider
+
+        def respond(handler, request, sequence):
+            if sequence == 1:
+                body = provider.function_body(sequence, 'pane-verbosity', 'exec_command', {
+                    'cmd': "printf 'visible-tool-body\\n'", 'yield_time_ms': 10000,
+                    'max_output_tokens': 100})
+            else:
+                body = provider.response_body(sequence, 'verbosity-answer')
+            provider.reply(handler, body.encode())
+
+        provider.runtime_handler = respond
+        child = self.start('-N', 'pane-verbosity', rows=24, columns=180)
+        child.command('attach ' + self.owner.sid)
+        child.attached()
+        child.command('vsp')
+        child.write(b'irun tool\r')
+        child.until(b'verbosity-answer')
+        child.output.clear()
+        self.assertEqual(self.owner.identity(), self.owner.owner_identity)
+        os.kill(self.owner.owner, signal.SIGSTOP)
+        try:
+            child.write(b'/verbose 3\r')
+            self.wait_snapshot(lambda rows: any(
+                rollout(c)['pending'] for c in next(iter(rows.values()))['state']['buffers']))
+            self.escape(child)
+            child.write(b'\x17h')
+            child.read(.1)
+        finally:
+            os.kill(self.owner.owner, signal.SIGCONT)
+        child.until(b'verbosity: 3')
+        child.repaint_until(b'visible-tool-body')
+        saved = self.wait_snapshot(lambda rows: sorted(
+            w['history']['verbosity'] for w in
+            next(iter(rows.values()))['state']['windows']) == [0, 3])
+        self.assertTrue(saved)
+        child.output.clear()
+        child.write(b'\x17li/verbose\r')
+        child.until(b'verbosity: 3')
+        self.escape(child)
+        child.finish('workspace detach')
+        self.assertEqual(len(provider.requests), 2)
+
     def test_cancelled_draft_is_retained_without_submitting_it(self):
         from test_vm_mouse import current_rows
 

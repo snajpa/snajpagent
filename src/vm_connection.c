@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "vm_connection.h"
 #include "irc.h"
+#include "render.h"
 #include "vm_report.h"
 #include "vm_text.h"
 
@@ -264,7 +265,7 @@ snag_vm_connection_close(struct snag_vm_connection *connection)
     connection->reports_supported = connection->reports_subscribed = false;
     connection->drafts = connection->detaching = connection->detach_sent = false;
     connection->cancel_pending = false;
-    connection->feedback_supported = false;
+    connection->feedback_supported = connection->command_verbosity = false;
     json_decref(connection->feedback);
     connection->feedback = NULL;
     connection->draft_wait = connection->inflight = NULL;
@@ -529,7 +530,7 @@ snag_vm_connection_detach(struct snag_vm_connection *connection)
 
 static int
 prepare_input(struct snag_vm_buffer *buffer, struct snag_vm_buffer *source, uint64_t window,
-    bool queued, const char *literal)
+    bool queued, const char *literal, unsigned int verbosity)
 {
     struct snag_vm_connection *connection = buffer->connection;
     if (!snag_vm_buffer_writable(buffer) || !snag_vm_buffer_writable(source))
@@ -549,6 +550,11 @@ prepare_input(struct snag_vm_buffer *buffer, struct snag_vm_buffer *source, uint
     json_t *pending =
         json_pack("{s:s,s:s,s:s}", "id", id, "instance", connection->instance, "text", text);
     if (!pending) return -1;
+    if (connection->command_verbosity && !queued && snag_verbosity_command(text, strlen(text)) &&
+        json_object_set_new(pending, "verbosity", json_integer(verbosity)) < 0) {
+        json_decref(pending);
+        return -1;
+    }
     if ((queued && json_object_set_new(pending, "queued", json_true()) < 0) ||
         (literal && json_object_set_new(pending, "literal", json_true()) < 0)) {
         json_decref(pending);
@@ -582,16 +588,17 @@ prepare_input(struct snag_vm_buffer *buffer, struct snag_vm_buffer *source, uint
 
 int
 snag_vm_buffer_prepare(
-    struct snag_vm_buffer *buffer, struct snag_vm_buffer *source, uint64_t window, bool queued)
+    struct snag_vm_buffer *buffer, struct snag_vm_buffer *source, uint64_t window, bool queued,
+    unsigned int verbosity)
 {
-    return prepare_input(buffer, source, window, queued, NULL);
+    return prepare_input(buffer, source, window, queued, NULL, verbosity);
 }
 
 int
 snag_vm_buffer_upload(struct snag_vm_buffer *buffer, uint64_t window, bool directory)
 {
     if (!buffer->connection->terminal_commands) return snag_errno(ENOTSUP);
-    return prepare_input(buffer, buffer, window, false, directory ? "/receive -d" : "/receive");
+    return prepare_input(buffer, buffer, window, false, directory ? "/receive -d" : "/receive", 0u);
 }
 
 int
@@ -747,6 +754,11 @@ draft_sync(struct snag_vm_buffer *buffer)
             snag_json_string(buffer->pending, "id"), "text",
             snag_json_string(buffer->pending, "text"));
         if (!request) return -1;
+        json_t *verbosity = json_object_get(buffer->pending, "verbosity");
+        if (verbosity && json_object_set(request, "verbosity", verbosity) < 0) {
+            json_decref(request);
+            return -1;
+        }
         if ((command || json_is_object(buffer->route)) &&
             json_object_set(request, "route", buffer->route) < 0) {
             json_decref(request);
@@ -909,6 +921,8 @@ receive(struct snag_vm_connection *connection, const json_t *value)
             if (feature && !strcmp(feature, "irc_connections")) connection->irc_connections = true;
             if (feature && !strcmp(feature, "commands")) connection->commands = true;
             if (feature && !strcmp(feature, "queue")) connection->queue = true;
+            if (feature && !strcmp(feature, "command_verbosity"))
+                connection->command_verbosity = true;
             if (feature && !strcmp(feature, "terminal_commands"))
                 connection->terminal_commands = true;
             if (feature && !strcmp(feature, "reports")) connection->reports_supported = true;
@@ -1095,6 +1109,25 @@ receive(struct snag_vm_connection *connection, const json_t *value)
             json_t *selection = json_object_get(value, "selection");
             if (selection && (!command || !json_is_object(selection) || !valid_route(selection)))
                 return snag_errno(EPROTO);
+            json_t *verbosity = json_object_get(value, "verbosity");
+            if (verbosity) {
+                uint64_t level;
+                if (!command || !json_object_get(buffer->pending, "verbosity") ||
+                    strcmp(snag_json_string(value, "outcome"), "ok") ||
+                    snag_json_integer_u64(value, "verbosity", &level) < 0 ||
+                    level > SNAG_VERBOSITY_MAX) return snag_errno(EPROTO);
+                buffer->result_level = (unsigned int)level;
+                buffer->level_ready = true;
+            } else if (command && !connection->command_verbosity &&
+                !strcmp(snag_json_string(value, "outcome"), "ok")) {
+                const char *text = snag_json_string(buffer->pending, "text");
+                if (snag_verbosity_command(text, strlen(text)) &&
+                    !snag_text_blank(text + 8u)) {
+                    char feedback[192];
+                    buffer->level_ready = snag_verbosity_apply(text, &buffer->result_level,
+                        SNAG_RENDER_ROLLOUT, feedback, sizeof(feedback));
+                }
+            }
             json_decref(buffer->selection);
             buffer->selection = json_incref(selection);
             json_decref(buffer->pending);
@@ -1401,14 +1434,20 @@ load_buffer(struct snag_vm_connection *connection, const json_t *row, bool legac
     if ((queued && !json_is_true(json_object_get(pending, "queued"))) ||
         (literal && (origin || queued || !json_is_true(json_object_get(pending, "literal")) ||
                         !text || (strcmp(text, "/receive") && strcmp(text, "/receive -d")))) ||
-        !snag_json_exact_keys(pending,
+        !snag_json_arg_keys(pending,
             literal  ? "id instance text literal"
             : queued ? origin ? "id instance text origin queued" : "id instance text queued"
             : origin ? "id instance text origin"
-                     : "id instance text") ||
+                     : "id instance text", "verbosity", NULL, 0u) ||
         !id || !instance || !text || !snag_hex_is_lower(id, SNAG_ID_HEX_LEN) ||
         !snag_hex_is_lower(instance, SNAG_ID_HEX_LEN))
         return -1;
+    if (json_object_get(pending, "verbosity")) {
+        uint64_t level;
+        if (queued || literal || origin || !snag_verbosity_command(text, strlen(text)) ||
+            snag_json_integer_u64(pending, "verbosity", &level) < 0 ||
+            level > SNAG_VERBOSITY_MAX) return -1;
+    }
     if (origin) {
         const char *session =
             snag_json_bounded_string(json_object_get(origin, "session"), SNAG_ID_HEX_LEN);

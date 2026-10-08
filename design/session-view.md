@@ -334,3 +334,22 @@ request deduplication across routes, nickname reuse, active-provider privacy,
 query catalogue/reconnect, incoming queries and preserved classic focus.
 `tests/test_session_draft.c` withholds engine admission to verify deterministic
 cross-conversation edit/clear ordering and connection-epoch draft isolation.
+
+## Pane verbosity
+
+The optional `command_verbosity` capability allows `/verbose` requests to carry
+`verbosity`, the submitting pane's current level. The shared renderer helper
+parses the command and formats the same feedback as the standalone UI. The owner
+returns the resulting level in the completed receipt without changing its own
+renderer. Invalid levels and context attached to other commands are refused;
+request-ID deduplication includes the supplied level.
+
+The workspace retains this context with its pending command and applies a
+successful result only to the original window while it still views that buffer.
+The existing Ex verbosity path owns reprojection, selection invalidation and
+reading-position preservation for both callers. A closed or repurposed window
+receives no effect. Older saved submissions remain readable; older owners receive
+the previous request shape, with explicit level changes also applied to the pane.
+Argumentless queries to older owners report their standalone level. Retained
+pending commands with pane context require a workspace build supporting this
+capability for restoration.
