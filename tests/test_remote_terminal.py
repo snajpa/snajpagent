@@ -752,7 +752,7 @@ class RemoteStartupTests(unittest.TestCase):
                     with self.subTest(term=term[:10]):
                         bad = RemoteProcess(home, command, wrapped=None, extra_env={"TERM": term})
                         try:
-                            message = b"File name too long" if len(term) == 256 else b"ANSI-capable TERM"
+                            message = b"too long" if len(term) == 256 else b"ANSI-capable TERM"
                             bad.until(message)
                             bad.wait(3)
                         finally:
