@@ -3484,3 +3484,10 @@ receipt rows, in sequence order, using authenticated indexed projection. The
 ordinary source-closure pass resolves their IRC dependencies. Covered IRC receipts
 validate the snapshot and keep their summary representation; direct pending input
 is preserved. Damaged or missing receipts fail restoration before state adoption.
+
+Incremental projection may have already walked a receipt while it was deferred.
+When admission makes that receipt eligible, the cache checks its matched-input
+count before accepting the update. An incomplete match rebuilds from the retained
+seam, then applies the ordinary active-turn and snapshot checks. This preserves
+incremental updates for new receipts and restores older deferred input across a
+turn boundary. Failed updates leave the source seam available for retry.

@@ -2592,6 +2592,9 @@ Presentation, steering and tool yield act on current work.  Text received at an
 idle rollout prompt just before work starts retains its future-turn meaning;
 following commands remain responsive.
 .PP
+Deferred direct and IRC input enters the next eligible turn, including after
+resume. Its admission refreshes the response context from saved input.
+.PP
 Public response text is saved incrementally before display.  Recovery continues
 the original turn from saved inputs, public output and tool results.  Started
 calls without durable results are reported as outcome unknown; unstarted calls

@@ -3720,6 +3720,10 @@ context_cache_update(struct snag_context_capture *cache, struct snag_session *se
             }
         }
     }
+    /* A prior request may have skipped a deferred receipt. Once admitted,
+     * that input needs the retained seam again even if only its admission
+     * event is new. Never publish an incomplete view as the retry cache. */
+    if (view->steering_seen != json_array_size(steering)) return 1;
     json_t *snapshot = json_deep_copy(steering);
     if (!snapshot || json_array_clear(cache->pending) < 0) {
         json_decref(snapshot);

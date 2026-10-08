@@ -3094,6 +3094,93 @@ test_deferred_steering_replay(struct snag_store *store, const char *cwd)
 }
 
 static void
+test_deferred_steering_cache_admission(struct snag_store *store, const char *cwd)
+{
+    const char *old = "ed100000000000000000000000000000";
+    const char *turn = "ed200000000000000000000000000000";
+    const char *reply = "ed300000000000000000000000000000";
+    const char *steer = "ed400000000000000000000000000000";
+    const char *text = "retain this deferred instruction";
+    for (unsigned int legacy = 0u; legacy < 2u; ++legacy) {
+        for (unsigned int room = 0u; room < 2u; ++room) {
+            for (unsigned int resume = 0u; resume < 2u; ++resume) {
+                struct snag_session session;
+                struct snag_context_projection projection = {0};
+                char error[512] = "";
+                char id[SNAG_ID_HEX_LEN + 1u];
+                json_t *empty = json_array();
+                if (legacy) create_legacy_session(store, &session, cwd, "medium");
+                else create_session(store, &session, cwd, "medium");
+                memcpy(id, session.id, sizeof(id));
+                commit_event(&session, "turn_started",
+                    turn_started(old, 1u, "finish current work", cwd, NULL));
+                commit_event(&session, "response_started", response_started(old, reply, NULL));
+                commit_event(&session, "response_completed",
+                    response_completed(old, reply, "current work complete"));
+                commit_event(&session, "steering_deferred", json_pack("{s:s}", "turn_id", old));
+                if (room) {
+                    struct snag_irc_event event = {.kind = SNAG_IRC_MESSAGE,
+                        .timestamp_ms = 1u, .endpoint = "fixture:1234", .room = "#lab",
+                        .nick = "peer", .stream = "11111111111111111111111111111111",
+                        .sequence = 1u, .input = true};
+                    assert(snag_strcpy(event.text, sizeof(event.text), text));
+                    commit_event(&session, "irc_event", snag_irc_event_data(&event));
+                    commit_event(&session, "irc_admitted",
+                        json_pack("{s:[I],s:o}", "sequences",
+                            (json_int_t)session.irc_received_seq, "steering",
+                            steering_added(old, steer, text)));
+                } else {
+                    commit_event(&session, "steering_added", steering_added(old, steer, text));
+                }
+                /* This successful request consumes the cached event while its
+                 * input still belongs to the following turn. */
+                build_context_cached(&session, 2u, empty, NULL, &projection);
+                snag_context_projection_free(&projection);
+                if (resume) {
+                    assert(!snag_session_checkpoint(&session, error, sizeof(error)));
+                    snag_session_close(&session);
+                    assert(!snag_session_open(store, &session, id, error, sizeof(error)));
+                    build_context_cached(&session, 2u, empty, NULL, &projection);
+                    snag_context_projection_free(&projection);
+                }
+                commit_event(&session, "turn_completed", turn_completed(old, reply));
+                commit_event(&session, "turn_started",
+                    turn_started(turn, 2u, "continue with pending input", cwd, NULL));
+                commit_event(&session, "input_admitted",
+                    json_pack("{s:[s],s:I,s:s}", "steering_ids", steer, "time_ms",
+                        (json_int_t)1788739291000LL, "turn_id", turn));
+                json_t *snapshot = json_pack("[{s:s,s:s}]", "id", steer, "text", text);
+                /* The first projection and repeated retries must see the same
+                 * admitted message; state-only resume uses the same contract. */
+                for (unsigned int retry = 0u; retry < 2u; ++retry) {
+                    build_context(&session, 1u, snapshot, NULL, &projection);
+                    json_t *input = json_object_get(projection.create_request.value, "input");
+                    assert(message_matching(input, text));
+                    snag_context_projection_free(&projection);
+                }
+                assert(!snag_session_checkpoint(&session, error, sizeof(error)));
+                snag_session_close(&session);
+                assert(!snag_session_open(store, &session, id, error, sizeof(error)));
+                build_context(&session, 1u, snapshot, NULL, &projection);
+                assert(message_matching(
+                    json_object_get(projection.create_request.value, "input"), text));
+                snag_context_projection_free(&projection);
+                assert(!json_object_set_new(json_array_get(snapshot, 0u), "text",
+                    json_string("different instruction")));
+                assert(snag_context_build(&session, SNAJPAGENT_MODEL, "medium", 1u,
+                    snapshot, 0u, false, NULL, NULL, NULL, NULL, &projection,
+                    error, sizeof(error), NULL) < 0);
+                assert(strstr(error, "steering"));
+                snag_context_projection_free(&projection);
+                json_decref(snapshot);
+                json_decref(empty);
+                snag_session_close(&session);
+            }
+        }
+    }
+}
+
+static void
 test_reasoning_continuation(struct snag_store *store, const char *cwd)
 {
     struct snag_session session;
@@ -6298,6 +6385,7 @@ main(int argc, char **argv)
     test_unsettled_final_recovery_guidance(&store, cwd);
     test_rebased_active_compaction_after_trim(&store, cwd);
     test_deferred_steering_replay(&store, cwd);
+    test_deferred_steering_cache_admission(&store, cwd);
     test_public_phase_compaction(&store, cwd);
     test_context_meter_usage(&store, cwd);
     test_cache_accounting(&store, cwd);

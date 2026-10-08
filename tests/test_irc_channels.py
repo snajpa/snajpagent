@@ -310,7 +310,7 @@ class HostedStatusTests(StatusReport, QueryFixture):
 
 
 class ReminderTests(ChannelFixture):
-    def deferred_reminder(self, pending):
+    def deferred_reminder(self, pending, cached=False):
         calls = []
         requests = []
 
@@ -329,7 +329,12 @@ class ReminderTests(ChannelFixture):
                 self.held.set()
                 if not self.release.wait(10):
                     raise AssertionError('deferred response was not released')
-                wire = self.provider.response_body(sequence, 'deferred turn finished')
+                if cached and len(calls) == 1:
+                    calls.append('cached')
+                    wire = self.provider.function_body(sequence, 'intermediate-cwd',
+                                                       'get_cwd', {})
+                else:
+                    wire = self.provider.response_body(sequence, 'deferred turn finished')
             self.provider.reply(handler, wire.encode(), close_header=True)
             handler.close_connection = True
 
@@ -365,7 +370,7 @@ class ReminderTests(ChannelFixture):
         events = [e for e in self.events() if e['seq'] > before]
         self.assertFalse(any(e['type'] in ('irc_reply_reminder', 'turn_failed') for e in events))
         self.assertEqual(sum(e['type'] == 'response_started' and
-                         e['data']['turn_id'] == turn for e in events), 2)
+                         e['data']['turn_id'] == turn for e in events), 3 if cached else 2)
         self.assertNotIn('cannot stage', self.term.output.decode(errors='replace'))
         if pending == 'irc':
             self.submit('next-explicit-turn')
@@ -384,6 +389,15 @@ class ReminderTests(ChannelFixture):
             self.assertEqual(len(admitted), 1)
             self.assertNotEqual(admitted[0]['data']['turn_id'], turn)
             self.assertIn('queued-after-deferral', json.dumps(requests[-1]['input']))
+
+    def test_cached_deferred_input_enters_next_turn(self):
+        self.deferred_reminder(True, cached=True)
+
+    def test_cached_deferred_input_enters_next_turn_legacy(self):
+        self.deferred_reminder(True, cached=True)
+
+    def test_cached_deferred_irc_enters_next_turn(self):
+        self.deferred_reminder('irc', cached=True)
 
     def test_deferred_reply_with_pending_input(self):
         self.deferred_reminder(True)

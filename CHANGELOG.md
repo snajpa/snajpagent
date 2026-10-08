@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Rebuild cached response context when previously deferred input is admitted.
+  Direct and IRC steering carry into the next turn without an active-turn
+  projection error or repeated retries.
+
 - Bound the recent verbatim messages retained by streamed Codex compaction.
   Repeated compactions no longer accumulate the entire user-role history beside
   each encrypted summary. Complete original messages remain in session history.
