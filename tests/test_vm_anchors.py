@@ -83,9 +83,10 @@ class AnchorTests(unittest.TestCase):
                      event['type'] in ('response_output', 'response_completed'))
         key = event['data']['response_id'] + '/0'
         byte = len((prefix + 'anchor-marker-' + '界' * 3).encode())
-        child = self.start('-N', 'source', columns=27)
+        child = self.start('-N', 'source', columns=80)
         child.command('history ' + journal.parent.name)
         child.repaint_until(b'--resume')
+        child.resize(12, 27)
         child.finish('qa')
         path, = (self.root / 'state' / 'workspaces').glob('*/workspace.json')
         saved = json.loads(path.read_text())

@@ -275,9 +275,12 @@ snag_binary_checkpoint_encoder_init(struct snag_binary_checkpoint_encoder *out,
     if (!snag_size_add(frame->core.size, frame->provider.size, &size) ||
         !snag_size_add(size, frame->access.size, &size) ||
         !snag_size_add(size, SNAG_BINARY_CHECKPOINT_HEADER_SIZE +
-            SNAG_BINARY_CHECKPOINT_FOOTER_SIZE, &size) || size > INT64_MAX) {
+            SNAG_BINARY_CHECKPOINT_FOOTER_SIZE, &size)) {
         return snag_errno(EOVERFLOW);
     }
+#if SIZE_MAX > INT64_MAX
+    if (size > INT64_MAX) return snag_errno(EOVERFLOW);
+#endif
     struct snag_binary_checkpoint_encoder encoder = {.frame = *frame, .total = size};
     unsigned char *header = encoder.header;
     memcpy(header, checkpoint_magic, sizeof(checkpoint_magic));

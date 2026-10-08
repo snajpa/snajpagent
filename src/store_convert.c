@@ -9,7 +9,6 @@
 #include "store_internal.h"
 
 #include <errno.h>
-#include <inttypes.h>
 #include <pthread.h>
 #include <signal.h>
 #include <stdatomic.h>
@@ -55,9 +54,11 @@ conversion_processors(void)
     SYSTEM_INFO info;
     GetSystemInfo(&info);
     return info.dwNumberOfProcessors ? info.dwNumberOfProcessors : 1u;
-#else
+#elif defined(_SC_NPROCESSORS_ONLN)
     long count = sysconf(_SC_NPROCESSORS_ONLN);
     return count > 0 ? (size_t)count : 1u;
+#else
+    return 1u;
 #endif
 }
 
@@ -231,7 +232,7 @@ conversion_usage(FILE *stream)
 {
     (void)fprintf(stream, "Usage: snajpagent convert [--dotdir DIR] [--jobs N]\n"
         "Convert stopped saved sessions to native storage, retaining original journals.\n"
-        "Default jobs: online processors, bounded by discovered session count.\n");
+        "Default jobs: online processors (one if unavailable), bounded by session count.\n");
 }
 
 int
@@ -312,9 +313,9 @@ snag_convert_main(int argc, char **argv)
     for (size_t i = 0u; i < started; ++i) (void)pthread_join(threads[i], NULL);
     if (interrupt != SIG_ERR) (void)signal(SIGINT, interrupt);
     if (terminate != SIG_ERR) (void)signal(SIGTERM, terminate);
-    (void)printf("Converted: %" PRIu64 "; already-current: %" PRIu64
-        "; skipped: %" PRIu64 "; failed: %" PRIu64 "%s\n",
-        pool.counts[CONVERTED], pool.counts[CURRENT], pool.counts[SKIPPED], pool.counts[FAILED],
+    (void)printf("Converted: %llu; already-current: %llu; skipped: %llu; failed: %llu%s\n",
+        (unsigned long long)pool.counts[CONVERTED], (unsigned long long)pool.counts[CURRENT],
+        (unsigned long long)pool.counts[SKIPPED], (unsigned long long)pool.counts[FAILED],
         conversion_cancelled(NULL) ? "; interrupted" : "");
     rc = conversion_cancelled(NULL) ? 130 :
         (pool.counts[FAILED] || pool.enumeration_failed || startup_failed ? 1 : 0);

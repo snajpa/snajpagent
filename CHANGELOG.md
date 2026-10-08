@@ -6,6 +6,8 @@
 
 - Keep Windows redirected input responsive while waiting for an OAuth callback,
   and retain nanosecond file-change checks on supported BSD targets.
+  Keep native checkpoint and conversion builds compatible with 32-bit and older
+  BSD targets.
 
 - Add native MCP tools over current and initialized Streamable HTTP, with
   registered-client OAuth/PKCE, private credentials, catalog notifications and

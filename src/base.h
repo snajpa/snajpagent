@@ -21,6 +21,10 @@
 #define EPROTO EIO /* Old BSD has no distinct protocol-error number. */
 #endif
 
+#ifndef EBADMSG
+#define EBADMSG EINVAL /* Old BSD uses invalid data for malformed stored records. */
+#endif
+
 #ifndef ESTALE
 #define ESTALE EAGAIN /* Retry stale state from a fresh snapshot. */
 #endif

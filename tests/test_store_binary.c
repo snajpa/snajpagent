@@ -789,7 +789,7 @@ test_checkpoint_access(struct snag_binary_checkpoint_frame frame)
         if (fault == 2u) bad.access.size = 0u;
         if (fault == 3u) bad.access.size = SIZE_MAX;
         if (fault == 4u) bad.access.size = SIZE_MAX - bad.core.size - bad.provider.size;
-        if (fault == 5u) bad.access.size = INT64_MAX;
+        if (fault == 5u) bad.access.size = SIZE_MAX < INT64_MAX ? SIZE_MAX : (size_t)INT64_MAX;
         struct snag_binary_checkpoint_encoder encoder, saved;
         memset(&encoder, 0x5a, sizeof(encoder));
         memcpy(&saved, &encoder, sizeof(saved));

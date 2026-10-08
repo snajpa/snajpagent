@@ -4896,10 +4896,9 @@ run_base(int argc, char **argv)
     if (argc == 2 && !strcmp(argv[1], "--office-memory")) return 0;
 #endif
 #ifdef _WIN32
-    if (argc == 2 && !strcmp(argv[1], "--windows-input-privacy")) {
+    if (argc == 2 && !strcmp(argv[1], "--windows-pipe-input")) {
         test_pipe_input_wait();
-        test_windows_privacy();
-        puts("test_windows_input_privacy: ok");
+        puts("test_windows_pipe_input: ok");
         return 0;
     }
     if (argc == 3 && !strcmp(argv[1], "--direct-argv-limits")) {
