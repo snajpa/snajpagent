@@ -7,6 +7,41 @@
 #include <string.h>
 
 static void
+conversation_routes(void)
+{
+    struct snag_irc_conversation_target target = {
+        .connection = "22222222222222222222222222222222",
+        .conversation = "33333333333333333333333333333333",
+        .generation = 42u, .identity = SNAG_IRC_OPERATOR, .kind = SNAG_IRC_QUERY,
+        .peer = "peer", .endpoint = "localhost:6667", .room = "#work",
+        .membership = "44444444444444444444444444444444", .casemapping = SNAG_IRC_RFC1459};
+    json_t *expected = json_pack("{s:s,s:s,s:i,s:s,s:s}",
+        "connection", "22222222222222222222222222222222",
+        "conversation", "33333333333333333333333333333333", "generation", 42,
+        "identity", "operator", "peer", "peer");
+    assert(expected);
+    for (unsigned int variant = 0u; variant < 3u; ++variant) {
+        if (variant == 1u) {
+            target.kind = SNAG_IRC_CONNECTION_EVENTS;
+            target.identity = SNAG_IRC_AGENT;
+            assert(!json_object_del(expected, "peer"));
+            assert(!json_object_set_new(expected, "identity", json_string("agent")));
+            assert(!json_object_set_new(expected, "endpoint", json_string("localhost:6667")));
+        } else if (variant == 2u) {
+            target.kind = SNAG_IRC_CHANNEL;
+            assert(!json_object_set_new(expected, "room", json_string("#work")));
+            assert(!json_object_set_new(expected, "membership",
+                json_string("44444444444444444444444444444444")));
+            assert(!json_object_set_new(expected, "casemapping", json_integer(SNAG_IRC_RFC1459)));
+        }
+        json_t *route = snag_irc_conversation_route(&target);
+        assert(route && json_equal(route, expected));
+        json_decref(route);
+    }
+    json_decref(expected);
+}
+
+static void
 nickname_mappings(void)
 {
     assert(snag_irc_name_equal(SNAG_IRC_ASCII, "Peer", "peer"));
@@ -428,6 +463,7 @@ directory_update_test(void)
 int
 main(void)
 {
+    conversation_routes();
     nickname_mappings();
     privacy_and_provenance();
     channel_membership();

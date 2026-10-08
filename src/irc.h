@@ -135,6 +135,7 @@ struct snag_irc_conversation_target {
     char membership[SNAG_ID_HEX_LEN + 1u];
     char endpoint[SNAG_CONFIG_IRC_ENDPOINT_MAX + 1u];
 };
+json_t *snag_irc_conversation_route(const struct snag_irc_conversation_target *);
 /* Returns an owned array, empty when the captured destination is stale. */
 json_t *snag_irc_completion_names(
     const json_t *, const struct snag_irc_conversation_target *, enum snag_irc_casemapping *);

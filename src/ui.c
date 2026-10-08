@@ -214,7 +214,7 @@ editor_feedback(void *opaque, enum snag_term_feedback kind, const char *label, c
 {
     struct snag_ui_display *display = opaque;
     json_t *route = display->term.chat ?
-        snag_view_conversation_route(&display->term.conversation) : json_null();
+        snag_irc_conversation_route(&display->term.conversation) : json_null();
     if (!route) return -1;
     int rc = view_feedback(display, route, kind, label, text);
     json_decref(route);
@@ -226,7 +226,7 @@ present_local(struct snag_ui_display *display, enum snag_ui_operation kind, cons
     const char *text, bool input, const struct ui_snapshot *origin)
 {
     json_t *route = origin && origin->view == SNAG_RENDER_CHAT ?
-        snag_view_conversation_route(&origin->conversation) : json_null();
+        snag_irc_conversation_route(&origin->conversation) : json_null();
     if (!route) return -1;
     struct snag_ui_command command = {
         .kind = kind, .label = label, .text = text, .data.value = input, .route = route};
@@ -2440,7 +2440,7 @@ static int
 send_input_message(struct snag_ui *ui, struct ui_message *message, const char *text)
 {
     json_t *route = ui->input_view == SNAG_RENDER_CHAT ?
-        snag_view_conversation_route(&ui->input_conversation) : json_null();
+        snag_irc_conversation_route(&ui->input_conversation) : json_null();
     if (!route) return -1;
     message->command.route = route;
     int rc = send_message(ui, message, text);
@@ -2577,7 +2577,7 @@ view_conversations(const struct snag_session *session, enum snag_irc_conversatio
                                   : SNAG_IRC_AGENT;
             if (wanted == SNAG_IRC_CONNECTION_EVENTS && target.identity == SNAG_IRC_AGENT) continue;
             (void)snag_json_integer_u64(routing, "generation", &target.generation);
-            json_t *route = snag_view_conversation_route(&target);
+            json_t *route = snag_irc_conversation_route(&target);
             uint64_t seq = (uint64_t)json_integer_value(json_object_get(item, "seq"));
             json_t *activity =
                 wanted == SNAG_IRC_CONNECTION_EVENTS

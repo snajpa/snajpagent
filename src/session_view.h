@@ -44,7 +44,6 @@ struct snag_irc_query_target;
 json_t *snag_view_query_route(const struct snag_irc_query_target *);
 int snag_view_query_read(const json_t *, struct snag_irc_query_target *);
 struct snag_irc_conversation_target;
-json_t *snag_view_conversation_route(const struct snag_irc_conversation_target *);
 int snag_view_conversation_read(const json_t *, struct snag_irc_conversation_target *);
 const char *snag_view_conversation_name(const json_t *);
 

@@ -298,7 +298,9 @@ requests and wakes the frontend only when a current result is ready.
 The grid composes UTF-8 graphemes into a back frame and publishes differences
 only after successful output. Unicode 17 tables supply shared cluster boundaries
 and width policy; all 766 official grapheme-boundary cases pass locally.
-The build switch `WITH_VM=0` omits these optional workspace objects.
+The build switch `WITH_VM=0` omits these optional workspace objects. Conversation
+route encoding lives with the shared IRC events and remains available to standalone
+presentation when Vim is omitted. Shared Unicode editing also remains available.
 Private workspace storage now supports atomic snapshots, unique names and ID
 prefixes, exclusive ownership and open-first activity ordering. Probes preserve
 existing locks; a lost frontend leaves a resumable snapshot.

@@ -5,6 +5,24 @@
 #include <errno.h>
 #include <string.h>
 
+json_t *
+snag_irc_conversation_route(const struct snag_irc_conversation_target *target)
+{
+    if (target->kind == SNAG_IRC_QUERY || target->kind == SNAG_IRC_CONNECTION_EVENTS) {
+        return json_pack("{s:s,s:s,s:I,s:s,s:s}", "connection", target->connection,
+            "conversation", target->conversation, "generation", (json_int_t)target->generation,
+            "identity", target->identity == SNAG_IRC_OPERATOR ? "operator" : "agent",
+            target->kind == SNAG_IRC_QUERY ? "peer" : "endpoint",
+            target->kind == SNAG_IRC_QUERY ? target->peer : target->endpoint);
+    }
+    if (target->kind != SNAG_IRC_CHANNEL) { errno = EINVAL; return NULL; }
+    return json_pack("{s:s,s:s,s:I,s:s,s:s,s:s,s:s,s:i}", "connection", target->connection,
+        "conversation", target->conversation, "generation", (json_int_t)target->generation,
+        "identity", target->identity == SNAG_IRC_OPERATOR ? "operator" : "agent",
+        "room", target->room, "membership", target->membership, "endpoint", target->endpoint,
+        "casemapping", (int)target->casemapping);
+}
+
 void
 snag_irc_capture_scopes(
     const struct snag_irc_destinations *destinations, struct snag_irc_scopes *out)

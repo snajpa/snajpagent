@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Keep shared IRC input and retained command output available in builds with
+  Vim support omitted.
+
 - Allow simultaneous native session startup to wait for the short publication
   lock instead of failing one owner when creating several workspace sessions.
 

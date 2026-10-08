@@ -3018,7 +3018,7 @@ snag_app_irc_select_conversation(
 {
 #if SNAJPAGENT_VM
     if (app->view_command) {
-        json_t *route = snag_view_conversation_route(target);
+        json_t *route = snag_irc_conversation_route(target);
         if (!route) return -1;
         json_decref(app->view_command->selection);
         app->view_command->selection = route;
