@@ -989,6 +989,14 @@ test_prompt_spinners(void)
     uint64_t deadline = term.animation.tool_until;
     assert(snag_term_set_prompt_template(&term, false, "\xfd\xfe idle> ", held, 8u, 1u) == 0);
     assert(term.animation.tool_until == deadline && strstr(term.label, "GT"));
+    /* The final idle redraw remains due after the hold deadline has elapsed. */
+    uint64_t due = snag_term_animation_due(&term.animation, deadline);
+    if (due != deadline) {
+        (void)printf("expired tool spinner: expected deadline %llu, got %llu\n",
+            (unsigned long long)deadline, (unsigned long long)due);
+        (void)fflush(stdout);
+    }
+    assert(due == deadline);
     assert(snag_term_set_spinner_states(&term, 5u) == 0 && !term.animation.tool_until);
     assert(snag_term_set_spinner_states(&term, 3u) == 0 && term.animation.tool_until >= deadline);
     term.animation.tool_until = 1u;
@@ -3904,10 +3912,12 @@ test_output_span_prompt_repaint(void)
     /* A logical tool burst must park and repaint the composer once, not once per internal output
      * slice. */
     assert(term.prompt_visible);
+    bool ended_line = term.output_columns == 0u && term.output_ended_lf;
     assert(count_text(output, "BURST> ") == 1u);
     snag_render_free(&render);
     snag_term_close(&term);
     capture_restore(&capture);
+    assert(ended_line);
     close(capture.fd);
 }
 

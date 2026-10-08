@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Keep tool-detail newlines in terminal cursor bookkeeping and clear the held
+  tool spinner when its timer expires, including while the session is idle.
+
 - Make `/verbose` reformat the submitting workspace pane and report its own level,
   sharing standalone command parsing and preserving other panes' settings.
 

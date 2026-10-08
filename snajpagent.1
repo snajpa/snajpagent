@@ -1371,7 +1371,8 @@ does not animate it. The active marker still identifies an unfinished, cancellab
 turn, including one parked after a policy stop. Empty-draft Ctrl-C cancels that
 turn; Ctrl-C with a draft clears the draft first.
 Unused context digits also remain spaces. Indicators stop when their work unwinds;
-there is no separate interruption glyph. At verbosity 1 and higher, terminals
+there is no separate interruption glyph. Expiring tool activity clears itself
+while the prompt is idle, without another keypress. At verbosity 1 and higher, terminals
 also print one-shot wait lines naming the wait and its bound: managed commands
 report the tool and wait cap, provider responses report the model. Verbosity 0
 and one-shot execution omit these status lines. Wait and warning notices are

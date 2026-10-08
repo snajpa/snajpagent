@@ -353,3 +353,8 @@ the previous request shape, with explicit level changes also applied to the pane
 Argumentless queries to older owners report their standalone level. Retained
 pending commands with pane context require a workspace build supporting this
 capability for restoration.
+
+Shared terminal output tracks every trailing tool-detail newline before repainting
+the composer. An expired held-tool deadline remains due until animation rendering
+consumes it, so an idle prompt receives its final redraw without input. Both the
+standalone display and pane projection use these output and animation contracts.

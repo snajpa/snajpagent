@@ -972,7 +972,8 @@ snag_term_animation_render(
 uint64_t
 snag_term_animation_due(const struct snag_term_animation *animation, uint64_t now)
 {
-    uint64_t due = animation->tool_until > now ? animation->tool_until : 0u;
+    /* Expiry still needs one render to remove the held frame from an idle prompt. */
+    uint64_t due = animation->tool_until;
     unsigned int states = visible_spinner_states(animation, now);
     for (unsigned int slot = 0u; slot < SNAG_TERM_SPINNER_SLOTS; ++slot) {
         unsigned int id =

@@ -4007,7 +4007,7 @@ tool_body(struct snag_render *render, const struct snag_render_block *block)
         if (render_checkpoint(render) < 0) return -1;
     }
     if (offset && block->body.data[offset - 1u] != '\n' &&
-        write_literal(render, STDERR_FILENO, "\n") < 0)
+        write_block(render, STDERR_FILENO, "\n", 1u, true, true) < 0)
         return -1;
     return truncated ? write_omitted(render) : 0;
 }
