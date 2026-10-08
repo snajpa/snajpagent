@@ -4233,7 +4233,7 @@ again:;
         if (rc < 0) goto active_done;
         if (handled) {
             if (!app->queue_edit_id[0] && !prompt_ready) {
-                if (app->control_requested || app->model_switch_requested) {
+                if (app->model_switch_requested) {
                     rc = snag_ui_hold(&app->ui, true);
                     if (rc == 0) app->turn_prompt_seen = false;
                 } else

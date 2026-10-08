@@ -370,7 +370,10 @@ an engine action is pending; they cannot release subsequent typeahead. The engin
 readiness prompt carries the consumed action-queue position: a prompt issued
 before newer input cannot acknowledge that input. Standalone and semantic owners
 apply readiness through the same path. An explicit conversation reopen therefore
-takes effect before the next message captures its route.
+takes effect before the next message captures its route. Accepted deferred controls
+acknowledge readiness after their durable intent is saved. Further input can
+therefore retain admission order or close the session before an editor starts;
+foreground execution still owns the composer until it returns.
 
 The presenter publishes its ordered conversation directory in semantic state as
 `tabs`: `[key, enabled]` pairs, starting with `rollout`, then configured default

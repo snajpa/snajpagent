@@ -2577,7 +2577,9 @@ in an active turn and remains selected for later turns and resume. Effort-only
 selection applies to later requests after a safe response boundary. Configuration, cache
 refresh, compaction, retry and delete run at safe request boundaries;
 their accepted intents in an established session survive restart and retain
-admission order.  Configuration editing and cache discovery before the first
+admission order. Accepted deferred controls leave the prompt ready for further
+input, including EOF before a queued editor starts. Configuration editing and
+cache discovery before the first
 work item preserve lazy session creation.  Repeated
 requests for the same pending control coalesce.  Delete still requires explicit
 confirmation. Commands typed while another foreground control runs are

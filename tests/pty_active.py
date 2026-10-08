@@ -2653,6 +2653,8 @@ def test_deferred_controls_in_admission_order():
     log = events(sid)
     requested = [e["data"]["control"] for e in log if e["type"] == "control_requested"]
     assert requested == [2, 1], requested
+    assert not [e for e in log if e["type"] == "control_started" and
+                e["data"]["control"] == 1], "editor admitted before the buffered EOF"
     with Child(["--resume", sid], ready=None, env=dict(os.environ, EDITOR=str(editor))) as child:
         child.wait(b"configuration unchanged")
         child.wait_idle_prompt()

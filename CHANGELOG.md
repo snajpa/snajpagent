@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Keep the prompt ready after accepting a deferred control, preserving command
+  order and EOF before a queued configuration editor starts.
+
 - Refresh conversation counts and new chats after owner updates arrive while
   workspace terminal output is stalled.
 
