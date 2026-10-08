@@ -687,7 +687,7 @@ wait_callback(struct snag_mcp_server *server, snag_socket listener, const char *
     uint64_t peer_deadline = 0u;
     if (snag_isatty(STDIN_FILENO)) {
         if (snag_term_input_capture(&terminal) < 0 ||
-            snag_term_input_hidden(&terminal) < 0) {
+            snag_term_input_raw(&terminal, false) < 0) {
             goto done;
         }
         hidden = true;
@@ -699,10 +699,25 @@ wait_callback(struct snag_mcp_server *server, snag_socket listener, const char *
         int input_ready = stdin_open
             ? snag_term_input_wait(&terminal, SNAG_WAKE_INVALID, 0) : 0;
         if (input_ready & SNAG_TERM_WAIT_INPUT) {
-            char bytes[4];
+            char bytes[256];
             ssize_t n = snag_term_input_read(&terminal, bytes, sizeof(bytes));
             if (!n) stdin_open = false;
             for (ssize_t i = 0; i < n; ++i) {
+                if (bytes[i] == 3) goto done;
+                if (bytes[i] == 21) {
+                    if (input.data) snag_secret_clear(input.data, input.len);
+                    snag_buf_reset(&input);
+                    continue;
+                }
+                if (bytes[i] == 8 || bytes[i] == 127) {
+                    if (input.len) {
+                        size_t before = input.len;
+                        do { --input.len; }
+                        while (input.len && (input.data[input.len] & 0xc0u) == 0x80u);
+                        snag_secret_clear(input.data + input.len, before - input.len);
+                    }
+                    continue;
+                }
                 if (bytes[i] == '\n' || bytes[i] == '\r') {
                     if (snag_buf_terminate(&input) < 0) goto done;
                     code = callback_code((char *)input.data, redirect, state, metadata);

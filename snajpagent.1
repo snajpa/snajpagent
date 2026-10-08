@@ -3955,7 +3955,8 @@ The provider and unrelated servers remain usable.
 Login prints an authorization URL without opening a browser. Open the URL,
 check the displayed resource and scopes, and complete consent. The client accepts
 the registered loopback callback or a pasted complete redirected URL at its hidden
-terminal input. The consent wait lasts ten minutes; Ctrl-C cancels it.
+terminal input. Backspace edits the hidden input and Ctrl-U clears it. Callback
+handling continues while you type. The consent wait lasts ten minutes; Ctrl-C cancels it.
 Authorization codes belong in that terminal, never a session prompt or slash command.
 .PP
 Discovery checks protected-resource and authorization-server metadata, the exact

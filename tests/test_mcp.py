@@ -7,6 +7,7 @@ import hashlib
 import http.server
 import json
 import os
+import pty
 import re
 import select
 import signal
@@ -16,6 +17,7 @@ import ssl
 import subprocess
 import sys
 import tempfile
+import termios
 import threading
 import time
 import unittest
@@ -427,8 +429,15 @@ class MCPTests(unittest.TestCase):
         process.communicate(timeout=3)
 
     def login(self, bad_state=False, callback_mode='paste'):
+        tty = callback_mode.startswith('tty_')
+        master, slave = pty.openpty() if tty else (-1, -1)
+        if tty:
+            self.addCleanup(os.close, master)
         p = subprocess.Popen(self.args('mcp', 'login', 'fixture'), cwd=self.root, env=self.env,
-                             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                             stdin=slave if tty else subprocess.PIPE,
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if tty:
+            os.close(slave)
         self.addCleanup(self.close_login, p)
         output = bytearray()
         deadline = time.monotonic() + 8
@@ -441,10 +450,12 @@ class MCPTests(unittest.TestCase):
                     break
                 output.extend(data)
                 match = re.search(rb'(http://[^\s]+/authorize\?[^\s]+)', output)
-                if match:
+                if match and (not tty or b'Waiting for the loopback' in output):
                     authorize = match[1].decode()
                     break
         self.assertIsNotNone(authorize, bytes(output))
+        if tty:
+            self.assertFalse(termios.tcgetattr(master)[3] & (termios.ICANON | termios.ECHO))
         query = urllib.parse.parse_qs(urllib.parse.urlsplit(authorize).query)
         self.assertEqual(query['resource'], [self.server.url + '/mcp'])
         callback = query['redirect_uri'][0] + '?' + urllib.parse.urlencode({
@@ -466,14 +477,24 @@ class MCPTests(unittest.TestCase):
             self.assertEqual(refused.exception.code, 400)
             supplied = b''
             bad_state = True
-        elif callback_mode == 'http':
+        elif callback_mode in ('http', 'tty_http'):
+            if tty:
+                os.write(master, b'incomplete hidden input')
             with urllib.request.urlopen(callback, timeout=5) as reply:
                 self.assertEqual(reply.status, 200)
                 reply.read()
             supplied = b''
+        elif callback_mode == 'tty_cancel':
+            os.write(master, b'\x03')
+            supplied = b''
+            bad_state = True
+        elif callback_mode == 'tty_paste':
+            os.write(master, b'discard\x15' + callback[:12].encode() +
+                     b'x\x7f' + callback[12:].encode() + b'\r')
+            supplied = b''
         else:
             supplied = (callback + '\n').encode()
-        stdout, stderr = p.communicate(supplied, timeout=8)
+        stdout, stderr = p.communicate(None if tty else supplied, timeout=8)
         output.extend(stderr)
         if not bad_state:
             self.assertEqual(p.returncode, 0, bytes(output))
@@ -684,6 +705,11 @@ class MCPTests(unittest.TestCase):
 
     def test_oauth_real_loopback_callback(self):
         self.login(callback_mode='http')
+
+    def test_oauth_tty_input_stays_hidden_and_callback_remains_responsive(self):
+        self.login(callback_mode='tty_http')
+        self.login(callback_mode='tty_paste')
+        self.assertNotEqual(self.login(callback_mode='tty_cancel'), 0)
 
     def test_configure_preserves_active_catalog_then_switches_endpoint(self):
         replacement = MCPServer()
