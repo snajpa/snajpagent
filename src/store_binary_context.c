@@ -370,6 +370,58 @@ checkpoint_cancelled(const struct snag_context_control *control, char *error, si
     return 0;
 }
 
+/* Older checkpoints trimmed pending input along with summarized history. Its
+ * authenticated receipts remain core roots, so restore only those missing rows. */
+static int
+restore_pending_steering(int fd, const struct snag_binary_anchor *boundary,
+    const struct snag_binary_checkpoint_index *access, const struct snag_session *state,
+    json_t **recent, const struct snag_context_control *control, char *error, size_t error_size)
+{
+    json_t *merged = json_array();
+    size_t cursor = 0u;
+    if (!merged) return snag_errno(ENOMEM);
+    for (size_t i = 0u; i < state->pending_steering_count; ++i) {
+        uint64_t seq = state->pending_steering[i].seq;
+        if (checkpoint_cancelled(control, error, error_size) < 0) goto fail;
+        while (cursor < json_array_size(*recent)) {
+            json_t *entry = json_array_get(*recent, cursor);
+            if ((uint64_t)json_integer_value(json_object_get(entry, "seq")) >= seq) break;
+            if (json_array_append(merged, entry) < 0) goto fail;
+            ++cursor;
+        }
+        json_t *entry = json_array_get(*recent, cursor);
+        if (entry && (uint64_t)json_integer_value(json_object_get(entry, "seq")) == seq)
+            continue;
+        if (seq > state->compact_seq && seq > state->context_rebase_seq) {
+            snag_fail(error, error_size, EINVAL, "uncovered pending input missing from context");
+            goto fail;
+        }
+        const char *type = NULL;
+        json_t *data = NULL;
+        if (snag_binary_checkpoint_projection_read(fd, boundary, access, seq, &type, &data) < 0)
+            goto fail;
+        const json_t *input = !strcmp(type, "irc_admitted") ?
+            json_object_get(data, "steering") : data;
+        const char *turn = snag_json_string(input, "turn_id");
+        bool valid = turn && snag_string_in(type,
+            "steering_added irc_admitted irc_reply_reminder response_output_correction");
+        entry = valid ? json_pack("{s:I,s:s,s:O,s:I,s:s,s:b,s:b,s:b}",
+            "seq", (json_int_t)seq, "type", type, "data", data,
+            "time", (json_int_t)state->pending_steering[i].received_ms, "turn", turn,
+            "active", 1, "unfinished", 0, "processes", 0) : NULL;
+        json_decref(data);
+        if (!entry || json_array_append_new(merged, entry) < 0) goto fail;
+    }
+    while (cursor < json_array_size(*recent))
+        if (json_array_append(merged, json_array_get(*recent, cursor++)) < 0) goto fail;
+    json_decref(*recent);
+    *recent = merged;
+    return 0;
+fail:
+    json_decref(merged);
+    return -1;
+}
+
 int
 snag_store_materialize_binary_context_checkpoint(struct snag_session *source,
     struct snag_session *restored, const struct snag_binary_checkpoint_frame *frame,
@@ -443,6 +495,8 @@ snag_store_materialize_binary_context_checkpoint(struct snag_session *source,
     if (snag_binary_checkpoint_provider_read(source->log_fd, &frame->boundary, &access,
             frame->provider.data, frame->provider.size, control ? control->cancelled : NULL,
             control ? control->opaque : NULL, &recent, &history) < 0) goto done;
+    if (restore_pending_steering(source->log_fd, &frame->boundary, &access, candidate,
+            &recent, control, error, error_size) < 0) goto done;
     capture = snag_context_capture_new(control);
     if (!capture) { snag_errno(ENOMEM); goto done; }
     if (snag_context_capture_seed(capture, recent, history) < 0 ||

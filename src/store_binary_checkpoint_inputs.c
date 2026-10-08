@@ -195,7 +195,10 @@ read_steering(int fd, const struct snag_binary_anchor *anchor,
     int rc = -1;
     const char *id = snag_json_string(data, "steering_id");
     const char *turn = snag_json_string(data, "turn_id");
-    if (!snapshot->active_turn || !turn || strcmp(turn, snapshot->active_turn_id)) {
+    /* Late input survives a completed turn and can be admitted by the next one.
+     * The authenticated checkpoint owns membership; the receipt owns origin. */
+    if (!turn || !snag_hex_is_lower(turn, SNAG_ID_HEX_LEN) ||
+        (get_number(entry + 8u) && !snapshot->active_turn)) {
         snag_errno(EINVAL);
         goto done;
     }

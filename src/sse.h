@@ -7,8 +7,10 @@
 #include <stdbool.h>
 #include <stddef.h>
 
-#define SNAG_MAX_SSE_EVENT (1024u * 1024u)
 #define SNAG_MAX_PROVIDER_WIRE (64u * 1024u * 1024u)
+/* A terminal event contains the complete output, including opaque reasoning.
+ * Its framing shares the transport budget; the consumer bounds retained items. */
+#define SNAG_MAX_SSE_EVENT SNAG_MAX_PROVIDER_WIRE
 #define SNAG_MAX_SSE_NAME 4096u
 
 enum snag_sse_record_kind {

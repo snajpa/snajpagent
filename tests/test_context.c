@@ -2249,6 +2249,114 @@ test_irc_summary_during_active_compaction(struct snag_store *store, const char *
     }
 }
 
+/* Reproduce an older writer's authenticated checkpoint with pending receipts
+ * outside its provider seam. Core membership and original journal stay intact. */
+static void
+trim_pending_checkpoint_fixture(struct snag_session *session)
+{
+    const json_t *recent = NULL, *history = NULL;
+    assert(!snag_context_capture_seam(session, &recent, &history));
+    json_t *trimmed = json_array();
+    assert(trimmed);
+    for (size_t i = 0u; i < json_array_size(recent); ++i) {
+        json_t *entry = json_array_get(recent, i);
+        uint64_t seq = (uint64_t)json_integer_value(json_object_get(entry, "seq"));
+        if (seq > session->context_rebase_seq) assert(!json_array_append(trimmed, entry));
+    }
+    struct snag_context_capture *capture = snag_context_capture_new(NULL);
+    assert(capture && !snag_context_capture_seed(capture, trimmed, history));
+    session->on_commit_free(session->on_commit_opaque);
+    session->on_commit_opaque = capture;
+    json_decref(trimmed);
+}
+
+static void
+test_carried_steering_after_summary(struct snag_store *store, const char *cwd)
+{
+    const char *old = "ec100000000000000000000000000000";
+    const char *turn = "ec200000000000000000000000000000";
+    const char *reply = "ec300000000000000000000000000000";
+    const char *direct = "ec400000000000000000000000000000";
+    const char *room = "ec500000000000000000000000000000";
+    for (unsigned int legacy = 0u; legacy < 2u; ++legacy) {
+        struct snag_session session;
+        struct snag_context_projection projection = {0};
+        char error[256] = "", id[SNAG_ID_HEX_LEN + 1u];
+        if (legacy) create_legacy_session(store, &session, cwd, "medium");
+        else create_session(store, &session, cwd, "medium");
+        memcpy(id, session.id, sizeof(id));
+        commit_event(&session, "turn_started", turn_started(old, 1u, "first task", cwd, NULL));
+        commit_event(&session, "response_started", response_started(old, reply, NULL));
+        commit_event(&session, "steering_added",
+            steering_added(old, direct, "late operator input"));
+        struct snag_irc_event event = {.kind = SNAG_IRC_MESSAGE,
+            .timestamp_ms = 1u, .endpoint = "fixture:1234", .room = "#lab", .nick = "peer",
+            .text = "late room input", .stream = "11111111111111111111111111111111",
+            .sequence = 1u, .input = true};
+        commit_event(&session, "irc_event", snag_irc_event_data(&event));
+        commit_event(&session, "irc_admitted",
+            json_pack("{s:[I],s:o}", "sequences", (json_int_t)session.irc_received_seq,
+                "steering", steering_added(old, room, event.text)));
+        commit_event(&session, "response_completed", response_completed(old, reply, "done"));
+        commit_event(&session, "turn_completed", turn_completed(old, reply));
+        assert(!snag_session_checkpoint(&session, error, sizeof(error)));
+        snag_session_close(&session);
+        assert(!snag_session_open(store, &session, id, error, sizeof(error)));
+        assert(!session.active_turn && session.pending_steering_count == 2u);
+        commit_event(&session, "turn_started", turn_started(turn, 2u, "next task", cwd, NULL));
+        json_t *empty = json_array();
+        build_context_cached(&session, 1u, empty, NULL, &projection);
+        snag_context_projection_free(&projection);
+        json_decref(empty);
+        event.input = false;
+        for (size_t i = 0u; i < SNAG_CONTEXT_COMPACT_OVERLAP_EVENTS + 2u; ++i) {
+            event.sequence++;
+            commit_event(&session, "irc_event", snag_irc_event_data(&event));
+        }
+        commit_event(&session, "context_rebased",
+            json_pack("{s:s,s:s}", "reason", "turn_recovery", "turn_id", turn));
+        commit_event(&session, "irc_compacted",
+            json_pack("{s:I,s:I,s:s}", "through_seq", (json_int_t)(session.next_seq - 1u),
+                "count", (json_int_t)1, "summary", "covered room summary"));
+        commit_event(&session, "input_admitted",
+            json_pack("{s:[s,s],s:I,s:s}", "steering_ids", direct, room, "time_ms",
+                (json_int_t)1788739291000LL, "turn_id", turn));
+        json_t *snapshot = json_pack("[{s:s,s:s},{s:s,s:s}]", "id", direct, "text",
+            "late operator input", "id", room, "text", "late room input");
+        for (unsigned int resume = 0u; resume < 2u; ++resume) {
+            build_context(&session, 1u, snapshot, NULL, &projection);
+            json_t *input = json_object_get(projection.create_request.value, "input");
+            assert(message_matching(input, "late operator input"));
+            assert(message_matching(input, "covered room summary"));
+            assert(!message_matching(input, "late room input"));
+            snag_context_projection_free(&projection);
+            snag_session_close(&session);
+            int rc = snag_session_open(store, &session, id, error, sizeof(error));
+            if (rc < 0) fprintf(stderr, "carried steering resume: %s\n", error);
+            assert(rc == 0);
+        }
+        if (!legacy) {
+            trim_pending_checkpoint_fixture(&session);
+            assert(!snag_session_checkpoint(&session, error, sizeof(error)));
+            snag_session_close(&session);
+            assert(!snag_session_open(store, &session, id, error, sizeof(error)));
+            build_context(&session, 1u, snapshot, NULL, &projection);
+            json_t *input = json_object_get(projection.create_request.value, "input");
+            assert(message_matching(input, "late operator input"));
+            assert(!message_matching(input, "late room input"));
+            snag_context_projection_free(&projection);
+            assert(!json_object_set_new(json_array_get(snapshot, 0u), "text",
+                json_string("tampered pending input")));
+            assert(snag_context_build(&session, SNAJPAGENT_MODEL, "medium", 1u,
+                snapshot, 0u, false, NULL, NULL, NULL, NULL, &projection,
+                error, sizeof(error), NULL) < 0);
+            assert(strstr(error, "steering"));
+        }
+        json_decref(snapshot);
+        snag_session_close(&session);
+    }
+}
+
 static void
 test_irc_context_summary(struct snag_store *store, const char *cwd)
 {
@@ -6215,6 +6323,7 @@ main(int argc, char **argv)
     test_irc_source_shifted_by_checkpoint(&store, cwd);
     test_irc_source_lookup_bounds(&store, cwd);
     test_irc_lookup_skips_unrelated_checkpoint(&store, cwd);
+    test_carried_steering_after_summary(&store, cwd);
     test_irc_summary_during_active_compaction(&store, cwd);
     test_irc_context_summary(&store, cwd);
     test_admitted_room_event_stays_out_of_tool_exchange(&store, cwd);

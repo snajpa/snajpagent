@@ -102,55 +102,34 @@ test_bounds(void)
     struct snag_sse_parser parser;
     char error[128] = {0};
     unsigned int count = 0u;
-    unsigned char *input = malloc(SNAG_MAX_SSE_EVENT + 2u);
+    /* One event may use the wire budget, including data framing and delimiters. */
+    size_t length = SNAG_MAX_PROVIDER_WIRE;
+    unsigned char *input = malloc(length);
 
     assert(input);
     memcpy(input, "data: ", 6u);
-    memset(input + 6u, 'x', SNAG_MAX_SSE_EVENT - 6u);
-    input[SNAG_MAX_SSE_EVENT] = '\n';
-    input[SNAG_MAX_SSE_EVENT + 1u] = '\n';
+    memset(input + 6u, 'x', length - 8u);
+    input[length - 2u] = '\n';
+    input[length - 1u] = '\n';
     snag_sse_init(&parser, count_record, &count);
-    assert(snag_sse_feed(&parser, input, SNAG_MAX_SSE_EVENT + 2u, error, sizeof(error)) == 0);
+    assert(snag_sse_feed(&parser, input, length, error, sizeof(error)) == 0);
     assert(snag_sse_finish(&parser, error, sizeof(error)) == 0);
     assert(count == 1u);
-    snag_sse_free(&parser);
-
-    memset(error, 0, sizeof(error));
-    snag_sse_init(&parser, NULL, NULL);
-    memset(input, 'x', SNAG_MAX_SSE_EVENT + 1u);
-    assert(snag_sse_feed(&parser, input, SNAG_MAX_SSE_EVENT + 1u, error, sizeof(error)) < 0);
-    assert(strstr(error, "line exceeds"));
-    snag_sse_free(&parser);
-
-    memset(error, 0, sizeof(error));
-    snag_sse_init(&parser, NULL, NULL);
-    assert(snag_sse_feed(&parser, "event: response.created\n", 24u, error, sizeof(error)) == 0);
-    assert(snag_sse_feed(&parser, input, SNAG_MAX_SSE_EVENT + 1u, error, sizeof(error)) < 0);
-    assert(strstr(error, "SSE response.created line exceeds 1 MiB"));
-    snag_sse_free(&parser);
-
-    memset(error, 0, sizeof(error));
-    snag_sse_init(&parser, NULL, NULL);
-    assert(snag_sse_feed(&parser, "event: private_request_text\n", 28u, error, sizeof(error)) == 0);
-    assert(snag_sse_feed(&parser, input, SNAG_MAX_SSE_EVENT + 1u, error, sizeof(error)) < 0);
-    assert(strstr(error, "SSE unknown line exceeds 1 MiB"));
-    assert(!strstr(error, "private_request_text"));
-    snag_sse_free(&parser);
-
-    memset(error, 0, sizeof(error));
-    snag_sse_init(&parser, NULL, NULL);
-    memcpy(input, "data: ", 6u);
-    memset(input + 6u, 'x', SNAG_MAX_SSE_EVENT - 6u);
-    input[SNAG_MAX_SSE_EVENT] = '\n';
-    assert(snag_sse_feed(&parser, input, SNAG_MAX_SSE_EVENT + 1u, error, sizeof(error)) == 0);
-    assert(snag_sse_feed(&parser, "data: 123456\n", 13u, error, sizeof(error)) < 0);
-    assert(strstr(error, "event exceeds"));
-    snag_sse_free(&parser);
-
-    memset(error, 0, sizeof(error));
-    snag_sse_init(&parser, NULL, NULL);
-    parser.wire_bytes = SNAG_MAX_PROVIDER_WIRE;
     assert(snag_sse_feed(&parser, "x", 1u, error, sizeof(error)) < 0);
+    assert(strstr(error, "aggregate exceeds"));
+    snag_sse_free(&parser);
+
+    /* Fragments count toward the same bound before a record is dispatched. */
+    count = 0u;
+    error[0] = '\0';
+    snag_sse_init(&parser, count_record, &count);
+    input[length - 2u] = 'x';
+    input[length - 1u] = 'x';
+    for (size_t offset = 0u; offset < length; offset += length / 4u)
+        assert(snag_sse_feed(&parser, input + offset, length / 4u,
+                   error, sizeof(error)) == 0);
+    assert(count == 0u);
+    assert(snag_sse_feed(&parser, "\n\n", 2u, error, sizeof(error)) < 0);
     assert(strstr(error, "aggregate exceeds"));
     snag_sse_free(&parser);
     free(input);

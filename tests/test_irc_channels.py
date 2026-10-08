@@ -345,7 +345,14 @@ class ReminderTests(ChannelFixture):
         deferred = next(e for e in self.events() if e['seq'] > before and
                         e['type'] == 'steering_deferred')
         turn = deferred['data']['turn_id']
-        if pending:
+        if pending == 'irc':
+            for nick in ('querybot', 'queryop'):
+                self.server.send(nick, '@saj-id=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb:2;saj-op=1 '
+                                 ':queryop!u@fake PRIVMSG #side :querybot: queued-after-deferral\r\n')
+            self.wait(lambda: any(e['type'] == 'irc_admitted' and
+                      'queued-after-deferral' in e['data'].get('steering', {}).get('text', '')
+                      for e in self.events()))
+        elif pending:
             self.term.write(b'/rollout\r')
             self.term.until(b'host-model/medium')
             self.term.write(b'queued-after-deferral\r')
@@ -361,9 +368,10 @@ class ReminderTests(ChannelFixture):
                          e['data']['turn_id'] == turn for e in events), 2)
         self.assertNotIn('cannot stage', self.term.output.decode(errors='replace'))
         if pending:
-            steering = next(e['data']['steering_id'] for e in events
-                            if e['type'] == 'steering_added' and
-                            e['data'].get('text') == 'queued-after-deferral')
+            inputs = [e['data'] if e['type'] == 'steering_added' else
+                      e['data'].get('steering', {}) for e in events]
+            steering = next(d['steering_id'] for d in inputs
+                            if 'queued-after-deferral' in d.get('text', ''))
             self.assertFalse(any(steering in e['data'].get('steering_ids', []) for e in events
                                  if e['type'] == 'input_admitted' and
                                  e['data']['turn_id'] == turn))
@@ -382,6 +390,9 @@ class ReminderTests(ChannelFixture):
 
     def test_deferred_reply_without_pending_input(self):
         self.deferred_reminder(False)
+
+    def test_deferred_reply_with_pending_irc(self):
+        self.deferred_reminder('irc')
 
 
 class ChannelTests(ChannelFixture):

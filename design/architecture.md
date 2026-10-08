@@ -711,6 +711,11 @@ capacity metadata in the local catalog; Codex routes use their dedicated
 catalog shape. Capacity is source-bound to the configured URL and protocol,
 while typed model identifiers are not checked against the catalog.
 
+SSE framing and JSON records share the existing 64 MiB wire budget. A terminal
+snapshot can include complete reasoning ciphertext or repeated public output
+larger than 1 MiB. The Responses consumer retains its 8 MiB graph and per-item
+bounds, validates completion, and reconciles repeated items before tool dispatch.
+
 The common provider request setup explicitly selects HTTP/1.1, including HTTPS
 Responses, count/compact, catalog and media requests. Every exchange creates its
 own curl multi handle and connection; there is no shared HTTP/2 multiplexing to

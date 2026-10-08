@@ -34,23 +34,6 @@ fail(struct snag_sse_parser *parser, char *error, size_t error_size, const char 
     return snag_fail(error, error_size, EPROTO, "%s", message);
 }
 
-/* Report only recognized protocol event names, never raw provider bytes. */
-static const char *
-oversized_line_kind(const struct snag_sse_parser *parser)
-{
-    static const char *const names[] = {"response.created", "response.completed", "response.failed",
-        "response.output_item.added", "response.output_item.done",
-        "response.function_call_arguments.done", "response.output_text.delta",
-        "response.reasoning_summary_text.delta"};
-    for (size_t i = 0u; i < sizeof(names) / sizeof(names[0]); ++i)
-        if (parser->event.len == strlen(names[i]) &&
-            memcmp(parser->event.data, names[i], parser->event.len) == 0)
-            return names[i];
-    if (parser->line.len >= 5u && memcmp(parser->line.data, "data:", 5u) == 0) return "data";
-    if (parser->line.len && parser->line.data[0] == ':') return "comment";
-    return "unknown";
-}
-
 static int
 assign(struct snag_buf *target, const unsigned char *value, size_t len)
 {
@@ -134,10 +117,10 @@ process_line(struct snag_sse_parser *parser, char *error, size_t error_size)
     if (colon == 4u && memcmp(line, "data", 4u) == 0) {
         size_t extra = value_len + (parser->data_seen ? 1u : 0u);
         if (extra > SNAG_MAX_SSE_EVENT - parser->data.len)
-            return fail(parser, error, error_size, "SSE event exceeds 1 MiB");
+            return fail(parser, error, error_size, "cannot buffer SSE event");
         if ((parser->data_seen && snag_buf_putc(&parser->data, '\n') < 0) ||
             snag_buf_append(&parser->data, value, value_len) < 0)
-            return fail(parser, error, error_size, "SSE event exceeds 1 MiB");
+            return fail(parser, error, error_size, "cannot buffer SSE event");
         parser->data_seen = true;
     } else if (colon == 5u && memcmp(line, "event", 5u) == 0) {
         if (assign(&parser->event, value, value_len) < 0)
@@ -193,8 +176,7 @@ snag_sse_feed(
         if ((amount && snag_buf_append(&parser->line, input + start, amount) < 0) ||
             span > amount) {
             parser->failed = true;
-            return snag_fail(error, error_size, EPROTO, "SSE %s line exceeds 1 MiB",
-                oversized_line_kind(parser));
+            return snag_fail(error, error_size, ENOMEM, "cannot buffer SSE line");
         }
         if (i == len) break;
         unsigned char c = input[i++];

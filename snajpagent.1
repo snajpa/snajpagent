@@ -5639,6 +5639,11 @@ transcript remain available. The summary preserves room/sender provenance;
 room text keeps its original authority. Ordinary conversation compaction may
 subsequently incorporate that summary.
 .PP
+Pending input survives conversation compaction and turn boundaries until a
+response admits it. Covered IRC input remains represented by its room summary.
+Native resume also restores pending input from older checkpoints whose context
+recipe omitted those receipts.
+.PP
 At most one IRC summary runs per owner. A failed request leaves the original
 context intact; another attempt requires more admitted updates or a new
 irc_compact call. A concurrent conversation compaction or context reset supersedes
@@ -6298,8 +6303,10 @@ or eligible background chat input at a failed request keeps its normal next-turn
 Successful refusals and ordinary failed tool results retain their existing handling.
 The retry hint appears once when the ordinary budget is exhausted or disabled.
 .PP
-An oversized SSE line reports its recognized event type when present, without
-echoing provider content. The existing 1 MiB line bound still applies.
+Responses stream records, including complete encrypted reasoning items, share
+one 64 MiB wire budget per response. Completed output remains subject to the
+8 MiB response graph budget and individual output limits. Budget errors omit
+provider content.
 .PP
 With automatic retry enabled, an active goal retries failed work indefinitely
 with paced, interruptible waits.

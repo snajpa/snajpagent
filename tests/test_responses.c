@@ -2170,9 +2170,54 @@ test_sparse_output_identities(void)
     }
 }
 
+/* Terminal snapshots repeat complete reasoning items, even with small deltas. */
+static void
+test_large_completion_reasoning(void)
+{
+    size_t length = 2u * 1024u * 1024u;
+    char *opaque = malloc(length + 1u);
+    assert(opaque);
+    memset(opaque, 'r', length);
+    opaque[length] = '\0';
+    for (unsigned int announced = 0u; announced < 2u; ++announced) {
+        struct snag_buf wire = {.max = SNAG_MAX_PROVIDER_WIRE};
+        struct parsed_stream parsed = parsed_new(1024u);
+        assert(snag_buf_printf(&wire,
+                   "data: {\"type\":\"response.created\",\"response\":{\"id\":\"r\","
+                   "\"status\":\"in_progress\",\"output\":[]}}\n\n") == 0);
+        if (announced)
+            assert(snag_buf_printf(&wire,
+                       "event: response.output_item.done\ndata: {\"type\":"
+                       "\"response.output_item.done\",\"output_index\":0,\"item\":{"
+                       "\"type\":\"reasoning\",\"id\":\"rs\",\"summary\":[],"
+                       "\"encrypted_content\":\"%s\"}}\n\n", opaque) == 0);
+        assert(snag_buf_printf(&wire,
+                   "event: response.completed\ndata: {\"type\":\"response.completed\","
+                   "\"response\":{\"id\":\"r\",\"status\":\"completed\",\"output\":["
+                   "{\"type\":\"reasoning\",\"id\":\"rs\",\"summary\":[],"
+                   "\"encrypted_content\":\"%s\"},"
+                   "{\"type\":\"message\",\"id\":\"m\",\"role\":\"assistant\","
+                   "\"status\":\"completed\",\"content\":[{\"type\":\"output_text\","
+                   "\"text\":\"done\"}]}]}}\n\n", opaque) == 0);
+        int rc = parse_stream((char *)wire.data, 16381u, &parsed);
+        if (rc < 0) fprintf(stderr, "large completion: %s\n", parsed.error);
+        assert(rc == 0);
+        assert(parsed.graph.count == 1u && parsed.calls == 1u);
+        assert(parsed.text.len == 4u && !memcmp(parsed.text.data, "done", 4u));
+        assert(json_array_size(parsed.graph.continuation) == 1u);
+        json_t *item = json_object_get(json_array_get(parsed.graph.continuation, 0u), "item");
+        assert(!strcmp(snag_json_string(item, "encrypted_content"), opaque));
+        assert(snag_response_continuation_valid(parsed.graph.continuation, 1u));
+        parsed_free(&parsed);
+        snag_buf_free(&wire);
+    }
+    free(opaque);
+}
+
 int
 main(void)
 {
+    test_large_completion_reasoning();
     test_message_completion_finalizes_phase();
     test_sparse_output_identities();
     test_failed_function_clarification_boundaries();

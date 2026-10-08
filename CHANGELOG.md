@@ -4,6 +4,12 @@
 
 ## Unreleased
 
+- Accept large Responses completion records, including encrypted reasoning,
+  within the existing 64 MiB stream budget.
+
+- Preserve deferred input across compaction and turn boundaries. Native resume
+  recovers pending inputs omitted from older checkpoint context recipes.
+
 - Preserve the final Mosh screen and reconnect command by default in remote mode.
   Workspace detach places following output below its panes.
 

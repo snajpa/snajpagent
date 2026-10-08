@@ -109,6 +109,7 @@ enum model_fixture {
     MODEL_LIMIT_CONFLICT,
     MODEL_CREATE_HTTP_FAILURE,
     MODEL_CREATE_SSE_FAILURE,
+    MODEL_CREATE_LARGE_COMPLETION,
     MODEL_CREATE_TYPELESS,
     MODEL_VOICE_REQUEST,
     MODEL_VOICE_REQUEST_WAIT,
@@ -660,7 +661,7 @@ send_native_large_summary(int fd)
     if (!text) server_fail("native summary allocation failed");
     memset(text, 'g', length);
     text[length] = '\0';
-    memcpy(text + SNAG_MAX_SSE_EVENT / 2u - 11u, "native-capacity-secret",
+    memcpy(text + (512u * 1024u) - 11u, "native-capacity-secret",
         sizeof("native-capacity-secret") - 1u);
     memcpy(text + length - 19u, "native complete end", 19u);
     struct snag_buf response = {.max = SNAG_MAX_PROVIDER_WIRE};
@@ -675,9 +676,9 @@ send_native_large_summary(int fd)
     /* Complete small parts form one large public message without exceeding
      * the existing per-event SSE bound. */
     size_t index = 0u;
-    for (size_t offset = 0u; offset < length; offset += SNAG_MAX_SSE_EVENT / 2u) {
+    for (size_t offset = 0u; offset < length; offset += (512u * 1024u)) {
         size_t bytes = length - offset;
-        if (bytes > SNAG_MAX_SSE_EVENT / 2u) bytes = SNAG_MAX_SSE_EVENT / 2u;
+        if (bytes > (512u * 1024u)) bytes = (512u * 1024u);
         json_t *part =
             json_pack("{s:s,s:s,s:i,s:I,s:{s:s,s:s%}}", "type", "response.content_part.done",
                 "item_id", "native_summary", "output_index", 0, "content_index",
@@ -1409,6 +1410,29 @@ server_child(int listen_fd, enum model_fixture models, bool transport)
                                            : "{\"detail\":\"Not Found\"}");
             (void)close(fd);
         }
+    }
+    if (models == MODEL_CREATE_LARGE_COMPLETION) {
+        struct snag_buf wire = {.max = SNAG_MAX_PROVIDER_WIRE};
+        size_t length = 2u * 1024u * 1024u;
+        char *opaque = malloc(length + 1u);
+        assert(opaque);
+        memset(opaque, 'r', length);
+        opaque[length] = '\0';
+        assert(!snag_buf_printf(&wire,
+            "data: {\"type\":\"response.created\",\"response\":{\"id\":\"large\","
+            "\"status\":\"in_progress\",\"output\":[]}}\n\n"
+            "event: response.completed\ndata: {\"type\":\"response.completed\","
+            "\"response\":{\"id\":\"large\",\"status\":\"completed\",\"output\":["
+            "{\"type\":\"reasoning\",\"id\":\"rs\",\"summary\":[],"
+            "\"encrypted_content\":\"%s\"},"
+            "{\"type\":\"function_call\",\"id\":\"f\",\"call_id\":\"c\","
+            "\"name\":\"exec_command\",\"arguments\":\"{}\",\"status\":\"completed\"}]}}\n\n",
+            opaque));
+        serve_one(listen_fd, 200u, "POST", "/v1/responses", NULL,
+            "text/event-stream", (char *)wire.data);
+        free(opaque);
+        snag_buf_free(&wire);
+        _exit(0);
     }
     if (models == MODEL_CREATE_TYPELESS) {
         serve_one(listen_fd, 200u, "POST", "/v1/responses", NULL, "text/event-stream",
@@ -2412,6 +2436,34 @@ test_structured_create_failures(void)
         snag_config_free(&config);
         stop_server(&server);
     }
+}
+
+static void
+test_large_completion_transport(void)
+{
+    struct local_server server;
+    struct snag_config config;
+    struct snag_credential credential;
+    struct snag_provider_failure failure = {0};
+    struct snag_response_graph graph = {0};
+    char error[256] = "";
+    unsigned int retries = 99u;
+    json_t *request = request_with_marker("large-completion");
+    start_server(&server, MODEL_CREATE_LARGE_COMPLETION, false, "/v1");
+    struct snag_provider_connection connection =
+        transport_connection(&config, &credential, server.endpoint);
+    assert(!snag_provider_responses_create(connection, request, NULL, NULL, NULL, NULL, NULL,
+        NULL, &graph, &failure, NULL, error, sizeof(error), &retries));
+    assert(!retries && graph.count == 1u && json_array_size(graph.continuation) == 1u);
+    const json_t *item = json_object_get(json_array_get(graph.continuation, 0u), "item");
+    const json_t *encrypted = json_object_get(item, "encrypted_content");
+    assert(json_string_length(encrypted) == 2u * 1024u * 1024u);
+    assert(strspn(json_string_value(encrypted), "r") == json_string_length(encrypted));
+    assert(snag_response_graph_item(&graph, 0u).kind == SNAG_ITEM_TOOL_CALL);
+    snag_response_graph_free(&graph);
+    json_decref(request);
+    snag_config_free(&config);
+    stop_server(&server);
 }
 
 static void
@@ -11140,6 +11192,7 @@ main(int argc, char **argv)
     test_openrouter_search_transport();
     test_codex_path_selection();
     test_structured_create_failures();
+    test_large_completion_transport();
     test_typeless_create_diagnostic();
     test_create_retries();
     test_policy_clarification_after_reasoning();

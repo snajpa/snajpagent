@@ -120,6 +120,14 @@ context_cache_unconsumed_irc(const json_t *entry, uint64_t consumed)
     return false;
 }
 
+static const struct snag_pending_steering *
+pending_steering_at_seq(const struct snag_session *session, uint64_t seq)
+{
+    for (size_t i = 0u; i < session->pending_steering_count; ++i)
+        if (session->pending_steering[i].seq == seq) return &session->pending_steering[i];
+    return NULL;
+}
+
 static int
 context_cache_trim(
     struct snag_context_capture *cache, const struct snag_session *session, uint64_t boundary)
@@ -133,7 +141,8 @@ context_cache_trim(
         json_t *event = json_array_get(cache->recent, i);
         uint64_t seq;
         if (snag_json_integer_u64(event, "seq", &seq) < 0 ||
-            ((seq >= overlap || context_cache_unconsumed_irc(event, session->irc_consumed_seq)) &&
+            ((seq >= overlap || pending_steering_at_seq(session, seq) ||
+                 context_cache_unconsumed_irc(event, session->irc_consumed_seq)) &&
                 json_array_append(recent, event) < 0))
             goto fail;
     }
@@ -1903,14 +1912,6 @@ admitted_steering_count(const struct snag_session *session)
     return count;
 }
 
-static const struct snag_pending_steering *
-pending_steering_at_seq(const struct snag_session *session, uint64_t seq)
-{
-    for (size_t i = 0u; i < session->pending_steering_count; ++i)
-        if (session->pending_steering[i].seq == seq) return &session->pending_steering[i];
-    return NULL;
-}
-
 static int defer_room_event(struct context_builder *builder, const json_t *data, bool has_prompt);
 
 struct recovery_room_input {
@@ -2357,11 +2358,17 @@ context_event(void *opaque, const struct snag_session *state, uint64_t seq, cons
             json_object_get(data, "content"));
     }
     if (summarized) {
-        if (builder->steering && current && !strcmp(type, "steering_added") &&
-            steering_matches_snapshot(builder, snag_json_string(data, "steering_id"), text,
-                json_object_get(data, "content")))
-            return defer_input(builder, text, snag_json_string(data, "steering_id"), time_ms,
-                json_object_get(data, "content"));
+        const struct snag_pending_steering *pending =
+            pending_steering_at_seq(builder->session, seq);
+        if (builder->steering && pending && pending->first_context_ms &&
+            snag_string_in(type, "steering_added irc_reply_reminder response_output_correction")) {
+            const char *id = snag_json_string(data, !strcmp(type, "response_output_correction") ?
+                "correction_id" : "steering_id");
+            if (!steering_matches_snapshot(builder, id, text, json_object_get(data, "content")))
+                return snag_fail(error, error_size, EINVAL,
+                    "summarized steering differs from snapshot");
+            return defer_input(builder, text, id, time_ms, json_object_get(data, "content"));
+        }
         return 0;
     }
     /* Network updates and steering belong after the complete response/tool group. */

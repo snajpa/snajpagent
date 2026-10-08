@@ -3468,3 +3468,19 @@ groups their batch reads; omitted old sources remain unavailable. Native session
 loading propagates the caller's cancellation through admission and reconstruction.
 Converted tool previews resolve their canonical native sequence ranges; retained
 legacy byte offsets serve presentation compatibility.
+
+### Pending input across compaction and turn boundaries
+
+The provider seam retains pending steering receipts when trimming summarized
+history. Late input can carry its original turn identity into a later turn;
+checkpoint input membership comes from the authenticated core, while each receipt
+preserves its original identity, text and admission time. Admitted input requires
+an active turn. Provider projection compares retained pending input against the
+request snapshot even when its original turn is already summarized.
+
+Older native checkpoints may omit those rows from their provider recipe while
+retaining the receipts as core roots. Materialization merges only missing pending
+receipt rows, in sequence order, using authenticated indexed projection. The
+ordinary source-closure pass resolves their IRC dependencies. Covered IRC receipts
+validate the snapshot and keep their summary representation; direct pending input
+is preserved. Damaged or missing receipts fail restoration before state adoption.

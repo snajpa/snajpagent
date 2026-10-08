@@ -279,12 +279,12 @@ test_store_binary_inputs_state(int fd, const struct snag_binary_anchor *anchor,
         active.active_turn = true;
         bad_read(fd, anchor, &view, &active, &access.index);
     }
-    if (view.steering_count) {
+    bool admitted = false;
+    for (size_t i = 0u; i < view.steering_count; ++i)
+        admitted |= state->pending_steering[i].first_context_ms != 0u;
+    if (admitted) {
         struct snag_session wrong = *state;
         wrong.active_turn = false;
-        bad_read(fd, anchor, &view, &wrong, &access.index);
-        wrong = *state;
-        memset(wrong.active_turn_id, 'f', SNAG_ID_HEX_LEN);
         bad_read(fd, anchor, &view, &wrong, &access.index);
     }
     json_t *receipt = (json_t *)&restored;
