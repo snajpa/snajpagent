@@ -61,6 +61,32 @@
 #endif
 
 static void
+test_file_change_precision(void)
+{
+    snag_file_info before = {0};
+    snag_file_info after = {0};
+    assert(snag_file_unchanged(&before, &after));
+#ifdef _WIN32
+    after.mtime_nsec = 1u;
+#elif defined(__APPLE__) || defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__)
+    after.st_mtimespec.tv_nsec = 1;
+#else
+    after.st_mtim.tv_nsec = 1;
+#endif
+    assert(!snag_file_unchanged(&before, &after));
+    before = after;
+    assert(snag_file_unchanged(&before, &after));
+#ifndef _WIN32
+#if defined(__APPLE__) || defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__)
+    after.st_ctimespec.tv_nsec = 1;
+#else
+    after.st_ctim.tv_nsec = 1;
+#endif
+    assert(!snag_file_unchanged(&before, &after));
+#endif
+}
+
+static void
 test_term_modes_pending_output(void)
 {
 #ifndef _WIN32
@@ -5102,6 +5128,7 @@ run_base(int argc, char **argv)
     test_irc_target_parse();
     test_path_join();
     test_platform();
+    test_file_change_precision();
     test_realpath();
     test_private_directory();
     test_regex();
