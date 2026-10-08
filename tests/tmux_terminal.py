@@ -4128,6 +4128,7 @@ def run_destination_case(binary, root, provider, environment):
             _, events = read_events(terminal.dotdir)
             matches = [event for event in event_list(events, "irc_event")
                        if event["data"]["kind"] == "message" and
+                       event["data"].get("routing", {}).get("direction", "incoming") == "incoming" and
                        event["data"]["text"] == marker]
             assert len(matches) == expected.get(name, 0), (name, marker, matches)
 
@@ -4147,7 +4148,7 @@ def run_destination_case(binary, root, provider, environment):
         terminals["a"].wait("routerop joined")
         terminals["b"].wait("routerop joined")
         wait_irc_idle(list(terminals.values()))
-        client.wait("[1 #alpha]")
+        client.wait(f"[{endpoints[0]}/#alpha]")
         client.submit("destination-plain-one")
         deliveries("destination-plain-one", {"a": 1, "c": 1})
         client.submit("/2 destination-once-two")
@@ -4155,7 +4156,7 @@ def run_destination_case(binary, root, provider, environment):
         client.submit("destination-still-one")
         deliveries("destination-still-one", {"a": 1, "c": 1})
         client.submit_wait("/2", "destination: 2")
-        client.wait("[2 #beta]")
+        client.wait(f"[{endpoints[1]}/#beta]")
         client.submit("destination-selected-two")
         deliveries("destination-selected-two", {"b": 1, "c": 1})
         client.submit("/all destination-broadcast")
@@ -4179,10 +4180,10 @@ def run_destination_case(binary, root, provider, environment):
 
         rollout_prompt = "fake/two-model/medium   ?% ›"
         cycle_to(rollout_prompt)
-        cycle_to(f"routerop@{MACHINE_HOSTNAME} :", "[1 #alpha]")
+        cycle_to(f"routerop@{MACHINE_HOSTNAME} :", f"[{endpoints[0]}/#alpha]")
         client.submit("destination-tab-one")
         deliveries("destination-tab-one", {"a": 1, "c": 1})
-        cycle_to(f"routerop@{MACHINE_HOSTNAME} :", "[2 #beta]")
+        cycle_to(f"routerop@{MACHINE_HOSTNAME} :", f"[{endpoints[1]}/#beta]")
         client.submit("destination-tab-two")
         deliveries("destination-tab-two", {"b": 1, "c": 1})
         cycle_to(rollout_prompt)
@@ -4209,18 +4210,18 @@ def run_destination_case(binary, root, provider, environment):
         client.submit_wait("/1", "destination: 1")
         client.submit("/1 single-still-valid")
         deliveries("single-still-valid", {"a": 1, "c": 1})
-        assert "[1 #alpha]" not in client.capture().rstrip().splitlines()[-1]
+        assert f"[{endpoints[0]}/#alpha]" not in client.capture().rstrip().splitlines()[-1]
         client.submit_wait(f"/connect {endpoints[1]}", "outgoing connection added")
         client.submit_wait("/names", f"destination[3]: {endpoints[1]}")
         client.submit_wait("/2 removed-target", "destination 2 is unavailable; use /names")
         client.wait(": /2 removed-target")
         deliveries("removed-target", {})
         client.send_key("C-u")
-        cycle_to(f"routerop@{MACHINE_HOSTNAME} :", "[3 #beta]")
+        cycle_to(f"routerop@{MACHINE_HOSTNAME} :", f"[{endpoints[1]}/#beta]")
         client.submit("destination-tab-reconnected")
         deliveries("destination-tab-reconnected", {"b": 1, "c": 1})
         cycle_to(rollout_prompt)
-        cycle_to(f"routerop@{MACHINE_HOSTNAME} :", "[1 #alpha]")
+        cycle_to(f"routerop@{MACHINE_HOSTNAME} :", f"[{endpoints[0]}/#alpha]")
         for terminal in reversed(list(terminals.values())):
             terminal.send_key("C-u")
             terminal.send_key("C-d")
