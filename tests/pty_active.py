@@ -15,7 +15,6 @@ import socket
 import struct
 import subprocess
 import sys
-import threading
 
 # Expected-output waits tolerate a loaded host; explicit sub-second literals
 # in cases stay as responsiveness or pacing intent.
@@ -143,19 +142,33 @@ class Child:
 
     def read_once(self, timeout):
         self.remember_owner()
-        ready, _, _ = select.select([self.fd], [], [], timeout)
-        if not ready:
-            return False
-        try:
-            chunk = os.read(self.fd, 65536)
-        except OSError as exc:
-            if exc.errno == errno.EIO:
+        peers = [self] + [child for child in getattr(self, "companions", ())
+                          if child is not self and child.pid is not None]
+        deadline = time.monotonic() + timeout
+        while True:
+            ready, _, _ = select.select([child.fd for child in peers], [], [],
+                                         max(0, deadline - time.monotonic()))
+            if not ready:
                 return False
-            raise
-        if chunk:
-            self.buf.extend(chunk)
-            return True
-        return False
+            own_read = None
+            for child in list(peers):
+                if child.fd not in ready:
+                    continue
+                try:
+                    chunk = os.read(child.fd, 65536)
+                except OSError as exc:
+                    if exc.errno != errno.EIO:
+                        raise
+                    chunk = b""
+                child.buf.extend(chunk)
+                if child is self:
+                    own_read = bool(chunk)
+                elif not chunk:
+                    peers.remove(child)
+            if own_read is not None:
+                return own_read
+            if time.monotonic() >= deadline:
+                return False
 
     def wait(self, needle, start=0, timeout=MIN_WAIT_S):
         # Active/idle changes repaint only the changed label span. Full cell
@@ -2891,22 +2904,10 @@ def test_dynamic_irc_lifecycle_and_refusal():
         host_session_id = host.session_id()
         host.wait_idle_prompt(start=hosted_end)
         watcher = IRCClient(port, "watcher")
-        stop_reader = threading.Event()
-        reader_errors = []
-
-        def drain_host():
-            try:
-                while not stop_reader.is_set():
-                    host.read_once(0.05)
-            except Exception as error:
-                reader_errors.append(error)
-
-        # Keep the hosted terminal consuming output while the other terminal
-        # runs lifecycle commands; stalled-writer behavior has its own tests.
-        reader = threading.Thread(target=drain_host)
-        reader.start()
         try:
             with Child(client_args, PROMPT.rstrip()) as client:
+                # Both terminals keep consuming output during the lifecycle.
+                client.companions = [host]
                 watch_start = len(watcher.buf)
                 connected_end = client.send_wait(f"irc_connect_test {endpoint}\r".encode(), b"IRC connected",
                                                  timeout=IRC_WAIT_S)
@@ -2950,10 +2951,6 @@ def test_dynamic_irc_lifecycle_and_refusal():
                 client.exit_cleanly(disconnected_end)
         finally:
             watcher.close()
-            stop_reader.set()
-            reader.join(timeout=2)
-            assert not reader.is_alive(), "host terminal reader did not stop"
-            assert not reader_errors, reader_errors
         deadline = time.monotonic() + IRC_WAIT_S
         quiet_since = None
         last_seq = None
@@ -3612,8 +3609,8 @@ def test_help_plain_terminal():
         for command in (b"/help\r", b"/?\r", b"/goal help\r"):
             start = len(child.buf)
             child.send(command)
-            child.wait(b"clear=cancel", start=start)
-            child.drain(0.1)
+            end = child.wait(b"clear=cancel", start=start)
+            child.wait_idle_prompt(start=end)
             text = bytes(child.buf[start:])
             assert b"[optional]" in text and b"/state goal [set] TEXT" in text
             assert b"\x1b" not in text
@@ -5576,6 +5573,7 @@ def test_network_collision_prompts():
     try:
         server = Child(["--no-color", "-vvvvvv", "-s", address, "-r", "lab"], env=env)
         children.append(server)
+        server.companions = children
         server.wait(chat_prompt("root0"))
         names_end = server.send_wait(b"/rollout\r/names\r", b"model nick: agent0")
         server.wait(b"operator nick: root0", start=names_end)
@@ -5583,6 +5581,7 @@ def test_network_collision_prompts():
         for suffix in (1, 2):
             client = Child(["--no-color", "-c", address], env=env)
             children.append(client)
+            client.companions = children
             deadline = time.monotonic() + MIN_WAIT_S
             while (chat_prompt(f"root{suffix}") not in client.buf and
                    f"\x1b[16C{suffix}".encode() not in client.buf):
