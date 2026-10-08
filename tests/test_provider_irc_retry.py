@@ -37,7 +37,11 @@ class BufferedRetryTests(QueryFixture):
             self.release.clear()
             self.held.clear()
         else:
-            self.submit('/goal finish fixture dependency')
+            before = self.events()[-1]['seq']
+            self.term.write(b'/rollout\r/goal finish fixture dependency\r')
+            self.wait(lambda: any(e['seq'] > before and e['type'] == 'goal_blocked'
+                                 for e in self.events()))
+            self.wait_idle()
             self.assertEqual(sum(e['type'] == 'goal_blocked' for e in self.events()), 1)
 
     def exercise(self, mode='chat', failures=1, paused=False):
