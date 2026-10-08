@@ -204,9 +204,9 @@ class Child:
             re.escape(DEFAULT_ACCOUNTED_IDLE_PROMPT.rstrip()) +
             rb"|(?:^|[\r\n])[^\r\n]*/[^\r\n]* \xe2\x80\xba"
             rb"|\r(?:\x1b\[\d+C)?(?:\x1b\[[0-9;]*m)?"
-            rb"(?:[0-9? ]{0,3}% )?\xe2\x80\xba"
+            rb"(?:~?[0-9? ]{0,3}% )?\xe2\x80\xba"
             rb"(?:\x1b\[[0-9;]*m)?(?=\r)"
-            rb"|\r\x1b\[\d+C[a-z]+ +[0-9?]{1,3}% \xe2\x80\xba(?=[ \r]|$)")
+            rb"|\r\x1b\[\d+C[a-z]+ +~?[0-9?]{1,3}% \xe2\x80\xba(?=[ \r]|$)")
         return self.wait_pattern(pattern, start, timeout)
 
     def wait_context_percent(self, percent, start=0, timeout=MIN_WAIT_S):
@@ -6953,11 +6953,12 @@ def test_idle_prompt_after_partial_effort_repaint():
             return pattern.search(self.buf, start)
 
     previous = DEFAULT_IDLE_PROMPT
-    cursor_suffix = b"\r\x1b[32Cmedium   ?% "
-    probe = Probe(previous + cursor_suffix + PROMPT)
-    assert Child.wait_idle_prompt(probe, start=len(previous)) is not None
-    probe.buf = previous + cursor_suffix + "» ".encode()
-    assert Child.wait_idle_prompt(probe, start=len(previous)) is None
+    for meter in (b"?", b"52", b"~5", b"~100"):
+        cursor_suffix = b"\r\x1b[32Cmedium  " + meter + b"% "
+        probe = Probe(previous + cursor_suffix + PROMPT)
+        assert Child.wait_idle_prompt(probe, start=len(previous)) is not None
+        probe.buf = previous + cursor_suffix + "» ".encode()
+        assert Child.wait_idle_prompt(probe, start=len(previous)) is None
 
 
 if __name__ == "__main__":

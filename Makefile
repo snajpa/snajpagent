@@ -591,14 +591,14 @@ tmuxcheck-run: tmuxcheck-fixture tmuxcheck-irc-early tmuxcheck-irc-middle tmuxch
 
 tmuxcheck-fixture:
 	mkdir -p -m 700 "$(abspath $(TMUX_TEST_ROOT))/fixture/home" "$(abspath $(TMUX_TEST_ROOT))/fixture/work"
-	HOME="$(abspath $(TMUX_TEST_ROOT))/fixture/home" LC_ALL=C.utf8 \
+	HOME="$(abspath $(TMUX_TEST_ROOT))/fixture/home" LC_ALL=C.UTF-8 \
 		python3 ./tests/tmux_terminal.py fixture \
 		./$(FIXTURE_BIN) "$(abspath $(TMUX_TEST_ROOT))/fixture/work" \
 		"$(abspath $(TMUX_TEST_ROOT))/fixture/run"
 
 tmuxcheck-irc-%:
 	mkdir -p -m 700 "$(abspath $(TMUX_TEST_ROOT))/irc-$*/home"
-	HOME="$(abspath $(TMUX_TEST_ROOT))/irc-$*/home" LC_ALL=C.utf8 \
+	HOME="$(abspath $(TMUX_TEST_ROOT))/irc-$*/home" LC_ALL=C.UTF-8 \
 		python3 ./tests/tmux_terminal.py irc ./$(BIN) \
 		"$(abspath $(TMUX_TEST_ROOT))/irc-$*/run" --group $*
 
