@@ -138,6 +138,8 @@ schema for older readers. Its sequence basis records missing older accounting.
 Owner state publishes the counters as advisory metadata; older owners show unknown.
 Version11 workspace read markers keep sequence, received count and accounting basis.
 Only a successfully flushed focused FOLLOW pane at its loaded tail marks read;
+Owner updates consumed during terminal-output callbacks invalidate the buffer
+directory for the main loop to rebuild before its next frame.
 HOLD, hidden/background panes, terminal focus loss and interrupted painting preserve
 unread counts. Public channel and connection views share the history's local-role
 scope; private queries remain role/conversation scoped. Draft routes never refresh

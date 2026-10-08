@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Refresh conversation counts and new chats after owner updates arrive while
+  workspace terminal output is stalled.
+
 - Keep shared IRC input and retained command output available in builds with
   Vim support omitted.
 

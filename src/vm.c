@@ -200,7 +200,7 @@ struct vm {
     size_t pending_input_bytes;
     char message[512];
     int output;
-    bool dirty, save_dirty, meaningful, quit, suspend, entering, paste_failed;
+    bool dirty, save_dirty, buffers_dirty, meaningful, quit, suspend, entering, paste_failed;
     bool composer, insert, quit_all, detach_exit, detach_suspend;
     bool classic_pending, classic_ready, classic_uncertain;
     bool mouse, mouse_reported, mouse_down, mouse_select, mouse_follow, unfocused;
@@ -1240,6 +1240,7 @@ buffer_catalog(struct vm *vm)
     ordered = NULL;
     json_decref(rows);
     rows = sorted;
+    vm->buffers_dirty = false;
     if (json_equal(vm->buffers, rows)) { json_decref(rows); return 0; }
     for (size_t i = 0u; i < vm->count; ++i) {
         struct vm_window *window = &vm->windows[i];
@@ -3636,7 +3637,7 @@ inline_completions(struct vm *vm, struct snag_vm_connection *owner)
     }
 }
 
-static bool
+static void
 connection_step(struct vm *vm, struct snag_vm_connection *c)
 {
     struct snag_vm_buffer *focused = focused_buffer(vm);
@@ -3652,6 +3653,7 @@ connection_step(struct vm *vm, struct snag_vm_connection *c)
     bool had_tail = history_tail(c, &before);
     snag_vm_connection_step(c);
     if (revision != c->revision) {
+        vm->buffers_dirty = true;
         if (history_tail(c, &after) && (!had_tail || before.origin != after.origin ||
             before.offset != after.offset || before.next_seq != after.next_seq)) {
             for (size_t i = 0u; i < vm->count; ++i) {
@@ -3666,7 +3668,6 @@ connection_step(struct vm *vm, struct snag_vm_connection *c)
             strcmp(buffer_previous, feedback->message)) notice(vm, feedback->message);
         changed(vm);
     }
-    return revision != c->revision;
 }
 
 static void
@@ -3677,7 +3678,7 @@ connections_step(struct vm *vm)
     for (size_t i = 0u; i < vm->count; ++i)
         if (vm->windows[i].kind == VIEW_BUFFERS) catalog = true;
     for (struct snag_vm_connection *c = vm->connections; c; c = c->next) {
-        bool updated = connection_step(vm, c);
+        connection_step(vm, c);
         for (struct snag_vm_buffer *b = c->buffers; b; b = b->next) {
             int edited = snag_vm_editor_poll(b);
             if (edited < 0) notice(vm, "Cannot continue input history search");
@@ -3735,11 +3736,11 @@ connections_step(struct vm *vm)
             }
         }
         if (c->reports_changed) inline_completions(vm, c);
-        if (catalog && updated && buffer_catalog(vm) < 0)
-            notice(vm, "Cannot update buffer list");
         if (c->quitting && !c->exited && c->control) waiting = true;
         if (snag_view_channel_opened(&c->channel)) connected = true;
     }
+    if (catalog && vm->buffers_dirty && buffer_catalog(vm) < 0)
+        notice(vm, "Cannot update buffer list");
     if (vm->detach_exit && !connected) {
         vm->detach_exit = false;
         if (save(vm, NULL) == 0) vm->quit = true;
@@ -3780,7 +3781,7 @@ output_checkpoint(void *opaque)
     if (rc < 0) return rc;
     /* Owner traffic must progress while the terminal cannot accept a frame. */
     for (struct snag_vm_connection *c = vm->connections; c; c = c->next)
-        (void)connection_step(vm, c);
+        connection_step(vm, c);
     return 0;
 }
 

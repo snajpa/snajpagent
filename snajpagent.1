@@ -2345,7 +2345,8 @@ and last message time in local time. Use / to filter by name, qualified address,
 identity or ID, then Enter to open the selected buffer in the current window.
 Retained drafts keep their captured destination and show old route after a nick,
 membership or connection change. Empty obsolete routes disappear from the directory
-when no window displays or selects them.
+when no window displays or selects them. Owner updates continue while terminal
+output is stalled; the directory refreshes when drawing resumes.
 .PP
 Unread counts include incoming messages and notices since this workspace last
 displayed the conversation's tail in a focused FOLLOW window. Held history,

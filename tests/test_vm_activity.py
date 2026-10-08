@@ -3,6 +3,7 @@
 
 import os
 import re
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -122,6 +123,29 @@ class ActivityWorkspaceTests(ChannelFixture):
                         and read.get('received') == 3)
         self.directory('peer', 0)
         self.child.finish('close')
+
+    def test_directory_refreshes_owner_updates_received_while_output_is_stalled(self):
+        self.incoming('peer', 'before-stalled-terminal')
+        self.directory('peer', 1)
+        for _ in range(60):
+            self.child.write(b'\x0c')
+            time.sleep(.01)
+        self.server.send('queryop',
+                         ':late-peer!u@fake NOTICE queryop :during-stalled-terminal\r\n')
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            self.child.command('workspace save')
+            time.sleep(.02)
+            if any(isinstance(b['route'], dict) and b['route'].get('peer') == 'late-peer'
+                   for owner in self.state()['buffers'] for b in owner['buffers']):
+                break
+        else:
+            self.fail('owner update did not progress while terminal output was stalled')
+        # The owner update was consumed in the output callback. Repaint the
+        # existing directory without reopening it or generating more traffic.
+        self.child.repaint_until(b'/late-peer [your chat] [1 unread]')
+        self.saved_read('late-peer', lambda read: read.get('received') == 0)
+        self.child.finish('workspace detach')
 
     def test_directory_selection_survives_insertions_and_nick_change(self):
         self.incoming('chosen', 'selected-conversation-body')
