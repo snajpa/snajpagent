@@ -1513,7 +1513,7 @@ channel_history_test(struct snag_store *store, const char *root)
         .membership = "33333333333333333333333333333333",
         .generation = 1u, .identity = SNAG_IRC_OPERATOR, .room = "#side",
         .endpoint = "test:6667", .casemapping = SNAG_IRC_RFC1459};
-    json_t *route = snag_view_conversation_route(&target);
+    json_t *route = snag_irc_conversation_route(&target);
     assert(route);
     struct snag_irc_conversation_target decoded;
     assert(snag_view_conversation_read(route, &decoded) == 0);
@@ -1582,7 +1582,7 @@ channel_history_test(struct snag_store *store, const char *root)
     assert(snag_view_conversation_read(route, &decoded) < 0);
     json_decref(route);
     target.kind = SNAG_IRC_CONNECTION_EVENTS;
-    route = snag_view_conversation_route(&target);
+    route = snag_irc_conversation_route(&target);
     assert(route && snag_view_conversation_read(route, &decoded) == 0);
     assert(decoded.kind == SNAG_IRC_CONNECTION_EVENTS && !decoded.peer[0] && !decoded.room[0]);
     assert(!strcmp(decoded.endpoint, target.endpoint));
@@ -1635,7 +1635,7 @@ conversation_snapshot_test(void)
         .membership = "44444444444444444444444444444444",
         .generation = 1u, .identity = SNAG_IRC_OPERATOR, .room = "#room",
         .endpoint = "test:6667", .casemapping = SNAG_IRC_ASCII};
-    json_t *channel_route = snag_view_conversation_route(&channel);
+    json_t *channel_route = snag_irc_conversation_route(&channel);
     struct snag_vm_buffer *room = snag_vm_buffer_get(owner, channel_route, true);
     assert(room && snag_vm_buffer_writable(room) && !snag_vm_buffer_supported(room));
     owner->irc_queries = true;
