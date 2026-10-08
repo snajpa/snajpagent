@@ -101,7 +101,14 @@ Direct Codex native compaction appends `compaction_trigger` to its input and use
 the existing `/responses` SSE transport. Request preparation happens before its
 durable hash is calculated. The shared response decoder retains the canonical
 encrypted compaction item; completion must supply exactly one. The next context
-retains the input user messages followed by that capsule. Plaintext reduction
+retains a chronological suffix of complete user messages followed by that capsule.
+The suffix has a 256,000 encoded-byte budget, corresponding to upstream's 64,000
+estimated-token retention budget at four bytes per token. This bounds redundant
+verbatim context, including host and IRC messages in the user role; it is not an
+exact token count. Stop at the first older message that cannot fit, without
+backfilling or splitting it. The capsule represents the entire selected source,
+and original messages remain in the durable journal. The separate API compact
+endpoint's returned window stays intact. Plaintext reduction
 cannot replace a window containing encrypted state. A model, endpoint or account
 change rebuilds covered history from the journal when its capsule cannot cross
 the binding; the rebuilt projection is cached for subsequent requests. Interrupted,
@@ -109,7 +116,9 @@ missing, duplicate or malformed results preserve the prior context. Compaction n
 same protocol. API-key providers retain `/v1/responses/compact`.
 
 The Codex protocol follows upstream
-[`compact_remote_v2_attempt.rs`](https://github.com/openai/codex/blob/b7a76bce20feac9e54d5a9b0c01ed463aa2fbf36/codex-rs/core/src/compact_remote_v2_attempt.rs).
+[`compact_remote_v2_attempt.rs`](https://github.com/openai/codex/blob/b7a76bce20feac9e54d5a9b0c01ed463aa2fbf36/codex-rs/core/src/compact_remote_v2_attempt.rs)
+and the retention policy in
+[`compact_remote_v2.rs`](https://github.com/openai/codex/blob/b7a76bce20feac9e54d5a9b0c01ed463aa2fbf36/codex-rs/core/src/compact_remote_v2.rs).
 
 If a native route is unavailable, close that attempt with
 `compaction_interrupted` reason `endpoint_unavailable`, then perform one

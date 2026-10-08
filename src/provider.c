@@ -1519,7 +1519,31 @@ codex_compact_output(struct provider_ctx *ctx, const json_t *request,
     json_t *window = json_array();
     const json_t *input = json_object_get(request, "input");
     if (!window) return -1;
-    for (size_t i = 0u; i < json_array_size(input); ++i) {
+    /* Match Codex's bounded recent-message retention (64k estimated tokens at
+     * four bytes each). This is an encoded-byte budget, not a token count.
+     * Whole older messages remain represented by the encrypted capsule; keeping
+     * every user-role host/IRC update makes successive compactions grow forever. */
+    size_t remaining = 64000u * 4u;
+    size_t first = json_array_size(input);
+    for (size_t i = first; i > 0u; --i) {
+        const json_t *item = json_array_get(input, i - 1u);
+        const char *role = snag_json_string(item, "role");
+        if (!role || strcmp(role, "user")) continue;
+        struct snag_json_document candidate = {.value = json_copy((json_t *)item)};
+        if (!candidate.value ||
+            snag_json_set_new(candidate.value, "type", json_string("message")) < 0 ||
+            snag_json_document_measure(&candidate, SNAG_CONTEXT_MAX_COMPACT) < 0) {
+            snag_json_document_free(&candidate);
+            json_decref(window);
+            return -1;
+        }
+        size_t bytes = candidate.bytes;
+        snag_json_document_free(&candidate);
+        if (bytes > remaining) break;
+        remaining -= bytes;
+        first = i - 1u;
+    }
+    for (size_t i = first; i < json_array_size(input); ++i) {
         const json_t *item = json_array_get(input, i);
         const char *role = snag_json_string(item, "role");
         if (!role || strcmp(role, "user")) continue;

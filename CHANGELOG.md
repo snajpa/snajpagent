@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Bound the recent verbatim messages retained by streamed Codex compaction.
+  Repeated compactions no longer accumulate the entire user-role history beside
+  each encrypted summary. Complete original messages remain in session history.
+
 - Keep safe provider retries running when active-goal recovery receives IRC
   background traffic that is still waiting for its admission boundary.
 

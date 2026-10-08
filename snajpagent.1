@@ -3680,8 +3680,11 @@ compaction; each new attempt announces itself.  A long turn can compact again af
 tool progress when its next request exceeds the hard budget.  A recovery rebase clears the
 previous usage measurement until a new response supplies one.
 Native compaction is used when enabled. Direct ChatGPT/Codex sends a compaction
-trigger through the Responses stream and retains the input user messages and
-completed encrypted result. A model, endpoint or account change rebuilds earlier
+trigger through the Responses stream and retains the completed encrypted result
+with recent complete user messages, up to 256,000 encoded bytes. Older or oversized
+messages are represented by the encrypted summary; their original text remains in
+session history. This bounds verbatim context carried between compactions, including
+IRC updates and host context. A model, endpoint or account change rebuilds earlier
 history when the encrypted result cannot be reused. API providers use the separate
 Responses compact endpoint. Set
 .B native_compaction=false
