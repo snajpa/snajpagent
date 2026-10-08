@@ -42,6 +42,17 @@ order, duplicates and the distinction between absent options and an empty list.
 Hosted-search start/finish observations retain their typed provider evidence
 through replay and paired checkpoints without creating local calls or processes.
 
+## Concurrent native session creation
+
+Fresh sessions prepare independent private directories and checkpoints before
+publishing their names. Both name-check and final rename phases serialize through
+the existing sessions-directory lock. Native creation retries contention every
+10ms for at most five seconds per acquisition; interrupted waits and other errors
+return immediately. A failed final acquisition retains its provisional directory
+and leaves the caller's prepared session unchanged. Collision, private-directory
+validation and parent durability checks retain their existing behavior. The generic
+nonblocking directory-lock contract is unchanged for configuration writers.
+
 ## Format evolution and compatibility
 
 The new encoding is provisional while implementation and recovery testing expose

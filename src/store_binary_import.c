@@ -98,6 +98,22 @@ native_name_available(struct snag_store *store, const char *id, char *error, siz
     return 0;
 }
 
+static int
+native_names_lock(struct snag_store *store, struct snag_directory_lock *lock,
+    char *error, size_t error_size)
+{
+    /* Concurrent creation only holds this lock for name checks and rename.
+     * Bound contention so a stalled publisher cannot freeze another startup. */
+    uint64_t deadline = snag_monotonic_ms() + 5000u;
+    while (snag_directory_lock_acquire(store->sessions_fd, lock) < 0) {
+        if ((errno != EAGAIN && errno != EWOULDBLOCK) ||
+            snag_monotonic_ms() >= deadline || snag_sleep_ms(10u) < 0)
+            return snag_errorf(error, error_size, "cannot lock session names: %s",
+                strerror(errno));
+    }
+    return 0;
+}
+
 int
 snag_store_persist_binary_session(struct snag_store *store, struct snag_session *prepared,
     char *error, size_t error_size)
@@ -125,10 +141,7 @@ snag_store_persist_binary_session(struct snag_store *store, struct snag_session 
     int index_fd = -1;
     int rc = -1;
     int final_error = 0;
-    if (snag_directory_lock_acquire(store->sessions_fd, &names) < 0) {
-        (void)snag_errorf(error, error_size, "cannot lock session names: %s", strerror(errno));
-        goto out;
-    }
+    if (native_names_lock(store, &names, error, error_size) < 0) goto out;
     if (native_name_available(store, prepared->id, error, error_size) < 0) goto out;
     if (snag_directory_lock_release(&names) < 0) goto out;
     if (snag_random_id(nonce) < 0) goto out;
@@ -168,7 +181,7 @@ snag_store_persist_binary_session(struct snag_store *store, struct snag_session 
     index_fd = -1;
     if (bootstrap_native_checkpoint(candidate, query_fd, NULL, error, error_size) < 0 ||
         snag_sync_file(query_fd) < 0) goto out;
-    if (snag_directory_lock_acquire(store->sessions_fd, &names) < 0 ||
+    if (native_names_lock(store, &names, error, error_size) < 0 ||
         native_name_available(store, prepared->id, error, error_size) < 0 ||
         snag_rename_at(store->sessions_fd, stage, store->sessions_fd, prepared->id) < 0)
         goto out;

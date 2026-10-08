@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Allow simultaneous native session startup to wait for the short publication
+  lock instead of failing one owner when creating several workspace sessions.
+
 - Queue workspace session shutdown behind an outgoing owner request, so `:q!`
   completes without requiring another attempt while draft synchronization sends.
 

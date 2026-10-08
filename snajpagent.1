@@ -2138,7 +2138,9 @@ the normal agent resume rules. Browsing history and restoring a workspace alone
 leave stopped owners stopped.
 .PP
 On supported POSIX hosts, startup runs asynchronously. Other windows, commands
-and drafts remain usable.
+and drafts remain usable. Concurrent session creation waits up to five seconds
+for the shared session-name publication lock; a lock that remains busy reports
+a startup error.
 When ready, the owner opens in the requesting window. Selecting another buffer,
 closing that window or switching workspaces leaves the new owner detached;
 find it in :sessions. Closing or losing the frontend during startup also leaves
