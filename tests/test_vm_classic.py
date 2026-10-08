@@ -115,10 +115,16 @@ class ClassicTests(unittest.TestCase):
         child.command('workspace save')
         self.wait_snapshot(lambda rows: next(iter(rows.values()))['state']['classic'] is not None)
         self.assertEqual(base64.b64decode(self.saved()['classic']['input']), suffix)
-        for command in ('q', 'qa'):
+        for command in ('session quit', 'sessions quit'):
             child.command(command)
             child.repaint_until(b'Unsent classic input')
             self.assertIsNone(child.process.poll())
+        for command in ('q', 'qa'):
+            child.finish(command)
+            self.assertEqual(base64.b64decode(self.saved()['classic']['input']), suffix)
+            child = self.start('--resume', 'failed')
+            child.repaint_until(b'uncertain outcome')
+            self.assertEqual(self.inputs(), [])
         child.command('recover')
         child.repaint_until(b'INSERT')
         child.write(b'\x1b:workspace save\r')

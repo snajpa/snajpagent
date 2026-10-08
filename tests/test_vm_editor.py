@@ -9,6 +9,7 @@ import unittest
 import test_vm_frontend as frontend
 from store_history import journal_paths
 from test_vm_frontend import rollout
+from test_vm_mouse import current_rows
 
 
 class EditorTests(unittest.TestCase):
@@ -224,14 +225,19 @@ class EditorTests(unittest.TestCase):
         self.seed(text)
         self.child.write(b'6Gzz')
         self.check(text, 35)
+        self.child.repaint_until(b'line05')
+        visible = [line.strip() for line in current_rows(self.child).values()
+                   if line.strip().startswith('line')]
+        self.assertEqual(visible, ['line' + str(i).zfill(2) for i in range(1, 10)])
+        self.assertEqual(visible[len(visible) // 2], 'line05')
         self.child.write(b'H')
-        self.check(text, 21)
+        self.check(text, 7)
         self.child.write(b'M')
-        self.check(text, 28)
+        self.check(text, 35)
         self.child.write(b'L')
-        self.check(text, 42)
+        self.check(text, 63)
         self.child.write(b'$j')
-        self.check(text, 54)
+        self.check(text, 75)
 
     def test_joined_grapheme_undo_uses_valid_utf8_deltas(self):
         self.seed('👩💻')

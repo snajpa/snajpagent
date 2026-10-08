@@ -154,7 +154,6 @@ class Terminal:
     def attached(self, timeout=5):
         """Wait for a controlled session surface, including older frontends."""
         from test_session_view import View
-        from test_vm_mouse import current_rows
 
         labels = set()
         seen = set()
@@ -175,14 +174,17 @@ class Terminal:
                     observer.close()
             self.write(b'\x0c')
             self.read(.05)
-            rows = current_rows(self).values()
-            for line in rows:
-                if 'ATTACHED' in line:
+            # Screen and Mosh can rewrite the paint into relative cursor moves.
+            # Wait for the owner-derived prompt label; cell assertions belong to
+            # the interaction being tested after attachment.
+            output = re.sub(r'\x1b\[[0-9;?]*[A-Za-z]', '',
+                            self.output.decode('utf-8', 'replace'))
+            if 'ATTACHED' in output:
+                return
+            for label in labels:
+                if re.search(r'\[' + re.escape(label) +
+                             r'(?:; (?:HOLD|loading|history error, R))*\] ', output):
                     return
-                for label in labels:
-                    if re.search(r'\[' + re.escape(label) +
-                                 r'(?:; (?:HOLD|loading|history error, R))*\] ', line):
-                        return
         raise AssertionError(('controlled session prompt', bytes(self.output[-5000:])))
 
     def write(self, text):
