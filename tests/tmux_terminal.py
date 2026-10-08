@@ -97,6 +97,8 @@ def maybe_events(dotdir):
 
 
 def event_list(events, kind):
+    if kind == "irc_event":
+        return [event for event in events if event["type"] in ("irc_event", "irc_event_v2")]
     return [event for event in events if event["type"] == kind]
 
 
@@ -3442,7 +3444,7 @@ def run_pager_case(binary, root):
             filename = "memo's ; touch PAGER_INJECTED.txt"
             source = home / filename
             source.write_text("relative /cat file with quoting\n", encoding="utf-8")
-            terminal.submit("/cat " + filename)
+            terminal.submit('/cat "' + filename + '"')
             wait_file_contains(captured, "relative /cat file with quoting")
             wait_pager_return(terminal)
             assert captured.read_bytes() == source.read_bytes()
