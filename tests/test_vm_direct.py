@@ -24,7 +24,7 @@ class DirectTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(prefix='snag-direct-')
         self.addCleanup(self.tmp.cleanup)
-        self.root = Path(self.tmp.name)
+        self.root = Path(self.tmp.name).resolve()
         self.state = self.root / 'state'
         self.state.mkdir(mode=0o700)
         self.provider = harness.FakeResponses()
