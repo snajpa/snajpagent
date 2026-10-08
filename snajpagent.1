@@ -6336,7 +6336,10 @@ and cancellation available during the wait.  Earlier turn/tool work is not
 replayed. Additional eligible live chat, steering or queued input prevents further
 retries, including during backoff. Ordinary chat buffered behind a paused or
 blocked goal leaves recovery running and stays pending until its normal admission
-boundary. Direct mentions remain eligible. Steering keeps its immediate handoff;
+boundary. During active-goal recovery, background chat prevents a retry only when
+the current steering mode admits it into the rebuilt request. Deferred background
+chat stays queued while safe transport retries continue.
+Direct mentions remain eligible. Steering keeps its immediate handoff;
 background chat and queued turns retain their normal admission rules, without
 interrupting a healthy response.  When new input stops retrying a failed
 response, armed queued turns proceed automatically, without an extra

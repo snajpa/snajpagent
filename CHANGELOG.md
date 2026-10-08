@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Keep safe provider retries running when active-goal recovery receives IRC
+  background traffic that is still waiting for its admission boundary.
+
 - Accept large Responses completion records, including encrypted reasoning,
   within the existing 64 MiB stream budget.
 

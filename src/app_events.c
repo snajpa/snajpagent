@@ -300,6 +300,17 @@ out:
     return rc;
 }
 
+static bool
+irc_background_steering(const struct app_state *app)
+{
+    const struct snag_model_limit_config *limit = snag_config_model_limit_exact(
+        app->config, app->session.active_turn_provider, app->config->model);
+    return app->irc_sleep_released ||
+        ((app->session.steering_override && *app->session.steering_override) ?
+            !strcmp(app->session.steering_override, "all") :
+            (limit && !strcmp(limit->steering, "all")));
+}
+
 int
 snag_app_irc_event(void *opaque, const struct snag_irc_event *event)
 {
@@ -382,10 +393,12 @@ snag_app_irc_event(void *opaque, const struct snag_irc_event *event)
         if (snag_app_irc_snapshot(app, "join", error, sizeof(error)) < 0) return -1;
     }
 
-    /* Buffered chat cannot take over a failed request while the goal's idle
-     * boundary prevents that chat from starting a turn. Keep recovery armed. */
+    /* Goal recovery retains its active turn. Background chat that still waits
+     * for turn end cannot replace the failed request with fresher input. */
     bool background_ready = app->session.goal_status != SNAG_GOAL_PAUSED &&
-                            app->session.goal_status != SNAG_GOAL_BLOCKED;
+        app->session.goal_status != SNAG_GOAL_BLOCKED &&
+        (app->session.goal_status != SNAG_GOAL_ACTIVE || !app->session.active_turn ||
+            (!app->session.steering_deferred && irc_background_steering(app)));
     if (chat && (!app->session.irc_sleep_until_ms || accepted.urgent) &&
         (accepted.urgent || background_ready)) {
         ++app->input_generation;
@@ -511,18 +524,12 @@ snag_app_irc_flush_urgent(struct app_state *app, char *error, size_t error_size)
     size_t used;
     char *text;
     int rc;
-    const struct snag_model_limit_config *limit;
     bool admit_all;
 
     if (!app || !app->session.active_turn) return 0;
     int sleeping = snag_app_irc_sleeping(app, error, error_size);
     if (sleeping) return sleeping < 0 ? -1 : 0;
-    limit = snag_config_model_limit_exact(
-        app->config, app->session.active_turn_provider, app->config->model);
-    admit_all = (app->session.steering_override && *app->session.steering_override)
-                    ? strcmp(app->session.steering_override, "all") == 0
-                    : (limit && strcmp(limit->steering, "all") == 0);
-    admit_all = admit_all || app->irc_sleep_released;
+    admit_all = irc_background_steering(app);
     if (!app->irc_urgent.len && !(admit_all && app->irc_background.len)) return 0;
     if (app->irc_urgent.len) {
         if (snag_random_id(steering_id) < 0 || !(text = pending_batch(&app->irc_urgent, &used)))

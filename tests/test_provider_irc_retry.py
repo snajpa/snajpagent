@@ -5,7 +5,7 @@ import json
 import unittest
 
 from test_irc_queries import QueryFixture
-from test_provider_https import event
+from test_provider_https import event, response
 
 
 class BufferedRetryTests(QueryFixture):
@@ -142,6 +142,88 @@ class BufferedRetryTests(QueryFixture):
 
     def test_cancel_stops_recovery(self):
         self.exercise('cancel')
+
+    def active_goal_retry(self, mode='chat'):
+        before = self.events()[-1]['seq']
+        requests = []
+
+        def respond(handler, request, sequence):
+            requests.append(request)
+            n = len(requests)
+            if n == 1:
+                body = self.provider.function_body(sequence, 'once', 'exec_command', {
+                    'command': 'printf x >> retry-once', 'workdir': str(self.root),
+                    'stdin': None, 'pty': False, 'timeout_ms': None,
+                    'yield_ms': 1000, 'max_output_tokens': 1000})
+            elif n == 2:
+                body = response(partial=True) if mode == 'partial' else event(
+                    'response.created', response={
+                        'id': 'interrupted', 'status': 'in_progress', 'output': []})
+                handler.send_response(200)
+                handler.send_header('Content-Type', 'text/event-stream')
+                handler.send_header('Content-Length', str(len(body) + 100))
+                handler.send_header('Connection', 'close')
+                handler.end_headers()
+                handler.wfile.write(body)
+                handler.wfile.flush()
+                self.held.set()
+                assert self.release.wait(10), 'fixture did not release stream'
+                handler.close_connection = True
+                return
+            elif n == 3:
+                body = self.provider.function_body(sequence, 'complete', 'update_goal', {
+                    'action': 'complete', 'text': None})
+            else:
+                body = self.provider.response_body(sequence, 'recovered active goal')
+            self.provider.reply(handler, body.encode(), close_header=True)
+
+        self.provider.runtime_handler = respond
+        if mode == 'all':
+            self.term.write(b'/steering all\r')
+            self.wait(lambda: any(e['type'] == 'steering_updated' and
+                      e['data'].get('mode') == 'all' for e in self.events()))
+        self.term.write(b'/rollout\r/goal retry active goal\r')
+        self.wait(self.held.is_set)
+        marker = 'background remains deferred'
+        text = ('querybot: ' if mode == 'mention' else '') + marker
+        self.peer.sock.sendall(f'PRIVMSG #lab :{text}\r\n'.encode())
+        self.wait(lambda: any(e['type'] == 'irc_event_v2' and
+                  e['data'].get('text') == text for e in self.events()))
+        self.release.set()
+        self.wait(lambda: any(e['seq'] > before and e['type'] == 'goal_completed'
+                             for e in self.events()))
+        self.wait_idle()
+        events = [e for e in self.events() if e['seq'] > before]
+        failed = [e['data'] for e in events if e['type'] == 'response_failed']
+        if mode in ('all', 'mention'):
+            self.assertEqual(len(failed), 1)
+            self.assertTrue(failed[0]['new_input'])
+            self.assertIn(marker, json.dumps(requests[2]['input']))
+        elif mode == 'partial':
+            self.assertEqual(len(failed), 1)
+            self.assertFalse(failed[0]['new_input'])
+            self.assertEqual(failed[0]['partial_public'][0]['text'], 'partial answer')
+            self.assertIn('partial answer', json.dumps(requests[2]['input']))
+            self.assertNotIn(marker, json.dumps(requests[1:3]))
+        else:
+            self.assertFalse(failed, 'deferred background input vetoed safe provider retry')
+            self.assertEqual(requests[1], requests[2])
+            self.assertNotIn(marker, json.dumps(requests[1:3]))
+            self.assertNotIn(b'provider retry stopped', self.term.output)
+        self.assertEqual((self.root / 'retry-once').read_text(), 'x')
+        self.assertEqual(sum(e['type'] == 'tool_started' for e in events), 2)
+
+    def test_active_goal_background_chat_keeps_safe_transport_retry(self):
+        self.active_goal_retry()
+
+    def test_active_goal_all_steering_rebuilds_failed_request(self):
+        self.active_goal_retry('all')
+
+    def test_active_goal_mention_rebuilds_failed_request(self):
+        self.active_goal_retry('mention')
+
+    def test_active_goal_recovers_partial_output_once(self):
+        self.active_goal_retry('partial')
 
 
 if __name__ == '__main__':
