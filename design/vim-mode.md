@@ -1573,7 +1573,10 @@ Workspace commands have the same scope in every pane, report and picker:
 | `:session quit!` | Discard that session's drafts and request normal shutdown. |
 | `:sessions quit[!]` | Apply shutdown to all controlled sessions and exit; `!` permits retained drafts. |
 
-Shutdown uses the existing owner protocol and never sends SIGKILL. A slow shutdown
+Shutdown uses the existing owner protocol and never sends SIGKILL. After controller
+preflight and workspace save, an admitted quit stops new draft submissions and
+follows the current outgoing frame. Repeated quit requests coalesce; transport
+failure preserves local drafts and reports the lost connection. A slow shutdown
 remains visible and allows inspection or explicit detach. Terminal loss, broken
 SSH, workspace crash and suspension preserve native owners. Direct in-process
 backends must keep the workspace alive until their session stops. A report's

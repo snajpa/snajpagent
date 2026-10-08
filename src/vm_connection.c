@@ -264,7 +264,7 @@ snag_vm_connection_close(struct snag_vm_connection *connection)
     connection->irc_channels = connection->irc_connections = false;
     connection->reports_supported = connection->reports_subscribed = false;
     connection->drafts = connection->detaching = connection->detach_sent = false;
-    connection->cancel_pending = false;
+    connection->cancel_pending = connection->quit_pending = false;
     connection->feedback_supported = connection->command_verbosity = false;
     json_decref(connection->feedback);
     connection->feedback = NULL;
@@ -654,19 +654,22 @@ int
 snag_vm_connection_control(struct snag_vm_connection *connection, const char *intent)
 {
     if (connection->direct && !strcmp(intent, "detach")) return snag_errno(ENOTSUP);
+    if (!strcmp(intent, "quit")) {
+        if (!connection->bound || connection->detach_sent) return snag_errno(EBUSY);
+        if (!connection->quitting) {
+            connection->quitting = connection->quit_pending = true;
+            message(connection, "Waiting for session shutdown");
+        }
+        return 0;
+    }
     if (connection->bound && !connection->detach_sent && !strcmp(intent, "cancel") &&
         connection->channel.output) {
         connection->cancel_pending = true;
         return 0;
     }
     if (!connection->bound || connection->channel.output) return snag_errno(EBUSY);
-    int rc = send_message(connection,
+    return send_message(connection,
         json_pack("{s:s,s:I}", "type", intent, "generation", (json_int_t)connection->generation));
-    if (!rc && !strcmp(intent, "quit")) {
-        connection->quitting = true;
-        message(connection, "Waiting for session shutdown");
-    }
-    return rc;
 }
 
 /* Reconcile only on edits or owner replies. Idle polling never hashes a draft.
@@ -1250,6 +1253,11 @@ snag_vm_connection_step(struct snag_vm_connection *connection)
     if (rc > 0) rc = receive(connection, value);
     json_decref(value);
     if (rc < 0) goto failed;
+    if (connection->bound && connection->quit_pending && !connection->channel.output) {
+        if (send_message(connection, json_pack("{s:s,s:I}", "type", "quit",
+            "generation", (json_int_t)connection->generation)) < 0) goto failed;
+        connection->quit_pending = false;
+    }
     if (connection->bound && json_array_size(connection->feedback) &&
         !connection->channel.output) {
         if (send_message(connection, json_incref(json_array_get(connection->feedback, 0u))) < 0)
@@ -1310,7 +1318,8 @@ int
 snag_vm_connection_wait(const struct snag_vm_connection *connection, uint64_t now, int timeout)
 {
     if (connection->bound &&
-        (connection->cancel_pending || json_array_size(connection->feedback)) &&
+        (connection->quit_pending || connection->cancel_pending ||
+         json_array_size(connection->feedback)) &&
         !connection->channel.output)
         return 0;
     uint64_t receipt_at = 0u;

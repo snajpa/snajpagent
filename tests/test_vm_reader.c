@@ -1248,6 +1248,64 @@ mode_identity_test(struct snag_store *store, const char *root)
 }
 
 static void
+queued_quit_test(void)
+{
+#ifndef _WIN32
+    int sockets[2];
+    assert(socketpair(AF_UNIX, SOCK_STREAM, 0, sockets) == 0);
+    for (unsigned int i = 0u; i < 2u; ++i)
+        assert(fcntl(sockets[i], F_SETFL, O_NONBLOCK) == 0);
+    struct snag_vm_connection *connection =
+        snag_vm_connection_new("0123456789abcdef0123456789abcdef");
+    assert(connection);
+    assert(snag_vm_connection_control(connection, "quit") < 0 && errno == EBUSY);
+    assert(snag_vm_draft_replace(connection->rollout, 0u, 0u, "retained draft", 14u) == 0);
+    snag_view_channel_init(&connection->channel, sockets[0]);
+    connection->bound = connection->hello = connection->control = true;
+    connection->generation = 17u;
+    connection->detach_sent = true;
+    assert(snag_vm_connection_control(connection, "quit") < 0 && errno == EBUSY);
+    assert(!connection->quitting);
+    connection->detach_sent = false;
+    struct snag_view_channel peer;
+    snag_view_channel_init(&peer, sockets[1]);
+    json_t *request = json_pack("{s:s,s:I,s:s}", "type", "draft_get", "generation",
+        (json_int_t)17, "route", "rollout");
+    assert(request && snag_view_channel_send(&connection->channel, request) == 0);
+    json_decref(request);
+    assert(connection->channel.output);
+    assert(snag_vm_connection_control(connection, "quit") == 0);
+    assert(connection->quitting);
+    assert(snag_vm_connection_control(connection, "quit") == 0);
+    uint64_t deadline = snag_monotonic_ms() + 5000u;
+    for (unsigned int count = 0u; count < 2u;) {
+        assert(snag_monotonic_ms() < deadline);
+        snag_vm_connection_step(connection);
+        json_t *message = NULL;
+        int rc = snag_view_channel_read(&peer, &message);
+        assert(rc >= 0);
+        if (rc) {
+            assert(!strcmp(snag_json_string(message, "type"), count ? "quit" : "draft_get"));
+            assert(json_integer_value(json_object_get(message, "generation")) == 17);
+            ++count;
+        }
+        json_decref(message);
+    }
+    assert(snag_vm_connection_control(connection, "quit") == 0);
+    snag_vm_connection_step(connection);
+    assert(!connection->channel.output);
+    json_t *message = NULL;
+    assert(snag_view_channel_read(&peer, &message) == 0 && !message);
+    assert(connection->rollout->draft.len == 14u &&
+        !memcmp(connection->rollout->draft.data, "retained draft", 14u));
+    snag_view_channel_close(&peer);
+    snag_vm_connection_step(connection);
+    assert(!connection->bound && connection->rollout->draft.len == 14u);
+    snag_vm_connections_free(connection);
+#endif /* _WIN32 */
+}
+
+static void
 owner_state_test(void)
 {
 #ifndef _WIN32
@@ -1744,6 +1802,7 @@ main(void)
     assert(pthread_attr_destroy(&attributes) == 0);
 #endif
     projection_test();
+    queued_quit_test();
     owner_state_test();
     conversation_snapshot_test();
     forwarded_snapshot_test();

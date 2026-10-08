@@ -52,7 +52,7 @@ struct snag_vm_connection {
     bool control, bound, hello, quitting, exited, direct;
     bool commands, queue, drafts, terminal_commands, irc_queries, irc_channels, irc_connections;
     bool reports_supported, reports_subscribed, reports_changed, detaching, detach_sent;
-    bool cancel_pending;
+    bool cancel_pending, quit_pending;
     bool feedback_supported, command_verbosity;
 };
 

@@ -42,10 +42,10 @@ class CrossSessionTests(ChannelFixture):
         self.other.wait_exit()
         self.child = self.workspace_start('-N', 'cross-session')
         self.child.command('attach ' + self.source)
-        self.child.repaint_until(b'ATTACHED ' + self.source[:8].encode())
+        self.child.repaint_until(b'[channel-session]')
         self.child.command('vsp')
         self.child.command('attach ' + self.target)
-        self.child.repaint_until(b'ATTACHED ' + self.target[:8].encode())
+        self.child.repaint_until(b'[other session]')
         self.child.write(b'ikeep-target-rollout')
         self.normal()
         self.child.write(b'\x17w')
@@ -61,6 +61,7 @@ class CrossSessionTests(ChannelFixture):
         return next(b for b in self.owner(sid)['buffers'] if b['route'] == 'rollout')
 
     def finish(self):
+        self.normal()
         self.child.command('close')
         self.child.finish('close')
 
@@ -80,7 +81,7 @@ class CrossSessionTests(ChannelFixture):
         self.assertTrue(all(link.fileno() >= 0 for link in self.server.links.values()))
         self.assertTrue(self.owner(self.target)['control'])
         self.child.command('attach ' + self.source)
-        self.child.repaint_until(b'ATTACHED ' + self.source[:8].encode())
+        self.child.repaint_until(b'[channel-session]')
         self.child.finish('q!')
         self.wait(lambda: all(link.fileno() < 0 for link in self.server.links.values()))
 
@@ -148,7 +149,8 @@ class CrossSessionTests(ChannelFixture):
         self.wait(lambda: ('secondop', 'PRIVMSG peer :hello-target') in self.server.lines)
         self.assertEqual([nick for nick, line in self.server.lines if 'hello-target' in line],
                          ['secondop'])
-        self.child.repaint_until(b'query/peer')
+        self.child.repaint_until(b'[peer]')
+        self.normal()
         self.child.command('workspace save')
         self.wait_snapshot(lambda rows: rows and self.state()['windows'][0]['history']['session']
                            == self.target and isinstance(
@@ -176,7 +178,8 @@ class CrossSessionTests(ChannelFixture):
         self.assertEqual(self.rollout(self.target)['draft'], 'keep-target-rollout')
         self.assertNotIn('private-notice', json.dumps(self.seen))
         self.child.write(b'i/connections ' + address.encode() + b'/\r')
-        self.child.repaint_until(b'connection/' + self.server.endpoint.encode() + b' [operator]')
+        self.child.repaint_until(b'[' + self.server.endpoint.encode() + b']')
+        self.normal()
         self.child.command('workspace save')
         self.wait_snapshot(lambda rows: rows and self.state()['windows'][0]['history']['session']
                            == self.target)
@@ -206,7 +209,7 @@ class CrossSessionTests(ChannelFixture):
         self.child.write(b'\x17w')
         self.child.command('detach')
         self.child.repaint_until(b'Detached; owner continues running')
-        self.child.repaint_until(b'read-only ' + self.target[:8].encode())
+        self.child.repaint_until(b'[' + self.target[:8].encode() + b'; view only; :attach]')
         classic = Terminal(self.root, ('--attach', self.target), subcommand='')
         self.addCleanup(classic.close)
         classic.until(b'secondop@')
@@ -228,11 +231,13 @@ class CrossSessionTests(ChannelFixture):
     def test_channel_selection_join_and_part_use_addressed_owner(self):
         address = self.target[:8] + '/' + self.server.endpoint
         self.child.write(b'i/chat ' + address.encode() + b'/#side\r')
-        self.child.repaint_until(b'channel/#side')
+        self.child.repaint_until(b'[#side]')
+        self.normal()
         self.child.command('buffer ' + self.source)
         self.child.write(b'i/join ' + address.encode() + b'/#fresh\r')
         self.wait(lambda: ('secondop', 'JOIN #fresh') in self.server.lines)
-        self.child.repaint_until(b'channel/#fresh')
+        self.child.repaint_until(b'[#fresh]')
+        self.normal()
         self.child.command('buffer ' + self.source)
         self.child.write(b'i/part ' + address.encode() + b'/#fresh\r')
         self.wait(lambda: any(nick == 'secondop' and line.startswith('PART #fresh')

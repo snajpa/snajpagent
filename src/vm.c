@@ -1755,7 +1755,7 @@ quit_sessions(struct vm *vm, bool all, bool force)
     bool any = false;
     if (all) {
         for (struct snag_vm_connection *c = vm->connections; c; c = c->next) {
-            if (!c->bound && !c->exited && !c->direct &&
+            if ((!c->bound || c->detaching) && !c->exited && !c->direct &&
                 (c->instance[0] || c->control || snag_view_channel_opened(&c->channel))) {
                 (void)snprintf(vm->message, sizeof(vm->message),
                     "Session %.8s is not controlled; :attach %s before quitting all sessions",
@@ -1780,6 +1780,10 @@ quit_sessions(struct vm *vm, bool all, bool force)
     for (struct snag_vm_connection *c = vm->connections; c; c = c->next) {
         if ((!c->bound && !(all && direct && !strcmp(c->session, direct->session))) ||
             (!all && c != focused)) continue;
+        if (c->detaching) {
+            notice(vm, "Session is detaching; :attach it before requesting shutdown");
+            return;
+        }
         if (!force && snag_vm_connection_unsaved(c)) {
             notice(vm, "Unsent draft or unresolved submission; "
                 ":close preserves it, :session quit! discards");
@@ -1793,10 +1797,6 @@ quit_sessions(struct vm *vm, bool all, bool force)
         }
         if (!force && c->drafts && synchronizing) {
             notice(vm, "Waiting for the owner draft; retry quit after synchronization");
-            return;
-        }
-        if (c->channel.output) {
-            notice(vm, "Owner request is still sending; retry quit");
             return;
         }
     }

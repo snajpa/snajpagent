@@ -2082,7 +2082,8 @@ its sessions, panes and drafts. :qa is also accepted for detaching the workspace
 (or :qa!) saves the layout and drafts, requests normal shutdown of all sessions
 controlled by the workspace, and exits after their acknowledgements. A live
 observed session must first be attached; otherwise shutdown is refused before
-stopping any session.
+stopping any session. Shutdown waits for the current outgoing owner request
+to finish sending; repeating the quit command is unnecessary.
 .B :session quit
 stops the focused controlled session. Unsent drafts or unresolved submissions
 block this command; :session quit! discards that session's drafts and requests

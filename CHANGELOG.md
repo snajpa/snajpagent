@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Queue workspace session shutdown behind an outgoing owner request, so `:q!`
+  completes without requiring another attempt while draft synchronization sends.
+
 - Share standalone conversation order with workspace Tab and buffer navigation;
   connection logs enter the cycle after being opened and shared rooms appear once.
 
