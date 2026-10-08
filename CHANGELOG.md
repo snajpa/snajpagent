@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Exclude encrypted continuation size from streaming context estimates; use
+  provider usage when the response completes.
+
 - Replay shared-room IRC history once when the agent joins before the operator.
 
 - Recognize fully static Linux executables in dependency checks while retaining
@@ -35,7 +38,7 @@
   separators. Keep one entered line and semantic receipt; preserve separate file reports.
 
 - Refresh context percentages immediately after compaction and during streamed
-  text, tool arguments and continuation output. Mark display estimates with `~`;
+  text and tool arguments. Mark display estimates with `~`;
   completed provider usage includes the response's output tokens. Standalone
   prompts and workspace panes share the owner's meter and measured budget guards.
 

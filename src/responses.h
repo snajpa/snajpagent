@@ -86,6 +86,7 @@ struct snag_responses_stream {
     struct snag_wire_item *items;
     size_t item_count, item_capacity;
     size_t aggregate_bytes;
+    size_t text_bytes;
     char *response_id;
     struct snag_response_usage usage;
     snag_responses_emit_fn emit;

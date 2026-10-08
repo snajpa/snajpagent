@@ -1666,8 +1666,9 @@ response_record(void *opaque, const struct snag_sse_record *record)
             return -1;
         }
     }
+    /* Encrypted continuation size does not measure newly generated tokens. */
     if (rc == 0 && ctx->progress &&
-        ctx->progress(ctx->pump_opaque, ctx->stream.aggregate_bytes) < 0) {
+        ctx->progress(ctx->pump_opaque, ctx->stream.text_bytes) < 0) {
         ctx_error(ctx, "cannot report provider context growth");
         return -1;
     }

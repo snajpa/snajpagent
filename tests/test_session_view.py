@@ -886,6 +886,47 @@ class ContextMeterTests(unittest.TestCase):
         self.release.set()
         self.owner.wait_event('turn_interrupted')
 
+    def test_encrypted_continuation_does_not_inflate_completion_meter(self):
+        def respond(handler, request, sequence):
+            response_id = 'resp_opaque_meter'
+            handler.send_response(200)
+            handler.send_header('Content-Type', 'text/event-stream')
+            handler.send_header('Connection', 'close')
+            handler.end_headers()
+            handler.close_connection = True
+
+            def send(kind, data):
+                handler.wfile.write(self.provider.event(kind, data).encode())
+                handler.wfile.flush()
+
+            send('response.created', {'response': {'id': response_id,
+                 'status': 'in_progress', 'output': []}})
+            send('response.output_item.done', {'output_index': 0, 'item': {
+                'type': 'reasoning', 'id': 'opaque_item', 'summary': [],
+                'encrypted_content': 'A' * 600000}})
+            text = 'opaque completion boundary\n'
+            item = {'type': 'message', 'id': 'opaque_answer', 'role': 'assistant',
+                    'status': 'completed', 'content': [{'type': 'output_text',
+                    'text': text, 'annotations': []}]}
+            send('response.output_item.done', {'output_index': 1, 'item': item})
+            self.release.wait(10)
+            send('response.completed', {'response': {'id': response_id,
+                 'status': 'completed', 'output': [], 'usage': {
+                 'input_tokens': 1000, 'output_tokens': 2000, 'total_tokens': 3000}}})
+
+        self.provider.runtime_handler = respond
+        peer = self.owner.view()
+        os.write(self.owner.initial.master, b'finish with opaque continuation\r')
+        self.owner.initial.until(b'opaque completion boundary')
+        self.wait_meter(peer, lambda value: value == '~2')
+        self.assertFalse(any(state['prompt']['values'][5] == '~100'
+                             for state in peer.states))
+        self.release.set()
+        self.owner.wait_event('turn_completed')
+        peer.until('state', lambda message: message['state']['prompt']['values'][5] == '3'
+                   and not message['state']['prompt']['active'])
+        self.classic_meter('3')
+
     def test_compaction_refreshes_known_capacity_without_a_count_endpoint(self):
         self.owner.config.write_text(self.owner.config.read_text().replace(
             'exact_token_count = true', 'exact_token_count = false'))

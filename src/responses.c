@@ -495,6 +495,7 @@ reconcile_part(struct snag_responses_stream *stream, size_t output_index,
     if (account_bytes(stream, len - offset) < 0 ||
         snag_buf_append(&part->text, text + offset, len - offset) < 0)
         return stream_fail(stream, EOVERFLOW, "public response item exceeds its limit");
+    stream->text_bytes += len - offset;
     part->value_seen = true;
     if (emit_text(stream, output_index, item, kind, text + offset, len - offset) < 0) return -1;
     if (complete) part->complete = true;
@@ -553,6 +554,7 @@ reconcile_arguments(struct snag_responses_stream *stream, struct snag_wire_item 
     } else {
         if (account_bytes(stream, len) < 0 || snag_buf_append(&item->arguments, arguments, len) < 0)
             return stream_fail(stream, EOVERFLOW, "function arguments exceed their limit");
+        stream->text_bytes += len;
         item->arguments_seen = true;
     }
     if (complete) item->arguments_complete = true;

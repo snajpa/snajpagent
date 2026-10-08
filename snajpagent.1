@@ -3777,8 +3777,9 @@ setting the proactive threshold to zero does not disable capacity handling.
 With a known hard input window, the default automatic threshold is 90% of that
 window. The prompt percentage tracks the current request and its growing response
 against the effective input budget. An exact outgoing count refreshes it before
-provider output. Streamed text, tool arguments and retained continuation bytes
-increase a display estimate; completed input and output usage replace that estimate.
+provider output. Streamed text and tool arguments increase a display estimate; completed input and
+output usage replace that estimate. Encrypted continuation bytes are excluded from
+streaming estimates because their encoded size does not measure generated tokens.
 A leading ~ marks an estimate, including while an exact input count is combined
 with estimated output. Providers report hidden reasoning tokens at completion.
 .PP
