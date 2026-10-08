@@ -2660,7 +2660,9 @@ def test_deferred_controls_in_admission_order():
     with Child([], PROMPT.rstrip(), env=dict(os.environ, EDITOR=str(editor))) as child:
         child.send_wait(b"engine_blocked\r", b"engine-block-start")
         child.send(b"/model cache\r/config\r\x04")
-        child.wait(RESUME_HEADER, timeout=5)
+        # The two controls can cross two 2.5-second provider stalls before EOF.
+        # The assertions below own admission order; exit is an output wait.
+        child.wait(RESUME_HEADER)
         child.finish()
         sid = child.session_id()
     assert not marker.exists()

@@ -2,10 +2,9 @@
 #ifndef SNAJPAGENT_MCP_INTERNAL_H
 #define SNAJPAGENT_MCP_INTERNAL_H
 
+#include "http.h"
 #include "mcp.h"
 #include "sse.h"
-
-#include <curl/curl.h>
 
 #define SNAG_MCP_CURRENT "2026-07-28"
 #define SNAG_MCP_LEGACY "2025-11-25"
