@@ -1454,8 +1454,9 @@ or `COMMAND-LINE` for Ex command/search entry. Session identity, provider/model/
 clock and activity belong in the shared session prompt. Its workspace prefix
 identifies the session and marks HOLD, loading, history failure or the action
 needed to control a viewing-only/stored session. Session panes have no separate
-status bar. Engine activity comes from the owner's prompt snapshot; older owners
-supply their live active flag.
+status bar. Session names, conversation labels, owner prompts and history-search
+labels retain their complete text through rendering and editing. Engine activity
+comes from the owner's prompt snapshot; older owners supply their live active flag.
 
 ### 8.1 Movement and composition
 

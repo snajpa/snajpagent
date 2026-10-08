@@ -676,7 +676,7 @@ insert_input(struct snag_vm_buffer *buffer, const struct snag_vm_input_event *ev
     term->irc_names = json_incref(json_object_get(buffer->connection->state, "irc_names"));
     if (term->chat && snag_view_conversation_read(buffer->route, &term->conversation) < 0)
         return SNAG_VM_EDIT_ERROR;
-    if (!snag_strcpy(term->label, sizeof(term->label), prompt)) return SNAG_VM_EDIT_ERROR;
+    term->input_label = prompt;
 
     /* The buffer owns the draft across persistence and Vim edits. Lend it to
      * the terminal editor for this input step without a second text copy. */
@@ -704,6 +704,7 @@ insert_input(struct snag_vm_buffer *buffer, const struct snag_vm_input_event *ev
     buffer->draft = term->draft;
     buffer->cursor = term->cursor;
     term->draft = spare;
+    term->input_label = NULL;
     buffer->draft_dirty = true;
     ++buffer->connection->revision;
     if (snag_buf_terminate(&buffer->draft) < 0 || rc < 0) return SNAG_VM_EDIT_ERROR;
@@ -725,9 +726,7 @@ snag_vm_editor_poll(struct snag_vm_buffer *buffer)
     struct snag_term *term = buffer->editor.input;
     if (!term || !term->history_pending) return 0;
     const struct snag_vm_input_event tick = {.kind = SNAG_VM_TEXT};
-    char prompt[SNAG_TERM_LABEL_BYTES];
-    memcpy(prompt, term->label, sizeof(prompt));
-    return insert_input(buffer, &tick, term->columns, term->rows, prompt) < 0 ? -1 : 1;
+    return insert_input(buffer, &tick, term->columns, term->rows, NULL) < 0 ? -1 : 1;
 }
 
 enum snag_vm_edit_result

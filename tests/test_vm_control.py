@@ -427,11 +427,13 @@ class ControlTests(unittest.TestCase):
         self.assertEqual(self.owner.identity(), self.owner.owner_identity)
 
     def test_insert_history_and_reverse_search_use_session_history(self):
+        from test_vm_mouse import current_rows
+
         child = self.start('-N', 'input-history')
         child.command('attach ' + self.owner.sid)
         child.attached()
         child.write(b'i/fast off\r')
-        child.until(b'Fast mode: OFF')
+        child.repaint_until(b'Fast mode: OFF')
         child.write(b'\x10')
         self.wait_synced('/fast off')
         child.write(b'\x0e')
@@ -439,6 +441,25 @@ class ControlTests(unittest.TestCase):
         child.write(b'\x12fast')
         self.wait_synced('/fast off')
         child.write(b'\x07')
+        self.wait_synced('')
+        query = 'x' * 20000 + 'search-query-tail'
+        child.write(b'\x1b[200~' + query.encode() + b'\x1b[201~')
+        self.wait_synced(query)
+        child.write(b'\x01')
+        self.wait_snapshot(lambda rows:
+            rollout(next(iter(rows.values()))['state']['buffers'][0])['cursor'] == 0)
+        child.repaint_until(b'INSERT')
+        child.write(b'\x12')
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            child.read(.05)
+            if any("search-query-tail': " in row for row in current_rows(child).values()):
+                break
+        self.assertTrue(any("search-query-tail': " in row
+                            for row in current_rows(child).values()))
+        child.write(b'\x07X')
+        self.wait_synced('X' + query)
+        child.write(b'\x03')
         self.wait_synced('')
         self.escape(child)
         child.finish('workspace detach')
@@ -978,6 +999,47 @@ class ControlTests(unittest.TestCase):
         child.repaint_until(b'I>')
         self.escape(child)
         child.finish('workspace detach')
+
+    def test_workspace_identity_preserves_the_full_owner_prompt(self):
+        from test_vm_mouse import current_rows, mouse, position
+
+        child = self.start('-N', 'full-owner-prompt', rows=24, columns=100)
+        child.command('set mouse')
+        child.command('attach ' + self.owner.sid)
+        child.attached()
+        name = 'n' * 240
+        template = 'p' * 300 + 'PROMPT-END>'
+        child.write(b'i/session name ' + name.encode() + b'\r')
+        child.repaint_until(b'session name: ')
+        with self.owner.config.open('a') as stream:
+            stream.write('prompt = ' + 'p' * 300 +
+                         '{chat:C>}{rollout-idle:PROMPT-END>}{rollout-active:A>}\n')
+        child.write(b'/configure\r')
+        child.repaint_until(b'configuration reloaded:')
+        child.repaint_until(b'PROMPT-END>')
+        rows = current_rows(child)
+        frame = ''.join(rows[y].rstrip() for y in sorted(rows))
+        self.assertIn('[' + name + '] ' + template, frame)
+        child.write(b'complete draft')
+        self.wait_synced('complete draft')
+        child.write(b'\x1b[A')
+        self.wait_snapshot(lambda rows:
+            rollout(next(iter(rows.values()))['state']['buffers'][0])['cursor'] == 0)
+        self.wait_synced('complete draft')
+        child.write(b'\x05')
+        self.wait_snapshot(lambda rows:
+            rollout(next(iter(rows.values()))['state']['buffers'][0])['cursor']
+            == len('complete draft'))
+        row, column = position(child, 'complete draft')
+        mouse(child, row, column)
+        mouse(child, row, column, release=True)
+        self.wait_snapshot(lambda rows:
+            rollout(next(iter(rows.values()))['state']['buffers'][0])['cursor'] == 0)
+        child.write(b'X')
+        self.wait_synced('Xcomplete draft')
+        self.escape(child)
+        child.finish('workspace detach')
+        self.assertEqual(self.owner_draft()['text'], 'Xcomplete draft')
 
     def test_prompt_clock_advances_on_submission_and_spinner_animates_without_input(self):
         child = self.start('-N', 'prompt-lifetime', columns=140)

@@ -2200,8 +2200,9 @@ and undo history. Different conversations keep separate drafts.
 :detach releases control for all those views and preserves
 the running owner. In NORMAL, Ctrl-C requests the owner's ordinary turn interruption.
 The session prompt shows the provider, model, effort and activity reported by
-its owner. In a workspace it also identifies the session. A live session opened
-for viewing says "view only; :attach"; use :attach to control it and i to type.
+its owner. Workspace session and conversation prefixes preserve that full prompt
+while typing, placing the cursor and searching input history. A live session
+opened for viewing says "view only; :attach"; use :attach to control it and i to type.
 Stored history says "stored; :session"; :session starts that session again.
 .PP
 The workspace command line names the current mode:

@@ -92,7 +92,7 @@ struct vm_window {
     enum view_kind kind;
     size_t selected, top, composer_top, history_rows, composer_row, composer_rows;
     bool center_composer;
-    char prompt[SNAG_TERM_LABEL_BYTES];
+    struct snag_buf prompt;
     struct snag_prompt_clock prompt_clock;
     struct snag_term_animation animation;
     struct snag_vm_selection visual;
@@ -341,6 +341,7 @@ static void
 windows_free(struct vm_window *windows, size_t count)
 {
     for (size_t i = 0u; i < count; ++i) {
+        snag_buf_free(&windows[i].prompt);
         free(windows[i].filter);
         json_decref(windows[i].report);
         json_decref(windows[i].route);
@@ -960,6 +961,7 @@ split(struct vm *vm, enum snag_vm_split axis)
         return;
     }
     struct vm_window copy = vm->windows[vm->focus];
+    copy.prompt = (struct snag_buf){0};
     copy.filter = snag_strdup_checked(copy.filter ? copy.filter : "", SNAG_MAX_DIRECT_PROMPT);
     if (!copy.filter) { command_error(vm, "Cannot retain window filter"); return; }
     struct vm_window *grown = realloc(vm->windows, (vm->count + 1u) * sizeof(*grown));
@@ -1025,6 +1027,7 @@ close_window(struct vm *vm)
         return;
     }
     free(vm->windows[vm->focus].filter);
+    snag_buf_free(&vm->windows[vm->focus].prompt);
     snag_vm_document_free(vm->windows[vm->focus].document);
     json_decref(vm->windows[vm->focus].report);
     json_decref(vm->windows[vm->focus].route);
@@ -2571,7 +2574,8 @@ composer_key(struct vm *vm, const struct snag_vm_input_event *event)
     const struct snag_vm_rectangle *r = &vm->windows[vm->focus].rectangle;
     enum snag_vm_edit_result result = snag_vm_editor_key(c, &vm->reg, event,
         vm->insert, r->columns, vm->windows[vm->focus].composer_rows,
-        vm->windows[vm->focus].composer_top, vm->windows[vm->focus].prompt);
+        vm->windows[vm->focus].composer_top,
+        (const char *)vm->windows[vm->focus].prompt.data);
     if (result == SNAG_VM_EDIT_UNUSED) return false;
     if (event->kind == SNAG_VM_KEY && (event->modifiers & SNAG_VM_CTRL) && event->key == 'l')
         resized = 1;
@@ -3089,7 +3093,7 @@ mouse_composer(struct vm *vm, struct vm_window *window, unsigned int row, unsign
     struct snag_buf frame = {0};
     struct snag_term_composer_layout layout;
     unsigned int columns = window->rectangle.columns;
-    if (snag_term_composer_frame(window->prompt, text, buffer->draft.len,
+    if (snag_term_composer_frame((const char *)window->prompt.data, text, buffer->draft.len,
         buffer->cursor, columns, &frame, &layout) < 0) goto done;
     size_t target = window->composer_top + row - window->composer_row;
     size_t at = 0u;
@@ -3101,7 +3105,7 @@ mouse_composer(struct vm *vm, struct vm_window *window, unsigned int row, unsign
     size_t hit = mouse_byte((const char *)frame.data, line.start, line.end, 0u,
         column - window->rectangle.column, true);
     size_t source;
-    if (snag_term_composer_hit(window->prompt, text, buffer->draft.len, columns,
+    if (snag_term_composer_hit((const char *)window->prompt.data, text, buffer->draft.len, columns,
         hit, &source) < 0) goto done;
     source = snag_vm_text_floor(text, buffer->draft.len, source);
     if (!vm->insert && source == buffer->draft.len && source)
@@ -3897,9 +3901,13 @@ window_prompt(struct vm *vm, struct vm_window *window, struct snag_vm_connection
 {
     const json_t *state = connection ? connection->state : NULL;
     struct snag_vm_buffer *buffer = window_buffer(vm, window);
-    if (buffer && buffer->editor.input && buffer->editor.input->searching)
-        return snag_strcpy(window->prompt, sizeof(window->prompt),
-            (const char *)buffer->editor.input->search_label.data) ? 0 : -1;
+    snag_buf_reset(&window->prompt);
+    window->prompt.max = SIZE_MAX;
+    if (buffer && buffer->editor.input && buffer->editor.input->searching) {
+        const struct snag_buf *label = &buffer->editor.input->search_label;
+        return snag_buf_append(&window->prompt, label->data, label->len) < 0 ? -1 :
+            snag_buf_terminate(&window->prompt);
+    }
     const json_t *description = json_object_get(state, "prompt");
     const json_t *values = json_object_get(description, "values");
     const json_t *frames = json_object_get(description, "frames");
@@ -3994,11 +4002,11 @@ window_prompt(struct vm *vm, struct vm_window *window, struct snag_vm_connection
                 destination, sizeof(destination));
         }
     }
-    (void)snprintf(window->prompt, sizeof(window->prompt), "[%s%s%s%s%s] %s%s",
+    if (snag_buf_printf(&window->prompt, "[%s%s%s%s%s] %s%s",
         name && *name ? name : identity, *access ? "; " : "", access,
         window->follow ? "" : "; HOLD", window->source_failed ? "; history error, R" :
             window->load && window->load != LOAD_POLL ? "; loading" : "",
-        destination, term.label);
+        destination, term.label) < 0) return -1;
     uint64_t due = snag_term_animation_due(&window->animation, now);
     if (due && (!vm->prompt_due || due < vm->prompt_due)) vm->prompt_due = due;
     return 0;
@@ -4015,8 +4023,8 @@ draw_composer(struct vm *vm, struct vm_window *window, struct snag_vm_buffer *bu
     size_t cursor = buffer ? buffer->cursor : 0u;
     struct snag_buf frame = {0};
     struct snag_term_composer_layout layout;
-    if (snag_term_composer_frame(window->prompt, text, length, cursor, r->columns,
-        &frame, &layout) < 0) { snag_buf_free(&frame); return -1; }
+    if (snag_term_composer_frame((const char *)window->prompt.data, text, length, cursor,
+        r->columns, &frame, &layout) < 0) { snag_buf_free(&frame); return -1; }
     size_t rows = *height > 2u ? *height - 2u : 1u;
     size_t top = window->composer_top;
     if (window->center_composer) {

@@ -156,6 +156,8 @@ struct snag_term {
     size_t input_pos;
     size_t input_len;
     size_t paste_end_match;
+    /* The workspace lends its fully composed prompt for one input step. */
+    const char *input_label;
     char label[SNAG_TERM_LABEL_BYTES];
     char destination_label[SNAG_TERM_LABEL_BYTES + 192u];
     struct snag_prompt_clock prompt_clock;

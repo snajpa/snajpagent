@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Preserve complete workspace prompts and history-search labels through typing
+  and mouse cursor placement, including long session names and search queries.
+
 - Keep the complete inspection, approval and retry instructions in pending MCP
   tool results, including both exact request identifiers.
 

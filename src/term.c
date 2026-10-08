@@ -22,8 +22,8 @@ static atomic_uint sigint_pending;
 static volatile sig_atomic_t sigwinch_pending;
 static int redraw(struct snag_term *term);
 static size_t previous_cp(const unsigned char *s, size_t pos);
-static int compose_frame(struct snag_term *term, struct snag_buf *out, size_t *label_bytes,
-    size_t *cursor_row, size_t *cursor_col, size_t *end_row, size_t *end_col,
+static int compose_frame(struct snag_term *term, const char *label, struct snag_buf *out,
+    size_t *label_bytes, size_t *cursor_row, size_t *cursor_col, size_t *end_row, size_t *end_col,
     size_t *source_offset);
 static bool word_space(unsigned char c);
 static int insert_bytes(struct snag_term *, const unsigned char *, size_t);
@@ -796,6 +796,10 @@ prompt_label(struct snag_term *term, size_t *len)
         *len = term->search_label.len;
         return (const char *)term->search_label.data;
     }
+    if (term->input_label) {
+        *len = strlen(term->input_label);
+        return term->input_label;
+    }
     snag_term_destination_prefix(term, term->destination_label, 128u);
     size_t prefix = strlen(term->destination_label);
     (void)snprintf(term->destination_label + prefix, sizeof(term->destination_label) - prefix,
@@ -1126,11 +1130,12 @@ caption_line(struct snag_buf *out, const char *label, const char *text, unsigned
 }
 
 static int
-compose_frame(struct snag_term *term, struct snag_buf *out, size_t *label_bytes, size_t *cursor_row,
-    size_t *cursor_col, size_t *end_row, size_t *end_col, size_t *source_offset)
+compose_frame(struct snag_term *term, const char *label, struct snag_buf *out, size_t *label_bytes,
+    size_t *cursor_row, size_t *cursor_col, size_t *end_row, size_t *end_col, size_t *source_offset)
 {
     size_t label_len, cursor_byte = 0u, max;
-    const char *label = prompt_label(term, &label_len);
+    if (label) label_len = strlen(label);
+    else label = prompt_label(term, &label_len);
     size_t indent;
 
     snag_buf_init(out, 0u);
@@ -1175,10 +1180,10 @@ snag_term_composer_frame(const char *label, const char *text, size_t length, siz
     struct snag_term term = {.columns = columns,
         .cursor = cursor,
         .draft = {.data = (unsigned char *)text, .len = length}};
-    if (!columns || cursor > length || !snag_strcpy(term.label, sizeof(term.label), label))
+    if (!columns || !label || cursor > length)
         return snag_errno(EINVAL);
-    return compose_frame(&term, frame, &layout->label, &layout->cursor_row, &layout->cursor_column,
-        &layout->end_row, &layout->end_column, NULL);
+    return compose_frame(&term, label, frame, &layout->label, &layout->cursor_row,
+        &layout->cursor_column, &layout->end_row, &layout->end_column, NULL);
 }
 
 int
@@ -1187,12 +1192,12 @@ snag_term_composer_hit(const char *label, const char *text, size_t length, unsig
 {
     struct snag_term term = {
         .columns = columns, .draft = {.data = (unsigned char *)text, .len = length}};
-    if (!columns || !snag_strcpy(term.label, sizeof(term.label), label)) return snag_errno(EINVAL);
+    if (!columns || !label) return snag_errno(EINVAL);
     struct snag_buf frame = {0};
     struct snag_term_composer_layout layout;
     size_t source = frame_byte;
-    int rc = compose_frame(&term, &frame, &layout.label, &layout.cursor_row, &layout.cursor_column,
-        &layout.end_row, &layout.end_column, &source);
+    int rc = compose_frame(&term, label, &frame, &layout.label, &layout.cursor_row,
+        &layout.cursor_column, &layout.end_row, &layout.end_column, &source);
     snag_buf_free(&frame);
     if (!rc) *source_byte = frame_byte < layout.label ? 0u : source;
     return rc;
@@ -1598,8 +1603,8 @@ redraw(struct snag_term *term)
         return 0;
     }
     snag_term_trace(term, "paint", "compose_frame");
-    if (compose_frame(term, &out, &label_len, &cursor_row, &cursor_col, &end_row, &end_col, NULL) <
-        0)
+    if (compose_frame(term, label, &out, &label_len, &cursor_row, &cursor_col, &end_row, &end_col,
+        NULL) < 0)
         goto out;
     clip_prompt(term, &out, &label_len, &cursor_row, &cursor_col, &end_row, &end_col);
     rc = paint_prompt(term, &out, label_len, cursor_row, cursor_col, end_row, end_col);
@@ -2507,7 +2512,7 @@ move_vertical(struct snag_term *term, bool down, size_t preferred)
     if ((!down && !term->cursor) || (down && term->cursor == term->draft.len))
         return down ? history_down(term) : history_up(term);
     /* Input checkpoints may have edited the draft without painting it yet. */
-    rc = compose_frame(term, &frame, &label, &row, &col, &end_row, &end_col, NULL);
+    rc = compose_frame(term, NULL, &frame, &label, &row, &col, &end_row, &end_col, NULL);
     if (rc < 0) {
         snag_buf_free(&frame);
         return -1;
@@ -2536,18 +2541,18 @@ move_vertical(struct snag_term *term, bool down, size_t preferred)
         source = next;
     }
     snag_buf_free(&frame);
-    rc = compose_frame(term, &frame, &label, &row, &col, &end_row, &end_col, &source);
+    rc = compose_frame(term, NULL, &frame, &label, &row, &col, &end_row, &end_col, &source);
     snag_buf_free(&frame);
     if (rc < 0) return -1;
     term->cursor = snag_grapheme_floor(term->draft.data, term->draft.len, source);
-    rc = compose_frame(term, &frame, &label, &row, &col, &end_row, &end_col, NULL);
+    rc = compose_frame(term, NULL, &frame, &label, &row, &col, &end_row, &end_col, NULL);
     snag_buf_free(&frame);
     if (rc < 0) return -1;
     /* A soft-wrap boundary maps to the next row's first byte. Stay on the
      * requested row, including when its final space starts a display wrap. */
     while (row > target && term->cursor) {
         term->cursor = snag_grapheme_floor(term->draft.data, term->draft.len, term->cursor - 1u);
-        rc = compose_frame(term, &frame, &label, &row, &col, &end_row, &end_col, NULL);
+        rc = compose_frame(term, NULL, &frame, &label, &row, &col, &end_row, &end_col, NULL);
         snag_buf_free(&frame);
         if (rc < 0) return -1;
     }
@@ -2804,7 +2809,8 @@ cancel_line(struct snag_term *term, enum snag_term_action *action)
         if (!rc) rc = snag_buf_append(&echo, "^C", 2u);
         if (!rc) rc = snag_buf_terminate(&echo);
         size_t label_length;
-        const char *label = term->input_only ? term->label : prompt_label(term, &label_length);
+        const char *label = term->input_only && term->input_label ?
+            term->input_label : prompt_label(term, &label_length);
         if (!rc) rc = term->feedback(term->feedback_opaque, SNAG_TERM_CANCELLED, label,
             (const char *)echo.data);
         snag_buf_free(&echo);
