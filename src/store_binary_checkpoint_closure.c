@@ -82,19 +82,22 @@ load(struct closure_capture *capture, uint64_t sequence,
 {
     if (cancel_capture(capture)) return snag_errno(ECANCELED);
     bool old = sequence < capture->available->boundary.next_seq;
+    bool indexed = capture->index_fd >= 0;
     struct snag_binary_index_entry listed;
     if (old && old_member(capture, sequence, &listed) < 0) return -1;
-    if (!old && capture->index_fd >= 0) {
+    if (!old && indexed) {
         int rc = snag_binary_index_read_verified(capture->index_fd, &capture->available->identity,
             capture->frontier->count, capture->index_root, sequence, &listed);
-        if (rc) return rc < 0 ? -1 : snag_errno(ENOENT);
+        if (rc < 0) return -1;
+        /* A rebuilt derived index can omit the already verified suffix. */
+        if (rc > 0) indexed = false;
     }
     if (!capture->batch.count || sequence < capture->before.next_seq ||
         sequence >= capture->after.next_seq) {
         struct snag_binary_checkpoint_index verified;
         unsigned char encoded[SNAG_BINARY_INDEX_ENTRY_SIZE];
         const struct snag_binary_checkpoint_index *access = capture->available;
-        if (capture->index_fd >= 0) {
+        if (indexed) {
             /* Old and suffix rows have independent captured-root membership;
              * neither source location is supplied by an unproved cache row. */
             if (snag_binary_index_entry_encode(encoded, &access->identity, &listed) < 0) return -1;
@@ -119,7 +122,7 @@ load(struct closure_capture *capture, uint64_t sequence,
     if (snag_binary_index_entry_decode(capture->flat.data + offset,
             SNAG_BINARY_INDEX_ENTRY_SIZE, &capture->available->identity, sequence,
             &canonical) < 0) return -1;
-    if (old || capture->index_fd >= 0) {
+    if (old || indexed) {
         if (listed.batch_offset != canonical.batch_offset || listed.turn != canonical.turn ||
             listed.record_offset != canonical.record_offset || listed.kind != canonical.kind ||
             memcmp(listed.batch_digest, canonical.batch_digest, sizeof(listed.batch_digest)))
@@ -342,7 +345,10 @@ collect_roots(struct closure_capture *capture,
     for (size_t i = 0u; i < SNAG_BINARY_CHECKPOINT_TEXT_COUNT; ++i) {
         const struct snag_binary_checkpoint_text_source *source = &sources->texts.slots[i];
         if (need(capture, &capture->roots, source->declaration) < 0 ||
-            need(capture, &capture->needed, source->original.target.sequence) < 0) return -1;
+            need(capture, i == SNAG_BINARY_TEXT_ACTIVE_PROMPT ?
+                &capture->roots : &capture->needed, source->original.target.sequence) < 0) {
+            return -1;
+        }
     }
     if (collect_call(capture, &sources->calls, capture->through->next_seq) < 0) return -1;
     for (size_t i = 0u; i < sources->process_count; ++i) {

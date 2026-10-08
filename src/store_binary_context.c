@@ -19,6 +19,8 @@ struct source_walk {
     const struct snag_context_control *control;
     const struct snag_binary_anchor *verified;
     const struct snag_binary_checkpoint_index *access;
+    uint64_t prompt_input;
+    struct snag_buf *additional;
 };
 
 static int
@@ -111,6 +113,78 @@ source_record(void *opaque, const struct snag_binary_record *record, uint64_t se
     return rc;
 }
 
+/* Earlier checkpoints retained the prompt's admission receipt as a text leaf,
+ * without its IRC dependencies once compaction removed that admission from the
+ * recent context. The authenticated receipt supplies the exact missing points. */
+static int
+prompt_dependency(struct source_selection *selection, uint64_t sequence)
+{
+    const struct source_walk *source = selection->source;
+    if (!sequence || sequence >= source->verified->next_seq) return snag_errno(EINVAL);
+    struct snag_binary_index_entry entry;
+    int missing = sequence < source->access->boundary.next_seq ?
+        snag_binary_checkpoint_index_find(source->access, sequence, &entry) : 0;
+    if (missing < 0) return -1;
+    struct source_walk direct = *source;
+    if (missing) direct.access = NULL;
+    struct source_selection scoped = *selection;
+    scoped.source = &direct;
+    int rc = snag_binary_checkpoint_records_read(source->fd, source->verified, direct.access,
+        sequence, sequence + 1u, source_record, source_selection_cancelled, &scoped);
+    selection->matched = scoped.matched;
+    if (rc < 0 || !missing || !source->additional) return rc;
+    struct snag_buf scratch = {.max = SNAG_BINARY_BATCH_MAX};
+    struct snag_buf flat = {.max = SNAG_BINARY_INDEX_BATCH_MAX};
+    struct snag_binary_batch batch;
+    struct snag_binary_anchor before;
+    struct snag_binary_anchor after;
+    rc = -1;
+    if (source_selection_cancelled(selection)) { snag_errno(ECANCELED); goto done; }
+    if (snag_binary_batch_find(source->fd, &source->access->boundary, sequence,
+            &scratch, &batch, &before) < 0 ||
+        snag_binary_batch_read(source->fd, source->access->boundary.end,
+            &before, &scratch, &batch, &after) != 0 ||
+        snag_binary_index_append_batch(&flat, &source->access->identity,
+            &before, &after, batch.data, batch.size) < 0) goto done;
+    size_t offset = (size_t)(sequence - before.next_seq) * SNAG_BINARY_INDEX_ENTRY_SIZE;
+    if (snag_binary_index_entry_decode(flat.data + offset, SNAG_BINARY_INDEX_ENTRY_SIZE,
+            &source->access->identity, sequence, &entry) < 0) goto done;
+    for (size_t i = 0u; i < source->additional->len / sizeof(entry); ++i) {
+        const struct snag_binary_index_entry *saved =
+            (const struct snag_binary_index_entry *)source->additional->data + i;
+        if (saved->sequence == sequence) { rc = 0; goto done; }
+    }
+    rc = snag_buf_append(source->additional, &entry, sizeof(entry));
+done:
+    snag_buf_free(&scratch);
+    snag_buf_free(&flat);
+    return rc;
+}
+
+static int
+prompt_sources(struct source_selection *selection)
+{
+    const struct source_walk *source = selection->source;
+    if (!selection->prompt || !source->prompt_input) return 0;
+    const char *type = NULL;
+    json_t *data = NULL;
+    if (snag_binary_checkpoint_projection_read(source->fd, source->verified, source->access,
+            source->prompt_input, &type, &data) < 0) return -1;
+    const char *text = snag_json_string(json_object_get(data, "input"), "text");
+    int rc = 0;
+    if (!strcmp(type, "irc_admitted") && text && !strcmp(text, selection->prompt)) {
+        const json_t *sequences = json_object_get(data, "sequences");
+        for (size_t i = 0u; i < json_array_size(sequences); ++i) {
+            uint64_t sequence = (uint64_t)json_integer_value(json_array_get(sequences, i));
+            if (!sequence || sequence >= source->prompt_input) { rc = snag_errno(EINVAL); break; }
+            if (prompt_dependency(selection, sequence) < 0 ||
+                prompt_dependency(selection, sequence + 1u) < 0) { rc = -1; break; }
+        }
+    }
+    json_decref(data);
+    return rc;
+}
+
 static int
 compare_sources(const void *left, const void *right)
 {
@@ -174,6 +248,7 @@ walk_selected_sources(const struct source_walk *source, const json_t *wanted,
             goto done;
     }
     if (prompt) {
+        if (prompt_sources(&selection) < 0) goto done;
         if (snag_binary_checkpoint_records_read(source->fd, source->verified, source->access,
                 1u, source->verified->next_seq, source_record,
                 source_selection_cancelled, &selection) < 0) goto done;
@@ -406,8 +481,8 @@ resume_pinned(struct snag_session *source, struct snag_session *restored,
     const struct snag_binary_checkpoint_frame *frame,
     const struct snag_binary_checkpoint_receipt *receipt, const struct snag_binary_anchor *stop,
     const struct snag_binary_checkpoint_index *available, struct snag_binary_recovery *recovered,
-    struct snag_binary_checkpoint_sources *sources, const struct snag_context_control *control,
-    char *error, size_t error_size)
+    struct snag_binary_checkpoint_sources *sources, struct snag_buf *additional,
+    const struct snag_context_control *control, char *error, size_t error_size)
 {
     if (!source || !restored || source == restored || !frame || !receipt || !stop ||
         source->log_fd < 0 || (source->lock_fd < 0 && !source->snapshot_read_only) ||
@@ -455,7 +530,10 @@ resume_pinned(struct snag_session *source, struct snag_session *restored,
         &origins, candidate, control ? control->cancelled : NULL,
         control ? control->opaque : NULL) < 0) goto done;
     struct source_walk walk = {.fd = source->log_fd, .control = control,
-        .verified = &recovery.verified, .access = available};
+        .verified = &recovery.verified, .access = available,
+        .prompt_input =
+            origins.texts.slots[SNAG_BINARY_TEXT_ACTIVE_PROMPT].original.target.sequence,
+        .additional = additional};
     if (snag_context_capture_sources(capture, candidate, walk_sources, &walk,
             error, error_size) < 0 ||
         snag_context_capture_bind(&capture, candidate, error, error_size) < 0 ||
@@ -493,7 +571,7 @@ snag_store_resume_pinned_binary_context_checkpoint(struct snag_session *source,
     char *error, size_t error_size)
 {
     return resume_pinned(source, restored, frame, receipt, stop, available, NULL,
-        sources, control, error, error_size);
+        sources, NULL, control, error, error_size);
 }
 
 void
@@ -505,11 +583,46 @@ snag_binary_context_admission_free(struct snag_binary_context_admission *admissi
 }
 
 static int
+compare_entries(const void *left, const void *right)
+{
+    const struct snag_binary_index_entry *a = left;
+    const struct snag_binary_index_entry *b = right;
+    return (a->sequence > b->sequence) - (a->sequence < b->sequence);
+}
+
+static int
+copy_access(struct snag_buf *out, const struct snag_binary_checkpoint_index *access,
+    const struct snag_buf *additional)
+{
+    if (!additional->len)
+        return snag_binary_checkpoint_index_copy(out, access);
+    struct snag_buf entries = {.max = SIZE_MAX};
+    int rc = -1;
+    for (size_t i = 0u; i < access->entry_count; ++i) {
+        struct snag_binary_index_entry entry;
+        const unsigned char *bytes = access->entries + i * SNAG_BINARY_INDEX_ENTRY_SIZE;
+        uint64_t sequence = 0u;
+        for (size_t j = 0u; j < 8u; ++j) sequence |= (uint64_t)bytes[j] << (8u * j);
+        if (snag_binary_index_entry_decode(bytes,
+                SNAG_BINARY_INDEX_ENTRY_SIZE, &access->identity, sequence, &entry) < 0 ||
+            snag_buf_append(&entries, &entry, sizeof(entry)) < 0) goto done;
+    }
+    if (snag_buf_append(&entries, additional->data, additional->len) < 0) goto done;
+    size_t count = entries.len / sizeof(struct snag_binary_index_entry);
+    qsort(entries.data, count, sizeof(struct snag_binary_index_entry), compare_entries);
+    rc = snag_binary_checkpoint_index_encode(out, &access->identity, &access->boundary,
+        &access->tree, (const struct snag_binary_index_entry *)entries.data, count);
+done:
+    snag_buf_free(&entries);
+    return rc;
+}
+
+static int
 admission_frontier(int fd, const struct snag_binary_checkpoint_frame *frame,
     const struct snag_binary_checkpoint_receipt *receipt,
     const struct snag_binary_checkpoint_index *supplement,
     const struct snag_binary_anchor *stop, struct snag_buf *scratch,
-    struct snag_binary_context_admission *admission,
+    struct snag_binary_context_admission *admission, const struct snag_buf *additional,
     const struct snag_context_control *control, char *error, size_t error_size)
 {
     struct snag_binary_checkpoint_index embedded;
@@ -521,7 +634,7 @@ admission_frontier(int fd, const struct snag_binary_checkpoint_frame *frame,
         supplement = &embedded;
     }
     admission->access.max = SIZE_MAX;
-    if (snag_binary_checkpoint_index_copy(&admission->access, supplement) < 0 ||
+    if (copy_access(&admission->access, supplement, additional) < 0 ||
         snag_binary_checkpoint_index_decode(admission->access.data, admission->access.len,
             &frame->identity, &frame->boundary, receipt->index_root,
             &admission->available) < 0) {
@@ -576,6 +689,7 @@ snag_store_admit_binary_context_checkpoint(struct snag_session *source,
     snag_session_init(candidate);
     struct snag_binary_checkpoint_sources origins = {0};
     struct snag_binary_context_admission staged = {0};
+    struct snag_buf additional = {.max = SIZE_MAX};
     int rc = -1;
     if (checkpoint_cancelled(control, error, error_size) < 0 ||
         snag_binary_journal_tail(source->log_fd, before.st_size, &scratch,
@@ -614,13 +728,13 @@ snag_store_admit_binary_context_checkpoint(struct snag_session *source,
     if (snag_binary_checkpoint_image_read(images[slot], &identity, &receipts[slot], &image,
             &frame, control ? control->cancelled : NULL, control ? control->opaque : NULL) < 0 ||
         resume_pinned(source, candidate, &frame, &receipts[slot], &found.verified,
-            available ? available[slot] : NULL, &suffix, &origins,
+            available ? available[slot] : NULL, &suffix, &origins, &additional,
             control, error, error_size) < 0 ||
         checkpoint_cancelled(control, error, error_size) < 0) goto done;
     if (admission) {
         if (admission_frontier(source->log_fd, &frame, &receipts[slot],
                 available ? available[slot] : NULL, &found.verified, &scratch,
-                &staged, control, error, error_size) < 0) goto done;
+                &staged, &additional, control, error, error_size) < 0) goto done;
         for (size_t i = 0u; i < 2u; ++i) {
             if (!(pinned & (1 << i))) continue;
             staged.generations[i] = receipts[i].generation;
@@ -654,6 +768,7 @@ done:
     free(candidate);
     snag_binary_checkpoint_sources_free(&origins);
     snag_binary_context_admission_free(&staged);
+    snag_buf_free(&additional);
     snag_buf_free(&scratch);
     snag_buf_free(&image);
     return rc;

@@ -2153,6 +2153,15 @@ chain. Existing entries retain their checked locations, and malformed entries or
 missing required source references remain errors. This path also recovers existing
 checkpoint images without changing their bytes or the on-disk format.
 
+An active prompt's original admission receipt is a closure root. Its message
+ordinals and adjacent-row discriminators survive even after consumption and
+compaction remove that receipt from recent provider context. For older images,
+pinned recovery verifies that receipt's input against the exact active prompt,
+authenticates its missing source points through the journal, and adds the proven
+locations to the owner's in-memory access table for subsequent checkpoints.
+Other missing required old points remain errors. Suffix locations missing from a
+rebuilt derived index use the already bounded journal suffix during capture.
+
 ### Joint checkpoint materialization
 
 The state-only materializer takes an immutable decoded image already matched to
