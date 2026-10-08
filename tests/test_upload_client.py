@@ -19,6 +19,7 @@ import shlex
 import signal
 import struct
 import subprocess
+import sys
 import tempfile
 import termios
 import threading
@@ -45,14 +46,71 @@ def frame(kind, data, numeric=False):
 
 
 class FixtureChildren:
-    """Pin only verified descendants of a fixture-owned process on Linux."""
+    """Track verified fixture descendants across frontend exit."""
 
     def __init__(self, pid, parent=None):
         self.handles = {}
+        self.mac_ids = {}
         if hasattr(os, "pidfd_open") and hasattr(signal, "pidfd_send_signal"):
             self.pin(pid, os.getpid() if parent is None else parent)
+        elif sys.platform == "darwin":
+            row = self.mac_processes().get(pid)
+            if row and row[0] == (os.getpid() if parent is None else parent):
+                self.mac_ids[pid] = row[1]
         atexit.register(self.close)
         self.remember()
+
+    @staticmethod
+    def mac_processes():
+        rows = subprocess.check_output(
+            ["ps", "-axo", "pid=,ppid=,lstart=,command="], text=True)
+        result = {}
+        for line in rows.splitlines():
+            fields = line.split(None, 7)
+            if len(fields) == 8:
+                result[int(fields[0])] = (int(fields[1]), tuple(fields[2:]))
+        return result
+
+    def remember_mac(self, stop):
+        rows = self.mac_processes()
+        pending = list(self.mac_ids)
+        seen = set()
+        while pending:
+            pid = pending.pop()
+            if pid in seen:
+                continue
+            seen.add(pid)
+            row = rows.get(pid)
+            if not row or row[1] != self.mac_ids[pid]:
+                continue
+            if stop:
+                try:
+                    os.kill(pid, signal.SIGSTOP)
+                except ProcessLookupError:
+                    continue
+                rows = self.mac_processes()
+            for child, (parent, identity) in rows.items():
+                if parent == pid and child not in seen:
+                    self.mac_ids[child] = identity
+                    pending.append(child)
+
+    def close_mac(self):
+        self.remember_mac(True)
+        rows = self.mac_processes()
+        for pid, identity in self.mac_ids.items():
+            if rows.get(pid, (None, None))[1] == identity:
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+        deadline = time.monotonic() + 3
+        while self.mac_ids:
+            rows = self.mac_processes()
+            self.mac_ids = {pid: identity for pid, identity in self.mac_ids.items()
+                            if rows.get(pid, (None, None))[1] == identity}
+            if self.mac_ids:
+                assert time.monotonic() < deadline, "fixture descendants did not exit"
+                time.sleep(.01)
 
     def pin(self, pid, parent, parent_fd=None):
         if pid in self.handles:
@@ -77,6 +135,9 @@ class FixtureChildren:
                 os.close(fd)
 
     def remember(self, stop=False):
+        if sys.platform == "darwin":
+            self.remember_mac(stop)
+            return
         pending = list(self.handles)
         seen = set()
         while pending:
@@ -100,6 +161,9 @@ class FixtureChildren:
 
     def close(self):
         atexit.unregister(self.close)
+        if sys.platform == "darwin":
+            self.close_mac()
+            return
         try:
             # Freeze known parents before discovering their last descendants.
             # Detached owners remain pinned even after their frontend is reaped.
@@ -271,6 +335,34 @@ class ProductSession(Session):
 
 
 class UploadClientTests(unittest.TestCase):
+    @unittest.skipUnless(sys.platform == "darwin", "macOS process identities")
+    def test_mac_fixture_cleanup_after_frontend_loss(self):
+        with tempfile.TemporaryDirectory(prefix="snag-owner-cleanup-") as tmp:
+            session = ProductSession(Path(tmp))
+            sibling = subprocess.Popen(["/bin/sleep", "30"])
+            try:
+                rejected = FixtureChildren(sibling.pid, parent=os.getpid() + 1)
+                self.assertFalse(rejected.mac_ids)
+                rejected.close()
+                session.children.remember()
+                owners = {pid: identity for pid, identity in session.children.mac_ids.items()
+                          if pid != session.process.pid}
+                self.assertTrue(owners, "native engine was not tracked")
+                session.process.terminate()
+                session.process.wait(timeout=3)
+                rows = FixtureChildren.mac_processes()
+                self.assertTrue(any(rows.get(pid, (None, None))[1] == identity
+                                    for pid, identity in owners.items()))
+                session.close()
+                rows = FixtureChildren.mac_processes()
+                self.assertFalse(any(rows.get(pid, (None, None))[1] == identity
+                                     for pid, identity in owners.items()))
+                self.assertIsNone(sibling.poll(), "cleanup touched a sibling fixture")
+            finally:
+                session.close()
+                sibling.terminate()
+                sibling.wait(timeout=3)
+
     @unittest.skipUnless(hasattr(os, "pidfd_open"), "Linux pidfds")
     def test_cleanup_ignores_nonleader_task(self):
         stop = threading.Event()
