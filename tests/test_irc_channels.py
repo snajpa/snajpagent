@@ -349,8 +349,8 @@ class ReminderTests(ChannelFixture):
             for nick in ('querybot', 'queryop'):
                 self.server.send(nick, '@saj-id=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb:2;saj-op=1 '
                                  ':queryop!u@fake PRIVMSG #side :querybot: queued-after-deferral\r\n')
-            self.wait(lambda: any(e['type'] == 'irc_admitted' and
-                      'queued-after-deferral' in e['data'].get('steering', {}).get('text', '')
+            self.wait(lambda: any(e['type'] == 'irc_event_v2' and
+                      'queued-after-deferral' in e['data'].get('text', '')
                       for e in self.events()))
         elif pending:
             self.term.write(b'/rollout\r')
@@ -367,7 +367,10 @@ class ReminderTests(ChannelFixture):
         self.assertEqual(sum(e['type'] == 'response_started' and
                          e['data']['turn_id'] == turn for e in events), 2)
         self.assertNotIn('cannot stage', self.term.output.decode(errors='replace'))
-        if pending:
+        if pending == 'irc':
+            self.submit('next-explicit-turn')
+            self.assertIn('queued-after-deferral', json.dumps(requests))
+        elif pending:
             inputs = [e['data'] if e['type'] == 'steering_added' else
                       e['data'].get('steering', {}) for e in events]
             steering = next(d['steering_id'] for d in inputs
