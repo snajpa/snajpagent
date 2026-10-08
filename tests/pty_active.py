@@ -15,6 +15,7 @@ import socket
 import struct
 import subprocess
 import sys
+import threading
 
 # Expected-output waits tolerate a loaded host; explicit sub-second literals
 # in cases stay as responsiveness or pacing intent.
@@ -2890,6 +2891,20 @@ def test_dynamic_irc_lifecycle_and_refusal():
         host_session_id = host.session_id()
         host.wait_idle_prompt(start=hosted_end)
         watcher = IRCClient(port, "watcher")
+        stop_reader = threading.Event()
+        reader_errors = []
+
+        def drain_host():
+            try:
+                while not stop_reader.is_set():
+                    host.read_once(0.05)
+            except Exception as error:
+                reader_errors.append(error)
+
+        # Keep the hosted terminal consuming output while the other terminal
+        # runs lifecycle commands; stalled-writer behavior has its own tests.
+        reader = threading.Thread(target=drain_host)
+        reader.start()
         try:
             with Child(client_args, PROMPT.rstrip()) as client:
                 watch_start = len(watcher.buf)
@@ -2935,6 +2950,10 @@ def test_dynamic_irc_lifecycle_and_refusal():
                 client.exit_cleanly(disconnected_end)
         finally:
             watcher.close()
+            stop_reader.set()
+            reader.join(timeout=2)
+            assert not reader.is_alive(), "host terminal reader did not stop"
+            assert not reader_errors, reader_errors
         deadline = time.monotonic() + IRC_WAIT_S
         quiet_since = None
         last_seq = None
