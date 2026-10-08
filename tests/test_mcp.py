@@ -106,7 +106,10 @@ class MCPServer:
                 self.send_header('Content-Length', str(len(body)))
                 self.send_header('Connection', 'close')
                 self.end_headers()
-                self.wfile.write(body)
+                try:
+                    self.wfile.write(body)
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
                 self.close_connection = True
 
             def watch(self, request_id=None):
@@ -505,7 +508,7 @@ class MCPTests(unittest.TestCase):
         self.addCleanup(QueryFixture.close_terminal, self, term, owners)
         return term
 
-    def wait_result(self, term, count):
+    def wait_result(self, term, count, tools=True):
         deadline = time.monotonic() + 8
         while time.monotonic() < deadline:
             term.read(.02)
@@ -514,8 +517,8 @@ class MCPTests(unittest.TestCase):
             _, events = read_events(self.state)
             results = [e['data']['result'] for e in events if e['type'] == 'tool_finished']
             finished = [e for e in events if e['type'] == 'turn_completed']
-            if len(results) >= count and len(finished) >= count:
-                return results[-1]
+            if len(finished) >= count and (not tools or len(results) >= count):
+                return results[-1] if tools else finished[-1]
         self.fail(bytes(term.output[-5000:]))
 
     def test_exact_approval_changed_arguments_and_single_use_in_terminal(self):
@@ -793,7 +796,7 @@ class MCPTests(unittest.TestCase):
         self.provider.runtime_handler = respond
         term = self.interactive()
         term.write(b'first catalog\r')
-        term.until(b'catalog turn complete')
+        self.wait_result(term, 1, tools=False)
         self.assertTrue(self.server.subscribed.wait(3))
         self.server.tools = [dict(TOOL, name='replacement')]
         self.server.notify_change.set()
@@ -803,7 +806,7 @@ class MCPTests(unittest.TestCase):
         term.read(.2)
         term.output.clear()
         term.write(b'next catalog\r')
-        term.until(b'catalog turn complete')
+        self.wait_result(term, 2, tools=False)
         self.assertEqual(len(seen), 2)
         first = [t for t in seen[0]['tools'] if t.get('name', '').startswith('mcp_')]
         second = [t for t in seen[1]['tools'] if t.get('name', '').startswith('mcp_')]
