@@ -5914,7 +5914,9 @@ def run_runtime_history_case(binary, root, provider, environment, sequenced=Fals
         while True:
             _, log = read_events(terminal.dotdir)
             if any(event["data"]["text"] == history for event in event_list(log, "irc_event")) and any(
-                    event["data"]["kind"] == "history_ready" for event in event_list(log, "irc_event")):
+                    event["data"]["kind"] == "history_ready" for event in event_list(log, "irc_event")) and (
+                    not sequenced or any(event["data"]["text"] == "later live event"
+                                         for event in event_list(log, "irc_event"))):
                 break
             assert time.monotonic() < deadline, provider.failure
             time.sleep(0.02)
