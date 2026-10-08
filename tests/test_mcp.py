@@ -685,6 +685,51 @@ class MCPTests(unittest.TestCase):
     def test_oauth_real_loopback_callback(self):
         self.login(callback_mode='http')
 
+    def test_configure_preserves_active_catalog_then_switches_endpoint(self):
+        replacement = MCPServer()
+        self.addCleanup(replacement.close)
+        replacement.tools = [dict(TOOL, name='replacement.reader')]
+        entered = threading.Event()
+        release = threading.Event()
+        self.addCleanup(release.set)
+        requests = []
+
+        def respond(handler, request, sequence):
+            requests.append(request)
+            if len(requests) == 1:
+                entered.set()
+                self.assertTrue(release.wait(8))
+            body = self.provider.response_body(sequence, 'configured turn complete')
+            self.provider.reply(handler, body.encode(), close_header=True)
+
+        self.provider.runtime_handler = respond
+        term = self.interactive()
+        term.write(b'first turn\r')
+        self.assertTrue(entered.wait(5))
+        self.config.write_text(self.config.read_text().replace(self.server.url, replacement.url))
+        term.output.clear()
+        term.write(b'/configure\r')
+        term.until(b'/configure accepted;')
+        release.set()
+        term.until(b'configuration reloaded:')
+        self.wait_result(term, 1, tools=False)
+        original = [t for t in requests[0]['tools'] if t.get('name', '').startswith('mcp_')]
+        self.assertEqual(len(original), 1)
+        for request in requests:
+            self.assertEqual([t for t in request['tools'] if t.get('name', '').startswith('mcp_')],
+                             original)
+        self.assertEqual(replacement.requests, [])
+        previous = len(requests)
+        term.write(b'next turn\r')
+        self.wait_result(term, 2, tools=False)
+        current = [t for t in requests[previous]['tools'] if t.get('name', '').startswith('mcp_')]
+        self.assertEqual(len(current), 1)
+        self.assertNotEqual(current[0]['name'], original[0]['name'])
+        self.assertIn('replacement.reader', current[0]['description'])
+        self.assertTrue(replacement.requests)
+        term.write(b'/exit\r')
+        term.wait_exit()
+
     def test_oauth_exact_callback_path_issuer_and_duplicates(self):
         for mode in ('path', 'issuer', 'duplicate'):
             self.assertNotEqual(self.login(callback_mode=mode), 0)
