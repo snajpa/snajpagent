@@ -9,7 +9,7 @@ from pathlib import Path
 from irc_client import IRCClient
 from tmux_terminal import (
     FakeResponses, TmuxTerminal, event_list, fixture_terminal, free_loopback_port,
-    irc_workspace, read_events, wait_event_count,
+    irc_workspace, read_events, wait_event_count, wait_irc_idle,
 )
 
 
@@ -90,8 +90,7 @@ def run_irc_attention_case(binary, root):
             any(i.get("type") == "function_call_output" and
                 i.get("call_id") == "attn_" + prompt for i in r["input"]) for r in seen),
             "tool result was not sent back to the model")
-        wait_for(lambda: not read_events(state)[1][-1]["type"] == "response_started",
-                 "tool continuation did not finish")
+        wait_irc_idle([terminal])
 
     def contains(request, text):
         return text in json.dumps(request.get("input", []))

@@ -4163,7 +4163,8 @@ def run_destination_case(binary, root, provider, environment):
         deliveries("destination-broadcast", {"a": 1, "b": 1, "c": 2})
         client.submit("/1 /all literal-command")
         deliveries("/all literal-command", {"a": 1, "c": 1})
-        client.submit_wait("/names", "selected destination: 2")
+        client.submit_wait("/names", f"channel[{endpoints[1]}/#beta]: joined as operator")
+        client.submit_wait("/status", f"destination[1]: {endpoints[0]}")
         client.wait(f"destination[1]: {endpoints[0]}")
         client.wait(f"destination[2]: {endpoints[1]}")
 
@@ -4212,7 +4213,7 @@ def run_destination_case(binary, root, provider, environment):
         deliveries("single-still-valid", {"a": 1, "c": 1})
         assert f"[{endpoints[0]}/#alpha]" not in client.capture().rstrip().splitlines()[-1]
         client.submit_wait(f"/connect {endpoints[1]}", "outgoing connection added")
-        client.submit_wait("/names", f"destination[3]: {endpoints[1]}")
+        client.submit_wait("/status", f"destination[3]: {endpoints[1]}")
         client.submit_wait("/2 removed-target", "destination 2 is unavailable; use /names")
         client.wait(": /2 removed-target")
         deliveries("removed-target", {})
@@ -4233,7 +4234,7 @@ def run_destination_case(binary, root, provider, environment):
 
 
 def run_destination_reconnect_case(binary, root, provider, environment):
-    """A reconnect that advertises a different room keeps the selection usable."""
+    """Reopen a changed room explicitly before sending after reconnect."""
     case = root / "destination-reconnect"
     endpoint = f"127.0.0.1:{free_loopback_port()}"
     terminals = []
@@ -4258,13 +4259,13 @@ def run_destination_reconnect_case(binary, root, provider, environment):
         client.submit("reconnect-before")
         host.wait("reconnect-before")
 
-        # The room the endpoint advertises changes while the client is selected
-        # on it. The selection must keep working instead of staying unavailable.
+        # A replacement room must not inherit the old room's input recipient.
         host.exit()
         replacement = start("replacement", "host-model",
             ["-s", endpoint, "-n", "hostbot", "-o", "hostop", "-r", "gamma"])
         replacement.wait("clientop joined")
-        client.wait("clientop joined", timeout=20.0, join_wrapped=True)
+        client.submit_wait(f"/chat {endpoint}/#gamma", f"── chat {endpoint} #gamma ──",
+                           join_wrapped=True)
         client.submit("reconnect-after")
         deadline = time.monotonic() + 20.0
         delivered = False
@@ -4309,7 +4310,8 @@ def run_listener_collision_case(binary, root, provider, environment):
                 assert f"cannot listen on IRC endpoint {endpoint}:" in screen, screen
                 assert ("Address already in use" in screen or
                         "Address in use" in screen), screen
-        terminals[0].submit_wait("/names", f"members[{endpoint}]:", join_wrapped=True)
+        terminals[0].submit_wait("/names", f"members[{endpoint}/#{MACHINE_HOSTNAME}]:",
+                                 join_wrapped=True)
         terminals[0].exit()
         print("tmux_terminal listener collision: ok", flush=True)
     finally:
@@ -4598,7 +4600,8 @@ def run_reasoning_boundary_cases(binary, root, provider, environment,
                     wait_for_terminal_event(state, {"turn_completed"}, 5)
                     terminal.exit()
                 else:
-                    resumed = subprocess.run([*command, "-e", "--resume", sid], input="",
+                    assert command[-2:] == ["--resume", sid]
+                    resumed = subprocess.run([*command, "-e"], input="",
                                              cwd=case, env={**environment, "HOME": str(case)},
                                              capture_output=True, text=True, timeout=20)
                     assert resumed.returncode == 0, resumed.stderr
@@ -9814,7 +9817,7 @@ def run_irc_chat_case(binary, root):
         for terminal, operator in zip(ordered, ("hostop", "oneop", "twoop")):
             wait_current_prompt(terminal, operator)
         names = terminals["two"].submit_wait("/names",
-            f"members[{endpoint}]:", join_wrapped=True
+            f"members[{endpoint}/#lab]:", join_wrapped=True
         )
         for nick in ("hostbot", "@hostop", "onebot", "@oneop",
                      "twobot", "@twoop"):
