@@ -5406,11 +5406,15 @@ restrictions are applied and their availability is reported in the result.
 On other targets the result reports unavailable OS filesystem/network/exec
 confinement; package checks and worker resource limits still apply.
 This is not a general cross-platform parser sandbox. The worker has a 60-second
-CPU/elapsed limit, 2 GiB address-space limit (data-segment limit on macOS and
-targets without RLIMIT_AS), 32 MiB per-file/output limit,
+CPU/elapsed limit, 2 GiB memory limit, 32 MiB per-file/output limit,
 4,096 ZIP-entry limit, 16 MiB per XML entry and 256 MiB expanded-input limit.
-The resource limits and a fresh credential-free environment are also installed
-by the POSIX worker itself. Windows verifies the direct-argv child's 2 GiB job
+macOS checks the worker's physical footprint, including compressed pages, at
+50-millisecond polling intervals. The bounded parent runner and an independent
+Office worker watchdog enforce it. Crossing 2 GiB or a failed memory query
+terminates the conversion; this sampled limit can overshoot between checks.
+Other POSIX targets use an address-space limit, or a data-segment limit where
+RLIMIT_AS is unavailable. The other resource limits and a fresh credential-free
+environment are also installed by the POSIX worker itself. Windows verifies the direct-argv child's 2 GiB job
 memory and 60-second user-CPU limits, installs a 60-second elapsed timer, locks
 the private directory and replaces its environment while retaining system
 directory variables. A direct internal invocation creates its own job when

@@ -140,7 +140,9 @@ test_direct_argv(void)
     bool eof = false;
     while (!eof && snag_monotonic_ms() < deadline) {
         struct snag_child_event event = {&child, 0u, SNAG_CHILD_READ, 0};
-        assert(snag_child_wait(&event, 1u, SNAG_WAKE_INVALID, 50) >= 0);
+        int ready = snag_child_wait(&event, 1u, SNAG_WAKE_INVALID, 50);
+        if (ready < 0) fprintf(stderr, "bounded helper poll: %s\n", strerror(errno));
+        assert(ready >= 0);
         ssize_t n = snag_child_read(&child, 0u, bytes + used, sizeof(bytes) - used - 1u);
         if (n > 0)
             used += (size_t)n;
@@ -155,6 +157,63 @@ test_direct_argv(void)
     assert(snag_child_exited(&child) == 1 && snag_child_reap(&child) == 0 && child.exit_code == 0);
     snag_child_free(&child);
 }
+
+#ifdef __APPLE__
+static void
+test_memory_before_exec(void)
+{
+    struct snag_child child;
+    snag_child_init(&child);
+    child.bounded = true;
+    child.pid = fork();
+    assert(child.pid >= 0);
+    if (!child.pid) {
+        size_t bytes = (size_t)2176u << 20;
+        volatile unsigned char *memory = malloc(bytes);
+        assert(memory);
+        for (size_t i = 0; i < bytes; i += 4096u) memory[i] = (unsigned char)(i / 4096u);
+        assert(raise(SIGSTOP) == 0);
+        _exit(0);
+    }
+    int status;
+    assert(waitpid(child.pid, &status, WUNTRACED) == child.pid && WIFSTOPPED(status));
+    /* A fork has not started the helper's own image yet. */
+    int rc = snag_child_exited(&child);
+    snag_child_free(&child);
+    assert(rc == 0);
+}
+#endif
+
+#ifdef __APPLE__
+static void
+test_direct_memory(const char *program)
+{
+    char *executable = snag_realpath(program);
+    const char *args[] = {executable, "--allocate-memory", NULL};
+    char *environment[] = {"PATH=/usr/bin:/bin", NULL};
+    struct snag_child child;
+    snag_child_init(&child);
+    assert(executable && snag_child_spawn_argv(&child, args, "/", environment) == 0);
+    snag_child_close_stream(&child, 2u);
+    uint64_t deadline = snag_monotonic_ms() + 5000u;
+    bool ready = false;
+    int rc = 0;
+    while (snag_monotonic_ms() < deadline && rc >= 0) {
+        struct snag_child_event event = {&child, 0u, SNAG_CHILD_READ, 0};
+        rc = snag_child_wait(&event, 1u, SNAG_WAKE_INVALID, 50);
+        if (rc < 0) break;
+        char bytes[32];
+        ssize_t n = snag_child_read(&child, 0u, bytes, sizeof(bytes));
+        if (n > 0) ready = true;
+        rc = snag_child_exited(&child);
+        if (rc != 0) break;
+    }
+    int error = errno;
+    snag_child_free(&child);
+    free(executable);
+    assert(ready && rc < 0 && error == ENOMEM);
+}
+#endif
 
 static int
 cancel_conversion(void *opaque, unsigned int wait)
@@ -1107,11 +1166,27 @@ main(int argc, char **argv)
         puts("test_tools output recovery: ok");
         return 0;
     }
+#ifdef __APPLE__
+    if (argc == 2 && !strcmp(argv[1], "--allocate-memory")) {
+        assert(write(STDOUT_FILENO, "ready\n", 6u) == 6);
+        size_t size = (size_t)2176u << 20;
+        volatile unsigned char *memory = malloc(size);
+        assert(memory);
+        for (size_t i = 0; i < size; i += 4096u) memory[i] = (unsigned char)(i / 4096u);
+        assert(snag_sleep_ms(3000u) == 0);
+        free((void *)memory);
+        return 0;
+    }
+#endif
     test_command_argument_feedback();
     test_atomic_sequence();
     test_child_wait_ownership();
     test_child_interrupt_mask();
     test_direct_argv();
+#ifdef __APPLE__
+    test_memory_before_exec();
+    test_direct_memory(argv[0]);
+#endif
     test_converter_boundary();
     (void)signal(SIGPIPE, SIG_IGN);
     snag_tools_journal(retain_output, read_output, NULL);

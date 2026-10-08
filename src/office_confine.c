@@ -5,6 +5,7 @@
 #include "office.h"
 #include "media.h"
 #include "fs.h"
+#include "process_host.h"
 #include <errno.h>
 #include <stddef.h>
 #include <stdio.h>
@@ -82,6 +83,9 @@ office_environment(const char *dir)
 #include <fcntl.h>
 #include <sys/resource.h>
 #include <signal.h>
+#ifdef __APPLE__
+#include <pthread.h>
+#endif
 #if defined(__linux__)
 #include <linux/audit.h>
 #include <linux/filter.h>
@@ -92,10 +96,29 @@ office_environment(const char *dir)
 #include <sys/stat.h>
 #endif
 
+#ifdef __APPLE__
+static void *
+office_memory_watch(void *unused)
+{
+    (void)unused;
+    /* The disposable worker owns this thread until process exit, including
+     * direct invocation and parent loss. No importer state is referenced. */
+    do {
+        if (snag_process_memory_check(getpid()) < 0) break;
+    } while (snag_sleep_ms(50u) == 0);
+    const char message[] = "Office worker memory limit exceeded or unavailable\n";
+    (void)write(STDERR_FILENO, message, sizeof(message) - 1u);
+    _exit(125);
+}
+#endif
+
 int
 snag_office_worker_limits(const char *dir, char *error, size_t size)
 {
-    struct rlimit cpu = {60u, 60u}, memory = {2ull << 30, 2ull << 30};
+    struct rlimit cpu = {60u, 60u};
+#ifndef __APPLE__
+    struct rlimit memory = {2ull << 30, 2ull << 30};
+#endif
     struct rlimit file = {32u << 20, 32u << 20}, core = {0u, 0u};
     struct snag_file_privacy privacy;
     struct snag_directory_lock lock = {.fd = -1};
@@ -105,10 +128,12 @@ snag_office_worker_limits(const char *dir, char *error, size_t size)
     if (prctl(PR_SET_PDEATHSIG, SIGKILL) || getppid() != parent_pid) goto failed;
 #endif
     if (setrlimit(RLIMIT_CPU, &cpu) ||
-#if defined(__APPLE__) || !defined(RLIMIT_AS)
-        setrlimit(RLIMIT_DATA, &memory) ||
-#else
+#if !defined(__APPLE__)
+#if defined(RLIMIT_AS)
         setrlimit(RLIMIT_AS, &memory) ||
+#else
+        setrlimit(RLIMIT_DATA, &memory) ||
+#endif
 #endif
         setrlimit(RLIMIT_FSIZE, &file) || setrlimit(RLIMIT_CORE, &core))
         goto failed;
@@ -119,6 +144,16 @@ snag_office_worker_limits(const char *dir, char *error, size_t size)
         !privacy.private_access || snag_directory_lock_acquire(work_fd, &lock) < 0)
         goto failed;
     if (office_environment(dir)) goto failed;
+#ifdef __APPLE__
+    if (snag_process_memory_check(getpid()) < 0) goto failed;
+    pthread_t watcher;
+    int rc = pthread_create(&watcher, NULL, office_memory_watch, NULL);
+    if (!rc) rc = pthread_detach(watcher);
+    if (rc) {
+        errno = rc;
+        goto failed;
+    }
+#endif
     return 0;
 failed:
     snag_errorf(error, size, "Office worker limits/private directory failed: %s", strerror(errno));

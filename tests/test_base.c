@@ -4804,9 +4804,40 @@ test_pcm(void)
     assert(snag_pcm_playout_read(&p, &ring, played, 2u) == 1u);
 }
 
+#if defined(__APPLE__) && SNAJPAGENT_OFFICE
+static void
+test_office_memory(void)
+{
+    char *root = snag_path_join(getenv("TMPDIR") ? getenv("TMPDIR") : "/tmp",
+        "snag-office-memory-XXXXXX");
+    assert(root && mkdtemp(root));
+    pid_t child = fork();
+    assert(child >= 0);
+    if (!child) {
+        char error[256];
+        assert(chdir(root) == 0 && snag_office_worker_limits(root, error, sizeof(error)) == 0);
+        size_t bytes = (size_t)2176u << 20;
+        volatile unsigned char *memory = malloc(bytes);
+        assert(memory);
+        for (size_t i = 0; i < bytes; i += 4096u) memory[i] = (unsigned char)(i / 4096u);
+        assert(snag_sleep_ms(1000u) == 0);
+        _exit(0);
+    }
+    int status;
+    assert(waitpid(child, &status, 0) == child);
+    assert(rmdir(root) == 0);
+    free(root);
+    assert(WIFEXITED(status) && WEXITSTATUS(status) == 125);
+}
+#endif
+
 static int
 run_base(int argc, char **argv)
 {
+#if defined(__APPLE__) && SNAJPAGENT_OFFICE
+    test_office_memory();
+    if (argc == 2 && !strcmp(argv[1], "--office-memory")) return 0;
+#endif
 #ifdef _WIN32
     if (argc == 3 && !strcmp(argv[1], "--direct-argv-limits")) {
         JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits = {0};

@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Start bounded document helpers on macOS with a checked physical-memory limit;
+  its large reserved address space no longer makes every helper exit before exec.
+  Direct Office workers enforce the same limit independently of their parent.
+
 - Retain the current activity indicator when a workspace submits a command;
   an old owner display frame no longer leaves a spinner on idle command lines.
 

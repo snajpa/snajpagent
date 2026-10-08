@@ -4924,14 +4924,20 @@ test_office_limits(void)
             assert(
                 !strcmp(getenv("LOK_HOST_ALLOWLIST"), "a^") && !strcmp(getenv("SAL_LOG"), "-WARN"));
             const int limits[] = {RLIMIT_CPU,
-#if defined(__APPLE__) || !defined(RLIMIT_AS)
-                RLIMIT_DATA,
-#else
+#ifndef __APPLE__
+#ifdef RLIMIT_AS
                 RLIMIT_AS,
+#else
+                RLIMIT_DATA,
+#endif
 #endif
                 RLIMIT_FSIZE, RLIMIT_CORE};
-            const rlim_t values[] = {60u, 2ull << 30, 32u << 20, 0u};
-            for (size_t i = 0; i < 4u; ++i) {
+            const rlim_t values[] = {60u,
+#ifndef __APPLE__
+                2ull << 30,
+#endif
+                32u << 20, 0u};
+            for (size_t i = 0; i < sizeof(limits) / sizeof(*limits); ++i) {
                 struct rlimit bound;
                 assert(getrlimit(limits[i], &bound) == 0);
                 assert(bound.rlim_cur == values[i] && bound.rlim_max == values[i]);
@@ -4945,8 +4951,8 @@ test_office_limits(void)
             _Exit(0);
         }
         int status;
-        assert(
-            waitpid(child, &status, 0) == child && WIFEXITED(status) && WEXITSTATUS(status) == 0);
+        assert(waitpid(child, &status, 0) == child && WIFEXITED(status) &&
+               WEXITSTATUS(status) == 0);
     }
     assert(rmdir(root) == 0);
     free(root);

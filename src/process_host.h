@@ -16,6 +16,9 @@ struct snag_child {
     pid_t pid;
     int fd[3]; /* stdout, stderr, stdin */
     unsigned short rows, columns;
+#ifdef __APPLE__
+    bool bounded, memory_ready;
+#endif
 #endif
 };
 
@@ -50,6 +53,11 @@ ssize_t snag_child_read(struct snag_child *child, unsigned int stream, void *buf
 ssize_t snag_child_write(struct snag_child *child, const void *buffer, size_t size);
 int snag_child_wait(
     struct snag_child_event *events, size_t count, snag_wake_fd wake, int timeout_ms);
+
+#ifdef __APPLE__
+/* Disposable helper memory, including compressed pages; -1 on excess/query error. */
+int snag_process_memory_check(pid_t pid);
+#endif
 
 #ifdef _WIN32
 struct snag_output_broker;

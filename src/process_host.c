@@ -1374,6 +1374,9 @@ done:
 #include <sys/wait.h>
 #include <sys/resource.h>
 #include <unistd.h>
+#ifdef __APPLE__
+#include <libproc.h>
+#endif
 #if defined(__FreeBSD__) && !defined(WNOWAIT)
 #include <sys/param.h>
 #include <sys/sysctl.h>
@@ -1431,13 +1434,18 @@ exec_child(const char *shell, const char *command, const char *const *argv, cons
     int stdin_rd, int stdout_wr, int stderr_wr, char **env, bool bounded)
 {
     if (bounded) {
-        struct rlimit cpu = {60u, 60u}, memory = {2ull << 30, 2ull << 30};
+        struct rlimit cpu = {60u, 60u};
+#ifndef __APPLE__
+        struct rlimit memory = {2ull << 30, 2ull << 30};
+#endif
         struct rlimit files = {32u << 20, 32u << 20}, core = {0u, 0u};
         if (setrlimit(RLIMIT_CPU, &cpu) ||
-#if defined(__APPLE__) || !defined(RLIMIT_AS)
-            setrlimit(RLIMIT_DATA, &memory) ||
-#else
+#if !defined(__APPLE__)
+#if defined(RLIMIT_AS)
             setrlimit(RLIMIT_AS, &memory) ||
+#else
+            setrlimit(RLIMIT_DATA, &memory) ||
+#endif
 #endif
             setrlimit(RLIMIT_FSIZE, &files) || setrlimit(RLIMIT_CORE, &core))
             _exit(125);
@@ -1561,6 +1569,9 @@ child_spawn(struct snag_child *child, const char *shell, const char *command,
     int pipes[3][2] = {{-1, -1}, {-1, -1}, {-1, -1}};
     int master = -1, slave = -1;
     child->pty = pty;
+#ifdef __APPLE__
+    child->bounded = bounded;
+#endif
     child->rows = 24;
     child->columns = 80;
     if (pty) {
@@ -1671,6 +1682,31 @@ proc_child_exited(struct snag_child *child)
 }
 #endif
 
+#ifdef __APPLE__
+int
+snag_process_memory_check(pid_t pid)
+{
+    struct rusage_info_v0 usage;
+    if (proc_pid_rusage(pid, RUSAGE_INFO_V0, (rusage_info_t *)&usage) < 0) return -1;
+    return usage.ri_phys_footprint > (2ull << 30) ? snag_errno(ENOMEM) : 0;
+}
+
+static int
+child_memory_check(struct snag_child *child)
+{
+    if (!child->memory_ready) {
+        struct proc_bsdinfo info;
+        int n = proc_pidinfo(child->pid, PROC_PIDTBSDINFO, 0, &info, sizeof(info));
+        if (n <= 0) return -1;
+        if ((size_t)n != sizeof(info)) return snag_errno(EIO);
+        /* The fork initially contains the owner's mappings, before exec replaces them. */
+        if (!(info.pbi_flags & PROC_FLAG_EXEC)) return 0;
+        child->memory_ready = true;
+    }
+    return snag_process_memory_check(child->pid);
+}
+#endif
+
 int
 snag_child_exited(struct snag_child *child)
 {
@@ -1759,6 +1795,21 @@ snag_child_exited(struct snag_child *child)
             child->reaped = true; /* Never signal a reused PID after ownership loss. */
         return -1;
     }
+#ifdef __APPLE__
+    if (info.si_pid != child->pid && child->bounded) {
+        if (child_memory_check(child) < 0) {
+            int error = errno;
+            /* Exec/exit can temporarily hide proc information. Recheck ownership
+             * before allowing an unavailable process to reach the next checkpoint. */
+            if (waitid(P_PID, (id_t)child->pid, &info, WEXITED | WNOHANG | WNOWAIT) < 0) {
+                if (errno == ECHILD) child->reaped = true;
+                return -1;
+            }
+            if (info.si_pid == child->pid) return 1;
+            return error == ESRCH ? 0 : snag_errno(error);
+        }
+    }
+#endif
     return info.si_pid == child->pid;
 #endif
 }
@@ -1833,6 +1884,12 @@ snag_child_wait(struct snag_child_event *events, size_t count, snag_wake_fd wake
     struct pollfd fds[97];
     if (count > 96u) return snag_errno(EINVAL);
     for (size_t i = 0; i < count; ++i) {
+#ifdef __APPLE__
+        if (events[i].child->bounded) {
+            if (snag_child_exited(events[i].child) < 0) return -1;
+            if (timeout_ms < 0 || timeout_ms > 50) timeout_ms = 50;
+        }
+#endif
         fds[i] = (struct pollfd){events[i].child->fd[events[i].stream], 0, 0};
         if (events[i].events & SNAG_CHILD_READ) fds[i].events |= POLLIN;
         if (events[i].events & SNAG_CHILD_WRITE) fds[i].events |= POLLOUT;

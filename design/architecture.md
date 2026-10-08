@@ -952,3 +952,18 @@ from concurrent pane output, with 8 KiB frames negotiated over byte streams and
 120-byte frames retained for stock Mosh. Input modes and workstation probes use
 the same route; display output and tmux options retain their normal behavior.
 See remote-terminal.md for endpoint selection, compatibility and qualification.
+
+### Bounded document helper memory
+
+macOS reserves a virtual map larger than the document memory budget before helper
+startup. Its DATA/AS rlimits reject that budget against the existing map. The
+bounded child runner therefore checks physical footprint, including compressed
+pages, at each polling checkpoint, with waits capped at 50ms. It validates child
+wait ownership and successful exec before checking the helper's memory. Temporary
+process disappearance during exec/exit is retried after rechecking wait ownership;
+other query errors or excess memory fail the conversion. Normal commands keep
+their existing limits. A disposable linked Office worker runs the same check
+in a process-lifetime thread, which also covers direct invocation and parent loss.
+The thread starts after environment replacement and reads no importer state.
+Memory can overshoot between samples. CPU/elapsed, file/output, privacy and package
+checks retain their own enforcement; other platforms retain native memory limits.
