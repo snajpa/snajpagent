@@ -175,7 +175,7 @@ separate opt-in tools:
 |---|---|
 | `make depscheck` | rejects undeclared vendored dependency source/header drift and Jansson/libcurl include drift |
 | `make portabilitycheck` | verifies that PTY support is capability-gated for Linux and macOS |
-| `make depclosurecheck` | captures and validates the current-host dynamic executable dependency closure, including system libcurl and Jansson linkage plus detected libcurl backend evidence |
+| `make depclosurecheck` | validates dynamic libcurl/Jansson linkage and backend evidence, or uses ELF program headers and dynamic entries to prove that a fully static Linux executable needs no runtime libraries; provider fixtures verify its provider capability |
 | `make evidencebundle` / `make evidencecheck` | collects and validates a JSON evidence bundle for one concrete host, including source audits, dependency closure, and PTY terminal evidence when a fixture binary is supplied |
 | `make evidencetoolcheck` | exercises the single-bundle and matrix-evidence checkers against generated valid and invalid bundles, including path-escape, missing-record, duplicate-platform, version-mismatch, and extra-platform cases |
 | `make evidencematrixcheck` | validates a supplied final set of external per-platform bundles for required platform coverage, unique platform ids, consistent versioning, terminal evidence, and live-provider evidence |

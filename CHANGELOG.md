@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Recognize fully static Linux executables in dependency checks while retaining
+  the provider-library checks for dynamic builds.
+
 - Compute release artifact checksums with Python 3.9 and later.
 
 - Deliver paged command reports to voice once after paging finishes, preserving

@@ -102,6 +102,13 @@ def validate_dependency(path: Path) -> None:
     dep = load_json(path)
     require_schema(dep, "snajpagent.dependency_closure.v1", "dependency closure")
     deps = dep.get("dependencies")
+    if dep.get("linkage") == "static":
+        if (dep.get("platform", {}).get("system") != "Linux"
+                or dep.get("platform_tool") != "readelf"
+                or deps != [] or dep.get("direct_needed") != []
+                or dep.get("unresolved") != []):
+            die("invalid static ELF dependency closure")
+        return
     if not isinstance(deps, list) or not deps:
         die("dependency closure contains no dependencies")
     if dep.get("unresolved"):
@@ -227,6 +234,20 @@ def self_test() -> int:
         good = write_fake_bundle(root / "good")
         if main([str(good), "--require-terminal", "--require-live"]) != 0:
             die("self-test positive case did not pass")
+
+        static = write_fake_bundle(root / "static")
+        path = static / "dependency_closure.json"
+        dep = load_json(path)
+        dep.update(linkage="static", platform={"system": "Linux"}, platform_tool="readelf",
+                   dependencies=[], direct_needed=[], unresolved=[])
+        write_json(path, dep)
+        if main([str(static), "--require-terminal", "--require-live"]) != 0:
+            die("self-test static case did not pass")
+        for field, value in (("direct_needed", ["libcurl.so.4"]),
+                             ("unresolved", ["libcurl.so.4 not found"]),
+                             ("platform_tool", "ldd")):
+            write_json(path, {**dep, field: value})
+            expect_failure([str(static)], "invalid static ELF dependency closure")
 
         escape = write_fake_bundle(root / "escape", source_ref="../source_audit.json")
         expect_failure([str(escape)], "source_audit path")

@@ -1,12 +1,10 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0-only
-"""Capture and validate the dynamic dependency closure of a built binary.
+"""Validate runtime libraries, or prove that an ELF executable is fully static.
 
-The release archive intentionally does not vendor libcurl or Jansson.  This
-check is the machine-readable counterpart to that policy: for the executable
-that will be qualified on a host, record the concrete dynamic libraries selected
-by the platform loader and fail if the required provider-capable dependencies are
-missing or unresolved.
+Dynamic builds require resolved libcurl and Jansson dependencies. Static ELF
+builds have no runtime library closure; provider capability is exercised by the
+provider fixture suite.
 """
 
 from __future__ import annotations
@@ -38,7 +36,8 @@ def die(message: str) -> None:
 def run(argv: list[str]) -> subprocess.CompletedProcess[str]:
     try:
         return subprocess.run(argv, text=True, stdout=subprocess.PIPE,
-                              stderr=subprocess.PIPE, check=False)
+                              stderr=subprocess.PIPE, check=False,
+                              env={**os.environ, "LC_ALL": "C"})
     except OSError as exc:
         die(f"could not run {' '.join(argv)}: {exc}")
 
@@ -113,18 +112,26 @@ def parse_ldd(text: str) -> tuple[list[dict[str, str]], list[str]]:
 
 
 def linux_closure(binary: Path) -> dict[str, Any]:
+    readelf_needed: list[str] = []
+    if shutil.which("readelf"):
+        header = run(["readelf", "-h", str(binary)])
+        program = run(["readelf", "-lW", str(binary)])
+        dynamic = run(["readelf", "-d", str(binary)])
+        if not (header.returncode or program.returncode or dynamic.returncode):
+            readelf_needed = re.findall(r"Shared library: \[(.*?)\]", dynamic.stdout)
+            if (re.search(r"Type:\s+(?:EXEC|DYN)\b", header.stdout)
+                    and re.search(r"^\s+LOAD\s", program.stdout, re.M)
+                    and not re.search(r"^\s+INTERP\s", program.stdout, re.M)
+                    and not readelf_needed):
+                return {"platform_tool": "readelf", "linkage": "static",
+                        "dependencies": [], "unresolved": [], "direct_needed": []}
     ldd = run([tool_path("ldd"), str(binary)])
     if ldd.returncode != 0:
         die(ldd.stderr.strip() or "ldd failed")
     deps, unresolved = parse_ldd(ldd.stdout)
-    readelf_needed: list[str] = []
-    if shutil.which("readelf"):
-        readelf = run(["readelf", "-d", str(binary)])
-        if readelf.returncode == 0:
-            for match in re.finditer(r"Shared library: \[(.*?)\]", readelf.stdout):
-                readelf_needed.append(match.group(1))
     return {
         "platform_tool": "ldd",
+        "linkage": "dynamic",
         "dependencies": deps,
         "unresolved": unresolved,
         "direct_needed": sorted(readelf_needed),
@@ -144,6 +151,7 @@ def macos_closure(binary: Path) -> dict[str, Any]:
         deps.append({"name": basename(path), "path": path})
     return {
         "platform_tool": "otool -L",
+        "linkage": "dynamic",
         "dependencies": deps,
         "unresolved": [],
         "direct_needed": [],
@@ -173,6 +181,10 @@ def validate(report: dict[str, Any]) -> None:
     unresolved = report["unresolved"]
     if unresolved:
         die("unresolved dynamic dependencies:\n" + "\n".join(unresolved))
+    if report.get("linkage") == "static":
+        if deps or report.get("direct_needed"):
+            die("static executable has runtime dependencies")
+        return
     if not has_dep(deps, "libcurl"):
         die("dynamic closure does not include libcurl")
     if not has_dep(deps, "jansson"):
@@ -242,6 +254,9 @@ def main() -> int:
                             encoding="utf-8")
     deps = report["dependencies"]
     classified = report["classified_backends"]
+    if report.get("linkage") == "static":
+        print("depclosurecheck: ok (static ELF; no runtime library dependencies)")
+        return 0
     print(
         "depclosurecheck: ok "
         f"({report['platform']['system']} {report['platform']['machine']}; "

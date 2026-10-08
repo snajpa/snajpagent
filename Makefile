@@ -552,6 +552,7 @@ leancheck:
 	sh ./tests/test_lean_build.sh
 
 depclosurecheck: $(BIN)
+	python3 ./tests/test_dependency_closure.py
 	python3 ./tools/check_dependency_closure.py ./$(BIN)
 
 sanitizercheck:
@@ -571,7 +572,7 @@ releasecheck:
 livecheck: $(BIN)
 	python3 ./tools/live_provider_check.py ./$(BIN)
 
-tmuxcheck: $(BIN) $(FIXTURE_BIN)
+tmuxcheck: $(BIN) $(FIXTURE_BIN) tests/test_store
 	@command -v tmux >/dev/null 2>&1 || { \
 		printf '%s\n' 'tmuxcheck: tmux is required' >&2; exit 2; \
 	}
