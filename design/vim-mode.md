@@ -43,7 +43,9 @@ transient terminal-only notices were never recorded and cannot be recovered.
 Input checkpoint: bracketed paste uses the terminal editor's literal insertion
 operation in both interfaces. It normalizes CR to LF, rejects invalid UTF-8 and
 preserves complete characters at the existing draft byte limit. Completed paste
-is one insertion; Ctrl-C cancels before a terminator arrives. Workstation drops
+is one insertion; Ctrl-C cancels before a terminator arrives. The shared editor
+retains the received valid UTF-8 prefix with its cancellation echo and clears the
+paste without interrupting an active turn, including an empty or incomplete paste. Workstation drops
 use the existing receipt-bound terminal command handoff with an explicit literal
 request, leaving the session draft independent of the transfer command. Owner
 connections progress during terminal output checkpoints, including cancellation

@@ -418,6 +418,7 @@ class ControlTests(unittest.TestCase):
         self.wait_synced('headfirst\nsecondtail')
         child.write(b'\x1b[200~unfinished paste\x03')
         self.wait_synced('')
+        child.repaint_until(b'unfinished paste^C')
         child.write(b'next draft')
         self.wait_synced('next draft')
         self.escape(child)
@@ -474,10 +475,11 @@ class ControlTests(unittest.TestCase):
                          (self.snapshots(), bytes(child.output[-3000:])))
         self.assertFalse(any(row['type'] == 'steering_added' for row in self.owner.events()))
         self.assertEqual(len(self.owner.provider.requests), 1)
-        child.write(b'abc\x03')
-        self.wait_synced('')
-        self.assertFalse(any(row['type'] == 'turn_cancel_requested'
-                             for row in self.owner.events()))
+        for draft in (b'abc', b'\x1b[200~unfinished', b'\x1b[200~\xf0\x9f', b'\x1b[200~'):
+            child.write(draft + b'\x03')
+            self.wait_synced('')
+            self.assertFalse(any(row['type'] == 'turn_cancel_requested'
+                                 for row in self.owner.events()))
         child.write(b'\x03')
         self.owner.wait_event('turn_cancel_requested')
         self.owner.release.set()

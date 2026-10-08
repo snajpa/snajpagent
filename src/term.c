@@ -2704,6 +2704,7 @@ insert_paste(struct snag_term *term, const void *data, size_t len)
 void
 snag_term_paste_begin(struct snag_term *term)
 {
+    term->ctrl_c_count = 0u;
     term->paste = true;
     term->paste_end_match = 0u;
     term->paste_overflow = false;
@@ -2771,7 +2772,20 @@ complete_exit(struct snag_term *term, enum snag_term_action *action)
 static int
 cancel_line(struct snag_term *term, enum snag_term_action *action)
 {
-    bool interrupt = term->active && !term->searching && !term->draft.len;
+    bool paste = term->paste;
+    if (paste) {
+        size_t length = 0u;
+        while (length < term->paste_text.len) {
+            uint32_t cp;
+            size_t size = snag_utf8_decode(term->paste_text.data + length,
+                term->paste_text.len - length, &cp);
+            if (!size || !cp) break;
+            length += size;
+        }
+        /* Cancellation keeps the received text, even before the closing marker. */
+        if (insert_paste(term, term->paste_text.data, length) < 0) return -1;
+    }
+    bool interrupt = term->active && !term->searching && !term->draft.len && !paste;
     if (interrupt && term->interrupt_pending) return 0;
 
     if (!term->input_only && !term->prompt_visible && redraw(term) < 0) return -1;

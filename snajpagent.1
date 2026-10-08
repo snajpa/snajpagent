@@ -1296,6 +1296,9 @@ During output, editing opens a live composer without stopping the provider.
 Visible output resumes after
 .B typing_pause_ms
 of inactivity.  Bracketed paste inserts pasted newlines without submitting.
+Ctrl-C cancels an unfinished paste without interrupting the active turn. Its
+complete UTF-8 prefix remains in scrollback with literal ^C; an incomplete or
+invalid suffix is discarded.
 .PP
 Direct prompts accept up to 1 MiB of valid UTF-8; steering and queued turns
 accept up to 256 KiB.  The queue holds pending turns within 16 MiB; pending

@@ -2153,6 +2153,12 @@ def test_active_ctrl_c_clears_draft():
     assert b"interrupting" not in cleared
     assert b"\x1b[2K" not in cleared
 
+    for pasted in (b"unfinished active paste", b"\xf0\x9f", b""):
+        paste_start = len(child.buf)
+        child.send(b"\x1b[200~" + pasted)
+        clear_end = child.send_wait(b"\x03", b"^C\r\n", start=paste_start)
+        assert b"interrupting" not in child.buf[paste_start:clear_end]
+
     answer_end = child.send_wait(b"replacement\r", b"steered: replacement", start=clear_end)
     child.exit_cleanly(answer_end)
 
@@ -2173,12 +2179,14 @@ def test_ctrl_c_cancels_partial_editor_states():
                               b"escape-draft")
         child.wait(DEFAULT_IDLE_PROMPT, start=escape_end)
 
-        paste_start = len(child.buf)
-        child.send(b"\x1b[200~paste-draft")
-        paste_end = child.send_wait(b"\x03", b"^C\r\n", start=paste_start)
-        assert_bytes_in_order(bytes(child.buf[paste_start:paste_end]),
-                              b"paste-draft")
-        child.wait(DEFAULT_IDLE_PROMPT, start=paste_end)
+        for pasted, expected in ((b"paste-draft", b"paste-draft"),
+                                 ("valid-界".encode() + b"\xf0\x9f", "valid-界".encode()),
+                                 (b"valid-prefix\xfftail", b"valid-prefix"), (b"", b"")):
+            paste_start = len(child.buf)
+            child.send(b"\x1b[200~" + pasted)
+            paste_end = child.send_wait(b"\x03", b"^C\r\n", start=paste_start)
+            assert_bytes_in_order(bytes(child.buf[paste_start:paste_end]), expected + b"^C")
+            child.wait(DEFAULT_IDLE_PROMPT, start=paste_end)
         child.send_wait(b"clean-after-cancel\r", b"fixture answer", start=paste_end)
 
 

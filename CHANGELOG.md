@@ -107,6 +107,8 @@
   the layout and drafts, and exits. `:session quit` stops the focused session.
 - Apply bracketed paste through the shared terminal editor, normalize CR to LF,
   cancel unfinished paste with Ctrl-C and preserve UTF-8 at the draft limit.
+  Keep its valid received prefix in cancelled scrollback and preserve the active
+  turn when the paste has no completed text yet.
   Insert a completed paste in one edit, including in the middle of a large draft.
 - Receive workstation drops from a workspace pane through the existing terminal
   transfer, preserving its unsent draft. Support the `trz` launch alias.
