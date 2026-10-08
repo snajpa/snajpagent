@@ -139,9 +139,11 @@ initial history/snapshot activation barrier is unchanged.
 
 ## Shared context and tool boundary
 
-Successful paged command reports use the same UI observation path as directly
-rendered reports. Voice-submitted reference commands render directly, keeping
-pager input on the keyboard-driven path. `/cat` remains an operator-only display
+Successful paged command reports reach the voice observer once, after the pager
+finishes. Retaining a report for history does not deliver a live observation.
+Directly rendered reports use the same observer. Voice-submitted reference
+commands render directly, keeping pager input on the keyboard-driven path.
+`/cat` remains an operator-only display
 and contributes no file contents to voice history.
 
 Maintain an ordered voice conversation history. Before each voice-model turn,

@@ -2396,7 +2396,7 @@ request(struct snag_ui *ui, struct ui_message *message, struct snag_buf *deliver
     if (delivered && message->delivered.len &&
         snag_buf_append(delivered, message->delivered.data, message->delivered.len) < 0)
         rc = -1;
-    if (rc == 0 && ui->observe) {
+    if (rc == 0 && ui->observe && !message->command.retain_only) {
         const char *kind = NULL;
         switch (message->command.kind) {
         case SNAG_UI_HOST:

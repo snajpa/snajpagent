@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Deliver paged command reports to voice once after paging finishes, preserving
+  their retained history.
+
 - Reserve sufficient stack for direct session startup, turns and shutdown on
   hosts with small default thread stacks.
 

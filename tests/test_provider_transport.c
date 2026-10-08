@@ -10531,10 +10531,10 @@ test_native_pager_reports(struct app_state *app, struct snag_config *config, con
             strcpy(config->pager, "off");
         bool handled = false, prompt_ready = false;
         assert(snag_app_input_command(app, "/status", false, &handled, &prompt_ready) == 0);
-        /* Keyboard pagers finish through the same pump used during a turn. */
+        /* Retention precedes paging; observers see the report once it is shown. */
         assert(handled);
+        assert(observations == (app->pager ? 0u : 1u));
         if (app->pager) {
-            assert(observations == 0u);
             uint64_t deadline = snag_monotonic_ms() + 5000u;
             while (app->pager) {
                 assert(snag_monotonic_ms() < deadline);
