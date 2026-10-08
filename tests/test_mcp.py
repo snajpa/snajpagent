@@ -411,6 +411,11 @@ class MCPTests(unittest.TestCase):
         result, _ = self.model_call(permitted=False)
         self.assertEqual(result['status'], 'not_run')
         self.assertEqual(result['reason'], 'mcp_approval_required')
+        hint = result['model_text']
+        self.assertTrue(hint.endswith('then repeat these exact arguments.'), hint)
+        pending = re.search(r'/mcp pending ([0-9a-f]{64})', hint)
+        self.assertIsNotNone(pending, hint)
+        self.assertIn('/mcp approve ' + pending.group(1), hint)
         self.assertEqual(self.server.calls, [])
 
     def test_uncertain_mutation_is_never_retried(self):

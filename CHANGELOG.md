@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Keep the complete inspection, approval and retry instructions in pending MCP
+  tool results, including both exact request identifiers.
+
 - Chain slash commands and workspace Ex commands with semicolons, quoted or
   escaped literals, ordered dispatch, error/exit boundaries and completion after
   separators. Keep one entered line and semantic receipt; preserve separate file reports.

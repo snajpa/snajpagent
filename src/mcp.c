@@ -311,7 +311,7 @@ call_remote(struct snag_mcp *client, const struct snag_response_item *call,
         char message[256];
         (void)snprintf(message, sizeof(message),
             "MCP call requires exact operator approval. Inspect /mcp pending %s; "
-            "approve with /mcp approve %s, then repeat these exact arguments.", digest, digest);
+            "use /mcp approve %s, then repeat these exact arguments.", digest, digest);
         *result = snag_tool_result("not_run", "mcp_approval_required", message, -1, 0u);
         json_decref(request);
         return *result ? 0 : -1;

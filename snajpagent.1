@@ -4046,8 +4046,9 @@ Server annotations never grant local permission. Deny lists take precedence;
 read_only_tools admits the named tools in ordinary and /ro turns. allow_tools
 admits the named tools in ordinary turns. Other tools require exact approval.
 .PP
-When a call is pending, inspect /mcp pending DIGEST, then approve or deny it.
-Approval permits a subsequent exact call; the model receives a not-run result
+The pending result supplies inspection and approval commands for one exact
+request. Inspect /mcp pending DIGEST, then approve or deny it. Approval permits
+one subsequent call with unchanged arguments; the model receives a not-run result
 until then. This is an MCP dispatch control. Local command tools still run with
 the account's filesystem and process permissions, so use account isolation where
 OS confinement is required.
