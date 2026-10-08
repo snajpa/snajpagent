@@ -5433,7 +5433,7 @@ def run_runtime_networking_cases(binary, root, provider, environment):
                 for message in backgrounds:
                     peer.sendall(f"PRIVMSG #lab :{message}\r\n".encode())
                 for message in mentions:
-                    peer.sendall(f"NOTICE #lab :{message}\r\n".encode())
+                    peer.sendall(f"PRIVMSG #lab :{message}\r\n".encode())
                 peer.sendall(b"NICK renamedpeer\r\nTOPIC #lab :runtime-topic\r\n")
                 deadline = time.monotonic() + 5.0
                 while True:
