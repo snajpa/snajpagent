@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Resume sessions with older interrupted responses whose streamed text falls
+  outside the current checkpoint. Retrieve missing verified history and report
+  replay errors before exiting.
+
 - Preserve complete workspace prompts and history-search labels through typing
   and mouse cursor placement, including long session names and search queries.
 

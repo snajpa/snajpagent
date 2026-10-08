@@ -2229,6 +2229,7 @@ pinned_span_checks(int fd, uint64_t boundary, const struct snag_binary_output_sp
         assert(!snag_buf_append(&output, "keep", 4u));
         assert(snag_binary_output_span_read(fd, &through, &missing, span, expected->turn,
             expected->response, expected->cycle, &expected->item, &output) < 0);
+        assert(errno == ENOENT);
         assert(output.len == 4u && !memcmp(output.data, "keep", 4u));
         snag_buf_free(&output);
         snag_buf_free(&omitted);

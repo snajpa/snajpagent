@@ -6191,6 +6191,7 @@ test_ui_bounded_history(void)
     assert(got > 0);
     output[got] = '\0';
     assert(strstr(output, "history input 2") && !strstr(output, "history input 1"));
+    assert(strstr(output, "cannot replay session history:"));
     const char *during = strstr(output, "You [voice, ASR]: during work");
     const char *started = strstr(output, "voice: inspect_session");
     const char *finished = started ? strstr(started + 1, "voice: inspect_session") : NULL;

@@ -3534,8 +3534,18 @@ history_show(
     uint64_t before = 0u;
     int rc = window.events ? 0 : -1;
     if (!rc && count) {
+        char error[256] = {0};
         rc = snag_session_each_event_reverse(
-            session, 0u, SNAG_JOURNAL_PAGE_BYTES, history_collect, &window, &before, NULL, 0u);
+            session, 0u, SNAG_JOURNAL_PAGE_BYTES, history_collect, &window, &before,
+            error, sizeof(error));
+        if (rc < 0 && !snag_ui_leaving(ui)) {
+            int saved = errno;
+            char message[512];
+            (void)snprintf(message, sizeof(message), "cannot replay session history: %s",
+                error[0] ? error : strerror(saved));
+            (void)snag_ui_text(ui, SNAG_UI_ERROR, message);
+            errno = saved;
+        }
         bool first = true;
         for (size_t i = json_array_size(window.events); !rc && i; --i) {
             const json_t *entry = json_array_get(window.events, i - 1u);

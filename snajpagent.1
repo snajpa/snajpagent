@@ -430,6 +430,10 @@ is not rendered as user text. When the scan ends early, its continuation sequenc
 locates older records through the model's read_session_history tool. IRC references
 outside the window may remain unresolved.
 .PP
+Native replay retrieves older streamed text from verified journal records when
+the current checkpoint holds only part of a response. A history-read failure
+reports its cause before the session closes.
+.PP
 Final voice transcripts and voice-initiated action results in that window are
 included, even when the session has no coding turns. Speaker labels distinguish
 ASR input from generated replies; action rows follow tool verbosity settings.

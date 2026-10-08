@@ -5535,7 +5535,7 @@ struct span_read {
     const struct snag_binary_public_item *item;
     struct snag_buf text;
     uint64_t index, last;
-    bool first;
+    bool first, sparse;
 };
 
 static int
@@ -5552,8 +5552,12 @@ read_span_fragment(void *opaque, const struct snag_binary_record *record, uint64
     const struct snag_binary_response_output *source = &event.data.response_output;
     if (memcmp(source->turn, state->turn, 16u) ||
         memcmp(source->response, state->response, 16u) || source->cycle != state->cycle ||
-        !public_metadata_equal(&source->item, state->item) || source->offset != state->text.len)
+        !public_metadata_equal(&source->item, state->item))
         return invalid();
+    /* A checkpoint can retain only part of an older output span. Let the
+     * caller fetch its authenticated closure before treating it as corrupt. */
+    if (source->offset != state->text.len)
+        return snag_errno(state->sparse && source->offset > state->text.len ? ENOENT : EINVAL);
     if (sequence == span->first.sequence) {
         size_t offset = (size_t)(source->item.text.data - record->payload);
         if (span->first.offset != offset || span->first.size != source->item.text.size)
@@ -5579,12 +5583,13 @@ snag_binary_output_span_read(int fd, const struct snag_binary_anchor *through,
         !item || item->text.data || item->text.size || !public_metadata_valid(item) ||
         span->last_sequence >= through->next_seq) return invalid();
     struct span_read state = {.span = span, .turn = turn, .response = response,
-        .cycle = cycle, .item = item, .text = {.max = span->bytes}};
+        .cycle = cycle, .item = item, .text = {.max = span->bytes}, .sparse = access != NULL};
     int rc = snag_binary_checkpoint_records_read(fd, through, access,
         span->first.sequence, span->last_sequence + 1u, read_span_fragment, NULL, &state);
     if (rc == 0) {
         rc = state.first && state.last == span->last_sequence && state.text.len == span->bytes ?
-            snag_buf_append(out, state.text.data, state.text.len) : invalid();
+            snag_buf_append(out, state.text.data, state.text.len) :
+            snag_errno(state.sparse ? ENOENT : EINVAL);
     }
     snag_buf_free(&state.text);
     return rc;
