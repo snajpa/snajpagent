@@ -4891,6 +4891,47 @@ compacted_prompt_compatibility(struct snag_session *source, uint64_t observed)
 }
 
 static void
+checkpoint_prompt_source(struct snag_session *session, uint64_t observed)
+{
+    char error[256] = {0};
+    struct snag_binary_anchor boundary;
+    struct snag_binary_index_tree tree;
+    assert(!snag_session_binary_checkpoint_capture(session, &boundary, &tree, NULL,
+        error, sizeof(error)));
+    unsigned char header[SNAG_BINARY_HEADER_SIZE];
+    struct snag_binary_identity identity;
+    struct snag_binary_anchor initial;
+    assert(snag_pread(session->log_fd, header, sizeof(header), 0) == sizeof(header));
+    assert(!snag_binary_header_decode(header, sizeof(header), &identity, &initial));
+    unsigned char root[32];
+    assert(!snag_binary_index_tree_root(&tree, root));
+    assert(!snag_session_checkpoint(session, error, sizeof(error)));
+    bool found = false;
+    for (size_t i = 0u; i < 2u; ++i) {
+        int fd = snag_open_read_security_at(session->dir_fd,
+            i ? "checkpoint.1" : "checkpoint.0", false);
+        assert(fd >= 0);
+        snag_file_info info;
+        assert(!snag_fstat(fd, &info) && info.st_size > 0);
+        size_t size = (size_t)info.st_size;
+        unsigned char *bytes = malloc(size);
+        assert(bytes && snag_pread(fd, bytes, size, 0) == (ssize_t)size);
+        struct snag_binary_checkpoint_frame frame;
+        if (!snag_binary_checkpoint_frame_decode(bytes, size, &identity, &boundary, &frame)) {
+            struct snag_binary_checkpoint_index access;
+            struct snag_binary_index_entry entry;
+            assert(!snag_binary_checkpoint_index_decode(frame.access.data, frame.access.size,
+                &identity, &boundary, root, &access));
+            assert(!snag_binary_checkpoint_index_find(&access, observed, &entry));
+            found = true;
+        }
+        free(bytes);
+        assert(!close(fd));
+    }
+    assert(found);
+}
+
+static void
 test_compacted_irc_turn_resume(struct snag_store *store, const char *cwd)
 {
     struct snag_session session;
@@ -4936,7 +4977,7 @@ test_compacted_irc_turn_resume(struct snag_store *store, const char *cwd)
     start_compact_fixture(&session, "cccccccccccccccccccccccccccccccc", NULL);
     finish_compact_fixture(&session, NULL, "fixture compacted context");
     compacted_prompt_compatibility(&session, observed);
-    assert(!snag_session_checkpoint(&session, error, sizeof(error)));
+    checkpoint_prompt_source(&session, observed);
     commit_data(&session, "retry_auto_changed", json_pack("{s:s}", "value", "off"));
     int directory = dup(session.dir_fd);
     assert(directory >= 0);
