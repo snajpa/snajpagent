@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Keep Windows redirected input responsive while waiting for an OAuth callback,
+  and retain nanosecond file-change checks on supported FreeBSD targets.
+
 - Add native MCP tools over current and initialized Streamable HTTP, with
   registered-client OAuth/PKCE, private credentials, catalog notifications and
   immutable tool contracts across turn resume. Inspect servers with `/mcp` and

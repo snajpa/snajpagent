@@ -26,7 +26,7 @@ snag_file_unchanged(const snag_file_info *before, const snag_file_info *after)
     return before->mtime_nsec == after->mtime_nsec;
 #else
     if (before->st_ctime != after->st_ctime) return false;
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(__FreeBSD__)
     return before->st_mtimespec.tv_nsec == after->st_mtimespec.tv_nsec &&
            before->st_ctimespec.tv_nsec == after->st_ctimespec.tv_nsec;
 #else

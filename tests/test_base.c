@@ -2302,6 +2302,37 @@ test_control_signal(int number)
     if (number == SIGINT) (void)atomic_fetch_add(&console_interrupts, 1u);
 }
 
+#ifdef _WIN32
+static void
+test_pipe_input_wait(void)
+{
+    int pipe[2];
+    int saved = _dup(STDIN_FILENO);
+    assert(saved >= 0 && _pipe(pipe, 4096, _O_BINARY) == 0);
+    assert(_dup2(pipe[0], STDIN_FILENO) == 0 && _close(pipe[0]) == 0);
+    struct snag_term_host host = {0};
+    assert(snag_term_input_wait(&host, SNAG_WAKE_INVALID, 0) == 0);
+    uint64_t start = snag_monotonic_ms();
+    assert(snag_term_input_wait(&host, SNAG_WAKE_INVALID, 30) == 0);
+    assert(snag_monotonic_ms() - start >= 30u);
+    snag_wake_fd wake[2];
+    assert(snag_wakeup_pair(wake) == 0);
+    snag_wakeup_send(wake[1]);
+    assert(snag_term_input_wait(&host, wake[0], -1) == SNAG_TERM_WAIT_WAKE);
+    snag_wakeup_drain(wake[0]);
+    assert(_write(pipe[1], "x", 1u) == 1);
+    assert(snag_term_input_wait(&host, wake[0], -1) == SNAG_TERM_WAIT_INPUT);
+    char data[4];
+    assert(snag_term_input_read(&host, data, sizeof(data)) == 1 && data[0] == 'x');
+    assert(snag_term_input_wait(&host, wake[0], 0) == 0);
+    assert(_close(pipe[1]) == 0);
+    assert(snag_term_input_wait(&host, wake[0], -1) == SNAG_TERM_WAIT_INPUT);
+    assert(snag_term_input_read(&host, data, sizeof(data)) == 0);
+    snag_wakeup_close(wake);
+    assert(_dup2(saved, STDIN_FILENO) == 0 && _close(saved) == 0);
+}
+#endif
+
 static void
 test_input_mode(void)
 {
@@ -4839,6 +4870,12 @@ run_base(int argc, char **argv)
     if (argc == 2 && !strcmp(argv[1], "--office-memory")) return 0;
 #endif
 #ifdef _WIN32
+    if (argc == 2 && !strcmp(argv[1], "--windows-input-privacy")) {
+        test_pipe_input_wait();
+        test_windows_privacy();
+        puts("test_windows_input_privacy: ok");
+        return 0;
+    }
     if (argc == 3 && !strcmp(argv[1], "--direct-argv-limits")) {
         JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits = {0};
         assert(QueryInformationJobObject(
@@ -5085,6 +5122,7 @@ run_base(int argc, char **argv)
 #endif
     test_input_mode();
 #ifdef _WIN32
+    test_pipe_input_wait();
     test_windows_privacy();
 #endif
     puts("test_base: ok");

@@ -1080,6 +1080,35 @@ snag_term_input_resized(struct snag_term_host *host)
     return resized;
 }
 
+static DWORD
+wait_input_handles(HANDLE *handles, DWORD count, int timeout_ms)
+{
+    if (GetFileType(handles[0]) != FILE_TYPE_PIPE)
+        return WaitForMultipleObjects(count, handles, FALSE,
+            timeout_ms < 0 ? INFINITE : (DWORD)timeout_ms);
+
+    /* Synchronous pipe handles can signal with no readable bytes. Poll their
+     * byte count while retaining wake/control events and the caller's deadline. */
+    uint64_t deadline = snag_monotonic_ms() + (timeout_ms < 0 ? 0u : (uint64_t)timeout_ms);
+    for (;;) {
+        DWORD available = 0;
+        if (!PeekNamedPipe(handles[0], NULL, 0, NULL, &available, NULL))
+            return GetLastError() == ERROR_BROKEN_PIPE ? WAIT_OBJECT_0 : WAIT_FAILED;
+        if (available) return WAIT_OBJECT_0;
+        uint64_t now = snag_monotonic_ms();
+        DWORD interval = 20u;
+        if (timeout_ms >= 0) {
+            uint64_t left = now < deadline ? deadline - now : 0u;
+            if (left < interval) interval = (DWORD)left;
+        }
+        DWORD ready = WAIT_TIMEOUT;
+        if (count > 1u) ready = WaitForMultipleObjects(count - 1u, handles + 1u, FALSE, interval);
+        else Sleep(interval);
+        if (ready != WAIT_TIMEOUT) return ready == WAIT_FAILED ? ready : ready + 1u;
+        if (timeout_ms >= 0 && snag_monotonic_ms() >= deadline) return WAIT_TIMEOUT;
+    }
+}
+
 int
 snag_term_input_native_wait(struct snag_term_host *host, snag_wake_fd wake, int timeout_ms)
 {
@@ -1104,8 +1133,7 @@ snag_term_input_native_wait(struct snag_term_host *host, snag_wake_fd wake, int 
         wake_index = 1;
     }
     if (host->control_event) handles[count++] = host->control_event;
-    DWORD ready = WaitForMultipleObjects(
-        count, handles, FALSE, timeout_ms < 0 ? INFINITE : (DWORD)timeout_ms);
+    DWORD ready = wait_input_handles(handles, count, timeout_ms);
     rc = ready == WAIT_OBJECT_0                                   ? SNAG_TERM_WAIT_INPUT
          : ready > WAIT_OBJECT_0 && ready < WAIT_OBJECT_0 + count ? SNAG_TERM_WAIT_WAKE
          : ready == WAIT_TIMEOUT                                  ? 0

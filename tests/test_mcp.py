@@ -486,18 +486,24 @@ class MCPTests(unittest.TestCase):
             self.assertNotIn(b'fixture-code', stdout + output)
         return p.returncode
 
-    def test_oauth_pkce_private_storage_refresh_and_logout(self):
+    def test_oauth_pkce_refresh_and_logout(self):
         self.server.expires = 1
         self.login()
         files = [p for p in (self.state / 'mcp-auth').iterdir() if '.' not in p.name]
         self.assertEqual(len(files), 1)
-        self.assertEqual(files[0].stat().st_mode & 0o777, 0o600)
         self.server.oauth = True
         self.run_cli('tools', 'fixture')
         self.assertEqual(self.server.tokens[-1][1]['grant_type'], ['refresh_token'])
         self.run_cli('logout', 'fixture')
         self.assertFalse(files[0].exists())
         self.assertEqual(self.server.tokens[-1][0], '/revoke')
+
+    @unittest.skipIf(os.name == 'nt', 'Windows credentials use a private DACL')
+    def test_oauth_private_posix_storage(self):
+        self.login()
+        files = [p for p in (self.state / 'mcp-auth').iterdir() if '.' not in p.name]
+        self.assertEqual(len(files), 1)
+        self.assertEqual(files[0].stat().st_mode & 0o777, 0o600)
 
     process_identity = staticmethod(QueryFixture.process_identity)
 
