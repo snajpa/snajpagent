@@ -78,7 +78,7 @@ class WorkspaceCatalogTests(unittest.TestCase):
         self.assertEqual(self.reports(2), reports)
         child.write(b'G\r')
         child.repaint_until(('REPORT ' + self.owner.sid[:8] + ' ' + reports[-1]['id'][:8]).encode())
-        child.repaint_until(b'/configure')
+        child.repaint_until(b'Help and settings')
         child.finish('close')
         self.owner.status('stored')
         self.assertEqual(self.owner.journal.read_bytes(), before)
