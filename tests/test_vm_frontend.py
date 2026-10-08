@@ -186,7 +186,7 @@ class Terminal:
                 return
             for label in labels:
                 if re.search(r'\[' + re.escape(label) +
-                             r'(?:; (?:HOLD|loading|history error, R))*\] ', output):
+                             r'(?:; (?:HOLD|newer|loading|history error, R))*\] ', output):
                     return
         raise AssertionError(('controlled session prompt', bytes(self.output[-5000:])))
 
