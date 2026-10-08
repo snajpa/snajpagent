@@ -85,7 +85,7 @@ class AnchorTests(unittest.TestCase):
         byte = len((prefix + 'anchor-marker-' + '界' * 3).encode())
         child = self.start('-N', 'source', columns=80)
         child.command('history ' + journal.parent.name)
-        child.repaint_until(b'--resume')
+        child.repaint_until(b'You can resume this session with the following command:')
         child.resize(12, 27)
         child.finish('qa')
         path, = (self.root / 'state' / 'workspaces').glob('*/workspace.json')
