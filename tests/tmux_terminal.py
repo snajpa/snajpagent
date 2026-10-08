@@ -5466,7 +5466,7 @@ def run_runtime_networking_cases(binary, root, provider, environment):
                 assert all(message not in second for message in backgrounds), "topology admitted ordinary chat too early"
                 assert all(message in third for message in backgrounds), "final disconnect stranded background input"
                 assert "runtime-topic" in third and "renamedpeer" in third
-                assert endpoint in second and "sender=runtimepeer operator=true" in second
+                assert endpoint in second and "sender=runtimepeer " in second
                 assert "no active endpoints" in second
                 assert prefix.rstrip() in second, "IRC mention truncated the provider's answer"
                 assert "irc_send" in {tool.get("name") for tool in requests[1]["tools"]}
@@ -5480,6 +5480,7 @@ def run_runtime_networking_cases(binary, root, provider, environment):
                 for marker in mentions:
                     matches = [e for e in received if e["text"] == marker]
                     assert len(matches) == 1 and not matches[0]["historical"]
+                    assert matches[0]["urgent"] and matches[0]["op"]
                     identity = f"id={matches[0]['stream']}:{matches[0]['sequence']} "
                     assert sum(identity in text for text in admitted) == 1
                 assert len(requests) == expected, "received input was admitted as duplicate work"
