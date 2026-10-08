@@ -214,6 +214,9 @@ snag_app_stream_public(void *opaque, size_t item_index, enum snag_item_kind kind
     if (len > remaining || snag_buf_append(&partial->text, text, len) < 0)
         return stream_fail(app, EOVERFLOW, "public output exceeds its limit");
     app->partial_bytes += len;
+#ifdef SNAJPAGENT_TEST_FIXTURE
+    if (snag_app_context_progress(app, app->partial_bytes) < 0) return -1;
+#endif
     if (partial_created) app->public_flush_ms = snag_monotonic_ms();
     rc = snag_app_flush_public(app, false);
     return rc;

@@ -42,6 +42,7 @@ struct provider_ctx {
     const char *session_id;
     struct snag_ui *render;
     snag_provider_pump_fn pump;
+    snag_provider_progress_fn progress;
     bool (*retry_allowed)(const void *opaque);
     void *pump_opaque;
     snag_provider_ready_fn ready;
@@ -1216,6 +1217,7 @@ provider_ctx_init(struct provider_ctx *ctx, struct snag_provider_connection conn
     ctx->session_id = connection.session_id;
     ctx->render = connection.render;
     ctx->pump = connection.pump;
+    ctx->progress = connection.progress;
     ctx->retry_allowed = connection.retry_allowed;
     ctx->pump_opaque = connection.pump_opaque;
     ctx->low_speed_ms = connection.low_speed_override_ms;
@@ -1664,6 +1666,11 @@ response_record(void *opaque, const struct snag_sse_record *record)
             return -1;
         }
     }
+    if (rc == 0 && ctx->progress &&
+        ctx->progress(ctx->pump_opaque, ctx->stream.aggregate_bytes) < 0) {
+        ctx_error(ctx, "cannot report provider context growth");
+        return -1;
+    }
     return rc;
 }
 
@@ -1881,7 +1888,7 @@ snag_provider_audio(enum snag_audio_operation operation, const json_t *request,
             "Selected provider supports dictation and live voice, not this audio API operation");
     provider_ctx_init(&ctx,
         (struct snag_provider_connection){
-            config, provider, credential, NULL, pump, opaque, NULL, 0, NULL},
+            config, provider, credential, NULL, pump, opaque, NULL, 0, NULL, NULL},
         20u * 1024u * 1024u, 65536u);
     ctx.audio_output = output;
     ctx.multipart = operation == SNAG_AUDIO_TRANSCRIBE;
@@ -1977,7 +1984,7 @@ snag_provider_voice_call(const struct snag_config *config,
     if (!snag_provider_native_audio(provider) || !sdp || !json_is_object(session)) return -1;
     provider_ctx_init(&ctx,
         (struct snag_provider_connection){
-            config, provider, credential, NULL, pump, opaque, NULL, 0, NULL},
+            config, provider, credential, NULL, pump, opaque, NULL, 0, NULL, NULL},
         65536u, 65536u);
     /* The caller resolves credentials before starting voice. Keep that same
      * snapshot for the call and WebSocket attachment. The session owner protects

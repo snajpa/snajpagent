@@ -46,6 +46,8 @@ commit_rendered(
             (struct snag_ui_command){.kind = SNAG_UI_EVENT, .text = type, .data.seq = seq}) < 0) {
         return snag_errorf(error, error_size, "durable compaction event output failed");
     }
+    if (!strcmp(type, "compaction_completed") && snag_app_context_refresh(app) < 0)
+        return snag_errorf(error, error_size, "compacted context prompt could not be displayed");
     return 0;
 }
 
@@ -136,7 +138,7 @@ run_responses_compaction(struct app_state *app, const json_t *create_request,
     rc = snag_provider_responses_create(
         (struct snag_provider_connection){app->config, app->turn_provider, credential, &app->ui,
             snag_app_provider_input_pump, app, app->session.id,
-            app->turn_provider->request_timeout_ms, snag_app_retry_allowed},
+            app->turn_provider->request_timeout_ms, snag_app_retry_allowed, NULL},
         create_request, NULL, NULL, NULL, NULL, NULL, NULL, &graph, &failure, NULL, error,
         error_size, NULL);
     if (rc != 0 && snag_provider_failure_is_capacity(&failure)) rc = SNAG_PROVIDER_CONTEXT_OVERFLOW;

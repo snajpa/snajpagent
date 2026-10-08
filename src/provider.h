@@ -16,6 +16,8 @@ struct snag_secret_set;
 typedef int (*snag_provider_pump_fn)(void *opaque, unsigned int timeout_ms);
 /* Called once after a response.created event has been validated. */
 typedef int (*snag_provider_ready_fn)(void *opaque);
+/* Retained response bytes after a validated SSE record, with pump_opaque. */
+typedef int (*snag_provider_progress_fn)(void *opaque, size_t output_bytes);
 
 /* Pump: -1 failure, 0 continue, 1 steer, 2 cancel, 3 new non-steering input.
  * New input lets a healthy response finish but prevents further retries. */
@@ -46,6 +48,7 @@ struct snag_provider_connection {
     uint32_t low_speed_override_ms;
     /* Consulted at retry boundaries with pump_opaque; NULL uses config. */
     bool (*retry_allowed)(const void *opaque);
+    snag_provider_progress_fn progress;
 };
 
 enum snag_audio_operation { SNAG_AUDIO_LISTEN, SNAG_AUDIO_TRANSCRIBE, SNAG_AUDIO_SPEAK };

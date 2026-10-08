@@ -44,6 +44,9 @@ struct snag_context_control {
     bool goal_recovery_rebase;
     const char *irc_replies;
     const json_t *mcp_tools; /* Borrowed, immutable active-turn catalog. */
+    /* Permit an idle display projection and keep checkpoint writes disabled.
+     * The derived request cache may advance; no turn or request is admitted. */
+    bool preview;
 };
 
 struct snag_context_projection {

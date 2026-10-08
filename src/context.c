@@ -4021,7 +4021,9 @@ snag_context_build(struct snag_session *session, const char *model, const char *
             }
         }
     }
-    if (!builder.active_turn || builder.steering_seen != json_array_size(steering) ||
+    if ((control && control->preview ? builder.active_turn != session->active_turn
+                                    : !builder.active_turn) ||
+        builder.steering_seen != json_array_size(steering) ||
         builder.steering_seen != admitted_steering_count(session)) {
         (void)snag_fail(
             error, error_size, EINVAL, "response projection does not end at an active turn");
@@ -4071,9 +4073,11 @@ snag_context_build(struct snag_session *session, const char *model, const char *
         goto out;
     }
     if (freeze_host_context(&builder, controller_start, projection) < 0) goto out;
+    const char *provider_name =
+        session->active_turn ? session->active_turn_provider : session->default_provider;
     builder.tools = tool_schemas(session->goal_status == SNAG_GOAL_ACTIVE,
         !snag_goal_unfinished(session->goal_status), builder.networked, config, session,
-        session->active_turn_provider, session->active_read_only);
+        provider_name, session->active_read_only);
     if (control && control->mcp_tools && builder.tools &&
         json_array_extend(builder.tools, (json_t *)control->mcp_tools) < 0) goto out;
     if (builder.deferred_irc_seq && projection->irc_seq >= builder.deferred_irc_seq)
@@ -4083,7 +4087,7 @@ snag_context_build(struct snag_session *session, const char *model, const char *
      * chat templates) get the boundary in the user transport slot, labelled as
      * host text; every other provider keeps the developer-level boundary. */
     const struct snag_provider_config *provider =
-        snag_config_provider(config, session->active_turn_provider);
+        snag_config_provider(config, provider_name);
     {
         static const char host_boundary[] =
             "Host continuation: continue the current request using the conversation, "
@@ -4155,7 +4159,8 @@ snag_context_build(struct snag_session *session, const char *model, const char *
     projection->input_tokens_bound = 0u; /* Unknown until counted by the provider. */
     /* Reconstructed state-only views have no journal writer. A live legacy
      * owner may still persist its first materialized provider checkpoint. */
-    if (!session->binary && session->log_fd >= 0 && session->lock_fd >= 0 &&
+    if (!(control && control->preview) && !session->binary && session->log_fd >= 0 &&
+        session->lock_fd >= 0 &&
         session->checkpoint_seq && !session->checkpoint_has_context && session->on_checkpoint &&
         snag_session_checkpoint(session, error, error_size) < 0)
         goto out;

@@ -286,7 +286,8 @@ choose_model(const struct snag_cli *cli, const struct snag_config *config,
         tokens->credential.root_fd = -1; /* Uncommitted credentials. */
         if (snag_provider_models_list(
                 (struct snag_provider_connection){
-                    config, provider, &tokens->credential, NULL, login_pump, NULL, NULL, 0, NULL},
+                    config, provider, &tokens->credential, NULL, login_pump, NULL, NULL, 0, NULL,
+                    NULL},
                 &models, error, error_size) < 0) {
             if (cancelled) goto out;
             (void)fprintf(
@@ -473,7 +474,7 @@ snag_login_dispatch(const struct snag_cli *cli, bool *handled)
             char probe_error[256] = {0};
             int probe = snag_provider_native_compaction_probe(
                 (struct snag_provider_connection){
-                    &config, &provider, &tokens.credential, NULL, NULL, NULL, NULL, 0, NULL},
+                    &config, &provider, &tokens.credential, NULL, NULL, NULL, NULL, 0, NULL, NULL},
                 probe_model, probe_error, sizeof(probe_error));
             if (probe >= 0) provider.native_compaction = probe == 1;
             (void)fprintf(stderr, "%s: native compaction %s\n", provider.name,

@@ -436,6 +436,7 @@ prepare_turn_settings(struct app_state *app, char *error, size_t error_size)
 }
 static unsigned int prompt_spinner_states(const struct app_state *app);
 static int set_input_prompt(struct app_state *app, bool active);
+static void context_observe(struct app_state *app, const char *type, const json_t *data);
 
 static int
 commit_event_with_request(struct app_state *app, const char *type, json_t *data,
@@ -467,10 +468,15 @@ commit_event_with_request(struct app_state *app, const char *type, json_t *data,
     char view_request[SNAG_ID_HEX_LEN + 1u] = {0};
     if (request) (void)snag_strcpy(view_request, sizeof(view_request), request);
     json_t *voice_event = app->voice ? json_incref(data) : NULL;
+    json_t *accounting =
+        snag_string_in(type, "response_started response_completed") ? json_incref(data) : NULL;
     int committed = snag_session_commit(&app->session, type, data, &seq, error, error_size);
     if (!committed && voice_event) snag_app_voice_event(app, type, voice_event);
     json_decref(voice_event);
+    if (!committed && accounting) context_observe(app, type, accounting);
+    json_decref(accounting);
     if (committed < 0) return -1;
+    if (!strcmp(type, "context_rebased")) app->prompt_context.valid = false;
     if (view_request[0]) {
         /* Receipt publication follows fsync/reducer admission. A disconnected
          * frontend never changes a successfully committed input into failure. */
@@ -503,9 +509,7 @@ commit_event_with_request(struct app_state *app, const char *type, json_t *data,
             (struct snag_ui_command){.kind = SNAG_UI_EVENT, .text = type, .data.seq = seq}) < 0) {
         return snag_errorf(error, error_size, "durable event output failed");
     }
-    /* The reducer has already changed the measurement. Keep the live composer
-     * current across response/tool cycles and the idle prompt after a count;
-     * ordinary output does not otherwise rebuild its context field. */
+    /* Accounting and its display projection are adopted before repainting. */
     if (app->ui.opened &&
         snag_string_in(
             type, "response_started response_completed compaction_completed context_rebased") &&
@@ -655,6 +659,80 @@ snag_app_measured_input(struct app_state *app, uint64_t *tokens)
     return true;
 }
 
+static uint64_t
+context_estimate(const struct app_state *app, const struct snag_input_observation *input)
+{
+    const struct snag_input_observation *anchor = &app->session.usage_anchor;
+    long double estimate = (long double)input->model_input_bytes / 4.0L;
+    if (anchor->input_tokens && anchor->model_input_bytes &&
+        snag_input_observation_matches(anchor, input->provider, input->model, input->effort,
+            input->provider_source_sha256, anchor->compact_id))
+        estimate = (long double)input->model_input_bytes * anchor->input_tokens /
+                   anchor->model_input_bytes;
+    if (estimate >= (long double)UINT64_MAX) return UINT64_MAX;
+    uint64_t rounded = (uint64_t)estimate;
+    return rounded + (estimate > (long double)rounded);
+}
+
+static void
+context_observe(struct app_state *app, const char *type, const json_t *data)
+{
+    if (!strcmp(type, "response_started")) {
+        app->prompt_context = app->session.active_accounting;
+        const char *method = snag_json_string(data, "count_method");
+        app->prompt_context_estimated = strcmp(method, "exact") != 0;
+        if (!strcmp(method, "unknown"))
+            app->prompt_context.input_tokens = context_estimate(app, &app->prompt_context);
+        app->prompt_context_output_bytes = 0u;
+        app->prompt_context_output_tokens = 0u;
+        app->prompt_context_output_known = false;
+    } else {
+        struct snag_response_usage usage;
+        if (snag_response_usage_from_json(json_object_get(data, "usage"), &usage) < 0) return;
+        if (usage.input_known) {
+            app->prompt_context.input_tokens = usage.input_tokens;
+            app->prompt_context_estimated = false;
+        }
+        app->prompt_context_output_known = usage.output_known;
+        app->prompt_context_output_tokens = usage.output_tokens;
+    }
+}
+
+static int
+context_preview(struct app_state *app, const struct snag_provider_config *provider,
+    const char *model, const char *effort, const struct snag_model_capacity *capacity)
+{
+    struct snag_context_projection projection = {0};
+    struct snag_context_control control = {.preview = true,
+        .history_orientation = app->history_orientation,
+        .goal_recovery_rebase = app->history_recovery_rebase,
+        .mcp_tools = snag_mcp_tools(app->mcp)};
+    struct snag_input_observation input = {0};
+    json_t *steering = snag_app_steering_snapshot(&app->session);
+    char error[256] = {0};
+    int rc = snag_context_build(&app->session, model, effort, app->session.active_cycle + 1u,
+        steering, capacity->max_output_tokens, capacity->max_output_tokens != 0u, app->config,
+        app->session.compact_scope, &app->turn_instructions, NULL, &projection, error,
+        sizeof(error), &control);
+    if (!rc && snag_strcpy(input.provider, sizeof(input.provider), provider->name) &&
+        snag_strcpy(input.model, sizeof(input.model), model) &&
+        snag_strcpy(input.effort, sizeof(input.effort), effort)) {
+        provider_capacity_source_sha256(provider, model, input.provider_source_sha256);
+        memcpy(input.compact_id, app->session.compact_id, sizeof(input.compact_id));
+        input.model_input_bytes = projection.model_input.bytes;
+        input.input_tokens = context_estimate(app, &input);
+        input.valid = true;
+        app->prompt_context = input;
+        app->prompt_context_estimated = true;
+        app->prompt_context_output_bytes = 0u;
+        app->prompt_context_output_tokens = 0u;
+        app->prompt_context_output_known = true;
+    } else rc = -1;
+    snag_context_projection_free(&projection);
+    json_decref(steering);
+    return rc;
+}
+
 static int
 format_context_meter(struct app_state *app, bool active, char meter[32u])
 {
@@ -668,7 +746,7 @@ format_context_meter(struct app_state *app, bool active, char meter[32u])
     unsigned int percent;
     int n;
 
-    if (!active && app->session.turn_count == 0u) {
+    if (!active && app->session.turn_count == 0u && !app->session.last_user) {
         memcpy(meter, "0", sizeof("0"));
         return 0;
     }
@@ -684,22 +762,33 @@ format_context_meter(struct app_state *app, bool active, char meter[32u])
         }
         capacity = &resolved;
     }
-    if (!context_meter_matches(app, provider, model, effort)) {
-        memcpy(meter, "?", sizeof("?"));
-        return 0;
-    }
     if (!capacity->hard_input_known) {
         memcpy(meter, "?", sizeof("?"));
         return 0;
     }
-    used = app->session.context_meter.input_tokens;
+    char hash[SNAG_SHA256_HEX_LEN + 1u];
+    provider_capacity_source_sha256(provider, model, hash);
+    if (!snag_input_observation_matches(
+            &app->prompt_context, provider->name, model, effort, hash, app->session.compact_id) &&
+        context_preview(app, provider, model, effort, capacity) < 0) {
+        memcpy(meter, "?", sizeof("?"));
+        return 0;
+    }
+    used = app->prompt_context.input_tokens;
+    uint64_t output = app->prompt_context_output_known
+                          ? app->prompt_context_output_tokens
+                          : app->prompt_context_output_bytes / 4u +
+                                (app->prompt_context_output_bytes % 4u != 0u);
+    used = output > UINT64_MAX - used ? UINT64_MAX : used + output;
     hard = capacity->hard_input_tokens;
     if (used >= hard) {
         percent = 100u;
     } else {
         percent = (unsigned int)((used * 100u + hard - 1u) / hard);
     }
-    n = snprintf(meter, 32u, "%u", percent);
+    bool estimated = app->prompt_context_estimated ||
+                     (!app->prompt_context_output_known && app->prompt_context_output_bytes);
+    n = snprintf(meter, 32u, "%s%u", estimated ? "~" : "", percent);
     if (n < 0 || n >= 32) return snag_errno(EOVERFLOW);
     return 0;
 }
@@ -736,6 +825,8 @@ render_prompt(struct app_state *app, bool active, const char *submitted)
 
     if (!provider || !model || !effort || format_context_meter(app, active || submitted, meter) < 0)
         return -1;
+    if (!submitted)
+        memcpy(app->prompt_context_value, meter, strlen(meter) + 1u);
     prompt_hostname(hostname, sizeof(hostname));
     values[0] = provider->name;
     values[1] = model;
@@ -774,6 +865,26 @@ static int
 set_input_prompt(struct app_state *app, bool active)
 {
     return render_prompt(app, active, NULL);
+}
+
+int
+snag_app_context_progress(void *opaque, size_t output_bytes)
+{
+    struct app_state *app = opaque;
+    app->prompt_context_output_bytes = output_bytes;
+    if (!app->ui.opened) return 0;
+    char value[32u];
+    if (format_context_meter(app, app->session.active_turn, value) < 0) return -1;
+    return strcmp(value, app->prompt_context_value)
+               ? set_input_prompt(app, app->session.active_turn)
+               : 0;
+}
+
+int
+snag_app_context_refresh(struct app_state *app)
+{
+    app->prompt_context.valid = false;
+    return app->ui.opened ? set_input_prompt(app, app->session.active_turn) : 0;
 }
 
 static int

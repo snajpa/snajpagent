@@ -212,12 +212,27 @@ last-known input observation, not an exact count of unsubmitted later tool outpu
 The hard guard uses the current request's accounting, never just the displayed
 percentage. A provider-reported lower ceiling remains scoped to its source/model.
 
-The prompt and `/status` select the same compatible observation. Compute the
-rounded-up percentage against the effective hard input budget. A fresh unused
-session shows zero; unknown/incompatible observation or capacity shows unknown.
-Both summary completion and recovery rebase invalidate pre-boundary measurements
-and growth anchors. Failed compaction retains them because coverage did not change.
-The compact output's count alone is not the full next-request count.
+The prompt has a process-local display projection, separate from `/status`'s
+durable measured input observations. Compute its rounded-up percentage against
+the effective hard input budget. A fresh unused session shows zero. Known capacity
+uses the current request count or a marked estimate; unavailable capacity or a
+failed display projection shows unknown. Completed usage supplies input plus
+output tokens. Before completion, retained SSE text, arguments and continuation
+bytes estimate output at four bytes per token; unreported hidden reasoning is
+accounted when provider usage arrives.
+
+Compaction completion invalidates the prior display binding and measures the
+adopted context through the same builder as a response request, allowing an idle
+preview without request admission or checkpoint writes. Resume and selection/source
+changes also rebuild a preview. Calibrate input estimates with a compatible provider
+usage observation's byte/token ratio, falling back to four encoded bytes per token.
+The projection includes request overhead and uncovered history beside the summary;
+the compact output count alone cannot represent the next full request. Display
+estimates never update durable observations, counting capabilities, ceilings or
+automatic-compaction decisions. Streaming callbacks update a byte counter and
+repaint only changed percentages; they never rebuild context or make count requests.
+Summary completion and recovery rebases retain their existing invalidation of
+measured anchors. Failed compaction preserves the current binding and measurements.
 
 An exact outgoing count becomes durable at `response_started`; provider usage
 may replace it at `response_completed`. There is no `input_token_count` journal

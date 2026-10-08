@@ -8,6 +8,11 @@
   escaped literals, ordered dispatch, error/exit boundaries and completion after
   separators. Keep one entered line and semantic receipt; preserve separate file reports.
 
+- Refresh context percentages immediately after compaction and during streamed
+  text, tool arguments and continuation output. Mark display estimates with `~`;
+  completed provider usage includes the response's output tokens. Standalone
+  prompts and workspace panes share the owner's meter and measured budget guards.
+
 - Show routine IRC pending/written/acknowledged receipts at verbosity 1 and above
   in live conversations, replay and workspace panes. Verbosity 0 retains message
   bodies, failed or uncertain sends and server-text corrections.

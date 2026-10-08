@@ -748,5 +748,209 @@ class SessionViewTests(unittest.TestCase):
         self.assertFalse((self.directory / 'terminal.sock').exists())
 
 
+class ContextMeterTests(unittest.TestCase):
+    def setUp(self):
+        self.owner = SessionViewTests('test_legacy_observer_is_a_committed_prefix') if (
+            'legacy' in self._testMethodName) else SessionViewTests()
+        self.owner.setUp()
+        self.addCleanup(self.owner.tearDown)
+        self.provider = self.owner.provider
+        self.ready = threading.Event()
+        self.first = threading.Event()
+        self.second = threading.Event()
+        self.release = self.owner.release
+        self.addCleanup(self.first.set)
+        self.addCleanup(self.second.set)
+        text = self.owner.config.read_text().replace('exact_token_count = false',
+                                                    'exact_token_count = true')
+        text = text.replace('native_compaction = false', 'native_compaction = true')
+        text = text.replace('idle_timeout_ms = 3000', 'idle_timeout_ms = 15000')
+        text = text.replace('request_timeout_ms = 5000', 'request_timeout_ms = 20000')
+        text += ('prompt = METER {context}% {rollout-idle:› }{rollout-active:» }{chat:: }\n'
+                 '[model-limit fake/host-model]\nmax_input_tokens = 100000\n'
+                 'max_output_tokens = 10000\n')
+        self.owner.config.write_text(text)
+        self.provider.runtime_count_handler = lambda handler, request: self.provider.reply(
+            handler, b'{"object":"response.input_tokens","input_tokens":1000}',
+            content_type='application/json')
+        self.configure()
+
+    def configure(self):
+        self.owner.initial.output.clear()
+        os.write(self.owner.initial.master, b'/configure\r')
+        self.owner.initial.until(b'configuration reloaded:')
+        self.owner.initial.until(b'METER 0%')
+
+    def wait_meter(self, peer, predicate):
+        try:
+            return peer.until('state', lambda message:
+                              predicate(message['state']['prompt']['values'][5]))['state']['prompt']
+        except socket.timeout:
+            self.fail(('context meter did not update',
+                       [state['prompt']['values'][5] for state in peer.states[-5:]]))
+
+    def classic_meter(self, value):
+        self.owner.initial.output.clear()
+        os.write(self.owner.initial.master, b'\x0c')
+        self.owner.initial.until(('METER ' + value + '%').encode())
+
+    def stream(self, arguments=False):
+        def respond(handler, request, sequence):
+            event = self.provider.event
+            rid, item_id = 'resp_meter', 'meter_item'
+            item = ({'type': 'function_call', 'id': item_id, 'call_id': 'meter_call',
+                     'name': 'read_file', 'arguments': '', 'status': 'in_progress'} if arguments else
+                    {'type': 'message', 'id': item_id, 'role': 'assistant',
+                     'phase': 'final_answer', 'status': 'in_progress', 'content': []})
+            position = {'item_id': item_id, 'output_index': 0, 'content_index': 0}
+            handler.send_response(200)
+            handler.send_header('Content-Type', 'text/event-stream')
+            handler.send_header('Connection', 'close')
+            handler.end_headers()
+
+            def send(kind, data):
+                handler.wfile.write(event(kind, data).encode())
+                handler.wfile.flush()
+
+            send('response.created', {'response': {'id': rid, 'status': 'in_progress',
+                                                   'output': []}})
+            send('response.output_item.added', {'output_index': 0, 'item': item})
+            if not arguments:
+                send('response.content_part.added', {**position,
+                     'part': {'type': 'output_text', 'text': '', 'annotations': []}})
+            self.ready.set()
+            self.first.wait(10)
+            chunk = ('{"path":"' + 'a' * 8192 if arguments else
+                     'meter-first ' + 'a ' * 4096 + ' first-chunk-done\n')
+            delta = 'response.function_call_arguments.delta' if arguments else (
+                'response.output_text.delta')
+            send(delta, {**position, 'delta': chunk})
+            self.second.wait(10)
+            tail = 'b' * 8192 + '"}' if arguments else 'b ' * 4096 + ' meter-last\n'
+            send(delta, {**position, 'delta': tail})
+            self.release.wait(10)
+            if arguments:
+                return
+            text = chunk + tail
+            send('response.output_text.done', {**position, 'text': text})
+            item.update(status='completed', content=[{'type': 'output_text', 'text': text,
+                                                     'annotations': []}])
+            send('response.output_item.done', {'output_index': 0, 'item': item})
+            send('response.completed', {'response': {'id': rid, 'status': 'completed',
+                 'output': [], 'usage': {'input_tokens': 1000, 'output_tokens': 6000,
+                                        'total_tokens': 7000}}})
+
+        self.provider.runtime_handler = respond
+
+    def test_meter_grows_before_completion_in_classic_and_workspace_prompt(self):
+        self.stream()
+        peer = self.owner.view()
+        os.write(self.owner.initial.master, b'grow the response\r')
+        self.assertTrue(self.ready.wait(5))
+        self.wait_meter(peer, lambda value: value == '1')
+        self.classic_meter('1')
+        self.first.set()
+        self.owner.initial.until(b'first-chunk-done')
+        first = self.wait_meter(peer, lambda value: value.startswith('~') and int(value[1:]) >= 3)
+        self.classic_meter(first['values'][5])
+        self.assertFalse(any(e['type'] == 'response_completed' for e in self.owner.events()))
+        self.second.set()
+        self.owner.initial.until(b'meter-last')
+        self.wait_meter(peer, lambda value: value.startswith('~') and
+                        int(value[1:]) > int(first['values'][5][1:]))
+        self.release.set()
+        self.owner.wait_event('turn_completed')
+        self.wait_meter(peer, lambda value: value == '7')
+        self.classic_meter('7')
+        done = self.owner.events()
+        self.assertEqual(next(e['data']['input_tokens_bound'] for e in done
+                              if e['type'] == 'response_started'), 1000)
+        self.assertEqual(next(e['data']['usage']['output_tokens'] for e in done
+                              if e['type'] == 'response_completed'), 6000)
+
+    def test_tool_arguments_update_the_meter_without_public_text(self):
+        self.stream(arguments=True)
+        self.owner.detach()
+        peer = self.owner.view(bind=True)
+        self.assertEqual(peer.result(peer.submit('grow tool arguments'))['status'], 'committed')
+        self.assertTrue(self.ready.wait(5))
+        self.wait_meter(peer, lambda value: value == '1')
+        self.first.set()
+        first = self.wait_meter(peer, lambda value: value.startswith('~') and int(value[1:]) >= 3)
+        self.second.set()
+        self.wait_meter(peer, lambda value: value.startswith('~') and
+                        int(value[1:]) > int(first['values'][5][1:]))
+        self.assertFalse(any(e['type'] in ('response_output', 'response_completed', 'tool_started')
+                             for e in self.owner.events()))
+        peer.send(type='cancel', generation=peer.generation)
+        self.release.set()
+        self.owner.wait_event('turn_interrupted')
+
+    def test_compaction_refreshes_known_capacity_without_a_count_endpoint(self):
+        self.owner.config.write_text(self.owner.config.read_text().replace(
+            'exact_token_count = true', 'exact_token_count = false'))
+        self.configure()
+        counts, compacts = [], []
+        self.provider.runtime_count_handler = lambda handler, request: counts.append(request)
+
+        def compact(handler, request):
+            compacts.append(request)
+            self.provider.reply(handler, json.dumps({'object': 'response.compaction', 'output': [
+                {'type': 'compaction', 'encrypted_content': 'opaque-meter-summary'}]}).encode(),
+                content_type='application/json')
+
+        self.provider.runtime_compact_handler = compact
+        os.write(self.owner.initial.master, b'remember retained context\r')
+        self.owner.wait_event('turn_completed')
+        peer = self.owner.view()
+        self.owner.initial.output.clear()
+        os.write(self.owner.initial.master, b'/compact\r')
+        self.owner.initial.until(b'Compacted')
+        prompt = self.wait_meter(peer, lambda value: value.startswith('~') and
+                                 value[1:].isdigit())
+        self.classic_meter(prompt['values'][5])
+        self.assertFalse(prompt['active'])
+        self.assertEqual(counts, [])
+        self.assertEqual(len(compacts), 1)
+        self.assertEqual(len(self.provider.requests), 1)
+        self.assertEqual(self.owner.wait_event('compaction_completed')['data'][
+            'output_tokens_bound'], 0)
+        self.assertEqual(self.owner.identity(), self.owner.owner_identity)
+
+    def test_compaction_meter_survives_legacy_resume_without_provider_requests(self):
+        self.test_compaction_refreshes_known_capacity_without_a_count_endpoint()
+        self.owner.finish(self.owner.initial, b'/exit')
+        self.owner.status('stored')
+        history = self.owner.journal.read_bytes()
+        resumed = self.owner.start(['--resume', self.owner.sid])
+        resumed.until(b'METER ~')
+        peer = self.owner.view()
+        self.wait_meter(peer, lambda value: value.startswith('~') and value[1:].isdigit())
+        current = self.owner.journal.read_bytes()
+        self.assertTrue(current.startswith(history))
+        joined = [json.loads(line) for line in current[len(history):].splitlines()]
+        self.assertEqual([event['type'] for event in joined], ['irc_snapshot'])
+        self.assertEqual(joined[0]['data']['reason'], 'join')
+        os.write(resumed.master, b'\x0c')
+        resumed.until(b'METER ~')
+        self.assertEqual(self.owner.journal.read_bytes(), current)
+        self.assertEqual(len(self.provider.requests), 1)
+        self.owner.finish(resumed, b'/exit')
+
+    def test_selection_rebuilds_estimates_and_unknown_capacity_stays_unknown(self):
+        os.write(self.owner.initial.master, b'one measured response\r')
+        self.owner.wait_event('turn_completed')
+        peer = self.owner.view()
+        os.write(self.owner.initial.master, b'/model fake/uncached/high\r')
+        peer.until('state', lambda message:
+                   message['state']['prompt']['values'][1] == 'uncached' and
+                   message['state']['prompt']['values'][5] == '?')
+        os.write(self.owner.initial.master, b'/model fake/host-model/high\r')
+        peer.until('state', lambda message:
+                   message['state']['prompt']['values'][1] == 'host-model' and
+                   message['state']['prompt']['values'][5].startswith('~'))
+        self.assertEqual(len(self.provider.requests), 1)
+
+
 if __name__ == '__main__':
     unittest.main(defaultTest='SessionViewTests.test_binary_feature_boundary' if OMITTED else None)

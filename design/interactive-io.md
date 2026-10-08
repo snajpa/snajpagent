@@ -29,6 +29,17 @@ dispatching the next command. Workspace chains select one owner before dispatch;
 cross-owner chains and mixed pane-local searches are refused without effects.
 The manual's Commands section owns the complete grammar and user examples.
 
+## Context display
+
+The session owner produces one context field for both terminal and semantic
+prompts. Request admission supplies the accounting baseline. Stream progress
+supplies retained response bytes, including public text, tool arguments and opaque
+continuation snapshots; completed usage replaces estimates with input plus output
+tokens. Estimate markers never enter durable observations or budget decisions.
+Compaction and binding changes use the existing context builder once to measure
+a display projection. Incremental response updates change only the cached byte
+counter and repaint when the displayed percentage changes.
+
 ## Runtime Ownership And Scheduling
 
 ### Native session attachment

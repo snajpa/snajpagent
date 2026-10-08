@@ -3767,19 +3767,28 @@ Commands still require collection before a final answer or goal completion.
 Automatic compaction uses the provider threshold and resolved input capacity;
 setting the proactive threshold to zero does not disable capacity handling.
 With a known hard input window, the default automatic threshold is 90% of that
-window.  The prompt percentage shows measured input usage of the selected
-window. An exact outgoing count refreshes the composer when the response attempt
-starts, before provider output. Completed responses refresh it from measured
-usage. Compaction and recovery rebases replace the measured context; the meter
-shows unknown until a compatible measurement exists. Status retains a historical
-observation only with an explicit label when provider source, model, effort or
-compaction no longer matches. Context-selection advice uses the same compatibility
-check. A matching last observation is not a measurement of later unsubmitted
-tool output. Streaming output enters a later request when its input is measured.
+window. The prompt percentage tracks the current request and its growing response
+against the effective input budget. An exact outgoing count refreshes it before
+provider output. Streamed text, tool arguments and retained continuation bytes
+increase a display estimate; completed input and output usage replace that estimate.
+A leading ~ marks an estimate, including while an exact input count is combined
+with estimated output. Providers report hidden reasoning tokens at completion.
+.PP
+Compaction refreshes the meter immediately from the adopted context, including its
+summary, retained history and request overhead. Known-capacity models show an
+estimate while an exact count is unavailable. The estimate uses the compatible
+provider input observation's bytes/token ratio, or four encoded bytes per token
+when no observation is available. Streaming growth uses four retained bytes per
+token. Resume and selection or source changes rebuild the display estimate.
+Unknown capacity or an unavailable context projection shows ?.
+These estimates serve presentation; capacity checks and automatic compaction retain
+their existing measured accounting. /status labels historical input observations
+when provider source, model, effort or compaction no longer matches, and
+context-selection advice uses that compatibility check.
 The percentage can fall after a completed
 compaction; each new attempt announces itself.  A long turn can compact again after a completed response and later
 tool progress when its next request exceeds the hard budget.  A recovery rebase clears the
-previous usage measurement until a new response supplies one.
+previous usage measurement while a fresh display estimate remains available.
 Native compaction is used when enabled. Direct ChatGPT/Codex sends a compaction
 trigger through the Responses stream and retains the completed encrypted result
 with recent complete user messages, up to 256,000 encoded bytes. Older or oversized
@@ -4688,8 +4697,8 @@ expands to the plain number of pending future prompts, including 0 when empty.
 It includes paused prompts, excludes the running turn, and updates as prompts
 are queued, started or removed.
 .B {context}
-expands to the plain percentage number, or ? when unknown; it includes no percent
-sign.  Punctuation and spacing belong to the template.
+expands to the percentage number, ~NUMBER for an estimate, or ? when unknown;
+it includes no percent sign. Punctuation and spacing belong to the template.
 The optional
 .B {queued:TEXT}
 section renders TEXT only when the queue count is nonzero.  It accepts ordinary
@@ -6334,8 +6343,8 @@ pending rather than opening an editor during shutdown.  An active turn alone
 is not a reason to reject a valid command.
 .TP
 .B The prompt shows ?% for context.
-Usage and capacity are different facts.  A comparable request bound exists,
-but the selected provider/model has no known effective input budget.  Inspect
+The selected provider/model may lack a known effective input budget, or its
+retained context may be unavailable for display projection. Inspect
 .B /status
 and
 .BR /model .
@@ -6346,6 +6355,13 @@ match the selected local provider.  Do not invent a capacity or confuse
 bytes, provider usage, the conservative request bound and the total context
 window.  The percentage is rounded up against the effective input budget,
 which can be smaller than the configured total after safety/output reserves.
+.TP
+.B The prompt shows ~NUMBER% for context.
+The current context or streamed response is estimated. Completed provider usage
+replaces streamed estimates; an available exact input count replaces the request
+estimate. Compaction and resume provide a fresh estimate immediately for known
+capacity. The prompt uses the session owner's accounting in standalone and
+workspace displays. /status retains separately labelled measured input observations.
 .TP
 .B Tab did not queue my text.
 In rollout, Tab queues during an active turn; while idle it inserts spaces. Use

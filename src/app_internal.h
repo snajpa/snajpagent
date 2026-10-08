@@ -112,6 +112,12 @@ struct app_state {
     struct snag_instruction_set turn_instructions;
     struct snag_model_cache model_cache;
     struct snag_model_capacity turn_capacity;
+    /* Display estimates never enter durable input accounting or budget guards. */
+    struct snag_input_observation prompt_context;
+    size_t prompt_context_output_bytes;
+    uint64_t prompt_context_output_tokens;
+    bool prompt_context_estimated, prompt_context_output_known;
+    char prompt_context_value[32u];
     const struct snag_cli *cli;
     struct snag_config *config;
     struct snag_irc_config irc_file_config;
@@ -338,6 +344,8 @@ enum queue_command_kind {
 };
 
 json_t *snag_app_steering_snapshot(const struct snag_session *session);
+int snag_app_context_progress(void *opaque, size_t output_bytes);
+int snag_app_context_refresh(struct app_state *app);
 int snag_app_request_build(struct app_state *app, const json_t *steering, unsigned int cycle,
     const struct snag_credential *credential, struct snag_context_projection *projection,
     const char **count_method, struct snag_buf *request_body, char *error, size_t error_size);

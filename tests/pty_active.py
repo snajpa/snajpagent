@@ -4914,7 +4914,7 @@ def test_known_context_meter():
     assert isinstance(hard, int) and hard > 0
     assert response["count_method"] == "unknown"
     assert response["input_tokens_bound"] == 0
-    child.wait(b"?%", start=start)
+    child.wait(b"~", start=start)
     interrupted = child.send_wait(b"\x03", b"turn interrupted", start=start)
     child.exit_cleanly(interrupted)
 
@@ -4924,9 +4924,10 @@ def test_known_context_meter():
     answered = child.send_wait_idle(b"context_anchor_chain\r", b"context anchor complete", start=start)
     completed = [event["data"] for event in events(session_id)
                  if event["type"] == "response_completed"][-1]
-    used = completed["usage"]["input_tokens"]
+    used = completed["usage"]["input_tokens"] + completed["usage"]["output_tokens"]
     percent = min(100, (used * 100 + hard - 1) // hard)
-    # The idle prompt reports measured usage, and new unknown requests cannot replace it.
+    # Completed usage accounts for both the request and its retained response.
+    child.send(b"\x0c")
     child.wait_context_percent(percent, start=answered)
     child.exit_cleanly(answered)
 
@@ -4944,13 +4945,15 @@ def test_context_meter_repaints_during_turn_and_at_idle():
         assert len(starts) == len(completed) == 5, (len(starts), len(completed))
         hard = starts[0]["hard_input_tokens"]
         assert isinstance(hard, int) and hard > 0
-        percentages = [min(100, (item["usage"]["input_tokens"] * 100 + hard - 1) // hard)
+        percentages = [min(100, ((item["usage"]["input_tokens"] +
+                                 item["usage"]["output_tokens"]) * 100 + hard - 1) // hard)
                        for item in completed]
         assert len(set(percentages)) == 5, percentages
         active_output = bytes(child.buf[start:answered])
         assert any(f"{percent}%".encode() in active_output for percent in percentages[:-1]), (
             "active prompt never painted a completed response measurement", percentages,
             re.findall(rb"[0-9?]{1,3}%", active_output)[-20:])
+        child.send(b"\x0c")
         child.wait_context_percent(percentages[-1], start=answered)
         child.exit_cleanly(answered)
 
@@ -4969,11 +4972,10 @@ def test_context_meter_exact_start_and_lineage():
         assert request["count_method"] == "exact", request
         assert not [event for event in log if event["type"] == "response_completed"]
         used, hard = request["input_tokens_bound"], request["hard_input_tokens"]
-        percent = min(100, (used * 100 + hard - 1) // hard)
-        active_output = bytes(child.buf[start:])
-        assert f"{percent}%".encode() in active_output, (
-            "exact request-start measurement was not painted before provider completion",
-            re.findall(rb"[0-9?]{1,3}%", active_output)[-20:])
+        # The fixture has streamed 15 bytes alongside its exact request count.
+        percent = min(100, ((used + 4) * 100 + hard - 1) // hard)
+        child.send(b"\x0c")
+        child.wait(f"~{percent}% » ".encode(), start=start)
         interrupted = child.send_wait(b"\x03", b"turn interrupted")
         child.exit_cleanly(interrupted)
 
