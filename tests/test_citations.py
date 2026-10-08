@@ -20,7 +20,7 @@ RAW = f"citations: {OPEN}cite{SEP}turn2view0{SEP}turn0view3{CLOSE} tail"
 
 def main():
     with tempfile.TemporaryDirectory(prefix="snajpagent-citations-") as root:
-        root = Path(root)
+        root = Path(root).resolve()
         (root / "home").mkdir(mode=0o700)
         (root / "work").mkdir()
         dotdir = root / "state"
