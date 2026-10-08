@@ -25,7 +25,7 @@ struct snag_vm_buffer {
     bool query, submitting, send_pending, reconcile_pending;
     bool draft_ready, draft_dirty, draft_conflict, draft_get;
     bool terminal_result, terminal_auto;
-    bool level_ready;
+    bool level_ready, opened;
     unsigned int result_level;
 };
 

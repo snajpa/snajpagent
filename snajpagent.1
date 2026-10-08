@@ -2290,7 +2290,11 @@ draft. Connection panes share the session's existing owner and sockets.
 In an INSERT-mode conversation composer, Tab completes @nickname words from
 that channel or private query using the standalone completion rules. Completion
 preserves surrounding text. Ctrl-P and Ctrl-N navigate prompt history in every
-conversation. An empty-draft Tab or Shift-Tab cycles conversation buffers.
+conversation. An empty-draft Tab or Shift-Tab follows the session's standalone
+order: rollout, endpoint default rooms, then additional channels and private
+queries. Connection logs join the cycle when opened. Shared rooms appear once
+through the operator identity; :buffers can open the model's view explicitly.
+Older running owners retain their existing buffer order until restarted.
 .PP
 Enter /query NICK or /query ENDPOINT/NICK in an attached composer to open an
 operator private conversation in that window. A successful command changes the
@@ -2357,9 +2361,8 @@ and ID prefixes are accepted. :buffer ID accepts a unique ID prefix from :buffer
 which also distinguishes retained routes after a nick or connection change.
 An ambiguous address leaves the selected buffer unchanged.
 .B :bnext
-(:bn) and :bprevious (:bp) cycle the current session's buffers.
-Tab retains the history/composer focus control; classic mode uses Tab/Shift-Tab
-for its destination cycle.
+(:bn) and :bprevious (:bp) follow the same conversation order as INSERT-mode
+Tab and Shift-Tab. In NORMAL mode, Tab switches transcript/composer focus.
 .PP
 .B :vsp [ADDRESS_OR_ID]
 and :sp [ADDRESS_OR_ID] create vertical or horizontal splits and select a known

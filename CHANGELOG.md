@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Share standalone conversation order with workspace Tab and buffer navigation;
+  connection logs enter the cycle after being opened and shared rooms appear once.
+
 - Keep input buffered through an IRC conversation reopen until the owner confirms
   readiness, so fast replies use the new channel membership after a rejoin.
 

@@ -371,3 +371,18 @@ readiness prompt carries the consumed action-queue position: a prompt issued
 before newer input cannot acknowledge that input. Standalone and semantic owners
 apply readiness through the same path. An explicit conversation reopen therefore
 takes effect before the next message captures its route.
+
+The presenter publishes its ordered conversation directory in semantic state as
+`tabs`: `[key, enabled]` pairs, starting with `rollout`, then configured default
+rooms and additional conversations in their original arrival order. A key is a
+conversation ID or an unresolved numeric destination. Classic Tab consumes the
+same directory; workspace Tab and buffer navigation resolve it against their
+existing buffers. Shared rooms use the operator view. Connection logs become
+eligible after an explicit open; each workspace also records its own opened views
+in memory and restores visible panes. A retained draft keeps its frozen route.
+
+The directory is optional for older owners and adds no persisted format. Clients
+validate it at the existing state-frame boundary and preserve their previous
+catalogue traversal when it is absent. Workspace lookup builds one temporary
+index, keeping navigation linear in the number of conversations. Explicit buffer
+selection still exposes retained routes and model-side shared-room views.

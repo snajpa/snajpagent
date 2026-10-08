@@ -886,6 +886,31 @@ out:
     return rc;
 }
 
+static bool
+valid_tabs(const json_t *tabs)
+{
+    if (!tabs) return true;
+    size_t count = json_array_size(tabs);
+    if (!count) return false;
+    for (size_t i = 0u; i < count; ++i) {
+        const json_t *entry = json_array_get(tabs, i);
+        const json_t *key = json_array_get(entry, 0u);
+        const char *id = json_string_value(key);
+        if (json_array_size(entry) != 2u || !json_is_boolean(json_array_get(entry, 1u)))
+            return false;
+        if (!i) {
+            if (!id || json_string_length(key) != 7u || strcmp(id, "rollout") ||
+                !json_is_true(json_array_get(entry, 1u)))
+                return false;
+        } else if (id) {
+            if (json_string_length(key) != SNAG_ID_HEX_LEN ||
+                !snag_hex_is_lower(id, SNAG_ID_HEX_LEN)) return false;
+        } else if (!json_is_integer(key) || json_integer_value(key) < 0 ||
+            (uint64_t)json_integer_value(key) > UINT32_MAX) return false;
+    }
+    return true;
+}
+
 static int
 receive(struct snag_vm_connection *connection, const json_t *value)
 {
@@ -992,6 +1017,7 @@ receive(struct snag_vm_connection *connection, const json_t *value)
         json_t *state = json_object_get(value, "state");
         struct snag_journal_cursor next, previous;
         if (state_tail(state, &next) < 0 || !valid_activity(state, next.next_seq) ||
+            !valid_tabs(json_object_get(state, "tabs")) ||
             !json_is_boolean(json_object_get(state, "active")) ||
             !json_is_string(json_object_get(state, "provider")) ||
             !json_is_string(json_object_get(state, "model")) ||

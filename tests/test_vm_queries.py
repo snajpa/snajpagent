@@ -66,6 +66,43 @@ class QueryWorkspaceTests(QueryFixture):
         self.normal()
         child.finish('q')
 
+    def test_tab_order_matches_standalone(self):
+        child = self.child
+        self.query('query-peer')
+        child.write(b'i')
+
+        def route_is(expected):
+            def selected(rows):
+                if not rows:
+                    return False
+                state = next(iter(rows.values()))['state']
+                route = state['windows'][0].get('history', {}).get('route')
+                if expected == 'rollout':
+                    return route is None
+                return (isinstance(route, dict) and route.get('identity') == 'operator' and
+                        (route.get('peer') == expected or route.get('room') == expected))
+            self.wait_snapshot(selected)
+
+        route_is('query-peer')
+        for expected in ('rollout', '#lab', 'query-peer'):
+            child.write(b'\t')
+            route_is(expected)
+        child.write(b'private draft\t')
+        route_is('rollout')
+        child.write(b'local draft\x1b[Z')
+        route_is('query-peer')
+        child.repaint_until(b'private draft')
+        child.write(b'\x1b[Z')
+        route_is('#lab')
+        child.write(b'\x1b[Z')
+        route_is('rollout')
+        child.repaint_until(b'local draft')
+        self.assertNotIn('private draft', json.dumps(self.seen))
+        self.assertFalse(any(e['data'].get('text') == 'private draft'
+                             for e in self.events() if e['type'] == 'irc_event_v2'))
+        self.normal()
+        child.finish('q')
+
     def test_query_selects_origin_split_and_preserves_three_drafts(self):
         child = self.child
         self.query('query-peer')
@@ -117,9 +154,9 @@ class QueryWorkspaceTests(QueryFixture):
                            len(self.state()['buffers'][0]['buffers']) == 6)
         self.assertTrue(all(not b['draft'] and not b['pending']
                             for b in self.state()['buffers'][0]['buffers']))
-        child.command('bn')
-        child.repaint_until(b'[query-peer]')
         child.command('bp')
+        child.repaint_until(b'[query-peer]')
+        child.command('bn')
         child.repaint_until(b"viewing model's chat")
         child.finish('q')
 

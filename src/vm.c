@@ -691,6 +691,10 @@ state_restore(struct vm *vm, const json_t *state, char *error, size_t size)
     vm->count = count;
     vm->focus = focus;
     vm->next_window = next + 1u;
+    for (size_t i = 0u; i < vm->count; ++i) {
+        struct snag_vm_buffer *buffer = window_buffer(vm, &vm->windows[i]);
+        if (buffer && vm->windows[i].kind == VIEW_TRANSCRIPT) buffer->opened = true;
+    }
     (void)buffer_catalog(vm);
     vm->composer = vm->insert = false;
     vm->quit_all = false;
@@ -1084,6 +1088,7 @@ static void
 open_conversation(struct vm *vm, struct snag_vm_buffer *buffer)
 {
     json_t *route = json_incref(buffer->route);
+    buffer->opened = true;
     view(vm, VIEW_TRANSCRIPT);
     struct vm_window *window = &vm->windows[vm->focus];
     memcpy(window->session_id, buffer->connection->session, sizeof(window->session_id));
@@ -1344,17 +1349,86 @@ buffer_select(struct vm *vm, const char *text)
     free(selector);
 }
 
+static struct snag_vm_buffer *
+ordered_tab(struct snag_vm_buffer *current, const json_t *tabs, bool previous)
+{
+    struct snag_vm_connection *connection = current->connection;
+    size_t count = json_array_size(tabs), at = 0u;
+    if (!count) return current;
+    struct snag_vm_buffer **buffers = calloc(count, sizeof(*buffers));
+    json_t *indices = json_object();
+    if (!buffers || !indices) goto fail;
+    for (size_t i = 0u; i < count; ++i) {
+        const json_t *key = json_array_get(json_array_get(tabs, i), 0u);
+        const char *id = json_string_value(key);
+        if (id && json_object_set_new(indices, id, json_integer((json_int_t)i)) < 0) goto fail;
+    }
+    /* Resolve the directory once: Tab stays linear in the number of chats. */
+    for (struct snag_vm_buffer *b = connection->buffers; b; b = b->next) {
+        const char *id = b == connection->rollout ? "rollout" :
+            snag_json_string(b->route, "conversation");
+        const json_t *index = id ? json_object_get(indices, id) : NULL;
+        if (!index) continue;
+        size_t slot = (size_t)json_integer_value(index);
+        if (!json_is_true(json_array_get(json_array_get(tabs, slot), 1u)) &&
+            !b->opened && !b->draft.len && !b->pending) continue;
+        struct snag_vm_buffer *best = buffers[slot];
+        /* A frozen draft keeps its original route through a membership change. */
+        if (!best || (!(best->draft.len || best->pending) &&
+            (b->draft.len || b->pending || !buffer_stale(b, snag_vm_buffer_state(b)))))
+            buffers[slot] = b;
+    }
+    const char *id = current == connection->rollout ? "rollout" :
+        snag_json_string(current->route, "conversation");
+    const json_t *index = id ? json_object_get(indices, id) : NULL;
+    if (index) {
+        at = (size_t)json_integer_value(index);
+    } else {
+        /* Shared-room model views occupy their operator room's cycle slot. */
+        const char *room = snag_json_string(current->route, "room");
+        for (size_t i = 0u; room && i < count; ++i) {
+            const struct snag_vm_buffer *b = buffers[i];
+            const char *candidate = b ? snag_json_string(b->route, "room") : NULL;
+            if (candidate && json_equal(json_object_get(b->route, "connection"),
+                json_object_get(current->route, "connection")) &&
+                snag_irc_name_equal((enum snag_irc_casemapping)json_integer_value(
+                    json_object_get(current->route, "casemapping")), room, candidate)) at = i;
+        }
+    }
+    struct snag_vm_buffer *next = current;
+    for (size_t i = 0u; i < count; ++i) {
+        at = previous ? (at ? at - 1u : count - 1u) : (at + 1u) % count;
+        if (buffers[at]) { next = buffers[at]; break; }
+    }
+    free(buffers);
+    json_decref(indices);
+    return next;
+fail:
+    free(buffers);
+    json_decref(indices);
+    return NULL;
+}
+
 static void
 buffer_cycle(struct vm *vm, bool previous)
 {
     struct snag_vm_buffer *b = focused_buffer(vm);
     if (!b) return;
     struct snag_vm_connection *c = b->connection;
-    struct snag_vm_buffer *next = b->next ? b->next : c->buffers;
-    if (previous) {
-        for (struct snag_vm_buffer *candidate = c->buffers; candidate; candidate = candidate->next)
-            if (candidate->next == b || (!candidate->next && b == c->buffers)) next = candidate;
+    const json_t *tabs = json_object_get(c->state, "tabs");
+    struct snag_vm_buffer *next;
+    if (json_is_array(tabs)) {
+        next = ordered_tab(b, tabs, previous);
+    } else {
+        /* Older owners retain their existing catalogue traversal. */
+        next = b->next ? b->next : c->buffers;
+        if (previous) {
+            for (struct snag_vm_buffer *candidate = c->buffers; candidate;
+                candidate = candidate->next)
+                if (candidate->next == b || (!candidate->next && b == c->buffers)) next = candidate;
+        }
     }
+    if (!next) { notice(vm, "Cannot select conversation"); return; }
     if (next == b) return;
     if (json_is_object(next->route)) open_conversation(vm, next);
     else (void)open_history(vm, c->session);

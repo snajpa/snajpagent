@@ -883,21 +883,26 @@ display_conversation_event(struct snag_ui_display *display, const struct snag_ir
     return display->prompt.source && !display->view_repainting ? apply_prompt(display) : 0;
 }
 
+static struct ui_conversation_tab *
+display_room_tab(struct snag_ui_display *display, const struct snag_irc_destination *destination)
+{
+    for (struct ui_conversation_tab *tab = display->conversations; tab; tab = tab->next)
+        if (destination && tab->target.kind == SNAG_IRC_CHANNEL &&
+            tab->target.identity == SNAG_IRC_OPERATOR &&
+            !strcmp(tab->target.connection, destination->connection) &&
+            snag_irc_name_equal(destination->casemapping[SNAG_IRC_OPERATOR], tab->target.room,
+                destination->room))
+            return tab;
+    return NULL;
+}
+
 static int
 display_set_chat_room(
     struct snag_ui_display *display, const struct snag_irc_destination *destination, bool announce)
 {
     const char *endpoint = destination ? destination->endpoint : "";
     const char *room = destination ? destination->room : "";
-
-    struct ui_conversation_tab *tab;
-    for (tab = display->conversations; tab; tab = tab->next)
-        if (destination && tab->target.kind == SNAG_IRC_CHANNEL &&
-            tab->target.identity == SNAG_IRC_OPERATOR &&
-            !strcmp(tab->target.connection, destination->connection) &&
-            snag_irc_name_equal(
-                destination->casemapping[SNAG_IRC_OPERATOR], tab->target.room, room))
-            break;
+    struct ui_conversation_tab *tab = display_room_tab(display, destination);
     bool leaving_conversation = display->conversation != tab;
     if (display_select_draft(display, tab,
             display_channel_draft(display, destination ? destination->target.id : 0u)) < 0)
@@ -951,27 +956,68 @@ display_set_view(
     return 0;
 }
 
+/* The presenter owns tab order for every view. Connection logs remain in the
+ * directory so a workspace can include a log explicitly opened in a pane. */
+static json_t *
+display_tabs(struct snag_ui_display *display)
+{
+    const struct snag_term *term = &display->term;
+    size_t channels =
+        term->destinations && term->destinations->count ? term->destinations->count : 1u;
+    json_t *tabs = json_pack("[[s,b]]", "rollout", true);
+    if (!tabs) return NULL;
+    for (size_t i = 0u; i < channels; ++i) {
+        const struct snag_irc_destination *destination =
+            term->destinations && term->destinations->count ? &term->destinations->items[i] : NULL;
+        const struct ui_conversation_tab *tab = display_room_tab(display, destination);
+        json_t *entry = tab ? json_pack("[s,b]", tab->target.conversation, true) :
+            json_pack("[I,b]", (json_int_t)(destination ? destination->target.id : 0u), true);
+        if (!entry || json_array_append_new(tabs, entry) < 0) goto fail;
+    }
+    for (struct ui_conversation_tab *tab = display->conversations; tab; tab = tab->next) {
+        bool enabled = extra_tab(display, tab);
+        if (!enabled && !(tab->target.kind == SNAG_IRC_CONNECTION_EVENTS &&
+            tab->target.identity == SNAG_IRC_OPERATOR)) continue;
+        json_t *entry = json_pack("[s,b]", tab->target.conversation, enabled);
+        if (!entry || json_array_append_new(tabs, entry) < 0) goto fail;
+    }
+    return tabs;
+fail:
+    json_decref(tabs);
+    return NULL;
+}
+
 static int
 display_cycle_view(struct snag_ui_display *display)
 {
     struct snag_term *term = &display->term;
     size_t channels =
         term->destinations && term->destinations->count ? term->destinations->count : 1u;
-    size_t count = channels + 1u;
+    json_t *tabs = display_tabs(display);
+    if (!tabs) return -1;
+    size_t count = json_array_size(tabs);
     size_t current = 0u;
-    for (struct ui_conversation_tab *tab = display->conversations; tab; tab = tab->next) {
-        if (!extra_tab(display, tab)) continue;
-        if (tab == display->conversation) current = count;
-        ++count;
+    if (display->render.view == SNAG_RENDER_CHAT) {
+        if (display->conversation && extra_tab(display, display->conversation)) {
+            for (size_t i = 1u; i < count; ++i) {
+                const char *id = json_string_value(json_array_get(json_array_get(tabs, i), 0u));
+                if (id && !strcmp(id, display->conversation->target.conversation)) current = i;
+            }
+        } else {
+            current = 1u;
+            for (size_t i = 0u; term->destinations && i < term->destinations->count; ++i)
+                if (term->destinations->items[i].target.id == term->destination.id)
+                    current = i + 1u;
+        }
     }
-    if (display->render.view == SNAG_RENDER_CHAT &&
-        (!display->conversation || !extra_tab(display, display->conversation))) {
-        current = 1u;
-        for (size_t i = 0u; term->destinations && i < term->destinations->count; ++i)
-            if (term->destinations->items[i].target.id == term->destination.id) current = i + 1u;
-    }
-    size_t next =
-        term->view_reverse ? (current ? current - 1u : count - 1u) : (current + 1u) % count;
+    size_t next = current;
+    do {
+        next = term->view_reverse ? (next ? next - 1u : count - 1u) : (next + 1u) % count;
+    } while (!json_is_true(json_array_get(json_array_get(tabs, next), 1u)));
+    const char *id = json_string_value(json_array_get(json_array_get(tabs, next), 0u));
+    struct ui_conversation_tab *tab = display->conversations;
+    while (tab && (!id || strcmp(id, tab->target.conversation))) tab = tab->next;
+    json_decref(tabs);
     if (!next) return display_set_view(display, SNAG_RENDER_ROLLOUT, true, true);
     if (next <= channels) {
         const struct snag_irc_destination *destination =
@@ -981,10 +1027,6 @@ display_cycle_view(struct snag_ui_display *display)
             return -1;
         if (display_set_chat_room(display, destination, true) < 0) return -1;
     } else {
-        struct ui_conversation_tab *tab = display->conversations;
-        size_t index = channels;
-        for (; tab; tab = tab->next)
-            if (extra_tab(display, tab) && ++index == next) break;
         if (!tab) return snag_errno(EINVAL);
         if (display_select_draft(display, tab, NULL) < 0 ||
             snag_render_set_chat_conversation(
@@ -1464,7 +1506,8 @@ view_state(struct snag_ui_display *display, const json_t *state)
         json_decref(copy);
         return -1;
     }
-    if (json_object_set_new(copy, "prompt", view_prompt(display)) < 0) {
+    if (json_object_set_new(copy, "tabs", display_tabs(display)) < 0 ||
+        json_object_set_new(copy, "prompt", view_prompt(display)) < 0) {
         json_decref(copy);
         return -1;
     }

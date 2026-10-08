@@ -1251,7 +1251,7 @@ static void
 owner_state_test(void)
 {
 #ifndef _WIN32
-    for (unsigned int variant = 0u; variant < 14u; ++variant) {
+    for (unsigned int variant = 0u; variant < 21u; ++variant) {
         int sockets[2];
         assert(socketpair(AF_UNIX, SOCK_STREAM, 0, sockets) == 0);
         for (unsigned int i = 0u; i < 2u; ++i)
@@ -1270,7 +1270,24 @@ owner_state_test(void)
             "active", 0, "provider", "provider", "model", "model", "effort", "high");
         json_t *state = json_deep_copy(connection->state);
         assert(state);
-        if (variant == 1u) {
+        if (variant >= 14u) {
+            json_t *tabs = json_pack("[[s,b],[s,b],[I,b]]", "rollout", true,
+                "0123456789abcdef0123456789abcdef", false, (json_int_t)1, true);
+            assert(tabs);
+            if (variant == 15u) json_array_clear(tabs);
+            if (variant == 16u)
+                assert(!json_array_set_new(json_array_get(tabs, 0u), 0u, json_string("bad")));
+            if (variant == 17u)
+                assert(!json_array_set_new(json_array_get(tabs, 1u), 0u, json_string("bad")));
+            if (variant == 18u)
+                assert(!json_array_set_new(json_array_get(tabs, 1u), 1u, json_integer(1)));
+            if (variant == 19u)
+                assert(!json_array_set_new(json_array_get(tabs, 2u), 0u, json_integer(-1)));
+            if (variant == 20u)
+                assert(!json_array_set_new(json_array_get(tabs, 0u), 0u,
+                    json_stringn("rollout\0bad", 11u)));
+            assert(!json_object_set_new(state, "tabs", tabs));
+        } else if (variant == 1u) {
             assert(json_object_set_new(state, "seq", json_integer(11)) == 0);
             assert(json_object_set_new(state, "end", json_integer(1100)) == 0);
         } else if (variant == 2u)
@@ -1319,7 +1336,7 @@ owner_state_test(void)
             snag_vm_connection_step(connection);
         }
         struct snag_journal_cursor tail;
-        if (variant < 2u || variant == 9u || variant == 12u) {
+        if (variant < 2u || variant == 9u || variant == 12u || variant == 14u) {
             assert(connection->channel.fd >= 0 && snag_vm_connection_tail(connection, &tail));
             assert(json_equal(connection->state, state) &&
                 tail.next_seq == (variant == 1u ? 12u : 11u));
