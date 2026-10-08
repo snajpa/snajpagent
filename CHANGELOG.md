@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Reserve sufficient stack for direct session startup, turns and shutdown on
+  hosts with small default thread stacks.
+
 - Show newer retained output in a workspace pane's HOLD prompt while preserving
   the selected history range.
 

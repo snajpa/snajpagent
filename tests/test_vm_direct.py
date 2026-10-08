@@ -59,6 +59,10 @@ class DirectTests(unittest.TestCase):
                     ready, _, _ = select.select([process.stdout], [], [], 12)
                     self.assertTrue(ready, 'direct engine never became active')
                     line = process.stdout.readline()
+                    if not line:
+                        output, error = process.communicate(timeout=5)
+                        self.fail(f'direct engine exited {process.returncode} before activity: '
+                                  f'{error.decode(errors="replace")} {output!r}')
                     self.assertEqual(line.replace(b'\r\n', b'\n'), b'{"phase":"active"}\n')
                     self.assertTrue(self.requested.wait(5), 'provider request never arrived')
                     if mode == 'turn':

@@ -81,7 +81,10 @@ requests shutdown of the workspace-owned engine. Capabilities identify the direc
 lifetime and exclude detach and whole-terminal takeover. Portable C tests cover
 fragmentation, backpressure, thread ownership, close, receipt ordering and these
 restrictions. The engine/UI and VM client now use this channel without console
-I/O from the presenter. Native integration tests cover /fast, a real HTTP request,
+I/O from the presenter. The engine thread reserves at least 8 MiB of stack for the
+same nested owner, store and provider paths used by standalone sessions. Larger
+platform defaults are preserved; joining shutdown releases the thread's stack.
+Native integration tests cover /fast, a real HTTP request,
 newer draft retention, resume, startup failure and cancellation during a held
 provider request. Windows workspace wiring owns one engine, retains it when hidden
 and requires explicit quit before workspace exit or switching. The actual Windows

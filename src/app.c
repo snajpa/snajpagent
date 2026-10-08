@@ -7627,7 +7627,18 @@ snag_app_direct_start(const char *program, const char *dotdir, const char *sessi
     struct snag_view_channel pair[2];
     if (snag_view_channel_pair(pair) < 0) goto strings;
     direct->channel = pair[1];
-    error = pthread_create(&direct->thread, NULL, direct_main, direct);
+    pthread_attr_t attributes;
+    error = pthread_attr_init(&attributes);
+    if (!error) {
+        size_t stack_size = 0u;
+        error = pthread_attr_getstacksize(&attributes, &stack_size);
+        /* The engine runs the same nested store/provider paths as the main
+         * thread. Small libc defaults cannot hold their working frames. */
+        if (!error && stack_size < 8u * 1024u * 1024u)
+            error = pthread_attr_setstacksize(&attributes, 8u * 1024u * 1024u);
+        if (!error) error = pthread_create(&direct->thread, &attributes, direct_main, direct);
+        (void)pthread_attr_destroy(&attributes);
+    }
     if (error) {
         snag_view_channel_close(&pair[0]);
         snag_view_channel_close(&direct->channel);
