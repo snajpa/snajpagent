@@ -2342,7 +2342,7 @@ test_pipe_input_wait(void)
     assert(snag_term_input_wait(&host, SNAG_WAKE_INVALID, 30) == 0);
     assert(snag_monotonic_ms() - start >= 30u);
     snag_wake_fd wake[2];
-    assert(snag_wakeup_pair(wake) == 0);
+    assert(snag_wakeup_create(wake) == 0);
     snag_wakeup_send(wake[1]);
     assert(snag_term_input_wait(&host, wake[0], -1) == SNAG_TERM_WAIT_WAKE);
     snag_wakeup_drain(wake[0]);
