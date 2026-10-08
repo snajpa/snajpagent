@@ -12,7 +12,6 @@
 
 #ifndef _WIN32
 #include <sys/resource.h>
-#include <sys/wait.h>
 #endif
 
 #ifdef __APPLE__
@@ -206,21 +205,6 @@ main(int argc, char **argv)
     char *program = snag_program_path(argv[0]);
     assert(program);
 #ifndef _WIN32
-    int converter_status = 0;
-#ifdef __APPLE__
-    /* GUI verification links frameworks with large virtual data mappings.
-     * Probe Darwin's refusal explicitly, preserving the converter limit. */
-    pid_t probe = fork();
-    assert(probe >= 0);
-    if (!probe) {
-        struct rlimit memory = {2ull << 30, 2ull << 30};
-        _exit(setrlimit(RLIMIT_DATA, &memory) < 0 ? errno : 0);
-    }
-    int probe_status;
-    assert(waitpid(probe, &probe_status, 0) == probe && WIFEXITED(probe_status));
-    assert(WEXITSTATUS(probe_status) == 0 || WEXITSTATUS(probe_status) == EINVAL);
-    if (WEXITSTATUS(probe_status) == EINVAL) converter_status = 125;
-#endif
     char **environment = snag_environment_entries();
     const char *converter[] = {program, "--converter-limits", NULL};
     struct snag_child child;
@@ -232,14 +216,14 @@ main(int argc, char **argv)
         (void)snag_child_wait(NULL, 0u, SNAG_WAKE_INVALID, 10);
     }
     assert(snag_child_reap(&child) == 0);
-    if (child.exit_code != converter_status) {
+    if (child.exit_code != 0) {
         char problem[1024];
         ssize_t length = snag_child_read(&child, 1u, problem, sizeof(problem));
         (void)fprintf(stderr, "converter exit %lld signal %d: %.*s\n",
             (long long)child.exit_code, child.signal_number,
             (int)(length > 0 ? length : 0), problem);
     }
-    assert(child.exit_code == converter_status);
+    assert(child.exit_code == 0);
     snag_child_free(&child);
     snag_environment_entries_free(environment);
 #endif
