@@ -4968,7 +4968,9 @@ test_tool_result_statuses(void)
         "managed_process_conflict", "managed_process_handle_mismatch", "recovery_unstarted",
         "superseded_by_steering", "turn_cancelled", "process_interaction_required", "rule_rejected",
         "owner_lost", "unreaped_after_sigkill", "user_denied", "timeout_handoff", "wait_timeout",
-        "steering_handoff", "output_drain_timeout", "invalid"};
+        "steering_handoff", "output_drain_timeout", "mcp_tool_not_in_turn_catalog",
+        "mcp_approval_required", "mcp_invalid_header_arguments", "mcp_transport",
+        "mcp_outcome_unknown", "invalid"};
     json_t *values[] = {json_null(), json_integer(0), json_integer(INT64_MIN),
         json_pack("[n]"), json_pack("{s:b}", "x", 1)};
     struct snag_buf bytes[5] = {{.max = 128u}, {.max = 128u}, {.max = 128u},

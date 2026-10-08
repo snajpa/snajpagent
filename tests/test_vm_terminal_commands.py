@@ -125,7 +125,10 @@ input()
         def completed(rows):
             if not rows:
                 return False
-            owner = next(iter(rows.values()))['state']['buffers'][0]
+            buffers = next(iter(rows.values()))['state']['buffers']
+            if not buffers:
+                return False
+            owner = buffers[0]
             return (not rollout(owner)['pending'] and any(
                 r['command'] == command and r['id'] != opened.get(command)
                 for r in owner['reports']))
