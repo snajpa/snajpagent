@@ -135,12 +135,16 @@ journal watermark, and `outcome` is `ok` or `error`; it does not invent an input
 admission event. A deferred operation such as `/configure` reports that it was
 scheduled. Later completion is separate from this receipt. Native adapters cover
 help/status/history, model/effort/context/fast settings, verbosity, goal/state,
-steering/banner, configure/compact/yield, file snapshots, session list/name and
+steering/banner, configure/compact/yield/retry, file snapshots, session list/name and
 private `/query`, `/msg`, `/notice`, `/me`. Commands needing terminal input return
 `terminal` before dispatch from the rollout; query-scoped requests are rejected
 with instructions to open the rollout for that transaction. The client can
 refer to that original request through a bound whole-terminal transaction;
 this result never contains a shell command supplied by the owner.
+
+An idle `/retry` that starts a turn receives `committed` at the same durable input
+admission as an ordinary prompt. An active retry receives its control receipt;
+an idle retry with no failed work completes with an error. All three stay in the pane.
 
 A completed receipt includes `report: {id, bytes, sha256, command}` and an empty
 `report_error`, or `report: null` plus a retention error. Failure to retain output

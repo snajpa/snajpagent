@@ -297,6 +297,35 @@ class ControlTests(unittest.TestCase):
         self.assertEqual(self.owner.identity(), self.owner.owner_identity)
         self.assertEqual(self.owner.provider.requests, [])
 
+    def test_retry_failed_turn_stays_in_the_pane(self):
+        provider = self.owner.provider
+
+        def respond(handler, request, sequence):
+            if sequence == 1:
+                provider.reply(handler, b'{"error":{"message":"retry-pane-failure"}}',
+                               content_type='application/json', status=503)
+            else:
+                provider.reply(handler, provider.response_body(
+                    sequence, 'retry-pane-recovered').encode())
+
+        provider.runtime_handler = respond
+        child = self.start('-N', 'retry-pane', rows=24, columns=120)
+        child.command('attach ' + self.owner.sid)
+        child.attached()
+        child.write(b'i/retry auto off\r')
+        child.until(b'Automatic retry: OFF')
+        child.write(b'fail once\r')
+        child.until(b'retry-pane-failure')
+        child.write(b'/retry\r')
+        child.until(b'retry-pane-recovered', 10)
+        self.wait_synced('')
+        child.write(b'/retry\r')
+        child.until(b'no failed turn to retry')
+        self.escape(child)
+        child.finish('workspace detach')
+        self.assertEqual(len(provider.requests), 2)
+        self.assertEqual(self.owner.identity(), self.owner.owner_identity)
+
     def test_cancelled_draft_is_retained_without_submitting_it(self):
         from test_vm_mouse import current_rows
 

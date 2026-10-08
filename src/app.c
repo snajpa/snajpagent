@@ -3514,7 +3514,8 @@ handle_common_command(
         if (snag_app_queue_arm(app, true) < 0) return -1;
         return app_textf(app, SNAG_UI_HOST, "queued work armed for the next full turn");
     }
-    if (active && !strcmp(line, "/retry")) {
+    if (!strcmp(line, "/retry")) {
+        if (!active) return app_error(app, "no failed turn to retry");
         app->yield_requested = app->tool_waiting;
         return request_control(app, SNAG_CONTROL_RETRY, "/retry");
     }
@@ -3837,9 +3838,8 @@ view_command_native(const char *line)
     if (length >= sizeof(verb)) return false;
     memcpy(verb, line, length);
     verb[length] = '\0';
-    if (!strcmp(verb, "/retry") && isspace((unsigned char)line[length])) return true;
     if (snag_string_in(verb,
-            "/help /? /status /history /model /fast /effort /context "
+            "/help /? /status /history /model /fast /effort /context /retry "
             "/state /goal /steering /banner /configure /compact /yield /verbose /cat "
             "/attachments /detach "
             "/query /msg /notice /me /chat /join /part /names /topic /connections /whois /nick"))
@@ -4020,6 +4020,14 @@ int
 snag_app_input_command(
     struct app_state *app, const char *line, bool active, bool *handled, bool *prompt_ready)
 {
+    /* Idle retry starts a turn through submit_idle. Keep its frontend request
+     * until the same durable input admission used by ordinary prompts. */
+    if (!active && !strcmp(line, "/retry") &&
+        (app->session.last_turn_failed || app->session.active_turn || app->session.pending_input)) {
+        *handled = *prompt_ready = false;
+        return app->ui.input_echoed ? 0 :
+            snag_ui_submitted(&app->ui, app->ui.label, line, true);
+    }
 #if SNAJPAGENT_VM
     if (app->ui.input_interface && app->ui.view_request[0] &&
         app->ui.input_view == SNAG_RENDER_CHAT && app->ui.input_conversation.conversation[0] &&

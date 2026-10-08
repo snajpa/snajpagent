@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Retry a failed turn from its workspace pane without switching terminals.
+  Active retries keep using the session's safe request boundary.
+
 - Keep native session names and workspace conversation selection available while
   the running session appends to its journal. Read-only snapshots retain their
   verified boundary throughout lookup.

@@ -3307,6 +3307,8 @@ The original prompt is not duplicated and completed tools are not replayed.
 Read-only mode is preserved.  Continuation of an unfinished turn keeps its
 frozen provider/model/effort; a new retry turn uses current next-turn settings.
 Available in both views and after session resume, until another turn starts.
+In a workspace, retry continues in the submitting pane. When no failed or
+unfinished turn remains, it reports that there is no turn to retry.
 For an unfinished active turn, request continuation at the next safe boundary.
 Pending input that failed preparation can also be retried.  Explicitly cancelled
 turns stay cancelled; retained completed or uncertain tool calls are never
