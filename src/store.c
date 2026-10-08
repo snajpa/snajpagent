@@ -3606,8 +3606,8 @@ snag_session_history_open(struct snag_store *store, struct snag_session *session
     if (!history_tail_valid(tail)) {
         return snag_fail(error, error_size, EINVAL, "invalid committed history prefix");
     }
-    int64_t size;
-    bool native;
+    int64_t size = 0;
+    bool native = false;
     if (history_source_open(store, session, id, &size, &native, error, error_size) < 0) return -1;
     if (size < tail->offset) {
         return snag_fail(error, error_size, EINVAL, "source history ends before committed prefix");
@@ -3689,10 +3689,10 @@ int
 snag_session_history_snapshot(struct snag_store *store, struct snag_session *session,
     const char *id, bool *incomplete, char *error, size_t error_size)
 {
-    int64_t size;
+    int64_t size = 0;
     if (!incomplete) return snag_fail(error, error_size, EINVAL, "missing history suffix result");
     *incomplete = false;
-    bool native;
+    bool native = false;
     if (history_source_open(store, session, id, &size, &native, error, error_size) < 0) return -1;
     if (native)
         return native_history_stage(session, (uint64_t)size, NULL, incomplete, error, error_size);

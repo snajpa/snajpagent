@@ -3964,8 +3964,8 @@ write_pdf_fixture(const char *pdf, const char *stream)
     fputs("%PDF-1.4\n", f);
     const char *objects[] = {"<< /Type /Catalog /Pages 2 0 R >>",
         "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
-        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 160 100] /Resources << /Font << /F1 4 0 R >> "
-        ">> /Contents 5 0 R >>",
+        ("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 160 100] /Resources << /Font << /F1 4 0 R >> "
+        ">> /Contents 5 0 R >>"),
         "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"};
     for (size_t i = 0; i < 4u; ++i) {
         offsets[i + 1u] = ftell(f);
