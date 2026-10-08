@@ -4,6 +4,8 @@
 
 ## Unreleased
 
+- Compute release artifact checksums with Python 3.9 and later.
+
 - Deliver paged command reports to voice once after paging finishes, preserving
   their retained history.
 

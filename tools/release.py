@@ -34,8 +34,11 @@ def git_text(revision, name):
 
 
 def digest(path):
+    result = hashlib.sha256()
     with path.open("rb") as source:
-        return hashlib.file_digest(source, "sha256").hexdigest()
+        for block in iter(lambda: source.read(256 * 1024), b""):
+            result.update(block)
+    return result.hexdigest()
 
 
 def https(url):

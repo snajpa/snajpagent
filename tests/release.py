@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-2.0-only
 """Focused packaging/channel regressions; synthetic bytes, no publication."""
 import argparse
+import hashlib
 from html.parser import HTMLParser
 import importlib.util
 import json
@@ -245,6 +246,7 @@ with tempfile.TemporaryDirectory(prefix="release-", dir=root / "build") as tmp:
             assert len(release.load_channel(channel)) == 1
         descriptor = next(channel.glob("*.json"))
         meta = json.loads(descriptor.read_text())
+        assert meta["sha256"] == hashlib.sha256(data).hexdigest()
         meta["target"] = "../escape"
         descriptor.write_text(json.dumps(meta))
         rejected(lambda: release.load_channel(channel))
@@ -908,7 +910,8 @@ windows = (root / "nix/windows.nix").read_text()
 zlib_recipe = windows.split("zlib = ", 1)[1].split("  brotli =", 1)[0]
 assert '"$out/lib/pkgconfig/zlib.pc"' in zlib_recipe
 expression = re.search(r"sed -i '([^']+)'", zlib_recipe).group(1)
-actual = subprocess.check_output(["sed", expression],
+# Nix runs this recipe with GNU sed; macOS installs it as gsed.
+actual = subprocess.check_output([shutil.which("gsed") or "sed", expression],
     input="Libs: -L/fixture/lib -lz\nCflags: -I/fixture/include\n", text=True)
 assert actual == "Libs: -L/fixture/lib -lzs\nCflags: -I/fixture/include\n"
 assert '"CURL_LIBS=$($PKG_CONFIG --static --libs libcurl)"' in windows
@@ -1105,7 +1108,7 @@ print("PASS: Windows PDF selects a supported build type and static C++ interface
 
 png_recipe = windows.split("png = (cmakeLibrary windows.libpng [", 1)[1].split("  freetype =", 1)[0]
 expression = re.search(r"sed -i '([^']+)'", png_recipe).group(1)
-actual = subprocess.check_output(["sed", expression],
+actual = subprocess.check_output([shutil.which("gsed") or "sed", expression],
     input="Requires.private: zlib\nLibs.private: -lz -lm\nLibs: -L/example -lpng16\n", text=True)
 assert actual == "Requires.private: zlib\nLibs.private: -lm\nLibs: -L/example -lpng16\n"
 print("PASS: Windows PNG uses zlib pkg-config instead of a redundant -lz")
