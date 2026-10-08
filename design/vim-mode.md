@@ -564,6 +564,12 @@ report IDs and journal anchors survive workspace resume without adding operator
 commands to model context. Coalesced controls publish one completion per command
 kind; ordered catalogue groups identify its originating retained command reports.
 
+Mosh uses one remote screen and normally restores the local alternate screen on
+exit. The wrapper selects --no-init unless explicitly overridden, retaining the
+final frame and reconnect hint. VM leaves its cursor below the grid before
+restoring terminal modes; terminals with alternate buffers restore the shell
+cursor, and single-screen transports continue below the workspace.
+
 Mosh predicts edits across an entire terminal row and cannot infer split bounds.
 The workstation wrapper therefore selects --predict=never for direct remote
 snajpagent vm commands unless the operator supplied a prediction policy. Nested

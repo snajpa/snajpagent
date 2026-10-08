@@ -1014,6 +1014,7 @@ remote_mosh_command(int argc, char **argv)
     if (strcmp(name ? name + 1 : argv[0], "mosh")) return argv;
     int host = 1;
     bool separator = false, prediction = getenv("MOSH_PREDICTION_DISPLAY") != NULL;
+    bool initialization = false;
     for (; host < argc; ++host) {
         const char *option = argv[host];
         if (!strcmp(option, "--")) { separator = true; ++host; break; }
@@ -1021,6 +1022,7 @@ remote_mosh_command(int argc, char **argv)
         option += option[1] == '-' ? 2 : 1;
         if (!strcmp(option, "predict") || !strncmp(option, "predict=", 8u) ||
             !strcmp(option, "a") || !strcmp(option, "n")) prediction = true;
+        if (!strcmp(option, "init") || !strcmp(option, "no-init")) initialization = true;
         if (snag_string_in(option, "client server predict family port p ssh bind-server "
                           "experimental-remote-ip")) {
             if (++host == argc) return argv;
@@ -1039,12 +1041,14 @@ remote_mosh_command(int argc, char **argv)
     /* Mosh's speculative line editing has no knowledge of split boundaries.
      * A workspace renders its own echo; explicit transport policy still wins. */
     bool disable = workspace && !prediction;
-    if (separator && !disable) return argv;
-    char **command = calloc((size_t)argc + 3u, sizeof(*command));
+    if (separator && !disable && initialization) return argv;
+    char **command = calloc((size_t)argc + 4u, sizeof(*command));
     if (!command) return NULL;
     size_t at = 0u;
     command[at++] = argv[0];
     if (disable) command[at++] = "--predict=never";
+    /* Keep the final remote frame, including detach hints, after Mosh exits. */
+    if (!initialization) command[at++] = "--no-init";
     for (int i = 1; i < host; ++i) command[at++] = argv[i];
     if (!separator) command[at++] = "--";
     for (int i = host; i < argc; ++i) command[at++] = argv[i];

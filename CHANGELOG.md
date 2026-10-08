@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Preserve the final Mosh screen and reconnect command by default in remote mode.
+  Workspace detach places following output below its panes.
+
 - Keep the prompt ready after accepting a deferred control, preserving command
   order and EOF before a queued configuration editor starts.
 

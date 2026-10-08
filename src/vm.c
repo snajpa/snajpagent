@@ -4852,12 +4852,17 @@ clipboard_settle(struct vm *vm)
 static void
 leave_screen(struct vm *vm, bool restore_input)
 {
-    static const char modes[] = "\033[0m\033[?25h\033[?1004l\033[?1006l"
-        "\033[?1002l\033[?1000l\033[?2004l\033[?1049l";
     clipboard_settle(vm);
     vm->mouse_reported = vm->mouse_down = false;
     uint64_t deadline = snag_monotonic_ms() + 250u;
-    (void)snag_term_output_write(&vm->terminal, vm->output, modes, sizeof(modes) - 1u,
+    char modes[128];
+    /* Mosh retains one screen. Put subsequent output below the grid when
+     * alternate-screen restoration is unavailable. Ordinary terminals restore
+     * their saved shell cursor with the final mode reset. */
+    int length = snprintf(modes, sizeof(modes),
+        "\033[0m\033[?25h\033[?1004l\033[?1006l\033[?1002l\033[?1000l"
+        "\033[?2004l\033[%zu;1H\r\n\033[?1049l", vm->grid.rows ? vm->grid.rows : 1u);
+    (void)snag_term_output_write(&vm->terminal, vm->output, modes, (size_t)length,
         false, restore_checkpoint, &deadline);
     (void)snag_term_output_mode(&vm->terminal, false);
     if (restore_input) (void)snag_term_input_restore(&vm->terminal, false);

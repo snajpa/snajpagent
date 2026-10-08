@@ -84,6 +84,8 @@ class Terminal:
         if '[terminal]' not in settings:
             config.write_text(settings + '\n[terminal]\nclipboard=off\n')
         self.root = root
+        self.alternate_screen = not any(Path(arg).name == 'mosh' for arg in transport)
+        self.alternate_screen = self.alternate_screen or '--init' in transport
         self.master, self.slave = pty.openpty()
         self.original = normalized_modes(termios.tcgetattr(self.slave))
         self.receipt = root / ('terminal-' + uuid.uuid4().hex + '.json')
@@ -108,6 +110,7 @@ class Terminal:
         self.output = bytearray()
 
     def resize(self, rows, columns):
+        self.rows = rows
         fcntl.ioctl(self.slave, termios.TIOCSWINSZ, struct.pack('HHHH', rows, columns, 0, 0))
         if hasattr(self, 'process'):
             self.signal(signal.SIGWINCH)
@@ -199,7 +202,8 @@ class Terminal:
         self.wait_exit()
         assert self.process.poll() == 0, bytes(self.output[-3000:])
         assert normalized_modes(self.state()['modes']) == self.original, 'terminal modes were not restored'
-        assert b'\x1b[?1049l' in self.output, 'alternate screen was not released'
+        if self.alternate_screen:
+            assert b'\x1b[?1049l' in self.output, 'alternate screen was not released'
 
     def wait_exit(self):
         # Drain output while the controlling process exits. A Darwin PTY's
@@ -240,7 +244,8 @@ class WorkspaceTests(unittest.TestCase):
         if not hasattr(self, '_terminals'):
             self._terminals = []
         self._terminals.append(child)
-        child.until(b'\x1b[?1049h')
+        if child.alternate_screen:
+            child.until(b'\x1b[?1049h')
         child.until(expect)
         return child
 
@@ -268,6 +273,8 @@ class WorkspaceTests(unittest.TestCase):
 
     def resume_hint(self, child, sid):
         # The footer belongs to the shell screen, after leaving the workspace.
+        self.assertRegex(bytes(child.output),
+            rb'\x1b\[' + str(child.rows).encode() + rb';1H\r+\n\x1b\[\?1049l')
         output = child.output.rsplit(b'\x1b[?1049l', 1)[-1].decode(errors='replace')
         marker = 'You can resume this workspace with the following command'
         self.assertEqual(output.count(marker), 1, output)

@@ -1587,6 +1587,9 @@ program. Put Mosh options before the hostname. Full option names, short options
 and their values are recognized; abbreviated or unfamiliar options retain Mosh's
 own parsing and require an explicit -- before the hostname. An existing
 separator is preserved. Argument text remains literal.
+The wrapper defaults to --no-init so the final screen and reconnect command
+remain visible after Mosh exits. Explicit --init or --no-init takes precedence.
+With --init, Mosh restores the previous screen and hides the remote exit output.
 For a direct snajpagent vm remote command, Mosh prediction defaults to never:
 the workspace echoes typing within its pane boundaries. Explicit --predict,
 -a, -n or MOSH_PREDICTION_DISPLAY settings take precedence. For a workspace

@@ -6,6 +6,7 @@ import hashlib
 import struct
 import os
 import pty
+import re
 import select
 import shlex
 import shutil
@@ -140,6 +141,8 @@ class RemoteStartupTests(unittest.TestCase):
                 (['-a'], ['host', 'snajpagent', 'vm'], False),
                 (['-n'], ['host', 'snajpagent', 'vm'], False),
                 ([], ['host', 'snajpagent', '--resume', 'fixture'], False),
+                (['--init', '--'], ['host', 'snajpagent', 'vm'], True),
+                (['--no-init'], ['host', 'snajpagent', 'vm'], True),
             ]
             for options, command, disabled in cases:
                 with self.subTest(options=options, command=command):
@@ -150,9 +153,40 @@ class RemoteStartupTests(unittest.TestCase):
                         child.wait(0)
                         args = json.loads(mosh.with_suffix('.json').read_text())
                         self.assertEqual('--predict=never' in args, disabled)
+                        self.assertEqual(args.count('--no-init'), 0 if '--init' in options else 1)
+                        self.assertEqual(args.count('--init'), options.count('--init'))
                         self.assertEqual(args[-len(command):], command)
                     finally:
                         child.close()
+
+    @unittest.skipUnless(shutil.which('mosh') and shutil.which('mosh-server'),
+                         'stock Mosh client and server unavailable')
+    def test_mosh_workspace_detach_retains_resume_hint(self):
+        with tempfile.TemporaryDirectory(prefix='snag-mosh-detach-') as tmp:
+            root = Path(tmp).resolve()
+            state = root / 'state'
+            state.mkdir(mode=0o700)
+            child = RemoteProcess(root, ['mosh', '--local', '--predict=never',
+                '127.0.0.1', str(PRODUCT), 'vm', '--dotdir', str(state), '-N', 'saved'],
+                winsize=(24, 400))
+            try:
+                child.until(b'sessions', 10)
+                os.write(child.master, b':q\r')
+                child.until(b'[mosh is exiting.]', 10)
+                child.wait(0)
+                output = bytes(child.output)
+                # Mosh's final paint must survive transport shutdown on the main screen.
+                self.assertNotIn(b'\x1b[?1049h', output)
+                self.assertNotIn(b'\x1b[?1049l', output)
+                plain = re.sub(rb'\x1b\[[0-9;?]*[A-Za-z]', b'', output).decode()
+                marker = 'You can resume this workspace with the following command'
+                self.assertIn(marker, plain)
+                workspace, = (state / 'workspaces').glob('*/workspace.json')
+                command = plain.split(marker)[1].splitlines()[1]
+                self.assertEqual(shlex.split(command), [str(PRODUCT), 'vm', '--dotdir',
+                    str(state), '--resume', workspace.parent.name])
+            finally:
+                child.close()
 
     @staticmethod
     def wait_exited(child):
@@ -546,7 +580,7 @@ class RemoteStartupTests(unittest.TestCase):
                         owners[pid] = identity
                 return owners
 
-            child = RemoteProcess(home, ["mosh", "--local", "--no-init",
+            child = RemoteProcess(home, ["mosh", "--local",
                                    "--predict=never", "127.0.0.1", str(PRODUCT),
                                    "--dotdir", str(dotdir)], winsize=(24, 80))
             try:
