@@ -586,6 +586,7 @@ class ChannelTests(ChannelFixture):
         self.command('/chat 1/#side', '[#side]')
         self.term.write(b'fresh-channel-draft\r')
         self.operator_wire('PRIVMSG #side :fresh-channel-draft')
+        self.assert_no_wire('frozen-channel-draft')
 
     def test_shared_incoming_channel_has_one_typed_copy(self):
         events = self.channel_message('#SIDE', 'querybot: shared-channel-input')

@@ -363,3 +363,11 @@ Semantic submission refreshes its label through the shared animation state befor
 capturing input metadata. The owner terminal can remain unpainted while panes are
 attached; its cached frame therefore cannot identify current activity. Submission
 clock, route and durable command ordering retain their existing ownership.
+
+Native input admission uses the pending-submission state as well as prompt
+visibility. Label refreshes from IRC or layout can configure the composer while
+an engine action is pending; they cannot release subsequent typeahead. The engine's
+readiness prompt carries the consumed action-queue position: a prompt issued
+before newer input cannot acknowledge that input. Standalone and semantic owners
+apply readiness through the same path. An explicit conversation reopen therefore
+takes effect before the next message captures its route.

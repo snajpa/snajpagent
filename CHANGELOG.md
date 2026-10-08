@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Keep input buffered through an IRC conversation reopen until the owner confirms
+  readiness, so fast replies use the new channel membership after a rejoin.
+
 - Start bounded document helpers on macOS with a checked physical-memory limit;
   its large reserved address space no longer makes every helper exit before exec.
   Direct Office workers enforce the same limit independently of their parent.

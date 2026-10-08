@@ -39,6 +39,7 @@ struct ui_message {
     char error[256];
     int result, saved_errno;
     bool prompt_changed;
+    size_t input_tail;
     atomic_bool done;
 };
 
@@ -1665,27 +1666,6 @@ apply_message(struct snag_ui_display *display, struct snag_ui_command *command, 
         term->active = command->data.value != 0u;
         term->prompt_wanted = false;
         return 0;
-    case SNAG_UI_PROMPT: {
-        term->defer_redraw = true;
-        struct snag_ui_command boundary = {.kind = SNAG_UI_BEFORE_PROMPT};
-        if (snag_presentation_apply(render, &boundary, NULL) < 0) return -1;
-        term->defer_redraw = false;
-        if (command->data.prompt.active && !term->active) ++display->turn_generation;
-        /* After consuming Ctrl-C the owner can acknowledge an editor-only
-         * cancellation with another active prompt; the model turn continues. */
-        if (!command->data.prompt.active ||
-            atomic_load(&display->runtime->interrupt) != display->turn_generation)
-            term->interrupt_pending = false;
-        prompt_free(&display->prompt);
-        display->prompt = command->data.prompt;
-        memset(&command->data.prompt, 0, sizeof(command->data.prompt));
-        term->submit_awaiting_activity = false;
-        if (display->view_repainting) {
-            term->defer_redraw = true;
-            return 0;
-        }
-        return apply_prompt(display);
-    }
     case SNAG_UI_VALIDATE: {
         const char *frames[SNAG_TERM_SPINNER_COUNT];
         struct snag_term probe;
@@ -1964,8 +1944,11 @@ read_input(struct snag_ui_display *display, int timeout_ms)
     /* Output checkpoints can leave a local submission waiting to be painted.
      * Settle it before reading the next Enter from the same input burst. */
     if (!term->input_only && local_feedback(display) < 0) return -1;
+    /* A presentation refresh can repaint the label before the engine finishes
+     * an action. Only its readiness prompt releases subsequent input. */
     bool held = display->painting_feedback ||
-                (!term->prompt_wanted && !term->dictating && !term->input_only);
+                ((!term->prompt_wanted || term->submit_awaiting_activity) &&
+                    !term->dictating && !term->input_only);
     if (term->opened && !display->suspended && !display->input_closed && held) {
         enum held_control control = input_take_held_control(
             &runtime->input, (term->animation.states & (1u << SNAG_TERM_SPINNER_TOOL)) != 0u);
@@ -2066,6 +2049,37 @@ public_stopped(struct snag_ui_runtime *runtime)
 }
 
 static int
+display_prompt(struct snag_ui_display *display, struct ui_message *message)
+{
+    struct snag_term *term = &display->term;
+    struct snag_ui_command *command = &message->command;
+    if (!display->direct && !snag_view_server_attached(display->view)) {
+        term->defer_redraw = true;
+        struct snag_ui_command boundary = {.kind = SNAG_UI_BEFORE_PROMPT};
+        if (snag_presentation_apply(&display->render, &boundary, NULL) < 0) return -1;
+        term->defer_redraw = false;
+    }
+    if (command->data.prompt.active && !term->active) ++display->turn_generation;
+    /* After consuming Ctrl-C the owner can acknowledge an editor-only
+     * cancellation with another active prompt; the model turn continues. */
+    if (!command->data.prompt.active ||
+        atomic_load(&display->runtime->interrupt) != display->turn_generation)
+        term->interrupt_pending = false;
+    prompt_free(&display->prompt);
+    display->prompt = command->data.prompt;
+    memset(&command->data.prompt, 0, sizeof(command->data.prompt));
+    /* A queued readiness prompt cannot acknowledge input received after
+     * the engine sent it. The action queue owns this ordering. */
+    if (message->input_tail == atomic_load(&display->runtime->actions.head))
+        term->submit_awaiting_activity = false;
+    if (display->view_repainting) {
+        term->defer_redraw = true;
+        return 0;
+    }
+    return apply_prompt(display);
+}
+
+static int
 apply_display(struct snag_ui_display *display, struct ui_message *message)
 {
     struct snag_ui_runtime *runtime = display->runtime;
@@ -2105,17 +2119,10 @@ apply_display(struct snag_ui_display *display, struct ui_message *message)
 
     if (retain_output(display, &message->command) < 0) return -1;
     if (message->command.retain_only) return 0;
+    if (message->command.kind == SNAG_UI_PROMPT) return display_prompt(display, message);
 
     if (display->direct || snag_view_server_attached(display->view)) {
         switch (message->command.kind) {
-        case SNAG_UI_PROMPT:
-            if (message->command.data.prompt.active && !display->term.active)
-                ++display->turn_generation;
-            prompt_free(&display->prompt);
-            display->prompt = message->command.data.prompt;
-            memset(&message->command.data.prompt, 0, sizeof(message->command.data.prompt));
-            display->term.submit_awaiting_activity = false;
-            return apply_prompt(display);
         case SNAG_UI_IRC:
             return display_conversation_event(display, message->command.data.irc);
         case SNAG_UI_HOST:
@@ -2331,6 +2338,7 @@ request(struct snag_ui *ui, struct ui_message *message, struct snag_buf *deliver
         errno = EOVERFLOW;
         goto out;
     }
+    message->input_tail = atomic_load(&runtime->actions.tail);
     atomic_store_explicit(&runtime->request, message, memory_order_release);
     snag_wakeup_send(runtime->commands[1]);
     for (;;) {

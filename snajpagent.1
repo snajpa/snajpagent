@@ -1355,9 +1355,9 @@ commands.  Each line retains the prompt label and current activity state at subm
 including commands entered through a workspace.
 Every nonblank prompt, command, chat message, steering instruction or queued
 submission is painted at this submission boundary, before engine admission can
-wait.  The ready composer stays hidden until the engine acknowledges the action,
-while later input remains live as retained type-ahead and appears in the next
-real composer.  Empty or whitespace-only ordinary Enter is presentation-only:
+wait.  The ready composer stays hidden until the engine acknowledges the action.
+Later input stays buffered through IRC and display refreshes and appears in the
+next real composer.  Empty or whitespace-only ordinary Enter is presentation-only:
 it creates no turn, command, queue item, chat message, goal event or provider
 request.  Modal confirmations and queue editing keep their documented blank
 answer behavior.
