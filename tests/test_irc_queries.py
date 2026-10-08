@@ -155,11 +155,27 @@ class QueryFixture(unittest.TestCase):
         self.wait(idle)
 
     def submit(self, text):
-        before = sum(e['type'] == 'turn_completed' for e in self.events())
+        before = self.events()[-1]['seq']
         self.term.write(b'/rollout\r')
         self.term.until(b'host-model/medium')
         self.term.write(text.encode() + b'\r')
-        self.wait(lambda: sum(e['type'] == 'turn_completed' for e in self.events()) > before)
+
+        def completed():
+            events = [e for e in self.events() if e['seq'] > before]
+            steering = {e['data']['steering_id'] for e in events
+                        if e['type'] == 'steering_added' and e['data'].get('text') == text}
+            admitted = {}
+            for event in events:
+                data = event['data']
+                if ((event['type'] == 'turn_started' and data.get('text') == text) or
+                        (event['type'] == 'input_admitted' and
+                         steering.intersection(data['steering_ids']))):
+                    admitted[data['turn_id']] = event['seq']
+            return any(e['type'] in ('turn_completed', 'turn_completed_silent') and
+                       e['data']['turn_id'] in admitted and
+                       e['seq'] > admitted[e['data']['turn_id']] for e in events)
+
+        self.wait(completed)
         self.wait_idle()
 
     def direct(self, target, text, notice=False):

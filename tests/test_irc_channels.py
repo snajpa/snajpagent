@@ -152,6 +152,7 @@ class ChannelFixture(QueryFixture):
             *(('-N', 'channel-session') if not resume else ()), '-r', 'lab')
         self.wait(lambda: len(self.channels()) == 4 and
                   all(c['routing']['joined'] for c in self.channels().values()))
+        self.submit('prime')
         self.wait_idle()
 
     def channels(self):
