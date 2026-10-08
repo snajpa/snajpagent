@@ -651,8 +651,8 @@ fixture_response(const char *prompt, const json_t *steering, const json_t *reque
         static const char *const arguments[] = {
             "{\"path\":\".\",\"recursive\":false,\"offset\":null,\"limit\":null}",
             "{\"path\":\"ro-input.txt\",\"start_line\":null,\"end_line\":null}",
-            "{\"path\":\"ro-input.txt\",\"pattern\":\"native\",\"recursive\":false,\"ignore_case\":"
-            "false,\"literal\":true,\"offset\":null,\"limit\":null}"};
+            ("{\"path\":\"ro-input.txt\",\"pattern\":\"native\",\"recursive\":false,"
+             "\"ignore_case\":false,\"literal\":true,\"offset\":null,\"limit\":null}")};
         if (cycle <= 3u) {
             const char *text = arguments[cycle - 1u];
             json_t *args = snag_json_load_strict(

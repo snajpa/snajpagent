@@ -1009,8 +1009,8 @@ test_minimal_command_contract(void)
 {
     const char *inputs[] = {"{\"command\":\"printf minimal-contract\"}",
         "{\"cmd\":\"printf minimal-contract\",\"yield_time_ms\":1000,\"max_output_bytes\":6000}",
-        "{\"max_output_bytes\":null,\"timeout_ms\":null,\"yield_ms\":null,\"stdin\":null,\"pty\":"
-        "null,\"workdir\":null,\"command\":\"printf minimal-contract\"}"};
+        ("{\"max_output_bytes\":null,\"timeout_ms\":null,\"yield_ms\":null,\"stdin\":null,"
+         "\"pty\":null,\"workdir\":null,\"command\":\"printf minimal-contract\"}")};
     for (size_t i = 0; i < sizeof(inputs) / sizeof(inputs[0]); ++i) {
         json_t *args = json_loadb(inputs[i], strlen(inputs[i]), 0, NULL);
         json_t *result = run_tool_with_args("exec_command", args);
