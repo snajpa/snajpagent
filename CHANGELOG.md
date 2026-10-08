@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Show newer retained output in a workspace pane's HOLD prompt while preserving
+  the selected history range.
+
 - Resume sessions with older interrupted responses whose streamed text falls
   outside the current checkpoint. Retrieve missing verified history and report
   replay errors before exiting.

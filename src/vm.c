@@ -4002,9 +4002,11 @@ window_prompt(struct vm *vm, struct vm_window *window, struct snag_vm_connection
                 destination, sizeof(destination));
         }
     }
-    if (snag_buf_printf(&window->prompt, "[%s%s%s%s%s] %s%s",
+    if (snag_buf_printf(&window->prompt, "[%s%s%s%s%s%s] %s%s",
         name && *name ? name : identity, *access ? "; " : "", access,
-        window->follow ? "" : "; HOLD", window->source_failed ? "; history error, R" :
+        window->follow ? "" : "; HOLD",
+        !window->follow && window->end.next_seq < window->tail.next_seq ? "; newer" : "",
+        window->source_failed ? "; history error, R" :
             window->load && window->load != LOAD_POLL ? "; loading" : "",
         destination, term.label) < 0) return -1;
     uint64_t due = snag_term_animation_due(&window->animation, now);

@@ -487,14 +487,15 @@ class WorkspaceTests(unittest.TestCase):
                            transport=[*tmux, '-f', '/dev/null', 'new-session',
                                       '-s', 'scroll', '--'])
 
-        def frame_until(marker):
+        def frame_until(marker, absent=''):
             deadline = time.monotonic() + 10
             frame = ''
             while time.monotonic() < deadline:
                 child.read(.03)
                 frame = subprocess.check_output([*tmux, 'capture-pane', '-p',
                                                  '-t', 'scroll:0.0'], text=True, timeout=5)
-                if marker in frame and ' loading' not in frame:
+                if (marker in frame and ' loading' not in frame and
+                        (not absent or absent not in frame)):
                     return frame
             self.fail((marker, frame))
 
@@ -506,13 +507,13 @@ class WorkspaceTests(unittest.TestCase):
         child.command('history ' + journal.parent.name)
         frame_until('last-visible-marker')
         wheel(64)
-        frame = frame_until('[start]')
+        frame = frame_until('first-visible-marker')
         self.assertIn('first-visible-marker', frame)
         # A new hidden tail must likewise leave the last visible output intact.
         append_event(journal, 'provider_request', {'padding': 'y' * (5 * 1024 * 1024)})
         frame_until('newer')
         wheel(65)
-        frame = frame_until('[tail]')
+        frame = frame_until('last-visible-marker', absent='newer')
         self.assertIn('last-visible-marker', frame)
         child.finish('workspace detach')
 
