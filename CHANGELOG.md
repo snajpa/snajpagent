@@ -4,6 +4,13 @@
 
 ## Unreleased
 
+- Add native MCP tools over current and initialized Streamable HTTP, with
+  registered-client OAuth/PKCE, private credentials, catalog notifications and
+  immutable tool contracts across turn resume. Inspect servers with `/mcp` and
+  admit consequential calls through exact, single-use approvals or local policy.
+  Preserve structured receipts and large results; report uncertain effects
+  without automatic mutation retries.
+
 - Rebuild cached response context when previously deferred input is admitted.
   Direct and IRC steering carry into the next turn without an active-turn
   projection error or repeated retries.

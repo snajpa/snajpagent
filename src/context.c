@@ -910,7 +910,16 @@ static int
 append_tool_call(
     struct context_builder *builder, const struct snag_response_item *call, bool scoped)
 {
-    char *args = canonical_string(call->arguments, SNAG_MAX_TOOL_ARGUMENTS);
+    json_t *arguments = snag_response_arguments(call);
+    struct snag_buf wire = {.max = SNAG_MAX_TOOL_ARGUMENTS + 1u};
+    char *args = NULL;
+    if (arguments && snag_json_diagnostic(arguments, &wire) == 0 &&
+        snag_buf_terminate(&wire) == 0) {
+        args = (char *)wire.data;
+        wire.data = NULL;
+    }
+    json_decref(arguments);
+    snag_buf_free(&wire);
     bool provider_id = call->provider_call_id && call->provider_call_id[0];
     /* A call the provider issued must be named by the provider's own id on both sides, in
      * every section: the result is appended from a separate tool_finished event and may be
@@ -3176,7 +3185,7 @@ snag_context_interface_request(const struct snag_session *session,
         "reasoning.encrypted_content", "truncation", "disabled", "prompt_cache_key", cache_key);
     if (!request || snag_context_provider_model(provider, model, request) < 0 ||
         (snag_auth_uses_codex(provider->auth) && snag_context_codex_request(request) < 0) ||
-        snag_json_digest_bounded(request, SNAG_CONTEXT_MAX_REQUEST, NULL, NULL) < 0) {
+        snag_json_wire_digest(request, SNAG_CONTEXT_MAX_REQUEST, NULL, NULL) < 0) {
         json_decref(request);
         return NULL;
     }
@@ -4065,6 +4074,8 @@ snag_context_build(struct snag_session *session, const char *model, const char *
     builder.tools = tool_schemas(session->goal_status == SNAG_GOAL_ACTIVE,
         !snag_goal_unfinished(session->goal_status), builder.networked, config, session,
         session->active_turn_provider, session->active_read_only);
+    if (control && control->mcp_tools && builder.tools &&
+        json_array_extend(builder.tools, (json_t *)control->mcp_tools) < 0) goto out;
     if (builder.deferred_irc_seq && projection->irc_seq >= builder.deferred_irc_seq)
         projection->irc_seq = builder.deferred_irc_seq - 1u;
     /* State and system policy do not themselves start a continuation request.

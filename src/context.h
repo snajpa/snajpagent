@@ -43,6 +43,7 @@ struct snag_context_control {
      * goal may still need orientation, but must retain ordinary history. */
     bool goal_recovery_rebase;
     const char *irc_replies;
+    const json_t *mcp_tools; /* Borrowed, immutable active-turn catalog. */
 };
 
 struct snag_context_projection {

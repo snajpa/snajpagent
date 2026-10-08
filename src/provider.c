@@ -1316,7 +1316,7 @@ provider_request_setup(struct provider_ctx *ctx, const struct snag_credential *c
         return -1;
     if (snag_secret_set_build(&ctx->secrets, ctx->config, &ctx->credential, error, error_size) < 0)
         return -1;
-    if (has_body && snag_json_canonical(request, &ctx->body) < 0)
+    if (has_body && snag_json_diagnostic(request, &ctx->body) < 0)
         return snag_errorf(error, error_size, "%s", body_error);
     if (provider_endpoint_url(ctx->provider, path, url, sizeof(url), &endpoint, error, error_size) <
         0)

@@ -5,7 +5,7 @@
 #include "base.h"
 #include "snag_jansson.h"
 
-/* Owned canonical document. Refresh its measurement after any mutation. */
+/* Owned provider document; wire numbers may include reals. Refresh after mutation. */
 struct snag_json_document {
     json_t *value;
     size_t bytes;
@@ -28,6 +28,8 @@ json_t *snag_json_load_canonical(
     const unsigned char *data, size_t len, char *error, size_t error_size);
 json_t *snag_json_load_canonical_bounded(
     const unsigned char *data, size_t len, size_t max_len, char *error, size_t error_size);
+/* Sorted wire JSON permits finite reals; native host canonical values do not. */
+int snag_json_wire_digest(const json_t *, size_t, char [SNAG_SHA256_HEX_LEN + 1u], size_t *);
 int snag_json_digest(const json_t *value, char out[SNAG_SHA256_HEX_LEN + 1u]);
 int snag_json_digest_bounded(
     const json_t *value, size_t max, char out[SNAG_SHA256_HEX_LEN + 1u], size_t *bytes);

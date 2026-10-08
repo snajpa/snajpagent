@@ -648,6 +648,8 @@ int
 snag_app_tool_run(struct app_state *app, const struct snag_response_item *call,
     const struct snag_credential *credential, json_t **result, char *error, size_t error_size)
 {
+    if (call && call->name && !strncmp(call->name, "mcp_", 4u))
+        return snag_mcp_call(app->mcp, call, snag_app_active_input_pump, app, result);
     if (call && call->name && !strcmp(call->name, "read_tool_output"))
         return snag_app_output_page(app, call, result, error, error_size);
     if (call && call->name && !strcmp(call->name, "read_session_history")) {

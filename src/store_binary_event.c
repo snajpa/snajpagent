@@ -2537,11 +2537,14 @@ tool_result_valid(const struct snag_binary_tool_result *result)
     enum snag_binary_tool_reason reason = result->reason;
     switch (result->status) {
     case SNAG_BINARY_TOOL_NOT_RUN:
-        return reason >= SNAG_BINARY_TOOL_PROTOCOL_CONFLICT &&
-            reason <= SNAG_BINARY_TOOL_RULE_REJECTED;
+        return (reason >= SNAG_BINARY_TOOL_PROTOCOL_CONFLICT &&
+            reason <= SNAG_BINARY_TOOL_RULE_REJECTED) ||
+            (reason >= SNAG_BINARY_TOOL_MCP_UNAVAILABLE &&
+                reason <= SNAG_BINARY_TOOL_MCP_TRANSPORT);
     case SNAG_BINARY_TOOL_OUTCOME_UNKNOWN:
         return reason == SNAG_BINARY_TOOL_OWNER_LOST ||
-            reason == SNAG_BINARY_TOOL_UNREAPED_AFTER_SIGKILL;
+            reason == SNAG_BINARY_TOOL_UNREAPED_AFTER_SIGKILL ||
+            reason == SNAG_BINARY_TOOL_MCP_UNKNOWN;
     case SNAG_BINARY_TOOL_DENIED:
         return reason == SNAG_BINARY_TOOL_USER_DENIED;
     case SNAG_BINARY_TOOL_CANCELLED:

@@ -12,6 +12,7 @@
 #include "instructions.h"
 #include "irc.h"
 #include "model_cache.h"
+#include "mcp.h"
 #include "render.h"
 #include "responses.h"
 #include "store.h"
@@ -50,6 +51,7 @@ struct snag_output_cache {
 };
 struct app_state {
     const char *program;
+    struct snag_mcp *mcp;
     /* Informational output from one command is shown in one pager invocation. */
     struct snag_buf *command_report;
     struct app_view_terminal *view_terminal;

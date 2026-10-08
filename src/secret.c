@@ -61,6 +61,10 @@ snag_secret_set_build(struct snag_secret_set *set, const struct snag_config *con
             continue; /* Inactive providers do not gate the selected one. */
         if (append_secret(set, value) < 0) goto failed;
     }
+    for (size_t i = 0u; i < json_array_size(config->mcp_credentials); ++i) {
+        const char *value = json_string_value(json_array_get(config->mcp_credentials, i));
+        if (append_secret(set, snag_strdup_checked(value, SNAG_WIRE_SECRET_MAX)) < 0) goto failed;
+    }
     for (size_t i = 0; i < config->secret_count; ++i) {
         char *value = NULL;
         if (snag_secret_source_resolve(&config->secrets[i], &value, error, error_size) < 0)

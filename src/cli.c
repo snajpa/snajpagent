@@ -380,6 +380,13 @@ snag_cli_parse(struct snag_cli *cli, int argc, char **argv, char *error, size_t 
     if (cli->list && positional >= 0 && positional < argc)
         return snag_errorf(error, error_size, "-l accepts one optional stored-session count");
     if (!cli->execute && !cli->resume && !dashdash && positional >= 0 &&
+        !strcmp(argv[positional], "mcp")) {
+        cli->mcp = true;
+        cli->mcp_argc = argc - positional - 1;
+        cli->mcp_argv = argv + positional + 1;
+        return 0;
+    }
+    if (!cli->execute && !cli->resume && !dashdash && positional >= 0 &&
         (strcmp(argv[positional], "login") == 0 || strcmp(argv[positional], "logout") == 0))
         return parse_auth_command(cli, argc, argv, positional, error, error_size);
     if (cli->list && (cli->resume || cli->execute || cli->last || cli->session_name ||
@@ -458,6 +465,7 @@ snag_cli_usage(int fd)
         "       AUTH_OPTION: --openai-device-auth | --meta-device-auth |\n"
         "                    --with-api-key | --with-access-token\n"
         "       " SNAJPAGENT_NAME " [OPTIONS] login status [PROVIDER]\n"
+        "       " SNAJPAGENT_NAME " [OPTIONS] mcp list|status|tools|reload|login|logout [SERVER]\n"
         "       " SNAJPAGENT_NAME " [OPTIONS] logout [PROVIDER]\n"
         "  -s, --listen[=ENDPOINT]      host the IRC server on ENDPOINT\n"
         "  -c, --client[=ENDPOINT]      connect to IRC; repeatable\n"

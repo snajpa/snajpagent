@@ -70,7 +70,7 @@ static int
 canonical_prefix(const json_t *value, struct snag_buf *out, size_t bytes, bool *truncated)
 {
     snag_buf_init(out, bytes);
-    if (snag_json_canonical(value, out) == 0) return 0;
+    if (snag_json_diagnostic(value, out) == 0) return 0;
     if (errno != EOVERFLOW) return -1;
     *truncated = true;
     while (out->len && !snag_utf8_valid(out->data, out->len, false)) --out->len;
@@ -137,7 +137,10 @@ snag_render_prepare_tool_start(struct snag_render_block *block,
     block_init(block, SNAG_PRESENT_ARGUMENTS);
     block->role = SNAG_ROLE_ACTIVITY;
     struct snag_buf row = {.max = 4096u};
-    if (canonical_prefix(call->arguments, &args, bytes, &truncated) < 0) goto out;
+    json_t *arguments = snag_response_arguments(call);
+    int encoded = canonical_prefix(arguments, &args, bytes, &truncated);
+    json_decref(arguments);
+    if (encoded < 0) goto out;
     bool arguments_truncated = truncated;
     if (snag_buf_printf(&row, "→ %s", call->name) < 0 || append_tool_ref(&row, call->call_id) < 0)
         goto out;

@@ -978,6 +978,10 @@ snag_app_request_build(struct app_state *app, const json_t *steering, unsigned i
         .history_orientation = app->history_orientation,
         .goal_recovery_rebase = app->history_recovery_rebase};
 
+    if (snag_mcp_prepare(app->mcp, &app->session,
+            snag_app_active_input_pump, app) < 0)
+        return snag_errorf(error, error_size, "cannot freeze MCP catalog");
+    control.mcp_tools = snag_mcp_tools(app->mcp);
     app->request_networked = app->networked && !app->session.active_read_only;
     snag_irc_capture_route(app->irc, &app->irc_request_route);
     snag_irc_destinations(app->irc, &app->irc_request_destinations);

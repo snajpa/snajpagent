@@ -39,9 +39,11 @@
       <p>Start <code>snajpagent</code> and describe the task. Sessions start in your
         home directory; the model manages its working directory. Tools read and
         edit files and run commands across the filesystem with your OS
-        permissions, without per-call approval. Tool details are hidden at the
+        permissions. Local tools run without per-call approval. Tool details are hidden at the
         default verbosity; show them when useful. Read replies and scroll back
-        normally.</p>
+        normally. Native MCP in current development builds adds tools from configured
+        Streamable HTTP servers, with OAuth and exact call approvals. Setup and
+        recovery are in the <a href="manual.html#Native_MCP">MCP reference</a>.</p>
       <figure>
         <a href="screenshots/ordinary.png">
           <img src="screenshots/ordinary.png" width="1122" height="221"

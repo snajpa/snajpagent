@@ -1317,7 +1317,9 @@ build_call(struct snag_responses_stream *stream, struct snag_response_graph *gra
         return stream_fail(
             stream, EPROTO, "function arguments are not one strict object: %s", json_error);
     }
-    if (snag_response_graph_add_call(graph, item->id, item->call_id, item->name, arguments) < 0)
+    arguments = snag_response_arguments_store(item->name, arguments);
+    if (!arguments ||
+        snag_response_graph_add_call(graph, item->id, item->call_id, item->name, arguments) < 0)
         return stream_fail(
             stream, errno ? errno : EPROTO, "function call is outside the registered schema");
     return 0;

@@ -19,7 +19,7 @@ snag_json_document_measure(struct snag_json_document *document, size_t max)
 {
     document->bytes = 0u;
     document->sha256[0] = '\0';
-    return snag_json_digest_bounded(document->value, max, document->sha256, &document->bytes);
+    return snag_json_wire_digest(document->value, max, document->sha256, &document->bytes);
 }
 
 int
@@ -176,6 +176,20 @@ snag_json_diagnostic(const json_t *value, struct snag_buf *out)
 {
     snag_buf_reset(out);
     return encode_value(value, out, 0u, true);
+}
+
+int
+snag_json_wire_digest(const json_t *value, size_t max,
+    char hash[SNAG_SHA256_HEX_LEN + 1u], size_t *bytes)
+{
+    struct snag_buf encoded = {.max = max};
+    int rc = snag_json_diagnostic(value, &encoded);
+    if (!rc) {
+        if (hash) snag_sha256_hex(encoded.data, encoded.len, hash);
+        if (bytes) *bytes = encoded.len;
+    }
+    snag_buf_free(&encoded);
+    return rc;
 }
 
 static int

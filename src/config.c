@@ -28,6 +28,7 @@ enum section {
     SECTION_IRC,
     SECTION_TOOL,
     SECTION_RULE,
+    SECTION_MCP,
     SECTION_COUNT
 };
 
@@ -46,6 +47,7 @@ struct parse_state {
     size_t model_count, model_capacity;
     json_t *rules;
     size_t rule_index;
+    json_t *mcp_server;
 };
 
 static int
@@ -178,6 +180,12 @@ void
 snag_config_free(struct snag_config *config)
 {
     snag_rules_free(config->rules);
+    json_decref(config->mcp_servers);
+    for (size_t i = 0u; i < json_array_size(config->mcp_credentials); ++i) {
+        json_t *value = json_array_get(config->mcp_credentials, i);
+        snag_secret_clear((char *)json_string_value(value), json_string_length(value));
+    }
+    json_decref(config->mcp_credentials);
     free(config->shell);
     for (size_t i = 0; i < config->provider_count; ++i) {
         snag_secret_source_free(&config->providers[i].api_key);
@@ -628,6 +636,20 @@ invalid:
 }
 
 static int
+set_mcp_section(struct parse_state *state, const char *name)
+{
+    if (!snag_config_name_valid(name)) return snag_errno(EINVAL);
+    if (!state->config->mcp_servers) state->config->mcp_servers = json_object();
+    if (!state->config->mcp_servers) return -1;
+    if (json_object_get(state->config->mcp_servers, name)) return snag_errno(EINVAL);
+    json_t *server = json_object();
+    if (!server || json_object_set_new(state->config->mcp_servers, name, server) < 0) return -1;
+    state->mcp_server = server;
+    state->section = SECTION_MCP;
+    return 0;
+}
+
+static int
 set_section(struct parse_state *state, char *name)
 {
     enum section section;
@@ -635,6 +657,8 @@ set_section(struct parse_state *state, char *name)
         section = SECTION_AGENT;
     else if (strcmp(name, "terminal") == 0)
         section = SECTION_TERMINAL;
+    else if (strncmp(name, "mcp ", 4u) == 0)
+        return set_mcp_section(state, trim(name + 4u));
     else if (strncmp(name, "provider ", 9u) == 0)
         return set_provider_section(state, trim(name + 9u));
     else if (strncmp(name, "model-limit ", 12u) == 0)
@@ -755,8 +779,49 @@ parse_clipboard(const char *value, enum snag_clipboard_policy *policy)
 }
 
 static int
+parse_mcp(struct parse_state *state, const char *key, const char *value)
+{
+    json_t *parsed = NULL;
+    if (claim_key(state, key) < 0) return -1;
+    if (!strcmp(key, "enabled")) {
+        bool enabled;
+        if (parse_bool(value, &enabled) < 0) return -1;
+        parsed = json_boolean(enabled);
+    } else if (!strcmp(key, "timeout_ms")) {
+        uint32_t timeout;
+        if (parse_u32(value, 1u, INT_MAX, &timeout) < 0) return -1;
+        parsed = json_integer(timeout);
+    } else if (snag_string_in(key, "allow_tools deny_tools read_only_tools")) {
+        parsed = snag_json_load_strict((const unsigned char *)value, strlen(value),
+            SNAG_CONFIG_FILE_MAX, NULL, 0u);
+        if (!json_is_array(parsed)) goto invalid;
+        for (size_t i = 0u; i < json_array_size(parsed); ++i) {
+            const char *name = json_string_value(json_array_get(parsed, i));
+            if (!name || !*name) goto invalid;
+        }
+    } else if (snag_string_in(key,
+        "url resource issuer client_id client_secret scope identity redirect_uri")) {
+        if (!*value) return snag_errno(EINVAL);
+        if (!strcmp(key, "client_secret")) {
+            struct snag_secret_source source = {0};
+            int rc = snag_secret_source_parse(&source, value, state->config->source_path, NULL, 0u);
+            snag_secret_source_free(&source);
+            if (rc < 0) return -1;
+        }
+        parsed = json_string(value);
+    } else {
+        return snag_errno(EINVAL);
+    }
+    return parsed ? json_object_set_new(state->mcp_server, key, parsed) : -1;
+invalid:
+    json_decref(parsed);
+    return snag_errno(EINVAL);
+}
+
+static int
 parse_setting(struct parse_state *state, const char *key, const char *value)
 {
+    if (state->section == SECTION_MCP) return parse_mcp(state, key, value);
     if (state->section == SECTION_AUDIO) return parse_audio(state, key, value);
     struct snag_config *config = state->config;
     struct snag_provider_config *provider = &config->providers[state->provider_index];
@@ -1083,7 +1148,7 @@ parse_file(struct snag_config *config, char *text, char *error, size_t error_siz
             }
             if (rc < 0) {
                 snag_errorf(error, error_size,
-                    "invalid configuration at line %u; use named [provider NAME], "
+                    "invalid configuration at line %u; check named [provider NAME] or [mcp NAME], "
                     "api_key with ${ENV}, quoted literal or path, and repeatable tool secret",
                     number);
                 free_parse_state(&state);

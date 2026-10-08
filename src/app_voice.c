@@ -9,6 +9,7 @@
 #include "voice.h"
 #include "voice_rtc.h"
 
+#include <ctype.h>
 #include <errno.h>
 #include <limits.h>
 #include <pthread.h>
@@ -3109,6 +3110,18 @@ snag_app_voice_ui_input(struct app_state *app, const struct snag_response_item *
             call->arguments, "text", 1u, SNAG_MAX_DIRECT_PROMPT, false, &text, error, size)) {
         *result = snag_tool_result_terminal(false, error);
         return *result ? 0 : -1;
+    }
+    const char *command = text;
+    while (isspace((unsigned char)*command)) ++command;
+    if (!strncmp(command, "/mcp", 4u) && isspace((unsigned char)command[4])) {
+        command += 4u;
+        while (isspace((unsigned char)*command)) ++command;
+        if (!strncmp(command, "approve", 7u) &&
+            (!command[7] || isspace((unsigned char)command[7]))) {
+            *result = snag_tool_result_terminal(false,
+                "MCP approval requires direct operator input after inspecting the exact call.");
+            return *result ? 0 : -1;
+        }
     }
     struct app_voice *v = app->voice;
     if (!v || atomic_load(&v->stop) || (atomic_load(&v->done) && !v->retryable) ||

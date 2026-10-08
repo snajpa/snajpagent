@@ -15,6 +15,9 @@ enum snag_cli_auth_command {
     SNAG_CLI_AUTH_NONE, SNAG_CLI_LOGIN, SNAG_CLI_LOGIN_STATUS, SNAG_CLI_LOGOUT };
 
 struct snag_cli {
+    int mcp_argc;
+    char **mcp_argv;
+    bool mcp;
     enum snag_cli_auth_command auth_command;
     bool openai_device_auth;
     bool meta_device_auth;

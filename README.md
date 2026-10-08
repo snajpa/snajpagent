@@ -272,6 +272,17 @@ default. Larger windows may change pricing. The prompt shows measured input as
 a percentage of this budget; `?%` means unknown. `/status` explains accounting;
 `/compact` summarizes older context while preserving the transcript.
 
+### Connect MCP tools
+
+Current development builds expose configured Streamable HTTP MCP tools directly
+in model turns. Add `[mcp NAME]` with the endpoint and registered OAuth client,
+then run `snajpagent mcp login NAME` and complete the displayed consent URL.
+`/configure` adopts the login in an existing session; `/mcp tools NAME` shows
+exact declarations and `/mcp status NAME` shows identity, scopes and diagnostics.
+Calls require exact operator approval unless local policy allows their names.
+See the manual's **Native MCP** section for setup, approval and recovery, or
+[the configuration example](examples/mcp.ini).
+
 ### Restrict what the model may do
 
 Configuration filters model tool calls through `[rule NAME]` sections,

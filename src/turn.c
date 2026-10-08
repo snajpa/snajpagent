@@ -32,9 +32,45 @@ snag_prompt_command(const char *text)
     return !read_only;
 }
 
+static bool
+mcp_name(const char *name, char policy)
+{
+    return name && strlen(name) == 62u && !strncmp(name, "mcp_", 4u) &&
+        name[4] == policy && name[5] == '_' && snag_hex_is_lower(name + 6u, 56u);
+}
+
+json_t *
+snag_response_arguments_store(const char *name, json_t *arguments)
+{
+    if (!mcp_name(name, 'r') && !mcp_name(name, 'w')) return arguments;
+    struct snag_buf wire = {.max = SNAG_MAX_TOOL_ARGUMENTS};
+    json_t *stored = NULL;
+    if (snag_json_diagnostic(arguments, &wire) == 0 && snag_buf_terminate(&wire) == 0)
+        stored = json_pack("{s:s}", "mcp_arguments_json", (char *)wire.data);
+    json_decref(arguments);
+    snag_buf_free(&wire);
+    return stored;
+}
+
+json_t *
+snag_response_arguments(const struct snag_response_item *call)
+{
+    if ((mcp_name(call->name, 'r') || mcp_name(call->name, 'w')) &&
+        snag_json_exact_keys(call->arguments, "mcp_arguments_json")) {
+        const char *wire = snag_json_string(call->arguments, "mcp_arguments_json");
+        json_t *value = wire ? snag_json_load_strict((const unsigned char *)wire, strlen(wire),
+            SNAG_MAX_TOOL_ARGUMENTS, NULL, 0u) : NULL;
+        if (json_is_object(value)) return value;
+        json_decref(value);
+        return NULL;
+    }
+    return call->arguments ? json_incref(call->arguments) : json_object();
+}
+
 bool
 snag_read_only_tool(const char *name)
 {
+    if (mcp_name(name, 'r')) return true;
     return snag_string_in(name,
         "get_cwd list_files read_file grep view_image view_video read_document "
         "listen_audio transcribe_audio read_tool_output read_session_history "
@@ -289,7 +325,7 @@ snag_response_graph_set_provider_id(
 bool
 snag_tool_name_valid(const char *name)
 {
-    return snag_read_only_tool(name) ||
+    return mcp_name(name, 'w') || snag_read_only_tool(name) ||
            snag_string_in(name,
                "exec_command write_stdin speak_text apply_patch write_file edit_file cd "
                "select_model send_file inspect_session submit_input interrupt_turn "
@@ -655,7 +691,9 @@ reason_is_not_run(const char *reason)
         "stdin_busy "
         "stdin_closed invalid_arguments managed_process_conflict "
         "managed_process_handle_mismatch recovery_unstarted superseded_by_steering "
-        "turn_cancelled process_interaction_required rule_rejected");
+        "turn_cancelled process_interaction_required rule_rejected "
+        "mcp_tool_not_in_turn_catalog mcp_approval_required "
+        "mcp_invalid_header_arguments mcp_transport");
 }
 
 int
@@ -734,7 +772,8 @@ snag_tool_result_valid(const json_t *result)
     if (strcmp(status, "not_run") == 0)
         return reason_is_not_run(reason) && json_is_null(handle) ? 0 : -1;
     if (strcmp(status, "outcome_unknown") == 0)
-        return reason && (snag_string_in(reason, "owner_lost unreaped_after_sigkill")) &&
+        return reason && snag_string_in(reason,
+                             "owner_lost unreaped_after_sigkill mcp_outcome_unknown") &&
                        json_is_null(handle)
                    ? 0
                    : -1;

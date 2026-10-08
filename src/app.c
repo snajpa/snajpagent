@@ -232,6 +232,7 @@ app_reportf(struct app_state *app, const char *format, ...)
 static int
 service_attachment(struct app_state *app, bool external)
 {
+    snag_mcp_poll(app->mcp);
     if (snag_ui_view_state(&app->ui, &app->session) < 0) return -1;
     if (snag_app_voice_attachment_service(app) < 0) return -1;
     uint64_t generation = snag_ui_session_pending(&app->ui);
@@ -2511,6 +2512,7 @@ reload_config(struct app_state *app, char *error, size_t error_size)
 {
     struct snag_config candidate;
     struct snag_config previous;
+    struct snag_mcp *mcp_candidate = NULL;
     struct snag_model_cache cache = {0};
     const char *selected_provider =
         app->session.default_provider[0] ? app->session.default_provider : NULL;
@@ -2566,8 +2568,15 @@ reload_config(struct app_state *app, char *error, size_t error_size)
         snag_secret_bytes_free(value);
     }
     if (snag_model_cache_load(&app->store, &cache, error, error_size) < 0) goto out;
+    candidate.mcp_credentials = app->config->mcp_credentials
+        ? json_deep_copy(app->config->mcp_credentials) : json_array();
+    if (!candidate.mcp_credentials) goto out;
+    mcp_candidate = snag_mcp_open(app->store.root_fd, &candidate);
+    if (!mcp_candidate) goto out;
     rc = apply_network(app, &candidate, error, error_size);
     if (rc != 0) goto out;
+    snag_mcp_configure(app->mcp, mcp_candidate);
+    mcp_candidate = NULL;
     snag_app_irc_summary_close(app);
     app->irc_summary_attempt_count = 0;
     previous = *app->config;
@@ -2599,6 +2608,7 @@ reload_config(struct app_state *app, char *error, size_t error_size)
     snag_config_free(&previous);
     rc = 0;
 out:
+    snag_mcp_close(mcp_candidate);
     snag_model_cache_free(&cache);
     snag_auth_config_close(&candidate);
     snag_config_free(&candidate);
@@ -3680,6 +3690,36 @@ handle_common_command(
         return (app->audio || app->voice)
                    ? app_error(app, "Stop local audio before reloading configuration.")
                    : change_config(app, active);
+    if (!strncmp(line, "/mcp", 4u) && (!line[4] || isspace((unsigned char)line[4]))) {
+        struct snag_buf report = {.max = SNAG_MAX_EVENT_LINE};
+        int rc = 0;
+        const char *argument = line + 4u;
+        while (isspace((unsigned char)*argument)) ++argument;
+        if (!strncmp(argument, "login", 5u) && isspace((unsigned char)argument[5])) {
+            struct snag_buf command = {.max = SNAG_PATH_MAX_BYTES * 3u};
+            const char *server = argument + 5u;
+            while (isspace((unsigned char)*server)) ++server;
+            rc = snag_command_argument(&command, app->program);
+            if (!rc) rc = snag_command_argument(&command, "--config");
+            if (!rc) rc = snag_command_argument(&command, app->config_path);
+            if (!rc) rc = snag_command_argument(&command, "--dotdir");
+            if (!rc) rc = snag_command_argument(&command, app->store.root_path);
+            if (!rc) rc = snag_command_argument(&command, "mcp");
+            if (!rc) rc = snag_command_argument(&command, "login");
+            if (!rc) rc = snag_command_argument(&command, server);
+            if (!rc) rc = snag_command_finish(&command);
+            if (!rc) rc = snag_buf_terminate(&command);
+            if (!rc) rc = snag_buf_printf(&report,
+                "Run this in a shell, then /configure here:\n%s\n", command.data);
+            snag_buf_free(&command);
+        } else {
+            rc = snag_mcp_command(app->mcp, line + 4u, &report, snag_app_active_input_pump, app);
+        }
+        if (!rc) rc = snag_buf_terminate(&report);
+        if (!rc) rc = app_reportf(app, "%s", report.data ? (char *)report.data : "");
+        snag_buf_free(&report);
+        return rc;
+    }
     if (strcmp(line, "/configure") == 0) {
         if (app->audio || app->voice) {
             return app_error(app, "Stop local audio before reloading configuration.");
@@ -4100,6 +4140,7 @@ again:;
     if (snag_app_flush_public(app, false) < 0) return -1;
     if (service_pager(app) < 0 || service_attachment(app, app->pager != NULL) < 0) return -1;
     if (app->pager && timeout_ms > 25u) timeout_ms = 25u;
+    if (snag_mcp_watching(app->mcp) && timeout_ms > 100u) timeout_ms = 100u;
     if (snag_app_shutdown(app) || (app->interrupt_requested && !leaving)) {
         snag_app_audio_close(app);
         app->interrupt_requested = true;
@@ -4624,10 +4665,10 @@ call_rule_check(struct app_state *app, const struct snag_response_item *call, bo
     message[0] = '\0';
     *insertion = NULL;
     if (snag_rules_empty(app->config->rules)) return 0;
-    owned = call->arguments == NULL;
-    arguments = call->arguments ? call->arguments : json_object();
+    owned = true;
+    arguments = snag_response_arguments(call);
     snag_buf_init(&text, SNAG_MAX_TOOL_ARGUMENTS);
-    if (!arguments || snag_json_canonical(arguments, &text) < 0 || snag_buf_terminate(&text) < 0) {
+    if (!arguments || snag_json_diagnostic(arguments, &text) < 0 || snag_buf_terminate(&text) < 0) {
         snag_buf_free(&text);
         if (owned) json_decref(arguments);
         return snag_errorf(error, error_size, "tool call could not be canonicalized for rules");
@@ -6507,6 +6548,7 @@ idle_poll_timeout(const struct app_state *app)
     int timeout =
         app->pager || app->audio || app->voice || app->networked || app->irc_background.len ? 25
                                                                                             : -1;
+    if (snag_mcp_watching(app->mcp) && (timeout < 0 || timeout > 100)) timeout = 100;
     if (json_array_size(app->session.download_queue) && (timeout < 0 || timeout > 250))
         timeout = 250;
     if (app->session.timer_id[0] && app->session.timer_due_ms) {
@@ -7021,6 +7063,8 @@ run_owner(const struct snag_cli *cli, const char *program, struct snag_session_p
     if (snag_auth_config_open(app.store.root_fd, &config, error, sizeof(error)) < 0) {
         goto invalid;
     }
+    app.mcp = snag_mcp_open(app.store.root_fd, &config);
+    if (!app.mcp) goto fail;
     if (cli->update_model_cache) {
         if (refresh_model_cache(&app, error, sizeof(error)) < 0) goto fail;
     } else {
@@ -7279,6 +7323,7 @@ out:
     snag_instructions_free(&app.turn_instructions);
     snag_model_cache_free(&app.model_cache);
     json_decref(app.draft_content);
+    snag_mcp_close(app.mcp);
     snag_session_close(&app.session);
     snag_store_close(&app.store);
     snag_auth_config_close(&config);

@@ -1354,7 +1354,15 @@ The result starts with status, reason and presence flags (one byte each), then
 duration (8), native exit/signal field values, the running handle (16, only for
 running status), length-prefixed model text, stdout excerpt and stderr excerpt.
 Status/reason numbers are the explicit enums in `store_binary_event.h`; reason
-zero represents null. The existing status-specific reason and exit/signal type
+zero represents null. Values24..28 identify MCP catalog-unavailable,
+exact-approval-required, invalid header arguments, transport-not-run and
+outcome-unknown respectively. They append to the established enum; prior values
+retain their meaning. MCP tool function names retain the normal string encoding
+and require an MCP-capable runtime when resumed. Their argument object carries
+`mcp_arguments_json`, an opaque sorted JSON string that preserves fractional remote
+values. Shared projection decodes it for rules, rendering, dispatch and provider
+replay; host canonical records retain integer-only values. See [MCP](mcp.md).
+The existing status-specific reason and exit/signal type
 rules apply. Presence masks1/2/4 select a token limit (8), output reference and
 typed content, in that order. A reference requires the token-limit field.
 Version2 adds mask8 for a native log range; it requires an output reference.

@@ -95,6 +95,7 @@ COMMON_SRC += src/upload_wire.c src/upload_md5.c src/screen_wire.c src/upload.c 
 COMMON_SRC += src/clipboard.c src/clipboard_transfer.c
 COMMON_SRC += src/app_resume.c src/commands.c src/unicode.c src/presentation.c src/presentation_store.c
 COMMON_SRC += src/store_convert.c
+COMMON_SRC += src/mcp.c src/mcp_http.c src/mcp_catalog.c src/mcp_snapshot.c src/mcp_auth.c src/mcp_cli.c
 COMMON_SRC += src/irc_address.c src/app_irc.c
 COMMON_SRC += src/vm.c
 ifeq ($(WITH_VM),1)
@@ -401,6 +402,7 @@ check: $(BIN) $(TEST_BIN)
 	./tests/test_irc_address
 	./tests/test_irc_event
 	./tests/test_irc_send
+	python3 tests/test_mcp.py ./$(BIN)
 	python3 tests/test_irc_queries.py ./$(BIN)
 	python3 tests/test_irc_hosted_channels.py ./$(BIN)
 	python3 tests/test_irc_channels.py ./$(BIN)

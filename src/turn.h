@@ -73,6 +73,11 @@ struct snag_response_item {
     json_t *arguments;
 };
 
+/* MCP arguments are opaque JSON in the native host record. Both helpers return
+ * owned values; store consumes input and arguments projects the actual tool object. */
+json_t *snag_response_arguments_store(const char *, json_t *);
+json_t *snag_response_arguments(const struct snag_response_item *);
+
 struct snag_response_usage {
     uint64_t input_tokens;
     uint64_t output_tokens;

@@ -209,6 +209,8 @@ struct snag_config {
     uint32_t max_output_bytes;
     uint32_t output_cache_bytes;
     struct snag_rules *rules;
+    json_t *mcp_servers; /* Named native MCP configurations. */
+    json_t *mcp_credentials; /* Runtime redaction values; never serialized to config. */
     struct snag_secret_source *secrets;
     size_t secret_count, secret_capacity;
     char terminal_download_dir[SNAG_CONFIG_PATH_MAX + 1u];

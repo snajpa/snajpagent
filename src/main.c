@@ -3,6 +3,7 @@
 #include "base.h"
 #include "cli.h"
 #include "login.h"
+#include "mcp.h"
 #include "office.h"
 #include "render.h"
 #include "remote.h"
@@ -56,7 +57,8 @@ run(int argc, char **argv)
     }
     {
         bool handled = false;
-        rc = snag_login_dispatch(&cli, &handled);
+        rc = cli.mcp ? snag_mcp_cli(&cli) : snag_login_dispatch(&cli, &handled);
+        if (cli.mcp) handled = true;
         if (!handled) rc = snag_app_run(&cli, argv[0]);
     }
     snag_cli_free(&cli);

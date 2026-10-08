@@ -41,6 +41,11 @@ snajpagent \- terminal coding agent with built-in IRC
 .B logout
 .RI [ provider ]
 .br
+.B snajpagent
+.RI [ options ]
+.B mcp list|status|tools|reload|login|logout
+.RI [ SERVER ]
+.br
 .B snajpagent remote
 .RI [ --config " PATH]"
 .RI [ --dotdir " PATH]"
@@ -2822,15 +2827,55 @@ requested mode. Use
 to inspect it. Sessions that have used this command require a reader with
 service-tier support when resumed.
 .TP
+.BR /mcp " list"
+List configured native MCP servers, tool counts and diagnostics.
+.TP
+.BR /mcp " status SERVER"
+Show endpoint, protocol, configured identity label, identity disclosed by the
+OAuth grant, scopes, expiry, catalog generation and last contact. A label is
+local configuration; an undisclosed authenticated identity remains unknown.
+.TP
+.BR /mcp " tools SERVER"
+Inspect complete remote tool declarations and locally filtered declarations
+with their reasons. The active turn's tool schema remains fixed.
+.TP
+.BR /mcp " reload SERVER"
+Schedule catalog discovery at the next turn boundary.
+.TP
+.BR /mcp " login SERVER"
+Print a shell command for the current configuration and application directory.
+Run it separately, complete OAuth, then use /configure in this session.
+.TP
+.BR /mcp " logout SERVER"
+Remove the local credential and attempt revocation when the authorization
+server advertises an endpoint. Report the two outcomes separately. The session
+stops admitting that server's calls. An active MCP request must finish or be
+cancelled first. Other owners keep their admitted settings until reload or refresh.
+.TP
+.BR /mcp " pending [DIGEST]"
+List pending requests, or inspect the complete server/tool declaration and
+arguments for a particular digest. Inspect a particular digest before approval.
+.TP
+.BR /mcp " approve DIGEST"
+Admit one subsequent call matching the inspected server, tool declaration and
+arguments exactly. Any changed argument requires another inspection and approval.
+Approvals stay in this owner and expire when consumed or configuration is replaced.
+Voice-generated UI commands cannot approve MCP calls; type the approval directly.
+.TP
+.BR /mcp " deny DIGEST"
+Remove a pending request and its approval.
+.TP
 .B /configure
-Reload the saved configuration, provider credentials, redaction secrets and local
-model cache for this session owner at a safe request boundary. Preserve the
+Reload the saved configuration, provider credentials, MCP server settings and
+credentials, redaction secrets and local model cache for this session owner at a safe request boundary. Preserve the
 selected provider, model and effort. Validation failures leave the current
 settings, credentials and cache active. A missing cache retains the last valid
 copy; an invalid cache rejects the reload. The command reloads saved values even
 when the configuration file is unchanged. Use
 .B /model cache
-to fetch a new catalog from providers. Stop local audio before reloading.
+to fetch a new catalog from providers. MCP configuration and catalog replacements
+apply at the next turn; an unfinished turn retains its pinned tool contract.
+Stop local audio before reloading.
 .TP
 .B /config
 Open the active configuration with
@@ -3874,6 +3919,100 @@ leaves the existing setting unchanged.
 Automatic setup never consumes piped task input or runs for execution, resume,
 session listing, or a missing explicitly specified configuration.  Invalid
 existing configuration produces an error and remains on disk for correction.
+.SH "Native MCP"
+Current development builds connect directly to configured Streamable HTTP MCP
+servers and expose their tools in the model's normal tool catalog.
+The client supports stateless protocol 2026-07-28 and initialized protocols
+2025-03-26, 2025-06-18 and 2025-11-25. Local stdio and deprecated HTTP+SSE servers
+are outside this transport implementation.
+.SS Configure and inspect
+Use a distinct server name for each workspace/account. Obtain a registered OAuth
+client from the service when authentication is required. Example:
+.nf
+[mcp docs]
+url = https://mcp.example.net/mcp
+resource = https://mcp.example.net
+issuer = https://login.example.net
+client_id = registered-client-id
+scope = documents:read
+identity = documentation workspace
+read_only_tools = ["search_documents", "read_document"]
+.fi
+.PP
+Run these commands with common options before the mcp subcommand:
+.nf
+snajpagent mcp list
+snajpagent mcp login docs
+snajpagent mcp status docs
+snajpagent mcp tools docs
+.fi
+.PP
+The CLI tools/status/reload commands perform bounded live discovery. CLI reload
+reports the catalog it loaded; /mcp reload controls a running session. A missing
+optional server withholds its tools and exposes a diagnostic through /mcp status.
+The provider and unrelated servers remain usable.
+.SS OAuth
+Login prints an authorization URL without opening a browser. Open the URL,
+check the displayed resource and scopes, and complete consent. The client accepts
+the registered loopback callback or a pasted complete redirected URL at its hidden
+terminal input. The consent wait lasts ten minutes; Ctrl-C cancels it.
+Authorization codes belong in that terminal, never a session prompt or slash command.
+.PP
+Discovery checks protected-resource and authorization-server metadata, the exact
+issuer and resource, PKCE S256, random state, callback address and issuer response.
+HTTPS is required outside localhost/127.0.0.1/::1. Redirects are refused.
+A confidential client uses client_secret from the existing secret-source syntax.
+No client registration or credential import from other applications is performed.
+.PP
+Credentials live in the private mcp-auth directory under the application directory.
+Each binding includes the configured server name, endpoint, resource, issuer and
+client ID. Files require effective-user ownership and private access (0600 on
+POSIX; the equivalent private ACL on Windows). Refreshes are serialized across
+owners sharing a credential. A changed login requires /configure; a refresh keeps
+its original grant. Status distinguishes missing login, rejected grant, denied
+scope and transport/server failure. Logout removes local credentials and reports
+whether remote revocation was available and succeeded.
+.SS Tool contracts and approval
+Each remote tool receives a deterministic namespaced function name. Its exact
+inputSchema becomes the model function parameters; its description, annotations,
+outputSchema and other declaration metadata accompany it as untrusted data.
+The client checks schema structure for the default JSON Schema 2020-12 dialect
+and explicitly declared draft-07. It preserves local references and never fetches
+external schema references; unsupported declarations appear in the filtered list.
+Server annotations never grant local permission. Deny lists take precedence;
+read_only_tools admits the named tools in ordinary and /ro turns. allow_tools
+admits the named tools in ordinary turns. Other tools require exact approval.
+.PP
+When a call is pending, inspect /mcp pending DIGEST, then approve or deny it.
+Approval permits a subsequent exact call; the model receives a not-run result
+until then. This is an MCP dispatch control. Local command tools still run with
+the account's filesystem and process permissions, so use account isolation where
+OS confinement is required.
+.PP
+A call is sent once. A disconnect or cancellation after dispatch reports an
+unknown outcome; inspect remote state before repeating a mutation. The owner
+requires fresh approval to repeat the same uncertain mutation even when its name
+is allowed in configuration. A received MCP result preserves text, structured
+content, resource links, annotations and metadata. The local receipt includes
+server, endpoint, tool, argument/declaration digest and receive time. Server
+acceptance does not establish external delivery; read back the object when the
+server offers a reader. Results larger than 2 MiB are retained intact in a private
+session mcp-results JSON file, referenced with byte count and SHA-256 in the result.
+The repeat-approval guard lasts for the owning process; uncertain effects still
+require inspection after a restart. Optional server requests for elicitation,
+sampling or roots are not advertised. An input_required result is retained as
+incomplete and requires explicit operator action.
+.SS Catalog lifetime and recovery
+Catalogs refresh between turns when their TTL expires, a list-change notification
+arrives, /mcp reload is used, or configuration changes. Modern subscriptions and
+legacy notification streams are owned by the session and close on exit/reload.
+A lost notification stream schedules catalog refresh at the next turn.
+An active turn and its resume use the same private mcp-turn.json snapshot.
+A malformed snapshot withholds MCP tools for that turn and is reported in status.
+.PP
+Resume sessions that invoked MCP with an MCP-capable binary. Existing sessions
+that have never used MCP keep their storage contracts. No MCP server is configured
+by default. Changing the installed executable leaves running owners in place.
 .SH "Configuration"
 The file is UTF-8 INI syntax.  Lines beginning with
 .B #
@@ -3889,6 +4028,48 @@ The numeric forms 1 and 0 are also accepted for boolean settings.
 Command-line values override file values.  A missing default configuration
 uses built-ins; an explicit file must exist.  Configuration must be a regular
 file, not a symlink.  Section names below go in square brackets.
+.SS "mcp NAME"
+Each name identifies a separately configured server/account.
+.TP
+.B enabled
+Boolean; default true. False omits this server.
+.TP
+.B url
+Required MCP Streamable HTTP endpoint; HTTPS or exact loopback HTTP.
+.TP
+.B resource
+OAuth resource identifier. Default: url. Use the exact value advertised in
+protected-resource metadata, including its path and trailing slash.
+.TP
+.B issuer
+Authorization-server issuer registered for this client. Required for OAuth login.
+.TP
+.B client_id
+Pre-registered OAuth client ID. Required for OAuth login.
+.TP
+.B client_secret
+Optional confidential-client secret source: ${ENV}, quoted literal or file path,
+as with provider api_key. Private file paths keep secrets out of configuration.
+.TP
+.B scope
+Space-separated requested OAuth scopes. If absent, use the initial challenge's
+scope or the authorization server's default. Login shows the requested scope.
+.TP
+.B identity
+Local workspace/account label shown by /mcp status.
+.TP
+.B redirect_uri
+Registered loopback HTTP callback. Default: http://127.0.0.1:0/callback,
+where port 0 requests an ephemeral port. A configured fixed port must be available.
+.TP
+.B timeout_ms
+Positive request/complete-catalog timeout in milliseconds; default 60000.
+OAuth consent has its separate ten-minute deadline.
+.TP
+.BR read_only_tools ", " allow_tools ", " deny_tools
+JSON arrays of exact remote tool names; default empty. Deny overrides both other
+lists. Locally classified read-only tools may run in /ro; server readOnlyHint
+alone supplies no authority. Unlisted tools require exact operator approval.
 .SS agent
 .TP
 .B provider
