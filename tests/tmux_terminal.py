@@ -653,7 +653,7 @@ class TmuxTerminal:
         command.extend(args)
         env = os.environ.copy()
         env.pop("TMUX", None)
-        env["LC_ALL"] = "C.utf8"
+        env["LC_ALL"] = "C.UTF-8"
         env["PAGER"] = ""
         env["HOME"] = self.workspace
         if environment:
