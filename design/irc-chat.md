@@ -516,6 +516,11 @@ conversation explains:
 - that a quiet response to ordinary chatter is valid, while a local operator
   mention turn requires one room-facing reply.
 
+For a room requested by both local identities, the operator connection supplies
+room events and history throughout the join. The agent connection supplies rooms
+that the operator has not requested; it does not provisionally replay a shared
+room while the operator join is pending.
+
 IRC input is recorded as typed structured session events before it affects a
 provider request. Each projected user message renders source endpoint, room,
 timestamp, event type, sender, and the sender's operator flag. Nick text alone

@@ -2635,7 +2635,8 @@ link_emit(struct snag_irc_core *irc, struct irc_conn *link, enum snag_irc_event_
     if (!link_emit_enabled(link)) {
         struct irc_channel *operator =
             channel ? channel_find(&irc->conns[LINK_OPERATOR], room) : NULL;
-        if (!channel || (operator && operator->joined)) return 0;
+        /* The operator owns shared-room history even while its join is pending. */
+        if (!channel || (operator && (operator->joined || operator->wanted))) return 0;
     }
     size_t length = text ? strlen(text) : 0u;
     bool action = kind == SNAG_IRC_MESSAGE && length >= 9u && !memcmp(text, "\001ACTION ", 8u) &&

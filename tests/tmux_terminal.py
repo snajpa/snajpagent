@@ -5864,6 +5864,7 @@ def run_runtime_history_case(binary, root, provider, environment):
         terminal.submit("runtime history main")
         assert arrived.wait(5.0)
         terminal.submit(f"/connect {endpoint}")
+        registered = []
         for _ in range(2):
             link, _ = upstream.accept()
             links.append(link)
@@ -5878,6 +5879,9 @@ def run_runtime_history_case(binary, root, provider, environment):
             wire = b""
             while b"JOIN #lab\r\n" not in wire:
                 wire += link.recv(8192)
+            registered.append((nick, link))
+        # Both links want the room; agent history arrives before the operator joins.
+        for nick, link in sorted(registered):
             link.sendall((f":{nick}!u@fake JOIN #lab\r\n"
                           f":fake 353 {nick} = #lab :@operator7 agent7 peer\r\n"
                           f":fake 366 {nick} #lab :end\r\n"

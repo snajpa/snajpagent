@@ -4,6 +4,8 @@
 
 ## Unreleased
 
+- Replay shared-room IRC history once when the agent joins before the operator.
+
 - Recognize fully static Linux executables in dependency checks while retaining
   the provider-library checks for dynamic builds.
 
