@@ -136,8 +136,8 @@ test_invalid_definitions_rejected(void)
 {
     static const char *const bad[] = {"[{\"name\":\"x\",\"action\":\"explode\"}]",
         "[{\"name\":\"x\",\"action\":\"allow\",\"match\":{\"/a\":\"(\"}}]",
-        "[{\"name\":\"x\",\"action\":\"allow\"},{\"name\":\"x\",\"action\":\"deny\",\"message\":"
-        "\"m\"}]",
+        ("[{\"name\":\"x\",\"action\":\"allow\"},"
+         "{\"name\":\"x\",\"action\":\"deny\",\"message\":\"m\"}]"),
         "[{\"name\":\"x\",\"action\":\"allow\",\"bogus\":1}]",
         "[{\"name\":\"x\",\"action\":\"allow\",\"match\":{\"bad\":\"a\"}}]",
         "[{\"name\":\"x\",\"action\":\"allow\",\"message\":\"m\"}]",
