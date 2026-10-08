@@ -572,6 +572,8 @@ attachment status is unavailable, then the 10 most recent stored sessions. Use
 to include 25 stored sessions, or
 .B snajpagent -l 0
 for running sessions only. Each group shows the latest saved activity first.
+Session lists and name lookups read a consistent saved snapshot while a running
+session continues writing.
 Use
 .B snajpagent --resume -N lead
 to attach to a running session or resume a stored one by name.

@@ -377,7 +377,7 @@ snag_store_materialize_binary_context_checkpoint(struct snag_session *source,
      * the source after its final validation and still expose adopted state. */
     snag_file_info after;
     if (snag_fstat(source->log_fd, &after) < 0) goto done;
-    if (!snag_file_unchanged(&before, &after)) {
+    if (!snag_store_binary_prefix_stable(source, &before, &after)) {
         snag_fail(error, error_size, EAGAIN,
             "native checkpoint source changed during materialization");
         goto done;
@@ -462,7 +462,7 @@ resume_pinned(struct snag_session *source, struct snag_session *restored,
         checkpoint_cancelled(control, error, error_size) < 0) goto done;
     snag_file_info after;
     if (snag_fstat(source->log_fd, &after) < 0) goto done;
-    if (!snag_file_unchanged(&before, &after)) {
+    if (!snag_store_binary_prefix_stable(source, &before, &after)) {
         snag_fail(error, error_size, EAGAIN, "native source changed during pinned resume");
         goto done;
     }
@@ -629,7 +629,7 @@ snag_store_admit_binary_context_checkpoint(struct snag_session *source,
     }
     snag_file_info after;
     if (snag_fstat(source->log_fd, &after) < 0) goto done;
-    if (!snag_file_unchanged(&before, &after)) {
+    if (!snag_store_binary_prefix_stable(source, &before, &after)) {
         snag_fail(error, error_size, EAGAIN, "native source changed during checkpoint admission");
         goto done;
     }
@@ -819,7 +819,7 @@ snag_store_load_binary_session(struct snag_session *session, enum snag_tail_poli
             control.cancelled, control.opaque) < 0) goto done;
     snag_file_info after;
     if (snag_fstat(session->log_fd, &after) < 0) goto done;
-    if (!snag_file_unchanged(&before, &after)) {
+    if (!snag_store_binary_prefix_stable(session, &before, &after)) {
         snag_fail(error, error_size, EAGAIN, "native source changed during session open");
         goto done;
     }

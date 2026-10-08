@@ -4812,9 +4812,98 @@ test_irc_admission_after_checkpoint(struct snag_store *store, const char *cwd, b
     snag_session_close(&session);
 }
 
+struct snapshot_append {
+    struct snag_session *owner;
+    unsigned int calls, at;
+    bool cancel, change_mode;
+};
+
+static bool
+append_during_snapshot(void *opaque)
+{
+    struct snapshot_append *hook = opaque;
+    if (++hook->calls != hook->at) return false;
+    if (hook->cancel) return true;
+    if (hook->change_mode) {
+        assert(!fchmod(hook->owner->log_fd, 0400));
+    } else {
+        commit_data(hook->owner, "session_named", json_pack("{s:s}", "name", "snapshot-after"));
+    }
+    return false;
+}
+
+static int
+open_test_snapshot(struct snag_store *store, struct snag_session *snapshot,
+    struct snapshot_append *hook, char *error, size_t size)
+{
+    snag_session_init(snapshot);
+    assert(!snag_store_open_session_directory(store, snapshot, hook->owner->id, error, size));
+    snapshot->log_fd = snag_open_read_security_at(snapshot->dir_fd, "journal.bin", false);
+    assert(snapshot->log_fd >= 0);
+    snapshot->snapshot_read_only = true;
+    snapshot->history_cancel = append_during_snapshot;
+    snapshot->history_cancel_opaque = hook;
+    return snag_store_load_binary_session(snapshot, SNAG_TAIL_IGNORE, error, size);
+}
+
+static void
+test_live_native_snapshot(struct snag_store *store, const char *cwd)
+{
+    struct snag_session owner, snapshot;
+    snag_session_init(&owner);
+    char error[256] = {0};
+    assert(!snag_session_create(store, &owner, cwd, "default", "fixture", "default",
+        error, sizeof(error)));
+    struct snapshot_append hook = {.owner = &owner};
+    commit_data(&owner, "session_named", json_pack("{s:s}", "name", "snapshot-before"));
+    assert(!snag_session_checkpoint(&owner, error, sizeof(error)));
+    for (unsigned int i = 0u; i < 4u; ++i)
+        commit_data(&owner, "retry_auto_changed", json_pack("{s:s}", "value", "on"));
+    assert(!open_test_snapshot(store, &snapshot, &hook, error, sizeof(error)));
+    unsigned int callbacks = hook.calls;
+    assert(callbacks > 4u);
+    snag_session_close(&snapshot);
+
+    /* Append at every cancellation boundary, including after suffix validation.
+     * Each successful snapshot must be one complete committed state. */
+    for (unsigned int at = 1u; at <= callbacks; ++at) {
+        commit_data(&owner, "session_named", json_pack("{s:s}", "name", "snapshot-before"));
+        assert(!snag_session_checkpoint(&owner, error, sizeof(error)));
+        for (unsigned int i = 0u; i < 4u; ++i)
+            commit_data(&owner, "retry_auto_changed", json_pack("{s:s}", "value", "on"));
+        uint64_t before = owner.next_seq;
+        hook = (struct snapshot_append){.owner = &owner, .at = at};
+        int rc = open_test_snapshot(store, &snapshot, &hook, error, sizeof(error));
+        if (rc < 0) fprintf(stderr, "live snapshot callback %u: %s\n", at, error);
+        assert(!rc && hook.calls >= at && owner.next_seq == before + 1u);
+        assert(snapshot.next_seq == before || snapshot.next_seq == owner.next_seq);
+        assert(!strcmp(snapshot.name,
+            snapshot.next_seq == before ? "snapshot-before" : "snapshot-after"));
+        assert(snapshot.snapshot_read_only && snapshot.lock_fd < 0);
+        snag_session_close(&snapshot);
+    }
+
+    for (unsigned int fault = 0u; fault < 2u; ++fault) {
+        hook = (struct snapshot_append){.owner = &owner};
+        assert(!open_test_snapshot(store, &snapshot, &hook, error, sizeof(error)));
+        snag_session_close(&snapshot);
+        hook.at = hook.calls;
+        hook.calls = 0u;
+        hook.cancel = fault == 0u;
+        hook.change_mode = fault == 1u;
+        int rc = open_test_snapshot(store, &snapshot, &hook, error, sizeof(error));
+        assert(rc < 0 && errno == (fault ? EAGAIN : ECANCELED));
+        assert(!snapshot.name && !snapshot.binary && snapshot.next_seq == 1u);
+        snag_session_close(&snapshot);
+        if (fault) assert(!fchmod(owner.log_fd, 0600));
+    }
+    snag_session_close(&owner);
+}
+
 void
 test_store_binary_replay(struct snag_store *store, const char *cwd)
 {
+    test_live_native_snapshot(store, cwd);
     test_irc_admission_after_checkpoint(store, cwd, true);
     test_irc_admission_after_checkpoint(store, cwd, false);
     test_checkpoint_after_streamed_tools(store, cwd, false);

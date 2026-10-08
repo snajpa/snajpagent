@@ -2,6 +2,7 @@
 #ifndef SNAJPAGENT_STORE_BINARY_REPLAY_H
 #define SNAJPAGENT_STORE_BINARY_REPLAY_H
 
+#include "fs.h"
 #include "store.h"
 #include "store_binary.h"
 #include "store_binary_checkpoint.h"
@@ -14,6 +15,11 @@ struct snag_binary_recovery {
     /* Physical error range; decoded-record errors identify their containing batch. */
     uint64_t problem_start, problem_end;
 };
+
+/* A verified prefix in an unlocked read-only snapshot tolerates later appends
+ * to the same file. Locked recovery retains its whole-source stamp check. */
+bool snag_store_binary_prefix_stable(const struct snag_session *,
+    const snag_file_info *before, const snag_file_info *after);
 
 /* Core-state replay from a stopped native journal, not application resume.
  * Caller holds source's exclusive writer lock throughout replay/publication.

@@ -3252,8 +3252,10 @@ admission, and no missing source invokes lifetime replay.
 The exclusive opener may synchronize removal of a verified incomplete physical
 tail after successful state/provenance admission. Complete corrupt batches and
 lost final delimiters fail before this phase. Trash recovery rejects incomplete
-tails. Read-only name/list snapshots ignore a verified open tail, detect source
-changes and bind metadata without an I/O worker. Their commit, checkpoint and
+tails. Read-only name/list snapshots ignore a verified open tail and allow later
+appends to the same file while retaining their captured boundary through core,
+provider and suffix recovery. Rewrites, truncation and permission changes remain
+errors. They bind metadata without an I/O worker. Their commit, checkpoint and
 index-writer operations fail EROFS. They never acquire/close another owner's lock
 or alter the journal, images or derived index.
 

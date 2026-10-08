@@ -26,6 +26,16 @@ struct replay_context {
     struct snag_binary_checkpoint_sources sources;
 };
 
+bool
+snag_store_binary_prefix_stable(const struct snag_session *source,
+    const snag_file_info *before, const snag_file_info *after)
+{
+    if (snag_file_unchanged(before, after)) return true;
+    return source->snapshot_read_only && source->lock_fd < 0 &&
+        before->st_dev == after->st_dev && before->st_ino == after->st_ino &&
+        before->st_mode == after->st_mode && after->st_size > before->st_size;
+}
+
 static void
 bytes_hex(char *out, const unsigned char *bytes, size_t size)
 {
@@ -931,12 +941,10 @@ reconcile_binary(struct snag_session *source, struct snag_session *restored,
         goto done;
     }
     bool inspected = snag_fstat(source->log_fd, &after) == 0;
-    /* The authenticated read-only prefix is independent of later appends.
-     * Locked reconstruction retains its whole-source stability contract. */
-    bool growth = inspected && prefix && source->snapshot_read_only && source->lock_fd < 0 &&
-        before.st_dev == after.st_dev && before.st_ino == after.st_ino &&
-        before.st_mode == after.st_mode && after.st_size > before.st_size;
-    if (!inspected || (!growth && !snag_file_unchanged(&before, &after))) {
+    bool stable = inspected && (prefix ?
+        snag_store_binary_prefix_stable(source, &before, &after) :
+        snag_file_unchanged(&before, &after));
+    if (!stable) {
         recovery->problem_seq = 1u;
         recovery->problem_start = 0u;
         recovery->problem_end = boundary;
@@ -1065,7 +1073,8 @@ reduce_binary_suffix(struct snag_session *source, struct snag_session *state,
     }
     if (rc == 0) rc = replay_cancelled(&context, error, error_size);
     if (rc == 0 && (snag_fstat(source->log_fd, &after) < 0 ||
-        !snag_file_unchanged(&before, &after))) {
+        !(stop ? snag_store_binary_prefix_stable(source, &before, &after) :
+                 snag_file_unchanged(&before, &after)))) {
         rc = snag_fail(error, error_size, EAGAIN, "native source changed during suffix replay");
     }
     if (rc == 0) {

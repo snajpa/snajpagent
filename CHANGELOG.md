@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Keep native session names and workspace conversation selection available while
+  the running session appends to its journal. Read-only snapshots retain their
+  verified boundary throughout lookup.
+
 - Use streamed native compaction for ChatGPT/Codex credentials, including login
   detection, retained user instructions and encrypted context restoration. Preserve
   covered history across binding changes and refuse incomplete plaintext reduction.
