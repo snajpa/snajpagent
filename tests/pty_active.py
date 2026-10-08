@@ -6125,7 +6125,7 @@ def test_network_chat_and_managed_mention():
 
         child.send_wait(b"session setup\r", "localop › session setup".encode())
         session_id = new_session(before, child)
-        human = IRCClient(port, "remoteop")
+        human = IRCClient(port, "remoteop", service=lambda: child.read_once(0))
         assert (b" 332 remoteop #lab :" + str(network_home).encode() +
                 b"\r\n") in human.buf
         peer_agent = IRCClient(port, "peerbot", agent=True)

@@ -8,9 +8,10 @@ MIN_WAIT_S = 30.0
 
 
 class IRCClient:
-    def __init__(self, port, nick, agent=False):
+    def __init__(self, port, nick, agent=False, service=None):
         self.sock = socket.create_connection(("127.0.0.1", port), timeout=4.0)
         self.buf = bytearray()
+        self.service = service
         role = b" snajpagent/agent" if agent else b""
         registration = (
             b"CAP LS 302\r\nCAP REQ :batch server-time draft/chathistory" +
@@ -29,6 +30,9 @@ class IRCClient:
                 raise AssertionError(
                     f"timeout waiting for IRC {needle!r}; got {bytes(self.buf)!r}"
                 )
+            if self.service is not None:
+                self.service()
+                remaining = min(remaining, 0.05)
             ready, _, _ = select.select([self.sock], [], [], remaining)
             if not ready:
                 continue
