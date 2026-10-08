@@ -51,7 +51,7 @@ class RecoveryTests(ChannelFixture):
 
     def query(self):
         self.assertEqual(self.command_report('/query 1/peer'), '/query 1/peer\n')
-        self.child.repaint_until(b'query/peer')
+        self.child.repaint_until(b'[peer]')
 
     def wire(self, text):
         return [line for nick, line in self.server.lines

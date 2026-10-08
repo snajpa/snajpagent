@@ -137,7 +137,12 @@ class NotificationTests(unittest.TestCase):
         observer.until('state')
         self.peer.result(self.peer.command('/status'))
         observer.send(type='receipt', id='0' * 32)
-        self.assertEqual(observer.receive()['type'], 'result')
+        while True:
+            message = observer.receive()
+            self.assertIn(message['type'], ('state', 'result'))
+            if message['type'] == 'result':
+                self.assertEqual(message['id'], '0' * 32)
+                break
         invalid = self.owner.view()
         invalid.send(type='reports', generation=123)
         self.assertIn('fields', invalid.until('error')['message'])
@@ -213,8 +218,10 @@ class WorkspaceNotificationTests(unittest.TestCase):
         self.wait_synced('newer unsent draft')
         self.escape(child)
         child.command('report ' + reports[0]['id'])
+        child.repaint_until(b'REPORT ' + self.owner.sid[:8].encode() + b' ' +
+                            reports[0]['id'][:8].encode())
         child.repaint_until(b'accepted; applying')
-        child.finish('close')
+        child.finish('q')
         resumed = self.start('--resume', 'notifications', expect=b'REPORT', columns=120)
         resumed.repaint_until(reports[0]['id'][:8].encode())
         self.assertEqual(self.reports(2), reports)
@@ -235,7 +242,7 @@ class WorkspaceNotificationTests(unittest.TestCase):
         self.owner.wait_event('control_finished')
         peer.close()
         self.owner.status('detached')
-        resumed = self.start('--resume', 'offline-notifications', expect=b'history')
+        resumed = self.start('--resume', 'offline-notifications', expect=b'\x1b[?1049h')
         self.reports(2)
         # Replay adds reports without changing the saved transcript window.
         path, = (self.root / 'state' / 'workspaces').glob('*/workspace.json')
