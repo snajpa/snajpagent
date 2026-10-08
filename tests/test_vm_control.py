@@ -345,6 +345,13 @@ class ControlTests(unittest.TestCase):
         child.command('vsp')
         child.write(b'irun tool\r')
         child.until(b'verbosity-answer')
+        observer = self.owner.view()
+        observer.until('state', lambda message: not message['state']['active'] and
+                       message['state']['prompt']['states'] == 0)
+        observer.close()
+        deadline = time.monotonic() + .75
+        while time.monotonic() < deadline:
+            child.read(.02)
         child.output.clear()
         self.assertEqual(self.owner.identity(), self.owner.owner_identity)
         os.kill(self.owner.owner, signal.SIGSTOP)
@@ -363,6 +370,14 @@ class ControlTests(unittest.TestCase):
             w['history']['verbosity'] for w in
             next(iter(rows.values()))['state']['windows']) == [0, 3])
         self.assertTrue(saved)
+        presentation = subprocess.run(
+            [str(Path(__file__).with_name('test_render')), '--read-presentation',
+             str(self.owner.directory / '.view-presentation.snb'), self.owner.sid],
+            capture_output=True, check=True, text=True, timeout=5)
+        labels = [row['data']['label'] for row in json.loads(presentation.stdout)
+                  if row['data']['op'] == 'submitted' and row['data']['text'] == '/verbose 3']
+        self.assertEqual(len(labels), 1)
+        self.assertRegex(labels[0], r'^\s+[0-9:]+ fake/host-model/')
         child.output.clear()
         child.write(b'\x17li/verbose\r')
         child.until(b'verbosity: 3')

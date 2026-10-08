@@ -1043,6 +1043,11 @@ view_submit(void *opaque, const char *id, const char *text, const json_t *route,
         atomic_load(&runtime->session_attachment) != generation)
         return snag_errno(ESTALE);
     if (queue_full(&runtime->actions) || display->local) return snag_errno(EAGAIN);
+    /* Semantic controllers paint independently; refresh their submission snapshot
+     * from the shared animation state instead of the owner's last terminal frame. */
+    if (!terminal && display->term.animation.source[0] &&
+        snag_term_animation_render(&display->term.animation, snag_monotonic_ms(),
+            display->term.label) < 0) return -1;
     struct ui_action *item = calloc(1u, sizeof(*item));
     if (!item) return -1;
     item->text = strdup(text);

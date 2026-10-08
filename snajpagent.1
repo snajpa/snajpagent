@@ -1351,7 +1351,8 @@ when idle.  Its first two spaces reserve the indicator slots; one literal
 space separates them from the clock in every activity state.
 Submitted command lines remain in scrollback with their output below them.
 This applies in both views, during active work and at idle, including invalid
-commands.  Each line retains the prompt label visible at submission.
+commands.  Each line retains the prompt label and current activity state at submission,
+including commands entered through a workspace.
 Every nonblank prompt, command, chat message, steering instruction or queued
 submission is painted at this submission boundary, before engine admission can
 wait.  The ready composer stays hidden until the engine acknowledges the action,

@@ -358,3 +358,8 @@ Shared terminal output tracks every trailing tool-detail newline before repainti
 the composer. An expired held-tool deadline remains due until animation rendering
 consumes it, so an idle prompt receives its final redraw without input. Both the
 standalone display and pane projection use these output and animation contracts.
+
+Semantic submission refreshes its label through the shared animation state before
+capturing input metadata. The owner terminal can remain unpainted while panes are
+attached; its cached frame therefore cannot identify current activity. Submission
+clock, route and durable command ordering retain their existing ownership.

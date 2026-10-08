@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Retain the current activity indicator when a workspace submits a command;
+  an old owner display frame no longer leaves a spinner on idle command lines.
+
 - Keep tool-detail newlines in terminal cursor bookkeeping and clear the held
   tool spinner when its timer expires, including while the session is idle.
 
