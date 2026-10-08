@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Show routine IRC pending/written/acknowledged receipts at verbosity 1 and above
+  in live conversations, replay and workspace panes. Verbosity 0 retains message
+  bodies, failed or uncertain sends and server-text corrections.
+
 - Keep Windows redirected input responsive while waiting for an OAuth callback,
   and retain nanosecond file-change checks on supported BSD targets.
   Keep native checkpoint and conversion builds compatible with 32-bit and older

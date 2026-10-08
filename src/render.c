@@ -3590,6 +3590,11 @@ render_irc_event_now(
     struct snag_render *render, const struct snag_irc_event *event, const json_t *display)
 {
     if (!render || !event) return snag_errno(EINVAL);
+    bool outgoing = event->routed && event->route.direction == SNAG_IRC_OUTGOING;
+    bool quiet_receipt = !render->verbosity && outgoing &&
+        (event->route.delivery == SNAG_IRC_WRITTEN ||
+            event->route.delivery == SNAG_IRC_ACKNOWLEDGED);
+    if (quiet_receipt && !event->route.revised) return 0;
     char when[16u];
     const char *endpoint = display ? snag_json_string(display, "endpoint") : event->endpoint;
     const char *room = display ? snag_json_string(display, "room") : event->room;
@@ -3636,8 +3641,7 @@ render_irc_event_now(
                 event->route.kind == SNAG_IRC_QUERY && event->route.identity == SNAG_IRC_AGENT,
                 source, source_size);
         }
-        if (event->route.direction == SNAG_IRC_OUTGOING &&
-            event->route.delivery == SNAG_IRC_PENDING) {
+        if (render->verbosity && outgoing && event->route.delivery == SNAG_IRC_PENDING) {
             size_t used = strlen(source);
             (void)snprintf(
                 source + used, source_size - used, "[send %.8s pending] ", event->route.send);
@@ -3675,15 +3679,15 @@ render_irc_event_now(
     if (colored &&
         (irc_piece(render, COLOR_RESET, false) < 0 || irc_piece(render, nick_color, false) < 0))
         goto out;
-    bool outgoing = event->routed && event->route.direction == SNAG_IRC_OUTGOING;
     if (outgoing && event->route.delivery >= SNAG_IRC_WRITTEN &&
         event->route.delivery <= SNAG_IRC_UNCERTAIN) {
         static const char *const outcomes[] = {"written", "acknowledged", "failed", "uncertain"};
-        n = snprintf(prefix, prefix_size, "· send %.8s %s", event->route.send,
-            outcomes[event->route.delivery - SNAG_IRC_WRITTEN]);
+        n = quiet_receipt ? snprintf(prefix, prefix_size, "· server text") :
+            snprintf(prefix, prefix_size, "· send %.8s %s", event->route.send,
+                outcomes[event->route.delivery - SNAG_IRC_WRITTEN]);
         if (n < 0 || (size_t)n >= prefix_size || irc_piece(render, prefix, true) < 0) goto out;
         if (event->route.revised &&
-            (irc_piece(render, " · server text: ", true) < 0 ||
+            (irc_piece(render, quiet_receipt ? ": " : " · server text: ", true) < 0 ||
                 (event->route.action && irc_piece(render, "* ", true) < 0) ||
                 irc_piece(render, text, true) < 0))
             goto out;

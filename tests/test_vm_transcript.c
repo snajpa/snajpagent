@@ -109,7 +109,10 @@ outgoing_receipts(void)
     strcpy(irc.text, "server top-secret revision");
     event(events, "irc_event_v2", snag_irc_event_data(&irc));
     for (unsigned int level = 0u; level <= 6u; ++level) {
-        json_t *blocks = project(events, level);
+        char error[256];
+        json_t *blocks = snag_vm_transcript_blocks(events, NULL, level, 240u,
+            false, false, false, &secrets, NULL, NULL, error, sizeof(error));
+        assert(blocks);
         json_t *pending = find(blocks, "irc", 0u);
         json_t *written = find(blocks, "irc", 1u);
         json_t *ack = find(blocks, "irc", 2u);
@@ -120,6 +123,21 @@ outgoing_receipts(void)
         assert(strstr(snag_json_string(written, "label"), "send 33333333 written"));
         assert(strstr(snag_json_string(revised, "label"), "acknowledged; server text"));
         assert(strstr(snag_json_string(revised, "text"), "server <redacted:secret> revision"));
+        const char *pending_display = snag_json_string(pending, "display");
+        const char *written_display = snag_json_string(written, "display");
+        const char *ack_display = snag_json_string(ack, "display");
+        const char *revised_display = snag_json_string(revised, "display");
+        assert(strstr(pending_display, "pending <redacted:secret> body"));
+        assert(strstr(revised_display, "server text: server <redacted:secret> revision"));
+        if (level) {
+            assert(strstr(pending_display, "send 33333333 pending"));
+            assert(strstr(written_display, "send 33333333 written"));
+            assert(strstr(ack_display, "send 33333333 acknowledged"));
+        } else {
+            assert(!strstr(pending_display, "send "));
+            assert(!*written_display && !*ack_display);
+            assert(!strstr(revised_display, "send "));
+        }
         json_decref(blocks);
     }
     json_decref(events);

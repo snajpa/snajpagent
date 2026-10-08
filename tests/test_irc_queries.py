@@ -384,6 +384,30 @@ class QueryTests(QueryFixture):
                          e['data']['routing'].get('peer') == 'new-peer-without-text'
                          for e in self.events()))
 
+    def test_send_receipts_follow_verbosity(self):
+        self.term.write(b'/query query-peer\r')
+        self.term.until(b'[query-peer]')
+        for level in (0, 1, 2):
+            self.term.output.clear()
+            self.term.write(f'/verbose {level}\r'.encode())
+            self.term.until(f'verbosity: {level}'.encode())
+            body = f'receipt-level-{level}'
+            self.term.write((body + '\r').encode())
+            self.wait_wire(self.peer, f'PRIVMSG query-peer :{body}\r\n'.encode())
+            self.wait(lambda: any(e['type'] == 'irc_event_v2' and
+                      e['data'].get('text') == body and
+                      e['data']['routing']['state'] == 'acknowledged' for e in self.events()))
+            self.term.write(b'/query\r')
+            self.term.until(b'/query query:')
+            output = bytes(self.term.output)
+            self.assertIn(body.encode(), output)
+            for state in (b'pending', b'written', b'acknowledged'):
+                pattern = rb'send [0-9a-f]{8} ' + state
+                if level:
+                    self.assertRegex(output, pattern)
+                else:
+                    self.assertNotRegex(output, pattern)
+
     def test_query_command_opens_sends_and_lists_operator_tab(self):
         self.term.write(b'/query query-peer\r')
         self.term.until(b'[query-peer]')

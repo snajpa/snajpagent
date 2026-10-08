@@ -1040,7 +1040,10 @@ Existing endpoint authentication/encryption properties apply to direct traffic.
 Use a stable local send ID and explicit states: pending locally, written to the
 connection, server-acknowledged where supported, failed or uncertain. Split long
 messages on UTF-8 boundaries within the actual negotiated line budget and retain
-per-chunk outcomes. Disconnection never automatically replays an uncertain chunk.
+per-chunk outcomes. The shared IRC renderer shows pending IDs and routine
+written/acknowledged rows at verbosity 1 and above. Verbosity 0 keeps message bodies,
+failed/uncertain outcomes and server-text corrections; live output and retained
+replay use the same rule. Disconnection never automatically replays an uncertain chunk.
 Explicit retry uses a visual copy from the original buffer, a fresh selection
 of the intended peer, and paste/submit after review. Keep the copied body separate
 from delivery-state rows and require a new submission after revalidation.

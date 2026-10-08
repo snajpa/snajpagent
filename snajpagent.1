@@ -866,10 +866,13 @@ means the complete frame reached the socket; acknowledged records mean the
 server or local recipient accepted it.
 Nick changes, disconnection, loss of the required capabilities and endpoint
 removal cancel unwritten chunks and mark started, unconfirmed sends uncertain.
-Classic and Vim conversation views print the body once with a pending send ID,
-followed by compact delivery-state rows for that ID. When the server changes the
-text or action, its result includes an explicit server-text correction, retained
-in history. Labels and action framing count toward the client's line budget;
+Classic and Vim conversation views print each message body once. Verbosity 1
+and above adds the pending send ID and compact written/acknowledged receipt rows.
+Verbosity 0 shows message text, failed or uncertain sends, and explicit server-text
+corrections. The same visibility applies to replay and workspace scrollback;
+changing verbosity preserves the retained delivery records. When the server changes
+the text or action, its correction remains visible at every verbosity.
+Labels and action framing count toward the client's line budget;
 UTF-8 characters remain intact across chunks.
 Private queues are never replayed on reconnect. Model sends use the exact query
 captured when their request started. A changed nickname or connection generation

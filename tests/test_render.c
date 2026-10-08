@@ -2544,7 +2544,21 @@ test_query_markdown_isolation(void)
 }
 
 static void
-test_query_send_receipts(void)
+query_receipt_emit(struct snag_render *render, struct snag_irc_event *event, bool replay)
+{
+    if (!replay) {
+        assert(snag_render_irc_event(render, event) == 0);
+        return;
+    }
+    json_t *record = NULL;
+    struct snag_ui_command command = {.kind = SNAG_UI_IRC, .data.irc = event};
+    assert(snag_presentation_encode(&command, &record) == 0);
+    assert(snag_presentation_replay(render, record, -1) == 0);
+    json_decref(record);
+}
+
+static void
+query_send_receipts_at(unsigned int level, bool replay, bool queued)
 {
     struct snag_render render;
     struct snag_irc_event event = {.routed = true,
@@ -2556,6 +2570,8 @@ test_query_send_receipts(void)
         .route = {.identity = SNAG_IRC_OPERATOR,
             .kind = SNAG_IRC_QUERY,
             .direction = SNAG_IRC_OUTGOING,
+            .generation = 1u,
+            .target = "peer",
             .connection = "11111111111111111111111111111111",
             .conversation = "22222222222222222222222222222222",
             .peer = "peer",
@@ -2566,25 +2582,42 @@ test_query_send_receipts(void)
         .conversation = "22222222222222222222222222222222"};
     char output[8192];
     struct output_capture capture = capture_open(false, true);
-    snag_render_init(&render, 1u);
+    snag_render_init(&render, level);
     snag_render_set_color(&render, SNAG_COLOR_NEVER);
     assert(snag_render_set_chat_conversation(&render, event.endpoint, &target, false) == 0);
-    assert(snag_render_set_view(&render, SNAG_RENDER_CHAT) == 0);
+    if (!queued) assert(snag_render_set_view(&render, SNAG_RENDER_CHAT) == 0);
     for (unsigned int state = SNAG_IRC_PENDING; state <= SNAG_IRC_ACKNOWLEDGED; ++state) {
         event.route.delivery = (enum snag_irc_delivery)state;
-        assert(snag_render_irc_event(&render, &event) == 0);
+        query_receipt_emit(&render, &event, replay);
     }
     event.route.revised = true;
     strcpy(event.text, "server-revised-body");
-    assert(snag_render_irc_event(&render, &event) == 0);
+    query_receipt_emit(&render, &event, replay);
+    event.route.revised = false;
+    for (unsigned int state = SNAG_IRC_FAILED; state <= SNAG_IRC_UNCERTAIN; ++state) {
+        event.route.delivery = (enum snag_irc_delivery)state;
+        query_receipt_emit(&render, &event, replay);
+    }
+    if (queued) assert(snag_render_set_view(&render, SNAG_RENDER_CHAT) == 0);
     snag_render_free(&render);
     (void)capture_close(&capture, output, sizeof(output), 0u);
     assert(count_text(output, "one-private-body") == 1u);
-    assert(strstr(output, "send 33333333 pending"));
-    assert(strstr(output, "send 33333333 written"));
-    assert(strstr(output, "send 33333333 acknowledged"));
+    assert((strstr(output, "send 33333333 pending") != NULL) == (level > 0u));
+    assert((strstr(output, "send 33333333 written") != NULL) == (level > 0u));
+    assert((strstr(output, "send 33333333 acknowledged") != NULL) == (level > 0u));
+    assert(strstr(output, "send 33333333 failed"));
+    assert(strstr(output, "send 33333333 uncertain"));
     assert(count_text(output, "server-revised-body") == 1u);
     assert(strstr(output, "server text: server-revised-body"));
+}
+
+static void
+test_query_send_receipts(void)
+{
+    for (unsigned int level = 0u; level <= SNAG_VERBOSITY_MAX; ++level)
+        for (unsigned int replay = 0u; replay < 2u; ++replay)
+            for (unsigned int queued = 0u; queued < 2u; ++queued)
+                query_send_receipts_at(level, replay != 0u, queued != 0u);
 }
 
 static void
