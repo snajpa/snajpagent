@@ -3626,6 +3626,23 @@ render_irc_event_now(
     source = calloc(source_size, 1u);
     if (!prefix || !source) goto cleanup;
     irc_markdown_lifecycle(render, event);
+    const struct snag_irc_destinations *destinations =
+        render->term ? render->term->destinations : NULL;
+    const struct snag_irc_destination *origin = NULL;
+    for (size_t i = 0u; destinations && i < destinations->count; ++i) {
+        const struct snag_irc_destination *item = &destinations->items[i];
+        if (strcmp(item->endpoint, event->endpoint)) continue;
+        if (event->routed ? strcmp(item->connection, event->route.connection)
+                          : room[0] && strcmp(item->room, room))
+            continue;
+        origin = item;
+        break;
+    }
+    highlight = origin && (event->kind == SNAG_IRC_MESSAGE || event->kind == SNAG_IRC_NOTICE) &&
+                ((!snag_irc_nick_mentioned(nick, origin->operator) &&
+                     snag_irc_nick_mentioned(text, origin->operator)) ||
+                    (!snag_irc_nick_mentioned(nick, origin->model) &&
+                        snag_irc_nick_mentioned(text, origin->model)));
     if (event->routed) {
         const char *conversation = event->route.kind == SNAG_IRC_CHANNEL ? ""
                                    : event->route.kind == SNAG_IRC_QUERY ? event->route.conversation
@@ -3646,18 +3663,7 @@ render_irc_event_now(
             (void)snprintf(
                 source + used, source_size - used, "[send %.8s pending] ", event->route.send);
         }
-    } else if (render->term && render->term->destinations) {
-        const struct snag_irc_destinations *destinations = render->term->destinations;
-        const struct snag_irc_destination *origin = NULL;
-        for (size_t i = 0u; i < destinations->count; ++i)
-            if (strcmp(destinations->items[i].endpoint, endpoint) == 0 &&
-                (!room[0] || strcmp(destinations->items[i].room, room) == 0))
-                origin = &destinations->items[i];
-        highlight = origin && (event->kind == SNAG_IRC_MESSAGE || event->kind == SNAG_IRC_NOTICE) &&
-                    ((!snag_irc_nick_mentioned(nick, origin->operator) &&
-                         snag_irc_nick_mentioned(text, origin->operator)) ||
-                        (!snag_irc_nick_mentioned(nick, origin->model) &&
-                            snag_irc_nick_mentioned(text, origin->model)));
+    } else if (destinations) {
         if (origin && destinations->count > 1u)
             (void)snprintf(source, source_size, "[%u] ", origin->target.id);
         else if (!origin && strcmp(endpoint, "local") != 0)

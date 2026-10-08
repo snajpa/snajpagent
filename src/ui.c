@@ -699,17 +699,18 @@ extra_tab(const struct snag_ui_display *display, const struct ui_conversation_ta
             if (other->target.identity == SNAG_IRC_OPERATOR && same_conversation_view(tab, other))
                 return false;
         }
-        return true;
     }
     const struct snag_term *term = &display->term;
+    bool connection = false;
     for (size_t i = 0u; term->destinations && i < term->destinations->count; ++i) {
         const struct snag_irc_destination *destination = &term->destinations->items[i];
-        if (!strcmp(destination->connection, tab->target.connection) &&
-            snag_irc_name_equal(
+        if (strcmp(destination->connection, tab->target.connection)) continue;
+        connection = true;
+        if (tab->target.identity == SNAG_IRC_OPERATOR && snag_irc_name_equal(
                 destination->casemapping[SNAG_IRC_OPERATOR], destination->room, tab->target.room))
             return false;
     }
-    return true;
+    return connection || tab->draft.len || display->conversation == tab;
 }
 
 static int view_state(struct snag_ui_display *, const json_t *);

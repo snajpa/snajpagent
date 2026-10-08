@@ -3768,6 +3768,15 @@ def run_configured_efforts_case(binary, root, provider, environment):
         case / "terminal", binary, workspace, case / "state", config,
         110, 30, environment=environment,
     ), case / "screen.txt") as terminal:
+        def reload(text, message):
+            edited.write_text(text)
+            terminal.submit("/config")
+            deadline = time.monotonic() + MIN_WAIT_S
+            while config.read_text() != text:
+                assert time.monotonic() < deadline, "editor did not install the requested fixture"
+                time.sleep(0.02)
+            terminal.wait(message, join_wrapped=True)
+
         terminal.wait(" ordinary/uncached-start/xhigh")
         # A configured effort list also resolves before a catalog exists.
         terminal.submit_wait("/model standard-model", "ordinary / standard-model / max", join_wrapped=True)
@@ -3789,14 +3798,12 @@ def run_configured_efforts_case(binary, root, provider, environment):
         terminal.submit_wait("/model 4 save", "ordinary / standard-model / max", join_wrapped=True)
         assert rule.strip() in config.read_text()
         saved = config.read_text()
-        edited.write_text(saved.replace('["none", "low", "high", "max"]', '["custom", "low"]'))
-        terminal.submit_wait("/config", "configuration reloaded:", join_wrapped=True)
+        reload(saved.replace('["none", "low", "high", "max"]', '["custom", "low"]'),
+               "configuration reloaded:")
         terminal.submit_wait("/model list", "1. ordinary / standard-model / custom", join_wrapped=True)
-        edited.write_text(saved.replace('["none", "low", "high", "max"]', '[]'))
-        terminal.submit_wait("/config", "invalid configuration", join_wrapped=True)
+        reload(saved.replace('["none", "low", "high", "max"]', '[]'), "invalid configuration")
         terminal.submit_wait("/model list", "1. ordinary / standard-model / custom", join_wrapped=True)
-        edited.write_text(saved)
-        terminal.submit_wait("/config", "configuration reloaded:", join_wrapped=True)
+        reload(saved, "configuration reloaded:")
         terminal.submit_wait("/model cache", "cache updated:", join_wrapped=True)
         terminal.submit_wait("/model list", "4. ordinary / standard-model / max", join_wrapped=True)
         assert json.loads(cache_path.read_text())["providers"] == raw["providers"]
@@ -3992,7 +3999,8 @@ def validate_irc_events(dotdir):
             for nick in ("hostbot", "onebot", "twobot")
         )
     messages = [event for event in event_list(events, "irc_event")
-                if event["data"]["kind"] == "message"]
+                if event["data"]["kind"] == "message" and
+                event["data"].get("routing", {}).get("direction", "incoming") == "incoming"]
     if any("local completion" in event["data"]["text"] for event in messages):
         raise AssertionError("local assistant completion leaked into IRC events")
     for nick, text, operator in expected_messages:
@@ -5823,8 +5831,8 @@ def run_runtime_boundary_cases(binary, root, provider, environment):
             provider.runtime_handler = None
 
 
-def run_runtime_history_case(binary, root, provider, environment):
-    case = root / "runtime-history"
+def run_runtime_history_case(binary, root, provider, environment, sequenced=False):
+    case = root / ("runtime-history-sequenced" if sequenced else "runtime-history")
     workspace, config = irc_workspace(case / "work", provider.port, "host-model")
     arrived, release = threading.Event(), threading.Event()
     requests = []
@@ -5885,13 +5893,23 @@ def run_runtime_history_case(binary, root, provider, environment):
                 wire += link.recv(8192)
             registered.append((nick, link))
         # Both links want the room; agent history arrives before the operator joins.
+        stream = "d" * 32
+        identity = f";saj-id={stream}:1;saj-kind=message" if sequenced else ""
         for nick, link in sorted(registered):
             link.sendall((f":{nick}!u@fake JOIN #lab\r\n"
                           f":fake 353 {nick} = #lab :@operator7 agent7 peer\r\n"
                           f":fake 366 {nick} #lab :end\r\n"
                           ":fake BATCH +h chathistory #lab\r\n"
-                          f"@batch=h;time=2026-09-01T12:00:00.000Z :peer!u@fake PRIVMSG #lab :{history}\r\n"
+                          f"@batch=h{identity};time=2026-09-01T12:00:00.000Z "
+                          f":peer!u@fake PRIVMSG #lab :{history}\r\n"
                           ":fake BATCH -h\r\n").encode())
+            if sequenced:
+                link.sendall((f"@saj-id={stream}:2 :peer!u@fake PRIVMSG #lab "
+                              ":later live event\r\n").encode())
+            link.sendall(b"PING :history-barrier\r\n")
+            wire = b""
+            while b"PONG :history-barrier\r\n" not in wire:
+                wire += link.recv(8192)
         deadline = time.monotonic() + 5.0
         while True:
             _, log = read_events(terminal.dotdir)
@@ -5904,6 +5922,11 @@ def run_runtime_history_case(binary, root, provider, environment):
         historical = [event["data"] for event in event_list(log, "irc_event")
                       if event["data"]["text"] == history]
         assert len(historical) == 1 and historical[0]["historical"]
+        if sequenced:
+            live = [event["data"] for event in event_list(log, "irc_event")
+                    if event["data"]["text"] == "later live event"]
+            assert len(live) == 1 and not live[0]["historical"]
+            assert live[0]["sequence"] > historical[0]["sequence"]
         screen = terminal.submit_wait("/chat", "── history replayed ──", join_wrapped=True)
         assert screen.count("── history replayed ──") == 1, screen
         assert re.search(r"\d{2}:\d{2}:\d{2} peer › " + re.escape(history), screen), screen
@@ -8700,7 +8723,7 @@ def run_interrupted_history_case(binary, root):
         try:
             link.settimeout(8)
             wire = b""
-            while b"CAP END\r\n" not in wire: wire += link.recv(8192)
+            while b"USER " not in wire: wire += link.recv(8192)
             nick = re.search(rb"NICK (\w+)", wire)[1].decode()
             link.sendall((f":fake CAP {nick} ACK :batch server-time snajpagent/catchup\r\n"
                           f":fake 001 {nick} :welcome\r\n:fake 005 {nick} SAJROOM=#lab :supported\r\n"
@@ -9731,6 +9754,7 @@ def run_irc_case(binary, root, group="all"):
             run_runtime_routing_cases(binary, root, provider, environment)
             run_runtime_boundary_cases(binary, root, provider, environment)
             run_runtime_history_case(binary, root, provider, environment)
+            run_runtime_history_case(binary, root, provider, environment, sequenced=True)
             run_destination_case(binary, root, provider, environment)
             run_destination_reconnect_case(binary, root, provider, environment)
             run_listener_collision_case(binary, root, provider, environment)

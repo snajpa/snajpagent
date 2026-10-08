@@ -66,7 +66,7 @@ struct irc_channel {
     struct irc_member *members;
     size_t member_count, member_capacity;
     uint64_t restored_seq;
-    bool joined, wanted, op, names_active, parting, published;
+    bool joined, wanted, op, names_active, parting, published, ever_joined;
 };
 
 struct irc_replay_member {
@@ -1348,6 +1348,7 @@ channel_state(struct irc_conn *link, struct irc_channel *channel, const char *re
 {
     struct snag_irc_core *irc = link->owner;
     ++irc->names_revision;
+    if (channel->joined) channel->ever_joined = true;
     if (!irc->connection[0]) return 0;
     struct snag_irc_event event;
     bool joined = channel->joined && !channel->parting;
@@ -2635,8 +2636,11 @@ link_emit(struct snag_irc_core *irc, struct irc_conn *link, enum snag_irc_event_
     if (!link_emit_enabled(link)) {
         struct irc_channel *operator =
             channel ? channel_find(&irc->conns[LINK_OPERATOR], room) : NULL;
-        /* The operator owns shared-room history even while its join is pending. */
-        if (!channel || (operator && (operator->joined || operator->wanted))) return 0;
+        /* Initial agent traffic must not advance past the operator's history. */
+        bool history = link->historical || kind == SNAG_IRC_HISTORY_READY;
+        if (!channel || (operator && (operator->joined ||
+                (operator->wanted && (history || !operator->ever_joined)))))
+            return 0;
     }
     size_t length = text ? strlen(text) : 0u;
     bool action = kind == SNAG_IRC_MESSAGE && length >= 9u && !memcmp(text, "\001ACTION ", 8u) &&

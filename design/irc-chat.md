@@ -517,9 +517,10 @@ conversation explains:
   mention turn requires one room-facing reply.
 
 For a room requested by both local identities, the operator connection supplies
-room events and history throughout the join. The agent connection supplies rooms
-that the operator has not requested; it does not provisionally replay a shared
-room while the operator join is pending.
+history even when the agent joins first. Initial room traffic waits for the
+operator join so later live events cannot advance past unread history. After
+that first join, the agent supplies live events while the operator reconnects.
+It also supplies history for rooms that the operator has not requested.
 
 IRC input is recorded as typed structured session events before it affects a
 provider request. Each projected user message renders source endpoint, room,

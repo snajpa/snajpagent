@@ -4,10 +4,16 @@
 
 ## Unreleased
 
+- Restore mention highlighting for routed IRC messages in live and replayed chat.
+
+- Remove unselected empty channel tabs after their connection is removed, while
+  retaining drafts and the selected conversation.
+
 - Exclude encrypted continuation size from streaming context estimates; use
   provider usage when the response completes.
 
-- Replay shared-room IRC history once when the agent joins before the operator.
+- Replay shared-room IRC history once when the agent joins before the operator,
+  keeping live messages available through the agent during later operator reconnects.
 
 - Recognize fully static Linux executables in dependency checks while retaining
   the provider-library checks for dynamic builds.
