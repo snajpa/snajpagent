@@ -13,6 +13,11 @@
   covered history across binding changes and refuse incomplete plaintext reduction.
   Preserve API compact endpoints and report the provider error on a fallback.
 
+- Preserve the original IRC messages of an active turn across compaction and
+  checkpoint recovery. Recover older checkpoint references from their saved
+  admission receipt. Saving after resume also works when the derived history
+  index has been removed.
+
 - Resume native sessions after IRC messages retained across compaction are
   admitted after a checkpoint. Resolve newly needed adjacent records from the
   verified journal when the checkpoint lookup table omits them.

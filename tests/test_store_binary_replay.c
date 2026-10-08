@@ -2,6 +2,7 @@
 #include "fixture_store_binary.h"
 #include "fixture_store_legacy.h"
 #include "store_binary_replay.h"
+#include "store_binary_context.h"
 #include "store_binary_import.h"
 #include "store_binary_producer.h"
 #include "fs.h"
@@ -4900,10 +4901,165 @@ test_live_native_snapshot(struct snag_store *store, const char *cwd)
     snag_session_close(&owner);
 }
 
+static void
+compacted_prompt_compatibility(struct snag_session *source, uint64_t observed)
+{
+    char error[256] = {0};
+    struct snag_binary_checkpoint_sources origins = {0};
+    struct snag_binary_anchor boundary;
+    struct snag_binary_index_tree tree;
+    assert(!snag_session_binary_checkpoint_capture(source, &boundary, &tree, &origins,
+        error, sizeof(error)));
+    struct snag_buf core = {.max = SIZE_MAX};
+    struct snag_buf provider = {.max = SIZE_MAX};
+    struct snag_buf dense = {.max = SIZE_MAX};
+    struct snag_buf omitted = {.max = SIZE_MAX};
+    struct snag_buf access_bytes = {.max = SIZE_MAX};
+    struct snag_buf image = {.max = SIZE_MAX};
+    const json_t *recent;
+    const json_t *history;
+    assert(!snag_context_capture_seam(source, &recent, &history));
+    assert(!snag_binary_checkpoint_core_encode(&core, &origins, source));
+    assert(!snag_binary_checkpoint_provider_encode(&provider, source, recent, history));
+    struct snag_binary_checkpoint_index access;
+    struct snag_binary_checkpoint_index old;
+    binary_fixture_access(source->log_fd, &boundary, &dense, &access);
+    binary_fixture_access_omit(&access, observed, &omitted, &old);
+    assert(!snag_binary_checkpoint_index_copy(&access_bytes, &old));
+    struct snag_binary_checkpoint_frame frame = {.identity = access.identity,
+        .boundary = boundary, .generation = 1u,
+        .core = {SNAG_BINARY_CORE_VERSION, core.data, core.len},
+        .provider = {1u, provider.data, provider.len},
+        .access = {1u, access_bytes.data, access_bytes.len}};
+    assert(!snag_binary_checkpoint_frame_encode(&image, &frame));
+    struct snag_binary_checkpoint_receipt receipt = {.generation = 1u,
+        .image_size = image.len, .boundary = boundary};
+    assert(!snag_binary_index_tree_root(&tree, receipt.index_root));
+    memcpy(receipt.image_digest, image.data + image.len - 32u, 32u);
+    assert(!snag_binary_checkpoint_frame_from_receipt(image.data, image.len,
+        &access.identity, &receipt, &frame));
+    struct snag_binary_index_entry entry;
+    assert(!snag_binary_checkpoint_index_find(&access, observed, &entry));
+    unsigned char original;
+    assert(snag_pread(source->log_fd, &original, 1u, entry.batch_offset + 1u) == 1);
+    for (unsigned int variant = 0u; variant < 3u; ++variant) {
+        struct snag_session restored;
+        snag_session_init(&restored);
+        struct snag_session before = restored;
+        struct snag_context_control control = {.cancelled = seed_access_cancel};
+        if (variant == 1u) {
+            unsigned char corrupt = original ^ 0x80u;
+            assert(snag_seek(source->log_fd, (int64_t)entry.batch_offset + 1, SEEK_SET) >= 0);
+            assert(!snag_write_full(source->log_fd, &corrupt, 1u));
+        }
+        int rc = snag_store_resume_pinned_binary_context_checkpoint(source, &restored,
+            &frame, &receipt, &boundary, NULL, NULL,
+            variant == 0u ? &control : NULL, error, sizeof(error));
+        if (variant < 2u) {
+            assert(rc < 0 && !memcmp(&before, &restored, sizeof(before)));
+            if (!variant) assert(errno == ECANCELED);
+        } else {
+            if (rc < 0) fprintf(stderr, "old compacted prompt: %s\n", error);
+            assert(!rc && restored.active_turn &&
+                !strcmp(restored.active_prompt, source->active_prompt));
+        }
+        if (variant == 1u) {
+            assert(snag_seek(source->log_fd, (int64_t)entry.batch_offset + 1, SEEK_SET) >= 0);
+            assert(!snag_write_full(source->log_fd, &original, 1u));
+        }
+        snag_session_close(&restored);
+    }
+    snag_buf_free(&image);
+    snag_buf_free(&access_bytes);
+    snag_buf_free(&omitted);
+    snag_buf_free(&dense);
+    snag_buf_free(&provider);
+    snag_buf_free(&core);
+    snag_binary_checkpoint_sources_free(&origins);
+}
+
+static void
+test_compacted_irc_turn_resume(struct snag_store *store, const char *cwd)
+{
+    struct snag_session session;
+    snag_session_init(&session);
+    char error[256] = {0};
+    assert(!snag_session_create(store, &session, cwd, "default", "fixture", "default",
+        error, sizeof(error)));
+    char id[SNAG_ID_HEX_LEN + 1u];
+    memcpy(id, session.id, sizeof(id));
+    struct snag_irc_event event = {.kind = SNAG_IRC_MESSAGE, .timestamp_ms = 1u,
+        .stream = OTHER_ID, .sequence = 1u, .input = true, .endpoint = "fixture",
+        .room = "#fixture", .nick = "operator", .op = true};
+    assert(snag_strcpy(event.text, sizeof(event.text), "original turn input"));
+    uint64_t observed = commit_data(&session, "irc_event", snag_irc_event_data(&event));
+    struct snag_buf prompt = {.max = SNAG_MAX_DIRECT_PROMPT};
+    assert(!snag_irc_event_reference(&prompt, &event) && !snag_buf_terminate(&prompt));
+    json_t *paths = checked_json(json_array());
+    json_t *input = input_data((const char *)prompt.data, false, paths);
+    commit_data(&session, "irc_admitted", json_pack("{s:[I],s:o}",
+        "sequences", (json_int_t)observed, "input", input));
+    commit_data(&session, "turn_started", direct_turn_data(cwd,
+        (const char *)prompt.data, GOAL_ID, 1, false, paths));
+    json_decref(paths);
+    json_t *response = response_data();
+    assert(!json_object_set_new(response, "irc_seq", json_integer(observed)));
+    commit_data(&session, "response_started", response);
+    struct snag_response_graph graph = {0};
+    assert(!snag_response_graph_add_call(&graph, "read", "read", "read_file",
+        json_pack("{s:s}", "path", "fixture.txt")));
+    commit_data(&session, "response_completed", json_pack(
+        "{s:s,s:s,s:i,s:s,s:s,s:O,s:{s:i,s:i,s:i,s:i}}", "turn_id", GOAL_ID,
+        "response_id", OTHER_ID, "cycle", 1, "status", "completed",
+        "provider_response_id", "fixture", "items", graph.items, "usage",
+        "input_tokens", 17, "output_tokens", 7, "reasoning_tokens", 3, "total_tokens", 24));
+    start_process_call(&session, 0u);
+    commit_data(&session, "tool_finished", json_pack("{s:s,s:s,s:o}",
+        "turn_id", GOAL_ID, "call_id", session.pending_calls[0].call_id,
+        "result", snag_tool_result_terminal(true, "fixture result")));
+    snag_response_graph_free(&graph);
+    assert(session.irc_consumed_seq == observed && session.active_turn);
+    for (size_t i = 0u; i <= SNAG_CONTEXT_COMPACT_OVERLAP_EVENTS; ++i)
+        commit_data(&session, "retry_auto_changed", json_pack("{s:s}", "value", "on"));
+    start_compact_fixture(&session, "cccccccccccccccccccccccccccccccc", NULL);
+    finish_compact_fixture(&session, NULL, "fixture compacted context");
+    compacted_prompt_compatibility(&session, observed);
+    assert(!snag_session_checkpoint(&session, error, sizeof(error)));
+    commit_data(&session, "retry_auto_changed", json_pack("{s:s}", "value", "off"));
+    int directory = dup(session.dir_fd);
+    assert(directory >= 0);
+    snag_session_close(&session);
+    assert(!snag_unlink_at(directory, "history.idx", false));
+    assert(!close(directory));
+    snag_session_init(&session);
+    int rc = snag_session_open(store, &session, id, error, sizeof(error));
+    if (rc < 0) fprintf(stderr, "compacted IRC turn: %s\n", error);
+    assert(!rc && session.active_turn && !strcmp(session.active_prompt, (const char *)prompt.data));
+    const json_t *recent, *history;
+    assert(!snag_context_capture_seam(&session, &recent, &history));
+    bool found = false;
+    for (size_t i = 0u; i < json_array_size(history); ++i) {
+        const json_t *row = json_array_get(history, i);
+        if ((uint64_t)json_integer_value(json_object_get(row, "seq")) == observed) {
+            assert(!strcmp(snag_json_string(json_object_get(row, "data"), "text"), event.text));
+            found = true;
+        }
+    }
+    assert(found);
+    assert(!snag_session_checkpoint(&session, error, sizeof(error)));
+    snag_session_close(&session);
+    snag_session_init(&session);
+    assert(!snag_session_open(store, &session, id, error, sizeof(error)));
+    assert(session.active_turn && !strcmp(session.active_prompt, (const char *)prompt.data));
+    snag_session_close(&session);
+    snag_buf_free(&prompt);
+}
+
 void
 test_store_binary_replay(struct snag_store *store, const char *cwd)
 {
     test_live_native_snapshot(store, cwd);
+    test_compacted_irc_turn_resume(store, cwd);
     test_irc_admission_after_checkpoint(store, cwd, true);
     test_irc_admission_after_checkpoint(store, cwd, false);
     test_checkpoint_after_streamed_tools(store, cwd, false);
