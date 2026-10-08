@@ -4,10 +4,9 @@
 
 A terminal harness for autonomous, long-horizon work and distributed agent teams.
 
-Give a model an objective, tools and project context. Goals, steering and saved
-sessions carry work across turns. Built-in IRC connects agents across machines;
-each runs tools locally. Model-owned project notes retain findings and unfinished
-work. Sessions discover your home directory's `AGENTS.md`; point it to those notes.
+Goals and saved sessions carry work across turns. IRC connects agents across
+machines; each runs tools locally. Point your home directory's `AGENTS.md` to
+project notes that retain findings and unfinished work.
 
 [Website](https://agent.snajpa.net) ·
 [Downloads](https://agent.snajpa.net/downloads.html) ·
@@ -56,9 +55,8 @@ never submits text.
 
 ### Commands, history and context
 
-Commands remain available during work. Foreground commands and `$EDITOR` own
-input until they finish; controls needing a safe boundary acknowledge it.
-Session deletion requires confirmation.
+Foreground commands and `$EDITOR` own input until finished. Controls acknowledge
+safe-boundary waits; session deletion requires confirmation.
 
 `/history` shows the last turn, `/history 10` the last ten, and `/history 0`
 counts. Up/Ctrl-R navigate prompt history. `/cat PATH` opens a file in `$PAGER`
@@ -116,17 +114,15 @@ snajpagent --resume --last
 ```
 
 `-l` groups attached, detached and other running sessions, then the ten most
-recent stored sessions. Each group sorts by latest saved activity. `-l N`
-changes the stored count; `-l 0` shows running sessions only.
+recent stored sessions. Groups sort by saved activity. `-l N` changes the stored count; `-l 0` lists running sessions.
 
 Convert stopped legacy sessions with `snajpagent convert --jobs 4`. The command
 retains original journals, skips locked writers and reports individual results.
 The [manual](snajpagent.1) covers interruption and recovery.
 
-Name sessions with `-N lead` or `/session name lead`. Use `--attach -N lead`
-while running; `--resume -N lead` also reopens stored sessions. Duplicates
-require IDs. **Active goals continue on resume**; pause before exiting to keep
-one paused. Armed queues run first; paused queues need `/next`.
+Name sessions with `-N lead` or `/session name lead`; select them with
+`--attach -N lead` or `--resume -N lead`. Duplicate names require IDs.
+**Active goals continue on resume**; pause before exiting to keep one paused.
 
 ### Transfer files through the terminal
 
@@ -156,12 +152,10 @@ preparation. Review `/attachments` before submitting. `/send PATH` and model
 and saved-path receipts, then restore the draft. Downloads default to
 `~/Downloads`; set `[terminal] download_dir` on the workstation to change it.
 
-Detached sends queue durable exports. Fast-stream reattachment delivers them at
-idle; after Mosh reattachment, use `/send PATH` and remove the delivered queue ID.
-Changed or uncertain exports stay pending. Model `download_queue` manages this
-intent while preserving source files. The manual's terminal-transfer sections
-cover setup, recovery and the alternative trzsz-go client. Native transfers and
-the durable outbox are included in 0.99.8c.
+Detached sends queue exports. Fast-stream reattachment delivers them at idle;
+after Mosh reattachment, use `/send PATH` and remove the delivered queue ID.
+Changed or uncertain exports stay pending. The manual covers recovery and the
+alternative trzsz-go client.
 
 ### Attach files and use voice
 
@@ -186,9 +180,8 @@ paths use the launch directory and persist in the session.
 
 ## 2. Work together
 
-Run agents where their repositories, tools and services are available, and use
-IRC rooms to assign work, exchange findings and coordinate handoffs. One instance
-hosts a room and others connect; an instance can join several endpoints at once.
+Run agents beside their tools and repositories. One instance hosts an IRC room;
+others connect to assign work and exchange findings. Each can join several endpoints.
 
 In two terminals:
 
@@ -203,11 +196,9 @@ machine; `-n` names the model, `-o` its operator and `-r` the hosted room.
 
 ### Choose who receives your message
 
-Networked startup opens **chat**, the shared room, where Enter sends as your
-operator name. `@builder check the empty-input case` asks builder to work, and a
-mention during its work steers it at a safe boundary without cutting off its
-current response; ordinary conversation supplies background context, while a
-direct mention starts a task for the addressed model.
+Networked startup opens **chat**; Enter sends as your operator name.
+`@builder check the empty-input case` starts or steers builder at a safe boundary.
+Ordinary conversation supplies background context.
 
 Empty Tab cycles through **rollout**, connected rooms and opened private chats.
 Shift-Tab moves backwards with a draft present. Each view keeps its own draft.
@@ -228,10 +219,8 @@ Models can use `irc_sleep` to hold updates until a timeout, mention or message
 threshold, and `irc_compact` to summarize IRC context asynchronously. Your
 transcript stays complete. See the manual's model IRC controls.
 
-In chat, Tab first completes `@nickname` words from the selected conversation.
-With conversation tabs open it then cycles views; otherwise Tab at the end queues
-a local follow-up during work.
-Enter sends to the selected conversation.
+In chat, Tab completes `@nickname`, then cycles open conversations. Without
+conversation tabs, Tab at the end queues a local follow-up during work.
 
 ### Coordinate work
 
@@ -252,25 +241,17 @@ sandbox.
 
 ## Further controls
 
-`/help` lists commands and keys; `/status` shows current state. `/queue` lists
-waiting work and its editor revises entries. See the manual for editing controls.
-Keyboard command reports use `$PAGER`, defaulting to `less -FX` when it is unset
-or just `less` and less is available. Short reports return automatically; longer
-reports stay open until you quit. The text remains visible afterward. Work and IRC continue while the pager is open; new output appears
-when it closes. `[ui] pager = off` displays reports directly.
+`/help` lists controls; `/status` shows state; `/queue` lists and edits waiting work.
+Keyboard reports use `$PAGER`, defaulting to `less -FX` when unset or just `less`,
+if available. Short reports return automatically; longer reports wait for quit.
+Work and IRC keep buffering output. `[ui] pager = off` displays reports directly.
 
-`/model` selects the next response's provider, model and effort; `/model cache`
-refreshes the catalog. Selection persists across resume; model-callable switching
-uses `[agent] allow_model_change=true` (default off). Switching retains tool
-results and running commands, compacting smaller contexts when needed.
-`/fast` toggles priority service with ON/OFF feedback while preserving that
-selection. Its setting persists across resume; provider support and pricing apply.
-
-`/context default` uses the normal window, `max` the advertised maximum, and a
-number sets the session's token budget. Append `save` to persist a provider/model
-default. Larger windows may change pricing. The prompt shows measured input as
-a percentage of this budget; `?%` means unknown. `/status` explains accounting;
-`/compact` summarizes older context while preserving the transcript.
+`/model` selects provider, model and effort; `/model cache` refreshes the catalog.
+Selection survives resume. Model-callable switching requires
+`[agent] allow_model_change=true`. `/fast` toggles priority service; provider
+support and pricing apply. `/context default|max|NUMBER` selects the context
+budget; append `save` for a provider/model default. Larger windows may change
+pricing. `/status` explains accounting; `?%` means usage is unknown.
 
 ### Connect MCP tools
 
@@ -424,16 +405,11 @@ history; agent conversations are read-only.
 Use `/query SESSION/ENDPOINT/NICK` to select another attached session's query;
 `:attach ID` in another split gives the workspace control of that session.
 
-Commands and their output remain in the pane transcript, ready for more typing.
-`:report` opens one output separately; `:reports` lists retained outputs.
-`:history` returns to rollout. Search with
-`/TEXT`, `?TEXT` and `n`/`N`; select with `v`, `V` or Ctrl-V and yank with `y`.
-Yanks copy to the workstation clipboard, including through `snajpagent remote`.
-`[terminal] clipboard` selects `native`, `osc52` or `off`; OSC 52 is unconfirmed.
-
-`:classic [SESSION_ID]` opens an owner's terminal; `/s d` returns. Interactive
-commands use it automatically. See the manual for controls and [the design](design/vim-mode.md)
-for implementation status. `WITH_VM=0` omits this frontend.
+Pane transcripts retain commands and output. `:reports` lists retained reports;
+`:history` returns to rollout. Search with `/TEXT`, `?TEXT`, `n`/`N`; select with
+`v`, `V` or Ctrl-V and yank with `y`. Clipboard transfer works through `remote`;
+OSC 52 delivery is unconfirmed. The [manual](snajpagent.1) covers reports,
+clipboard policy and `:classic` terminal access. `WITH_VM=0` omits the frontend.
 
 The POSIX build needs C11 with pthreads, GNU make, pkg-config and
 libcurl/Jansson development files. On the BSDs, install GNU make and use `gmake`

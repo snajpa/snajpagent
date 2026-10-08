@@ -10,7 +10,9 @@ import os
 import re
 import select
 import signal
+import shutil
 import socket
+import ssl
 import subprocess
 import sys
 import tempfile
@@ -43,7 +45,7 @@ TOOL = {'name': 'send.message', 'description': 'Send exactly this message.',
 
 
 class MCPServer:
-    def __init__(self):
+    def __init__(self, ipv6=False, tls=None):
         self.requests = []
         self.calls = []
         self.tokens = []
@@ -86,6 +88,7 @@ class MCPServer:
         self.call_received = threading.Event()
         self.release_call = threading.Event()
         self.hold_call = False
+        self.redirect = None
         owner = self
 
         class Handler(http.server.BaseHTTPRequestHandler):
@@ -189,6 +192,9 @@ class MCPServer:
                 if owner.rpc_error:
                     self.reply(400, {'jsonrpc': '2.0', 'id': request['id'], 'error': owner.rpc_error})
                     return
+                if owner.redirect:
+                    self.reply(307, {}, {'Location': owner.redirect})
+                    return
                 if owner.http_status:
                     self.reply(owner.http_status, {})
                     return
@@ -262,11 +268,17 @@ class MCPServer:
                 else:
                     self.reply(200, envelope)
 
-        self.server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        class Server(http.server.ThreadingHTTPServer):
+            address_family = socket.AF_INET6 if ipv6 else socket.AF_INET
+
+        self.server = Server(('::1' if ipv6 else '127.0.0.1', 0), Handler)
+        if tls:
+            self.server.socket = tls.wrap_socket(self.server.socket, server_side=True)
         self.server.daemon_threads = True
         self.thread = threading.Thread(target=self.server.serve_forever)
         self.thread.start()
-        self.url = f'http://127.0.0.1:{self.server.server_address[1]}'
+        self.url = ('https' if tls else 'http') + '://' + ('[::1]' if ipv6 else '127.0.0.1')
+        self.url += f':{self.server.server_address[1]}'
 
     def close(self):
         self.stopping.set()
@@ -997,6 +1009,60 @@ class MCPTests(unittest.TestCase):
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0]['status'], 'outcome_unknown')
         self.assertEqual(len(self.server.calls), 1)
+
+    def test_ipv6_catalog_and_callback(self):
+        try:
+            server = MCPServer(ipv6=True)
+        except OSError as error:
+            self.skipTest(str(error))
+        self.addCleanup(server.close)
+        self.server = server
+        self.policy = 'redirect_uri = http://[::1]:0/callback\n'
+        self.write_config()
+        self.assertIn(b'send.message', self.run_cli('tools', 'fixture').stdout)
+        self.login(callback_mode='http')
+
+    def test_redirect_does_not_forward_request(self):
+        destination = MCPServer()
+        self.addCleanup(destination.close)
+        self.server.redirect = destination.url + '/mcp'
+        result = self.run_cli('tools', 'fixture', ok=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(b'redirect refused', result.stderr)
+        self.assertEqual(destination.requests, [])
+
+    @unittest.skipUnless(shutil.which('openssl'), 'openssl required for isolated TLS fixture')
+    def test_https_trust_and_proxy_failure(self):
+        cert, key = self.root / 'cert.pem', self.root / 'key.pem'
+        conf = self.root / 'openssl.cnf'
+        conf.write_text('[req]\nprompt=no\ndistinguished_name=dn\nx509_extensions=ext\n'
+            '[dn]\nCN=localhost\n[ext]\nsubjectAltName=DNS:localhost,IP:127.0.0.1\n'
+            'basicConstraints=critical,CA:TRUE\n'
+            'keyUsage=critical,digitalSignature,keyEncipherment,keyCertSign\n'
+            'extendedKeyUsage=serverAuth\n')
+        subprocess.run(['openssl', 'req', '-x509', '-newkey', 'rsa:2048', '-nodes',
+            '-days', '1', '-keyout', str(key), '-out', str(cert), '-config', str(conf)],
+            check=True, capture_output=True)
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(cert, key)
+        server = MCPServer(tls=context)
+        self.addCleanup(server.close)
+        self.server = server
+        self.write_config()
+        self.env.pop('SSL_CERT_FILE', None)
+        failed = self.run_cli('tools', 'fixture', ok=False)
+        self.assertNotEqual(failed.returncode, 0)
+        self.assertEqual(server.requests, [])
+        self.env['SSL_CERT_FILE'] = str(cert)
+        self.assertIn(b'send.message', self.run_cli('tools', 'fixture').stdout)
+        server.requests.clear()
+        proxy = MCPServer()
+        self.addCleanup(proxy.close)
+        self.env['HTTPS_PROXY'] = proxy.url
+        self.env['NO_PROXY'] = self.env['no_proxy'] = ''
+        failed = self.run_cli('tools', 'fixture', ok=False)
+        self.assertNotEqual(failed.returncode, 0)
+        self.assertEqual(server.requests, [])
 
 
 if __name__ == '__main__':

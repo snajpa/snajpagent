@@ -246,7 +246,7 @@ challenge_parameter(const char *header, const char *key)
             ++p;
         }
         if (strlen(key) == n && !strncasecmp(begin, key, n))
-            return strndup(value, (size_t)(p - value));
+            return snag_mcp_slice(value, (size_t)(p - value));
         if (*p) ++p;
     }
     return NULL;
@@ -582,7 +582,7 @@ done:
 static char *
 form_decode(const char *value, size_t length)
 {
-    char *copy = strndup(value, length);
+    char *copy = snag_mcp_slice(value, length);
     if (!copy) return NULL;
     for (size_t i = 0u; i < length; ++i)
         if (copy[i] == '+') copy[i] = ' ';
@@ -590,7 +590,7 @@ form_decode(const char *value, size_t length)
     char *decoded = curl_easy_unescape(NULL, copy, (int)length, &decoded_len);
     free(copy);
     char *result = decoded && decoded_len >= 0 && !memchr(decoded, 0, (size_t)decoded_len)
-        ? strndup(decoded, (size_t)decoded_len) : NULL;
+        ? snag_mcp_slice(decoded, (size_t)decoded_len) : NULL;
     if (decoded) snag_secret_clear(decoded, (size_t)decoded_len);
     curl_free(decoded);
     return result;

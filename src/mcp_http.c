@@ -18,6 +18,17 @@ snag_mcp_string(const json_t *object, const char *key)
 }
 
 char *
+snag_mcp_slice(const char *text, size_t length)
+{
+    if (length == SIZE_MAX) return NULL;
+    char *copy = malloc(length + 1u);
+    if (!copy) return NULL;
+    memcpy(copy, text, length);
+    copy[length] = '\0';
+    return copy;
+}
+
+char *
 snag_mcp_url_part(const char *url, CURLUPart part)
 {
     CURLU *parsed = curl_url();
@@ -190,7 +201,7 @@ receive_header(char *data, size_t size, size_t count, void *opaque)
         target = &t->out->challenge;
     if (target) {
         if (*target) return 0u;
-        *target = strndup(begin, (size_t)(end - begin));
+        *target = snag_mcp_slice(begin, (size_t)(end - begin));
         if (!*target) return 0u;
         if (target == &t->out->content_type)
             t->sse = !strncasecmp(*target, "text/event-stream", 17u);

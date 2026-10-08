@@ -47,6 +47,7 @@ struct snag_mcp_http {
 };
 
 const char *snag_mcp_string(const json_t *object, const char *key);
+char *snag_mcp_slice(const char *, size_t);
 bool snag_mcp_url_valid(const char *url);
 char *snag_mcp_url_part(const char *url, CURLUPart part);
 void snag_mcp_http_free(struct snag_mcp_http *response);
