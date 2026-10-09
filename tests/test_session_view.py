@@ -1114,6 +1114,150 @@ class ContextMeterTests(unittest.TestCase):
                              for event in self.owner.events()))
         self.assertEqual(self.provider.requests, [])
 
+    def lower_cached_maximum(self, cache_path):
+        cache = json.loads(cache_path.read_text())
+        cache['providers'][0]['models'][0]['id'] = 'host-model'
+        cache_path.write_text(json.dumps(cache))
+
+    def settings_wait(self, child):
+        child.until(b'Waiting for valid model/context settings')
+        deadline = time.monotonic() + 1.1
+        while time.monotonic() < deadline:
+            if select.select([child.master], [], [], .05)[0]:
+                child.output.extend(os.read(child.master, 65536))
+        self.assertNotIn(b'retrying after error', child.output)
+        self.assertNotIn(b'Retrying turn after error', child.output)
+        self.assertEqual(child.output.count(b'exceeds the advertised maximum'), 1)
+
+    def test_inherited_context_is_validated_before_model_save(self):
+        self.cache_maximum_context()
+        self.command('/model fake/host-model/high:900000', 'selected=900000')
+        before = self.owner.config.read_bytes()
+        events = self.owner.events()
+        for selector in ('fake/standard-model/medium', '#1'):
+            self.command('/model ' + selector + ' save', 'exceeds the advertised maximum')
+        self.assertEqual(self.owner.config.read_bytes(), before)
+        self.assertEqual([e for e in self.owner.events() if e['type'] in
+                          ('model_selection_changed', 'context_selection_changed')],
+                         [e for e in events if e['type'] in
+                          ('model_selection_changed', 'context_selection_changed')])
+        self.command('/model #1:max', 'selected=872000')
+        self.assertEqual(self.provider.requests, [])
+
+    def test_startup_model_validates_inherited_context(self):
+        self.cache_maximum_context()
+        self.command('/context 900000', 'selected=900000')
+        self.owner.finish(self.owner.initial, b'/exit')
+        self.owner.status('stored')
+        before = self.owner.journal.read_bytes()
+        result = subprocess.run([*self.owner.prefix, '--resume', self.owner.sid,
+                                 '-m', 'fake/standard-model/medium', '-e'],
+                                env={**os.environ, **self.owner.env}, capture_output=True,
+                                timeout=5)
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn(b'exceeds the advertised maximum', result.stderr)
+        self.assertEqual(self.owner.journal.read_bytes(), before)
+        self.assertEqual(self.provider.requests, [])
+
+    def test_model_tool_rejects_inherited_context_without_switching(self):
+        self.cache_maximum_context()
+        text = self.owner.config.read_text().replace('read_agents_md = false',
+                                                    'read_agents_md = false\nallow_model_change = true')
+        self.owner.config.write_text(text)
+        self.configure()
+        self.command('/context 900000', 'selected=900000')
+        self.provider.AGENTS = {**self.provider.AGENTS, 'standard-model': 'standardbot'}
+
+        def respond(handler, request, sequence):
+            body = (self.provider.function_body(sequence, 'invalid_context', 'select_model',
+                    {'selector': '#1'}) if sequence == 1 else
+                    self.provider.response_body(sequence, 'selection rejected'))
+            self.provider.reply(handler, body.encode(), close_header=True)
+
+        self.provider.runtime_handler = respond
+        os.write(self.owner.initial.master, b'try the incompatible model\r')
+        self.owner.wait_event('tool_finished')
+        self.assertFalse(any(e['type'] == 'model_selection_changed' for e in self.owner.events()))
+        self.owner.wait_event('turn_completed')
+        self.assertEqual([r['model'] for r in self.provider.requests], ['host-model', 'host-model'])
+        outputs = [item['output'] for item in self.provider.requests[-1]['body']['input']
+                   if item.get('type') == 'function_call_output']
+        self.assertTrue(any('exceeds the advertised maximum' in output for output in outputs))
+
+    def test_invalid_context_goal_waits_and_one_shot_stops(self):
+        path = self.cache_maximum_context()
+        self.command('/context 900000', 'selected=900000')
+        self.lower_cached_maximum(path)
+        self.command('/configure', 'configuration reloaded:')
+        os.write(self.owner.initial.master, b'/goal context recovery fixture\r')
+        self.settings_wait(self.owner.initial)
+        self.assertEqual(self.provider.requests, [])
+        self.owner.finish(self.owner.initial, b'/exit')
+        self.owner.status('stored')
+        once = subprocess.run([*self.owner.prefix, '--resume', self.owner.sid, '-e'],
+                              env={**os.environ, **self.owner.env}, capture_output=True,
+                              timeout=5)
+        self.assertEqual(once.returncode, 2, once.stderr)
+        self.assertNotIn(b'retrying after error', once.stderr)
+        resumed = self.owner.start(['--resume', self.owner.sid])
+        self.settings_wait(resumed)
+
+        def respond(handler, request, sequence):
+            self.ready.set()
+            self.release.wait(10)
+            self.provider.reply(handler, self.provider.response_body(sequence, 'repaired').encode(),
+                                close_header=True)
+
+        self.provider.runtime_handler = respond
+        os.write(resumed.master, b'/context max\r')
+        self.assertTrue(self.ready.wait(5), bytes(resumed.output))
+        os.write(resumed.master, b'/goal pause\r')
+        resumed.until(b'Goal paused')
+        self.release.set()
+        self.owner.wait_event('turn_completed')
+        self.assertEqual(len(self.provider.requests), 1)
+        self.owner.finish(resumed, b'/exit')
+
+    def resume_invalid_context(self):
+        path = self.cache_maximum_context()
+        self.command('/context 900000', 'selected=900000')
+        self.provider.AGENTS = {**self.provider.AGENTS, 'two-model': 'twobot'}
+
+        def respond(handler, request, sequence):
+            if sequence == 1:
+                self.ready.set()
+                self.release.wait(10)
+            try:
+                self.provider.reply(handler, self.provider.response_body(sequence, 'repaired').encode(),
+                                    close_header=True)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+
+        self.provider.runtime_handler = respond
+        os.write(self.owner.initial.master, b'preserve this unfinished context turn\r')
+        self.assertTrue(self.ready.wait(5))
+        started = self.owner.wait_event('turn_started')['data']['turn_id']
+        self.owner.finish(self.owner.initial, b'/exit')
+        self.release.set()
+        self.owner.status('stored')
+        self.lower_cached_maximum(path)
+        resumed = self.owner.start(['--resume', self.owner.sid])
+        self.settings_wait(resumed)
+        self.assertEqual(len(self.provider.requests), 1)
+        os.write(resumed.master, b'/model fake/two-model/high:60000\r')
+        self.owner.wait_event('turn_completed')
+        self.assertEqual([r['model'] for r in self.provider.requests], ['host-model', 'two-model'])
+        self.assertEqual(self.owner.wait_event('turn_completed')['data']['turn_id'], started)
+        self.assertIn('preserve this unfinished context turn',
+                      json.dumps(self.provider.requests[-1]['body']))
+        self.owner.finish(resumed, b'/exit')
+
+    def test_invalid_resumed_context_can_change_model(self):
+        self.resume_invalid_context()
+
+    def test_invalid_resumed_context_can_change_model_legacy(self):
+        self.resume_invalid_context()
+
     def test_model_context_start_resume_override_and_omission(self):
         self.owner.finish(self.owner.initial, b'/exit')
         self.owner.status('stored')

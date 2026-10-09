@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Wait for correction when restored model/context settings exceed cached limits,
+  retaining unfinished work without repeated retries. One-shot mode exits with
+  the validation error. Validate inherited context before switching models.
+
 - Save a cached advertised maximum with `/model SELECTOR:max s|save` or
   `/context max s|save`, storing its token count as the model's context default.
 

@@ -358,10 +358,19 @@ model's source-bound advertised maximum before any input-budget deductions.
 The session keeps its `max` selection; configuration stores the resolved token
 count for future default selections. An unavailable maximum fails before
 configuration or session changes. Other settings and permissions survive the
-edit. Validation and saving precede the session selection event; a failed save retains the previous selection. The
-runtime configuration adopts the saved override, so `/context default` and
+edit. Validation and saving precede the session selection event; a failed save
+retains the previous selection. The runtime configuration adopts the saved override, so `/context default` and
 new sessions use it immediately. A plain numeric selection remains local to
 the session.
+
+Model selection validates an inherited context choice as well as an explicit
+suffix before changing defaults or configuration, including model tools and
+startup/resume overrides. Restored or refreshed invalid settings retain unfinished
+work in the existing interactive recovery loop. This wait accepts corrective
+commands without timed retries or provider calls; one-shot execution returns2.
+Validation uses the next selected primary model, while an active fallback keeps
+its own model/context until explicitly replaced. The request boundary records
+the model transition before sending. No stored-state format changes are needed.
 
 The provider setting `auto_compact_input_tokens` defaults to `auto`: proactive
 compaction uses 90% of the resolved hard input budget (rounded down, minimum

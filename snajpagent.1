@@ -2911,7 +2911,10 @@ the save suffix writes the selected model's cached advertised maximum as a
 numeric default. This requires a maximum from the current provider endpoint.
 Invalid context choices and failed configuration writes leave the
 session selection unchanged. Without a context suffix, its current choice is
-preserved.
+preserved and validated against the selected model before saving or switching.
+Use an explicit suffix, such as
+.BR :max ,
+when the inherited choice does not fit the new model.
 .TP
 .BR /fallback " [SELECTOR|off] [save|s]"
 Configure an automatic fallback model for terminal
@@ -3100,6 +3103,16 @@ or configuration save failure leaves the session selection unchanged.
 Edit the configuration with
 .B /config
 to remove a saved override.
+.IP
+If restored settings or refreshed cache limits make the current context invalid,
+interactive execution retains unfinished work and waits for a valid selection.
+Use
+.BR /context ,
+.B /model
+or
+.B /configure
+to correct it. Settings errors consume no automatic retries and send no provider
+request. One-shot execution reports the error and exits with status 2.
 .TP
 .BR /nick " [" NICK "]"
 Show the model and operator nicks, or rename your operator nick on the selected
@@ -3529,8 +3542,9 @@ is literal text.  One-shot argument and stdin prompts also support this prefix.
 .B /retry
 After a turn fails, continue it from retained conversation and tool results.
 The original prompt is not duplicated and completed tools are not replayed.
-Read-only mode is preserved.  Continuation of an unfinished turn keeps its
-frozen provider/model/effort; a new retry turn uses current next-turn settings.
+Read-only mode is preserved. Continuation retains the unfinished turn and
+applies explicit model/context changes before the next request. A new retry
+turn uses current next-turn settings.
 Available in both views and after session resume, until another turn starts.
 In a workspace, retry continues in the submitting pane. When no failed or
 unfinished turn remains, it reports that there is no turn to retry.
@@ -3543,7 +3557,9 @@ With automatic retry enabled, ordinary turns retry failures up to
 additional times (default five), then display the manual retry hint. A repeated identical definitive provider rejection fails at once instead of replaying.
 Automatic retry counts and their original limit survive restart.  A successful
 actionable response or manual retry after terminal failure starts a fresh budget.
-With automatic retry enabled, active goals recover ordinary failures without an attempt limit.  Same-process
+Invalid local model/context settings wait for correction in interactive mode;
+one-shot execution exits with status 2. With automatic retry enabled, active
+goals recover ordinary failures without an attempt limit. Same-process
 recovery retains live command handles; after restart their outcomes are settled
 without reusing old handles. Eligible terminal cyber-policy failures use the
 configured /fallback before policy-stop handling. Remaining policy stops survive

@@ -113,6 +113,7 @@ struct turn_retry {
     enum snag_goal_status goal_status;
     bool pending, new_input;
     bool compaction_bounded;
+    bool settings_invalid;
     char last_failure_code[64];
     char last_failure_type[64];
     char last_failure_message[256];
@@ -411,19 +412,22 @@ snag_app_capacity_resolve(struct app_state *app, const struct snag_provider_conf
 static int
 prepare_turn_settings(struct app_state *app, char *error, size_t error_size)
 {
-    const char *model = app->session.active_turn ? app->session.active_turn_model
-                        : app->session.pending_input
+    /* Validate a requested replacement before the obsolete model's context. */
+    bool use_active = app->session.active_turn && app->session.turn_fallback_active &&
+                      !app->model_switch_requested;
+    bool use_pending = !app->session.active_turn && app->session.pending_input;
+    const char *model = use_active ? app->session.active_turn_model
+                        : use_pending
                             ? snag_json_string(app->session.pending_input, "model")
                             : app->session.default_model;
-    const char *effort_preference = app->session.active_turn ? app->session.active_turn_effort
-                                    : app->session.pending_input
+    const char *effort_preference = use_active ? app->session.active_turn_effort
+                                    : use_pending
                                         ? snag_json_string(app->session.pending_input, "effort")
                                         : app->session.default_effort;
     const char *effort = resolve_effort(effort_preference);
     const struct snag_provider_config *provider =
-        app->session.active_turn
-            ? snag_config_provider(app->config, app->session.active_turn_provider)
-        : app->session.pending_input ? snag_config_provider(app->config,
+        use_active ? snag_config_provider(app->config, app->session.active_turn_provider)
+        : use_pending ? snag_config_provider(app->config,
                                            snag_json_string(app->session.pending_input, "provider"))
                                      : next_provider(app);
     if (!provider) {
@@ -442,9 +446,13 @@ prepare_turn_settings(struct app_state *app, char *error, size_t error_size)
     app->turn_model = app->turn_model_value;
     app->turn_effort = app->turn_effort_value;
     app->turn_provider = provider;
-    if (snag_app_capacity_resolve(app, provider, model, &app->turn_capacity, error, error_size) < 0)
-        return -1;
-    return 0;
+    struct snag_context_choice choice = use_active
+                                           ? app->session.turn_fallback_context
+                                           : (struct snag_context_choice){
+                                                 app->session.context_mode,
+                                                 app->session.context_tokens};
+    return snag_app_context_preview(
+        app, provider, model, &choice, &app->turn_capacity, error, error_size);
 }
 static unsigned int prompt_spinner_states(const struct app_state *app);
 static int set_input_prompt(struct app_state *app, bool active);
@@ -2242,15 +2250,16 @@ commit_model_selection(struct app_state *app, const struct snag_provider_config 
     uint64_t context_tokens = 0u;
     int rc;
 
+    struct snag_context_choice current = {app->session.context_mode, app->session.context_tokens};
+    struct snag_model_capacity capacity;
+    if (save && choice && choice->mode == SNAG_CONTEXT_MODE_DEFAULT) {
+        return app_error(
+            app, "saving a context default requires an explicit token count or max");
+    }
+    if (snag_app_context_preview(app, provider, model, choice ? choice : &current, &capacity,
+            error, sizeof(error)) < 0)
+        return app_error(app, error);
     if (choice) {
-        struct snag_model_capacity capacity;
-        if (save && choice->mode == SNAG_CONTEXT_MODE_DEFAULT) {
-            return app_error(
-                app, "saving a context default requires an explicit token count or max");
-        }
-        if (snag_app_context_preview(app, provider, model, choice, &capacity,
-                error, sizeof(error)) < 0)
-            return app_error(app, error);
         context_tokens = choice->mode == SNAG_CONTEXT_MODE_MAX
                              ? capacity.max_context_window_tokens
                              : choice->tokens;
@@ -2645,8 +2654,9 @@ snag_app_select_model_tool(struct app_state *app, const struct snag_response_ite
     }
     const struct snag_context_choice *choice = selected.context_set ? &selected.context : NULL;
     struct snag_model_capacity capacity;
-    if (choice && snag_app_context_preview(app, selected.provider, selected.model, choice,
-                      &capacity, error, error_size) < 0) {
+    struct snag_context_choice current = {app->session.context_mode, app->session.context_tokens};
+    if (snag_app_context_preview(app, selected.provider, selected.model,
+            choice ? choice : &current, &capacity, error, error_size) < 0) {
         *result = snag_tool_result_terminal(false, error);
         return *result ? 0 : -1;
     }
@@ -5438,15 +5448,24 @@ turn_recovery_wait(struct app_state *app, struct turn_retry *retry)
     enum snag_goal_status initial_goal_status = app->session.goal_status;
     bool goal = initial_goal_status == SNAG_GOAL_ACTIVE;
     bool policy = app->turn_policy_stopped;
+    bool settings = retry->settings_invalid;
     unsigned int delay = app->recovery_delay_ms ? app->recovery_delay_ms : 250u;
     uint64_t deadline = snag_monotonic_ms() + delay;
-    app->recovery_delay_ms = delay < 30000u / 2u ? delay * 2u : 30000u;
+    if (!settings) app->recovery_delay_ms = delay < 30000u / 2u ? delay * 2u : 30000u;
     app->recovery_wait = true;
     /* Retried requests and policy stops remain future steering targets; only
      * foreground slash commands take the composer away. */
-    if (!app->execute) (void)ensure_turn_prompt(app);
+    if (!app->execute &&
+        (settings ? set_input_prompt(app, true) : ensure_turn_prompt(app)) < 0) {
+        app->recovery_wait = false;
+        return -1;
+    }
     app->steering_requested = false;
-    if (policy) {
+    if (settings) {
+        (void)app_warning(app,
+            "Waiting for valid model/context settings; use /context max, /model, or /configure. "
+            "Ctrl-C interrupts; unfinished work is retained.");
+    } else if (policy) {
         (void)app_warning(app,
             "Provider policy rejection; press Ctrl-C, then clarify the task to continue. "
             "Running commands retained.");
@@ -5461,11 +5480,11 @@ turn_recovery_wait(struct app_state *app, struct turn_retry *retry)
                 (unsigned long long)retry->attempts, retry->limit, delay / 1000.0);
         app->recovery_status_ms = snag_monotonic_ms();
     }
-    while (!app->input_closed && (policy || snag_app_retry_allowed(app)) &&
+    while (!app->input_closed && (policy || settings || snag_app_retry_allowed(app)) &&
            (goal ? (app->session.goal_status == SNAG_GOAL_ACTIVE ||
                        (app->session.goal_status == SNAG_GOAL_PAUSED && app->session.process_count))
                  : app->session.goal_status == initial_goal_status) &&
-           (policy || snag_monotonic_ms() < deadline ||
+           (policy || settings || snag_monotonic_ms() < deadline ||
                (goal && app->session.goal_status == SNAG_GOAL_PAUSED))) {
         int rc = snag_app_active_input_pump(app, 25u);
         if (rc == 2) break;
@@ -5476,7 +5495,17 @@ turn_recovery_wait(struct app_state *app, struct turn_retry *retry)
                 return -1;
             }
             if (app->input_closed || app->interrupt_requested) break;
-            if (!app->steering_requested) continue;
+            if (!settings && !app->steering_requested) continue;
+        }
+        if (settings) {
+            char error[256] = {0};
+            if (rc < 0) {
+                app->recovery_wait = false;
+                return -1;
+            }
+            if (prepare_turn_settings(app, error, sizeof(error)) == 0) break;
+            app->steering_requested = false;
+            continue;
         }
         /* A new selection can repair the failed request. No response is open
          * during backoff, so the provider input pump does not wake it for us. */
@@ -5492,7 +5521,7 @@ turn_recovery_wait(struct app_state *app, struct turn_retry *retry)
     }
     app->recovery_wait = false;
     if (app->interrupt_requested || app->input_closed) return 2;
-    if (!policy && !snag_app_retry_allowed(app)) return 3;
+    if (!policy && !settings && !snag_app_retry_allowed(app)) return 3;
     if (policy && app->steering_requested) {
         app->turn_policy_stopped = SNAG_POLICY_STOP_NONE;
         app->steering_requested = false;
@@ -5600,6 +5629,7 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
         select_view(app, SNAG_RENDER_ROLLOUT, false) < 0)
         return 6;
     if (prepare_turn_settings(app, error, sizeof(error)) < 0) {
+        retry->settings_invalid = true;
         (void)app_error(app, error);
         return 2;
     }
@@ -5750,7 +5780,11 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
         app->model_switch_requested = false;
         fallback_started = false;
         if (settings_changed) {
-            if (prepare_turn_settings(app, error, sizeof(error)) < 0) goto fail;
+            if (prepare_turn_settings(app, error, sizeof(error)) < 0) {
+                retry->settings_invalid = true;
+                result = 2;
+                goto report;
+            }
             provider_capacity_source_sha256(
                 app->turn_provider, app->turn_model, provider_source_hash);
             if (!app->execute && set_input_prompt(app, true) < 0) goto fail;
@@ -6691,6 +6725,7 @@ run_tracked_turn(struct app_state *app, const char *prompt, const struct snag_qu
             read_only = queued_copy.read_only;
         }
         retry.pending = false;
+        retry.settings_invalid = false;
         rc = run_turn(
             app, &retry, retained, queued, goal_turn, timer_turn, read_only, retained_content);
         if (app->session.turn_count != turns) queued = NULL;
@@ -6715,11 +6750,12 @@ run_tracked_turn(struct app_state *app, const char *prompt, const struct snag_qu
             if (wait_rc == 0 && !app->turn_policy_stopped) continue;
         }
         bool goal = app->session.goal_status == SNAG_GOAL_ACTIVE && snag_app_retry_allowed(app);
-        if (app->turn_policy_stopped || (!goal && !retry.pending) || app->input_closed ||
+        if (app->turn_policy_stopped || (retry.settings_invalid && app->execute) ||
+            (!retry.settings_invalid && !goal && !retry.pending) || app->input_closed ||
             app->interrupt_requested || rc == 0 ||
             (rc == SNAG_APP_INPUT_READY && !app->session.active_turn))
             break;
-        if (!goal) ++retry.attempts;
+        if (!goal && !retry.settings_invalid) ++retry.attempts;
         int wait_rc = turn_recovery_wait(app, &retry);
         if (wait_rc < 0) {
             rc = 3;
@@ -7596,8 +7632,9 @@ run_owner(const struct snag_cli *cli, const char *program, struct snag_session_p
         new_model = effective_model(selection.model);
         new_effort = cli->effort ? cli->effort : selection.effort;
         struct snag_model_capacity capacity;
-        if (selection.context_set &&
-            snag_app_context_preview(&app, selection.provider, new_model, &selection.context,
+        struct snag_context_choice current = {app.session.context_mode, app.session.context_tokens};
+        if (snag_app_context_preview(&app, selection.provider, new_model,
+                selection.context_set ? &selection.context : &current,
                 &capacity, error, sizeof(error)) < 0)
             goto invalid;
     }
