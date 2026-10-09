@@ -6609,12 +6609,12 @@ Ordinary messages, summary text and paired tool results remain available across
 model switches.  The covered compaction boundary remains durable while opaque
 private compact items from another binding are omitted.  The selected binding
 performs any required tail compaction or summary reduction against its own
-capacity; the previous binding is not restored for request preparation.  A
-smaller target context may require several bounded chunks, each advancing the
-saved boundary.  Failed and cancelled turns retain that progress and the
-selected model across resume, and completed tools are never re-executed.
-If reconstruction exceeds the 32 MiB request limit, the selected model first
-compacts a bounded history prefix. A request that still cannot fit uses the
+capacity. Failed and cancelled turns retain that progress and the selected
+model across resume, and completed tools are never re-executed.
+If an encrypted summary cannot cross a model or provider change, restored
+history is checked against the selected context estimate before upload.
+Reconstruction above that window or the 32 MiB request limit first compacts a
+bounded history prefix. A rebuilt request that remains too large uses the
 current-turn recovery context and can retrieve older journal history with tools.
 The full history remains saved. If even this recovery request is too large, the
 turn stops instead of repeating the same local failure.

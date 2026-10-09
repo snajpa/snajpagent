@@ -672,15 +672,17 @@ snag_app_measured_input(struct app_state *app, uint64_t *tokens)
 }
 
 static uint64_t
-context_estimate(const struct app_state *app, const struct snag_input_observation *input)
+context_estimate(const struct app_state *app, const struct snag_provider_config *provider,
+    const char *model, const char *effort, uint64_t bytes)
 {
     const struct snag_input_observation *anchor = &app->session.usage_anchor;
-    long double estimate = (long double)input->model_input_bytes / 4.0L;
+    char source[SNAG_SHA256_HEX_LEN + 1u];
+    provider_capacity_source_sha256(provider, model, source);
+    long double estimate = (long double)bytes / 4.0L;
     if (anchor->input_tokens && anchor->model_input_bytes &&
-        snag_input_observation_matches(anchor, input->provider, input->model, input->effort,
-            input->provider_source_sha256, anchor->compact_id))
-        estimate = (long double)input->model_input_bytes * anchor->input_tokens /
-                   anchor->model_input_bytes;
+        snag_input_observation_matches(anchor, provider->name, model, effort,
+            source, anchor->compact_id))
+        estimate = (long double)bytes * anchor->input_tokens / anchor->model_input_bytes;
     if (estimate >= (long double)UINT64_MAX) return UINT64_MAX;
     uint64_t rounded = (uint64_t)estimate;
     return rounded + (estimate > (long double)rounded);
@@ -694,7 +696,8 @@ context_observe(struct app_state *app, const char *type, const json_t *data)
         const char *method = snag_json_string(data, "count_method");
         app->prompt_context_estimated = strcmp(method, "exact") != 0;
         if (!strcmp(method, "unknown"))
-            app->prompt_context.input_tokens = context_estimate(app, &app->prompt_context);
+            app->prompt_context.input_tokens = context_estimate(app, app->turn_provider,
+                app->turn_model, app->turn_effort, app->prompt_context.model_input_bytes);
         app->prompt_context_output_bytes = 0u;
         app->prompt_context_output_tokens = 0u;
         app->prompt_context_output_known = false;
@@ -732,7 +735,8 @@ context_preview(struct app_state *app, const struct snag_provider_config *provid
         provider_capacity_source_sha256(provider, model, input.provider_source_sha256);
         memcpy(input.compact_id, app->session.compact_id, sizeof(input.compact_id));
         input.model_input_bytes = projection.model_input.bytes;
-        input.input_tokens = context_estimate(app, &input);
+        input.input_tokens =
+            context_estimate(app, provider, model, effort, input.model_input_bytes);
         input.valid = true;
         app->prompt_context = input;
         app->prompt_context_estimated = true;
@@ -5555,6 +5559,7 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
     char rejected_request_hash[SNAG_SHA256_HEX_LEN + 1u] = {0};
     char over_budget_request_hash[SNAG_SHA256_HEX_LEN + 1u] = {0};
     unsigned int hard_compaction_attempts = 0u, cyber_clarifications = 0u;
+    bool request_size_recovery = false;
     bool continuing = app->session.active_turn;
     bool fallback_started = false;
     unsigned int next_cycle = continuing ? app->session.active_cycle + 1u : 1u;
@@ -5790,21 +5795,34 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
             minimal_rebased_request ||
             (app->history_orientation == SNAG_HISTORY_ORIENTATION_RECOVERY &&
                 app->history_recovery_rebase);
-        if (snag_app_request_build(app, steering, cycle, &credential, &projection, &count_method,
-                &request_body, error, sizeof(error)) < 0) {
+        int build_rc = snag_app_request_build(app, steering, cycle, &credential, &projection,
+            &count_method, &request_body, error, sizeof(error));
+        bool request_oversized = build_rc < 0 && errno == E2BIG;
+        if (build_rc == 0 && projection.restored_compacted_history) request_size_recovery = true;
+
+        /* Reconstructed archives can exceed the selected window while fitting
+         * the wire cap. Prepare them before either provider endpoint sees them.
+         * The estimate selects recovery; it never rejects a minimal request. */
+        if (build_rc == 0 && request_size_recovery && !pure_history_recovery &&
+            app->turn_capacity.hard_input_known &&
+            context_estimate(app, app->turn_provider, app->turn_model, app->turn_effort,
+                projection.model_input.bytes) > app->turn_capacity.hard_input_tokens)
+            request_oversized = true;
+        if (build_rc < 0 || request_oversized) {
             bool image_boundary =
-                errno == EFBIG && strstr(error, "Image request exceeds 12 MiB") != NULL;
+                build_rc < 0 && errno == EFBIG &&
+                strstr(error, "Image request exceeds 12 MiB") != NULL;
             if (app->interrupt_requested) goto user_interrupted;
             if (image_boundary && !pure_history_recovery) {
                 app->history_orientation = SNAG_HISTORY_ORIENTATION_RECOVERY;
                 app->history_recovery_rebase = true;
                 goto rebuild_request;
             }
-            if (errno == E2BIG && !pure_history_recovery) {
-                /* A model change can invalidate an opaque compact and restore
-                 * an archive larger than the request limit. Compact a bounded
-                 * prefix before projection; token counting cannot run yet. */
+            if (request_oversized && !pure_history_recovery) {
+                /* One bounded compact gets a chance to preserve the archive.
+                 * Recheck its rebuilt size before choosing history recovery. */
                 bool compacted = false;
+                request_size_recovery = true;
                 int compact_rc = hard_compaction_attempts ? 0 :
                     snag_app_compact_oversized_request(app, &credential,
                         &compacted, error, sizeof(error));
@@ -5822,7 +5840,7 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
                     goto rebuild_request;
                 }
                 if (app->compaction_bounded) retry->compaction_bounded = true;
-            } else if (errno == E2BIG) {
+            } else if (request_oversized) {
                 /* Even the current-turn recovery envelope cannot fit. Repeating
                  * the identical local projection cannot make progress. */
                 retry->compaction_bounded = true;
@@ -6259,6 +6277,7 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
          * provider response is genuine progress; its new tool/assistant group
          * may need another checkpoint later instead of a summary-less rebase. */
         hard_compaction_attempts = 0u;
+        request_size_recovery = false;
         over_budget_request_hash[0] = '\0';
         {
             struct snag_usage_totals *totals = &app->program_usage;

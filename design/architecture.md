@@ -366,12 +366,16 @@ turn. The shared prompt refreshes at the same request boundary as credentials,
 capacity and provider selection. No alternate transport or credential path exists.
 
 A request projection exceeding the 32 MiB wire bound returns `E2BIG` before
-provider counting. The turn owner runs one bounded prefix compaction under the
-selected binding, then rebuilds. If it still exceeds the bound, existing
-current-turn history recovery supplies the journal orientation and retained
-active work. An oversized minimal recovery envelope is terminal for automatic
-retry. This covers model switches that invalidate an encrypted compact and
-require archive reconstruction; completed tools stay durable throughout.
+provider counting. The projector also reports reconstruction of history from an
+incompatible encrypted summary. Before upload, the turn owner compares that
+projection with the selected hard window using the shared context estimate.
+Either size trigger runs one bounded prefix compaction under the selected
+binding, then rebuilds. If the rebuilt projection still exceeds the wire bound
+or estimated window, existing current-turn history recovery supplies the journal
+orientation and retained active work. An oversized minimal recovery envelope is terminal for automatic
+retry only at the wire bound; an estimate prepares history and never certifies
+overflow of current input. Small restored histories and portable summaries retain
+their ordinary path. Completed tools stay durable throughout.
 
 A pre-output
 `context_length_exceeded` closes the open response with the durable

@@ -51,7 +51,7 @@ def expand_history(journal, turns):
                 previous = event
 
 
-def check(binary, native, turns=20):
+def check(binary, native, turns=20, context=12000000):
     provider = FakeResponses()
     summaries = []
     def compact(handler, request):
@@ -93,7 +93,7 @@ def check(binary, native, turns=20):
             try:
                 child.until('›'.encode(), timeout=30)
                 print('compact owner ready', flush=True)
-                old_compacts = 1 if turns == 20 else 5
+                old_compacts = 5 if turns == 26 else 1
                 for _ in range(old_compacts):
                     child.output.clear()
                     os.write(child.master, b'/compact\r')
@@ -113,16 +113,26 @@ def check(binary, native, turns=20):
                  for e in read_events(journal) if e['type'].startswith('compaction_') or
                  e['type'] == 'context_rebased'],
                 [(len(json.dumps(r).encode()), len(r['input'])) for r in summaries])
-            result = run('-m', 'fake/two-model/high:872000', '-e', '--', 'new model continuation')
-            assert b'Compacted' in result.stderr + result.stdout
-            assert len(summaries) >= 2
-            assert all(len(json.dumps(r).encode()) < 12 * 1024 * 1024 for r in summaries)
+            result = run('-m', f'fake/two-model/high:{context}', '-e', '--',
+                         'new model continuation')
             request = provider.requests[-1]['body']
+            if turns in (3, 14):
+                request_bytes = len(json.dumps(request).encode())
+                assert request_bytes < context * 4, (
+                    'restored archive was sent before context recovery', request_bytes, context)
+            if turns == 3:
+                assert len(summaries) == old_compacts
+            else:
+                assert b'Compacted' in result.stderr + result.stdout
+                assert len(summaries) >= 2
+            assert all(len(json.dumps(r).encode()) < 12 * 1024 * 1024 for r in summaries)
             assert request['model'] == 'two-model'
             assert 'new model continuation' in json.dumps(request['input'])
             assert 'opaque-host-model' not in json.dumps(request['input'])
             events = read_events(journal)
-            if turns == 20:
+            if turns == 3:
+                assert not any(e['type'] == 'context_rebased' for e in events)
+            elif turns == 20:
                 assert 'opaque-two-model' in json.dumps(request['input'])
                 assert not any(e['type'] == 'context_rebased' for e in events)
             else:
@@ -131,7 +141,7 @@ def check(binary, native, turns=20):
             assert not any(e['type'] in ('turn_failed', 'turn_recovery') for e in events)
             assert events[-1]['type'] != 'turn_failed'
             assert provider.failure is None, provider.failure
-            print('projection overflow', 'native' if native else 'legacy', turns, 'PASS', flush=True)
+            print('projection recovery', 'native' if native else 'legacy', turns, 'PASS', flush=True)
     finally:
         provider.close()
 
@@ -141,3 +151,5 @@ if __name__ == '__main__':
     for native in (False, True):
         check(binary, native)
     check(binary, True, 26)
+    check(binary, True, 14, 872000)
+    check(binary, True, 3, 872000)

@@ -56,6 +56,7 @@ struct snag_context_projection {
     size_t request_input_bytes;
     size_t request_input_count;
     size_t request_controller_count;
+    bool restored_compacted_history;
     uint64_t input_tokens_bound;
     uint64_t irc_seq;
     uint64_t irc_boundary, irc_count;

@@ -8,7 +8,9 @@
   retaining send delivery state. Repeated equal messages remain separate.
 - Recover a request over the 32 MiB wire bound through bounded compaction and
   current-turn history recovery, including switches from an incompatible opaque
-  summary. Stop unchanged retries if the recovery envelope itself cannot fit.
+  summary. Check restored histories against the selected context estimate before
+  upload even below the wire bound. Stop unchanged retries if the recovery
+  envelope itself cannot fit.
 
 - Configure `/fallback SELECTOR [save|s]` for automatic authorized cyber-model
   routing after a terminal `cyber_policy` error. The fallback finishes the turn,
