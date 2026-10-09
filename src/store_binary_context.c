@@ -46,6 +46,16 @@ struct source_selection {
     size_t matched;
 };
 
+static bool
+prompt_names_event(const char *prompt, const struct snag_irc_event *event)
+{
+    if (!prompt || !event->input || !event->stream[0] || !event->sequence) return false;
+    char reference[SNAG_ID_HEX_LEN + 48u];
+    (void)snprintf(reference, sizeof(reference), "[IRC update id=%s:%llu ",
+        event->stream, (unsigned long long)event->sequence);
+    return strstr(prompt, reference) != NULL;
+}
+
 static int
 select_source(struct source_selection *selection, uint64_t sequence,
     const char *type, json_t *data)
@@ -56,11 +66,7 @@ select_source(struct source_selection *selection, uint64_t sequence,
     if (selection->prompt && snag_string_in(type, "irc_event irc_event_v2")) {
         struct snag_irc_event event;
         if (snag_irc_event_record_read(type, data, &event) < 0) return -1;
-        char reference[SNAG_ID_HEX_LEN + 48u];
-        (void)snprintf(reference, sizeof(reference), "[IRC update id=%s:%llu ",
-            event.stream, (unsigned long long)event.sequence);
-        selection->matched += event.input && event.stream[0] && event.sequence &&
-            strstr(selection->prompt, reference) != NULL;
+        selection->matched += prompt_names_event(selection->prompt, &event);
     }
     if (sequence > INT64_MAX) return snag_errno(EOVERFLOW);
     json_t *row = json_pack("{s:I,s:s,s:o}", "seq", (json_int_t)sequence,
@@ -158,6 +164,31 @@ prompt_dependency(struct source_selection *selection, uint64_t sequence)
 done:
     snag_buf_free(&scratch);
     snag_buf_free(&flat);
+    return rc;
+}
+
+/* Older catch-up handling could put an already admitted reference into a later
+ * prompt without including its ordinal in that prompt's admission. Authenticate
+ * those sources from the journal and retain their locations for the next save. */
+static int
+recover_prompt_source(void *opaque, const struct snag_binary_record *record, uint64_t sequence)
+{
+    struct source_selection *selection = opaque;
+    if (record->kind != SNAG_BINARY_IRC_EVENT && record->kind != SNAG_BINARY_IRC_EVENT_V2)
+        return 0;
+    char key[32];
+    (void)snprintf(key, sizeof(key), "%llu", (unsigned long long)sequence);
+    if (json_object_get(selection->seen, key)) return 0;
+    const struct source_walk *source = selection->source;
+    const char *type = NULL;
+    json_t *data = NULL;
+    int rc = snag_binary_checkpoint_record_project(source->fd, source->verified,
+        NULL, record, sequence, &type, &data);
+    struct snag_irc_event event;
+    if (!rc) rc = snag_irc_event_record_read(type, data, &event);
+    if (!rc && prompt_names_event(selection->prompt, &event))
+        rc = prompt_dependency(selection, sequence);
+    json_decref(data);
     return rc;
 }
 
@@ -396,6 +427,10 @@ walk_selected_sources(const struct source_walk *source, const json_t *wanted,
              * Only the structured stream-reference prefix names this lookup. */
             expected += digits && counter[digits] == ' ';
         }
+        if (selection.matched < expected &&
+            snag_binary_checkpoint_records_read(source->fd, source->verified, NULL,
+                1u, source->verified->next_seq, recover_prompt_source,
+                source_selection_cancelled, &selection) < 0) goto done;
         if (selection.matched != expected) {
             snag_fail(error, error_size, ENOENT, "current IRC source closure unavailable");
             goto done;
@@ -1040,6 +1075,79 @@ done:
     return rc;
 }
 
+/* A missing derived index must not turn successful checkpoint recovery into a
+ * history replay failure. Rebuild it off to the side from authenticated batches
+ * and publish only after its complete frontier agrees with the recovered state. */
+static int
+rebuild_history_index(struct snag_session *session, const struct snag_binary_anchor *through,
+    const struct snag_binary_index_tree *frontier, const struct snag_context_control *control)
+{
+    char id[SNAG_ID_HEX_LEN + 1u];
+    char name[SNAG_ID_HEX_LEN + sizeof(".history-index-")];
+    if (snag_random_id(id) < 0) return -1;
+    (void)snprintf(name, sizeof(name), ".history-index-%s", id);
+    int fd = snag_create_private_at(session->dir_fd, name, true);
+    if (fd < 0) return -1;
+    bool staged = true;
+    struct snag_buf scratch = {.max = SNAG_BINARY_BATCH_MAX};
+    struct snag_buf bytes = {.max = SNAG_BINARY_INDEX_TREE_BATCH_MAX};
+    struct snag_binary_identity identity;
+    struct snag_binary_anchor cursor;
+    struct snag_binary_index_tree tree = {0};
+    int rc = -1;
+    if (source_header(session->log_fd, &identity, &cursor) < 0) goto done;
+    unsigned char header[SNAG_BINARY_INDEX_HEADER_SIZE];
+    snag_binary_index_header_encode(header, &identity);
+    if (snag_write_full(fd, header, sizeof(header)) < 0) goto done;
+    while (cursor.end < through->end) {
+        if (control && control->cancelled && control->cancelled(control->opaque)) {
+            snag_errno(ECANCELED);
+            goto done;
+        }
+        struct snag_binary_batch batch;
+        struct snag_binary_anchor after;
+        int read = snag_binary_batch_read(session->log_fd, through->end,
+            &cursor, &scratch, &batch, &after);
+        if (read != 0) {
+            if (read > 0) snag_errno(EIO);
+            goto done;
+        }
+        snag_buf_reset(&bytes);
+        if (snag_binary_index_tree_append_batch(&bytes, &tree, &identity,
+                &cursor, &after, batch.data, batch.size) < 0 ||
+            snag_write_full(fd, bytes.data, bytes.len) < 0) goto done;
+        cursor = after;
+    }
+    unsigned char actual[32];
+    unsigned char expected[32];
+    if (snag_binary_index_tree_root(&tree, actual) < 0 ||
+        snag_binary_index_tree_root(frontier, expected) < 0) goto done;
+    if (!same_anchor(&cursor, through) || tree.count != frontier->count ||
+        memcmp(actual, expected, sizeof(actual))) {
+        snag_errno(EINVAL);
+        goto done;
+    }
+    if (control && control->cancelled && control->cancelled(control->opaque)) {
+        snag_errno(ECANCELED);
+        goto done;
+    }
+    if (snag_sync_file(fd) < 0 ||
+        snag_rename_at(session->dir_fd, name, session->dir_fd, "history.idx") < 0) goto done;
+    staged = false;
+    if (snag_sync_dir(session->dir_fd) < 0) goto done;
+    rc = 0;
+done:
+    {
+        int saved = errno;
+        snag_buf_free(&scratch);
+        snag_buf_free(&bytes);
+        if (rc < 0) (void)close(fd);
+        if (staged) (void)snag_unlink_at(session->dir_fd, name, false);
+        errno = saved;
+    }
+    return rc < 0 ? -1 : fd;
+}
+
 int
 snag_store_load_binary_session(struct snag_session *session, enum snag_tail_policy policy,
     char *error, size_t error_size)
@@ -1113,10 +1221,29 @@ snag_store_load_binary_session(struct snag_session *session, enum snag_tail_poli
             error, error_size) < 0) goto done;
     if (!candidate->snapshot_read_only) {
         int index = snag_open_private_append_at(candidate->dir_fd, "history.idx", false);
-        if (index < 0 && errno == ENOENT)
-            index = snag_open_private_append_at(candidate->dir_fd, "history.idx", true);
+        bool rebuild = index < 0 && errno == ENOENT;
+        char index_error[128];
         if (index >= 0) {
-            char index_error[128];
+            snag_file_info info;
+            if (snag_store_verify_private_fd(index, false, "native index", index_error,
+                    sizeof(index_error)) < 0 || snag_fstat(index, &info) < 0) {
+                (void)close(index);
+                index = -1;
+            } else if (info.st_size == 0) {
+                (void)close(index);
+                index = -1;
+                rebuild = true;
+            }
+        }
+        if (rebuild) {
+            index = rebuild_history_index(candidate, &recovery.verified, &admission.tree, &control);
+            if (index < 0) {
+                snag_errorf(error, error_size, "cannot rebuild native history index: %s",
+                    strerror(errno));
+                goto done;
+            }
+        }
+        if (index >= 0) {
             if (snag_store_verify_private_fd(index, false, "native index", index_error,
                     sizeof(index_error)) < 0 ||
                 snag_session_binary_index_adopt(candidate, index,

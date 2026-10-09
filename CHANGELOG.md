@@ -4,6 +4,11 @@
 
 ## Unreleased
 
+- Resume compacted IRC turns whose input includes already admitted catch-up
+  messages. Recover their verified journal sources and retain them on save;
+  keep newly admitted catch-up out of later pending input batches. Rebuild a
+  missing or empty history index so resumed history remains readable.
+
 - Apply model changes immediately during automatic retry backoff, preserving
   the unfinished turn and goal status while updating the request and prompt.
 

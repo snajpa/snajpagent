@@ -5033,8 +5033,22 @@ checkpoint_prompt_source(struct snag_session *session, uint64_t observed)
     assert(found);
 }
 
+static int
+count_resumed_history(void *opaque, const struct snag_session *state, uint64_t sequence,
+    const char *type, const json_t *data, char *error, size_t error_size)
+{
+    (void)state;
+    (void)sequence;
+    (void)type;
+    (void)data;
+    (void)error;
+    (void)error_size;
+    ++*(size_t *)opaque;
+    return 0;
+}
+
 static void
-test_compacted_irc_turn_resume(struct snag_store *store, const char *cwd)
+test_compacted_irc_turn_resume(struct snag_store *store, const char *cwd, bool catchup)
 {
     struct snag_session session;
     snag_session_init(&session);
@@ -5046,9 +5060,22 @@ test_compacted_irc_turn_resume(struct snag_store *store, const char *cwd)
     struct snag_irc_event event = {.kind = SNAG_IRC_MESSAGE, .timestamp_ms = 1u,
         .stream = OTHER_ID, .sequence = 1u, .input = true, .endpoint = "fixture",
         .room = "#fixture", .nick = "operator", .op = true};
+    struct snag_buf prompt = {.max = SNAG_MAX_DIRECT_PROMPT};
+    uint64_t historical = 0u;
+    if (catchup) {
+        /* Older writers admitted catch-up immediately but left its reference
+         * in the batch that later became a new input, without that ordinal. */
+        event.historical = true;
+        assert(snag_strcpy(event.text, sizeof(event.text), "previously admitted history"));
+        historical = commit_data(&session, "irc_event", snag_irc_event_data(&event));
+        commit_data(&session, "irc_admitted", json_pack("{s:[I]}",
+            "sequences", (json_int_t)historical));
+        assert(!snag_irc_event_reference(&prompt, &event));
+        event.historical = false;
+        ++event.sequence;
+    }
     assert(snag_strcpy(event.text, sizeof(event.text), "original turn input"));
     uint64_t observed = commit_data(&session, "irc_event", snag_irc_event_data(&event));
-    struct snag_buf prompt = {.max = SNAG_MAX_DIRECT_PROMPT};
     assert(!snag_irc_event_reference(&prompt, &event) && !snag_buf_terminate(&prompt));
     json_t *paths = checked_json(json_array());
     json_t *input = input_data((const char *)prompt.data, false, paths);
@@ -5078,18 +5105,35 @@ test_compacted_irc_turn_resume(struct snag_store *store, const char *cwd)
         commit_data(&session, "retry_auto_changed", json_pack("{s:s}", "value", "on"));
     start_compact_fixture(&session, "cccccccccccccccccccccccccccccccc", NULL);
     finish_compact_fixture(&session, NULL, "fixture compacted context");
-    compacted_prompt_compatibility(&session, observed);
+    compacted_prompt_compatibility(&session, historical ? historical : observed);
     checkpoint_prompt_source(&session, observed);
     commit_data(&session, "retry_auto_changed", json_pack("{s:s}", "value", "off"));
     int directory = dup(session.dir_fd);
     assert(directory >= 0);
     snag_session_close(&session);
-    assert(!snag_unlink_at(directory, "history.idx", false));
+    if (catchup) {
+        int index = snag_open_private_append_at(directory, "history.idx", false);
+        assert(index >= 0 && !snag_truncate(index, 0) && !close(index));
+    } else {
+        assert(!snag_unlink_at(directory, "history.idx", false));
+    }
     assert(!close(directory));
     snag_session_init(&session);
     int rc = snag_session_open(store, &session, id, error, sizeof(error));
     if (rc < 0) fprintf(stderr, "compacted IRC turn: %s\n", error);
     assert(!rc && session.active_turn && !strcmp(session.active_prompt, (const char *)prompt.data));
+    size_t history_count = 0u;
+    struct snag_session history_view;
+    snag_session_init(&history_view);
+    bool incomplete = false;
+    assert(!snag_session_history_snapshot(store, &history_view, id, &incomplete,
+        error, sizeof(error)) && !incomplete);
+    struct snag_journal_cursor cursor = {0};
+    assert(!snag_session_each_event_forward(&history_view, &cursor, SIZE_MAX,
+        count_resumed_history, &history_count, error, sizeof(error)));
+    assert(cursor.next_seq == history_view.next_seq);
+    assert(history_count > SNAG_CONTEXT_COMPACT_OVERLAP_EVENTS);
+    snag_session_close(&history_view);
     const json_t *recent, *history;
     assert(!snag_context_capture_seam(&session, &recent, &history));
     bool found = false;
@@ -5101,6 +5145,7 @@ test_compacted_irc_turn_resume(struct snag_store *store, const char *cwd)
         }
     }
     assert(found);
+    if (historical) checkpoint_prompt_source(&session, historical);
     assert(!snag_session_checkpoint(&session, error, sizeof(error)));
     snag_session_close(&session);
     snag_session_init(&session);
@@ -5114,7 +5159,8 @@ void
 test_store_binary_replay(struct snag_store *store, const char *cwd)
 {
     test_live_native_snapshot(store, cwd);
-    test_compacted_irc_turn_resume(store, cwd);
+    test_compacted_irc_turn_resume(store, cwd, false);
+    test_compacted_irc_turn_resume(store, cwd, true);
     test_irc_admission_after_checkpoint(store, cwd, true, false);
     test_irc_admission_after_checkpoint(store, cwd, false, false);
     test_irc_admission_after_checkpoint(store, cwd, true, true);

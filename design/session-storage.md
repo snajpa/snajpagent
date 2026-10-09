@@ -2195,6 +2195,13 @@ compaction remove that receipt from recent provider context. For older images,
 pinned recovery verifies that receipt's input against the exact active prompt,
 authenticates its missing source points through the journal, and adds the proven
 locations to the owner's in-memory access table for subsequent checkpoints.
+Older catch-up handling could admit a historical message immediately while also
+leaving its reference in a later input batch, without its ordinal in that batch's
+admission. If the active prompt still lacks sources after receipt lookup, recovery
+scans verified journal records for the exact input stream/sequence references.
+Only matching sources enter the retained history and access table; the complete
+reference count must agree before adoption. Subsequent checkpoints retain these
+sources. Current catch-up admission bypasses the pending input buffer.
 Other missing required old points remain errors. Suffix locations missing from a
 rebuilt derived index use the already bounded journal suffix during capture.
 
@@ -3305,8 +3312,13 @@ index-writer operations fail EROFS. They never acquire/close another owner's loc
 or alter the journal, images or derived index.
 
 The live opener installs authenticated slot generations/ordinals and owns its
-attached derived-index descriptor. Failure to attach the cache leaves canonical
-state available with index lookup unavailable. Native close drains I/O before
+attached derived-index descriptor. A missing or empty history index is rebuilt
+under the writer lock by streaming authenticated batches into a private temporary
+file. Its complete anchor and index root must match recovered state before sync
+and atomic replacement; cancellation or a mismatch leaves the original index
+unchanged. This recovery scan uses bounded batch scratch. Read-only snapshots do
+not rebuild caches. Rebuild failure stops open with its error; other failures to
+attach an existing cache leave canonical state available with index lookup unavailable. Native close drains I/O before
 closing an adopted index and the opener's journal/lock/directory. Confirmed
 deletion closes that owner before unlinking the exact native files. Once the
 canonical journal is removed, the private trash name retains deletion intent;

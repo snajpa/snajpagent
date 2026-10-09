@@ -453,6 +453,41 @@ class ChannelTests(ChannelFixture):
                 self.assertEqual(events[0]['historical'], historical)
                 self.assertEqual(events[0]['room'], '#side')
 
+    def test_catchup_is_admitted_once_outside_later_input_batch(self):
+        def respond(handler, request, sequence):
+            self.seen.append(request)
+            if self.provider.latest_user(request) == 'hold-catchup':
+                self.held.set()
+                assert self.release.wait(15), 'catch-up fixture was not released'
+            self.provider.reply(handler, self.provider.response_body(
+                sequence, 'catch-up boundary').encode(), close_header=True)
+            handler.close_connection = True
+
+        self.provider.runtime_handler = respond
+        self.command('/rollout', 'host-model/medium')
+        self.term.write(b'hold-catchup\r')
+        self.wait(self.held.is_set)
+        self.server.send('queryop', ':fake BATCH +old chathistory #side\r\n'
+            '@batch=old;saj-id=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:21;saj-kind=message;saj-op=0 '
+            ':peer!u@fake PRIVMSG #side :saved-catchup-body\r\n'
+            ':fake BATCH -old\r\n'
+            ':peer!u@fake PRIVMSG #side :fresh-channel-body\r\n')
+        self.wait(lambda: any(e['data'].get('text') == 'fresh-channel-body'
+                             for e in self.events()))
+        history = next(e for e in self.events()
+                       if e['data'].get('text') == 'saved-catchup-body')
+        self.assertTrue(history['data']['historical'])
+        self.release.set()
+        self.wait(lambda: 'fresh-channel-body' in json.dumps(self.seen))
+        self.wait_idle()
+        admissions = [e['data'] for e in self.events() if e['type'] == 'irc_admitted']
+        self.assertEqual(sum(history['seq'] in e['sequences'] for e in admissions), 1)
+        reference = '[IRC update id=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:21 '
+        for admission in admissions:
+            for kind in ('input', 'steering'):
+                self.assertNotIn(reference, admission.get(kind, {}).get('text', ''))
+        self.assertIn('saved-catchup-body', json.dumps(self.seen))
+
     def test_completion_uses_case_rules_and_removes_departed_nicks(self):
         self.server.send('queryop', ':fake 005 queryop CASEMAPPING=ascii :supported\r\n'
                          ':fake 353 queryop = #side :@queryop member[one\r\n'
