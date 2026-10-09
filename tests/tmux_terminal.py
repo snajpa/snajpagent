@@ -411,29 +411,36 @@ class FakeResponses:
         self.reply(handler, body)
 
     def output_cap_body(self, request, sequence, prompt):
-        _, ceiling, selected = prompt.split()
+        _, ceiling, selected = prompt.split(maxsplit=2)
         ceiling, selected = int(ceiling), json.loads(selected)
-        effective = min(ceiling, selected if selected is not None else ceiling)
+        key = "max_output_bytes"
+        if isinstance(selected, dict):
+            key, selected = next(iter(selected.items()))
+        requested = selected * 4 if selected is not None and key == "max_output_approx_tokens" else selected
+        effective = min(ceiling, requested if requested is not None else ceiling)
         for tool in request["tools"]:
             if tool.get("name") in ("exec_command", "write_stdin"):
                 assert tool["parameters"]["properties"]["max_output_bytes"][
                     "maximum"] == 4000000000
+                assert tool["parameters"]["properties"]["max_output_approx_tokens"][
+                    "maximum"] == 1000000000
                 assert f"Output ceiling ({ceiling})" in tool["description"]
         outputs = [item["output"] for item in request["input"]
                    if item.get("type") == "function_call_output"]
         if outputs:
             assert len(outputs) == 1 and len(outputs[0].encode()) <= effective
             assert f"max_output_bytes={effective}" in outputs[0]
-            if selected is not None and selected > ceiling:
+            if requested is not None and requested > ceiling:
                 controls = str([i for i in request["input"] if i.get("role") == "system" or
                                 str(i.get("content", "")).startswith("[snajpagent host continuation —")])
-                assert f"Requested max_output_bytes={selected}" in controls
+                reported_key = key if key == "max_output_approx_tokens" else "max_output_bytes"
+                assert f"Requested {reported_key}={selected}" in controls
                 assert f"applied max_output_bytes={effective}" in controls
             return self.response_body(sequence, "tool cap confirmed")
         return self.function_body(sequence, "call_cap", "exec_command", {
             "command": "printf '%08000d' 0", "workdir": str(self.tool_workspace),
             "stdin": None, "pty": False, "timeout_ms": None, "yield_ms": 1000,
-            "max_output_bytes": selected,
+            key: selected,
         })
 
     def multi_tool_body(self, request, sequence, prompt):
@@ -5300,7 +5307,11 @@ def run_output_cap_cases(binary, root, provider, environment):
                                        ("above", 1234, 9999),
                                        ("below", 1234, 512),
                                        ("legacy", 1234, 9999),
-                                       ("per-model", 1234, None)):
+                                       ("per-model", 1234, None),
+                                       ("tokens-below", 1232, {"max_output_approx_tokens": 128}),
+                                       ("tokens-above", 1232, {"max_output_approx_tokens": 3000}),
+                                       ("tokens-null", 1233, {"max_output_approx_tokens": None}),
+                                       ("tokens-model", 1232, {"max_output_approx_tokens": 308})):
         case = root / ("cap-" + name)
         workspace = case / "work"
         workspace.mkdir(mode=0o700, parents=True)
@@ -5310,10 +5321,13 @@ def run_output_cap_cases(binary, root, provider, environment):
         model_key = "max_output_tokens" if name == "legacy" else "tool_output_bytes"
         display_key = "max_output_bytes" if name == "legacy" else "display_output_bytes"
         settings = f"[tool]\n{display_key} = 17\n"
-        if name == "per-model":
+        if name in ("per-model", "tokens-model"):
             settings += "tool_output_bytes = 7000\n[model-limit fake/host-model]\n"
         if configured:
-            settings += f"{model_key} = {configured}\n"
+            if name in ("tokens-below", "tokens-above", "tokens-model"):
+                settings += f"tool_output_approx_tokens = {configured // 4}\n"
+            else:
+                settings += f"{model_key} = {configured}\n"
         config.write_text(config.read_text() + settings, encoding="utf-8")
         ceiling = configured or 6000
         with TmuxTerminal(case / "terminal", binary, workspace,
@@ -5323,7 +5337,10 @@ def run_output_cap_cases(binary, root, provider, environment):
             terminal.submit_wait(f"tool-cap {ceiling} {json.dumps(selected)}", "tool cap confirmed")
             _, events = wait_for_terminal_event(terminal.dotdir, {"turn_completed"}, 5.0)
             result = event_list(events, "tool_finished")[0]["data"]["result"]
-            assert result["max_output_tokens"] == min(ceiling, selected or ceiling)
+            requested = next(iter(selected.values())) if isinstance(selected, dict) else selected
+            if isinstance(selected, dict) and requested is not None:
+                requested *= 4
+            assert result["max_output_tokens"] == min(ceiling, requested or ceiling)
             chunks = event_list(events, "process_output")
             assert "".join(event["data"]["data"] for event in chunks) == "0" * 8000
             assert result["stdout"]["original_bytes"] == 8000

@@ -1,9 +1,11 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "http.h"
+#include "fs.h"
 
+#include <errno.h>
 #include <pthread.h>
-#include <stdlib.h>
 #include <stdint.h>
+#include <stdlib.h>
 
 static pthread_once_t once = PTHREAD_ONCE_INIT;
 static CURLcode initialized;
@@ -12,6 +14,22 @@ static void
 initialize(void)
 {
     initialized = curl_global_init(CURL_GLOBAL_DEFAULT);
+}
+
+CURLcode
+snag_http_provider_trust(CURL *curl, const char *bundle)
+{
+    const char *file = getenv("SSL_CERT_FILE");
+    if (file && *file) return snag_http_trust(curl);
+    if (bundle && *bundle) {
+        snag_file_info status;
+        if (snag_stat(bundle, &status) == 0) {
+            CURLcode rc = curl_easy_setopt(curl, CURLOPT_CAINFO, bundle);
+            return rc != CURLE_OK ? rc : curl_easy_setopt(curl, CURLOPT_PROXY_CAINFO, bundle);
+        }
+        if (errno != ENOENT) return CURLE_SSL_CACERT_BADFILE;
+    }
+    return snag_http_trust(curl);
 }
 
 CURLcode

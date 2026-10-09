@@ -4646,6 +4646,7 @@ defaults for a matched model:
 .BR default_timeout_ms ,
 .BR max_timeout_ms ,
 .BR tool_output_bytes ,
+.BR tool_output_approx_tokens ,
 and
 .BR output_cache_bytes .
 Their ranges and meanings match the tool settings below.
@@ -4981,6 +4982,15 @@ separately from the bounded command-output body, including with very small
 output budgets. The legacy [tool] max_output_tokens spelling remains a byte-valued
 alias. Use only one spelling in a section. Provider/model max_output_tokens
 settings continue to specify generated tokens.
+.TP
+.B tool_output_approx_tokens
+Alternative command-result ceiling in approximate tokens, 1 through 1000000000.
+Each approximate token permits four UTF-8 bytes, including result framing and
+truncation notices. For example, 3000 selects a 12000-byte ceiling. This is the
+same byte-based estimate used by Codex tool-output truncation; actual tokenization
+depends on the model and text. Use one of tool_output_approx_tokens,
+tool_output_bytes or the legacy byte-valued max_output_tokens in a section.
+Both global tool settings and per-model execution settings accept this spelling.
 .TP
 .B output_cache_bytes
 Maximum command-output bytes kept in the in-memory paging cache, 0 through
@@ -5564,7 +5574,12 @@ A deadline yields control without terminating the child.
 .B max_output_bytes
 is a positive retained UTF-8 byte bound for result text sent to model context,
 or omitted/null for the configured ceiling (default 6000). The legacy input
-spelling max_output_tokens retains these byte semantics. This argument selects
+spelling max_output_tokens retains these byte semantics.
+.B max_output_approx_tokens
+accepts a positive approximate-token budget up to 1000000000 and converts it to
+four UTF-8 bytes per token. Omitted/null uses the configured byte ceiling.
+Supply exactly one output-limit field, even when its value is null.
+These arguments select
 the model excerpt; [tool] display_output_bytes controls
 terminal display only. Larger requests are capped with requested/applied
 feedback. Complete redacted
@@ -6414,6 +6429,15 @@ A nonempty value selects a CA file for provider, login and refresh HTTPS
 connections, including HTTPS proxies.  It replaces the standalone build's
 embedded CA data, or the native build's default CA file.  Certificate and
 hostname verification remain enabled.  Keep this file trusted and current.
+When this variable is unset or empty, provider connections use
+.B DOTDIR/ca/NAME.pem
+if present, where NAME is the configured provider name. Install a PEM CA bundle
+there for a private HTTPS provider; include every root needed by that provider
+and its HTTPS proxy. The bundle covers model discovery, input-token counting,
+compaction, responses, audio and realtime connections. Other providers retain
+their own trust roots. An invalid or unreadable bundle fails verification.
+Removing the file restores the embedded or system defaults. New requests read
+the bundle; restarting the terminal or exporting a shell variable is unnecessary.
 .TP
 .B TERM
 Enables terminal capabilities and color detection.

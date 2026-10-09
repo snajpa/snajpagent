@@ -103,6 +103,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
         size = int(self.headers.get("Content-Length", "0"))
         assert len(self.rfile.read(size)) == size
         self.server.requests.append((self.command, self.path, self.request_version))
+        if self.path == "/v1/responses/input_tokens":
+            self.reply(200, b'{"object":"response.input_tokens","input_tokens":7}')
+            return
         assert self.path == "/v1/responses", self.path
         mode = self.server.mode
         attempt = self.server.attempt
@@ -155,7 +158,7 @@ def check(binary):
         cert, key = root / "cert.pem", root / "key.pem"
         conf = root / "openssl.cnf"
         conf.write_text("[req]\nprompt=no\ndistinguished_name=dn\nx509_extensions=ext\n"
-                        "[dn]\nCN=localhost\n[ext]\nsubjectAltName=DNS:localhost,IP:127.0.0.1\n"
+                        "[dn]\nCN=localhost\n[ext]\nsubjectAltName=DNS:localhost\n"
                         "basicConstraints=critical,CA:TRUE\n"
                         "keyUsage=critical,digitalSignature,keyEncipherment,keyCertSign\n"
                         "extendedKeyUsage=serverAuth\n")
@@ -172,15 +175,17 @@ def check(binary):
         thread.start()
         config = root / "config.ini"
         config.write_text("[agent]\nmodel=tls-model\nread_agents_md=false\nmax_turn_retries=0\n"
-            f"[provider fixture]\nbase_url=https://127.0.0.1:{server.server_port}/v1\n"
+            f"[provider fixture]\nbase_url=https://localhost:{server.server_port}/v1\n"
             'api_key="fixture-secret"\nconnect_timeout_ms=2000\nrequest_timeout_ms=5000\n'
             "idle_timeout_ms=3000\nexact_token_count=false\nnative_compaction=false\n"
             "[ui]\ncolor=never\n")
         config.chmod(0o600)
         env = {**os.environ, "HOME": str(root), "SSL_CERT_FILE": str(cert),
-               "NO_PROXY": "127.0.0.1", "no_proxy": "127.0.0.1"}
+               "NO_PROXY": "localhost,127.0.0.1", "no_proxy": "localhost,127.0.0.1"}
         try:
-            for name in ("complete", "partial", "untrusted", "reasoning",
+            for name in ("persistent-ca", "persistent-ca-invalid", "persistent-ca-other",
+                         "persistent-ca-env", "persistent-ca-hostname",
+                         "complete", "partial", "untrusted", "reasoning",
                          "complete-cutoff", "chunked-complete", "broken-trailer", "late-event",
                          "reasoning-tool", "reasoning-hosted", "reasoning-unknown",
                          "reasoning-partial-record", "reasoning-exhausted"):
@@ -188,13 +193,38 @@ def check(binary):
                 server.mode, server.attempt = name, 0
                 before = len(server.requests)
                 case_env = dict(env)
-                if name == "untrusted":
+                case_config = config
+                if name.startswith("persistent-ca"):
+                    if name != "persistent-ca-env":
+                        case_env.pop("SSL_CERT_FILE")
+                    state.mkdir(mode=0o700)
+                    ca = state / "ca"
+                    ca.mkdir(mode=0o700)
+                    bundle = ca / ("other.pem" if name.endswith("other") else "fixture.pem")
+                    bundle.write_bytes(b"invalid CA data" if name.endswith(("invalid", "env"))
+                                       else cert.read_bytes())
+                    case_config = root / (name + ".ini")
+                    case_config.write_text(config.read_text().replace(
+                        "exact_token_count=false", "exact_token_count=true"))
+                    if name == "persistent-ca-hostname":
+                        case_config.write_text(case_config.read_text().replace(
+                            "https://localhost:", "https://127.0.0.1:"))
+                    case_config.chmod(0o600)
+                elif name == "untrusted":
                     case_env.pop("SSL_CERT_FILE")
-                result = subprocess.run([str(binary), "--config", str(config), "--dotdir",
+                result = subprocess.run([str(binary), "--config", str(case_config), "--dotdir",
                     str(state), "-e", "--", "answer"], env=case_env, cwd=root,
                     capture_output=True, text=True, timeout=15)
                 requests = [r for r in server.requests[before:] if r[0] == "POST"]
-                if name in ("complete", "reasoning", "complete-cutoff", "chunked-complete"):
+                if name in ("persistent-ca", "persistent-ca-env"):
+                    assert result.returncode == 0, result.stderr
+                    assert result.stdout.strip() == "HTTPS answer once", result.stdout
+                    assert [r[1] for r in requests] == [
+                        "/v1/responses/input_tokens", "/v1/responses"], requests
+                elif name in ("persistent-ca-invalid", "persistent-ca-hostname"):
+                    assert result.returncode != 0 and not requests, (result, requests)
+                    assert "input-token count failed" in result.stderr, result.stderr
+                elif name in ("complete", "reasoning", "complete-cutoff", "chunked-complete"):
                     assert result.returncode == 0, (result.stderr, server.protocols, server.resets)
                     assert result.stdout.strip() == "HTTPS answer once", result.stdout
                     assert len(requests) == (2 if name == "reasoning" else 1), requests
@@ -230,7 +260,8 @@ def check(binary):
                     assert "certificate" in result.stderr.lower(), result.stderr
                 assert server.resets == 0 and set(server.protocols) == {"http/1.1"}
                 assert all(r[2] == "HTTP/1.1" for r in server.requests)
-            print("provider HTTPS: TLS, safe reasoning retry, completed cutoff retention, "
+            print("provider HTTPS: persistent CA, token counting, trust/hostname rejection, "
+                  "TLS, safe reasoning retry, completed cutoff retention, "
                   "partial output and malformed trailers: ok", flush=True)
         finally:
             server.shutdown()

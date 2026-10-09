@@ -823,6 +823,17 @@ parse_setting(struct parse_state *state, const char *key, const char *value)
 {
     if (state->section == SECTION_MCP) return parse_mcp(state, key, value);
     if (state->section == SECTION_AUDIO) return parse_audio(state, key, value);
+    char converted[32];
+    if ((state->section == SECTION_TOOL || state->section == SECTION_MODEL_LIMIT) &&
+        !strcmp(key, "tool_output_approx_tokens")) {
+        uint32_t tokens;
+        if (parse_u32(value, 1u, SNAG_CONFIG_TOKEN_LIMIT_MAX / SNAG_APPROX_TOKEN_BYTES,
+                &tokens) < 0)
+            goto invalid;
+        (void)snprintf(converted, sizeof(converted), "%u", tokens * SNAG_APPROX_TOKEN_BYTES);
+        key = "tool_output_bytes";
+        value = converted;
+    }
     if (state->section == SECTION_TOOL) {
         if (!strcmp(key, "max_output_tokens")) key = "tool_output_bytes";
         else if (!strcmp(key, "max_output_bytes")) key = "display_output_bytes";
@@ -1490,6 +1501,18 @@ snag_config_load(struct snag_config *config, const char *explicit_path, const ch
     if (read_rc < 0) goto out;
     if (read_rc == 0 && parse_file(config, (char *)text.data, error, error_size) < 0) goto out;
     rc = validate_config(config, read_rc != 0 || private_file, error, error_size);
+    if (rc == 0 && dotdir) {
+        for (size_t i = 0u; i < config->provider_count; ++i) {
+            struct snag_provider_config *provider = &config->providers[i];
+            int n = snprintf(provider->ca_bundle, sizeof(provider->ca_bundle),
+                "%s/ca/%s.pem", dotdir, provider->name);
+            if (n < 0 || (size_t)n >= sizeof(provider->ca_bundle)) {
+                rc = snag_fail(error, error_size, ENAMETOOLONG,
+                    "provider CA bundle path is too long");
+                break;
+            }
+        }
+    }
 out:
     free(owned_path);
     snag_secret_clear(text.data, text.len);

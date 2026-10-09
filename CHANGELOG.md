@@ -4,6 +4,15 @@
 
 ## Unreleased
 
+- Accept approximate command-output token budgets in global/per-model
+  `tool_output_approx_tokens` and command `max_output_approx_tokens`, converting
+  once at four UTF-8 bytes per approximate token. Retain byte limits, legacy
+  saved-call semantics and complete durable output paging.
+
+- Load private provider CA bundles from `DOTDIR/ca/NAME.pem` when SSL_CERT_FILE
+  is unset, sharing verified trust across counting, model discovery, responses,
+  compaction and audio connections.
+
 - Name command-output settings by their units: `[tool] tool_output_bytes` bounds
   model excerpts and `display_output_bytes` bounds terminal output. Preserve old
   setting aliases, saved result limits and complete durable output paging.

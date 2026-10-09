@@ -618,6 +618,58 @@ test_command_output_limit_is_optional_and_positive(void)
 }
 
 static void
+test_approximate_output_limits(void)
+{
+    const char *valid[] = {
+        "{\"command\":\"printf retained\",\"max_output_approx_tokens\":100}",
+        "{\"command\":\"printf retained\",\"max_output_approx_tokens\":3000}",
+        "{\"command\":\"printf retained\",\"max_output_approx_tokens\":null}",
+        "{\"command\":\"printf retained\",\"max_output_approx_tokens\":1000000000}"};
+    for (size_t i = 0u; i < sizeof(valid) / sizeof(valid[0]); ++i) {
+        json_t *args = json_loads(valid[i], 0, NULL);
+        assert(args);
+        json_t *result = run_tool_with_args("exec_command", args);
+        assert(!strcmp(snag_json_string(result, "status"), "succeeded"));
+        assert(json_int_member(result, "max_output_tokens") == (i ? 6000 : 400));
+        const char *text = snag_json_string(result, "model_text");
+        assert(strstr(text, "retained"));
+        assert((strstr(text, "Requested max_output_approx_tokens=") != NULL) ==
+               (i == 1u || i == 3u));
+        json_decref(result);
+    }
+    const char *invalid[] = {
+        "{\"max_output_approx_tokens\":0}", "{\"max_output_approx_tokens\":1000000001}",
+"{\"max_output_approx_tokens\":\"100\"}",
+        "{\"max_output_bytes\":null,\"max_output_approx_tokens\":null}",
+        "{\"max_output_approx_tokens\":1,\"max_output_bytes\":4}",
+        "{\"max_output_tokens\":4,\"max_output_approx_tokens\":1}"};
+    for (size_t i = 0u; i < sizeof(invalid) / sizeof(invalid[0]); ++i) {
+        json_t *args = json_loads(invalid[i], 0, NULL);
+        assert(args && !json_object_set_new(args, "command", json_string("printf never-run")));
+        json_t *result = run_tool_with_args("exec_command", args);
+        assert(!strcmp(snag_json_string(result, "status"), "not_run"));
+        assert(!strstr(snag_json_string(result, "model_text"), "Process exited"));
+        json_decref(result);
+    }
+    json_t *started = run_managed_exec("read line; printf '%s' \"$line\"", 5000, 1);
+    const char *handle = snag_json_string(started, "handle");
+    assert(handle);
+    json_t *result = run_tool_with_args("write_stdin", json_pack("{s:s,s:i,s:i}",
+        "handle", handle, "yield_ms", 1, "max_output_approx_tokens", 100));
+    assert(!strcmp(snag_json_string(result, "status"), "running"));
+    assert(json_int_member(result, "max_output_tokens") == 400);
+    json_decref(result);
+    result = run_tool_with_args("write_stdin", json_pack("{s:s,s:i,s:i}",
+        "handle", handle, "yield_ms", 1, "max_output_approx_tokens", 3000));
+    assert(json_int_member(result, "max_output_tokens") == 6000);
+    assert(strstr(snag_json_string(result, "model_text"),
+        "Requested max_output_approx_tokens=3000"));
+    json_decref(result);
+    json_decref(close_command(handle));
+    json_decref(started);
+}
+
+static void
 test_stdin_uses_blocking_child_fd(void)
 {
     bool delayed = false;
@@ -1200,6 +1252,7 @@ main(int argc, char **argv)
     test_command_output_limit_selection();
     test_managed_output_ceiling();
     test_command_output_limit_is_optional_and_positive();
+    test_approximate_output_limits();
     test_stdin_uses_blocking_child_fd();
     test_managed_process_hands_off_on_steering();
     test_wait_limit_and_pending_termination();

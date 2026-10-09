@@ -1604,23 +1604,29 @@ assert_context_tool_schemas(json_t *tools, const char *active_handle, uint32_t m
                 "UTF-8 byte limit"));
         assert_properties(
             tool, json_pack("{s:{s:s},s:{s:[s,s]},s:{s:[s,s]},s:{s:[s,s]},"
-                            "s:{s:[s,s],s:i,s:I},s:{s:[s,s],s:i,s:I},s:{s:[s,s],s:i,s:I}}",
+                            "s:{s:[s,s],s:i,s:I},s:{s:[s,s],s:i,s:I},s:{s:[s,s],s:i,s:I},"
+                            "s:{s:[s,s],s:i,s:I}}",
                       "command", "type", "string", "workdir", "type", "string", "null", "stdin",
                       "type", "string", "null", "pty", "type", "boolean", "null", "yield_ms",
                       "type", "integer", "null", "minimum", 0, "maximum", (json_int_t)max_wait_ms,
                       "timeout_ms", "type", "integer", "null", "minimum", 1, "maximum",
-                      (json_int_t)max_timeout_ms, "max_output_bytes", "type", "integer", "null",
+                      (json_int_t)max_timeout_ms, "max_output_approx_tokens", "type", "integer",
+                      "null", "minimum", 1,
+                      "maximum", (json_int_t)1000000000, "max_output_bytes", "type", "integer",
+                      "null",
                       "minimum", 1, "maximum", (json_int_t)SNAG_CONFIG_TOKEN_LIMIT_MAX));
     }
 
     tool = item_by_field(tools, "name", "write_stdin");
     assert(tool && strstr(snag_json_string(tool, "description"), fallback));
     expected = json_pack("{s:{s:s},s:{s:s},s:{s:[s,s]},s:{s:[s,s]},"
-                         "s:{s:[s,s],s:i,s:I},s:{s:[s,s],s:i,s:I}}",
+                         "s:{s:[s,s],s:i,s:I},s:{s:[s,s],s:i,s:I},s:{s:[s,s],s:i,s:I}}",
         "handle", "type", "string", "data", "type", "string", "eof", "type", "boolean", "null",
         "terminate", "type", "boolean", "null", "yield_ms", "type", "integer", "null", "minimum", 0,
-        "maximum", (json_int_t)max_wait_ms, "max_output_bytes", "type", "integer", "null",
-        "minimum", 1, "maximum", (json_int_t)SNAG_CONFIG_TOKEN_LIMIT_MAX);
+        "maximum", (json_int_t)max_wait_ms, "max_output_approx_tokens", "type", "integer", "null",
+        "minimum", 1, "maximum", (json_int_t)1000000000,
+        "max_output_bytes", "type", "integer", "null", "minimum", 1,
+        "maximum", (json_int_t)SNAG_CONFIG_TOKEN_LIMIT_MAX);
     assert(expected);
     if (active_handle)
         assert(json_object_set_new(json_object_get(expected, "handle"), "enum",

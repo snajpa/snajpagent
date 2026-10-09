@@ -1339,7 +1339,7 @@ provider_request_setup(struct provider_ctx *ctx, const struct snag_credential *c
             ctx->error[0] ? ctx->error : "provider request headers could not be rendered");
     /* Each exchange has its own connection; HTTP/2 adds no multiplexing here
      * and gateway stream resets can discard a long-running Responses request. */
-    if (snag_http_trust(ctx->curl) != CURLE_OK ||
+    if (snag_http_provider_trust(ctx->curl, ctx->provider->ca_bundle) != CURLE_OK ||
         curl_easy_setopt(ctx->curl, CURLOPT_URL, endpoint) != CURLE_OK ||
         curl_easy_setopt(ctx->curl, CURLOPT_HTTP_VERSION, (long)CURL_HTTP_VERSION_1_1) !=
             CURLE_OK ||
@@ -2185,7 +2185,8 @@ voice_connect(const struct snag_provider_config *provider, const struct snag_cre
         goto failed;
 #endif
     CURL *curl = voice->curl;
-    if (snag_http_trust(curl) != CURLE_OK || curl_easy_setopt(curl, CURLOPT_URL, url) != CURLE_OK ||
+    if (snag_http_provider_trust(curl, provider->ca_bundle) != CURLE_OK ||
+        curl_easy_setopt(curl, CURLOPT_URL, url) != CURLE_OK ||
         curl_easy_setopt(curl, CURLOPT_CONNECT_ONLY, 2L) != CURLE_OK ||
         curl_easy_setopt(curl, CURLOPT_HTTPHEADER, voice->headers) != CURLE_OK ||
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, voice_handshake_body) != CURLE_OK ||

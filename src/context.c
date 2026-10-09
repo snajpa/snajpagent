@@ -984,7 +984,8 @@ bounded_command_output(
     snag_sha256_hex(text, len, digest);
     n = snprintf(notice, sizeof(notice),
         "\n[command output truncated for model context; "
-        "max_output_bytes=%u is a UTF-8 byte limit; original_bytes=%zu; sha256=%s; complete output "
+        "max_output_bytes=%u (4 UTF-8 bytes per approximate token); "
+        "original_bytes=%zu; sha256=%s; complete output "
         "remains in "
         "the durable session journal]\n",
         tool_output_bytes, len, digest);
@@ -1049,7 +1050,8 @@ append_tool_result(struct context_builder *builder, const char *call_id, const j
     const char *status = snag_json_string(result, "status");
     bool rejected = status && !strcmp(status, "not_run");
     bool capped = !strncmp(model_text, "Requested max_output_bytes=", 27u) ||
-                  !strncmp(model_text, "Requested max_output_tokens=", 28u);
+                  !strncmp(model_text, "Requested max_output_tokens=", 28u) ||
+                  !strncmp(model_text, "Requested max_output_approx_tokens=", 35u);
     if (builder->tool_feedback && (rejected || capped)) {
         size_t length = rejected ? strlen(model_text) : strcspn(model_text, "\n");
         if (length <= 2048u && json_array_append_new(builder->tool_feedback,
@@ -2475,12 +2477,14 @@ exec_tool_schema(uint32_t max_wait_ms, uint32_t max_timeout_ms, uint32_t tool_ou
     (void)snprintf(description, sizeof(description),
         "Run a command using the configured shell. Omitted controls use existing defaults. "
         "Returned running handles belong to live commands; collect them with write_stdin. "
-        "Output ceiling (%u) is in UTF-8 bytes; larger positive requests are capped and reported. "
+        "Output ceiling (%u) is in UTF-8 bytes, at 4 bytes per approximate token; "
+        "larger requests are capped. "
         "Invalid fields or ranges reject the call before execution.",
         tool_output_bytes);
     return tool_schema("exec_command", "command", description,
         json_pack("{s:{s:s,s:s},s:{s:[s,s],s:s},s:{s:[s,s],s:s},s:{s:[s,s],s:s},"
-                  "s:{s:[s,s],s:i,s:I,s:s},s:{s:[s,s],s:i,s:I,s:s},s:{s:[s,s],s:i,s:I,s:s}}",
+                  "s:{s:[s,s],s:i,s:I,s:s},s:{s:[s,s],s:i,s:I,s:s},s:{s:[s,s],s:i,s:I,s:s},"
+                  "s:{s:[s,s],s:i,s:I,s:s}}",
             "command", "type", "string", "description",
             "Source for the configured shell, at most 262144 UTF-8 bytes. Legacy cmd is accepted; "
             "supply only one spelling.",
@@ -2504,10 +2508,17 @@ exec_tool_schema(uint32_t max_wait_ms, uint32_t max_timeout_ms, uint32_t tool_ou
             "returns a running handle without killing the command. Null uses default_timeout_ms (0 "
             "in host configuration disables this handoff). Values above the maximum are rejected, "
             "not clamped.",
+            "max_output_approx_tokens", "type", "integer", "null", "minimum", 1, "maximum",
+            (json_int_t)(SNAG_CONFIG_TOKEN_LIMIT_MAX / SNAG_APPROX_TOKEN_BYTES), "description",
+            "Approximate token budget, at 4 UTF-8 bytes per token, including result framing and "
+            "truncation markers. Null uses the configured byte ceiling. Larger positive requests "
+            "are capped and reported. Supply only one output-limit field. Complete redacted "
+            "output remains available through read_tool_output.",
             "max_output_bytes", "type", "integer", "null", "minimum", 1, "maximum",
             (json_int_t)SNAG_CONFIG_TOKEN_LIMIT_MAX, "description",
             "Model-facing UTF-8 byte limit. Legacy max_output_tokens is accepted; supply only one "
-            "spelling. Null uses the output ceiling; smaller positive values reduce the excerpt; "
+            "output-limit field. Null uses the output ceiling; smaller positive values reduce the "
+            "excerpt; "
             "larger positive values up to 4000000000 are capped with requested/applied feedback. "
             "Complete redacted output stays in the journal."));
 }
@@ -2519,11 +2530,12 @@ stdin_tool_schema(uint32_t max_wait_ms, uint32_t tool_output_bytes)
     (void)snprintf(description, sizeof(description),
         "Collect output, wait, send input, or request termination of an existing managed process. "
         "At most one call per handle in each response. A running result retains that handle. "
-        "Output ceiling (%u) is in UTF-8 bytes; larger positive requests are capped and reported.",
+        "Output ceiling (%u) is in UTF-8 bytes, at 4 bytes per approximate token; "
+        "larger requests are capped.",
         tool_output_bytes);
     return tool_schema("write_stdin", "handle", description,
         json_pack("{s:{s:s,s:s},s:{s:s,s:s},s:{s:[s,s],s:s},s:{s:[s,s],s:s},"
-                  "s:{s:[s,s],s:i,s:I,s:s},s:{s:[s,s],s:i,s:I,s:s}}",
+                  "s:{s:[s,s],s:i,s:I,s:s},s:{s:[s,s],s:i,s:I,s:s},s:{s:[s,s],s:i,s:I,s:s}}",
             "handle", "type", "string", "description",
             "Exact 32-character lowercase hex handle from a running result. A terminal result "
             "settles it; do not reuse a settled handle.",
@@ -2541,10 +2553,17 @@ stdin_tool_schema(uint32_t max_wait_ms, uint32_t tool_output_bytes)
             "Maximum wait for this invocation in milliseconds; 0 returns promptly, null uses "
             "default_yield_ms. Host max_wait_ms or /yield can return earlier. Does not reset the "
             "initial one-shot timeout_ms handoff deadline.",
+            "max_output_approx_tokens", "type", "integer", "null", "minimum", 1, "maximum",
+            (json_int_t)(SNAG_CONFIG_TOKEN_LIMIT_MAX / SNAG_APPROX_TOKEN_BYTES), "description",
+            "Approximate token budget, at 4 UTF-8 bytes per token, including result framing and "
+            "truncation markers. Null uses the configured byte ceiling. Larger positive requests "
+            "are capped and reported. Supply only one output-limit field. Complete redacted "
+            "output remains available through read_tool_output.",
             "max_output_bytes", "type", "integer", "null", "minimum", 1, "maximum",
             (json_int_t)SNAG_CONFIG_TOKEN_LIMIT_MAX, "description",
             "Model-facing UTF-8 byte limit. Legacy max_output_tokens is accepted; supply only one "
-            "spelling. Null uses the configured ceiling; smaller positive requests reduce the "
+            "output-limit field. Null uses the configured ceiling; smaller requests reduce "
+            "the "
             "excerpt, larger positive requests up to 4000000000 are capped and reported. Does not "
             "limit durable capture."));
 }

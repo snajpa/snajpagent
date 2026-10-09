@@ -25,6 +25,7 @@
     (SNAG_CONFIG_PROVIDER_NAME_MAX + SNAG_CONFIG_MODEL_MAX + SNAG_CONFIG_EFFORT_MAX + 32u)
 #define SNAG_CONFIG_STEERING_MAX 8u
 #define SNAG_CONFIG_TOKEN_LIMIT_MAX UINT64_C(4000000000)
+#define SNAG_APPROX_TOKEN_BYTES 4u
 #define SNAG_CONFIG_OUTPUT_CACHE_MAX (64u * 1024u * 1024u)
 /* Outside the numeric compaction range; zero continues to mean disabled. */
 #define SNAG_CONFIG_COMPACT_AUTO UINT32_MAX
@@ -109,6 +110,7 @@ struct snag_provider_config {
      * transport slot instead of a developer item. */
     bool leading_instructions;
     char base_url[SNAG_CONFIG_URL_MAX];
+    char ca_bundle[SNAG_CONFIG_PATH_MAX];
     struct snag_secret_source api_key;
     /* Borrowed runtime snapshot; the session owner controls its lifetime. */
     struct snag_auth_state *auth_state;

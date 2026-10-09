@@ -742,7 +742,11 @@ The common provider request setup explicitly selects HTTP/1.1, including HTTPS
 Responses, count/compact, catalog and media requests. Every exchange creates its
 own curl multi handle and connection; there is no shared HTTP/2 multiplexing to
 retain. Avoiding HTTP/2 prevents gateway stream resets from discarding long
-Responses requests. TLS verification, cancellation and the existing retry
+Responses requests. A provider's `DOTDIR/ca/NAME.pem` supplies persistent CA trust
+when SSL_CERT_FILE is unset. Configuration snapshots retain its path, including
+background compaction and realtime owners; each request reads the bundle.
+Missing bundles use normal roots, while invalid bundles fail closed. TLS
+verification, cancellation and the existing retry
 admission rules remain unchanged. The HTTPS fixture offers HTTP/2 first and
 resets those streams, verifying HTTP/1.1 completion, TLS trust rejection and no
 replay after partial output.
@@ -831,9 +835,11 @@ chunks in the existing session journal, without a capture cutoff. Results
 reference contiguous per-stream ranges; successive polls return only newly
 collected output. RAM staging is bounded and I/O service rotates among jobs.
 The app owns journal writes, and the UI owns all display. `exec_command` and
-`write_stdin` advertise `max_output_bytes` for a retained UTF-8 byte
-ceiling on result text, not a token count. The
-model may select positive `max_output_bytes`, or omit/use `null` for
+`write_stdin` advertise `max_output_approx_tokens` at four UTF-8 bytes per
+approximate token, alongside the byte-valued `max_output_bytes`. Both feed one
+runtime selector; supplying both is rejected, including null values. Configuration
+accepts `tool_output_approx_tokens` globally and per model, converting to bytes
+before execution resolution. The model may select either positive limit, or omit/use `null` for
 the configured `[tool] tool_output_bytes` ceiling (6000 by default). Larger
 requests are clamped to that ceiling; smaller requests are honored. Both tool
 schemas advertise the accepted positive range and describe the configured

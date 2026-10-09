@@ -261,6 +261,43 @@ test_output_units(const char *path)
 }
 
 static void
+test_approximate_output_tokens(const char *path)
+{
+    struct snag_config config;
+    struct snag_execution_config execution;
+    char error[256];
+    const char valid[] = "[tool]\ntool_output_approx_tokens=3000\n[provider p]\n"
+                         "[model-limit p/m]\ntool_output_approx_tokens=1000\n"
+                         "max_output_tokens=16000\n";
+    write_bytes(path, valid, sizeof(valid) - 1u);
+    load_config(&config, path, NULL);
+    assert(config.tool_output_bytes == 12000u);
+    assert(!snag_config_resolve_execution(&config, "p", "m", &execution, error, sizeof(error)));
+    assert(execution.tool_output_bytes == 4000u);
+    assert(config.model_limits[0].max_output_tokens == 16000u);
+    snag_config_free(&config);
+
+    const char maximum[] = "[tool]\ntool_output_approx_tokens=1000000000\n";
+    write_bytes(path, maximum, sizeof(maximum) - 1u);
+    load_config(&config, path, NULL);
+    assert(config.tool_output_bytes == 4000000000u);
+    snag_config_free(&config);
+
+    const char *invalid[] = {"[tool]\ntool_output_approx_tokens=0\n",
+        "[tool]\ntool_output_approx_tokens=1000000001\n",
+        "[tool]\ntool_output_approx_tokens=1\ntool_output_bytes=4\n",
+        "[tool]\ntool_output_bytes=4\ntool_output_approx_tokens=1\n",
+        "[tool]\nmax_output_tokens=4\ntool_output_approx_tokens=1\n",
+        "[tool]\ntool_output_approx_tokens=1\nmax_output_tokens=4\n",
+        "[provider p]\n[model-limit p/m]\ntool_output_bytes=4\ntool_output_approx_tokens=1\n",
+        "[provider p]\n[model-limit p/m]\ntool_output_approx_tokens=1\ntool_output_bytes=4\n"};
+    for (size_t i = 0u; i < sizeof(invalid) / sizeof(invalid[0]); ++i) {
+        write_bytes(path, invalid[i], strlen(invalid[i]));
+        expect_invalid(path);
+    }
+}
+
+static void
 test_model_execution(const char *path)
 {
     struct snag_config config;
@@ -1290,6 +1327,7 @@ main(void)
     test_model_steering(path);
     test_configured_efforts(path);
     test_output_units(path);
+    test_approximate_output_tokens(path);
     test_model_execution(path);
     test_numeric_settings(path);
     test_io_rules(path);
