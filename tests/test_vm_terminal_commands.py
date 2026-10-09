@@ -345,7 +345,7 @@ input()
             child.resize(14, 200)
             child.repaint_until(b'1 unsent attachment(s)')
         else:
-            child.until(b'1 unsent attachment(s)', 15)
+            child.repaint_until(b'1 unsent attachment(s)', 15)
         self.assertEqual(len(self.inputs()), int(background))
         self.assertEqual(len(requests), int(background))
         self.show_report(child, '/receive')
