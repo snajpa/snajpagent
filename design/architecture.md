@@ -589,7 +589,9 @@ The enabled `select_model` tool reloads the current cache for each choice and
 accepts only a matching provider, model and effort row bound to the configured
 provider URL. Selector `cache` runs the existing atomic provider refresh and
 returns available cached rows; a failed refresh retains the previous cache.
-An operator's typed `/model` remains able to choose a new uncached identifier.
+A `:context` suffix selects default, max or a token window through the shared
+capacity validation and context event path; the model/effort must still match
+a cached row. An operator's typed `/model` remains able to choose a new uncached identifier.
 
 Interactive `/configure` reloads saved configuration, credentials, redaction
 secrets and the local model cache without an editor, at a durable safe request

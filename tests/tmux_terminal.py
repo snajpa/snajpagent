@@ -2903,8 +2903,8 @@ def run_help_case(binary, root, active=False, chat=False, width=80):
                 "/state goal pause|resume", "/state goal lock|unlock", "/state goal complete|cancel|clear",
                 "/goal ...",
                 "/queue N delete|d", "/queue N edit|e", "/queue Nd|Ne",
-                "/model [#]N [save|s]", "/model MODEL[/EFFORT] [save|s]",
-                "/model PROVIDER/MODEL/EFFORT [save|s]", "[optional]", "UPPERCASE"):
+                "/model [#]N[:CONTEXT] [save|s]", "/model MODEL[/EFFORT][:CONTEXT] [save|s]",
+                "/model PROVIDER/MODEL/EFFORT[:CONTEXT] [save|s]", "[optional]", "UPPERCASE"):
             assert syntax in text, (syntax, screen)
         for syntax in ("/help", "/?", "/status", "/history [N]", "/config", "/effort [LEVEL]",
                 "/ro QUERY", "/verbose [0..6]", "/queue [TEXT]", "/queue clear|c", "/queue pop|p",

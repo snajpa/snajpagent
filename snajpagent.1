@@ -4218,7 +4218,8 @@ goals keep their state while ordinary prompts retry.
 .B allow_model_change
 Permit the model to use the
 .B select_model
-tool to refresh its model catalog or change provider, model, or reasoning effort.
+tool to refresh its model catalog or change provider, model, reasoning effort,
+or context window.
 Default:
 .BR false .
 When disabled, the tool is omitted from provider requests and calls are rejected
@@ -5407,6 +5408,11 @@ keep their own launch directory.
 requires selector, either a configured
 .IR "provider/model/effort" ,
 a shorter model selector, or a numbered row from the cached model listing.
+Append
+.B :context
+to select its window using the same default, max or integer token syntax as
+.BR /context .
+Invalid choices leave the model and context selection unchanged.
 It is available when
 .B [agent] allow_model_change=true
 (default: false). When disabled, the tool is absent from the model's catalog and
