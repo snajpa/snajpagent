@@ -707,7 +707,8 @@ snag_model_select_selector(const struct snag_model_cache *cache, const struct sn
     }
     if (rc < 0) return -1;
     written = strchr(model, '/')
-                  ? snprintf(composed, sizeof(composed), "%s/\"%s\"/\"%s\"", provider, model, effort)
+                  ? snprintf(composed, sizeof(composed), "%s/\"%s\"/\"%s\"",
+                        provider, model, effort)
                   : snprintf(composed, sizeof(composed), "%s/%s/\"%s\"", provider, model, effort);
     if (written < 0 || (size_t)written >= sizeof(composed)) return -1;
     rc = snag_model_select(
