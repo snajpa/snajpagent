@@ -728,9 +728,7 @@ class RemoteStartupTests(unittest.TestCase):
                     if hasattr(os, "pidfd_open"):
                         self.assertEqual(list(child.children.handles), [child.process.pid])
                     os.write(child.master, b"ping\n")
-                    child.until(b"pong")
-                    child.output.clear()
-                    child.until("›".encode(), 8)
+                    child.until_after(b"pong", "›".encode(), 8)
                     os.write(child.master, b"/exit\n")
                     child.until(b"--resume", 8)
                     child.wait(0)
