@@ -4,6 +4,13 @@
 
 ## Unreleased
 
+- Keep the context prompt anchored to completed input/output usage between requests
+  and after resume. Add newly projected text without treating encrypted reasoning
+  size as token growth; retain independent strict request accounting.
+
+- Preserve large TLS 1.3 upload bodies under backpressure by keeping bundled
+  mbedTLS session-ticket notifications internal.
+
 - Accept approximate command-output token budgets in global/per-model
   `tool_output_approx_tokens` and command `max_output_approx_tokens`, converting
   once at four UTF-8 bytes per approximate token. Retain byte limits, legacy

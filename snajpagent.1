@@ -3896,10 +3896,13 @@ with estimated output. Providers report hidden reasoning tokens at completion.
 .PP
 Compaction refreshes the meter immediately from the adopted context, including its
 summary, retained history and request overhead. Known-capacity models show an
-estimate while an exact count is unavailable. The estimate uses the compatible
-provider input observation's bytes/token ratio, or four encoded bytes per token
-when no observation is available. Streaming growth uses four retained bytes per
-token. Resume and selection or source changes rebuild the display estimate.
+estimate while an exact count is unavailable. The estimate starts from compatible
+completed input and output usage, then adds
+new conversation items at four encoded bytes per token. Encrypted continuation
+size does not inflate this estimate. Without compatible usage, visible request
+bytes supply the approximation; opaque context remains uncounted until provider
+usage is available. Streaming growth uses four retained text bytes per token.
+Resume and selection or source changes rebuild the display estimate.
 Unknown capacity or an unavailable context projection shows ?.
 These estimates serve presentation; capacity checks and automatic compaction retain
 their existing measured accounting. /status labels historical input observations
@@ -6681,7 +6684,9 @@ Plaintext provider reasoning is sensitive journal data:
 protect the session directory and its backups as you would the conversation.
 .SS Provider failures
 Provider HTTP requests use HTTP/1.1, including HTTPS Responses streams, to avoid
-HTTP/2 framing failures from intermediaries during long responses. TLS certificate
+HTTP/2 framing failures from intermediaries during long responses. Bundled TLS 1.3
+keeps session-ticket notifications internal so blocked uploads preserve each
+request byte. TLS certificate
 and hostname verification remain enabled. Each exchange has its own connection;
 provider requests do not share a multiplexed HTTP/2 connection.
 .PP

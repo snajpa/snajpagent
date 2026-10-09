@@ -49,6 +49,9 @@ struct context_builder {
     bool compact_stop_before_active;
     bool compact_current;
     bool compact_stopped;
+    struct snag_input_observation display_anchor, display_start;
+    uint64_t display_tokens;
+    size_t display_count;
     size_t base_request_count;
     size_t compact_new_items;
     uint64_t compact_source_seq;
@@ -685,10 +688,9 @@ context_cache_restore(struct snag_session *session, struct snag_context_capture 
         goto invalid;
     cache->view.active_turn = json_is_true(active_turn);
     cache->view.input_timed = json_is_true(input_timed);
-    /* Older views lack retry cursors and may include the installed prefix.
-     * The legacy flag also covers interrupted updates and image resolution. */
-    cache->rebuild_view = old_view || json_is_true(rebuild_images);
-    if (!cache->rebuild_view && cache->view.recovery_count &&
+    /* Replay the retained seam once to recover derived display accounting. */
+    cache->rebuild_view = true;
+    if (!old_view && !json_is_true(rebuild_images) && cache->view.recovery_count &&
         cache->view.recovery_index >= json_array_size(cache->view.request_input)) {
         goto invalid;
     }
@@ -2401,6 +2403,17 @@ context_event(void *opaque, const struct snag_session *state, uint64_t seq, cons
         return rc;
     }
     if (!strcmp(type, "response_started")) {
+        struct snag_input_observation *anchor = &builder->display_start;
+        memset(anchor, 0, sizeof(*anchor));
+        const char *compact = snag_json_string(data, "compact_id");
+        anchor->valid =
+            snag_strcpy(anchor->provider, sizeof(anchor->provider),
+                snag_json_string(data, "provider")) &&
+            snag_strcpy(anchor->model, sizeof(anchor->model), snag_json_string(data, "model")) &&
+            snag_strcpy(anchor->effort, sizeof(anchor->effort), snag_json_string(data, "effort")) &&
+            snag_strcpy(anchor->provider_source_sha256, sizeof(anchor->provider_source_sha256),
+                snag_json_string(data, "provider_source_sha256")) &&
+            snag_strcpy(anchor->compact_id, sizeof(anchor->compact_id), compact ? compact : "");
         json_t *snapshot = json_object_get(data, "host_context");
         if (append_deferred_input(builder) < 0) return -1;
         if (snapshot) {
@@ -2430,7 +2443,18 @@ context_event(void *opaque, const struct snag_session *state, uint64_t seq, cons
         return append_interrupted_prefix(builder, data, error, error_size);
     if (!strcmp(type, "response_completed")) {
         if (builder->tool_feedback) (void)json_array_clear(builder->tool_feedback);
-        return append_response_items(builder, json_object_get(data, "items"), data);
+        int rc = append_response_items(builder, json_object_get(data, "items"), data);
+        struct snag_response_usage usage;
+        if (rc == 0 &&
+            snag_response_usage_from_json(json_object_get(data, "usage"), &usage) == 0 &&
+            usage.input_known && usage.output_known) {
+            builder->display_anchor = builder->display_start;
+            builder->display_tokens = usage.output_tokens > UINT64_MAX - usage.input_tokens
+                                          ? UINT64_MAX
+                                          : usage.input_tokens + usage.output_tokens;
+            builder->display_count = json_array_size(builder->request_input);
+        } else builder->display_anchor.valid = false;
+        return rc;
     }
     if (!strcmp(type, "tool_finished"))
         return append_tool_result(
@@ -3757,6 +3781,13 @@ context_copy_events(
     dest->active_turn = source->active_turn;
     dest->input_timed = source->input_timed;
     dest->tool_result_bytes = source->tool_result_bytes;
+    dest->display_start = source->display_start;
+    dest->display_anchor = source->display_anchor;
+    dest->display_tokens = source->display_tokens;
+    if (source->display_count >= start &&
+        source->display_count <= json_array_size(source->request_input)) {
+        dest->display_count = offset + source->display_count - start;
+    } else dest->display_anchor.valid = false;
     memcpy(dest->active_turn_id, source->active_turn_id, sizeof(dest->active_turn_id));
     if (source->call_ids && !(dest->call_ids = json_deep_copy(source->call_ids))) return -1;
     if (source->deferred_irc && !(dest->deferred_irc = json_deep_copy(source->deferred_irc)))
@@ -4230,6 +4261,14 @@ snag_context_build(struct snag_session *session, const char *model, const char *
                 : append_message(&builder, "developer", host_boundary) < 0)
             goto out;
     }
+    if (builder.display_anchor.valid) {
+        for (size_t i = builder.display_count; i < json_array_size(builder.request_input); ++i) {
+            size_t bytes;
+            if (snag_json_digest_bounded(json_array_get(builder.request_input, i),
+                    SNAG_CONTEXT_MAX_REQUEST, NULL, &bytes) < 0) goto out;
+            projection->display_bytes += bytes + 1u;
+        }
+    }
     if (provider && provider->leading_instructions &&
         normalize_leading_instruction_items(builder.request_input) < 0) {
         snag_errorf(error, error_size, "instruction items could not be prepared for this endpoint");
@@ -4291,6 +4330,19 @@ snag_context_build(struct snag_session *session, const char *model, const char *
     if (projection->model_input.bytes > (size_t)LLONG_MAX) {
         (void)snag_fail(error, error_size, EOVERFLOW, "response request projection is too large");
         goto out;
+    }
+    projection->display_anchor = builder.display_anchor;
+    projection->display_tokens = builder.display_tokens;
+    projection->display_plain_bytes = projection->model_input.bytes;
+    for (size_t i = 0u; i < json_array_size(builder.request_input); ++i) {
+        const json_t *item = json_array_get(builder.request_input, i);
+        const json_t *encrypted = json_object_get(item, "encrypted_content");
+        if (json_is_string(encrypted)) {
+            size_t bytes;
+            if (snag_json_digest_bounded(encrypted, SNAG_CONTEXT_MAX_REQUEST, NULL, &bytes) < 0)
+                goto out;
+            projection->display_plain_bytes -= bytes - 2u;
+        }
     }
     projection->input_tokens_bound = 0u; /* Unknown until counted by the provider. */
     /* Reconstructed state-only views have no journal writer. A live legacy

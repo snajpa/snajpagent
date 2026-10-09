@@ -227,15 +227,20 @@ durable measured input observations. Compute its rounded-up percentage against
 the effective hard input budget. A fresh unused session shows zero. Known capacity
 uses the current request count or a marked estimate; unavailable capacity or a
 failed display projection shows unknown. Completed usage supplies input plus
-output tokens. Before completion, retained SSE text, arguments and continuation
+output tokens. Before completion, retained SSE text and argument
 bytes estimate output at four bytes per token; unreported hidden reasoning is
 accounted when provider usage arrives.
 
 Compaction completion invalidates the prior display binding and measures the
 adopted context through the same builder as a response request, allowing an idle
 preview without request admission or checkpoint writes. Resume and selection/source
-changes also rebuild a preview. Calibrate input estimates with a compatible provider
-usage observation's byte/token ratio, falling back to four encoded bytes per token.
+changes also rebuild a preview. Anchor display estimates in completed input/output
+usage with matching provider,
+model, effort, source and compaction lineage. The builder retains that usage and
+its item boundary; newly projected conversation items add four bytes per token.
+Replay the retained seam once after checkpoint restore to recover these derived
+facts without changing stored formats. With no compatible usage, estimate visible
+request bytes at four bytes per token, excluding opaque encrypted payloads.
 The projection includes request overhead and uncovered history beside the summary;
 the compact output count alone cannot represent the next full request. Display
 estimates never update durable observations, counting capabilities, ceilings or

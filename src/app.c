@@ -696,6 +696,23 @@ context_estimate(const struct app_state *app, const struct snag_provider_config 
     return rounded + (estimate > (long double)rounded);
 }
 
+uint64_t
+snag_app_context_estimate(const struct app_state *app,
+    const struct snag_provider_config *provider, const char *model, const char *effort,
+    const struct snag_context_projection *projection)
+{
+    char source[SNAG_SHA256_HEX_LEN + 1u];
+    provider_capacity_source_sha256(provider, model, source);
+    bool anchored = snag_input_observation_matches(&projection->display_anchor,
+        provider->name, model, effort, source, app->session.compact_id);
+    uint64_t bytes = anchored ? projection->display_bytes : projection->display_plain_bytes;
+    uint64_t tokens = bytes / 4u + (bytes % 4u != 0u);
+    if (!anchored) return tokens;
+    return tokens > UINT64_MAX - projection->display_tokens
+               ? UINT64_MAX
+               : projection->display_tokens + tokens;
+}
+
 static void
 context_observe(struct app_state *app, const char *type, const json_t *data)
 {
@@ -704,8 +721,7 @@ context_observe(struct app_state *app, const char *type, const json_t *data)
         const char *method = snag_json_string(data, "count_method");
         app->prompt_context_estimated = strcmp(method, "exact") != 0;
         if (!strcmp(method, "unknown"))
-            app->prompt_context.input_tokens = context_estimate(app, app->turn_provider,
-                app->turn_model, app->turn_effort, app->prompt_context.model_input_bytes);
+            app->prompt_context.input_tokens = app->request_context_estimate;
         app->prompt_context_output_bytes = 0u;
         app->prompt_context_output_tokens = 0u;
         app->prompt_context_output_known = false;
@@ -744,7 +760,7 @@ context_preview(struct app_state *app, const struct snag_provider_config *provid
         memcpy(input.compact_id, app->session.compact_id, sizeof(input.compact_id));
         input.model_input_bytes = projection.model_input.bytes;
         input.input_tokens =
-            context_estimate(app, provider, model, effort, input.model_input_bytes);
+            snag_app_context_estimate(app, provider, model, effort, &projection);
         input.valid = true;
         app->prompt_context = input;
         app->prompt_context_estimated = true;

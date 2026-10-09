@@ -6,6 +6,9 @@ let
       urls = previous.lib.unique (source.urls ++ urls);
     }) else old.src or null;
   });
+  curl = package: urls: (mirrors package urls).overrideAttrs (old: {
+    patches = previous.lib.unique ((old.patches or []) ++ [ ./curl-mbedtls-write.patch ]);
+  });
 in {
   brotli = mirrors previous.brotli [
     "https://codeload.github.com/google/brotli/tar.gz/v${previous.brotli.version}"
@@ -20,10 +23,10 @@ in {
     "https://sources.buildroot.net/c-ares/c-ares-${previous.c-ares.version}.tar.gz"
     "https://distfiles.macports.org/c-ares/c-ares-${previous.c-ares.version}.tar.gz"
   ];
-  curl = mirrors previous.curl [
+  curl = curl previous.curl [
     "https://curl.se/download/curl-${previous.curl.version}.tar.xz"
   ];
-  curlMinimal = mirrors previous.curlMinimal [
+  curlMinimal = curl previous.curlMinimal [
     "https://curl.se/download/curl-${previous.curlMinimal.version}.tar.xz"
   ];
   libidn2 = mirrors previous.libidn2 [

@@ -927,6 +927,66 @@ class ContextMeterTests(unittest.TestCase):
                    and not message['state']['prompt']['active'])
         self.classic_meter('3')
 
+    def test_next_request_uses_usage_instead_of_encrypted_output_size(self):
+        self.owner.config.write_text(self.owner.config.read_text().replace(
+            'exact_token_count = true', 'exact_token_count = false'))
+        self.configure()
+        self.release.set()
+
+        def respond(handler, request, sequence):
+            if sequence == 2:
+                self.ready.set()
+                self.first.wait(10)
+            rid = 'resp_meter_' + str(sequence)
+            handler.send_response(200)
+            handler.send_header('Content-Type', 'text/event-stream')
+            handler.send_header('Connection', 'close')
+            handler.end_headers()
+            handler.close_connection = True
+            data = self.provider.event('response.created', {
+                'response': {'id': rid, 'status': 'in_progress', 'output': []}})
+            data += self.provider.event('response.output_item.done', {
+                'output_index': 0, 'item': {'type': 'reasoning', 'id': 'opaque_' + rid,
+                'summary': [], 'encrypted_content': 'A' * 600000}})
+            data += self.provider.event('response.output_item.done', {
+                'output_index': 1, 'item': {'type': 'message', 'id': 'answer_' + rid,
+                'role': 'assistant', 'status': 'completed', 'content': [
+                {'type': 'output_text', 'text': 'meter answer', 'annotations': []}]}})
+            data += self.provider.event('response.completed', {'response': {
+                'id': rid, 'status': 'completed', 'output': [], 'usage': {
+                'input_tokens': 60000 if sequence == 1 else 62000,
+                'output_tokens': 2000, 'total_tokens': 62000 if sequence == 1 else 64000}}})
+            handler.wfile.write(data.encode())
+            handler.wfile.flush()
+
+        self.provider.runtime_handler = respond
+        peer = self.owner.view()
+        os.write(self.owner.initial.master, b'establish known usage\r')
+        self.owner.wait_event('turn_completed')
+        self.wait_meter(peer, lambda value: value == '62')
+        self.owner.initial.output.clear()
+        os.write(self.owner.initial.master, b'continue with retained reasoning\r')
+        self.assertTrue(self.ready.wait(5))
+        prompt = self.wait_meter(peer, lambda value: value.startswith('~'))
+        self.assertTrue(62 <= int(prompt['values'][5][1:]) <= 65, prompt)
+        self.classic_meter(prompt['values'][5])
+        self.assertTrue(any('encrypted_content' in item for item in
+                            self.provider.requests[-1]['body']['input']))
+        self.first.set()
+        self.wait_meter(peer, lambda value: value == '64')
+        peer.until('state', lambda message: not message['state']['prompt']['active'])
+        self.owner.finish(self.owner.initial, b'/exit')
+        resumed = self.owner.start(['--resume', self.owner.sid])
+        resumed.until(b'METER ~')
+        view = self.owner.view()
+        prompt = self.wait_meter(view, lambda value: value.startswith('~'))
+        self.assertTrue(64 <= int(prompt['values'][5][1:]) <= 67, prompt)
+        self.assertEqual(len(self.provider.requests), 2)
+        self.owner.finish(resumed, b'/exit')
+
+    def test_next_request_meter_survives_legacy_resume(self):
+        self.test_next_request_uses_usage_instead_of_encrypted_output_size()
+
     def test_compaction_refreshes_known_capacity_without_a_count_endpoint(self):
         self.owner.config.write_text(self.owner.config.read_text().replace(
             'exact_token_count = true', 'exact_token_count = false'))

@@ -745,7 +745,10 @@ retain. Avoiding HTTP/2 prevents gateway stream resets from discarding long
 Responses requests. A provider's `DOTDIR/ca/NAME.pem` supplies persistent CA trust
 when SSL_CERT_FILE is unset. Configuration snapshots retain its path, including
 background compaction and realtime owners; each request reads the bundle.
-Missing bundles use normal roots, while invalid bundles fail closed. TLS
+Missing bundles use normal roots, while invalid bundles fail closed. Bundled curl
+keeps mbedTLS TLS 1.3 ticket notifications internal during blocked uploads, avoiding
+a retry that sends the same TLS record twice. The shared source overlay applies
+this patch to every bundled target. TLS
 verification, cancellation and the existing retry
 admission rules remain unchanged. The HTTPS fixture offers HTTP/2 first and
 resets those streams, verifying HTTP/1.1 completion, TLS trust rejection and no

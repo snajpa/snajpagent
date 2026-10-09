@@ -1013,6 +1013,8 @@ snag_app_request_build(struct app_state *app, const json_t *steering, unsigned i
         errno = context_errno;
         return -1;
     }
+    app->request_context_estimate = snag_app_context_estimate(app, app->turn_provider,
+        app->turn_model, app->turn_effort, projection);
     projection->irc_boundary = app->session.next_seq - 1;
     projection->irc_count = app->session.irc_admitted_count;
     memcpy(
