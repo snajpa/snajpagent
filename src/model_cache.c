@@ -608,6 +608,54 @@ snag_model_metadata(const struct snag_model_cache *cache,
         cache, provider->name, snag_config_model_upstream(provider, model));
 }
 
+int
+snag_model_parse_context(const char *text, struct snag_context_choice *choice,
+    char *error, size_t error_size)
+{
+    if (!strcmp(text, "default")) {
+        *choice = (struct snag_context_choice){SNAG_CONTEXT_MODE_DEFAULT, 0u};
+    } else if (!strcmp(text, "max")) {
+        *choice = (struct snag_context_choice){SNAG_CONTEXT_MODE_MAX, 0u};
+    } else {
+        uint64_t tokens = 0u;
+        for (const unsigned char *p = (const unsigned char *)text; *p; ++p) {
+            if (*p < '0' || *p > '9' ||
+                tokens > (SNAG_CONFIG_TOKEN_LIMIT_MAX - (*p - '0')) / 10u)
+                return snag_errorf(error, error_size,
+                    "context accepts default, max, or a token count between 1 and 4000000000");
+            tokens = tokens * 10u + (*p - '0');
+        }
+        if (!tokens)
+            return snag_errorf(error, error_size,
+                "context token count must be between 1 and 4000000000");
+        *choice = (struct snag_context_choice){SNAG_CONTEXT_MODE_TOKENS, tokens};
+    }
+    return 0;
+}
+
+int
+snag_model_context_suffix(char *selector, struct snag_context_choice *choice,
+    char *error, size_t error_size)
+{
+    char quote = '\0';
+    char *suffix = NULL;
+    for (char *p = selector; *p; ++p) {
+        if (quote) {
+            if (*p == quote) quote = '\0';
+        } else if (*p == '\'' || *p == '"') {
+            quote = *p;
+        } else if (*p == ':' && !suffix) {
+            suffix = p;
+        } else if (*p == '/') {
+            suffix = NULL;
+        }
+    }
+    if (quote || !suffix) return 0;
+    if (snag_model_parse_context(suffix + 1u, choice, error, error_size) < 0) return -1;
+    *suffix = '\0';
+    return 1;
+}
+
 static bool
 selector_is_index(const char *selector, size_t *index)
 {
@@ -639,10 +687,16 @@ snag_model_select_selector(const struct snag_model_cache *cache, const struct sn
     const char *provider = NULL, *model = NULL, *effort = NULL;
     size_t index = 0u;
     int rc, written;
+    char copy[SNAG_CONFIG_PATH_MAX + 1u];
+    struct snag_context_choice context = {0};
+    if (!selector || !snag_strcpy(copy, sizeof(copy), selector))
+        return snag_errorf(error, error_size, "model selector is too long");
+    int context_set = snag_model_context_suffix(copy, &context, error, error_size);
+    if (context_set < 0) return -1;
 
     /* Without a catalogue an index cannot be resolved, so keep name semantics rather than
      * silently sending bare digits upstream as a model name. */
-    if (!cache || !selector_is_index(selector, &index))
+    if (!cache || !selector_is_index(copy, &index))
         return snag_model_select(cache, config, selector, fallback_provider, fallback_effort,
             selection, error, error_size);
     rc = snag_model_entry(cache, config, index, fallback_effort, &provider, &model, &effort);
@@ -656,8 +710,13 @@ snag_model_select_selector(const struct snag_model_cache *cache, const struct sn
                   ? snprintf(composed, sizeof(composed), "%s/\"%s\"/%s", provider, model, effort)
                   : snprintf(composed, sizeof(composed), "%s/%s/%s", provider, model, effort);
     if (written < 0 || (size_t)written >= sizeof(composed)) return -1;
-    return snag_model_select(
+    rc = snag_model_select(
         cache, config, composed, fallback_provider, fallback_effort, selection, error, error_size);
+    if (rc == 0) {
+        selection->context_set = context_set != 0;
+        selection->context = context;
+    }
+    return rc;
 }
 
 /* Quote-aware split of a model selector into at most three slash-separated
@@ -708,7 +767,7 @@ snag_model_select(const struct snag_model_cache *cache, const struct snag_config
     const char *fallback_effort, struct snag_model_selection *selection, char *error,
     size_t error_size)
 {
-    char copy[SNAG_CONFIG_MODEL_MAX + SNAG_CONFIG_PROVIDER_NAME_MAX + SNAG_CONFIG_EFFORT_MAX + 2u];
+    char copy[SNAG_CONFIG_MODEL_MAX + SNAG_CONFIG_PROVIDER_NAME_MAX + SNAG_CONFIG_EFFORT_MAX + 32u];
     char *parts[3], *model;
     const char *effort = NULL;
     size_t count;
@@ -716,6 +775,10 @@ snag_model_select(const struct snag_model_cache *cache, const struct snag_config
     const struct snag_provider_config *provider = fallback_provider;
 
     if (!selector || !snag_strcpy(copy, sizeof(copy), selector)) goto invalid;
+    selection->context = (struct snag_context_choice){0};
+    int context_set = snag_model_context_suffix(copy, &selection->context, error, error_size);
+    if (context_set < 0) return -1;
+    selection->context_set = context_set != 0;
     split = snag_model_split_selector(copy, parts);
     if (split == -2) {
         snag_errorf(error, error_size,

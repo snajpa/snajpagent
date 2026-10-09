@@ -1666,7 +1666,7 @@ snag_config_validate_provider(
 static int
 save_config_settings(const char *path, bool allow_create, const char *provider, const char *model,
     const char *effort, const struct snag_provider_config *provider_config, uint64_t context_tokens,
-    char *error, size_t error_size)
+    bool save_model, char *error, size_t error_size)
 {
     snag_file_info before;
     snag_file_info current;
@@ -1759,6 +1759,17 @@ save_config_settings(const char *path, bool allow_create, const char *provider, 
         snag_buf_free(&output);
         output = selected;
     }
+    if (context_tokens && save_model) {
+        struct snag_buf selected = {.max = SNAG_CONFIG_FILE_MAX};
+        const char *model_values[] = {provider, model, effort};
+        if (replace_settings(&output, &selected, NULL, "agent", model_setting_keys,
+                model_values, 3u) < 0) {
+            snag_buf_free(&selected);
+            goto out;
+        }
+        snag_buf_free(&output);
+        output = selected;
+    }
     if (validate_config_text(&output, path, read_rc != 0 || private_file, error, error_size) < 0)
         goto out;
     if (snag_random_id(id) < 0) goto out;
@@ -1829,12 +1840,13 @@ snag_config_save_model(const char *path, bool allow_create, const char *provider
     const char *effort, char *error, size_t error_size)
 {
     return save_config_settings(
-        path, allow_create, provider, model, effort, NULL, 0u, error, error_size);
+        path, allow_create, provider, model, effort, NULL, 0u, false, error, error_size);
 }
 
-int
-snag_config_save_context(struct snag_config *config, const char *path, bool allow_create,
-    const char *provider, const char *model, uint64_t tokens, char *error, size_t error_size)
+static int
+save_context_settings(struct snag_config *config, const char *path, bool allow_create,
+    const char *provider, const char *model, const char *effort, uint64_t tokens,
+    char *error, size_t error_size)
 {
     if (!config || !snag_config_name_valid(provider) || !tokens ||
         tokens > SNAG_CONFIG_TOKEN_LIMIT_MAX || !model || !*model || strchr(model, '*') ||
@@ -1851,8 +1863,8 @@ snag_config_save_context(struct snag_config *config, const char *path, bool allo
     }
     if (index == config->model_limit_count && grow_model_limits(config) < 0)
         return snag_errorf(error, error_size, "cannot allocate the context default");
-    if (save_config_settings(path, allow_create, provider, model, "default", selected, tokens,
-            error, error_size) < 0)
+    if (save_config_settings(path, allow_create, provider, model, effort ? effort : "default",
+            selected, tokens, effort != NULL, error, error_size) < 0)
         return -1;
     struct snag_model_limit_config *limit = &config->model_limits[index];
     if (index == config->model_limit_count) {
@@ -1866,6 +1878,23 @@ snag_config_save_context(struct snag_config *config, const char *path, bool allo
 }
 
 int
+snag_config_save_context(struct snag_config *config, const char *path, bool allow_create,
+    const char *provider, const char *model, uint64_t tokens, char *error, size_t error_size)
+{
+    return save_context_settings(config, path, allow_create, provider, model, NULL, tokens,
+        error, error_size);
+}
+
+int
+snag_config_save_model_context(struct snag_config *config, const char *path, bool allow_create,
+    const char *provider, const char *model, const char *effort, uint64_t tokens,
+    char *error, size_t error_size)
+{
+    return save_context_settings(config, path, allow_create, provider, model, effort, tokens,
+        error, error_size);
+}
+
+int
 snag_config_save_provider(const char *path, bool allow_create,
     const struct snag_provider_config *provider, const char *initial_model, const char *effort,
     char *error, size_t error_size)
@@ -1876,7 +1905,7 @@ snag_config_save_provider(const char *path, bool allow_create,
         strchr(provider->base_url, '\n') || strchr(provider->base_url, '\r'))
         return snag_errorf(error, error_size, "invalid provider settings");
     return save_config_settings(path, allow_create, provider->name,
-        initial_model ? initial_model : "", effort ? effort : "default", provider, 0u, error,
+        initial_model ? initial_model : "", effort ? effort : "default", provider, 0u, false, error,
         error_size);
 }
 

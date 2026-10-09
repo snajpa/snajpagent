@@ -97,6 +97,26 @@ test_selectors(void)
     assert(snag_model_select(
                NULL, &config, "\"q/m\"", NULL, "medium", &selected, error, sizeof(error)) == 0);
     assert(selected.provider == &config.providers[1] && !strcmp(selected.model, "m"));
+    assert(snag_model_select(NULL, &config, "p/m/high:500000", first, "medium",
+               &selected, error, sizeof(error)) == 0);
+    assert(!strcmp(selected.model, "m") && !strcmp(selected.effort, "high"));
+    assert(selected.context_set && selected.context.mode == SNAG_CONTEXT_MODE_TOKENS &&
+           selected.context.tokens == 500000u);
+    assert(snag_model_select(NULL, &config, "p/\"q/m:free\"/high:max", first, "medium",
+               &selected, error, sizeof(error)) == 0);
+    assert(!strcmp(selected.model, "q/m:free") && selected.context_set &&
+           selected.context.mode == SNAG_CONTEXT_MODE_MAX);
+    assert(snag_model_select(NULL, &config, "\"m:500000\"", first, "medium",
+               &selected, error, sizeof(error)) == 0);
+    assert(!strcmp(selected.model, "m:500000") && !selected.context_set);
+    assert(snag_model_select(NULL, &config, "m:default", first, "medium",
+               &selected, error, sizeof(error)) == 0);
+    assert(selected.context_set && selected.context.mode == SNAG_CONTEXT_MODE_DEFAULT);
+    const char *bad_context[] = {"m:", "p/m/high:0", "m/high:-1", "m/high:+1",
+        "m/high:4000000001", "m/high:184467440737095516160", "m/high:typo", "m/high:1:2"};
+    for (size_t i = 0; i < sizeof(bad_context) / sizeof(bad_context[0]); ++i)
+        assert(snag_model_select(NULL, &config, bad_context[i], first, "medium",
+                   &selected, error, sizeof(error)) < 0);
     for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); ++i)
         assert(snag_model_select(
                    NULL, &config, bad[i], first, "medium", &selected, error, sizeof(error)) < 0);
@@ -203,6 +223,10 @@ test_local_models(struct snag_store *store, struct snag_model_cache *cache)
         assert(snag_model_select_selector(
                    cache, &config, "#1", provider, "medium", &selected, error, sizeof(error)) == 0);
         assert(strcmp(selected.model, entry_model) == 0);
+        assert(snag_model_select_selector(cache, &config, "#1:4000000000", provider,
+                   "medium", &selected, error, sizeof(error)) == 0);
+        assert(strcmp(selected.model, entry_model) == 0 && selected.context_set &&
+               selected.context.tokens == 4000000000u);
         assert(snag_model_select_selector(
                    cache, &config, "999", provider, "medium", &selected, error, sizeof(error)) < 0);
         assert(strstr(error, "not in the catalogue") != NULL);

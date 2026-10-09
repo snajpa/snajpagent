@@ -271,6 +271,9 @@ choose_model(const struct snag_cli *cli, const struct snag_config *config,
         if (snag_model_select(NULL, config, cli->model, provider, config->reasoning_effort,
                 &selection, error, error_size) < 0)
             return -1;
+        if (selection.context_set)
+            return snag_errorf(error, error_size,
+                "select a session context with --model after login, or /model SELECTOR save");
         if (strcmp(selection.provider->name, provider->name)) {
             snag_errorf(error, error_size, "model selector must use the login provider");
             return -1;

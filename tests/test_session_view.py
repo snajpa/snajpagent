@@ -978,6 +978,140 @@ class ContextMeterTests(unittest.TestCase):
         self.assertEqual(len(self.provider.requests), 1)
         self.owner.finish(resumed, b'/exit')
 
+    def command(self, text, marker):
+        self.owner.initial.output.clear()
+        os.write(self.owner.initial.master, (text + '\r').encode())
+        return self.owner.initial.until(marker.encode())
+
+    def test_model_context_save_wire_and_resume(self):
+        peer = self.owner.view()
+        self.command('/model fake/host-model/high:60000 save', 'configuration saved:')
+        prompt = peer.until('state', lambda message:
+                            message['state']['prompt']['values'][2] == 'high')['state']['prompt']
+        self.assertEqual(prompt['values'][1], 'host-model')
+        self.assertNotEqual(prompt['values'][5], '?')
+        saved = self.owner.config.read_text()
+        self.assertIn('reasoning_effort = high', saved)
+        self.assertIn('context_window_tokens = 60000', saved)
+        self.assertIn('max_output_tokens = 10000', saved)
+        self.assertEqual(self.owner.wait_event('context_selection_changed')['data']['new_tokens'],
+                         60000)
+        os.write(self.owner.initial.master, b'context selection wire identity\r')
+        self.owner.wait_event('turn_completed')
+        request, = self.provider.requests
+        self.assertEqual(request['body']['model'], 'host-model')
+        self.assertEqual(request['body']['reasoning']['effort'], 'high')
+        self.owner.finish(self.owner.initial, b'/exit')
+        self.owner.status('stored')
+        resumed = self.owner.start(['--resume', self.owner.sid])
+        resumed.until(b'METER')
+        os.write(resumed.master, b'/context\r')
+        resumed.until(b'selected=60000')
+        self.assertEqual(len(self.provider.requests), 1)
+        self.owner.finish(resumed, b'/exit')
+
+    def test_invalid_model_context_preserves_model_and_config(self):
+        before = self.owner.config.read_bytes()
+        for selector in ('fake/two-model/high:0', 'fake/two-model/high:-1',
+                         'fake/two-model/high:4000000001'):
+            self.command('/model ' + selector + ' save', '4000000000')
+        self.command('/model fake/host-model/high:9000 save', 'output reservation')
+        self.command('/model fake/host-model/high:max save', 'explicit token count')
+        self.assertEqual(self.owner.config.read_bytes(), before)
+        self.assertFalse(any(event['type'] in ('model_selection_changed',
+                                              'context_selection_changed')
+                             for event in self.owner.events()))
+        self.assertEqual(self.provider.requests, [])
+
+    def test_model_context_start_resume_override_and_omission(self):
+        self.owner.finish(self.owner.initial, b'/exit')
+        self.owner.status('stored')
+        sid = None
+        for args, tokens in ((['-N', 'context-start', '-m',
+                              'fake/host-model/high:70000'], 70000),
+                             (['--resume', 'context-start', '-m',
+                               'fake/host-model/low:80000'], 80000),
+                             (['--resume', 'context-start', '-m',
+                               'fake/host-model/high'], 80000)):
+            if sid:
+                args[1] = sid
+            child = self.owner.start(args)
+            child.until(b'METER')
+            sid, = (path.parent.name for path in journal_paths(self.owner.root / 'state')
+                    if path.parent.name != self.owner.sid)
+            os.write(child.master, b'/context\r')
+            child.until(('selected=' + str(tokens)).encode())
+            self.owner.finish(child, b'/exit')
+        child = self.owner.start(['--resume', sid, '-m',
+                                  'fake/host-model/high:9000'])
+        child.until(b'output reservation')
+        child.process.wait(5)
+        self.assertNotEqual(child.process.returncode, 0)
+        child = self.owner.start(['--resume', sid])
+        child.until(b'METER')
+        os.write(child.master, b'/context\r')
+        child.until(b'selected=80000')
+        self.owner.finish(child, b'/exit')
+        self.assertEqual(self.provider.requests, [])
+
+    def test_cached_model_tool_applies_context_before_next_response(self):
+        self.owner.config.write_text(self.owner.config.read_text().replace(
+            '[agent]\n', '[agent]\nallow_model_change = true\n', 1))
+        self.configure()
+        self.command('/model cache', 'cache updated:')
+        self.provider.AGENTS = {**self.provider.AGENTS, 'standard-model': 'standardbot'}
+
+        def respond(handler, request, sequence):
+            body = (self.provider.function_body(sequence, 'choose_context', 'select_model',
+                    {'selector': '#1:120000'}) if request['model'] == 'host-model' else
+                    self.provider.response_body(sequence, 'selected context via tool'))
+            self.provider.reply(handler, body.encode(), close_header=True)
+
+        self.provider.runtime_handler = respond
+        peer = self.owner.view()
+        os.write(self.owner.initial.master, b'select a cached model and context\r')
+        self.owner.wait_event('turn_completed')
+        peer.until('state', lambda message:
+                   message['state']['prompt']['values'][1:3] == ['standard-model', 'medium'])
+        self.assertEqual([request['model'] for request in self.provider.requests],
+                         ['host-model', 'standard-model'])
+        self.command('/context', 'selected=120000')
+        outputs = [item['output'] for item in self.provider.requests[-1]['body']['input']
+                   if item.get('type') == 'function_call_output']
+        self.assertTrue(any('context=120000 tokens' in output for output in outputs), outputs)
+
+    def test_model_context_switch_during_request_keeps_wire_and_prompt_aligned(self):
+        held = threading.Event()
+        switched = threading.Event()
+        self.provider.AGENTS = {**self.provider.AGENTS, 'two-model': 'twobot'}
+
+        def respond(handler, request, sequence):
+            if request['model'] == 'host-model':
+                held.set()
+                self.release.wait(10)
+            else:
+                switched.set()
+            try:
+                self.provider.reply(handler, self.provider.response_body(
+                    sequence, 'context-switch-complete').encode(), close_header=True)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+
+        self.provider.runtime_handler = respond
+        peer = self.owner.view()
+        os.write(self.owner.initial.master, b'held selection request\r')
+        self.assertTrue(held.wait(5))
+        self.command('/model fake/two-model/high:120000', 'selected=120000')
+        self.assertTrue(switched.wait(5))
+        peer.until('state', lambda message:
+                   message['state']['prompt']['values'][1:3] == ['two-model', 'high'])
+        self.owner.wait_event('turn_completed')
+        self.assertEqual([request['model'] for request in self.provider.requests],
+                         ['host-model', 'two-model'])
+        self.assertEqual(self.provider.requests[-1]['body']['reasoning']['effort'], 'high')
+        self.command('/context', 'selected=120000')
+        self.release.set()
+
     def test_selection_rebuilds_estimates_and_unknown_capacity_stays_unknown(self):
         os.write(self.owner.initial.master, b'one measured response\r')
         self.owner.wait_event('turn_completed')

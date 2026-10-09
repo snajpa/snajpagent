@@ -2866,10 +2866,11 @@ tool_schemas(bool goal_active, bool goal_create_allowed, bool networked,
                     "Other selectors must match a provider/model/effort in the current model "
                     "cache. "
                     "Use selector cache to refresh the catalog and see its available rows; "
-                    "then select [provider/]model[/effort] or a numbered cached row. "
+                    "then select [provider/]model[/effort][:context] or a numbered cached row. "
                     "This changes the session selection, not the configuration file.",
                     json_pack("{s:{s:s,s:s}}", "selector", "type", "string", "description",
-                        "Cached model/effort row, or cache to refresh and list."))) < 0) ||
+                        "Cached model/effort row with optional :context (default, max, or tokens); "
+                        "cache refreshes and lists."))) < 0) ||
         json_array_append_new(tools, snag_context_read_tool_schema("list_files")) < 0 ||
         json_array_append_new(tools, snag_context_read_tool_schema("read_file")) < 0 ||
         json_array_append_new(tools, snag_context_read_tool_schema("grep")) < 0 ||

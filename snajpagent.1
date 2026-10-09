@@ -950,7 +950,7 @@ them, while explicit -d options replace the saved set. They remain explicit poin
 when automatic discovery is disabled.  They do not grant unrelated write
 permission or synchronize documents between hosts.
 .TP
-.BI \-m " [provider/]model[/effort]"
+.BI \-m " [provider/]model[/effort][:context]"
 Select the model for the next request on start or resume, including an unfinished
 turn. With an omitted
 provider, use the first provider defined in the configuration (or an explicit
@@ -981,6 +981,23 @@ so
 .B \(dqopenrouter/openai/gpt-4.1-mini\(dq
 selects the same model.  A provider-local model name in the configuration
 remains available for IDs used often.
+Append
+.B :context
+to choose the session window together with the model, for example
+.BR \-m " 'openai/MODEL/high:200000'" .
+The suffix accepts
+.BR default ,
+.BR max ,
+or an integer token count with the same validation as
+.BR /context .
+Numbered rows also accept it:
+.BR \-m " '12:200000'" .
+A quoted colon stays part of its component; quote a final model ID containing a
+literal colon, for example
+.BR \-m " '\(dqlocal:model\(dq'" .
+The local context suffix is removed before sending the model name to a provider.
+Omitting it preserves the session's context selection. The suffix is a session
+control; choose it after login when using the login subcommand.
 The provider/model/effort selection becomes the session preference until changed.
 It survives later turns and session resume, including when you exit before running
 the next turn. An already active turn or admitted pending input retains its saved
@@ -2869,6 +2886,19 @@ selection differs from the startup
 .B \-m
 option, which uses the first configured or cached effort. Two components mean model/effort;
 include all three components to name a provider explicitly.
+Append
+.B :context
+to any selector, including a numbered row, to select its window using
+.BR /context 's
+.BR default ,
+.B max
+or numeric syntax. For example,
+.B /model openai/MODEL/high:200000 save
+saves the model and effort plus its exact model-limit context default in one
+configuration replacement. Saving a context suffix requires a numeric token
+count. Invalid context choices and failed configuration writes leave the
+session selection unchanged. Without a context suffix, its current choice is
+preserved.
 .TP
 .BR /fast " [on|off|status]"
 Toggle fast service and print the resulting ON or OFF state. The optional

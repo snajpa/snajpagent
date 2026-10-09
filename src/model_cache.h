@@ -77,6 +77,8 @@ struct snag_model_selection {
     const struct snag_provider_config *provider;
     char model[SNAG_CONFIG_MODEL_MAX];
     char effort[SNAG_CONFIG_EFFORT_MAX];
+    bool context_set;
+    struct snag_context_choice context;
 };
 /* Quote-aware split of a model selector into at most three slash-separated
  * components. A component wrapped in matching single or double quotes keeps
@@ -85,6 +87,11 @@ struct snag_model_selection {
  * parts[] points into copy. Returns the component count, -1 when a fourth
  * component starts, or -2 for malformed quoting. */
 int snag_model_split_selector(char *copy, char *parts[3]);
+int snag_model_parse_context(const char *text, struct snag_context_choice *choice,
+    char *error, size_t error_size);
+/* Removes an unquoted :context suffix. Returns 1 when present, 0 when absent. */
+int snag_model_context_suffix(char *selector, struct snag_context_choice *choice,
+    char *error, size_t error_size);
 /* A configured provider prefix disambiguates provider/model from model/effort. */
 int snag_model_select(const struct snag_model_cache *cache, const struct snag_config *config,
     const char *selector, const struct snag_provider_config *fallback_provider,

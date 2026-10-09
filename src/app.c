@@ -2180,14 +2180,58 @@ record_model_selection(struct app_state *app, const char *provider, const char *
 }
 
 static int
+record_context_selection(struct app_state *app, const struct snag_context_choice *choice,
+    char *error, size_t error_size)
+{
+    if (!choice || (choice->mode == app->session.context_mode &&
+                       choice->tokens == app->session.context_tokens))
+        return 0;
+    if (commit_event(app, "context_selection_changed",
+            json_pack("{s:s,s:I,s:s,s:I}", "new_mode", snag_context_mode_name(choice->mode),
+                "new_tokens", (json_int_t)choice->tokens, "old_mode",
+                snag_context_mode_name(app->session.context_mode), "old_tokens",
+                (json_int_t)app->session.context_tokens),
+            error, error_size) < 0)
+        return -1;
+    if (app->session.active_turn) {
+        /* Retain the serving model's capacity until its replacement starts. */
+        if (app->turn_provider && app->turn_model &&
+            !strcmp(app->turn_provider->name, app->session.default_provider) &&
+            !strcmp(app->turn_model, app->session.default_model) &&
+            snag_app_capacity_resolve(app, app->turn_provider, app->turn_model,
+                &app->turn_capacity, error, error_size) < 0)
+            return -1;
+        app->model_switch_requested = true;
+    }
+    return 0;
+}
+
+static int report_context(struct app_state *app, const struct snag_provider_config *provider,
+    const struct snag_context_choice *choice);
+
+static int
 commit_model_selection(struct app_state *app, const struct snag_provider_config *provider,
-    const char *model, const char *effort, bool known_in_cache, bool save)
+    const char *model, const char *effort, bool known_in_cache, bool save,
+    const struct snag_context_choice *choice)
 {
     char error[256] = {0};
     bool current_turn = app->session.active_turn;
     int rc;
 
-    if (save) {
+    if (choice) {
+        struct snag_model_capacity capacity;
+        if (save && choice->mode != SNAG_CONTEXT_MODE_TOKENS)
+            return app_error(app, "saving a context default requires an explicit token count");
+        if (snag_app_context_preview(app, provider, model, choice, &capacity,
+                error, sizeof(error)) < 0)
+            return app_error(app, error);
+    }
+    if (save && choice) {
+        if (snag_config_save_model_context(app->config, app->config_path,
+                app->config_allow_create, provider->name, model, effort, choice->tokens,
+                error, sizeof(error)) < 0)
+            return app_error(app, error[0] ? error : "model settings could not be saved");
+    } else if (save) {
         snag_file_info st;
         bool missing =
             app->config_allow_create && snag_lstat(app->config_path, &st) < 0 && errno == ENOENT;
@@ -2201,6 +2245,10 @@ commit_model_selection(struct app_state *app, const struct snag_provider_config 
     }
     if (record_model_selection(app, provider->name, model, effort, error, sizeof(error)) < 0) {
         (void)app_error(app, error[0] ? error : "model selection could not be saved");
+        return -1;
+    }
+    if (record_context_selection(app, choice, error, sizeof(error)) < 0) {
+        (void)app_error(app, error[0] ? error : "context selection could not be saved");
         return -1;
     }
     if (current_turn &&
@@ -2223,10 +2271,12 @@ commit_model_selection(struct app_state *app, const struct snag_provider_config 
             "model is not known in the model cache; the configured provider will still be used") <
             0)
         return -1;
+    if (choice && report_context(app, provider, choice) < 0) return -1;
     return save ? app_textf(app, SNAG_UI_HOST, "configuration saved: %s", app->config_path) : 0;
 }
 static int
-select_cached_model(struct app_state *app, const char *value, bool save)
+select_cached_model(struct app_state *app, const char *value, bool save,
+    const struct snag_context_choice *choice)
 {
     const struct snag_provider_config *provider_config;
     const char *provider;
@@ -2244,10 +2294,11 @@ select_cached_model(struct app_state *app, const char *value, bool save)
     provider_config = snag_config_provider(app->config, provider);
     if (!provider_config)
         return app_error(app, "cached provider is not configured; use /model cache");
-    return commit_model_selection(app, provider_config, model, effort, true, save);
+    return commit_model_selection(app, provider_config, model, effort, true, save, choice);
 }
 static int
-select_typed_model(struct app_state *app, char *value, bool save)
+select_typed_model(struct app_state *app, char *value, bool save,
+    const struct snag_context_choice *choice)
 {
     const struct snag_provider_config *provider;
     const char *model;
@@ -2318,7 +2369,7 @@ select_typed_model(struct app_state *app, char *value, bool save)
                 app->config, provider->name, model, cached, resolve_effort(effort));
     }
     return commit_model_selection(
-        app, provider, model, resolve_effort(effort), known_in_cache, save);
+        app, provider, model, resolve_effort(effort), known_in_cache, save, choice);
 }
 
 static bool
@@ -2374,8 +2425,16 @@ change_model(struct app_state *app, const char *value, bool active)
         return rc;
     }
     save = strip_model_save_suffix(selector);
-    rc = select_cached_model(app, selector, save);
-    if (rc == 1) rc = select_typed_model(app, selector, save);
+    struct snag_context_choice choice = {0};
+    int context_set = snag_model_context_suffix(selector, &choice, error, sizeof(error));
+    if (context_set < 0) {
+        free(copy);
+        return app_error(app, error);
+    }
+    selector = trim_selector_part(selector);
+    rc = select_cached_model(app, selector, save, context_set ? &choice : NULL);
+    if (rc == 1)
+        rc = select_typed_model(app, selector, save, context_set ? &choice : NULL);
     free(copy);
     return rc;
 }
@@ -2482,14 +2541,32 @@ snag_app_select_model_tool(struct app_state *app, const struct snag_response_ite
             "use selector cache to refresh");
         return *result ? 0 : -1;
     }
+    const struct snag_context_choice *choice = selected.context_set ? &selected.context : NULL;
+    struct snag_model_capacity capacity;
+    if (choice && snag_app_context_preview(app, selected.provider, selected.model, choice,
+                      &capacity, error, error_size) < 0) {
+        *result = snag_tool_result_terminal(false, error);
+        return *result ? 0 : -1;
+    }
     if (commit_model_selection(
-            app, selected.provider, selected.model, selected.effort, true, false) < 0)
+            app, selected.provider, selected.model, selected.effort, true, false, choice) < 0)
         return snag_errorf(error, error_size, "cannot apply model selection");
     if (snag_buf_printf(&message, "model for %s: %s / %s / %s",
             app->session.active_turn ? "next response in this turn" : "next turn",
             selected.provider->name, selected.model, selected.effort) < 0) {
         snag_buf_free(&message);
         return -1;
+    }
+    if (choice) {
+        int appended = choice->mode == SNAG_CONTEXT_MODE_TOKENS
+                           ? snag_buf_printf(&message, "; context=%llu tokens",
+                                 (unsigned long long)choice->tokens)
+                           : snag_buf_printf(&message, "; context=%s",
+                                 snag_context_mode_name(choice->mode));
+        if (appended < 0) {
+            snag_buf_free(&message);
+            return -1;
+        }
     }
     *result = snag_tool_result_terminal(true, (const char *)message.data);
     snag_buf_free(&message);
@@ -2908,7 +2985,6 @@ change_context(struct app_state *app, const char *value, bool active)
     char *copy = NULL;
     char *word = NULL;
     char *end = NULL;
-    uint64_t tokens;
     bool save = false;
 
     (void)active;
@@ -2939,22 +3015,9 @@ change_context(struct app_state *app, const char *value, bool active)
         }
         save = true;
     }
-    if (strcmp(word, "default") == 0) {
-        choice = (struct snag_context_choice){SNAG_CONTEXT_MODE_DEFAULT, 0u};
-    } else if (strcmp(word, "max") == 0) {
-        choice = (struct snag_context_choice){SNAG_CONTEXT_MODE_MAX, 0u};
-    } else {
-        errno = 0;
-        tokens = strtoull(word, &end, 10);
-        if (errno != 0 || end == word || *end) {
-            free(copy);
-            return app_error(app, "context accepts default, max, or a token count");
-        }
-        choice = (struct snag_context_choice){SNAG_CONTEXT_MODE_TOKENS, tokens};
-        if (!snag_context_choice_valid(choice.mode, choice.tokens)) {
-            free(copy);
-            return app_error(app, "context token count must be between 1 and 4000000000");
-        }
+    if (snag_model_parse_context(word, &choice, error, sizeof(error)) < 0) {
+        free(copy);
+        return app_error(app, error);
     }
     free(copy);
     if (save && choice.mode != SNAG_CONTEXT_MODE_TOKENS)
@@ -2969,29 +3032,8 @@ change_context(struct app_state *app, const char *value, bool active)
         snag_config_save_context(app->config, app->config_path, app->config_allow_create,
             provider->name, app->session.default_model, choice.tokens, error, sizeof(error)) < 0)
         return app_error(app, error[0] ? error : "context default could not be saved");
-    if (choice.mode != app->session.context_mode || choice.tokens != app->session.context_tokens) {
-        if (commit_event(app, "context_selection_changed",
-                json_pack("{s:s,s:I,s:s,s:I}", "new_mode", snag_context_mode_name(choice.mode),
-                    "new_tokens", (json_int_t)choice.tokens, "old_mode",
-                    snag_context_mode_name(app->session.context_mode), "old_tokens",
-                    (json_int_t)app->session.context_tokens),
-                error, sizeof(error)) < 0)
-            return app_error(app, error[0] ? error : "context selection could not be saved");
-        app->session.context_mode = choice.mode;
-        app->session.context_tokens = choice.tokens;
-        /* A running turn keeps its own capacity copy. Refresh it first, then
-         * reuse the model-switch restart: the active response ends at a safe
-         * boundary and the turn is rebuilt under the new window with retained
-         * history and completed tool results. */
-        if (app->session.active_turn) {
-            if (app->turn_provider && app->turn_model &&
-                snag_app_capacity_resolve(app, app->turn_provider, app->turn_model,
-                    &app->turn_capacity, error, sizeof(error)) < 0)
-                (void)app_warning(
-                    app, error[0] ? error : "turn context capacity could not be refreshed");
-            app->model_switch_requested = true;
-        }
-    }
+    if (record_context_selection(app, &choice, error, sizeof(error)) < 0)
+        return app_error(app, error[0] ? error : "context selection could not be saved");
     int rc = report_context(app, provider, &choice);
     if (rc < 0) return rc;
     return save ? app_textf(app, SNAG_UI_HOST, "configuration saved: %s", app->config_path) : 0;
@@ -7338,6 +7380,11 @@ run_owner(const struct snag_cli *cli, const char *program, struct snag_session_p
         }
         new_model = effective_model(selection.model);
         new_effort = cli->effort ? cli->effort : selection.effort;
+        struct snag_model_capacity capacity;
+        if (selection.context_set &&
+            snag_app_context_preview(&app, selection.provider, new_model, &selection.context,
+                &capacity, error, sizeof(error)) < 0)
+            goto invalid;
     }
     if ((!cli->resume || cli->effort || cli->model) && !resolve_effort(new_effort)) {
         invalid_message = "reasoning effort is empty, oversized, or invalid UTF-8";
@@ -7423,6 +7470,9 @@ run_owner(const struct snag_cli *cli, const char *program, struct snag_session_p
         app.turn_effort = resolve_effort(app.session.default_effort);
         app.turn_provider = selected_provider;
     }
+    if (selection.context_set &&
+        record_context_selection(&app, &selection.context, error, sizeof(error)) < 0)
+        goto fail;
     app.resume_options_ready = true;
     if (snag_app_save_resume_options(&app, error, sizeof(error)) < 0) goto fail;
     if (direct && snag_ui_leaving(&app.ui)) {

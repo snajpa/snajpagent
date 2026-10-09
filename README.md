@@ -247,7 +247,8 @@ if available. Short reports return automatically; longer reports wait for quit.
 Work and IRC keep buffering output. `[ui] pager = off` displays reports directly.
 
 `/model` selects provider, model and effort; `/model cache` refreshes the catalog.
-Selection survives resume. Model-callable switching requires
+Append `:context` to select its window, for example
+`/model openai/MODEL/high:200000 save`. Selection survives resume. Model-callable switching requires
 `[agent] allow_model_change=true`. `/fast` toggles priority service; provider
 support and pricing apply. `/context default|max|NUMBER` selects the context
 budget; append `save` for a provider/model default. Larger windows may change

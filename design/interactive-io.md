@@ -346,6 +346,14 @@ streaming Markdown state and redirected bytes. Other host/status output keeps
 its existing formatting. Interactive model syntax documents its own parser:
 two components mean model/effort, three name a provider; omitted effort uses
 highest cached/default/current effort, unlike the CLI's first-effort choice.
+Both parsers use the shared quote-aware `:context` suffix parser. Startup/resume,
+numbered rows and enabled model-selection tools apply it through the existing
+context choice and capacity resolver. Validation precedes configuration or session
+changes; model and context defaults share one atomic configuration replacement.
+Session changes retain the existing model/context events and native archive
+format. They are committed in sequence before request dispatch; a journal I/O
+failure stops that application path. Recovery uses the durable event prefix.
+Omitted suffixes preserve context selection; quoted colons stay in upstream IDs.
 
 Optional networking adds one IRC server owner and one client owner per outgoing
 endpoint (its agent/operator sockets stay together). Each runs the same existing

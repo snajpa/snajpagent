@@ -89,6 +89,7 @@ snag_app_voice_tools(void)
             tools, interface_tool("select_model",
                        "Change the coding session's provider/model/effort using a cached selector. "
                        "Existing process handles and completed results are retained. "
+                       "Append :context (default, max, or tokens) to select its window. "
                        "This interface does not perform catalog refresh.",
                        json_pack("{s:{s:s}}", "selector", "type", "string"),
                        json_pack("[s]", "selector"))) < 0 ||

@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Select a model and its context window with `provider/model/effort:context`,
+  including startup, resume, numbered rows and enabled model tools. Numeric
+  selections with `save` write both defaults in one configuration replacement.
+
 - Restore mention highlighting for routed IRC messages in live and replayed chat.
 
 - Remove unselected empty channel tabs after their connection is removed, while
