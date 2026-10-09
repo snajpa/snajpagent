@@ -220,7 +220,9 @@ then append only changed facts in one group. Goal wording is separate from goal
 status. Absence is explicit for a cleared work note, banner, reply list or process
 set, so an earlier value cannot remain current merely because it was omitted.
 Unsettled commands supply handles, state, unread bytes and stdin counts; their
-command and working directory are already in the paired call. This comparison
+stable command/workdir identities are separate facts retained once, including
+after compaction covers the originating call. Counter updates retain those
+identities without recopying their command text. This comparison
 never deduplicates arbitrary user or IRC text.
 
 Checkpoint restore rebuilds the derived view from its retained seam through the

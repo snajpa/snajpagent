@@ -6839,6 +6839,8 @@ def current_host_context(request):
             key = 'goal'
         elif 'The preceding JSON describes unsettled commands' in text:
             key = 'processes'
+        elif text.startswith('Unsettled command identity: '):
+            key = 'process-' + json.loads(text.split(': ', 1)[1])['handle']
         else:
             key = next((prefix for prefix in (
                 'Local operator display snapshot:', 'Local work note', 'Session banner',

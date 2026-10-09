@@ -5777,13 +5777,25 @@ test_host_snapshot_delta(struct snag_store *store, const char *cwd)
     memcpy(id, session.id, sizeof(id));
     commit_event(&session, "goal_started",
         goal_started_data("dd000000000000000000000000000001", objective));
+    const char *handle = "dd000000000000000000000000000004";
+    const char *setup_turn = "dd000000000000000000000000000005";
+    const char *setup_response = "dd000000000000000000000000000006";
+    const char *setup_call = handle;
+    commit_event(&session, "turn_started",
+        turn_started(setup_turn, 1u, "start a retained command", cwd, NULL));
+    commit_event(&session, "response_started", response_started(setup_turn, setup_response, NULL));
+    commit_event(&session, "response_completed",
+        response_completed_call(setup_turn, setup_response, setup_call, cwd));
+    commit_event(&session, "tool_started", tool_started_data(
+        setup_turn, setup_call, session.pending_calls[0].action_sha256, cwd));
+    commit_event(&session, "tool_finished", tool_finished_data(
+        setup_turn, setup_call, running_result_limit(handle, "command running", NULL, 6000u)));
     for (unsigned int cycle = 1u; cycle <= 4u; ++cycle) {
         char turn[33], response[33], visibility[64];
-        snprintf(turn, sizeof(turn), "%032x", 0xdd100u + cycle);
+        memcpy(turn, setup_turn, sizeof(turn));
         snprintf(response, sizeof(response), "%032x", 0xdd200u + cycle);
         snprintf(visibility, sizeof(visibility), "Display revision %u", cycle);
-        commit_event(&session, "turn_started", turn_started(turn, cycle, "work", cwd, NULL));
-        assert(snag_context_build(&session, SNAJPAGENT_MODEL, "medium", 1u, empty,
+        assert(snag_context_build(&session, SNAJPAGENT_MODEL, "medium", cycle + 1u, empty,
             0u, false, NULL, NULL, NULL, visibility, &projection, error,
             sizeof(error), NULL) == 0);
         struct snag_buf encoded = {.max = SNAG_CONTEXT_MAX_REQUEST};
@@ -5792,21 +5804,22 @@ test_host_snapshot_delta(struct snag_store *store, const char *cwd)
         const char *match = strstr((const char *)encoded.data, objective);
         assert(match && !strstr(match + strlen(objective), objective));
         assert(strstr((const char *)encoded.data, visibility));
+        match = strstr((const char *)encoded.data, "Unsettled command identity:");
+        assert(match && !strstr(match + 1u, "Unsettled command identity:"));
         snag_buf_free(&encoded);
         json_t *started = response_started(turn, response, NULL);
+        assert(json_object_set_new(started, "cycle", json_integer(cycle + 1u)) == 0);
         if (projection.host_context)
             assert(json_object_set(started, "host_context", projection.host_context) == 0);
         commit_event(&session, "response_started", started);
-        commit_event(&session, "response_completed",
-            response_completed(turn, response, "work result"));
-        commit_event(&session, "turn_completed", turn_completed(turn, response));
+        json_t *completed = response_completed(turn, response, "work result");
+        assert(json_object_set_new(completed, "cycle", json_integer(cycle + 1u)) == 0);
+        commit_event(&session, "response_completed", completed);
         snag_context_projection_free(&projection);
     }
     assert(snag_session_checkpoint(&session, error, sizeof(error)) == 0);
     snag_session_close(&session);
     assert(snag_session_open(store, &session, id, error, sizeof(error)) == 0);
-    commit_event(&session, "turn_started", turn_started(
-        "000000000000000000000000000dd105", 5u, "resume work", cwd, NULL));
     build_context(&session, 1u, empty, NULL, &projection);
     struct snag_buf encoded = {.max = SNAG_CONTEXT_MAX_REQUEST};
     assert(snag_json_canonical(json_object_get(projection.create_request.value, "input"),
@@ -5814,6 +5827,20 @@ test_host_snapshot_delta(struct snag_store *store, const char *cwd)
     const char *match = strstr((const char *)encoded.data, objective);
     assert(match && !strstr(match + strlen(objective), objective));
     snag_buf_free(&encoded);
+    snag_context_projection_free(&projection);
+    struct snag_context_projection compact = {0};
+    assert(snag_context_compact_request_build(&session, SNAJPAGENT_MODEL, "medium", true,
+        0u, false, NULL, &compact, error, sizeof(error), NULL) == 0);
+    json_t *output = compact_output_fixture();
+    commit_counted_compaction(&session, "dd000000000000000000000000000008", "manual",
+        SNAJPAGENT_MODEL, &compact, output);
+    json_decref(output);
+    build_context(&session, 1u, empty, NULL, &projection);
+    json_t *identity = message_matching(json_object_get(projection.create_request.value, "input"),
+        "Unsettled command identity:");
+    assert(identity && strstr(snag_json_string(identity, "content"), handle));
+    assert(strstr(snag_json_string(identity, "content"), session.processes[0].command));
+    snag_context_projection_free(&compact);
     snag_context_projection_free(&projection);
     json_decref(empty);
     snag_session_close(&session);

@@ -1234,6 +1234,15 @@ append_process_state(struct context_builder *builder)
     if (!jobs) goto out;
     for (size_t i = 0u; i < builder->session->process_count; ++i) {
         const struct snag_process_state *p = &builder->session->processes[i];
+        size_t identity_max = 6u * (sizeof(p->command) + sizeof(p->workdir)) + 128u;
+        json_t *identity = json_pack("{s:s,s:s,s:s}", "handle", p->handle,
+            "command", p->command, "workdir", p->workdir);
+        char *wire = identity ? canonical_string(identity, identity_max) : NULL;
+        json_decref(identity);
+        int described = wire ? append_messagef(builder, "user", identity_max,
+            "Unsettled command identity: %s", wire) : -1;
+        free(wire);
+        if (described < 0) goto out;
         json_t *job = json_pack("{s:s,s:s,s:I,s:I,s:I,s:I}", "handle", p->handle, "state",
             p->ready      ? "ready"
             : p->draining ? "draining"

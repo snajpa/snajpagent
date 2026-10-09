@@ -70,6 +70,10 @@ class HostedChannelTests(QueryFixture):
         self.peer.sock.sendall(b'PRIVMSG #lab :same-audit-corpus\r\n' * 2)
         self.wait(lambda: sum(e['data'].get('text') == 'same-audit-corpus' and
             e['data'].get('input', False) for e in self.events()) == 2)
+        sources = {e['seq'] for e in self.events() if e['data'].get('text') == 'same-audit-corpus'
+                   and e['data'].get('input', False)}
+        self.wait(lambda: sources.issubset({seq for e in self.events()
+            if e['type'] == 'irc_admitted' for seq in e['data']['sequences']}))
         self.wait_idle()
         self.submit('inspect-two-messages')
         input_text = json.dumps(self.seen[-1]['input'])
