@@ -4731,7 +4731,8 @@ test_prepared_native_seed(const char *cwd)
 }
 
 static void
-test_irc_admission_after_checkpoint(struct snag_store *store, const char *cwd, bool legacy)
+test_irc_admission_after_checkpoint(struct snag_store *store, const char *cwd, bool legacy,
+    bool consumed)
 {
     struct snag_session session;
     snag_session_init(&session);
@@ -4759,6 +4760,17 @@ test_irc_admission_after_checkpoint(struct snag_store *store, const char *cwd, b
     commit_data(&session, "retry_auto_changed", json_pack("{s:s}", "value", "off"));
     int64_t neighbor = session.committed_start +
         (session.committed_end - session.committed_start) / 2;
+    if (consumed) {
+        json_t *response = response_data();
+        assert(!json_object_set_new(response, "irc_seq", json_integer(observation)));
+        commit_data(&session, "response_started", response);
+        commit_data(&session, "response_completed", json_pack(
+            "{s:s,s:s,s:i,s:s,s:s,s:[],s:{s:i,s:i,s:n,s:i}}", "turn_id", GOAL_ID,
+            "response_id", OTHER_ID, "cycle", 1, "status", "completed",
+            "provider_response_id", "fixture", "items", "usage", "input_tokens", 0,
+            "output_tokens", 0, "reasoning_tokens", "total_tokens", 0));
+        assert(session.irc_consumed_seq == observation);
+    }
     for (size_t i = 0u; i <= SNAG_CONTEXT_COMPACT_OVERLAP_EVENTS; ++i) {
         commit_data(&session, "retry_auto_changed", json_pack("{s:s}", "value", "on"));
     }
@@ -4770,6 +4782,8 @@ test_irc_admission_after_checkpoint(struct snag_store *store, const char *cwd, b
     uint64_t end = session.next_seq;
     int journal = dup(session.log_fd);
     assert(journal >= 0);
+    /* Resume must also work when only the sparse checkpoint index survives. */
+    if (consumed && !legacy) assert(!snag_unlink_at(session.dir_fd, "history.idx", false));
     snag_session_close(&session);
     snag_session_init(&session);
     if (!legacy) {
@@ -5101,8 +5115,10 @@ test_store_binary_replay(struct snag_store *store, const char *cwd)
 {
     test_live_native_snapshot(store, cwd);
     test_compacted_irc_turn_resume(store, cwd);
-    test_irc_admission_after_checkpoint(store, cwd, true);
-    test_irc_admission_after_checkpoint(store, cwd, false);
+    test_irc_admission_after_checkpoint(store, cwd, true, false);
+    test_irc_admission_after_checkpoint(store, cwd, false, false);
+    test_irc_admission_after_checkpoint(store, cwd, true, true);
+    test_irc_admission_after_checkpoint(store, cwd, false, true);
     test_checkpoint_after_streamed_tools(store, cwd, false);
     test_checkpoint_after_streamed_tools(store, cwd, true);
     test_prepared_native_seed(cwd);

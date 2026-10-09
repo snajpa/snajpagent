@@ -194,6 +194,128 @@ compare_sources(const void *left, const void *right)
 }
 
 static int
+compare_entries(const void *left, const void *right)
+{
+    const struct snag_binary_index_entry *a = left;
+    const struct snag_binary_index_entry *b = right;
+    return (a->sequence > b->sequence) - (a->sequence < b->sequence);
+}
+
+static int
+copy_access(struct snag_buf *out, const struct snag_binary_checkpoint_index *access,
+    const struct snag_buf *additional)
+{
+    if (!additional->len)
+        return snag_binary_checkpoint_index_copy(out, access);
+    struct snag_buf entries = {.max = SIZE_MAX};
+    int rc = -1;
+    for (size_t i = 0u; i < access->entry_count; ++i) {
+        struct snag_binary_index_entry entry;
+        const unsigned char *bytes = access->entries + i * SNAG_BINARY_INDEX_ENTRY_SIZE;
+        uint64_t sequence = 0u;
+        for (size_t j = 0u; j < 8u; ++j) sequence |= (uint64_t)bytes[j] << (8u * j);
+        if (snag_binary_index_entry_decode(bytes,
+                SNAG_BINARY_INDEX_ENTRY_SIZE, &access->identity, sequence, &entry) < 0 ||
+            snag_buf_append(&entries, &entry, sizeof(entry)) < 0) goto done;
+    }
+    if (snag_buf_append(&entries, additional->data, additional->len) < 0) goto done;
+    size_t count = entries.len / sizeof(struct snag_binary_index_entry);
+    qsort(entries.data, count, sizeof(struct snag_binary_index_entry), compare_entries);
+    rc = snag_binary_checkpoint_index_encode(out, &access->identity, &access->boundary,
+        &access->tree, (const struct snag_binary_index_entry *)entries.data, count);
+done:
+    snag_buf_free(&entries);
+    return rc;
+}
+
+static int
+source_sequence(const char *key, uint64_t *out)
+{
+    uint64_t sequence = 0u;
+    for (const char *p = key; *p; ++p) {
+        if (*p < '0' || *p > '9' || sequence > (UINT64_MAX - (unsigned int)(*p - '0')) / 10u)
+            return snag_errno(EINVAL);
+        sequence = sequence * 10u + (unsigned int)(*p - '0');
+    }
+    if (!sequence) return snag_errno(EINVAL);
+    *out = sequence;
+    return 0;
+}
+
+/* A later admission can reference already consumed IRC outside the checkpoint's
+ * working set. Recover all newly required sources and neighbours in one verified
+ * backward pass; the derived history index may be absent. */
+static int
+suffix_sources(const struct source_walk *source, const json_t *wanted, struct snag_buf *out)
+{
+    json_t *needed = json_object();
+    struct snag_buf scratch = {.max = SNAG_BINARY_BATCH_MAX};
+    struct snag_buf flat = {.max = SNAG_BINARY_INDEX_BATCH_MAX};
+    int rc = -1;
+    if (!needed) return snag_errno(ENOMEM);
+    const char *key;
+    json_t *value;
+    json_object_foreach((json_t *)wanted, key, value) {
+        uint64_t sequence;
+        if (!json_is_integer(value) || json_integer_value(value) <= 0 ||
+            source_sequence(key, &sequence) < 0) { snag_errno(EINVAL); goto done; }
+        uint64_t admission = (uint64_t)json_integer_value(value);
+        if (sequence >= admission || admission >= source->verified->next_seq) {
+            snag_errno(EINVAL);
+            goto done;
+        }
+        bool retained = admission < source->access->boundary.next_seq;
+        for (uint64_t next = sequence; next <= sequence + 1u; ++next) {
+            if (next >= source->access->boundary.next_seq) continue;
+            struct snag_binary_index_entry entry;
+            int found = snag_binary_checkpoint_index_find(source->access, next, &entry);
+            if (found < 0) goto done;
+            if (!found) continue;
+            if (retained) { snag_errno(ENOENT); goto done; }
+            char number[32];
+            (void)snprintf(number, sizeof(number), "%llu", (unsigned long long)next);
+            if (json_object_set_new(needed, number, json_true()) < 0) {
+                snag_errno(ENOMEM);
+                goto done;
+            }
+        }
+    }
+    struct snag_binary_anchor cursor = source->access->boundary;
+    while (json_object_size(needed)) {
+        if (source->control && source->control->cancelled &&
+            source->control->cancelled(source->control->opaque)) {
+            snag_errno(ECANCELED);
+            goto done;
+        }
+        struct snag_binary_batch batch;
+        struct snag_binary_anchor before;
+        if (snag_binary_batch_previous(source->fd, &cursor, &scratch, &batch, &before) < 0)
+            goto done;
+        snag_buf_reset(&flat);
+        for (uint64_t sequence = before.next_seq; sequence < cursor.next_seq; ++sequence) {
+            char number[32];
+            (void)snprintf(number, sizeof(number), "%llu", (unsigned long long)sequence);
+            if (!json_object_get(needed, number)) continue;
+            if (!flat.len && snag_binary_index_append_batch(&flat, &source->access->identity,
+                    &before, &cursor, batch.data, batch.size) < 0) goto done;
+            size_t offset = (size_t)(sequence - before.next_seq) * SNAG_BINARY_INDEX_ENTRY_SIZE;
+            struct snag_binary_index_entry entry;
+            if (snag_binary_index_entry_decode(flat.data + offset, SNAG_BINARY_INDEX_ENTRY_SIZE,
+                    &source->access->identity, sequence, &entry) < 0 ||
+                snag_buf_append(out, &entry, sizeof(entry)) < 0) goto done;
+            (void)json_object_del(needed, number);
+        }
+        cursor = before;
+    }
+    rc = 0;
+done:
+    json_decref(needed);
+    snag_buf_free(&scratch);
+    snag_buf_free(&flat);
+    return rc;
+}
+
+static int
 walk_selected_sources(const struct source_walk *source, const json_t *wanted,
     const char *prompt, snag_session_event_fn fn, void *argument, char *error, size_t error_size)
 {
@@ -201,7 +323,23 @@ walk_selected_sources(const struct source_walk *source, const json_t *wanted,
         .rows = json_array(), .seen = json_object()};
     int rc = -1;
     json_t **ordered = NULL;
+    struct snag_buf additional = {.max = SIZE_MAX};
+    struct snag_buf expanded = {.max = SIZE_MAX};
+    struct snag_binary_checkpoint_index access;
+    struct source_walk supplemented = *source;
     if (!selection.rows || !selection.seen) { snag_errno(ENOMEM); goto done; }
+    if (suffix_sources(source, wanted, &additional) < 0) goto done;
+    if (additional.len) {
+        unsigned char root[32];
+        if (copy_access(&expanded, source->access, &additional) < 0 ||
+            snag_binary_index_tree_root(&source->access->tree, root) < 0 ||
+            snag_binary_checkpoint_index_decode(expanded.data, expanded.len,
+                &source->access->identity, &source->access->boundary, root, &access) < 0 ||
+            (source->additional && snag_buf_append(source->additional,
+                additional.data, additional.len) < 0)) goto done;
+        supplemented.access = &access;
+        source = selection.source = &supplemented;
+    }
     const char *key;
     json_t *value;
     json_object_foreach((json_t *)wanted, key, value) {
@@ -211,14 +349,8 @@ walk_selected_sources(const struct source_walk *source, const json_t *wanted,
             snag_errno(EINVAL);
             goto done;
         }
-        uint64_t sequence = 0u;
-        for (const char *p = key; *p; ++p) {
-            if (*p < '0' || *p > '9' || sequence > (UINT64_MAX - (unsigned int)(*p - '0')) / 10u) {
-                snag_errno(EINVAL);
-                goto done;
-            }
-            sequence = sequence * 10u + (unsigned int)(*p - '0');
-        }
+        uint64_t sequence;
+        if (source_sequence(key, &sequence) < 0) goto done;
         if (source_point(&selection, sequence, true) < 0) goto done;
         uint64_t next = sequence + 1u;
         if (next >= source->verified->next_seq) continue;
@@ -288,6 +420,8 @@ walk_selected_sources(const struct source_walk *source, const json_t *wanted,
     }
     rc = 0;
 done:
+    snag_buf_free(&additional);
+    snag_buf_free(&expanded);
     free(ordered);
     json_decref(selection.rows);
     json_decref(selection.seen);
@@ -634,41 +768,6 @@ snag_binary_context_admission_free(struct snag_binary_context_admission *admissi
     if (!admission) return;
     snag_buf_free(&admission->access);
     *admission = (struct snag_binary_context_admission){0};
-}
-
-static int
-compare_entries(const void *left, const void *right)
-{
-    const struct snag_binary_index_entry *a = left;
-    const struct snag_binary_index_entry *b = right;
-    return (a->sequence > b->sequence) - (a->sequence < b->sequence);
-}
-
-static int
-copy_access(struct snag_buf *out, const struct snag_binary_checkpoint_index *access,
-    const struct snag_buf *additional)
-{
-    if (!additional->len)
-        return snag_binary_checkpoint_index_copy(out, access);
-    struct snag_buf entries = {.max = SIZE_MAX};
-    int rc = -1;
-    for (size_t i = 0u; i < access->entry_count; ++i) {
-        struct snag_binary_index_entry entry;
-        const unsigned char *bytes = access->entries + i * SNAG_BINARY_INDEX_ENTRY_SIZE;
-        uint64_t sequence = 0u;
-        for (size_t j = 0u; j < 8u; ++j) sequence |= (uint64_t)bytes[j] << (8u * j);
-        if (snag_binary_index_entry_decode(bytes,
-                SNAG_BINARY_INDEX_ENTRY_SIZE, &access->identity, sequence, &entry) < 0 ||
-            snag_buf_append(&entries, &entry, sizeof(entry)) < 0) goto done;
-    }
-    if (snag_buf_append(&entries, additional->data, additional->len) < 0) goto done;
-    size_t count = entries.len / sizeof(struct snag_binary_index_entry);
-    qsort(entries.data, count, sizeof(struct snag_binary_index_entry), compare_entries);
-    rc = snag_binary_checkpoint_index_encode(out, &access->identity, &access->boundary,
-        &access->tree, (const struct snag_binary_index_entry *)entries.data, count);
-done:
-    snag_buf_free(&entries);
-    return rc;
 }
 
 static int

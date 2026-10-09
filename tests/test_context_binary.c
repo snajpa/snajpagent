@@ -1504,8 +1504,8 @@ reject_pinned_resume(struct snag_session *source, const struct snag_binary_check
     int rc = snag_store_resume_pinned_binary_context_checkpoint(source, &target, frame, receipt,
         stop, available, &origins, control, error, sizeof(error));
     if (rc >= 0 || errno != expected_errno) {
-        fprintf(stderr, "pinned reject: rc=%d errno=%d expected=%d error=%s\n",
-            rc, errno, expected_errno, error);
+        fprintf(stderr, "pinned reject: rc=%d errno=%d expected=%d entries=%zu error=%s\n",
+            rc, errno, expected_errno, available ? available->entry_count : 0u, error);
     }
     assert(rc < 0);
     assert(errno == expected_errno && !memcmp(&target, &saved, sizeof(saved)) &&
@@ -1598,14 +1598,33 @@ pinned_resume_checks(struct snag_session *source, struct snag_session *expected,
         has_old_history |= sequence < base->boundary.next_seq;
     }
     if (has_old_history && !pinned_history_missing) {
+        bool retained_admission = false;
+        for (size_t i = 0u; i < json_array_size(recent); ++i) {
+            const json_t *row = json_array_get(recent, i);
+            if (strcmp(snag_json_string(row, "type"), "irc_admitted")) continue;
+            uint64_t admitted;
+            assert(!snag_json_integer_u64(row, "seq", &admitted));
+            retained_admission |= admitted < base->boundary.next_seq;
+        }
         struct snag_buf empty_bytes = {.max = SIZE_MAX};
         assert(!snag_binary_checkpoint_index_encode(&empty_bytes, &available.identity,
             &available.boundary, &available.tree, NULL, 0u));
         struct snag_binary_checkpoint_index empty;
         assert(!snag_binary_checkpoint_index_decode(empty_bytes.data, empty_bytes.len,
             &available.identity, &available.boundary, root, &empty));
-        reject_pinned_resume(source, &frame, &receipt, stop, &empty, NULL, ENOENT);
-        ++pinned_history_missing;
+        if (retained_admission) {
+            reject_pinned_resume(source, &frame, &receipt, stop, &empty, NULL, ENOENT);
+            ++pinned_history_missing;
+        } else {
+            /* New admissions can require old messages outside the pinned table.
+             * Their reconstructed context must match independent full replay. */
+            struct snag_session recovered;
+            snag_session_init(&recovered);
+            assert(!snag_store_resume_pinned_binary_context_checkpoint(source, &recovered,
+                &frame, &receipt, stop, &empty, NULL, NULL, error, sizeof(error)));
+            same_cache(expected, &recovered, false);
+            snag_session_close(&recovered);
+        }
         snag_buf_free(&empty_bytes);
     }
     static bool checked[2];
