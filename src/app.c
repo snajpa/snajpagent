@@ -524,7 +524,7 @@ commit_event_with_request(struct app_state *app, const char *type, json_t *data,
                 (struct snag_ui_command){.kind = SNAG_UI_DURABLE,
                     .text = type,
                     .data.durable = {app->session.log_fd, source, app->config->default_timeout_ms,
-                        app->config->max_output_bytes}}) < 0) ||
+                        app->config->display_output_bytes}}) < 0) ||
         snag_ui_send(&app->ui,
             (struct snag_ui_command){.kind = SNAG_UI_EVENT, .text = type, .data.seq = seq}) < 0) {
         return snag_errorf(error, error_size, "durable event output failed");
@@ -5180,7 +5180,7 @@ run_call_batch(struct app_state *app, const char *turn_id, const struct snag_cre
             process_config.max_parallel_commands = app->session.max_parallel_commands;
             process_config.default_timeout_ms = app->session.default_timeout_ms;
             process_config.max_timeout_ms = app->session.max_timeout_ms;
-            process_config.max_output_tokens = app->session.tool_output_bytes;
+            process_config.tool_output_bytes = app->session.tool_output_bytes;
             process_config.output_cache_bytes = app->session.output_cache_bytes;
             if (app->session.command_shell[0]) process_config.shell = app->session.command_shell;
             json_t *result = NULL;

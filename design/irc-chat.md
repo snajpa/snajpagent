@@ -400,7 +400,7 @@ All modes use the same process-local ladder (flag count or `/verbose N`):
   call reference in the same column, no output body;
 - verbosity 2: 1,024 argument / 512 output character previews;
 - verbosity 3: full retained arguments, execution context and results, preserving
-  `[tool] max_output_bytes` and capture limits;
+  `[tool] display_output_bytes` and capture limits;
 - verbosity 4: runtime, accounting, durable app events and IRC connection state;
 - verbosity 5: sanitized prompt/protocol bodies and parsed IRC commands, with
   the existing sensitive-content warning; and
@@ -662,7 +662,7 @@ unrelated successful send.
 Tool calls are durable and use the same start/result ordering and secret-safe
 rendering as other tools. One `-v` shows compact calls without output; `-vv`
 previews 1,024 argument and 512 output characters, and `-vvv` shows full retained
-calls/results. Debug detail starts at four flags. `[tool] max_output_bytes` bounds
+calls/results. Debug detail starts at four flags. `[tool] display_output_bytes` bounds
 only terminal presentation; its default `0` is unlimited, and the complete
 redacted output is always persisted. Command output supplied to the model is
 separately bounded by the calling command tool's `max_output_bytes`. Lifecycle

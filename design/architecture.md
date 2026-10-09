@@ -834,7 +834,7 @@ The app owns journal writes, and the UI owns all display. `exec_command` and
 `write_stdin` advertise `max_output_bytes` for a retained UTF-8 byte
 ceiling on result text, not a token count. The
 model may select positive `max_output_bytes`, or omit/use `null` for
-the configured `[tool] max_output_tokens` ceiling (6000 by default). Larger
+the configured `[tool] tool_output_bytes` ceiling (6000 by default). Larger
 requests are clamped to that ceiling; smaller requests are honored. Both tool
 schemas advertise the accepted positive range and describe the configured
 ceiling; one shared runtime selector applies it. The
@@ -842,8 +842,13 @@ resolved value is recorded in the durable result so replay is independent of
 later configuration. Model-context projection preserves a valid-UTF-8 head
 and tail plus digest/provenance when the selected conservative
 retained UTF-8 byte budget permits. Provider token accounting is a separate
-request-budget concern and does not change this byte unit. The former `default_max_output_tokens` configuration key is removed.
-`[tool] max_output_bytes` is presentation-only: it limits the number of
+request-budget concern and does not change this byte unit. The legacy `[tool]`
+keys `max_output_tokens` and `max_output_bytes` alias `tool_output_bytes` and
+`display_output_bytes` respectively; duplicate aliases are rejected. The durable
+JSON result field `max_output_tokens` retains its byte-valued meaning, and the
+native binary result layout is unchanged. The former
+`default_max_output_tokens` configuration key is removed.
+`[tool] display_output_bytes` is presentation-only: it limits the number of
 output bytes shown for each tool call. At level 3 and above, `0`
 (the default) shows the complete retained result; level 2 also applies its
 512-character preview budget, and levels 0/1 show no output body.

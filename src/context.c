@@ -968,7 +968,7 @@ rollout_log_name(const struct snag_session *session)
 
 static int
 bounded_command_output(
-    struct snag_buf *out, const char *text, size_t len, uint32_t max_output_tokens)
+    struct snag_buf *out, const char *text, size_t len, uint32_t tool_output_bytes)
 {
     static const char short_notice[] = "\n[truncated]\n";
     char notice[512];
@@ -987,19 +987,19 @@ bounded_command_output(
         "max_output_bytes=%u is a UTF-8 byte limit; original_bytes=%zu; sha256=%s; complete output "
         "remains in "
         "the durable session journal]\n",
-        max_output_tokens, len, digest);
+        tool_output_bytes, len, digest);
     if (n < 0 || (size_t)n >= sizeof(notice)) return snag_errno(EOVERFLOW);
     marker_len = (size_t)n;
-    if (marker_len >= max_output_tokens) {
+    if (marker_len >= tool_output_bytes) {
         marker = short_notice;
         marker_len = sizeof(short_notice) - 1u;
     }
-    if (marker_len >= max_output_tokens) {
-        if (snag_buf_append(out, marker, max_output_tokens) < 0) return -1;
+    if (marker_len >= tool_output_bytes) {
+        if (snag_buf_append(out, marker, tool_output_bytes) < 0) return -1;
         return snag_buf_terminate(out);
     }
 
-    keep = (size_t)max_output_tokens - marker_len;
+    keep = (size_t)tool_output_bytes - marker_len;
     head = keep / 2u;
     tail = keep - head;
     while (head && ((unsigned char)text[head] & 0xc0u) == 0x80u) --head;
@@ -2469,7 +2469,7 @@ out:
 }
 
 static json_t *
-exec_tool_schema(uint32_t max_wait_ms, uint32_t max_timeout_ms, uint32_t max_output_tokens)
+exec_tool_schema(uint32_t max_wait_ms, uint32_t max_timeout_ms, uint32_t tool_output_bytes)
 {
     char description[512];
     (void)snprintf(description, sizeof(description),
@@ -2477,7 +2477,7 @@ exec_tool_schema(uint32_t max_wait_ms, uint32_t max_timeout_ms, uint32_t max_out
         "Returned running handles belong to live commands; collect them with write_stdin. "
         "Output ceiling (%u) is in UTF-8 bytes; larger positive requests are capped and reported. "
         "Invalid fields or ranges reject the call before execution.",
-        max_output_tokens);
+        tool_output_bytes);
     return tool_schema("exec_command", "command", description,
         json_pack("{s:{s:s,s:s},s:{s:[s,s],s:s},s:{s:[s,s],s:s},s:{s:[s,s],s:s},"
                   "s:{s:[s,s],s:i,s:I,s:s},s:{s:[s,s],s:i,s:I,s:s},s:{s:[s,s],s:i,s:I,s:s}}",
@@ -2513,14 +2513,14 @@ exec_tool_schema(uint32_t max_wait_ms, uint32_t max_timeout_ms, uint32_t max_out
 }
 
 static json_t *
-stdin_tool_schema(uint32_t max_wait_ms, uint32_t max_output_tokens)
+stdin_tool_schema(uint32_t max_wait_ms, uint32_t tool_output_bytes)
 {
     char description[384];
     (void)snprintf(description, sizeof(description),
         "Collect output, wait, send input, or request termination of an existing managed process. "
         "At most one call per handle in each response. A running result retains that handle. "
         "Output ceiling (%u) is in UTF-8 bytes; larger positive requests are capped and reported.",
-        max_output_tokens);
+        tool_output_bytes);
     return tool_schema("write_stdin", "handle", description,
         json_pack("{s:{s:s,s:s},s:{s:s,s:s},s:{s:[s,s],s:s},s:{s:[s,s],s:s},"
                   "s:{s:[s,s],s:i,s:I,s:s},s:{s:[s,s],s:i,s:I,s:s}}",
@@ -2887,8 +2887,8 @@ tool_schemas(bool goal_active, bool goal_create_allowed, bool networked,
                               : config ? config->max_timeout_ms
                                        : UINT32_MAX;
     uint32_t tool_output_bytes = session  ? session->tool_output_bytes
-                                 : config ? config->max_output_tokens
-                                          : SNAG_DEFAULT_TOOL_OUTPUT_TOKENS;
+                                 : config ? config->tool_output_bytes
+                                          : SNAG_DEFAULT_TOOL_OUTPUT_BYTES;
     if (json_array_append_new(
             tools, exec_tool_schema(max_wait_ms, max_timeout_ms, tool_output_bytes)) < 0 ||
         json_array_append_new(tools, stdin_tool_schema(max_wait_ms, tool_output_bytes)) < 0 ||

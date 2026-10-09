@@ -2020,7 +2020,7 @@ turn_config_variants(void)
         "default_timeout_ms", "max_timeout_ms", "tool_output_bytes", "output_cache_bytes",
         "max_turn_retries"};
     const json_int_t literals[] = {INT64_MAX, 10000, 60000, 0, 86400000,
-        SNAG_DEFAULT_TOOL_OUTPUT_TOKENS, SNAG_CONFIG_OUTPUT_CACHE_MAX, UINT32_MAX};
+        SNAG_DEFAULT_TOOL_OUTPUT_BYTES, SNAG_CONFIG_OUTPUT_CACHE_MAX, UINT32_MAX};
     for (unsigned int mask = 0u; mask < 256u; ++mask) {
         json_t *data = json_loads(samples[61].data, JSON_REJECT_DUPLICATES, NULL);
         assert(data);

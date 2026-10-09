@@ -418,6 +418,7 @@ class FakeResponses:
             if tool.get("name") in ("exec_command", "write_stdin"):
                 assert tool["parameters"]["properties"]["max_output_bytes"][
                     "maximum"] == 4000000000
+                assert f"Output ceiling ({ceiling})" in tool["description"]
         outputs = [item["output"] for item in request["input"]
                    if item.get("type") == "function_call_output"]
         if outputs:
@@ -432,7 +433,7 @@ class FakeResponses:
         return self.function_body(sequence, "call_cap", "exec_command", {
             "command": "printf '%08000d' 0", "workdir": str(self.tool_workspace),
             "stdin": None, "pty": False, "timeout_ms": None, "yield_ms": 1000,
-            "max_output_tokens": selected,
+            "max_output_bytes": selected,
         })
 
     def multi_tool_body(self, request, sequence, prompt):
@@ -5297,16 +5298,23 @@ def run_tool_contract_cases(binary, root, provider, environment):
 def run_output_cap_cases(binary, root, provider, environment):
     for name, configured, selected in (("default", None, None),
                                        ("above", 1234, 9999),
-                                       ("below", 1234, 512)):
+                                       ("below", 1234, 512),
+                                       ("legacy", 1234, 9999),
+                                       ("per-model", 1234, None)):
         case = root / ("cap-" + name)
         workspace = case / "work"
         workspace.mkdir(mode=0o700, parents=True)
         provider.tool_workspace = workspace
         config = case / "config.ini"
         write_irc_config(config, provider.port, "host-model")
-        config.write_text(config.read_text() + "[tool]\nmax_output_bytes = 17\n" +
-                          (f"max_output_tokens = {configured}\n"
-                           if configured else ""), encoding="utf-8")
+        model_key = "max_output_tokens" if name == "legacy" else "tool_output_bytes"
+        display_key = "max_output_bytes" if name == "legacy" else "display_output_bytes"
+        settings = f"[tool]\n{display_key} = 17\n"
+        if name == "per-model":
+            settings += "tool_output_bytes = 7000\n[model-limit fake/host-model]\n"
+        if configured:
+            settings += f"{model_key} = {configured}\n"
+        config.write_text(config.read_text() + settings, encoding="utf-8")
         ceiling = configured or 6000
         with TmuxTerminal(case / "terminal", binary, workspace,
                                 case / "state", config, 120, 24,
@@ -8121,7 +8129,7 @@ def run_tool_cases(binary, root, provider, environment):
     workspace, config = irc_workspace(case / "work", provider.port, "host-model")
     config.write_text(config.read_text() +
                       "[tool]\ndefault_timeout_ms=0\nmax_timeout_ms=20000\n"
-                      "output_cache_bytes=4096\n")
+                      "tool_output_bytes=6000\ndisplay_output_bytes=17\noutput_cache_bytes=4096\n")
     number = 0
     prompt = "tool behavior cases"
     supplied = queue.Queue()

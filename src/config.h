@@ -28,7 +28,7 @@
 #define SNAG_CONFIG_OUTPUT_CACHE_MAX (64u * 1024u * 1024u)
 /* Outside the numeric compaction range; zero continues to mean disabled. */
 #define SNAG_CONFIG_COMPACT_AUTO UINT32_MAX
-#define SNAG_DEFAULT_TOOL_OUTPUT_TOKENS 6000u
+#define SNAG_DEFAULT_TOOL_OUTPUT_BYTES 6000u
 #define SNAG_CONFIG_IRC_CLIENT_MAX 16u
 #define SNAG_CONFIG_IRC_ENDPOINT_MAX 255u
 #define SNAG_CONFIG_IRC_NICK_MAX 30u
@@ -208,8 +208,8 @@ struct snag_config {
     uint32_t max_parallel_commands;
     uint32_t default_timeout_ms;
     uint32_t max_timeout_ms;
-    uint32_t max_output_tokens;
-    uint32_t max_output_bytes;
+    uint32_t tool_output_bytes;
+    uint32_t display_output_bytes;
     uint32_t output_cache_bytes;
     struct snag_rules *rules;
     json_t *mcp_servers; /* Named native MCP configurations. */

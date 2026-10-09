@@ -5030,7 +5030,7 @@ test_tool_result_options(void)
     assert(!snag_binary_content_encode(&content, &part, 1u));
     for (unsigned int flags = 0u; flags < 8u; ++flags) {
         *result = binary_tool_result();
-        result->max_output_tokens = flags & 1u ? SNAG_CONFIG_TOKEN_LIMIT_MAX : 0u;
+        result->output_limit_bytes = flags & 1u ? SNAG_CONFIG_TOKEN_LIMIT_MAX : 0u;
         result->has_output_ref = (flags & 2u) != 0u;
         result->output_ref = (struct snag_binary_tool_output_ref){.stdin_accepted = INT64_MAX,
             .stdin_written = 1u, .stdin_pending = INT64_MAX - 1u, .stdin_open = true,
@@ -5066,7 +5066,7 @@ test_tool_result_options(void)
     record.size -= 8u;
     assert_rejected(record);
     snag_buf_free(&payload);
-    result->max_output_tokens++;
+    result->output_limit_bytes++;
     assert_event_encode_rejected(&event);
     *result = valid;
     result->output_ref.stdin_pending++;
@@ -5115,7 +5115,7 @@ test_native_tool_output_ref(void)
     struct snag_binary_event event = {.kind = SNAG_BINARY_TOOL_FINISHED};
     struct snag_binary_tool_result *result = &event.data.tool_finished.result;
     *result = binary_tool_result();
-    result->max_output_tokens = 16000u;
+    result->output_limit_bytes = 16000u;
     result->has_output_ref = true;
     result->output_ref = (struct snag_binary_tool_output_ref){.native = true,
         .log_start = 100u, .log_end = 200u, .first_sequence = 2u, .end_sequence = 7u};
@@ -5681,7 +5681,7 @@ test_result_references(void)
         assert_result_original_missing(&batch, 2u, kinds[k]);
         struct snag_binary_tool_result *rich = k ? &event.data.process_closed.result :
             &event.data.tool_finished.result;
-        rich->max_output_tokens = SNAG_CONFIG_TOKEN_LIMIT_MAX;
+        rich->output_limit_bytes = SNAG_CONFIG_TOKEN_LIMIT_MAX;
         rich->has_output_ref = true;
         rich->output_ref.handle[0] = 3u;
         rich->output_ref.stdin_open = true;
@@ -5698,7 +5698,7 @@ test_result_references(void)
         assert(!snag_binary_result_ref_create(&batch, 2u, kinds[k], &reference));
         assert(reference.offset == offset && reference.size == 187u);
         assert(!snag_binary_result_ref_resolve(&reference, &batch, kinds[k], &source));
-        assert(source.result.max_output_tokens == SNAG_CONFIG_TOKEN_LIMIT_MAX &&
+        assert(source.result.output_limit_bytes == SNAG_CONFIG_TOKEN_LIMIT_MAX &&
             source.result.has_output_ref && source.result.output_ref.handle[0] == 3u &&
             source.result.output_ref.stdin_open && source.result.content.size == content.len &&
             !memcmp(source.result.content.data, content.data, content.len));

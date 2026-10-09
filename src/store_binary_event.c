@@ -2487,7 +2487,7 @@ static bool
 tool_output_ref_valid(const struct snag_binary_tool_result *result)
 {
     const struct snag_binary_tool_output_ref *ref = &result->output_ref;
-    if (!result->max_output_tokens || ref->log_end > INT64_MAX || ref->log_start > ref->log_end ||
+    if (!result->output_limit_bytes || ref->log_end > INT64_MAX || ref->log_start > ref->log_end ||
         ref->stdin_accepted > INT64_MAX || ref->stdin_written > ref->stdin_accepted ||
         ref->stdin_pending > ref->stdin_accepted - ref->stdin_written ||
         (!ref->native && (ref->first_sequence || ref->end_sequence)) ||
@@ -2534,7 +2534,7 @@ tool_result_valid(const struct snag_binary_tool_result *result)
     struct snag_binary_result_value exit_code;
     struct snag_binary_result_value signal;
     if (result->duration_ms > INT64_MAX ||
-        result->max_output_tokens > SNAG_CONFIG_TOKEN_LIMIT_MAX ||
+        result->output_limit_bytes > SNAG_CONFIG_TOKEN_LIMIT_MAX ||
         result->has_handle != (result->status == SNAG_BINARY_TOOL_RUNNING) ||
         !text_valid(result->model_text, 0u, SNAG_MAX_EVENT_LINE) ||
         !tool_excerpt_valid(&result->streams[0]) || !tool_excerpt_valid(&result->streams[1]) ||
@@ -2623,7 +2623,7 @@ static int
 write_tool_result(struct snag_buf *out, const struct snag_binary_tool_result *value)
 {
     if (!tool_result_valid(value)) return invalid();
-    unsigned int flags = (value->max_output_tokens ? 1u : 0u) |
+    unsigned int flags = (value->output_limit_bytes ? 1u : 0u) |
         (value->has_output_ref ? 2u : 0u) | (value->content.data ? 4u : 0u) |
         (value->output_ref.native ? 8u : 0u);
     if (write_uint(out, value->status, 1u) < 0 || write_uint(out, value->reason, 1u) < 0 ||
@@ -2634,7 +2634,7 @@ write_tool_result(struct snag_buf *out, const struct snag_binary_tool_result *va
         write_text(out, value->model_text, 0u, SNAG_MAX_EVENT_LINE) < 0 ||
         write_tool_excerpt(out, &value->streams[0]) < 0 ||
         write_tool_excerpt(out, &value->streams[1]) < 0 ||
-        (value->max_output_tokens && write_uint(out, value->max_output_tokens, 8u) < 0) ||
+        (value->output_limit_bytes && write_uint(out, value->output_limit_bytes, 8u) < 0) ||
         (value->has_output_ref && write_tool_output_ref(out, &value->output_ref) < 0)) {
         return -1;
     }
@@ -2700,8 +2700,8 @@ read_tool_result(struct fields *fields, struct snag_binary_tool_result *out)
         !read_text(fields, &out->model_text, 0u, SNAG_MAX_EVENT_LINE) ||
         !read_tool_excerpt(fields, &out->streams[0]) ||
         !read_tool_excerpt(fields, &out->streams[1]) ||
-        ((flags & 1u) && (!read_uint(fields, 8u, &out->max_output_tokens) ||
-            !out->max_output_tokens)) ||
+        ((flags & 1u) && (!read_uint(fields, 8u, &out->output_limit_bytes) ||
+            !out->output_limit_bytes)) ||
         (out->has_output_ref && !read_tool_output_ref(fields, &out->output_ref)) ||
         (out->output_ref.native &&
             (!read_uint(fields, 8u, &out->output_ref.first_sequence) ||

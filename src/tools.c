@@ -56,8 +56,8 @@ struct managed_process {
     uint64_t deadline_ms;
     uint64_t wait_started_ms;
     uint32_t max_wait_ms;
-    uint32_t max_output_tokens, requested_yield_ms;
-    uint64_t requested_output_tokens;
+    uint32_t tool_output_bytes, requested_yield_ms;
+    uint64_t requested_output_bytes;
     struct snag_secret_set secrets;
     size_t max_secret;
     struct process_output output[2];
@@ -223,7 +223,7 @@ result_json(const char *status, const char *reason, int64_t exit_code, int signa
     const char *msg = NULL;
     struct snag_buf text = {.max = SIZE_MAX};
 
-    if (output_limit_notice(&text, proc->requested_output_tokens, proc->max_output_tokens) < 0)
+    if (output_limit_notice(&text, proc->requested_output_bytes, proc->tool_output_bytes) < 0)
         goto done;
 
     if (snag_string_in(status, "succeeded failed")) {
@@ -737,7 +737,7 @@ snag_tools_collect(
     if (!proc || !journal_read)
         return snag_errorf(error, error_size, "command handle or output journal unavailable");
     for (unsigned int s = 0u; s < 2u; ++s) {
-        size_t cap = proc->max_output_tokens;
+        size_t cap = proc->tool_output_bytes;
         if (cap > SNAG_MAX_EVENT_LINE / 16u) cap = SNAG_MAX_EVENT_LINE / 16u;
         snag_buf_init(&streams[s].data, cap);
         streams[s].bytes = proc->output_offset[s] - proc->collected_offset[s];
@@ -774,7 +774,7 @@ snag_tools_collect(
         snag_monotonic_ms() - proc->started_ms, process_ready(proc) ? NULL : handle, proc,
         &streams[0], &streams[1]);
     if (!*result ||
-        snag_json_set_new(*result, "max_output_tokens", json_integer(proc->max_output_tokens)) < 0)
+        snag_json_set_new(*result, "max_output_tokens", json_integer(proc->tool_output_bytes)) < 0)
         goto out;
     json_t *ref = json_pack("{s:I,s:I,s:I,s:I,s:I,s:I,s:I,s:i,s:i,s:s,s:b}", "stdout_start",
         (json_int_t)proc->collected_offset[0], "stdout_end", (json_int_t)proc->result_offset[0],
@@ -811,7 +811,7 @@ snag_tools_collected(const char *handle)
 
 static int
 start_command(const char *handle, const char *command, const char *workdir, const char *stdin_text,
-    uint32_t timeout_ms, uint32_t max_output_tokens, bool pty, const struct snag_config *config,
+    uint32_t timeout_ms, uint32_t tool_output_bytes, bool pty, const struct snag_config *config,
     const struct snag_credential *credential, char *error, size_t error_size)
 {
     char **env = NULL;
@@ -849,7 +849,7 @@ start_command(const char *handle, const char *command, const char *workdir, cons
     proc->output[1].open = !pty;
     proc->started_ms = snag_monotonic_ms();
     proc->deadline_ms = saturating_deadline(proc->started_ms, timeout_ms);
-    proc->max_output_tokens = max_output_tokens;
+    proc->tool_output_bytes = tool_output_bytes;
     memcpy(proc->handle, handle, sizeof(proc->handle));
     proc->in_call = true;
     snag_buf_init(&proc->input, SNAG_TOOL_STDIN_MAX);
@@ -900,7 +900,7 @@ command_args(const struct snag_response_item *call, const struct snag_config *co
                                                            : config->max_wait_ms,
             0u, config->max_wait_ms, &args->yield, error, size) ||
         !command_output_limit(
-            call->arguments, config->max_output_tokens, &args->limit, error, size))
+            call->arguments, config->tool_output_bytes, &args->limit, error, size))
         return -1;
     if (args->exec) {
         args->handle = call->call_id;
@@ -1026,7 +1026,7 @@ snag_tools_start(const struct snag_response_item *call, const struct snag_config
         proc = find_process(args.handle);
         if (!proc) return -1;
         proc->in_call = true;
-        proc->max_output_tokens = args.limit;
+        proc->tool_output_bytes = args.limit;
         if (args.terminate) {
             begin_close(proc, false);
         } else {
@@ -1039,7 +1039,7 @@ snag_tools_start(const struct snag_response_item *call, const struct snag_config
     const char *key =
         snag_json_arg_name(call->arguments, "max_output_bytes", "max_output_tokens", NULL, 0u);
     const json_t *requested = key ? json_object_get(call->arguments, key) : NULL;
-    proc->requested_output_tokens =
+    proc->requested_output_bytes =
         json_is_integer(requested) ? (uint64_t)json_integer_value(requested) : args.limit;
     proc->wait_started_ms = snag_monotonic_ms();
     proc->max_wait_ms = config->max_wait_ms;
@@ -1051,26 +1051,26 @@ int
 snag_tools_attach_output_limit(
     const struct snag_response_item *call, const struct snag_config *config, json_t *result)
 {
-    uint32_t max_output_tokens;
+    uint32_t tool_output_bytes;
 
     if (!call || !call->name || !config || !result ||
         json_object_get(result, "max_output_tokens") ||
         (!snag_string_in(call->name, "exec_command write_stdin")))
         return 0;
     if (!command_output_limit(
-            call->arguments, config->max_output_tokens, &max_output_tokens, NULL, 0u))
-        max_output_tokens = config->max_output_tokens;
-    if (snag_json_set_new(result, "max_output_tokens", json_integer(max_output_tokens)) < 0)
+            call->arguments, config->tool_output_bytes, &tool_output_bytes, NULL, 0u))
+        tool_output_bytes = config->tool_output_bytes;
+    if (snag_json_set_new(result, "max_output_tokens", json_integer(tool_output_bytes)) < 0)
         return -1;
     uint64_t requested;
     const char *key =
         snag_json_arg_name(call->arguments, "max_output_bytes", "max_output_tokens", NULL, 0u);
     if (key && snag_json_integer_u64(call->arguments, key, &requested) == 0 &&
-        requested > max_output_tokens && requested <= SNAG_CONFIG_TOKEN_LIMIT_MAX) {
+        requested > tool_output_bytes && requested <= SNAG_CONFIG_TOKEN_LIMIT_MAX) {
         const char *old = snag_json_string(result, "model_text");
         struct snag_buf text = {.max = SNAG_MAX_EVENT_LINE};
         int rc =
-            !old || output_limit_notice(&text, requested, max_output_tokens) < 0 ||
+            !old || output_limit_notice(&text, requested, tool_output_bytes) < 0 ||
                     snag_buf_append(&text, old, strlen(old)) < 0 || snag_buf_terminate(&text) < 0
                 ? -1
                 : snag_json_set_new(result, "model_text", json_string((const char *)text.data));

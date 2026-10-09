@@ -146,8 +146,8 @@ snag_config_init(struct snag_config *config)
     config->max_parallel_commands = 4u;
     config->default_timeout_ms = 0u;
     config->max_timeout_ms = 86400000u;
-    config->max_output_tokens = SNAG_DEFAULT_TOOL_OUTPUT_TOKENS;
-    config->max_output_bytes = 0u;
+    config->tool_output_bytes = SNAG_DEFAULT_TOOL_OUTPUT_BYTES;
+    config->display_output_bytes = 0u;
     config->output_cache_bytes = 1024u * 1024u;
 }
 
@@ -687,7 +687,7 @@ set_section(struct parse_state *state, char *name)
 static int
 claim_key(struct parse_state *state, const char *key)
 {
-    /* Keys borrow the parsed file until parse_file returns. IRC clients repeat. */
+    /* Keys live through parse_file: borrowed text or canonical alias literals. */
     if ((state->section == SECTION_IRC && strcmp(key, "client") == 0) ||
         (state->section == SECTION_TOOL && strcmp(key, "secret") == 0))
         return 0;
@@ -823,6 +823,10 @@ parse_setting(struct parse_state *state, const char *key, const char *value)
 {
     if (state->section == SECTION_MCP) return parse_mcp(state, key, value);
     if (state->section == SECTION_AUDIO) return parse_audio(state, key, value);
+    if (state->section == SECTION_TOOL) {
+        if (!strcmp(key, "max_output_tokens")) key = "tool_output_bytes";
+        else if (!strcmp(key, "max_output_bytes")) key = "display_output_bytes";
+    }
     struct snag_config *config = state->config;
     struct snag_provider_config *provider = &config->providers[state->provider_index];
     struct snag_model_limit_config *limit = &config->model_limits[state->model_limit_index];
@@ -922,10 +926,11 @@ parse_setting(struct parse_state *state, const char *key, const char *value)
             UINT32_MAX},
         {SECTION_TOOL, "default_timeout_ms", SET_U32, &config->default_timeout_ms, 0, UINT32_MAX},
         {SECTION_TOOL, "max_timeout_ms", SET_U32, &config->max_timeout_ms, 1, UINT32_MAX},
-        {SECTION_TOOL, "max_output_bytes", SET_U32, &config->max_output_bytes, 0, UINT32_MAX},
+        {SECTION_TOOL, "display_output_bytes", SET_U32, &config->display_output_bytes, 0,
+            UINT32_MAX},
         {SECTION_TOOL, "output_cache_bytes", SET_U32, &config->output_cache_bytes, 0,
             SNAG_CONFIG_OUTPUT_CACHE_MAX},
-        {SECTION_TOOL, "max_output_tokens", SET_U32, &config->max_output_tokens, 1,
+        {SECTION_TOOL, "tool_output_bytes", SET_U32, &config->tool_output_bytes, 1,
             SNAG_CONFIG_TOKEN_LIMIT_MAX}};
 
     if (state->section == SECTION_NONE || !*key || claim_key(state, key) < 0) goto invalid;
@@ -2064,7 +2069,7 @@ snag_config_resolve_execution(const struct snag_config *config, const char *prov
     if (!config || !provider || !model || !out) return snag_errno(EINVAL);
     *out = (struct snag_execution_config){config->default_yield_ms, config->max_wait_ms,
         config->max_parallel_commands, config->default_timeout_ms, config->max_timeout_ms,
-        config->max_output_tokens, config->output_cache_bytes};
+        config->tool_output_bytes, config->output_cache_bytes};
     (void)snag_config_resolve_limits(config, provider, model, &resolved, NULL);
 #define APPLY_EXEC(field, bit)                                                                     \
     do {                                                                                           \

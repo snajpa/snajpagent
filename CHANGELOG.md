@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Name command-output settings by their units: `[tool] tool_output_bytes` bounds
+  model excerpts and `display_output_bytes` bounds terminal output. Preserve old
+  setting aliases, saved result limits and complete durable output paging.
+
 - Preserve uncovered history when a model switch moves a compaction boundary
   backward. Resume repairs incomplete retained history from the original journal,
   keeping tool calls paired with their results.

@@ -393,7 +393,7 @@ run_command_full(const char *command, int timeout_ms, const char *secret, const 
     assert(config.shell != NULL);
     config.default_timeout_ms = 0;
     config.max_timeout_ms = 5000;
-    config.max_output_tokens = ceiling;
+    config.tool_output_bytes = ceiling;
     make_call(&graph, command, cwd, timeout_ms, stdin_text);
     struct snag_response_item call = snag_response_graph_item(&graph, 0u);
     if (selected_limit >= 0)
@@ -608,7 +608,7 @@ test_command_output_limit_is_optional_and_positive(void)
         json_decref(result);
         result = snag_tool_result_terminal(false, "invalid arguments");
         assert(result != NULL);
-        config.max_output_tokens = 123u;
+        config.tool_output_bytes = 123u;
         assert(snag_tools_attach_output_limit(&call, &config, result) == 0);
         assert(json_integer_value(json_object_get(result, "max_output_tokens")) == 123);
         json_decref(result);

@@ -1990,7 +1990,7 @@ apply_event(struct snag_session *session, const char *type, const json_t *data, 
         uint64_t max_parallel = 4u;
         uint64_t default_yield = 10000u, max_wait = 60000u;
         uint64_t default_timeout = 0u, max_timeout = 86400000u;
-        uint64_t tool_output = SNAG_DEFAULT_TOOL_OUTPUT_TOKENS, output_cache = 1024u * 1024u;
+        uint64_t tool_output = SNAG_DEFAULT_TOOL_OUTPUT_BYTES, output_cache = 1024u * 1024u;
         char fields[192];
         const char *cwd_key;
         int fields_len;

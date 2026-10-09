@@ -877,7 +877,7 @@ operator_visibility(const struct app_state *app, char *text, size_t size)
         level, snag_verbosity_name(level), view == SNAG_RENDER_CHAT ? "chat" : "rollout",
         snag_presentation_enabled(SNAG_PRESENT_CONVERSATION, level, view) ? "visible" : "hidden",
         rows ? "visible (brief start/outcome rows)" : "hidden", arguments, output,
-        app->config->max_output_bytes,
+        app->config->display_output_bytes,
         app->execute ? "In one-shot mode final answers go to stdout; commentary and diagnostics "
                        "use stderr, which may be redirected."
                      : "Interactive mode uses the selected local view; off-screen or truncated "

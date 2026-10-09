@@ -1581,8 +1581,9 @@ read_tool_result(const json_t *data, struct snag_binary_tool_result *result,
     if (result->has_handle && read_id(data, "handle", result->handle) < 0) {
         return -1;
     }
+    /* The legacy result field stores bytes; keep its durable spelling. */
     if (json_object_get(data, "max_output_tokens") &&
-        snag_json_integer_u64(data, "max_output_tokens", &result->max_output_tokens) < 0) {
+        snag_json_integer_u64(data, "max_output_tokens", &result->output_limit_bytes) < 0) {
         return -1;
     }
     const char *streams[] = {"stdout", "stderr"};
@@ -1705,7 +1706,7 @@ static int
 turn_execution_valid(const struct snag_binary_turn_config *config)
 {
     uint64_t numbers[] = {4u, 10000u, 60000u, 0u, 86400000u,
-        SNAG_DEFAULT_TOOL_OUTPUT_TOKENS, 1024u * 1024u, 5u};
+        SNAG_DEFAULT_TOOL_OUTPUT_BYTES, 1024u * 1024u, 5u};
     for (size_t i = 0u; i < SNAG_BINARY_TURN_NUMBER_COUNT; ++i) {
         if (!(config->present & (1u << i))) continue;
         numbers[i] = config->numbers[i];
@@ -3215,8 +3216,8 @@ put_tool_result(json_t *data, const struct snag_binary_tool_result *result)
         (result->has_handle && put_id(value, "handle", result->handle) < 0) ||
         (result->reason && snag_json_set_new(value, "reason",
             json_string(tool_reasons[result->reason])) < 0) ||
-        (result->max_output_tokens && snag_json_set_new(value, "max_output_tokens",
-            json_integer((json_int_t)result->max_output_tokens)) < 0) ||
+        (result->output_limit_bytes && snag_json_set_new(value, "max_output_tokens",
+            json_integer((json_int_t)result->output_limit_bytes)) < 0) ||
         (result->has_output_ref && put_tool_output_ref(value, &result->output_ref) < 0) ||
         put_content(value, &result->content) < 0) {
         goto fail;

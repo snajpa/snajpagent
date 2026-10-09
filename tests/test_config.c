@@ -213,6 +213,54 @@ test_configured_efforts(const char *path)
 }
 
 static void
+test_output_units(const char *path)
+{
+    const char *model_keys[] = {"tool_output_bytes", "max_output_tokens"};
+    const char *display_keys[] = {"display_output_bytes", "max_output_bytes"};
+    struct snag_config config;
+    struct snag_execution_config execution;
+    char text[512], error[256];
+
+    for (size_t model = 0u; model < 2u; ++model) {
+        for (size_t display = 0u; display < 2u; ++display) {
+            int n = snprintf(text, sizeof(text),
+                "[tool]\n%s=7000\n%s=123\n[provider p]\n"
+                "[model-limit p/m]\ntool_output_bytes=9000\n",
+                model_keys[model], display_keys[display]);
+            assert(n > 0 && (size_t)n < sizeof(text));
+            write_bytes(path, text, (size_t)n);
+            load_config(&config, path, NULL);
+            assert(config.tool_output_bytes == 7000u && config.display_output_bytes == 123u);
+            assert(!snag_config_resolve_execution(
+                &config, "p", "other", &execution, error, sizeof(error)));
+            assert(execution.tool_output_bytes == 7000u);
+            assert(!snag_config_resolve_execution(
+                &config, "p", "m", &execution, error, sizeof(error)));
+            assert(execution.tool_output_bytes == 9000u);
+            snag_config_free(&config);
+        }
+    }
+    const char *invalid[] = {
+        "tool_output_bytes=0\n", "tool_output_bytes=4000000001\n",
+        "display_output_bytes=4294967296\n",
+        "tool_output_bytes=100\nmax_output_tokens=100\n",
+        "max_output_tokens=100\ntool_output_bytes=200\n",
+        "display_output_bytes=100\nmax_output_bytes=100\n",
+        "max_output_bytes=100\ndisplay_output_bytes=200\n"};
+    for (size_t i = 0u; i < sizeof(invalid) / sizeof(invalid[0]); ++i) {
+        int n = snprintf(text, sizeof(text), "[tool]\n%s", invalid[i]);
+        assert(n > 0 && (size_t)n < sizeof(text));
+        write_bytes(path, text, (size_t)n);
+        expect_invalid(path);
+    }
+    const char unlimited[] = "[tool]\ntool_output_bytes=4000000000\ndisplay_output_bytes=0\n";
+    write_bytes(path, unlimited, sizeof(unlimited) - 1u);
+    load_config(&config, path, NULL);
+    assert(config.tool_output_bytes == 4000000000u && config.display_output_bytes == 0u);
+    snag_config_free(&config);
+}
+
+static void
 test_model_execution(const char *path)
 {
     struct snag_config config;
@@ -995,10 +1043,10 @@ main(void)
     assert(config.irc.history_lines == 200u);
     assert(config.default_timeout_ms == 0u);
     assert(config.max_timeout_ms == 86400000u);
-    assert(config.max_output_tokens == 6000u);
+    assert(config.tool_output_bytes == 6000u);
     assert(config.max_parallel_commands == 4u);
     assert(config.providers[0].parallel_tool_calls);
-    assert(config.max_output_bytes == 0u);
+    assert(config.display_output_bytes == 0u);
     assert(config.provider_count == 1u);
     assert(strcmp(config.providers[0].name, "openai") == 0);
     assert(config.providers[0].auto_compact_input_tokens == SNAG_CONFIG_COMPACT_AUTO);
@@ -1116,8 +1164,8 @@ main(void)
     assert(config.default_yield_ms == 0u);
     assert(config.default_timeout_ms == 4000u);
     assert(config.max_timeout_ms == 5000u);
-    assert(config.max_output_tokens == 7654u);
-    assert(config.max_output_bytes == 123456u);
+    assert(config.tool_output_bytes == 7654u);
+    assert(config.display_output_bytes == 123456u);
     assert(config.secret_count == 2u);
     assert(strcmp(config.secrets[0].value, "TOKEN_ONE") == 0);
     assert(strcmp(config.secrets[1].value, "TOKEN_TWO") == 0);
@@ -1241,6 +1289,7 @@ main(void)
     test_model_change_setting(path);
     test_model_steering(path);
     test_configured_efforts(path);
+    test_output_units(path);
     test_model_execution(path);
     test_numeric_settings(path);
     test_io_rules(path);
@@ -1271,7 +1320,7 @@ main(void)
     write_bytes(path, "[tool]\nmax_output_bytes=4294967295\n",
         sizeof("[tool]\nmax_output_bytes=4294967295\n") - 1u);
     load_config(&config, path, dotdir);
-    assert(config.max_output_bytes == UINT32_MAX);
+    assert(config.display_output_bytes == UINT32_MAX);
     snag_config_free(&config);
     {
         static const unsigned char bad_header[] = {'[', 'p', 'r', 'o', 'v', 'i', 'd', 'e', 'r', ']',

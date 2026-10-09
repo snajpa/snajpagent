@@ -1501,7 +1501,7 @@ marks display content that was cut or hidden by the current level.
 .B 3
 Full retained tool arguments, effective execution context and results, subject
 to existing capture limits and
-.BR "[tool] max_output_bytes" .
+.BR "[tool] display_output_bytes" .
 .TP
 .B 4
 Add runtime decisions, token accounting, synced event identities and connection
@@ -4648,11 +4648,7 @@ defaults for a matched model:
 .BR tool_output_bytes ,
 and
 .BR output_cache_bytes .
-Their ranges and meanings match the tool settings below, except
-.B tool_output_bytes
-is the per-model name for the model-context result ceiling configured globally
-as
-.BR max_output_tokens .
+Their ranges and meanings match the tool settings below.
 The effective set is frozen with each admitted turn and shown to the model.
 .TP
 .B steering
@@ -4972,10 +4968,9 @@ Maximum positive model handoff deadline, 1 through 4294967295. Default: 86400000
 Out-of-range tool arguments are rejected before execution with the allowed range;
 they are not silently reduced.
 .TP
-.B max_output_tokens
+.B tool_output_bytes
 Command-result model-context ceiling in retained UTF-8 bytes, 1 through
-4000000000.  Default: 6000.  The legacy key name is not a token-count unit;
-provider/model output limits with the same name are separately token-based.
+4000000000.  Default: 6000.
 A tool call selects a smaller positive bound or
 .B null
 for this ceiling. Larger requests are capped at this value, with requested and
@@ -4983,7 +4978,9 @@ applied values reported. A separate per-result context-safety ceiling may reduce
 the excerpt further and is also reported. These limits leave durable capture
 unchanged. Host argument corrections and applied-limit feedback are supplied
 separately from the bounded command-output body, including with very small
-output budgets.
+output budgets. The legacy [tool] max_output_tokens spelling remains a byte-valued
+alias. Use only one spelling in a section. Provider/model max_output_tokens
+settings continue to specify generated tokens.
 .TP
 .B output_cache_bytes
 Maximum command-output bytes kept in the in-memory paging cache, 0 through
@@ -4995,11 +4992,12 @@ without rerunning the command. Completed-command reads walk verified journal
 records backwards and stop when the requested range is complete. Active commands
 use their retained collection cursor when it covers the requested bytes.
 .TP
-.B max_output_bytes
+.B display_output_bytes
 Maximum result bytes displayed per tool call, 0 through 4294967295.  Zero
 means unlimited.  The
 durable session retains complete redacted output; model context has its own
-tool-call bound.  Default: 0.
+tool-call bound. Default: 0. The legacy [tool] max_output_bytes spelling remains
+an alias. Use only one spelling in a section.
 .TP
 .B secret
 Repeatable additional value to protect, using the same source syntax as api_key.
@@ -5248,10 +5246,9 @@ call selects a positive
 context bound or
 .B null
 for the configured
-.BR "[tool] max_output_tokens" " ceiling (default: 6000)."
+.BR "[tool] tool_output_bytes" " ceiling (default: 6000)."
 Larger requested bounds are capped at that ceiling; smaller bounds are honored.
-For backward compatibility the option keeps its name, but the bound is a
-retained UTF-8 byte limit, not a token count or estimate. It is persisted
+The bound is measured in retained UTF-8 bytes. It is persisted
 with the result and enforces byte/memory safety.  Truncated context retains bounded
 provenance; complete redacted output remains in journal chunks.  Polls return
 only newly collected output, with exact stream-range references.  Multiple
@@ -5568,7 +5565,7 @@ A deadline yields control without terminating the child.
 is a positive retained UTF-8 byte bound for result text sent to model context,
 or omitted/null for the configured ceiling (default 6000). The legacy input
 spelling max_output_tokens retains these byte semantics. This argument selects
-the model excerpt; the similarly named [tool] max_output_bytes setting controls
+the model excerpt; [tool] display_output_bytes controls
 terminal display only. Larger requests are capped with requested/applied
 feedback. Complete redacted
 process output remains in the session log; the bounded excerpt identifies

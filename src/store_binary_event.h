@@ -763,7 +763,7 @@ struct snag_binary_tool_output_ref {
 struct snag_binary_tool_result {
     enum snag_binary_tool_status status;
     enum snag_binary_tool_reason reason;
-    uint64_t duration_ms, max_output_tokens; /* Zero limit means absent. */
+    uint64_t duration_ms, output_limit_bytes; /* Zero limit means absent. */
     struct snag_binary_result_value exit_code, signal;
     struct snag_binary_text model_text;
     struct snag_binary_tool_excerpt streams[2]; /* stdout, stderr */

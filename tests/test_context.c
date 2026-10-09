@@ -6993,7 +6993,7 @@ main(int argc, char **argv)
         const char *gate_text;
 
         snag_config_init(&network_config);
-        network_config.max_output_tokens = 777u;
+        network_config.tool_output_bytes = 777u;
         network_config.irc.listen_explicit = true;
         memcpy(network_config.irc.model_nick, "builder", 8u);
         memcpy(network_config.irc.operator_nick, "alice", 6u);
