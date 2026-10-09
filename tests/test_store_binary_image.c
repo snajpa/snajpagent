@@ -73,9 +73,19 @@ interfere(void *opaque)
         if (event->fault == 1u) assert(!snag_truncate(fd, (int64_t)size - 1));
         if (event->fault == 2u) assert(!snag_truncate(fd, (int64_t)size + 1));
         if (event->fault == 3u) {
-            assert(snag_seek(fd, (int64_t)size - 80, SEEK_SET) == (int64_t)size - 80);
+            snag_file_info before, after;
+            assert(!snag_fstat(fd, &before));
             unsigned char changed = event->fixture->bytes.data[size - 80u] ^ 1u;
-            assert(!snag_write_full(fd, &changed, 1u));
+            /* Fast rewrites can share a filesystem clock tick. Establish the
+             * changed stamp that the final source-stability check observes. */
+            for (unsigned attempt = 0u; attempt < 2000u; ++attempt) {
+                assert(snag_seek(fd, (int64_t)size - 80, SEEK_SET) == (int64_t)size - 80);
+                assert(!snag_write_full(fd, &changed, 1u));
+                assert(!snag_fstat(fd, &after));
+                if (!snag_file_unchanged(&before, &after)) break;
+                assert(!snag_sleep_ms(1u));
+            }
+            assert(!snag_file_unchanged(&before, &after));
             assert(snag_seek(fd, 13, SEEK_SET) == 13);
         }
     }
