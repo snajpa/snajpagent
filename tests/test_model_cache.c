@@ -278,6 +278,16 @@ test_local_models(struct snag_store *store, struct snag_model_cache *cache)
     strcpy(provider->models[1].upstream, "unknown");
     capacity = resolve_capacity(cache, &config, 0, "large", "codex");
     assert(capacity.hard_input_tokens == 475000u);
+    for (size_t i = 0u; i < 2u; ++i) {
+        json_decref(config.model_limits[i].reasoning_efforts);
+        config.model_limits[i].reasoning_efforts = load_json("[\"level:max\"]");
+    }
+    assert(snag_model_select_selector(cache, &config, "#1", provider, "medium",
+               &selected, error, sizeof(error)) == 0);
+    assert(!strcmp(selected.effort, "level:max") && !selected.context_set);
+    assert(snag_model_select_selector(cache, &config, "#1:450000", provider, "medium",
+               &selected, error, sizeof(error)) == 0);
+    assert(!strcmp(selected.effort, "level:max") && selected.context.tokens == 450000u);
     snag_config_free(&config);
 }
 

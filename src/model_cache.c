@@ -683,7 +683,7 @@ snag_model_select_selector(const struct snag_model_cache *cache, const struct sn
     size_t error_size)
 {
     char composed[SNAG_CONFIG_PROVIDER_NAME_MAX + SNAG_CONFIG_MODEL_MAX + SNAG_CONFIG_EFFORT_MAX +
-                  5u];
+                  7u];
     const char *provider = NULL, *model = NULL, *effort = NULL;
     size_t index = 0u;
     int rc, written;
@@ -707,8 +707,8 @@ snag_model_select_selector(const struct snag_model_cache *cache, const struct sn
     }
     if (rc < 0) return -1;
     written = strchr(model, '/')
-                  ? snprintf(composed, sizeof(composed), "%s/\"%s\"/%s", provider, model, effort)
-                  : snprintf(composed, sizeof(composed), "%s/%s/%s", provider, model, effort);
+                  ? snprintf(composed, sizeof(composed), "%s/\"%s\"/\"%s\"", provider, model, effort)
+                  : snprintf(composed, sizeof(composed), "%s/%s/\"%s\"", provider, model, effort);
     if (written < 0 || (size_t)written >= sizeof(composed)) return -1;
     rc = snag_model_select(
         cache, config, composed, fallback_provider, fallback_effort, selection, error, error_size);
