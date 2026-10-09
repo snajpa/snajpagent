@@ -6,6 +6,7 @@ import re
 import socket
 import tempfile
 import threading
+import time
 import unittest
 from pathlib import Path
 
@@ -27,6 +28,7 @@ class ChannelServer:
         self.chantypes = '#&+!'
         self.capabilities = ''
         self.rejected_nick = None
+        self.send_handler = None
         self.failure = None
         self.stopping = threading.Event()
         self.workers = []
@@ -100,6 +102,8 @@ class ChannelServer:
                             self.send(nick, f':{nick}!u@fake {line}\r\n')
                         else:
                             self.send(nick, f':fake 332 {nick} {room} :fixture topic\r\n')
+                    elif self.send_handler:
+                        self.send_handler(nick, line)
         except (OSError, UnicodeError) as exc:
             if not self.stopping.is_set():
                 self.failure = repr(exc)
@@ -133,7 +137,9 @@ class ChannelFixture(QueryFixture):
             'request_timeout_ms = 5000', 'request_timeout_ms = 20000'))
         self.server = ChannelServer()
         self.server.chantypes = getattr(self, 'chantypes', '#&+!')
-        self.server.capabilities = getattr(self, 'capabilities', '')
+        self.server.capabilities = ('batch echo-message labeled-response'
+            if self._testMethodName == 'test_delayed_receipts_failures_and_server_revisions'
+            else getattr(self, 'capabilities', ''))
         self.addCleanup(self.server.close)
         self.seen = []
         self.calls = []
@@ -181,6 +187,64 @@ class ChannelFixture(QueryFixture):
             wire = self.provider.response_body(sequence, 'channel fixture done')
         self.provider.reply(handler, wire.encode(), close_header=True)
         handler.close_connection = True
+
+    def send_outputs(self):
+        return [e['data']['result'] for e in self.events() if e['type'] == 'tool_finished']
+
+    def test_plain_server_send_returns_unconfirmed_without_repeating_body(self):
+        self.run_calls(self.send_call(self.selector(), 'plain-receipt-corpus'))
+        output = self.send_outputs()[-1]
+        self.assertEqual(output['status'], 'succeeded')
+        self.assertIn('0 acknowledged by server; 1 written (unconfirmed)', output['model_text'])
+        self.assertEqual(json.dumps(self.seen[-1]['input']).count('plain-receipt-corpus'), 1)
+
+    def test_send_wait_is_interrupted_without_replaying_the_effect(self):
+        frame_seen = threading.Event()
+        self.server.send_handler = lambda nick, line: (
+            frame_seen.set() if 'interrupt-receipt-corpus' in line else None)
+        self.calls = [self.send_call(self.selector(), 'interrupt-receipt-corpus')]
+        self.release.set()
+        self.command('/rollout', 'host-model/medium')
+        self.command('channel-check')
+        self.assertTrue(frame_seen.wait(5))
+        self.term.write(b'\x03')
+        self.wait(lambda: any(e['type'] == 'turn_interrupted' for e in self.events()))
+        finished = [e['data']['result'] for e in self.events() if e['type'] == 'tool_finished']
+        self.assertTrue(finished)
+        self.assertIn('unconfirmed', finished[-1]['model_text'])
+        self.assertEqual(sum('interrupt-receipt-corpus' in line
+                             for _, line in self.server.lines), 1)
+
+    def test_delayed_receipts_failures_and_server_revisions(self):
+        def receipt(nick, line):
+            match = re.fullmatch(r'@label=([0-9a-f]{32}) PRIVMSG #side :(.*)', line)
+            if not match:
+                return
+            label, body = match.groups()
+            time.sleep(.04)
+            if body == 'failed-receipt-corpus':
+                self.server.send(nick,
+                    f'@label={label} :fake 404 {nick} #side :Cannot send\r\n')
+            else:
+                echoed = 'server-revised-corpus' if body == 'original-receipt-corpus' else body
+                self.server.send(nick,
+                    f'@label={label} :{nick}!u@fake PRIVMSG #side :{echoed}\r\n')
+
+        self.server.send_handler = receipt
+        self.run_calls(self.send_call(self.selector(), 'delayed-receipt-corpus'),
+                       self.send_call(self.selector(), 'failed-receipt-corpus'),
+                       self.send_call(self.selector(), 'original-receipt-corpus'))
+        outputs = self.send_outputs()
+        self.assertEqual([o['status'] for o in outputs], ['succeeded', 'failed', 'succeeded'])
+        self.assertIn('1 acknowledged by server', outputs[0]['model_text'])
+        self.assertIn('1 failed', outputs[1]['model_text'])
+        self.assertIn('target=#side: failed', outputs[1]['model_text'])
+        self.assertIn('server revised the message body:\nserver-revised-corpus',
+                      outputs[2]['model_text'])
+        request = json.dumps(self.seen[-1]['input'])
+        for body in ('delayed-receipt-corpus', 'failed-receipt-corpus',
+                     'original-receipt-corpus', 'server-revised-corpus'):
+            self.assertEqual(request.count(body), 1)
 
     def run_calls(self, *calls):
         self.calls = list(calls)

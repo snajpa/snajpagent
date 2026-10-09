@@ -6822,11 +6822,31 @@ def current_host_context(request):
     items = request.get("input", [])
     begin = "[snajpagent host continuation — not a new user message]\nHost state snapshot:"
     end = "[snajpagent host continuation — not a new user message]\nEnd host state snapshot."
-    for index in range(len(items) - 1, -1, -1):
-        if str(items[index].get("content", "")).startswith(begin):
-            stop = next(i for i in range(index + 1, len(items)) if items[i].get("content") == end)
-            return items[index + 1:stop]
-    return items
+    facts = {}
+    inside = False
+    for item in items:
+        text = str(item.get("content", ""))
+        if text.startswith(begin):
+            inside = True
+            continue
+        if text == end:
+            inside = False
+            continue
+        if not inside:
+            continue
+        text = text.removeprefix("[snajpagent host continuation — not a new user message]\n")
+        if text.startswith(('Persistent goal ', 'No persistent goal ')):
+            key = 'goal'
+        elif 'The preceding JSON describes unsettled commands' in text:
+            key = 'processes'
+        else:
+            key = next((prefix for prefix in (
+                'Local operator display snapshot:', 'Local work note', 'Session banner',
+                'Current goal wording:', 'IRC preferences', 'Outstanding IRC replies',
+                'Host tool feedback', 'History orientation:') if text.startswith(prefix)),
+                text.split('\n', 1)[0])
+        facts[key] = item
+    return list(facts.values()) if facts else items
 
 
 def unsettled_commands(request):
@@ -6914,7 +6934,7 @@ def run_host_cache_prefix_case(binary, root):
         assert "The preceding JSON describes unsettled commands" in running
         assert "Host tool feedback for the latest batch" in running and "8000" in running and "6000" in running
         settled = "\n".join(str(i.get("content", "")) for i in current_host_context(requests[2]))
-        assert "The preceding JSON describes unsettled commands" not in settled
+        assert not unsettled_commands(requests[2])
         assert "cache-result" in json.dumps(gateway_conversation(requests[2]))
         print("host cache prefix running/collected/timed-input/feedback: ok", flush=True)
     finally:

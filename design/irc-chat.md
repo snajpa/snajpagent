@@ -596,17 +596,17 @@ Removing a destination clears its outstanding local-operator reply obligation.
 
 On successful room join/reconnect, the topic and member nicks are admitted as
 a state-only snapshot. Identified live/replayed event payloads are projected
-once from their durable records. The scheduling reference that admits a payload
-names the update itself (endpoint, room, kind, sender and durable id) instead of
-claiming its text lives elsewhere; history replay resolves that reference to the
-retained payload, so the operator reads the room event and never a dangling
-pointer. Scheduling references do not copy the payload text. The payload itself
+once with their endpoint, room, kind, sender and durable ID. The admission prompt
+carries that complete projection, and the request builder verifies its source
+without expanding a second header/body. Older reference-only admissions resolve
+to their retained payload. Distinct events remain distinct even when their text
+is identical. The payload itself
 waits for the same safe boundary as steering and topology snapshots, so an
 admission that arrives while a tool call is outstanding never separates that
 call from its output.
 Ordinary live background chat still follows the existing queue/turn boundaries;
 durable `irc_admitted` sequence references record when accepted payloads become
-model context, without storing another copy of their text. Mention and
+model context. Mention and
 historical catch-up timing is unchanged. The received-event watermark of a
 frozen request cannot cross withheld background input, and only successful
 completion advances consumption. Resume schedules durable
@@ -618,10 +618,11 @@ afterward.
 
 Every successful manual, automatic, native, or Responses-based compaction is
 followed before the next provider response by a fresh user-role snapshot of
-the current topic, membership/operator state, and up to `history_lines` recent
-events from the local IRC cache. This keeps live room state outside the text
-that compaction may summarize. Snapshot insertion is itself a durable event,
-so restart and replay cannot change which network context the model saw.
+the current topic, membership/operator state and accepted aliases. Message bodies
+enter through admission; automatic snapshots contain current state only. Original
+events remain available through history navigation. Old automatic snapshots with
+an embedded transport history ring project only their state section. Snapshot
+insertion is itself a durable event, so restart and replay retain its source.
 
 `/nick NICK` changes the operator identity through the UI's selected destination
 route. Bare `/nick` reports both identities. Accepted operator changes update the
@@ -655,7 +656,14 @@ nullable string `destination`: a numbered target from maintained state, `all`
 for an explicit broadcast, or omission/null when the frozen request has exactly
 one destination. Omitted `notice` defaults to false. Operator UI selection never
 redirects a model reply. Each target produces its own attributed local echo and
-queue/failure result. Queue acceptance is not proof of remote delivery.
+queue/failure result. `irc_send` services input and collects its batch's delivery
+events for at most 250 ms, then returns aggregate acknowledged, written, pending,
+failed and uncertain counts. Failed/uncertain chunks retain IDs and targets;
+actual server text corrections retain the revised text. Partial queue failures
+preserve the accepted-chunk report. A server acknowledgement confirms server
+handling; pending or written sends remain unconfirmed and must not be resent
+merely because the receipt wait ended. Transport events stay in the journal and
+operator views without becoming additional model admissions.
 Local-mention reply obligations belong to their originating targets, not an
 unrelated successful send.
 

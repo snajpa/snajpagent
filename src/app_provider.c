@@ -513,6 +513,63 @@ channel_selector(const char *selector)
 }
 
 static int
+irc_send_result(struct app_state *app, int status, struct snag_buf *report, json_t **result)
+{
+    json_t *sends = app->irc_tool_sends;
+    int rc = -1;
+    uint64_t deadline = snag_monotonic_ms() + 250u;
+    while (!status && json_object_size(sends) && snag_monotonic_ms() < deadline) {
+        const char *id;
+        json_t *send;
+        bool waiting = false;
+        json_object_foreach(sends, id, send) {
+            (void)id;
+            int state = (int)json_integer_value(json_object_get(send, "state"));
+            waiting |= state == SNAG_IRC_PENDING || state == SNAG_IRC_WRITTEN;
+        }
+        if (!waiting) break;
+        int pumped = snag_app_active_input_pump(app, 25u);
+        if (pumped < 0) goto out;
+        if (pumped) break;
+        if (app->execute || app->input_closed) (void)snag_sleep_ms(25u);
+    }
+    if (!status && json_object_size(sends)) {
+        unsigned int counts[SNAG_IRC_UNCERTAIN + 1u] = {0};
+        const char *id;
+        json_t *send;
+        json_object_foreach(sends, id, send) {
+            (void)id;
+            int state = (int)json_integer_value(json_object_get(send, "state"));
+            if (state < SNAG_IRC_PENDING || state > SNAG_IRC_UNCERTAIN) goto out;
+            ++counts[state];
+        }
+        snag_buf_reset(report);
+        if (snag_buf_printf(report,
+            "IRC send batch: %u acknowledged by server; %u written (unconfirmed); "
+            "%u pending; %u failed; %u uncertain.\n",
+            counts[SNAG_IRC_ACKNOWLEDGED], counts[SNAG_IRC_WRITTEN], counts[SNAG_IRC_PENDING],
+            counts[SNAG_IRC_FAILED], counts[SNAG_IRC_UNCERTAIN]) < 0) goto out;
+        json_object_foreach(sends, id, send) {
+            int state = (int)json_integer_value(json_object_get(send, "state"));
+            const char *revised = snag_json_string(send, "revised_text");
+            if (state >= SNAG_IRC_FAILED && snag_buf_printf(report, "%s target=%s: %s.\n",
+                id, snag_json_string(send, "target"),
+                state == SNAG_IRC_FAILED ? "failed" : "delivery uncertain") < 0) goto out;
+            if (revised && snag_buf_printf(report,
+                "%s: server revised the message body:\n%s\n", id, revised) < 0) goto out;
+        }
+        status = counts[SNAG_IRC_FAILED] || counts[SNAG_IRC_UNCERTAIN];
+    }
+    if (snag_buf_terminate(report) < 0) goto out;
+    *result = snag_tool_result_terminal(status == 0, (const char *)report->data);
+    rc = *result ? 0 : -1;
+out:
+    app->irc_tool_sends = NULL;
+    json_decref(sends);
+    return rc;
+}
+
+static int
 irc_tool_channel_send(struct app_state *app, const char *selector, const char *text, bool topic,
     bool notice, bool action, json_t **result, char *error, size_t error_size)
 {
@@ -520,6 +577,8 @@ irc_tool_channel_send(struct app_state *app, const char *selector, const char *t
     snag_irc_capture_scopes(&app->irc_request_destinations, &scopes);
     struct snag_irc_channel_target target;
     struct snag_buf report = {.max = SNAG_MAX_IRC_SNAPSHOT};
+    app->irc_tool_sends = topic ? NULL : json_object();
+    if (!topic && !app->irc_tool_sends) goto fail;
     int rc = snag_app_irc_channel_target(app, &scopes, app->irc_request_conversations,
         SNAG_IRC_AGENT, 0u, selector, &target, error, error_size);
     if (!rc) {
@@ -535,11 +594,12 @@ irc_tool_channel_send(struct app_state *app, const char *selector, const char *t
     }
     if (rc && snag_buf_printf(&report, "%s\n", error[0] ? error : "channel command failed") < 0)
         goto fail;
-    if (snag_buf_terminate(&report) < 0) goto fail;
-    *result = snag_tool_result_terminal(rc == 0, (const char *)report.data);
+    rc = irc_send_result(app, rc, &report, result);
     snag_buf_free(&report);
-    return *result ? 0 : -1;
+    return rc;
 fail:
+    json_decref(app->irc_tool_sends);
+    app->irc_tool_sends = NULL;
     snag_buf_free(&report);
     return -1;
 }
@@ -550,17 +610,20 @@ irc_tool_query_send(struct app_state *app, const char *selector, const char *tex
 {
     struct snag_irc_query_target target;
     struct snag_buf report = {.max = SNAG_MAX_IRC_SNAPSHOT};
+    app->irc_tool_sends = json_object();
+    if (!app->irc_tool_sends) goto fail;
     int rc = irc_tool_query_target(app, selector, &target, error, error_size);
     if (!rc)
         rc = snag_irc_query_send(app->irc, &target, notice ? SNAG_IRC_NOTICE : SNAG_IRC_MESSAGE,
             text, action, &report, error, error_size);
     if (rc && snag_buf_printf(&report, "%s\n", error[0] ? error : "private send failed") < 0)
         goto fail;
-    if (snag_buf_terminate(&report) < 0) goto fail;
-    *result = snag_tool_result_terminal(rc == 0, (const char *)report.data);
+    rc = irc_send_result(app, rc, &report, result);
     snag_buf_free(&report);
-    return *result ? 0 : -1;
+    return rc;
 fail:
+    json_decref(app->irc_tool_sends);
+    app->irc_tool_sends = NULL;
     snag_buf_free(&report);
     return -1;
 }
@@ -988,6 +1051,8 @@ snag_app_tool_run(struct app_state *app, const struct snag_response_item *call,
             return *result ? 0 : -1;
         }
         struct snag_buf report = {.max = 8192u};
+        app->irc_tool_sends = topic || nick ? NULL : json_object();
+        if (!topic && !nick && !app->irc_tool_sends) return -1;
         rc = snag_irc_send_route(app->irc, &route, true,
             topic    ? SNAG_IRC_TOPIC
             : nick   ? SNAG_IRC_NICK
@@ -1001,9 +1066,11 @@ snag_app_tool_run(struct app_state *app, const struct snag_response_item *call,
             else
                 app->config->irc.model_nick_implicit = false;
         }
-        if (rc >= 0 && snag_buf_terminate(&report) == 0)
-            *result = snag_tool_result_terminal(
-                rc == 0, report.len > 1u ? (const char *)report.data : error);
+        if (rc >= 0) rc = irc_send_result(app, rc, &report, result);
+        else {
+            json_decref(app->irc_tool_sends);
+            app->irc_tool_sends = NULL;
+        }
         snag_buf_free(&report);
         return rc < 0 || !*result ? -1 : 0;
     }

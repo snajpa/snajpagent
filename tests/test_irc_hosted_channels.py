@@ -10,6 +10,72 @@ from tmux_terminal import read_events
 
 
 class HostedChannelTests(QueryFixture):
+    def audit_send(self, text='sent-corpus-audit-marker'):
+        channel = self.channels()['agent']['routing']['conversation_id']
+        issued = False
+        compacted = []
+
+        def respond(handler, request, sequence):
+            nonlocal issued
+            self.seen.append(request)
+            if not request.get('tools'):
+                compacted.append(request)
+                wire = self.provider.response_body(sequence, 'conversation summarized')
+            elif not issued:
+                issued = True
+                wire = self.provider.function_body(sequence, 'send-audit', 'irc_send',
+                    dict(destination='channel:' + channel, text=text,
+                         notice=False))
+            else:
+                wire = self.provider.response_body(sequence, 'send audit done')
+            self.provider.reply(handler, wire.encode(), close_header=True)
+            handler.close_connection = True
+
+        self.provider.runtime_handler = respond
+        def native_compact(handler, request):
+            self.provider.reply(handler, b'{"error":{"message":"native unavailable"}}',
+                'application/json', status=404, close_header=True)
+        self.provider.runtime_compact_handler = native_compact
+        self.submit('audit-one-send')
+        for line in text.splitlines():
+            self.wire('PRIVMSG #lab :' + line, 'querybot')
+        after_send = self.seen[-1]
+        results = [item['output'] for item in after_send['input']
+                   if item.get('type') == 'function_call_output']
+        return after_send, results, compacted
+
+    def test_send_receipts_settle_in_one_result_without_context_replay(self):
+        after_send, results, _ = self.audit_send()
+        self.assertIn('acknowledged', json.dumps(results))
+        self.assertEqual(json.dumps(after_send['input']).count('sent-corpus-audit-marker'), 1)
+
+    def test_compaction_does_not_reinsert_send_receipts(self):
+        _, _, compacted = self.audit_send()
+        self.command('/compact', 'Compacted')
+        self.wait(lambda: bool(compacted))
+        self.assertEqual(json.dumps(compacted[-1]['input']).count('sent-corpus-audit-marker'), 1)
+        self.assertNotIn('delivery=pending', json.dumps(compacted[-1]['input']))
+        self.assertNotIn('delivery=written', json.dumps(compacted[-1]['input']))
+        self.submit('after-compaction-audit')
+        self.assertNotIn('sent-corpus-audit-marker', json.dumps(self.seen[-1]['input']))
+
+    def test_send_chunks_share_one_aggregate_result(self):
+        request, results, _ = self.audit_send('batch-first-corpus\nbatch-second-corpus')
+        self.assertEqual(len(results), 1)
+        self.assertIn('2 acknowledged by server', results[0])
+        for text in ('batch-first-corpus', 'batch-second-corpus'):
+            self.assertEqual(json.dumps(request['input']).count(text), 1)
+
+    def test_native_channel_batch_keeps_each_message_once(self):
+        self.peer.sock.sendall(b'PRIVMSG #lab :same-audit-corpus\r\n' * 2)
+        self.wait(lambda: sum(e['data'].get('text') == 'same-audit-corpus' and
+            e['data'].get('input', False) for e in self.events()) == 2)
+        self.wait_idle()
+        self.submit('inspect-two-messages')
+        input_text = json.dumps(self.seen[-1]['input'])
+        self.assertEqual(input_text.count('same-audit-corpus'), 2)
+        self.assertEqual(input_text.count('event=message sender=query-peer'), 2)
+
     def channels(self):
         result = {}
         for event in self.events():

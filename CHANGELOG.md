@@ -4,6 +4,14 @@
 
 ## Unreleased
 
+- Group IRC send receipts into one tool result after a short interruptible wait.
+  Preserve failures, uncertain delivery and server text corrections; compaction
+  refreshes room state without recopying message and receipt history.
+
+- Project only changed host facts, keeping unchanged goal/work-note text once
+  through tool cycles and checkpoint resume. Keep IRC admission payloads once,
+  and retain distinct identical messages and complete durable history.
+
 - Keep the context prompt anchored to completed input/output usage between requests
   and after resume. Add newly projected text without treating encrypted reasoning
   size as token growth; retain independent strict request accounting.

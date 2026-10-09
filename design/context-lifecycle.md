@@ -192,6 +192,44 @@ foreign opaque state nor silently replay the entire covered archive. The target
 binding owns any new summarization/counting. Switching never returns to an old
 provider merely to reconstruct context.
 
+### Automatic input and repetition
+
+The common request builder owns automatic input for ordinary responses, retries,
+resume and compaction. Keep stable instructions and retained conversation as a
+cacheable prefix. Each request contains one projection of each admitted event;
+the same retained prefix can be submitted again to a stateless provider.
+Never manufacture additional conversation copies from transport bookkeeping.
+
+| Producer | Model projection and lifetime |
+| --- | --- |
+| Harness, project instructions, rules and tool catalog | Fixed policy prefix and current schemas; topology changes can change available tools. |
+| Operator, voice and timer input | Exact admitted input with one typed timing record. Immediate steering uses `kind=steer`; its policy lives in the harness. |
+| IRC input | Coalesced complete events with source identity. Background input batches for 100 ms while idle; mentions use the urgent path. Distinct identical messages remain distinct. |
+| Model output and tools | Successful response items and paired results, with command excerpts under the configured output budget. Full bytes remain journal-backed and pageable. |
+| IRC send receipts | One short-wait batch result; failures, uncertainty and actual server rewrites remain explicit. Ordinary outgoing transport transitions do not become fresh admissions. |
+| Room snapshots | Current topic, members, aliases and routing state; message/receipt bodies stay with admissions and history. |
+| Host facts | Changes to display, work note, banner, goal, reply targets and process state. Unchanged facts stay in the retained prefix. |
+| Recovery | One coalesced notice with count, last failure class and elapsed time; completed effects remain paired. |
+| Reply/output correction | A bounded current-turn correction, under the existing reminder/recovery rules. No repeated original message body. |
+| Compaction | A summary or compatible native output plus uncovered groups. Current host facts are restored once after coverage replaces their previous copy. |
+| Explicit history/state tools | Bounded pages or maintained state requested by the model; no opaque provider continuation in readable history. |
+
+Durable `response_started` host snapshots remain complete. Replay and live request
+projection compare individual host-owned facts with the preceding full snapshot,
+then append only changed facts in one group. Goal wording is separate from goal
+status. Absence is explicit for a cleared work note, banner, reply list or process
+set, so an earlier value cannot remain current merely because it was omitted.
+Unsettled commands supply handles, state, unread bytes and stdin counts; their
+command and working directory are already in the paired call. This comparison
+never deduplicates arbitrary user or IRC text.
+
+Checkpoint restore rebuilds the derived view from its retained seam through the
+same interpreter. Older full snapshots get the same fact projection. Legacy
+automatic IRC snapshots with a transport `history:` section retain only their
+state section. Original durable records and operator views keep all events.
+Newly changed facts and explicit model-requested history pages may legitimately
+contain revised or previously seen content; their source and purpose stay clear.
+
 ## Compaction transaction and boundaries
 
 Source selection uses the materialized view and retained validated seam. Select

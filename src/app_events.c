@@ -114,11 +114,9 @@ append_irc_projection(struct snag_buf *pending, const struct snag_irc_event *eve
         memcpy(when, "1970-01-01T00:00:00Z", 21u);
     snag_buf_init(&line, sizeof(*event) + 1024u);
     if (event->stream[0] || event->historical) {
-        /* This batch text becomes the turn prompt: the operator reads it during
-         * replay and the model receives it as the turn's user message. It has
-         * to stand on its own, so name the update instead of pointing at a room
-         * event the reader may not have; the durable id still ties it back. */
-        rc = snag_irc_event_reference(&line, event);
+        /* The admission carries its payload once; durable source IDs still
+         * validate provenance without a second header/body expansion. */
+        rc = snag_irc_event_projection(&line, event);
         if (rc == 0) rc = append_pending(pending, (const char *)line.data, line.len);
         snag_buf_free(&line);
         return rc;
@@ -282,10 +280,7 @@ snag_app_irc_snapshot(struct app_state *app, const char *reason, char *error, si
     if (snag_app_sync_destinations(app) < 0) return -1;
     if (snag_app_save_resume_options(app, error, error_size) < 0) return -1;
     struct snag_buf snapshot = {.max = SNAG_MAX_IRC_SNAPSHOT};
-    rc = strcmp(reason, "compaction") != 0 || app->session.irc_sleep_until_ms ||
-                 app->session.irc_compact_updates
-             ? snag_irc_state(app->irc, &snapshot, error, error_size)
-             : snag_irc_snapshot(app->irc, &snapshot, error, error_size);
+    rc = snag_irc_state(app->irc, &snapshot, error, error_size);
     if (rc < 0) goto out;
     rc = -1;
     if (snag_buf_terminate(&snapshot) < 0) goto out;
@@ -362,6 +357,18 @@ snag_app_irc_event(void *opaque, const struct snag_irc_event *event)
     /* Commit may insert a checkpoint before the IRC event. The reducer keeps
      * the actual durable sequence, including any checkpoint on either side. */
     uint64_t accepted_seq = app->session.irc_received_seq;
+    if (app->irc_tool_sends && outgoing && event->route.identity == SNAG_IRC_AGENT) {
+        json_t *send = json_object_get(app->irc_tool_sends, event->route.send);
+        if (!send && event->route.delivery == SNAG_IRC_PENDING) {
+            send = json_pack("{s:s,s:i}", "target", event->route.target, "state",
+                (int)event->route.delivery);
+            if (!send || json_object_set_new(app->irc_tool_sends, event->route.send, send) < 0)
+                return -1;
+        } else if (send && json_object_set_new(send, "state",
+            json_integer(event->route.delivery)) < 0) return -1;
+        if (send && event->route.revised &&
+            json_object_set_new(send, "revised_text", json_string(event->text)) < 0) return -1;
+    }
     if (snag_ui_send(&app->ui, (struct snag_ui_command){.kind = SNAG_UI_IRC, .data.irc = event}) <
         0)
         return -1;
