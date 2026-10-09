@@ -865,12 +865,12 @@ snag_app_compact_before_response(struct app_state *app, const struct snag_creden
 }
 
 int
-snag_app_compact_after_capacity_rejection(struct app_state *app,
+snag_app_compact_oversized_request(struct app_state *app,
     const struct snag_credential *credential, bool *compacted, char *error, size_t error_size)
 {
     if (compacted) *compacted = false;
     if (!app || !credential || !compacted)
-        return snag_fail(error, error_size, EINVAL, "invalid provider-rejection compaction state");
+        return snag_fail(error, error_size, EINVAL, "invalid oversized-request compaction state");
     return run_compaction(
-        app, "provider_rejection", true, credential, compacted, error, error_size);
+        app, "hard_budget", true, credential, compacted, error, error_size);
 }

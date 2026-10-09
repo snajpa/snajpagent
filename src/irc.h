@@ -180,6 +180,8 @@ struct snag_irc_event {
     /* Engine-classified durable input; transport marks eligible sent receipts. */
     bool input;
     bool classified, urgent, reply;
+    /* The channel transport supplies the displayed message after admission. */
+    bool echo_expected;
     /* The agent counterpart at receipt time; captured with empty IDs means unavailable. */
     bool reply_captured;
     char reply_conversation[SNAG_ID_HEX_LEN + 1u], reply_membership[SNAG_ID_HEX_LEN + 1u];

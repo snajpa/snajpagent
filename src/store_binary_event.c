@@ -970,6 +970,12 @@ encode_metadata(struct snag_buf *out, const struct snag_binary_event *event)
     case SNAG_BINARY_SERVICE_TIER_CHANGED:
         if (!service_tier_valid(event->data.service_tier)) return invalid();
         return write_text(out, event->data.service_tier, 7u, 8u);
+    case SNAG_BINARY_FALLBACK_CHANGED:
+        return write_text(out, event->data.fallback, 1u, SNAG_CONFIG_SELECTOR_MAX - 1u);
+    case SNAG_BINARY_TURN_FALLBACK_STARTED:
+        if (snag_buf_append(out, event->data.turn_fallback.id, 16u) < 0 ||
+            write_selection(out, &event->data.turn_fallback.selection) < 0) return -1;
+        return write_choice(out, event->data.turn_fallback.context);
     case SNAG_BINARY_RETRY_AUTO_CHANGED:
         if (!retry_auto_valid(event->data.retry_auto)) return invalid();
         return write_text(out, event->data.retry_auto, 2u, 3u);
@@ -1035,6 +1041,12 @@ decode_metadata(struct fields *fields, struct snag_binary_event *event)
     case SNAG_BINARY_SERVICE_TIER_CHANGED:
         return read_text(fields, &event->data.service_tier, 7u, 8u) &&
             service_tier_valid(event->data.service_tier);
+    case SNAG_BINARY_FALLBACK_CHANGED:
+        return read_text(fields, &event->data.fallback, 1u, SNAG_CONFIG_SELECTOR_MAX - 1u);
+    case SNAG_BINARY_TURN_FALLBACK_STARTED:
+        return read_id(fields, event->data.turn_fallback.id) &&
+            read_selection(fields, &event->data.turn_fallback.selection) &&
+            read_choice(fields, &event->data.turn_fallback.context);
     case SNAG_BINARY_RETRY_AUTO_CHANGED:
         return read_text(fields, &event->data.retry_auto, 2u, 3u) &&
             retry_auto_valid(event->data.retry_auto);
@@ -2850,7 +2862,7 @@ encode_irc_event(struct snag_buf *out, const struct snag_binary_irc_event *event
         (event->op ? 4u : 0u) | (event->has_watermark ? 8u : 0u) |
         (event->has_stream ? 16u : 0u) | (event->input ? 32u : 0u) |
         (event->classified ? 64u : 0u) | (event->urgent ? 128u : 0u) |
-        (event->reply ? 256u : 0u);
+        (event->reply ? 256u : 0u) | (event->echo_expected ? 512u : 0u);
     if (write_uint(out, event->kind, 1u) < 0 || write_uint(out, flags, 2u) < 0 ||
         write_uint(out, event->timestamp_ms, 8u) < 0) {
         return -1;
@@ -2871,7 +2883,7 @@ static bool
 decode_irc_event(struct fields *fields, struct snag_binary_irc_event *event)
 {
     uint64_t kind, flags;
-    if (!read_uint(fields, 1u, &kind) || !read_uint(fields, 2u, &flags) || flags > 511u ||
+    if (!read_uint(fields, 1u, &kind) || !read_uint(fields, 2u, &flags) || flags > 1023u ||
         !read_uint(fields, 8u, &event->timestamp_ms)) {
         return false;
     }
@@ -2885,6 +2897,7 @@ decode_irc_event(struct fields *fields, struct snag_binary_irc_event *event)
     event->classified = (flags & 64u) != 0u;
     event->urgent = (flags & 128u) != 0u;
     event->reply = (flags & 256u) != 0u;
+    event->echo_expected = (flags & 512u) != 0u;
     if (event->has_stream && (!read_id(fields, event->stream) ||
         !read_uint(fields, 8u, &event->sequence))) {
         return false;
@@ -2909,6 +2922,8 @@ irc_route_valid(const struct snag_binary_irc_event *event)
     if (route->has_membership && (event->kind == SNAG_BINARY_IRC_CONNECTED ||
         event->kind == SNAG_BINARY_IRC_DISCONNECTED)) visible = false;
     return irc_event_valid(event) && event->has_watermark && route->generation &&
+        (!event->echo_expected || (chat && event->is_local && !event->historical &&
+            route->kind == SNAG_IRC_CHANNEL && route->direction == SNAG_IRC_OUTGOING)) &&
         route->generation <= INT64_MAX && (unsigned)route->identity <= SNAG_IRC_AGENT &&
         (unsigned)route->kind <= SNAG_IRC_QUERY &&
         (unsigned)route->direction <= SNAG_IRC_OUTGOING &&
@@ -3634,6 +3649,9 @@ static const struct archive_schema archive_schemas[] = {
     ARCHIVE_SCHEMA(SNAG_BINARY_SESSION_OPTIONS, "args"),
     ARCHIVE_SCHEMA(SNAG_BINARY_SERVICE_TIER_CHANGED, "value"),
     ARCHIVE_SCHEMA(SNAG_BINARY_RETRY_AUTO_CHANGED, "value"),
+    ARCHIVE_SCHEMA(SNAG_BINARY_FALLBACK_CHANGED, "value"),
+    ARCHIVE_SCHEMA(SNAG_BINARY_TURN_FALLBACK_STARTED, "turn_id", "provider", "model", "effort",
+        "context_mode", "context_tokens"),
     ARCHIVE_SCHEMA(SNAG_BINARY_CONTROL_REQUESTED, "control", "origin", "source_seq"),
     ARCHIVE_SCHEMA(SNAG_BINARY_CONTROL_STARTED, "control"),
     ARCHIVE_SCHEMA(SNAG_BINARY_CONTROL_FINISHED, "control"),
@@ -4467,7 +4485,8 @@ encode_fields(struct snag_buf *out, const struct snag_binary_event *event)
         return encode_process_close(out, &event->data.process_closed);
     }
     if (event->kind == SNAG_BINARY_IRC_EVENT) {
-        return encode_irc_event(out, &event->data.irc_event);
+        return event->data.irc_event.echo_expected ? invalid() :
+            encode_irc_event(out, &event->data.irc_event);
     }
     if (event->kind == SNAG_BINARY_IRC_EVENT_V2) {
         return encode_irc_route(out, &event->data.irc_event);
@@ -4488,7 +4507,9 @@ encode_fields(struct snag_buf *out, const struct snag_binary_event *event)
         event->kind <= SNAG_BINARY_FUTURE_TURN_EDITED) return encode_input(out, event);
     if ((event->kind >= SNAG_BINARY_SESSION_CREATED &&
             event->kind <= SNAG_BINARY_SERVICE_TIER_CHANGED) ||
-        event->kind == SNAG_BINARY_RETRY_AUTO_CHANGED) {
+        event->kind == SNAG_BINARY_RETRY_AUTO_CHANGED ||
+        event->kind == SNAG_BINARY_FALLBACK_CHANGED ||
+        event->kind == SNAG_BINARY_TURN_FALLBACK_STARTED) {
         return encode_metadata(out, event);
     }
     if (timer_kind(event->kind)) {
@@ -4557,6 +4578,8 @@ static const struct {
     {SNAG_BINARY_SESSION_OPTIONS, "session_options"},
     {SNAG_BINARY_SERVICE_TIER_CHANGED, "service_tier_changed"},
     {SNAG_BINARY_RETRY_AUTO_CHANGED, "retry_auto_changed"},
+    {SNAG_BINARY_FALLBACK_CHANGED, "fallback_changed"},
+    {SNAG_BINARY_TURN_FALLBACK_STARTED, "turn_fallback_started"},
     {SNAG_BINARY_CONTROL_REQUESTED, "control_requested"},
     {SNAG_BINARY_CONTROL_STARTED, "control_started"},
     {SNAG_BINARY_CONTROL_FINISHED, "control_finished"},
@@ -4666,6 +4689,7 @@ snag_binary_event_version(enum snag_binary_kind kind)
         (kind >= SNAG_BINARY_INPUT_RECEIVED && kind <= SNAG_BINARY_FUTURE_TURN_EDITED)) return 2u;
     if ((kind >= SNAG_BINARY_SESSION_CREATED && kind <= SNAG_BINARY_SERVICE_TIER_CHANGED) ||
         kind == SNAG_BINARY_RETRY_AUTO_CHANGED ||
+        kind == SNAG_BINARY_FALLBACK_CHANGED || kind == SNAG_BINARY_TURN_FALLBACK_STARTED ||
         timer_kind(kind) || goal_kind(kind) || hosted_search_kind(kind) ||
         kind == SNAG_BINARY_TURN_STARTED ||
         turn_outcome_kind(kind) || kind == SNAG_BINARY_RESPONSE_STARTED ||
@@ -4782,7 +4806,8 @@ decode_fields(struct fields *fields, struct snag_binary_event *event)
         return decode_process_close(fields, &event->data.process_closed);
     }
     if (event->kind == SNAG_BINARY_IRC_EVENT) {
-        return decode_irc_event(fields, &event->data.irc_event);
+        return decode_irc_event(fields, &event->data.irc_event) &&
+            !event->data.irc_event.echo_expected;
     }
     if (event->kind == SNAG_BINARY_IRC_EVENT_V2) {
         return decode_irc_route(fields, &event->data.irc_event);
@@ -4803,7 +4828,9 @@ decode_fields(struct fields *fields, struct snag_binary_event *event)
         event->kind <= SNAG_BINARY_FUTURE_TURN_EDITED) return decode_input(fields, event);
     if ((event->kind >= SNAG_BINARY_SESSION_CREATED &&
             event->kind <= SNAG_BINARY_SERVICE_TIER_CHANGED) ||
-        event->kind == SNAG_BINARY_RETRY_AUTO_CHANGED) {
+        event->kind == SNAG_BINARY_RETRY_AUTO_CHANGED ||
+        event->kind == SNAG_BINARY_FALLBACK_CHANGED ||
+        event->kind == SNAG_BINARY_TURN_FALLBACK_STARTED) {
         return decode_metadata(fields, event);
     }
     if (timer_kind(event->kind)) {

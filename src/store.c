@@ -526,6 +526,9 @@ static void
 clear_turn_state(struct snag_session *session)
 {
     session->active_turn = false;
+    session->turn_fallback_used = false;
+    session->turn_fallback_active = false;
+    session->turn_fallback_context = (struct snag_context_choice){0};
     session->active_read_only = false;
     session->active_queued = false;
     session->active_goal = false;
@@ -1682,6 +1685,39 @@ apply_event(struct snag_session *session, const char *type, const json_t *data, 
             !snag_strcpy(session->default_model, sizeof(session->default_model), new_model) ||
             !snag_strcpy(session->default_effort, sizeof(session->default_effort), new_effort))
             goto invalid;
+    } else if (strcmp(type, "fallback_changed") == 0) {
+        const char *value = snag_json_string(data, "value");
+        if (!snag_json_exact_keys(data, "value") ||
+            !snag_text_valid(value, 1u, sizeof(session->fallback_model) - 1u) ||
+            !snag_strcpy(session->fallback_model, sizeof(session->fallback_model), value))
+            goto invalid;
+    } else if (strcmp(type, "turn_fallback_started") == 0) {
+        const char *turn = snag_json_string(data, "turn_id");
+        const char *provider = snag_json_string(data, "provider");
+        const char *model = snag_json_string(data, "model");
+        const char *effort = snag_json_string(data, "effort");
+        enum snag_context_mode mode;
+        uint64_t tokens;
+        if (!session->active_turn || session->response_open || session->turn_fallback_used ||
+            session->response_terminal != SNAG_RESPONSE_TERMINAL_FAILED ||
+            !turn || strcmp(turn, session->active_turn_id) ||
+            !snag_json_exact_keys(
+                data, "turn_id provider model effort context_mode context_tokens") ||
+            !snag_text_valid(provider, 1u, sizeof(session->active_turn_provider) - 1u) ||
+            !snag_text_valid(model, 1u, sizeof(session->active_turn_model) - 1u) ||
+            !snag_text_valid(effort, 1u, sizeof(session->active_turn_effort) - 1u) ||
+            snag_json_integer_u64(data, "context_tokens", &tokens) < 0 ||
+            snag_context_mode_parse(snag_json_string(data, "context_mode"), &mode) < 0 ||
+            !snag_context_choice_valid(mode, tokens))
+            goto invalid;
+        (void)snag_strcpy(session->active_turn_provider,
+            sizeof(session->active_turn_provider), provider);
+        (void)snag_strcpy(session->active_turn_model, sizeof(session->active_turn_model), model);
+        (void)snag_strcpy(session->active_turn_effort, sizeof(session->active_turn_effort), effort);
+        clear_response_state(session);
+        session->turn_fallback_context = (struct snag_context_choice){mode, tokens};
+        session->turn_fallback_used = true;
+        session->turn_fallback_active = true;
     } else if (strcmp(type, "turn_model_changed") == 0) {
         const char *old_provider = snag_json_string(data, "old_provider");
         const char *old_model = snag_json_string(data, "old_model");
@@ -1698,7 +1734,8 @@ apply_event(struct snag_session *session, const char *type, const json_t *data, 
             strcmp(old_provider, session->active_turn_provider) != 0 || !old_model ||
             strcmp(old_model, session->active_turn_model) != 0 || !old_effort ||
             strcmp(old_effort, session->active_turn_effort) != 0 ||
-            (strcmp(old_provider, session->default_provider) == 0 &&
+            (!session->turn_fallback_active &&
+                strcmp(old_provider, session->default_provider) == 0 &&
                 strcmp(old_model, session->default_model) == 0 &&
                 strcmp(old_effort, new_effort) == 0) ||
             !snag_strcpy(session->active_turn_provider, sizeof(session->active_turn_provider),
@@ -1708,6 +1745,7 @@ apply_event(struct snag_session *session, const char *type, const json_t *data, 
             !snag_strcpy(
                 session->active_turn_effort, sizeof(session->active_turn_effort), new_effort))
             goto invalid;
+        session->turn_fallback_active = false;
     } else if (strcmp(type, "effort_changed") == 0) {
         const char *old_effort = snag_json_string(data, "old_effort");
         const char *new_effort = snag_json_string(data, "new_effort");

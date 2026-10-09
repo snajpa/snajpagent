@@ -369,7 +369,7 @@ int snag_app_compact_after_turn(struct app_state *app, uint64_t input_tokens_bou
 int snag_app_compact_before_response(struct app_state *app,
     const struct snag_credential *credential, uint64_t input_tokens_bound, const char *count_method,
     bool *compacted, char *error, size_t error_size);
-int snag_app_compact_after_capacity_rejection(struct app_state *app,
+int snag_app_compact_oversized_request(struct app_state *app,
     const struct snag_credential *credential, bool *compacted, char *error, size_t error_size);
 void snag_app_response_cycle_release(struct app_state *app, struct snag_response_graph *graph,
     json_t **steering, struct snag_context_projection *projection, struct snag_buf *request_body);

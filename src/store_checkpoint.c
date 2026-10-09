@@ -48,6 +48,11 @@ static const struct checkpoint_field session_fields[] = {
     S(struct snag_session, capacity_ceiling_model),
     S(struct snag_session, capacity_ceiling_source_sha256),
     S(struct snag_session, default_effort),
+    S(struct snag_session, fallback_model),
+    B(struct snag_session, turn_fallback_used),
+    B(struct snag_session, turn_fallback_active),
+    U(struct snag_session, turn_fallback_context.mode),
+    U(struct snag_session, turn_fallback_context.tokens),
     S(struct snag_session, command_shell),
     S(struct snag_session, trash_name),
     S(struct snag_session, compact_scope),
@@ -245,7 +250,9 @@ decode_fields(const json_t *source, void *target,
         if (!value && snag_string_in(f->name,
                 "irc_message_count irc_sleep_until_ms irc_sleep_start_count irc_sleep_messages "
                 "irc_compact_updates irc_admitted_count irc_compact_count "
-                "irc_compact_seq irc_summary_seq")) continue;
+                "irc_compact_seq irc_summary_seq fallback_model turn_fallback_used "
+                "turn_fallback_active turn_fallback_context.mode turn_fallback_context.tokens"))
+            continue;
         if (f->kind == CK_TEXT) {
             const char *text = json_string_value(value);
             if (!text || json_string_length(value) >= f->width ||
@@ -535,6 +542,12 @@ decode_state(const json_t *data, struct snag_session *s)
         if (!content || !(item->text = snag_json_string(s->strings, item->queue_id))) return -1;
         item->content = json_is_null(content) ? NULL : json_incref((json_t *)content);
     }
+    if ((s->turn_fallback_used && !s->active_turn) ||
+        (s->turn_fallback_active && !s->turn_fallback_used) ||
+        (!s->turn_fallback_used && (s->turn_fallback_context.mode ||
+            s->turn_fallback_context.tokens)) ||
+        !snag_context_choice_valid(s->turn_fallback_context.mode, s->turn_fallback_context.tokens))
+        return -1;
     if (!s->id[0] || !snag_hex_is_lower(s->id, SNAG_ID_HEX_LEN) ||
         !snag_hex_is_lower(s->prev_sha256, SNAG_SHA256_HEX_LEN) ||
         s->log_end < 0 || s->next_seq < 2u ||

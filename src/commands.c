@@ -22,6 +22,7 @@ const struct snag_term_command snag_commands[] = {
     {"/model [#]N[:CONTEXT] [save|s]", "select numbered model/effort row (N starts at 1)"},
     {"/model MODEL[/EFFORT][:CONTEXT] [save|s]", "select on the next-turn provider"},
     {"/model PROVIDER/MODEL/EFFORT[:CONTEXT] [save|s]", "select explicit provider/model/effort"},
+    {"/fallback [SELECTOR|off] [save|s]", "configure automatic fallback on terminal cyber_policy"},
     {"/fast [on|off|status]", "toggle fast service; retain the selected model and effort"},
     {"/effort [LEVEL]", "show/set provider-defined effort (default means medium)"},
     {"/context", "show the context window, its reserve and compaction budget"},

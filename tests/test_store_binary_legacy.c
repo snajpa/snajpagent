@@ -208,6 +208,10 @@ static const struct legacy_sample {
     {"hosted_search_started", "{\"turn_id\":\"" ID "\",\"item_id\":\"ws_search\"}", 167},
     {"hosted_search_finished", "{\"turn_id\":\"" ID "\",\"item_id\":\"ws_search\","
         "\"status\":\"completed\"}", 168},
+    {"fallback_changed", "{\"value\":\"p/m/high:100000\"}", 19},
+    {"turn_fallback_started", "{\"turn_id\":\"" ID "\",\"provider\":\"p\","
+        "\"model\":\"m\",\"effort\":\"high\",\"context_mode\":\"tokens\","
+        "\"context_tokens\":100000}", 20},
 };
 
 static void

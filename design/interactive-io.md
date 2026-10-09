@@ -354,6 +354,11 @@ Session changes retain the existing model/context events and native archive
 format. They are committed in sequence before request dispatch; a journal I/O
 failure stops that application path. Recovery uses the durable event prefix.
 Omitted suffixes preserve context selection; quoted colons stay in upstream IDs.
+`/fallback` uses the shared selector and capacity resolver to configure an
+explicit provider/model/effort snapshot. Its omitted context suffix uses that
+model's default. Configuration alone leaves the running request untouched.
+Automatic use, explicit model changes and completion all refresh the same prompt
+state consumed by standalone terminals and workspace panes.
 
 Optional networking adds one IRC server owner and one client owner per outgoing
 endpoint (its agent/operator sockets stay together). Each runs the same existing

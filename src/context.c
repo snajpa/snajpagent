@@ -4139,15 +4139,19 @@ snag_context_build(struct snag_session *session, const char *model, const char *
     projection->count_request.value = snag_context_count_request(projection->create_request.value);
     if (snag_media_request_check(projection->create_request.value, error, error_size) < 0) goto out;
     if (!projection->model_input.value || !projection->create_request.value ||
-        !projection->count_request.value ||
-        snag_json_document_measure(&projection->model_input, SNAG_CONTEXT_MAX_REQUEST) < 0 ||
+        !projection->count_request.value)
+        goto projection_error;
+    if (snag_json_document_measure(&projection->model_input, SNAG_CONTEXT_MAX_REQUEST) < 0 ||
         snag_json_digest_bounded(json_object_get(projection->create_request.value, "input"),
             SNAG_CONTEXT_MAX_REQUEST, projection->request_input_sha256,
             &projection->request_input_bytes) < 0 ||
         snag_json_document_measure(&projection->create_request, SNAG_CONTEXT_MAX_REQUEST) < 0 ||
         snag_json_document_measure(&projection->count_request, SNAG_CONTEXT_MAX_REQUEST) < 0) {
-    projection_error:
-        snag_errorf(error, error_size, "response request projection exceeds 32 MiB");
+        if (errno == EOVERFLOW)
+            (void)snag_fail(error, error_size, E2BIG,
+                "response request projection exceeds 32 MiB");
+        else
+            (void)snag_errorf(error, error_size, "cannot measure response request projection");
         goto out;
     }
     projection->request_input_count =
@@ -4166,6 +4170,9 @@ snag_context_build(struct snag_session *session, const char *model, const char *
         snag_session_checkpoint(session, error, error_size) < 0)
         goto out;
     rc = 0;
+    goto out;
+projection_error:
+    (void)snag_errorf(error, error_size, "cannot allocate response request projection");
 out:
     if (rc < 0) snag_context_projection_free(projection);
     json_decref(builder.call_ids);

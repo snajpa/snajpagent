@@ -883,6 +883,9 @@ Nick changes, disconnection, loss of the required capabilities and endpoint
 removal cancel unwritten chunks and mark started, unconfirmed sends uncertain.
 Classic and Vim conversation views print each message body once. Verbosity 1
 and above adds the pending send ID and compact written/acknowledged receipt rows.
+Native channel sends appear when their admitted room event arrives. Their pending
+delivery record remains saved without printing a second copy of the message.
+This also applies when replaying messages recorded with this behavior.
 Verbosity 0 shows message text, failed or uncertain sends, and explicit server-text
 corrections. The same visibility applies to replay and workspace scrollback;
 changing verbosity preserves the retained delivery records. When the server changes
@@ -2446,7 +2449,7 @@ Successful /msg, /notice and /me commands preserve the conversation
 window. Their command reports remain available through :reports.
 .SS "Read command output"
 Submit a slash command from the transcript composer. Supported commands include
-/help, /status, /history, /model, /fast, /effort, /context, /state, /goal,
+/help, /status, /history, /model, /fallback, /fast, /effort, /context, /state, /goal,
 /steering, /banner, /configure, /compact, /yield, /verbose, /cat, /msg,
 /notice and /session list or name.
 The command echo and immediate result open a retained report when that transcript
@@ -2899,6 +2902,45 @@ configuration replacement. Saving a context suffix requires a numeric token
 count. Invalid context choices and failed configuration writes leave the
 session selection unchanged. Without a context suffix, its current choice is
 preserved.
+.TP
+.BR /fallback " [SELECTOR|off] [save|s]"
+Configure an automatic fallback model for terminal
+.B cyber_policy
+errors. The selector accepts the same quoted components, numbered cache rows
+and optional
+.B :context
+suffix as model selection. Include provider/model/effort to make the choice
+explicit. The command displays the setting when used without an argument.
+Selecting a fallback enables it for this session and survives resume. Append
+.B save
+or
+.B s
+to write
+.B [agent] fallback_model
+in the active configuration. Use
+.B /fallback off
+to disable future automatic switches, or
+.B /fallback off save
+to save that default.
+.sp
+The primary model keeps its yellow clarification attempts. A terminal red
+cyber-policy failure switches once to the configured fallback for the rest of
+that turn. Completed tool results and retained conversation continue with it;
+unexecuted calls from the failed response are discarded. The prompt and
+.B /status
+show the serving model. The next turn returns to the primary. An unfinished
+fallback turn resumes on the fallback. Explicit /model, /effort or /context selection
+replaces the turn override; /fallback off leaves an already serving fallback
+in place until that turn ends. Cancellation ends the override.
+.sp
+The fallback uses its selected context window, or its own configured/catalog
+default when the suffix is omitted. The primary context choice is preserved.
+Automatic fallback operates independently of /retry auto. Transport errors,
+other policy codes, and ordinary refusal text retain their existing behavior.
+A fallback error follows normal recovery or policy-stop handling, without
+another automatic model switch in that turn. Each selected provider uses its
+configured credentials and access rules. Sessions using this feature require
+a binary with fallback support for replay and resume.
 .TP
 .BR /fast " [on|off|status]"
 Toggle fast service and print the resulting ON or OFF state. The optional
@@ -3486,7 +3528,9 @@ Automatic retry counts and their original limit survive restart.  A successful
 actionable response or manual retry after terminal failure starts a fresh budget.
 With automatic retry enabled, active goals recover ordinary failures without an attempt limit.  Same-process
 recovery retains live command handles; after restart their outcomes are settled
-without reusing old handles.  Policy stops survive restart and require clarification.
+without reusing old handles. Eligible terminal cyber-policy failures use the
+configured /fallback before policy-stop handling. Remaining policy stops survive
+restart and require clarification.
 .TP
 .B /retry auto [on|off]
 Toggle automatic transport and turn retries, or set them explicitly. The command
@@ -3517,7 +3561,8 @@ An active goal continues across ordinary turns until complete, paused,
 cancelled, or blocked; there is no default per-goal-turn working or step budget.
 Queued operator turns run before the next automatic
 goal turn.  Ordinary errors retain the active goal and schedule recovery with
-interruptible backoff, without an attempt limit.  Policy stops and provider
+interruptible backoff, without an attempt limit. Terminal cyber-policy errors
+first use an eligible configured fallback. Remaining policy stops and provider
 refusals pause automatic continuation and require clarification.  Turn-only
 cancellation also pauses automatic continuation.  Quitting preserves unfinished
 work and its goal for resume.  Session resume preserves saved stops.
@@ -4205,6 +4250,13 @@ Goal wording limit, 1 through 1048576.  Default: 262144.
 Enable automatic transport and failed-turn retries. Default: true.
 The saved /retry auto session override takes precedence. Disabling also stops
 active-goal recovery after failure; explicit /retry remains available.
+.TP
+.B fallback_model
+Automatic model fallback selector. Default: off. A saved /fallback session
+selection takes precedence over this setting. The selector is resolved against
+configured providers and the local model cache when needed; an invalid choice
+reports its error and leaves the terminal provider failure in effect.
+An explicit /configure reload updates the inherited setting. See /fallback.
 .TP
 .B max_turn_retries
 Additional automatic retries per consecutive failure sequence, 0 through
@@ -6561,6 +6613,11 @@ capacity; the previous binding is not restored for request preparation.  A
 smaller target context may require several bounded chunks, each advancing the
 saved boundary.  Failed and cancelled turns retain that progress and the
 selected model across resume, and completed tools are never re-executed.
+If reconstruction exceeds the 32 MiB request limit, the selected model first
+compacts a bounded history prefix. A request that still cannot fit uses the
+current-turn recovery context and can retrieve older journal history with tools.
+The full history remains saved. If even this recovery request is too large, the
+turn stops instead of repeating the same local failure.
 Older sessions cannot recover reasoning discarded by an earlier executable.
 Plaintext provider reasoning is sensitive journal data:
 protect the session directory and its backups as you would the conversation.

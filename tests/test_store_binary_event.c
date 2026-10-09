@@ -4114,6 +4114,9 @@ test_routed_irc_event(void)
         route->delivery = (enum snag_irc_delivery)delivery;
         route->revised = delivery >= SNAG_IRC_ACKNOWLEDGED;
         routed_irc_roundtrip(&source, &payload);
+        source.local = source.echo_expected = true;
+        routed_irc_roundtrip(&source, &payload);
+        source.local = source.echo_expected = false;
     }
     source.room[0] = route->membership[0] = '\0';
     route->joined = route->rejoin = false;
@@ -6077,6 +6080,7 @@ test_event_names(void)
         {67u, "goal_lock_changed"}, {68u, "goal_paused"}, {69u, "goal_blocked"},
         {70u, "goal_completed"}, {71u, "goal_resumed"}, {72u, "goal_cancelled"},
         {73u, "goal_blocked_wait_for"}, {74u, "retry_auto_changed"},
+        {19u, "fallback_changed"}, {20u, "turn_fallback_started"},
         {96u, "input_received"}, {97u, "input_cancelled"}, {98u, "steering_added"},
         {99u, "irc_reply_reminder"}, {100u, "steering_deferred"}, {101u, "input_admitted"},
         {102u, "future_queue_state"}, {103u, "future_turn_cancelled"},

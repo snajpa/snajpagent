@@ -101,7 +101,8 @@ static bool
 metadata_kind(enum snag_binary_kind kind)
 {
     return (kind >= SNAG_BINARY_SESSION_CREATED && kind <= SNAG_BINARY_SERVICE_TIER_CHANGED) ||
-        kind == SNAG_BINARY_RETRY_AUTO_CHANGED;
+        (kind == SNAG_BINARY_RETRY_AUTO_CHANGED ||
+        kind == SNAG_BINARY_FALLBACK_CHANGED || kind == SNAG_BINARY_TURN_FALLBACK_STARTED);
 }
 
 static bool
@@ -408,6 +409,26 @@ read_metadata(const json_t *data, struct snag_binary_event *event, struct snag_b
     case SNAG_BINARY_SERVICE_TIER_CHANGED:
         if (!snag_json_exact_keys(data, "value")) return invalid();
         return read_text(data, "value", &event->data.service_tier);
+    case SNAG_BINARY_FALLBACK_CHANGED:
+        if (!snag_json_exact_keys(data, "value")) return invalid();
+        return read_text(data, "value", &event->data.fallback);
+    case SNAG_BINARY_TURN_FALLBACK_STARTED: {
+        struct snag_binary_selection *selection = &event->data.turn_fallback.selection;
+        int mode = read_name(data, "context_mode", context_modes,
+            sizeof(context_modes) / sizeof(context_modes[0]));
+        if (mode < 0 ||
+            !snag_json_exact_keys(
+                data, "turn_id provider model effort context_mode context_tokens") ||
+            read_id(data, "turn_id", event->data.turn_fallback.id) < 0 ||
+            read_text(data, "provider", &selection->provider) < 0 ||
+            read_text(data, "model", &selection->model) < 0 ||
+            read_text(data, "effort", &selection->effort) < 0 ||
+            snag_json_integer_u64(data, "context_tokens",
+                &event->data.turn_fallback.context.tokens) < 0)
+            return invalid();
+        event->data.turn_fallback.context.mode = (enum snag_binary_context)mode;
+        return 0;
+    }
     case SNAG_BINARY_RETRY_AUTO_CHANGED:
         if (!snag_json_exact_keys(data, "value")) return invalid();
         return read_text(data, "value", &event->data.retry_auto);
@@ -1412,6 +1433,7 @@ read_irc_event(const json_t *data, struct snag_binary_irc_event *event, bool rou
     event->classified = source.classified;
     event->urgent = source.urgent;
     event->reply = source.reply;
+    event->echo_expected = source.echo_expected;
     if (event->has_stream && read_id(data, "stream", event->stream) < 0) return -1;
     if (!routed) return 0;
     const json_t *routing = json_object_get(data, "routing");
@@ -2286,6 +2308,21 @@ put_metadata(json_t *data, const struct snag_binary_event *event)
         return put_text(data, "name", event->data.name);
     case SNAG_BINARY_SERVICE_TIER_CHANGED:
         return put_text(data, "value", event->data.service_tier);
+    case SNAG_BINARY_FALLBACK_CHANGED:
+        return put_text(data, "value", event->data.fallback);
+    case SNAG_BINARY_TURN_FALLBACK_STARTED: {
+        const struct snag_binary_selection *selection = &event->data.turn_fallback.selection;
+        if (put_id(data, "turn_id", event->data.turn_fallback.id) < 0 ||
+            put_text(data, "provider", selection->provider) < 0 ||
+            put_text(data, "model", selection->model) < 0 ||
+            put_text(data, "effort", selection->effort) < 0 ||
+            snag_json_set_new(data, "context_mode",
+                json_string(context_modes[event->data.turn_fallback.context.mode])) < 0 ||
+            snag_json_set_new(data, "context_tokens",
+                json_integer((json_int_t)event->data.turn_fallback.context.tokens)) < 0)
+            return -1;
+        return 0;
+    }
     case SNAG_BINARY_RETRY_AUTO_CHANGED:
         return put_text(data, "value", event->data.retry_auto);
     case SNAG_BINARY_SESSION_OPTIONS: {
@@ -3058,6 +3095,8 @@ put_irc_event(json_t *data, const struct snag_binary_irc_event *event, bool rout
         snag_json_set_new(data, "reply", json_boolean(event->reply)) < 0)) {
         return -1;
     }
+    if (event->echo_expected && snag_json_set_new(data, "echo_expected", json_true()) < 0)
+        return -1;
     if (routed && put_irc_route(data, &event->route) < 0) return -1;
     struct snag_irc_event checked;
     return snag_irc_event_record_read(routed ? "irc_event_v2" : "irc_event", data, &checked);

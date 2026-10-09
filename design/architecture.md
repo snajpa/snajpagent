@@ -348,15 +348,31 @@ eligibility; active turns cannot be retried. Failures hint `/retry` in both
 views. Queued turns and paused goals stay paused. This uses ordinary durable
 turn events; retry eligibility is derived while replaying the session.
 
-A pre-output `cyber_policy` rejection can receive three model-facing
-clarifications per turn through the existing `response_output_correction`
-transition. Its independent counter is replayed from those exact correction
-records; empty/oversized output retains its separate one-correction bound.
-Original task context is preserved. The fixed system instruction asks for
-accurate scope-preserving restatement, never concealed details or bypassing
-restrictions; uncertain scope should be clarified with the operator. New input
-and observed output/activity veto automatic clarification. Rollout progress is
-compact at every verbosity; the established debug/protocol ladder adds details.
+An eligible `cyber_policy` rejection receives up to five model-facing
+clarifications through `response_output_correction`. Public text is retained;
+unexecuted local calls are discarded. Hosted/unknown activity and unsupported
+failed output snapshots stop this clarification path. The original task scope
+and the provider's policy error remain intact.
+At a terminal cyber-policy failure, a configured `/fallback` selects one
+alternative for the remaining turn. `response_failed` retains the public prefix
+and error provenance, then `turn_fallback_started` changes active selection and
+context without changing primary preferences. A crash between those commits
+recovers the failed primary response before choosing fallback again. Once the
+fallback-start event commits, the once-per-turn latch and serving selection
+survive recovery; subsequent failures retain ordinary retry/policy-stop behavior.
+Explicit model/effort/context selection ends the serving override but retains that latch.
+Completed/cancelled turns clear it, restoring primary preferences for the next
+turn. The shared prompt refreshes at the same request boundary as credentials,
+capacity and provider selection. No alternate transport or credential path exists.
+
+A request projection exceeding the 32 MiB wire bound returns `E2BIG` before
+provider counting. The turn owner runs one bounded prefix compaction under the
+selected binding, then rebuilds. If it still exceeds the bound, existing
+current-turn history recovery supplies the journal orientation and retained
+active work. An oversized minimal recovery envelope is terminal for automatic
+retry. This covers model switches that invalidate an encrypted compact and
+require archive reconstruction; completed tools stay durable throughout.
+
 A pre-output
 `context_length_exceeded` closes the open response with the durable
 `response_capacity_rejected` transition. Trustworthy context-limit or

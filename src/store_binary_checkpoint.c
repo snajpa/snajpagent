@@ -334,8 +334,13 @@ save_number(void *base, const struct number_field *field, uint64_t number)
 int
 snag_binary_checkpoint_controls_encode(struct snag_buf *out, const struct snag_session *value)
 {
-    if (!out || !value || value->format_version < 2u || value->format_version > 4u)
-        return snag_errno(EINVAL);
+    if (!out || !value || value->format_version < 2u || value->format_version > 4u ||
+        (value->turn_fallback_used && !value->active_turn) ||
+        (value->turn_fallback_active && !value->turn_fallback_used) ||
+        (!value->turn_fallback_used && (value->turn_fallback_context.mode ||
+            value->turn_fallback_context.tokens)) ||
+        !snag_context_choice_valid(value->turn_fallback_context.mode,
+            value->turn_fallback_context.tokens)) return snag_errno(EINVAL);
     struct snag_buf encoded;
     snag_buf_init(&encoded, SIZE_MAX);
     const unsigned char *base = (const unsigned char *)value;
@@ -352,6 +357,7 @@ snag_binary_checkpoint_controls_encode(struct snag_buf *out, const struct snag_s
         rc = load_number(value, &control_irc_numbers[i], &number);
         if (!rc && number) version = 3u;
     }
+    if (value->fallback_model[0] || value->turn_fallback_used) version = 4u;
     if (!rc) rc = put_number(&encoded, version, 2u);
     if (!rc) rc = put_number(&encoded, flags, 4u);
     for (size_t i = 0u; !rc && i < COUNT(control_texts); ++i) {
@@ -366,10 +372,19 @@ snag_binary_checkpoint_controls_encode(struct snag_buf *out, const struct snag_s
     }
     for (size_t i = 0u; !rc && i < COUNT(value->control_seq); ++i)
         rc = put_number(&encoded, value->control_seq[i], 8u);
-    for (size_t i = 0u; !rc && version == 3u && i < COUNT(control_irc_numbers); ++i) {
+    for (size_t i = 0u; !rc && version >= 3u && i < COUNT(control_irc_numbers); ++i) {
         uint64_t number;
         rc = load_number(value, &control_irc_numbers[i], &number);
         if (!rc) rc = put_number(&encoded, number, control_irc_numbers[i].wire);
+    }
+    if (!rc && version == 4u) {
+        const struct text_field field = {offsetof(struct snag_session, fallback_model),
+            sizeof(value->fallback_model), 0u};
+        rc = put_text(&encoded, value, &field);
+        if (!rc) rc = put_number(&encoded, value->turn_fallback_used, 1u);
+        if (!rc) rc = put_number(&encoded, value->turn_fallback_active, 1u);
+        if (!rc) rc = put_number(&encoded, value->turn_fallback_context.mode, 1u);
+        if (!rc) rc = put_number(&encoded, value->turn_fallback_context.tokens, 8u);
     }
     if (!rc) rc = snag_buf_append(out, encoded.data, encoded.len);
     snag_buf_free(&encoded);
@@ -382,7 +397,7 @@ snag_binary_checkpoint_controls_decode(const void *data, size_t size, struct sna
     if (!data || !out) return snag_errno(EINVAL);
     struct fields fields = {.data = data, .size = size};
     uint64_t version, flags;
-    if (get_number(&fields, 2u, &version) < 0 || version < 1u || version > 3u ||
+    if (get_number(&fields, 2u, &version) < 0 || version < 1u || version > 4u ||
         get_number(&fields, 4u, &flags) < 0 || flags >> COUNT(control_flags))
         return snag_errno(EINVAL);
     struct snag_session value = {0};
@@ -408,10 +423,25 @@ snag_binary_checkpoint_controls_decode(const void *data, size_t size, struct sna
         return snag_errno(EINVAL);
     for (size_t i = 0u; i < sequences; ++i)
         if (get_number(&fields, 8u, &value.control_seq[i]) < 0) return -1;
-    for (size_t i = 0u; version == 3u && i < COUNT(control_irc_numbers); ++i) {
+    for (size_t i = 0u; version >= 3u && i < COUNT(control_irc_numbers); ++i) {
         uint64_t number;
         if (get_number(&fields, control_irc_numbers[i].wire, &number) < 0 ||
             save_number(&value, &control_irc_numbers[i], number) < 0) return -1;
+    }
+    if (version == 4u) {
+        const struct text_field field = {offsetof(struct snag_session, fallback_model),
+            sizeof(value.fallback_model), 0u};
+        uint64_t used, active, mode, tokens;
+        if (get_text(&fields, &value, &field, true) < 0 ||
+            get_number(&fields, 1u, &used) < 0 || used > 1u ||
+            get_number(&fields, 1u, &active) < 0 || active > used ||
+            get_number(&fields, 1u, &mode) < 0 || mode > SNAG_CONTEXT_MODE_TOKENS ||
+            get_number(&fields, 8u, &tokens) < 0 ||
+            !snag_context_choice_valid((enum snag_context_mode)mode, tokens) ||
+            (used && !value.active_turn) || (!used && (mode || tokens))) return snag_errno(EINVAL);
+        value.turn_fallback_used = used != 0u;
+        value.turn_fallback_active = active != 0u;
+        value.turn_fallback_context = (struct snag_context_choice){mode, tokens};
     }
     if (value.format_version < 2u || fields.offset != fields.size) return snag_errno(EINVAL);
     unsigned char *target = (unsigned char *)out;
@@ -425,6 +455,11 @@ snag_binary_checkpoint_controls_decode(const void *data, size_t size, struct sna
     }
     for (size_t i = 0u; i < COUNT(control_flags); ++i)
         memcpy(target + control_flags[i], base + control_flags[i], sizeof(bool));
+    memcpy(out->fallback_model, value.fallback_model, sizeof(value.fallback_model));
+    out->turn_fallback_used = value.turn_fallback_used;
+    out->turn_fallback_active = value.turn_fallback_active;
+    out->turn_fallback_context.mode = value.turn_fallback_context.mode;
+    out->turn_fallback_context.tokens = value.turn_fallback_context.tokens;
     memcpy(out->control_seq, value.control_seq, sizeof(value.control_seq));
     for (size_t i = 0u; i < COUNT(control_irc_numbers); ++i) {
         const struct number_field *field = &control_irc_numbers[i];

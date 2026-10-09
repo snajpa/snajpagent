@@ -29,6 +29,8 @@ enum snag_binary_kind {
     SNAG_BINARY_CONTROL_REQUESTED = 16,
     SNAG_BINARY_CONTROL_STARTED = 17,
     SNAG_BINARY_CONTROL_FINISHED = 18,
+    SNAG_BINARY_FALLBACK_CHANGED = 19,
+    SNAG_BINARY_TURN_FALLBACK_STARTED = 20,
     SNAG_BINARY_TIMER_SCHEDULED = 32,
     SNAG_BINARY_TIMER_FIRED = 33,
     SNAG_BINARY_TIMER_CANCELLED = 34,
@@ -848,7 +850,7 @@ struct snag_binary_irc_event {
     struct snag_binary_text endpoint, room, nick, text;
     bool historical, is_local, op;
     bool has_watermark, has_stream, input;
-    bool classified, urgent, reply;
+    bool classified, urgent, reply, echo_expected;
     struct snag_binary_irc_route route; /* Record215 only. */
 };
 
@@ -895,6 +897,12 @@ struct snag_binary_event {
         } deletion;
         struct snag_binary_text banner, shell, name, service_tier, retry_auto;
         struct snag_binary_options options;
+        struct snag_binary_text fallback;
+        struct {
+            unsigned char id[16];
+            struct snag_binary_selection selection;
+            struct snag_binary_context_choice context;
+        } turn_fallback;
         enum snag_binary_steering steering;
         struct { struct snag_binary_selection before, after; } model;
         struct {

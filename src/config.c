@@ -877,6 +877,8 @@ parse_setting(struct parse_state *state, const char *key, const char *value)
         {SECTION_AGENT, "allow_model_change", SET_BOOL, &config->allow_model_change, 0, 0},
         {SECTION_AGENT, "max_turn_retries", SET_U32, &config->max_turn_retries, 0, UINT32_MAX},
         {SECTION_AGENT, "retry_auto", SET_BOOL, &config->retry_auto, 0, 0},
+        {SECTION_AGENT, "fallback_model", SET_TEXT, config->fallback_model, 0,
+            sizeof(config->fallback_model)},
         {SECTION_PROVIDER, "parallel_tool_calls", SET_BOOL, &provider->parallel_tool_calls, 0, 0},
         {SECTION_PROVIDER, "connect_timeout_ms", SET_U32, &provider->connect_timeout_ms, 1000,
             120000},
@@ -1666,7 +1668,7 @@ snag_config_validate_provider(
 static int
 save_config_settings(const char *path, bool allow_create, const char *provider, const char *model,
     const char *effort, const struct snag_provider_config *provider_config, uint64_t context_tokens,
-    bool save_model, char *error, size_t error_size)
+    bool save_model, const char *fallback, char *error, size_t error_size)
 {
     snag_file_info before;
     snag_file_info current;
@@ -1686,12 +1688,13 @@ save_config_settings(const char *path, bool allow_create, const char *provider, 
     memset(&before, 0, sizeof(before));
     struct snag_buf input = {.max = SNAG_CONFIG_FILE_MAX + 1u};
     struct snag_buf output = {.max = SNAG_CONFIG_FILE_MAX};
-    if (!snag_path_root_len(path) || strlen(path) > SNAG_CONFIG_PATH_MAX || !provider ||
+    if (!snag_path_root_len(path) || strlen(path) > SNAG_CONFIG_PATH_MAX ||
+        (!fallback && (!provider ||
         !*provider || strlen(provider) > SNAG_CONFIG_PROVIDER_NAME_MAX || !model ||
         (!provider_config && !*model) || strlen(model) >= SNAG_CONFIG_MODEL_MAX || !effort ||
         !*effort || strlen(effort) >= SNAG_CONFIG_EFFORT_MAX || strchr(provider, '\n') ||
         strchr(provider, '\r') || strchr(model, '\n') || strchr(model, '\r') ||
-        strchr(effort, '\n') || strchr(effort, '\r')) {
+        strchr(effort, '\n') || strchr(effort, '\r')))) {
         (void)snag_fail(error, error_size, EINVAL, "refusing to save invalid model settings");
         goto out;
     }
@@ -1732,6 +1735,12 @@ save_config_settings(const char *path, bool allow_create, const char *provider, 
     char tokens[32];
     const char *section = "agent";
     size_t count = 3u;
+    if (fallback) {
+        static const char *const fallback_keys[] = {"fallback_model"};
+        keys = fallback_keys;
+        values[0] = fallback;
+        count = 1u;
+    }
     if (context_tokens) {
         (void)snprintf(
             context_section, sizeof(context_section), "model-limit %s/%s", provider, model);
@@ -1840,7 +1849,21 @@ snag_config_save_model(const char *path, bool allow_create, const char *provider
     const char *effort, char *error, size_t error_size)
 {
     return save_config_settings(
-        path, allow_create, provider, model, effort, NULL, 0u, false, error, error_size);
+        path, allow_create, provider, model, effort, NULL, 0u, false, NULL, error, error_size);
+}
+
+int
+snag_config_save_fallback(struct snag_config *config, const char *path, bool allow_create,
+    const char *value, char *error, size_t error_size)
+{
+    if (!value || !snag_text_valid(value, 1u, sizeof(config->fallback_model) - 1u) ||
+        strchr(value, '\n') || strchr(value, '\r'))
+        return snag_fail(error, error_size, EINVAL, "invalid fallback model");
+    if (save_config_settings(path, allow_create, config->provider, config->model,
+            config->reasoning_effort, NULL, 0u, false, value, error, error_size) < 0)
+        return -1;
+    (void)snag_strcpy(config->fallback_model, sizeof(config->fallback_model), value);
+    return 0;
 }
 
 static int
@@ -1864,7 +1887,7 @@ save_context_settings(struct snag_config *config, const char *path, bool allow_c
     if (index == config->model_limit_count && grow_model_limits(config) < 0)
         return snag_errorf(error, error_size, "cannot allocate the context default");
     if (save_config_settings(path, allow_create, provider, model, effort ? effort : "default",
-            selected, tokens, effort != NULL, error, error_size) < 0)
+            selected, tokens, effort != NULL, NULL, error, error_size) < 0)
         return -1;
     struct snag_model_limit_config *limit = &config->model_limits[index];
     if (index == config->model_limit_count) {
@@ -1905,8 +1928,8 @@ snag_config_save_provider(const char *path, bool allow_create,
         strchr(provider->base_url, '\n') || strchr(provider->base_url, '\r'))
         return snag_errorf(error, error_size, "invalid provider settings");
     return save_config_settings(path, allow_create, provider->name,
-        initial_model ? initial_model : "", effort ? effort : "default", provider, 0u, false, error,
-        error_size);
+        initial_model ? initial_model : "", effort ? effort : "default", provider, 0u, false, NULL,
+        error, error_size);
 }
 
 const struct snag_provider_config *

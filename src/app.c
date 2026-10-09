@@ -118,6 +118,14 @@ struct turn_retry {
     char last_failure_message[256];
 };
 
+static const char *
+fallback_model(const struct app_state *app)
+{
+    const char *value = app->session.fallback_model[0] ? app->session.fallback_model
+                                                     : app->config->fallback_model;
+    return value[0] ? value : "off";
+}
+
 bool
 snag_app_retry_allowed(const void *opaque)
 {
@@ -393,6 +401,10 @@ snag_app_capacity_resolve(struct app_state *app, const struct snag_provider_conf
     if (!app) return snag_fail(error, error_size, EINVAL, "invalid model capacity selection");
     choice.mode = app->session.context_mode;
     choice.tokens = app->session.context_tokens;
+    if (app->session.turn_fallback_active &&
+        !strcmp(provider->name, app->session.active_turn_provider) &&
+        !strcmp(model, app->session.active_turn_model))
+        choice = app->session.turn_fallback_context;
     return snag_app_context_preview(app, provider, model, &choice, capacity, error, error_size);
 }
 
@@ -1395,7 +1407,13 @@ static int
 render_status(struct app_state *app)
 {
     const char *id = app->session.id;
-    const struct snag_provider_config *provider = next_provider(app);
+    const struct snag_provider_config *provider =
+        app->session.active_turn ? app->turn_provider : next_provider(app);
+    const char *model = app->session.active_turn ? app->turn_model : app->session.default_model;
+    const char *effort = app->session.active_turn ? app->turn_effort : app->session.default_effort;
+    struct snag_context_choice choice = app->session.turn_fallback_active
+        ? app->session.turn_fallback_context
+        : (struct snag_context_choice){app->session.context_mode, app->session.context_tokens};
     const struct snag_model_limit_config *configured = NULL;
     struct snag_model_limit_config configured_values;
     const struct snag_model_limit_config *rule_sources[3];
@@ -1409,19 +1427,19 @@ render_status(struct app_state *app)
     if (!provider)
         return app_error(app, "selected provider is not present in the current configuration");
     if (snag_app_capacity_resolve(
-            app, provider, app->session.default_model, &capacity, error, sizeof(error)) < 0)
+            app, provider, model, &capacity, error, sizeof(error)) < 0)
         return app_error(app, error[0] ? error : "model capacity could not be resolved");
-    if (snag_config_resolve_limits(app->config, provider->name, app->session.default_model,
+    if (snag_config_resolve_limits(app->config, provider->name, model,
             &configured_values, rule_sources))
         configured = &configured_values;
     ceiling_selection_matches =
         app->session.capacity_ceiling_valid &&
         strcmp(app->session.capacity_ceiling_provider, provider->name) == 0 &&
-        strcmp(app->session.capacity_ceiling_model, app->session.default_model) == 0;
+        strcmp(app->session.capacity_ceiling_model, model) == 0;
     ceiling_source_matches = ceiling_selection_matches &&
-                             capacity_ceiling_matches(app, provider, app->session.default_model);
+                             capacity_ceiling_matches(app, provider, model);
     if (capacity.source_bound)
-        advertised = snag_model_metadata(&app->model_cache, provider, app->session.default_model);
+        advertised = snag_model_metadata(&app->model_cache, provider, model);
     struct snag_buf text = {.max = 64u * 1024u};
     if (snag_buf_printf(&text,
             "session: %s\n"
@@ -1433,6 +1451,7 @@ render_status(struct app_state *app)
             "effort: %s\n"
             "fast: %s\n"
             "automatic retry: %s (%s)\n"
+            "fallback: %s%s\n"
             "cwd: %s\n"
             "turns: %llu\n"
             "queue: %zu%s\n"
@@ -1441,13 +1460,13 @@ render_status(struct app_state *app)
             id, app->session.name ? app->session.name : "-",
             app->session.active_turn ? "active" : "idle",
             app->session.active_read_only ? "read-only query" : "normal",
-            next_provider(app) ? next_provider(app)->name : "<missing>", app->session.default_model,
-            app->session.default_effort,
+            provider->name, model, effort,
             snag_string_in(app->session.service_tier, "priority") ? "ON (priority requested)"
             : app->session.service_tier                           ? "OFF (standard requested)"
                                                                   : "OFF (provider default)",
             snag_app_retry_allowed(app) ? "ON" : "OFF",
-            app->session.retry_auto ? "session override" : "configuration", app->session.cwd,
+            app->session.retry_auto ? "session override" : "configuration", fallback_model(app),
+            app->session.turn_fallback_active ? " (serving this turn)" : "", app->session.cwd,
             (unsigned long long)app->session.turn_count, app->session.pending_queue_count,
             app->session.pending_queue_count && !app->session.queue_armed ? " paused" : "",
             snag_ui_verbosity(&app->ui), snag_capacity_source_name(capacity.source)) < 0 ||
@@ -1457,11 +1476,11 @@ render_status(struct app_state *app)
             capacity.max_output_tokens) < 0 ||
         append_compact_threshold(&text, provider, &capacity) < 0)
         goto out;
-    if (app->session.context_mode == SNAG_CONTEXT_MODE_TOKENS) {
+    if (choice.mode == SNAG_CONTEXT_MODE_TOKENS) {
         if (snag_buf_printf(&text, " · selection=tokens:%llu",
-                (unsigned long long)app->session.context_tokens) < 0)
+                (unsigned long long)choice.tokens) < 0)
             goto out;
-    } else if (app->session.context_mode == SNAG_CONTEXT_MODE_MAX &&
+    } else if (choice.mode == SNAG_CONTEXT_MODE_MAX &&
                snag_buf_printf(&text, " · selection=max") < 0)
         goto out;
     if (capacity.effective_context_window_percent &&
@@ -1481,7 +1500,7 @@ render_status(struct app_state *app)
     }
     if (append_advertised_capacity(&text, advertised) < 0) goto out;
     if (snag_buf_printf(&text, "\nprovider model: %s",
-            snag_config_model_upstream(provider, app->session.default_model)) < 0)
+            snag_config_model_upstream(provider, model)) < 0)
         goto out;
     for (size_t i = 0; i < 3u; ++i) {
         static const char *const fields[] = {"context", "max-input", "max-output"};
@@ -1521,7 +1540,7 @@ render_status(struct app_state *app)
         goto out;
     if (app->session.context_meter.valid) {
         bool matches = context_meter_matches(
-            app, provider, app->session.default_model, resolve_effort(app->session.default_effort));
+            app, provider, model, resolve_effort(effort));
         if (snag_buf_printf(&text,
                 "\nobserved usage: input=%llu tokens · provider=%s · model=%s · effort=%s · %s",
                 (unsigned long long)app->session.context_meter.input_tokens,
@@ -1617,7 +1636,7 @@ snag_app_help_text(struct snag_buf *text, const char *command)
     static const char legend[] = "Syntax: [optional], A|B alternatives, UPPERCASE values.\n";
     static const char settings[] =
         "\nNotes\n"
-        "Model/effort: next full turn onward, until changed; save (s) also writes config.\n"
+        "Model/effort: next response onward, until changed; save (s) also writes config.\n"
         "Omitted model effort: highest cached effort/default, then current effort.\n"
         "ENDPOINT: host[:port] or [IPv6][:port]; IPv6 brackets literal; port 6667.\n"
         "Queue: idle adds paused; active adds armed; N is the displayed position.\n"
@@ -2252,7 +2271,8 @@ commit_model_selection(struct app_state *app, const struct snag_provider_config 
         return -1;
     }
     if (current_turn &&
-        (strcmp(app->session.active_turn_provider, app->session.default_provider) != 0 ||
+        (app->session.turn_fallback_active ||
+            strcmp(app->session.active_turn_provider, app->session.default_provider) != 0 ||
             strcmp(app->session.active_turn_model, app->session.default_model) != 0 ||
             strcmp(app->session.active_turn_effort, resolve_effort(app->session.default_effort)) !=
                 0))
@@ -2389,6 +2409,78 @@ strip_model_save_suffix(char *selector)
     while (word > selector && isspace((unsigned char)word[-1])) --word;
     *word = '\0';
     return true;
+}
+
+static int
+resolve_fallback(struct app_state *app, const char *value, struct snag_model_selection *selected,
+    char *error, size_t error_size)
+{
+    struct snag_model_capacity capacity;
+    char cache_error[256] = {0};
+    (void)load_model_cache(app, false, cache_error, sizeof(cache_error));
+    if (snag_model_select_selector(&app->model_cache, app->config, value, next_provider(app),
+            resolve_effort(app->session.default_effort), selected, error, error_size) < 0)
+        return -1;
+    if (!selected->context_set)
+        selected->context = (struct snag_context_choice){SNAG_CONTEXT_MODE_DEFAULT, 0u};
+    const char *effort = resolve_effort(selected->effort);
+    if (!effort) return snag_fail(error, error_size, EINVAL, "invalid fallback effort");
+    if (effort != selected->effort)
+        (void)snag_strcpy(selected->effort, sizeof(selected->effort), effort);
+    return snag_app_context_preview(app, selected->provider, selected->model,
+        &selected->context, &capacity, error, error_size);
+}
+
+static int
+change_fallback(struct app_state *app, const char *argument)
+{
+    char copy[SNAG_CONFIG_SELECTOR_MAX + 8u];
+    char value[SNAG_CONFIG_SELECTOR_MAX];
+    char error[256] = {0};
+    struct snag_model_selection selected = {0};
+
+    if (!argument)
+        return app_textf(app, SNAG_UI_HOST, "Fallback: %s%s", fallback_model(app),
+            app->session.turn_fallback_active ? " (serving this turn)" : "");
+    if (!snag_strcpy(copy, sizeof(copy), argument))
+        return app_error(app, "fallback selector is too long");
+    char *selector = trim_selector_part(copy);
+    bool save = strip_model_save_suffix(selector);
+    if (!strcmp(selector, "off")) {
+        memcpy(value, "off", sizeof("off"));
+    } else {
+        if (resolve_fallback(app, selector, &selected, error, sizeof(error)) < 0)
+            return app_error(app, error);
+        char context[32] = "";
+        if (selected.context_set) {
+            if (selected.context.mode == SNAG_CONTEXT_MODE_TOKENS)
+                (void)snprintf(context, sizeof(context), ":%llu",
+                    (unsigned long long)selected.context.tokens);
+            else
+                (void)snprintf(context, sizeof(context), ":%s",
+                    snag_context_mode_name(selected.context.mode));
+        }
+        char model_quote = strchr(selected.model, '"') ? '\'' : '"';
+        char effort_quote = strchr(selected.effort, '"') ? '\'' : '"';
+        if (strchr(selected.model, model_quote) || strchr(selected.effort, effort_quote))
+            return app_error(app, "fallback components cannot contain both quote characters");
+        int n = snprintf(value, sizeof(value), "%s/%c%s%c/%c%s%c%s", selected.provider->name,
+            model_quote, selected.model, model_quote, effort_quote, selected.effort, effort_quote,
+            context);
+        if (n < 0 || (size_t)n >= sizeof(value))
+            return app_error(app, "fallback selector too long");
+    }
+    if (save && snag_config_save_fallback(app->config, app->config_path,
+            app->config_allow_create, value, error, sizeof(error)) < 0)
+        return app_error(app, error);
+    if (strcmp(app->session.fallback_model, value) &&
+        commit_event(app, "fallback_changed", json_pack("{s:s}", "value", value), error,
+            sizeof(error)) < 0)
+        return app_error(app, error), -1;
+    if (app_textf(app, SNAG_UI_HOST, "Fallback: %s%s", value,
+            !strcmp(value, "off") ? "" : " (automatic on terminal cyber_policy errors)") < 0)
+        return -1;
+    return save ? app_textf(app, SNAG_UI_HOST, "configuration saved: %s", app->config_path) : 0;
 }
 
 static int
@@ -2893,7 +2985,6 @@ change_effort(struct app_state *app, const char *value, bool active)
     char error[256] = {0};
     char *copy = NULL;
     char *effort = NULL;
-    (void)active;
     if (!value) return show_setting(app, "effort", app->session.default_effort);
     copy = snag_strdup_checked(value, SNAG_CONFIG_EFFORT_MAX - 1u);
     if (copy) effort = trim_selector_part(copy);
@@ -2908,7 +2999,9 @@ change_effort(struct app_state *app, const char *value, bool active)
         return -1;
     }
     free(copy);
-    return show_setting(app, "effort", app->session.default_effort);
+    if (active) app->model_switch_requested = true;
+    return app_textf(app, SNAG_UI_HOST, "effort for %s: %s (until changed)",
+        active ? "next response in this turn" : "next turn", app->session.default_effort);
 }
 
 static int
@@ -2987,7 +3080,6 @@ change_context(struct app_state *app, const char *value, bool active)
     char *end = NULL;
     bool save = false;
 
-    (void)active;
     if (!provider)
         return app_error(app, "selected provider is not present in the current configuration");
     choice.mode = app->session.context_mode;
@@ -3034,6 +3126,7 @@ change_context(struct app_state *app, const char *value, bool active)
         return app_error(app, error[0] ? error : "context default could not be saved");
     if (record_context_selection(app, &choice, error, sizeof(error)) < 0)
         return app_error(app, error[0] ? error : "context selection could not be saved");
+    if (active && app->session.turn_fallback_active) app->model_switch_requested = true;
     int rc = report_context(app, provider, &choice);
     if (rc < 0) return rc;
     return save ? app_textf(app, SNAG_UI_HOST, "configuration saved: %s", app->config_path) : 0;
@@ -3842,6 +3935,8 @@ handle_common_command(
         *prompt_ready = rc == 0;
         return rc;
     }
+    if (!strcmp(line, "/fallback")) return change_fallback(app, NULL);
+    if (!strncmp(line, "/fallback ", 10u)) return change_fallback(app, line + 10u);
     if (strcmp(line, "/model") == 0) return change_model(app, NULL, active);
     if (strncmp(line, "/model ", 7u) == 0) return change_model(app, line + 7u, active);
     if (!strncmp(line, "/fast", 5u) && (!line[5] || isspace((unsigned char)line[5]))) {
@@ -4120,7 +4215,7 @@ view_single_command_native(const char *line, bool chained)
     memcpy(verb, line, length);
     verb[length] = '\0';
     if (snag_string_in(verb,
-            "/help /? /status /history /model /fast /effort /context /retry "
+            "/help /? /status /history /model /fallback /fast /effort /context /retry "
             "/state /goal /steering /banner /configure /compact /yield /verbose /cat "
             "/attachments /detach "
             "/query /msg /notice /me /chat /join /part /names /topic /connections /whois /nick"))
@@ -4736,9 +4831,9 @@ interrupt_turn(struct app_state *app, const char *turn_id, const char *cause, bo
 }
 
 static int
-fail_response(struct app_state *app, struct turn_retry *retry, const char *turn_id,
+record_response_failure(struct app_state *app, struct turn_retry *retry, const char *turn_id,
     const char *response_id, unsigned int cycle, const char *class_name, const char *message,
-    json_t *partial, unsigned int retry_count, const char *cause,
+    json_t *partial, unsigned int retry_count,
     const struct snag_provider_failure *provider_failure, char *error, size_t error_size)
 {
     if (!partial) partial = json_array();
@@ -4763,10 +4858,52 @@ fail_response(struct app_state *app, struct turn_retry *retry, const char *turn_
         data = NULL;
     }
     if (!data) return snag_errorf(error, error_size, "cannot allocate response failure event");
-    return commit_event(app, "response_failed", data, error, error_size) < 0 ||
-                   fail_turn(app, retry, turn_id, cause, class_name, message, error, error_size) < 0
-               ? -1
-               : 0;
+    return commit_event(app, "response_failed", data, error, error_size);
+}
+
+static int
+fail_response(struct app_state *app, struct turn_retry *retry, const char *turn_id,
+    const char *response_id, unsigned int cycle, const char *class_name, const char *message,
+    json_t *partial, unsigned int retry_count, const char *cause,
+    const struct snag_provider_failure *provider_failure, char *error, size_t error_size)
+{
+    return record_response_failure(app, retry, turn_id, response_id, cycle, class_name, message,
+               partial, retry_count, provider_failure, error, error_size) < 0 ||
+            fail_turn(app, retry, turn_id, cause, class_name, message, error, error_size) < 0
+        ? -1 : 0;
+}
+
+static int
+start_turn_fallback(struct app_state *app, struct turn_retry *retry, const char *turn_id,
+    const char *response_id, unsigned int cycle, unsigned int retry_count,
+    const struct snag_provider_failure *failure, char *error, size_t error_size)
+{
+    if (app->session.turn_fallback_used || failure->new_input || app->interrupt_requested ||
+        app->input_closed || app->model_switch_requested || app->control_requested ||
+        (strcmp(failure->code, "cyber_policy") && strcmp(failure->type, "cyber_policy")) ||
+        !strcmp(fallback_model(app), "off")) return 0;
+    struct snag_model_selection selected = {0};
+    char selection_error[256] = {0};
+    if (resolve_fallback(app, fallback_model(app), &selected, selection_error,
+            sizeof(selection_error)) < 0) {
+        if (app_warning(app, selection_error) < 0) return -1;
+        return 0;
+    }
+    json_t *partial = snag_app_partial_public_json(app);
+    if (!partial) return -1;
+    char message[256];
+    (void)snag_strcpy(message, sizeof(message), error[0] ? error : "provider cyber_policy error");
+    if (record_response_failure(app, retry, turn_id, response_id, cycle, "provider", message,
+            partial, retry_count, failure, error, error_size) < 0 ||
+        commit_event(app, "turn_fallback_started",
+            json_pack("{s:s,s:s,s:s,s:s,s:s,s:I}", "turn_id", turn_id,
+                "provider", selected.provider->name, "model", selected.model, "effort",
+                selected.effort, "context_mode", snag_context_mode_name(selected.context.mode),
+                "context_tokens", (json_int_t)selected.context.tokens), error, error_size) < 0)
+        return -1;
+    if (app_textf(app, SNAG_UI_HOST, "Fallback for this turn: %s/%s/%s (cyber_policy)",
+            selected.provider->name, selected.model, selected.effort) < 0) return -1;
+    return 1;
 }
 
 static int
@@ -5419,6 +5556,7 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
     char over_budget_request_hash[SNAG_SHA256_HEX_LEN + 1u] = {0};
     unsigned int hard_compaction_attempts = 0u, cyber_clarifications = 0u;
     bool continuing = app->session.active_turn;
+    bool fallback_started = false;
     unsigned int next_cycle = continuing ? app->session.active_cycle + 1u : 1u;
     struct snag_credential credential;
     struct snag_response_graph graph;
@@ -5572,7 +5710,9 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
         app->provider_request_ready = false;
         bool selected_new_model =
             app->session.active_turn &&
-            (strcmp(app->session.active_turn_provider, app->session.default_provider) != 0 ||
+            (!app->session.turn_fallback_active || app->model_switch_requested) &&
+            (app->session.turn_fallback_active ||
+                strcmp(app->session.active_turn_provider, app->session.default_provider) != 0 ||
                 strcmp(app->session.active_turn_model, app->session.default_model) != 0 ||
                 strcmp(app->session.active_turn_effort,
                     resolve_effort(app->session.default_effort)) != 0);
@@ -5584,18 +5724,24 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
                     "old_effort", app->session.active_turn_effort, "turn_id", turn_id),
                 error, sizeof(error)) < 0)
             goto fail;
+        bool settings_changed = fallback_started || reconfigured || selected_new_model ||
+            strcmp(app->turn_provider->name, app->session.active_turn_provider) ||
+            strcmp(app->turn_model, app->session.active_turn_model) ||
+            strcmp(app->turn_effort, app->session.active_turn_effort);
         app->model_switch_requested = false;
-        if (reconfigured || selected_new_model) {
+        fallback_started = false;
+        if (settings_changed) {
             if (prepare_turn_settings(app, error, sizeof(error)) < 0) goto fail;
             provider_capacity_source_sha256(
                 app->turn_provider, app->turn_model, provider_source_hash);
+            if (!app->execute && set_input_prompt(app, true) < 0) goto fail;
         }
         if (!app->execute && ensure_turn_prompt(app) < 0) goto fail;
 #ifndef SNAJPAGENT_TEST_FIXTURE
         /* Recovery must apply /model and /configure before checking credentials;
          * the old provider's failed snapshot must not prevent either remedy. */
         bool initial_auth = credential.len == 0u;
-        if (initial_auth || reconfigured || selected_new_model) {
+        if (initial_auth || settings_changed) {
             snag_credential_clear(&credential);
             if (snag_auth_read(app->store.root_fd, app->turn_provider, false, NULL, &credential,
                     snag_app_active_input_pump, app, error, sizeof(error)) < 0) {
@@ -5653,6 +5799,33 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
                 app->history_orientation = SNAG_HISTORY_ORIENTATION_RECOVERY;
                 app->history_recovery_rebase = true;
                 goto rebuild_request;
+            }
+            if (errno == E2BIG && !pure_history_recovery) {
+                /* A model change can invalidate an opaque compact and restore
+                 * an archive larger than the request limit. Compact a bounded
+                 * prefix before projection; token counting cannot run yet. */
+                bool compacted = false;
+                int compact_rc = hard_compaction_attempts ? 0 :
+                    snag_app_compact_oversized_request(app, &credential,
+                        &compacted, error, sizeof(error));
+                if (compact_rc == 1 && (app->steering_requested ||
+                        app->control_requested || app->model_switch_requested))
+                    goto steered_before_response;
+                if (compact_rc == 2 && app->interrupt_requested) goto user_interrupted;
+                if (compact_rc == 0) {
+                    if (compacted) {
+                        ++hard_compaction_attempts;
+                    } else {
+                        app->history_orientation = SNAG_HISTORY_ORIENTATION_RECOVERY;
+                        app->history_recovery_rebase = true;
+                    }
+                    goto rebuild_request;
+                }
+                if (app->compaction_bounded) retry->compaction_bounded = true;
+            } else if (errno == E2BIG) {
+                /* Even the current-turn recovery envelope cannot fit. Repeating
+                 * the identical local projection cannot make progress. */
+                retry->compaction_bounded = true;
             }
             if (app->session.goal_status == SNAG_GOAL_ACTIVE)
                 app->history_orientation = SNAG_HISTORY_ORIENTATION_RECOVERY;
@@ -5926,6 +6099,15 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
                 sizeof(provider_failure.clarification_skipped),
                 app->stream_failed ? "output_failure" : "clarification_limit");
         cyber_clarifications = 0u;
+        if (provider_rc < 0 && !app->stream_failed) {
+            int fallback_rc = start_turn_fallback(app, retry, turn_id, response_id, cycle,
+                provider_retry_count, &provider_failure, error, sizeof(error));
+            if (fallback_rc < 0) goto fail;
+            if (fallback_rc > 0) {
+                fallback_started = true;
+                continue;
+            }
+        }
         if (provider_rc < 0 || app->stream_failed) {
             bool capacity_failure =
                 provider_rc < 0 && snag_provider_failure_is_capacity(&provider_failure);

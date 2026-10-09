@@ -402,6 +402,7 @@ check: $(BIN) $(TEST_BIN)
 	./tests/test_irc_address
 	./tests/test_irc_event
 	./tests/test_irc_send
+	python3 tests/test_model_fallback.py ./$(BIN) $(if $(filter 0,$(WITH_VM)),--without-vm,)
 	python3 tests/test_mcp.py ./$(BIN)
 	python3 tests/test_irc_queries.py ./$(BIN)
 	python3 tests/test_irc_hosted_channels.py ./$(BIN)
@@ -480,6 +481,7 @@ endif
 	./tests/test_provider_transport
 	python3 tests/test_access_token.py ./tests/snajpagent-transport
 	python3 tests/test_codex_compaction.py ./tests/snajpagent-transport
+	python3 tests/test_projection_overflow.py ./$(BIN)
 	python3 tests/test_config_reload.py ./tests/snajpagent-transport
 	python3 tests/test_model_auth_recovery.py ./tests/snajpagent-transport
 	python3 tests/test_goal_wait_channel.py ./$(BIN)

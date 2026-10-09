@@ -1981,6 +1981,8 @@ chat_send_chunk(struct snag_irc_core *irc, struct irc_conn *sender, struct irc_c
         route->kind == SNAG_IRC_CHANNEL ? channel_find(sender, route->target) : NULL;
     event_init(irc, &send->event, kind, irc->connection_endpoint, channel ? channel->room : NULL,
         sender->accepted_nick, clean, channel && channel->op, false, true);
+    send->event.echo_expected = route->kind == SNAG_IRC_CHANNEL &&
+        (irc->hosting || sender->cap_catchup);
     send->event.routed = true;
     send->event.route = *route;
     send->event.route.direction = SNAG_IRC_OUTGOING;

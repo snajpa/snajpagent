@@ -187,6 +187,10 @@ struct snag_session {
     char capacity_ceiling_model[SNAG_MODEL_MAX_BYTES];
     char capacity_ceiling_source_sha256[SNAG_SHA256_HEX_LEN + 1u];
     char default_effort[SNAG_EFFORT_MAX_BYTES];
+    /* Empty inherits configuration; "off" is an explicit session override. */
+    char fallback_model[SNAG_CONFIG_SELECTOR_MAX];
+    bool turn_fallback_used, turn_fallback_active;
+    struct snag_context_choice turn_fallback_context;
     /* Context-window selection for the selected model; durable through
      * context_selection_changed and restored on resume. */
     enum snag_context_mode context_mode;

@@ -21,6 +21,8 @@
 #define SNAG_CONFIG_URL_MAX 2048u
 #define SNAG_CONFIG_ENV_NAME_MAX 255u
 #define SNAG_CONFIG_PROVIDER_NAME_MAX 63u
+#define SNAG_CONFIG_SELECTOR_MAX \
+    (SNAG_CONFIG_PROVIDER_NAME_MAX + SNAG_CONFIG_MODEL_MAX + SNAG_CONFIG_EFFORT_MAX + 32u)
 #define SNAG_CONFIG_STEERING_MAX 8u
 #define SNAG_CONFIG_TOKEN_LIMIT_MAX UINT64_C(4000000000)
 #define SNAG_CONFIG_OUTPUT_CACHE_MAX (64u * 1024u * 1024u)
@@ -177,6 +179,7 @@ struct snag_config {
     char provider[SNAG_CONFIG_PROVIDER_NAME_MAX + 1u];
     char model[SNAG_CONFIG_MODEL_MAX];
     char reasoning_effort[SNAG_CONFIG_EFFORT_MAX];
+    char fallback_model[SNAG_CONFIG_SELECTOR_MAX];
     uint32_t max_goal_prompt_bytes;
     uint32_t max_turn_retries;
     bool retry_auto;
@@ -234,6 +237,8 @@ int snag_config_load(struct snag_config *config, const char *explicit_path, cons
 int snag_config_shell_validate(const char *shell, char *error, size_t error_size);
 char *snag_config_path(
     const char *explicit_path, const char *dotdir, char *error, size_t error_size);
+int snag_config_save_fallback(struct snag_config *config, const char *path, bool allow_create,
+    const char *value, char *error, size_t error_size);
 int snag_config_save_model(const char *path, bool allow_create, const char *provider,
     const char *model, const char *effort, char *error, size_t error_size);
 int snag_config_save_model_context(struct snag_config *config, const char *path, bool allow_create,

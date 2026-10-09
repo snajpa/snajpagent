@@ -173,6 +173,10 @@ snag_irc_event_data(const struct snag_irc_event *event)
         "local", event->local, "nick", event->nick, "op", event->op, "room", event->room, "text",
         event->text, "timestamp_ms", (json_int_t)event->timestamp_ms, "stream", event->stream,
         "sequence", (json_int_t)event->sequence, "input", event->input);
+    if (event->echo_expected && snag_json_set_new(data, "echo_expected", json_true()) < 0) {
+        json_decref(data);
+        return NULL;
+    }
     if (event->classified &&
         (snag_json_set_new(data, "urgent", json_boolean(event->urgent)) < 0 ||
             snag_json_set_new(data, "reply", json_boolean(event->reply)) < 0)) {
@@ -354,7 +358,8 @@ event_read(const json_t *data, struct snag_irc_event *event, bool routed)
             ? "endpoint historical kind local nick op room text timestamp_ms stream sequence "
               "input urgent reply"
             : "endpoint historical kind local nick op room text timestamp_ms stream sequence input";
-    if (!snag_json_arg_keys(data, keys, routed ? "reply_to" : "", NULL, 0u) || !kind ||
+    if (!snag_json_arg_keys(data, keys, routed ? "reply_to echo_expected" : "", NULL, 0u) ||
+        !kind ||
         strlen(kind) != json_string_length(json_object_get(data, "kind")) ||
         (event->classified && (!json_is_boolean(json_object_get(data, "urgent")) ||
                                   !json_is_boolean(json_object_get(data, "reply")))) ||
@@ -381,6 +386,13 @@ event_read(const json_t *data, struct snag_irc_event *event, bool routed)
         event->local = json_is_true(json_object_get(data, "local"));
         event->op = json_is_true(json_object_get(data, "op"));
         if (routed && route_read(json_object_get(data, "routing"), event) < 0) goto invalid;
+        event->echo_expected = json_object_get(data, "echo_expected") != NULL;
+        if (event->echo_expected &&
+            (!json_is_true(json_object_get(data, "echo_expected")) || !event->local ||
+                event->historical || !routed || event->route.kind != SNAG_IRC_CHANNEL ||
+                event->route.direction != SNAG_IRC_OUTGOING ||
+                (event->kind != SNAG_IRC_MESSAGE && event->kind != SNAG_IRC_NOTICE)))
+            goto invalid;
         const json_t *reply = json_object_get(data, "reply_to");
         if (reply) {
             if (!event->classified || !event->reply || event->route.kind != SNAG_IRC_CHANNEL)

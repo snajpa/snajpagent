@@ -1781,6 +1781,7 @@ test_channel_routes(void)
     wait_wire(client, peers[SNAG_IRC_OPERATOR], wire, sizeof(wire),
         "PRIVMSG #side :channel-body é界\r\n");
     tick(client, 2u);
+    assert(!capture.last_message.echo_expected);
     assert(capture.channel_delivery[SNAG_IRC_OPERATOR][SNAG_IRC_PENDING] == 1u);
     assert(capture.channel_delivery[SNAG_IRC_OPERATOR][SNAG_IRC_WRITTEN] == 1u);
     assert(!capture.channel_delivery[SNAG_IRC_OPERATOR][SNAG_IRC_ACKNOWLEDGED]);
@@ -2027,6 +2028,21 @@ test_private_native_receipts(void)
                &client_capture, error, sizeof(error)) == 0);
     assert(snag_irc_bind_conversations(client, NULL) == 0);
     wait_pair_event(server, client, &client_capture, SNAG_IRC_HISTORY_READY, 1u);
+    struct snag_irc_query_target scope = channel_fixture_scope(client);
+    struct snag_irc_channel_target channel;
+    assert(!snag_irc_channel_open(client, &scope, "#lab", false, &channel, error, sizeof(error)));
+    assert(!snag_irc_channel_send(client, &channel, SNAG_IRC_MESSAGE,
+        "native channel echo", false, NULL, error, sizeof(error)));
+    assert(client_capture.last_message.echo_expected);
+    assert(client_capture.channel_delivery[SNAG_IRC_OPERATOR][SNAG_IRC_PENDING] == 1u);
+    uint64_t echo_deadline = snag_monotonic_ms() + 1000u;
+    while (client_capture.last_message.route.direction != SNAG_IRC_INCOMING) {
+        assert(snag_monotonic_ms() < echo_deadline);
+        tick(server, 1u);
+        tick(client, 1u);
+    }
+    assert(!client_capture.last_message.echo_expected);
+    assert(!strcmp(client_capture.last_message.text, "native channel echo"));
     uint32_t destination = private_destination(client);
     struct snag_irc_query_target target;
     assert(snag_irc_query_open(client, destination, SNAG_IRC_AGENT, "operator", &target, error,

@@ -2621,6 +2621,56 @@ test_query_send_receipts(void)
 }
 
 static void
+test_channel_send_echo(void)
+{
+    for (unsigned int replay = 0u; replay < 2u; ++replay) {
+        struct snag_render render;
+        struct snag_irc_event event = {.routed = true, .local = true,
+            .kind = SNAG_IRC_MESSAGE, .timestamp_ms = 1000u,
+            .endpoint = "server:6667", .room = "#room", .nick = "operator",
+            .text = "repeated-channel-body",
+            .route = {.identity = SNAG_IRC_OPERATOR, .kind = SNAG_IRC_CHANNEL,
+                .generation = 1u, .target = "#room",
+                .connection = "11111111111111111111111111111111",
+                .conversation = "22222222222222222222222222222222"}};
+        struct snag_irc_conversation_target target = {.kind = SNAG_IRC_CHANNEL,
+            .identity = SNAG_IRC_OPERATOR, .room = "#room",
+            .conversation = "22222222222222222222222222222222"};
+        char output[8192];
+        struct output_capture capture = capture_open(false, true);
+        snag_render_init(&render, 0u);
+        snag_render_set_color(&render, SNAG_COLOR_NEVER);
+        assert(!snag_render_set_chat_conversation(&render, event.endpoint, &target, false));
+        for (unsigned int repeat = 0u; repeat < 2u; ++repeat) {
+            event.echo_expected = true;
+            event.route.direction = SNAG_IRC_OUTGOING;
+            event.route.delivery = SNAG_IRC_PENDING;
+            strcpy(event.route.send, "33333333333333333333333333333333");
+            query_receipt_emit(&render, &event, replay != 0u);
+            event.route.delivery = SNAG_IRC_ACKNOWLEDGED;
+            query_receipt_emit(&render, &event, replay != 0u);
+            event.echo_expected = false;
+            event.route.direction = SNAG_IRC_INCOMING;
+            event.route.delivery = SNAG_IRC_DELIVERY_NONE;
+            event.route.send[0] = '\0';
+            query_receipt_emit(&render, &event, replay != 0u);
+        }
+        event.echo_expected = true;
+        event.route.direction = SNAG_IRC_OUTGOING;
+        event.route.delivery = SNAG_IRC_FAILED;
+        strcpy(event.route.send, "44444444444444444444444444444444");
+        query_receipt_emit(&render, &event, replay != 0u);
+        /* Both direct presentation replay and delayed chat-view replay use the
+         * same pending metadata rule, retaining repeated identical messages. */
+        assert(!snag_render_set_view(&render, SNAG_RENDER_CHAT));
+        snag_render_free(&render);
+        (void)capture_close(&capture, output, sizeof(output), 0u);
+        assert(count_text(output, "repeated-channel-body") == 2u);
+        assert(strstr(output, "send 44444444 failed"));
+    }
+}
+
+static void
 test_history_failure(void)
 {
     struct snag_render render;
@@ -4179,6 +4229,7 @@ main(int argc, char **argv)
         test_append_only_views(verbosity);
     test_chat_room_views();
     test_query_send_receipts();
+    test_channel_send_echo();
     test_async_render_backfill();
 
     assert(capture_lifecycle(0u, SNAG_COLOR_NEVER, output, sizeof(output)) > 0u);

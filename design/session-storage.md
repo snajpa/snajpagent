@@ -1462,6 +1462,13 @@ These are durable field checks; live membership, authority and delivery remain
 separate. No relationship between historical, operator, input or urgency flags
 is inferred by the codec.
 
+Native routed IRC events use flag bit 512 for `echo_expected`: a local outgoing
+channel send whose transport supplies the canonical displayed room event. The
+optional JSON field has the same name. Pending delivery remains durable; live
+and presentation replay omit its duplicate body. The flag is invalid on legacy
+unrouted events, queries and incoming events. Older records omit it; readers
+predating the flag cannot reopen journals containing it.
+
 Draft kind 215/version 1 (`irc_event_v2`) keeps the complete kind208/version1
 prefix and appends typed routing. Kind208 retains its original wire contract.
 The routing suffix is flags1, generation8, identity1, conversation-kind1,
@@ -1590,7 +1597,7 @@ and preserves the destination on failure. This block carries metadata only;
 complete core/provider bodies, reference authority and snapshot adoption remain
 separate work.
 
-The control-metadata block has its own u16 version (currently2), followed by a
+The control-metadata block has its own u16 version (currently4), followed by a
 u32 bitmap for21 booleans; higher bits are reserved zero. The draft omits the
 retired session-archive flag, matching the current runtime state. Its24 fixed metadata
 fields follow `control_texts` order in `store_binary_checkpoint.c`: optional
@@ -1603,6 +1610,16 @@ counters use u64 on disk and fail with overflow if a reader cannot represent the
 Seven u64 control-event sequences finish version2, including explicit saved-setting
 reload at control bit64. The masks admit bits1..64. Version1 retains its six
 sequences and bits1..32; decoding it clears the absent reload sequence to zero.
+Version3 appends the nine IRC-attention counters. Version4 additionally appends
+fallback selector text, boolean used/active flags and its context mode/token
+choice. Writers retain an older layout when no newer state is present; older
+readers reject unsupported records/blocks. `fallback_changed` (kind19) stores the
+session selector; `turn_fallback_started` (kind20) stores the turn ID, active
+provider/model/effort and context choice. The reducer requires an active turn,
+a closed response and an unused fallback latch. Primary model/context preferences
+stay unchanged. The selector survives completed turns; active override/latch state
+survives recovery and clears on completed/cancelled turns. Legacy JSON checkpoints
+accept absent fallback fields as their original disabled/default state.
 Each version consumes its exact layout and reserved control bits fail validation.
 `control_flags` defines the
 boolean bit order. The existing bounded text/hex primitives are shared with the

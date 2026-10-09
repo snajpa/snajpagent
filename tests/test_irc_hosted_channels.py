@@ -2,6 +2,7 @@
 """Hosted room selectors use the same commands and exact routes as clients."""
 
 import json
+import re
 import unittest
 
 from test_irc_queries import QueryFixture
@@ -51,6 +52,25 @@ class HostedChannelTests(QueryFixture):
         self.wire('PRIVMSG query-peer :hosted-private')
         self.observer.drain(.1)
         self.assertNotIn(b'hosted-private', self.observer.buf)
+
+    def test_local_channel_echo_is_rendered_once(self):
+        self.command('/chat 1/#lab', f'chat 127.0.0.1:{self.port} #lab')
+        for command, body, frame in (
+                ('same-message', 'same-message', 'PRIVMSG #lab :same-message'),
+                ('same-message', 'same-message', 'PRIVMSG #lab :same-message'),
+                ('/notice 1/#lab notice-body', 'notice-body', 'NOTICE #lab :notice-body'),
+                ('/me action-body', 'action-body', 'PRIVMSG #lab :\x01ACTION action-body\x01')):
+            self.peer.buf.clear()
+            self.command(command)
+            self.wire(frame)
+            self.term.write(b'/session\r')
+            self.term.until(b'session:')
+            text = re.sub(rb'\x1b\[[0-?]*[ -/]*[@-~]', b'', bytes(self.term.output))
+            rows = [line for line in text.splitlines() if re.match(rb'^\d{2}:\d{2}:\d{2} ', line)
+                    and b'queryop ' in line and body.encode() in line]
+            self.assertEqual(len(rows), 1, (command, text))
+        copies = [e['data'] for e in self.events() if e['data'].get('text') == 'same-message']
+        self.assertEqual(sum(e.get('input', False) for e in copies), 2)
 
     def test_part_rejoin_rotates_membership_and_keeps_agent(self):
         self.command('/chat 1/#lab', f'chat 127.0.0.1:{self.port} #lab')

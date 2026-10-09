@@ -4,6 +4,17 @@
 
 ## Unreleased
 
+- Display native IRC channel sends once, using the admitted room event while
+  retaining send delivery state. Repeated equal messages remain separate.
+- Recover a request over the 32 MiB wire bound through bounded compaction and
+  current-turn history recovery, including switches from an incompatible opaque
+  summary. Stop unchanged retries if the recovery envelope itself cannot fit.
+
+- Configure `/fallback SELECTOR [save|s]` for automatic authorized cyber-model
+  routing after a terminal `cyber_policy` error. The fallback finishes the turn,
+  survives unfinished-turn resume and appears immediately in the prompt; the
+  following turn uses the primary. `/fallback off` disables future switches.
+
 - Select a model and its context window with `provider/model/effort:context`,
   including startup, resume, numbered rows and enabled model tools. Numeric
   selections with `save` write both defaults in one configuration replacement.

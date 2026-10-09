@@ -107,7 +107,7 @@ same_controls(const struct snag_session *a, const struct snag_session *b)
     json_object_del(right, "irc_conversations");
     json_object_del(left, "irc_activity");
     json_object_del(right, "irc_activity");
-    assert(json_object_size(left) == 92u && json_equal(left, right));
+    assert(json_object_size(left) == 97u && json_equal(left, right));
     json_decref(left);
     json_decref(right);
 }
@@ -148,6 +148,17 @@ roundtrip(const struct snag_session *value, struct snag_buf *wire)
     copy_fields(expected, value, numbers, COUNT(numbers));
     copy_fields(expected, value, irc_numbers, COUNT(irc_numbers));
     copy_fields(expected, value, flags, COUNT(flags));
+    memcpy(expected + offsetof(struct snag_session, fallback_model),
+        value->fallback_model, sizeof(value->fallback_model));
+    memcpy(expected + offsetof(struct snag_session, turn_fallback_used),
+        &value->turn_fallback_used, sizeof(value->turn_fallback_used));
+    memcpy(expected + offsetof(struct snag_session, turn_fallback_active),
+        &value->turn_fallback_active, sizeof(value->turn_fallback_active));
+    /* Structure padding stays untouched, just like other non-field bytes. */
+    memcpy(expected + offsetof(struct snag_session, turn_fallback_context.mode),
+        &value->turn_fallback_context.mode, sizeof(value->turn_fallback_context.mode));
+    memcpy(expected + offsetof(struct snag_session, turn_fallback_context.tokens),
+        &value->turn_fallback_context.tokens, sizeof(value->turn_fallback_context.tokens));
     memcpy(expected + offsetof(struct snag_session, control_seq),
         value->control_seq, sizeof(value->control_seq));
     assert(!snag_binary_checkpoint_controls_decode(wire->data, wire->len, &decoded));
@@ -175,7 +186,8 @@ fixture(struct snag_session *out)
     /* Seed every legacy scalar independently of the native field table, so an
      * omitted native scalar cannot disappear behind its original zero value. */
     json_object_foreach(doc, name, value) {
-        if (outside_field(name)) continue;
+        if (outside_field(name) || !strcmp(name, "fallback_model") ||
+            !strncmp(name, "turn_fallback_", 14u)) continue;
         bool new_irc = false;
         for (size_t i = 0u; i < COUNT(irc_numbers); ++i)
             if (!strcmp(name, irc_numbers[i].name)) new_irc = true;
@@ -315,6 +327,24 @@ test_store_binary_controls(void)
     reject_decode(bad_irc, sizeof(bad_irc));
     bad_irc[0] = 4u;
     reject_decode(bad_irc, sizeof(bad_irc));
+    snag_buf_free(&extended);
+    snag_buf_init(&extended, SIZE_MAX);
+    struct snag_session fallback = value;
+    memcpy(fallback.fallback_model, "p/m/high:100000", sizeof("p/m/high:100000"));
+    fallback.turn_fallback_used = true;
+    fallback.turn_fallback_active = true;
+    fallback.turn_fallback_context =
+        (struct snag_context_choice){SNAG_CONTEXT_MODE_TOKENS, 100000u};
+    roundtrip(&fallback, &extended);
+    assert(extended.data[0] == 4u);
+    test_store_binary_controls_state(&fallback);
+    for (size_t i = wire.len; i < extended.len; ++i) reject_decode(extended.data, i);
+    extended.data[extended.len - 11u] = 0u;
+    reject_decode(extended.data, extended.len); /* Active requires used. */
+    fallback.active_turn = false;
+    reject_encode(&fallback);
+    assert(!snag_binary_checkpoint_controls_decode(legacy, sizeof(legacy), &fallback));
+    assert(!fallback.fallback_model[0] && !fallback.turn_fallback_used);
     snag_buf_free(&extended);
     for (size_t i = 0u; i < wire.len; ++i) reject_decode(wire.data, i);
     reject_decode(NULL, wire.len);

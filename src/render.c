@@ -3591,6 +3591,9 @@ render_irc_event_now(
 {
     if (!render || !event) return snag_errno(EINVAL);
     bool outgoing = event->routed && event->route.direction == SNAG_IRC_OUTGOING;
+    /* Native channels emit a canonical room event after durable admission.
+     * Its pending send is delivery metadata, not another chat message. */
+    if (event->echo_expected && event->route.delivery == SNAG_IRC_PENDING) return 0;
     bool quiet_receipt = !render->verbosity && outgoing &&
         (event->route.delivery == SNAG_IRC_WRITTEN ||
             event->route.delivery == SNAG_IRC_ACKNOWLEDGED);
