@@ -4,6 +4,7 @@
 
 import json
 import os
+import select
 import threading
 import time
 import unittest
@@ -172,6 +173,59 @@ class ModelFallbackTests(unittest.TestCase):
 
     def test_explicit_model_clears_same_model_fallback_context(self):
         self.explicit_selection('/model fake/host-model/medium:60000', 'model for next response')
+
+    def switch_during_retry(self, goal):
+        def respond(handler, request, sequence):
+            if request['model'] == 'host-model':
+                error = {'code': 'model_not_found',
+                         'message': f'synthetic model failure {sequence}'}
+                body = json.dumps({'error': error}).encode()
+                handler.send_response(400)
+                handler.send_header('Content-Length', str(len(body)))
+                handler.end_headers()
+                handler.wfile.write(body)
+                return
+            self.entered.set()
+            self.release.wait(10)
+            self.provider.reply(handler, self.provider.response_body(sequence, 'done').encode(),
+                                close_header=True)
+
+        self.provider.runtime_handler = respond
+        text = '/goal retry selection fixture' if goal else 'retry selection fixture'
+        os.write(self.owner.initial.master, text.encode() + b'\r')
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            recoveries = [e for e in self.owner.events() if e['type'] == 'turn_recovery']
+            if len(recoveries) == 4:
+                break
+            child = self.owner.initial
+            if select.select([child.master], [], [], .02)[0]:
+                child.output.extend(os.read(child.master, 65536))
+        self.assertEqual(len(recoveries), 4, bytes(self.owner.initial.output))
+        # The fourth failure starts a two-second wait. An explicit selection
+        # must start the replacement promptly, without waiting out that timer.
+        self.command('/model fake/two-model/high', 'model for next response')
+        self.assertTrue(self.entered.wait(1), self.models())
+        self.owner.initial.until(b'fake/two-model/high', 1)
+        if not session.OMITTED:
+            peer = self.owner.view()
+            peer.until('state', lambda message:
+                       message['state']['prompt']['values'][1:3] == ['two-model', 'high'])
+        self.assertEqual(self.models(), ['host-model'] * 4 + ['two-model'])
+        events = self.owner.events()
+        self.assertEqual(sum(e['type'] == 'turn_started' for e in events), 1)
+        self.assertEqual(sum(e['type'] == 'turn_model_changed' for e in events), 1)
+        self.assertIn('retry selection fixture', json.dumps(self.provider.requests[-1]['body']))
+        if goal:
+            self.command('/goal pause', 'Goal paused')
+        self.release.set()
+        self.completed()
+
+    def test_model_change_wakes_turn_retry(self):
+        self.switch_during_retry(False)
+
+    def test_model_change_wakes_active_goal_retry(self):
+        self.switch_during_retry(True)
 
     def test_yellow_clarification_stays_on_primary(self):
         self.command('/fallback fake/two-model/high')

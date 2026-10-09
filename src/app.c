@@ -5469,6 +5469,11 @@ turn_recovery_wait(struct app_state *app, struct turn_retry *retry)
             if (app->input_closed || app->interrupt_requested) break;
             if (!app->steering_requested) continue;
         }
+        /* A new selection can repair the failed request. No response is open
+         * during backoff, so the provider input pump does not wake it for us. */
+        if (!policy && app->model_switch_requested &&
+            (!goal || app->session.goal_status == SNAG_GOAL_ACTIVE))
+            break;
         if (rc == 1) {
             if (policy || !goal || app->session.goal_status != SNAG_GOAL_PAUSED) break;
             app->steering_requested = false;

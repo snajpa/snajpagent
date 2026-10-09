@@ -2881,6 +2881,9 @@ interrupted; the new provider request receives the retained conversation and
 tool results, including still-running command handles. It persists across
 session resume without a save suffix. After a credential error, selecting another
 configured provider continues the same unfinished turn using that provider's login.
+A model change during automatic retry starts the next attempt immediately,
+using the new selection in both the request and prompt. The existing goal
+status is retained.
 The final save suffix also
 works with numbered rows. A bare model name uses the highest recognized effort
 in its configured or cached effort list (or the first unrecognized effort if none are ranked),

@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Apply model changes immediately during automatic retry backoff, preserving
+  the unfinished turn and goal status while updating the request and prompt.
+
 - Display native IRC channel sends once, using the admitted room event while
   retaining send delivery state. Repeated equal messages remain separate.
 - Recover a request over the 32 MiB wire bound through bounded compaction and
