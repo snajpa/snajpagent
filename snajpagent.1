@@ -6647,6 +6647,9 @@ capacity. Failed and cancelled turns retain that progress and the selected
 model across resume, and completed tools are never re-executed.
 If an encrypted summary cannot cross a model or provider change, restored
 history is checked against the selected context estimate before upload.
+If a new summary covers an earlier boundary, the uncovered original events remain
+available to following requests and resume. Older checkpoints with a gap in that
+retained history recover the missing events from the journal before projection.
 Reconstruction above that window or the 32 MiB request limit first compacts a
 bounded history prefix. A rebuilt request that remains too large uses the
 current-turn recovery context and can retrieve older journal history with tools.

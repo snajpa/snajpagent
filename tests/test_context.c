@@ -3431,11 +3431,14 @@ test_opaque_compaction_binding(struct snag_store *store, const char *cwd, bool l
     commit_completed_turn(&session, cwd, "ba100000000000000000000000000000",
         "ba200000000000000000000000000000", 1u, "original user instruction",
         "assistant state covered by opaque capsule");
+    uint64_t middle_seq = 0u;
     for (unsigned int i = 2u; i <= 80u; ++i) {
         char turn[33], response[33];
         snprintf(turn, sizeof(turn), "%032x", 0xbc00u + i * 2u);
         snprintf(response, sizeof(response), "%032x", 0xbc01u + i * 2u);
-        commit_completed_turn(&session, cwd, turn, response, i, "next", "later answer");
+        commit_completed_turn(&session, cwd, turn, response, i, "next",
+            i == 40u ? "middle history survives" : "later answer");
+        if (i == 40u) middle_seq = session.next_seq - 1u;
     }
     assert(snag_context_compact_request_build(&session, SNAJPAGENT_MODEL, "medium", false, 0u,
                false, scope, &compact, error, sizeof(error), NULL) == 0);
@@ -3448,8 +3451,11 @@ test_opaque_compaction_binding(struct snag_store *store, const char *cwd, bool l
 
     for (unsigned int pass = 0u; pass < 3u; ++pass) {
         bool changed = pass != 0u;
-        assert(snag_context_build(&session, SNAJPAGENT_MODEL, "medium", 1u, empty, 0u, false, NULL,
-                   changed ? other : scope, NULL, NULL, &next, error, sizeof(error), NULL) == 0);
+        int rc = snag_context_build(&session, SNAJPAGENT_MODEL, "medium", 1u, empty, 0u,
+            false, NULL, changed ? other : scope, NULL, NULL, &next, error, sizeof(error), NULL);
+        if (rc < 0)
+            fprintf(stderr, "opaque binding: legacy=%u pass=%u: %s\n", legacy, pass, error);
+        assert(rc == 0);
         json_t *input = json_object_get(next.create_request.value, "input");
         assert((item_by_field(input, "type", "compaction") != NULL) == !changed);
         bool restored =
@@ -3464,6 +3470,46 @@ test_opaque_compaction_binding(struct snag_store *store, const char *cwd, bool l
                other, &rebuild, error, sizeof(error), NULL) == 0);
     assert(item_by_field(json_object_get(rebuild.create_request.value, "input"), "content",
         "assistant state covered by opaque capsule"));
+    snag_context_projection_free(&rebuild);
+    assert(snag_context_compact_request_build(&session, SNAJPAGENT_MODEL, "medium", true, 512u,
+               false, other, &rebuild, error, sizeof(error), NULL) == 0);
+    assert(rebuild.source_seq < middle_seq);
+    assert(middle_seq + SNAG_CONTEXT_COMPACT_OVERLAP_EVENTS < session.compact_seq);
+    commit_counted_compaction(&session, "ba500000000000000000000000000000", "hard_budget",
+        SNAJPAGENT_MODEL, &rebuild, output);
+    for (unsigned int resume = 0u; resume < 2u; ++resume) {
+        if (resume) {
+            assert(!snag_session_checkpoint(&session, error, sizeof(error)));
+            snag_session_close(&session);
+            assert(!snag_session_open(store, &session, saved, error, sizeof(error)));
+        }
+        assert(!snag_context_build(&session, SNAJPAGENT_MODEL, "medium", 1u, empty, 0u, false,
+            NULL, other, NULL, NULL, &next, error, sizeof(error), NULL));
+        assert(item_by_field(json_object_get(next.create_request.value, "input"),
+            "content", "middle history survives"));
+        snag_context_projection_free(&next);
+    }
+    /* Simulate an older writer checkpointing the previous, later seam.
+     * The new summary boundary remains valid; its uncovered events must be
+     * recovered from the original journal, including across a saved restart. */
+    json_t *checkpoint = session.on_checkpoint(session.on_commit_opaque, &session);
+    assert(checkpoint);
+    json_t *recent = json_object_get(checkpoint, "recent");
+    for (size_t i = json_array_size(recent); i > 0u; --i) {
+        uint64_t seq;
+        assert(!snag_json_integer_u64(json_array_get(recent, i - 1u), "seq", &seq));
+        if (seq < compact.source_seq - SNAG_CONTEXT_COMPACT_OVERLAP_EVENTS)
+            assert(!json_array_remove(recent, i - 1u));
+    }
+    json_decref(checkpoint);
+    assert(!snag_session_checkpoint(&session, error, sizeof(error)));
+    snag_session_close(&session);
+    assert(!snag_session_open(store, &session, saved, error, sizeof(error)));
+    assert(!snag_context_build(&session, SNAJPAGENT_MODEL, "medium", 1u, empty, 0u, false,
+        NULL, other, NULL, NULL, &next, error, sizeof(error), NULL));
+    assert(item_by_field(json_object_get(next.create_request.value, "input"),
+        "content", "middle history survives"));
+    snag_context_projection_free(&next);
     snag_context_projection_free(&rebuild);
     assert(snag_context_compact_reduce_request_build(&session, NULL, SNAJPAGENT_MODEL, "medium",
                output, "merge these summaries", &reduce, error, sizeof(error)) < 0);

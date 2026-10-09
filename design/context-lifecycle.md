@@ -87,6 +87,16 @@ Older views without these cursor fields rebuild from their retained event seam.
 Repeated preparation and reopening must agree with a fresh projection of the
 same events, including after another recovery event.
 
+A binding change that reconstructs encrypted history can select an earlier
+compaction boundary. Retain the newly uncovered original events before accepting
+that cut. Archive restoration ignores historical trim operations and applies the
+current coverage boundary only after replay. Resumed older caches verify missing
+sequence ranges once; only omitted checkpoint records can explain a gap. A
+missing semantic event triggers source restoration before live projection. The
+live cache remembers verified coverage and advances with commits, preserving the
+journal-free normal request path.
+
+
 There are two explicit ways to change coverage in that state:
 
 - **Compaction completion:** a validated summary with source boundary, predecessor

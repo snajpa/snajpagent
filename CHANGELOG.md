@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Preserve uncovered history when a model switch moves a compaction boundary
+  backward. Resume repairs incomplete retained history from the original journal,
+  keeping tool calls paired with their results.
+
 - Wait for correction when restored model/context settings exceed cached limits,
   retaining unfinished work without repeated retries. One-shot mode exits with
   the validation error. Validate inherited context before switching models.

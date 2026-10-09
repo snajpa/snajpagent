@@ -756,11 +756,11 @@ class ControlTests(unittest.TestCase):
         self.escape(child)
         child.finish('workspace detach')
 
-    def test_live_prompt_is_visible_in_each_pane(self):
+    def check_live_prompts(self, split):
         child = self.start('-N', 'pane-prompts', rows=24, columns=160)
         child.command('attach ' + self.owner.sid)
         child.attached()
-        child.command('vsp')
+        child.command(split)
         from test_vm_mouse import current_rows
 
         marker = 'fake/host-model/medium   0% ›'
@@ -772,12 +772,23 @@ class ControlTests(unittest.TestCase):
         child.write(b'iunsent-pane-draft')
         self.wait_synced('unsent-pane-draft')
         child.repaint_until(b'unsent-pane-draft')
-        draft_line, = (line for line in current_rows(child).values()
-                       if 'unsent-pane-draft' in line)
-        self.assertIn(marker + ' unsent-pane-draft', draft_line)
+        deadline = time.monotonic() + 5
+        while sum(line.count('unsent-pane-draft')
+                  for line in current_rows(child).values()) < 2:
+            self.assertLess(time.monotonic(), deadline, current_rows(child))
+            child.read(.02)
+        rows = current_rows(child)
+        self.assertEqual(sum(line.count(marker + ' unsent-pane-draft')
+                             for line in rows.values()), 2, rows)
         self.escape(child)
         self.assertEqual(self.inputs(), [])
         child.finish('workspace detach')
+
+    def test_live_prompt_is_visible_in_each_pane(self):
+        self.check_live_prompts('vsp')
+
+    def test_live_prompt_is_visible_in_each_horizontal_pane(self):
+        self.check_live_prompts('split')
 
     def test_follow_cursor_is_at_prompt_without_an_extra_key(self):
         from test_vm_mouse import current_rows, mouse, positions

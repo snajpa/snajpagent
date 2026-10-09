@@ -72,6 +72,8 @@ struct snag_context_capture {
     char scope[SNAG_SHA256_HEX_LEN + 1u];
     bool invalid;
     bool rebuild_view;
+    bool coverage_known;
+    uint64_t source_floor; /* Every non-checkpoint event after this floor is retained. */
 };
 
 static void
@@ -158,6 +160,7 @@ context_cache_trim(
     json_decref(cache->pending);
     cache->recent = recent;
     cache->pending = pending;
+    if (overlap && overlap - 1u > cache->source_floor) cache->source_floor = overlap - 1u;
     return 0;
 fail:
     json_decref(recent);
@@ -184,13 +187,7 @@ context_cache_record(struct snag_context_capture *cache, const struct snag_sessi
                  ? 0
                  : -1;
     json_decref(entry);
-    if (rc < 0) return -1;
-    if ((!strcmp(type, "compaction_completed") || !strcmp(type, "context_rebased")) &&
-        context_cache_trim(cache, session,
-            session->context_rebase_seq > session->compact_seq ? session->context_rebase_seq
-                                                               : session->compact_seq) < 0)
-        return -1;
-    return 0;
+    return rc;
 }
 
 static void
@@ -199,7 +196,11 @@ context_cache_commit(void *opaque, const struct snag_session *session, uint64_t 
 {
     struct snag_context_capture *cache = opaque;
     if (cache->invalid || !strcmp(type, "session_checkpoint")) return;
-    if (context_cache_record(cache, session, seq, type, data) < 0)
+    if (context_cache_record(cache, session, seq, type, data) < 0 ||
+        ((!strcmp(type, "compaction_completed") || !strcmp(type, "context_rebased")) &&
+            context_cache_trim(cache, session,
+                session->context_rebase_seq > session->compact_seq
+                    ? session->context_rebase_seq : session->compact_seq) < 0))
         cache->invalid = true; /* A durable event is never retroactively failed. */
     if (!strcmp(type, "irc_compacted")) cache->rebuild_view = true;
 }
@@ -209,6 +210,7 @@ context_cache_new(void)
 {
     struct snag_context_capture *cache = calloc(1u, sizeof(*cache));
     if (!cache) return NULL;
+    cache->coverage_known = true;
     cache->pending = json_array();
     cache->recent = json_array();
     cache->steering_snapshot = json_array();
@@ -406,6 +408,7 @@ snag_context_capture_seed(
     cache->recent = events;
     cache->pending = pending;
     cache->history_sources = sources;
+    cache->coverage_known = false;
     return 0;
 }
 
@@ -626,6 +629,7 @@ context_cache_restore(struct snag_session *session, struct snag_context_capture 
     json_decref(cache->recent);
     /* Suffix replay must not mutate the saved source document on failure. */
     cache->recent = json_copy((json_t *)recent);
+    cache->coverage_known = false;
     if (!cache->recent) goto memory;
     for (size_t i = 0; i < json_array_size(recent); ++i) {
         json_t *event = json_array_get(recent, i);
@@ -3287,9 +3291,120 @@ compact_event(void *opaque, const struct snag_session *state, uint64_t seq, cons
     return 0;
 }
 
+struct context_gap {
+    const struct snag_context_control *control;
+    uint64_t end;
+    bool missing;
+};
+
+static int
+context_gap_event(void *opaque, const struct snag_session *state, uint64_t seq,
+    const char *type, const json_t *data, char *error, size_t error_size)
+{
+    struct context_gap *gap = opaque;
+    (void)state;
+    (void)data;
+    if (gap->control && gap->control->cancelled &&
+        gap->control->cancelled(gap->control->opaque))
+        return snag_fail(error, error_size, ECANCELED, "context preparation cancelled");
+    if (seq >= gap->end) return 1;
+    if (strcmp(type, "session_checkpoint") && strcmp(type, "session_created")) {
+        gap->missing = true;
+        return SNAG_JOURNAL_STOP_AFTER;
+    }
+    return 0;
+}
+
+/* Older checkpoints can have a summary boundary that moved backward while
+ * their retained events still start at the previous boundary. Check gaps once,
+ * accepting only the checkpoint records intentionally omitted from the cache. */
+static int
+context_source_complete(struct snag_context_capture *cache, struct snag_session *session,
+    uint64_t floor, const struct snag_context_control *control, char *error, size_t error_size)
+{
+    uint64_t next = floor + 1u;
+    for (size_t i = 0u; i <= json_array_size(cache->recent); ++i) {
+        uint64_t seq = session->next_seq;
+        if (i < json_array_size(cache->recent) &&
+            snag_json_integer_u64(json_array_get(cache->recent, i), "seq", &seq) < 0)
+            return snag_fail(error, error_size, EINVAL, "invalid retained context sequence");
+        if (seq < next) continue;
+        if (seq > next) {
+            struct snag_journal_cursor cursor = {0};
+            struct context_gap gap = {.control = control, .end = seq};
+            if (snag_session_history_cursor_before(session, next, &cursor, error, error_size) < 0)
+                return -1;
+            while (cursor.next_seq < seq && !gap.missing) {
+                if (snag_session_each_event_forward(session, &cursor, SNAG_JOURNAL_PAGE_BYTES,
+                        context_gap_event, &gap, error, error_size) < 0) return -1;
+            }
+            if (gap.missing) return 0;
+        }
+        next = seq + 1u;
+    }
+    return 1;
+}
+
+static int
+context_restore_event(void *opaque, const struct snag_session *state, uint64_t seq,
+    const char *type, const json_t *data, char *error, size_t error_size)
+{
+    struct snag_context_capture *cache = opaque;
+    const struct snag_context_control *control = cache->view.control;
+    if (control && control->cancelled && control->cancelled(control->opaque))
+        return snag_fail(error, error_size, ECANCELED, "context restoration cancelled");
+    if (!strcmp(type, "session_checkpoint")) return 0;
+    /* Historical compactions cannot trim the source needed by today's boundary. */
+    if (context_cache_record(cache, state, seq, type, data) < 0)
+        return snag_fail(error, error_size, ENOMEM, "cannot restore provider source events");
+    return 0;
+}
+
+static int
+context_source_require(struct snag_context_capture *cache, struct snag_session *session,
+    uint64_t floor, const struct snag_context_control *control, char *error, size_t error_size)
+{
+    if (cache->coverage_known && cache->source_floor <= floor) return 0;
+    /* State-only consumers carry the current seam. A binding change that needs
+     * older history still requires the owning journal reader. */
+    if (!cache->coverage_known && !session->binary && session->log_fd < 0) {
+        uint64_t boundary = session->compact_seq > session->context_rebase_seq
+                                ? session->compact_seq : session->context_rebase_seq;
+        if (floor < boundary && boundary - floor > SNAG_CONTEXT_COMPACT_OVERLAP_EVENTS)
+            return snag_fail(error, error_size, ENOENT, "earlier context source unavailable");
+        return 0;
+    }
+    int complete = cache->coverage_known ? 0 :
+        context_source_complete(cache, session, floor, control, error, error_size);
+    if (complete < 0) return -1;
+    if (complete) {
+        cache->source_floor = floor;
+        cache->coverage_known = true;
+        return 0;
+    }
+    struct snag_context_capture *restored = context_cache_new();
+    if (!restored) return snag_fail(error, error_size, ENOMEM, "cannot restore provider source");
+    restored->view.control = control;
+    int rc = snag_session_each_event(session, context_restore_event, restored, error, error_size);
+    if (!rc) rc = context_cache_trim(restored, session, floor);
+    if (!rc) {
+        json_decref(cache->recent);
+        json_decref(cache->pending);
+        cache->recent = restored->recent;
+        cache->pending = restored->pending;
+        restored->recent = NULL;
+        restored->pending = NULL;
+        cache->source_floor = restored->source_floor;
+        cache->coverage_known = true;
+        cache->rebuild_view = true;
+    }
+    context_cache_free(restored);
+    return rc;
+}
+
 /* Materialized uncompressed event seam: the compact reducer and the
  * post-summary provider use the same events and the same context_event logic.
- * Old summarized prefixes are never reparsed to select a new boundary. */
+ * Compatible summaries reuse this seam when selecting a new boundary. */
 static int
 context_recent_each(struct snag_context_capture *cache, struct context_builder *builder,
     snag_session_event_fn fn, char *error, size_t error_size)
@@ -3433,7 +3548,6 @@ snag_context_compact_request_build(struct snag_session *session, const char *mod
     size_t error_size, const struct snag_context_control *control)
 {
     struct context_builder builder;
-    bool restore_history = false;
     int rc = -1;
 
     if (!projection) return snag_errno(EINVAL);
@@ -3490,17 +3604,14 @@ snag_context_compact_request_build(struct snag_session *session, const char *mod
         if (install_rc == 1) { /* no portable text: this attempt cannot claim coverage */
             builder.compact_seq = 0u;
             builder.compact_walk_seq = 0u;
-            restore_history = true;
         }
     }
     {
         struct snag_context_capture *cache = NULL;
         if (context_cache_get(session, &cache, error, error_size, control) < 0) goto out;
-        int walk =
-            restore_history
-                ? snag_session_each_event(session, compact_event, &builder, error, error_size)
-                : context_recent_each(cache, &builder, compact_event, error, error_size);
-        if (walk < 0) goto out;
+        if (context_source_require(cache, session, builder.compact_walk_seq,
+                control, error, error_size) < 0 ||
+            context_recent_each(cache, &builder, compact_event, error, error_size) < 0) goto out;
     }
     if (prune_dangling_calls(builder.request_input) < 0) goto out;
     if (append_deferred_input(&builder) < 0) goto out;
@@ -3852,7 +3963,6 @@ snag_context_build(struct snag_session *session, const char *model, const char *
         "as a reply, and unmentioned channel/background traffic requires no response.";
     struct context_builder builder;
     size_t controller_start;
-    bool restore_history = false;
     int rc = -1;
 
     snag_context_projection_free(projection);
@@ -3938,7 +4048,6 @@ snag_context_build(struct snag_session *session, const char *model, const char *
             if (install_rc == 1) {
                 builder.compact_seq = 0u;
                 builder.compact_walk_seq = 0u;
-                restore_history = true;
                 projection->restored_compacted_history = true;
             }
         }
@@ -3947,7 +4056,9 @@ snag_context_build(struct snag_session *session, const char *model, const char *
          * provider IDs or shift the input-timing references. */
         builder.base_request_count = json_array_size(builder.request_input);
         struct snag_context_capture *cache = NULL;
-        if (context_cache_get(session, &cache, error, error_size, control) < 0) goto out;
+        if (context_cache_get(session, &cache, error, error_size, control) < 0 ||
+            context_source_require(cache, session, builder.compact_walk_seq,
+                control, error, error_size) < 0) goto out;
         if (!cache->scope[0] && continuation_scope &&
             !snag_strcpy(cache->scope, sizeof(cache->scope), continuation_scope)) {
             (void)snag_fail(error, error_size, EINVAL, "invalid provider continuation scope");
@@ -3986,10 +4097,9 @@ snag_context_build(struct snag_session *session, const char *model, const char *
             json_decref(cache->recent);
             cache->recent = json_incref(old_cache->recent);
             cache->history_sources = json_incref(old_cache->history_sources);
-            int walk =
-                restore_history
-                    ? snag_session_each_event(session, context_event, &builder, error, error_size)
-                    : context_recent_each(old_cache, &builder, context_event, error, error_size);
+            cache->coverage_known = old_cache->coverage_known;
+            cache->source_floor = old_cache->source_floor;
+            int walk = context_recent_each(old_cache, &builder, context_event, error, error_size);
             if (walk < 0) {
                 context_cache_free(cache);
                 goto out;
