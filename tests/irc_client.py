@@ -8,7 +8,7 @@ MIN_WAIT_S = 30.0
 
 
 class IRCClient:
-    def __init__(self, port, nick, agent=False, service=None):
+    def __init__(self, port, nick, agent=False, service=None, *, join=True):
         self.sock = socket.create_connection(("127.0.0.1", port), timeout=4.0)
         self.buf = bytearray()
         self.service = service
@@ -16,11 +16,12 @@ class IRCClient:
         registration = (
             b"CAP LS 302\r\nCAP REQ :batch server-time draft/chathistory" +
             role + b"\r\nCAP END\r\nNICK " + nick.encode() +
-            b"\r\nUSER " + nick.encode() + b" 0 * :PTY peer\r\nJOIN #lab\r\n"
+            b"\r\nUSER " + nick.encode() + b" 0 * :PTY peer\r\n" +
+            (b"JOIN #lab\r\n" if join else b"")
         )
         self.sock.sendall(registration)
         self.sock.setblocking(False)
-        self.wait(b" 366 " + nick.encode() + b" #lab ")
+        self.wait(b" 366 " + nick.encode() + b" #lab " if join else b" 001 " + nick.encode())
 
     def wait(self, needle, start=0, timeout=MIN_WAIT_S):
         end = time.monotonic() + timeout

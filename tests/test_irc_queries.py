@@ -124,8 +124,8 @@ class QueryFixture(unittest.TestCase):
                 except ProcessLookupError:
                     pass
 
-    def connect(self, nick):
-        peer = IRCClient(self.port, nick)
+    def connect(self, nick, *, join=True):
+        peer = IRCClient(self.port, nick, join=join)
         self.addCleanup(peer.close)
         self.peers.append(peer)
         return peer
@@ -625,7 +625,8 @@ class QueryTests(QueryFixture):
         self.term = self.start('-s', f'127.0.0.1:{self.port}', '-n', 'querybot',
                                '-o', 'queryop', '-r', 'lab')
         self.term.until(b'queryop@')
-        peer = self.connect('fresh-peer')
+        # Keep JOIN/MODE observations from starting an unrelated model turn.
+        peer = self.connect('fresh-peer', join=False)
         peer.sock.sendall(b'PRIVMSG queryop :first-durable-private-message\r\n')
         self.wait(lambda: bool(journal_paths(self.root / 'state')))
         self.wait(lambda: any(e['data'].get('text') == 'first-durable-private-message'
