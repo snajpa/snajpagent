@@ -141,8 +141,8 @@ grep -q -- '--no-client' "$root/help"
 grep -q "^usage: $SNAJPAGENT_TEST_NAME " "$root/help"
 
 # Short help stays short; long help invokes man directly and falls back on failure.
-grep -Fq -- '-m [PROVIDER/]MODEL[/EFFORT]' "$root/help"
-grep -Fq -- 'model from next turn onward (start or resume)' "$root/help"
+grep -Fq -- '-m [PROVIDER/]MODEL[/EFFORT][:CONTEXT]' "$root/help"
+grep -Fq -- 'model/context on start or resume' "$root/help"
 grep -Fq -- '--update-model-cache' "$root/help"
 ! grep -q -- '-M ' "$root/help"
 mkdir "$root/man-bin"
