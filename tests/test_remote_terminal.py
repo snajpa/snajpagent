@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-2.0-only
 """Native client-only remote-mode startup and PTY ownership regressions."""
+import errno
 import json
 import fcntl
 import hashlib
@@ -96,7 +97,22 @@ class RemoteProcess:
             # ceases to be a tty, so inspect modes while the client is live.
             os.close(self.slave)
             self.slave = None
-        assert self.process.wait(timeout=5) == expected, bytes(self.output)
+        deadline = time.monotonic() + 5
+        # Final writes and terminal drain need the PTY reader to keep consuming.
+        while self.process.poll() is None and time.monotonic() < deadline:
+            if not select.select([self.master], [], [], .05)[0]:
+                continue
+            try:
+                data = os.read(self.master, 65536)
+            except OSError as error:
+                if error.errno != errno.EIO:
+                    raise
+                break
+            if not data:
+                break
+            self.output.extend(data)
+        exit_status = self.process.wait(timeout=max(0, deadline - time.monotonic()))
+        assert exit_status == expected, bytes(self.output)
         if self.slave is not None:
             assert termios.tcgetattr(self.slave) == self.original
 
