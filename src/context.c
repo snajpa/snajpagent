@@ -3332,7 +3332,8 @@ context_source_complete(struct snag_context_capture *cache, struct snag_session 
         if (seq > next) {
             struct snag_journal_cursor cursor = {0};
             struct context_gap gap = {.control = control, .end = seq};
-            if (snag_session_history_cursor_before(session, next, &cursor, error, error_size) < 0)
+            if (next > 1u &&
+                snag_session_history_cursor_before(session, next, &cursor, error, error_size) < 0)
                 return -1;
             while (cursor.next_seq < seq && !gap.missing) {
                 if (snag_session_each_event_forward(session, &cursor, SNAG_JOURNAL_PAGE_BYTES,
