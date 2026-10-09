@@ -145,9 +145,9 @@ class ControlTests(unittest.TestCase):
         while time.monotonic() < deadline:
             child.read(.1)
             rows = '\n'.join(current_rows(child).values())
-            if 'session id ' + self.owner.sid[:8] in rows:
+            if 'session id ' + self.owner.sid[:8] in ' '.join(rows.split()):
                 break
-        self.assertIn('session id ' + self.owner.sid[:8], rows)
+        self.assertIn('session id ' + self.owner.sid[:8], ' '.join(rows.split()))
         child.write(b'i/fast off\r')
         deadline = time.monotonic() + 5
         while time.monotonic() < deadline:
@@ -176,7 +176,8 @@ class ControlTests(unittest.TestCase):
         deadline = time.monotonic() + 5
         while time.monotonic() < deadline:
             child.read(.02)
-            if 'session id ' + self.owner.sid[:8] in '\n'.join(current_rows(child).values()):
+            rows = '\n'.join(current_rows(child).values())
+            if 'session id ' + self.owner.sid[:8] in ' '.join(rows.split()):
                 break
         else:
             self.fail('initial retained output did not load')
