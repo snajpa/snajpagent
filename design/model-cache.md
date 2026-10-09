@@ -351,10 +351,14 @@ and a number selects an explicit token count that must fit the advertised
 maximum. Reserve, client percentage and
 proactive compaction stay derived from the selection.
 
-`/context N s|save` also writes `context_window_tokens` in the exact
-`[model-limit PROVIDER/MODEL]` section through the atomic config writer. Other
-settings and permissions survive the edit. Validation and saving precede the
-session selection event; a failed save retains the previous selection. The
+`/context N s|save` and `/context max s|save` also write `context_window_tokens`
+in the exact `[model-limit PROVIDER/MODEL]` section through the atomic config
+writer. Saving `max`, including `/model SELECTOR:max s|save`, uses the target
+model's source-bound advertised maximum before any input-budget deductions.
+The session keeps its `max` selection; configuration stores the resolved token
+count for future default selections. An unavailable maximum fails before
+configuration or session changes. Other settings and permissions survive the
+edit. Validation and saving precede the session selection event; a failed save retains the previous selection. The
 runtime configuration adopts the saved override, so `/context default` and
 new sessions use it immediately. A plain numeric selection remains local to
 the session.

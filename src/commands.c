@@ -27,7 +27,7 @@ const struct snag_term_command snag_commands[] = {
     {"/effort [LEVEL]", "show/set provider-defined effort (default means medium)"},
     {"/context", "show the context window, its reserve and compaction budget"},
     {"/context default", "use the configured or advertised working window"},
-    {"/context max", "use the advertised maximum context"},
+    {"/context max [s|save]", "use the cached maximum; optionally save its token count"},
     {"/context N [s|save]", "set N tokens; optionally save this model's config default"},
     {"/compact", "compact context at a safe request boundary"},
     {"/state", "session state including goal and its actions"},

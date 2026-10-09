@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Save a cached advertised maximum with `/model SELECTOR:max s|save` or
+  `/context max s|save`, storing its token count as the model's context default.
+
 - Resume compacted IRC turns whose input includes already admitted catch-up
   messages. Recover their verified journal sources and retain them on save;
   keep newly admitted catch-up out of later pending input batches. Rebuild a
@@ -27,7 +30,8 @@
 
 - Select a model and its context window with `provider/model/effort:context`,
   including startup, resume, numbered rows and enabled model tools. Numeric
-  selections with `save` write both defaults in one configuration replacement.
+  selections and cached maxima with `save` write both defaults in one
+  configuration replacement.
 
 - Restore mention highlighting for routed IRC messages in live and replayed chat.
 

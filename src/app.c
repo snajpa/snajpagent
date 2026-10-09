@@ -2239,19 +2239,25 @@ commit_model_selection(struct app_state *app, const struct snag_provider_config 
 {
     char error[256] = {0};
     bool current_turn = app->session.active_turn;
+    uint64_t context_tokens = 0u;
     int rc;
 
     if (choice) {
         struct snag_model_capacity capacity;
-        if (save && choice->mode != SNAG_CONTEXT_MODE_TOKENS)
-            return app_error(app, "saving a context default requires an explicit token count");
+        if (save && choice->mode == SNAG_CONTEXT_MODE_DEFAULT) {
+            return app_error(
+                app, "saving a context default requires an explicit token count or max");
+        }
         if (snag_app_context_preview(app, provider, model, choice, &capacity,
                 error, sizeof(error)) < 0)
             return app_error(app, error);
+        context_tokens = choice->mode == SNAG_CONTEXT_MODE_MAX
+                             ? capacity.max_context_window_tokens
+                             : choice->tokens;
     }
     if (save && choice) {
         if (snag_config_save_model_context(app->config, app->config_path,
-                app->config_allow_create, provider->name, model, effort, choice->tokens,
+                app->config_allow_create, provider->name, model, effort, context_tokens,
                 error, sizeof(error)) < 0)
             return app_error(app, error[0] ? error : "model settings could not be saved");
     } else if (save) {
@@ -3116,17 +3122,20 @@ change_context(struct app_state *app, const char *value, bool active)
         return app_error(app, error);
     }
     free(copy);
-    if (save && choice.mode != SNAG_CONTEXT_MODE_TOKENS)
-        return app_error(app, "saving a context default requires a token count: /context N s|save");
+    if (save && choice.mode == SNAG_CONTEXT_MODE_DEFAULT)
+        return app_error(app, "saving a context default requires a token count or max");
     /* Resolve the candidate before recording it: an impossible choice must not
      * reach the session log, and the operator sees the reconciled reserve and
      * compaction budget for the choice they made. */
     if (snag_app_context_preview(app, provider, app->session.default_model, &choice, &capacity,
             error, sizeof(error)) < 0)
         return app_error(app, error[0] ? error : "context capacity could not be resolved");
+    uint64_t context_tokens = choice.mode == SNAG_CONTEXT_MODE_MAX
+                                  ? capacity.max_context_window_tokens
+                                  : choice.tokens;
     if (save &&
         snag_config_save_context(app->config, app->config_path, app->config_allow_create,
-            provider->name, app->session.default_model, choice.tokens, error, sizeof(error)) < 0)
+            provider->name, app->session.default_model, context_tokens, error, sizeof(error)) < 0)
         return app_error(app, error[0] ? error : "context default could not be saved");
     if (record_context_selection(app, &choice, error, sizeof(error)) < 0)
         return app_error(app, error[0] ? error : "context selection could not be saved");

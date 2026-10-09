@@ -1010,13 +1010,104 @@ class ContextMeterTests(unittest.TestCase):
         self.assertEqual(len(self.provider.requests), 1)
         self.owner.finish(resumed, b'/exit')
 
+    def cache_maximum_context(self):
+        self.command('/model cache', 'cache updated:')
+        path = self.owner.root / 'state' / 'models.json'
+        cache = json.loads(path.read_text())
+        cache['providers'][0]['models'][0]['limits'].update({
+            'context_window_tokens': 272000, 'max_context_window_tokens': 872000,
+            'max_output_tokens': 16000, 'effective_context_window_percent': 95})
+        path.write_text(json.dumps(cache))
+        text = self.owner.config.read_text()
+        text += ('[model-limit fake/standard-model]\ncontext_window_tokens = 200000\n'
+                 'max_output_tokens = 16000\n')
+        self.owner.config.write_text(text)
+        self.configure()
+        return path
+
+    def test_model_max_save_uses_target_cache_and_persists_numeric_default(self):
+        self.cache_maximum_context()
+        self.provider.AGENTS = {**self.provider.AGENTS, 'standard-model': 'standardbot'}
+        self.owner.config.chmod(0o640)
+        peer = self.owner.view()
+        self.command('/model fake/standard-model/medium:max s', 'configuration saved:')
+        prompt = peer.until('state', lambda message:
+                            message['state']['prompt']['values'][1] == 'standard-model')
+        self.assertNotEqual(prompt['state']['prompt']['values'][5], '?')
+        self.command('/context', 'selected=872000')
+        saved = self.owner.config.read_text()
+        self.assertIn('context_window_tokens = 872000', saved)
+        self.assertNotIn('context_window_tokens = 200000', saved)
+        self.assertIn('max_output_tokens = 16000', saved)
+        self.assertIn('max_input_tokens = 100000', saved)
+        self.assertEqual(self.owner.config.stat().st_mode & 0o777, 0o640)
+        change = self.owner.wait_event('context_selection_changed')['data']
+        self.assertEqual((change['new_mode'], change['new_tokens']), ('max', 0))
+        os.write(self.owner.initial.master, b'cached maximum wire identity\r')
+        self.owner.wait_event('turn_completed')
+        request, = self.provider.requests
+        self.assertEqual(request['body']['model'], 'standard-model')
+        self.assertEqual(request['body']['reasoning']['effort'], 'medium')
+        self.owner.finish(self.owner.initial, b'/exit')
+        self.owner.status('stored')
+        for args in (['--resume', self.owner.sid], ['-N', 'saved-max-default']):
+            child = self.owner.start(args)
+            child.until(b'METER')
+            os.write(child.master, b'/context\r')
+            child.until(b'selected=872000')
+            os.write(child.master, b'/model\r')
+            child.until(b'standard-model')
+            self.owner.finish(child, b'/exit')
+        self.assertEqual(len(self.provider.requests), 1)
+
+    def test_numbered_model_max_save(self):
+        self.cache_maximum_context()
+        self.command('/model #1:max save', 'configuration saved:')
+        self.assertIn('context_window_tokens = 872000', self.owner.config.read_text())
+        self.command('/context default', 'selected=872000')
+        self.assertEqual(self.provider.requests, [])
+
+    def test_context_max_save(self):
+        self.cache_maximum_context()
+        self.command('/model fake/standard-model/medium', 'standard-model / medium')
+        self.command('/context 300000 s', 'configuration saved:')
+        self.command('/context max save', 'configuration saved:')
+        self.assertIn('context_window_tokens = 872000', self.owner.config.read_text())
+        self.command('/context default', 'selected=872000')
+        self.command('/context max s', 'configuration saved:')
+        self.assertEqual(self.provider.requests, [])
+
+    def test_max_save_failure_preserves_selection(self):
+        cache_path = self.cache_maximum_context()
+        before = self.owner.config.read_bytes()
+        moved = self.owner.config.with_suffix('.saved')
+        self.owner.config.rename(moved)
+        self.owner.config.mkdir()
+        try:
+            self.command('/model fake/standard-model/high:max save', 'regular file')
+            self.assertEqual(moved.read_bytes(), before)
+        finally:
+            self.owner.config.rmdir()
+            moved.rename(self.owner.config)
+        cache = json.loads(cache_path.read_text())
+        cache['providers'][0]['base_url'] = 'http://127.0.0.1:1'
+        cache_path.write_text(json.dumps(cache))
+        self.command('/model fake/standard-model/high:max save', 'publishes no maximum context')
+        self.assertEqual(self.owner.config.read_bytes(), before)
+        self.assertFalse(any(event['type'] in ('model_selection_changed',
+                                              'context_selection_changed')
+                             for event in self.owner.events()))
+        self.assertEqual(self.provider.requests, [])
+
     def test_invalid_model_context_preserves_model_and_config(self):
         before = self.owner.config.read_bytes()
         for selector in ('fake/two-model/high:0', 'fake/two-model/high:-1',
                          'fake/two-model/high:4000000001'):
             self.command('/model ' + selector + ' save', '4000000000')
         self.command('/model fake/host-model/high:9000 save', 'output reservation')
-        self.command('/model fake/host-model/high:max save', 'explicit token count')
+        self.command('/model fake/host-model/high:max save', 'publishes no maximum context')
+        self.command('/context max save', 'publishes no maximum context')
+        self.command('/model fake/host-model/high:default save', 'explicit token count')
         self.assertEqual(self.owner.config.read_bytes(), before)
         self.assertFalse(any(event['type'] in ('model_selection_changed',
                                               'context_selection_changed')
