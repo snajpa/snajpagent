@@ -4326,7 +4326,8 @@ def test_context_configuration_save():
         end = child.send_wait_idle(b"/context 500000\r", b"selected=500000", start=end)
         assert config.read_bytes() == original
         for command, value in ((b"/context 500000 s\r", 500000),
-                               (b"/context 600000 save\r", 600000)):
+                               (b"/context 600000 save\r", 600000),
+                               (b"/context max save\r", 872000)):
             end = child.send_wait_idle(command, b"configuration saved:", start=end)
             text = config.read_text()
             assert f"context_window_tokens = {value}\n" in text, text
@@ -4336,23 +4337,22 @@ def test_context_configuration_save():
         for command, message in (
                 (b"/context 900000 save\r", b"exceeds the advertised maximum"),
                 (b"/context 0 s\r", b"between 1 and 4000000000"),
-                (b"/context 500000 save extra\r", b"context accepts"),
-                (b"/context max save\r", b"requires a token count")):
+                (b"/context 500000 save extra\r", b"context accepts")):
             end = child.send_wait_idle(command, message, start=end)
             assert config.read_bytes() == saved
         end = child.send_wait_idle(b"/context 500000\r", b"selected=500000", start=end)
         assert config.read_bytes() == saved
-        end = child.send_wait_idle(b"/context default\r", b"selected=600000", start=end)
+        end = child.send_wait_idle(b"/context default\r", b"selected=872000", start=end)
         # A failed write must leave both the session choice and config intact.
         config.unlink()
         config.mkdir()
         end = child.send_wait_idle(b"/context 700000 save\r", b"configuration", start=end)
         config.rmdir()
         config.write_bytes(saved)
-        end = child.send_wait_idle(b"/context\r", b"selected=600000", start=end)
+        end = child.send_wait_idle(b"/context\r", b"selected=872000", start=end)
         child.exit_cleanly(end)
         with Child(["--config", str(config), "--no-color"], PROMPT.rstrip()) as fresh:
-            end = fresh.send_wait_idle(b"/context\r", b"selected=600000")
+            end = fresh.send_wait_idle(b"/context\r", b"selected=872000")
             fresh.exit_cleanly(end)
     finally:
         child.kill()
