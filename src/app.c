@@ -2999,7 +2999,7 @@ change_effort(struct app_state *app, const char *value, bool active)
         return -1;
     }
     free(copy);
-    if (active) app->model_switch_requested = true;
+    if (active && app->session.turn_fallback_active) app->model_switch_requested = true;
     return app_textf(app, SNAG_UI_HOST, "effort for %s: %s (until changed)",
         active ? "next response in this turn" : "next turn", app->session.default_effort);
 }

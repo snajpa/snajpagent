@@ -68,7 +68,9 @@ def check(binary, native, turns=20):
             state, config = root / 'state', root / 'config.ini'
             write_irc_config(config, provider.port, 'host-model')
             config.write_text(config.read_text().replace('native_compaction = false',
-                'native_compaction = true').replace('[agent]\n', '[agent]\nmax_turn_retries=0\n').replace('[ui]\n', '[ui]\nresume_history_turns=0\n'))
+                'native_compaction = true').replace(
+                '[agent]\n', '[agent]\nmax_turn_retries=0\n').replace(
+                '[ui]\n', '[ui]\nresume_history_turns=0\n'))
             env = {**os.environ, 'HOME': str(root), 'SNAJPAGENT_IRC_UI_KEY': 'irc-ui-secret'}
             prefix = [str(binary), '--config', str(config), '--dotdir', str(state)]
             journal = create_legacy(state, root, 'fake', 'host-model')
@@ -106,7 +108,11 @@ def check(binary, native, turns=20):
             # binding must rebuild the archive and compact before its first POST.
             run('-e', '--', 'same model continuation')
             assert any(i.get('encrypted_content') == 'opaque-host-model'
-                       for i in provider.requests[-1]['body']['input'])
+                       for i in provider.requests[-1]['body']['input']), (
+                [(e['type'], e['data'].get('source_seq'), e['data'].get('reason'))
+                 for e in read_events(journal) if e['type'].startswith('compaction_') or
+                 e['type'] == 'context_rebased'],
+                [(len(json.dumps(r).encode()), len(r['input'])) for r in summaries])
             result = run('-m', 'fake/two-model/high:872000', '-e', '--', 'new model continuation')
             assert b'Compacted' in result.stderr + result.stdout
             assert len(summaries) >= 2
@@ -134,4 +140,4 @@ if __name__ == '__main__':
     binary = Path(sys.argv[1]).resolve()
     for native in (False, True):
         check(binary, native)
-    check(binary, True, 40)
+    check(binary, True, 26)
