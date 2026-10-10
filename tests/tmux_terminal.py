@@ -183,8 +183,8 @@ class FakeResponses:
                                        "The provider rejected the preceding", "The preceding response",
                                        "Pure durable-turn continuation after process resume")):
                     continue  # Host context/continuation is not new operator input.
-                if content.startswith("[IRC endpoint=") and " id=" in content:
-                    continue  # Supplemental durable event, not a new scheduler turn.
+                # Full IRC projections can be the scheduler's input; only
+                # legacy references below need a separately retained payload.
                 ids = re.findall(r"\[IRC update id=([^ ]+)", content)
                 if ids:
                     # Resolve the production scheduler's references to its
@@ -4040,8 +4040,9 @@ def validate_irc_events(dotdir):
         originals = [event for event in messages if marker in event["data"]["text"]]
         assert len(originals) == 1 and originals[0]["data"]["input"] and originals[0]["data"]["op"]
         identity = f"{originals[0]['data']['stream']}:{originals[0]['data']['sequence']}"
-        matching = [event for event in turns if f"id={identity} " in event["data"]["text"]]
-        if len(matching) != 1:
+        pattern = re.escape(f"id={identity}") + r"(?=[ \]])"
+        count = sum(len(re.findall(pattern, event["data"]["text"])) for event in turns)
+        if count != 1:
             raise AssertionError(f"operator input was not admitted once: {marker!r}")
     failures = event_list(events, "turn_failed")
     if failures:
@@ -9858,7 +9859,34 @@ def run_tools_only(binary, root):
         provider.close()
 
 
+def check_fake_irc_input():
+    identity = "f" * 32
+    payloads = [f"[IRC endpoint=127.0.0.1:1 id={identity}:{i}]\noperator message {i}"
+                for i in (4, 5)]
+    ordinary = {"role": "user", "content": "local operator input"}
+    projected = [{"role": "user", "content": text} for text in payloads]
+    batch = "\n".join(payloads)
+    assert FakeResponses.latest_user({"input": []}) == ""
+    assert FakeResponses.latest_user({"input": [ordinary, projected[0]]}) == payloads[0]
+    assert FakeResponses.latest_user({"input": [ordinary, {"role": "user", "content": batch}]}) == batch
+    assert FakeResponses.latest_user({"input": [*projected, ordinary]}) == ordinary["content"]
+    for context in ("[IRC room snapshot; @ marks a channel operator]\nroom status",
+                    "[snajpagent host continuation — not a new user message]\nstatus",
+                    "Pure durable-turn continuation after process resume"):
+        assert FakeResponses.latest_user({"input": [projected[0],
+            {"role": "user", "content": context}]}) == payloads[0]
+    recovery = "[snajpagent host continuation — not a new user message]\nrecover prior turn"
+    assert FakeResponses.latest_user({"input": [projected[0],
+        {"role": "user", "content": recovery}]}) == "recover"
+
+    references = "\n".join(f"[IRC update id={identity}:{i} endpoint=127.0.0.1:1]" for i in (4, 5))
+    unrelated = {"role": "user", "content": payloads[0].replace(":4]", ":40]")}
+    assert FakeResponses.latest_user({"input": [*projected, unrelated,
+        {"role": "user", "content": references}]}) == batch
+
+
 def run_irc_chat_case(binary, root):
+    check_fake_irc_input()
     root.mkdir(mode=0o700, parents=True)
     provider = FakeResponses()
     irc_port = free_loopback_port()
