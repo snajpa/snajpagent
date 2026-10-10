@@ -8643,7 +8643,8 @@ def run_incremental_history_case(binary, root):
         return read_events(t.dotdir)[0].parent.name
 
     def records(t):
-        return event_list(maybe_events(t.dotdir)[1], "irc_event")
+        return [e for e in event_list(maybe_events(t.dotdir)[1], "irc_event")
+                if e["data"].get("routing", {}).get("direction", "incoming") == "incoming"]
 
     def wait_record(t, text, count=1):
         wait_event_count(t.dotdir, "session_created", 1)
@@ -8653,16 +8654,31 @@ def run_incremental_history_case(binary, root):
             time.sleep(0.02)
         return [e for e in records(t) if e["data"]["text"] == text]
 
+    def payload_count(request, text):
+        # Supplemental host context can repeat the current full projection.
+        return sum(str(item.get("content", "")).count(text) for item in request.get("input", [])
+                   if item.get("role") == "user" and not str(item.get("content", "")).startswith(
+                       "[snajpagent host continuation — not a new user message]\n"))
+
     def observed(text, count=1):
         deadline = time.monotonic() + 10
         while True:
             requests = [r for r in captured if r.get("model") == "one-model"]
             # Count message payloads, not older requests legitimately retaining context.
-            if any(sum(text in str(item.get("content", "")) for item in r.get("input", [])) == count
-                   for r in requests):
+            if any(payload_count(r, text) == count for r in requests):
                 return
             assert time.monotonic() < deadline, (text, requests[-1:] , terminals['client'].capture())
             time.sleep(0.02)
+
+    payload = "[IRC endpoint=127.0.0.1:1 id=fixture:4]\ncount fixture"
+    primary = {"role": "user", "content": payload}
+    supplemental = {"role": "user", "content":
+        "[snajpagent host continuation — not a new user message]\n" + payload}
+    assert payload_count({"input": [supplemental]}, "count fixture") == 0
+    assert payload_count({"input": [supplemental, primary]}, "count fixture") == 1
+    assert payload_count({"input": [primary, primary]}, "count fixture") == 2
+    assert payload_count({"input": [{"role": "user", "content": payload + payload}]},
+                         "count fixture") == 2
 
     try:
         host = launch("host")
@@ -8693,7 +8709,7 @@ def run_incremental_history_case(binary, root):
         wait_irc_idle([host, client])
         assert len(wait_record(client, "one original conversation marker")) == 1
         assert client.capture().count("one original conversation marker") == 1
-        assert all(sum("one original conversation marker" in str(i.get("content", "")) for i in r.get("input", [])) <= 1
+        assert all(payload_count(r, "one original conversation marker") <= 1
                    for r in captured if r.get("model") == "one-model")
         client.submit_wait("/disconnect", "outgoing connections removed")
         host.submit("identical legitimate message")
