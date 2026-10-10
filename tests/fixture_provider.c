@@ -642,6 +642,11 @@ fixture_response(const char *prompt, const json_t *steering, const json_t *reque
             return add_goal_call(graph, cycle, false, "complete", NULL);
         return final_answer(&out, "msg_fixture_goal_done", "goal done");
     }
+    if (strcmp(prompt, "rewrite unfinished goal") == 0) {
+        if (cycle == 1u)
+            return add_goal_call(graph, cycle, false, "rewrite", "expanded unfinished goal");
+        return final_answer(&out, "msg_fixture_inactive_rewritten", "unfinished goal rewritten");
+    }
     if (strcmp(prompt, "please create a persistent goal") == 0) {
         if (cycle == 1u) return add_goal_call(graph, cycle, true, NULL, "model-created goal");
         return final_answer(&out, "msg_fixture_model_goal_checkpoint", "model-created checkpoint");

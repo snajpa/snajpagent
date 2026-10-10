@@ -1390,7 +1390,7 @@ apply_event(struct snag_session *session, const char *type, const json_t *data, 
             const char *new_goal_id = snag_json_string(data, "new_goal_id");
             if (!snag_json_exact_keys(data, "actor goal_id new_goal_id prompt") ||
                 (!model && (!actor || strcmp(actor, "user"))) ||
-                (model && (status != SNAG_GOAL_ACTIVE || session->goal_locked)) || !new_goal_id ||
+                (model && session->goal_locked) || !new_goal_id ||
                 !snag_hex_is_lower(new_goal_id, SNAG_ID_HEX_LEN) ||
                 strcmp(new_goal_id, session->id) == 0 || strcmp(new_goal_id, goal_id) == 0 ||
                 !snag_text_valid(prompt, 1u, SNAG_MAX_GOAL_PROMPT) || snag_text_blank(prompt) ||

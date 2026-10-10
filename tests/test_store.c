@@ -1250,6 +1250,75 @@ test_goal_wait_channel(struct snag_store *store, const char *cwd)
 }
 
 static void
+test_inactive_goal_replacement(struct snag_store *store, const char *cwd)
+{
+    const char *goal = "13131313131313131313131313131313";
+    const char *replacement = "14141414141414141414141414141414";
+
+    for (unsigned blocked = 0u; blocked < 2u; ++blocked) {
+        struct snag_session session;
+        char error[256];
+        char id[SNAG_ID_HEX_LEN + 1u];
+        enum snag_goal_status status = blocked ? SNAG_GOAL_BLOCKED : SNAG_GOAL_PAUSED;
+        snag_session_init(&session);
+        assert(!snag_session_create(
+            store, &session, cwd, "default", "model", "high", error, sizeof(error)));
+        memcpy(id, session.id, sizeof(id));
+        commit_event(&session, "goal_started", goal_started_data(goal, "original objective"));
+        if (blocked) {
+            commit_event(&session, "goal_blocked",
+                json_pack("{s:s,s:s,s:s,s:s}", "goal_id", goal, "actor", "model", "reason",
+                    "reply missing", "wait_for", "irc: team/secretary"));
+        } else {
+            commit_event(&session, "goal_paused",
+                goal_reason_data(goal, NULL, "reason", "user"));
+        }
+
+        /* A replacement cannot bypass the operator's wording lock. */
+        commit_event(&session, "goal_lock_changed", goal_lock_data(goal, true));
+        int64_t end = session.log_end;
+        assert(snag_session_commit(&session, "goal_replaced",
+                   goal_replaced_data(goal, replacement, "model", "expanded objective"), NULL,
+                   error, sizeof(error)) < 0);
+        assert(session.log_end == end && session.goal_status == status && session.goal_locked);
+        assert(!strcmp(session.goal_id, goal));
+        assert(!strcmp(session.goal_prompt, "original objective"));
+        commit_event(&session, "goal_lock_changed", goal_lock_data(goal, false));
+
+        /* Editing an unfinished objective preserves its pause/block and lineage. */
+        commit_event(&session, "goal_replaced",
+            goal_replaced_data(goal, replacement, "model", "expanded objective"));
+        assert(session.goal_status == status && !session.goal_locked);
+        assert(!strcmp(session.goal_id, replacement));
+        assert(!strcmp(session.goal_parent_id, goal));
+        assert(!strcmp(session.goal_prompt, "expanded objective"));
+        assert(session.goal_revision == 1u && session.goal_turn_count == 0u);
+        if (blocked) {
+            assert(!strcmp(session.goal_blocker, "reply missing"));
+            assert(!strcmp(snag_goal_wait_for(&session), "irc: team/secretary"));
+        } else {
+            assert(!session.goal_blocker);
+        }
+
+        /* Both journal replay and checkpoint restoration retain the stopped state. */
+        snag_session_close(&session);
+        assert(!snag_session_open(store, &session, id, error, sizeof(error)));
+        assert(session.goal_status == status && !strcmp(session.goal_id, replacement));
+        assert(!strcmp(session.goal_parent_id, goal));
+        assert(!snag_session_checkpoint(&session, error, sizeof(error)));
+        snag_session_close(&session);
+        assert(!snag_session_open(store, &session, id, error, sizeof(error)));
+        assert(session.checkpoint_seq && session.goal_status == status);
+        assert(!strcmp(session.goal_prompt, "expanded objective"));
+        if (blocked) {
+            assert(!strcmp(session.goal_blocker, "reply missing"));
+            assert(!strcmp(snag_goal_wait_for(&session), "irc: team/secretary"));
+        }
+        snag_session_close(&session);
+    }
+}
+
+static void
 test_retry_and_service_tier(struct snag_store *store, const char *cwd)
 {
     struct snag_session session, restored;
@@ -3117,6 +3186,7 @@ main(int argc, char **argv)
     test_upload_staging_lifecycle(&store, cwd);
     test_retry_and_service_tier(&store, cwd);
     test_goal_wait_channel(&store, cwd);
+    test_inactive_goal_replacement(&store, cwd);
     test_irc_conversation_checkpoint(&store, cwd);
     test_checkpoint_optional_download_queue(cwd);
     test_one_file_checkpoint(&store, cwd);
