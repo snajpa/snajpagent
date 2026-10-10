@@ -263,6 +263,9 @@ struct snag_voice_rtc;
 int snag_app_voice_fixture_capture(
     struct app_state *, struct snag_audio_device *, struct snag_voice_rtc *);
 int snag_app_voice_fixture_checkpoint(struct app_state *);
+struct snag_voice_socket;
+int snag_app_voice_fixture_frames(
+    struct app_state *, struct snag_voice_socket *, const json_t *);
 #endif
 bool snag_app_shutdown(struct app_state *);
 int snag_app_request_ready(void *opaque);

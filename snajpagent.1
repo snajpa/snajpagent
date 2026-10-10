@@ -3370,7 +3370,10 @@ result or asks for confirmation. While voice is on, acknowledged host/help text,
 errors, warnings and logical prompt changes enter its public history. UI-local
 command feedback follows the same session-owner history path. Registered secrets
 are filtered; terminal frames and clock/spinner redraws are not copied. Both voice
-histories consume the retained observations, including after reconnection. This
+histories consume the retained observations, including after reconnection.
+Native context updates, spoken output and delegation replies are sent in ordered
+UTF-8-safe chunks of at most 500 bytes per append. Long updates retain their
+complete text, channel and delegation identity while the outgoing queue drains. This
 path does not reconstruct UI output from before voice activation.
 Voice remains serviceable while a confirmation is open. Existing permissions
 still apply, including keyboard-only consent where explicitly required.

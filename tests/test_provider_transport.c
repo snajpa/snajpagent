@@ -7572,6 +7572,138 @@ websocket_supported(void)
 }
 
 static void
+context_frame_server(int listener, const json_t *events)
+{
+    alarm(15u);
+    int fd = accept(listener, NULL, NULL);
+    if (fd < 0) server_fail("Context frame fixture accept failed");
+    struct http_request request;
+    read_request(fd, &request);
+    free(request.body);
+    write_all_or_die(fd,
+        "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\n"
+        "Connection: Upgrade\r\nSec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\n\r\n",
+        strlen("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\n"
+               "Connection: Upgrade\r\n"
+               "Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\n\r\n"));
+    for (size_t i = 0u; i < json_array_size(events); ++i) {
+        json_t *expected = json_array_get(events, i);
+        bool context = strcmp(snag_json_string(expected, "type"), "conversation.item.create");
+        json_t *part = json_array_get(json_object_get(expected, "content"), 0u);
+        const char *text = snag_json_string(part, "text");
+        size_t offset = 0u, length = strlen(text);
+        do {
+            unsigned char header[2], mask[4], extended[8];
+            ws_read_full(fd, header, 2u);
+            if (header[0] != 0x81u || !(header[1] & 0x80u))
+                server_fail("Context fixture expected one final masked text frame");
+            uint64_t bytes = header[1] & 127u;
+            if (bytes >= 126u) {
+                size_t count = bytes == 126u ? 2u : 8u;
+                bytes = 0u;
+                ws_read_full(fd, extended, count);
+                for (size_t j = 0u; j < count; ++j) bytes = (bytes << 8u) | extended[j];
+            }
+            if (bytes >= 32768u) server_fail("Oversized context fixture JSON");
+            char payload[32768];
+            ws_read_full(fd, mask, 4u);
+            ws_read_full(fd, payload, (size_t)bytes);
+            for (size_t j = 0u; j < bytes; ++j) payload[j] ^= mask[j % 4u];
+            json_t *event = json_loadb(payload, (size_t)bytes, JSON_REJECT_DUPLICATES, NULL);
+            if (!event) server_fail("Context fixture invalid JSON/UTF-8");
+            json_t *content = json_array_get(json_object_get(event, "content"), 0u);
+            const char *chunk = snag_json_string(content, "text");
+            size_t size = chunk ? strlen(chunk) : 32768u;
+            if ((context && size > 500u) || size > length - offset ||
+                (offset < length && !size) || memcmp(text + offset, chunk, size))
+                server_fail("Context chunks duplicated, omitted or exceeded provider bound");
+            json_t *copy = json_deep_copy(expected);
+            if (json_object_set_new(json_array_get(json_object_get(copy, "content"), 0u), "text",
+                    json_string(chunk)) < 0 || !json_equal(copy, event))
+                server_fail("Context chunk changed correlation, channel or ordering");
+            json_decref(copy);
+            json_decref(event);
+            offset += size;
+        } while (offset < length);
+    }
+    close(fd);
+    _Exit(0);
+}
+
+static void
+test_voice_context_frames(void)
+{
+    if (!websocket_supported()) {
+        fprintf(stderr, "context frames skipped: linked curl lacks WebSocket support\n");
+        return;
+    }
+    json_t *events = json_array();
+    const size_t lengths[] = {0u, 500u, 501u, 10201u, 4005u, 2001u};
+    for (size_t i = 0u; i < sizeof(lengths) / sizeof(lengths[0]); ++i) {
+        char *text = calloc(lengths[i] + 1u, 1u);
+        assert(text);
+        if (i == 4u) {
+            memcpy(text, "padxx", 5u);
+            for (size_t j = 5u; j < lengths[i]; j += 8u)
+                memcpy(text + j, "a\\\"\n\xf0\x9f\x98\x80", 8u);
+        } else
+            memset(text, 'a' + (int)i, lengths[i]);
+        json_t *event = json_pack("{s:s,s:s,s:[{s:s,s:s}]}", "type",
+            i == 5u ? "conversation.item.create"
+                    : i % 2u ? "delegation.context.append" : "session.context.append",
+            "channel", i % 2u ? "speakable" : "commentary", "content", "type", "input_text",
+            "text", text);
+        if (i % 2u && i != 5u)
+            assert(json_object_set_new(event, "delegation_item_id", json_string("call-fixture")) ==
+                   0);
+        assert(json_array_append_new(events, event) == 0);
+        free(text);
+    }
+    struct local_server server = {.fd = socket(AF_INET, SOCK_STREAM, 0)};
+    assert(server.fd >= 0);
+    struct sockaddr_in address = {.sin_family = AF_INET};
+    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    socklen_t size = sizeof(address);
+    assert(bind(server.fd, (struct sockaddr *)&address, sizeof(address)) == 0);
+    assert(listen(server.fd, 1) == 0);
+    assert(getsockname(server.fd, (struct sockaddr *)&address, &size) == 0);
+    server.pid = fork();
+    assert(server.pid >= 0);
+    if (!server.pid) context_frame_server(server.fd, events);
+    close(server.fd);
+    server.fd = -1;
+    struct snag_provider_config provider;
+    snag_config_provider_init(&provider, "default");
+    provider.auth = SNAG_AUTH_API_KEY;
+    snprintf(provider.base_url, sizeof(provider.base_url), "http://127.0.0.1:%u/",
+        ntohs(address.sin_port));
+    struct snag_credential credential = {0};
+    strcpy(credential.value, "fixture-context-key");
+    credential.len = strlen(credential.value);
+    struct snag_voice_socket *socket = NULL;
+    char error[256];
+    assert(snag_provider_voice_open(&provider, &credential, "fixture", NULL, NULL, &socket,
+               error, sizeof(error)) == 0);
+    struct app_state app = {0};
+    struct snag_config config;
+    snag_config_init(&config);
+    app.config = &config;
+    snag_session_init(&app.session);
+    snag_store_init(&app.store);
+    assert(snag_ui_init(&app.ui) == 0);
+    json_t *notices = json_array();
+    assert(snag_app_voice_fixture(&app, notices, false) == 0);
+    json_decref(notices);
+    assert(snag_app_voice_fixture_frames(&app, socket, events) == 0);
+    snag_provider_voice_close(socket);
+    stop_server(&server);
+    snag_app_voice_close(&app);
+    snag_ui_free(&app.ui);
+    snag_config_free(&config);
+    json_decref(events);
+}
+
+static void
 test_voice_socket(void)
 {
     struct snag_provider_config provider;
@@ -11176,6 +11308,7 @@ main(int argc, char **argv)
     test_voice_session_controls();
     test_voice_owner_mute();
     test_voice_output_tool();
+    test_voice_context_frames();
     test_voice_socket();
     test_audio_transport();
     test_provider_auth();

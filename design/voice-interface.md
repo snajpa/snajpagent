@@ -166,6 +166,15 @@ fragmenting it, so larger descriptions continue without repeated disk reads or
 lost remainder bytes. Existing voice snapshots remain separate from this live
 cursor while conversation retention is developed.
 
+Native session and delegation context appends drain as individual frames of at
+most 500 UTF-8 bytes, matching the upstream client's conservative framing bound.
+The connection owner retains one original queued message and one active fragment.
+Each fragment preserves the append channel and delegation identity, and advances
+only after its complete frame is sent. Existing send progress renews the stall
+deadline. Off and connection replacement discard the pending remainder, while
+accepted coding work remains in the canonical queue. Public Realtime messages
+retain their existing framing.
+
 Initial and refreshed textual context snapshots use the same configured-secret
 filter as recorded voice events. Filtering operates on an outbound copy; the
 working session's prompt, queue contents and authority records stay unchanged.

@@ -310,8 +310,10 @@ struct app_voice {
     struct snag_journal_cursor observation_cursor;
     size_t observation_offset;
     size_t notice_read, notice_count, notice_bytes, notice_size[VOICE_NOTICES];
-    struct snag_buf send[8], receive;
-    bool send_audio[8];
+    struct snag_buf send[8], receive, context_frame;
+    bool send_audio[8], send_context[8];
+    json_t *context_event, *context_text;
+    size_t context_offset, context_end;
     size_t send_read, send_count, send_bytes, send_offset;
     uint64_t send_deadline, start_ms, drained_ms, expires_ms;
     const struct snag_ui *ui;
@@ -1033,6 +1035,7 @@ snag_app_voice_fixture(struct app_state *app, const json_t *notices, bool done)
     }
     for (size_t i = 0; i < 8u; ++i) snag_buf_init(&v->send[i], VOICE_MESSAGE);
     snag_buf_init(&v->receive, VOICE_MESSAGE);
+    snag_buf_init(&v->context_frame, VOICE_MESSAGE);
     v->announced = true;
     app->voice = v;
     observation_start(v, &app->session);
@@ -1109,6 +1112,8 @@ owner_send(void *opaque, const json_t *event)
     const char *type = snag_json_string(event, "type");
     v->send_audio[(v->send_read + v->send_count) % 8u] =
         type && !strcmp(type, "input_audio_buffer.append");
+    v->send_context[(v->send_read + v->send_count) % 8u] =
+        type && snag_string_in(type, "session.context.append delegation.context.append");
     ++v->send_count;
     v->send_bytes += out->len;
     return 0;
@@ -1162,6 +1167,45 @@ owner_controls(void *opaque, unsigned int timeout)
     return atomic_load(&v->stop) ? 2 : 0;
 }
 static int
+owner_context_frame(struct app_voice *v, const struct snag_buf *source)
+{
+    if (v->context_frame.len) return 0;
+    if (!v->context_event) {
+        v->context_event = snag_json_load_strict(
+            source->data, source->len, VOICE_MESSAGE, v->error, sizeof(v->error));
+        json_t *content = json_object_get(v->context_event, "content");
+        if (json_array_size(content) != 1u) return -1;
+        v->context_text = json_incref(json_object_get(json_array_get(content, 0u), "text"));
+        if (!json_is_string(v->context_text)) return -1;
+    }
+    const char *text = json_string_value(v->context_text);
+    size_t length = json_string_length(v->context_text);
+    /* Codex bounds each context append at 500 tokens. Its client uses a
+     * conservative 500-byte bound, preserving UTF-8 character boundaries. */
+    size_t end = v->context_offset + 500u;
+    if (end > length) end = length;
+    while (end < length && ((unsigned char)text[end] & 0xc0u) == 0x80u) --end;
+    json_t *part = json_array_get(json_object_get(v->context_event, "content"), 0u);
+    if (json_object_set_new(part, "text",
+            json_stringn(text + v->context_offset, end - v->context_offset)) < 0 ||
+        snag_json_canonical(v->context_event, &v->context_frame) < 0)
+        return -1;
+    v->context_end = end;
+    return 0;
+}
+
+static void
+owner_context_clear(struct app_voice *v)
+{
+    json_decref(v->context_event);
+    json_decref(v->context_text);
+    v->context_event = v->context_text = NULL;
+    v->context_offset = v->context_end = 0u;
+    snag_secret_clear(v->context_frame.data, v->context_frame.len);
+    snag_buf_reset(&v->context_frame);
+}
+
+static int
 owner_flush(struct app_voice *v)
 {
     if (!v->send_count || owner_controls(v, 0u)) return 0;
@@ -1180,7 +1224,12 @@ owner_flush(struct app_voice *v)
         v->retryable = true;
         return SNAG_PROVIDER_VOICE_RETRY;
     }
-    struct snag_buf *out = &v->send[v->send_read];
+    struct snag_buf *source = &v->send[v->send_read];
+    struct snag_buf *out = source;
+    if (v->send_context[v->send_read]) {
+        if (owner_context_frame(v, source) < 0) return -1;
+        out = &v->context_frame;
+    }
     size_t before = v->send_offset;
     int rc = snag_provider_voice_send(
         v->socket, out->data, out->len, &v->send_offset, v->error, sizeof(v->error));
@@ -1190,9 +1239,18 @@ owner_flush(struct app_voice *v)
     }
     if (v->send_offset != before) v->send_deadline = snag_monotonic_ms() + 2000u;
     if (v->send_offset == out->len) {
-        v->send_bytes -= out->len;
-        snag_secret_clear(out->data, out->len);
-        snag_buf_reset(out);
+        v->send_offset = 0u;
+        if (v->send_context[v->send_read]) {
+            v->context_offset = v->context_end;
+            snag_secret_clear(out->data, out->len);
+            snag_buf_reset(out);
+            if (v->context_offset < json_string_length(v->context_text)) return 0;
+            owner_context_clear(v);
+            v->send_context[v->send_read] = false;
+        }
+        v->send_bytes -= source->len;
+        snag_secret_clear(source->data, source->len);
+        snag_buf_reset(source);
         v->send_read = (v->send_read + 1u) % 8u;
         --v->send_count;
         v->send_offset = 0;
@@ -1269,6 +1327,29 @@ owner_mute(struct app_voice *v)
 }
 
 #ifdef SNAJPAGENT_TEST_TRANSPORT_ENDPOINTS
+int
+snag_app_voice_fixture_frames(
+    struct app_state *app, struct snag_voice_socket *socket, const json_t *events)
+{
+    struct app_voice *v = app->voice;
+    if (!v || v->thread_started || v->socket) return -1;
+    v->socket = socket;
+    int rc = 0;
+    for (size_t i = 0u; !rc && i < json_array_size(events); ++i)
+        rc = owner_send(v, json_array_get(events, i));
+    uint64_t deadline = snag_monotonic_ms() + 10000u;
+    while (!rc && v->send_count) {
+        if (snag_monotonic_ms() >= deadline) {
+            rc = -1;
+            break;
+        }
+        rc = owner_flush(v);
+        if (!rc && v->send_count) rc = snag_provider_voice_wait(socket, true, 10u);
+    }
+    v->socket = NULL;
+    return rc;
+}
+
 int
 snag_app_voice_fixture_checkpoint(struct app_state *app)
 {
@@ -1679,7 +1760,9 @@ connection_reset(struct app_state *app)
         snag_secret_clear(v->send[i].data, v->send[i].len);
         snag_buf_reset(&v->send[i]);
         v->send_audio[i] = false;
+        v->send_context[i] = false;
     }
+    owner_context_clear(v);
     snag_secret_clear(v->receive.data, v->receive.len);
     snag_buf_reset(&v->receive);
     v->send_read = v->send_count = v->send_bytes = v->send_offset = 0u;
@@ -1790,6 +1873,8 @@ snag_app_voice_close(struct app_state *app)
         snag_secret_clear(v->send[i].data, v->send[i].len);
         snag_buf_free(&v->send[i]);
     }
+    owner_context_clear(v);
+    snag_buf_free(&v->context_frame);
     snag_secret_clear(v->receive.data, v->receive.len);
     snag_buf_free(&v->receive);
     for (size_t i = 0; i < SNAG_VOICE_HANDOFFS; ++i) {
@@ -4162,6 +4247,7 @@ voice_start(struct app_state *app, bool muted, uint64_t attachment)
     v->attachment = attachment;
     for (size_t i = 0; i < 8u; ++i) snag_buf_init(&v->send[i], VOICE_MESSAGE);
     snag_buf_init(&v->receive, VOICE_MESSAGE);
+    snag_buf_init(&v->context_frame, VOICE_MESSAGE);
     app->voice = v;
     if (snag_random_id(v->connection) < 0 ||
         snag_secret_set_build(&v->secrets, app->config, NULL, error, sizeof(error)) < 0)

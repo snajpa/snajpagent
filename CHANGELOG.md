@@ -8,6 +8,10 @@
   without mandatory PRIVMSG acknowledgement loops. Preserve channel reply,
   recipient, connection and delivery-state checks.
 
+- Split native voice context updates into ordered UTF-8-safe frames within the
+  provider's append limit. Long progress updates and delegation replies keep
+  their text and correlation without overflowing the outgoing message queue.
+
 - Save default, maximum and numeric context selections through one capacity
   resolution, using the selected total window for model/context commands and
   reports. Unknown windows retain the prior settings.
