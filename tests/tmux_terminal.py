@@ -5491,7 +5491,7 @@ def run_runtime_networking_cases(binary, root, provider, environment):
                 assert not event_list(log, "turn_completed")
                 release.set()
                 deadline = time.monotonic() + 10.0
-                expected = 3
+                expected = 4 if view == "burst" else 3
                 while len(requests) < expected:
                     assert time.monotonic() < deadline, (len(requests), terminal.capture())
                     time.sleep(0.02)
@@ -5510,16 +5510,31 @@ def run_runtime_networking_cases(binary, root, provider, environment):
                 _, log = read_events(terminal.dotdir)
                 admitted = [event["data"]["steering"]["text"] for event in event_list(log, "irc_admitted")
                             if "steering" in event["data"]]
-                # ID references coalesce even the large burst in one steering
-                # record; full payloads remain unique in the request above.
-                assert len(admitted) == 1
+                # Full projections use the existing 256 KiB steering limit;
+                # this burst needs two batches without losing or repeating IDs.
+                assert len(admitted) == (2 if view == "burst" else 1)
+                assert all(len(text.encode("utf-8")) <= 256 * 1024 for text in admitted)
                 received = [e["data"] for e in event_list(log, "irc_event")]
                 for marker in mentions:
                     matches = [e for e in received if e["text"] == marker]
                     assert len(matches) == 1 and not matches[0]["historical"]
                     assert matches[0]["urgent"] and matches[0]["op"]
-                    identity = f"id={matches[0]['stream']}:{matches[0]['sequence']} "
-                    assert sum(identity in text for text in admitted) == 1
+                    identity = f"id={matches[0]['stream']}:{matches[0]['sequence']}"
+                    # References use a space; full event headers end the ID with ].
+                    assert sum(len(re.findall(re.escape(identity) + r"(?=[ \]])", text))
+                               for text in admitted) == 1
+                background_admitted = [event["data"]["input"]["text"]
+                                       for event in event_list(log, "irc_admitted")
+                                       if "input" in event["data"]]
+                assert len(background_admitted) == (2 if view == "burst" else 1)
+                assert all(len(text.encode("utf-8")) <= 256 * 1024
+                           for text in background_admitted)
+                for marker in backgrounds:
+                    matches = [e for e in received if e["text"] == marker]
+                    assert len(matches) == 1 and not matches[0]["historical"]
+                    identity = f"id={matches[0]['stream']}:{matches[0]['sequence']}"
+                    assert sum(len(re.findall(re.escape(identity) + r"(?=[ \]])", text))
+                               for text in background_admitted) == 1
                 assert len(requests) == expected, "received input was admitted as duplicate work"
                 if view == "chat":
                     assert "runtime completion" not in terminal.capture(), "private response leaked into offline chat"
