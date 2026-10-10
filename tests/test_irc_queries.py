@@ -45,6 +45,7 @@ class QueryFixture(unittest.TestCase):
         if self._testMethodName in (
                 'test_active_query_reply_survives_resume',
                 'test_pending_query_reply_survives_resume',
+                'test_private_notice_reply_stays_closed_after_resume',
                 'test_notice_received_before_admission_survives_resume_without_reply'):
             journal = create_legacy(self.root / 'state', self.root, 'fake', 'host-model')
             resume = ('--resume', journal.parent.name)
@@ -184,16 +185,25 @@ class QueryFixture(unittest.TestCase):
         self.wait(lambda: any(e['type'] == 'irc_event_v2' and
                   e['data'].get('text') == text for e in self.events()))
 
-    def reply_call(self, handler, sequence, call_id, destination, text, **extra):
+    def reply_call(self, handler, sequence, call_id, destination, text, notice=False, **extra):
         wire = self.provider.function_body(sequence, call_id, 'irc_send',
-            dict(destination=destination, text=text, notice=False, **extra))
+            dict(destination=destination, text=text, notice=notice, **extra))
         self.provider.reply(handler, wire.encode(), close_header=True)
 
     def respond(self, handler, request, sequence):
         self.seen.append(request)
         prompt = self.provider.latest_user(request)
         all_text = json.dumps(request.get('input', []))
-        if 'private-stale' in all_text and 'stale' not in self.issued:
+        if 'private-close-with-notice' in all_text and 'notice-reply' not in self.issued:
+            self.issued.add('notice-reply')
+            query = re.search(r'conversation=([0-9a-f]{32}) kind=query', all_text)[1]
+            self.reply_call(handler, sequence, 'notice-reply', 'query:' + query,
+                            'closure-ack', notice=True)
+        elif 'private-wrong-notice' in all_text and 'wrong-notice' not in self.issued:
+            self.issued.add('wrong-notice')
+            self.reply_call(handler, sequence, 'wrong-notice',
+                            f'127.0.0.1:{self.port}/observer', 'unrelated-notice', notice=True)
+        elif 'private-stale' in all_text and 'stale' not in self.issued:
             self.issued.add('stale')
             query = re.search(r'conversation=([0-9a-f]{32}) kind=query', all_text)[1]
             self.held.set()
@@ -257,6 +267,35 @@ class QueryFixture(unittest.TestCase):
 
 
 class QueryTests(QueryFixture):
+    def test_private_notice_reply_closes_obligation(self):
+        self.direct('querybot', 'private-close-with-notice')
+        self.wait_wire(self.peer, b'NOTICE query-peer :closure-ack\r\n')
+        self.wait_idle()
+        self.assert_private('closure-ack')
+        self.assertFalse(any(e['type'] == 'irc_reply_reminder' for e in self.events()),
+                         'A private NOTICE reply must not force another PRIVMSG acknowledgement')
+
+    def test_notice_to_another_query_does_not_close_obligation(self):
+        self.direct('querybot', 'private-wrong-notice')
+        self.wait_wire(self.observer, b'NOTICE observer :unrelated-notice\r\n')
+        self.wait(lambda: any(e['type'] == 'irc_reply_reminder' for e in self.events()))
+        self.wait_idle()
+        self.assert_private('private-wrong-notice')
+
+    def test_private_notice_reply_stays_closed_after_resume(self):
+        self.direct('querybot', 'private-close-with-notice')
+        self.wait_wire(self.peer, b'NOTICE query-peer :closure-ack\r\n')
+        self.wait_idle()
+        written = next(e for e in self.events() if e['type'] == 'irc_event_v2' and
+                       e['data'].get('text') == 'closure-ack' and
+                       e['data']['routing']['state'] == 'written')
+        # Resume an active turn just after the real send, before its final answer.
+        self.resume_at(written['seq'])
+        self.wait_idle()
+        self.submit('inspect-restored-notice')
+        self.assertFalse(any(e['type'] == 'irc_reply_reminder' for e in self.events()),
+                         'Replay must retain the completed private NOTICE reply')
+
     def test_admission_identity_and_reply(self):
         self.direct('queryop', 'operator-secret-marker')
         self.direct('querybot', 'private-notice-context', notice=True)

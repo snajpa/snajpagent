@@ -1140,7 +1140,10 @@ Operator queries stay out of provider input; agent NOTICE/history and proven
 nick changes add context at the next natural request without waking a turn.
 Request-time directory and connection snapshots pin model query sends, including
 new peer lookup. Live query messages carry a private reply obligation and wake
-IRC sleep. Model actions and explicit query/address sends use the frozen API.
+IRC sleep. A written or acknowledged agent NOTICE to that exact query closes its
+reply obligation, including during replay; an acknowledgement-only exchange can
+end without another PRIVMSG turn. Channel reply obligations still require PRIVMSG.
+Model actions and explicit query/address sends use the frozen API.
 Real PTY/fake-provider fixtures cover identity isolation, private replies,
 implicit destination rejection, nickname changes during requests and resume.
 Classic query tabs now use separate render queues keyed by conversation UUID,

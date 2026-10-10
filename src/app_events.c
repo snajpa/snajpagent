@@ -152,7 +152,8 @@ static int
 conversation_replied(json_t *conversations, const struct snag_irc_event *event,
     const json_t *directory, bool own_agent)
 {
-    if (event->kind != SNAG_IRC_MESSAGE) return 0;
+    bool notice = event->kind == SNAG_IRC_NOTICE;
+    if (event->kind != SNAG_IRC_MESSAGE && !notice) return 0;
     bool outgoing = event->routed && event->route.direction == SNAG_IRC_OUTGOING;
     if (outgoing ? event->route.identity != SNAG_IRC_AGENT ||
                        (event->route.delivery != SNAG_IRC_WRITTEN &&
@@ -167,6 +168,8 @@ conversation_replied(json_t *conversations, const struct snag_irc_event *event,
         struct snag_irc_event original;
         if (snag_irc_event_payload_read(json_object_get(entry, "event"), &original) < 0) return -1;
         bool channel = original.route.kind == SNAG_IRC_CHANNEL;
+        /* Private closure replies must not force another acknowledgement. */
+        if (notice && channel) continue;
         const char *id = channel ? original.reply_conversation : original.route.conversation;
         if (!*id) continue;
         struct snag_irc_event echo;
@@ -945,7 +948,8 @@ reply_context(const struct app_state *app, struct snag_buf *text)
                 "Outstanding IRC replies for this turn: use irc_send to each available target. "
                 "Targets retain the connection and membership at receipt time. "
                 "If unavailable, explain the missing reply path; do not substitute another "
-                "conversation or a newer membership. NOTICE does not satisfy a reply.\n") < 0)
+                "conversation or a newer membership. A NOTICE can close an informational "
+                "private query; channel replies require PRIVMSG.\n") < 0)
             return -1;
         first = false;
         struct snag_buf line = {.max = SNAG_MAX_IRC_SNAPSHOT};

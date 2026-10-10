@@ -860,7 +860,9 @@ failures produce no automatic reply. Direct messages to the session's operator
 and agent nicknames form separate queries. Operator queries remain in operator
 history and are excluded from provider input, IRC compaction and model-facing
 history reads. Agent queries enter model context with their recipient and
-conversation ID. A live private message requires a reply in that query; NOTICE,
+conversation ID. A live private message requires a reply in that query. An
+acknowledgement-only reply can use NOTICE to complete the exchange without
+triggering another reply. Channel replies still require PRIVMSG. Incoming NOTICE,
 historical messages and nickname changes add context without requiring a reply.
 Pending reply obligations survive resume. Opened queries appear in the classic
 Tab cycle, including queries addressed to the agent. Enter replies as the

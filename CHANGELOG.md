@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Accept exact private-query NOTICE replies so informational exchanges can end
+  without mandatory PRIVMSG acknowledgement loops. Preserve channel reply,
+  recipient, connection and delivery-state checks.
+
 - Save default, maximum and numeric context selections through one capacity
   resolution, using the selected total window for model/context commands and
   reports. Unknown windows retain the prior settings.

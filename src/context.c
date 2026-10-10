@@ -4034,13 +4034,15 @@ snag_context_build(struct snag_session *session, const char *model, const char *
         "Use endpoint/nick to initiate a query explicitly. Operator-identity DMs are private "
         "to the operator and are excluded from your context. NOTICE and historical replay "
         "are context only and require no reply. A live private PRIVMSG addresses you directly "
-        "and requires a reply in its originating query. An unavailable or changed query "
+        "and requires a reply in its originating query. Use NOTICE for acknowledgement-only "
+        "private replies to end the exchange without triggering another reply. "
+        "An unavailable or changed query "
         "requires a fresh explicit target; never substitute a channel. "
         "A queued send is not proof of remote receipt. "
         "The runtime owns sockets, joining, history, and "
         "reconnect: do not poll or babysit them. Use irc_state for cached state, irc_nick "
         "to change your live alias, and irc_topic when the room's current mode permits it. A local "
-        "operator mention in a writable turn "
+        "operator's channel mention in a writable turn "
         "requires one successful irc_send message; a notice does not count "
         "as a reply, and unmentioned channel/background traffic requires no response.";
     struct context_builder builder;
