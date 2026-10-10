@@ -20,6 +20,9 @@ class RecoveryTests(ChannelFixture):
 
     def setUp(self):
         super().setUp()
+        # Inherited channel tests exercise the native terminal, not workspace routing.
+        if self._testMethodName in ChannelFixture.__dict__:
+            return
         self.sid = read_events(self.root / 'state')[0].parent.name
         self.term.write(b'/s d\r')
         self.term.wait_exit()
