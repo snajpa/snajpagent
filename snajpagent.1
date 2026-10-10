@@ -2914,7 +2914,12 @@ saves the model and effort plus its exact model-limit context default in one
 configuration replacement. With
 .BR :max ,
 the save suffix writes the selected model's cached advertised maximum as a
-numeric default. This requires a maximum from the current provider endpoint.
+numeric default. With
+.BR :default ,
+it saves the configured or cached working window. Each saved window uses
+the resolver's total selection before output reservation and percentage
+deductions. Saving requires a known window; max requires the current
+provider endpoint's advertised maximum.
 Invalid context choices and failed configuration writes leave the
 session selection unchanged. Without a context suffix, its current choice is
 preserved and validated against the selected model before saving or switching.
@@ -3087,12 +3092,11 @@ Append
 .B s
 or
 .B save
-to a numeric selection or
-.BR max ,
+to any known selection,
 for example
 .B /context 900000 save
 or
-.BR "/context max s" ,
+.BR "/context default s" ,
 to also save
 .B context_window_tokens
 in the selected provider/model's exact
@@ -3101,10 +3105,12 @@ section of the active configuration. Other settings and file permissions are
 preserved. The saved window applies to new sessions using that model and to
 .B /context default
 in this process. A numeric selection without the suffix changes only the
-current session. Saving
+current session. Saving a selection resolves its total window to a numeric
+default, before output reservation or client-percentage deductions.
+.B default
+uses the configured or cached working window;
 .B max
-resolves the cached advertised maximum to a numeric default, before output
-reservation or client-percentage deductions. A missing maximum, invalid value
+uses the cached advertised maximum. An unknown window, missing maximum, invalid value
 or configuration save failure leaves the session selection unchanged.
 Edit the configuration with
 .B /config

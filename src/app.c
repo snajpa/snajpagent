@@ -2120,8 +2120,8 @@ render_model_catalog(struct app_state *app)
                 : app->session.default_effort) < 0 ||
         append_compact_threshold(&text, selected, &capacity) < 0)
         goto out;
-    if (append_capacity_value(&text, "effective-context", capacity.context_window_tokens,
-            capacity.context_window_tokens) < 0 ||
+    if (append_capacity_value(&text, "effective-context", capacity.selected_context_window_tokens,
+            capacity.selected_context_window_tokens) < 0 ||
         append_capacity_value(
             &text, "hard-input", capacity.hard_input_known, capacity.hard_input_tokens) < 0 ||
         snag_model_each(&app->model_cache, app->config,
@@ -2263,27 +2263,17 @@ commit_model_selection(struct app_state *app, const struct snag_provider_config 
 {
     char error[256] = {0};
     bool current_turn = app->session.active_turn;
-    uint64_t context_tokens = 0u;
     int rc;
 
     struct snag_context_choice current = {app->session.context_mode, app->session.context_tokens};
     struct snag_model_capacity capacity;
-    if (save && choice && choice->mode == SNAG_CONTEXT_MODE_DEFAULT) {
-        return app_error(
-            app, "saving a context default requires an explicit token count or max");
-    }
     if (snag_app_context_preview(app, provider, model, choice ? choice : &current, &capacity,
             error, sizeof(error)) < 0)
         return app_error(app, error);
-    if (choice) {
-        context_tokens = choice->mode == SNAG_CONTEXT_MODE_MAX
-                             ? capacity.max_context_window_tokens
-                             : choice->tokens;
-    }
     if (save && choice) {
         if (snag_config_save_model_context(app->config, app->config_path,
-                app->config_allow_create, provider->name, model, effort, context_tokens,
-                error, sizeof(error)) < 0)
+                app->config_allow_create, provider->name, model, effort,
+                capacity.selected_context_window_tokens, error, sizeof(error)) < 0)
             return app_error(app, error[0] ? error : "model settings could not be saved");
     } else if (save) {
         snag_file_info st;
@@ -3056,9 +3046,7 @@ report_context(struct app_state *app, const struct snag_provider_config *provide
     if (snag_app_context_preview(
             app, provider, app->session.default_model, choice, &capacity, error, sizeof(error)) < 0)
         return app_error(app, error[0] ? error : "context capacity could not be resolved");
-    selected = choice->mode == SNAG_CONTEXT_MODE_MAX      ? capacity.max_context_window_tokens
-               : choice->mode == SNAG_CONTEXT_MODE_TOKENS ? choice->tokens
-                                                          : capacity.context_window_tokens;
+    selected = capacity.selected_context_window_tokens;
     if (snag_buf_printf(&text, "context for %s: %s (until changed)",
             app->session.active_turn ? "next response in this turn" : "next turn",
             choice->mode == SNAG_CONTEXT_MODE_MAX ? "max (advertised maximum)"
@@ -3148,20 +3136,16 @@ change_context(struct app_state *app, const char *value, bool active)
         return app_error(app, error);
     }
     free(copy);
-    if (save && choice.mode == SNAG_CONTEXT_MODE_DEFAULT)
-        return app_error(app, "saving a context default requires a token count or max");
     /* Resolve the candidate before recording it: an impossible choice must not
      * reach the session log, and the operator sees the reconciled reserve and
      * compaction budget for the choice they made. */
     if (snag_app_context_preview(app, provider, app->session.default_model, &choice, &capacity,
             error, sizeof(error)) < 0)
         return app_error(app, error[0] ? error : "context capacity could not be resolved");
-    uint64_t context_tokens = choice.mode == SNAG_CONTEXT_MODE_MAX
-                                  ? capacity.max_context_window_tokens
-                                  : choice.tokens;
     if (save &&
         snag_config_save_context(app->config, app->config_path, app->config_allow_create,
-            provider->name, app->session.default_model, context_tokens, error, sizeof(error)) < 0)
+            provider->name, app->session.default_model, capacity.selected_context_window_tokens,
+            error, sizeof(error)) < 0)
         return app_error(app, error[0] ? error : "context default could not be saved");
     if (record_context_selection(app, &choice, error, sizeof(error)) < 0)
         return app_error(app, error[0] ? error : "context selection could not be saved");

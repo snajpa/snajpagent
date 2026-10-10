@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Save default, maximum and numeric context selections through one capacity
+  resolution, using the selected total window for model/context commands and
+  reports. Unknown windows retain the prior settings.
+
 - Group IRC send receipts into one tool result after a short interruptible wait.
   Preserve failures, uncertain delivery and server text corrections; compaction
   refreshes room state without recopying message and receipt history.

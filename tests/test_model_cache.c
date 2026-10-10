@@ -516,10 +516,12 @@ main(void)
         chosen =
             resolve_capacity_choice(&cache, &config, 1, "codex-context-only", "codex", &max_choice);
         assert(chosen.context_window_tokens == 272000u);
+        assert(chosen.selected_context_window_tokens == 872000u);
         assert(chosen.hard_input_tokens == 828400u);
         assert(snag_model_compact_threshold(&config.providers[1], &chosen) == 745560u);
         chosen = resolve_capacity_choice(
             &cache, &config, 1, "codex-context-only", "codex", &token_choice);
+        assert(chosen.selected_context_window_tokens == 500000u);
         assert(chosen.hard_input_tokens == 475000u);
         assert(snag_model_compact_threshold(&config.providers[1], &chosen) == 427500u);
         /* Above the advertised maximum, absent a maximum, and smaller than the

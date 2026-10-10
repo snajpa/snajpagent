@@ -1046,6 +1046,7 @@ snag_model_capacity_resolve(const struct snag_model_cache *cache, const struct s
         selected_context = choice->tokens;
         capacity->source = SNAG_CAPACITY_CONFIG;
     }
+    capacity->selected_context_window_tokens = selected_context;
     if (selected_context && capacity->max_output_tokens >= selected_context) {
         return snag_fail(error, error_size, EINVAL,
             "output reservation %llu (rule %s) leaves no input in context %llu (rule %s) for %s/%s",

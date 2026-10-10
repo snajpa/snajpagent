@@ -1899,7 +1899,10 @@ save_context_settings(struct snag_config *config, const char *path, bool allow_c
     const char *provider, const char *model, const char *effort, uint64_t tokens,
     char *error, size_t error_size)
 {
-    if (!config || !snag_config_name_valid(provider) || !tokens ||
+    if (!tokens)
+        return snag_fail(error, error_size, EINVAL,
+            "context window is unknown; use /context with an explicit token count");
+    if (!config || !snag_config_name_valid(provider) ||
         tokens > SNAG_CONFIG_TOKEN_LIMIT_MAX || !model || !*model || strchr(model, '*') ||
         strchr(model, '?') || strchr(model, '[') || strchr(model, ']'))
         return snag_fail(error, error_size, EINVAL, "invalid context default");

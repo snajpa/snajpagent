@@ -1085,6 +1085,76 @@ class ContextMeterTests(unittest.TestCase):
         self.configure()
         return path
 
+    def test_model_default_save_resolves_target_and_survives_restart(self):
+        self.cache_maximum_context()
+        self.command('/context 300000', 'selected=300000')
+        self.command('/model fake/standard-model/medium:default s', 'configuration saved:')
+        self.command('/context', 'selected=200000')
+        self.assertIn('context_window_tokens = 200000', self.owner.config.read_text())
+        self.assertNotIn('context_window_tokens = 872000', self.owner.config.read_text())
+        events = [event['data'] for event in self.owner.events()
+                  if event['type'] == 'context_selection_changed']
+        self.assertEqual((events[-1]['new_mode'], events[-1]['new_tokens']), ('default', 0))
+        self.owner.finish(self.owner.initial, b'/exit')
+        self.owner.status('stored')
+        for args in (['--resume', self.owner.sid], ['-N', 'saved-default-window']):
+            child = self.owner.start(args)
+            child.until(b'METER')
+            os.write(child.master, b'/context\r')
+            child.until(b'selected=200000')
+            self.owner.finish(child, b'/exit')
+        self.assertEqual(self.provider.requests, [])
+
+    def test_numbered_default_save_uses_catalog_working_window(self):
+        self.cache_maximum_context()
+        text = self.owner.config.read_text().replace('context_window_tokens = 200000\n', '')
+        self.owner.config.write_text(text)
+        self.configure()
+        self.command('/model #1:default save', 'configuration saved:')
+        self.assertIn('context_window_tokens = 272000', self.owner.config.read_text())
+        self.command('/context', 'selected=272000')
+        self.assertEqual(self.provider.requests, [])
+
+    def test_default_save_with_only_catalog_maximum(self):
+        path = self.cache_maximum_context()
+        cache = json.loads(path.read_text())
+        cache['providers'][0]['models'][0]['limits']['context_window_tokens'] = None
+        path.write_text(json.dumps(cache))
+        self.owner.config.write_text(self.owner.config.read_text().replace(
+            'context_window_tokens = 200000\n', ''))
+        self.configure()
+        self.command('/model fake/standard-model/medium:default save', 'configuration saved:')
+        self.command('/context', 'selected=872000')
+        self.assertIn('context_window_tokens = 872000', self.owner.config.read_text())
+        self.assertEqual(self.provider.requests, [])
+
+    def test_default_save_write_failure_preserves_selection(self):
+        self.cache_maximum_context()
+        before = self.owner.config.read_bytes()
+        moved = self.owner.config.with_suffix('.saved')
+        self.owner.config.rename(moved)
+        self.owner.config.mkdir()
+        try:
+            self.command('/model fake/standard-model/high:default save', 'regular file')
+            self.command('/context default s', 'context window is unknown')
+            self.assertEqual(moved.read_bytes(), before)
+        finally:
+            self.owner.config.rmdir()
+            moved.rename(self.owner.config)
+        self.assertFalse(any(event['type'] in ('model_selection_changed',
+                                              'context_selection_changed')
+                             for event in self.owner.events()))
+        self.assertEqual(self.provider.requests, [])
+
+    def test_context_default_save_resolves_configured_window(self):
+        self.cache_maximum_context()
+        self.command('/model fake/standard-model/medium:max', 'selected=872000')
+        self.command('/context default save', 'configuration saved:')
+        self.command('/context', 'selected=200000')
+        self.assertIn('context_window_tokens = 200000', self.owner.config.read_text())
+        self.command('/context default s', 'configuration saved:')
+        self.assertEqual(self.provider.requests, [])
+
     def test_model_max_save_uses_target_cache_and_persists_numeric_default(self):
         self.cache_maximum_context()
         self.provider.AGENTS = {**self.provider.AGENTS, 'standard-model': 'standardbot'}
@@ -1167,7 +1237,7 @@ class ContextMeterTests(unittest.TestCase):
         self.command('/model fake/host-model/high:9000 save', 'output reservation')
         self.command('/model fake/host-model/high:max save', 'publishes no maximum context')
         self.command('/context max save', 'publishes no maximum context')
-        self.command('/model fake/host-model/high:default save', 'explicit token count')
+        self.command('/model fake/host-model/high:default save', 'context window is unknown')
         self.assertEqual(self.owner.config.read_bytes(), before)
         self.assertFalse(any(event['type'] in ('model_selection_changed',
                                               'context_selection_changed')

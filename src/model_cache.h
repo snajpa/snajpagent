@@ -31,6 +31,7 @@ enum snag_capacity_source {
 struct snag_model_capacity {
     uint64_t context_window_tokens;
     uint64_t max_context_window_tokens;
+    uint64_t selected_context_window_tokens;
     uint64_t input_context_window_tokens;
     uint64_t max_input_tokens;
     uint64_t max_output_tokens;
