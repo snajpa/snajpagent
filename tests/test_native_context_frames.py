@@ -96,7 +96,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     text = event["content"][0]["text"]
                     assert len(text.encode()) <= 500, (
                         "oversized native context frame", len(text.encode()))
-                    self.server.received.set()
+                    snapshot = "".join(item["content"][0]["text"]
+                                       for item in self.server.messages)
+                    if snapshot.endswith("not a new request or approval."):
+                        self.server.received.set()
         except (EOFError, socket.timeout):
             pass
         except BaseException as error:
@@ -152,7 +155,6 @@ def run(binary):
                     if needle and needle in output:
                         break
                 if not needle and server.received.is_set():
-                    time.sleep(.2)
                     break
 
         try:
