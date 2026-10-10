@@ -2598,13 +2598,13 @@ def test_irc_update_prompt_names_update_and_replay_resolves_it():
     lines = path.read_bytes().splitlines(keepends=True)
     log = [json.loads(line) for line in lines]
     prompts = [item for item in log if item["type"] == "turn_started" and
-               "[IRC update id=" in item["data"]["text"] and
+               "[IRC endpoint=" in item["data"]["text"] and
                "event=message sender=peer" in item["data"]["text"]]
     assert len(prompts) == 1, "IRC message admission produced no unique turn prompt"
     text = prompts[0]["data"]["text"]
     assert "preceding room event" not in text, text
     assert "sender=peer" in text and "event=message" in text, text
-    identity = re.search(r"\[IRC update id=([^ ]+)", text).group(1)
+    identity = re.search(r"\bid=([^ \]]+)", text).group(1)
     # A journal written before the fix still replays as the room event.
     legacy = []
     for line in lines:
@@ -2649,6 +2649,7 @@ def test_irc_admission_is_not_echoed_as_operator_input():
             peer.close()
     output = bytes(child.buf[:end]).decode("utf-8", "replace")
     assert "[IRC update id=" not in output, output[-600:]
+    assert "[IRC endpoint=" not in output, output[-600:]
 
 
 def test_deferred_controls_in_admission_order():
