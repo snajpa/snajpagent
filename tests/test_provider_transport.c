@@ -7579,7 +7579,6 @@ context_frame_server(int listener, const json_t *events)
     if (fd < 0) server_fail("Context frame fixture accept failed");
     struct http_request request;
     read_request(fd, &request);
-    free(request.body);
     write_all_or_die(fd,
         "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\n"
         "Connection: Upgrade\r\nSec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\n\r\n",
@@ -7614,7 +7613,8 @@ context_frame_server(int listener, const json_t *events)
             json_t *content = json_array_get(json_object_get(event, "content"), 0u);
             const char *chunk = snag_json_string(content, "text");
             size_t size = chunk ? strlen(chunk) : 32768u;
-            if ((context && size > 500u) || size > length - offset ||
+            if ((context && size > 500u) || (!context && size != length) ||
+                size > length - offset ||
                 (offset < length && !size) || memcmp(text + offset, chunk, size))
                 server_fail("Context chunks duplicated, omitted or exceeded provider bound");
             json_t *copy = json_deep_copy(expected);
@@ -7675,10 +7675,12 @@ test_voice_context_frames(void)
     struct snag_provider_config provider;
     snag_config_provider_init(&provider, "default");
     provider.auth = SNAG_AUTH_API_KEY;
+    strcpy(provider.openrouter_referer, "https://github.com/snajpa/snajpagent");
+    strcpy(provider.openrouter_title, "snajpagent");
     snprintf(provider.base_url, sizeof(provider.base_url), "http://127.0.0.1:%u/",
         ntohs(address.sin_port));
     struct snag_credential credential = {0};
-    strcpy(credential.value, "fixture-context-key");
+    strcpy(credential.value, "transport-secret");
     credential.len = strlen(credential.value);
     struct snag_voice_socket *socket = NULL;
     char error[256];
