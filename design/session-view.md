@@ -324,8 +324,15 @@ extension because they do not advertise this capability.
 
 A bound semantic controller retains the canonical owner editor and prompt
 state. Transcript fragments go to durable history and typed state publication;
-the owner skips the second classic transcript render. A classic reattachment
-restores its ordinary prompt and history catch-up boundary. Command reports use
+the owner skips the second classic transcript render. Detach and disconnect keep
+that render suspended while the owner continues retaining output. A classic
+reattachment restores its ordinary prompt and history catch-up boundary, including
+output that began under a semantic controller. Reattachment during an unfinished
+item shows its committed prefix through history catch-up and restores the classic
+renderer for later fragments. That renderer-only continuation adds no duplicate
+operation to the canonical presentation. Output ownership survives closing the
+terminal editor, so a headless owner's final resume hint remains retained without
+writing to the host terminal. Command reports use
 immutable presentation files; external I/O uses the capability-gated terminal
 transaction above. The protocol grants no frontend-supplied shell operation.
 

@@ -476,6 +476,90 @@ class SessionViewTests(unittest.TestCase):
         self.assertEqual(len(inputs), 1)
         self.assertEqual(self.identity(), self.owner_identity)
 
+    def semantic_stream_handoff(self, disconnect, classic_early=False):
+        prefix, tail = 'semantic-prefix ', 'classic-tail\n'
+
+        def respond(handler, request, sequence):
+            rid, item_id = 'resp_handoff', 'handoff_item'
+            item = {'type': 'message', 'id': item_id, 'role': 'assistant',
+                    'phase': 'final_answer', 'status': 'in_progress', 'content': []}
+            position = {'item_id': item_id, 'output_index': 0, 'content_index': 0}
+            handler.send_response(200)
+            handler.send_header('Content-Type', 'text/event-stream')
+            handler.send_header('Connection', 'close')
+            handler.end_headers()
+
+            def send(kind, data):
+                handler.wfile.write(self.provider.event(kind, data).encode())
+                handler.wfile.flush()
+
+            send('response.created', {'response': {'id': rid, 'status': 'in_progress',
+                                                   'output': []}})
+            send('response.output_item.added', {'output_index': 0, 'item': item})
+            send('response.content_part.added', {**position,
+                 'part': {'type': 'output_text', 'text': '', 'annotations': []}})
+            send('response.output_text.delta', {**position, 'delta': prefix})
+            self.release.wait(10)
+            send('response.output_text.delta', {**position, 'delta': tail})
+            send('response.output_text.done', {**position, 'text': prefix + tail})
+            item.update(status='completed', content=[{'type': 'output_text',
+                        'text': prefix + tail, 'annotations': []}])
+            send('response.output_item.done', {'output_index': 0, 'item': item})
+            send('response.completed', {'response': {'id': rid, 'status': 'completed',
+                 'output': [], 'usage': {'input_tokens': 10, 'output_tokens': 10,
+                                        'total_tokens': 20}}})
+
+        self.provider.runtime_handler = respond
+        self.detach()
+        peer = self.view(bind=True)
+        request = peer.submit('continue output after semantic controller leaves')
+        self.assertEqual(peer.result(request)['status'], 'committed')
+        self.assertEqual(self.wait_event('response_output')['data']['item']['text'], prefix)
+        if not disconnect:
+            peer.send(type='detach', generation=peer.generation)
+            peer.until('detached')
+        peer.close()
+        self.status('detached')
+        child = None
+        if classic_early:
+            child = self.start(['--resume', self.sid])
+            self.status('attached')
+        self.release.set()
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            events = self.events()
+            if any(event['type'] in ('turn_completed', 'response_failed') for event in events):
+                break
+            time.sleep(.02)
+        self.assertEqual([event['data'] for event in events
+                          if event['type'] == 'response_failed'], [])
+        self.assertTrue(any(event['type'] == 'turn_completed' for event in events))
+        self.assertEqual(''.join(event['data']['item']['text'] for event in events
+                                if event['type'] == 'response_output'), prefix + tail)
+        self.assertEqual(self.identity(), self.owner_identity)
+        if child is None:
+            child = self.start(['--resume', self.sid])
+        child.until(b'Attached session', 10)
+        if classic_early:
+            child.until(prefix.strip().encode())
+            child.until(tail.strip().encode())
+            self.assertEqual(child.output.count(prefix.strip().encode()), 1)
+            self.assertEqual(child.output.count(tail.strip().encode()), 1)
+        else:
+            child.until((prefix + tail).strip().encode())
+        self.finish(child, b'/s d')
+        self.status('detached')
+        self.assertEqual(self.identity(), self.owner_identity)
+
+    def test_semantic_detach_mid_output_preserves_owner_and_classic_return(self):
+        self.semantic_stream_handoff(False)
+
+    def test_semantic_disconnect_mid_output_preserves_owner_and_classic_return(self):
+        self.semantic_stream_handoff(True)
+
+    def test_classic_return_before_semantic_output_completes(self):
+        self.semantic_stream_handoff(False, classic_early=True)
+
     def test_multiframe_unicode_prompt_and_stale_submission(self):
         self.detach()
         peer = self.view(bind=True)

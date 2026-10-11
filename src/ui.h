@@ -172,6 +172,7 @@ int snag_ui_submitted(struct snag_ui *ui, const char *label, const char *text,
                        bool input);
 int snag_ui_public(struct snag_ui *ui, const char *text, size_t len,
                    struct snag_buf *delivered);
+int snag_ui_public_continue(struct snag_ui *ui, int fd);
 int snag_ui_orientation(struct snag_ui *ui, const struct snag_session *session,
                          bool resumed);
 int snag_ui_history(struct snag_ui *ui, struct snag_session *session, uint64_t count);

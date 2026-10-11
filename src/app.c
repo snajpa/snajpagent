@@ -266,6 +266,8 @@ service_attachment(struct app_state *app, bool external)
             "Attached session %s; recent history follows. Use /history N for earlier turns.",
             app->session.id);
         if (!rc) rc = snag_ui_history(&app->ui, &app->session, app->config->resume_history_turns);
+        if (!rc && app->stream_item_active)
+            rc = snag_ui_public_continue(&app->ui, app->execute ? STDERR_FILENO : STDOUT_FILENO);
     }
     if (generation && snag_ui_session_ready(&app->ui, generation) < 0 && errno != ESTALE) return -1;
     return rc;

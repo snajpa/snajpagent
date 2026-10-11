@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Keep streamed output running when a workspace controller detaches or disconnects.
+  A later terminal attachment restores the retained output and prompt. Keep
+  headless session shutdown from writing a resume hint to the host terminal.
+
 - Keep input available after a local verbosity change arrives during earlier
   command output. Do not wait for an engine acknowledgement of a local command.
 

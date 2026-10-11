@@ -38,7 +38,7 @@ struct ui_message {
     struct snag_buf delivered;
     char error[256];
     int result, saved_errno;
-    bool prompt_changed;
+    bool prompt_changed, public_continuation;
     size_t input_tail;
     atomic_bool done;
 };
@@ -135,7 +135,7 @@ struct snag_ui_display {
     struct snag_ui_runtime *runtime;
     uint64_t turn_generation;
     bool suspended;
-    bool input_closed, backlog_warned, view_repainting;
+    bool input_closed, backlog_warned, view_repainting, semantic_item;
     bool native, native_barrier, native_continuing, native_quitting;
     bool direct, direct_opened;
     struct snag_view_channel direct_channel;
@@ -185,7 +185,7 @@ retain_output(struct snag_ui_display *display, const struct snag_ui_command *com
         json_decref(display->view_state);
         display->view_state = state;
     }
-    if (!failed || display->direct || snag_view_server_attached(display->view)) return 0;
+    if (!failed || display->term.input_only) return 0;
     return snag_render_warning_ctx(&display->render, display->presentation_error);
 }
 
@@ -1043,10 +1043,10 @@ view_bound(void *opaque, uint64_t generation)
 {
     struct snag_ui_display *display = opaque;
     struct snag_ui_runtime *runtime = display->runtime;
-    /* A semantic controller retains the editor but paints through its own
-     * renderer. Classic reattachment rebuilds the presentation boundary. */
-    display->term.input_only = display->direct || generation != 0u;
-    display->term.defer_redraw = display->direct || generation != 0u;
+    /* Keep semantic output retained after detach: the classic renderer may
+     * have missed an unfinished item's begin. Classic rebind restores it. */
+    if (display->direct || generation) display->term.input_only = true;
+    display->term.defer_redraw = display->term.input_only;
     display->native_barrier = false;
     display->view_repainting = false;
     atomic_store(&runtime->session_attachment, generation);
@@ -1441,6 +1441,7 @@ apply_session(struct snag_ui_display *display, const struct snag_ui_command *com
             snag_session_relay_activate(
                 &display->relay, command->data.seq, display->native_process.slave) < 0)
             return -1;
+        display->term.input_only = false;
         display->profile = display->relay.profile;
         display->term.screen = display->profile.sty[0] != '\0';
         display->term.backend = display->profile;
@@ -1596,12 +1597,16 @@ apply_message(struct snag_ui_display *display, struct snag_ui_command *command, 
         return apply_session(display, command);
     case SNAG_UI_LEVEL:
         return set_level(display, command->data.value);
-    case SNAG_UI_CLOSE:
+    case SNAG_UI_CLOSE: {
+        bool input_only = term->input_only;
         snag_render_attach_term(render, NULL);
         display->direct_opened = false;
         input_stop(display);
         snag_term_close(term);
+        /* Output ownership outlives the editor, including the final resume hint. */
+        term->input_only = input_only;
         return 0;
+    }
     case SNAG_UI_COLOR: {
         bool previous = render->color_stderr;
         snag_render_set_color(render, (enum snag_color_mode)command->data.value);
@@ -2099,7 +2104,7 @@ display_prompt(struct snag_ui_display *display, struct ui_message *message)
 {
     struct snag_term *term = &display->term;
     struct snag_ui_command *command = &message->command;
-    if (!display->direct && !snag_view_server_attached(display->view)) {
+    if (!term->input_only) {
         term->defer_redraw = true;
         struct snag_ui_command boundary = {.kind = SNAG_UI_BEFORE_PROMPT};
         if (snag_presentation_apply(&display->render, &boundary, NULL) < 0) return -1;
@@ -2131,6 +2136,15 @@ apply_display(struct snag_ui_display *display, struct ui_message *message)
     struct snag_ui_runtime *runtime = display->runtime;
     size_t offset = 0u;
     bool raw = message->command.kind == SNAG_UI_RAW;
+    if (message->public_continuation) {
+        /* History already retained this item's begin. Restore only the classic
+         * renderer so the canonical presentation has no duplicate operation. */
+        if (display->term.input_only) return 0;
+        int rc = display->render.rollout_open ? 0 :
+            snag_presentation_apply(&display->render, &message->command, NULL);
+        if (!rc) display->semantic_item = false;
+        return rc;
+    }
     if (message->command.kind == SNAG_UI_PROMPT && message->command.label) {
         /* Dispatch gets a fresh label without replacing a live draft/clock. */
         struct snag_term submitted;
@@ -2141,7 +2155,7 @@ apply_display(struct snag_ui_display *display, struct ui_message *message)
         struct snag_ui_command echo = {
             .kind = SNAG_UI_SUBMITTED, .label = submitted.label, .text = message->command.label};
         if (!rc) rc = retain_output(display, &echo);
-        if (!rc && !display->direct && !snag_view_server_attached(display->view))
+        if (!rc && !display->term.input_only)
             rc = snag_presentation_apply(&display->render, &echo, NULL);
         snag_term_close(&submitted);
         return rc;
@@ -2167,7 +2181,20 @@ apply_display(struct snag_ui_display *display, struct ui_message *message)
     if (message->command.retain_only) return 0;
     if (message->command.kind == SNAG_UI_PROMPT) return display_prompt(display, message);
 
-    if (display->direct || snag_view_server_attached(display->view)) {
+    /* Keep an orphaned tail retained until classic history catch-up restores
+     * its renderer, or until the item ends while detached. */
+    if (message->command.kind == SNAG_UI_PUBLIC_BEGIN)
+        display->semantic_item = display->term.input_only;
+    else if (display->semantic_item) {
+        if (message->command.kind == SNAG_UI_PUBLIC) return 0;
+        if (message->command.kind == SNAG_UI_ROLLOUT_END ||
+            message->command.kind == SNAG_UI_ROLLOUT_ABORT) {
+            display->semantic_item = false;
+            return 0;
+        }
+    }
+
+    if (display->term.input_only) {
         switch (message->command.kind) {
         case SNAG_UI_IRC:
             return display_conversation_event(display, message->command.data.irc);
@@ -3220,6 +3247,15 @@ snag_ui_public(struct snag_ui *ui, const char *text, size_t len, struct snag_buf
 {
     struct ui_message message = {.command = {.kind = SNAG_UI_PUBLIC, .text = text, .len = len}};
     return request(ui, &message, delivered, NULL, 0u);
+}
+
+int
+snag_ui_public_continue(struct snag_ui *ui, int fd)
+{
+    struct ui_message message = {.public_continuation = true,
+        .command = {.kind = SNAG_UI_PUBLIC_BEGIN,
+            .data.public = {fd, SNAG_PRESENT_CONVERSATION}}};
+    return request(ui, &message, NULL, NULL, 0u);
 }
 
 int

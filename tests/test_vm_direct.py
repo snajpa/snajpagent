@@ -105,6 +105,14 @@ class DirectTests(unittest.TestCase):
         self.assertFalse(result['exit_received'])
         self.assertEqual(self.requests, [])
 
+    def test_workspace_close_and_resume_remain_headless(self):
+        result = self.run_driver('close')
+        resumed = self.run_driver('close', result['session'])
+        self.assertEqual(resumed['session'], result['session'])
+        self.assertFalse(result['exit_received'])
+        self.assertFalse(resumed['exit_received'])
+        self.assertEqual(self.requests, [])
+
     def test_stop_interrupts_provider_and_joins(self):
         result = self.run_driver('stop')
         self.assertEqual(len(self.requests), 1)
