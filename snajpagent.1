@@ -5355,6 +5355,8 @@ Explicit goal requests expose
 when no unfinished goal exists. An unfinished goal exposes
 .B update_goal
 for rewriting, completion, blocking or resuming under the current state's rules.
+Rewriting unlocked wording preserves a paused or blocked goal's state, including
+its blocker and wait destination. Resume is a separate action.
 Blocking requires both a nonblank reason in
 .B text
 and an explicit single-line
@@ -6006,8 +6008,10 @@ Goal creation takes effect when the tool succeeds.
 .PP
 .B update_goal
 requires action; text depends on the action. Rewrite requires new wording; complete
-accepts omitted or null text; block requires a specific reason. It succeeds only
-for an active goal. A wording lock refuses the model's rewording, blocking and
+accepts omitted or null text; block requires a specific reason and wait_for.
+Rewrite accepts an active, paused or blocked goal and preserves its current state.
+Complete and block require an active goal; resume accepts a paused or blocked goal.
+A wording lock refuses the model's rewording, blocking and
 cancelling while completion and resume stay available; the operator retains
 explicit control through slash commands.
 .SS Timer

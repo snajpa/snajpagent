@@ -2598,13 +2598,13 @@ def test_irc_update_prompt_names_update_and_replay_resolves_it():
     lines = path.read_bytes().splitlines(keepends=True)
     log = [json.loads(line) for line in lines]
     prompts = [item for item in log if item["type"] == "turn_started" and
-               "[IRC update id=" in item["data"]["text"] and
+               "[IRC endpoint=" in item["data"]["text"] and
                "event=message sender=peer" in item["data"]["text"]]
     assert len(prompts) == 1, "IRC message admission produced no unique turn prompt"
     text = prompts[0]["data"]["text"]
     assert "preceding room event" not in text, text
     assert "sender=peer" in text and "event=message" in text, text
-    identity = re.search(r"\[IRC update id=([^ ]+)", text).group(1)
+    identity = re.search(r"\bid=([^ \]]+)", text).group(1)
     # A journal written before the fix still replays as the room event.
     legacy = []
     for line in lines:
@@ -2649,6 +2649,7 @@ def test_irc_admission_is_not_echoed_as_operator_input():
             peer.close()
     output = bytes(child.buf[:end]).decode("utf-8", "replace")
     assert "[IRC update id=" not in output, output[-600:]
+    assert "[IRC endpoint=" not in output, output[-600:]
 
 
 def test_deferred_controls_in_admission_order():
@@ -3225,6 +3226,47 @@ def test_goal_clear_controls_continuation():
             end = child.send_wait_idle(b"/goal automatic goal\r", b"goal done", start=end)
             child.exit_now()
         assert len([e for e in events(session_id) if e["type"] == "goal_started"]) == 2
+
+
+def test_model_rewrite_preserves_inactive_goal():
+    for blocked in (False, True):
+        with Child([], ready=DEFAULT_IDLE_PROMPT) as child:
+            if blocked:
+                end = child.send_wait_idle(b"/goal blocked goal\r", b"goal done")
+                status = b": blocked"
+            else:
+                end = child.send_wait(b"/goal slow goal\r", b"working on goal")
+                end = child.send_wait(b"/goal pause\r",
+                                      b"Goal paused at the current turn boundary", start=end)
+                end = child.wait_idle_prompt(start=end)
+                status = b": paused"
+            session_id = child.session_id()
+            end = child.send_wait_idle(b"rewrite unfinished goal\r",
+                                      b"unfinished goal rewritten", start=end)
+            status_start = len(child.buf)
+            end = child.send_wait_idle(b"/goal\r", status, start=status_start)
+            assert b"expanded unfinished goal" in child.buf[status_start:]
+            child.exit_now()
+        log = events(session_id)
+        started = one(log, "goal_started")
+        replaced = one(log, "goal_replaced")
+        assert replaced["data"]["actor"] == "model"
+        assert replaced["data"]["goal_id"] == started["data"]["goal_id"]
+        assert replaced["data"]["new_goal_id"] != started["data"]["goal_id"]
+        assert replaced["data"]["prompt"] == "expanded unfinished goal"
+        assert not [e for e in log if e["type"] in ("goal_resumed", "goal_completed")]
+        assert [e["data"]["input_kind"] for e in log if e["type"] == "turn_started"] == [
+            "goal", "direct"]
+        with Child(["--resume", session_id], ready=DEFAULT_ACCOUNTED_IDLE_PROMPT) as child:
+            status_start = len(child.buf)
+            end = child.send_wait_idle(b"/goal\r", status, start=status_start)
+            assert b"expanded unfinished goal" in child.buf[status_start:]
+            child.exit_now()
+        restored = events(session_id)
+        assert not [e for e in restored[len(log):] if e["type"] == "turn_started"]
+        if blocked:
+            assert one(restored, "goal_blocked")["data"]["wait_for"] == \
+                "external: fixture dependency"
 
 
 def test_goal_control_whitespace():
@@ -7056,6 +7098,7 @@ if __name__ == "__main__":
     test_model_created_goal_continuation()
     test_goal_configured_wording_limit()
     test_goal_model_rewrite_and_lock()
+    test_model_rewrite_preserves_inactive_goal()
     test_goal_interrupt_prompt_state()
     test_goal_interrupt_blocks_background_irc_restart()
     test_goal_pause_resume_and_queue_priority()

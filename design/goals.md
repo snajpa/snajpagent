@@ -95,7 +95,7 @@ direct turn still reaches its normal final answer; that final is the first
 checkpoint, after which queued user turns run before the first synthetic goal
 turn.
 
-While a goal is active, the provider receives an `update_goal` function
+While a goal is unfinished, the provider receives an `update_goal` function
 tool with required action and action-dependent text and wait_for:
 
 ```json
@@ -106,8 +106,12 @@ tool with required action and action-dependent text and wait_for:
 ```
 
 `rewrite` changes the durable wording when it is unlocked and within the
-configured byte limit. A locked rewrite returns a failed factual tool result
-and leaves the goal unchanged. `complete` records successful completion.
+configured byte limit. It accepts active, paused and blocked goals. Replacement
+creates a new goal identity with the prior goal as its parent, retaining the
+current state, blocker and wait destination. Automatic continuation resumes only
+after an explicit resume action. A locked rewrite returns a failed factual tool
+result and leaves the goal unchanged. `complete` records successful completion
+of an active goal.
 `block` records why no dependency-ready action remains and requires an explicit
 single-line `wait_for`: `operator`, `timer`, `irc: endpoint/nick`, `process: handle`,
 or `external: concrete dependency`. Each block text field uses the existing64KiB

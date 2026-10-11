@@ -183,8 +183,8 @@ class FakeResponses:
                                        "The provider rejected the preceding", "The preceding response",
                                        "Pure durable-turn continuation after process resume")):
                     continue  # Host context/continuation is not new operator input.
-                if content.startswith("[IRC endpoint=") and " id=" in content:
-                    continue  # Supplemental durable event, not a new scheduler turn.
+                # Full IRC projections can be the scheduler's input; only
+                # legacy references below need a separately retained payload.
                 ids = re.findall(r"\[IRC update id=([^ ]+)", content)
                 if ids:
                     # Resolve the production scheduler's references to its
@@ -4040,8 +4040,9 @@ def validate_irc_events(dotdir):
         originals = [event for event in messages if marker in event["data"]["text"]]
         assert len(originals) == 1 and originals[0]["data"]["input"] and originals[0]["data"]["op"]
         identity = f"{originals[0]['data']['stream']}:{originals[0]['data']['sequence']}"
-        matching = [event for event in turns if f"id={identity} " in event["data"]["text"]]
-        if len(matching) != 1:
+        pattern = re.escape(f"id={identity}") + r"(?=[ \]])"
+        count = sum(len(re.findall(pattern, event["data"]["text"])) for event in turns)
+        if count != 1:
             raise AssertionError(f"operator input was not admitted once: {marker!r}")
     failures = event_list(events, "turn_failed")
     if failures:
@@ -5491,7 +5492,7 @@ def run_runtime_networking_cases(binary, root, provider, environment):
                 assert not event_list(log, "turn_completed")
                 release.set()
                 deadline = time.monotonic() + 10.0
-                expected = 3
+                expected = 4 if view == "burst" else 3
                 while len(requests) < expected:
                     assert time.monotonic() < deadline, (len(requests), terminal.capture())
                     time.sleep(0.02)
@@ -5510,16 +5511,31 @@ def run_runtime_networking_cases(binary, root, provider, environment):
                 _, log = read_events(terminal.dotdir)
                 admitted = [event["data"]["steering"]["text"] for event in event_list(log, "irc_admitted")
                             if "steering" in event["data"]]
-                # ID references coalesce even the large burst in one steering
-                # record; full payloads remain unique in the request above.
-                assert len(admitted) == 1
+                # Full projections use the existing 256 KiB steering limit;
+                # this burst needs two batches without losing or repeating IDs.
+                assert len(admitted) == (2 if view == "burst" else 1)
+                assert all(len(text.encode("utf-8")) <= 256 * 1024 for text in admitted)
                 received = [e["data"] for e in event_list(log, "irc_event")]
                 for marker in mentions:
                     matches = [e for e in received if e["text"] == marker]
                     assert len(matches) == 1 and not matches[0]["historical"]
                     assert matches[0]["urgent"] and matches[0]["op"]
-                    identity = f"id={matches[0]['stream']}:{matches[0]['sequence']} "
-                    assert sum(identity in text for text in admitted) == 1
+                    identity = f"id={matches[0]['stream']}:{matches[0]['sequence']}"
+                    # References use a space; full event headers end the ID with ].
+                    assert sum(len(re.findall(re.escape(identity) + r"(?=[ \]])", text))
+                               for text in admitted) == 1
+                background_admitted = [event["data"]["input"]["text"]
+                                       for event in event_list(log, "irc_admitted")
+                                       if "input" in event["data"]]
+                assert len(background_admitted) == (2 if view == "burst" else 1)
+                assert all(len(text.encode("utf-8")) <= 256 * 1024
+                           for text in background_admitted)
+                for marker in backgrounds:
+                    matches = [e for e in received if e["text"] == marker]
+                    assert len(matches) == 1 and not matches[0]["historical"]
+                    identity = f"id={matches[0]['stream']}:{matches[0]['sequence']}"
+                    assert sum(len(re.findall(re.escape(identity) + r"(?=[ \]])", text))
+                               for text in background_admitted) == 1
                 assert len(requests) == expected, "received input was admitted as duplicate work"
                 if view == "chat":
                     assert "runtime completion" not in terminal.capture(), "private response leaked into offline chat"
@@ -8627,7 +8643,8 @@ def run_incremental_history_case(binary, root):
         return read_events(t.dotdir)[0].parent.name
 
     def records(t):
-        return event_list(maybe_events(t.dotdir)[1], "irc_event")
+        return [e for e in event_list(maybe_events(t.dotdir)[1], "irc_event")
+                if e["data"].get("routing", {}).get("direction", "incoming") == "incoming"]
 
     def wait_record(t, text, count=1):
         wait_event_count(t.dotdir, "session_created", 1)
@@ -8637,16 +8654,31 @@ def run_incremental_history_case(binary, root):
             time.sleep(0.02)
         return [e for e in records(t) if e["data"]["text"] == text]
 
+    def payload_count(request, text):
+        # Supplemental host context can repeat the current full projection.
+        return sum(str(item.get("content", "")).count(text) for item in request.get("input", [])
+                   if item.get("role") == "user" and not str(item.get("content", "")).startswith(
+                       "[snajpagent host continuation — not a new user message]\n"))
+
     def observed(text, count=1):
         deadline = time.monotonic() + 10
         while True:
             requests = [r for r in captured if r.get("model") == "one-model"]
             # Count message payloads, not older requests legitimately retaining context.
-            if any(sum(text in str(item.get("content", "")) for item in r.get("input", [])) == count
-                   for r in requests):
+            if any(payload_count(r, text) == count for r in requests):
                 return
             assert time.monotonic() < deadline, (text, requests[-1:] , terminals['client'].capture())
             time.sleep(0.02)
+
+    payload = "[IRC endpoint=127.0.0.1:1 id=fixture:4]\ncount fixture"
+    primary = {"role": "user", "content": payload}
+    supplemental = {"role": "user", "content":
+        "[snajpagent host continuation — not a new user message]\n" + payload}
+    assert payload_count({"input": [supplemental]}, "count fixture") == 0
+    assert payload_count({"input": [supplemental, primary]}, "count fixture") == 1
+    assert payload_count({"input": [primary, primary]}, "count fixture") == 2
+    assert payload_count({"input": [{"role": "user", "content": payload + payload}]},
+                         "count fixture") == 2
 
     try:
         host = launch("host")
@@ -8677,7 +8709,7 @@ def run_incremental_history_case(binary, root):
         wait_irc_idle([host, client])
         assert len(wait_record(client, "one original conversation marker")) == 1
         assert client.capture().count("one original conversation marker") == 1
-        assert all(sum("one original conversation marker" in str(i.get("content", "")) for i in r.get("input", [])) <= 1
+        assert all(payload_count(r, "one original conversation marker") <= 1
                    for r in captured if r.get("model") == "one-model")
         client.submit_wait("/disconnect", "outgoing connections removed")
         host.submit("identical legitimate message")
@@ -9843,7 +9875,34 @@ def run_tools_only(binary, root):
         provider.close()
 
 
+def check_fake_irc_input():
+    identity = "f" * 32
+    payloads = [f"[IRC endpoint=127.0.0.1:1 id={identity}:{i}]\noperator message {i}"
+                for i in (4, 5)]
+    ordinary = {"role": "user", "content": "local operator input"}
+    projected = [{"role": "user", "content": text} for text in payloads]
+    batch = "\n".join(payloads)
+    assert FakeResponses.latest_user({"input": []}) == ""
+    assert FakeResponses.latest_user({"input": [ordinary, projected[0]]}) == payloads[0]
+    assert FakeResponses.latest_user({"input": [ordinary, {"role": "user", "content": batch}]}) == batch
+    assert FakeResponses.latest_user({"input": [*projected, ordinary]}) == ordinary["content"]
+    for context in ("[IRC room snapshot; @ marks a channel operator]\nroom status",
+                    "[snajpagent host continuation — not a new user message]\nstatus",
+                    "Pure durable-turn continuation after process resume"):
+        assert FakeResponses.latest_user({"input": [projected[0],
+            {"role": "user", "content": context}]}) == payloads[0]
+    recovery = "[snajpagent host continuation — not a new user message]\nrecover prior turn"
+    assert FakeResponses.latest_user({"input": [projected[0],
+        {"role": "user", "content": recovery}]}) == "recover"
+
+    references = "\n".join(f"[IRC update id={identity}:{i} endpoint=127.0.0.1:1]" for i in (4, 5))
+    unrelated = {"role": "user", "content": payloads[0].replace(":4]", ":40]")}
+    assert FakeResponses.latest_user({"input": [*projected, unrelated,
+        {"role": "user", "content": references}]}) == batch
+
+
 def run_irc_chat_case(binary, root):
+    check_fake_irc_input()
     root.mkdir(mode=0o700, parents=True)
     provider = FakeResponses()
     irc_port = free_loopback_port()

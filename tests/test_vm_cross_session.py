@@ -27,6 +27,9 @@ class CrossSessionTests(ChannelFixture):
 
     def setUp(self):
         super().setUp()
+        # Inherited channel tests exercise the native terminal, not workspace routing.
+        if self._testMethodName in ChannelFixture.__dict__:
+            return
         self.source_path = read_events(self.root / 'state')[0]
         self.source = self.source_path.parent.name
         self.term.write(b'/s d\r')

@@ -9,6 +9,10 @@
   connection generation, sharing that check with pending replies and sends.
   Preserve renamed identities, additional channels and exact private routing.
 
+- Allow the model to rewrite unlocked paused and blocked goals while preserving
+  their state, blocker, wait destination and parent lineage. Resume remains an
+  explicit action.
+
 - Accept exact private-query NOTICE replies so informational exchanges can end
   without mandatory PRIVMSG acknowledgement loops. Preserve channel reply,
   recipient, connection and delivery-state checks.
