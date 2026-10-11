@@ -199,12 +199,11 @@ snag_app_irc_summary_start(struct app_state *app, const struct snag_context_proj
             job->error, sizeof(job->error)) < 0 ||
         snag_buf_printf(&prompt, "%s%s", instruction, extra ? extra : "") < 0 ||
         snag_buf_terminate(&prompt) < 0 ||
-        json_object_set_new(job->request, "tools", json_array()) < 0 ||
+        json_object_set_new(job->request, "tool_choice", json_string("none")) < 0 ||
         json_array_append_new(json_object_get(job->request, "input"),
             json_pack("{s:s,s:s,s:[{s:s,s:s}]}", "type", "message", "role", "user",
                 "content", "type", "input_text", "text", (const char *)prompt.data)) < 0)
         goto fail;
-    json_object_del(job->request, "tool_choice");
     json_object_del(job->request, "context_management");
     if (pthread_create(&job->thread, NULL, summary_owner, job)) goto fail;
     job->started = true;

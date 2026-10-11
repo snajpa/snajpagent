@@ -834,9 +834,12 @@ ordinary background turn scheduling.
 `irc_compact(after_updates, instruction)` configures a durable admitted-update
 threshold (zero disables, initially disabled), with optional summary guidance.
 One independent worker snapshots an ordinary request's complete input, provider,
-model, effort, tier, credential and protection set. It clears tools and appends
-an IRC-summary instruction. Ordinary requests continue while it runs. The worker
-owns only its request/graph; it never mutates the session or renders its answer.
+model, effort, tier, credential and protection set. It retains tool declarations,
+sets tool_choice to none and appends an IRC-summary instruction. This preserves
+the foreground tool-schema prefix for provider caching. Ordinary requests continue
+while it runs. The worker owns only its request/graph; it never mutates the
+session or renders its answer.
+It never dispatches returned tool calls; a tool-call-only result fails the summary.
 The owner adopts a complete successful final text at a closed response/tool
 boundary, recording `irc_compacted` with the frozen admission sequence/count.
 

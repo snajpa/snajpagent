@@ -6058,6 +6058,8 @@ Settings survive resume. The feature starts disabled.
 Each summary request branches from the current request's complete context,
 using the same endpoint, model, reasoning effort and service tier. It runs
 concurrently with ordinary work and makes an additional provider request.
+Tool declarations are retained for prompt-cache reuse, with tool selection
+disabled. The summary worker never executes returned tool calls.
 Successful completion replaces covered IRC entries only in future model context.
 Operator conversation, tool results, later admissions and the complete visible
 transcript remain available. The summary preserves room/sender provenance;

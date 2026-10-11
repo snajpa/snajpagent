@@ -25,6 +25,7 @@ def run_irc_attention_case(binary, root):
     release, started = threading.Event(), threading.Event()
     seen, branches, issued = [], [], set()
     branch_failure = False
+    branch_tool_call = False
     commands = {
         "sleep-count": ("irc_sleep", {"delay_ms": 60000, "wake_after_messages": 2}),
         "sleep-mention": ("irc_sleep", {"delay_ms": 60000, "wake_after_messages": 20}),
@@ -34,6 +35,8 @@ def run_irc_attention_case(binary, root):
                                            "instruction": "retain decisions"}),
         "compact-off": ("irc_compact", {"after_updates": 0}),
         "compact-fail": ("irc_compact", {"after_updates": 1}),
+        "compact-off-toolcall": ("irc_compact", {"after_updates": 0}),
+        "compact-toolcall": ("irc_compact", {"after_updates": 1}),
         "compact-reload": ("irc_compact", {"after_updates": 1}),
         "compact-stale": ("irc_compact", {"after_updates": 1}),
         "compact-interrupt": ("irc_compact", {"after_updates": 1}),
@@ -57,13 +60,20 @@ def run_irc_attention_case(binary, root):
         raise AssertionError(description)
 
     def respond(handler, request, sequence):
-        if not request.get("tools") and "IRC context compaction branch" in json.dumps(request):
+        if "IRC context compaction branch" in json.dumps(request):
             branches.append(request)
             started.set()
             assert release.wait(20), "summary branch was not released"
             if branch_failure:
                 provider.reply(handler, b'{"error":{"message":"summary rejected"}}',
                                "application/json", status=400, close_header=True)
+            elif branch_tool_call:
+                wire = provider.function_body(sequence, "forbidden_summary_call",
+                    "exec_command", {"command": "touch summary-tool-executed",
+                                     "workdir": str(workspace), "stdin": None,
+                                     "pty": False, "timeout_ms": None,
+                                     "max_output_tokens": None})
+                provider.reply(handler, wire.encode(), close_header=True)
             else:
                 provider.reply(handler, provider.response_body(sequence,
                     "IRC decisions condensed fixture").encode(), close_header=True)
@@ -152,8 +162,10 @@ def run_irc_attention_case(binary, root):
             branch = branches[0]
             assert branch["model"] == "host-model" and branch["reasoning"]["effort"] == "medium"
             assert contains(branch, "operator-task-kept") and contains(branch, "original-IRC-detail")
-            assert any(r["input"] == branch["input"][:-1] and
-                       r.get("prompt_cache_key") == branch.get("prompt_cache_key") for r in seen)
+            parent = next(r for r in seen if r["input"] == branch["input"][:-1] and
+                          r.get("prompt_cache_key") == branch.get("prompt_cache_key"))
+            assert branch["tools"] == parent["tools"], "summary changed the cached tool prefix"
+            assert branch.get("tool_choice") == "none", "summary did not disable tool selection"
             term.submit("foreground-while-summary-held")
             wait_for(lambda: any(provider.latest_user(r) == "foreground-while-summary-held"
                                  for r in seen), "summary blocked foreground work")
@@ -193,6 +205,28 @@ def run_irc_attention_case(binary, root):
                      "failure follow-up missing")
             checked = next(r for r in seen if provider.latest_user(r) == "verify-failure-kept")
             assert contains(checked, "keep-after-summary-failure")
+
+            # A provider violating tool_choice must never dispatch a summary tool.
+            tool(term, "compact-off-toolcall", "irc_compact_configured")
+            peer.message("keep-after-summary-toolcall")
+            wait_for(lambda: any(contains(r, "keep-after-summary-toolcall") for r in seen),
+                     "tool-call failure source missing")
+            branch_failure = False
+            branch_tool_call = True
+            started.clear()
+            before = len(event_list(read_events(state)[1], "irc_compacted"))
+            tool(term, "compact-toolcall", "irc_compact_configured")
+            assert started.wait(10)
+            term.submit("verify-toolcall-kept")
+            wait_for(lambda: any(provider.latest_user(r) == "verify-toolcall-kept" for r in seen),
+                     "tool-call failure follow-up missing")
+            checked = next(r for r in seen if provider.latest_user(r) == "verify-toolcall-kept")
+            assert contains(checked, "keep-after-summary-toolcall")
+            assert len(event_list(read_events(state)[1], "irc_compacted")) == before
+            assert not (workspace / "summary-tool-executed").exists()
+            assert not any(e["data"].get("call_id") == "forbidden_summary_call"
+                           for e in event_list(read_events(state)[1], "tool_started"))
+            branch_tool_call = False
 
             # Ctrl-C while waiting for a shell tool also cancels the summary branch.
             branch_failure = False

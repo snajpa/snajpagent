@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Retain the foreground tool-schema prefix in full-context IRC summary requests
+  while disabling tool selection. Background summaries remain unable to execute
+  tools and preserve original context when a provider returns a tool call.
+
 - Keep streamed output running when a workspace controller detaches or disconnects.
   A later terminal attachment restores the retained output and prompt. Keep
   headless session shutdown from writing a resume hint to the host terminal.
