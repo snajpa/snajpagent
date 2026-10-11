@@ -62,6 +62,7 @@
 # Release and evidence artifacts
 /build/
 /.assets-cache/
+/refusals.log
 
 # Python cache
 __pycache__/

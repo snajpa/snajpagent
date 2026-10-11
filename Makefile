@@ -531,10 +531,10 @@ stylecheck:
 	python3 ./tests/test_style.py
 	./tools/check_style.sh
 
-rulescheck: $(BIN)
+rulescheck: $(BIN) tests/test_store
 	python3 ./tests/rules_e2e.py ./$(BIN)
 
-toolscheck: $(BIN)
+toolscheck: $(BIN) tests/test_store
 	python3 ./tests/tools_e2e.py ./$(BIN)
 
 depscheck:
