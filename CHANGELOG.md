@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Keep input available after a local verbosity change arrives during earlier
+  command output. Do not wait for an engine acknowledgement of a local command.
+
 - Report agent and operator IRC membership separately after resume. Mark
   retained private-query IDs available or unavailable against the live
   connection generation, sharing that check with pending replies and sends.

@@ -6025,6 +6025,9 @@ def run_provider_retry_input_cases(binary, root, provider, environment):
                 handler.send_response(200)
                 handler.send_header("Content-Type", "text/event-stream")
                 handler.send_header("Connection", "close")
+                if mode in ("steer", "chat", "mention", "queue"):
+                    # Keep backoff open for the bounded input-admission check.
+                    handler.send_header("Retry-After", "60")
                 handler.end_headers()
                 handler.wfile.write(created.encode())
                 handler.wfile.flush()

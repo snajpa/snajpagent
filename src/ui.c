@@ -1890,6 +1890,7 @@ finish_input(struct snag_ui_display *display, struct ui_action *item, int rc)
     }
     if (item->local) {
         item->action = SNAG_TERM_NONE;
+        term->submit_awaiting_activity = false;
         term->prompt_wanted = true;
         snag_term_trace(term, "want-true", "read_input-local");
         display->local = item;

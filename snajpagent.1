@@ -3158,7 +3158,9 @@ Show or set this process's current verbosity immediately, even during active
 work (Enter or active-turn Tab).  Subsequent output uses the new level;
 already visited detail is not replayed. Idle queries use the configured pager;
 active-turn queries and all level changes stay in the terminal. It is local
-feedback, never chat or model input. The current level is saved on orderly exit
+feedback, never chat or model input. Input remains available when a level change
+arrives while earlier command output is finishing. The current level is saved on
+orderly exit
 and restored on resume unless explicit -v flags select another level.
 In a workspace, the command shows or changes the submitting pane's level and
 reformats its retained transcript, preserving the reading position. Other panes
